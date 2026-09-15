@@ -19,6 +19,7 @@
 #include "psx_bios_known_images.h"
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
+#include "source_gpu_runtime.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
 #include "savestate.h"
@@ -617,7 +618,7 @@ static int manual_fast_forward_multiplier(void) {
                 value = -1;
             } else {
                 int parsed = std::atoi(e);
-                if (parsed >= 2 && parsed <= 16)
+                if (parsed >= 2 && parsed <= 64)
                     value = parsed;
             }
         }
@@ -4972,6 +4973,9 @@ static int savestate_input_guard_active(void) {
  * sampling — never slammed mid-
  * handshake (the v0.5.0 phantom-input lesson). */
 static void apply_input_override_to_sio(int override_word) {
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (debug_server_apply_dualshock_input(override_word)) return;
+#endif
     PlayerInput& p = g_players[0];
     const uint16_t w = (uint16_t)override_word;
     sio_set_pad_state_slot(0, w);
@@ -6786,6 +6790,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 sample_headless_pad_into_sio(override);
             else
                 sample_pad_into_sio(override);
+#ifndef PSX_NO_DEBUG_TOOLS
+            debug_server_note_input_applied();
+#endif
         }
         /* Offline vblank boundary: record/replay/compare (PSX_RB_SELFCHECK).
          * Defer opening a window while multitap arming is still pending —
@@ -6925,12 +6932,18 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     bool turbo_load_paced = false;
 
     /* Manual fast-forward: bounded by default so the game visibly advances and
-     * audio is less hostile. PSX_FAST_FORWARD_SPEED=2..16 changes the cap;
+     * audio is less hostile. PSX_FAST_FORWARD_SPEED=2..64 changes the cap;
      * PSX_FAST_FORWARD_SPEED=max restores the old unbounded simulation rate. */
     {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
         static int turbo_was_down = 0;
+        /* Automated replay uses the same host pacing/presentation path as
+         * holding the fast-forward key. Guest clocks and input are unchanged. */
+        static const bool startup_fast_forward = [] {
+            const char *e = std::getenv("PSX_FAST_FORWARD");
+            return e && std::strcmp(e, "1") == 0;
+        }();
         /* Keyboard ([KeyMap] Turbo, default Tab) or the controller host
          * shortcut ([hotkeys] fast_forward_pad, default select+L1). Both are
          * hold-to-run; the pad chord goes through the same combo matcher as
@@ -6939,7 +6952,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * fast_forward_toggle_pad) and drives the same path. */
         const bool kb_turbo = host_hotkey_input_focused() &&
             host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState());
-        if (kb_turbo || g_manual_turbo_latched ||
+        if (startup_fast_forward || kb_turbo || g_manual_turbo_latched ||
             hotkey_pad_binding_down(g_hotkey_pad_fast_forward)) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
@@ -14839,6 +14852,15 @@ session_reboot:
     interrupts_init();
     sio_init();
     psx_event_step_conservative_env_init();
+    const char *gpu_work_model=std::getenv("PSX_GPU_DMA_MODEL");
+    if(gpu_work_model && !std::strcmp(gpu_work_model,"octoshock-2.2.2-bounded-quad")) {
+        const char *field=std::getenv("PSX_INPUT_ROUTE_FIELD_MODEL");
+        if(!std::getenv("PSX_INPUT_ROUTE_FILE") || !field || std::strcmp(field,"octoshock-2.2.2-ntsc-raster")) {
+            std::fprintf(stderr,"[source-gpu-service] bounded quad mode requires a route and source NTSC raster clock\n");
+            return 2;
+        }
+        source_gpu_runtime_init();
+    }
     /* Seed per-player device routing from the resolved [controller] config.
      * SDL controller handles are opened later (after SDL_Init); here we only
      * set the PSX-visible connection + pad type so the BIOS sees the right
@@ -14986,8 +15008,22 @@ session_reboot:
         std::atexit(game_options_save_now);
 #ifndef PSX_NO_DEBUG_TOOLS
         debug_server_init(debug_port);
+        /* Private deterministic route gate: no TCP-upload timing in guest
+         * history. An explicit malformed route aborts before guest execution. */
+        if (const char *route = std::getenv("PSX_INPUT_ROUTE_FILE")) {
+            if (!route[0] || net_cfg.enabled ||
+                !debug_server_preload_input_route(route)) {
+                std::fprintf(stderr, "psxrecomp: prestart input route rejected\n");
+                debug_server_shutdown();
+                return 2;
+            }
+        }
 #else
         (void)debug_port;
+        if (std::getenv("PSX_INPUT_ROUTE_FILE")) {
+            std::fprintf(stderr, "psxrecomp: input routes require debug tools\n");
+            return 2;
+        }
 #endif
 #ifdef PSX_COSIM
         cosim_init();  /* first-divergence oracle server */

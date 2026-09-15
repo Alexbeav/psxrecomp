@@ -16,6 +16,7 @@
 #include "psx_fiber.h"   /* cross-platform fibers (Win32 fibers / POSIX ucontext) */
 #include "psx_scheduler.h" /* deterministic TCB scheduler carve-out (scaffolding) */
 #include "parity_trace.h"  /* general two-process control-flow parity ring */
+#include "source_gpu_runtime.h"
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
@@ -818,6 +819,8 @@ void psx_scheduler_run(CPUState* cpu)
             overlay_loader_shadow_scheduler_escape_fixup();
             g_psx_dispatch_depth = 0;
             g_psx_call_bail      = 0;
+            /* A longjmp abandons the precise interpreter frame and its mode restore. */
+            { extern int g_precise_mode; g_precise_mode = 0; }
             /* Soft-exit / yield longjmps out of vblank inside
              * psx_devices_service_to_now; without this the re-entrancy guard
              * stays set and every later advance skips device service forever. */
@@ -920,6 +923,49 @@ void psx_scheduler_run(CPUState* cpu)
     }
 }
 
+/* Explicit research control: execute the installed guest SYS01/02 handler.
+ * This does not select a BIOS image, scheduler, delay, or title-specific PC.
+ * The old direct mode remains the default until the exception route has wider
+ * validation. Non-delay-slot entry is the existing psx_syscall API contract.
+ * Nested synchronous IRQ windows need a separate RFE owner stack; fail closed
+ * rather than let an inner RFE unwind the outer handler's native stack. */
+static int critical_exception_enabled(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char* value = getenv("PSX_CRITICAL_SECTION_MODEL");
+        mode = value && strcmp(value, "exception") == 0;
+    }
+    return mode;
+}
+
+int psx_guest_syscalls_active(void) {
+    static int mode = -1;
+    if(mode<0) {
+        const char *value=getenv("PSX_SYSCALL_MODEL");
+        mode=value && !strcmp(value,"guest-exception");
+    }
+    return mode;
+}
+
+static int enter_guest_syscall_exception(CPUState *cpu) {
+    uint32_t sr=cpu->cop0[12];
+    if (psx_get_in_exception()) {
+        fprintf(stderr, "Guest syscall exception model: nested synchronous IRQ entry unsupported at %08X\n", cpu->pc);
+        exit(1);
+    }
+    /* Return the vector to the flat dispatcher. Calling psx_dispatch here
+     * would create a host continuation that could outlive the guest RFE.
+     * Guest code owns result registers, TCB stores, and EPC advancement. */
+    cpu->cop0[14] = cpu->pc;
+    /* Source exception entry retains only pending interrupt bits. A
+     * non-delay SYSCALL has no CE, BD, or BT bits of its own. */
+    cpu->cop0[13] = (cpu->cop0[13] & (source_gpu_runtime_active()
+        ? 0x0000FF00u : ~(0x80000000u | 0x7Cu))) | (8u << 2);
+    cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);
+    cpu->pc = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;
+    return 1;
+}
+
 int psx_syscall(CPUState* cpu, uint32_t code) {
     /*
      * PS1 BIOS SYSCALL convention:
@@ -927,8 +973,8 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
      *   $a0 = 2: ExitCriticalSection  — enable interrupts, preserve GPRs
      *   $a0 = 3: ReturnFromException  — restore full TCB state + RFE
      *
-     * Syscalls 1 and 2 are always handled directly — they only touch IEc
-     * in SR and don't need the full exception mechanism.
+     * Legacy mode handles critical sections directly. The explicit guest
+     * exception model lets the installed BIOS own all syscall behavior.
      *
      * Syscall 3 and unknown numbers route through the real BIOS exception
      * handler once it's installed, because ReturnFromException must restore
@@ -937,6 +983,10 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
      */
     uint32_t func = cpu->gpr[4]; /* $a0 = syscall function number */
     uint32_t sr = cpu->cop0[12];
+
+    if (psx_guest_syscalls_active() || ((func == 1 || func == 2) && critical_exception_enabled())) {
+        return enter_guest_syscall_exception(cpu);
+    }
 
     switch (func) {
         case 1: /* EnterCriticalSection: disable interrupts */

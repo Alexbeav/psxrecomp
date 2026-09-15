@@ -19,6 +19,11 @@ uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words);
 int mdec_dma_write_ready(void);
 int mdec_dma_read_ready(void);
 
+/* Explicit cold Octoshock2.3 compatibility; service is owned by source DMA. */
+int mdec_source_active(void);
+void mdec_source_advance(uint32_t clocks);
+uint32_t mdec_source_dma_read(uint32_t *word_offset);
+
 /* FMV detector: nonzero if a colour (15/24-bit) MDEC decode ran within the
  * last `within_frames` vblanks. Streamed video decodes continuously; the
  * widescreen present pins such frames to native 4:3 (FMVs are authored 4:3

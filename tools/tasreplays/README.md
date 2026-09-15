@@ -1,0 +1,302 @@
+# Tekken 3 TAS replay
+
+For explicit, bounded multi-step investigations and read-only evidence analysis,
+see the [unattended investigation controller guide](investigation.md).
+
+Build and play [Spikestuff's tool-assisted speedrun](https://tasvideos.org/4164M)
+from your own Tekken 3 USA disc and SCPH1001 BIOS. The original 7,974 inputs
+finish Arcade with Yoshimitsu at **8.80 seconds**. The original campaign
+qualified the Octoshock 2.2.2 comparison configuration. This upstream integration
+is pending fresh retail qualification; see [current status](../../docs/TAS_UPSTREAM_INTEGRATION.md).
+Setup retains the historical generated-code fingerprint gate and can refuse
+changed output from the updated upstream emitter.
+
+## Quick start: Windows x64
+
+Install **Git, Python 3.11 or newer, CMake 3.24 or newer, Ninja, and a UCRT
+MinGW GCC toolchain**. Put their executables on PATH. The validated compiler is
+WinLibs GCC 16.1.0, x86_64 UCRT POSIX SEH. MSYS2 users should use the UCRT64
+environment, not MINGW64/MSVCRT. Python uses only its standard library.
+Allow several GB of disk space and a few minutes for the initial build.
+Internet access is needed for the original TAS and the pinned SDL3/zlib sources.
+
+```powershell
+git clone --branch codex/tas-upstream-integration-20260913 https://github.com/Alexbeav/psxrecomp.git
+cd psxrecomp
+python tools/tasreplays/tekken3.py setup --disc "D:/Games/Tekken 3 (USA).cue" --bios "D:/BIOS/SCPH1001.BIN"
+python tools/tasreplays/tekken3.py run
+```
+
+The setup verifies all three original disc tracks and the BIOS before building.
+It binds the original CUE and tracks in place, caches the verified boot executable
+and BIOS, downloads the TAS, preserves every input, builds the tools, runs their
+tests, generates BIOS/game C, checks all 57 generated source fingerprints, and
+builds the player. BIOS emitter freshness checking stays enabled. No emulator, reference oracle,
+Ghidra, prebuilt game binary, generated game C, or files from the research
+workspace are required. No retail disc, firmware, or extracted game code is
+distributed in the branch.
+
+The first run opens a window and ends automatically at frame 8,400, after the
+victory is visible. It checks **8,399 completed frame returns**, including every
+original-input return, against the saved RAM-page and cycle fingerprints.
+Success prints `PASS`; a changed input, missing checkpoint, different RAM page,
+or clock difference produces a nonzero exit and identifies the first mismatch.
+Each run gets a new directory under `build/tasreplays-runs`, containing logs,
+screenshots, input completion, RAM/clock records and `verification.json`.
+
+For unattended verification:
+
+```powershell
+python tools/tasreplays/tekken3.py run --headless
+```
+
+To fast-forward a visible replay, use `run --speed 4`, `--speed 8`,
+`--speed 32`, or `--speed max`. Supported caps are 1, 2, 4, 8, 16, 32 and 64;
+`max` removes the wall-clock cap. These use the same host pacing and
+presentation path as holding the fast-forward key. Every original input and
+RAM/clock checkpoint is still verified. The cap is a ceiling: CPU, rendering
+and capture costs can keep the achieved rate below it. Headless playback is
+already uncapped, so combining `--headless` with a speed override is rejected.
+
+The standalone runtime accepts `PSX_FAST_FORWARD=1` to hold fast-forward from
+startup and `PSX_FAST_FORWARD_SPEED=2..64|max` to choose its cap. The replay
+command sets these explicitly and records them in each run's manifest.
+After updating an older checkout, run `setup` with a fresh `--project` directory
+and pass that same directory to `run` before selecting a speed.
+The runner rejects older setup receipts so a player cannot silently ignore
+the requested fast-forward control.
+
+Use `--timeout 3600` on a slower machine, or `setup --jobs 4` to reduce peak
+compiler memory. An original `.bk2` or its TASVideos download ZIP can be supplied
+with `setup --movie "D:/TAS/spikestuffv3-tekken3-ps1.bk2"`; it must have the
+same identity as publication4164. Each setup requires a fresh output directory.
+Use `setup --project "D:/psx-tas/tekken3-build-02"` to preserve a previous build,
+then use `run --project "D:/psx-tas/tekken3-build-02"`. An explicit project directory
+must be outside the source checkout. `--cache` selects an existing verified
+private boot/firmware cache, and `--tools-dir` selects a reusable tools build
+that setup reconfigures and tests. Moving a configured checkout requires a new
+setup so generated paths and firmware provenance are verified again.
+The native executable imports only Windows system libraries; the launcher does
+not need the compiler's DLL directory at playback time.
+
+## Exact inputs
+
+The supported disc is the original three-track USA BIN/CUE layout from the
+[TASVideos version record](https://tasvideos.org/Games/1530/Versions/View/1913).
+Renaming files is fine when the CUE names them correctly. Track order, raw
+sectors and audio pregaps must match. Merged BIN, ISO, other regions and
+revisions are not admitted by this setup.
+
+A `.chd` of that same layout is also accepted for `--disc`: setup splits it
+with `chdman extractcd -sb` into one BIN per track plus a CUE, in a private
+directory keyed by the container's own SHA-256, and then runs the identical
+size/hash/layout check over the result. The check is not relaxed for a
+container, so a CHD of a merged, ISO or wrong dump fails exactly as the
+equivalent CUE does. `chdman` is taken from `--chdman`, else `PSX_CHDMAN`, else
+`PATH`; `--chd-cache` overrides where the split tracks are kept.
+
+| Input | SHA-1 |
+|---|---|
+| Data track, 632,532,768 bytes | `68f32a8657376cb4d4504c160fd5e8ae4a4f18d6` |
+| Audio track2, 27,701,856 bytes | `ba8cbc6a371250a92b3d12c1154f489bd6b4b70b` |
+| Audio track3, 28,042,896 bytes | `a5b34e39603ed80fed8400d879b20b39aadfe1ba` |
+| SCPH1001 BIOS, 524,288 bytes | `110155d8d6e6e832d6ea66db9bc098321fb5e8ebf` |
+
+The script checks the full SHA-256 values as well. The BK2 SHA-256 is
+`13ebc56bb877ed3200ca3dcd54dac25ad20cba091a73351425ec8bbabc82e5d6`.
+Its original header requests SCPH5501; the qualified native and independent
+reference runs both used the SCPH1001 image listed here. Do not substitute the
+5501 image into this particular recipe.
+
+## Scope and evidence
+
+This is an explicit source-emulator compatibility profile, not a claim of
+complete PS1 hardware timing or general game compatibility. It starts from
+cold boot, uses one digital controller, no second controller, no memory cards,
+software rendering, LLE BIOS and the qualified instruction/DMA/device timing
+options. It does not shift inputs, patch game RAM, load a checkpoint, replace
+game code with the reference core, or select delays from the desired outcome.
+The profile's raw CD random tape is generated independently of the movie and
+game state by the separately licensed external utility described below.
+
+The reference fingerprints come from integrated202, the second verified native
+victory. At all 7,974 original-input returns, every one of its 512 RAM-page
+hashes and its return clock matched the independent Octoshock reference.
+Twenty-eight selected full 2 MiB RAM snapshots also matched byte for byte.
+The neutral tail fingerprints through8,399 come from that native victory run.
+The small committed reference file contains hashes only, not guest RAM.
+See [accuracy changes](../../docs/TAS_ACCURACY.md) for the repair scope.
+
+The replay deliberately ends at the observed victory boundary, matching the
+declared426 neutral inputs after the original movie. A longer exploratory tail
+in the research build stopped at the explicit **unqualified CDDA Play seek**
+guard after return10,704. That statement describes the original Tekken revision; later optional CDDA
+component work is documented in [the source CDDA profile](../../docs/source-cdda-profile.md). This branch
+does not claim unrestricted post-victory playback, complete audio/pixel parity,
+save-state support, PAL support, or other-game TAS success.
+
+The historical campaign started from `f23c5ba1`. This submission starts from
+upstream `85cd26f0`. It does not change release pins or merge itself.
+
+## Diagnostic runs: prefixes, ladders, streaming stop and binary identity
+
+The three title `run` commands (`tekken3.py`, `pepsiman.py`, `biohazard.py`)
+share these flags. None of them changes the verdict: the existing post-run
+comparison still decides a pass exactly as before.
+
+- `--returns N` replays the first N original inputs plus one record with no
+  neutral tail and compares N returns (`N` below the input count); `N` equal to
+  the endpoint is the full run. The shortened route is written beside the run
+  as `<output>-input.psxrti` / `.psxrti2`. Receipts carry `diagnostic_prefix:
+  true` and `status: "prefix_pass"`; a prefix never claims the full pass.
+- `--ladder 6000,60000,full` runs strictly increasing prefix tiers into
+  `<output>-t<N>` and the optional final `full` tier into `<output>` itself,
+  stops at the first tier that does not match, and writes
+  `<output>-ladder.json`. Mutually exclusive with `--returns`.
+- `--stop-on-divergence` lets the streaming watcher (`stream_compare.py`),
+  which follows `ram-pages.tsv` while the runtime writes it, publish
+  `<run>/stop-request.json`; `run_native.py` then terminates playback with
+  `stop_reason: "harness_stop"` and records the request in `exit.json`. The
+  run is a failure like any divergence. The watcher result is always recorded
+  under `streaming` in the receipt (`verification.json` for Tekken 3 and
+  Pepsiman, `source-comparison.json` for Bio Hazard).
+- `--exe PATH` runs another executable than the setup receipt's; it must be
+  declared with `--diagnostic-binary SHA256` naming the bytes that actually run,
+  otherwise the launch is refused. Receipts record `setup_executable_sha256`,
+  `binary_sha256`, `binary_matches_setup` and `diagnostic_binary`; a mismatching
+  binary yields `status: "diagnostic"` and a nonzero exit, never a qualifying
+  pass. `run_native.py` binds the staged copy with `--expected-exe-sha256` and
+  records `staged_executable` in `manifest.json`.
+- `--cpu-boundary-window LO HI` is forwarded unchanged to `run_native.py`.
+- `diverge_trace.py <run-a> <run-b> <return> --output <dir>` is a diagnostic, not a
+  qualification. It takes the return clocks at R-1 and R from both `cpu-return.tsv`
+  files, forms the window [cycle at R-1, cycle at R + `--margin-cycles`] clamped to
+  the 1,000,000-cycle runtime limit, resolves each side's binary by SHA-256 (the
+  staged copy in the run directory, then `manifest.inputs.exe.path`, then any
+  `<evidence-root>/*/SHA256SUMS.txt` entry that still hashes correctly), reruns
+  both sides through the title harness of run-b's project with `--returns`,
+  `--diagnostic-binary` and `--cpu-boundary-window`, and streams the two
+  `cpu-boundary.tsv` traces row by row ignoring the cumulative `slice_takes` and
+  `slice_cycle` counters. It prints the identical-row count and the first differing
+  row with every differing column, and writes `<output>/diverge-trace.json`.
+  `--dry-run` prints the window and commands; `--compare-only` diffs two
+  directories that already hold traces. Exit 0 reports a difference, 2 identical
+  traces, 1 an error.
+
+## Qualified-hunk registry
+
+`qualified-hunks.json` records, for every accuracy change a replay pass depends
+on, the file and the exact added lines as they exist in the qualified tree
+(`227e9057`). `python tools/tasreplays/qualified_hunks.py check --rev <rev>`
+verifies each block is still present contiguously at that revision (CRLF and
+trailing-whitespace insensitive, indentation exact); `check-all` prints an
+entry-by-revision matrix over `origin/split/01..07` and `HEAD` (pass
+`--revs upstream/master,...` after a fetch). This is an integrity check on
+source trees, not a replay verdict: presence proves nothing about behaviour,
+absence is a definite finding. It is how the dropped `b1413e71`
+`dirty_ram_interp.c` hunk of 2026-09-14 would have been caught before a full
+replay. New fixes are added with `seed --commit SHA --id ID --titles ...
+--as-of 227e9057`; blocks a later commit rewrote are split into the sub-runs
+that survive and the entry is marked `evolved`.
+
+## Archiving a run
+
+`python tools/tasreplays/archive_run.py <run-dir> <archive-name> [--evidence-root DIR]
+[--mailbox DIR] [--dry-run] [--label TEXT]` copies a finished run directory into
+`<evidence-root>/<archive-name>/runs/<run>/` (default root
+`Z:\Share\psxrecomp\tas-evidence`, or `PSX_TAS_EVIDENCE`), verifies every copied
+file by SHA-256 and byte total, copies the sibling ladder/prefix receipts and the
+project's `setup.json`/`game.toml`/`bios.toml`/`input.json` into `runs/` and
+`builds/<project>/`, and appends the new files to the archive's `SHA256SUMS.txt`
+without ever rewriting an existing hash (a conflicting hash fails before anything
+is copied; an identical existing copy is reported as already archived). It then
+writes `runs/<run>.archive.json` and, under `notes/`, a mailbox note
+(`YYYYMMDD-HHMM-<AUTHOR>-<title>-<run>.md`, dropped into `--mailbox DIR` with its
+`.md.sha256` sidecar only when that flag is given) and a one-paragraph board
+amendment that is also printed. The summary restates the run's own receipt
+(`source-comparison.json` or `verification.json`, the `streaming` block, the
+binary identity fields, ladder and setup receipts when present): it archives
+evidence and drafts notes; it qualifies nothing. `--dry-run` prints the summary,
+the planned paths and both texts without writing.
+
+## Setup build cache
+
+Every title `setup` reuses its three build stages through a content-keyed cache
+(design: `docs/tasreplays/build-cache.md`, code: `build_cache.py`). Stage 1 is
+the tools build plus ctest, stage 2 the generated BIOS/game C (and census
+outputs), stage 3 the native player. A stage is reused only when every input
+that can influence it is identical by content hash (git tree ids of the
+committed source trees, SHA-256 of ROM/boot/seeds/generated files and tool
+executables, the toolchain banner lines and the CMake flags); paths, mtimes and
+branch names are never inputs. Reuse is a shortcut for building only: media,
+movie, reference and firmware hashes, the BIOS emitter fingerprint and the
+Tekken codegen guard still run on every setup, and `run` never consults the
+cache. A partial or corrupt entry is a miss, never an error.
+
+Flags shared by `tekken3.py`, `pepsiman.py` and `biohazard.py setup`:
+
+- `--build-cache DIR` selects the cache; otherwise `PSX_TAS_BUILD_CACHE`,
+  otherwise `%LOCALAPPDATA%\psxrecomp\build-cache`.
+- `--no-build-cache` builds every stage fresh and stores nothing.
+- `--tools-dir DIR` keeps its meaning (reconfigure, rebuild and retest there)
+  and bypasses the tools stage of the cache.
+
+On a miss the stage runs exactly the commands it always ran; the tools build
+lands in `<cache>/tools/<key>/build/` instead of `<project>/tools`. On a hit the
+entry's files are copied into place and re-hashed, and the stage logs
+(`configure-tools.log`, `generate-bios.log`, `build-native.log`, ...) are copied
+into the project with a first line naming the entry they came from. A native hit
+copies only the executable into `<project>/native/`; no CMake build directory is
+created. `setup.json` records every stage:
+
+```
+"build_cache": {
+  "root": "<dir>",
+  "tools":     {"key": "<hex>", "hit": true,  "entry": "<path>", "built_at": "<iso>", "source_head": "<sha>"},
+  "generated": {"key": "<hex>", "hit": false, "entry": "<path>", "built_at": "<iso>", "source_head": "<sha>"},
+  "native":    {"key": "<hex>", "hit": false, "entry": "<path>", "built_at": "<iso>", "source_head": "<sha>"}
+}
+```
+
+`source_head` names the commit whose setup produced the entry; a stage that was
+not keyed (`--no-build-cache`, or `--tools-dir` for the tools stage) has
+`key: null`. `executable_sha256` and every other field keep their meaning.
+`python tools/tasreplays/build_cache.py list` shows the entries;
+`build_cache.py prune --keep-days N` deletes older ones. Nothing in setup deletes.
+
+The player used to embed `<project>/game.toml` as its default game-config path
+(`DEFAULT_GAME_CONFIG_PATH` in `tools/tasreplays/CMakeLists.txt`), the only
+absolute path in the binary and the reason two byte-identical builds in
+different project directories never shared a hash. It is now the relative
+`game.toml`, resolved beside the executable; the harness is unaffected because
+`run_native.py` always passes `--game`. Binaries built after this change do not
+reproduce the 2026-09-14 hashes, which were project-directory specific anyway.
+
+## Tests without retail assets
+
+```powershell
+cmake -S recompiler -B build/tests -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+cmake --build build/tests --parallel 8
+ctest --test-dir build/tests --output-on-failure
+```
+
+The suite includes the existing recompiler tests, the ABI24 overlay boundary
+tests, O0/O2 TAS input/clock/controller regressions, BK2 validation, and failures
+for incorrect media topology and replay evidence. Three pre-existing disabled
+tests remain visible in CTest. Historical fixtures that need the separately
+retained original-core oracle captures remain explicitly listed in
+`runtime/check_test_registration.cmake`; they are not counted as portable CI
+passes. CI contains no BIOS, disc, generated title C or retail replay.
+
+## Licenses and attribution
+
+The framework and new independent runtime code retain the repository license.
+`external/source_random_tape.py` is a **separate GPL-2.0-or-later program**,
+adapted from the fixed cold-reset random generator in Mednafen/Octoshock.
+Its [source and license notice](external/README.md) and complete GPL text are
+included. It is invoked as its own process and exchanges only a binary data
+file with the native runtime. It is not compiled or linked into the runtime.
+The GPL notice applies to that utility, not as a relicensing of this repository.
+
+The TAS is credited to Spikestuff and is downloaded unchanged from the
+publication page. It is not bundled with the repository.

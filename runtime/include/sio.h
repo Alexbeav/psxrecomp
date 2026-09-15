@@ -195,6 +195,7 @@ uint8_t  sio_peek_rx_data(void);
 /* Debug accessors: is a logical pad connected, and is it in analog mode. */
 int sio_get_pad_connected(int slot);
 int sio_get_pad_analog(int slot);
+int sio_get_pad_config_capable(int slot);
 void sio_get_pad_sticks(int slot, uint8_t out[4]);
 
 /* ---- SIO byte-level trace ring buffer ----
@@ -336,7 +337,7 @@ typedef struct {
     uint32_t counter_7514;   /* card chain counter byte at fire */
     uint8_t  source;         /* SioIrqSource */
     uint8_t  slot;           /* selected_slot at fire */
-    uint8_t  delay_applied;  /* the SIO_IRQ_DELAY_* value used */
+    uint16_t delay_applied;  /* cycles; source cards request 256 */
     uint8_t  pad;
 } SioIrqEntry;
 

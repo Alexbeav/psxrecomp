@@ -1,3 +1,8 @@
+# TAS replay branch
+
+For the verified Tekken 3 TAS, follow the [clean-clone setup and replay guide](tools/tasreplays/README.md).
+It builds from your USA disc and SCPH1001 BIOS, then verifies the original TAS through the 8.80-second victory.
+
 <p align="center">
   <img src="docs/assets/psxrecomp-logo.png" alt="PSXRecomp" width="640">
 </p>

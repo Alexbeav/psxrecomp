@@ -305,6 +305,17 @@ static int cdda_delay;
 static int cdda_data_end_pending;
 static uint64_t cdda_sectors_played;
 
+/* Optional cold source CDDA state. Two physical sectors precede the audio
+ * consumer; SubQ/report ownership remains at the physical read head. */
+static struct {
+    int enabled,seeking,position_valid,play_track_match;
+    uint32_t sectors_read;
+    unsigned pipe_count,pipe_at,report_last_tens;
+    uint8_t pipe[2][2352],async_data[8];
+    unsigned async_type,async_count;
+} source_cdda;
+
+
 /* Operating divisor: 1x during BIOS boot, switches to g_game_divisor
  * when the game's entry point first fires (via cdrom_notify_game_started). */
 static int g_disc_speed_divisor = 1;
@@ -660,6 +671,16 @@ static int sector_delay_cycles(void) {
 }
 
 static int initial_read_delay_cycles(void) {
+    /* Explicit source-core comparison profile, not a hardware timing claim.
+     * Octoshock 2.2.2 fills two pipeline slots before presenting the oldest
+     * sector on its third fetch (cdc.h SectorPipe_Count / HandlePlayRead).
+     * This reproduces that start deadline only; seek jitter, command latency,
+     * and rotating drive state are separate, still-unqualified differences. */
+    const char *profile = getenv("PSX_CD_READ_START_MODEL");
+    if (profile && strcmp(profile, "octoshock-2.2.2-pipeline") == 0)
+        return apply_read_speed(((mode_reg & 0x80)
+            ? CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2
+            : CDROM_SINGLE_SPEED_SECTOR_CYCLES) * 3);
     /* Beetle/PCSX model an additional read-start latency after ReadN/ReadS.
      * In double-speed mode the first sector still waits one 1x sector period;
      * subsequent sectors use the steady-state 2x cadence above. */
@@ -758,8 +779,11 @@ static CDROMTraceEntry cdrom_trace[CDROM_TRACE_CAP];
 static uint64_t cdrom_trace_seq;
 
 static void trace_cdrom(uint8_t kind, uint32_t addr, uint32_t val, uint8_t width) {
+    extern uint32_t debug_guest_ra(void);
     CDROMTraceEntry *e = &cdrom_trace[cdrom_trace_seq % CDROM_TRACE_CAP];
     e->seq = cdrom_trace_seq++;
+    e->cycle = psx_cycle_count;
+    e->guest_ra = debug_guest_ra();
     e->kind = kind;
     e->addr = addr;
     e->val = val;
@@ -787,6 +811,15 @@ static void trace_cdrom(uint8_t kind, uint32_t addr, uint32_t val, uint8_t width
     e->read_cmd = read_cmd;
     e->read_delay = read_delay;
 }
+
+#include "cdrom_random_tape.h"
+static CdRandomTape s_source_clock_tape;
+static int s_source_clock;
+/* Independent drive operation, not a command second response. */
+static uint64_t s_source_reset_due;
+static uint64_t s_source_command_due, s_source_ready_due;
+static uint32_t s_source_clock_calls;
+static int s_source_command_phase, s_source_args_remaining;
 
 static void record_command_history(uint8_t kind, uint8_t cmd,
                                    const uint8_t* params, int count) {
@@ -824,6 +857,9 @@ static void record_command_history(uint8_t kind, uint8_t cmd,
     e->pending_pending = (uint8_t)(pending.pending ? 1 : 0);
     e->queued_cmd = queued_cmd.cmd;
     e->queued_pending = (uint8_t)(queued_cmd.pending ? 1 : 0);
+    e->source_clock=(uint8_t)s_source_clock;
+    e->source_random_cursor=s_source_clock_tape.cursor;
+    e->source_random_calls=s_source_clock_calls;
 }
 
 static int xa_is_audio_realtime(const CDROMSectorDelivery *d) {
@@ -888,6 +924,42 @@ static int has_disc(void) {
 #define CDSTAT_SEEKERR  0x04
 #define CDSTAT_IDERROR  0x08
 #define CDSTAT_SHELL    0x10
+
+/* Explicit cold-start source compatibility only. Hardware identity is not
+ * inferred from the main BIOS. Defaults retain the existing PU-7 response.
+ * This does not reproduce the source drive's seek/rotation or swap lifecycle. */
+static int s_source_firmware_model;
+static int s_source_cold_status_model;
+static int s_source_toc_seek_model;
+static int s_source_explicit_seek_model;
+static int s_nymashock_drive;
+/* Source timing profile only: PAUSED and STANDBY have the same public status
+ * bits but different restart costs. Kept separate from visible READ/SEEK. */
+static uint8_t s_source_seek_paused;
+/* Native MSF names the next delivered sector. The source drive has two
+ * additional sectors in its pipeline. Remember the stream origin so Pause
+ * can rewind up to four physical reads even before that pipeline is full. */
+static int s_source_read_start_lba;
+static uint32_t source_clock_random(uint32_t maximum) {
+    uint32_t value;
+    if (!cd_tape_bounded(&s_source_clock_tape,maximum,&value)) {
+        fprintf(stderr,"[CDROM] Source clock random tape exhausted at word %u\n",s_source_clock_tape.cursor);
+        exit(2);
+    }
+    s_source_clock_calls++;
+    return value;
+}
+static int source_clock_receive_ready(void) {
+    return irq_flag==0 && (!s_source_clock || psx_cycle_count>=s_source_ready_due);
+}
+static int source_boot_model(const char *name) {
+    const char *value=getenv(name);
+    if(!value || !*value || strcmp(value,"default")==0) return 0;
+    if(strcmp(value,"octoshock-2.2.2")==0) return 1;
+    fprintf(stderr,"[CDROM] Unsupported %s=%s\n",name,value);
+    exit(2);
+}
+
 #define CDSTAT_READ     0x20
 #define CDSTAT_SEEK     0x40
 #define CDSTAT_PLAY     0x80
@@ -916,11 +988,18 @@ static void set_irq(int type) {
      * so re-arm the latch (the delayed present below raises it once). */
     cdrom_irq_generation++;
     cdrom_intc_request_latched = 0;
-    /* Arm the presentation latency: this response must NOT be presented to INTC
-     * synchronously inside the guest store that triggered it (see the
-     * CDROM_IRQ_PRESENT_DELAY note). Absolute due — not a slice-relative
-     * countdown (see pending.due_cyc). */
-    cdrom_irq_present_due = psx_cycle_count + (uint64_t)CDROM_IRQ_PRESENT_DELAY;
+    /* A command response must not appear inside the command/ack store that
+     * produced it. Asynchronous INT1 already comes from a sector deadline (or
+     * the separately scheduled pending-data-ready release). Its readable IRQ
+     * flag and INTC line must become visible together. Holding INTC for another
+     * 5000 cycles lets the next command's preparatory ACK erase a new sector
+     * notification before the CPU has ever received it. This preserves the
+     * single-outstanding latch and command queue; it changes no buffer owner.
+     * Octoshock 2.2.2 CheckAIP/WriteIRQ likewise publishes async flag+line together.
+     */
+    cdrom_irq_present_due = (type == CDIRQ_DATA_READY || s_source_clock) ? psx_cycle_count
+        : psx_cycle_count + (uint64_t)CDROM_IRQ_PRESENT_DELAY;
+    if (s_source_clock) s_source_ready_due=0; /* 2000 clocks begin after IRQ acknowledgement. */
     trace_cdrom('I', 0, (uint32_t)type, 0);
     /* DEQUEUE: CD response/data event fired (aux = CD irq type). */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_CD_IRQ, (uint32_t)type);
@@ -1445,7 +1524,13 @@ static int read_sector_at(int min, int sec, int sect) {
         delivery.data_delivered = 0;
         delivery.skip_reason = CDROM_SKIP_XA_AUDIO_REALTIME;
     }
-    if ((delivery.xa_submode & (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) ==
+    /* The Nymashock 1.29.0 drive profile was qualified without an XA end-of-file
+     * event: on Bio Hazard (SLPS-00998) the source core raises no CD interrupt at
+     * the EOF sector of the intro stream, and delivering DATA_END here (cd55e8a4)
+     * diverged the 239,202-return reference route at return 5149. Keep the
+     * DATA_END delivery for the default drive model only. */
+    if (!s_nymashock_drive &&
+        (delivery.xa_submode & (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) ==
         (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) {
         if (!(mode_reg & 0x08u) ||
             (delivery.xa_file == filter_file &&
@@ -1608,7 +1693,114 @@ static int read_continues_current_stream(void) {
     return 1;
 }
 
+/* A pending Setloc is also a seek when consumed by ReadN/ReadS. The source
+ * comparison for this model is Octoshock 2.2.2 CalcSeekTime/ReadBase:
+ * https://github.com/TASEmulators/BizHawk/blob/2.2.2/psx/octoshock/psx/cdc.cpp
+ * Its deterministic component models travel across a 72-minute disc in one
+ * second, a 300ms long-seek settle, and a simplified paused-drive restart.
+ * This independently expressed lower bound omits its 0..25000-cycle jitter;
+ * it is an emulator timing model, not a hardware-calibrated exact guarantee.
+ * Command response and sector pipeline delays remain separate below.
+ */
+static int source_seek_lower_bound(int origin,int target,int motor_on,int paused,uint8_t mode) {
+    int64_t cycles=0;
+    if(!motor_on) {origin=0;cycles=33868800;}
+    int64_t distance=llabs((int64_t)target-origin);
+    int64_t travel=distance*33868800/(72*60*75);
+    cycles+=travel>20000?travel:20000;
+    if(distance>=2250)cycles+=10160640;
+    else if(paused)cycles+=(mode&0x80)?1237952:2475904;
+    else if(s_nymashock_drive && distance>=3 && distance<12)
+        cycles+=4*CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode&0x80)?2:1);
+    return cycles>INT32_MAX?INT32_MAX:(int)cycles;
+}
+/* Nymashock 1.29.0 HandlePlayRead: after two pipeline fills and the
+ * verified target header, standby advances to target+3 then retreats nine.
+ * Keep this physical cursor separate from the guest's next-delivery cursor. */
+static int source_drive_head_valid, source_drive_head_lba, source_drive_head_target;
+static uint64_t source_drive_head_due;
+static int source_drive_hold_logical, source_reset_phase;
+static void source_drive_head_update(void) {
+    if(!s_nymashock_drive || !source_drive_head_valid)return;
+    while(psx_cycle_count>=source_drive_head_due) {
+        source_drive_head_lba++;
+        if(source_drive_head_lba>=source_drive_head_target+(source_drive_hold_logical?2:0))source_drive_head_lba-=9;
+        if(source_drive_head_lba < -150)source_drive_head_lba=-150;
+        source_drive_head_due += CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg&0x80)?2:1);
+    }
+}
+static int implicit_read_seek_cycles(void) {
+    if (s_source_clock) {
+        int origin=msf_to_lba(read_min,read_sec,read_sect);
+        int target=setloc_pending?s_setloc_lba:origin;
+        if(origin<0)origin=0;
+        if(target<0)target=0;
+        source_drive_head_update();
+        if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;
+        int delay=source_seek_lower_bound(origin,target,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
+        source_drive_head_valid=0;
+        uint32_t jitter=source_clock_random(25000);
+        return delay>INT32_MAX-(int)jitter?INT32_MAX:delay+(int)jitter;
+    }
+    if (!setloc_pending) return 0;
+    int origin=last_sector_lba>=0?last_sector_lba:0;
+    return apply_speed(source_seek_lower_bound(origin,s_setloc_lba,(stat_reg&CDSTAT_MOTOR)!=0,
+                                              !reading&&!(stat_reg&CDSTAT_PLAY),mode_reg));
+}
+/* This optional comparison adds only the independently expressed source seek
+ * lower bound. The source's global PRNG jitter and physical drive-head position
+ * are not recreated. The first cold ReadTOC's paused/zero position is measured. */
+static int source_toc_seek_cycles(void) {
+    int origin=last_sector_lba>=0?last_sector_lba:0;
+    /* Pause rewinds the source drive head without changing the last sector
+     * delivered to the host. ReadTOC seeks from that stopped head, just as
+     * a subsequent explicit seek or resumed ReadN does. */
+    if(s_source_clock && s_source_seek_paused && !reading) {
+        origin=msf_to_lba(read_min,read_sec,read_sect);
+        if(origin<0)origin=0;
+    }
+    if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;
+    int motor=(stat_reg&CDSTAT_MOTOR)!=0;
+    int paused=motor&&!reading&&!(stat_reg&(CDSTAT_READ|CDSTAT_SEEK|CDSTAT_PLAY));
+    int delay=source_seek_lower_bound(origin,0,motor,paused,mode_reg);
+    uint32_t jitter=s_source_clock?source_clock_random(25000):0;
+    return delay>INT32_MAX-(int)jitter?INT32_MAX:delay+(int)jitter;
+}
+
+static int source_explicit_seek_cycles(uint8_t cmd) {
+    /* The older model uses the delivery cursor; Nymashock also tracks the
+     * physical head while paused or in standby. Both use the source tape.
+     *
+     * The source measures a seek from CurSector, its physical read head. An
+     * established read keeps that head CDC_SECTOR_PIPE_COUNT (2) sectors
+     * ahead of the sector handed to the guest, because HandlePlayRead fills
+     * the pipe before the guest drains it. A seek issued mid-read therefore
+     * starts two sectors further along than the delivery cursor says, and
+     * timing it from the delivery cursor makes its travel two sectors too
+     * long. Command_Reset already accounts for the same lead below. */
+    int cursor = msf_to_lba(read_min, read_sec, read_sect);
+    if (cursor < 0) cursor = 0;
+    int origin = reading ? cursor + 2 : cursor;
+    int target = msf_to_lba(seek_min, seek_sec, seek_sect);
+    if (target < 0) target = 0;
+    if(s_nymashock_drive && !reading && source_drive_head_valid)origin=source_drive_head_lba;
+    source_drive_head_valid=0;
+    int seek = source_seek_lower_bound(origin, target,
+        !!(stat_reg & CDSTAT_MOTOR), s_source_seek_paused, mode_reg);
+    if(s_source_clock) {
+        uint32_t jitter=source_clock_random(25000);
+        seek=seek>INT32_MAX-(int)jitter?INT32_MAX:seek+(int)jitter;
+    }
+    int header_period = cmd == 0x15 ?
+        (s_nymashock_drive ? 2 : 1) * CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg & 0x80) ? 2 : 1) : 0;
+    return seek > INT32_MAX - header_period ? INT32_MAX : seek + header_period;
+}
+
 static void start_read_stream(uint8_t cmd) {
+    int source_target = setloc_pending ? s_setloc_lba :
+        msf_to_lba(read_min, read_sec, read_sect);
+    int seek_cycles = implicit_read_seek_cycles();
+    source_cdda.position_valid=0;source_cdda.async_type=source_cdda.async_count=0;source_cdda.seeking=0;
     cdda_playing = 0;
     cdda_track = 0;
     cdda_delay = 0;
@@ -1626,14 +1818,21 @@ static void start_read_stream(uint8_t cmd) {
     read_min = seek_min;
     read_sec = seek_sec;
     read_sect = seek_sect;
+    if (s_source_clock) {
+        lba_to_msf(source_target, 150, &read_min, &read_sec, &read_sect);
+        s_source_read_start_lba = source_target;
+    }
+    if(s_nymashock_drive)source_drive_hold_logical=1;
     read_cmd = cmd;
-    read_delay = initial_read_delay_cycles();
+    read_delay = seek_cycles + initial_read_delay_cycles();
     s_cd_probe_read_start_count++;
     s_cd_probe_read_start_cycles += (uint64_t)read_delay;
     s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
     s_cd_timing_stream_starts++;
     reading = 1;
-    stat_reg |= CDSTAT_READ;
+    s_source_seek_paused = 0;
+    stat_reg &= (uint8_t)~(CDSTAT_SEEK | CDSTAT_READ | CDSTAT_PLAY);
+    stat_reg |= seek_cycles ? CDSTAT_SEEK : CDSTAT_READ;
     /* ENQUEUE: sector-read stream scheduled (due in read_delay cycles). A
      * content load that happens in OFF but not ON shows up as a missing
      * SRC_CD_READ enqueue here. */
@@ -1669,11 +1868,14 @@ static void stop_read_stream(void) {
 }
 
 static void stop_cdda_playback(void) {
+    source_cdda.seeking=0;source_cdda.pipe_count=source_cdda.pipe_at=0;
+    source_cdda.sectors_read=0;source_cdda.async_type=source_cdda.async_count=0;
     cdda_playing = 0;
     cdda_track = 0;
     cdda_delay = 0;
     cdda_data_end_pending = 0;
     stat_reg &= (uint8_t)~CDSTAT_PLAY;
+    s_source_seek_paused = 1;
 }
 
 static void deliver_cdda_data_end(void) {
@@ -1790,7 +1992,117 @@ static int start_cdda_playback(int requested_track) {
     return 1;
 }
 
+static int source_cdda_peek(int32_t lba) {
+    uint8_t q[12];int valid=0;
+    if(iso_read_subq(iso_handle,(uint32_t)lba,q,12,&valid) && valid && (q[0]&15u)==1u) {
+        memcpy(last_valid_subq,q,12);last_valid_subq_available=1;
+        source_cdda.position_valid=1;return 1;
+    }
+    return 0;
+}
+static void source_cdda_present(void) {
+    if(!source_cdda.enabled || !source_cdda.async_type || !source_clock_receive_ready())return;
+    unsigned type=source_cdda.async_type;
+    response_clear();
+    for(unsigned i=0;i<source_cdda.async_count;i++)response_push(source_cdda.async_data[i]);
+    source_cdda.async_type=source_cdda.async_count=0;
+    set_irq((int)type);fire_cdrom_irq();
+}
+static void source_cdda_queue(unsigned type,const uint8_t *data,unsigned count) {
+    if(count>8)abort();
+    memcpy(source_cdda.async_data,data,count);source_cdda.async_type=type;source_cdda.async_count=count;
+    source_cdda_present();
+}
+static void start_source_cdda(int requested_track) {
+    if(reading || (mode_reg&0x80u)) {
+        fprintf(stderr,"[CDROM] Source CDDA active data-read transition/double speed unqualified\n");exit(2);
+    }
+    source_cdda.async_type=source_cdda.async_count=0;
+    cdrom_clear_pending_dataready();
+    if(!requested_track && !setloc_pending && cdda_playing && !source_cdda.seeking)return;
+    int count=iso_track_count(iso_handle);
+    if(count<1 || count>9){fprintf(stderr,"[CDROM] Source CDDA track range unqualified\n");exit(2);}
+    if(requested_track>count)requested_track=count;
+    int origin=cdda_playing?(int)cdda_lba:msf_to_lba(read_min,read_sec,read_sect);
+    if(origin<0)origin=0;
+    int target=requested_track?(int)iso_track_start_lba(iso_handle,requested_track):setloc_pending?s_setloc_lba:origin;
+    if(target<0)target=0;
+    int track=cdda_track_for_lba((uint32_t)target);
+    if(!track || !iso_track_is_audio(iso_handle,track)) {
+        fprintf(stderr,"[CDROM] Source CDDA data-track play unqualified\n");exit(2);
+    }
+    int delay=source_seek_lower_bound(origin,target,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
+    uint32_t jitter=source_clock_random(25000);
+    if(delay>INT32_MAX-(int)jitter)abort();
+    cdda_delay=delay+(int)jitter;
+    stop_read_stream();spu_cd_audio_reset();
+    cdda_playing=1;cdda_track=track;cdda_lba=(uint32_t)target;cdda_data_end_pending=0;
+    source_cdda.seeking=1;source_cdda.sectors_read=0;
+    source_cdda.pipe_at=source_cdda.pipe_count=0;source_cdda.report_last_tens=255;
+    source_cdda.play_track_match=requested_track?requested_track:-1;
+    for(int i=0;i<32;i++)if(source_cdda_peek(target+i))break;
+    lba_to_msf(target,150,&read_min,&read_sec,&read_sect);
+    s_source_seek_paused=0;setloc_pending=0;
+    stat_reg=(stat_reg&~(CDSTAT_READ|CDSTAT_PLAY))|CDSTAT_MOTOR|CDSTAT_SEEK;
+}
+static void process_source_cdda(uint32_t cycles) {
+    source_cdda_present();
+    if(!cdda_playing)return;
+    cdda_delay-=(int)cycles;
+    unsigned serviced=0;
+    while(cdda_playing && cdda_delay<=0) {
+        if(++serviced>64){fprintf(stderr,"[CDROM] Source CDDA service interval unqualified\n");exit(2);}
+        if(source_cdda.seeking) {
+            source_cdda.seeking=0;
+            for(int i=1;i<=16;i++)if(source_cdda_peek((int)cdda_lba-i))break;
+            stat_reg=(stat_reg&~CDSTAT_SEEK)|CDSTAT_PLAY;
+            cdda_delay+=CDROM_SINGLE_SPEED_SECTOR_CYCLES;continue;
+        }
+        uint8_t raw[2352];
+        if(!iso_read_raw_sector(iso_handle,cdda_lba,raw,2352)) {
+            fprintf(stderr,"[CDROM] Source CDDA sector read failed\n");exit(2);
+        }
+        int valid=source_cdda_peek((int)cdda_lba);
+        const uint8_t *q=last_valid_subq;
+        if(!last_valid_subq_available){fprintf(stderr,"[CDROM] Source CDDA requires a valid SubQ position\n");exit(2);}
+        if(source_cdda.play_track_match<0 && valid)source_cdda.play_track_match=q[1];
+        int leadout=q[1]==0xaa;
+        if(leadout || ((mode_reg&2u) && source_cdda.play_track_match>=0 && q[1]!=source_cdda.play_track_match)) {
+            uint8_t status=stat_reg;
+            cdda_playing=0;cdda_delay=0;source_cdda.pipe_count=source_cdda.pipe_at=0;
+            source_cdda.sectors_read=0;s_source_seek_paused=1;stat_reg&=~CDSTAT_PLAY;
+            if(leadout)status=stat_reg;
+            source_cdda_queue(CDIRQ_DATA_END,&status,1);return;
+        }
+        if((mode_reg&4u) && valid && (q[9]>>4)!=source_cdda.report_last_tens) {
+            source_cdda.report_last_tens=q[9]>>4;
+            unsigned channel=q[8]&1u,peak=0;
+            for(unsigned i=0;i<588;i++) {
+                int value=(int16_t)((uint16_t)raw[4*i+2*channel]|((uint16_t)raw[4*i+2*channel+1]<<8));
+                unsigned magnitude=value<0?(unsigned)-value:(unsigned)value;
+                if(magnitude>32767)magnitude=32767;if(magnitude>peak)peak=magnitude;
+            }
+            peak|=channel<<15;
+            uint8_t report[]={stat_reg,q[1],q[2],q[7],q[8],q[9],(uint8_t)peak,(uint8_t)(peak>>8)};
+            if(q[9]&0x10u){report[3]=q[3];report[4]=q[4]|0x80;report[5]=q[5];}
+            source_cdda_queue(CDIRQ_DATA_READY,report,8);
+        }
+        if(source_cdda.pipe_count==2) {
+            const uint8_t *bytes=source_cdda.pipe[source_cdda.pipe_at];int16_t pcm[1176];
+            for(unsigned i=0;i<1176;i++)pcm[i]=(int16_t)((uint16_t)bytes[2*i]|((uint16_t)bytes[2*i+1]<<8));
+            if(cd_muted)memset(pcm,0,sizeof(pcm));
+            cd_apply_decode_volume(pcm,588);spu_cd_audio_push(pcm,588);
+            cdda_sectors_played++;
+        } else source_cdda.pipe_count++;
+        memcpy(source_cdda.pipe[source_cdda.pipe_at],raw,2352);source_cdda.pipe_at^=1u;
+        cdda_track=bcd_to_bin(q[1]);cdda_lba++;source_cdda.sectors_read++;
+        lba_to_msf((int)cdda_lba,150,&read_min,&read_sec,&read_sect);
+        cdda_delay+=CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+    }
+}
+
 static void process_cdda_stream(uint32_t cycles) {
+    if(source_cdda.enabled){process_source_cdda(cycles);return;}
     if (!cdda_playing) {
         deliver_cdda_data_end();
         return;
@@ -1856,7 +2168,7 @@ static int data_fifo_ready(void) {
 static uint64_t s_dataready_fires;  /* INT1 (data-ready) raised per streamed sector — FMV dispatch probe */
 uint64_t cdrom_get_dataready_fires(void) { return s_dataready_fires; }
 
-static int deliver_read_sector(void) {
+static int deliver_read_sector(uint64_t timing_seq) {
     int delivered = read_sector_at(read_min, read_sec, read_sect);
     advance_msf(&read_min, &read_sec, &read_sect);
     if (xa_data_end_pending) {
@@ -1873,6 +2185,7 @@ static int deliver_read_sector(void) {
     /* Delivered immediately: this INT1 announces the slot just filled. */
     s_ring_read = s_ring_write;
     set_irq(CDIRQ_DATA_READY);
+    cd_timing_arm_irq(timing_seq);
     fire_cdrom_irq();
     s_dataready_fires++;
     return 1;
@@ -1987,6 +2300,16 @@ static void cd_bisect_cmd_log(const char *kind, uint8_t cmd,
 
 static void try_execute_queued_command(void) {
     if (!queued_cmd.pending || irq_flag != 0) return;
+    if(s_source_clock && (psx_cycle_count<s_source_command_due || !source_clock_receive_ready())) return;
+    if(s_source_clock && s_source_command_phase<1) {
+        if(s_source_args_remaining>0) {
+            s_source_args_remaining--;s_source_command_phase=0;
+            s_source_command_due=psx_cycle_count+1815u;
+        } else {
+            s_source_command_phase=1;s_source_command_due=psx_cycle_count+8500u;
+        }
+        return;
+    }
 
     uint8_t cmd = queued_cmd.cmd;
     int count = queued_cmd.param_count;
@@ -2005,6 +2328,29 @@ static void try_execute_queued_command(void) {
 }
 
 static void queue_or_exec_command(uint8_t cmd) {
+    if(s_source_clock) {
+        /* Source reception: 12315+jitter, then 1815 per argument and 8500.
+         * Capture the already-written argument packet. Post-command argument
+         * writes are outside this first clock profile's qualification. */
+        if(param_count<0 || param_count>PARAM_FIFO_SIZE) {
+            fprintf(stderr,"[CDROM] Invalid source clock argument count\n");exit(2);
+        }
+        if(source_cdda.enabled && (cmd==0x04 || cmd==0x05)) {
+            fprintf(stderr,"[CDROM] Source CDDA scan commands unqualified\n");exit(2);
+        }
+        if(cmd==0x03 && !source_cdda.enabled) {
+            fprintf(stderr,"[CDROM] Source clock CDDA Play seek is not qualified\n");exit(2);
+        }
+        s_source_command_due=psx_cycle_count+12315u+source_clock_random(3000);
+        s_source_command_phase=-1;s_source_args_remaining=param_count;
+        queued_cmd.cmd=cmd;queued_cmd.param_count=param_count;queued_cmd.pending=1;
+        memcpy(queued_cmd.params,param_fifo,(size_t)param_count);
+        pending.pending=0; /* Source reception replaces an outstanding second response. */
+        param_count=0;
+        trace_cdrom('Q',0,cmd,0);
+        record_command_history('Q',cmd,queued_cmd.params,queued_cmd.param_count);
+        return;
+    }
     if (irq_flag == 0) {
         exec_command(cmd);
         return;
@@ -2039,18 +2385,39 @@ static void queue_or_exec_command(uint8_t cmd) {
  * disc-speed divisors / 'instant' mode must never compress this latency back
  * into the race window. Call BEFORE stop_read_stream()/CDSTAT_READ clear. */
 static int pause_complete_delay_cycles(void) {
-    if (!reading && !(stat_reg & (CDSTAT_READ | CDSTAT_PLAY)))
+    if (!reading && !(stat_reg & (CDSTAT_READ | CDSTAT_PLAY)) && !(source_cdda.enabled && cdda_playing))
         return 5000;
     int lba = reading ? msf_to_lba(read_min, read_sec, read_sect)
                       : last_sector_lba;
+    if(source_cdda.enabled && cdda_playing) {
+        uint32_t rewind=source_cdda.sectors_read<4?source_cdda.sectors_read:4;
+        cdda_lba-=rewind;lba=(int)cdda_lba;
+        lba_to_msf(lba,150,&read_min,&read_sec,&read_sect);
+    }
+    if (s_source_clock && reading) {
+        /* Source Command_Pause rewinds min(4, physical reads). With its
+         * two-sector pipe this is max(stream origin, next delivery - 2).
+         * Before any delivery, all physical reads are rewound to the origin.
+         * Preserve that stopped head for a subsequent seek or resumed read. */
+        lba -= 2;
+        if (lba < s_source_read_start_lba) lba = s_source_read_start_lba;
+        lba_to_msf(lba, 150, &read_min, &read_sec, &read_sect);
+    }
+    if(s_nymashock_drive) {
+        source_drive_head_valid=1;
+        source_drive_head_lba=source_drive_head_target=lba;
+        source_drive_head_due=psx_cycle_count+CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode_reg&0x80)?2:1);
+    }
     if (lba < 0) lba = 0;
     int64_t cycles = 1124584 + (int64_t)lba * 42596 / (75 * 60);
     if (!(mode_reg & 0x80))
         cycles *= 2;
+    if(s_nymashock_drive && s_source_clock)cycles+=source_clock_random(100000);
     return (int)cycles;
 }
 
 static void exec_command(uint8_t cmd) {
+    source_drive_head_update();
 #if !defined(PSX_NO_DEBUG_TOOLS) && !defined(_WIN32)
     /* Self-stop trap: PSX_CD_TRAP_CMD=<byte> makes the process SIGSTOP
      * itself the moment that CD command dispatches, so a debugger can
@@ -2101,6 +2468,9 @@ static void exec_command(uint8_t cmd) {
     memcpy(cmd_params, param_fifo, (size_t)cmd_param_count);
     response_clear();
 
+    if(s_source_clock && !s_nymashock_drive && s_source_reset_due && cmd!=0x01 && cmd!=0x0A) {
+        fprintf(stderr,"[CDROM] Source command %02X during drive reset is not qualified\n",cmd);exit(2);
+    }
     switch (cmd) {
     case 0x01: /* GetStat */
         if (has_disc()) {
@@ -2109,8 +2479,11 @@ static void exec_command(uint8_t cmd) {
             stat_reg |= CDSTAT_SHELL;
         }
         response_push(stat_reg);
+        if(s_source_cold_status_model && has_disc()) stat_reg &= (uint8_t)~CDSTAT_SHELL;
+        else {
         if (cdrom_lid_acknowledge_closed_shell(&s_lid))
             stat_reg &= (uint8_t)~CDSTAT_SHELL;
+        }
         set_irq(CDIRQ_ACK);
         break;
 
@@ -2138,8 +2511,8 @@ static void exec_command(uint8_t cmd) {
             break;
         }
         if (read_continues_current_stream()) break;   /* ACKed inside */
-        start_read_stream(cmd);
         response_push(stat_reg);
+        start_read_stream(cmd);
         set_irq(CDIRQ_ACK);
         break;
 
@@ -2163,14 +2536,15 @@ static void exec_command(uint8_t cmd) {
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
         {
-            int lat = apply_speed(30000); /* motor spin-up */
+            int lat = source_cdda.enabled?3386880:apply_speed(30000); /* motor spin-up */
+            if(source_cdda.enabled){stat_reg|=CDSTAT_MOTOR;s_source_seek_paused=0;spu_cd_audio_reset();source_cdda.async_type=source_cdda.async_count=0;}
             pending_arm(0x07, lat, 1);
             s_cd_probe_motor_count++;
             s_cd_probe_motor_cycles += (uint64_t)lat;
         }
         break;
 
-    case 0x08: /* Stop — stop the motor. Two-phase like Pause: INT3 (ACK) now
+    case 0x08: { /* Stop — stop the motor. Two-phase like Pause: INT3 (ACK) now
                 * with the pre-stop status (motor still spinning), then a pending
                 * INT2 (COMPLETE) after the motor spins down, reporting the new
                 * status with the motor bit cleared (psx-spx "08h Stop").
@@ -2180,29 +2554,37 @@ static void exec_command(uint8_t cmd) {
                 * change then waits for the Stop completion IRQ never sees it and
                 * hangs: Tsumu Light's CD library retries Stop forever (~90-frame
                 * timeout) and never advances past its first content load. */
+        uint8_t old_status=stat_reg;
         stop_read_stream();
         stop_cdda_playback();
+        s_source_seek_paused = 0;
         xa_reset_decode();
         spu_cd_audio_reset();
         stat_reg &= ~(CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK);
-        response_push(stat_reg);
+        response_push(source_cdda.enabled?old_status:stat_reg);
         set_irq(CDIRQ_ACK);
         {
-            int lat = apply_speed(30000); /* motor spin-down */
+            int lat = source_cdda.enabled?((old_status&CDSTAT_MOTOR)?33868:5000):apply_speed(30000); /* motor spin-down */
+            if(source_cdda.enabled)stat_reg&=~CDSTAT_MOTOR;
             pending_arm(0x08, lat, 1);
             s_cd_probe_stop_count++;
             s_cd_probe_stop_cycles += (uint64_t)lat;
         }
         break;
+    }
 
     case 0x09: { /* Pause */
+        /* Source Command_Pause queues MakeStatus before changing the drive
+         * state. Its ACK describes the active stream; completion describes
+         * the paused drive. Preserve the default response image. */
+        uint8_t source_ack_status = stat_reg;
+        int preserve_source_audio=source_cdda.enabled && cdda_playing;
         int complete_delay = pause_complete_delay_cycles();
         stop_read_stream();
         stop_cdda_playback();
-        xa_reset_decode();
-        spu_cd_audio_reset();
-        stat_reg &= ~(CDSTAT_READ | CDSTAT_PLAY);
-        response_push(stat_reg);
+        if(!preserve_source_audio){xa_reset_decode();spu_cd_audio_reset();}
+        stat_reg &= ~(CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK);
+        response_push(s_source_clock ? source_ack_status : stat_reg);
         set_irq(CDIRQ_ACK);
         pending_arm(0x09, complete_delay, 1);
         s_cd_probe_pause_count++;
@@ -2210,26 +2592,62 @@ static void exec_command(uint8_t cmd) {
         break;
     }
 
-    case 0x0A: /* Init */
+    case 0x0A: /* Init (named Command_Reset in original Octoshock 2.2.2) */
+        if(s_nymashock_drive) {
+            if(cdda_playing || (reading && (stat_reg&CDSTAT_SEEK))) {
+                fprintf(stderr,"[CDROM] Nymashock reset during audio/read seek is not qualified\n");exit(2);
+            }
+            /* An established read keeps two physical sectors ahead of the
+             * next sector delivered to the guest. Reset does not rewind it. */
+            int origin=reading?msf_to_lba(read_min,read_sec,read_sect)+2:
+                source_drive_head_valid?source_drive_head_lba:msf_to_lba(read_min,read_sec,read_sect);
+            response_push(stat_reg);set_irq(CDIRQ_ACK);
+            cd_muted=0;mode_reg=0x20;setloc_pending=0;s_setloc_lba=0;
+            if(source_reset_phase==1) {
+                pending_arm(0x0A,256,1);
+            } else if(has_disc()) {
+                /* Stock clang evaluates the broad Reset draw before CalcSeekTime. */
+                int delay=(int)source_clock_random(3250000);
+                int seek=source_seek_lower_bound(origin,0,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
+                seek+=(int)source_clock_random(25000);
+                if(delay<seek)delay=seek;
+                stop_read_stream();stop_cdda_playback();
+                s_source_reset_due=psx_cycle_count+(uint64_t)delay;source_reset_phase=1;
+                source_drive_head_valid=1;source_drive_head_lba=source_drive_head_target=0;
+                source_drive_head_due=UINT64_MAX;
+                clear_sector_buffer();cdrom_clear_pending_dataready();spu_cd_audio_reset();xa_reset_decode();
+                stat_reg=(stat_reg&~(CDSTAT_READ|CDSTAT_PLAY))|CDSTAT_MOTOR|CDSTAT_SEEK;
+                s_source_seek_paused=0;
+                pending_arm(0x0A,4100000,1);
+            } else pending_arm(0x0A,70000,1);
+            break;
+        }
+        if(s_source_clock) {
+            if(reading || cdda_playing || pending_dataready) {
+                fprintf(stderr,"[CDROM] Source reset from an active stream is not qualified\n");exit(2);
+            }
+            /* ACK reports the old state. Repeated reset does not restart the
+             * drive timer. Empty/paused stream is the qualified source scope. */
+            response_push(stat_reg);
+            set_irq(CDIRQ_ACK);
+            if(!s_source_reset_due) {
+                s_source_reset_due=psx_cycle_count+1136000u;
+                stat_reg=has_disc()?CDSTAT_MOTOR:CDSTAT_SHELL;
+            }
+            break;
+        }
         stop_read_stream();
         stop_cdda_playback();
         spu_cd_audio_reset();
         xa_reset_decode();
         stat_reg = has_disc() ? CDSTAT_MOTOR : CDSTAT_SHELL;
+        s_source_seek_paused = has_disc() ? 1 : 0;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        /* The old 1136000-cycle (34 ms) value was borrowed from Beetle's
-         * Command_RESET — a different command. Init(0x0A) on an already-
-         * spinning drive completes far faster on real hardware, and OpenBIOS
-         * depends on it: its cdromInnerInit spin-waits only ~30000 loop
-         * iterations (single-digit ms) for the INT2 completion, then
-         * re-issues Init — which re-armed our 34 ms clock every retry, a
-         * permanent livelock (Init spam at 2/frame, stalling CD boot).
-         * Sony's driver never noticed: it waits on the completion event with
-         * no short timeout. 131072 cycles (~3.9 ms; an arbitrary power of
-         * two, not a measured constant) sits inside OpenBIOS's window and
-         * within real-hardware quick-init behavior; cross-check against
-         * Beetle's exact PS_CDC::Command_Init figure when refining. */
+        /* Retained default OpenBIOS timeout accommodation. This arbitrary
+         * 131072-cycle delay is not a measured hardware constant. Original
+         * Octoshock's Command_Reset is this same opcode, despite its name;
+         * the explicit source clock above uses that core's drive deadline. */
         pending_arm(0x0A, 131072, 1);
         break;
 
@@ -2257,8 +2675,11 @@ static void exec_command(uint8_t cmd) {
 
     case 0x0E: /* SetMode */
         if (param_count >= 1) {
+            if(source_cdda.enabled && cdda_playing && (param_fifo[0]&0x80u)) {
+                fprintf(stderr,"[CDROM] Source CDDA double speed unqualified\n");exit(2);
+            }
             mode_reg = param_fifo[0];
-            if (!(mode_reg & 0x40u)) {
+            if (!(mode_reg & 0x40u) && !(source_cdda.enabled && cdda_playing)) {
                 xa_reset_decode();
                 spu_cd_audio_reset();
             }
@@ -2295,6 +2716,11 @@ static void exec_command(uint8_t cmd) {
     }
 
     case 0x11: { /* GetlocP */
+        if(source_cdda.enabled && source_cdda.position_valid) {
+            for(unsigned i=1;i<=5;i++)response_push(last_valid_subq[i]);
+            for(unsigned i=7;i<=9;i++)response_push(last_valid_subq[i]);
+            set_irq(CDIRQ_ACK);break;
+        }
         int lba;
         int track = 1;
         int track_lba = 0;
@@ -2306,6 +2732,9 @@ static void exec_command(uint8_t cmd) {
             /* GetlocP reports the drive/sub-Q position. During a read the
              * sector stream has already advanced past the data-ready sector. */
             lba = msf_to_lba(read_min, read_sec, read_sect);
+            /* Nymashock decodes sub-Q before its two-sector data pipeline.
+             * The last physical sector read is one ahead of next delivery. */
+            if(s_nymashock_drive && !(stat_reg&CDSTAT_SEEK))lba++;
         } else if (last_sector_lba >= 0) {
             lba = last_sector_lba;
         } else {
@@ -2313,7 +2742,8 @@ static void exec_command(uint8_t cmd) {
         }
         if (subq_replacements_active) update_last_valid_subq((uint32_t)lba);
         if (subq_replacements_active && last_valid_subq_available) {
-            for (int i = 1; i <= 8; ++i) response_push(last_valid_subq[i]);
+            for (int i = 1; i <= 5; ++i) response_push(last_valid_subq[i]);
+            for (int i = 7; i <= 9; ++i) response_push(last_valid_subq[i]);
         } else {
             int rm, rs, rf;
             int am, as, af;
@@ -2382,6 +2812,10 @@ static void exec_command(uint8_t cmd) {
             break;
         }
         {
+            if(source_cdda.enabled) {
+                response_push(stat_reg);set_irq(CDIRQ_ACK);
+                start_source_cdda(param_count?bcd_to_bin(param_fifo[0]):0);break;
+            }
             int requested_track = 0;
             if (param_count >= 1 && param_fifo[0] != 0)
                 requested_track = bcd_to_bin(param_fifo[0]);
@@ -2405,6 +2839,7 @@ static void exec_command(uint8_t cmd) {
                 }
             }
         }
+        s_source_seek_paused = 0;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
         break;
@@ -2417,18 +2852,24 @@ static void exec_command(uint8_t cmd) {
             set_irq(CDIRQ_ERROR);
             break;
         }
+        {
+        int lat = s_source_explicit_seek_model ? source_explicit_seek_cycles(cmd) :
+                                                seek_complete_delay_cycles();
+        /* Plain seeks ACK the old state, cancel the stream, then own SEEK.
+         * PSX-SPX SeekL/P; upstream cd55e8a stops/retargets the read producer.
+         * The already admitted guest data FIFO is independent and survives. */
+        response_push(stat_reg);
+        set_irq(CDIRQ_ACK);
         stop_read_stream();
         xa_reset_decode();
         spu_cd_audio_reset();
         stop_cdda_playback();
+        s_source_seek_paused = 0; /* source STANDBY after plain seek */
         read_min = seek_min;
         read_sec = seek_sec;
         read_sect = seek_sect;
-        stat_reg |= CDSTAT_SEEK;
-        response_push(stat_reg);
-        set_irq(CDIRQ_ACK);
-        {
-            int lat = seek_complete_delay_cycles();
+        stat_reg = (stat_reg & ~(CDSTAT_READ | CDSTAT_PLAY)) |
+                   CDSTAT_MOTOR | CDSTAT_SEEK;
             pending_arm(cmd, lat, 1); /* 0x15/0x16 — completed in process_pending */
             s_cd_probe_seek_count++;
             s_cd_probe_seek_cycles += (uint64_t)lat;
@@ -2453,8 +2894,8 @@ static void exec_command(uint8_t cmd) {
             break;
         }
         if (read_continues_current_stream()) break;   /* ACKed inside */
-        start_read_stream(cmd);
         response_push(stat_reg);
+        start_read_stream(cmd);
         set_irq(CDIRQ_ACK);
         break;
 
@@ -2464,24 +2905,27 @@ static void exec_command(uint8_t cmd) {
         /* Beetle PS_CDC::Command_ReadTOC: ~30M cycles (a near-second TOC
          * re-scan; Beetle adds a seek term on top — we keep the dominant
          * constant). Unscaled — authentic-latency class. */
-        pending_arm(0x1E, 30000000, 1);
+        {
+            int seek=s_source_toc_seek_model?source_toc_seek_cycles():0;
+            int delay=seek>INT32_MAX-30000000?INT32_MAX:30000000+seek;
+            pending_arm(0x1E, delay, 1);
+            if(s_nymashock_drive) {
+                source_drive_head_target=0;source_drive_hold_logical=0;
+                cdrom_clear_pending_dataready();
+            }
+            s_source_seek_paused = 1;
+        }
         break;
 
     case 0x19: /* Test */
         if (param_count >= 1 && param_fifo[0] == 0x20) {
-            /* CD controller firmware version (BCD date + region). This BIOS is
-             * SCPH-1001, whose sub-CPU reports the 1994 controller: 94/09/19 C0.
-             * The value must be < 0x95 in the high byte — the shell's CD-init
-             * (func at ROM 0x1DF50) sets kernel flag [0xA000DFFC]=1 when the
-             * version byte >= 0x95, which later makes the boot CD-open
-             * (0xBFC0D570) issue a spurious ReadTOC that wedges the game's
-             * streaming reads. Beetle hardcodes the PSone-era 0x97 regardless of
-             * BIOS, which is wrong for SCPH-1001; matching the real 1994
-             * controller keeps the flag clear (Kula World demo-load wedge). */
-            response_push(0x94);
-            response_push(0x09);
-            response_push(0x19);
-            response_push(0xC0);
+            /* Two documented HC05 identities: PU-7 default, PU-18 source.
+             * The old default also suppresses BIOS ReadTOC; retain it without
+             * claiming that firmware selection proves main-BIOS compatibility. */
+            static const uint8_t version[2][4] = {
+                {0x94,0x09,0x19,0xC0}, {0x97,0x01,0x10,0xC2}
+            };
+            for(int i=0;i<4;i++) response_push(version[s_source_firmware_model][i]);
             set_irq(CDIRQ_ACK);
         } else {
             response_push(stat_reg);
@@ -2504,6 +2948,39 @@ static void exec_command(uint8_t cmd) {
     cd_bisect_cmd_log("ISSUE", cmd, cmd_params, cmd_param_count);
 }
 
+static void process_source_reset(void) {
+    if(!s_source_clock || !s_source_reset_due || psx_cycle_count<s_source_reset_due)return;
+    if(s_nymashock_drive) {
+        while(s_source_reset_due && psx_cycle_count>=s_source_reset_due) {
+            uint64_t due=s_source_reset_due;
+            if(source_drive_hold_logical && source_reset_phase<3) {
+                source_drive_head_lba=source_reset_phase++;
+                s_source_reset_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+            } else {
+                s_source_reset_due=0;source_reset_phase=0;
+                source_drive_head_lba=source_drive_hold_logical?-6:-8;
+                source_drive_head_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES*(source_drive_hold_logical?1:2);
+                stat_reg&=~CDSTAT_SEEK;s_source_seek_paused=1;
+                read_min=seek_min=0;read_sec=seek_sec=2;read_sect=seek_sect=0;
+                source_drive_head_update();
+            }
+        }
+        return;
+    }
+    s_source_reset_due=0;
+    /* Original SetAIP then ClearAIP presents only if receive is open at this
+     * instant; drive state completes even if the old ACK owns the FIFO. */
+    if(source_clock_receive_ready()) {
+        response_clear();response_push(stat_reg);
+        set_irq(CDIRQ_COMPLETE);fire_cdrom_irq();
+    }
+    cd_muted=0;spu_cd_audio_reset();xa_reset_decode();
+    mode_reg=0x20;
+    read_min=seek_min=0;read_sec=seek_sec=2;read_sect=seek_sect=0;
+    s_setloc_lba=0;setloc_seek_far=0;
+    s_source_seek_paused=1;
+}
+
 static void process_pending(uint32_t cycles) {
     uint8_t done_cmd;
     (void)cycles;
@@ -2514,9 +2991,21 @@ static void process_pending(uint32_t cycles) {
      * due_cyc forward while the response FIFO is busy (old relative freeze
      * under/over-counted mid-slice acks and forked Pause→Seek→ReadN). */
     if (psx_cycle_count < pending.due_cyc) return;
+    if(s_nymashock_drive && pending.cmd==0x0A && s_source_reset_due) {
+        pending.due_cyc=s_source_reset_due>psx_cycle_count+256?s_source_reset_due:psx_cycle_count+256;
+        return;
+    }
     if (irq_flag != 0) return;
+    if (!source_clock_receive_ready()) return;
 
     done_cmd = pending.cmd;
+    if(s_nymashock_drive && done_cmd==0x15) {
+        source_drive_hold_logical=1;
+        source_drive_head_valid=1;source_drive_head_target=msf_to_lba(seek_min,seek_sec,seek_sect);
+        source_drive_head_lba=source_drive_head_target-6;
+        source_drive_head_due=pending.due_cyc+CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode_reg&0x80)?2:1);
+        source_drive_head_update();
+    }
     pending.pending = 0;
     pending.due_cyc = 0;
     response_clear();
@@ -2538,6 +3027,7 @@ static void process_pending(uint32_t cycles) {
 
     case 0x07: /* MotorOn complete — motor now spinning */
         stat_reg |= CDSTAT_MOTOR;
+        s_source_seek_paused = 0;
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
@@ -2565,10 +3055,11 @@ static void process_pending(uint32_t cycles) {
 
     case 0x15: /* SeekL complete */
     case 0x16: /* SeekP complete */
-        stat_reg &= ~CDSTAT_SEEK;
-        stat_reg |= CDSTAT_READ;   /* PSX-CD-003: GT1 waits for READ after seek */
+        /* A plain seek finishes paused. Only a subsequent Read starts READ;
+         * the implicit ReadN/S seek is a separate transition. */
+        stat_reg &= ~(CDSTAT_SEEK | CDSTAT_READ | CDSTAT_PLAY);
         setloc_seek_far = 0;
-    setloc_pending = 0;
+        setloc_pending = 0;
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
@@ -2709,15 +3200,17 @@ static void process_read_stream(uint32_t cycles) {
     }
 
     if (read_delay <= 0) {
+        /* The target is now eligible. READ replaces SEEK before the first
+         * data-ready response; the existing read timer carries both delays. */
+        stat_reg = (stat_reg & (uint8_t)~CDSTAT_SEEK) | CDSTAT_READ;
         uint64_t timing_seq = cd_timing_begin_sector(
             msf_to_lba(read_min, read_sec, read_sect));
-        if (irq_flag == 0) {
+        if (source_clock_receive_ready()) {
             if (rb_available()) {
                 trace_cdrom('O', 0, (uint32_t)RB_.pos, 0);
             }
-            if (deliver_read_sector()) {
+            if (deliver_read_sector(timing_seq)) {
                 cd_timing_flag(timing_seq, CDT_DATA);
-                cd_timing_arm_irq(timing_seq);
             }
         } else if (dma_cdrom_transfer_active()) {
             /* Active multi-sector CD DMA with the data-ready INT still
@@ -2746,6 +3239,7 @@ static void process_read_stream(uint32_t cycles) {
                 pending_dataready_slot = s_ring_write;
                 s_cd_timing_pending_seq = timing_seq;
                 s_int1_pended++;
+                if(s_source_clock && irq_flag==0)pending_present_due=s_source_ready_due;
             }
         }
         s_accel_block_accum = 0;   /* the pipeline advanced; the next hold
@@ -2773,12 +3267,42 @@ static void present_pending_dataready(void) {
     response_push(pending_dataready_stat);
     s_ring_read = pending_dataready_slot;   /* the slot this INT1 announced */
     set_irq(CDIRQ_DATA_READY);
-    fire_cdrom_irq();
     cd_timing_arm_irq(timing_seq);
+    fire_cdrom_irq();
     s_dataready_fires++;
 }
 
 void cdrom_init(const char* cue_path) {
+    s_source_firmware_model=source_boot_model("PSX_CD_FIRMWARE_MODEL");
+    s_source_cold_status_model=source_boot_model("PSX_CD_COLD_STATUS_MODEL");
+    s_source_toc_seek_model=source_boot_model("PSX_CD_TOC_SEEK_MODEL");
+    s_source_explicit_seek_model=source_boot_model("PSX_CD_EXPLICIT_SEEK_MODEL");
+    cd_tape_free(&s_source_clock_tape);
+    s_source_clock=0;s_source_command_due=0;s_source_ready_due=0;s_source_clock_calls=0;s_source_reset_due=0;
+    s_source_command_phase=-1;s_source_args_remaining=0;
+    const char *clock_tape=getenv("PSX_CD_SOURCE_CLOCK_TAPE");
+    if(clock_tape && *clock_tape) {
+        const char *pipeline=getenv("PSX_CD_READ_START_MODEL");
+        if(!s_source_explicit_seek_model || !s_source_toc_seek_model ||
+           !pipeline || strcmp(pipeline,"octoshock-2.2.2-pipeline") ||
+           !cd_tape_load(&s_source_clock_tape,clock_tape)) {
+            fprintf(stderr,"[CDROM] Source clock needs a valid tape, source seek models and source pipeline\n");exit(2);
+        }
+        s_source_clock=1;
+    }
+    const char *drive_model=getenv("PSX_CD_DRIVE_MODEL");
+    s_nymashock_drive=drive_model && !strcmp(drive_model,"nymashock-1.29.0");
+    if(drive_model && *drive_model && (!s_nymashock_drive || !s_source_clock)) {
+        fprintf(stderr,"[CDROM] Invalid source drive model or missing clock\n");exit(2);
+    }
+    source_drive_head_valid=source_drive_head_lba=source_drive_head_target=0;
+    source_drive_head_due=0;source_drive_hold_logical=source_reset_phase=0;
+    memset(&source_cdda,0,sizeof(source_cdda));
+    const char *cdda_model=getenv("PSX_CD_CDDA_MODEL");
+    if(cdda_model && *cdda_model) {
+        if(strcmp(cdda_model,"octoshock-2.3") || !s_source_clock){fprintf(stderr,"[CDROM] Invalid source CDDA model or missing clock\n");exit(2);}
+        source_cdda.enabled=1;
+    }
     memset(param_fifo, 0, sizeof(param_fifo));
     memset(response_fifo, 0, sizeof(response_fifo));
     memset(s_sector_ring, 0, sizeof(s_sector_ring));
@@ -2834,8 +3358,10 @@ void cdrom_init(const char* cue_path) {
     read_cmd = 0;
     read_delay = 0;
     seek_min = seek_sec = seek_sect = 0;
+    s_source_read_start_lba = 0;
     s_setloc_lba = -1;
     setloc_seek_far = 0;
+    setloc_pending = 0;
     s_warm_routes_count = 0;
     s_warm_route_configured = 0;
     s_warm_route_enabled = 0;
@@ -2865,6 +3391,8 @@ void cdrom_init(const char* cue_path) {
     }
 
     stat_reg = has_disc() ? CDSTAT_MOTOR : CDSTAT_SHELL;
+    if(s_source_cold_status_model) stat_reg |= CDSTAT_SHELL;
+    s_source_seek_paused = has_disc() ? 1 : 0;
     cdrom_debug_clear_trace();
     cdrom_debug_clear_command_history();
     trace_cdrom('N', 0, has_disc() ? 1u : 0u, 0);
@@ -2943,6 +3471,9 @@ void cdrom_write(uint32_t addr, uint32_t value) {
 
     case 0x1F801802:
         if (index_reg == 0) {
+            if(s_source_clock && queued_cmd.pending) {
+                fprintf(stderr,"[CDROM] Source clock post-command argument writes are not qualified\n");exit(2);
+            }
             if (param_count < PARAM_FIFO_SIZE) {
                 param_fifo[param_count++] = val;
             }
@@ -2982,6 +3513,7 @@ void cdrom_write(uint32_t addr, uint32_t value) {
             if (had_active_irq && (irq_flag & 0x1F) == 0) {
                 cdrom_intc_request_latched = 0;
                 present_lid_open_irq_if_ready();
+                if(s_source_clock)s_source_ready_due=psx_cycle_count+2000u;
             }
             if (val & 0x40) {
                 param_count = 0;
@@ -2993,7 +3525,7 @@ void cdrom_write(uint32_t addr, uint32_t value) {
              * second-response already past due_cyc; a queued command waits
              * behind. */
             if (pending_dataready && pending_present_due == 0)
-                pending_present_due = psx_cycle_count + CDROM_PEND_PRESENT_DELAY;
+                pending_present_due = psx_cycle_count + (s_source_clock?2000u:CDROM_PEND_PRESENT_DELAY);
             process_pending(0);
             try_execute_queued_command();
         }
@@ -3013,6 +3545,17 @@ void cdrom_write(uint32_t addr, uint32_t value) {
 uint32_t cdrom_cycles_to_irq(uint32_t i_mask) {
     if (!(i_mask & (1u << 2))) return 0xFFFFFFFFu;   /* IRQ_CDROM masked */
     uint32_t best = 0xFFFFFFFFu;
+    if(source_cdda.enabled) {
+        if(cdda_playing)best=cdda_delay>0?(uint32_t)cdda_delay:0;
+        if(source_cdda.async_type && !irq_flag) {
+            uint32_t wait=(uint32_t)cycles_until_due(s_source_ready_due);
+            if(wait<best)best=wait;
+        }
+    }
+    if(s_source_clock && queued_cmd.pending && irq_flag==0) {
+        uint64_t due=s_source_command_due>s_source_ready_due?s_source_command_due:s_source_ready_due;
+        uint32_t wait=(uint32_t)cycles_until_due(due);if(wait<best)best=wait;
+    }
     /* Armed response awaiting presentation (raises bit2 at present_due). */
     if (cdrom_irq_mask_matches_reason(irq_enable, irq_flag)) {
         int rem = irq_present_rem_cycles();
@@ -3022,6 +3565,10 @@ uint32_t cdrom_cycles_to_irq(uint32_t i_mask) {
     /* Pending second response: slice to due_cyc while the drive clock runs.
      * Once due, presentation waits on irq_flag clear (CPU ack) — do not
      * advertise a deliverable CD IRQ until the FIFO is free. */
+    if(s_source_clock && s_source_reset_due) {
+        uint32_t d=(uint32_t)cycles_until_due(s_source_reset_due);
+        if(d<best)best=d;
+    }
     if (pending.pending) {
         if (psx_cycle_count < pending.due_cyc) {
             uint32_t d = (uint32_t)cycles_until_due(pending.due_cyc);
@@ -3049,19 +3596,26 @@ void cdrom_advance(uint32_t cycles) {
      * Menu CD asymmetry is contained by no-invent during media + core POST. */
     process_lid_state();
     refresh_cdrom_irq_line();
+    process_source_reset();
+    source_cdda_present();
     process_pending(cycles);
-    try_execute_queued_command();
+    if(!s_source_clock)try_execute_queued_command();
     /* Release a scheduled data-ready once its delay has elapsed and the guest
      * has genuinely finished with the previous INT. */
     if (pending_present_due != 0 && psx_cycle_count >= pending_present_due) {
         pending_present_due = 0;
-        if (pending_dataready && irq_flag == 0)
+        if (pending_dataready && source_clock_receive_ready())
             present_pending_dataready();
+        else if(s_source_clock && pending_dataready && irq_flag==0)
+            pending_present_due=s_source_ready_due;
     }
     process_read_stream(cycles);
     process_cdda_stream(cycles);
     deliver_xa_data_end();
     process_lid_state();
+    /* A command admitted at this interval's end must not age its new stream
+     * by the interval that elapsed before admission. */
+    if(s_source_clock)try_execute_queued_command();
     refresh_cdrom_irq_line();
 }
 
@@ -3069,13 +3623,15 @@ void cdrom_tick(void) {
     cdrom_advance(33868u);
 }
 
-uint32_t cdrom_dma_read(void) {
+static uint32_t cdrom_dma_read_internal(int padded) {
     uint32_t val = 0;
     int got = 0;
     if ((request_reg & CDROM_REQUEST_BFRD) && rb_available() &&
-        RB_.pos + 4 <= RB_.size) {
-        memcpy(&val, RB_.data + RB_.pos, 4);
-        RB_.pos += 4;
+        (padded || RB_.pos + 4 <= RB_.size)) {
+        int count=RB_.size-RB_.pos;
+        if(count>4)count=4;
+        memcpy(&val, RB_.data + RB_.pos, (size_t)count);
+        RB_.pos += count;
         got = 1;
     }
     /* Per-word DMA data reads flood the CD trace ring (hundreds per sector) and
@@ -3092,6 +3648,9 @@ uint32_t cdrom_dma_read(void) {
     }
     return val;
 }
+
+uint32_t cdrom_dma_read(void) { return cdrom_dma_read_internal(0); }
+uint32_t cdrom_dma_read_padded(void) { return cdrom_dma_read_internal(1); }
 
 int cdrom_dma_ready(void) {
     if (request_reg & CDROM_REQUEST_BFRD) ring_note_starved();
@@ -3363,6 +3922,18 @@ static int cdrom_snap_emit(PstW *w) {
     W8(pending.cmd); WI(pending.pending); WI(pending_rem_cycles()); WI(pending.phase);
     W8(queued_cmd.cmd); WB(queued_cmd.params); WI(queued_cmd.param_count); WI(queued_cmd.pending);
     W8(pending_dataready); W8(pending_dataready_stat);
+    /* This explicit private profile adds its timing state to the CD section.
+     * Default bytes stay unchanged. Full-machine/cross-profile restore remains
+     * unqualified; matching-profile controller state is not reconstructed. */
+    if (s_source_explicit_seek_model) W8(s_source_seek_paused);
+    if(s_source_clock) {
+        WI(s_source_read_start_lba);
+        WU(0x33434c43u);WB(s_source_clock_tape.sha256);
+        WU(s_source_clock_tape.count);WU(s_source_clock_tape.cursor);WU(s_source_clock_calls);
+        WI(s_source_command_phase);WI(s_source_args_remaining);
+        WI(cycles_until_due(s_source_command_due));WI(cycles_until_due(s_source_ready_due));
+        WI(setloc_pending);WI(s_source_reset_due!=0);WI(cycles_until_due(s_source_reset_due));
+    }
 #undef W8
 #undef WI
 #undef WU
@@ -3427,6 +3998,19 @@ static int cdrom_snap_parse(PstR *r) {
     R8(pending.cmd); RI(pending.pending); RI(pending_rem); RI(pending.phase);
     R8(queued_cmd.cmd); RB(queued_cmd.params); RI(queued_cmd.param_count); RI(queued_cmd.pending);
     R8(pending_dataready); R8(pending_dataready_stat);
+    if (s_source_explicit_seek_model) R8(s_source_seek_paused);
+    if(s_source_clock) {
+        uint8_t identity[32];uint32_t signature,count;
+        int command_rem,ready_rem,reset_active,reset_rem;
+        RI(s_source_read_start_lba);
+        RU(signature);RB(identity);RU(count);RU(s_source_clock_tape.cursor);RU(s_source_clock_calls);
+        RI(s_source_command_phase);RI(s_source_args_remaining);
+        RI(command_rem);RI(ready_rem);RI(setloc_pending);RI(reset_active);RI(reset_rem);
+        (void)signature;(void)count; /* Identity and range checks precede any parse mutation. */
+        s_source_command_due=psx_cycle_count+(uint32_t)command_rem;
+        s_source_ready_due=psx_cycle_count+(uint32_t)ready_rem;
+        s_source_reset_due=reset_active?psx_cycle_count+(uint32_t)reset_rem:0;
+    }
 #undef R8
 #undef RI
 #undef RU
@@ -3441,20 +4025,38 @@ static int cdrom_snap_parse(PstR *r) {
 }
 
 uint32_t cdrom_snapshot_bytes(void) {
+    if(source_cdda.enabled || s_nymashock_drive){fprintf(stderr,"[CDROM] Source CDDA/drive capture unqualified\n");exit(2);}
     PstW w;
     pst_w_init(&w, NULL, 0);
     (void)cdrom_snap_emit(&w);
     return (uint32_t)w.written;
 }
 void cdrom_snapshot_write(uint8_t *p) {
+    if(source_cdda.enabled || s_nymashock_drive){fprintf(stderr,"[CDROM] Source CDDA/drive capture unqualified\n");exit(2);}
     PstW w;
     uint32_t n = cdrom_snapshot_bytes();
     pst_w_init(&w, p, n);
     (void)cdrom_snap_emit(&w);
 }
 int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
+    if(source_cdda.enabled || s_nymashock_drive)return 0;
     PstR r;
     if (len != cdrom_snapshot_bytes()) return 0;
+    uint32_t clock_bytes=s_source_clock?80u:0u;
+    if (s_source_explicit_seek_model && p[len-clock_bytes-1] > 1) return 0;
+    if(s_source_clock) {
+        const uint8_t *clock=p+len-clock_bytes+4;
+        int32_t phase=(int32_t)cd_tape_le32(clock+48);
+        if(cd_tape_le32(clock)!=0x33434c43u || memcmp(clock+4,s_source_clock_tape.sha256,32) ||
+           cd_tape_le32(clock+36)!=s_source_clock_tape.count ||
+           cd_tape_le32(clock+40)>s_source_clock_tape.count ||
+           cd_tape_le32(clock+44)>cd_tape_le32(clock+40) ||
+           phase < -1 || phase > 1 || cd_tape_le32(clock+52)>PARAM_FIFO_SIZE ||
+           cd_tape_le32(clock+56)>INT32_MAX || cd_tape_le32(clock+60)>2000u ||
+           cd_tape_le32(clock+64)>1u || cd_tape_le32(clock+68)>1u ||
+           cd_tape_le32(clock+72)>1136000u ||
+           (!cd_tape_le32(clock+68) && cd_tape_le32(clock+72))) return 0;
+    }
     pst_r_init(&r, p, len);
     if (!cdrom_snap_parse(&r))
         return 0;

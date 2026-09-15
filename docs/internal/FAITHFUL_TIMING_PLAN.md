@@ -232,6 +232,25 @@ on a fixed region -> next.
   checkpoint; refresh onto upstream 7025bb5f (rewind-key aliases only) and
   recheck before merging. Game pins and other PRs remain untouched.
   See `SIO_CARD_NO_HACKS_AUDIT.md`; central issue beads-eio.3.154.
+- **2026-09-13 (PR361 Python test discovery):** Discover Python before the
+  GNU TAS contract-test registrations expand their commands. A fresh original
+  CHD-enabled configure produced 16 script-as-executable commands; the patched
+  configure discovers Python without a cache override and wraps all 16
+  correctly. Python is required only for the GNU test suite; testing disabled
+  still configures without Python, and Clang retains optional Python tests.
+  Fresh GNU 16.1 / CHD-enabled build and all 160 enabled CTests pass; three
+  pre-existing disabled tests remain disabled. The local mixed-MinGW overlay
+  fixture required matching compiler runtime DLLs staged beside the test-build
+  emitter (not a source change or fingerprint bypass).
+  This is a test-configuration fix, not retail replay qualification or a
+  resolution of the runtime conflicts with the landed no-hack SIO removal.
+  Tracking: central issue `beads-eio.3.157`.
+
+- **2026-09-13 (TAS upstream submission):** Port the authored replay profile,
+  source-oracle component fixtures and cold launchers onto upstream `85cd26f0`.
+  Preserve current upstream DMA, GPU polyline, CUE mount and overlay callbacks.
+  Retail acceptance remains tied to the earlier campaign builds; see
+  [integration status](../TAS_UPSTREAM_INTEGRATION.md). No release pin promotion.
 
 - **2026-09-12 (FMV brief follow-ups, correctness separated from experiments):**
   `fix/cfg-metadata-integrity` repairs missing live reverse edges and replaces
@@ -299,6 +318,13 @@ on a fixed region -> next.
   builds also pass their
   600-frame headless gates. Visible software-renderer routes and another fork
   review are still required before the public branch can change.
+- **2026-09-09 (TAS host-speed validation):** The published Tekken 3 cold-boot
+  route reproduces the 8.80 victory with 7,974 unchanged inputs and 8,399 exact
+  RAM/clock returns. Added replay `--speed` control using the existing host
+  fast-forward path, including 32x/64x caps and an uncapped mode. Guest timing,
+  code generation and controller routing are unchanged. Full visible 4x, 8x,
+  32x and uncapped checks use the same fingerprint gate; results belong in the
+  speed-validation PR. Requested caps and measured throughput are separate.
 
 - **2026-07-28 (per-game host audio cushion — implemented, parser validated):**
   Added `[audio] buffer_ms` as a runtime-only developer setting with a guarded

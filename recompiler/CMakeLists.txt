@@ -4,8 +4,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CTest)
 
-# libchdr is needed by exactly one target here: the user-facing `psxrecomp`
-# media CLI. It arrives via FetchContent + ExternalProject, which is by far the
+# libchdr is needed by the user-facing `psxrecomp` media CLI and optional
+# production disc-reader tests. It arrives via FetchContent + ExternalProject, which is by far the
 # heaviest and most fragile thing in this configure — it needs the network on a
 # cold cache, and ExternalProject cannot handle a source path containing a colon
 # (a repo directory like "Marvel vs. Capcom: Clash of Super Heroes Recomp"
@@ -13,7 +13,8 @@ include(CTest)
 #
 # Turning it off lets a caller that only wants an analysis or emitter binary
 # configure this project without any of that. Nothing but the media CLI is
-# affected; the emitters, psxrecomp-analyze, and every test are chd-free.
+# affected apart from the conditional disc-reader tests; emitters and
+# psxrecomp-analyze remain chd-free.
 option(PSXRECOMP_ENABLE_CHD
        "Build the psxrecomp media CLI (requires libchdr via FetchContent)" ON)
 
@@ -195,16 +196,22 @@ endif()
 set(PSXRECOMP_CODEGEN_HASH_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/codegen_hash_sources.cmake)
 set(_baked_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_baked_codegen_hash.h)
+set(_runtime_hash_hdr ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include/overlay_codegen_hash.h)
 add_custom_command(
-    OUTPUT  ${_baked_hash_hdr}
+    OUTPUT  ${_baked_hash_hdr} ${_runtime_hash_hdr}
     COMMAND ${CMAKE_COMMAND} -DOUT=${_baked_hash_hdr}
+            "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
+    COMMAND ${CMAKE_COMMAND} -DOUT=${_runtime_hash_hdr}
             "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
     DEPENDS ${PSXRECOMP_CODEGEN_HASH_SRCS}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
     COMMENT "Hashing codegen sources -> psxrecomp_baked_codegen_hash.h"
     VERBATIM)
-add_custom_target(psxrecomp_baked_codegen_hash DEPENDS ${_baked_hash_hdr})
+# Overlay generation is usable immediately after a tools-only build, before
+# configuring any runtime. Both consumers must have the same cache identity.
+add_custom_target(psxrecomp_baked_codegen_hash DEPENDS ${_baked_hash_hdr} ${_runtime_hash_hdr})
 add_dependencies(psxrecomp-game psxrecomp_baked_codegen_hash)
 # Force main_psx.cpp to recompile whenever the hash header content changes
 # (same OBJECT_DEPENDS hardening as runtime.cmake — __has_include depfile gap).
@@ -346,6 +353,15 @@ target_include_directories(emitter_directive_line_test PRIVATE
 target_link_libraries(emitter_directive_line_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    # Discover the interpreter before expanding any Python-backed TAS test
+    # command. GNU's contract tests require it; non-GNU Python tests remain
+    # optional, and BUILD_TESTING=OFF adds no interpreter dependency.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    else()
+        find_package(Python3 COMPONENTS Interpreter)
+    endif()
+
     add_executable(control_flow_metadata_test
         tests/control_flow_metadata_test.cpp
         src/control_flow.cpp)
@@ -368,6 +384,134 @@ if(BUILD_TESTING)
     target_include_directories(host_path_test PRIVATE include)
     add_test(NAME host_path_test COMMAND host_path_test)
 
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        foreach(_mode IN ITEMS O0 O2)
+            add_executable(tas_cdrom_subq_position_${_mode}
+                ../runtime/tests/test_cdrom_subq_position.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_cdrom_subq_position_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_cdrom_subq_position_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_cdrom_subq_position_${_mode} PRIVATE m)
+            add_test(NAME tas_cdrom_subq_position_${_mode} COMMAND tas_cdrom_subq_position_${_mode})
+            if(PSXRECOMP_ENABLE_CHD)
+                foreach(_disc_test IN ITEMS source_subq sbi)
+                    if(_disc_test STREQUAL "source_subq")
+                        set(_disc_source ../runtime/tests/test_iso_reader_source_subq.cpp)
+                    else()
+                        set(_disc_source ../runtime/tests/test_iso_reader_sbi.cpp)
+                    endif()
+                    add_executable(tas_iso_${_disc_test}_${_mode}
+                        ${_disc_source}
+                        ../runtime/src/iso_reader.cpp ../runtime/src/cue_sheet.cpp)
+                    target_include_directories(tas_iso_${_disc_test}_${_mode} PRIVATE ../runtime/include include)
+                    target_compile_options(tas_iso_${_disc_test}_${_mode} PRIVATE -${_mode} -UNDEBUG)
+                    target_link_libraries(tas_iso_${_disc_test}_${_mode} PRIVATE chdr-static)
+                endforeach()
+                add_test(NAME tas_iso_source_subq_${_mode} COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_iso_reader_source_subq_contracts.py
+                    $<TARGET_FILE:tas_iso_source_subq_${_mode}>)
+                file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sbi-${_mode})
+                add_test(NAME tas_iso_sbi_${_mode} COMMAND tas_iso_sbi_${_mode})
+                set_tests_properties(tas_iso_sbi_${_mode} PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sbi-${_mode})
+            endif()
+            add_executable(tas_gpu_sprite_blend_${_mode}
+                ../runtime/tests/test_source_gpu_sprite_blend.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_sprite_blend_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_sprite_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_sprite_blend_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_sprite_blend_${_mode} COMMAND tas_gpu_sprite_blend_${_mode})
+            add_executable(tas_gpu_textured_triangle_${_mode}
+                ../runtime/tests/test_source_gpu_textured_triangle.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_textured_triangle_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_textured_triangle_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_textured_triangle_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_textured_triangle_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_textured_triangle_contracts.py
+                $<TARGET_FILE:tas_gpu_textured_triangle_${_mode}>)
+            add_executable(tas_gpu_polygon_order_${_mode}
+                ../runtime/tests/test_source_gpu_polygon_order.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_polygon_order_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_polygon_order_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_polygon_order_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_polygon_order_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_polygon_order_contracts.py
+                $<TARGET_FILE:tas_gpu_polygon_order_${_mode}>)
+            add_executable(tas_gpu_shaded_texture_family_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_texture_family.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_texture_family_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_texture_family_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_texture_family_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_texture_family_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_texture_family_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_texture_family_${_mode}>)
+            add_executable(tas_gpu_shaded_triangle_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_triangle.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_triangle_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_triangle_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_triangle_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_triangle_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_triangle_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_triangle_${_mode}>)
+            add_executable(tas_gpu_shaded_quad_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_quad.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_quad_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_quad_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_quad_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_quad_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_quad_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_quad_${_mode}>)
+            add_executable(tas_gpu_polygon_wrap_${_mode}
+                ../runtime/tests/test_source_gpu_polygon_wrap.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_polygon_wrap_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_polygon_wrap_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_polygon_wrap_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_polygon_wrap_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_polygon_wrap_contracts.py
+                $<TARGET_FILE:tas_gpu_polygon_wrap_${_mode}>)
+            add_executable(tas_gpu_flat_blend_${_mode}
+                ../runtime/tests/test_source_gpu_flat_blend.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_flat_blend_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_flat_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_flat_blend_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_flat_blend_${_mode} COMMAND tas_gpu_flat_blend_${_mode})
+            add_executable(tas_gpu_line_${_mode}
+                ../runtime/tests/test_source_gpu_line.c ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_line_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_line_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_line_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_line_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_line_contracts.py
+                $<TARGET_FILE:tas_gpu_line_${_mode}>)
+        endforeach()
+    endif()
+
+    add_executable(source_cpu_block_bound_test
+        ../runtime/tests/test_source_cpu_block_bound.c
+        ../runtime/src/psx_icache.c)
+    target_include_directories(source_cpu_block_bound_test PRIVATE ../runtime/include)
+    target_compile_definitions(source_cpu_block_bound_test PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+    if(MSVC)
+        target_compile_options(source_cpu_block_bound_test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(source_cpu_block_bound_test PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME source_cpu_block_bound_test COMMAND source_cpu_block_bound_test)
     add_test(NAME emitter_directive_line_test
              COMMAND emitter_directive_line_test)
     add_executable(guest_tty_test
@@ -522,7 +666,6 @@ if(BUILD_TESTING)
     add_test(NAME l2_structural_test COMMAND l2_structural_test)
     add_test(NAME reachable_discovery_test COMMAND reachable_discovery_test)
 
-    find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND AND CMAKE_GENERATOR STREQUAL "Ninja")
         add_test(NAME runtime_ipo_configuration
             COMMAND ${Python3_EXECUTABLE}
@@ -713,6 +856,7 @@ if(BUILD_TESTING)
                 pal_cadence_host_refresh
                 sdl3_main_single_include
                 spu_sample_scheduler_default
+                overlay_step_boundary
                 vk_build_default
                 vk_color_self_barrier
                 vk_command_buffer_batching
@@ -796,6 +940,36 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
         COMMAND ${Python3_EXECUTABLE}
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gpu_upload_history.py"
             --cc ${CMAKE_C_COMPILER})
+endif()
+if(BUILD_TESTING)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests"
+                     "${CMAKE_CURRENT_BINARY_DIR}/tas-models")
+    if(Python3_Interpreter_FOUND)
+        # The Python driver compiles test_scheduler_precise_escape.c and
+        # test_source_gpu_pending_deadline.c at O0/O2.
+        add_test(NAME tas_scheduler_precise_escape
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_scheduler_precise_escape.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_bk2_intake
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_bk2_intake.py")
+        add_test(NAME tas_replay_recipe
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_tekken3.py")
+        add_test(NAME tas_pepsiman_admission
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_pepsiman.py")
+        # The Python driver compiles test_source_ram_page_probe.c at O0/O2.
+        add_test(NAME tas_ram_long_route
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_ram_page_probe.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_cpu_long_route
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_cpu_return_probe.py"
+                --cc ${CMAKE_C_COMPILER})
+    endif()
 endif()
 
 # Reads both CMakeLists.txt files as text, so it catches an orphan in either
