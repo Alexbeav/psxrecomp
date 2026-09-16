@@ -27,7 +27,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define PSX_TAS_STATEIO_SCHEMA "psx-tas-stateio-v2"
+/* v3 adds the memory card images, which live in host files rather than in any
+ * boot_state section: a checkpoint taken after the guest writes its card must
+ * resume with that card, not with the route's initial image. */
+#define PSX_TAS_STATEIO_SCHEMA "psx-tas-stateio-v3"
+#define PSX_TAS_STATEIO_CARD_BYTES 131072u
+#define PSX_TAS_STATEIO_NO_CARD "none"
 /* Bump when a diagnostic state changes representation or continuation meaning.
  * This admits runtime-only rebuilds, never a different codegen ABI or profile;
  * boot_state_load independently checks its header and every device section. */
@@ -58,7 +63,16 @@ typedef struct TasStateManifest {
     char               exe_sha256[65];
     char               route_sha256[65];
     char               compatibility[65];
+    /* v3: SHA-256 of each slot's card image, saved beside the state as
+     * <state>.card1.mcd / <state>.card2.mcd, or PSX_TAS_STATEIO_NO_CARD. */
+    char               card_sha256[2][65];
 } TasStateManifest;
+
+/* <state>.cardN.mcd for slot 0 or 1. Returns 1 when the path fits. */
+static inline int source_tas_stateio_card_path(char *out, size_t cap, const char *state_path, int slot) {
+    return out && state_path && (slot == 0 || slot == 1) &&
+           snprintf(out, cap, "%s.card%d.mcd", state_path, slot + 1) < (int)cap;
+}
 
 /* PSX_* variables that may legitimately DIFFER between a save and a resume.
  * Everything else the runtime reads is part of the identity, so a newly added
@@ -174,13 +188,17 @@ static inline int source_tas_stateio_manifest_write(const char *path, const TasS
                  "  \"config_digest\": \"%s\",\n"
                  "  \"exe_sha256\": \"%s\",\n"
                  "  \"route_sha256\": \"%s\",\n"
-                 "  \"compatibility\": \"%s\"\n"
+                 "  \"compatibility\": \"%s\",\n"
+                 "  \"card1_sha256\": \"%s\",\n"
+                 "  \"card2_sha256\": \"%s\"\n"
                  "}\n",
                  PSX_TAS_STATEIO_SCHEMA, m->frame, m->input_consumed, (unsigned long long)m->cycle,
                  (unsigned long long)m->ram_digest, m->bios_checksum, m->entry_pc,
                  escaped, state_sha256 ? state_sha256 : "", m->state_bytes,
                  m->config_digest, m->exe_sha256, m->route_sha256,
-                 PSX_TAS_STATEIO_COMPATIBILITY) > 0;
+                 PSX_TAS_STATEIO_COMPATIBILITY,
+                 m->card_sha256[0][0] ? m->card_sha256[0] : PSX_TAS_STATEIO_NO_CARD,
+                 m->card_sha256[1][0] ? m->card_sha256[1] : PSX_TAS_STATEIO_NO_CARD) > 0;
     if (fclose(f) != 0) ok = 0;
     return ok;
 }
@@ -289,6 +307,16 @@ static inline int source_tas_stateio_manifest_parse(const char *text, TasStateMa
     /* Older manifests remain same-binary only. */
     (void)source_tas_stateio_find_field(text, "compatibility", out->compatibility,
                                        sizeof out->compatibility);
+    for (int slot = 0; slot < 2; ++slot) {
+        const char *key = slot ? "card2_sha256" : "card1_sha256";
+        size_t n;
+        if (!source_tas_stateio_find_field(text, key, out->card_sha256[slot], sizeof out->card_sha256[slot]))
+            return 0;
+        n = strlen(out->card_sha256[slot]);
+        if (strcmp(out->card_sha256[slot], PSX_TAS_STATEIO_NO_CARD) != 0 &&
+            (n != 64 || strspn(out->card_sha256[slot], "0123456789abcdef") != 64))
+            return 0;
+    }
     return 1;
 }
 

@@ -96,11 +96,24 @@ def card_identity(path):
 def checkpoint_interval(manifest, frames, tail):
     frame, consumed = manifest.get('frame'), manifest.get('input_consumed')
     terminal = frames + tail - 1
-    if (manifest.get('schema') != 'psx-tas-stateio-v2' or
+    if (manifest.get('schema') != 'psx-tas-stateio-v3' or
             type(frame) is not int or type(consumed) is not int or
             not 0 < frame < terminal or not 0 < consumed < frames + tail):
         raise ValueError('invalid checkpoint resume interval')
     return frame, consumed
+
+
+def checkpoint_cards_valid(state, manifest):
+    """Every card image the manifest names exists beside the state with that SHA-256."""
+    for slot in (1, 2):
+        expected = manifest.get(f'card{slot}_sha256')
+        if expected == 'none':
+            continue
+        card = Path(f'{state}.card{slot}.mcd')
+        if (type(expected) is not str or not card.is_file() or card.stat().st_size != 131072
+                or digest(card) != expected):
+            return False
+    return True
 
 
 def playback_identity_matches(complete, identity, tail):
@@ -315,6 +328,8 @@ def main():
         if (args.resume_from.stat().st_size != resume_manifest.get('state_bytes') or
                 digest(args.resume_from) != resume_manifest.get('state_sha256')):
             raise ValueError('checkpoint size or SHA256 mismatch')
+        if not checkpoint_cards_valid(args.resume_from, resume_manifest):
+            raise ValueError('checkpoint card image missing or SHA256 mismatch')
     completion_identity = route_identity(paths['route'], resume_inputs)
 
     dualshock = identity.get('format') == 'PSXRTI2'
@@ -629,7 +644,7 @@ p2_mode = "digital"
             if state.exists() and sidecar.exists():
                 m = json.loads(sidecar.read_text())
                 item['valid'] = (m.get('frame') == frame and m.get('state_bytes') == state.stat().st_size
-                                 and m.get('state_sha256') == digest(state))
+                                 and m.get('state_sha256') == digest(state) and checkpoint_cards_valid(state, m))
             saved.append(item)
         write_json(run / 'saved-states.json', saved)
         qualified = qualified and all(item['valid'] for item in saved)

@@ -111,7 +111,7 @@ def checkpoint_resume(args):
         return 0, 0
     manifest = json.loads(Path(str(path) + '.json').read_text())
     frame, consumed = manifest.get('frame'), manifest.get('input_consumed')
-    if (manifest.get('schema') != 'psx-tas-stateio-v2' or type(frame) is not int or
+    if (manifest.get('schema') != 'psx-tas-stateio-v3' or type(frame) is not int or
             type(consumed) is not int or frame < 1 or consumed < 1):
         raise ValueError(f'not a TAS checkpoint manifest: {path}.json')
     return frame, consumed

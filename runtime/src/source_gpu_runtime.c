@@ -15,6 +15,7 @@
 #include "source_stateio_identity.h"
 #include "interrupts.h"               /* E survey: IRQ_TIMING transients */
 #include "sio.h"                      /* E survey (Part 3): SIO FSM sizing */
+#include "memcard.h"                  /* TAS checkpoint card images */
 #include <stdio.h>
 #include <stdlib.h>
 extern uint64_t g_psx_cycle_fast_limit;
@@ -234,6 +235,28 @@ static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
             fprintf(stderr,"[tas-stateio] save refused: cannot hash the input route\n");
             return;
         }
+    }
+    /* Card images are host files, not boot_state sections: save each present
+     * slot's in-memory image beside the state, replaced atomically. */
+    for(int slot=0;slot<2;slot++) {
+        static uint8_t image[PSX_TAS_STATEIO_CARD_BYTES];
+        char card_path[4160],temporary[4200];
+        FILE *card;
+        if(!memcard_is_present(slot)) { snprintf(m.card_sha256[slot],sizeof m.card_sha256[slot],"%s",PSX_TAS_STATEIO_NO_CARD); continue; }
+        if(memcard_export_raw(slot,image)!=0 || !source_tas_stateio_card_path(card_path,sizeof card_path,path,slot) ||
+           snprintf(temporary,sizeof temporary,"%s.tmp",card_path)>=(int)sizeof temporary || !(card=fopen(temporary,"wb"))) {
+            fprintf(stderr,"[tas-stateio] save refused: cannot capture card %d at return %u\n",slot+1,frame);
+            return;
+        }
+        int written=fwrite(image,1,sizeof image,card)==sizeof image;
+        if(fclose(card)!=0) written=0;
+        if(!written || !boot_state_replace_file(temporary,card_path)) {
+            remove(temporary);
+            fprintf(stderr,"[tas-stateio] save refused: cannot write card %d at return %u\n",slot+1,frame);
+            return;
+        }
+        uint8_t card_digest[32]; psx_sha256_compute(image,sizeof image,card_digest);
+        for(unsigned i=0;i<32;i++) sprintf(m.card_sha256[slot]+i*2,"%02x",card_digest[i]);
     }
     char manifest_path[4160];
     if(snprintf(manifest_path,sizeof manifest_path,"%s.json",path)>=(int)sizeof manifest_path ||

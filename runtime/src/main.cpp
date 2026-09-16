@@ -15678,6 +15678,32 @@ session_reboot:
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state SHA256 mismatch\n");
             return 2;
         }
+        /* The cards the checkpoint was taken with replace the route's initial
+         * images; the slots themselves (present or absent) must agree. */
+        for (int slot = 0; slot < 2; ++slot) {
+            const int saved = std::strcmp(m.card_sha256[slot], PSX_TAS_STATEIO_NO_CARD) != 0;
+            char card_path[4160], card_hash[65];
+            static uint8_t image[PSX_TAS_STATEIO_CARD_BYTES];
+            if (saved != (memcard_is_present(slot) != 0)) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: card %d slot differs from the checkpoint\n", slot + 1);
+                return 2;
+            }
+            if (!saved) continue;
+            FILE *card = nullptr;
+            if (!source_tas_stateio_card_path(card_path, sizeof card_path, resume_state, slot) ||
+                !source_stateio_file_sha256(card_path, card_hash) || std::strcmp(card_hash, m.card_sha256[slot]) ||
+                !(card = std::fopen(card_path, "rb"))) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: card %d image missing or SHA256 mismatch\n", slot + 1);
+                return 2;
+            }
+            const size_t got = std::fread(image, 1, sizeof image, card);
+            const int extra = std::fgetc(card) != EOF;
+            std::fclose(card);
+            if (got != sizeof image || extra || memcard_import_raw(slot, image) != 0) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: card %d image could not be loaded\n", slot + 1);
+                return 2;
+            }
+        }
         if (!boot_state_load(resume_state, resume_bios, resume_entry, &cpu)) {
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state load failed (integrity/incomplete)\n");
             return 2;

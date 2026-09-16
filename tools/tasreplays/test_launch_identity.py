@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
     # Resume: the runtime's manifest names the saved return and consumed inputs; later captures only.
     state = root/'tas-state-001500.pst'; state.write_bytes(b'state')
     manifest = Path(str(state)+'.json')
-    manifest.write_text(json.dumps({'schema': 'psx-tas-stateio-v2', 'frame': 1500, 'input_consumed': 1501}))
+    manifest.write_text(json.dumps({'schema': 'psx-tas-stateio-v3', 'frame': 1500, 'input_consumed': 1501}))
     resume = parser.parse_args(['--resume-from', str(state), '--resume-compatible-build', '--save-state-every', '1000'])
     check_launch_arguments(resume)
     assert checkpoint_resume(resume) == (1500, 1501) and checkpoint_returns(resume, 3500) == [2000, 3000]
@@ -100,8 +100,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
     rejects(lambda: checkpoint_returns(parser.parse_args(['--resume-from', str(state), '--save-state-at', '1500']), 3500), '[1500]')
     rejects(lambda: check_launch_arguments(parser.parse_args(['--resume-from', str(state), '--ladder', 'full'])))
     assert checkpoint_resume(plain) == (0, 0) and checkpoint_receipt(plain, 10)['resumed_from'] is None
-    for broken in ({'schema': 'other', 'frame': 1500, 'input_consumed': 1501}, {'schema': 'psx-tas-stateio-v2', 'frame': '1500', 'input_consumed': 1501},
-                   {'schema': 'psx-tas-stateio-v2', 'frame': 0, 'input_consumed': 1}):
+    for broken in ({'schema': 'other', 'frame': 1500, 'input_consumed': 1501}, {'schema': 'psx-tas-stateio-v3', 'frame': '1500', 'input_consumed': 1501},
+                   {'schema': 'psx-tas-stateio-v3', 'frame': 0, 'input_consumed': 1}):
         manifest.write_text(json.dumps(broken))
         rejects(lambda: check_launch_arguments(parser.parse_args(['--resume-from', str(state)])), 'not a TAS checkpoint manifest')
     # wait_budgeted: a string reason is recorded verbatim; bare True keeps operator_stop; falsy never stops.

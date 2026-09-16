@@ -44,6 +44,8 @@ int main(int argc, char **argv) {
     check(!source_tas_stateio_binary_accept(&m, SHA, 1), "incompatible rebuild refused");
     strcpy(m.compatibility, PSX_TAS_STATEIO_COMPATIBILITY);
     snprintf(m.route_sha256, sizeof m.route_sha256, "%s", ROUTE);
+    snprintf(m.card_sha256[0], sizeof m.card_sha256[0], "%s", ROUTE);   /* slot 1 present */
+    m.card_sha256[1][0] = '\0';                                          /* slot 2 absent  */
 
     check(source_tas_stateio_manifest_write(manifest_path, &m, state_path, SHA) == 1,
           "write manifest");
@@ -57,6 +59,28 @@ int main(int argc, char **argv) {
     check(strcmp(parsed_state, state_path) == 0, "round-trip state path");
     check(strcmp(parsed.config_digest, CFG) == 0 && strcmp(parsed.exe_sha256, EXE) == 0 &&
           strcmp(parsed.route_sha256, ROUTE) == 0, "round-trip v7 identity");
+    check(strcmp(parsed.card_sha256[0], ROUTE) == 0 &&
+          strcmp(parsed.card_sha256[1], PSX_TAS_STATEIO_NO_CARD) == 0, "round-trip card images");
+    {
+        char path[512], broken[4096], *at;
+        check(source_tas_stateio_card_path(path, sizeof path, state_path, 1) &&
+              strcmp(path + strlen(path) - 10, ".card2.mcd") == 0, "card image beside the state");
+        check(!source_tas_stateio_card_path(path, sizeof path, state_path, 2), "only two card slots");
+        /* A manifest without its card images, or with a malformed digest, is refused. */
+        snprintf(broken, sizeof broken, "%s", text);
+        at = strstr(broken, "\"card2_sha256\"");
+        check(at != NULL, "card field written");
+        if (at) {
+            at[1] = 'X';
+            check(!source_tas_stateio_manifest_parse(broken, &parsed, NULL, 0), "missing card image refused");
+        }
+        snprintf(broken, sizeof broken, "%s", text);
+        at = strstr(broken, ROUTE);
+        at = at ? strstr(at + 1, ROUTE) : NULL;          /* second occurrence: card1_sha256 */
+        if (at) at[0] = 'B';
+        check(at != NULL && !source_tas_stateio_manifest_parse(broken, &parsed, NULL, 0),
+              "non-lowercase card digest refused");
+    }
     check(source_tas_stateio_parse_u64(text, "frame", &v) == 1 && v == 300u, "parse_u64 frame");
 
     /* --- environment identity: whole PSX_* set, order independent --- */

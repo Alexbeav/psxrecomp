@@ -5,6 +5,16 @@ the selected source GPU frontend returns. `--resume-from FILE.pst` resumes
 the same route from a checkpoint. This is a diagnostic path: final TAS
 qualification still uses an uninterrupted run against the independent oracle.
 
+Every title command (`tekken3.py`, `pepsiman.py`, `biohazard.py`, `megamanx5.py`,
+`redc.py`, `megamanx4.py`, `abesoddysee.py run`) takes the same options:
+`--save-state-at RETURN...` and `--save-state-every N` (expanded to the multiples
+inside the run's endpoint) capture during a normal replay without changing what it
+qualifies; `--resume-from STATE [--resume-compatible-build]` replays only the
+returns after the checkpoint, compares them against the source reference from K+1,
+and is always recorded as `diagnostic`. A resume must use the same run length
+(`--returns`) as the capture, because the checkpoint binds the route file's content.
+None of them combine with `--ladder`.
+
 The checkpoint manifest binds the exact executable, resolved configuration,
 route, BIOS, game entry, guest clock and RAM digest. By default, a checkpoint
 from another executable is refused. `--resume-compatible-build` permits a
@@ -90,7 +100,17 @@ load timing credits. Load preserves the exact GTE backing registers. SPU sample
 budgeting resumes from its saved guest-clock watermark and remainder. MDEC
 preserves its absolute last-decode timestamp, including the never-decoded sentinel.
 
-Manifest schema **psx-tas-stateio-v2** records `frame` and `input_consumed`
+Memory card images live in host `.mcd` files, not in any boot_state section, so
+manifest schema **psx-tas-stateio-v3** carries them: each present slot's
+in-memory image is saved beside the state as `<state>.card1.mcd` /
+`<state>.card2.mcd` and bound by `card1_sha256` / `card2_sha256` (`none` for an
+empty slot). Resume refuses a slot that differs in presence or digest and imports
+the images before the state loads, so a checkpoint taken after the guest saved
+continues with that card rather than the route's initial image. v2 manifests,
+which never recorded cards, are refused. Player save states are unchanged: their
+cards stay host-persistent.
+
+The manifest records `frame` and `input_consumed`
 separately. They are different boundaries: the measured return-300 checkpoint
 had already consumed 301 inputs. The loader seeks the recorded input position.
 Resumed observation hashes cover only the newly delivered suffix, labeled
