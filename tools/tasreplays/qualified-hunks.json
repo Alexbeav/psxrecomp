@@ -495,20 +495,13 @@
       ],
       "origin_commit": "b010335b60ea0934a90d77f81d72e36c61a24112",
       "subject": "Support shaded source GPU lines for Biohazard replay",
-      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "qualified_tree": "e4e25053deb92a173b7ec26c6f1d7edecb03e98d",
+      "evolved": {
+        "dropped_lines": 3,
+        "from_blocks": 10,
+        "to_blocks": 8
+      },
       "blocks": [
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            " * and flat/shaded two-vertex lines (0x40-0x47, 0x50-0x57),"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return (command>=0x40 && command<=0x47) || (command>=0x50 && command<=0x57);"
-          ]
-        },
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
@@ -540,7 +533,6 @@
         {
           "file": "runtime/src/gpu_sw_renderer.c",
           "lines": [
-            "    if((opcode>=0x40 && opcode<=0x47) || (opcode>=0x50 && opcode<=0x57)) {",
             "        unsigned shaded=!!(opcode&0x10),last=2+shaded;",
             "        int dx=(int)((words[last]&2047u)^1024u)-(int)((words[1]&2047u)^1024u);",
             "        int dy=(int)(((words[last]>>16)&2047u)^1024u)-(int)(((words[1]>>16)&2047u)^1024u);"
@@ -571,7 +563,8 @@
             "            for(unsigned channel=0;channel<3;channel++)c.base[channel]=start[channel]+step[channel]*(unsigned)i;"
           ]
         }
-      ]
+      ],
+      "note": "Re-pinned to its current span on 2026-09-16: the poly-line family change (e4e25053) superseded the two-vertex-only predicate and its scope comment. The shaded-line behaviour is unchanged and now lives inside the widened 0x40-0x5F family."
     },
     {
       "id": "f5f5b16e-source-gpu-raw-blended-sprites",
@@ -944,6 +937,368 @@
         }
       ],
       "note": "With 0x45 fixed the divergence moved to return 1098, where Mega Man X5 issues 0x4C with data 0x01. The source selects these replies from the data byte; our canned tables held only the data==0x00 variant. 0x46: 00 -> 00 01 02 00 0A, 01 -> 00 01 01 01 14, else zeros. 0x47: 00 -> 00 02 00 01 00, else zeros. 0x4C: 00 -> 00 00 04 00 00, 01 -> 00 00 07 00 00, else zeros. The pinned 260-transaction Nymashock fixture issues none of 0x46/0x47/0x4C."
+    },
+    {
+      "id": "polyline-family-20260916",
+      "titles": [
+        "abesoddysee"
+      ],
+      "origin_commit": "e4e25053deb92a173b7ec26c6f1d7edecb03e98d",
+      "subject": "gpu: project and draw the poly-line family (0x48-0x4F, 0x58-0x5F)",
+      "qualified_tree": null,
+      "blocks": [
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            " * and the whole line family (0x40-0x5F): flat/shaded two-vertex lines and poly-lines,"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    /* INCMD_PLINE: a poly-line consumes further vertices after its opening packet until a",
+            "     * terminator word. pline_command is the source's InCmd_CC; pline_color/pline_vertex are",
+            "     * InPLine_PrevPoint, kept as packet words so each segment can be projected as the ordinary",
+            "     * two-vertex packet the cost model and renderer already take. */",
+            "    unsigned pline, pline_command;",
+            "    uint32_t pline_color, pline_vertex;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Commands_40_5F: the source gives every entry in 0x40-0x5F the same LINE_HELPER, so the whole",
+            " * family is one shape. Bit 3 selects a poly-line and bit 4 gouraud shading; bit 3 changes only",
+            " * the FIFO bookkeeping, never the rasterisation, because DrawLine is templated on <goraud,",
+            " * BlendMode, MaskEval_TA> alone. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return command>=0x40 && command<=0x5f;",
+            "}",
+            "static inline int source_gpu_line_polyline(unsigned command) {",
+            "    return source_gpu_line_supported(command) && (command&0x08u)!=0;",
+            "}",
+            "/* INCMD_PLINE consumes 1 + goraud words per continuation segment: a vertex, preceded by a",
+            " * colour when shaded. */",
+            "static inline unsigned source_gpu_line_segment_length(unsigned command) {",
+            "    return 1u+!!(command&0x10u);",
+            "}",
+            "/* ProcessFIFO tests the terminator before it tests the segment length, so it needs one word. */",
+            "static inline int source_gpu_line_terminator(uint32_t word) {",
+            "    return (word&0xf000f000u)==0x50005000u;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    /* CalcFIFOReadyBit clears the bit for INCMD_PLINE exactly as it does for INCMD_QUAD. */",
+            "    if(s->phase==2 || s->pline) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if(s->pline) {",
+            "        /* INCMD_PLINE. The terminator is tested before the segment length and consumes one",
+            "         * word. A segment is projected as the ordinary two-vertex packet it draws as, with",
+            "         * InPLine_PrevPoint supplying point 0, so the cost model, the dispatch block's start",
+            "         * coordinate and the renderer all take it unchanged. The main FIFO tail's -2 is never",
+            "         * reached from this branch, so a segment is charged the draw cost alone. */",
+            "        if(s->budget<0) return 1;",
+            "        if(source_gpu_line_terminator(s->queue[0])) {",
+            "            source_gpu_command_pop(s);s->pline=0;return 1;",
+            "        }",
+            "        unsigned cc=s->pline_command,vl=source_gpu_line_segment_length(cc);",
+            "        if(s->count<vl)return 1;",
+            "        unsigned shaded=!!(cc&0x10u),n=3u+shaded;",
+            "        uint32_t words[4];",
+            "        words[0]=((uint32_t)cc<<24)|s->pline_color;",
+            "        words[1]=s->pline_vertex;",
+            "        if(shaded){words[2]=s->queue[0];words[3]=s->queue[1];}",
+            "        else words[2]=s->queue[0];",
+            "        int cost=source_gpu_command_line_cost(s,words);",
+            "        if(cost<0){s->error=SOURCE_GPU_COMMAND_UNSUPPORTED;return 0;}",
+            "        s->dispatch.kind=SOURCE_GPU_DISPATCH_COMMAND;s->dispatch.count=n;",
+            "        memcpy(s->dispatch.words,words,n*sizeof(uint32_t));",
+            "        for(unsigned i=0;i<vl;i++)source_gpu_command_pop(s);",
+            "        s->pline_vertex=words[n-1u];",
+            "        if(shaded)s->pline_color=words[2]&0xffffffu;",
+            "        s->budget-=cost;return 1;",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        if(source_gpu_line_polyline(command)) {",
+            "            /* Command_DrawLine keeps points[1] as InPLine_PrevPoint; a flat line's second",
+            "             * point carries the first point's colour. */",
+            "            unsigned last=2u+!!(command&0x10u);",
+            "            s->pline=1;s->pline_command=command;",
+            "            s->pline_vertex=s->dispatch.words[last];",
+            "            s->pline_color=((command&0x10u)?s->dispatch.words[2]:s->dispatch.words[0])&0xffffffu;",
+            "        }"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        s->count=0;s->phase=0;s->transfer_words=0;s->pline=0;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    /* The whole line family, 0x40-0x5F. A poly-line segment reaches here as the ordinary",
+            "     * two-vertex packet it draws as: DrawLine is templated on <goraud, BlendMode,",
+            "     * MaskEval_TA>, so the poly-line bit never reaches rasterisation. */",
+            "    if(opcode>=0x40 && opcode<=0x5f) {"
+          ]
+        }
+      ],
+      "note": "Abe's Oddysee 5620M aborted at return 4,682 on GP0 5E030B0B; the projection admitted only two-vertex lines. Derived from Commands_40_5F/LINE_HELPER and ProcessFIFO's INCMD_PLINE branch."
+    },
+    {
+      "id": "155003cb-tas-state-capture-resume",
+      "titles": [
+        "biohazard",
+        "all"
+      ],
+      "origin_commit": "155003cb920024a73fefe4de3d017054afbc34dd",
+      "subject": "Add Biohazard diagnostic state capture and compatible-build resume",
+      "qualified_tree": "cdab7da3daa9dee001a0c8aa58eba5bac6af5c22",
+      "blocks": [
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "/* Bump when a diagnostic state changes representation or continuation meaning.",
+            " * This admits runtime-only rebuilds, never a different codegen ABI or profile;",
+            " * boot_state_load independently checks its header and every device section. */",
+            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v9-sio-source-1\""
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "    char               compatibility[65];"
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "        \"PSX_TAS_RESUME_COMPATIBLE_BUILD\", /* explicit diagnostic mode */",
+            "        \"PSX_SOURCE_CPU_BOUNDARY_WINDOW\", /* passive diagnostic range */",
+            "        \"PSX_SOURCE_GPU_COMMAND_WINDOW\",  /* passive diagnostic range */",
+            "        \"PSX_SOURCE_RAM_SNAPSHOT_FRAMES\", /* passive raw RAM captures */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "                 \"  \\\"route_sha256\\\": \\\"%s\\\",\\n\"",
+            "                 \"  \\\"compatibility\\\": \\\"%s\\\"\\n\""
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "                 m->config_digest, m->exe_sha256, m->route_sha256,",
+            "                 PSX_TAS_STATEIO_COMPATIBILITY) > 0;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "    /* Older manifests remain same-binary only. */",
+            "    (void)source_tas_stateio_find_field(text, \"compatibility\", out->compatibility,",
+            "                                       sizeof out->compatibility);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "static inline int source_tas_stateio_binary_accept(const TasStateManifest *m,",
+            "                                                   const char *exe, int compatible) {",
+            "    return m && exe && *exe &&",
+            "        (!strcmp(m->exe_sha256, exe) ||",
+            "         (compatible && !strcmp(m->compatibility, PSX_TAS_STATEIO_COMPATIBILITY)));",
+            "}",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "static inline int source_tas_stateio_manifest_accept_mode(const TasStateManifest *m,"
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "                                              int compatible_build,"
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "    if (!source_tas_stateio_binary_accept(m, exe_sha256, compatible_build)) {"
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "static inline int source_tas_stateio_manifest_accept(const TasStateManifest *m,",
+            "        unsigned frame, uint64_t cycle, uint64_t ram_digest, uint32_t bios_checksum,",
+            "        uint32_t entry_pc, const char *config_digest, const char *exe_sha256,",
+            "        const char *route_sha256, char *reason, size_t reason_cap) {",
+            "    return source_tas_stateio_manifest_accept_mode(m, frame, cycle, ram_digest,",
+            "        bios_checksum, entry_pc, config_digest, exe_sha256, route_sha256, 0,",
+            "        reason, reason_cap);",
+            "}",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/src/debug_server.c",
+          "lines": [
+            "        s_input_route_remaining = i < s_input_route_count ? s_dualshock_route[i].frames - remaining : 0;",
+            "        s_input_route_active = i < s_input_route_count;"
+          ]
+        },
+        {
+          "file": "runtime/src/debug_server.c",
+          "lines": [
+            "    s_input_route_remaining = i < s_input_route_count ? s_input_route[i].frames - remaining : 0;",
+            "    s_input_route_active = i < s_input_route_count;"
+          ]
+        },
+        {
+          "file": "runtime/src/input_route_observer.c",
+          "lines": [
+            "    if (consumed >= total_inputs + tail_ticks) fail(\"resume is past the observation interval\");"
+          ]
+        },
+        {
+          "file": "runtime/src/main.cpp",
+          "lines": [
+            "        const char *compatible_env = std::getenv(\"PSX_TAS_RESUME_COMPATIBLE_BUILD\");",
+            "        const int compatible_build = compatible_env && !std::strcmp(compatible_env, \"1\");"
+          ]
+        },
+        {
+          "file": "runtime/src/main.cpp",
+          "lines": [
+            "            if (!source_tas_stateio_binary_accept(&m, exe_hex, compatible_build)) {"
+          ]
+        },
+        {
+          "file": "runtime/src/main.cpp",
+          "lines": [
+            "        char expected_state_hash[65], actual_state_hash[65];",
+            "        if (!source_tas_stateio_find_field(text, \"state_sha256\", expected_state_hash,",
+            "                                          sizeof expected_state_hash) ||",
+            "            !source_stateio_file_sha256(resume_state, actual_state_hash) ||",
+            "            std::strcmp(expected_state_hash, actual_state_hash)) {",
+            "            std::fprintf(stderr, \"psxrecomp: [tas-stateio] resume rejected: state SHA256 mismatch\\n\");",
+            "            return 2;",
+            "        }"
+          ]
+        },
+        {
+          "file": "runtime/src/main.cpp",
+          "lines": [
+            "        if (!source_tas_stateio_manifest_accept_mode(&m, m.frame, psx_get_cycle_count(),"
+          ]
+        },
+        {
+          "file": "runtime/src/main.cpp",
+          "lines": [
+            "                resume_bios, resume_entry, cfg_hex, exe_hex, route_hex, compatible_build,"
+          ]
+        },
+        {
+          "file": "runtime/src/main.cpp",
+          "lines": [
+            "        std::fprintf(stdout, \"psxrecomp: [tas-stateio] diagnostic resume mode=%s saved_exe=%s running_exe=%s\\n\",",
+            "                     compatible_build ? \"compatible-build\" : \"same-binary\", m.exe_sha256, exe_hex);"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    if (sio_source_pad_ack || sio_source_card) {"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack == 2 || sio_source_card) {",
+            "            if (!pst_w_bytes(w, analog_mode_locked, sizeof analog_mode_locked) ||",
+            "                !pst_w_bytes(w, pad_supports_config, sizeof pad_supports_config)) return 0;",
+            "        }"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    if (!sio_source_pad_ack && !sio_source_card)"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    if (sio_source_pad_ack || sio_source_card) {"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack == 2 || sio_source_card) {",
+            "            if (!pst_r_bytes(r, analog_mode_locked, sizeof analog_mode_locked) ||",
+            "                !pst_r_bytes(r, pad_supports_config, sizeof pad_supports_config)) return 0;",
+            "        }"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    /* The source profiles below serialize single-pad transactions completely.",
+            "     * The legacy eight-byte pad wire cannot represent a multitap transfer. */",
+            "    if ((sio_source_pad_ack || sio_source_card) && sio_multitap_enabled) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    if (sio_source_pad_ack || sio_source_card) return len == current;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    if (sio_source_pad_ack || sio_source_card) {"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        uint32_t config_bytes = (sio_source_pad_ack == 2 || sio_source_card) ?",
+            "            2u * PSX_MAX_PLAYERS : 0u;",
+            "        pst_r_init(&extra, p + len - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        for (uint32_t j = 0; j < config_bytes; j++)",
+            "            if (p[len - config_bytes + j] > 1) return 0;"
+          ]
+        }
+      ],
+      "note": "Save-state capture/resume (--save-state-at / --resume-from / --resume-compatible-build). Proven on Bio Hazard: resuming tas-state-233500.pst reproduced the continuous run byte for byte in 182 s against 6,507 s. Dropped in the PR #361 -> split rebase like b1413e71 and never restored; absent from every split branch and from this lane. Expect check to report it missing until it is ported."
     }
   ]
 }
