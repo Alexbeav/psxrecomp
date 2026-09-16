@@ -229,10 +229,10 @@ renderer = "software"
     def build_native():
         command(native_argv,project/'configure-native.log',env=build_cache.build_env())
         command(['cmake','--build',native,'--parallel',str(args.jobs)],project/'build-native.log',env=build_cache.build_env())
-    native_record=build_cache.stage_native(cache_root,ROOT,project,native,'MegaManX5-TAS',
+    native_record=build_cache.stage_native(cache_root,ROOT,project,native,'MegaManX4-TAS',
         lambda:build_cache.native_inputs(ROOT,build_cache.generated_set(ROOT,BIOS_STEM,project),native_argv,bios_profile),build_native,head)
     if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip() or subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=head:raise ValueError('source changed during build')
-    build=native/'MegaManX5-TAS.exe'
+    build=native/'MegaManX4-TAS.exe'
     files=[disc,track,bios,staged_bios,bios_profile,movie,exe,game,tape,card,route,project/'seeds.txt',reference_path,random_receipt_path]
     generated={str(p):source.digest(p) for p in (ROOT/'generated').glob(BIOS_STEM+'*') if p.is_file()}
     generated.update({str(p):source.digest(p) for p in (project/'generated').glob('*') if p.is_file()})
