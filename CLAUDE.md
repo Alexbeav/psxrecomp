@@ -510,3 +510,31 @@ all handle install-at-runtime code this way. PSXRecomp v4 follows suit.
 Implementation lives in `runtime/src/dirty_ram_interp.c` (or similar). It
 is intentionally small (~300 LOC), modular, and isolated. It does NOT
 expand into a general-purpose CPU emulator.
+
+---
+
+## 19. A qualified behaviour is registered in the same commit that qualifies it
+
+A TAS replay qualifies a source *tree*. The accuracy changes that tree depends on then
+travel through cherry-picks, stacked branches and upstream merges, where a hunk can be
+dropped without any build or unit test noticing. This has happened twice and cost days:
+
+- `b1413e71`'s four-line `dirty_ram_interp.c` hunk was lost in the PR #361 → split rebase
+  and found only by a full Bio Hazard replay divergence.
+- `155003cb`, save-state capture and compatible-build resume, was lost in the *same* rebase
+  and nobody noticed for two days, because nothing was watching for it.
+
+So: **when a change is qualified by a replay, register it in
+`tools/tasreplays/qualified-hunks.json` in the same commit.** Use
+`qualified_hunks.py seed --commit <sha> --id <id> --titles <titles>`. If a later change
+supersedes a registered hunk's exact lines, re-pin it with `--as-of HEAD` rather than
+deleting it; that is the evolved-hunk case.
+
+`build_cache.stage_tools` runs the check, so **every title adapter's `setup` now refuses to
+build a candidate from a tree that dropped a registered behaviour.** You cannot forget by
+accident. A loss that is genuinely known is recorded in the registry's `known_absent` map
+with a written reason and reported as a debt rather than refusing; nothing may be marked
+absent silently, and clearing a debt means porting the behaviour back and deleting the entry.
+
+Presence proves nothing about behaviour. Absence is a definite finding. Read
+`docs/tasreplays/LANE.md` before working the lane.
