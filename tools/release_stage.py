@@ -636,10 +636,18 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
     # Windows needs the mingw runtime beside the recompiler; a Linux build links
     # against the system libstdc++ that is already present.
     if platform_tag == 'win':
-        if not mingw_bin:
-            _die('--mingw-bin is required when staging a Windows toolchain')
+        # A recompiler built against a static CRT (the cmake-clang-v1 emitters) needs no
+        # runtime DLLs; a gcc-built one does. Copy whatever the named bin dir (or the
+        # emitter's own directory) holds, and say which case this is.
+        dll_src = mingw_bin or recomp_dir
+        copied = 0
         for d in ('libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll'):
-            shutil.copy2(os.path.join(mingw_bin, d), os.path.join(toolchain, d))
+            p = os.path.join(dll_src, d)
+            if os.path.isfile(p):
+                shutil.copy2(p, os.path.join(toolchain, d))
+                copied += 1
+        log('mingw runtime DLLs staged beside the recompiler: %d (from %s)%s'
+            % (copied, dll_src, '' if copied else ' -- assuming a static recompiler'))
 
     shutil.copy2(os.path.join(recomp_tools, 'compile_overlays.py'), toolchain)
     tool_inc = _mkdirs(os.path.join(toolchain, 'include'))
