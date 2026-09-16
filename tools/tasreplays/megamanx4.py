@@ -156,6 +156,11 @@ def setup(args):
     if project==ROOT or project.is_relative_to(ROOT):raise ValueError('generated candidate must be outside source')
     project.mkdir(parents=True,exist_ok=False)
     data=boot_program(track);exe=project/BOOT;exe.write_bytes(data)
+    # The game profile's entry_pc/text_size are pinned constants; require them to agree with
+    # the boot program's own PS-X EXE header so a cloned pin cannot pass unnoticed (6790M's
+    # first build carried Mega Man X5's values and the recompiler refused the text bound).
+    pc0,_,t_addr,t_size=struct.unpack_from('<IIII',data,0x10)
+    if (pc0,t_addr,t_size)!=(0x800DAE8C,0x80010000,0x11F800):raise ValueError('boot program header differs from the pinned game profile: pc0=%08X t_addr=%08X t_size=%X'%(pc0,t_addr,t_size))
     staged_bios=project/source.FIRMWARE_NAME;shutil.copyfile(bios,staged_bios);require_hash(staged_bios,source.FIXED[source.FIRMWARE_NAME])
     card=project/'initial-card1.mcd';shutil.copyfile(reference['initial_card1'],card);require_hash(card,source.CARD_SHA)
     tape=project/'nymashock-cold-random.psxrng';shutil.copyfile(tape_source,tape);require_hash(tape,TAPE_SHA)
@@ -184,8 +189,8 @@ name = "Mega Man X4 TAS"
 id = "SLUS-01334"
 exe = {q(exe)}
 load_address = "0x80010000"
-entry_pc = "0x8005894C"
-text_size = "0x82000"
+entry_pc = "0x800DAE8C"
+text_size = "0x11F800"
 stack_base = "0x801FFFF0"
 [recompiler]
 seeds = {q(project/'seeds.txt')}
