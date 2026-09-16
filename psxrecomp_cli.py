@@ -1402,7 +1402,34 @@ def _cmake_configure(
                 if line.strip():
                     progress.log(line)
     if proc.returncode != 0:
-        raise RuntimeError(f"cmake configure failed (exit {proc.returncode})")
+        err = RuntimeError(f"cmake configure failed (exit {proc.returncode})")
+        err.cmake_output = (proc.stdout or "") + (proc.stderr or "")  # type: ignore[attr-defined]
+        raise err
+
+
+def _configure_product(project_root: Path, build_dir: Path, *, pgo: str, cmake_extra: list[str],
+                       lto: bool, progress: ProgressReporter) -> bool:
+    """Configure one product build with the wave-5 product flags; returns the LTO state that
+    actually took. CMake's IPO support check FATAL_ERRORs when the compiler cannot do LTO on
+    this host (a clang without llvm-ar/llvm-ranlib on PATH refuses ThinLTO: Rocky 9 smoke box,
+    2026-09-16), and a player must get a plain build out of that, not a configure error."""
+    def once(use_lto: bool) -> None:
+        flags = product_cmake_flags(use_lto)
+        _cmake_configure(project_root, build_dir, pgo=pgo, extra=cmake_extra + flags, progress=progress)
+        _assert_configured(build_dir, product_cmake_expect(use_lto), progress,
+                           reconfigure=lambda: _cmake_configure(project_root, build_dir, pgo=pgo,
+                                                                extra=cmake_extra + flags, progress=progress))
+    try:
+        once(lto)
+        return lto
+    except RuntimeError as exc:
+        out = getattr(exc, "cmake_output", "") or ""
+        if lto and "IPO is unsupported" in out:
+            progress.log("LTO: this compiler/linker cannot do link-time optimisation here "
+                         "(see the IPO check above); building the product without it")
+            once(False)
+            return False
+        raise
 
 
 
@@ -1797,13 +1824,11 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         hide_video = True
 
     try:
+        lto = product_lto_enabled(args, progress)
         if not pgo_enabled:
             progress.phase("build", pct=0.2, message="cmake Release build...")
-            _cmake_configure(
-                project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF"], progress=progress
-            )
-            _assert_configured(build_dir, {"PSX_DEBUG_TOOLS": "OFF", "PSX_STEP_BOUNDARY": "OFF"}, progress,
-                               reconfigure=lambda: _cmake_configure(project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF"], progress=progress))
+            lto = _configure_product(project_root, build_dir, pgo="", cmake_extra=cmake_extra,
+                                     lto=lto, progress=progress)
             _cmake_build(build_dir, target, progress)
         else:
             # Framework defaults (60×2); game.toml / CLI may lengthen for hard titles.
@@ -1818,13 +1843,11 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 pct=0.1,
                 message="PGO instrumented build...",
             )
-            _cmake_configure(
-                project_root,
-                build_dir,
-                pgo="generate",
-                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=ON"],
-                progress=progress,
-            )
+            # Same product shape as the final build (see product_cmake_flags), LTO off:
+            # the profile is keyed by function control flow, not by the optimiser, and the
+            # instrumented build is thrown away.
+            _configure_product(project_root, build_dir, pgo="generate", cmake_extra=cmake_extra,
+                               lto=False, progress=progress)
             _cmake_build(build_dir, target, progress)
             if not disc or not Path(disc).is_file():
                 raise RuntimeError(
@@ -1845,15 +1868,8 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 progress=progress,
             )
             progress.phase("pgo_use", pct=0.85, message="PGO optimized rebuild...")
-            _cmake_configure(
-                project_root,
-                build_dir,
-                pgo="use",
-                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF"],
-                progress=progress,
-            )
-            _assert_configured(build_dir, {"PSX_DEBUG_TOOLS": "OFF", "PSX_STEP_BOUNDARY": "OFF"}, progress,
-                               reconfigure=lambda: _cmake_configure(project_root, build_dir, pgo="use", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF"], progress=progress))
+            lto = _configure_product(project_root, build_dir, pgo="use", cmake_extra=cmake_extra,
+                                     lto=lto, progress=progress)
             _cmake_build(build_dir, target, progress)
     except Exception as exc:  # noqa: BLE001
         progress.error(str(exc), code=EXIT_ERROR)
@@ -1890,6 +1906,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         ok=True,
         exe=str(exe),
         pgo=pgo_enabled,
+        lto=lto,
         diagnostic_exe=str(diagnostic_exe) if diagnostic_exe else None,
         diagnostic_error=diagnostic_error or None,
     )
@@ -1943,6 +1960,71 @@ def stage_overlay_toolchain_for_product(project_root: Path, exe_dir: Path, progr
     except Exception as exc:  # noqa: BLE001
         progress.log(f"WARNING: overlay toolchain staging failed; overlays will run interpreted: {exc}")
         return None
+
+
+def _host_memory_gb() -> float:
+    """Physical RAM in GiB, 0.0 when unknown."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
+            return int(out.stdout.strip()) / (1 << 30)
+        if sys.platform.startswith("linux"):
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / (1 << 20)
+        if sys.platform == "win32":
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            st = MEMORYSTATUSEX()
+            st.dwLength = ctypes.sizeof(st)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+            return st.ullTotalPhys / (1 << 30)
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
+
+
+# ThinLTO's link step is the memory peak of the whole build; below this the 8 GB Intel Mac
+# in the smoke fleet has not been measured to survive it (wave-5 F11 open item).
+LTO_MIN_MEMORY_GB = 12.0
+
+
+def product_lto_enabled(args, progress) -> bool:
+    """Wave-5 F11: link-time optimisation is on for the normal product unless the operator
+    opts out (--no-lto) or the host is a small-memory macOS box. Measured on NCII, 5 rounds
+    interleaved: -10.8% time to guest frame alone, -34% with PGO, cosim-identical over 6,103
+    checkpoints of boot + FMV."""
+    if getattr(args, "no_lto", False):
+        progress.log("LTO: off (--no-lto)")
+        return False
+    mem = _host_memory_gb()
+    if sys.platform == "darwin" and 0.0 < mem < LTO_MIN_MEMORY_GB:
+        progress.log(f"LTO: off on this macOS host ({mem:.1f} GiB RAM < {LTO_MIN_MEMORY_GB:g}; "
+                     "the ThinLTO link has not been proven at this size)")
+        return False
+    progress.log("LTO: on (PSX_RUNTIME_IPO=ON); pass --no-lto to build without it")
+    return True
+
+
+def product_cmake_flags(lto: bool) -> list[str]:
+    """The normal (player) product: no debug tools, no per-instruction step boundary, LTO as
+    decided above. The diagnostic product is the opposite shape (build_diagnostic_product).
+    Both PGO phases use this too, so the instrumented binary has the same control flow as
+    the one the profile is applied to (a DEBUG_TOOLS=ON instrumented build profiles
+    functions the final build does not have, and clang drops the mismatched counters)."""
+    return ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF",
+            f"-DPSX_RUNTIME_IPO={'ON' if lto else 'OFF'}"]
+
+
+def product_cmake_expect(lto: bool) -> dict:
+    return {"PSX_DEBUG_TOOLS": "OFF", "PSX_STEP_BOUNDARY": "OFF",
+            "PSX_RUNTIME_IPO": "ON" if lto else "OFF"}
 
 
 def _assert_configured(build_dir: Path, expected: dict, progress, reconfigure=None) -> None:
@@ -2350,6 +2432,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-pgo",
         action="store_true",
         help="skip PGO even if game.toml [pgo] enabled=true",
+    )
+    r.add_argument(
+        "--no-lto",
+        action="store_true",
+        help="build the normal product without link-time optimisation (default: on, "
+             "except on macOS hosts under %g GiB)" % LTO_MIN_MEMORY_GB,
     )
     r.add_argument(
         "--force-pgo",
