@@ -27,7 +27,7 @@ BOOT='SLUS_005.61'
 # original dump name; the regenerated cue is byte-identical to the pinned one.
 DISC_STEM='Mega Man X4 (USA)'
 EXE_SHA='dae43d44a9f3176208830ddbba0607bb627ebcd7faf9b36fc03dd0ffda34d2e8'
-CONTROLLER_SHA='68c445ffeedaf505772b20efa3c5388a13edacb5ec3424e0a021e6d0c3b1c1f2'
+CONTROLLER_SHA='844bcca0dc10b6479a2cb96c61b8d7ec15c787082e232bbaeeca8b2f4a9f17aa'
 TAPE_SHA='d85f0dec13b00e50b10a52ce0fda3cdaa9797f058ad16dd57caa8e926fad7a6a'
 PROFILE=[
     '--critical-section-model','exception','--syscall-model','guest-exception',
@@ -143,9 +143,10 @@ def setup(args):
     disc,bios,movie=[p.resolve(strict=True) for p in (container,args.bios,args.movie)]
     # media() is the unchanged pinned cue/track check for either container.
     track=media(disc,bios);require_hash(movie,source.MOVIE_SHA)
-    # 6412M is a 2.8 recording re-encoded into the 2.9.1 layout; the re-encoder keeps
-    # Header.txt byte for byte, so its declared provenance is still 2.8.
-    rows=dualshock_route.read_movie(movie,emu_version='Version 2.8')
+    # 6790M is a native BizHawk 2.10 Nymashock recording: same log key and layout as 2.9.1,
+    # only the container's BizVersion marker differs. (6412M, the 2.8 recording this lane
+    # started with, desyncs on the 2.9.1 core and was rejected 2026-09-16.)
+    rows=dualshock_route.read_movie(movie,emu_version='Version 2.10',container_version='Version 2.10')
     if len(rows)!=source.FRAMES:raise ValueError('incomplete original movie')
     random_receipt_path=args.random_receipt.resolve(strict=True);random_receipt=source.read(random_receipt_path)
     if random_receipt.get('status')!='pass' or random_receipt.get('source_commit')!='ddf225cf63b7b355cb2ac7772450cf473f4b53ac' or random_receipt.get('tape_sha256')!=TAPE_SHA:

@@ -41,17 +41,19 @@ LOGKEY_28 = ('LogKey:#Power|Reset|Previous Disk|Next Disk|'
 MEMBERS_28 = {'Header.txt', 'Comments.txt', 'Subtitles.txt', 'SyncSettings.json', 'Input Log.txt'}
 
 
-def read_movie(movie, emu_version='Version 2.9.1'):
+def read_movie(movie, emu_version='Version 2.9.1', container_version='Version 2.9.1'):
     """Return (buttons-active-low, LY,LX,RY,RX,physical-Analog) per input.
 
     emu_version is the declared header provenance; a 2.8 movie re-encoded
     into this layout keeps its original header, so its reader passes 'Version 2.8'.
+    container_version is the BizVersion.txt marker the host wrote; a 2.10 Nymashock
+    movie uses the same log key and container layout as 2.9.1, only this marker differs.
     """
     with zipfile.ZipFile(movie) as archive:
         if len(archive.namelist()) != len(MEMBERS) or set(archive.namelist()) != MEMBERS:
             raise ValueError('Unsupported movie payload; cold input-only movie required')
         if (archive.read('BizState 1.0') != b'2\r\n' or
-                archive.read('BizVersion.txt') != b'Version 2.9.1\r\n'):
+                archive.read('BizVersion.txt') != (container_version + '\r\n').encode()):
             raise ValueError('Unsupported movie container version')
         header = dict(line.split(' ', 1) for line in archive.read('Header.txt').decode().splitlines()
                       if ' ' in line)

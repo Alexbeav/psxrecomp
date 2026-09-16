@@ -1,11 +1,11 @@
 """Admit the independently replayed Mega Man X4 Nymashock source, never native output.
 
-Publication 6412M, Zero, recorded on BizHawk 2.8. BizHawk 2.9.1 changed the Nymashock
-controller definition, so the 2.8 log cannot be played as-is; nymashock28_movie.py
-re-encodes it losslessly into the 2.9.1 layout and keeps Header.txt byte for byte, so
-the movie pinned here still declares emuVersion 2.8 as its provenance while its
-container is 2.9.1. Structure and every check are the Mega Man X5 module's, including
-the movie-header firmware cross-check.
+Publication 6790M, "X, no items", a native BizHawk 2.10 Nymashock recording, replayed on
+the pinned 2.10 host through source_control_nyma210.py with the observer-291-generic source
+compiled against the 2.10 assemblies. (6412M, the 2.8 recording this lane started with,
+plays its inputs on the 2.9.1 core but desyncs before frame 14,400 and was rejected on
+2026-09-16: a 2.8 recording does not sync on a 2.9.1 core.) Structure and every check are
+the Mega Man X5 module's, including the movie-header firmware cross-check.
 """
 from pathlib import Path
 import argparse
@@ -17,14 +17,12 @@ from itertools import zip_longest
 from observation_evidence import captured_frames, compare_stock_observations, terminal_consistency
 from compare_ram_pages import read_pages
 
-FRAMES=137920
-SOURCE_COMMIT='745efb1dd8eb82f31ba9201a79cdfc5bcaf1f5d1'
-MOVIE_SHA='8a8a9951d92e2e1d84f761ce8a1a7f537c8cd33c1ba00c3813e8e8c050f45cfe'
-# The published 6412M bytes this was re-encoded from, recorded for provenance.
-ORIGINAL_MOVIE_SHA='661a08f85a2955a49ea588524b8b77cf277a741ae24658c05945e4867073ea2d'
+FRAMES=143342
+SOURCE_COMMIT='dd232820493c05296c304b64bf09c57ff1e4812f'
+MOVIE_SHA='77837dcb28d457b18bc5e5d827cd5d540875d494310bd4f8ed0725e308ab215f'
 CARD_SHA='78b6d4ac9ab4d23caf7e5f04f83539bf5d994cccfb0a709d14ac53d05c8e21ef'
 FINAL_CARD="SaveRAM/Mega Man X4 (USA).SaveRAM"
-TITLE='Mega Man X4 (USA) Zero 6412M'
+TITLE='Mega Man X4 (USA) X no items 6790M'
 FIRMWARE_KEY='PSX+U'
 # The firmware this movie's own header declares. Its header says
 # PSX_Firmware_U 0555C6FAE8906F3F09BAF5988F00E55F88E9F30B, which is SCPH-5501;
@@ -35,19 +33,19 @@ FIRMWARE_SHA1='0555c6fae8906f3f09baf5988f00e55f88e9f30b'
 FIXED={
     'Mega Man X4 (USA).bin':'3ceab06ac99add4035f912188bcbf5b16c02056f46a33d38ff0c8dbce6cb613b',
     'Mega Man X4 (USA).cue':'d8cb97b968aba5cae059540456f85441933c2a8c213df5a3064d2d28e9eef8bd',
-    'BizHawk-2.9.1-win-x64.zip':'ff6ddc657d474e37d3b06cb10154f19173a1455ab756476ed58236fca62387a9',
-    'EmuHawk.exe':'6ce622d4ed4e8460ce362cf35ef67dc70096fec2c9a174cbef6a3e5b04f18bcc',
-    'BizHawk.Emulation.Cores.dll':'750b0dfb9a3b9720ae92ed94aa798d7b531f14c20d202a97be6c83568e620bbe',
-    'shock.wbx.zst':'78c7bdda5ad9551294468fb435eab7afb7e8edb224ef44c7bf7efaa4032dd200',
+    'BizHawk-2.10-win-x64.zip':'fdd0e7ae57afcb04509861408fdbb499bec52cffcc7b008526b60d3548a872ec',
+    'EmuHawk.exe':'a23eccb289d1a09b8b9ca09677718725acebab7d610e4b0ee93f7daf54064a25',
+    'BizHawk.Emulation.Cores.dll':'54fa9f589b3784042a37c4cffce88b26e23d5243bb49c01bd451dc8bcf035744',
+    'shock.wbx.zst':'7fe6d288593b1bec65fcef0e26ccadec745c25693abb0a7ad0f0b27bdf4fd627',
     FIRMWARE_NAME:'11052b6499e466bbf0a709b1f9cb6834a9418e66680387912451e971cf8a1fef',
-    'happylee_mcbobx-megamanx4-zero.relayout291.bk2':MOVIE_SHA,'original.bk2':MOVIE_SHA,
-    'Observation291.dll':'dd4fcaf409a41132039e09d8c2a8490cf35da6a7056660eb5321cbb197cbbbff',
-    'source_control_nyma.py':'653bc42a0e8f08ae70cbead578ffd4ad672308ae30479764162ef3c3b7960d5f',
+    'happyleev2-mmx4-x_noitems.bk2':MOVIE_SHA,'original.bk2':MOVIE_SHA,
+    'Observation291.dll':'d2ecbe85fdd25754d97db7085ad4d7f2ab79e18900378ae30188bbaa744e9ade',
+    'source_control_nyma210.py':'01a9bcfe5b15be23a99c4e1831481ba763ade34e8d080f26496b0f484fc955f2',
     'source_control_nyma.lua':'cc44363aff7c645e427764d3e5eeed8256e166ce517b6a310e9097bffbe34f4c',
-    'observer-build.json':'4426c3aea6b6a755962f3499c73d06ede1078e40a57bb6d4b0f3b08836eeeae0',
+    'observer-build.json':'cab11a1ecb70fd79779b0565d7134267f372efbea1285a3ebe821cb6ddfb8e9a',
 }
 # Run-local artifacts the launcher writes or copies beside the run's manifest.
-LOCAL=('original.bk2','source_control_nyma.py','source_control_nyma.lua','observer-build.json','start.lua','launch-config.json','host-closure.json')
+LOCAL=('original.bk2','source_control_nyma210.py','source_control_nyma.lua','observer-build.json','start.lua','launch-config.json','host-closure.json')
 # Unbound diagnostic evidence: controller.tsv is the host-side joypad.get() log (neutral during
 # playback) and host-dialogs.jsonl records the dismissed informational end-of-movie cycle warning.
 OPTIONAL=('controller.tsv','host-dialogs.jsonl')
@@ -55,7 +53,7 @@ OPTIONAL=('controller.tsv','host-dialogs.jsonl')
 SETTINGS={
     'effective-sync.json':'066f68ba9ee8aa8be5753dd8b69056bf479b2fea00e4c22f5072e58621e96f97',
     'effective-settings.json':'9f78b1634dac17e574889add799f181c3f37f7ac8508bf92e5b9cae964652ad3',
-    'effective-setting-values.json':'4683a464ab25e69738314759f6530627813b7507480edcdea0cb01c3004daff4',
+    'effective-setting-values.json':'1decca016c7e5a083b39e57fa29bd1d781eda141305fd9a91dedad855cd2f4bf',
     'effective-ports.json':'e3ceec7164b05978e42d0ad200027a700f4a0ec607f1630ea2b800d72444168c',
 }
 
@@ -95,8 +93,8 @@ def return_rows(path,endpoint):
 
 def launch_config(root,firmware):
     """The launcher's host configuration as written before EmuHawk rewrote host-config.json."""
-    return {'LastWrittenFrom':'2.9.1','LastWrittenFromDetailed':'Version 2.9.1','FirmwareUserSpecifications':{FIRMWARE_KEY:firmware},
-            'TargetZoomFactors':{'PSX':2},'StartPaused':False,'RunInBackground':True,'AcceptBackgroundInput':False,'SingleInstanceMode':False,
+    return {'LastWrittenFrom':'2.10','LastWrittenFromDetailed':'Version 2.10','FirmwareUserSpecifications':{FIRMWARE_KEY:firmware},
+            'TargetZoomFactors':{'PSX':2},'StartPaused':True,'RunInBackground':True,'AcceptBackgroundInput':False,'SingleInstanceMode':False,
             'SoundEnabled':False,'Screenshot_CaptureOSD':False,'AutosaveSaveRAM':False,'DispMethod':1,
             'Movies':{'MovieEndAction':3,'EnableBackupMovies':False},
             'PathEntries':{'Paths':[{'System':'PSX','Type':t,'Path':str(root/d)} for t,d in [('Save RAM','SaveRAM'),('Savestates','State'),('Screenshots','Screenshots')]]}}
@@ -119,7 +117,7 @@ def verify_identity(root,manifest,role,tail):
     if (manifest.get('schema'),manifest.get('title'),manifest.get('source_commit'),manifest.get('source_tag'),
         manifest.get('original_inputs'),manifest.get('cutoff'),manifest.get('role'),manifest.get('neutral_tail'),
         manifest.get('firmware_key'),manifest.get('firmware_sha256')) != (
-        'nymashock-stock-control-v2',TITLE,SOURCE_COMMIT,'2.9.1',FRAMES,FRAMES,role,tail,FIRMWARE_KEY,FIXED[FIRMWARE_NAME]):
+        'nymashock-stock-control-v2',TITLE,SOURCE_COMMIT,'2.10',FRAMES,FRAMES,role,tail,FIRMWARE_KEY,FIXED[FIRMWARE_NAME]):
         raise ValueError('source manifest role/core/firmware/input boundary differs')
     bindings=manifest['bindings'];names={Path(x['path']).name:x for x in bindings}
     if len(names)!=len(bindings) or set(names)!=set(FIXED)|{'start.lua','launch-config.json','host-closure.json'}:
@@ -132,7 +130,7 @@ def verify_identity(root,manifest,role,tail):
     closure=read(root/'host-closure.json')
     if not closure or len({x['path'] for x in closure})!=len(closure):raise ValueError('invalid host closure')
     app=Path(names['EmuHawk.exe']['path']).resolve()
-    with zipfile.ZipFile(names['BizHawk-2.9.1-win-x64.zip']['path']) as archive:
+    with zipfile.ZipFile(names['BizHawk-2.10-win-x64.zip']['path']) as archive:
         for item in closure:
             path=Path(item['path']).resolve()
             if path.relative_to(app.parent).as_posix()!=item['archive_member']:
