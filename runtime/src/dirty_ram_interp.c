@@ -484,6 +484,9 @@ uint32_t g_overlay_region_floor = OVERLAY_REGION_FLOOR_DEFAULT;
  * high-loading game pins it; main.cpp sets it at game load. See the header. */
 uint32_t g_text_image_lo = DIRTY_RAM_KERNEL_WINDOW_END;
 
+/* func_override.c: NULL unless an override is armed. */
+extern int (*g_psx_func_override_hook)(CPUState *cpu, uint32_t phys);
+
 #ifdef PSX_HAS_GAME_DISPATCH
 extern int psx_dispatch_game_compiled(CPUState* cpu, uint32_t addr);
 extern int psx_game_address_in_text(uint32_t addr);
@@ -2870,13 +2873,19 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     int      _ovfp = overlay_fp_enabled() &&
                      overlay_cache_window_contains(phys) &&
                      overlay_loader_is_candidate(phys);
-    uint32_t current_function_entry_phys =
-        overlay_loader_is_candidate(phys) ? phys : 0u;
+    /* Function-entry provenance only feeds the J/JR override route below.
+     * With no override armed, skip both entry lookups so a build without
+     * overrides pays nothing here. Zero is the conservative value: it can
+     * only make the route decline, never consult on an unproven entry. */
+    uint32_t current_function_entry_phys = 0u;
+    if (g_psx_func_override_hook) {
+        if (overlay_loader_is_candidate(phys))
+            current_function_entry_phys = phys;
 #ifdef PSX_HAS_GAME_DISPATCH
-    if (current_function_entry_phys == 0u &&
-        psx_game_is_function_entry(addr))
-        current_function_entry_phys = phys;
+        else if (psx_game_is_function_entry(addr))
+            current_function_entry_phys = phys;
 #endif
+    }
     uint32_t _in_regs[34];
     if (_ovfp) {
         overlay_regs_snap(_in_regs, cpu);
@@ -3230,13 +3239,19 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 opc == 0x02u ||
                 (opc == 0x00u && (insn & 0x3Fu) == 0x08u &&
                  ((insn >> 21) & 0x1Fu) != 31u);
-            int target_is_function_entry =
-                overlay_loader_is_candidate(target_phys);
-#ifdef PSX_HAS_GAME_DISPATCH
-            if (!target_is_function_entry)
+            /* Test the hook before the entry lookups: every interpreted
+             * J/JR reaches this point, and with no override armed the
+             * lookups can only feed a route that declines anyway. */
+            int target_is_function_entry = 0;
+            if (unlinked_tail && g_psx_func_override_hook) {
                 target_is_function_entry =
-                    psx_game_is_function_entry(target);
+                    overlay_loader_is_candidate(target_phys);
+#ifdef PSX_HAS_GAME_DISPATCH
+                if (!target_is_function_entry)
+                    target_is_function_entry =
+                        psx_game_is_function_entry(target);
 #endif
+            }
             const uint32_t source_phys = pc & 0x1FFFFFFFu;
             const int proven_tail_entry =
                 target != 0u && target_phys != source_phys &&

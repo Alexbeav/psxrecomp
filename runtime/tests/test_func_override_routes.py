@@ -37,6 +37,14 @@ def main() -> None:
             "dynamic tail entry must require an exact overlay entry")
     require("psx_game_is_function_entry(target)" in DIRTY[pump:tail],
             "static tail entry must require a generated function entry")
+    gate = DIRTY.find("if (unlinked_tail && g_psx_func_override_hook)", pump, tail)
+    lookup = DIRTY.find("overlay_loader_is_candidate(target_phys)", pump, tail)
+    require(0 <= gate < lookup,
+            "J/JR entry lookups must wait for an armed override hook")
+    entry = DIRTY.index("uint32_t current_function_entry_phys = 0u;")
+    require(DIRTY.find("if (g_psx_func_override_hook)", entry, entry + 400)
+            > entry,
+            "dispatch entry provenance lookups must wait for an armed hook")
     print("function override entry routes passed")
 
 
