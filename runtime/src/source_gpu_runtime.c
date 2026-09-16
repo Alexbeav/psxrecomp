@@ -240,8 +240,7 @@ static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
         return;
     }
     {
-        const char *route=getenv("PSX_INPUT_ROUTE_FILE");
-        if(!source_stateio_file_sha256(route,m.route_sha256)) {
+        if(!source_stateio_route_sha256(m.route_sha256)) {
             fprintf(stderr,"[tas-stateio] save refused: cannot hash the input route\n");
             return;
         }

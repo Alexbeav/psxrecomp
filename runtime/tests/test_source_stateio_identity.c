@@ -1,6 +1,7 @@
 /* v7 identity dimensions: file hash, runtime-binary hash, config digest. */
 #include "source_stateio_identity.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures = 0;
@@ -35,6 +36,30 @@ int main(int argc, char **argv) {
     check(source_stateio_file_sha256("does-not-exist-xyz", b) == 0 && b[0] == '\0',
           "missing file refuses");
     check(source_stateio_file_sha256(NULL, b) == 0, "null path refuses");
+
+    /* The route digest refuses without a route, then is computed once per process:
+     * a capture reuses it instead of rehashing (the route file is immutable). */
+    {
+        char route[65], again[65], direct[65];
+#if defined(_WIN32)
+        _putenv_s("PSX_INPUT_ROUTE_FILE", "");
+#else
+        unsetenv("PSX_INPUT_ROUTE_FILE");
+#endif
+        check(source_stateio_route_sha256(route) == 0 && route[0] == '\0', "no route refuses");
+#if defined(_WIN32)
+        _putenv_s("PSX_INPUT_ROUTE_FILE", argv[1]);
+#else
+        setenv("PSX_INPUT_ROUTE_FILE", argv[1], 1);
+#endif
+        check(source_stateio_route_sha256(route) == 1 && source_stateio_file_sha256(argv[1], direct) == 1 &&
+              strcmp(route, direct) == 0, "route digest is the route file's SHA-256");
+        f = fopen(argv[1], "wb");
+        if (!f) return 2;
+        fputs("three", f); fclose(f);
+        check(source_stateio_route_sha256(again) == 1 && strcmp(route, again) == 0,
+              "route digest computed once per process");
+    }
 
     /* config digest is present; the value itself is environment dependent, so
      * only shape and stability are asserted here. */

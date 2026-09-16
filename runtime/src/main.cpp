@@ -15625,6 +15625,15 @@ session_reboot:
      * the checkpoint before the run is admitted; a foreign or truncated state
      * aborts instead of producing a silently wrong replay. Final qualification
      * runs stay from-scratch; this path is for diagnosis only. */
+    if (std::getenv("PSX_TAS_SAVE_STATE_AT") || std::getenv("PSX_TAS_RESUME_STATE")) {
+        /* Hash the executable and route before the first frame, while no
+         * frontend heartbeat is expected; every capture then reuses them. */
+        char exe_digest[65], route_digest[65];
+        if (!source_stateio_exe_sha256(exe_digest) || !source_stateio_route_sha256(route_digest)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] cannot hash the runtime binary or input route\n");
+            return 2;
+        }
+    }
     if (const char *resume_state = std::getenv("PSX_TAS_RESUME_STATE")) {
         char manifest_path[4160], text[4096], state_path_field[1024], reason[160];
         TasStateManifest m;
@@ -15646,12 +15655,9 @@ session_reboot:
         const int compatible_build = compatible_env && !std::strcmp(compatible_env, "1");
         source_stateio_config_digest_hex(cfg_hex);
         source_stateio_exe_sha256(exe_hex);
-        {
-            const char *rp = std::getenv("PSX_INPUT_ROUTE_FILE");
-            if (!rp || !source_stateio_file_sha256(rp, route_hex)) {
-                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: cannot hash the input route\n");
-                return 2;
-            }
+        if (!source_stateio_route_sha256(route_hex)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: cannot hash the input route\n");
+            return 2;
         }
         /* Identity dimensions that do not depend on the loaded state are checked
          * BEFORE the load, so a foreign blob is refused without first mutating

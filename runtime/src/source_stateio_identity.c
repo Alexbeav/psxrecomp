@@ -6,6 +6,7 @@
 #include "source_tas_stateio.h"   /* env digest + allow-list + hex */
 #include "psx_sha256.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -38,17 +39,35 @@ int source_stateio_file_sha256(const char *path, char out[65]) {
     return 1;
 }
 
+/* The running executable and the route file cannot change during a run, and
+ * hashing them is the slow part of a capture: a 94 MB title executable took
+ * 22.7 s under a loaded host at Mega Man X4 return 25,000, and the starvation
+ * watchdog aborted the replay. Each digest is computed once per process. */
 int source_stateio_exe_sha256(char out[65]) {
+    static char cached[65];
     char path[1024];
+    if (!out) return 0;
+    if (cached[0]) { memcpy(out, cached, 65); return 1; }
 #if defined(_WIN32)
     DWORD n = GetModuleFileNameA(NULL, path, (DWORD)sizeof path);
-    if (n == 0 || n >= sizeof path) { if (out) out[0] = '\0'; return 0; }
+    if (n == 0 || n >= sizeof path) { out[0] = '\0'; return 0; }
 #else
     ssize_t n = readlink("/proc/self/exe", path, sizeof path - 1);
-    if (n <= 0 || (size_t)n >= sizeof path) { if (out) out[0] = '\0'; return 0; }
+    if (n <= 0 || (size_t)n >= sizeof path) { out[0] = '\0'; return 0; }
     path[n] = '\0';
 #endif
-    return source_stateio_file_sha256(path, out);
+    if (!source_stateio_file_sha256(path, out)) return 0;
+    memcpy(cached, out, 65);
+    return 1;
+}
+
+int source_stateio_route_sha256(char out[65]) {
+    static char cached[65];
+    if (!out) return 0;
+    if (cached[0]) { memcpy(out, cached, 65); return 1; }
+    if (!source_stateio_file_sha256(getenv("PSX_INPUT_ROUTE_FILE"), out)) return 0;
+    memcpy(cached, out, 65);
+    return 1;
 }
 
 int source_stateio_config_digest_hex(char out[65]) {

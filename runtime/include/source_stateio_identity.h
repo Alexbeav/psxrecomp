@@ -13,7 +13,10 @@
 extern "C" {
 #endif
 int source_stateio_file_sha256(const char *path, char out[65]);
+/* Both computed once per process: the executable and PSX_INPUT_ROUTE_FILE cannot
+ * change during a run, and hashing them is the slow part of a capture. */
 int source_stateio_exe_sha256(char out[65]);
+int source_stateio_route_sha256(char out[65]);
 int source_stateio_config_digest_hex(char out[65]);
 #ifdef __cplusplus
 }
