@@ -527,6 +527,19 @@ int main() {
     mod_runtime_activate_plugins();
     check(func_override_count() == 1,
           "selected exact package override must arm");
+    /* Offline lobby rematch: commit again, then jump past activation. The
+     * commit disarms the previous set; the rematch path must re-arm it
+     * without re-running activation callbacks. */
+    const int activations_before_rematch = activation_calls;
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    check(func_override_count() == 0,
+          "commit must disarm the previous package override set");
+    check(PSXRecompV4::mod_runtime_arm_function_overrides(&error),
+          error.c_str());
+    check(func_override_count() == 1,
+          "rematch re-arm must restore the committed package override");
+    check(activation_calls == activations_before_rematch,
+          "rematch re-arm must not run activation callbacks");
     int guard_kind = -1, guard_count = 0;
     uint32_t guard_crc = 0;
     check(func_override_get_guard_info(0, &guard_kind, &guard_count,

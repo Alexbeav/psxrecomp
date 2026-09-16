@@ -1374,14 +1374,14 @@ extern "C" void mod_runtime_clear_function_override_plugins_for_tests(void) {
 }
 #endif
 
-extern "C" void mod_runtime_activate_plugins(void) {
-    using namespace PSXRecompV4;
+namespace PSXRecompV4 {
+
+bool mod_runtime_arm_function_overrides(std::string* error) {
     RuntimeMods& s = state();
-    if (!s.initialized || !s.plan.ok) return;
-    /* Arm the complete selected override set before any activation callback
-     * can change host or guest state. Commit already preflighted collisions
-     * and capacity. If the table changed after commit, roll back the complete
-     * package set and fail closed instead of silently arming a subset. */
+    if (!s.initialized || !s.plan.ok) return true;
+    /* Commit already preflighted collisions and capacity. If the table
+     * changed after commit, roll back the complete package set and fail
+     * closed instead of silently arming a subset. */
     func_override_reset_package_armed();
     for (FunctionOverridePlugin& pending : function_override_plugins())
         pending.armed = false;
@@ -1420,10 +1420,23 @@ extern "C" void mod_runtime_activate_plugins(void) {
             func_override_install();
             /* The launcher reads s.error through provider_error. Keep this
              * failure on that existing diagnostics boundary. */
-            return;
+            if (error) *error = s.error;
+            return false;
         }
     }
     func_override_install();
+    return true;
+}
+
+} // namespace PSXRecompV4
+
+extern "C" void mod_runtime_activate_plugins(void) {
+    using namespace PSXRecompV4;
+    RuntimeMods& s = state();
+    if (!s.initialized || !s.plan.ok) return;
+    /* Arm the complete selected override set before any activation callback
+     * can change host or guest state. */
+    if (!mod_runtime_arm_function_overrides()) return;
     for (const ModResolution::Plugin& plugin : s.plan.plugins) {
         s.current_plugin = &plugin;
         mod_invoke_activation_plugin(plugin.id);

@@ -22,6 +22,13 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path = {},
  * user's persisted offline selection on disk. Netplay is always vanilla for
  * now (no synced mod plans). */
 bool mod_runtime_clear_for_netplay(std::string* error = nullptr);
+/* Arm the committed plan's package function overrides without running
+ * activation callbacks. mod_runtime_commit disarms the previous set, so a
+ * path that commits without activating (the offline lobby rematch, which
+ * jumps past mod_runtime_activate_plugins) must re-arm here or the selected
+ * overrides stay silently off. Fails closed like activation: on a late
+ * table collision the whole plan is dropped and *error names the entry. */
+bool mod_runtime_arm_function_overrides(std::string* error = nullptr);
 const std::string& mod_runtime_fingerprint();
 const std::filesystem::path& mod_runtime_effective_disc_path();
 
