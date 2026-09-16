@@ -40,6 +40,49 @@ int main(void) {
     assert(source_gpu_command_write(&s,0x4000ff00));assert(source_gpu_command_write(&s,0x00a20054));
     assert(source_gpu_command_write(&s,0x00a20054));assert(s.count==3 && !s.dispatch.kind);
     assert(source_gpu_command_update(&s,1));assert(!s.count && s.budget==-17);
-    source_gpu_command_cold(&s);assert(!source_gpu_command_write(&s,0x48000000));
+    /* Poly-lines. LINE_HELPER gives every entry in 0x40-0x5F the same len, 3 + goraud, so an
+     * opening poly-line packet is its two-vertex counterpart's shape; INCMD_PLINE then takes
+     * 1 + goraud words per segment until a terminator word, tested before the segment length.
+     * The main FIFO tail's -2 is never reached from that branch, so only the opening packet
+     * pays it: the opening line here costs 2 + 16 + 2*16 = 50 and each segment 16 + 2*16 = 48. */
+    source_gpu_command_cold(&s);
+    s.budget=4096;s.clip_x1=1023;s.clip_y1=511;
+    assert(source_gpu_command_length(0x48000000u)==3);
+    assert(source_gpu_command_feedback_length(0x48000000u)==1);
+    assert(source_gpu_command_write(&s,0x48804020u));
+    assert(source_gpu_command_write(&s,0x00000000u));
+    assert(source_gpu_command_write(&s,0x00000010u));
+    assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==3 && !s.count);
+    assert(s.pline && s.pline_command==0x48u && s.budget==4096-50);
+    assert(!source_gpu_command_ready(&s));
+    assert(source_gpu_command_write(&s,0x00000020u));
+    assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==3 && !s.count);
+    assert(s.dispatch.words[0]==((0x48u<<24)|0x804020u));
+    assert(s.dispatch.words[1]==0x00000010u && s.dispatch.words[2]==0x00000020u);
+    assert(s.pline && s.budget==4096-50-48);
+    assert(source_gpu_command_write(&s,0x55555555u));
+    assert(!s.pline && !s.count && s.dispatch.kind==SOURCE_GPU_DISPATCH_NONE);
+    assert(source_gpu_command_ready(&s));
+    /* Shaded poly-line: len 4, and each segment carries its own colour word first. */
+    source_gpu_command_cold(&s);
+    s.budget=4096;s.clip_x1=1023;s.clip_y1=511;
+    assert(source_gpu_command_length(0x58000000u)==4);
+    assert(source_gpu_command_write(&s,0x58111111u));
+    assert(source_gpu_command_write(&s,0x00000000u));
+    assert(source_gpu_command_write(&s,0x00222222u));
+    assert(source_gpu_command_write(&s,0x00000010u));
+    assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==4);
+    assert(s.pline && s.pline_command==0x58u && s.pline_color==0x222222u);
+    assert(source_gpu_command_write(&s,0x00333333u));
+    assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_NONE && s.count==1);
+    assert(source_gpu_command_write(&s,0x00000020u));
+    assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==4 && !s.count);
+    assert(s.dispatch.words[0]==((0x58u<<24)|0x222222u) && s.dispatch.words[1]==0x00000010u);
+    assert(s.dispatch.words[2]==0x00333333u && s.dispatch.words[3]==0x00000020u);
+    assert(s.pline && s.pline_color==0x333333u);
+    /* A terminator is recognised by its nibble pattern, not an exact word, and ends the
+     * command even with a full segment already queued behind it. */
+    assert(source_gpu_command_write(&s,0x5fff5abcu));
+    assert(!s.pline && !s.count);
     return 0;
 }

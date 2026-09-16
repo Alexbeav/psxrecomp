@@ -404,7 +404,10 @@ int sw_draw_source_block(const SourceGPUBlock *block,int *extra_work) {
     *extra_work=0;
     if(g_hr || g_wide_cur || g_precise_valid || g_perspective_valid)return 0;
     const uint32_t *words=block->words;unsigned opcode=words[0]>>24;
-    if((opcode>=0x40 && opcode<=0x47) || (opcode>=0x50 && opcode<=0x57)) {
+    /* The whole line family, 0x40-0x5F. A poly-line segment reaches here as the ordinary
+     * two-vertex packet it draws as: DrawLine is templated on <goraud, BlendMode,
+     * MaskEval_TA>, so the poly-line bit never reaches rasterisation. */
+    if(opcode>=0x40 && opcode<=0x5f) {
         unsigned shaded=!!(opcode&0x10),last=2+shaded;
         int dx=(int)((words[last]&2047u)^1024u)-(int)((words[1]&2047u)^1024u);
         int dy=(int)(((words[last]>>16)&2047u)^1024u)-(int)(((words[1]>>16)&2047u)^1024u);
