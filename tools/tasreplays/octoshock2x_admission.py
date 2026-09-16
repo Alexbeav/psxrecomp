@@ -59,8 +59,13 @@ TITLES = {
         'title': "Oddworld Abe's Exoddus (USA) 100% 6672M", 'host': '2.10', 'frames': 478752,
         'movie': 'samtastic-oddworldabesexoddus-100p.bk2', 'movie_sha256': '5cabfa9b64b91ad93374bf1d28bbc129b05f6831e160c15de1e1c19f1aca55d7',
         'firmware': 'SCPH5501.BIN',
+        # Two-disc set: the movie swaps discs twelve times (first at frame 179,996), so the host loads an
+        # .m3u naming both cues; a Disc-1-only run crashed EmuHawk at the first swap (2026-09-16).
         'media': {"Oddworld - Abe's Exoddus (USA) (Disc 1).bin": 'd480e3aaf66a80c9307c1f2c61fefd162d2fb9e801398f69feb6e5bcbfb7c720',
-                  "Oddworld - Abe's Exoddus (USA) (Disc 1).cue": '2c7ed2c4ad10825315a7bb763c6cf0c9daf6af9d4fdab2e5d27718fa8d35f96c'},
+                  "Oddworld - Abe's Exoddus (USA) (Disc 1).cue": '2c7ed2c4ad10825315a7bb763c6cf0c9daf6af9d4fdab2e5d27718fa8d35f96c',
+                  "Oddworld - Abe's Exoddus (USA) (Disc 2).bin": 'a9db9be897ff2e5179943e460124a86a9df4a28a9a3a81fe19d1cfe01dacf007',
+                  "Oddworld - Abe's Exoddus (USA) (Disc 2).cue": '47b55fa7294469cb90c704e22b7514a988f49f51bebf24e055b11489daba8dd2',
+                  "Oddworld - Abe's Exoddus (USA).m3u": 'f91d5d417fd0e5da832a8116658192789bf033f21c5e2bfc0eceb8c80dcd09cf'},
         'sync': {'EnableLEC': False, 'FIOConfig': {'Multitaps': [False, False], 'Memcards': [False, False], 'Devices8': [1, 0, 0, 0, 1, 0, 0, 0]}},
         'schema': 'exoddus-independent-source-v1'},
 }
