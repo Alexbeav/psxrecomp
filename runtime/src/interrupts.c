@@ -1675,6 +1675,12 @@ void psx_check_interrupts(CPUState* cpu) {
                 debug_server_log_thread_event(32, cpu, from_tcb, to_tcb, resume_pc);
                 g_dirty_interp_active = 0;
                 s_compiled_interrupt_resume_pc = 0;
+                /* The interpreter's entry poll publishes its entry PC in the
+                 * dirty resume latch so this boundary can be honored; the longjmp
+                 * skips that frame's restore, and the latch is transient, so it
+                 * must read 0 once we land in the scheduler, or a later compiled
+                 * poll would take it as EPC. */
+                g_dirty_safe_resume_pc = 0;
                 g_sched_escape.target_tcb = to_tcb;
                 g_sched_escape.resume_pc  = 0;
                 g_sched_escape.reason     = PSX_RUN_YIELD_TO_TCB;

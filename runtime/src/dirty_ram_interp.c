@@ -961,6 +961,20 @@ static int dirty_ram_pump_boundary(CPUState *cpu, uint32_t committed_pc, int sit
     }
 
     cpu->pc = committed_pc;
+    /* A committed control transfer (site 1) is an architecturally clean point,
+     * but a deferred in-exception thread switch is honored only at a site-0
+     * poll. If one is pending, surface to the dispatcher with cpu->pc = the
+     * committed target: the flat re-dispatch re-enters this interpreter there,
+     * and its entry poll (site 0, resume PC published) honors the switch. Only
+     * site 1 surfaces; the other pump sites expose candidate PCs whose CPUState
+     * may not be materialized yet. No-op when nothing is pending. (872c8310: an
+     * interpreted thread spinning in one local-flow run otherwise never reaches
+     * an honorable boundary and starves every other task, the MGS PAL boot.) */
+    if (site == 1) {
+        extern int psx_defer_switch_pending(void);
+        if (psx_defer_switch_pending() && !psx_get_in_exception())
+            return 1;
+    }
     return 0;
 }
 
@@ -3545,10 +3559,28 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 !psx_get_in_exception() &&
                 (sr & 0x1u) != 0u &&
                 (sr & (1u << 10)) != 0u;
-            if (deliverable || (++s_interp_entry_poll & 0x3Fu) == 0) {
+            /* A fresh interpreter entry is a fully materialized boundary:
+             * CPUState is authoritative, cpu->pc = pc, no load writeback owed.
+             * Publish that PC as the dirty resume latch around the poll
+             * (872c8310, restored by 2312f929 after a merge kept only the
+             * block-leader wrapper). Without it an IRQ taken here carries the
+             * sentinel EPC and leaves the async-RFE resume latch stale, and a
+             * handler that switches threads in-exception saves the sentinel
+             * into the outgoing TCB. Poll whenever a deferred in-exception
+             * switch is pending, so an interpreted thread brought back here by
+             * the site-1 surfacing in dirty_ram_pump_boundary honors it. */
+            extern int psx_defer_switch_pending(void);
+            int defer_pending = psx_defer_switch_pending() && !psx_get_in_exception();
+            if (deliverable || defer_pending || (++s_interp_entry_poll & 0x3Fu) == 0) {
                 cpu->pc = pc;
                 s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
-                psx_check_interrupts_at(cpu, pc);
+                {
+                    extern uint32_t g_dirty_safe_resume_pc;
+                    uint32_t prev_safe = g_dirty_safe_resume_pc;
+                    g_dirty_safe_resume_pc = pc;
+                    psx_check_interrupts_at(cpu, pc);   /* a honored switch longjmps away */
+                    g_dirty_safe_resume_pc = prev_safe;
+                }
                 if (cpu->pc != 0u && !dirty_ram_same_pc(cpu->pc, pc)) {
                     /* Handler resumed elsewhere — surface to dispatch. */
                     g_dirty_ram_blocks_run++;

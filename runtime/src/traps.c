@@ -867,6 +867,18 @@ void psx_scheduler_run(CPUState* cpu)
              * nested-unit gate so IRQ checks are not wedged-off after the escape
              * (backstop for the Ape memcard native<->interp fix). */
             { extern int g_call_unit_depth; g_call_unit_depth = 0; }
+            /* A deferred thread yield (or a save-admission unwind) can longjmp
+             * out of a dirty-interpreter IRQ pump and skip that frame's restore
+             * of the pump-site latch and the dirty resume PC. The scheduler top
+             * is never a pump site. Left set, the latch stops deferred thread
+             * switches from ever being honored and makes a later compiled poll
+             * take a stale PC as EPC (3f56f6a5; GT2-Arcade wedged this way). */
+            {
+                extern int g_cosim_dirty_pump_site;
+                extern uint32_t g_dirty_safe_resume_pc;
+                g_cosim_dirty_pump_site = 0;
+                g_dirty_safe_resume_pc = 0;
+            }
             /* flush_resume / savestate longjmp skips generated bb_defer cleanup. */
             {
                 extern int g_psx_cyc_bb_defer;
