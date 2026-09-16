@@ -177,7 +177,7 @@ def setup(args):
     bios_profile.write_text(profile,encoding='utf8')
     game=project/'game.toml'
     game.write_text(f'''[game]
-name = "Bio Hazard Director's Cut TAS"
+name = "Resident Evil Director's Cut best ending TAS"
 id = "SLPS-00998"
 exe = {q(exe)}
 load_address = "0x80010000"
@@ -190,7 +190,7 @@ bios_config = {q(bios_profile)}
 strict = true
 out_dir = {q(project/'generated')}
 [runtime]
-window_title = "Bio Hazard - original TAS"
+window_title = "Resident Evil DC - Jill best ending TAS"
 bios_hle = false
 [video]
 renderer = "software"
@@ -214,7 +214,7 @@ renderer = "software"
     fingerprint=stamped[0] if stamped else stamp()
     native=project/'native'
     native_argv=['cmake','-S',HERE,'-B',native,*common,'-DTAS_PROJECT_DIR='+str(project),
-             '-DTAS_GAME_STEM='+BOOT,'-DTAS_EXE_NAME=BioHazard-TAS','-DTAS_WINDOW_TITLE=Bio Hazard TAS',
+             '-DTAS_GAME_STEM='+BOOT,'-DTAS_EXE_NAME=ResidentEvilDC-TAS','-DTAS_WINDOW_TITLE=Resident Evil DC best ending TAS',
              '-DPSXRECOMP_BIOS_STEMS=SCPH5500','-DPSX_SHELLWIN_INTERP=ON','-DPSXRECOMP_BIOS_PROFILE='+str(bios_profile),
              '-D_psxrt_bash='+str(bash),'-DPSX_RECOMP_UI=OFF','-DPSX_NETPLAY=OFF','-DPSX_REWIND=OFF','-DPSX_SETUP_WIZARD=OFF',
              '-DPSX_DEBUG_TOOLS=ON','-DPSX_ENABLE_VULKAN=OFF','-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE','-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE']
@@ -228,7 +228,7 @@ renderer = "software"
     files=[disc,track,bios,staged_bios,bios_profile,movie,exe,game,tape,card,route,project/'seeds.txt',reference_path,random_receipt_path]
     generated={str(p):source.digest(p) for p in (ROOT/'generated').glob('SCPH5500*') if p.is_file()}
     generated.update({str(p):source.digest(p) for p in (project/'generated').glob('*') if p.is_file()})
-    info={'schema':'biohazard-tas-candidate-v1','source_head':head,'source_tree':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD^{tree}'],text=True).strip(),
+    info={'schema':'redc-tas-candidate-v1','source_head':head,'source_tree':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD^{tree}'],text=True).strip(),
           'reference':str(reference_path),'bindings':[source.bind(p) for p in files],'generated':generated,
           'executable':str(build),'executable_sha256':source.digest(build),'disc':str(disc),'bios':str(staged_bios),'game':str(game),
           'route':str(route),'card1':str(card),'tape':str(tape),'profile':PROFILE,
@@ -241,7 +241,7 @@ def replay(args,returns=None,output=None):
     """One replay: full when returns is None or the endpoint, otherwise a diagnostic prefix."""
     output=(args.output if output is None else Path(output)).resolve()
     setup_path=args.setup.resolve(strict=True);info=source.read(setup_path)
-    if info.get('schema')!='biohazard-tas-candidate-v1':raise ValueError('wrong Bio Hazard candidate')
+    if info.get('schema')!='redc-tas-candidate-v1':raise ValueError('wrong Resident Evil DC best-ending candidate')
     for binding in info['bindings']:require_hash(Path(binding['path']),binding['sha256'])
     if args.exe is None and args.diagnostic_binary is None:require_hash(Path(info['executable']),info['executable_sha256'])
     binary=resolve_binary(info['executable'],info['executable_sha256'],args.exe,args.diagnostic_binary)

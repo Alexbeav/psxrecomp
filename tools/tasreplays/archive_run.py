@@ -34,6 +34,10 @@ TITLES = {
                   'schema': 'biohazard-tas-candidate-v1'},
     'megamanx5': {'name': 'Mega Man X5', 'receipt': 'source-comparison.json', 'exe': 'megamanx5-tas.exe',
                   'schema': 'megamanx5-tas-candidate-v1'},
+    'megamanx4': {'name': 'Mega Man X4', 'receipt': 'source-comparison.json', 'exe': 'megamanx4-tas.exe',
+                  'schema': 'megamanx4-tas-candidate-v1'},
+    'redc': {'name': 'Resident Evil DC (best ending)', 'receipt': 'source-comparison.json',
+             'exe': 'residentevildc-tas.exe', 'schema': 'redc-tas-candidate-v1'},
     'tekken3': {'name': 'Tekken 3', 'receipt': 'verification.json', 'exe': 'tekken3-tas.exe',
                 'schema': 'psx-tas-setup-v1'},
     'pepsiman': {'name': 'Pepsiman', 'receipt': 'verification.json', 'exe': 'pepsiman-tas.exe',
@@ -258,7 +262,7 @@ def build_summary(run):
     verdict = 'incomplete'
     terminal_ram = terminal_card = None
     divergence = streaming.get('first_divergence') if streaming else None
-    if title in ('biohazard', 'megamanx5'):
+    if title in ('biohazard', 'megamanx5', 'megamanx4', 'redc'):
         comparison = receipt.get('comparison') if isinstance(receipt.get('comparison'), dict) else None
         returns = comparison.get('returns') if comparison else None
         if isinstance(returns, list) and len(returns) == 2:
