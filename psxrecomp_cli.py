@@ -1580,6 +1580,29 @@ def _pgo_train_warning(*, hide_video: bool) -> str:
     )
 
 
+def pgo_merge_tool_available(project_root: Path) -> str:
+    """Name of the profile merge route that will work here, or "" when PGO cannot complete.
+    Checked BEFORE the instrumented build: finding out after two minutes of training that
+    llvm-profdata is missing leaves the player with an instrumented binary (athena, 2026-09-16).
+    Clang front-end profiles need llvm-profdata (the wizard's toolchain pack ships it; on
+    macOS xcrun finds it); GCC writes .gcda files that -fprofile-use reads without a merge."""
+    toolchain_bin = resolve_embedded_toolchain_bin(project_root)
+    if _tool_in_dir(toolchain_bin, "llvm-profdata") or shutil.which("llvm-profdata"):
+        return "llvm-profdata"
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(["xcrun", "--find", "llvm-profdata"], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", check=False)
+            if r.returncode == 0 and r.stdout.strip():
+                return "xcrun llvm-profdata"
+        except OSError:
+            pass
+    clang_c = _tool_in_dir(toolchain_bin, "clang") or _which_tool("clang")
+    if clang_c is None and (shutil.which("gcc") or shutil.which("cc")):
+        return "gcc (.gcda)"
+    return ""
+
+
 def run_pgo_train(
     project_root: Path,
     build_dir: Path,
@@ -1733,6 +1756,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
     pgo = secs.get("pgo") or {}
     # Opt-in only: requires game.toml [pgo] enabled = true (or --force-pgo).
     pgo_enabled = bool(pgo.get("enabled", False)) and not args.no_pgo
+    pgo_skip_reason = ""
     if args.force_pgo:
         pgo_enabled = True
 
@@ -1825,6 +1849,15 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
 
     try:
         lto = product_lto_enabled(args, progress)
+        if pgo_enabled:
+            merge_route = pgo_merge_tool_available(project_root)
+            if merge_route:
+                progress.log(f"PGO: on (profile merge via {merge_route})")
+            else:
+                pgo_skip_reason = ("no llvm-profdata on PATH or in the toolchain pack, so a "
+                                   "clang profile could not be merged")
+                progress.log(f"PGO: off ({pgo_skip_reason}); building the plain product")
+                pgo_enabled = False
         if not pgo_enabled:
             progress.phase("build", pct=0.2, message="cmake Release build...")
             lto = _configure_product(project_root, build_dir, pgo="", cmake_extra=cmake_extra,
@@ -1872,8 +1905,24 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                                      lto=lto, progress=progress)
             _cmake_build(build_dir, target, progress)
     except Exception as exc:  # noqa: BLE001
-        progress.error(str(exc), code=EXIT_ERROR)
-        return EXIT_ERROR
+        if not pgo_enabled:
+            progress.error(str(exc), code=EXIT_ERROR)
+            return EXIT_ERROR
+        # The PGO route failed somewhere between the instrumented configure and the
+        # optimised link. Whatever is in build_dir now (an instrumented binary, a
+        # half-trained profile) must not be what the player runs: build the plain
+        # product in its place and say what happened.
+        pgo_skip_reason = f"PGO failed ({exc}); built the plain product instead"
+        progress.log(f"PGO: {pgo_skip_reason}")
+        pgo_enabled = False
+        try:
+            progress.phase("build", pct=0.6, message="cmake Release build (PGO fallback)...")
+            lto = _configure_product(project_root, build_dir, pgo="", cmake_extra=cmake_extra,
+                                     lto=lto, progress=progress)
+            _cmake_build(build_dir, target, progress)
+        except Exception as exc2:  # noqa: BLE001
+            progress.error(str(exc2), code=EXIT_ERROR)
+            return EXIT_ERROR
 
     exe, exe_err = _resolve_runtime_exe(build_dir, target, exe_basename)
     if exe is None:
@@ -1906,6 +1955,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         ok=True,
         exe=str(exe),
         pgo=pgo_enabled,
+        pgo_skipped=pgo_skip_reason or None,
         lto=lto,
         diagnostic_exe=str(diagnostic_exe) if diagnostic_exe else None,
         diagnostic_error=diagnostic_error or None,
