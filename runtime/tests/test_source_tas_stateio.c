@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
     check(digest == source_tas_stateio_ram_digest(ram, sizeof ram), "digest stable");
     check(digest != source_tas_stateio_ram_digest(ram, sizeof ram - 1), "digest length sensitive");
 
-    m.frame = 300u; m.input_consumed = 301u; m.cycle = UINT64_C(262837430); m.ram_digest = digest;
+    m.frame = 300u; m.requested_frame = 299u; m.input_consumed = 301u; m.cycle = UINT64_C(262837430); m.ram_digest = digest;
     m.bios_checksum = 0x11223344u; m.entry_pc = 0x800603F8u; m.state_bytes = 3551234ull;
     memset(m.compatibility, 0, sizeof m.compatibility);
     snprintf(m.config_digest, sizeof m.config_digest, "%s", CFG);
@@ -61,6 +61,18 @@ int main(int argc, char **argv) {
           strcmp(parsed.route_sha256, ROUTE) == 0, "round-trip v7 identity");
     check(strcmp(parsed.card_sha256[0], ROUTE) == 0 &&
           strcmp(parsed.card_sha256[1], PSX_TAS_STATEIO_NO_CARD) == 0, "round-trip card images");
+    check(parsed.requested_frame == 299u, "round-trip deferred capture request");
+    {
+        char broken[4096], *at;
+        snprintf(broken, sizeof broken, "%s", text);
+        at = strstr(broken, "\"requested_frame\": 299");
+        check(at != NULL, "requested frame written");
+        if (at) {
+            memcpy(at + strlen("\"requested_frame\": "), "301", 3);
+            check(!source_tas_stateio_manifest_parse(broken, &parsed, NULL, 0),
+                  "request after its own capture refused");
+        }
+    }
     {
         char path[512], broken[4096], *at;
         check(source_tas_stateio_card_path(path, sizeof path, state_path, 1) &&

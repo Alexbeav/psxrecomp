@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from compare_checkpoint_runs import compare_runs
+from compare_checkpoint_runs import compare_runs, saved_states
 
 
 def main():
@@ -46,6 +46,8 @@ def main():
         (args.output/'results.json').write_text(json.dumps(report, indent=2)+'\n')
 
     def run(name, start=0, negative=False):
+        # start is the return A1 actually captured for the requested resume point;
+        # a request that fell on a return with no represented continuation moved later.
         command = [sys.executable, '-B', str(source/'tools/tasreplays/run_native.py'),
                    str(args.output/name), *common, '--save-state-at',
                    *map(str, (n for n in points if n > start))]
@@ -65,9 +67,16 @@ def main():
 
     try:
         run('A1')
-        for name, start, negative in cases:
+        captured = {frame: int(state[len('tas-state-'):-len('.pst')])
+                    for frame, state in saved_states(args.output/'A1').items()}
+        report['A1_captures'] = captured
+        for name, requested, negative in cases:
+            if requested and requested not in captured:
+                raise RuntimeError(f'A1 has no checkpoint for requested return {requested}')
+            start = captured[requested] if requested else 0
             run(name, start, negative)
             result = compare_runs(args.output/'A1', args.output/name, start, args.terminal, points)
+            result['requested_start'] = requested
             if negative:
                 result['negative_control_passed'] = any(
                     not state['identical'] for state in result['states'].values())

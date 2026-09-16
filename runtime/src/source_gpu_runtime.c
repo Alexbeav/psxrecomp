@@ -185,12 +185,22 @@ extern uint8_t *memory_get_ram_ptr(void);
  * binds frame/cycle/RAM digest, the resolved configuration, the runtime binary
  * and the route content, so a later resume can prove identity; host-only caches
  * are re-derived by boot_state on load. */
+/* A requested return whose boundary has no represented instruction continuation
+ * (a return reached inside a nested exception dispatch, whose host call chain no
+ * single continuation can describe) is not captured there. The request moves to
+ * the next frontend return that can be captured, and that state's manifest names
+ * both its own return and the earliest request it satisfies. */
+static unsigned s_tas_deferred_request;
 static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
-    if(!cpu || !source_tas_stateio_save_at_match(frame)) return;
+    if(!cpu || (!source_tas_stateio_save_at_match(frame) && !s_tas_deferred_request)) return;
     if (!dirty_ram_checkpoint_pc(0)) {
-        fprintf(stderr,"[tas-stateio] save refused: no instruction continuation at return %u\n",frame);
+        if(!s_tas_deferred_request) s_tas_deferred_request=frame;
+        fprintf(stderr,"[tas-stateio] return %u has no represented instruction continuation; "
+                       "capture deferred to the next return\n",frame);
         return;
     }
+    const unsigned requested_frame=s_tas_deferred_request ? s_tas_deferred_request : frame;
+    s_tas_deferred_request=0;
     const char *path=getenv("PSX_TAS_SAVE_STATE_PATH");
     char auto_path[4096];
     if(!path || !*path) {
@@ -218,7 +228,7 @@ static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
     for(unsigned i=0;i<32;i++) sprintf(sha_hex+i*2,"%02x",digest[i]);
     sha_hex[64]='\0';
     TasStateManifest m; memset(&m,0,sizeof m);
-    m.frame=frame; m.cycle=cycle; m.bios_checksum=bios_checksum; m.entry_pc=entry_pc;
+    m.frame=frame; m.requested_frame=requested_frame; m.cycle=cycle; m.bios_checksum=bios_checksum; m.entry_pc=entry_pc;
     m.input_consumed=debug_server_input_route_consumed();
     m.state_bytes=state_bytes;
     m.ram_digest=source_tas_stateio_ram_digest(memory_get_ram_ptr(),2097152u);

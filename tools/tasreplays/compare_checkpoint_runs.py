@@ -30,13 +30,31 @@ def compare_rows(left, right, skip, terminal):
                 first_mismatch=first, passed=count == terminal-skip and mismatches == 0)
 
 
+def saved_states(run):
+    """Requested return -> state file, from run_native's saved-states.json. A capture
+    requested at a return with no represented continuation is taken at a later
+    return, so the file name is the return where it was actually taken."""
+    path = Path(run) / 'saved-states.json'
+    if not path.exists():
+        return {}
+    return {item['frame']: item['state'] for item in json.loads(path.read_text()) if item.get('valid')}
+
+
 def compare_runs(baseline, candidate, start, terminal, captures):
     result = {'start': start, 'terminal': terminal, 'states': {}}
+    left_names, right_names = saved_states(baseline), saved_states(candidate)
     for frame in captures:
         if not start < frame <= terminal:
             continue
-        name = f'tas-state-{frame:06d}.pst'
-        result['states'][str(frame)] = compare(baseline/name, candidate/name)
+        left = left_names.get(frame, f'tas-state-{frame:06d}.pst')
+        if int(left[len('tas-state-'):-len('.pst')]) <= start:
+            continue  # satisfied by the checkpoint the candidate resumed from
+        right = right_names.get(frame, f'tas-state-{frame:06d}.pst')
+        if left != right:
+            result['states'][str(frame)] = {'identical': False, 'differences': [
+                {'section': 'CAPTURE_RETURN', 'left': left, 'right': right}]}
+            continue
+        result['states'][str(frame)] = compare(baseline/left, candidate/right)
     if not result['states']:
         raise ValueError('at least one later full-state comparison is required')
     result['CPU'] = compare_rows(cpu_rows(baseline/'cpu-return.tsv'),

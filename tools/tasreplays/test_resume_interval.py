@@ -1,7 +1,8 @@
 """Resume accepts the original route and its neutral tail, never the endpoint."""
-from run_native import checkpoint_interval, checkpoint_asset_digest, checkpoint_cards_valid
+from run_native import checkpoint_interval, checkpoint_asset_digest, checkpoint_cards_valid, resolve_saved_states
 from pathlib import Path
 import hashlib
+import json
 import tempfile
 
 # A pre-card (v2) manifest cannot resume: it never recorded the guest's card images.
@@ -42,4 +43,21 @@ with tempfile.TemporaryDirectory() as folder:
     Path(f'{state}.card1.mcd').write_bytes(image[:-1] + b'\1')
     assert not checkpoint_cards_valid(state, manifest)
     assert not checkpoint_cards_valid(state, dict(manifest, card1_sha256=None))
+    # Requests resolve to the one state that covers them; a deferred capture covers several.
+    run = root/'run'; run.mkdir()
+    def capture(frame, requested, payload=b'state', cards=None):
+        path = run/f'tas-state-{frame:06d}.pst'; path.write_bytes(payload)
+        Path(f'{path}.json').write_text(json.dumps({
+            'frame': frame, 'requested_frame': requested, 'state_bytes': len(payload),
+            'state_sha256': hashlib.sha256(payload).hexdigest(), 'card1_sha256': 'none', 'card2_sha256': 'none'}))
+        return path
+    capture(500, 500); capture(1501, 1500); capture(2600, 2500, b'other')
+    resolved = {item['frame']: item for item in resolve_saved_states(run, [500, 1500, 1501, 2500, 2560, 3000])}
+    assert [resolved[n]['state_frame'] for n in (500, 1500, 1501, 2500, 2560)] == [500, 1501, 1501, 2600, 2600]
+    assert all(resolved[n]['valid'] for n in (500, 1500, 1501, 2500, 2560))
+    assert resolved[3000] == {'frame': 3000, 'state_frame': None, 'state': None, 'valid': False}
+    (run/'tas-state-002600.pst').write_bytes(b'changed')
+    assert not resolve_saved_states(run, [2500])[0]['valid']
+    capture(2601, 2550)  # overlapping coverage is ambiguous, never silently picked
+    assert resolve_saved_states(run, [2560])[0]['state'] is None
 print('PASS: checkpoint media identity detects changed track under unchanged CUE; card images are bound')

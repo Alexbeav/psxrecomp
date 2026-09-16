@@ -50,6 +50,10 @@ uint8_t *memory_get_ram_ptr(void);
 
 typedef struct TasStateManifest {
     unsigned           frame;
+    /* v3: the earliest requested return this state satisfies. Equal to frame
+     * unless the request landed on a return with no represented instruction
+     * continuation and the capture moved to this later return. */
+    unsigned           requested_frame;
     unsigned           input_consumed;
     uint64_t           cycle;
     uint64_t           ram_digest;
@@ -177,6 +181,7 @@ static inline int source_tas_stateio_manifest_write(const char *path, const TasS
                  "{\n"
                  "  \"schema\": \"%s\",\n"
                  "  \"frame\": %u,\n"
+                 "  \"requested_frame\": %u,\n"
                  "  \"input_consumed\": %u,\n"
                  "  \"cycle\": %llu,\n"
                  "  \"ram_digest\": \"%016llX\",\n"
@@ -192,7 +197,8 @@ static inline int source_tas_stateio_manifest_write(const char *path, const TasS
                  "  \"card1_sha256\": \"%s\",\n"
                  "  \"card2_sha256\": \"%s\"\n"
                  "}\n",
-                 PSX_TAS_STATEIO_SCHEMA, m->frame, m->input_consumed, (unsigned long long)m->cycle,
+                 PSX_TAS_STATEIO_SCHEMA, m->frame, m->requested_frame ? m->requested_frame : m->frame,
+                 m->input_consumed, (unsigned long long)m->cycle,
                  (unsigned long long)m->ram_digest, m->bios_checksum, m->entry_pc,
                  escaped, state_sha256 ? state_sha256 : "", m->state_bytes,
                  m->config_digest, m->exe_sha256, m->route_sha256,
@@ -285,6 +291,8 @@ static inline int source_tas_stateio_manifest_parse(const char *text, TasStateMa
     if (strcmp(schema, PSX_TAS_STATEIO_SCHEMA) != 0) return 0;
     if (!source_tas_stateio_parse_u64(text, "frame", &v) || v > 0xFFFFFFFFull) return 0;
     out->frame = (unsigned)v;
+    if (!source_tas_stateio_parse_u64(text, "requested_frame", &v) || v == 0 || v > out->frame) return 0;
+    out->requested_frame = (unsigned)v;
     if (!source_tas_stateio_parse_u64(text, "input_consumed", &v) || v > 0xFFFFFFFFull) return 0;
     out->input_consumed = (unsigned)v;
     if (!source_tas_stateio_parse_u64(text, "cycle", &out->cycle)) return 0;

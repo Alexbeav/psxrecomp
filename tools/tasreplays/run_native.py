@@ -103,6 +103,38 @@ def checkpoint_interval(manifest, frames, tail):
     return frame, consumed
 
 
+def resolve_saved_states(run, requested):
+    """Map each requested return to the one checkpoint that satisfies it.
+
+    A capture requested at a return with no represented instruction continuation
+    moves to the next return that has one; its manifest records requested_frame
+    (the earliest request it satisfies) and frame (where it was taken). A request
+    is satisfied by exactly one state with requested_frame <= request <= frame,
+    and that state must be intact: its size, SHA-256 and card images."""
+    states = []
+    for sidecar in sorted(Path(run).glob('tas-state-*.pst.json')):
+        state = sidecar.with_suffix('')
+        try:
+            m = json.loads(sidecar.read_text())
+        except (OSError, ValueError):
+            continue
+        frame, first = m.get('frame'), m.get('requested_frame')
+        if type(frame) is not int or type(first) is not int or not 0 < first <= frame:
+            continue
+        valid = (state.is_file() and state.name == f'tas-state-{frame:06d}.pst'
+                 and m.get('state_bytes') == state.stat().st_size and m.get('state_sha256') == digest(state)
+                 and checkpoint_cards_valid(state, m))
+        states.append((first, frame, valid, state.name))
+    resolved = []
+    for request in sorted(set(requested)):
+        matches = [s for s in states if s[0] <= request <= s[1]]
+        entry = {'frame': request, 'state_frame': None, 'state': None, 'valid': False}
+        if len(matches) == 1:
+            entry.update(state_frame=matches[0][1], state=matches[0][3], valid=matches[0][2])
+        resolved.append(entry)
+    return resolved
+
+
 def checkpoint_cards_valid(state, manifest):
     """Every card image the manifest names exists beside the state with that SHA-256."""
     for slot in (1, 2):
@@ -636,16 +668,7 @@ p2_mode = "digital"
                  playback_identity_matches(complete, completion_identity, args.neutral_tail) and
                  complete.get("resumed_inputs", 0) == resume_inputs)
     if args.save_state_at:
-        saved = []
-        for frame in args.save_state_at:
-            state = run / f'tas-state-{frame:06d}.pst'
-            sidecar = Path(str(state) + '.json')
-            item = {'frame':frame, 'valid':False}
-            if state.exists() and sidecar.exists():
-                m = json.loads(sidecar.read_text())
-                item['valid'] = (m.get('frame') == frame and m.get('state_bytes') == state.stat().st_size
-                                 and m.get('state_sha256') == digest(state) and checkpoint_cards_valid(state, m))
-            saved.append(item)
+        saved = resolve_saved_states(run, args.save_state_at)
         write_json(run / 'saved-states.json', saved)
         qualified = qualified and all(item['valid'] for item in saved)
     if initial_card or dualshock:

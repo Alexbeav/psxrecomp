@@ -86,7 +86,14 @@ CPU_EXEC records the current instruction, pending branch delay slot and target,
 and pending load writeback. Resume enters the instruction interpreter before
 returning to the normal dispatcher. The scheduler retains the restored live
 CPU registers rather than loading their older suspended TCB copy. Checkpoint
-capture refuses a boundary without a represented instruction continuation.
+capture never writes a boundary without a represented instruction continuation.
+A frontend return can land inside a nested exception dispatch, whose host call
+chain no single continuation describes (Mega Man X4 return 2500 lands in the
+kernel handler at 0x1BC0). A request at such a return moves to the next return
+that can be captured. The manifest records both `frame` (where it was taken) and
+`requested_frame` (the earliest request it satisfies), `saved-states.json` maps
+every request to its state, and a request still pending when the route ends is
+reported invalid.
 
 Scheduler escapes clear the precise-interpreter mode abandoned by `longjmp`.
 Otherwise later compiled blocks mistake that stale flag for a live interpreter
