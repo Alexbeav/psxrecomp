@@ -1156,6 +1156,7 @@ static int resolve_build_paths(void) {
  * or PSXRECOMP_DIAGNOSTIC=1 in the environment. --collect-diagnostics zips the
  * runtime's report files for a GitHub issue. */
 #define PSX_DIAGNOSTIC_DIR_NAME "build-diagnostic"
+static int host_self_exe_path(char* out, size_t cap);
 #define PSX_DIAGNOSTIC_MARKER "diagnostic-mode.txt"
 #define PSX_DIAGNOSTIC_ENV "PSXRECOMP_DIAGNOSTIC"
 
@@ -4117,7 +4118,7 @@ static void bat_write_set(FILE* f, const char* name, const char* value) {
 
 /* force_pgo: Settings Optimize FMV (instrument → train → use). Else setup
  * rebuild with --no-pgo. disc_path required when force_pgo. */
-static int write_windows_deferred_rebuild_helper(int force_pgo,
+static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnostic,
                                                  const char* disc_path,
                                                  char* err_msg,
                                                  size_t err_cap) {
@@ -4144,7 +4145,9 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
     fprintf(f, "@echo off\r\n");
     fprintf(f, "setlocal EnableExtensions\r\n");
     fprintf(f, "title %s - %s\r\n", g_display,
-            force_pgo ? "PGO optimize" : "rebuilding");
+            force_pgo ? "PGO optimize"
+                      : want_diagnostic ? "building the diagnostic product"
+                                        : "rebuilding");
     bat_write_set(f, "PARENT_PID", pid_buf);
     bat_write_set(f, "PYTHON", g_python);
     bat_write_set(f, "CLI", g_cli_path);
@@ -4155,11 +4158,15 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
     bat_write_set(f, "EXE_BASE", g_exe_basename);
     bat_write_set(f, "EXE", g_exe_path);
     bat_write_set(f, "DISPLAY", g_display);
-    {
-        char diag_dir[1200];
+    if (want_diagnostic) {
+        char diag_dir[1200], self_exe[1100];
         if (join_path(diag_dir, sizeof(diag_dir), g_project_root,
                       PSX_DIAGNOSTIC_DIR_NAME))
             bat_write_set(f, "DIAG_DIR", diag_dir);
+        /* Relaunch through the setup exe afterwards: it forwards to the
+         * diagnostic product now that one exists. */
+        if (host_self_exe_path(self_exe, sizeof(self_exe)))
+            bat_write_set(f, "SELF", self_exe);
     }
     {
         /* Post-build sanity: the dispatch file the launcher will gate on. */
@@ -4199,17 +4206,22 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--disc \"%%DISC%%\" --force-pgo --pgo-video "
-                "--diagnostic-dir \"%%DIAG_DIR%%\"\r\n");
+                "--disc \"%%DISC%%\" --force-pgo --pgo-video");
     } else {
         fprintf(f,
-                "echo Building...\r\n"
+                "echo %s\r\n"
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--no-pgo --prune-after build-intermediates "
-                "--diagnostic-dir \"%%DIAG_DIR%%\"\r\n");
+                "--no-pgo --prune-after build-intermediates",
+                want_diagnostic ? "Building the diagnostic product (first request)..."
+                                : "Building...");
     }
+    /* Wave-5 F10: the diagnostic product is built on first request, not at
+     * setup, so a first run compiles one product instead of two. */
+    if (want_diagnostic)
+        fprintf(f, " --diagnostic-dir \"%%DIAG_DIR%%\"");
+    fprintf(f, "\r\n");
     fprintf(f,
             "if errorlevel 1 (\r\n"
             "  echo.\r\n"
@@ -4246,7 +4258,11 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
             "  exit /b 1\r\n"
             ")\r\n"
             "echo Starting %%DISPLAY%%...\r\n"
-            "start \"\" /D \"%%ROOT%%\" \"%%EXE_FINAL%%\" --launcher\r\n"
+            "if defined SELF (\r\n"
+            "  start \"\" /D \"%%ROOT%%\" \"%%SELF%%\" --diagnostic --launcher\r\n"
+            ") else (\r\n"
+            "  start \"\" /D \"%%ROOT%%\" \"%%EXE_FINAL%%\" --launcher\r\n"
+            ")\r\n"
             "endlocal\r\n");
     fclose(f);
     return 1;
@@ -4254,6 +4270,7 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
 #endif
 
 static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
+                                int want_diagnostic,
                                 char* out_exe_path, size_t out_cap,
                                 char* err_msg, size_t err_cap,
                                 RecompLauncherCPrepareProgressFn on_progress,
@@ -4293,8 +4310,8 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         on_progress(progress_ctx, 0.4f,
                     force_pgo ? "Scheduling Windows PGO optimize after exit…"
                               : "Scheduling Windows rebuild after exit…");
-    if (!write_windows_deferred_rebuild_helper(force_pgo, disc_path, err_msg,
-                                               err_cap))
+    if (!write_windows_deferred_rebuild_helper(force_pgo, want_diagnostic,
+                                               disc_path, err_msg, err_cap))
         return 0;
     g_relaunch_is_helper = 1;
     snprintf(out_exe_path, out_cap, "%s", g_helper_path);
@@ -4340,7 +4357,9 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         argv[argc++] = "--prune-after";
         argv[argc++] = "build-intermediates";
     }
-    if (join_path(diag_dir_storage, sizeof(diag_dir_storage), g_project_root,
+    /* Wave-5 F10: only on request; setup builds one product. */
+    if (want_diagnostic &&
+        join_path(diag_dir_storage, sizeof(diag_dir_storage), g_project_root,
                   PSX_DIAGNOSTIC_DIR_NAME)) {
         argv[argc++] = "--diagnostic-dir";
         argv[argc++] = diag_dir_storage;
@@ -4369,16 +4388,16 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
                              size_t out_cap, char* err_msg, size_t err_cap,
                              RecompLauncherCPrepareProgressFn on_progress,
                              void* progress_ctx) {
-    return host_rebuild_game_ex(disc_path, 0, out_exe_path, out_cap, err_msg,
-                                err_cap, on_progress, progress_ctx);
+    return host_rebuild_game_ex(disc_path, 0, 0, out_exe_path, out_cap,
+                                err_msg, err_cap, on_progress, progress_ctx);
 }
 
 static int host_pgo_optimize(const char* disc_path, char* out_exe_path,
                              size_t out_cap, char* err_msg, size_t err_cap,
                              RecompLauncherCPrepareProgressFn on_progress,
                              void* progress_ctx) {
-    return host_rebuild_game_ex(disc_path, 1, out_exe_path, out_cap, err_msg,
-                                err_cap, on_progress, progress_ctx);
+    return host_rebuild_game_ex(disc_path, 1, 0, out_exe_path, out_cap,
+                                err_msg, err_cap, on_progress, progress_ctx);
 }
 
 /* Settings → VIDEO → Apply FMV Timing Opt: regenerate C (picks up
@@ -4392,9 +4411,48 @@ static int host_fmv_timing_optimize(const char* disc_path, char* out_exe_path,
     if (!host_prepare_generate(disc_path, gen_out, sizeof(gen_out), err_msg,
                                err_cap, on_progress, progress_ctx))
         return 0;
-    return host_rebuild_game_ex(disc_path, 0, out_exe_path, out_cap, err_msg,
-                                err_cap, on_progress, progress_ctx);
+    return host_rebuild_game_ex(disc_path, 0, 0, out_exe_path, out_cap,
+                                err_msg, err_cap, on_progress, progress_ctx);
 }
+
+#if !defined(PSX_HAS_GAME_DISPATCH)
+/* Wave-5 F10: the diagnostic product on first request. Runs from the forward
+ * path, before the wizard state exists, so it wires the little it needs. On
+ * Windows the build is deferred to the helper bat (the setup exe must exit
+ * before its build tree is touched); the helper relaunches this exe with
+ * --diagnostic when done. On POSIX the build runs inline and the diagnostic
+ * exe is returned. */
+static int host_build_diagnostic_on_demand(char* out_exe_path, size_t out_cap,
+                                           char* err_msg, size_t err_cap) {
+    if (!g_cli_path[0] &&
+        !resolve_cli_path(g_project_root, g_cli_path, sizeof(g_cli_path))) {
+        snprintf(err_msg, err_cap, "psxrecomp_cli.py not found under %s",
+                 g_project_root);
+        return 0;
+    }
+    if (!g_game_toml[0] &&
+        (!join_path(g_game_toml, sizeof(g_game_toml), g_project_root,
+                    cfg_or(g_cfg->game_toml_relpath, "game.toml")) ||
+         !path_is_file(g_game_toml))) {
+        snprintf(err_msg, err_cap, "game.toml not found under %s",
+                 g_project_root);
+        return 0;
+    }
+    g_ready = 1;
+    if (!host_rebuild_game_ex(NULL, 0, 1, out_exe_path, out_cap, err_msg,
+                              err_cap, NULL, NULL))
+        return 0;
+#if !defined(_WIN32)
+    if (!resolve_diagnostic_exe_path(out_exe_path, out_cap) ||
+        !path_is_file(out_exe_path)) {
+        snprintf(err_msg, err_cap, "build finished but %s/ has no product",
+                 PSX_DIAGNOSTIC_DIR_NAME);
+        return 0;
+    }
+#endif
+    return 1;
+}
+#endif /* !PSX_HAS_GAME_DISPATCH */
 
 static int host_self_exe_path(char* out, size_t cap) {
     if (!out || cap < 2)
@@ -4661,11 +4719,29 @@ void psxrecomp_codegen_host_forward_if_built(
                     "  reports land under %s\n",
                     PSX_DIAGNOSTIC_MARKER, PSX_DIAGNOSTIC_ENV, PSX_DIAGNOSTIC_DIR_NAME);
         } else {
+            char built[1300], err[512];
             fprintf(stderr,
                     "psxrecomp-codegen: diagnostic mode requested but %s/ has no "
-                    "product yet; starting the normal build. Run Generate & rebuild "
-                    "again (or the CLI rebuild with --diagnostic-dir) to create it.\n",
+                    "product yet; building it now (the diagnostic product is "
+                    "built on first request, not at setup).\n",
                     PSX_DIAGNOSTIC_DIR_NAME);
+            err[0] = '\0';
+            if (host_build_diagnostic_on_demand(built, sizeof(built), err,
+                                                sizeof(err))) {
+#if defined(_WIN32)
+                /* Deferred: hand over to the helper bat, which relaunches this
+                 * exe with --diagnostic once the product exists. */
+                psxrecomp_codegen_host_relaunch_or_exit(NULL);
+#else
+                snprintf(g_exe_path, sizeof(g_exe_path), "%s", built);
+#endif
+            } else {
+                fprintf(stderr,
+                        "psxrecomp-codegen: diagnostic build failed (%s); starting "
+                        "the normal build. Run the CLI rebuild with "
+                        "--diagnostic-dir to create it by hand.\n",
+                        err[0] ? err : "unknown error");
+            }
         }
     }
     if (!g_exe_path[0] || !path_is_file(g_exe_path))

@@ -3,10 +3,11 @@
 Every owned-input kit ships the game in **normal mode**. Normal mode is the
 fast build: no debug server, no freeze heartbeat, no periodic snapshots.
 
-First-run setup also builds a **diagnostic** product from the same generated
-sources, with `PSX_DEBUG_TOOLS=ON`. Switching to it never needs another
-compilation. Use it when the game crashes, freezes, shows a black screen, or
-misbehaves, and you want to send the port maintainers something they can act on.
+A **diagnostic** product is built from the same generated sources, with
+`PSX_DEBUG_TOOLS=ON`, the first time you ask for it (below); first-run setup
+builds only the normal product, so setup takes half as long. Use it when the
+game crashes, freezes, shows a black screen, or misbehaves, and you want to
+send the port maintainers something they can act on.
 
 ## Where the two builds live
 
@@ -33,9 +34,13 @@ Any one of these turns diagnostic mode on for the next start:
 The setup executable prints which product it forwards to. Delete
 `diagnostic-mode.txt` (or drop the flag) to return to normal mode.
 
-If `build-diagnostic/` has no executable yet (setup ran on an older kit, or the
-diagnostic build failed), the setup executable says so and starts the normal
-build. Run **Generate & rebuild** from the launcher again, or from a shell:
+The first time diagnostic mode is requested, `build-diagnostic/` has no
+executable yet and the setup executable builds it before starting (a few
+minutes on a fast machine, comparable to first-run setup on a slow one; on
+Windows the build runs in a console window after the setup executable exits,
+then the game starts in diagnostic mode). If that build fails, the setup
+executable says so and starts the normal build; you can create it by hand
+from a shell:
 
 ```bash
 python psxrecomp/psxrecomp_cli.py rebuild --project-root . --config game.toml \
