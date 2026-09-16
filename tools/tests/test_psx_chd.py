@@ -265,7 +265,9 @@ class DecodeTests(unittest.TestCase):
         self.assertEqual((out / "Fixture (Europe) (Track 2).bin").read_bytes(), self.audio)
         self.assertTrue((out / BOOT).is_file())
         receipt = json.loads((out / "Fixture (Europe).disc-receipt.json").read_text())
-        self.assertEqual(receipt["source_image"], str(self.chd))
+        # macOS reports the temp dir through /private/var while resolve() may
+        # not; compare resolved paths.
+        self.assertEqual(Path(receipt["source_image"]).resolve(), self.chd.resolve())
         self.assertIn('FILE "Fixture (Europe) (Track 2).bin" BINARY', (out / "Fixture (Europe).cue").read_text())
 
     def test_prepare_disc_single_track_chd_lands_on_bin_name(self):
