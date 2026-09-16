@@ -26,7 +26,7 @@ static FILE *fixture(unsigned n, int fault) {
     rewind(f); return f;
 }
 int main(void) {
-    InputRouteStep steps[INPUT_ROUTE_MAX_STEPS]; uint32_t count,n;
+    static InputRouteStep steps[INPUT_ROUTE_MAX_STEPS]; uint32_t count,n;   /* too large for the stack at the cap */
     FILE *f=fixture(5,0);
     check(input_route_read(f,steps,&count,&n)==NULL,"valid route"); fclose(f);
     check(n==5 && count==2 && steps[0].frames==2 && steps[0].buttons==0 &&

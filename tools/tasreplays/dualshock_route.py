@@ -15,7 +15,7 @@ import zipfile
 MAX_FRAMES = 1_000_000
 # Must equal INPUT_ROUTE_MAX_STEPS in runtime/include/input_route_file.h; the
 # runtime refuses a route past it. See that header for why it moved off 4096.
-MAX_STEPS = 32768
+MAX_STEPS = 65536
 HEADER = struct.Struct('<8sIIII')
 RECORD = struct.Struct('<IH6B')
 CONTROLLER = struct.Struct('<H5B')
@@ -39,6 +39,17 @@ LOGKEY_28 = ('LogKey:#Power|Reset|Previous Disk|Next Disk|'
              'P1 Select|P1 Start|P1 △|P1 X|P1 □|P1 ○|P1 L1|P1 L2|'
              'P1 R1|P1 R2|P1 Left Stick, Button|P1 Right Stick, Button|P1 Analog|')
 MEMBERS_28 = {'Header.txt', 'Comments.txt', 'Subtitles.txt', 'SyncSettings.json', 'Input Log.txt'}
+# BizHawk 2.7 Octoshock with a DualShock on port 1 (FIOConfig Devices8[0] = 2): a disc-select
+# number and Open/Close/Reset, then LX,LY,RX,RY and seventeen button characters in IO_Dualshock
+# order. Octoshock hands the stick bytes to the pad unscaled (Nymashock rescales them), and the
+# MODE check happens only when DTR drops; neither difference can show while every stick is 128
+# and MODE is never pressed, so only those records have an exact PSXRTI2 spelling.
+LOGKEY_OCTO27_DUALSHOCK = ('LogKey:#Disc Select|Open|Close|Reset|'
+                           '#P1 LStick X|P1 LStick Y|P1 RStick X|P1 RStick Y|'
+                           'P1 Up|P1 Down|P1 Left|P1 Right|P1 Select|P1 Start|'
+                           'P1 Square|P1 Triangle|P1 Circle|P1 Cross|P1 L1|P1 R1|P1 L2|P1 R2|'
+                           'P1 L3|P1 R3|P1 MODE|')
+BUTTON_BITS_OCTO = (4, 6, 7, 5, 0, 3, 15, 12, 13, 14, 10, 11, 8, 9, 1, 2)
 
 
 def read_movie(movie, emu_version='Version 2.9.1', container_version='Version 2.9.1'):
@@ -128,6 +139,53 @@ def read_movie_28(movie):
             if character != '.':
                 word &= ~(1 << bit)
         rows.append((word, ly >> 8, lx >> 8, ry >> 8, rx >> 8, int(controller[4][16] != '.')))
+        if len(rows) > MAX_FRAMES:
+            raise ValueError('Frame capacity exceeded')
+    if not rows:
+        raise ValueError('Empty controller route')
+    return rows
+
+
+def read_movie_octoshock27(movie):
+    """Return read_movie rows from a cold BizHawk 2.7 Octoshock movie with a DualShock on P1.
+
+    One disc, never ejected or reset; no multitap or memory card; both sticks neutral and
+    MODE never pressed (see LOGKEY_OCTO27_DUALSHOCK for why only those records are exact)."""
+    with zipfile.ZipFile(movie) as archive:
+        if len(archive.namelist()) != len(MEMBERS_28) or set(archive.namelist()) != MEMBERS_28:
+            raise ValueError('Unsupported movie payload; cold 2.7 input-only movie required')
+        header = dict(line.split(' ', 1) for line in archive.read('Header.txt').decode().splitlines()
+                      if ' ' in line)
+        if (header.get('Core') != 'Octoshock' or header.get('Platform') != 'PSX' or
+                header.get('emuVersion') != 'Version 2.7.0'):
+            raise ValueError('Only the declared Octoshock 2.7 PSX log layout is supported')
+        if any(field.startswith('StartsFrom') for field in header):
+            raise ValueError('Anchored movie is not a cold controller route')
+        settings = json.loads(archive.read('SyncSettings.json').decode())
+        options = settings.get('o') if isinstance(settings, dict) else None
+        fio = options.get('FIOConfig') if isinstance(options, dict) else None
+        if (not isinstance(fio, dict) or fio.get('Devices8') != [2, 0, 0, 0, 0, 0, 0, 0] or
+                fio.get('Memcards') != [False, False] or fio.get('Multitaps') != [False, False]):
+            raise ValueError('Only a lone DualShock on port 1 with no card or multitap is supported')
+        lines = archive.read('Input Log.txt').decode().splitlines()
+    if len(lines) < 4 or lines[:2] != ['[Input]', LOGKEY_OCTO27_DUALSHOCK] or lines[-1] != '[/Input]':
+        raise ValueError('Unsupported controller or frontend input layout')
+    rows = []
+    for line in lines[2:-1]:
+        fields = line.split('|')
+        if len(fields) != 4 or fields[0] or fields[3] or fields[1] != '    1,...':
+            raise ValueError('Console events, disc changes and other ports are unsupported')
+        controller = fields[2].split(',')
+        if (len(controller) != 5 or len(controller[4]) != 17 or
+                not all(value.strip().isdigit() for value in controller[:4])):
+            raise ValueError('Malformed controller record')
+        if any(int(value) != 128 for value in controller[:4]) or controller[4][16] != '.':
+            raise ValueError('Octoshock stick or MODE input has no exact PSXRTI2 spelling')
+        word = 0xFFFF
+        for character, bit in zip(controller[4][:16], BUTTON_BITS_OCTO):
+            if character != '.':
+                word &= ~(1 << bit)
+        rows.append((word, 128, 128, 128, 128, 0))
         if len(rows) > MAX_FRAMES:
             raise ValueError('Frame capacity exceeded')
     if not rows:

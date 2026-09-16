@@ -1,4 +1,5 @@
 """Authored controller cases: no retail inputs, BIOS, media or saved state."""
+import json
 from pathlib import Path
 import struct
 import tempfile
@@ -79,6 +80,53 @@ class ControllerExport(unittest.TestCase):
                      ['|    0,....|128,128,128,128,.................|extra|']]:
             with self.subTest(rows=rows), self.assertRaises(ValueError):
                 route.read_movie(self.movie(rows))
+
+    def octoshock27(self, rows=None, header=None, fio=None, members=None):
+        if rows is None:
+            rows = ['|    1,...|  128,  128,  128,  128,.................|']
+        if fio is None:
+            fio = {'Devices8': [2, 0, 0, 0, 0, 0, 0, 0], 'Memcards': [False, False], 'Multitaps': [False, False]}
+        values = {'Header.txt': (header or 'Core Octoshock\nPlatform PSX\nemuVersion Version 2.7.0\n').encode(),
+                  'Comments.txt': b'', 'Subtitles.txt': b'',
+                  'SyncSettings.json': json.dumps({'o': {'FIOConfig': fio}}).encode(),
+                  'Input Log.txt': ('\n'.join(['[Input]', route.LOGKEY_OCTO27_DUALSHOCK, *rows, '[/Input]']) + '\n').encode()}
+        values.update(members or {})
+        movie = self.root / 'authored27.bk2'
+        with zipfile.ZipFile(movie, 'w') as archive:
+            for name, value in values.items():
+                archive.writestr(name, value)
+        return movie
+
+    def test_octoshock27_buttons(self):
+        rows = []
+        for index in range(16):
+            buttons = ['.'] * 17
+            buttons[index] = 'P'
+            rows.append('|    1,...|  128,  128,  128,  128,' + ''.join(buttons) + '|')
+        # IO_Dualshock order: Up Down Left Right Select Start Square Triangle Circle Cross L1 R1 L2 R2 L3 R3.
+        bits = [4, 6, 7, 5, 0, 3, 15, 12, 13, 14, 10, 11, 8, 9, 1, 2]
+        self.assertEqual(route.read_movie_octoshock27(self.octoshock27(rows)),
+                         [(65535 ^ (1 << bit), 128, 128, 128, 128, 0) for bit in bits])
+
+    def test_octoshock27_refuses_what_has_no_exact_spelling(self):
+        neutral = '  128,  128,  128,  128,'
+        refused = [
+            {'rows': ['|    1,...|  127,  128,  128,  128,.................|']},
+            {'rows': ['|    1,...|' + neutral + '................M|']},
+            {'rows': ['|    1,O..|' + neutral + '.................|']},
+            {'rows': ['|    2,...|' + neutral + '.................|']},
+            {'rows': ['|    1,...|' + neutral + '.................||' + neutral + '.................|']},
+            {'rows': []},
+            {'header': 'Core Nymashock\nPlatform PSX\nemuVersion Version 2.7.0\n'},
+            {'header': 'Core Octoshock\nPlatform PSX\nemuVersion Version 2.10\n'},
+            {'header': 'Core Octoshock\nPlatform PSX\nemuVersion Version 2.7.0\nStartsFromSavestate True\n'},
+            {'fio': {'Devices8': [1, 0, 0, 0, 0, 0, 0, 0], 'Memcards': [False, False], 'Multitaps': [False, False]}},
+            {'fio': {'Devices8': [2, 0, 0, 0, 0, 0, 0, 0], 'Memcards': [True, False], 'Multitaps': [False, False]}},
+            {'members': {'Core.bin': b'state'}},
+        ]
+        for case in refused:
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                route.read_movie_octoshock27(self.octoshock27(**case))
 
     def test_validation_precedes_file_creation(self):
         valid = (65535, 128, 128, 128, 128, 0)

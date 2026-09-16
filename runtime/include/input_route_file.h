@@ -16,8 +16,10 @@
  * X4's 6412M needs 12,346 steps over 137,920 frames and was refused outright.
  * Raising it cannot change how any already accepted route parses; it only changes
  * which routes are refused. Cost is staging memory, about 400 KiB per array,
- * host-side only, never guest state. Keep dualshock_route.py's MAX_STEPS equal. */
-#define INPUT_ROUTE_MAX_STEPS 32768u
+ * host-side only, never guest state. Keep dualshock_route.py's MAX_STEPS equal.
+ * Crash Bandicoot 7798S needs 55,610 steps over 203,477 frames, so the cap is
+ * 65,536 (about 800 KiB per array); Abe's Exoddus 6672M needs 10,909. */
+#define INPUT_ROUTE_MAX_STEPS 65536u
 #define INPUT_ROUTE_MAX_FRAMES 1000000u
 typedef struct { uint32_t frames; uint16_t buttons; } InputRouteStep;
 
