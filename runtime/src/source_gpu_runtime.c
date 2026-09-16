@@ -105,6 +105,11 @@ static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
 }
 
 void source_gpu_runtime_init(void) {
+#ifdef PSX_NO_STEP_BOUNDARY
+    /* Wave-5: the normal product compiles the per-instruction retirement boundary out
+     * (PSX_STEP_BOUNDARY=OFF); the source model cannot observe retirement there. */
+    fail("source GPU model needs the per-instruction retirement boundary; use the diagnostic product (PSX_STEP_BOUNDARY=ON)");
+#endif
     if(enabled || psx_get_cycle_count()!=0 || g_psx_cpu_step_boundary_callback)fail("cold initialization/CPU owner required");
     source_gpu_service_cold(&clock_state);source_gpu_command_cold(&command_state);
     input_route_raster_reset(&draw_raster);command_state.field_valid=1;

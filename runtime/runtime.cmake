@@ -13,6 +13,7 @@ endif()
 # beside the target it must affect: an otherwise unconsumed cache entry makes a
 # costly PGO rebuild/train cycle a silent no-op.
 set(PSX_PGO "" CACHE STRING "PGO mode: empty, generate, or use")
+option(PSX_STEP_BOUNDARY "Emit the per-instruction retirement boundary for the source-GPU comparison model (diagnostic/source builds; OFF for the normal product)" ON)
 set_property(CACHE PSX_PGO PROPERTY STRINGS "" generate use)
 include("${PSXRECOMP_ROOT}/cmake/psx_runtime_ipo.cmake")
 
@@ -1935,6 +1936,11 @@ function(psxrecomp_add_runtime_target target)
     if(NOT PSX_DEBUG_TOOLS)
         target_compile_definitions(${target} PRIVATE PSX_NO_DEBUG_TOOLS=1)
     endif()
+    # Wave-5: the source-GPU retirement boundary is a diagnostic/source-profile
+    # feature; the normal product compiles the 80k+ emitted call sites out.
+    if(NOT PSX_STEP_BOUNDARY)
+        target_compile_definitions(${target} PRIVATE PSX_NO_STEP_BOUNDARY=1)
+    endif()
 
     if(PSXRECOMP_HAS_RECOMP_NET)
         target_compile_definitions(${target} PRIVATE PSX_HAS_RECOMP_NET=1)
@@ -1982,6 +1988,20 @@ function(psxrecomp_add_runtime_target target)
                 "  git submodule add <recomp-ui-url> recomp-ui\n"
                 "Or point at an existing checkout: "
                 "-DRECOMP_UI_ROOT=/path/to/recomp-ui")
+        endif()
+        # Wave-5 F7: psxrecomp and recomp-ui move together. A recomp-ui that predates
+        # the netplay lobby API this main.cpp uses fails with ~20 unrelated-looking
+        # struct-field errors; say what is actually wrong instead.
+        if(EXISTS "${RECOMP_UI_ROOT}/src/recomp_launcher.h")
+            file(READ "${RECOMP_UI_ROOT}/src/recomp_launcher.h" _psx_recomp_launcher_h)
+            if(NOT _psx_recomp_launcher_h MATCHES "RecompLauncherCNetplayChatMessage")
+                message(FATAL_ERROR
+                    "recomp-ui at ${RECOMP_UI_ROOT} is too old for this psxrecomp: it lacks the "
+                    "netplay lobby API (RecompLauncherCNetplayChatMessage). Update the recomp-ui "
+                    "submodule to the commit framework_pins.txt pairs with this psxrecomp "
+                    "(ff92028 or newer): git -C recomp-ui checkout <pin> && git add recomp-ui")
+            endif()
+            unset(_psx_recomp_launcher_h)
         endif()
         # recomp-ui gates its Mods view behind RECOMP_UI_ENABLE_MODS, which
         # defaults OFF there -- correct for a cross-console launcher, since a

@@ -20,6 +20,14 @@ extern void (*g_psx_cpu_step_boundary_callback)(CPUState *,uint32_t,uint64_t);
 /* The DLL owns its pending cycle batch; its shim flushes that batch before
  * forwarding to the host's observer. Host globals must not be copied. */
 void psx_cpu_step_boundary(CPUState *cpu,uint32_t address);
+#elif defined(PSX_NO_STEP_BOUNDARY)
+/* Wave-5: the per-instruction retirement boundary exists only for the source-GPU
+ * comparison model (gpu_work_model = octoshock-2.2.2-bounded-quad), which no shipping
+ * configuration arms. 86,542 call sites on NCII cost ~3.4% of throughput and 3 MB of
+ * image discovering that. The normal product compiles them out (PSX_STEP_BOUNDARY=OFF);
+ * diagnostic and source-profile builds keep them. source_gpu_runtime_init refuses to
+ * arm the model in a build without them. */
+static inline void psx_cpu_step_boundary(CPUState *cpu,uint32_t address) { (void)cpu; (void)address; }
 #else
 static inline void psx_cpu_step_boundary(CPUState *cpu,uint32_t address) {
     if(g_psx_cpu_step_boundary_callback && !g_ls_replay_active) {
