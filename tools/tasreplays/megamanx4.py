@@ -28,7 +28,9 @@ BOOT='SLUS_005.61'
 DISC_STEM='Mega Man X4 (USA)'
 EXE_SHA='dae43d44a9f3176208830ddbba0607bb627ebcd7faf9b36fc03dd0ffda34d2e8'
 CONTROLLER_SHA='844bcca0dc10b6479a2cb96c61b8d7ec15c787082e232bbaeeca8b2f4a9f17aa'
-TAPE_SHA='d85f0dec13b00e50b10a52ce0fda3cdaa9797f058ad16dd57caa8e926fad7a6a'
+# 1,048,576-word cold tape (nymashock-random-source-qualified-02): the qualified 65,536-word
+# tape is its exact prefix and X4 exhausts that prefix by return 67,863 of 149,342.
+TAPE_SHA='8cb70d09a341acdbf7bd8dd3efc54e8640f988ed9e07d55733c85e04eb4c8ce4'
 PROFILE=[
     '--critical-section-model','exception','--syscall-model','guest-exception',
     '--field-model','octoshock-2.2.2-ntsc-raster',
@@ -186,7 +188,7 @@ def setup(args):
     game=project/'game.toml'
     game.write_text(f'''[game]
 name = "Mega Man X4 TAS"
-id = "SLUS-01334"
+id = "SLUS-00561"
 exe = {q(exe)}
 load_address = "0x80010000"
 entry_pc = "0x800DAE8C"
