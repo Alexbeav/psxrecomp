@@ -5,6 +5,7 @@ not qualify playback. Default execution has no window and uses software video.
 """
 import argparse
 import hashlib
+import dualshock_route
 import json
 import os
 from pathlib import Path
@@ -44,7 +45,7 @@ def route_identity(path):
                 raise ValueError('DualShock sequence/reserved bytes or unqualified physical Analog press')
             row = struct.pack('<H5B', buttons, ly, lx, ry, rx, analog)
             steps += row != previous; previous = row
-            if steps > 4096:
+            if steps > dualshock_route.MAX_STEPS:  # the encoder's and runtime's shared cap
                 raise ValueError('DualShock step capacity exceeded')
             original.update(row)
             # Nyma expands axes to u16 with value<<8; the device rescales to u8.
