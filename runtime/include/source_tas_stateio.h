@@ -31,7 +31,7 @@
 /* Bump when a diagnostic state changes representation or continuation meaning.
  * This admits runtime-only rebuilds, never a different codegen ABI or profile;
  * boot_state_load independently checks its header and every device section. */
-#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v9-sio-source-1"
+#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v10-lane-1"
 
 /* Guest RAM accessor (memory.c). Declared here so the manifest/digest call
  * sites — including C++ — share one C-linkage declaration. */
