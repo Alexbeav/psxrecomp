@@ -1800,8 +1800,10 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if not pgo_enabled:
             progress.phase("build", pct=0.2, message="cmake Release build...")
             _cmake_configure(
-                project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"], progress=progress
+                project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF"], progress=progress
             )
+            _assert_configured(build_dir, {"PSX_DEBUG_TOOLS": "OFF", "PSX_STEP_BOUNDARY": "OFF"}, progress,
+                               reconfigure=lambda: _cmake_configure(project_root, build_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF"], progress=progress))
             _cmake_build(build_dir, target, progress)
         else:
             # Framework defaults (60×2); game.toml / CLI may lengthen for hard titles.
@@ -1847,9 +1849,11 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 project_root,
                 build_dir,
                 pgo="use",
-                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF"],
+                extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF"],
                 progress=progress,
             )
+            _assert_configured(build_dir, {"PSX_DEBUG_TOOLS": "OFF", "PSX_STEP_BOUNDARY": "OFF"}, progress,
+                               reconfigure=lambda: _cmake_configure(project_root, build_dir, pgo="use", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=OFF", "-DPSX_STEP_BOUNDARY=OFF"], progress=progress))
             _cmake_build(build_dir, target, progress)
     except Exception as exc:  # noqa: BLE001
         progress.error(str(exc), code=EXIT_ERROR)
@@ -1941,6 +1945,36 @@ def stage_overlay_toolchain_for_product(project_root: Path, exe_dir: Path, progr
         return None
 
 
+def _assert_configured(build_dir: Path, expected: dict, progress, reconfigure=None) -> None:
+    """Verify the cache says what configure was just asked for.
+
+    CMake discards its cache when the compiler changes (a toolchain pack update between
+    generate and rebuild does exactly that) and re-runs configure WITHOUT the -D values
+    it was given; the diagnostic product then silently comes out as a release build
+    (NCII kit, 2026-09-16: PSX_DEBUG_TOOLS=ON requested, cache OFF, no heartbeat, no
+    debug server). Re-run configure once, then fail loudly rather than build the wrong
+    product."""
+    def read():
+        got = {}
+        cache = build_dir / "CMakeCache.txt"
+        if cache.is_file():
+            for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+                for k in expected:
+                    if line.startswith(k + ":"):
+                        got[k] = line.split("=", 1)[1].strip()
+        return {k: (got.get(k), v) for k, v in expected.items() if (got.get(k) or "").upper() != v.upper()}
+    bad = read()
+    if bad and reconfigure is not None:
+        progress.log("configure did not take (%s); the cache was regenerated, configuring again"
+                     % ", ".join(f"{k}={g!r} wanted {w!r}" for k, (g, w) in bad.items()))
+        reconfigure()
+        bad = read()
+    if bad:
+        raise RuntimeError(
+            "configure did not take: " + ", ".join(f"{k} is {g!r}, wanted {w!r}" for k, (g, w) in bad.items())
+            + f" in {build_dir / 'CMakeCache.txt'}; the product would be the wrong kind")
+
+
 def build_diagnostic_product(
     project_root: Path,
     diag_dir: Path,
@@ -1967,6 +2001,8 @@ def build_diagnostic_product(
         _cmake_configure(
             project_root, diag_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=ON"], progress=progress
         )
+        _assert_configured(diag_dir, {"PSX_DEBUG_TOOLS": "ON"}, progress,
+                           reconfigure=lambda: _cmake_configure(project_root, diag_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=ON"], progress=progress))
         _cmake_build(diag_dir, target, progress)
         exe, err = _resolve_runtime_exe(diag_dir, target, exe_basename)
         if exe is None:
