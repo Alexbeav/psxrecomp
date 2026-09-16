@@ -69,6 +69,10 @@ DISC_HINT="your legally owned game disc"
 # Player-facing BIOS wording for README-SETUP.txt. Default derives from the
 # staged recipe (retail-only titles name their pinned image); --bios-hint overrides.
 BIOS_HINT=""
+# Wave-5 F4: a packaged game.toml without `overlay_cache = true` ships a runtime that never
+# initialises the overlay loader, so every streamed overlay runs on the interpreter (78 of
+# 105 releases measured 2026-09-16). Refuse unless the caller states why.
+SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE=""
 PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_DIRS=()
@@ -123,6 +127,7 @@ while [[ $# -gt 0 ]]; do
     --embed-toolchain) EMBED_TOOLCHAIN=1; shift ;;
     --no-embed-toolchain) EMBED_TOOLCHAIN=0; shift ;;
     --omit-openbios) OMIT_OPENBIOS=1; shift ;;
+    --ship-without-overlay-cache-because) SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE="${2:?}"; shift 2 ;;
     *)
       echo "error: unknown arg: $1" >&2
       usage 2
@@ -604,6 +609,17 @@ if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
     echo "error: forbidden final BIOS payload: ${FORBIDDEN_FINAL_BIOS}" >&2
     exit 1
   fi
+fi
+
+if ! grep -qE '^[[:space:]]*overlay_cache[[:space:]]*=[[:space:]]*true' "${STAGE}/game.toml"; then
+  if [[ -z "${SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE}" ]]; then
+    echo "error: REFUSING TO PACKAGE: ${STAGE}/game.toml has no '[runtime] overlay_cache = true'." >&2
+    echo "       The runtime never initialises the overlay loader without it, so every streamed" >&2
+    echo "       overlay runs on the dirty-RAM interpreter for every player. Add the key, or pass" >&2
+    echo "       --ship-without-overlay-cache-because '<reason>' to record why this title ships without it." >&2
+    exit 1
+  fi
+  echo "warning: packaging without overlay_cache = true (reason: ${SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE})" >&2
 fi
 
 if [[ -z "${BIOS_HINT}" ]]; then
