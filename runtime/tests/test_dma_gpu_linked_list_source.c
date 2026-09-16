@@ -64,6 +64,9 @@ uint32_t gpu_dma_vram_upload_words(void) {return upload_left;}
 void gpu_ws_begin_linked_list(void) {}
 void gpu_ws_end_linked_list(void) {}
 void gpu_ws_prepass_linked_list(uint32_t a) {(void)a;}
+void gpu_ws_restore_linked_list_rank(uint32_t r) {(void)r;}
+void gpu_ws_validate_linked_list_header(uint32_t a,uint32_t h) {(void)a;(void)h;}
+void gpu_ws_validate_linked_list_node(uint32_t a,uint32_t n) {(void)a;(void)n;}
 uint32_t psx_mod_gpu_dma_resolve_address(uint32_t a) {return a;}
 void spu_dma_write(uint32_t v) {(void)v;abort();}
 uint32_t spu_dma_read(void) {abort();}
@@ -106,6 +109,15 @@ int main(int argc,char **argv) {
             fprintf(stderr,"source startup mismatch ready=%d words=%u irq=%u expected=%u busy=%u sent=%u\n",ready,n,irqs,expected,!!(channels[2].chcr&(1u<<24)),upload_count);return 1;
         }
 #ifdef PSX_TEST_SOURCE_LL_IMPLEMENTED
+        /* Capture while stalled or part-way through a linked list, then
+         * continue the same live RAM payload after restoring both sections. */
+        uint8_t base[512],source[512];
+        assert(dma_snapshot_bytes()<=sizeof base && dma_src_wire_bytes()<=sizeof source);
+        dma_snapshot_write(base);dma_src_wire_write(source);
+        memset(&gpu_ll_source,0,sizeof gpu_ll_source);
+        memset(&channels[2],0,sizeof channels[2]);
+        assert(dma_snapshot_read(base,dma_snapshot_bytes()));
+        assert(dma_src_wire_read(source,dma_src_wire_bytes()));
         psx_cycle_count=512;advance_source_gpu_ll();
         if(!ready){assert(!upload_count&&!irqs);ready_state=1;}
         psx_cycle_count=640;advance_source_gpu_ll();
@@ -132,12 +144,28 @@ int main(int argc,char **argv) {
     setup(50,1);try_execute(2);psx_cycle_count=28;
     dma_write(0x1f8010f4,0);assert(upload_count==50&&irqs==1);
     assert(!dma_snapshot_read(NULL,0));
+    /* The default model is the event-driven DMA2 walker (dma_gpu_ll.c): the kick
+     * sends nothing synchronously, so the walk itself is live checkpoint state.
+     * Restoring it into a cleared controller must resume the same walk. */
     set_option("PSX_GPU_DMA_MODEL","");setup(6,1);try_execute(2);
-    assert(upload_count==6&&!irqs&&delayed_complete[2].active);
+    assert(!upload_count&&!irqs&&gpu_linked_list.active);
+    {
+        uint8_t base[512];
+        assert(dma_snapshot_bytes()<=sizeof base);
+        dma_snapshot_write(base);
+        DMAGPULinkedList live=gpu_linked_list;
+        memset(&gpu_linked_list,0,sizeof gpu_linked_list);
+        assert(dma_snapshot_read(base,dma_snapshot_bytes()));
+        assert(!memcmp(&live,&gpu_linked_list,sizeof live));
+    }
 #endif
     puts("PASS ten source startup states,49/50 boundary,live future words/nodes,stalls,write ordering,default");return 0;
 }
 
 /* Source GPU projection is inactive in this isolated controller fixture. */
 int source_gpu_runtime_active(void) {return 0;}
+uint32_t source_gpu_runtime_cycles_to_event(void) {return UINT32_MAX;}
+void source_gpu_runtime_copy(SourceGPUServiceClock *clock,SourceGPUCommandProjection *command) {
+    (void)clock;(void)command;abort();
+}
 void source_gpu_runtime_dma_write(void) {}

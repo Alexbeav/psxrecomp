@@ -25,6 +25,10 @@ with tempfile.TemporaryDirectory() as folder:
     # Independent explicit source-protocol examples straddle the nonidentity conversion.
     protocol=struct.pack('<H5B',0xffef,1,0,128,254,0)+struct.pack('<H5B',0xffff,128,129,130,131,0)
     assert identity['expected_protocol_sha256']==hashlib.sha256(protocol).hexdigest()
+    suffix=route_identity(route,start=1)
+    assert suffix['frames']==2 and suffix['sha256']==identity['sha256']
+    assert suffix['expected_protocol_sha256']==hashlib.sha256(protocol[7:]).hexdigest()
+    assert suffix['original_controller_sha256']==hashlib.sha256(struct.pack('<H5B',*rows[1])).hexdigest()
     done=dict(frame=3,input_frames=2,neutral_tail_ticks=1,controller_profile='nymashock-2.9.1-dualshock-neutral-analog',original_controller_sha256=identity['original_controller_sha256'],applied_controller_sha256=identity['expected_protocol_sha256'],expected_protocol_sha256=identity['expected_protocol_sha256'])
     assert playback_identity_matches(done,identity,1)
     for field,value in [('frame',2),('input_frames',1),('neutral_tail_ticks',0),('controller_profile','digital'),('original_controller_sha256','0'*64),('applied_controller_sha256',identity['original_controller_sha256']),('expected_protocol_sha256','0'*64)]:

@@ -4,6 +4,17 @@
 #include "dma.h"
 #include "source_cpu_boundary_probe.h"
 #include "source_ram_page_probe.h"
+#include "source_tas_stateio.h"
+#include "boot_state.h"
+#include "savestate.h"
+#include "debug_server.h"
+#include "dirty_ram_interp.h"
+#include "psx_sha256.h"
+#include "pst_wire.h"
+#include "input_route_raster_clock_wire.h"
+#include "source_stateio_identity.h"
+#include "interrupts.h"               /* E survey: IRQ_TIMING transients */
+#include "sio.h"                      /* E survey (Part 3): SIO FSM sizing */
 #include <stdio.h>
 #include <stdlib.h>
 extern uint64_t g_psx_cycle_fast_limit;
@@ -167,6 +178,135 @@ static void compiled_irq_handoff(CPUState *cpu,uint32_t pc) {
     g_dirty_safe_resume_pc=previous;
     if(g_irq_deliver_count!=before) { g_sd_handoff_taken++; if(!g_sd_handoff_first_pc) g_sd_handoff_first_pc=pc; }
 }
+extern uint8_t *memory_get_ram_ptr(void);
+/* TAS checkpoint production. Opt-in via PSX_TAS_SAVE_STATE_AT=<return>[,<return>]:
+ * one save per listed frontend return, beside the RAM-page probe. The manifest
+ * binds frame/cycle/RAM digest, the resolved configuration, the runtime binary
+ * and the route content, so a later resume can prove identity; host-only caches
+ * are re-derived by boot_state on load. */
+static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
+    if(!cpu || !source_tas_stateio_save_at_match(frame)) return;
+    if (!dirty_ram_checkpoint_pc(0)) {
+        fprintf(stderr,"[tas-stateio] save refused: no instruction continuation at return %u\n",frame);
+        return;
+    }
+    const char *path=getenv("PSX_TAS_SAVE_STATE_PATH");
+    char auto_path[4096];
+    if(!path || !*path) {
+        const char *dir=getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
+        if(!dir || snprintf(auto_path,sizeof auto_path,"%s/tas-state-%06u.pst",dir,frame)>=(int)sizeof auto_path) {
+            fprintf(stderr,"[tas-stateio] save refused: no state path or capture dir at return %u\n",frame);
+            return;
+        }
+        path=auto_path;
+    }
+    uint32_t bios_checksum=0,entry_pc=0;
+    savestate_get_integrity(&bios_checksum,&entry_pc);
+    if(!boot_state_save(cpu,bios_checksum,entry_pc,path)) {
+        fprintf(stderr,"[tas-stateio] save failed at return %u\n",frame);
+        return;
+    }
+    char sha_hex[65]; unsigned long long state_bytes=0;
+    FILE *state=fopen(path,"rb");
+    if(!state) { fprintf(stderr,"[tas-stateio] save wrote no readable state at return %u\n",frame); return; }
+    psx_sha256_ctx ctx; psx_sha256_init(&ctx);
+    uint8_t buffer[65536]; size_t got;
+    while((got=fread(buffer,1,sizeof buffer,state))>0) { psx_sha256_update(&ctx,buffer,got); state_bytes+=got; }
+    fclose(state);
+    uint8_t digest[32]; psx_sha256_final(&ctx,digest);
+    for(unsigned i=0;i<32;i++) sprintf(sha_hex+i*2,"%02x",digest[i]);
+    sha_hex[64]='\0';
+    TasStateManifest m; memset(&m,0,sizeof m);
+    m.frame=frame; m.cycle=cycle; m.bios_checksum=bios_checksum; m.entry_pc=entry_pc;
+    m.input_consumed=debug_server_input_route_consumed();
+    m.state_bytes=state_bytes;
+    m.ram_digest=source_tas_stateio_ram_digest(memory_get_ram_ptr(),2097152u);
+    /* v7 identity: whole resolved configuration, the exact runtime binary, and
+     * the exact route content. */
+    source_stateio_config_digest_hex(m.config_digest);
+    if(!source_stateio_exe_sha256(m.exe_sha256)) {
+        fprintf(stderr,"[tas-stateio] save refused: cannot hash the runtime binary\n");
+        return;
+    }
+    {
+        const char *route=getenv("PSX_INPUT_ROUTE_FILE");
+        if(!source_stateio_file_sha256(route,m.route_sha256)) {
+            fprintf(stderr,"[tas-stateio] save refused: cannot hash the input route\n");
+            return;
+        }
+    }
+    char manifest_path[4160];
+    if(snprintf(manifest_path,sizeof manifest_path,"%s.json",path)>=(int)sizeof manifest_path ||
+       !source_tas_stateio_manifest_write(manifest_path,&m,path,sha_hex)) {
+        fprintf(stderr,"[tas-stateio] save manifest failed at return %u\n",frame);
+        return;
+    }
+    fprintf(stderr,"[tas-stateio] saved return %u cycle %llu RAM %016llX -> %s\n",frame,
+            (unsigned long long)cycle,(unsigned long long)m.ram_digest,path);
+}
+/* E-recon: bounded survey of source-GPU-service quiescence at frame boundaries.
+ * Opt-in via PSX_E_SURVEY=1. Answers the pre-registered abort condition in the
+ * campaign scope doc: is command_state near-zero at the checkpoint boundary? */
+static struct {
+    int initialized, enabled;
+    unsigned long long boundaries, queue_nonzero, words_nonzero, words_total, budget_nonzero;
+    unsigned long long upload_live, ll_live, spu_live;
+    unsigned long long irq_slot_nonzero, defer_switch_nonzero;
+    unsigned long long sio_pad_live, sio_mc_live;
+} s_e_survey;
+static void e_survey_report(void) {
+    if(!s_e_survey.enabled) return;
+    fprintf(stderr,"[e-survey] boundaries=%llu queue_nonzero=%llu words_nonzero=%llu words_total=%llu budget_nonzero=%llu\n",
+        s_e_survey.boundaries,s_e_survey.queue_nonzero,s_e_survey.words_nonzero,
+        s_e_survey.words_total,s_e_survey.budget_nonzero);
+    fprintf(stderr,"[e-survey] source-dma live: upload=%llu ll=%llu spu=%llu (of %llu boundaries)\n",
+        s_e_survey.upload_live,s_e_survey.ll_live,s_e_survey.spu_live,s_e_survey.boundaries);
+    fprintf(stderr,"[e-survey] IRQ_TIMING transient: source_irq_slot_nonzero=%llu s_defer_switch_nonzero=%llu (of %llu)\n",
+        s_e_survey.irq_slot_nonzero,s_e_survey.defer_switch_nonzero,s_e_survey.boundaries);
+    fprintf(stderr,"[e-survey] source-sio fsm live: pad_ack=%llu memcard=%llu (of %llu boundaries)\n",
+        s_e_survey.sio_pad_live,s_e_survey.sio_mc_live,s_e_survey.boundaries);
+    {
+        uint32_t sz[5];
+        sio_source_survey_sizes(sz);
+        fprintf(stderr,"[e-survey] source-sio sizes: pads=%u memcard=%u fsm_pace=%u unemitted_scalars=%u mc_slots=%u\n",
+            sz[0],sz[1],sz[2],sz[3],sz[4]);
+    }
+}
+static void e_survey(void) {
+    if(!s_e_survey.initialized) {
+        s_e_survey.initialized=1;
+        const char *e=getenv("PSX_E_SURVEY");
+        s_e_survey.enabled=e && e[0]=='1' && !e[1];
+        if(s_e_survey.enabled) atexit(e_survey_report);
+    }
+    if(!s_e_survey.enabled) return;
+    ++s_e_survey.boundaries;
+    s_e_survey.words_total+=command_state.count;
+    if(command_state.count) {
+        ++s_e_survey.queue_nonzero;
+        for(unsigned i=0;i<command_state.count;i++) if(command_state.queue[i]) ++s_e_survey.words_nonzero;
+    }
+    if(command_state.budget) ++s_e_survey.budget_nonzero;
+    {
+        int up=0,ll=0,sp=0;
+        dma_source_dma_live(&up,&ll,&sp);
+        if(up) ++s_e_survey.upload_live;
+        if(ll) ++s_e_survey.ll_live;
+        if(sp) ++s_e_survey.spu_live;
+    }
+    {
+        /* IRQ_TIMING transients: are they ever non-zero at a boundary? If never,
+         * keep serializing them but assert zero on save, like queue[32]. */
+        if (interrupts_source_irq_slot_live()) ++s_e_survey.irq_slot_nonzero;
+        if (psx_defer_switch_pending()) ++s_e_survey.defer_switch_nonzero;
+    }
+    {
+        int pad=0,mc=0;
+        sio_source_fsm_live(&pad,&mc);
+        if(pad) ++s_e_survey.sio_pad_live;
+        if(mc) ++s_e_survey.sio_mc_live;
+    }
+}
 static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
     /* Same order as psx_run_precise: test deliverability BEFORE the boundary
      * work (which can charge DMA-halt/fetch cycles and would otherwise move
@@ -186,6 +326,8 @@ static void cpu_boundary_inner(CPUState *cpu,uint32_t pc,uint64_t cycle) {
             return_clock=clock_state;return_command=command_state;
             source_cpu_return_probe(cpu,pc,cycle,clock_state.frame_returns);
             source_ram_page_probe(clock_state.frame_returns,cycle);
+            tas_stateio_save(cpu,clock_state.frame_returns,cycle);
+            e_survey();
             { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }   /* frame end re-arms the GPU service clock */
             psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
         }
@@ -218,6 +360,142 @@ void source_gpu_runtime_init(void) {
     psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
 }
 int source_gpu_runtime_active(void) {return enabled;}
+/* Resume support: restore the frontend-return counter after a checkpoint load,
+ * so subsequent probes and the input route line up with the original run. */
+int source_gpu_runtime_set_frame_returns(uint32_t frame) {
+    if(!enabled)return 0;
+    clock_state.frame_returns=frame;
+    return_clock=clock_state;
+    return 1;
+}
+
+/* ---- BS_SEC_RASTER instances [1] and [2] -------------------------------- */
+uint32_t source_gpu_raster_wire_bytes(void) { return INPUT_ROUTE_RASTER_WIRE_BYTES*2u; }
+void source_gpu_raster_wire_write(uint8_t *out) {
+    input_route_raster_wire_write(&clock_state.raster, out);
+    input_route_raster_wire_write(&draw_raster, out+INPUT_ROUTE_RASTER_WIRE_BYTES);
+}
+int source_gpu_raster_wire_read(const uint8_t *in, uint32_t len) {
+    if (len != INPUT_ROUTE_RASTER_WIRE_BYTES*2u) return 0;
+    if (!input_route_raster_wire_read(&clock_state.raster, in, INPUT_ROUTE_RASTER_WIRE_BYTES))
+        return 0;
+    if (!input_route_raster_wire_read(&draw_raster, in+INPUT_ROUTE_RASTER_WIRE_BYTES,
+                                      INPUT_ROUTE_RASTER_WIRE_BYTES))
+        return 0;
+    return 1;
+}
+
+/* ---- BS_SEC_GPU_SERVICE ------------------------------------------------- */
+/* Service clock, command projection, and all 32 queued command words. */
+uint32_t source_gpu_service_wire_bytes(void) { return SOURCE_GPU_SERVICE_WIRE_BYTES; }
+int source_gpu_service_queue_empty(void) { return command_state.count == 0; }
+/* Amendment C: the two derived copies are refreshed once per frame boundary on
+ * the normal path, so after a restore they would lag by a frame. A bit-exact
+ * replay cannot afford a frame of stale reads. Re-derive them once post-load. */
+void source_gpu_runtime_rederive_returns(void) {
+    return_clock = clock_state;
+    return_command = command_state;
+}
+/* E negative control: corrupt one restored service/projection field so the
+ * ladder comparison must fail. Test/diagnostic only. */
+int source_gpu_service_perturb(const char *field) {
+    if (!field || !*field || !enabled) return 0;
+    if (strcmp(field, "service_budget_debt") == 0) {
+        command_state.budget -= 1000000;
+        return 1;
+    }
+    if (strcmp(field, "service_cycle") == 0) {
+        clock_state.cycle += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: service cycle -> %llu\n",
+                (unsigned long long)clock_state.cycle);
+        return 1;
+    }
+    if (strcmp(field, "service_frame_returns") == 0) {
+        clock_state.frame_returns += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: service frame_returns -> %u\n",
+                clock_state.frame_returns);
+        return 1;
+    }
+    if (strcmp(field, "service_budget") == 0) {
+        command_state.budget += 1;
+        fprintf(stderr, "[tas-stateio] negative control: service budget -> %d\n",
+                command_state.budget);
+        return 1;
+    }
+    return 0;
+}
+void source_gpu_service_wire_write(uint8_t *out) {
+    PstW w; pst_w_init(&w, out, SOURCE_GPU_SERVICE_WIRE_BYTES);
+    /* psx_cycle_count is restored exactly by BS_SEC_CLOCK, so every absolute
+     * stamp here (cycle, deadlines, frame_request_cycle, last_update) is
+     * written as-is — no rebase. #7's existing delta-rebase is an identity op. */
+    pst_w_u64(&w, clock_state.cycle);             pst_w_u64(&w, clock_state.gpu_deadline);
+    pst_w_u64(&w, clock_state.dma_deadline);      pst_w_u64(&w, clock_state.frame_request_cycle);
+    pst_w_u32(&w, clock_state.zero_reached);      pst_w_u32(&w, clock_state.frame_pending);
+    pst_w_u32(&w, clock_state.frame_returns);
+    pst_w_i32(&w, command_state.budget);
+    pst_w_u32(&w, command_state.count);           pst_w_u32(&w, command_state.phase);
+    pst_w_u32(&w, command_state.command);         pst_w_u64(&w, command_state.last_update);
+    pst_w_i32(&w, command_state.clip_x0);         pst_w_i32(&w, command_state.clip_y0);
+    pst_w_i32(&w, command_state.clip_x1);         pst_w_i32(&w, command_state.clip_y1);
+    pst_w_i32(&w, command_state.offset_x);        pst_w_i32(&w, command_state.offset_y);
+    pst_w_u32(&w, command_state.draw_mode);       pst_w_u32(&w, command_state.texture_window);
+    pst_w_u32(&w, command_state.mask_bits);       pst_w_u32(&w, command_state.display_mode);
+    pst_w_u32(&w, command_state.dma_direction);
+    pst_w_u32(&w, command_state.field_valid);     pst_w_u32(&w, command_state.skip_field);
+    pst_w_u32(&w, command_state.first_triangles); pst_w_u32(&w, command_state.second_triangles);
+    /* INCMD_PLINE: a poly-line split across a frontend return is still open. */
+    pst_w_u32(&w, command_state.pline);           pst_w_u32(&w, command_state.pline_command);
+    pst_w_u32(&w, command_state.pline_color);     pst_w_u32(&w, command_state.pline_vertex);
+    for (unsigned i=0;i<12u;i++) pst_w_u32(&w, command_state.polygon_words[i]);
+    pst_w_u32(&w, command_state.transfer_words);
+    pst_w_u32(&w, command_state.dispatch.kind);   pst_w_u32(&w, command_state.dispatch.count);
+    for (unsigned i=0;i<12u;i++) pst_w_u32(&w, command_state.dispatch.words[i]);
+    pst_w_i32(&w, command_state.error);
+    for (unsigned i=0;i<32u;i++) pst_w_u32(&w, command_state.queue[i]);
+}
+int source_gpu_service_wire_read(const uint8_t *in, uint32_t len) {
+    PstR r;
+    if (!in || len != SOURCE_GPU_SERVICE_WIRE_BYTES) return 0;
+    { PstR count_wire;uint32_t count;
+      pst_r_init(&count_wire,in+48,4);
+      if (!pst_r_u32(&count_wire,&count) || count>32u) return 0; }
+    pst_r_init(&r, in, len);
+    if (!pst_r_u64(&r,&clock_state.cycle)              || !pst_r_u64(&r,&clock_state.gpu_deadline) ||
+        !pst_r_u64(&r,&clock_state.dma_deadline)       || !pst_r_u64(&r,&clock_state.frame_request_cycle) ||
+        !pst_r_u32(&r,&clock_state.zero_reached)       || !pst_r_u32(&r,&clock_state.frame_pending) ||
+        !pst_r_u32(&r,&clock_state.frame_returns)      || !pst_r_i32(&r,&command_state.budget) ||
+        !pst_r_u32(&r,&command_state.count)            || !pst_r_u32(&r,&command_state.phase) ||
+        !pst_r_u32(&r,&command_state.command)          || !pst_r_u64(&r,&command_state.last_update) ||
+        !pst_r_i32(&r,&command_state.clip_x0)          || !pst_r_i32(&r,&command_state.clip_y0) ||
+        !pst_r_i32(&r,&command_state.clip_x1)          || !pst_r_i32(&r,&command_state.clip_y1) ||
+        !pst_r_i32(&r,&command_state.offset_x)         || !pst_r_i32(&r,&command_state.offset_y) ||
+        !pst_r_u32(&r,&command_state.draw_mode)        || !pst_r_u32(&r,&command_state.texture_window) ||
+        !pst_r_u32(&r,&command_state.mask_bits)        || !pst_r_u32(&r,&command_state.display_mode) ||
+        !pst_r_u32(&r,&command_state.dma_direction)    || !pst_r_u32(&r,&command_state.field_valid) ||
+        !pst_r_u32(&r,&command_state.skip_field)       || !pst_r_u32(&r,&command_state.first_triangles) ||
+        !pst_r_u32(&r,&command_state.second_triangles) ||
+        !pst_r_u32(&r,&command_state.pline)            || !pst_r_u32(&r,&command_state.pline_command) ||
+        !pst_r_u32(&r,&command_state.pline_color)      || !pst_r_u32(&r,&command_state.pline_vertex))
+        return 0;
+    /* The tail is POSITIONAL: this order must match source_gpu_service_wire_write
+     * exactly. A divergence here is invisible to the total-length check and to
+     * the _Static_assert(sizeof), which is how the shipped version read `error`
+     * and both word arrays at the wrong offsets (test_boot_state_section_wire). */
+    for (unsigned i=0;i<12u;i++)
+        if (!pst_r_u32(&r,&command_state.polygon_words[i])) return 0;
+    if (!pst_r_u32(&r,&command_state.transfer_words) ||
+        !pst_r_u32(&r,&command_state.dispatch.kind) ||
+        !pst_r_u32(&r,&command_state.dispatch.count))
+        return 0;
+    for (unsigned i=0;i<12u;i++)
+        if (!pst_r_u32(&r,&command_state.dispatch.words[i])) return 0;
+    if (!pst_r_i32(&r,&command_state.error))
+        return 0;
+    for (unsigned i=0;i<32u;i++)
+        if (!pst_r_u32(&r,&command_state.queue[i])) return 0;
+    return 1;
+}
 int source_gpu_runtime_ready(void) {return enabled?source_gpu_command_ready(&command_state):-2;}
 uint32_t source_gpu_runtime_status_bits(void) {
     uint32_t bits=(command_state.dma_direction&2u)?1u<<25:0;
@@ -227,7 +505,8 @@ uint32_t source_gpu_runtime_status_bits(void) {
     return bits;
 }
 void source_gpu_runtime_advance(void) {
-    if(enabled && !source_gpu_service_to(&clock_state,psx_cycle_count,service,0))fail("reversed device time");
+    if(enabled && !source_gpu_service_to(&clock_state,psx_cycle_count,service,0))
+        fail("reversed device time");
 }
 uint32_t source_gpu_runtime_cycles_to_event(void) {
     if(!enabled)return UINT32_MAX;

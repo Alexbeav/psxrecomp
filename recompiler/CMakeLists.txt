@@ -991,6 +991,31 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_cpu_return_probe.py"
                 --cc ${CMAKE_C_COMPILER})
+        # tas_stateio_manifest and tas_stateio_identity are registered with the
+        # foundation above. The Python driver compiles test_input_route_raster_wire.c at O0/O2.
+        add_test(NAME tas_raster_wire
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_input_route_raster_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        # The Python driver links the four comparison-profile section codecs with
+        # auto-derived link stubs and round-trips per-field sentinels (O0/O2).
+        add_test(NAME tas_section_wire_sentinels
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_boot_state_section_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_cpu_state_wire
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cpu_state_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_gpu_service_path
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_service_path.py"
+                --cc ${CMAKE_C_COMPILER})
+        # The Python driver compiles test_boot_state_replace.c with its own TU.
+        add_test(NAME tas_state_replace
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_boot_state_replace.py"
+                --cc ${CMAKE_C_COMPILER})
     endif()
 endif()
 

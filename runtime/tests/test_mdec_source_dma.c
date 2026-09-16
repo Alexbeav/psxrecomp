@@ -93,6 +93,15 @@ int main(int argc,char **argv){
    case 12:dma_snapshot_write(NULL);break;
    default:abort();
   }
+  if(getenv("PSX_TEST_ROUNDTRIP")) {
+   uint32_t n=mdec_snapshot_bytes(),dn=dma_snapshot_bytes();
+   uint8_t *wire=malloc(n),*dw=malloc(dn);if(!wire || !dw)abort();
+   mdec_snapshot_write(wire);dma_snapshot_write(dw);
+   /* Reset the decoder and DMA continuation without touching fixture RAM/IRQ. */
+   mdec_init();memset(mdec_source_dma,0,sizeof mdec_source_dma);mdec_source_last_cycle=0;
+   if(!mdec_snapshot_read(wire,n) || !dma_snapshot_read(dw,dn))abort();
+   free(wire);free(dw);
+  }
   SourceMDEC *s=&source_mdec;
   uint32_t row[]={result,aux,mdec_read(0x1f801824),(uint32_t)s->credit,s->command,s->control,s->remaining,s->in_count,s->out_count,
    s->coefficient,s->block,s->pixel_count,s->pixel_at,s->row,s->word_in_row,s->row_words,s->busy,s->quant_index,s->matrix_index,

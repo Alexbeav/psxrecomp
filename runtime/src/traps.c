@@ -807,6 +807,8 @@ void psx_request_return_to_lobby(void)
 void psx_scheduler_run(CPUState* cpu)
 {
     extern int g_psx_dispatch_depth;
+    extern int dirty_ram_checkpoint_resume_pending(void);
+    extern void dirty_ram_checkpoint_resume(CPUState *);
     g_in_scheduler_run = 1;
     g_sched_escape.reason = PSX_RUN_CONTINUE;
     for (;;) {
@@ -859,7 +861,11 @@ void psx_scheduler_run(CPUState* cpu)
 
         uint32_t run_pc;
         int from_top_resume = 0;
-        if (g_sched_escape.reason == PSX_RUN_RESUME_CURRENT &&
+        if (dirty_ram_checkpoint_resume_pending()) {
+            /* A cold checkpoint already contains the live CPU context. The
+             * current TCB is its last suspended context, not its current one. */
+            run_pc = cpu->pc;
+        } else if (g_sched_escape.reason == PSX_RUN_RESUME_CURRENT &&
             g_sched_escape.resume_pc != 0u) {
             /* Same-thread RFE: GPRs already committed by the RFE; just re-dispatch. */
             run_pc = g_sched_escape.resume_pc;
@@ -888,6 +894,12 @@ void psx_scheduler_run(CPUState* cpu)
         if (from_top_resume) {
             extern void psx_irq_arm_compiled_resume_pc(uint32_t pc);
             psx_irq_arm_compiled_resume_pc(run_pc);
+        }
+        /* A restored TAS checkpoint re-enters its saved instruction, delay-slot
+         * or load continuation through the interpreter before normal dispatch. */
+        if (dirty_ram_checkpoint_resume_pending()) {
+            dirty_ram_checkpoint_resume(cpu);
+            run_pc = cpu->pc;
         }
         psx_dispatch(cpu, run_pc);
 

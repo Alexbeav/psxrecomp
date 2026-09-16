@@ -88,10 +88,10 @@ events crossed by their width-dependent bus wait. The load still consumes its
 full duration. `runtime/tests/test_cd_read_sample_order.py` checks event ordering,
 byte/half/word reads, LWC2 and address aliases at O0/O2 without retail assets.
 
-These are cold diagnostic options. This integration exposes no TAS checkpoint
-launcher; the source memory-card/DualShock profile also remains
-unsupported for checkpoints. Device state encoding does not qualify TAS
-continuation. Existing default model options retain their prior behavior.
+The drive and source memory-card/DualShock profiles admit checkpoint diagnostics.
+See [TAS checkpoints](TAS_CHECKPOINTS.md#debugging-a-late-mismatch) for same-build
+and compatible-build resume. Device state encoding and component tests do not
+qualify full Biohazard continuation; cold-versus-resumed evidence is required.
 
 On historical replay revision `7a0d0ff4`, the measured Bio Hazard RAM-page/clock prefix advanced from return 463
 to 233,567, with the first state/clock difference at 233,568 in the neutral

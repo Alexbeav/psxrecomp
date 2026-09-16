@@ -112,7 +112,12 @@ int main(void) {
     CHECK(source_drive_head_lba==-2,"physical head does not advance early");
     psx_cycle_count=next;source_drive_head_update();
     CHECK(source_drive_head_lba==-1,"physical head advances on sector deadline");
-    /* Full source-drive checkpoint support is a separate submission. */
+    uint32_t head_size=cdrom_snapshot_bytes();uint8_t *head_wire=malloc(head_size);
+    cdrom_snapshot_write(head_wire);source_drive_head_lba=123;
+    CHECK(cdrom_snapshot_read(head_wire,head_size) && source_drive_head_lba==-1,"physical head survives same-profile state encoding");
+    head_wire[head_size-32]=2;source_drive_head_lba=123;
+    CHECK(!cdrom_snapshot_read(head_wire,head_size) && source_drive_head_lba==123,"invalid physical-head flag fails before mutation");
+    free(head_wire);
     s_source_clock=1;s_source_clock_tape.bytes=malloc(4);s_source_clock_tape.count=1;
     memset(s_source_clock_tape.bytes,0,4);s_source_clock_tape.bytes[0]=123;s_source_clock_tape.cursor=0;
     source_drive_head_valid=1;source_drive_head_lba=-2;source_drive_head_target=4;

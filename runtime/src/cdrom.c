@@ -3892,6 +3892,8 @@ int cdrom_savestate_boost_vblanks_remaining(void) {
  * PendingCmd / QueuedCmd are plain pointer-free structs, so raw copy is sound. */
 /* LE field wire — PendingCmd/QueuedCmd have host padding. */
 #include "pst_wire.h"
+#define CDDA_SNAP_WIRE_BYTES (9u * 4u + 2u * 2352u + 8u)
+#define CD_SOURCE_RING_WIRE_BYTES (8u * (SECTOR_BUFFER_SIZE + 8u) + 12u + 56u)
 
 static int cdrom_snap_emit(PstW *w) {
 #define W8(f)  do { if (!pst_w_u8(w, (uint8_t)(f))) return 0; } while (0)
@@ -3943,17 +3945,41 @@ static int cdrom_snap_emit(PstW *w) {
     W8(pending.cmd); WI(pending.pending); WI(pending_rem_cycles()); WI(pending.phase);
     W8(queued_cmd.cmd); WB(queued_cmd.params); WI(queued_cmd.param_count); WI(queued_cmd.pending);
     W8(pending_dataready); W8(pending_dataready_stat);
+    WB(cd_pending_vol); WB(cd_decode_vol);
+    /* Timed lid: the close deadline is an absolute psx_cycle_count stamp, which
+     * BS_SEC_CLOCK restores exactly. */
+    W64(s_lid.close_due); W8(s_lid.physical_open); W8(s_lid.shell_open_latched);
+    WI(s_lid_irq_pending);
     /* This explicit private profile adds its timing state to the CD section.
      * Default bytes stay unchanged. Full-machine/cross-profile restore remains
      * unqualified; matching-profile controller state is not reconstructed. */
     if (s_source_explicit_seek_model) W8(s_source_seek_paused);
+    if (source_cdda.enabled) {
+        WI(source_cdda.seeking); WI(source_cdda.position_valid);
+        WI(source_cdda.play_track_match); WU(source_cdda.sectors_read);
+        WU(source_cdda.pipe_count); WU(source_cdda.pipe_at);
+        WU(source_cdda.report_last_tens); WB(source_cdda.pipe);
+        WB(source_cdda.async_data); WU(source_cdda.async_type); WU(source_cdda.async_count);
+    }
     if(s_source_clock) {
+        /* Replay retains read-ahead slots and exact inactive/deferred deadlines. */
+        for (unsigned slot=0;slot<CDROM_NUM_SECTOR_BUFFERS;slot++) {
+            WB(s_sector_ring[slot].data); WI(s_sector_ring[slot].size); WI(s_sector_ring[slot].pos);
+        }
+        WI(s_ring_read); WI(s_ring_write); WI(pending_dataready_slot);
+        W64(pending_present_due); W64(pending.due_cyc); W64(cdrom_irq_present_due);
+        W64(s_source_command_due); W64(s_source_ready_due); W64(s_source_reset_due);
+        W64(s_cd_timing_next_due);
         WI(s_source_read_start_lba);
         WU(0x33434c43u);WB(s_source_clock_tape.sha256);
         WU(s_source_clock_tape.count);WU(s_source_clock_tape.cursor);WU(s_source_clock_calls);
         WI(s_source_command_phase);WI(s_source_args_remaining);
         WI(cycles_until_due(s_source_command_due));WI(cycles_until_due(s_source_ready_due));
         WI(setloc_pending);WI(s_source_reset_due!=0);WI(cycles_until_due(s_source_reset_due));
+    }
+    if(s_nymashock_drive) {
+        WI(source_drive_head_valid);WI(source_drive_head_lba);WI(source_drive_head_target);W64(source_drive_head_due);WI(source_drive_hold_logical);WI(source_reset_phase);
+        WI(source_drive_subq_lba);
     }
 #undef W8
 #undef WI
@@ -4019,54 +4045,97 @@ static int cdrom_snap_parse(PstR *r) {
     R8(pending.cmd); RI(pending.pending); RI(pending_rem); RI(pending.phase);
     R8(queued_cmd.cmd); RB(queued_cmd.params); RI(queued_cmd.param_count); RI(queued_cmd.pending);
     R8(pending_dataready); R8(pending_dataready_stat);
+    RB(cd_pending_vol); RB(cd_decode_vol);
+    R64(s_lid.close_due); R8(s_lid.physical_open); R8(s_lid.shell_open_latched);
+    RI(s_lid_irq_pending);
     if (s_source_explicit_seek_model) R8(s_source_seek_paused);
+    if (source_cdda.enabled) {
+        RI(source_cdda.seeking); RI(source_cdda.position_valid);
+        RI(source_cdda.play_track_match); RU(source_cdda.sectors_read);
+        RU(source_cdda.pipe_count); RU(source_cdda.pipe_at);
+        RU(source_cdda.report_last_tens); RB(source_cdda.pipe);
+        RB(source_cdda.async_data); RU(source_cdda.async_type); RU(source_cdda.async_count);
+    }
     if(s_source_clock) {
         uint8_t identity[32];uint32_t signature,count;
         int command_rem,ready_rem,reset_active,reset_rem;
+        for (unsigned slot=0;slot<CDROM_NUM_SECTOR_BUFFERS;slot++) {
+            RB(s_sector_ring[slot].data); RI(s_sector_ring[slot].size); RI(s_sector_ring[slot].pos);
+        }
+        RI(s_ring_read); RI(s_ring_write); RI(pending_dataready_slot);
+        R64(pending_present_due); R64(pending.due_cyc); R64(cdrom_irq_present_due);
+        R64(s_source_command_due); R64(s_source_ready_due); R64(s_source_reset_due);
+        R64(s_cd_timing_next_due);
         RI(s_source_read_start_lba);
         RU(signature);RB(identity);RU(count);RU(s_source_clock_tape.cursor);RU(s_source_clock_calls);
         RI(s_source_command_phase);RI(s_source_args_remaining);
         RI(command_rem);RI(ready_rem);RI(setloc_pending);RI(reset_active);RI(reset_rem);
         (void)signature;(void)count; /* Identity and range checks precede any parse mutation. */
-        s_source_command_due=psx_cycle_count+(uint32_t)command_rem;
-        s_source_ready_due=psx_cycle_count+(uint32_t)ready_rem;
-        s_source_reset_due=reset_active?psx_cycle_count+(uint32_t)reset_rem:0;
+        /* The legacy remaining-time fields are retained for validation. */
+        (void)command_rem;(void)ready_rem;(void)reset_active;(void)reset_rem;
+    }
+    if(s_nymashock_drive) {
+        RI(source_drive_head_valid);RI(source_drive_head_lba);RI(source_drive_head_target);R64(source_drive_head_due);RI(source_drive_hold_logical);RI(source_reset_phase);
+        RI(source_drive_subq_lba);
     }
 #undef R8
 #undef RI
 #undef RU
 #undef R64
 #undef RB
-    irq_present_set_remaining(present_rem);
-    if (pending.pending)
-        pending_set_remaining(pending_rem);
-    else
-        pending.due_cyc = 0;
+    if (!s_source_clock) {
+        irq_present_set_remaining(present_rem);
+        if (pending.pending) pending_set_remaining(pending_rem);
+        else pending.due_cyc = 0;
+    }
     return 1;
 }
 
 uint32_t cdrom_snapshot_bytes(void) {
-    if(source_cdda.enabled || s_nymashock_drive){fprintf(stderr,"[CDROM] Source CDDA/drive capture unqualified\n");exit(2);}
     PstW w;
     pst_w_init(&w, NULL, 0);
     (void)cdrom_snap_emit(&w);
     return (uint32_t)w.written;
 }
 void cdrom_snapshot_write(uint8_t *p) {
-    if(source_cdda.enabled || s_nymashock_drive){fprintf(stderr,"[CDROM] Source CDDA/drive capture unqualified\n");exit(2);}
+    if (!p) return;
     PstW w;
     uint32_t n = cdrom_snapshot_bytes();
     pst_w_init(&w, p, n);
     (void)cdrom_snap_emit(&w);
 }
 int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
-    if(source_cdda.enabled || s_nymashock_drive)return 0;
     PstR r;
-    if (len != cdrom_snapshot_bytes()) return 0;
+    if (!p || len != cdrom_snapshot_bytes()) return 0;
+    uint32_t drive_bytes=s_nymashock_drive?32u:0u;
+    if(drive_bytes) {
+        const uint8_t *drive=p+len-drive_bytes;
+        int32_t lba=(int32_t)cd_tape_le32(drive+4), target=(int32_t)cd_tape_le32(drive+8);
+        int32_t subq=(int32_t)cd_tape_le32(drive+28);
+        if(cd_tape_le32(drive+20)>1 || cd_tape_le32(drive+24)>3 || cd_tape_le32(drive)>1 || lba < -150 || lba > 450000 || target < 0 || target > 450000 ||
+           subq < -150 || subq > 450000 ||
+           (cd_tape_le32(drive) && !cd_tape_le32(drive+12) && !cd_tape_le32(drive+16)))return 0;
+    }
     uint32_t clock_bytes=s_source_clock?80u:0u;
-    if (s_source_explicit_seek_model && p[len-clock_bytes-1] > 1) return 0;
+    uint32_t cdda_bytes=source_cdda.enabled?CDDA_SNAP_WIRE_BYTES:0u;
+    uint32_t ring_bytes=s_source_clock?CD_SOURCE_RING_WIRE_BYTES:0u;
+    if (s_source_explicit_seek_model && p[len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes-1] > 1) return 0;
+    if (source_cdda.enabled) {
+        const uint8_t *c=p+len-drive_bytes-clock_bytes-ring_bytes-cdda_bytes;
+        if (cd_tape_le32(c)>1 || cd_tape_le32(c+4)>1 ||
+            cd_tape_le32(c+16)>2 || cd_tape_le32(c+20)>1 ||
+            cd_tape_le32(c+cdda_bytes-8)>5 || cd_tape_le32(c+cdda_bytes-4)>8) return 0;
+    }
     if(s_source_clock) {
-        const uint8_t *clock=p+len-clock_bytes+4;
+        const uint8_t *ring=p+len-drive_bytes-clock_bytes-ring_bytes;
+        for (unsigned slot=0;slot<CDROM_NUM_SECTOR_BUFFERS;slot++) {
+            uint32_t size=cd_tape_le32(ring+slot*(SECTOR_BUFFER_SIZE+8u)+SECTOR_BUFFER_SIZE);
+            uint32_t pos=cd_tape_le32(ring+slot*(SECTOR_BUFFER_SIZE+8u)+SECTOR_BUFFER_SIZE+4u);
+            if (size>SECTOR_BUFFER_SIZE || pos>size) return 0;
+        }
+        for (unsigned i=0;i<3;i++)
+            if (cd_tape_le32(ring+8u*(SECTOR_BUFFER_SIZE+8u)+i*4u)>=8u) return 0;
+        const uint8_t *clock=p+len-drive_bytes-clock_bytes+4;
         int32_t phase=(int32_t)cd_tape_le32(clock+48);
         if(cd_tape_le32(clock)!=0x33434c43u || memcmp(clock+4,s_source_clock_tape.sha256,32) ||
            cd_tape_le32(clock+36)!=s_source_clock_tape.count ||
@@ -4083,16 +4152,7 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
         return 0;
     /* Absolute host deadlines are not on the wire — rebuild from restored
      * relative read_delay (psx_cycle_count is resynced by the load caller). */
-    cdrom_resync_deadlines_after_restore();
-    /* The snapshot wire predates the timed-lid helper. Reconstruct its short
-     * host-side deadline from the saved hardware status instead of changing
-     * the section size and invalidating existing save states. */
-    if (iso_handle && (stat_reg & (CDSTAT_ERROR | CDSTAT_SHELL)) ==
-                          (CDSTAT_ERROR | CDSTAT_SHELL)) {
-        cdrom_lid_begin_open(&s_lid, psx_cycle_count);
-    } else if (iso_handle && (stat_reg & CDSTAT_SHELL)) {
-        s_lid.shell_open_latched = 1;
-    }
+    if (!s_source_clock) cdrom_resync_deadlines_after_restore();
     return 1;
 }
 

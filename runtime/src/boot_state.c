@@ -1,5 +1,6 @@
 #include "boot_state.h"
 #include "mod_memory.h"
+#include "fntrace.h"
 #include "overlay_api.h"   /* PSX_OVERLAY_CODEGEN_HASH / _ABI_TAG / _CODEGEN_VER */
 #include "dirty_ram_interp.h"
 #include "gpu.h"           /* gpu_get_vram — CPU-auth mirror under dual-raster   */
@@ -9,7 +10,14 @@
 #include "interrupts.h"
 #include "psx_cycles.h"
 #include "psx_icache.h"    /* g_psx_icache_tv — fetch-cost tags in BS_SEC_ICACHE */
+#include "psx_scheduler.h"
+#include "source_gpu_runtime.h" /* source GPU service + raster sections */
+#include "timers.h"             /* BS_SEC_TIMER_SRC */
+#include "dma.h"                /* BS_SEC_DMA_SRC */
+#include "input_route_raster_clock_wire.h"
 #include "pst_wire.h"
+#include "cpu_state_wire.h"
+#include "dirty_ram_interp.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,12 +83,13 @@ extern int      dma_snapshot_read(const uint8_t* p, uint32_t len);
 extern uint32_t sio_snapshot_bytes(void);
 extern void     sio_snapshot_write(uint8_t* p);
 extern int      sio_snapshot_read(const uint8_t* p, uint32_t len);
+extern int      sio_snapshot_shape_ok(uint32_t len);
 extern uint32_t mdec_snapshot_bytes(void);
 extern void     mdec_snapshot_write(uint8_t* p);
 extern int      mdec_snapshot_read(const uint8_t* p, uint32_t len);
 
-/* CPU regs wire: 32+3+32+32+32 LE u32 = 131 * 4 = 524 bytes (no padding). */
-#define CPU_REGS_WIRE_BYTES (524u)
+/* CPU wire: 524 register bytes + 56 timing bytes, without padding/pointers. */
+#define CPU_REGS_WIRE_BYTES CPU_STATE_WIRE_BYTES
 /* Timer wire: 3*u16 + 3*u32 + 3*u16 + 3*i32 + 3*u32 = 48 bytes (no pad holes). */
 #define TIMER_REGS_WIRE_BYTES (48u)
 
@@ -277,6 +286,10 @@ static int write_module_section(BsOut* o, uint32_t tag,
                                 uint32_t (*bytes)(void),
                                 void (*write)(uint8_t*)) {
     uint32_t n = bytes();
+    if (!n) {
+        fprintf(stderr, "[stateio] refusing snapshot: required section %u has no serializer\n", tag);
+        return 0;
+    }
     uint8_t* buf = (uint8_t*)malloc(n ? n : 1);
     if (!buf) return 0;
     write(buf);
@@ -287,20 +300,10 @@ static int write_module_section(BsOut* o, uint32_t tag,
 
 static int write_cpu_section(BsOut* o, const CPUState* cpu) {
     uint8_t buf[CPU_REGS_WIRE_BYTES];
-    PstW w;
-    pst_w_init(&w, buf, sizeof buf);
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->gpr[i])) return 0;
-    if (!pst_w_u32(&w, cpu->pc) || !pst_w_u32(&w, cpu->hi) || !pst_w_u32(&w, cpu->lo))
-        return 0;
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->cop0[i])) return 0;
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->gte_data[i])) return 0;
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->gte_ctrl[i])) return 0;
-    if (w.written != CPU_REGS_WIRE_BYTES) return 0;
-    return write_section(o, BS_SEC_CPU, buf, CPU_REGS_WIRE_BYTES);
+    CPUState saved = *cpu;
+    saved.pc = dirty_ram_checkpoint_pc(cpu->pc);
+    return cpu_state_wire_write(buf, &saved) &&
+           write_section(o, BS_SEC_CPU, buf, sizeof buf);
 }
 
 static int write_timer_section(BsOut* o) {
@@ -359,25 +362,68 @@ static int write_vram_section_full(BsOut *o)
     return ok;
 }
 
+/* v7 profile-aware section presence (amendment A): a section must exist
+ * exactly when its subsystem is active. boot_state.c is shared code, so the
+ * three comparison-profile sections must NOT be always-required — under a
+ * normal profile there is no raster clock, no source GPU service and no source
+ * timers, and always-requiring them would break every normal boot state. */
+/* Deferred VBlank phase (reshaped #5). BS_SEC_IRQ is written before
+ * BS_SEC_RASTER, so at IRQ-apply time we cannot yet know whether the raster
+ * section is coming. Stage the phase here and commit it after the whole stream
+ * has been read, where the section's presence is known. */
+static int      s_pending_vblank_phase_valid;
+static uint32_t s_pending_vblank_phase;
+static int      s_pending_game_started;
+
+static int boot_state_raster_section_active(void) {
+    return interrupts_raster_comparison_active() || source_gpu_runtime_active();
+}
+static uint32_t boot_state_extra_sections(void) {
+    uint32_t n = 0;
+    if (boot_state_raster_section_active()) n++;
+    if (source_gpu_runtime_active()) n++;
+    if (timers_source_active()) n++;
+    if (dma_src_active()) n++;
+    return n;
+}
+
 static int boot_state_save_to(BsOut* o, const CPUState* cpu,
                               uint32_t bios_checksum, uint32_t entry_pc) {
     BootStateHeader h;
     int ok;
     memset(&h, 0, sizeof h);
     h.magic         = BOOT_STATE_MAGIC;
-    h.version       = psx_mod_memory_snapshot_bytes() ? BOOT_STATE_VERSION : 7u;
+    h.version       = BOOT_STATE_VERSION;
     h.reserved      = psx_mod_memory_layout_cookie();
     h.bios_checksum = bios_checksum;
     h.entry_pc      = entry_pc;
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
     h.abi_tag       = (int32_t)PSX_OVERLAY_ABI_TAG;
     h.codegen_ver   = (uint32_t)PSX_OVERLAY_CODEGEN_VER;
-    h.section_count = 16 + (psx_mod_memory_snapshot_bytes() ? 1u : 0u);
+    h.section_count = 20u + boot_state_extra_sections() +
+                      (psx_mod_memory_snapshot_bytes() ? 1u : 0u);
 
     ok = write_header_le(o, &h);
 
     if (ok) ok = write_cpu_section(o, cpu);
+    if (ok) {
+        uint8_t exec[DIRTY_RAM_CHECKPOINT_BYTES];
+        dirty_ram_checkpoint_write(exec);
+        ok = write_section(o, BS_SEC_CPU_EXEC, exec, sizeof exec);
+    }
     if (ok) ok = write_section(o, BS_SEC_RAM,  memory_get_ram_ptr(),        RAM_SIZE);
+    if (ok) {
+        uint8_t sched[PSX_SCHEDULER_SNAPSHOT_BYTES];
+        psx_scheduler_snapshot_write(sched, sizeof sched);
+        ok = write_section(o, BS_SEC_SCHED, sched, sizeof sched);
+    }
+    if (ok) {
+        uint8_t flow[BOOT_STATE_BOOTFLOW_BYTES];
+        PstW w;
+        pst_w_init(&w, flow, sizeof flow);
+        ok = pst_w_u32(&w, fntrace_is_game_started() ? BOOT_STATE_BOOTFLOW_GAME_STARTED : 0u) &&
+             write_section(o, BS_SEC_BOOTFLOW, flow, sizeof flow);
+    }
     if (ok) ok = write_section(o, BS_SEC_SPAD, memory_get_scratchpad_ptr(), SPAD_SIZE);
     if (ok && psx_mod_memory_snapshot_bytes())
         ok = write_module_section(o, BS_SEC_MODMEM, psx_mod_memory_snapshot_bytes,
@@ -463,22 +509,69 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
             free(db);
         }
     }
+    /* v7 comparison-profile sections, written ONLY when their subsystem is
+     * active, so a normal-profile boot state keeps the v6 shape. */
+    if (ok && boot_state_raster_section_active()) {
+        uint8_t buf[INPUT_ROUTE_RASTER_WIRE_BYTES * 3u];
+        interrupts_raster_wire_write(buf);                                   /* [0]   */
+        source_gpu_raster_wire_write(buf + INPUT_ROUTE_RASTER_WIRE_BYTES);   /* [1][2] */
+        ok = write_section(o, BS_SEC_RASTER, buf, sizeof buf);
+    }
+    if (ok && source_gpu_runtime_active()) {
+        uint8_t buf[SOURCE_GPU_SERVICE_WIRE_BYTES];
+        source_gpu_service_wire_write(buf);
+        ok = write_section(o, BS_SEC_GPU_SERVICE, buf, sizeof buf);
+    }
+    if (ok && timers_source_active()) {
+        uint8_t buf[60u];                     /* source timer state machines */
+        timers_source_wire_write(buf);
+        ok = write_section(o, BS_SEC_TIMER_SRC, buf, sizeof buf);
+    }
+    if (ok && dma_src_active()) {
+        uint8_t buf[140u];                    /* four source-DMA state machines */
+        dma_src_wire_write(buf);
+        ok = write_section(o, BS_SEC_DMA_SRC, buf, sizeof buf);
+    }
+    if (ok) {
+        /* Always present: none of these fields is model-gated. */
+        uint8_t buf[64u];
+        interrupts_timing_wire_write(buf);
+        ok = write_section(o, BS_SEC_IRQ_TIMING, buf, sizeof buf);
+    }
     return ok;
 }
+
+/* Atomic replace of `to` by `from`. See boot_state_replace.c (its own TU so the
+ * overwrite/refusal behaviour can be regression-tested in isolation). */
 
 int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
                     uint32_t entry_pc, const char* path) {
     BsOut o;
-    FILE* f = fopen(path, "wb");
+    FILE* f;
+    char tmp[1024];
     int ok;
+    /* Validate BEFORE creating anything, and write to a temporary that is only
+     * renamed into place on success. This kills the trap class where a refusal
+     * (or any write failure) inside the serializer leaves a zero-byte or short
+     * artifact at `path` — a truncated file that still parses is the same
+     * silent-stub failure, one layer down. */
+    if (!path || snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp)
+        return 0;
+    f = fopen(tmp, "wb");
     if (!f) return 0;
     memset(&o, 0, sizeof o);
     o.f = f;
     ok = boot_state_save_to(&o, cpu, bios_checksum, entry_pc);
-    fclose(f);
-    if (!ok)
-        remove(path);
-    return ok;
+    if (fclose(f) != 0) ok = 0;
+    if (!ok) {
+        remove(tmp);
+        return 0;
+    }
+    if (!boot_state_replace_file(tmp, path)) {
+        remove(tmp);
+        return 0;
+    }
+    return 1;
 }
 
 static int boot_state_save_buffer_ex(const CPUState* cpu, uint32_t bios_checksum,
@@ -522,27 +615,14 @@ int boot_state_save_buffer_raw(const CPUState* cpu, uint32_t bios_checksum,
 static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
                          CPUState* cpu, uint32_t entry_pc) {
     switch (tag) {
-    case BS_SEC_CPU: {
-        PstR r;
-        if (len != CPU_REGS_WIRE_BYTES) return 0;
-        pst_r_init(&r, p, len);
-        for (int i = 0; i < 32; i++)
-            if (!pst_r_u32(&r, &cpu->gpr[i])) return 0;
-        if (!pst_r_u32(&r, &cpu->pc) || !pst_r_u32(&r, &cpu->hi) ||
-            !pst_r_u32(&r, &cpu->lo))
-            return 0;
-        (void)entry_pc;
-        for (int i = 0; i < 32; i++)
-            if (!pst_r_u32(&r, &cpu->cop0[i])) return 0;
-        for (int i = 0; i < 32; i++)
-            if (!pst_r_u32(&r, &cpu->gte_data[i])) return 0;
-        for (int i = 0; i < 32; i++)
-            if (!pst_r_u32(&r, &cpu->gte_ctrl[i])) return 0;
-        /* Architectural normalize + drop host-only projection provenance that
-         * belonged to the pre-load timeline (not part of the wire format). */
-        gte_canonicalize_cpu_state(cpu);
+    case BS_SEC_CPU:
+        if (!cpu_state_wire_read(p, len, cpu)) return 0;
+        /* The snapshot is an exact backing-state image, not a guest register
+         * write. Normalization would change untouched cold LZCR from 0 to 32. */
+        gte_precision_timeline_invalidate();
         return 1;
-    }
+    case BS_SEC_CPU_EXEC:
+        return dirty_ram_checkpoint_read(p, len);
     case BS_SEC_RAM:
         if (len != RAM_SIZE) return 0;
         memcpy(memory_get_ram_ptr(), p, RAM_SIZE);
@@ -551,6 +631,38 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
             psx_kernel_bless_note_range(0, RAM_SIZE);
         }
         return 1;
+    case BS_SEC_RASTER: {
+        /* 3 x 80 B in fixed order. Each instance's read refuses on its own
+         * fraction/cycle cross-check, so a cross-instance swap is caught. */
+        if (len != INPUT_ROUTE_RASTER_WIRE_BYTES * 3u) return 0;
+        if (!interrupts_raster_wire_read(p, INPUT_ROUTE_RASTER_WIRE_BYTES)) return 0;
+        if (!source_gpu_raster_wire_read(p + INPUT_ROUTE_RASTER_WIRE_BYTES,
+                                         INPUT_ROUTE_RASTER_WIRE_BYTES * 2u)) return 0;
+        return 1;
+    }
+    case BS_SEC_GPU_SERVICE:
+        return source_gpu_service_wire_read(p, len);
+    case BS_SEC_TIMER_SRC:
+        return timers_source_wire_read(p, len);
+    case BS_SEC_DMA_SRC:
+        return dma_src_wire_read(p, len);
+    case BS_SEC_IRQ_TIMING:
+        return interrupts_timing_wire_read(p, len);
+    case BS_SEC_SCHED:
+        /* RAM precedes this section in every stream, so guest TCB pointers
+         * can be validated against the restored kernel state. */
+        return psx_scheduler_snapshot_read(p, len, cpu);
+    case BS_SEC_BOOTFLOW: {
+        /* Staged, not applied: the latch is committed only after every section
+         * has loaded, so a refused load leaves the live boot flow untouched. */
+        PstR r;
+        uint32_t flags;
+        if (len != BOOT_STATE_BOOTFLOW_BYTES) return 0;
+        pst_r_init(&r, p, len);
+        if (!pst_r_u32(&r, &flags) || (flags & ~BOOT_STATE_BOOTFLOW_GAME_STARTED)) return 0;
+        s_pending_game_started = (flags & BOOT_STATE_BOOTFLOW_GAME_STARTED) ? 1 : 0;
+        return 1;
+    }
     case BS_SEC_SPAD:
         if (len != SPAD_SIZE) return 0;
         memcpy(memory_get_scratchpad_ptr(), p, SPAD_SIZE);
@@ -565,10 +677,12 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         i_mask = mk;
         if (len == 12) {
             if (!pst_r_u32(&r, &csv)) return 0;
-            interrupts_set_cycles_since_vblank(csv);
+            s_pending_vblank_phase = csv;
+            s_pending_vblank_phase_valid = 1;
         } else {
             /* Legacy UI/disk snaps: no phase — rebase like pre-csv saves. */
-            interrupts_set_cycles_since_vblank(0);
+            s_pending_vblank_phase = 0;
+            s_pending_vblank_phase_valid = 1;
         }
         return 1;
     }
@@ -802,6 +916,42 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
     return 1;
 }
 
+/* Pass-1 shape validation. Mirrors the length rule each reader enforces, but
+ * reads no machine state and mutates nothing -- so a malformed stream is refused
+ * BEFORE any section is applied. Without this, a failure part-way through left a
+ * HALF-APPLIED machine (live state changed, replay then runs on a mix), and the
+ * first failing section masked every later one. */
+static int section_shape_ok(uint32_t tag, uint32_t len) {
+    switch (tag) {
+    case BS_SEC_CPU:        return len == CPU_REGS_WIRE_BYTES;
+    case BS_SEC_CPU_EXEC:   return len == DIRTY_RAM_CHECKPOINT_BYTES;
+    case BS_SEC_RAM:        return len == RAM_SIZE;
+    case BS_SEC_SCHED:      return len == PSX_SCHEDULER_SNAPSHOT_BYTES;
+    case BS_SEC_BOOTFLOW:   return len == BOOT_STATE_BOOTFLOW_BYTES;
+    case BS_SEC_SPAD:       return len == SPAD_SIZE;
+    case BS_SEC_MODMEM:     return len == psx_mod_memory_snapshot_bytes();
+    case BS_SEC_IRQ:        return len == 8u || len == 12u;
+    case BS_SEC_TIMER:      return len == TIMER_REGS_WIRE_BYTES;
+    case BS_SEC_CLOCK:      return len == 8u;
+    case BS_SEC_GPU:        return len == gpu_snapshot_bytes();
+    case BS_SEC_VRAM:       return len == VRAM_SIZE;
+    case BS_SEC_SPU:        return len == spu_snapshot_bytes();
+    case BS_SEC_SPURAM:     return len == spu_get_ram_bytes();
+    case BS_SEC_CDROM:      return len == cdrom_snapshot_bytes();
+    case BS_SEC_DMA:        return len == dma_snapshot_bytes();
+    case BS_SEC_SIO:        return sio_snapshot_shape_ok(len);
+    case BS_SEC_MDEC:       return len == mdec_snapshot_bytes();
+    case BS_SEC_ICACHE:     return len == 1024u * 4u;
+    case BS_SEC_DIRTY:      return (len % 4u) == 0u;
+    case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;
+    case BS_SEC_GPU_SERVICE:return len == SOURCE_GPU_SERVICE_WIRE_BYTES;
+    case BS_SEC_TIMER_SRC:  return len == 60u;
+    case BS_SEC_DMA_SRC:    return len == dma_src_wire_bytes();
+    case BS_SEC_IRQ_TIMING: return len == 64u;
+    default:                return 0;   /* unknown tag: refuse */
+    }
+}
+
 int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                            uint32_t bios_checksum, uint32_t entry_pc,
                            CPUState* cpu) {
@@ -814,6 +964,8 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         (1u<<BS_SEC_TIMER)|(1u<<BS_SEC_CLOCK)|(1u<<BS_SEC_GPU)|(1u<<BS_SEC_VRAM)|
         (1u<<BS_SEC_SPU)|(1u<<BS_SEC_SPURAM)|(1u<<BS_SEC_CDROM)|(1u<<BS_SEC_DMA)|
         (1u<<BS_SEC_SIO)|(1u<<BS_SEC_MDEC)|(1u<<BS_SEC_DIRTY)|
+        (1u<<BS_SEC_SCHED)|(1u<<BS_SEC_ICACHE)|(1u<<BS_SEC_IRQ_TIMING)|(1u<<BS_SEC_CPU_EXEC)|
+        (1u<<BS_SEC_BOOTFLOW)|
         (psx_mod_memory_snapshot_bytes() ? (1u<<BS_SEC_MODMEM) : 0u);
     uint32_t seen = 0;
     int ok = 1;
@@ -835,6 +987,67 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
 
     cur = file + BOOT_STATE_HEADER_WIRE_BYTES;
     end = file + file_len;
+
+    /* ---- Pass 1: validate every section's SHAPE before touching anything ---- */
+    {
+        const uint8_t* v = file + BOOT_STATE_HEADER_WIRE_BYTES;
+        uint32_t bad_tags[8];
+        uint32_t bad_lens[8];
+        uint32_t nbad = 0, nchecked = 0;
+        for (uint32_t i = 0; i < h.section_count; i++) {
+            PstR sh;
+            uint32_t tag = 0, pad = 0, apply_len = 0;
+            uint64_t len = 0;
+            const uint8_t* payload;
+            if ((size_t)(end - v) < 16u) { nbad = 0; nchecked = 0; break; }
+            pst_r_init(&sh, v, 16);
+            if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &pad) || !pst_r_u64(&sh, &len)) break;
+            v += 16;
+            if (len > 64u * 1024u * 1024u || (uint64_t)(end - v) < len) break;
+            payload = v;
+            v += (size_t)len;
+            if (h.version >= 4u && pad == BOOT_STATE_SEC_ZLIB) {
+                PstR lr;
+                uint32_t raw_len = 0;
+                uLong dest_len;
+                uint8_t* scratch;
+                if (len < 4u) { apply_len = 0; }
+                else {
+                    pst_r_init(&lr, payload, 4);
+                    if (!pst_r_u32(&lr, &raw_len)) apply_len = 0;
+                    else if (raw_len == 0 || raw_len > 64u * 1024u * 1024u) apply_len = 0;
+                    else {
+                    scratch = (uint8_t*)malloc(raw_len);
+                    if (!scratch) apply_len = 0;
+                    else {
+                        dest_len = (uLong)raw_len;
+                        if (uncompress(scratch, &dest_len, payload + 4, (uLong)(len - 4u)) != Z_OK ||
+                            dest_len != (uLong)raw_len) apply_len = 0;
+                        else apply_len = raw_len;
+                        free(scratch);
+                    }
+                    }
+                }
+            } else if (pad != 0u) {
+                apply_len = 0;
+            } else {
+                apply_len = len > 0xffffffffu ? 0u : (uint32_t)len;
+            }
+            ++nchecked;
+            if (!section_shape_ok(tag, apply_len)) {
+                if (nbad < 8) { bad_tags[nbad] = tag; bad_lens[nbad] = apply_len; }
+                ++nbad;
+            }
+        }
+        if (nbad) {
+            fprintf(stderr, "boot_state: reject — %u of %u sections failed shape "
+                            "validation (nothing applied):", nbad, nchecked);
+            for (uint32_t i = 0; i < nbad && i < 8; i++)
+                fprintf(stderr, " 0x%02X(len=%u)", bad_tags[i], bad_lens[i]);
+            fprintf(stderr, "\n");
+            return 0;
+        }
+    }
 
     for (uint32_t i = 0; ok && i < h.section_count; i++) {
         PstR sh;
@@ -894,7 +1107,13 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         }
 
         t_sec = boot_state_mono_ms();
-        if (!apply_section(tag, apply_ptr, apply_len, cpu, entry_pc)) ok = 0;
+        if (!apply_section(tag, apply_ptr, apply_len, cpu, entry_pc)) {
+            /* Name the section: a silent load failure is undiagnosable against
+             * an hour-long run. */
+            fprintf(stderr, "boot_state: reject — section 0x%02X failed to apply "
+                            "(len=%u)\n", tag, apply_len);
+            ok = 0;
+        }
         else if (tag < 32) seen |= (1u << tag);
         {
             double dt = boot_state_mono_ms() - t_sec;
@@ -906,11 +1125,56 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         free(inflated);
     }
 
-    if (!ok || (seen & required) != required)
+    if (!ok || (seen & required) != required) {
+        if (ok && (seen & required) != required)
+            fprintf(stderr, "boot_state: reject — required sections missing: "
+                            "seen=0x%08X required=0x%08X missing=0x%08X\n",
+                    seen, required, required & ~seen);
         return 0;
+    }
+
+    /* Amendment A: the three comparison-profile sections must be present
+     * EXACTLY when their subsystem is active. Missing -> refuse (the blob could
+     * not have been written by this profile). Present while inactive -> refuse
+     * (the blob came from a different profile; restoring it is a mismatch).
+     * Both directions fail loudly rather than restoring a half-configured
+     * machine. */
+    if (boot_state_raster_section_active() != ((seen >> BS_SEC_RASTER) & 1u) ||
+        source_gpu_runtime_active()       != ((seen >> BS_SEC_GPU_SERVICE) & 1u) ||
+        timers_source_active()            != ((seen >> BS_SEC_TIMER_SRC) & 1u) ||
+        dma_src_active()                  != ((seen >> BS_SEC_DMA_SRC) & 1u)) {
+        fprintf(stderr, "boot_state: reject — comparison-profile section "
+                        "presence does not match the active profile "
+                        "(raster=%u service=%u timers=%u dma_src=%u)\n",
+                (unsigned)((seen >> BS_SEC_RASTER) & 1u),
+                (unsigned)((seen >> BS_SEC_GPU_SERVICE) & 1u),
+                (unsigned)((seen >> BS_SEC_TIMER_SRC) & 1u),
+                (unsigned)((seen >> BS_SEC_DMA_SRC) & 1u));
+        return 0;
+    }
+
+    /* Amendment C: return_clock/return_command are assigned once per frame
+     * boundary on the normal path, so right after a restore they would be one
+     * frame stale. A bit-exact replay cannot afford a frame of stale reads.
+     * Re-derive both once, here, after every section has loaded. */
+    source_gpu_runtime_rederive_returns();
+
+    /* Reshaped #5: the VBlank phase was staged while BS_SEC_IRQ applied, so
+     * commit it now that BS_SEC_RASTER's presence is known. The guard inside
+     * interrupts_set_cycles_since_vblank refuses a comparison-profile restore
+     * that arrived without the raster section. */
+    interrupts_note_state_load((int)((seen >> BS_SEC_RASTER) & 1u));
+    if (s_pending_vblank_phase_valid) {
+        interrupts_set_cycles_since_vblank(s_pending_vblank_phase);
+        s_pending_vblank_phase_valid = 0;
+    }
 
     /* RAM was memcpy'd; force overlay revalidation before resume. */
     overlay_watch_invalidate_after_ram_restore();
+    fntrace_restore_game_started(s_pending_game_started);
+    /* Every device changed at once: the deadline caches keyed on this
+     * generation must not reuse a countdown computed before the load. */
+    { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }
 
     {
         const double total_ms = boot_state_mono_ms() - t0;

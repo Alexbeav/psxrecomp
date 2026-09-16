@@ -27,9 +27,24 @@ in the output directory; any missing evidence fails the cohort.
 
 ## Format and continuation
 
-Boot-state format **v9** requires a 580-byte CPU section, a 36-byte CPU_EXEC
+Boot-state format **v10** requires a 580-byte CPU section, a 36-byte CPU_EXEC
 section, a 16-byte SPU sample-clock extension, and MDEC snapshot version 2.
-The research branch currently rejects earlier boot states and player save slots.
+It rejects earlier boot states and player save slots.
+
+v10 is the merge of two lineages that both numbered their formats v6-v9 with
+different contents: the resume lineage (`pegasus-codex/biohazard-resume-20260913`)
+and upstream (per-word DMA2 linked-list progress, XA DATA_END, and the optional
+enhancement-memory `MODMEM` section at tag 0x11 with its layout cookie in the
+header's reserved word). Upstream keeps both. The resume lineage's scheduler
+continuation therefore moved from 0x11 to `SCHED` 0x18, and its game-start latch
+moved out of the header into the required 4-byte `BOOTFLOW` section, 0x19.
+Tags 0x12-0x17 keep their resume-lineage numbers.
+
+The merge also serializes state the resume lineage never had: the open poly-line
+in GPU_SERVICE (384 bytes), the Nymashock drive's sub-Q latch, the exact timed-lid
+deadline and pending lid IRQ in the CD section, and the SIO IRQ sequence counter
+that IRQ_TIMING's `last_sio_seq_seen` is compared against. A restore also bumps the
+device generation that keys the precise-slice deadline caches.
 The operator superseded the earlier compatibility hold on 2026-09-12:
 **development may break existing player slots; a v6/v7 reader is not required**.
 Rewind and netplay share this loader. TAS checkpoints default to same-binary

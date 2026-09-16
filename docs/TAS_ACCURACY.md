@@ -6,6 +6,8 @@ current checks, source mapping and exclusions. The results below were measured
 on the earlier campaign builds, whose base was `f23c5ba1`; they do not qualify
 this newly integrated runtime. Its overlay callback ABI is 24, preserving the
 upstream v23 callbacks before appending TAS instruction-boundary callbacks.
+Checkpoint capture, resume validation and format compatibility are documented
+in [TAS checkpoint diagnostics](TAS_CHECKPOINTS.md).
 
 The unchanged Spikestuff movie contains7,974 inputs. The integrated native
 build wins Arcade at8.80 seconds. Every original-input return clock and all512

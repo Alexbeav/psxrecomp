@@ -2896,9 +2896,12 @@ static int sio_snap_emit_fsm_pace(PstW *w) {
 /* Audit/diag metadata — must not drive netplay digests (byte_seq tracks the
  * host-local sio_trace_seq counter, which is not itself a guest register). */
 static int sio_snap_emit_fsm_meta(PstW *w) {
+    /* sio_irq_seq is compared against IRQ_TIMING's restored last_sio_seq_seen;
+     * restarting it at zero would read as fresh SIO progress and move the
+     * card-protocol VBlank deferral window. */
     return pst_w_u8(w, sio_irq_pending_source) && pst_w_u8(w, sio_irq_pending_slot) &&
            pst_w_u8(w, sio_irq_pending_delay) && pst_w_u8(w, sio_irq_pending_mc_state) &&
-           pst_w_u32(w, sio_irq_pending_byte_seq);
+           pst_w_u32(w, sio_irq_pending_byte_seq) && pst_w_u32(w, sio_irq_seq);
 }
 
 /* DualShock rumble map/motors — appended after meta so pre-rumble snapshots
@@ -2914,8 +2917,22 @@ static int sio_snap_emit_fsm(PstW *w) {
 }
 
 static int sio_snap_emit(PstW *w) {
-    return sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
-           sio_snap_emit_mc(w) && sio_snap_emit_fsm(w) && sio_snap_emit_rumble(w);
+    if (!(sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
+          sio_snap_emit_mc(w) && sio_snap_emit_fsm(w) && sio_snap_emit_rumble(w))) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack || sio_source_card) {
+        if (!pst_w_i32(w, sio_ack_pulse_remaining) ||
+            !pst_w_i32(w, sio_pending_ack_timed)) return 0;
+        for (int s = 0; s < PSX_MAX_PLAYERS; s++)
+            if (!pst_w_u16(w, pad_buttons[s])) return 0;
+        if (!pst_w_bytes(w, pad_stick, sizeof pad_stick)) return 0;
+        if (sio_source_pad_ack == 2 || sio_source_card) {
+            if (!pst_w_bytes(w, analog_mode_locked, sizeof analog_mode_locked) ||
+                !pst_w_bytes(w, pad_supports_config, sizeof pad_supports_config)) return 0;
+        }
+    }
+#endif
+    return 1;
 }
 
 /* Cumulative section end offsets in the snapshot wire:
@@ -2934,7 +2951,44 @@ void sio_snapshot_section_ends(uint32_t out[5]) {
     out[3] = (uint32_t)w.written;
     (void)sio_snap_emit_fsm_meta(&w);
     (void)sio_snap_emit_rumble(&w);
+    /* Source extension is part of the full wire, outside the old digest cuts. */
+    pst_w_init(&w, NULL, 0);
+    (void)sio_snap_emit(&w);
     out[4] = (uint32_t)w.written;
+}
+
+/* ---- E survey (SIO sizing), Part 3. SIZING ONLY: no serialization, no guard,
+ * no mutation. See sio.h for the contract. */
+int sio_source_fsm_live(int *pad_live, int *mc_live) {
+    int pad = 0, mc = 0;
+#if SIO_MODEL_CYCLE_PACED
+    int pad_busy = (sio_bus_owner == SIO_OWNER_PAD) || sio_shift_active ||
+                   sio_tx_buffered || sio_pending_ack || sio_ack_remaining ||
+                   sio_ack_pulse_remaining || sio_pending_ack_timed ||
+                   sio_tx_buffer_ack_irq_en;
+    pad = sio_source_pad_ack && pad_busy;
+    mc  = sio_source_card && ((sio_bus_owner == SIO_OWNER_CARD) ||
+                              sio_card_protocol_active());
+#endif
+    if (pad_live) *pad_live = pad;
+    if (mc_live)  *mc_live  = mc;
+    return pad || mc;
+}
+
+void sio_source_survey_sizes(uint32_t out[5]) {
+    uint32_t ends[5];
+    sio_snapshot_section_ends(ends);
+    out[0] = ends[1] - ends[0];   /* pads subsection of the snapshot wire */
+    out[1] = ends[2] - ends[1];   /* memcard subsection */
+    out[2] = ends[3] - ends[2];   /* pacing FSM subset (shift/ACK pipeline) */
+    out[3] = 0;
+#if SIO_MODEL_CYCLE_PACED
+    /* Digital source checkpoints now emit both previously missing scalars. */
+    if (!sio_source_pad_ack && !sio_source_card)
+        out[3] = (uint32_t)(sizeof sio_ack_pulse_remaining +
+                            sizeof sio_pending_ack_timed);
+#endif
+    out[4] = (uint32_t)sizeof mc_slots;  /* per-slot card FSM state (2 slots) */
 }
 
 static int sio_snap_parse(PstR *r) {
@@ -3011,7 +3065,7 @@ static int sio_snap_parse(PstR *r) {
     sio_ack_visible_reads = (int)i;
     if (!pst_r_u8(r, &sio_irq_pending_source) || !pst_r_u8(r, &sio_irq_pending_slot) ||
         !pst_r_u8(r, &saved_delay) || !pst_r_u8(r, &sio_irq_pending_mc_state) ||
-        !pst_r_u32(r, &sio_irq_pending_byte_seq))
+        !pst_r_u32(r, &sio_irq_pending_byte_seq) || !pst_r_u32(r, &sio_irq_seq))
         return 0;
     sio_irq_pending_delay = saved_delay;
     /* sio_trace_seq is host-local and not on the wire; reseat it from the
@@ -3035,13 +3089,30 @@ static int sio_snap_parse(PstR *r) {
         !pst_r_bytes(r, pad_rumble_small, sizeof(pad_rumble_small)) ||
         !pst_r_bytes(r, pad_rumble_large, sizeof(pad_rumble_large)))
         return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack || sio_source_card) {
+        if (!pst_r_i32(r, &i)) return 0;
+        sio_ack_pulse_remaining = i;
+        if (!pst_r_i32(r, &i)) return 0;
+        sio_pending_ack_timed = i;
+        for (int s = 0; s < PSX_MAX_PLAYERS; s++)
+            if (!pst_r_u16(r, &pad_buttons[s])) return 0;
+        if (!pst_r_bytes(r, pad_stick, sizeof pad_stick)) return 0;
+        if (sio_source_pad_ack == 2 || sio_source_card) {
+            if (!pst_r_bytes(r, analog_mode_locked, sizeof analog_mode_locked) ||
+                !pst_r_bytes(r, pad_supports_config, sizeof pad_supports_config)) return 0;
+        }
+    }
+#endif
     if (r->p != r->end) return 0;
     return 1;
 }
 
 uint32_t sio_snapshot_bytes(void) {
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack || sio_source_card) return 0; /* explicit cold-boot experiment only */
+    /* The source profiles below serialize single-pad transactions completely.
+     * The legacy eight-byte pad wire cannot represent a multitap transfer. */
+    if ((sio_source_pad_ack || sio_source_card) && sio_multitap_enabled) return 0;
 #endif
     PstW w;
     pst_w_init(&w, NULL, 0);
@@ -3057,10 +3128,39 @@ void sio_snapshot_write(uint8_t *p) {
     (void)sio_snap_emit(&w);
 }
 
+/* Pass-1 shape validator for boot_state: does `len` match the wire shape of the
+ * SIO section this build would write? Pure -- reads no machine state, mutates
+ * nothing -- so a malformed stream can be refused before anything is applied. */
+int sio_snapshot_shape_ok(uint32_t len) {
+    const uint32_t current = sio_snapshot_bytes();
+    const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
+                                 sizeof(pad_rumble_small) +
+                                 sizeof(pad_rumble_large));
+    if (!current) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack || sio_source_card) return len == current;
+#endif
+    return len == current || (len < current && len + rumble_bytes == current);
+}
+
 int sio_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     const uint32_t current = sio_snapshot_bytes();
-    if (!current) return 0;
+    if (!p || !current || !sio_snapshot_shape_ok(len)) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack || sio_source_card) {
+        PstR extra;
+        int32_t pulse, timed;
+        uint32_t config_bytes = (sio_source_pad_ack == 2 || sio_source_card) ?
+            2u * PSX_MAX_PLAYERS : 0u;
+        pst_r_init(&extra, p + len - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,
+                   8u + 6u * PSX_MAX_PLAYERS);
+        if (!pst_r_i32(&extra, &pulse) || !pst_r_i32(&extra, &timed) ||
+            pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;
+        for (uint32_t j = 0; j < config_bytes; j++)
+            if (p[len - config_bytes + j] > 1) return 0;
+    }
+#endif
     const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
                                   sizeof(pad_rumble_small) +
                                   sizeof(pad_rumble_large));

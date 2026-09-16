@@ -49,6 +49,40 @@ typedef struct SourceGPUCommandProjection {
     int error;
 } SourceGPUCommandProjection;
 
+#if defined(__cplusplus)
+#define PSX_GPUPP_STATIC_ASSERT(c, m) static_assert(c, m)
+#else
+#define PSX_GPUPP_STATIC_ASSERT(c, m) _Static_assert(c, m)
+#endif
+
+/* Layout guard (E step 2, condition on the #8 quiescence pass). Enumeration:
+ *   budget                      4        (offset 0)
+ *   queue[32]                 128        (4..132)
+ *   count, phase, command      12        (132..144)
+ *   last_update                 8        (144..152)
+ *   clip_x0/y0/x1/y1           16        (152..168)
+ *   offset_x, offset_y          8        (168..176)
+ *   draw_mode, texture_window, mask_bits, display_mode, dma_direction
+ *                              20        (176..196)
+ *   field_valid, skip_field     8        (196..204)
+ *   first_triangles, second_triangles
+ *                               8        (204..212)
+ *   pline, pline_command, pline_color, pline_vertex
+ *                              16        (212..228)
+ *   polygon_words[12]          48        (228..276)
+ *   transfer_words              4        (276..280)
+ *   dispatch                   56        (280..336)
+ *   error                       4        (336..340)
+ *                             ---
+ *   members sum to            340; struct alignment is 8 (uint64_t last_update),
+ *   so the tail pads 340 -> 344, which is what sizeof reports.
+ * If this fires, a member was added/removed/reordered: the #8 accounting and the
+ * BS_SEC_GPU_SERVICE serializer (source_gpu_service_wire_write/read) are stale.
+ * Resolve the discrepancy — do not "fix" the assert. */
+PSX_GPUPP_STATIC_ASSERT(sizeof(SourceGPUCommandProjection) == 344,
+    "SourceGPUCommandProjection layout changed; update the #8 accounting");
+#undef PSX_GPUPP_STATIC_ASSERT
+
 enum { SOURCE_GPU_COMMAND_UNSUPPORTED=1, SOURCE_GPU_COMMAND_OVERFLOW=2,
        SOURCE_GPU_COMMAND_REVERSE_TIME=3 };
 

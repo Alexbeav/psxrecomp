@@ -238,6 +238,19 @@ uint32_t sio_get_seq(void);
  * transaction by issuing 0x01 on the SIO bus mid-read. */
 int sio_card_protocol_active(void);
 
+/* ---- E survey (SIO sizing), Part 3 -----------------------------------------
+ * SIZING ONLY: pure reads used to decide whether the source pad-ack / memcard
+ * FSMs can ever be quiescence-guarded at a frame boundary, and what their
+ * serialization would cost. Neither function serializes, guards, or mutates
+ * anything. */
+/* 1 if the source pad-ack / memcard FSM is holding live handshake state at this
+ * boundary (1 = live). Out-params may be NULL. */
+int sio_source_fsm_live(int *pad_live, int *mc_live);
+/* Wire byte cost of each SIO snapshot subsection, measured on the codec:
+ * out[0]=pads  out[1]=memcard  out[2]=pacing FSM subset  out[3]=source-mode
+ * scalars the snapshot omits  out[4]=sizeof(mc_slots) (per-slot card FSM). */
+void sio_source_survey_sizes(uint32_t out[5]);
+
 /* Post-probe handoff ring: diagnostic device state only, no guest-RAM probes. */
 typedef struct {
     uint8_t  kind;   /* 1=probe_abort 2=b7_set 3=b7_clear 4=tx 5=card_ack */
