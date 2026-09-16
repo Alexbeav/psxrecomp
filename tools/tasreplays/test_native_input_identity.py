@@ -3,7 +3,7 @@ from pathlib import Path
 import hashlib
 import struct
 import tempfile
-from dualshock_route import write_route
+from dualshock_route import write_route,MAX_STEPS
 from run_native import route_identity,card_identity,playback_identity_matches
 
 def rejects(call):
@@ -38,7 +38,8 @@ with tempfile.TemporaryDirectory() as folder:
         bad=folder/(name+'.route');bad.write_bytes(data);rejects(lambda:route_identity(bad))
     # Axis-only transitions count against the complete-state RLE capacity.
     bad=folder/'capacity.route'
-    bad.write_bytes(struct.pack('<8sIIII',b'PSXRTI2\0',2,12,4097,0)+b''.join(struct.pack('<IH6B',i+1,0xffff,i%256,128,128,128,0,0) for i in range(4097)))
+    over=MAX_STEPS+1  # one past the shared encoder/runtime cap (was a private 4096)
+    bad.write_bytes(struct.pack('<8sIIII',b'PSXRTI2\0',2,12,over,0)+b''.join(struct.pack('<IH6B',i+1,0xffff,i%256,128,128,128,0,0) for i in range(over)))
     rejects(lambda:route_identity(bad))
     card=folder/'card.mcd';card.write_bytes(bytes(131072))
     assert card_identity(card)['sha256']==hashlib.sha256(bytes(131072)).hexdigest()
