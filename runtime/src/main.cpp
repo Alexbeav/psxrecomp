@@ -3593,6 +3593,36 @@ static void runtime_perf_section_end(uint64_t start, uint64_t *total) {
  *
  * Opt-in via PSX_FRAME_REPORT_MS (milliseconds between lines). When unset this
  * is one branch on a cached int per vblank. */
+/* Timed clean exit, available in every product (release included).
+ *
+ * PGO training runs the product-shaped instrumented binary, which has no debug
+ * server, so the CLI's "quit" request had nothing to talk to and fell back to a
+ * forced stop. On Windows that is TerminateProcess: atexit handlers never run,
+ * the LLVM profile runtime never writes, and both .profraw files came out empty
+ * (0 bytes; the merge then produced a 560-byte profile and the "optimised" build
+ * used nothing). PSX_EXIT_AFTER_MS asks for the same exit(0) the debug server's
+ * quit command performs, from the emulation thread's vblank path. Unset costs
+ * one branch on a cached value per vblank. */
+static void exit_after_tick(void) {
+    static int64_t exit_after_ms = -1;
+    static uint64_t first_ticks = 0;
+    if (exit_after_ms < 0) {
+        const char *e = std::getenv("PSX_EXIT_AFTER_MS");
+        exit_after_ms = (e && e[0]) ? std::atoll(e) : 0;
+        if (exit_after_ms < 0) exit_after_ms = 0;
+        first_ticks = SDL_GetTicks();
+        if (exit_after_ms)
+            std::fprintf(stdout, "psxrecomp: will exit after %lld ms (PSX_EXIT_AFTER_MS)\n",
+                         (long long)exit_after_ms);
+    }
+    if (!exit_after_ms) return;
+    if (SDL_GetTicks() - first_ticks < (uint64_t)exit_after_ms) return;
+    std::fprintf(stdout, "psxrecomp: PSX_EXIT_AFTER_MS reached, exiting\n");
+    std::fflush(stdout);
+    psx_crash_trace_set_exit_origin("exit_after_ms");
+    std::exit(0);
+}
+
 static void frame_report_tick(uint64_t frames) {
     static int interval_ms = -1;
     static uint64_t first_ticks = 0, last_ticks = 0, last_frames = 0;
@@ -7030,6 +7060,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         /* Outside every debug guard on purpose: production must be measurable. */
         extern uint64_t s_frame_count;
         frame_report_tick(s_frame_count);
+        exit_after_tick();
     }
     runtime_perf_frame_begin();
     RuntimePerfFrameScope runtime_perf_frame_scope;

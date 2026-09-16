@@ -1579,6 +1579,10 @@ def run_pgo_train(
     env = os.environ.copy()
     env.setdefault("PSX_BIOS_HLE", "0")
     env["LLVM_PROFILE_FILE"] = str(pgo_dir / "bpe-%p.profraw")
+    # The runtime exits cleanly on its own after the training window, so the profile
+    # runtime's atexit writer runs. The instrumented binary is product-shaped (no debug
+    # server), and a forced stop on Windows is TerminateProcess, which writes nothing.
+    env["PSX_EXIT_AFTER_MS"] = str(int(train_secs) * 1000)
     # Discard SDL output; SPU/CD still advance (profiles stay valid).
     if mute_host_audio:
         env["PSX_HOST_MUTE"] = "1"
@@ -1639,10 +1643,17 @@ def run_pgo_train(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(train_secs)
+        # Clean exit first: PSX_EXIT_AFTER_MS ends the run from inside. Allow boot time
+        # plus a margin before falling back to the debug quit and then a forced stop
+        # (either of which may lose this run's profile; the size check below catches it).
+        try:
+            proc.wait(timeout=train_secs + 90)
+        except subprocess.TimeoutExpired:
+            pass
         if proc.poll() is None:
             if not _debug_quit(proc.pid, PGO_DEBUG_PORT):
-                progress.log("PGO train debug quit unavailable; using forced stop.")
+                progress.log("PGO train run did not exit on its own and debug quit is unavailable; "
+                             "using forced stop (this run's profile may be lost).")
                 _soft_stop(proc.pid)
         try:
             proc.wait(timeout=5)
@@ -1654,8 +1665,16 @@ def run_pgo_train(
                 proc.kill()
 
     n_gcda = len(list(build_dir.rglob("*.gcda")))
-    n_raw = len(list(pgo_dir.glob("*.profraw")))
-    progress.log(f"PGO profiles: {n_gcda} .gcda, {n_raw} .profraw")
+    all_raw = list(pgo_dir.glob("*.profraw"))
+    empty_raw = [p for p in all_raw if p.stat().st_size == 0]
+    for p in empty_raw:
+        p.unlink()   # a zero-byte raw profile merges "successfully" into nothing
+    n_raw = len(all_raw) - len(empty_raw)
+    progress.log(f"PGO profiles: {n_gcda} .gcda, {n_raw} .profraw"
+                 + (f" ({len(empty_raw)} empty, discarded)" if empty_raw else ""))
+    if all_raw and n_raw == 0:
+        raise RuntimeError("PGO training wrote only empty .profraw files (the training runs did not "
+                           "exit cleanly), so there is no profile to optimise with")
     if n_raw >= 1:
         merge = shutil.which("llvm-profdata")
         if not merge:
