@@ -9,7 +9,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from launch_identity import resolve_binary, receipt_fields, add_launch_arguments, check_launch_arguments, run_native_arguments
+from launch_identity import (resolve_binary, receipt_fields, add_launch_arguments, check_launch_arguments, run_native_arguments,
+                             checkpoint_resume, checkpoint_returns, checkpoint_receipt)
 from process_budget import wait_budgeted
 from stream_compare import write_stop_request
 
@@ -73,6 +74,36 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
     assert plain.stop_on_divergence and run_native_arguments(plain, binary) == ['--expected-exe-sha256', other_sha]
     rejects(lambda: check_launch_arguments(parser.parse_args(['--returns', '5', '--ladder', 'full'])), 'mutually exclusive')
     rejects(lambda: check_launch_arguments(parser.parse_args(['--diagnostic-binary', 'xyz'])))
+    # Checkpoint capture: explicit returns plus every multiple, bounded by the run's endpoint.
+    capture = parser.parse_args(['--save-state-at', '2500', '10', '--save-state-every', '1000'])
+    check_launch_arguments(capture)
+    assert checkpoint_returns(capture, 3500) == [10, 1000, 2000, 2500, 3000]
+    assert run_native_arguments(capture, binary, 3500) == ['--expected-exe-sha256', other_sha, '--save-state-at',
+                                                          '10', '1000', '2000', '2500', '3000']
+    assert checkpoint_receipt(capture, 3500)['save_state_at'] == [10, 1000, 2000, 2500, 3000]
+    rejects(lambda: run_native_arguments(capture, binary), 'does not bound')
+    rejects(lambda: run_native_arguments(capture, binary, 2000), '[2500]')
+    for bad in (['--save-state-every', '0'], ['--save-state-at', '0'], ['--resume-compatible-build'],
+                ['--save-state-every', '100', '--ladder', 'full'], ['--save-state-at', '5', '--ladder', 'full']):
+        rejects(lambda: check_launch_arguments(parser.parse_args(bad)))
+    # Resume: the runtime's manifest names the saved return and consumed inputs; later captures only.
+    state = root/'tas-state-001500.pst'; state.write_bytes(b'state')
+    manifest = Path(str(state)+'.json')
+    manifest.write_text(json.dumps({'schema': 'psx-tas-stateio-v2', 'frame': 1500, 'input_consumed': 1501}))
+    resume = parser.parse_args(['--resume-from', str(state), '--resume-compatible-build', '--save-state-every', '1000'])
+    check_launch_arguments(resume)
+    assert checkpoint_resume(resume) == (1500, 1501) and checkpoint_returns(resume, 3500) == [2000, 3000]
+    assert run_native_arguments(resume, binary, 3500) == ['--expected-exe-sha256', other_sha, '--save-state-at', '2000', '3000',
+                                                         '--resume-from', str(state.resolve()), '--resume-compatible-build']
+    receipt = checkpoint_receipt(resume, 3500)
+    assert (receipt['resumed_return'], receipt['resumed_inputs'], receipt['resume_compatible_build']) == (1500, 1501, True)
+    rejects(lambda: checkpoint_returns(parser.parse_args(['--resume-from', str(state), '--save-state-at', '1500']), 3500), '[1500]')
+    rejects(lambda: check_launch_arguments(parser.parse_args(['--resume-from', str(state), '--ladder', 'full'])))
+    assert checkpoint_resume(plain) == (0, 0) and checkpoint_receipt(plain, 10)['resumed_from'] is None
+    for broken in ({'schema': 'other', 'frame': 1500, 'input_consumed': 1501}, {'schema': 'psx-tas-stateio-v2', 'frame': '1500', 'input_consumed': 1501},
+                   {'schema': 'psx-tas-stateio-v2', 'frame': 0, 'input_consumed': 1}):
+        manifest.write_text(json.dumps(broken))
+        rejects(lambda: check_launch_arguments(parser.parse_args(['--resume-from', str(state)])), 'not a TAS checkpoint manifest')
     # wait_budgeted: a string reason is recorded verbatim; bare True keeps operator_stop; falsy never stops.
     flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
     sleeper = lambda: subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(20)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)

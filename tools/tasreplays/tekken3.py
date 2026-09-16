@@ -17,7 +17,7 @@ import subprocess
 import sys
 import urllib.request
 
-from launch_identity import resolve_binary, receipt_fields, add_launch_arguments, check_launch_arguments, run_native_arguments
+from launch_identity import resolve_binary, receipt_fields, add_launch_arguments, check_launch_arguments, run_native_arguments, checkpoint_resume, checkpoint_receipt
 from replay_prefix import native_span, write_prefix_route, parse_ladder, run_ladder
 from run_native import route_identity
 from stream_compare import Watcher, line_hash_reference
@@ -306,13 +306,16 @@ renderer = "software"
     print('Build ready. Run: python tools/tasreplays/tekken3.py run', flush=True)
 
 
-def compare_replay(run: Path, through: int | None = None, words_sha: str = WORDS_SHA) -> dict:
-    """Full verdict when through is None; otherwise a diagnostic prefix through N returns."""
+def compare_replay(run: Path, through: int | None = None, words_sha: str = WORDS_SHA, start: int = 0) -> dict:
+    """Full verdict when through is None; otherwise a diagnostic prefix through N returns.
+    A run resumed from a checkpoint at return `start` is compared from start+1 and is diagnostic."""
     expected = dict(line.split() for line in gzip.decompress((HERE / 'tekken3-reference.tsv.gz').read_bytes()).decode().splitlines())
     if through is not None and (type(through) is not int or not 1 <= through < 7974):
         raise ValueError('A prefix must end inside the 7,974 original inputs')
     wanted = 8399 if through is None else through
-    count = 0
+    if type(start) is not int or not 0 <= start < wanted:
+        raise ValueError('the checkpoint is not before the compared endpoint')
+    count = start
     with (run / 'ram-pages.tsv').open() as stream:
         for line in stream:
             values = line.split()
@@ -327,16 +330,17 @@ def compare_replay(run: Path, through: int | None = None, words_sha: str = WORDS
             count += 1
     if count != wanted:
         raise ValueError(f'Incomplete replay: {count} of {wanted} return checkpoints')
+    count -= start
     complete = json.loads((run / 'complete.json').read_text())
     if through is not None:
         if (complete['frame'], complete['input_frames'], complete['neutral_tail_ticks'], complete['applied_words_sha256']) != (through + 1, through + 1, 0, words_sha):
             raise ValueError('Prefix controller input or ending boundary did not match')
-        return {'status': 'prefix_pass', 'diagnostic_prefix': True, 'original_inputs': 7974, 'compared_returns': count,
+        return {'status': 'diagnostic' if start else 'prefix_pass', 'diagnostic_prefix': True, 'resumed_return': start, 'original_inputs': 7974, 'compared_returns': count,
                 'end_frame': through + 1, 'reference': 'integrated202 native victory line hashes, bounded to the diagnostic prefix',
                 'limitation': 'Diagnostic prefix of unchanged original inputs; no victory or full-input claim.'}
-    if (complete['frame'], complete['input_frames'], complete['neutral_tail_ticks'], complete['applied_words_sha256']) != (8400, 7974, 426, WORDS_SHA):
+    if (complete['frame'], complete['input_frames'], complete['neutral_tail_ticks'], complete['applied_words_sha256']) != (8400, 7974, 426, words_sha):
         raise ValueError('Original controller input or ending boundary did not match')
-    return {'status': 'pass', 'original_inputs': 7974, 'compared_returns': count,
+    return {'status': 'diagnostic' if start else 'pass', 'original_inputs': 7974, 'compared_returns': count, 'resumed_return': start,
             'reference': 'integrated202 native victory; all7974 original-input returns also matched the independent Octoshock reference',
             'expected_victory_time': '8.80', 'end_frame': 8400,
             'limitation': 'Replay ends at the observed victory. Later CDDA Play seek remains unqualified.'}
@@ -361,6 +365,7 @@ def replay(args, returns=None, output=None) -> dict:
     if run_dir.exists():
         raise ValueError(f'Choose a new run directory: {run_dir}')
     wanted = 8399 if returns is None else returns
+    start, consumed = checkpoint_resume(args)
     records, tail = native_span(7974, 8399, wanted)
     prefix = wanted < 8399
     route = Path(info['route'])
@@ -369,16 +374,19 @@ def replay(args, returns=None, output=None) -> dict:
         run_dir.parent.mkdir(parents=True, exist_ok=True)
         route = write_prefix_route(route, records, run_dir.parent / (run_dir.name + '-input.psxrti'))
         words_sha = route_identity(route)['words_sha256']
+    if start:
+        # The runtime hashes only the inputs it delivers after the checkpoint.
+        words_sha = route_identity(route, consumed)['words_sha256']
     argv = [sys.executable, HERE / 'run_native.py', run_dir,
             '--exe', binary['path'], '--game', info['game'], '--disc', info['disc'],
             '--bios', info['bios'], '--route', route, '--cd-source-clock-tape', info['tape'],
             '--storage-budget-mib','1536','--neutral-tail', str(tail), '--timeout', str(args.timeout), '--checkpoint-every', '300',
-            '--renderer', 'software', '--speed', args.speed, *run_native_arguments(args, binary), *PROFILE]
+            '--renderer', 'software', '--speed', args.speed, *run_native_arguments(args, binary, wanted), *PROFILE]
     if not args.headless:
         argv.append('--show')
     # Streaming evidence only: it may stop the process early, never decide a pass.
     watcher = Watcher(run_dir, line_hash_reference(HERE / 'tekken3-reference.tsv.gz'), wanted, kind='line_hash',
-                      stop_on_divergence=args.stop_on_divergence)
+                      stop_on_divergence=args.stop_on_divergence, first_frame=start + 1)
     watcher.start()
     launcher_error = None
     # The runtime writes settings beside its executable; the runner creates an
@@ -392,10 +400,10 @@ def replay(args, returns=None, output=None) -> dict:
     if not run_dir.is_dir():
         raise RuntimeError(launcher_error or 'native launcher rejected before creating its evidence directory')
     identity = {**receipt_fields(binary), 'diagnostic_prefix': prefix, 'observed_returns': wanted,
-                'launcher_error': launcher_error, 'streaming': streaming,
+                'launcher_error': launcher_error, 'streaming': streaming, 'checkpoints': checkpoint_receipt(args, wanted),
                 'first_divergence': streaming['first_divergence']}
     try:
-        result = compare_replay(run_dir, wanted if prefix else None, words_sha)
+        result = compare_replay(run_dir, wanted if prefix else None, words_sha, start)
         result['mechanical_match'] = True
         if not binary['binary_matches_setup']:
             result['status'] = 'diagnostic'

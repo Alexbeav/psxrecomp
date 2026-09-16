@@ -13,7 +13,7 @@ from observation_evidence import terminal_consistency
 from run_native import route_identity
 from tekken3 import command,require_hash,write_json
 from replay_prefix import native_span,write_prefix_route,parse_ladder,run_ladder
-from launch_identity import resolve_binary,receipt_fields,add_launch_arguments,check_launch_arguments,run_native_arguments
+from launch_identity import resolve_binary,receipt_fields,add_launch_arguments,check_launch_arguments,run_native_arguments,checkpoint_resume,checkpoint_receipt
 from stream_compare import Watcher,page_reference
 
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parent.parent
@@ -116,11 +116,11 @@ def boot_program(track):
 
 # native_span lives in replay_prefix and is re-exported here for existing importers.
 
-def compare_terminal_observations(run,reference,endpoint):
+def compare_terminal_observations(run,reference,endpoint,start=0):
     """Keep independently observed RAM and persisted-card failures distinct."""
     errors=[]
     try:
-        actual=terminal_consistency(run/'ram-pages.tsv',run/f'ram-frame-{endpoint:06d}.bin',endpoint)
+        actual=terminal_consistency(run/'ram-pages.tsv',run/f'ram-frame-{endpoint:06d}.bin',endpoint,first_frame=start+1)
         ram_match=actual==Path(reference['terminal_ram']).read_bytes()
     except (ValueError,OSError) as error:
         ram_match=False;errors.append('RAM: '+str(error))
@@ -260,6 +260,9 @@ def replay(args,returns=None,output=None):
     if output.exists():raise ValueError('fresh output required')
     output.parent.mkdir(parents=True,exist_ok=True)
     wanted=endpoint if returns is None else returns
+    # A resumed run compares only the returns after its checkpoint and never qualifies.
+    start=checkpoint_resume(args)[0]
+    if start>=wanted:raise ValueError('the checkpoint is not before the compared endpoint')
     records,tail=native_span(source.FRAMES,endpoint,wanted)
     route=Path(info['route']);identity=route_identity(route)
     if identity.get('format')!='PSXRTI2' or identity['frames']!=source.FRAMES or identity['original_controller_sha256']!=CONTROLLER_SHA:
@@ -270,9 +273,9 @@ def replay(args,returns=None,output=None):
           '--route',str(route),'--disc',info['disc'],'--bios',info['bios'],'--card1',info['card1'],
           '--cd-source-clock-tape',info['tape'],'--neutral-tail',str(tail),'--timeout',str(args.timeout),
           '--checkpoint-every','1200','--renderer','software','--storage-budget-mib','3072',
-          '--ram-snapshot-frame',str(wanted),*run_native_arguments(args,binary),*PROFILE]
+          '--ram-snapshot-frame',str(wanted),*run_native_arguments(args,binary,wanted),*PROFILE]
     # Streaming evidence only: it may stop the process early, never decide a pass.
-    watcher=Watcher(output,page_reference(Path(reference['ram_pages']),wanted),wanted,stop_on_divergence=args.stop_on_divergence)
+    watcher=Watcher(output,page_reference(Path(reference['ram_pages']),wanted,start),wanted,stop_on_divergence=args.stop_on_divergence,first_frame=start+1)
     watcher.start()
     try:result=subprocess.run(argv)
     finally:streaming=watcher.finish()
@@ -285,25 +288,25 @@ def replay(args,returns=None,output=None):
         from itertools import islice,zip_longest
         first=None;counts=[0,0]
         try:
-            for left,right in zip_longest(islice(read_pages(Path(reference['ram_pages'])),wanted),read_pages(output/'ram-pages.tsv')):
+            for left,right in zip_longest(islice(read_pages(Path(reference['ram_pages'])),start,wanted),read_pages(output/'ram-pages.tsv',first_frame=start+1)):
                 counts[0]+=left is not None;counts[1]+=right is not None
                 if first is None and left!=right:
                     first={'frame':(left or right)[0],'source_cycle':left[1] if left else None,'native_cycle':right[1] if right else None,
                            'changed_pages':[f'{i*4096:06X}' for i in range(512) if left and right and left[2][i]!=right[2][i]]}
-            comparison={'match':first is None and counts==[wanted,wanted],'returns':counts,'first_divergence':first}
+            comparison={'match':first is None and counts==[wanted-start,wanted-start],'returns':counts,'first_divergence':first}
         except (ValueError,OSError) as error:
             comparison={'match':False,'returns':counts,'first_divergence':first,'observation_error':str(error)}
     terminal_match=None;terminal_card_match=None;terminal_error=None
     if wanted==endpoint and result.returncode==0:
-        terminal_match,terminal_card_match,terminal_error=compare_terminal_observations(output,reference,wanted)
+        terminal_match,terminal_card_match,terminal_error=compare_terminal_observations(output,reference,wanted,start)
     mechanical=bool(result.returncode==0 and comparison and comparison['match'] and (wanted<endpoint or (terminal_match and terminal_card_match)))
-    status=('fail' if not mechanical else 'diagnostic' if not binary['binary_matches_setup'] else 'prefix_pass' if wanted<endpoint else 'pass')
+    status=('fail' if not mechanical else 'diagnostic' if not binary['binary_matches_setup'] or start else 'prefix_pass' if wanted<endpoint else 'pass')
     receipt={'candidate_sha256':binary['binary_sha256'],**receipt_fields(binary),'source_reference':source.bind(Path(info['reference'])),
              'diagnostic_prefix':wanted<endpoint,'original_input_prefix_unchanged':True,'full_original_input_and_tail':wanted==endpoint,
              'observed_returns':wanted,'native_input_exit':result.returncode,'comparison':comparison,'terminal_ram_match':terminal_match,
              'terminal_card1_match':terminal_card_match,'terminal_observation_error':terminal_error,
              'mechanical_match':mechanical,'status':status,'first_divergence':comparison['first_divergence'] if comparison else None,
-             'streaming':streaming,
+             'streaming':streaming,'checkpoints':checkpoint_receipt(args,wanted),
              'qualification':'mechanical comparison only; ending/semantic review and repeated gameplay remain required'}
     write_json(output/'source-comparison.json',receipt)
     print(json.dumps(receipt))

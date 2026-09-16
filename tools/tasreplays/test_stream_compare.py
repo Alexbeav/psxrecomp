@@ -18,9 +18,9 @@ def row(frame, cycle_bump=0, page=None):
     return '\t'.join([str(frame), str(frame*564480+cycle_bump)] + pages)
 
 
-def capture_text(frames, cycle_bump_at=None, page_at=None, magic=MAGIC):
+def capture_text(frames, cycle_bump_at=None, page_at=None, magic=MAGIC, first=1):
     lines = [magic, HEADER] + [row(f, 1 if cycle_bump_at == f else 0, page_at[1] if page_at and page_at[0] == f else None)
-                               for f in range(1, frames+1)]
+                               for f in range(first, frames+1)]
     return '\n'.join(lines) + '\n'
 
 
@@ -39,12 +39,13 @@ def simulate(run, text, chunk=4096, delay=0.02, create_delay=0.0, truncate_tail=
     return thread
 
 
-def watch(root, reference_text, native_text, endpoint, kind='pages', stop=False, **simulate_args):
+def watch(root, reference_text, native_text, endpoint, kind='pages', stop=False, start=0, **simulate_args):
     run = root/f'run-{time.monotonic_ns()}'; run.mkdir()
     reference = root/f'reference-{time.monotonic_ns()}.tsv'; reference.write_text(reference_text)
-    if kind == 'pages': table = page_reference(reference, endpoint)
+    if kind == 'pages': table = page_reference(reference, endpoint, start)
     else: table = {frame: line_hash(values) for frame, _, _, values in parse_rows(reference_text.splitlines())}
-    watcher = Watcher(run, table, endpoint, kind=kind, stop_on_divergence=stop, poll=0.02, progress_every=3)
+    watcher = Watcher(run, table, endpoint, kind=kind, stop_on_divergence=stop, poll=0.02, progress_every=3,
+                      first_frame=start+1)
     watcher.start()
     thread = simulate(run, native_text, **simulate_args)
     thread.join(30)
@@ -111,11 +112,27 @@ with tempfile.TemporaryDirectory() as directory:
     target = write_stop_request(run, {'reason': 'divergence', 'frame': 7})
     assert target.name == 'stop-request.json' and json.loads(target.read_text())['frame'] == 7
     assert not target.with_suffix('.json.tmp').exists()
+    # A run resumed from a checkpoint at return 2 captures 3..5: compared against source 3..5 only.
+    resumed = capture_text(5, first=3)
+    run, reference, result = watch(root, same, resumed, 5, start=2)
+    assert result['compared_returns'] == 3 and result['first_divergence'] is None and result['complete_through_endpoint']
+    assert result['first_frame'] == 3 and compare_returns(reference, run/'ram-pages.tsv', 5, start=2)['match']
+    run, reference, result = watch(root, same, capture_text(5, page_at=(4, 7), first=3), 5, start=2)
+    assert result['first_divergence']['frame'] == 4 and result['first_divergence']['changed_pages'] == ['007000']
+    verdict = compare_returns(reference, run/'ram-pages.tsv', 5, start=2)
+    assert not verdict['match'] and verdict['first_divergence']['frame'] == 4 and verdict['captured_returns'] == [3, 3]
+    # A capture that does not begin right after the checkpoint is an observation error, never a match.
+    run, reference, result = watch(root, same, same, 5, start=2)
+    assert result['observation_error'] and result['compared_returns'] == 0
+    try: compare_returns(reference, run/'ram-pages.tsv', 5, start=2); raise AssertionError('misaligned resume admitted')
+    except ValueError: pass
     # Streamed rows equal read_pages rows for the same file.
     assert [r[:3] for r in parse_rows(same.splitlines())] == list(read_pages(reference))
     for bad in [Watcher, ]:
         try: bad(run, {}, 0, kind='line_hash'); raise AssertionError('zero endpoint admitted')
         except ValueError: pass
         try: bad(run, {}, 1, kind='other'); raise AssertionError('unknown kind admitted')
+        except ValueError: pass
+        try: bad(run, {}, 5, first_frame=6); raise AssertionError('resume past the endpoint admitted')
         except ValueError: pass
 print('Streaming comparison: tailing, page/clock/line-hash divergence, stop request, bounded reference and partial lines pass')

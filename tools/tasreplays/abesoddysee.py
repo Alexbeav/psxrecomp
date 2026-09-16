@@ -29,7 +29,7 @@ import tekken3
 from bk2_to_psxrti import convert
 from observation_evidence import compare_returns, terminal_consistency
 from replay_prefix import native_span, write_prefix_route, compare_prefix_returns, parse_ladder, run_ladder
-from launch_identity import resolve_binary, receipt_fields, add_launch_arguments, check_launch_arguments, run_native_arguments
+from launch_identity import resolve_binary, receipt_fields, add_launch_arguments, check_launch_arguments, run_native_arguments, checkpoint_resume, checkpoint_receipt
 from run_native import route_identity
 from stream_compare import Watcher, page_reference
 
@@ -305,6 +305,10 @@ def replay(args, returns=None, output=None):
             raise ValueError('candidate was built against a different source reference')
         observation_end = reference['observed_returns']
     wanted = observation_end if returns is None else returns
+    # A resumed run compares only the returns after its checkpoint and never qualifies.
+    start, consumed = checkpoint_resume(args)
+    if start >= wanted:
+        raise ValueError('the checkpoint is not before the compared endpoint')
     records, tail = native_span(FRAMES, observation_end, wanted)
     prefix = wanted < observation_end
     route = Path(info['route'])
@@ -313,11 +317,14 @@ def replay(args, returns=None, output=None):
         output.parent.mkdir(parents=True, exist_ok=True)
         route = write_prefix_route(route, records, output.with_name(output.name + '-input.psxrti'))
         words_sha = route_identity(route)['words_sha256']
+    if start:
+        # The runtime hashes only the inputs it delivers after the checkpoint.
+        words_sha = route_identity(route, consumed)['words_sha256']
     argv = [sys.executable, HERE / 'run_native.py', output, '--exe', binary['path'],
             '--game', info['game'], '--disc', info['disc'], '--bios', info['bios'], '--route', route,
             '--cd-source-clock-tape', info['tape'], '--neutral-tail', str(tail), '--timeout', str(args.timeout),
             '--storage-budget-mib', '1536', '--cd-cdda-model', 'octoshock-2.3', '--mdec-source-model', 'octoshock-2.3',
-            '--checkpoint-every', '1200', '--renderer', 'software', *run_native_arguments(args, binary), *tekken3.PROFILE]
+            '--checkpoint-every', '1200', '--renderer', 'software', *run_native_arguments(args, binary, wanted), *tekken3.PROFILE]
     if args.show:
         argv.append('--show')
     if reference:
@@ -329,8 +336,8 @@ def replay(args, returns=None, output=None):
     # Streaming evidence only: it may stop the process early, never decide a pass.
     watcher = None
     if reference:
-        watcher = Watcher(output, page_reference(Path(reference['ram_pages']), wanted), wanted,
-                          stop_on_divergence=args.stop_on_divergence)
+        watcher = Watcher(output, page_reference(Path(reference['ram_pages']), wanted, start), wanted,
+                          stop_on_divergence=args.stop_on_divergence, first_frame=start + 1)
         watcher.start()
     try:
         with log.open('x') as stream:
@@ -341,28 +348,29 @@ def replay(args, returns=None, output=None):
               'end_frame': wanted + 1, 'source_observation_end': observation_end, 'observed_returns': wanted,
               'diagnostic_prefix': prefix, 'full_original_input_and_tail': not prefix,
               'native_runner_exit': process.returncode, 'first_divergence': None, 'mechanical_match': False,
-              **receipt_fields(binary), 'streaming': streaming,
+              **receipt_fields(binary), 'streaming': streaming, 'checkpoints': checkpoint_receipt(args, wanted),
               'scope': ('diagnostic prefix of unchanged original inputs; no ending or terminal RAM claim' if prefix else
                         'unchanged original inputs and declared neutral ending; full RAM/clock source compatibility')}
     if reference:
         try:
             complete = None
             if prefix:
-                comparison = compare_prefix_returns(Path(reference['ram_pages']), output / 'ram-pages.tsv', wanted)
+                comparison = compare_prefix_returns(Path(reference['ram_pages']), output / 'ram-pages.tsv', wanted, start)
                 report.update({k: v for k, v in comparison.items() if k != 'match'})
                 complete = json.loads((output / 'complete.json').read_text())
                 report['input_identity_matches'] = (complete['input_frames'] == records and complete['applied_words_sha256'] == words_sha
                                                     and complete['frame'] == wanted + 1 and complete['neutral_tail_ticks'] == 0)
                 okay = process.returncode == 0 and report['input_identity_matches'] and comparison['match']
             else:
-                comparison = compare_returns(Path(reference['ram_pages']), output / 'ram-pages.tsv', observation_end)
+                comparison = compare_returns(Path(reference['ram_pages']), output / 'ram-pages.tsv', observation_end, start)
                 report.update({k: v for k, v in comparison.items() if k != 'match'})
                 complete = json.loads((output / 'complete.json').read_text())
-                report['input_identity_matches'] = (complete['input_frames'] == FRAMES and complete['applied_words_sha256'] == WORDS_SHA
+                report['input_identity_matches'] = (complete['input_frames'] == FRAMES and complete['applied_words_sha256'] == words_sha
                                                     and complete['frame'] == observation_end + 1
                                                     and complete['neutral_tail_ticks'] == observation_end - FRAMES + 1)
                 raw = terminal_consistency(Path(reference['ram_pages']), Path(reference['terminal_ram']), observation_end)
-                actual = terminal_consistency(output / 'ram-pages.tsv', output / f'ram-frame-{observation_end:06d}.bin', observation_end)
+                actual = terminal_consistency(output / 'ram-pages.tsv', output / f'ram-frame-{observation_end:06d}.bin', observation_end,
+                                              first_frame=start + 1)
                 report['terminal_ram_matches'] = actual == raw
                 okay = (process.returncode == 0 and report['input_identity_matches']
                         and report['terminal_ram_matches'] and comparison['match'])
@@ -374,7 +382,7 @@ def replay(args, returns=None, output=None):
         report['status'] = 'fail'
     if report['status'] == 'pass':
         # A non-setup binary or a prefix never claims the qualifying full pass.
-        if not binary['binary_matches_setup']:
+        if not binary['binary_matches_setup'] or start:
             report['status'] = 'diagnostic'
         elif prefix:
             report['status'] = 'prefix_pass'

@@ -62,11 +62,11 @@ with tempfile.TemporaryDirectory() as directory:
         assert not (root/f'{name}-prefix.psxrti').exists()
     # Bounded prefix comparison mirrors compare_returns' result shape and criterion.
     zero = page_hash(bytes(PAGE_BYTES))
-    def capture(name, frames, cycle_change=None, page_change=None):
+    def capture(name, frames, cycle_change=None, page_change=None, first=1):
         path = root/name
         with path.open('w') as stream:
             stream.write(MAGIC+'\nframe\tcycle'+''.join(f'\t{i*PAGE_BYTES:06X}' for i in range(PAGE_COUNT))+'\n')
-            for frame in range(1, frames+1):
+            for frame in range(first, frames+1):
                 pages = [zero]*PAGE_COUNT
                 if page_change and frame == page_change[0]: pages[page_change[1]] = '0000000000000000'
                 stream.write(f'{frame}\t{frame*564480+(1 if cycle_change == frame else 0)}\t'+'\t'.join(pages)+'\n')
@@ -82,6 +82,12 @@ with tempfile.TemporaryDirectory() as directory:
     assert not result['match'] and result['first_divergence'] == {'kind': 'missing_return', 'frame': 4, 'missing_side': 'source'}
     result = compare_prefix_returns(source, capture('short.tsv', 2), 3)
     assert not result['match'] and result['first_divergence']['missing_side'] == 'native' and result['captured_returns'] == [3, 2]
+    # Resumed at return 1: the capture holds 2..3 and is compared against source 2..3 only.
+    result = compare_prefix_returns(source, capture('resumed.tsv', 3, first=2), 3, start=1)
+    assert result == {'match': True, 'compared_returns': 2, 'captured_returns': [2, 2], 'first_divergence': None}
+    result = compare_prefix_returns(source, capture('resumed-page.tsv', 3, page_change=(3, 1), first=2), 3, start=1)
+    assert not result['match'] and result['first_divergence']['frame'] == 3
+    rejects(lambda: compare_prefix_returns(source, capture('resumed-misaligned.tsv', 3), 3, start=1))
     # Ladder parsing: strictly increasing, bounded by the endpoint, optional trailing full.
     assert parse_ladder('6000,60000,full', 239202) == [6000, 60000, 239202]
     assert parse_ladder(' 6000 , full ', 8399) == [6000, 8399] and parse_ladder('full', 10) == [10] and parse_ladder('10', 10) == [10]

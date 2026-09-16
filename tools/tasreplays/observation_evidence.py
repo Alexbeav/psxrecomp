@@ -1,5 +1,5 @@
 """Strict, streaming checks for complete independent TAS observations."""
-from itertools import zip_longest
+from itertools import islice, zip_longest
 from pathlib import Path
 import hashlib
 import re
@@ -24,11 +24,14 @@ def validate_cpu_capture(directory, expected_frames, first_frame=1):
     return {'valid':True,'frames':count,'scope':'native return capture completeness; no independent source CPU equivalence claim'}
 
 
-def compare_returns(source, native, expected_frames):
+def compare_returns(source, native, expected_frames, start=0):
+    """Every source return against the native capture; a run resumed at return
+    `start` is compared from start+1 and must cover exactly the rest."""
     first = None
     coverage = [0, 0]
     paired = 0
-    for expected, actual in zip_longest(read_pages(source), read_pages(native)):
+    for expected, actual in zip_longest(islice(read_pages(source), start, None),
+                                        read_pages(native, first_frame=start+1)):
         coverage[0] += expected is not None
         coverage[1] += actual is not None
         if expected is None or actual is None:
@@ -41,13 +44,13 @@ def compare_returns(source, native, expected_frames):
         if first is None and (expected[1] != actual[1] or changed):
             first = {'kind': 'state_or_clock', 'frame': expected[0],
                      'source_cycle': expected[1], 'native_cycle': actual[1], 'changed_pages': changed}
-    return {'match': first is None and coverage == [expected_frames, expected_frames],
+    return {'match': first is None and coverage == [expected_frames-start, expected_frames-start],
             'compared_returns': paired, 'captured_returns': coverage, 'first_divergence': first}
 
 
-def terminal_consistency(pages, raw_path, expected_frames, full_sha=None):
+def terminal_consistency(pages, raw_path, expected_frames, full_sha=None, first_frame=1):
     terminal = None
-    for row in read_pages(pages):
+    for row in read_pages(pages, first_frame=first_frame):
         terminal = row
     if terminal is None or terminal[0] != expected_frames:
         raise ValueError('RAM index does not reach the declared terminal return')

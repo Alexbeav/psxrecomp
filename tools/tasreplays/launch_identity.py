@@ -5,6 +5,7 @@ SHA-256 was declared up front with --diagnostic-binary. A diagnostic run keeps
 its full mechanical comparison but is never reported as a qualifying pass.
 """
 import hashlib
+import json
 from pathlib import Path
 import re
 
@@ -67,6 +68,16 @@ def add_launch_arguments(parser):
                         help='reuse device deadlines while the device-state generation is unchanged')
     parser.add_argument('--slot-take', choices=('off', 'on'), default='off',
                         help='take interrupts at compiled delay-slot boundaries the way exec_delay_slot does')
+    # TAS checkpoints (docs/TAS_CHECKPOINTS.md). Capturing does not change what a run
+    # qualifies; resuming always makes the run diagnostic.
+    parser.add_argument('--save-state-at', type=int, nargs='+', metavar='RETURN',
+                        help='save a full-machine checkpoint at each listed frontend return')
+    parser.add_argument('--save-state-every', type=int, metavar='N',
+                        help='save a checkpoint at every multiple of N returns inside the observed interval')
+    parser.add_argument('--resume-from', type=Path, metavar='STATE',
+                        help='diagnostic: resume from a checkpoint .pst; only the later returns are compared, never a pass')
+    parser.add_argument('--resume-compatible-build', action='store_true',
+                        help='with --resume-from: admit a rebuilt runtime with the same checkpoint compatibility identifier')
     return parser
 
 
@@ -75,12 +86,78 @@ def check_launch_arguments(args):
         raise ValueError('--ladder and --returns are mutually exclusive')
     if getattr(args, 'diagnostic_binary', None) is not None and not HEX64.fullmatch(str(args.diagnostic_binary).lower()):
         raise ValueError('--diagnostic-binary must be a 64-digit hex SHA-256')
+    every = getattr(args, 'save_state_every', None)
+    if every is not None and every < 1:
+        raise ValueError('--save-state-every must be a positive return count')
+    if any(frame < 1 for frame in getattr(args, 'save_state_at', None) or ()):
+        raise ValueError('--save-state-at returns must be positive')
+    resume = getattr(args, 'resume_from', None)
+    if getattr(args, 'resume_compatible_build', False) and resume is None:
+        raise ValueError('--resume-compatible-build requires --resume-from')
+    if getattr(args, 'ladder', None) is not None and (
+            resume is not None or every is not None or getattr(args, 'save_state_at', None)):
+        raise ValueError('checkpoint capture and resume apply to one replay, not a ladder')
+    if resume is not None:
+        checkpoint_resume(args)
 
 
-def run_native_arguments(args, binary):
-    """Extra run_native argv: bind the staged executable, forward the CPU window
-    and any precise-slice variant that differs from the qualified default."""
+def checkpoint_resume(args):
+    """(saved return, inputs consumed) of --resume-from, or (0, 0) for a cold run.
+
+    The manifest beside the state is the runtime's own record; run_native and the
+    runtime re-verify its identity, size and SHA-256 before anything loads."""
+    path = getattr(args, 'resume_from', None)
+    if path is None:
+        return 0, 0
+    manifest = json.loads(Path(str(path) + '.json').read_text())
+    frame, consumed = manifest.get('frame'), manifest.get('input_consumed')
+    if (manifest.get('schema') != 'psx-tas-stateio-v2' or type(frame) is not int or
+            type(consumed) is not int or frame < 1 or consumed < 1):
+        raise ValueError(f'not a TAS checkpoint manifest: {path}.json')
+    return frame, consumed
+
+
+def checkpoint_returns(args, observed):
+    """The returns to capture: --save-state-at plus every --save-state-every multiple,
+    all strictly after a resume point and no later than the observed endpoint."""
+    start = checkpoint_resume(args)[0]
+    explicit = set(getattr(args, 'save_state_at', None) or ())
+    outside = sorted(frame for frame in explicit if not start < frame <= observed)
+    if outside:
+        raise ValueError(f'--save-state-at returns {outside} are outside the run ({start}, {observed}]')
+    every = getattr(args, 'save_state_every', None)
+    if every:
+        explicit.update(range((start // every + 1) * every, observed + 1, every))
+    return sorted(explicit)
+
+
+def checkpoint_receipt(args, observed):
+    """Receipt fields naming the checkpoints a run captured and the one it resumed from."""
+    start, consumed = checkpoint_resume(args)
+    resume = getattr(args, 'resume_from', None)
+    return {'save_state_at': checkpoint_returns(args, observed),
+            'resumed_from': str(Path(resume).resolve()) if resume is not None else None,
+            'resumed_return': start, 'resumed_inputs': consumed,
+            'resume_compatible_build': bool(getattr(args, 'resume_compatible_build', False))}
+
+
+def run_native_arguments(args, binary, observed=None):
+    """Extra run_native argv: bind the staged executable, forward the CPU window,
+    any precise-slice variant that differs from the qualified default, and the
+    checkpoint capture/resume options. `observed` is the run's last compared
+    return; it bounds --save-state-every and is required when either is used."""
     argv = ['--expected-exe-sha256', binary['binary_sha256']]
+    wants_checkpoints = getattr(args, 'save_state_at', None) or getattr(args, 'save_state_every', None)
+    if wants_checkpoints or getattr(args, 'resume_from', None) is not None:
+        if observed is None:
+            raise ValueError('this title command does not bound checkpoint returns')
+        returns = checkpoint_returns(args, observed)
+        if returns:
+            argv += ['--save-state-at', *map(str, returns)]
+        if args.resume_from is not None:
+            argv += ['--resume-from', str(Path(args.resume_from).resolve(strict=True))]
+            if args.resume_compatible_build:
+                argv.append('--resume-compatible-build')
     window = getattr(args, 'cpu_boundary_window', None)
     if window: argv += ['--cpu-boundary-window', str(window[0]), str(window[1])]
     for flag, attribute, default in (('--slice-gpu-deadline', 'slice_gpu_deadline', 'tick'),
