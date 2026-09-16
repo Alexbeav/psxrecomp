@@ -19,7 +19,12 @@
 #define PSX_OVERLAY_FLAVOR 0
 #endif
 
-static char s_cmd[4096];   /* large: the runtime-constructed bundled tcc cmd has
+/* 8192, not 4096: a 208-address --force-interior list made the runtime-built command
+ * 6,392 chars, and snprintf's silent truncation cut it mid-argument, so every compile
+ * failed identically and autocompile latched degraded for the process lifetime
+ * (Parasite Eve, 2026-09-15). cmd.exe's own line limit is ~8,191 chars, so this is the
+ * useful ceiling; beyond it the invocation needs an @file, not a bigger buffer. */
+static char s_cmd[8192];   /* large: the runtime-constructed bundled tcc cmd has
                             * many absolute paths (python+script+recompiler+tcc+...) */
 static char s_cwd[512];
 /* Canonical loader cache dir + captures file (see autocompile_set_cache_paths).
@@ -754,6 +759,18 @@ static void autocompile_check_path_args(void) {
 #endif /* _WIN32 */
 
 void autocompile_configure(const char *cmd, const char *cwd) {
+    if (cmd && strlen(cmd) >= sizeof(s_cmd)) {
+        /* Loud, and off: a truncated command line fails argparse on every retry
+         * with an error that never mentions the real cause. */
+        fprintf(stderr,
+                "psxrecomp: overlay autocompile command is %zu chars, over the %zu-char "
+                "limit; autocompile DISABLED. Shorten the command (an @file for long "
+                "--force-interior lists) instead of relying on truncation.\n",
+                strlen(cmd), sizeof(s_cmd) - 1);
+        s_cmd[0] = '\0';
+        snprintf(s_cwd, sizeof(s_cwd), "%s", cwd ? cwd : "");
+        return;
+    }
     snprintf(s_cmd, sizeof(s_cmd), "%s", cmd ? cmd : "");
     snprintf(s_cwd, sizeof(s_cwd), "%s", cwd ? cwd : "");
 #ifdef _WIN32
@@ -879,7 +896,7 @@ int autocompile_request(void) {
      * is incorrect" — every autocompile run failed and the reshard silently
      * never happened). With the outer quotes cmd strips exactly those two and
      * executes the inner command verbatim. */
-    char full[4200];
+    char full[sizeof(s_cmd) + 32];   /* grows with s_cmd: the wrapper must never be the new truncation point */
     snprintf(full, sizeof(full), "cmd.exe /C \"%s\"", s_cmd);
 
     STARTUPINFOA si;
