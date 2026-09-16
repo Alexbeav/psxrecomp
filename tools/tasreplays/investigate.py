@@ -345,7 +345,8 @@ def execute(step, run, variables, state, bindings):
             if not executable:
                 raise ValueError('command executable not found: ' + spec['argv'][0])
             spec['argv'][0] = str(Path(executable).resolve())
-            spec['env'] = {**os.environ, **spec.get('env', {})}
+            spec['env'] = {**{k: v for k, v in os.environ.items()
+                              if not SECRET_ENV.match(k)}, **spec.get('env', {})}
             spec.update(run=str(run), budget_directory=str(run), launched=time.time(),
                         executable=identity(spec['argv'][0]))
             write(attempt / 'command.json', spec)  # intent precedes launch; never inferred safe to repeat
@@ -495,6 +496,14 @@ def investigate(recipe_path, run):
             state.update(status='failed', error=str(error))
         report(run, state)
         return state
+
+
+# command.json is both the retained evidence and the launch contract the worker
+# reads back, so the environment cannot simply be masked on write. Agent session
+# credentials are dropped from the child environment entirely: no build, test or
+# replay step reads them, and a retained run directory is copied to shared storage.
+SECRET_ENV = re.compile(r'(?i)^(CLAUDE_CODE_.*|ANTHROPIC_.*|AWS_.*|GH_TOKEN|GITHUB_TOKEN'
+                        r'|.*_API_KEY|.*_SECRET|.*_TOKEN|.*_PASSWORD|.*_CREDENTIALS)$')
 
 
 def main():
