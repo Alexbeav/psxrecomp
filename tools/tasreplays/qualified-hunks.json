@@ -1,5 +1,8 @@
 {
   "schema": "psx-tas-qualified-hunks-v1",
+  "known_absent": {
+    "155003cb-tas-state-capture-resume": "Dropped in the PR #361 to split rebase (2026-09-14) like b1413e71, and not yet restored. Absent from every split branch and from this lane. Costs replay time only, never accuracy: runs are cold. Restore by porting 155003cb from pegasus-codex/biohazard-resume-20260913, then delete this entry."
+  },
   "entries": [
     {
       "id": "67b5d16e-biohazard-return-3846-cd-cpu-mdec",
@@ -815,7 +818,7 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "/* Source SubQBuf_Safe latch — the sector whose sub-Q the drive last decoded.",
+            "/* Source SubQBuf_Safe latch \u2014 the sector whose sub-Q the drive last decoded.",
             " * HandlePlayRead reads the sector AT CurSector and decodes its Q before",
             " * advancing the cursor, so the decoded position is the pre-increment value,",
             " * one behind the physical head tracked above. The source keeps calling",
@@ -886,7 +889,7 @@
           "lines": [
             "             * (axis5_sio_controller.md D8).",
             "             * That source index is the SECOND byte of the 0x4501 phase, i.e. the",
-            "             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 — not",
+            "             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 \u2014 not",
             "             * pad_response[3], which is the constant 0x02. Writing it there",
             "             * destroyed the constant and left a hard-coded analog-on in the real",
             "             * mode slot, so we answered 03 00 01 where the source answers",
@@ -918,7 +921,7 @@
             "         * the data byte at position 3, which arrives paired with response index 2",
             "         * (frontio.c cases 0x4601, 0x4701, 0x4C01). The canned tables above are",
             "         * only the data == 0x00 variant, so a game that asks with 0x01 got the",
-            "         * wrong answer — Mega Man X5 issues 0x4C with 0x01 and the source replies",
+            "         * wrong answer \u2014 Mega Man X5 issues 0x4C with 0x01 and the source replies",
             "         * 07 where an unpatched table replies 04 (return 1098).",
             "         * Reply bytes 3..7 are the five phase-1 bytes; byte 2 is the phase-0 byte",
             "         * and does not vary. */",

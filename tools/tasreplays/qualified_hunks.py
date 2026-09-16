@@ -180,13 +180,46 @@ def resolve(repo, rev):
 
 
 def run_check(repo, registry, rev=None, titles=None):
+    """`missing` counts unexpected absences only.
+
+    An entry listed in the registry's `known_absent` map is a tracked debt: a qualified
+    behaviour we know this lineage lost and have not yet restored. It is still reported, and
+    still absent, but it does not fail a gate, because a gate that is permanently red for a
+    reason everyone already knows teaches people to ignore it. Recording a debt requires a
+    reason; nothing may be marked absent silently.
+    """
     resolved = resolve(repo, rev)
+    known = registry.get('known_absent') or {}
     cache, results = {}, []
     for entry in select_entries(registry, titles):
-        results.append(check_entry(repo, entry, rev, cache))
-    missing = [r for r in results if not r['present']]
+        result = check_entry(repo, entry, rev, cache)
+        if not result['present'] and result['id'] in known:
+            result['known_absent'] = known[result['id']]
+        results.append(result)
+    missing = [r for r in results if not r['present'] and 'known_absent' not in r]
+    tracked = [r for r in results if 'known_absent' in r]
     return {'schema': SCHEMA, 'rev': rev or 'worktree', 'resolved': resolved,
-            'entries': results, 'missing': len(missing), 'total': len(results)}
+            'entries': results, 'missing': len(missing), 'total': len(results),
+            'known_absent': len(tracked)}
+
+
+def require_qualified(repo, rev, titles=None):
+    """Raise if `rev` has lost a qualified behaviour that is not a recorded debt.
+
+    The registry is read from the tree being built, not from this file's own location, so a
+    synthetic or unrelated repository simply has nothing to check. Call this before building a
+    candidate: a replay qualifies a source tree, and a tree that quietly lost one of those
+    behaviours is not that tree any more, however green its unit tests are.
+    """
+    registry_path = Path(repo) / 'tools/tasreplays/qualified-hunks.json'
+    if not registry_path.exists():
+        return None
+    report = run_check(repo, load_registry(registry_path), rev, titles)
+    lost = [r['id'] for r in report['entries'] if not r['present'] and 'known_absent' not in r]
+    if lost:
+        raise HunkError(f"{rev or 'worktree'} has lost qualified behaviour: " + ', '.join(lost)
+                        + ' (run tools/tasreplays/qualified_hunks.py check for the detail)')
+    return report
 
 
 def describe(result):
@@ -194,6 +227,8 @@ def describe(result):
         return f"present  {result['id']}"
     bad = next(b for b in result['blocks'] if not b['present'])
     where = f"{bad['file']} (file absent)" if bad['file_missing'] else f"{bad['file']}: {bad['first_missing_line'].strip()}"
+    if 'known_absent' in result:
+        return f"debt     {result['id']}  {result['missing_blocks']} of {result['total_blocks']} blocks  {result['known_absent']}"
     return f"MISSING  {result['id']}  {result['missing_blocks']} of {result['total_blocks']} blocks  {where}"
 
 
@@ -203,8 +238,9 @@ def cmd_check(args):
     report['registry'] = str(args.registry)
     for result in report['entries']:
         print(describe(result))
-    print(f"missing: {report['missing']} of {report['total']} entries  ({report['rev']}"
-          f"{' = ' + report['resolved'][:12] if report['resolved'] else ''})")
+    debt = f", plus {report['known_absent']} tracked as debt" if report['known_absent'] else ''
+    where = ' = ' + report['resolved'][:12] if report['resolved'] else ''
+    print(f"missing: {report['missing']} of {report['total']} entries{debt}  ({report['rev']}{where})")
     if args.json:
         with open(args.json, 'w', encoding='utf-8', newline='\n') as stream:
             json.dump(report, stream, indent=2)
