@@ -2298,7 +2298,10 @@ void FullFunctionEmitter::emit_dispatch(
     out += "                /* Normalization locates bytes; it does not change the guest\n";
     out += "                 * execution alias. Fixed native bodies encode fetch/link/PC\n";
     out += "                 * addresses. Interpret unrepresented RAM aliases as supplied. */\n";
-    out += "                if ((addr & 0x1FFFFFFFu) < 0x200000u &&\n";
+    out += "                /* All four RAM mirrors (normalize() folds phys < 0x800000),\n";
+    out += "                 * not only the first: a call through mirror 2-4 must not run\n";
+    out += "                 * the fixed body under the canonical alias either. */\n";
+    out += "                if ((addr & 0x1FFFFFFFu) < 0x800000u &&\n";
     out += "                    addr != dispatch_table[mid].runtime_pc) {\n";
     out += "                    /* A known entry also admits clean RAM to the interpreter.\n";
     out += "                     * This marks host executable metadata, never guest bytes. */\n";

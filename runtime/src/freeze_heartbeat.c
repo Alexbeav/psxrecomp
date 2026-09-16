@@ -367,6 +367,17 @@ static void hb_sig_stack_handler(int sig, siginfo_t *si, void *uctx) {
      * No unwinding, allocation, or locking — see the mailbox comment. */
     if (uctx) {
         s_sig_uctx = *(const ucontext_t *)uctx;
+#if defined(__APPLE__)
+        /* Darwin's uc_mcontext is a POINTER into the signal frame that is
+         * gone once this handler returns; the heartbeat thread reads the
+         * registers later. Deep-copy the machine context (a struct copy is
+         * async-signal-safe) and repoint the saved context at the copy. */
+        {
+            static __typeof__(*((ucontext_t *)0)->uc_mcontext) s_sig_mctx;
+            s_sig_mctx = *s_sig_uctx.uc_mcontext;
+            s_sig_uctx.uc_mcontext = &s_sig_mctx;
+        }
+#endif
         __sync_synchronize();   /* context visible before the capture flag */
         s_sig_captured = 1;
     }
@@ -420,7 +431,11 @@ static int hb_walk_saved_frames(uintptr_t *out, int max) {
     int n = 0;
     out[n++] = pc;
     while (n < max && fp && s_stack_lo && s_stack_hi) {
-        if (fp < s_stack_lo || fp + 16 > s_stack_hi) break;
+        /* Subtract, never add: RBP is a general register in a Release
+         * build, and a value near UINTPTR_MAX would wrap `fp + 16` back
+         * inside the bounds and fault on the deref below, turning a
+         * diagnosable freeze into a heartbeat-thread crash. */
+        if (fp < s_stack_lo || s_stack_hi - fp < 16) break;
         uintptr_t next_fp = *(const uintptr_t *)fp;
         uintptr_t ret = *(const uintptr_t *)(fp + sizeof(uintptr_t));
         if (!ret) break;
