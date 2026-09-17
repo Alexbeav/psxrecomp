@@ -213,7 +213,13 @@ def convert(movie_bytes, disc_digests):
 
 
 def read_psxrti3(data):
-    """Strict reader for the files this tool writes (the T98 subset of PSXRTI3)."""
+    """Strict reader for the files this tool writes (the T98 subset of PSXRTI3).
+
+    record_size never identifies the layout: the two-digital-pad record written here and a
+    PSXRTI2 DualShock record are both 12 bytes. The 0x201 port-layout tag decides, and a file
+    without it is refused rather than guessed at (the "8 = PSXRTI1, 12 = PSXRTI2" fallback
+    belongs to readers of tag-less v3 files, not here).
+    """
     if len(data) < HEADER.size:
         raise ValueError('short header')
     magic, version, record_size, count, flags, ext_bytes = HEADER.unpack_from(data)

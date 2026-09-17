@@ -111,6 +111,15 @@ bad = bytearray(good)
 ext = struct.unpack_from('<I', good, 24)[0]
 struct.pack_into('<I', bad, 28 + ext + 12 * 3, 99)  # record sequence
 refuses(lambda: o.read_psxrti3(bytes(bad)), 'record sequence')
+# record_size does not identify the layout: this two-digital-pad record and a PSXRTI2 DualShock
+# record are both 12 bytes. Without the port-layout tag the reader must refuse, never guess.
+bare = o.HEADER.pack(o.MAGIC, 3, 12, 1, 0, 0) + struct.pack('<IHHHH', 1, 0xFFFF, 0, 0xFFFF, 0)
+refuses(lambda: o.read_psxrti3(bare), 'unsupported port layout')
+# A layout naming a DualShock (a record this tool does not write) is refused rather than misread.
+dualshock = struct.pack('<II', o.TAG_PORT_LAYOUT, 6) + bytes([1, 0, 0, 0, o.DEVICE_DUALSHOCK, 0]) + b'\0\0'
+sized = o.HEADER.pack(o.MAGIC, 3, 12, 1, 0, len(dualshock)) + dualshock + struct.pack('<IHHHH', 1, 0xFFFF, 0, 0xFFFF, 0)
+refuses(lambda: o.read_psxrti3(sized), 'unsupported port layout')
+
 # A skippable (bit 31) tag the reader does not know is accepted.
 extra = struct.pack('<II', 0x80000101, 4) + b'abcd'
 skippable = good[:24] + struct.pack('<I', ext + len(extra)) + good[28:28 + ext] + extra + good[28 + ext:]
