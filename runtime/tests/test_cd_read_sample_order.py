@@ -7,7 +7,7 @@ import tempfile
 
 def check(output, cc):
     runtime = Path(__file__).resolve().parents[1]
-    memory = (runtime / 'src/memory.c').read_text()
+    memory = (runtime / 'src/memory.c').read_text(encoding="utf-8")
     def section(start, end):
         return memory[memory.index(start):memory.index(end)]
     production = section('static inline uint32_t psx_mmio_read_wait(', '/* Resolve PSX_LOAD_DELAY')

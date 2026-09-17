@@ -515,11 +515,11 @@ def check_recompiler_discovered_host_ownership(recompiler):
             f.write(f'interior 0x{target:08X}\n')
         result = subprocess.run(
             [recompiler, psx, '--seeds', seeds, '--out-dir', out, '--overlay'],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8")
         assert result.returncode == 0, result.stderr or result.stdout
-        full = ''.join(path.read_text()
+        full = ''.join(path.read_text(encoding="utf-8")
                        for path in pathlib.Path(out).glob('*_full*.c'))
-        ranges = next(pathlib.Path(out).glob('*_full.ranges')).read_text()
+        ranges = next(pathlib.Path(out).glob('*_full.ranges')).read_text(encoding="utf-8")
 
     assert f'void func_{host:08X}' in full
     assert f'void func_{target:08X}' in full
@@ -561,12 +561,12 @@ def check_recompiler_explicit_hosted_interior(recompiler):
                     f'hosted_interior 0x{extra_target:08X} 0x{host:08X}\n')
             result = subprocess.run(
                 [recompiler, psx, '--seeds', seeds, '--out-dir', out,
-                 '--overlay'], capture_output=True, text=True)
+                 '--overlay'], capture_output=True, text=True, encoding="utf-8")
             assert result.returncode == 0, result.stderr or result.stdout
             ranges_path = next(pathlib.Path(out).glob('*_full.ranges'))
             identities = MOD.parse_overlay_func_ids(
                 str(ranges_path), bytes(data), LOAD, len(data))
-            full = ''.join(path.read_text()
+            full = ''.join(path.read_text(encoding="utf-8")
                            for path in pathlib.Path(out).glob('*_full*.c'))
             return identities, full, result.stdout + result.stderr
 
@@ -604,7 +604,7 @@ def check_recompiler_hosted_interior_parser(recompiler):
                 f.write('\n'.join(lines) + '\n')
             return subprocess.run(
                 [recompiler, psx, '--seeds', seeds, '--out-dir', out,
-                 '--overlay'], capture_output=True, text=True)
+                 '--overlay'], capture_output=True, text=True, encoding="utf-8")
 
     invalid_cases = (
         [f'hosted_interiorXYZ 0x{target:08X} 0x{host:08X}'],
@@ -803,9 +803,9 @@ def check_recompiler_unreachable_jal_not_alias(recompiler):
             f.write(f'interior 0x{target:08X}\n')
         result = subprocess.run(
             [recompiler, psx, '--seeds', seeds, '--out-dir', out, '--overlay'],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8")
         assert result.returncode == 0, result.stderr or result.stdout
-        full = ''.join(path.read_text()
+        full = ''.join(path.read_text(encoding="utf-8")
                        for path in pathlib.Path(out).glob('*_full*.c'))
     assert f'void func_{target:08X}' not in full
 
@@ -956,10 +956,10 @@ def check_t2_shaped_retained_partition_conflict(recompiler):
                     f'0x{LOAD:08X} 0x{LOAD + 0x2A8:08X}\n')
         result = subprocess.run(
             [recompiler, psx, '--seeds', seed_path, '--out-dir', out,
-             '--overlay'], capture_output=True, text=True)
+             '--overlay'], capture_output=True, text=True, encoding="utf-8")
         assert result.returncode == 0, result.stderr or result.stdout
-        ranges = next(pathlib.Path(out).glob('*_full.ranges')).read_text()
-        full = ''.join(path.read_text()
+        ranges = next(pathlib.Path(out).glob('*_full.ranges')).read_text(encoding="utf-8")
+        full = ''.join(path.read_text(encoding="utf-8")
                        for path in pathlib.Path(out).glob('*_full*.c'))
     assert 'ignoring legacy retained_alias' in result.stdout
     assert f'F {old_alias:08X}' not in ranges
@@ -1122,11 +1122,11 @@ def check_padded_return_boundary(recompiler):
             f.write(f"0x{LOAD:08X}\n0x{LOAD + 0x14:08X}\n")
         result = subprocess.run(
             [recompiler, psx, "--seeds", seeds, "--out-dir", out, "--overlay"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8")
         assert result.returncode == 0, result.stderr or result.stdout
-        full = next(pathlib.Path(out).glob("*_full.c")).read_text()
+        full = next(pathlib.Path(out).glob("*_full.c")).read_text(encoding="utf-8")
         assert f"void func_{LOAD + 0x14:08X}" in full
-        ranges = next(pathlib.Path(out).glob("*_full.ranges")).read_text()
+        ranges = next(pathlib.Path(out).glob("*_full.ranges")).read_text(encoding="utf-8")
         assert f"F {LOAD + 0x14:08X}" in ranges
 
 
@@ -1157,9 +1157,9 @@ def check_recompiler_composite_contract(recompiler):
                 f.write(f"0x{LOAD:08X}\n")
             result = subprocess.run(
                 [recompiler, psx, "--seeds", seeds, "--out-dir", out, "--overlay"],
-                capture_output=True, text=True)
+                capture_output=True, text=True, encoding="utf-8")
             assert result.returncode == 0, result.stderr or result.stdout
-            return ''.join(path.read_text() for path in pathlib.Path(out).glob("*_full*.c"))
+            return ''.join(path.read_text(encoding="utf-8") for path in pathlib.Path(out).glob("*_full*.c"))
 
         assert f"void func_{target:08X}" not in generated(False)
         assert f"void func_{target:08X}" in generated(True)
@@ -1185,9 +1185,9 @@ def check_recompiler_pointer_table_call_root(recompiler):
             f.write(f"0x{LOAD:08X}\ncall_root 0x{target:08X}\n")
         result = subprocess.run(
             [recompiler, psx, "--seeds", seeds, "--out-dir", out, "--overlay"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8")
         assert result.returncode == 0, result.stderr or result.stdout
-        full = ''.join(path.read_text()
+        full = ''.join(path.read_text(encoding="utf-8")
                        for path in pathlib.Path(out).glob("*_full*.c"))
         assert f"void func_{target:08X}" not in full
 
@@ -1216,9 +1216,9 @@ def check_recompiler_pointer_table_alias(recompiler):
             f.write(f"0x{LOAD:08X}\n")
         result = subprocess.run(
             [recompiler, psx, "--seeds", seeds, "--out-dir", out, "--overlay"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8")
         assert result.returncode == 0, result.stderr or result.stdout
-        full = ''.join(path.read_text()
+        full = ''.join(path.read_text(encoding="utf-8")
                        for path in pathlib.Path(out).glob("*_full*.c"))
         assert "+1 in-function jal-target alias entries" not in result.stdout
         assert f"void func_{target:08X}" not in full
@@ -1247,11 +1247,11 @@ def check_retained_alias_contract(recompiler):
                 f"0x{LOAD:08X} 0x{LOAD + 0x2C:08X}\n")
         result = subprocess.run(
             [recompiler, psx, "--seeds", seeds, "--out-dir", out, "--overlay"],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8")
         assert result.returncode == 0, result.stderr or result.stdout
-        full = ''.join(path.read_text() for path in pathlib.Path(out).glob("*_full*.c"))
+        full = ''.join(path.read_text(encoding="utf-8") for path in pathlib.Path(out).glob("*_full*.c"))
         assert f"void func_{LOAD + 0x20:08X}" not in full
-        ranges = next(pathlib.Path(out).glob("*_full.ranges")).read_text()
+        ranges = next(pathlib.Path(out).glob("*_full.ranges")).read_text(encoding="utf-8")
         assert f"F {LOAD + 0x20:08X}" not in ranges
 
 
@@ -1279,7 +1279,7 @@ def check_atomic_dll_publication():
             assert not MOD.compile_dll("ignored.c", final, [])
             with open(final, "rb") as built:
                 assert built.read() == b"old-good-shard"
-            assert pathlib.Path(ranges).read_text() == "OLD-RANGES\n"
+            assert pathlib.Path(ranges).read_text(encoding="utf-8") == "OLD-RANGES\n"
             assert not list(pathlib.Path(tmp).glob(".*.tmp.*"))
             assert MOD.shard_pair_files_complete(final)
 
@@ -1301,7 +1301,7 @@ def check_atomic_dll_publication():
                                    func_ids=func_ids, pair_id=pair_id)
             with open(final, "rb") as built:
                 assert built.read() == b"new-complete-shard"
-            manifest = pathlib.Path(ranges).read_text()
+            manifest = pathlib.Path(ranges).read_text(encoding="utf-8")
             assert f"P {pair_id:016X}\n" in manifest
             assert "F 80010000 DEADBEEF\nR 80010000 10\n" in manifest
             assert MOD.shard_pair_files_complete(final)
@@ -1325,7 +1325,7 @@ def check_atomic_dll_publication():
                 publication_result=publication)
             assert publication == {"published": False}
             assert pathlib.Path(final).read_bytes() == b"first-winner"
-            assert pathlib.Path(ranges).read_text() == "FIRST-MANIFEST\n"
+            assert pathlib.Path(ranges).read_text(encoding="utf-8") == "FIRST-MANIFEST\n"
             resident_cap = {
                 "producer": MOD.BIOS_RESIDENT_PRODUCER,
                 "bios_sha256": "ab" * 32,
@@ -1333,16 +1333,16 @@ def check_atomic_dll_publication():
             }
             marker = pathlib.Path(final).with_suffix('.resident')
             MOD.reconcile_bios_resident_marker(final, resident_cap, True)
-            resident_payload = marker.read_text()
+            resident_payload = marker.read_text(encoding="utf-8")
             MOD.reconcile_bios_resident_marker(
                 final, {"producer": "ordinary"}, False)
-            assert marker.read_text() == resident_payload
+            assert marker.read_text(encoding="utf-8") == resident_payload
             marker.unlink()
             MOD.reconcile_bios_resident_marker(final, resident_cap, False)
             assert marker.exists()  # crash-after-pair self-heal
             MOD.reconcile_bios_resident_marker(
                 final, {"producer": "ordinary"}, True)
-            assert marker.read_text() == resident_payload
+            assert marker.read_text(encoding="utf-8") == resident_payload
             assert not list(pathlib.Path(tmp).glob(".*.tmp.*"))
             MOD._runtime_valid_shard_pair_locked = original_pair_valid
 
@@ -1384,7 +1384,7 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
                 expected = ((b"NEW-DLL", "NEW-RANGES\n") if fail_after == 5
                             else (b"OLD-DLL", "OLD-RANGES\n"))
                 assert pathlib.Path(final).read_bytes() == expected[0]
-                assert pathlib.Path(ranges).read_text() == expected[1]
+                assert pathlib.Path(ranges).read_text(encoding="utf-8") == expected[1]
                 assert not list(pathlib.Path(tmp).glob("*.pair-txn.json"))
 
         # Recovery is restartable if an individual rollback rename faults.
@@ -1422,7 +1422,7 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
                 MOD.os.replace = real_replace
             MOD.recover_shard_pair(final)
             assert pathlib.Path(final).read_bytes() == b"OLD-DLL"
-            assert pathlib.Path(ranges).read_text() == "OLD-RANGES\n"
+            assert pathlib.Path(ranges).read_text(encoding="utf-8") == "OLD-RANGES\n"
 
         # Real cross-process writers must serialize on the permanent OS lock.
         publish_script = r'''
@@ -1446,8 +1446,8 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
                     [sys.executable, "-c", publish_script, module_path,
                      staged, staged_ranges, final]))
             assert all(writer.wait(timeout=30) == 0 for writer in writers)
-            dll_generation = pathlib.Path(final).read_text().removeprefix("DLL-")
-            range_generation = pathlib.Path(ranges).read_text().removeprefix("RANGES-")
+            dll_generation = pathlib.Path(final).read_text(encoding="utf-8").removeprefix("DLL-")
+            range_generation = pathlib.Path(ranges).read_text(encoding="utf-8").removeprefix("RANGES-")
             assert dll_generation == range_generation
             assert not list(pathlib.Path(tmp).glob("*.pair-txn.json"))
 
@@ -1536,7 +1536,7 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
                     '__declspec(dllexport) void func_80010000(void *p) {(void)p;}\n' +
                     MOD.add_overlay_pair_export('', pair_id))
                 subprocess.run([gcc, '-shared', str(pair_source), '-o', pair_dll],
-                               check=True, capture_output=True, text=True)
+                               check=True, capture_output=True, text=True, encoding="utf-8")
                 pair_func_ids = [(0x80010000, 0xDEADBEEF,
                                   [(0x80010000, 0x10)])]
                 pathlib.Path(pair_dll).with_suffix('.ranges').write_text(
@@ -1567,13 +1567,13 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
                 staged_ranges = str(pathlib.Path(tmp) / ".new.ranges")
                 source.write_text("__declspec(dllexport) int loaded(void) { return 7; }\n")
                 subprocess.run([gcc, '-shared', str(source), '-o', final],
-                               check=True, capture_output=True, text=True)
+                               check=True, capture_output=True, text=True, encoding="utf-8")
                 pathlib.Path(ranges).write_text("OLD-RANGES\n")
                 shutil.copyfile(final, staged)
                 pathlib.Path(staged_ranges).write_text("NEW-RANGES\n")
                 loaded = ctypes.WinDLL(final)
                 MOD.publish_shard_pair(staged, staged_ranges, final)
-                assert pathlib.Path(ranges).read_text() == "NEW-RANGES\n"
+                assert pathlib.Path(ranges).read_text(encoding="utf-8") == "NEW-RANGES\n"
                 assert not os.path.exists(final + '.pair-txn.json')
                 deferred = list(pathlib.Path(tmp).glob(
                     'shard.dll.pair-txn.*.old-dll'))
@@ -1625,7 +1625,7 @@ def check_candidate_capacity_publication():
                 MOD.overlay_ranges_text(records, pair_id, provenance))
 
         def staged_identity(path):
-            manifest = pathlib.Path(path).with_suffix('.ranges').read_text()
+            manifest = pathlib.Path(path).with_suffix('.ranges').read_text(encoding="utf-8")
             pair_id, manifest_funcs = MOD.parse_runtime_shard_manifest(
                 manifest, require_pair=False)
             return MOD._normalized_runtime_manifest_identity(
@@ -1933,7 +1933,7 @@ def check_candidate_capacity_publication():
             assert MOD.cache_candidate_capacity_full(third, None, 4) == \
                 (False, 3)
             old_dll = pathlib.Path(third).read_bytes()
-            old_ranges = pathlib.Path(third).with_suffix('.ranges').read_text()
+            old_ranges = pathlib.Path(third).with_suffix('.ranges').read_text(encoding="utf-8")
             growth = os.path.join(tmp, '.growth.dll')
             growth_ranges = os.path.join(tmp, '.growth.ranges')
             pair(growth, 3, 6, LOAD + 0x80)
@@ -1945,7 +1945,7 @@ def check_candidate_capacity_publication():
             else:
                 raise AssertionError('over-cap force replacement accepted')
             assert pathlib.Path(third).read_bytes() == old_dll
-            assert pathlib.Path(third).with_suffix('.ranges').read_text() == \
+            assert pathlib.Path(third).with_suffix('.ranges').read_text(encoding="utf-8") == \
                 old_ranges
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2062,7 +2062,7 @@ def check_candidate_capacity_publication():
                 '.ranges')
             # pair() names the backup manifest by with_suffix; move it to the
             # exact transaction backup path used by recovery.
-            pathlib.Path(backup_ranges).write_text(backup_manifest.read_text())
+            pathlib.Path(backup_ranges).write_text(backup_manifest.read_text(encoding="utf-8"))
             backup_manifest.unlink()
             MOD._write_json_atomic(hidden + '.pair-txn.json', {
                 'schema': 'psxrecomp shard pair transaction v1',
@@ -2241,7 +2241,7 @@ def check_candidate_capacity_publication():
                 '__declspec(dllexport) void func_80010000(void*p){(void)p;}\n')
             subprocess.run(
                 [gcc, '-shared', str(source), '-o', str(template)],
-                check=True, capture_output=True, text=True)
+                check=True, capture_output=True, text=True, encoding="utf-8")
             partial_manifest = MOD.overlay_ranges_text([
                 (LOAD, 1, ((LOAD, 4),)),
                 (LOAD + 4, 2, ((LOAD + 4, 4),)),
@@ -2301,7 +2301,7 @@ except m.ShardCandidateCapacityError:
                     '__declspec(dllexport) void func_80010000(void*p){(void)p;}\n')
                 subprocess.run(
                     [gcc, '-shared', str(source), '-o', str(template)],
-                    check=True, capture_output=True, text=True)
+                    check=True, capture_output=True, text=True, encoding="utf-8")
                 staged_ranges = pathlib.Path(tmp) / f'.distinct-{index}.ranges'
                 staged_ranges.write_text(MOD.overlay_ranges_text(
                     [(LOAD, 1, ((LOAD, 4),))], pair_id))
@@ -3051,7 +3051,7 @@ def check_interior_fragment_contract():
 
     def stop_after_seeds(cmd, **_kwargs):
         seeds = pathlib.Path(cmd[cmd.index("--seeds") + 1])
-        seen_seeds.extend(seeds.read_text().splitlines())
+        seen_seeds.extend(seeds.read_text(encoding="utf-8").splitlines())
         return Failed()
 
     try:
@@ -3296,7 +3296,7 @@ def check_real_hosted_fragment_publication(recompiler):
         assert len(hosted_dlls) == 1
         hosted_dll = hosted_dlls.pop()
         assert MOD.HOSTED_MANIFEST_MARKER in \
-            hosted_dll.with_suffix('.ranges').read_text().splitlines()
+            hosted_dll.with_suffix('.ranges').read_text(encoding="utf-8").splitlines()
         assert MOD.manifest_has_hosted_provenance(
             MOD.HOSTED_MANIFEST_MARKER + '\n')
         assert MOD.manifest_has_hosted_provenance(
@@ -3344,7 +3344,7 @@ def check_real_hosted_fragment_publication(recompiler):
             f'*{MOD.overlay_ext()}')) - orphan_before
         assert len(orphan_dlls) == 1
         orphan_dll = orphan_dlls.pop()
-        orphan_manifest = orphan_dll.with_suffix('.ranges').read_text()
+        orphan_manifest = orphan_dll.with_suffix('.ranges').read_text(encoding="utf-8")
         assert MOD.manifest_provenance(orphan_manifest) == \
             MOD.ORPHAN_MANIFEST_PROVENANCE
         assert MOD.load_shard_func_ids(
@@ -3461,7 +3461,7 @@ def check_observed_dispatch_cli_recovery(recompiler):
             capture_path.write_text(MOD.json.dumps([record, record]),
                                     encoding='utf-8')
             result = subprocess.run(command, env=env, cwd=ROOT,
-                                    capture_output=True, text=True, timeout=120)
+                                    capture_output=True, text=True, encoding="utf-8", timeout=120)
             assert result.returncode == 0, result.stdout + result.stderr
             return result.stdout
 
@@ -3584,7 +3584,7 @@ def check_full_hosted_fixed_point(recompiler):
         env = os.environ.copy()
         env['PATH'] = os.path.dirname(gcc) + os.pathsep + env.get('PATH', '')
         first = subprocess.run(
-            command, cwd=str(ROOT), env=env, capture_output=True, text=True,
+            command, cwd=str(ROOT), env=env, capture_output=True, text=True, encoding="utf-8",
             timeout=120)
         assert first.returncode == 0, first.stdout + first.stderr
         manifests = list(cache_root.rglob('*.ranges'))
@@ -3616,7 +3616,7 @@ def check_full_hosted_fixed_point(recompiler):
 
         before = inventory()
         second = subprocess.run(
-            command, cwd=str(ROOT), env=env, capture_output=True, text=True,
+            command, cwd=str(ROOT), env=env, capture_output=True, text=True, encoding="utf-8",
             timeout=120)
         assert second.returncode == 0, second.stdout + second.stderr
         assert inventory() == before
@@ -3676,7 +3676,7 @@ def check_full_candidate_cli_fastpath(recompiler):
             encoding='utf-8')
         subprocess.run(
             [gcc, '-shared', str(source), '-o', str(dll)],
-            check=True, capture_output=True, text=True)
+            check=True, capture_output=True, text=True, encoding="utf-8")
         manifest = dll.with_suffix('.ranges')
         manifest.write_text(MOD.overlay_ranges_text([
             (LOAD, code_crc, ((LOAD, 8),)),
@@ -3729,7 +3729,7 @@ def check_full_candidate_cli_fastpath(recompiler):
         env.pop('PSX_OVERLAY_CAPTURES', None)
         env['PATH'] = os.path.dirname(gcc) + os.pathsep + env.get('PATH', '')
         run = subprocess.run(
-            command, cwd=str(ROOT), env=env, capture_output=True, text=True,
+            command, cwd=str(ROOT), env=env, capture_output=True, text=True, encoding="utf-8",
             timeout=30)
         assert run.returncode == 0, run.stdout + run.stderr
         assert 'Overlay candidate fixed point: 1/1' in run.stdout, run.stdout
@@ -3752,7 +3752,7 @@ def check_full_candidate_cli_fastpath(recompiler):
         os.utime(marker, ns=(sentinel_ns, sentinel_ns))
         marker_mtime = marker.stat().st_mtime_ns
         rerun = subprocess.run(
-            command, cwd=str(ROOT), env=env, capture_output=True, text=True,
+            command, cwd=str(ROOT), env=env, capture_output=True, text=True, encoding="utf-8",
             timeout=30)
         assert rerun.returncode == 0, rerun.stdout + rerun.stderr
         assert marker.read_bytes() == marker_bytes
@@ -3821,7 +3821,7 @@ def check_packaged_game_toml_resolves_bios_profile(recompiler):
             return subprocess.run(
                 [recompiler, str(exe), '--overlay',
                  '--out-dir', str(pathlib.Path(td) / 'out')] + extra,
-                cwd=str(staged), capture_output=True, text=True, timeout=60)
+                cwd=str(staged), capture_output=True, text=True, encoding="utf-8", timeout=60)
 
         # Without a root, the probe searches the packaged dir and fails — and
         # the message must NAME that directory, or the cause is invisible.

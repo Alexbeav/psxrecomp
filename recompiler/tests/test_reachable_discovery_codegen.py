@@ -75,7 +75,7 @@ out_dir = "generated"
 
 def run(recompiler, config):
     return subprocess.run(
-        [recompiler, "--config", config], capture_output=True, text=True)
+        [recompiler, "--config", config], capture_output=True, text=True, encoding="utf-8")
 
 
 def main():

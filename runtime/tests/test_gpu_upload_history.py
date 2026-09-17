@@ -8,7 +8,7 @@ p=argparse.ArgumentParser()
 p.add_argument('--cc',default='gcc')
 p.add_argument('--source',type=Path,default=Path(__file__).resolve().parents[1]/'src/gpu.c')
 a=p.parse_args()
-s=a.source.read_text()
+s=a.source.read_text(encoding="utf-8")
 start=s.index('/* A0 upload history for debug inspection */')
 end=s.index('/* C0 (VRAM',start)
 production=s[start:end]
@@ -52,7 +52,7 @@ int main(void) {
 }
 """
 with tempfile.TemporaryDirectory() as d:
- root=Path(d);c=root/'history.c';c.write_text(harness)
+ root=Path(d);c=root/'history.c';c.write_text(harness,encoding='utf-8')
  for opt in ('-O0','-O2'):
   exe=root/(opt+'.exe')
   subprocess.run([a.cc,opt,'-std=c11','-Wall','-Wextra','-Werror',str(c),'-o',str(exe)],check=True)

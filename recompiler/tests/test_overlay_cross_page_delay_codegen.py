@@ -49,7 +49,7 @@ def run_codegen(recompiler: str, include_delay: bool, root: str,
     proc = subprocess.run(
         [recompiler, psx, "--seeds", seeds, "--out-dir", out_dir, "--overlay"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
     )
     return proc, out_dir
 
