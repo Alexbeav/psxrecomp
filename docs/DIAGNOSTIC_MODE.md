@@ -73,6 +73,12 @@ The zip contains only these report files, taken from `build-release/`,
 It never includes saves, memory cards, BIOS images, disc images, or settings.
 Open the zip before attaching it if you want to check.
 
+## Recording an input route
+
+The diagnostic product can record what you play as a frame-exact input route
+(`PSX_INPUT_ROUTE_RECORD`, F11/F12 markers) that any product can replay. See
+[INPUT_ROUTES.md](INPUT_ROUTES.md).
+
 ## For maintainers
 
 - The CLI `rebuild` command builds the diagnostic product when it is given
