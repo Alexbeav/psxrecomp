@@ -20,6 +20,8 @@ Each DLL exports:
   func_XXXXXXXX(CPUState*)   — one export per compiled function entry point
 """
 
+from __future__ import annotations
+
 import argparse
 import itertools
 import io
@@ -49,8 +51,10 @@ except ImportError:
     try:
         import tomli as tomllib
     except ImportError:
-        print("ERROR: need tomllib (Python 3.11+) or 'pip install tomli'")
-        sys.exit(1)
+        # Not fatal at import: release_stage and psxrecomp_cli.py import this
+        # module for cache_tag()/codegen_hash() on 3.9 hosts without tomli.
+        # main() refuses to run without a TOML parser.
+        tomllib = None
 
 import json
 import platform
@@ -6215,6 +6219,9 @@ def main():
     # Read game ID from game.toml (strip BOM if present)
     with open(args.game_toml, 'rb') as f:
         raw = f.read().lstrip(b'\xef\xbb\xbf')  # UTF-8 BOM
+    if tomllib is None:
+        print("ERROR: need tomllib (Python 3.11+) or 'pip install tomli'")
+        sys.exit(1)
     toml = tomllib.loads(raw.decode('utf-8'))
     game_id = toml.get('game', {}).get('id', 'UNKNOWN')
     print(f'Game ID: {game_id}')
