@@ -779,6 +779,17 @@ if(BUILD_TESTING)
                     --recompiler $<TARGET_FILE:psxrecomp-game>
                     --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Every host edge into an independently registered split piece
+        # (fallthrough, branch, jump, jal/jalr continuation, delay slot at the
+        # cap) validates live text before native entry. Runs the emitted
+        # bodies against mutated RAM; finding PSX-OVL-003.
+        add_test(
+            NAME split_piece_handoff_guards
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_split_piece_handoff_guards.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME overlay_shim_compile_contract
             COMMAND ${Python3_EXECUTABLE}
