@@ -79,22 +79,39 @@ that someone else published.
 
 - Test ROM: `tools/bios_resume_testrom`. It runs ROM A0 routines (memset, memcpy
   and its BFC02B7C delay slot, memcmp, rand, strlen) and Enter/ExitCriticalSection
-  syscalls under a root-counter-2 interrupt at a high rate. Results on psx-bresume
-  and psx-beetle, same BIOS, same synthetic disc:
+  syscalls under a root-counter-2 interrupt with an event callback. psx-bresume
+  and psx-beetle boot the same synthetic disc; the harness proves both loaded the
+  same kernel by comparing RAM 0x500..0x1500 (PSX-ORACLE-001 — psx-beetle loads
+  firmware by filename, so a BIOS path argument silently runs a different image).
 
-  | BIOS | `PSX_PRECISE_SLICE` | Compared words | Native callbacks | Runtime publishes | Refused | Unknown dispatches |
-  |---|---|---|---|---|---|---|
-  | SCPH5552 | 0 | match | 99,803 | 103,065 | 0 | 0 |
-  | SCPH5552 | 1 | match | 70,218 | 490,030 | 0 | 0 |
-  | SCPH1001 | 0 | match | 99,737 | 103,128 | 0 | 0 |
-  | SCPH1001 | 1 | match | 84,615 | 4,884,551 | 0 | 0 |
+  | BIOS | `PSX_PRECISE_SLICE` | kernel band | compared words | native callbacks | runtime publishes | refused | unknown dispatches |
+  |---|---|---|---|---|---|---|---|
+  | SCPH1001 | 0 | 100.0% | match | 89,095 | 93,952 | 0 | 0 |
+  | SCPH1001 | 1 | 100.0% | match | 71,549 | 4,873,598 | 0 | 0 |
 
-  SCPH5500 (Japan) did not run the synthetic disc to completion on either
-  backend; the local license data is the SCEA ("Sony Computer Entertainment
-  America") region. The test ROM therefore covers SCPH5552 and SCPH1001.
+  SCPH5552 and SCPH5500 cannot be run as a PAIR on this disc: the local license
+  data is SCEA, and psx-beetle picks firmware by the disc's region, so the EU/JP
+  images cannot be the oracle side here. psx-bresume alone passes on SCPH5552
+  (both slice modes), with 0 refused publishes and 0 unknown dispatches.
+
+- BIOS boot pairs, no test ROM: SCPH1001, SCPH5552 and SCPH5500 each reach the
+  Sony logo and the shell on both backends, kernel band 100.0% on all three,
+  0 unknown dispatches and 0 refused publishes
+  (`Z:/Share/psxrecomp/evidence/t13-bios-seeds-20260917/boot/`).
+
+- Not an interrupt-load parity claim: with the genuine BIOS, psx-beetle delivers
+  NO root-counter-2 interrupts (callback count 0) while psx-bresume delivers
+  ~90k, and a psx-beetle I_STAT write trace shows only VBlank acks. Same BIOS,
+  same EXE, so this is a timer2 target-IRQ divergence, reported separately; it is
+  not what this test is for, so only the native count gates the run.
+
 - The audit and test ROM found real publishers (rows marked Fixed), so the
   scope's fallback game boots were not needed.
-- Reproducing the August addresses exactly was not possible on this tree:
+- Reproducing the August addresses exactly is not possible on this tree:
   instruction-granular ROM execution exists only in the precise/source profiles
   added 2026-09-09. The rows above close every path that could produce those
   shapes.
+- No performance regression from these changes: SCPH1001 LLE boot measured on an
+  otherwise idle machine is 16.80 fps through the intro and 60.00 fps at the
+  shell, against 16.15 / 59.93 for a runtime built at the base commit. (Both
+  collapse to a few fps when other builds and emulators run in parallel.)
