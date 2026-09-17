@@ -779,6 +779,19 @@ if(BUILD_TESTING)
                     --recompiler $<TARGET_FILE:psxrecomp-game>
                     --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # A shard compiled from resident text patched only at a control-flow
+        # word (the 17e9bbaa0 fixture) is published, and the real loader plus
+        # memory.c's exact-range text guard still never run stale native code
+        # for it. The harness is built with GCC-style flags.
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(
+                NAME overlay_resident_patch_runtime
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_resident_patch_runtime.py
+                        --recompiler $<TARGET_FILE:psxrecomp-game>
+                        --compiler ${CMAKE_C_COMPILER}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endif()
         add_test(
             NAME overlay_shim_compile_contract
             COMMAND ${Python3_EXECUTABLE}
