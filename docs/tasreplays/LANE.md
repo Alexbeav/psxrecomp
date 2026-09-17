@@ -17,6 +17,25 @@ python tools/tasreplays/qualified_hunks.py check --rev HEAD      # one tree
 python tools/tasreplays/qualified_hunks.py check-all             # across the split branches
 ```
 
+## Batch rule (operator rule, 2026-09-17; Wave 5 batch, PSX Work T59)
+
+Fix a closed list of items, then requalify every route **once**, at the end.
+
+- **No full reruns between fixes, and no smoke or prefix runs.** Never rerun an
+  already-qualified route because of a fix made for another game.
+- A title runs only its own route while its item is open. Resume from checkpoints to
+  diagnose; a verdict still needs one uninterrupted run.
+- Every accuracy fix is its own commit with its `qualified-hunks.json` entry. Performance
+  changes are out of scope for a batch.
+- An integration or merge step is gated by `build_cache.stage_tools` (every registered hunk
+  present) and runs no routes.
+- The batch list is closed; only the operator adds to it. A bug found inside an item gets
+  its own PSX Work ID.
+- The final requalification starts when every batch item is at Review or Done and the
+  framework owner names the freeze candidate head. Every route runs on that one head, at
+  most three at once, with the 120 s watchdog. If a route fails, find and fix the cause,
+  then tell the operator before any second full run.
+
 ## Where things live
 
 Lane root is **`D:\psxrecomp\validation\tas`** (operator rule, 2026-09-16: keep lane files on
