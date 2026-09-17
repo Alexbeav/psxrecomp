@@ -1,0 +1,102 @@
+name: Kit emitter rebuild
+
+# Rebuilds psxrecomp-game the way a PLAYER does: from the framework tree as a
+# shipped game kit carries it, not from the repo.
+#
+# Those are different trees, and the difference is not cosmetic. A kit drops the
+# developer directories and is delivered as a zip, so packaging decisions become
+# build inputs — and two of them broke every kit at once without any repo build
+# noticing (2026-09-17, Parasite Eve macOS kit, framework pin 667900cca):
+#
+#   * tools/tasreplays is not shipped, but runtime/tests is. The three tests
+#     registered only in tools/tasreplays/tests/CMakeLists.txt therefore looked
+#     unregistered to runtime/check_test_registration.cmake, and configure
+#     failed outright — including with -DBUILD_TESTING=OFF, because the guard
+#     runs unconditionally.
+#   * The framework copy excluded 'generated' unanchored, so besides the
+#     top-level recompiler output it also deleted the vendored
+#     recompiler/lib/rabbitizer/**/generated headers, and rabbitizer could not
+#     compile.
+#
+# Both are invisible to every other job here, which builds the repo. This job
+# stages with the same tools/stage_framework_tree.sh that titles package with,
+# round-trips through a zip, and then runs the exact command a kit user runs.
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild-from-kit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build rsync
+
+      # rsync is the branch that shipped the broken kits: its unanchored
+      # exclude matched at every depth, while the cp fallback's removal was
+      # already anchored. Make sure the job takes that branch.
+      - name: Stage the framework tree as a kit carries it
+        run: |
+          set -euo pipefail
+          command -v rsync >/dev/null || { echo "::error::rsync missing"; exit 1; }
+          bash tools/stage_framework_tree.sh \
+            --framework . \
+            --dest "${RUNNER_TEMP}/stage/psxrecomp"
+
+      - name: Zip and extract it
+        run: |
+          set -euo pipefail
+          python3 tools/create_release_zip.py \
+            --source "${RUNNER_TEMP}/stage" \
+            --output "${RUNNER_TEMP}/kit.zip"
+          mkdir -p "${RUNNER_TEMP}/kit"
+          unzip -q "${RUNNER_TEMP}/kit.zip" -d "${RUNNER_TEMP}/kit"
+
+      # The literal command a kit user runs, and the one _build_recompiler_targets
+      # runs by itself when emitter binaries are missing or the toolchain stamp
+      # moves. --no-download keeps CI off the toolchain CDN: ubuntu's cmake,
+      # ninja and clang stand in for the portable pack.
+      - name: Rebuild emitters from the extracted kit
+        working-directory: ${{ runner.temp }}/kit
+        run: |
+          set -euo pipefail
+          python3 psxrecomp/psxrecomp_cli.py ensure-emitters \
+            --project-root . --force --no-download
+
+      - name: Check the emitters exist and run
+        working-directory: ${{ runner.temp }}/kit
+        run: |
+          set -euo pipefail
+          for tool in psxrecomp-game psxrecomp-bios; do
+            bin="psxrecomp/recompiler/build/${tool}"
+            if [[ ! -x "${bin}" ]]; then
+              echo "::error::${tool} was not produced at ${bin}"
+              ls -la psxrecomp/recompiler/build || true
+              exit 1
+            fi
+            # No arguments: every emitter prints usage and exits non-zero. That
+            # is enough to prove the binary loads and is the right architecture.
+            "./${bin}" >/dev/null 2>&1 || true
+            echo "ok: ${bin}"
+          done
+
+      - name: Upload the kit on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kit-emitter-rebuild-stage
+          path: ${{ runner.temp }}/kit.zip
+          retention-days: 7

@@ -369,7 +369,13 @@ $STRAY"
 STRAY_BIN="$(find "$STAGE" -iname '*.bin' ! -path "$OPENBIOS" -print 2>/dev/null || true)"
 [ -z "$STRAY_BIN" ] || die "unexpected .bin in stage (only openbios.bin may ship):
 $STRAY_BIN"
-STRAY_GEN="$(find "$STAGE" -path '*/generated/*' -print 2>/dev/null | head -1 || true)"
+# "generated" names two unrelated things: recompiler output, which never ships,
+# and the vendored rabbitizer headers under recompiler/lib, which are tracked
+# sources a kit needs to rebuild the emitters. Matching the directory name alone
+# conflates them — the same conflation that stripped those headers out of kits
+# until tools/stage_framework_tree.sh anchored its exclude.
+STRAY_GEN="$(find "$STAGE" -path '*/generated/*' ! -path '*/recompiler/lib/*' \
+    -print 2>/dev/null | head -1 || true)"
 [ -z "$STRAY_GEN" ] || die "generated recompiler output entered the stage: $STRAY_GEN"
 note "no disc / retail BIOS / generated / local-state files"
 

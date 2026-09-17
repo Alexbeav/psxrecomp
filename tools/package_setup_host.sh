@@ -453,31 +453,23 @@ if [[ ! -d "${ROOT}/recomp-ui" ]]; then
   exit 1
 fi
 
-copy_tree_filtered "${ROOT}/psxrecomp" "${STAGE}/psxrecomp" \
-  --exclude '.git' \
-  --exclude 'recompiler/build' \
-  --exclude 'generated' \
-  --exclude '__pycache__' \
-  --exclude 'build' \
-  --exclude 'build-*'
+# The framework copy is what a kit rebuilds its emitters from, so its filter
+# list is build configuration. It lives in tools/stage_framework_tree.sh, which
+# the CI regression job (.github/workflows/kit-emitter-rebuild.yml) also calls,
+# so the tree that job builds is the tree titles ship.
+bash "${SCRIPT_DIR}/stage_framework_tree.sh" \
+  --framework "${ROOT}/psxrecomp" \
+  --dest "${STAGE}/psxrecomp"
 
 copy_tree_filtered "${ROOT}/recomp-ui" "${STAGE}/recomp-ui" \
   --exclude '.git' \
   --exclude 'build' \
   --exclude '__pycache__'
 
-# Developer notes, one-off capture helpers, and dependency test fixtures are
-# not setup SDK inputs. Some contain paths from their authors' workstations.
-# Keep those paths out of a public source package on both rsync and cp routes.
+# Developer notes and dependency test fixtures are not setup SDK inputs; some
+# contain paths from their authors' workstations. The psxrecomp side of this
+# drop list lives in stage_framework_tree.sh.
 rm -rf \
-  "${STAGE}/psxrecomp/CLAUDE.md" \
-  "${STAGE}/psxrecomp/docs/internal" \
-  "${STAGE}/psxrecomp/docs/STRING_TRANSLATION.md" \
-  "${STAGE}/psxrecomp/recompiler/lib/ELFIO/tests" \
-  "${STAGE}/psxrecomp/tools/aot_overlay_spike" \
-  "${STAGE}/psxrecomp/tools/tasreplays" \
-  "${STAGE}/psxrecomp/tools/audio_capture_ab.py" \
-  "${STAGE}/psxrecomp/tools/launch_tomba2_interp_perf.ps1" \
   "${STAGE}/recomp-ui/docs/HANDOFF.md" \
   "${STAGE}/recomp-ui/test_data"
 
