@@ -2,10 +2,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "mdec.c"
+/* Exclusive create without C11 fopen "x", which msvcrt rejects. */
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+static FILE *fixture_create_new(const char *p) {
+    int fd = _open(p, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, 0644);
+    return fd < 0 ? NULL : _fdopen(fd, "wb");
+}
+#else
+#include <unistd.h>
+static FILE *fixture_create_new(const char *p) {
+    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    return fd < 0 ? NULL : fdopen(fd, "wb");
+}
+#endif
 uint64_t s_frame_count,psx_cycle_count;
 int debug_server_fmv_quiet(void){return 0;}
 int main(int argc,char **argv){
- if(argc!=3)return 2;FILE *in=fopen(argv[1],"rb"),*out=fopen(argv[2],"wbx");if(!in || !out)return 2;
+ if(argc!=3)return 2;FILE *in=fopen(argv[1],"rb"),*out=fixture_create_new(argv[2]);if(!in || !out)return 2;
 #ifdef _WIN32
  if(_putenv_s("PSX_MDEC_SOURCE_MODEL","octoshock-2.3"))abort();
 #else

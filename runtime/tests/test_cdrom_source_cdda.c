@@ -9,6 +9,21 @@
  * entire synthetic disc. All commands and advancement use its real MMIO API.
  */
 #include "../src/cdrom.c"
+/* Exclusive create without C11 fopen "x", which msvcrt rejects. */
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+static FILE *fixture_create_new(const char *p) {
+    int fd = _open(p, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, 0644);
+    return fd < 0 ? NULL : _fdopen(fd, "wb");
+}
+#else
+#include <unistd.h>
+static FILE *fixture_create_new(const char *p) {
+    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    return fd < 0 ? NULL : fdopen(fd, "wb");
+}
+#endif
 
 uint64_t psx_cycle_count, s_frame_count;
 uint32_t i_stat, g_debug_current_func_addr, g_debug_last_store_pc;
@@ -58,7 +73,7 @@ cdrom_init("authored");
  * This unit precondition is not the runtime's production cold-boot image. */
 if(argc==5){if(!strcmp(argv[4],"capture"))cdrom_snapshot_bytes();else if(!strcmp(argv[4],"write-state"))cdrom_snapshot_write(NULL);else if(!strcmp(argv[4],"scan"))cdrom_write(0x1f801801,4);else if(!strcmp(argv[4],"restore"))return cdrom_snapshot_read(NULL,0)?1:0;else if(!strcmp(argv[4],"double-speed")){mode_reg=0x80;start_source_cdda(2);}else if(!strcmp(argv[4],"active-read")){reading=1;start_source_cdda(2);}return 1;}
 stat_reg=CDSTAT_SHELL;s_source_seek_paused=0;read_sec=2;setloc_pending=1;s_setloc_lba=0;
-FILE *in=fopen(argv[2],"rb"),*f=fopen(argv[3],"wbx");if(!in||!f)return 3;uint8_t bytes[16];
+FILE *in=fopen(argv[2],"rb"),*f=fixture_create_new(argv[3]);if(!in||!f)return 3;uint8_t bytes[16];
 while(fread(bytes,1,16,in)==16){uint32_t o[4];for(int i=0;i<4;i++)o[i]=cd_tape_le32(bytes+i*4);
 if(o[0]==0){if(o[1]<psx_cycle_count)return 4;uint32_t delta=o[1]-psx_cycle_count;psx_cycle_count=o[1];cdrom_advance(delta);}
 else if(o[0]==1)cdrom_write(0x1f801800+o[2],o[3]);

@@ -3,6 +3,21 @@
 #include "dma_gpu_ll.c"
 #include "dma.c"
 #include "mdec.c"
+/* Exclusive create without C11 fopen "x", which msvcrt rejects. */
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+static FILE *fixture_create_new(const char *p) {
+    int fd = _open(p, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, 0644);
+    return fd < 0 ? NULL : _fdopen(fd, "wb");
+}
+#else
+#include <unistd.h>
+static FILE *fixture_create_new(const char *p) {
+    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    return fd < 0 ? NULL : fdopen(fd, "wb");
+}
+#endif
 #include <assert.h>
 uint64_t s_frame_count,psx_cycle_count,psx_next_service_cycle;
 int psx_in_device_service,g_event_step_conservative,g_ls_replay_active;
@@ -69,7 +84,7 @@ uint32_t source_gpu_runtime_cycles_to_event(void){return 128-(uint32_t)(psx_cycl
 void source_gpu_runtime_dma_write(void){dma_source_gpu_service_at(psx_cycle_count);}
 void source_gpu_runtime_copy(SourceGPUServiceClock *c,SourceGPUCommandProjection *s){(void)c;(void)s;abort();}
 int main(int argc,char **argv){
- if(argc!=3)return 2;FILE *in=fopen(argv[1],"rb"),*out=fopen(argv[2],"wbx");if(!in || !out)return 2;
+ if(argc!=3)return 2;FILE *in=fopen(argv[1],"rb"),*out=fixture_create_new(argv[2]);if(!in || !out)return 2;
  set_option("PSX_MDEC_SOURCE_MODEL","octoshock-2.3");
  set_option("PSX_INPUT_ROUTE_FILE","authored-fixture");
  set_option("PSX_GPU_DMA_MODEL","octoshock-2.2.2-bounded-quad");

@@ -1,3 +1,7 @@
+/* The reads under test run inside assert(); keep them in Release builds. */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "psx_cyc.h"
 #include <assert.h>
 #include <stdio.h>

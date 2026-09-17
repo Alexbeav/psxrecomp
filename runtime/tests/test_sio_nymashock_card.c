@@ -1,4 +1,8 @@
 /* Authored SIO transactions on the production device with an explicit clock. */
+/* Card reads and the final export run inside assert(); keep them in Release builds. */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "../src/sio.c"
 #include "../src/memcard.c"
 #include <stdio.h>
