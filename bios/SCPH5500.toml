@@ -1,8 +1,9 @@
 # Retail SCPH-5500 (Japan), SHA256 9c0421858e217805f4abe18698afea8d5aa36ff0727eb8484944e00eb5e7eadb.
 # ROM [0x80,0x18000) equals the qualified SCPH1001 kernel bytes.
 # The reset-vector area has 24 differing bytes; compile those target bytes.
-# The seed list retains matching 64-byte kernel entries plus the explicit
-# architectural reset vector. Shell code differs; PSX_SHELLWIN_INTERP=ON is
+# The seed list is derived by tools/filter_bios_seeds.py: matching 64-byte kernel
+# entries of the SCPH1001 corpus, the architectural vectors, and this ROM's own
+# A0/B0/C0 kernel table targets. Shell code differs; PSX_SHELLWIN_INTERP=ON is
 # required until its own native admission is qualified. No firmware is shipped.
 
 [program]

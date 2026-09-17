@@ -56,6 +56,13 @@ typedef struct PsxBiosBackend {
      * each range's hi. Null/0 for an image that declares no slots. */
     const PsxKernelPatchRange *kernel_patch_ranges;
     uint32_t                   kernel_patch_range_count;
+
+    /* 1 iff addr normalizes to a compiled function entry or registered
+     * continuation (block leader) of this image, without executing it. A
+     * mid-block instruction or a delay slot is not re-enterable by the static
+     * dispatch; psx_is_dispatchable() (traps.c) uses this to refuse such a
+     * resume PC where it is published. */
+    int (*is_entry)(uint32_t addr);
 } PsxBiosBackend;
 
 /* The backend in use. Null before psx_bios_select() runs; every forwarder and
@@ -74,6 +81,9 @@ const PsxBiosBackend *psx_bios_find(const char *image_id);
 /* Select a backend and publish it (also assigns the global psx_bios_image).
  * Returns 0 if backend is null. */
 int psx_bios_activate(const PsxBiosBackend *backend);
+
+/* Active backend's is_entry(); 0 when no backend is active. */
+int psx_bios_is_entry(uint32_t addr);
 
 /* The bundled, redistributable backend (image_bundled != 0), or null if this
  * build has none. */

@@ -17,6 +17,7 @@
 #endif
 #include <time.h>
 #include "debug_server.h"
+#include "dispatch_publish.h"
 #include "psx_bss.h"
 #include "nd_intro_ot.h"
 #include "latency_ring.h"
@@ -10117,6 +10118,58 @@ static void handle_irqctx_ring(int id, const char *json)
     free(buf);
 }
 
+/* publish_ring — runtime sites that published a resume PC (dispatch_publish.h):
+ * site name, target, origin and whether psx_is_dispatchable accepted it then.
+ * Params: count (newest N, default 128), only_bad (1 = non-dispatchable only),
+ * target (hex string: entries whose target matches, KSEG-normalized). */
+static void handle_publish_ring(int id, const char *json)
+{
+    int count = json_get_int(json, "count", 128);
+    int only_bad = json_get_int(json, "only_bad", 0);
+    char tbuf[32] = {0};
+    uint32_t want = 0; int have_want = 0;
+    if (json_get_str(json, "target", tbuf, sizeof(tbuf)) && tbuf[0]) {
+        want = (uint32_t)strtoul(tbuf, NULL, 16); have_want = 1;
+    }
+    if (count < 1) count = 1;
+    if (count > (int)PSX_PUBLISH_RING_CAP) count = (int)PSX_PUBLISH_RING_CAP;
+    uint64_t total = psx_publish_seq();
+    uint64_t avail = total < PSX_PUBLISH_RING_CAP ? total : PSX_PUBLISH_RING_CAP;
+    size_t BUF_SZ = 256u + (size_t)avail * 200u;
+    char *buf = (char *)malloc(BUF_SZ); if (!buf) { send_err(id, "oom"); return; }
+    size_t pos = 0;
+    pos += snprintf(buf + pos, BUF_SZ - pos,
+                    "{\"id\":%d,\"ok\":true,\"total\":%llu,\"entries\":[",
+                    id, (unsigned long long)total);
+    /* Newest `count` matching entries, emitted oldest first. */
+    uint64_t first = total;
+    int matched = 0;
+    for (uint64_t i = 1; i <= avail && matched < count; i++) {
+        const PsxPublishEntry *e = psx_publish_get(total - i);
+        if (!e) continue;
+        if (only_bad && e->dispatchable) continue;
+        if (have_want && ((e->target ^ want) & 0x1FFFFFFFu) != 0u) continue;
+        first = total - i;
+        matched++;
+    }
+    int emitted = 0;
+    for (uint64_t idx = first; idx < total && emitted < matched && pos < BUF_SZ - 256; idx++) {
+        const PsxPublishEntry *e = psx_publish_get(idx);
+        if (!e) continue;
+        if (only_bad && e->dispatchable) continue;
+        if (have_want && ((e->target ^ want) & 0x1FFFFFFFu) != 0u) continue;
+        pos += snprintf(buf + pos, BUF_SZ - pos,
+            "%s{\"seq\":%llu,\"cycle\":%llu,\"frame\":%u,\"site\":\"%s\","
+            "\"target\":\"0x%08X\",\"origin\":\"0x%08X\",\"dispatchable\":%u}",
+            emitted ? "," : "", (unsigned long long)e->seq, (unsigned long long)e->cycle,
+            e->frame, psx_publish_site_name(e->site), e->target, e->origin, e->dispatchable);
+        emitted++;
+    }
+    pos += snprintf(buf + pos, BUF_SZ - pos, "],\"emitted\":%d}", emitted);
+    debug_server_send_line(buf);
+    free(buf);
+}
+
 /* sp_ring — dump the always-on stack-domain transition ring (fntrace.c).
  * One entry per dispatch whose guest SP crossed a 64 KB domain: the
  * provenance record for "who installed this stack pointer". */
@@ -13959,6 +14012,7 @@ static const CmdEntry s_commands[] = {
     { "freeze_check",      handle_freeze_check },
     { "d44_ring",          handle_d44_ring },
     { "irqctx_ring",       handle_irqctx_ring },
+    { "publish_ring",      handle_publish_ring },
     { "sp_ring",           handle_sp_ring },
     { "disp_ring",         handle_disp_ring },
     { "cyc_watch",         handle_cyc_watch },

@@ -12,8 +12,9 @@
 #
 # Because the shell DIFFERS from the US image, this profile has no shell seeds:
 # recompiler/seeds/phase2_ghidra_seeds_SCPH5552.json is the SCPH1001 corpus
-# filtered through tools/filter_bios_seeds.py to the kernel region, and every
-# seed in it lies below ROM 0x18000. The shell window runs through the dirty-RAM
+# filtered through tools/filter_bios_seeds.py to the kernel region (plus the
+# vectors and this ROM's own A0/B0/C0 table targets), and every seed in it lies
+# below ROM 0x18000. The shell window runs through the dirty-RAM
 # interpreter (build with -DPSX_SHELLWIN_INTERP=ON) until an EU-shell seed
 # corpus exists.
 #

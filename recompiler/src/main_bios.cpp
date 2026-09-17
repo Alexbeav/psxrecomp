@@ -493,6 +493,49 @@ size_t add_bios_vector_target_seeds(
     return added;
 }
 
+// Seeds the profile adds on top of the seed file: ROM-resident vector-table
+// targets and bios_alias targets. Shared by --emit and --discover so both walk
+// the same roots.
+void augment_profile_seeds(std::vector<PSXRecompV4::Seed>& seeds,
+                           const std::vector<uint8_t>& rom,
+                           const fs::path& seed_path,
+                           const std::vector<PSXRecompV4::BiosVectorTable>& bios_vectors,
+                           const std::vector<PSXRecompV4::BiosAlias>& bios_aliases) {
+    const size_t vector_seed_count =
+        add_bios_vector_target_seeds(seeds, rom, kBiosBase,
+                                     kBiosBase + static_cast<uint32_t>(kBiosSize) - 1,
+                                     bios_vectors);
+    std::fprintf(stdout, "psxrecomp-bios: loaded %zu seeds from %s\n",
+                 seeds.size(), seed_path.string().c_str());
+    if (vector_seed_count != 0) {
+        std::fprintf(stdout,
+            "psxrecomp-bios: added %zu ROM-resident BIOS vector target seeds\n",
+            vector_seed_count);
+    }
+
+    // Also seed bios_alias targets — same reachability hole as vector-table
+    // entries: a fixed-target trampoline's callee may never be jal'd in ROM.
+    const uint32_t base_phys = kBiosBase & 0x1FFFFFFFu;
+    std::set<uint32_t> have;
+    for (const auto& sd : seeds) have.insert(sd.address & 0x1FFFFFFFu);
+    size_t alias_added = 0;
+    for (const auto& ba : bios_aliases) {
+        const uint32_t phys = ba.target_key & 0x1FFFFFFFu;
+        if (phys < base_phys || phys >= base_phys + (uint32_t)kBiosSize) continue;
+        if ((phys & 3u) != 0u) continue;
+        if (!have.insert(phys).second) continue;
+        seeds.push_back({kBiosBase | (phys - base_phys),
+                         fmt::format("bios_alias_{:08X}", ba.ram_addr),
+                         "ROM-resident target of configured BIOS alias"});
+        alias_added++;
+    }
+    if (alias_added != 0) {
+        std::fprintf(stdout,
+            "psxrecomp-bios: added %zu BIOS alias target seeds\n",
+            alias_added);
+    }
+}
+
 // ----- Phase 1c: artifact emission -----------------------------------------
 
 std::string make_function_manifest_json(const PSXRecompV4::DiscoveryResult& dr,
@@ -798,41 +841,7 @@ int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
 
     // 2. Load seeds.
     auto seeds = load_seeds(seed_path);
-    const size_t vector_seed_count =
-        add_bios_vector_target_seeds(seeds, rom, kBiosBase,
-                                     kBiosBase + static_cast<uint32_t>(kBiosSize) - 1,
-                                     bios_vectors);
-    std::fprintf(stdout, "psxrecomp-bios: loaded %zu seeds from %s\n",
-                 seeds.size(), seed_path.string().c_str());
-    if (vector_seed_count != 0) {
-        std::fprintf(stdout,
-            "psxrecomp-bios: added %zu ROM-resident BIOS vector target seeds\n",
-            vector_seed_count);
-    }
-
-    // Also seed bios_alias targets — same reachability hole as vector-table
-    // entries: a fixed-target trampoline's callee may never be jal'd in ROM.
-    {
-        const uint32_t base_phys = kBiosBase & 0x1FFFFFFFu;
-        std::set<uint32_t> have;
-        for (const auto& sd : seeds) have.insert(sd.address & 0x1FFFFFFFu);
-        size_t alias_added = 0;
-        for (const auto& ba : bios_aliases) {
-            const uint32_t phys = ba.target_key & 0x1FFFFFFFu;
-            if (phys < base_phys || phys >= base_phys + (uint32_t)kBiosSize) continue;
-            if ((phys & 3u) != 0u) continue;
-            if (!have.insert(phys).second) continue;
-            seeds.push_back({kBiosBase | (phys - base_phys),
-                             fmt::format("bios_alias_{:08X}", ba.ram_addr),
-                             "ROM-resident target of configured BIOS alias"});
-            alias_added++;
-        }
-        if (alias_added != 0) {
-            std::fprintf(stdout,
-                "psxrecomp-bios: added %zu BIOS alias target seeds\n",
-                alias_added);
-        }
-    }
+    augment_profile_seeds(seeds, rom, seed_path, bios_vectors, bios_aliases);
 
     // 3. Run discovery.
     const auto dr = PSXRecompV4::FunctionDiscovery::discover(
@@ -879,7 +888,10 @@ int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
 
 int run_discover(const fs::path& bios_path, const fs::path& out_dir,
                  const fs::path& seed_path,
-                 const PSXRecompV4::BiosAddressModel& model) {
+                 const PSXRecompV4::BiosAddressModel& model,
+                 const std::string& declared_sha = {},
+                 const std::vector<PSXRecompV4::BiosVectorTable>& bios_vectors = {},
+                 const std::vector<PSXRecompV4::BiosAlias>& bios_aliases = {}) {
     fs::create_directories(out_dir);
 
     // 0. Activate the profile's address model (discovery follows J/JAL
@@ -889,11 +901,17 @@ int run_discover(const fs::path& bios_path, const fs::path& out_dir,
     // 1. Load + validate BIOS file.
     const auto rom = load_file_strict(bios_path, kBiosSize);
     const std::string sha = sha256_hex(rom);
+    if (!declared_sha.empty() && declared_sha != sha) {
+        std::fprintf(stderr,
+            "psxrecomp-bios: FATAL: profile declares [program.image] sha256\n"
+            "  %s\nbut %s hashes to\n  %s\n",
+            declared_sha.c_str(), bios_path.string().c_str(), sha.c_str());
+        return 1;
+    }
 
-    // 2. Load seeds.
-    const auto seeds = load_seeds(seed_path);
-    std::fprintf(stdout, "psxrecomp-bios: loaded %zu seeds from %s\n",
-                 seeds.size(), seed_path.string().c_str());
+    // 2. Load seeds (plus the profile's vector/alias roots, as --emit does).
+    auto seeds = load_seeds(seed_path);
+    augment_profile_seeds(seeds, rom, seed_path, bios_vectors, bios_aliases);
 
     // 3. Run discovery.
     const auto dr = PSXRecompV4::FunctionDiscovery::discover(
@@ -949,6 +967,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stdout,
                     "usage: psxrecomp-bios --config <path.toml>\n"
                     "                      [--rom <bios.bin>] [--out-dir <dir>]\n"
+                    "                      [--seeds <seeds.json>] [--discover-only]\n"
                     "       psxrecomp-bios <bios.bin> <out_dir> [--cc <c-compiler>]\n"
                     "       psxrecomp-bios <bios.bin> <out_dir> --discover <seeds.json>\n"
                     "       psxrecomp-bios <bios.bin> <out_dir> --emit-full <seeds.json>\n");
@@ -963,6 +982,8 @@ int main(int argc, char** argv) {
         std::optional<fs::path> config_path;
         std::optional<fs::path> config_rom_override;
         std::optional<fs::path> config_out_override;
+        std::optional<fs::path> config_seeds_override;
+        bool config_discover_only = false;
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
             if (a == "--config" && i + 1 < argc) {
@@ -973,12 +994,17 @@ int main(int argc, char** argv) {
                 config_rom_override = PSXRecompV4::host_absolute(argv[++i]);
             } else if (a == "--out-dir" && i + 1 < argc) {
                 config_out_override = PSXRecompV4::host_absolute(argv[++i]);
+            } else if (a == "--seeds" && i + 1 < argc) {
+                config_seeds_override = PSXRecompV4::host_absolute(argv[++i]);
+            } else if (a == "--discover-only") {
+                config_discover_only = true;
             }
         }
         if (config_path) {
             auto cfg = PSXRecompV4::load_bios_config(*config_path);
             if (config_rom_override) cfg.rom_path = *config_rom_override;
             if (config_out_override) cfg.out_dir = *config_out_override;
+            if (config_seeds_override) cfg.seeds_path = *config_seeds_override;
             std::fprintf(stdout,
                 "psxrecomp-bios: --config %s\n"
                 "  rom        = %s\n"
@@ -991,6 +1017,13 @@ int main(int argc, char** argv) {
                 cfg.out_dir.string().c_str(),
                 cfg.out_stem.c_str());
             const auto model = PSXRecompV4::BiosAddressModel::from_config(cfg);
+            if (config_discover_only) {
+                // Discovery artifacts only (function_manifest.json etc.), no C.
+                // tools/bios_seed_corpus.py drives this to enumerate boundaries.
+                return run_discover(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
+                                    model, cfg.image_sha256,
+                                    cfg.bios_vectors, cfg.bios_aliases);
+            }
             PSXRecompV4::FullFunctionEmitter::set_bios_profile(&cfg);
             return run_emit_full(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
                                  cfg.out_stem, model, cfg.image_sha256,

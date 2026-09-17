@@ -387,6 +387,35 @@ OpenBIOS incompatibility. See [`BIOS_SELECTION.md`](BIOS_SELECTION.md).
 OpenBIOS seeds come from its ELF symbol tables (no Ghidra pass needed):
 see the pin + regeneration recipe in `bios/OpenBIOS.toml`.
 
+Retail seed files are regenerated from a clean checkout, your own dumps under
+`bios/` and a built `psxrecomp-bios`. No Ghidra export is involved:
+
+```bash
+# SCPH1001 reference corpus: vectors, A0/B0/C0 kernel-table targets, discovery
+# call targets, unreferenced post-return functions, plus the committed
+# recompiler/seeds/bios_curated_seeds.json. Every seed records its provenance.
+python tools/bios_seed_corpus.py generate --profile bios/SCPH1001.toml --report seeds-report.md
+
+# Kernel-only derived corpora (their shells differ from SCPH1001)
+python tools/filter_bios_seeds.py --reference-seeds recompiler/seeds/phase2_ghidra_seeds.json \
+    --reference-rom bios/SCPH1001.BIN --target-rom bios/EUR-PSX-SCPH5552.bin \
+    --target-name SCPH5552 --target-profile bios/SCPH5552.toml \
+    --out recompiler/seeds/phase2_ghidra_seeds_SCPH5552.json
+python tools/filter_bios_seeds.py --reference-seeds recompiler/seeds/phase2_ghidra_seeds.json \
+    --reference-rom bios/SCPH1001.BIN --target-rom bios/SCPH5500.BIN \
+    --target-name SCPH5500 --target-profile bios/SCPH5500.toml \
+    --out recompiler/seeds/phase2_ghidra_seeds_SCPH5500.json
+
+# Consistency (ROM checks skip when the images are absent)
+python -m unittest tests.test_bios_seed_corpus -v
+```
+
+To find out what an address is before seeding it, run
+`python tools/bios_seed_corpus.py classify --profile bios/SCPH5552.toml --addresses 0xBFC0C0B0`.
+A `block_leader` is already a dispatchable continuation. A `mid_block` or
+`delay_slot` address is not a callable entry, so do not seed it: find what
+published that PC.
+
 ### Controller capacity and live port routing
 
 `psxrecomp_add_game_runtime(MAX_PLAYERS 1)` retains two compiled controller

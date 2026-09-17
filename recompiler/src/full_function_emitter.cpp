@@ -183,6 +183,18 @@ bool FullFunctionEmitter::emit_function(
                "psx_cyc_bb_defer_flush();\n#endif\n" + indent +
                fmt::format("psx_check_interrupts_at(cpu, {});\n", resume_pc_expr);
     };
+    // Publish a register-held jump target: latch it ONCE (like the `_t` jr paths
+    // below), check interrupts with that PC as the resume point, then publish the
+    // same value. Reading the register again after psx_check_interrupts_at could
+    // observe a handler that did not restore it; the R3000A latches the jump
+    // target before any exception is taken (T110).
+    auto emit_publish_expr = [&emit_irq_check_expr](const std::string& target_expr,
+                                                    const std::string& tail,
+                                                    const std::string& indent = "    ") {
+        return indent + "{ uint32_t psx_pub_pc = " + target_expr + ";\n" +
+               emit_irq_check_expr("psx_pub_pc", indent) +
+               indent + "cpu->pc = psx_pub_pc; " + tail + " }\n";
+    };
     auto emit_cosim_instr = [](uint32_t pc, const std::string& indent = "    ") {
         return "#ifdef PSX_COSIM\n" + indent +
                fmt::format("cosim_instr(0x{:08X}u);\n", bios_runtime_pc(pc)) +
@@ -313,7 +325,14 @@ bool FullFunctionEmitter::emit_function(
         if (addr_to_raw.count(target_rom)) return;
         // Find containing function.
         uint32_t parent_norm = find_containing_function(target_rom);
-        if (parent_norm == 0) return;  // No containing function — nothing to register
+        if (parent_norm == 0) {
+            // The body publishes this PC, but no compiled function can own it:
+            // dispatch will miss at runtime. Never silent (T110).
+            std::fprintf(stderr,
+                "[cross-target] UNREGISTERED: 0x%08X published by func 0x%08X "
+                "lies in no discovered function\n", target_rom, func.entry_addr);
+            return;
+        }
         // Push to OUT_CROSS_TARGETS (NOT local_continuations). The top-level
         // emit pass aggregates these and re-injects them as the containing
         // function's continuations in PASS 2.
@@ -1069,18 +1088,17 @@ bool FullFunctionEmitter::emit_function(
                         uint8_t rs = (pb.raw >> 21) & 0x1F;
                         if (rs == 31) {
                             if (ra_loaded_from_non_sp)
-                                out += emit_irq_check_expr("cpu->gpr[31]") +
-                                       "    cpu->pc = cpu->gpr[31]; psx_restore_state_escape(); return;  /* longjmp-return */\n";
+                                out += emit_publish_expr("cpu->gpr[31]",
+                                       "psx_restore_state_escape(); return;  /* longjmp-return */");
                             else if (cps)
-                                out += emit_irq_check_expr("cpu->gpr[31]") +
-                                       "    cpu->pc = cpu->gpr[31]; return;  /* CPS: publish $ra */\n";
+                                out += emit_publish_expr("cpu->gpr[31]",
+                                       "return;  /* CPS: publish $ra */");
                             else
                                 out += emit_irq_check_expr("cpu->gpr[31]") +
                                        "    return;\n";
                         } else {
-                            out += emit_irq_check_expr(fmt::format("cpu->gpr[{}]", static_cast<int>(rs)));
-                            out += fmt::format("    cpu->pc = cpu->gpr[{}]; return;\n",
-                                               static_cast<int>(rs));
+                            out += emit_publish_expr(
+                                fmt::format("cpu->gpr[{}]", static_cast<int>(rs)), "return;");
                         }
                     } else {
                         // Pending non-JR terminator (unexpected but safe).
@@ -1578,11 +1596,11 @@ bool FullFunctionEmitter::emit_function(
                     : fmt::format("cpu->gpr[{}]", static_cast<int>(rs));
                 if (rs == 31) {
                     if (ra_loaded_from_non_sp)
-                        out += emit_irq_check_expr(jr_tgt) +
-                               fmt::format("    cpu->pc = {}; psx_restore_state_escape(); return;  /* longjmp-return */\n", jr_tgt);
+                        out += emit_publish_expr(jr_tgt,
+                               "psx_restore_state_escape(); return;  /* longjmp-return */");
                     else if (cps)
-                        out += emit_irq_check_expr(jr_tgt) +
-                               fmt::format("    cpu->pc = {}; return;  /* CPS: publish $ra for trampoline dispatch */\n", jr_tgt);
+                        out += emit_publish_expr(jr_tgt,
+                               "return;  /* CPS: publish $ra for trampoline dispatch */");
                     else
                         out += emit_irq_check_expr(jr_tgt) +
                                "    return;\n";
@@ -1666,8 +1684,7 @@ bool FullFunctionEmitter::emit_function(
                                     out += fmt::format("            goto label_{:08X};\n", rom_t);
                                 }
                                 out += "        default:\n";
-                                out += emit_irq_check_expr(jr_tgt, "            ");
-                                out += fmt::format("            cpu->pc = {}; return;\n", jr_tgt);
+                                out += emit_publish_expr(jr_tgt, "return;", "            ");
                                 out += "    }\n";
                                 emitted_switch = true;
                             }
@@ -1675,8 +1692,7 @@ bool FullFunctionEmitter::emit_function(
                     }
                     if (!emitted_switch) {
                         // Tail call: set cpu->pc and return; dispatch loop re-dispatches.
-                        out += emit_irq_check_expr(jr_tgt);
-                        out += fmt::format("    cpu->pc = {}; return;\n", jr_tgt);
+                        out += emit_publish_expr(jr_tgt, "return;");
                     }
                 }
             }
@@ -1712,6 +1728,11 @@ bool FullFunctionEmitter::emit_function(
         if (!has_control_flow) {
             // Fallthrough tail call: set cpu->pc and return; dispatch loop re-dispatches.
             uint32_t next_addr = last_addr + 4;
+            // The fall-through PC is published like any branch target, so it
+            // must be a dispatch key: a function entry, or a continuation of
+            // the function that contains it (T110 — this edge used to be the
+            // one publish site that registered nothing).
+            register_cross_function_target(next_addr);
             out += emit_irq_check(next_addr);
             out += fmt::format("    cpu->pc = 0x{:08X}u; return;  /* fallthrough */\n", next_addr);
         }
@@ -2456,6 +2477,27 @@ void FullFunctionEmitter::emit_dispatch(
     out += "    psx_dispatch_impl(cpu, addr, return_addr);\n";
     out += "}\n";
 
+    // Non-destructive companion to the static table walk above: 1 iff `addr`
+    // normalizes to a compiled function entry or a registered continuation
+    // (every block leader). A mid-block instruction or a delay slot is NOT an
+    // entry — the runtime's psx_is_dispatchable() uses this so a resume PC that
+    // the static table cannot re-enter is caught where it is published, not
+    // later as an unknown-dispatch fatal (T110).
+    out += fmt::format(
+        "\n/* 1 iff addr is a compiled entry/continuation of this image (no exec). */\n"
+        "static int {0}psx_bios_is_entry(uint32_t addr) {{\n"
+        "    uint32_t phys = normalize(addr);\n"
+        "    int lo = 0, hi = {1} - 1;\n"
+        "    while (lo <= hi) {{\n"
+        "        int mid = lo + (hi - lo) / 2;\n"
+        "        if (dispatch_table[mid].addr == phys) return 1;\n"
+        "        if (dispatch_table[mid].addr < phys) lo = mid + 1;\n"
+        "        else hi = mid - 1;\n"
+        "    }}\n"
+        "    return 0;\n"
+        "}}\n",
+        g_sym_prefix, total_entries);
+
     if (cps) {
         // RECURSION_BUG.md §25 — mark CPS mode at startup for runtime code that
         // routes CPS continuations (overlay_loader.c).
@@ -2489,6 +2531,7 @@ void FullFunctionEmitter::emit_dispatch(
         "    {0}psx_bios_kernel_body_count," "\n"
         "    {0}psx_bios_kernel_patch_ranges," "\n"
         "    {0}psx_bios_kernel_patch_range_count," "\n"
+        "    {0}psx_bios_is_entry," "\n"
         "}};" "\n",
         g_sym_prefix);
 }

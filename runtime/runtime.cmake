@@ -424,6 +424,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/mod_texture_banks.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_bios_backend.c
+    ${PSXRECOMP_ROOT}/runtime/src/dispatch_publish.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c
     ${PSXRECOMP_ROOT}/recompiler/src/config_loader.cpp

@@ -1,0 +1,22 @@
+# BIOS resume-PC test ROM (T110). Paths are relative to this directory's
+# psxrecomp worktree root. gen_testrom.py writes the EXE; psxrecomp-game
+# recompiles it for psx-bresume; psx-beetle boots the same disc raw.
+[game]
+name = "BiosResumeTestROM"
+id = "BRES-00101"
+exe = "bios_resume_testrom.exe"
+disc = "disc/bresume.cue"   # synthetic licensed disc (tools/mkpsxiso)
+load_address = "0x80010000"
+entry_pc = "0x80010000"
+text_size = "0x00000800"
+
+[recompiler]
+seeds = "seeds.txt"
+out_dir = "generated"
+strict = true
+
+[runtime]
+debug_port = 4610
+window_title = "BIOS Resume Test ROM"
+# The test exercises the recompiled kernel (LLE), not the HLE service tier.
+bios_hle = false
