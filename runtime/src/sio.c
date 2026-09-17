@@ -348,7 +348,8 @@ typedef enum {
 
 static ActiveDevice active_device = DEV_NONE;
 
-/* Source DualShock (Mednafen InputDevice_DualShock, Nymashock 1.29.0 and Octoshock 2.7/2.10):
+/* Source pads (Mednafen InputDevice_Gamepad and InputDevice_DualShock: Octoshock 2.2.2/2.3,
+ * Nymashock 1.29.0, Octoshock 2.7/2.10):
  * every device on a port sees every byte while that port's DTR is asserted, and the pad's
  * command phase restarts only when its DTR rises. A session whose first byte is not 0x01
  * (a memory-card 0x81, say) leaves the pad silent until DTR falls and rises again, so a
@@ -1834,7 +1835,7 @@ static void sio_process_byte(uint8_t tx_byte) {
     uint8_t txn_pre_state  = (uint8_t)mc_state;
     int pad_muted = 0;
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack == 2) {
+    if (sio_source_pad_ack) {
         int port = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
         if (pad_dtr_session_first[port]) {
             pad_dtr_session_first[port] = 0;
@@ -2257,7 +2258,7 @@ void sio_write(uint32_t addr, uint32_t value) {
         sio_ctrl = (uint16_t)value;
         sr_record(SR_EVT_CTRL_WRITE, (uint8_t)(value & 0xFF), (uint8_t)((value >> 8) & 0xFF));
 #if SIO_MODEL_CYCLE_PACED
-        if (sio_source_pad_ack == 2) {
+        if (sio_source_pad_ack) {
             /* Per-port DTR as FrontIO drives it: DTR bit and the port-select bit. */
             uint16_t new_ctrl = (value & SIO_CTRL_RESET) ? 0 : (uint16_t)value;
             for (int port = 0; port < 2; port++) {
@@ -2963,7 +2964,7 @@ static int sio_snap_emit(PstW *w) {
             if (!pst_w_bytes(w, analog_mode_locked, sizeof analog_mode_locked) ||
                 !pst_w_bytes(w, pad_supports_config, sizeof pad_supports_config)) return 0;
         }
-        if (sio_source_pad_ack == 2 &&
+        if (sio_source_pad_ack &&
             (!pst_w_bytes(w, pad_dtr_session_first, sizeof pad_dtr_session_first) ||
              !pst_w_bytes(w, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;
     }
@@ -3138,7 +3139,7 @@ static int sio_snap_parse(PstR *r) {
             if (!pst_r_bytes(r, analog_mode_locked, sizeof analog_mode_locked) ||
                 !pst_r_bytes(r, pad_supports_config, sizeof pad_supports_config)) return 0;
         }
-        if (sio_source_pad_ack == 2 &&
+        if (sio_source_pad_ack &&
             (!pst_r_bytes(r, pad_dtr_session_first, sizeof pad_dtr_session_first) ||
              !pst_r_bytes(r, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;
     }
@@ -3192,7 +3193,7 @@ int sio_snapshot_read(const uint8_t *p, uint32_t len) {
         int32_t pulse, timed;
         uint32_t config_bytes = (sio_source_pad_ack == 2 || sio_source_card) ?
             2u * PSX_MAX_PLAYERS : 0u;
-        uint32_t session_bytes = sio_source_pad_ack == 2 ?
+        uint32_t session_bytes = sio_source_pad_ack ?
             (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;
         pst_r_init(&extra, p + len - session_bytes - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,
                    8u + 6u * PSX_MAX_PLAYERS);

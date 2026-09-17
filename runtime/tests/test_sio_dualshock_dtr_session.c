@@ -49,8 +49,8 @@ static void boot(const char *profile) {
     const uint8_t neutral[4] = {128,128,128,128};
     input_dualshock_deliver(0xFFFF, neutral);
 }
-int main(void) {
-    boot("nymashock-1.29.0-dualshock");
+static void source_profile(const char *profile) {
+    boot(profile);
     /* Crash 7798S return 1153: a card probe leaves port 1's DTR asserted, then the BIOS pad
      * read rewrites control without dropping DTR and sends 0x01. */
     sio_write(0x1F80104A, 0); sio_write(0x1F80104A, 0x1003);
@@ -72,6 +72,10 @@ int main(void) {
     check(byte_acked(0x01), "a fresh DTR session answers 0x01");
     check(byte_acked(0x42), "and continues the poll");
     sio_write(0x1F80104A, 0);
+}
+int main(void) {
+    source_profile("nymashock-1.29.0-dualshock");
+    source_profile("octoshock-2.2.2-digital");   /* InputDevice_Gamepad has the same DTR rule */
     /* Negative control: the default profile keeps its device routing. */
     boot("");
     sio_write(0x1F80104A, 0); sio_write(0x1F80104A, 0x1003);
