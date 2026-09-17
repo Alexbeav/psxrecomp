@@ -16,6 +16,7 @@
 #include "boot_state.h"
 #include "bios_hle.h"
 #include "bios_hle_plan.h"
+#include "input_route_session.h"
 #include "psx_bios_known_images.h"
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
@@ -4465,7 +4466,7 @@ static int controller_port_swap_available(void) {
  * routing change. The host device array is never reordered: every consumer
  * maps through the same permutation, including rumble and dev-any input. */
 static void refresh_sio_port_routes(void) {
-    if (psx_netplay_active())
+    if (psx_netplay_active() || input_route_session_owns_ports())
         return;
     for (int sio_slot = 0; sio_slot < PSX_MAX_PLAYERS; sio_slot++) {
         const int host = host_player_for_sio_slot(sio_slot);
@@ -5051,9 +5052,22 @@ static int savestate_input_guard_active(void) {
 static void apply_input_override_to_sio(int override_word) {
 #ifndef PSX_NO_DEBUG_TOOLS
     if (debug_server_apply_dualshock_input(override_word)) return;
+#else
+    if (input_route_session_release_dualshock(override_word)) return;
 #endif
-    PlayerInput& p = g_players[0];
     const uint16_t w = (uint16_t)override_word;
+    if (input_route_session_owns_ports()) {
+        /* A PSXRTI3 digital route or a recording declares one digital pad at
+         * P1. The word is the whole device state, so recording and every
+         * product's replay deliver identical input whatever host devices or
+         * seat modes are configured. */
+        sio_set_pad_state_slot(0, w);
+        sio_set_pad_sticks(0, 0x80, 0x80, 0x80, 0x80);
+        sio_request_pad_type(0, 0);
+        psx_selfcheck_note_pad(0, w, 0x80, 0x80, 0x80, 0x80, 0);
+        return;
+    }
+    PlayerInput& p = g_players[0];
     sio_set_pad_state_slot(0, w);
 
     uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
@@ -6478,6 +6492,10 @@ static void savestate_menu_close(void) {
 static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
     if (psx_rewind_is_open() || runtime_settings_menu_open)
         return;
+    if (input_route_session_recording()) {
+        host_osd_push("Save states are off while recording a route", 1500);
+        return;
+    }
     if (savestate_menu_open) {
         savestate_menu_close();
         return;
@@ -6996,6 +7014,26 @@ struct NetplayVblankEpilogue {
     int override = -1;
 };
 
+/* PSX_INPUT_ROUTE_FILE / PSX_INPUT_ROUTE_RECORD frame boundary. A replay that
+ * set PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS=1 exits here once its last marker is
+ * checked: 0 when every recorded checkpoint matched, 3 otherwise. */
+static void route_session_boundary(void) {
+    const int status = input_route_session_boundary();
+    if (status < 0) return;
+    std::fflush(stdout);
+    psx_crash_trace_set_exit_origin("input_route_markers_complete");
+    std::exit(status);
+}
+
+/* Recording samples the physical P1 pad once per vblank as a digital word. */
+#ifndef PSX_NO_DEBUG_TOOLS
+static int route_record_live_p1_word(void) {
+    PsxNetPad pad;
+    if (g_headless || !capture_pad_slot(0, &pad)) return 0xFFFF;
+    return pad.buttons;
+}
+#endif
+
 /* Called from gpu_vblank_tick() at each simulated vblank. */
 static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     NetplayVblankEpilogue ep{};
@@ -7021,14 +7059,25 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     debug_server_record_frame();
     debug_server_check_watchpoints();
 
+    /* Route markers are checked (or recorded) on this boundary, before the
+     * next route input is taken. */
+    route_session_boundary();
     /* Check debug server input override. */
     int override = debug_server_get_input_override();
+    if (input_route_session_recording()) {
+        /* The recorded word is applied through the same override path a
+         * replay uses. An agent's debug-server input wins over the pad. */
+        if (override < 0) override = route_record_live_p1_word();
+        input_route_session_record_input((uint16_t)override);
+    }
 #else
     /* Production: skip debug server. Still need to advance frame counter
      * locally so anything else that reads it continues to work. */
     extern uint64_t s_frame_count;
     s_frame_count++;
-    int override = -1;
+    route_session_boundary();
+    /* PSX_INPUT_ROUTE_FILE replay; -1 (live input) when no route is loaded. */
+    int override = input_route_session_release_override();
 #endif
 
     {
@@ -7197,6 +7246,17 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     netplay_soft_exit("netplay_escape");
                     return ep;
                 }
+#ifndef PSX_NO_DEBUG_TOOLS
+                /* Route recording markers: F11 MENU, F12 GAMEPLAY. */
+                if (!key_repeat && input_route_session_recording() &&
+                    (key == SDLK_F11 || key == SDLK_F12)) {
+                    const bool menu = key == SDLK_F11;
+                    input_route_session_request_marker(
+                        menu ? INPUT_ROUTE_MARKER_MENU : INPUT_ROUTE_MARKER_GAMEPLAY);
+                    host_osd_push(menu ? "Route marker: MENU" : "Route marker: GAMEPLAY", 1500);
+                }
+                else
+#endif
                 if (!key_repeat &&
                     host_keymap_match_event(HOST_KEYMAP_REWIND, (int)key,
                                             (int)scancode, (int)mod)) {
@@ -7324,7 +7384,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * BPE uses Port 2). Empty tap slots are OK — P1 may be the standalone
          * pad on the other port. */
         if (g_offline_pad_count >= 3 && fntrace_is_game_started() &&
-            !sio_get_multitap()) {
+            !sio_get_multitap() && !input_route_session_owns_ports()) {
             sio_set_multitap(1);
             /* Tap seats drop to plain digital unless multitap_analog is on. */
             for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
@@ -15486,6 +15546,7 @@ session_reboot:
                      route.arm_lba, route.lbas.size(),
                      route.instant_max_per_frame);
     }
+    std::string route_disc_serial;
     if (!disc_path_str.empty()) {
         /* GetID must report the inserted disc's license region (the BIOS CD
          * driver revalidates it mid-game). Derive it from the disc's boot
@@ -15517,7 +15578,12 @@ session_reboot:
         if (!ident.region.empty())
             std::fprintf(stdout, "psxrecomp: disc region %s (serial %s)\n",
                          ident.region.c_str(), ident.detected_serial.c_str());
+        route_disc_serial = ident.detected_serial;
     }
+    /* Route identity sides for PSX_INPUT_ROUTE_FILE / PSX_INPUT_ROUTE_RECORD.
+     * Nothing is read or hashed unless one of them is set. */
+    input_route_session_set_product(route_disc_serial.c_str(),
+                                    disc_path_str.c_str(), bios_path_str.c_str());
     /* Arm the text-image guard now that both possible sources are resolved:
      * the local EXE file (dev checkouts) and the disc image (every install). */
     if (game_config_path)
@@ -15566,16 +15632,36 @@ session_reboot:
          * history. An explicit malformed route aborts before guest execution. */
         if (const char *route = std::getenv("PSX_INPUT_ROUTE_FILE")) {
             if (!route[0] || net_cfg.enabled ||
+                !input_route_session_admit(route) ||
                 !debug_server_preload_input_route(route)) {
                 std::fprintf(stderr, "psxrecomp: prestart input route rejected\n");
                 debug_server_shutdown();
                 return 2;
             }
         }
+        /* Diagnostic route recorder: one P1 word per guest vblank from boot,
+         * written as PSXRTI3 at exit. F11/F12 (or route_record_marker) drop
+         * MENU/GAMEPLAY markers. */
+        if (const char *record = std::getenv("PSX_INPUT_ROUTE_RECORD")) {
+            if (std::getenv("PSX_INPUT_ROUTE_FILE") || net_cfg.enabled ||
+                !input_route_session_record_begin(record)) {
+                std::fprintf(stderr, "psxrecomp: input route recording rejected "
+                                     "(not with PSX_INPUT_ROUTE_FILE or netplay)\n");
+                debug_server_shutdown();
+                return 2;
+            }
+        }
 #else
         (void)debug_port;
-        if (std::getenv("PSX_INPUT_ROUTE_FILE")) {
-            std::fprintf(stderr, "psxrecomp: input routes require debug tools\n");
+        /* Release replay: same route files, no debug server. */
+        if (const char *route = std::getenv("PSX_INPUT_ROUTE_FILE")) {
+            if (!route[0] || net_cfg.enabled || !input_route_session_admit(route)) {
+                std::fprintf(stderr, "psxrecomp: prestart input route rejected\n");
+                return 2;
+            }
+        }
+        if (const char *record = std::getenv("PSX_INPUT_ROUTE_RECORD")) {
+            input_route_session_record_begin(record);
             return 2;
         }
 #endif
@@ -16108,6 +16194,14 @@ session_reboot:
                          ? "HLE (shell skipped)" : "LLE (real intro)",
                      psx_bios_image.image_id ? psx_bios_image.image_id : "?");
     }
+    /* Route identity needs the final boot mode, and must be settled before
+     * the first guest instruction. */
+    if ((std::getenv("PSX_INPUT_ROUTE_FILE") || input_route_session_recording()) &&
+        !input_route_session_verify_identity(psx_bios_hle_enabled(),
+                                             psx_bios_hle_boot_skip_enabled())) {
+        std::fflush(stdout);
+        std::exit(2);
+    }
 
     /* R3000A reset state. */
     cpu.pc = 0xBFC00000u;
@@ -16151,7 +16245,8 @@ session_reboot:
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
-        psx_rewind_set_enabled(g_rewind_enabled);
+        /* A route recording must not restore an earlier guest state. */
+        psx_rewind_set_enabled(g_rewind_enabled && !input_route_session_recording());
         psx_rewind_set_depth((uint32_t)g_rewind_depth);
         psx_rewind_set_interval((uint32_t)g_rewind_interval);
         psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);

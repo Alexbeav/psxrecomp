@@ -390,6 +390,27 @@ if(BUILD_TESTING)
     target_include_directories(host_path_test PRIVATE include)
     add_test(NAME host_path_test COMMAND host_path_test)
 
+    # PSXRTI3 route format and the record -> release replay round trip (T101).
+    # BIOS-free, so they also run here where CI configures this tree.
+    add_executable(input_route_v3_file_test ../runtime/tests/test_input_route_v3_file.c)
+    target_include_directories(input_route_v3_file_test PRIVATE ../runtime/include)
+    add_test(NAME input_route_v3_file_test COMMAND input_route_v3_file_test)
+    if(Python3_Interpreter_FOUND)
+        foreach(_product IN ITEMS diagnostic release)
+            set(_target input_route_session_${_product})
+            add_executable(${_target} ../runtime/tests/test_input_route_session.c
+                ../runtime/src/input_route_session.c ../runtime/src/psx_sha256.c)
+            target_include_directories(${_target} PRIVATE ../runtime/include)
+            target_compile_definitions(${_target} PRIVATE
+                "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
+                $<$<STREQUAL:${_product},release>:PSX_NO_DEBUG_TOOLS=1>)
+        endforeach()
+        add_test(NAME input_route_session_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_input_route_session.py
+            $<TARGET_FILE:input_route_session_diagnostic>
+            $<TARGET_FILE:input_route_session_release>)
+    endif()
+
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         foreach(_mode IN ITEMS O0 O2)
             add_executable(tas_cdrom_subq_position_${_mode}

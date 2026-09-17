@@ -327,6 +327,7 @@ endif()
 
 set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/input_route_observer.c
+    ${PSXRECOMP_ROOT}/runtime/src/input_route_session.c
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_window_icon.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp
@@ -1744,6 +1745,12 @@ function(psxrecomp_add_runtime_target target)
     if(NOT PSX_GIT_REV)
         set(PSX_GIT_REV "unknown")
     endif()
+    # Route identity pin (input_route_session.c): the full psxrecomp commit.
+    # Empty when not a git checkout; recording then refuses and an identity
+    # route refuses to replay.
+    execute_process(
+        COMMAND git -C "${CMAKE_CURRENT_FUNCTION_LIST_DIR}" rev-parse HEAD
+        OUTPUT_VARIABLE PSX_FRAMEWORK_PIN OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 
     # Release pin for lobby matching (create/join/list). Override via
     # GAME_VERSION arg or -DPSX_GAME_VERSION=...; default "dev".
@@ -1803,6 +1810,10 @@ function(psxrecomp_add_runtime_target target)
     set_source_files_properties(
         "${PSXRECOMP_ROOT}/runtime/src/crash_trace.c"
         PROPERTIES COMPILE_DEFINITIONS "PSX_BUILD_REV=\"${PSX_GIT_REV}\""
+    )
+    set_source_files_properties(
+        "${PSXRECOMP_ROOT}/runtime/src/input_route_session.c"
+        PROPERTIES COMPILE_DEFINITIONS "PSX_FRAMEWORK_PIN=\"${PSX_FRAMEWORK_PIN}\""
     )
 
     # Stamp the lobby pin next to the exe (and, on multi-config, in the build

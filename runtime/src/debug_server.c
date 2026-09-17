@@ -329,6 +329,7 @@ static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
 #include "input_dualshock_route_file.h"
 #include "input_dualshock_delivery.h"
 #include "input_route_observer.h"
+#include "input_route_session.h"
 static PSX_BSS InputRouteStep s_input_route[INPUT_ROUTE_MAX_STEPS];
 static uint32_t s_input_route_count = 0;
 static uint32_t s_input_route_index = 0;
@@ -357,10 +358,21 @@ int debug_server_preload_input_route(const char *path)
     if (fread(magic, 1, sizeof(magic), f) != sizeof(magic) || fseek(f, 0, SEEK_SET)) {
         fclose(f); return 0;
     }
-    if (!memcmp(magic, "PSXRTI2\0", 8)) {
+    /* PSXRTI3 was admitted by input_route_session_admit(); its record size
+     * selects the digital or DualShock path below. */
+    const int v3 = !memcmp(magic, "PSXRTI3\0", 8);
+    uint32_t v3_record_size = 0;
+    if (v3) {
+        unsigned char v3_header[16];
+        if (fread(v3_header, 1, sizeof(v3_header), f) != sizeof(v3_header) ||
+            fseek(f, 0, SEEK_SET)) { fclose(f); return 0; }
+        v3_record_size = input_route_le32(v3_header + 12);
+    }
+    if (!memcmp(magic, "PSXRTI2\0", 8) || v3_record_size == INPUT_DUALSHOCK_ROUTE_RECORD_BYTES) {
         InputDualShockRouteStep *dual = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(*dual));
         if (!dual) { fclose(f); return 0; }
-        error = input_dualshock_route_read(f, dual, &count, &frames);
+        error = v3 ? input_route_session_read_v3_dualshock(f, dual, &count, &frames)
+                   : input_dualshock_route_read(f, dual, &count, &frames);
         if (fclose(f) && !error) error = "close error";
         if (getenv("PSX_INPUT_UPDATE_CLOCK")) error = "DualShock does not admit input retiming";
         const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
@@ -379,13 +391,7 @@ int debug_server_preload_input_route(const char *path)
         free(dual);
         /* This format declares one cold DualShock at P1. Guest protocol mode
          * is untouched by subsequent samples. Cards are separate inputs. */
-        sio_set_multitap(0);
-        for (int slot = 0; slot < PSX_MAX_PLAYERS; ++slot) {
-            sio_set_pad_connected(slot, slot == 0);
-            sio_set_pad_config_capable(slot, slot == 0);
-            sio_set_pad_analog(slot, 0, 128, 128, 128, 128);
-            sio_set_pad_state_slot(slot, 0xFFFF);
-        }
+        input_route_admit_cold_p1(1);
         s_input_override = -1; s_input_frames = 0; s_axis_override = 0;
         s_input_route_count = count; s_input_route_index = 0;
         s_input_route_remaining = s_dualshock_route[0].frames;
@@ -397,7 +403,8 @@ int debug_server_preload_input_route(const char *path)
     }
     staged = (InputRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(*staged));
     if (!staged) { fclose(f); return 0; }
-    error = input_route_read(f, staged, &count, &frames);
+    error = v3 ? input_route_session_read_v3_digital(f, staged, &count, &frames)
+               : input_route_read(f, staged, &count, &frames);
     if (fclose(f) != 0 && !error) error = "close error";
     if (error) {
         fprintf(stderr, "input route rejected: %s\n", error);
@@ -7843,6 +7850,31 @@ static void handle_input_route_status(int id, const char *json)
              (unsigned)s_input_route_remaining);
 }
 
+/* PSX_INPUT_ROUTE_RECORD markers for agents (the F11/F12 hotkeys' twin):
+ *   {"cmd":"route_record_marker","kind":"menu"|"gameplay"}
+ * The marker lands on the next guest frame boundary. */
+static void handle_route_record_marker(int id, const char *json)
+{
+    char kind[16];
+    unsigned value = 0;
+    if (json_get_str(json, "kind", kind, sizeof(kind))) {
+        if (!strcmp(kind, "menu")) value = INPUT_ROUTE_MARKER_MENU;
+        else if (!strcmp(kind, "gameplay")) value = INPUT_ROUTE_MARKER_GAMEPLAY;
+    }
+    if (!value) { send_err(id, "kind must be menu or gameplay"); return; }
+    if (!input_route_session_recording()) { send_err(id, "not recording (PSX_INPUT_ROUTE_RECORD)"); return; }
+    if (!input_route_session_request_marker(value)) { send_err(id, "marker queue full"); return; }
+    send_ok(id);
+}
+
+static void handle_route_record_status(int id, const char *json)
+{
+    char body[9000];
+    (void)json;
+    input_route_session_record_status(body, sizeof(body));
+    send_fmt("{\"id\":%d,\"ok\":true,%s}\n", id, body);
+}
+
 /* Live A/B for the native-wide HUD corner gate:
  *   {"cmd":"ws_hud_mode","tag_rects":0|1}
  * tag_rects=1 lets TAGGED rect-family prims re-anchor too (Tomba's AP
@@ -14043,6 +14075,8 @@ static const CmdEntry s_commands[] = {
     { "input_route_start", handle_input_route_start },
     { "input_route_stop",  handle_input_route_stop },
     { "input_route_status",handle_input_route_status },
+    { "route_record_marker", handle_route_record_marker },
+    { "route_record_status", handle_route_record_status },
     { "savestate",         handle_savestate },
     { "savestate_status",  handle_savestate_status },
     { "turbo",             handle_turbo },

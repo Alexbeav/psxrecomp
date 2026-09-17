@@ -303,9 +303,9 @@ The TCP server is the canonical instrumentation surface. Rule 3 in `CLAUDE.md` i
 
 ## Complete command index (generated)
 
-**311 commands registered** — 298 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**315 commands registered** — 302 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-52 of 311 have prose above; **259 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+53 of 315 have prose above; **262 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -374,12 +374,13 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `dirty_insn_dump_file` | ✓ |  |  |
 | `dirty_insn_gate` | ✓ |  |  |
 | `dirty_insn_log` | ✓ |  |  |
-| `dirty_ram_stats` | ✓ |  |  |
+| `dirty_ram_stats` | ✓ |  | ✓ |
 | `dirty_ram_unsupported` | ✓ |  |  |
 | `disp_ring` | ✓ |  |  |
 | `dispatch_check` | ✓ |  |  |
 | `dispatch_stats` | ✓ |  |  |
 | `dispatch_tail` | ✓ |  |  |
+| `display_aspect` | ✓ |  |  |
 | `display_ring_aux` | ✓ |  |  |
 | `display_ring_get` | ✓ |  |  |
 | `display_ring_stats` | ✓ |  |  |
@@ -443,6 +444,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `gte_latch_dump` | ✓ |  |  |
 | `gte_ring_dump` | ✓ |  |  |
 | `gte_state` | ✓ |  |  |
+| `guest_tty_dump` | ✓ |  |  |
 | `history` | ✓ | ✓ | ✓ |
 | `hle_dump` | ✓ |  | ✓ |
 | `idle_skip` | ✓ |  |  |
@@ -518,6 +520,8 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `restore_trace` | ✓ |  |  |
 | `restore_trace_clear` | ✓ |  |  |
 | `restore_trace_window` | ✓ |  |  |
+| `route_record_marker` | ✓ |  |  |
+| `route_record_status` | ✓ |  |  |
 | `rtrace_arm` | ✓ | ✓ |  |
 | `rtrace_clear` | ✓ |  |  |
 | `rtrace_disarm` |  | ✓ |  |
