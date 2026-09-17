@@ -4446,6 +4446,29 @@ static int host_fmv_timing_optimize(const char* disc_path, char* out_exe_path,
                                 err_msg, err_cap, on_progress, progress_ctx);
 }
 
+#if defined(_WIN32)
+/* Start a deferred rebuild helper bat in its own console and exit: the helper
+ * waits for this process before it touches a build tree. */
+static void host_start_helper_and_exit(const char* helper) {
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char cmd[1536];
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+    fprintf(stderr, "psxrecomp-codegen: starting deferred rebuild helper\n");
+    snprintf(cmd, sizeof(cmd), "cmd.exe /C \"%s\"", helper);
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
+                        g_project_root, &si, &pi)) {
+        fprintf(stderr, "psxrecomp-codegen: CreateProcess failed\n");
+        exit(1);
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    ExitProcess(0);
+}
+#endif
+
 #if !defined(PSX_HAS_GAME_DISPATCH)
 /* Wave-5 F10: the diagnostic product on first request. Runs from the forward
  * path, before the wizard state exists, so it wires the little it needs. On
@@ -4760,9 +4783,12 @@ void psxrecomp_codegen_host_forward_if_built(
             if (host_build_diagnostic_on_demand(built, sizeof(built), err,
                                                 sizeof(err))) {
 #if defined(_WIN32)
-                /* Deferred: hand over to the helper bat, which relaunches this
-                 * exe with --diagnostic once the product exists. */
-                psxrecomp_codegen_host_relaunch_or_exit(NULL);
+                /* Deferred: hand over to the helper bat (built holds its
+                 * path), which relaunches this exe with --diagnostic once the
+                 * product exists. Not psxrecomp_codegen_host_relaunch_or_exit:
+                 * that takes the launcher UI's relaunch path, and no launcher
+                 * has run on this forward path. */
+                host_start_helper_and_exit(built);
 #else
                 snprintf(g_exe_path, sizeof(g_exe_path), "%s", built);
 #endif
@@ -4770,7 +4796,7 @@ void psxrecomp_codegen_host_forward_if_built(
                 fprintf(stderr,
                         "psxrecomp-codegen: diagnostic build failed (%s); starting "
                         "the normal build. Run the CLI rebuild with "
-                        "--diagnostic-dir to create it by hand.\n",
+                        "--diagnostic-only --diagnostic-dir to create it by hand.\n",
                         err[0] ? err : "unknown error");
             }
         }
@@ -4879,24 +4905,18 @@ void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
     persist_relaunch_sidecars(near_exe, disc_path);
 
 #if defined(_WIN32)
+    if (g_relaunch_is_helper)
+        host_start_helper_and_exit(exe);
     {
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
         char cmd[1536];
-        DWORD flags = 0;
         memset(&si, 0, sizeof(si));
         memset(&pi, 0, sizeof(pi));
         si.cb = sizeof(si);
-        if (g_relaunch_is_helper) {
-            fprintf(stderr,
-                    "psxrecomp-codegen: starting deferred rebuild helper\n");
-            snprintf(cmd, sizeof(cmd), "cmd.exe /C \"%s\"", exe);
-            flags = CREATE_NEW_CONSOLE;
-        } else {
-            fprintf(stderr, "psxrecomp-codegen: relaunching %s\n", exe);
-            snprintf(cmd, sizeof(cmd), "\"%s\" --launcher", exe);
-        }
-        if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, flags, NULL,
+        fprintf(stderr, "psxrecomp-codegen: relaunching %s\n", exe);
+        snprintf(cmd, sizeof(cmd), "\"%s\" --launcher", exe);
+        if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL,
                             g_project_root, &si, &pi)) {
             fprintf(stderr, "psxrecomp-codegen: CreateProcess failed\n");
             exit(1);
