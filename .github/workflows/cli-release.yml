@@ -70,6 +70,10 @@ jobs:
         run: cmake --build recompiler/build --parallel 4
       - name: Run recompiler tests
         run: ctest --test-dir recompiler/build --output-on-failure --parallel 4
+      - name: Install GL development files
+        # psx-runtime and psx-oracle are part of the runtime tree's default
+        # build and link libGL (gpu_gl_renderer.c).
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl-dev
       - name: Configure runtime tests
         run: >-
           cmake -S runtime -B runtime/build -DBUILD_TESTING=ON
