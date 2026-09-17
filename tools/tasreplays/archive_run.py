@@ -42,7 +42,16 @@ TITLES = {
                 'schema': 'psx-tas-setup-v1'},
     'pepsiman': {'name': 'Pepsiman', 'receipt': 'verification.json', 'exe': 'pepsiman-tas.exe',
                  'schema': 'pepsiman-tas-candidate-v1'},
+    # crash.py compares terminal RAM only; its receipt has no card field to require.
+    'crash': {'name': 'Crash Bandicoot', 'receipt': 'source-comparison.json', 'exe': 'crash-tas.exe',
+              'schema': 'crash-tas-candidate-v1', 'terminal_card': False},
+    'abesoddysee': {'name': "Abe's Oddysee", 'receipt': 'verification.json', 'exe': 'abesoddysee-tas.exe',
+                    'schema': 'abesoddysee-tas-candidate-v1'},
 }
+# Titles whose receipt is source-comparison.json with a comparison block, and
+# titles whose verification.json has Pepsiman's shape (captured_returns etc.).
+SOURCE_COMPARISON_TITLES = ('biohazard', 'megamanx5', 'megamanx4', 'redc', 'crash')
+PEPSIMAN_SHAPE_TITLES = ('pepsiman', 'abesoddysee')
 BUILD_FILES = ('setup.json', 'game.toml', 'bios.toml', 'input.json')
 SIBLING_SUFFIXES = ('-ladder.json', '-input.psxrti2', '-input.psxrti')
 
@@ -113,6 +122,20 @@ def _staged_exe_name(manifest):
     return ''
 
 
+def _title_sharing_receipt(manifest, setup, receipt_name):
+    """Title writing receipt_name, by setup schema then staged exe, or None."""
+    sharing = [(k, s) for k, s in TITLES.items() if s['receipt'] == receipt_name]
+    schema = (setup or {}).get('schema')
+    for key, spec in sharing:
+        if schema == spec['schema']:
+            return key
+    exe = _staged_exe_name(manifest)
+    for key, spec in sharing:
+        if exe == spec['exe']:
+            return key
+    return None
+
+
 def detect_title(manifest, receipts, setup):
     """Title key from the receipt present, then the exe name, then setup schema."""
     if 'source-comparison.json' in receipts:
@@ -120,18 +143,14 @@ def detect_title(manifest, receipts, setup):
         # does not identify the title -- it once labelled every Mega Man X5
         # archive "Bio Hazard". Disambiguate on the setup schema, then the
         # staged executable, and only then fall back.
-        sharing = [(k, s) for k, s in TITLES.items() if s['receipt'] == 'source-comparison.json']
-        schema = (setup or {}).get('schema')
-        for key, spec in sharing:
-            if schema == spec['schema']:
-                return key
-        exe = _staged_exe_name(manifest)
-        for key, spec in sharing:
-            if exe == spec['exe']:
-                return key
-        return 'biohazard'
+        return _title_sharing_receipt(manifest, setup, 'source-comparison.json') or 'biohazard'
     verification = receipts.get('verification.json')
     if verification is not None:
+        # Abe's Oddysee writes Pepsiman's receipt shape, so identity comes
+        # before the field heuristics below.
+        key = _title_sharing_receipt(manifest, setup, 'verification.json')
+        if key is not None:
+            return key
         if 'captured_returns' in verification or 'source_observation_end' in verification:
             return 'pepsiman'
         if 'expected_victory_time' in verification or verification.get('original_inputs') == 7974:
@@ -262,7 +281,8 @@ def build_summary(run):
     verdict = 'incomplete'
     terminal_ram = terminal_card = None
     divergence = streaming.get('first_divergence') if streaming else None
-    if title in ('biohazard', 'megamanx5', 'megamanx4', 'redc'):
+    if title in SOURCE_COMPARISON_TITLES:
+        card_required = TITLES[title].get('terminal_card', True)
         comparison = receipt.get('comparison') if isinstance(receipt.get('comparison'), dict) else None
         returns = comparison.get('returns') if comparison else None
         if isinstance(returns, list) and len(returns) == 2:
@@ -279,7 +299,7 @@ def build_summary(run):
             verdict = 'incomplete'
         elif not comparison.get('match') or receipt.get('native_input_exit') not in (0, None):
             verdict = 'fail'
-        elif not prefix and not (terminal_ram and terminal_card):
+        elif not prefix and not (terminal_ram and (terminal_card or not card_required)):
             verdict = 'fail'
         elif receipt_matches is False or prefix:
             verdict = 'diagnostic'
@@ -291,7 +311,7 @@ def build_summary(run):
         if divergence is None:
             divergence = receipt.get('first_divergence')
         verdict = _status_verdict(receipt, exit_info, receipt_matches)
-    elif title == 'pepsiman':
+    elif title in PEPSIMAN_SHAPE_TITLES:
         captured = receipt.get('captured_returns')
         if isinstance(captured, list) and len(captured) == 2:
             compared, expected = captured[1], captured[0]

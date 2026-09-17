@@ -139,6 +139,34 @@ def build_fixtures(root):
                                complete={'frame': 75407, 'input_frames': 71806, 'neutral_tail_ticks': 3601})
     out['no-receipt'] = make_run(runs, 'trace-control-01', bio, 'BioHazard-TAS.exe', SHA['a'], None, None,
                                  exit_extra={'timed_out': True, 'stop_reason': 'host_timeout', 'exit_code': None})
+    # Crash: source-comparison.json without a card field (crash.py compares terminal RAM only).
+    crash = make_project(root / 'projects', 'requal-crash-candidate-03', 'crash-tas-candidate-v1', SHA['e'])
+    crash_receipt = bio_receipt(SHA['e'], SHA['e'], observed_returns=207077,
+                                comparison={'match': True, 'returns': [207077, 207077], 'first_divergence': None},
+                                streaming={'compared_returns': 207077, 'first_divergence': None,
+                                           'stopped_on_divergence': False})
+    del crash_receipt['terminal_card1_match']
+    out['crash'] = make_run(runs, 'requal-crash-route-03', crash, 'Crash-TAS.exe', SHA['e'], 'source-comparison.json',
+                            crash_receipt, exit_extra={'host_seconds': 8700.0},
+                            complete={'frame': 207078, 'input_frames': 203477, 'neutral_tail_ticks': 3601})
+    crash_bad = dict(crash_receipt, terminal_ram_match=False, mechanical_match=False, status='fail')
+    out['crash-ram'] = make_run(runs, 'crash-terminal-ram-01', crash, 'Crash-TAS.exe', SHA['e'],
+                                'source-comparison.json', crash_bad)
+    # Abe's Oddysee: Pepsiman's verification.json shape, failing on the stack page only.
+    abe = make_project(root / 'projects', 'requal-abesoddysee-candidate-03', 'abesoddysee-tas-candidate-v1', SHA['f'])
+    stack = {'kind': 'state_or_clock', 'frame': 6602, 'source_cycle': 3737173493, 'native_cycle': 3737173493,
+             'changed_pages': ['1F0000']}
+    out['abe'] = make_run(runs, 'requal-abesoddysee-route-03', abe, 'AbesOddysee-TAS.exe', SHA['f'], 'verification.json',
+                          {'status': 'fail', 'original_inputs': 46254, 'compared_returns': 49854, 'end_frame': 49855,
+                           'source_observation_end': 49854, 'observed_returns': 49854, 'native_runner_exit': 0,
+                           'first_divergence': stack, 'mechanical_match': False, 'setup_executable_sha256': SHA['f'],
+                           'binary_sha256': SHA['f'], 'binary_matches_setup': True, 'diagnostic_binary': None,
+                           'streaming': {'compared_returns': 6602, 'first_divergence': stack,
+                                         'stopped_on_divergence': False},
+                           'captured_returns': [49854, 49854], 'input_identity_matches': True,
+                           'terminal_ram_matches': True},
+                          exit_extra={'host_seconds': 2400.0},
+                          complete={'frame': 49855, 'input_frames': 46254, 'neutral_tail_ticks': 3601})
     return out
 
 
@@ -212,10 +240,37 @@ with tempfile.TemporaryDirectory() as directory:
     write_json(setup_path, setup)
     assert json.loads(old.read_text()) == receipt
 
+    s = ar.build_summary(ar.load_run(runs['crash']))
+    assert s['title'] == 'Crash Bandicoot' and s['title_key'] == 'crash' and s['receipt'] == 'source-comparison.json'
+    assert s['verdict'] == 'pass' and s['scope'] == 'full route' and s['setup_schema'] == 'crash-tas-candidate-v1'
+    assert (s['returns_compared'], s['returns_expected'], s['returns_match']) == (207077, 207077, True)
+    assert s['terminal_ram_match'] is True and s['terminal_card1_match'] is None
+    assert ar.describe_terminal(s) == 'terminal RAM equal'
+    s = ar.build_summary(ar.load_run(runs['crash-ram']))
+    assert s['title_key'] == 'crash' and s['verdict'] == 'fail', 'terminal RAM is still required for Crash'
+
+    s = ar.build_summary(ar.load_run(runs['abe']))
+    assert s['title'] == "Abe's Oddysee" and s['title_key'] == 'abesoddysee' and s['receipt'] == 'verification.json'
+    assert s['verdict'] == 'fail' and s['setup_schema'] == 'abesoddysee-tas-candidate-v1'
+    assert (s['returns_compared'], s['returns_expected'], s['terminal_ram_match']) == (49854, 49854, True)
+    assert s['original_inputs'] == 46254 and s['input_identity_matches'] is True
+    assert s['first_divergence']['changed_pages'] == ['1F0000']
+    assert ar.describe_divergence(s) == 'first divergence at return 6,602 (cycle 3737173493 vs 3737173493)'
+
+    # A Pepsiman-shaped receipt is identified by schema/exe before the field heuristics.
+    pep_shaped = {'verification.json': {'captured_returns': [1, 1]}}
+    assert ar.detect_title({}, pep_shaped, {'schema': 'abesoddysee-tas-candidate-v1'}) == 'abesoddysee'
+    assert ar.detect_title({'inputs': {'exe': {'path': 'x/AbesOddysee-TAS.exe'}}}, pep_shaped, None) == 'abesoddysee'
+    assert ar.detect_title({}, pep_shaped, None) == 'pepsiman'
+    assert ar.detect_title({'inputs': {'exe': {'path': 'x/Crash-TAS.exe'}}}, {'source-comparison.json': {}}, None) == 'crash'
+    assert ar.detect_title({}, {'source-comparison.json': {}}, {'schema': 'megamanx5-tas-candidate-v1'}) == 'megamanx5'
+
     # Title detection fallbacks: exe name, then setup schema.
     assert ar.detect_title({'inputs': {'exe': {'path': 'x/Pepsiman-TAS.exe'}}}, {}, None) == 'pepsiman'
     assert ar.detect_title({'command': ['C:/x/Tekken3-TAS.exe']}, {}, None) == 'tekken3'
     assert ar.detect_title({}, {}, {'schema': 'biohazard-tas-candidate-v1'}) == 'biohazard'
+    assert ar.detect_title({'command': ['C:/x/Crash-TAS.exe']}, {}, None) == 'crash'
+    assert ar.detect_title({}, {}, {'schema': 'abesoddysee-tas-candidate-v1'}) == 'abesoddysee'
     assert ar.detect_title({}, {}, None) == 'unknown'
 
     # ------------------------------------------------------ SHA256SUMS merge
@@ -323,9 +378,15 @@ with tempfile.TemporaryDirectory() as directory:
     assert result.returncode == 0, result.stderr
     assert len(sums_lines(archive)) == len(lines) + len(ar.walk_files(runs['bio-full']))
     assert len(set(sums_lines(archive))) == len(sums_lines(archive))
-    for other in ('tekken', 'pepsiman', 'bio-diag', 'no-receipt'):
+    for other in ('tekken', 'pepsiman', 'bio-diag', 'no-receipt', 'crash', 'abe'):
         result = cli(runs[other], 'arch-01', '--evidence-root', evidence)
         assert result.returncode == 0, (other, result.stderr)
+    crash_record = json.loads((archive / 'runs' / 'requal-crash-route-03.archive.json').read_text())
+    assert crash_record['summary']['title_key'] == 'crash' and crash_record['summary']['verdict'] == 'pass'
+    assert (archive / 'builds' / 'requal-crash-candidate-03' / 'setup.json').is_file()
+    abe_record = json.loads((archive / 'runs' / 'requal-abesoddysee-route-03.archive.json').read_text())
+    assert abe_record['summary']['title_key'] == 'abesoddysee' and abe_record['summary']['verdict'] == 'fail'
+    assert any(n.name.endswith('-abesoddysee-requal-abesoddysee-route-03.md') for n in (archive / 'notes').iterdir())
 
     # ------------------------------------------------------ tampered destination
     tampered = archive / 'runs' / 'split07-tekken-replay-01' / 'cpu-return.tsv'
@@ -383,4 +444,23 @@ if REAL.is_dir():
             assert summary['verdict'] == 'pass' and summary['returns_match'] is True, name
 else:
     print(f'skipped real-evidence dry runs: {REAL} not reachable')
+
+# Crash and Abe's Oddysee requal-03 routes, read-only, from the lane root (their
+# manifests point at the D: candidate projects, so setup.json resolves there).
+LANE_NATIVE = Path(r'D:\psxrecomp\validation\tas\native')
+for name, key, verdict in (('requal-crash-route-03', 'crash', 'pass'),
+                           ('requal-abesoddysee-route-03', 'abesoddysee', 'fail')):
+    run = LANE_NATIVE / name
+    if not run.is_dir():
+        print(f'skipped (absent): {run}')
+        continue
+    with tempfile.TemporaryDirectory() as directory:
+        result = cli(run, 'requal-03-dry', '--evidence-root', directory, '--dry-run')
+        assert result.returncode == 0, result.stderr
+        assert not any(Path(directory).iterdir()), 'dry run wrote into the evidence root'
+        summary = json.loads(result.stdout.split('\n{', 1)[1].split('\n}', 1)[0].join('{}'))
+        assert summary['title_key'] == key and summary['verdict'] == verdict, (name, summary['verdict'])
+        assert summary['setup_schema'] == f'{key}-tas-candidate-v1' and summary['binary_matches_setup'] is True
+        print(f'real dry run: {name}: {summary["title"]} {summary["verdict"]} '
+              f'{summary["returns_compared"]}/{summary["returns_expected"]}')
 print('archive_run tests passed')
