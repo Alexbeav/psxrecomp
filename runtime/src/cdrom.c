@@ -1745,7 +1745,7 @@ static int implicit_read_seek_cycles(void) {
     if (!setloc_pending) return 0;
     int origin=last_sector_lba>=0?last_sector_lba:0;
     return apply_speed(source_seek_lower_bound(origin,s_setloc_lba,(stat_reg&CDSTAT_MOTOR)!=0,
-                                              !reading&&!(stat_reg&CDSTAT_PLAY),mode_reg));
+                                              s_source_seek_paused /* T93 candidate: tracked pause state, as the source path */,mode_reg));
 }
 /* This optional comparison adds only the independently expressed source seek
  * lower bound. The source's global PRNG jitter and physical drive-head position
