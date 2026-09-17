@@ -7082,7 +7082,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         } else if (frequency && now - s_fps_last_time >= frequency) {
             const double seconds = (double)(now - s_fps_last_time) / (double)frequency;
             const double fps = (double)(s_frame_count - s_fps_last_frame) / seconds;
-            const double speed = fps / 59.94;
+            /* Guest VBlanks per second against the video standard's own rate:
+             * a full-speed PAL title is 50 Hz, not 0.83x of NTSC. */
+            const double speed = fps / (gpu_video_standard_is_pal() ? 50.0 : 59.94);
             double display_fps = 0.0;
             if (g_frame_interpolation && g_gl_active) {
                 display_fps = g_frame_interpolation_fps > 0
