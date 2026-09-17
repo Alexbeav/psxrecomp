@@ -54,20 +54,31 @@ jobs:
           path: dist/psxrecomp-cli-*.zip
           if-no-files-found: error
 
-  linux-boot-path-test:
+  # Every registered test in both CMake projects, including cli_boot_path_test.
+  # Nothing else configures the runtime tree with BUILD_TESTING=ON, and that is
+  # how its fixtures stopped linking unnoticed. The runtime tree needs no
+  # generated BIOS for its tests, and SDL builds headless.
+  linux-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-      - name: Configure boot path test
-        run: cmake -S recompiler -B recompiler/build-boot-path-test -DBUILD_TESTING=ON
-      - name: Build boot path test
-        run: cmake --build recompiler/build-boot-path-test --target cli_boot_path_test --parallel 2
-      - name: Run boot path test
+      - name: Configure recompiler tests
+        run: cmake -S recompiler -B recompiler/build -DBUILD_TESTING=ON
+      - name: Build recompiler tests
+        run: cmake --build recompiler/build --parallel 4
+      - name: Run recompiler tests
+        run: ctest --test-dir recompiler/build --output-on-failure --parallel 4
+      - name: Configure runtime tests
         run: >-
-          ctest --test-dir recompiler/build-boot-path-test
-          -R '^cli_boot_path_test$' --output-on-failure
+          cmake -S runtime -B runtime/build -DBUILD_TESTING=ON
+          -DPSXRECOMP_ALLOW_NO_BIOS=ON -DPSX_RECOMP_UI=OFF -DPSX_REWIND=OFF
+          -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
+      - name: Build runtime tests
+        run: cmake --build runtime/build --parallel 4
+      - name: Run runtime tests
+        run: ctest --test-dir runtime/build --output-on-failure --parallel 4
 
   publish-release-assets:
     if: github.event_name == 'release'
