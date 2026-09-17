@@ -901,6 +901,7 @@ if(BUILD_TESTING)
                 cli_retail_bios_profile
                 codegen_host_bios_stems
                 default_renderer_guards
+                deferred_switch_interp_poll
                 mod_owned_display_controls
                 fmv_quiet_guards
                 fps_telemetry_opt_in

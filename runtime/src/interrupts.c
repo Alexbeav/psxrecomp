@@ -825,6 +825,16 @@ static int defer_switch_enabled(void) {
     return s;
 }
 
+/* Exposed for the dirty-RAM interpreter: a deferred in-exception thread switch
+ * is honored only at a site-0 poll with a materialized resume PC. An
+ * interpreted thread that never leaves one local-flow run (MGS PAL's parked
+ * debug-console task spins lw/beqz/jal get_char/bltz on a stub returning -1)
+ * never reaches such a poll on its own, so the guest's switch stays deferred
+ * forever and every other task starves (SLES-01370 boot black screen). The
+ * interpreter uses this to surface at its next committed transfer and to force
+ * its entry poll. */
+int psx_defer_switch_pending(void) { return s_defer_switch_pending; }
+
 static int same_guest_pc(uint32_t a, uint32_t b) {
     return (((a ^ b) & 0x1FFFFFFFu) == 0);
 }
