@@ -80,12 +80,13 @@ int main(void) {
     unsigned default_size=cdrom_snapshot_bytes();
     uint8_t *default_a=malloc(default_size),*default_b=malloc(default_size);
     cdrom_snapshot_write(default_a);s_source_seek_paused=0;cdrom_snapshot_write(default_b);
-    CHECK(!memcmp(default_a,default_b,default_size),"default wire excludes inert source-only state");
+    CHECK(memcmp(default_a,default_b,default_size),"default wire carries paused/standby state");
+    CHECK(cdrom_snapshot_read(default_a,default_size)&&s_source_seek_paused==1,"default snapshot restores paused state");
     set_model("PSX_CD_EXPLICIT_SEEK_MODEL","octoshock-2.2.2");
     for(int fast=0;fast<2;fast++) for(int logical=0;logical<2;logical++) for(int paused=0;paused<2;paused++)
         printf("fast=%d logical=%d paused=%d delay=%d\n",fast,logical,paused,run_seek(fast,logical,paused));
     cdrom_init("synthetic");psx_cycle_count=0;target(4);
-    unsigned size=cdrom_snapshot_bytes();CHECK(size==default_size+1,"profile adds one declared timing byte");
+    unsigned size=cdrom_snapshot_bytes();CHECK(size==default_size,"profile shares the default timing byte");
     uint8_t *wire=malloc(size);cdrom_snapshot_write(wire);
     command(0x15);finish();CHECK(!s_source_seek_paused,"seek changes timing state before restore");
     CHECK(cdrom_snapshot_read(wire,size)&&s_source_seek_paused==1,"matching-profile snapshot restores paused timing");
