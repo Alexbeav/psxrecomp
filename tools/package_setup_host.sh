@@ -676,8 +676,9 @@ esac
 cat >>"${STAGE}/README-SETUP.txt" <<EOF
 
 Diagnostic mode (if the game crashes, freezes, or misbehaves):
-- Setup builds two products: build-release/ (normal, the default) and
-  build-diagnostic/ (debug server, freeze heartbeat, freeze dumps).
+- Setup builds the normal product in build-release/. The diagnostic product
+  (build-diagnostic/: debug server, freeze heartbeat, freeze dumps) is built
+  the first time you ask for it; the normal build is not rebuilt or changed.
 - To switch, create an empty file named diagnostic-mode.txt next to
   ${EXE_BASENAME} and start the game as usual (or run ${EXE_BASENAME} --diagnostic).
   Delete the file to go back to normal mode.
