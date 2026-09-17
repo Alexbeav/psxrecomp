@@ -16,6 +16,19 @@ static inline void input_dualshock_protocol_sticks(const uint8_t source_ly_lx_ry
     for (unsigned i = 0; i < 4; ++i)
         protocol_lx_ly_rx_ry[i] = input_dualshock_protocol_axis(source_ly_lx_ry_rx[i ^ 1u]);
 }
+/* Preload admission for a route that declares one cold controller at P1:
+ * no multitap, every other slot disconnected, P1 digital protocol mode with
+ * neutral sticks. `dualshock` makes P1 config-capable (guest-owned mode). */
+static inline void input_route_admit_cold_p1(int dualshock)
+{
+    sio_set_multitap(0);
+    for (int slot = 0; slot < PSX_MAX_PLAYERS; ++slot) {
+        sio_set_pad_connected(slot, slot == 0);
+        sio_set_pad_config_capable(slot, dualshock && slot == 0);
+        sio_set_pad_analog(slot, 0, 128, 128, 128, 128);
+        sio_set_pad_state_slot(slot, 0xFFFF);
+    }
+}
 /* Only the preload admission may establish the cold device type. Per-input
  * delivery must leave guest-owned mode, lock and in-flight protocol alone.
  * No D-pad/stick folding. Physical Analog is admitted only when neutral. */

@@ -165,6 +165,23 @@ if(BUILD_TESTING)
     add_test(NAME input_dualshock_delivery_test COMMAND input_dualshock_delivery_test)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    # PSXRTI3 routes (T101): wire format, then record on a diagnostic build and
+    # replay on a release build (PSX_NO_DEBUG_TOOLS) of the session module.
+    add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)
+    target_include_directories(input_route_v3_file_test PRIVATE include)
+    add_test(NAME input_route_v3_file_test COMMAND input_route_v3_file_test)
+    foreach(_product IN ITEMS diagnostic release)
+        set(_target input_route_session_${_product})
+        add_executable(${_target} tests/test_input_route_session.c
+            src/input_route_session.c src/psx_sha256.c)
+        target_include_directories(${_target} PRIVATE include)
+        target_compile_definitions(${_target} PRIVATE
+            "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
+            $<$<STREQUAL:${_product},release>:PSX_NO_DEBUG_TOOLS=1>)
+    endforeach()
+    add_test(NAME input_route_session_test COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_input_route_session.py
+        $<TARGET_FILE:input_route_session_diagnostic> $<TARGET_FILE:input_route_session_release>)
     add_executable(sio_nymashock_card_test tests/test_sio_nymashock_card.c)
     target_include_directories(sio_nymashock_card_test PRIVATE include)
     add_test(NAME sio_nymashock_card_test COMMAND ${Python3_EXECUTABLE}

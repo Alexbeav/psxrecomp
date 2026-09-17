@@ -16,19 +16,15 @@ typedef struct {
     uint8_t analog_button;
 } InputDualShockRouteStep;
 
-static inline const char *input_dualshock_route_read(
-    FILE *f, InputDualShockRouteStep *steps,
-    uint32_t *step_count, uint32_t *frame_count)
+#define INPUT_DUALSHOCK_ROUTE_RECORD_BYTES 12u
+
+/* Record loop shared by PSXRTI2 and PSXRTI3 DualShock bodies. The step count
+ * is published only when all `n` records pass. */
+static inline const char *input_dualshock_route_read_records(
+    FILE *f, uint32_t n, InputDualShockRouteStep *steps, uint32_t *step_count)
 {
-    unsigned char h[24], r[12];
-    uint32_t n, count = 0;
-    *step_count = *frame_count = 0;
-    if (!f || fread(h, 1, sizeof(h), f) != sizeof(h)) return "short header";
-    if (memcmp(h, "PSXRTI2\0", 8) || input_route_le32(h + 8) != 2 ||
-        input_route_le32(h + 12) != sizeof(r)) return "header identity";
-    n = input_route_le32(h + 16);
-    if (input_route_le32(h + 20) || !n || n > INPUT_ROUTE_MAX_FRAMES)
-        return "frame count/reserved";
+    unsigned char r[INPUT_DUALSHOCK_ROUTE_RECORD_BYTES];
+    uint32_t count = 0;
     for (uint32_t i = 0; i < n; ++i) {
         uint16_t buttons;
         InputDualShockRouteStep *previous;
@@ -49,6 +45,27 @@ static inline const char *input_dualshock_route_read(
             steps[count++].analog_button = r[10];
         }
     }
+    *step_count = count;
+    return NULL;
+}
+
+static inline const char *input_dualshock_route_read(
+    FILE *f, InputDualShockRouteStep *steps,
+    uint32_t *step_count, uint32_t *frame_count)
+{
+    unsigned char h[24];
+    uint32_t n, count = 0;
+    const char *error;
+    *step_count = *frame_count = 0;
+    if (!f || fread(h, 1, sizeof(h), f) != sizeof(h)) return "short header";
+    if (memcmp(h, "PSXRTI2\0", 8) || input_route_le32(h + 8) != 2 ||
+        input_route_le32(h + 12) != INPUT_DUALSHOCK_ROUTE_RECORD_BYTES)
+        return "header identity";
+    n = input_route_le32(h + 16);
+    if (input_route_le32(h + 20) || !n || n > INPUT_ROUTE_MAX_FRAMES)
+        return "frame count/reserved";
+    error = input_dualshock_route_read_records(f, n, steps, &count);
+    if (error) return error;
     if (fgetc(f) != EOF || ferror(f)) return "trailing bytes/read error";
     *step_count = count;
     *frame_count = n;
