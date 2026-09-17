@@ -71,6 +71,9 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/.."
                 --compiler "${CMAKE_C_COMPILER}"
                 --output "${CMAKE_CURRENT_BINARY_DIR}/depth24-transition")
+            add_test(NAME cdrom_audio_disc_read_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_audio_disc_read.py"
+                "${CMAKE_C_COMPILER}" "${CMAKE_CURRENT_BINARY_DIR}/audio-disc-read")
         endif()
     endif()
     if(MINGW AND PSX_GL_READBACK_SDL_ROOT
