@@ -836,6 +836,82 @@ typedef struct BsSection {
     uint32_t len;
 } BsSection;
 
+int boot_state_peek_cpu_pc_buffer(const uint8_t* file, size_t file_len,
+                                  uint32_t* out_pc) {
+    BootStateHeader h;
+    const uint8_t *cur, *end;
+
+    if (!out_pc || !boot_state_parse_header(file, file_len, &h)) return 0;
+    cur = file + BOOT_STATE_HEADER_WIRE_BYTES;
+    end = file + file_len;
+    for (uint32_t i = 0; i < h.section_count; i++) {
+        PstR sh, cr;
+        uint32_t tag, flags, raw_len, discard;
+        uint64_t len;
+        const uint8_t *payload, *data;
+        uint8_t *owned = NULL;
+        int ok;
+        if ((size_t)(end - cur) < 16u) return 0;
+        pst_r_init(&sh, cur, 16u);
+        if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &flags) ||
+            !pst_r_u64(&sh, &len)) return 0;
+        cur += 16;
+        if (len > 64u * 1024u * 1024u || (uint64_t)(end - cur) < len) return 0;
+        payload = cur;
+        cur += (size_t)len;
+        if (tag != BS_SEC_CPU) continue;
+        raw_len = (uint32_t)len;
+        data = payload;
+        if (flags == BOOT_STATE_SEC_ZLIB) {
+            PstR lr;
+            uLong dest_len;
+            if (len < 4u) return 0;
+            pst_r_init(&lr, payload, 4u);
+            if (!pst_r_u32(&lr, &raw_len) || raw_len != CPU_REGS_WIRE_BYTES) return 0;
+            owned = (uint8_t*)malloc(raw_len);
+            if (!owned) return 0;
+            dest_len = raw_len;
+            if (uncompress(owned, &dest_len, payload + 4, (uLong)(len - 4u)) != Z_OK ||
+                dest_len != raw_len) {
+                free(owned);
+                return 0;
+            }
+            data = owned;
+        } else if (flags != 0u) {
+            return 0;
+        }
+        ok = raw_len == CPU_REGS_WIRE_BYTES;
+        pst_r_init(&cr, data, raw_len);
+        for (int reg = 0; ok && reg < 32; reg++)   /* gpr[0..31] precede pc */
+            ok = pst_r_u32(&cr, &discard);
+        ok = ok && pst_r_u32(&cr, out_pc);
+        free(owned);
+        return ok;
+    }
+    return 0;
+}
+
+int boot_state_peek_cpu_pc(const char* path, uint32_t* out_pc) {
+    FILE* f;
+    long sz;
+    uint8_t* file;
+    int ok;
+
+    if (!path || !out_pc || !(f = fopen(path, "rb"))) return 0;
+    if (fseek(f, 0, SEEK_END) != 0 || (sz = ftell(f)) < (long)BOOT_STATE_HEADER_WIRE_BYTES ||
+        sz > 64L * 1024L * 1024L || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return 0;
+    }
+    file = (uint8_t*)malloc((size_t)sz);
+    if (!file) { fclose(f); return 0; }
+    ok = fread(file, 1, (size_t)sz, f) == (size_t)sz &&
+         boot_state_peek_cpu_pc_buffer(file, (size_t)sz, out_pc);
+    free(file);
+    fclose(f);
+    return ok;
+}
+
 int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                            uint32_t bios_checksum, uint32_t entry_pc,
                            CPUState* cpu) {

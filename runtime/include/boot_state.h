@@ -142,6 +142,12 @@ void boot_state_vram_mirror_reset(void);
 int  boot_state_load(const char* path, uint32_t bios_checksum,
                      uint32_t entry_pc, CPUState* cpu);
 
+/* Read only the serialized CPU resume PC; no machine state is applied. Lets a
+ * caller reject a state before boot_state_load commits it. */
+int  boot_state_peek_cpu_pc(const char* path, uint32_t* out_pc);
+int  boot_state_peek_cpu_pc_buffer(const uint8_t* file, size_t file_len,
+                                   uint32_t* out_pc);
+
 /* Same as boot_state_load, but from an already-buffered .pst image (netplay). */
 int  boot_state_load_buffer(const uint8_t* file, size_t file_len,
                             uint32_t bios_checksum, uint32_t entry_pc,

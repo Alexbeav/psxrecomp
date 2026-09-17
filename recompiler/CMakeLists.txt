@@ -919,6 +919,7 @@ if(BUILD_TESTING)
                 overlay_init_guard
                 recomp_ui_root_override
                 pal_cadence_host_refresh
+                savestate_load_preflight
                 sdl3_main_single_include
                 spu_sample_scheduler_default
                 overlay_step_boundary

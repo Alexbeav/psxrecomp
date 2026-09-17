@@ -858,6 +858,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
     if (s_load_pending >= 0) {
         int slot = s_load_pending;
         int loaded = 0;
+        uint32_t saved_pc = 0;
         s_load_pending = -1;
         char path[600];
         const double t_load0 = savestate_mono_ms();
@@ -866,8 +867,16 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         path[0] = '\0';
         if (s_load_blob && s_load_blob_len > 0) {
             const size_t blob_len = s_load_blob_len;
-            loaded = boot_state_load_buffer(s_load_blob, blob_len,
-                                            s_bios_checksum, s_entry_pc, cpu);
+            /* Reject an unresumable state BEFORE applying it: the resume-PC
+             * check below runs after the machine was overwritten, so a rejected
+             * load used to leave the live session corrupted. */
+            if (boot_state_peek_cpu_pc_buffer(s_load_blob, blob_len, &saved_pc) &&
+                savestate_resume_pc_ok(saved_pc))
+                loaded = boot_state_load_buffer(s_load_blob, blob_len,
+                                                s_bios_checksum, s_entry_pc, cpu);
+            else
+                fprintf(stderr, "savestate: blob resume pc=0x%08X rejected before apply\n",
+                        (unsigned)saved_pc);
             clear_load_blob();
             if (!loaded) {
                 fprintf(stderr,
@@ -877,7 +886,12 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 psx_frontend_on_savestate_notify(1, slot, 0);
             }
         } else if (savestate_slot_path(slot, path, sizeof(path))) {
-            loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
+            if (boot_state_peek_cpu_pc(path, &saved_pc) &&
+                savestate_resume_pc_ok(saved_pc))
+                loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
+            else
+                fprintf(stderr, "savestate: slot %d resume pc=0x%08X rejected before apply\n",
+                        slot, (unsigned)saved_pc);
             if (!loaded) {
                 fprintf(stderr,
                         "savestate: LOAD FAILED slot %d %s\n",
