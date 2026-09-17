@@ -158,10 +158,17 @@
             "            if(source_reset_phase==1) {",
             "                pending_arm(0x0A,256,1);",
             "            } else if(has_disc()) {",
-            "                /* Stock clang evaluates the broad Reset draw before CalcSeekTime. */",
-            "                int delay=(int)source_clock_random(3250000);",
+            "                /* std::max(PSX_GetRandU32(0, 3250000), CalcSeekTime(...)) leaves the",
+            "                 * order of the two draws to the compiler. Stock clang (Nymashock) takes",
+            "                 * the broad Reset draw first; MSVC (octoshock.dll in BizHawk 2.7 and",
+            "                 * 2.10) calls CalcSeekTime, and its 25000 draw, first. */",
             "                int seek=source_seek_lower_bound(origin,0,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);",
-            "                seek+=(int)source_clock_random(25000);",
+            "                int delay;",
+            "                if(s_cd_reset_seek_draw_first) {",
+            "                    seek+=(int)source_clock_random(25000);delay=(int)source_clock_random(3250000);",
+            "                } else {",
+            "                    delay=(int)source_clock_random(3250000);seek+=(int)source_clock_random(25000);",
+            "                }",
             "                if(delay<seek)delay=seek;",
             "                stop_read_stream();stop_cdda_playback();",
             "                s_source_reset_due=psx_cycle_count+(uint64_t)delay;source_reset_phase=1;",
@@ -232,7 +239,9 @@
           "file": "runtime/src/cdrom.c",
           "lines": [
             "    const char *drive_model=getenv(\"PSX_CD_DRIVE_MODEL\");",
-            "    s_nymashock_drive=drive_model && !strcmp(drive_model,\"nymashock-1.29.0\");",
+            "    /* octoshock-2.7 is the same Mednafen drive (1.27.1 == 1.29.0 here) built with MSVC. */",
+            "    s_cd_reset_seek_draw_first=drive_model && !strcmp(drive_model,\"octoshock-2.7\");",
+            "    s_nymashock_drive=drive_model && (!strcmp(drive_model,\"nymashock-1.29.0\") || s_cd_reset_seek_draw_first);",
             "    if(drive_model && *drive_model && (!s_nymashock_drive || !s_source_clock)) {",
             "        fprintf(stderr,\"[CDROM] Invalid source drive model or missing clock\\n\");exit(2);",
             "    }",
@@ -356,7 +365,7 @@
           ]
         }
       ],
-      "note": "Bundles the early Bio Hazard CD/drive (Nymashock 1.29.0 physical head, reset, sub-Q), CPU/kernel (guest syscall exception model, CD register sample) and MDEC (512-cycle block model) fixes; the CPU/kernel lines are shared infrastructure but only the Bio Hazard pass depends on them. evolved: 3 dropped lines were rewritten by fa4d2267 (seek origin from the physical head); the other 21 are the Nymashock-drive savestate serialisation (cdrom_snap_emit/parse WI/RI fields, cdrom_snapshot_read drive_bytes validation and offsets, MDEC 512-cycle wire bytes) that split/06's cherry-pick 6224a262 left out - split refuses snapshots under that drive profile instead (cdrom_snapshot_bytes/write exit 2, 'Source CDDA/drive capture unqualified'). The power-on replay passes do not exercise savestates."
+      "note": "Bundles the early Bio Hazard CD/drive (Nymashock 1.29.0 physical head, reset, sub-Q), CPU/kernel (guest syscall exception model, CD register sample) and MDEC (512-cycle block model) fixes; the CPU/kernel lines are shared infrastructure but only the Bio Hazard pass depends on them. evolved: 3 dropped lines were rewritten by fa4d2267 (seek origin from the physical head); the other 21 are the Nymashock-drive savestate serialisation (cdrom_snap_emit/parse WI/RI fields, cdrom_snapshot_read drive_bytes validation and offsets, MDEC 512-cycle wire bytes) that split/06's cherry-pick 6224a262 left out - split refuses snapshots under that drive profile instead (cdrom_snapshot_bytes/write exit 2, 'Source CDDA/drive capture unqualified'). The power-on replay passes do not exercise savestates. evolved 2026-09-17: the Nymashock Reset block and the drive-model parse now select the order of its two random draws (octoshock-2.7 takes CalcSeekTime first, as MSVC does); the nymashock-1.29.0 branch keeps the qualified clang order unchanged."
     },
     {
       "id": "22fbb932-nymashock-subq-ahead-of-delivery",
