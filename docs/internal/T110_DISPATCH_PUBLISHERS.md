@@ -80,14 +80,19 @@ that someone else published.
 - Test ROM: `tools/bios_resume_testrom`. It runs ROM A0 routines (memset, memcpy
   and its BFC02B7C delay slot, memcmp, rand, strlen) and Enter/ExitCriticalSection
   syscalls under a root-counter-2 interrupt with an event callback. psx-bresume
-  and psx-beetle boot the same synthetic disc; the harness proves both loaded the
-  same kernel by comparing RAM 0x500..0x1500 (PSX-ORACLE-001 — psx-beetle loads
-  firmware by filename, so a BIOS path argument silently runs a different image).
+  and psx-beetle boot the same synthetic disc. The harness proves both loaded the
+  same image by comparing the live shell copy (RAM 0x30000..0x31000) against that
+  ROM's 0x18000.. window: psx-beetle loads firmware by filename and runs on when
+  the file is absent or is another image (PSX-ORACLE-001). The kernel band at RAM
+  0x500 — the bundle README's recipe, and this table's first version — does NOT
+  discriminate: ROM 0x10000..0x18000 is byte-identical across SCPH1001, SCPH5552
+  and SCPH5500, so all three score 99.95%. The shell band separates them
+  100.00% / 21.00% / 17.41%.
 
-  | BIOS | `PSX_PRECISE_SLICE` | kernel band | compared words | native callbacks | runtime publishes | refused | unknown dispatches |
+  | BIOS | `PSX_PRECISE_SLICE` | shell band | compared words | native callbacks | runtime publishes | refused | unknown dispatches |
   |---|---|---|---|---|---|---|---|
-  | SCPH1001 | 0 | 100.0% | match | 89,095 | 93,952 | 0 | 0 |
-  | SCPH1001 | 1 | 100.0% | match | 71,549 | 4,873,598 | 0 | 0 |
+  | SCPH1001 | 0 | 100.0% | match | 81,245 | 87,794 | 0 | 0 |
+  | SCPH1001 | 1 | 100.0% | match | 91,505 | 4,893,131 | 0 | 0 |
 
   SCPH5552 and SCPH5500 cannot be run as a PAIR on this disc: the local license
   data is SCEA, and psx-beetle picks firmware by the disc's region, so the EU/JP
@@ -95,9 +100,10 @@ that someone else published.
   (both slice modes), with 0 refused publishes and 0 unknown dispatches.
 
 - BIOS boot pairs, no test ROM: SCPH1001, SCPH5552 and SCPH5500 each reach the
-  Sony logo and the shell on both backends, kernel band 100.0% on all three,
+  Sony logo and the shell on both backends, with each process independently
+  verified as running the intended image (shell band 100.0% per port, per stem),
   0 unknown dispatches and 0 refused publishes
-  (`Z:/Share/psxrecomp/evidence/t13-bios-seeds-20260917/boot/`).
+  (`.../t13-bios-seeds-20260917/boot_image_verified/`).
 
 - Not an interrupt-load parity claim: with the genuine BIOS, psx-beetle delivers
   NO root-counter-2 interrupts (callback count 0) while psx-bresume delivers
