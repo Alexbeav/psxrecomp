@@ -9,6 +9,15 @@
  * entire synthetic disc. All commands and advancement use its real MMIO API.
  */
 #include "../src/cdrom.c"
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 
 uint64_t psx_cycle_count, s_frame_count;
 uint32_t i_stat, g_debug_current_func_addr, g_debug_last_store_pc;
@@ -50,6 +59,8 @@ _putenv_s(k,v);
 setenv(k,v,1);
 #endif
 }
+/* Exclusive create without C11 fopen "x", which msvcrt rejects. */
+static FILE *create_new(const char *path){int fd=open(path,O_WRONLY|O_CREAT|O_EXCL|O_BINARY,0644);if(fd<0)return NULL;FILE *f=fdopen(fd,"wb");if(!f)close(fd);return f;}
 static void out(FILE *f,uint32_t v){uint8_t b[]={v,v>>8,v>>16,v>>24};if(fwrite(b,1,4,f)!=4)exit(3);}
 int main(int argc,char **argv){if(argc!=4 && argc!=5)return 2;
 env("PSX_CD_EXPLICIT_SEEK_MODEL","octoshock-2.2.2");env("PSX_CD_TOC_SEEK_MODEL","octoshock-2.2.2");env("PSX_CD_READ_START_MODEL","octoshock-2.2.2-pipeline");env("PSX_CD_COLD_STATUS_MODEL","octoshock-2.2.2");env("PSX_CD_SOURCE_CLOCK_TAPE",argv[1]);env("PSX_CD_CDDA_MODEL","octoshock-2.3");
@@ -58,7 +69,7 @@ cdrom_init("authored");
  * This unit precondition is not the runtime's production cold-boot image. */
 if(argc==5){if(!strcmp(argv[4],"capture"))cdrom_snapshot_bytes();else if(!strcmp(argv[4],"write-state"))cdrom_snapshot_write(NULL);else if(!strcmp(argv[4],"scan"))cdrom_write(0x1f801801,4);else if(!strcmp(argv[4],"restore"))return cdrom_snapshot_read(NULL,0)?1:0;else if(!strcmp(argv[4],"double-speed")){mode_reg=0x80;start_source_cdda(2);}else if(!strcmp(argv[4],"active-read")){reading=1;start_source_cdda(2);}return 1;}
 stat_reg=CDSTAT_SHELL;s_source_seek_paused=0;read_sec=2;setloc_pending=1;s_setloc_lba=0;
-FILE *in=fopen(argv[2],"rb"),*f=fopen(argv[3],"wbx");if(!in||!f)return 3;uint8_t bytes[16];
+FILE *in=fopen(argv[2],"rb"),*f=create_new(argv[3]);if(!in||!f)return 3;uint8_t bytes[16];
 while(fread(bytes,1,16,in)==16){uint32_t o[4];for(int i=0;i<4;i++)o[i]=cd_tape_le32(bytes+i*4);
 if(o[0]==0){if(o[1]<psx_cycle_count)return 4;uint32_t delta=o[1]-psx_cycle_count;psx_cycle_count=o[1];cdrom_advance(delta);}
 else if(o[0]==1)cdrom_write(0x1f801800+o[2],o[3]);
