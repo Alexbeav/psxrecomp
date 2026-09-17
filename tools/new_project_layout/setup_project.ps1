@@ -616,10 +616,10 @@ if ($doBoxart) {
             python -c "from pathlib import Path; import sys; from project_studio.readme_metrics import inject_readme_boxart; inject_readme_boxart(Path(sys.argv[1]), sys.argv[2])" (Join-Path $Root "README.md") $GameName
             Write-Host "  injected boxart into README.md"
         } else {
-            Write-Warning "boxart fetch failed — leave LAUNCHER_BOXART commented."
+            Write-Warning "boxart fetch failed - leave LAUNCHER_BOXART commented."
         }
     } catch {
-        Write-Warning "boxart fetch failed — leave LAUNCHER_BOXART commented."
+        Write-Warning "boxart fetch failed - leave LAUNCHER_BOXART commented."
     } finally {
         if ($null -eq $prevPy) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $prevPy }
     }
@@ -693,7 +693,7 @@ if ($createGithub) {
                 gh repo edit $ghSlug --description "$ghDesc" --homepage "$ghHome"
                 Write-Host "  GitHub About: R.A.I.D. description + Discord homepage"
             } catch {
-                Write-Warning "gh repo edit (About) failed — set description/homepage by hand."
+                Write-Warning "gh repo edit (About) failed - set description/homepage by hand."
             }
         }
     }
