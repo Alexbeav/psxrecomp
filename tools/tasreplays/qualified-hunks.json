@@ -3028,6 +3028,9 @@
             "            if (!pst_w_bytes(w, analog_mode_locked, sizeof analog_mode_locked) ||",
             "                !pst_w_bytes(w, pad_supports_config, sizeof pad_supports_config)) return 0;",
             "        }",
+            "        if (sio_source_pad_ack &&",
+            "            (!pst_w_bytes(w, pad_dtr_session_first, sizeof pad_dtr_session_first) ||",
+            "             !pst_w_bytes(w, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;",
             "    }",
             "#endif",
             "    return 1;"
@@ -3102,6 +3105,9 @@
             "            if (!pst_r_bytes(r, analog_mode_locked, sizeof analog_mode_locked) ||",
             "                !pst_r_bytes(r, pad_supports_config, sizeof pad_supports_config)) return 0;",
             "        }",
+            "        if (sio_source_pad_ack &&",
+            "            (!pst_r_bytes(r, pad_dtr_session_first, sizeof pad_dtr_session_first) ||",
+            "             !pst_r_bytes(r, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;",
             "    }",
             "#endif"
           ]
@@ -3144,12 +3150,14 @@
             "        int32_t pulse, timed;",
             "        uint32_t config_bytes = (sio_source_pad_ack == 2 || sio_source_card) ?",
             "            2u * PSX_MAX_PLAYERS : 0u;",
-            "        pst_r_init(&extra, p + len - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,",
+            "        uint32_t session_bytes = sio_source_pad_ack ?",
+            "            (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;",
+            "        pst_r_init(&extra, p + len - session_bytes - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,",
             "                   8u + 6u * PSX_MAX_PLAYERS);",
             "        if (!pst_r_i32(&extra, &pulse) || !pst_r_i32(&extra, &timed) ||",
             "            pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;",
-            "        for (uint32_t j = 0; j < config_bytes; j++)",
-            "            if (p[len - config_bytes + j] > 1) return 0;",
+            "        for (uint32_t j = 0; j < config_bytes + session_bytes; j++)",
+            "            if (p[len - session_bytes - config_bytes + j] > 1) return 0;",
             "    }",
             "#endif"
           ]
@@ -3646,7 +3654,7 @@
           ]
         }
       ],
-      "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row."
+      "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion."
     },
     {
       "id": "tas-checkpoint-manifest-identity",
