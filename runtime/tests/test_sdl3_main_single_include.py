@@ -11,9 +11,14 @@ SDL_MAIN_HEADER = "<SDL3/SDL_main.h>"
 
 def main() -> int:
     runtime = ROOT / "runtime"
+    # runtime/build is the documented build tree; it holds fetched SDL sources
+    # that legitimately include SDL_main.h. Skip every CMake build tree.
+    build_trees = [cache.parent for cache in runtime.rglob("CMakeCache.txt")]
     owners = []
     for pattern in ("*.c", "*.cpp", "*.h"):
         for path in runtime.rglob(pattern):
+            if any(tree in path.parents for tree in build_trees):
+                continue
             source = path.read_text(encoding="utf-8")
             if SDL_MAIN_HEADER in source:
                 owners.append(path.relative_to(ROOT).as_posix())

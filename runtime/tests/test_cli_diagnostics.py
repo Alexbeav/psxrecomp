@@ -21,6 +21,13 @@ sys.modules[spec.name] = cli
 spec.loader.exec_module(cli)
 
 
+def _write_cache(build_dir, extra):
+    """Stand in for CMake: the CLI verifies CMakeCache.txt after configure (4b9c85846)."""
+    Path(build_dir).mkdir(parents=True, exist_ok=True)
+    lines = [e[2:].replace("=", ":BOOL=", 1) for e in extra if e.startswith("-D") and "=" in e]
+    (Path(build_dir) / "CMakeCache.txt").write_text("\n".join(lines), encoding="utf-8")
+
+
 class DiagnosticRebuildTests(unittest.TestCase):
     def test_rebuild_builds_normal_then_diagnostic_product(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -30,6 +37,7 @@ class DiagnosticRebuildTests(unittest.TestCase):
 
             def fake_configure(project_root, build_dir, *, pgo, extra, progress):
                 calls.append(("configure", Path(build_dir).name, [e for e in extra if "PSX_DEBUG_TOOLS" in e]))
+                _write_cache(build_dir, extra)
 
             def fake_build(build_dir, target, progress):
                 calls.append(("build", Path(build_dir).name))
@@ -41,7 +49,8 @@ class DiagnosticRebuildTests(unittest.TestCase):
                 target="psx-runtime", exe_basename="Fixture", disc="", no_pgo=True, force_pgo=False,
                 cmake_extra=[], diagnostic_dir="build-diagnostic", prune_after="")
             progress = Mock()
-            with patch.object(cli, "activate_embedded_toolchain", lambda *a, **k: None), \
+            with patch.object(cli, "activate_embedded_toolchain", lambda *a, **k: True), \
+                 patch.object(cli, "stage_overlay_toolchain_for_product", lambda *a, **k: None), \
                  patch.object(cli, "_cmake_configure", side_effect=fake_configure), \
                  patch.object(cli, "_cmake_build", side_effect=fake_build), \
                  patch.object(cli, "_resolve_runtime_exe",
@@ -67,13 +76,15 @@ class DiagnosticRebuildTests(unittest.TestCase):
             def fake_configure(project_root, build_dir, *, pgo, extra, progress):
                 if Path(build_dir).name == "build-diagnostic":
                     raise RuntimeError("synthetic diagnostic configure failure")
+                _write_cache(build_dir, extra)
 
             args = argparse.Namespace(
                 config=str(root / "game.toml"), project_root=str(root), build_dir="build-release",
                 target="psx-runtime", exe_basename="Fixture", disc="", no_pgo=True, force_pgo=False,
                 cmake_extra=[], diagnostic_dir="build-diagnostic", prune_after="")
             progress = Mock()
-            with patch.object(cli, "activate_embedded_toolchain", lambda *a, **k: None), \
+            with patch.object(cli, "activate_embedded_toolchain", lambda *a, **k: True), \
+                 patch.object(cli, "stage_overlay_toolchain_for_product", lambda *a, **k: None), \
                  patch.object(cli, "_cmake_configure", side_effect=fake_configure), \
                  patch.object(cli, "_cmake_build", lambda *a, **k: None), \
                  patch.object(cli, "_resolve_runtime_exe",

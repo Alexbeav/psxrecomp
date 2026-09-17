@@ -117,8 +117,11 @@ SKIP_DIRS = {'.git', 'build', 'generated', 'node_modules', '__pycache__',
 # but that is a separate change with a separate proof (macOS in particular
 # cannot be built or verified here), so this test does not pretend to cover it.
 PACKAGER_RE = re.compile(r'^package_.*\.(sh|ps1)$')
+# `overlay_cache = true` in game.toml and the --ship-without-overlay-cache-because
+# escape hatch name the runtime SETTING, not the cache tag; a packager that
+# only gates on that setting (package_setup_host.sh, a030f4843) is not a consumer.
 TAG_CONSUMER_RE = re.compile(
-    r'cg_?tag|CgTag|cache_tag|overlay_cache|overlay_toolchain', re.I)
+    r'cg_?tag|CgTag|cache_tag|overlay_cache(?!\s*=|\[|_because)|overlay_toolchain', re.I)
 SHARED_SURFACE_RE = re.compile(r'release_overlay_stage|release_stage\.py')
 
 

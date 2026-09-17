@@ -64,7 +64,7 @@ assert "static int g_manual_turbo_latched = 0;" in MAIN
 assert "static void fast_forward_toggle_flip(void)" in MAIN
 assert "fast_forward_toggle_poll_buttons();" in MAIN
 assert "host_keymap_match_event(HOST_KEYMAP_TURBO_TOGGLE," in MAIN
-assert "if (kb_turbo || g_manual_turbo_latched ||" in MAIN
+assert "if (startup_fast_forward || kb_turbo || g_manual_turbo_latched ||" in MAIN
 assert MAIN.count("ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD_TOGGLE]") == \
     MAIN.count("ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD]")
 assert '"Fast-forward toggle",' in MAIN
