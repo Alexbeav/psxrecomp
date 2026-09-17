@@ -17,6 +17,8 @@
 #include "psx_scheduler.h" /* deterministic TCB scheduler carve-out (scaffolding) */
 #include "parity_trace.h"  /* general two-process control-flow parity ring */
 #include "source_gpu_runtime.h"
+#include "psx_bios_backend.h" /* psx_bios_is_entry, psx_bios_image (psx_is_dispatchable) */
+#include "dispatch_publish.h"
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
@@ -86,13 +88,33 @@ static void sched_escape_ring_log(CPUState* cpu, uint32_t reason,
 
 int psx_is_dispatchable(uint32_t pc)
 {
-    /* Fail closed on the known-bad resume PCs that the old pc=0 sentinel +
-     * sentinel-EPC pathologies produced. A nonzero, non-sentinel PC is treated
-     * as potentially dispatchable for now; a later step tightens this to "is a
-     * registered function entry / re-enterable block leader" via the dispatch
-     * tables (psx_game_is_function_entry + the BIOS dispatch table). */
+    /* Can the top-level dispatch re-enter `pc` exactly? Every resume-PC gate
+     * (EPC acceptance, TCB/scheduler resume, savestate/rewind/netplay) relies on
+     * this answer, so it must mirror what psx_dispatch can actually run.
+     *
+     * BIOS-owned code is exact (T110): the static table re-enters only function
+     * entries and registered continuations (every block leader). A mid-block
+     * instruction or a delay slot in ROM, or in the relocated kernel window while
+     * its page is clean, is NOT dispatchable — it used to pass here and surface
+     * later as an unknown-dispatch fatal at an address nothing called.
+     *
+     * Dirty RAM runs through the interpreter (CLAUDE.md Rule 18) and is
+     * re-enterable anywhere. Game/overlay RAM keeps its own gates (the precise
+     * slicer's precise_pc_dispatchable, the overlay loader). */
+    extern int dirty_ram_is_dirty(uint32_t phys);
     if (pc == 0u) return 0;
     if (pc == PSX_EXC_SENTINEL_PC) return 0;
+    if (pc & 3u) return 0;
+    if (psx_bios_is_entry(pc)) return 1;
+    uint32_t phys = pc & 0x1FFFFFFFu;
+    if (phys >= 0x1FC00000u && phys < 0x1FC80000u) return 0;
+    if (phys < 0x00800000u) {
+        phys &= 0x001FFFFFu;
+        if (dirty_ram_is_dirty(phys)) return 1;
+        if (psx_bios_image.kbless_ram_hi != 0u &&
+            phys >= psx_bios_image.kbless_ram_lo && phys < psx_bios_image.kbless_ram_hi)
+            return 0;
+    }
     return 1;
 }
 
@@ -720,6 +742,7 @@ void psx_scheduler_top_level_resume_clear(void)
 
 void psx_scheduler_resume_at(uint32_t resume_pc)
 {
+    psx_publish_note(PSX_PUB_SCHED_RESUME_AT, resume_pc, 0u);
     if (!psx_is_dispatchable(resume_pc)) {
         char b[96];
         snprintf(b, sizeof(b),
@@ -868,6 +891,7 @@ void psx_scheduler_run(CPUState* cpu)
             uint32_t cur = psx_current_tcb_ptr(cpu);
             if (psx_is_valid_tcb(cpu, cur)) {
                 run_pc = psx_restore_context_from_tcb(cpu, cur);
+                psx_publish_note(PSX_PUB_SCHED_TCB, run_pc, cur);
                 if (!psx_is_dispatchable(run_pc)) {
                     char b[112];
                     snprintf(b, sizeof(b),
@@ -1059,6 +1083,7 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
                     /* RFE pop on saved SR (clears bits [5:0], shifts [5:2]→[3:0]). */
                     cpu->cop0[12] = (saved_sr & 0xFFFFFFC0u) | ((saved_sr >> 2) & 0x0Fu);
                     cpu->pc = saved_epc;
+                    psx_publish_note(PSX_PUB_RFE, saved_epc, tcb_ptr_addr);
                     if (psx_get_in_exception()) {
                         /* Fix B: saved_epc is the REAL guest EPC restored from the TCB
                          * (never the sentinel). Mark the escape reason so the landing in
@@ -1075,6 +1100,7 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
             /* Fallback: simple RFE on current SR. */
             cpu->cop0[12] = (sr & ~0x0Fu) | ((sr >> 2) & 0x0Fu);
             cpu->pc = cpu->cop0[14];
+            psx_publish_note(PSX_PUB_RFE, cpu->pc, 0u);
             return 1;
         }
 
@@ -1458,14 +1484,28 @@ void psx_unknown_dispatch(CPUState* cpu, uint32_t addr, uint32_t phys) {
         if (s_fail_fast) {
             extern void psx_crash_trace_dump(const char *reason, void *seh_info);
             psx_crash_trace_dump("fail_fast_unknown_dispatch", NULL);
-            char msg[256];
+            /* Name the runtime site that published this PC, if one did
+             * (dispatch_publish.h). No match means a generated body or the
+             * guest itself produced it (see dispatch_tail). */
+            const PsxPublishEntry *pub = psx_publish_last_for(addr);
+            char pubtxt[160];
+            if (pub)
+                snprintf(pubtxt, sizeof(pubtxt),
+                    "published by %s (origin=0x%08X seq=%llu frame=%u)",
+                    psx_publish_site_name(pub->site), pub->origin,
+                    (unsigned long long)pub->seq, pub->frame);
+            else
+                snprintf(pubtxt, sizeof(pubtxt), "no runtime publisher in publish_ring");
+            char msg[640];
             snprintf(msg, sizeof(msg),
                 "FAIL-FAST unknown dispatch: addr=0x%08X phys=0x%08X ra=0x%08X "
-                "a0=0x%08X a1=0x%08X — see psx_last_run_report.json\n"
-                "(recompiler discovery gap: if addr is BIOS ROM, seed it — "
-                "recompiler/seeds/ — and regen; PSX_FAIL_FAST_UNKNOWN_DISPATCH=0 "
+                "a0=0x%08X a1=0x%08X — %s — see psx_last_run_report.json\n"
+                "(BIOS ROM address? `python tools/bios_seed_corpus.py classify "
+                "--profile bios/<stem>.toml --addresses 0x%08X`: seed it only if it is an "
+                "uncovered function start; a mid_block/delay_slot PC is a publisher bug, "
+                "see the publish_ring debug command. PSX_FAIL_FAST_UNKNOWN_DISPATCH=0 "
                 "to survive-and-log instead)\n",
-                addr, phys, cpu->gpr[31], cpu->gpr[4], cpu->gpr[5]);
+                addr, phys, cpu->gpr[31], cpu->gpr[4], cpu->gpr[5], pubtxt, addr);
             trap_crash(msg);
             exit(1);
         }

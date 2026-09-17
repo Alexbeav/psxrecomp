@@ -56,6 +56,12 @@ void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t return_addr)
     psx_bios_active->dispatch_call(cpu, addr, return_addr);
 }
 
+int psx_bios_is_entry(uint32_t addr)
+{
+    if (!psx_bios_active || !psx_bios_active->is_entry) return 0;
+    return psx_bios_active->is_entry(addr);
+}
+
 /* ── Selection ──────────────────────────────────────────────────────────── */
 
 const PsxBiosBackend *psx_bios_find(const char *image_id)

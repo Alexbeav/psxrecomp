@@ -44,6 +44,7 @@
 #include "input_route_field_clock.h"
 #include "input_route_raster_clock.h"
 #include "source_gpu_runtime.h"
+#include "dispatch_publish.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -778,8 +779,15 @@ int psx_irq_resume_context_snapshot_safe(void)
     return psx_irq_resume_context_snapshot_safe_at(g_dirty_safe_resume_pc);
 }
 
+/* Armed by psx_irq_arm_compiled_resume_pc and consumed by the first compiled
+ * boundary check: once execution reaches a later check the armed PC is behind
+ * it, so it must not remain the fallback EPC for a later bare
+ * psx_check_interrupts() (T110: the latch used to be sticky forever). */
+static int s_compiled_resume_armed = 0;
+
 void psx_irq_clear_resume_latches(void)
 {
+    s_compiled_resume_armed = 0;
     s_compiled_interrupt_resume_pc = 0;
     s_last_interrupt_check_pc = 0;
     s_last_interrupt_check_cycle = UINT64_MAX;
@@ -795,6 +803,7 @@ void psx_irq_arm_compiled_resume_pc(uint32_t pc)
         return;
     s_compiled_interrupt_resume_pc = pc;
     s_last_interrupt_check_pc = pc;
+    s_compiled_resume_armed = 1;
 }
 
 /* Deferred cooperative thread switch from nested exception delivery.
@@ -1726,11 +1735,15 @@ irq_deliver_eval:
     exception_entries_total++;
     uint32_t pre_handler_istat = i_stat;  /* snapshot for cooldown decision */
 
-    /* Set COP0 Cause: ExcCode=0 (interrupt). The ~0x7C mask deliberately
+    /* Set COP0 Cause: ExcCode=0 (interrupt). The mask deliberately
      * preserves the whole IP field, because a pure software interrupt must
      * present the guest-written IP0/IP1 bits unmodified (the guest's dispatcher
      * discriminates stages by exactly those bits — see the sw_pending rationale
-     * at the top of this function).
+     * at the top of this function). Everything else is per-exception: BD/BT
+     * and CE describe THIS exception, so they are cleared, exactly as Beetle's
+     * PS_CPU::Exception does (CAUSE &= 0x0000FF00). The old ~0x7C mask kept a
+     * previous delay-slot exception's BD set on this compiled-boundary IRQ
+     * (T110).
      *
      * IP2 specifically is NOT set here. It is combinational and has a single
      * owner, psx_irq_refresh_cause_ip2(), which already tracks the INTC line at
@@ -1738,7 +1751,7 @@ irq_deliver_eval:
      * delivery that races an ack cannot leave a stale bit behind, and a
      * software-interrupt delivery gets IP2 reflecting the true line state
      * instead of whatever bit 10 happened to be left as. */
-    cpu->cop0[COP0_CAUSE] = (cpu->cop0[COP0_CAUSE] & ~0x7C) | (0 << 2);
+    cpu->cop0[COP0_CAUSE] = (cpu->cop0[COP0_CAUSE] & 0x0000FF00u) | (0 << 2);
     if(source_irq_slot.pc) {
         cpu->cop0[COP0_CAUSE]=(cpu->cop0[COP0_CAUSE]&0x0000ff00u)|source_irq_slot.cause;
         cpu->cop0[6]=source_irq_slot.target; /* source TAR / branch destination */
@@ -1820,12 +1833,14 @@ irq_deliver_eval:
             cpu->cop0[COP0_EPC]  = real_pc;     /* architectural: the real resume PC */
             g_exception_real_epc = real_pc;
             g_exc_escape_reason  = PSX_EXC_ESCAPE_NONE; /* set at the actual RFE/SYSCALL return */
+            psx_publish_note(PSX_PUB_EPC_REAL, real_pc, cpu->pc);
         } else {
             uint32_t sentinel = PSX_EXC_SENTINEL_PC;
             cpu->write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
             cpu->cop0[COP0_EPC]  = sentinel;
             g_exception_real_epc = sentinel;
             g_exc_escape_reason  = PSX_EXC_ESCAPE_LEGACY_SENTINEL;
+            psx_publish_note(PSX_PUB_EPC_SENTINEL, sentinel, real_pc);
         }
 #ifdef PSX_COSIM
         cosim_irq_note(cpu, 1u, real_pc, g_dirty_safe_resume_pc,
@@ -2323,6 +2338,7 @@ irq_deliver_eval:
             cpu->hi = saved_hi;
             cpu->lo = saved_lo;
             cpu->cop0[COP0_SR] = sr;   /* pre-exception SR (IEc was set — gate above) */
+            psx_publish_note(PSX_PUB_DEFERRED_SWITCH, g_exception_real_epc, entry_tcb);
             cpu->pc = g_exception_real_epc; /* resume the OUTGOING thread at ITS own PC,
                                              * not the target PC the in-exception RFE
                                              * left in cpu->pc — else it runs the target's
@@ -2352,7 +2368,8 @@ irq_deliver_eval:
  * here gives the mmx6 baseline interrupt behavior — sufficient to build+run the
  * current generated code on the good baseline for instrumented comparison. */
 void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {
-    uint32_t prev = s_compiled_interrupt_resume_pc;
+    uint32_t prev = s_compiled_resume_armed ? 0u : s_compiled_interrupt_resume_pc;
+    s_compiled_resume_armed = 0;
     s_compiled_interrupt_resume_pc = resume_pc;
     psx_check_interrupts(cpu); /* flushes load-charge batch on entry */
     s_compiled_interrupt_resume_pc = prev;
@@ -2367,6 +2384,7 @@ int psx_check_interrupts_delay_slot(CPUState *cpu,uint32_t slot_pc,
     source_irq_slot.pc=slot_pc;source_irq_slot.target=target;
     source_irq_slot.cause=0x80000000u|(taken?0x40000000u:0u)|((instruction<<2)&0x30000000u);
     g_dirty_safe_resume_pc=slot_pc-4u;cpu->pc=slot_pc-4u;
+    psx_publish_note(PSX_PUB_EPC_DELAY_SLOT,slot_pc-4u,slot_pc);
     psx_check_interrupts_at(cpu,slot_pc-4u);
     g_dirty_safe_resume_pc=previous;source_irq_slot.pc=0;
     if(g_irq_deliver_count!=before && !cpu->pc)cpu->pc=slot_pc-4u;

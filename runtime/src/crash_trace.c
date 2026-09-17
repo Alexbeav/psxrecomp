@@ -39,6 +39,7 @@
 
 #include "cpu_state.h"
 #include "psx_bss.h"
+#include "dispatch_publish.h"
 #include "crash_trace.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */
@@ -745,6 +746,29 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         for (int i = 0; i < count; i++) {
             uint32_t a = crash_trace_dispatch_ring_get((int)((start + i) & (DISPATCH_TRACE_CAP - 1)));
             append_fmt(buf, sizeof(buf), &pos, "%s\"0x%08X\"", i == 0 ? "" : ",", a);
+        }
+        append_str(buf, sizeof(buf), &pos, "]\n  },\n");
+    }
+
+    /* publish tail (last 64): runtime sites that published a resume PC */
+    {
+        uint64_t total = psx_publish_seq();
+        uint64_t avail = total < PSX_PUBLISH_RING_CAP ? total : PSX_PUBLISH_RING_CAP;
+        uint64_t count = avail < 64u ? avail : 64u;
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"publish_tail\": {\n"
+            "    \"total\": %llu,\n"
+            "    \"count\": %llu,\n"
+            "    \"entries\": [",
+            (unsigned long long)total, (unsigned long long)count);
+        for (uint64_t i = 0; i < count; i++) {
+            const PsxPublishEntry *e = psx_publish_get(total - count + i);
+            if (!e) continue;
+            append_fmt(buf, sizeof(buf), &pos,
+                "%s{\"seq\":%llu,\"frame\":%u,\"site\":\"%s\",\"target\":\"0x%08X\","
+                "\"origin\":\"0x%08X\",\"dispatchable\":%u}",
+                i == 0 ? "" : ",", (unsigned long long)e->seq, e->frame,
+                psx_publish_site_name(e->site), e->target, e->origin, e->dispatchable);
         }
         append_str(buf, sizeof(buf), &pos, "]\n  },\n");
     }

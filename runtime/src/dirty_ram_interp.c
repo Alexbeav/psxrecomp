@@ -41,6 +41,8 @@
 #include <string.h>
 #include "source_gpu_runtime.h"
 #include "source_cpu_block_bound.h"
+#include "psx_scheduler.h"    /* psx_is_dispatchable */
+#include "dispatch_publish.h"
 
 uint64_t g_dirty_ram_blocks_run = 0;
 uint64_t g_dirty_ram_insns_run  = 0;
@@ -145,6 +147,15 @@ static int interp_exception(CPUState *cpu, uint32_t exc_code,
  * guest exception boundary and retires the older load before the handler. */
 static struct { uint32_t pc,target;int taken,active; } arithmetic_slot;
 static uint64_t arithmetic_exceptions;
+/* The delay slot exec_delay_slot is running, for the MTC0/CTC0 software
+ * interrupt below: once a slot instruction retires, the next boundary is the
+ * branch outcome, so a now-deliverable interrupt's EPC is the taken target (or
+ * slot+4 when not taken), never unconditionally slot+4 (T110). */
+static struct { uint32_t pc,target;int taken,active; } cop0_slot;
+static uint32_t cop0_write_resume_pc(uint32_t pc) {
+    if(cop0_slot.active && cop0_slot.pc==pc && cop0_slot.taken) return cop0_slot.target;
+    return pc+4u;
+}
 static int interp_arithmetic_overflow(CPUState *cpu,uint32_t pc,uint32_t insn) {
     uint32_t pending=cpu->cop0[13]&0x0000ff00u;
     dirty_ram_ld_delay_flush(cpu);
@@ -1418,8 +1429,22 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
                                     uint32_t *next_pc_out, int in_slot,
                                     uint32_t target, int taken);
 static int precise_irq_deliverable(CPUState *cpu);
+/* Can an exception taken with EPC = pc be resumed? BIOS ROM exists at compile
+ * time, so it is statically recompiled and never interpreted (CLAUDE.md Rule 18):
+ * the only ROM PCs that can resume are compiled entries/continuations. An
+ * interrupt that becomes deliverable at any other ROM instruction stays pending
+ * until the next re-enterable boundary — the same edge compiled code takes it
+ * at. Publishing the exact ROM PC instead stored an EPC nothing could dispatch
+ * (the August mid-block/delay-slot unknown-dispatch family, T110). */
+static int irq_epc_resumable(uint32_t pc) {
+    extern int psx_is_dispatchable(uint32_t pc);
+    uint32_t phys = pc & 0x1FFFFFFFu;
+    if (phys >= 0x1FC00000u && phys < 0x1FC80000u) return psx_is_dispatchable(pc);
+    return 1;
+}
 static int precise_irq_before(CPUState *cpu,uint32_t pc) {
-    return precise_irq_deliverable(cpu) && psx_irq_opcode_eligible(pc);
+    return precise_irq_deliverable(cpu) && psx_irq_opcode_eligible(pc) &&
+           irq_epc_resumable(pc);
 }
 static int source_dirty_irq_before(CPUState *cpu,uint32_t pc) {
     /* Ordinary dirty/kernel interpretation owns real instruction boundaries
@@ -1451,7 +1476,8 @@ static int exec_delay_slot(CPUState *cpu,uint32_t pc,uint32_t target,int taken) 
      * Recursively interpret as a single non-branching instruction. */
     uint32_t ds_phys = pc & 0x1FFFFFFFu;
     uint32_t insn = fetch_word(ds_phys);
-    if(source_gpu_runtime_active() && precise_irq_before(cpu,pc)) {
+    if(source_gpu_runtime_active() && precise_irq_before(cpu,pc) &&
+       irq_epc_resumable(pc-4u)) {
         dirty_ram_ld_delay_flush(cpu);
         if(psx_check_interrupts_delay_slot(cpu,pc,target,taken,insn)) {
             g_slice_irq_taken++;return 1;
@@ -1481,7 +1507,9 @@ static int exec_delay_slot(CPUState *cpu,uint32_t pc,uint32_t target,int taken) 
         arithmetic_slot.active=1;
     }
     uint64_t slot_takes=g_slice_irq_taken;
+    cop0_slot.pc=pc;cop0_slot.target=target;cop0_slot.taken=taken;cop0_slot.active=1;
     (void)exec_one_fetched_context(cpu,pc,insn,&dummy_next,1,target,taken);
+    cop0_slot.active=0;
     if(arithmetic)arithmetic_slot.active=0;
     g_dirty_ram_insns_run++;
     if(g_slice_irq_taken!=slot_takes)return 1;
@@ -1535,7 +1563,8 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
          * register effects. The IRQ path owns its fetch and ordinary step.
          * Source COP2 bypasses the halt/interrupt opcode table. */
         psx_cpu_step_boundary(cpu,pc);
-        if(op_field(insn)!=0x12u && precise_irq_deliverable(cpu)) {
+        if(op_field(insn)!=0x12u && precise_irq_deliverable(cpu) &&
+           irq_epc_resumable(in_slot ? pc-4u : pc)) {
             extern uint64_t g_irq_deliver_count;
             uint64_t before=g_irq_deliver_count;
             dirty_ram_ld_delay_flush(cpu);
@@ -2296,11 +2325,13 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             if ((rd == 12 /* Status */ || rd == 13 /* Cause */) &&
                 (cpu->cop0[13] & cpu->cop0[12] & 0x0300u) &&
                 (cpu->cop0[12] & 0x1u)) {
-                g_dirty_safe_resume_pc = pc + 4;
-                cpu->pc = pc + 4;
+                uint32_t resume = cop0_write_resume_pc(pc);
+                g_dirty_safe_resume_pc = resume;
+                cpu->pc = resume;
+                psx_publish_note(PSX_PUB_COP0_SWI, resume, pc);
                 psx_check_interrupts(cpu);
                 g_dirty_safe_resume_pc = 0;
-                return (cpu->pc != pc + 4);  /* transferred if exception taken */
+                return (cpu->pc != resume);  /* transferred if exception taken */
             }
             return 0;
         }
@@ -2314,11 +2345,13 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             if ((rd == 12 || rd == 13) &&
                 (cpu->cop0[13] & cpu->cop0[12] & 0x0300u) &&
                 (cpu->cop0[12] & 0x1u)) {
-                g_dirty_safe_resume_pc = pc + 4;
-                cpu->pc = pc + 4;
+                uint32_t resume = cop0_write_resume_pc(pc);
+                g_dirty_safe_resume_pc = resume;
+                cpu->pc = resume;
+                psx_publish_note(PSX_PUB_COP0_SWI, resume, pc);
                 psx_check_interrupts(cpu);
                 g_dirty_safe_resume_pc = 0;
-                return (cpu->pc != pc + 4);
+                return (cpu->pc != resume);
             }
             return 0;
         }
@@ -2705,12 +2738,17 @@ static int precise_pc_dispatchable(uint32_t pc) {
      * Keep its owner through the actual load-delay instruction; an eager
      * boundary flush would change an immediate consumer's visible operand. */
     if (s_ld_pend_armed) return 0;
+    /* BIOS ROM and the clean relocated kernel window are re-enterable only at
+     * compiled entries/continuations, exactly like clean game text (T110): a
+     * slice that stepped into ROM must not hand back mid-block or at a delay
+     * slot. psx_is_dispatchable is exact for BIOS-owned code. */
+    extern int psx_is_dispatchable(uint32_t pc);
+    if (!psx_is_dispatchable(pc)) return 0;
 #ifdef PSX_HAS_GAME_DISPATCH
     uint32_t phys = pc & 0x1FFFFFFFu;
     if (psx_game_address_in_text(pc) && !dirty_ram_is_dirty(phys))
         return psx_game_is_function_entry(pc);
 #endif
-    (void)pc;
     return 1;
 }
 
@@ -2900,6 +2938,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
 
     cpu->pc = pc;
     g_slice_exit_pc = cpu->pc;
+    psx_publish_note(PSX_PUB_PRECISE_EXIT, pc, g_slice_last_block);
     g_slice_exit_dispatchable = precise_pc_dispatchable(cpu->pc) ? 1u : 0u;
     g_slice_exit_dirty = dirty_ram_is_dirty(cpu->pc & 0x1FFFFFFFu) ? 1u : 0u;
 #ifdef PSX_HAS_GAME_DISPATCH
@@ -3400,6 +3439,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 uint32_t saved_resume = g_dirty_safe_resume_pc;
                 cpu->pc = next_pc ? next_pc : pc + 4u;
                 g_dirty_safe_resume_pc = cpu->pc;
+                psx_publish_note(PSX_PUB_COP0_SWI, cpu->pc, pc);
                 /* Retire an owed load writeback before vectoring: the R3000A
                  * pipeline drains on exception entry, and the handler must not
                  * observe a stale destination register. */
@@ -3617,8 +3657,20 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
          * static dispatch by setting cpu->pc and returning. */
         uint32_t next_page = next_phys >> 12;
         if ((!current_page_dirty || next_page != current_page) &&
+            !dirty_ram_is_dirty(next_phys) && !psx_is_dispatchable(pc)) {
+            /* T110: the clean page is compiled code the static table can only
+             * re-enter at an entry/continuation. Handing back here (mid-block,
+             * e.g. a relocated kernel body) published a PC nothing could
+             * dispatch. Keep interpreting and re-test every instruction until
+             * the flow reaches a re-enterable boundary. */
+            current_page_dirty = 0;
+            current_page = next_page;
+            continue;
+        }
+        if ((!current_page_dirty || next_page != current_page) &&
             !dirty_ram_is_dirty(next_phys)) {
             cpu->pc = pc;
+            psx_publish_note(PSX_PUB_INTERP_EXIT, pc, addr);
             if (dirty_ram_pump_boundary(cpu, pc, 3)) {
                 g_dirty_ram_blocks_run++;
                 if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
