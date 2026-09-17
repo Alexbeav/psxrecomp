@@ -35,9 +35,18 @@ project ships no game data.
 | **ELFIO** | vendored `recompiler/lib/ELFIO` | ELF parsing (recompiler only) |
 | **rabbitizer** | vendored `recompiler/lib/rabbitizer` | MIPS instruction decoding (recompiler only) |
 | **TinyCC (TCC) 0.9.27** | Not in this repo — downloaded at release-packaging time and bundled beside the game exe in `overlay_toolchain/`. | Toolchain-free overlay compilation for players (run as a subprocess) |
-| **Python 3** | System (development) or an embedded copy bundled in releases | Runs `tools/compile_overlays.py` in the overlay pipeline |
+| **Python 3.9+** | System (development) or an embedded copy bundled in releases | Runs `tools/compile_overlays.py` in the overlay pipeline |
 | **OpenGL** | System (`opengl32` on Windows; `find_package(OpenGL)` elsewhere) | The GL renderer |
 | **Vulkan** | Headers only, **on by default** (`PSX_ENABLE_VULKAN=ON`) — built when the SDK tools are available, otherwise skipped; loaded dynamically via SDL. Shader compilation needs `glslc` from the Vulkan SDK. Pass `-DPSX_ENABLE_VULKAN=OFF` to exclude it. | The experimental Vulkan renderer |
+
+
+The build host's Python floor is **3.9**, the system `python3` on RHEL/Rocky 9,
+Debian 11, Ubuntu 20.04 and macOS 13/14. `psxrecomp_cli.py` and everything it
+imports or spawns must stay importable there — the ctest `cli_python_floor`
+enforces it, because a failed import only degrades overlays to interpreted with
+a warning rather than failing the build. Pre-3.11 also needs `pip install tomli`
+to run `tools/compile_overlays.py` itself. Releases bundle their own 3.13
+interpreter, so players are unaffected either way.
 
 Developers building overlays locally just need `gcc` on `PATH` (the `gcc` tier);
 the bundled `tcc` matters only for end-user release packages.

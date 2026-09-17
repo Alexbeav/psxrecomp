@@ -7,8 +7,8 @@ toolchain, and a failed import there is swallowed as a warning: the product
 builds, but overlays silently run interpreted (athena-rocky, T115). So the
 floor is checked statically on whatever Python runs ctest:
 
-  * every module reached from psxrecomp_cli.py parses as 3.9 grammar
-    (no match statements, no except*);
+  * every module reached from psxrecomp_cli.py, and from the scripts it spawns
+    with sys.executable, parses as 3.9 grammar (no match statements, no except*);
   * PEP 604 unions (`X | None`) only appear where 3.9 never evaluates them,
     i.e. in annotations of a module with `from __future__ import annotations`;
   * no 3.10+ stdlib calls from a short list of ones that have bitten before.
@@ -191,9 +191,14 @@ def check_imports(python: str) -> None:
 def main() -> None:
     check_detector()
 
-    closure = import_closure(ROOT / "psxrecomp_cli.py")
+    # prepare_disc.py is not imported but spawned with sys.executable, so it
+    # runs on the same host interpreter and shares the floor.
+    closure: dict[Path, str] = {}
+    for entry in ("psxrecomp_cli.py", "tools/prepare_disc.py"):
+        closure.update(import_closure(ROOT / entry))
     names = {p.name for p in closure}
-    for required in ("release_stage.py", "compile_overlays.py", "toolchain_pack.py"):
+    for required in ("release_stage.py", "compile_overlays.py", "toolchain_pack.py",
+                     "prepare_disc.py", "disc_companion.py"):
         assert required in names, f"import closure lost {required}: {sorted(names)}"
 
     violations = []
