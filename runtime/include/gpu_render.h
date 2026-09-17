@@ -29,6 +29,10 @@ GrBackend gr_backend(void);                   /* effective backend after init */
 
 /* Lifecycle / global state */
 void gr_init(uint16_t *vram);
+/* Call right after the GP1(08h) display-mode registers change, before any
+ * later GP0 command. Optional backend transition work (GL 15/24-bit VRAM
+ * ownership); software keeps no deferred state. */
+void gr_display_mode_changed(void);
 void gr_set_scale(int scale);
 int  gr_scale(void);
 void gr_set_texture_filter(int bilinear);
@@ -207,6 +211,7 @@ typedef struct GpuRenderBackend {
      * pixel count, writes width/height to ow/oh. NULL if unsupported. */
     int  (*wide_dump_full)(uint32_t *out, int cap_pixels, int *ow, int *oh,
                            int base_x);
+    void (*display_mode_changed)(void); /* optional; see gr_display_mode_changed */
 } GpuRenderBackend;
 
 #ifdef __cplusplus

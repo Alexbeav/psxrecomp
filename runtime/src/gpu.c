@@ -2903,6 +2903,7 @@ static void gpu_reset_state(int clear_vram) {
     s_d24_upload_x1 = 0;
     s_d24_present_hold = 0;
     s_d24_prev_disp_h = 0;
+    gr_display_mode_changed();
 }
 
 void gpu_init(void) {
@@ -6093,6 +6094,11 @@ static void gp1_display_mode(uint32_t val) {
         interlace_field = 0;
     hres2 = (val >> 6) & 1;
     reverse_flag = (val >> 7) & 1;
+    /* Hand VRAM ownership over now, in command order. Waiting for the next
+     * CPU->VRAM write let a GP0 copy/draw issued after FMV->15-bit be wiped
+     * by the late movie-band clear (Phantom Menace), and let the first
+     * 24-bit upload be overwritten by the entry readback. */
+    gr_display_mode_changed();
 }
 
 static void gp1_get_info(uint32_t val) {

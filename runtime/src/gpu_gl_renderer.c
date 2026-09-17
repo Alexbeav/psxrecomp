@@ -2441,7 +2441,10 @@ static void glb_draw_gouraud_triangle(int x0,int y0,uint16_t c0,int x1,int y1,ui
     precise_consumed();
 }
 static void glb_fill_rect(int x,int y,int w,int h,uint16_t c){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    /* 24-bit scanout presents from the CPU mirror and never syncs from the
+     * FBO, so a fill issued while it is active must land in the mirror too
+     * (Parasite Eve's title clears both buffers before its 24-bit picture). */
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_fill_rect(x,y,w,h,c);
     if (!s_raster_ok) return;
     gpu_fill(x,y,w,h,c);
@@ -2628,15 +2631,15 @@ static void depth24_upload_policy(void) {
 }
 
 static void glb_vram_write(int x,int y,uint16_t px){
+    depth24_upload_policy();   /* before the write: entry readback must not clobber it */
     sw_vram_write(x,y,px);
-    depth24_upload_policy();
     /* Point pokes are never MDEC frames — always stage to FBO. */
     up_add(x & (VRAM_W-1), y & (VRAM_H-1), x & (VRAM_W-1), y & (VRAM_H-1));
 }
 static uint16_t glb_vram_read(int x,int y){ ensure_cpu(); return sw_vram_read(x,y); }
 static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
+    depth24_upload_policy();   /* before the write: entry readback must not clobber it */
     sw_vram_transfer_in(x,y,w,h,d);
-    depth24_upload_policy();
     if (s_depth24_skip_up && depth24_is_fb_transfer(x, y, w, h)) {
         /* Full-VRAM restore (boot_state): must stage into the FBO or every
          * texture page outside the movie band is missing after FMV→menus.
@@ -4658,6 +4661,7 @@ static const GpuRenderBackend GL_BACKEND = {
     .wide_clear_margins = glb_wide_clear_margins,
     .render_wide_display = glb_render_wide_display,
     .wide_dump_full = glb_wide_dump_full,
+    .display_mode_changed = depth24_upload_policy,
 };
 
 const GpuRenderBackend *gl_backend_get(void) { return &GL_BACKEND; }
