@@ -172,7 +172,10 @@ if(BUILD_TESTING)
     add_test(NAME sio_nymashock_card_test COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sio_nymashock_card.py
         $<TARGET_FILE:sio_nymashock_card_test>)
-    add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
+    add_executable(sio_dualshock_dtr_session_test tests/test_sio_dualshock_dtr_session.c)
+target_include_directories(sio_dualshock_dtr_session_test PRIVATE include)
+add_test(NAME sio_dualshock_dtr_session_test COMMAND sio_dualshock_dtr_session_test)
+add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
     target_include_directories(sio_nymashock_dualshock_test PRIVATE include)
     add_test(NAME sio_nymashock_dualshock_test COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sio_nymashock_dualshock.py
