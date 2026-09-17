@@ -22,11 +22,16 @@ name: Kit emitter rebuild
 # stages with the same tools/stage_framework_tree.sh that titles package with,
 # round-trips through a zip, and then runs the exact command a kit user runs.
 
+# The default branch here is `main`. The `master` in tasreplays.yml and
+# nightly-source-release.yml matches no branch on origin, so do not copy it --
+# a job that triggers on a branch that does not exist is an inert check that
+# still looks like coverage. wave5/** is listed because the wave branches are
+# where kit-affecting changes land before they reach main.
 on:
   pull_request:
-    branches: [master]
+    branches: [main, "wave5/**"]
   push:
-    branches: [master]
+    branches: [main, "wave5/**"]
   workflow_dispatch:
 
 permissions:
@@ -87,10 +92,21 @@ jobs:
               ls -la psxrecomp/recompiler/build || true
               exit 1
             fi
-            # No arguments: every emitter prints usage and exits non-zero. That
-            # is enough to prove the binary loads and is the right architecture.
-            "./${bin}" >/dev/null 2>&1 || true
-            echo "ok: ${bin}"
+            # Every emitter prints usage and exits non-zero with no arguments,
+            # so a non-zero status proves nothing by itself. What must fail the
+            # job is the binary not running at all: the shell reports 126 for
+            # "cannot execute" (wrong architecture, bad interpreter) and 127 for
+            # a missing loader/shared object. Swallowing those with `|| true`
+            # would pass a kit whose emitters cannot start.
+            status=0
+            "./${bin}" >/dev/null 2>&1 || status=$?
+            if [[ "${status}" -eq 126 || "${status}" -eq 127 ]]; then
+              echo "::error::${tool} exists but will not execute (status ${status})"
+              file "${bin}" || true
+              ldd "${bin}" || true
+              exit 1
+            fi
+            echo "ok: ${bin} (ran, exit ${status})"
           done
 
       - name: Upload the kit on failure
