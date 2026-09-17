@@ -38,13 +38,15 @@ The first time diagnostic mode is requested, `build-diagnostic/` has no
 executable yet and the setup executable builds it before starting (a few
 minutes on a fast machine, comparable to first-run setup on a slow one; on
 Windows the build runs in a console window after the setup executable exits,
-then the game starts in diagnostic mode). If that build fails, the setup
+then the game starts in diagnostic mode). This builds only the diagnostic
+product: the normal build in `build-release/`, including an optimised (PGO)
+build, is not rebuilt or changed. If the diagnostic build fails, the setup
 executable says so and starts the normal build; you can create it by hand
 from a shell:
 
 ```bash
 python psxrecomp/psxrecomp_cli.py rebuild --project-root . --config game.toml \
-  --build-dir build-release --diagnostic-dir build-diagnostic --no-pgo
+  --build-dir build-release --diagnostic-dir build-diagnostic --diagnostic-only
 ```
 
 ## Collecting results for a GitHub issue
@@ -75,14 +77,22 @@ Open the zip before attaching it if you want to check.
 
 ## For maintainers
 
-- The CLI `rebuild` command builds the diagnostic product when it is given
-  `--diagnostic-dir`; the setup host passes `build-diagnostic` on both the
-  Windows deferred-helper route and the POSIX route.
+- The CLI `rebuild` command builds the diagnostic product after the normal
+  one when it is given `--diagnostic-dir`. With `--diagnostic-only` it builds
+  the diagnostic product alone and never configures, compiles, stages into or
+  prunes `--build-dir` (it refuses `--force-pgo` and `--prune-after`). A
+  diagnostic request from the setup host uses `--diagnostic-only
+  --diagnostic-dir build-diagnostic` on both the Windows deferred-helper route
+  and the POSIX route, because setup pruned the normal product's intermediates
+  and the player may have optimised it with PGO since.
 - `--setup-selfcheck` reports `diagnostic_build_present` and
   `diagnostic_mode_requested`, so a kit's diagnostic readiness is scriptable.
-- A diagnostic build failure never removes the normal product; the rebuild
-  result carries `diagnostic_error` and the player-facing text above tells the
-  player to rebuild.
+- A diagnostic build failure never removes the normal product. In the
+  two-product rebuild the result carries `diagnostic_error`; with
+  `--diagnostic-only` the rebuild exits non-zero with the error, and the setup
+  host (or the Windows helper) starts the normal product instead.
 - Regression coverage: `runtime/tests/test_cli_diagnostics.py` (rebuild builds
-  both products; the collector's include and exclude lists) and
+  both products; the collector's include and exclude lists),
+  `runtime/tests/test_cli_diagnostic_only.py` (a diagnostic request leaves the
+  normal build directory unchanged, with or without PGO enabled) and
   `runtime/tests/test_codegen_host_bios_stems.py` (host contract strings).

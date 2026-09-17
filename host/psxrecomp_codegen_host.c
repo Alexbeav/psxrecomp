@@ -4207,28 +4207,46 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
                 "--disc \"%%DISC%%\" --force-pgo --pgo-video");
-    } else {
+    } else if (want_diagnostic) {
+        /* Wave-5 F10: the diagnostic product is built on first request, not at
+         * setup. --diagnostic-only leaves the normal product alone: setup pruned
+         * its intermediates and it may be a PGO build. */
         fprintf(f,
-                "echo %s\r\n"
+                "echo Building the diagnostic product (first request)...\r\n"
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--no-pgo --prune-after build-intermediates",
-                want_diagnostic ? "Building the diagnostic product (first request)..."
-                                : "Building...");
+                "--diagnostic-only --diagnostic-dir \"%%DIAG_DIR%%\"");
+    } else {
+        fprintf(f,
+                "echo Building...\r\n"
+                "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
+                "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
+                "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
+                "--no-pgo --prune-after build-intermediates");
     }
-    /* Wave-5 F10: the diagnostic product is built on first request, not at
-     * setup, so a first run compiles one product instead of two. */
-    if (want_diagnostic)
-        fprintf(f, " --diagnostic-dir \"%%DIAG_DIR%%\"");
     fprintf(f, "\r\n");
+    if (want_diagnostic)
+        /* The normal product is untouched, so a failed diagnostic build starts
+         * it instead: relaunching the setup exe with --diagnostic would only
+         * request the same failing build again. */
+        fprintf(f,
+                "if errorlevel 1 (\r\n"
+                "  echo.\r\n"
+                "  echo The diagnostic build failed; see the errors above.\r\n"
+                "  echo Starting the normal build instead.\r\n"
+                "  pause\r\n"
+                "  set \"SELF=\"\r\n"
+                ")\r\n");
+    else
+        fprintf(f,
+                "if errorlevel 1 (\r\n"
+                "  echo.\r\n"
+                "  echo Build failed. Fix the errors above, then rebuild manually.\r\n"
+                "  pause\r\n"
+                "  exit /b 1\r\n"
+                ")\r\n");
     fprintf(f,
-            "if errorlevel 1 (\r\n"
-            "  echo.\r\n"
-            "  echo Build failed. Fix the errors above, then rebuild manually.\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
             /* %EXE% was guessed before the build; runtime.cmake publishes the
              * OUTPUT_NAME it really used, which wins the moment a title is
              * renamed. Then verify game code + exe exist before relaunching,
@@ -4349,20 +4367,25 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         argv[argc++] = "--disc";
         argv[argc++] = disc_arg_storage;
     }
-    if (force_pgo) {
+    if (want_diagnostic) {
+        /* Wave-5 F10: only on request; setup builds one product. The request
+         * builds the diagnostic product alone and leaves the normal one (pruned
+         * at setup, possibly PGO-optimised) as it is. */
+        if (!join_path(diag_dir_storage, sizeof(diag_dir_storage),
+                       g_project_root, PSX_DIAGNOSTIC_DIR_NAME)) {
+            snprintf(err_msg, err_cap, "Failed to form the diagnostic build path.");
+            return 0;
+        }
+        argv[argc++] = "--diagnostic-only";
+        argv[argc++] = "--diagnostic-dir";
+        argv[argc++] = diag_dir_storage;
+    } else if (force_pgo) {
         argv[argc++] = "--force-pgo";
         argv[argc++] = "--pgo-video";
     } else {
         argv[argc++] = "--no-pgo";
         argv[argc++] = "--prune-after";
         argv[argc++] = "build-intermediates";
-    }
-    /* Wave-5 F10: only on request; setup builds one product. */
-    if (want_diagnostic &&
-        join_path(diag_dir_storage, sizeof(diag_dir_storage), g_project_root,
-                  PSX_DIAGNOSTIC_DIR_NAME)) {
-        argv[argc++] = "--diagnostic-dir";
-        argv[argc++] = diag_dir_storage;
     }
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
