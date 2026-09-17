@@ -47,7 +47,16 @@ if(NOT DEFINED CMAKE_C_COMPILER_LAUNCHER)
     if(DEFINED ENV{RETCOMM_TOOLCHAIN_DIR} AND NOT "$ENV{RETCOMM_TOOLCHAIN_DIR}" STREQUAL "")
         list(APPEND _psx_ccache_hints "$ENV{RETCOMM_TOOLCHAIN_DIR}/bin")
     endif()
-    find_program(CCACHE_PROGRAM NAMES ccache ccache.exe HINTS ${_psx_ccache_hints})
+    # Only a Windows host can run ccache.exe. Under WSL the Windows PATH is
+    # appended to the Linux one, so a WinLibs ccache.exe would otherwise win
+    # and fail to exec a Linux (or osxcross) compiler.
+    if(CMAKE_HOST_WIN32)
+        set(_psx_ccache_names ccache ccache.exe)
+    else()
+        set(_psx_ccache_names ccache)
+    endif()
+    find_program(CCACHE_PROGRAM NAMES ${_psx_ccache_names} HINTS ${_psx_ccache_hints})
+    unset(_psx_ccache_names)
     unset(_psx_ccache_hints)
     if(CCACHE_PROGRAM)
         set(CMAKE_C_COMPILER_LAUNCHER   "${CCACHE_PROGRAM}" CACHE STRING "compiler launcher")
