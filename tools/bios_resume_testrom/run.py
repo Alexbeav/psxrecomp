@@ -7,7 +7,14 @@ done magic, then checks:
   2. the syscall and phase-1 loop counts equal the generator's constants;
   3. both backends ran the interrupt callback at least 1000 times;
   4. psx-bresume recorded no unknown dispatch, and publish_ring holds no
-     entry that psx_is_dispatchable refused.
+     entry that psx_is_dispatchable refused;
+  5. both backends ran the same kernel image (RAM 0x500..0x1500 compared).
+
+psx-beetle loads firmware BY NAME from the directory its BIOS argument points at
+(scph5500/scph5501/scph5502.bin by disc region), so --beetle-bios must name a
+file in a directory holding the intended image under that region's name. Without
+it psx-beetle reports "Firmware is missing" and runs a different kernel, which
+silently voids the comparison.
 
 Usage:
   python tools/bios_resume_testrom/run.py --runtime <build/BIOS_Resume_Test_ROM.exe> \
@@ -55,6 +62,8 @@ def main():
     ap.add_argument("--runtime", required=True)
     ap.add_argument("--beetle", required=True)
     ap.add_argument("--bios", required=True)
+    ap.add_argument("--beetle-bios", help="path inside psx-beetle's system dir "
+                    "(region-named copy of the same image); defaults to --bios")
     ap.add_argument("--disc", default=os.path.join(HERE, "disc", "bresume.cue"))
     ap.add_argument("--env", action="append", default=[], help="KEY=VALUE for psx-bresume")
     ap.add_argument("--timeout", type=float, default=240.0)
@@ -62,6 +71,7 @@ def main():
     args = ap.parse_args()
     args.runtime, args.beetle = os.path.abspath(args.runtime), os.path.abspath(args.beetle)
     args.bios, args.disc = os.path.abspath(args.bios), os.path.abspath(args.disc)
+    args.beetle_bios = os.path.abspath(args.beetle_bios or args.bios)
 
     with open(os.path.join(HERE, "bios_resume_testrom.exe.json"), encoding="utf-8") as fh:
         meta = json.load(fh)
@@ -77,11 +87,12 @@ def main():
                           "--bios", args.bios, "--disc", args.disc],
                          cwd=os.path.dirname(os.path.abspath(args.runtime)), env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
-        subprocess.Popen([args.beetle, args.bios, "--disc", args.disc, "--port", str(BEETLE_PORT)],
+        subprocess.Popen([args.beetle, args.beetle_bios, "--disc", args.disc, "--port", str(BEETLE_PORT)],
                          cwd=os.path.dirname(os.path.abspath(args.beetle)),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
     ]
-    report = {"bios": os.path.basename(args.bios), "env": args.env, "checks": {}}
+    report = {"bios": os.path.basename(args.bios),
+              "beetle_bios": args.beetle_bios, "env": args.env, "checks": {}}
     try:
         deadline = time.time() + args.timeout
         native = wait_done(RUNTIME_PORT, result, magic, deadline)
@@ -98,6 +109,18 @@ def main():
             # Callback counts are timing, but both must show a sustained
             # interrupt load, not a single stray delivery.
             c["irqs_taken"] = native[0] >= 1000 and beetle[0] >= 1000
+        try:
+            band = [query(p, {"id": 1, "cmd": "read_ram", "addr": "0x00000500", "len": 4096},
+                          )["hex"] for p in (RUNTIME_PORT, BEETLE_PORT)]
+            a, b = (bytes.fromhex(x) for x in band)
+            same = sum(1 for x, y in zip(a, b) if x == y)
+            report["kernel_band_match_pct"] = round(100.0 * same / len(a), 2)
+            # >=95% is the oracle bundle's "genuine same image" threshold; a wrong
+            # firmware lands near 15-20%.
+            c["same_kernel_image"] = report["kernel_band_match_pct"] >= 95.0
+        except (OSError, ValueError, KeyError) as exc:
+            report["kernel_band_error"] = str(exc)
+            c["same_kernel_image"] = False
         try:
             unk = query(RUNTIME_PORT, {"id": 1, "cmd": "unknown_dispatch_log"})
             pub = query(RUNTIME_PORT, {"id": 1, "cmd": "publish_ring", "count": 1024, "only_bad": 1})

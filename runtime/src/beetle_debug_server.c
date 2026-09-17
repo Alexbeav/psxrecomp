@@ -1614,6 +1614,9 @@ typedef struct { const char *name; cmd_handler handler; } CmdEntry;
 
 static const CmdEntry CMDS[] = {
     { "ping",                  h_ping },
+    /* Rule 16 protocol parity: the native server answers `frame`; ping already
+     * carries the frame count, so one tool can poll either port by name. */
+    { "frame",                 h_ping },
     { "parity_dump",           h_parity_dump },
     { "parity_ctl",            h_parity_ctl },
     { "devtrace_dump",         h_devtrace_dump },
