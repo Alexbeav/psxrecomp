@@ -84,17 +84,26 @@ def launch(mode, port, stride, start_cycle):
         env["PSX_FORCE_INTERP"] = "1"
     log_path = os.path.join(LOGDIR, f"cosim_{mode}_{port}_{os.getpid()}.log")
     log_file = open(log_path, "wb")
+    # CREATE_NEW_PROCESS_GROUP keeps a console Ctrl-C off the guests; it does
+    # not exist off Windows, where start_new_session does the same job.
+    if sys.platform == "win32":
+        spawn_kw = {"creationflags": 0x00000200}
+    else:
+        spawn_kw = {"start_new_session": True}
     p = subprocess.Popen([exe, "--headless", "--no-launcher", "--game", GAME],
                          cwd=cwd, env=env,
                          stdout=log_file, stderr=subprocess.STDOUT,
-                         creationflags=0x00000200)
+                         **spawn_kw)
     p._cosim_log_path = log_path
     p._cosim_log_file = log_file
     if os.environ.get("PSX_COSIM_BELOW_NORMAL") == "1":
         try:
-            import ctypes
-            h = ctypes.windll.kernel32.OpenProcess(0x0400, False, p.pid)
-            ctypes.windll.kernel32.SetPriorityClass(h, 0x00004000)  # BELOW_NORMAL
+            if sys.platform == "win32":
+                import ctypes
+                h = ctypes.windll.kernel32.OpenProcess(0x0400, False, p.pid)
+                ctypes.windll.kernel32.SetPriorityClass(h, 0x00004000)  # BELOW_NORMAL
+            else:
+                os.setpriority(os.PRIO_PROCESS, p.pid, 10)
         except Exception:
             pass
     return p
