@@ -27,6 +27,9 @@ uint64_t psx_get_cycle_count(void) {
 }
 uint32_t memory_get_sr(void) { return 0; }
 void debug_server_poll(void) {}
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog) {
+    (void)slot; (void)analog; return buttons;
+}
 void debug_server_log_sio_write(uint32_t a, uint32_t v, uint8_t w) {
     (void)a; (void)v; (void)w;
 }

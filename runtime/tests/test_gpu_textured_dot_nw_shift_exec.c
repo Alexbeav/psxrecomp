@@ -370,3 +370,42 @@ int gr_render_wide_display(uint32_t *out, int pitch, int base_x,
     (void)out; (void)pitch; (void)base_x; (void)disp_y; (void)disp_h;
     return 0;
 }
+/* gpu.c dependencies added after this fixture was written. The fixture runs
+ * the default configuration: software renderer, no mod texture banks, no
+ * input raster clock, source-GPU model disarmed. The source-GPU entry points
+ * below are reached only when that model is armed, so they abort. */
+GrBackend gr_backend(void) { return GR_BACKEND_SOFTWARE; }
+void gr_display_mode_changed(void) {}
+int gl_renderer_select_texture_bank(uint16_t id) { (void)id; return 0; }
+int gl_renderer_texture_banks_supported(void) { return 0; }
+uint16_t mod_texture_packet_bank(uint32_t source, const uint32_t *words, uint32_t count) {
+    (void)source; (void)words; (void)count;
+    return 0;
+}
+int mod_texture_packet_precision(uint32_t source, float q[3], float xy[6]) {
+    (void)source; (void)q; (void)xy;
+    return 0;
+}
+void interrupts_raster_gp1(uint32_t word) { (void)word; }
+int interrupts_raster_gpu_status(uint32_t *bits) { (void)bits; return 0; }
+void source_gpu_runtime_set_dispatch_sink(SourceGPUDispatchSink sink) { (void)sink; }
+int source_gpu_runtime_active(void) { return 0; }
+int source_gpu_runtime_ready(void) { abort(); }
+uint32_t source_gpu_runtime_status_bits(void) { abort(); }
+void source_gpu_runtime_gp0(uint32_t word) { (void)word; abort(); }
+void source_gpu_runtime_gp1(uint32_t word) { (void)word; abort(); }
+void source_gpu_runtime_read(void) { abort(); }
+void source_gpu_runtime_copy(SourceGPUServiceClock *clock, SourceGPUCommandProjection *projection) {
+    (void)clock; (void)projection; abort();
+}
+void gr_source_texture_control(unsigned action, uint32_t page) { (void)action; (void)page; abort(); }
+int gr_draw_source_block(const SourceGPUBlock *block, int *extra_work) {
+    (void)block; (void)extra_work; abort();
+}
+int gr_draw_source_triangle(const int *x, const int *y, const uint32_t *colors,
+                            int shaded, int dither, int interlace, unsigned skip_field,
+                            const SourceGPUTexture *texture, int *extra_work) {
+    (void)x; (void)y; (void)colors; (void)shaded; (void)dither; (void)interlace;
+    (void)skip_field; (void)texture; (void)extra_work;
+    abort();
+}

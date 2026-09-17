@@ -9,6 +9,10 @@ void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)bit; (void)detail; }
 void event_ring_record_aux(uint16_t kind, uint8_t detail, uint32_t aux) {
     (void)kind; (void)detail; (void)aux;
 }
+/* Default configuration: no input raster clock, source-GPU model disarmed. */
+int interrupts_raster_gpu_status(uint32_t *bits) { (void)bits; return 0; }
+int source_gpu_runtime_active(void) { return 0; }
+uint32_t source_gpu_runtime_status_bits(void) { abort(); }
 
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #condition); \

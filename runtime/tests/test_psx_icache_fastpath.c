@@ -8,6 +8,9 @@ int g_ls_replay_active = 0;
 static uint64_t test_cycles = 0;
 
 void psx_advance_cycles(uint32_t cycles) { test_cycles += cycles; }
+/* PSX_OVERLAY_DLL_BUILD makes the step boundary an extern. No observer is
+ * installed in this fixture, matching the host inline with a null callback. */
+void psx_cpu_step_boundary(CPUState *cpu, uint32_t address) { (void)cpu; (void)address; }
 
 static int expect(int condition, const char *message) {
     if (condition) return 1;

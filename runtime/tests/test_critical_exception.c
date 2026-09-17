@@ -9,6 +9,8 @@
 
 static int nested;
 int psx_get_in_exception(void) { return nested; }
+/* The source-GPU model is disarmed, as in every shipping configuration. */
+int source_gpu_runtime_active(void) { return 0; }
 
 static inline __attribute__((always_inline)) void check(unsigned func, unsigned sr, int enabled) {
     CPUState cpu = {0}, expected;

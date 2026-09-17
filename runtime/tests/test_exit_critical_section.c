@@ -7,6 +7,10 @@
 #include <string.h>
 
 int psx_syscall(CPUState *cpu, uint32_t code);
+/* traps.c references these outside the SYS(02h) path: not in an exception,
+ * source-GPU model disarmed. */
+int psx_get_in_exception(void) { return 0; }
+int source_gpu_runtime_active(void) { return 0; }
 
 int main(void) {
     const uint32_t results[] = {0u, 1u, 0x80010000u, UINT32_MAX};
