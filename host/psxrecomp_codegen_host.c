@@ -4122,15 +4122,25 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
                                                  const char* disc_path,
                                                  char* err_msg,
                                                  size_t err_cap) {
-    if (!join_path(g_helper_path, sizeof(g_helper_path), g_build_dir,
+    /* A diagnostic request writes nothing into the normal product's directory,
+     * not even this helper. */
+    char diag_dir[1200];
+    if (want_diagnostic &&
+        !join_path(diag_dir, sizeof(diag_dir), g_project_root,
+                   PSX_DIAGNOSTIC_DIR_NAME)) {
+        snprintf(err_msg, err_cap, "Failed to form the diagnostic build path.");
+        return 0;
+    }
+    const char* helper_dir = want_diagnostic ? diag_dir : g_build_dir;
+    if (!join_path(g_helper_path, sizeof(g_helper_path), helper_dir,
                    "recomp_deferred_rebuild.cmd")) {
         snprintf(err_msg, err_cap, "Failed to form helper path.");
         return 0;
     }
     /* Setup zips omit build-release/; create it before writing the .cmd. */
-    if (!mkdir_p(g_build_dir)) {
+    if (!mkdir_p(helper_dir)) {
         snprintf(err_msg, err_cap, "Failed to create build dir: %s",
-                 g_build_dir);
+                 helper_dir);
         return 0;
     }
     FILE* f = fopen(g_helper_path, "wb");
@@ -4159,10 +4169,8 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
     bat_write_set(f, "EXE", g_exe_path);
     bat_write_set(f, "DISPLAY", g_display);
     if (want_diagnostic) {
-        char diag_dir[1200], self_exe[1100];
-        if (join_path(diag_dir, sizeof(diag_dir), g_project_root,
-                      PSX_DIAGNOSTIC_DIR_NAME))
-            bat_write_set(f, "DIAG_DIR", diag_dir);
+        char self_exe[1100];
+        bat_write_set(f, "DIAG_DIR", diag_dir);
         /* Relaunch through the setup exe afterwards: it forwards to the
          * diagnostic product now that one exists. */
         if (host_self_exe_path(self_exe, sizeof(self_exe)))
@@ -4207,28 +4215,46 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
                 "--disc \"%%DISC%%\" --force-pgo --pgo-video");
-    } else {
+    } else if (want_diagnostic) {
+        /* Wave-5 F10: the diagnostic product is built on first request, not at
+         * setup. --diagnostic-only leaves the normal product alone: setup pruned
+         * its intermediates and it may be a PGO build. */
         fprintf(f,
-                "echo %s\r\n"
+                "echo Building the diagnostic product (first request)...\r\n"
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--no-pgo --prune-after build-intermediates",
-                want_diagnostic ? "Building the diagnostic product (first request)..."
-                                : "Building...");
+                "--diagnostic-only --diagnostic-dir \"%%DIAG_DIR%%\"");
+    } else {
+        fprintf(f,
+                "echo Building...\r\n"
+                "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
+                "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
+                "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
+                "--no-pgo --prune-after build-intermediates");
     }
-    /* Wave-5 F10: the diagnostic product is built on first request, not at
-     * setup, so a first run compiles one product instead of two. */
-    if (want_diagnostic)
-        fprintf(f, " --diagnostic-dir \"%%DIAG_DIR%%\"");
     fprintf(f, "\r\n");
+    if (want_diagnostic)
+        /* The normal product is untouched, so a failed diagnostic build starts
+         * it instead: relaunching the setup exe with --diagnostic would only
+         * request the same failing build again. */
+        fprintf(f,
+                "if errorlevel 1 (\r\n"
+                "  echo.\r\n"
+                "  echo The diagnostic build failed; see the errors above.\r\n"
+                "  echo Starting the normal build instead.\r\n"
+                "  pause\r\n"
+                "  set \"SELF=\"\r\n"
+                ")\r\n");
+    else
+        fprintf(f,
+                "if errorlevel 1 (\r\n"
+                "  echo.\r\n"
+                "  echo Build failed. Fix the errors above, then rebuild manually.\r\n"
+                "  pause\r\n"
+                "  exit /b 1\r\n"
+                ")\r\n");
     fprintf(f,
-            "if errorlevel 1 (\r\n"
-            "  echo.\r\n"
-            "  echo Build failed. Fix the errors above, then rebuild manually.\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
             /* %EXE% was guessed before the build; runtime.cmake publishes the
              * OUTPUT_NAME it really used, which wins the moment a title is
              * renamed. Then verify game code + exe exist before relaunching,
@@ -4349,20 +4375,25 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         argv[argc++] = "--disc";
         argv[argc++] = disc_arg_storage;
     }
-    if (force_pgo) {
+    if (want_diagnostic) {
+        /* Wave-5 F10: only on request; setup builds one product. The request
+         * builds the diagnostic product alone and leaves the normal one (pruned
+         * at setup, possibly PGO-optimised) as it is. */
+        if (!join_path(diag_dir_storage, sizeof(diag_dir_storage),
+                       g_project_root, PSX_DIAGNOSTIC_DIR_NAME)) {
+            snprintf(err_msg, err_cap, "Failed to form the diagnostic build path.");
+            return 0;
+        }
+        argv[argc++] = "--diagnostic-only";
+        argv[argc++] = "--diagnostic-dir";
+        argv[argc++] = diag_dir_storage;
+    } else if (force_pgo) {
         argv[argc++] = "--force-pgo";
         argv[argc++] = "--pgo-video";
     } else {
         argv[argc++] = "--no-pgo";
         argv[argc++] = "--prune-after";
         argv[argc++] = "build-intermediates";
-    }
-    /* Wave-5 F10: only on request; setup builds one product. */
-    if (want_diagnostic &&
-        join_path(diag_dir_storage, sizeof(diag_dir_storage), g_project_root,
-                  PSX_DIAGNOSTIC_DIR_NAME)) {
-        argv[argc++] = "--diagnostic-dir";
-        argv[argc++] = diag_dir_storage;
     }
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
@@ -4414,6 +4445,29 @@ static int host_fmv_timing_optimize(const char* disc_path, char* out_exe_path,
     return host_rebuild_game_ex(disc_path, 0, 0, out_exe_path, out_cap,
                                 err_msg, err_cap, on_progress, progress_ctx);
 }
+
+#if defined(_WIN32)
+/* Start a deferred rebuild helper bat in its own console and exit: the helper
+ * waits for this process before it touches a build tree. */
+static void host_start_helper_and_exit(const char* helper) {
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char cmd[1536];
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+    fprintf(stderr, "psxrecomp-codegen: starting deferred rebuild helper\n");
+    snprintf(cmd, sizeof(cmd), "cmd.exe /C \"%s\"", helper);
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
+                        g_project_root, &si, &pi)) {
+        fprintf(stderr, "psxrecomp-codegen: CreateProcess failed\n");
+        exit(1);
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    ExitProcess(0);
+}
+#endif
 
 #if !defined(PSX_HAS_GAME_DISPATCH)
 /* Wave-5 F10: the diagnostic product on first request. Runs from the forward
@@ -4729,9 +4783,12 @@ void psxrecomp_codegen_host_forward_if_built(
             if (host_build_diagnostic_on_demand(built, sizeof(built), err,
                                                 sizeof(err))) {
 #if defined(_WIN32)
-                /* Deferred: hand over to the helper bat, which relaunches this
-                 * exe with --diagnostic once the product exists. */
-                psxrecomp_codegen_host_relaunch_or_exit(NULL);
+                /* Deferred: hand over to the helper bat (built holds its
+                 * path), which relaunches this exe with --diagnostic once the
+                 * product exists. Not psxrecomp_codegen_host_relaunch_or_exit:
+                 * that takes the launcher UI's relaunch path, and no launcher
+                 * has run on this forward path. */
+                host_start_helper_and_exit(built);
 #else
                 snprintf(g_exe_path, sizeof(g_exe_path), "%s", built);
 #endif
@@ -4739,7 +4796,7 @@ void psxrecomp_codegen_host_forward_if_built(
                 fprintf(stderr,
                         "psxrecomp-codegen: diagnostic build failed (%s); starting "
                         "the normal build. Run the CLI rebuild with "
-                        "--diagnostic-dir to create it by hand.\n",
+                        "--diagnostic-only --diagnostic-dir to create it by hand.\n",
                         err[0] ? err : "unknown error");
             }
         }
@@ -4848,24 +4905,18 @@ void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
     persist_relaunch_sidecars(near_exe, disc_path);
 
 #if defined(_WIN32)
+    if (g_relaunch_is_helper)
+        host_start_helper_and_exit(exe);
     {
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
         char cmd[1536];
-        DWORD flags = 0;
         memset(&si, 0, sizeof(si));
         memset(&pi, 0, sizeof(pi));
         si.cb = sizeof(si);
-        if (g_relaunch_is_helper) {
-            fprintf(stderr,
-                    "psxrecomp-codegen: starting deferred rebuild helper\n");
-            snprintf(cmd, sizeof(cmd), "cmd.exe /C \"%s\"", exe);
-            flags = CREATE_NEW_CONSOLE;
-        } else {
-            fprintf(stderr, "psxrecomp-codegen: relaunching %s\n", exe);
-            snprintf(cmd, sizeof(cmd), "\"%s\" --launcher", exe);
-        }
-        if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, flags, NULL,
+        fprintf(stderr, "psxrecomp-codegen: relaunching %s\n", exe);
+        snprintf(cmd, sizeof(cmd), "\"%s\" --launcher", exe);
+        if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL,
                             g_project_root, &si, &pi)) {
             fprintf(stderr, "psxrecomp-codegen: CreateProcess failed\n");
             exit(1);

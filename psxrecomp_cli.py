@@ -24,7 +24,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional, Union
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "tools"))
@@ -173,7 +173,7 @@ def prune_after_rebuild(
 def clamp_future_mtimes(
     root: Path,
     *,
-    skip: Optional[Path] = None,
+    skip: Union[Path, Iterable[Path], None] = None,
     now: Optional[float] = None,
 ) -> int:
     """Clamp mtimes ahead of *now* so Ninja does not infinite-reconfigure.
@@ -186,12 +186,12 @@ def clamp_future_mtimes(
     if not root.is_dir():
         return 0
     stamp = time.time() if now is None else now
-    skip_res: Optional[Path] = None
-    if skip is not None:
+    skip_res: set[Path] = set()
+    for sk in ([skip] if isinstance(skip, Path) else list(skip or [])):
         try:
-            skip_res = skip.resolve()
+            skip_res.add(sk.resolve())
         except OSError:
-            skip_res = skip
+            skip_res.add(sk)
     n = 0
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dpath = Path(dirpath)
@@ -200,9 +200,7 @@ def clamp_future_mtimes(
         except OSError:
             d_res = dpath
         # Skip the active build tree entirely (outputs are rewritten anyway).
-        if skip_res is not None and (
-            d_res == skip_res or skip_res in d_res.parents
-        ):
+        if any(d_res == sk or sk in d_res.parents for sk in skip_res):
             dirnames[:] = []
             continue
         # Never descend into VCS metadata; prune the build dir at the parent.
@@ -210,9 +208,9 @@ def clamp_future_mtimes(
         for x in dirnames:
             if x == ".git":
                 continue
-            if skip_res is not None:
+            if skip_res:
                 try:
-                    if (dpath / x).resolve() == skip_res:
+                    if (dpath / x).resolve() in skip_res:
                         continue
                 except OSError:
                     pass
@@ -226,7 +224,14 @@ def clamp_future_mtimes(
                 continue
             if mtime > stamp:
                 try:
-                    os.utime(p, (stamp, stamp), follow_symlinks=False)
+                    if os.utime in os.supports_follow_symlinks:
+                        os.utime(p, (stamp, stamp), follow_symlinks=False)
+                    elif p.is_symlink():
+                        # Windows has no lutime (follow_symlinks=False raises
+                        # NotImplementedError); never touch a link's target.
+                        continue
+                    else:
+                        os.utime(p, (stamp, stamp))
                     n += 1
                 except OSError:
                     pass
@@ -1813,6 +1818,12 @@ def run_pgo_train(
         raise RuntimeError("no PGO profiles written — train did not flush")
 
 
+def _resolve_under(project_root: Path, raw: str) -> Path:
+    """A CLI directory argument: relative paths are taken from the project root."""
+    p = Path(raw).expanduser()
+    return (p if p.is_absolute() else project_root / p).resolve()
+
+
 def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
     config = Path(args.config).expanduser().resolve()
     if not config.is_file():
@@ -1823,13 +1834,28 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if args.project_root
         else config.parent
     )
-    build_dir = Path(args.build_dir).expanduser()
-    if not build_dir.is_absolute():
-        build_dir = (project_root / build_dir).resolve()
-    else:
-        build_dir = build_dir.resolve()
+    build_dir = _resolve_under(project_root, args.build_dir)
     target = args.target or "psx-runtime"
     exe_basename = args.exe_basename or "psx-runtime"
+
+    diag_raw = (getattr(args, "diagnostic_dir", None) or "").strip()
+    diag_dir = _resolve_under(project_root, diag_raw) if diag_raw else None
+    diagnostic_only = bool(getattr(args, "diagnostic_only", False))
+    if diagnostic_only:
+        # The diagnostic request of a set-up kit (docs/DIAGNOSTIC_MODE.md). The normal
+        # product may be a PGO build and its intermediates were pruned at setup, so
+        # nothing here may configure, compile, stage into or prune --build-dir.
+        clash = [flag for flag, on in (("--force-pgo", args.force_pgo),
+                                       ("--prune-after", (getattr(args, "prune_after", "") or "").strip()))
+                 if on]
+        if diag_dir is None or clash:
+            progress.error("--diagnostic-only needs --diagnostic-dir"
+                           + (f" and cannot be combined with {', '.join(clash)}" if clash else ""),
+                           code=EXIT_USAGE)
+            return EXIT_USAGE
+        if diag_dir == build_dir:
+            progress.error("--diagnostic-dir must differ from --build-dir", code=EXIT_USAGE)
+            return EXIT_USAGE
 
     secs = load_sections(config)
     pgo = secs.get("pgo") or {}
@@ -1902,12 +1928,25 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
     if args.cmake_extra:
         cmake_extra.extend(args.cmake_extra)
 
-    clamped = clamp_future_mtimes(project_root, skip=build_dir)
+    clamped = clamp_future_mtimes(
+        project_root, skip=[build_dir, diag_dir] if diagnostic_only else build_dir)
     if clamped:
         progress.log(
             f"Clamped {clamped} future mtime(s) under {project_root} "
             "(avoids Ninja dirty-manifest loop from release-zip clocks)."
         )
+
+    if diagnostic_only:
+        progress.log(f"Diagnostic product only; the normal product in {build_dir} is left as it is")
+        diagnostic_exe, diagnostic_error = build_diagnostic_product(
+            project_root, diag_dir, target, exe_basename, cmake_extra, progress=progress
+        )
+        if diagnostic_exe is None:
+            progress.error(f"diagnostic build failed: {diagnostic_error}", code=EXIT_ERROR)
+            return EXIT_ERROR
+        progress.phase("done", pct=1.0, message="Diagnostic build complete")
+        progress.result(ok=True, diagnostic_only=True, diagnostic_exe=str(diagnostic_exe))
+        return EXIT_OK
 
     # mute_host_audio / hide_video: default ON; game.toml / CLI can disable.
     mute_host = True
@@ -2018,13 +2057,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
 
     diagnostic_exe = None
     diagnostic_error = ""
-    diag_raw = (getattr(args, "diagnostic_dir", None) or "").strip()
-    if diag_raw:
-        diag_dir = Path(diag_raw).expanduser()
-        if not diag_dir.is_absolute():
-            diag_dir = (project_root / diag_dir).resolve()
-        else:
-            diag_dir = diag_dir.resolve()
+    if diag_dir is not None:
         diagnostic_exe, diagnostic_error = build_diagnostic_product(
             project_root, diag_dir, target, exe_basename, cmake_extra, progress=progress
         )
@@ -2629,6 +2662,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="also build a diagnostic product (PSX_DEBUG_TOOLS=ON: debug server, "
         "heartbeat, freeze dumps) into this directory after the normal build",
+    )
+    r.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help="build only the --diagnostic-dir product; the normal product in --build-dir "
+        "(including a PGO build) is not configured, compiled or pruned",
     )
     r.set_defaults(handler=cmd_rebuild)
 
