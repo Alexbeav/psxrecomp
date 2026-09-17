@@ -19,22 +19,26 @@ python tools/tasreplays/qualified_hunks.py check-all             # across the sp
 
 ## Batch rule (operator rule, 2026-09-17; Wave 5 batch, PSX Work T59)
 
-Fix a closed list of items, then requalify every route **once**, at the end.
+Work starts from a base head the operator supplies. Corrections are layered on it; every
+route is requalified **once**, at the end.
 
-- **No full reruns between fixes, and no smoke or prefix runs.** Never rerun an
+- Titles are worked one at a time, in the batch order. A title runs only its own route.
+  Resume from checkpoints to diagnose; a title is done when one uninterrupted run passes.
+- **No reruns of other routes between fixes, and no smoke or prefix runs.** Never rerun an
   already-qualified route because of a fix made for another game.
-- A title runs only its own route while its item is open. Resume from checkpoints to
-  diagnose; a verdict still needs one uninterrupted run.
-- Every accuracy fix is its own commit with its `qualified-hunks.json` entry. Performance
-  changes are out of scope for a batch.
-- An integration or merge step is gated by `build_cache.stage_tools` (every registered hunk
-  present) and runs no routes.
-- The batch list is closed; only the operator adds to it. A bug found inside an item gets
+- Every accuracy fix is its own commit on top of the base, with its `qualified-hunks.json`
+  entry. Performance changes are out of scope for a batch.
+- Taking in the base, or merging into it, is gated by `build_cache.stage_tools` (every
+  registered hunk present) and runs no routes. The base does not move unless the operator
+  supplies a new one.
+- The batch list is closed; only the operator adds to it. A bug found inside a title gets
   its own PSX Work ID.
-- The final requalification starts when every batch item is at Review or Done and the
-  framework owner names the freeze candidate head. Every route runs on that one head, at
-  most three at once, with the 120 s watchdog. If a route fails, find and fix the cause,
-  then tell the operator before any second full run.
+- Once every title passes, the whole catalogue is requalified on that one head: every route,
+  one uninterrupted run each, at most three at once, with the 120 s watchdog. If a route
+  fails, find and fix the cause, then tell the operator before any second full run.
+
+2026-09-17 batch (T59), in order: Abe's Oddysee 5620M, Abe's Exoddus 6672M, Spyro the Dragon
+5523M, Spyro: Year of the Dragon 4083M and 5021M, Spyro 2 5278M, MediEvil 4875M.
 
 ## Where things live
 
