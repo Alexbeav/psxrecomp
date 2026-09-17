@@ -61,7 +61,9 @@ Host quirks, each found the hard way:
 - **Observer storage**: the page log is ~8.7 KB per frame, so the launcher budget is 6 GiB.
   Exoddus at 482,352 frames needs ~4.2 GB.
 - **Multi-disc movies need an `.m3u`** naming both cues. Abe's Exoddus 6672M opens the tray at
-  frame 179,993 and swaps discs twelve times; a Disc-1-only host crashed at the first swap.
+  frame 179,993 and closes it on Disc 2 at 179,996; a Disc-1-only host crashed there. That is
+  the only swap: its later Disc Select changes all happen with the tray closed, and Octoshock
+  mounts a newly selected disc only while the tray is open.
 
 ## Build environment
 
@@ -71,8 +73,33 @@ that appears as processes parked at 0 CPU in an `LpcReply` wait with every test 
 1500 s, which reads like a hang and is not one. The lane's `.ps1` drivers pin the WinLibs
 runtime first and drop Git's copy.
 
+The runtime's starvation watchdog is wall-clock. With several replays and builds running, a host
+stall once killed two unrelated multi-hour routes in the same second, so `run_native.py` sets it
+to 120 s; the variable is outside the checkpoint identity. Keep concurrent native routes to about
+three on this machine anyway.
+
 `setup` refuses a dirty worktree and aborts if HEAD moves during the build. Commit first, then
 build, then leave the worktree alone until the route finishes.
+
+A fresh worktree on this machine checks text out with CRLF (`core.autocrlf=true`). Any tool
+whose own bytes are hashed into evidence must be pinned `eol=lf` in `.gitattributes`, or
+every candidate built from a new worktree is refused ("source reference admission tool
+differs"). All five admission tools and `nymashock28_movie.py` are pinned; pin any new one
+in the commit that adds it.
+
+## Save states
+
+Read `docs/TAS_CHECKPOINTS.md`. Every title command takes `--save-state-at RETURN...`,
+`--save-state-every N` and `--resume-from STATE [--resume-compatible-build]`. Capture during
+long qualifying replays, so a later divergence is diagnosed by resuming near it, not by a
+cold rerun. Capturing never changes what a run qualifies; a resumed run is always
+`diagnostic`, and a final verdict is always an uninterrupted run. Resume with the same
+`--returns` as the capture, because the checkpoint binds the route file's content.
+
+States are format v10 and manifests `psx-tas-stateio-v3`, which carry the memory card images
+beside the state. A state is bound to its exact executable unless `--resume-compatible-build`
+is given, and then only when `PSX_TAS_STATEIO_COMPATIBILITY` matches. Change that identifier
+in any commit that changes what a state represents.
 
 ## Adapters: derive constants, never clone them
 
@@ -89,15 +116,10 @@ runtime header, the encoder and `run_native.route_identity`.
 
 ## Standing debts
 
-- **`155003cb` save-state capture and resume is absent from this lineage.** Dropped in the
-  PR #361 → split rebase like `b1413e71`, and unlike it never restored. Costs replay time
-  only, never accuracy: all runs are cold. Recorded in `known_absent`; port it from
-  `pegasus-codex/biohazard-resume-20260913` and delete the entry.
+- **Abe's Oddysee 5620M diverges at return 949**: one 4 KiB page at 0x08E000, identical return
+  clock, terminal RAM matches. A state or ordering difference, not timing; open.
 - **Tekken 3 still runs on SCPH1001** while its movie declares SCPH-5501. Its comparison uses
   a committed file of line hashes that a BIOS change invalidates.
 - **No disc-swap support anywhere in the runtime.** The route format has no tray or disc
-  column and there is no playlist concept, so Abe's Exoddus cannot be replayed natively until
-  that is designed. Its oracle side is complete.
-- **No runtime source-behaviour model for Octoshock 2.7 or 2.10.** The runtime implements
-  2.2.2, 2.3 and Nymashock 1.29.0 only, so Crash and Exoddus need those cores characterised or
-  proven equivalent before a native route means anything.
+  column and there is no playlist concept. Abe's Exoddus needs exactly one tray open (frame
+  179,993) and a close on Disc 2 (179,996). Its oracle side is complete.
