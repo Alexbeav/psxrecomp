@@ -494,7 +494,11 @@ p2_mode = "digital"
                     "PSX_INPUT_ROUTE_NEUTRAL_TAIL": str(args.neutral_tail),
                     "PSX_INPUT_ROUTE_TRACE": "1" if args.sio_trace else "0",
                     "PSX_INPUT_ROUTE_CAPTURE_EVERY": str(args.checkpoint_every),
-                    "PSX_BIOS_HLE": "1" if args.hle else "0"}
+                    "PSX_BIOS_HLE": "1" if args.hle else "0",
+                    # The runtime's 4 s starvation watchdog is wall-clock. A host stall killed
+                    # two unrelated multi-hour replays in the same second (2026-09-17 06:10);
+                    # the launcher's own --timeout bounds a real hang.
+                    "PSX_STARVATION_TIMEOUT_US": "120000000"}
     if args.speed != "1":
         selected_env["PSX_FAST_FORWARD"] = "1"
         selected_env["PSX_FAST_FORWARD_SPEED"] = args.speed

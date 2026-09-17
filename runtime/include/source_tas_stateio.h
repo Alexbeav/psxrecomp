@@ -98,6 +98,7 @@ static inline int source_tas_stateio_env_allowed_to_differ(const char *key, size
         "PSX_LOAD_SLOT",                /* user slot load request     */
         "PSX_E_SURVEY",                 /* diagnostic only            */
         "PSX_TAS_PERTURB_RESTORE",      /* negative-control injection */
+        "PSX_STARVATION_TIMEOUT_US",    /* host watchdog bound; no guest effect */
         NULL
     };
     for (int i = 0; allow[i]; i++)

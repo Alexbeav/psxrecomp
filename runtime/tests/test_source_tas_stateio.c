@@ -182,6 +182,14 @@ int main(int argc, char **argv) {
     check(source_tas_stateio_save_at_match(300u) == 1, "save_at single value");
     check(source_tas_stateio_save_at_match(301u) == 0, "save_at single value non-member");
     putenv("PSX_TAS_SAVE_STATE_AT=");
+    {
+        /* The host watchdog bound never enters the configuration identity. */
+        static const char *const env[] = {"PSX_STARVATION_TIMEOUT_US=120000000", "PSX_HLE_SCHEDULER=1",
+                                          "OTHER=1", NULL};
+        const char *kept[8];
+        size_t n = source_tas_stateio_env_collect(env, kept, 8);
+        check(n == 1 && !strcmp(kept[0], "PSX_HLE_SCHEDULER=1"), "watchdog timeout is outside config identity");
+    }
 
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     puts("PASS: TAS checkpoint manifest round-trip and identity gate");
