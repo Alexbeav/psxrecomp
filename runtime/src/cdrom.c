@@ -1745,7 +1745,7 @@ static int implicit_read_seek_cycles(void) {
     if (!setloc_pending) return 0;
     int origin=last_sector_lba>=0?last_sector_lba:0;
     return apply_speed(source_seek_lower_bound(origin,s_setloc_lba,(stat_reg&CDSTAT_MOTOR)!=0,
-                                              !reading&&!(stat_reg&CDSTAT_PLAY),mode_reg));
+                                              s_source_seek_paused,mode_reg));
 }
 /* This optional comparison adds only the independently expressed source seek
  * lower bound. The source's global PRNG jitter and physical drive-head position
@@ -3961,10 +3961,11 @@ static int cdrom_snap_emit(PstW *w) {
     W8(pending.cmd); WI(pending.pending); WI(pending_rem_cycles()); WI(pending.phase);
     W8(queued_cmd.cmd); WB(queued_cmd.params); WI(queued_cmd.param_count); WI(queued_cmd.pending);
     W8(pending_dataready); W8(pending_dataready_stat);
-    /* This explicit private profile adds its timing state to the CD section.
-     * Default bytes stay unchanged. Full-machine/cross-profile restore remains
-     * unqualified; matching-profile controller state is not reconstructed. */
-    if (s_source_explicit_seek_model) W8(s_source_seek_paused);
+    /* Paused versus standby is not derivable from status bits: a completed
+     * plain seek and a completed Pause report the same status. Every profile
+     * times seeks and implicit reads from it, so every profile carries it.
+     * Full-machine/cross-profile restore remains unqualified. */
+    W8(s_source_seek_paused);
     if(s_source_clock) {
         WI(s_source_read_start_lba);
         WU(0x33434c43u);WB(s_source_clock_tape.sha256);
@@ -4037,7 +4038,7 @@ static int cdrom_snap_parse(PstR *r) {
     R8(pending.cmd); RI(pending.pending); RI(pending_rem); RI(pending.phase);
     R8(queued_cmd.cmd); RB(queued_cmd.params); RI(queued_cmd.param_count); RI(queued_cmd.pending);
     R8(pending_dataready); R8(pending_dataready_stat);
-    if (s_source_explicit_seek_model) R8(s_source_seek_paused);
+    R8(s_source_seek_paused);
     if(s_source_clock) {
         uint8_t identity[32];uint32_t signature,count;
         int command_rem,ready_rem,reset_active,reset_rem;
@@ -4082,7 +4083,7 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     if (len != cdrom_snapshot_bytes()) return 0;
     uint32_t clock_bytes=s_source_clock?80u:0u;
-    if (s_source_explicit_seek_model && p[len-clock_bytes-1] > 1) return 0;
+    if (p[len-clock_bytes-1] > 1) return 0;
     if(s_source_clock) {
         const uint8_t *clock=p+len-clock_bytes+4;
         int32_t phase=(int32_t)cd_tape_le32(clock+48);
