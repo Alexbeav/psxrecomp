@@ -148,6 +148,29 @@ int main(void) {
         ack(); advance(period); CHECK(reads==2&&last_sector_lba==201,"profile preserves subsequent sector cadence");
     }
     SET_MODEL("");
+    /* A completed plain seek leaves the drive in standby, not paused, even
+     * though its status bits match a paused drive. The next SetLoc+ReadN must
+     * not pay the paused-restart latency; only Pause earns it. Resident Evil 2
+     * NTSC times out that ReadN and retries forever on the violence warning. */
+    for (int after_pause=0; after_pause<=1; ++after_pause) {
+        setup(1000); target(1100);
+        if(after_pause) {
+            command(6); ack(); advance(read_delay); ack();
+            command(9); ack(); advance(100000000);
+            CHECK(irq_flag==CDIRQ_COMPLETE,"Pause completes");
+        } else {
+            command(0x15); ack(); advance(100000000);
+            CHECK(irq_flag==CDIRQ_COMPLETE,"SeekL completes");
+        }
+        ack();
+        CHECK(!reading&&!(stat_reg&(CDSTAT_SEEK|CDSTAT_READ|CDSTAT_PLAY)),
+              "drive status is idle before the second SetLoc");
+        target(1200); int origin=last_sector_lba; command(6);
+        int expect=apply_speed(source_seek_lower_bound(origin,1200,1,after_pause,mode_reg))+
+                   initial_read_delay_cycles();
+        CHECK(read_delay==expect,after_pause?"ReadN after Pause pays paused restart":
+                                             "ReadN after completed SeekL pays no paused restart");
+    }
     if(failures) { fprintf(stderr,"FAILED (%d)\n",failures); return 1; }
     puts("CD implicit seek: ALL PASS"); return 0;
 }
