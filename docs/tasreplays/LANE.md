@@ -37,6 +37,15 @@ native route, `archive_source_runs.py` for source passes.
 | BizHawk 2.10 | Nymashock | `observer-2100-generic` | Mega Man X4 6790M |
 | BizHawk 2.7 / 2.10 | Octoshock | `ObservationOcto2x` | Crash 7798S, Abe's Exoddus 6672M |
 
+**Diagnostic source cores.** When the admitted observer cannot show why a source run did what it
+did, build a private instrumented core; never touch the admitted host. `oracle\diag-octoshock-2.7`
+holds the 2.7 source with `patch_diag.py` (FrontIO writes/reads, bit clocks, DSR pulses, IRQ edges,
+exceptions and DMA steal, with timestamps, gated by `OCTO_DIAG_TRACE="<path>;<first>;<last>"`),
+staged in `oracle\BizHawk-2.7-diag`; `crash-01\run-trace.ps1` plays a copy of the movie on it with
+a Lua. Its `octoshock.vcxproj` lists `video\convert.h` as a compile unit that races `convert.cpp`
+for `convert.obj`; the diagnostic copy drops it. Lua memory callbacks on 2.7 receive no address or
+value and cannot see I/O, so they only mark that and when code ran.
+
 **One helper per core family per host.** A 2.10 Nymashock helper does nothing for 2.10
 Octoshock. Stock Octoshock throws from `TotalExecutedCycles` at every version, so the observer
 role always runs a rebuilt core carrying the `b3ec859c` passive cycle export; it is admissible
@@ -116,10 +125,36 @@ runtime header, the encoder and `run_native.route_identity`.
 
 ## Standing debts
 
-- **Abe's Oddysee 5620M diverges at return 949**: one 4 KiB page at 0x08E000, identical return
-  clock, terminal RAM matches. A state or ordering difference, not timing; open.
+- **Abe's Oddysee 5620M still fails on one stack page.** Return 949 was the pad DTR session (a
+  source lag frame); with that fixed, only page 0x1F0000 differs, on 3,826 of 49,854 returns in
+  short bursts from 6,602, with the return clock equal every time and terminal RAM matching.
+  Likely below-SP residue from handler or call frames placed at different instructions; open.
 - **Tekken 3 still runs on SCPH1001** while its movie declares SCPH-5501. Its comparison uses
   a committed file of line hashes that a BIOS change invalidates.
 - **No disc-swap support anywhere in the runtime.** The route format has no tray or disc
   column and there is no playlist concept. Abe's Exoddus needs exactly one tray open (frame
   179,993) and a close on Disc 2 (179,996). Its oracle side is complete.
+
+## Octoshock 2.7 / 2.10 is Nymashock 1.29.0 with a different wrapper and compiler
+
+BizHawk 2.7 moved Octoshock from Mednafen 0.9.38.7 to Mednafen 1.27.1; 2.10 is the same source
+plus EXE-only checks. **Mednafen 1.27.1 and 1.29.0 emulate the PS1 identically** (`src/psx` and
+`src/cdrom` differ only in messages, VFS and host I/O), so a 2.7/2.10 Octoshock movie runs on the
+Nymashock 1.29.0 device switches, not the 2.3 ones. Crash 7798S qualifies that way.
+
+Two places still differ, and both were found by divergence, not by reading:
+
+- **Compiler.** `octoshock.dll` is an MSVC build. CDC `Command_Init` takes
+  `std::max(PSX_GetRandU32(0, 3250000), CalcSeekTime(...))`, and MSVC calls `CalcSeekTime` (its
+  0-25,000 draw) first where Nymashock's clang takes the broad draw first. Checked in the 2.7 and
+  2.10 DLLs' machine code. `--cd-drive-model octoshock-2.7` selects the MSVC order. It is the
+  only expression in the 1.27.1 CDC with two draws; check any new source of randomness the same way.
+- **BizHawk's wrapper.** The CD shell bit clears only on GetStat
+  (`--cd-cold-status-model octoshock-2.2.2`). The DualShock takes stick bytes unscaled and checks
+  MODE only when DTR drops; `dualshock_route.read_movie_octoshock27` accepts only records where
+  neither can show (every stick 128, MODE never pressed) and refuses the rest.
+
+Both source pads (`InputDevice_Gamepad` at every Octoshock version, `InputDevice_DualShock`)
+restart their command phase only on their port's DTR rising edge and ignore a session whose first
+byte is not 0x01. A game that probes the memory card and leaves DTR asserted makes the next BIOS
+pad read time out in the source: a lag frame. Both `--pad-ack-model` profiles model it.

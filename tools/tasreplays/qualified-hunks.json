@@ -4744,6 +4744,242 @@
         }
       ],
       "note": "Golden-lineage HLE scheduler fixes 872c8310 + 2312f929 (deferred in-exception thread switch requested from an interpreted spin loop; the MGS PAL black screen) and 3f56f6a5 (pump-site latch clear on scheduler escape), ported onto the TAS lineage. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row."
+    },
+    {
+      "id": "crash-route-step-cap-65536",
+      "titles": [
+        "crash"
+      ],
+      "origin_commit": "3b184cbe9ce7ee4fca60cbf4632df20110c19632",
+      "subject": "tasreplays: Crash Bandicoot 7798S adapter on the Nymashock 1.29.0 profile",
+      "qualified_tree": "970ab88d22b7aed300fd2ae85588d1e8939a79a7",
+      "blocks": [
+        {
+          "file": "runtime/include/input_route_file.h",
+          "lines": [
+            " * host-side only, never guest state. Keep dualshock_route.py's MAX_STEPS equal.",
+            " * Crash Bandicoot 7798S needs 55,610 steps over 203,477 frames, so the cap is",
+            " * 65,536 (about 800 KiB per array); Abe's Exoddus 6672M needs 10,909. */",
+            "#define INPUT_ROUTE_MAX_STEPS 65536u"
+          ]
+        }
+      ],
+      "note": "Route step cap 65,536 (Crash 7798S needs 55,610 steps). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949."
+    },
+    {
+      "id": "octoshock27-cdc-reset-draw-order",
+      "titles": [
+        "crash"
+      ],
+      "origin_commit": "74b919cf0f4849619c8ea34db99524ccb7fe8aba",
+      "subject": "cdrom: octoshock-2.7 drive model takes CDC Reset's random draws in MSVC order",
+      "qualified_tree": "970ab88d22b7aed300fd2ae85588d1e8939a79a7",
+      "blocks": [
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "static int s_cd_reset_seek_draw_first;   /* octoshock-2.7: MSVC order of Reset's two draws */"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "                /* std::max(PSX_GetRandU32(0, 3250000), CalcSeekTime(...)) leaves the",
+            "                 * order of the two draws to the compiler. Stock clang (Nymashock) takes",
+            "                 * the broad Reset draw first; MSVC (octoshock.dll in BizHawk 2.7 and",
+            "                 * 2.10) calls CalcSeekTime, and its 25000 draw, first. */"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "                int delay;",
+            "                if(s_cd_reset_seek_draw_first) {",
+            "                    seek+=(int)source_clock_random(25000);delay=(int)source_clock_random(3250000);",
+            "                } else {",
+            "                    delay=(int)source_clock_random(3250000);seek+=(int)source_clock_random(25000);",
+            "                }"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    /* octoshock-2.7 is the same Mednafen drive (1.27.1 == 1.29.0 here) built with MSVC. */",
+            "    s_cd_reset_seek_draw_first=drive_model && !strcmp(drive_model,\"octoshock-2.7\");",
+            "    s_nymashock_drive=drive_model && (!strcmp(drive_model,\"nymashock-1.29.0\") || s_cd_reset_seek_draw_first);"
+          ]
+        }
+      ],
+      "note": "octoshock.dll (MSVC) evaluates CalcSeekTime's draw before the 3,250,000 Reset draw; Crash 7798S return 709. Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949."
+    },
+    {
+      "id": "source-pad-dtr-session",
+      "titles": [
+        "crash",
+        "all"
+      ],
+      "origin_commit": "735be5fa8a5f27e96eed2c39774c5cac7191a54d",
+      "subject": "sio: source DualShock stays silent for a DTR session that began with another address",
+      "qualified_tree": "970ab88d22b7aed300fd2ae85588d1e8939a79a7",
+      "evolved": {
+        "dropped_lines": 7,
+        "from_blocks": 11,
+        "to_blocks": 12
+      },
+      "blocks": [
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v10-lane-2\""
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            " * every device on a port sees every byte while that port's DTR is asserted, and the pad's",
+            " * command phase restarts only when its DTR rises. A session whose first byte is not 0x01",
+            " * (a memory-card 0x81, say) leaves the pad silent until DTR falls and rises again, so a",
+            " * later 0x01 in the same session gets no response and no ACK. Per physical port. */",
+            "static uint8_t pad_dtr_session_first[2];",
+            "static uint8_t pad_dtr_session_mute[2];",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    memset(pad_dtr_session_first, 0, sizeof pad_dtr_session_first);",
+            "    memset(pad_dtr_session_mute, 0, sizeof pad_dtr_session_mute);"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    int pad_muted = 0;",
+            "#if SIO_MODEL_CYCLE_PACED"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        int port = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;",
+            "        if (pad_dtr_session_first[port]) {",
+            "            pad_dtr_session_first[port] = 0;",
+            "            pad_dtr_session_mute[port] = tx_byte != 0x01;",
+            "        }",
+            "        pad_muted = pad_dtr_session_mute[port];",
+            "    }",
+            "#endif"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (tx_byte == 0x01 && !pad_muted) {"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "                if (tx_byte == 0x01 && !pad_muted) {"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            /* Per-port DTR as FrontIO drives it: DTR bit and the port-select bit. */",
+            "            uint16_t new_ctrl = (value & SIO_CTRL_RESET) ? 0 : (uint16_t)value;",
+            "            for (int port = 0; port < 2; port++) {",
+            "                int was = (old_ctrl & SIO_CTRL_SELECT) && (((old_ctrl & SIO_CTRL_SLOT) != 0) == port);",
+            "                int now = (new_ctrl & SIO_CTRL_SELECT) && (((new_ctrl & SIO_CTRL_SLOT) != 0) == port);",
+            "                if (!was && now) { pad_dtr_session_first[port] = 1; pad_dtr_session_mute[port] = 0; }",
+            "                else if (was && !now) pad_dtr_session_first[port] = pad_dtr_session_mute[port] = 0;",
+            "            }",
+            "        }",
+            "#endif"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            (!pst_w_bytes(w, pad_dtr_session_first, sizeof pad_dtr_session_first) ||",
+            "             !pst_w_bytes(w, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            (!pst_r_bytes(r, pad_dtr_session_first, sizeof pad_dtr_session_first) ||",
+            "             !pst_r_bytes(r, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;",
+            "        pst_r_init(&extra, p + len - session_bytes - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        for (uint32_t j = 0; j < config_bytes + session_bytes; j++)",
+            "            if (p[len - session_bytes - config_bytes + j] > 1) return 0;"
+          ]
+        }
+      ],
+      "note": "Source pads ignore a DTR session whose first byte is not 0x01 until DTR rises again; Crash 7798S return 1153 (card probe leaves DTR asserted, the BIOS pad read times out, a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949."
+    },
+    {
+      "id": "source-pad-dtr-session-digital",
+      "titles": [
+        "abesoddysee",
+        "tekken3",
+        "pepsiman"
+      ],
+      "origin_commit": "f7637b73ca9d3591137bdbb3eb6c19c4fed96bd7",
+      "subject": "sio: the digital source pad follows the same DTR session rule",
+      "qualified_tree": "970ab88d22b7aed300fd2ae85588d1e8939a79a7",
+      "blocks": [
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "/* Source pads (Mednafen InputDevice_Gamepad and InputDevice_DualShock: Octoshock 2.2.2/2.3,",
+            " * Nymashock 1.29.0, Octoshock 2.7/2.10):"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    if (sio_source_pad_ack) {"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack) {"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack &&"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack &&"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        uint32_t session_bytes = sio_source_pad_ack ?"
+          ]
+        }
+      ],
+      "note": "The same DTR session rule for Octoshock 2.2.2/2.3 InputDevice_Gamepad; removed Abe's Oddysee's return-949 divergence (a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949."
     }
   ]
 }
