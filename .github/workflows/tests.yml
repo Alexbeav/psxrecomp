@@ -1,0 +1,54 @@
+name: Tests
+
+# Every registered test in both CMake projects, on every push and pull request.
+# Same steps as cli-release.yml's linux-tests job, which stays release-only;
+# this is the fast per-change check that comment asks for.
+#
+# No path filters: the test trees pull from recompiler/, runtime/, cmake/,
+# lib/, tests/, tools/ and mods/, so any filter narrow enough to matter could
+# hide a change that breaks them.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-tests
+          max-size: 500M
+      - name: Configure recompiler tests
+        run: >-
+          cmake -S recompiler -B recompiler/build -DBUILD_TESTING=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build recompiler tests
+        run: cmake --build recompiler/build --parallel 4
+      - name: Run recompiler tests
+        run: ctest --test-dir recompiler/build --output-on-failure --parallel 4
+      - name: Install GL development files
+        # psx-runtime and psx-oracle are part of the runtime tree's default
+        # build and link libGL (gpu_gl_renderer.c).
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl-dev
+      - name: Configure runtime tests
+        run: >-
+          cmake -S runtime -B runtime/build -DBUILD_TESTING=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DPSXRECOMP_ALLOW_NO_BIOS=ON -DPSX_RECOMP_UI=OFF -DPSX_REWIND=OFF
+          -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
+      - name: Build runtime tests
+        run: cmake --build runtime/build --parallel 4
+      - name: Run runtime tests
+        run: ctest --test-dir runtime/build --output-on-failure --parallel 4
