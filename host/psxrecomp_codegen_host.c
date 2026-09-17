@@ -4122,15 +4122,25 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
                                                  const char* disc_path,
                                                  char* err_msg,
                                                  size_t err_cap) {
-    if (!join_path(g_helper_path, sizeof(g_helper_path), g_build_dir,
+    /* A diagnostic request writes nothing into the normal product's directory,
+     * not even this helper. */
+    char diag_dir[1200];
+    if (want_diagnostic &&
+        !join_path(diag_dir, sizeof(diag_dir), g_project_root,
+                   PSX_DIAGNOSTIC_DIR_NAME)) {
+        snprintf(err_msg, err_cap, "Failed to form the diagnostic build path.");
+        return 0;
+    }
+    const char* helper_dir = want_diagnostic ? diag_dir : g_build_dir;
+    if (!join_path(g_helper_path, sizeof(g_helper_path), helper_dir,
                    "recomp_deferred_rebuild.cmd")) {
         snprintf(err_msg, err_cap, "Failed to form helper path.");
         return 0;
     }
     /* Setup zips omit build-release/; create it before writing the .cmd. */
-    if (!mkdir_p(g_build_dir)) {
+    if (!mkdir_p(helper_dir)) {
         snprintf(err_msg, err_cap, "Failed to create build dir: %s",
-                 g_build_dir);
+                 helper_dir);
         return 0;
     }
     FILE* f = fopen(g_helper_path, "wb");
@@ -4159,10 +4169,8 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
     bat_write_set(f, "EXE", g_exe_path);
     bat_write_set(f, "DISPLAY", g_display);
     if (want_diagnostic) {
-        char diag_dir[1200], self_exe[1100];
-        if (join_path(diag_dir, sizeof(diag_dir), g_project_root,
-                      PSX_DIAGNOSTIC_DIR_NAME))
-            bat_write_set(f, "DIAG_DIR", diag_dir);
+        char self_exe[1100];
+        bat_write_set(f, "DIAG_DIR", diag_dir);
         /* Relaunch through the setup exe afterwards: it forwards to the
          * diagnostic product now that one exists. */
         if (host_self_exe_path(self_exe, sizeof(self_exe)))
