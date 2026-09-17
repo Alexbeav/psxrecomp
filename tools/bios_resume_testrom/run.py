@@ -12,7 +12,10 @@ done magic, then checks:
      divergence that is not what this test is for);
   4. psx-bresume recorded no unknown dispatch, and publish_ring holds no
      entry that psx_is_dispatchable refused;
-  5. both backends ran the same kernel image (RAM 0x500..0x1500 compared).
+  5. both backends ran the same BIOS image (the shell band RAM 0x30000..0x31000,
+     which is the verbatim copy of ROM 0x18000..; the kernel band RAM 0x500 that
+     the oracle bundle README suggests is identical across SCPH1001/5552/5500 and
+     cannot tell them apart -- measured 99.95% for all three).
 
 psx-beetle loads firmware BY NAME from the directory its BIOS argument points at
 (scph5500/scph5501/scph5502.bin by disc region), so --beetle-bios must name a
@@ -117,14 +120,14 @@ def main():
             c["native_irqs_taken"] = native[0] >= 1000
             report["beetle_irq_count"] = beetle[0]
         try:
-            band = [query(p, {"id": 1, "cmd": "read_ram", "addr": "0x00000500", "len": 4096},
+            band = [query(p, {"id": 1, "cmd": "read_ram", "addr": "0x00030000", "len": 4096},
                           )["hex"] for p in (RUNTIME_PORT, BEETLE_PORT)]
             a, b = (bytes.fromhex(x) for x in band)
             same = sum(1 for x, y in zip(a, b) if x == y)
-            report["kernel_band_match_pct"] = round(100.0 * same / len(a), 2)
-            # >=95% is the oracle bundle's "genuine same image" threshold; a wrong
-            # firmware lands near 15-20%.
-            c["same_kernel_image"] = report["kernel_band_match_pct"] >= 95.0
+            report["shell_band_match_pct"] = round(100.0 * same / len(a), 2)
+            # The region shells differ by ~155 KB, so this discriminates: the same
+            # image lands >=95%, a different region's near 17-21% (measured).
+            c["same_bios_image"] = report["shell_band_match_pct"] >= 95.0
         except (OSError, ValueError, KeyError) as exc:
             report["kernel_band_error"] = str(exc)
             c["same_kernel_image"] = False
