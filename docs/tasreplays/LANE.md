@@ -59,6 +59,7 @@ native route, `archive_source_runs.py` for source passes.
 | BizHawk 2.9.1 | Nymashock (waterbox) | `Observation291` | Bio Hazard, Mega Man X5, Resident Evil DC |
 | BizHawk 2.10 | Nymashock | `observer-2100-generic` | Mega Man X4 6790M |
 | BizHawk 2.7 / 2.10 | Octoshock | `ObservationOcto2x` | Crash 7798S, Abe's Exoddus 6672M |
+| BizHawk 2.8 | Nymashock (waterbox, `shock.wbx.gz`) | `observer-280-generic` | MediEvil 4875M, Spyro 2 5278M |
 
 **Diagnostic source cores.** When the admitted observer cannot show why a source run did what it
 did, build a private instrumented core; never touch the admitted host. `oracle\diag-octoshock-2.7`
@@ -92,6 +93,15 @@ Host quirks, each found the hard way:
   the movie; answering Yes would write to the frozen original.
 - **Observer storage**: the page log is ~8.7 KB per frame, so the launcher budget is 6 GiB.
   Exoddus at 482,352 frames needs ~4.2 GB.
+- **2.8 is the first Nymashock release and differs from 2.9.1+ in the Lua layer.** Its NLua 5.1
+  cannot yield under `xpcall`; it reads the Lua file in the ANSI code page and its strings keep
+  UTF-16 code units, so the `P1 △` `P1 ○` `P1 □` keys cannot be written as literals (match them by
+  their low byte from `joypad.get()`); `memory.hash_region` of MainRAM costs ~317 ms per frame, so
+  hash through the helper. Sticks are u16 (neutral 32768), and the helper has no
+  `MemoryDomain.EnterExit` to call. `tools/derive_nyma28.py` records each fix with its probe.
+  2.8's stock `octoshock.dll` is byte-identical to 2.7's.
+- **A 2.8 Nymashock movie needs the 2.8 core.** It desyncs on 2.9.1 (Mega Man X4 6412M), and a
+  stick value that is not a multiple of 256 has no 2.9.1 spelling at all (MediEvil 4875M).
 - **Multi-disc movies need an `.m3u`** naming both cues. Abe's Exoddus 6672M opens the tray at
   frame 179,993 and closes it on Disc 2 at 179,996; a Disc-1-only host crashed there. That is
   the only swap: its later Disc Select changes all happen with the tray closed, and Octoshock
