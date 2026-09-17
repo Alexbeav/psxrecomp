@@ -218,10 +218,15 @@ function(psxrecomp_check_all_tests_registered)
                     "re-checked. Drop the entry, or fix the registration.")
             endif()
         else()
-            list(APPEND _dev_excused "${_e_stem}")
+            # Excuse the FILENAME, not the stem. Stem-matching would let a
+            # declaration about test_foo.py silently excuse a later, genuinely
+            # unregistered test_foo.c in every tree without the dev build file
+            # — i.e. in every shipped kit, which is where this guard is the
+            # only thing looking. PSXRECOMP_TESTS_NOT_REGISTERED matches on
+            # filename for the same reason.
+            list(APPEND _dev_excused "${_e_file}")
         endif()
     endforeach()
-    list(APPEND _declared ${_dev_excused})
     list(REMOVE_DUPLICATES _declared)
 
     # ---- what is actually on disk ---------------------------------------
@@ -307,6 +312,11 @@ function(psxrecomp_check_all_tests_registered)
                 break()
             endif()
         endforeach()
+        # Registered, but only in a dev build file this tree does not carry.
+        list(FIND _dev_excused "${_file}" _dev_idx)
+        if(NOT _dev_idx EQUAL -1)
+            set(_excused TRUE)
+        endif()
         if(_excused)
             continue()
         endif()
