@@ -114,7 +114,7 @@ and game code (`game.toml`, seeds, CMake) at the repo root. See
 
 ### Build requirements
 
-Every platform needs **Git**, **Python 3**, **CMake 3.20+**, **Ninja**, and a
+Every platform needs **Git**, **Python 3.9+**, **CMake 3.20+**, **Ninja**, and a
 C/C++ compiler (the recompiler is C++20; the runtime is C99 + C++17). SDL3 is
 fetched automatically if no system package is found.
 
