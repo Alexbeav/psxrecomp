@@ -1,32 +1,7 @@
 {
-  "schema": "psxrecomp phase2 seeds",
-  "source": "tools/bios_seed_corpus.py generate over SCPH1001.toml (ROM sha256 71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3) + recompiler/seeds/bios_curated_seeds.json",
-  "seed_count": 1220,
+  "schema": "psxrecomp curated BIOS seeds",
+  "source": "SCPH1001 (ROM sha256 71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3). Entries tools/bios_seed_corpus.py cannot prove: manual = recorded rationale (dispatch-miss history), ghidra_legacy = Ghidra function start with no tool proof. Split from the pre-T13 phase2_ghidra_seeds.json (1102 entries) on 2026-09-17.",
   "seeds": [
-    {
-      "address": "0xBFC00000",
-      "label": "reset_vector",
-      "rationale": "MIPS R3000A reset vector",
-      "provenance": "vector"
-    },
-    {
-      "address": "0xBFC00180",
-      "label": "general_exception_bev1",
-      "rationale": "BEV=1 general exception vector",
-      "provenance": "vector"
-    },
-    {
-      "address": "0xBFC00420",
-      "label": "fn_BFC00420",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC00460",
-      "label": "post_return_BFC00460",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
     {
       "address": "0xBFC00678",
       "label": "ghidra_BFC00678",
@@ -46,376 +21,124 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC00778",
-      "label": "post_return_BFC00778",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC00810",
-      "label": "fn_BFC00810",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC008A0",
-      "label": "fn_BFC008A0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC00944",
-      "label": "fn_BFC00944",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC00B7C",
-      "label": "fn_BFC00B7C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC00DA0",
-      "label": "fn_BFC00DA0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC018E0",
-      "label": "ktab_BFC018E0",
-      "rationale": "kernel call table A0:3F target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC01920",
-      "label": "ktab_BFC01920",
-      "rationale": "kernel call table A0:44 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC0193C",
       "label": "cache_flush_continuation",
       "rationale": "Jump target of cache-flush jr k0 at BFC01938",
       "provenance": "manual"
     },
     {
-      "address": "0xBFC01A60",
-      "label": "fn_BFC01A60",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC01A90",
-      "label": "ktab_BFC01A90",
-      "rationale": "kernel call table A0:27 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC01ACC",
-      "label": "ktab_BFC01ACC",
-      "rationale": "kernel call table A0:28 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC01B08",
       "label": "seed_BFC01B08",
-      "rationale": "kernel call table A0:29 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC01B80",
-      "label": "fn_BFC01B80",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC01C8C",
-      "label": "fn_BFC01C8C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
+      "rationale": "kernel jump-table target: A0:29 (bcmp) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC01E24",
       "label": "SysInitMemory",
-      "rationale": "kernel call table A0:39 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC01E5C",
-      "label": "ktab_BFC01E5C",
-      "rationale": "kernel call table A0:33 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC020F0",
-      "label": "ktab_BFC020F0",
-      "rationale": "kernel call table A0:34 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02104",
-      "label": "ktab_BFC02104",
-      "rationale": "kernel call table A0:38 target",
-      "provenance": "kernel_table"
+      "rationale": "Dispatch miss during boot â€” kernel init function",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC021A0",
       "label": "seed_BFC021A0",
-      "rationale": "kernel call table A0:37 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:37 (rand-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC02200",
       "label": "jal_BFC02200",
-      "rationale": "kernel call table A0:2F target",
-      "provenance": "kernel_table"
+      "rationale": "JAL target from code region",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC02230",
       "label": "seed_BFC02230",
-      "rationale": "kernel call table A0:30 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02240",
-      "label": "ktab_BFC02240",
-      "rationale": "kernel call table A0:13 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0227C",
-      "label": "ktab_BFC0227C",
-      "rationale": "kernel call table A0:14 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC022C0",
-      "label": "ktab_BFC022C0",
-      "rationale": "kernel call table A0:0A target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02324",
-      "label": "ktab_BFC02324",
-      "rationale": "kernel call table A0:32 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02590",
-      "label": "ktab_BFC02590",
-      "rationale": "kernel call table A0:0B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC025B0",
-      "label": "ktab_BFC025B0",
-      "rationale": "kernel call table A0:0C target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02738",
-      "label": "ktab_BFC02738",
-      "rationale": "kernel call table A0:0D target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:30 (rand-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC02918",
       "label": "card_copy_dispatch_miss_2026_05_05",
-      "rationale": "kernel call table A0:0E target",
-      "provenance": "kernel_table"
+      "rationale": "Runtime dispatch miss: 8 hits during YES/NO COPY confirm execution. BANDAID per user permission.",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC02934",
       "label": "seed_BFC02934",
-      "rationale": "kernel call table A0:0F target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02950",
-      "label": "ktab_BFC02950",
-      "rationale": "kernel call table A0:10 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02AF0",
-      "label": "ktab_BFC02AF0",
-      "rationale": "kernel call table A0:11 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02B10",
-      "label": "ktab_BFC02B10",
-      "rationale": "kernel call table A0:12 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02B50",
-      "label": "ktab_BFC02B50",
-      "rationale": "kernel call table A0:2A target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:0F (unresolved (see psx-spx A0 table)) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC02B8C",
       "label": "seed_BFC02B8C",
-      "rationale": "kernel call table A0:2B target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:2B (memset) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC02BC8",
       "label": "seed_BFC02BC8",
-      "rationale": "kernel call table A0:2C target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:2C (memmove) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC02C50",
       "label": "seed_BFC02C50",
-      "rationale": "kernel call table A0:2D target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02CC0",
-      "label": "ktab_BFC02CC0",
-      "rationale": "kernel call table A0:2E target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02D20",
-      "label": "ktab_BFC02D20",
-      "rationale": "kernel call table A0:35 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02DAC",
-      "label": "ktab_BFC02DAC",
-      "rationale": "kernel call table A0:36 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02EA0",
-      "label": "ktab_BFC02EA0",
-      "rationale": "kernel call table A0:25 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02EDC",
-      "label": "ktab_BFC02EDC",
-      "rationale": "kernel call table A0:26 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC02F20",
-      "label": "fn_BFC02F20",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC03098",
-      "label": "ktab_BFC03098",
-      "rationale": "kernel call table A0:31 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03104",
-      "label": "fn_BFC03104",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC03190",
-      "label": "ktab_BFC03190",
-      "rationale": "kernel call table A0:15 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:2D (memcmp) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC03200",
       "label": "seed_BFC03200",
-      "rationale": "kernel call table A0:16 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03288",
-      "label": "ktab_BFC03288",
-      "rationale": "kernel call table A0:17 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03310",
-      "label": "ktab_BFC03310",
-      "rationale": "kernel call table A0:18 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC033C8",
-      "label": "ktab_BFC033C8",
-      "rationale": "kernel call table A0:19 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03418",
-      "label": "ktab_BFC03418",
-      "rationale": "kernel call table A0:1A target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03494",
-      "label": "ktab_BFC03494",
-      "rationale": "kernel call table A0:1B target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:16 (strncat) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC034D0",
       "label": "seed_BFC034D0",
-      "rationale": "kernel call table A0:1C target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:1C (atob helper) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC03514",
       "label": "seed_BFC03514",
-      "rationale": "kernel call table A0:1D target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:1D (strtol-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0357C",
       "label": "seed_BFC0357C",
-      "rationale": "kernel call table A0:1E target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:1E (strtol-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC035C0",
       "label": "seed_BFC035C0",
-      "rationale": "kernel call table A0:1F target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:1F (abs) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC03628",
       "label": "seed_BFC03628",
-      "rationale": "kernel call table A0:20 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:20 (labs) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC03694",
       "label": "seed_BFC03694",
-      "rationale": "kernel call table A0:21 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:21 (atoi) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC036FC",
       "label": "seed_BFC036FC",
-      "rationale": "kernel call table A0:22 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03764",
-      "label": "ktab_BFC03764",
-      "rationale": "kernel call table A0:23 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:22 (atol) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC03894",
       "label": "seed_BFC03894",
-      "rationale": "kernel call table A0:24 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:24 (strtol-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC03910",
@@ -424,550 +147,58 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC03950",
-      "label": "post_return_BFC03950",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC03958",
-      "label": "post_return_BFC03958",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC03968",
-      "label": "fn_BFC03968",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC03978",
-      "label": "fn_BFC03978",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC03988",
-      "label": "post_return_BFC03988",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC03990",
-      "label": "fn_BFC03990",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC039B0",
-      "label": "ktab_BFC039B0",
-      "rationale": "kernel call table A0:41 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03A18",
-      "label": "ktab_BFC03A18",
-      "rationale": "kernel call table A0:42 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03AA4",
-      "label": "ktab_BFC03AA4",
-      "rationale": "kernel call table A0:51 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03C90",
-      "label": "fn_BFC03C90",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC03CF0",
-      "label": "ktab_BFC03CF0",
-      "rationale": "kernel call table A0:43 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03D80",
-      "label": "ktab_BFC03D80",
-      "rationale": "kernel call table A0:46 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03EA0",
-      "label": "ktab_BFC03EA0",
-      "rationale": "kernel call table A0:47 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03F8C",
-      "label": "ktab_BFC03F8C",
-      "rationale": "kernel call table A0:48 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC03F9C",
-      "label": "post_return_BFC03F9C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC03FAC",
-      "label": "ktab_BFC03FAC",
-      "rationale": "kernel call table A0:49 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC03FC0",
       "label": "jal_BFC03FC0",
       "rationale": "JAL target from code region",
       "provenance": "manual"
     },
     {
-      "address": "0xBFC03FE0",
-      "label": "ktab_BFC03FE0",
-      "rationale": "kernel call table A0:4A target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0403C",
-      "label": "ktab_BFC0403C",
-      "rationale": "kernel call table A0:4B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC040EC",
-      "label": "ktab_BFC040EC",
-      "rationale": "kernel call table A0:4C target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC04120",
       "label": "seed_BFC04120",
-      "rationale": "kernel call table A0:4D target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC04138",
-      "label": "ktab_BFC04138",
-      "rationale": "kernel call table A0:4E target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC04260",
-      "label": "fn_BFC04260",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC042A0",
-      "label": "ktab_BFC042A0",
-      "rationale": "kernel call table A0:45 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC042D0",
-      "label": "fn_BFC042D0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC04610",
-      "label": "fn_BFC04610",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC04678",
-      "label": "fn_BFC04678",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0472C",
-      "label": "fn_BFC0472C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
+      "rationale": "kernel jump-table target: A0:4D (ChangeClearRCnt-adjacent) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC04850",
       "label": "dmiss_BFC04850",
-      "rationale": "kernel call table A0:A2 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC048D0",
-      "label": "ktab_BFC048D0",
-      "rationale": "kernel call table A0:A3 target",
-      "provenance": "kernel_table"
+      "rationale": "Tomba boot dispatch miss after seeding 0xBFC04910. Verified in Ghidra/runtime disassembly as a standalone BIOS callback-list init routine between 0xBFC0472C and 0xBFC048D0, with return at 0xBFC048C8 and table data reference from 0xBFC04588.",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC04910",
       "label": "dmiss_BFC04910",
-      "rationale": "kernel call table A0:95 target",
-      "provenance": "kernel_table"
+      "rationale": "Tomba boot dispatch miss after licensed PlayStation screen. Verified in Ghidra/runtime disassembly as a standalone BIOS init routine between 0xBFC048D0 and 0xBFC04ABC, with return at 0xBFC04A98 and table data reference from 0xBFC04554.",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC04AA0",
       "label": "seed_BFC04AA0",
-      "rationale": "kernel call table A0:94 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC04ABC",
-      "label": "ktab_BFC04ABC",
-      "rationale": "kernel call table A0:78 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC04BC4",
-      "label": "ktab_BFC04BC4",
-      "rationale": "kernel call table A0:7C target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC04C38",
-      "label": "ktab_BFC04C38",
-      "rationale": "kernel call table A0:7E target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC04D50",
-      "label": "ktab_BFC04D50",
-      "rationale": "kernel call table A0:81 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC04DEC",
-      "label": "ktab_BFC04DEC",
-      "rationale": "kernel call table A0:90 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC04FBC",
-      "label": "ktab_BFC04FBC",
-      "rationale": "kernel call table A0:91 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0506C",
-      "label": "ktab_BFC0506C",
-      "rationale": "kernel call table A0:92 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC050A4",
-      "label": "ktab_BFC050A4",
-      "rationale": "kernel call table A0:93 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:94 (card-adjacent service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC050DC",
       "label": "seed_BFC050DC",
-      "rationale": "kernel call table A0:9E target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC050FC",
-      "label": "fn_BFC050FC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05120",
-      "label": "fn_BFC05120",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05194",
-      "label": "fn_BFC05194",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05558",
-      "label": "fn_BFC05558",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC057B0",
-      "label": "fn_BFC057B0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0593C",
-      "label": "fn_BFC0593C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05A44",
-      "label": "fn_BFC05A44",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05C18",
-      "label": "fn_BFC05C18",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05C50",
-      "label": "fn_BFC05C50",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05D04",
-      "label": "fn_BFC05D04",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05DB0",
-      "label": "fn_BFC05DB0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05DF4",
-      "label": "fn_BFC05DF4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05E58",
-      "label": "fn_BFC05E58",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC05F08",
-      "label": "fn_BFC05F08",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06010",
-      "label": "fn_BFC06010",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06038",
-      "label": "fn_BFC06038",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC060DC",
-      "label": "fn_BFC060DC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0615C",
-      "label": "fn_BFC0615C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC061A0",
-      "label": "fn_BFC061A0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC061D4",
-      "label": "fn_BFC061D4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06218",
-      "label": "fn_BFC06218",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06288",
-      "label": "fn_BFC06288",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC062CC",
-      "label": "fn_BFC062CC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC063CC",
-      "label": "fn_BFC063CC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC064D8",
-      "label": "fn_BFC064D8",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06540",
-      "label": "post_return_BFC06540",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC06548",
-      "label": "fn_BFC06548",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC065C0",
-      "label": "fn_BFC065C0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0661C",
-      "label": "fn_BFC0661C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06680",
-      "label": "ktab_BFC06680",
-      "rationale": "kernel call table A0:9F target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC06700",
-      "label": "ktab_BFC06700",
-      "rationale": "kernel call table A0:B2 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:9E (kernel service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC06728",
       "label": "seed_BFC06728",
-      "rationale": "kernel call table A0:9D target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:9D (kernel service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC06750",
       "label": "seed_BFC06750",
-      "rationale": "kernel call table A0:9C target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC06784",
-      "label": "fn_BFC06784",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC067E8",
-      "label": "fn_BFC067E8",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06CA4",
-      "label": "ktab_BFC06CA4",
-      "rationale": "kernel call table A0:A0 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC06EC4",
-      "label": "fn_BFC06EC4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06F28",
-      "label": "fn_BFC06F28",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06FA4",
-      "label": "fn_BFC06FA4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC06FD4",
-      "label": "post_return_BFC06FD4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
+      "rationale": "kernel jump-table target: A0:9C (kernel service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC06FDC",
       "label": "indirect_BFC06FDC",
-      "rationale": "kernel call table A0:00 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC06FE4",
-      "label": "post_return_BFC06FE4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC06FF0",
-      "label": "fn_BFC06FF0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0703C",
-      "label": "fn_BFC0703C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC070AC",
-      "label": "fn_BFC070AC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0711C",
-      "label": "fn_BFC0711C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC07148",
-      "label": "fn_BFC07148",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC071A0",
-      "label": "fn_BFC071A0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC072B8",
-      "label": "ktab_BFC072B8",
-      "rationale": "kernel call table A0:56 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC07330",
-      "label": "fn_BFC07330",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
+      "rationale": "Reached via indirect dispatch during boot",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC07370",
@@ -976,100 +207,10 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC073A0",
-      "label": "ktab_BFC073A0",
-      "rationale": "kernel call table A0:54 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC07410",
-      "label": "fn_BFC07410",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC07664",
-      "label": "fn_BFC07664",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC07700",
-      "label": "fn_BFC07700",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC078A4",
-      "label": "ktab_BFC078A4",
-      "rationale": "kernel call table A0:5F target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC079F8",
       "label": "dmiss_BFC079F8",
-      "rationale": "kernel call table A0:61 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC07A04",
-      "label": "ktab_BFC07A04",
-      "rationale": "kernel call table A0:60 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC07B88",
-      "label": "ktab_BFC07B88",
-      "rationale": "kernel call table A0:A4 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC07C1C",
-      "label": "ktab_BFC07C1C",
-      "rationale": "kernel call table A0:A5 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC07F28",
-      "label": "ktab_BFC07F28",
-      "rationale": "kernel call table A0:A6 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC08020",
-      "label": "fn_BFC08020",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC08098",
-      "label": "ktab_BFC08098",
-      "rationale": "kernel call table A0:63 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC081FC",
-      "label": "ktab_BFC081FC",
-      "rationale": "kernel call table A0:62 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC08354",
-      "label": "ktab_BFC08354",
-      "rationale": "kernel call table A0:64 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC083CC",
-      "label": "fn_BFC083CC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC085B0",
-      "label": "ktab_BFC085B0",
-      "rationale": "kernel call table A0:96 target",
-      "provenance": "kernel_table"
+      "rationale": "Tomba boot dispatch miss after game callback coverage fixes. Verified in Ghidra as a tiny BIOS table leaf routine (sw a0,0(sp); jr ra; clear v0) referenced by data at 0xBFC04484 and 0xBFC0E30C.",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC085D4",
@@ -1078,112 +219,10 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC086B0",
-      "label": "ktab_BFC086B0",
-      "rationale": "kernel call table A0:99 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC086E0",
-      "label": "post_return_BFC086E0",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC086EC",
       "label": "ghidra_BFC086EC",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC08720",
-      "label": "fn_BFC08720",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC087C4",
-      "label": "fn_BFC087C4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0884C",
-      "label": "fn_BFC0884C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC088A0",
-      "label": "fn_BFC088A0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC08954",
-      "label": "post_return_BFC08954",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC0895C",
-      "label": "fn_BFC0895C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC089C0",
-      "label": "fn_BFC089C0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC08B3C",
-      "label": "fn_BFC08B3C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC08FFC",
-      "label": "fn_BFC08FFC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC09144",
-      "label": "fn_BFC09144",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC091CC",
-      "label": "fn_BFC091CC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC092EC",
-      "label": "fn_BFC092EC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC09540",
-      "label": "fn_BFC09540",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC09598",
-      "label": "fn_BFC09598",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC09720",
-      "label": "fn_BFC09720",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
     },
     {
       "address": "0xBFC09890",
@@ -1198,142 +237,16 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC098A8",
-      "label": "fn_BFC098A8",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC09914",
-      "label": "ktab_BFC09914",
-      "rationale": "kernel call table A0:55 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC0994C",
       "label": "ghidra_BFC0994C",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC0996C",
-      "label": "ktab_BFC0996C",
-      "rationale": "kernel call table A0:65 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC09CDC",
-      "label": "ktab_BFC09CDC",
-      "rationale": "kernel call table A0:68 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC09D3C",
-      "label": "ktab_BFC09D3C",
-      "rationale": "kernel call table A0:66 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0A080",
-      "label": "ktab_BFC0A080",
-      "rationale": "kernel call table A0:67 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0A3D4",
-      "label": "fn_BFC0A3D4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0A43C",
-      "label": "fn_BFC0A43C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0A4B4",
-      "label": "ktab_BFC0A4B4",
-      "rationale": "kernel call table A0:6A target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0A5E4",
-      "label": "ktab_BFC0A5E4",
-      "rationale": "kernel call table A0:69 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0A754",
-      "label": "fn_BFC0A754",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0A8BC",
-      "label": "ktab_BFC0A8BC",
-      "rationale": "kernel call table A0:6B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0AB60",
-      "label": "ktab_BFC0AB60",
-      "rationale": "kernel call table A0:6E target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0AD08",
-      "label": "ktab_BFC0AD08",
-      "rationale": "kernel call table A0:6C target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC0B0C4",
       "label": "seed_BFC0B0C4",
-      "rationale": "kernel call table A0:6F target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0B0D0",
-      "label": "ktab_BFC0B0D0",
-      "rationale": "kernel call table A0:6D target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0B170",
-      "label": "fn_BFC0B170",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0B394",
-      "label": "fn_BFC0B394",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0B54C",
-      "label": "fn_BFC0B54C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0B5A0",
-      "label": "fn_BFC0B5A0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0B5F4",
-      "label": "fn_BFC0B5F4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0B648",
-      "label": "fn_BFC0B648",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
+      "rationale": "kernel jump-table target: A0:6F (card/dev service) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0BA8C",
@@ -1342,76 +255,10 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC0BFF0",
-      "label": "fn_BFC0BFF0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0C048",
-      "label": "ktab_BFC0C048",
-      "rationale": "kernel call table A0:AF target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C0DC",
-      "label": "ktab_BFC0C0DC",
-      "rationale": "kernel call table A0:AB target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C140",
-      "label": "ktab_BFC0C140",
-      "rationale": "kernel call table A0:AC target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC0C1DC",
       "label": "bios_C1DC",
-      "rationale": "kernel call table A0:AD target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C1F4",
-      "label": "post_return_BFC0C1F4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC0C1FC",
-      "label": "ktab_BFC0C1FC",
-      "rationale": "kernel call table A0:97 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C220",
-      "label": "ktab_BFC0C220",
-      "rationale": "kernel call table A0:A7 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C248",
-      "label": "ktab_BFC0C248",
-      "rationale": "kernel call table A0:A8 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C270",
-      "label": "ktab_BFC0C270",
-      "rationale": "kernel call table A0:A9 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C298",
-      "label": "ktab_BFC0C298",
-      "rationale": "kernel call table A0:AA target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C2C0",
-      "label": "ktab_BFC0C2C0",
-      "rationale": "kernel call table A0:AE target",
-      "provenance": "kernel_table"
+      "rationale": "BIOS boot code function. Dispatch miss from shell input path.",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0C2E8",
@@ -1424,18 +271,6 @@
       "label": "ghidra_BFC0C318",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC0C354",
-      "label": "fn_BFC0C354",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0C3AC",
-      "label": "post_return_BFC0C3AC",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC0C580",
@@ -1456,292 +291,52 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC0C890",
-      "label": "ktab_BFC0C890",
-      "rationale": "kernel call table A0:5B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0C9CC",
-      "label": "ktab_BFC0C9CC",
-      "rationale": "kernel call table A0:5C target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0CAB4",
-      "label": "ktab_BFC0CAB4",
-      "rationale": "kernel call table A0:5D target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0CC68",
-      "label": "ktab_BFC0CC68",
-      "rationale": "kernel call table A0:5E target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0CD80",
-      "label": "fn_BFC0CD80",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0CF84",
-      "label": "fn_BFC0CF84",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D0CC",
-      "label": "fn_BFC0D0CC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D11C",
-      "label": "fn_BFC0D11C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D34C",
-      "label": "fn_BFC0D34C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D4CC",
-      "label": "ktab_BFC0D4CC",
-      "rationale": "kernel call table A0:98 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC0D4F0",
       "label": "seed_BFC0D4F0",
-      "rationale": "kernel call table A0:B4 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0D570",
-      "label": "fn_BFC0D570",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D600",
-      "label": "fn_BFC0D600",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D640",
-      "label": "fn_BFC0D640",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D664",
-      "label": "fn_BFC0D664",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D688",
-      "label": "fn_BFC0D688",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D72C",
-      "label": "fn_BFC0D72C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D7BC",
-      "label": "fn_BFC0D7BC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D850",
-      "label": "fn_BFC0D850",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D880",
-      "label": "fn_BFC0D880",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D890",
-      "label": "fn_BFC0D890",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D8A0",
-      "label": "fn_BFC0D8A0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D8B0",
-      "label": "fn_BFC0D8B0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D8C0",
-      "label": "fn_BFC0D8C0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D8D0",
-      "label": "ktab_BFC0D8D0",
-      "rationale": "kernel call table A0:3A target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:B4 (GetSystemInfo-family) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0D8E0",
       "label": "seed_BFC0D8E0",
-      "rationale": "kernel call table A0:40 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:40 (SystemErrorUnresolvedException) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0D8F0",
       "label": "seed_BFC0D8F0",
-      "rationale": "kernel call table A0:4F target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:4F (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0D900",
       "label": "seed_BFC0D900",
-      "rationale": "kernel call table A0:50 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:50 (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0D910",
       "label": "seed_BFC0D910",
-      "rationale": "kernel call table A0:52 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:52 (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0D920",
       "label": "seed_BFC0D920",
-      "rationale": "kernel call table A0:53 target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:53 (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0D930",
       "label": "seed_BFC0D930",
-      "rationale": "kernel call table A0:9A target",
-      "provenance": "kernel_table"
+      "rationale": "kernel jump-table target: A0:9A (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0D940",
       "label": "seed_BFC0D940",
-      "rationale": "kernel call table A0:9B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0D950",
-      "label": "ktab_BFC0D950",
-      "rationale": "kernel call table A0:A1 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC0D960",
-      "label": "fn_BFC0D960",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D970",
-      "label": "fn_BFC0D970",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D980",
-      "label": "fn_BFC0D980",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D990",
-      "label": "fn_BFC0D990",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D9A0",
-      "label": "fn_BFC0D9A0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D9B0",
-      "label": "fn_BFC0D9B0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D9C0",
-      "label": "fn_BFC0D9C0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D9D0",
-      "label": "fn_BFC0D9D0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D9E0",
-      "label": "fn_BFC0D9E0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0D9F0",
-      "label": "fn_BFC0D9F0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DA00",
-      "label": "fn_BFC0DA00",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DA10",
-      "label": "fn_BFC0DA10",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DA20",
-      "label": "fn_BFC0DA20",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DA30",
-      "label": "fn_BFC0DA30",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DA40",
-      "label": "fn_BFC0DA40",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
+      "rationale": "kernel jump-table target: A0:9B (stub/ret) — ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02).",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC0DA50",
@@ -1798,142 +393,10 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC0DAE0",
-      "label": "fn_BFC0DAE0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DAF0",
-      "label": "fn_BFC0DAF0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB00",
-      "label": "fn_BFC0DB00",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB10",
-      "label": "fn_BFC0DB10",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB20",
-      "label": "fn_BFC0DB20",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB30",
-      "label": "fn_BFC0DB30",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB40",
-      "label": "fn_BFC0DB40",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB50",
-      "label": "fn_BFC0DB50",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB60",
-      "label": "fn_BFC0DB60",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB70",
-      "label": "fn_BFC0DB70",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB80",
-      "label": "fn_BFC0DB80",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DB90",
-      "label": "fn_BFC0DB90",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
       "address": "0xBFC0DBA0",
       "label": "ghidra_BFC0DBA0",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC0DBB0",
-      "label": "fn_BFC0DBB0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DBC0",
-      "label": "fn_BFC0DBC0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DBD0",
-      "label": "fn_BFC0DBD0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DBE0",
-      "label": "fn_BFC0DBE0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DBF0",
-      "label": "fn_BFC0DBF0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DC00",
-      "label": "fn_BFC0DC00",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DC10",
-      "label": "fn_BFC0DC10",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DC20",
-      "label": "fn_BFC0DC20",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DC30",
-      "label": "fn_BFC0DC30",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC0DC40",
-      "label": "fn_BFC0DC40",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
     },
     {
       "address": "0xBFC0DC50",
@@ -1944,8 +407,8 @@
     {
       "address": "0xBFC10000",
       "label": "kernel_trampoline_0",
-      "rationale": "kernel call table C0:09 target",
-      "provenance": "kernel_table"
+      "rationale": "Trampoline to FileOpen (0x598)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10010",
@@ -1968,8 +431,8 @@
     {
       "address": "0xBFC10040",
       "label": "kernel_memcpy",
-      "rationale": "kernel call table C0:1C target",
-      "provenance": "kernel_table"
+      "rationale": "ROM-to-RAM and RAM clear routine",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10098",
@@ -2022,14 +485,14 @@
     {
       "address": "0xBFC1015C",
       "label": "kernel_get_c0_table",
-      "rationale": "kernel call table B0:56 target",
-      "provenance": "kernel_table"
+      "rationale": "Returns C0 table pointer",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10168",
       "label": "kernel_get_b0_table",
-      "rationale": "kernel call table B0:57 target",
-      "provenance": "kernel_table"
+      "rationale": "Returns B0 table pointer",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10174",
@@ -2040,8 +503,8 @@
     {
       "address": "0xBFC10780",
       "label": "rmiss_BFC10780",
-      "rationale": "kernel call table C0:06 target",
-      "provenance": "kernel_table"
+      "rationale": "runtime dispatch miss",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC109A0",
@@ -2052,32 +515,26 @@
     {
       "address": "0xBFC109B0",
       "label": "kernel_BFC109B0",
-      "rationale": "kernel call table C0:07 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10A20",
       "label": "kernel_BFC10A20",
-      "rationale": "kernel call table B0:19 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10A2C",
       "label": "kernel_BFC10A2C",
-      "rationale": "kernel call table B0:18 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10A40",
       "label": "kernel_BFC10A40",
-      "rationale": "kernel call table B0:17 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC10B18",
-      "label": "post_return_BFC10B18",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10B30",
@@ -2106,50 +563,38 @@
     {
       "address": "0xBFC10C3C",
       "label": "kernel_BFC10C3C",
-      "rationale": "kernel call table C0:08 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC10C74",
-      "label": "ktab_BFC10C74",
-      "rationale": "kernel call table B0:00 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10F08",
       "label": "kernel_BFC10F08",
-      "rationale": "kernel call table B0:01 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10F20",
       "label": "kernel_BFC10F20",
-      "rationale": "kernel call table C0:02 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC10F44",
       "label": "kernel_BFC10F44",
-      "rationale": "kernel call table C0:03 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC11008",
-      "label": "ktab_BFC11008",
-      "rationale": "kernel call table C0:00 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC110D8",
       "label": "kernel_BFC110D8",
-      "rationale": "kernel call table C0:0A target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC110F8",
       "label": "kernel_BFC110F8",
-      "rationale": "kernel call table B0:02 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11114",
@@ -2160,8 +605,8 @@
     {
       "address": "0xBFC111AC",
       "label": "kernel_BFC111AC",
-      "rationale": "kernel call table B0:03 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC111C4",
@@ -2172,8 +617,8 @@
     {
       "address": "0xBFC111E4",
       "label": "kernel_BFC111E4",
-      "rationale": "kernel call table B0:04 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC1121C",
@@ -2184,14 +629,14 @@
     {
       "address": "0xBFC11228",
       "label": "kernel_BFC11228",
-      "rationale": "kernel call table B0:05 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC1125C",
       "label": "kernel_BFC1125C",
-      "rationale": "kernel call table B0:06 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11274",
@@ -2290,28 +735,22 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC11620",
-      "label": "ktab_BFC11620",
-      "rationale": "kernel call table C0:01 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC11644",
       "label": "kernel_BFC11644",
-      "rationale": "kernel call table B0:07 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC1175C",
       "label": "kernel_BFC1175C",
-      "rationale": "kernel call table B0:20 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11800",
       "label": "kernel_BFC11800",
-      "rationale": "kernel call table C0:04 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11840",
@@ -2326,22 +765,16 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC1188C",
-      "label": "ktab_BFC1188C",
-      "rationale": "kernel call table B0:08 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC1191C",
       "label": "kernel_BFC1191C",
-      "rationale": "kernel call table B0:09 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11944",
       "label": "kernel_BFC11944",
-      "rationale": "kernel call table B0:0A target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11980",
@@ -2358,8 +791,8 @@
     {
       "address": "0xBFC119C8",
       "label": "kernel_BFC119C8",
-      "rationale": "kernel call table B0:0B target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11A04",
@@ -2370,20 +803,20 @@
     {
       "address": "0xBFC11A10",
       "label": "kernel_BFC11A10",
-      "rationale": "kernel call table B0:0C target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11A4C",
       "label": "kernel_BFC11A4C",
-      "rationale": "kernel call table B0:0D target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11A88",
       "label": "kernel_BFC11A88",
-      "rationale": "kernel call table C0:05 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11AFC",
@@ -2392,22 +825,16 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC11B18",
-      "label": "ktab_BFC11B18",
-      "rationale": "kernel call table B0:0E target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC11BA8",
       "label": "kernel_BFC11BA8",
-      "rationale": "kernel call table B0:0F target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11BD4",
       "label": "kernel_BFC11BD4",
-      "rationale": "kernel call table B0:10 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC11C14",
@@ -2448,14 +875,14 @@
     {
       "address": "0xBFC12224",
       "label": "kernel_BFC12224",
-      "rationale": "kernel call table C0:0C target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC1228C",
       "label": "kernel_BFC1228C",
-      "rationale": "kernel call table C0:0D target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC122A0",
@@ -2464,88 +891,10 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC122C0",
-      "label": "ktab_BFC122C0",
-      "rationale": "kernel call table C0:12 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12370",
-      "label": "ktab_BFC12370",
-      "rationale": "kernel call table C0:1B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12408",
-      "label": "ktab_BFC12408",
-      "rationale": "kernel call table C0:13 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12458",
-      "label": "ktab_BFC12458",
-      "rationale": "kernel call table B0:32 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12564",
-      "label": "ktab_BFC12564",
-      "rationale": "kernel call table B0:33 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12628",
-      "label": "ktab_BFC12628",
-      "rationale": "kernel call table B0:34 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12794",
-      "label": "ktab_BFC12794",
-      "rationale": "kernel call table B0:35 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12900",
-      "label": "ktab_BFC12900",
-      "rationale": "kernel call table B0:36 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12998",
-      "label": "ktab_BFC12998",
-      "rationale": "kernel call table B0:55 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC129EC",
       "label": "kernel_BFC129EC",
-      "rationale": "kernel call table B0:54 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC129FC",
-      "label": "ktab_BFC129FC",
-      "rationale": "kernel call table B0:37 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12AC8",
-      "label": "ktab_BFC12AC8",
-      "rationale": "kernel call table C0:19 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12B00",
-      "label": "ktab_BFC12B00",
-      "rationale": "kernel call table B0:38 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12B60",
-      "label": "fn_BFC12B60",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC12BC8",
@@ -2566,40 +915,16 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC12C08",
-      "label": "fn_BFC12C08",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC12CE8",
-      "label": "fn_BFC12CE8",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
       "address": "0xBFC12EA4",
       "label": "kernel_BFC12EA4",
       "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
       "provenance": "manual"
     },
     {
-      "address": "0xBFC12F6C",
-      "label": "ktab_BFC12F6C",
-      "rationale": "kernel call table B0:39 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC12FB4",
-      "label": "ktab_BFC12FB4",
-      "rationale": "kernel call table C0:17 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC1302C",
       "label": "kernel_BFC1302C",
-      "rationale": "kernel call table C0:18 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC13070",
@@ -2610,62 +935,20 @@
     {
       "address": "0xBFC130A4",
       "label": "kernel_BFC130A4",
-      "rationale": "kernel call table C0:0E target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC130AC",
-      "label": "ktab_BFC130AC",
-      "rationale": "kernel call table B0:40 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13178",
-      "label": "ktab_BFC13178",
-      "rationale": "kernel call table B0:59 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13244",
-      "label": "ktab_BFC13244",
-      "rationale": "kernel call table B0:45 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13310",
-      "label": "ktab_BFC13310",
-      "rationale": "kernel call table B0:46 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC133D8",
-      "label": "ktab_BFC133D8",
-      "rationale": "kernel call table B0:41 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC134A4",
-      "label": "ktab_BFC134A4",
-      "rationale": "kernel call table B0:42 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC13570",
       "label": "kernel_BFC13570",
-      "rationale": "kernel call table B0:43 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC135AC",
-      "label": "ktab_BFC135AC",
-      "rationale": "kernel call table B0:44 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC1372C",
       "label": "kernel_BFC1372C",
-      "rationale": "kernel call table B0:47 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC1376C",
@@ -2692,100 +975,34 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC137E0",
-      "label": "ktab_BFC137E0",
-      "rationale": "kernel call table B0:48 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC138AC",
       "label": "kernel_BFC138AC",
-      "rationale": "kernel call table B0:49 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC1395C",
       "label": "kernel_BFC1395C",
-      "rationale": "kernel call table C0:1A target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC13968",
       "label": "kernel_BFC13968",
-      "rationale": "kernel call table C0:1D target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13980",
-      "label": "ktab_BFC13980",
-      "rationale": "kernel call table C0:16 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC13A04",
       "label": "kernel_BFC13A04",
-      "rationale": "kernel call table C0:15 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13AF0",
-      "label": "ktab_BFC13AF0",
-      "rationale": "kernel call table B0:3C target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13B24",
-      "label": "ktab_BFC13B24",
-      "rationale": "kernel call table B0:3A target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13B6C",
-      "label": "ktab_BFC13B6C",
-      "rationale": "kernel call table B0:3D target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13C34",
-      "label": "ktab_BFC13C34",
-      "rationale": "kernel call table B0:3B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13C64",
-      "label": "ktab_BFC13C64",
-      "rationale": "kernel call table B0:3E target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13E04",
-      "label": "ktab_BFC13E04",
-      "rationale": "kernel call table B0:3F target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13E60",
-      "label": "fn_BFC13E60",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC13E90",
-      "label": "post_return_BFC13E90",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC13ED0",
       "label": "kernel_BFC13ED0",
-      "rationale": "kernel call table B0:5B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC13EE8",
-      "label": "fn_BFC13EE8",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC13F5C",
@@ -2824,28 +1041,10 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC145C8",
-      "label": "ktab_BFC145C8",
-      "rationale": "kernel call table B0:12 target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC14670",
       "label": "kernel_BFC14670",
       "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
       "provenance": "manual"
-    },
-    {
-      "address": "0xBFC14690",
-      "label": "ktab_BFC14690",
-      "rationale": "kernel call table B0:13 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC14710",
-      "label": "ktab_BFC14710",
-      "rationale": "kernel call table B0:14 target",
-      "provenance": "kernel_table"
     },
     {
       "address": "0xBFC14754",
@@ -2860,22 +1059,10 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC14770",
-      "label": "ktab_BFC14770",
-      "rationale": "kernel call table B0:4B target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC147F4",
-      "label": "ktab_BFC147F4",
-      "rationale": "kernel call table B0:4C target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC1483C",
       "label": "kernel_BFC1483C",
-      "rationale": "kernel call table B0:50 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC1484C",
@@ -3100,12 +1287,6 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC158A8",
-      "label": "ktab_BFC158A8",
-      "rationale": "kernel call table B0:4A target",
-      "provenance": "kernel_table"
-    },
-    {
       "address": "0xBFC158D0",
       "label": "dmiss_BFC158D0",
       "rationale": "dispatch miss (Beetle wtrace, docs/CASE_A_AOT_GAP.md): chain init slot-0 BUSY writer at RAM 0x5DD0; alias RAM=ROM-0xBFC10000+0x500. Inside FUN_bfc158a8 body.",
@@ -3120,14 +1301,14 @@
     {
       "address": "0xBFC15930",
       "label": "kernel_BFC15930",
-      "rationale": "kernel call table B0:58 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC15950",
       "label": "kernel_BFC15950",
-      "rationale": "kernel call table B0:4F target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC15998",
@@ -3144,8 +1325,8 @@
     {
       "address": "0xBFC15A04",
       "label": "kernel_BFC15A04",
-      "rationale": "kernel call table B0:4E target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC15A4C",
@@ -3162,8 +1343,8 @@
     {
       "address": "0xBFC15AB8",
       "label": "kernel_BFC15AB8",
-      "rationale": "kernel call table B0:4D target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC15AF0",
@@ -3174,26 +1355,20 @@
     {
       "address": "0xBFC15B5C",
       "label": "kernel_BFC15B5C",
-      "rationale": "kernel call table B0:5C target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC15B70",
       "label": "kernel_BFC15B70",
-      "rationale": "kernel call table B0:5D target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC15B9C",
-      "label": "ktab_BFC15B9C",
-      "rationale": "kernel call table B0:15 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC15CC4",
       "label": "kernel_BFC15CC4",
-      "rationale": "kernel call table B0:16 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC15E90",
@@ -3226,102 +1401,6 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC160E0",
-      "label": "ktab_BFC160E0",
-      "rationale": "kernel call table B0:51 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC16170",
-      "label": "ktab_BFC16170",
-      "rationale": "kernel call table B0:53 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC16550",
-      "label": "ktab_BFC16550",
-      "rationale": "kernel call table B0:52 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC16560",
-      "label": "ktab_BFC16560",
-      "rationale": "kernel call table B0:5A target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC16570",
-      "label": "fn_BFC16570",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC16590",
-      "label": "fn_BFC16590",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC165A0",
-      "label": "fn_BFC165A0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC165B0",
-      "label": "fn_BFC165B0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC165C0",
-      "label": "fn_BFC165C0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC165D0",
-      "label": "fn_BFC165D0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC165E0",
-      "label": "fn_BFC165E0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC165F0",
-      "label": "fn_BFC165F0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC16600",
-      "label": "fn_BFC16600",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC16610",
-      "label": "fn_BFC16610",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC16620",
-      "label": "fn_BFC16620",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC16680",
-      "label": "fn_BFC16680",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
       "address": "0xBFC16690",
       "label": "kernel_BFC16690",
       "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
@@ -3330,74 +1409,56 @@
     {
       "address": "0xBFC166A0",
       "label": "kernel_BFC166A0",
-      "rationale": "kernel call table C0:0B target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC166B0",
       "label": "kernel_BFC166B0",
-      "rationale": "kernel call table B0:1A target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC166C0",
       "label": "kernel_BFC166C0",
-      "rationale": "kernel call table B0:1B target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC166D0",
       "label": "kernel_BFC166D0",
-      "rationale": "kernel call table B0:1C target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC166E0",
       "label": "kernel_BFC166E0",
-      "rationale": "kernel call table B0:1D target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC166F0",
       "label": "kernel_BFC166F0",
-      "rationale": "kernel call table B0:1E target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC16700",
       "label": "kernel_BFC16700",
-      "rationale": "kernel call table B0:1F target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC16710",
       "label": "kernel_BFC16710",
-      "rationale": "kernel call table B0:21 target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC16720",
       "label": "kernel_BFC16720",
-      "rationale": "kernel call table B0:22 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC16730",
-      "label": "ktab_BFC16730",
-      "rationale": "kernel call table B0:23 target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC16740",
-      "label": "ktab_BFC16740",
-      "rationale": "kernel call table B0:2A target",
-      "provenance": "kernel_table"
-    },
-    {
-      "address": "0xBFC16750",
-      "label": "ktab_BFC16750",
-      "rationale": "kernel call table B0:2B target",
-      "provenance": "kernel_table"
+      "rationale": "Kernel ROM function (auto-discovered from tables/boundaries)",
+      "provenance": "manual"
     },
     {
       "address": "0xBFC18000",
@@ -3572,18 +1633,6 @@
       "label": "ghidra_BFC1B7E0",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC1BD2C",
-      "label": "post_return_BFC1BD2C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC1BD48",
-      "label": "post_return_BFC1BD48",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC1BD68",
@@ -3922,12 +1971,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC23070",
-      "label": "post_return_BFC23070",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC23078",
       "label": "ghidra_BFC23078",
       "rationale": "Ghidra function start",
@@ -4048,94 +2091,10 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC258C0",
-      "label": "post_return_BFC258C0",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25904",
-      "label": "post_return_BFC25904",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25910",
-      "label": "post_return_BFC25910",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25920",
-      "label": "post_return_BFC25920",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC259B8",
-      "label": "post_return_BFC259B8",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC259C8",
-      "label": "post_return_BFC259C8",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC25B74",
       "label": "ghidra_BFC25B74",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC25C44",
-      "label": "post_return_BFC25C44",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25C4C",
-      "label": "post_return_BFC25C4C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25C54",
-      "label": "post_return_BFC25C54",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25C5C",
-      "label": "post_return_BFC25C5C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25C64",
-      "label": "post_return_BFC25C64",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25C6C",
-      "label": "post_return_BFC25C6C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25C9C",
-      "label": "post_return_BFC25C9C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC25CA8",
-      "label": "post_return_BFC25CA8",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC25CC0",
@@ -4202,12 +2161,6 @@
       "label": "ghidra_BFC26670",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC266A8",
-      "label": "post_return_BFC266A8",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC266B0",
@@ -4318,30 +2271,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC2808C",
-      "label": "post_return_BFC2808C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC2813C",
-      "label": "post_return_BFC2813C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC281E0",
-      "label": "post_return_BFC281E0",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC28268",
-      "label": "post_return_BFC28268",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC28490",
       "label": "ghidra_BFC28490",
       "rationale": "Ghidra function start",
@@ -4390,30 +2319,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC2A430",
-      "label": "post_return_BFC2A430",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC2AC30",
-      "label": "post_return_BFC2AC30",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC2ACD0",
-      "label": "fn_BFC2ACD0",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC2B1FC",
-      "label": "fn_BFC2B1FC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
       "address": "0xBFC2BF1C",
       "label": "ghidra_BFC2BF1C",
       "rationale": "Ghidra function start",
@@ -4436,12 +2341,6 @@
       "label": "ghidra_BFC2C3E0",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC2C7F4",
-      "label": "fn_BFC2C7F4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
     },
     {
       "address": "0xBFC2CA9C",
@@ -4474,12 +2373,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC2CCBC",
-      "label": "post_return_BFC2CCBC",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC2CCC4",
       "label": "ghidra_BFC2CCC4",
       "rationale": "Ghidra function start",
@@ -4510,12 +2403,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC2E508",
-      "label": "post_return_BFC2E508",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC2E600",
       "label": "ghidra_BFC2E600",
       "rationale": "Ghidra function start",
@@ -4534,18 +2421,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC2EDB4",
-      "label": "post_return_BFC2EDB4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC2EDF4",
-      "label": "post_return_BFC2EDF4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC2EE6C",
       "label": "ghidra_BFC2EE6C",
       "rationale": "Ghidra function start",
@@ -4556,12 +2431,6 @@
       "label": "ghidra_BFC2EF40",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC2F0C8",
-      "label": "post_return_BFC2F0C8",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC2F210",
@@ -4606,18 +2475,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC2FC44",
-      "label": "post_return_BFC2FC44",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC2FCB8",
-      "label": "post_return_BFC2FCB8",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC2FCC4",
       "label": "ghidra_BFC2FCC4",
       "rationale": "Ghidra function start",
@@ -4630,40 +2487,10 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC2FF70",
-      "label": "post_return_BFC2FF70",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC30048",
-      "label": "post_return_BFC30048",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC3010C",
-      "label": "fn_BFC3010C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3015C",
-      "label": "fn_BFC3015C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
       "address": "0xBFC301AC",
       "label": "ghidra_BFC301AC",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC3022C",
-      "label": "fn_BFC3022C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
     },
     {
       "address": "0xBFC3029C",
@@ -4672,28 +2499,10 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC302BC",
-      "label": "fn_BFC302BC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3031C",
-      "label": "fn_BFC3031C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
       "address": "0xBFC30350",
       "label": "ghidra_BFC30350",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC30394",
-      "label": "post_return_BFC30394",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC3045C",
@@ -4726,18 +2535,6 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC304B4",
-      "label": "fn_BFC304B4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC30514",
-      "label": "fn_BFC30514",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
       "address": "0xBFC30554",
       "label": "dmiss_BFC30554",
       "rationale": "dispatch miss: Shell function, indirect call via table",
@@ -4766,30 +2563,6 @@
       "label": "trampoline_BFC30584",
       "rationale": "audit-detected dispatch miss — A0/B0/C0 syscall trampoline",
       "provenance": "manual"
-    },
-    {
-      "address": "0xBFC3058C",
-      "label": "fn_BFC3058C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC30670",
-      "label": "fn_BFC30670",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3079C",
-      "label": "fn_BFC3079C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC30868",
-      "label": "fn_BFC30868",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
     },
     {
       "address": "0xBFC30960",
@@ -4880,18 +2653,6 @@
       "label": "ghidra_BFC31E74",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC31F24",
-      "label": "post_return_BFC31F24",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC32100",
-      "label": "fn_BFC32100",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
     },
     {
       "address": "0xBFC322E4",
@@ -5072,12 +2833,6 @@
       "label": "gte_lib_BFC33E20",
       "rationale": "GTE math library function. Batch-discovered from BFC33000-BFC36000.",
       "provenance": "manual"
-    },
-    {
-      "address": "0xBFC33E70",
-      "label": "post_return_BFC33E70",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC33E80",
@@ -5890,18 +3645,6 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC37000",
-      "label": "post_return_BFC37000",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC37010",
-      "label": "post_return_BFC37010",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC37028",
       "label": "ghidra_BFC37028",
       "rationale": "Ghidra function start",
@@ -5936,12 +3679,6 @@
       "label": "ghidra_BFC3716C",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC371E4",
-      "label": "post_return_BFC371E4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC37334",
@@ -6010,12 +3747,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC379F4",
-      "label": "post_return_BFC379F4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC37A4C",
       "label": "ghidra_BFC37A4C",
       "rationale": "Ghidra function start",
@@ -6026,12 +3757,6 @@
       "label": "ghidra_BFC37AC4",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC381EC",
-      "label": "post_return_BFC381EC",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC38204",
@@ -6082,18 +3807,6 @@
       "provenance": "manual"
     },
     {
-      "address": "0xBFC38BB0",
-      "label": "post_return_BFC38BB0",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC38BE0",
-      "label": "post_return_BFC38BE0",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC38BE8",
       "label": "ghidra_BFC38BE8",
       "rationale": "Ghidra function start",
@@ -6116,12 +3829,6 @@
       "label": "ghidra_BFC39080",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC393FC",
-      "label": "post_return_BFC393FC",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC39410",
@@ -6152,144 +3859,6 @@
       "label": "ghidra_BFC396E8",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC39790",
-      "label": "post_return_BFC39790",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC397CC",
-      "label": "post_return_BFC397CC",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC397E4",
-      "label": "post_return_BFC397E4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39848",
-      "label": "post_return_BFC39848",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC3988C",
-      "label": "post_return_BFC3988C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC398B4",
-      "label": "post_return_BFC398B4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39974",
-      "label": "post_return_BFC39974",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC3999C",
-      "label": "fn_BFC3999C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC399C4",
-      "label": "post_return_BFC399C4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39A3C",
-      "label": "fn_BFC39A3C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC39A64",
-      "label": "post_return_BFC39A64",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39A8C",
-      "label": "post_return_BFC39A8C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39AB4",
-      "label": "post_return_BFC39AB4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39B04",
-      "label": "post_return_BFC39B04",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39B2C",
-      "label": "post_return_BFC39B2C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39B54",
-      "label": "post_return_BFC39B54",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39B7C",
-      "label": "post_return_BFC39B7C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39BF4",
-      "label": "post_return_BFC39BF4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39C1C",
-      "label": "post_return_BFC39C1C",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39C44",
-      "label": "post_return_BFC39C44",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39C78",
-      "label": "post_return_BFC39C78",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39CAC",
-      "label": "post_return_BFC39CAC",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
-      "address": "0xBFC39CE0",
-      "label": "post_return_BFC39CE0",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC39D38",
@@ -6328,72 +3897,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC3A44C",
-      "label": "fn_BFC3A44C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3A638",
-      "label": "fn_BFC3A638",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3A95C",
-      "label": "fn_BFC3A95C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3A9EC",
-      "label": "fn_BFC3A9EC",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3AAC4",
-      "label": "fn_BFC3AAC4",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3AB70",
-      "label": "fn_BFC3AB70",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3AC9C",
-      "label": "fn_BFC3AC9C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3AD68",
-      "label": "fn_BFC3AD68",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3B054",
-      "label": "fn_BFC3B054",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3B160",
-      "label": "fn_BFC3B160",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
-      "address": "0xBFC3B290",
-      "label": "post_return_BFC3B290",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC3B30C",
       "label": "ghidra_BFC3B30C",
       "rationale": "Ghidra function start",
@@ -6424,12 +3927,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC3BCC0",
-      "label": "post_return_BFC3BCC0",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC3BD78",
       "label": "ghidra_BFC3BD78",
       "rationale": "Ghidra function start",
@@ -6440,12 +3937,6 @@
       "label": "ghidra_BFC3BD98",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC3BE6C",
-      "label": "fn_BFC3BE6C",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
     },
     {
       "address": "0xBFC3BF10",
@@ -6496,12 +3987,6 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC3DE38",
-      "label": "post_return_BFC3DE38",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
-    },
-    {
       "address": "0xBFC3DF20",
       "label": "ghidra_BFC3DF20",
       "rationale": "Ghidra function start",
@@ -6514,22 +3999,10 @@
       "provenance": "ghidra_legacy"
     },
     {
-      "address": "0xBFC3E110",
-      "label": "fn_BFC3E110",
-      "rationale": "function entry reached by discovery from vector/kernel_table/post_return roots",
-      "provenance": "call_target"
-    },
-    {
       "address": "0xBFC3E980",
       "label": "ghidra_BFC3E980",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC3ED40",
-      "label": "post_return_BFC3ED40",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC3EDB4",
@@ -6554,12 +4027,6 @@
       "label": "ghidra_BFC3F2B4",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC3F3E4",
-      "label": "post_return_BFC3F3E4",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC3F484",
@@ -6908,12 +4375,6 @@
       "label": "ghidra_BFC42120",
       "rationale": "Ghidra function start",
       "provenance": "ghidra_legacy"
-    },
-    {
-      "address": "0xBFC42150",
-      "label": "post_return_BFC42150",
-      "rationale": "unreferenced code run after a function end, valid up to jr ra",
-      "provenance": "post_return"
     },
     {
       "address": "0xBFC42160",
