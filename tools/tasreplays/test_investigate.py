@@ -139,11 +139,13 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(state['comparison']['first_divergence']['frame'], 3)
 
     def test_failure_and_timeout(self):
-        for mode, delay, expected in [('failure', 0, None), ('match', 2, 'host_timeout')]:
+        # The failure case must fail on its own, not on the host clock: a loaded build machine
+        # can take longer than 0.3 s just to start Python, which reported host_timeout instead.
+        for mode, delay, timeout, expected in [('failure', 0, 120, None), ('match', 2, .3, 'host_timeout')]:
             with self.subTest(mode=mode):
                 self.run = self.root / mode
                 self.start(mode, delay)
-                self.data['steps'][0]['timeout'] = .3
+                self.data['steps'][0]['timeout'] = timeout
                 self.save()
                 self.command('run', self.path, self.run)
                 self.assertEqual(self.state()['status'], 'failed')
