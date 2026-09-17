@@ -85,7 +85,12 @@ def main() -> int:
                    '"--diagnostic-dir"',
                    'PSX_DIAGNOSTIC_MARKER "diagnostic-mode.txt"', 'PSX_DIAGNOSTIC_DIR_NAME "build-diagnostic"',
                    '"--collect-diagnostics"', 'diagnostic_build_present', 'diagnostic_mode_requested',
-                   'if (strcmp(argv[i], "--diagnostic") == 0)'):
+                   'if (strcmp(argv[i], "--diagnostic") == 0)',
+                   # The helper bat belongs beside the product it builds, and the
+                   # forward path must start it itself: relaunch_or_exit takes the
+                   # launcher UI's path, which no launcher has set there.
+                   'want_diagnostic ? diag_dir : g_build_dir',
+                   'host_start_helper_and_exit(built)'):
         assert needle in host_text, f"host lacks the diagnostic-mode contract: {needle}"
     ui = find_recomp_ui()
     if ui is None:
