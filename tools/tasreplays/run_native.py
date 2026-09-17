@@ -242,8 +242,9 @@ def main():
                         metavar=("LOW", "HIGH"), help="record existing RAM reads in physical [LOW,HIGH)")
     parser.add_argument("--cd-read-start-model", choices=("default", "octoshock-2.2.2-pipeline"), default="default",
                         help="explicit source-core pipeline comparison; not full timing compatibility")
-    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0'),default='default',
-                        help='experimental Nymashock drive head, seek, Pause and Reset timing; cold diagnostics only')
+    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0','octoshock-2.7'),default='default',
+                        help='experimental Nymashock drive head, seek, Pause and Reset timing; octoshock-2.7 is '
+                             'the same drive with the MSVC order of the Reset random draws')
     parser.add_argument('--cd-source-clock-tape', type=Path,
                         help='experimental command/seek clock using an immutable raw random-word tape')
     parser.add_argument('--cd-cdda-model',choices=('default','octoshock-2.3'),default='default',

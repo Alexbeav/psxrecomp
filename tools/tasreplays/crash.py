@@ -2,7 +2,9 @@
 
 The movie was recorded on BizHawk 2.7, whose Octoshock is Mednafen 1.27.1. Mednafen 1.27.1 and
 1.29.0 emulate the PS1 identically (src/psx and src/cdrom differ only in messages, VFS and
-host I/O), so the device models are the Nymashock 1.29.0 profile Mega Man X5 qualified. The two
+host I/O), so the device models are the Nymashock 1.29.0 profile Mega Man X5 qualified. The one
+compiler-visible difference is the order of CDC Reset's two random draws, which octoshock.dll
+(MSVC) takes seek-first: --cd-drive-model octoshock-2.7. The two
 places Octoshock's wrapper differs from Nymashock are covered without new models: the CD shell
 bit clears only on GetStat, which is --cd-cold-status-model octoshock-2.2.2; and the DualShock
 takes stick bytes unscaled and checks MODE only when DTR drops, which cannot show because this
@@ -63,7 +65,7 @@ PROFILE = [
     '--cd-firmware-model', 'octoshock-2.2.2', '--cd-cold-status-model', 'octoshock-2.2.2',
     '--cd-toc-seek-model', 'octoshock-2.2.2', '--cd-explicit-seek-model', 'octoshock-2.2.2',
     '--cd-read-start-model', 'octoshock-2.2.2-pipeline', '--cd-dma-model', 'octoshock-2.2.2',
-    '--cd-drive-model', 'nymashock-1.29.0',
+    '--cd-drive-model', 'octoshock-2.7',
     '--cd-cdda-model', 'octoshock-2.3', '--mdec-source-model', 'nymashock-1.29.0',
     '--gpu-status-model', 'octoshock-2.2.2-raster', '--gpu-dma-model', 'octoshock-2.2.2-bounded-quad',
     '--timer1-model', 'octoshock-2.2.2', '--timer2-model', 'octoshock-2.2.2',

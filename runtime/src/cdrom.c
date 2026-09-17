@@ -933,6 +933,7 @@ static int s_source_cold_status_model;
 static int s_source_toc_seek_model;
 static int s_source_explicit_seek_model;
 static int s_nymashock_drive;
+static int s_cd_reset_seek_draw_first;   /* octoshock-2.7: MSVC order of Reset's two draws */
 /* Source timing profile only: PAUSED and STANDBY have the same public status
  * bits but different restart costs. Kept separate from visible READ/SEEK. */
 static uint8_t s_source_seek_paused;
@@ -2616,10 +2617,17 @@ static void exec_command(uint8_t cmd) {
             if(source_reset_phase==1) {
                 pending_arm(0x0A,256,1);
             } else if(has_disc()) {
-                /* Stock clang evaluates the broad Reset draw before CalcSeekTime. */
-                int delay=(int)source_clock_random(3250000);
+                /* std::max(PSX_GetRandU32(0, 3250000), CalcSeekTime(...)) leaves the
+                 * order of the two draws to the compiler. Stock clang (Nymashock) takes
+                 * the broad Reset draw first; MSVC (octoshock.dll in BizHawk 2.7 and
+                 * 2.10) calls CalcSeekTime, and its 25000 draw, first. */
                 int seek=source_seek_lower_bound(origin,0,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
-                seek+=(int)source_clock_random(25000);
+                int delay;
+                if(s_cd_reset_seek_draw_first) {
+                    seek+=(int)source_clock_random(25000);delay=(int)source_clock_random(3250000);
+                } else {
+                    delay=(int)source_clock_random(3250000);seek+=(int)source_clock_random(25000);
+                }
                 if(delay<seek)delay=seek;
                 stop_read_stream();stop_cdda_playback();
                 s_source_reset_due=psx_cycle_count+(uint64_t)delay;source_reset_phase=1;
@@ -3311,7 +3319,9 @@ void cdrom_init(const char* cue_path) {
         s_source_clock=1;
     }
     const char *drive_model=getenv("PSX_CD_DRIVE_MODEL");
-    s_nymashock_drive=drive_model && !strcmp(drive_model,"nymashock-1.29.0");
+    /* octoshock-2.7 is the same Mednafen drive (1.27.1 == 1.29.0 here) built with MSVC. */
+    s_cd_reset_seek_draw_first=drive_model && !strcmp(drive_model,"octoshock-2.7");
+    s_nymashock_drive=drive_model && (!strcmp(drive_model,"nymashock-1.29.0") || s_cd_reset_seek_draw_first);
     if(drive_model && *drive_model && (!s_nymashock_drive || !s_source_clock)) {
         fprintf(stderr,"[CDROM] Invalid source drive model or missing clock\n");exit(2);
     }

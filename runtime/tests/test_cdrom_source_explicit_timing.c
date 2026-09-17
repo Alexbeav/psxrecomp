@@ -159,6 +159,19 @@ int main(void) {
     CHECK(s_source_reset_due==psx_cycle_count+20000,"active Reset seeks from physical sector twelve, beyond the short-distance penalty");
     CHECK(!reading && !(stat_reg&CDSTAT_READ) && (stat_reg&CDSTAT_SEEK),"active Reset stops data delivery and enters seek");
     CHECK(s_source_clock_tape.cursor==2,"active Reset consumes the same two random draws");
+    /* Draw order is the compiler's: tape {3000000, 7}. Clang takes the Reset bound first
+     * (max(3000000, 2495904+7)); MSVC takes CalcSeekTime's first (3000000&0x7FFF=18112). */
+    for(int msvc=0;msvc<2;msvc++) {
+        uint8_t *words=s_source_clock_tape.bytes;memset(words,0,16);
+        words[0]=0xC0;words[1]=0xC6;words[2]=0x2D;words[4]=7;
+        s_source_clock_tape.cursor=0;s_cd_reset_seek_draw_first=msvc;
+        reading=0;stat_reg=CDSTAT_MOTOR;s_source_seek_paused=1;source_reset_phase=0;
+        source_drive_head_valid=1;source_drive_head_lba=9;psx_cycle_count=100;irq_flag=0;
+        exec_command(0x0A);
+        CHECK(s_source_reset_due==100+(msvc?2495904+18112:3000000) && s_source_clock_tape.cursor==2,
+              msvc?"MSVC Reset draws CalcSeekTime's bound first":"clang Reset draws its broad bound first");
+    }
+    s_cd_reset_seek_draw_first=0;
     cdrom_init("synthetic");s_nymashock_drive=1;
     reading=1;stat_reg=CDSTAT_MOTOR|CDSTAT_READ;
     lba_to_msf(1234,150,&read_min,&read_sec,&read_sect);
