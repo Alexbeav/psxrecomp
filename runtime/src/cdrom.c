@@ -2416,12 +2416,21 @@ static int pause_complete_delay_cycles(void) {
     return (int)cycles;
 }
 
-/* Audio-only media cannot satisfy a normal data read. CDDA mode explicitly
- * permits audio-sector reads; mixed-mode game discs keep their data path.
- * PSX-SPX: ReadN/ReadS on an audio CD without Setmode bit 0 return 40h
- * (Vib-Ribbon swaps to the player's music CD and relies on this). */
+/* Audio-only media cannot satisfy a normal data read, and the drive says so
+ * before it looks at the transfer mode at all. Oracle (beetle-psx cdc.cpp,
+ * PS_CDC::ReadBase): when !IsPSXDisc the command answers MakeStatus(true) +
+ * ERRCODE_BAD_COMMAND (0x40) on CDCIRQ_DISC_ERROR and returns, ahead of every
+ * mode-dependent path. IsPSXDisc is false exactly when SetDisc got no
+ * SYSTEM.CNF disc id, i.e. for an audio CD. Setmode bit 0 (CDDA) therefore
+ * does NOT license a data read here; it only governs which sectors a read that
+ * already started may deliver. Mixed-mode game discs have a data track, so
+ * they keep their data path.
+ *
+ * Vib-Ribbon probes track 1 with ReadS to tell its own game disc from the
+ * player's music CD, and shifts track numbering by one when that read
+ * succeeds. Gating this error on the CDDA bit left the answer dependent on
+ * whichever mode byte the title had written last. */
 static int reject_audio_disc_data_read(void) {
-    if (mode_reg & 0x01u) return 0;
     int tracks = iso_handle ? iso_track_count(iso_handle) : 0;
     if (tracks <= 0) return 0;
     for (int track = 1; track <= tracks; ++track)

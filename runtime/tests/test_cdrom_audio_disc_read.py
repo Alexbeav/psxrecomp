@@ -1,6 +1,12 @@
 """Compile the production ReadN/ReadS cases against a synthetic drive.
 
 No retail media required. Pass C compiler and a private output directory.
+
+Oracle for the expectations (beetle-psx mednafen/psx/cdc.cpp): PS_CDC::ReadBase answers
+MakeStatus(true) + ERRCODE_BAD_COMMAND (0x40) on CDCIRQ_DISC_ERROR whenever !IsPSXDisc,
+before any mode-dependent path, and IsPSXDisc is false for media that SetDisc got no
+SYSTEM.CNF disc id for (an audio CD).  So the rejection must hold for EVERY Setmode byte,
+the CDDA bit included.
 """
 from pathlib import Path
 import subprocess, sys
@@ -9,6 +15,7 @@ source = (Path(__file__).parents[1] / 'src/cdrom.c').read_text(encoding='utf-8')
 start = source.index('static int reject_audio_disc_data_read(void) {')
 end = source.index('\nstatic void exec_command(uint8_t cmd) {', start)
 helper = source[start:end]
+assert 'mode_reg' not in helper, 'audio-disc rejection must not depend on the transfer mode'
 cases = []
 for marker in ['    case 0x06: /* ReadN */', '    case 0x1B: /* ReadS */']:
     start = source.index(marker)
@@ -36,18 +43,17 @@ static void start_read_stream(int cmd) { (void)cmd; reads++; }
 int main(void) {
   const int commands[] = {6, 27};
   for (unsigned i=0; i<2; ++i) {
-    /* 1-track and album audio-only media, with and without CDDA mode. */
+    /* 1-track and album audio-only media: every mode byte errors, CDDA included. */
     for (int n=1; n<=12; n+=11) for (int mode=0; mode<256; ++mode) {
-      track_count=n; data_track=0; present=1; mode_reg=mode;
+      track_count=n; data_track=0; present=1; mode_reg=(uint8_t)mode;
       count=irq=reads=0; execute(commands[i]);
-      if (mode & 1) { assert(reads==1 && irq==3 && count==1 && bytes[0]==2); }
-      else { assert(reads==0 && irq==5 && count==2 && bytes[0]==3 && bytes[1]==0x40); }
+      assert(reads==0 && irq==5 && count==2 && bytes[0]==3 && bytes[1]==0x40);
     }
-    /* Every possible data-track position preserves the mixed-mode path. */
-    for (int t=1; t<=8; ++t) {
-      track_count=8; data_track=t; present=1; mode_reg=0;
+    /* Every data-track position keeps the mixed-mode data path, in every mode. */
+    for (int t=1; t<=8; ++t) for (int mode=0; mode<256; ++mode) {
+      track_count=8; data_track=t; present=1; mode_reg=(uint8_t)mode;
       count=irq=reads=0; execute(commands[i]);
-      assert(reads==1 && irq==3 && count==1);
+      assert(reads==1 && irq==3 && count==1 && bytes[0]==2);
     }
     present=0; count=irq=reads=0; execute(commands[i]);
     assert(reads==0 && irq==5 && count==1);
