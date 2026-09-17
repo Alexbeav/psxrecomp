@@ -1600,6 +1600,7 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
 
 def check_candidate_capacity_publication():
     """Candidate accounting dedups only exact, same-tier whole pairs."""
+    ext = MOD.overlay_ext()  # the inventory ignores other suffixes
     original_exports = MOD._dll_runtime_exports_match
     original_abi = MOD._dll_abi_matches
     try:
@@ -1635,7 +1636,7 @@ def check_candidate_capacity_publication():
             leaf = os.path.join(
                 tmp, 'GAME', 'gcc', 'win-x64',
                 'cg9_a3003734_gc76b225b8')
-            final = os.path.join(leaf, '00010000_00000001.dll')
+            final = os.path.join(leaf, f'00010000_00000001{ext}')
             capacity_lock, cache_dirs = MOD._candidate_capacity_namespace(final)
             assert capacity_lock == os.path.join(
                 tmp, 'GAME', '.overlay-candidate-capacity.lock')
@@ -1646,8 +1647,8 @@ def check_candidate_capacity_publication():
             ]
 
         with tempfile.TemporaryDirectory() as tmp:
-            first = os.path.join(tmp, '00010000_00000001.dll')
-            duplicate = os.path.join(tmp, '00010000_00000002.dll')
+            first = os.path.join(tmp, f'00010000_00000001{ext}')
+            duplicate = os.path.join(tmp, f'00010000_00000002{ext}')
             pair(first, 2, 0x100)
             pair(duplicate, 2, 0x100)
             total, counts = MOD.cache_candidate_inventory([tmp], None)
@@ -1657,24 +1658,24 @@ def check_candidate_capacity_publication():
             assert counts.range_link_total == 4
 
             # Same F rows with a distinct P are not the same compiled pair.
-            different_pair = os.path.join(tmp, '00010000_00000003.dll')
+            different_pair = os.path.join(tmp, f'00010000_00000003{ext}')
             pair(different_pair, 2, 0x101)
             assert MOD.cache_candidate_inventory([tmp], None)[0] == 4
 
             # Nor does P alone override an exact manifest mismatch.
-            different_manifest = os.path.join(tmp, '00010000_00000004.dll')
+            different_manifest = os.path.join(tmp, f'00010000_00000004{ext}')
             pair(different_manifest, 1, 0x100, LOAD + 0x40)
             assert MOD.cache_candidate_inventory([tmp], None)[0] == 5
 
             # Provenance is safety-significant even when P/F/R match.
-            supplemental = os.path.join(tmp, '00010000_00000005.dll')
+            supplemental = os.path.join(tmp, f'00010000_00000005{ext}')
             pair(supplemental, 2, 0x100,
                  provenance=MOD.HOSTED_MANIFEST_PROVENANCE)
             assert MOD.cache_candidate_inventory([tmp], None)[0] == 7
 
             # Legacy/no-P pairs remain unique.
-            legacy_a = os.path.join(tmp, '00010000_00000006.dll')
-            legacy_b = os.path.join(tmp, '00010000_00000007.dll')
+            legacy_a = os.path.join(tmp, f'00010000_00000006{ext}')
+            legacy_b = os.path.join(tmp, f'00010000_00000007{ext}')
             pair(legacy_a, 1, None, LOAD + 0x80)
             pair(legacy_b, 1, None, LOAD + 0x80)
             assert MOD.cache_candidate_inventory([tmp], None)[0] == 9
@@ -1687,7 +1688,7 @@ def check_candidate_capacity_publication():
             assert list(forward[1]) == list(reverse[1]) == sorted(forward[1])
 
         with tempfile.TemporaryDirectory() as tmp:
-            invalid = os.path.join(tmp, '00010000_00000001.dll')
+            invalid = os.path.join(tmp, f'00010000_00000001{ext}')
             pair(invalid, 2, 0x180)
             MOD._dll_runtime_exports_match = (
                 lambda _path, _abi, _pair, _entries: False)
@@ -1715,7 +1716,7 @@ def check_candidate_capacity_publication():
 
             MOD._dll_abi_matches = counted_abi
             MOD._dll_runtime_exports_match = counted_exports
-            cached = os.path.join(tmp, '00010000_00000001.dll')
+            cached = os.path.join(tmp, f'00010000_00000001{ext}')
             pair(cached, 2, 0x190)
             assert MOD.cache_candidate_inventory([tmp], 14)[0] == 2
             assert calls == {'abi': 1, 'exports': 1}
@@ -1740,7 +1741,7 @@ def check_candidate_capacity_publication():
             # Atomic replacement must invalidate even when an adversarial
             # publisher preserves the old sizes and mtimes: the file identity
             # (and on Windows change time) still changes.
-            replacement = os.path.join(tmp, '.replacement.dll')
+            replacement = os.path.join(tmp, f'.replacement{ext}')
             pair(replacement, 1, 0x192, LOAD + 0x100)
             replacement_ranges = pathlib.Path(replacement).with_suffix(
                 '.ranges')
@@ -1774,7 +1775,7 @@ def check_candidate_capacity_publication():
                 calls['exports'] += 1
                 return bool(entries) and calls['exports'] > 1
 
-            transient = os.path.join(tmp, '00010000_00000001.dll')
+            transient = os.path.join(tmp, f'00010000_00000001{ext}')
             pair(transient, 2, 0x191)
             MOD._dll_abi_matches = transient_abi
             MOD._dll_runtime_exports_match = transient_exports
@@ -1791,16 +1792,16 @@ def check_candidate_capacity_publication():
                 lambda _path, _abi, _pair, entries: bool(entries))
 
         with tempfile.TemporaryDirectory() as tmp:
-            first = os.path.join(tmp, '00010000_00000001.dll')
-            second = os.path.join(tmp, '00010000_00000002.dll')
-            third = os.path.join(tmp, '00010000_00000003.dll')
+            first = os.path.join(tmp, f'00010000_00000001{ext}')
+            second = os.path.join(tmp, f'00010000_00000002{ext}')
+            third = os.path.join(tmp, f'00010000_00000003{ext}')
             pair(first, 2, 0x200)
             pair(second, 2, 0x200)
             pair(third, 2, 0x200)
             total, counts = MOD.cache_candidate_inventory([tmp], None)
             assert total == 2 and counts.raw_total == 6
 
-            replacement = os.path.join(tmp, '.replacement.dll')
+            replacement = os.path.join(tmp, f'.replacement{ext}')
             pair(replacement, 1, 0x201, LOAD + 0x40)
             usage = MOD.projected_cache_candidate_usage(
                 total, counts, [tmp], first, 1,
@@ -1812,8 +1813,8 @@ def check_candidate_capacity_publication():
             assert same_usage == (2, 6, 3)
 
         with tempfile.TemporaryDirectory() as tmp:
-            first = os.path.join(tmp, '00010000_00000001.dll')
-            duplicate = os.path.join(tmp, '00010000_00000002.dll')
+            first = os.path.join(tmp, f'00010000_00000001{ext}')
+            duplicate = os.path.join(tmp, f'00010000_00000002{ext}')
             overlapping = [(
                 LOAD + 0x100, 0x500,
                 ((LOAD, 0x900), (LOAD + 0x800, 0x900)))
@@ -1827,7 +1828,7 @@ def check_candidate_capacity_publication():
             assert counts.range_link_counts == {first: 2, duplicate: 2}
             assert counts.range_link_total == 4
 
-            replacement = os.path.join(tmp, '.range-replacement.dll')
+            replacement = os.path.join(tmp, f'.range-replacement{ext}')
             replacement_records = [(
                 LOAD + 0x100, 0x501, ((LOAD + 0x100, 4),))]
             pair_records(replacement, replacement_records, 0x281)
@@ -1839,15 +1840,15 @@ def check_candidate_capacity_publication():
             assert usage == (2, 2, 3, 2)
 
         with tempfile.TemporaryDirectory() as tmp:
-            first = os.path.join(tmp, '00010000_00000001.dll')
+            first = os.path.join(tmp, f'00010000_00000001{ext}')
             wide = [(LOAD, 0x600, ((LOAD, 9 * 4096),))]
             pair_records(first, wide, 0x290)
-            staged = os.path.join(tmp, '.range-overflow.dll')
+            staged = os.path.join(tmp, f'.range-overflow{ext}')
             pair_records(staged, wide, 0x290)
             try:
                 MOD.publish_shard_pair(
                     staged, pathlib.Path(staged).with_suffix('.ranges'),
-                    os.path.join(tmp, '00010000_00000002.dll'),
+                    os.path.join(tmp, f'00010000_00000002{ext}'),
                     candidate_cap=1)
             except MOD.ShardCandidateCapacityError as exc:
                 assert 'lazy range-link capacity' in str(exc)
@@ -1855,8 +1856,8 @@ def check_candidate_capacity_publication():
                 raise AssertionError('lazy range-link cap was not enforced')
 
         with tempfile.TemporaryDirectory() as tmp:
-            first = os.path.join(tmp, '00010000_00000001.dll')
-            second = os.path.join(tmp, '00010000_00000002.dll')
+            first = os.path.join(tmp, f'00010000_00000001{ext}')
+            second = os.path.join(tmp, f'00010000_00000002{ext}')
             wide = [(LOAD, 0x700, ((LOAD, 17 * 4096),))]
             pair_records(first, wide, 0x2A0)
             pair_records(second, wide, 0x2A0)
@@ -1866,7 +1867,7 @@ def check_candidate_capacity_publication():
                 (True, 1)
             assert MOD.candidate_capacity_saturated_in_tier(
                 total, counts, 2, tmp)
-            shrinking = os.path.join(tmp, '.range-shrink.dll')
+            shrinking = os.path.join(tmp, f'.range-shrink{ext}')
             pair_records(shrinking, [(
                 LOAD, 0x701, ((LOAD, 4),))], 0x2A1)
             # The namespace starts over its 32-link bound. A replacement that
@@ -1878,18 +1879,18 @@ def check_candidate_capacity_publication():
             assert total == 2 and counts.range_link_total == 18
 
         with tempfile.TemporaryDirectory() as tmp:
-            first = os.path.join(tmp, '00010000_00000001.dll')
-            second = os.path.join(tmp, '00010000_00000002.dll')
+            first = os.path.join(tmp, f'00010000_00000001{ext}')
+            second = os.path.join(tmp, f'00010000_00000002{ext}')
             # Deliberately repeat F while changing P: no pair dedup is legal.
             pair(first, 1, 1)
             pair(second, 1, 2)
             total, counts = MOD.cache_candidate_inventory([tmp], None)
             assert total == 2 and counts[first] == counts[second] == 1
 
-            staged = os.path.join(tmp, '.staged.dll')
+            staged = os.path.join(tmp, f'.staged{ext}')
             staged_ranges = os.path.join(tmp, '.staged.ranges')
             pair(staged, 2, 3, LOAD + 0x20)
-            third = os.path.join(tmp, '00010000_00000003.dll')
+            third = os.path.join(tmp, f'00010000_00000003{ext}')
             assert MOD.publish_shard_pair(
                 staged, staged_ranges, third, candidate_cap=4)
             assert MOD.cache_candidate_inventory([tmp], None)[0] == 4
@@ -1900,17 +1901,17 @@ def check_candidate_capacity_publication():
                 total, counts, 4, tmp)
             assert not MOD.candidate_capacity_saturated_in_tier(
                 total, counts, 5, tmp)
-            cache_hit = os.path.join(tmp, '.cache-hit.dll')
+            cache_hit = os.path.join(tmp, f'.cache-hit{ext}')
             cache_hit_ranges = os.path.join(tmp, '.cache-hit.ranges')
             pair(cache_hit, 1, 30, LOAD + 0x200)
             assert not MOD.publish_shard_pair(
                 cache_hit, cache_hit_ranges, third,
                 preserve_existing=True, candidate_cap=4)
 
-            rejected_stage = os.path.join(tmp, '.rejected.dll')
+            rejected_stage = os.path.join(tmp, f'.rejected{ext}')
             rejected_ranges = os.path.join(tmp, '.rejected.ranges')
             pair(rejected_stage, 1, 4, LOAD + 0x40)
-            fourth = os.path.join(tmp, '00010000_00000004.dll')
+            fourth = os.path.join(tmp, f'00010000_00000004{ext}')
             snapshot = {path: pathlib.Path(path).read_bytes()
                         for path in (first, second, third)}
             try:
@@ -1924,7 +1925,7 @@ def check_candidate_capacity_publication():
             assert snapshot == {path: pathlib.Path(path).read_bytes()
                                 for path in snapshot}
 
-            replacement = os.path.join(tmp, '.replacement.dll')
+            replacement = os.path.join(tmp, f'.replacement{ext}')
             replacement_ranges = os.path.join(tmp, '.replacement.ranges')
             pair(replacement, 1, 5, LOAD + 0x60)
             assert MOD.publish_shard_pair(
@@ -1934,7 +1935,7 @@ def check_candidate_capacity_publication():
                 (False, 3)
             old_dll = pathlib.Path(third).read_bytes()
             old_ranges = pathlib.Path(third).with_suffix('.ranges').read_text(encoding="utf-8")
-            growth = os.path.join(tmp, '.growth.dll')
+            growth = os.path.join(tmp, f'.growth{ext}')
             growth_ranges = os.path.join(tmp, '.growth.ranges')
             pair(growth, 3, 6, LOAD + 0x80)
             try:
@@ -1952,12 +1953,12 @@ def check_candidate_capacity_publication():
             # An already-impossible pair must be rejected from its generated
             # manifest before the expensive native linker runs. The normal
             # locked publication projection remains in place for admissions.
-            existing = os.path.join(tmp, '00010000_00000001.dll')
+            existing = os.path.join(tmp, f'00010000_00000001{ext}')
             pair(existing, 2, 0x310)
             assert MOD.preflight_shard_candidate_capacity(
                 existing, funcs(2, LOAD + 0x40), 0x312, None, None, 2
             ) is None
-            final = os.path.join(tmp, '00010000_00000002.dll')
+            final = os.path.join(tmp, f'00010000_00000002{ext}')
             attempted_link = []
             original_compile = MOD._compile_dll_direct
 
@@ -1993,7 +1994,7 @@ def check_candidate_capacity_publication():
                 assert MOD.preflight_shard_candidate_capacity(
                     final, funcs(1, LOAD + 0x80), 0x313, None, None, 2)
                 assert MOD.preflight_shard_candidate_capacity(
-                    os.path.join(tmp, '00010000_00000003.dll'),
+                    os.path.join(tmp, f'00010000_00000003{ext}'),
                     funcs(1, LOAD + 0xC0), 0x314, None, None, 2)
                 assert len(inventory_calls) == 1
             finally:
@@ -2025,9 +2026,9 @@ def check_candidate_capacity_publication():
         with tempfile.TemporaryDirectory() as tmp:
             # Growth after an admitted preflight is caught by the unchanged
             # authoritative projection after linking.
-            existing = os.path.join(tmp, '00010000_00000001.dll')
-            racer = os.path.join(tmp, '00010000_00000003.dll')
-            final = os.path.join(tmp, '00010000_00000002.dll')
+            existing = os.path.join(tmp, f'00010000_00000001{ext}')
+            racer = os.path.join(tmp, f'00010000_00000003{ext}')
+            final = os.path.join(tmp, f'00010000_00000002{ext}')
             pair(existing, 1, 0x320)
             original_compile = MOD._compile_dll_direct
 
@@ -2050,8 +2051,8 @@ def check_candidate_capacity_publication():
                 MOD._compile_dll_direct = original_compile
 
         with tempfile.TemporaryDirectory() as tmp:
-            hidden = os.path.join(tmp, '00010000_00000001.dll')
-            other = os.path.join(tmp, '00010000_00000002.dll')
+            hidden = os.path.join(tmp, f'00010000_00000001{ext}')
+            other = os.path.join(tmp, f'00010000_00000002{ext}')
             pair(other, 1, 40)
             token = 'a' * 32
             backup_dll = f'{hidden}.pair-txn.{token}.old-dll'
@@ -2074,10 +2075,10 @@ def check_candidate_capacity_publication():
                 'new_dll_sha256': '0' * 64,
                 'new_ranges_sha256': '1' * 64,
             })
-            staged = os.path.join(tmp, '.new.dll')
+            staged = os.path.join(tmp, f'.new{ext}')
             staged_ranges = os.path.join(tmp, '.new.ranges')
             pair(staged, 1, 42, LOAD + 0x40)
-            new_final = os.path.join(tmp, '00010000_00000003.dll')
+            new_final = os.path.join(tmp, f'00010000_00000003{ext}')
             try:
                 MOD.publish_shard_pair(
                     staged, staged_ranges, new_final, candidate_cap=2)
@@ -2095,7 +2096,7 @@ def check_candidate_capacity_publication():
             tcc_dir = game / 'tcc' / 'win-x64' / 'cg5_7125d9b5'
             gcc_dir.mkdir(parents=True)
             tcc_dir.mkdir(parents=True)
-            basename = '00010000_00000001.dll'
+            basename = f'00010000_00000001{ext}'
             gcc_pair = str(gcc_dir / basename)
             tcc_pair = str(tcc_dir / basename)
             pair(gcc_pair, 2, 10)
@@ -2106,8 +2107,8 @@ def check_candidate_capacity_publication():
             assert tcc_pair not in counts
             assert MOD.candidate_capacity_saturated_in_tier(
                 total, counts, 2, str(gcc_dir))
-            gcc_exact = str(gcc_dir / '00010000_00000002.dll')
-            tcc_exact = str(tcc_dir / '00010000_00000003.dll')
+            gcc_exact = str(gcc_dir / f'00010000_00000002{ext}')
+            tcc_exact = str(tcc_dir / f'00010000_00000003{ext}')
             pair(gcc_exact, 1, 15, LOAD + 0x40)
             pair(tcc_exact, 1, 15, LOAD + 0x40)
             total, counts = MOD.cache_candidate_inventory(tier_dirs, None)
@@ -2115,7 +2116,7 @@ def check_candidate_capacity_publication():
             for exact in (gcc_exact, tcc_exact):
                 pathlib.Path(exact).unlink()
                 pathlib.Path(exact).with_suffix('.ranges').unlink()
-            lower_unique = str(tcc_dir / '00010000_00000002.dll')
+            lower_unique = str(tcc_dir / f'00010000_00000002{ext}')
             pair(lower_unique, 1, 14, LOAD + 0x80)
             total, counts = MOD.cache_candidate_inventory(tier_dirs, None)
             assert total == 3 and counts[lower_unique] == 1
@@ -2142,8 +2143,8 @@ def check_candidate_capacity_publication():
             tcc_dir = game / 'tcc' / 'win-x64' / 'cg5_06162507'
             gcc_dir.mkdir(parents=True)
             tcc_dir.mkdir(parents=True)
-            upper = str(gcc_dir / '00010000_DEADBEEF.dll')
-            lower = str(tcc_dir / '00010000_deadbeef.dll')
+            upper = str(gcc_dir / f'00010000_DEADBEEF{ext}')
+            lower = str(tcc_dir / f'00010000_deadbeef{ext}')
             pair(upper, 2, 12)
             pair(lower, 3, 13)
             total, counts = MOD.cache_candidate_inventory(
@@ -2154,12 +2155,12 @@ def check_candidate_capacity_publication():
                 assert total == 5 and counts == {upper: 2, lower: 3}
 
         with tempfile.TemporaryDirectory() as tmp:
-            first = os.path.join(tmp, '00010000_00000001.dll')
-            second = os.path.join(tmp, '00010000_00000002.dll')
+            first = os.path.join(tmp, f'00010000_00000001{ext}')
+            second = os.path.join(tmp, f'00010000_00000002{ext}')
             pair(first, 3, 20)
             pair(second, 2, 21, LOAD + 0x100)
             assert MOD.cache_candidate_inventory([tmp], None)[0] == 5
-            shrinking = os.path.join(tmp, '.shrinking.dll')
+            shrinking = os.path.join(tmp, f'.shrinking{ext}')
             shrinking_ranges = os.path.join(tmp, '.shrinking.ranges')
             pair(shrinking, 1, 22, LOAD + 0x200)
             # Still over cap after replacement (5 -> 3), but the operation is
@@ -2169,12 +2170,12 @@ def check_candidate_capacity_publication():
             assert MOD.cache_candidate_inventory([tmp], None)[0] == 3
 
         with tempfile.TemporaryDirectory() as tmp:
-            first = os.path.join(tmp, '00010000_00000001.dll')
+            first = os.path.join(tmp, f'00010000_00000001{ext}')
             pair(first, 2, 0x300)
             for suffix in (2, 3):
-                staged = os.path.join(tmp, f'.raw-{suffix}.dll')
+                staged = os.path.join(tmp, f'.raw-{suffix}{ext}')
                 pair(staged, 2, 0x300)
-                final = os.path.join(tmp, f'00010000_{suffix:08X}.dll')
+                final = os.path.join(tmp, f'00010000_{suffix:08X}{ext}')
                 if suffix == 2:
                     assert MOD.publish_shard_pair(
                         staged, pathlib.Path(staged).with_suffix('.ranges'),
@@ -2198,14 +2199,14 @@ def check_candidate_capacity_publication():
             MOD.RUNTIME_CACHE_FILE_CAP = 2
             try:
                 for suffix in (1, 2):
-                    final = os.path.join(tmp, f'00010000_{suffix:08X}.dll')
+                    final = os.path.join(tmp, f'00010000_{suffix:08X}{ext}')
                     pair(final, 1, 0x400 + suffix, LOAD + suffix * 4)
-                staged = os.path.join(tmp, '.file-cap.dll')
+                staged = os.path.join(tmp, f'.file-cap{ext}')
                 pair(staged, 1, 0x403, LOAD + 0x20)
                 try:
                     MOD.publish_shard_pair(
                         staged, pathlib.Path(staged).with_suffix('.ranges'),
-                        os.path.join(tmp, '00010000_00000003.dll'),
+                        os.path.join(tmp, f'00010000_00000003{ext}'),
                         candidate_cap=10)
                 except MOD.ShardCandidateCapacityError as exc:
                     assert 'cache file capacity' in str(exc)
@@ -2230,7 +2231,7 @@ def check_candidate_capacity_publication():
         with tempfile.TemporaryDirectory() as tmp:
             pair_id = 0x1020304050607080
             source = pathlib.Path(tmp) / 'capacity.c'
-            template = pathlib.Path(tmp) / 'template.dll'
+            template = pathlib.Path(tmp) / f'template{ext}'
             source.write_text(
                 '#include <stdint.h>\n'
                 '__declspec(dllexport) int overlay_abi(void){return 14;}\n'
@@ -2262,11 +2263,11 @@ except m.ShardCandidateCapacityError:
 '''
             writers = []
             for index in range(2):
-                staged = pathlib.Path(tmp) / f'.race-{index}.dll'
+                staged = pathlib.Path(tmp) / f'.race-{index}{ext}'
                 staged_ranges = pathlib.Path(tmp) / f'.race-{index}.ranges'
                 shutil.copy2(template, staged)
                 staged_ranges.write_text(manifest)
-                final = pathlib.Path(tmp) / f'00010000_{index + 1:08X}.dll'
+                final = pathlib.Path(tmp) / f'00010000_{index + 1:08X}{ext}'
                 writers.append(subprocess.Popen([
                     sys.executable, '-c', child_script, module_path,
                     str(staged), str(staged_ranges), str(final)]))
@@ -2290,7 +2291,7 @@ except m.ShardCandidateCapacityError:
             for index, pair_id in enumerate(
                     (0x1020304050607080, 0x1020304050607081)):
                 source = pathlib.Path(tmp) / f'distinct-{index}.c'
-                template = pathlib.Path(tmp) / f'.distinct-{index}.dll'
+                template = pathlib.Path(tmp) / f'.distinct-{index}{ext}'
                 source.write_text(
                     '#include <stdint.h>\n'
                     '__declspec(dllexport) int overlay_abi(void){return 14;}\n'
@@ -2305,7 +2306,7 @@ except m.ShardCandidateCapacityError:
                 staged_ranges = pathlib.Path(tmp) / f'.distinct-{index}.ranges'
                 staged_ranges.write_text(MOD.overlay_ranges_text(
                     [(LOAD, 1, ((LOAD, 4),))], pair_id))
-                final = pathlib.Path(tmp) / f'00010000_{index + 1:08X}.dll'
+                final = pathlib.Path(tmp) / f'00010000_{index + 1:08X}{ext}'
                 writers.append(subprocess.Popen([
                     sys.executable, '-c', child_script, module_path,
                     str(template), str(staged_ranges), str(final)]))
@@ -2907,7 +2908,7 @@ def check_interior_fragment_contract():
     assert isolated == [entry + 4, entry + 8, entry + 12]
 
     with tempfile.TemporaryDirectory() as td:
-        dll = pathlib.Path(td) / "00010000_fragment.dll"
+        dll = pathlib.Path(td) / f"00010000_fragment{MOD.overlay_ext()}"
         ranges = pathlib.Path(td) / "00010000_fragment.ranges"
         pair_id = 0x123456789ABCDEF0
         payload = bytes(0x100)
@@ -2931,7 +2932,7 @@ def check_interior_fragment_contract():
             assert entries == {entry & 0x1FFFFFFF}
             assert code_ranges == [
                 (entry & 0x1FFFFFFF, (entry & 0x1FFFFFFF) + 8)]
-            canonical = pathlib.Path(td) / "00010000_DEADBEEF.dll"
+            canonical = pathlib.Path(td) / f"00010000_DEADBEEF{MOD.overlay_ext()}"
             assert MOD.current_variant_func_id_coverage(
                 MOD.load_shard_func_ids(str(canonical)), payload,
                 LOAD, len(payload)) == (set(), [])

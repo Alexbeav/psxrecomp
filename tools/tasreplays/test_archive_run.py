@@ -250,7 +250,7 @@ with tempfile.TemporaryDirectory() as directory:
     for needle in ('- Tree: source tree bbbbbbbbbbbb (head aaaaaaaaaaaa)', f'- Binary: {SHA["a"]} (matches the setup receipt)',
                    '- Returns: 239,202/239,202 returns', '- Terminal: terminal RAM equal, card1 equal', '- Divergence: none',
                    r'- Evidence: Z:\ev\arch\runs\fix2-biohazard-replay-01',
-                   r'- Receipt: Z:\ev\arch\runs\fix2-biohazard-replay-01\source-comparison.json'):
+                   '- Receipt: ' + r'Z:\ev\arch\runs\fix2-biohazard-replay-01' + os.sep + 'source-comparison.json'):
         assert needle in note, needle
     assert '\r' not in note and note.endswith('\n')
     board = ar.render_board(summary, r'Z:\ev\arch\runs\fix2-biohazard-replay-01', options)

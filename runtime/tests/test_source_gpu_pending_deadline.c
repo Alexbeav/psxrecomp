@@ -1,4 +1,5 @@
 /* A pending frontend return must prevent another compiled block from running. */
+#define _POSIX_C_SOURCE 200809L /* setenv under -std=c11 */
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
