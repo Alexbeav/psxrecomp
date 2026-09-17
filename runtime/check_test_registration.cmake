@@ -34,6 +34,18 @@
 # the test files on disk. That works identically from either project, so both
 # call it and each independently catches an orphan in the other.
 #
+# One of the build files it reads — tools/tasreplays/tests/CMakeLists.txt — is a
+# developer tree that source packages (game kits) deliberately do not ship, while
+# runtime/tests/ IS shipped. Treating that absence as "nothing to read" made the
+# guard unsound in exactly those trees: the three tests registered only there
+# looked like orphans, and `psxrecomp_cli.py ensure-emitters` could not configure
+# a shipped kit at all (2026-09-17, Parasite Eve macOS kit). The registrations
+# such a tree cannot see are therefore declared below in
+# PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES, and the declaration is verified in
+# both directions whenever the dev tree IS present — so a full checkout still
+# fails on a real orphan, on a stale declaration, and on a new dev-only
+# registration that nobody declared.
+#
 # Usage: call at the END of a CMakeLists.txt.
 #   include(${CMAKE_CURRENT_SOURCE_DIR}/check_test_registration.cmake)
 #   psxrecomp_check_all_tests_registered()
@@ -80,17 +92,30 @@ set(PSXRECOMP_TESTS_NOT_REGISTERED
     "test_overlay_posix.c|built and run by tests/run_overlay_posix_test.sh, which stages the dlopen fixture tree; that script is registered as overlay_posix_test on UNIX"
 )
 
-function(psxrecomp_check_all_tests_registered)
-    set(_root "${_PSXRECOMP_TESTREG_DIR}/..")
+# Build files that a complete checkout has but a source package (game kit) does
+# not ship. Their registrations are invisible to the guard in a shipped tree, so
+# the tests they own are declared below instead.
+set(PSXRECOMP_TESTREG_DEV_BUILD_FILES
+    "tools/tasreplays/tests/CMakeLists.txt"
+)
 
-    # ---- what the build systems say -------------------------------------
+# Tests under runtime/tests/ whose ONLY add_test() lives in one of the dev build
+# files above. Format: <filename>|<dev build file>|<reason>.
+#
+# These are NOT excuses. When the named build file is present the guard checks
+# the claim both ways: the entry must really be registered there (no stale
+# entries), and every dev-only registration must have an entry (no new kit
+# breakage). The declaration is used only when that build file is absent.
+set(PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES
+    "test_mdec_nymashock_timing.c|tools/tasreplays/tests/CMakeLists.txt|built at O0 and O2 as tas_mdec_nymashock_timing_<mode>, asserting MDEC timing vectors that come from the TAS replay corpus"
+    "test_guest_syscall_exception.c|tools/tasreplays/tests/CMakeLists.txt|built LTO/whole-program as tas_guest_syscall_exception, covering the guest SYSCALL exception path the replay harness depends on"
+    "test_cd_read_sample_order.py|tools/tasreplays/tests/CMakeLists.txt|registered as tas_cd_read_sample_order, compiling its own fixture with the configured C compiler passed via --cc"
+)
+
+# Parse one CMakeLists.txt as TEXT and return the test stems it registers.
+function(_psxrecomp_testreg_read_declared _out_var _cml)
     set(_declared "")
-    foreach(_cml "${_root}/runtime/CMakeLists.txt"
-                 "${_root}/recompiler/CMakeLists.txt"
-                 "${_root}/tools/tasreplays/tests/CMakeLists.txt")
-        if(NOT EXISTS "${_cml}")
-            continue()
-        endif()
+    if(EXISTS "${_cml}")
         file(READ "${_cml}" _text)
 
         # Direct references: tests/test_foo.c, ../runtime/tests/test_foo.py,
@@ -115,7 +140,88 @@ function(psxrecomp_check_all_tests_registered)
                 list(APPEND _declared "test_${_i}")
             endforeach()
         endforeach()
+
+        list(REMOVE_DUPLICATES _declared)
+    endif()
+    set(${_out_var} "${_declared}" PARENT_SCOPE)
+endfunction()
+
+function(psxrecomp_check_all_tests_registered)
+    set(_root "${_PSXRECOMP_TESTREG_DIR}/..")
+
+    # ---- what the build systems say -------------------------------------
+    set(_declared "")
+    foreach(_cml "${_root}/runtime/CMakeLists.txt"
+                 "${_root}/recompiler/CMakeLists.txt")
+        _psxrecomp_testreg_read_declared(_d "${_cml}")
+        list(APPEND _declared ${_d})
     endforeach()
+    set(_core_declared ${_declared})
+
+    # Dev-only build files. Present: parse them like any other registrar, and
+    # cross-check PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES against what they
+    # actually register. Absent (a shipped source package): honour the declared
+    # entries, because the registration does exist — this tree cannot see it.
+    set(_dev_missing "")
+    foreach(_rel IN LISTS PSXRECOMP_TESTREG_DEV_BUILD_FILES)
+        string(MAKE_C_IDENTIFIER "${_rel}" _key)
+        if(EXISTS "${_root}/${_rel}")
+            _psxrecomp_testreg_read_declared(_d "${_root}/${_rel}")
+            list(APPEND _declared ${_d})
+            set(_dev_declared_${_key} "${_d}")
+        else()
+            list(APPEND _dev_missing "${_rel}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _declared)
+
+    set(_dev_excused "")
+    foreach(_entry IN LISTS PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES)
+        # A ';' anywhere in an entry's reason makes CMake split it, so an
+        # iteration can be a tail fragment with no fields at all. Skip those.
+        if(NOT _entry MATCHES "\\|")
+            continue()
+        endif()
+        # Split on '|' rather than peeling fields with anchored REGEX REPLACE:
+        # CMake re-anchors '^' after each replacement, so "^[^|]*\\|" strips
+        # every field, not the first one.
+        string(REPLACE "|" ";" _fields "${_entry}")
+        list(LENGTH _fields _n_fields)
+        if(_n_fields LESS 2)
+            continue()
+        endif()
+        list(GET _fields 0 _e_file)
+        list(GET _fields 1 _e_owner)
+        string(REGEX REPLACE "\\.(c|cpp|py)$" "" _e_stem "${_e_file}")
+
+        list(FIND PSXRECOMP_TESTREG_DEV_BUILD_FILES "${_e_owner}" _owner_idx)
+        if(_owner_idx EQUAL -1)
+            message(FATAL_ERROR
+                "PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES entry for ${_e_file} "
+                "names '${_e_owner}', which is not listed in "
+                "PSXRECOMP_TESTREG_DEV_BUILD_FILES. Add it there, or point the "
+                "entry at the build file that really registers the test.")
+        endif()
+
+        list(FIND _dev_missing "${_e_owner}" _missing_idx)
+        if(_missing_idx EQUAL -1)
+            # The owner is present, so the claim is checkable. Check it.
+            string(MAKE_C_IDENTIFIER "${_e_owner}" _key)
+            list(FIND _dev_declared_${_key} "${_e_stem}" _idx)
+            if(_idx EQUAL -1)
+                message(FATAL_ERROR
+                    "${_e_file} is declared in "
+                    "PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES as registered by "
+                    "${_e_owner}, but that file does not register it.\n"
+                    "A stale entry silences this guard in every source package, "
+                    "where ${_e_owner} is not shipped and the claim cannot be "
+                    "re-checked. Drop the entry, or fix the registration.")
+            endif()
+        else()
+            list(APPEND _dev_excused "${_e_stem}")
+        endif()
+    endforeach()
+    list(APPEND _declared ${_dev_excused})
     list(REMOVE_DUPLICATES _declared)
 
     # ---- what is actually on disk ---------------------------------------
@@ -128,6 +234,64 @@ function(psxrecomp_check_all_tests_registered)
         "${_root}/runtime/tests/test_*.py"
         "${_root}/recompiler/tests/*_test.cpp"
         "${_root}/recompiler/tests/test_*.py")
+
+    # ---- dev-only registrations must be declared --------------------------
+    # The other half of the cross-check: a shipped test whose only add_test()
+    # lives in an unshipped build file is invisible to a source package, so it
+    # has to be named in PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES. Catching that
+    # here means the full checkout fails first, instead of the kit failing later
+    # on somebody else's machine.
+    set(_undeclared_dev "")
+    foreach(_rel IN LISTS PSXRECOMP_TESTREG_DEV_BUILD_FILES)
+        list(FIND _dev_missing "${_rel}" _missing_idx)
+        if(NOT _missing_idx EQUAL -1)
+            continue()
+        endif()
+        string(MAKE_C_IDENTIFIER "${_rel}" _key)
+        foreach(_path IN LISTS _found)
+            get_filename_component(_file "${_path}" NAME)
+            get_filename_component(_stem "${_path}" NAME_WE)
+
+            list(FIND _dev_declared_${_key} "${_stem}" _idx)
+            if(_idx EQUAL -1)
+                continue()
+            endif()
+            list(FIND _core_declared "${_stem}" _idx)
+            if(NOT _idx EQUAL -1)
+                continue()
+            endif()
+
+            set(_known FALSE)
+            foreach(_known_list IN LISTS PSXRECOMP_TESTS_NOT_REGISTERED
+                                         PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES)
+                string(REGEX REPLACE "\\|.*$" "" _known_file "${_known_list}")
+                if(_known_file STREQUAL _file)
+                    set(_known TRUE)
+                    break()
+                endif()
+            endforeach()
+            if(NOT _known)
+                list(APPEND _undeclared_dev "${_file} (only in ${_rel})")
+            endif()
+        endforeach()
+    endforeach()
+    if(_undeclared_dev)
+        list(REMOVE_DUPLICATES _undeclared_dev)
+        list(JOIN _undeclared_dev "\n    " _pretty)
+        message(FATAL_ERROR
+            "Test file(s) registered only in a build file that source packages "
+            "do not ship:\n"
+            "    ${_pretty}\n\n"
+            "A game kit carries runtime/tests/ but not the developer trees, so "
+            "this test would look like an orphan there and break `cmake` for "
+            "everyone rebuilding the emitters from a kit.\n\n"
+            "Fix by EITHER:\n"
+            "  * registering it in runtime/CMakeLists.txt or "
+            "recompiler/CMakeLists.txt as well; or\n"
+            "  * adding '<filename>|<dev build file>|<reason>' to "
+            "PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES in "
+            "runtime/check_test_registration.cmake.")
+    endif()
 
     # ---- diff -------------------------------------------------------------
     set(_orphans "")
@@ -176,6 +340,15 @@ function(psxrecomp_check_all_tests_registered)
     endif()
 
     list(LENGTH _found _n_found)
-    message(STATUS
-        "test-registration guard: ${_n_found} test file(s), all registered")
+    if(_dev_missing)
+        list(JOIN _dev_missing ", " _pretty_missing)
+        list(LENGTH _dev_excused _n_excused)
+        message(STATUS
+            "test-registration guard: ${_n_found} test file(s), all registered "
+            "(${_n_excused} via declared dev build file(s) not in this tree: "
+            "${_pretty_missing})")
+    else()
+        message(STATUS
+            "test-registration guard: ${_n_found} test file(s), all registered")
+    endif()
 endfunction()
