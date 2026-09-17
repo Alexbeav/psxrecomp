@@ -56,13 +56,16 @@ def launch(mode, port, stride, start_cycle):
     cwd_b = os.environ.get("COSIM_CWD_B", "")
     if cwd_b and port != 4600 and str(port).endswith("1"):
         cwd = cwd_b
-        exe_b = os.environ.get("COSIM_EXE_B",
-                               os.path.join(cwd_b, os.path.basename(EXE)))
+        explicit_b = os.environ.get("COSIM_EXE_B", "")
+        exe_b = explicit_b or os.path.join(cwd_b, os.path.basename(EXE))
         if not os.path.isfile(exe_b):
             raise RuntimeError(
                 f"instance B exe not found: {exe_b} — copy the freshly built "
                 f"exe into COSIM_CWD_B (its mods/ root is exe-dir-relative)")
-        if os.path.getmtime(exe_b) < os.path.getmtime(EXE) - 1:
+        # The staleness guard is for the default layout, where B is a copy of
+        # A's exe. An explicit COSIM_EXE_B names a different build on purpose
+        # (e.g. before vs after a codegen change), so its age says nothing.
+        if not explicit_b and os.path.getmtime(exe_b) < os.path.getmtime(EXE) - 1:
             raise RuntimeError(
                 f"instance B exe is STALE: {exe_b} is older than {EXE} — "
                 f"copy the freshly built exe into COSIM_CWD_B")
