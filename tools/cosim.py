@@ -108,6 +108,27 @@ def launch(mode, port, stride, start_cycle):
             pass
     return p
 
+def require_port_free(port):
+    """A guest left over from an earlier run answers on the same port, and the
+    coordinator would then talk to IT instead of the instance it just launched
+    — comparing a finished guest against a fresh one, which looks exactly like
+    a first divergence at the last checkpoint. Refuse to start instead."""
+    s = socket.socket()
+    s.settimeout(2)
+    try:
+        s.connect(("127.0.0.1", port))
+    except Exception:
+        return
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+    raise RuntimeError(
+        f"cosim port {port} is already in use — a psx-cosim from an earlier run "
+        f"is still alive. Kill it before starting, or this run would compare "
+        f"against that stale guest.")
+
 def connect(port, timeout=40):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -204,7 +225,8 @@ def main():
         print(f"launch A={args.a}:{args.porta}  B={args.b}:{args.portb}  "
               f"stride={args.stride} start={args.start_cycle} cpudiff={args.cpudiff_at_cp}",
               flush=True)
-        pa = launch(args.a, args.porta, args.stride, args.start_cycle); pb = launch(args.b, args.portb, args.stride, args.start_cycle)
+        require_port_free(args.porta); require_port_free(args.portb)
+    pa = launch(args.a, args.porta, args.stride, args.start_cycle); pb = launch(args.b, args.portb, args.stride, args.start_cycle)
         try:
             sa = connect(args.porta); sb = connect(args.portb)
             wait_parked(sa, sb)
@@ -259,6 +281,7 @@ def main():
         return
 
     print(f"launch A={args.a}:{args.porta}  B={args.b}:{args.portb}  stride={args.stride} start={args.start_cycle}", flush=True)
+    require_port_free(args.porta); require_port_free(args.portb)
     pa = launch(args.a, args.porta, args.stride, args.start_cycle); pb = launch(args.b, args.portb, args.stride, args.start_cycle)
     try:
         sa = connect(args.porta); sb = connect(args.portb)
