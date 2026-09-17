@@ -45,6 +45,10 @@ extern uint16_t beetle_get_pad(void);
 extern int      beetle_get_framebuffer(uint32_t **out_pixels,
                                         unsigned *out_w, unsigned *out_h);
 extern uint32_t beetle_get_frame_count(void);
+/* Disc change through the core's own disk-control interface (tray open,
+ * replace image, tray closed) — lets a psx-runtime "Change disc" route be
+ * replayed against the oracle. */
+extern int      beetle_disc_change(const char *path);
 /* Absolute guest CPU cycles since boot (oracle cycle clock, beetle-psx
  * libretro.cpp). For native<->Beetle cycle-drift comparison
  * (FAITHFUL_TIMING_PLAN.md). */
@@ -259,6 +263,30 @@ static uint32_t hex_to_u32(const char *s) {
 }
 
 /* ---- Command handlers ---- */
+
+/* frame — the native server's frame-counter command, same shape here so one
+ * poller drives both ports (Rule 16). */
+static void h_frame(int id, const char *json) {
+    (void)json;
+    send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%u}\n", id, beetle_get_frame_count());
+}
+
+/* disc_change — swap the mounted image the way a frontend does, so the guest
+ * sees Beetle's own eject/insert sequence and a psx-runtime Change-disc route
+ * can be compared like for like. */
+static void h_disc_change(int id, const char *json) {
+    char path[4096];
+    if (!json_get_str(json, "path", path, sizeof(path))) {
+        send_err(id, "path_required"); return;
+    }
+    const int rc = beetle_disc_change(path);
+    if (rc != 0) {
+        send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"disc_change\",\"rc\":%d}\n", id, rc);
+        return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"frame\":%u}\n",
+             id, path, beetle_get_frame_count());
+}
 
 static void h_ping(int id, const char *json) {
     (void)json;
@@ -1614,9 +1642,12 @@ typedef struct { const char *name; cmd_handler handler; } CmdEntry;
 
 static const CmdEntry CMDS[] = {
     { "ping",                  h_ping },
-    /* Rule 16 protocol parity: the native server answers `frame`; ping already
-     * carries the frame count, so one tool can poll either port by name. */
-    { "frame",                 h_ping },
+    /* Rule 16 protocol parity: the native server answers `frame` with just the
+     * frame count, so one tool polls either port by name. (T13 landed this as a
+     * ping alias; h_frame answers the native shape instead of ping's wider
+     * payload, which is what a poller written against psx-runtime expects.) */
+    { "frame",                 h_frame },
+    { "disc_change",           h_disc_change },
     { "parity_dump",           h_parity_dump },
     { "parity_ctl",            h_parity_ctl },
     { "devtrace_dump",         h_devtrace_dump },

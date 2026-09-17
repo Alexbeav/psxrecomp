@@ -614,6 +614,33 @@ extern "C" uint16_t beetle_vram_peek(uint32_t x, uint32_t y) {
     return GPU_PeekRAM(((y & 0x1FF) << 10) | (x & 0x3FF));
 }
 
+/* Disc change through the core's own disk-control interface: tray open,
+ * replace image 0, tray closed. That is the path a frontend's "swap disc"
+ * takes, so the guest sees Beetle's real eject/insert sequence (CDInsertEject
+ * -> SetDiscWrapper -> PS_CDC::SetDisc, which recomputes the SYSTEM.CNF disc
+ * id and with it IsPSXDisc). The debug server exposes it as disc_change so a
+ * psx-runtime "Change disc" route can be replayed against the oracle.
+ * Returns 0 on success, or a negative step code. */
+extern "C" int beetle_disc_change(const char *path) {
+    if (!s_loaded || !path || !*path) return -1;
+    bool (*set_eject)(bool) = s_have_disk_cb_ext ? s_disk_cb_ext.set_eject_state
+                            : (s_have_disk_cb ? s_disk_cb.set_eject_state : NULL);
+    bool (*replace)(unsigned, const struct retro_game_info *) =
+        s_have_disk_cb_ext ? s_disk_cb_ext.replace_image_index
+                           : (s_have_disk_cb ? s_disk_cb.replace_image_index : NULL);
+    unsigned (*get_index)(void) = s_have_disk_cb_ext ? s_disk_cb_ext.get_image_index
+                                : (s_have_disk_cb ? s_disk_cb.get_image_index : NULL);
+    if (!set_eject || !replace) return -2;
+    if (!set_eject(true)) return -3;
+
+    struct retro_game_info info;
+    memset(&info, 0, sizeof(info));
+    info.path = path;
+    if (!replace(get_index ? get_index() : 0u, &info)) { set_eject(false); return -4; }
+    if (!set_eject(false)) return -5;
+    return 0;
+}
+
 extern "C" uint16_t beetle_get_pad(void) { return s_joypad; }
 extern "C" uint32_t beetle_get_frame_count(void) { return s_frame_count; }
 extern "C" int beetle_is_loaded(void) { return s_loaded ? 1 : 0; }
