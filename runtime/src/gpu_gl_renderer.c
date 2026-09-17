@@ -3149,6 +3149,8 @@ int gl_renderer_init_context(SDL_Window *win) {
  * Safe to call before or after context creation; applies live when a context
  * exists. Adaptive falls back to vsync if unsupported. */
 void gl_renderer_set_swap_interval(int interval) {
+    extern int g_present_vsync_disabled;
+    if (g_present_vsync_disabled && interval != 0) interval = 0; /* self-heal is sticky */
     s_swap_interval = interval;
     if (s_ctx) {
         if (SDL_GL_SetSwapInterval(interval) != 0 && interval < 0) {
@@ -4306,7 +4308,28 @@ static void gl_swap_with_osd(void) {
             present_shot_done(wrote);
         }
     }
-    SDL_GL_SwapWindow(s_win);
+    /* Vsync self-heal, shared with the SDL_Renderer present in main.cpp. A
+     * wedged Windows/NVIDIA swap queue can block wglSwapBuffers ~1.5 s per
+     * present: audio keeps playing while emulation and input look frozen. The
+     * wall-clock pacer already owns 59.94 Hz, so after three pathological
+     * swaps drop driver vsync for the session. */
+    {
+        extern uint32_t g_present_slow_count;
+        extern int      g_present_vsync_disabled;
+        const Uint64 t0 = SDL_GetPerformanceCounter();
+        SDL_GL_SwapWindow(s_win);
+        const Uint64 t1 = SDL_GetPerformanceCounter();
+        const Uint64 freq = SDL_GetPerformanceFrequency();
+        const Uint64 present_ms = (t1 >= t0 && freq) ? ((t1 - t0) * 1000u) / freq : 0;
+        if (!g_present_vsync_disabled && s_swap_interval != 0 && present_ms > 250) {
+            g_present_slow_count++;
+            if (g_present_slow_count >= 3 && SDL_GL_SetSwapInterval(0) == 0) {
+                s_swap_interval = 0;
+                g_present_vsync_disabled = 1;
+                fprintf(stderr, "psxrecomp: OpenGL swap blocked repeatedly; disabled driver vsync\n");
+            }
+        }
+    }
 }
 
 static void present_target_quad(GLuint tex, int tex_w, int tex_h,
