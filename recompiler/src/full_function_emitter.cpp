@@ -73,12 +73,6 @@ static std::string fn_sym(uint32_t norm) {
     return fmt::format("{}func_{:08X}", g_sym_prefix, norm);
 }
 
-/* Name of a dispatch continuation inside a BIOS function. */
-static std::string cont_sym(uint32_t parent_norm, uint32_t rom_addr) {
-    return fmt::format("{}func_{:08X}_cont_{:08X}", g_sym_prefix, parent_norm,
-                       rom_addr);
-}
-
 /* Name of a dispatch-layer entry point this emitter defines. Pass the bare
  * name, e.g. rt_sym("psx_dispatch"). */
 static std::string rt_sym(const char* base) {
@@ -1979,10 +1973,12 @@ void FullFunctionEmitter::emit_dispatch(
     // Forward declarations for all emitted functions.
     for (uint32_t norm : emitted_normalized) {
         if (continuations.count(norm)) {
-            // Continuation wrapper: use the wrapper name.
+            // A continuation's table row points at its PARENT (the label key
+            // travels in cont_pc), so declare the parent. The parent is also
+            // declared by its own entry; a repeated extern declaration is legal.
             const auto& cl = continuations.at(norm);
             out += fmt::format("extern void {}(CPUState* cpu);\n",
-                               cont_sym(cl.parent_func_norm, cl.rom_addr));
+                               fn_sym(cl.parent_func_norm));
         } else {
             out += fmt::format("extern void {}(CPUState* cpu);\n", fn_sym(norm));
         }
@@ -2096,6 +2092,14 @@ void FullFunctionEmitter::emit_dispatch(
     out += "    uint32_t addr;\n";
     out += "    PsxRecompFunc func;\n";
     out += "    uint32_t runtime_pc; /* represented guest alias, not lookup key */\n";
+    out += "    /* Continuation key: the ROM label this entry re-enters its function\n";
+    out += "     * at, which the function's entry-switch matches. 0 = a plain function\n";
+    out += "     * entry, entered at the top. This replaces the one-per-continuation\n";
+    out += "     * wrapper function that used to do `cpu->pc = <label>; parent(cpu);`:\n";
+    out += "     * the trampoline already zeroes cpu->pc before every dispatch, so\n";
+    out += "     * assigning this field is the same two cases in a table column\n";
+    out += "     * instead of tens of thousands of functions (T110). */\n";
+    out += "    uint32_t cont_pc;\n";
     out += "} DispatchEntry;\n\n";
 
     const size_t total_entries = emitted_normalized.size() + vec_handlers.size();
@@ -2104,7 +2108,7 @@ void FullFunctionEmitter::emit_dispatch(
 
     // Vector entries first (addresses 0xA0/0xB0/0xC0 < 0x500, always first).
     for (const auto& vh : vec_handlers) {
-        out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u }},\n", vh.ram_addr, vh.func_name, vh.ram_addr);
+        out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u, 0u }},\n", vh.ram_addr, vh.func_name, vh.ram_addr);
     }
 
     std::map<uint32_t, uint32_t> runtime_by_norm;
@@ -2112,13 +2116,15 @@ void FullFunctionEmitter::emit_dispatch(
         runtime_by_norm[normalize_address(fn.entry_addr)] = bios_runtime_pc(fn.entry_addr);
     for (uint32_t norm : emitted_normalized) {
         if (continuations.count(norm)) {
+            /* Enter the PARENT and hand it the label key; no wrapper. */
             const auto& cl = continuations.at(norm);
-            out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u }},\n",
-                               norm, cont_sym(cl.parent_func_norm, cl.rom_addr), bios_runtime_pc(cl.rom_addr));
+            out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u, 0x{:08X}u }},\n",
+                               norm, fn_sym(cl.parent_func_norm),
+                               bios_runtime_pc(cl.rom_addr), cl.rom_addr);
         } else {
             const auto entry = runtime_by_norm.find(norm);
             const uint32_t runtime = entry == runtime_by_norm.end() ? norm : entry->second;
-            out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u }},\n", norm, fn_sym(norm), runtime);
+            out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u, 0u }},\n", norm, fn_sym(norm), runtime);
         }
     }
     out += "};\n\n";
@@ -2447,6 +2453,12 @@ void FullFunctionEmitter::emit_dispatch(
     }
     out += "                g_debug_current_func_addr = phys;\n";
     out += "                debug_server_trace_dispatch(phys);\n";
+    out += "                /* cpu->pc was zeroed at the top of this iteration; a\n";
+    out += "                 * continuation row restores its label key here, which is\n";
+    out += "                 * exactly what the per-continuation wrapper used to do.\n";
+    out += "                 * Placed after every `break` above so a refused entry\n";
+    out += "                 * still leaves cpu->pc at 0. */\n";
+    out += "                cpu->pc = dispatch_table[mid].cont_pc;\n";
     out += "                dispatch_table[mid].func(cpu);\n";
     out += "                g_dispatch_static_hits++;\n";
     out += "                found = 1;\n";
@@ -2917,16 +2929,16 @@ EmitStats FullFunctionEmitter::emit(
     }
 
     if (!unique_continuations.empty()) {
-        full_c += fmt::format("\n/* --- {} continuation wrappers for jal/jalr return routing --- */\n\n",
+        full_c += fmt::format("\n/* --- {} dispatch continuations (routed by DispatchEntry.cont_pc, "
+                              "no wrapper bodies) --- */\n\n",
                               unique_continuations.size());
         for (const auto& [cnorm, cl] : unique_continuations) {
-            // Wrapper: sets cpu->pc to the ROM label address so the parent's
-            // entry-switch routes to the correct goto label.
-            full_c += fmt::format("void {}(CPUState* cpu) {{\n",
-                                  cont_sym(cl.parent_func_norm, cl.rom_addr));
-            full_c += fmt::format("    cpu->pc = 0x{:08X}u;\n", cl.rom_addr);
-            full_c += fmt::format("    {}(cpu);\n", fn_sym(cl.parent_func_norm));
-            full_c += "}\n\n";
+            // No wrapper body: the dispatch row carries the label key in
+            // cont_pc and calls the parent directly. The wrapper used to do
+            // `cpu->pc = <label>; parent(cpu);` — one function, one symbol and
+            // one unwind record per continuation, which at exact-EPC coverage
+            // is tens of thousands of them per image (T110).
+            (void)cl;
             emitted_normalized.insert(cnorm);
         }
         stats.continuation_entries = static_cast<uint32_t>(unique_continuations.size());
