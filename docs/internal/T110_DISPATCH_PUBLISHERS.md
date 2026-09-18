@@ -121,3 +121,160 @@ that someone else published.
   otherwise idle machine is 16.80 fps through the intro and 60.00 fps at the
   shell, against 16.15 / 59.93 for a runtime built at the base commit. (Both
   collapse to a few fps when other builds and emulators run in parallel.)
+
+## 2026-09-18 — exact EPC: the rule above moved the architectural EPC
+
+The rule as written above ("an interrupt that becomes deliverable at a ROM PC
+that is not re-enterable stays pending until the next re-enterable boundary")
+is faithful about the resume PC and UNFAITHFUL about COP0.EPC. Deferring the
+delivery does not merely delay it: it runs the instructions in between, so the
+EPC that reaches the guest names a different instruction than the one hardware
+would have interrupted.
+
+Pegasus found it on Abe's Oddysee during the T59 batch, on SCPH5501. Base
+stored EPC = BFC041D0 where hardware, BizHawk and the pre-merge build all
+report BFC041F8; every register matched and frames 98 and 100 agreed, so it was
+not a BIOS-image artefact. The ROM explains the pair exactly:
+
+    BFC041EC  8C8C0000  lw   $t4, 0($a0)
+    BFC041F0  00000000  nop
+    BFC041F4  01856824  and  $t5, $t4, $a1
+    BFC041F8  15A0FFF5  bne  $t5, $zero, 0xBFC041D0
+    BFC041FC  00601021  addu $v0, $v1, $zero      <- delay slot
+
+BFC041F8 is a branch whose target IS BFC041D0. The interrupt became deliverable
+at the branch; `irq_epc_resumable` refused it there, and `exec_delay_slot`
+refused it again at BFC041FC (it tests `pc-4`, the same branch); execution
+therefore completed the branch and its slot and arrived at BFC041D0, which IS a
+block leader — so the delivery happened there. The "dispatchable block leader"
+in the report was the interrupted branch's own destination, reached by the
+deferral.
+
+**The ruling (Alex, 2026-09-18): EPC stays faithful.** The exact interrupted
+instruction is the architectural answer, and it is not negotiable to work
+around a resume-side limitation. The alternative — profile-gating the guard so
+it only applies where the hazard has been measured — was rejected: it would
+qualify a runtime that differs from the shipped one.
+
+### What changed
+
+`full_function_emitter.cpp` only. No runtime source change was needed, because
+every gate that was downgrading the EPC reads the same dispatch table. Every
+ROM instruction that can be an EPC is now emitted as a continuation, so
+`psx_is_dispatchable()` accepts it.
+
+Two exclusions, both correctness requirements and not size optimisations:
+
+- **Delay slots.** The architectural EPC for an instruction in a delay slot is
+  the TERMINATOR with `Cause.BD` set (`psx_check_interrupts_delay_slot`), never
+  the slot. The slot's emitted body is also guarded on `psx_delay_<term>`,
+  which a fresh function entry initialises to 0.
+- **The successor of a modeled load-delay pair.** Its emitted body reads, and
+  `emit_ldd_flush` writes back, `psx_ldd_<load>` — also zeroed at a fresh entry,
+  so entering there would clobber the loaded GPR with zero. The runtime already
+  refuses such a PC (`precise_pc_dispatchable` returns 0 while
+  `s_ld_pend_armed`), so the two sides agree.
+
+`block_leaders` is deliberately NOT extended. It drives the cycle model
+(`psx_slice_block` extents, per-block charges), the I-cache line-leader test,
+and the load-delay "dependent pair split by a label" bail-out — adding leaders
+would change generated timing and push every ROM function with a dependent load
+pair onto the interpreter. A resume point adds a label and a dispatch key and
+nothing else.
+
+Continuations are routed by a `cont_pc` column on `DispatchEntry` rather than by
+a per-continuation wrapper function. The trampoline already zeroes `cpu->pc`
+before every dispatch, so assigning that column immediately before the call is
+the same two cases the wrapper had.
+
+### Sizing is PER PROFILE
+
+Dispatch-table membership follows each profile's seeds, so one image's counts
+say nothing about another's — SCPH1001 compiles 63,186 instructions and
+SCPH5552 19,749, from the same 512 KB of ROM. Do not size this from one image.
+The emitter prints its own census for whatever image it was given:
+
+    [T110] <stem> resume points: N functions, N instruction slots =
+    N already keyed + N added + N delay slots + N load-delay successors
+
+Measured 2026-09-18 on `t110/epc-continuations`, dispatch entries before/after:
+
+| profile | instructions | entries before | entries after | delay slots | ldd successors |
+|---|---|---|---|---|---|
+| OpenBIOS | 17,526 | 4,010 | 14,450 | 3,058 | 2 |
+| SCPH1001 | 63,186 | 13,338 | 52,316 | 10,835 | 0 |
+| SCPH101 | 19,341 | 4,530 | 15,580 | 3,762 | 0 |
+| SCPH5500 | 19,749 | 4,644 | 15,878 | 3,868 | 0 |
+| SCPH5501 | 54,153 | 11,905 | 44,709 | 9,409 | 0 |
+| SCPH5552 | 19,749 | 4,639 | 15,850 | 3,864 | 0 |
+
+SCPH5501 is not a base profile: base ships OpenBIOS, SCPH1001, SCPH101,
+SCPH5500 and SCPH5552, and the TAS lane generates SCPH5501 at setup from a
+supplied image (`bios/SCPH5501.toml` is committed on the lane, and it reuses
+`recompiler/seeds/phase2_ghidra_seeds.json`). It was built here from that lane
+file. Base ships six after the lane intake merges. Nothing in this change
+hardcodes a profile count.
+
+After this change the only in-function ROM addresses that remain un-resumable
+are delay slots — which must stay out — and two load-delay successors in
+OpenBIOS.
+
+### Evidence, and what is NOT evidenced
+
+Static, all six profiles, on this revision:
+
+- Generated code is purely additive over the pre-fix emitter. Multiset line
+  compare per profile, over 307,742 to 1,071,849 generated lines: exactly one
+  line is present before and absent after, the wrapper-count banner whose count
+  changed. Added lines classify only as resume labels, entry-switch cases,
+  wrapper triples, and an entry-switch skeleton for the 163-584 functions per
+  profile that previously had no continuations at all. (This compare is against
+  the resume-point commit alone; the `cont_pc` collapse that follows it removes
+  the wrapper triples, and is checked separately below.)
+- For the reported address: `0x1FC041F8` is a dispatch row; that row enters
+  `func_1FC04138` with the label key; that function's entry switch contains
+  `case 0xBFC041F8u: goto label_BFC041F8;` (absent before, present after); and
+  `label_BFC041F8: ;` sits immediately before the emitted
+  `bne $t5, $zero, 0xBFC041D0`, ahead of its i-cache fetch and cycle step, so
+  the resume re-executes the interrupted instruction whole and reads its
+  operand from `cpu->gpr[13]`, not from any host local.
+- The continuation collapse is equivalent row for row: 158,786 dispatch rows
+  compared across the six profiles (153,354 continuations, 5,432 plain), 0
+  mismatches.
+
+Runtime, `tools/bios_resume_testrom` on SCPH5501 with `PSX_PRECISE_SLICE=1`,
+Eagle, gcc 16.1.0: the ROM completed, 59,713 interrupt callbacks, 8,273,067
+runtime publishes, 0 unknown dispatches, 0 refused publishes.
+
+**That run does not demonstrate the fix.** Classifying its EPCs against the
+before/after tables — 157 ring snapshots, 160,768 publish rows examined, 1.94%
+of the stream, 51 distinct EPC targets — gives 21 targets already keyed before
+the change, 30 in game RAM (dispatchable without being BIOS keys) and **zero**
+that only this change made dispatchable. The synthetic ROM's interrupts do not
+land mid-block in ROM, so it cannot reproduce the Abe's Oddysee shape. It is a
+no-regression result and nothing more; the title is the only test of the
+behaviour itself.
+
+A note on how that number was obtained, because the first attempt got it wrong
+in the house style: reading the publish ring ONCE at the end samples its last
+1,024 rows out of millions, finds nothing relevant, and reports a clean pass.
+Sample throughout the run and print the coverage alongside the verdict.
+
+### Cost
+
+Measured on Eagle, gcc 16.1.0, `-O2 -DPSX_ENABLE_BLOCK_CYCLES
+-DPSX_NO_DEBUG_TOOLS`, compiling `generated/SCPH5501_full.c` alone. Interleave
+the arms and take more than one round: a fixed-order A/B lets the first run eat
+the cold-page cost, and a parallel build on the same machine inflated one of
+these by 20% before it was re-run on an idle host.
+
+Object-file growth overstates what ships — most of it is symbol, string and
+relocation tables that do not survive linking. The section deltas are the
+honest number: `.text` +1.18 MB, `.rdata` +0.69 MB, `.pdata` +0.39 MB, `.xdata`
++0.13 MB, so roughly +2.4 MB linked per profile. `.pdata` grew 393,624 bytes
+over 32,804 new continuations, 12.0 bytes each — that is the per-wrapper unwind
+record, one for one, which is what the `cont_pc` collapse removes.
+
+`full_function_emitter.cpp` is already listed in `codegen_hash_sources.cmake`,
+so this change moves the codegen hash and invalidates overlay caches by design.
+Kits must regenerate: there is no stale-cache hazard, and no cache reuse either.
