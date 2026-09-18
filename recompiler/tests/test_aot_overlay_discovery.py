@@ -3456,7 +3456,12 @@ def check_observed_dispatch_cli_recovery(recompiler):
             '--gcc', gcc, '--out-dir', str(cache), '--jobs', '1', '--cps',
         ]
         env = dict(os.environ)
-        env['PATH'] = os.path.dirname(gcc) + os.pathsep + env.get('PATH', '')
+        # APPEND, never prepend: gcc is passed by absolute path and finds its
+        # own DLLs beside itself, but putting a second toolchain's bin first
+        # shadows the C++ runtime the recompiler binary was built against and
+        # it then fails to start at all (0xC0000139), with empty output that
+        # reads as an unsupported flag rather than a launcher problem.
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.dirname(gcc)
 
         def run(record):
             capture_path.write_text(MOD.json.dumps([record, record]),
@@ -3583,7 +3588,12 @@ def check_full_hosted_fixed_point(recompiler):
             '--jobs', '1',
         ]
         env = os.environ.copy()
-        env['PATH'] = os.path.dirname(gcc) + os.pathsep + env.get('PATH', '')
+        # APPEND, never prepend: gcc is passed by absolute path and finds its
+        # own DLLs beside itself, but putting a second toolchain's bin first
+        # shadows the C++ runtime the recompiler binary was built against and
+        # it then fails to start at all (0xC0000139), with empty output that
+        # reads as an unsupported flag rather than a launcher problem.
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.dirname(gcc)
         first = subprocess.run(
             command, cwd=str(ROOT), env=env, capture_output=True, text=True, encoding="utf-8",
             timeout=120)
@@ -3728,7 +3738,12 @@ def check_full_candidate_cli_fastpath(recompiler):
         env = os.environ.copy()
         env.pop('PSX_OVERLAY_CACHE_DIR', None)
         env.pop('PSX_OVERLAY_CAPTURES', None)
-        env['PATH'] = os.path.dirname(gcc) + os.pathsep + env.get('PATH', '')
+        # APPEND, never prepend: gcc is passed by absolute path and finds its
+        # own DLLs beside itself, but putting a second toolchain's bin first
+        # shadows the C++ runtime the recompiler binary was built against and
+        # it then fails to start at all (0xC0000139), with empty output that
+        # reads as an unsupported flag rather than a launcher problem.
+        env['PATH'] = env.get('PATH', '') + os.pathsep + os.path.dirname(gcc)
         run = subprocess.run(
             command, cwd=str(ROOT), env=env, capture_output=True, text=True, encoding="utf-8",
             timeout=30)
