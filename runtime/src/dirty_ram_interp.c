@@ -1471,6 +1471,80 @@ static int precise_irq_deliverable(CPUState *cpu);
 static int precise_irq_before(CPUState *cpu,uint32_t pc) {
     return precise_irq_deliverable(cpu) && psx_irq_opcode_eligible(pc);
 }
+
+/* -- T163 portable IRQ-gate probe -------------------------------------------
+ * Same five site names and the same columns as the probe on the T59 head, so
+ * traces from two different trees diff line for line.
+ *
+ * It prints NO resumability column, deliberately. irq_epc_resumable does not
+ * exist before 702d1cd88, and psx_is_dispatchable answers against whatever
+ * dispatch table a tree happens to carry, so such a column would be measuring
+ * a different thing on each side. Every column here is device or COP0 state,
+ * which is tree-independent. That is also what makes pend a valid cross-tree
+ * observable where the EPC is not: without T110's emitter a correct take point
+ * can still stamp BFC04A88, as route-01 did.
+ *
+ * The question it answers: at `exec_ctx pc=BFC04A6C`, is the interrupt line
+ * already up? On the T59 head it measurably is not - istat=00000001
+ * pend=00000000 at cycle 396838093, rising only by 396838098, inside that
+ * instruction's own fetch and base charge. Every path that can stamp
+ * EPC=BFC04A6C runs before that charge, so a tree that stamps BFC04A6C must
+ * read pend non-zero here.
+ *
+ * in_window is a result in its own right: 0 over a window where the head
+ * reports 21,791 means this tree ran the loop COMPILED rather than sliced.
+ *
+ * Env (deliberately NOT PSX_-prefixed: run_native.py strips those):
+ *   T163_LO / T163_HI          hex PC range, inclusive. Unset => probe OFF.
+ *   T163_CYC_LO / T163_CYC_HI  decimal guest-cycle window (default: all).
+ *   T163_MAX                   line cap (default 200000). It keeps the FIRST N
+ *                              and drops the rest, so a cap that is too small
+ *                              discards the approach to the event. Size it from
+ *                              the window and check `suppressed` reads 0. */
+uint64_t g_t163_examined = 0, g_t163_in_window = 0;
+uint64_t g_t163_emitted = 0, g_t163_suppressed = 0;
+static uint32_t s_t163_lo, s_t163_hi;
+static uint64_t s_t163_cyc_lo, s_t163_cyc_hi, s_t163_max;
+static int s_t163_init, s_t163_on;
+static void t163_probe(const char *site, CPUState *cpu, uint32_t pc, int took) {
+    if (!s_t163_init) {
+        s_t163_init = 1;
+        const char *lo = getenv("T163_LO"), *hi = getenv("T163_HI");
+        const char *cl = getenv("T163_CYC_LO"), *ch = getenv("T163_CYC_HI");
+        const char *mx = getenv("T163_MAX");
+        s_t163_lo = lo ? (uint32_t)strtoul(lo, 0, 16) : 0u;
+        s_t163_hi = hi ? (uint32_t)strtoul(hi, 0, 16) : 0u;
+        s_t163_cyc_lo = cl ? strtoull(cl, 0, 10) : 0ull;
+        s_t163_cyc_hi = ch ? strtoull(ch, 0, 10) : ~0ull;
+        s_t163_max = mx ? strtoull(mx, 0, 10) : 200000ull;
+        s_t163_on = lo && hi && s_t163_hi >= s_t163_lo;
+        fprintf(stderr, "[t163] portable probe %s: pc=[%08X,%08X] cycle=[%llu,%llu] max=%llu\n",
+                s_t163_on ? "ARMED" : "OFF (set T163_LO and T163_HI)",
+                s_t163_lo, s_t163_hi,
+                (unsigned long long)s_t163_cyc_lo, (unsigned long long)s_t163_cyc_hi,
+                (unsigned long long)s_t163_max);
+    }
+    if (!s_t163_on) return;
+    g_t163_examined++;
+    if (pc < s_t163_lo || pc > s_t163_hi) return;
+    uint64_t cyc = psx_get_cycle_count();
+    if (cyc < s_t163_cyc_lo || cyc > s_t163_cyc_hi) return;
+    g_t163_in_window++;
+    if (g_t163_emitted >= s_t163_max) { g_t163_suppressed++; return; }
+    g_t163_emitted++;
+    extern uint32_t i_stat;
+    extern int memory_peek_instruction_word(uint32_t address, uint32_t *value);
+    uint32_t insn = 0;
+    int have_insn = memory_peek_instruction_word(pc, &insn);
+    fprintf(stderr,
+            "[t163] %-14s pc=%08X cyc=%llu istat=%08X imask=%08X pend=%08X "
+            "sr=%08X cause=%08X inexc=%d cooldown=%d deliverable=%d eligible=%d "
+            "insn=%s%08X took=%d\n",
+            site, pc, (unsigned long long)cyc, i_stat, i_mask, i_stat & i_mask,
+            cpu->cop0[12], cpu->cop0[13], psx_get_in_exception(),
+            psx_interrupt_cooldown_active(), precise_irq_deliverable(cpu),
+            psx_irq_opcode_eligible(pc), have_insn ? "" : "?", insn, took);
+}
 /* diag: trace every IRQ-check site at one watched PC (PSX_SD_WATCH_PC=hex), first 8 hits */
 static void sd_watch(const char *site, CPUState *cpu, uint32_t pc, int result) {
     static int init, hits; static uint32_t watch;
@@ -1518,6 +1592,7 @@ static int exec_delay_slot(CPUState *cpu,uint32_t pc,uint32_t target,int taken) 
      * Recursively interpret as a single non-branching instruction. */
     uint32_t ds_phys = pc & 0x1FFFFFFFu;
     uint32_t insn = fetch_word(ds_phys);
+    if(source_gpu_runtime_active()) t163_probe("slot_gate",cpu,pc,-1);
     if(source_gpu_runtime_active() && precise_irq_before(cpu,pc)) {
         dirty_ram_ld_delay_flush(cpu);
         if(psx_check_interrupts_delay_slot(cpu,pc,target,taken,insn)) {
@@ -1611,6 +1686,7 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
           dirty_ram_checkpoint_leave();
           g_interp_boundary_in_progress=0; }
         sd_watch(in_slot ? "exec_ctx_slot" : "exec_ctx", cpu, pc, op_field(insn)!=0x12u ? precise_irq_deliverable(cpu) : -1);
+        t163_probe(in_slot ? "exec_ctx_slot" : "exec_ctx", cpu, pc, -1);
         if(op_field(insn)!=0x12u && precise_irq_deliverable(cpu)) {
             extern uint64_t g_irq_deliver_count;
             uint64_t before=g_irq_deliver_count;
@@ -1761,6 +1837,9 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         interp_cyc_step(cpu, 0u, rt);
     } else if (!(opc >= 0x20u && opc <= 0x26u))
         interp_cyc_step(cpu, psx_cyc_dep_res_mask(insn), 32u);
+    /* T163: after this instruction's own fetch and base charge. No gate
+     * exists between here and the end of the instruction. */
+    t163_probe("post_fetch",cpu,pc,-1);
 #endif
 
     /* Widescreen far-backdrop column PRELOAD (auto_backdrop). At a detected
@@ -2848,6 +2927,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     const int source_owned_slice = source_gpu_runtime_active();
     for (uint32_t i = 0; source_owned_slice || i < MAX_PRECISE_INSNS;
          i += i != UINT32_MAX) {
+        t163_probe("slice_top",cpu,pc,-1);
         if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,pc)) {
             uint32_t committed = pc;
             extern uint32_t i_stat;
@@ -2930,6 +3010,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
          * still owns a mid-block return target. SR/in_exception determine
          * eligibility at every boundary; a previous take cannot permit one
          * extra opcode before the next IRQ. Retain the default take limit. */
+        t163_probe("slice_bottom",cpu,committed,-1);
         if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,committed)) {
             extern uint32_t i_stat;
             g_slice_last_committed = committed;
