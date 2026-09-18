@@ -1861,6 +1861,11 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         interp_cyc_step(cpu, 0u, rt);
     } else if (!(opc >= 0x20u && opc <= 0x26u))
         interp_cyc_step(cpu, psx_cyc_dep_res_mask(insn), 32u);
+    /* T163: the gate in exec_one_fetched_context ran BEFORE this fetch and base
+     * charge. A KSEG1 ROM fetch costs +4, so a line raised by those cycles is
+     * invisible until the next boundary, where it is stamped pc+4. Sampling
+     * here separates "raised before the fetch" from "raised by the fetch". */
+    t163_probe("post_fetch",cpu,pc,-1);
 #endif
 
     /* Widescreen far-backdrop column PRELOAD (auto_backdrop). At a detected
