@@ -250,6 +250,15 @@ def build_summary(run):
         # run was launched from, so this never downgrades the verdict.
         matches, match_source = binary.lower() == setup_sha.lower(), 'setup.json'
     receipt_matches = matches if match_source == 'receipt' else None
+    # The project's setup.json is this run's provenance ONLY while it still
+    # describes the binary the run used. Rebuilding into the same project
+    # directory replaces it, and source_head then names a tree this run never
+    # saw. Archiving a before/after pair is exactly when that happens, and the
+    # before-half gets labelled with the after-half's head -- silently, and
+    # permanently, because the archive is the durable record. Refuse to guess.
+    live_setup_sha = setup.get('executable_sha256')
+    setup_describes_run = (isinstance(binary, str) and isinstance(live_setup_sha, str)
+                           and binary.lower() == live_setup_sha.lower())
     summary = {
         'schema': 'psx-tas-archive-summary-v1',
         'title': TITLES.get(title, {}).get('name', 'Unknown title'), 'title_key': title,
@@ -257,7 +266,10 @@ def build_summary(run):
         'receipt': run['receipt_name'],
         'binary_sha256': binary, 'setup_executable_sha256': setup_sha, 'binary_matches_setup': matches,
         'binary_match_source': match_source, 'diagnostic_binary': receipt.get('diagnostic_binary'),
-        'source_head': setup.get('source_head'), 'source_tree': setup.get('source_tree'),
+        'source_head': setup.get('source_head') if setup_describes_run else None,
+        'source_tree': setup.get('source_tree') if setup_describes_run else None,
+        'setup_describes_run': setup_describes_run,
+        'project_executable_sha256': live_setup_sha,
         'setup_schema': setup.get('schema'),
         'project': run['project'].name if run['project'] is not None else None,
         'setup_path': str(run['project'] / 'setup.json') if run['setup'] is not None else None,
@@ -558,6 +570,13 @@ def describe_binary(summary):
 def describe_tree(summary):
     head, tree = summary.get('source_head'), summary.get('source_tree')
     if not head and not tree:
+        if summary.get('setup_describes_run') is False:
+            # Say which binary the project now describes, so the reader can find
+            # the real head in the build cache rather than assume it is lost.
+            return ('an unrecorded source tree (the project setup.json now describes '
+                    f'build {short(summary.get("project_executable_sha256"))}, not this '
+                    "run's; its source_head is NOT this run and has been withheld. The "
+                    'true head is in the build cache entry for this binary)')
         return 'an unrecorded source tree (setup receipt not reachable)'
     return f'source tree {short(tree)} (head {short(head)})'
 
