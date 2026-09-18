@@ -914,6 +914,7 @@ if(BUILD_TESTING)
                 aot_base_recovery
                 bios_resident_shard
                 msvc_cps_codegen
+                no_overlapping_bodies
                 overlay_guard_codegen
                 overlay_store_barrier_codegen
                 reachable_discovery_codegen)
