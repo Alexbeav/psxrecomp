@@ -226,7 +226,7 @@ def main():
               f"stride={args.stride} start={args.start_cycle} cpudiff={args.cpudiff_at_cp}",
               flush=True)
         require_port_free(args.porta); require_port_free(args.portb)
-    pa = launch(args.a, args.porta, args.stride, args.start_cycle); pb = launch(args.b, args.portb, args.stride, args.start_cycle)
+        pa = launch(args.a, args.porta, args.stride, args.start_cycle); pb = launch(args.b, args.portb, args.stride, args.start_cycle)
         try:
             sa = connect(args.porta); sb = connect(args.portb)
             wait_parked(sa, sb)
