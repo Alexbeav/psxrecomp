@@ -45,7 +45,7 @@ that someone else published.
 | traps.c `psx_is_dispatchable` | gate for every row below | Returned 1 for any non-zero, non-sentinel PC. Every "fail-loud" guard built on it did nothing. | **Fixed.** Exact for BIOS ROM and the kernel window through `psx_bios_is_entry`; dirty RAM stays dispatchable; other RAM unchanged. |
 | interrupts.c exception entry: EPC selection | `EPC = g_dirty_safe_resume_pc ?: compiled latch ?: top-level cpu->pc` | ROM acceptance was gated on the stub, so a mid-block ROM PC became an architectural EPC, went into the TCB and was dispatched later. | **Fixed** by the real gate: a non-entry ROM PC takes the designed sentinel path instead. Ring sites `epc_real` / `epc_sentinel`. |
 | interrupts.c exception entry: Cause | `Cause & ~0x7C` | Kept BD/BT/CE from the previous exception, so a compiled-boundary IRQ could carry a stale BD. | **Fixed:** `Cause & 0x0000FF00`, as Beetle `PS_CPU::Exception` does. |
-| interrupts.c `psx_check_interrupts_delay_slot` | `EPC = branch` with BD/BT | Faithful, but a ROM branch is not re-enterable. | **Fixed:** deferred when the branch PC is not resumable (`irq_epc_resumable`). Ring site `epc_delay_slot`. |
+| interrupts.c `psx_check_interrupts_delay_slot` | `EPC = branch` with BD/BT | Faithful, but a ROM branch is not re-enterable. | **Fixed:** deferred when the branch PC is not resumable (`irq_epc_resumable`). Ring site `epc_delay_slot`. **This row states the INTENT, not the behaviour — see T163 below.** |
 | interrupts.c `psx_irq_arm_compiled_resume_pc` | resume latch for savestate / rewind / netplay / scheduler resume | Sticky forever: later bare `psx_check_interrupts()` calls delivered with a stale EPC. | **Fixed:** consumed by the first compiled boundary check. |
 | interrupts.c deferred in-exception switch | `cpu->pc = g_exception_real_epc` | Pass-through of the entry EPC. | Gated by the fixed `psx_is_dispatchable`. Ring site `deferred_switch`. |
 | traps.c `psx_scheduler_resume_at` | savestate / rewind / netplay / selfcheck resume | Pass-through; the savestate candidate list includes `$ra`. | Gate is real now: a non-dispatchable resume crashes loudly. Ring site `sched_resume_at`. |
@@ -74,6 +74,90 @@ that someone else published.
 | full_function_emitter.cpp HLE hook | `cpu->pc = $ra` | Faithful `jr ra`. | No change. Not in the ring; a miss here reports "no runtime publisher". |
 | code_generator.cpp (game) `jr` / `jalr` | `check_at(_jt_X); cpu->pc = _jt_X` | Already latched into `_jt_<addr>` before the delay slot. | No change (the audit draft's G1 row was a false alarm). |
 | strict_translator.cpp stores / MTC0 | — | No exit and no IRQ check inside a block. | No publisher. |
+
+## T163 — what this audit did not cover (2026-09-18)
+
+Two defects traced to this work after it shipped. Neither is in the table
+above, and the reason they are not is the same in both cases: **the audit's
+subject was sites that PUBLISH a resume PC, but the change's blast radius was
+every CALLER of `psx_is_dispatchable`.** Those are different sets, and both
+defects live in the difference.
+
+### 1. The delay-slot row states intent, not behaviour
+
+The `psx_check_interrupts_delay_slot` row says the take is "deferred when the
+branch PC is not resumable". The code does something stricter. `exec_delay_slot`
+(dirty_ram_interp.c) gates on
+
+```
+precise_irq_before(cpu,pc) && irq_epc_resumable(pc-4u)
+```
+
+and `precise_irq_before` itself contains `irq_epc_resumable(pc)`. At a delay
+slot `pc` IS the slot, so the gate also requires the SLOT to be a dispatch key
+— which the emitter deliberately guarantees it never is. The two terms
+contradict each other and the first always loses: the take is not deferred, it
+is **unreachable**, for every BIOS-ROM delay slot. Measured on SCPH5501: the
+gate was satisfiable at at most 15 of 9,331 ROM terminators.
+
+The interrupt is not lost — `exec_one_fetched_context` takes it with the same
+EPC and Cause one boundary later, using the correct test
+(`irq_epc_resumable(in_slot ? pc-4u : pc)`).
+
+Left as-is deliberately. A candidate fix restoring the intended behaviour was
+built and routed (Abe's Oddysee, route 04) and was **byte-identical to the
+unfixed run across all 49,854 returns** — inert on that route. It is a real
+contradiction with no measured consequence, so it is not worth an unvalidated
+change to the interrupt path. Do not "fix" it without a test that exercises it.
+
+### 2. A predicate whose meaning changed under an untouched caller
+
+`interrupts.c` (delivery path) charges the preempted opcode's I-cache fetch and
+one base step. Its own comment states the intent: *"Preserve that fetch's tags
+and load-absorb effects, but never execute its register/store effects."* It is a
+timing charge. The ROM branch of its guard read `&& psx_is_dispatchable(fetch_pc)`.
+
+That term was a **tautology when written** (5cda8cf9c, which introduced the
+guard and the comment together): `psx_is_dispatchable` then returned 0 only for
+`pc == 0` and `PSX_EXC_SENTINEL_PC`, and neither can reach that branch —
+`fetch_pc != 0u` is tested two lines above, and the sentinel is `0x80000048`,
+whose phys `0x48` takes the RAM branch.
+
+Making `psx_is_dispatchable` exact turned that tautology into a behaviour
+change **without touching the line**, so it does not appear in this work's diff
+at all. For a delay-slot take `fetch_pc` is the SLOT, which is deliberately
+absent from the dispatch table, so every ROM delay-slot take stopped charging
+its preempted fetch: 4 cycles for the KSEG1 miss plus 1 for the base step. The
+machine then runs one instruction ahead of itself from that exception onward.
+
+Abe's Oddysee, against a 970ab88d control on the same host: returns 700–703 one
+instruction early at an identical clock, converting to five cycles fast from
+return 704. Removing the term returns all four predicted rows to the source
+values, and the 710-return prefix passes where the head fails at 702. Fixed by
+dropping the term; the remaining tests (non-zero, aligned, in RAM or the BIOS
+window) are what the guard actually requires, and `psx_icache_fetch` reads no
+guest memory.
+
+**The trigger is not title-specific.** Returns whose sampled EPC is in the BIOS
+window with `Cause.BD` set, across the eight requal-03 routes — a lower bound,
+since a return shows only the last exception: abesoddysee 37, biohazard 39,
+crash 30, megamanx4 72, megamanx5 35, pepsiman 39, redc 39, tekken3 21. Every
+title meets it. pepsiman and tekken3 passed requal-03 *before* this change and
+had not been re-run since, so the fix restores the behaviour they passed under.
+
+### The rule this leaves behind
+
+**When a change alters what a predicate MEANS, the review set is its callers,
+not its subject matter.** A caller written against the old meaning changes
+behaviour silently and shows up in no diff of the commit responsible.
+
+Screen for the second defect's shape mechanically rather than by reading names:
+*does the guarded block charge cycles?* A timing path and a control-flow gate
+are indistinguishable by variable name and obvious by that test. Applied to all
+15 gating call sites of `psx_is_dispatchable`, exactly one guards a block that
+calls `psx_icache_fetch`, and it is the defect above. (A screen, not a proof: it
+reads 22 lines into each block, so a charge further in or behind a call is
+missed.)
 
 ## Evidence
 
