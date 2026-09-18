@@ -1926,6 +1926,75 @@ std::string CodeGenerator::translate_basic_block(
     uint32_t delayed_load_dest = 0u;
     bool delayed_load_active = false;
 
+    /* Zero-word runs. Discovery reaches the zero-filled BSS / overlay load
+     * areas of an EXE image through JAL targets, and each zero word (sll
+     * $0,$0,0) expands to ~10 lines, so one run can be a million-line
+     * function (Parasite Eve func_8019234C: 110,381 words). A run of zero
+     * words with no label, annotation or delay slot among its followers is
+     * emitted as its leader (normal path) plus one loop that makes, per
+     * follower, exactly the calls the expanded form makes: the fetch-or-
+     * boundary choice of emit_pre_icache (a follower is never a block leader
+     * or label), the zero word's psx_cyc_step mask, and cosim_instr.
+     * Short runs stay expanded, so ordinary code is emitted byte-identically. */
+    static constexpr uint32_t kZeroRunMinFollowers = 64u;
+    const uint32_t zero_nop_mask = psx_cyc_dep_res_mask(0u);
+    auto canon_zero_word = [&](uint32_t a) {
+        std::string t = translate_instruction(a, 0u);
+        const std::string hex = fmt::format("0x{:08X}", a);
+        for (size_t p = t.find(hex); p != std::string::npos; p = t.find(hex, p))
+            t.replace(p, hex.size(), "0x@");
+        return t;
+    };
+    // Exclusive end of the zero-word run led by `lead`.
+    auto scan_zero_run = [&](uint32_t lead) -> uint32_t {
+        const uint64_t limit = exit_uses_delay_slot
+            ? static_cast<uint64_t>(block.end_addr)
+            : static_cast<uint64_t>(block.end_addr) + 4u;
+        const bool lead_kseg1 = lead >= 0xA0000000u;
+        const std::string lead_text = canon_zero_word(lead);
+        uint64_t a = static_cast<uint64_t>(lead) + 4u;
+        for (; a < limit && a <= 0xFFFFFFF8u; a += 4u) {
+            const uint32_t a32 = static_cast<uint32_t>(a);
+            auto w = exe_.read_word(a32);
+            if (!w.has_value() || *w != 0u) break;
+            if (extra_labels_.count(a32)) break;
+            if ((a32 >= 0xA0000000u) != lead_kseg1) break;
+            if (annotations_ && a32 != cfg.function_start &&
+                !annotations_->lookup(a32).empty()) break;
+            if (canon_zero_word(a32) != lead_text) break;
+        }
+        return static_cast<uint32_t>(a);
+    };
+    auto emit_zero_run_followers = [&](uint32_t first, uint32_t end) {
+        const std::string& in = config_.indent;
+        const std::string var = fmt::format("_zr_{:08X}", first);
+        ss << in << fmt::format(
+            "{{ /* zero-word run 0x{:08X}..0x{:08X}: {} words, per-word calls as expanded */\n",
+            first, end - 4u, (end - first) / 4u);
+        ss << in << in << fmt::format("uint32_t {};\n", var);
+        ss << in << in << fmt::format(
+            "for ({0} = 0x{1:08X}u; {0} != 0x{2:08X}u; {0} += 4u) {{\n", var, first, end);
+        if (cycle_per_insn) {
+            ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
+            if (first >= 0xA0000000u) {
+                ss << in << in << in << fmt::format("psx_icache_fetch(cpu, {});\n", var);
+            } else {
+                ss << in << in << in << fmt::format(
+                    "if (({0} & 0xCu) == 0u) psx_icache_fetch(cpu, {0}); "
+                    "else psx_cpu_step_boundary(cpu, {0});\n", var);
+            }
+            ss << in << in << in << fmt::format("psx_cyc_step(cpu, 0x{:X}u);\n", zero_nop_mask);
+            ss << "#endif\n";
+        }
+        ss << "#ifdef PSX_COSIM\n";
+        ss << in << in << in << fmt::format("cosim_instr({});\n", var);
+        ss << "#endif\n";
+        ss << in << in << "}\n";
+        ss << in << "}\n";
+    };
+    uint32_t zero_run_end = 0u;
+    uint32_t zero_run_scanned_end = 0u;
+
     while (addr <= block.end_addr) {
         auto instr_opt = exe_.read_word(addr);
         if (!instr_opt.has_value()) {
@@ -1953,6 +2022,12 @@ std::string CodeGenerator::translate_basic_block(
             const std::string& inote = annotations_->lookup(addr);
             if (!inote.empty())
                 ss << config_.indent << fmt::format("/* [NOTE] {} */\n", inote);
+        }
+
+        if (instr == 0u && !is_cf && !delayed_load_active && addr >= zero_run_scanned_end) {
+            zero_run_end = scan_zero_run(addr);
+            zero_run_scanned_end = zero_run_end;
+            if ((zero_run_end - addr) / 4u - 1u < kZeroRunMinFollowers) zero_run_end = 0u;
         }
 
         if (!is_cf) {
@@ -2495,6 +2570,15 @@ std::string CodeGenerator::translate_basic_block(
                     }
                 }
             }
+        }
+
+        if (zero_run_end != 0u) {
+            // The run leader above went through the normal path; its followers
+            // are emitted as one loop making the same per-word calls.
+            emit_zero_run_followers(addr + 4u, zero_run_end);
+            addr = zero_run_end;
+            zero_run_end = 0u;
+            continue;
         }
 
         addr += 4;
