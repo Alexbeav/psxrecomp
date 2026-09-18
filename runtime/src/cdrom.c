@@ -4029,10 +4029,12 @@ static int cdrom_snap_emit(PstW *w) {
      * BS_SEC_CLOCK restores exactly. */
     W64(s_lid.close_due); W8(s_lid.physical_open); W8(s_lid.shell_open_latched);
     WI(s_lid_irq_pending);
-    /* This explicit private profile adds its timing state to the CD section.
-     * Default bytes stay unchanged. Full-machine/cross-profile restore remains
-     * unqualified; matching-profile controller state is not reconstructed. */
-    if (s_source_explicit_seek_model) W8(s_source_seek_paused);
+    /* Paused versus standby is not derivable from the status bits: a completed
+     * plain seek and a completed Pause report the same status. Every profile
+     * times seeks and implicit reads from it, so every profile carries it, at
+     * one shared offset. Full-machine/cross-profile restore remains unqualified;
+     * matching-profile controller state is not reconstructed. */
+    W8(s_source_seek_paused);
     if (source_cdda.enabled) {
         WI(source_cdda.seeking); WI(source_cdda.position_valid);
         WI(source_cdda.play_track_match); WU(source_cdda.sectors_read);
@@ -4127,7 +4129,7 @@ static int cdrom_snap_parse(PstR *r) {
     RB(cd_pending_vol); RB(cd_decode_vol);
     R64(s_lid.close_due); R8(s_lid.physical_open); R8(s_lid.shell_open_latched);
     RI(s_lid_irq_pending);
-    if (s_source_explicit_seek_model) R8(s_source_seek_paused);
+    R8(s_source_seek_paused);
     if (source_cdda.enabled) {
         RI(source_cdda.seeking); RI(source_cdda.position_valid);
         RI(source_cdda.play_track_match); RU(source_cdda.sectors_read);
