@@ -925,16 +925,27 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
 
-        # test_aot_overlay_discovery.py had no add_test() entry at all. It runs
-        # far enough to exercise real discovery, then fails in
-        # check_real_batched_fragment_publication: that check reaches
-        # MOD.compile_fragment_batch, which spawns psxrecomp-game with cwd set
-        # to its own TemporaryDirectory, so BIOS-profile resolution (which
-        # probes bios/SCPH1001.toml relative to the working directory) finds
-        # nothing and returns "recompiler-error: no BIOS profile found". Every
-        # other subprocess in the same file passes cwd=str(ROOT) explicitly, so
-        # this looks like a missed cwd rather than a product defect — but it
-        # needs an owner, and DISABLED keeps it counted until then.
+        # test_aot_overlay_discovery.py had no add_test() entry at all until
+        # 2026-08-11, which registered it with a note blaming a missed cwd in
+        # MOD.compile_fragment_batch ("no BIOS profile found"). That note was
+        # already wrong when it was written: compile_fragment_batch has passed
+        # cwd since b39387eb0 on 2026-07-13, a month earlier. The failure being
+        # observed was two different things, neither of them that.
+        #
+        # On a Windows host the test prepended its gcc's bin to PATH, which put
+        # a second toolchain's libstdc++-6.dll ahead of the one psxrecomp-game
+        # was built against; the binary then failed to START (0xC0000139) with
+        # empty output, and compile_overlays.py reported that as a binary too
+        # old to support --codegen-hash. Separately, subprocess output was
+        # decoded with the host ANSI codepage, so any byte the local codepage
+        # could not map killed the reader thread (cp1253 here).
+        #
+        # Both are fixed at source: the test appends its toolchain instead of
+        # prepending, and compile_overlays.py decodes as UTF-8 and distinguishes
+        # a loader failure from a stale binary. Kept as a comment rather than
+        # deleted because the shape recurs: a subprocess that could not run
+        # should never be reported as a verdict about its contents, and a
+        # known-failure note nobody re-checks will outlive the bug it names.
         add_test(
             NAME aot_overlay_discovery
             COMMAND ${Python3_EXECUTABLE}

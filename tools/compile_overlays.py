@@ -137,6 +137,124 @@ def codegen_hash(runtime_include: str, recompiler: str = None) -> int:
     return 0
 
 
+# Windows puts an NTSTATUS in the exit code when an image cannot start: a DLL
+# was missing, or was found but lacked an entry point the binary needs (a GCC
+# 16 build against an older libstdc++-6.dll earlier on PATH, say). The process
+# never runs, so both streams come back empty -- which is indistinguishable, to
+# a caller checking only the return code and the output, from a binary that
+# does not understand the flag it was asked about. Reporting that as staleness
+# sends people to rebuild a binary that was never the problem.
+_LOADER_STATUS = {
+    0xC0000135: 'a required DLL was not found',
+    0xC0000139: 'a required DLL was found but lacks an entry point it needs',
+    0xC0000142: 'a required DLL failed to initialise',
+}
+
+
+def _pe_imported_dlls(path: str) -> list:
+    """DLL names from a PE import table. Stdlib only: the diagnosis must not
+    depend on objdump, which need not exist wherever this tool is run."""
+    try:
+        with open(path, 'rb') as fh:
+            data = fh.read()
+    except OSError:
+        return []
+    if len(data) < 0x40 or data[:2] != b'MZ':
+        return []
+    pe = int.from_bytes(data[0x3C:0x40], 'little')
+    if len(data) < pe + 24 or data[pe:pe + 4] != b'PE\0\0':
+        return []
+    nsections = int.from_bytes(data[pe + 6:pe + 8], 'little')
+    opt_size = int.from_bytes(data[pe + 20:pe + 22], 'little')
+    opt = pe + 24
+    magic = int.from_bytes(data[opt:opt + 2], 'little')
+    # DataDirectory starts here; entry [0] is exports, [1] is the import table.
+    dd = opt + (112 if magic == 0x20B else 96) + 8
+    if len(data) < dd + 4:
+        return []
+    imp_rva = int.from_bytes(data[dd:dd + 4], 'little')
+    if not imp_rva:
+        return []
+    sections = []
+    sec = opt + opt_size
+    for i in range(nsections):
+        s = sec + i * 40
+        if len(data) < s + 40:
+            return []
+        sections.append((int.from_bytes(data[s + 12:s + 16], 'little'),
+                         int.from_bytes(data[s + 8:s + 12], 'little'),
+                         int.from_bytes(data[s + 20:s + 24], 'little')))
+
+    def to_off(rva):
+        for va, vsz, raw in sections:
+            if va <= rva < va + max(vsz, 1):
+                return raw + (rva - va)
+        return None
+
+    names = []
+    off = to_off(imp_rva)
+    while off is not None and off + 20 <= len(data):
+        name_rva = int.from_bytes(data[off + 12:off + 16], 'little')
+        if not name_rva:
+            break
+        n = to_off(name_rva)
+        if n is None:
+            break
+        end = data.find(b'\0', n)
+        if end < 0:
+            break
+        names.append(data[n:end].decode('ascii', 'replace'))
+        off += 20
+    return names
+
+
+def _resolve_dll(exe: str, dll: str) -> str:
+    """Where the loader would find `dll`: the image's own directory first, then
+    PATH. shutil.which is wrong here -- it applies PATHEXT rules and reports a
+    DLL that is plainly on PATH as missing."""
+    roots = [os.path.dirname(os.path.abspath(exe))]
+    roots += os.environ.get('PATH', '').split(os.pathsep)
+    for root in roots:
+        if not root:
+            continue
+        candidate = os.path.join(root, dll)
+        if os.path.isfile(candidate):
+            return candidate
+    return 'NOT FOUND'
+
+
+def loader_failure_detail(exe: str, result) -> str:
+    """Non-empty when `exe` failed to start rather than failing to answer.
+
+    Names each non-system DLL it imports and the file PATH actually resolves
+    it to, because the usual cause is a second toolchain earlier on PATH
+    shadowing the runtime the binary was built against -- which is invisible
+    from the exit code alone."""
+    if os.name != 'nt' or (result.stdout or '') or (result.stderr or ''):
+        return ''
+    reason = _LOADER_STATUS.get(result.returncode & 0xFFFFFFFF)
+    if reason is None:
+        return ''
+    out = ['  The process never started: %s (exit 0x%08X).'
+           % (reason, result.returncode & 0xFFFFFFFF),
+           '  This is a launcher problem, NOT a stale or outdated binary;'
+           ' rebuilding will not change it.']
+    rows = []
+    for dll in _pe_imported_dlls(exe):
+        low = dll.lower()
+        if low.startswith('api-ms-') or low in (
+                'kernel32.dll', 'ntdll.dll', 'msvcrt.dll', 'user32.dll',
+                'advapi32.dll', 'shell32.dll', 'ole32.dll'):
+            continue
+        rows.append('    %s -> %s' % (dll, _resolve_dll(exe, dll)))
+    if rows:
+        out.append('  Non-system DLLs it imports, and what PATH resolves them to:')
+        out.extend(rows)
+        out.append('  A DLL from a different toolchain earlier on PATH shadows'
+                   ' the one it needs.')
+    return '\n'.join(out)
+
+
 def verify_recompiler_matches_tag(recompiler: str, tag_hash: int) -> None:
     """Stale-recompiler-binary guard. The cg tag hash is computed from the
     emitter build header (or the staged package header), but the code is emitted
@@ -152,13 +270,19 @@ def verify_recompiler_matches_tag(recompiler: str, tag_hash: int) -> None:
     import subprocess
     try:
         out = subprocess.run([recompiler, '--codegen-hash'],
-                             capture_output=True, text=True, timeout=30)
+                             capture_output=True, text=True,
+                             encoding='utf-8', errors='replace', timeout=30)
     except Exception as e:
         raise SystemExit(f'FATAL: cannot execute {recompiler} for --codegen-hash '
                          f'staleness check: {e}')
     line = (out.stdout or '').strip().splitlines()
     baked = line[0].strip() if line else ''
     if out.returncode != 0 or not re.fullmatch(r'[0-9a-fA-F]{8}', baked or ''):
+        stalled = loader_failure_detail(recompiler, out)
+        if stalled:
+            raise SystemExit(
+                f'FATAL: {recompiler} could not be run for the --codegen-hash\n'
+                f'  staleness check.\n{stalled}')
         raise SystemExit(
             f'FATAL: {recompiler} does not support --codegen-hash (or errored).\n'
             f'  This binary predates the stale-recompiler guard and CANNOT be\n'
@@ -205,13 +329,19 @@ def overlay_config_hash(recompiler: str, game_toml: str) -> int:
     try:
         out = subprocess.run(
             [recompiler, '--overlay-config-hash', os.path.abspath(game_toml)],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True,
+            encoding='utf-8', errors='replace', timeout=30)
     except Exception as e:
         raise SystemExit(
             f'FATAL: cannot execute {recompiler} for --overlay-config-hash: {e}')
     line = (out.stdout or '').strip().splitlines()
     value = line[0].strip() if line else ''
     if out.returncode != 0 or not re.fullmatch(r'[0-9a-fA-F]{8}', value):
+        stalled = loader_failure_detail(recompiler, out)
+        if stalled:
+            raise SystemExit(
+                f'FATAL: {recompiler} could not be run to hash overlay codegen\n'
+                f'  config.\n{stalled}')
         detail = (out.stderr or out.stdout or '').strip()
         raise SystemExit(
             f'FATAL: {recompiler} could not hash overlay codegen config.\n'
@@ -3475,7 +3605,7 @@ def generate_interior_fragment_static(interior: int, data: bytes,
         if args.cps:
             sub_env['PSX_CPS'] = '1'
         result = subprocess.run(
-            cmd, capture_output=True, text=True,
+            cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
             cwd=os.path.dirname(os.path.abspath(args.game_toml)), env=sub_env)
         if result.returncode != 0:
             # A walk from this interior that runs off the image (a branch at
@@ -4367,7 +4497,7 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
                '--out-dir', out_dir_tmp, '--overlay',
                '--ws-config', os.path.abspath(args.game_toml)]
         cmd += recompiler_project_root_args(args)
-        r = subprocess.run(cmd, capture_output=True, text=True,
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
                            cwd=os.path.dirname(os.path.abspath(args.game_toml)),
                            env=sub_env)
         if r.returncode != 0:
@@ -4666,7 +4796,7 @@ def _compile_dll_tcc(c_path: str, out_dll: str, include_dirs, flavor: int,
     for d in include_dirs:
         cmd.append('-I' + native_path(_bom_free_incdir(d)))
     print(f'  compile (tcc): {" ".join(cmd)}')
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         print(f'  TCC COMPILE ERROR (exit {r.returncode}):\n{r.stderr or r.stdout}')
         return False
@@ -4722,7 +4852,7 @@ def _compile_dll_direct(c_path: str, out_dll: str, include_dirs: list[str],
         print('  WARNING: no gcc toolchain dir found (PSX_MINGW_BIN / --gcc dir / '
               'PATH / common locations); compile will likely fail silently.')
     print(f'  compile: {" ".join(cmd)}')
-    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', env=env)
     if r.returncode != 0:
         msg = (r.stderr or r.stdout or '').strip()
         if not msg:
@@ -5876,7 +6006,7 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
         sub_env = dict(os.environ)
         if args.cps:
             sub_env['PSX_CPS'] = '1'   # §25: emit continuation-passing overlay C
-        r = subprocess.run(cmd, capture_output=True, text=True,
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
                            cwd=toml_dir, env=sub_env)
         if r.returncode != 0:
             print(f'  RECOMPILER ERROR:\n{r.stderr or r.stdout}')
@@ -6469,7 +6599,7 @@ def main():
             sub_env = dict(os.environ)
             if args.cps:
                 sub_env['PSX_CPS'] = '1'   # §25: emit continuation-passing overlay C
-            r = subprocess.run(cmd, capture_output=True, text=True,
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
                                cwd=toml_dir, env=sub_env)
             if r.returncode != 0:
                 print(f'  RECOMPILER ERROR:\n{r.stderr or r.stdout}')
