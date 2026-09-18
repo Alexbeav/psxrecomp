@@ -1859,10 +1859,40 @@ irq_deliver_eval:
         if(fetch_pc && !psx_irq_opcode_eligible(fetch_pc))
             PSX_CHECK_INTERRUPTS_RETURN();
         uint32_t fetch_phys = fetch_pc & 0x1FFFFFFFu;
+        /* T163. This admits a FETCH, not a resume. fetch_pc is the opcode the
+         * interrupt preempted — for a delay-slot take, source_irq_slot.pc, i.e.
+         * the SLOT — and the block below charges its I-cache fetch and one base
+         * step, exactly as the comment above states: tags and load-absorb
+         * effects, never register or store effects. The hardware fetched that
+         * opcode whether or not the static dispatch table can re-enter there,
+         * so re-enterability is the wrong question and must not gate it.
+         *
+         * This once carried `&& psx_is_dispatchable(fetch_pc)` on the ROM
+         * branch. It was harmless when written (5cda8cf9c, which introduced the
+         * guard and the comment above together): psx_is_dispatchable then
+         * returned 0 only for pc == 0 and for PSX_EXC_SENTINEL_PC. On THIS
+         * branch it could never return 0 — `fetch_pc != 0u` is tested above,
+         * and the sentinel is 0x80000048, whose phys 0x48 takes the RAM branch
+         * and never reaches here. The term was a tautology.
+         *
+         * T110 (702d1cd88) made psx_is_dispatchable exact WITHOUT touching this
+         * line, and the tautology silently became a behaviour change. A delay
+         * slot is deliberately excluded from the dispatch table, so every ROM
+         * delay-slot take stopped charging its preempted fetch: 4 cycles for
+         * the KSEG1 miss plus 1 for the base step. The machine then runs one
+         * instruction ahead of itself from that exception onward. Abe's
+         * Oddysee: returns 700-703 one instruction early at an identical clock,
+         * converting to five cycles fast from 704. Removing the term returns
+         * all four rows to the source values, the clock at 704 included.
+         *
+         * What the guard actually requires is that fetch_pc be a plausible
+         * instruction address: non-zero, aligned, and inside RAM or the BIOS
+         * window. Those tests remain and are sufficient on their own —
+         * psx_icache_fetch reads no guest memory, it charges cycles and updates
+         * cache tags, so no address in range can harm it. */
         if (fetch_pc != 0u && (fetch_pc & 3u) == 0u &&
             (fetch_phys < 0x00200000u ||
-             (fetch_phys >= 0x1FC00000u && fetch_phys < 0x1FC80000u &&
-              psx_is_dispatchable(fetch_pc)))) {
+             (fetch_phys >= 0x1FC00000u && fetch_phys < 0x1FC80000u))) {
             extern int source_gpu_runtime_active(void);
             if (source_gpu_runtime_active() && !source_irq_slot.pc) {
                 uint32_t instruction;
