@@ -263,18 +263,52 @@ Sample throughout the run and print the coverage alongside the verdict.
 ### Cost
 
 Measured on Eagle, gcc 16.1.0, `-O2 -DPSX_ENABLE_BLOCK_CYCLES
--DPSX_NO_DEBUG_TOOLS`, compiling `generated/SCPH5501_full.c` alone. Interleave
-the arms and take more than one round: a fixed-order A/B lets the first run eat
-the cold-page cost, and a parallel build on the same machine inflated one of
-these by 20% before it was re-run on an idle host.
+-DPSX_NO_DEBUG_TOOLS`, compiling `generated/SCPH5501_full.c` alone. Three arms,
+interleaved, two rounds — a fixed-order A/B lets the first run eat the cold-page
+cost, and an earlier measurement of the wrapper arm read 487 s because a runtime
+build was competing for the same cores.
 
-Object-file growth overstates what ships — most of it is symbol, string and
-relocation tables that do not survive linking. The section deltas are the
-honest number: `.text` +1.18 MB, `.rdata` +0.69 MB, `.pdata` +0.39 MB, `.xdata`
-+0.13 MB, so roughly +2.4 MB linked per profile. `.pdata` grew 393,624 bytes
-over 32,804 new continuations, 12.0 bytes each — that is the per-wrapper unwind
-record, one for one, which is what the `cont_pc` collapse removes.
+| arm | dispatch entries | compile r1 | compile r2 | object |
+|---|---|---|---|---|
+| base (block-leader keys, wrapper functions) | 11,905 | 86 s | 89 s | 8,357,169 |
+| exact EPC, wrapper functions | 44,709 | 313 s | 287 s | 16,356,534 |
+| exact EPC, `cont_pc` column | 44,709 | 76 s | 65 s | 10,005,031 |
+
+**With the wrapper collapse the exact-EPC build compiles faster than the
+pre-fix build it replaces**, while carrying 3.8x the dispatch entries. That is
+not a paradox: base itself emitted 10,213 wrapper functions for its own
+continuations, and removing those outweighs adding the extra switch cases. The
+wrapper functions, not the coverage, were the cost.
+
+Object-file size overstates what ships, since most of the growth is symbol,
+string and relocation tables that do not survive linking. Sections, versus base:
+
+| section | base | wrapper form | `cont_pc` form | vs base |
+|---|---|---|---|---|
+| .text | 5,084,928 | 6,262,848 | 5,221,856 | +136,928 |
+| .rdata | 99,136 | 790,816 | 790,816 | +691,680 |
+| .pdata | 142,956 | 536,580 | 20,388 | -122,568 |
+| .xdata | 65,740 | 196,524 | 24,152 | -41,588 |
+
+Net linked growth over base is about **+0.66 MB per profile**, against +2.4 MB
+for the wrapper form. `.pdata` and `.xdata` end up SMALLER than base, because
+those are per-function unwind records and the collapse deletes more wrapper
+functions than base ever had. The `.rdata` growth is the entry-switch jump
+tables and is the real cost of the coverage.
+
+Peak compiler memory matters as much as the totals on the smaller build hosts:
+cc1 was observed around 1.4 GB RSS on the wrapper form of this one translation
+unit. The `cont_pc` form is the mitigation.
 
 `full_function_emitter.cpp` is already listed in `codegen_hash_sources.cmake`,
 so this change moves the codegen hash and invalidates overlay caches by design.
 Kits must regenerate: there is no stale-cache hazard, and no cache reuse either.
+
+### Runtime equivalence of the collapse
+
+Same harness, same disc, same profile, `PSX_PRECISE_SLICE=1`, wrapper form vs
+`cont_pc` form: every timing-independent result word is identical
+(`0xE4F393BC`, `0x00000BB8`, `0x000005DC`, `0x23232289`, done magic
+`0x7110D0E0`), both runs report 0 unknown dispatches and 0 refused publishes,
+and both complete the ROM. The interrupt callback count differs (59,713 vs
+62,289) because it is timing; the harness deliberately does not gate on it.
