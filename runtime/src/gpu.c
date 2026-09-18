@@ -6113,10 +6113,20 @@ static void gp1_get_info(uint32_t val) {
             gpuread_latch = texture_window_value;
             break;
         case 3: /* draw area top-left */
-            gpuread_latch = draw_area_left | (draw_area_top << 10);
+            /* T97: merge into the low 20 bits and retain the upper 12, the way
+             * the pinned Octoshock 2.3 source does (psx/gpu.cpp case 0x3:
+             * DataReadBufferEx &= 0xFFF00000, then OR). Assigning dropped bits a
+             * game can read back and store: Abe's Oddysee ORs the result under
+             * 0xE3000000 into its DRAWENV packet, so the discarded bits surfaced
+             * as a RAM divergence at 801F069C. draw_area_* are 10 bits each, so
+             * the OR cannot reach the retained field. */
+            gpuread_latch = (gpuread_latch & 0xFFF00000u) |
+                            (draw_area_left | (draw_area_top << 10));
             break;
         case 4: /* draw area bottom-right */
-            gpuread_latch = draw_area_right | (draw_area_bottom << 10);
+            /* Same retain as case 3; observed at 801F06A0 under 0xE4000000. */
+            gpuread_latch = (gpuread_latch & 0xFFF00000u) |
+                            (draw_area_right | (draw_area_bottom << 10));
             break;
         case 5: /* draw offset */
             gpuread_latch = ((uint32_t)draw_offset_x & 0x7FFu) |
