@@ -3163,6 +3163,16 @@ void psx_slice_diag_write(const char *dir) {
       fprintf(f, "  \"compiled_irq_handoff\": {\"enabled\": %d, \"taken\": %llu, \"delay_slot_skipped\": %llu, \"slot_take_enabled\": %d, \"delay_slot_taken\": %llu, \"first_pc\": \"%08X\"},\n",
               g_psx_slice_irq_handoff, (unsigned long long)g_sd_handoff_taken, (unsigned long long)g_sd_handoff_slot_skipped,
               g_psx_slice_slot_take, (unsigned long long)g_sd_handoff_slot_taken, g_sd_handoff_first_pc); }
+    /* T163 probe denominator: armed?, gates examined, gates inside the window,
+     * lines printed, lines suppressed by the cap. An all-zero row with armed=0
+     * means the probe never ran - not that the trace was clean. Without this
+     * row a reader cannot tell a truncated trace from a complete one, which is
+     * the whole point of printing what was examined rather than a verdict. */
+    fprintf(f, "  \"t163_probe\": {\"armed\": %d, \"pc_lo\": \"%08X\", \"pc_hi\": \"%08X\", "
+               "\"examined\": %llu, \"in_window\": %llu, \"emitted\": %llu, \"suppressed\": %llu},\n",
+            s_t163_on, s_t163_lo, s_t163_hi,
+            (unsigned long long)g_t163_examined, (unsigned long long)g_t163_in_window,
+            (unsigned long long)g_t163_emitted, (unsigned long long)g_t163_suppressed);
     fprintf(f, "  \"leaders\": %llu,\n  \"gate_off\": %llu,\n  \"bios_skip\": %llu,\n  \"nested_skip\": %llu,\n",
             (unsigned long long)g_sd_leaders, (unsigned long long)g_sd_gate_off,
             (unsigned long long)g_sd_bios_skip, (unsigned long long)g_sd_nested_skip);
