@@ -1496,6 +1496,69 @@ static int precise_irq_before(CPUState *cpu,uint32_t pc) {
     return precise_irq_deliverable(cpu) && psx_irq_opcode_eligible(pc) &&
            irq_epc_resumable(pc);
 }
+
+/* ── T163 diagnostic: per-boundary IRQ-gate trace ────────────────────────────
+ * Abe's Oddysee return 702 stores COP0.EPC = BFC04A70 where the source stores
+ * BFC04A6C. Both are dispatch keys after T110, so the resume gate is not the
+ * discriminator and the TAKE POINT itself moved. This prints, at every IRQ-gate
+ * evaluation inside a PC range and cycle window, which site evaluated it, the
+ * device/COP0 inputs, each gate's answer separately, and whether a take
+ * happened — so the boundary that first saw the line raised is read directly
+ * instead of inferred from the resulting EPC.
+ *
+ * Env (deliberately NOT PSX_-prefixed: run_native.py strips those):
+ *   T163_LO / T163_HI          hex PC range, inclusive. Unset => probe OFF.
+ *   T163_CYC_LO / T163_CYC_HI  decimal guest-cycle window (default: all).
+ *   T163_MAX                   max lines (default 4000); after that, counts only.
+ * The arming line and the slice-diag counters report what was EXAMINED, not
+ * only what was printed, so an empty trace is distinguishable from a probe
+ * that never ran. */
+uint64_t g_t163_examined = 0, g_t163_in_window = 0;
+uint64_t g_t163_emitted = 0, g_t163_suppressed = 0;
+static uint32_t s_t163_lo, s_t163_hi;
+static uint64_t s_t163_cyc_lo, s_t163_cyc_hi, s_t163_max;
+static int s_t163_init, s_t163_on;
+static void t163_probe(const char *site, CPUState *cpu, uint32_t pc, int took) {
+    if (!s_t163_init) {
+        s_t163_init = 1;
+        const char *lo = getenv("T163_LO"), *hi = getenv("T163_HI");
+        const char *cl = getenv("T163_CYC_LO"), *ch = getenv("T163_CYC_HI");
+        const char *mx = getenv("T163_MAX");
+        s_t163_lo = lo ? (uint32_t)strtoul(lo, 0, 16) : 0u;
+        s_t163_hi = hi ? (uint32_t)strtoul(hi, 0, 16) : 0u;
+        s_t163_cyc_lo = cl ? strtoull(cl, 0, 10) : 0ull;
+        s_t163_cyc_hi = ch ? strtoull(ch, 0, 10) : ~0ull;
+        s_t163_max = mx ? strtoull(mx, 0, 10) : 4000ull;
+        s_t163_on = lo && hi && s_t163_hi >= s_t163_lo;
+        fprintf(stderr, "[t163] probe %s: pc=[%08X,%08X] cycle=[%llu,%llu] max=%llu\n",
+                s_t163_on ? "ARMED" : "OFF (set T163_LO and T163_HI)",
+                s_t163_lo, s_t163_hi,
+                (unsigned long long)s_t163_cyc_lo, (unsigned long long)s_t163_cyc_hi,
+                (unsigned long long)s_t163_max);
+    }
+    if (!s_t163_on) return;
+    g_t163_examined++;
+    if (pc < s_t163_lo || pc > s_t163_hi) return;
+    uint64_t cyc = psx_get_cycle_count();
+    if (cyc < s_t163_cyc_lo || cyc > s_t163_cyc_hi) return;
+    g_t163_in_window++;
+    if (g_t163_emitted >= s_t163_max) { g_t163_suppressed++; return; }
+    g_t163_emitted++;
+    extern uint32_t i_stat;
+    extern int memory_peek_instruction_word(uint32_t address, uint32_t *value);
+    uint32_t insn = 0;
+    int have_insn = memory_peek_instruction_word(pc, &insn);
+    fprintf(stderr,
+            "[t163] %-14s pc=%08X cyc=%llu istat=%08X imask=%08X pend=%08X "
+            "sr=%08X cause=%08X inexc=%d cooldown=%d deliverable=%d eligible=%d "
+            "resumable=%d resumable_m4=%d insn=%s%08X took=%d\n",
+            site, pc, (unsigned long long)cyc, i_stat, i_mask, i_stat & i_mask,
+            cpu->cop0[12], cpu->cop0[13], psx_get_in_exception(),
+            psx_interrupt_cooldown_active(), precise_irq_deliverable(cpu),
+            psx_irq_opcode_eligible(pc), irq_epc_resumable(pc),
+            irq_epc_resumable(pc - 4u), have_insn ? "" : "?", insn, took);
+}
+
 /* diag: trace every IRQ-check site at one watched PC (PSX_SD_WATCH_PC=hex), first 8 hits */
 static void sd_watch(const char *site, CPUState *cpu, uint32_t pc, int result) {
     static int init, hits; static uint32_t watch;
@@ -1543,10 +1606,12 @@ static int exec_delay_slot(CPUState *cpu,uint32_t pc,uint32_t target,int taken) 
      * Recursively interpret as a single non-branching instruction. */
     uint32_t ds_phys = pc & 0x1FFFFFFFu;
     uint32_t insn = fetch_word(ds_phys);
+    if(source_gpu_runtime_active()) t163_probe("slot_gate",cpu,pc,-1);
     if(source_gpu_runtime_active() && precise_irq_before(cpu,pc) &&
        irq_epc_resumable(pc-4u)) {
         dirty_ram_ld_delay_flush(cpu);
         if(psx_check_interrupts_delay_slot(cpu,pc,target,taken,insn)) {
+            t163_probe("slot_gate_TOOK",cpu,pc,1);
             g_slice_irq_taken++;return 1;
         }
     }
@@ -1639,6 +1704,10 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
           dirty_ram_checkpoint_leave();
           g_interp_boundary_in_progress=0; }
         sd_watch(in_slot ? "exec_ctx_slot" : "exec_ctx", cpu, pc, op_field(insn)!=0x12u ? precise_irq_deliverable(cpu) : -1);
+        /* T163: the ONLY gate evaluated with devices advanced to THIS
+         * instruction's own boundary (psx_cpu_step_boundary ran just above).
+         * Both psx_run_precise gates run without that advance. */
+        t163_probe(in_slot ? "exec_ctx_slot" : "exec_ctx", cpu, pc, -1);
         if(op_field(insn)!=0x12u && precise_irq_deliverable(cpu) &&
            irq_epc_resumable(in_slot ? pc-4u : pc)) {
             extern uint64_t g_irq_deliver_count;
@@ -1655,6 +1724,8 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
                 if(!cpu->pc)cpu->pc=pc;
             }
             if(g_irq_deliver_count!=before) {
+                t163_probe(in_slot ? "exec_ctx_slot_TOOK" : "exec_ctx_TOOK",
+                           cpu, pc, 1);
                 g_slice_irq_taken++;
                 return 1;
             }
@@ -2886,7 +2957,9 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     const int source_owned_slice = source_gpu_runtime_active();
     for (uint32_t i = 0; source_owned_slice || i < MAX_PRECISE_INSNS;
          i += i != UINT32_MAX) {
+        t163_probe("slice_top",cpu,pc,-1);
         if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,pc)) {
+            t163_probe("slice_top_TAKE",cpu,pc,1);
             uint32_t committed = pc;
             extern uint32_t i_stat;
             g_slice_last_committed = committed;
@@ -2968,7 +3041,12 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
          * still owns a mid-block return target. SR/in_exception determine
          * eligibility at every boundary; a previous take cannot permit one
          * extra opcode before the next IRQ. Retain the default take limit. */
+        /* T163: this gate publishes EPC = committed (= pc+4 on a straight-line
+         * step) but is evaluated with devices advanced only to `pc`'s boundary.
+         * If it is the site that fires at BFC04A70, the +4 is here. */
+        t163_probe("slice_bottom",cpu,committed,-1);
         if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,committed)) {
+            t163_probe("slice_bottom_TAKE",cpu,committed,1);
             extern uint32_t i_stat;
             g_slice_last_committed = committed;
             g_slice_last_istat = i_stat;
@@ -3121,6 +3199,14 @@ void psx_slice_diag_write(const char *dir) {
       fprintf(f, "  \"compiled_irq_handoff\": {\"enabled\": %d, \"taken\": %llu, \"delay_slot_skipped\": %llu, \"slot_take_enabled\": %d, \"delay_slot_taken\": %llu, \"first_pc\": \"%08X\"},\n",
               g_psx_slice_irq_handoff, (unsigned long long)g_sd_handoff_taken, (unsigned long long)g_sd_handoff_slot_skipped,
               g_psx_slice_slot_take, (unsigned long long)g_sd_handoff_slot_taken, g_sd_handoff_first_pc); }
+    /* T163 probe denominator: armed?, gates examined, gates inside the window,
+     * lines printed, lines suppressed by the cap. An all-zero row with
+     * armed=0 means the probe never ran — not that the trace was clean. */
+    fprintf(f, "  \"t163_probe\": {\"armed\": %d, \"pc_lo\": \"%08X\", \"pc_hi\": \"%08X\", "
+               "\"examined\": %llu, \"in_window\": %llu, \"emitted\": %llu, \"suppressed\": %llu},\n",
+            s_t163_on, s_t163_lo, s_t163_hi,
+            (unsigned long long)g_t163_examined, (unsigned long long)g_t163_in_window,
+            (unsigned long long)g_t163_emitted, (unsigned long long)g_t163_suppressed);
     fprintf(f, "  \"leaders\": %llu,\n  \"gate_off\": %llu,\n  \"bios_skip\": %llu,\n  \"nested_skip\": %llu,\n",
             (unsigned long long)g_sd_leaders, (unsigned long long)g_sd_gate_off,
             (unsigned long long)g_sd_bios_skip, (unsigned long long)g_sd_nested_skip);
