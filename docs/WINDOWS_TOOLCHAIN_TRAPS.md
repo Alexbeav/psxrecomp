@@ -18,6 +18,22 @@ exits with an NTSTATUS and the process writes nothing to either stream.
     0xC0000139  STATUS_ENTRYPOINT_NOT_FOUND   (DLL found, wrong vintage)
     0xC0000142  STATUS_DLL_INIT_FAILED
 
+**The exit code has more than one spelling, and searching for the wrong one hides half the
+cases.** The same binary, the same build, only `PATH` differing:
+
+    correct toolchain first      exit 0, prints usage
+    foreign libstdc++-6.dll first, launched from a native shell
+                                 exit -1073741511  (0xC0000139 as a signed int)
+    the same, launched from Git Bash
+                                 exit 127
+
+Git Bash reports it as 127, which reads as "command not found" and sends the reader looking for a
+missing file rather than a shadowed DLL. Both spellings print nothing on either stream. Grep the
+symptom, not the number: **a non-zero exit with both streams empty.**
+
+Note also what this failure mode *cannot* be: it makes tests fail, never pass. A green suite is
+never a symptom of it, so it can invalidate a red run and never a clean one.
+
 A caller checking only "non-zero exit, no output" cannot tell that from a binary too old to
 understand the flag it was asked about. `tools/compile_overlays.py` used to report it as
 staleness and advise a rebuild, which cannot help — the binary was current, the launcher was
@@ -69,8 +85,38 @@ a catastrophically broken tree:
 **Rule:** before quoting a suite number, build every target and confirm `Not Run: 0`. A run with
 non-zero `Not Run` is not a measurement of the tree.
 
+**Second half of the same rule, from a run that was quoted before it was earned:** also confirm
+the recompiler actually loads, because a suite whose spawned binary cannot start reports a
+plausible pass rate rather than an error. The cheap gate, before ctest:
+
+    psxrecomp-game --help   # must exit 0 and print usage
+
+Without it, 2026-09-18 produced `84% tests passed, 30 tests failed out of 189` — a number with a
+percentage, a denominator and no meaning at all, because every test that spawns the recompiler
+died at image load. With the gate, the same tree measured 0 of 189.
+
 Three tests are `DISABLED` deliberately (`recompiler/CMakeLists.txt`) and report as
 `Not Run (Disabled)`. Those are expected and are not breakage.
+
+## A hand-rolled hash of CMake-read files is wrong on a CRLF checkout
+
+`PSX_OVERLAY_CODEGEN_HASH` is SHA-256 over the files in
+`runtime/codegen_hash_sources.cmake`, concatenated in order, first 8 hex characters
+(`runtime/hash_codegen.cmake`). CMake's `file(READ)` **normalises CRLF to LF**. A script that
+reads the same files as raw bytes on a CRLF checkout therefore hashes something else — and still
+returns eight plausible hex characters that compare cleanly against nothing.
+
+Reproducing it by hand produced `7af52ab7`, then `91f42d0d`, before the correct `80dd9a27`. Both
+wrong values looked exactly as much like a hash as the right one.
+
+**Rule:** use `codegen_hash.py`, which normalises the way `file(READ)` does, or the built
+binary's `--codegen-hash`, which is authoritative. Never hand-roll it. And when checking a tree
+you have not built, **run the script first against a tree whose hash is already known** — a
+control run is the only thing separating a correct implementation from a confidently wrong one.
+
+Worked example, 2026-09-18: control `cdc88fb44` → `ef02e740`, already known, so the same script
+at `65730fc70` → `80dd9a27` could be believed. Without the control, `80dd9a27` would have been
+a number that merely looked right.
 
 ## Known-issue notes decay into permanent excuses
 
