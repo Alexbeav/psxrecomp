@@ -1607,8 +1607,22 @@ static int exec_delay_slot(CPUState *cpu,uint32_t pc,uint32_t target,int taken) 
     uint32_t ds_phys = pc & 0x1FFFFFFFu;
     uint32_t insn = fetch_word(ds_phys);
     if(source_gpu_runtime_active()) t163_probe("slot_gate",cpu,pc,-1);
-    if(source_gpu_runtime_active() && precise_irq_before(cpu,pc) &&
-       irq_epc_resumable(pc-4u)) {
+    /* T163. The resumability test belongs to the PUBLISHED EPC, which at a
+     * delay slot is the terminator (pc-4) with Cause.BD set, never the slot
+     * itself — T110's own rule, and why its emitter deliberately excludes
+     * delay slots from the dispatch table. precise_irq_before(cpu,pc) tests
+     * irq_epc_resumable(pc), so using it here required the SLOT to be a
+     * dispatch key, which by that exclusion it can never be: this take was
+     * unreachable for every BIOS-ROM delay slot. The interrupt was not lost —
+     * exec_one_fetched_context takes it with the same EPC one boundary later,
+     * after psx_cpu_step_boundary(cpu,pc) has run. That boundary is where the
+     * frame-return probe samples, so the sampled pc moved forward one
+     * instruction (Abe's Oddysee returns 700-701, BFC04A48 -> BFC04A4C and
+     * BFC04A88 -> BFC04A8C at an identical clock, and the epc +4 at 702-703
+     * downstream of it). Keep both of precise_irq_before's other terms and the
+     * terminator test; drop only the test that contradicts the rule. */
+    if(source_gpu_runtime_active() && precise_irq_deliverable(cpu) &&
+       psx_irq_opcode_eligible(pc) && irq_epc_resumable(pc-4u)) {
         dirty_ram_ld_delay_flush(cpu);
         if(psx_check_interrupts_delay_slot(cpu,pc,target,taken,insn)) {
             t163_probe("slot_gate_TOOK",cpu,pc,1);
