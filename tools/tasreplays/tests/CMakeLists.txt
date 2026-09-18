@@ -6,12 +6,18 @@ add_test(NAME tas_dualshock_route_export COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_dualshock_route.py")
 add_test(NAME tas_native_input_identity COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_native_input_identity.py")
+add_test(NAME tas_checkpoint_comparator COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_compare_boot_states.py")
+add_test(NAME tas_checkpoint_run_comparator COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_compare_checkpoint_runs.py")
 add_test(NAME tas_nymashock_admission COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock_admission.py")
 add_test(NAME tas_biohazard_adapter COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_biohazard.py")
 add_test(NAME tas_megamanx5_adapter COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_megamanx5.py")
+add_test(NAME tas_admission_firmware COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_admission_firmware.py")
 add_test(NAME tas_nymashock28_movie COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock28_movie.py")
 add_test(NAME tas_nymashock_progression COMMAND ${Python3_EXECUTABLE}
@@ -28,6 +34,12 @@ add_test(NAME tas_qualified_hunks COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_qualified_hunks.py")
 add_test(NAME tas_archive_run COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_archive_run.py")
+add_test(NAME tas_octoshock210_route COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_octoshock210_route.py")
+add_test(NAME tas_nymashock28_route COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock28_route.py")
+add_test(NAME tas_octoshock_dualshock COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_dualshock_octoshock.py")
 add_test(NAME tas_build_cache COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_build_cache.py")
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
@@ -78,11 +90,43 @@ foreach(_mode IN ITEMS O0 O2)
     target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
     add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
         "${_tas_runtime}/tests/test_sio_nymashock_dualshock.py" $<TARGET_FILE:${_target}>)
+    set(_target "tas_sio_pad_query_model_${_mode}")
+    add_executable(${_target} "${_tas_runtime}/tests/test_sio_pad_query_model.c")
+    target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
+    target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
+    add_test(NAME ${_target} COMMAND ${_target})
     set(_target "tas_sio_ack_timing_${_mode}")
     add_executable(${_target} "${_tas_runtime}/tests/test_sio_ack_timing.c")
     target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
     target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
     add_test(NAME ${_target} COMMAND ${_target})
+    set(_target "tas_sio_checkpoint_${_mode}")
+    add_executable(${_target} "${_tas_runtime}/tests/test_sio_checkpoint.c")
+    target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
+    target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
+    add_test(NAME ${_target} COMMAND ${_target})
+endforeach()
+
+# The driver links test_fntrace_checkpoint.c with the actual game-start latch.
+add_test(NAME tas_fntrace_checkpoint COMMAND ${Python3_EXECUTABLE}
+    "${_tas_runtime}/tests/test_fntrace_checkpoint.py" --cc ${CMAKE_C_COMPILER})
+add_test(NAME tas_spu_checkpoint COMMAND ${Python3_EXECUTABLE}
+    "${_tas_runtime}/tests/test_spu_checkpoint.py" --cc ${CMAKE_C_COMPILER})
+
+foreach(_mode IN ITEMS O0 O2)
+    foreach(_kind IN ITEMS cd gpu_linked_list)
+        set(_target "tas_dma_checkpoint_${_kind}_${_mode}")
+        add_executable(${_target} "${_tas_runtime}/tests/test_dma_${_kind}_source.c" "${_tas_runtime}/src/dma_gpu_ll.c")
+        target_include_directories(${_target} PRIVATE "${_tas_runtime}/include" "${_tas_runtime}/../recompiler/include")
+        if(_kind STREQUAL "cd")
+            target_compile_definitions(${_target} PRIVATE PSX_TEST_SOURCE_CD_IMPLEMENTED)
+        else()
+            target_compile_definitions(${_target} PRIVATE PSX_TEST_SOURCE_LL_IMPLEMENTED)
+        endif()
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -flto -fwhole-program)
+        target_link_options(${_target} PRIVATE -flto -fwhole-program)
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
 endforeach()
 
 foreach(_kind IN ITEMS pipeline dma)
@@ -105,6 +149,11 @@ foreach(_mode IN ITEMS O0 O2)
     target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
     add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
         "${_tas_runtime}/tests/test_cdrom_source_cdda_contracts.py" $<TARGET_FILE:${_target}>)
+    set(_target "tas_cdrom_checkpoint_${_mode}")
+    add_executable(${_target} "${_tas_runtime}/tests/test_cdrom_checkpoint.c" "${_tas_runtime}/src/psx_sha256.c")
+    target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
+    target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
+    add_test(NAME ${_target} COMMAND ${_target})
 endforeach()
 
 foreach(_mode IN ITEMS O0 O2)

@@ -37,11 +37,13 @@
 #include "lockstep.h"
 #include "psx_cycles.h"
 #include "psx_icache.h"
+#include "input_route_raster_clock_wire.h"
 #include "psx_memory.h"
 #include "psx_cyc.h"
 #include "psx_scheduler.h"
 #include "spu.h"
 #include "input_route_field_clock.h"
+#include "pst_wire.h"
 #include "input_route_raster_clock.h"
 #include "source_gpu_runtime.h"
 #include "dispatch_publish.h"
@@ -254,6 +256,49 @@ int interrupts_raster_gpu_status(uint32_t *bits) {
     }
     *bits=input_route_raster_status(&input_route_raster);
     return 1;
+}
+
+/* BS_SEC_RASTER, instance [0]: the comparison raster clock owned by this module.
+ * `cycle`/`last_rise` are INTERNAL counters (accumulated advanced cycles), not
+ * psx_cycle_count's time base — written as-is, never rebased. The wire reader
+ * refuses on a failed fraction/cycle cross-check. */
+uint32_t interrupts_raster_wire_bytes(void) { return INPUT_ROUTE_RASTER_WIRE_BYTES; }
+void interrupts_raster_wire_write(uint8_t *out) {
+    input_route_raster_wire_write(&input_route_raster, out);
+}
+int interrupts_raster_wire_read(const uint8_t *in, uint32_t len) {
+    return input_route_raster_wire_read(&input_route_raster, in, len);
+}
+/* TRUE when the NTSC raster comparison clock is the active timing model. Drives
+ * the profile-dependent required-set rule (the section is required when this is
+ * true, and its presence is a profile mismatch when it is false). */
+int interrupts_raster_comparison_active(void) { return input_route_source_raster; }
+
+/* E negative control (PSX_TAS_PERTURB_RESTORE): deliberately corrupt ONE
+ * restored field immediately after a resume, so the ladder's comparison is
+ * required to fail. A gate that has never been observed to fail is not
+ * evidence; this is how it is observed failing. Test/diagnostic only. */
+int interrupts_raster_perturb(const char *field) {
+    if (!field || !*field) return 0;
+    if (strcmp(field, "raster_fraction") == 0) {
+        input_route_raster.fraction += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.fraction -> %u\n",
+                input_route_raster.fraction);
+        return 1;
+    }
+    if (strcmp(field, "raster_cycle") == 0) {
+        input_route_raster.cycle += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.cycle -> %llu\n",
+                (unsigned long long)input_route_raster.cycle);
+        return 1;
+    }
+    if (strcmp(field, "raster_rises") == 0) {
+        input_route_raster.rises += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.rises -> %u\n",
+                input_route_raster.rises);
+        return 1;
+    }
+    return 0;
 }
 extern uint64_t g_vblank_raise_count;
 extern int g_cosim_dirty_pump_site;
@@ -516,7 +561,9 @@ void psx_spu_sample_event_service(void) {
     g_spu_sample_service_checks++;
     if (!spu_sample_event_mode() || !s_midframe_audio_pump)
         return;
-    /* SPUCNT alone — same hot-gate rationale as the deadline query above. */
+    /* SPUCNT alone — same hot-gate rationale as the deadline query above:
+     * read the register directly instead of building the full global-state
+     * struct (memset plus ~20 register reads) on every sample-event service. */
     const uint16_t ctrl = spu_ctrl_read();
     if ((ctrl & 0x0040u) != 0) {
         g_spu_sample_enabled_services++;
@@ -563,6 +610,7 @@ static void fire_vblank_edge(void) {
 }
 
 void interrupts_service_scheduled_events(void) {
+    { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }   /* scheduled events may fire below */
     note_sio_progress_cycle();
     /* Device time continues while the CPU handles an exception, including
      * with IEc clear. A handler may poll GPUSTAT's field bit. CPU interrupt
@@ -596,9 +644,35 @@ uint32_t interrupts_get_cycles_since_vblank(void) {
     return cycles_since_vblank;
 }
 
+/* Reshaped #5 guard (was: refuse whenever the comparison profile is active).
+ *
+ * Restoring the VBlank phase is only meaningful when the state that DEFINES
+ * that phase came with it. Under the raster comparison profile the phase lives
+ * in BS_SEC_RASTER, so a blob written without that section would leave a zeroed
+ * raster clock behind a plausible-looking run — exactly the v4 no-stub
+ * violation the old model-based refusal existed to prevent.
+ *
+ * So the predicate is now a PRESENCE question, not a model question: refuse
+ * when the comparison profile is active and the load did not carry
+ * BS_SEC_RASTER. Non-comparison profiles restore plain cycles_since_vblank and
+ * are unaffected. boot_state.c records the section's presence once per load via
+ * interrupts_note_state_load(); psx_selfcheck.c's post-load re-apply of the
+ * latched phase stays valid because that record persists for the process. */
+static int s_state_load_raster_present;
+
+void interrupts_note_state_load(int raster_section_present) {
+    s_state_load_raster_present = raster_section_present ? 1 : 0;
+    /* input_route_raster_deadline is DERIVED from the raster clock
+     * (cycle + until_rise), so it is not on the wire; recompute it here, after
+     * every section has loaded -- the same treatment as return_clock. */
+    input_route_raster_recompute();
+}
+
 void interrupts_set_cycles_since_vblank(uint32_t v) {
-    if (input_route_source_fields || input_route_source_raster) {
-        fprintf(stderr, "[input-field-clock] comparison profile requires a cold boot; state restore is unsupported\n");
+    if ((input_route_source_fields || input_route_source_raster) &&
+        !s_state_load_raster_present) {
+        fprintf(stderr, "[input-field-clock] refuse: comparison profile restore "
+                        "without BS_SEC_RASTER (raster clock would be a stub)\n");
         exit(4);
     }
     cycles_since_vblank = v;
@@ -834,6 +908,8 @@ static int defer_switch_enabled(void) {
     return s;
 }
 
+/* Documents psx_defer_switch_pending(), which the BS_SEC_IRQ_TIMING block
+ * below ends with; the registry pins that block as one contiguous run. */
 /* Exposed for the dirty-RAM interpreter: a deferred in-exception thread switch
  * is honored only at a site-0 poll with a materialized resume PC. An
  * interpreted thread that never leaves one local-flow run (MGS PAL's parked
@@ -842,6 +918,88 @@ static int defer_switch_enabled(void) {
  * forever and every other task starves (SLES-01370 boot black screen). The
  * interpreter uses this to surface at its next committed transfer and to force
  * its entry poll. */
+/* BS_SEC_IRQ_TIMING: comparison-clock / IRQ-deferral state that is live but was
+ * covered by NO section -- found by the step-8 forward sweep, i.e. an UNGUARDED
+ * surface (the earlier "catalogue what refuses" inventory structurally could not
+ * see it).
+ *
+ *   input_route_field_clock       16 B  field-duration clock, advanced on every
+ *                                      VBlank while the field model is active
+ *   input_route_raster_pending     4 B  accumulated VBlank edges not yet fired;
+ *                                      NOT derivable from the raster struct
+ *   last_sio_seq_seen              4 B  SIO progress; drives
+ *   last_sio_progress_cycle        8 B  should_defer_vblank_for_sio(), which
+ *                                      decides whether a VBlank edge fires.
+ *                                      Absolute stamp (psx_cycle_count base)
+ *   post_exception_cooldown_until  8 B  gates IRQ delivery. Absolute stamp
+ *   source_irq_slot               12 B  source-IRQ context. NOT transient: the
+ *                                      e-survey measured it non-zero at 5901 of
+ *                                      6000 frame boundaries (98.4%), so it must
+ *                                      be serialized and must never be asserted
+ *                                      zero on save.
+ *   s_defer_switch_*              12 B  scheduler deferral. Serialized (it is a
+ *                                      real mechanism, live on MGS PAL); the
+ *                                      0/6000 figure is RE1-only and is not a
+ *                                      licence to assert it zero.
+ *
+ * input_route_raster_deadline is NOT serialized: DERIVED from the raster clock
+ * (cycle + until_rise), recomputed at end of load in interrupts_note_state_load()
+ * -- the same treatment as return_clock.
+ *
+ * No field here is model-gated, so the section is present in EVERY profile and
+ * is always required (which is why it is not part of the profile-exact rule). */
+#define IRQ_TIMING_WIRE_BYTES 64u
+uint32_t interrupts_timing_wire_bytes(void) { return IRQ_TIMING_WIRE_BYTES; }
+void interrupts_timing_wire_write(uint8_t *out) {
+    PstW w; pst_w_init(&w, out, IRQ_TIMING_WIRE_BYTES);
+    pst_w_u32(&w, input_route_field_clock.remainder);
+    pst_w_u32(&w, input_route_field_clock.line_phase);
+    pst_w_u32(&w, input_route_field_clock.field);
+    pst_w_u32(&w, input_route_field_clock.current_cycles);
+    pst_w_u32(&w, input_route_raster_pending);
+    pst_w_u32(&w, last_sio_seq_seen);
+    pst_w_u64(&w, last_sio_progress_cycle);
+    pst_w_u64(&w, post_exception_cooldown_until);
+    pst_w_u32(&w, source_irq_slot.pc);
+    pst_w_u32(&w, source_irq_slot.target);
+    pst_w_u32(&w, source_irq_slot.cause);
+    pst_w_u32(&w, s_defer_switch_from);
+    pst_w_u32(&w, s_defer_switch_target);
+    pst_w_u32(&w, (uint32_t)s_defer_switch_pending);
+}
+int interrupts_timing_wire_read(const uint8_t *in, uint32_t len) {
+    PstR r; uint32_t pending;
+    if (len != IRQ_TIMING_WIRE_BYTES) return 0;
+    pst_r_init(&r, in, len);
+    if (!pst_r_u32(&r, &input_route_field_clock.remainder)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.line_phase)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.field)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.current_cycles)) return 0;
+    if (!pst_r_u32(&r, &input_route_raster_pending)) return 0;
+    if (!pst_r_u32(&r, &last_sio_seq_seen)) return 0;
+    if (!pst_r_u64(&r, &last_sio_progress_cycle)) return 0;
+    if (!pst_r_u64(&r, &post_exception_cooldown_until)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.pc)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.target)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.cause)) return 0;
+    if (!pst_r_u32(&r, &s_defer_switch_from)) return 0;
+    if (!pst_r_u32(&r, &s_defer_switch_target)) return 0;
+    if (!pst_r_u32(&r, &pending)) return 0;
+    s_defer_switch_pending = pending ? 1 : 0;
+    return 1;
+}
+_Static_assert(sizeof(InputRouteFieldClock) == 16,
+               "field clock layout changed; update interrupts_timing_wire_write");
+
+int interrupts_source_irq_slot_live(void) {
+    return source_irq_slot.pc != 0u || source_irq_slot.target != 0u || source_irq_slot.cause != 0u;
+}
+int interrupts_timing_perturb(const char *field) {
+    if (!field || strcmp(field,"irq_cooldown")) return 0;
+    post_exception_cooldown_until = psx_get_cycle_count() + 1000000u;
+    return 1;
+}
+
 int psx_defer_switch_pending(void) { return s_defer_switch_pending; }
 
 static int same_guest_pc(uint32_t a, uint32_t b) {
@@ -1225,6 +1383,9 @@ int psx_interrupt_cooldown_active(void) {
     return post_exception_cooldown_until != 0 &&
            psx_get_cycle_count() < post_exception_cooldown_until;
 }
+/* Nonzero while delivery fetches the handler's first instruction (see the take
+ * path); the compiled-code IRQ handoff in source_gpu_runtime.c tests it. */
+int g_psx_irq_delivering;
 
 int psx_interrupt_delivery_needed(const CPUState* cpu) {
     if (s_defer_switch_pending) { s_need_defer++; return 1; }
@@ -1538,6 +1699,12 @@ void psx_check_interrupts(CPUState* cpu) {
                 debug_server_log_thread_event(32, cpu, from_tcb, to_tcb, resume_pc);
                 g_dirty_interp_active = 0;
                 s_compiled_interrupt_resume_pc = 0;
+                /* The interpreter's entry poll publishes its entry PC in the
+                 * dirty resume latch so this boundary can be honored; the longjmp
+                 * skips that frame's restore, and the latch is transient, so it
+                 * must read 0 once we land in the scheduler, or a later compiled
+                 * poll would take it as EPC. */
+                g_dirty_safe_resume_pc = 0;
                 g_sched_escape.target_tcb = to_tcb;
                 g_sched_escape.resume_pc  = 0;
                 g_sched_escape.reason     = PSX_RUN_YIELD_TO_TCB;
@@ -1702,7 +1869,19 @@ irq_deliver_eval:
                 if (memory_peek_instruction_word(fetch_pc, &instruction))
                     source_irq_cause_ce = (instruction << 2) & 0x30000000u;
             }
-            psx_icache_fetch(cpu, fetch_pc);
+            /* This fetch reaches the CPU boundary callback before in_exception is
+             * set; the compiled-code IRQ handoff must not re-enter delivery here.
+             * The same pre-fetch callback can save a TAS checkpoint while IRQ
+             * entry is pending, including a preempted branch delay slot. */
+            extern void dirty_ram_checkpoint_enter(uint32_t,int,uint32_t,int);
+            extern void dirty_ram_checkpoint_leave(void);
+            { extern int g_psx_irq_delivering; g_psx_irq_delivering++;
+              dirty_ram_checkpoint_enter(fetch_pc, source_irq_slot.pc != 0u,
+                  source_irq_slot.pc ? source_irq_slot.target : 0u,
+                  source_irq_slot.pc && (source_irq_slot.cause & 0x40000000u));
+              psx_icache_fetch(cpu, fetch_pc);
+              dirty_ram_checkpoint_leave();
+              g_psx_irq_delivering--; }
 #ifdef PSX_ENABLE_BLOCK_CYCLES
             /* Interrupt dispatch has no dependencies on the preempted opcode.
              * Its ordinary step still consumes base/load-absorb timing. */

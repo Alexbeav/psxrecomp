@@ -81,5 +81,10 @@ else if(o[0]==2)out(f,cdrom_read(0x1f801800+o[2]));
 else if(o[0]==4)(void)cdrom_read(0x1f801800+o[2]);
 else if(o[0]==5){for(unsigned i=0;i<588;i++)out(f,(uint16_t)last_pcm[i*2]|((uint32_t)(uint16_t)last_pcm[i*2+1]<<16));}
 else if(o[0]==3){out(f,stat_reg);out(f,source_cdda.seeking?1:cdda_playing?4:!(stat_reg&2)?0:s_source_seek_paused?~0u:~1u);out(f,(uint32_t)msf_to_lba(read_min,read_sec,read_sect));out(f,source_cdda.sectors_read);out(f,cdda_playing?cdda_delay:0);out(f,mode_reg);out(f,irq_flag);out(f,source_cdda.pipe_count);out(f,source_cdda.report_last_tens);out(f,source_cdda.play_track_match);out(f,source_cdda.async_type);out(f,source_cdda.async_type?source_cdda.async_count:0);out(f,response_count-response_read);}
-else return 5;}
+else return 5;
+if(getenv("PSX_TEST_ROUNDTRIP")) {
+ unsigned n=cdrom_snapshot_bytes();uint8_t *wire=malloc(n);if(!wire)abort();
+ cdrom_snapshot_write(wire);memset(&source_cdda,0,sizeof source_cdda);source_cdda.enabled=1;
+ if(!cdrom_snapshot_read(wire,n))abort();free(wire);
+}}
 fclose(in);fclose(f);return 0;}

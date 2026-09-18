@@ -47,6 +47,7 @@ static uint32_t capture_every = 300;
 static psx_sha256_ctx input_hash;
 static psx_sha256_ctx delivered_hash;
 static uint32_t delivered_inputs;
+static uint32_t resumed_inputs;
 static uint16_t pending_word;
 static int pending;
 static int first_non_neutral_seen;
@@ -134,6 +135,7 @@ static void close_observation_json(FILE *f) {
                    "\"expected_protocol_sha256\":\"%s\",\"original_controller_sha256\":\"%s\","
                    "\"guest_analog_mode\":%d", expected, supplied, last_protocol_mode);
     }
+    if (resumed_inputs) fprintf(f,",\"resumed_inputs\":%u",resumed_inputs);
     if (fputs("}\n", f) < 0 || ferror(f)) fail("observation JSON write");
 }
 FILE *input_route_observer_output(const char *name) { return open_output(name); }
@@ -290,6 +292,20 @@ void input_route_observer_input(uint16_t buttons) {
 void input_route_observer_set_end(uint32_t total) {
     if (!total || total != delivered_inputs || pending) fail("invalid dynamic input end");
     total_inputs=total;
+}
+/* TAS checkpoint resume: the delivered-input counter is observer state that
+ * starts at zero in each process, while the route is seeked to an ABSOLUTE
+ * return. Without this, the first post-resume boundary compares the absolute
+ * consumed index against a suffix-only delivery count and fails
+ * ("boundary does not follow exact SIO delivery count"). Seed the counter to
+ * the resumed return and drop any half-applied sample, so the boundary
+ * invariant (completed == delivered_inputs) holds from the resume point on. */
+void input_route_observer_resume(uint32_t consumed) {
+    if (!log_file) return;
+    if (consumed >= total_inputs + tail_ticks) fail("resume is past the observation interval");
+    delivered_inputs = consumed;
+    resumed_inputs = consumed;
+    pending = 0;
 }
 void input_route_observer_applied(uint16_t buttons, int connected, int analog) {
     if (!log_file) return;
@@ -470,6 +486,7 @@ void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame) {
         close_observation_json(done);
         if (fclose(done)) fail("completion close");
         fprintf(stdout, "input_route_complete: frames=%u words_sha256=%s\n", completed, applied_hash);
+        { extern void psx_slice_diag_write(const char *dir); psx_slice_diag_write(output_dir); }
         fflush(stdout);
         exit(0);
     }

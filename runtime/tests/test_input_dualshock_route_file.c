@@ -44,8 +44,8 @@ static FILE *wire(uint32_t frames, int fault, int alternating_axis)
 }
 int main(int argc, char **argv)
 {
-    InputDualShockRouteStep steps[INPUT_ROUTE_MAX_STEPS];
-    InputRouteStep old_steps[INPUT_ROUTE_MAX_STEPS];
+    static InputDualShockRouteStep steps[INPUT_ROUTE_MAX_STEPS];   /* too large for the stack at the cap */
+    static InputRouteStep old_steps[INPUT_ROUTE_MAX_STEPS];
     uint32_t count, frames;
     if (argc == 2) {
         FILE *input = fopen(argv[1], "rb");

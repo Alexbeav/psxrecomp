@@ -1256,7 +1256,12 @@ static uint32_t mmio_read32(uint32_t addr) {
     return v;
 }
 
+/* Device-state generation: a write mutates device state after the sync at the
+ * top, so bump again when the wrapper exits (every return path). */
+extern uint64_t g_psx_device_gen;
+static void psx_device_gen_bump_cleanup(int *unused) { (void)unused; g_psx_device_gen++; }
 static void mmio_write32(uint32_t addr, uint32_t val) {
+    __attribute__((cleanup(psx_device_gen_bump_cleanup))) int _gen_guard = 0;
     psx_devices_mmio_sync();
     SHADOW_NOTE_MMIO();
     debug_server_trace_mmio_write(addr, val, 4);
@@ -1377,6 +1382,7 @@ static uint16_t mmio_read16(uint32_t addr) {
 }
 
 static void mmio_write16(uint32_t addr, uint16_t val) {
+    __attribute__((cleanup(psx_device_gen_bump_cleanup))) int _gen_guard = 0;
     psx_devices_mmio_sync();
     SHADOW_NOTE_MMIO();
     debug_server_trace_mmio_write(addr, (uint32_t)val, 2);
@@ -1501,6 +1507,7 @@ static uint8_t mmio_read8(uint32_t addr) {
 }
 
 static void mmio_write8(uint32_t addr, uint8_t val) {
+    __attribute__((cleanup(psx_device_gen_bump_cleanup))) int _gen_guard = 0;
     psx_devices_mmio_sync();
     SHADOW_NOTE_MMIO();
     debug_server_trace_mmio_write(addr, (uint32_t)val, 1);

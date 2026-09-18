@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "source_gpu_polygon_projection.h"
+#include "source_gpu_texture.h"
 
 /* Experimental, independently expressed Octoshock 2.2.2 command timing.
  * This is NOT a renderer or a hardware timing claim. The synchronous renderer
@@ -11,7 +12,7 @@
  * explicitly qualified source GPU service event; reads do not advance it.
  * Current scope: NOP/cache-clear, drawing environment, A0/C0 transfers,02 fills,80 copies, variable rectangles,
  * observed untextured/textured polygons, including general opaque flat quads,
- * and flat/shaded two-vertex lines (0x40-0x47, 0x50-0x57),
+ * and the whole line family (0x40-0x5F): flat/shaded two-vertex lines and poly-lines,
  * with inclusive clipping. Vertex and drawing offset are independently signed11-bit. Their sum stays
  * within[-2048,2046]; source signed clipping and raw interpolation are separate.
  * Clipping stays inside the admitted VRAM draw area.
@@ -36,11 +37,51 @@ typedef struct SourceGPUCommandProjection {
     uint32_t draw_mode,texture_window,mask_bits,display_mode,dma_direction;
     unsigned field_valid,skip_field;
     unsigned first_triangles, second_triangles;
+    /* INCMD_PLINE: a poly-line consumes further vertices after its opening packet until a
+     * terminator word. pline_command is the source's InCmd_CC; pline_color/pline_vertex are
+     * InPLine_PrevPoint, kept as packet words so each segment can be projected as the ordinary
+     * two-vertex packet the cost model and renderer already take. */
+    unsigned pline, pline_command;
+    uint32_t pline_color, pline_vertex;
     uint32_t polygon_words[12];
     uint32_t transfer_words;
     SourceGPUCommandDispatch dispatch;
     int error;
 } SourceGPUCommandProjection;
+
+#if defined(__cplusplus)
+#define PSX_GPUPP_STATIC_ASSERT(c, m) static_assert(c, m)
+#else
+#define PSX_GPUPP_STATIC_ASSERT(c, m) _Static_assert(c, m)
+#endif
+
+/* Layout guard (E step 2, condition on the #8 quiescence pass). Enumeration:
+ *   budget                      4        (offset 0)
+ *   queue[32]                 128        (4..132)
+ *   count, phase, command      12        (132..144)
+ *   last_update                 8        (144..152)
+ *   clip_x0/y0/x1/y1           16        (152..168)
+ *   offset_x, offset_y          8        (168..176)
+ *   draw_mode, texture_window, mask_bits, display_mode, dma_direction
+ *                              20        (176..196)
+ *   field_valid, skip_field     8        (196..204)
+ *   first_triangles, second_triangles
+ *                               8        (204..212)
+ *   pline, pline_command, pline_color, pline_vertex
+ *                              16        (212..228)
+ *   polygon_words[12]          48        (228..276)
+ *   transfer_words              4        (276..280)
+ *   dispatch                   56        (280..336)
+ *   error                       4        (336..340)
+ *                             ---
+ *   members sum to            340; struct alignment is 8 (uint64_t last_update),
+ *   so the tail pads 340 -> 344, which is what sizeof reports.
+ * If this fires, a member was added/removed/reordered: the #8 accounting and the
+ * BS_SEC_GPU_SERVICE serializer (source_gpu_service_wire_write/read) are stale.
+ * Resolve the discrepancy — do not "fix" the assert. */
+PSX_GPUPP_STATIC_ASSERT(sizeof(SourceGPUCommandProjection) == 344,
+    "SourceGPUCommandProjection layout changed; update the #8 accounting");
+#undef PSX_GPUPP_STATIC_ASSERT
 
 enum { SOURCE_GPU_COMMAND_UNSUPPORTED=1, SOURCE_GPU_COMMAND_OVERFLOW=2,
        SOURCE_GPU_COMMAND_REVERSE_TIME=3 };
@@ -64,28 +105,58 @@ static inline int source_gpu_polygon_supported(unsigned opcode) {
 static inline unsigned source_gpu_polygon_setup(unsigned opcode) {
     return opcode&4 ? (opcode&0x10 ? 450:180) : (opcode&0x10 ? 288:0);
 }
+/* Commands_40_5F: the source gives every entry in 0x40-0x5F the same LINE_HELPER, so the whole
+ * family is one shape. Bit 3 selects a poly-line and bit 4 gouraud shading; bit 3 changes only
+ * the FIFO bookkeeping, never the rasterisation, because DrawLine is templated on <goraud,
+ * BlendMode, MaskEval_TA> alone. */
 static inline int source_gpu_line_supported(unsigned command) {
-    return (command>=0x40 && command<=0x47) || (command>=0x50 && command<=0x57);
+    return command>=0x40 && command<=0x5f;
 }
+static inline int source_gpu_line_polyline(unsigned command) {
+    return source_gpu_line_supported(command) && (command&0x08u)!=0;
+}
+/* INCMD_PLINE consumes 1 + goraud words per continuation segment: a vertex, preceded by a
+ * colour when shaded. */
+static inline unsigned source_gpu_line_segment_length(unsigned command) {
+    return 1u+!!(command&0x10u);
+}
+/* ProcessFIFO tests the terminator before it tests the segment length, so it needs one word. */
+static inline int source_gpu_line_terminator(uint32_t word) {
+    return (word&0xf000f000u)==0x50005000u;
+}
+/* source_gpu_sprite_opcode / _class / _extent live in source_gpu_texture.h so
+ * this cost model and the software renderer share one definition of a sprite
+ * packet's shape. */
 static inline int source_gpu_block_supported(unsigned command) {
-    return command==2 || command==0x80 || command==0x60 || command==0x62 || command==0x64 || command==0x65 || command==0x66 || command==0x67;
+    return command==2 || command==0x80 || source_gpu_sprite_opcode(command);
+}
+/* SPR_HELPER: len = 2 + textured + (variable size ? 1 : 0). */
+static inline unsigned source_gpu_sprite_length(unsigned command) {
+    return 2u+((command&4u)>>2)+(source_gpu_sprite_class(command)?0u:1u);
 }
 static inline unsigned source_gpu_command_length(uint32_t word) {
     unsigned command=word>>24;
     if(source_gpu_line_supported(command))return 3+!!(command&0x10);
-    if(source_gpu_block_supported(command))return command==0x80 || command==0x64 || command==0x65 || command==0x66 || command==0x67?4:3;
+    if(source_gpu_sprite_opcode(command))return source_gpu_sprite_length(command);
+    if(source_gpu_block_supported(command))return command==0x80?4:3;
     if(source_gpu_polygon_supported(command))return 1+3*source_gpu_polygon_stride(command)-!!(command&0x10);
     return command==0xa0 || command==0xc0 ? 3u : 1u;
 }
 static inline unsigned source_gpu_command_feedback_length(uint32_t word) {
     unsigned command=word>>24;
-    if(command==2 || (command>=0x60 && command<=0x67))return 3;
+    /* SPR_HELPER again, but its fifo_fb_len ORs the same three terms instead of
+     * adding them, so a textured fixed-size sprite feeds back 3 while its flat
+     * counterpart feeds back 2. Reproduces the previously pinned 3 for 0x60-0x67. */
+    if(source_gpu_sprite_opcode(command))
+        return 2u|((command&4u)>>2)|(source_gpu_sprite_class(command)?0u:1u);
+    if(command==2)return 3;
     return command==0x80 || command==1 || command==0xa0 || command==0xc0 || command==0xe1 || command==0xe2 || command==0xe6 ? 2u : 1u;
 }
 
 static inline int source_gpu_command_ready(const SourceGPUCommandProjection *s) {
     if(s->error) return -1;
-    if(s->phase==2) return 0;
+    /* CalcFIFOReadyBit clears the bit for INCMD_PLINE exactly as it does for INCMD_QUAD. */
+    if(s->phase==2 || s->pline) return 0;
     if(s->count && (s->phase==4 || s->phase==8))return 0;
     /* Feedback length differs from packet length. Cache clear and ordinary
      * environment commands admit one queued word while DMA-ready stays set. */
@@ -142,8 +213,12 @@ static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection
         return cost;
     }
     int x=source_gpu_sprite_origin(words[1],0,s->offset_x),y=source_gpu_sprite_origin(words[1],16,s->offset_y);
-    unsigned size=words[(opcode&4)?3:2];
-    int right=x+(int)(size&1023u),bottom=y+(int)((size>>16)&511u);
+    /* Only the variable-size class carries a width/height word; the fixed
+     * classes imply 1x1, 8x8 or 16x16 and the raster cost is otherwise the
+     * same rectangle walk. */
+    unsigned width_px,height_px;
+    source_gpu_sprite_extent(opcode,words,&width_px,&height_px);
+    int right=x+(int)width_px,bottom=y+(int)height_px;
     if(x<s->clip_x0)x=s->clip_x0;if(y<s->clip_y0)y=s->clip_y0;
     if(right>s->clip_x1+1)right=s->clip_x1+1;if(bottom>s->clip_y1+1)bottom=s->clip_y1+1;
     int width=right-x;
@@ -193,6 +268,33 @@ static inline int source_gpu_command_process(SourceGPUCommandProjection *s) {
         s->phase=0;++s->second_triangles;return 1;
     }
 
+    if(s->pline) {
+        /* INCMD_PLINE. The terminator is tested before the segment length and consumes one
+         * word. A segment is projected as the ordinary two-vertex packet it draws as, with
+         * InPLine_PrevPoint supplying point 0, so the cost model, the dispatch block's start
+         * coordinate and the renderer all take it unchanged. The main FIFO tail's -2 is never
+         * reached from this branch, so a segment is charged the draw cost alone. */
+        if(s->budget<0) return 1;
+        if(source_gpu_line_terminator(s->queue[0])) {
+            source_gpu_command_pop(s);s->pline=0;return 1;
+        }
+        unsigned cc=s->pline_command,vl=source_gpu_line_segment_length(cc);
+        if(s->count<vl)return 1;
+        unsigned shaded=!!(cc&0x10u),n=3u+shaded;
+        uint32_t words[4];
+        words[0]=((uint32_t)cc<<24)|s->pline_color;
+        words[1]=s->pline_vertex;
+        if(shaded){words[2]=s->queue[0];words[3]=s->queue[1];}
+        else words[2]=s->queue[0];
+        int cost=source_gpu_command_line_cost(s,words);
+        if(cost<0){s->error=SOURCE_GPU_COMMAND_UNSUPPORTED;return 0;}
+        s->dispatch.kind=SOURCE_GPU_DISPATCH_COMMAND;s->dispatch.count=n;
+        memcpy(s->dispatch.words,words,n*sizeof(uint32_t));
+        for(unsigned i=0;i<vl;i++)source_gpu_command_pop(s);
+        s->pline_vertex=words[n-1u];
+        if(shaded)s->pline_color=words[2]&0xffffffu;
+        s->budget-=cost;return 1;
+    }
     unsigned command=s->queue[0]>>24;
     if(source_gpu_line_supported(command)) {
         unsigned n=source_gpu_command_length(s->queue[0]);
@@ -201,6 +303,14 @@ static inline int source_gpu_command_process(SourceGPUCommandProjection *s) {
         if(cost<0){s->error=SOURCE_GPU_COMMAND_UNSUPPORTED;return 0;}
         s->dispatch.kind=SOURCE_GPU_DISPATCH_COMMAND;s->dispatch.count=n;
         for(unsigned i=0;i<n;i++)s->dispatch.words[i]=source_gpu_command_pop(s);
+        if(source_gpu_line_polyline(command)) {
+            /* Command_DrawLine keeps points[1] as InPLine_PrevPoint; a flat line's second
+             * point carries the first point's colour. */
+            unsigned last=2u+!!(command&0x10u);
+            s->pline=1;s->pline_command=command;
+            s->pline_vertex=s->dispatch.words[last];
+            s->pline_color=((command&0x10u)?s->dispatch.words[2]:s->dispatch.words[0])&0xffffffu;
+        }
         s->budget-=2+cost;return 1;
     }
     if(source_gpu_block_supported(command)) {
@@ -271,7 +381,7 @@ static inline int source_gpu_command_gp1(SourceGPUCommandProjection *s,uint32_t 
     unsigned command=word>>24;
     if(command==0 || command==1) {
         if(s->budget<0)s->budget=0;
-        s->count=0;s->phase=0;s->transfer_words=0;
+        s->count=0;s->phase=0;s->transfer_words=0;s->pline=0;
         if(!command) {
             s->clip_x0=s->clip_y0=s->clip_x1=s->clip_y1=0;
             s->offset_x=s->offset_y=0;s->draw_mode=s->texture_window=s->mask_bits=0;

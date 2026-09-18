@@ -22,14 +22,20 @@ void psx_irq_arm_compiled_resume_pc(uint32_t pc) { assert(pc == 0x80001004u); }
 void psx_dispatch(CPUState *cpu, uint32_t pc) {
     (void)cpu;
     assert(g_precise_mode == 0); /* a fresh dispatch must admit precise blocks */
+    /* ...and no dirty IRQ pump frame can be live at the scheduler top. */
+    assert(g_cosim_dirty_pump_site == 0 && g_dirty_safe_resume_pc == 0u);
     if (++dispatches == 1) {
         assert(pc == 0x80001000u);
         g_precise_mode = 1;
+        g_cosim_dirty_pump_site = 6;               /* escape from inside a pump */
+        g_dirty_safe_resume_pc = 0x80001234u;
         psx_scheduler_resume_at(0x80001004u);
         assert(!"scheduler resume must unwind the slice");
     }
     assert(dispatches == 2 && pc == 0x80001004u);
     g_precise_mode = 1;
+    g_cosim_dirty_pump_site = 1;
+    g_dirty_safe_resume_pc = 0x80001004u;
     psx_request_return_to_lobby();
     assert(!"lobby exit must unwind the slice");
 }
@@ -39,5 +45,6 @@ int main(void) {
     cpu.read_word = read_word;
     psx_scheduler_run(&cpu);
     assert(dispatches == 2 && fixups == 2 && g_precise_mode == 0);
+    assert(g_cosim_dirty_pump_site == 0 && g_dirty_safe_resume_pc == 0u);
     return 0;
 }

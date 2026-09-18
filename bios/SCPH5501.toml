@@ -1,0 +1,280 @@
+# bios/SCPH5501.toml - BIOS build profile for the retail Sony SCPH-5501 image.
+#
+# This is the firmware every US movie in the TAS corpus declares
+# (PSX_Firmware_U 0555C6FAE8906F3F09BAF5988F00E55F88E9F30B). Tekken 3 and both
+# Mega Man titles name it; we had been building them against SCPH1001, which is a
+# different image, until tools/tasreplays/megamanx5_admission.py was taught to
+# cross-check the BIOS against the movie header.
+#
+# Measured against the qualified SCPH1001 image, not assumed:
+#   ROM [0x00000,0x00080)  reset vector   0 differing bytes
+#   ROM [0x00080,0x18000)  kernel         0 differing bytes
+#   ROM [0x18000,0x80000)  shell        238,783 differing bytes
+#
+# Every field below other than the identity block is a property of the KERNEL -
+# the copy windows, the install slots at kernel RAM addresses, and the runtime
+# export anchors - and that kernel is byte-identical here, so they carry over
+# verbatim along with the SCPH1001 seed list. Only the shell differs, and the
+# shell is interpreted (PSX_SHELLWIN_INTERP=ON), exactly as it is for SCPH-5500.
+# SCPH-5501 is in fact the easier case of the two: SCPH-5500 needed its own seed
+# list because its reset vector has 24 differing bytes, and this one has none.
+#
+# The .BIN image itself stays untracked (bios/* gitignore rule) - profiles are
+# the only tracked contents of this directory.
+
+[program]
+
+name         = "Sony SCPH-5501 BIOS (USA, v3.0 11/18/96)"
+
+id           = "SCPH-5501"
+
+rom          = "bios/SCPH5501.BIN"
+
+load_address = "0xBFC00000"
+
+entry_pc     = "0xBFC00000"
+
+text_size    = "0x80000"
+
+
+
+# Declared identity. The emitter refuses to generate from any other image
+
+# (main_bios.cpp's declared-identity gate), which is the point: the seeds in
+
+# this profile name v2.2 function starts, and generating from a SCPH-1001
+
+# **v2.0** dump (CRC32 55847D8C, 1994-09-22) produced three boot halts and a
+
+# live A0 table with 90 of 161 ROM targets uncompiled. That looked like
+
+# missing upstream seeds and was actually a revision mismatch. An empty pin
+
+# let it through silently.
+
+#
+
+# This is v2.2, 1995-09-18: CRC32 37157331, 512 KiB.
+
+[program.image]
+
+sha256          = "11052b6499e466bbf0a709b1f9cb6834a9418e66680387912451e971cf8a1fef"
+
+license         = "proprietary"
+
+redistributable = false
+
+
+
+[recompiler]
+
+seeds    = "recompiler/seeds/phase2_ghidra_seeds.json"
+
+out_dir  = "generated"
+
+out_stem = "SCPH5501"
+
+strict   = true
+
+
+
+# The BIOS's boot-time bulk copies of CODE out of ROM into RAM. Single source
+
+# of truth for every relocation window in the recompiler AND in the C it
+
+# emits (the generated dispatch's normalize(), the kernel-bless guard, the
+
+# game/shell-overlap tests). Each entry is a CLAIM that the copy is
+
+# byte-verbatim; the runtime's kernel-bless memcmp enforces it for the
+
+# bless window. All bounds are [lo, hi) with hi EXCLUSIVE.
+
+#
+
+# dispatch_key = "ram": functions in the window are keyed by RAM address
+
+#                       (normalize folds ROM -> RAM).
+
+# dispatch_key = "rom": functions keep their ROM key (normalize folds the
+
+#                       RAM alias back to ROM).
+
+[recompiler.address_model]
+
+normalize_mask = "0x1FFFFFFF"
+
+
+
+[[recompiler.address_model.copy]]
+
+name         = "Kernel Part 2"
+
+rom_lo       = "0x1FC10000"
+
+rom_hi       = "0x1FC18000"
+
+ram_lo       = "0x00000500"
+
+runtime_base = "0x00000500"     # KUSEG — the kernel executes uncached-region code cached at 0x500
+
+dispatch_key = "ram"
+
+kernel_bless = true
+
+
+
+[[recompiler.address_model.copy]]
+
+name         = "Shell"
+
+rom_lo       = "0x1FC18000"
+
+rom_hi       = "0x1FC43000"
+
+ram_lo       = "0x00030000"
+
+runtime_base = "0x80030000"     # KSEG0 — LoadRunShell jumps to 0x80030000
+
+dispatch_key = "rom"
+
+kernel_bless = false
+
+# NOTE (do not "fix" without evidence): runtime/src/bios_hle.c documents the
+
+# actual LoadRunShell copy as 0x67FF0 bytes (ROM 0xBFC18000 -> RAM 0x30000..
+
+# 0x97FF0). Every pre-profile window constant covered only 0x2B000 of that,
+
+# and dirty_ram_interp.c tracks live RAM in [0x5B000,0x8F000) as an open
+
+# class-B bug. Widening this window is a REAL BEHAVIOR CHANGE requiring its
+
+# own evidence-backed commit — it is not a parameterization cleanup.
+
+
+
+# Kernel-RAM RANGES the BIOS and the game's Psy-Q libapi patchers overwrite at
+
+# runtime (CLAUDE.md rule 18; docs/dynamic_handler_install.md). The emitter
+
+# plants a compare-against-ROM hook at each range start so the guest's patched
+
+# instructions execute; the runtime excludes the range from the kernel-bless
+
+# memcmp and resumes native at the range end, so only the patched words
+
+# interpret.
+
+#
+
+# `resume` says how the compiled body picks up again: "jalr" for the classic
+
+# 4-word lui/addiu/jalr/nop stub (the call returns to ram_addr+0x10),
+
+# "fallthrough" when the patched words ARE the function, "none" when the patch
+
+# jumps out and never comes back.
+
+#
+
+# Measured on a live boot of Breath of Fire III (SLPS-00990, Psy-Q SDK 3.70)
+
+# against the ROM source, 30 s in, identical at t+8 s — the patchers are
+
+# _patch_gte / _patch_card / _patch_card2 / _patch_pad. Every SDK title runs
+
+# these, so the ranges are a property of the BIOS revision and libapi release,
+
+# not of one game. Re-measure per SDK version before trusting the numbers:
+
+# the schema tolerates declaring the union.
+
+
+
+[[recompiler.install_slots]]
+
+ram_addr = "0x00000C88"         # exception handler: register-save prologue
+
+len      = "0x30"               # shifted two words + an inserted mfc0 v0,Cause
+
+resume    = "fallthrough"       # the patched words are the function itself
+
+
+
+[[recompiler.install_slots]]
+
+ram_addr = "0x00000CF0"         # SIO data-byte handler dispatch slot
+
+len      = "0x10"               # lui/addiu/jalr/nop over ROM zeros
+
+resume    = "jalr"              # the stub's call returns to 0x0D00
+
+
+
+[[recompiler.install_slots]]
+
+ram_addr = "0x00004964"         # pad driver clear routine, 11 words NOP'd
+
+len      = "0x2C"               # (RemovePatchPad / ChgclrPAD family)
+
+resume    = "fallthrough"
+
+
+
+[[recompiler.install_slots]]
+
+ram_addr = "0x00004D98"         # _patch_card2 payload: jalr into boot EXE
+
+len      = "0x14"               # 0x8017EB6C; the ra landing word is NOP'd too,
+
+resume    = "fallthrough"       # so the body resumes past it, not at +0x10
+
+
+
+[[recompiler.install_slots]]
+
+ram_addr = "0x00006444"         # _patch_card payload: the kernel's card
+
+len      = "0x10"               # handler replaced by jr into boot EXE
+
+resume    = "none"              # 0x8017EAA0 — a jr never returns here
+
+
+
+# NOT declared: RAM 0x0500, one word of kernel_trampoline_0 cleared to zero
+
+# (ROM `lui t2, 0`). It differs on every boot, but what writes it is not yet
+
+# identified, and a range declared on a guess would tell the bless verifier to
+
+# stop checking a word it should be checking. Rule 14: unknown is acceptable,
+
+# guessing is not. Undeclared means that body keeps interpreting, exactly as
+
+# it does today.
+
+
+
+# Per-image anchors couriered into the generated C (psx_bios_image) for the
+
+# runtime HLE tier. Values are FACTS about this image, not tunables: the
+
+# shell entry is where LoadRunShell (ROM 0xBFC06FF0) jumps after its copy;
+
+# deliver_event_ret is the instruction after the kernel DeliverEvent loop's
+
+# `jalr v0` (kernel RAM 0x1718), the $ra a delivered event callback returns
+
+# through. Omit a key on a BIOS that has no such anchor — the runtime then
+
+# treats that HLE feature as structurally unavailable instead of firing on a
+
+# wrong address.
+
+[recompiler.runtime_exports]
+
+shell_entry_phys  = "0x00030000"
+
+deliver_event_ret = "0x80001720"
+

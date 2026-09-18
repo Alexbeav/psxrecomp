@@ -91,6 +91,28 @@ uint32_t interrupts_cycles_to_vblank(void);
  * write. Inactive profiles return immediately. No guest RAM is modified. */
 void interrupts_raster_gp1(uint32_t word);
 int interrupts_raster_gpu_status(uint32_t *bits);
+/* BS_SEC_RASTER instance [0] (comparison raster clock) + the active-profile
+ * predicate that drives the section's required-set rule. */
+uint32_t interrupts_raster_wire_bytes(void);
+void interrupts_raster_wire_write(uint8_t *out);
+int interrupts_raster_wire_read(const uint8_t *in, uint32_t len);
+int interrupts_raster_comparison_active(void);
+/* Reshaped #5 guard: record whether the state being loaded carried
+ * BS_SEC_RASTER, so restoring the VBlank phase can refuse on a stub raster
+ * clock. Called once per boot_state load, after the profile-presence check. */
+void interrupts_note_state_load(int raster_section_present);
+/* BS_SEC_IRQ_TIMING: field clock + VBlank-edge / IRQ-deferral state (64 B). */
+uint32_t interrupts_timing_wire_bytes(void);
+void     interrupts_timing_wire_write(uint8_t *out);
+int      interrupts_timing_wire_read(const uint8_t *in, uint32_t len);
+/* E survey: is the source-IRQ slot holding a live (non-zero) context? */
+int      interrupts_source_irq_slot_live(void);
+int      interrupts_timing_perturb(const char *field);
+/* E survey: is a scheduler deferral switch armed at this boundary? */
+int      psx_defer_switch_pending(void);
+/* E negative control: corrupt one restored raster field so the ladder
+ * comparison must fail. Returns 1 when the named field was perturbed. */
+int interrupts_raster_perturb(const char *field);
 /* While IRQ9 is enabled, expose the next 44.1-kHz sample as a first-class
  * device deadline so the CPU can observe and acknowledge an IRQ before the
  * following sample. UINT32_MAX means inactive. PSX_SPU_SAMPLE_EVENTS=0 is a
@@ -101,7 +123,6 @@ void psx_spu_sample_event_service(void);
  * BS_SEC_IRQ (and selfcheck's out-of-band latch) so resim keeps the snap's
  * phase. Legacy 8-byte IRQ sections still rebase to 0 on load. */
 uint32_t interrupts_get_cycles_since_vblank(void);
-extern uint32_t vblank_cycles; /* guest CPU cycles in the current video field */
 void     interrupts_set_cycles_since_vblank(uint32_t v);
 
 /* Cycle-budgeted precise event slicing: minimum guest-CPU-cycle distance to the

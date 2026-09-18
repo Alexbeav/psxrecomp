@@ -2054,28 +2054,47 @@ static int dma_r_delay(PstR *r, DMADelayedComplete *d) {
            pst_r_u32(r, &d->cycles_remaining);
 }
 
-uint32_t dma_snapshot_bytes(void) { return DMA_SNAP_WIRE_BYTES; }
+/* Any source-DMA timing model selected at all. Upstream this sits inside the
+ * save-state wire section, but it is only a predicate over the model flags and
+ * the precise-slice diagnostic counters want it, so it lives here instead. */
+int dma_src_active(void) {
+    return gpu_upload_source_model || gpu_ll_source_model || cd_source_model || otc_source_model;
+}
+/* Is a source-model DMA transfer moving words right now? This ignores leftover
+ * budget/address state that persists after completion; a new transfer resets
+ * budget on start. Used by the precise-slice guard. */
+unsigned dma_source_transfer_active_mask(void) {
+    /* bit0 upload words remaining, bit1 upload mid-block, bit2 LL active, bit3 LL node words
+     * remaining, bit4 SPU words remaining, bit5 SPU mid-block, bit6 OTC remaining.
+     * gpu_ll_source.nodes is a monotonically increasing node index, not transfer state. */
+    return (gpu_upload_source.remaining != 0u) | ((gpu_upload_source.in_block != 0u) << 1) |
+           ((gpu_ll_source.active != 0u) << 2) | ((gpu_ll_source.remaining != 0u) << 3) |
+           ((spu_source.remaining != 0u) << 4) | ((spu_source.in_block != 0u) << 5) |
+           ((otc_source_model && otc_source.remaining != 0u) << 6);
+}
+int dma_source_transfer_active(void) {
+    return dma_source_transfer_active_mask() != 0u;
+}
+/* Any channel with its CHCR start/busy bit (24) set, regardless of model:
+ * MDEC in/out, CD, OTC and the GPU/SPU channels. A busy channel can complete
+ * and raise its IRQ from a DMA service tick, which cycles_to_next_event()
+ * does not predict. Bitmask of busy channels. */
+unsigned dma_channels_busy_mask(void) {
+    unsigned m = 0;
+    for (int i = 0; i < 7; i++) if (channels[i].chcr & 0x01000000u) m |= 1u << i;
+    return m;
+}
+
+uint32_t dma_snapshot_bytes(void) {
+    return DMA_SNAP_WIRE_BYTES + (mdec_source_active()?32u:0u) + (cd_source_model?20u:0u);
+}
 
 void dma_snapshot_write(uint8_t *p) {
-    if(mdec_source_active()){fprintf(stderr,"[dma-model] source MDEC capture unsupported\n");exit(2);}
-    if(spu_source.remaining) {
-        fprintf(stderr,"[dma-model] active source SPU request capture unsupported\n");exit(2);
-    }
-    if(gpu_ll_source.active) {
-        fprintf(stderr,"[dma-model] active source linked-list capture unsupported\n");exit(2);
-    }
-    if(gpu_upload_source.remaining) {
-        fprintf(stderr,"[dma-model] active source GPU upload capture unsupported\n");exit(2);
-    }
-    if(cd_source_model && cdrom_async.active) {
-        fprintf(stderr,"[dma-model] state capture during source CD transfer is unsupported\n");exit(2);
-    }
-    if (otc_source.remaining) {
-        fprintf(stderr, "[dma-model] state capture during experimental OTC transfer is unsupported\n");
-        exit(2);
-    }
+    /* Source GPU/SPU/OTC continuations live in the required DMA_SRC section.
+     * CD and MDEC continuations are included below, including active transfers. */
     PstW w;
-    pst_w_init(&w, p, DMA_SNAP_WIRE_BYTES);
+    if (!p) return;
+    pst_w_init(&w, p, dma_snapshot_bytes());
     for (int i = 0; i < 7; i++) {
         pst_w_u32(&w, channels[i].madr);
         pst_w_u32(&w, channels[i].bcr);
@@ -2089,23 +2108,141 @@ void dma_snapshot_write(uint8_t *p) {
     dma_w_gpu_ll(&w, &gpu_linked_list);
     for (int i = 0; i < 7; i++)
         dma_w_delay(&w, &delayed_complete[i]);
+    if (mdec_source_active()) {
+        for (int i=0;i<2;i++) {
+            pst_w_u32(&w,mdec_source_dma[i].address);
+            pst_w_u32(&w,mdec_source_dma[i].in_block);
+            pst_w_i32(&w,mdec_source_dma[i].credit);
+        }
+        pst_w_u64(&w,mdec_source_last_cycle);
+    }
+    if (cd_source_model) {
+        pst_w_i32(&w,cd_source.budget);
+        pst_w_u64(&w,cd_source.last_cycle);
+        pst_w_u64(&w,cd_source.next_cycle);
+    }
+}
+
+/* BS_SEC_DMA_SRC: the four source-DMA state machines (bounded-quad GPU upload,
+ * GPU linked list, SPU request, OTC). Measured live at 98.1%/98.4%/57.7% (and
+ * OTC in the same family) of frame boundaries, so the queue[32] quiescence
+ * precedent does NOT apply -- these must be serialized, not guarded.
+ * Every member is a flat scalar: `address`/`start_addr` are GUEST physical
+ * addresses (masked to 0xffffff/0x1ffffc), never host pointers.
+ * Cycle classification (amendment B): `last_cycle`/`next_cycle` are absolute
+ * stamps in psx_cycle_count's base, which BS_SEC_CLOCK restores exactly, so they
+ * are written as-is. */
+/* Encoded size = the sum of the field widths below (no struct padding on the
+ * wire), NOT the sum of sizeof(gpu_upload_source) + sizeof(gpu_ll_source) +
+ * sizeof(spu_source) + sizeof(otc_source) = 40+40+48+24 = 152. Declaring 152
+ * left the last 12 bytes of the section unwritten, and boot_state.c hands this
+ * function an uninitialized buffer, so those bytes were stack garbage in every
+ * save. The _Static_asserts below still pin each struct's sizeof. */
+#define DMA_SRC_WIRE_BYTES 140u
+uint32_t dma_src_wire_bytes(void) { return DMA_SRC_WIRE_BYTES; }
+void dma_src_wire_write(uint8_t *out) {
+    PstW w; pst_w_init(&w, out, DMA_SRC_WIRE_BYTES);
+    pst_w_u32(&w, gpu_upload_source.remaining);
+    pst_w_u32(&w, gpu_upload_source.block_size);
+    pst_w_u32(&w, gpu_upload_source.in_block);
+    pst_w_u32(&w, gpu_upload_source.address);
+    pst_w_i32(&w, gpu_upload_source.budget);
+    pst_w_u64(&w, gpu_upload_source.last_cycle);
+    pst_w_u64(&w, gpu_upload_source.next_cycle);
+    pst_w_u32(&w, gpu_ll_source.active);
+    pst_w_u32(&w, gpu_ll_source.address);
+    pst_w_u32(&w, gpu_ll_source.remaining);
+    pst_w_u32(&w, gpu_ll_source.nodes);
+    pst_w_i32(&w, gpu_ll_source.budget);
+    pst_w_u64(&w, gpu_ll_source.last_cycle);
+    pst_w_u64(&w, gpu_ll_source.next_cycle);
+    pst_w_u32(&w, spu_source.remaining);
+    pst_w_u32(&w, spu_source.block_size);
+    pst_w_u32(&w, spu_source.in_block);
+    pst_w_u32(&w, spu_source.address);
+    pst_w_u32(&w, spu_source.total_words);
+    pst_w_u32(&w, spu_source.start_addr);
+    pst_w_i32(&w, spu_source.budget);
+    pst_w_u64(&w, spu_source.last_cycle);
+    pst_w_u64(&w, spu_source.next_cycle);
+    pst_w_u32(&w, otc_source.remaining);
+    pst_w_u32(&w, otc_source.address);
+    pst_w_u64(&w, otc_source.last_cycle);
+    pst_w_u64(&w, otc_source.next_cycle);
+}
+int dma_src_perturb(const char *field) {
+    if (!field || strcmp(field,"dma_upload_cycle")) return 0;
+    gpu_upload_source.last_cycle += 1u;
+    return 1;
+}
+int dma_src_wire_read(const uint8_t *in, uint32_t len) {
+    PstR r;
+    if (len != DMA_SRC_WIRE_BYTES) return 0;
+    pst_r_init(&r, in, len);
+    if (!pst_r_u32(&r, &gpu_upload_source.remaining)) return 0;
+    if (!pst_r_u32(&r, &gpu_upload_source.block_size)) return 0;
+    if (!pst_r_u32(&r, &gpu_upload_source.in_block)) return 0;
+    if (!pst_r_u32(&r, &gpu_upload_source.address)) return 0;
+    if (!pst_r_i32(&r, &gpu_upload_source.budget)) return 0;
+    if (!pst_r_u64(&r, &gpu_upload_source.last_cycle)) return 0;
+    if (!pst_r_u64(&r, &gpu_upload_source.next_cycle)) return 0;
+    if (!pst_r_u32(&r, &gpu_ll_source.active)) return 0;
+    if (!pst_r_u32(&r, &gpu_ll_source.address)) return 0;
+    if (!pst_r_u32(&r, &gpu_ll_source.remaining)) return 0;
+    if (!pst_r_u32(&r, &gpu_ll_source.nodes)) return 0;
+    if (!pst_r_i32(&r, &gpu_ll_source.budget)) return 0;
+    if (!pst_r_u64(&r, &gpu_ll_source.last_cycle)) return 0;
+    if (!pst_r_u64(&r, &gpu_ll_source.next_cycle)) return 0;
+    if (!pst_r_u32(&r, &spu_source.remaining)) return 0;
+    if (!pst_r_u32(&r, &spu_source.block_size)) return 0;
+    if (!pst_r_u32(&r, &spu_source.in_block)) return 0;
+    if (!pst_r_u32(&r, &spu_source.address)) return 0;
+    if (!pst_r_u32(&r, &spu_source.total_words)) return 0;
+    if (!pst_r_u32(&r, &spu_source.start_addr)) return 0;
+    if (!pst_r_i32(&r, &spu_source.budget)) return 0;
+    if (!pst_r_u64(&r, &spu_source.last_cycle)) return 0;
+    if (!pst_r_u64(&r, &spu_source.next_cycle)) return 0;
+    if (!pst_r_u32(&r, &otc_source.remaining)) return 0;
+    if (!pst_r_u32(&r, &otc_source.address)) return 0;
+    if (!pst_r_u64(&r, &otc_source.last_cycle)) return 0;
+    if (!pst_r_u64(&r, &otc_source.next_cycle)) return 0;
+    return 1;
+}
+/* Layout guards: a future field addition becomes a build break instead of a
+ * silent drop (the E5 R10 failure mode). */
+_Static_assert(sizeof gpu_upload_source == 40, "gpu_upload_source layout changed; update dma_src_wire_write");
+_Static_assert(sizeof gpu_ll_source == 40, "gpu_ll_source layout changed; update dma_src_wire_write");
+_Static_assert(sizeof spu_source == 48, "spu_source layout changed; update dma_src_wire_write");
+_Static_assert(sizeof otc_source == 24, "otc_source layout changed; update dma_src_wire_write");
+
+/* E survey (M2 apparatus): report whether each source-DMA state machine holds
+ * live mid-transfer state at the frame boundary that arms a checkpoint. If a
+ * machine is provably idle there, a quiescence precondition can replace both
+ * serializing it and the model-based refusal; if it is live, it must be
+ * serialized field by field. */
+void dma_source_dma_live(int *upload, int *ll, int *spu) {
+    if (upload)
+        *upload = (gpu_upload_source.remaining != 0u) || (gpu_upload_source.in_block != 0u) ||
+                  (gpu_upload_source.address != 0u) || (gpu_upload_source.budget != 0);
+    if (ll)
+        *ll = (gpu_ll_source.active != 0u) || (gpu_ll_source.remaining != 0u) ||
+              (gpu_ll_source.nodes != 0u) || (gpu_ll_source.budget != 0);
+    if (spu)
+        *spu = (spu_source.remaining != 0u) || (spu_source.in_block != 0u) ||
+               (spu_source.budget != 0);
 }
 
 int dma_snapshot_read(const uint8_t *p, uint32_t len) {
-    if(mdec_source_active())return 0;
-    if(gpu_upload_source_model) {
-        fprintf(stderr,"[dma-model] source GPU upload timing requires cold boot\n");return 0;
-    }
-    if(cd_source_model) {
-        fprintf(stderr,"[dma-model] source CD timing requires cold boot\n");return 0;
-    }
-    if (otc_source_model) {
-        fprintf(stderr, "[dma-model] experimental source OTC model requires cold boot\n");
-        return 0;
-    }
+    /* The three model-based refusals that used to live here (source GPU upload,
+     * source CD timing, source OTC) are now PRESENCE-based, exactly as #5 was:
+     * boot_state refuses a comparison-profile state that arrives without
+     * BS_SEC_DMA_SRC, and refuses BS_SEC_DMA_SRC when no source model is active.
+     * Every restore path funnels through boot_state_load_buffer -> apply_section
+     * (savestate, rewind, netplay rings, selfcheck, TAS resume), so the leaf
+     * guard is redundant; keeping it would refuse the very state we now write. */
     PstR r;
     int gpu_ll_was_active = gpu_linked_list.active != 0;
-    if (len != DMA_SNAP_WIRE_BYTES) return 0;
+    if (!p || len != dma_snapshot_bytes()) return 0;
     pst_r_init(&r, p, len);
     for (int i = 0; i < 7; i++) {
         if (!pst_r_u32(&r, &channels[i].madr) || !pst_r_u32(&r, &channels[i].bcr) ||
@@ -2118,6 +2255,19 @@ int dma_snapshot_read(const uint8_t *p, uint32_t len) {
         return 0;
     for (int i = 0; i < 7; i++)
         if (!dma_r_delay(&r, &delayed_complete[i])) return 0;
+    if (mdec_source_active()) {
+        for (int i=0;i<2;i++) {
+            if (!pst_r_u32(&r,&mdec_source_dma[i].address) ||
+                !pst_r_u32(&r,&mdec_source_dma[i].in_block) ||
+                !pst_r_i32(&r,&mdec_source_dma[i].credit)) return 0;
+        }
+        if (!pst_r_u64(&r,&mdec_source_last_cycle)) return 0;
+    }
+    if (cd_source_model) {
+        if (!pst_r_i32(&r,&cd_source.budget) ||
+            !pst_r_u64(&r,&cd_source.last_cycle) ||
+            !pst_r_u64(&r,&cd_source.next_cycle)) return 0;
+    }
     if (gpu_ll_was_active) gpu_ws_end_linked_list();
     if (gpu_linked_list.active) {
         gpu_ws_begin_linked_list();

@@ -5,8 +5,10 @@ not qualify playback. Default execution has no window and uses software video.
 """
 import argparse
 import hashlib
+import dualshock_route
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -26,7 +28,24 @@ def write_json(path, value):
         stream.write("\n")
 
 
-def route_identity(path):
+def checkpoint_asset_digest(path):
+    """Bind CUE content and its tracks, not just the small descriptor file."""
+    value = digest(path)
+    if path.suffix.lower() != '.cue':
+        return value
+    tracks = []
+    for line in path.read_text(encoding='utf-8-sig').splitlines():
+        if re.match(r'\s*FILE\b', line, re.I):
+            match = re.fullmatch(r'\s*FILE\s+"([^"\r\n]+)"\s+BINARY\s*', line, re.I)
+            if not match:
+                raise ValueError('checkpoint media requires quoted BINARY cue tracks')
+            tracks.append(digest((path.parent / match[1]).resolve(strict=True)))
+    if not tracks:
+        raise ValueError('checkpoint cue has no tracks')
+    return hashlib.sha256('\n'.join([value, *tracks]).encode('ascii')).hexdigest()
+
+
+def route_identity(path, start=0):
     if path.stat().st_size > 24 + 12 * 1000000:
         raise ValueError('route exceeds frame capacity')
     data = path.read_bytes()
@@ -44,12 +63,12 @@ def route_identity(path):
                 raise ValueError('DualShock sequence/reserved bytes or unqualified physical Analog press')
             row = struct.pack('<H5B', buttons, ly, lx, ry, rx, analog)
             steps += row != previous; previous = row
-            if steps > 4096:
+            if steps > dualshock_route.MAX_STEPS:  # the encoder's and runtime's shared cap
                 raise ValueError('DualShock step capacity exceeded')
-            original.update(row)
+            if index >= start: original.update(row)
             # Nyma expands axes to u16 with value<<8; the device rescales to u8.
             axes = [((value << 8)*255+32767)//65535 for value in (ly,lx,ry,rx)]
-            protocol.update(struct.pack('<H5B', buttons, *axes, analog))
+            if index >= start: protocol.update(struct.pack('<H5B', buttons, *axes, analog))
         return {'format':'PSXRTI2', 'frames':count, 'steps':steps,
                 'sha256':hashlib.sha256(data).hexdigest(),
                 'original_controller_sha256':original.hexdigest(),
@@ -63,7 +82,7 @@ def route_identity(path):
         sequence, word, zero = struct.unpack_from("<IHH", data, 24 + 8 * index)
         if sequence != index + 1 or zero:
             raise ValueError("route sequence or reserved bytes")
-        words.extend(struct.pack("<H", word))
+        if index >= start: words.extend(struct.pack("<H", word))
     return {"frames": count, "sha256": digest(path),
             "words_sha256": hashlib.sha256(words).hexdigest()}
 
@@ -72,6 +91,61 @@ def card_identity(path):
     if path.stat().st_size != 131072:
         raise ValueError('card1 must be an exact raw 128 KiB card')
     return {'path':str(path), 'bytes':131072, 'sha256':digest(path)}
+
+
+def checkpoint_interval(manifest, frames, tail):
+    frame, consumed = manifest.get('frame'), manifest.get('input_consumed')
+    terminal = frames + tail - 1
+    if (manifest.get('schema') != 'psx-tas-stateio-v3' or
+            type(frame) is not int or type(consumed) is not int or
+            not 0 < frame < terminal or not 0 < consumed < frames + tail):
+        raise ValueError('invalid checkpoint resume interval')
+    return frame, consumed
+
+
+def resolve_saved_states(run, requested):
+    """Map each requested return to the one checkpoint that satisfies it.
+
+    A capture requested at a return with no represented instruction continuation
+    moves to the next return that has one; its manifest records requested_frame
+    (the earliest request it satisfies) and frame (where it was taken). A request
+    is satisfied by exactly one state with requested_frame <= request <= frame,
+    and that state must be intact: its size, SHA-256 and card images."""
+    states = []
+    for sidecar in sorted(Path(run).glob('tas-state-*.pst.json')):
+        state = sidecar.with_suffix('')
+        try:
+            m = json.loads(sidecar.read_text())
+        except (OSError, ValueError):
+            continue
+        frame, first = m.get('frame'), m.get('requested_frame')
+        if type(frame) is not int or type(first) is not int or not 0 < first <= frame:
+            continue
+        valid = (state.is_file() and state.name == f'tas-state-{frame:06d}.pst'
+                 and m.get('state_bytes') == state.stat().st_size and m.get('state_sha256') == digest(state)
+                 and checkpoint_cards_valid(state, m))
+        states.append((first, frame, valid, state.name))
+    resolved = []
+    for request in sorted(set(requested)):
+        matches = [s for s in states if s[0] <= request <= s[1]]
+        entry = {'frame': request, 'state_frame': None, 'state': None, 'valid': False}
+        if len(matches) == 1:
+            entry.update(state_frame=matches[0][1], state=matches[0][3], valid=matches[0][2])
+        resolved.append(entry)
+    return resolved
+
+
+def checkpoint_cards_valid(state, manifest):
+    """Every card image the manifest names exists beside the state with that SHA-256."""
+    for slot in (1, 2):
+        expected = manifest.get(f'card{slot}_sha256')
+        if expected == 'none':
+            continue
+        card = Path(f'{state}.card{slot}.mcd')
+        if (type(expected) is not str or not card.is_file() or card.stat().st_size != 131072
+                or digest(card) != expected):
+            return False
+    return True
 
 
 def playback_identity_matches(complete, identity, tail):
@@ -128,6 +202,18 @@ def main():
     parser.add_argument("--update-predictor",choices=("gate", "previous-accept"),default="gate",
                         help="experimental prediction only; actual packet/context acceptance stays authoritative")
     parser.add_argument("--checkpoint-every", type=int, default=300)
+    parser.add_argument('--save-state-at', type=int, nargs='+', metavar='RETURN',
+                        help='TAS checkpoint: save a full-machine state once at each listed frontend return')
+    parser.add_argument('--resume-from', type=Path, metavar='FILE',
+                        help='TAS checkpoint: restore this saved state and continue the route from its frame')
+    parser.add_argument('--resume-compatible-build', action='store_true',
+                        help='diagnostic only: admit runtime rebuilds with matching state compatibility and codegen ABI')
+    parser.add_argument('--e-survey', action='store_true',
+                        help='diagnostic: report source-GPU/source-DMA quiescence counts at frame boundaries')
+    parser.add_argument('--perturb-restore', metavar='FIELD',
+                        help='negative control: corrupt exactly one restored field '
+                             '(raster_fraction, raster_cycle, raster_rises, '
+                             'service_cycle, service_frame_returns, service_budget)')
     parser.add_argument('--storage-budget-mib',type=int,help='Stop with host_storage_budget if diagnostic output exceeds this bound')
     parser.add_argument('--expected-exe-sha256',help='refuse to launch unless the staged executable copy has exactly this SHA-256')
     parser.add_argument("--watch-u16", type=lambda x: int(x, 0), action="append", default=[],
@@ -156,8 +242,9 @@ def main():
                         metavar=("LOW", "HIGH"), help="record existing RAM reads in physical [LOW,HIGH)")
     parser.add_argument("--cd-read-start-model", choices=("default", "octoshock-2.2.2-pipeline"), default="default",
                         help="explicit source-core pipeline comparison; not full timing compatibility")
-    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0'),default='default',
-                        help='experimental Nymashock drive head, seek, Pause and Reset timing; cold diagnostics only')
+    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0','octoshock-2.7'),default='default',
+                        help='experimental Nymashock drive head, seek, Pause and Reset timing; octoshock-2.7 is '
+                             'the same drive with the MSVC order of the Reset random draws')
     parser.add_argument('--cd-source-clock-tape', type=Path,
                         help='experimental command/seek clock using an immutable raw random-word tape')
     parser.add_argument('--cd-cdda-model',choices=('default','octoshock-2.3'),default='default',
@@ -185,7 +272,7 @@ def main():
     parser.add_argument("--legacy-card-repair", choices=("default", "off"), default="default",
                         help="Disable inherited global Ape Escape fixed-address card repair explicitly")
     parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock"), default="default",
-                        help="Experimental source digital-pad ACK delay/pulse; cold boot only")
+                        help="Experimental source pad ACK delay/pulse; checkpoints retain the pad, DualShock and card state")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
                         help="experimental source OTC service and CPU-wait rule; cold boot only")
     parser.add_argument('--gpu-dma-model', choices=('default','octoshock-2.2.2-vram-upload','octoshock-2.2.2-bounded-linked-list','octoshock-2.2.2-bounded-quad'), default='default',
@@ -196,6 +283,15 @@ def main():
                         help="experimental source timer2 clock/IRQ state; requires source timer1; timer0 IRQ modes and restore reject")
     parser.add_argument("--precise-slice", choices=("off", "on"), default="off",
                         help="Experimental existing instruction-boundary IRQ slicer; RAM BIOS guard requires the qualified candidate emitter")
+    parser.add_argument("--slice-gpu-deadline", choices=("tick", "phase"), default="tick",
+                        help="precise-slice GPU deadline: the service clock's 128-cycle tick (qualified) or the raster phase edge (step-2 candidate)")
+    parser.add_argument("--slice-bound", choices=("steal", "nosteal", "icache", "none"), default="steal",
+                        help="precise-slice block bound: 240 cycles per access (qualified); 40 while no source DMA transfer is live (step-2); "
+                             "icache = nosteal + refill charged per I-cache line from the live tags (step-3); none = no deadline slicing (step-3 probe)")
+    parser.add_argument("--deadline-cache", choices=("off", "on"), default="off",
+                        help="step-4b: reuse device deadlines while the device-state generation is unchanged (PSX_DEADLINE_CACHE=1)")
+    parser.add_argument("--slot-take", choices=("off", "on"), default="off",
+                        help="take interrupts at compiled delay-slot boundaries the way exec_delay_slot does (PSX_SLICE_SLOT_TAKE=1)")
     args = parser.parse_args()
     if args.speed != "1" and not args.show:
         parser.error('--speed requires --show; headless playback is already uncapped')
@@ -215,7 +311,7 @@ def main():
         raise ValueError('guest syscall model requires the source CPU/service profile')
     if args.cd_drive_model!='default':
         if not args.cd_source_clock_tape:
-            raise ValueError('source drive model requires a clock tape and cold diagnostics')
+            raise ValueError('source drive model requires a clock tape')
     if args.cd_cdda_model!='default' and not args.cd_source_clock_tape:
         raise ValueError('source CDDA requires an explicit source clock tape')
     if args.mdec_source_model!='default' and args.gpu_dma_model!='octoshock-2.2.2-bounded-quad':
@@ -256,6 +352,19 @@ def main():
     if clock_tape:
         paths['cd_source_clock_tape'] = Path(clock_tape['path'])
     identity = route_identity(paths["route"])
+    resume_frame = resume_inputs = 0
+    if args.resume_compatible_build and args.resume_from is None:
+        raise ValueError('--resume-compatible-build requires --resume-from')
+    if args.resume_from is not None:
+        resume_manifest = json.loads(Path(str(args.resume_from)+'.json').read_text())
+        resume_frame, resume_inputs = checkpoint_interval(resume_manifest, identity['frames'], args.neutral_tail)
+        if (args.resume_from.stat().st_size != resume_manifest.get('state_bytes') or
+                digest(args.resume_from) != resume_manifest.get('state_sha256')):
+            raise ValueError('checkpoint size or SHA256 mismatch')
+        if not checkpoint_cards_valid(args.resume_from, resume_manifest):
+            raise ValueError('checkpoint card image missing or SHA256 mismatch')
+    completion_identity = route_identity(paths['route'], resume_inputs)
+
     dualshock = identity.get('format') == 'PSXRTI2'
     if dualshock and (args.update_profile or args.pad_ack_model == 'octoshock-2.2.2-digital'):
         raise ValueError('DualShock does not admit retiming or the digital Octoshock ACK model')
@@ -274,6 +383,11 @@ def main():
         raise ValueError('RAM capture requires 1..1000000 declared completed returns')
     if any(frame > ram_returns for frame in args.ram_snapshot_frame):
         raise ValueError('RAM snapshot exceeds the declared completed-return boundary')
+    if args.save_state_at and (len(set(args.save_state_at)) != len(args.save_state_at) or
+            any(not resume_frame < frame <= ram_returns for frame in args.save_state_at)):
+        raise ValueError('save-state returns must be unique and inside the executed interval')
+    if args.resume_from and args.update_profile:
+        raise ValueError('checkpoint resume does not support input retiming')
     update_profile = None
     update_contexts = None
     context_values = None
@@ -381,7 +495,11 @@ p2_mode = "digital"
                     "PSX_INPUT_ROUTE_NEUTRAL_TAIL": str(args.neutral_tail),
                     "PSX_INPUT_ROUTE_TRACE": "1" if args.sio_trace else "0",
                     "PSX_INPUT_ROUTE_CAPTURE_EVERY": str(args.checkpoint_every),
-                    "PSX_BIOS_HLE": "1" if args.hle else "0"}
+                    "PSX_BIOS_HLE": "1" if args.hle else "0",
+                    # The runtime's 4 s starvation watchdog is wall-clock. A host stall killed
+                    # two unrelated multi-hour replays in the same second (2026-09-17 06:10);
+                    # the launcher's own --timeout bounds a real hang.
+                    "PSX_STARVATION_TIMEOUT_US": "120000000"}
     if args.speed != "1":
         selected_env["PSX_FAST_FORWARD"] = "1"
         selected_env["PSX_FAST_FORWARD_SPEED"] = args.speed
@@ -420,6 +538,27 @@ p2_mode = "digital"
     if args.timer2_model!='default':
         selected_env['PSX_TIMER2_MODEL']=args.timer2_model
     selected_env['PSX_PRECISE_SLICE']='1' if args.precise_slice=='on' else '0'
+    if args.slice_gpu_deadline != 'tick':
+        selected_env['PSX_SLICE_GPU_DEADLINE'] = args.slice_gpu_deadline
+    if args.slice_bound != 'steal':
+        selected_env['PSX_SLICE_BOUND'] = args.slice_bound
+    if args.deadline_cache == 'on':
+        selected_env['PSX_DEADLINE_CACHE'] = '1'
+    if args.slot_take == 'on':
+        selected_env['PSX_SLICE_SLOT_TAKE'] = '1'
+    if args.save_state_at:
+        selected_env['PSX_TAS_SAVE_STATE_AT'] = ','.join(str(f) for f in args.save_state_at)
+    if args.resume_from is not None:
+        selected_env['PSX_TAS_RESUME_STATE'] = str(args.resume_from)
+    if args.resume_compatible_build:
+        selected_env['PSX_TAS_RESUME_COMPATIBLE_BUILD'] = '1'
+    if args.save_state_at or args.resume_from:
+        for asset in ('game', 'bios', 'disc'):
+            selected_env['PSX_TAS_ASSET_' + asset.upper() + '_SHA256'] = checkpoint_asset_digest(paths[asset])
+    if args.perturb_restore is not None:
+        selected_env['PSX_TAS_PERTURB_RESTORE'] = args.perturb_restore
+    if args.e_survey:
+        selected_env['PSX_E_SURVEY'] = '1'
     if args.gpu_dma_model!='default':
         selected_env['PSX_GPU_DMA_MODEL']=args.gpu_dma_model
     if args.legacy_card_repair == "off":
@@ -531,7 +670,12 @@ p2_mode = "digital"
     if (run / "complete.json").exists():
         complete = json.loads((run / "complete.json").read_text())
     qualified = (budget['stop_reason'] is None and code == 0 and
-                 playback_identity_matches(complete, identity, args.neutral_tail))
+                 playback_identity_matches(complete, completion_identity, args.neutral_tail) and
+                 complete.get("resumed_inputs", 0) == resume_inputs)
+    if args.save_state_at:
+        saved = resolve_saved_states(run, args.save_state_at)
+        write_json(run / 'saved-states.json', saved)
+        qualified = qualified and all(item['valid'] for item in saved)
     if initial_card or dualshock:
         initial_path = run / 'initial-cards.json'
         actual_cards = json.loads(initial_path.read_text()) if initial_path.exists() else None
@@ -571,7 +715,7 @@ p2_mode = "digital"
     if args.cpu_return_probe:
         from observation_evidence import validate_cpu_capture
         try:
-            cpu_validation=validate_cpu_capture(run,ram_returns)
+            cpu_validation=validate_cpu_capture(run,ram_returns,first_frame=resume_frame+1)
         except (ValueError,OSError) as error:
             cpu_validation={'valid':False,'error':str(error)}
         write_json(run/'cpu-capture-validation.json',cpu_validation)
@@ -580,13 +724,14 @@ p2_mode = "digital"
         from compare_ram_pages import validate_capture
         try:
             # The completion hook exits before the terminal return observer.
-            ram_validation = validate_capture(run, identity['frames'] + args.neutral_tail - 1, args.ram_snapshot_frame)
+            ram_validation = validate_capture(run, identity['frames'] + args.neutral_tail - 1, args.ram_snapshot_frame, first_frame=resume_frame+1)
         except (ValueError, OSError, StopIteration) as error:
             ram_validation = {'valid': False, 'error': str(error)}
         write_json(run / 'ram-capture-validation.json', ram_validation)
         qualified = qualified and ram_validation['valid']
     print(json.dumps({"input_playback_complete": qualified, "exit_code": code,
-                      "gameplay_equivalence": "unclassified"}), flush=True)
+                      "gameplay_equivalence": "unclassified",
+                      "resumed_inputs": resume_inputs, "observed_from_return": resume_frame+1}), flush=True)
     return 0 if qualified else 1
 
 

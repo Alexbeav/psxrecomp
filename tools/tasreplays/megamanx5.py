@@ -13,10 +13,15 @@ from observation_evidence import terminal_consistency
 from run_native import route_identity
 from tekken3 import command,require_hash,write_json
 from replay_prefix import native_span,write_prefix_route,parse_ladder,run_ladder
-from launch_identity import resolve_binary,receipt_fields,add_launch_arguments,check_launch_arguments,run_native_arguments
+from launch_identity import resolve_binary,receipt_fields,add_launch_arguments,check_launch_arguments,run_native_arguments,checkpoint_resume,checkpoint_receipt
 from stream_compare import Watcher,page_reference
 
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parent.parent
+# Recompiler BIOS stem. SCPH-5501 is the firmware this movie declares
+# (PSX_Firmware_U 0555C6FA); megamanx5_admission cross-checks it. Its kernel and
+# reset vector are byte-identical to SCPH1001, so bios/SCPH5501.toml carries the
+# SCPH1001 seed list, copy windows and install slots verbatim.
+BIOS_STEM='SCPH5501'
 BOOT='SLUS_013.34'
 # media() pins the .cue file's own bytes, so a split .chd must carry the exact
 # original dump name; the regenerated cue is byte-identical to the pinned one.
@@ -74,7 +79,7 @@ def verify_reference(path):
 
 def media(cue,bios):
     require_hash(cue,source.FIXED['Mega Man X5 (USA).cue'])
-    require_hash(bios,source.FIXED['SCPH1001.BIN'])
+    require_hash(bios,source.FIXED[source.FIRMWARE_NAME])
     lines=[x.strip() for x in cue.read_text().splitlines() if x.strip()]
     match=re.fullmatch(r'FILE "([^"\r\n]+)" BINARY',lines[0]) if lines else None
     if not match or lines[1:]!=['TRACK 01 MODE2/2352','INDEX 01 00:00:00']:
@@ -109,11 +114,11 @@ def boot_program(track):
 
 # native_span lives in replay_prefix and is re-exported here for existing importers.
 
-def compare_terminal_observations(run,reference,endpoint):
+def compare_terminal_observations(run,reference,endpoint,start=0):
     """Keep independently observed RAM and persisted-card failures distinct."""
     errors=[]
     try:
-        actual=terminal_consistency(run/'ram-pages.tsv',run/f'ram-frame-{endpoint:06d}.bin',endpoint)
+        actual=terminal_consistency(run/'ram-pages.tsv',run/f'ram-frame-{endpoint:06d}.bin',endpoint,first_frame=start+1)
         ram_match=actual==Path(reference['terminal_ram']).read_bytes()
     except (ValueError,OSError) as error:
         ram_match=False;errors.append('RAM: '+str(error))
@@ -148,7 +153,7 @@ def setup(args):
     if project==ROOT or project.is_relative_to(ROOT):raise ValueError('generated candidate must be outside source')
     project.mkdir(parents=True,exist_ok=False)
     data=boot_program(track);exe=project/BOOT;exe.write_bytes(data)
-    staged_bios=project/'SCPH1001.BIN';shutil.copyfile(bios,staged_bios);require_hash(staged_bios,source.FIXED['SCPH1001.BIN'])
+    staged_bios=project/source.FIRMWARE_NAME;shutil.copyfile(bios,staged_bios);require_hash(staged_bios,source.FIXED[source.FIRMWARE_NAME])
     card=project/'initial-card1.mcd';shutil.copyfile(reference['initial_card1'],card);require_hash(card,source.CARD_SHA)
     tape=project/'nymashock-cold-random.psxrng';shutil.copyfile(tape_source,tape);require_hash(tape,TAPE_SHA)
     route=project/'input.psxrti2';receipt=dualshock_route.write_route(rows,route)
@@ -166,7 +171,7 @@ def setup(args):
     tools,tools_record=build_cache.stage_tools(cache_root,ROOT,project,args.tools_dir.resolve() if args.tools_dir else None,
                                               lambda:build_cache.tools_inputs(ROOT,tools_argv(project/'tools')),build_tools,head)
     q=lambda p:json.dumps(p.as_posix())
-    bios_profile=project/'bios.toml';profile=(ROOT/'bios/SCPH1001.toml').read_text()
+    bios_profile=project/'bios.toml';profile=(ROOT/('bios/'+BIOS_STEM+'.toml')).read_text()
     for key,value in [('rom',staged_bios),('seeds',ROOT/'recompiler/seeds/phase2_ghidra_seeds.json'),('out_dir',ROOT/'generated')]:
         profile=re.sub(r'^'+key+r'\s*=.*$',lambda _,v=value:key+' = '+q(v),profile,flags=re.M)
     bios_profile.write_text(profile,encoding='utf8')
@@ -193,7 +198,7 @@ renderer = "software"
     def stamp():
         fingerprint=subprocess.check_output([str(bash),(ROOT/'tools/bios_emitter_fingerprint.sh').as_posix(),bios_profile.as_posix()],cwd=ROOT,text=True).strip()
         if not re.fullmatch('[0-9a-f]{64}',fingerprint):raise ValueError('invalid BIOS fingerprint')
-        (ROOT/'generated/SCPH1001.emitter.sha').write_text(fingerprint+'\n')
+        (ROOT/('generated/'+BIOS_STEM+'.emitter.sha')).write_text(fingerprint+'\n')
         return fingerprint
     stamped=[]
     def generate():
@@ -201,27 +206,27 @@ renderer = "software"
         command([tools/'psxrecomp-bios.exe','--config',bios_profile,'--rom',staged_bios,'--out-dir',ROOT/'generated'],project/'generate-bios.log')
         stamped.append(stamp())
         command([tools/'psxrecomp-game.exe','--config',game],project/'generate-game.log')
-    generated_record=build_cache.stage_generated(cache_root,ROOT,project,'SCPH1001',
-        lambda:build_cache.generated_inputs(tools,'SCPH1001',staged_bios,ROOT/'recompiler/seeds/phase2_ghidra_seeds.json',
-                                            build_cache.blob_id(ROOT,'bios/SCPH1001.toml'),build_cache.portable_emitter_fingerprint(bash,ROOT,bios_profile),exe,game),
+    generated_record=build_cache.stage_generated(cache_root,ROOT,project,BIOS_STEM,
+        lambda:build_cache.generated_inputs(tools,BIOS_STEM,staged_bios,ROOT/'recompiler/seeds/phase2_ghidra_seeds.json',
+                                            build_cache.blob_id(ROOT,'bios/'+BIOS_STEM+'.toml'),build_cache.portable_emitter_fingerprint(bash,ROOT,bios_profile),exe,game),
         True,generate,head)
     # On a cache hit the emitter fingerprint is recomputed and written exactly as on a miss.
     fingerprint=stamped[0] if stamped else stamp()
     native=project/'native'
     native_argv=['cmake','-S',HERE,'-B',native,*common,'-DTAS_PROJECT_DIR='+str(project),
              '-DTAS_GAME_STEM='+BOOT,'-DTAS_EXE_NAME=MegaManX5-TAS','-DTAS_WINDOW_TITLE=Mega Man X5 TAS',
-             '-DPSXRECOMP_BIOS_STEMS=SCPH1001','-DPSX_SHELLWIN_INTERP=ON','-DPSXRECOMP_BIOS_PROFILE='+str(bios_profile),
+             '-DPSXRECOMP_BIOS_STEMS='+BIOS_STEM,'-DPSX_SHELLWIN_INTERP=ON','-DPSXRECOMP_BIOS_PROFILE='+str(bios_profile),
              '-D_psxrt_bash='+str(bash),'-DPSX_RECOMP_UI=OFF','-DPSX_NETPLAY=OFF','-DPSX_REWIND=OFF','-DPSX_SETUP_WIZARD=OFF',
              '-DPSX_DEBUG_TOOLS=ON','-DPSX_ENABLE_VULKAN=OFF','-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE','-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE']
     def build_native():
         command(native_argv,project/'configure-native.log',env=build_cache.build_env())
         command(['cmake','--build',native,'--parallel',str(args.jobs)],project/'build-native.log',env=build_cache.build_env())
     native_record=build_cache.stage_native(cache_root,ROOT,project,native,'MegaManX5-TAS',
-        lambda:build_cache.native_inputs(ROOT,build_cache.generated_set(ROOT,'SCPH1001',project),native_argv,bios_profile),build_native,head)
+        lambda:build_cache.native_inputs(ROOT,build_cache.generated_set(ROOT,BIOS_STEM,project),native_argv,bios_profile),build_native,head)
     if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip() or subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=head:raise ValueError('source changed during build')
     build=native/'MegaManX5-TAS.exe'
     files=[disc,track,bios,staged_bios,bios_profile,movie,exe,game,tape,card,route,project/'seeds.txt',reference_path,random_receipt_path]
-    generated={str(p):source.digest(p) for p in (ROOT/'generated').glob('SCPH1001*') if p.is_file()}
+    generated={str(p):source.digest(p) for p in (ROOT/'generated').glob(BIOS_STEM+'*') if p.is_file()}
     generated.update({str(p):source.digest(p) for p in (project/'generated').glob('*') if p.is_file()})
     info={'schema':'megamanx5-tas-candidate-v1','source_head':head,'source_tree':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD^{tree}'],text=True).strip(),
           'reference':str(reference_path),'bindings':[source.bind(p) for p in files],'generated':generated,
@@ -245,6 +250,9 @@ def replay(args,returns=None,output=None):
     if output.exists():raise ValueError('fresh output required')
     output.parent.mkdir(parents=True,exist_ok=True)
     wanted=endpoint if returns is None else returns
+    # A resumed run compares only the returns after its checkpoint and never qualifies.
+    start=checkpoint_resume(args)[0]
+    if start>=wanted:raise ValueError('the checkpoint is not before the compared endpoint')
     records,tail=native_span(source.FRAMES,endpoint,wanted)
     route=Path(info['route']);identity=route_identity(route)
     if identity.get('format')!='PSXRTI2' or identity['frames']!=source.FRAMES or identity['original_controller_sha256']!=CONTROLLER_SHA:
@@ -255,9 +263,9 @@ def replay(args,returns=None,output=None):
           '--route',str(route),'--disc',info['disc'],'--bios',info['bios'],'--card1',info['card1'],
           '--cd-source-clock-tape',info['tape'],'--neutral-tail',str(tail),'--timeout',str(args.timeout),
           '--checkpoint-every','1200','--renderer','software','--storage-budget-mib','3072',
-          '--ram-snapshot-frame',str(wanted),*run_native_arguments(args,binary),*PROFILE]
+          '--ram-snapshot-frame',str(wanted),*run_native_arguments(args,binary,wanted),*PROFILE]
     # Streaming evidence only: it may stop the process early, never decide a pass.
-    watcher=Watcher(output,page_reference(Path(reference['ram_pages']),wanted),wanted,stop_on_divergence=args.stop_on_divergence)
+    watcher=Watcher(output,page_reference(Path(reference['ram_pages']),wanted,start),wanted,stop_on_divergence=args.stop_on_divergence,first_frame=start+1)
     watcher.start()
     try:result=subprocess.run(argv)
     finally:streaming=watcher.finish()
@@ -270,25 +278,25 @@ def replay(args,returns=None,output=None):
         from itertools import islice,zip_longest
         first=None;counts=[0,0]
         try:
-            for left,right in zip_longest(islice(read_pages(Path(reference['ram_pages'])),wanted),read_pages(output/'ram-pages.tsv')):
+            for left,right in zip_longest(islice(read_pages(Path(reference['ram_pages'])),start,wanted),read_pages(output/'ram-pages.tsv',first_frame=start+1)):
                 counts[0]+=left is not None;counts[1]+=right is not None
                 if first is None and left!=right:
                     first={'frame':(left or right)[0],'source_cycle':left[1] if left else None,'native_cycle':right[1] if right else None,
                            'changed_pages':[f'{i*4096:06X}' for i in range(512) if left and right and left[2][i]!=right[2][i]]}
-            comparison={'match':first is None and counts==[wanted,wanted],'returns':counts,'first_divergence':first}
+            comparison={'match':first is None and counts==[wanted-start,wanted-start],'returns':counts,'first_divergence':first}
         except (ValueError,OSError) as error:
             comparison={'match':False,'returns':counts,'first_divergence':first,'observation_error':str(error)}
     terminal_match=None;terminal_card_match=None;terminal_error=None
     if wanted==endpoint and result.returncode==0:
-        terminal_match,terminal_card_match,terminal_error=compare_terminal_observations(output,reference,wanted)
+        terminal_match,terminal_card_match,terminal_error=compare_terminal_observations(output,reference,wanted,start)
     mechanical=bool(result.returncode==0 and comparison and comparison['match'] and (wanted<endpoint or (terminal_match and terminal_card_match)))
-    status=('fail' if not mechanical else 'diagnostic' if not binary['binary_matches_setup'] else 'prefix_pass' if wanted<endpoint else 'pass')
+    status=('fail' if not mechanical else 'diagnostic' if not binary['binary_matches_setup'] or start else 'prefix_pass' if wanted<endpoint else 'pass')
     receipt={'candidate_sha256':binary['binary_sha256'],**receipt_fields(binary),'source_reference':source.bind(Path(info['reference'])),
              'diagnostic_prefix':wanted<endpoint,'original_input_prefix_unchanged':True,'full_original_input_and_tail':wanted==endpoint,
              'observed_returns':wanted,'native_input_exit':result.returncode,'comparison':comparison,'terminal_ram_match':terminal_match,
              'terminal_card1_match':terminal_card_match,'terminal_observation_error':terminal_error,
              'mechanical_match':mechanical,'status':status,'first_divergence':comparison['first_divergence'] if comparison else None,
-             'streaming':streaming,
+             'streaming':streaming,'checkpoints':checkpoint_receipt(args,wanted),
              'qualification':'mechanical comparison only; ending/semantic review and repeated gameplay remain required'}
     write_json(output/'source-comparison.json',receipt)
     print(json.dumps(receipt))

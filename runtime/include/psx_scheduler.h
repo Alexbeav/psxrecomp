@@ -110,6 +110,15 @@ void psx_scheduler_resume_at(uint32_t resume_pc);
 int  psx_scheduler_top_level_resume_active(void);
 void psx_scheduler_top_level_resume_clear(void);
 
+/* BS_SEC_SCHED wire: logical scheduler state that is not stored in guest RAM.
+ * The one-level return TCB is required when a yielded target later returns to
+ * its caller; omitting it can leave a restored title in a live BIOS loop even
+ * though CPU/RAM/device restoration succeeded. Three reserved words stay zero. */
+#define PSX_SCHEDULER_SNAPSHOT_BYTES 16u
+void psx_scheduler_snapshot_write(uint8_t *out, uint32_t len);
+int  psx_scheduler_snapshot_read(const uint8_t *in, uint32_t len,
+                                 struct CPUState *cpu);
+
 /* HLE-tier standing subsystem replacement (CLAUDE.md §0 amendments
  * 2026-06-29 + 2026-07-02). 1 = deterministic TCB scheduler (default, both
  * BIOS backends — the LLE host-fiber bridge it replaces is non-deterministic);

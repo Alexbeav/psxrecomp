@@ -180,13 +180,46 @@ def resolve(repo, rev):
 
 
 def run_check(repo, registry, rev=None, titles=None):
+    """`missing` counts unexpected absences only.
+
+    An entry listed in the registry's `known_absent` map is a tracked debt: a qualified
+    behaviour we know this lineage lost and have not yet restored. It is still reported, and
+    still absent, but it does not fail a gate, because a gate that is permanently red for a
+    reason everyone already knows teaches people to ignore it. Recording a debt requires a
+    reason; nothing may be marked absent silently.
+    """
     resolved = resolve(repo, rev)
+    known = registry.get('known_absent') or {}
     cache, results = {}, []
     for entry in select_entries(registry, titles):
-        results.append(check_entry(repo, entry, rev, cache))
-    missing = [r for r in results if not r['present']]
+        result = check_entry(repo, entry, rev, cache)
+        if not result['present'] and result['id'] in known:
+            result['known_absent'] = known[result['id']]
+        results.append(result)
+    missing = [r for r in results if not r['present'] and 'known_absent' not in r]
+    tracked = [r for r in results if 'known_absent' in r]
     return {'schema': SCHEMA, 'rev': rev or 'worktree', 'resolved': resolved,
-            'entries': results, 'missing': len(missing), 'total': len(results)}
+            'entries': results, 'missing': len(missing), 'total': len(results),
+            'known_absent': len(tracked)}
+
+
+def require_qualified(repo, rev, titles=None):
+    """Raise if `rev` has lost a qualified behaviour that is not a recorded debt.
+
+    The registry is read from the tree being built, not from this file's own location, so a
+    synthetic or unrelated repository simply has nothing to check. Call this before building a
+    candidate: a replay qualifies a source tree, and a tree that quietly lost one of those
+    behaviours is not that tree any more, however green its unit tests are.
+    """
+    registry_path = Path(repo) / 'tools/tasreplays/qualified-hunks.json'
+    if not registry_path.exists():
+        return None
+    report = run_check(repo, load_registry(registry_path), rev, titles)
+    lost = [r['id'] for r in report['entries'] if not r['present'] and 'known_absent' not in r]
+    if lost:
+        raise HunkError(f"{rev or 'worktree'} has lost qualified behaviour: " + ', '.join(lost)
+                        + ' (run tools/tasreplays/qualified_hunks.py check for the detail)')
+    return report
 
 
 def describe(result):
@@ -194,6 +227,8 @@ def describe(result):
         return f"present  {result['id']}"
     bad = next(b for b in result['blocks'] if not b['present'])
     where = f"{bad['file']} (file absent)" if bad['file_missing'] else f"{bad['file']}: {bad['first_missing_line'].strip()}"
+    if 'known_absent' in result:
+        return f"debt     {result['id']}  {result['missing_blocks']} of {result['total_blocks']} blocks  {result['known_absent']}"
     return f"MISSING  {result['id']}  {result['missing_blocks']} of {result['total_blocks']} blocks  {where}"
 
 
@@ -203,8 +238,9 @@ def cmd_check(args):
     report['registry'] = str(args.registry)
     for result in report['entries']:
         print(describe(result))
-    print(f"missing: {report['missing']} of {report['total']} entries  ({report['rev']}"
-          f"{' = ' + report['resolved'][:12] if report['resolved'] else ''})")
+    debt = f", plus {report['known_absent']} tracked as debt" if report['known_absent'] else ''
+    where = ' = ' + report['resolved'][:12] if report['resolved'] else ''
+    print(f"missing: {report['missing']} of {report['total']} entries{debt}  ({report['rev']}{where})")
     if args.json:
         with open(args.json, 'w', encoding='utf-8', newline='\n') as stream:
             json.dump(report, stream, indent=2)
@@ -232,6 +268,42 @@ def cmd_check_all(args):
             json.dump({'schema': SCHEMA, 'registry': str(args.registry), 'revs': reports}, stream, indent=2)
             stream.write('\n')
     return 1 if failed else 0
+
+
+def span_at_rev(repo, path, rev, anchor, count):
+    """`count` lines of `path` at `rev`, starting at the line equal to `anchor`.
+
+    Seeding from a commit's added lines cannot re-pin a fix whose expression a
+    later commit rewrote: the rewritten lines are dropped and the entry decays
+    towards whatever survived, which for a commented fix is the comment alone --
+    a guard that passes on a tree where the code itself was deleted. This takes
+    the fix's CURRENT lines instead, so an evolved entry keeps its teeth.
+    """
+    if not qualifies(path):
+        raise HunkError(f'{path}: not a qualifying source path ({", ".join(QUALIFYING)})')
+    lines = file_lines(repo, path, rev)
+    if lines is None:
+        raise HunkError(f'{path}: not present at {rev or "the working tree"}')
+    anchor = anchor.rstrip()
+    matches = [i for i, line in enumerate(lines) if line == anchor]
+    if len(matches) != 1:
+        raise HunkError(f'{path}: anchor matches {len(matches)} lines, need exactly 1: {anchor!r}')
+    start = matches[0]
+    if count < 1 or start + count > len(lines):
+        raise HunkError(f'{path}: {count} lines from the anchor runs past the end of the file')
+    return lines[start:start + count]
+
+
+def seed_span(repo, path, rev, anchor, count, entry_id, titles, note=None, origin=None, subject=None):
+    """An entry pinned to a contiguous span as it exists at `rev`."""
+    block = {'file': path, 'lines': span_at_rev(repo, path, rev, anchor, count)}
+    entry = {'id': entry_id, 'titles': list(titles),
+             'origin_commit': resolve(repo, origin) if origin else resolve(repo, rev or 'HEAD'),
+             'subject': subject or 'pinned span',
+             'qualified_tree': resolve(repo, rev or 'HEAD'), 'blocks': [block]}
+    if note:
+        entry['note'] = note
+    return entry
 
 
 def seed_entry(repo, commit, entry_id, titles, prefixes=None, as_of=None, note=None, origin=None, subject=None):
@@ -277,8 +349,16 @@ def cmd_seed(args):
         if not qualifies(clean) and not any(q.startswith(clean + '/') for q in QUALIFYING):
             raise HunkError(f'{prefix}: not a qualifying source path ({", ".join(QUALIFYING)})')
     registry = load_registry(args.registry)
-    entry = seed_entry(args.repo, args.commit, args.id, args.titles, args.path or None,
-                       args.as_of, args.note, args.origin, args.subject)
+    if args.anchor is not None:
+        if not args.file or args.lines is None:
+            raise HunkError('--anchor needs --file and --lines')
+        entry = seed_span(args.repo, args.file, args.as_of, args.anchor, args.lines,
+                          args.id, args.titles, args.note, args.origin, args.subject)
+    else:
+        if not args.commit:
+            raise HunkError('seed needs --commit, or --file/--anchor/--lines to pin a current span')
+        entry = seed_entry(args.repo, args.commit, args.id, args.titles, args.path or None,
+                           args.as_of, args.note, args.origin, args.subject)
     action = upsert(registry, entry)
     write_registry(args.registry, registry)
     evolved = entry.get('evolved')
@@ -321,7 +401,7 @@ def build_parser():
 
     p = sub.add_parser('seed', help="record a commit's added source lines as a registry entry")
     common(p)
-    p.add_argument('--commit', required=True)
+    p.add_argument('--commit')
     p.add_argument('--path', action='append', help='restrict to these qualifying path prefixes')
     p.add_argument('--id', required=True)
     p.add_argument('--titles', type=titles_list, required=True)
@@ -329,6 +409,9 @@ def build_parser():
     p.add_argument('--note')
     p.add_argument('--origin', help='record this hash as origin_commit (the lines come from a re-application)')
     p.add_argument('--subject')
+    p.add_argument('--file', help='with --anchor/--lines: pin a span of this file as it exists at --as-of')
+    p.add_argument('--anchor', help='exact first line of the span to pin (must match exactly one line)')
+    p.add_argument('--lines', type=int, help='number of lines in the span, starting at --anchor')
     p.set_defaults(func=cmd_seed)
     return parser
 

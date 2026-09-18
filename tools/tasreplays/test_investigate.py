@@ -139,11 +139,13 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(state['comparison']['first_divergence']['frame'], 3)
 
     def test_failure_and_timeout(self):
-        for mode, delay, expected in [('failure', 0, None), ('match', 2, 'host_timeout')]:
+        # The failure case must fail on its own, not on the host clock: a loaded build machine
+        # can take longer than 0.3 s just to start Python, which reported host_timeout instead.
+        for mode, delay, timeout, expected in [('failure', 0, 120, None), ('match', 2, .3, 'host_timeout')]:
             with self.subTest(mode=mode):
                 self.run = self.root / mode
                 self.start(mode, delay)
-                self.data['steps'][0]['timeout'] = .3
+                self.data['steps'][0]['timeout'] = timeout
                 self.save()
                 self.command('run', self.path, self.run)
                 self.assertEqual(self.state()['status'], 'failed')
@@ -185,6 +187,27 @@ class ControllerTests(unittest.TestCase):
         self.save()
         self.assertEqual(self.command('run', self.path, self.run).returncode, 0)
         self.assertEqual(self.state()['completed'], ['build', 'test', 'replay'])
+
+    def test_session_credentials_stay_out_of_steps_and_evidence(self):
+        self.start()
+        base = self.data['steps'][0]
+        probe = self.root / 'child-env.json'
+        self.data['steps'] = [dict(base, id='build', phase='build',
+                                   argv=['{python}', '-c', 'import json,os,sys;json.dump(dict(os.environ),open(sys.argv[1],"w"))',
+                                         str(probe)])] + [base]
+        self.save()
+        secret = 'sk-ant-test-secret-value'
+        env = dict(os.environ, CLAUDE_CODE_SESSION_ACCESS_TOKEN=secret, GH_TOKEN=secret, EXAMPLE_API_KEY=secret,
+                   PSX_TAS_KEEP='kept')
+        outcome = subprocess.run([sys.executable, str(CONTROLLER), 'run', str(self.path), str(self.run)],
+                                 capture_output=True, text=True, timeout=30, env=env)
+        self.assertEqual(outcome.returncode, 0, outcome.stderr + outcome.stdout)
+        child = json.loads(probe.read_text())
+        self.assertEqual(child.get('PSX_TAS_KEEP'), 'kept')
+        for name in ('CLAUDE_CODE_SESSION_ACCESS_TOKEN', 'GH_TOKEN', 'EXAMPLE_API_KEY'):
+            self.assertNotIn(name, child)
+        for record in self.run.glob('attempts/*/command.json'):
+            self.assertNotIn(secret, record.read_text())
 
     def test_changed_input_blocks_diagnostics(self):
         self.start('mismatch', 1, diagnostics=True)

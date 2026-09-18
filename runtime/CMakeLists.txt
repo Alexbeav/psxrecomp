@@ -104,6 +104,10 @@ if(BUILD_TESTING)
     target_include_directories(input_instruction_histogram_test PRIVATE include)
     add_test(NAME input_instruction_histogram_test COMMAND input_instruction_histogram_test)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME biohazard_checkpoint_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_biohazard_checkpoint.py --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_resume_interval_test COMMAND ${Python3_EXECUTABLE}
+            ${PSXRECOMP_ROOT}/tools/tasreplays/test_resume_interval.py)
         foreach(_opt IN ITEMS 0 2)
             set(_target cdrom_source_cdda_O${_opt}_test)
             add_executable(${_target} tests/test_cdrom_source_cdda.c src/psx_sha256.c)
@@ -192,7 +196,10 @@ if(BUILD_TESTING)
     add_test(NAME sio_nymashock_card_test COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sio_nymashock_card.py
         $<TARGET_FILE:sio_nymashock_card_test>)
-    add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
+    add_executable(sio_dualshock_dtr_session_test tests/test_sio_dualshock_dtr_session.c)
+target_include_directories(sio_dualshock_dtr_session_test PRIVATE include)
+add_test(NAME sio_dualshock_dtr_session_test COMMAND sio_dualshock_dtr_session_test)
+add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
     target_include_directories(sio_nymashock_dualshock_test PRIVATE include)
     add_test(NAME sio_nymashock_dualshock_test COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sio_nymashock_dualshock.py

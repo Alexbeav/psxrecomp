@@ -8,7 +8,18 @@
 #include <stdio.h>
 #include <string.h>
 
-#define INPUT_ROUTE_MAX_STEPS 4096u
+/* Distinct controller states a route may hold. This bounds the staging arrays in
+ * debug_server.c and nothing else: a step is a run of frames with identical
+ * controller bytes, so the cap limits input DENSITY, not length. 4096 was ample
+ * for the first four titles - Mega Man X5 needs 493, Bio Hazard 2,824, Resident
+ * Evil DC 5963M 3,046 - but a dense action TAS goes straight through it: Mega Man
+ * X4's 6412M needs 12,346 steps over 137,920 frames and was refused outright.
+ * Raising it cannot change how any already accepted route parses; it only changes
+ * which routes are refused. Cost is staging memory, about 400 KiB per array,
+ * host-side only, never guest state. Keep dualshock_route.py's MAX_STEPS equal.
+ * Crash Bandicoot 7798S needs 55,610 steps over 203,477 frames, so the cap is
+ * 65,536 (about 800 KiB per array); Abe's Exoddus 6672M needs 10,909. */
+#define INPUT_ROUTE_MAX_STEPS 65536u
 #define INPUT_ROUTE_MAX_FRAMES 1000000u
 typedef struct { uint32_t frames; uint16_t buttons; } InputRouteStep;
 

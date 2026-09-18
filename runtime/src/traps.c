@@ -15,6 +15,7 @@
 #include <setjmp.h>
 #include "psx_fiber.h"   /* cross-platform fibers (Win32 fibers / POSIX ucontext) */
 #include "psx_scheduler.h" /* deterministic TCB scheduler carve-out (scaffolding) */
+#include "pst_wire.h"      /* BS_SEC_SCHED wire */
 #include "parity_trace.h"  /* general two-process control-flow parity ring */
 #include "source_gpu_runtime.h"
 #include "psx_bios_backend.h" /* psx_bios_is_entry, psx_bios_image (psx_is_dispatchable) */
@@ -765,6 +766,40 @@ void psx_scheduler_resume_at(uint32_t resume_pc)
     longjmp(g_scheduler_jmpbuf, 1); /* unwind to psx_scheduler_run; never returns */
 }
 
+void psx_scheduler_snapshot_write(uint8_t *out, uint32_t len)
+{
+    PstW w;
+    if (!out || len != PSX_SCHEDULER_SNAPSHOT_BYTES) return;
+    pst_w_init(&w, out, len);
+    (void)pst_w_u32(&w, g_sched_return_tcb);
+    (void)pst_w_u32(&w, 0u);
+    (void)pst_w_u32(&w, 0u);
+    (void)pst_w_u32(&w, 0u);
+}
+
+int psx_scheduler_snapshot_read(const uint8_t *in, uint32_t len, CPUState *cpu)
+{
+    PstR r;
+    uint32_t return_tcb, reserved0, reserved1, reserved2;
+    if (!in || !cpu || len != PSX_SCHEDULER_SNAPSHOT_BYTES) return 0;
+    pst_r_init(&r, in, len);
+    if (!pst_r_u32(&r, &return_tcb) ||
+        !pst_r_u32(&r, &reserved0) ||
+        !pst_r_u32(&r, &reserved1) ||
+        !pst_r_u32(&r, &reserved2))
+        return 0;
+    if (reserved0 || reserved1 || reserved2) return 0;
+    /* RAM precedes this section, so the TCB can be checked against the
+     * restored kernel tables. */
+    if (return_tcb && !psx_is_valid_tcb(cpu, return_tcb)) return 0;
+    g_sched_return_tcb = return_tcb;
+    g_sched_escape.target_tcb = 0;
+    g_sched_escape.resume_pc = 0;
+    g_sched_escape.reason = PSX_RUN_CONTINUE;
+    g_sched_top_level_resume = 0;
+    return 1;
+}
+
 /* Scheduler mode. HLE = the deterministic TCB scheduler
  * (psx_request_thread_switch, default); LLE = the legacy host-fiber bridge
  * (psx_change_thread_fiber). This is the HLE tier's standing SUBSYSTEM
@@ -830,6 +865,8 @@ void psx_request_return_to_lobby(void)
 void psx_scheduler_run(CPUState* cpu)
 {
     extern int g_psx_dispatch_depth;
+    extern int dirty_ram_checkpoint_resume_pending(void);
+    extern void dirty_ram_checkpoint_resume(CPUState *);
     g_in_scheduler_run = 1;
     g_sched_escape.reason = PSX_RUN_CONTINUE;
     for (;;) {
@@ -853,6 +890,18 @@ void psx_scheduler_run(CPUState* cpu)
              * nested-unit gate so IRQ checks are not wedged-off after the escape
              * (backstop for the Ape memcard native<->interp fix). */
             { extern int g_call_unit_depth; g_call_unit_depth = 0; }
+            /* A deferred thread yield (or a save-admission unwind) can longjmp
+             * out of a dirty-interpreter IRQ pump and skip that frame's restore
+             * of the pump-site latch and the dirty resume PC. The scheduler top
+             * is never a pump site. Left set, the latch stops deferred thread
+             * switches from ever being honored and makes a later compiled poll
+             * take a stale PC as EPC (3f56f6a5; GT2-Arcade wedged this way). */
+            {
+                extern int g_cosim_dirty_pump_site;
+                extern uint32_t g_dirty_safe_resume_pc;
+                g_cosim_dirty_pump_site = 0;
+                g_dirty_safe_resume_pc = 0;
+            }
             /* flush_resume / savestate longjmp skips generated bb_defer cleanup. */
             {
                 extern int g_psx_cyc_bb_defer;
@@ -882,7 +931,11 @@ void psx_scheduler_run(CPUState* cpu)
 
         uint32_t run_pc;
         int from_top_resume = 0;
-        if (g_sched_escape.reason == PSX_RUN_RESUME_CURRENT &&
+        if (dirty_ram_checkpoint_resume_pending()) {
+            /* A cold checkpoint already contains the live CPU context. The
+             * current TCB is its last suspended context, not its current one. */
+            run_pc = cpu->pc;
+        } else if (g_sched_escape.reason == PSX_RUN_RESUME_CURRENT &&
             g_sched_escape.resume_pc != 0u) {
             /* Same-thread RFE: GPRs already committed by the RFE; just re-dispatch. */
             run_pc = g_sched_escape.resume_pc;
@@ -912,6 +965,12 @@ void psx_scheduler_run(CPUState* cpu)
         if (from_top_resume) {
             extern void psx_irq_arm_compiled_resume_pc(uint32_t pc);
             psx_irq_arm_compiled_resume_pc(run_pc);
+        }
+        /* A restored TAS checkpoint re-enters its saved instruction, delay-slot
+         * or load continuation through the interpreter before normal dispatch. */
+        if (dirty_ram_checkpoint_resume_pending()) {
+            dirty_ram_checkpoint_resume(cpu);
+            run_pc = cpu->pc;
         }
         psx_dispatch(cpu, run_pc);
 

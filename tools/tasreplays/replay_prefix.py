@@ -38,10 +38,12 @@ def write_prefix_route(source_route, records, target):
     return target
 
 
-def compare_prefix_returns(source, native, wanted):
-    """compare_returns-shaped result for the first `wanted` source returns."""
+def compare_prefix_returns(source, native, wanted, start=0):
+    """compare_returns-shaped result for source returns start+1..wanted (start > 0
+    for a run resumed from a checkpoint at that return)."""
     first = None; coverage = [0, 0]; paired = 0
-    for expected, actual in zip_longest(islice(read_pages(Path(source)), wanted), read_pages(Path(native))):
+    for expected, actual in zip_longest(islice(read_pages(Path(source)), start, wanted),
+                                        read_pages(Path(native), first_frame=start+1)):
         coverage[0] += expected is not None; coverage[1] += actual is not None
         if expected is None or actual is None:
             if first is None:
@@ -53,7 +55,7 @@ def compare_prefix_returns(source, native, wanted):
         if first is None and (expected[1] != actual[1] or changed):
             first = {'kind': 'state_or_clock', 'frame': expected[0],
                      'source_cycle': expected[1], 'native_cycle': actual[1], 'changed_pages': changed}
-    return {'match': first is None and coverage == [wanted, wanted],
+    return {'match': first is None and coverage == [wanted-start, wanted-start],
             'compared_returns': paired, 'captured_returns': coverage, 'first_divergence': first}
 
 

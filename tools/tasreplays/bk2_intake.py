@@ -81,7 +81,15 @@ def inspect(data):
     words, segments = [], []
     counts = dict.fromkeys(BUTTONS, 0)
     for index, line in enumerate(lines[2:-1]):
-        match = re.fullmatch(r"\| {4}1,\.\.\.\|([^|]{14})\|", line)
+        # A row may carry columns past the one the LogKey declares. BizHawk's own
+        # deserializer (Bk2ControllerAdapter.SetControllersAsMnemonic, 2.3) strips every
+        # '|' and then consumes characters only for the controls the emulator's definition
+        # declares, so anything after the declared set is never read. Abe's Oddysee 5620M
+        # has 76 such rows carrying one extra, wholly neutral column. We accept those and
+        # require them to be neutral, which is stricter than the source (it ignores those
+        # bytes whatever they hold): we can refuse a movie the oracle would run, but we
+        # can never silently read a different input stream than the oracle did.
+        match = re.fullmatch(r"\| {4}1,\.\.\.\|([^|]{14})\|(?:\.{14}\|)*", line)
         if not match:
             raise ValueError(f"frame {index}: unsupported disc/reset/tray event or row width")
         buttons = match[1]

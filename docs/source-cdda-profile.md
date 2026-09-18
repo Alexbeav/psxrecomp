@@ -36,13 +36,15 @@ source timers, unused internal state and downstream SPU mixing are not projected
 REPRODUCE: configure the runtime CMake tests with GNU C and run
 `ctest --test-dir <build> -R cdrom_source_cdda --output-on-failure`.
 O0 and O2 replay each complete transcript and check rejection of scan commands,
-double-speed playback, active data-read to Play and state capture/restore.
+double-speed playback and active data-read to Play. Each transcript also runs
+with a snapshot round trip after every operation, including queued PCM and
+pending reports. See [TAS checkpoints](TAS_CHECKPOINTS.md) for replay qualification.
 Fixtures bind original upstream, external oracle source head/tree/core hash,
 authoring driver, random-word tape, complete operation stream and output hash.
 External build/authoring recipes are retained in the campaign recovery evidence.
 
 Scope: single-speed audio tracks with valid SubQ, ordinary authored commands,
 cold source-clock selection. Double speed, Forward/Backward, playing data tracks,
-active data-read to Play, snapshot capture/restore and hardware timing are not
+active data-read to Play and hardware timing are not
 qualified. Full Pepsiman RAM/clock parity and witnessed ending remain separate
 acceptance gates, as does the unchanged Tekken regression after shared changes.

@@ -47,6 +47,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import qualified_hunks
+
 SCHEMA = 'psx-tas-build-cache-v1'
 STAGES = ('tools', 'generated', 'native')
 ENV_VAR = 'PSX_TAS_BUILD_CACHE'
@@ -442,7 +444,13 @@ def _announce(stage, key, entry: Entry | None):
 def stage_tools(root, repo, project, explicit_dir, inputs, miss, head):
     """Stage 1. `explicit_dir` (--tools-dir) bypasses the cache and rebuilds there as before.
     `inputs()` returns the key document; `miss(tools_dir)` runs configure, build and ctest.
-    Returns (tools build directory, receipt record)."""
+    Returns (tools build directory, receipt record).
+
+    Every title adapter's setup reaches this function, so it is where a candidate is refused
+    if `head` has lost a qualified behaviour that no build or unit test would notice. See
+    qualified_hunks.require_qualified; a loss that is known and recorded as a debt does not
+    refuse, an unrecorded one does."""
+    qualified_hunks.require_qualified(repo, head)
     project = Path(project)
     if explicit_dir is not None:
         miss(Path(explicit_dir))

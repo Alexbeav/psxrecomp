@@ -56,7 +56,7 @@ static void start_card(unsigned ctrl) {
 static void check_source_clock(void) {
     const unsigned ack=0x80, spu=1u<<9;
     if (!sio_source_card) return;
-    assert(sio_snapshot_bytes()==0);
+    assert(sio_snapshot_bytes()>0);
     start_card(0x1003);
     advance(1087); assert(!sio_pending_ack && !(i_stat&ack));
     advance(1); assert(sio_pending_ack && sio_ack_remaining==256);

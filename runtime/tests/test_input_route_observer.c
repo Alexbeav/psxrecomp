@@ -44,6 +44,10 @@ uint64_t dma_debug_get_cdrom_history(const DMACDROMHistoryEntry **out) { *out = 
 uint32_t sio_get_trace(const SioTraceEntry **out, int *index) {
     *out = NULL; *index = 0; return 0;
 }
+/* The observer's boundary hook asks the precise-slice interpreter to dump its
+ * diagnostic counters; that lives in dirty_ram_interp.c, which this fixture
+ * deliberately does not link. */
+void psx_slice_diag_write(const char *dir) { (void)dir; }
 void gl_renderer_sync_cpu(void) {}
 void debug_server_dump_watched_writes(FILE *f, const uint32_t *a, uint32_t count) {
     (void)a; (void)count; fputs("{\"kind\":\"coverage\",\"total_writes\":0,\"retained_writes\":0}\n", f);
@@ -59,6 +63,16 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo *di, uint32_t x, uint32_t y,
 int main(int argc, char **argv) {
     if (argc != 2) return 9;
     card_case = argv[1];
+    if (!strcmp(argv[1], "resume_tail")) {
+        const uint8_t neutral[4] = {128,128,128,128};
+        if (!input_route_observer_dualshock_init(2)) return 4;
+        input_route_observer_resume(3);
+        input_route_observer_boundary(3, 3);
+        input_route_observer_dualshock_input(0xFFFF, neutral);
+        input_route_observer_dualshock_applied(0xFFFF, neutral, 1, 1, 1);
+        input_route_observer_boundary(4, 4);
+        return 8;
+    }
     if (!strncmp(argv[1], "ds_", 3)) {
         if (!input_route_observer_dualshock_init(2)) return 4;
         const uint8_t source[4] = {1,0,128,255}, source2[4] = {129,130,131,132};

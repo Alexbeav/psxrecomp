@@ -348,6 +348,15 @@ typedef enum {
 
 static ActiveDevice active_device = DEV_NONE;
 
+/* Source pads (Mednafen InputDevice_Gamepad and InputDevice_DualShock: Octoshock 2.2.2/2.3,
+ * Nymashock 1.29.0, Octoshock 2.7/2.10):
+ * every device on a port sees every byte while that port's DTR is asserted, and the pad's
+ * command phase restarts only when its DTR rises. A session whose first byte is not 0x01
+ * (a memory-card 0x81, say) leaves the pad silent until DTR falls and rises again, so a
+ * later 0x01 in the same session gets no response and no ACK. Per physical port. */
+static uint8_t pad_dtr_session_first[2];
+static uint8_t pad_dtr_session_mute[2];
+
 /* Save working mc_ vars back to the slot state for the given slot. */
 static void mc_save_slot(int slot) {
     if (slot < 0 || slot > 1) return;
@@ -849,6 +858,8 @@ void sio_init(void) {
         mc_slots[i].flag = 0x08;
     }
     active_device = DEV_NONE;
+    memset(pad_dtr_session_first, 0, sizeof pad_dtr_session_first);
+    memset(pad_dtr_session_mute, 0, sizeof pad_dtr_session_mute);
     sio_irq_pending = 0;
     sio_irq_countdown = 0;
     sio_ack_visible_reads = 0;
@@ -1391,7 +1402,11 @@ static void pad_process_byte(uint8_t tx_byte) {
              * responses; only valid while in config mode (a digital pad ignores
              * them, handled by the else branch below). */
             static const uint8_t r_def[8] = { 0xF3,0x5A,0x00,0x00,0x00,0x00,0x00,0x00 };
-            static const uint8_t r_45[8]  = { 0xF3,0x5A,0x03,0x02,0x01,0x02,0x01,0x00 };
+            /* 0x45 "Query Model and Mode". The source builds this reply in two
+             * phases (frontio.c case 0x4500/0x4501): transmit_buffer[0] = 0x01 for
+             * the device type, then 0x02, analog_mode ? 1 : 0, 0x02, 0x01, 0x00.
+             * After the 0xF3 0x5A header that is  01 02 <mode> 02 01 00. */
+            static const uint8_t r_45[8]  = { 0xF3,0x5A,0x01,0x02,0x00,0x02,0x01,0x00 };
             static const uint8_t r_46[8]  = { 0xF3,0x5A,0x00,0x00,0x01,0x02,0x00,0x0A };
             static const uint8_t r_47[8]  = { 0xF3,0x5A,0x00,0x00,0x02,0x00,0x01,0x00 };
             static const uint8_t r_4c[8]  = { 0xF3,0x5A,0x00,0x00,0x00,0x04,0x00,0x00 };
@@ -1403,12 +1418,18 @@ static void pad_process_byte(uint8_t tx_byte) {
             memcpy(pad_response, r, 8);
             /* 0x45 reports the analog-status byte: a driver polling 0x45 to learn
              * the live mode must read the CURRENT analog state, not a hard-coded
-             * analog-on (dualshock.cpp:743 transmit_buffer[1]=analog_mode?1:0).
+             * analog-on (frontio.c case 0x4501, transmit_buffer[1]=analog_mode?1:0).
              * Reporting "analog" while we present digital (or vice-versa) makes the
              * driver mis-parse the poll frame length → off-by-frame garbage buttons
-             * (axis5_sio_controller.md D8). */
+             * (axis5_sio_controller.md D8).
+             * That source index is the SECOND byte of the 0x4501 phase, i.e. the
+             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 — not
+             * pad_response[3], which is the constant 0x02. Writing it there
+             * destroyed the constant and left a hard-coded analog-on in the real
+             * mode slot, so we answered 03 00 01 where the source answers
+             * 01 02 00 (Mega Man X5 return 1090). */
             if (tx_byte == 0x45)
-                pad_response[3] = pad_analog[lp] ? 0x01 : 0x00;
+                pad_response[4] = pad_analog[lp] ? 0x01 : 0x00;
             /* 0x4D returns the previous six-byte motor map while latching the
              * replacement bytes later in this same transaction. */
             if (tx_byte == 0x4D)
@@ -1480,6 +1501,25 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_active_logical >= 0 && pad_active_logical < PSX_MAX_PLAYERS) {
             pad_analog[pad_active_logical] = (tx_byte == 0x01) ? 1 : 0;
             pad_type_req[pad_active_logical] = -1;
+        }
+        /* 0x46/0x47/0x4C do not have one fixed reply: the source selects it from
+         * the data byte at position 3, which arrives paired with response index 2
+         * (frontio.c cases 0x4601, 0x4701, 0x4C01). The canned tables above are
+         * only the data == 0x00 variant, so a game that asks with 0x01 got the
+         * wrong answer — Mega Man X5 issues 0x4C with 0x01 and the source replies
+         * 07 where an unpatched table replies 04 (return 1098).
+         * Reply bytes 3..7 are the five phase-1 bytes; byte 2 is the phase-0 byte
+         * and does not vary. */
+        if (!g_pad_legacy_cfg && pad_response_idx == 2 && tx_byte != 0x00 &&
+            (pad_current_cmd == 0x46 || pad_current_cmd == 0x47 || pad_current_cmd == 0x4C)) {
+            static const uint8_t v46_one[5] = { 0x00,0x01,0x01,0x01,0x14 };
+            static const uint8_t v4c_one[5] = { 0x00,0x00,0x07,0x00,0x00 };
+            static const uint8_t v_other[5] = { 0x00,0x00,0x00,0x00,0x00 };
+            const uint8_t *variant = v_other;
+            if (pad_current_cmd == 0x46 && tx_byte == 0x01) variant = v46_one;
+            else if (pad_current_cmd == 0x4C && tx_byte == 0x01) variant = v4c_one;
+            /* 0x47 has no 0x01 case: anything other than 0x00 replies zeros. */
+            memcpy(&pad_response[3], variant, 5);
         }
         /* 0x44 lock byte (data position 4, the byte after the mode byte): 0x03 =>
          * lock analog mode, 0x02 => unlock (dualshock.cpp:714-725). A locked slot
@@ -1793,11 +1833,22 @@ static void sio_process_byte(uint8_t tx_byte) {
      * happens AFTER mc_process_byte runs so post-state is accurate. */
     int txn_was_card_byte = 0;
     uint8_t txn_pre_state  = (uint8_t)mc_state;
+    int pad_muted = 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack) {
+        int port = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
+        if (pad_dtr_session_first[port]) {
+            pad_dtr_session_first[port] = 0;
+            pad_dtr_session_mute[port] = tx_byte != 0x01;
+        }
+        pad_muted = pad_dtr_session_mute[port];
+    }
+#endif
 
     if (active_device == DEV_NONE) {
         selected_slot = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
 
-        if (tx_byte == 0x01) {
+        if (tx_byte == 0x01 && !pad_muted) {
             /* Pad select.  Save any in-flight card state back to its slot
              * so it survives pad polling.  Don't touch mc_state — we need
              * it per-slot, and mc_load_slot will restore it when the card
@@ -1879,7 +1930,7 @@ static void sio_process_byte(uint8_t tx_byte) {
             } else {
                 active_device = DEV_NONE;
                 selected_slot = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
-                if (tx_byte == 0x01) {
+                if (tx_byte == 0x01 && !pad_muted) {
                     active_device = DEV_PAD;
                     pad_process_byte(tx_byte);
                 } else {
@@ -2206,6 +2257,18 @@ void sio_write(uint32_t addr, uint32_t value) {
         uint16_t old_ctrl = sio_ctrl;
         sio_ctrl = (uint16_t)value;
         sr_record(SR_EVT_CTRL_WRITE, (uint8_t)(value & 0xFF), (uint8_t)((value >> 8) & 0xFF));
+#if SIO_MODEL_CYCLE_PACED
+        if (sio_source_pad_ack) {
+            /* Per-port DTR as FrontIO drives it: DTR bit and the port-select bit. */
+            uint16_t new_ctrl = (value & SIO_CTRL_RESET) ? 0 : (uint16_t)value;
+            for (int port = 0; port < 2; port++) {
+                int was = (old_ctrl & SIO_CTRL_SELECT) && (((old_ctrl & SIO_CTRL_SLOT) != 0) == port);
+                int now = (new_ctrl & SIO_CTRL_SELECT) && (((new_ctrl & SIO_CTRL_SLOT) != 0) == port);
+                if (!was && now) { pad_dtr_session_first[port] = 1; pad_dtr_session_mute[port] = 0; }
+                else if (was && !now) pad_dtr_session_first[port] = pad_dtr_session_mute[port] = 0;
+            }
+        }
+#endif
         if (value & SIO_CTRL_ACK) {
             sio_stat &= ~SIO_STAT_IRQ;
             /* Original source clears the IRQ latch, not the DSR pulse. Its
@@ -2867,9 +2930,12 @@ static int sio_snap_emit_fsm_pace(PstW *w) {
 /* Audit/diag metadata — must not drive netplay digests (byte_seq tracks the
  * host-local sio_trace_seq counter, which is not itself a guest register). */
 static int sio_snap_emit_fsm_meta(PstW *w) {
+    /* sio_irq_seq is compared against IRQ_TIMING's restored last_sio_seq_seen;
+     * restarting it at zero would read as fresh SIO progress and move the
+     * card-protocol VBlank deferral window. */
     return pst_w_u8(w, sio_irq_pending_source) && pst_w_u8(w, sio_irq_pending_slot) &&
            pst_w_u8(w, sio_irq_pending_delay) && pst_w_u8(w, sio_irq_pending_mc_state) &&
-           pst_w_u32(w, sio_irq_pending_byte_seq);
+           pst_w_u32(w, sio_irq_pending_byte_seq) && pst_w_u32(w, sio_irq_seq);
 }
 
 /* DualShock rumble map/motors — appended after meta so pre-rumble snapshots
@@ -2885,8 +2951,25 @@ static int sio_snap_emit_fsm(PstW *w) {
 }
 
 static int sio_snap_emit(PstW *w) {
-    return sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
-           sio_snap_emit_mc(w) && sio_snap_emit_fsm(w) && sio_snap_emit_rumble(w);
+    if (!(sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
+          sio_snap_emit_mc(w) && sio_snap_emit_fsm(w) && sio_snap_emit_rumble(w))) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack || sio_source_card) {
+        if (!pst_w_i32(w, sio_ack_pulse_remaining) ||
+            !pst_w_i32(w, sio_pending_ack_timed)) return 0;
+        for (int s = 0; s < PSX_MAX_PLAYERS; s++)
+            if (!pst_w_u16(w, pad_buttons[s])) return 0;
+        if (!pst_w_bytes(w, pad_stick, sizeof pad_stick)) return 0;
+        if (sio_source_pad_ack == 2 || sio_source_card) {
+            if (!pst_w_bytes(w, analog_mode_locked, sizeof analog_mode_locked) ||
+                !pst_w_bytes(w, pad_supports_config, sizeof pad_supports_config)) return 0;
+        }
+        if (sio_source_pad_ack &&
+            (!pst_w_bytes(w, pad_dtr_session_first, sizeof pad_dtr_session_first) ||
+             !pst_w_bytes(w, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;
+    }
+#endif
+    return 1;
 }
 
 /* Cumulative section end offsets in the snapshot wire:
@@ -2905,7 +2988,44 @@ void sio_snapshot_section_ends(uint32_t out[5]) {
     out[3] = (uint32_t)w.written;
     (void)sio_snap_emit_fsm_meta(&w);
     (void)sio_snap_emit_rumble(&w);
+    /* Source extension is part of the full wire, outside the old digest cuts. */
+    pst_w_init(&w, NULL, 0);
+    (void)sio_snap_emit(&w);
     out[4] = (uint32_t)w.written;
+}
+
+/* ---- E survey (SIO sizing), Part 3. SIZING ONLY: no serialization, no guard,
+ * no mutation. See sio.h for the contract. */
+int sio_source_fsm_live(int *pad_live, int *mc_live) {
+    int pad = 0, mc = 0;
+#if SIO_MODEL_CYCLE_PACED
+    int pad_busy = (sio_bus_owner == SIO_OWNER_PAD) || sio_shift_active ||
+                   sio_tx_buffered || sio_pending_ack || sio_ack_remaining ||
+                   sio_ack_pulse_remaining || sio_pending_ack_timed ||
+                   sio_tx_buffer_ack_irq_en;
+    pad = sio_source_pad_ack && pad_busy;
+    mc  = sio_source_card && ((sio_bus_owner == SIO_OWNER_CARD) ||
+                              sio_card_protocol_active());
+#endif
+    if (pad_live) *pad_live = pad;
+    if (mc_live)  *mc_live  = mc;
+    return pad || mc;
+}
+
+void sio_source_survey_sizes(uint32_t out[5]) {
+    uint32_t ends[5];
+    sio_snapshot_section_ends(ends);
+    out[0] = ends[1] - ends[0];   /* pads subsection of the snapshot wire */
+    out[1] = ends[2] - ends[1];   /* memcard subsection */
+    out[2] = ends[3] - ends[2];   /* pacing FSM subset (shift/ACK pipeline) */
+    out[3] = 0;
+#if SIO_MODEL_CYCLE_PACED
+    /* Digital source checkpoints now emit both previously missing scalars. */
+    if (!sio_source_pad_ack && !sio_source_card)
+        out[3] = (uint32_t)(sizeof sio_ack_pulse_remaining +
+                            sizeof sio_pending_ack_timed);
+#endif
+    out[4] = (uint32_t)sizeof mc_slots;  /* per-slot card FSM state (2 slots) */
 }
 
 static int sio_snap_parse(PstR *r) {
@@ -2982,7 +3102,7 @@ static int sio_snap_parse(PstR *r) {
     sio_ack_visible_reads = (int)i;
     if (!pst_r_u8(r, &sio_irq_pending_source) || !pst_r_u8(r, &sio_irq_pending_slot) ||
         !pst_r_u8(r, &saved_delay) || !pst_r_u8(r, &sio_irq_pending_mc_state) ||
-        !pst_r_u32(r, &sio_irq_pending_byte_seq))
+        !pst_r_u32(r, &sio_irq_pending_byte_seq) || !pst_r_u32(r, &sio_irq_seq))
         return 0;
     sio_irq_pending_delay = saved_delay;
     /* sio_trace_seq is host-local and not on the wire; reseat it from the
@@ -3006,13 +3126,33 @@ static int sio_snap_parse(PstR *r) {
         !pst_r_bytes(r, pad_rumble_small, sizeof(pad_rumble_small)) ||
         !pst_r_bytes(r, pad_rumble_large, sizeof(pad_rumble_large)))
         return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack || sio_source_card) {
+        if (!pst_r_i32(r, &i)) return 0;
+        sio_ack_pulse_remaining = i;
+        if (!pst_r_i32(r, &i)) return 0;
+        sio_pending_ack_timed = i;
+        for (int s = 0; s < PSX_MAX_PLAYERS; s++)
+            if (!pst_r_u16(r, &pad_buttons[s])) return 0;
+        if (!pst_r_bytes(r, pad_stick, sizeof pad_stick)) return 0;
+        if (sio_source_pad_ack == 2 || sio_source_card) {
+            if (!pst_r_bytes(r, analog_mode_locked, sizeof analog_mode_locked) ||
+                !pst_r_bytes(r, pad_supports_config, sizeof pad_supports_config)) return 0;
+        }
+        if (sio_source_pad_ack &&
+            (!pst_r_bytes(r, pad_dtr_session_first, sizeof pad_dtr_session_first) ||
+             !pst_r_bytes(r, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;
+    }
+#endif
     if (r->p != r->end) return 0;
     return 1;
 }
 
 uint32_t sio_snapshot_bytes(void) {
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack || sio_source_card) return 0; /* explicit cold-boot experiment only */
+    /* The source profiles below serialize single-pad transactions completely.
+     * The legacy eight-byte pad wire cannot represent a multitap transfer. */
+    if ((sio_source_pad_ack || sio_source_card) && sio_multitap_enabled) return 0;
 #endif
     PstW w;
     pst_w_init(&w, NULL, 0);
@@ -3028,20 +3168,46 @@ void sio_snapshot_write(uint8_t *p) {
     (void)sio_snap_emit(&w);
 }
 
-int sio_snapshot_size_valid(uint32_t len) {
+/* Pass-1 shape validator for boot_state: does `len` match the wire shape of the
+ * SIO section this build would write? Pure -- reads no machine state, mutates
+ * nothing -- so a malformed stream can be refused before anything is applied. */
+int sio_snapshot_shape_ok(uint32_t len) {
     const uint32_t current = sio_snapshot_bytes();
+    const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
+                                 sizeof(pad_rumble_small) +
+                                 sizeof(pad_rumble_large));
     if (!current) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack || sio_source_card) return len == current;
+#endif
+    return len == current || (len < current && len + rumble_bytes == current);
+}
+
+int sio_snapshot_read(const uint8_t *p, uint32_t len) {
+    PstR r;
+    const uint32_t current = sio_snapshot_bytes();
+    if (!p || !current || !sio_snapshot_shape_ok(len)) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack || sio_source_card) {
+        PstR extra;
+        int32_t pulse, timed;
+        uint32_t config_bytes = (sio_source_pad_ack == 2 || sio_source_card) ?
+            2u * PSX_MAX_PLAYERS : 0u;
+        uint32_t session_bytes = sio_source_pad_ack ?
+            (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;
+        pst_r_init(&extra, p + len - session_bytes - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,
+                   8u + 6u * PSX_MAX_PLAYERS);
+        if (!pst_r_i32(&extra, &pulse) || !pst_r_i32(&extra, &timed) ||
+            pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;
+        for (uint32_t j = 0; j < config_bytes + session_bytes; j++)
+            if (p[len - session_bytes - config_bytes + j] > 1) return 0;
+    }
+#endif
     const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
                                   sizeof(pad_rumble_small) +
                                   sizeof(pad_rumble_large));
     if (len != current && (len > current || len + rumble_bytes != current))
         return 0;
-    return 1;
-}
-
-int sio_snapshot_read(const uint8_t *p, uint32_t len) {
-    PstR r;
-    if (!p || !sio_snapshot_size_valid(len)) return 0;
     pst_r_init(&r, p, len);
     return sio_snap_parse(&r);
 }

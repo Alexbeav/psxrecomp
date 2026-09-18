@@ -155,6 +155,21 @@ def main():
         assert [r['missing'] for r in json.loads(out.read_text())['revs']] == [1, 0, 0]
         assert run(repo, 'check-all', '--revs', f'{fix},{rewritten}', '--registry', str(registry)).returncode == 0
         assert qh.SPLIT_REVS[0] == 'origin/split/01-standalone-fixes' and qh.SPLIT_REVS[-1] == 'HEAD'
+
+        # A tracked debt is still absent and still reported, but does not fail the gate, while
+        # an unexpected absence still does. This is the property setup() relies on: a candidate
+        # must not be built from a tree that silently lost a qualified behaviour.
+        entries = json.loads(registry.read_text())
+        assert run(repo, 'check', '--rev', base, '--registry', str(registry)).returncode == 1
+        debt = dict(entries, known_absent={entries['entries'][0]['id']: 'ported later; reason recorded'})
+        debt_registry = repo / 'debt.json'
+        debt_registry.write_text(json.dumps(debt, indent=2) + '\n', encoding='utf-8', newline='\n')
+        tracked = run(repo, 'check', '--rev', base, '--registry', str(debt_registry))
+        assert tracked.returncode == 0, tracked.stdout
+        assert 'debt     ' in tracked.stdout and 'ported later; reason recorded' in tracked.stdout
+        assert 'plus 1 tracked as debt' in tracked.stdout, tracked.stdout
+        # Marking an entry that is actually present changes nothing.
+        assert run(repo, 'check', '--rev', fix, '--registry', str(debt_registry)).returncode == 0
     print('qualified_hunks: ok')
 
 

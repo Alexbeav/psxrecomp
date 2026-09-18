@@ -22,6 +22,16 @@
 extern "C" {
 #endif
 
+/* Instruction continuation captured only while the source boundary callback runs. */
+#define DIRTY_RAM_CHECKPOINT_BYTES 36u
+void dirty_ram_checkpoint_enter(uint32_t pc, int slot, uint32_t target, int taken);
+void dirty_ram_checkpoint_leave(void);
+uint32_t dirty_ram_checkpoint_pc(uint32_t fallback);
+void dirty_ram_checkpoint_write(uint8_t *out);
+int dirty_ram_checkpoint_read(const uint8_t *in, uint32_t len);
+int dirty_ram_checkpoint_resume_pending(void);
+void dirty_ram_checkpoint_resume(CPUState *cpu);
+
 /* Returns 1 if `addr` lies in a dirty kernel-RAM page and the interpreter
  * ran a basic block at that PC.  Returns 0 if `addr` is clean (caller must
  * fall back to the static dispatch table).  On return with 1, cpu->pc is

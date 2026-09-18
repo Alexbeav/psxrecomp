@@ -13,12 +13,15 @@ with tempfile.TemporaryDirectory(prefix='cd-source-cdda-') as temp:
   data=zlib.decompress(base64.b64decode(case['input_zlib_base64']))
   assert len(data)==case['operations']*16 and sha(data)==case['input_sha256']
   source=root/f'{i}.input';actual=root/f'{i}.output';source.write_bytes(data)
-  run=subprocess.run([str(exe),str(tape),str(source),str(actual)],env=env,capture_output=True,timeout=30)
-  assert run.returncode==0,(case['name'],run.returncode,run.stderr)
-  output=actual.read_bytes()
-  assert len(output)==case['expected_bytes'] and sha(output)==case['expected_sha256'],case['name']
- for name in ['capture','write-state','scan','double-speed','active-read','restore']:
+  for mode in ('cold','checkpoint'):
+   target=actual.with_suffix('.'+mode)
+   mode_env=dict(env,**({'PSX_TEST_ROUNDTRIP':'1'} if mode=='checkpoint' else {}))
+   run=subprocess.run([str(exe),str(tape),str(source),str(target)],env=mode_env,capture_output=True,timeout=30)
+   assert run.returncode==0,(case['name'],mode,run.returncode,run.stderr)
+   output=target.read_bytes()
+   assert len(output)==case['expected_bytes'] and sha(output)==case['expected_sha256'],(case['name'],mode)
+ for name in ['scan','double-speed','active-read','restore']:
   run=subprocess.run([str(exe),str(tape),'unused','unused',name],env=env,capture_output=True,timeout=30)
   assert run.returncode==(0 if name=='restore' else 2),(name,run.returncode,run.stderr)
   if name!='restore':assert b'[CDROM]' in run.stderr,(name,run.stderr)
-print('CDDA: four complete source command/state/audio transcripts and six unsupported-scope checks PASS')
+print('CDDA: four complete source command/state/audio transcripts and four unsupported-scope checks PASS')

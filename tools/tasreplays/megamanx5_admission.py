@@ -16,6 +16,12 @@ CARD_SHA='78b6d4ac9ab4d23caf7e5f04f83539bf5d994cccfb0a709d14ac53d05c8e21ef'
 FINAL_CARD="SaveRAM/Mega Man X5 (USA).SaveRAM"
 TITLE='Mega Man X5 (USA) Training X 6377M'
 FIRMWARE_KEY='PSX+U'
+# The firmware this movie's own header declares. Its header says
+# PSX_Firmware_U 0555C6FAE8906F3F09BAF5988F00E55F88E9F30B, which is SCPH-5501;
+# admission cross-checks that SHA-1 against the loaded BIOS below, so this pin
+# and the movie can never drift apart again.
+FIRMWARE_NAME='SCPH5501.BIN'
+FIRMWARE_SHA1='0555c6fae8906f3f09baf5988f00e55f88e9f30b'
 FIXED={
     'Mega Man X5 (USA).bin':'be731bc4b9d3211b9267a34b8a68c769199a15479b14004ff25b67cdfebe8af4',
     'Mega Man X5 (USA).cue':'37c2ef545c4d7367315d6ff173d2a1a82404a4a6c87380f4ee107287e80f0bf1',
@@ -23,7 +29,7 @@ FIXED={
     'EmuHawk.exe':'6ce622d4ed4e8460ce362cf35ef67dc70096fec2c9a174cbef6a3e5b04f18bcc',
     'BizHawk.Emulation.Cores.dll':'750b0dfb9a3b9720ae92ed94aa798d7b531f14c20d202a97be6c83568e620bbe',
     'shock.wbx.zst':'78c7bdda5ad9551294468fb435eab7afb7e8edb224ef44c7bf7efaa4032dd200',
-    'SCPH1001.BIN':'71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3',
+    FIRMWARE_NAME:'11052b6499e466bbf0a709b1f9cb6834a9418e66680387912451e971cf8a1fef',
     'm3-megamanx5-training,x.bk2':MOVIE_SHA,'original.bk2':MOVIE_SHA,
     'Observation291.dll':'dd4fcaf409a41132039e09d8c2a8490cf35da6a7056660eb5321cbb197cbbbff',
     'source_control_nyma.py':'653bc42a0e8f08ae70cbead578ffd4ad672308ae30479764162ef3c3b7960d5f',
@@ -85,11 +91,25 @@ def launch_config(root,firmware):
             'Movies':{'MovieEndAction':3,'EnableBackupMovies':False},
             'PathEntries':{'Paths':[{'System':'PSX','Type':t,'Path':str(root/d)} for t,d in [('Save RAM','SaveRAM'),('Savestates','State'),('Screenshots','Screenshots')]]}}
 
+def declared_firmware(movie):
+    """The BIOS SHA-1 the movie's own header names, and the region key it names it under.
+
+    A .bk2 records the firmware its author ran, e.g. `PSX_Firmware_U <sha1>`. Nothing in
+    this tool used to read it, so a source could be admitted on a BIOS the movie never
+    used: both US titles were, for months, on SCPH1001 while every US movie declares
+    SCPH-5501. Both facts were already in files admission reads.
+    """
+    with zipfile.ZipFile(movie) as archive:
+        header=archive.read('Header.txt').decode('utf-8','replace')
+    named=[l.split(' ',1) for l in header.splitlines() if l.startswith('PSX_Firmware_')]
+    if len(named)!=1:raise ValueError('movie declares %d firmwares, expected exactly one'%len(named))
+    return named[0][0],named[0][1].strip().lower()
+
 def verify_identity(root,manifest,role,tail):
     if (manifest.get('schema'),manifest.get('title'),manifest.get('source_commit'),manifest.get('source_tag'),
         manifest.get('original_inputs'),manifest.get('cutoff'),manifest.get('role'),manifest.get('neutral_tail'),
         manifest.get('firmware_key'),manifest.get('firmware_sha256')) != (
-        'nymashock-stock-control-v2',TITLE,SOURCE_COMMIT,'2.9.1',FRAMES,FRAMES,role,tail,FIRMWARE_KEY,FIXED['SCPH1001.BIN']):
+        'nymashock-stock-control-v2',TITLE,SOURCE_COMMIT,'2.9.1',FRAMES,FRAMES,role,tail,FIRMWARE_KEY,FIXED[FIRMWARE_NAME]):
         raise ValueError('source manifest role/core/firmware/input boundary differs')
     bindings=manifest['bindings'];names={Path(x['path']).name:x for x in bindings}
     if len(names)!=len(bindings) or set(names)!=set(FIXED)|{'start.lua','launch-config.json','host-closure.json'}:
@@ -115,10 +135,10 @@ def verify_identity(root,manifest,role,tail):
     expected_lua=('CONTROL_ROOT=[['+root.as_posix()+']]\nCONTROL_LENGTH='+str(FRAMES)+'\nCONTROL_END='+str(FRAMES)+'\nCONTROL_TAIL='+str(tail)+
         '\nCONTROL_HELPER=[['+Path(names['Observation291.dll']['path']).as_posix()+']]\nCONTROL_CORE_SHA="'+
         FIXED['BizHawk.Emulation.Cores.dll']+'"\nCONTROL_WBX_SHA="'+FIXED['shock.wbx.zst']+
-        '"\nCONTROL_WITH_PAGES='+str(role=='pages-observer').lower()+'\nCONTROL_BIOS_SHA="'+FIXED['SCPH1001.BIN']+'"\n'+
+        '"\nCONTROL_WITH_PAGES='+str(role=='pages-observer').lower()+'\nCONTROL_BIOS_SHA="'+FIXED[FIRMWARE_NAME]+'"\n'+
         (root/'source_control_nyma.lua').read_text())
     if (root/'start.lua').read_text()!=expected_lua:raise ValueError('source launch script differs')
-    if read(root/'launch-config.json')!=launch_config(root,names['SCPH1001.BIN']['path']):raise ValueError('source launch configuration differs')
+    if read(root/'launch-config.json')!=launch_config(root,names[FIRMWARE_NAME]['path']):raise ValueError('source launch configuration differs')
     expected_command=[str(app),str(Path(names['Mega Man X5 (USA).cue']['path'])),
         '--config='+str(root/'host-config.json'),'--movie='+str(root/'original.bk2'),'--lua='+str(root/'start.lua')]
     if manifest['command']!=expected_command:raise ValueError('source command differs')
@@ -128,8 +148,16 @@ def verify_identity(root,manifest,role,tail):
         raise ValueError('loaded Nymashock core differs')
     for field,name in [('assembly','BizHawk.Emulation.Cores.dll'),('waterbox','shock.wbx.zst')]:
         if Path(loaded[field]).resolve()!=Path(names[name]['path']).resolve():raise ValueError('loaded core path differs')
-    if read(root/'loaded-bios.json')!={'sha256':FIXED['SCPH1001.BIN'],'bytes':524288}:
+    if read(root/'loaded-bios.json')!={'sha256':FIXED[FIRMWARE_NAME],'bytes':524288}:
         raise ValueError('loaded BIOS differs')
+    # The BIOS must be the one the movie itself declares, not merely the one pinned
+    # above: pinning alone cannot catch a pin that was wrong to begin with.
+    region,declared=declared_firmware(root/'original.bk2')
+    if region!='PSX_Firmware_'+FIRMWARE_KEY.rsplit('+',1)[1]:
+        raise ValueError('movie firmware region %s does not match %s'%(region,FIRMWARE_KEY))
+    if declared!=FIRMWARE_SHA1:raise ValueError('movie declares firmware '+declared+', pinned '+FIRMWARE_SHA1)
+    if hashlib.sha1(Path(names[FIRMWARE_NAME]['path']).read_bytes()).hexdigest()!=declared:
+        raise ValueError('loaded BIOS is not the firmware the movie declares')
     for name,expected in SETTINGS.items():
         actual=hashlib.sha256(json.dumps(read(root/name),sort_keys=True,separators=(',',':')).encode()).hexdigest()
         if actual!=expected:raise ValueError('effective source setting differs: '+name)

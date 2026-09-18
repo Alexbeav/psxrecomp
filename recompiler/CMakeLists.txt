@@ -419,6 +419,12 @@ if(BUILD_TESTING)
             target_compile_options(tas_cdrom_subq_position_${_mode} PRIVATE -${_mode} -UNDEBUG)
             target_link_libraries(tas_cdrom_subq_position_${_mode} PRIVATE m)
             add_test(NAME tas_cdrom_subq_position_${_mode} COMMAND tas_cdrom_subq_position_${_mode})
+            add_executable(tas_cdrom_paused_subq_cycle_${_mode}
+                ../runtime/tests/test_cdrom_paused_subq_cycle.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_cdrom_paused_subq_cycle_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_cdrom_paused_subq_cycle_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_cdrom_paused_subq_cycle_${_mode} PRIVATE m)
+            add_test(NAME tas_cdrom_paused_subq_cycle_${_mode} COMMAND tas_cdrom_paused_subq_cycle_${_mode})
             if(PSXRECOMP_ENABLE_CHD)
                 foreach(_disc_test IN ITEMS source_subq sbi)
                     if(_disc_test STREQUAL "source_subq")
@@ -448,6 +454,11 @@ if(BUILD_TESTING)
             target_compile_options(tas_gpu_sprite_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
             target_link_libraries(tas_gpu_sprite_blend_${_mode} PRIVATE m)
             add_test(NAME tas_gpu_sprite_blend_${_mode} COMMAND tas_gpu_sprite_blend_${_mode})
+            add_executable(tas_gpu_sprite_fixed_${_mode}
+                ../runtime/tests/test_source_gpu_sprite_fixed.c)
+            target_include_directories(tas_gpu_sprite_fixed_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_sprite_fixed_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_sprite_fixed_${_mode} COMMAND tas_gpu_sprite_fixed_${_mode})
             add_executable(tas_gpu_textured_triangle_${_mode}
                 ../runtime/tests/test_source_gpu_textured_triangle.c
                 ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
@@ -526,6 +537,17 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_line_contracts.py
                 $<TARGET_FILE:tas_gpu_line_${_mode}>)
         endforeach()
+    endif()
+
+    # TAS checkpoint state I/O and the v7 identity dimensions. Both drivers compile their own
+    # C at O0 and O2 with -Werror, so they take no CMake target.
+    if(Python3_EXECUTABLE AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME tas_stateio_manifest COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_tas_stateio.py
+            --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_stateio_identity COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_stateio_identity.py
+            --cc ${CMAKE_C_COMPILER})
     endif()
 
     add_executable(source_cpu_block_bound_test
@@ -1115,6 +1137,31 @@ int main(void) {
             set_tests_properties(tas_ram_long_route tas_cpu_long_route
                 PROPERTIES DISABLED TRUE)
         endif()
+        # tas_stateio_manifest and tas_stateio_identity are registered with the
+        # foundation above. The Python driver compiles test_input_route_raster_wire.c at O0/O2.
+        add_test(NAME tas_raster_wire
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_input_route_raster_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        # The Python driver links the four comparison-profile section codecs with
+        # auto-derived link stubs and round-trips per-field sentinels (O0/O2).
+        add_test(NAME tas_section_wire_sentinels
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_boot_state_section_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_cpu_state_wire
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cpu_state_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_gpu_service_path
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_service_path.py"
+                --cc ${CMAKE_C_COMPILER})
+        # The Python driver compiles test_boot_state_replace.c with its own TU.
+        add_test(NAME tas_state_replace
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_boot_state_replace.py"
+                --cc ${CMAKE_C_COMPILER})
     endif()
 endif()
 

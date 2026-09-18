@@ -75,6 +75,7 @@ void psx_event_step_conservative_env_init(void) {
 }
 
 static void advance_devices(uint32_t c) {
+    { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }   /* device state may change below */
     psx_cycle_count += (uint64_t)c;
     sio_advance(c);
     cdrom_advance(c);
@@ -177,8 +178,29 @@ uint32_t psx_idle_cycles_to_next_observable_event(void) {
     return devices_cycles_to_next_idle_event();
 }
 
+/* Device-state generation (step 4b of the TAS speed task). Bumped whenever
+ * device state can change: any device advance, scheduled-event service, MMIO
+ * access (reads with side effects at the top, writes on wrapper exit) and the
+ * explicit deadline-dirty sites. While it is unchanged, every device's next
+ * internal event is at the same absolute clock, so the seven countdown queries
+ * need not be repeated on every block leader. Enabled by PSX_DEADLINE_CACHE=1
+ * (run_native.py --deadline-cache on); default recomputes exactly as before. */
+uint64_t g_psx_device_gen;
+int g_psx_deadline_cache = -1;
+static uint64_t s_deadline_cache_gen = ~0ull, s_deadline_cache_abs;
+uint64_t g_psx_deadline_cache_hits, g_psx_deadline_cache_misses;
 static void psx_devices_recompute_deadline(void) {
-    uint32_t next = devices_cycles_to_next_internal_event();
+    if (g_psx_deadline_cache < 0) { const char *e = getenv("PSX_DEADLINE_CACHE"); g_psx_deadline_cache = (e && e[0] == '1') ? 1 : 0; }
+    uint32_t next;
+    if (g_psx_deadline_cache && s_deadline_cache_gen == g_psx_device_gen) {
+        g_psx_deadline_cache_hits++;
+        next = s_deadline_cache_abs > psx_cycle_count ? (uint32_t)(s_deadline_cache_abs - psx_cycle_count) : 1u;
+    } else {
+        g_psx_deadline_cache_misses++;
+        next = devices_cycles_to_next_internal_event();
+        s_deadline_cache_gen = g_psx_device_gen;
+        s_deadline_cache_abs = psx_cycle_count + (uint64_t)next;
+    }
     if (next > PSX_DEADLINE_HARD_CAP) next = PSX_DEADLINE_HARD_CAP;
     psx_next_service_cycle = psx_cycle_count + (uint64_t)next;
 }
@@ -245,6 +267,7 @@ void psx_devices_service_to_now(void) {
  * advance through service_to_now even when already synced — MotK FMV pays
  * that on every GPU/CD/MDEC MMIO touch. Recompute here instead. */
 void psx_devices_mmio_sync(void) {
+    g_psx_device_gen++;   /* MMIO reads can have side effects; writes bump again on wrapper exit */
     psx_cyc_batch_flush();
     if (s_devices_synced_cycle != psx_cycle_count) {
         psx_devices_service_to_now();
@@ -353,6 +376,7 @@ uint64_t psx_get_cycle_count(void) {
     if (g_psx_cyc_local_acc) n += (uint64_t)(*g_psx_cyc_local_acc);
     return n;
 }
+
 
 /* ===== Idle-loop cycle skip (wait-loop elision, 2026-07-06) ==================
  *
@@ -589,29 +613,10 @@ void psx_cycles_resync_after_restore(CPUState *cpu) {
     s_idle_have_snap = 0;
     s_idle_progress_reg = -2;
     s_idle_last_cycle = psx_cycle_count;
-    /* GTE/muldiv completion deadlines and load-absorb give-back are host-only
-     * absolute cycle stamps (not in BS_SEC_CPU). After a warm load they still
-     * hold the pre-load live timeline; the next psx_gte_stall / muldiv_stall
-     * would then advance (live_ts - restored_cycle) in one shot — tens of
-     * millions of cycles / N nested presents with zero IRQ checks (MotK
-     * transform CTC2 path). Anchor them at the restored clock. */
-    if (cpu) {
-        cpu->gte_ts_done = psx_cycle_count;
-        cpu->muldiv_ts_done = psx_cycle_count;
-        memset(cpu->read_absorb, 0, sizeof(cpu->read_absorb));
-        cpu->read_absorb_which = 0;
-        cpu->read_fudge = 0x20u; /* no committed predecessor load */
-        cpu->ld_which_t = 0x20u; /* no pending load dest */
-        cpu->ld_absorb = 0;
-    }
-    /* Dirty-RAM interpreter load-delay writebacks live in host statics, not
-     * BS_SEC_CPU. Discard (do not flush): snap GPRs are already architectural.
-     * A stale pending v0 write from the pre-load timeline was forking MotK
-     * resim peers (countdown vs BIOS v0=1) at matched guest clocks. */
-    {
-        extern void dirty_ram_ld_delay_discard(void);
-        dirty_ram_ld_delay_discard();
-    }
+    /* v8 restores guest timing and pending load writeback from the snapshot.
+     * They belong to the restored clock and must survive host resynchronization. */
+    (void)cpu;
+    g_psx_cycle_fast_limit = 0;
     /* Entry-poll %%64 stride + 4096-insn pump gap are host-only; reset so
      * both peers take the first post-load dirty wait IRQ on the same phase. */
     {

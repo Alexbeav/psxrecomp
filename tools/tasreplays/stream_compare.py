@@ -26,9 +26,9 @@ def write_stop_request(run, payload):
     return target
 
 
-def page_reference(path, endpoint):
-    """Source page rows bounded to the compared endpoint (the verdict's islice)."""
-    return islice(read_pages(Path(path)), endpoint)
+def page_reference(path, endpoint, start=0):
+    """Source page rows after `start` (a resumed checkpoint) through the compared endpoint."""
+    return islice(read_pages(Path(path)), start, endpoint)
 
 
 def line_hash_reference(path):
@@ -85,11 +85,12 @@ def follow_lines(path, run, cancelled=None, poll=0.5):
             time.sleep(poll)
 
 
-def parse_rows(lines, name='ram-pages.tsv'):
+def parse_rows(lines, name='ram-pages.tsv', first_frame=1):
     """Validate the stream exactly like compare_ram_pages.read_pages, row by row.
 
     Yields (frame, cycle, hashes, values): the same triple read_pages yields
-    plus the raw tab-split values for line-hash references.
+    plus the raw tab-split values for line-hash references. A run resumed from a
+    checkpoint at return K starts at first_frame K+1.
     """
     lines = iter(lines)
     magic = next(lines, None)
@@ -103,7 +104,7 @@ def parse_rows(lines, name='ram-pages.tsv'):
     if header.split('\t') != HEADER:
         raise ValueError(f'invalid page columns: {name}')
     previous = 0
-    for expected_frame, line in enumerate(lines, 1):
+    for expected_frame, line in enumerate(lines, first_frame):
         row = line.split('\t')
         if len(row) != len(HEADER) or int(row[0]) != expected_frame:
             raise ValueError(f'incomplete or discontinuous RAM index: {name}, frame {expected_frame}')
@@ -118,17 +119,21 @@ class Watcher(threading.Thread):
     """Compare native returns as they appear; optionally request an early stop.
 
     reference: page rows (kind='pages', from page_reference) or {frame: sha}
-    (kind='line_hash'). endpoint bounds the comparison. The result dict is
-    complete after finish().
+    (kind='line_hash'). endpoint bounds the comparison; it is the last return, so
+    a run resumed at return K (first_frame K+1) compares endpoint-K returns. The
+    result dict is complete after finish().
     """
 
     def __init__(self, run, reference, endpoint, kind='pages', stop_on_divergence=False,
-                 poll=0.5, progress_every=10000, label='native'):
+                 poll=0.5, progress_every=10000, label='native', first_frame=1):
         super().__init__(name='stream-compare', daemon=True)
         if kind not in ('pages', 'line_hash'):
             raise ValueError('unsupported streaming reference kind')
         if type(endpoint) is not int or endpoint < 1:
             raise ValueError('streaming endpoint must be a positive return count')
+        if type(first_frame) is not int or not 1 <= first_frame <= endpoint:
+            raise ValueError('streaming first return must lie inside the endpoint')
+        self.first_frame = first_frame
         self.directory = Path(run)
         self.reference = reference
         self.kind = kind
@@ -137,7 +142,8 @@ class Watcher(threading.Thread):
         self.progress_every = progress_every
         self.label = label
         self.cancelled = threading.Event()
-        self.result = {'kind': kind, 'endpoint': endpoint, 'compared_returns': 0, 'native_returns': 0,
+        self.result = {'kind': kind, 'endpoint': endpoint, 'first_frame': first_frame,
+                       'compared_returns': 0, 'native_returns': 0,
                        'first_divergence': None, 'stop_on_divergence': bool(stop_on_divergence),
                        'stopped_on_divergence': False, 'stop_request': None,
                        'reference_exhausted': False, 'complete_through_endpoint': False,
@@ -179,7 +185,7 @@ class Watcher(threading.Thread):
         result = self.result
         try:
             lines = follow_lines(self.directory / 'ram-pages.tsv', self.directory, self.cancelled, self.poll)
-            for native in parse_rows(lines):
+            for native in parse_rows(lines, first_frame=self.first_frame):
                 result['native_returns'] = native[0]
                 expected = self._reference_row(native)
                 if expected is None:
@@ -204,7 +210,7 @@ class Watcher(threading.Thread):
                 if count % self.progress_every == 0:
                     rate = count / max(time.monotonic() - started, 1e-9)
                     print(f'match through return {count} ({rate:.1f} ret/s)', flush=True)
-                if count >= self.endpoint:
+                if count >= self.endpoint - self.first_frame + 1:
                     result['complete_through_endpoint'] = True
                     print(f'MATCH complete through {count}', flush=True)
                     break

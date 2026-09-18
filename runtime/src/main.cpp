@@ -11,6 +11,8 @@
 #include "device_trace.h"    /* general two-process device-event cycle ring */
 #include "psx_interpreter.h"
 #include "cdrom.h"
+#include "dma.h"
+#include "timers.h"
 #include "fntrace.h"
 #include "text_xlate.h"
 #include "boot_state.h"
@@ -21,6 +23,8 @@
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
 #include "source_gpu_runtime.h"
+#include "source_tas_stateio.h"
+#include "source_stateio_identity.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
 #include "savestate.h"
@@ -532,7 +536,7 @@ static int      s_fmv_skip_hold = 0;
 static int      s_d24_prev_mdec = 0;
 static int      s_d24_saw_gap = 0;
 static int      s_d24_cutover_blank = 0;
-/* Savestate restore → audio pump: re-anchor last_cycles (declared early so
+/* Savestate restore → audio pump: clear host output (declared early so
  * psx_frontend_on_savestate_loaded can set it). */
 static int      g_audio_cycle_resync = 0;
 
@@ -3214,18 +3218,16 @@ static void sdl_audio_pump(bool discard_output = false) {
      * produced vs 44100/s consumed = recurring ring underruns no +/-0.5%
      * DRC trim could absorb during jitter spikes). */
     extern uint64_t psx_cycle_count;
-    static uint64_t last_cycles = 0;
-    static uint64_t cycle_carry = 0;
+    uint64_t &last_cycles = spu_sample_last_cycle;
+    uint64_t &cycle_carry = spu_sample_cycle_carry;
     const uint64_t now_cycles = psx_cycle_count;
     if (g_audio_cycle_resync) {
-        last_cycles = now_cycles;
-        cycle_carry = 0;
+        /* Restore already restored the guest sample clock. Clear only output. */
         g_audio_cycle_resync = 0;
         if (legacy && sdl_audio_device)
             psx_sdl_audio_clear(sdl_audio_device);
         else
             g_audio_unmute_resync = 1; /* skip mute-drain underrun reports */
-        return;
     }
     if (last_cycles == 0) last_cycles = now_cycles;
     uint64_t delta = (now_cycles - last_cycles) + cycle_carry;
@@ -16265,6 +16267,158 @@ session_reboot:
             }
         }
     }
+#ifndef PSX_NO_DEBUG_TOOLS
+    /* TAS checkpoint resume (accuracy diagnostic loop): restore a saved
+     * full-machine state and continue the SAME input route from the saved
+     * return. The manifest gate proves the restored RAM digest and cycle match
+     * the checkpoint before the run is admitted; a foreign or truncated state
+     * aborts instead of producing a silently wrong replay. Final qualification
+     * runs stay from-scratch; this path is for diagnosis only. */
+    if (std::getenv("PSX_TAS_SAVE_STATE_AT") || std::getenv("PSX_TAS_RESUME_STATE")) {
+        /* Hash the executable and route before the first frame, while no
+         * frontend heartbeat is expected; every capture then reuses them. */
+        char exe_digest[65], route_digest[65];
+        if (!source_stateio_exe_sha256(exe_digest) || !source_stateio_route_sha256(route_digest)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] cannot hash the runtime binary or input route\n");
+            return 2;
+        }
+    }
+    if (const char *resume_state = std::getenv("PSX_TAS_RESUME_STATE")) {
+        char manifest_path[4160], text[4096], state_path_field[1024], reason[160];
+        TasStateManifest m;
+        const char *mp = std::getenv("PSX_TAS_RESUME_MANIFEST");
+        uint32_t resume_bios = 0, resume_entry = 0;
+        savestate_get_integrity(&resume_bios, &resume_entry);
+        if (!mp || !*mp) {
+            std::snprintf(manifest_path, sizeof manifest_path, "%s.json", resume_state);
+            mp = manifest_path;
+        }
+        if (!source_tas_stateio_read_text(mp, text, sizeof text) ||
+            !source_tas_stateio_manifest_parse(text, &m, state_path_field,
+                                               sizeof state_path_field)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: malformed manifest %s\n", mp);
+            return 2;
+        }
+        char cfg_hex[65], exe_hex[65], route_hex[65];
+        const char *compatible_env = std::getenv("PSX_TAS_RESUME_COMPATIBLE_BUILD");
+        const int compatible_build = compatible_env && !std::strcmp(compatible_env, "1");
+        source_stateio_config_digest_hex(cfg_hex);
+        source_stateio_exe_sha256(exe_hex);
+        if (!source_stateio_route_sha256(route_hex)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: cannot hash the input route\n");
+            return 2;
+        }
+        /* Identity dimensions that do not depend on the loaded state are checked
+         * BEFORE the load, so a foreign blob is refused without first mutating
+         * the machine. */
+        {
+            if (std::strcmp(m.config_digest, cfg_hex) != 0) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: configuration digest mismatch\n");
+                return 2;
+            }
+            if (!source_tas_stateio_binary_accept(&m, exe_hex, compatible_build)) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: runtime binary mismatch\n");
+                return 2;
+            }
+            if (std::strcmp(m.route_sha256, route_hex) != 0) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: input route mismatch\n");
+                return 2;
+            }
+        }
+        char expected_state_hash[65], actual_state_hash[65];
+        if (!source_tas_stateio_find_field(text, "state_sha256", expected_state_hash,
+                                          sizeof expected_state_hash) ||
+            !source_stateio_file_sha256(resume_state, actual_state_hash) ||
+            std::strcmp(expected_state_hash, actual_state_hash)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state SHA256 mismatch\n");
+            return 2;
+        }
+        /* The cards the checkpoint was taken with replace the route's initial
+         * images; the slots themselves (present or absent) must agree. */
+        for (int slot = 0; slot < 2; ++slot) {
+            const int saved = std::strcmp(m.card_sha256[slot], PSX_TAS_STATEIO_NO_CARD) != 0;
+            char card_path[4160], card_hash[65];
+            static uint8_t image[PSX_TAS_STATEIO_CARD_BYTES];
+            if (saved != (memcard_is_present(slot) != 0)) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: card %d slot differs from the checkpoint\n", slot + 1);
+                return 2;
+            }
+            if (!saved) continue;
+            FILE *card = nullptr;
+            if (!source_tas_stateio_card_path(card_path, sizeof card_path, resume_state, slot) ||
+                !source_stateio_file_sha256(card_path, card_hash) || std::strcmp(card_hash, m.card_sha256[slot]) ||
+                !(card = std::fopen(card_path, "rb"))) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: card %d image missing or SHA256 mismatch\n", slot + 1);
+                return 2;
+            }
+            const size_t got = std::fread(image, 1, sizeof image, card);
+            const int extra = std::fgetc(card) != EOF;
+            std::fclose(card);
+            if (got != sizeof image || extra || memcard_import_raw(slot, image) != 0) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: card %d image could not be loaded\n", slot + 1);
+                return 2;
+            }
+        }
+        if (!boot_state_load(resume_state, resume_bios, resume_entry, &cpu)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state load failed (integrity/incomplete)\n");
+            return 2;
+        }
+        /* Resync host-only cycle bookkeeping to the restored clock.
+         *
+         * s_devices_synced_cycle (psx_cycles.c:114) is the device-servicing
+         * watermark. It is in NO boot_state section: psx_cycles_reset_for_boot()
+         * zeroes it at boot and the restore does not set it. So after a resume
+         * psx_devices_service_to_now() sees devices "behind" by the whole
+         * restored timeline, rewinds psx_cycle_count to the stale watermark and
+         * re-plays the gap (observed: 170170042 -> 120, then "reversed device
+         * time" in source_gpu_runtime_advance). The guard on that rewind is
+         * s_devices_synced_cycle < target, which is TRUE BY CONSTRUCTION after a
+         * restore — so it must be made resume-aware, not skipped.
+         *
+         * Every other loader in the tree already does this after a load
+         * (savestate.c:1102, psx_rewind.c:508, psx_selfcheck.c:787,
+         * psx_netplay_rb.c:6550/6681). This path calls boot_state_load directly
+         * and bypasses savestate.c's loader, so it was the one place missing it.
+         * The call is assignment-only, hence idempotent. It does not touch the
+         * VBlank phase, raster clocks, GPU service clock or source timers, so it
+         * neither duplicates nor conflicts with BS_SEC_IRQ_TIMING, RASTER,
+         * GPU_SERVICE or TIMER_SRC. */
+        psx_cycles_resync_after_restore(&cpu);
+        if (!source_tas_stateio_manifest_accept_mode(&m, m.frame, psx_get_cycle_count(),
+                source_tas_stateio_ram_digest(memory_get_ram_ptr(), 2097152u),
+                resume_bios, resume_entry, cfg_hex, exe_hex, route_hex, compatible_build,
+                reason, sizeof reason)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: %s\n", reason);
+            return 2;
+        }
+        if (!debug_server_seek_input_route(m.input_consumed)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: route cannot seek to input %u\n", m.input_consumed);
+            return 2;
+        }
+        if (!source_gpu_runtime_set_frame_returns(m.frame)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: source GPU runtime not active\n");
+            return 2;
+        }
+        std::fprintf(stdout, "psxrecomp: [tas-stateio] resumed return %u cycle %llu from %s\n",
+                     m.frame, (unsigned long long)m.cycle, resume_state);
+        std::fprintf(stdout, "psxrecomp: [tas-stateio] diagnostic resume mode=%s saved_exe=%s running_exe=%s\n",
+                     compatible_build ? "compatible-build" : "same-binary", m.exe_sha256, exe_hex);
+        /* E negative control: corrupt exactly one restored field, so the test
+         * ladder's from-scratch-vs-resumed comparison is observed FAILING.
+         * A gate never seen to fail is not evidence. Diagnostic only. */
+        if (const char *pf = std::getenv("PSX_TAS_PERTURB_RESTORE")) {
+            if (!interrupts_raster_perturb(pf) && !source_gpu_service_perturb(pf) &&
+                !dma_src_perturb(pf) && !timers_source_perturb(pf) &&
+                !interrupts_timing_perturb(pf)) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] negative control: "
+                                     "unknown field '%s'\n", pf);
+                return 2;
+            }
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] negative control active: %s\n", pf);
+        }
+    }
+#endif
+
     /* Netplay: refresh RB bios/entry after savestate_configure (start() ran
      * earlier with zeros); guest also sandboxes .pst/.mcd under saves/netplay/. */
     psx_netplay_bind_guest_saves();

@@ -41,13 +41,22 @@ extern "C" {
  * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);
  * v5 = v4 + CD-ROM Sub-Q replacement state;
  * v6 = v5 + per-word GPU DMA2 linked-list progress;
- * v7 = v6 + pending XA DATA_END IRQ state. */
-#define BOOT_STATE_VERSION 8u
-/* v8 adds allocated enhancement memory. Vanilla writers remain v7; older
- * runtimes must not accept enhanced snapshots while ignoring their arenas. */
-/* v7 intentionally breaks older savestates after the CD-ROM wire grew. Reject
- * them at the header before any section changes the live machine. */
-#define BOOT_STATE_VERSION_MIN_READ 7u
+ * v7 = v6 + pending XA DATA_END IRQ state;
+ * v8 = v7 + allocated enhancement memory (optional MODMEM section).
+ * v10 = v8 + the TAS checkpoint state from the resume lineage, where it was
+ *      numbered v6-v9: scheduler continuation, comparison-profile raster clocks,
+ *      source GPU service/timer/DMA state, IRQ timing, CPU timing and instruction
+ *      continuation, SPU sample clock, exact MDEC timestamp, the game-start latch,
+ *      source peripheral pipelines and queued GPU work. The two lineages both
+ *      used v6-v9 for different contents, so this merge takes a number neither
+ *      ever wrote. */
+#define BOOT_STATE_VERSION 10u
+/* The version field is the ONLY guard against a blob written by an older
+ * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
+ * so a runtime-only change (new sections, changed snapshot writers) leaves all
+ * three unchanged. A pin bump without a code regen would otherwise hand an old
+ * runtime's blob to a new loader. v10 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 10u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
@@ -87,7 +96,8 @@ typedef struct {
  */
 enum {
     BS_SEC_MODMEM = 0x11,  /* allocated opt-in CPU/GPU enhancement arenas */
-    BS_SEC_CPU    = 0x01,  /* CPUState: gpr/pc/hi/lo/cop0/gte_data/gte_ctrl       */
+    BS_SEC_CPU_EXEC = 0x17, /* interpreter instruction/branch/load continuation */
+    BS_SEC_CPU    = 0x01,  /* CPU registers, completion deadlines and load timing */
     BS_SEC_RAM    = 0x02,  /* 2 MB main RAM                                       */
     BS_SEC_SPAD   = 0x03,  /* 1 KB scratchpad                                     */
     BS_SEC_IRQ    = 0x04,  /* i_stat / i_mask / cycles_since_vblank (12B; 8B ok)  */
@@ -110,11 +120,54 @@ enum {
                               apart (MotK abort@940: fin cyc Δ8, v0 5c83/5c86
                               from identical baselines). Optional on load for
                               old blobs (left untouched when absent).          */
+    BS_SEC_RASTER = 0x12,  /* comparison raster clocks, 3 instances x 80 B:
+                              [0]   input_route_raster (interrupts.c)
+                              [80]  clock_state.raster  (source_gpu_runtime.c)
+                              [160] draw_raster         (source_gpu_runtime.c)
+                              These `cycle`/`last_rise` values are INTERNAL
+                              counters, not psx_cycle_count's time base — never
+                              rebase them; the fraction cross-check depends on
+                              that time base.                                   */
+    BS_SEC_GPU_SERVICE = 0x13, /* bounded-quad source GPU service: the service
+                              clock scalars + the command-projection scalar
+                              tail. queue[32] is NOT serialized: save AND load
+                              both require count==0, since a non-zero count
+                              with no queue would restore as a stub.           */
+    BS_SEC_TIMER_SRC = 0x14, /* source timer state machines (the IRQ-disabled
+                              comparison timers).                               */
+    BS_SEC_DMA_SRC   = 0x15, /* source-DMA state machines: bounded-quad GPU
+                              upload, GPU linked list, SPU request, OTC (140 B).
+                              Measured live at 98.1%/98.4%/57.7% of frame
+                              boundaries, so they cannot be quiescence-guarded;
+                              every member is a flat scalar, and the address
+                              fields are GUEST physical addresses, never host
+                              pointers. Required exactly when a source DMA model
+                              is active (profile-exact, like RASTER).           */
+    BS_SEC_IRQ_TIMING = 0x16, /* field clock + VBlank-edge/IRQ-deferral state
+                              (64 B). Found by the step-8 forward sweep: live in
+                              every profile and previously covered by NO section.
+                              Always required. input_route_raster_deadline is
+                              derived and recomputed at load, not serialized.    */
+    BS_SEC_SCHED  = 0x18,  /* deterministic scheduler return continuation. The
+                              resume lineage wrote this as 0x11, which upstream
+                              had already given to MODMEM.                     */
+    BS_SEC_BOOTFLOW = 0x19, /* u32 flags, bit 0 = game-start transition already
+                              applied. The resume lineage kept this bit in the
+                              header's reserved word, which upstream uses for
+                              the enhancement-memory layout cookie. Always
+                              required.                                        */
 };
+
+#define BOOT_STATE_BOOTFLOW_BYTES         4u
+#define BOOT_STATE_BOOTFLOW_GAME_STARTED  1u
 
 /* Save a COMPLETE snapshot at game handoff. Returns 1 on success. */
 int  boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
                      uint32_t entry_pc, const char* path);
+
+/* Atomic replace of `to` by `from` (Windows: MoveFileExW REPLACE_EXISTING).
+ * Exposed so the overwrite/refusal behaviour can be regression-tested. */
+int  boot_state_replace_file(const char* from, const char* to);
 
 /* Same as boot_state_save, but into a malloc'd buffer (caller frees *out_data).
  * Compresses large sections (disk-oriented). */

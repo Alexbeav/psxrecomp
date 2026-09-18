@@ -155,6 +155,8 @@ typedef struct {
 } SpuVoice;
 
 static SpuVoice voices[SPU_VOICE_COUNT];
+uint64_t spu_sample_last_cycle;
+uint64_t spu_sample_cycle_carry;
 
 /* The retained source profile decodes one four-sample word when fewer than
  * eleven samples remain. Its END/loop/envelope readbacks belong to that
@@ -1095,6 +1097,7 @@ static void source_apply_keys(int enabled) {
 }
 
 void spu_init(void) {
+    spu_sample_last_cycle = spu_sample_cycle_carry = 0;
     const char *model = getenv("PSX_GPU_DMA_MODEL");
     source_key_timing = model &&
         (!strcmp(model, "octoshock-2.2.2-bounded-linked-list") ||
@@ -1791,6 +1794,8 @@ uint32_t spu_ram_peek(uint32_t addr, uint8_t *out, uint32_t len) {
     return len;
 }
 
+/* Hot-path accessor for the sample-event service: SPUCNT alone, no struct
+ * build. Same value spu_get_global_state() reports in ->ctrl. */
 uint16_t spu_ctrl_read(void) {
     return spu_regs[reg_index(0x1F801DAAu)];
 }
@@ -1918,11 +1923,13 @@ static int spu_r_voice(PstR *r, int idx) {
 
 /* SPK2 extends the source-only footer with each decoder's complete queue. */
 #define SOURCE_SPU_TAIL_BYTES (36u + SPU_VOICE_COUNT * (64u + 6u))
+/* CD input is guest-visible through the capture buffers and their IRQs. */
+#define SPU_CD_SNAPSHOT_BYTES (SPU_CD_RING_FRAMES * 4u + 12u + 24u)
 
 uint32_t spu_snapshot_bytes(void) {
     return (uint32_t)(SPU_REG_COUNT * 2u) +
            (SPU_VOICE_COUNT * SPU_VOICE_WIRE_BYTES) + SPU_SNAPSHOT_TAIL_BYTES +
-           (source_key_timing ? SOURCE_SPU_TAIL_BYTES : 0u);
+           (source_key_timing ? SOURCE_SPU_TAIL_BYTES : 0u) + 16u + SPU_CD_SNAPSHOT_BYTES;
 }
 
 void spu_snapshot_write(uint8_t *p) {
@@ -1965,11 +1972,30 @@ void spu_snapshot_write(uint8_t *p) {
             pst_w_u8(&w, d->filter); pst_w_u8(&w, d->ignore_loop);
         }
     }
+    pst_w_u64(&w,spu_sample_last_cycle);
+    pst_w_u64(&w,spu_sample_cycle_carry);
+    for (uint32_t i = 0; i < SPU_CD_RING_FRAMES * 2u; ++i)
+        pst_w_i16(&w, cd_ring[i]);
+    pst_w_u32(&w, cd_read_pos);
+    pst_w_u32(&w, cd_write_pos);
+    pst_w_u32(&w, cd_frame_count);
+    pst_w_u64(&w, cd_push_frames);
+    pst_w_u64(&w, cd_overflow_frames);
+    pst_w_u64(&w, cd_underflow_frames);
 }
 
 int spu_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
-    if (len != spu_snapshot_bytes()) return 0;
+    if (!p || len != spu_snapshot_bytes()) return 0;
+    /* Validate queue cursors before mutating the SPU. */
+    {
+        uint32_t rd, wr, count;
+        pst_r_init(&r, p + len - 36u, 36u);
+        if (!pst_r_u32(&r, &rd) || !pst_r_u32(&r, &wr) ||
+            !pst_r_u32(&r, &count) || rd >= SPU_CD_RING_FRAMES ||
+            wr >= SPU_CD_RING_FRAMES || count > SPU_CD_RING_FRAMES ||
+            (rd + count) % SPU_CD_RING_FRAMES != wr) return 0;
+    }
     pst_r_init(&r, p, len);
     for (uint32_t i = 0; i < SPU_REG_COUNT; i++)
         if (!pst_r_u16(&r, &spu_regs[i])) return 0;
@@ -2010,6 +2036,14 @@ int spu_snapshot_read(const uint8_t *p, uint32_t len) {
                 !pst_r_u8(&r, &d->ignore_loop) || d->ignore_loop > 1) return 0;
         }
     }
+    if (!pst_r_u64(&r,&spu_sample_last_cycle) ||
+        !pst_r_u64(&r,&spu_sample_cycle_carry) || spu_sample_cycle_carry>=768u) return 0;
+    for (uint32_t i = 0; i < SPU_CD_RING_FRAMES * 2u; ++i)
+        if (!pst_r_i16(&r, &cd_ring[i])) return 0;
+    if (!pst_r_u32(&r, &cd_read_pos) || !pst_r_u32(&r, &cd_write_pos) ||
+        !pst_r_u32(&r, &cd_frame_count) || !pst_r_u64(&r, &cd_push_frames) ||
+        !pst_r_u64(&r, &cd_overflow_frames) ||
+        !pst_r_u64(&r, &cd_underflow_frames)) return 0;
     return 1;
 }
 uint8_t*  spu_get_ram_ptr(void){ return spu_ram; }
@@ -2040,7 +2074,8 @@ void spu_snapshot_part_digests(SpuSnapPartDigests *out)
     spu_snapshot_write(buf);
     regs_n = (uint32_t)(SPU_REG_COUNT * 2u);
     voices_n = (uint32_t)(SPU_VOICE_COUNT * SPU_VOICE_WIRE_BYTES);
-    uint32_t tail_n = SPU_SNAPSHOT_TAIL_BYTES + (source_key_timing ? SOURCE_SPU_TAIL_BYTES : 0u);
+    uint32_t tail_n = SPU_SNAPSHOT_TAIL_BYTES + (source_key_timing ? SOURCE_SPU_TAIL_BYTES : 0u)
+                    + 16u + SPU_CD_SNAPSHOT_BYTES;
     if (regs_n + voices_n + tail_n != n)
         return;
     crc = 0xFFFFFFFFu;
