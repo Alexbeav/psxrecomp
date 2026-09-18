@@ -1177,8 +1177,7 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
 
     if (!boot_state_preflight_mdec(file, file_len, &h)) {
         fprintf(stderr, "boot_state: reject — the MDEC section could not be "
-                        "admitted (nothing applied)
-");
+                        "admitted (nothing applied)\n");
         return 0;
     }
 
