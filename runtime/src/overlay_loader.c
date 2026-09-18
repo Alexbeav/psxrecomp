@@ -1256,6 +1256,24 @@ static int cache_entry_suppress_at_capacity(int ci) {
     return cache_entry_suppress_for_shortfall(ci, dropped);
 }
 
+/* ASCII case fold for cache-path comparison.
+ *
+ * These helpers run per CHARACTER on the overlay dispatch-miss path
+ * (dll_already_loaded() linear-scans every loaded DLL path; load_one_dll()
+ * scans the cache index). ucrtbase's tolower() is a locale-aware out-of-line
+ * call into a separate system DLL, so each character costs a cross-DLL call
+ * that no amount of LTO/PGO on this exe can inline or speed up -- which is why
+ * the native-overlay penalty stayed flat at ~1.16 ms/frame while an LTO+PGO exe
+ * got 1.7x faster overall. T152 profiling of RE2 put 14.24% of ALL samples in
+ * ucrtbase!tolower with native overlays on, and 0% with them off.
+ *
+ * Cache paths are ASCII by construction (hex-named artifacts under fixed ASCII
+ * directory names), so an inline ASCII fold is exact here -- and it is strictly
+ * more predictable than tolower(), whose result is locale-dependent. */
+static inline unsigned char cache_ascii_lower(unsigned char c) {
+    return (c >= 'A' && c <= 'Z') ? (unsigned char)(c - 'A' + 'a') : c;
+}
+
 static int path_component_eq(const char *path, const char *wanted) {
     size_t wanted_len = strlen(wanted);
     const char *p = path;
@@ -1269,7 +1287,7 @@ static int path_component_eq(const char *path, const char *wanted) {
             for (; i < len; i++) {
                 unsigned char a = (unsigned char)start[i];
                 unsigned char b = (unsigned char)wanted[i];
-                if (tolower(a) != tolower(b)) break;
+                if (cache_ascii_lower(a) != cache_ascii_lower(b)) break;
             }
             if (i == len) return 1;
         }
@@ -1296,7 +1314,7 @@ static int cache_name_is_immutable(const char *name) {
 static int cache_path_char_equal(unsigned char a, unsigned char b) {
 #ifdef _WIN32
     if ((a == '/' || a == '\\') && (b == '/' || b == '\\')) return 1;
-    return tolower(a) == tolower(b);
+    return cache_ascii_lower(a) == cache_ascii_lower(b);
 #else
     return a == b;
 #endif
@@ -2995,10 +3013,57 @@ static int native_rank_allows(Candidate *c, uint32_t pc) {
 }
 #endif
 
+/* Hash index over s_loaded_paths.
+ *
+ * This was a linear scan calling cache_path_equal() against EVERY loaded DLL
+ * path -- O(loaded DLLs) full string compares, 262+ entries deep on RE2, on the
+ * overlay dispatch-miss path. Folding tolower() out (cache_ascii_lower) made
+ * each compare ~5x cheaper but left the O(n); measured on RE2 that residue was
+ * still ~23.7 us per miss. This makes the lookup O(1) expected.
+ *
+ * The hash MUST fold exactly what cache_path_char_equal() ignores, or two paths
+ * that compare equal could land in different buckets and a loaded DLL would be
+ * loaded twice (double-registration -> stale-chain execution). On Windows that
+ * means case AND '/' vs '\\'; on POSIX the compare is exact, so the hash is too.
+ * Every probe hit is still confirmed with cache_path_equal(), so a collision
+ * costs a compare and never a wrong answer. */
+#define LOADED_PATH_HASH_CAP 8192u   /* 2x MAX_LOADED_DLLS, power of two */
+static int s_loaded_path_hash[LOADED_PATH_HASH_CAP];  /* 0 = empty, else idx+1 */
+
+static uint32_t loaded_path_hash(const char *s) {
+    uint32_t h = 2166136261u;                      /* FNV-1a */
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+#ifdef _WIN32
+        if (c == '\\') c = '/';                    /* separators compare equal */
+        c = cache_ascii_lower(c);                  /* case compares equal */
+#endif
+        h = (h ^ c) * 16777619u;
+    }
+    return h;
+}
+
 static int dll_already_loaded(const char *path) {
-    for (int i = 0; i < s_nloaded_paths; i++)
-        if (cache_path_equal(s_loaded_paths[i], path)) return 1;
+    if (!path) return 0;
+    uint32_t slot = loaded_path_hash(path) & (LOADED_PATH_HASH_CAP - 1u);
+    for (uint32_t probe = 0; probe < LOADED_PATH_HASH_CAP; probe++) {
+        int entry = s_loaded_path_hash[(slot + probe) & (LOADED_PATH_HASH_CAP - 1u)];
+        if (entry == 0) return 0;                  /* empty slot ends the probe */
+        if (cache_path_equal(s_loaded_paths[entry - 1], path)) return 1;
+    }
     return 0;
+}
+
+/* Insert an already-stored s_loaded_paths[idx] into the hash index. */
+static void loaded_path_hash_insert(int idx) {
+    uint32_t slot = loaded_path_hash(s_loaded_paths[idx]) & (LOADED_PATH_HASH_CAP - 1u);
+    for (uint32_t probe = 0; probe < LOADED_PATH_HASH_CAP; probe++) {
+        uint32_t at = (slot + probe) & (LOADED_PATH_HASH_CAP - 1u);
+        if (s_loaded_path_hash[at] == 0) {
+            s_loaded_path_hash[at] = idx + 1;
+            return;
+        }
+    }
 }
 
 static void overlay_library_close(OverlayLibraryHandle handle) {
@@ -3099,6 +3164,7 @@ static int load_one_dll(const char *dll_path,
      * tracking table can never silently lose a loaded DLL again. */
     strncpy(s_loaded_paths[s_nloaded_paths], dll_path, 767);
     s_loaded_paths[s_nloaded_paths][767] = '\0';
+    loaded_path_hash_insert(s_nloaded_paths);  /* keep the O(1) index in step */
     s_nloaded_paths++;
     if (registered > 0) s_ndlls++;
     return registered;
