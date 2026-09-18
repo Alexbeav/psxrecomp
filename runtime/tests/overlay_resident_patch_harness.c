@@ -148,6 +148,11 @@ int g_idle_note_suppress;
 int g_psx_call_bail;
 uint64_t g_psx_bail_first, g_psx_bail_resolved;
 uint64_t s_frame_count;
+/* memory.c bumps the device-state generation on every MMIO write. Its
+ * definition lives in psx_cycles.c, which cannot be compiled into this
+ * unit (its header takes the overlay-DLL branch here). MMIO is unreachable
+ * from the stores under test, so the counter is a fixture global. */
+uint64_t g_psx_device_gen;
 
 void ds_init(const char *cache_dir, const char *game_id) {
     (void)cache_dir; (void)game_id;

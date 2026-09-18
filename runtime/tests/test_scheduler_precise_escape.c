@@ -3,6 +3,8 @@
 #include <assert.h>
 #include <stdint.h>
 #include "cpu_state.h"
+#include "psx_bios_backend.h"
+#include "psx_bios_image.h"
 #include "psx_scheduler.h"
 
 int g_precise_mode, g_psx_dispatch_depth, psx_in_device_service;
@@ -15,6 +17,22 @@ static uint32_t read_word(uint32_t address) {
     assert(address == 0x108u || address == 0x110u || address == 0x114u);
     return 0; /* boot, before guest TCB creation */
 }
+/* traps.c publishes dispatch notes for the debug console. This fixture has no
+ * publisher, and source_fixture_link.py stubs an unresolved seam with a
+ * placeholder that aborts -- so the escape path died before reaching the
+ * behaviour this test names (T145). Publishing nothing is the right fixture. */
+void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin) {
+    (void)site; (void)target; (void)origin;
+}
+/* psx_is_dispatchable() consults the BIOS entry table and the dirty-RAM map
+ * for EVERY pc, not only ROM ones (T110). This fixture links neither module,
+ * so source_fixture_link.py stubbed both with placeholders that abort and the
+ * scheduler died before reaching the behaviour this test names (T145). No BIOS
+ * image, no dirty pages and no kernel-less window is the honest fixture, and it
+ * makes the RAM resume PC dispatchable, which is what the test exercises. */
+int psx_bios_is_entry(uint32_t addr) { (void)addr; return 0; }
+int dirty_ram_is_dirty(uint32_t phys) { (void)phys; return 0; }
+PsxBiosImageInfo psx_bios_image;
 int dirty_ram_checkpoint_resume_pending(void) { return 0; }
 int savestate_pending(void) { return 0; }
 void overlay_loader_shadow_scheduler_escape_fixup(void) { ++fixups; }

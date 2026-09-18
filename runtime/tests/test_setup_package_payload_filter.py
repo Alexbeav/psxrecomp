@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = ROOT / "tools" / "package_setup_host.sh"
 PRIVATE_PATH_GATE = ROOT / "tools" / "check_private_paths.sh"
+FRAMEWORK_STAGE = ROOT / "tools" / "stage_framework_tree.sh"
 ATTRIBUTES = ROOT / ".gitattributes"
 
 
@@ -23,16 +24,22 @@ def main() -> None:
     assert text.count("assert_no_private_build_paths") >= 3
     assert 'check_private_paths.sh"' in text
     assert 'bash "${gate}" "${STAGE}"' in text
+    # The psxrecomp side of the drop list lives in stage_framework_tree.sh, which
+    # the packager calls and the kit-emitter-rebuild CI job calls too; only the
+    # recomp-ui side is still dropped by the packager itself. Assert the
+    # delegation as well, so moving the list cannot silently unguard it.
+    assert "stage_framework_tree.sh" in text
+    framework_text = FRAMEWORK_STAGE.read_text(encoding="utf-8")
     for private_source in (
         "CLAUDE.md",
         "docs/internal",
         "recompiler/lib/ELFIO/tests",
         "tools/aot_overlay_spike",
         "tools/tasreplays",
-        "recomp-ui/docs/HANDOFF.md",
-        "recomp-ui/test_data",
     ):
-        assert private_source in text
+        assert private_source in framework_text, private_source
+    for private_source in ("recomp-ui/docs/HANDOFF.md", "recomp-ui/test_data"):
+        assert private_source in text, private_source
     gate_text = PRIVATE_PATH_GATE.read_text(encoding="utf-8")
     assert "developer-machine path" in gate_text
     for token in ("Users", "Projects", "AgentData", "OneDrive", "Share", "/mnt/"):
