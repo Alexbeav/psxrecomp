@@ -119,6 +119,7 @@ int interrupts_raster_perturb(const char *field);
  * diagnostic opt-out. */
 uint32_t psx_spu_sample_event_cycles_to_next(void);
 void psx_spu_sample_event_service(void);
+extern uint32_t vblank_cycles; /* guest CPU cycles in the current video field */
 /* VBlank phase within the current frame (0 .. VBLANK_CYCLES-1). Persisted in
  * BS_SEC_IRQ (and selfcheck's out-of-band latch) so resim keeps the snap's
  * phase. Legacy 8-byte IRQ sections still rebase to 0 on load. */
