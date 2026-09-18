@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = ROOT / "tools" / "package_setup_host.sh"
+FRAMEWORK_STAGER = ROOT / "tools" / "stage_framework_tree.sh"
 PRIVATE_PATH_GATE = ROOT / "tools" / "check_private_paths.sh"
 ATTRIBUTES = ROOT / ".gitattributes"
 
@@ -23,6 +24,14 @@ def main() -> None:
     assert text.count("assert_no_private_build_paths") >= 3
     assert 'check_private_paths.sh"' in text
     assert 'bash "${gate}" "${STAGE}"' in text
+    # The psxrecomp half of the drop list lives in stage_framework_tree.sh, so
+    # the CI kit-emitter-rebuild job and the shipped tree filter identically.
+    # What must hold is that nothing private ships, not which file says so, so
+    # check both -- but only after confirming the packager still calls the
+    # stager, since the list is worthless if it never runs.
+    assert 'bash "${SCRIPT_DIR}/stage_framework_tree.sh"' in text
+    stager_text = FRAMEWORK_STAGER.read_text(encoding="utf-8")
+    dropped = text + "\n" + stager_text
     for private_source in (
         "CLAUDE.md",
         "docs/internal",
@@ -32,7 +41,7 @@ def main() -> None:
         "recomp-ui/docs/HANDOFF.md",
         "recomp-ui/test_data",
     ):
-        assert private_source in text
+        assert private_source in dropped, private_source
     gate_text = PRIVATE_PATH_GATE.read_text(encoding="utf-8")
     assert "developer-machine path" in gate_text
     for token in ("Users", "Projects", "AgentData", "OneDrive", "Share", "/mnt/"):
