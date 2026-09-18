@@ -137,6 +137,26 @@ static bool is_branch_kind(const char* kind) {
     return k.substr(0, 7) == "branch_";
 }
 
+// T110 — resume-point census, per BIOS image.
+//
+// The hazard this fix closes is sized PER PROFILE: dispatch-table membership
+// depends on that profile's seeds, so one image's numbers say nothing about
+// another's. Rather than make anyone re-derive them, the emitter reports what
+// it examined for whatever image it was just given. Folded in only when a
+// function emits successfully, and reset before PASS 2 so PASS 1's probe run
+// into a throwaway buffer does not double-count.
+namespace {
+struct ResumeCensus {
+    uint64_t functions = 0;
+    uint64_t instructions = 0;   // in-function instruction slots examined
+    uint64_t already_keyed = 0;  // block leaders + function entries
+    uint64_t added = 0;          // new exact-EPC resume points
+    uint64_t skip_delay = 0;     // delay slots: EPC is the terminator, BD set
+    uint64_t skip_ldd = 0;       // load-delay successors: psx_ldd_ temp not live
+};
+ResumeCensus g_resume_census;
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // emit_function: emit one C function
 // ---------------------------------------------------------------------------
@@ -779,14 +799,20 @@ bool FullFunctionEmitter::emit_function(
     // interpreter. A resume point adds a label and a dispatch key, nothing
     // else, so the fall-through path emits byte-identical code.
     std::set<uint32_t> resume_points;
+    ResumeCensus census;
     for (const auto& [pc, word] : addr_to_raw) {
         (void)word;
-        if (block_leaders.count(pc)) continue;
-        if (all_function_entries_norm.count(normalize_address(pc))) continue;
-        if (pending_at.count(pc)) continue;
-        if (ldd_sites.count(pc - 4u)) continue;
+        ++census.instructions;
+        if (block_leaders.count(pc) ||
+            all_function_entries_norm.count(normalize_address(pc))) {
+            ++census.already_keyed;
+            continue;
+        }
+        if (pending_at.count(pc))    { ++census.skip_delay; continue; }
+        if (ldd_sites.count(pc - 4u)) { ++census.skip_ldd;  continue; }
         resume_points.insert(pc);
     }
+    census.added = resume_points.size();
     for (uint32_t rp : resume_points) {
         local_continuations.push_back({rp, normalize_address(rp), norm});
     }
@@ -1860,6 +1886,15 @@ bool FullFunctionEmitter::emit_function(
 
     // Append the body.
     out += body;
+
+    // T110 census: fold in only now, so a function that bailed out to the
+    // interpreter above is not counted as covered.
+    ++g_resume_census.functions;
+    g_resume_census.instructions   += census.instructions;
+    g_resume_census.already_keyed  += census.already_keyed;
+    g_resume_census.added          += census.added;
+    g_resume_census.skip_delay     += census.skip_delay;
+    g_resume_census.skip_ldd       += census.skip_ldd;
     return true;
 }
 
@@ -2761,6 +2796,7 @@ EmitStats FullFunctionEmitter::emit(
     }
 
     // ---- PASS 2: real emission with injected cross-targets ----
+    g_resume_census = ResumeCensus{};   /* T110: count PASS 2 only */
     for (const auto& fn : dr.functions) {
         // Re-walk the function to get raw instructions.
         std::string lineage = fn.discovered_by;
@@ -2805,6 +2841,23 @@ EmitStats FullFunctionEmitter::emit(
     }
 
     stats.dispatch_entries = static_cast<uint32_t>(emitted_normalized.size());
+
+    // T110 — say what was examined for THIS image, not just a verdict. The
+    // exact-EPC hazard is sized per profile (dispatch membership follows that
+    // profile's seeds), so these numbers must be read off the image in hand;
+    // another profile's counts do not carry. added + already_keyed + delay +
+    // ldd-successor accounts for every in-function instruction slot.
+    std::fprintf(stderr,
+        "[T110] %s resume points: %llu functions, %llu instruction slots = "
+        "%llu already keyed + %llu added + %llu delay slots (EPC is the "
+        "terminator, BD set) + %llu load-delay successors\n",
+        out_stem.c_str(),
+        (unsigned long long)g_resume_census.functions,
+        (unsigned long long)g_resume_census.instructions,
+        (unsigned long long)g_resume_census.already_keyed,
+        (unsigned long long)g_resume_census.added,
+        (unsigned long long)g_resume_census.skip_delay,
+        (unsigned long long)g_resume_census.skip_ldd);
 
     // Emit fatal stubs for skipped functions (e.g. FPU) so calls to them
     // link but abort at runtime with a diagnostic.
