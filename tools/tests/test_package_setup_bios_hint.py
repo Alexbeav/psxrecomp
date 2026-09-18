@@ -48,11 +48,27 @@ def find_bash() -> str | None:
     return None
 
 
+def shell_env(bash: str) -> dict:
+    """PATH that reaches the coreutils shipped beside `bash`.
+
+    recipe_bios_hint() decides the wording with `grep ... || true`, so a bash
+    launched from a PATH without grep (PowerShell, or any build environment that
+    does not add Git's usr\bin) silently takes the OPTIONAL branch for every
+    recipe and this test reports a wording regression that is not there.
+    """
+    env = dict(os.environ)
+    here = os.path.dirname(bash)
+    extra = [here, os.path.join(os.path.dirname(here), "bin"),
+             os.path.join(os.path.dirname(here), "usr", "bin")]
+    env["PATH"] = os.pathsep.join([p for p in extra if os.path.isdir(p)] + [env.get("PATH", "")])
+    return env
+
+
 def to_shell_path(path: Path, bash: str) -> str:
     if os.name != "nt":
         return str(path)
     out = subprocess.run([bash, "-c", 'cygpath -u "$1"', "_", str(path)],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, env=shell_env(bash))
     return out.stdout.strip() or str(path)
 
 
@@ -73,7 +89,7 @@ def main() -> int:
             toml.write_text(recipe, encoding="utf-8", newline="\n")
             script = "set -euo pipefail\n" + func + '\nrecipe_bios_hint "$1"\necho "rc=$?"\n'
             run = subprocess.run([bash, "-c", script, "_", to_shell_path(toml, bash)],
-                                 capture_output=True, text=True)
+                                 capture_output=True, text=True, env=shell_env(bash))
             out = run.stdout.replace("\r", "")
             assert run.returncode == 0, (run.returncode, out, run.stderr)
             assert out.endswith("rc=0\n"), out
