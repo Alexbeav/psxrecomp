@@ -746,6 +746,51 @@ bool FullFunctionEmitter::emit_function(
         branch_decls += fmt::format("    uint32_t psx_ldd_{:08X} = 0;  /* load-delay temp */\n", la);
     }
 
+    // T110 — exact-EPC resume points.
+    //
+    // An interrupt that becomes deliverable at a ROM instruction must take
+    // COP0.EPC = that exact instruction (hardware, BizHawk). The runtime used
+    // to defer such a delivery to the next re-enterable boundary because the
+    // static dispatch could only re-enter at a block leader, which MOVED the
+    // architectural EPC: Abe's Oddysee took an IRQ at BFC041F8 (`bne` closing
+    // a three-instruction loop) and stored BFC041D0 — the branch's own target,
+    // because the deferral ran the branch and its slot first. EPC stays
+    // faithful; the resume side grows instead. Every instruction that can be
+    // an EPC becomes a dispatch key, so psx_is_dispatchable() accepts it.
+    //
+    // NOT a resume point (each exclusion is a correctness requirement, not a
+    // size optimisation):
+    //   - a block leader / function entry: already a key, label already emitted.
+    //   - a branch/jump delay slot: architecturally the EPC is the TERMINATOR
+    //     with Cause.BD set (psx_check_interrupts_delay_slot), never the slot.
+    //     The slot's emitted body is also guarded on psx_delay_<term>, which a
+    //     fresh function entry initialises to 0.
+    //   - the successor of a modeled load-delay pair: its emitted body reads
+    //     (and emit_ldd_flush writes back) psx_ldd_<load>, which a fresh entry
+    //     initialises to 0 — entering there would clobber the loaded GPR with
+    //     zero. The runtime refuses such a PC anyway (precise_pc_dispatchable
+    //     returns 0 while s_ld_pend_armed), so the two sides agree.
+    //
+    // block_leaders is deliberately NOT extended: it drives the cycle model
+    // (psx_slice_block extents, per-block charges), the I-cache line-leader
+    // test, and the load-delay "dependent pair split by a label" bail-out at
+    // the top of this function. Adding leaders would change generated timing
+    // and push every ROM function with a dependent load pair onto the
+    // interpreter. A resume point adds a label and a dispatch key, nothing
+    // else, so the fall-through path emits byte-identical code.
+    std::set<uint32_t> resume_points;
+    for (const auto& [pc, word] : addr_to_raw) {
+        (void)word;
+        if (block_leaders.count(pc)) continue;
+        if (all_function_entries_norm.count(normalize_address(pc))) continue;
+        if (pending_at.count(pc)) continue;
+        if (ldd_sites.count(pc - 4u)) continue;
+        resume_points.insert(pc);
+    }
+    for (uint32_t rp : resume_points) {
+        local_continuations.push_back({rp, normalize_address(rp), norm});
+    }
+
     auto should_probe_pc = [](uint32_t pc) -> bool {
         switch (pc) {
         case 0xBFC148DCu:
@@ -1006,6 +1051,21 @@ bool FullFunctionEmitter::emit_function(
             if (should_probe_pc(addr)) {
                 out += fmt::format("    debug_server_log_probe(0x{:08X}u, cpu);\n", addr);
             }
+        }
+
+        // T110 — exact-EPC resume label. Placed ahead of this instruction's
+        // fetch/interlock so a resume re-executes it whole, exactly as the
+        // fall-through path does. Only the label: no block-leader preamble,
+        // because a resume point is by construction not a leader and the
+        // preamble (patch-range guard, cyc_observe, psx_slice_block, block
+        // cycle charge) belongs to the leader that already ran. The trailing
+        // `;` keeps the label attached to a statement even when this is the
+        // function's last instruction and the translation emits only a
+        // comment. block_leaders can still gain entries during this loop
+        // (emit_patch_range_guard registers install-slot resume addresses), so
+        // re-test it here rather than trusting the pre-loop membership.
+        if (!block_leaders.count(addr) && resume_points.count(addr)) {
+            out += fmt::format("label_{:08X}: ;\n", addr);
         }
 
         // Per-instruction cycle charge (faithful-timing mode). Emitted for EVERY
