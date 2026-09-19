@@ -38,8 +38,24 @@ def matrix():
                                            (-2147483648, -2147483648), (2147483647, 2147483647),
                                            (0, 20000000), (0, 21000000), (0, 2147483647)]:
                         add(origin, target, motor, paused, mode, profile, "representation")
-    return dict(schema="t172-cd-seek-experiment-v1", matrix_revision=2,
-                domain="Signed sector addresses -150..450000; boolean states; all mode bits",
+    # Holdout inputs chosen after the model was fitted, with no expected outputs.
+    import random
+    rng = random.Random(1722009)
+    for index in range(20000):
+        if index < 10000:
+            origin, target = rng.randrange(-150, 450001), rng.randrange(-150, 450001)
+        else:
+            origin, target = rng.randrange(-2147483648, 2147483648), rng.randrange(-2147483648, 2147483648)
+        add(origin, target, rng.randrange(2), rng.randrange(2), rng.randrange(256),
+            rng.randrange(2), "holdout")
+    for motor in [0, 1]:
+        boundary = (2147483647 - 10160640 - (0 if motor else 33868800)) * 15 // 1568
+        for delta in range(-32, 33):
+            for sign in [-1, 1]:
+                for mode in [0, 128, 255]:
+                    add(0, sign * (boundary + delta), motor, 1, mode, 1, "saturation")
+    return dict(schema="t172-cd-seek-experiment-v1", matrix_revision=3,
+                domain="Disc-range -150..450000 plus separate signed32 representation stress; boolean states; all mode bits",
                 expected_outputs=None, cases=cases)
 
 
