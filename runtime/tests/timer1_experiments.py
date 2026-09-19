@@ -34,7 +34,7 @@ def matrix():
         for target in [0, 1, 3, 65534, 65535]:
             for start in sorted({0, target, (target + 1) & 65535, 65535}):
                 ops = [blank(0), write(8, target), write(4, mode), write(0, start)]
-                for count in [0, 1, 2, 7, 65535, 65536, 1048576]:
+                for count in [0, 1, 2, 7, 65535, 65536, 1000000]:
                     ops += [advance(count), hblank(count), read(0), read(4), read(4)]
                 add(f"boundary_{mode:03x}_{target:04x}_{start:04x}", ops)
     for mode in [1, 3, 5, 7, 0x101, 0x103, 0x105, 0x107]:
@@ -65,7 +65,7 @@ def matrix():
                 ops.append(advance(amount) if choice == 3 else hblank(amount))
         add(f"mixed_{index:04d}", ops)
     assert len({c["id"] for c in cases}) == len(cases)
-    return dict(schema="t172-timer1-experiment-v1", matrix_revision=1, cases=cases,
+    return dict(schema="t172-timer1-experiment-v1", matrix_revision=2, cases=cases,
                 policy="IRQ-disabled modes only; explicit CPU/HBlank advances unsplit; repeated blank levels intentional",
                 expected_outputs=None)
 

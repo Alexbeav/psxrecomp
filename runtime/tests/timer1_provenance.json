@@ -1,0 +1,21 @@
+{
+  "task": "T172",
+  "status": "First independent timer1 candidate; comparisons pending",
+  "base": "8812eca2c9989b164b16e396a6a2c335dea0aee4",
+  "sources": [
+    {
+      "path": "I:/Projects/PSX-References/research-and-documentation/psx-spx/docs/timers.md",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "sha256": "e24283cf10e3e4da93d05173d075d72cb09e6309913d495df01025251110c02c",
+      "lines_read": "entire file"
+    }
+  ],
+  "exposure": "Hardware documentation, declaration-only T77 handoff, authored register/raster experiments and public60byte wire observations; no old timer1 implementation or source-profile test body read",
+  "scope": "Preserve IRQ-disabled runtime profile, existing reset behavior and wire ABI; not a silicon accuracy change",
+  "legal_claim": "None",
+  "unresolved": [
+    "Header comparison",
+    "Cross-version state replay",
+    "Preexisting reference reset/order differences"
+  ]
+}
