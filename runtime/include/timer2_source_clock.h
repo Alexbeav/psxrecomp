@@ -86,6 +86,8 @@ static inline uint32_t timer2_source_read(PsxTimer2Source *timer, unsigned reg)
 
 static inline uint32_t timer2_source_next(const PsxTimer2Source *timer)
 {
+    if ((timer->mode & 56u) == 40u && timer->counter == timer->target)
+        return 1;
     if (!timer->counting)
         return 1024;
     if (!(timer->mode & 48u)) return 1024;
@@ -93,8 +95,6 @@ static inline uint32_t timer2_source_next(const PsxTimer2Source *timer)
     if (((timer->mode & 16u) || ((timer->mode & 40u) == 40u)) &&
         timer->counter < timer->target)
         distance = timer->target - timer->counter;
-    if ((timer->mode & 56u) == 40u && timer->counter == timer->target)
-        return 1;
     if (timer->mode & 512u)
         distance = distance * 8u - timer->divider;
     return distance < 1024 ? (uint32_t)distance : 1024;

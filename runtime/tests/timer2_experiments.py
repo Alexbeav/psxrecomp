@@ -116,9 +116,14 @@ def matrix():
                 ops.append(advance(rng.choice([0, 1, 7, 8, 65535, 65536, rng.randrange(100000001)])))
         add(f"unseen_{index:04d}", ops)
 
+    for mode in range(1024):
+        add(f"zero_target_{mode:03x}", [write(8, 0), write(4, mode), read(4),
+            advance(7), read(4), write(0, 65535), advance(8), read(4),
+            write(0, 0), advance(65536), read(4), write(8, 1), write(8, 0)])
+
     assert len({case["id"] for case in cases}) == len(cases)
     assert sum(len(c["operations"]) for c in cases) < 1_000_000
-    return {"schema": "t172-timer2-experiment-v1", "matrix_revision": 4,
+    return {"schema": "t172-timer2-experiment-v1", "matrix_revision": 5,
             "clock_policy": "Explicit advances are not subdivided; read/write flush including zero elapsed",
             "observation_policy": "Counter/target observation has no side effect; mode read only explicitly",
             "expected_outputs": None, "cases": cases}
