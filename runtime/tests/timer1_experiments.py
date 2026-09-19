@@ -64,9 +64,18 @@ def matrix():
                 amount = rng.choice([0, 1, 3, 65535, 65536, rng.randrange(1000000)])
                 ops.append(advance(amount) if choice == 3 else hblank(amount))
         add(f"mixed_{index:04d}", ops)
+    for mode in range(1024):
+        if mode & 48:
+            add(f"reject_{mode:03x}", [write(8, 3), write(4, 0), advance(2),
+                write(4, mode), read(0), read(4), advance(1), read(4), read(0)])
+    for mode in [0, 1, 3, 5, 7, 0x100, 0x101, 0x103, 0x105, 0x107]:
+        add(f"initial_{mode:03x}", [write(4, mode), advance(5), hblank(5), read(0),
+            blank(1), advance(5), hblank(5), read(0), blank(0), advance(5),
+            hblank(5), read(0), blank(1), blank(0), advance(5), hblank(5), read(0)])
+
     assert len({c["id"] for c in cases}) == len(cases)
-    return dict(schema="t172-timer1-experiment-v1", matrix_revision=2, cases=cases,
-                policy="IRQ-disabled modes only; explicit CPU/HBlank advances unsplit; repeated blank levels intentional",
+    return dict(schema="t172-timer1-experiment-v1", matrix_revision=3, cases=cases,
+                policy="IRQ-disabled operation plus rejected mode writes; explicit CPU updates unsplit; repeated blank levels intentional",
                 expected_outputs=None)
 
 

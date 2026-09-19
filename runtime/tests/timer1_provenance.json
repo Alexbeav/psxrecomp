@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "First independent timer1 candidate; comparisons pending",
+  "status": "Independent compatibility replacement; header and public-wire gates pass; final independent review pending",
   "base": "8812eca2c9989b164b16e396a6a2c335dea0aee4",
   "sources": [
     {
@@ -14,8 +14,34 @@
   "scope": "Preserve IRQ-disabled runtime profile, existing reset behavior and wire ABI; not a silicon accuracy change",
   "legal_claim": "None",
   "unresolved": [
-    "Header comparison",
-    "Cross-version state replay",
-    "Preexisting reference reset/order differences"
-  ]
+    "375 preexisting reference differences remain unchanged",
+    "Arbitrary aggregate HBlank n is not qualified; production and wrappers supply individual events",
+    "Full CPU IRQ consumer and full-system save-state qualification",
+    "Hardware qualification and remaining audit inventory"
+  ],
+  "observed_compatibility": [
+    "Runtime reset blank1/counting0 remains distinct from reference reset",
+    "Mode7 counting=-1 awaits a real blank0-to1 edge, then counting0 awaits1-to0 before counting1",
+    "Sync modes3/5 reset on falling blank transition; repeated levels have no transition effect",
+    "Mode writes retain reached flags and reject IRQ-enabled values without mutation",
+    "CPU and HBlank clock sources selected by bit8; bit9 ignored",
+    "No documented two-cycle write delay in this compatibility profile",
+    "Target/reset/wrap arithmetic follows independently measured profile, not a hardware correction"
+  ],
+  "validation": {
+    "tested_commit": "ef89c829e52606cb1ef3ad44b822312b6e432be5",
+    "header_cases": 2698,
+    "header_observations": 125416,
+    "all_fields_equal_baseline": true,
+    "retained_reference_field_differences": {
+      "counter": 327,
+      "read": 48
+    },
+    "rejected_mode_cases": 768,
+    "wire_cases": 2600,
+    "wire_checked_observations": 98048,
+    "all_wire_bytes_and_suffixes_equal": true,
+    "matrix_sha256": "5c4e5f7d98ab9a283495f84a8c2b88789faf5386f805a3d4bee7a3efa7842179",
+    "wire_matrix_sha256": "37ca96b8f6f1c2061fb11d216eec2cba9efbca3d978f7f7b08d2243c3ccd6a47"
+  }
 }
