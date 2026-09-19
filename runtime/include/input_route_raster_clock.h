@@ -1,6 +1,7 @@
 #ifndef INPUT_ROUTE_RASTER_CLOCK_H
 #define INPUT_ROUTE_RASTER_CLOCK_H
 #include <stdint.h>
+#include <string.h>
 
 typedef struct {
     uint64_t cycle, last_rise;

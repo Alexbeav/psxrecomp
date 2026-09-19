@@ -13,8 +13,11 @@ FIELDS = ['cycle', 'last_rise', 'fraction', 'remaining', 'phase', 'alternate',
           'y_start', 'y_offset', 'readout_y', 'readout_field']
 
 
-def check_row(row):
-    if not isinstance(row, dict) or set(row) != {'case_id', 'step', 'return_value', 'state', 'status', 'until_rise', 'wire_hex', 'events'}:
+def check_row(row, consumer=False):
+    keys = {'case_id', 'step', 'return_value', 'state', 'status', 'until_rise', 'wire_hex', 'events'}
+    if consumer:
+        keys.add('timer_wire_hex')
+    if not isinstance(row, dict) or set(row) != keys:
         raise ValueError('malformed raster result')
     state = row['state']
     if not isinstance(state, list) or len(state) != 18:
@@ -30,6 +33,8 @@ def check_row(row):
     wire = bytes.fromhex(row['wire_hex'])
     if len(wire) != 80 or list(struct.unpack('<QQ16I', wire)) != state:
         raise ValueError('public wire does not represent complete observed state')
+    if consumer and len(bytes.fromhex(row['timer_wire_hex'])) != 60:
+        raise ValueError('incomplete actual timer wire')
     if not isinstance(row['events'], list):
         raise ValueError('invalid event list')
     for event in row['events']:
@@ -41,6 +46,7 @@ def check_row(row):
 
 def validate(matrix_path, paths):
     matrix = json.loads(matrix_path.read_text())
+    consumer = matrix['schema'] == 't172-raster-consumer-experiment-v1'
     matrix_hash = hashlib.sha256(matrix_path.read_bytes()).hexdigest()
     digests = [hashlib.sha256() for _ in paths]
     differences, examples = Counter(), []
@@ -56,14 +62,14 @@ def validate(matrix_path, paths):
                 observed = []
                 for i, file in enumerate(files):
                     row = json.loads(next(file, 'null'))
-                    check_row(row)
+                    check_row(row, consumer)
                     if row['case_id'] != case['id'] or type(row['step']) is not int or row['step'] != step:
                         raise ValueError('missing or unordered operation')
                     events[i] += len(row['events'])
                     digests[i].update((json.dumps(row, sort_keys=True, separators=(',', ':')) + '\n').encode())
                     observed.append(row)
                 if len(observed) == 2:
-                    for field in ['return_value', 'state', 'status', 'until_rise', 'wire_hex', 'events']:
+                    for field in ['return_value', 'state', 'status', 'until_rise', 'wire_hex', 'events'] + (['timer_wire_hex'] if consumer else []):
                         if observed[0][field] != observed[1][field]:
                             differences[field] += 1
                             if len(examples) < 20:
