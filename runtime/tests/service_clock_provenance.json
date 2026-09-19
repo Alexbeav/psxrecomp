@@ -3,13 +3,13 @@
   "status": "Independent service helper; isolated, callback-entry, actual persistence and bounded actual consumer gates pass; independent review pending",
   "base": "7765cc5d2e024d8c6fa604e557bd1a750a91c458",
   "source_boundary": "Primary hardware context, declaration/caller-only contract, independently authored black-box experiments and qualified independently authored raster model. Old service/runtime/wire bodies and source-profile tests unread. Mechanical notice-marker scan found no header notice; root LICENSE unchanged.",
-  "model_evidence": "evidence/service-clock-hypothesis-v2.json matches eight authored matrices including callback-entry snapshots",
+  "model_evidence": "Independent measured model plus final-scanline holdout correction; all13final C matrices pass exactly",
   "scope": "Service clock helper only; qualified raster dependency reused",
   "pending_gates": [
     "Independent T77 raw evidence review and exact push"
   ],
   "legal_claim": "None; no formal clean-room or legal clearance claim",
-  "tested_commit": "17bdd9f9024c11d0f0d5ee2d4bbf84aa2e8cf90a",
+  "tested_commit": "f8cde13e62deb95a2ced5fdfb9b6d92eceb8eb63",
   "validation": {
     "experiments-v1": {
       "cases": 456,
@@ -17,6 +17,10 @@
       "events": [
         2386884,
         2386884
+      ],
+      "dispatches": [
+        0,
+        0
       ],
       "different_fields": {},
       "normalized_sha256": [
@@ -32,6 +36,10 @@
         140952,
         140952
       ],
+      "dispatches": [
+        0,
+        0
+      ],
       "different_fields": {},
       "normalized_sha256": [
         "22b3df68cbdff2204fb984638dc3b357e3feaa917e90919f79a6e37c39a7b2ed",
@@ -46,6 +54,10 @@
         50,
         50
       ],
+      "dispatches": [
+        0,
+        0
+      ],
       "different_fields": {},
       "normalized_sha256": [
         "b9b7c0b11e8e16c1b868665d9fc95cec6fd215fa64e3d8331cfcbe24c70f27f6",
@@ -57,6 +69,10 @@
       "cases": 16,
       "rows": 12832,
       "events": [
+        0,
+        0
+      ],
+      "dispatches": [
         0,
         0
       ],
@@ -74,6 +90,10 @@
         0,
         0
       ],
+      "dispatches": [
+        0,
+        0
+      ],
       "different_fields": {},
       "normalized_sha256": [
         "89f709044e5914a2601f399da3d8218b2e103dc1054a64b137901d2a6a22a63e",
@@ -85,6 +105,10 @@
       "cases": 232,
       "rows": 63568,
       "events": [
+        0,
+        0
+      ],
+      "dispatches": [
         0,
         0
       ],
@@ -102,6 +126,10 @@
         0,
         0
       ],
+      "dispatches": [
+        0,
+        0
+      ],
       "different_fields": {},
       "normalized_sha256": [
         "633c044dc9daa96078f53eaebf5812aa818e537dad694505a1b6bf12f8f8a0be",
@@ -116,21 +144,45 @@
         0,
         0
       ],
+      "dispatches": [
+        0,
+        0
+      ],
       "different_fields": {},
       "normalized_sha256": [
         "b08946935fc02d94c8e44272380ecb429b0a87d3e71b39037a856f0f174aa9c3",
         "b08946935fc02d94c8e44272380ecb429b0a87d3e71b39037a856f0f174aa9c3"
       ],
       "examples": []
-    }
-  },
-  "wire_validation": [
-    {
+    },
+    "final-line-holdouts-v9": {
+      "cases": 459,
+      "rows": 1836,
+      "events": [
+        2763792,
+        2763792
+      ],
+      "dispatches": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "9edee60bb61db9a2f9f4ccdb437965da0d72905d34466d68a009385040d57c8a",
+        "9edee60bb61db9a2f9f4ccdb437965da0d72905d34466d68a009385040d57c8a"
+      ],
+      "examples": []
+    },
+    "wire-experiments-v1": {
       "cases": 120,
       "rows": 3000,
       "events": [
         3396426,
         3396426
+      ],
+      "dispatches": [
+        0,
+        0
       ],
       "different_fields": {},
       "normalized_sha256": [
@@ -139,12 +191,16 @@
       ],
       "examples": []
     },
-    {
+    "wire-replay-v2": {
       "cases": 231,
       "rows": 1848,
       "events": [
         2008743,
         2008743
+      ],
+      "dispatches": [
+        0,
+        0
       ],
       "different_fields": {},
       "normalized_sha256": [
@@ -152,8 +208,44 @@
         "7ba23f6564b041d9e241cb06c54c1de7fdcd889a09601fd2724d81e0a6f6d877"
       ],
       "examples": []
+    },
+    "consumer-experiments-v1": {
+      "cases": 84,
+      "rows": 2268,
+      "events": [
+        19908,
+        19908
+      ],
+      "dispatches": [
+        249,
+        249
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "b4ced6ff87db1152283b8dd5cb5772942e5083202ca75cdab8fdc43cefc8b142",
+        "b4ced6ff87db1152283b8dd5cb5772942e5083202ca75cdab8fdc43cefc8b142"
+      ],
+      "examples": []
+    },
+    "consumer-replay-v2": {
+      "cases": 116,
+      "rows": 1160,
+      "events": [
+        25676,
+        25676
+      ],
+      "dispatches": [
+        121,
+        121
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "c4db388fec5a3262dfa003e75a78022da2b9ec3622d4d87c87bb961797cb7ecb",
+        "c4db388fec5a3262dfa003e75a78022da2b9ec3622d4d87c87bb961797cb7ecb"
+      ],
+      "examples": []
     }
-  ],
+  },
   "controls": {
     "controls": 69,
     "all_detected": true,
@@ -234,49 +326,19 @@
     "Apparent service/direct raster mismatch came from comparing mode0 withmode36; corrected before runtime change",
     "Blank rise alone does not describe measured service frame policy; threshold and skipped-line probes retained"
   ],
-  "consumer_validation": [
-    {
-      "cases": 84,
-      "rows": 2268,
-      "events": [
-        19908,
-        19908
-      ],
-      "dispatches": [
-        249,
-        249
-      ],
-      "different_fields": {},
-      "normalized_sha256": [
-        "b4ced6ff87db1152283b8dd5cb5772942e5083202ca75cdab8fdc43cefc8b142",
-        "b4ced6ff87db1152283b8dd5cb5772942e5083202ca75cdab8fdc43cefc8b142"
-      ],
-      "examples": []
-    },
-    {
-      "cases": 116,
-      "rows": 1160,
-      "events": [
-        25676,
-        25676
-      ],
-      "dispatches": [
-        121,
-        121
-      ],
-      "different_fields": {},
-      "normalized_sha256": [
-        "c4db388fec5a3262dfa003e75a78022da2b9ec3622d4d87c87bb961797cb7ecb",
-        "c4db388fec5a3262dfa003e75a78022da2b9ec3622d4d87c87bb961797cb7ecb"
-      ],
-      "examples": []
-    }
-  ],
   "preservation": "Only source_gpu_service_clock.h production change since7765cc5d2; qualified raster, command parser, runtime consumers, public wire code and root LICENSE unchanged",
   "limitations": [
     "Full DMA engine, renderer, CPU scheduler and arbitrary external sink reentry are outside the bounded actual callback fixture",
     "No hardware timing, host-performance or legal-clearance claim",
     "Command-cost snippet exposure prevents future unexposed claims for those unrelated fragments"
   ],
-  "primary_packet_context": "Pinned PSX-SPX GPU docs75-140,218-268,450-481,537-580 plus earlier polygon/display/timing reading. Hardware context only; no emulator formulas read."
+  "primary_packet_context": "Pinned PSX-SPX GPU docs75-140,218-268,450-481,537-580 plus earlier polygon/display/timing reading. Hardware context only; no emulator formulas read.",
+  "review_correction": "First review17bdd missed direct advances landing on final scanline. Reviewer supplied2input-only failures;459authored extensions found8failures. Preserved measured final-line fallback and reran every gate.",
+  "totals": {
+    "matrices": 13,
+    "cases": 2140,
+    "rows": 204215,
+    "ordered_events": 10742431,
+    "actual_dispatches": 370
+  }
 }
