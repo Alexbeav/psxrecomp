@@ -1,0 +1,17 @@
+{
+  "task": "T172",
+  "status": "Independent C candidate; full validation pending",
+  "base": "077a03d4ec3d33a5b650a48974a3e1b8ca1b49c9",
+  "source_boundary": "Primary hardware docs, declaration-only contract, authored black-box observations only. Old clock/wire implementation and emulator/profile tests not read. Whole clock header replaced mechanically; wire and callers unchanged.",
+  "observed_model": "Independent transition model v3 matches all state/event/GP1 outputs in 82692 catalog rows. Status/deadline and continuation gates pending.",
+  "sources": [
+    "evidence/raster-clock-specification-inputs-v1.json",
+    "evidence/raster-clock-v1-baseline-a.jsonl",
+    "evidence/raster-clock-hypothesis-v3.json"
+  ],
+  "limitations": [
+    "Measured compatibility, not hardware timing calibration",
+    "No service-clock/interrupt/GPU integration qualification yet",
+    "No legal clearance or formal clean-room claim"
+  ]
+}
