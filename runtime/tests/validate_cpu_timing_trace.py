@@ -47,6 +47,8 @@ def read_trace(matrix_path, trace_path):
             require(vector(row['memory_flags'], [1,1,1]), f'memory flags {key}')
         if 'scope_states' in row:
             expected_fields |= {'scope_states'}
+        if 'event_cpu_states' in row:
+            expected_fields |= {'event_cpu_states'}
         require(set(row) == expected_fields, 'row keys')
         require(type(row['step']) is int and (row['case_id'], row['step']) == key,
                 f'row order {key}')
@@ -68,6 +70,12 @@ def read_trace(matrix_path, trace_path):
             encoded = row['cpu_wire_hex']
             require(type(encoded) is str and len(encoded) == 1160
                     and all(c in '0123456789abcdef' for c in encoded), f'CPU wire {key}')
+        if 'event_cpu_states' in row:
+            states=row['event_cpu_states']
+            require(type(states) is list and len(states)==len(row['events']), f'event states {key}')
+            for encoded in states:
+                require(type(encoded) is str and len(encoded)==1160
+                        and all(c in '0123456789abcdef' for c in encoded), f'event CPU wire {key}')
         if 'scope_states' in row:
             require(type(row['scope_states']) is list, f'scope states {key}')
             for state in row['scope_states']:

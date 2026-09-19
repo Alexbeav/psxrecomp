@@ -165,13 +165,15 @@ static inline void psx_cyc_step(CPUState *cpu, uint32_t reg_mask)
 static inline void psx_cyc_ram_load_timing(CPUState *cpu, uint32_t rt, uint32_t mask)
 {
     if (!(g_psx_load_delay < 0 ? psx_load_delay_enabled() : g_psx_load_delay)) return;
+    psx_cyc_base(cpu);
+    psx_cyc_deps(cpu, mask);
     if (cpu->ld_which_t == rt) cpu->ld_which_t = 0;
-    psx_cyc_step(cpu, mask);
-    psx_cyc_charge(cpu->read_fudge == 32 ? 7 : 5);
+    psx_cyc_lds(cpu);
     cpu->read_absorb[cpu->read_absorb_which] = 0;
     cpu->read_absorb_which = 0;
-    cpu->ld_which_t = (uint8_t)rt;
     cpu->ld_absorb = 5;
+    psx_cyc_charge(cpu->read_fudge == 32 ? 7 : 5);
+    cpu->ld_which_t = (uint8_t)rt;
 }
 
 #ifdef PSX_OVERLAY_DLL_BUILD
