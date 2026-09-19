@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "Independent clock and wire gates pass; actual timers consumer gate pending",
+  "status": "Independent raster clock, public wire and actual Timer1 consumer gates pass; independent review pending",
   "base": "077a03d4ec3d33a5b650a48974a3e1b8ca1b49c9",
   "source_boundary": "Primary hardware docs, declaration-only contract, authored black-box observations only. Old clock/wire implementation and emulator/profile tests not read. Whole clock header replaced mechanically; wire and callers unchanged.",
   "observed_model": "Independent transition model v3 matches all state/event/GP1 outputs in 82692 catalog rows. Status/deadline and continuation gates pending.",
@@ -10,13 +10,14 @@
     "evidence/raster-clock-hypothesis-v3.json"
   ],
   "limitations": [
-    "Measured compatibility, not hardware timing calibration",
-    "No service-clock/interrupt/GPU integration qualification yet",
+    "Measured compatibility, not hardware calibration",
+    "Full interrupt scheduler, CPU pending policy, GPU service/queue histories and arbitrary external callbacks not qualified",
+    "No host performance qualification",
     "No legal clearance or formal clean-room claim"
   ],
-  "tested_commit": "a01f2f6cede93a192a14e3743bbd458ff718eb87",
+  "tested_commit": "b2b112299119d4dcd474464d84a47e69a5ab99ef",
   "validation": {
-    "catalog": {
+    "clock_v1": {
       "cases": 728,
       "rows": 82692,
       "events": [
@@ -30,7 +31,7 @@
       ],
       "examples": []
     },
-    "continuation": {
+    "clock_v2": {
       "cases": 1857,
       "rows": 29247,
       "events": [
@@ -44,46 +45,33 @@
       ],
       "examples": []
     },
-    "controls": {
-      "controls": 29,
-      "all_detected": true,
-      "results": {
-        "status": true,
-        "until_rise": true,
-        "state_0": true,
-        "state_1": true,
-        "state_2": true,
-        "state_3": true,
-        "state_4": true,
-        "state_5": true,
-        "state_6": true,
-        "state_7": true,
-        "state_8": true,
-        "state_9": true,
-        "state_10": true,
-        "state_11": true,
-        "state_12": true,
-        "state_13": true,
-        "state_14": true,
-        "state_15": true,
-        "state_16": true,
-        "state_17": true,
-        "event_0": true,
-        "event_1": true,
-        "event_2": true,
-        "event_order": true,
-        "wire": true,
-        "return": true,
-        "type": true,
-        "missing": true,
-        "extra": true
-      }
+    "consumer_v1": {
+      "cases": 632,
+      "rows": 34472,
+      "events": [
+        243559,
+        243559
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "c927b625b7aea3ecd7a879ad328340cd6bf0d2cd83ad7097918fc2ec7687ae8f",
+        "c927b625b7aea3ecd7a879ad328340cd6bf0d2cd83ad7097918fc2ec7687ae8f"
+      ],
+      "examples": []
     },
-    "restores": {
-      "('restore', 1)": 1047,
-      "('long_epoch', 1)": 105,
-      "('bad_length', 0)": 420,
-      "('bad_fraction', 0)": 105
+    "consumer_v2": {
+      "cases": 734,
+      "rows": 16882,
+      "events": [
+        215599,
+        215599
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "3d06f57b21ff30dd80c45e04b1e087da950c931a9e12de25050a6a6a3d968e8b",
+        "3d06f57b21ff30dd80c45e04b1e087da950c931a9e12de25050a6a6a3d968e8b"
+      ],
+      "examples": []
     }
   },
   "callback_contract": "T77 production audit: callback ignores NULL context and consumes cycle/event/blank only. timers_source_raster_finish runs after advance; service consumer uses unobserved advance. Arbitrary external callbacks not qualified.",
@@ -92,5 +80,50 @@
     "Missing 9-bit readout offset wrap",
     "Unconditional blank-entry field update",
     "Applying saved readout field outside high-resolution interlace"
-  ]
+  ],
+  "controls": {
+    "controls": 31,
+    "all_detected": true,
+    "results": {
+      "status": true,
+      "until_rise": true,
+      "state_0": true,
+      "state_1": true,
+      "state_2": true,
+      "state_3": true,
+      "state_4": true,
+      "state_5": true,
+      "state_6": true,
+      "state_7": true,
+      "state_8": true,
+      "state_9": true,
+      "state_10": true,
+      "state_11": true,
+      "state_12": true,
+      "state_13": true,
+      "state_14": true,
+      "state_15": true,
+      "state_16": true,
+      "state_17": true,
+      "event_0": true,
+      "event_1": true,
+      "event_2": true,
+      "event_order": true,
+      "wire": true,
+      "return": true,
+      "type": true,
+      "missing": true,
+      "extra": true,
+      "timer_content": true,
+      "timer_length": true
+    }
+  },
+  "restores": {
+    "('restore', 1)": 1047,
+    "('long_epoch', 1)": 105,
+    "('bad_length', 0)": 420,
+    "('bad_fraction', 0)": 105
+  },
+  "consumer_gate": "632 authored actual timers.c callback/finish/MMIO cases and734 paired baseline-produced80+60-byte state restores; all fields exact",
+  "preservation": "Only input_route_raster_clock.h production change; field names/types/order/size and transitive string.h dependency retained. Wire reader, timers.c, service clock, interrupts and root LICENSE unchanged."
 }

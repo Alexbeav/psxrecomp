@@ -42,6 +42,30 @@ def check(evidence):
             if not detected:
                 raise AssertionError(name)
             results[name] = detected
+        consumer = json.loads((evidence / 'raster-consumer-experiments-v1.json').read_text())
+        consumer['cases'] = consumer['cases'][:1]
+        with (evidence / 'raster-consumer-v1-baseline.jsonl').open() as file:
+            next(file)
+            rows = [json.loads(next(file)) for _ in range(len(consumer['cases'][0]['operations']) + 1)]
+        mpath.write_text(json.dumps(consumer))
+        metadata = dict(metadata=dict(matrix_sha256=hashlib.sha256(mpath.read_bytes()).hexdigest()))
+        save(original, rows)
+        for name in ['timer_content', 'timer_length']:
+            altered = deepcopy(rows)
+            wire = bytearray.fromhex(altered[-1]['timer_wire_hex'])
+            if name == 'timer_content':
+                wire[0] ^= 1
+            else:
+                wire.pop()
+            altered[-1]['timer_wire_hex'] = wire.hex()
+            save(bad, altered)
+            try:
+                detected = bool(validate(mpath, [original, bad])['different_fields'])
+            except ValueError:
+                detected = True
+            if not detected:
+                raise AssertionError(name)
+            results[name] = detected
     return dict(controls=len(results), all_detected=all(results.values()), results=results)
 
 
