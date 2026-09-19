@@ -22,7 +22,8 @@ def vector(value, limits):
 def read_trace(matrix_path, trace_path):
     raw = Path(matrix_path).read_bytes()
     matrix = json.loads(raw.decode('utf-8-sig'))
-    wire = matrix['schema'] == 't172-cpu-timing-wire-experiment-v1'
+    memory = matrix['schema'] == 't172-cpu-timing-memory-experiment-v1'
+    wire = memory or matrix['schema'] == 't172-cpu-timing-wire-experiment-v1'
     require(wire or matrix['schema'] == 't172-cpu-timing-experiment-v1', 'matrix schema')
     cases = matrix['cases']
     require(len({c['id'] for c in cases}) == len(cases), 'duplicate case')
@@ -31,7 +32,8 @@ def read_trace(matrix_path, trace_path):
     rows = [json.loads(line) for line in Path(trace_path).read_text().splitlines()]
     metadata = rows.pop(0)['metadata']
     require(metadata['schema'] in ['t77-cpu-timing-observations-v1',
-                                    't77-cpu-timing-wire-observations-v1'], 'trace schema')
+                                    't77-cpu-timing-wire-observations-v1',
+                                    't77-cpu-timing-memory-observations-v1'], 'trace schema')
     require(metadata['matrix_sha256'] == hashlib.sha256(raw).hexdigest(), 'matrix hash')
     require(metadata['cases'] == len(cases), 'case count')
     require(metadata['observations'] == len(expected) == len(rows), 'row count')
@@ -40,6 +42,9 @@ def read_trace(matrix_path, trace_path):
               'return_value', 'events'}
     for row, key in zip(rows, expected):
         expected_fields = fields | ({'cpu_wire_hex'} if wire else set())
+        if memory:
+            expected_fields |= {'memory_flags'}
+            require(vector(row['memory_flags'], [1,1,1]), f'memory flags {key}')
         if 'scope_states' in row:
             expected_fields |= {'scope_states'}
         require(set(row) == expected_fields, 'row keys')
@@ -57,7 +62,7 @@ def read_trace(matrix_path, trace_path):
                 f'return {key}')
         require(type(row['events']) is list, f'events {key}')
         for event in row['events']:
-            require(vector(event, [10, u64, u64, u32, u32]) and event[0] >= 1,
+            require(vector(event, [12 if memory else 10, u64, u64, u32, u32]) and event[0] >= 1,
                     f'event {key}')
         if wire:
             encoded = row['cpu_wire_hex']

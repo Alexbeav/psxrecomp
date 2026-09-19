@@ -47,7 +47,8 @@ static inline void psx_cyc_charge(uint32_t cycles)
     if (g_event_step_conservative || g_ls_replay_active) {
         psx_advance_cycles(cycles);
     } else if (g_psx_cyc_local_acc) {
-        if (*g_psx_cyc_local_acc >= UINT32_MAX - cycles) psx_cyc_local_publish();
+        if ((uint64_t)*g_psx_cyc_local_acc + cycles >= (UINT64_C(1) << 28))
+            psx_cyc_local_publish();
         *g_psx_cyc_local_acc += cycles;
     } else if (g_psx_cyc_batch > UINT32_MAX - cycles) {
         psx_cyc_batch_flush();
