@@ -1,0 +1,32 @@
+{
+  "task": "T172",
+  "status": "First independently authored timer2 compatibility candidate; full comparison pending",
+  "base": "62f3bf4ec0d18984af36d5fde6ed40686f21693b",
+  "sources": [
+    {
+      "path": "I:\\Projects\\PSX-References\\research-and-documentation\\psx-spx\\docs\\timers.md",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "sha256": "e24283cf10e3e4da93d05173d075d72cb09e6309913d495df01025251110c02c",
+      "lines_read": "entire file"
+    }
+  ],
+  "exposure": "Hardware timers.md and authored public register/IRQ/deadline traces; no old timer header/emulator source/profile test bodies read",
+  "interface": "T77 declaration-only PsxTimer2Source fields and five public static inline functions; no copyright/SPDX notice in replaced header; root LICENSE untouched",
+  "reference": "TASEmulators/BizHawk519e14aa1ad7a9d6df2edc7808c5ed687dfee046 unchanged research core",
+  "observed_compatibility": [
+    "Any sync-enable stops count",
+    "No two-cycle write delay",
+    "Read request bit10zero, toggle flag does not halve IRQ counts",
+    "Counter/mode writes rearm one-shot; target writes retain it",
+    "Divider phase runs through CPU clock and stopped modes and survives writes",
+    "Explicit unsplit clock updates coalesce IRQ assertions",
+    "Mode keeps low10bits, flags track target/wrap and clear on explicit read except retained equality"
+  ],
+  "scope": "Preserve existing runtime profile semantics, not a silicon accuracy change",
+  "unresolved": [
+    "Complete trace comparison",
+    "Large/boundary interval behavior",
+    "State roundtrip/full runtime caller integration"
+  ],
+  "legal_claim": "None"
+}
