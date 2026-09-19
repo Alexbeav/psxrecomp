@@ -1717,8 +1717,10 @@ void FullFunctionEmitter::emit_dispatch(
     out += " * hand-written C registered against a guest address. NULL (the\n";
     out += " * default) = no overrides, dispatch identical to a build without\n";
     out += " * the tier. Returns 1 when the override handled the call; the\n";
-    out += " * guest resumes at $ra exactly as if the original ran jr $ra. */\n";
+    out += " * guest resumes at $ra unless the body selected a non-local pc. */\n";
     out += "extern int (*g_psx_func_override_hook)(CPUState* cpu, uint32_t phys);\n\n";
+    out += "extern int func_override_try_dispatch(CPUState* cpu, uint32_t target,\n";
+    out += "                                      uint32_t default_pc);\n\n";
     out += "#ifdef PSX_HAS_GAME_DISPATCH\n";
     out += "extern int psx_game_address_in_text(uint32_t addr);\n";
     out += "#endif\n\n";
@@ -2056,12 +2058,11 @@ void FullFunctionEmitter::emit_dispatch(
         out += "         * can never shadow a kernel service vector), BEFORE every\n";
         out += "         * game code backend, so one address-keyed hook covers the\n";
         out += "         * static EXE, runtime-loaded overlays and dirty RAM alike.\n";
-        out += "         * Handled (rc 1) => the override completed against guest\n";
-        out += "         * state; resume at $ra via the trampoline's normal\n";
-        out += "         * return/tail contract. rc 0 => fall through untouched. */\n";
+        out += "         * Handled (rc 1) => use the body's non-local cpu->pc when\n";
+        out += "         * set, otherwise resume at $ra. rc 0 => fall through\n";
+        out += "         * without changing the incoming cpu->pc. */\n";
         out += "        if (!found && g_psx_func_override_hook &&\n";
-        out += "            g_psx_func_override_hook(cpu, addr & 0x1FFFFFFFu)) {\n";
-        out += "            cpu->pc = cpu->gpr[31];\n";
+        out += "            func_override_try_dispatch(cpu, addr, cpu->gpr[31])) {\n";
         out += "            found = 1;\n";
         out += "        }\n";
     out += "#ifdef PSX_HAS_GAME_DISPATCH\n";

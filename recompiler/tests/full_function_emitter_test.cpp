@@ -197,6 +197,24 @@ void complementary_lwl_lwr_stays_native() {
            "complementary LWL/LWR remains native");
 }
 
+void function_override_preserves_nonlocal_pc() {
+    const auto result = run_case(
+        "override-continuation",
+        {
+            0x03E00008u,  // jr ra
+            0x00000000u,  // nop
+        },
+        {function_at(kBase, kBase + 4u, {kBase})});
+    expect(result.dispatch.find(
+               "func_override_try_dispatch(cpu, addr, cpu->gpr[31])") !=
+               std::string::npos,
+           "generated dispatch uses the continuation-preserving override helper");
+    expect(result.dispatch.find(
+               "cpu->pc = cpu->gpr[31];\n            found = 1;\n        }\n#ifdef PSX_HAS_GAME_DISPATCH") ==
+               std::string::npos,
+           "generated dispatch must not overwrite a non-local override continuation");
+}
+
 }  // namespace
 
 int main() {
@@ -221,6 +239,7 @@ int main() {
     fragment_split_load_falls_back();
     noncomplementary_lwl_falls_back();
     complementary_lwl_lwr_stays_native();
+    function_override_preserves_nonlocal_pc();
 
     if (failures != 0) {
         std::fprintf(stderr, "%d full-function emitter test(s) failed\n", failures);

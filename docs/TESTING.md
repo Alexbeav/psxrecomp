@@ -58,19 +58,21 @@ and catch whole regression classes without running a game. Registered from
 runtime tree cannot configure until a BIOS has been generated, and these need
 neither.
 
-## Known-failing tests (not registered)
+The `overlay_pair_dedup_runtime` test is an executable loader test, not a
+source-invariant guard. A plain recompiler build keeps it registered but
+disables it when CMake cannot find `gcc`, `cc`, or `clang`. The test builds
+redistributable fixture libraries and links a harness against the real loader.
 
-Three tests exist and are **deliberately left out of `ctest`** because they fail
-today. They are not registered because a suite with a known-red test is a suite
-people stop believing — the exact failure mode that took CI off pull requests in
-the first place (see `.github/workflows/cli-release.yml`). Fix or retire them,
-then wire them in.
+## Known-failing tests (registered as disabled)
+
+Two tests are **deliberately disabled in `ctest`** because they fail today. They
+stay registered so `ctest -N` counts them without making the suite red. Fix or
+retire each test, then remove its `DISABLED` property.
 
 | Test | Status |
 |---|---|
 | `runtime/tests/test_interpreter_perf_guards.py` | Asserts `psx_devices_mmio_sync` invalidates the inline cycle limit. It does not: the function delegates to `psx_devices_service_to_now()` (which clears `g_psx_cycle_fast_limit`, `psx_cycles.c:161`) **or** to `psx_devices_recompute_deadline()` (`:153-157`), and that second branch never clears it. Needs a timing owner to decide whether the guard found a real hole or the invariant moved. The guard is also partly stale — it still names `s_next_service_cycle`, since renamed to `psx_next_service_cycle`. |
 | `runtime/tests/test_runtime_perf_diag_guards.py` | Asserts a substring that is no longer present in the runtime source. Either the diagnostic was removed or it was renamed; the guard has not been updated either way. |
-| `runtime/tests/test_overlay_pair_dedup_runtime.py` | Needs its companion harness (`overlay_pair_dedup_harness.c`) built. Unlike the other Python tests it is not source-only, so it needs a build target before it can be registered. |
 
 ## Tests that are not in `ctest` and should not be
 

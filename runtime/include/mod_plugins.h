@@ -56,6 +56,15 @@ int psx_mod_register_function_override(const char* id, uint32_t address,
                                        const uint32_t* expected_words,
                                        int n_words, int32_t credit);
 
+/* Exact overlay identity form. `lo_len_pairs` contains n_ranges guest code
+ * {start, byte_length} pairs. The override runs only while their concatenated
+ * CRC32 equals expected_crc. Use this for overlay addresses; the short word
+ * prefix above does not identify a complete overlay generation. */
+int psx_mod_register_function_override_exact(
+    const char* id, uint32_t address, PSXModFunctionOverrideFn fn,
+    const uint32_t* lo_len_pairs, int n_ranges, uint32_t expected_crc,
+    int32_t credit);
+
 /* Narrow guest services available to trusted plugin callbacks. */
 int psx_mod_game_started(void);
 uint8_t psx_mod_read_byte(uint32_t address);

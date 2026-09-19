@@ -27,17 +27,25 @@ def codegen_leaf() -> str:
     hash_header = (RUNTIME / "include" / "overlay_codegen_hash.h")
     version = "0"
     code_hash = "00000000"
+    flavor = "0"
     if api.is_file():
         match = re.search(r"PSX_OVERLAY_CODEGEN_VER\s+(\d+)",
                           api.read_text(encoding="utf-8"))
         if match:
             version = match.group(1)
+        match = re.search(r"PSX_OVERLAY_FLAVOR\s+(\d+)",
+                          api.read_text(encoding="utf-8"))
+        if match:
+            flavor = match.group(1)
     if hash_header.is_file():
         match = re.search(r"PSX_OVERLAY_CODEGEN_HASH\s+0x([0-9A-Fa-f]{8})",
                           hash_header.read_text(encoding="utf-8"))
         if match:
             code_hash = match.group(1).lower()
-    return f"cg{version}_{code_hash}"
+    # overlay_loader_init below uses config hash zero. Keep the fixture on the
+    # runtime's complete cache identity so it reaches the loader behavior under
+    # test instead of stopping at the stale-cache guard (FAIL-061).
+    return f"cg{version}_{code_hash}_gc00000000_f{flavor}"
 
 
 def arch_abi() -> str:
@@ -181,10 +189,11 @@ def main() -> int:
         compile_fixture(args.gcc, full_second, instance=2)
         compile_fixture(args.gcc, partial, instance=1, partial=True)
         compile_harness(args.gcc, harness)
+        run([str(harness), "--static-match-lifecycle"])
         for name in ("alias-at-cap", "manifest-mismatch",
                      "provenance-mismatch", "cross-tier", "partial-first"):
             scenario(tmp, harness, full_first, full_second, partial, name)
-    print("PASS: executable overlay whole-pair dedup behavior")
+    print("PASS: executable overlay lifecycle and whole-pair dedup behavior")
     return 0
 
 

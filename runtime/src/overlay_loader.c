@@ -553,7 +553,6 @@ static uint32_t cand_gensum(const Candidate *c) {
     return s;
 }
 
-#ifdef PSX_HAS_OVERLAY_DISPATCH
 /* Static-overlay validation uses the same exact-code-range contract as the
  * dynamic DLL loader. Generated code passes immutable {phys_lo, len} pairs and
  * the CRC of the bytes it was compiled from. A page-generation cache keeps the
@@ -643,7 +642,10 @@ void overlay_loader_static_match_stats(uint64_t *rehashes,
     if (crc_misses) *crc_misses = s_static_match_crc_misses;
     if (gen_fastpath) *gen_fastpath = s_static_match_gen_fastpath;
 }
-#endif
+
+void overlay_loader_static_match_cache_clear(void) {
+    memset(s_static_match_cache, 0, sizeof(s_static_match_cache));
+}
 
 /* ---- Per-DLL code-range manifest --------------------------------------- */
 /* Strict v2 line format emitted by tools/compile_overlays.py beside each DLL:
@@ -2855,9 +2857,7 @@ void overlay_loader_resync_validation_after_restore(void)
     int i;
     for (i = 0; i < s_cand_n; i++)
         s_cand[i].val_gen ^= 0x80000000u;
-#ifdef PSX_HAS_OVERLAY_DISPATCH
-    memset(s_static_match_cache, 0, sizeof(s_static_match_cache));
-#endif
+    overlay_loader_static_match_cache_clear();
 }
 
 /* Re-scan the cache dir for DLLs compiled after init (step 2.8 autocompile)

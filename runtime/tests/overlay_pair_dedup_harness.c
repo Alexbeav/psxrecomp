@@ -1,6 +1,7 @@
 #define PSX_OVERLAY_DLL_BUILD 1
 #include "overlay_loader.h"
 #undef PSX_OVERLAY_DLL_BUILD
+#include "crc32.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -22,6 +23,8 @@ _Static_assert(PSX_OVERLAY_TEST_CANDIDATE_CAP == 4,
 
 static uint8_t s_ram[RAM_SIZE];
 static uint8_t s_scratch[1024];
+static uint32_t s_page_generation;
+static int s_ram_available = 1;
 
 uint32_t g_debug_current_func_addr;
 uint32_t g_debug_last_store_pc;
@@ -36,10 +39,10 @@ uint64_t s_frame_count;
 int g_shadow_mmio_watch;
 uint64_t g_shadow_mmio_hits;
 
-uint8_t *memory_get_ram_ptr(void) { return s_ram; }
+uint8_t *memory_get_ram_ptr(void) { return s_ram_available ? s_ram : NULL; }
 uint8_t *memory_get_scratchpad_ptr(void) { return s_scratch; }
 uint32_t overlay_watch_pagegen_sum(uint32_t phys, uint32_t len) {
-    (void)phys; (void)len; return 0;
+    (void)phys; (void)len; return s_page_generation;
 }
 void overlay_watch_set_range(uint32_t phys, uint32_t len) {
     (void)phys; (void)len;
@@ -56,6 +59,36 @@ void dirty_ram_xprobe_call_note(CPUState *cpu, uint32_t target,
                                 uint32_t ra, uint8_t phase) {
     (void)cpu; (void)target; (void)ra; (void)phase;
 }
+
+int psx_netplay_is_resimulating(void) { return 0; }
+void psx_pgxp_load(CPUState *cpu, uint32_t instr, uint32_t addr,
+                   uint32_t value) {
+    (void)cpu; (void)instr; (void)addr; (void)value;
+}
+void psx_pgxp_store(CPUState *cpu, uint32_t instr, uint32_t addr,
+                    uint32_t value) {
+    (void)cpu; (void)instr; (void)addr; (void)value;
+}
+void psx_pgxp_alu(CPUState *cpu, uint32_t instr, uint32_t result,
+                  uint32_t s1, uint32_t s2) {
+    (void)cpu; (void)instr; (void)result; (void)s1; (void)s2;
+}
+void psx_pgxp_muldiv(CPUState *cpu, uint32_t instr, uint32_t hi,
+                     uint32_t lo, uint32_t s1, uint32_t s2) {
+    (void)cpu; (void)instr; (void)hi; (void)lo; (void)s1; (void)s2;
+}
+void psx_pgxp_cop2(CPUState *cpu, uint32_t instr, uint32_t value,
+                   uint32_t addr) {
+    (void)cpu; (void)instr; (void)value; (void)addr;
+}
+uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced) {
+    (void)forced; return vanilla;
+}
+uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla,
+                                   uint32_t forced) {
+    (void)site; (void)forced; return vanilla;
+}
+uint32_t psx_ws_angle_widen(uint32_t vanilla) { return vanilla; }
 
 void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t ra) {
     (void)cpu; (void)addr; (void)ra;
@@ -223,6 +256,89 @@ static int expect_int(const char *what, long long actual, long long expected) {
     return 0;
 }
 
+static int expect_static_match_stats(uint64_t want_rehashes,
+                                     uint64_t want_misses,
+                                     uint64_t want_fastpath) {
+    uint64_t rehashes = 0, misses = 0, fastpath = 0;
+    overlay_loader_static_match_stats(&rehashes, &misses, &fastpath);
+    return expect_int("static rehashes", (long long)rehashes,
+                      (long long)want_rehashes) &
+           expect_int("static CRC misses", (long long)misses,
+                      (long long)want_misses) &
+           expect_int("static generation fast-path", (long long)fastpath,
+                      (long long)want_fastpath);
+}
+
+static int static_match_lifecycle(void) {
+    static const uint32_t ranges[] = {
+        0x80001000u, 7u,
+        0xA0003000u, 9u,
+    };
+    static const uint32_t zero_length[] = {0x80001000u, 0u};
+    static const uint32_t out_of_bounds[] = {0x801FFFFCu, 8u};
+    uint32_t crc = 0xFFFFFFFFu;
+    int ok = 1;
+
+    s_ram_available = 1;
+    s_page_generation = 0;
+    for (uint32_t i = 0; i < RAM_SIZE; i++)
+        s_ram[i] = (uint8_t)((i * 37u + 11u) & 0xFFu);
+    crc = crc32_update(crc, s_ram + 0x1000u, 7u);
+    crc = crc32_update(crc, s_ram + 0x3000u, 9u) ^ 0xFFFFFFFFu;
+    overlay_loader_static_match_cache_clear();
+
+    ok &= expect_int("cold exact match",
+                     psx_overlay_static_code_matches(ranges, 2u, crc), 1);
+    ok &= expect_static_match_stats(1u, 0u, 0u);
+    ok &= expect_int("warm exact match",
+                     psx_overlay_static_code_matches(ranges, 2u, crc), 1);
+    ok &= expect_static_match_stats(1u, 0u, 1u);
+
+    const uint8_t original = s_ram[0x3004u];
+    s_ram[0x3004u] ^= 0x5Au;
+    s_page_generation++;
+    ok &= expect_int("replacement rejected",
+                     psx_overlay_static_code_matches(ranges, 2u, crc), 0);
+    ok &= expect_static_match_stats(2u, 1u, 1u);
+    ok &= expect_int("warm replacement rejected",
+                     psx_overlay_static_code_matches(ranges, 2u, crc), 0);
+    ok &= expect_static_match_stats(2u, 1u, 2u);
+
+    s_ram[0x3004u] = original;
+    s_page_generation++;
+    ok &= expect_int("restored bytes accepted",
+                     psx_overlay_static_code_matches(ranges, 2u, crc), 1);
+    ok &= expect_static_match_stats(3u, 1u, 2u);
+    ok &= expect_int("warm restored bytes accepted",
+                     psx_overlay_static_code_matches(ranges, 2u, crc), 1);
+    ok &= expect_static_match_stats(3u, 1u, 3u);
+
+    overlay_loader_static_match_cache_clear();
+    ok &= expect_int("explicit reset forces rehash",
+                     psx_overlay_static_code_matches(ranges, 2u, crc), 1);
+    ok &= expect_static_match_stats(4u, 1u, 3u);
+
+    ok &= expect_int("null ranges rejected",
+                     psx_overlay_static_code_matches(NULL, 1u, crc), 0);
+    ok &= expect_int("zero range count rejected",
+                     psx_overlay_static_code_matches(ranges, 0u, crc), 0);
+    ok &= expect_int("range-count cap enforced",
+                     psx_overlay_static_code_matches(ranges, 4097u, crc), 0);
+    ok &= expect_int("zero length rejected",
+                     psx_overlay_static_code_matches(zero_length, 1u, crc), 0);
+    ok &= expect_int("out-of-bounds range rejected",
+                     psx_overlay_static_code_matches(out_of_bounds, 1u, crc), 0);
+    s_ram_available = 0;
+    ok &= expect_int("missing RAM rejected",
+                     psx_overlay_static_code_matches(ranges, 2u, crc), 0);
+    s_ram_available = 1;
+    ok &= expect_static_match_stats(4u, 7u, 3u);
+
+    if (ok)
+        puts("PASS static-match replacement/restore/reset lifecycle");
+    return ok ? 0 : 1;
+}
+
 static uint32_t loader_owner_count(void) {
     uint32_t loads = 0;
     overlay_loader_get_counters(&loads, NULL, NULL, NULL, NULL, NULL,
@@ -273,6 +389,8 @@ static int reveal_second_pair(const char *second) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--static-match-lifecycle") == 0)
+        return static_match_lifecycle();
     if (argc != 5) {
         fprintf(stderr, "usage: %s <cache-root> <scenario> <first> <second>\n",
                 argv[0]);

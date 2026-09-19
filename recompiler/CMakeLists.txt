@@ -628,8 +628,25 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
 
+        # This executable loader test is not a source-invariant guard. It
+        # builds redistributable fixture DLLs and a real-loader harness with a
+        # GCC-compatible command line. Keep plain MSVC-only recompiler builds
+        # green when that separate compiler is unavailable, but keep the test
+        # registered and visible to the registration audit.
+        find_program(PSX_OVERLAY_FIXTURE_CC NAMES gcc cc clang)
+        add_test(
+            NAME overlay_pair_dedup_runtime
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_pair_dedup_runtime.py
+                    --gcc ${PSX_OVERLAY_FIXTURE_CC}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        if(NOT PSX_OVERLAY_FIXTURE_CC)
+            set_tests_properties(overlay_pair_dedup_runtime
+                                 PROPERTIES DISABLED TRUE)
+        endif()
+
         # ---- known-failing guards: DISABLED, not de-registered ---------------
-        # These three were previously left out of the list above with a comment
+        # These two were previously left out of the list above with a comment
         # explaining that they FAIL and that wiring a red check would recreate
         # the problem that took CI off PRs. That reasoning is right; the remedy
         # was not. De-registering is precisely how a test stops being counted,
@@ -646,12 +663,9 @@ if(BUILD_TESTING)
         #                              s_next_service_cycle
         #   runtime_perf_diag_guards   asserts a substring no longer present in
         #                              the runtime source
-        #   overlay_pair_dedup_runtime needs its companion harness built; not a
-        #                              source-only guard
         foreach(_t IN ITEMS
                 interpreter_perf_guards
-                runtime_perf_diag_guards
-                overlay_pair_dedup_runtime)
+                runtime_perf_diag_guards)
             add_test(
                 NAME ${_t}
                 COMMAND ${Python3_EXECUTABLE}

@@ -14742,6 +14742,17 @@ soft_return_lobby:
                                  mod_error.c_str());
                     SDL_Quit();
                     return 1;
+                } else if (!PSXRecompV4::mod_runtime_arm_function_overrides(
+                               &mod_error)) {
+                    disc_path_str = resolved_disc.string();
+                    /* Commit disarmed the previous override set and
+                     * session_reboot is past mod_runtime_activate_plugins,
+                     * so re-arm here. On failure the plan is dropped and the
+                     * rematch runs vanilla; say so rather than stay silent. */
+                    std::fprintf(stderr,
+                                 "psxrecomp: selected mods disabled for "
+                                 "rematch: %s\n",
+                                 mod_error.c_str());
                 }
             }
             apply_netplay_local_viewport_aspect(net_cfg.enabled);
