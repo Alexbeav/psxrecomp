@@ -193,6 +193,8 @@ static void spu_event_record(uint8_t kind, int voice, uint32_t addr) {
         e->vol_r   = 0;
     }
     s_event_idx++;
+}
+
 /* Independent envelope replacement from hardware documentation and measured
  * register behavior. See runtime/tests/spu_envelope_rate_provenance.json.
  * Earlier implementations remain in history; this is no license clearance.
