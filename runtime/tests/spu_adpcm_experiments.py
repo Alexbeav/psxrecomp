@@ -63,9 +63,9 @@ def matrix():
                 [block(8, 4, patterns["ramp"]), block(8, 3, patterns["extremes"])], extra=extra)
 
     assert len({c["id"] for c in cases}) == len(cases)
-    return {"schema": "t172-spu-experiment-v1", "matrix_revision": "adpcm-1",
+    return {"schema": "t172-spu-experiment-v1", "matrix_revision": "adpcm-2",
             "reset": "cold core and zero RAM per case, then case synthetic preload",
-            "preload": [], "observe_audio": True,
+            "preload": [], "audio": True,
             "observe": [VOICE + 12, VOICE + 14, 0x1F801D9C, 0x1F801D9E,
                         0x1F801DAE, 0x1F801E04, 0x1F801E06, 0x1F801DB8, 0x1F801DBA],
             "observation_timing": "reset, each write, each completed stereo sample",

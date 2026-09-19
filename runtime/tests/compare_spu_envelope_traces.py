@@ -27,8 +27,16 @@ def compare(paths):
                 assert r[key] == b[key] == c[key]
             assert r["registers"].keys() == b["registers"].keys() == c["registers"].keys()
             rows += 1
-            for reg, ref in r["registers"].items():
-                before, after = b["registers"][reg], c["registers"][reg]
+            values = []
+            assert len({"audio" in row for row in [r, b, c]}) == 1
+            for row in [r, b, c]:
+                fields = dict(row["registers"])
+                if "audio" in row:
+                    assert len(row["audio"]) == 2
+                    fields.update(audio_left=row["audio"][0], audio_right=row["audio"][1])
+                values.append(fields)
+            for reg, ref in values[0].items():
+                before, after = values[1][reg], values[2][reg]
                 if after == ref:
                     category = "all_match" if before == ref else "corrected"
                 elif before == ref:

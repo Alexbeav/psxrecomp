@@ -68,13 +68,19 @@ def validate(matrix, first, second=None):
         values = [registers[address] for address in addresses]
         canonical = {"case_id": case_id, "event_index": event,
                      "sample_index": sample, "kind": kind, "registers": registers}
+        if matrix.get("audio"):
+            pcm = row.get("audio")
+            if (not isinstance(pcm, list) or len(pcm) != 2 or
+                    any(type(v) is not int or not -32768 <= v <= 32767 for v in pcm)):
+                raise ValueError(f"invalid stereo PCM: {case_id}/{event}/{sample}")
+            canonical["audio"] = pcm
         if second is not None:
             other = next(second, None)
             if other is None or any(other.get(key) != value for key, value in canonical.items()):
                 raise ValueError(f"repeat differs at {case_id}/{event}/{sample}")
         digest.update((json.dumps(canonical, sort_keys=True, separators=(",", ":")) + "\n").encode())
         # Store envelope changes only; the digest still covers ENDX and status.
-        envelope = values[:8]
+        envelope = values[:8] + (canonical["audio"] if matrix.get("audio") else [])
         if event == -1:
             summary[case_id] = []
             previous = None
@@ -110,6 +116,23 @@ def self_test():
         pass
     else:
         raise AssertionError("unequal repeat accepted")
+    matrix["audio"] = True
+    audio_rows = [dict(row, audio=[-32768, 32767]) for row in rows]
+    assert validate(matrix, iter(audio_rows), iter(audio_rows))["observations"] == 4
+    for audio in [None, [], [0], [0, 32768], [True, 0]]:
+        bad = [dict(audio_rows[0], audio=audio)] + audio_rows[1:]
+        try:
+            validate(matrix, iter(bad))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid PCM accepted")
+    try:
+        validate(matrix, iter(audio_rows), iter([dict(audio_rows[0], audio=[0, 0])] + audio_rows[1:]))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unequal PCM accepted")
 
 
 if __name__ == "__main__":
