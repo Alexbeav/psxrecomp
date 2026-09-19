@@ -335,6 +335,8 @@ callback. An unexpected arming error removes the complete package set.
 It also disables all main-memory writes, disc patches, and callbacks from the
 selected plan. A later successful commit clears this failure state. Invalid
 plugin ids fail during registration.
+An offline rematch that cannot arm its overrides also restores the original
+disc path before rebooting the session.
 
 Calls and unlinked function tail entries use the same override. These entries
 are `j`, or `jr` through a register other than `$ra`. A `jr $ra` is a return.
@@ -342,6 +344,9 @@ A handled override normally continues at `$ra`. Dispatch preserves a nonzero
 `cpu->pc` that the override, a guest call, or a wrapped original selects. Every
 matched-address consult increments `calls`. An identity mismatch also
 increments `guard_misses`.
+For a tail transfer, the interpreter consults the override only when it keeps
+executing the target locally. Otherwise the outer dispatcher owns the consult,
+so a hook that declines the transfer does not run twice.
 
 Every registration states a required guest-cycle `credit`. Use a fixed charge
 for a measured constant cost. Use `0` for a mod with no hardware analog. Use

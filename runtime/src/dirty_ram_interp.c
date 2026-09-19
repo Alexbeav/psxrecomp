@@ -3228,6 +3228,10 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             }
             target = cpu->pc;
             uint32_t target_phys = target & 0x1FFFFFFFu;
+            const int local_dirty_target = allow_local_dirty_flow &&
+                target != 0 && target != stop_addr &&
+                phys_is_overlay_flow_region(target_phys) &&
+                dirty_ram_is_dirty(target_phys);
             /* A J/JR can be an unlinked function tail entry or an ordinary
              * intra-function jump. Only a known static or overlay function
              * entry proves the former. Check the override after the interrupt
@@ -3258,7 +3262,9 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 current_function_entry_phys != 0u &&
                 target_phys != current_function_entry_phys &&
                 target_is_function_entry;
-            if (unlinked_tail && proven_tail_entry &&
+            /* Surfaced transfers are consulted by the outer dispatcher.
+             * Only local flow needs an interpreter-owned consult. */
+            if (local_dirty_target && unlinked_tail && proven_tail_entry &&
                 !g_precise_mode && !g_ls_replay_active &&
                 func_override_try_dispatch(cpu, target, cpu->gpr[31])) {
                 g_dirty_ram_blocks_run++;
@@ -3295,10 +3301,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 cpu->pc = target;  /* surfaced; trampoline re-dispatches flat */
             }
 #endif
-            if (allow_local_dirty_flow && target != 0 &&
-                target != stop_addr &&
-                phys_is_overlay_flow_region(target_phys) &&
-                dirty_ram_is_dirty(target_phys)) {
+            if (local_dirty_target) {
                 if (unlinked_tail && target_is_function_entry)
                     current_function_entry_phys = target_phys;
                 /* A runtime overlay may start executing while its final code

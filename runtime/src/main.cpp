@@ -14744,6 +14744,7 @@ soft_return_lobby:
                     return 1;
                 } else if (!PSXRecompV4::mod_runtime_arm_function_overrides(
                                &mod_error)) {
+                    disc_path_str = resolved_disc.string();
                     /* Commit disarmed the previous override set and
                      * session_reboot is past mod_runtime_activate_plugins,
                      * so re-arm here. On failure the plan is dropped and the

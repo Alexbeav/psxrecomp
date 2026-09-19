@@ -562,6 +562,12 @@ if(BUILD_TESTING)
         add_test(NAME func_override_route_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_func_override_routes.py)
+        if(NOT MSVC)
+            add_test(NAME func_override_tail_dispatch_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_func_override_tail_dispatch.py
+                             --cc ${CMAKE_C_COMPILER})
+        endif()
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
