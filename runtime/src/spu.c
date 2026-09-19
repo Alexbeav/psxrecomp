@@ -22,6 +22,7 @@
 #include "audio_trace.h"
 #include "crc32.h"
 #include "psx_cycles.h"
+#include "spu_envelope_rate.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,116 +193,14 @@ static void spu_event_record(uint8_t kind, int voice, uint32_t addr) {
         e->vol_r   = 0;
     }
     s_event_idx++;
-}
-
-/* PS1 envelope rate decoder. Ported verbatim from Beetle's CalcVCDelta
- * (beetle-psx/mednafen/psx/spu.cpp). Each call emits the per-step
- * `increment` to add to env_level, and `divinco` added to a divider —
- * level is updated only when divider crosses 0x8000. The combination
- * encodes both linear and pseudo-exponential ramps at PSX-faithful
- * rates (rates 0..127 span ~0.1 ms .. ~30+ s). */
-static void calc_vc_delta(uint8_t zs, uint8_t speed, int log_mode, int dec_mode,
-                          int inv_increment, int16_t current,
-                          int *out_increment, int *out_divinco)
+/* Independent envelope replacement from hardware documentation and measured
+ * register behavior. See runtime/tests/spu_envelope_rate_provenance.json.
+ * Earlier implementations remain in history; this is no license clearance.
+ */
+static void adsr_run(int idx, SpuVoice *v)
 {
-    int increment = (7 - (speed & 0x3));
-    if (inv_increment) increment = ~increment;
-    int divinco = 32768;
-
-    if (speed < 0x2C)
-        increment = (unsigned)increment << ((0x2F - speed) >> 2);
-    if (speed >= 0x30)
-        divinco >>= (speed - 0x2C) >> 2;
-
-    if (log_mode) {
-        if (dec_mode) {
-            increment = (current * increment) >> 15;
-        } else if ((current & 0x7FFF) >= 0x6000) {
-            if (speed < 0x28) {
-                increment >>= 2;
-            } else if (speed >= 0x2C) {
-                divinco >>= 2;
-            } else {
-                increment >>= 1;
-                divinco   >>= 1;
-            }
-        }
-    }
-
-    if (divinco == 0 && speed < zs) divinco = 1;
-
-    *out_increment = increment;
-    *out_divinco   = divinco;
-}
-
-/* Step ADSR envelope by one output sample for voice `idx`. Mirrors
- * Beetle's PS_SPU::RunEnvelope. */
-static void adsr_run(int idx, SpuVoice *v) {
-    uint32_t raw = (uint32_t)spu_regs[(uint32_t)idx * 8u + 4u]
-                 | ((uint32_t)spu_regs[(uint32_t)idx * 8u + 5u] << 16);
-
-    int     Sl           = (int)(raw >> 0)  & 0x0F;
-    int     Dr           = (int)(raw >> 4)  & 0x0F;
-    int     Ar           = (int)(raw >> 8)  & 0x7F;
-    int     attack_exp   = (int)((raw >> 15) & 1);
-    int     Rr           = (int)(raw >> 16) & 0x1F;
-    int     release_exp  = (int)((raw >> 21) & 1);
-    int     Sr           = (int)(raw >> 22) & 0x7F;
-    int     sustain_dec  = (int)((raw >> 30) & 1);
-    int     sustain_exp  = (int)((raw >> 31) & 1);
-    int     sustain_lvl  = (Sl + 1) << 11;
-
-    /* Attack tops out at 0x7FFF — switch to Decay (Beetle does this
-     * before the switch on Phase). */
-    if (v->adsr_phase == ADSR_ATTACK && v->env_level == 0x7FFF)
-        v->adsr_phase = ADSR_DECAY;
-
-    int increment = 0, divinco = 0;
-    int16_t uoflow_reset = 0;
-
-    switch (v->adsr_phase) {
-    case ADSR_ATTACK:
-        calc_vc_delta(0x7F, (uint8_t)Ar, attack_exp, 0, 0,
-                      (int16_t)v->env_level, &increment, &divinco);
-        uoflow_reset = 0x7FFF;
-        break;
-    case ADSR_DECAY:
-        calc_vc_delta(0x1F << 2, (uint8_t)(Dr << 2), 1, 1, 1,
-                      (int16_t)v->env_level, &increment, &divinco);
-        uoflow_reset = 0;
-        break;
-    case ADSR_SUSTAIN:
-        calc_vc_delta(0x7F, (uint8_t)Sr, sustain_exp, sustain_dec, sustain_dec,
-                      (int16_t)v->env_level, &increment, &divinco);
-        uoflow_reset = sustain_dec ? 0 : 0x7FFF;
-        break;
-    case ADSR_RELEASE:
-        calc_vc_delta(0x1F << 2, (uint8_t)(Rr << 2), release_exp, 1, 1,
-                      (int16_t)v->env_level, &increment, &divinco);
-        uoflow_reset = 0;
-        break;
-    default:
-        return;
-    }
-
-    v->adsr_divider += (uint32_t)divinco;
-    if (v->adsr_divider & 0x8000u) {
-        uint16_t prev = v->env_level;
-        v->adsr_divider = 0;
-        v->env_level = (uint16_t)((int)v->env_level + increment);
-
-        if (v->adsr_phase == ADSR_ATTACK) {
-            /* If high bit just rolled over (0→1), clamp to uoflow_reset. */
-            if (((prev ^ v->env_level) & v->env_level) & 0x8000u)
-                v->env_level = (uint16_t)uoflow_reset;
-        } else {
-            if (v->env_level & 0x8000u)
-                v->env_level = (uint16_t)uoflow_reset;
-        }
-
-        if (v->adsr_phase == ADSR_DECAY && v->env_level < (uint16_t)sustain_lvl)
-            v->adsr_phase = ADSR_SUSTAIN;
-    }
+    spu_envelope_adsr_step(&v->env_level, &v->adsr_divider, &v->adsr_phase,
+                           spu_regs[idx * 8 + 4], spu_regs[idx * 8 + 5]);
 }
 
 static inline int16_t clamp16(int32_t v) {
@@ -339,51 +238,17 @@ static inline int16_t volume_reg_decode(uint16_t raw) {
  * effect immediately; a sweep-mode write starts the sweep FROM the current
  * live level (documented reading: the sweep register programs an envelope,
  * it does not itself carry a target level). The divider restarts either way. */
-static void sweep_env_write(SweepEnv *sw, uint16_t raw) {
-    if (!(raw & 0x8000u))
-        sw->level = volume_reg_decode(raw);
-    sw->divider = 0;
+static void sweep_env_write(SweepEnv *sw, uint16_t raw)
+{
+    /* Register storage is owned by the caller. The sample applies its value. */
+    (void)sw;
+    (void)raw;
 }
 
-/* Step one sweep envelope by one 44100 Hz output sample. No-op for
- * direct-mode registers. Sweep register layout (bit15=1):
- *   bit14   mode      0=linear 1=exponential
- *   bit13   direction 0=increase 1=decrease
- *   bit12   phase     0=positive 1=negative
- *   bit6-0  rate      (bits 0-1 step, bits 2-6 shift) — same 7-bit rate
- *                     format as ADSR, so calc_vc_delta is reused verbatim.
- *
- * DOCUMENTED-GAP: the documentation does not spell out how the "phase"
- * bit interacts with a level whose sign disagrees with it. Model chosen:
- * the envelope machinery always operates on a 0..0x7FFF working value in
- * the phase's domain (negative phase mirrors the level), and a level on the
- * wrong side of zero is clamped to 0 before stepping. Increase saturates at
- * 0x7FFF, decrease at 0, matching the ADSR clamp behaviour. Candidate for
- * oracle verification. */
-static void sweep_env_step(SweepEnv *sw, uint16_t raw) {
-    if (!(raw & 0x8000u)) return;
-    int     exp_mode  = (raw >> 14) & 1;
-    int     dec_mode  = (raw >> 13) & 1;
-    int     neg_phase = (raw >> 12) & 1;
-    uint8_t rate      = (uint8_t)(raw & 0x7F);
-
-    int32_t working = sw->level;
-    if (neg_phase) working = -working;
-    if (working < 0) working = 0;
-    if (working > 0x7FFF) working = 0x7FFF;
-
-    int increment = 0, divinco = 0;
-    calc_vc_delta(0x7F, rate, exp_mode, dec_mode, dec_mode,
-                  (int16_t)working, &increment, &divinco);
-
-    sw->divider += (uint32_t)divinco;
-    if (sw->divider & 0x8000u) {
-        sw->divider = 0;
-        working += increment;
-        if (working < 0) working = 0;
-        if (working > 0x7FFF) working = 0x7FFF;
-        sw->level = (int16_t)(neg_phase ? -working : working);
-    }
+/* Advance the independently authored sweep at the sample boundary. */
+static void sweep_env_step(SweepEnv *sw, uint16_t raw)
+{
+    spu_envelope_sweep_step(&sw->level, &sw->divider, raw);
 }
 
 /* Live effective volume of a volume register: the register decode in direct

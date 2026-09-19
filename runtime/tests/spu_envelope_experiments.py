@@ -168,6 +168,10 @@ def matrix():
             voice(0x000F, 0x1FCE) + [write(KON, 1), tick(16),
                                     write(keys[0], 1), write(keys[1], 1), tick(32)])
 
+    for case in cases:
+        if case["id"].startswith("sustain_slow_limit"):
+            case["operations"].append(tick(16))
+
     assert len({case["id"] for case in cases}) == len(cases)
     for case in cases:
         for op in case["operations"]:
@@ -178,7 +182,7 @@ def matrix():
                 assert op["op"] == "tick" and 0 < op["samples"] <= 32776
     return {
         "schema": "t172-spu-experiment-v1",
-        "matrix_revision": 3,
+        "matrix_revision": 4,
         "reset": "cold before every case; fresh core state and zero SPU RAM",
         "preload": [{"address": 0x1000, "bytes": [0x0C, 0x07] + [0] * 14}],
         "observe": [LEVEL, BASE + 28, 0x1F801E00, 0x1F801E02,
