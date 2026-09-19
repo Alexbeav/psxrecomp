@@ -187,6 +187,14 @@ python -B tools/tasreplays/test_native_input_identity.py
 python -B tools/tasreplays/test_pepsiman.py
 ```
 
+Failed-load admission has a separate full-runtime integration gate:
+[`state_load_atomicity`](../runtime/tests/state_load_atomicity/README.md).
+Run it against the candidate's native consumer build in addition to CTest. It
+checks version-10 raw/compressed states, normal and comparison profiles,
+malformed sections, dependency order, and allocation failures. No guest code
+runs. A refused load must preserve the serialized machine; passing a replay or
+the section-codec tests alone does not establish that property.
+
 ## Scope
 
 The results below describe their recorded experimental revisions. The durable

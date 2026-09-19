@@ -124,6 +124,7 @@ int cdrom_data_read_active(void);
 /* boot_state / netplay digest — full controller FSM (sector FIFOs included). */
 uint32_t cdrom_snapshot_bytes(void);
 void     cdrom_snapshot_write(uint8_t *p);
+int      cdrom_snapshot_validate(const uint8_t *p, uint32_t len);
 int      cdrom_snapshot_read(const uint8_t *p, uint32_t len);
 
 /* After savestate restore: clamp long CD second-response / read-start delays

@@ -1319,8 +1319,9 @@ static int mdec_snapshot_parse(const uint8_t *p, uint32_t len,
     if (input_count > MDEC_SNAP_INPUT_MAX || output_size > MDEC_SNAP_OUTPUT_MAX)
         return 0;
     if (next->output_pos > output_size) return 0;
-    if ((size_t)(r.end - r.p) <
-        (size_t)input_count * 2u + (size_t)output_size)
+    if ((size_t)(r.end - r.p) !=
+        (size_t)input_count * 2u + (size_t)output_size +
+        (source_mdec_enabled ? SOURCE_MDEC_WIRE_BYTES : 0u))
         return 0;
     next->input_count = input_count;
     next->output_size = output_size;

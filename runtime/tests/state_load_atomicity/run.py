@@ -132,6 +132,7 @@ def main():
         receipt["synthetic_bios_sha256"] = sha256(bios)
         for repeat in range(args.repeat):
             run(f"test{repeat}", [executable, bios])
+            run(f"source{repeat}", [executable, bios, "source"])
         receipt["qualification_passed"] = True
     except Exception as exc:
         receipt["error"] = str(exc)

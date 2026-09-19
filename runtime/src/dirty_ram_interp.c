@@ -391,13 +391,21 @@ void dirty_ram_checkpoint_write(uint8_t *out) {
     pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_age : 0u);
     pst_w_u32(&w,s_ld_pend_armed ? 1u : 0u);
 }
-int dirty_ram_checkpoint_read(const uint8_t *in,uint32_t len) {
-    PstR r; uint32_t v[9];
+static int checkpoint_parse(const uint8_t *in,uint32_t len,uint32_t v[9]) {
+    PstR r;
     if(len!=DIRTY_RAM_CHECKPOINT_BYTES)return 0;
     pst_r_init(&r,in,len);
     for(unsigned i=0;i<9;i++)if(!pst_r_u32(&r,&v[i]))return 0;
     if(v[0]>1u || v[2]>1u || v[4]>1u || v[5]>31u || v[7]>1u || v[8]>1u ||
        (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4])))return 0;
+    return 1;
+}
+int dirty_ram_checkpoint_validate(const uint8_t *in,uint32_t len) {
+    uint32_t v[9]; return checkpoint_parse(in,len,v);
+}
+int dirty_ram_checkpoint_read(const uint8_t *in,uint32_t len) {
+    uint32_t v[9];
+    if (!checkpoint_parse(in,len,v)) return 0;
     s_checkpoint.active=v[0];s_checkpoint.pc=v[1];s_checkpoint.slot=v[2];
     s_checkpoint.target=v[3];s_checkpoint.taken=v[4];
     s_ld_pend_rt=v[5];s_ld_pend_val=v[6];s_ld_pend_age=v[7];s_ld_pend_armed=(int)v[8];

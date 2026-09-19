@@ -71,7 +71,7 @@ void psx_mod_memory_snapshot_write(uint8_t* out) {
     memcpy(out + 16u + mod_memory_used, mod_gpu_dma_memory, mod_gpu_dma_memory_used);
 }
 
-int psx_mod_memory_snapshot_read(const uint8_t* data, uint32_t size) {
+int psx_mod_memory_snapshot_validate(const uint8_t* data, uint32_t size) {
     PstR r;
     uint32_t version, base, cpu_bytes, dma_bytes;
     if (!data || size < 16u || size != psx_mod_memory_snapshot_bytes()) return 0;
@@ -81,6 +81,12 @@ int psx_mod_memory_snapshot_read(const uint8_t* data, uint32_t size) {
         version != 1u || base != PSX_MOD_GPU_DMA_APERTURE_BASE ||
         cpu_bytes != mod_memory_used || dma_bytes != mod_gpu_dma_memory_used)
         return 0;
+    return 1;
+}
+
+int psx_mod_memory_snapshot_read(const uint8_t* data, uint32_t size) {
+    if (!psx_mod_memory_snapshot_validate(data, size)) return 0;
+    const uint32_t cpu_bytes = mod_memory_used, dma_bytes = mod_gpu_dma_memory_used;
     memcpy(mod_memory, data + 16u, cpu_bytes);
     memcpy(mod_gpu_dma_memory, data + 16u + cpu_bytes, dma_bytes);
     return 1;

@@ -118,8 +118,7 @@ enum {
                               cache, so fetch-miss cycles differ per peer/retry
                               and IRQ delivery lands a few wait-loop iterations
                               apart (MotK abort@940: fin cyc Δ8, v0 5c83/5c86
-                              from identical baselines). Optional on load for
-                              old blobs (left untouched when absent).          */
+                              from identical baselines). Required in v10.     */
     BS_SEC_RASTER = 0x12,  /* comparison raster clocks, 3 instances x 80 B:
                               [0]   input_route_raster (interrupts.c)
                               [80]  clock_state.raster  (source_gpu_runtime.c)

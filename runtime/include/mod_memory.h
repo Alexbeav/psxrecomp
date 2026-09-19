@@ -53,6 +53,7 @@ uint32_t psx_mod_memory_alloc(uint32_t size, uint32_t alignment);
  * host pointers; immutable host assets are reconstructed separately. */
 uint32_t psx_mod_memory_snapshot_bytes(void);
 void psx_mod_memory_snapshot_write(uint8_t* out);
+int psx_mod_memory_snapshot_validate(const uint8_t *data, uint32_t size);
 int psx_mod_memory_snapshot_read(const uint8_t* data, uint32_t size);
 uint32_t psx_mod_memory_layout_cookie(void);
 

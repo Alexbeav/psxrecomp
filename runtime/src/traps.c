@@ -777,21 +777,35 @@ void psx_scheduler_snapshot_write(uint8_t *out, uint32_t len)
     (void)pst_w_u32(&w, 0u);
 }
 
-int psx_scheduler_snapshot_read(const uint8_t *in, uint32_t len, CPUState *cpu)
+static int scheduler_snapshot_parse(const uint8_t *in, uint32_t len,
+                                    uint32_t base, uint32_t size, uint32_t *tcb)
 {
     PstR r;
-    uint32_t return_tcb, reserved0, reserved1, reserved2;
-    if (!in || !cpu || len != PSX_SCHEDULER_SNAPSHOT_BYTES) return 0;
+    uint32_t reserved0, reserved1, reserved2;
+    if (!in || len != PSX_SCHEDULER_SNAPSHOT_BYTES) return 0;
     pst_r_init(&r, in, len);
-    if (!pst_r_u32(&r, &return_tcb) ||
-        !pst_r_u32(&r, &reserved0) ||
-        !pst_r_u32(&r, &reserved1) ||
-        !pst_r_u32(&r, &reserved2))
-        return 0;
+    if (!pst_r_u32(&r, tcb) || !pst_r_u32(&r, &reserved0) ||
+        !pst_r_u32(&r, &reserved1) || !pst_r_u32(&r, &reserved2)) return 0;
     if (reserved0 || reserved1 || reserved2) return 0;
-    /* RAM precedes this section, so the TCB can be checked against the
-     * restored kernel tables. */
-    if (return_tcb && !psx_is_valid_tcb(cpu, return_tcb)) return 0;
+    return !*tcb || (base && size && *tcb - base < size && (*tcb - base) % 0xC0u == 0);
+}
+
+int psx_scheduler_snapshot_validate(const uint8_t *in, uint32_t len, const uint8_t *ram)
+{
+    PstR r;
+    uint32_t base, size, tcb;
+    if (!ram) return 0;
+    /* Admission reads the incoming RAM, not the still-running kernel tables. */
+    pst_r_init(&r, ram + 0x110u, 8u);
+    return pst_r_u32(&r, &base) && pst_r_u32(&r, &size) &&
+           scheduler_snapshot_parse(in, len, base, size, &tcb);
+}
+
+int psx_scheduler_snapshot_read(const uint8_t *in, uint32_t len, CPUState *cpu)
+{
+    uint32_t return_tcb;
+    if (!cpu || !scheduler_snapshot_parse(in, len, cpu->read_word(0x110u),
+                                          cpu->read_word(0x114u), &return_tcb)) return 0;
     g_sched_return_tcb = return_tcb;
     g_sched_escape.target_tcb = 0;
     g_sched_escape.resume_pc = 0;

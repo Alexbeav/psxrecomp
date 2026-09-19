@@ -28,6 +28,7 @@ void dirty_ram_checkpoint_enter(uint32_t pc, int slot, uint32_t target, int take
 void dirty_ram_checkpoint_leave(void);
 uint32_t dirty_ram_checkpoint_pc(uint32_t fallback);
 void dirty_ram_checkpoint_write(uint8_t *out);
+int dirty_ram_checkpoint_validate(const uint8_t *in, uint32_t len);
 int dirty_ram_checkpoint_read(const uint8_t *in, uint32_t len);
 int dirty_ram_checkpoint_resume_pending(void);
 void dirty_ram_checkpoint_resume(CPUState *cpu);

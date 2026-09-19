@@ -3183,8 +3183,7 @@ int sio_snapshot_shape_ok(uint32_t len) {
     return len == current || (len < current && len + rumble_bytes == current);
 }
 
-int sio_snapshot_read(const uint8_t *p, uint32_t len) {
-    PstR r;
+int sio_snapshot_validate(const uint8_t *p, uint32_t len) {
     const uint32_t current = sio_snapshot_bytes();
     if (!p || !current || !sio_snapshot_shape_ok(len)) return 0;
 #if SIO_MODEL_CYCLE_PACED
@@ -3208,6 +3207,12 @@ int sio_snapshot_read(const uint8_t *p, uint32_t len) {
                                   sizeof(pad_rumble_large));
     if (len != current && (len > current || len + rumble_bytes != current))
         return 0;
+    return 1;
+}
+
+int sio_snapshot_read(const uint8_t *p, uint32_t len) {
+    PstR r;
+    if (!sio_snapshot_validate(p, len)) return 0;
     pst_r_init(&r, p, len);
     return sio_snap_parse(&r);
 }

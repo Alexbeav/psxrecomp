@@ -1984,7 +1984,7 @@ void spu_snapshot_write(uint8_t *p) {
     pst_w_u64(&w, cd_underflow_frames);
 }
 
-int spu_snapshot_read(const uint8_t *p, uint32_t len) {
+int spu_snapshot_validate(const uint8_t *p, uint32_t len) {
     PstR r;
     if (!p || len != spu_snapshot_bytes()) return 0;
     /* Validate queue cursors before mutating the SPU. */
@@ -1996,6 +1996,30 @@ int spu_snapshot_read(const uint8_t *p, uint32_t len) {
             wr >= SPU_CD_RING_FRAMES || count > SPU_CD_RING_FRAMES ||
             (rd + count) % SPU_CD_RING_FRAMES != wr) return 0;
     }
+    if (source_key_timing) {
+        const uint8_t *source = p + len - SPU_CD_SNAPSHOT_BYTES - 16u - SOURCE_SPU_TAIL_BYTES;
+        uint32_t magic;
+        pst_r_init(&r, source, SOURCE_SPU_TAIL_BYTES);
+        if (!pst_r_u32(&r, &magic) || magic != 0x324B5053u) return 0;
+        for (unsigned i = 0; i < SPU_VOICE_COUNT; i++)
+            if (source[12u + i] > 4u) return 0;
+        for (unsigned i = 0; i < SPU_VOICE_COUNT; i++) {
+            const uint8_t *d = source + 36u + i * 70u + 64u;
+            if (d[0] > 31u || d[1] > 31u || d[2] > 14u ||
+                d[3] > 15u || d[4] > 15u || d[5] > 1u) return 0;
+        }
+    }
+    {
+        uint64_t carry;
+        pst_r_init(&r, p + len - SPU_CD_SNAPSHOT_BYTES - 8u, 8u);
+        if (!pst_r_u64(&r, &carry) || carry >= 768u) return 0;
+    }
+    return 1;
+}
+
+int spu_snapshot_read(const uint8_t *p, uint32_t len) {
+    PstR r;
+    if (!spu_snapshot_validate(p, len)) return 0;
     pst_r_init(&r, p, len);
     for (uint32_t i = 0; i < SPU_REG_COUNT; i++)
         if (!pst_r_u16(&r, &spu_regs[i])) return 0;

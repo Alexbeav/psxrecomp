@@ -72,17 +72,20 @@ extern int      gpu_snapshot_read(const uint8_t* p, uint32_t len);
 extern uint32_t spu_snapshot_bytes(void);
 extern void     spu_snapshot_write(uint8_t* p);
 extern int      spu_snapshot_read(const uint8_t* p, uint32_t len);
+extern int      spu_snapshot_validate(const uint8_t* p, uint32_t len);
 extern uint8_t* spu_get_ram_ptr(void);
 extern uint32_t spu_get_ram_bytes(void);
 extern uint32_t cdrom_snapshot_bytes(void);
 extern void     cdrom_snapshot_write(uint8_t* p);
 extern int      cdrom_snapshot_read(const uint8_t* p, uint32_t len);
+extern int      cdrom_snapshot_validate(const uint8_t* p, uint32_t len);
 extern uint32_t dma_snapshot_bytes(void);
 extern void     dma_snapshot_write(uint8_t* p);
 extern int      dma_snapshot_read(const uint8_t* p, uint32_t len);
 extern uint32_t sio_snapshot_bytes(void);
 extern void     sio_snapshot_write(uint8_t* p);
 extern int      sio_snapshot_read(const uint8_t* p, uint32_t len);
+extern int      sio_snapshot_validate(const uint8_t* p, uint32_t len);
 extern int      mdec_snapshot_prepare(const uint8_t* p, uint32_t len);
 extern int      sio_snapshot_shape_ok(uint32_t len);
 extern uint32_t mdec_snapshot_bytes(void);
@@ -941,7 +944,7 @@ static int section_shape_ok(uint32_t tag, uint32_t len) {
     case BS_SEC_CDROM:      return len == cdrom_snapshot_bytes();
     case BS_SEC_DMA:        return len == dma_snapshot_bytes();
     case BS_SEC_SIO:        return sio_snapshot_shape_ok(len);
-    case BS_SEC_MDEC:       return len == mdec_snapshot_bytes();
+    case BS_SEC_MDEC:       return 1; /* variable FIFO lengths: mdec_snapshot_prepare */
     case BS_SEC_ICACHE:     return len == 1024u * 4u;
     case BS_SEC_DIRTY:      return (len % 4u) == 0u;
     case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;
@@ -953,6 +956,51 @@ static int section_shape_ok(uint32_t tag, uint32_t len) {
     }
 }
 
+
+typedef struct BsSection {
+    const uint8_t *data;
+    uint8_t *owned;
+    uint32_t len;
+} BsSection;
+
+/* These checks must not change device state. Allocation admission follows them. */
+static int section_content_ok(uint32_t tag, const BsSection *sec,
+                              const BsSection *sections) {
+    const uint8_t *p = sec->data;
+    const uint32_t len = sec->len;
+    switch (tag) {
+    case BS_SEC_CPU: {
+        CPUState temporary = {0};
+        return cpu_state_wire_read(p, len, &temporary);
+    }
+    case BS_SEC_CPU_EXEC: return dirty_ram_checkpoint_validate(p, len);
+    case BS_SEC_SCHED:
+        return psx_scheduler_snapshot_validate(p, len, sections[BS_SEC_RAM].data);
+    case BS_SEC_BOOTFLOW: {
+        PstR r; uint32_t flags;
+        pst_r_init(&r, p, len);
+        return pst_r_u32(&r, &flags) && !(flags & ~BOOT_STATE_BOOTFLOW_GAME_STARTED);
+    }
+    case BS_SEC_RASTER:
+        for (unsigned i = 0; i < 3; i++) {
+            InputRouteRasterClock temporary;
+            if (!input_route_raster_wire_read(&temporary,
+                    p + i * INPUT_ROUTE_RASTER_WIRE_BYTES,
+                    INPUT_ROUTE_RASTER_WIRE_BYTES)) return 0;
+        }
+        return 1;
+    case BS_SEC_GPU_SERVICE: {
+        PstR r; uint32_t count;
+        pst_r_init(&r, p + 48, 4);
+        return pst_r_u32(&r, &count) && count <= 32u;
+    }
+    case BS_SEC_MODMEM: return psx_mod_memory_snapshot_validate(p, len);
+    case BS_SEC_SPU: return spu_snapshot_validate(p, len);
+    case BS_SEC_CDROM: return cdrom_snapshot_validate(p, len);
+    case BS_SEC_SIO: return sio_snapshot_validate(p, len);
+    default: return 1; /* Fixed-width readers; MDEC is prepared separately. */
+    }
+}
 
 int boot_state_peek_cpu_pc_buffer(const uint8_t* file, size_t file_len,
                                   uint32_t* out_pc) {
@@ -1030,61 +1078,23 @@ int boot_state_peek_cpu_pc(const char* path, uint32_t* out_pc) {
     return ok;
 }
 
-/* MDEC admission preflight, carried over from the Wave 5 base. mdec_snapshot_read
- * grows the MDEC FIFO buffers, so an allocation failure inside the apply loop
- * would leave a half-restored machine -- the one failure pass 1 cannot foresee,
- * because it reads lengths only. Reserve that capacity here, while nothing has
- * been applied. Section walk errors are left to pass 1, which already ran. */
-static int boot_state_preflight_mdec(const uint8_t* file, size_t file_len,
-                                     const BootStateHeader* h) {
-    const uint8_t* v = file + BOOT_STATE_HEADER_WIRE_BYTES;
-    const uint8_t* end = file + file_len;
-    for (uint32_t i = 0; i < h->section_count; i++) {
-        PstR sh;
-        uint32_t tag = 0, pad = 0;
-        uint64_t len = 0;
-        const uint8_t* payload;
-        if ((size_t)(end - v) < 16u) return 1;
-        pst_r_init(&sh, v, 16);
-        if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &pad) ||
-            !pst_r_u64(&sh, &len)) return 1;
-        v += 16;
-        if (len > 64u * 1024u * 1024u || (uint64_t)(end - v) < len) return 1;
-        payload = v;
-        v += (size_t)len;
-        if (tag != BS_SEC_MDEC) continue;
-        if (h->version >= 4u && pad == BOOT_STATE_SEC_ZLIB) {
-            PstR lr;
-            uint32_t raw_len = 0;
-            uLong dest_len;
-            uint8_t* scratch;
-            int ok;
-            if (len < 4u) return 0;
-            pst_r_init(&lr, payload, 4);
-            if (!pst_r_u32(&lr, &raw_len) || raw_len == 0 ||
-                raw_len > 64u * 1024u * 1024u) return 0;
-            scratch = (uint8_t*)malloc(raw_len);
-            if (!scratch) return 0;
-            dest_len = (uLong)raw_len;
-            ok = uncompress(scratch, &dest_len, payload + 4, (uLong)(len - 4u)) == Z_OK &&
-                 dest_len == (uLong)raw_len &&
-                 mdec_snapshot_prepare(scratch, raw_len);
-            free(scratch);
-            return ok;
-        }
-        if (pad != 0u || len > 0xffffffffu) return 1;
-        return mdec_snapshot_prepare(payload, (uint32_t)len);
-    }
-    return 1;
-}
-
 int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                            uint32_t bios_checksum, uint32_t entry_pc,
                            CPUState* cpu) {
-    const uint8_t* cur;
-    const uint8_t* end;
+    const uint8_t *cur, *end;
     BootStateHeader h;
     char reject[256];
+    BsSection sections[BS_SEC_BOOTFLOW + 1] = {{0}};
+    /* The writer's dependency order: clock before devices;
+     * dirty bitmap after RAM's write/invalidation bookkeeping.
+     * MODMEM follows SPAD, matching boot_state_save_to. */
+    static const uint8_t order[] = {
+        BS_SEC_CPU, BS_SEC_CPU_EXEC, BS_SEC_RAM, BS_SEC_SCHED, BS_SEC_BOOTFLOW, BS_SEC_SPAD, BS_SEC_MODMEM, BS_SEC_IRQ,
+        BS_SEC_TIMER, BS_SEC_CLOCK, BS_SEC_GPU, BS_SEC_VRAM, BS_SEC_SPU,
+        BS_SEC_SPURAM, BS_SEC_CDROM, BS_SEC_DMA, BS_SEC_SIO, BS_SEC_MDEC,
+        BS_SEC_ICACHE, BS_SEC_DIRTY, BS_SEC_RASTER, BS_SEC_GPU_SERVICE,
+        BS_SEC_TIMER_SRC, BS_SEC_DMA_SRC, BS_SEC_IRQ_TIMING
+    };
     const uint32_t required =
         (1u<<BS_SEC_CPU)|(1u<<BS_SEC_RAM)|(1u<<BS_SEC_SPAD)|(1u<<BS_SEC_IRQ)|
         (1u<<BS_SEC_TIMER)|(1u<<BS_SEC_CLOCK)|(1u<<BS_SEC_GPU)|(1u<<BS_SEC_VRAM)|
@@ -1093,178 +1103,83 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         (1u<<BS_SEC_SCHED)|(1u<<BS_SEC_ICACHE)|(1u<<BS_SEC_IRQ_TIMING)|(1u<<BS_SEC_CPU_EXEC)|
         (1u<<BS_SEC_BOOTFLOW)|
         (psx_mod_memory_snapshot_bytes() ? (1u<<BS_SEC_MODMEM) : 0u);
-    uint32_t seen = 0;
-    int ok = 1;
+    uint32_t seen = 0, dirty_count = 0;
+    uint32_t *dirty_words = NULL;
+    uint16_t *native_vram = NULL;
+    size_t prepared_bytes = 0;
+    int ok = 0;
     const double t0 = boot_state_mono_ms();
-    double inflate_ms = 0.0;
-    double apply_ram_ms = 0.0;
-    double apply_vram_ms = 0.0;
-    double apply_spuram_ms = 0.0;
-    double apply_other_ms = 0.0;
+    double inflate_ms = 0.0, apply_ram_ms = 0.0, apply_vram_ms = 0.0;
+    double apply_spuram_ms = 0.0, apply_other_ms = 0.0;
 
+    if (!cpu) return 0;
     if (!boot_state_check_buffer(file, file_len, bios_checksum, entry_pc,
                                  reject, sizeof(reject))) {
-        fprintf(stderr, "boot_state: reject — %s\n",
-                reject[0] ? reject : "unknown");
+        fprintf(stderr, "boot_state: reject — %s\n", reject);
         return 0;
     }
-    if (!boot_state_parse_header(file, file_len, &h))
-        return 0;
-
+    if (!boot_state_parse_header(file, file_len, &h)) return 0;
     cur = file + BOOT_STATE_HEADER_WIRE_BYTES;
     end = file + file_len;
 
-    /* ---- Pass 1: validate every section's SHAPE before touching anything ---- */
-    {
-        const uint8_t* v = file + BOOT_STATE_HEADER_WIRE_BYTES;
-        uint32_t bad_tags[8];
-        uint32_t bad_lens[8];
-        uint32_t nbad = 0, nchecked = 0;
-        for (uint32_t i = 0; i < h.section_count; i++) {
-            PstR sh;
-            uint32_t tag = 0, pad = 0, apply_len = 0;
-            uint64_t len = 0;
-            const uint8_t* payload;
-            if ((size_t)(end - v) < 16u) { nbad = 0; nchecked = 0; break; }
-            pst_r_init(&sh, v, 16);
-            if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &pad) || !pst_r_u64(&sh, &len)) break;
-            v += 16;
-            if (len > 64u * 1024u * 1024u || (uint64_t)(end - v) < len) break;
-            payload = v;
-            v += (size_t)len;
-            if (h.version >= 4u && pad == BOOT_STATE_SEC_ZLIB) {
-                PstR lr;
-                uint32_t raw_len = 0;
-                uLong dest_len;
-                uint8_t* scratch;
-                if (len < 4u) { apply_len = 0; }
-                else {
-                    pst_r_init(&lr, payload, 4);
-                    if (!pst_r_u32(&lr, &raw_len)) apply_len = 0;
-                    else if (raw_len == 0 || raw_len > 64u * 1024u * 1024u) apply_len = 0;
-                    else {
-                    scratch = (uint8_t*)malloc(raw_len);
-                    if (!scratch) apply_len = 0;
-                    else {
-                        dest_len = (uLong)raw_len;
-                        if (uncompress(scratch, &dest_len, payload + 4, (uLong)(len - 4u)) != Z_OK ||
-                            dest_len != (uLong)raw_len) apply_len = 0;
-                        else apply_len = raw_len;
-                        free(scratch);
-                    }
-                    }
-                }
-            } else if (pad != 0u) {
-                apply_len = 0;
-            } else {
-                apply_len = len > 0xffffffffu ? 0u : (uint32_t)len;
-            }
-            ++nchecked;
-            if (!section_shape_ok(tag, apply_len)) {
-                if (nbad < 8) { bad_tags[nbad] = tag; bad_lens[nbad] = apply_len; }
-                ++nbad;
-            }
-        }
-        if (nbad) {
-            fprintf(stderr, "boot_state: reject — %u of %u sections failed shape "
-                            "validation (nothing applied):", nbad, nchecked);
-            for (uint32_t i = 0; i < nbad && i < 8; i++)
-                fprintf(stderr, " 0x%02X(len=%u)", bad_tags[i], bad_lens[i]);
-            fprintf(stderr, "\n");
-            return 0;
-        }
-    }
-
-    if (!boot_state_preflight_mdec(file, file_len, &h)) {
-        fprintf(stderr, "boot_state: reject — the MDEC section could not be "
-                        "admitted (nothing applied)\n");
-        return 0;
-    }
-
-    for (uint32_t i = 0; ok && i < h.section_count; i++) {
+    /* No guest or precision state changes in this pass. Retain inflated data
+     * until commit so neither a late malformed section nor allocation failure
+     * can strand the caller in a partially restored machine. */
+    for (uint32_t i = 0; i < h.section_count; i++) {
         PstR sh;
-        uint32_t tag = 0, pad = 0;
-        uint64_t len = 0;
-        const uint8_t* payload;
-        uint8_t* inflated = NULL;
-        const uint8_t* apply_ptr;
-        uint32_t apply_len;
-        double t_sec;
-
-        if ((size_t)(end - cur) < 16u) { ok = 0; break; }
-        pst_r_init(&sh, cur, 16);
-        if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &pad) || !pst_r_u64(&sh, &len)) {
-            ok = 0; break;
-        }
+        uint32_t tag, flags, raw_len;
+        uint64_t len;
+        const uint8_t *payload, *data;
+        uint8_t *owned = NULL;
+        if ((size_t)(end - cur) < 16u) goto cleanup;
+        pst_r_init(&sh, cur, 16u);
+        if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &flags) ||
+            !pst_r_u64(&sh, &len)) goto cleanup;
         cur += 16;
-        if (len > 64u * 1024u * 1024u || (uint64_t)(end - cur) < len) {
-            ok = 0; break;
-        }
+        if (len > 64u * 1024u * 1024u || (uint64_t)(end-cur) < len)
+            goto cleanup;
         payload = cur;
         cur += (size_t)len;
-
-        if (h.version >= 4u && pad == BOOT_STATE_SEC_ZLIB) {
+        raw_len = (uint32_t)len;
+        data = payload;
+        if (flags == BOOT_STATE_SEC_ZLIB) {
             PstR lr;
-            uint32_t raw_len = 0;
             uLong dest_len;
             double t_inf;
-            if (len < 4u) { ok = 0; break; }
-            pst_r_init(&lr, payload, 4);
-            if (!pst_r_u32(&lr, &raw_len) || raw_len == 0 ||
-                raw_len > 64u * 1024u * 1024u) {
-                ok = 0; break;
-            }
-            inflated = (uint8_t*)malloc(raw_len);
-            if (!inflated) { ok = 0; break; }
-            dest_len = (uLong)raw_len;
+            if (len < 4u) goto cleanup;
+            pst_r_init(&lr, payload, 4u);
+            if (!pst_r_u32(&lr, &raw_len) || !raw_len ||
+                raw_len > 64u * 1024u * 1024u) goto cleanup;
+            /* Bound simultaneous inflated storage, including unknown records. */
+            if (prepared_bytes + raw_len > 64u * 1024u * 1024u) goto cleanup;
+            owned = (uint8_t*)malloc(raw_len);
+            if (!owned) goto cleanup;
+            dest_len = raw_len;
             t_inf = boot_state_mono_ms();
-            if (uncompress(inflated, &dest_len, payload + 4,
-                           (uLong)(len - 4u)) != Z_OK ||
-                dest_len != (uLong)raw_len) {
-                free(inflated);
-                ok = 0;
-                break;
+            if (uncompress(owned, &dest_len, payload+4, (uLong)(len-4u)) != Z_OK ||
+                dest_len != raw_len) {
+                free(owned);
+                goto cleanup;
             }
             inflate_ms += boot_state_mono_ms() - t_inf;
-            apply_ptr = inflated;
-            apply_len = raw_len;
-        } else if (pad != 0u) {
-            /* v3 requires pad==0; v4 unknown/extra flags are a hard reject. */
-            ok = 0;
-            break;
-        } else {
-            if (len > 0xffffffffu) { ok = 0; break; }
-            apply_ptr = payload;
-            apply_len = (uint32_t)len;
-        }
+            data = owned;
+        } else if (flags != 0u) goto cleanup;
 
-        t_sec = boot_state_mono_ms();
-        if (!apply_section(tag, apply_ptr, apply_len, cpu, entry_pc)) {
-            /* Name the section: a silent load failure is undiagnosable against
-             * an hour-long run. */
-            fprintf(stderr, "boot_state: reject — section 0x%02X failed to apply "
-                            "(len=%u)\n", tag, apply_len);
-            ok = 0;
+        if (tag == 0u || tag > BS_SEC_BOOTFLOW) {
+            free(owned); /* unknown sections remain forward-compatible */
+            continue;
         }
-        else if (tag < 32) seen |= (1u << tag);
-        {
-            double dt = boot_state_mono_ms() - t_sec;
-            if (tag == BS_SEC_RAM) apply_ram_ms += dt;
-            else if (tag == BS_SEC_VRAM) apply_vram_ms += dt;
-            else if (tag == BS_SEC_SPURAM) apply_spuram_ms += dt;
-            else apply_other_ms += dt;
+        if ((seen & (1u << tag)) || !section_shape_ok(tag, raw_len)) {
+            free(owned);
+            goto cleanup;
         }
-        free(inflated);
+        sections[tag].data = data;
+        sections[tag].owned = owned;
+        sections[tag].len = raw_len;
+        if (owned) prepared_bytes += raw_len;
+        seen |= 1u << tag;
     }
-
-    if (!ok || (seen & required) != required) {
-        if (ok && (seen & required) != required)
-            fprintf(stderr, "boot_state: reject — required sections missing: "
-                            "seen=0x%08X required=0x%08X missing=0x%08X\n",
-                    seen, required, required & ~seen);
-        return 0;
-    }
-
+    if ((seen & required) != required) goto cleanup;
     /* Amendment A: the three comparison-profile sections must be present
      * EXACTLY when their subsystem is active. Missing -> refuse (the blob could
      * not have been written by this profile). Present while inactive -> refuse
@@ -1282,9 +1197,63 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                 (unsigned)((seen >> BS_SEC_GPU_SERVICE) & 1u),
                 (unsigned)((seen >> BS_SEC_TIMER_SRC) & 1u),
                 (unsigned)((seen >> BS_SEC_DMA_SRC) & 1u));
-        return 0;
+        goto cleanup;
     }
 
+    for (uint32_t tag = 1; tag <= BS_SEC_BOOTFLOW; tag++)
+        if ((seen & (1u << tag)) && !section_content_ok(tag, &sections[tag], sections))
+            goto cleanup;
+    /* Convert the dirty bitmap before commit. The setter historically accepts
+     * short/long bitmaps and consumes only its own word count; retain that. */
+    dirty_count = sections[BS_SEC_DIRTY].len / 4u;
+    if (dirty_count > dirty_ram_get_bitmap_word_count())
+        dirty_count = dirty_ram_get_bitmap_word_count();
+    dirty_words = (uint32_t*)malloc(dirty_count ? (size_t)dirty_count * 4u : 1u);
+    if (!dirty_words) goto cleanup;
+    {
+        PstR r;
+        pst_r_init(&r, sections[BS_SEC_DIRTY].data, sections[BS_SEC_DIRTY].len);
+        for (uint32_t i = 0; i < dirty_count; i++)
+            (void)pst_r_u32(&r, &dirty_words[i]);
+    }
+#if !defined(__BYTE_ORDER__) || (__BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
+    native_vram = (uint16_t*)malloc(VRAM_SIZE);
+    if (!native_vram) goto cleanup;
+    {
+        PstR r;
+        pst_r_init(&r, sections[BS_SEC_VRAM].data, VRAM_SIZE);
+        if (!pst_r_pod(&r, native_vram, VRAM_SIZE, 2)) goto cleanup;
+    }
+#endif
+    if (!mdec_snapshot_prepare(sections[BS_SEC_MDEC].data,
+                               sections[BS_SEC_MDEC].len)) goto cleanup;
+
+    /* All rejection and fallible allocation paths are above this point. */
+    for (size_t i = 0; i < sizeof(order); i++) {
+        const uint32_t tag = order[i];
+        const BsSection *sec = &sections[tag];
+        double t_sec, dt;
+        if (!(seen & (1u << tag))) continue;
+        t_sec = boot_state_mono_ms();
+        if (tag == BS_SEC_DIRTY) {
+            dirty_ram_set_bitmap_words(dirty_words, dirty_count);
+        } else if (tag == BS_SEC_VRAM && native_vram) {
+            gr_vram_transfer_in(0, 0, VRAM_W, VRAM_H, native_vram);
+            if (gpu_vram_dirty_tracking()) {
+                memcpy(s_vram_mirror, native_vram, VRAM_SIZE);
+                s_vram_mirror_valid = 1;
+                gpu_vram_dirty_clear();
+            } else s_vram_mirror_valid = 0;
+        } else {
+            /* Readers cannot fail after shape, content and allocation admission. */
+            (void)apply_section(tag, sec->data, sec->len, cpu, entry_pc);
+        }
+        dt = boot_state_mono_ms() - t_sec;
+        if (tag == BS_SEC_RAM) apply_ram_ms += dt;
+        else if (tag == BS_SEC_VRAM) apply_vram_ms += dt;
+        else if (tag == BS_SEC_SPURAM) apply_spuram_ms += dt;
+        else apply_other_ms += dt;
+    }
     /* Amendment C: return_clock/return_command are assigned once per frame
      * boundary on the normal path, so right after a restore they would be one
      * frame stale. A bit-exact replay cannot afford a frame of stale reads.
@@ -1308,17 +1277,19 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
      * generation must not reuse a countdown computed before the load. */
     { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }
 
-    {
-        const double total_ms = boot_state_mono_ms() - t0;
-        fprintf(stderr,
-                "savestate: load_timing read=0.0 inflate=%.1f "
-                "apply_ram=%.1f apply_vram=%.1f apply_spuram=%.1f "
-                "apply_other=%.1f total=%.1f ms (file=%zu)\n",
-                inflate_ms,
-                apply_ram_ms, apply_vram_ms, apply_spuram_ms,
-                apply_other_ms, total_ms, file_len);
-    }
-    return 1;
+    ok = 1;
+    fprintf(stderr,
+            "savestate: load_timing read=0.0 inflate=%.1f "
+            "apply_ram=%.1f apply_vram=%.1f apply_spuram=%.1f "
+            "apply_other=%.1f total=%.1f ms (file=%zu)\n",
+            inflate_ms, apply_ram_ms, apply_vram_ms, apply_spuram_ms,
+            apply_other_ms, boot_state_mono_ms() - t0, file_len);
+cleanup:
+    if (!ok) fprintf(stderr, "boot_state: reject - incomplete, duplicate, malformed or unallocatable state (nothing applied)\n");
+    for (uint32_t tag = 1; tag <= BS_SEC_BOOTFLOW; tag++) free(sections[tag].owned);
+    free(dirty_words);
+    free(native_vram);
+    return ok;
 }
 
 int boot_state_load(const char* path, uint32_t bios_checksum,

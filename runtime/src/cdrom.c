@@ -4185,8 +4185,7 @@ void cdrom_snapshot_write(uint8_t *p) {
     pst_w_init(&w, p, n);
     (void)cdrom_snap_emit(&w);
 }
-int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
-    PstR r;
+int cdrom_snapshot_validate(const uint8_t *p, uint32_t len) {
     if (!p || len != cdrom_snapshot_bytes()) return 0;
     uint32_t drive_bytes=s_nymashock_drive?32u:0u;
     if(drive_bytes) {
@@ -4228,6 +4227,12 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
            cd_tape_le32(clock+72)>1136000u ||
            (!cd_tape_le32(clock+68) && cd_tape_le32(clock+72))) return 0;
     }
+    return 1;
+}
+
+int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
+    PstR r;
+    if (!cdrom_snapshot_validate(p, len)) return 0;
     pst_r_init(&r, p, len);
     if (!cdrom_snap_parse(&r))
         return 0;

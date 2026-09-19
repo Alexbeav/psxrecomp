@@ -115,6 +115,7 @@ void psx_scheduler_top_level_resume_clear(void);
  * its caller; omitting it can leave a restored title in a live BIOS loop even
  * though CPU/RAM/device restoration succeeded. Three reserved words stay zero. */
 #define PSX_SCHEDULER_SNAPSHOT_BYTES 16u
+int psx_scheduler_snapshot_validate(const uint8_t *in, uint32_t len, const uint8_t *ram);
 void psx_scheduler_snapshot_write(uint8_t *out, uint32_t len);
 int  psx_scheduler_snapshot_read(const uint8_t *in, uint32_t len,
                                  struct CPUState *cpu);
