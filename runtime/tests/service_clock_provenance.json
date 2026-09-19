@@ -1,0 +1,14 @@
+{
+  "task": "T172",
+  "status": "Independent measured C candidate; qualification pending",
+  "base": "7765cc5d2e024d8c6fa604e557bd1a750a91c458",
+  "source_boundary": "Primary hardware context, declaration/caller-only contract, independently authored black-box experiments and qualified independently authored raster model. Old service/runtime/wire bodies and source-profile tests unread. Mechanical notice-marker scan found no header notice; root LICENSE unchanged.",
+  "model_evidence": "evidence/service-clock-hypothesis-v2.json matches eight authored matrices including callback-entry snapshots",
+  "scope": "Service clock helper only; qualified raster dependency reused",
+  "pending_gates": [
+    "Exact C traces and callback-state comparison",
+    "Actual full-service persistence and baseline snapshot continuation",
+    "Transitive production callback/reentrancy boundary"
+  ],
+  "legal_claim": "None; no formal clean-room or legal clearance claim"
+}
