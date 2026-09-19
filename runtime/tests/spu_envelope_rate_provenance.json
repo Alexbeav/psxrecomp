@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "Local SPU envelope replacement; bounded source-profile comparison and same-binary snapshot checks pass; broader qualification remains open",
+  "status": "Reviewable local envelope replacement; bounded differential and snapshot gates pass in both tested profiles",
   "base": "77fc84d18cd341ba0c0feb68a63f0904f8c467f0",
   "implementation": "runtime/include/spu_envelope_rate.h",
   "tests": "runtime/tests/test_spu_envelope_rate.c",
@@ -77,23 +77,63 @@
     ],
     "method": "Mechanical boundary replacement without showing old implementation bodies",
     "boundary_correction": "Supplied comment start included previous closing brace at base line195; restored after compiler detected omission",
-    "shared_helper": "volume_reg_decode retained because another caller exists"
+    "shared_helper": "volume_reg_decode retained because another caller exists",
+    "legacy_adapter": "Existing source_key_timing declaration selects immediate fixed sweep state initialization only for legacy callers, which can omit voice sweep ticks when no voice is active; no counter reset."
   },
   "validation": {
-    "implementation_commit": "9f1cfafb9b80405bf993d37b4e6a577bb0943157",
-    "matrix_revision": 4,
-    "matrix_sha256": "90d400dcbe57042dbb11d115c8c268d7e9a7022e560ac959a07c48e5b28f6e55",
-    "cases": 623,
-    "observations": 237501,
+    "implementation_commit": "d81431b793e877054bfc9c071ad0c247c096fda9",
+    "matrix_revision": 5,
+    "matrix_sha256": "0e6062d80be0cdf88b8c67849d8e80d95a2e22d90ef96d5aa2dfe5242c6254f6",
+    "cases": 678,
+    "observations_per_profile": 241260,
     "registers_per_observation": 10,
-    "candidate_repeated_equal": true,
-    "candidate_only_mismatches": 0,
-    "changed_mismatches": 0,
-    "corrected_observations": 6849,
-    "unchanged_mismatches": 412560,
-    "snapshot_cases": 130,
-    "snapshot_observations": 21329,
-    "snapshot_roundtrip_equal": true,
-    "scope": "Sample-granularity wrapper; no CPU scheduler, BIOS or retail input; silent CD; same-binary SPU/RAM restoration only"
-  }
+    "reference_repeat_equal": true,
+    "profiles": {
+      "source": {
+        "counts": {
+          "all_match": 1989330,
+          "unchanged_mismatch": 415550,
+          "corrected": 7720
+        },
+        "candidate_only_mismatches": 0,
+        "changed_mismatches": 0,
+        "snapshot_cases": 130,
+        "snapshot_roundtrip_equal": true
+      },
+      "legacy": {
+        "counts": {
+          "all_match": 2263713,
+          "unchanged_mismatch": 148016,
+          "corrected": 871
+        },
+        "candidate_only_mismatches": 0,
+        "changed_mismatches": 0,
+        "snapshot_cases": 130,
+        "snapshot_roundtrip_equal": true
+      }
+    },
+    "scope": "Sample-granularity opaque wrapper, silent CD, no BIOS/retail/CPU scheduler. Same-binary SPU/RAM snapshots; not full-system or cross-version validation."
+  },
+  "remaining_inventory": [
+    {
+      "routine": "SPU source_decode_word and interpolation table provenance",
+      "state": "Unresolved T77 audit candidate; untouched, no clearance claimed"
+    },
+    {
+      "routine": "GPU polygon coverage helpers",
+      "state": "Unresolved T77 audit candidate; untouched"
+    },
+    {
+      "routine": "Timer1/2, raster and service clock profile",
+      "state": "Unresolved T77 audit candidate; untouched"
+    },
+    {
+      "routine": "CD source_seek_lower_bound",
+      "state": "Unresolved T77 audit candidate; untouched"
+    },
+    {
+      "routine": "CPU timing, memory and instruction-cache profile",
+      "state": "Unresolved audit questions; untouched"
+    }
+  ]
 }
