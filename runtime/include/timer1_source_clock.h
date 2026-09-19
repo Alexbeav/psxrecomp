@@ -65,7 +65,7 @@ static inline void timer1_source_blank(PsxTimer1Source *timer, int blank)
         timer->counting = (timer->mode & 4u) ? timer->blank : 1;
         break;
     case 3:
-        if (timer->counting < 0 && timer->blank) timer->counting = 0;
+        if (timer->counting < 0 && !previous && timer->blank) timer->counting = 0;
         else if (timer->counting == 0 && previous && !timer->blank) timer->counting = 1;
         break;
     }
