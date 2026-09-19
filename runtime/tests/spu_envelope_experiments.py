@@ -130,6 +130,44 @@ def matrix():
         voice(0x3060, 0x1FC0) + [write(KON, 1), tick(32),
                                 write(KOFF, 1), tick(32)])
 
+    # Follow-up neighborhoods distinguish signed versus bit-pattern knees.
+    for initial in [0, 1, 0x0FFF, 0x1000, 0x1001, 0x2FFF, 0x3000, 0x3001,
+                    0x4FFF, 0x5000, 0x5001, 0x6FFF, 0x7000, 0x7001, 0x7FFF]:
+        for inverted in [0, 1]:
+            for shift in [9, 10, 11]:
+                raw = 0xC000 | (inverted << 12) | (shift << 2)
+                add(f"knee_{initial:04x}_{raw:04x}",
+                    "Locate the exponential-rise knee on both signed half ranges",
+                    [write(BASE, initial), tick(4), write(BASE, raw), tick(24)])
+
+    for offset in [1, 2, 3, 5, 6, 7]:
+        add(f"sweep_counter_overshoot_{offset}",
+            "Does an update keep counter overshoot when the rate changes again?",
+            [write(BASE, 0x1000), tick(4), write(BASE, 0x8038), tick(offset),
+             write(BASE, 0x8034), tick(3), write(BASE, 0x8038), tick(32)])
+
+    for phase in ["decay", "sustain_linear", "sustain_exp", "release_linear", "release_exp"]:
+        for level in [0, 1, 0x07FF, 0x0800, 0x7FFF, 0x8000, 0xFFFF]:
+            setup = voice(0x0060 if phase == "decay" else 0x000F, 0x1FC0)
+            setup += [write(KON, 1), tick(10)]
+            if phase.startswith("sustain"):
+                setup += [write(HIGH, 0xC000 if phase.endswith("exp") else 0x4000)]
+            elif phase.startswith("release"):
+                setup += [write(HIGH, 0x1FE0 if phase.endswith("exp") else 0x1FC0),
+                          write(KOFF, 1), tick(1)]
+            add(f"phase_write_{phase}_{level:04x}",
+                "Observe signed direct writes and clamping in each decreasing phase",
+                setup + [write(LEVEL, level), tick(32)])
+    for level in [0, 0x5FFF, 0x6000, 0x6001, 0x7FFF, 0x8000, 0xFFFF]:
+        add(f"attack_log_write_{level:04x}", "Locate the ADSR exponential attack knee",
+            voice(0xAC60, 0x1FC0) + [write(KON, 1), tick(6),
+                                    write(LEVEL, level), tick(24)])
+    for order in ["on_off", "off_on"]:
+        keys = [KON, KOFF] if order == "on_off" else [KOFF, KON]
+        add(f"key_precedence_{order}", "Determine simultaneous key event precedence",
+            voice(0x000F, 0x1FCE) + [write(KON, 1), tick(16),
+                                    write(keys[0], 1), write(keys[1], 1), tick(32)])
+
     assert len({case["id"] for case in cases}) == len(cases)
     for case in cases:
         for op in case["operations"]:
@@ -140,7 +178,7 @@ def matrix():
                 assert op["op"] == "tick" and 0 < op["samples"] <= 32776
     return {
         "schema": "t172-spu-experiment-v1",
-        "matrix_revision": 2,
+        "matrix_revision": 3,
         "reset": "cold before every case; fresh core state and zero SPU RAM",
         "preload": [{"address": 0x1000, "bytes": [0x0C, 0x07] + [0] * 14}],
         "observe": [LEVEL, BASE + 28, 0x1F801E00, 0x1F801E02,
