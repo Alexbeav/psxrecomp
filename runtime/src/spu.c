@@ -705,8 +705,11 @@ static void source_decode_word(int idx, uint32_t noise_mask)
                 voice->env_level = 0;
                 voice->adsr_phase = ADSR_RELEASE;
             }
-            spu_event_record(stop ? SPU_EV_END_STOP : SPU_EV_END_LOOP, idx, address);
             address = voice->repeat_addr & (SPU_RAM_SIZE - 1u);
+            /* Public diagnostics classify the block flag, even in noise mode,
+             * and report the destination address rather than the boundary. */
+            spu_event_record((voice->flags & 2u) ? SPU_EV_END_LOOP : SPU_EV_END_STOP,
+                             idx, address);
         }
         source_decode_irq(address);
         uint8_t header = spu_ram[address];

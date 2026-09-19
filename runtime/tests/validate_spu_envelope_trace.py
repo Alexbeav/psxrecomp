@@ -74,6 +74,23 @@ def validate(matrix, first, second=None):
                     any(type(v) is not int or not -32768 <= v <= 32767 for v in pcm)):
                 raise ValueError(f"invalid stereo PCM: {case_id}/{event}/{sample}")
             canonical["audio"] = pcm
+        if matrix.get("events"):
+            total, recorded = row.get("events_total"), row.get("events")
+            widths = {"seq": 64, "frame": 32, "kind": 8, "voice": 8,
+                      "pitch": 16, "addr": 32, "adsr_lo": 16, "adsr_hi": 16,
+                      "vol_l": 16, "vol_r": 16}
+            if (type(total) is not int or not 0 <= total < 2**64 or
+                    not isinstance(recorded, list) or len(recorded) > 64):
+                raise ValueError("invalid diagnostic event envelope")
+            previous_seq = -1
+            for recorded_event in recorded:
+                if (not isinstance(recorded_event, dict) or set(recorded_event) != set(widths) or
+                        any(type(recorded_event[k]) is not int or
+                            not 0 <= recorded_event[k] < 2**bits for k, bits in widths.items()) or
+                        recorded_event["seq"] <= previous_seq):
+                    raise ValueError("invalid or unordered diagnostic event")
+                previous_seq = recorded_event["seq"]
+            canonical.update(events_total=total, events=recorded)
         if second is not None:
             other = next(second, None)
             if other is None or any(other.get(key) != value for key, value in canonical.items()):

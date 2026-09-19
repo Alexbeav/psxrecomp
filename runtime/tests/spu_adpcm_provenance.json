@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "Integrated decoder passes full baseline preservation in both profiles; diagnostic event gate pending",
+  "status": "Audio/register/snapshot gates pass; corrected diagnostic-event candidate awaiting rerun",
   "base": "9333800db8f84210bca53aec33c7b5a19e5722cd",
   "sources": [
     {
@@ -33,7 +33,8 @@
     "Invalid filter5..15 contributes zero prediction",
     "Reserved shifts13..15 yield residual0 for nonnegative nibble and -128 for negative nibble",
     "Four samples per packed word; observed IRQ/readback timing supports refill below11queued samples",
-    "Noise-mode end+mute sets ENDX without zeroing envelope"
+    "Noise-mode end+mute sets ENDX without zeroing envelope",
+    "Runtime diagnostic END events report destination repeat address and classify raw repeat flag independently from noise muting; observed through public event API"
   ],
   "arithmetic_evidence": {
     "script": "runtime/tests/analyze_spu_adpcm_prediction.py",
