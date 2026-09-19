@@ -1,0 +1,31 @@
+{
+  "task": "T172",
+  "status": "Standalone documentation-derived arithmetic candidate; not integrated or reference-qualified",
+  "base": "9333800db8f84210bca53aec33c7b5a19e5722cd",
+  "sources": [
+    {
+      "repository": "https://github.com/psx-spx/psx-spx.github.io",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "path": "docs/soundprocessingunitspu.md",
+      "sha256": "e7ddff35a7faf8267f1cde0362a54c9011ee99a9cc6600faa4ab63c53b4e500d",
+      "lines_read": "1-48,85-209,719-747"
+    },
+    {
+      "repository": "https://github.com/psx-spx/psx-spx.github.io",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "path": "docs/cdromformat.md",
+      "sha256": "d391c98d5156b41edb15759e56b21e5619f73b12e2a541d9806f4bb68c981950",
+      "lines_read": "778-854"
+    }
+  ],
+  "exposure": "Hardware-document decoder pseudocode read; no emulator or suspect implementation body read. T77 provided declarations and caller responsibilities only. Notion ADPCM/SPU searches were metadata-only to avoid implementation recipes.",
+  "test_origin": "New mathematical examples from documented nibble expansion, filter coefficients, rounding and saturation",
+  "unresolved": [
+    "SPU versus XA rounding and reserved shift semantics",
+    "Invalid filter selectors5..15",
+    "Whether predictor histories use clipped samples",
+    "Refill timing, ring occupancy, loop/end transitions, IRQ visibility and noise behavior",
+    "Full stereo path introduces interpolation/envelope/mixer behavior; decoder accuracy requires distinguishing these"
+  ],
+  "legal_claim": "None"
+}
