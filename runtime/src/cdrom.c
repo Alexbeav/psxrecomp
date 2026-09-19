@@ -11,6 +11,7 @@
  */
 
 #include "cdrom.h"
+#include "cd_seek_delay.h"
 #include "cdrom_irq.h"
 #include "cdrom_lid.h"
 #include "dma.h"
@@ -1694,26 +1695,10 @@ static int read_continues_current_stream(void) {
     return 1;
 }
 
-/* A pending Setloc is also a seek when consumed by ReadN/ReadS. The source
- * comparison for this model is Octoshock 2.2.2 CalcSeekTime/ReadBase:
- * https://github.com/TASEmulators/BizHawk/blob/2.2.2/psx/octoshock/psx/cdc.cpp
- * Its deterministic component models travel across a 72-minute disc in one
- * second, a 300ms long-seek settle, and a simplified paused-drive restart.
- * This independently expressed lower bound omits its 0..25000-cycle jitter;
- * it is an emulator timing model, not a hardware-calibrated exact guarantee.
- * Command response and sector pipeline delays remain separate below.
- */
-static int source_seek_lower_bound(int origin,int target,int motor_on,int paused,uint8_t mode) {
-    int64_t cycles=0;
-    if(!motor_on) {origin=0;cycles=33868800;}
-    int64_t distance=llabs((int64_t)target-origin);
-    int64_t travel=distance*33868800/(72*60*75);
-    cycles+=travel>20000?travel:20000;
-    if(distance>=2250)cycles+=10160640;
-    else if(paused)cycles+=(mode&0x80)?1237952:2475904;
-    else if(s_nymashock_drive && distance>=3 && distance<12)
-        cycles+=4*CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode&0x80)?2:1);
-    return cycles>INT32_MAX?INT32_MAX:(int)cycles;
+/* Caller retains jitter, drive state, scheduling and final timing clamps. */
+static int source_seek_lower_bound(int origin, int target, int motor_on, int paused, uint8_t mode)
+{
+    return psx_cd_seek_delay(origin, target, motor_on, paused, mode, s_nymashock_drive);
 }
 /* Nymashock 1.29.0 HandlePlayRead: after two pipeline fills and the
  * verified target header, standby advances to target+3 then retreats nine.
