@@ -29,7 +29,7 @@ static inline unsigned timer2_source_cpu(PsxTimer2Source *timer, uint32_t cycles
     uint64_t divided = (uint64_t)timer->divider + cycles;
     uint64_t steps = timer->mode & 512u ? divided / 8u : cycles;
     timer->divider = (uint32_t)(divided & 7u);
-    if (!timer->counting)
+    if (!timer->counting || (timer->mode & 256u))
         return 0;
 
     uint64_t start = timer->counter;
@@ -95,7 +95,7 @@ static inline uint32_t timer2_source_next(const PsxTimer2Source *timer)
     if (!timer->counting)
         return 1024;
     uint64_t distance = UINT64_C(1) << 32;
-    if (timer->mode & 16u)
+    if ((timer->mode & 16u) || ((timer->mode & 40u) == 40u))
         distance = timer->counter < timer->target ? timer->target - timer->counter
                                                  : 65536u - timer->counter + timer->target;
     if ((timer->mode & 32u) && 65536u - timer->counter < distance)
