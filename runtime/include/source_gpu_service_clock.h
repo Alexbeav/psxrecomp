@@ -35,9 +35,8 @@ static inline void source_gpu_service_raster(SourceGPUServiceClock *s, uint32_t 
     input_route_raster_advance(&s->raster, elapsed);
     int changed_line = old_line != s->raster.scanline;
     if (changed_line && !s->raster.scanline) s->zero_reached = 1;
-    int frame_edge = (!old_blank && s->raster.blank && s->raster.scanline >= 232)
-                     || (changed_line && (s->raster.scanline == 256
-                                          || s->raster.scanline + 1 == s->raster.lines));
+    int frame_edge = changed_line && ((!old_blank && s->raster.blank && s->raster.scanline >= 232)
+                     || s->raster.scanline == 256 || s->raster.scanline + 1 == s->raster.lines);
     if (s->zero_reached && !s->frame_pending && frame_edge) {
         s->frame_pending = 1;
         s->frame_request_cycle = s->raster.cycle;

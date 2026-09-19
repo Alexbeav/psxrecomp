@@ -24,7 +24,7 @@ def model(previous, operation, callbacks=False):
         raster, _ = advance(raster, elapsed)
         if old['scanline'] != raster['scanline'] and raster['scanline'] == 0:
             state[4] = 1
-        frame_edge = (not old['blank'] and raster['blank'] and raster['scanline'] >= 232) or (old['scanline'] != raster['scanline'] and raster['scanline'] in [256, raster['lines'] - 1])
+        frame_edge = old['scanline'] != raster['scanline'] and ((not old['blank'] and raster['blank'] and raster['scanline'] >= 232) or raster['scanline'] in [256, raster['lines'] - 1])
         if state[4] and not state[5] and frame_edge:
             state[5] = 1
             state[3] = raster['cycle']
