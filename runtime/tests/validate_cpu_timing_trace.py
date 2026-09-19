@@ -45,6 +45,9 @@ def read_trace(matrix_path, trace_path):
         if memory:
             expected_fields |= {'memory_flags'}
             require(vector(row['memory_flags'], [1,1,1]), f'memory flags {key}')
+            if 'memory_extra' in row:
+                expected_fields |= {'memory_extra'}
+                require(vector(row['memory_extra'], [u64,100]), f'memory extra {key}')
         if 'scope_states' in row:
             expected_fields |= {'scope_states'}
         if 'event_cpu_states' in row:
