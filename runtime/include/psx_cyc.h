@@ -34,16 +34,28 @@ enum { PSX_CYC_BATCH_SOFT = 64u };
 static inline void psx_cyc_charge(uint32_t cycles)
 {
     if (!cycles) return;
-#if defined(PSX_OVERLAY_DLL_BUILD) || defined(PSX_COSIM)
+#if defined(PSX_OVERLAY_DLL_BUILD)
     psx_advance_cycles(cycles);
 #else
-    if (psx_in_device_service || g_event_step_conservative || g_ls_replay_active) {
+    if (psx_in_device_service) {
+        psx_cycle_count += cycles;
+        return;
+    }
+#ifdef PSX_COSIM
+    psx_advance_cycles(cycles);
+#else
+    if (g_event_step_conservative || g_ls_replay_active) {
         psx_advance_cycles(cycles);
     } else if (g_psx_cyc_local_acc) {
+        if (*g_psx_cyc_local_acc > UINT32_MAX - cycles) psx_cyc_local_publish();
         *g_psx_cyc_local_acc += cycles;
+    } else if (g_psx_cyc_batch > UINT32_MAX - cycles) {
+        psx_cyc_batch_flush();
+        psx_advance_cycles(cycles);
     } else if (g_psx_cyc_bb_defer) {
         g_psx_cyc_batch += cycles;
     } else {
+        const int already_batched = g_psx_cyc_batch != 0;
         if (!g_psx_cyc_batch) {
             uint64_t distance = psx_next_service_cycle > psx_cycle_count
                 ? psx_next_service_cycle - psx_cycle_count : 1;
@@ -52,11 +64,16 @@ static inline void psx_cyc_charge(uint32_t cycles)
         }
         g_psx_cyc_batch += cycles;
         if (g_psx_cyc_batch >= g_psx_cyc_batch_limit) {
-            uint32_t elapsed = g_psx_cyc_batch;
-            g_psx_cyc_batch = 0;
-            psx_advance_cycles(elapsed);
+            if (already_batched) {
+                psx_cyc_batch_flush();
+            } else {
+                uint32_t elapsed = g_psx_cyc_batch;
+                g_psx_cyc_batch = 0;
+                psx_advance_cycles(elapsed);
+            }
         }
     }
+#endif
 #endif
 }
 
@@ -169,7 +186,7 @@ static inline uint32_t psx_cyc_load_word(CPUState *cpu, uint32_t addr,
         uint32_t result;
         psx_cyc_ram_load_timing(cpu, rt, reg_mask);
         memcpy(&result, g_psx_ram + (physical & UINT32_C(0x1fffff)), sizeof result);
-        if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(physical, result);
+        if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(physical & UINT32_C(0x1fffff), result);
         return result;
     }
 #endif
@@ -190,7 +207,7 @@ static inline uint16_t psx_cyc_load_half(CPUState *cpu, uint32_t addr,
         uint16_t result;
         psx_cyc_ram_load_timing(cpu, rt, reg_mask);
         memcpy(&result, g_psx_ram + (physical & UINT32_C(0x1fffff)), sizeof result);
-        if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(physical, result);
+        if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(physical & UINT32_C(0x1fffff), result);
         return result;
     }
 #endif
