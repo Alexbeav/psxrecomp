@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "Integrated local candidate; streaming/runtime comparison pending",
+  "status": "Integrated decoder passes full baseline preservation in both profiles; diagnostic event gate pending",
   "base": "9333800db8f84210bca53aec33c7b5a19e5722cd",
   "sources": [
     {
@@ -41,5 +41,20 @@
     "exact_interior_observations": 30720,
     "cases": 640,
     "calibration": "T77 declared reference host output floor((3*x+2)/4); not inverted, not part of decoder implementation"
+  },
+  "validation": {
+    "tested_commit": "4a30634f3097843bd445afb2b947b7094efa3821",
+    "matrix": "spu-adpcm-experiments-v4.json",
+    "matrix_sha256": "954a0261f4a19b4b554911f48552c3260026c8fca8ea175b142cfb644a8153dd",
+    "cases": 1020,
+    "observations_per_profile": 141690,
+    "audio_and_registers_equal_baseline_both_profiles": true,
+    "reference_and_source_candidate_repeat_equal": true,
+    "snapshot_cases_per_profile": 522,
+    "snapshot_observations_per_profile": 66192,
+    "snapshot_registers_and_pcm_suffix_equal": true,
+    "envelope_regression_observations": 241260,
+    "envelope_regression_equal": true,
+    "preexisting_source_reference_field_differences": 136326
   }
 }
