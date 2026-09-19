@@ -18,7 +18,7 @@ def matrix():
                 "extremes": [7, 8] * 14,
                 "zero": [0] * 28}
 
-    def add(name, blocks, start=0x2000, pitch=0x1000, extra=None, irq=None):
+    def add(name, blocks, start=0x2000, pitch=0x1000, extra=None, irq=None, noise=False):
         preload = [{"address": 0x1000, "bytes": block(12, 7, [0] * 28)}]
         for i, data in enumerate(blocks):
             preload.append({"address": (start + i * 16) & 0x7FFFF, "bytes": data})
@@ -30,6 +30,8 @@ def matrix():
                write(VOICE + 14, 0x200)]
         if irq is not None:
             ops += [write(0x1F801DA4, irq // 8)]
+        if noise:
+            ops += [write(0x1F801D94, 2)]
         ops += [write(0x1F801D88, 2), tick(6), write(VOICE + 12, 0x6000)]
         ops += extra if extra is not None else [tick(120)]
         cases.append({"id": name, "preload": preload, "operations": ops})
@@ -42,11 +44,20 @@ def matrix():
                 tested = block(predictor * 16 + shift, 0, values)
                 add(f"decode_{predictor:x}_{shift:x}_{name}", [warmup, tested, tested, silence])
 
+    for shift in range(16):
+        for nibble in range(16):
+            steady = block(shift, 3, [nibble] * 28)
+            add(f"constant_{shift:x}_{nibble:x}", [steady, steady])
+
     for flags in list(range(8)) + [8, 16, 32, 64, 128, 255]:
         for pitch in [0, 0x800, 0x1000, 0x2000, 0x4000]:
             add(f"flags_{flags:02x}_pitch_{pitch:04x}",
                 [block(8, flags, patterns["ramp"]),
                  block(8, 3, patterns["extremes"])], pitch=pitch)
+
+    for flags in range(8):
+        add(f"noise_flags_{flags}",
+            [block(8, flags, patterns["ramp"]), block(8, 3, patterns["extremes"])], noise=True)
 
     for start in [0x2000, 0x2008, 0x7FFE0, 0x7FFF0]:
         for irq in [start & ~7, (start + 8) & 0x7FFFF, (start + 16) & 0x7FFFF, 0x3000]:
@@ -63,7 +74,7 @@ def matrix():
                 [block(8, 4, patterns["ramp"]), block(8, 3, patterns["extremes"])], extra=extra)
 
     assert len({c["id"] for c in cases}) == len(cases)
-    return {"schema": "t172-spu-experiment-v1", "matrix_revision": "adpcm-2",
+    return {"schema": "t172-spu-experiment-v1", "matrix_revision": "adpcm-4",
             "reset": "cold core and zero RAM per case, then case synthetic preload",
             "preload": [], "audio": True,
             "observe": [VOICE + 12, VOICE + 14, 0x1F801D9C, 0x1F801D9E,

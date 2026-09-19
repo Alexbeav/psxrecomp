@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "Standalone documentation-derived arithmetic candidate; not integrated or reference-qualified",
+  "status": "Integrated local candidate; streaming/runtime comparison pending",
   "base": "9333800db8f84210bca53aec33c7b5a19e5722cd",
   "sources": [
     {
@@ -8,7 +8,7 @@
       "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
       "path": "docs/soundprocessingunitspu.md",
       "sha256": "e7ddff35a7faf8267f1cde0362a54c9011ee99a9cc6600faa4ab63c53b4e500d",
-      "lines_read": "1-48,85-209,719-747"
+      "lines_read": "1-48,85-209,719-747;214-325 Gaussian table/formula;1091-end state-machine discussion"
     },
     {
       "repository": "https://github.com/psx-spx/psx-spx.github.io",
@@ -21,11 +21,25 @@
   "exposure": "Hardware-document decoder pseudocode read; no emulator or suspect implementation body read. T77 provided declarations and caller responsibilities only. Notion ADPCM/SPU searches were metadata-only to avoid implementation recipes.",
   "test_origin": "New mathematical examples from documented nibble expansion, filter coefficients, rounding and saturation",
   "unresolved": [
-    "SPU versus XA rounding and reserved shift semantics",
-    "Invalid filter selectors5..15",
-    "Whether predictor histories use clipped samples",
-    "Refill timing, ring occupancy, loop/end transitions, IRQ visibility and noise behavior",
-    "Full stereo path introduces interpolation/envelope/mixer behavior; decoder accuracy requires distinguishing these"
+    "Streaming refill/boundary/loop/IRQ comparison after integration",
+    "Baseline PCM scaling and unrelated interpolation/mixer discrepancies",
+    "Full-system and hardware qualification",
+    "Diagnostic event address/timing not observed by current wrapper",
+    "Other audit candidates remain untouched"
   ],
-  "legal_claim": "None"
+  "legal_claim": "None",
+  "observed_rules": [
+    "Separate signed floor for each predictor product, then add residual and saturate signed16; clipped result feeds history",
+    "Invalid filter5..15 contributes zero prediction",
+    "Reserved shifts13..15 yield residual0 for nonnegative nibble and -128 for negative nibble",
+    "Four samples per packed word; observed IRQ/readback timing supports refill below11queued samples",
+    "Noise-mode end+mute sets ENDX without zeroing envelope"
+  ],
+  "arithmetic_evidence": {
+    "script": "runtime/tests/analyze_spu_adpcm_prediction.py",
+    "receipt": "../evidence/adpcm-prediction-hypotheses-v1.json",
+    "exact_interior_observations": 30720,
+    "cases": 640,
+    "calibration": "T77 declared reference host output floor((3*x+2)/4); not inverted, not part of decoder implementation"
+  }
 }

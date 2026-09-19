@@ -23,6 +23,7 @@
 #include "crc32.h"
 #include "psx_cycles.h"
 #include "spu_envelope_rate.h"
+#include "spu_adpcm_sample.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -686,57 +687,50 @@ static void source_decode_irq(uint32_t address) {
         spu_irq_check(irq_address, 1u);
 }
 
-static void source_decode_word(int idx, uint32_t noise_mask) {
-    SpuVoice *v = &voices[idx];
-    SourceSpuDecode *d = &source_decode[idx];
-    if (d->available >= 11) {
-        source_decode_irq(v->cur_addr - 2u);
+/* Independent streaming decoder. Register/audio experiments and rejected
+ * hypotheses are recorded in runtime/tests/spu_adpcm_provenance.json. */
+static void source_decode_word(int idx, uint32_t noise_mask)
+{
+    SourceSpuDecode *queue = &source_decode[idx];
+    SpuVoice *voice = &voices[idx];
+    if (queue->available >= 11)
         return;
-    }
-    if (!(v->cur_addr & 15u)) {
-        if (v->flags & 1u) {
-            v->cur_addr = v->repeat_addr & ~15u;
-            endx_latch |= 1u << idx;
-            if (!(v->flags & 2u) && !(noise_mask & (1u << idx))) {
-                v->env_level = 0;
-                v->adsr_phase = ADSR_RELEASE;
-                /* Source END keeps the envelope divider; KEYOFF resets it. */
+
+    uint32_t address = voice->cur_addr & (SPU_RAM_SIZE - 1u);
+    if ((address & 15u) == 0) {
+        if (voice->flags & 1u) {
+            endx_latch |= UINT32_C(1) << idx;
+            int stop = !(voice->flags & 2u) && !(noise_mask & (UINT32_C(1) << idx));
+            if (stop) {
+                voice->env_level = 0;
+                voice->adsr_phase = ADSR_RELEASE;
             }
-            spu_event_record((v->flags & 2u) ? SPU_EV_END_LOOP : SPU_EV_END_STOP,
-                             idx, v->cur_addr);
+            spu_event_record(stop ? SPU_EV_END_STOP : SPU_EV_END_LOOP, idx, address);
+            address = voice->repeat_addr & (SPU_RAM_SIZE - 1u);
         }
-        source_decode_irq(v->cur_addr);
-        uint8_t header = spu_ram[v->cur_addr];
-        v->flags = spu_ram[v->cur_addr + 1u];
-        d->shift = header & 15u;
-        d->filter = header >> 4;
-        if ((v->flags & 4u) && !d->ignore_loop) {
-            v->repeat_addr = v->cur_addr;
-            spu_regs[(uint32_t)idx * 8u + 7u] = (uint16_t)(v->cur_addr >> 3);
+        source_decode_irq(address);
+        uint8_t header = spu_ram[address];
+        voice->flags = spu_ram[(address + 1u) & (SPU_RAM_SIZE - 1u)];
+        queue->shift = header & 15u;
+        queue->filter = header >> 4;
+        if ((voice->flags & 4u) && !queue->ignore_loop) {
+            voice->repeat_addr = address;
+            spu_regs[idx * 8 + 7] = (uint16_t)(address / 8u);
         }
-        v->cur_addr = (v->cur_addr + 2u) & (SPU_RAM_SIZE - 1u);
-    } else {
-        source_decode_irq(v->cur_addr);
+        address = (address + 2u) & (SPU_RAM_SIZE - 1u);
     }
-    uint16_t word = (uint16_t)(spu_ram[v->cur_addr] |
-                              (uint16_t)spu_ram[v->cur_addr + 1u] << 8);
-    unsigned shift = d->shift;
-    if (shift > 12u) { shift = 8u; word &= 0x8888u; }
-    static const int16_t weights[5][2] = {{0,0},{60,0},{115,-52},{98,-55},{122,-60}};
-    int w1 = d->filter < 5u ? weights[d->filter][0] : 0;
-    int w2 = d->filter < 5u ? weights[d->filter][1] : 0;
-    for (unsigned n = 0; n < 4; ++n) {
-        int32_t value = (int16_t)((word & 15u) << 12);
-        value = (value >> shift) + (((int32_t)v->hist1 * w1) >> 6) +
-                                  (((int32_t)v->hist2 * w2) >> 6);
-        int16_t sample = clamp16(value);
-        d->samples[(d->write_pos + n) & 31u] = sample;
-        v->hist2 = v->hist1; v->hist1 = sample;
-        word >>= 4;
+
+    source_decode_irq(address);
+    uint16_t packed = (uint16_t)((uint16_t)spu_ram[address] |
+                      (uint16_t)((uint16_t)spu_ram[(address + 1u) & (SPU_RAM_SIZE - 1u)] << 8));
+    for (unsigned sample = 0; sample < 4; ++sample) {
+        queue->samples[queue->write_pos] = spu_adpcm_sample(
+            (packed >> (sample * 4u)) & 15u, queue->shift, queue->filter,
+            &voice->hist1, &voice->hist2);
+        queue->write_pos = (uint8_t)((queue->write_pos + 1u) & 31u);
     }
-    d->write_pos = (d->write_pos + 4u) & 31u;
-    d->available += 4;
-    v->cur_addr = (v->cur_addr + 2u) & (SPU_RAM_SIZE - 1u);
+    queue->available = (uint8_t)(queue->available + 4u);
+    voice->cur_addr = (address + 2u) & (SPU_RAM_SIZE - 1u);
 }
 
 static int16_t source_voice_sample(int idx) {
