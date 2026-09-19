@@ -3,13 +3,13 @@
   "status": "Independent service helper; isolated, callback-entry, actual persistence and bounded actual consumer gates pass; independent review pending",
   "base": "7765cc5d2e024d8c6fa604e557bd1a750a91c458",
   "source_boundary": "Primary hardware context, declaration/caller-only contract, independently authored black-box experiments and qualified independently authored raster model. Old service/runtime/wire bodies and source-profile tests unread. Mechanical notice-marker scan found no header notice; root LICENSE unchanged.",
-  "model_evidence": "Independent measured model plus final-scanline holdout correction; all13final C matrices pass exactly",
+  "model_evidence": "Independent measured model with final-scanline and unchanged-line corrections; all16exact corrected matrices pass",
   "scope": "Service clock helper only; qualified raster dependency reused",
   "pending_gates": [
     "Independent T77 raw evidence review and exact push"
   ],
   "legal_claim": "None; no formal clean-room or legal clearance claim",
-  "tested_commit": "f8cde13e62deb95a2ced5fdfb9b6d92eceb8eb63",
+  "tested_commit": "e1868b9a9db0980e05b70c8b84a1b34cbb5bc3bf",
   "validation": {
     "experiments-v1": {
       "cases": 456,
@@ -173,6 +173,24 @@
       ],
       "examples": []
     },
+    "range-wrap-holdouts-v10": {
+      "cases": 270,
+      "rows": 1350,
+      "events": [
+        2544750,
+        2544750
+      ],
+      "dispatches": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "88b2bc3a70a86261664a5b5d8652ab9017b00c2de9209094760c4720c42482c6",
+        "88b2bc3a70a86261664a5b5d8652ab9017b00c2de9209094760c4720c42482c6"
+      ],
+      "examples": []
+    },
     "wire-experiments-v1": {
       "cases": 120,
       "rows": 3000,
@@ -242,6 +260,42 @@
       "normalized_sha256": [
         "c4db388fec5a3262dfa003e75a78022da2b9ec3622d4d87c87bb961797cb7ecb",
         "c4db388fec5a3262dfa003e75a78022da2b9ec3622d4d87c87bb961797cb7ecb"
+      ],
+      "examples": []
+    },
+    "reviewer-lastline": {
+      "cases": 20,
+      "rows": 60,
+      "events": [
+        188500,
+        188500
+      ],
+      "dispatches": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "fac83589c6a04e879626df975675b345e832e1b1ed2abf04fe2dc3e24dbe864b",
+        "fac83589c6a04e879626df975675b345e832e1b1ed2abf04fe2dc3e24dbe864b"
+      ],
+      "examples": []
+    },
+    "reviewer-wrap": {
+      "cases": 15,
+      "rows": 75,
+      "events": [
+        141375,
+        141375
+      ],
+      "dispatches": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "3a1c4e00c3f9abe39ad387138ef5137f957709e7fbaa08f17df662117ab4843e",
+        "3a1c4e00c3f9abe39ad387138ef5137f957709e7fbaa08f17df662117ab4843e"
       ],
       "examples": []
     }
@@ -333,12 +387,12 @@
     "Command-cost snippet exposure prevents future unexposed claims for those unrelated fragments"
   ],
   "primary_packet_context": "Pinned PSX-SPX GPU docs75-140,218-268,450-481,537-580 plus earlier polygon/display/timing reading. Hardware context only; no emulator formulas read.",
-  "review_correction": "First review17bdd missed direct advances landing on final scanline. Reviewer supplied2input-only failures;459authored extensions found8failures. Preserved measured final-line fallback and reran every gate.",
+  "review_correction": "First review missed final-scanline fallback; second review missed full-wrap advances returning to identical scanline. Input-only reviewer holdouts independently expanded to459final-line and270range/wrap cases; corrected both measured rules, then rebuilt and reran every gate and both original root holdout matrices. Prior attempts retained immutable.",
   "totals": {
-    "matrices": 13,
-    "cases": 2140,
-    "rows": 204215,
-    "ordered_events": 10742431,
+    "matrices": 16,
+    "cases": 2445,
+    "rows": 205700,
+    "ordered_events": 13617056,
     "actual_dispatches": 370
   }
 }
