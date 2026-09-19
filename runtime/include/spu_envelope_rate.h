@@ -75,10 +75,8 @@ static inline void spu_envelope_sweep_step(int16_t *level, uint32_t *counter, ui
     SpuEnvelopeRate rate = spu_envelope_rate(
         (raw >> 2) & 31u, raw & 3u, exponential, decreasing,
         inverted && !(exponential && decreasing), (raw & 127u) == 127u, *level);
-    if (!spu_envelope_clock(counter, rate.counter_step))
-        return;
-
-    int32_t next = (int32_t)*level + rate.level_step;
+    int due = spu_envelope_clock(counter, rate.counter_step);
+    int32_t next = (int32_t)*level + (due ? rate.level_step : 0);
     if (decreasing) {
         /* The reference tests the old sign, allowing a one-sample zero
          * crossing. Exponential negative sweeps retain their signed tail.
@@ -129,10 +127,9 @@ static inline void spu_envelope_adsr_step(uint16_t *level, uint32_t *counter,
     int32_t current = *level < 32768 ? *level : (int32_t)*level - 65536;
     SpuEnvelopeRate rate = spu_envelope_rate(shift, step, exponential, decreasing,
                                             0, stopped, (int16_t)current);
-    if (!spu_envelope_clock(counter, rate.counter_step))
-        return;
-    int32_t next = current + rate.level_step;
-    if (decreasing) {
+    int due = spu_envelope_clock(counter, rate.counter_step);
+    int32_t next = current + (due ? rate.level_step : 0);
+    if (due && decreasing) {
         uint16_t wrapped = (uint16_t)next;
         next = wrapped < 32768 ? wrapped : 0;
     } else if (next > 32767) {
