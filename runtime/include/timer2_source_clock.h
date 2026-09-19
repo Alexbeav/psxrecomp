@@ -49,7 +49,7 @@ static inline unsigned timer2_source_cpu(PsxTimer2Source *timer, uint32_t cycles
     if (overflow) timer->mode |= 4096u;
     unsigned pulses = timer2_source_pulse(timer, (target_hit && (timer->mode & 16u)) ||
                                                 (overflow && (timer->mode & 32u)));
-    if ((timer->mode & 64u) && overflow && !(timer->mode & 32u))
+    if ((timer->mode & 64u) && overflow && (target_hit || !(timer->mode & 32u)))
         timer->irq_done = 0;
     return pulses;
 }
