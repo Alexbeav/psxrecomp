@@ -18,9 +18,11 @@ def validate(matrix_path, paths):
     with ExitStack() as stack:
         files = [stack.enter_context(path.open()) for path in paths]
         callback_flags = []
+        wire_flags = []
         for file in files:
             metadata = json.loads(next(file))['metadata']
             callback_flags.append(bool(metadata.get('callback_state', False)))
+            wire_flags.append(bool(metadata.get('actual_public_wire', False)))
             if metadata['matrix_sha256'] != signature:
                 raise ValueError('wrong service matrix')
         for case in matrix['cases']:
@@ -31,6 +33,8 @@ def validate(matrix_path, paths):
                     keys = {'case_id', 'step', 'state', 'next', 'until_phase', 'return_value', 'raster_wire_hex', 'events'}
                     if callback_flags[i]:
                         keys.add('callback_states')
+                    if wire_flags[i]:
+                        keys.update(['service_wire_hex', 'full_raster_wire_hex'])
                     if not isinstance(row, dict) or set(row) != keys:
                         raise ValueError('missing or malformed service result')
                     if row['case_id'] != case['id'] or type(row['step']) is not int or row['step'] != step:
@@ -49,6 +53,9 @@ def validate(matrix_path, paths):
                     if len(wire) != 80:
                         raise ValueError('invalid raster wire length')
                     struct.unpack('<QQ16I', wire)
+                    if wire_flags[i]:
+                        if len(bytes.fromhex(row['service_wire_hex'])) != 384 or len(bytes.fromhex(row['full_raster_wire_hex'])) != 160:
+                            raise ValueError('incomplete actual service/raster wire')
                     if not isinstance(row['events'], list):
                         raise ValueError('invalid event list')
                     for event in row['events']:
@@ -77,6 +84,10 @@ def validate(matrix_path, paths):
                                                      first=rows[0][field], second=rows[1][field]))
                     if all(callback_flags) and rows[0]['callback_states'] != rows[1]['callback_states']:
                         differences['callback_states'] += 1
+                    if all(wire_flags):
+                        for field in ['service_wire_hex', 'full_raster_wire_hex']:
+                            if rows[0][field] != rows[1][field]:
+                                differences[field] += 1
                 count += 1
         if any(next(file, None) is not None for file in files):
             raise ValueError('extra service records')

@@ -1,14 +1,207 @@
 {
   "task": "T172",
-  "status": "Independent measured C candidate; qualification pending",
+  "status": "Independent service event/callback-entry and actual persistence gates pass; transitive callback qualification pending",
   "base": "7765cc5d2e024d8c6fa604e557bd1a750a91c458",
   "source_boundary": "Primary hardware context, declaration/caller-only contract, independently authored black-box experiments and qualified independently authored raster model. Old service/runtime/wire bodies and source-profile tests unread. Mechanical notice-marker scan found no header notice; root LICENSE unchanged.",
   "model_evidence": "evidence/service-clock-hypothesis-v2.json matches eight authored matrices including callback-entry snapshots",
   "scope": "Service clock helper only; qualified raster dependency reused",
   "pending_gates": [
-    "Exact C traces and callback-state comparison",
-    "Actual full-service persistence and baseline snapshot continuation",
-    "Transitive production callback/reentrancy boundary"
+    "Actual transitive production callback/reentrancy boundary"
   ],
-  "legal_claim": "None; no formal clean-room or legal clearance claim"
+  "legal_claim": "None; no formal clean-room or legal clearance claim",
+  "tested_commit": "17bdd9f9024c11d0f0d5ee2d4bbf84aa2e8cf90a",
+  "validation": {
+    "experiments-v1": {
+      "cases": 456,
+      "rows": 22752,
+      "events": [
+        2386884,
+        2386884
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "4e71faa358e2a11d880c8526a82a0e90a3fc6ba6fb53e3771b29d80d7dd37237",
+        "4e71faa358e2a11d880c8526a82a0e90a3fc6ba6fb53e3771b29d80d7dd37237"
+      ],
+      "examples": []
+    },
+    "raster-experiments-v2": {
+      "cases": 110,
+      "rows": 31280,
+      "events": [
+        140952,
+        140952
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "22b3df68cbdff2204fb984638dc3b357e3feaa917e90919f79a6e37c39a7b2ed",
+        "22b3df68cbdff2204fb984638dc3b357e3feaa917e90919f79a6e37c39a7b2ed"
+      ],
+      "examples": []
+    },
+    "boundaries-v3": {
+      "cases": 47,
+      "rows": 134,
+      "events": [
+        50,
+        50
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "b9b7c0b11e8e16c1b868665d9fc95cec6fd215fa64e3d8331cfcbe24c70f27f6",
+        "b9b7c0b11e8e16c1b868665d9fc95cec6fd215fa64e3d8331cfcbe24c70f27f6"
+      ],
+      "examples": []
+    },
+    "frame-probes-v4": {
+      "cases": 16,
+      "rows": 12832,
+      "events": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "b788f1679c786e608946a6351332e6495eee753ba7897c73253bde29871624ef",
+        "b788f1679c786e608946a6351332e6495eee753ba7897c73253bde29871624ef"
+      ],
+      "examples": []
+    },
+    "frame-thresholds-v5": {
+      "cases": 232,
+      "rows": 63336,
+      "events": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "89f709044e5914a2601f399da3d8218b2e103dc1054a64b137901d2a6a22a63e",
+        "89f709044e5914a2601f399da3d8218b2e103dc1054a64b137901d2a6a22a63e"
+      ],
+      "examples": []
+    },
+    "frame-thresholds-v6": {
+      "cases": 232,
+      "rows": 63568,
+      "events": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "8df3d20d7981e817adc8577330c5a9ac977c99f6b7d3639ad85ee005501342bd",
+        "8df3d20d7981e817adc8577330c5a9ac977c99f6b7d3639ad85ee005501342bd"
+      ],
+      "examples": []
+    },
+    "crossings-v7": {
+      "cases": 21,
+      "rows": 105,
+      "events": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "633c044dc9daa96078f53eaebf5812aa818e537dad694505a1b6bf12f8f8a0be",
+        "633c044dc9daa96078f53eaebf5812aa818e537dad694505a1b6bf12f8f8a0be"
+      ],
+      "examples": []
+    },
+    "crossings-v8": {
+      "cases": 16,
+      "rows": 96,
+      "events": [
+        0,
+        0
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "b08946935fc02d94c8e44272380ecb429b0a87d3e71b39037a856f0f174aa9c3",
+        "b08946935fc02d94c8e44272380ecb429b0a87d3e71b39037a856f0f174aa9c3"
+      ],
+      "examples": []
+    }
+  },
+  "wire_validation": [
+    {
+      "cases": 120,
+      "rows": 3000,
+      "events": [
+        3396426,
+        3396426
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "4e95b3421b2f830ce92c7647f1521885a9c67193a75274a60de5f4bc39da9fe6",
+        "4e95b3421b2f830ce92c7647f1521885a9c67193a75274a60de5f4bc39da9fe6"
+      ],
+      "examples": []
+    },
+    {
+      "cases": 231,
+      "rows": 1848,
+      "events": [
+        2008743,
+        2008743
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "7ba23f6564b041d9e241cb06c54c1de7fdcd889a09601fd2724d81e0a6f6d877",
+        "7ba23f6564b041d9e241cb06c54c1de7fdcd889a09601fd2724d81e0a6f6d877"
+      ],
+      "examples": []
+    }
+  ],
+  "controls": {
+    "controls": 39,
+    "all_detected": true,
+    "results": {
+      "callback_next": true,
+      "callback_until_phase": true,
+      "callback_return_value": true,
+      "callback_state_0": true,
+      "callback_state_1": true,
+      "callback_state_2": true,
+      "callback_state_3": true,
+      "callback_state_4": true,
+      "callback_state_5": true,
+      "callback_state_6": true,
+      "callback_event_0": true,
+      "callback_event_1": true,
+      "callback_event_order": true,
+      "callback_raster_wire_hex": true,
+      "callback_raster_wire_hex_length": true,
+      "callback_callback_state": true,
+      "callback_callback_wire": true,
+      "callback_callback_missing": true,
+      "callback_integer_type": true,
+      "wire_next": true,
+      "wire_until_phase": true,
+      "wire_return_value": true,
+      "wire_state_0": true,
+      "wire_state_1": true,
+      "wire_state_2": true,
+      "wire_state_3": true,
+      "wire_state_4": true,
+      "wire_state_5": true,
+      "wire_state_6": true,
+      "wire_event_0": true,
+      "wire_event_1": true,
+      "wire_event_order": true,
+      "wire_raster_wire_hex": true,
+      "wire_raster_wire_hex_length": true,
+      "wire_service_wire_hex": true,
+      "wire_service_wire_hex_length": true,
+      "wire_full_raster_wire_hex": true,
+      "wire_full_raster_wire_hex_length": true,
+      "wire_integer_type": true
+    }
+  },
+  "exposure_incident": "Opaque --wire compiler warnings printed unrelated source_gpu_command_projection.h fragments at lines222,223,241. Service implementation was already independently authored; its old body remains unread. T172 is no longer unexposed for those future command-cost fragments; T77 recorded incident and suppressed source diagnostic output. Do not open restricted compiler logs.",
+  "rejected_leads": [
+    "Apparent service/direct raster mismatch came from comparing mode0 withmode36; corrected before runtime change",
+    "Blank rise alone does not describe measured service frame policy; threshold and skipped-line probes retained"
+  ]
 }
