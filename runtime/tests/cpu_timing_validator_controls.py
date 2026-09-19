@@ -43,6 +43,13 @@ def controls(matrix_path, trace_path, scratch):
     add('event_shape',lambda x:x[-1].update(events=[[1,0,1]]))
     add('wire_length',lambda x:x[-1].update(cpu_wire_hex=x[-1]['cpu_wire_hex'][:-2]))
     add('wire_value',lambda x:x[-1].update(cpu_wire_hex='ff'+x[-1]['cpu_wire_hex'][2:]))
+    if selected[-1].get('event_cpu_states'):
+        add('event_cpu_missing',lambda x:x[-1].pop('event_cpu_states'))
+        add('event_cpu_count',lambda x:x[-1]['event_cpu_states'].pop())
+        add('event_cpu_type',lambda x:x[-1]['event_cpu_states'].__setitem__(0,False))
+        add('event_cpu_length',lambda x:x[-1]['event_cpu_states'].__setitem__(0,'00'))
+        add('event_cpu_value',lambda x:x[-1]['event_cpu_states'].__setitem__(0,
+            'ff'+x[-1]['event_cpu_states'][0][2:]))
     rejected = []
     Path(scratch).mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='cpu-validator-',dir=scratch) as folder:
