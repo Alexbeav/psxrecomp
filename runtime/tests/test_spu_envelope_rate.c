@@ -97,7 +97,7 @@ int main(void)
     uint8_t phase = 0;
     counter = 0;
     spu_envelope_adsr_step(&level, &counter, &phase, 0x000F, 0x1FC0);
-    assert(level == 32767 && phase == 1);
+    assert(level == 32767 && phase == 0);
     spu_envelope_adsr_step(&level, &counter, &phase, 0x000F, 0x1FC0);
     assert(level == 16383 && phase == 2);
     spu_envelope_adsr_step(&level, &counter, &phase, 0x000F, 0x1FC0);
@@ -109,5 +109,21 @@ int main(void)
     assert(level == 16384);
     spu_envelope_adsr_step(&level, &counter, &phase, 0x000F, 0x4000);
     assert(level == 0);
+    /* sweep_0001_a030: clamp on the sample between slow updates. */
+    sweep = 2;
+    counter = 0;
+    spu_envelope_sweep_step(&sweep, &counter, 0xA030);
+    assert(sweep == 2);
+    spu_envelope_sweep_step(&sweep, &counter, 0xA030);
+    assert(sweep == -6);
+    spu_envelope_sweep_step(&sweep, &counter, 0xA030);
+    assert(sweep == 0 && counter == 16384);
+
+    /* adsr_write_7f60_7fff_6: even halted attack can enter decay. */
+    level = 32767;
+    phase = 0;
+    counter = 0;
+    spu_envelope_adsr_step(&level, &counter, &phase, 0x7F60, 0x1FC0);
+    assert(level == 32511 && phase == 1);
     return 0;
 }

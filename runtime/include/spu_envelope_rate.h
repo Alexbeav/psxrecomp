@@ -96,6 +96,10 @@ static inline void spu_envelope_sweep_step(int16_t *level, uint32_t *counter, ui
 static inline void spu_envelope_adsr_step(uint16_t *level, uint32_t *counter,
                                          uint8_t *phase, uint16_t low, uint16_t high)
 {
+    /* A direct maximum-level write enters decay before selecting this sample
+     * rate; decay itself must complete an update before entering sustain. */
+    if (*phase == 0 && *level == 32767)
+        *phase = 1;
     unsigned shift, step = 0;
     int exponential, decreasing, stopped = 0;
     switch (*phase) {
@@ -136,8 +140,7 @@ static inline void spu_envelope_adsr_step(uint16_t *level, uint32_t *counter,
         next = 32767;
     }
     *level = (uint16_t)next;
-    if ((*phase == 0 && next == 32767) ||
-        (*phase == 1 && next <= (int32_t)((low & 15u) + 1u) * 2048))
+    if (due && *phase == 1 && next <= (int32_t)((low & 15u) + 1u) * 2048)
         ++*phase;
 }
 
