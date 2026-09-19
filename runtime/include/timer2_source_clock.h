@@ -38,7 +38,7 @@ static inline unsigned timer2_source_cpu(PsxTimer2Source *timer, uint32_t cycles
     uint64_t end = start + steps;
     uint64_t distance = start < timer->target ? timer->target - start
                                             : 65536u - start + timer->target;
-    int target_hit = steps >= distance;
+    int target_hit = steps >= distance && !((timer->mode & 8u) && start == timer->target);
     if ((timer->mode & 8u) && (target_hit || start == timer->target))
         end = timer->target ? end % timer->target : 0;
     int overflow = end >= 65536u;
@@ -61,7 +61,6 @@ static inline unsigned timer2_source_write(PsxTimer2Source *timer, unsigned reg,
         timer->counting = !(value & 1u);
     } else if (reg == 8) {
         timer->target = value;
-        return 0;
     } else {
         return 0;
     }
@@ -70,7 +69,7 @@ static inline unsigned timer2_source_write(PsxTimer2Source *timer, unsigned reg,
     timer->mode |= 2048u;
     if (timer->mode & 8u)
         timer->counter = 0;
-    return timer2_source_pulse(timer, !!(timer->mode & 16u));
+    return timer2_source_pulse(timer, !timer->irq_done && !!(timer->mode & 16u));
 }
 
 static inline uint32_t timer2_source_read(PsxTimer2Source *timer, unsigned reg)
@@ -94,7 +93,7 @@ static inline uint32_t timer2_source_next(const PsxTimer2Source *timer)
     if (((timer->mode & 16u) || ((timer->mode & 40u) == 40u)) &&
         timer->counter < timer->target)
         distance = timer->target - timer->counter;
-    if ((timer->mode & 40u) == 40u && timer->counter == timer->target)
+    if ((timer->mode & 56u) == 40u && timer->counter == timer->target)
         distance = 1;
     if (timer->mode & 512u)
         distance = distance * 8u - timer->divider;
