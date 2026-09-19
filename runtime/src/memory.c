@@ -2125,7 +2125,8 @@ static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
     }
     cpu->read_absorb[cpu->read_absorb_which] = 0;
     cpu->read_absorb_which = 0;
-    uint32_t wait = t172_memory_wait(physical, width);
+    uint32_t base_wait = t172_memory_wait(physical, width);
+    uint32_t wait = base_wait;
     uint32_t tail = 0;
     if (wait) {
         wait += dma_cpu_read_penalty();
@@ -2134,9 +2135,17 @@ static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
         if (cpu->read_fudge < 32) wait -= 2;
         if (physical >= 0x1f801000u && physical < 0x1f803000u)
             tail = coprocessor ? 1 : 2;
-        int sample_early = sampling && source_gpu_runtime_active() &&
-                           timers_source_hblank_counter_read(addr);
-        if (sample_early) tail = wait < 3 ? wait : 3;
+        int cd = physical >= 0x1f801800u && physical < 0x1f801810u;
+        int early_register = (physical >= 0x1f801070u && physical < 0x1f801078u) ||
+                             (physical >= 0x1f801080u && physical < 0x1f801100u) ||
+                             (width == 4 && physical >= 0x1f801810u && physical < 0x1f801818u);
+        int sample_early = addr < 0xc0000000u && source_gpu_runtime_active() &&
+            (coprocessor ? cd : sampling && (cd || early_register || timers_source_hblank_counter_read(addr)));
+        if (sample_early) {
+            tail = physical < 0x800000u ? 3 :
+                physical >= 0x1f801000u && physical < 0x1f803000u ? base_wait - 2 - coprocessor : 0;
+            if (tail > wait) tail = wait;
+        }
         if (wait > tail) psx_advance_cycles(wait - tail);
         if (sample_early) psx_devices_service_to_now();
     } else {
@@ -2145,6 +2154,15 @@ static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
     cpu->ld_which_t = (uint8_t)rt;
     t172_memory_poll(physical);
     return tail;
+}
+#endif
+
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
+static int t172_memory_direct_ram(uint32_t addr)
+{
+    return addr < 0xc0000000u && (addr & 0x1fffffffu) < 0x800000u &&
+        !g_ls_mode && !g_ds_recording && !g_ls_replay_active &&
+        !g_ram_read_watch_active && !g_dma_exec_depth;
 }
 #endif
 
@@ -2161,7 +2179,13 @@ static uint32_t t172_memory_load(CPUState *cpu, uint32_t addr, uint32_t rt,
     if (!only_timing) {
         if (width == 4) result = psx_read_word(addr);
         else if (width == 2) result = psx_read_half(addr);
-        else result = psx_read_byte(addr);
+        else {
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
+            if (t172_memory_direct_ram(addr)) result = ram[addr & (RAM_SIZE - 1)];
+            else
+#endif
+                result = psx_read_byte(addr);
+        }
     }
     if (tail) psx_advance_cycles(tail);
     return result;
@@ -2193,8 +2217,7 @@ uint32_t psx_cyc_lwc2_read(CPUState *cpu, uint32_t addr)
 #endif
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
     uint32_t physical = addr & 0x1fffffffu;
-    if (addr < 0xc0000000u && physical < 0x800000u && !g_ls_mode &&
-        !g_ds_recording && !g_ls_replay_active && !g_ram_read_watch_active && !g_dma_exec_depth)
+    if (t172_memory_direct_ram(addr))
         memcpy(&result, ram + (physical & (RAM_SIZE - 1)), sizeof result);
     else
 #endif
