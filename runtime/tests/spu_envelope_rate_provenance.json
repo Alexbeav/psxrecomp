@@ -1,0 +1,59 @@
+{
+  "task": "T172",
+  "status": "standalone documentation-derived candidate; not integrated or hardware-qualified",
+  "base": "77fc84d18cd341ba0c0feb68a63f0904f8c467f0",
+  "implementation": "runtime/include/spu_envelope_rate.h",
+  "tests": "runtime/tests/test_spu_envelope_rate.c",
+  "sources": [
+    {
+      "repository": "https://github.com/psx-spx/psx-spx.github.io",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "path": "docs/soundprocessingunitspu.md",
+      "sha256": "e7ddff35a7faf8267f1cde0362a54c9011ee99a9cc6600faa4ab63c53b4e500d",
+      "lines_read": "330-507, plus section-heading search",
+      "use": "Register definitions, envelope rate relationships, documented slow-rate equivalence, and uncertainty statements. Hardware-document pseudocode was read. No document text or implementation was copied verbatim."
+    },
+    {
+      "url": "https://psx-spx.consoledev.net/soundprocessingunitspu/",
+      "use": "Web search corroboration of the hardware documentation location. Local pinned text supplies the implementation input."
+    },
+    {
+      "source": "T77 behavior-only messages on 2026-09-19",
+      "use": "Base identity, candidate filenames, helper declarations, state field types, call-site and replacement line boundaries. No implementation bodies or old test expectations supplied."
+    }
+  ],
+  "test_oracle": {
+    "origin": "New hand-calculated numeric examples from the pinned hardware documentation",
+    "fast_rate": "Shift 0 scales the step by 2048; upward selectors 0 and 3 yield 14336 and 8192. Downward selectors yield -16384 and -10240.",
+    "knee": "24576 is inclusive in the fast regime. At 24577, shift 9 changes 28 to 7, shift 10 changes 14/32768 to 7/16384, and shift 11 changes 7/32768 to 7/8192.",
+    "decay": "At shift 11, -8 times half volume is -4. At level 1 it floors to -1. At level -32768 it is +8. The -5 times -16384 case floors +2.5 to +2.",
+    "slow_rate": "Clock increment remains 1 below representable clock rates unless the caller identifies the phase's all-ones rate. An all-ones rate leaves zero increment.",
+    "polarity": "The inverted argument is the effective step polarity, not a complete hardware sweep phase policy.",
+    "limitations": "These are specification-conformance checks, not measurements on PlayStation hardware or independent validation of the documentation itself."
+  },
+  "input_contract": {
+    "shift": "0 through 31 from a hardware register",
+    "step": "0 through 3 from a hardware register, or the phase's fixed selector",
+    "mode_flags": "0 or 1",
+    "all_rate_bits_set": "Caller-supplied phase-specific halt condition; the helper does not infer it from a generic encoding",
+    "level": "Signed 16-bit current level",
+    "output": "Signed level change and unsigned counter increment; no state mutation"
+  },
+  "unresolved": [
+    "Counter reset or retention on key-on, key-off, rate writes and phase transitions",
+    "Phase transition ordering relative to the level update",
+    "Negative direct ADSR writes and internal-versus-visible register behavior",
+    "Effective polarity selection for exponential decreasing sweep",
+    "Phase-specific all-ones decoding at the runtime adapter",
+    "Existing saved-state representation and compatibility",
+    "Entire ADSR and sweep callers still require independent replacement",
+    "Audio decoder and interpolation-table provenance remain separate T77 candidates"
+  ],
+  "excluded_inputs": [
+    "Mednafen, Beetle and Octoshock implementation bodies",
+    "Suspect runtime implementation bodies",
+    "T77 detailed source-comparison report",
+    "Existing emulator-derived golden tests"
+  ],
+  "legal_claim": "None. A fresh task and documentation-derived arithmetic do not establish formal clean-room status or legal clearance."
+}
