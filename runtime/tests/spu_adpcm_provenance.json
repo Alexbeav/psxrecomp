@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "Audio/register/snapshot gates pass; corrected diagnostic-event candidate awaiting rerun",
+  "status": "Reviewable independent decoder replacement; audio/register/state/event regression gates pass",
   "base": "9333800db8f84210bca53aec33c7b5a19e5722cd",
   "sources": [
     {
@@ -18,14 +18,12 @@
       "lines_read": "778-854"
     }
   ],
-  "exposure": "Hardware-document decoder pseudocode read; no emulator or suspect implementation body read. T77 provided declarations and caller responsibilities only. Notion ADPCM/SPU searches were metadata-only to avoid implementation recipes.",
+  "exposure": "Hardware-document decoder pseudocode read; no emulator or suspect implementation body read. T77 provided declarations and caller responsibilities only. Notion ADPCM/SPU searches were metadata-only to avoid implementation recipes. Public diagnostic baseline traces were read to preserve destination-address and raw-flag event contracts; no implementation bodies were displayed.",
   "test_origin": "New mathematical examples from documented nibble expansion, filter coefficients, rounding and saturation",
   "unresolved": [
-    "Streaming refill/boundary/loop/IRQ comparison after integration",
-    "Baseline PCM scaling and unrelated interpolation/mixer discrepancies",
-    "Full-system and hardware qualification",
-    "Diagnostic event address/timing not observed by current wrapper",
-    "Other audit candidates remain untouched"
+    "Pre-existing full PCM/reference output differences, including explicit host normalization",
+    "Full-system scheduling and hardware qualification",
+    "Other audit candidates (timer2 next, timer1/GPU/CD and related inventory pending T77 review)"
   ],
   "legal_claim": "None",
   "observed_rules": [
@@ -56,6 +54,10 @@
     "snapshot_registers_and_pcm_suffix_equal": true,
     "envelope_regression_observations": 241260,
     "envelope_regression_equal": true,
-    "preexisting_source_reference_field_differences": 136326
+    "preexisting_source_reference_field_differences": 136326,
+    "tested_final_commit": "3c508fc85b0b623002472fef755bb5886bf82887",
+    "diagnostic_cases_per_profile": 124,
+    "diagnostic_observations_per_profile": 17146,
+    "diagnostic_all_fields_equal_baseline": true
   }
 }
