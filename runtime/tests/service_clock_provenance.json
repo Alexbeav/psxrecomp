@@ -1,12 +1,12 @@
 {
   "task": "T172",
-  "status": "Independent service event/callback-entry and actual persistence gates pass; transitive callback qualification pending",
+  "status": "Independent service helper; isolated, callback-entry, actual persistence and bounded actual consumer gates pass; independent review pending",
   "base": "7765cc5d2e024d8c6fa604e557bd1a750a91c458",
   "source_boundary": "Primary hardware context, declaration/caller-only contract, independently authored black-box experiments and qualified independently authored raster model. Old service/runtime/wire bodies and source-profile tests unread. Mechanical notice-marker scan found no header notice; root LICENSE unchanged.",
   "model_evidence": "evidence/service-clock-hypothesis-v2.json matches eight authored matrices including callback-entry snapshots",
   "scope": "Service clock helper only; qualified raster dependency reused",
   "pending_gates": [
-    "Actual transitive production callback/reentrancy boundary"
+    "Independent T77 raw evidence review and exact push"
   ],
   "legal_claim": "None; no formal clean-room or legal clearance claim",
   "tested_commit": "17bdd9f9024c11d0f0d5ee2d4bbf84aa2e8cf90a",
@@ -155,7 +155,7 @@
     }
   ],
   "controls": {
-    "controls": 39,
+    "controls": 69,
     "all_detected": true,
     "results": {
       "callback_next": true,
@@ -196,12 +196,87 @@
       "wire_service_wire_hex_length": true,
       "wire_full_raster_wire_hex": true,
       "wire_full_raster_wire_hex_length": true,
-      "wire_integer_type": true
+      "wire_integer_type": true,
+      "consumer_next": true,
+      "consumer_until_phase": true,
+      "consumer_return_value": true,
+      "consumer_state_0": true,
+      "consumer_state_1": true,
+      "consumer_state_2": true,
+      "consumer_state_3": true,
+      "consumer_state_4": true,
+      "consumer_state_5": true,
+      "consumer_state_6": true,
+      "consumer_event_0": true,
+      "consumer_event_1": true,
+      "consumer_event_order": true,
+      "consumer_raster_wire_hex": true,
+      "consumer_raster_wire_hex_length": true,
+      "consumer_service_wire_hex": true,
+      "consumer_service_wire_hex_length": true,
+      "consumer_full_raster_wire_hex": true,
+      "consumer_full_raster_wire_hex_length": true,
+      "consumer_callback_state": true,
+      "consumer_callback_wire": true,
+      "consumer_callback_missing": true,
+      "consumer_dispatch_cycle": true,
+      "consumer_dispatch_kind": true,
+      "consumer_dispatch_cost": true,
+      "consumer_dispatch_word": true,
+      "consumer_dispatch_missing": true,
+      "consumer_dma_time": true,
+      "consumer_dma_queue": true,
+      "consumer_integer_type": true
     }
   },
   "exposure_incident": "Opaque --wire compiler warnings printed unrelated source_gpu_command_projection.h fragments at lines222,223,241. Service implementation was already independently authored; its old body remains unread. T172 is no longer unexposed for those future command-cost fragments; T77 recorded incident and suppressed source diagnostic output. Do not open restricted compiler logs.",
   "rejected_leads": [
     "Apparent service/direct raster mismatch came from comparing mode0 withmode36; corrected before runtime change",
     "Blank rise alone does not describe measured service frame policy; threshold and skipped-line probes retained"
-  ]
+  ],
+  "consumer_validation": [
+    {
+      "cases": 84,
+      "rows": 2268,
+      "events": [
+        19908,
+        19908
+      ],
+      "dispatches": [
+        249,
+        249
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "b4ced6ff87db1152283b8dd5cb5772942e5083202ca75cdab8fdc43cefc8b142",
+        "b4ced6ff87db1152283b8dd5cb5772942e5083202ca75cdab8fdc43cefc8b142"
+      ],
+      "examples": []
+    },
+    {
+      "cases": 116,
+      "rows": 1160,
+      "events": [
+        25676,
+        25676
+      ],
+      "dispatches": [
+        121,
+        121
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "c4db388fec5a3262dfa003e75a78022da2b9ec3622d4d87c87bb961797cb7ecb",
+        "c4db388fec5a3262dfa003e75a78022da2b9ec3622d4d87c87bb961797cb7ecb"
+      ],
+      "examples": []
+    }
+  ],
+  "preservation": "Only source_gpu_service_clock.h production change since7765cc5d2; qualified raster, command parser, runtime consumers, public wire code and root LICENSE unchanged",
+  "limitations": [
+    "Full DMA engine, renderer, CPU scheduler and arbitrary external sink reentry are outside the bounded actual callback fixture",
+    "No hardware timing, host-performance or legal-clearance claim",
+    "Command-cost snippet exposure prevents future unexposed claims for those unrelated fragments"
+  ],
+  "primary_packet_context": "Pinned PSX-SPX GPU docs75-140,218-268,450-481,537-580 plus earlier polygon/display/timing reading. Hardware context only; no emulator formulas read."
 }

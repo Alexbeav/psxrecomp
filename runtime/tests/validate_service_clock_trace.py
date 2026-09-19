@@ -14,15 +14,18 @@ def validate(matrix_path, paths):
     digests = [hashlib.sha256() for _ in paths]
     differences, examples = Counter(), []
     events = [0 for _ in paths]
+    dispatches = [0 for _ in paths]
     count = 0
     with ExitStack() as stack:
         files = [stack.enter_context(path.open()) for path in paths]
         callback_flags = []
         wire_flags = []
+        consumer_flags = []
         for file in files:
             metadata = json.loads(next(file))['metadata']
             callback_flags.append(bool(metadata.get('callback_state', False)))
             wire_flags.append(bool(metadata.get('actual_public_wire', False)))
+            consumer_flags.append(bool(metadata.get('actual_service_callback', False)))
             if metadata['matrix_sha256'] != signature:
                 raise ValueError('wrong service matrix')
         for case in matrix['cases']:
@@ -35,6 +38,8 @@ def validate(matrix_path, paths):
                         keys.add('callback_states')
                     if wire_flags[i]:
                         keys.update(['service_wire_hex', 'full_raster_wire_hex'])
+                    if consumer_flags[i]:
+                        keys.update(['dma_times', 'pending_dma_words', 'dispatches'])
                     if not isinstance(row, dict) or set(row) != keys:
                         raise ValueError('missing or malformed service result')
                     if row['case_id'] != case['id'] or type(row['step']) is not int or row['step'] != step:
@@ -56,6 +61,21 @@ def validate(matrix_path, paths):
                     if wire_flags[i]:
                         if len(bytes.fromhex(row['service_wire_hex'])) != 384 or len(bytes.fromhex(row['full_raster_wire_hex'])) != 160:
                             raise ValueError('incomplete actual service/raster wire')
+                    if consumer_flags[i]:
+                        for field, bits in [('dma_times', 64), ('pending_dma_words', 32)]:
+                            if not isinstance(row[field], list) or any(type(v) is not int or not 0 <= v < 2**bits for v in row[field]):
+                                raise ValueError('invalid DMA observation')
+                        if not isinstance(row['dispatches'], list):
+                            raise ValueError('invalid dispatch list')
+                        for dispatch in row['dispatches']:
+                            if not isinstance(dispatch, dict) or set(dispatch) != {'cycle', 'kind', 'words', 'cost'}:
+                                raise ValueError('invalid dispatch observation')
+                            for field, bits in [('cycle', 64), ('kind', 32), ('cost', 32)]:
+                                if type(dispatch[field]) is not int or not 0 <= dispatch[field] < 2**bits:
+                                    raise ValueError('invalid dispatch integer')
+                            if not isinstance(dispatch['words'], list) or any(type(v) is not int or not 0 <= v < 2**32 for v in dispatch['words']):
+                                raise ValueError('invalid dispatch words')
+                        dispatches[i] += len(row['dispatches'])
                     if not isinstance(row['events'], list):
                         raise ValueError('invalid event list')
                     for event in row['events']:
@@ -88,10 +108,14 @@ def validate(matrix_path, paths):
                         for field in ['service_wire_hex', 'full_raster_wire_hex']:
                             if rows[0][field] != rows[1][field]:
                                 differences[field] += 1
+                    if all(consumer_flags):
+                        for field in ['dma_times', 'pending_dma_words', 'dispatches']:
+                            if rows[0][field] != rows[1][field]:
+                                differences[field] += 1
                 count += 1
         if any(next(file, None) is not None for file in files):
             raise ValueError('extra service records')
-    return dict(cases=len(matrix['cases']), rows=count, events=events, different_fields=dict(differences),
+    return dict(cases=len(matrix['cases']), rows=count, events=events, dispatches=dispatches, different_fields=dict(differences),
                 normalized_sha256=[d.hexdigest() for d in digests], examples=examples)
 
 
