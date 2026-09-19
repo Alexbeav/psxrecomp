@@ -111,6 +111,20 @@ def matrix():
             voice(0x000F, rate << 6) + [write(KON, 1), tick(16),
                                       write(LEVEL, 0x4000), tick(96)])
 
+    # Short traces cannot distinguish the slowest clock from a stopped one.
+    for rate in [0x7E, 0x7F]:
+        add(f"sweep_slow_limit_{rate:02x}",
+            "Distinguish one change per 32768 samples from a halted sweep",
+            [write(BASE, 0x1000), tick(4), write(BASE, 0x8000 | rate), tick(32776)])
+        add(f"sustain_slow_limit_{rate:02x}",
+            "Distinguish the slowest decreasing sustain from halted sustain",
+            voice(0x000F, 0x4000 | (rate << 6)) + [write(KON, 1), tick(32776)])
+    for release in [30, 31]:
+        add(f"release_slow_limit_{release}",
+            "Distinguish the slowest release from halted release",
+            voice(0x000F, 0x1FC0 | release) +
+            [write(KON, 1), tick(16), write(KOFF, 1), tick(32776)])
+
     # Voice isolation: no voice-1 key or volume write is sent.
     add("voice_isolation", "Do voice-0 operations affect voice-1 registers?",
         voice(0x3060, 0x1FC0) + [write(KON, 1), tick(32),
@@ -123,9 +137,10 @@ def matrix():
                 assert 0x1F801C00 <= op["address"] <= 0x1F801FFE
                 assert op["address"] % 2 == 0 and 0 <= op["value"] <= 65535
             else:
-                assert op["op"] == "tick" and 0 < op["samples"] <= 768
+                assert op["op"] == "tick" and 0 < op["samples"] <= 32776
     return {
         "schema": "t172-spu-experiment-v1",
+        "matrix_revision": 2,
         "reset": "cold before every case; fresh core state and zero SPU RAM",
         "preload": [{"address": 0x1000, "bytes": [0x0C, 0x07] + [0] * 14}],
         "observe": [LEVEL, BASE + 28, 0x1F801E00, 0x1F801E02,
