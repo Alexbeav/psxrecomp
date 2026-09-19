@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "Independent C candidate; full validation pending",
+  "status": "Independent clock and wire gates pass; actual timers consumer gate pending",
   "base": "077a03d4ec3d33a5b650a48974a3e1b8ca1b49c9",
   "source_boundary": "Primary hardware docs, declaration-only contract, authored black-box observations only. Old clock/wire implementation and emulator/profile tests not read. Whole clock header replaced mechanically; wire and callers unchanged.",
   "observed_model": "Independent transition model v3 matches all state/event/GP1 outputs in 82692 catalog rows. Status/deadline and continuation gates pending.",
@@ -13,5 +13,84 @@
     "Measured compatibility, not hardware timing calibration",
     "No service-clock/interrupt/GPU integration qualification yet",
     "No legal clearance or formal clean-room claim"
+  ],
+  "tested_commit": "a01f2f6cede93a192a14e3743bbd458ff718eb87",
+  "validation": {
+    "catalog": {
+      "cases": 728,
+      "rows": 82692,
+      "events": [
+        191946,
+        191946
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "9248b83298b70a0bcccb0c826e148898d0774af98eb9ab3e865a40512cb32d41",
+        "9248b83298b70a0bcccb0c826e148898d0774af98eb9ab3e865a40512cb32d41"
+      ],
+      "examples": []
+    },
+    "continuation": {
+      "cases": 1857,
+      "rows": 29247,
+      "events": [
+        1013919,
+        1013919
+      ],
+      "different_fields": {},
+      "normalized_sha256": [
+        "fd5a2bf16ae32cf095d60af7c06a6ecb4da2e77f75351b4e9b3e7a9e247d428b",
+        "fd5a2bf16ae32cf095d60af7c06a6ecb4da2e77f75351b4e9b3e7a9e247d428b"
+      ],
+      "examples": []
+    },
+    "controls": {
+      "controls": 29,
+      "all_detected": true,
+      "results": {
+        "status": true,
+        "until_rise": true,
+        "state_0": true,
+        "state_1": true,
+        "state_2": true,
+        "state_3": true,
+        "state_4": true,
+        "state_5": true,
+        "state_6": true,
+        "state_7": true,
+        "state_8": true,
+        "state_9": true,
+        "state_10": true,
+        "state_11": true,
+        "state_12": true,
+        "state_13": true,
+        "state_14": true,
+        "state_15": true,
+        "state_16": true,
+        "state_17": true,
+        "event_0": true,
+        "event_1": true,
+        "event_2": true,
+        "event_order": true,
+        "wire": true,
+        "return": true,
+        "type": true,
+        "missing": true,
+        "extra": true
+      }
+    },
+    "restores": {
+      "('restore', 1)": 1047,
+      "('long_epoch', 1)": 105,
+      "('bad_length', 0)": 420,
+      "('bad_fraction', 0)": 105
+    }
+  },
+  "callback_contract": "T77 production audit: callback ignores NULL context and consumes cycle/event/blank only. timers_source_raster_finish runs after advance; service consumer uses unobserved advance. Arbitrary external callbacks not qualified.",
+  "rejected_hypotheses": [
+    "Omitting GP1 reset display defaults",
+    "Missing 9-bit readout offset wrap",
+    "Unconditional blank-entry field update",
+    "Applying saved readout field outside high-resolution interlace"
   ]
 }
