@@ -1,7 +1,7 @@
 {
   "schema": "psx-tas-qualified-hunks-v1",
   "known_absent": {
-    "tekken3-codegen-repin-split07": "Superseded by tekken3-codegen-repin-77fc84d1. These hashes pin the split/07 recompiler output; 30ca7064 (zero-run compaction) and 67af7172 (T110 dispatch keys) changed the emitted text, and SLUS_004.02_full_53.c is no longer generated at all, so the lines are intentionally unreachable at 77fc84d1 and later. Not a lost behaviour: the guard it protects is re-pinned, and Tekken 3 is re-qualified by route replay on the new base."
+    "tekken3-codegen-repin-split07": "Superseded by tekken3-codegen-repin-77fc84d1. These hashes pin the split/07 recompiler output; 30ca7064 (zero-run compaction) and 67af7172 (T110 dispatch keys) changed the emitted text, and SLUS_004.02_full_53.c is no longer generated at all, so the lines are intentionally unreachable at 77fc84d1 and later. The guard it protects is re-pinned. CORRECTION 2026-09-19: an earlier version of this reason also claimed \"Tekken 3 is re-qualified by route replay on the new base\". That was FALSE. Tekken 3 FAILS at this base (requal-tekken3-route-05, first divergence return 109) and is UNQUALIFIED here. Bisected to the T110 dispatchability work: 702d1cd8 -> return 490, 67af7172 -> return 109; position 102 (079f5f03) still passes the full 8,399-return route. T163 (0b0b6b13) and 30ca7064 are behaviourally inert for this title. See validation/tas/T168-TEKKEN3-ATTRIBUTION-20260919.md. Do not re-baseline tekken3-reference.tsv.gz: it is the only record that Tekken 3 is unqualified here."
   },
   "entries": [
     {
