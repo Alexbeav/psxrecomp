@@ -1,6 +1,8 @@
 {
   "schema": "psx-tas-qualified-hunks-v1",
-  "known_absent": {},
+  "known_absent": {
+    "tekken3-codegen-repin-split07": "Superseded by tekken3-codegen-repin-77fc84d1. These hashes pin the split/07 recompiler output; 30ca7064 (zero-run compaction) and 67af7172 (T110 dispatch keys) changed the emitted text, and SLUS_004.02_full_53.c is no longer generated at all, so the lines are intentionally unreachable at 77fc84d1 and later. Not a lost behaviour: the guard it protects is re-pinned, and Tekken 3 is re-qualified by route replay on the new base."
+  },
   "entries": [
     {
       "id": "67b5d16e-biohazard-return-3846-cd-cpu-mdec",
@@ -825,7 +827,7 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "/* Source SubQBuf_Safe latch — the sector whose sub-Q the drive last decoded.",
+            "/* Source SubQBuf_Safe latch \u2014 the sector whose sub-Q the drive last decoded.",
             " * HandlePlayRead reads the sector AT CurSector and decodes its Q before",
             " * advancing the cursor, so the decoded position is the pre-increment value,",
             " * one behind the physical head tracked above. The source keeps calling",
@@ -896,7 +898,7 @@
           "lines": [
             "             * (axis5_sio_controller.md D8).",
             "             * That source index is the SECOND byte of the 0x4501 phase, i.e. the",
-            "             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 — not",
+            "             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 \u2014 not",
             "             * pad_response[3], which is the constant 0x02. Writing it there",
             "             * destroyed the constant and left a hard-coded analog-on in the real",
             "             * mode slot, so we answered 03 00 01 where the source answers",
@@ -928,7 +930,7 @@
             "         * the data byte at position 3, which arrives paired with response index 2",
             "         * (frontio.c cases 0x4601, 0x4701, 0x4C01). The canned tables above are",
             "         * only the data == 0x00 variant, so a game that asks with 0x01 got the",
-            "         * wrong answer — Mega Man X5 issues 0x4C with 0x01 and the source replies",
+            "         * wrong answer \u2014 Mega Man X5 issues 0x4C with 0x01 and the source replies",
             "         * 07 where an unpatched table replies 04 (return 1098).",
             "         * Reply bytes 3..7 are the five phase-1 bytes; byte 2 is the phase-0 byte",
             "         * and does not vary. */",
@@ -1122,7 +1124,7 @@
             "                              [80]  clock_state.raster  (source_gpu_runtime.c)",
             "                              [160] draw_raster         (source_gpu_runtime.c)",
             "                              These `cycle`/`last_rise` values are INTERNAL",
-            "                              counters, not psx_cycle_count's time base — never",
+            "                              counters, not psx_cycle_count's time base \u2014 never",
             "                              rebase them; the fraction cross-check depends on",
             "                              that time base.                                   */",
             "    BS_SEC_GPU_SERVICE = 0x13, /* bounded-quad source GPU service: the service",
@@ -1268,7 +1270,7 @@
             "/* Layout guard for #6 (see the campaign scope doc). 18 scalar fields",
             " * (2 x uint64_t + 16 x uint32_t) = 16 + 64 = 80 bytes, no padding.",
             " * If this fires, a field was added/removed/reordered and any serializer for the",
-            " * raster clock is stale. Resolve the discrepancy — do not \"fix\" the assert. */",
+            " * raster clock is stale. Resolve the discrepancy \u2014 do not \"fix\" the assert. */",
             "#if defined(__cplusplus)",
             "static_assert(sizeof(InputRouteRasterClock) == 80,",
             "              \"raster clock layout changed; update the serializer\");",
@@ -1317,7 +1319,7 @@
             "",
             "/* Pure cycle-derived invariant: the fractional raster accumulator depends only",
             " * on the TOTAL cycles advanced since reset, not on how those cycles were sliced",
-            " * — fraction after N cycles is (N*103896) mod 65536. `cycle` is that total,",
+            " * \u2014 fraction after N cycles is (N*103896) mod 65536. `cycle` is that total,",
             " * because every advance adds the same delta to both `cycle` and the accumulator.",
             " *",
             " * This is the ONLY field cross-checked on load. scanline / field / readout_*",
@@ -1435,7 +1437,7 @@
             " *   so the tail pads 340 -> 344, which is what sizeof reports.",
             " * If this fires, a member was added/removed/reordered: the #8 accounting and the",
             " * BS_SEC_GPU_SERVICE serializer (source_gpu_service_wire_write/read) are stale.",
-            " * Resolve the discrepancy — do not \"fix\" the assert. */",
+            " * Resolve the discrepancy \u2014 do not \"fix\" the assert. */",
             "PSX_GPUPP_STATIC_ASSERT(sizeof(SourceGPUCommandProjection) == 344,",
             "    \"SourceGPUCommandProjection layout changed; update the #8 accounting\");",
             "#undef PSX_GPUPP_STATIC_ASSERT",
@@ -1543,7 +1545,7 @@
           "lines": [
             "/* v7 profile-aware section presence (amendment A): a section must exist",
             " * exactly when its subsystem is active. boot_state.c is shared code, so the",
-            " * three comparison-profile sections must NOT be always-required — under a",
+            " * three comparison-profile sections must NOT be always-required \u2014 under a",
             " * normal profile there is no raster clock, no source GPU service and no source",
             " * timers, and always-requiring them would break every normal boot state. */",
             "/* Deferred VBlank phase (reshaped #5). BS_SEC_IRQ is written before",
@@ -1663,7 +1665,7 @@
             "    /* Validate BEFORE creating anything, and write to a temporary that is only",
             "     * renamed into place on success. This kills the trap class where a refusal",
             "     * (or any write failure) inside the serializer leaves a zero-byte or short",
-            "     * artifact at `path` — a truncated file that still parses is the same",
+            "     * artifact at `path` \u2014 a truncated file that still parses is the same",
             "     * silent-stub failure, one layer down. */",
             "    if (!path || snprintf(tmp, sizeof tmp, \"%s.tmp\", path) >= (int)sizeof tmp)",
             "        return 0;",
@@ -1856,7 +1858,7 @@
             "            }",
             "        }",
             "        if (nbad) {",
-            "            fprintf(stderr, \"boot_state: reject — %u of %u sections failed shape \"",
+            "            fprintf(stderr, \"boot_state: reject \u2014 %u of %u sections failed shape \"",
             "                            \"validation (nothing applied):\", nbad, nchecked);",
             "            for (uint32_t i = 0; i < nbad && i < 8; i++)",
             "                fprintf(stderr, \" 0x%02X(len=%u)\", bad_tags[i], bad_lens[i]);",
@@ -1873,7 +1875,7 @@
             "        if (!apply_section(tag, apply_ptr, apply_len, cpu, entry_pc)) {",
             "            /* Name the section: a silent load failure is undiagnosable against",
             "             * an hour-long run. */",
-            "            fprintf(stderr, \"boot_state: reject — section 0x%02X failed to apply \"",
+            "            fprintf(stderr, \"boot_state: reject \u2014 section 0x%02X failed to apply \"",
             "                            \"(len=%u)\\n\", tag, apply_len);",
             "            ok = 0;",
             "        }"
@@ -1884,7 +1886,7 @@
           "lines": [
             "    if (!ok || (seen & required) != required) {",
             "        if (ok && (seen & required) != required)",
-            "            fprintf(stderr, \"boot_state: reject — required sections missing: \"",
+            "            fprintf(stderr, \"boot_state: reject \u2014 required sections missing: \"",
             "                            \"seen=0x%08X required=0x%08X missing=0x%08X\\n\",",
             "                    seen, required, required & ~seen);",
             "        return 0;",
@@ -1900,7 +1902,7 @@
             "        source_gpu_runtime_active()       != ((seen >> BS_SEC_GPU_SERVICE) & 1u) ||",
             "        timers_source_active()            != ((seen >> BS_SEC_TIMER_SRC) & 1u) ||",
             "        dma_src_active()                  != ((seen >> BS_SEC_DMA_SRC) & 1u)) {",
-            "        fprintf(stderr, \"boot_state: reject — comparison-profile section \"",
+            "        fprintf(stderr, \"boot_state: reject \u2014 comparison-profile section \"",
             "                        \"presence does not match the active profile \"",
             "                        \"(raster=%u service=%u timers=%u dma_src=%u)\\n\",",
             "                (unsigned)((seen >> BS_SEC_RASTER) & 1u),",
@@ -1943,13 +1945,13 @@
         {
           "file": "runtime/src/boot_state_replace.c",
           "lines": [
-            "/* boot_state_replace.c — atomic file replace for state saves.",
+            "/* boot_state_replace.c \u2014 atomic file replace for state saves.",
             " *",
             " * Separated from boot_state.c so the overwrite/refusal behaviour can be",
             " * regression-tested without linking the whole serializer.",
             " *",
             " * On Windows the CRT's rename() does NOT replace an existing target, and a",
-            " * remove()+rename() sequence is not atomic — a failure between them loses the",
+            " * remove()+rename() sequence is not atomic \u2014 a failure between them loses the",
             " * old file. MoveFileExW with MOVEFILE_REPLACE_EXISTING is the real atomic",
             " * replace. MOVEFILE_WRITE_THROUGH is added so the replace is not deferred.",
             " *",
@@ -2507,7 +2509,7 @@
             "",
             "/* BS_SEC_RASTER, instance [0]: the comparison raster clock owned by this module.",
             " * `cycle`/`last_rise` are INTERNAL counters (accumulated advanced cycles), not",
-            " * psx_cycle_count's time base — written as-is, never rebased. The wire reader",
+            " * psx_cycle_count's time base \u2014 written as-is, never rebased. The wire reader",
             " * refuses on a failed fraction/cycle cross-check. */",
             "uint32_t interrupts_raster_wire_bytes(void) { return INPUT_ROUTE_RASTER_WIRE_BYTES; }",
             "void interrupts_raster_wire_write(uint8_t *out) {",
@@ -2557,7 +2559,7 @@
             " * Restoring the VBlank phase is only meaningful when the state that DEFINES",
             " * that phase came with it. Under the raster comparison profile the phase lives",
             " * in BS_SEC_RASTER, so a blob written without that section would leave a zeroed",
-            " * raster clock behind a plausible-looking run — exactly the v4 no-stub",
+            " * raster clock behind a plausible-looking run \u2014 exactly the v4 no-stub",
             " * violation the old model-based refusal existed to prevent.",
             " *",
             " * So the predicate is now a PRESENCE question, not a model question: refuse",
@@ -2716,7 +2718,7 @@
         {
           "file": "runtime/src/main.cpp",
           "lines": [
-            "/* Savestate restore → audio pump: clear host output (declared early so"
+            "/* Savestate restore \u2192 audio pump: clear host output (declared early so"
           ]
         },
         {
@@ -2825,7 +2827,7 @@
             "         * re-plays the gap (observed: 170170042 -> 120, then \"reversed device",
             "         * time\" in source_gpu_runtime_advance). The guard on that rewind is",
             "         * s_devices_synced_cycle < target, which is TRUE BY CONSTRUCTION after a",
-            "         * restore — so it must be made resume-aware, not skipped.",
+            "         * restore \u2014 so it must be made resume-aware, not skipped.",
             "         *",
             "         * Every other loader in the tree already does this after a load",
             "         * (savestate.c:1102, psx_rewind.c:508, psx_selfcheck.c:787,",
@@ -3408,7 +3410,7 @@
             "    PstW w; pst_w_init(&w, out, SOURCE_GPU_SERVICE_WIRE_BYTES);",
             "    /* psx_cycle_count is restored exactly by BS_SEC_CLOCK, so every absolute",
             "     * stamp here (cycle, deadlines, frame_request_cycle, last_update) is",
-            "     * written as-is — no rebase. #7's existing delta-rebase is an identity op. */",
+            "     * written as-is \u2014 no rebase. #7's existing delta-rebase is an identity op. */",
             "    pst_w_u64(&w, clock_state.cycle);             pst_w_u64(&w, clock_state.gpu_deadline);",
             "    pst_w_u64(&w, clock_state.dma_deadline);      pst_w_u64(&w, clock_state.frame_request_cycle);",
             "    pst_w_u32(&w, clock_state.zero_reached);      pst_w_u32(&w, clock_state.frame_pending);",
@@ -3599,7 +3601,7 @@
             "    pst_w_u32(&w, source_timer1.target);    pst_w_i32(&w, source_timer1.counting);",
             "    pst_w_i32(&w, source_timer1.blank);",
             "    /* Absolute guest-cycle stamp: psx_cycle_count restores exactly (BS_SEC_CLOCK),",
-            "     * so written as-is. Note cycles_until_due() would CLAMP a past value to 0 —",
+            "     * so written as-is. Note cycles_until_due() would CLAMP a past value to 0 \u2014",
             "     * it is for future deadlines and must not be reused for a past stamp. */",
             "    pst_w_u64(&w, source_timer1_cycle);",
             "    pst_w_u32(&w, source_timer2.counter);   pst_w_u32(&w, source_timer2.mode);",
@@ -3607,7 +3609,7 @@
             "    pst_w_i32(&w, source_timer2.irq_done);  pst_w_i32(&w, source_timer2.counting);",
             "    /* Relative period counters (timers.c:289-293 uses deadline-elapsed and",
             "     * flushes when elapsed==deadline; timers.c:178 reloads it as a period",
-            "     * length) — not absolute, so no rebase. */",
+            "     * length) \u2014 not absolute, so no rebase. */",
             "    pst_w_u32(&w, source_timer2_elapsed);   pst_w_u32(&w, source_timer2_deadline);",
             "}",
             "int timers_source_wire_read(const uint8_t *in, uint32_t len) {",
@@ -3748,7 +3750,7 @@
           "lines": [
             "",
             "/* Guest RAM accessor (memory.c). Declared here so the manifest/digest call",
-            " * sites — including C++ — share one C-linkage declaration. */",
+            " * sites \u2014 including C++ \u2014 share one C-linkage declaration. */",
             "#ifdef __cplusplus",
             "extern \"C\" {",
             "#endif",
@@ -3771,7 +3773,7 @@
             "    uint32_t           entry_pc;",
             "    unsigned long long state_bytes;",
             "    /* v7 identity: the whole resolved configuration, not a hand-written flag",
-            "     * list, plus the two things a flag list can never cover — the exact runtime",
+            "     * list, plus the two things a flag list can never cover \u2014 the exact runtime",
             "     * binary and the exact route content. */",
             "    char               config_digest[65];",
             "    char               exe_sha256[65];",
@@ -3821,7 +3823,7 @@
             "    return 0;",
             "}",
             "",
-            "/* FNV-1a over guest RAM — same family as the RAM page probe, cheap enough to",
+            "/* FNV-1a over guest RAM \u2014 same family as the RAM page probe, cheap enough to",
             " * run once per checkpoint. */",
             "static inline uint64_t source_tas_stateio_ram_digest(const uint8_t *ram, size_t bytes) {",
             "    uint64_t h = UINT64_C(14695981039346656037);",
@@ -4153,7 +4155,7 @@
         {
           "file": "runtime/src/source_stateio_identity.c",
           "lines": [
-            "/* source_stateio_identity.c — v7 checkpoint identity dimensions.",
+            "/* source_stateio_identity.c \u2014 v7 checkpoint identity dimensions.",
             " *",
             " * Its own TU so it can include <windows.h> for the executable path without",
             " * dragging that into headers shared with main.cpp. */",
@@ -4980,6 +4982,59 @@
         }
       ],
       "note": "The same DTR session rule for Octoshock 2.2.2/2.3 InputDevice_Gamepad; removed Abe's Oddysee's return-949 divergence (a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949."
+    },
+    {
+      "id": "tekken3-codegen-repin-77fc84d1",
+      "titles": [
+        "tekken3"
+      ],
+      "origin_commit": "9e87916a73045bbbfab0bfdbb7ce8c98f6848348",
+      "subject": "tasreplays: re-baseline the Tekken 3 codegen guard onto the 77fc84d1 recompiler output",
+      "qualified_tree": null,
+      "blocks": [
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"generated/SCPH1001_dispatch.c\": \"fa65e7dcd11b53c9d05238f2602f4fb768e94a97bd68187f1ccad9baf90bc468\",",
+            "  \"generated/SCPH1001_full.c\": \"c15d863367abc9278989c67ab4df8dbd0dd1c1386b10fbc933d93ec955ea5f0b\",",
+            "  \"build/tekken3/generated/SLUS_004.02_dispatch.c\": \"11d1fd5f753a35a0ea6ac0ae40540051ea67ab13f36bf72bb55ca913c21259e5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_00.c\": \"be2ba932a89519f62eeb78abc7286828ce6f07a83cc859db49891a8709640888\","
+          ]
+        },
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"build/tekken3/generated/SLUS_004.02_full_16.c\": \"8cbad93b69b818da22d4eab37b51f7f21a5ed531a3207052d82c30a9462dbc6b\","
+          ]
+        },
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"build/tekken3/generated/SLUS_004.02_full_34.c\": \"155726443e29356cbe5587a33d7f891cbaeec2f89fda006809fca1835e376430\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_35.c\": \"8cbd2a5ce83d72df726e35adf40be78bdf6874b765427e4a446ed3fa72b79954\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_36.c\": \"e21eee32cfe92191084c8e338ab9c4653ad144671163897d233bc2fc2015a3ed\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_37.c\": \"a2b778daaa8543f22b04eadfc5f1b95e8d8b3317a5ce3a5a0baadce88b0cf097\","
+          ]
+        },
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"build/tekken3/generated/SLUS_004.02_full_41.c\": \"14e316ccc7931d5cc036096a784b03065f55872d4e1dab668f76bc47e390680e\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_42.c\": \"878ff677ac6521b689926e0c4b0e286a38592ad266b6dcee47b148b2d4d91c73\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_43.c\": \"67f6500978a2e569735490be14ded44297ed3d0cececd3d12c03c7d5a4beed9b\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_44.c\": \"1429121b7eb6c8800a916b524fa30d43439f3d0784b073ed23dddfa73248a543\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_45.c\": \"aeb277e8756e9b38501832ebec3b001038d0be1d2a97aa9865a0eefcd016c7a9\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_46.c\": \"01ca90bda4ad15451d7fc5bdbdaa75df3f17c08fabcb03c85b6271f01d03a529\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_47.c\": \"5a0a27686a40a40d0cbc82dd70ae1495e587e65891420c55f655743151b5f777\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_48.c\": \"8046c96410e195fd3bffb5ab1197820d788a834fe2242a9e38342b2f7755dc91\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_49.c\": \"ae7a57755de0eec98ef3c48c62a6f513273d01b820a1bb7ab3a6a02634ac8ee0\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_50.c\": \"13a7855c557d5a78392d01396c6ac9e4dc71ff86962f42c2c3f0348c8ddfa229\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_51.c\": \"8e0f025c8475122a0d57d5986621c146902aed7429c6ae6d6d75b54e9cc9b1a0\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_52.c\": \"1acda035e45e05dc69b9db3a7c2b67426afb6db57c39740f798f173390b8a734\""
+          ]
+        }
+      ],
+      "note": "Re-pins the Tekken 3 codegen guard hashes to the 77fc84d1 recompiler output; only this JSON file qualifies. Supersedes tekken3-codegen-repin-split07, whose hashes 30ca7064 (zero-run compaction) and 67af7172 (T110 dispatch keys) made unreachable."
     }
   ]
 }
