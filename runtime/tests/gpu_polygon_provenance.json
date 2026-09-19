@@ -1,0 +1,16 @@
+{
+  "status": "Independent candidate; compatibility validation pending",
+  "scope": "Polygon ordered spans and work helper only; renderer callers unchanged",
+  "source_boundary": "No old helper bodies, implementation-bearing headers, emulator source, or source-profile tests read. Whole header replaced mechanically.",
+  "inputs": [
+    "Declaration and caller-only contract from T77",
+    "PSX-SPX graphicsprocessingunitgpu.md at a253f078553f83b4e540f087abf0c28d954b6293",
+    "Independently authored black-box matrix gpu-polygon-experiments-v1.json"
+  ],
+  "observations": "15520 baseline cases, 96885 ordered spans. Independent rational Python model matches all measured spans and work.",
+  "limitations": [
+    "Baseline compatibility observations are not hardware accuracy evidence",
+    "No rendering or performance qualification yet",
+    "No legal clearance or formal clean-room claim"
+  ]
+}
