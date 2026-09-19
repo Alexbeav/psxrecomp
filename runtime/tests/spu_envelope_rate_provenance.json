@@ -1,6 +1,6 @@
 {
   "task": "T172",
-  "status": "Integrated local candidate; runtime comparison pending",
+  "status": "Local SPU envelope replacement; bounded source-profile comparison and same-binary snapshot checks pass; broader qualification remains open",
   "base": "77fc84d18cd341ba0c0feb68a63f0904f8c467f0",
   "implementation": "runtime/include/spu_envelope_rate.h",
   "tests": "runtime/tests/test_spu_envelope_rate.c",
@@ -41,8 +41,9 @@
     "limitations": "These are specification-conformance checks, not measurements on PlayStation hardware or independent validation of the documentation itself.",
     "state_rules": [
       "Counter overflow discards excess; writes retain fraction; fixed sweep pauses fraction and applies on sample",
-      "Linear decreasing sweep tests previous sign and permits one-sample zero crossing; inverted exponential decrease retains signed tail",
-      "ADSR decrease narrows result to 16 bits before negative clamp; phase transitions follow updates"
+      "Sweep previous-sign clamp runs even when counter is not due; linear decrease permits one-sample zero crossing",
+      "Attack at maximum level selects decay before sample rate calculation; decay enters sustain only after completed update",
+      "ADSR decrease narrows result to16bits before negative clamp"
     ]
   },
   "input_contract": {
@@ -54,11 +55,11 @@
     "output": "Rate returns step and clock; state helpers mutate declared level, counter and phase pointers"
   },
   "unresolved": [
-    "Full runtime reference and baseline comparison",
-    "Saved-state load and resume behavior; representation unchanged",
-    "Outer scheduling and unkeyed voice differences",
+    "Pre-existing runtime differences from reference remain",
+    "Full-system scheduling/audio validation",
+    "Cross-version saved-state interchange",
     "Hardware qualification",
-    "Other T77 audit candidates"
+    "Audio decoder/interpolation and other T77 audit candidates; no license clearance"
   ],
   "excluded_inputs": [
     "Mednafen, Beetle and Octoshock implementation bodies",
@@ -77,5 +78,22 @@
     "method": "Mechanical boundary replacement without showing old implementation bodies",
     "boundary_correction": "Supplied comment start included previous closing brace at base line195; restored after compiler detected omission",
     "shared_helper": "volume_reg_decode retained because another caller exists"
+  },
+  "validation": {
+    "implementation_commit": "9f1cfafb9b80405bf993d37b4e6a577bb0943157",
+    "matrix_revision": 4,
+    "matrix_sha256": "90d400dcbe57042dbb11d115c8c268d7e9a7022e560ac959a07c48e5b28f6e55",
+    "cases": 623,
+    "observations": 237501,
+    "registers_per_observation": 10,
+    "candidate_repeated_equal": true,
+    "candidate_only_mismatches": 0,
+    "changed_mismatches": 0,
+    "corrected_observations": 6849,
+    "unchanged_mismatches": 412560,
+    "snapshot_cases": 130,
+    "snapshot_observations": 21329,
+    "snapshot_roundtrip_equal": true,
+    "scope": "Sample-granularity wrapper; no CPU scheduler, BIOS or retail input; silent CD; same-binary SPU/RAM restoration only"
   }
 }

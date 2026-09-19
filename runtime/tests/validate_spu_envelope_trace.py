@@ -16,6 +16,7 @@ from pathlib import Path
 def events(matrix):
     for case in matrix["cases"]:
         sample = 0
+        saved_sample = None
         yield case["id"], -1, sample, "reset"
         for event, op in enumerate(case["operations"]):
             if op["op"] == "write16":
@@ -24,6 +25,14 @@ def events(matrix):
                 for _ in range(op["samples"]):
                     sample += 1
                     yield case["id"], event, sample, "sample"
+            elif op["op"] == "save":
+                saved_sample = sample
+                yield case["id"], event, sample, "save"
+            elif op["op"] == "load":
+                if saved_sample is None:
+                    raise ValueError("load without save")
+                sample = saved_sample
+                yield case["id"], event, sample, "load"
             else:
                 raise ValueError(f"unsupported input operation: {op['op']}")
 

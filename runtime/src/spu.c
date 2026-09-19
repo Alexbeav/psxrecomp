@@ -95,13 +95,7 @@ static int32_t  rev_out_r;
  * inside these rings, so each write runs the IRQ check. */
 static uint32_t capture_pos;
 
-/* ---- Volume sweep envelopes ---------------------------------------------
- * Every volume register (24 voices x L/R + main L/R) is either DIRECT
- * (bit15=0: effective volume = signed bits14-0 << 1) or a live SWEEP
- * envelope (bit15=1) stepped once per 44100 Hz sample with the same rate
- * machinery as ADSR (calc_vc_delta). `level` is the authoritative current
- * volume in sweep mode and is refreshed from the register on direct writes,
- * so a later switch to sweep mode glides from the last direct level. */
+/* Envelope timing is provided by spu_envelope_rate.h. */
 typedef struct {
     int16_t  level;      /* live effective volume, full signed 16-bit */
     uint32_t divider;    /* rate divider, same overflow scheme as ADSR */
@@ -236,10 +230,7 @@ static inline int16_t volume_reg_decode(uint16_t raw) {
     return (int16_t)((uint16_t)(raw << 1));
 }
 
-/* Called on every guest write to a volume register. Direct writes take
- * effect immediately; a sweep-mode write starts the sweep FROM the current
- * live level (documented reading: the sweep register programs an envelope,
- * it does not itself carry a target level). The divider restarts either way. */
+/* Writes retain state until the next sample applies the register value. */
 static void sweep_env_write(SweepEnv *sw, uint16_t raw)
 {
     /* Register storage is owned by the caller. The sample applies its value. */
