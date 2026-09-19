@@ -848,7 +848,7 @@ bool FullFunctionEmitter::emit_function(
     // I-cache FETCH cost (faithful R3000A), emitted BEFORE the per-instruction
     // interlock/load — like Beetle ReadInstruction precedes the base, so a fetch MISS
     // clears any pending load give-back before the next load arms one. Only emitted at
-    // cache-line LEADERS: a block leader (any branch/dispatch entry — a possibly-cold
+    // cache-line LEADERS: a block leader or interrupt resume entry (a possibly-cold
     // cache entry; cross-function targets are inserted into block_leaders above) OR a
     // 16-byte-line start (addr&0xC==0, a sequential line crossing). Intra-line followers
     // reached by fall-through are hits only in cached address space. Uncached code
@@ -863,6 +863,7 @@ bool FullFunctionEmitter::emit_function(
         if (!per_insn_cycles) return;
         const uint32_t runtime_addr = relocate_ra(rom_addr);
         if (!(runtime_addr >= 0xA0000000u || block_leaders.count(rom_addr) ||
+              resume_points.count(rom_addr) ||
               (runtime_addr & 0xCu) == 0)) {
             out += fmt::format("#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_cpu_step_boundary(cpu, 0x{:08X}u);\n#endif\n", runtime_addr);
             return;

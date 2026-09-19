@@ -1,6 +1,6 @@
 {
   "generated/SCPH1001_dispatch.c": "fa65e7dcd11b53c9d05238f2602f4fb768e94a97bd68187f1ccad9baf90bc468",
-  "generated/SCPH1001_full.c": "c15d863367abc9278989c67ab4df8dbd0dd1c1386b10fbc933d93ec955ea5f0b",
+  "generated/SCPH1001_full.c": "2cebf13b9b56b52688eff46de0db513339fbfe719b69697a0d09447d48c371c8",
   "build/tekken3/generated/SLUS_004.02_dispatch.c": "11d1fd5f753a35a0ea6ac0ae40540051ea67ab13f36bf72bb55ca913c21259e5",
   "build/tekken3/generated/SLUS_004.02_full_00.c": "be2ba932a89519f62eeb78abc7286828ce6f07a83cc859db49891a8709640888",
   "build/tekken3/generated/SLUS_004.02_full_01.c": "62b053909d3be2b69eda9fb13333abb695658f7bd74ad5ebe48d9d65983afb3e",

@@ -1,7 +1,8 @@
 {
   "schema": "psx-tas-qualified-hunks-v1",
   "known_absent": {
-    "tekken3-codegen-repin-split07": "Superseded by tekken3-codegen-repin-77fc84d1. These hashes pin the split/07 recompiler output; 30ca7064 (zero-run compaction) and 67af7172 (T110 dispatch keys) changed the emitted text, and SLUS_004.02_full_53.c is no longer generated at all, so the lines are intentionally unreachable at 77fc84d1 and later. The guard it protects is re-pinned. CORRECTION 2026-09-19: an earlier version of this reason also claimed \"Tekken 3 is re-qualified by route replay on the new base\". That was FALSE. Tekken 3 FAILS at this base (requal-tekken3-route-05, first divergence return 109) and is UNQUALIFIED here. Bisected to the T110 dispatchability work: 702d1cd8 -> return 490, 67af7172 -> return 109; position 102 (079f5f03) still passes the full 8,399-return route. T163 (0b0b6b13) and 30ca7064 are behaviourally inert for this title. See validation/tas/T168-TEKKEN3-ATTRIBUTION-20260919.md. Do not re-baseline tekken3-reference.tsv.gz: it is the only record that Tekken 3 is unqualified here."
+    "tekken3-codegen-repin-split07": "Superseded by tekken3-codegen-repin-77fc84d1. These hashes pin the split/07 recompiler output; 30ca7064 (zero-run compaction) and 67af7172 (T110 dispatch keys) changed the emitted text, and SLUS_004.02_full_53.c is no longer generated at all, so the lines are intentionally unreachable at 77fc84d1 and later. The guard it protects is re-pinned. CORRECTION 2026-09-19: an earlier version of this reason also claimed \"Tekken 3 is re-qualified by route replay on the new base\". That was FALSE. Tekken 3 FAILS at this base (requal-tekken3-route-05, first divergence return 109) and is UNQUALIFIED here. Bisected to the T110 dispatchability work: 702d1cd8 -> return 490, 67af7172 -> return 109; position 102 (079f5f03) still passes the full 8,399-return route. T163 (0b0b6b13) and 30ca7064 are behaviourally inert for this title. See validation/tas/T168-TEKKEN3-ATTRIBUTION-20260919.md. Do not re-baseline tekken3-reference.tsv.gz: it is the only record that Tekken 3 is unqualified here.",
+    "tekken3-codegen-repin-77fc84d1": "Superseded by t168-cached-resume-fetch-candidate-pin. Only the SCPH1001 full-body hash changes: cached interrupt resume entries now check the instruction cache. Dispatch keys and game generated pins are unchanged. The new candidate matches diagnostic returns 1-700, but full-route qualification is still pending. The gameplay reference is unchanged."
   },
   "entries": [
     {
@@ -5031,6 +5032,67 @@
             "  \"build/tekken3/generated/SLUS_004.02_full_50.c\": \"13a7855c557d5a78392d01396c6ac9e4dc71ff86962f42c2c3f0348c8ddfa229\",",
             "  \"build/tekken3/generated/SLUS_004.02_full_51.c\": \"8e0f025c8475122a0d57d5986621c146902aed7429c6ae6d6d75b54e9cc9b1a0\",",
             "  \"build/tekken3/generated/SLUS_004.02_full_52.c\": \"1acda035e45e05dc69b9db3a7c2b67426afb6db57c39740f798f173390b8a734\""
+          ]
+        }
+      ],
+      "note": "Re-pins the Tekken 3 codegen guard hashes to the 77fc84d1 recompiler output; only this JSON file qualifies. Supersedes tekken3-codegen-repin-split07, whose hashes 30ca7064 (zero-run compaction) and 67af7172 (T110 dispatch keys) made unreachable."
+    },
+    {
+      "id": "t168-cached-resume-fetch-candidate-pin",
+      "titles": [
+        "tekken3"
+      ],
+      "origin_commit": null,
+      "subject": "Pin cached-continuation fetch candidate; 700-return diagnostic matches, full qualification pending",
+      "qualified_tree": null,
+      "blocks": [
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"generated/SCPH1001_dispatch.c\": \"fa65e7dcd11b53c9d05238f2602f4fb768e94a97bd68187f1ccad9baf90bc468\",",
+            "  \"generated/SCPH1001_full.c\": \"2cebf13b9b56b52688eff46de0db513339fbfe719b69697a0d09447d48c371c8\",",
+            "  \"build/tekken3/generated/SLUS_004.02_dispatch.c\": \"11d1fd5f753a35a0ea6ac0ae40540051ea67ab13f36bf72bb55ca913c21259e5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_00.c\": \"be2ba932a89519f62eeb78abc7286828ce6f07a83cc859db49891a8709640888\","
+          ]
+        },
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"build/tekken3/generated/SLUS_004.02_full_16.c\": \"8cbad93b69b818da22d4eab37b51f7f21a5ed531a3207052d82c30a9462dbc6b\","
+          ]
+        },
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"build/tekken3/generated/SLUS_004.02_full_34.c\": \"155726443e29356cbe5587a33d7f891cbaeec2f89fda006809fca1835e376430\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_35.c\": \"8cbd2a5ce83d72df726e35adf40be78bdf6874b765427e4a446ed3fa72b79954\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_36.c\": \"e21eee32cfe92191084c8e338ab9c4653ad144671163897d233bc2fc2015a3ed\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_37.c\": \"a2b778daaa8543f22b04eadfc5f1b95e8d8b3317a5ce3a5a0baadce88b0cf097\","
+          ]
+        },
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"build/tekken3/generated/SLUS_004.02_full_41.c\": \"14e316ccc7931d5cc036096a784b03065f55872d4e1dab668f76bc47e390680e\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_42.c\": \"878ff677ac6521b689926e0c4b0e286a38592ad266b6dcee47b148b2d4d91c73\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_43.c\": \"67f6500978a2e569735490be14ded44297ed3d0cececd3d12c03c7d5a4beed9b\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_44.c\": \"1429121b7eb6c8800a916b524fa30d43439f3d0784b073ed23dddfa73248a543\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_45.c\": \"aeb277e8756e9b38501832ebec3b001038d0be1d2a97aa9865a0eefcd016c7a9\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_46.c\": \"01ca90bda4ad15451d7fc5bdbdaa75df3f17c08fabcb03c85b6271f01d03a529\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_47.c\": \"5a0a27686a40a40d0cbc82dd70ae1495e587e65891420c55f655743151b5f777\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_48.c\": \"8046c96410e195fd3bffb5ab1197820d788a834fe2242a9e38342b2f7755dc91\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_49.c\": \"ae7a57755de0eec98ef3c48c62a6f513273d01b820a1bb7ab3a6a02634ac8ee0\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_50.c\": \"13a7855c557d5a78392d01396c6ac9e4dc71ff86962f42c2c3f0348c8ddfa229\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_51.c\": \"8e0f025c8475122a0d57d5986621c146902aed7429c6ae6d6d75b54e9cc9b1a0\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_52.c\": \"1acda035e45e05dc69b9db3a7c2b67426afb6db57c39740f798f173390b8a734\""
+          ]
+        },
+        {
+          "file": "recompiler/src/full_function_emitter.cpp",
+          "lines": [
+            "        if (!(runtime_addr >= 0xA0000000u || block_leaders.count(rom_addr) ||",
+            "              resume_points.count(rom_addr) ||",
+            "              (runtime_addr & 0xCu) == 0)) {"
           ]
         }
       ],

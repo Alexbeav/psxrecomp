@@ -24,6 +24,12 @@ RAM owned by the game/overlay gates.
   It uses the backend's new `is_entry()`, a lookup over the generated dispatch
   table. BIOS ROM and the clean relocated kernel window are dispatchable only at
   entries and continuations.
+- Interrupt resume entries also perform an instruction-cache fetch check, even
+  inside a cached line. Dispatch can enter without executing the line's earlier
+  instructions, and an exception handler can replace the line's cache tags.
+  Omitting the check loses refill cycles and load-absorb clearing. Delay slots
+  remain excluded from the added resume entries; a slot exception resumes at
+  its branch with Cause.BD set. A pending load-delay pair retains its owner.
 - BIOS ROM exists at compile time, so it is never interpreted (CLAUDE.md
   Rule 18). An interrupt that becomes deliverable at a ROM PC that is not
   re-enterable stays pending until the next re-enterable boundary. That is the

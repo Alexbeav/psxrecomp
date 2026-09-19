@@ -218,10 +218,12 @@ void linear_fetches_follow_runtime_address(uint32_t runtime) {
         char needle[96];
         std::snprintf(needle, sizeof needle, "psx_icache_fetch(cpu, 0x%08Xu);", runtime + offset);
         const auto first = result.full.find(needle);
-        const bool required = uncached || (offset & 15u) == 0;
+        // All non-slot instructions in this fixture are dispatch entries.
+        // A mid-line resume can start with a cold/conflicting cache tag.
+        const bool required = uncached || offset < 20u;
         expect((first != std::string::npos) == required,
                uncached ? "every uncached instruction pays a fetch, including return slot"
-                        : "relocated cached followers retain the existing leader policy");
+                        : "cached resume entries fetch; the excluded return slot stays coalesced");
         if (first != std::string::npos)
             expect(result.full.find(needle, first + 1) == std::string::npos,
                    "a fetch is not emitted twice for one instruction");
