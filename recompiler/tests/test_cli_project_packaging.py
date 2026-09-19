@@ -60,9 +60,7 @@ def main() -> int:
         raise AssertionError(
             "framework/profile must be copied before game recompilation")
 
-    for profile in (
-            "OpenBIOS.toml", "SCPH1001.toml",
-            "SCPH101.toml", "SCPH5552.toml"):
+    for profile in sorted(path.name for path in (ROOT / "bios").glob("*.toml")):
         require(package, f'"{profile}"',
                 f"CLI package omits BIOS profile {profile}")
     require(package, 'shutil.copy2(ROOT / ".gitignore", framework)',

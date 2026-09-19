@@ -536,9 +536,10 @@ These are noted here so future work knows where to slot them:
 ## BIOS profiles (`bios/<STEM>.toml`)
 
 One profile per BIOS image; the profile is the single source of truth for the
-image identity, the relocation windows, and the runtime anchors. Two ship:
-`bios/SCPH1001.toml` (retail; user supplies the dump) and `bios/OpenBIOS.toml`
-(MIT, redistributable, shipped with the build). Normal runtimes link both
+image identity, the relocation windows, and the runtime anchors. Six profiles ship
+in the source and developer CLI package: OpenBIOS, SCPH1001, SCPH101, SCPH5500,
+SCPH5501, and SCPH5552. Only the MIT-licensed OpenBIOS image is bundled; retail
+profiles require the user's matching dump. Normal runtimes default to both
 generated backends (`PSXRECOMP_BIOS_STEMS=OpenBIOS;SCPH1001`) and select one at
 launch. The recompiler's `[recompiler] bios_config` identifies the profile used
 for game code generation; it does not choose the player's runtime BIOS.
