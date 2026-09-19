@@ -62,7 +62,8 @@ def check(matrix_path, trace_path):
                 require(pipeline == row['pipeline'], f'pipeline model {key}: {pipeline} != {row["pipeline"]}')
                 if profile == 'cosim':
                     actual = [e[2] for e in row['events'] if e[0] == 1]
-                    expected = [] if previous['flags'][0] else charges
+                    flags = previous['flags']
+                    expected = [] if flags[0] and not (flags[1] or flags[2]) else charges
                     require(expected == actual, f'charge model {key}: {expected} != {actual}')
                     require(row['clock'][0] - previous['clock'][0] == sum(charges),
                             f'published cycle model {key}')

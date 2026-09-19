@@ -37,7 +37,7 @@ static inline void psx_cyc_charge(uint32_t cycles)
 #if defined(PSX_OVERLAY_DLL_BUILD)
     psx_advance_cycles(cycles);
 #else
-    if (psx_in_device_service) {
+    if (psx_in_device_service && !g_event_step_conservative && !g_ls_replay_active) {
         psx_cycle_count += cycles;
         return;
     }
@@ -173,6 +173,10 @@ static inline void psx_cyc_ram_load_timing(CPUState *cpu, uint32_t rt, uint32_t 
     cpu->ld_absorb = 5;
 }
 
+#ifdef PSX_OVERLAY_DLL_BUILD
+uint32_t psx_cyc_load_word(CPUState *, uint32_t, uint32_t, uint32_t);
+uint16_t psx_cyc_load_half(CPUState *, uint32_t, uint32_t, uint32_t);
+#else
 static inline uint32_t psx_cyc_load_word(CPUState *cpu, uint32_t addr,
                                          uint32_t rt, uint32_t reg_mask)
 {
@@ -214,6 +218,7 @@ static inline uint16_t psx_cyc_load_half(CPUState *cpu, uint32_t addr,
     return psx_cyc_load_half_slow(cpu, addr, rt, reg_mask);
 #endif
 }
+#endif
 
 #ifdef __cplusplus
 }
