@@ -101,9 +101,24 @@ def matrix():
                 ops.append(advance(rng.choice([0, 1, 2, 7, 8, 9, 1024, 65535, 65536, 1048576])))
         add(f"mixed_{index:03d}", ops)
 
+    # Deliberately cover unseen values and history, beyond boundary examples.
+    rng = random.Random(17204)
+    for index in range(1500):
+        ops = [write(8, rng.randrange(65536)), write(4, rng.randrange(1024))]
+        for _ in range(80):
+            choice = rng.randrange(5)
+            if choice < 2:
+                reg = rng.choice([0, 4, 8])
+                ops.append(write(reg, rng.randrange(65536)))
+            elif choice == 2:
+                ops.append(read(rng.choice([0, 4, 8])))
+            else:
+                ops.append(advance(rng.choice([0, 1, 7, 8, 65535, 65536, rng.randrange(100000001)])))
+        add(f"unseen_{index:04d}", ops)
+
     assert len({case["id"] for case in cases}) == len(cases)
     assert sum(len(c["operations"]) for c in cases) < 1_000_000
-    return {"schema": "t172-timer2-experiment-v1", "matrix_revision": 3,
+    return {"schema": "t172-timer2-experiment-v1", "matrix_revision": 4,
             "clock_policy": "Explicit advances are not subdivided; read/write flush including zero elapsed",
             "observation_policy": "Counter/target observation has no side effect; mode read only explicitly",
             "expected_outputs": None, "cases": cases}
