@@ -172,6 +172,13 @@ def matrix():
         if case["id"].startswith("sustain_slow_limit"):
             case["operations"].append(tick(16))
 
+    # Keep one silent voice active so legacy callers advance every sweep.
+    for original in list(cases):
+        if original["id"].startswith(("sweep_counter_", "sweep_fixed_interposition_")):
+            add("active_" + original["id"], "Compare active-voice sweep counter behavior",
+                voice(0x7F0F, 0x1FC0) + [write(KON, 1), tick(8)] +
+                original["operations"])
+
     assert len({case["id"] for case in cases}) == len(cases)
     for case in cases:
         for op in case["operations"]:
@@ -182,7 +189,7 @@ def matrix():
                 assert op["op"] == "tick" and 0 < op["samples"] <= 32776
     return {
         "schema": "t172-spu-experiment-v1",
-        "matrix_revision": 4,
+        "matrix_revision": 5,
         "reset": "cold before every case; fresh core state and zero SPU RAM",
         "preload": [{"address": 0x1000, "bytes": [0x0C, 0x07] + [0] * 14}],
         "observe": [LEVEL, BASE + 28, 0x1F801E00, 0x1F801E02,

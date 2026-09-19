@@ -233,9 +233,11 @@ static inline int16_t volume_reg_decode(uint16_t raw) {
 /* Writes retain state until the next sample applies the register value. */
 static void sweep_env_write(SweepEnv *sw, uint16_t raw)
 {
-    /* Register storage is owned by the caller. The sample applies its value. */
-    (void)sw;
-    (void)raw;
+    /* Legacy callers can skip voice sweep ticks while no voice is active.
+     * Preserve the fixed starting level for their later sweep transition. */
+    if (!source_key_timing && !(raw & 0x8000))
+        sw->level = (int16_t)(raw < 0x4000 ? (int32_t)raw * 2
+                                         : (int32_t)raw * 2 - 65536);
 }
 
 /* Advance the independently authored sweep at the sample boundary. */
