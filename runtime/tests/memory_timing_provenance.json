@@ -1,0 +1,63 @@
+{
+  "task": "T172",
+  "status": "Corrected independent memory consumer; exact validation passed; final independent review and push pending",
+  "base": "65f753d2bc9f95a42168b2a725df9133099fcf17",
+  "tested_commit": "f28848d90425ba9afff46f87915c8d7e22bdcd0a",
+  "scope": "Contiguous load-timing consumer section in runtime/src/memory.c only; surrounding prefix/suffix, psx_cyc.h, psx_cycles.h, CPU ABI/codec and callers unchanged",
+  "source_boundary": "Primary PSX-SPX hardware context, declaration-only T77 contracts, authored opaque experiments, actual public CPU wire snapshots. Old memory timing bodies/comments, adjacent implementation-bearing headers and inherited algorithm recipes unread.",
+  "validation": {
+    "cases": 76556,
+    "rows": 995661,
+    "events": 471411,
+    "event_cpu_states": 471411,
+    "paired_restores": 900
+  },
+  "datasets": 114,
+  "negative_control_attempts": 158,
+  "compile_checks": 36,
+  "evidence_plan": "memory-timing-final-plan-v2.json",
+  "evidence_report": "memory-timing-final-validation-v2.json",
+  "frozen_fragment": "memory-timing-authored-fragment-v7.c",
+  "preservation": "memory-timing-preservation-v2.json",
+  "controlled_environment": {
+    "PSX_LOAD_DELAY": [
+      "unset",
+      "0",
+      "1"
+    ],
+    "PSX_MMIO_WAIT": [
+      "unset",
+      "0",
+      "1"
+    ],
+    "PSX_POLL_PROOF": "Decimal 0..1000000 or unset; sampled 0,7,1000000; one setting per process"
+  },
+  "limitations": [
+    "Authored read/device-profile/penalty seams; not full decoder/device execution",
+    "No full linking, boot restore, resynchronization, hardware accuracy, performance or port quality claim",
+    "Aligned word/half/LWC2 accesses only; no architectural exception claim",
+    "CPU wire omits external state; paired tests reseed globals and RAM seed",
+    "GCC C11 full-TU object builds and C++17 public declaration/use checks; MSVC untested",
+    "Runtime stderr diagnostics are outside the declared resolver API and observation scope"
+  ],
+  "compatibility_notes": [
+    "Preserved unsigned wait wrap and bit32 read-fudge behavior",
+    "Preserved region/width/source-profile read sampling and callback-entry CPU state",
+    "Preserved optimized direct byte return and ring0 replay/poll-fast-limit behavior",
+    "These observed compatibility behaviors do not assert physical PSX correctness",
+    "Physical-address Timer1 query integration independently reproduced and fixed; address-sensitive observer and900 paired restores now qualified"
+  ],
+  "retained_attempts": [
+    "601cb86058fc05010ef8a98c090cc670cc88076f: tests-only commit with inaccurate subject after failed installer; production unchanged",
+    "8b8555c46befde0efbbbd7d40d06892152331b3a: rejected initial production draft",
+    "7bf45130bfcbad6090b5d5c857dc85364ccb3754: rejected mixed-state/optimized mismatches",
+    "0ade5f9844cd9c08d600e507075587962f8dde78: rejected zero-wait/unsigned-sampling mismatches",
+    "6a5de096cb5ba5c76e403245b7853dd9476c8342: rejected optimized poll callback differences",
+    "2cbd3fb4f009c8da05bae0237fc33ed955d617de:95 constant-query datasets passed but independent address-sensitive probe rejected physical-address argument"
+  ],
+  "notice_status": "Existing surrounding memory source and root LICENSE preserved; byte hashes bind both section boundaries",
+  "exposure_incident": "Earlier service-clock compiler warning exposed three unrelated GPU command-cost fragments; incident remains recorded. No unexposed claim for those fragments or blanket clean-room claim.",
+  "legal_claim": "None; no formal clean-room or legal clearance claim",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4",
+  "distinct_negative_control_types": 45
+}

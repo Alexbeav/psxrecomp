@@ -11,7 +11,7 @@ def digest(path):
         return hashlib.file_digest(f,'sha256').hexdigest()
 
 
-def bind(plan_path, report_path, tools, source):
+def bind(plan_path, report_path, source):
     folder=plan_path.parent
     plan=json.loads(plan_path.read_text());report=json.loads(report_path.read_text())
     files={plan_path.resolve(),report_path.resolve()}
@@ -35,7 +35,8 @@ def bind(plan_path, report_path, tools, source):
             files.update([binary.resolve(),identity.resolve()])
         if 'capture' in entry:files.add((folder/entry['capture']).resolve())
     for pattern in ['memory-timing-*.json','memory-timing-authored-fragment-*.c',
-                    'memory-full-tu-check-*.json','install_memory_timing_fragment-*.py']:
+                    'memory-full-tu-check-*.json','memory-review-query-address-*.json',
+                    'memory-review-query-address-*.jsonl','install_memory_timing_fragment-*.py']:
         files.update(f.resolve() for f in folder.glob(pattern) if not f.name.startswith('validation-receipt'))
     for pattern in ['memory_timing*.py','compare_memory_timing.py','bind_memory_timing_evidence.py',
                     'memory_timing_provenance.json','validate_cpu_timing_trace.py','cpu_timing_validator_controls.py']:
@@ -43,6 +44,7 @@ def bind(plan_path, report_path, tools, source):
     files.add((source/'runtime/src/memory.c').resolve())
     tracked_head=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
     assert subprocess.run(['git','-C',str(source),'diff','--quiet',report['tested_commit'],'HEAD','--','runtime/src/memory.c']).returncode==0
+    assert subprocess.run(['git','-C',str(source),'diff','--quiet','HEAD','--','runtime/src/memory.c']).returncode==0
     return dict(schema='t172-memory-timing-evidence-v1',base=report['base'],tested_commit=report['tested_commit'],
                 review_commit=tracked_head,datasets=len(plan),totals=report['totals'],
                 exclusions='Restricted exported old sources, archives and compiler logs are not read or copied; their metadata hashes remain in opaque build receipts.',
@@ -51,7 +53,7 @@ def bind(plan_path, report_path, tools, source):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('plan',type=Path);p.add_argument('report',type=Path)
-    p.add_argument('tools',type=Path);p.add_argument('source',type=Path);p.add_argument('output',type=Path)
-    a=p.parse_args();result=bind(a.plan,a.report,a.tools,a.source)
+    p.add_argument('source',type=Path);p.add_argument('output',type=Path)
+    a=p.parse_args();result=bind(a.plan,a.report,a.source)
     with a.output.open('x') as f:json.dump(result,f,indent=2)
     print(json.dumps(dict(files=len(result['files']),sha256=digest(a.output),review_commit=result['review_commit'])))
