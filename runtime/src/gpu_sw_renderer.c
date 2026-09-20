@@ -309,8 +309,8 @@ void sw_source_texture_control(unsigned action, uint32_t page)
     if (action == 0) {
         for (unsigned i = 0; i < 256; ++i) t172_palette[i] = 0;
     }
-    if (action == 0 || action == 4) t172_control_page = 0;
-    if (action == 3) t172_control_page = selected;
+    if (action == 0) t172_control_page = 0;
+    if (action == 3 || action == 4) t172_control_page = selected;
 }
 
 typedef struct SourceTriangleColors {
@@ -352,7 +352,7 @@ static void source_texture_palette(SourceTriangleColors *colors)
     const SourceGPUTexture *texture = colors->texture;
     if (colors->mode == 2 || !texture->load_clut) return;
     unsigned size = colors->mode == 0 ? 16u : 256u;
-    unsigned key = texture->clut;
+    unsigned key = texture->clut & 0x7fffu;
     if (t172_palette_valid && t172_palette_key == key && t172_palette_size == size) return;
     unsigned x = (key & 63u) * 16u;
     unsigned y = (key >> 6) & 511u;
