@@ -1701,22 +1701,23 @@ static int implicit_read_seek_cycles(void)
 /* This optional comparison adds only the independently expressed source seek
  * lower bound. The source's global PRNG jitter and physical drive-head position
  * are not recreated. The first cold ReadTOC's paused/zero position is measured. */
-static int source_toc_seek_cycles(void) {
-    int origin=last_sector_lba>=0?last_sector_lba:0;
-    /* Pause rewinds the source drive head without changing the last sector
-     * delivered to the host. ReadTOC seeks from that stopped head, just as
-     * a subsequent explicit seek or resumed ReadN does. */
-    if(s_source_clock && s_source_seek_paused && !reading) {
-        origin=msf_to_lba(read_min,read_sec,read_sect);
-        if(origin<0)origin=0;
-    }
-    if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;
-    int motor=(stat_reg&CDSTAT_MOTOR)!=0;
-    int paused=motor&&!reading&&!(stat_reg&(CDSTAT_READ|CDSTAT_SEEK|CDSTAT_PLAY));
-    int delay=source_seek_lower_bound(origin,0,motor,paused,mode_reg);
-    uint32_t jitter=s_source_clock?source_clock_random(25000):0;
-    return delay>INT32_MAX-(int)jitter?INT32_MAX:delay+(int)jitter;
+/* T172 authored CD TOC seek. */
+static int source_toc_seek_cycles(void)
+{
+    int origin = last_sector_lba;
+    if (s_source_clock && !reading && s_source_seek_paused)
+        origin = msf_to_lba(read_min, read_sec, read_sect);
+    if (origin < 0) origin = 0;
+    if (s_nymashock_drive && source_drive_head_valid)
+        origin = source_drive_head_lba;
+    int motor = (stat_reg & CDSTAT_MOTOR) != 0;
+    int paused = motor && !reading && !(stat_reg & (CDSTAT_READ | CDSTAT_SEEK | CDSTAT_PLAY));
+    int delay = source_seek_lower_bound(origin, 0, motor, paused, mode_reg);
+    if (!s_source_clock) return delay;
+    int64_t total = (int64_t)delay + source_clock_random(25000);
+    return total > INT32_MAX ? INT32_MAX : (int)total;
 }
+/* T172 end CD TOC seek. */
 
 static int source_explicit_seek_cycles(uint8_t cmd) {
     /* The older model uses the delivery cursor; Nymashock also tracks the
