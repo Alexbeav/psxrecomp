@@ -61,6 +61,7 @@ void psx_icache_shadow_abort(void)
 
 void psx_icache_isolated_store(uint32_t address, uint32_t control)
 {
+    if (g_ls_replay_active && shadow_state != 2) return;
     if ((control & 0x804u) != 0x804u) return;
     unsigned start = (address & 0xff0u) >> 2;
     for (unsigned i = 0; i < 4; ++i) g_psx_icache_tv[start + i] = 2;

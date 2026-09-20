@@ -11,6 +11,7 @@ extern "C" {
 
 extern uint32_t g_psx_icache_tv[1024];
 extern int g_psx_icache_active;
+extern int g_ls_replay_active;
 extern void (*g_psx_cpu_step_boundary_callback)(CPUState *, uint32_t, uint64_t);
 void psx_icache_reset(void);
 int psx_icache_enabled(void);
@@ -38,7 +39,7 @@ static inline void psx_icache_fetch_interp_after_boundary(CPUState *cpu, uint32_
 {
     if (g_input_instruction_histogram_active)
         input_instruction_histogram_sample(address);
-    psx_icache_fetch_miss(cpu, address);
+    if (!g_ls_replay_active) psx_icache_fetch_miss(cpu, address);
 }
 
 static inline void psx_icache_fetch_interp(CPUState *cpu, uint32_t address)
