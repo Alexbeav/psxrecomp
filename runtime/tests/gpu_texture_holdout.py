@@ -1,7 +1,9 @@
 """Post-implementation mixed texture and synthetic VRAM holdouts."""
 import json
 import random
-rng=random.Random(172092005);cases=[]
+import argparse
+p=argparse.ArgumentParser();p.add_argument('--seed',type=int,default=172092005);args=p.parse_args()
+rng=random.Random(args.seed);cases=[]
 for case in range(192):
     ops=[dict(op='digest')]
     points=[(rng.randrange(256),rng.randrange(256)) for _ in range(4)]+[(0,0),(255,255)]

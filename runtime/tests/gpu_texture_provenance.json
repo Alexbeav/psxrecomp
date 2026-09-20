@@ -1,0 +1,36 @@
+{
+  "task": "T172",
+  "status": "Texture helpers/statefulcache and bounded publicdraw qualified; independent final review/publication pending",
+  "base": "754fbae6fb2b130acbf0806135f4701d0346c45e",
+  "tested_commit": "6eebf2bc5f09a5bb41f86c6dc472dcb9859afa0d",
+  "scope": [
+    "runtime/include/source_gpu_texture.h",
+    "Two guarded texturecache/control and fetch/palette sections in runtime/src/gpu_sw_renderer.c"
+  ],
+  "validation": {
+    "datasets": 20,
+    "cases": 6000,
+    "rows": 242028
+  },
+  "public_draw_cases": 96,
+  "public_draw_changed_pixels": 1514,
+  "negative_controls": 23,
+  "source_boundary": "Primary PSX-SPX hardware context, declaration-only contracts, authored syntheticVRAM experiments; old helper/header/renderer bodies and adjacent projection code unread.",
+  "evidence_plan": "gpu-texture-plan-v1.json",
+  "evidence_results": "gpu-texture-results-v1.json",
+  "preservation": "gpu-texture-preservation-v2.json; all three unowned chunks retain exact original rawbyte hashes",
+  "limitations": [
+    "Texture helper modes0..2,UV0..255,declared controlactions0..4; syntheticVRAM only",
+    "Actual public triangle drawing covered96coldcache cases with stated inactivehook/parityseams; no commandqueue/generalpersistentdraw claim",
+    "No snapshotcodec for privatecache; lifecycle tested throughpublicsequences",
+    "No full game/runtime integration,MSVC,hardware accuracy,performance or quality graduation claim"
+  ],
+  "retained_attempts": [
+    "5608e347e05db2bd39319fac44f8dc273cfcf475 passed initial70548rows but failed mixedholdout controlpage/CLUTalias state",
+    "Initial negativecontrol config_1 was a no-op mutation; corrected actual configsubstitution and all23controls rejected"
+  ],
+  "notice_status": "Original renderer file-level prefix preserved byte-for-byte; T77 headernotice review reports no explicit retainednotice; rootLICENSE unchanged; finalrootnotice/source review remains gate.",
+  "legal_claim": "No formal clean-room/legal-clearance claim; broaderorigin auditopen.",
+  "exposure_incident": "Prior unrelated GPU projection warning exposure remains recorded; command-cost/clamping scope excluded.",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4"
+}
