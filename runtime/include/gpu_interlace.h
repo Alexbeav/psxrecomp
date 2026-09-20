@@ -3,8 +3,8 @@
 
 int gpu_raster_skipped_row(void);
 
-/* GP0 raster primitives skip the active field only in 480i mode with
- * drawing-to-display prohibited. VRAM transfer commands do not use this rule.
+/* GP0 raster primitives and quick fills skip the active field only in 480i
+ * mode with drawing-to-display prohibited. VRAM copies/uploads do not.
  * Return -1 for progressive drawing, otherwise the native VRAM row parity
  * that must remain unchanged. The display origin participates in that parity. */
 static inline int psx_gpu_raster_skipped_row(unsigned interlace,

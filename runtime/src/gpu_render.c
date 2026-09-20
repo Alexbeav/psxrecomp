@@ -7,10 +7,11 @@
  * gl_backend_get(); if that returns NULL (GL unavailable / init failed) we
  * stay on software so a misconfigured [video] renderer never bricks boot.
  *
- * The software backend table points straight at the existing sw_* functions,
- * so the software path is byte-for-byte unchanged. */
+ * The software backend table points at the sw_* functions. Shared quick-fill
+ * field selection happens before backend dispatch. */
 
 #include "gpu_render.h"
+#include "gpu_interlace.h"
 #include "gpu_sw_renderer.h"
 #include <stdio.h>
 
@@ -123,7 +124,17 @@ void gr_set_perspective_triangle(int enabled, float q0, float q1, float q2) {
     if (g_b->set_perspective_triangle)
         g_b->set_perspective_triangle(enabled, q0, q1, q2);
 }
-void gr_fill_rect(int x, int y, int w, int h, uint16_t c)  { g_b->fill_rect(x, y, w, h, c); }
+void gr_fill_rect(int x, int y, int w, int h, uint16_t c) {
+    const int skip = gpu_raster_skipped_row();
+    if (skip < 0) {
+        g_b->fill_rect(x, y, w, h, c);
+        return;
+    }
+    /* GP0(02h) preserves the active field, unlike VRAM copies/uploads.
+     * ponytail: one submission per native row; batch only if measured costly. */
+    for (int row = ((y & 1) == skip); row < h; row += 2)
+        g_b->fill_rect(x, (y + row) & 511, w, 1, c);
+}
 void gr_copy_rect(int sx, int sy, int dx, int dy, int w, int h) { g_b->copy_rect(sx, sy, dx, dy, w, h); }
 void gr_draw_flat_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t c) {
     g_b->draw_flat_triangle(x0, y0, x1, y1, x2, y2, c);

@@ -7,7 +7,7 @@
 static uint16_t vram[1024 * 512];
 static uint32_t hires[32*4*32*4], reference_hires[32*4*32*4];
 static uint16_t reference_vram[32*32];
-static int skipped_row;
+static int skipped_row = -1;
 static int failures;
 static int mock_enabled, mock_pc, mock_pq, mock_submissions, mock_bad;
 static void mock_precise(int e,int32_t x0,int32_t y0,int32_t x1,int32_t y1,int32_t x2,int32_t y2) {
@@ -111,12 +111,30 @@ int main(void) {
         reset_canvas(); skipped_row=1;
         gr_set_draw_area(3,3,8,8); gr_draw_flat_rect(0,0,10,10,0x7FFF);
         CHECK(vram[4*1024+3]==0x7FFF && vram[3*1024+3]==0 && vram[4*1024+2]==0);
-        /* Fill/copy/upload/readback must retain BOTH fields. */
+        /* Fill preserves the active field. Copies and uploads do not filter it. */
         gr_fill_rect(0,0,16,16,0x1234);
         gr_copy_rect(0,0,16,0,16,16);
         uint16_t in[4]={1,2,3,4},out[4]={0};
         gr_vram_transfer_in(0,0,2,2,in); gr_vram_transfer_out(0,0,2,2,out);
-        CHECK(memcmp(in,out,sizeof in)==0 && vram[17]==0x1234 && vram[1024+17]==0x1234);
+        CHECK(memcmp(in,out,sizeof in)==0 && vram[17]==0x1234 && vram[1024+17]==0);
+        /* Wrapped fills preserve the other field, including scaled mirrors,
+         * regardless of draw area or either mask bit. */
+        for (int skip=-1;skip<=1;++skip) {
+            skipped_row=-1;gr_fill_rect(0,0,1024,512,0x801f);
+            skipped_row=skip;gr_set_mask_bits(1,1);
+            gr_fill_rect(1016,510,24,4,0x03e0);
+            for(int y=0;y<512;++y) for(int x=0;x<1024;++x) {
+                int touched=(y>=510 || y<2) && (x>=1016 || x<16);
+                int written=touched && (skip<0 || (y&1)!=skip);
+                CHECK(vram[y*1024+x]==(written?0x03e0:0x801f));
+            }
+            gr_render_display_hires(hires,32*scale*4,0,0,32,32);
+            for(int y=0;y<4*scale;++y) for(int x=0;x<24*scale;++x) {
+                int written=y<2*scale && x<16*scale &&
+                    (skip<0 || ((y/scale)&1)!=skip);
+                CHECK((hires[y*32*scale+x]&0xFFFFFF)==(written?0x00ff00:0xff0000));
+            }
+        }
         /* A mode switch restores drawing to both fields immediately. */
         reset_canvas(); skipped_row=0; gr_draw_flat_rect(2,2,1,2,0x7FFF);
         skipped_row=-1; gr_draw_flat_rect(2,2,1,2,0x4321);
