@@ -9,7 +9,7 @@ def read_check(matrix,item,commit):
  cases=json.loads(Path(matrix).read_text())['cases'];count=events=0
  with Path(item['trace']).open() as f:
   meta=json.loads(next(f))['metadata'];identity=json.loads(Path(item['identity']).read_text())
-  require(meta['schema']=='t77-cd-implicit-observations-v1','schema');require(meta['source']==identity and identity['commit']==commit,'source identity')
+  require(identity['head_sha256']==identity['selected_header_sha256'],'owned fragment identity');require(meta['schema']=='t77-cd-implicit-observations-v1','schema');require(meta['source']==identity and identity['commit']==commit,'source identity')
   require(meta['matrix_sha256']==digest(matrix),'input hash');require(identity['binary_sha256']==digest(item['executable']),'binary hash')
   for a,e in itertools.zip_longest((json.loads(l) for l in f),expected_rows(matrix)):
    require(a is not None and e is not None,'row count');require(a==e,f'{e["case_id"]} full state');count+=1;events+=len(a['events'])
@@ -21,7 +21,7 @@ def compare(plan,job):
   if not Path(item['trace']).exists():subprocess.run([sys.executable,plan['runner'],job['matrix'],item['trace'],'--executable',item['executable'],'--identity',item['identity']],capture_output=True,check=True)
   observed.append(read_check(job['matrix'],item,plan['base' if side=='baseline' else 'tested_commit']))
  a,b=observed;require(a[0]['adapter_sha256']==b[0]['adapter_sha256'],'adapter')
- for k in ('optimization','wrapper_sha256','dependencies_sha256','head_sha256','seek_header_sha256'):require(a[0]['source'][k]==b[0]['source'][k],k)
+ for k in ('optimization','wrapper_sha256','sha_source_sha256','dependencies_sha256','seek_header_sha256'):require(a[0]['source'][k]==b[0]['source'][k],k)
  with Path(job['baseline']['trace']).open() as l,Path(job['candidate']['trace']).open() as r:
   next(l);next(r)
   for x,y in itertools.zip_longest(l,r):require(x is not None and y is not None and json.loads(x)==json.loads(y),'paired rows')
