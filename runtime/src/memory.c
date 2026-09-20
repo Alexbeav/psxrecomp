@@ -2112,7 +2112,16 @@ static void t172_memory_poll(uint32_t physical)
         const char *value = getenv("PSX_POLL_PROOF");
         extra = value ? atoi(value) : 0;
     }
-    if (physical < 0x800000u && extra > 0) psx_advance_cycles((uint32_t)extra);
+    if (physical < 0x800000u && extra > 0) {
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM) && !STARVATION_RING_ENABLED
+        extern uint64_t g_psx_cycle_fast_limit;
+        if (!g_event_step_conservative && psx_cycle_count + (uint32_t)extra <= g_psx_cycle_fast_limit) {
+            psx_cycle_count += (uint32_t)extra;
+            return;
+        }
+#endif
+        psx_advance_cycles((uint32_t)extra);
+    }
 }
 
 static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
