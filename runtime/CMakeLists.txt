@@ -23,6 +23,21 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    # Existing movie-row fixture uses GCC whole-program pruning of GPU services.
+    if(WIN32 AND MINGW AND CMAKE_SIZEOF_VOID_P EQUAL 8
+       AND CMAKE_C_COMPILER_ID STREQUAL "GNU"
+       AND CMAKE_C_COMPILER_VERSION VERSION_EQUAL "16.1.0")
+        add_executable(depth24_row_policy_test tests/test_depth24_row_policy.c)
+        target_include_directories(depth24_row_policy_test PRIVATE include)
+        target_compile_options(depth24_row_policy_test PRIVATE
+            -O2 -UNDEBUG -flto -fwhole-program -ffunction-sections -fdata-sections)
+        target_link_options(depth24_row_policy_test PRIVATE -flto -Wl,--gc-sections)
+        add_test(NAME depth24_row_policy_test COMMAND depth24_row_policy_test)
+    else()
+        add_test(NAME depth24_row_policy_test COMMAND ${CMAKE_COMMAND} -E echo
+            "SKIP: depth24 row fixture requires Windows x64 MinGW GCC 16.1.0")
+        set_tests_properties(depth24_row_policy_test PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
+    endif()
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
