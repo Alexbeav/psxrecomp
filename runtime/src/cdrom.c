@@ -1939,19 +1939,31 @@ static int source_cdda_peek(int32_t lba) {
     }
     return 0;
 }
-static void source_cdda_present(void) {
-    if(!source_cdda.enabled || !source_cdda.async_type || !source_clock_receive_ready())return;
-    unsigned type=source_cdda.async_type;
+/* T172 authored CDDA notification. */
+static void source_cdda_present(void)
+{
+    if (!source_cdda.enabled || !source_cdda.async_type) return;
+    if (!source_clock_receive_ready()) return;
     response_clear();
-    for(unsigned i=0;i<source_cdda.async_count;i++)response_push(source_cdda.async_data[i]);
-    source_cdda.async_type=source_cdda.async_count=0;
-    set_irq((int)type);fire_cdrom_irq();
+    for (unsigned i = 0; i < source_cdda.async_count; ++i)
+        response_push(source_cdda.async_data[i]);
+    unsigned type = source_cdda.async_type;
+    source_cdda.async_type = 0;
+    source_cdda.async_count = 0;
+    set_irq((int)type);
+    fire_cdrom_irq();
 }
-static void source_cdda_queue(unsigned type,const uint8_t *data,unsigned count) {
-    if(count>8)abort();
-    memcpy(source_cdda.async_data,data,count);source_cdda.async_type=type;source_cdda.async_count=count;
+
+static void source_cdda_queue(unsigned type, const uint8_t *data, unsigned count)
+{
+    source_cdda.async_type = type;
+    source_cdda.async_count = count;
+    for (unsigned i = 0; i < count; ++i)
+        source_cdda.async_data[i] = data[i];
     source_cdda_present();
 }
+/* T172 end CDDA notification. */
+
 static void start_source_cdda(int requested_track) {
     if(reading || (mode_reg&0x80u)) {
         fprintf(stderr,"[CDROM] Source CDDA active data-read transition/double speed unqualified\n");exit(2);
