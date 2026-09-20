@@ -1,0 +1,36 @@
+{
+  "task": "T172",
+  "status": "Independent opcode helpers qualified; T77 independent review/publication pending",
+  "base": "4ce4adbda0155454ab8631545fadb2dc50e91c8f",
+  "tested_commit": "9f9ac75b885438da90041a5eda1efdf1af608ef9",
+  "scope": "Only runtime/include/psx_instr_cost.h production replacement",
+  "source_boundary": "Primary PSX-SPX encoding/operand context, declaration-only T77 contract and authored opaque opcode observations. Old header/comments/tests unread.",
+  "validation": {
+    "datasets": 12,
+    "build_axes": [
+      "C11/O0",
+      "C11/O2",
+      "C++17/O0",
+      "C++17/O2"
+    ],
+    "raw_opcode_observations": 3194880,
+    "negative_controls": 21
+  },
+  "evidence_plan": "instr-cost-plan-v1.json",
+  "evidence_results": "instr-cost-results-v1.json",
+  "observed_compatibility": [
+    "Base helper returns1 throughout measured domain; separate waits excluded",
+    "Masks preserve encodedregister0 bits and observed unused/reserved field behavior",
+    "Coprocessor primary opcodes16..19 yielded zero masks in measured partition/holdout domain"
+  ],
+  "limits": [
+    "Pure raw-u32 compatibility only; no CPU execution, memory timing, total latency or hardware accuracy claim",
+    "Input sweep is not exhaustive across all2^32opcodes",
+    "GCC/G++ builds; MSVC untested",
+    "No saved CPU state or snapshotcodec applies to these pure functions"
+  ],
+  "notice_status": "T77 confirms no explicit copyright/SPDX/license/grant notice in original owned header; original comments retained in history/restricted audit; rootLICENSE unchanged.",
+  "legal_claim": "None; broader origin audit remains separate.",
+  "exposure_incident": "Prior unrelated GPU command-cost warning exposure remains recorded; no blanket clean-room claim.",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4"
+}
