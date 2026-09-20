@@ -1664,7 +1664,7 @@ static void source_drive_head_update(void)
     if (!s_nymashock_drive || !source_drive_head_valid) return;
     uint64_t period = (mode_reg & 0x80) ?
         CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 : CDROM_SINGLE_SPEED_SECTOR_CYCLES;
-    int limit = source_drive_head_target + (source_drive_hold_logical ? 1 : -1);
+    int64_t limit = (int64_t)source_drive_head_target + (source_drive_hold_logical ? 1 : -1);
     while (source_drive_head_due <= psx_cycle_count) {
         source_drive_subq_lba = source_drive_head_lba;
         source_drive_head_lba += source_drive_head_lba < limit ? 1 : -8;
