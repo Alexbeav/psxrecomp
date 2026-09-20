@@ -1544,33 +1544,34 @@ static int read_sector_at(int min, int sec, int sect) {
         }
     }
 
+/* T172 authored CD delivery buffer-fill. */
     CdSectorBuf *wb = NULL;
     if (delivery.data_delivered) {
-        int wi = (s_ring_write + 1) % CDROM_NUM_SECTOR_BUFFERS;
-        wb = &s_sector_ring[wi];
-        if (wb->size > 0 && wb->pos < wb->size) s_ring_dropped++;
+        int target = (s_ring_write + 1) % CDROM_NUM_SECTOR_BUFFERS;
+        wb = &s_sector_ring[target];
+        if (wb->pos < wb->size)
+            ++s_ring_dropped;
         memset(wb->data, 0, sizeof(wb->data));
-        if (mode_reg & 0x20) {
-            if (have_raw) {
-                memcpy(wb->data, raw_data + WHOLE_SECTOR_OFFSET, WHOLE_SECTOR_SIZE);
-                wb->size = WHOLE_SECTOR_SIZE;
-            } else {
-                wb->data[0] = bin_to_bcd(min);
-                wb->data[1] = bin_to_bcd(sec);
-                wb->data[2] = bin_to_bcd(sect);
-                wb->data[3] = 0x02; /* Mode 2 sector. */
-                memcpy(wb->data + FALLBACK_SECTOR_HEADER_SIZE, user_data, SECTOR_SIZE);
-                wb->size = FALLBACK_WHOLE_SECTOR_SIZE;
-            }
-        } else {
+        if (!(mode_reg & 0x20)) {
             memcpy(wb->data, user_data, SECTOR_SIZE);
             wb->size = SECTOR_SIZE;
+        } else if (have_raw) {
+            memcpy(wb->data, raw_data + WHOLE_SECTOR_OFFSET, WHOLE_SECTOR_SIZE);
+            wb->size = WHOLE_SECTOR_SIZE;
+        } else {
+            wb->data[0] = bin_to_bcd(min);
+            wb->data[1] = bin_to_bcd(sec);
+            wb->data[2] = bin_to_bcd(sect);
+            wb->data[3] = 2;
+            memcpy(wb->data + FALLBACK_SECTOR_HEADER_SIZE, user_data, SECTOR_SIZE);
+            wb->size = FALLBACK_WHOLE_SECTOR_SIZE;
         }
         wb->pos = 0;
-        s_ring_write = wi;
+        s_ring_write = target;
         history_bytes = wb->data;
         history_size = wb->size;
     }
+/* T172 end CD delivery buffer-fill. */
 
     if (delivery.data_delivered) {
         memcpy(last_sector_buffer, wb->data, (size_t)wb->size);
@@ -2143,7 +2144,9 @@ static int data_fifo_ready(void) {
 static uint64_t s_dataready_fires;  /* INT1 (data-ready) raised per streamed sector — FMV dispatch probe */
 uint64_t cdrom_get_dataready_fires(void) { return s_dataready_fires; }
 
-static int deliver_read_sector(uint64_t timing_seq) {
+/* T172 authored CD delivery delivery-helpers. */
+static int deliver_read_sector(uint64_t timing_seq)
+{
     int delivered = read_sector_at(read_min, read_sec, read_sect);
     advance_msf(&read_min, &read_sec, &read_sect);
     if (xa_data_end_pending) {
@@ -2154,48 +2157,27 @@ static int deliver_read_sector(uint64_t timing_seq) {
         fire_cdrom_irq();
         return 1;
     }
-    if (!delivered) return 0;
+    if (!delivered)
+        return 0;
     response_clear();
     response_push(stat_reg);
-    /* Delivered immediately: this INT1 announces the slot just filled. */
     s_ring_read = s_ring_write;
     set_irq(CDIRQ_DATA_READY);
     cd_timing_arm_irq(timing_seq);
     fire_cdrom_irq();
-    s_dataready_fires++;
+    ++s_dataready_fires;
     return 1;
 }
 
-/* Both callers advance the read pointer, and that is DELIBERATE.
- *
- * Splitting them -- so the "guest has not acked" path parked the sector
- * without advancing -- looked obviously correct (why redirect a drain the
- * guest is still working through?) and regressed hard: int1_lost went 0 -> 70
- * and the game retried every Setloc. Without the advance, sectors pile up
- * behind an unacked INT, each new one replaces the pended notification, and
- * the guest is never told. The reasoning was sound and the measurement said
- * otherwise; it was committed without a verification run, which is how it
- * survived long enough to confuse three later experiments.
- *
- * Do not re-split this without a cd_verify run showing int1_lost stays 0. */
-static int deliver_read_sector_without_irq(void) {
+static int deliver_read_sector_without_irq(void)
+{
     int delivered = read_sector_at(read_min, read_sec, read_sect);
     advance_msf(&read_min, &read_sec, &read_sect);
-    if (delivered) {
-        /* Seamless refill for an in-flight multi-sector DMA: no INT1 is
-         * raised because this is a CONTINUATION of the drain already in
-         * progress, not a new notification. The read pointer must therefore
-         * follow it -- with one buffer this refill landed in the very buffer
-         * being drained, and the ring reproduces that only by advancing.
-         *
-         * Measured: leaving the pointer behind starved 1,128,960 drains and
-         * stranded exactly 70 refills -- the same 70 that showed up as
-         * int1_lost, with every Setloc retried. This one line is the whole
-         * difference between the ring regressing and the ring working. */
+    if (delivered)
         s_ring_read = s_ring_write;
-    }
     return delivered;
 }
+/* T172 end CD delivery delivery-helpers. */
 
 /* §93 P1: cmd timeline under PSX_RB_CD_BISECT (window via netplay).
  * ISSUE/DONE include controller stat + response FIFO (GetTN last-track BCD,
