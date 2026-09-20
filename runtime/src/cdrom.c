@@ -1931,14 +1931,22 @@ static int start_cdda_playback(int requested_track) {
     return 1;
 }
 
-static int source_cdda_peek(int32_t lba) {
-    uint8_t q[12];int valid=0;
-    if(iso_read_subq(iso_handle,(uint32_t)lba,q,12,&valid) && valid && (q[0]&15u)==1u) {
-        memcpy(last_valid_subq,q,12);last_valid_subq_available=1;
-        source_cdda.position_valid=1;return 1;
-    }
-    return 0;
+/* T172 authored CDDA peek. */
+static int source_cdda_peek(int32_t lba)
+{
+    uint8_t subq[12];
+    int valid = 0;
+    if (!iso_read_subq(iso_handle, (uint32_t)lba, subq, 12, &valid) ||
+        !valid || (subq[0] & 15) != 1)
+        return 0;
+    for (unsigned i = 0; i < 12; ++i)
+        last_valid_subq[i] = subq[i];
+    last_valid_subq_available = 1;
+    source_cdda.position_valid = 1;
+    return 1;
 }
+/* T172 end CDDA peek. */
+
 /* T172 authored CDDA notification. */
 static void source_cdda_present(void)
 {
