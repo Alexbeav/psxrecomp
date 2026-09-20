@@ -1282,30 +1282,22 @@ static void xa_reset_decode(void) {
     xa_stream_active = 0;
 }
 
-/* CD-audio volume matrix ([data_source][output_port], 0x80 = unity) applied
- * to every decoded XA/CD-DA sample, exactly as the CD controller does on
- * real hardware (Beetle PS_CDC::ApplyVolume, cdc.cpp:524). Written via the
- * index-2/3 register banks and latched by the "apply changes" bit; games
- * drive it CONSTANTLY — X5 fades music between scenes with it (measured
- * 0x7E steady, ramping to 0x00 at transitions on the Beetle oracle). Not
- * modeling it left fades missing and steady levels ~0.6 dB hot. */
-static uint8_t cd_pending_vol[2][2] = { { 0x80, 0x00 }, { 0x00, 0x80 } };
-static uint8_t cd_decode_vol[2][2]  = { { 0x80, 0x00 }, { 0x00, 0x80 } };
+/* T172 authored CD volume. */
+static uint8_t cd_pending_vol[2][2] = {{128, 0}, {0, 128}};
+static uint8_t cd_decode_vol[2][2] = {{128, 0}, {0, 128}};
 
-static void cd_apply_decode_volume(int16_t *stereo, int frames) {
-    /* Fast path: identity matrix (the reset state). */
-    if (cd_decode_vol[0][0] == 0x80 && cd_decode_vol[1][1] == 0x80 &&
-        cd_decode_vol[0][1] == 0x00 && cd_decode_vol[1][0] == 0x00)
-        return;
-    for (int i = 0; i < frames; i++) {
-        int32_t l = stereo[i * 2 + 0];
-        int32_t r = stereo[i * 2 + 1];
-        int32_t lo = ((l * cd_decode_vol[0][0]) >> 7) + ((r * cd_decode_vol[1][0]) >> 7);
-        int32_t ro = ((l * cd_decode_vol[0][1]) >> 7) + ((r * cd_decode_vol[1][1]) >> 7);
-        stereo[i * 2 + 0] = clamp16_cd(lo);
-        stereo[i * 2 + 1] = clamp16_cd(ro);
+static void cd_apply_decode_volume(int16_t *stereo, int frames)
+{
+    for (int frame = 0; frame < frames; ++frame, stereo += 2) {
+        int32_t left = stereo[0];
+        int32_t right = stereo[1];
+        stereo[0] = clamp16_cd(((left * cd_decode_vol[0][0]) >> 7) +
+                               ((right * cd_decode_vol[1][0]) >> 7));
+        stereo[1] = clamp16_cd(((left * cd_decode_vol[0][1]) >> 7) +
+                               ((right * cd_decode_vol[1][1]) >> 7));
     }
 }
+/* T172 end CD volume. */
 
 static int xa_decode_sector_4bit_stereo(const uint8_t* data, int16_t* out) {
     static const int k0[5] = { 0, 60, 115, 98, 122 };
