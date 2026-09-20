@@ -100,10 +100,10 @@ void psx_icache_fetch_miss(CPUState *cpu, uint32_t address)
     if (g_ls_replay_active && shadow_state != 2) return;
     if (g_psx_icache_active < 0) g_psx_icache_active = psx_icache_enabled();
     if (!g_psx_icache_active) return;
+    unsigned index = (address >> 2) & 1023u;
+    if (g_psx_icache_tv[index] == address) return;
     uint32_t cost = 4;
     if (address < 0xa0000000u) {
-        unsigned index = (address >> 2) & 1023u;
-        if (g_psx_icache_tv[index] == address) return;
         unsigned offset = index & 3u;
         unsigned start = index - offset;
         uint32_t line = address & ~15u;
