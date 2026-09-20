@@ -66,6 +66,11 @@ if(BUILD_TESTING)
         add_test(NAME gl_readback_runner_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_readback_runner.py")
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME depth24_upload_span_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_depth24_upload_span.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/.."
+                --compiler "${CMAKE_C_COMPILER}"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/depth24-upload-span")
             add_test(NAME depth24_transition_test COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_depth24_transition.py"
                 "${CMAKE_CURRENT_SOURCE_DIR}/.."
