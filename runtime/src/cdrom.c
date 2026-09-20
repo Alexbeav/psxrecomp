@@ -1415,60 +1415,49 @@ static void xa_zero_scan(const int16_t *stereo, int frames, int lba,
     }
 }
 
-static int maybe_deliver_xa_audio(const uint8_t* raw_data, int lba,
-                                  const CDROMSectorDelivery *delivery) {
-    if (!(mode_reg & 0x40u) || !raw_data || !delivery || cd_muted) return 0;
+/* T172 authored XA delivery. */
+static int maybe_deliver_xa_audio(const uint8_t *raw_data, int lba,
+                                 const CDROMSectorDelivery *delivery)
+{
+    if (!raw_data || !delivery || !(mode_reg & 0x40) || cd_muted)
+        return 0;
     if (!xa_is_audio_realtime(delivery)) return 0;
-
     uint8_t file = delivery->xa_file;
     uint8_t channel = delivery->xa_channel;
     uint8_t coding = delivery->xa_coding;
-
-    if ((mode_reg & 0x08u) &&
-        (file != filter_file || channel != filter_channel)) {
-        trace_cdrom('a', 0, ((uint32_t)file << 16) | ((uint32_t)channel << 8) | coding, 0);
+    uint32_t tag = ((uint32_t)file << 16) | ((uint32_t)channel << 8) | coding;
+    if ((mode_reg & 8) && (file != filter_file || channel != filter_channel)) {
+        trace_cdrom(97, 0, tag, 0);
         return 0;
     }
-
-    int stereo = (coding & 0x01u) != 0;
-    int rate_code = (coding >> 2) & 0x03;
-    int depth_code = (coding >> 4) & 0x03;
-    int sample_rate = (rate_code == 0) ? 37800 : ((rate_code == 1) ? 18900 : 0);
-    if (depth_code != 0 || sample_rate == 0) {
-        trace_cdrom('X', 0, ((uint32_t)file << 16) | ((uint32_t)channel << 8) | coding, 0);
+    if (coding & 0x38) {
+        trace_cdrom(88, 0, tag, 0);
         return 0;
     }
-
-    if (!xa_stream_active ||
-        xa_stream_file != file ||
-        xa_stream_channel != channel ||
-        xa_stream_coding != coding) {
+    if (!xa_stream_active || xa_stream_file != file ||
+        xa_stream_channel != channel || xa_stream_coding != coding) {
         xa_reset_decode();
         xa_stream_file = file;
         xa_stream_channel = channel;
         xa_stream_coding = coding;
         xa_stream_active = 1;
     }
-
     int16_t native[XA_NATIVE_FRAMES * 2];
-    int16_t pcm_44100[XA_MAX_44100_FRAMES * 2];
-    int native_frames = stereo
+    int16_t output[XA_MAX_44100_FRAMES * 2];
+    int frames = (coding & 1)
         ? xa_decode_sector_4bit_stereo(raw_data + XA_DATA_OFFSET, native)
         : xa_decode_sector_4bit_mono(raw_data + XA_DATA_OFFSET, native);
-    xa_zero_scan(native, native_frames, lba, 0);
-    int out_frames = xa_resample_to_44100(native, native_frames, sample_rate,
-                                          pcm_44100, XA_MAX_44100_FRAMES);
-    /* Volume is applied after resampling, per PS1 hardware tests (Beetle
-     * cdc.cpp GetCDAudio comment). */
-    cd_apply_decode_volume(pcm_44100, out_frames);
-    xa_zero_scan(pcm_44100, out_frames, lba, 1);
-    spu_cd_audio_push(pcm_44100, out_frames);
-    trace_cdrom('A', 0,
-                ((uint32_t)file << 24) | ((uint32_t)channel << 16) |
-                ((uint32_t)coding << 8) | ((uint32_t)(out_frames / 32) & 0xFFu),
-                0);
+    xa_zero_scan(native, frames, lba, 0);
+    int count = xa_resample_to_44100(native, frames, (coding & 4) ? 18900 : 37800,
+                                   output, XA_MAX_44100_FRAMES);
+    cd_apply_decode_volume(output, count);
+    xa_zero_scan(output, count, lba, 1);
+    spu_cd_audio_push(output, count);
+    trace_cdrom(65, 0, ((uint32_t)file << 24) | ((uint32_t)channel << 16) |
+                ((uint32_t)coding << 8) | ((uint32_t)(count >> 5) & 255u), 0);
     return 1;
 }
+/* T172 end XA delivery. */
 
 static int read_sector_at(int min, int sec, int sect) {
     int lba = msf_to_lba(min, sec, sect);
