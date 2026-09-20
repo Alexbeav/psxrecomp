@@ -1674,24 +1674,30 @@ static void source_drive_head_update(void)
 }
 /* T172 end CD head. */
 
-static int implicit_read_seek_cycles(void) {
-    if (s_source_clock) {
-        int origin=msf_to_lba(read_min,read_sec,read_sect);
-        int target=setloc_pending?s_setloc_lba:origin;
-        if(origin<0)origin=0;
-        if(target<0)target=0;
-        source_drive_head_update();
-        if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;
-        int delay=source_seek_lower_bound(origin,target,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
-        source_drive_head_valid=0;
-        uint32_t jitter=source_clock_random(25000);
-        return delay>INT32_MAX-(int)jitter?INT32_MAX:delay+(int)jitter;
+/* T172 authored CD implicit seek. */
+static int implicit_read_seek_cycles(void)
+{
+    if (!s_source_clock) {
+        if (!setloc_pending) return 0;
+        int origin = last_sector_lba < 0 ? 0 : last_sector_lba;
+        return apply_speed(source_seek_lower_bound(origin, s_setloc_lba,
+            (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg));
     }
-    if (!setloc_pending) return 0;
-    int origin=last_sector_lba>=0?last_sector_lba:0;
-    return apply_speed(source_seek_lower_bound(origin,s_setloc_lba,(stat_reg&CDSTAT_MOTOR)!=0,
-                                              s_source_seek_paused,mode_reg));
+
+    int origin = msf_to_lba(read_min, read_sec, read_sect);
+    if (origin < 0) origin = 0;
+    int target = setloc_pending ? s_setloc_lba : origin;
+    if (target < 0) target = 0;
+    source_drive_head_update();
+    if (s_nymashock_drive && source_drive_head_valid) origin = source_drive_head_lba;
+    int delay = source_seek_lower_bound(origin, target,
+        (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg);
+    source_drive_head_valid = 0;
+    int64_t total = (int64_t)delay + source_clock_random(25000);
+    return total > INT32_MAX ? INT32_MAX : (int)total;
 }
+/* T172 end CD implicit seek. */
+
 /* This optional comparison adds only the independently expressed source seek
  * lower bound. The source's global PRNG jitter and physical drive-head position
  * are not recreated. The first cold ReadTOC's paused/zero position is measured. */
