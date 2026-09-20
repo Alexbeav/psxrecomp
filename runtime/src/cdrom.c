@@ -1973,38 +1973,54 @@ static void source_cdda_queue(unsigned type, const uint8_t *data, unsigned count
 }
 /* T172 end CDDA notification. */
 
-static void start_source_cdda(int requested_track) {
-    if(reading || (mode_reg&0x80u)) {
-        fprintf(stderr,"[CDROM] Source CDDA active data-read transition/double speed unqualified\n");exit(2);
-    }
-    source_cdda.async_type=source_cdda.async_count=0;
+/* T172 authored CDDA start. */
+static void start_source_cdda(int requested_track)
+{
+    if (reading || (mode_reg & 0x80)) exit(2);
+    source_cdda.async_type = 0;
+    source_cdda.async_count = 0;
     cdrom_clear_pending_dataready();
-    if(!requested_track && !setloc_pending && cdda_playing && !source_cdda.seeking)return;
-    int count=iso_track_count(iso_handle);
-    if(count<1 || count>9){fprintf(stderr,"[CDROM] Source CDDA track range unqualified\n");exit(2);}
-    if(requested_track>count)requested_track=count;
-    int origin=cdda_playing?(int)cdda_lba:msf_to_lba(read_min,read_sec,read_sect);
-    if(origin<0)origin=0;
-    int target=requested_track?(int)iso_track_start_lba(iso_handle,requested_track):setloc_pending?s_setloc_lba:origin;
-    if(target<0)target=0;
-    int track=cdda_track_for_lba((uint32_t)target);
-    if(!track || !iso_track_is_audio(iso_handle,track)) {
-        fprintf(stderr,"[CDROM] Source CDDA data-track play unqualified\n");exit(2);
-    }
-    int delay=source_seek_lower_bound(origin,target,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
-    uint32_t jitter=source_clock_random(25000);
-    if(delay>INT32_MAX-(int)jitter)abort();
-    cdda_delay=delay+(int)jitter;
-    stop_read_stream();spu_cd_audio_reset();
-    cdda_playing=1;cdda_track=track;cdda_lba=(uint32_t)target;cdda_data_end_pending=0;
-    source_cdda.seeking=1;source_cdda.sectors_read=0;
-    source_cdda.pipe_at=source_cdda.pipe_count=0;source_cdda.report_last_tens=255;
-    source_cdda.play_track_match=requested_track?requested_track:-1;
-    for(int i=0;i<32;i++)if(source_cdda_peek(target+i))break;
-    lba_to_msf(target,150,&read_min,&read_sec,&read_sect);
-    s_source_seek_paused=0;setloc_pending=0;
-    stat_reg=(stat_reg&~(CDSTAT_READ|CDSTAT_PLAY))|CDSTAT_MOTOR|CDSTAT_SEEK;
+    if (cdda_playing && !requested_track && !setloc_pending) return;
+
+    int tracks = iso_track_count(iso_handle);
+    if (tracks < 1 || tracks > 9) exit(2);
+    if (requested_track > tracks) requested_track = tracks;
+    int origin = cdda_playing ? (int)cdda_lba : msf_to_lba(read_min, read_sec, read_sect);
+    if (origin < 0) origin = 0;
+    int target = origin;
+    if (requested_track)
+        target = (int)iso_track_start_lba(iso_handle, requested_track);
+    else if (setloc_pending)
+        target = s_setloc_lba < 0 ? 0 : s_setloc_lba;
+    int track = cdda_track_for_lba((uint32_t)target);
+    if (!track || !iso_track_is_audio(iso_handle, track)) exit(2);
+
+    int delay = source_seek_lower_bound(origin, target, (stat_reg & 2) != 0,
+                                        s_source_seek_paused, mode_reg);
+    uint32_t jitter = source_clock_random(25000);
+    if ((int64_t)delay + jitter > 2147483647LL) abort();
+    cdda_delay = delay + (int)jitter;
+    stop_read_stream();
+    spu_cd_audio_reset();
+    cdda_playing = 1;
+    cdda_track = track;
+    cdda_lba = (uint32_t)target;
+    cdda_data_end_pending = 0;
+    source_cdda.seeking = 1;
+    source_cdda.sectors_read = 0;
+    source_cdda.pipe_count = 0;
+    source_cdda.pipe_at = 0;
+    source_cdda.report_last_tens = 255;
+    source_cdda.play_track_match = requested_track ? requested_track : -1;
+    for (int i = 0; i < 32; ++i)
+        if (source_cdda_peek(target + i)) break;
+    lba_to_msf(target, 150, &read_min, &read_sec, &read_sect);
+    setloc_pending = 0;
+    s_source_seek_paused = 0;
+    stat_reg = (stat_reg & 0x1f) | 0x42;
 }
+/* T172 end CDDA start. */
+
 static void process_source_cdda(uint32_t cycles) {
     source_cdda_present();
     if(!cdda_playing)return;
