@@ -1658,16 +1658,22 @@ static int source_drive_hold_logical, source_reset_phase;
  * which is exactly when source_drive_head_valid is cleared. -1 = never
  * decoded. */
 static int source_drive_subq_lba = -1;
-static void source_drive_head_update(void) {
-    if(!s_nymashock_drive || !source_drive_head_valid)return;
-    while(psx_cycle_count>=source_drive_head_due) {
-        source_drive_subq_lba=source_drive_head_lba;
-        source_drive_head_lba++;
-        if(source_drive_head_lba>=source_drive_head_target+(source_drive_hold_logical?2:0))source_drive_head_lba-=9;
-        if(source_drive_head_lba < -150)source_drive_head_lba=-150;
-        source_drive_head_due += CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg&0x80)?2:1);
+/* T172 authored CD head. */
+static void source_drive_head_update(void)
+{
+    if (!s_nymashock_drive || !source_drive_head_valid) return;
+    uint64_t period = (mode_reg & 0x80) ?
+        CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 : CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+    int limit = source_drive_head_target + (source_drive_hold_logical ? 1 : -1);
+    while (source_drive_head_due <= psx_cycle_count) {
+        source_drive_subq_lba = source_drive_head_lba;
+        source_drive_head_lba += source_drive_head_lba < limit ? 1 : -8;
+        if (source_drive_head_lba < -150) source_drive_head_lba = -150;
+        source_drive_head_due += period;
     }
 }
+/* T172 end CD head. */
+
 static int implicit_read_seek_cycles(void) {
     if (s_source_clock) {
         int origin=msf_to_lba(read_min,read_sec,read_sect);
