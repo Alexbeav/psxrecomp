@@ -1624,45 +1624,24 @@ static void clear_sector_buffer(void) {
     request_reg &= (uint8_t)~CDROM_REQUEST_BFRD;
 }
 
-/* One-deep asynchronous data-ready notification, mirroring Beetle
- * PS_CDC::SetAIP/CheckAIP (cdc.cpp:829,816): a data sector that comes due
- * while the guest still has an unacked controller INT does NOT stop disc
- * time — the sector buffer is overwritten on schedule (hardware clobbers
- * the FIFO the same way) and its INT1 pends here until the ack clears
- * irq_flag. If ANOTHER data sector lands while one is still pending, the
- * old notification is lost exactly like Beetle's "Previous notification
- * skipped" warning (counted, traced 'P'). */
-static uint8_t  pending_dataready;        /* 0/1: INT1 awaiting presentation */
-static uint8_t  pending_dataready_stat;   /* stat_reg snapshot at pend time */
-static int      pending_dataready_slot;   /* ring slot THIS INT1 announces */
-/* Absolute cycle at which a pended data-ready may be PRESENTED, or 0.
- *
- * Presenting it synchronously inside the guest's ack write is what loses the
- * sector. The ISR clears the interrupt and only then sets up its DMA; if the
- * next INT1's response FIFO and read slot are installed in between, the
- * transfer drains the WRONG sector. Measured: the guest acks sector 110's
- * INT1, 111 is presented instantly, and 111 lands in the buffer meant for 110
- * -- which is why psx-runtime fills 109,111,111,113,113 where DuckStation
- * fills 109,110,111,112,113.
- *
- * DuckStation guards the same window (QueueDeliverAsyncInterrupt): after an
- * ack, diff since the last interrupt is 0, so it always schedules rather than
- * delivering inline, "give it enough time to read the response out ... the
- * real console does something similar anyway, the INT1 task won't run
- * immediately after the INT3 is cleared." */
-#define CDROM_PEND_PRESENT_DELAY 500
+/* T172 authored CD pending state-clear. */
+/* Independent notification state; inputs and observations are recorded in cd_pending_provenance.json. */
+static uint8_t pending_dataready;
+static uint8_t pending_dataready_stat;
+static int pending_dataready_slot;
 static uint64_t pending_present_due;
-static uint64_t s_int1_pended;            /* INT1s that had to wait for ack */
-static uint64_t s_int1_lost;              /* pended INT1s replaced unseen */
+static uint64_t s_int1_pended;
+static uint64_t s_int1_lost;
+#define CDROM_PEND_PRESENT_DELAY 500
 
-/* Drive-state changes (Read/Play/Pause/Stop/Seek) cancel a pended
- * notification, matching Beetle's ClearAIP in every such command. */
-static void cdrom_clear_pending_dataready(void) {
+static void cdrom_clear_pending_dataready(void)
+{
     pending_dataready = 0;
     pending_dataready_stat = 0;
     pending_present_due = 0;
     s_cd_timing_pending_seq = UINT64_MAX;
 }
+/* T172 end CD pending state-clear. */
 
 /* A Read issued while the drive is ALREADY streaming the very sector the
  * pending Setloc names is not a new read -- it is the game saying "keep
@@ -3266,23 +3245,24 @@ static void process_read_stream(uint32_t cycles) {
              * schedule (XA audio + buffer overwrite happen inside), and
              * pend its data-ready INT1 one deep. */
             int delivered = deliver_read_sector_without_irq();
-            if (delivered) {
-                cd_timing_flag(timing_seq, CDT_DATA | CDT_PENDED);
-                if (pending_dataready) {
-                    s_int1_lost++;
-                    trace_cdrom('P', 0, (uint32_t)last_sector_lba, 0);
-                    cd_timing_flag(s_cd_timing_pending_seq, CDT_LOST);
-                }
-                pending_dataready = 1;
-                pending_dataready_stat = stat_reg;
-                /* Capture the slot NOW. By presentation time the drive will
-                 * have moved on -- latching "newest" there is what handed the
-                 * guest a sector seven ahead of the one it asked for. */
-                pending_dataready_slot = s_ring_write;
-                s_cd_timing_pending_seq = timing_seq;
-                s_int1_pended++;
-                if(s_source_clock && irq_flag==0)pending_present_due=s_source_ready_due;
+/* T172 authored CD pending enqueue. */
+        if (delivered) {
+            cd_timing_flag(timing_seq, CDT_DATA | CDT_PENDED);
+            if (pending_dataready) {
+                ++s_int1_lost;
+                trace_cdrom(80, 0, (uint32_t)last_sector_lba, 0);
+                cd_timing_flag(s_cd_timing_pending_seq, CDT_LOST);
             }
+            pending_dataready = 1;
+            pending_dataready_stat = stat_reg;
+            pending_dataready_slot = s_ring_write;
+            s_cd_timing_pending_seq = timing_seq;
+            ++s_int1_pended;
+            if (s_source_clock && !irq_flag)
+                pending_present_due = s_source_ready_due;
+        }
+/* T172 end CD pending enqueue. */
+
         }
         s_accel_block_accum = 0;   /* the pipeline advanced; the next hold
                                     * starts a fresh authentic-period budget */
@@ -3296,23 +3276,25 @@ static void process_read_stream(uint32_t cycles) {
     }
 }
 
-/* Present a pended data-ready INT1 the moment the guest fully acks the
- * previous INT (Beetle CheckAIP: async results present as soon as the IRQ
- * register clears). Called from the irq_flag ack write. */
-static void present_pending_dataready(void) {
-    if (!pending_dataready || irq_flag != 0) return;
-    pending_present_due = 0;
-    uint64_t timing_seq = s_cd_timing_pending_seq;
+/* T172 authored CD pending present. */
+static void present_pending_dataready(void)
+{
+    if (!pending_dataready || irq_flag)
+        return;
+
+    uint64_t sequence = s_cd_timing_pending_seq;
     pending_dataready = 0;
+    pending_present_due = 0;
     s_cd_timing_pending_seq = UINT64_MAX;
     response_clear();
     response_push(pending_dataready_stat);
-    s_ring_read = pending_dataready_slot;   /* the slot this INT1 announced */
+    s_ring_read = pending_dataready_slot;
     set_irq(CDIRQ_DATA_READY);
-    cd_timing_arm_irq(timing_seq);
+    cd_timing_arm_irq(sequence);
     fire_cdrom_irq();
-    s_dataready_fires++;
+    ++s_dataready_fires;
 }
+/* T172 end CD pending present. */
 
 void cdrom_init(const char* cue_path) {
     s_source_firmware_model=source_boot_model("PSX_CD_FIRMWARE_MODEL");
@@ -3603,14 +3585,12 @@ void cdrom_write(uint32_t addr, uint32_t value) {
             if (val & 0x40) {
                 param_count = 0;
             }
-            /* A fully-acked INT releases any pended data-ready -- but on a
-             * SCHEDULE, not inside this store. See CDROM_PEND_PRESENT_DELAY:
-             * installing the next response and read slot before the ISR has
-             * set up its DMA makes that DMA drain the wrong sector. Then a
-             * second-response already past due_cyc; a queued command waits
-             * behind. */
-            if (pending_dataready && pending_present_due == 0)
-                pending_present_due = psx_cycle_count + (s_source_clock?2000u:CDROM_PEND_PRESENT_DELAY);
+/* T172 authored CD pending ack-schedule. */
+    if (pending_dataready && !pending_present_due)
+        pending_present_due = psx_cycle_count +
+            (s_source_clock ? 2000 : CDROM_PEND_PRESENT_DELAY);
+/* T172 end CD pending ack-schedule. */
+
             process_pending(0);
             try_execute_queued_command();
         }
@@ -3685,15 +3665,16 @@ void cdrom_advance(uint32_t cycles) {
     source_cdda_present();
     process_pending(cycles);
     if(!s_source_clock)try_execute_queued_command();
-    /* Release a scheduled data-ready once its delay has elapsed and the guest
-     * has genuinely finished with the previous INT. */
-    if (pending_present_due != 0 && psx_cycle_count >= pending_present_due) {
+/* T172 authored CD pending service. */
+    if (pending_present_due && psx_cycle_count >= pending_present_due) {
         pending_present_due = 0;
-        if (pending_dataready && source_clock_receive_ready())
+        if (source_clock_receive_ready())
             present_pending_dataready();
-        else if(s_source_clock && pending_dataready && irq_flag==0)
-            pending_present_due=s_source_ready_due;
+        else if (s_source_clock && !irq_flag)
+            pending_present_due = s_source_ready_due;
     }
+/* T172 end CD pending service. */
+
     process_read_stream(cycles);
     process_cdda_stream(cycles);
     deliver_xa_data_end();
