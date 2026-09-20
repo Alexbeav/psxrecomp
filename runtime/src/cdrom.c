@@ -3668,10 +3668,12 @@ void cdrom_advance(uint32_t cycles) {
 /* T172 authored CD pending service. */
     if (pending_present_due && psx_cycle_count >= pending_present_due) {
         pending_present_due = 0;
-        if (source_clock_receive_ready())
-            present_pending_dataready();
-        else if (s_source_clock && !irq_flag)
-            pending_present_due = s_source_ready_due;
+        if (pending_dataready) {
+            if (source_clock_receive_ready())
+                present_pending_dataready();
+            else if (s_source_clock && !irq_flag)
+                pending_present_due = s_source_ready_due;
+        }
     }
 /* T172 end CD pending service. */
 
