@@ -2023,61 +2023,93 @@ static void start_source_cdda(int requested_track)
 }
 /* T172 end CDDA start. */
 
-static void process_source_cdda(uint32_t cycles) {
+/* T172 authored CDDA service. */
+static void process_source_cdda(uint32_t cycles)
+{
     source_cdda_present();
-    if(!cdda_playing)return;
-    cdda_delay-=(int)cycles;
-    unsigned serviced=0;
-    while(cdda_playing && cdda_delay<=0) {
-        if(++serviced>64){fprintf(stderr,"[CDROM] Source CDDA service interval unqualified\n");exit(2);}
-        if(source_cdda.seeking) {
-            source_cdda.seeking=0;
-            for(int i=1;i<=16;i++)if(source_cdda_peek((int)cdda_lba-i))break;
-            stat_reg=(stat_reg&~CDSTAT_SEEK)|CDSTAT_PLAY;
-            cdda_delay+=CDROM_SINGLE_SPEED_SECTOR_CYCLES;continue;
+    if (!cdda_playing) return;
+    cdda_delay -= (int)cycles;
+    unsigned serviced = 0;
+    while (cdda_delay <= 0) {
+        if (++serviced > 64) exit(2);
+        if (source_cdda.seeking) {
+            source_cdda.seeking = 0;
+            for (int back = 1; back <= 16; ++back)
+                if (source_cdda_peek((int32_t)cdda_lba - back)) break;
+            stat_reg = (stat_reg & ~CDSTAT_SEEK) | CDSTAT_PLAY;
+            cdda_delay += CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+            continue;
         }
+
         uint8_t raw[2352];
-        if(!iso_read_raw_sector(iso_handle,cdda_lba,raw,2352)) {
-            fprintf(stderr,"[CDROM] Source CDDA sector read failed\n");exit(2);
+        if (!iso_read_raw_sector(iso_handle, cdda_lba, raw, sizeof(raw))) exit(2);
+        int fresh = source_cdda_peek((int32_t)cdda_lba);
+        if (!last_valid_subq_available) exit(2);
+        if (fresh && source_cdda.play_track_match < 0)
+            source_cdda.play_track_match = last_valid_subq[1];
+        int leadout = last_valid_subq[1] == 0xaa;
+        int track_end = (mode_reg & 2) && source_cdda.play_track_match >= 0 &&
+                        source_cdda.play_track_match != last_valid_subq[1];
+        if (leadout || track_end) {
+            uint8_t status = stat_reg;
+            cdda_playing = 0;
+            cdda_delay = 0;
+            s_source_seek_paused = 1;
+            source_cdda.pipe_at = 0;
+            source_cdda.pipe_count = 0;
+            source_cdda.sectors_read = 0;
+            stat_reg &= ~CDSTAT_PLAY;
+            if (leadout) status = stat_reg;
+            source_cdda_queue(CDIRQ_DATA_END, &status, 1);
+            return;
         }
-        int valid=source_cdda_peek((int)cdda_lba);
-        const uint8_t *q=last_valid_subq;
-        if(!last_valid_subq_available){fprintf(stderr,"[CDROM] Source CDDA requires a valid SubQ position\n");exit(2);}
-        if(source_cdda.play_track_match<0 && valid)source_cdda.play_track_match=q[1];
-        int leadout=q[1]==0xaa;
-        if(leadout || ((mode_reg&2u) && source_cdda.play_track_match>=0 && q[1]!=source_cdda.play_track_match)) {
-            uint8_t status=stat_reg;
-            cdda_playing=0;cdda_delay=0;source_cdda.pipe_count=source_cdda.pipe_at=0;
-            source_cdda.sectors_read=0;s_source_seek_paused=1;stat_reg&=~CDSTAT_PLAY;
-            if(leadout)status=stat_reg;
-            source_cdda_queue(CDIRQ_DATA_END,&status,1);return;
-        }
-        if((mode_reg&4u) && valid && (q[9]>>4)!=source_cdda.report_last_tens) {
-            source_cdda.report_last_tens=q[9]>>4;
-            unsigned channel=q[8]&1u,peak=0;
-            for(unsigned i=0;i<588;i++) {
-                int value=(int16_t)((uint16_t)raw[4*i+2*channel]|((uint16_t)raw[4*i+2*channel+1]<<8));
-                unsigned magnitude=value<0?(unsigned)-value:(unsigned)value;
-                if(magnitude>32767)magnitude=32767;if(magnitude>peak)peak=magnitude;
+
+        unsigned tens = last_valid_subq[9] >> 4;
+        if (fresh && (mode_reg & 4) && source_cdda.report_last_tens != tens) {
+            source_cdda.report_last_tens = tens;
+            unsigned channel = last_valid_subq[8] & 1;
+            unsigned peak = 0;
+            for (unsigned i = channel * 2; i < sizeof(raw); i += 4) {
+                int sample = raw[i] | ((unsigned)raw[i + 1] << 8);
+                if (sample >= 32768) sample -= 65536;
+                unsigned magnitude = (unsigned)(sample < 0 ? -sample : sample);
+                if (magnitude > peak) peak = magnitude;
             }
-            peak|=channel<<15;
-            uint8_t report[]={stat_reg,q[1],q[2],q[7],q[8],q[9],(uint8_t)peak,(uint8_t)(peak>>8)};
-            if(q[9]&0x10u){report[3]=q[3];report[4]=q[4]|0x80;report[5]=q[5];}
-            source_cdda_queue(CDIRQ_DATA_READY,report,8);
+            if (peak > 32767) peak = 32767;
+            peak |= channel << 15;
+            unsigned time = (last_valid_subq[9] & 0x10) ? 3 : 7;
+            uint8_t report[8] = {stat_reg, last_valid_subq[1], last_valid_subq[2],
+                last_valid_subq[time], last_valid_subq[time + 1], last_valid_subq[time + 2],
+                (uint8_t)peak, (uint8_t)(peak >> 8)};
+            if (time == 3) report[4] |= 0x80;
+            source_cdda_queue(CDIRQ_DATA_READY, report, sizeof(report));
         }
-        if(source_cdda.pipe_count==2) {
-            const uint8_t *bytes=source_cdda.pipe[source_cdda.pipe_at];int16_t pcm[1176];
-            for(unsigned i=0;i<1176;i++)pcm[i]=(int16_t)((uint16_t)bytes[2*i]|((uint16_t)bytes[2*i+1]<<8));
-            if(cd_muted)memset(pcm,0,sizeof(pcm));
-            cd_apply_decode_volume(pcm,588);spu_cd_audio_push(pcm,588);
-            cdda_sectors_played++;
-        } else source_cdda.pipe_count++;
-        memcpy(source_cdda.pipe[source_cdda.pipe_at],raw,2352);source_cdda.pipe_at^=1u;
-        cdda_track=bcd_to_bin(q[1]);cdda_lba++;source_cdda.sectors_read++;
-        lba_to_msf((int)cdda_lba,150,&read_min,&read_sec,&read_sect);
-        cdda_delay+=CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+
+        unsigned slot = source_cdda.pipe_at;
+        if (source_cdda.pipe_count == 2) {
+            int16_t stereo[1176];
+            for (unsigned i = 0; i < 1176; ++i) {
+                int sample = source_cdda.pipe[slot][i * 2] |
+                             ((unsigned)source_cdda.pipe[slot][i * 2 + 1] << 8);
+                if (sample >= 32768) sample -= 65536;
+                stereo[i] = cd_muted ? 0 : (int16_t)sample;
+            }
+            cd_apply_decode_volume(stereo, 588);
+            spu_cd_audio_push(stereo, 588);
+            ++cdda_sectors_played;
+        } else {
+            ++source_cdda.pipe_count;
+        }
+        memcpy(source_cdda.pipe[slot], raw, sizeof(raw));
+        source_cdda.pipe_at = slot ^ 1;
+        cdda_track = bcd_to_bin(last_valid_subq[1]);
+        ++cdda_lba;
+        ++source_cdda.sectors_read;
+        lba_to_msf(cdda_lba, 150, &read_min, &read_sec, &read_sect);
+        cdda_delay += CDROM_SINGLE_SPEED_SECTOR_CYCLES;
     }
 }
+/* T172 end CDDA service. */
 
 static void process_cdda_stream(uint32_t cycles) {
     if(source_cdda.enabled){process_source_cdda(cycles);return;}
