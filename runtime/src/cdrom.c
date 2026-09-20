@@ -2993,38 +2993,55 @@ static void exec_command(uint8_t cmd) {
     cd_bisect_cmd_log("ISSUE", cmd, cmd_params, cmd_param_count);
 }
 
-static void process_source_reset(void) {
-    if(!s_source_clock || !s_source_reset_due || psx_cycle_count<s_source_reset_due)return;
-    if(s_nymashock_drive) {
-        while(s_source_reset_due && psx_cycle_count>=s_source_reset_due) {
-            uint64_t due=s_source_reset_due;
-            if(source_drive_hold_logical && source_reset_phase<3) {
-                source_drive_head_lba=source_reset_phase++;
-                s_source_reset_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES;
-            } else {
-                s_source_reset_due=0;source_reset_phase=0;
-                source_drive_head_lba=source_drive_hold_logical?-6:-8;
-                source_drive_head_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES*(source_drive_hold_logical?1:2);
-                stat_reg&=~CDSTAT_SEEK;s_source_seek_paused=1;
-                read_min=seek_min=0;read_sec=seek_sec=2;read_sect=seek_sect=0;
-                source_drive_head_update();
-            }
+/* T172 authored CD reset. */
+static void process_source_reset(void)
+{
+    if (!s_source_clock || !s_source_reset_due || psx_cycle_count < s_source_reset_due)
+        return;
+
+    if (!s_nymashock_drive) {
+        s_source_reset_due = 0;
+        if (source_clock_receive_ready()) {
+            response_clear();
+            response_push(stat_reg);
+            set_irq(2);
+            fire_cdrom_irq();
         }
+        cd_muted = 0;
+        spu_cd_audio_reset();
+        xa_reset_decode();
+        mode_reg = 0x20;
+        s_source_seek_paused = 1;
+        read_min = seek_min = 0;
+        read_sec = seek_sec = 2;
+        read_sect = seek_sect = 0;
+        s_setloc_lba = 0;
+        setloc_seek_far = 0;
         return;
     }
-    s_source_reset_due=0;
-    /* Original SetAIP then ClearAIP presents only if receive is open at this
-     * instant; drive state completes even if the old ACK owns the FIFO. */
-    if(source_clock_receive_ready()) {
-        response_clear();response_push(stat_reg);
-        set_irq(CDIRQ_COMPLETE);fire_cdrom_irq();
+
+    while (s_source_reset_due <= psx_cycle_count) {
+        if (source_drive_hold_logical && source_reset_phase < 3) {
+            source_drive_head_lba = source_reset_phase;
+            ++source_reset_phase;
+            s_source_reset_due += 451584;
+            continue;
+        }
+        read_min = seek_min = 0;
+        read_sec = seek_sec = 2;
+        read_sect = seek_sect = 0;
+        stat_reg &= (uint8_t)~64u;
+        s_source_seek_paused = 1;
+        source_reset_phase = 0;
+        source_drive_head_lba = source_drive_hold_logical ? -6 : -8;
+        source_drive_head_due = s_source_reset_due +
+            (source_drive_hold_logical ? 451584u : 903168u);
+        s_source_reset_due = 0;
+        source_drive_head_update();
+        return;
     }
-    cd_muted=0;spu_cd_audio_reset();xa_reset_decode();
-    mode_reg=0x20;
-    read_min=seek_min=0;read_sec=seek_sec=2;read_sect=seek_sect=0;
-    s_setloc_lba=0;setloc_seek_far=0;
-    s_source_seek_paused=1;
 }
+/* T172 end CD reset. */
 
 static void process_pending(uint32_t cycles) {
     uint8_t done_cmd;
