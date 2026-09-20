@@ -1,0 +1,29 @@
+{
+  "schema": "t172-cdda-service-provenance-v1",
+  "base": "d9afcb19b9b06921b50e189b9168eea39f3aaa60",
+  "tested_commit": "2a1bdf1675025675b7197dd038408abdbdad145f",
+  "owned_function": "static void process_source_cdda(uint32_t cycles)",
+  "authority": "Sanitized root contract/declarations; independently authored opaque probes/model. No original body/comments/headers/tests/root tool or model body reads.",
+  "primary_reference": "Pinned PSX-SPX a253f078553f83b4e540f087abf0c28d954b6293; source-cdda-service-preflight-v1.json binds reference paths/hashes.",
+  "receipt": "..\\evidence\\validation-receipt-cdda-service-v1.json",
+  "receipt_sha256": "35d512975270656a002e62e15720759cf68c14cfc0b61f86c3207a68ed4cbf09",
+  "totals": {
+    "cases": 2098,
+    "rows": 40660,
+    "events": 60146,
+    "fatal": 110,
+    "frames": 2062704
+  },
+  "negative_controls": 53,
+  "full_translation_unit_checks": 7,
+  "scope": "Only process_source_cdda; actual accepted peek/notification/volume/clamp preserved byte-exact. Synthetic raw/SubQ, response/IRQ, BCD/MSF and PCM sink seams; 64-service cap/raw failure/missing stored SubQ exit gates preserved. Pipe index/count and defined position/delay arithmetic domains only; no full restore, actual media/CRC/transport/INTC/timing/audio hardware or quality claim.",
+  "notes": [
+    "Fresh SubQ required for negative track latch update and reporting; stale stored position retained for other decisions.",
+    "Autopause payload uses prior status, leadout payload uses cleared play bit.",
+    "Muted buffered PCM becomes zero before accepted volume/sink; report peak uses new raw sector.",
+    "Three fatal boundaries preserved; invalid restored indices and undefined arithmetic remain outside admitted domains.",
+    "Prior EOF/source-profile and accepted dependency gates preserved; all source changes installed through guarded region-only tool."
+  ],
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4",
+  "publication": "Pending independent T77 review; root owns publication."
+}
