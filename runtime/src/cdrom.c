@@ -1362,32 +1362,34 @@ static int xa_decode_sector_4bit_mono(const uint8_t *data, int16_t *out)
 }
 /* T172 end XA4 decoders. */
 
-static int xa_resample_to_44100(const int16_t* in, int in_frames,
-                                int sample_rate, int16_t* out, int max_frames) {
-    if (!in || !out || in_frames <= 0 || sample_rate <= 0 || max_frames <= 0) return 0;
-    int out_frames = 0;
-    int in_pos = 0;
-    int phase = 0;
-
-    while (in_pos < in_frames && out_frames < max_frames) {
-        int next_pos = (in_pos + 1 < in_frames) ? in_pos + 1 : in_pos;
-        int32_t cur_l = in[in_pos * 2 + 0];
-        int32_t cur_r = in[in_pos * 2 + 1];
-        int32_t next_l = in[next_pos * 2 + 0];
-        int32_t next_r = in[next_pos * 2 + 1];
-        out[out_frames * 2 + 0] = (int16_t)(cur_l + ((next_l - cur_l) * phase) / 44100);
-        out[out_frames * 2 + 1] = (int16_t)(cur_r + ((next_r - cur_r) * phase) / 44100);
-        out_frames++;
-
-        phase += sample_rate;
-        while (phase >= 44100) {
-            phase -= 44100;
-            in_pos++;
+/* T172 authored XA resampler. */
+static int xa_resample_to_44100(const int16_t *in, int in_frames,
+                              int sample_rate, int16_t *out, int max_frames)
+{
+    if (!in || !out || in_frames <= 0 || sample_rate <= 0 || max_frames <= 0)
+        return 0;
+    int frames = (in_frames * 44100 + sample_rate - 1) / sample_rate;
+    if (frames > max_frames) frames = max_frames;
+    for (int frame = 0; frame < frames; ++frame) {
+        int position = frame * sample_rate;
+        int current = position / 44100;
+        int fraction = position % 44100;
+        int next = current + 1 < in_frames ? current + 1 : current;
+        for (int channel = 0; channel < 2; ++channel) {
+            int first = in[current * 2 + channel];
+            int delta = in[next * 2 + channel] - first;
+            /* Preserve pinned compiler observations with defined modular arithmetic. */
+            uint32_t bits = (uint32_t)((int64_t)delta * fraction);
+            int64_t product = bits;
+            if (product >= 2147483648LL) product -= 4294967296LL;
+            int value = first + (int)(product / 44100);
+            uint32_t low = (uint32_t)value & 65535u;
+            out[frame * 2 + channel] = (int16_t)((int)low - (low >= 32768u ? 65536 : 0));
         }
     }
-
-    return out_frames;
+    return frames;
 }
+/* T172 end XA resampler. */
 
 /* Always-on XA zero-run scanner (audio_trace event ring). Decoded XA music
  * must not contain long exact-zero spans when the source sectors are dense;
