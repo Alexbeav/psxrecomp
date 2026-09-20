@@ -43,7 +43,7 @@ def read_trace(matrix,item,commit):
     require(meta['source']==identity and identity['commit']==commit,'source identity')
     require(meta['matrix_sha256']==digest(matrix),'matrix hash')
     require(meta['binary_sha256']==identity['binary_sha256']==digest(item['executable']),'binary hash')
-    require(meta['schema']=='t77-cd-delivery-observations-v3','observer schema')
+    require(meta['schema']=='t77-cd-delivery-observations-v1','observer schema')
     expected=[(c['id'],s) for c in cases for s in range(-1,len(c['operations']))]
     require(meta['cases']==len(cases) and meta['observations']==len(rows)==len(expected),'row count')
     require([(r['case_id'],r['step']) for r in rows]==expected,'row identity/order')
