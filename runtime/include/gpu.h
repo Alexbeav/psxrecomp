@@ -16,6 +16,10 @@ extern "C" {
 #endif
 
 void     gpu_init(void);
+void     gpu_command_queue_advance(void);
+uint32_t gpu_command_queue_cycles_to_event(void);
+int      gpu_command_queue_dma_ready(void);
+int      gpu_command_queue_accept_word(void);
 uint32_t gpu_dma_vram_upload_words(void); /* Active GP0(A0) payload remaining. */
 /* Experimental LL gate: 1 idle, 0 qualified mono-polyline wait, -1 outside
  * scope. This does not represent source draw budget or FIFO occupancy. */

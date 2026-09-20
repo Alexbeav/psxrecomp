@@ -69,6 +69,7 @@ extern void timers_set_snapshot(const uint16_t counter[3], const uint32_t mode[3
 extern uint32_t gpu_snapshot_bytes(void);
 extern void     gpu_snapshot_write(uint8_t* p);
 extern int      gpu_snapshot_read(const uint8_t* p, uint32_t len);
+extern int      gpu_snapshot_validate(const uint8_t* p, uint32_t len);
 extern uint32_t spu_snapshot_bytes(void);
 extern void     spu_snapshot_write(uint8_t* p);
 extern int      spu_snapshot_read(const uint8_t* p, uint32_t len);
@@ -1150,6 +1151,8 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                         if (uncompress(scratch, &dest_len, payload + 4, (uLong)(len - 4u)) != Z_OK ||
                             dest_len != (uLong)raw_len) apply_len = 0;
                         else apply_len = raw_len;
+                        if (apply_len && tag == BS_SEC_GPU && !gpu_snapshot_validate(scratch,apply_len))
+                            apply_len = 0;
                         free(scratch);
                     }
                     }
@@ -1158,6 +1161,8 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                 apply_len = 0;
             } else {
                 apply_len = len > 0xffffffffu ? 0u : (uint32_t)len;
+                if (apply_len && tag == BS_SEC_GPU && !gpu_snapshot_validate(payload,apply_len))
+                    apply_len = 0;
             }
             ++nchecked;
             if (!section_shape_ok(tag, apply_len)) {

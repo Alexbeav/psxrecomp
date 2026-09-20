@@ -169,3 +169,5 @@ void source_gpu_runtime_copy(SourceGPUServiceClock *clock,SourceGPUCommandProjec
     (void)clock;(void)command;abort();
 }
 void source_gpu_runtime_dma_write(void) {}
+
+#include "gpu_command_queue_stubs.h"

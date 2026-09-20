@@ -260,6 +260,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME psx_cyc_batch_test COMMAND psx_cyc_batch_test)
 
     add_executable(psx_icache_fastpath_test
+        # Production fetch now arbitrates for the DMA bus; this fixture uses a counting stub.
         tests/test_psx_icache_fastpath.c
         src/psx_icache.c
     )
@@ -274,6 +275,17 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         PSX_ENABLE_BLOCK_CYCLES=1
         PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
+
+    add_executable(gpu_command_queue_wire_test tests/test_gpu_command_queue_wire.c)
+    target_include_directories(gpu_command_queue_wire_test PRIVATE include)
+    add_test(NAME gpu_command_queue_wire_test COMMAND gpu_command_queue_wire_test)
+    add_executable(gpu_command_queue_test tests/test_gpu_command_queue.c)
+    target_include_directories(gpu_command_queue_test PRIVATE include)
+    add_test(NAME gpu_command_queue_test COMMAND gpu_command_queue_test)
+    add_executable(dma_gpu_queue_test tests/test_dma_gpu_queue.c src/dma_gpu_ll.c)
+    target_include_directories(dma_gpu_queue_test PRIVATE include)
+    target_compile_definitions(dma_gpu_queue_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
+    add_test(NAME dma_gpu_queue_test COMMAND dma_gpu_queue_test)
 
     add_executable(psx_icache_elision_guard_test
         tests/test_psx_icache_elision_guard.c src/psx_icache.c)

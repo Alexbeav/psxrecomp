@@ -154,3 +154,5 @@ int gpu_dma_source_ll_ready(void) {abort();}
 /* Source GPU projection is inactive in this isolated controller fixture. */
 int source_gpu_runtime_active(void) {return 0;}
 void source_gpu_runtime_dma_write(void) {}
+
+#include "gpu_command_queue_stubs.h"

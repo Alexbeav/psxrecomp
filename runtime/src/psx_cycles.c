@@ -14,6 +14,7 @@
 #include "starvation_ring.h"
 #include "timers.h"
 #include "source_gpu_runtime.h"
+#include "gpu.h"
 #if defined(PSX_HAS_RECOMP_NET)
 #include "psx_netplay.h"
 #endif
@@ -80,6 +81,7 @@ static void advance_devices(uint32_t c) {
     sio_advance(c);
     cdrom_advance(c);
     source_gpu_runtime_advance();
+    gpu_command_queue_advance();
     dma_advance(c);
     timers_advance(c);
     interrupts_advance_cycles(c);
@@ -143,6 +145,7 @@ static uint32_t devices_cycles_to_next_internal_event(void) {
     uint32_t c = cdrom_cycles_to_irq(0xFFFFFFFFu);   if (c < best) best = c;
     uint32_t d = dma_cycles_to_internal_event();     if (d < best) best = d;
     uint32_t g = source_gpu_runtime_cycles_to_event(); if (g < best) best = g;
+    uint32_t q = gpu_command_queue_cycles_to_event(); if (q < best) best = q;
     uint32_t s = sio_cycles_to_irq(0xFFFFFFFFu);     if (s < best) best = s;
     uint32_t a = psx_spu_sample_event_cycles_to_next(); if (a < best) best = a;
     if (best == 0) best = 1;    /* due/overdue: process within one cycle */

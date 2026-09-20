@@ -144,3 +144,5 @@ void source_gpu_runtime_copy(SourceGPUServiceClock *clock, SourceGPUCommandProje
     assert(!"inactive source GPU must not be sampled");
 }
 void source_gpu_runtime_dma_write(void) {}
+
+#include "gpu_command_queue_stubs.h"

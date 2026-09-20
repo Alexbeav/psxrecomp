@@ -156,3 +156,5 @@ void source_gpu_runtime_dma_write(void) {}
 /* No source GPU consumer in this device-isolation control. */
 void source_gpu_runtime_advance(void) {}
 uint32_t source_gpu_runtime_cycles_to_event(void) {return UINT32_MAX;}
+
+#include "gpu_command_queue_stubs.h"

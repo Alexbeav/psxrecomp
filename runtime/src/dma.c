@@ -1660,7 +1660,8 @@ void dma_advance(uint32_t cycles) {
         g_dma_cur_madr = gpu_linked_list.current_addr;
         g_dma_cur_bcr = channels[2].bcr;
         g_dma_initiator_pc = s_dma_ch_initiator_pc[2];
-        dma_gpu_ll_advance(&gpu_linked_list, cycles, &gpu_ll_ops, NULL);
+        if (gpu_linked_list.phase==DMA_GPU_LL_PHASE_HEADER ? gpu_command_queue_dma_ready() : gpu_command_queue_accept_word())
+            dma_gpu_ll_advance(&gpu_linked_list, cycles, &gpu_ll_ops, NULL);
     }
     DMAAsyncChannel *a = &cdrom_async;
     if (!cd_source_model && dma_cdrom_transfer_active()) {
@@ -1913,10 +1914,13 @@ void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
                 if (ch == 2 && gpu_linked_list.active && channel_enabled(2) &&
                     (mask & (1u << 24)) && !(val & (1u << 24)) &&
                     gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD) {
-                    uint32_t remaining = gpu_linked_list.word_count -
-                                         gpu_linked_list.payload_index;
-                    psx_advance_cycles(remaining);
-                    psx_devices_service_to_now();
+                    /* GPU work can pause a packet. Count completed words,
+                     * not elapsed clocks, before exposing the next header. */
+                    while (gpu_linked_list.active &&
+                           gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD) {
+                        psx_advance_cycles(1u);
+                        psx_devices_service_to_now();
+                    }
                 }
                 channels[ch].chcr = (channels[ch].chcr & ~mask) | (val & mask);
                 if ((mask & (1u << 24)) && !((channels[ch].chcr >> 24) & 1u)) {

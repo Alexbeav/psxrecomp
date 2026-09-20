@@ -20,6 +20,13 @@ uint64_t g_mmio_access_count = 0;
 static uint32_t s_cd_cycles_remaining = 5;
 static int s_cd_ready = 0;
 static uint32_t s_dma_ready_cycles = 0;
+static uint64_t s_gpu_serviced_at;
+void gpu_command_queue_advance(void) {
+    if(!s_gpu_serviced_at && psx_cycle_count>=3)s_gpu_serviced_at=psx_cycle_count;
+}
+uint32_t gpu_command_queue_cycles_to_event(void) {
+    return s_gpu_serviced_at ? UINT32_MAX : (uint32_t)(3-psx_cycle_count);
+}
 
 void sio_advance(uint32_t cycles) { (void)cycles; }
 
@@ -74,6 +81,10 @@ int main(void) {
      * rewind. psx_cycles_resync_after_restore guards that block on `if (cpu)`. */
     psx_cycles_resync_after_restore(NULL);
     psx_advance_cycles(5);
+    if(s_gpu_serviced_at!=3) {
+        fprintf(stderr,"FAIL queued GPU command did not run at its cycle-3 deadline\n");
+        return 1;
+    }
 
     if (psx_get_cycle_count() != 5) {
         fprintf(stderr, "FAIL cycle count: expected 5 got %llu\n",
@@ -119,3 +130,6 @@ int main(void) {
                     "idle skip bounded by the SPU sample deadline\n");
     return 0;
 }
+
+#define GPU_COMMAND_QUEUE_EVENT_STUBS_CUSTOM
+#include "gpu_command_queue_stubs.h"
