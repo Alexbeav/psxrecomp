@@ -86,6 +86,14 @@ not implement complete raster timing or GPU command execution latency. See
 The GCC CTest targets `vblank_in_exception_test` and
 `gpu_interlace_status_test` exercise these production owners without retail data.
 
+In 480-line interlace with drawing-to-display disabled, GP0 primitives and
+GP0(02h) quick fills preserve the active field, one of the two alternating row
+sets. `gr_fill_rect` uses the shared field predicate before backend dispatch.
+It leaves draw-area and mask behavior unchanged. Copies and uploads still write
+both row sets. `gpu_interlace_render_test` covers this distinction, memory-edge
+wrapping and scaled output. Interlaced fills submit one native row at a time;
+this does not establish complete GPU timing or general performance.
+
 ### BIOS: LLE baseline + a swappable HLE tier
 
 The recompiled `SCPH1001.BIN` is the **low-level (LLE) baseline**: it *is* the
