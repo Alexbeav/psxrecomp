@@ -1980,7 +1980,7 @@ static void start_source_cdda(int requested_track)
     source_cdda.async_type = 0;
     source_cdda.async_count = 0;
     cdrom_clear_pending_dataready();
-    if (cdda_playing && !requested_track && !setloc_pending) return;
+    if (cdda_playing && !source_cdda.seeking && !requested_track && !setloc_pending) return;
 
     int tracks = iso_track_count(iso_handle);
     if (tracks < 1 || tracks > 9) exit(2);

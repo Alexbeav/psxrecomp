@@ -20,7 +20,7 @@ def expected_rows(matrix):
     def run():
      if f['reading'] or f['mode_reg']&128:event(13,[2]);return 2
      f['source_async_type']=f['source_async_count']=0;clear()
-     if f['cdda_playing'] and not requested and not f['setloc_pending']:return 0
+     if f['cdda_playing'] and not f['source_seeking'] and not requested and not f['setloc_pending']:return 0
      event(2,[s['handle']])
      if tc<1 or tc>9:event(13,[2]);return 2
      request=min(requested,tc)
