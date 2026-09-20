@@ -1299,88 +1299,68 @@ static void cd_apply_decode_volume(int16_t *stereo, int frames)
 }
 /* T172 end CD volume. */
 
-static int xa_decode_sector_4bit_stereo(const uint8_t* data, int16_t* out) {
-    static const int k0[5] = { 0, 60, 115, 98, 122 };
-    static const int k1[5] = { 0, 0, -52, -55, -60 };
-    int pair = 0;
-
-    for (int g = 0; g < XA_SOUND_GROUPS; g++) {
-        const uint8_t* grp = data + g * 128;
-        for (int blk = 0; blk < 4; blk++) {
-            uint8_t hdr_l = grp[4 + blk * 2];
-            uint8_t hdr_r = grp[4 + blk * 2 + 1];
-            int shift_l = 12 - (int)(hdr_l & 0x0F);
-            int shift_r = 12 - (int)(hdr_r & 0x0F);
-            int filter_l = (hdr_l >> 4) & 0x03;
-            int filter_r = (hdr_r >> 4) & 0x03;
-            if (shift_l < 0) shift_l = 0;
-            if (shift_r < 0) shift_r = 0;
-
-            for (int i = 0; i < 28; i++) {
-                uint8_t b = grp[16 + blk + i * 4];
-                int32_t nib_l = b & 0x0F;
-                int32_t nib_r = (b >> 4) & 0x0F;
-                if (nib_l >= 8) nib_l -= 16;
-                if (nib_r >= 8) nib_r -= 16;
-
-                int32_t sample_l = (nib_l << shift_l)
-                    + ((k0[filter_l] * xa_hist_l[0] + k1[filter_l] * xa_hist_l[1] + 32) >> 6);
-                int32_t sample_r = (nib_r << shift_r)
-                    + ((k0[filter_r] * xa_hist_r[0] + k1[filter_r] * xa_hist_r[1] + 32) >> 6);
-                sample_l = clamp16_cd(sample_l);
-                sample_r = clamp16_cd(sample_r);
-                xa_hist_l[1] = xa_hist_l[0];
-                xa_hist_l[0] = sample_l;
-                xa_hist_r[1] = xa_hist_r[0];
-                xa_hist_r[0] = sample_r;
-
-                out[pair * 2 + 0] = (int16_t)sample_l;
-                out[pair * 2 + 1] = (int16_t)sample_r;
-                pair++;
+/* T172 authored XA4 decoders. */
+static int xa_decode_sector_4bit_stereo(const uint8_t *data, int16_t *out)
+{
+    const int32_t first[4] = {0, 60, 115, 98};
+    const int32_t second[4] = {0, 0, -52, -55};
+    for (int group = 0; group < XA_SOUND_GROUPS; ++group) {
+        const uint8_t *packed = data + group * 128;
+        for (int unit = 0; unit < 8; ++unit) {
+            unsigned header = packed[4 + unit];
+            unsigned shift = header & 15;
+            unsigned filter = (header >> 4) & 3;
+            int channel = unit & 1;
+            int32_t *history = channel ? xa_hist_r : xa_hist_l;
+            if (shift > 12)
+                shift = 12;
+            for (int sample = 0; sample < 28; ++sample) {
+                int nibble = (packed[16 + unit / 2 + sample * 4] >> (channel * 4)) & 15;
+                if (nibble >= 8)
+                    nibble -= 16;
+                int32_t prediction = (history[0] * first[filter] + history[1] * second[filter] + 32) >> 6;
+                int16_t value = clamp16_cd(((nibble * 4096) >> shift) + prediction);
+                history[1] = history[0];
+                history[0] = value;
+                out[((group * 4 + unit / 2) * 28 + sample) * 2 + channel] = value;
             }
         }
     }
-
-    return pair;
+    return XA_SOUND_GROUPS * 4 * 28;
 }
 
-static int xa_decode_sector_4bit_mono(const uint8_t* data, int16_t* out) {
-    static const int k0[5] = { 0, 60, 115, 98, 122 };
-    static const int k1[5] = { 0, 0, -52, -55, -60 };
-    int pair = 0;
-
-    for (int g = 0; g < XA_SOUND_GROUPS; g++) {
-        const uint8_t* grp = data + g * 128;
-        for (int blk = 0; blk < 4; blk++) {
-            for (int nibble = 0; nibble < 2; nibble++) {
-                uint8_t hdr = grp[4 + blk * 2 + nibble];
-                int shift = 12 - (int)(hdr & 0x0F);
-                int filter = (hdr >> 4) & 0x03;
-                if (shift < 0) shift = 0;
-
-                for (int i = 0; i < 28; i++) {
-                    uint8_t b = grp[16 + blk + i * 4];
-                    int32_t sample_nibble = nibble ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                    if (sample_nibble >= 8) sample_nibble -= 16;
-
-                    int32_t sample = (sample_nibble << shift)
-                        + ((k0[filter] * xa_hist_l[0] + k1[filter] * xa_hist_l[1] + 32) >> 6);
-                    sample = clamp16_cd(sample);
-                    xa_hist_l[1] = xa_hist_l[0];
-                    xa_hist_l[0] = sample;
-
-                    out[pair * 2 + 0] = (int16_t)sample;
-                    out[pair * 2 + 1] = (int16_t)sample;
-                    pair++;
-                }
+static int xa_decode_sector_4bit_mono(const uint8_t *data, int16_t *out)
+{
+    const int32_t first[4] = {0, 60, 115, 98};
+    const int32_t second[4] = {0, 0, -52, -55};
+    int frame = 0;
+    for (int group = 0; group < XA_SOUND_GROUPS; ++group) {
+        const uint8_t *packed = data + group * 128;
+        for (int unit = 0; unit < 8; ++unit) {
+            unsigned header = packed[4 + unit];
+            unsigned shift = header & 15;
+            unsigned filter = (header >> 4) & 3;
+            if (shift > 12)
+                shift = 12;
+            for (int sample = 0; sample < 28; ++sample) {
+                int nibble = (packed[16 + unit / 2 + sample * 4] >> ((unit & 1) * 4)) & 15;
+                if (nibble >= 8)
+                    nibble -= 16;
+                int32_t prediction = (xa_hist_l[0] * first[filter] + xa_hist_l[1] * second[filter] + 32) >> 6;
+                int16_t value = clamp16_cd(((nibble * 4096) >> shift) + prediction);
+                xa_hist_l[1] = xa_hist_l[0];
+                xa_hist_l[0] = value;
+                out[frame * 2] = value;
+                out[frame * 2 + 1] = value;
+                ++frame;
             }
         }
     }
-
     xa_hist_r[0] = xa_hist_l[0];
     xa_hist_r[1] = xa_hist_l[1];
-    return pair;
+    return frame;
 }
+/* T172 end XA4 decoders. */
 
 static int xa_resample_to_44100(const int16_t* in, int in_frames,
                                 int sample_rate, int16_t* out, int max_frames) {
