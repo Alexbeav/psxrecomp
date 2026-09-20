@@ -31,6 +31,10 @@ for job in plan['jobs']:
                 return json.loads(next(source))['metadata'],[json.loads(line) for line in source]
         bm,a=read(job['baseline']['trace']);cm,b=read(job['candidate']['trace'])
     assert bm['source']['profile']==cm['source']['profile']
+    assert bm['source']['no_step_boundary']==cm['source']['no_step_boundary']
+    for side,meta in [('baseline',bm),('candidate',cm)]:
+        assert meta['source']==json.loads(Path(job[side]['identity']).read_text())
+        assert meta['icache_env']==job['environment']
     assert len(a)==len(b)
     differences=[]
     for x,y in zip(a,b):
