@@ -1,0 +1,42 @@
+{
+  "schema": "t172-cdda-peek-provenance-v1",
+  "base": "189b9fec2147fab4527b8efa5037e30d4100a813",
+  "tested_commit": "ff24e023d651a51de0bf1042e04b6a714355e17b",
+  "owned": [
+    "source_cdda_peek"
+  ],
+  "inputs": [
+    "T77 sanitized contract and opaque observer",
+    "pinned PSX-SPX primary docs",
+    "independently authored observations"
+  ],
+  "primary_revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+  "excluded_exposure": [
+    "original bodies/comments/tests",
+    "restricted root models/tools/headers/exports/diagnostics"
+  ],
+  "domain": [
+    "full signed32 LBA/state/reader return/valid",
+    "12 initialized reader bytes on potentially accepted paths",
+    "null/opaque handle only to fixture",
+    "optional valid/data writes per contract"
+  ],
+  "observed": [
+    "reader initial valid zero",
+    "signed LBA forwarded modulo2^32",
+    "nonzero return/valid and header low nibble1 accepted",
+    "failure preserves stored bytes and flags",
+    "success copies12bytes and sets flags1"
+  ],
+  "preserved": [
+    "all surrounding source",
+    "all unowned CDDA fields and data",
+    "file notices and LICENSE",
+    "prior accepted gates"
+  ],
+  "defensive_boundary": "Root found no additional helper-owned abort requirement; uninitialized accepted buffers rejected by adapter",
+  "limits": [
+    "reader is a seam; no actual ISO/CRC/media/drive/transport execution",
+    "no hardware/fullrestore/audiblegameplay/formalcleanroom/legalclearance/quality claim"
+  ]
+}
