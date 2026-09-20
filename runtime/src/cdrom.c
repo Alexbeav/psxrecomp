@@ -1985,11 +1985,13 @@ static void start_source_cdda(int requested_track)
     int tracks = iso_track_count(iso_handle);
     if (tracks < 1 || tracks > 9) exit(2);
     if (requested_track > tracks) requested_track = tracks;
-    int origin = cdda_playing ? (int)cdda_lba : msf_to_lba(read_min, read_sec, read_sect);
+    int origin = cdda_playing ? (cdda_lba > 2147483647U ? 0 : (int)cdda_lba) : msf_to_lba(read_min, read_sec, read_sect);
     if (origin < 0) origin = 0;
     int target = origin;
-    if (requested_track)
-        target = (int)iso_track_start_lba(iso_handle, requested_track);
+    if (requested_track) {
+        uint32_t position = iso_track_start_lba(iso_handle, requested_track);
+        target = position > 2147483647U ? 0 : (int)position;
+    }
     else if (setloc_pending)
         target = s_setloc_lba < 0 ? 0 : s_setloc_lba;
     int track = cdda_track_for_lba((uint32_t)target);
