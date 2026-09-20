@@ -1,0 +1,25 @@
+{
+  "schema": "t172-cd-reset-provenance-v1",
+  "base": "5c4f7374ab99ef96545afb0d6271c938a5659a90",
+  "tested_commit": "d8db2565282cab2d5a5065e63da7f6a0c4116c4f",
+  "receipt": "L:\\AgentData\\codex-long-runs\\20260919-t172-independent-runtime\\evidence\\validation-receipt-cd-reset-v1.json",
+  "receipt_sha256": "ec8656bcc55dbeb0fa6d857d92097d094a3ce20e109038fe7a4e8f01110cc6fe",
+  "authorship": "Independent implementation from sanitized declarations, primary PSX-SPX context, own opaque experiments and independent model. No unowned runtime body/header/test or root tool implementation/log read.",
+  "scope": "Only process_source_reset; actual accepted head helper preserved. Synthetic readiness and recording-only response/IRQ/SPU/XA dependencies; no actual internals or command lifecycle qualification.",
+  "domain_note": "Initial head due fulluint64 corrected by root after eight chained values exceeded former cap. Fresh adapter v3 traces retained with earlier evidence; clock/reset_due bounded and elapsed limit unchanged.",
+  "identity_note": "Inherited head_sha256 and selected_header_sha256 identify reset fragment. dependencies_sha256 binds actual head helper. seek_header_sha256 ancillary unused export.",
+  "validation": {
+    "cases": 14056,
+    "rows": 14056,
+    "events": 29108,
+    "negative_controls": 76,
+    "compile_checks": 7
+  },
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4",
+  "limitations": [
+    "No real media or hardware claim",
+    "No fullrestore or legal claim",
+    "No source reset initiation or process_pending ownership",
+    "Root exact revision review required before root-only push"
+  ]
+}

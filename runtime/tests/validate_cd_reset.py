@@ -18,7 +18,9 @@ def compare(plan,job):
  observed=[]
  for side in ('baseline','candidate'):
   item=job[side]
-  if not Path(item['trace']).exists():subprocess.run([sys.executable,plan['runner'],job['matrix'],item['trace'],'--executable',item['executable'],'--identity',item['identity']],capture_output=True,check=True)
+  if not Path(item['trace']).exists():
+   result=subprocess.run([sys.executable,plan['runner'],job['matrix'],item['trace'],'--executable',item['executable'],'--identity',item['identity']],capture_output=True)
+   require(result.returncode==0,'collector exit '+str(result.returncode))
   observed.append(read_check(job['matrix'],item,plan['base' if side=='baseline' else 'tested_commit']))
  a,b=observed;require(a[0]['adapter_sha256']==b[0]['adapter_sha256'],'adapter')
  for k in ('optimization','wrapper_sha256','sha_source_sha256','dependencies_sha256','seek_header_sha256'):require(a[0]['source'][k]==b[0]['source'][k],k)
