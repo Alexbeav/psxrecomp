@@ -177,6 +177,7 @@ static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "RuntimeMenu")) return HOST_KEYMAP_RUNTIME_MENU;
     if (ieq(name, "SwapControllerPorts"))
         return HOST_KEYMAP_SWAP_CONTROLLER_PORTS;
+    if (ieq(name, "CdSpeedToggle")) return HOST_KEYMAP_CD_SPEED_TOGGLE;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 

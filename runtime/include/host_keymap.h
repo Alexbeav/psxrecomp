@@ -25,6 +25,7 @@ typedef enum HostKeymapAction {
     HOST_KEYMAP_TURBO_TOGGLE,     /* default F9; latches Turbo until pressed again */
     HOST_KEYMAP_RUNTIME_MENU,     /* default F1 */
     HOST_KEYMAP_SWAP_CONTROLLER_PORTS, /* default Ctrl+F6 */
+    HOST_KEYMAP_CD_SPEED_TOGGLE,  /* opt-in; session-only acceleration toggle */
     HOST_KEYMAP_ACTION_COUNT
 } HostKeymapAction;
 

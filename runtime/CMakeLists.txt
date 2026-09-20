@@ -321,6 +321,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(host_keymap_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_keymap_test COMMAND host_keymap_test)
 
+    add_executable(host_cd_speed_test tests/test_host_cd_speed.c)
+    target_include_directories(host_cd_speed_test PRIVATE include)
+    add_test(NAME host_cd_speed_test COMMAND host_cd_speed_test)
+
     add_executable(keyboard_pad_chord_test
         tests/test_keyboard_pad_chord.c
         src/psx_keybinds.c)

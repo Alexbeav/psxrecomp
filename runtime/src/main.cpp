@@ -11,6 +11,7 @@
 #include "device_trace.h"    /* general two-process device-event cycle ring */
 #include "psx_interpreter.h"
 #include "cdrom.h"
+#include "host_cd_speed.h"
 #include "dma.h"
 #include "timers.h"
 #include "fntrace.h"
@@ -1313,6 +1314,7 @@ static uint32_t      g_mod_native_vblank_fps = 0;
 static int           g_mod_load_wall_multiplier = -1;
 static int           g_mod_load_release_frames = -1;
 static int           g_mod_disc_speed_divisor = -1;
+static int           g_startup_disc_speed_divisor = 1;
 static int           g_mod_disc_instant_rate = -1;
 
 static int present_vsync_owns_cadence(void);
@@ -7279,6 +7281,23 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                          host_keymap_match_event(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
                                            (int)key, (int)scancode, (int)mod)) {
                     controller_port_route_toggle();
+                }
+                else if (!key_repeat &&
+                         host_keymap_match_event(HOST_KEYMAP_CD_SPEED_TOGGLE,
+                                                 (int)key, (int)scancode,
+                                                 (int)mod)) {
+                    const int active = host_cd_speed_toggle(
+                        g_startup_disc_speed_divisor, fntrace_is_game_started(),
+                        psx_netplay_active());
+                    char message[80];
+                    if (active < 0)
+                        std::snprintf(message, sizeof(message),
+                                      "CD speed unchanged: unavailable now");
+                    else if (active == 0)
+                        std::snprintf(message, sizeof(message), "CD speed: instant (this session)");
+                    else
+                        std::snprintf(message, sizeof(message), "CD speed: %dx (this session)", active);
+                    host_osd_push(message, 2500);
                 }
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
                     std::fprintf(stdout, "[DEBUG] Forzando reinserción de CD...\n");
@@ -15603,6 +15622,7 @@ session_reboot:
             divisor = g_mod_disc_speed_divisor;
         /* Store for post-BIOS application; boot always runs at 1x so the
          * BIOS disc-init sequence sees correct timing. */
+        g_startup_disc_speed_divisor = divisor;
         cdrom_set_game_speed(divisor);
         if (g_mod_disc_instant_rate > 0)
             cdrom_set_instant_rate(g_mod_disc_instant_rate);

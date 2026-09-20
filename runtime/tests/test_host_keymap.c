@@ -26,6 +26,8 @@ int main(int argc, char **argv) {
 
     memset(keys, 0, sizeof(keys));
     host_keymap_load(NULL);
+    check(!host_keymap_match(HOST_KEYMAP_CD_SPEED_TOGGLE, (int)SDLK_F10, 0),
+          "CD speed toggle is unbound unless opted in");
     check(host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)SDLK_RETURN, mod_alt()),
           "default fullscreen includes Alt+Return");
     check(host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)SDLK_f, mod_ctrl()),
@@ -60,11 +62,16 @@ int main(int argc, char **argv) {
           "VolumeDown = Down\n"
           "DisplayPerf = F10\n"
           "RuntimeMenu = F2\n"
-          "SwapControllerPorts = F5\n",
+          "SwapControllerPorts = F5\n"
+          "CdSpeedToggle = Ctrl+F10\n",
           f);
     fclose(f);
 
     host_keymap_load(cfg);
+    check(host_keymap_match(HOST_KEYMAP_CD_SPEED_TOGGLE, (int)SDLK_F10, mod_ctrl()),
+          "CD speed toggle uses configured modified binding");
+    check(!host_keymap_match(HOST_KEYMAP_CD_SPEED_TOGGLE, (int)SDLK_F10, 0),
+          "CD speed toggle does not consume unmodified key");
     check(!host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)SDLK_f, mod_ctrl()),
           "fullscreen rebind disables Ctrl+F fallback");
     check(host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)SDLK_F11, 0),
