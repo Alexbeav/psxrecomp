@@ -1719,34 +1719,28 @@ static int source_toc_seek_cycles(void)
 }
 /* T172 end CD TOC seek. */
 
-static int source_explicit_seek_cycles(uint8_t cmd) {
-    /* The older model uses the delivery cursor; Nymashock also tracks the
-     * physical head while paused or in standby. Both use the source tape.
-     *
-     * The source measures a seek from CurSector, its physical read head. An
-     * established read keeps that head CDC_SECTOR_PIPE_COUNT (2) sectors
-     * ahead of the sector handed to the guest, because HandlePlayRead fills
-     * the pipe before the guest drains it. A seek issued mid-read therefore
-     * starts two sectors further along than the delivery cursor says, and
-     * timing it from the delivery cursor makes its travel two sectors too
-     * long. Command_Reset already accounts for the same lead below. */
-    int cursor = msf_to_lba(read_min, read_sec, read_sect);
-    if (cursor < 0) cursor = 0;
-    int origin = reading ? cursor + 2 : cursor;
+/* T172 authored CD explicit seek. */
+static int source_explicit_seek_cycles(uint8_t cmd)
+{
+    int origin = msf_to_lba(read_min, read_sec, read_sect);
     int target = msf_to_lba(seek_min, seek_sec, seek_sect);
+    if (origin < 0) origin = 0;
     if (target < 0) target = 0;
-    if(s_nymashock_drive && !reading && source_drive_head_valid)origin=source_drive_head_lba;
-    source_drive_head_valid=0;
-    int seek = source_seek_lower_bound(origin, target,
-        !!(stat_reg & CDSTAT_MOTOR), s_source_seek_paused, mode_reg);
-    if(s_source_clock) {
-        uint32_t jitter=source_clock_random(25000);
-        seek=seek>INT32_MAX-(int)jitter?INT32_MAX:seek+(int)jitter;
+    if (reading) origin += 2;
+    else if (s_nymashock_drive && source_drive_head_valid)
+        origin = source_drive_head_lba;
+    source_drive_head_valid = 0;
+    int64_t total = source_seek_lower_bound(origin, target,
+        (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg);
+    if (cmd == 0x15) {
+        int period = (mode_reg & 0x80) ? CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 :
+                                      CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+        total += period * (s_nymashock_drive ? 2 : 1);
     }
-    int header_period = cmd == 0x15 ?
-        (s_nymashock_drive ? 2 : 1) * CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg & 0x80) ? 2 : 1) : 0;
-    return seek > INT32_MAX - header_period ? INT32_MAX : seek + header_period;
+    if (s_source_clock) total += source_clock_random(25000);
+    return total > INT32_MAX ? INT32_MAX : (int)total;
 }
+/* T172 end CD explicit seek. */
 
 static void start_read_stream(uint8_t cmd) {
     int source_target = setloc_pending ? s_setloc_lba :
