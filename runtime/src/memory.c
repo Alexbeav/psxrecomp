@@ -2152,7 +2152,7 @@ static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
                              (physical >= 0x1f801080u && physical < 0x1f801100u) ||
                              (width == 4 && physical >= 0x1f801810u && physical < 0x1f801818u);
         int sample_early = addr < 0xc0000000u && source_gpu_runtime_active() &&
-            (coprocessor ? cd : sampling && (cd || early_register || timers_source_hblank_counter_read(addr)));
+            (coprocessor ? cd : sampling && (cd || early_register || timers_source_hblank_counter_read(physical)));
         if (sample_early) {
             tail = physical < 0x800000u ? 3 :
                 physical >= 0x1f801000u && physical < 0x1f803000u ? base_wait - 2 - coprocessor : 0;

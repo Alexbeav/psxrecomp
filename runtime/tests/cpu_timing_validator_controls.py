@@ -37,6 +37,12 @@ def controls(matrix_path, trace_path, scratch):
         add(field+'_length',lambda x,f=field:x[-1][f].append(0))
         add(field+'_value',lambda x,f=field:x[-1][f].__setitem__(0,x[-1][f][0]^1))
         add(field+'_boolean',lambda x,f=field:x[-1][f].__setitem__(0,False))
+    for field in ['memory_flags','memory_extra','memory_hblank_address']:
+        if field in selected[-1]:
+            add(field+'_missing',lambda x,f=field:x[-1].pop(f))
+            add(field+'_length',lambda x,f=field:x[-1][f].append(0))
+            add(field+'_value',lambda x,f=field:x[-1][f].__setitem__(0,x[-1][f][0]^1))
+            add(field+'_boolean',lambda x,f=field:x[-1][f].__setitem__(0,False))
     add('return_value',lambda x:x[-1].update(return_value=1))
     add('return_type',lambda x:x[-1].update(return_value=True))
     add('event_value',lambda x:x[-1].update(events=[[1,0,1,0,0]]))
@@ -50,6 +56,8 @@ def controls(matrix_path, trace_path, scratch):
         add('event_cpu_length',lambda x:x[-1]['event_cpu_states'].__setitem__(0,'00'))
         add('event_cpu_value',lambda x:x[-1]['event_cpu_states'].__setitem__(0,
             'ff'+x[-1]['event_cpu_states'][0][2:]))
+        if len(selected[-1]['events'])>1:
+            add('event_order',lambda x:x[-1]['events'].reverse())
     rejected = []
     Path(scratch).mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='cpu-validator-',dir=scratch) as folder:

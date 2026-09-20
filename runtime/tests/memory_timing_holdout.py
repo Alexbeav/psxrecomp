@@ -4,8 +4,8 @@ import json
 import random
 
 
-def matrix(optimized=False):
-    rng=random.Random(0x17220920)
+def matrix(optimized=False, seed=0x17220920, count=360):
+    rng=random.Random(seed)
     addresses=[0,0x1ffffc,0x200000,0x7ffffc,0x800000,0x1f800000,0x1f8003fc,
                0x1f800400,0x1f801020,0x1f801024,0x1f801040,0x1f80105c,
                0x1f801060,0x1f801070,0x1f801074,0x1f801078,0x1f801080,
@@ -15,7 +15,7 @@ def matrix(optimized=False):
                0x1f802ffc,0x1f803000,0x1fc00000,0x1fc7fffc,0x1fffffff]
     kinds=['word_slow','half_slow','byte','timing_only','lwc2','word','half']
     cases=[]
-    for index in range(360):
+    for index in range(count):
         ops=[]
         for slot in [0,1,3,7,15,31,32]:
             ops.append(dict(op='absorb',index=slot,value=rng.randrange(256)))
@@ -48,4 +48,7 @@ def matrix(optimized=False):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--optimized',action='store_true')
-    print(json.dumps(matrix(p.parse_args().optimized),indent=2))
+    p.add_argument('--seed',type=lambda s:int(s,0),default=0x17220920)
+    p.add_argument('--count',type=int,default=360)
+    args=p.parse_args()
+    print(json.dumps(matrix(args.optimized,args.seed,args.count),indent=2))

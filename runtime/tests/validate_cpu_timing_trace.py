@@ -45,12 +45,15 @@ def read_trace(matrix_path, trace_path):
         if memory:
             expected_fields |= {'memory_flags'}
             require(vector(row['memory_flags'], [1,1,1]), f'memory flags {key}')
-            if 'memory_extra' in row:
+            if metadata['source'].get('memory_query_address',False):
+                expected_fields |= {'memory_hblank_address'}
+                require(vector(row['memory_hblank_address'], [u32]), f'memory query address {key}')
+            if metadata['source'].get('memory_production','off') != 'off':
                 expected_fields |= {'memory_extra'}
                 require(vector(row['memory_extra'], [u64,100]), f'memory extra {key}')
         if 'scope_states' in row:
             expected_fields |= {'scope_states'}
-        if 'event_cpu_states' in row:
+        if metadata.get('event_cpu_states') or 'event_cpu_states' in row:
             expected_fields |= {'event_cpu_states'}
         require(set(row) == expected_fields, 'row keys')
         require(type(row['step']) is int and (row['case_id'], row['step']) == key,

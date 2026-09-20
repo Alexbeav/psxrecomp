@@ -6,12 +6,13 @@ from pathlib import Path
 import subprocess
 import sys
 
-from validate_cpu_timing_trace import read_trace
+from validate_cpu_timing_trace import read_trace, check_pairs, require
 
 
 def run(job, evidence, tools, commit, label):
     tag = job['production']
     binary = tools / f"cpu-timing-candidate-{commit[:12]}-{job['profile']}-memory-{label}{'' if tag == 'off' else '-' + tag}"
+    if job.get('query',False):binary=binary.with_name(binary.name+'-query')
     output = evidence / job['baseline'].replace('-baseline.jsonl', f'-{commit[:12]}.jsonl')
     if not output.exists():
         command = [sys.executable, str(tools/'run_cpu_timing_matrix.py'),
@@ -23,14 +24,26 @@ def run(job, evidence, tools, commit, label):
         if result.returncode:
             return dict(baseline=job['baseline'], valid=False, observer_exit=result.returncode)
     _, reference = read_trace(evidence/job['matrix'], evidence/job['baseline'])
-    _, candidate = read_trace(evidence/job['matrix'], output)
+    metadata, candidate = read_trace(evidence/job['matrix'], output)
+    require(metadata['source']['commit']==commit,'candidate source commit')
+    require(metadata['source']['profile']==job['profile'],'profile identity')
+    require(metadata['source']['memory_production']==job['production'],'production identity')
+    require(bool(metadata['source'].get('memory_query_address',False))==job.get('query',False),'query identity')
+    for key,field in [('load_delay_default','load_delay'),('mmio_wait','mmio'),('poll_proof','poll')]:
+        require(str(metadata[key])==job[field],f'environment {key}')
     mismatches=[]
     for a,b in zip(reference,candidate):
         if a != b:
             mismatches.append(dict(case=a['case_id'],step=a['step'],fields=[k for k in a if a[k]!=b[k]]))
             if len(mismatches)==5:break
+    pairs=0
+    if 'capture' in job:
+        pairs=check_pairs(evidence/job['matrix'],evidence/job['baseline'],evidence/job['capture'])
+        require(check_pairs(evidence/job['matrix'],output,evidence/job['capture'])==pairs,'pair count')
     return dict(baseline=job['baseline'],candidate=output.name,valid=not mismatches,
-                rows=len(candidate),mismatches=mismatches)
+                cases=metadata['cases'],rows=len(candidate),events=sum(len(r['events']) for r in candidate),
+                event_cpu_states=sum(len(r.get('event_cpu_states',[])) for r in candidate),
+                paired_restores=pairs,mismatches=mismatches)
 
 
 if __name__ == '__main__':
