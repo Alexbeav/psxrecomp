@@ -23,7 +23,8 @@ def read_trace(matrix_path, trace_path):
     raw = Path(matrix_path).read_bytes()
     matrix = json.loads(raw.decode('utf-8-sig'))
     memory = matrix['schema'] == 't172-cpu-timing-memory-experiment-v1'
-    wire = memory or matrix['schema'] == 't172-cpu-timing-wire-experiment-v1'
+    cache = matrix['schema'] == 't172-icache-experiment-v1'
+    wire = cache or memory or matrix['schema'] == 't172-cpu-timing-wire-experiment-v1'
     require(wire or matrix['schema'] == 't172-cpu-timing-experiment-v1', 'matrix schema')
     cases = matrix['cases']
     require(len({c['id'] for c in cases}) == len(cases), 'duplicate case')
@@ -33,7 +34,9 @@ def read_trace(matrix_path, trace_path):
     metadata = rows.pop(0)['metadata']
     require(metadata['schema'] in ['t77-cpu-timing-observations-v1',
                                     't77-cpu-timing-wire-observations-v1',
-                                    't77-cpu-timing-memory-observations-v1'], 'trace schema')
+                                    't77-cpu-timing-memory-observations-v1',
+                                    't77-icache-observations-v1'], 'trace schema')
+    if cache:require(metadata['schema']=='t77-icache-observations-v1','cache trace schema')
     require(metadata['matrix_sha256'] == hashlib.sha256(raw).hexdigest(), 'matrix hash')
     require(metadata['cases'] == len(cases), 'case count')
     require(metadata['observations'] == len(expected) == len(rows), 'row count')
@@ -42,6 +45,16 @@ def read_trace(matrix_path, trace_path):
               'return_value', 'events'}
     for row, key in zip(rows, expected):
         expected_fields = fields | ({'cpu_wire_hex'} if wire else set())
+        if cache:
+            expected_fields |= {'cache_flags','cache_tags','event_cache_tags'}
+            cf=row['cache_flags']
+            require(type(cf) is list and len(cf)==4 and type(cf[0]) is int and
+                    cf[0] in [-1,0,1] and vector(cf[1:],[1,1,1]),f'cache flags {key}')
+            require(vector(row['cache_tags'],[u32]*1024),f'cache tags {key}')
+            require(type(row['event_cache_tags']) is list and
+                    len(row['event_cache_tags'])==len(row['events']),f'event cache count {key}')
+            for tags in row['event_cache_tags']:
+                require(vector(tags,[u32]*1024),f'event cache tags {key}')
         if memory:
             expected_fields |= {'memory_flags'}
             require(vector(row['memory_flags'], [1,1,1]), f'memory flags {key}')
@@ -70,7 +83,9 @@ def read_trace(matrix_path, trace_path):
                 f'return {key}')
         require(type(row['events']) is list, f'events {key}')
         for event in row['events']:
-            require(vector(event, [12 if memory else 10, u64, u64, u32, u32]) and event[0] >= 1,
+            require(type(event) is list and len(event) == 5, f'event shape {key}')
+            bounds=[14,u32,u64,u64,1] if cache and event[0]==13 else [14 if cache else 12 if memory else 10,u64,u64,u32,u32]
+            require(vector(event, bounds) and event[0] >= 1,
                     f'event {key}')
         if wire:
             encoded = row['cpu_wire_hex']
