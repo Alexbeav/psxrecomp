@@ -1956,6 +1956,7 @@ static void source_cdda_present(void)
 
 static void source_cdda_queue(unsigned type, const uint8_t *data, unsigned count)
 {
+    if (count > sizeof(source_cdda.async_data)) abort();
     source_cdda.async_type = type;
     source_cdda.async_count = count;
     for (unsigned i = 0; i < count; ++i)
