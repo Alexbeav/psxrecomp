@@ -11,7 +11,7 @@ def run(state):
    steps=(s['clock']-s['reset_due'])//451584+1
    advance=min(steps,max(0,3-s['phase'])) if s['hold'] else 0
    if advance:
-    s['lba']=s['phase']+advance-1;s['phase']+=advance;s['reset_due']+=advance*451584
+    s['lba']=s['phase']+advance-1;s['phase']+=advance;s['reset_due']=(s['reset_due']+advance*451584)&((1<<64)-1)
    if steps>advance:
     s.update(paused=1,read_min=0,read_sec=2,read_sect=0,seek_min=0,seek_sec=2,seek_sect=0,phase=0,lba=(-6 if s['hold'] else -8),due=s['reset_due']+(451584 if s['hold'] else 903168),reset_due=0,stat=s['stat']&~64)
     event(1);s=head_update(s);event(2)

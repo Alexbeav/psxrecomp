@@ -3020,7 +3020,7 @@ static void process_source_reset(void)
         return;
     }
 
-    while (s_source_reset_due <= psx_cycle_count) {
+    while (s_source_reset_due && s_source_reset_due <= psx_cycle_count) {
         if (source_drive_hold_logical && source_reset_phase < 3) {
             source_drive_head_lba = source_reset_phase;
             ++source_reset_phase;
