@@ -2104,6 +2104,9 @@ static uint32_t t172_memory_wait(uint32_t physical, unsigned width)
 
 static void t172_memory_poll(uint32_t physical)
 {
+#if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM) && !STARVATION_RING_ENABLED
+    if (g_ls_replay_active) return;
+#endif
     static int extra = -1;
     if (extra < 0) {
         const char *value = getenv("PSX_POLL_PROOF");
@@ -2132,7 +2135,7 @@ static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
         wait += dma_cpu_read_penalty();
         if (coprocessor) --wait;
         cpu->ld_absorb = wait - 2;
-        if (cpu->read_fudge < 32) wait -= 2;
+        if (!(cpu->read_fudge & 32)) wait -= 2;
         if (physical >= 0x1f801000u && physical < 0x1f803000u)
             tail = coprocessor ? 1 : 2;
         int cd = physical >= 0x1f801800u && physical < 0x1f801810u;
@@ -2146,7 +2149,8 @@ static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
                 physical >= 0x1f801000u && physical < 0x1f803000u ? base_wait - 2 - coprocessor : 0;
             if (tail > wait) tail = wait;
         }
-        if (wait > tail) psx_advance_cycles(wait - tail);
+        uint32_t before = wait - tail;
+        if (before) psx_advance_cycles(before);
         if (sample_early) psx_devices_service_to_now();
     } else {
         cpu->ld_absorb = 0;
@@ -2181,7 +2185,7 @@ static uint32_t t172_memory_load(CPUState *cpu, uint32_t addr, uint32_t rt,
         else if (width == 2) result = psx_read_half(addr);
         else {
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
-            if (t172_memory_direct_ram(addr)) result = ram[addr & (RAM_SIZE - 1)];
+            if (t172_memory_direct_ram(addr)) return ram[addr & (RAM_SIZE - 1)];
             else
 #endif
                 result = psx_read_byte(addr);
