@@ -2147,10 +2147,9 @@ static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,
         if (sample_early) {
             tail = physical < 0x800000u ? 3 :
                 physical >= 0x1f801000u && physical < 0x1f803000u ? base_wait - 2 - coprocessor : 0;
-            if (tail > wait) tail = wait;
         }
         uint32_t before = wait - tail;
-        if (before) psx_advance_cycles(before);
+        psx_advance_cycles(before);
         if (sample_early) psx_devices_service_to_now();
     } else {
         cpu->ld_absorb = 0;
