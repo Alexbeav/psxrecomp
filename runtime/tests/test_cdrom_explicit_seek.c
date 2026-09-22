@@ -63,10 +63,11 @@ static void setup(int origin) {
 /* PSX-SPX plain seek stops future reads and finishes paused. Octoshock
  * Command_SeekL/P also preserves the already admitted DMA buffer. Do not
  * conflate that guest-owned payload with a queued, unannounced INT1. */
-static void exercise_explicit(uint8_t read, uint8_t seek, int delivered) {
+static void exercise_explicit(uint8_t read, uint8_t seek, int delivered, int repeat_setloc) {
     setup(100); target(100); command(read); ack();
     if(delivered) { advance(read_delay); ack(); }
-    target(1000);
+    const int destination = 263062;
+    target(destination);
     /* Authored pending producer state, independent of guest response FIFO. */
     pending_dataready=1; pending_dataready_stat=CDSTAT_READ|CDSTAT_MOTOR;
     pending_present_due=psx_cycle_count+500; s_cd_timing_pending_seq=123;
@@ -91,20 +92,24 @@ static void exercise_explicit(uint8_t read, uint8_t seek, int delivered) {
     CHECK(response_fifo[response_read]==CDSTAT_MOTOR&&stat_reg==CDSTAT_MOTOR,
           "plain seek completes paused with no READ/PLAY/SEEK bit");
     CHECK(reads==before_reads&&!reading,"plain seek never resumes old stream");
-    CHECK(msf_to_lba(read_min,read_sec,read_sect)==1000,"seek retargets future stream position");
+    CHECK(msf_to_lba(read_min,read_sec,read_sect)==destination,"seek retargets future stream position");
     ack();advance(2000000);
     CHECK(irq_flag==0&&reads==before_reads,"paused seek has no late INT1");
+    if(repeat_setloc) target(destination);
     command(read);
     CHECK(response_fifo[response_read]==CDSTAT_MOTOR,"subsequent read ACK sees paused state");
-    CHECK(read_delay==initial_read_delay_cycles(),"completed seek has no extra implicit seek");
+    /* A same-position Setloc retains the model's minimum seek overhead,
+     * but must not charge the travel from the last delivered sector again. */
+    CHECK(read_delay==initial_read_delay_cycles()+(repeat_setloc?20000:0),
+          "completed seek is not charged again after repeated Setloc");
     ack();advance(read_delay);
-    CHECK(last_sector_lba==1000&&reads==before_reads+1,"explicit read resumes at seek target");
-    printf("read=%02x seek=%02x delivered=%d checked\n",read,seek,delivered);
+    CHECK(last_sector_lba==destination&&reads==before_reads+1,"explicit read resumes at seek target");
+    printf("read=%02x seek=%02x delivered=%d repeat=%d checked\n",read,seek,delivered,repeat_setloc);
 }
 int main(void) {
     for(int read=0;read<2;read++) for(int seek=0;seek<2;seek++)
         for(int delivered=0;delivered<2;delivered++)
-            exercise_explicit(read?0x1b:6,seek?0x16:0x15,delivered);
+            exercise_explicit(read?0x1b:6,seek?0x16:0x15,delivered,0);
     for(int seek=0;seek<2;seek++) {
         setup(100);target(1000);cdda_playing=1;stat_reg=CDSTAT_MOTOR|CDSTAT_PLAY;
         command(seek?0x16:0x15);

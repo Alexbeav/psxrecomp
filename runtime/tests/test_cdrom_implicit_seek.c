@@ -165,7 +165,9 @@ int main(void) {
         ack();
         CHECK(!reading&&!(stat_reg&(CDSTAT_SEEK|CDSTAT_READ|CDSTAT_PLAY)),
               "drive status is idle before the second SetLoc");
-        target(1200); int origin=last_sector_lba; command(6);
+        /* A completed seek positions at 1100 without delivering it. A read
+         * delivers 1100 and advances the next-sector cursor to 1101. */
+        target(1200); int origin=after_pause?1101:1100; command(6);
         int expect=apply_speed(source_seek_lower_bound(origin,1200,1,after_pause,mode_reg))+
                    initial_read_delay_cycles();
         CHECK(read_delay==expect,after_pause?"ReadN after Pause pays paused restart":
@@ -180,7 +182,7 @@ int main(void) {
         command(6); ack(); advance(read_delay); ack(); command(9); ack(); advance(100000000); ack();
         CHECK(s_source_seek_paused==1,"abandoned timeline ends paused");
         CHECK(cdrom_snapshot_read(snap,snap_size),"standby snapshot restores");
-        target(1200); int origin=last_sector_lba; command(6);
+        target(1200); int origin=1100; command(6);
         CHECK(read_delay==apply_speed(source_seek_lower_bound(origin,1200,1,0,mode_reg))+
                          initial_read_delay_cycles(),
               "restored standby ReadN pays no paused restart");

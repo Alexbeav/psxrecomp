@@ -1754,7 +1754,12 @@ static int implicit_read_seek_cycles(void) {
         return delay>INT32_MAX-(int)jitter?INT32_MAX:delay+(int)jitter;
     }
     if (!setloc_pending) return 0;
-    int origin=last_sector_lba>=0?last_sector_lba:0;
+    /* SeekL/SeekP move the drive cursor without delivering a data sector.
+     * A subsequent Setloc+Read must measure from that cursor, not from the
+     * last payload delivered before the seek. Otherwise a repeated Setloc
+     * charges the completed travel again and can trigger endless retries. */
+    int origin=msf_to_lba(read_min,read_sec,read_sect);
+    if(origin<0)origin=0;
     return apply_speed(source_seek_lower_bound(origin,s_setloc_lba,(stat_reg&CDSTAT_MOTOR)!=0,
                                               s_source_seek_paused,mode_reg));
 }
