@@ -82,11 +82,38 @@ int      gpu_depth24_present_hold_tick(void);
 /* After savestate restore: clear ephemeral hold so the restored depth24
  * frame can present immediately (span/prev_h come from the GPU snap). */
 void     gpu_depth24_on_savestate_loaded(void);
+typedef struct {
+    uint64_t seq;
+    uint32_t frame;
+    uint16_t x, y, w, h;
+} GpuDepth24UploadDebug;
+/* Copy up to cap most-recent CPU->VRAM transfers observed while depth24 was
+ * active, oldest first. Bounded diagnostic data; returns the copied count. */
+int gpu_get_depth24_upload_debug(GpuDepth24UploadDebug *out, int cap);
 /* GP1(06h)/GP1(07h)/GP1(08h) fields for debug (gpu_state). */
 void gpu_get_crtc_debug(uint32_t *x1, uint32_t *x2, uint32_t *y1, uint32_t *y2,
                         uint32_t *hres1_out, uint32_t *hres2_out);
 uint64_t gpu_get_gp0_count(void);  /* Total GP0 writes since init */
 void gpu_get_gp0_stats(uint64_t* nop, uint64_t* fill, uint64_t* draw, uint64_t* env, uint64_t* copy);
+
+/* Visual-only PGXP side channel. Exact address/generation provenance is
+ * required for every vertex; otherwise the entire triangle uses native PS1
+ * coordinates and affine texture mapping. */
+typedef struct GpuPgxpStats {
+    uint64_t triangles;
+    uint64_t complete;
+    uint64_t partial;
+    uint64_t unmatched;
+    uint64_t cpu_authored;
+    uint64_t stale_vertices;
+    uint64_t address_mismatch_vertices;
+    uint64_t packed_mismatch_vertices;
+    uint64_t invalid_vertices;
+} GpuPgxpStats;
+void gpu_pgxp_set(int enabled);
+int  gpu_pgxp_enabled(void);
+void gpu_pgxp_get_stats(GpuPgxpStats *out);
+void gpu_pgxp_reset_stats(void);
 
 typedef struct {
     uint32_t left, top, right, bottom;
@@ -369,7 +396,7 @@ void gpu_ws_tag_repeat_rect(uint32_t prim, int32_t period);
 /* Targeted alternative for sprite-heavy 2D games: corner-anchor only primitives
  * whose ordering-table packet lives in the configured half-open RAM range. */
 void gpu_ws_set_nw_left_hud_packet_range(uint32_t lo, uint32_t hi);
-void gpu_ws_begin_linked_list(void);
+void gpu_ws_begin_linked_list(uint32_t start_addr);
 void gpu_ws_end_linked_list(void);
 void gpu_ws_prepass_linked_list(uint32_t start_addr);
 void gpu_ws_validate_linked_list_header(uint32_t addr, uint32_t header);
@@ -385,8 +412,9 @@ void gpu_ws_set_nw_backdrop(int on);
  * canonical 4:3 framebuffer. Intended for flat-colour sky/water backdrops. */
 void gpu_ws_set_nw_flat_backdrop(int on);
 int  gpu_ws_nw_flat_backdrop_enabled(void);
-/* Stretch the title-opted textured pre-3D backdrop phase in the wide mirror. */
+/* Stretch the title-opted first textured OT rank in the wide mirror. */
 void gpu_ws_set_nw_phase_backdrop(int on);
+int  gpu_ws_get_nw_phase_backdrop(void);
 
 /* Backdrop screen-X correction ([widescreen.backdrop] x_sites). The parallax
  * 2D backdrop layer computes screen-X without the GTE, so it misses the
@@ -451,8 +479,8 @@ int  psx_ws_is_backdrop_site(uint32_t pc);
 /* Live widescreen state for diagnostics (TCP gpu_state). All pointers
  * optional. last_tag_frame/cur_frame let the caller see game_mode freshness. */
 typedef struct {
-    int      configured;        /* ws_xnum != ws_xden */
-    int      active;            /* squash currently applied this frame */
+    int      configured;        /* any widescreen mode engaged */
+    int      active;            /* selected wide mode active this frame */
     int      game_mode;         /* tagged char/billboard prim within 2 frames */
     int      present_native_43; /* frame presents pillarboxed 4:3 (FMV/full-2D) */
     int      x_margin;          /* psx_ws_x_margin() right now */
@@ -460,6 +488,10 @@ typedef struct {
     int      xnum, xden;        /* squash factor */
     int      mode;              /* 0 = off, 1 = squash, 2 = native-wide */
     int      nw_extra;          /* native-wide frame growth (display px), 0 if off */
+    int      nw_guest_projection; /* guest-visible X squash + world-OT inverse */
+    int      nw_guest_projection_num;
+    int      nw_guest_projection_den;
+    uint64_t nw_guest_projection_restores;
     uint64_t cur_frame;
     uint32_t last_tag_frame;    /* frame of newest tagged prim */
     uint32_t last_3d_frame;     /* frame of newest shaded prim (diagnostic) */
@@ -473,6 +505,8 @@ typedef struct {
     uint32_t auto_ui_ot_rank;    /* highest populated UI rank in current list */
     uint64_t auto_ui_candidates;
     uint64_t auto_ui_transforms;
+    uint64_t fullscreen_rect_checks;  /* native-wide rects classified */
+    uint64_t fullscreen_rect_expands; /* full-display rects widened */
     uint64_t aspect_cone_calls;
     uint64_t aspect_cone_43_identity;
     uint64_t aspect_cone_vanilla_keep;

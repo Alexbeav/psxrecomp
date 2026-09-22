@@ -24,6 +24,18 @@ typedef enum {
     GR_BACKEND_VULKAN   = 2
 } GrBackend;
 
+/* Visual-only precision metadata for the next triangle.  Command processing
+ * submits this only after all three packet positions have exact GTE-to-RAM
+ * provenance.  Backends must consume it once and then clear it; valid == 0
+ * means native integer positions and affine texture coordinates. */
+typedef struct GrPrecisionTriangle {
+    int valid;
+    int perspective;
+    int32_t x16[3];
+    int32_t y16[3];
+    float q[3];
+} GrPrecisionTriangle;
+
 void      gr_set_backend(GrBackend backend);  /* call before gr_init() */
 GrBackend gr_backend(void);                   /* effective backend after init */
 
@@ -37,12 +49,17 @@ void gr_set_scale(int scale);
 int  gr_scale(void);
 void gr_set_texture_filter(int bilinear);
 int  gr_texture_filter(void);
+/* Notify a backend when GP1(08h) changes scanout ownership.  Hardware
+ * backends use the 15->24 transition to hand authoritative VRAM from their
+ * render target to the packed-RGB CPU representation before movie uploads. */
+void gr_display_depth_changed(int old_depth24, int new_depth24);
 
 /* Per-primitive draw state */
 void gr_set_semi_transparency(int enabled, int mode);
 void gr_set_mask_bits(int set_bit, int check_bit);
 void gr_set_texture_window(uint32_t raw);
 void gr_set_color_modulation(int r, int g, int b, int raw_texture);
+void gr_set_precision_triangle(const GrPrecisionTriangle *precision);
 
 /* Sub-pixel vertex override for the NEXT triangle ([video] geometry_correction).
  * x/y are signed 16.16 screen coordinates carrying the projection fraction the
@@ -143,6 +160,7 @@ typedef struct GpuRenderBackend {
     int  (*scale)(void);
     void (*set_texture_filter)(int bilinear);
     int  (*texture_filter)(void);
+    void (*display_depth_changed)(int old_depth24, int new_depth24);
     void (*set_semi_transparency)(int enabled, int mode);
     void (*set_mask_bits)(int set_bit, int check_bit);
     void (*set_texture_window)(uint32_t raw);
@@ -154,6 +172,7 @@ typedef struct GpuRenderBackend {
                                  int32_t x1, int32_t y1,
                                  int32_t x2, int32_t y2);
     void (*set_perspective_triangle)(int enabled, float q0, float q1, float q2);
+    void (*set_precision_triangle)(const GrPrecisionTriangle *precision);
     void (*fill_rect)(int x, int y, int w, int h, uint16_t color);
     void (*copy_rect)(int src_x, int src_y, int dst_x, int dst_y, int w, int h);
     void (*draw_flat_triangle)(int x0, int y0, int x1, int y1, int x2, int y2,

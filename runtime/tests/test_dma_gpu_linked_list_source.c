@@ -61,7 +61,7 @@ static int ready_state=1;
 int gpu_dma_source_ll_ready(void) {return ready_state;}
 void gpu_write_gp0(uint32_t v) {uploaded[upload_count++]=v;}
 uint32_t gpu_dma_vram_upload_words(void) {return upload_left;}
-void gpu_ws_begin_linked_list(void) {}
+void gpu_ws_begin_linked_list(uint32_t start_addr) {(void)start_addr;}
 void gpu_ws_end_linked_list(void) {}
 void gpu_ws_prepass_linked_list(uint32_t a) {(void)a;}
 void gpu_ws_restore_linked_list_rank(uint32_t r) {(void)r;}

@@ -247,6 +247,20 @@ extern int      gte_nclip_precise_bltz(int32_t native_mac0);
  * Pulled in here so every generated translation unit sees them. */
 #include "pgxp_hooks.h"
 
+typedef enum GtePrecisionStatus {
+    GTE_PRECISION_DISABLED = 0,
+    GTE_PRECISION_EXACT = 1,
+    GTE_PRECISION_SPECULATIVE = -1,
+    GTE_PRECISION_NON_RAM = -2,
+    GTE_PRECISION_MISSING = -3,
+    GTE_PRECISION_STALE = -4,
+    GTE_PRECISION_ADDRESS_MISMATCH = -5,
+    GTE_PRECISION_PACKED_MISMATCH = -6,
+    GTE_PRECISION_INVALID = -7
+} GtePrecisionStatus;
+extern GtePrecisionStatus gte_precision_query_word(
+    uint32_t addr, uint32_t packed, int32_t *x16, int32_t *y16, uint16_t *z);
+
 /* ============================================================================
  * Dispatch call contract (Bug D / wild-return family fix)
  * ----------------------------------------------------------------------------

@@ -59,6 +59,9 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #ifndef PSX_MAX_PLAYERS
 #define PSX_MAX_PLAYERS 2
 #endif
+#include "pad_timeline.h"
+#include "mouse_pad_adapter.h"
+#include "mouse_camera.h"
 #include "psx_netplay.h"
 #include "psx_stick.h"       /* radial SDL-stick -> DualShock response transform */
 #include "psx_netplay_rb.h"
@@ -1174,6 +1177,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE void psx_web_set_smooth_60fps(int enabled) {
 
 /* [video] options, resolved from the game config (defaults: native + AA). */
 static int           g_video_scale = 1;     /* internal-resolution SSAA factor */
+static int           g_mouse_pad_enabled = 0;
+static int           g_mouse_pad_counts_per_frame = 12;
+static int           g_mouse_pad_aim_counts_per_frame = 4;
+static int           g_mouse_camera_enabled = 0;
 static bool          g_video_aa    = true;  /* linear present filtering */
 /* FMV present reconstruction (VIDEO_FMV_FILTER_*), pushed to the GL renderer
  * once the config is resolved. Only consulted while g_video_aa is on. */
@@ -1221,6 +1228,8 @@ static int           g_video_geometry_correction   = 0;
 static int           g_video_perspective_texturing = 0;
 static int           g_video_pgxp_cpu_mode         = 0;
 static float         g_video_pgxp_tolerance        = 0.5f;
+/* SF2-generation single PGXP switch, still consumed by gpu_pgxp_set() below. */
+static int           g_video_pgxp = 0;      /* visual-only precise GTE sidecar */
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 static std::string   g_bezel_path;      /* mod-owned OpenGL margin artwork */
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
@@ -1247,6 +1256,7 @@ static int           g_hotkey_pad_fast_forward_toggle = 0; /* unbound: latch fas
 static uint32_t      g_savestate_input_guard_min_until = 0;
 static uint32_t      g_savestate_input_guard_max_until = 0;
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
+static int           g_hidden_window  = 0;   /* CI GPU frontend: SDL/GL without a visible window */
 
 /* FMV instant-skip via the game's OWN end-of-movie path. Tomba's MDEC player
  * (FUN_8001efe8) tears a movie down when the streamed frame number reaches that
@@ -1407,6 +1417,21 @@ extern "C" int psx_mod_set_adaptive_display_aspect(
         "(initial %d:%d, range 4:3 through %u:%u)\n",
         g_video_aspect_num, g_video_aspect_den,
         (unsigned)max_numerator, (unsigned)max_denominator);
+    return 1;
+}
+
+extern "C" int psx_mod_set_pgxp(int enabled) {
+    g_video_pgxp = enabled ? 1 : 0;
+    std::fprintf(stdout, "psxrecomp: mod %s PGXP geometry correction\n",
+                 g_video_pgxp ? "enabled" : "disabled");
+    return 1;
+}
+
+extern "C" int psx_mod_set_mouse_camera(int enabled) {
+    g_mouse_camera_enabled = enabled ? 1 : 0;
+    psx_mouse_camera_set_enabled(g_mouse_camera_enabled);
+    std::fprintf(stdout, "psxrecomp: mod %s direct mouse camera\n",
+                 g_mouse_camera_enabled ? "enabled" : "disabled");
     return 1;
 }
 
@@ -1609,6 +1634,8 @@ extern "C" void gpu_ws_set_netplay_local_viewport(int enabled, int slot);
 extern "C" int gpu_ws_netplay_local_viewport_base_x(void);
 extern "C" int gpu_ws_netplay_local_viewport_width(void);
 extern "C" void gpu_ws_set_nw_textured_edges(int on, int scale_pct);
+extern "C" void gpu_ws_set_nw_guest_projection(int on,
+                                                  uint32_t world_min_polygons);
 extern "C" void gpu_ws_set_signed_x_bound_sites(const uint32_t*, const uint32_t*, int);
 /* Widescreen engages at game entry (fntrace_is_game_started): the BIOS boot
  * — Sony logo, PS logo, shell — presents authentic 4:3 with no GTE squash.
@@ -1618,6 +1645,9 @@ static bool          g_ws_engaged = true;
  * present 1:1 — the GTE is NOT squashed) vs. the legacy squash hack. Default
  * native-wide; toggle live via the ws_nw TCP command for A/B comparison. */
 static int           g_ws_native_wide = 1;
+/* Title opt-in: aspect-scaled SXY remains guest-visible for retail culling;
+ * dense world DMA submissions restore unsquashed X at presentation. */
+static int           g_ws_nw_guest_projection = 0;
 /* Logical present width for the SDL_Renderer (software) path; 640*scale at
  * 4:3, wider for wide aspects. Height is always 480*scale. Set at window
  * creation alongside SDL_RenderSetLogicalSize. */
@@ -3080,6 +3110,7 @@ static void shutdown_runtime(void) {
      * off-thread JIT worker here; the worker no longer exists.) */
     psx_netplay_shutdown();
     psx_rewind_shutdown();
+    pad_timeline_close();
     memcard_flush_all();
     /* Stop and join the active external compiler before capture/debug teardown.
      * Otherwise closing the window can leave cmd/python/gcc running against
@@ -4555,6 +4586,10 @@ static bool controller_source_pressed_h(SDL_GameController* h, const ControllerS
  * (arrows=d-pad, X/S/Z/A=Cross/Circle/Square/Triangle, Q/W/E/R=L1/R1/L2/R2,
  * Return=Start, RShift=Select) plus T/Y=L3/R3 stick clicks. */
 static uint16_t pad_from_keyboard(int player) {
+    if (g_headless || g_hidden_window || !sdl_window ||
+        !(SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
+        return 0xFFFF;
+    }
     const Uint8* keys = SDL_GetKeyboardState(NULL);
     return psx_keybinds_pad_word(keys, player);
 }
@@ -4652,6 +4687,10 @@ static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_
 static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
     out[0] = out[1] = out[2] = out[3] = 0x80;
     if (p.kind == 1) {
+        if (g_headless || g_hidden_window || !sdl_window ||
+            !(SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
+            return;
+        }
         /* Keyboard analog: the configurable left/right stick-direction binds
          * (default = arrow keys on the LEFT stick; RIGHT stick unbound), so the
          * old keyboard analog behaviour is preserved unless the user rebinds. */
@@ -5183,6 +5222,21 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
         btn &= pad_from_keyboard(player);
     if (src.all_pads)
         btn &= dev_all_controllers_buttons(suppress_stick);
+    /* Mouse pad adapter / mouse camera (SF2 feature). Merged after the button
+     * sources so a mouse button press is an active-low AND on the same word;
+     * the right button doubles as the camera-aim hold. Player 1 only. */
+    if (s == 0 && (g_mouse_pad_enabled || g_mouse_camera_enabled) && sdl_window) {
+        const Uint32 mouse = SDL_GetMouseState(nullptr, nullptr);
+        uint32_t host = 0;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_LEFT))   host |= PSX_MOUSE_LEFT;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_RIGHT))  host |= PSX_MOUSE_RIGHT;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_MIDDLE)) host |= PSX_MOUSE_MIDDLE;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_X1))     host |= PSX_MOUSE_X1;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_X2))     host |= PSX_MOUSE_X2;
+        psx_mouse_camera_set_aim((host & PSX_MOUSE_RIGHT) != 0);
+        if (g_mouse_pad_enabled)
+            btn = mouse_pad_merge(btn, host);
+    }
 
     /* Analog axes. ANALOG and plugin-selected analog feed the raw stick only;
      * the D-pad is never folded in, matching a real DualShock, which keeps
@@ -5767,6 +5821,12 @@ static void sample_headless_pad_into_sio(int override) {
 #endif
     sio_set_pad_state_slot(0, 0xFFFFu);
     sio_set_pad_state_slot(1, 0xFFFFu);
+}
+
+static void finalize_host_input_frame(void) {
+    pad_timeline_capture(s_frame_count);
+    mouse_pad_commit_frame();
+    psx_mouse_camera_commit_frame();
 }
 
 /* PSX native vblank cadence: NTSC ≈ 59.94 Hz. Wall-clock target keeps
@@ -7206,6 +7266,16 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     }
 
     if (!g_headless) {
+        const int mouse_focus = (g_mouse_pad_enabled || g_mouse_camera_enabled) &&
+            sdl_window &&
+            (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS);
+        static int prior_mouse_focus = -1;
+        if (mouse_focus != prior_mouse_focus) {
+            mouse_pad_set_focus(mouse_focus);
+            psx_mouse_camera_set_focus(mouse_focus);
+            (void)psx_sdl_set_relative_mouse_mode(sdl_window, mouse_focus);
+            prior_mouse_focus = mouse_focus;
+        }
         /* Pump SDL events to prevent window freeze. */
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -7232,6 +7302,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     close_controller();
                     refresh_player_devices();
                 }
+            } else if (ev.type == SDL_MOUSEMOTION) {
+                if (g_mouse_camera_enabled)
+                    psx_mouse_camera_add_motion((int)ev.motion.xrel,
+                                                (int)ev.motion.yrel);
+                else
+                    mouse_pad_add_motion((int)ev.motion.xrel,
+                                         (int)ev.motion.yrel);
             } else if (ev.type == SDL_KEYDOWN) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
@@ -7378,7 +7455,15 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
     /* Turbo-active / multitap arming share game-started detection. */
 
-    if (psx_netplay_active()) {
+    if (pad_timeline_is_replay()) {
+        if (!pad_timeline_apply(s_frame_count)) {
+            /* A malformed/exhausted replay must never silently fall through to
+             * live host input. Neutralize both ports and keep the divergence
+             * visible in stderr. */
+            sio_set_pad_state_slot(0, 0xFFFFu);
+            sio_set_pad_state_slot(1, 0xFFFFu);
+        }
+    } else if (psx_netplay_active()) {
         psx_netplay_finish_frame();
     } else {
         /* Offline N-pad: enable multitap only once the game EXE is running.
@@ -7525,6 +7610,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #endif
 
     if (g_headless) {
+        finalize_host_input_frame();
         ep.skip_pace = 1;
         return ep;
     }
@@ -7536,6 +7622,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * presentation and wall-clock pacing. */
 #ifndef PSX_NO_DEBUG_TOOLS
     if (debug_server_turbo_enabled()) {
+        finalize_host_input_frame();
         ep.skip_pace = 1;
         return ep;
     }
@@ -7589,6 +7676,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             }
             turbo_skip = (turbo_skip + 1) % present_every;
             if (turbo_skip != 0) {
+                finalize_host_input_frame();
                 ep.skip_pace = 1;
                 return ep;  /* skip render this frame */
             }
@@ -7626,6 +7714,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         const int TL_PRESENT_EVERY = 30;
         s_turbo_present_skip = (s_turbo_present_skip + 1) % TL_PRESENT_EVERY;
         if (s_turbo_present_skip != 0) {
+            finalize_host_input_frame();
             ep.skip_pace = 1;
             return ep;
         }
@@ -7638,6 +7727,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         const int FMV_PRESENT_EVERY = 30;
         s_fmv_skip_present_skip = (s_fmv_skip_present_skip + 1) % FMV_PRESENT_EVERY;
         if (s_fmv_skip_present_skip != 0) {
+            finalize_host_input_frame();
             ep.skip_pace = 1;
             return ep;
         }
@@ -7665,6 +7755,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             s_netplay_depth24_present_skip = 0;
         } else if (s_netplay_depth24_present_skip > 0) {
             s_netplay_depth24_present_skip--;
+            finalize_host_input_frame();
             return ep;
         } else {
             s_netplay_depth24_present_skip = div - 1;
@@ -7690,8 +7781,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * CPU frame reads near-fresh input (the dominant input->photon cost on a
          * vsync-light box). Re-stamp the ring's input mark to measure from here.
          * Self-check record keeps pads boundary-latched (netplay tick
-         * semantics) — the mid-frame re-sample would fork the resim. */
-        if (g_low_latency_input && !psx_selfcheck_input_locked()) {
+         * semantics) — the mid-frame re-sample would fork the resim. A
+         * pad-timeline replay likewise owns the final SIO state, so the live
+         * host sample must not overwrite it. */
+        if (g_low_latency_input && !psx_selfcheck_input_locked() &&
+            !pad_timeline_is_replay()) {
             SDL_GameControllerUpdate();  /* refresh pad state after the wait */
             SDL_PumpEvents();            /* refresh keyboard state */
             sample_pad_into_sio(override);
@@ -7701,6 +7795,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
     /* Mod hooks. Run after all normal input sampling. */
     mod_call_frame_hooks();
+    finalize_host_input_frame();
 
     /* Resize-driven mode updates the pending aspect during BIOS boot too, but
      * the actual wide compositor remains disengaged until game entry. */
@@ -13055,6 +13150,8 @@ int main(int argc, char** argv) {
         cli_path_arg_storage.push_back(std::move(best));
         return cli_path_arg_storage.back().c_str();
     };
+    const char* cli_pad_record = nullptr;    /* final SIO-visible input timeline */
+    const char* cli_pad_replay = nullptr;
     PsxNetplayConfig net_cfg;
     psx_netplay_config_defaults(&net_cfg);
     psx_netplay_apply_env(&net_cfg);  /* CLI flags below win over env */
@@ -13065,10 +13162,13 @@ int main(int argc, char** argv) {
      *   --disc <path>       override the game config disc path
      *   --debug-port <n>    override the TCP debug-server port (multi-instance)
      *   --memcard-dir <path> override card/save/options state (multi-instance)
+     *   --pad-record <path> record final SIO-visible pad state once per VBlank
+     *   --pad-replay <path> replay an exact pad timeline (exclusive with record)
      *   --renderer <name>   override the renderer: software|opengl|vulkan
      *   --launcher          force the GUI launcher (overrides skip_launcher)
      *   --no-launcher       skip the GUI launcher (boot straight in)
      *   --headless          skip SDL window/audio; use TCP screenshots/state
+     *   --hidden-window     create the selected GPU backend without showing its window
      *   --netplay           enable delay-sync LAN (also PSX_NETPLAY=1)
      *   --net-slot N        local player slot (0|1)
      *   --net-input-player N  host device to sample (0=P1, 1=P2; default auto)
@@ -13091,6 +13191,10 @@ int main(int argc, char** argv) {
             cli_debug_port = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--memcard-dir") == 0 && i + 1 < argc) {
             cli_memcard_dir = consume_path_arg(i);
+        } else if (std::strcmp(argv[i], "--pad-record") == 0 && i + 1 < argc) {
+            cli_pad_record = argv[++i];
+        } else if (std::strcmp(argv[i], "--pad-replay") == 0 && i + 1 < argc) {
+            cli_pad_replay = argv[++i];
         } else if (std::strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
             const char* r = argv[++i];
             if      (std::strcmp(r, "software") == 0) cli_renderer = 0;
@@ -13104,6 +13208,9 @@ int main(int argc, char** argv) {
             force_no_launcher = true;
         } else if (std::strcmp(argv[i], "--headless") == 0) {
             g_headless = 1;
+            force_no_launcher = true;
+        } else if (std::strcmp(argv[i], "--hidden-window") == 0) {
+            g_hidden_window = 1;
             force_no_launcher = true;
         } else if (std::strcmp(argv[i], "--netplay") == 0) {
             net_cfg.enabled = 1;
@@ -13139,6 +13246,20 @@ int main(int argc, char** argv) {
                     "psxrecomp: ignoring unexpected positional argument after BIOS selection: %s\n",
                     argv[i]);
             }
+        }
+    }
+    {
+        char pad_error[256]{};
+        if ((cli_pad_record || cli_pad_replay) && net_cfg.enabled) {
+            std::fprintf(stderr,
+                "psxrecomp: PAD timelines are not supported with netplay; "
+                "lockstep applies its final input in the VBlank tail\n");
+            return 1;
+        }
+        if (!pad_timeline_configure(cli_pad_record, cli_pad_replay,
+                                    pad_error, sizeof(pad_error))) {
+            std::fprintf(stderr, "psxrecomp: %s\n", pad_error);
+            return 1;
         }
     }
     if (const char *e = std::getenv("PSX_HEADLESS")) {
@@ -13362,6 +13483,7 @@ int main(int argc, char** argv) {
                 gc.runtime.video_perspective_texturing ? 1 : 0;
             g_video_pgxp_cpu_mode = gc.runtime.video_pgxp_cpu_mode ? 1 : 0;
             g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
+            g_video_pgxp       = gc.runtime.video_pgxp ? 1 : 0;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_scanlines  = gc.runtime.video_scanlines;
@@ -13371,6 +13493,71 @@ int main(int argc, char** argv) {
             g_video_aspect_den = gc.runtime.video_aspect_den;
             g_low_latency_input = gc.runtime.video_low_latency_input ? 1 : 0;
             g_video_vsync       = gc.runtime.video_vsync;
+            g_mouse_pad_enabled = gc.runtime.controller_mouse_pad ? 1 : 0;
+            g_mouse_pad_counts_per_frame =
+                gc.runtime.controller_mouse_counts_per_frame;
+            g_mouse_pad_aim_counts_per_frame =
+                gc.runtime.controller_mouse_aim_counts_per_frame;
+            mouse_pad_configure(g_mouse_pad_enabled,
+                                g_mouse_pad_counts_per_frame,
+                                g_mouse_pad_aim_counts_per_frame);
+            PsxMouseCameraConfig mouse_camera{};
+            mouse_camera.enabled =
+                gc.runtime.controller_mouse_camera_enabled ? 1 : 0;
+            mouse_camera.facing_site =
+                gc.runtime.controller_mouse_camera_facing_site;
+            mouse_camera.facing_expected =
+                gc.runtime.controller_mouse_camera_facing_expected;
+            mouse_camera.application_state_addr =
+                gc.runtime.controller_mouse_camera_application_state_addr;
+            mouse_camera.player_pointer_addr =
+                gc.runtime.controller_mouse_camera_player_pointer_addr;
+            mouse_camera.player_state_offset =
+                gc.runtime.controller_mouse_camera_player_state_offset;
+            mouse_camera.wrapper_offset =
+                gc.runtime.controller_mouse_camera_wrapper_offset;
+            mouse_camera.base_offset =
+                gc.runtime.controller_mouse_camera_base_offset;
+            mouse_camera.owner_offset =
+                gc.runtime.controller_mouse_camera_owner_offset;
+            mouse_camera.desired_pitch_offset =
+                gc.runtime.controller_mouse_camera_desired_pitch_offset;
+            mouse_camera.rendered_pitch_offset =
+                gc.runtime.controller_mouse_camera_rendered_pitch_offset;
+            mouse_camera.vector_x_offset =
+                gc.runtime.controller_mouse_camera_vector_x_offset;
+            mouse_camera.vector_y_offset =
+                gc.runtime.controller_mouse_camera_vector_y_offset;
+            mouse_camera.vector_z_offset =
+                gc.runtime.controller_mouse_camera_vector_z_offset;
+            mouse_camera.controller_reg =
+                gc.runtime.controller_mouse_camera_controller_reg;
+            mouse_camera.chase_yaw_sensitivity =
+                gc.runtime.controller_mouse_chase_yaw_sensitivity;
+            mouse_camera.chase_pitch_sensitivity =
+                gc.runtime.controller_mouse_chase_pitch_sensitivity;
+            mouse_camera.aim_yaw_sensitivity =
+                gc.runtime.controller_mouse_aim_yaw_sensitivity;
+            mouse_camera.aim_pitch_sensitivity =
+                gc.runtime.controller_mouse_aim_pitch_sensitivity;
+            mouse_camera.invert_y =
+                gc.runtime.controller_mouse_invert_y ? 1 : 0;
+            psx_mouse_camera_configure(&mouse_camera);
+            g_mouse_camera_enabled = mouse_camera.enabled;
+            if (g_mouse_pad_enabled) {
+                std::fprintf(stdout,
+                    "psxrecomp: mouse PAD adapter enabled "
+                    "(%d chase, %d aim counts/frame)\n",
+                    g_mouse_pad_counts_per_frame,
+                    g_mouse_pad_aim_counts_per_frame);
+            }
+            if (g_mouse_camera_enabled) {
+                std::fprintf(stdout,
+                    "psxrecomp: direct relative-mouse camera enabled "
+                    "(site=0x%08X, non-inverted-y=%s)\n",
+                    mouse_camera.facing_site,
+                    mouse_camera.invert_y ? "no" : "yes");
+            }
             g_frame_interpolation = gc.runtime.video_frame_interpolation ? 1 : 0;
             g_frame_interpolation_fps = gc.runtime.video_frame_interpolation_fps;
             g_fmv_skip_total_table = gc.runtime.video_fmv_skip_total_table;
@@ -13406,6 +13593,10 @@ int main(int argc, char** argv) {
             /* Keep titles with known native-wide regressions on the original
              * projection-squash + stretched-present widescreen path. */
             g_ws_native_wide = gc.ws_native_wide ? 1 : 0;
+            g_ws_nw_guest_projection = gc.ws_nw_guest_projection ? 1 : 0;
+            gpu_ws_set_nw_guest_projection(
+                g_ws_nw_guest_projection,
+                gc.ws_nw_world_min_polygons);
             /* [widescreen] nw_hud_corners — push HUD to the true wide corners. */
             gpu_ws_set_nw_hud_corners(gc.ws_nw_hud_corners ? 1 : 0);
             /* Targeted left-HUD packet range — avoids shifting 2D scenery. */
@@ -13416,8 +13607,8 @@ int main(int argc, char** argv) {
             /* [widescreen] nw_flat_backdrop — stretch flat sky/backdrop prims
              * in the native-wide mirror, preserving the canonical 4:3 image. */
             gpu_ws_set_nw_flat_backdrop(gc.ws_nw_flat_backdrop ? 1 : 0);
-            /* [widescreen] nw_phase_backdrop — stretch only the textured
-             * backdrop phase emitted before shaded 3D foreground geometry. */
+            /* [widescreen] nw_phase_backdrop — stretch only the first
+             * ordering-table rank which submits textured polygons. */
             gpu_ws_set_nw_phase_backdrop(gc.ws_nw_phase_backdrop ? 1 : 0);
             gpu_ws_set_nw_textured_edges(gc.ws_nw_textured_edges ? 1 : 0,
                                          gc.ws_nw_textured_edge_scale);
@@ -14713,6 +14904,20 @@ int main(int argc, char** argv) {
             lr = rui_rc;
 
             if (lr == 0) {
+                /* Rebinds are persisted immediately by recomp-ui. Import that
+                 * exact file before gameplay in the same process; requiring a
+                 * second launch makes a successful edit look discarded.
+                 *
+                 * g_rui_keybinds_path is the path recomp-ui was handed earlier
+                 * in this function (see the recomp_launcher_run_window setup);
+                 * the merge had left an SF2-scoped local name here whose
+                 * declaration did not survive into this scope. */
+                g_rui_keybinds_path.empty()
+                    ? (void)0
+                    : psx_keybinds_load_file(g_rui_keybinds_path.c_str());
+            }
+
+            if (lr == 0) {
                 seed.netplay_player_name = ls.netplay_player_name;
                 seed.has_netplay_player_name = true;
                 if (rui_out_disc[0]) {
@@ -15409,6 +15614,12 @@ session_reboot:
         g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
     if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
         g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
+    /* [video] pgxp is the title-level switch for the precision sidecar. It is
+     * still honoured: gpu_pgxp_set() enables the geometry and texture
+     * corrections together (see gpu.c), so a title that turns pgxp on without
+     * naming the individual corrections still gets the full sidecar. Applied
+     * before the explicit setters so an explicit [video] value always wins. */
+    gpu_pgxp_set(g_video_pgxp);
     gte_geometry_correction_set(g_video_geometry_correction);
     gpu_texture_correction_set(g_video_perspective_texturing);
     pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
@@ -15425,7 +15636,8 @@ session_reboot:
     }
     gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
                               g_video_scanline_strength);
-    if (g_video_geometry_correction || g_video_perspective_texturing) {
+    if (g_video_geometry_correction || g_video_perspective_texturing ||
+        g_video_pgxp) {
         std::fprintf(stdout,
                      "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
                      g_video_geometry_correction ? "on" : "off",
@@ -15796,7 +16008,8 @@ session_reboot:
     sdl_audio_pump_midframe();
 #endif
 
-    Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+    Uint32 win_flags = (g_hidden_window ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN)
+                     | SDL_WINDOW_RESIZABLE;
     if (g_video_renderer == 1) {
         configure_core_gl_context_attributes();
         win_flags |= SDL_WINDOW_OPENGL;

@@ -22,7 +22,7 @@ namespace PSXRecomp {
 
 /* Reserved MIPS-II branch-likely words often appear when discovery sweeps
  * ASCII/data as code. Emit the RI raise every time (faithfulness), but do not
- * spam one WARNING per revisit of the same PC — product Generate was flooding
+ * spam one WARNING per revisit of the same PC β€” product Generate was flooding
  * the setup wizard with hundreds of identical lines. Set
  * PSXRECOMP_VERBOSE_RI_WARNINGS=1 to print every hit (dev / tests). */
 static bool should_print_reserved_opcode_warning(uint32_t addr) {
@@ -36,8 +36,8 @@ static bool should_print_reserved_opcode_warning(uint32_t addr) {
 static bool codegen_cycle_per_insn() {
     // DEFAULT ON for the faithful-timing (cycle-audit) branch: each instruction
     // charges its cost at its own site, so the running cycle count is correct
-    // mid-block. This is REQUIRED for stateful timing — mult/div completion-stall
-    // (mflo/mfhi wait for muldiv_ts_done) and later GTE stalls — to absorb
+    // mid-block. This is REQUIRED for stateful timing β€” mult/div completion-stall
+    // (mflo/mfhi wait for muldiv_ts_done) and later GTE stalls β€” to absorb
     // correctly, exactly like Beetle's per-instruction timestamp. Block-up-front
     // charging loses the in-between timing and can only charge full latency.
     // Set PSX_CODEGEN_CYCLE_PER_INSN=0 to force the old block-up-front mode.
@@ -49,7 +49,7 @@ static bool codegen_cycle_per_insn() {
 /* The BIOS address model of the profile this game is built against
  * (main_psx.cpp resolves [recompiler] bios_config, default the SCPH1001
  * profile, and sets it before generation). A game artifact depends on a
- * BIOS property here — jump tables inside relocated BIOS code windows —
+ * BIOS property here β€” jump tables inside relocated BIOS code windows β€”
  * so the window comes from the profile, never from a constant. */
 static const ::PSXRecompV4::BiosAddressModel* g_game_bios_model = nullptr;
 
@@ -95,9 +95,9 @@ static uint32_t ram_to_rom(uint32_t addr, const PS1Executable& exe) {
 
 CodeGenerator::CodeGenerator(const PS1Executable& exe, const CodeGenConfig& config)
     : exe_(exe), config_(config) {
-    // RECURSION_BUG.md §25 — continuation-passing call/return. Gen-time opt-in
+    // RECURSION_BUG.md Β§25 β€” continuation-passing call/return. Gen-time opt-in
     // via PSX_CPS so legacy codegen stays byte-identical when unset.
-    // CPS is the DEFAULT (RECURSION_BUG.md §25). Opt out (legacy) with PSX_CPS=0.
+    // CPS is the DEFAULT (RECURSION_BUG.md Β§25). Opt out (legacy) with PSX_CPS=0.
     { const char* e = std::getenv("PSX_CPS"); cps_enabled_ = (e == nullptr || e[0] != '0'); }
 }
 
@@ -728,7 +728,7 @@ std::string CodeGenerator::translate_divu(uint32_t instr) {
 std::string CodeGenerator::translate_mfhi(uint32_t instr) {
     uint32_t rd = get_rd(instr);
 
-    // Stall until the mult/div completion deadline (faithful R3000A) — happens
+    // Stall until the mult/div completion deadline (faithful R3000A) β€” happens
     // even when rd==$zero (the read still stalls on HW).
     const char* stall = "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_muldiv_stall(cpu);\n#endif";
     if (config_.optimize_zero_reg && rd == 0) {
@@ -774,7 +774,7 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
 
     // REGIMM branches. R3000A hardware decodes EVERY rt value here, not just
     // the four assembler mnemonics: the branch sense is rt bit 0 (0 = bltz,
-    // 1 = bgez) and the link register is written iff (rt & 0x1E) == 0x10 —
+    // 1 = bgez) and the link register is written iff (rt & 0x1E) == 0x10 β€”
     // Beetle cpu.cpp op_BCOND: result = (int32)(rs ^ (rt<<31)) < 0,
     // link = ((rt & 0x1E) == 0x10). Undefined rt values appear when discovery
     // sweeps data-as-code into a function; emitting the hardware decode keeps
@@ -785,7 +785,7 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
             // LEFT-edge funnel bltz: reject only past the revealed margin.
             // Identity at 4:3 (margin 0). Two sources: (a) auto_screen_x's
             // detect_cull_bltz_sites classification (ws_cull_bltz_pcs_), and
-            // (b) explicit [widescreen.cull] bltz_sites — the left-edge
+            // (b) explicit [widescreen.cull] bltz_sites β€” the left-edge
             // counterpart to slti_sites, for X-only funnels auto_screen_x can't
             // qualify (whose bltz would otherwise never be widened).
             if (regimm_op == 0x00 &&
@@ -1008,7 +1008,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
     // high clamps preload the whole finite tile row (filling the revealed 16:9
     // margin). ws_backdrop_sites_ is populated per function by
     // detect_backdrop_windows() only when config_.ws_auto_backdrop_preload is
-    // set — inert and byte-identical when the feature is off. The instruction
+    // set β€” inert and byte-identical when the feature is off. The instruction
     // shape is verified; a mismatch is a loud build error (detector/codegen drift).
     if (!ws_backdrop_sites_.empty()) {
         auto bd = ws_backdrop_sites_.find(addr);
@@ -1041,13 +1041,13 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
     }
 
     // Widescreen cull-margin widening ([widescreen.cull] sites). Emit the
-    // window immediate with a runtime margin term psx_ws_x_margin() — 0 at
-    // 4:3/boot/menu/FMV, ~half-the-extra-width when stretching — so the world-
+    // window immediate with a runtime margin term psx_ws_x_margin() β€” 0 at
+    // 4:3/boot/menu/FMV, ~half-the-extra-width when stretching β€” so the world-
     // space draw cull tracks the aspect and one build serves both. Each site's
     // instruction type is verified; a mismatch is a loud build error in main-EXE
     // mode (a bad address would silently mis-emit otherwise). In OVERLAY mode the
     // same address holds different code across scene variants, so a mismatch is
-    // expected — apply the transform only where the bytes match, else fall
+    // expected β€” apply the transform only where the bytes match, else fall
     // through to the vanilla translation (see CodeGenConfig::overlay_mode).
     if (config_.ws_cull_bias_sites.count(addr)) {
         if (opcode == 0x08 || opcode == 0x09) {  // addi / addiu
@@ -1067,7 +1067,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                        "addi/addiu (opcode 0x{:02X})\n", addr, opcode);
             std::exit(1);
         }
-        // overlay variant: addr is different code here — fall through to vanilla.
+        // overlay variant: addr is different code here β€” fall through to vanilla.
     }
     if (config_.ws_cull_vxrange_sites.count(addr)) {
         if (opcode == 0x0B) {  // sltiu
@@ -1171,7 +1171,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                        "sltiu (opcode 0x{:02X})\n", addr, opcode);
             std::exit(1);
         }
-        // overlay variant: addr is different code here — fall through to vanilla.
+        // overlay variant: addr is different code here β€” fall through to vanilla.
     }
     if (config_.ws_cull_a1_sites.count(addr)) {
         if (instr == 0x00000000u) {  // must be a nop we can safely repurpose
@@ -1198,7 +1198,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                        "nop or move rD,a1 (0x{:08X})\n", addr, instr);
             std::exit(1);
         }
-        // overlay variant: addr is different code here — fall through to vanilla.
+        // overlay variant: addr is different code here β€” fall through to vanilla.
     }
     if (config_.ws_cull_screen_x_sites.count(addr)) {
         if (opcode == 0x0B) {  // sltiu rt,rs,imm
@@ -1218,10 +1218,10 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
     // auto_screen_x). ws_auto_cull_func_ is set when this function carries the
     // GTE screen-extent reject signature, so a per-vertex width compare here is
     // `sltiu rt, SX, 0x140` (or inclusive 0x141). Emit it widened by
-    // +2*psx_ws_x_margin() (0 at 4:3 ⇒ byte-identical; = the wide-surface extra
+    // +2*psx_ws_x_margin() (0 at 4:3 β‡’ byte-identical; = the wide-surface extra
     // when 16:9), so geometry out to the wide frame edge is submitted rather
     // than culled at the 320 boundary. Same shape as an explicit range_site but
-    // applied by signature — no per-address list. (Reached only when the addr is
+    // applied by signature β€” no per-address list. (Reached only when the addr is
     // not already an explicit cull site, which returns above.)
     if (ws_auto_cull_func_ && (opcode == 0x0B || opcode == 0x0A)) {  // sltiu / slti
         uint16_t uimm = get_imm16_u(instr);
@@ -1239,7 +1239,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                                    reg_name(rt), reg_name(rs), (int)uimm, comment);
             }
             // Signed min/max funnel: `slti v, minSX, W` is the RIGHT edge only
-            // (the paired left edge is the classified bltz — see
+            // (the paired left edge is the classified bltz β€” see
             // generate_branch_condition); widen by +margin.
             return fmt::format("{} = psx_ws_cull_slti({}, {});"
                                "  /* ws auto screen-x cull (right edge) */{}",
@@ -1277,7 +1277,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                        "slti (opcode 0x{:02X})\n", addr, opcode);
             std::exit(1);
         }
-        // overlay variant: addr is different code here — fall through to vanilla.
+        // overlay variant: addr is different code here β€” fall through to vanilla.
     }
     // Explicit horizontal low-edge widen for negate-form classifiers:
     // `subu rd, zero, rt` computes -bound; subtracting the horizontal margin
@@ -1315,13 +1315,13 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                        "sh (opcode 0x{:02X})\n", addr, opcode);
             std::exit(1);
         }
-        // overlay variant: addr is different code here — fall through to vanilla.
+        // overlay variant: addr is different code here β€” fall through to vanilla.
     }
 
     // Widescreen pure-2D background tile-loop widen ([widescreen.bg2d]). The
     // per-layer BG renderer draws `count` 16px tile columns from a start column /
     // start screen-x derived from the camera scroll. Rewrite those three values
-    // (via the gpu.c psx_ws_bg2d_* helpers — identity at 4:3 / 512 hi-res) so
+    // (via the gpu.c psx_ws_bg2d_* helpers β€” identity at 4:3 / 512 hi-res) so
     // the loop draws the 16:9 reveal columns on both sides. Each site's opcode is
     // verified; a mismatch is a loud build error (main-EXE addresses).
     if (config_.ws_bg2d_count_site && addr == config_.ws_bg2d_count_site) {
@@ -1432,7 +1432,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
     // The site is the boot-init sb/sh that writes a config global's DEFAULT value
     // (Tomba MESSAGE / SOUND / VIBRATION / ADJUST SCREEN). Route the stored value
     // through psx_game_option_store(addr, val): it returns a value persisted from a
-    // prior session for that address, else `val` unchanged — so the saved setting
+    // prior session for that address, else `val` unchanged β€” so the saved setting
     // overrides the default exactly once, at initialization, and a fresh install
     // (no saved file) is byte-identical. The in-OPTION write is a different
     // instruction (option overlay), untouched, so the player can still change it.
@@ -1484,7 +1484,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
             case 0x0D:                                          // break
                 {
                     uint32_t break_code = (instr >> 6) & 0xFFFFF;
-                    code = fmt::format("/* break({}) — trap, no-op in recompiler */", break_code);
+                    code = fmt::format("/* break({}) β€” trap, no-op in recompiler */", break_code);
                 }
                 break;
             case 0x10: code = translate_mfhi(instr); break;    // mfhi
@@ -1526,9 +1526,9 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                     uint32_t rt = get_rt(instr);
                     uint32_t rd = get_rd(instr);
                     if (cop_op == 0x00) { // MFC0 - move from COP0
-                        // MFC0 is a delayed load (Beetle: LDAbsorb=0, LDWhich=rt) — no
+                        // MFC0 is a delayed load (Beetle: LDAbsorb=0, LDWhich=rt) β€” no
                         // give-back cycles, but it sets ReadFudge=rt so a load in the next
-                        // slot gets no fudge. §1+DO_LDS ran in the block's psx_cyc_step.
+                        // slot gets no fudge. Β§1+DO_LDS ran in the block's psx_cyc_step.
                         code = fmt::format(
                             "{} = cpu->cop0[{}];"
                             "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    cpu->ld_absorb = 0u; cpu->ld_which_t = {}u;\n#endif"
@@ -1537,7 +1537,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                     } else if (cop_op == 0x04) { // MTC0 - move to COP0
                         code = fmt::format("cpu->cop0[{}] = {};  /* mtc0 */", rd, reg_name(rt));
                     } else if (cop_op == 0x10 && (instr & 0x3F) == 0x10) { // RFE
-                        // Restore interrupt enable bits: shift bits 5:2 → 3:0.
+                        // Restore interrupt enable bits: shift bits 5:2 β†’ 3:0.
                         // Fix B: arm the host exception-return escape if this RFE runs
                         // inside the synchronous exception handler (see psx_runtime.h).
                         code = "{ uint32_t sr = cpu->cop0[12]; "
@@ -1560,7 +1560,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                         "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_stall(cpu);\n#endif\n    ";
                     // MFC2/CFC2 (GPR-dest reads): stall to the GTE deadline AND hand the
                     // stall amount to the next instruction(s) as a load-delay give-back
-                    // (Beetle MFC2/CFC2: LDAbsorb=gte_ts_done-ts, LDWhich=rt). §1+DO_LDS
+                    // (Beetle MFC2/CFC2: LDAbsorb=gte_ts_done-ts, LDWhich=rt). Β§1+DO_LDS
                     // ran in the block's psx_cyc_step (COP2 is non-load).
                     const std::string gte_read = fmt::format(
                         "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_read(cpu, {});\n#endif\n    ", rt);
@@ -1611,8 +1611,8 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
             // Stores: stamp the EXACT executing store PC before the write so
             // wtrace/readtrace producer attribution is correct for game code.
             // (The BIOS emitter does the same in strict_translator.cpp; the game
-            // emitter previously left g_debug_last_store_pc holding a STALE pc —
-            // the last BIOS store — which mis-attributed game writes to BIOS.)
+            // emitter previously left g_debug_last_store_pc holding a STALE pc β€”
+            // the last BIOS store β€” which mis-attributed game writes to BIOS.)
             case 0x28: code = fmt::format("g_debug_last_store_pc = 0x{:08X}u; ", addr) + translate_sb(instr); break;     // sb
             case 0x29: code = fmt::format("g_debug_last_store_pc = 0x{:08X}u; ", addr) + translate_sh(instr); break;     // sh
             case 0x2A: code = fmt::format("g_debug_last_store_pc = 0x{:08X}u; ", addr) + translate_swl(instr); break;    // swl
@@ -1629,10 +1629,10 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                     // Faithful GTE: COP2 reg write stalls to the command deadline.
                     const char* gte_stall =
                         "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_stall(cpu);\n#endif\n    ";
-                    // LWC2 load timing: §1+DO_LDS via the block's psx_cyc_step(cpu,0)
+                    // LWC2 load timing: Β§1+DO_LDS via the block's psx_cyc_step(cpu,0)
                     // (op 0x32 is non-load), the GTE deadline stall via psx_gte_stall,
                     // then psx_cyc_lwc2_read does the ReadMemory timing (completion +1,
-                    // no LDWhich arm — the dest is a GTE register).
+                    // no LDWhich arm β€” the dest is a GTE register).
                     std::string addr = (offset == 0)
                         ? reg_name(rs)
                         : fmt::format("{} + {}", reg_name(rs), offset);
@@ -1704,7 +1704,7 @@ std::string CodeGenerator::translate_basic_block(
     // Block label
     ss << fmt::format("block_{:08X}:\n", block.start_addr);
 
-    // Per-block-leader cycle observe (cyc_watch ruler — universal with the BIOS
+    // Per-block-leader cycle observe (cyc_watch ruler β€” universal with the BIOS
     // emitter). Sampled at the block leader BEFORE any cycle is charged, matching
     // Beetle's before-instruction sample and the cycle_compare.py anchor
     // semantics, so ANY block-leader PC is anchorable on both backends (not just
@@ -1713,6 +1713,19 @@ std::string CodeGenerator::translate_basic_block(
     ss << config_.indent
        << fmt::format("debug_server_cyc_observe(0x{:08X}u);\n", block.start_addr);
     ss << "#endif\n";
+    if (config_.mouse_camera_facing_site == block.start_addr) {
+        const auto word = exe_.read_word(block.start_addr);
+        if (!word || *word != config_.mouse_camera_facing_expected) {
+            throw std::runtime_error(fmt::format(
+                "[controller.mouse_camera] facing site 0x{:08X} expected "
+                "0x{:08X}, found {}",
+                block.start_addr, config_.mouse_camera_facing_expected,
+                word ? fmt::format("0x{:08X}", *word) : "no executable word"));
+        }
+        ss << config_.indent
+           << fmt::format("psx_mouse_camera_hook(cpu, 0x{:08X}u);\n",
+                          block.start_addr);
+    }
     // First-divergence co-sim oracle (COSIM_ORACLE.md): lean per-block-leader hook,
     // present only in the clean PSX_COSIM build (independent of the debug tools).
     ss << "#ifdef PSX_COSIM\n";
@@ -1721,11 +1734,11 @@ std::string CodeGenerator::translate_basic_block(
     ss << "#endif\n";
 
     // Cycle-budgeted precise event slicing (PRECISE_IRQ_SLICE.md). At the block
-    // leader — before any cycle is charged or the body runs — divert to the
+    // leader β€” before any cycle is charged or the body runs β€” divert to the
     // per-instruction interpreter when an interrupt could be taken inside this
     // block, so the IRQ lands at its exact architectural instruction instead of
     // the coarse block edge. psx_slice_block returns nonzero iff it sliced (it
-    // interpreted the block — and possibly more — and left cpu->pc at a
+    // interpreted the block β€” and possibly more β€” and left cpu->pc at a
     // dispatchable resume point), in which case this function returns so its
     // compiled body does not re-execute the same instructions.
     // side_effects=1 marks blocks that change interrupt visibility on the CPU
@@ -1738,7 +1751,7 @@ std::string CodeGenerator::translate_basic_block(
     // instruction_count. But when the delay slot is a SEPARATE block leader (a
     // branch target, or a split-function edge) the branch sits AT end_addr and the
     // delay slot at end_addr+4 is outside [start,end]; instruction_count then
-    // EXCLUDES it, yet the clone still executes — so the block undercharges by one
+    // EXCLUDES it, yet the clone still executes β€” so the block undercharges by one
     // cycle vs the per-instruction interpreter on BOTH paths. (This is the measured
     // -8 drift in the Tomba 2 logo init subtree: ~8 such sites on the boot path,
     // native runs behind interp, the elapsed-Timer1 logo-delay loop exits early.)
@@ -1793,10 +1806,10 @@ std::string CodeGenerator::translate_basic_block(
     }
 
     const bool cycle_per_insn = codegen_cycle_per_insn();
-    // Per-instruction R3000A load-delay interlock (cycle_per_insn mode): §1 base +
-    // GPR_DEPRES + DO_LDS, emitted BEFORE the instruction body so §1 precedes any
+    // Per-instruction R3000A load-delay interlock (cycle_per_insn mode): Β§1 base +
+    // GPR_DEPRES + DO_LDS, emitted BEFORE the instruction body so Β§1 precedes any
     // muldiv/GTE deadline stall the body applies (Beetle order). CPU loads (op
-    // 0x20-0x26) are SKIPPED here — psx_cyc_load_* runs their full interlock inside
+    // 0x20-0x26) are SKIPPED here β€” psx_cyc_load_* runs their full interlock inside
     // the body (and arms LDWhich=rt). The dep/res mask is a gen-time literal. This
     // replaces the old flat per-instruction psx_advance_cycles(1u).
     auto emit_pre_timing = [&](uint32_t in, const std::string& indent) {
@@ -1808,7 +1821,7 @@ std::string CodeGenerator::translate_basic_block(
         ss << "#endif\n";
     };
     // I-cache FETCH cost (faithful R3000A), emitted BEFORE the per-instruction
-    // interlock/load — exactly like Beetle ReadInstruction precedes the base, and so a
+    // interlock/load β€” exactly like Beetle ReadInstruction precedes the base, and so a
     // fetch MISS clears any pending load give-back before the next load arms one. Only
     // emitted at cache-line LEADERS: a block leader / mid-block jump-table target (any
     // address reachable other than by fall-through, i.e. a possibly-cold cache entry) OR
@@ -1994,7 +2007,6 @@ std::string CodeGenerator::translate_basic_block(
     };
     uint32_t zero_run_end = 0u;
     uint32_t zero_run_scanned_end = 0u;
-
     while (addr <= block.end_addr) {
         auto instr_opt = exe_.read_word(addr);
         if (!instr_opt.has_value()) {
@@ -2017,7 +2029,7 @@ std::string CodeGenerator::translate_basic_block(
             ss << fmt::format("block_{:08X}:;\n", addr);
         }
 
-        // Instruction-level annotation (skipped at function start — already shown above signature)
+        // Instruction-level annotation (skipped at function start β€” already shown above signature)
         if (annotations_ && addr != cfg.function_start) {
             const std::string& inote = annotations_->lookup(addr);
             if (!inote.empty())
@@ -2120,7 +2132,7 @@ std::string CodeGenerator::translate_basic_block(
                      * into a function body; aborting the WHOLE regen here (the
                      * old throw) broke "every title regenerates at tip" over one
                      * bogus word, and emitting the word as a real branch would
-                     * be unfaithful. Emit the architectural RI raise inline —
+                     * be unfaithful. Emit the architectural RI raise inline β€”
                      * ABI-neutral: the dispatch trampoline (and the CPS exit
                      * contract in overlay mode) re-dispatches cpu->pc after the
                      * return, exactly like any other guest control transfer. If
@@ -2129,7 +2141,7 @@ std::string CodeGenerator::translate_basic_block(
                      * exception hardware would deliver. */
                     if (should_print_reserved_opcode_warning(addr)) {
                         fmt::print("  WARNING: reserved opcode 0x{:08X} at 0x{:08X} "
-                                   "— emitting guest RI exception raise\n",
+                                   "β€” emitting guest RI exception raise\n",
                                    block.exit_instr.instruction, addr);
                     }
                     ss << config_.indent
@@ -2148,9 +2160,9 @@ std::string CodeGenerator::translate_basic_block(
                     break;  /* block ends at the raise; nothing after is reachable */
                 }
 
-                // Per-instruction interlock ORDER (Beetle): the branch's §1+deps+DO_LDS
+                // Per-instruction interlock ORDER (Beetle): the branch's Β§1+deps+DO_LDS
                 // runs at the branch PC, THEN the delay slot's at PC+4. Emit the branch
-                // step FIRST (it is pure timing — does not touch GPR values, so it is
+                // step FIRST (it is pure timing β€” does not touch GPR values, so it is
                 // safe before the branch-condition capture below).
                 if (cycle_per_insn)
                     emit_pre_icache(exit_branch_addr, config_.indent);
@@ -2235,7 +2247,7 @@ std::string CodeGenerator::translate_basic_block(
                                                   delay_saved_cond, cond);
                             }
                             ss << config_.indent << "/* delay slot (always executes) */\n";
-                            // Delay slot's own fetch + §1+deps+DO_LDS, before its body (skipped if a load).
+                            // Delay slot's own fetch + Β§1+deps+DO_LDS, before its body (skipped if a load).
                             if (cycle_per_insn) emit_pre_icache(delay_slot_addr, config_.indent);
                             if (cycle_per_insn) emit_pre_timing(delay_instr, config_.indent);
                             ss << translate_instruction(delay_slot_addr, delay_instr) << "\n";
@@ -2316,7 +2328,7 @@ std::string CodeGenerator::translate_basic_block(
                         ss << config_.indent
                            << fmt::format("goto block_{:08X};  /* j */\n", block.successors[0]);
                     } else if (cps_enabled_ && block.exit_instr.target != 0) {
-                        // CPS: out-of-function jump target — tail-transfer (the
+                        // CPS: out-of-function jump target β€” tail-transfer (the
                         // flat trampoline dispatches the split piece / mid-func).
                         ss << emit_interrupt_check(block.exit_instr.target, config_.indent);
                         ss << config_.indent
@@ -2330,7 +2342,7 @@ std::string CodeGenerator::translate_basic_block(
                            << fmt::format("func_{:08X}(cpu); return;  /* j to split piece */\n",
                                           block.exit_instr.target);
                     } else if (block.exit_instr.target != 0) {
-                        // Jump target is a mid-function address — dispatch dynamically
+                        // Jump target is a mid-function address β€” dispatch dynamically
                         ss << emit_interrupt_check(block.exit_instr.target, config_.indent);
                         ss << config_.indent
                            << fmt::format("call_by_address(cpu, 0x{:08X}u); return;  /* j to split (mid-func) */\n",
@@ -2343,7 +2355,7 @@ std::string CodeGenerator::translate_basic_block(
                      * non-$sp source anywhere in this function (e.g. RestoreState
                      * loads $ra from a save buffer via $a0), the jr $ra must set
                      * cpu->pc so the dispatch loop tail-calls to the restored
-                     * address — the C `return` alone would go back to the wrong
+                     * address β€” the C `return` alone would go back to the wrong
                      * caller.  Normal functions that save/restore $ra on the $sp
                      * stack get the plain `return;`. */
                     bool ra_loaded_from_non_sp = false;
@@ -2356,7 +2368,7 @@ std::string CodeGenerator::translate_basic_block(
                             uint32_t i_rt = (w >> 16) & 0x1F;
                             uint32_t i_rs = (w >> 21) & 0x1F;
                             if (i_op == 0x23 && i_rt == 31 && i_rs == 4) {
-                                /* lw $ra, offset($a0) — RestoreState/longjmp pattern */
+                                /* lw $ra, offset($a0) β€” RestoreState/longjmp pattern */
                                 ra_loaded_from_non_sp = true;
                                 break;
                             }
@@ -2377,7 +2389,7 @@ std::string CodeGenerator::translate_basic_block(
                         ss << emit_interrupt_check_expr(delay_saved_target, config_.indent);
                         ss << config_.indent
                            << "cpu->pc = " << delay_saved_target << "; psx_restore_state_escape(); return;"
-                           << "  /* jr $ra — longjmp-return (ra loaded from non-sp) */\n";
+                           << "  /* jr $ra β€” longjmp-return (ra loaded from non-sp) */\n";
                     } else if (cps_enabled_) {
                         // CPS: publish $ra so the flat trampoline dispatches the
                         // caller's continuation (no host C-return to nest).
@@ -2389,7 +2401,7 @@ std::string CodeGenerator::translate_basic_block(
                         ss << config_.indent << "return;  /* jr $ra */\n";
                     }
                 } else if (block.exit_instr.type == ControlFlowType::JumpRegister) {
-                    // jr $rs — may be: BIOS call (jr $t2, t2=0xA0/0xB0/0xC0)
+                    // jr $rs β€” may be: BIOS call (jr $t2, t2=0xA0/0xB0/0xC0)
                     //                  or: jump table (jr $v0, v0 loaded from LW+ADDU+LUI)
                     uint32_t jr_rs = get_rs(block.exit_instr.instruction);
 
@@ -2444,7 +2456,7 @@ std::string CodeGenerator::translate_basic_block(
                                 ss << config_.indent << "    default:\n";
                                 ss << emit_interrupt_check_expr(delay_saved_target, config_.indent + "        ");
                                 ss << config_.indent << "        cpu->pc = " << delay_saved_target
-                                   << "; return;  /* CPS: jr table miss — tail-transfer */\n";
+                                   << "; return;  /* CPS: jr table miss β€” tail-transfer */\n";
                             } else {
                                 ss << config_.indent << "    default:\n";
                                 ss << emit_interrupt_check_expr(delay_saved_target, config_.indent + "        ");
@@ -2456,7 +2468,7 @@ std::string CodeGenerator::translate_basic_block(
                     }
                     if (!emitted_switch) {
                         if (cps_enabled_) {
-                            // CPS: indirect jump / BIOS-call gate — tail-transfer
+                            // CPS: indirect jump / BIOS-call gate β€” tail-transfer
                             // to the target (the flat trampoline dispatches it).
                             ss << emit_interrupt_check_expr(delay_saved_target, config_.indent);
                             ss << config_.indent << fmt::format("cpu->pc = {}; return;  /* CPS: jr {} */\n",
@@ -2480,7 +2492,7 @@ std::string CodeGenerator::translate_basic_block(
                         // function's entry-switch. No host nesting.
                         // Only register a LOCAL switch case when the return PC
                         // lives in this piece (has a block label). When the
-                        // delay/return was split out, successors is empty — the
+                        // delay/return was split out, successors is empty β€” the
                         // mid-function pre-pass promotes addr+8 to its own
                         // dispatch entry (do not emit goto block_<foreign>).
                         if (!block.successors.empty()) {
@@ -2527,7 +2539,7 @@ std::string CodeGenerator::translate_basic_block(
                     }
                     }
                 } else if (block.exit_instr.type == ControlFlowType::JumpLinkReg) {
-                    // Register indirect call (jalr $rs, $rd) — call function at rs, return to rd
+                    // Register indirect call (jalr $rs, $rd) β€” call function at rs, return to rd
                     uint32_t rs = get_rs(block.exit_instr.instruction);
                     uint32_t cont_addr = block.exit_instr.address + 8;
 
@@ -2543,7 +2555,7 @@ std::string CodeGenerator::translate_basic_block(
                            << "; return;  /* CPS jalr */\n";
                     } else {
                     // Dispatch the pre-delay latched indirect target.
-                    // Dispatch indirect call — target is a runtime register value
+                    // Dispatch indirect call β€” target is a runtime register value
                     ss << emit_interrupt_check_expr(delay_saved_target, config_.indent);
                     ss << config_.indent << fmt::format("call_by_address(cpu, {});  /* jalr {} */\n",
                                                         delay_saved_target, reg_name(rs));
@@ -2602,7 +2614,7 @@ std::string CodeGenerator::translate_basic_block(
             // Unit-edge fall-through with no known successor function (e.g. a
             // partial overlay capture). Falling off the body would leave
             // cpu->pc == 0 (the continuation-entry prologue cleared it), which
-            // the trampoline reads as a normal guest exit — a silent shutdown.
+            // the trampoline reads as a normal guest exit β€” a silent shutdown.
             // Publish the PC so dispatch can route it instead.
             ss << emit_interrupt_check(next_addr, config_.indent);
             ss << config_.indent
@@ -2736,7 +2748,7 @@ GeneratedFunction CodeGenerator::generate_function(
     std::map<uint32_t, std::vector<uint32_t>> jr_table_edges;
     scan_jr_tables(cfg, jr_table_edges);
 
-    // CPS (§25): collect this function's continuations (call return points) as
+    // CPS (Β§25): collect this function's continuations (call return points) as
     // blocks are translated, so the entry-switch below can route a dispatched
     // continuation address into the right block.
     cps_cur_continuations_.clear();
@@ -2749,7 +2761,7 @@ GeneratedFunction CodeGenerator::generate_function(
         blocks_ss << "\n" << translate_basic_block(block, cfg);
     }
 
-    // FAITHFUL RE-ENTRY — every basic-block leader is a dispatchable continuation
+    // FAITHFUL RE-ENTRY β€” every basic-block leader is a dispatchable continuation
     // (MMX6 boot-wedge class B, resume PC 0x8005B07C). psx_check_interrupts_at is
     // emitted at EVERY block leader, so ANY leader can be published as an async-RFE
     // / interp-handoff interrupt-resume PC. The compiled top-level trampoline can
@@ -2796,7 +2808,7 @@ GeneratedFunction CodeGenerator::generate_function(
     // Overlay mode must emit the cpu->pc guard even when the continuation set
     // is EMPTY: a range re-entry can still request an interior PC of a
     // single-block function, and without the guard the body runs from its top
-    // regardless of the requested PC — the same corrupting-fall-through this
+    // regardless of the requested PC β€” the same corrupting-fall-through this
     // switch's fail-closed default exists to prevent.
     if (cps_enabled_ && (!cps_cur_continuations_.empty() || config_.overlay_mode)) {
         std::set<uint32_t> seen;
@@ -2906,7 +2918,7 @@ GeneratedFunction CodeGenerator::generate_function(
     //      OR it ends with a branch/jump whose targets are all outside this function
     //      (indicating a split-function where the branch targets are in the next piece)
     // Functions that have dead code after a jr $ra (e.g., padding) must NOT get a
-    // fallthrough call — condition 1 guards against that.
+    // fallthrough call β€” condition 1 guards against that.
     if (!fallthrough_name.empty() && !cfg.block_order.empty()) {
         const BasicBlock& last_block = cfg.blocks.at(cfg.block_order.back());
         bool needs_fallthrough = false;
@@ -2916,7 +2928,7 @@ GeneratedFunction CodeGenerator::generate_function(
         } else if ((last_block.exit_instr.type == ControlFlowType::Branch ||
                     last_block.exit_instr.type == ControlFlowType::Jump) &&
                    last_block.successors.empty()) {
-            // Branch/jump with no in-function successors — likely a split-function bug.
+            // Branch/jump with no in-function successors β€” likely a split-function bug.
             // All targets are in the next function piece. Emit fallthrough as a safety net.
             fmt::print("  WARNING: func_{:08X} has out-of-function {} at block_{:08X}, "
                        "emitting fallthrough to {}\n",
@@ -3034,14 +3046,14 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
     std::map<uint32_t, std::vector<uint32_t>> jr_table_edges;
     scan_jr_tables(cfg, jr_table_edges);
 
-    // CPS (§25): collect this alias group's continuations during block
+    // CPS (Β§25): collect this alias group's continuations during block
     // translation (also prevents a stale list from leaking into the next
     // generate_function call).
     cps_cur_continuations_.clear();
 
     // Union of blocks reachable from any alias entry. Edges are
     // BasicBlock::successors plus jump-table targets (mapped to their
-    // containing block — table targets may be mid-block labels).
+    // containing block β€” table targets may be mid-block labels).
     auto containing_block = [&](uint32_t a) -> uint32_t {
         auto it = cfg.blocks.upper_bound(a);
         if (it == cfg.blocks.begin()) return 0;
@@ -3081,7 +3093,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
         blocks_buf << "\n" << translate_basic_block(block, cfg);
     }
 
-    // FAITHFUL RE-ENTRY — every live block leader is a dispatchable continuation
+    // FAITHFUL RE-ENTRY β€” every live block leader is a dispatchable continuation
     // (see generate_function for the full rationale: psx_check_interrupts_at is at
     // every leader, so any leader can be an async-RFE/interp-handoff resume PC and
     // must be re-enterable, not just CPS jal-returns). Alias-set blocks live behind
@@ -3105,8 +3117,8 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
     body << fmt::format("void psx_alias_body_{:08X}(CPUState* cpu, uint32_t entry)\n{{\n",
                         host);
     alias_body_decls_.push_back(fmt::format("void psx_alias_body_{:08X}(CPUState* cpu, uint32_t entry)", host));
-    // CPS (§25): a dispatched continuation (callee published cpu->pc = $ra) is
-    // routed into its block here, BEFORE the entry switch — cpu->pc overrides
+    // CPS (Β§25): a dispatched continuation (callee published cpu->pc = $ra) is
+    // routed into its block here, BEFORE the entry switch β€” cpu->pc overrides
     // the `entry` arg. The dispatch routes a continuation by calling the first
     // alias wrapper with cpu->pc set (entry is then ignored). Owner =
     // aliases[0]->start_addr.
@@ -3124,7 +3136,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
         if (config_.overlay_mode) {
             // Alias entry PCs are excluded from cps_cur_continuations_ (they
             // dispatch as function entries with cpu->pc == 0), but a RANGE
-            // re-entry can still request one with cpu->pc set — route it to
+            // re-entry can still request one with cpu->pc set β€” route it to
             // its block, exactly as the entry switch below would.
             for (const Function* a : aliases) {
                 if (!seen.insert(a->start_addr).second) continue;
@@ -3135,8 +3147,8 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
             // FAIL CLOSED on any other interior PC (same contract as
             // generate_function's overlay entry switch, PR #46). The old
             // `default: break` fell through to `switch (entry)` and ran the
-            // ALIAS'S OWN block for a PC it does not own — the Tomba 2
-            // splash→title reload death: dispatch(0x80089788) resolved to the
+            // ALIAS'S OWN block for a PC it does not own β€” the Tomba 2
+            // splashβ†’title reload death: dispatch(0x80089788) resolved to the
             // alias func_80089770, which re-ran the crt0 shim tail (reload
             // $ra, call main-init) in an infinite loop, leaking 0x40 of guest
             // stack per iteration until the frames overwrote the freshly
@@ -3235,7 +3247,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_all_functions(
     std::vector<GeneratedFunction> results;
     results.reserve(functions.size());
 
-    // CPS (§25): rebuild the continuation->owner map for this full pass so the
+    // CPS (Β§25): rebuild the continuation->owner map for this full pass so the
     // game dispatch table (psx_dispatch_game_compiled) reflects exactly the
     // functions emitted here (the final generate_file pass is authoritative).
     cps_continuation_owner_.clear();
@@ -3317,7 +3329,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_all_functions(
         // untranslatable (TODO-opcode) words is a data region that discovery's
         // primary-opcode-only validity check let slip through as code (valid
         // primary opcode, garbage sub-field). Re-emit it as the same compact,
-        // fail-closed data stub used for is_data_section — if it is ever
+        // fail-closed data stub used for is_data_section β€” if it is ever
         // dispatched (it should not be: real reachable code never hits a TODO)
         // psx_unknown_dispatch fatals LOUDLY rather than silently no-op'ing.
         // This is strictly more faithful than the baseline it replaces (which
@@ -3356,8 +3368,8 @@ std::vector<GeneratedFunction> CodeGenerator::generate_all_functions(
         results.push_back(gen_func);
     }
 
-    fmt::print("✓ Generated {} functions\n", results.size());
-    fmt::print("✓ Total C code: {} lines\n\n", total_lines);
+    fmt::print("β“ Generated {} functions\n", results.size());
+    fmt::print("β“ Total C code: {} lines\n\n", total_lines);
 
     return results;
 }
@@ -3379,6 +3391,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern void psx_datashard_ret(CPUState* cpu);                  /* data-shard capture finalize */\n";
     ss << "extern int  psx_vsync_query_hle_enter(CPUState* cpu, uint32_t func, uint32_t counter_addr, uint32_t gpustat_ptr_addr, uint32_t timer1_ptr_addr, uint32_t timer1_cache_addr);  /* load_accel.c */\n";
     ss << "extern void psx_ws_sprite_tag(CPUState* cpu);  /* widescreen prim tag (gpu.c) */\n";
+    ss << "extern void psx_mouse_camera_hook(CPUState* cpu, uint32_t site);  /* guarded direct relative-mouse semantic hook */\n";
     ss << "extern void psx_ws_mmx6_bg_stage_init(void);    /* ws 2D stage reveal invalidation (gpu.c) */\n";
     ss << "extern int  psx_ws_x_margin(void);  /* widescreen cull-margin term (gpu.c) */\n";
     ss << "extern int32_t psx_ws_player_x_bound(int32_t vanilla);  /* typed gameplay X bound */\n";
@@ -3406,7 +3419,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int  psx_game_option_store(uint32_t addr, int val);  /* persisted OPTION restore-at-init (game_options.c) */\n";
     ss << "extern uint32_t psx_ws_backdrop_value(uint32_t orig, int is_end, int window_cols);  /* ws backdrop preload (gpu.c) */\n";
     ss << "extern void gte_ws_set_suppress(int on);  /* widescreen far-backdrop un-squash (gte.cpp) */\n";
-    ss << "extern uint32_t g_debug_last_store_pc;  /* exact PC of the executing SW/SH/SB — wtrace/readtrace producer attribution (debug_server.c) */\n\n";
+    ss << "extern uint32_t g_debug_last_store_pc;  /* exact PC of the executing SW/SH/SB β€” wtrace/readtrace producer attribution (debug_server.c) */\n\n";
 }
 
 void CodeGenerator::emit_unaligned_helpers(std::ostream& ss, bool as_inline) const {
@@ -3547,7 +3560,7 @@ std::string CodeGenerator::generate_file(
     //
     // Overlay exact mode disables this: overlay branch targets are basic-block
     // labels, not callable function entries, so splitting them into standalone
-    // functions produces broken dispatch — the mid-function-seed failure mode.
+    // functions produces broken dispatch β€” the mid-function-seed failure mode.
     if (config_.split_mid_function_targets) {
         std::set<uint32_t> cfgs_to_scan;  // Which CFGs to scan (empty = all)
         uint32_t exe_start = exe_.header.load_address;
@@ -3555,7 +3568,7 @@ std::string CodeGenerator::generate_file(
         // mint a function whose first instruction has no successor word.
         uint32_t exe_end = exe_.analysis_end_address();
         int total_new = 0;
-        // Safety cap only — the loop must run to convergence. Unconverged
+        // Safety cap only β€” the loop must run to convergence. Unconverged
         // targets emit `call_by_address(mid-func); return;` which misses the
         // dispatch table at runtime. 16 proved too low once data-scan
         // promotions and alias entries widened the function set.
@@ -3587,7 +3600,7 @@ std::string CodeGenerator::generate_file(
                         // CPS jal/jalr publishes $ra = addr+8. When the delay slot
                         // was split into another piece, that return PC is often a
                         // mid-block address (not a function start / block leader) and
-                        // was never registered — MotK 0x8001E7F0 fell to dirty_ram.
+                        // was never registered β€” MotK 0x8001E7F0 fell to dirty_ram.
                         check_target(block.exit_instr.address + 8);
                     }
                 }
@@ -3609,7 +3622,7 @@ std::string CodeGenerator::generate_file(
             // Sort functions for binary search. Alias entries overlap their
             // host's range and must never be treated as the containing
             // function of a mid-target (that would split/truncate the alias
-            // instead of the host) — exclude them from containment.
+            // instead of the host) β€” exclude them from containment.
             std::sort(functions_mut.begin(), functions_mut.end(),
                 [](const Function& a, const Function& b) { return a.start_addr < b.start_addr; });
             std::vector<uint32_t> func_starts;
@@ -3802,7 +3815,7 @@ std::string CodeGenerator::generate_ranges_manifest(
             /* A validity range may never claim a byte the shard never saw.
              * The candidate CRC and the page-generation watch are computed
              * over these ranges, so a range past the image end would validate
-             * the shard against bytes that were not part of its input — the
+             * the shard against bytes that were not part of its input β€” the
              * cache would then "confirm" garbage.
              *
              * Two ways the +4 above can overrun, both real:

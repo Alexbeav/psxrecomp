@@ -568,6 +568,19 @@ if(BUILD_TESTING)
         ../runtime/src/guest_tty.c)
     target_include_directories(guest_tty_test PRIVATE ../runtime/include)
     add_test(NAME guest_tty_test COMMAND guest_tty_test)
+    add_executable(mouse_pad_adapter_test
+        ../runtime/tests/test_mouse_pad_adapter.c
+        ../runtime/src/mouse_pad_adapter.c
+    )
+    target_include_directories(mouse_pad_adapter_test PRIVATE ../runtime/include)
+    add_test(NAME mouse_pad_adapter_test COMMAND mouse_pad_adapter_test)
+
+    add_executable(pad_timeline_test
+        ../runtime/tests/test_pad_timeline.cpp
+        ../runtime/src/pad_timeline.cpp
+    )
+    target_include_directories(pad_timeline_test PRIVATE ../runtime/include)
+    add_test(NAME pad_timeline_test COMMAND pad_timeline_test)
 
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
@@ -1026,7 +1039,19 @@ if(BUILD_TESTING)
                 vk_mailbox_policy
                 vk_present_timing
                 vk_present_wait_stage
-                vk_staging_cache)
+                vk_staging_cache
+                crash_overlay_ring_guards
+                cdrom_seek_retarget
+                debug_input_schedule
+                gl_depth24_coherency
+                host_input_focus_guards
+                overlay_capture_legacy_history
+                overlay_dump_bounds
+                overlay_resident_patch_promotion
+                pad_timeline_final_sample
+                sf2_mission1_route_schedule
+                sf2_disc1_validation_monitor
+                sf2_pass2_candidate)
             add_test(
                 NAME ${_t}
                 COMMAND ${Python3_EXECUTABLE}
@@ -1195,3 +1220,4 @@ psxrecomp_check_all_tests_registered()
 # case-insensitive filesystem. See the module header for the shipped-bug story.
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_target_name_collisions.cmake)
 psxrecomp_check_output_name_collisions()
+

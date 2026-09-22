@@ -1,6 +1,6 @@
-/* gpu_gl_renderer.c — hardware OpenGL renderer backend.
+/* gpu_gl_renderer.c ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β hardware OpenGL renderer backend.
  *
- * ARCHITECTURE (v2 — GPU-authoritative VRAM)
+ * ARCHITECTURE (v2 ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β GPU-authoritative VRAM)
  * -------------------------------------------
  * The FBO color texture (`s_hr_tex`, RGBA8, 1024*S x 512*S where S is the
  * internal-resolution scale from [video] supersampling) is the single
@@ -44,14 +44,14 @@
  * into the CPU VRAM array (raw 1555, no conversion loop).
  *
  * PRESENT is deterministic: 15-bit frames always blit the display region
- * from the hr FBO into a 4:3 letterboxed rect (single path — no more
+ * from the hr FBO into a 4:3 letterboxed rect (single path ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β no more
  * frame-to-frame alternation between FBO and CPU presents). 24-bit (FMV)
  * frames sync to CPU and use the quad-present path, also letterboxed.
  * PSX_GL_FORCE_CPU_PRESENT=1 (read by main.cpp) forces the CPU path as a
  * diagnostic.
  *
  * Known divergences from the software rasterizer (accepted, documented):
- *   - GL triangle/line coverage rules differ from the PS1 DDA by ±1px on
+ *   - GL triangle/line coverage rules differ from the PS1 DDA by Ξβ€™Ξ’Β±1px on
  *     edges; lines use GL_LINES (width S) instead of Bresenham.
  *   - No dithering (the software path doesn't dither either).
  *   - Gouraud interpolation happens at 8-bit precision instead of 5-bit
@@ -60,7 +60,7 @@
  *     into wrapped segments. Wrapping copies/draws are unused by real SDKs.
  *
  * Init is all-or-nothing: if any shader/FBO fails, gl_renderer_init_context
- * returns 0 and the runtime falls back to the pure software renderer — no
+ * returns 0 and the runtime falls back to the pure software renderer ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β no
  * half-GL hybrid. */
 
 #include "gpu.h"
@@ -88,7 +88,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "png_write.h"   /* png_write_rgb — present_shot readback */
+#include "png_write.h"   /* png_write_rgb ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β present_shot readback */
 
 #ifndef GL_BGRA
 #define GL_BGRA 0x80E1
@@ -175,7 +175,7 @@ typedef void   (APIENTRY *PFN_glDeleteRenderbuffers)(GLsizei, const GLuint *);
 typedef void   (APIENTRY *PFN_glBindRenderbuffer)(GLenum, GLuint);
 typedef void   (APIENTRY *PFN_glRenderbufferStorage)(GLenum, GLenum, GLsizei, GLsizei);
 typedef void   (APIENTRY *PFN_glFramebufferRenderbuffer)(GLenum, GLenum, GLenum, GLuint);
-/* GPU timer queries (ARB_timer_query / core GL 3.3) — frame_perf instrumentation. */
+/* GPU timer queries (ARB_timer_query / core GL 3.3) ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β frame_perf instrumentation. */
 typedef void   (APIENTRY *PFN_glGenQueries)(GLsizei, GLuint *);
 typedef void   (APIENTRY *PFN_glDeleteQueries)(GLsizei, const GLuint *);
 typedef void   (APIENTRY *PFN_glBeginQuery)(GLenum, GLuint);
@@ -240,15 +240,15 @@ static PFN_glEndQuery            p_glEndQuery;
 static PFN_glGetQueryObjectui64v p_glGetQueryObjectui64v;
 static PFN_glGetQueryObjectiv    p_glGetQueryObjectiv;
 static PFN_glQueryCounter        p_glQueryCounter;
-static void gl_perf_init(void);   /* frame_perf — defined below, called from init_gpu_raster */
+static void gl_perf_init(void);   /* frame_perf ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β defined below, called from init_gpu_raster */
 static void gl_perf_mirror_begin(void); /* frame_perf: GPU-time bracket around ONE native-wide */
 static void gl_perf_mirror_end(void);   /* mirror pass (timestamp pair; splits scene canonical/mirror) */
 /* Native-wide mirror ABLATION (perf attribution, debug cmd gl_ws_ablate):
  * 0 = normal, 1 = skip the whole mirror pass, 2 = full mirror state churn but no
  * draw calls, 3 = mirror draws land in the hr FBO (no per-pass FBO rebind; wide
- * margins go stale + hr gets garbage — perf probe only). */
+ * margins go stale + hr gets garbage ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β perf probe only). */
 static int s_ws_ablate = 0;
-static void flush_tex_batch(void); /* textured-prim batch — defined below, flushed from coherency points */
+static void flush_tex_batch(void); /* textured-prim batch ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β defined below, flushed from coherency points */
 static void flush_flat_batch(void); /* flat/gouraud GEO batch (MotK starfield 0x68 dots) */
 static PFN_glGenRenderbuffers  p_glGenRenderbuffers;
 static PFN_glDeleteRenderbuffers p_glDeleteRenderbuffers;
@@ -289,7 +289,7 @@ static int load_modern_gl(void) {
     LOAD(p_glBindRenderbuffer, "glBindRenderbuffer");
     LOAD(p_glRenderbufferStorage, "glRenderbufferStorage");
     LOAD(p_glFramebufferRenderbuffer, "glFramebufferRenderbuffer");
-    /* GPU timer queries — optional (frame_perf). Don't fail the renderer if
+    /* GPU timer queries ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β optional (frame_perf). Don't fail the renderer if
      * absent; gl_perf just stays disabled. */
     p_glGenQueries          = (void *)SDL_GL_GetProcAddress("glGenQueries");
     p_glDeleteQueries       = (void *)SDL_GL_GetProcAddress("glDeleteQueries");
@@ -309,7 +309,7 @@ static uint16_t     *s_vram = NULL;       /* CPU VRAM array (gpu.c's storage) */
 static int           s_swap_interval = 1; /* SDL_GL swap interval (vsync mode) */
 
 static int           s_scale = 1;          /* internal-res scale (hr FBO) */
-/* Netplay: SW@1× + GPU@s_scale dual write; CPU VRAM always authoritative. */
+/* Netplay: SW@1Ξβ€Ξ²β‚¬β€ + GPU@s_scale dual write; CPU VRAM always authoritative. */
 static int           s_cpu_auth_dual = 0;
 static int           s_req_scale = 1;      /* requested before context init */
 
@@ -378,10 +378,10 @@ static GLuint s_geo_prog = 0, s_geo_vao = 0, s_geo_vbo = 0;
 static GLuint s_tex_prog = 0, s_tex_vao = 0, s_tex_vbo = 0;
 /* Textured vertex: pos(2) uv(2) col(4) tpage(2) clut(2) depth(1) raw(1) limits(4)
  * semi(1) q(1)
- * — per-prim texture state in flat attributes so prims batch (see flush_tex_batch).
+ * ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β per-prim texture state in flat attributes so prims batch (see flush_tex_batch).
  * q is the perspective weight ([video] perspective_texturing): 0 = affine, the
  * PS1-faithful default, which makes the vertex shader's w exactly 1.0 and the
- * fragment shader read the noperspective varying — i.e. bit-identical to the
+ * fragment shader read the noperspective varying ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β i.e. bit-identical to the
  * pre-feature pipeline. */
 #define TEXV 20
 static GLuint s_blit_prog = 0, s_blit_vao = 0, s_blit_vbo = 0;
@@ -457,22 +457,22 @@ typedef struct { int x0, y0, x1, y1, set; } DirtyRect;
 static DirtyRect s_cpu_dirty; /* conservative GPU-written area not yet read into CPU VRAM */
 static DirtyRect s_pack_dirty;             /* hr FBO content not in raw mirror */
 
-/* CPU writes not yet in the FBO — an EXACT rect list, NOT a single union.
+/* CPU writes not yet in the FBO ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β an EXACT rect list, NOT a single union.
  *
  * THE FLICKER CLASS BUG (MMX6 GL black-frame flicker, ISSUES.md #7): the old
  * single-union s_up_pending merged DISJOINT uploads (e.g. a sprite column at
  * x>=320 and a tile row at y>=480) into one bounding box that covered the
  * framebuffers in between; flush_cpu_upload then painted that whole box from
- * the CPU VRAM array — which is STALE under GL (the FBO is authoritative,
- * ensure_cpu only syncs on demand) — stomping freshly-rendered framebuffer
+ * the CPU VRAM array ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β which is STALE under GL (the FBO is authoritative,
+ * ensure_cpu only syncs on demand) ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β stomping freshly-rendered framebuffer
  * content with stale (typically black) pixels for 1-2 presents until the game
  * redrew each buffer. Fix: track the exact uploaded rects and flush each one;
  * only pixels the CPU actually wrote are ever painted. Merging is allowed only
  * when it adds NO uncovered pixels (containment / same-band extension). On
- * overflow the pending set is flushed and the new rect starts a fresh list —
+ * overflow the pending set is flushed and the new rect starts a fresh list ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β
  * order-preserving and still batched for the common poke patterns.
- * (Pre-context, s_raster_ok == 0, the CPU array is fully authoritative — the
- * software rasterizer mirrors every draw — so union-merging is harmless and
+ * (Pre-context, s_raster_ok == 0, the CPU array is fully authoritative ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β the
+ * software rasterizer mirrors every draw ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β so union-merging is harmless and
  * used as the overflow strategy there.) */
 #define UP_RECTS_MAX 16
 static DirtyRect s_up_rects[UP_RECTS_MAX];
@@ -559,7 +559,7 @@ static void flush_cpu_upload(void);   /* fwd: overflow flushes then re-adds */
 /* Add an uploaded rect. Merges ONLY when the merge adds no uncovered pixels:
  * containment either way, or an extension within the same row-band / column-
  * band (equal y-range with touching/overlapping x-ranges, or equal x-range
- * with touching/overlapping y-ranges — the row-scan / column-scan poke
+ * with touching/overlapping y-ranges ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β the row-scan / column-scan poke
  * patterns). Never unions disjoint rects post-init (that was the flicker bug). */
 static void up_add(int x0, int y0, int x1, int y1) {
     if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
@@ -614,7 +614,7 @@ static void up_add(int x0, int y0, int x1, int y1) {
 
 /* Add a GP0(A0) transfer's exact touched region. The software reference wraps
  * per pixel (px = (x+col) & 1023, py = (y+row) & 511), so a wrapping transfer
- * touches up to four exact rects — NOT all of VRAM (the old "wrapped: take
+ * touches up to four exact rects ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β NOT all of VRAM (the old "wrapped: take
  * all" full-VRAM union painted stale CPU content over the framebuffers). */
 static void up_add_transfer(int x, int y, int w, int h) {
     x &= VRAM_W - 1; y &= VRAM_H - 1;
@@ -631,8 +631,8 @@ static void up_add_transfer(int x, int y, int w, int h) {
 }
 
 /* ---- coherency event ring (always-on, debug server "gl_coh_ring") -------- */
-/* Every coherency-relevant operation — upload flushes, fills, copies, draw
- * bboxes, packs, full readbacks, presents, and probe perturbations — is
+/* Every coherency-relevant operation ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β upload flushes, fills, copies, draw
+ * bboxes, packs, full readbacks, presents, and probe perturbations ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β is
  * recorded with its rect and frame number. Per CLAUDE.md ring-buffer rule:
  * capture is continuous, observers query a window after the fact. Trigger
  * attribution convention: an op that flushes internally (fill/copy/draw/
@@ -662,10 +662,10 @@ static int s_last_dx, s_last_dy, s_last_dw, s_last_dh;
 /* After savestate restore: keep swapping for a few presents even when the
  * display rect is byte-identical to the last swap. Double/triple-buffered
  * windows otherwise can leave a stale back buffer on screen while vblanks
- * (and FPS) keep advancing — especially on a 2nd+ load of the same slot. */
+ * (and FPS) keep advancing ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β especially on a 2nd+ load of the same slot. */
 static int s_force_present_remaining = 0;
 
-/* §33 rollback resim hold-last: sticky copy of the last Live present so
+/* Ξβ€™Ξ’Β§33 rollback resim hold-last: sticky copy of the last Live present so
  * mid-resim ticks can Swap a frozen frame without reading mutating VRAM.
  * HOLD_DRAWABLE = full backbuffer copy taken just before SwapWindow.
  * HOLD_NATIVE   = GPU blit of a display band (used when interp owns Swap). */
@@ -896,7 +896,7 @@ static const char *PRESENT_VS =
  * u_sharp_scale is output pixels per texel. At <=1 (downscale) the band covers
  * the whole texel and this degrades to plain bilinear, which is what you want
  * there. The result is clamped to u_uv_rect so the half-texel edge inset the
- * caller applied still holds — that inset is what keeps LINEAR from bleeding
+ * caller applied still holds ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β that inset is what keeps LINEAR from bleeding
  * the border texel into the image (the old reason FMV was pinned to NEAREST). */
 /* Scanline post-process, shared by the present and interpolation shaders.
  * Darkens toward the gap between PS1 scanlines with a soft sinusoidal beam
@@ -1011,7 +1011,7 @@ static const char *INTERP_FS =
  * ALL drawn prims shift positions by u_shift = half an HR pixel (0.5/S in
  * native units): GL samples coverage/attributes at pixel CENTERS, the PS1
  * DDA at INTEGER coords. The shift aligns GL's sample grid with the PS1
- * grid — without it, any texture mapping with slope != 1 (scaled sprites,
+ * grid ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β without it, any texture mapping with slope != 1 (scaled sprites,
  * squished menu fonts) samples one texel off per row/column (striped
  * glyphs, seam lines). Half an HR pixel (not half a native pixel!) keeps
  * rect coverage exactly [x*S, (x+w)*S) at every scale AND makes the
@@ -1047,8 +1047,8 @@ static const char *GEO_FS =
  * Texel coords use floor() to match the software rasterizer's truncation
  * (rounding shifted sampling +1 texel half the time: smeared text). */
 /* Textured program. Per-prim texture state (texpage, clut, depth, raw, uv
- * limits) is carried in FLAT vertex attributes — constant across a prim's
- * vertices — instead of uniforms, so consecutive textured prims with the same
+ * limits) is carried in FLAT vertex attributes ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β constant across a prim's
+ * vertices ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β instead of uniforms, so consecutive textured prims with the same
  * blend/mask/texture-window state batch into one draw (see flush_tex_batch).
  * The remaining uniforms (u_twin/u_maskset/u_filter/u_semipass) are the batch
  * keys + per-pass state. */
@@ -1156,7 +1156,7 @@ static const char *TEX_FS =
     "    /* Bilinear, Beetle-PSX formulation: the NEAREST texel is the base\n"
     "     * (cutout + STP authority), the neighbours lie toward the sub-texel\n"
     "     * offset and clamp to u_limits, and each texel's weight is gated by\n"
-    "     * its opacity with the colour renormalised — so prim edges and\n"
+    "     * its opacity with the colour renormalised ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β so prim edges and\n"
     "     * cutout borders keep their colour instead of dissolving into the\n"
     "     * transparent (black) neighbour and discarding whole edge columns.\n"
     "     * Recenter from PS1 top-left point sampling to the bilinear footprint. */\n"
@@ -1211,7 +1211,7 @@ static const char *BLIT_FS =
     "                            sources, 1 for hr-res sources) */\n"
     "uniform ivec2 u_src_off; /* added after the divide, in src texel units */\n"
     "void main(){\n"
-    "  /* Exact integer source fetch — no normalized-uv edge precision. */\n"
+    "  /* Exact integer source fetch ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β no normalized-uv edge precision. */\n"
     "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
     "  vec4 c = texelFetch(u_src, p / u_src_div + u_src_off, 0);\n"
     "  bool stp = c.a >= 0.5;\n"
@@ -1312,7 +1312,7 @@ static void plain_stencil(int write_val) {
     glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 }
 
-/* PS1 semi-transparency as fixed-function blending, RGB only — the alpha
+/* PS1 semi-transparency as fixed-function blending, RGB only ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β the alpha
  * channel (mask bit) is always replaced by the source fragment's alpha.
  *   0: B/2 + F/2   1: B + F   2: B - F   3: B + F/4 */
 static void apply_psx_blend(int mode) {
@@ -1379,7 +1379,7 @@ static void flush_cpu_upload(void) {
 
     /* Stage every rect's CPU data first (texture uploads outside the FBO
      * bracket), then draw all the quads in one bracket. Only the exact
-     * uploaded rects are painted — never the union bounding box (stale-CPU
+     * uploaded rects are painted ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β never the union bounding box (stale-CPU
      * flicker class bug, see s_up_rects). */
     for (int i = 0; i < nrects; i++) {
         int x = rects[i].x0, y = rects[i].y0;
@@ -1400,7 +1400,7 @@ static void flush_cpu_upload(void) {
         glBindTexture(GL_TEXTURE_2D, s_up_tex);
         glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, s_conv);
 
-        /* Raw mirror takes the CPU data directly — current for this rect, so no
+        /* Raw mirror takes the CPU data directly ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β current for this rect, so no
          * pack is needed for uploaded content. */
         glBindTexture(GL_TEXTURE_2D, s_raw_tex);
         glPixelStorei(PSXGL_UNPACK_ROW_LENGTH, VRAM_W);
@@ -1412,7 +1412,7 @@ static void flush_cpu_upload(void) {
     }
 
     /* Quads into the hr FBO; two passes split by bit15 so the stencil mirror
-     * stays exact. gpu.c applied mask set/check per pixel already — no check
+     * stays exact. gpu.c applied mask set/check per pixel already ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β no check
      * here, the data is final. up_tex is VRAM-aligned: src texel = frag/S. */
     uint64_t draw_t0 = diag ? SDL_GetPerformanceCounter() : 0;
     hr_begin(0);
@@ -1525,7 +1525,7 @@ static void flush_pack_if_sampling(int tpage_x, int tpage_y, int depth,
     if (rect_intersects(&s_pack_dirty, tpage_x, tpage_y,
                         tpage_x + page_w - 1, tpage_y + 255)) {
         flush_flat_batch();
-        flush_tex_batch();   /* queued draws are part of s_pack_dirty — realise them before packing */
+        flush_tex_batch();   /* queued draws are part of s_pack_dirty ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β realise them before packing */
         pack_flush(); return;
     }
     if (depth <= 1) {
@@ -1547,7 +1547,7 @@ static void ensure_cpu(void) {
     extern int psx_netplay_active(void);
     if (!s_raster_ok || !s_gpu_dirty) return;
     /* Dual-raster / netplay: CPU VRAM is written on every GP0 (or pure SW).
-     * Never glReadPixels — that forked peer snaps/resim. */
+     * Never glReadPixels ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β that forked peer snaps/resim. */
     if (s_cpu_auth_dual || psx_netplay_active()) {
         s_gpu_dirty = 0;
         rect_clear(&s_cpu_dirty);
@@ -1605,7 +1605,7 @@ static void mark_prim_dirty(const int *xs, const int *ys, int n, int textured) {
     if (y1 > s_area_y2) y1 = s_area_y2;
     rect_add(&s_pack_dirty, x0, y0, x1, y1);
     if (!s_cpu_auth_dual) rect_add(&s_cpu_dirty, x0, y0, x1, y1);
-    /* Dual-raster keeps CPU current via SW writes — do not mark GPU-ahead. */
+    /* Dual-raster keeps CPU current via SW writes ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β do not mark GPU-ahead. */
     if (!s_cpu_auth_dual)
         s_gpu_dirty = 1;
     coh_record(GL_COH_DRAW, x0, y0, x1, y1);
@@ -1630,10 +1630,10 @@ static void mark_prim_dirty(const int *xs, const int *ys, int n, int textured) {
  * rt_wide() (t.cy1/cy2 = g_clip_y1/y2): native-wide only widens X. A full-height
  * Y scissor let draws that canonically clip at a vertical double-buffer band
  * boundary (MMX6: draw area alternates y=0/y=240, both bands in ONE wide
- * surface) bleed into the OTHER band's rows — presented one frame later as
+ * surface) bleed into the OTHER band's rows ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β presented one frame later as
  * top/bottom edge flicker (16:9 GL only). */
 static void wide_target_begin(int dx, GLint uXoff, GLint uXhalf) {
-    if (s_ws_ablate != 3)   /* ablate 3: no FBO rebind (draws land in hr — perf probe) */
+    if (s_ws_ablate != 3)   /* ablate 3: no FBO rebind (draws land in hr ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β perf probe) */
         p_glBindFramebuffer(PSXGL_FRAMEBUFFER, g_wide_cur);
     glViewport(0, 0, g_wide_w * s_scale, VRAM_H * s_scale);
     glEnable(GL_SCISSOR_TEST);
@@ -1659,7 +1659,7 @@ extern int psx_ws_prim_in_backdrop(void); /* gpu.c: is its source addr in the fl
 extern int gpu_ws_nw_flat_backdrop_enabled(void); /* gpu.c: per-title flat backdrop opt-in */
 
 /* Per-prim gate: stretch this prim iff native-wide + feature on AND the prim's
- * source address is inside the flower-field backdrop data structure (precise —
+ * source address is inside the flower-field backdrop data structure (precise ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β
  * excludes the 3D rock/foreground, which is untagged AND has narrow prims so the
  * earlier tag/narrow heuristic tore it). mode!=0 falls back to the old
  * tag+narrow heuristic for A/B. */
@@ -1685,14 +1685,14 @@ static int bd_prim_gate(const int *xs, int n, int textured) {
 /* ---- native-wide FAST path (skip redundant center mirror) ----------------- *
  * The wide surface's CENTRE columns [g_wide_off, g_wide_off+native_w) are, by
  * construction, identical to the canonical 4:3 framebuffer. So instead of
- * re-rasterizing every primitive into the wide surface (the "mirror" pass — the
+ * re-rasterizing every primitive into the wide surface (the "mirror" pass ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β the
  * dominant native-wide GPU cost, ~2x scene fill), we copy the canonical centre
  * into the wide surface once at present (blit_wide_center_from_canonical), and
  * the per-prim mirror only needs to produce the reveal MARGINS. Any prim/batch
  * whose x-range is fully inside the 4:3 frame contributes nothing to the margins,
  * so its mirror is skipped entirely. Correctness does not depend on the skip
  * being precise: the centre is authoritatively overwritten by the blit, so the
- * ONLY requirement is that a margin-reaching prim is NOT skipped — hence the
+ * ONLY requirement is that a margin-reaching prim is NOT skipped ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β hence the
  * conservative strict-inside test. 4:3 never runs any of this (g_wide_cur == 0).
  * Toggle via gl_wide_fast for A/B; default ON. */
 static int s_wide_fast = 1;
@@ -1772,15 +1772,15 @@ void gl_renderer_batch_diag(uint64_t out[8]) {
  * (frag.a) and the stencil; STP=1 texels must always set it.
  *
  * OPAQUE batch (semi < 0): the STP bit does NOT gate COLOUR (every texel is
- * opaque), so colour is drawn in ONE ordered pass over all texels — frag.a still
- * carries the per-texel mask bit, so the alpha mask is correct — followed by a
+ * opaque), so colour is drawn in ONE ordered pass over all texels ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β frag.a still
+ * carries the per-texel mask bit, so the alpha mask is correct ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β followed by a
  * COLOUR-MASKED pass that only fixes the STENCIL for STP=1 texels. The old code
  * split colour into STP=0 (pass 1) then STP=1 (pass 2) across the WHOLE batch,
  * which let a behind prim's STP=1 texels overwrite a front prim's STP=0 colour
  * (the Tomba character drew behind an AP-block's letters / a save post on GL
  * only). Same draw count, order preserved, mask preserved.
  *
- * SEMI batch (semi >= 0): genuine two-pass — STP=0 texels opaque, STP=1 texels
+ * SEMI batch (semi >= 0): genuine two-pass ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β STP=0 texels opaque, STP=1 texels
  * blended per the PSX mode. Cross-prim order is kept by isolating semi prims to
  * one per batch (see gpu_textured_triangle), so this batch holds a single prim
  * whose two passes do not self-overlap. */
@@ -1854,7 +1854,7 @@ static int mirror_batch_center_only(int nverts) {
         if (x < flo) flo = x; if (x > fhi) fhi = x;
     }
     /* floor/ceil, not a truncating cast: with geometry_correction these are
-     * fractional, and (int) rounds toward zero — which WIDENS a negative x
+     * fractional, and (int) rounds toward zero ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β which WIDENS a negative x
      * toward the centre and could wrongly call a margin-touching batch
      * centre-only, dropping its wide-mirror draw. Whole values are unchanged. */
     return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
@@ -1883,7 +1883,7 @@ static void flush_tex_batch(void) {
 
     tex_batch_draw_passes(nverts, semi);
 
-    /* Native-wide mirror — skipped for a batch fully inside the 4:3 frame (its
+    /* Native-wide mirror ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β skipped for a batch fully inside the 4:3 frame (its
      * centre content comes from the present-time canonical blit; nothing to add
      * to the margins). A backdrop-stretched batch (s_tb_gate) widens past the
      * frame, so it is never treated as centre-only. */
@@ -1903,7 +1903,7 @@ static void flush_tex_batch(void) {
     if (--s_cw_flush_depth == 0) s_cw_flush_ms += cw_ms() - cw_t0;
 }
 
-/* Flat / gouraud GEO batch — MotK title/char-select starfields issue ~30k/s
+/* Flat / gouraud GEO batch ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β MotK title/char-select starfields issue ~30k/s
  * GP0(68h) 1x1 dots; each was two immediate gpu_triangle draws (BufferData +
  * DrawArrays each). Coalesce opaque/semi-uniform tris into one draw. */
 #define FLATBATCH_MAXV 8190                 /* multiple of 3 */
@@ -1920,7 +1920,7 @@ static int mirror_flat_batch_center_only(int nverts) {
         float x = s_fb[i * 6];
         if (x < flo) flo = x; if (x > fhi) fhi = x;
     }
-    /* floor/ceil rather than a truncating cast — see mirror_batch_center_only. */
+    /* floor/ceil rather than a truncating cast ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β see mirror_batch_center_only. */
     return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
 }
 
@@ -2043,7 +2043,7 @@ static void gpu_line(int x0,int y0,uint16_t c0,int x1,int y1,uint16_t c1,int sem
     gpu_geometry(GL_LINES, xs, ys, cs, 2, semi);
 }
 
-/* Shared PS1 uv-sampling model (limits + mirrored-2D compensation) — one
+/* Shared PS1 uv-sampling model (limits + mirrored-2D compensation) ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β one
  * implementation for GL/VK/SW, see gpu_uv.h. */
 #include "gpu_uv.h"
 
@@ -2088,7 +2088,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         int field = gpu_raster_skipped_row();
         int gate = bd_prim_gate(xs, 3, 1); /* backdrop-stretch gate is also a batch key */
         /* Batch key: keep opaque as -1. Dual-source (4) is only for semi modes
-         * 0/1/3 when mask-check is off — never coalesce opaque into that key.
+         * 0/1/3 when mask-check is off ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β never coalesce opaque into that key.
          * Mixing opaque+semi under u_semimode==4 made additive particle/glow
          * batches (CTR Naughty Dog intro binary funnel) paint over later
          * opaque crate flaps whenever submission order and STP bits disagreed
@@ -2102,7 +2102,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             batch_semi = semi;
         /* STP draw-ORDER correctness. flush_tex_batch's conservative two-pass
          * path draws pass 1 = every prim's STP=0 texels then pass 2 = every
-         * prim's STP=1 texels — a behind prim's semi texels then overwrite a
+         * prim's STP=1 texels ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β a behind prim's semi texels then overwrite a
          * front prim's opaque texels (Tomba AP-block / CTR intro flaps). The
          * dual-source single-pass path avoids that WITHIN one prim, but
          * batching many overlapping semi quads (digit particles + glow) still
@@ -2157,7 +2157,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
 }
 
 /* Draw a flat-colored rect (GEO program) DIRECTLY into the active wide surface
- * at wide-space coords [wx, wx+ww) × [y, y+h). Used only by the full-screen-
+ * at wide-space coords [wx, wx+ww) Ξβ€Ξ²β‚¬β€ [y, y+h). Used only by the full-screen-
  * overlay path; positions are already in wide space so u_xoff stays 0. Mirrors
  * raster_flat_rect(&wt, ...) in sw_draw_flat_rect. Caller stays inside
  * hr_begin/hr_end. */
@@ -2239,7 +2239,7 @@ static void gpu_textured_rect(int x,int y,int w,int h,
     float col[9]={mr,mg,mb, mr,mg,mb, mr,mg,mb};
     /* gpu.c routes axis-aligned MIRRORED quads (X/Y-flipped 2D sprites,
      * e.g. right-facing MMX entities) through THIS path as scaled rects
-     * with u0>u1 / v0>v1 — they never reach the poly path. Exact bounds
+     * with u0>u1 / v0>v1 ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β they never reach the poly path. Exact bounds
      * from the original corners, then the mirror bump (see gpu_uv.h). */
     int lim[4];
     psx_uv_rect_limits(u0, v0, u1, v1, lim);
@@ -2302,7 +2302,7 @@ static void gpu_copy_rect(int sx,int sy,int dx,int dy,int w,int h) {
     flush_tex_batch();
     flush_cpu_upload();
     /* Clamp to bounds (the software path wraps; wrapping copies are unused
-     * in practice — see the file header). */
+     * in practice ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β see the file header). */
     if (sx < 0) sx = 0; if (sy < 0) sy = 0;
     if (dx < 0) dx = 0; if (dy < 0) dy = 0;
     if (sx + w > VRAM_W) w = VRAM_W - sx;
@@ -2367,7 +2367,7 @@ static void glb_set_scale(int s) {
 }
 static int  glb_scale(void) { return s_scale; }   /* real internal SSAA scale (was a stub 1; the
                                                       native-wide CPU present path + gr_scale() callers
-                                                      need the true scale — the FBO-direct present is
+                                                      need the true scale ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β the FBO-direct present is
                                                       unaffected since it never reads gr_scale()) */
 static void glb_set_texture_filter(int b) { s_tex_filter = b ? 1 : 0; sw_set_texture_filter(b); }
 static int  glb_texture_filter(void) { return s_tex_filter; }
@@ -2414,6 +2414,23 @@ static void glb_set_perspective_triangle(int enabled, float q0, float q1, float 
     s_pq[0] = q0; s_pq[1] = q1; s_pq[2] = q2;
     sw_set_perspective_triangle(enabled, q0, q1, q2);
 }
+
+/* SF2-generation precision entry point (gpu_render.h:
+ * gr_set_precision_triangle -> backend set_precision_triangle). The newer
+ * generation expresses the same override as the separate
+ * gr_set_precise_triangle()/gr_set_perspective_triangle() calls, so map the
+ * packed struct onto them and leave nothing in gpu_render.h unwired. */
+static void glb_set_precision_triangle(const GrPrecisionTriangle *precision) {
+    const int valid = precision && precision->valid;
+    glb_set_precise_triangle(valid,
+        valid ? precision->x16[0] : 0, valid ? precision->y16[0] : 0,
+        valid ? precision->x16[1] : 0, valid ? precision->y16[1] : 0,
+        valid ? precision->x16[2] : 0, valid ? precision->y16[2] : 0);
+    glb_set_perspective_triangle(valid && precision->perspective,
+        valid ? precision->q[0] : 0.0f,
+        valid ? precision->q[1] : 0.0f,
+        valid ? precision->q[2] : 0.0f);
+}
 static void glb_set_draw_area(int x1,int y1,int x2,int y2) { flush_flat_batch(); flush_tex_batch(); s_area_x1=x1; s_area_y1=y1; s_area_x2=x2; s_area_y2=y2; sw_set_draw_area(x1,y1,x2,y2); }
 static void glb_get_draw_area(int *x1,int *y1,int *x2,int *y2) { sw_get_draw_area(x1,y1,x2,y2); }
 static void glb_set_draw_offset(int x,int y) { flush_flat_batch(); flush_tex_batch(); s_off_x=x; s_off_y=y; sw_set_draw_offset(x,y); }
@@ -2421,7 +2438,7 @@ static void glb_set_draw_offset(int x,int y) { flush_flat_batch(); flush_tex_bat
 /* Pre-context draws (s_raster_ok == 0) fall back to the software rasterizer
  * over CPU VRAM; the initial full-VRAM upload at context init folds them in.
  * Offline post-init is GPU-only (FBO-auth). Netplay dual-raster always writes
- * SW @ 1× for authority, then GPU @ s_scale for present quality. */
+ * SW @ 1Ξβ€Ξ²β‚¬β€ for authority, then GPU @ s_scale for present quality. */
 /* The sub-pixel / perspective override describes exactly one triangle; drop it
  * once that triangle has been submitted so a later prim can never inherit it. */
 static inline void precise_consumed(void) { s_pc_valid = 0; s_pq_valid = 0; }
@@ -2508,23 +2525,23 @@ static void glb_draw_shaded_line(int x0,int y0,uint16_t c0,int x1,int y1,uint16_
 static int  glb_render_display(uint32_t *o,int p,int dx,int dy,int dw,int dh){ ensure_cpu(); return sw_render_display(o,p,dx,dy,dw,dh); }
 static int  glb_render_display_hires(uint32_t *o,int p,int dx,int dy,int dw,int dh){ ensure_cpu(); return sw_render_display_hires(o,p,dx,dy,dw,dh); }
 /* While GP1 depth24 is on, packed RGB888 lives in the CPU mirror and is
- * presented via gl_renderer_present — never as 1555 FBO texels. Queuing those
+ * presented via gl_renderer_present ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β never as 1555 FBO texels. Queuing those
  * MDEC A0 rects hits UP_RECTS_MAX (16) and force-flushes mid-movie (MotK intro
- * ~50→~30 FPS). Skip ONLY framebuffer-sized transfers (RGB888); still upload
+ * ~50ΞΒ²Ξ²β‚¬Β Ξ²β‚¬β„Ά~30 FPS). Skip ONLY framebuffer-sized transfers (RGB888); still upload
  * smaller texture A0s so post-FMV menus keep VRAM pages coherent.
- * On leave: clear the skipped FB union in the FBO — do NOT restage CPU RGB888
+ * On leave: clear the skipped FB union in the FBO ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β do NOT restage CPU RGB888
  * as 1555 (that painted MotK title rainbow/static). */
 static int depth24_is_fb_transfer(int x, int y, int w, int h) {
     if (!gpu_display_is_depth24() || w <= 0 || h <= 0) return 0;
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
-    int fb_w = (int)((di.width * 3u + 1u) / 2u); /* RGB W → halfwords */
+    int fb_w = (int)((di.width * 3u + 1u) / 2u); /* RGB W ΞΒ²Ξ²β‚¬Β Ξ²β‚¬β„Ά halfwords */
     int fb_h = (int)di.height;
     if (fb_w < 8) fb_w = 8;
     if (fb_h < 1) fb_h = 1;
-    /* Classic VRAM texture pages. The area heuristic below treats 256×256 as
-     * "half of a 320-wide RGB888 FB" (480×240/2) and would skip staging them
-     * during FMV — TM4 post-intro loading text then samples an empty FBO. */
+    /* Classic VRAM texture pages. The area heuristic below treats 256Ξβ€Ξ²β‚¬β€256 as
+     * "half of a 320-wide RGB888 FB" (480Ξβ€Ξ²β‚¬β€240/2) and would skip staging them
+     * during FMV ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β TM4 post-intro loading text then samples an empty FBO. */
     if (w <= 256 && h <= 256) return 0;
     /* Must target the CRTC scanout band (halfword coords). */
     {
@@ -2534,7 +2551,7 @@ static int depth24_is_fb_transfer(int x, int y, int w, int h) {
         if (x0 + w <= dx || x0 >= dx + fb_w || y0 + h <= dy || y0 >= dy + fb_h)
             return 0;
     }
-    /* MotK: 768×128 class blits; allow slack. */
+    /* MotK: 768Ξβ€Ξ²β‚¬β€128 class blits; allow slack. */
     if (h >= fb_h - 8 && h <= fb_h + 16 && w >= (fb_w * 3) / 4) return 1;
     if ((int64_t)w * (int64_t)h >= ((int64_t)fb_w * fb_h) / 2) return 1;
     return 0;
@@ -2597,6 +2614,18 @@ static void depth24_clear_skipped_fb(void) {
     rect_clear(&s_d24_skip_fb);
 }
 
+static void depth24_upload_policy(void);
+
+/* SF2-generation narrower hook (gpu_render.h: gr_display_depth_changed ->
+ * backend display_depth_changed). The newer generation routes the same
+ * transition through display_mode_changed/depth24_upload_policy, which reads
+ * the authoritative display state; delegate to it rather than duplicating the
+ * policy, since the callback only reports that the depth changed. */
+static void glb_display_depth_changed(int old_depth24, int new_depth24) {
+    (void)old_depth24; (void)new_depth24;
+    depth24_upload_policy();
+}
+
 static void depth24_upload_policy(void) {
     int d24 = gpu_display_is_depth24();
     if (d24 && !s_depth24_skip_up) {
@@ -2623,7 +2652,7 @@ static void depth24_upload_policy(void) {
         depth24_clear_skipped_fb();
         flush_cpu_upload();
         gpu_depth24_upload_span_reset();
-        /* Force a fresh present after FMV→15-bit so menus/loading screens
+        /* Force a fresh present after FMVΞΒ²Ξ²β‚¬Β Ξ²β‚¬β„Ά15-bit so menus/loading screens
          * are not held as a stale depth24 frame. */
         gl_renderer_invalidate_present();
     }
@@ -2633,7 +2662,7 @@ static void depth24_upload_policy(void) {
 static void glb_vram_write(int x,int y,uint16_t px){
     depth24_upload_policy();   /* before the write: entry readback must not clobber it */
     sw_vram_write(x,y,px);
-    /* Point pokes are never MDEC frames — always stage to FBO. */
+    /* Point pokes are never MDEC frames ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β always stage to FBO. */
     up_add(x & (VRAM_W-1), y & (VRAM_H-1), x & (VRAM_W-1), y & (VRAM_H-1));
 }
 static uint16_t glb_vram_read(int x,int y){ ensure_cpu(); return sw_vram_read(x,y); }
@@ -2642,8 +2671,8 @@ static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
     sw_vram_transfer_in(x,y,w,h,d);
     if (s_depth24_skip_up && depth24_is_fb_transfer(x, y, w, h)) {
         /* Full-VRAM restore (boot_state): must stage into the FBO or every
-         * texture page outside the movie band is missing after FMV→menus.
-         * Only the scanout band is remembered for clear-on-leave — do not
+         * texture page outside the movie band is missing after FMVΞΒ²Ξ²β‚¬Β Ξ²β‚¬β„Άmenus.
+         * Only the scanout band is remembered for clear-on-leave ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β do not
          * union every skipped rect (misclassified texture pages would be
          * wiped from the FBO when leaving depth24). */
         if (w >= VRAM_W && h >= VRAM_H) {
@@ -2729,7 +2758,7 @@ static void present_set_gamma(GLint uniform, int apply) {
  *   disp_lines  = PS1 display lines actually shown, for the output-scale gate.
  *   out_h       = letterbox height in window px.
  * Pass pitch_lines/disp_lines <= 0 (OSD, bezel, or the already-composed
- * hold-last drawable) to force the effect off — program uniforms persist, so
+ * hold-last drawable) to force the effect off ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β program uniforms persist, so
  * every content draw must state its own choice. */
 static void present_set_scanline(GLint uOn, GLint uStr, GLint uLines,
                                  GLint uScale, int pitch_lines, int disp_lines,
@@ -2753,7 +2782,7 @@ static void present_set_scanline(GLint uOn, GLint uStr, GLint uLines,
                          (pitch), (disp), (oh))
 
 /* Display aspect for the present letterbox. Default 4:3 (native). When a wide
- * aspect is configured the 4:3 frame is stretched into it — paired with the
+ * aspect is configured the 4:3 frame is stretched into it ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β paired with the
  * GTE X-squash (gte_set_display_aspect) this nets a wider field of view. */
 static int s_aspect_num = 4, s_aspect_den = 3;
 
@@ -2765,7 +2794,7 @@ void gl_renderer_set_display_aspect(int num, int den) {
 /* Scanline post-process toggle (host display setting). strength is the depth of
  * the dark gap between lines, 0..1 (0 = off-looking, 1 = fully black gap). The
  * actual darkening is applied per-draw in the present/interpolation shaders and
- * fades in with output scale — see PSX_SCANLINE_FUNC. */
+ * fades in with output scale ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β see PSX_SCANLINE_FUNC. */
 void gl_renderer_set_scanlines(int on, float strength) {
     s_scanline_on = on ? 1 : 0;
     if (strength < 0.f) strength = 0.f;
@@ -2924,17 +2953,17 @@ static int init_gpu_raster(void) {
 
     /* Sample-grid alignment shift: half an HR pixel, set once (S is fixed
      * for the lifetime of the pipeline). Backed off by 1/64 native px so
-     * primitive edges never land EXACTLY on sample centers — that float tie
+     * primitive edges never land EXACTLY on sample centers ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β that float tie
      * dropped 1px columns at quad seams (e.g. the 256px texture-page seam in
      * Tomba's title background). The 1/64 bias keeps floor(uv) on the exact
      * PS1 texel for |uv slope| < 64; mirrored (negative-slope) mappings can
-     * be off by one texel at exact-integer uv — accepted. */
+     * be off by one texel at exact-integer uv ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β accepted. */
     {
         float shift = 0.5f / (float)s_scale - 1.0f / 64.0f;
         p_glUseProgram(s_geo_prog);
         p_glUniform1f(p_glGetUniformLocation(s_geo_prog, "u_shift"), shift);
         /* Native-wide projection defaults: x translation 0, clip half-extent
-         * 512 — so the GEO_VS x term reduces to (x+u_shift)/512-1, bit-identical
+         * 512 ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β so the GEO_VS x term reduces to (x+u_shift)/512-1, bit-identical
          * to the pre-native-wide projection. The wide passes set these, then
          * restore these defaults. */
         p_glUniform1f(s_geo_uXoff, 0.0f);
@@ -3081,7 +3110,7 @@ int gl_renderer_init_context(SDL_Window *win) {
 
     /* All-or-nothing: any missing entry point / failed shader / bad FBO means
      * the whole GL renderer is unavailable and the runtime stays on the pure
-     * software path — no half-GL hybrid (that mixed mode is what produced
+     * software path ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β no half-GL hybrid (that mixed mode is what produced
      * the alternating-present menu jitter). */
     int ok = load_modern_gl();
     if (ok) {
@@ -3137,7 +3166,7 @@ int gl_renderer_init_context(SDL_Window *win) {
     }
     if (ok) ok = init_gpu_raster();
     if (!ok) {
-        fprintf(stdout, "psxrecomp: GL pipeline init failed — falling back to software renderer\n");
+        fprintf(stdout, "psxrecomp: GL pipeline init failed ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β falling back to software renderer\n");
         SDL_GL_DeleteContext(s_ctx); s_ctx = NULL;
         s_raster_ok = 0;
         return 0;
@@ -3175,7 +3204,7 @@ void gl_renderer_shutdown(void) {
     s_raster_ok = 0;
     /* New context regenerates s_present_tex empty; a stale size makes
      * upload_present_tex take glTexSubImage2D into an unallocated texture
-     * (rematch 24-bit FMV → black picture, audio still runs). */
+     * (rematch 24-bit FMV ΞΒ²Ξ²β‚¬Β Ξ²β‚¬β„Ά black picture, audio still runs). */
     s_present_w = 0;
     s_present_h = 0;
     s_osd_tex = 0;
@@ -3192,7 +3221,7 @@ void gl_renderer_shutdown(void) {
 
 /* CPU-readout present (24-bit FMV frames and the PSX_GL_FORCE_CPU_PRESENT
  * diagnostic): full-window clear, then a quad into the letterbox rect.
- * force_4_3 pins the rect to native 4:3 regardless of the display aspect —
+ * force_4_3 pins the rect to native 4:3 regardless of the display aspect ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β
  * FMVs are authored 4:3 and have no GTE squash to compensate a stretch, so
  * widescreen presents them pillarboxed instead of distorted. */
 void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linear,
@@ -3212,7 +3241,7 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
      * NTSC active height on hardware. Stretching them to the full letterbox
      * doubles vertical scale vs horizontal and makes the frame look too wide
      * with the right edge clipped. Letterbox within the present rect instead.
-     * Apply whenever the source is short — not only when force_4_3 — so a
+     * Apply whenever the source is short ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β not only when force_4_3 ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β so a
      * misclassified FMV frame still keeps correct pixel aspect. */
     /* Genuinely windowed video bands only (<80% of the 240-line field, e.g.
      * MotK's 128-line FMV). A game's native short display mode (216/224)
@@ -3224,7 +3253,7 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
         lh = content_h;
     }
     /* Optional trailing-column crop (depth24 margin): shrink the draw width
-     * left-aligned so cleared black remains on the right — never stretch. */
+     * left-aligned so cleared black remains on the right ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β never stretch. */
     float uv_x1 = 1.f;
     int crop = (content_w > 0 && content_w < src_w && src_w > 0);
     if (crop) {
@@ -3238,7 +3267,7 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
      * filtered reconstruction when [video] fmv_filter opts into it:
      *
      *   nearest   hard pixels, uneven pixel widths at non-integer scale
-     *   bilinear  plain GL_LINEAR — smoothest, but blurs the whole texel
+     *   bilinear  plain GL_LINEAR ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β smoothest, but blurs the whole texel
      *   sharp     sharp-bilinear: flat texel interiors, ramp confined to a
      *             one-output-pixel band at the boundary
      *   bicubic   Catmull-Rom
@@ -3320,7 +3349,7 @@ void gl_renderer_invalidate_present(void) {
 
 void gl_renderer_restage_vram_after_savestate(void) {
     if (!s_raster_ok || !s_vram) return;
-    /* Belt-and-suspenders after boot_state VRAM apply: force CPU mirror → FBO
+    /* Belt-and-suspenders after boot_state VRAM apply: force CPU mirror ΞΒ²Ξ²β‚¬Β Ξ²β‚¬β„Ά FBO
      * even if a depth24 skip swallowed the restore, then re-arm scanout-band
      * clear so leaving FMV does not keep RGB888-as-1555 junk. */
     s_up_nrects = 0;
@@ -3383,7 +3412,7 @@ void gl_renderer_flush_cpu_uploads(void) {
 
 /* Diagnostic (debug server "gl_fbo_peek"): read a rect of the GPU-side
  * authoritative VRAM (via the pack pass + raw mirror) WITHOUT writing CPU
- * VRAM — lets a probe diff FBO truth against CPU truth. Returns 0 when the
+ * VRAM ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β lets a probe diff FBO truth against CPU truth. Returns 0 when the
  * GL pipeline is inactive (software backend). */
 int gl_renderer_fbo_peek(int x, int y, int w, int h, uint16_t *out) {
     if (!s_raster_ok || !s_ctx) return 0;
@@ -3413,7 +3442,7 @@ int gl_renderer_vram_diff(uint32_t *count, int bbox[4],
     if (!tmp) return 0;
     flush_cpu_upload();
     /* Force a full pack: the diff must read FBO truth even where the
-     * raw-mirror invariant (raw == FBO outside s_pack_dirty) is broken —
+     * raw-mirror invariant (raw == FBO outside s_pack_dirty) is broken ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β
      * a broken invariant is exactly what this tool hunts. */
     rect_add(&s_pack_dirty, 0, 0, VRAM_W - 1, VRAM_H - 1);
     pack_flush();
@@ -3447,7 +3476,7 @@ int gl_renderer_vram_diff(uint32_t *count, int bbox[4],
 void gl_renderer_diag(int *gpu_dirty, int pending[5], int pack[5]) {
     if (gpu_dirty) *gpu_dirty = s_gpu_dirty;
     if (pending) {
-        /* [0] = pending rect count; [1..4] = union bbox (diagnostic only —
+        /* [0] = pending rect count; [1..4] = union bbox (diagnostic only ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β
          * the flush itself paints the exact rects, never this union). */
         pending[0] = s_up_nrects;
         pending[1] = pending[2] = pending[3] = pending[4] = 0;
@@ -3504,7 +3533,7 @@ static GLuint wide_fbo_for(int base_x) {
             /* Depth-stencil RB, same as the hr FBO: the stencil carries the
              * PSX mask-bit mirror for the wide surface, and (the hard lesson)
              * a stencil-less FBO turns every stencil-enabled mirror draw into
-             * ~0.6ms of driver-side work — the 16:9 GL perf collapse. */
+             * ~0.6ms of driver-side work ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β the 16:9 GL perf collapse. */
             p_glGenRenderbuffers(1, &s_wide_rb[i]);
             p_glBindRenderbuffer(PSXGL_RENDERBUFFER, s_wide_rb[i]);
             p_glRenderbufferStorage(PSXGL_RENDERBUFFER, PSXGL_DEPTH24_STENCIL8, w, h);
@@ -3525,7 +3554,7 @@ static GLuint wide_fbo_for(int base_x) {
             return s_wide_fbo[i];
         }
     }
-    return 0;  /* more distinct buffers than WIDE_MAX_SURF — shouldn't happen */
+    return 0;  /* more distinct buffers than WIDE_MAX_SURF ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β shouldn't happen */
 }
 
 /* Enable native-wide with a wide width + centering offset (native px), or
@@ -3636,11 +3665,11 @@ static void glb_wide_clear_margins(int base_x, int y, int h, uint16_t color, int
 /* Present source: read the wide FBO for the displayed buffer (base_x) into the
  * CPU present buffer as ARGB8888, byte-identical to sw_render_wide_display's
  * output so the shared CPU present path consumes it the same way. Output is
- * (g_wide_w*scale) wide × (disp_h*scale) tall. Returns pixel count (>0), or 0
+ * (g_wide_w*scale) wide Ξβ€Ξ²β‚¬β€ (disp_h*scale) tall. Returns pixel count (>0), or 0
  * if no surface exists for base_x (caller falls back to the canonical present).
  *
  * PIXEL FORMAT: glReadPixels(GL_BGRA, GL_UNSIGNED_BYTE) yields, per pixel, the
- * little-endian uint32 0xAARRGGBB == ARGB8888 — exactly what rgb555_to_argb
+ * little-endian uint32 0xAARRGGBB == ARGB8888 ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β exactly what rgb555_to_argb
  * produces and what upload_present_tex feeds to glTexImage2D(GL_BGRA,...). The
  * SW path forces alpha to 0xFF; we OR it in to match (present ignores alpha, but
  * we keep the two paths bit-identical). GL's read origin is bottom-left, so the
@@ -3678,7 +3707,7 @@ static int glb_render_wide_display(uint32_t *out, int pitch, int base_x,
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
 
     /* Orientation: the wide FBO stores PS1 y inverted (geo shader maps vram_y=0
-     * to NDC y=-1 = FBO BOTTOM), and glReadPixels reads bottom-up — the two
+     * to NDC y=-1 = FBO BOTTOM), and glReadPixels reads bottom-up ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β the two
      * inversions CANCEL, so glReadPixels row 0 already = PS1 top scanline. Copy
      * straight (NO flip) so `out` is top-down, matching sw_render_wide_display
      * (which the shared CPU present path + its PRESENT_VS V-flip expect). Force
@@ -3696,7 +3725,7 @@ static int glb_render_wide_display(uint32_t *out, int pitch, int base_x,
 
 /* Dump the ENTIRE wide compositor surface for base_x (all double-buffer bands +
  * both reveal margins), g_wide_w x VRAM_H at scale. Debug/inspection tool (TCP
- * wide_full) — the GL analog of sw_wide_dump_full, so native-wide can be
+ * wide_full) ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β the GL analog of sw_wide_dump_full, so native-wide can be
  * inspected without touching the game window. Runs the same authoritative
  * centre blit first so the dump matches what present shows. Top-down, alpha=FF
  * (matches sw_wide_dump_full / render_wide_display orientation). */
@@ -3731,7 +3760,7 @@ static int glb_wide_dump_full(uint32_t *out, int cap_pixels, int *ow, int *oh,
 }
 
 /* THE present path for 15-bit frames: blit the display region from the
- * authoritative hr FBO into a letterboxed rect. Deterministic — runs
+ * authoritative hr FBO into a letterboxed rect. Deterministic ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β runs
  * every 15-bit frame regardless of what mix of ops produced it.
  * force_4_3 pins to native 4:3 (15-bit MDEC FMV frames on a wide aspect). */
 /* ===================== frame_perf: per-frame GPU/CPU phase timing ============
@@ -3745,7 +3774,7 @@ static int glb_wide_dump_full(uint32_t *out, int cap_pixels, int *ow, int *oh,
  * the debug server, so they also leave this instrumentation disabled: a native-
  * wide frame can otherwise issue hundreds of unused mirror timestamp queries.
  * One question this answers in a diagnostics build:
- * where does a 16:9 frame go vs 4:3 — scene fill, wide composite, or CPU. */
+ * where does a 16:9 frame go vs 4:3 ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β scene fill, wide composite, or CPU. */
 #define GLPERF_NBUF 4
 #define GLPERF_RING 256
 typedef struct {
@@ -3830,7 +3859,7 @@ static void gl_perf_init(void) {
 }
 
 /* Bracket ONE native-wide mirror pass (called from the wide-mirror draw sites).
- * Timestamp pairs, not TIME_ELAPSED — see the pool comment above. */
+ * Timestamp pairs, not TIME_ELAPSED ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β see the pool comment above. */
 static void gl_perf_mirror_begin(void) {
     if (!s_pf_on || !s_mq_ok) return;
     int b = s_pf_b;
@@ -3848,11 +3877,11 @@ static void gl_perf_mirror_end(void) {
 
 /* Top of present (after flush_cpu_upload, before clear/blit). */
 static void gl_perf_present_enter(void) {
-    /* Per-frame boundary for the 2D-backdrop stretch — runs from BOTH present
+    /* Per-frame boundary for the 2D-backdrop stretch ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β runs from BOTH present
      * paths (4:3 present_vram AND native-wide present_wide_fbo), before the
      * perf-on gate so native-wide frames reset too. Snapshot this frame's
      * backdrop-stretch diagnostics, then reset the per-frame counters. (The gate
-     * is per-prim now — no draw-order phase to reset.) Final batch already flushed
+     * is per-prim now ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β no draw-order phase to reset.) Final batch already flushed
      * by the caller. */
     g_bdg_applied = s_bdg_applied; g_bdg_prims = s_bdg_prims; g_bdg_clearx = s_bdg_clearx;
     g_bdg_cur = (g_wide_cur != 0); g_bdg_base = g_wide_cur_base; g_bdg_w = g_wide_w; g_bdg_off = g_wide_off;
@@ -4181,8 +4210,8 @@ static void interp_present_source_interval(void) {
 }
 
 /* Draw one host OSD ARGB image into the default framebuffer at (vx,vy)
- * in top-left window coordinates (y down). Bitmap is ow×oh; viewport is
- * dw×dh (may upscale for HiDPI / large windows). */
+ * in top-left window coordinates (y down). Bitmap is owΞβ€Ξ²β‚¬β€oh; viewport is
+ * dwΞβ€Ξ²β‚¬β€dh (may upscale for HiDPI / large windows). */
 static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
                               int dw, int dh, int vx, int vy, int ww, int wh) {
     if (!px || ow <= 0 || oh <= 0 || dw <= 0 || dh <= 0 ||
@@ -4211,7 +4240,7 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_STENCIL_TEST);
     glDisable(GL_DEPTH_TEST);
-    /* host_osd bakes opaque panels (A=0xFF). Do not blend — PSX mode-2
+    /* host_osd bakes opaque panels (A=0xFF). Do not blend ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β PSX mode-2
      * REVERSE_SUBTRACT left armed across FMV present made toasts solid black. */
     glDisable(GL_BLEND);
     if (p_glBlendEquationSeparate)
@@ -4273,7 +4302,7 @@ static void gl_swap_with_osd(void) {
     }
     host_osd_present_done();
     /* present_shot (GL backend): the default framebuffer now holds the composed
-     * frame — display quad fitted to the window, plus OSD — so this is the only
+     * frame ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β display quad fitted to the window, plus OSD ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β so this is the only
      * capture that carries the presented aspect. Buffer-level captures resolve
      * before the fit and answer the raw display size instead. Read back before
      * the swap; GL rows come out bottom-up, so flip into the PNG. */
@@ -4347,13 +4376,13 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
     p_glUniform1i(s_present_uTex, 0);
     present_set_gamma(s_present_uGamma, apply_gamma);
     /* The rasterized path already renders at the internal scale, so it has no
-     * low-res source to reconstruct — keep the plain sample. */
+     * low-res source to reconstruct ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β keep the plain sample. */
     present_set_sharp(0, 0, 0, 0, 0);
     /* Scanline at the native line grid. v_uv is normalized against tex_h (the
      * full VRAM/FBO texture), and one texel row is one PS1 scanline, so tex_h is
      * the phase pitch; h is the displayed line count for the output-scale gate.
      * v_flip=0 is the already-composed hold-last drawable (scanlines, if any,
-     * are already baked) — skip it. */
+     * are already baked) ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β skip it. */
     PRESENT_SCANLINE(v_flip ? tex_h : 0, v_flip ? h : 0, lh);
     /* Half-texel inset: with GL_LINEAR, corner-mapped UVs make the outermost
      * dest pixels blend the border texel with VRAM outside the content rect
@@ -4364,9 +4393,9 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
     u1 = ((float)(x + w) - 0.5f) / (float)tex_w;
     v1 = ((float)(y + h) - 0.5f) / (float)tex_h;
     /* PRESENT_VS always samples with mix(v0,v1,1-p.y). For CPU/FBO guest
-     * bands that is the correct PSX top-down → GL mapping (v_flip=1). For a
+     * bands that is the correct PSX top-down ΞΒ²Ξ²β‚¬Β Ξ²β‚¬β„Ά GL mapping (v_flip=1). For a
      * glCopyTexSubImage2D of the already-presented drawable, the texture
-     * already matches screen orientation — swapping v ends cancels the
+     * already matches screen orientation ΞΒ²Ξ²β€Β¬Ξ²β‚¬Β swapping v ends cancels the
      * shader flip so hold-last is not upside-down for one frame. */
     if (!v_flip) {
         float t = v0;
@@ -4587,9 +4616,9 @@ static void wide_blit_center(GLuint wide_fbo, int base_x, int disp_y, int disp_h
 
 /* GPU-direct native-wide present: blit the displayed buffer's wide FBO straight
  * to the window (no glReadPixels / glFinish CPU round-trip). The wide surface is
- * g_wide_w wide × VRAM_H tall (at scale S); present its [0,g_wide_w] × [disp_y,
+ * g_wide_w wide Ξβ€Ξ²β‚¬β€ VRAM_H tall (at scale S); present its [0,g_wide_w] Ξβ€Ξ²β‚¬β€ [disp_y,
  * disp_y+disp_h] region into the letterbox, V-flipped like present_vram (FBO y
- * bottom-origin → window top). Returns 0 if there's no wide surface for base_x
+ * bottom-origin ΞΒ²Ξ²β‚¬Β Ξ²β‚¬β„Ά window top). Returns 0 if there's no wide surface for base_x
  * (caller falls back). disp_x is the displayed buffer base (the wide-surface key). */
 int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear) {
     if (!s_ctx || !s_raster_ok || g_wide_w <= 0) return 0;
@@ -4661,10 +4690,12 @@ static const GpuRenderBackend GL_BACKEND = {
     .name = "opengl",
     .init = glb_init, .set_scale = glb_set_scale, .scale = glb_scale,
     .set_texture_filter = glb_set_texture_filter, .texture_filter = glb_texture_filter,
+    .display_depth_changed = glb_display_depth_changed,
     .set_semi_transparency = glb_set_semi_transparency, .set_mask_bits = glb_set_mask_bits,
     .set_texture_window = glb_set_texture_window, .set_color_modulation = glb_set_color_modulation,
     .set_precise_triangle = glb_set_precise_triangle,
     .set_perspective_triangle = glb_set_perspective_triangle,
+    .set_precision_triangle = glb_set_precision_triangle,
     .fill_rect = glb_fill_rect, .copy_rect = glb_copy_rect,
     .draw_flat_triangle = glb_draw_flat_triangle, .draw_gouraud_triangle = glb_draw_gouraud_triangle,
     .draw_textured_triangle = glb_draw_textured_triangle,

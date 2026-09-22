@@ -857,7 +857,7 @@ static void start_async_gpu_linked_list(void) {
         return;
     }
     uint32_t start_addr = psx_mod_gpu_dma_resolve_address(channels[2].madr);
-    gpu_ws_begin_linked_list();
+    gpu_ws_begin_linked_list(start_addr);
     /* This scan only prepares optional widescreen grouping. It does not send
      * packets to GP0. The event-driven walker below performs every guest-visible
      * header and payload read at its consumption boundary. */
@@ -2270,7 +2270,7 @@ int dma_snapshot_read(const uint8_t *p, uint32_t len) {
     }
     if (gpu_ll_was_active) gpu_ws_end_linked_list();
     if (gpu_linked_list.active) {
-        gpu_ws_begin_linked_list();
+        gpu_ws_begin_linked_list(gpu_linked_list.start_addr);
         gpu_ws_prepass_linked_list(gpu_linked_list.start_addr);
         gpu_ws_restore_linked_list_rank(gpu_linked_list.empty_rank);
     }

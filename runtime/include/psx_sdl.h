@@ -137,6 +137,11 @@ static inline int psx_sdl_get_current_display_mode(
     return 0;
 }
 
+static inline int psx_sdl_set_relative_mouse_mode(SDL_Window *window, int enabled)
+{
+    return SDL_SetWindowRelativeMouseMode(window, enabled != 0) ? 0 : -1;
+}
+
 static inline const Uint8 *psx_sdl_get_keyboard_state(int *count)
 {
     return (const Uint8 *)(const void *)SDL_GetKeyboardState(count);
@@ -238,5 +243,11 @@ static inline int psx_sdl_cond_wait_timeout(
 #else
 
 #include <SDL.h>
+
+static inline int psx_sdl_set_relative_mouse_mode(SDL_Window *window, int enabled)
+{
+    (void)window;
+    return SDL_SetRelativeMouseMode(enabled ? SDL_TRUE : SDL_FALSE);
+}
 
 #endif

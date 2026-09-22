@@ -1,0 +1,27 @@
+schema_version = 1
+created = "2026-08-02"
+
+[experiment]
+name = "Syphon Filter 2 recompilation feasibility"
+branch = "experiment/sf2-recomp-feasibility"
+psxrecomp_commit = "0cfa9fe0a8da944e9f694a24361b4973c57131ea"
+hybrid_oracle_repository = "I:/Projects/sf-pc-port"
+hybrid_oracle_commit = "001b1e8"
+reference_catalog = "I:/Projects/PSX-References/CATALOG.md"
+
+[game]
+title = "Syphon Filter 2"
+region = "USA / NTSC-U"
+disc_1_serial = "SCUS-94451"
+disc_2_serial = "SCUS-94492"
+executable_name_disc_1 = "SCUS_944.51"
+executable_name_disc_2 = "SCUS_944.92"
+executable_sha256 = "75a360bf7465dfdec85c14f9ba93862aae2531b48d83fd8d82ba8c9fffa13d33"
+resident_executable_identical_across_discs = true
+
+[policy]
+retail_inputs_tracked = false
+generated_game_code_tracked = false
+overlay_captures_tracked = false
+private_research_tracked = false
+commercial_use_permitted_by_framework_license = false

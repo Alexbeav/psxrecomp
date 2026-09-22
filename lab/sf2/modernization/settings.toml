@@ -1,0 +1,13 @@
+# Isolated pass-1 presentation defaults. Runtime writes stay in the modern build.
+[video]
+renderer = "opengl"
+supersampling = 4
+window_width = 1280
+antialiasing = true
+texture_filtering = "nearest"
+fullscreen = 1
+aspect_ratio = "4:3"
+frame_interpolation = false
+
+[launcher]
+skip_launcher = true

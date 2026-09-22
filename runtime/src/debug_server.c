@@ -48,6 +48,8 @@
 #include "gpu_gl_renderer.h"
 #include "lockstep.h"
 #include "guest_tty.h"
+#include "debug_trace_ranges.h"
+#include "mouse_camera.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -313,6 +315,14 @@ static uint64_t s_dirty_break_hits = 0;
 /* ---- Input override ---- */
 static int s_input_override = -1;
 static int s_input_frames   = 0;
+/* Optional guest-frame deadline for deterministic diagnostic input.  A host
+ * client can arm an override early and have the emulation thread expose it
+ * only once the named guest frame is reached. */
+static uint64_t s_input_start_frame = 0;
+static uint64_t s_input_first_applied_frame = UINT64_MAX;
+static uint64_t s_input_last_applied_frame = 0;
+static uint32_t s_input_applied_count = 0;
+static int s_input_applied_value = -1;
 /* Optional analog-stick override (set_input lx/ly/rx/ry, 0..255, 0x80 =
  * centre). Lets injected input drive analog-mode movement; consumed by the
  * pad sampler alongside the button word. */
@@ -5467,6 +5477,8 @@ static void handle_gpu_state(int id, const char *json)
     gpu_vertical_split_debug(&split_active, &split_left_age, &split_right_age);
     GpuWsDebug ws;
     gpu_ws_get_debug(&ws);
+    GpuPgxpStats pgxp;
+    gpu_pgxp_get_stats(&pgxp);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"display_x\":%d,\"display_y\":%d,"
              "\"width\":%d,\"height\":%d,"
@@ -5481,15 +5493,25 @@ static void handle_gpu_state(int id, const char *json)
              "\"draw_area\":[%u,%u,%u,%u],"
              "\"draw_offset\":[%d,%d],"
              "\"vertical_split\":{\"active\":%d,\"left_age\":%d,\"right_age\":%d},"
+             "\"pgxp\":{\"enabled\":%d,\"triangles\":%llu,"
+             "\"complete\":%llu,\"partial\":%llu,\"unmatched\":%llu,"
+             "\"cpu_authored\":%llu,\"stale_vertices\":%llu,"
+             "\"address_mismatch_vertices\":%llu,"
+             "\"packed_mismatch_vertices\":%llu,"
+             "\"invalid_vertices\":%llu},"
              "\"ws\":{\"configured\":%d,\"active\":%d,\"game_mode\":%d,"
              "\"present_native_43\":%d,\"x_margin\":%d,"
              "\"activation_margin\":%d,\"squash\":[%d,%d],"
              "\"mode\":%d,\"nw_extra\":%d,"
+             "\"nw_guest_projection\":%d,"
+             "\"nw_guest_projection_scale\":[%d,%d],"
+             "\"nw_guest_projection_restores\":%llu,"
              "\"cur_frame\":%llu,\"last_tag_frame\":%u,\"last_3d_frame\":%u,"
              "\"gte_verts\":%u,\"last_world3d_frame\":%u,"
              "\"ovh_prims\":%u,\"last_ovh_frame\":%u,"
              "\"auto_ui\":{\"configured\":%d,\"dense\":%d,\"ot_rank\":%u,"
              "\"candidates\":%llu,\"transforms\":%llu},"
+             "\"fullscreen_rect\":{\"checks\":%llu,\"expanded\":%llu},"
              "\"aspect_cone\":{\"calls\":%llu,\"identity_43\":%llu,"
              "\"vanilla_keep\":%llu,\"visible_keep\":%llu,"
              "\"guard_keep\":%llu,\"hysteresis_keep\":%llu,"
@@ -5511,16 +5533,30 @@ static void handle_gpu_state(int id, const char *json)
              da.left, da.top, da.right, da.bottom,
              da.offset_x, da.offset_y,
              split_active, split_left_age, split_right_age,
+             gpu_pgxp_enabled(),
+             (unsigned long long)pgxp.triangles,
+             (unsigned long long)pgxp.complete,
+             (unsigned long long)pgxp.partial,
+             (unsigned long long)pgxp.unmatched,
+             (unsigned long long)pgxp.cpu_authored,
+             (unsigned long long)pgxp.stale_vertices,
+             (unsigned long long)pgxp.address_mismatch_vertices,
+             (unsigned long long)pgxp.packed_mismatch_vertices,
+             (unsigned long long)pgxp.invalid_vertices,
              ws.configured, ws.active, ws.game_mode,
              ws.present_native_43, ws.x_margin, ws.activation_margin,
              ws.xnum, ws.xden,
-             ws.mode, ws.nw_extra,
+             ws.mode, ws.nw_extra, ws.nw_guest_projection,
+             ws.nw_guest_projection_num, ws.nw_guest_projection_den,
+             (unsigned long long)ws.nw_guest_projection_restores,
              (unsigned long long)ws.cur_frame, ws.last_tag_frame,
               ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
               ws.ovh_prims, ws.last_ovh_frame,
               ws.auto_ui_squash, ws.auto_ui_dense, ws.auto_ui_ot_rank,
               (unsigned long long)ws.auto_ui_candidates,
               (unsigned long long)ws.auto_ui_transforms,
+              (unsigned long long)ws.fullscreen_rect_checks,
+              (unsigned long long)ws.fullscreen_rect_expands,
               (unsigned long long)ws.aspect_cone_calls,
              (unsigned long long)ws.aspect_cone_43_identity,
              (unsigned long long)ws.aspect_cone_vanilla_keep,
@@ -5535,6 +5571,25 @@ static void handle_gpu_state(int id, const char *json)
              (unsigned long long)ws.angle_calls,
              (unsigned long long)ws.angle_43_identity,
              ws.angle_max_vanilla, ws.angle_max_widened);
+}
+
+static void handle_depth24_uploads(int id, const char *json)
+{
+    int requested = json_get_int(json, "count", 32);
+    if (requested < 1) requested = 1;
+    if (requested > 128) requested = 128;
+    GpuDepth24UploadDebug entries[128];
+    int count = gpu_get_depth24_upload_debug(entries, requested);
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d,\"uploads\":[", id, count);
+    for (int i = 0; i < count; i++) {
+        const GpuDepth24UploadDebug *e = &entries[i];
+        if (i) send_fmt(",");
+        send_fmt("{\"seq\":%llu,\"frame\":%u,\"x\":%u,\"y\":%u,"
+                 "\"w\":%u,\"h\":%u}",
+                 (unsigned long long)e->seq, e->frame,
+                 e->x, e->y, e->w, e->h);
+    }
+    send_fmt("]}\n");
 }
 
 static void handle_ws_aspect_cone_site(int id, const char *json)
@@ -7742,6 +7797,11 @@ static void handle_set_input(int id, const char *json)
     }
     s_input_override = (int)hex_to_u32(val_str);
     s_input_frames = 0;
+    s_input_start_frame = 0;
+    s_input_first_applied_frame = UINT64_MAX;
+    s_input_last_applied_frame = 0;
+    s_input_applied_count = 0;
+    s_input_applied_value = -1;
     /* Optional stick override: any of lx/ly/rx/ry (0..255) arms it; omitted
      * axes centre. Absent entirely -> released (buttons-only injection). */
     int ax[4] = { json_get_int(json, "lx", -1), json_get_int(json, "ly", -1),
@@ -7758,9 +7818,15 @@ static void handle_press(int id, const char *json)
 {
     int buttons = json_get_int(json, "buttons", -1);
     int frames  = json_get_int(json, "frames", 2);
+    int at_frame = json_get_int(json, "at_frame", -1);
     if (buttons < 0) { send_err(id, "missing buttons"); return; }
     s_input_override = buttons;
     s_input_frames   = frames;
+    s_input_start_frame = at_frame >= 0 ? (uint64_t)(uint32_t)at_frame : 0;
+    s_input_first_applied_frame = UINT64_MAX;
+    s_input_last_applied_frame = 0;
+    s_input_applied_count = 0;
+    s_input_applied_value = buttons;
     int ax[4] = { json_get_int(json, "lx", -1), json_get_int(json, "ly", -1),
                   json_get_int(json, "rx", -1), json_get_int(json, "ry", -1) };
     s_axis_override = (ax[0] >= 0 || ax[1] >= 0 || ax[2] >= 0 || ax[3] >= 0);
@@ -7789,7 +7855,10 @@ static void handle_pad_status(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,\"pad\":\"0x%04X\","
              "\"slot0\":{\"buttons\":\"0x%04X\",\"connected\":%s,\"analog\":%s,\"sticks\":[%u,%u,%u,%u]},"
              "\"slot1\":{\"buttons\":\"0x%04X\",\"connected\":%s,\"analog\":%s,\"sticks\":[%u,%u,%u,%u]},"
-             "\"override\":%d,\"override_frames\":%d,"
+             "\"override\":%d,\"override_frames\":%d,\"override_start_frame\":%llu,"
+             "\"override_first_applied_frame\":%lld,"
+             "\"override_last_applied_frame\":%llu,"
+             "\"override_applied_count\":%u,\"override_applied_value\":%d,"
              "\"override_axes\":[%u,%u,%u,%u],\"override_axes_valid\":%s}\n",
              id, pad0,
              pad0, sio_get_pad_connected(0) ? "true" : "false", sio_get_pad_analog(0) ? "true" : "false",
@@ -7797,6 +7866,11 @@ static void handle_pad_status(int id, const char *json)
              pad1, sio_get_pad_connected(1) ? "true" : "false", sio_get_pad_analog(1) ? "true" : "false",
              sticks1[0], sticks1[1], sticks1[2], sticks1[3],
              s_input_override, s_input_frames,
+             (unsigned long long)s_input_start_frame,
+             s_input_first_applied_frame == UINT64_MAX
+                 ? -1LL : (long long)s_input_first_applied_frame,
+             (unsigned long long)s_input_last_applied_frame,
+             s_input_applied_count, s_input_applied_value,
              s_axis_st[0], s_axis_st[1], s_axis_st[2], s_axis_st[3],
              s_axis_override ? "true" : "false");
 }
@@ -7809,6 +7883,11 @@ static void handle_clear_input(int id, const char *json)
     s_input_route_remaining = 0;
     s_input_override = -1;
     s_input_frames   = 0;
+    s_input_start_frame = 0;
+    s_input_first_applied_frame = UINT64_MAX;
+    s_input_last_applied_frame = 0;
+    s_input_applied_count = 0;
+    s_input_applied_value = -1;
     s_axis_override  = 0;
     s_axis_st[0] = s_axis_st[1] = s_axis_st[2] = s_axis_st[3] = 0x80;
     send_ok(id);
@@ -8173,7 +8252,7 @@ static void handle_ws_backdrop_margin(int id, const char *json)
              g_ws_bd_margin < 0 ? "whole-row" : (g_ws_bd_margin == 0 ? "off" : "widen-cols"));
 }
 
-/* ws_backdrop_stretch [on=0/1] [pct=N] [thresh=N]: live-tune the native-wide
+/* ws_backdrop_stretch [on=0/1] [pct=N] [thresh=N] [phase=0/1]: live-tune the native-wide
  * 2D-backdrop x-stretch (GL renderer). on toggles the feature; pct=0 auto-fits
  * (g_wide_w/native_w), else pct/100 is the scale; thresh = px past 4:3 that ends
  * the per-frame backdrop phase. No args = report. */
@@ -8186,14 +8265,17 @@ static void handle_ws_backdrop_stretch(int id, const char *json)
     int pct = json_get_int(json, "pct", -1);
     int th  = json_get_int(json, "thresh", -1);
     int md  = json_get_int(json, "mode", -1);
+    int phase = json_get_int(json, "phase", -1);
     if (on  >= 0) g_ws_bd_stretch_on   = on;
     if (pct >= 0) g_ws_bd_stretch_pct  = pct;
     if (th  >= 0) g_ws_bd_phase_thresh = th;
     if (md  >= 0) g_ws_bd_phase_mode   = md;
-    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"pct\":%d,\"thresh\":%d,\"mode\":%d,"
+    if (phase >= 0) gpu_ws_set_nw_phase_backdrop(phase);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"pct\":%d,\"thresh\":%d,\"mode\":%d,\"phase\":%d,"
              "\"dbg\":{\"applied\":%d,\"prims\":%d,\"wide_cur\":%d,\"base\":%d,\"wide_w\":%d,\"off\":%d,"
              "\"bd_lo\":\"%08x\",\"bd_hi\":\"%08x\",\"src_lo\":\"%08x\",\"src_hi\":\"%08x\"}}",
              id, g_ws_bd_stretch_on, g_ws_bd_stretch_pct, g_ws_bd_phase_thresh, g_ws_bd_phase_mode,
+             gpu_ws_get_nw_phase_backdrop(),
              g_bdg_applied, g_bdg_prims, g_bdg_cur, g_bdg_base, g_bdg_w, g_bdg_off,
              g_ws_backdrop_lo, g_ws_backdrop_hi, g_bdg_src_lo, g_bdg_src_hi);
 }
@@ -8374,6 +8456,46 @@ static void handle_savestate_status(int id, const char *json)
     char status[256];
     savestate_status_json(status, sizeof status);
     send_fmt("{\"id\":%d,\"ok\":true,%s}", id, status);
+}
+
+/* Bounded semantic-mouse test seam. This feeds the same accumulator as SDL
+ * relative motion; the retail hook still owns all validation and writes. */
+static void handle_mouse_camera_input(int id, const char *json)
+{
+    int dx = json_get_int(json, "dx", 0);
+    int dy = json_get_int(json, "dy", 0);
+    int aim = json_get_int(json, "aim", 0);
+    psx_mouse_camera_set_focus(1);
+    psx_mouse_camera_set_aim(aim);
+    psx_mouse_camera_add_motion(dx, dy);
+    send_fmt("{\"id\":%d,\"ok\":true,\"dx\":%d,\"dy\":%d,\"aim\":%d}",
+             id, dx, dy, aim ? 1 : 0);
+}
+
+static void handle_mouse_camera_stats(int id, const char *json)
+{
+    PsxMouseCameraStats s;
+    (void)json;
+    psx_mouse_camera_get_stats(&s);
+    send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,"
+             "\"hook_calls\":%llu,\"applied_chase\":%llu,"
+             "\"applied_aim\":%llu,\"rejected_word\":%llu,"
+             "\"rejected_state\":%llu,\"rejected_owner\":%llu,"
+             "\"last_controller\":\"0x%08X\","
+             "\"last_player\":\"0x%08X\","
+             "\"last_wrapper\":\"0x%08X\","
+             "\"last_base\":\"0x%08X\","
+             "\"last_yaw\":%d,\"last_pitch\":%d,"
+             "\"last_chase_pitch\":%d}",
+             id, psx_mouse_camera_enabled(),
+             (unsigned long long)s.hook_calls,
+             (unsigned long long)s.applied_chase,
+             (unsigned long long)s.applied_aim,
+             (unsigned long long)s.rejected_word,
+             (unsigned long long)s.rejected_state,
+             (unsigned long long)s.rejected_owner,
+             s.last_controller, s.last_player, s.last_wrapper, s.last_base,
+             s.last_yaw, s.last_pitch, s.last_chase_pitch);
 }
 
 static void handle_turbo(int id, const char *json)
@@ -14109,6 +14231,8 @@ static const CmdEntry s_commands[] = {
     { "input_route_status",handle_input_route_status },
     { "route_record_marker", handle_route_record_marker },
     { "route_record_status", handle_route_record_status },
+    { "mouse_camera_input", handle_mouse_camera_input },
+    { "mouse_camera_stats", handle_mouse_camera_stats },
     { "savestate",         handle_savestate },
     { "savestate_status",  handle_savestate_status },
     { "turbo",             handle_turbo },
@@ -14143,6 +14267,7 @@ static const CmdEntry s_commands[] = {
     { "gpu_ring_stats",    handle_gpu_ring_stats },
     { "gpu_frame_dump",    handle_gpu_frame_dump },
     { "a0_history",        handle_a0_history },
+    { "depth24_uploads",   handle_depth24_uploads },
     { "c0_history",        handle_c0_history },
     { "capture_quads",     handle_capture_quads },
     { "get_quads",         handle_get_quads },
@@ -15019,10 +15144,18 @@ int debug_server_get_input_override(void)
         ++s_input_route_consumed;
         return 0xFFFF;
     }
+    if (s_input_override >= 0 && s_input_start_frame > s_frame_count)
+        return -1;
     int current = s_input_override;
     if (s_input_override >= 0 && s_input_frames > 0) {
-        if (--s_input_frames == 0)
+        if (s_input_first_applied_frame == UINT64_MAX)
+            s_input_first_applied_frame = s_frame_count;
+        s_input_last_applied_frame = s_frame_count;
+        s_input_applied_count++;
+        if (--s_input_frames == 0) {
             s_input_override = -1;
+            s_input_start_frame = 0;
+        }
     }
     return current;
 }
@@ -15046,3 +15179,4 @@ int debug_server_turbo_enabled(void)
 {
     return s_turbo_enabled != 0;
 }
+

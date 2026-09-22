@@ -401,6 +401,10 @@ struct RuntimeConfig {
     //               overall sharpness at the nearest level
     int                   video_fmv_filter = VIDEO_FMV_FILTER_DEFAULT;
 
+    // pgxp: visual-only precise GTE position/depth metadata. Disabled by
+    // default and fail-closed when packet provenance is incomplete.
+    bool                  video_pgxp = false;
+
     // renderer: "software" | "opengl" (default) | "vulkan". Selects the
     // rasterizer/present backend. The software rasterizer remains the explicit
     // fallback. Stored as VIDEO_RENDERER_*.
@@ -634,6 +638,39 @@ struct RuntimeConfig {
     // to compensate a title's own internal stick deadzone. Absent => 0.
     bool                  has_anti_deadzone = false;
     int                   anti_deadzone     = 0;
+
+    // Opt-in mouse translation through ordinary PAD state. Buttons use the
+    // Syphon layout; relative motion emits bounded D-pad pulses. This is a
+    // compatibility-first first pass, not a direct camera hook.
+    bool                  controller_mouse_pad = false;
+    int                   controller_mouse_counts_per_frame = 12;
+    int                   controller_mouse_aim_counts_per_frame = 4;
+
+    // Optional direct relative-mouse camera bridge. Unlike mouse_pad, motion
+    // never becomes PAD directions: a full-word-guarded resident block hook
+    // applies yaw/pitch only while the configured retail player owns the
+    // camera. All addresses and layouts are title configuration; the runtime
+    // implementation is otherwise title-neutral and fail-closed.
+    bool                  controller_mouse_camera_enabled = false;
+    uint32_t              controller_mouse_camera_facing_site = 0;
+    uint32_t              controller_mouse_camera_facing_expected = 0;
+    uint32_t              controller_mouse_camera_application_state_addr = 0;
+    uint32_t              controller_mouse_camera_player_pointer_addr = 0;
+    uint32_t              controller_mouse_camera_player_state_offset = 0;
+    uint32_t              controller_mouse_camera_wrapper_offset = 0;
+    uint32_t              controller_mouse_camera_base_offset = 0;
+    uint32_t              controller_mouse_camera_owner_offset = 0;
+    uint32_t              controller_mouse_camera_desired_pitch_offset = 0;
+    uint32_t              controller_mouse_camera_rendered_pitch_offset = 0;
+    uint32_t              controller_mouse_camera_vector_x_offset = 0;
+    uint32_t              controller_mouse_camera_vector_y_offset = 0;
+    uint32_t              controller_mouse_camera_vector_z_offset = 0;
+    int                   controller_mouse_camera_controller_reg = 0;
+    double                controller_mouse_chase_yaw_sensitivity = 0.75;
+    double                controller_mouse_chase_pitch_sensitivity = 1.0;
+    double                controller_mouse_aim_yaw_sensitivity = 1.0;
+    double                controller_mouse_aim_pitch_sensitivity = 1.0;
+    bool                  controller_mouse_invert_y = false;
 
 };
 
@@ -1086,10 +1123,11 @@ struct GameConfig {
     // a recognizable full-frame textured quad. Runtime-only; off by default.
     bool ws_nw_flat_backdrop = false;
 
-    // [widescreen] nw_phase_backdrop — stretch textured primitives emitted
-    // before the frame's first shaded 3D primitive. This isolates an authored
-    // 2D sky/backdrop phase from the later textured foreground. Runtime-only;
-    // off by default because draw ordering is title-specific.
+    // [widescreen] nw_phase_backdrop — stretch textured polygons in the first
+    // ordering-table rank that submits them each frame. This gives an opted-in
+    // title a semantic background owner without packet addresses or texture
+    // identities. Runtime-only; off by default because draw ordering is
+    // title-specific.
     bool ws_nw_phase_backdrop = false;
 
     // Expand only textured polygon vertices that already lie beyond the
@@ -1102,6 +1140,18 @@ struct GameConfig {
     // canonical VRAM. Required when edge-crossing polygon interpolation is
     // transformed in the mirror.
     bool ws_nw_full_mirror = false;
+
+    // Apply the aspect-scaled horizontal projection to guest-visible GTE SXY
+    // in native-wide mode, then restore the retail projection for dense world
+    // DMA submissions. This lets the title's visibility decisions observe the
+    // wide cone without moving later HUD/effect submissions. Runtime-only;
+    // off by default.
+    bool ws_nw_guest_projection = false;
+
+    // Minimum polygon commands required to classify one linked-list DMA
+    // submission as world-owned for native-wide projection compensation.
+    // Zero disables the classifier. Runtime-only and title-profile data.
+    uint32_t ws_nw_world_min_polygons = 0;
 
     // [[widescreen.signed_x_bound]] guarded LUI signed-Q16 bounds or ADDIU/ORI
     // rt,zero,imm screen-pixel bounds. Both remain identity in 4:3/menus/FMV.

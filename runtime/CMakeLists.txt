@@ -480,6 +480,44 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     # crc32 linkage is not the cause — the envelope sweep genuinely disagrees.
     set_tests_properties(spu_fidelity_test PROPERTIES DISABLED TRUE)
 
+    add_executable(ws_backdrop_owner_test
+        tests/test_ws_backdrop_owner.c)
+    target_include_directories(ws_backdrop_owner_test PRIVATE include)
+    add_test(NAME ws_backdrop_owner_test COMMAND ws_backdrop_owner_test)
+
+    add_executable(ws_fullwidth_effect_test
+        tests/test_ws_fullwidth_effect.c)
+    target_include_directories(ws_fullwidth_effect_test PRIVATE include)
+    add_test(NAME ws_fullwidth_effect_test COMMAND ws_fullwidth_effect_test)
+
+    add_executable(ws_projection_compose_test
+        tests/test_ws_projection_compose.c)
+    target_include_directories(ws_projection_compose_test PRIVATE include)
+    add_test(NAME ws_projection_compose_test COMMAND ws_projection_compose_test)
+
+    add_executable(gpu_primitive_reject_test
+        tests/test_gpu_primitive_reject.c)
+    target_include_directories(gpu_primitive_reject_test PRIVATE include)
+    add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)
+
+    add_executable(pgxp_native_vram_test
+        tests/test_pgxp_native_vram.c
+        src/gpu_sw_renderer.c)
+    target_include_directories(pgxp_native_vram_test PRIVATE include src)
+    if(NOT MSVC)
+        target_link_libraries(pgxp_native_vram_test PRIVATE m)
+    endif()
+    add_test(NAME pgxp_native_vram_test COMMAND pgxp_native_vram_test)
+
+    add_executable(mouse_camera_test
+        tests/test_mouse_camera.c
+        src/mouse_camera.c)
+    target_include_directories(mouse_camera_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(mouse_camera_test PRIVATE m)
+    endif()
+    add_test(NAME mouse_camera_test COMMAND mouse_camera_test)
+
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
         src/overlay_capture.c)

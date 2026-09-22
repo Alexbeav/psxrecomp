@@ -56,7 +56,7 @@ uint32_t gpu_read_gpuread(void) {abort();}
 void gpu_set_gp0_source(uint32_t a) {(void)a;}
 void gpu_write_gp0(uint32_t v) {assert(upload_left);upload_left--;uploaded[upload_count++]=v;}
 uint32_t gpu_dma_vram_upload_words(void) {return upload_left;}
-void gpu_ws_begin_linked_list(void) {abort();}
+void gpu_ws_begin_linked_list(uint32_t start_addr) {(void)start_addr; abort();}
 void gpu_ws_end_linked_list(void) {abort();}
 void gpu_ws_prepass_linked_list(uint32_t a) {(void)a;abort();}
 uint32_t psx_mod_gpu_dma_resolve_address(uint32_t a) {(void)a;abort();}

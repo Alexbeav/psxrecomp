@@ -63,6 +63,8 @@ typedef struct {
  * not exist. exe_path may be NULL/argv[0]/the exe directory itself — the .ini is
  * placed in that file's directory (or the path itself when it is a directory). */
 void psx_keybinds_init(const char *exe_path);
+/* Reload an explicit launcher-owned keybind file into the live runtime map. */
+void psx_keybinds_load_file(const char *path);
 
 /* Read-only view of the current bindings. */
 const PsxKeyBinds *psx_keybinds_get(void);

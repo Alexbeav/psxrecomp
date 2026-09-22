@@ -68,7 +68,7 @@ uint32_t gpu_dma_vram_upload_words(void) {return upload_left;}
 void gpu_ws_validate_linked_list_header(uint32_t a,uint32_t b) {(void)a;(void)b;abort();}
 void gpu_ws_validate_linked_list_node(uint32_t a,uint32_t b) {(void)a;(void)b;abort();}
 void gpu_ws_restore_linked_list_rank(uint32_t a) {(void)a;abort();}
-void gpu_ws_begin_linked_list(void) {}
+void gpu_ws_begin_linked_list(uint32_t start_addr) {(void)start_addr;}
 void gpu_ws_end_linked_list(void) {}
 void gpu_ws_prepass_linked_list(uint32_t a) {(void)a;}
 uint32_t psx_mod_gpu_dma_resolve_address(uint32_t a) {return a;}

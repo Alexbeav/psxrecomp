@@ -329,11 +329,22 @@ static void load_ini(const char *path) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-void psx_keybinds_init(const char *exe_path) {
-    derive_ini_path(exe_path);
+void psx_keybinds_load_file(const char *path) {
+    if (path && *path) {
+        char resolved[sizeof(s_ini_path)];
+        snprintf(resolved, sizeof(resolved), "%s", path);
+        snprintf(s_ini_path, sizeof(s_ini_path), "%s", resolved);
+    }
+    s_binds = s_default_binds;
+    memset(&s_alt_binds, 0, sizeof(s_alt_binds));
     FILE *test = fopen(s_ini_path, "r");
     if (test) { fclose(test); load_ini(s_ini_path); }
     else       write_ini(s_ini_path);
+}
+
+void psx_keybinds_init(const char *exe_path) {
+    derive_ini_path(exe_path);
+    psx_keybinds_load_file(s_ini_path);
 }
 
 const PsxKeyBinds *psx_keybinds_get(void) { return &s_binds; }
@@ -467,3 +478,4 @@ void psx_keybinds_save(void) {
     if (!s_ini_path[0]) strcpy(s_ini_path, "keybinds.ini");
     write_ini(s_ini_path);
 }
+

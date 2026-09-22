@@ -2,6 +2,7 @@
 #include "cpu_state.h"
 #include "nd_intro_ot.h"
 #include "pgxp.h"
+#include "ws_projection_compose.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
@@ -294,6 +295,23 @@ extern "C" void gte_precision_store_word(uint32_t addr, uint8_t reg) {
  * as a no-op for link compatibility. */
 extern "C" void gte_precision_invalidate_word(uint32_t addr) {
     (void)addr;
+}
+
+/* gte_precision_query_word() is the SF2-generation entry point. Its declaration
+ * survives in the merged cpu_state.h (GtePrecisionStatus + this prototype), but
+ * the hashed s_precision_store / s_precision_tracking generation it was written
+ * against is retired: the PGXP value-propagation engine (pgxp.cpp) owns exact
+ * projection provenance now, behind validate-on-read. Keep the symbol and the
+ * status vocabulary by mapping the pgxp result onto it, so the header declares
+ * nothing that no translation unit defines. */
+extern "C" GtePrecisionStatus gte_precision_query_word(
+    uint32_t addr, uint32_t packed, int32_t *x16, int32_t *y16,
+    uint16_t *z) {
+    if (s_speculative_depth != 0) return GTE_PRECISION_SPECULATIVE;
+    if (!pgxp_enabled()) return GTE_PRECISION_DISABLED;
+    if (!pgxp_load_precise_word(addr, packed, x16, y16, z))
+        return GTE_PRECISION_MISSING;
+    return GTE_PRECISION_EXACT;
 }
 
 extern "C" int gte_precision_load_word(uint32_t addr, uint32_t packed,
@@ -783,13 +801,9 @@ extern "C" int gte_rtp_ring_dump_json(char* out, int outsz, int max_count,
 }
 
 extern "C" void gte_set_display_aspect(int num, int den) {
-    if (num <= 0 || den <= 0) { s_ws_xnum = s_ws_xden = 1; return; }
-    // squash = (4/3) / (num/den) = (4*den) / (3*num); identity for 4:3.
-    int32_t n = 4 * den, d = 3 * num;
-    int32_t a = n, b = d;
-    while (b) { int32_t t = a % b; a = b; b = t; }   // gcd
-    s_ws_xnum = n / a;
-    s_ws_xden = d / a;
+    const WsProjectionScale scale = ws_projection_scale(num, den);
+    s_ws_xnum = scale.num;
+    s_ws_xden = scale.den;
 }
 
 // ---------------------------------------------------------------------------
