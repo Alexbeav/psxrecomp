@@ -25,6 +25,35 @@ def directory_record(name: str, extent: int, size: int, *, is_dir: bool) -> byte
     return bytes(record)
 
 
+class ProbeDiscChdTests(unittest.TestCase):
+    """A .chd is probed through libchdr, never rejected as "not a .cue".
+
+    The setup wizard accepts .chd for every disc of a set; update_disc_set
+    probes each one. Rejecting .chd left a multi-disc game.toml on its
+    placeholder roster (SF2 0.2.0, 2026-09-23). End-to-end digests and
+    fingerprints need real media and libchdr; this pins the routing.
+    """
+
+    def test_chd_routes_to_libchdr_not_cue_rejection(self) -> None:
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        import psx_chd
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chd = Path(tmp) / "Game (Disc 2).chd"
+            chd.write_bytes(b"MComprHD")
+            with mock.patch.dict(os.environ, {"PSXRECOMP_LIBCHDR": ""}), \
+                    mock.patch.object(psx_chd, "find_libchdr", return_value=None):
+                with self.assertRaises(SystemExit) as ctx:
+                    probe_disc.probe(chd)
+        message = str(ctx.exception)
+        self.assertNotIn("expects a .cue", message)
+        self.assertIn(chd.name, message)
+
+
 class ProbeDiscPathTests(unittest.TestCase):
     def test_system_cnf_keeps_nested_boot_path(self) -> None:
         cnf = b"BOOT = cdrom:\\TEKKEN3\\SLUS_004.02;1\r\n"
