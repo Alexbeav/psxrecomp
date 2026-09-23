@@ -173,7 +173,9 @@ def select_entries(registry, titles):
 def resolve(repo, rev):
     if rev is None:
         return None
-    out = git(repo, 'rev-parse', '--verify', '--quiet', f'{rev}^{{commit}}', allow_fail=True)
+    # ^0 peels to the commit like ^{commit}, without braces: MSYS2's git expands
+    # braces in arguments when a native Windows process starts it.
+    out = git(repo, 'rev-parse', '--verify', '--quiet', f'{rev}^0', allow_fail=True)
     if out is None:
         raise HunkError(f'unresolvable revision: {rev}')
     return out.decode().strip()
