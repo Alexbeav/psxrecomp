@@ -793,19 +793,61 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
     return 0;
 }
 
+#if !defined(_WIN32)
+/* True when retcomm-toolchain.json says the pack was built for this OS
+ * ("os": "macos-universal" / "linux-x64"). A Windows pack can sit in the shared
+ * cache (older kits downloaded only that one); it must never reach PATH here. */
+static int pack_is_for_this_host(const char* pack_root) {
+    char manifest[1500], buf[4096];
+    const char* p;
+    FILE* f;
+    size_t n;
+#if defined(__APPLE__)
+    const char* want = "macos";
+#else
+    const char* want = "linux";
+#endif
+    if (!pack_root || !pack_root[0] ||
+        !join_path(manifest, sizeof(manifest), pack_root, "retcomm-toolchain.json"))
+        return 0;
+    f = fopen(manifest, "rb");
+    if (!f)
+        return 0;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    p = strstr(buf, "\"os\"");
+    if (!p || !(p = strchr(p + 4, ':')) || !(p = strchr(p, '"')))
+        return 0;
+    return strncmp(p + 1, want, strlen(want)) == 0;
+}
+#endif
+
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
 #if !defined(_WIN32)
-    /* Linux and macOS use native build tools. A stale Windows pack can exist
-     * in the shared cache, but it must never shadow tools from the host PATH. */
-    return;
+    /* Linux and macOS prefer native build tools: when cmake and ninja are on
+     * PATH the pack never shadows them. Without them, a cmake-clang-v1 pack
+     * built for this OS supplies cmake/ninja (compilers stay the system's). */
+    {
+        char tool[1200];
+        if (find_on_path("cmake", tool, sizeof(tool)) &&
+            find_on_path("ninja", tool, sizeof(tool)))
+            return;
+    }
 #endif
     if (!resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
         return;
     /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
     pack_root[0] = '\0';
     (void)dirname_copy(pack_root, sizeof(pack_root), g_toolchain_bin);
+#if !defined(_WIN32)
+    if (!pack_is_for_this_host(pack_root)) {
+        g_toolchain_bin[0] = '\0';
+        return;
+    }
+#endif
 
     /* Prepend pack python/ (Windows) or python/bin (Unix), then bin/. */
     char py_path_dir[1400];
@@ -3471,6 +3513,7 @@ static int host_toolchain_is_ready(void) {
         return 0;
     g_tc_repair_note[0] = '\0';
 #if !defined(_WIN32)
+    activate_toolchain_path();   /* no-op when native cmake+ninja are on PATH */
     return host_system_toolchain_ready();
 #endif
     migrate_legacy_psxrecomp_toolchain();
@@ -3680,8 +3723,34 @@ static int host_ensure_toolchain_with_progress(
 #if !defined(_WIN32)
     if (on_progress)
         on_progress(progress_ctx, 0.02f, "Checking native build tools…");
+    activate_toolchain_path();
     if (host_system_toolchain_ready())
         return 1;
+    /* No native cmake/ninja: install the cmake-clang-v1 pack built for this OS
+     * (toolchain_zip_asset_name) and use its cmake/ninja with the system's
+     * compilers. The readiness check still requires Python and a C/C++
+     * compiler, which the pack does not replace. */
+    if ((zip_path && zip_path[0]) || download) {
+        char install_err[512];
+        int installed;
+        install_err[0] = '\0';
+        installed = (zip_path && zip_path[0])
+            ? host_install_toolchain_from_zip(zip_path, on_progress, progress_ctx,
+                                              install_err, sizeof(install_err))
+            : host_download_and_install_toolchain(on_progress, progress_ctx,
+                                                  install_err, sizeof(install_err));
+        if (installed) {
+            activate_toolchain_path();
+            if (host_system_toolchain_ready())
+                return 1;
+        }
+        snprintf(err_msg, err_cap,
+                 "Native build tools are missing%s%s. Install Python and C/C++ "
+                 "compilers (macOS: xcode-select --install), and CMake and Ninja "
+                 "if the portable pack cannot be used, then restart setup.",
+                 install_err[0] ? "; portable pack: " : "", install_err);
+        return 0;
+    }
     snprintf(err_msg, err_cap,
              "Native build tools are missing. Install CMake, Ninja, Python, "
              "and C/C++ compilers, then restart setup.");

@@ -13,6 +13,8 @@ sync_project_disc_cfg_to_product() closes that gap on both hand-off routes
 translation unit into a probe and checks the copy rules directly.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import os
 import shutil
@@ -98,9 +100,9 @@ def main() -> int:
             build_dir = proj / "build-release"
             build_dir.mkdir(parents=True)
             if project is not None:
-                (proj / "disc.cfg").write_text(project + "\n", encoding="utf-8", newline="\n")
+                (proj / "disc.cfg").write_bytes((project + "\n").encode("utf-8"))
             if product is not None:
-                (build_dir / "disc.cfg").write_text(product, encoding="utf-8", newline="\n")
+                (build_dir / "disc.cfg").write_bytes(product.encode("utf-8"))
             run = subprocess.run([str(exe), str(proj), str(build_dir / "Game.exe")],
                                  capture_output=True, text=True)
             target = build_dir / "disc.cfg"

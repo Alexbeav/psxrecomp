@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Keep Unix setup on native build tools instead of the Windows pack."""
+"""Unix setup: native build tools first, then the pack built for this OS.
+
+A Windows pack must never reach PATH on Linux or macOS, and a pack must never
+shadow native cmake/ninja. Without native tools, the cmake-clang-v1 pack for
+this OS supplies cmake/ninja (v1.0.14 publishes linux-x64 and macos-universal).
+"""
 
 from pathlib import Path
 import re
@@ -28,6 +33,31 @@ def main() -> int:
     )
     if not activate_cli or "_native_toolchain_ready(log)" not in activate_cli.group():
         raise AssertionError("POSIX CLI does not accept native build tools")
+    # Without native cmake/ninja, the pack ensure-toolchain installed for this
+    # OS must be used (SF2 0.2.0 macOS replay: it was downloaded, then ignored).
+    if "_host_pack_bin(project_root)" not in activate_cli.group():
+        raise AssertionError("POSIX CLI ignores the host-OS toolchain pack")
+    host_pack = re.search(r"def _host_pack_bin\(.*?(?=\n\ndef )", cli, re.DOTALL)
+    if not host_pack or "pack_matches_host(" not in host_pack.group():
+        raise AssertionError("POSIX CLI can activate a pack built for another OS")
+
+    pack_src = (root / "tools/toolchain_pack.py").read_text(encoding="utf-8")
+    hook = re.search(r"def _register_user_path_unix\(.*?(?=\n\ndef )", pack_src, re.DOTALL)
+    if not hook or "env.sh" in hook.group().split("hook.write_text(", 1)[1].split("encoding=", 1)[0]:
+        raise AssertionError("shell PATH hook sources the bash-only env.sh")
+
+    sys.path.insert(0, str(root / "tools"))
+    import json, tempfile
+    from toolchain_pack import host_artifact, pack_matches_host
+    host_os = {"windows": "windows-x64", "macos": "macos-universal", "linux": "linux-x64"}
+    mine = host_os[host_artifact().split("-", 1)[0]]
+    with tempfile.TemporaryDirectory() as tmp:
+        for pack_os in ("windows-x64", "macos-universal", "linux-x64"):
+            pack = Path(tmp) / pack_os
+            pack.mkdir()
+            (pack / "retcomm-toolchain.json").write_text(json.dumps({"os": pack_os}), encoding="utf-8")
+            if pack_matches_host(pack) != (pack_os == mine):
+                raise AssertionError(f"pack_matches_host({pack_os}) wrong on {mine}")
 
     ensure_cli = re.search(
         r"def ensure_toolchain_for_rebuild\(.*?(?=\n\ndef )",
@@ -46,6 +76,8 @@ def main() -> int:
         raise AssertionError("Toolchain PATH activation is missing")
     posix_activate = activate.group("body").split("#endif", 1)[0]
     if "#if !defined(_WIN32)" not in posix_activate or "return;" not in posix_activate:
+        raise AssertionError("POSIX setup lets a toolchain pack shadow native tools")
+    if "pack_is_for_this_host(pack_root)" not in activate.group("body"):
         raise AssertionError("POSIX setup can activate a cached Windows toolchain")
 
     find_python = re.search(

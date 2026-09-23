@@ -68,12 +68,31 @@ def _native_toolchain_ready(log=None) -> bool:
     return True
 
 
+def _host_pack_bin(project_root: Path) -> Optional[Path]:
+    """Unix: a cmake-clang-v1 bin/ built for this OS, never a Windows pack."""
+    from toolchain_pack import pack_matches_host
+
+    bin_dir = resolve_toolchain_bin(project_root)
+    if bin_dir is None or not pack_matches_host(bin_dir.parent):
+        return None
+    return bin_dir
+
+
 def activate_embedded_toolchain(
     project_root: Path, progress: Optional[ProgressReporter] = None
 ) -> bool:
     """Prepend resolved toolchain bin/ to PATH for cmake/ninja/clang."""
     log = progress.log if progress else None
     if sys.platform != "win32":
+        # Native cmake/ninja win. Without them, the pack that ensure-toolchain
+        # installed for this OS supplies them; compilers stay the system's.
+        if shutil.which("cmake") and shutil.which("ninja"):
+            return _native_toolchain_ready(log)
+        bin_dir = _host_pack_bin(project_root)
+        if bin_dir is not None and toolchain_bin_runs(bin_dir, log=log):
+            from toolchain_pack import activate_toolchain_bin
+
+            activate_toolchain_bin(bin_dir, log=log)
         return _native_toolchain_ready(log)
     bin_dir = resolve_toolchain_bin(project_root)
     if not bin_dir or not toolchain_bin_runs(bin_dir, log=log):
@@ -94,7 +113,10 @@ def ensure_toolchain_for_rebuild(
 ) -> bool:
     """Ensure cmake is available via cache / download / offline zip."""
     if sys.platform != "win32":
-        return _native_toolchain_ready(progress.log)
+        if activate_embedded_toolchain(project_root, progress):
+            return True
+        if not download and not from_zip:
+            return _native_toolchain_ready(progress.log)
     try:
         _ensure_toolchain_pack(
             project_root,
@@ -103,10 +125,12 @@ def ensure_toolchain_for_rebuild(
             min_version=min_version,
             log=progress.log,
         )
-        return True
     except Exception as exc:  # noqa: BLE001 — surface to progress UI
         progress.log(f"Toolchain ensure: {exc}")
         return False
+    if sys.platform != "win32":
+        return activate_embedded_toolchain(project_root, progress)
+    return True
 
 
 def prune_after_rebuild(
