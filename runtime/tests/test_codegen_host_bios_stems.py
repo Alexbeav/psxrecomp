@@ -13,6 +13,8 @@ test_cli_retail_bios_profile.py already covers the psxrecomp_cli.py half of
 this feature. This is the C host half, which had no coverage.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import os
 import shutil
