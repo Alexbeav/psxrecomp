@@ -397,10 +397,41 @@ def display_name_from_cue(cue_path: Path, volume_id: str) -> str:
     return name.strip() or stem
 
 
+def probe_chd(chd_path: Path, *, identity_only: bool = False) -> DiscProbe:
+    """Probe a .chd by extracting it to a temporary Redump-shaped cue/bin set.
+
+    The setup wizard accepts .chd for every disc of a set, and update_disc_set
+    probes each one; without this a multi-disc CHD set was rejected ("expects
+    a .cue"), the failure was non-fatal, and game.toml kept its placeholder
+    roster. Extracting through psx_chd reuses the exact cue layout Generate
+    normalizes to, so the digests and psxrecomp-toc-v1 fingerprint are those
+    of the equivalent Redump dump.
+    """
+    import tempfile
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import psx_chd  # tools/psx_chd.py
+
+    framework_root = Path(__file__).resolve().parents[2]
+    lib_path = psx_chd.find_libchdr(None, framework_root)
+    if lib_path is None:
+        raise SystemExit(psx_chd.unsupported_message(chd_path))
+    with tempfile.TemporaryDirectory(prefix="probe_chd_") as tmp:
+        with psx_chd.ChdDisc(chd_path, psx_chd.LibChdr(lib_path)) as disc:
+            cue = psx_chd.extract(disc, Path(tmp), chd_path.stem + ".cue")
+        p = probe(cue, identity_only=identity_only)
+    p.cue_path = str(chd_path)
+    p.cue_name = chd_path.name
+    p.notes.append("probed from a .chd through libchdr (temporary Redump-layout extract).")
+    return p
+
+
 def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
     cue_path = cue_path.resolve()
+    if cue_path.suffix.lower() == ".chd":
+        return probe_chd(cue_path, identity_only=identity_only)
     if cue_path.suffix.lower() != ".cue":
-        raise SystemExit("probe_disc expects a .cue (Redump multi-track layout)")
+        raise SystemExit("probe_disc expects a .cue (Redump multi-track layout) or a .chd")
 
     tracks, files_order = parse_cue(cue_path)
     bin_path = first_binary_bin(cue_path, files_order, tracks)
