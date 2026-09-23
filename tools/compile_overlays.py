@@ -3105,7 +3105,7 @@ def write_overlay_ranges_from(func_ids: list, out_path: str,
     Manifest v2 line format:
       F <entry_hex> <code_crc_hex>     one per function
       R <lo_hex> <len_hex>             one per coalesced code range"""
-    with open(out_path, 'w') as f:
+    with open(out_path, 'w', encoding='utf-8') as f:
         f.write(overlay_ranges_text(func_ids, pair_id, provenance))
     return len(func_ids)
 
@@ -3593,7 +3593,7 @@ def generate_interior_fragment_static(interior: int, data: bytes,
             f.write(make_psxexe(load_addr, interior, data,
                                 guard_bytes=guard_bytes))
         seeds_path = os.path.join(tmp, 'seeds.txt')
-        with open(seeds_path, 'w') as f:
+        with open(seeds_path, 'w', encoding='utf-8') as f:
             f.write(f'dispatch_root 0x{interior:08X}\n')
         out_dir_tmp = os.path.join(tmp, 'out')
         os.makedirs(out_dir_tmp)
@@ -4468,7 +4468,7 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
             f.write(make_psxexe(load_addr, first_entry, data,
                                 guard_bytes=guard_bytes))
         seeds_path = os.path.join(tmp, 'seeds.txt')
-        with open(seeds_path, 'w') as f:
+        with open(seeds_path, 'w', encoding='utf-8') as f:
             for range_lo, range_hi in producer_ranges:
                 f.write(f'producer_range 0x{range_lo:08X} 0x{range_hi:08X}\n')
             for target in sorted(set(cross_call_allow)):
@@ -4540,7 +4540,7 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
                 failed_c = os.path.join(
                     cache_dir,
                     f'{phys_addr:08X}_{request_key:08X}_fragment_FAILED.c')
-                with open(failed_c, 'w') as f:
+                with open(failed_c, 'w', encoding='utf-8') as f:
                     f.write(header + src)
             except OSError:
                 pass   # retention is best-effort; never mask the real failure
@@ -4598,7 +4598,7 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
                 return None, ('fragment cache-key collision/stale pair: existing '
                               'manifest does not match generated identity')
         patched_c = os.path.join(tmp, 'frag_patched.c')
-        with open(patched_c, 'w') as f:
+        with open(patched_c, 'w', encoding='utf-8') as f:
             f.write(src)
         # Keep the exact generated fragment beside other retained overlay
         # sources. Orphan interiors are the hardest shards to audit when a
@@ -4606,7 +4606,7 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
         # deleting their only C representation with the temp directory made
         # the responsible lowering impossible to inspect after compilation.
         retained_c = os.path.join(cache_dir, f'{key:08X}_fragment_patched.c')
-        with open(retained_c, 'w') as f:
+        with open(retained_c, 'w', encoding='utf-8') as f:
             f.write(src)
         include_dirs = [args.runtime_include]
         recomp_root = os.path.dirname(os.path.dirname(args.recompiler))
@@ -5986,7 +5986,7 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
             f.write(make_psxexe(load_addr, entry_pc, data,
                                 guard_bytes=guard_bytes))
         seeds_path = os.path.join(tmp, 'seeds.txt')
-        with open(seeds_path, 'w') as f:
+        with open(seeds_path, 'w', encoding='utf-8') as f:
             for seed in seeds:
                 f.write(seed + '\n')
         out_dir_tmp = os.path.join(tmp, 'out')
@@ -6571,7 +6571,7 @@ def main():
 
             # Write seeds file
             seeds_path = os.path.join(tmp, 'seeds.txt')
-            with open(seeds_path, 'w') as f:
+            with open(seeds_path, 'w', encoding='utf-8') as f:
                 for s in seeds:
                     f.write(s + '\n')
 
@@ -6636,7 +6636,7 @@ def main():
             os.makedirs(os.path.dirname(dll_path), exist_ok=True)
             debug_c = os.path.join(os.path.dirname(dll_path),
                                    f'{crc32:08X}_patched.c')
-            with open(debug_c, 'w') as f:
+            with open(debug_c, 'w', encoding='utf-8') as f:
                 f.write(src)
             if c_audit['unknown_bad'] or c_audit['unsupported_todo_addrs']:
                 fallback = optional_enrichment_fallback_capture(cap)
@@ -6652,7 +6652,7 @@ def main():
                                f'{len(c_audit["unsupported_todo_addrs"])} unsupported')
                 return
             patched_c = os.path.join(tmp, 'overlay_patched.c')
-            with open(patched_c, 'w') as f:
+            with open(patched_c, 'w', encoding='utf-8') as f:
                 f.write(src)
 
             # overlay-cache v2 dedup: compute this capture's per-function
@@ -6730,7 +6730,7 @@ def main():
             pair_id = overlay_pair_id(src, this_ids)
             src = add_overlay_pair_export(src, pair_id)
             # Retained source is the exact source compiled into the DLL.
-            with open(patched_c, 'w') as f:
+            with open(patched_c, 'w', encoding='utf-8') as f:
                 f.write(src)
 
             # Compile to DLL
