@@ -1731,6 +1731,50 @@ static int host_persist_setup_discs(void* ctx, const char* const* disc_paths,
     return 0;
 }
 
+/* Give the product the disc set the wizard recorded, when it has none.
+ *
+ * The wizard writes disc.cfg at the project root and tries build-release/ too,
+ * but on a fresh kit build-release/ does not exist yet, so that copy fails
+ * silently. The runtime reads disc.cfg only beside its own exe, so the first
+ * start asked for the disc again while the BIOS (which has a project-root
+ * fallback below) was remembered. The whole file is copied, so a multi-disc
+ * set keeps one path per line. An existing product-side disc.cfg is a pick
+ * the player made in the product and is left alone. */
+static void sync_project_disc_cfg_to_product(const char* near_exe) {
+    char dir[1100], dst[1200], src[1200];
+    char body[PSX_HOST_MAX_DISCS * 1030];
+    size_t n;
+    FILE* f;
+
+    if (!near_exe || !near_exe[0] || !g_project_root[0])
+        return;
+    if (!dirname_copy(dir, sizeof(dir), near_exe) ||
+        !join_path(dst, sizeof(dst), dir, "disc.cfg") ||
+        !join_path(src, sizeof(src), g_project_root, "disc.cfg"))
+        return;
+    if (host_paths_same_file(src, dst))
+        return;
+    f = fopen(dst, "rb");
+    if (f) {
+        int c = fgetc(f);
+        fclose(f);
+        if (c != EOF && c != '\n' && c != '\r')
+            return;
+    }
+    f = fopen(src, "rb");
+    if (!f)
+        return;
+    n = fread(body, 1, sizeof(body) - 1, f);
+    fclose(f);
+    body[n] = '\0';
+    while (n && (body[n - 1] == '\n' || body[n - 1] == '\r' ||
+                 body[n - 1] == ' ' || body[n - 1] == '\t'))
+        body[--n] = '\0';
+    if (!n)
+        return;
+    write_line_file(dst, body);
+}
+
 static void persist_relaunch_sidecars(const char* near_exe,
                                       const char* disc_path) {
     char bios_line[1100];
@@ -1744,6 +1788,8 @@ static void persist_relaunch_sidecars(const char* near_exe,
             join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
                       "disc.cfg"))
             write_line_file(project_sidecar, disc_path);
+    } else {
+        sync_project_disc_cfg_to_product(near_exe);
     }
 
     bios_line[0] = '\0';
@@ -4818,6 +4864,7 @@ void psxrecomp_codegen_host_forward_if_built(
     fprintf(stderr,
             "psxrecomp-codegen: setup host forwarding to product build:\n  %s\n",
             g_exe_path);
+    sync_project_disc_cfg_to_product(g_exe_path);
 
 #if defined(_WIN32)
     {
