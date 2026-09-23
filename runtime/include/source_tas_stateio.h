@@ -302,7 +302,10 @@ static inline int source_tas_stateio_manifest_parse(const char *text, TasStateMa
     out->bios_checksum = (uint32_t)v;
     if (!source_tas_stateio_parse_u64(text, "entry_pc", &v) || v > 0xFFFFFFFFull) return 0;
     out->entry_pc = (uint32_t)v;
-    if (!source_tas_stateio_parse_u64(text, "state_bytes", &out->state_bytes)) return 0;
+    /* state_bytes is unsigned long long (printed with %llu); uint64_t is
+     * unsigned long on LP64 Linux, so parse through the uint64_t temporary. */
+    if (!source_tas_stateio_parse_u64(text, "state_bytes", &v)) return 0;
+    out->state_bytes = (unsigned long long)v;
     if (!source_tas_stateio_find_field(text, "config_digest", out->config_digest,
                                        sizeof out->config_digest)) return 0;
     if (!source_tas_stateio_find_field(text, "exe_sha256", out->exe_sha256,
