@@ -77,7 +77,7 @@ background controllers from being merged into Player 1.
 
 ## Read-only references and provenance
 
-`I:/Projects/syphon-filter-redux` confirmed that 4x supersampling is a proven
+`<projects>/syphon-filter-redux` confirmed that 4x supersampling is a proven
 presentation target and contains game-specific free-look work. No guest
 addresses, camera writes, or implementation code were copied. The other SF2
 project confirmed the desired semantic action layout; this lab independently

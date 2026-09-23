@@ -33,7 +33,7 @@ fast_boot = true
 skip_launcher = true
 
 [bios]
-path = "I:/Projects/PSX-Ports/suikoden-ii/psxrecomp/bios/SCPH1001.BIN"
+path = "<projects>/PSX-Ports/suikoden-ii/psxrecomp/bios/SCPH1001.BIN"
 ```
 
 Disc and memcard differ only in kit-root path:
@@ -52,7 +52,7 @@ before the matched run.
 
 | Input | Value |
 | --- | --- |
-| BIOS dump | `I:\Projects\PSX-Ports\suikoden-ii\psxrecomp\bios\SCPH1001.BIN`, sha256 `71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3` |
+| BIOS dump | `<projects>\PSX-Ports\suikoden-ii\psxrecomp\bios\SCPH1001.BIN`, sha256 `71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3` |
 | disc | Syphon Filter 2 (USA) (Disc 1).cue, serial SCUS-94451, region NTSC-U |
 | boot exe | SCUS_944.51, sha256 `75a360bf7465dfdec85c14f9ba93862aae2531b48d83fd8d82ba8c9fffa13d33` |
 | game.toml | sha256 `813d40b794f68ca85c63416a81264f6102fe3fa16d4a3e0805e8b64ad8ac3355` |

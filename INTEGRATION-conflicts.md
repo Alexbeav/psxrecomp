@@ -1,6 +1,6 @@
 # SF2 integration — conflict inventory (2026-09-22)
 
-Branch `integration-test` in `I:\Projects\_local\psxrecomp-merge`
+Branch `integration-test` in `<projects>\_local\psxrecomp-merge`
 = `f4751d00` (launcher/wave5 baseline) + trial merge of `452cc0c` (SF2 feature branch).
 
 97 conflict hunks across 25 files. Only **4** are safely mechanical

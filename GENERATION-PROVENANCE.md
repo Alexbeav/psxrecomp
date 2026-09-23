@@ -35,7 +35,7 @@ documented; it was not enforced.
 The guide also names a different build target than the refs I merged:
 
 > "**Which fork branch:** build every title against `integrate/upstream-104` in
-> `I:\Projects\psxrecomp-fork`"
+> `<projects>\psxrecomp-fork`"
 
 and notes the recompiler tools build with **MSVC** (`recompiler/build` is an MSVC
 build). My merged emitter build used MinGW GCC 16.1.0, which the guide reserves for
@@ -44,9 +44,9 @@ recorded, not resolved.
 
 ## Regeneration result
 
-Built the merged emitters from `I:\Projects\_local\psxrecomp-merge\recompiler`
+Built the merged emitters from `<projects>\_local\psxrecomp-merge\recompiler`
 (configure `CFG=0`, build `BUILD=0`), then generated the game in an isolated
-workspace `I:\Projects\_local\gencheck` (game.toml + input + seeds + framework
+workspace `<projects>\_local\gencheck` (game.toml + input + seeds + framework
 staged; no existing build touched).
 
 Merged emitter identity:

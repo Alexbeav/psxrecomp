@@ -25,9 +25,9 @@ replaces retail gameplay, progression, timing, or authored behavior.
 | PSXRecomp baseline | `0cfa9fe0a8da944e9f694a24361b4973c57131ea` |
 | Upstream remote | `https://github.com/mstan/psxrecomp.git` |
 | License | PolyForm Noncommercial 1.0.0 |
-| Shipping SF2 correctness stream | `I:\Projects\sf-pc-port` |
-| SF2 modern presentation stream | `I:\Projects\SF2-Modern` |
-| Reference library | `I:\Projects\PSX-References` |
+| Shipping SF2 correctness stream | `<projects>\sf-pc-port` |
+| SF2 modern presentation stream | `<projects>\SF2-Modern` |
+| Reference library | `<projects>\PSX-References` |
 
 Because the upstream license is noncommercial, nothing produced here should
 be presented as the commercial-compatible harness. If the experiment proves

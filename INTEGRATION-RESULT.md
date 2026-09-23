@@ -13,7 +13,7 @@ A single runtime carrying **both** feature sets at once, which neither parent ha
 | `psx_rewind_*` (17 symbols) | **Rewind** | launcher baseline + rbengine |
 | `recomp_launcher_run_window`, `launcher_imgui.cpp` | **recomp-ui launcher** | paired recomp-ui `ff92028` |
 
-- exe: `I:\Projects\_local\integration-kit\bld\Syphon_Filter_2_Recompiled.exe`
+- exe: `<projects>\_local\integration-kit\bld\Syphon_Filter_2_Recompiled.exe`
 - 47,596,984 bytes, SHA-256 `97282fb89d1a0420572baad527dc16f71539fee9a69d323ef2415ab197901bff`
 - Launches; stderr is `main() entered` only (clean argv)
 - Configure gates: `BIOS backends linked: SCPH1001`, `rewind snap_ring (.../retcomm-rbengine)`, `recomp-ui: SDL3 platform backend`

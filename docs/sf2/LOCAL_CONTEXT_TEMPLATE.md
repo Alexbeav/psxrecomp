@@ -1,6 +1,6 @@
 # Local SF2 context template
 
-Copy this file to `I:\Projects\SF2-Recomp-Lab\.local-context\SF2.md` and fill
+Copy this file to `<projects>\SF2-Recomp-Lab\.local-context\SF2.md` and fill
 it in locally. `.local-context` is ignored by Git.
 
 ```text

@@ -36,7 +36,7 @@ Read these files completely at the start of each Codex session:
    the most detailed record and may be ahead of the state documents
 10. `lab/sf2/reference-manifest.toml`
 11. `CLAUDE.md`
-12. `I:\Projects\PSX-References\COMMUNITY_CONTRIBUTION_POLICY.md`
+12. `<projects>\PSX-References\COMMUNITY_CONTRIBUTION_POLICY.md`
 13. `docs/DEVELOPMENT_VALIDATION_WORKFLOW.md`
 
 `CLAUDE.md` is inherited upstream context. Preserve its hardware-faithfulness,
@@ -49,13 +49,13 @@ this pinned commit as the framework contract.
 
 ## Workspace boundaries
 
-- Work only in `I:\Projects\SF2-Recomp-Lab` unless performing a read-only
+- Work only in `<projects>\SF2-Recomp-Lab` unless performing a read-only
   comparison.
-- `I:\Projects\sf-pc-port` is the SF2 correctness oracle. Never edit it from
+- `<projects>\sf-pc-port` is the SF2 correctness oracle. Never edit it from
   this project.
-- `I:\Projects\SF2-Modern` is the presentation stream. Never edit it here.
-- `I:\Projects\SF3-PC-Port` is the independent SF3 bring-up. Never edit it.
-- `I:\Projects\PSX-References` is read-only research material.
+- `<projects>\SF2-Modern` is the presentation stream. Never edit it here.
+- `<projects>\SF3-PC-Port` is the independent SF3 bring-up. Never edit it.
+- `<projects>\PSX-References` is read-only research material.
 - Do not create branches or commits in any sibling repository.
 
 ## Licensing and provenance
@@ -186,16 +186,16 @@ The verified baseline is 50/50 passing tests. The CLI package is ignored under
 Before starting work, and again before diagnosing any new failure:
 
 1. Read this project's section in
-   `I:\Projects\PSX-Ports\_knowledge\reviews\2026-08-04-portfolio-sweep.md`
+   `<projects>\PSX-Ports\_knowledge\reviews\2026-08-04-portfolio-sweep.md`
    and apply its action list. Rebut findings only with artifact evidence
    (mtimes, build strings, phys ranges); do not re-assert claims it disproves.
 2. Search the shared corpus for your symptom BEFORE touching seeds, configs,
    or diagnostics:
-   - `I:\Projects\PSX-Ports\_shared\FINDINGS_REGISTRY.md` (PSX-BUILD-001
+   - `<projects>\PSX-Ports\_shared\FINDINGS_REGISTRY.md` (PSX-BUILD-001
      revised + PSX-BIOS-002 extended 2026-08-04 -- reread even if familiar)
-   - `I:\Projects\PSX-Ports\_knowledge\FINDING_CANDIDATES.md`
-   - `I:\Projects\PSX-Ports\_knowledge\failures\FAILURE_CATALOG.md`
-   - `I:\Projects\PSX-Ports\_knowledge\regressions\REGRESSION_LEDGER.md`
+   - `<projects>\PSX-Ports\_knowledge\FINDING_CANDIDATES.md`
+   - `<projects>\PSX-Ports\_knowledge\failures\FAILURE_CATALOG.md`
+   - `<projects>\PSX-Ports\_knowledge\regressions\REGRESSION_LEDGER.md`
 3. Return new lessons as candidate rows in `FINDING_CANDIDATES.md`, not only
    the local devlog. Evidence rule: match every cited dump's
    frame_count/epoch to the symptom stage and check end-of-run heartbeat/exit

@@ -403,7 +403,7 @@ shared-edge rejection gates before handoff.
 
 ## 2026-08-05 — read-only SF1 architecture delta
 
-Read-only inspection of `I:\Projects\sf-pc-port` confirms that SF1 high refresh
+Read-only inspection of `<projects>\sf-pc-port` confirms that SF1 high refresh
 does not operate on completed frames or identify GP0 packets after projection.
 Its main presentation loop owns an explicit 20 Hz wall-clock accumulator. Each
 completed retail update swaps immutable previous/current presentation snapshots;

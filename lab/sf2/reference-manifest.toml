@@ -5,9 +5,9 @@ created = "2026-08-02"
 name = "Syphon Filter 2 recompilation feasibility"
 branch = "experiment/sf2-recomp-feasibility"
 psxrecomp_commit = "0cfa9fe0a8da944e9f694a24361b4973c57131ea"
-hybrid_oracle_repository = "I:/Projects/sf-pc-port"
+hybrid_oracle_repository = "<projects>/sf-pc-port"
 hybrid_oracle_commit = "001b1e8"
-reference_catalog = "I:/Projects/PSX-References/CATALOG.md"
+reference_catalog = "<projects>/PSX-References/CATALOG.md"
 
 [game]
 title = "Syphon Filter 2"

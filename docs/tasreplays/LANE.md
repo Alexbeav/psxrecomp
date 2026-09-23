@@ -48,7 +48,7 @@ helpers and admitted source references, `movies/`, `firmware/`, `chd/` harness-s
 `discs/`, `runs/` source passes and their PowerShell drivers, `native/` candidates and routes,
 `build-cache/`. Older `nb-*` evidence stays on C: where admitted references bind it.
 
-Evidence archives go to `Z:\Share\psxrecomp\tas-evidence\<name>\` — `archive_run.py` for a
+Evidence archives go to `<share>\psxrecomp\tas-evidence\<name>\` — `archive_run.py` for a
 native route, `archive_source_runs.py` for source passes.
 
 ## Oracle hosts, and what each one costs you

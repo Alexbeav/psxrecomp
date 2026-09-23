@@ -6,13 +6,13 @@ Read these sources directly; do not duplicate them into this repository.
 
 ### Existing SF2 oracle
 
-- `I:\Projects\sf-pc-port\docs\GAME_RUNTIME_ARCHITECTURE.md`
-- `I:\Projects\sf-pc-port\docs\SF2_EXECUTABLE_MAP.md`
-- `I:\Projects\sf-pc-port\docs\SF2_SHARED_SYSTEM_MAP.md`
-- `I:\Projects\sf-pc-port\docs\SF2_MISSION_SCRIPT_VM.md`
-- `I:\Projects\sf-pc-port\docs\SF2_SF3_PORT_NOTES.md`
-- `I:\Projects\sf-pc-port\docs\devlogs\2026-07-28-sf2-bring-up.md`
-- `I:\Projects\sf-pc-port\tests\data\sf2\README.md`
+- `<projects>\sf-pc-port\docs\GAME_RUNTIME_ARCHITECTURE.md`
+- `<projects>\sf-pc-port\docs\SF2_EXECUTABLE_MAP.md`
+- `<projects>\sf-pc-port\docs\SF2_SHARED_SYSTEM_MAP.md`
+- `<projects>\sf-pc-port\docs\SF2_MISSION_SCRIPT_VM.md`
+- `<projects>\sf-pc-port\docs\SF2_SF3_PORT_NOTES.md`
+- `<projects>\sf-pc-port\docs\devlogs\2026-07-28-sf2-bring-up.md`
+- `<projects>\sf-pc-port\tests\data\sf2\README.md`
 
 The existing implementation is an oracle for externally observable state and
 known retail boundaries. Its host-specific workarounds are not automatically
@@ -20,7 +20,7 @@ requirements for this architecture.
 
 ### Reference library
 
-- `I:\Projects\PSX-References\CATALOG.md`
+- `<projects>\PSX-References\CATALOG.md`
 - `recompilation-and-ports\PsyDoom` — gradual native conversion and replay
   validation.
 - `recompilation-and-ports\sotn-decomp` — overlays, matching workflow, and

@@ -1,6 +1,6 @@
 # Start the SF2 recompilation experiment
 
-Open Codex in `I:\Projects\SF2-Recomp-Lab` and give it this instruction:
+Open Codex in `<projects>\SF2-Recomp-Lab` and give it this instruction:
 
 > Read `AGENTS.md` and every file it marks as required reading. Then pursue the
 > objective in `docs/sf2/CURRENT_OBJECTIVE.md` autonomously. Preserve all

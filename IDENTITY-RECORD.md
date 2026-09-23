@@ -7,7 +7,7 @@ identity. Not pushed.
 
 | Field | Value |
 | --- | --- |
-| repository | `I:\Projects\_local\psxrecomp-merge` (clone of `Alexbeav/psxrecomp`) |
+| repository | `<projects>\_local\psxrecomp-merge` (clone of `Alexbeav/psxrecomp`) |
 | branch | `integration-test` |
 | merge commit | `f3de715436426d3000f4f646d3f464d67b9c4529` |
 | tree | `b2aff5070acd438e5eb107874e56742d8668bbc1` |
@@ -66,5 +66,5 @@ merge commit above is local to `psxrecomp-merge` only.
 | compiler | `gcc/g++ 16.1.0` (MinGW-W64 x86_64-ucrt-posix-seh, Brecht Sanders r3) |
 | GPU / driver | NVIDIA, OpenGL 3.3.0, driver 616.92 |
 | panel | 144 Hz, vsync off; guest paced at 59.94 Hz |
-| BIOS | `I:\Projects\PSX-Ports\suikoden-ii\psxrecomp\bios\SCPH1001.BIN` |
-| disc | `I:\Projects\_local\integration-kit\disc\Syphon Filter 2 (USA) (Disc 1).cue` |
+| BIOS | `<projects>\PSX-Ports\suikoden-ii\psxrecomp\bios\SCPH1001.BIN` |
+| disc | `<projects>\_local\integration-kit\disc\Syphon Filter 2 (USA) (Disc 1).cue` |

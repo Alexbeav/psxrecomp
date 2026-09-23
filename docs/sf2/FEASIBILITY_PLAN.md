@@ -24,10 +24,10 @@ This is a bounded comparison, not a second full port.
 
 | Workspace | Authority |
 |---|---|
-| `I:\Projects\SF2-Recomp-Lab` | This recompilation feasibility experiment |
-| `I:\Projects\sf-pc-port` | Known-good SF2 behavior and deterministic oracle |
-| `I:\Projects\SF2-Modern` | Optional modern presentation only |
-| `I:\Projects\PSX-References` | Read-only external research references |
+| `<projects>\SF2-Recomp-Lab` | This recompilation feasibility experiment |
+| `<projects>\sf-pc-port` | Known-good SF2 behavior and deterministic oracle |
+| `<projects>\SF2-Modern` | Optional modern presentation only |
+| `<projects>\PSX-References` | Read-only external research references |
 
 Never repair an experiment failure by modifying one of the oracle workspaces.
 
@@ -112,7 +112,7 @@ Pause for architectural review if any of these occurs:
 Build the framework CLI:
 
 ```powershell
-cd I:\Projects\SF2-Recomp-Lab
+cd <projects>\SF2-Recomp-Lab
 $env:PYTHONUTF8 = "1"
 python tools\build_cli.py release
 ```

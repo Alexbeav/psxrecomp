@@ -7,8 +7,8 @@ spaced disc path would hit this." **Withdrawn.** A fleet check does not support 
 
 Evidence gathered:
 
-- 16 `play.bat` / `PLAY.bat` files found across `I:\Projects\PSX-Ports`,
-  `L:\AgentData`, `I:\Projects\PSX-Ports-pilot`.
+- 16 `play.bat` / `PLAY.bat` files found across `<projects>\PSX-Ports`,
+  `L:\AgentData`, `<projects>\PSX-Ports-pilot`.
 - 7 use the fragile `start` form; 0 use the corrective `call` form; 9 use neither.
 - **All 7 `start`-form launchers pass only the executable plus bare flags** — no
   path arguments at all:
