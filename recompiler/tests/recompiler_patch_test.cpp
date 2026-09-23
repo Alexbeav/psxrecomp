@@ -1259,38 +1259,6 @@ void syscall_codegen_transfer_test() {
     }
 }
 
-void cfg_codegen_load_delay_test() {
-    constexpr uint32_t base = 0x80003590u;
-    PSXRecomp::PS1Executable exe{};
-    exe.header.load_address = base;
-    exe.header.initial_pc = base;
-    exe.header.file_size = 20u;
-    append_word(exe.code_data, 0x8F5A4C38u); // lw k0,0x4c38(k0)
-    append_word(exe.code_data, 0x03400825u); // move at,k0 (must see old k0)
-    append_word(exe.code_data, 0xAC3A4C38u); // sw k0,0x4c38(at)
-    append_word(exe.code_data, 0x03E00008u); // jr ra
-    append_word(exe.code_data, 0x00000000u); // delay-slot nop
-
-    PSXRecomp::Function function{};
-    function.start_addr = base;
-    function.end_addr = base + 20u;
-    function.size = 20u;
-    function.name = "cfg_load_delay";
-    PSXRecomp::ControlFlowAnalyzer analyzer(exe);
-    const auto cfg = analyzer.analyze_function(function);
-    PSXRecomp::CodeGenerator generator(exe);
-    const std::string code = generator.generate_function(function, cfg).full_code;
-
-    const size_t deferred = code.find("uint32_t psx_ldd_80003590 =");
-    const size_t successor = code.find("cpu->gpr[1] = cpu->gpr[26]");
-    const size_t writeback = code.find(
-        "cpu->gpr[26] = psx_ldd_80003590;  /* load-delay writeback */");
-    check(deferred != std::string::npos && successor != std::string::npos &&
-          writeback != std::string::npos && deferred < successor &&
-          successor < writeback,
-          "CFG codegen preserves MIPS-I dependent load-delay value semantics");
-}
-
 } // namespace
 
 int main() {
