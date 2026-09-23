@@ -17,7 +17,7 @@ def body(name: str, next_marker: str) -> str:
 def main() -> int:
     keyboard = body("static uint16_t pad_from_keyboard", "static bool source_is_stick_axis")
     sticks = body("static void pad_sticks_for", "static bool controller_stick_active")
-    hybrid = body("static bool hybrid_dpad_active", "/* Sample each player's live device")
+    hybrid = body("static bool controller_policy_dpad_active", "static int controller_policy_resolve_mode")
 
     for guarded in (keyboard, sticks, hybrid):
         assert "g_hidden_window" in guarded

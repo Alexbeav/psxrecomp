@@ -189,14 +189,8 @@ void psx_mod_function_entry(CPUState *cpu, uint32_t address) {
 }
 int psx_netplay_is_resimulating(void) { return 0; }
 int psx_game_text_native_ok(uint32_t address) { (void)address; return 1; }
-uint32_t psx_ws_angle_widen(uint32_t vanilla) { return vanilla; }
-uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced) {
-    (void)forced; return vanilla;
-}
-uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla,
-                                  uint32_t object, int32_t x, int32_t z, int32_t y) {
-    (void)site; (void)object; (void)x; (void)z; (void)y; return vanilla;
-}
+int psx_cpu_step_boundary_enabled(int include_replay) { (void)include_replay; return 0; }
+void psx_cpu_step_boundary_fn(CPUState *cpu, uint32_t address) { (void)cpu; (void)address; }
 /* This harness exercises loader ownership, not precision shadowing. */
 void psx_pgxp_load(CPUState *cpu, uint32_t i, uint32_t a, uint32_t v) {
     (void)cpu; (void)i; (void)a; (void)v;

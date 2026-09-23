@@ -57,9 +57,9 @@ def main() -> None:
     require_in_order(
         seek,
         "stop_read_stream()",
-        "stat_reg &= (uint8_t)~(CDSTAT_READ | CDSTAT_PLAY)",
-        "stat_reg |= CDSTAT_SEEK",
-        "pending.cmd = cmd",
+        "stat_reg = (stat_reg & ~(CDSTAT_READ | CDSTAT_PLAY))",
+        "CDSTAT_SEEK",
+        "pending_arm(cmd",
     )
     assert "cdrom_clear_pending_dataready()" in function_body(
         source, "static void stop_read_stream", "static void stop_cdda_playback"

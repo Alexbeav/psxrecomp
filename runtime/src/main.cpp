@@ -4867,7 +4867,8 @@ static bool controller_policy_dpad_active(const PlayerInput& p, int player,
                 return true;
         }
     }
-    if (src.keybinds) {
+    if (src.keybinds && !g_headless && !g_hidden_window && sdl_window &&
+        (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         if (psx_keybinds_dpad_active(keys, player)) return true;
     }

@@ -49,17 +49,20 @@ def main() -> None:
     gp1 = function_body(gpu, "static void gp1_display_mode", "static void gp1_get_info")
     require_in_order(
         gp1,
+        "new_depth = (val >> 4) & 1",
         "old_display_depth = display_depth",
-        "display_depth = (val >> 4) & 1",
+        "display_depth = new_depth",
         "gr_display_depth_changed",
     )
     assert "g_b->display_depth_changed" in facade
 
-    handoff = function_body(gl, "static void depth24_set_mode", "static void glb_display_depth_changed")
+    hook = function_body(gl, "static void glb_display_depth_changed", "static void depth24_upload_policy(void) {")
+    assert "depth24_upload_policy();" in hook
+    handoff = function_body(gl, "static void depth24_upload_policy(void) {", "static void glb_")
     require_in_order(handoff, "if (d24 && !s_depth24_skip_up)", "ensure_cpu()", "s_depth24_skip_up = d24")
 
     fill = function_body(gl, "static void glb_fill_rect", "static void glb_copy_rect")
-    require_in_order(fill, "gpu_fill", "gpu_display_is_depth24", "sw_fill_rect")
+    require_in_order(fill, "gpu_display_is_depth24()", "sw_fill_rect", "gpu_fill")
 
     upload = function_body(gl, "static void glb_vram_transfer_in", "static void glb_vram_transfer_out")
     require_in_order(upload, "depth24_upload_policy()", "sw_vram_transfer_in")

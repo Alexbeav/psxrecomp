@@ -161,7 +161,10 @@ def load_additive_captures(capture_path):
                       f'{record_index} in {path}: {exc}')
                 continue
 
-            identity = (load_addr, size, hashlib.sha256(decoded).digest())
+            # Producer identity is part of the key: a BIOS resident recipe and an
+            # ordinary capture of the same bytes are distinct recipes.
+            identity = (load_addr, size, hashlib.sha256(decoded).digest(),
+                        region.get('producer'), region.get('bios_sha256'))
             target = merged.get(identity)
             if target is None:
                 merged[identity] = validated
@@ -174,7 +177,9 @@ def load_additive_captures(capture_path):
                 if field not in evidence_fields:
                     target[field] = value
 
-    if not merged:
+    if not accepted_sources:
+        # Every contribution was unreadable. A readable but empty capture list
+        # is a valid static-only run and yields no regions.
         raise ValueError(f'no valid capture records at {capture_path}')
     return list(merged.values()), accepted_sources
 
