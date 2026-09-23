@@ -67,7 +67,7 @@ def codegen_ver(runtime_include: str) -> int:
     The cache is namespaced gcc/<arch-abi>/cg<N>/, so a build with new emitter
     output reads+writes a FRESH dir and never reuses a stale DLL."""
     hdr = os.path.join(runtime_include, 'overlay_api.h')
-    with open(hdr) as f:
+    with open(hdr, encoding='utf-8') as f:
         m = re.search(r'#define\s+PSX_OVERLAY_CODEGEN_VER\s+(\d+)', f.read())
     if not m:
         raise SystemExit(f'PSX_OVERLAY_CODEGEN_VER not found in {hdr}')
@@ -77,7 +77,7 @@ def codegen_ver(runtime_include: str) -> int:
 def overlay_abi_tag(runtime_include: str, flavor: int) -> int:
     """Return the exact ABI/flavor export expected from a cached shard."""
     hdr = os.path.join(runtime_include, 'overlay_api.h')
-    with open(hdr) as source:
+    with open(hdr, encoding='utf-8') as source:
         match = re.search(
             r'#define\s+PSX_OVERLAY_ABI_VERSION\s+(\d+)', source.read())
     if not match:
@@ -88,7 +88,7 @@ def overlay_abi_tag(runtime_include: str, flavor: int) -> int:
 def overlay_candidate_cap(runtime_include: str) -> int:
     """Return the loader's process-lifetime manifest-candidate capacity."""
     hdr = os.path.join(runtime_include, 'overlay_api.h')
-    with open(hdr) as source:
+    with open(hdr, encoding='utf-8') as source:
         match = re.search(
             r'#define\s+PSX_OVERLAY_CANDIDATE_CAP\s+(\d+)', source.read())
     if not match:
@@ -126,7 +126,7 @@ def codegen_hash(runtime_include: str, recompiler: str = None) -> int:
             continue
         seen.add(normalized)
         try:
-            with open(hdr) as f:
+            with open(hdr, encoding='utf-8') as f:
                 m = re.search(
                     r'#define\s+PSX_OVERLAY_CODEGEN_HASH\s+0x([0-9A-Fa-f]+)',
                     f.read())
@@ -2940,7 +2940,7 @@ def parse_overlay_func_ids(src_path: str, data: bytes, load_addr: int,
     # Parse the recompiler manifest into [(entry, [(lo, len), ...]), ...].
     funcs: list[tuple[int, list[tuple[int, int]]]] = []
     cur = None
-    with open(src_path) as f:
+    with open(src_path, encoding='utf-8') as f:
         for line in f:
             s = line.split()
             if not s:
@@ -3630,7 +3630,7 @@ def generate_interior_fragment_static(interior: int, data: bytes,
         if not full_c or not ranges_src:
             return None, 'no-output: recompiler emitted no _full.c/_full.ranges'
 
-        with open(full_c) as f:
+        with open(full_c, encoding='utf-8') as f:
             src, func_addrs = patch_generated_c_static(
                 f.read(), load_addr, size)
         image_crc = binascii.crc32(data) & 0xFFFFFFFF
@@ -4510,7 +4510,7 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
                 ranges_src = os.path.join(out_dir_tmp, fn)
         if not full_c or not ranges_src:
             return None, 'no-generated-output (_full.c/_full.ranges missing)'
-        with open(full_c) as f:
+        with open(full_c, encoding='utf-8') as f:
             src = patch_generated_c(f.read(), load_addr, size)
         c_audit = audit_generated_c(src, load_addr, size,
                                     binascii.crc32(data) & 0xFFFFFFFF, toml_doc)
@@ -5850,7 +5850,7 @@ def cached_shard_manifest_status(dll_path: str, expected_abi: int | None,
         if not complete:
             return 'missing'
         try:
-            with open(ranges) as f:
+            with open(ranges, encoding='utf-8') as f:
                 actual_manifest = f.read()
         except OSError:
             return 'missing'
@@ -6022,7 +6022,7 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
                 fail('no_output', 'no _full.c emitted')
                 return
             full_c = os.path.join(out_dir_tmp, candidates[0])
-        with open(full_c) as f:
+        with open(full_c, encoding='utf-8') as f:
             src = f.read()
         ranges_src = None
         for fn in os.listdir(out_dir_tmp):
@@ -6463,7 +6463,7 @@ def main():
             prior_ranges_path = os.path.join(cache_dir, ranges_name)
             if os.path.exists(prior_ranges_path):
                 prior_entries = []
-                with open(prior_ranges_path) as pf:
+                with open(prior_ranges_path, encoding='utf-8') as pf:
                     for ln in pf:
                         parts = ln.split()
                         if parts and parts[0] == 'F':
@@ -6618,7 +6618,7 @@ def main():
                     return
                 full_c = os.path.join(out_dir_tmp, candidates[0])
 
-            with open(full_c) as f:
+            with open(full_c, encoding='utf-8') as f:
                 src = f.read()
 
             ranges_src = None
