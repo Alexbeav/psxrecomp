@@ -265,6 +265,11 @@ struct RuntimeConfig {
     // overlay DLLs (loaded ahead of the dirty-RAM interpreter) and records
     // overlay bytes to overlay_captures.json for offline compilation.
     bool                  overlay_cache = false;
+    // cpu_text_overlay_capture: treat ordinary CPU writes that diverge from
+    // the game's EXE text as executable-page evidence for overlay capture.
+    // Off by default; for titles that copy overlays into the EXE window with
+    // CPU stores instead of CD DMA (Syphon Filter 2).
+    bool                  cpu_text_overlay_capture = false;
 
     // overlay_capture_history: opt-in durable capture history. The runtime
     // keeps overlay_captures.json as an atomic latest snapshot for the live

@@ -31,8 +31,17 @@ def main() -> int:
     text_write = function_body(memory, "static inline void text_guard_note_write(")
     if "text_modified_bitmap" not in text_write:
         raise AssertionError("CPU text divergence is no longer recorded")
+    gate = "if (s_cpu_text_overlay_capture)"
+    if "static int s_cpu_text_overlay_capture = 0;" not in memory:
+        raise AssertionError("CPU text overlay capture must default off")
+    ungated = text_write
+    if gate in ungated:
+        # The opt-in branch may admit the page; nothing outside it may.
+        head, tail = ungated.split(gate, 1)
+        stmt_end = tail.index(";") + 1
+        ungated = head + tail[stmt_end:]
     for admission in ("dirty_ram_mark_page(", "dirty_ram_mark_executable_range("):
-        if admission in text_write:
+        if admission in ungated:
             raise AssertionError(
                 "an ordinary CPU write inside game text automatically admits "
                 f"executable overlay code via {admission}"

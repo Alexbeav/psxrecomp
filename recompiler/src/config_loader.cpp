@@ -464,6 +464,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("overlay_cache")) {
         rt.overlay_cache = toml::find<bool>(runtime, "overlay_cache");
     }
+    if (runtime.contains("cpu_text_overlay_capture")) {
+        rt.cpu_text_overlay_capture =
+            toml::find<bool>(runtime, "cpu_text_overlay_capture");
+    }
     if (runtime.contains("overlay_capture_history")) {
         rt.overlay_capture_history =
             toml::find<bool>(runtime, "overlay_capture_history");

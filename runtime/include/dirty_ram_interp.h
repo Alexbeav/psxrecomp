@@ -186,6 +186,9 @@ void     dirty_ram_reset_for_boot(void);
 void     overlay_watch_invalidate_after_ram_restore(void);
 void     dirty_ram_text_guard_resync_after_restore(void);
 void     dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
+/* Opt-in: CPU stores that diverge from game text mark the page for overlay
+ * capture (titles that install overlays into the EXE window by CPU copy). */
+void     dirty_ram_set_cpu_text_overlay_capture(int on);
 void     dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
                                        uint32_t len);
 int      dirty_ram_text_native_ok(uint32_t phys);

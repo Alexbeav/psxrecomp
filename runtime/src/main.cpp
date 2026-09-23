@@ -194,6 +194,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 
 extern "C" uint64_t gte_get_exec_count(void);
+extern "C" void dirty_ram_set_cpu_text_overlay_capture(int on);
 
 /* Cross-language globals defined in C translation units. Declared extern "C" at
  * file scope so MSVC gives them C linkage (matching the C definitions); without
@@ -13495,6 +13496,8 @@ int main(int argc, char** argv) {
             g_low_latency_input = gc.runtime.video_low_latency_input ? 1 : 0;
             g_video_vsync       = gc.runtime.video_vsync;
             g_mouse_pad_enabled = gc.runtime.controller_mouse_pad ? 1 : 0;
+            dirty_ram_set_cpu_text_overlay_capture(
+                gc.runtime.cpu_text_overlay_capture ? 1 : 0);
             g_mouse_pad_counts_per_frame =
                 gc.runtime.controller_mouse_counts_per_frame;
             g_mouse_pad_aim_counts_per_frame =

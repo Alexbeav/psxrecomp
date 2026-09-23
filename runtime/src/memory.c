@@ -545,6 +545,15 @@ void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
 
 int dirty_ram_text_image_registered(void) { return text_ref_image != NULL; }
 
+/* Per-game opt-in (game.toml [runtime] cpu_text_overlay_capture). Off by
+ * default: an ordinary CPU write inside game text only records divergence;
+ * executable admission stays with explicit load paths (CD DMA, shards). */
+static int s_cpu_text_overlay_capture = 0;
+
+void dirty_ram_set_cpu_text_overlay_capture(int on) {
+    s_cpu_text_overlay_capture = on ? 1 : 0;
+}
+
 static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) {
     if (!text_ref_image) return;
     if (phys < text_ref_lo || phys + (uint32_t)size > text_ref_hi) return;
@@ -562,8 +571,9 @@ static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) 
          * is eligible for capture and native-cache compilation.  Data-only
          * writes remain harmless: capture still requires execution evidence,
          * and exact-range validation can keep unaffected static functions
-         * native on a dirty page. */
-        dirty_ram_mark_page(phys);
+         * native on a dirty page.  Titles opt in; see the switch above. */
+        if (s_cpu_text_overlay_capture)
+            dirty_ram_mark_page(phys);
     }
 }
 
