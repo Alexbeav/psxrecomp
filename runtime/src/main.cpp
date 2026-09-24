@@ -2279,6 +2279,17 @@ static std::filesystem::path state_dir_from_argv(const char* argv0) {
         return state_dir;
     }
     std::fprintf(stdout, "psxrecomp: per-machine state directory = %s\n", state_dir.string().c_str());
+    /* The bundled overlay compiler is Python; without this it writes
+     * __pycache__/*.pyc into the install's overlay_toolchain/. Children
+     * inherit the variable. A value the user already set is kept. */
+    if (const char* pc = std::getenv("PYTHONPYCACHEPREFIX"); !pc || !pc[0]) {
+        const std::string prefix = (state_dir / "pycache").string();
+#ifdef _WIN32
+        _putenv_s("PYTHONPYCACHEPREFIX", prefix.c_str());
+#else
+        setenv("PYTHONPYCACHEPREFIX", prefix.c_str(), 1);
+#endif
+    }
     if (created) {
         const fs::path exe_dir = exe_dir_from_argv(argv0);
         for (const char* name : {"settings.toml", "input.ini", "keybinds.ini", "config.ini",
