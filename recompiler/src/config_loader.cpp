@@ -824,7 +824,11 @@ fs::path find_project_root(const fs::path& config_path) {
     const fs::path fallback = cur;
     for (int i = 0; i < 8; ++i) {
         for (const char* marker : { ".gitignore", ".git", "CMakeLists.txt" }) {
-            if (fs::exists(cur / marker)) {
+            /* Non-throwing: above a UNC share root ("\\server\x") the probe
+             * fails with "network name cannot be found", which must mean
+             * "no marker here", not abort loading an install on a share. */
+            std::error_code ec;
+            if (fs::exists(cur / marker, ec)) {
                 return cur;
             }
         }
