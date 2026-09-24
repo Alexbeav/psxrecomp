@@ -34,6 +34,46 @@ _ASSET = {
     "macos-x64": "cmake-clang-v1-macos-universal.zip",
 }
 
+# The pack a fresh host downloads is pinned to one release (T212). It is
+# fetched by tag, not from the moving "latest" release, and each asset is checked against
+# the SHA-256 digest GitHub publishes for it. RETCOMM_TOOLCHAIN_TAG selects a
+# different release; there is no pinned digest for it, so
+# RETCOMM_TOOLCHAIN_SHA256 must name the expected digest, or the download is
+# refused. Keep in lockstep with tools/fetch_toolchain.sh.
+PINNED_TAG = "v1.0.14"
+PINNED_SHA256 = {
+    "cmake-clang-v1-linux-x64.zip": "597c8d343a3cf02ba6f6b2ae7cf6fe2fef125dde8feff62a144e8dd3da3d484e",
+    "cmake-clang-v1-windows-x64.zip": "28da9742385e7ff875b3d9311e8ed89dbdc84f27b6ecba2bc0d0acc11f6d2b4d",
+    "cmake-clang-v1-macos-universal.zip": "9db2a9b6ede4162cb19850ee1a08d01147f3ea8bc9b2eefb3ffbdf8b20d389d7",
+}
+
+
+def pinned_download(asset: str, repo: str = DEFAULT_REPO) -> tuple:
+    """(url, expected sha256) for an asset of the pinned (or overridden) release."""
+    tag = os.environ.get("RETCOMM_TOOLCHAIN_TAG", "").strip() or PINNED_TAG
+    override = os.environ.get("RETCOMM_TOOLCHAIN_SHA256", "").strip().lower()
+    if override:
+        expected = override
+    elif tag == PINNED_TAG:
+        expected = PINNED_SHA256.get(asset, "")
+    else:
+        expected = ""
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise RuntimeError(
+            f"no expected SHA-256 for toolchain {asset} at {tag}; "
+            "set RETCOMM_TOOLCHAIN_SHA256 when RETCOMM_TOOLCHAIN_TAG is overridden")
+    return f"https://github.com/{repo}/releases/download/{tag}/{asset}", expected
+
+
+def file_sha256(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
 
 def sys_platform_is_windows() -> bool:
     return sys.platform == "win32"
@@ -917,9 +957,10 @@ def download_latest_pack(
     if not asset:
         raise RuntimeError(f"unknown toolchain artifact: {art}")
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
-    url = f"https://github.com/{repo}/releases/latest/download/{asset}"
+    # Name kept for callers; this downloads the pinned release, not "latest".
+    url, expected = pinned_download(asset, repo)
     if log:
-        log(f"Downloading {asset} from {repo}...")
+        log(f"Downloading {asset} from {url}...")
     with tempfile.TemporaryDirectory(prefix="psxrecomp-tc-") as tmp:
         zpath = Path(tmp) / asset
         try:
@@ -928,6 +969,12 @@ def download_latest_pack(
             raise RuntimeError(f"toolchain download failed ({e.code}): {url}") from e
         except urllib.error.URLError as e:
             raise RuntimeError(f"toolchain download failed: {e.reason}") from e
+        actual = file_sha256(zpath)
+        if actual != expected:
+            raise RuntimeError(
+                f"toolchain {asset} SHA-256 mismatch: got {actual}, expected {expected} ({url})")
+        if log:
+            log(f"Verified {asset} SHA-256 {actual}")
         # Tag fallback is "offline" — never install *into* latest/; latest is
         # pointer-only (symlink/copy) matching retcomm-toolchains install.sh.
         return install_from_zip(

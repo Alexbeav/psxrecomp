@@ -13,6 +13,12 @@
 #
 # Env:
 #   GH_TOKEN / GITHUB_TOKEN — optional; used for gh or Authorization on curl
+#   RETCOMM_TOOLCHAIN_TAG    — release to fetch (default: the pinned v1.0.14)
+#   RETCOMM_TOOLCHAIN_SHA256 — expected digest; required when the tag is overridden
+#
+# The pack is fetched by pinned tag, never the moving "latest" release, and the zip is
+# checked against its published SHA-256 (T212). Keep in lockstep with
+# tools/toolchain_pack.py PINNED_TAG / PINNED_SHA256.
 set -euo pipefail
 
 ARTIFACT=""
@@ -44,18 +50,22 @@ if [[ -z "${ARTIFACT}" ]]; then
   usage
 fi
 
+PINNED_TAG='v1.0.14'
 case "${ARTIFACT}" in
   linux-x64)
     PATTERN='cmake-clang-v1*linux*.zip'
     ASSET_NAME='cmake-clang-v1-linux-x64.zip'
+    PINNED_SHA256='597c8d343a3cf02ba6f6b2ae7cf6fe2fef125dde8feff62a144e8dd3da3d484e'
     ;;
   windows-x64)
     PATTERN='cmake-clang-v1*windows*.zip'
     ASSET_NAME='cmake-clang-v1-windows-x64.zip'
+    PINNED_SHA256='28da9742385e7ff875b3d9311e8ed89dbdc84f27b6ecba2bc0d0acc11f6d2b4d'
     ;;
   macos-arm64|macos-x64)
     PATTERN='cmake-clang-v1*macos*.zip'
     ASSET_NAME='cmake-clang-v1-macos-universal.zip'
+    PINNED_SHA256='9db2a9b6ede4162cb19850ee1a08d01147f3ea8bc9b2eefb3ffbdf8b20d389d7'
     ;;
   *)
     echo "error: unknown artifact '${ARTIFACT}' (want linux-x64|windows-x64|macos-arm64|macos-x64)" >&2
@@ -64,6 +74,16 @@ case "${ARTIFACT}" in
 esac
 
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+TAG="${RETCOMM_TOOLCHAIN_TAG:-${PINNED_TAG}}"
+if [[ -n "${RETCOMM_TOOLCHAIN_SHA256:-}" ]]; then
+  EXPECTED="$(printf '%s' "${RETCOMM_TOOLCHAIN_SHA256}" | tr 'A-F' 'a-f')"
+elif [[ "${TAG}" == "${PINNED_TAG}" ]]; then
+  EXPECTED="${PINNED_SHA256}"
+else
+  echo "error: RETCOMM_TOOLCHAIN_TAG=${TAG} has no pinned digest; set RETCOMM_TOOLCHAIN_SHA256" >&2
+  exit 1
+fi
+echo "toolchain pack: ${ASSET_NAME} at ${TAG} (expect sha256 ${EXPECTED})"
 
 rm -rf "${DL_DIR}" "${OUT_DIR}"
 mkdir -p "${DL_DIR}" "${OUT_DIR}"
@@ -72,9 +92,9 @@ if command -v gh >/dev/null 2>&1; then
   if [[ -n "${TOKEN}" ]]; then
     export GH_TOKEN="${TOKEN}"
   fi
-  gh release download -R "${REPO}" -p "${PATTERN}" -D "${DL_DIR}" --clobber
+  gh release download "${TAG}" -R "${REPO}" -p "${ASSET_NAME}" -D "${DL_DIR}" --clobber
 elif command -v curl >/dev/null 2>&1; then
-  ASSET_URL="https://github.com/${REPO}/releases/latest/download/${ASSET_NAME}"
+  ASSET_URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET_NAME}"
   echo "gh not on PATH; curling ${ASSET_URL}"
   curl_args=(-fsSL -o "${DL_DIR}/${ASSET_NAME}")
   if [[ -n "${TOKEN}" ]]; then
@@ -92,6 +112,13 @@ if [[ -z "${ZIP}" ]]; then
   ls -la "${DL_DIR}" >&2 || true
   exit 1
 fi
+
+ACTUAL="$( (sha256sum "${ZIP}" 2>/dev/null || shasum -a 256 "${ZIP}") | awk '{print tolower($1)}')"
+if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
+  echo "error: ${ZIP} sha256 ${ACTUAL} != expected ${EXPECTED}" >&2
+  exit 1
+fi
+echo "Verified ${ASSET_NAME} sha256 ${ACTUAL}"
 
 echo "Unpacking toolchain from ${ZIP}"
 if command -v unzip >/dev/null 2>&1; then
