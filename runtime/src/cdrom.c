@@ -888,6 +888,13 @@ static void record_command_history(uint8_t kind, uint8_t cmd,
     e->source_clock=(uint8_t)s_source_clock;
     e->source_random_cursor=s_source_clock_tape.cursor;
     e->source_random_calls=s_source_clock_calls;
+    {
+        int rn = response_count;
+        if (rn < 0) rn = 0;
+        if (rn > (int)sizeof(e->response)) rn = (int)sizeof(e->response);
+        e->response_count = (uint8_t)rn;
+        memcpy(e->response, response_fifo, (size_t)rn);
+    }
 }
 
 static int xa_is_audio_realtime(const CDROMSectorDelivery *d) {
