@@ -518,7 +518,7 @@ bool materialize_derived_disc(RuntimeMods& s, const ModResolution& plan,
             *error = derived.package_id + ": derived-disc patch checksum failed";
         return false;
     }
-    const std::filesystem::path cache_root = s.manager.root() / "cache";
+    const std::filesystem::path cache_root = s.manager.state_root() / "cache";  /* T211 */
     const std::filesystem::path cached = cache_root / (plan.fingerprint + ".bin");
     if (valid_cached_disc(cached, derived)) {
         out = cached;
@@ -1097,9 +1097,11 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
                             const std::string& game_id,
                             uint32_t game_entry_pc,
                             const std::filesystem::path& exe_path,
-                            std::string* error) {
+                            std::string* error,
+                            const std::filesystem::path& state_root) {
     RuntimeMods& s = state();
     s.manager.set_root({});
+    s.manager.set_state_root(state_root);
     s.plan = {};
     s.validation = {};
     s.raw_disc_index.clear();

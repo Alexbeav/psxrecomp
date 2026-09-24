@@ -2252,6 +2252,7 @@ static void migrate_state_file(const std::filesystem::path& src, const std::file
     namespace fs = std::filesystem;
     std::error_code ec;
     if (!fs::is_regular_file(src, ec) || fs::exists(dst, ec)) return;
+    fs::create_directories(dst.parent_path(), ec);
     fs::copy_file(src, dst, ec);
     std::fprintf(ec ? stderr : stdout, "psxrecomp: state migration %s -> %s%s%s\n",
                  src.string().c_str(), dst.string().c_str(),
@@ -2281,7 +2282,7 @@ static std::filesystem::path state_dir_from_argv(const char* argv0) {
     if (created) {
         const fs::path exe_dir = exe_dir_from_argv(argv0);
         for (const char* name : {"settings.toml", "input.ini", "keybinds.ini", "config.ini",
-                                 "overlay_captures.json"})
+                                 "overlay_captures.json", "mods/state.toml"})
             migrate_state_file(exe_dir / name, state_dir / name);
     }
     return state_dir;
@@ -14167,9 +14168,12 @@ int main(int argc, char** argv) {
      * psx_mod_set_* callbacks — is inert until this runs. */
     {
         std::string mod_error;
+        /* Mod selection state and the derived-disc cache are per-machine
+         * (T211); with the variables unset this is exe/mods, as before. */
         if (!PSXRecompV4::mod_runtime_initialize(
                 exe_dir_from_argv(argv[0]) / "mods", game_id,
-                game_entry_pc, text_guard_exe_path, &mod_error)) {
+                game_entry_pc, text_guard_exe_path, &mod_error,
+                state_dir_from_argv(argv[0]) / "mods")) {
             std::fprintf(stderr, "psxrecomp: mods unavailable: %s\n",
                          mod_error.c_str());
         }

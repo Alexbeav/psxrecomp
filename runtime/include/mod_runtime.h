@@ -15,7 +15,9 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
                             const std::string& game_id,
                             uint32_t game_entry_pc,
                             const std::filesystem::path& exe_path = {},
-                            std::string* error = nullptr);
+                            std::string* error = nullptr,
+                            /* T211: per-machine mod state root; empty = root */
+                            const std::filesystem::path& state_root = {});
 bool mod_runtime_commit(const std::filesystem::path& disc_path = {},
                         std::string* error = nullptr);
 /* Drop the in-session mod plan for a netplay launch without rewriting the
