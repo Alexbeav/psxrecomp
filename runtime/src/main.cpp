@@ -2222,6 +2222,10 @@ static std::string exe_stem_from_argv(const char* argv0) {
     return stem.empty() ? std::string("game") : stem;
 }
 
+// Player-facing warning (stderr line + a message box unless headless); defined below.
+static void launcher_warning(const char* title, const std::string& msg);
+static constexpr const char* kStateWarningTitle = "Settings folder";
+
 // Per-title directory under a host-wide root from the environment (T211,
 // TARGET-STATE section 3): $<var>/<exe name>/, with ${R}/${D} tokens expanded.
 // Returns empty when the variable is unset or empty. *created is set when this
@@ -2237,8 +2241,11 @@ static std::filesystem::path env_title_dir(const char* var, const char* argv0, b
     if (!existed) {
         fs::create_directories(dir, ec);
         if (ec) {
-            std::fprintf(stderr, "psxrecomp: cannot create %s directory %s: %s\n",
-                         var, dir.string().c_str(), ec.message().c_str());
+            /* Settings or saves would silently not persist: tell the player. */
+            launcher_warning(kStateWarningTitle,
+                std::string("Cannot create the folder named by ") + var + ":\n" +
+                dir.string() + "\n" + ec.message() +
+                "\n\nSettings and saves stay next to the game for this run.");
             return {};
         }
         if (created) *created = true;
@@ -2246,17 +2253,33 @@ static std::filesystem::path env_title_dir(const char* var, const char* argv0, b
     return dir;
 }
 
-// Copy one file into dst_dir unless a file of that name is already there.
-// The original is never removed. Used for the one-time migration below.
-static void migrate_state_file(const std::filesystem::path& src, const std::filesystem::path& dst) {
+// One-time migration of existing state into a new per-title folder. Copies a
+// file (or, for saves/, a folder) unless the destination already exists; the
+// original is never removed. Failures are collected and reported to the player
+// once per run by report_state_migration_failures(), not once per file.
+static void migrate_state_path(const std::filesystem::path& src, const std::filesystem::path& dst,
+                               std::vector<std::string>& failures) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    if (!fs::is_regular_file(src, ec) || fs::exists(dst, ec)) return;
+    const bool is_dir = fs::is_directory(src, ec);
+    if ((!is_dir && !fs::is_regular_file(src, ec)) || fs::exists(dst, ec)) return;
     fs::create_directories(dst.parent_path(), ec);
-    fs::copy_file(src, dst, ec);
-    std::fprintf(ec ? stderr : stdout, "psxrecomp: state migration %s -> %s%s%s\n",
-                 src.string().c_str(), dst.string().c_str(),
-                 ec ? ": " : "", ec ? ec.message().c_str() : "");
+    if (is_dir) fs::copy(src, dst, fs::copy_options::recursive, ec);
+    else fs::copy_file(src, dst, ec);
+    if (ec) {
+        failures.push_back(src.string() + " -> " + dst.string() + ": " + ec.message());
+        return;
+    }
+    std::fprintf(stdout, "psxrecomp: state migration %s -> %s\n",
+                 src.string().c_str(), dst.string().c_str());
+}
+
+static void report_state_migration_failures(const std::vector<std::string>& failures) {
+    if (failures.empty()) return;
+    std::string msg = "Some existing settings or saves could not be copied into the new folder."
+                      " The originals are untouched:\n";
+    for (const std::string& f : failures) msg += "\n" + f;
+    launcher_warning(kStateWarningTitle, msg);
 }
 
 // Writable per-machine state: settings.toml, input.ini, keybinds.ini,
@@ -2292,17 +2315,12 @@ static std::filesystem::path state_dir_from_argv(const char* argv0) {
     }
     if (created) {
         const fs::path exe_dir = exe_dir_from_argv(argv0);
+        std::vector<std::string> failures;
         for (const char* name : {"settings.toml", "input.ini", "keybinds.ini", "config.ini",
                                  "overlay_captures.json", "mods/state.toml",
-                                 "card1.mcd", "card2.mcd"})  /* default card slots */
-            migrate_state_file(exe_dir / name, state_dir / name);
-        std::error_code sec;
-        if (fs::is_directory(exe_dir / "saves", sec) && !fs::exists(state_dir / "saves", sec)) {
-            fs::copy(exe_dir / "saves", state_dir / "saves", fs::copy_options::recursive, sec);
-            std::fprintf(sec ? stderr : stdout, "psxrecomp: state migration %s -> %s%s%s\n",
-                         (exe_dir / "saves").string().c_str(), (state_dir / "saves").string().c_str(),
-                         sec ? ": " : "", sec ? sec.message().c_str() : "");
-        }
+                                 "card1.mcd", "card2.mcd", "saves"})  /* default card slots, savestates */
+            migrate_state_path(exe_dir / name, state_dir / name, failures);
+        report_state_migration_failures(failures);
     }
     return state_dir;
 }
@@ -14099,18 +14117,11 @@ int main(int argc, char** argv) {
                     if (explicit_path.empty()) return old_dir / name;
                     return explicit_path.is_relative() ? exe_dir / explicit_path : explicit_path;
                 };
-                migrate_state_file(slot(memcard1_path, "card1.mcd"), save_dir / "card1.mcd");
-                migrate_state_file(slot(memcard2_path, "card2.mcd"), save_dir / "card2.mcd");
-                std::error_code sec;
-                if (std::filesystem::is_directory(old_dir / "saves", sec) &&
-                    !std::filesystem::exists(save_dir / "saves", sec)) {
-                    std::filesystem::copy(old_dir / "saves", save_dir / "saves",
-                                          std::filesystem::copy_options::recursive, sec);
-                    std::fprintf(sec ? stderr : stdout, "psxrecomp: state migration %s -> %s%s%s\n",
-                                 (old_dir / "saves").string().c_str(),
-                                 (save_dir / "saves").string().c_str(),
-                                 sec ? ": " : "", sec ? sec.message().c_str() : "");
-                }
+                std::vector<std::string> failures;
+                migrate_state_path(slot(memcard1_path, "card1.mcd"), save_dir / "card1.mcd", failures);
+                migrate_state_path(slot(memcard2_path, "card2.mcd"), save_dir / "card2.mcd", failures);
+                migrate_state_path(old_dir / "saves", save_dir / "saves", failures);
+                report_state_migration_failures(failures);
             }
             env_memcard_dir = save_dir.string();
             cli_memcard_dir = env_memcard_dir.c_str();
