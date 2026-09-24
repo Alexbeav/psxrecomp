@@ -2501,18 +2501,25 @@ bool ModPackageManager::scan_root(const fs::path& packages_root,
 bool ModPackageManager::scan(std::string* error) {
     packages_.clear();
     scan_errors_.clear();
-    migrate_legacy_root();
+    /* T211: with a separate state root the runtime writes nothing into the
+     * install, so the legacy packages/ tree is read in place instead of being
+     * migrated (that move belongs to packaging or install time). */
+    if (!install_read_only()) migrate_legacy_root();
     /* Bundled first, then installed: an installed package of the same id and
      * version deliberately shadows the build-staged one, and records that it
      * did so, rather than the two racing on directory-iteration order. */
     if (!scan_root(bundled_root(), ModPackageOrigin::Bundled, error)) return false;
+    std::error_code legacy_ec;
+    if (install_read_only() && fs::is_directory(root_ / "packages", legacy_ec) &&
+        !scan_root(root_ / "packages", ModPackageOrigin::Installed, error))
+        return false;
     if (!scan_root(installed_root(), ModPackageOrigin::Installed, error)) return false;
     return true;
 }
 
 bool ModPackageManager::load_state(std::string* error) {
     selections_.clear();
-    const fs::path path = root_ / "state.toml";
+    const fs::path path = state_root() / "state.toml";
     if (!fs::exists(path)) return true;
     try {
         const toml::value cfg = toml::parse(path.string());
@@ -2595,13 +2602,13 @@ bool ModPackageManager::load_state(std::string* error) {
 
 bool ModPackageManager::save_state(std::string* error) const {
     std::error_code ec;
-    fs::create_directories(root_, ec);
+    fs::create_directories(state_root(), ec);
     if (ec) {
         set_error(error, "cannot create mods directory: " + ec.message());
         return false;
     }
-    const fs::path temp = root_ / "state.toml.tmp";
-    const fs::path final = root_ / "state.toml";
+    const fs::path temp = state_root() / "state.toml.tmp";
+    const fs::path final = state_root() / "state.toml";
     std::ofstream out(temp, std::ios::trunc);
     if (!out) {
         set_error(error, "cannot write " + temp.string());

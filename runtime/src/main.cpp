@@ -2231,13 +2231,109 @@ static std::filesystem::path exe_dir_from_argv(const char* argv0) {
     return exe_dir;
 }
 
+// The executable's file name without extension. It keys a title's per-machine
+// state directory (below) because it is known before game.toml is loaded and is
+// unique per title in a PSX-Ports install. Same sources as exe_dir_from_argv.
+static std::string exe_stem_from_argv(const char* argv0) {
+    namespace fs = std::filesystem;
+    fs::path exe;
+#ifdef _WIN32
+    {
+        wchar_t buf[MAX_PATH * 4];
+        DWORD n = GetModuleFileNameW(NULL, buf, (DWORD)(sizeof(buf) / sizeof(buf[0])));
+        if (n > 0 && n < (DWORD)(sizeof(buf) / sizeof(buf[0])))
+            exe = fs::path(std::wstring(buf, buf + n));
+    }
+#endif
+    if (exe.empty()) {
+        if (const char* appimg = std::getenv("APPIMAGE"); appimg && appimg[0]) exe = fs::path(appimg);
+    }
+    if (exe.empty() && argv0 && argv0[0]) exe = fs::path(argv0);
+    std::string stem = exe.stem().string();
+    return stem.empty() ? std::string("game") : stem;
+}
+
+// Per-title directory under a host-wide root from the environment (T211,
+// TARGET-STATE section 3): $<var>/<exe name>/, with ${R}/${D} tokens expanded.
+// Returns empty when the variable is unset or empty. *created is set when this
+// call made the directory, so a caller can migrate existing state exactly once.
+static std::filesystem::path env_title_dir(const char* var, const char* argv0, bool* created) {
+    namespace fs = std::filesystem;
+    if (created) *created = false;
+    const char* e = std::getenv(var);
+    if (!e || !e[0]) return {};
+    fs::path dir = PSXRecompV4::host_expand_roots(fs::path(e)) / exe_stem_from_argv(argv0);
+    std::error_code ec;
+    const bool existed = fs::is_directory(dir, ec);
+    if (!existed) {
+        fs::create_directories(dir, ec);
+        if (ec) {
+            std::fprintf(stderr, "psxrecomp: cannot create %s directory %s: %s\n",
+                         var, dir.string().c_str(), ec.message().c_str());
+            return {};
+        }
+        if (created) *created = true;
+    }
+    return dir;
+}
+
+// Copy one file into dst_dir unless a file of that name is already there.
+// The original is never removed. Used for the one-time migration below.
+static void migrate_state_file(const std::filesystem::path& src, const std::filesystem::path& dst) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_regular_file(src, ec) || fs::exists(dst, ec)) return;
+    fs::create_directories(dst.parent_path(), ec);
+    fs::copy_file(src, dst, ec);
+    std::fprintf(ec ? stderr : stdout, "psxrecomp: state migration %s -> %s%s%s\n",
+                 src.string().c_str(), dst.string().c_str(),
+                 ec ? ": " : "", ec ? ec.message().c_str() : "");
+}
+
+// Writable per-machine state: settings.toml, input.ini, keybinds.ini,
+// config.ini, the overlay cache and the default overlay capture store.
+// $PSXRECOMP_STATE_DIR set: $PSXRECOMP_STATE_DIR/<exe name>/, so one install on
+// a share can serve several hosts without them overwriting each other.
+// Unset or empty: exactly the exe directory, as before (no behaviour change).
+// When the per-title directory is first created, the state files that already
+// sit next to the exe are copied into it once; the originals stay.
+static std::filesystem::path state_dir_from_argv(const char* argv0) {
+    namespace fs = std::filesystem;
+    static bool resolved = false;
+    static fs::path state_dir;
+    if (resolved) return state_dir;
+    resolved = true;
+    bool created = false;
+    state_dir = env_title_dir("PSXRECOMP_STATE_DIR", argv0, &created);
+    if (state_dir.empty()) {
+        state_dir = exe_dir_from_argv(argv0);
+        return state_dir;
+    }
+    std::fprintf(stdout, "psxrecomp: per-machine state directory = %s\n", state_dir.string().c_str());
+    if (created) {
+        const fs::path exe_dir = exe_dir_from_argv(argv0);
+        for (const char* name : {"settings.toml", "input.ini", "keybinds.ini", "config.ini",
+                                 "overlay_captures.json", "mods/state.toml",
+                                 "card1.mcd", "card2.mcd"})  /* default card slots */
+            migrate_state_file(exe_dir / name, state_dir / name);
+        std::error_code sec;
+        if (fs::is_directory(exe_dir / "saves", sec) && !fs::exists(state_dir / "saves", sec)) {
+            fs::copy(exe_dir / "saves", state_dir / "saves", fs::copy_options::recursive, sec);
+            std::fprintf(sec ? stderr : stdout, "psxrecomp: state migration %s -> %s%s%s\n",
+                         (exe_dir / "saves").string().c_str(), (state_dir / "saves").string().c_str(),
+                         sec ? ": " : "", sec ? sec.message().c_str() : "");
+        }
+    }
+    return state_dir;
+}
+
 static std::filesystem::path resolve_existing_runtime_path(const char* requested,
                                                            const char* argv0) {
     namespace fs = std::filesystem;
     if (!requested || !requested[0]) return {};
 
     std::error_code ec;
-    fs::path p(requested);
+    const fs::path p = PSXRecompV4::host_expand_roots(fs::path(requested));  /* ${R}/${D} (T211) */
     if (fs::exists(p, ec)) return PSXRecompV4::host_absolute(p, ec);
     if (PSXRecompV4::host_path_is_absolute(p)) return {};
 
@@ -2262,7 +2358,8 @@ static std::filesystem::path read_cached_path(const char* argv0, const char* fil
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
         line.pop_back();
     }
-    return line.empty() ? std::filesystem::path{} : std::filesystem::path(line);
+    return line.empty() ? std::filesystem::path{}
+                        : PSXRecompV4::host_expand_roots(std::filesystem::path(line));
 }
 
 static void write_cached_path(const char* argv0, const char* filename,
@@ -2840,7 +2937,9 @@ static bool resolve_match_session_bios_path(
 // block) specifies one: the executable's directory (authoritative, never cwd —
 // see exe_dir_from_argv), so saves always live next to the binary.
 static std::filesystem::path default_memcard_dir(const char* argv0) {
-    return exe_dir_from_argv(argv0);
+    /* T211: cards are per-machine state, so the default follows the state
+     * dir; that is the exe directory unless PSXRECOMP_STATE_DIR is set. */
+    return state_dir_from_argv(argv0);
 }
 
 static void close_controller(void);
@@ -3970,6 +4069,7 @@ static std::string trim_copy(const std::string& s) {
 static std::filesystem::path resolve_overlay_capture_path(
         const std::filesystem::path& project_root,
         const std::filesystem::path& exe_dir,
+        const std::filesystem::path& default_dir,  /* per-machine state dir (T211) */
         const std::string& game_id) {
     std::string direct;
     std::string store_root;
@@ -4026,14 +4126,14 @@ static std::filesystem::path resolve_overlay_capture_path(
     if (!direct.empty()) result = root_relative(direct);
     else if (!store_root.empty())
         result = root_relative(store_root) / game_id / "overlay_captures.json";
-    else result = exe_dir / "overlay_captures.json";
+    else result = default_dir / "overlay_captures.json";
 
     std::error_code ec;
     std::filesystem::create_directories(result.parent_path(), ec);
     if (ec) {
         std::fprintf(stderr, "psxrecomp: cannot create overlay capture store %s: %s\n",
                      result.parent_path().string().c_str(), ec.message().c_str());
-        return exe_dir / "overlay_captures.json";
+        return default_dir / "overlay_captures.json";
     }
     return result.lexically_normal();
 }
@@ -4255,7 +4355,7 @@ static void load_input_config(const char* argv0) {
     set_default_controller_mapping();
 
     namespace fs = std::filesystem;
-    fs::path config_path = exe_dir_from_argv(argv0) / "input.ini";
+    fs::path config_path = state_dir_from_argv(argv0) / "input.ini";
     std::error_code ec;
     if (!fs::exists(config_path, ec)) {
         std::ofstream out(config_path, std::ios::binary);
@@ -12916,9 +13016,9 @@ namespace {
     };
 
     void ae_rui_set_sidecar_paths(const char* argv0) {
-        const auto exe = exe_dir_from_argv(argv0 ? argv0 : "");
-        g_rui_keybinds_path = (exe / "keybinds.ini").string();
-        g_rui_config_ini_path = (exe / "config.ini").string();
+        const auto state = state_dir_from_argv(argv0 ? argv0 : "");
+        g_rui_keybinds_path = (state / "keybinds.ini").string();
+        g_rui_config_ini_path = (state / "config.ini").string();
     }
 
     void ae_fill_psx_launcher_game_info(
@@ -13893,7 +13993,7 @@ int main(int argc, char** argv) {
     bool user_settings_has_renderer = false;
     {
         std::filesystem::path settings_path =
-            exe_dir_from_argv(argv[0]) / "settings.toml";
+            state_dir_from_argv(argv[0]) / "settings.toml";
         g_runtime_settings_path = settings_path;
 #if defined(RECOMP_LAUNCHER)
         g_lnch_settings_path = settings_path;
@@ -14163,6 +14263,44 @@ int main(int argc, char** argv) {
         if (fps == 0 || fps >= 90) g_frame_interpolation_fps = fps;
     }
 
+    /* T211: $PSXRECOMP_SAVE_DIR/<exe name>/ is a host-wide memory-card and
+     * savestate directory (for example a per-user folder on a share). It acts
+     * exactly like --memcard-dir, which still wins when given. When the
+     * directory is first created, the cards the title used until now (explicit
+     * slot paths or dir/cardN.mcd) are copied in once, slot for slot, with the
+     * saves/ savestate folder; the originals stay. */
+    std::string env_memcard_dir;  /* outlives cli_memcard_dir, which may point at it */
+    if (!cli_memcard_dir) {
+        bool created = false;
+        const std::filesystem::path save_dir =
+            env_title_dir("PSXRECOMP_SAVE_DIR", argv[0], &created);
+        if (!save_dir.empty()) {
+            if (created) {
+                const std::filesystem::path exe_dir = exe_dir_from_argv(argv[0]);
+                std::filesystem::path old_dir = memcard_dir.empty() ? exe_dir : memcard_dir;
+                if (old_dir.is_relative()) old_dir = exe_dir / old_dir;
+                auto slot = [&](const std::filesystem::path& explicit_path, const char* name) {
+                    if (explicit_path.empty()) return old_dir / name;
+                    return explicit_path.is_relative() ? exe_dir / explicit_path : explicit_path;
+                };
+                migrate_state_file(slot(memcard1_path, "card1.mcd"), save_dir / "card1.mcd");
+                migrate_state_file(slot(memcard2_path, "card2.mcd"), save_dir / "card2.mcd");
+                std::error_code sec;
+                if (std::filesystem::is_directory(old_dir / "saves", sec) &&
+                    !std::filesystem::exists(save_dir / "saves", sec)) {
+                    std::filesystem::copy(old_dir / "saves", save_dir / "saves",
+                                          std::filesystem::copy_options::recursive, sec);
+                    std::fprintf(sec ? stderr : stdout, "psxrecomp: state migration %s -> %s%s%s\n",
+                                 (old_dir / "saves").string().c_str(),
+                                 (save_dir / "saves").string().c_str(),
+                                 sec ? ": " : "", sec ? sec.message().c_str() : "");
+                }
+            }
+            env_memcard_dir = save_dir.string();
+            cli_memcard_dir = env_memcard_dir.c_str();
+        }
+    }
+
     /* Apply writable-state isolation before game-options and launcher setup,
      * not with the later renderer/port overrides. Explicit slot paths from a
      * shared settings.toml must not escape the isolated directory. */
@@ -14181,7 +14319,8 @@ int main(int argc, char** argv) {
                 memcard_dir.string().c_str(), memcard_ec.message().c_str());
             return 1;
         }
-        std::fprintf(stdout, "psxrecomp: CLI writable-state directory = %s\n",
+        std::fprintf(stdout, "psxrecomp: %s writable-state directory = %s\n",
+                     env_memcard_dir.empty() ? "CLI" : "PSXRECOMP_SAVE_DIR",
                      memcard_dir.string().c_str());
     }
 
@@ -14234,9 +14373,12 @@ int main(int argc, char** argv) {
      * psx_mod_set_* callbacks — is inert until this runs. */
     {
         std::string mod_error;
+        /* Mod selection state and the derived-disc cache are per-machine
+         * (T211); with the variables unset this is exe/mods, as before. */
         if (!PSXRecompV4::mod_runtime_initialize(
                 exe_dir_from_argv(argv[0]) / "mods", game_id,
-                game_entry_pc, text_guard_exe_path, &mod_error)) {
+                game_entry_pc, text_guard_exe_path, &mod_error,
+                state_dir_from_argv(argv[0]) / "mods")) {
             std::fprintf(stderr, "psxrecomp: mods unavailable: %s\n",
                          mod_error.c_str());
         }
@@ -14252,11 +14394,13 @@ int main(int argc, char** argv) {
     std::exception_ptr overlay_init_exc;
     auto run_deferred_overlay_init = [&]() {
         std::filesystem::path exe_dir = exe_dir_from_argv(argv[0]);
-        std::string cache_dir = (exe_dir / "cache").string();
+        /* Overlay cache + capture store are per-machine state (T211). */
+        const std::filesystem::path state_dir = state_dir_from_argv(argv[0]);
+        std::string cache_dir = (state_dir / "cache").string();
         std::filesystem::path captures_path =
-            resolve_overlay_capture_path(deferred_overlay_project_root, exe_dir, game_id);
+            resolve_overlay_capture_path(deferred_overlay_project_root, exe_dir, state_dir, game_id);
         if (!overlay_capture_set_path(captures_path.string().c_str())) {
-            captures_path = exe_dir / "overlay_captures.json";
+            captures_path = state_dir / "overlay_captures.json";
             if (!overlay_capture_set_path(captures_path.string().c_str())) {
                 throw std::runtime_error(
                     "overlay capture path exceeds runtime limit");
@@ -14363,7 +14507,7 @@ int main(int argc, char** argv) {
                 " --recompiler " + cmd_quote((tk_dir / tk_recompiler).string()) +
                 " --runtime-include " + cmd_quote((tk_dir / "include").string()) +
                 " --project-root " + cmd_quote(tk_dir.string()) +
-                " --out-dir " + cmd_quote((tk_xd / "cache").string()) +
+                " --out-dir " + cmd_quote(cache_dir) +
                 (g_psx_cps_mode ? " --cps" : "") +
                 " --compiler " + compiler;
             if (std::string(compiler) == "gcc" && !tk_compiler.empty())
@@ -15331,9 +15475,10 @@ int main(int argc, char** argv) {
                     if (seed.has_deadzone) resolved_deadzone = seed.deadzone;
                 }
                 g_video_win_w = seed.window_width;
-                /* Persist the user's choices next to the exe. */
+                /* Persist the user's choices in the per-machine state dir
+                 * (the exe dir unless PSXRECOMP_STATE_DIR is set). */
                 PSXRecompV4::save_user_settings(
-                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
+                    state_dir_from_argv(argv[0]) / "settings.toml", seed);
             }
         }
     }
@@ -17248,7 +17393,7 @@ soft_return_lobby:
              * the rest of settings.toml — merge into the on-disk file. */
             {
                 const auto settings_path =
-                    exe_dir_from_argv(argv[0]) / "settings.toml";
+                    state_dir_from_argv(argv[0]) / "settings.toml";
                 PSXRecompV4::UserSettings us =
                     PSXRecompV4::load_user_settings(settings_path);
                 const int un = std::min(PSX_MAX_PLAYERS,

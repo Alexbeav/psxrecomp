@@ -1356,6 +1356,36 @@ int main() {
     check(!ModPackageManager::read_manifest(root / "bad.toml", invalid, &error),
           "unsafe package id must be rejected");
 
+    /* T211: a separate state root makes the install tree read-only at runtime.
+     * The legacy packages/ tree is scanned in place (no migration), and
+     * state.toml is read from and written to the state root only. */
+    {
+        const fs::path install = root / "t211-install";
+        const fs::path state_dir = root / "t211-state";
+        write_text(install / "packages/player.mod/1.0.0/manifest.toml",
+                   manifest("player.mod", "1.0.0"));
+        write_text(install / "bundled/psx.builtin/1.0.0/manifest.toml",
+                   manifest("psx.builtin", "1.0.0"));
+        ModPackageManager shared(install);
+        shared.set_state_root(state_dir);
+        check(shared.install_read_only(), "a distinct state root marks the install read-only");
+        check(shared.scan(&error), error.c_str());
+        check(fs::exists(install / "packages/player.mod/1.0.0/manifest.toml"),
+              "with a state root the legacy packages tree must stay where it is");
+        check(!fs::exists(install / "installed"),
+              "with a state root the runtime must not create mods/installed");
+        check(shared.packages().count("player.mod") == 1,
+              "a legacy package must still be visible when read in place");
+        check(shared.load_state(&error), error.c_str());
+        check(shared.save_state(&error), error.c_str());
+        check(fs::exists(state_dir / "state.toml"), "state.toml must be written to the state root");
+        check(!fs::exists(install / "state.toml"), "state.toml must not be written into the install");
+
+        ModPackageManager same(install);
+        same.set_state_root(install);
+        check(!same.install_read_only(), "a state root equal to the mods root changes nothing");
+    }
+
     /* Catalog roots. mods/bundled is build output that every build wipes and
      * re-stages; mods/installed belongs to the launcher and a build never
      * touches it. Before the split both lived in mods/packages, so a rebuild

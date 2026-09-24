@@ -374,6 +374,15 @@ public:
     std::filesystem::path bundled_root() const { return root_ / "bundled"; }
     /* Launcher-owned catalog: a build never touches this tree. */
     std::filesystem::path installed_root() const { return root_ / "installed"; }
+    /* T211: per-machine mod state (state.toml and the derived-disc cache).
+     * Empty or equal to root(): state lives in root(), as before. Otherwise
+     * the install tree is read-only at runtime: the legacy packages/
+     * migration is skipped and packages/ is scanned where it is. */
+    void set_state_root(std::filesystem::path state_root) { state_root_ = std::move(state_root); }
+    const std::filesystem::path& state_root() const {
+        return state_root_.empty() ? root_ : state_root_;
+    }
+    bool install_read_only() const { return !state_root_.empty() && state_root_ != root_; }
 
     bool scan(std::string* error = nullptr);
     bool load_state(std::string* error = nullptr);
@@ -444,6 +453,7 @@ private:
                    ModPackageOrigin origin, std::string* error);
 
     std::filesystem::path root_;
+    std::filesystem::path state_root_;
     bool developer_channel_ = kDeveloperChannelDefault;
     std::vector<std::string> scan_errors_;
     std::map<std::string, std::map<std::string, ModPackage>> packages_;
