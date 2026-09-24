@@ -6,6 +6,7 @@
  */
 
 #include "cpu_state.h"
+#include "window_size.h"     /* default game-window size */
 #include "psx_scheduler.h"   /* psx_scheduler_run — deterministic TCB scheduler */
 #include "parity_trace.h"    /* general two-process control-flow parity ring */
 #include "device_trace.h"    /* general two-process device-event cycle ring */
@@ -1250,7 +1251,6 @@ static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderle
                                               * fullscreen, 2 exclusive fullscreen */
 static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
 static int           g_video_win_w    = 0;    /* 0 = fit the display; see clamp_window_aspect */
-static bool          g_video_win_w_explicit = false; /* user chose a width */
 /* Resolved settings.toml for the live runtime UI.  The overlay only writes
  * standard settings it actually exposes and never persists a session disc or
  * the transient controller-port route. */
@@ -1647,28 +1647,18 @@ static int           g_ws_native_wide = 1;
  * creation alongside SDL_RenderSetLogicalSize. */
 static int           g_logical_w = 640;
 
-/* Clamp a requested window width to the primary display's usable area so an
- * oversized choice (e.g. 1920 on a 1080p panel) still fits on screen. Keeps
- * the given aspect: height = width*den/num. */
+/* Opening client size for the game window, from the primary display's usable
+ * area (see window_size.h). An explicit width is clamped to fit; no width
+ * opens a normal window at a whole multiple of 240 lines, about two thirds of
+ * the usable height. Sizing from the panel rather than a fixed 1280 keeps a
+ * 4K or 8K display from getting a small image far below the internal render
+ * resolution. Keeps the given aspect: height = width*den/num. */
 static void clamp_window_aspect(int* w, int* h, int num, int den) {
-    int width = *w;
     SDL_Rect bounds;
     const int have_bounds =
         (SDL_GetDisplayUsableBounds(0, &bounds) == 0 && bounds.w > 0 && bounds.h > 0);
-    /* 0 = "fit the display". The old default was a hardcoded 1280, which on a
-     * 4K or 8K panel opens a small window in the corner and, worse, makes the
-     * image far smaller than the internal render resolution the user chose --
-     * supersampling 16 rendering into a 1280-wide window throws almost all of
-     * it away. Fitting the usable bounds keeps the window proportional to the
-     * display it is actually on. An explicit width still wins. */
-    if (width <= 0) width = have_bounds ? bounds.w : 1280;
-    if (width < 640) width = 640;
-    if (have_bounds) {
-        if (width > bounds.w)             width = bounds.w;
-        if (width * den / num > bounds.h) width = bounds.h * num / den;
-    }
-    *w = width;
-    *h = width * den / num;
+    psx_window_size(w, h, num, den, have_bounds,
+                    have_bounds ? bounds.w : 0, have_bounds ? bounds.h : 0);
 }
 
 static int aspect_gcd(int a, int b) {
@@ -6380,7 +6370,6 @@ static int runtime_ui_set_value(void*, const RecompRuntimeUiItem *item,
                            RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0) {
         if (value < 1 || value > 4) return 0;
         g_video_win_w = value * 640;
-        g_video_win_w_explicit = true;
         if (sdl_window) {
             int height = g_video_win_w * g_video_aspect_den /
                          std::max(1, g_video_aspect_num);
@@ -14263,7 +14252,6 @@ int main(int argc, char** argv) {
                 gc.runtime.video_depth24_trailing_margin;
             if (gc.runtime.video_window_width > 0) {
                 g_video_win_w = gc.runtime.video_window_width;
-                g_video_win_w_explicit = true;
             }
             g_video_aa         = gc.runtime.video_antialiasing;
             g_video_texfilter  = gc.runtime.video_texture_filter;
@@ -14660,7 +14648,6 @@ int main(int argc, char** argv) {
 #endif
         if (us.has_supersampling)  g_video_scale     = us.supersampling;
         if (us.has_window_width)   g_video_win_w     = us.window_width;
-        if (us.has_window_width && us.window_width > 0) g_video_win_w_explicit = true;
         if (us.has_antialiasing)   g_video_aa        = us.antialiasing;
         if (us.has_texture_filter) g_video_texfilter = us.texture_filter;
         if (us.has_fmv_filter)     g_video_fmv_filter = us.fmv_filter;
@@ -16787,8 +16774,8 @@ session_reboot:
      * the image), 2 = exclusive fullscreen (real display-mode change), 0 =
      * windowed. Matches the in-game Alt+Enter / Cmd+Ctrl+F hotkey behaviour. */
     win_flags |= psx_fullscreen_flag_for_mode(g_fullscreen);
-    /* Open at the user-chosen window size (default 1280 wide) instead of the
-     * old hardcoded 640x480, so the game doesn't boot into a tiny window. The
+    /* Open at the user-chosen window size (default: see window_size.h)
+     * instead of the old hardcoded 640x480. The
      * height follows the configured display aspect (4:3 native, wider for the
      * widescreen hack); the present path letterboxes to the same aspect, so
      * the image scales to fill the larger window with no further distortion. */
@@ -16806,21 +16793,9 @@ session_reboot:
     }
     psx_apply_window_icon(sdl_window, argv[0]);
 
-    /* Maximise instead of computing the frame size ourselves.
-     *
-     * clamp_window_aspect fits the CLIENT area to the usable bounds, but a
-     * window is client plus title bar and borders, so fitting the client to a
-     * full-height display produced a window taller than the screen that hung
-     * off the top. Deriving the decoration size first does not work either:
-     * SDL_GetWindowBordersSize reports nothing useful before the window is
-     * shown, so the correction silently did not apply.
-     *
-     * The window manager already solves this exactly. Maximise and let it fit
-     * the work area, decorations and taskbar included. Only when the request
-     * was "fit the display" (window_width unset) -- an explicit width is a
-     * deliberate choice and is left alone. */
-    if (!g_fullscreen && !g_video_win_w_explicit)
-        SDL_MaximizeWindow(sdl_window);
+    /* No maximise: the default size (window_size.h) leaves a third of the
+     * usable height free, so the client plus title bar and borders fits on
+     * screen without asking the window manager to fill the work area. */
 
     /* Host refresh: if the window's current panel matches the guest cadence,
      * record it so driver vsync can own cadence. Re-probed while running so
