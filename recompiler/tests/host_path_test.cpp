@@ -42,6 +42,38 @@ int main(int argc, char** argv) {
     check(host_absolute(relative) == fs::absolute(relative), "relative path anchors to cwd");
     const auto root = fs::current_path() / "config directory";
     check(host_resolve(root, relative) == root / relative, "relative config value anchors to root");
+    // T211 host root tokens.
+    {
+#ifdef _WIN32
+        _putenv_s("PSXRECOMP_SHARE_ROOT", "");
+        _putenv_s("PSXRECOMP_MEDIA_ROOT", "");
+#else
+        unsetenv("PSXRECOMP_SHARE_ROOT");
+        unsetenv("PSXRECOMP_MEDIA_ROOT");
+#endif
+        check(host_expand_roots("${R}/bios/SCPH1001.BIN") == fs::path("${R}/bios/SCPH1001.BIN"),
+              "unset root token stays as written");
+        check(host_expand_roots("plain/disc.cue") == fs::path("plain/disc.cue"), "no token: unchanged");
+        check(host_expand_roots("${X}/disc.cue") == fs::path("${X}/disc.cue"), "unknown token: unchanged");
+        const fs::path share = fs::current_path() / "share root";
+        const fs::path media = fs::current_path() / "PS1 Games";
+#ifdef _WIN32
+        _putenv_s("PSXRECOMP_SHARE_ROOT", share.string().c_str());
+        _putenv_s("PSXRECOMP_MEDIA_ROOT", media.string().c_str());
+#else
+        setenv("PSXRECOMP_SHARE_ROOT", share.string().c_str(), 1);
+        setenv("PSXRECOMP_MEDIA_ROOT", media.string().c_str(), 1);
+#endif
+        check(host_expand_roots("${R}/inputs/bios/SCPH1001.BIN") == share / "inputs/bios/SCPH1001.BIN",
+              "${R} expands to the share root");
+        check(host_expand_roots(R"(${D}\Syphon Filter 2 (USA) (Disc 1).chd)") ==
+                  media / fs::path("Syphon Filter 2 (USA) (Disc 1).chd"),
+              "${D} expands with a backslash separator");
+        check(host_expand_roots("${R}") == share, "bare token is the root itself");
+        check(host_resolve(fs::current_path() / "unrelated", "${D}/game.cue") == media / "game.cue",
+              "host_resolve expands a token before anchoring");
+        check(host_expand_roots("disc/${R}.cue") == fs::path("disc/${R}.cue"), "token only at the start");
+    }
     // Optional private integration input: inspect only, never change the asset.
     if (argc == 2) {
         const fs::path path(argv[1]);
