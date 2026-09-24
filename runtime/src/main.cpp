@@ -2282,8 +2282,16 @@ static std::filesystem::path state_dir_from_argv(const char* argv0) {
     if (created) {
         const fs::path exe_dir = exe_dir_from_argv(argv0);
         for (const char* name : {"settings.toml", "input.ini", "keybinds.ini", "config.ini",
-                                 "overlay_captures.json", "mods/state.toml"})
+                                 "overlay_captures.json", "mods/state.toml",
+                                 "card1.mcd", "card2.mcd"})  /* default card slots */
             migrate_state_file(exe_dir / name, state_dir / name);
+        std::error_code sec;
+        if (fs::is_directory(exe_dir / "saves", sec) && !fs::exists(state_dir / "saves", sec)) {
+            fs::copy(exe_dir / "saves", state_dir / "saves", fs::copy_options::recursive, sec);
+            std::fprintf(sec ? stderr : stdout, "psxrecomp: state migration %s -> %s%s%s\n",
+                         (exe_dir / "saves").string().c_str(), (state_dir / "saves").string().c_str(),
+                         sec ? ": " : "", sec ? sec.message().c_str() : "");
+        }
     }
     return state_dir;
 }
@@ -2898,7 +2906,9 @@ static bool resolve_match_session_bios_path(
 // block) specifies one: the executable's directory (authoritative, never cwd —
 // see exe_dir_from_argv), so saves always live next to the binary.
 static std::filesystem::path default_memcard_dir(const char* argv0) {
-    return exe_dir_from_argv(argv0);
+    /* T211: cards are per-machine state, so the default follows the state
+     * dir; that is the exe directory unless PSXRECOMP_STATE_DIR is set. */
+    return state_dir_from_argv(argv0);
 }
 
 static void close_controller(void);
