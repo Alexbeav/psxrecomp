@@ -14113,7 +14113,8 @@ int main(int argc, char** argv) {
                 memcard_dir.string().c_str(), memcard_ec.message().c_str());
             return 1;
         }
-        std::fprintf(stdout, "psxrecomp: CLI writable-state directory = %s\n",
+        std::fprintf(stdout, "psxrecomp: %s writable-state directory = %s\n",
+                     env_memcard_dir.empty() ? "CLI" : "PSXRECOMP_SAVE_DIR",
                      memcard_dir.string().c_str());
     }
 
