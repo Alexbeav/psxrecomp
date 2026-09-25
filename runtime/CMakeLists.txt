@@ -868,6 +868,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(spu_gaussian_test PRIVATE include)
     add_test(NAME spu_gaussian_test COMMAND spu_gaussian_test)
 
+    add_executable(spu_adpcm_sample_test tests/test_spu_adpcm_sample.c)
+    target_include_directories(spu_adpcm_sample_test PRIVATE include)
+    add_test(NAME spu_adpcm_sample_test COMMAND spu_adpcm_sample_test)
+
+    add_executable(spu_envelope_rate_test tests/test_spu_envelope_rate.c)
+    target_include_directories(spu_envelope_rate_test PRIVATE include)
+    add_test(NAME spu_envelope_rate_test COMMAND spu_envelope_rate_test)
+
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
         add_test(NAME fntrace_c_linkage_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
@@ -883,6 +891,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         endif()
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
+        add_test(NAME cd_seek_trace_validation_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cd_seek_trace_validation.py)
+        add_test(NAME timer1_trace_validation_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_timer1_trace_validation.py)
+        add_test(NAME timer2_trace_validation_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_timer2_trace_validation.py)
         add_test(NAME frame_interpolation_context_ownership_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)
