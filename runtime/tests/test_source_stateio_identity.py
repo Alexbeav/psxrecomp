@@ -14,7 +14,7 @@ def main():
         root = Path(temporary)
         for opt in ['-O0', '-O2']:
             exe = root / ('stateio_identity' + opt + ('.exe' if os.name == 'nt' else ''))
-            subprocess.run([a.cc, '-std=c11', opt, '-Wall', '-Wextra', '-Werror',
+            subprocess.run([a.cc, '-std=c11', '-D_XOPEN_SOURCE=700', opt, '-Wall', '-Wextra', '-Werror',
                             '-I' + str(here.parent / 'include'),
                             str(here / 'test_source_stateio_identity.c'),
                             str(here.parent / 'src' / 'source_stateio_identity.c'),
