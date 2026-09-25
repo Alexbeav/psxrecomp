@@ -69,8 +69,8 @@ static inline int64_t source_gpu_t_polygon_row(const SourceGPUCostTally *t, int 
     } else {
         q = 21 + 15 * (int64_t)((width + 15) / 16);   /* 5.25 + 3.75 per 16pix chunk */
     }
-    int pixels = width & ~1;                          /* rounded to pixel pairs */
-    return q + (rich ? 4 : 2) * (int64_t)pixels;      /* 1.00 or 0.50 per pixel */
+    /* Exact pixel count: No$ states pixel-pair rounding only for Rectangles. */
+    return q + (rich ? 4 : 2) * (int64_t)width;       /* 1.00 or 0.50 per pixel */
 }
 
 /* ---- Rectangles [DOC] "Rectangles", New GPU ---------------------------------- */
@@ -97,7 +97,10 @@ static inline int64_t source_gpu_t_line(const SourceGPUCostTally *t, int dx, int
     if (t->opcode & 0x10u) q += 240;                  /* 60.00 gouraud */
     int pixels = (dx > dy ? dx : dy) + 1;
     q += (dy ? 8 : 4) * (int64_t)pixels;              /* 2.00 / 1.00 per pixel */
-    int64_t per_row = dy >= dx && dy ? (t->reads_back ? 22 : 10) : 8; /* 5.50/2.50 steep, 2.00 */
+    /* 5.50/2.50 steep (45..90'), 2.00 flat (0..30') and 40' without semi.
+     * UNDOCUMENTED: 30..45' with semi-transparency is "??" in No$; the flat
+     * 2.00 is used there without a documented basis. */
+    int64_t per_row = dy >= dx && dy ? (t->reads_back ? 22 : 10) : 8;
     return q + per_row * t->drawn_rows;               /* offscreen scanlines 0.00 */
 }
 
