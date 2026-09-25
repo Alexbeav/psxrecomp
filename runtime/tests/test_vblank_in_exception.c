@@ -8,6 +8,7 @@ static uint64_t fixture_cycles;
 uint32_t i_stat, i_mask;
 
 uint64_t psx_get_cycle_count(void) { return fixture_cycles; }
+uint64_t g_psx_device_gen;
 uint32_t sio_get_seq(void) { return 0; }
 int sio_card_protocol_active(void) { return 0; }
 void gpu_vblank_tick(void) { field_ticks++; }
