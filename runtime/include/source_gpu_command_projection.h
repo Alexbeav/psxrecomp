@@ -397,6 +397,12 @@ static inline int source_gpu_command_start_polygon(SourceGPUCommandProjection *s
     unsigned length = source_gpu_command_length(s->queue[0]);
     if (source_gpu_command_draw_rejected(s)) return source_gpu_command_fail(s, SOURCE_GPU_COMMAND_UNSUPPORTED);
     for (unsigned i = 0; i < length; ++i) s->polygon_words[i] = source_gpu_command_pop(s);
+    /* PSX-SPX "Texpage Attribute": the second UV word's upper half sets
+     * GP0(E1h) bits 0-8 and 11 for textured polygons. */
+    if (opcode & 0x04u) {
+        uint32_t page = s->polygon_words[2 + source_gpu_polygon_stride(opcode)] >> 16;
+        s->draw_mode = (s->draw_mode & ~0x9FFu) | (page & 0x9FFu);
+    }
     int cost = source_gpu_command_polygon_cost(s, s->polygon_words, 0);
     if (cost < 0) return source_gpu_command_fail(s, SOURCE_GPU_COMMAND_UNSUPPORTED);
     s->budget -= cost;
