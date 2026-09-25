@@ -152,6 +152,7 @@ int main(void) {
      * though its status bits match a paused drive. The next SetLoc+ReadN must
      * not pay the paused-restart latency; only Pause earns it. Resident Evil 2
      * NTSC times out that ReadN and retries forever on the violence warning. */
+    int seekl_delay=0, pause_delay=0;
     for (int after_pause=0; after_pause<=1; ++after_pause) {
         setup(1000); target(1100);
         if(after_pause) {
@@ -165,12 +166,18 @@ int main(void) {
         ack();
         CHECK(!reading&&!(stat_reg&(CDSTAT_SEEK|CDSTAT_READ|CDSTAT_PLAY)),
               "drive status is idle before the second SetLoc");
-        target(1200); int origin=last_sector_lba; command(6);
+        /* PS1B-118: after a completed SeekL the origin is the read cursor (the
+         * seek target, PSX-SPX SeekL/GetlocP), not the last delivered sector. */
+        target(1200); int origin=after_pause?last_sector_lba:msf_to_lba(read_min,read_sec,read_sect); command(6);
         int expect=apply_speed(source_seek_lower_bound(origin,1200,1,after_pause,mode_reg))+
                    initial_read_delay_cycles();
         CHECK(read_delay==expect,after_pause?"ReadN after Pause pays paused restart":
                                              "ReadN after completed SeekL pays no paused restart");
+        if(after_pause) pause_delay=read_delay; else seekl_delay=read_delay;
     }
+    /* The T93 discriminator: only Pause earns the paused restart. */
+    CHECK(pause_delay>seekl_delay,"ReadN after Pause is slower than after a completed SeekL");
+    printf("standby discriminator: after SeekL %d cycles, after Pause %d cycles\n",seekl_delay,pause_delay);
     /* Rewind and netplay rollback restore through the CD snapshot. Restoring
      * a standby drive must not keep the abandoned timeline's paused state. */
     {
@@ -180,7 +187,9 @@ int main(void) {
         command(6); ack(); advance(read_delay); ack(); command(9); ack(); advance(100000000); ack();
         CHECK(s_source_seek_paused==1,"abandoned timeline ends paused");
         CHECK(cdrom_snapshot_read(snap,snap_size),"standby snapshot restores");
-        target(1200); int origin=last_sector_lba; command(6);
+        /* PS1B-118: the restored standby drive sits on the SeekL target (read
+         * cursor, PSX-SPX SeekL/GetlocP); that is the implicit seek origin. */
+        target(1200); int origin=msf_to_lba(read_min,read_sec,read_sect); command(6);
         CHECK(read_delay==apply_speed(source_seek_lower_bound(origin,1200,1,0,mode_reg))+
                          initial_read_delay_cycles(),
               "restored standby ReadN pays no paused restart");
