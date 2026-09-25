@@ -1464,17 +1464,18 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* GPUSTAT.28, ready to receive a DMA block (PSX-SPX \"Ready Bits\"). It drops",
-            " * while a command executes, once a command has all its parameters, and right",
-            " * after a polygon or line command word. During a CPU-to-VRAM transfer it",
-            " * follows free FIFO space. */"
+            "/* GPUSTAT.28. No$PSX \"GPU Status Register\" / \"Ready Bits\": \"Write FIFO empty\".",
+            " * During A0h and C0h data transfers it is exactly that. Otherwise, per the",
+            " * same section and PSX-SPX a253f078 \"Ready Bits\", it drops while a command",
+            " * executes, once a command has all its parameters, and right after a polygon",
+            " * or line command word. */"
           ]
         },
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD)",
-            "        return source_gpu_command_fifo_size(s) < SOURCE_GPU_T_FIFO_WORDS;",
+            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)",
+            "        return source_gpu_command_fifo_size(s) == 0;",
             "    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;",
             "    if (s->budget < 0) return 0;"
           ]
@@ -1534,6 +1535,13 @@
           "dropped_lines": 5,
           "from_blocks": 59,
           "to_blocks": 60
+        },
+        {
+          "as_of": "a583c3bde832bdc85acff821dc1ea4bd707611ca",
+          "issue": "PS1B-180",
+          "reason": "GPUSTAT.28 is write FIFO empty during A0h/C0h (No$PSX Ready Bits); comment citation corrected",
+          "dropped_lines": 6,
+          "added_lines": 7
         }
       ],
       "note": "superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun"
@@ -2401,17 +2409,18 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* GPUSTAT.28, ready to receive a DMA block (PSX-SPX \"Ready Bits\"). It drops",
-            " * while a command executes, once a command has all its parameters, and right",
-            " * after a polygon or line command word. During a CPU-to-VRAM transfer it",
-            " * follows free FIFO space. */"
+            "/* GPUSTAT.28. No$PSX \"GPU Status Register\" / \"Ready Bits\": \"Write FIFO empty\".",
+            " * During A0h and C0h data transfers it is exactly that. Otherwise, per the",
+            " * same section and PSX-SPX a253f078 \"Ready Bits\", it drops while a command",
+            " * executes, once a command has all its parameters, and right after a polygon",
+            " * or line command word. */"
           ]
         },
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD)",
-            "        return source_gpu_command_fifo_size(s) < SOURCE_GPU_T_FIFO_WORDS;",
+            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)",
+            "        return source_gpu_command_fifo_size(s) == 0;",
             "    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;",
             "    if (s->budget < 0) return 0;"
           ]
@@ -2472,6 +2481,13 @@
           "dropped_lines": 5,
           "from_blocks": 56,
           "to_blocks": 57
+        },
+        {
+          "as_of": "a583c3bde832bdc85acff821dc1ea4bd707611ca",
+          "issue": "PS1B-180",
+          "reason": "GPUSTAT.28 is write FIFO empty during A0h/C0h (No$PSX Ready Bits); comment citation corrected",
+          "dropped_lines": 6,
+          "added_lines": 7
         }
       ]
     },
@@ -3819,17 +3835,18 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* GPUSTAT.28, ready to receive a DMA block (PSX-SPX \"Ready Bits\"). It drops",
-            " * while a command executes, once a command has all its parameters, and right",
-            " * after a polygon or line command word. During a CPU-to-VRAM transfer it",
-            " * follows free FIFO space. */"
+            "/* GPUSTAT.28. No$PSX \"GPU Status Register\" / \"Ready Bits\": \"Write FIFO empty\".",
+            " * During A0h and C0h data transfers it is exactly that. Otherwise, per the",
+            " * same section and PSX-SPX a253f078 \"Ready Bits\", it drops while a command",
+            " * executes, once a command has all its parameters, and right after a polygon",
+            " * or line command word. */"
           ]
         },
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD)",
-            "        return source_gpu_command_fifo_size(s) < SOURCE_GPU_T_FIFO_WORDS;",
+            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)",
+            "        return source_gpu_command_fifo_size(s) == 0;",
             "    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;",
             "    if (s->budget < 0) return 0;"
           ]
@@ -3890,6 +3907,13 @@
           "dropped_lines": 5,
           "from_blocks": 54,
           "to_blocks": 55
+        },
+        {
+          "as_of": "a583c3bde832bdc85acff821dc1ea4bd707611ca",
+          "issue": "PS1B-180",
+          "reason": "GPUSTAT.28 is write FIFO empty during A0h/C0h (No$PSX Ready Bits); comment citation corrected",
+          "dropped_lines": 6,
+          "added_lines": 7
         }
       ]
     },
@@ -7415,17 +7439,18 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* GPUSTAT.28, ready to receive a DMA block (PSX-SPX \"Ready Bits\"). It drops",
-            " * while a command executes, once a command has all its parameters, and right",
-            " * after a polygon or line command word. During a CPU-to-VRAM transfer it",
-            " * follows free FIFO space. */"
+            "/* GPUSTAT.28. No$PSX \"GPU Status Register\" / \"Ready Bits\": \"Write FIFO empty\".",
+            " * During A0h and C0h data transfers it is exactly that. Otherwise, per the",
+            " * same section and PSX-SPX a253f078 \"Ready Bits\", it drops while a command",
+            " * executes, once a command has all its parameters, and right after a polygon",
+            " * or line command word. */"
           ]
         },
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD)",
-            "        return source_gpu_command_fifo_size(s) < SOURCE_GPU_T_FIFO_WORDS;",
+            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)",
+            "        return source_gpu_command_fifo_size(s) == 0;",
             "    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;",
             "    if (s->budget < 0) return 0;"
           ]
@@ -7497,6 +7522,13 @@
           "dropped_lines": 5,
           "from_blocks": 210,
           "to_blocks": 211
+        },
+        {
+          "as_of": "a583c3bde832bdc85acff821dc1ea4bd707611ca",
+          "issue": "PS1B-180",
+          "reason": "GPUSTAT.28 is write FIFO empty during A0h/C0h (No$PSX Ready Bits); comment citation corrected",
+          "dropped_lines": 6,
+          "added_lines": 7
         }
       ]
     },
