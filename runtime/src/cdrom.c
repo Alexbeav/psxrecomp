@@ -11,6 +11,7 @@
  */
 
 #include "cdrom.h"
+#include "cd_seek_delay.h"
 #include "cdrom_irq.h"
 #include "cdrom_lid.h"
 #include "dma.h"
@@ -1281,140 +1282,114 @@ static void xa_reset_decode(void) {
     xa_stream_active = 0;
 }
 
-/* CD-audio volume matrix ([data_source][output_port], 0x80 = unity) applied
- * to every decoded XA/CD-DA sample, exactly as the CD controller does on
- * real hardware (Beetle PS_CDC::ApplyVolume, cdc.cpp:524). Written via the
- * index-2/3 register banks and latched by the "apply changes" bit; games
- * drive it CONSTANTLY — X5 fades music between scenes with it (measured
- * 0x7E steady, ramping to 0x00 at transitions on the Beetle oracle). Not
- * modeling it left fades missing and steady levels ~0.6 dB hot. */
-static uint8_t cd_pending_vol[2][2] = { { 0x80, 0x00 }, { 0x00, 0x80 } };
-static uint8_t cd_decode_vol[2][2]  = { { 0x80, 0x00 }, { 0x00, 0x80 } };
+/* T172 authored CD volume. */
+static uint8_t cd_pending_vol[2][2] = {{128, 0}, {0, 128}};
+static uint8_t cd_decode_vol[2][2] = {{128, 0}, {0, 128}};
 
-static void cd_apply_decode_volume(int16_t *stereo, int frames) {
-    /* Fast path: identity matrix (the reset state). */
-    if (cd_decode_vol[0][0] == 0x80 && cd_decode_vol[1][1] == 0x80 &&
-        cd_decode_vol[0][1] == 0x00 && cd_decode_vol[1][0] == 0x00)
-        return;
-    for (int i = 0; i < frames; i++) {
-        int32_t l = stereo[i * 2 + 0];
-        int32_t r = stereo[i * 2 + 1];
-        int32_t lo = ((l * cd_decode_vol[0][0]) >> 7) + ((r * cd_decode_vol[1][0]) >> 7);
-        int32_t ro = ((l * cd_decode_vol[0][1]) >> 7) + ((r * cd_decode_vol[1][1]) >> 7);
-        stereo[i * 2 + 0] = clamp16_cd(lo);
-        stereo[i * 2 + 1] = clamp16_cd(ro);
+static void cd_apply_decode_volume(int16_t *stereo, int frames)
+{
+    for (int frame = 0; frame < frames; ++frame, stereo += 2) {
+        int32_t left = stereo[0];
+        int32_t right = stereo[1];
+        stereo[0] = clamp16_cd(((left * cd_decode_vol[0][0]) >> 7) +
+                               ((right * cd_decode_vol[1][0]) >> 7));
+        stereo[1] = clamp16_cd(((left * cd_decode_vol[0][1]) >> 7) +
+                               ((right * cd_decode_vol[1][1]) >> 7));
     }
 }
+/* T172 end CD volume. */
 
-static int xa_decode_sector_4bit_stereo(const uint8_t* data, int16_t* out) {
-    static const int k0[5] = { 0, 60, 115, 98, 122 };
-    static const int k1[5] = { 0, 0, -52, -55, -60 };
-    int pair = 0;
+/* T172 authored XA4 decoders. */
+static int xa_decode_sector_4bit_stereo(const uint8_t *data, int16_t *out)
+{
+    const int32_t first[4] = {0, 60, 115, 98};
+    const int32_t second[4] = {0, 0, -52, -55};
+    for (int group = 0; group < XA_SOUND_GROUPS; ++group) {
+        const uint8_t *packed = data + group * 128;
+        for (int unit = 0; unit < 8; ++unit) {
+            unsigned header = packed[4 + unit];
+            unsigned shift = header & 15;
+            unsigned filter = (header >> 4) & 3;
+            int channel = unit & 1;
+            int32_t *history = channel ? xa_hist_r : xa_hist_l;
+            if (shift > 12)
+                shift = 12;
+            for (int sample = 0; sample < 28; ++sample) {
+                int nibble = (packed[16 + unit / 2 + sample * 4] >> (channel * 4)) & 15;
+                if (nibble >= 8)
+                    nibble -= 16;
+                int32_t prediction = (history[0] * first[filter] + history[1] * second[filter] + 32) >> 6;
+                int16_t value = clamp16_cd(((nibble * 4096) >> shift) + prediction);
+                history[1] = history[0];
+                history[0] = value;
+                out[((group * 4 + unit / 2) * 28 + sample) * 2 + channel] = value;
+            }
+        }
+    }
+    return XA_SOUND_GROUPS * 4 * 28;
+}
 
-    for (int g = 0; g < XA_SOUND_GROUPS; g++) {
-        const uint8_t* grp = data + g * 128;
-        for (int blk = 0; blk < 4; blk++) {
-            uint8_t hdr_l = grp[4 + blk * 2];
-            uint8_t hdr_r = grp[4 + blk * 2 + 1];
-            int shift_l = 12 - (int)(hdr_l & 0x0F);
-            int shift_r = 12 - (int)(hdr_r & 0x0F);
-            int filter_l = (hdr_l >> 4) & 0x03;
-            int filter_r = (hdr_r >> 4) & 0x03;
-            if (shift_l < 0) shift_l = 0;
-            if (shift_r < 0) shift_r = 0;
-
-            for (int i = 0; i < 28; i++) {
-                uint8_t b = grp[16 + blk + i * 4];
-                int32_t nib_l = b & 0x0F;
-                int32_t nib_r = (b >> 4) & 0x0F;
-                if (nib_l >= 8) nib_l -= 16;
-                if (nib_r >= 8) nib_r -= 16;
-
-                int32_t sample_l = (nib_l << shift_l)
-                    + ((k0[filter_l] * xa_hist_l[0] + k1[filter_l] * xa_hist_l[1] + 32) >> 6);
-                int32_t sample_r = (nib_r << shift_r)
-                    + ((k0[filter_r] * xa_hist_r[0] + k1[filter_r] * xa_hist_r[1] + 32) >> 6);
-                sample_l = clamp16_cd(sample_l);
-                sample_r = clamp16_cd(sample_r);
+static int xa_decode_sector_4bit_mono(const uint8_t *data, int16_t *out)
+{
+    const int32_t first[4] = {0, 60, 115, 98};
+    const int32_t second[4] = {0, 0, -52, -55};
+    int frame = 0;
+    for (int group = 0; group < XA_SOUND_GROUPS; ++group) {
+        const uint8_t *packed = data + group * 128;
+        for (int unit = 0; unit < 8; ++unit) {
+            unsigned header = packed[4 + unit];
+            unsigned shift = header & 15;
+            unsigned filter = (header >> 4) & 3;
+            if (shift > 12)
+                shift = 12;
+            for (int sample = 0; sample < 28; ++sample) {
+                int nibble = (packed[16 + unit / 2 + sample * 4] >> ((unit & 1) * 4)) & 15;
+                if (nibble >= 8)
+                    nibble -= 16;
+                int32_t prediction = (xa_hist_l[0] * first[filter] + xa_hist_l[1] * second[filter] + 32) >> 6;
+                int16_t value = clamp16_cd(((nibble * 4096) >> shift) + prediction);
                 xa_hist_l[1] = xa_hist_l[0];
-                xa_hist_l[0] = sample_l;
-                xa_hist_r[1] = xa_hist_r[0];
-                xa_hist_r[0] = sample_r;
-
-                out[pair * 2 + 0] = (int16_t)sample_l;
-                out[pair * 2 + 1] = (int16_t)sample_r;
-                pair++;
+                xa_hist_l[0] = value;
+                out[frame * 2] = value;
+                out[frame * 2 + 1] = value;
+                ++frame;
             }
         }
     }
-
-    return pair;
-}
-
-static int xa_decode_sector_4bit_mono(const uint8_t* data, int16_t* out) {
-    static const int k0[5] = { 0, 60, 115, 98, 122 };
-    static const int k1[5] = { 0, 0, -52, -55, -60 };
-    int pair = 0;
-
-    for (int g = 0; g < XA_SOUND_GROUPS; g++) {
-        const uint8_t* grp = data + g * 128;
-        for (int blk = 0; blk < 4; blk++) {
-            for (int nibble = 0; nibble < 2; nibble++) {
-                uint8_t hdr = grp[4 + blk * 2 + nibble];
-                int shift = 12 - (int)(hdr & 0x0F);
-                int filter = (hdr >> 4) & 0x03;
-                if (shift < 0) shift = 0;
-
-                for (int i = 0; i < 28; i++) {
-                    uint8_t b = grp[16 + blk + i * 4];
-                    int32_t sample_nibble = nibble ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                    if (sample_nibble >= 8) sample_nibble -= 16;
-
-                    int32_t sample = (sample_nibble << shift)
-                        + ((k0[filter] * xa_hist_l[0] + k1[filter] * xa_hist_l[1] + 32) >> 6);
-                    sample = clamp16_cd(sample);
-                    xa_hist_l[1] = xa_hist_l[0];
-                    xa_hist_l[0] = sample;
-
-                    out[pair * 2 + 0] = (int16_t)sample;
-                    out[pair * 2 + 1] = (int16_t)sample;
-                    pair++;
-                }
-            }
-        }
-    }
-
     xa_hist_r[0] = xa_hist_l[0];
     xa_hist_r[1] = xa_hist_l[1];
-    return pair;
+    return frame;
 }
+/* T172 end XA4 decoders. */
 
-static int xa_resample_to_44100(const int16_t* in, int in_frames,
-                                int sample_rate, int16_t* out, int max_frames) {
-    if (!in || !out || in_frames <= 0 || sample_rate <= 0 || max_frames <= 0) return 0;
-    int out_frames = 0;
-    int in_pos = 0;
-    int phase = 0;
-
-    while (in_pos < in_frames && out_frames < max_frames) {
-        int next_pos = (in_pos + 1 < in_frames) ? in_pos + 1 : in_pos;
-        int32_t cur_l = in[in_pos * 2 + 0];
-        int32_t cur_r = in[in_pos * 2 + 1];
-        int32_t next_l = in[next_pos * 2 + 0];
-        int32_t next_r = in[next_pos * 2 + 1];
-        out[out_frames * 2 + 0] = (int16_t)(cur_l + ((next_l - cur_l) * phase) / 44100);
-        out[out_frames * 2 + 1] = (int16_t)(cur_r + ((next_r - cur_r) * phase) / 44100);
-        out_frames++;
-
-        phase += sample_rate;
-        while (phase >= 44100) {
-            phase -= 44100;
-            in_pos++;
+/* T172 authored XA resampler. */
+static int xa_resample_to_44100(const int16_t *in, int in_frames,
+                              int sample_rate, int16_t *out, int max_frames)
+{
+    if (!in || !out || in_frames <= 0 || sample_rate <= 0 || max_frames <= 0)
+        return 0;
+    int frames = (in_frames * 44100 + sample_rate - 1) / sample_rate;
+    if (frames > max_frames) frames = max_frames;
+    for (int frame = 0; frame < frames; ++frame) {
+        int position = frame * sample_rate;
+        int current = position / 44100;
+        int fraction = position % 44100;
+        int next = current + 1 < in_frames ? current + 1 : current;
+        for (int channel = 0; channel < 2; ++channel) {
+            int first = in[current * 2 + channel];
+            int delta = in[next * 2 + channel] - first;
+            /* Preserve pinned compiler observations with defined modular arithmetic. */
+            uint32_t bits = (uint32_t)((int64_t)delta * fraction);
+            int64_t product = bits;
+            if (product >= 2147483648LL) product -= 4294967296LL;
+            int value = first + (int)(product / 44100);
+            uint32_t low = (uint32_t)value & 65535u;
+            out[frame * 2 + channel] = (int16_t)((int)low - (low >= 32768u ? 65536 : 0));
         }
     }
-
-    return out_frames;
+    return frames;
 }
+/* T172 end XA resampler. */
 
 /* Always-on XA zero-run scanner (audio_trace event ring). Decoded XA music
  * must not contain long exact-zero spans when the source sectors are dense;
@@ -1440,60 +1415,49 @@ static void xa_zero_scan(const int16_t *stereo, int frames, int lba,
     }
 }
 
-static int maybe_deliver_xa_audio(const uint8_t* raw_data, int lba,
-                                  const CDROMSectorDelivery *delivery) {
-    if (!(mode_reg & 0x40u) || !raw_data || !delivery || cd_muted) return 0;
+/* T172 authored XA delivery. */
+static int maybe_deliver_xa_audio(const uint8_t *raw_data, int lba,
+                                 const CDROMSectorDelivery *delivery)
+{
+    if (!raw_data || !delivery || !(mode_reg & 0x40) || cd_muted)
+        return 0;
     if (!xa_is_audio_realtime(delivery)) return 0;
-
     uint8_t file = delivery->xa_file;
     uint8_t channel = delivery->xa_channel;
     uint8_t coding = delivery->xa_coding;
-
-    if ((mode_reg & 0x08u) &&
-        (file != filter_file || channel != filter_channel)) {
-        trace_cdrom('a', 0, ((uint32_t)file << 16) | ((uint32_t)channel << 8) | coding, 0);
+    uint32_t tag = ((uint32_t)file << 16) | ((uint32_t)channel << 8) | coding;
+    if ((mode_reg & 8) && (file != filter_file || channel != filter_channel)) {
+        trace_cdrom(97, 0, tag, 0);
         return 0;
     }
-
-    int stereo = (coding & 0x01u) != 0;
-    int rate_code = (coding >> 2) & 0x03;
-    int depth_code = (coding >> 4) & 0x03;
-    int sample_rate = (rate_code == 0) ? 37800 : ((rate_code == 1) ? 18900 : 0);
-    if (depth_code != 0 || sample_rate == 0) {
-        trace_cdrom('X', 0, ((uint32_t)file << 16) | ((uint32_t)channel << 8) | coding, 0);
+    if (coding & 0x38) {
+        trace_cdrom(88, 0, tag, 0);
         return 0;
     }
-
-    if (!xa_stream_active ||
-        xa_stream_file != file ||
-        xa_stream_channel != channel ||
-        xa_stream_coding != coding) {
+    if (!xa_stream_active || xa_stream_file != file ||
+        xa_stream_channel != channel || xa_stream_coding != coding) {
         xa_reset_decode();
         xa_stream_file = file;
         xa_stream_channel = channel;
         xa_stream_coding = coding;
         xa_stream_active = 1;
     }
-
     int16_t native[XA_NATIVE_FRAMES * 2];
-    int16_t pcm_44100[XA_MAX_44100_FRAMES * 2];
-    int native_frames = stereo
+    int16_t output[XA_MAX_44100_FRAMES * 2];
+    int frames = (coding & 1)
         ? xa_decode_sector_4bit_stereo(raw_data + XA_DATA_OFFSET, native)
         : xa_decode_sector_4bit_mono(raw_data + XA_DATA_OFFSET, native);
-    xa_zero_scan(native, native_frames, lba, 0);
-    int out_frames = xa_resample_to_44100(native, native_frames, sample_rate,
-                                          pcm_44100, XA_MAX_44100_FRAMES);
-    /* Volume is applied after resampling, per PS1 hardware tests (Beetle
-     * cdc.cpp GetCDAudio comment). */
-    cd_apply_decode_volume(pcm_44100, out_frames);
-    xa_zero_scan(pcm_44100, out_frames, lba, 1);
-    spu_cd_audio_push(pcm_44100, out_frames);
-    trace_cdrom('A', 0,
-                ((uint32_t)file << 24) | ((uint32_t)channel << 16) |
-                ((uint32_t)coding << 8) | ((uint32_t)(out_frames / 32) & 0xFFu),
-                0);
+    xa_zero_scan(native, frames, lba, 0);
+    int count = xa_resample_to_44100(native, frames, (coding & 4) ? 18900 : 37800,
+                                   output, XA_MAX_44100_FRAMES);
+    cd_apply_decode_volume(output, count);
+    xa_zero_scan(output, count, lba, 1);
+    spu_cd_audio_push(output, count);
+    trace_cdrom(65, 0, ((uint32_t)file << 24) | ((uint32_t)channel << 16) |
+                ((uint32_t)coding << 8) | ((uint32_t)(count >> 5) & 255u), 0);
     return 1;
 }
+/* T172 end XA delivery. */
 
 static int read_sector_at(int min, int sec, int sect) {
     int lba = msf_to_lba(min, sec, sect);
@@ -1543,33 +1507,34 @@ static int read_sector_at(int min, int sec, int sect) {
         }
     }
 
+/* T172 authored CD delivery buffer-fill. */
     CdSectorBuf *wb = NULL;
     if (delivery.data_delivered) {
-        int wi = (s_ring_write + 1) % CDROM_NUM_SECTOR_BUFFERS;
-        wb = &s_sector_ring[wi];
-        if (wb->size > 0 && wb->pos < wb->size) s_ring_dropped++;
+        int target = (s_ring_write + 1) % CDROM_NUM_SECTOR_BUFFERS;
+        wb = &s_sector_ring[target];
+        if (wb->pos < wb->size)
+            ++s_ring_dropped;
         memset(wb->data, 0, sizeof(wb->data));
-        if (mode_reg & 0x20) {
-            if (have_raw) {
-                memcpy(wb->data, raw_data + WHOLE_SECTOR_OFFSET, WHOLE_SECTOR_SIZE);
-                wb->size = WHOLE_SECTOR_SIZE;
-            } else {
-                wb->data[0] = bin_to_bcd(min);
-                wb->data[1] = bin_to_bcd(sec);
-                wb->data[2] = bin_to_bcd(sect);
-                wb->data[3] = 0x02; /* Mode 2 sector. */
-                memcpy(wb->data + FALLBACK_SECTOR_HEADER_SIZE, user_data, SECTOR_SIZE);
-                wb->size = FALLBACK_WHOLE_SECTOR_SIZE;
-            }
-        } else {
+        if (!(mode_reg & 0x20)) {
             memcpy(wb->data, user_data, SECTOR_SIZE);
             wb->size = SECTOR_SIZE;
+        } else if (have_raw) {
+            memcpy(wb->data, raw_data + WHOLE_SECTOR_OFFSET, WHOLE_SECTOR_SIZE);
+            wb->size = WHOLE_SECTOR_SIZE;
+        } else {
+            wb->data[0] = bin_to_bcd(min);
+            wb->data[1] = bin_to_bcd(sec);
+            wb->data[2] = bin_to_bcd(sect);
+            wb->data[3] = 2;
+            memcpy(wb->data + FALLBACK_SECTOR_HEADER_SIZE, user_data, SECTOR_SIZE);
+            wb->size = FALLBACK_WHOLE_SECTOR_SIZE;
         }
         wb->pos = 0;
-        s_ring_write = wi;
+        s_ring_write = target;
         history_bytes = wb->data;
         history_size = wb->size;
     }
+/* T172 end CD delivery buffer-fill. */
 
     if (delivery.data_delivered) {
         memcpy(last_sector_buffer, wb->data, (size_t)wb->size);
@@ -1623,45 +1588,24 @@ static void clear_sector_buffer(void) {
     request_reg &= (uint8_t)~CDROM_REQUEST_BFRD;
 }
 
-/* One-deep asynchronous data-ready notification, mirroring Beetle
- * PS_CDC::SetAIP/CheckAIP (cdc.cpp:829,816): a data sector that comes due
- * while the guest still has an unacked controller INT does NOT stop disc
- * time — the sector buffer is overwritten on schedule (hardware clobbers
- * the FIFO the same way) and its INT1 pends here until the ack clears
- * irq_flag. If ANOTHER data sector lands while one is still pending, the
- * old notification is lost exactly like Beetle's "Previous notification
- * skipped" warning (counted, traced 'P'). */
-static uint8_t  pending_dataready;        /* 0/1: INT1 awaiting presentation */
-static uint8_t  pending_dataready_stat;   /* stat_reg snapshot at pend time */
-static int      pending_dataready_slot;   /* ring slot THIS INT1 announces */
-/* Absolute cycle at which a pended data-ready may be PRESENTED, or 0.
- *
- * Presenting it synchronously inside the guest's ack write is what loses the
- * sector. The ISR clears the interrupt and only then sets up its DMA; if the
- * next INT1's response FIFO and read slot are installed in between, the
- * transfer drains the WRONG sector. Measured: the guest acks sector 110's
- * INT1, 111 is presented instantly, and 111 lands in the buffer meant for 110
- * -- which is why psx-runtime fills 109,111,111,113,113 where DuckStation
- * fills 109,110,111,112,113.
- *
- * DuckStation guards the same window (QueueDeliverAsyncInterrupt): after an
- * ack, diff since the last interrupt is 0, so it always schedules rather than
- * delivering inline, "give it enough time to read the response out ... the
- * real console does something similar anyway, the INT1 task won't run
- * immediately after the INT3 is cleared." */
-#define CDROM_PEND_PRESENT_DELAY 500
+/* T172 authored CD pending state-clear. */
+/* Independent notification state; inputs and observations are recorded in cd_pending_provenance.json. */
+static uint8_t pending_dataready;
+static uint8_t pending_dataready_stat;
+static int pending_dataready_slot;
 static uint64_t pending_present_due;
-static uint64_t s_int1_pended;            /* INT1s that had to wait for ack */
-static uint64_t s_int1_lost;              /* pended INT1s replaced unseen */
+static uint64_t s_int1_pended;
+static uint64_t s_int1_lost;
+#define CDROM_PEND_PRESENT_DELAY 500
 
-/* Drive-state changes (Read/Play/Pause/Stop/Seek) cancel a pended
- * notification, matching Beetle's ClearAIP in every such command. */
-static void cdrom_clear_pending_dataready(void) {
+static void cdrom_clear_pending_dataready(void)
+{
     pending_dataready = 0;
     pending_dataready_stat = 0;
     pending_present_due = 0;
     s_cd_timing_pending_seq = UINT64_MAX;
 }
+/* T172 end CD pending state-clear. */
 
 /* A Read issued while the drive is ALREADY streaming the very sector the
  * pending Setloc names is not a new read -- it is the game saying "keep
@@ -1694,26 +1638,10 @@ static int read_continues_current_stream(void) {
     return 1;
 }
 
-/* A pending Setloc is also a seek when consumed by ReadN/ReadS. The source
- * comparison for this model is Octoshock 2.2.2 CalcSeekTime/ReadBase:
- * https://github.com/TASEmulators/BizHawk/blob/2.2.2/psx/octoshock/psx/cdc.cpp
- * Its deterministic component models travel across a 72-minute disc in one
- * second, a 300ms long-seek settle, and a simplified paused-drive restart.
- * This independently expressed lower bound omits its 0..25000-cycle jitter;
- * it is an emulator timing model, not a hardware-calibrated exact guarantee.
- * Command response and sector pipeline delays remain separate below.
- */
-static int source_seek_lower_bound(int origin,int target,int motor_on,int paused,uint8_t mode) {
-    int64_t cycles=0;
-    if(!motor_on) {origin=0;cycles=33868800;}
-    int64_t distance=llabs((int64_t)target-origin);
-    int64_t travel=distance*33868800/(72*60*75);
-    cycles+=travel>20000?travel:20000;
-    if(distance>=2250)cycles+=10160640;
-    else if(paused)cycles+=(mode&0x80)?1237952:2475904;
-    else if(s_nymashock_drive && distance>=3 && distance<12)
-        cycles+=4*CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode&0x80)?2:1);
-    return cycles>INT32_MAX?INT32_MAX:(int)cycles;
+/* Caller retains jitter, drive state, scheduling and final timing clamps. */
+static int source_seek_lower_bound(int origin, int target, int motor_on, int paused, uint8_t mode)
+{
+    return psx_cd_seek_delay(origin, target, motor_on, paused, mode, s_nymashock_drive);
 }
 /* Nymashock 1.29.0 HandlePlayRead: after two pipeline fills and the
  * verified target header, standby advances to target+3 then retreats nine.
@@ -1730,82 +1658,89 @@ static int source_drive_hold_logical, source_reset_phase;
  * which is exactly when source_drive_head_valid is cleared. -1 = never
  * decoded. */
 static int source_drive_subq_lba = -1;
-static void source_drive_head_update(void) {
-    if(!s_nymashock_drive || !source_drive_head_valid)return;
-    while(psx_cycle_count>=source_drive_head_due) {
-        source_drive_subq_lba=source_drive_head_lba;
-        source_drive_head_lba++;
-        if(source_drive_head_lba>=source_drive_head_target+(source_drive_hold_logical?2:0))source_drive_head_lba-=9;
-        if(source_drive_head_lba < -150)source_drive_head_lba=-150;
-        source_drive_head_due += CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg&0x80)?2:1);
+/* T172 authored CD head. */
+static void source_drive_head_update(void)
+{
+    if (!s_nymashock_drive || !source_drive_head_valid) return;
+    uint64_t period = (mode_reg & 0x80) ?
+        CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 : CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+    int64_t limit = (int64_t)source_drive_head_target + (source_drive_hold_logical ? 1 : -1);
+    while (source_drive_head_due <= psx_cycle_count) {
+        source_drive_subq_lba = source_drive_head_lba;
+        source_drive_head_lba += source_drive_head_lba < limit ? 1 : -8;
+        if (source_drive_head_lba < -150) source_drive_head_lba = -150;
+        source_drive_head_due += period;
     }
 }
-static int implicit_read_seek_cycles(void) {
-    if (s_source_clock) {
-        int origin=msf_to_lba(read_min,read_sec,read_sect);
-        int target=setloc_pending?s_setloc_lba:origin;
-        if(origin<0)origin=0;
-        if(target<0)target=0;
-        source_drive_head_update();
-        if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;
-        int delay=source_seek_lower_bound(origin,target,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
-        source_drive_head_valid=0;
-        uint32_t jitter=source_clock_random(25000);
-        return delay>INT32_MAX-(int)jitter?INT32_MAX:delay+(int)jitter;
+/* T172 end CD head. */
+
+/* T172 authored CD implicit seek. */
+static int implicit_read_seek_cycles(void)
+{
+    if (!s_source_clock) {
+        if (!setloc_pending) return 0;
+        int origin = last_sector_lba < 0 ? 0 : last_sector_lba;
+        return apply_speed(source_seek_lower_bound(origin, s_setloc_lba,
+            (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg));
     }
-    if (!setloc_pending) return 0;
-    int origin=last_sector_lba>=0?last_sector_lba:0;
-    return apply_speed(source_seek_lower_bound(origin,s_setloc_lba,(stat_reg&CDSTAT_MOTOR)!=0,
-                                              s_source_seek_paused,mode_reg));
+
+    int origin = msf_to_lba(read_min, read_sec, read_sect);
+    if (origin < 0) origin = 0;
+    int target = setloc_pending ? s_setloc_lba : origin;
+    if (target < 0) target = 0;
+    source_drive_head_update();
+    if (s_nymashock_drive && source_drive_head_valid) origin = source_drive_head_lba;
+    int delay = source_seek_lower_bound(origin, target,
+        (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg);
+    source_drive_head_valid = 0;
+    int64_t total = (int64_t)delay + source_clock_random(25000);
+    return total > INT32_MAX ? INT32_MAX : (int)total;
 }
+/* T172 end CD implicit seek. */
+
 /* This optional comparison adds only the independently expressed source seek
  * lower bound. The source's global PRNG jitter and physical drive-head position
  * are not recreated. The first cold ReadTOC's paused/zero position is measured. */
-static int source_toc_seek_cycles(void) {
-    int origin=last_sector_lba>=0?last_sector_lba:0;
-    /* Pause rewinds the source drive head without changing the last sector
-     * delivered to the host. ReadTOC seeks from that stopped head, just as
-     * a subsequent explicit seek or resumed ReadN does. */
-    if(s_source_clock && s_source_seek_paused && !reading) {
-        origin=msf_to_lba(read_min,read_sec,read_sect);
-        if(origin<0)origin=0;
-    }
-    if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;
-    int motor=(stat_reg&CDSTAT_MOTOR)!=0;
-    int paused=motor&&!reading&&!(stat_reg&(CDSTAT_READ|CDSTAT_SEEK|CDSTAT_PLAY));
-    int delay=source_seek_lower_bound(origin,0,motor,paused,mode_reg);
-    uint32_t jitter=s_source_clock?source_clock_random(25000):0;
-    return delay>INT32_MAX-(int)jitter?INT32_MAX:delay+(int)jitter;
+/* T172 authored CD TOC seek. */
+static int source_toc_seek_cycles(void)
+{
+    int origin = last_sector_lba;
+    if (s_source_clock && !reading && s_source_seek_paused)
+        origin = msf_to_lba(read_min, read_sec, read_sect);
+    if (origin < 0) origin = 0;
+    if (s_nymashock_drive && source_drive_head_valid)
+        origin = source_drive_head_lba;
+    int motor = (stat_reg & CDSTAT_MOTOR) != 0;
+    int paused = motor && !reading && !(stat_reg & (CDSTAT_READ | CDSTAT_SEEK | CDSTAT_PLAY));
+    int delay = source_seek_lower_bound(origin, 0, motor, paused, mode_reg);
+    if (!s_source_clock) return delay;
+    int64_t total = (int64_t)delay + source_clock_random(25000);
+    return total > INT32_MAX ? INT32_MAX : (int)total;
 }
+/* T172 end CD TOC seek. */
 
-static int source_explicit_seek_cycles(uint8_t cmd) {
-    /* The older model uses the delivery cursor; Nymashock also tracks the
-     * physical head while paused or in standby. Both use the source tape.
-     *
-     * The source measures a seek from CurSector, its physical read head. An
-     * established read keeps that head CDC_SECTOR_PIPE_COUNT (2) sectors
-     * ahead of the sector handed to the guest, because HandlePlayRead fills
-     * the pipe before the guest drains it. A seek issued mid-read therefore
-     * starts two sectors further along than the delivery cursor says, and
-     * timing it from the delivery cursor makes its travel two sectors too
-     * long. Command_Reset already accounts for the same lead below. */
-    int cursor = msf_to_lba(read_min, read_sec, read_sect);
-    if (cursor < 0) cursor = 0;
-    int origin = reading ? cursor + 2 : cursor;
+/* T172 authored CD explicit seek. */
+static int source_explicit_seek_cycles(uint8_t cmd)
+{
+    int origin = msf_to_lba(read_min, read_sec, read_sect);
     int target = msf_to_lba(seek_min, seek_sec, seek_sect);
+    if (origin < 0) origin = 0;
     if (target < 0) target = 0;
-    if(s_nymashock_drive && !reading && source_drive_head_valid)origin=source_drive_head_lba;
-    source_drive_head_valid=0;
-    int seek = source_seek_lower_bound(origin, target,
-        !!(stat_reg & CDSTAT_MOTOR), s_source_seek_paused, mode_reg);
-    if(s_source_clock) {
-        uint32_t jitter=source_clock_random(25000);
-        seek=seek>INT32_MAX-(int)jitter?INT32_MAX:seek+(int)jitter;
+    if (reading) origin += 2;
+    else if (s_nymashock_drive && source_drive_head_valid)
+        origin = source_drive_head_lba;
+    source_drive_head_valid = 0;
+    int64_t total = source_seek_lower_bound(origin, target,
+        (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg);
+    if (cmd == 0x15) {
+        int period = (mode_reg & 0x80) ? CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 :
+                                      CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+        total += period * (s_nymashock_drive ? 2 : 1);
     }
-    int header_period = cmd == 0x15 ?
-        (s_nymashock_drive ? 2 : 1) * CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg & 0x80) ? 2 : 1) : 0;
-    return seek > INT32_MAX - header_period ? INT32_MAX : seek + header_period;
+    if (s_source_clock) total += source_clock_random(25000);
+    return total > INT32_MAX ? INT32_MAX : (int)total;
 }
+/* T172 end CD explicit seek. */
 
 static void start_read_stream(uint8_t cmd) {
     int source_target = setloc_pending ? s_setloc_lba :
@@ -2003,114 +1938,185 @@ static int start_cdda_playback(int requested_track) {
     return 1;
 }
 
-static int source_cdda_peek(int32_t lba) {
-    uint8_t q[12];int valid=0;
-    if(iso_read_subq(iso_handle,(uint32_t)lba,q,12,&valid) && valid && (q[0]&15u)==1u) {
-        memcpy(last_valid_subq,q,12);last_valid_subq_available=1;
-        source_cdda.position_valid=1;return 1;
-    }
-    return 0;
+/* T172 authored CDDA peek. */
+static int source_cdda_peek(int32_t lba)
+{
+    uint8_t subq[12];
+    int valid = 0;
+    if (!iso_read_subq(iso_handle, (uint32_t)lba, subq, 12, &valid) ||
+        !valid || (subq[0] & 15) != 1)
+        return 0;
+    for (unsigned i = 0; i < 12; ++i)
+        last_valid_subq[i] = subq[i];
+    last_valid_subq_available = 1;
+    source_cdda.position_valid = 1;
+    return 1;
 }
-static void source_cdda_present(void) {
-    if(!source_cdda.enabled || !source_cdda.async_type || !source_clock_receive_ready())return;
-    unsigned type=source_cdda.async_type;
+/* T172 end CDDA peek. */
+
+/* T172 authored CDDA notification. */
+static void source_cdda_present(void)
+{
+    if (!source_cdda.enabled || !source_cdda.async_type) return;
+    if (!source_clock_receive_ready()) return;
     response_clear();
-    for(unsigned i=0;i<source_cdda.async_count;i++)response_push(source_cdda.async_data[i]);
-    source_cdda.async_type=source_cdda.async_count=0;
-    set_irq((int)type);fire_cdrom_irq();
+    for (unsigned i = 0; i < source_cdda.async_count; ++i)
+        response_push(source_cdda.async_data[i]);
+    unsigned type = source_cdda.async_type;
+    source_cdda.async_type = 0;
+    source_cdda.async_count = 0;
+    set_irq((int)type);
+    fire_cdrom_irq();
 }
-static void source_cdda_queue(unsigned type,const uint8_t *data,unsigned count) {
-    if(count>8)abort();
-    memcpy(source_cdda.async_data,data,count);source_cdda.async_type=type;source_cdda.async_count=count;
+
+static void source_cdda_queue(unsigned type, const uint8_t *data, unsigned count)
+{
+    if (count > sizeof(source_cdda.async_data)) abort();
+    source_cdda.async_type = type;
+    source_cdda.async_count = count;
+    for (unsigned i = 0; i < count; ++i)
+        source_cdda.async_data[i] = data[i];
     source_cdda_present();
 }
-static void start_source_cdda(int requested_track) {
-    if(reading || (mode_reg&0x80u)) {
-        fprintf(stderr,"[CDROM] Source CDDA active data-read transition/double speed unqualified\n");exit(2);
-    }
-    source_cdda.async_type=source_cdda.async_count=0;
+/* T172 end CDDA notification. */
+
+/* T172 authored CDDA start. */
+static void start_source_cdda(int requested_track)
+{
+    if (reading || (mode_reg & 0x80)) exit(2);
+    source_cdda.async_type = 0;
+    source_cdda.async_count = 0;
     cdrom_clear_pending_dataready();
-    if(!requested_track && !setloc_pending && cdda_playing && !source_cdda.seeking)return;
-    int count=iso_track_count(iso_handle);
-    if(count<1 || count>9){fprintf(stderr,"[CDROM] Source CDDA track range unqualified\n");exit(2);}
-    if(requested_track>count)requested_track=count;
-    int origin=cdda_playing?(int)cdda_lba:msf_to_lba(read_min,read_sec,read_sect);
-    if(origin<0)origin=0;
-    int target=requested_track?(int)iso_track_start_lba(iso_handle,requested_track):setloc_pending?s_setloc_lba:origin;
-    if(target<0)target=0;
-    int track=cdda_track_for_lba((uint32_t)target);
-    if(!track || !iso_track_is_audio(iso_handle,track)) {
-        fprintf(stderr,"[CDROM] Source CDDA data-track play unqualified\n");exit(2);
+    if (cdda_playing && !source_cdda.seeking && !requested_track && !setloc_pending) return;
+
+    int tracks = iso_track_count(iso_handle);
+    if (tracks < 1 || tracks > 9) exit(2);
+    if (requested_track > tracks) requested_track = tracks;
+    int origin = cdda_playing ? (cdda_lba > 2147483647U ? 0 : (int)cdda_lba) : msf_to_lba(read_min, read_sec, read_sect);
+    if (origin < 0) origin = 0;
+    int target = origin;
+    if (requested_track) {
+        uint32_t position = iso_track_start_lba(iso_handle, requested_track);
+        target = position > 2147483647U ? 0 : (int)position;
     }
-    int delay=source_seek_lower_bound(origin,target,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
-    uint32_t jitter=source_clock_random(25000);
-    if(delay>INT32_MAX-(int)jitter)abort();
-    cdda_delay=delay+(int)jitter;
-    stop_read_stream();spu_cd_audio_reset();
-    cdda_playing=1;cdda_track=track;cdda_lba=(uint32_t)target;cdda_data_end_pending=0;
-    source_cdda.seeking=1;source_cdda.sectors_read=0;
-    source_cdda.pipe_at=source_cdda.pipe_count=0;source_cdda.report_last_tens=255;
-    source_cdda.play_track_match=requested_track?requested_track:-1;
-    for(int i=0;i<32;i++)if(source_cdda_peek(target+i))break;
-    lba_to_msf(target,150,&read_min,&read_sec,&read_sect);
-    s_source_seek_paused=0;setloc_pending=0;
-    stat_reg=(stat_reg&~(CDSTAT_READ|CDSTAT_PLAY))|CDSTAT_MOTOR|CDSTAT_SEEK;
+    else if (setloc_pending)
+        target = s_setloc_lba < 0 ? 0 : s_setloc_lba;
+    int track = cdda_track_for_lba((uint32_t)target);
+    if (!track || !iso_track_is_audio(iso_handle, track)) exit(2);
+
+    int delay = source_seek_lower_bound(origin, target, (stat_reg & 2) != 0,
+                                        s_source_seek_paused, mode_reg);
+    uint32_t jitter = source_clock_random(25000);
+    if ((int64_t)delay + jitter > 2147483647LL) abort();
+    cdda_delay = delay + (int)jitter;
+    stop_read_stream();
+    spu_cd_audio_reset();
+    cdda_playing = 1;
+    cdda_track = track;
+    cdda_lba = (uint32_t)target;
+    cdda_data_end_pending = 0;
+    source_cdda.seeking = 1;
+    source_cdda.sectors_read = 0;
+    source_cdda.pipe_count = 0;
+    source_cdda.pipe_at = 0;
+    source_cdda.report_last_tens = 255;
+    source_cdda.play_track_match = requested_track ? requested_track : -1;
+    for (int i = 0; i < 32; ++i)
+        if (source_cdda_peek(target + i)) break;
+    lba_to_msf(target, 150, &read_min, &read_sec, &read_sect);
+    setloc_pending = 0;
+    s_source_seek_paused = 0;
+    stat_reg = (stat_reg & 0x1f) | 0x42;
 }
-static void process_source_cdda(uint32_t cycles) {
+/* T172 end CDDA start. */
+
+/* T172 authored CDDA service. */
+static void process_source_cdda(uint32_t cycles)
+{
     source_cdda_present();
-    if(!cdda_playing)return;
-    cdda_delay-=(int)cycles;
-    unsigned serviced=0;
-    while(cdda_playing && cdda_delay<=0) {
-        if(++serviced>64){fprintf(stderr,"[CDROM] Source CDDA service interval unqualified\n");exit(2);}
-        if(source_cdda.seeking) {
-            source_cdda.seeking=0;
-            for(int i=1;i<=16;i++)if(source_cdda_peek((int)cdda_lba-i))break;
-            stat_reg=(stat_reg&~CDSTAT_SEEK)|CDSTAT_PLAY;
-            cdda_delay+=CDROM_SINGLE_SPEED_SECTOR_CYCLES;continue;
+    if (!cdda_playing) return;
+    cdda_delay -= (int)cycles;
+    unsigned serviced = 0;
+    while (cdda_delay <= 0) {
+        if (++serviced > 64) exit(2);
+        if (source_cdda.seeking) {
+            source_cdda.seeking = 0;
+            for (int back = 1; back <= 16; ++back)
+                if (source_cdda_peek((int32_t)cdda_lba - back)) break;
+            stat_reg = (stat_reg & ~CDSTAT_SEEK) | CDSTAT_PLAY;
+            cdda_delay += CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+            continue;
         }
+
         uint8_t raw[2352];
-        if(!iso_read_raw_sector(iso_handle,cdda_lba,raw,2352)) {
-            fprintf(stderr,"[CDROM] Source CDDA sector read failed\n");exit(2);
+        if (!iso_read_raw_sector(iso_handle, cdda_lba, raw, sizeof(raw))) exit(2);
+        int fresh = source_cdda_peek((int32_t)cdda_lba);
+        if (!last_valid_subq_available) exit(2);
+        if (fresh && source_cdda.play_track_match < 0)
+            source_cdda.play_track_match = last_valid_subq[1];
+        int leadout = last_valid_subq[1] == 0xaa;
+        int track_end = (mode_reg & 2) && source_cdda.play_track_match >= 0 &&
+                        source_cdda.play_track_match != last_valid_subq[1];
+        if (leadout || track_end) {
+            uint8_t status = stat_reg;
+            cdda_playing = 0;
+            cdda_delay = 0;
+            s_source_seek_paused = 1;
+            source_cdda.pipe_at = 0;
+            source_cdda.pipe_count = 0;
+            source_cdda.sectors_read = 0;
+            stat_reg &= ~CDSTAT_PLAY;
+            if (leadout) status = stat_reg;
+            source_cdda_queue(CDIRQ_DATA_END, &status, 1);
+            return;
         }
-        int valid=source_cdda_peek((int)cdda_lba);
-        const uint8_t *q=last_valid_subq;
-        if(!last_valid_subq_available){fprintf(stderr,"[CDROM] Source CDDA requires a valid SubQ position\n");exit(2);}
-        if(source_cdda.play_track_match<0 && valid)source_cdda.play_track_match=q[1];
-        int leadout=q[1]==0xaa;
-        if(leadout || ((mode_reg&2u) && source_cdda.play_track_match>=0 && q[1]!=source_cdda.play_track_match)) {
-            uint8_t status=stat_reg;
-            cdda_playing=0;cdda_delay=0;source_cdda.pipe_count=source_cdda.pipe_at=0;
-            source_cdda.sectors_read=0;s_source_seek_paused=1;stat_reg&=~CDSTAT_PLAY;
-            if(leadout)status=stat_reg;
-            source_cdda_queue(CDIRQ_DATA_END,&status,1);return;
-        }
-        if((mode_reg&4u) && valid && (q[9]>>4)!=source_cdda.report_last_tens) {
-            source_cdda.report_last_tens=q[9]>>4;
-            unsigned channel=q[8]&1u,peak=0;
-            for(unsigned i=0;i<588;i++) {
-                int value=(int16_t)((uint16_t)raw[4*i+2*channel]|((uint16_t)raw[4*i+2*channel+1]<<8));
-                unsigned magnitude=value<0?(unsigned)-value:(unsigned)value;
-                if(magnitude>32767)magnitude=32767;if(magnitude>peak)peak=magnitude;
+
+        unsigned tens = last_valid_subq[9] >> 4;
+        if (fresh && (mode_reg & 4) && source_cdda.report_last_tens != tens) {
+            source_cdda.report_last_tens = tens;
+            unsigned channel = last_valid_subq[8] & 1;
+            unsigned peak = 0;
+            for (unsigned i = channel * 2; i < sizeof(raw); i += 4) {
+                int sample = raw[i] | ((unsigned)raw[i + 1] << 8);
+                if (sample >= 32768) sample -= 65536;
+                unsigned magnitude = (unsigned)(sample < 0 ? -sample : sample);
+                if (magnitude > peak) peak = magnitude;
             }
-            peak|=channel<<15;
-            uint8_t report[]={stat_reg,q[1],q[2],q[7],q[8],q[9],(uint8_t)peak,(uint8_t)(peak>>8)};
-            if(q[9]&0x10u){report[3]=q[3];report[4]=q[4]|0x80;report[5]=q[5];}
-            source_cdda_queue(CDIRQ_DATA_READY,report,8);
+            if (peak > 32767) peak = 32767;
+            peak |= channel << 15;
+            unsigned time = (last_valid_subq[9] & 0x10) ? 3 : 7;
+            uint8_t report[8] = {stat_reg, last_valid_subq[1], last_valid_subq[2],
+                last_valid_subq[time], last_valid_subq[time + 1], last_valid_subq[time + 2],
+                (uint8_t)peak, (uint8_t)(peak >> 8)};
+            if (time == 3) report[4] |= 0x80;
+            source_cdda_queue(CDIRQ_DATA_READY, report, sizeof(report));
         }
-        if(source_cdda.pipe_count==2) {
-            const uint8_t *bytes=source_cdda.pipe[source_cdda.pipe_at];int16_t pcm[1176];
-            for(unsigned i=0;i<1176;i++)pcm[i]=(int16_t)((uint16_t)bytes[2*i]|((uint16_t)bytes[2*i+1]<<8));
-            if(cd_muted)memset(pcm,0,sizeof(pcm));
-            cd_apply_decode_volume(pcm,588);spu_cd_audio_push(pcm,588);
-            cdda_sectors_played++;
-        } else source_cdda.pipe_count++;
-        memcpy(source_cdda.pipe[source_cdda.pipe_at],raw,2352);source_cdda.pipe_at^=1u;
-        cdda_track=bcd_to_bin(q[1]);cdda_lba++;source_cdda.sectors_read++;
-        lba_to_msf((int)cdda_lba,150,&read_min,&read_sec,&read_sect);
-        cdda_delay+=CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+
+        unsigned slot = source_cdda.pipe_at;
+        if (source_cdda.pipe_count == 2) {
+            int16_t stereo[1176];
+            for (unsigned i = 0; i < 1176; ++i) {
+                int sample = source_cdda.pipe[slot][i * 2] |
+                             ((unsigned)source_cdda.pipe[slot][i * 2 + 1] << 8);
+                if (sample >= 32768) sample -= 65536;
+                stereo[i] = cd_muted ? 0 : (int16_t)sample;
+            }
+            cd_apply_decode_volume(stereo, 588);
+            spu_cd_audio_push(stereo, 588);
+            ++cdda_sectors_played;
+        } else {
+            ++source_cdda.pipe_count;
+        }
+        memcpy(source_cdda.pipe[slot], raw, sizeof(raw));
+        source_cdda.pipe_at = slot ^ 1;
+        cdda_track = bcd_to_bin(last_valid_subq[1]);
+        ++cdda_lba;
+        ++source_cdda.sectors_read;
+        lba_to_msf(cdda_lba, 150, &read_min, &read_sec, &read_sect);
+        cdda_delay += CDROM_SINGLE_SPEED_SECTOR_CYCLES;
     }
 }
+/* T172 end CDDA service. */
 
 static void process_cdda_stream(uint32_t cycles) {
     if(source_cdda.enabled){process_source_cdda(cycles);return;}
@@ -2179,7 +2185,9 @@ static int data_fifo_ready(void) {
 static uint64_t s_dataready_fires;  /* INT1 (data-ready) raised per streamed sector — FMV dispatch probe */
 uint64_t cdrom_get_dataready_fires(void) { return s_dataready_fires; }
 
-static int deliver_read_sector(uint64_t timing_seq) {
+/* T172 authored CD delivery delivery-helpers. */
+static int deliver_read_sector(uint64_t timing_seq)
+{
     int delivered = read_sector_at(read_min, read_sec, read_sect);
     advance_msf(&read_min, &read_sec, &read_sect);
     if (xa_data_end_pending) {
@@ -2190,48 +2198,27 @@ static int deliver_read_sector(uint64_t timing_seq) {
         fire_cdrom_irq();
         return 1;
     }
-    if (!delivered) return 0;
+    if (!delivered)
+        return 0;
     response_clear();
     response_push(stat_reg);
-    /* Delivered immediately: this INT1 announces the slot just filled. */
     s_ring_read = s_ring_write;
     set_irq(CDIRQ_DATA_READY);
     cd_timing_arm_irq(timing_seq);
     fire_cdrom_irq();
-    s_dataready_fires++;
+    ++s_dataready_fires;
     return 1;
 }
 
-/* Both callers advance the read pointer, and that is DELIBERATE.
- *
- * Splitting them -- so the "guest has not acked" path parked the sector
- * without advancing -- looked obviously correct (why redirect a drain the
- * guest is still working through?) and regressed hard: int1_lost went 0 -> 70
- * and the game retried every Setloc. Without the advance, sectors pile up
- * behind an unacked INT, each new one replaces the pended notification, and
- * the guest is never told. The reasoning was sound and the measurement said
- * otherwise; it was committed without a verification run, which is how it
- * survived long enough to confuse three later experiments.
- *
- * Do not re-split this without a cd_verify run showing int1_lost stays 0. */
-static int deliver_read_sector_without_irq(void) {
+static int deliver_read_sector_without_irq(void)
+{
     int delivered = read_sector_at(read_min, read_sec, read_sect);
     advance_msf(&read_min, &read_sec, &read_sect);
-    if (delivered) {
-        /* Seamless refill for an in-flight multi-sector DMA: no INT1 is
-         * raised because this is a CONTINUATION of the drain already in
-         * progress, not a new notification. The read pointer must therefore
-         * follow it -- with one buffer this refill landed in the very buffer
-         * being drained, and the ring reproduces that only by advancing.
-         *
-         * Measured: leaving the pointer behind starved 1,128,960 drains and
-         * stranded exactly 70 refills -- the same 70 that showed up as
-         * int1_lost, with every Setloc retried. This one line is the whole
-         * difference between the ring regressing and the ring working. */
+    if (delivered)
         s_ring_read = s_ring_write;
-    }
     return delivered;
 }
+/* T172 end CD delivery delivery-helpers. */
 
 /* §93 P1: cmd timeline under PSX_RB_CD_BISECT (window via netplay).
  * ISSUE/DONE include controller stat + response FIFO (GetTN last-track BCD,
@@ -3006,38 +2993,55 @@ static void exec_command(uint8_t cmd) {
     cd_bisect_cmd_log("ISSUE", cmd, cmd_params, cmd_param_count);
 }
 
-static void process_source_reset(void) {
-    if(!s_source_clock || !s_source_reset_due || psx_cycle_count<s_source_reset_due)return;
-    if(s_nymashock_drive) {
-        while(s_source_reset_due && psx_cycle_count>=s_source_reset_due) {
-            uint64_t due=s_source_reset_due;
-            if(source_drive_hold_logical && source_reset_phase<3) {
-                source_drive_head_lba=source_reset_phase++;
-                s_source_reset_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES;
-            } else {
-                s_source_reset_due=0;source_reset_phase=0;
-                source_drive_head_lba=source_drive_hold_logical?-6:-8;
-                source_drive_head_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES*(source_drive_hold_logical?1:2);
-                stat_reg&=~CDSTAT_SEEK;s_source_seek_paused=1;
-                read_min=seek_min=0;read_sec=seek_sec=2;read_sect=seek_sect=0;
-                source_drive_head_update();
-            }
+/* T172 authored CD reset. */
+static void process_source_reset(void)
+{
+    if (!s_source_clock || !s_source_reset_due || psx_cycle_count < s_source_reset_due)
+        return;
+
+    if (!s_nymashock_drive) {
+        s_source_reset_due = 0;
+        if (source_clock_receive_ready()) {
+            response_clear();
+            response_push(stat_reg);
+            set_irq(2);
+            fire_cdrom_irq();
         }
+        cd_muted = 0;
+        spu_cd_audio_reset();
+        xa_reset_decode();
+        mode_reg = 0x20;
+        s_source_seek_paused = 1;
+        read_min = seek_min = 0;
+        read_sec = seek_sec = 2;
+        read_sect = seek_sect = 0;
+        s_setloc_lba = 0;
+        setloc_seek_far = 0;
         return;
     }
-    s_source_reset_due=0;
-    /* Original SetAIP then ClearAIP presents only if receive is open at this
-     * instant; drive state completes even if the old ACK owns the FIFO. */
-    if(source_clock_receive_ready()) {
-        response_clear();response_push(stat_reg);
-        set_irq(CDIRQ_COMPLETE);fire_cdrom_irq();
+
+    while (s_source_reset_due && s_source_reset_due <= psx_cycle_count) {
+        if (source_drive_hold_logical && source_reset_phase < 3) {
+            source_drive_head_lba = source_reset_phase;
+            ++source_reset_phase;
+            s_source_reset_due += 451584;
+            continue;
+        }
+        read_min = seek_min = 0;
+        read_sec = seek_sec = 2;
+        read_sect = seek_sect = 0;
+        stat_reg &= (uint8_t)~64u;
+        s_source_seek_paused = 1;
+        source_reset_phase = 0;
+        source_drive_head_lba = source_drive_hold_logical ? -6 : -8;
+        source_drive_head_due = s_source_reset_due +
+            (source_drive_hold_logical ? 451584u : 903168u);
+        s_source_reset_due = 0;
+        source_drive_head_update();
+        return;
     }
-    cd_muted=0;spu_cd_audio_reset();xa_reset_decode();
-    mode_reg=0x20;
-    read_min=seek_min=0;read_sec=seek_sec=2;read_sect=seek_sect=0;
-    s_setloc_lba=0;setloc_seek_far=0;
-    s_source_seek_paused=1;
 }
+/* T172 end CD reset. */
 
 static void process_pending(uint32_t cycles) {
     uint8_t done_cmd;
@@ -3281,23 +3285,24 @@ static void process_read_stream(uint32_t cycles) {
              * schedule (XA audio + buffer overwrite happen inside), and
              * pend its data-ready INT1 one deep. */
             int delivered = deliver_read_sector_without_irq();
-            if (delivered) {
-                cd_timing_flag(timing_seq, CDT_DATA | CDT_PENDED);
-                if (pending_dataready) {
-                    s_int1_lost++;
-                    trace_cdrom('P', 0, (uint32_t)last_sector_lba, 0);
-                    cd_timing_flag(s_cd_timing_pending_seq, CDT_LOST);
-                }
-                pending_dataready = 1;
-                pending_dataready_stat = stat_reg;
-                /* Capture the slot NOW. By presentation time the drive will
-                 * have moved on -- latching "newest" there is what handed the
-                 * guest a sector seven ahead of the one it asked for. */
-                pending_dataready_slot = s_ring_write;
-                s_cd_timing_pending_seq = timing_seq;
-                s_int1_pended++;
-                if(s_source_clock && irq_flag==0)pending_present_due=s_source_ready_due;
+/* T172 authored CD pending enqueue. */
+        if (delivered) {
+            cd_timing_flag(timing_seq, CDT_DATA | CDT_PENDED);
+            if (pending_dataready) {
+                ++s_int1_lost;
+                trace_cdrom(80, 0, (uint32_t)last_sector_lba, 0);
+                cd_timing_flag(s_cd_timing_pending_seq, CDT_LOST);
             }
+            pending_dataready = 1;
+            pending_dataready_stat = stat_reg;
+            pending_dataready_slot = s_ring_write;
+            s_cd_timing_pending_seq = timing_seq;
+            ++s_int1_pended;
+            if (s_source_clock && !irq_flag)
+                pending_present_due = s_source_ready_due;
+        }
+/* T172 end CD pending enqueue. */
+
         }
         s_accel_block_accum = 0;   /* the pipeline advanced; the next hold
                                     * starts a fresh authentic-period budget */
@@ -3311,23 +3316,25 @@ static void process_read_stream(uint32_t cycles) {
     }
 }
 
-/* Present a pended data-ready INT1 the moment the guest fully acks the
- * previous INT (Beetle CheckAIP: async results present as soon as the IRQ
- * register clears). Called from the irq_flag ack write. */
-static void present_pending_dataready(void) {
-    if (!pending_dataready || irq_flag != 0) return;
-    pending_present_due = 0;
-    uint64_t timing_seq = s_cd_timing_pending_seq;
+/* T172 authored CD pending present. */
+static void present_pending_dataready(void)
+{
+    if (!pending_dataready || irq_flag)
+        return;
+
+    uint64_t sequence = s_cd_timing_pending_seq;
     pending_dataready = 0;
+    pending_present_due = 0;
     s_cd_timing_pending_seq = UINT64_MAX;
     response_clear();
     response_push(pending_dataready_stat);
-    s_ring_read = pending_dataready_slot;   /* the slot this INT1 announced */
+    s_ring_read = pending_dataready_slot;
     set_irq(CDIRQ_DATA_READY);
-    cd_timing_arm_irq(timing_seq);
+    cd_timing_arm_irq(sequence);
     fire_cdrom_irq();
-    s_dataready_fires++;
+    ++s_dataready_fires;
 }
+/* T172 end CD pending present. */
 
 void cdrom_init(const char* cue_path) {
     s_source_firmware_model=source_boot_model("PSX_CD_FIRMWARE_MODEL");
@@ -3618,14 +3625,12 @@ void cdrom_write(uint32_t addr, uint32_t value) {
             if (val & 0x40) {
                 param_count = 0;
             }
-            /* A fully-acked INT releases any pended data-ready -- but on a
-             * SCHEDULE, not inside this store. See CDROM_PEND_PRESENT_DELAY:
-             * installing the next response and read slot before the ISR has
-             * set up its DMA makes that DMA drain the wrong sector. Then a
-             * second-response already past due_cyc; a queued command waits
-             * behind. */
-            if (pending_dataready && pending_present_due == 0)
-                pending_present_due = psx_cycle_count + (s_source_clock?2000u:CDROM_PEND_PRESENT_DELAY);
+/* T172 authored CD pending ack-schedule. */
+    if (pending_dataready && !pending_present_due)
+        pending_present_due = psx_cycle_count +
+            (s_source_clock ? 2000 : CDROM_PEND_PRESENT_DELAY);
+/* T172 end CD pending ack-schedule. */
+
             process_pending(0);
             try_execute_queued_command();
         }
@@ -3700,15 +3705,18 @@ void cdrom_advance(uint32_t cycles) {
     source_cdda_present();
     process_pending(cycles);
     if(!s_source_clock)try_execute_queued_command();
-    /* Release a scheduled data-ready once its delay has elapsed and the guest
-     * has genuinely finished with the previous INT. */
-    if (pending_present_due != 0 && psx_cycle_count >= pending_present_due) {
+/* T172 authored CD pending service. */
+    if (pending_present_due && psx_cycle_count >= pending_present_due) {
         pending_present_due = 0;
-        if (pending_dataready && source_clock_receive_ready())
-            present_pending_dataready();
-        else if(s_source_clock && pending_dataready && irq_flag==0)
-            pending_present_due=s_source_ready_due;
+        if (pending_dataready) {
+            if (source_clock_receive_ready())
+                present_pending_dataready();
+            else if (s_source_clock && !irq_flag)
+                pending_present_due = s_source_ready_due;
+        }
     }
+/* T172 end CD pending service. */
+
     process_read_stream(cycles);
     process_cdda_stream(cycles);
     deliver_xa_data_end();

@@ -1,0 +1,139 @@
+{
+  "task": "T172",
+  "status": "Reviewable local envelope replacement; bounded differential and snapshot gates pass in both tested profiles",
+  "base": "77fc84d18cd341ba0c0feb68a63f0904f8c467f0",
+  "implementation": "runtime/include/spu_envelope_rate.h",
+  "tests": "runtime/tests/test_spu_envelope_rate.c",
+  "sources": [
+    {
+      "repository": "https://github.com/psx-spx/psx-spx.github.io",
+      "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+      "path": "docs/soundprocessingunitspu.md",
+      "sha256": "e7ddff35a7faf8267f1cde0362a54c9011ee99a9cc6600faa4ab63c53b4e500d",
+      "lines_read": "85-160, 330-507, 549-655",
+      "use": "Register definitions, envelope rate relationships, documented slow-rate equivalence, and uncertainty statements. Hardware-document pseudocode was read. No document text or implementation was copied verbatim."
+    },
+    {
+      "url": "https://psx-spx.consoledev.net/soundprocessingunitspu/",
+      "use": "Web search corroboration of the hardware documentation location. Local pinned text supplies the implementation input."
+    },
+    {
+      "source": "T77 behavior-only messages on 2026-09-19",
+      "use": "Base identity, candidate filenames, helper declarations, state field types, call-site and replacement line boundaries. No implementation bodies or old test expectations supplied."
+    },
+    {
+      "source": "T172 authored black-box matrix v3",
+      "reference_commit": "5759277be50052b9f3f388578bf56cc7899d833f",
+      "matrix_sha256": "ef48b4770a8aa18c836a6b0d13052f9c88c17525dcfa103bdfb0988cbce85d36",
+      "normalized_observations_sha256": "2055e369d5582d5d2cd332b6c4f9a026ecb29238753503cd914bc38157041b31",
+      "observations": 237469,
+      "repeat": "Two complete matching runs",
+      "use": "Register behavior only. Opaque research harness executed, never opened."
+    }
+  ],
+  "test_oracle": {
+    "origin": "Hardware documentation plus independently authored black-box experiments",
+    "fast_rate": "Shift 0 scales the step by 2048; upward selectors 0 and 3 yield 14336 and 8192. Downward selectors yield -16384 and -10240.",
+    "knee": "Measured low 15 bits, complemented for inverted rise, >=24576 inclusive. Compatibility inference differs from strict signed threshold in hardware documentation.",
+    "decay": "At shift 11, -8 times half volume is -4. At level 1 it floors to -1. At level -32768 it is +8. The -5 times -16384 case floors +2.5 to +2.",
+    "slow_rate": "Clock increment remains 1 below representable clock rates unless the caller identifies the phase's all-ones rate. An all-ones rate leaves zero increment.",
+    "polarity": "The inverted argument is the effective step polarity, not a complete hardware sweep phase policy.",
+    "limitations": "These are specification-conformance checks, not measurements on PlayStation hardware or independent validation of the documentation itself.",
+    "state_rules": [
+      "Counter overflow discards excess; writes retain fraction; fixed sweep pauses fraction and applies on sample",
+      "Sweep previous-sign clamp runs even when counter is not due; linear decrease permits one-sample zero crossing",
+      "Attack at maximum level selects decay before sample rate calculation; decay enters sustain only after completed update",
+      "ADSR decrease narrows result to16bits before negative clamp"
+    ]
+  },
+  "input_contract": {
+    "shift": "0 through 31 from a hardware register",
+    "step": "0 through 3 from a hardware register, or the phase's fixed selector",
+    "mode_flags": "0 or 1",
+    "all_rate_bits_set": "Caller-supplied phase-specific halt condition; the helper does not infer it from a generic encoding",
+    "level": "Signed 16-bit current level",
+    "output": "Rate returns step and clock; state helpers mutate declared level, counter and phase pointers"
+  },
+  "unresolved": [
+    "Pre-existing runtime differences from reference remain",
+    "Full-system scheduling/audio validation",
+    "Cross-version saved-state interchange",
+    "Hardware qualification",
+    "Audio decoder/interpolation and other T77 audit candidates; no license clearance"
+  ],
+  "excluded_inputs": [
+    "Mednafen, Beetle and Octoshock implementation bodies",
+    "Suspect runtime implementation bodies",
+    "T77 detailed source-comparison report",
+    "Existing emulator-derived golden tests"
+  ],
+  "legal_claim": "None. A fresh task and documentation-derived arithmetic do not establish formal clean-room status or legal clearance.",
+  "integration": {
+    "replaced": [
+      "calc_vc_delta",
+      "adsr_run",
+      "sweep_env_write",
+      "sweep_env_step"
+    ],
+    "method": "Mechanical boundary replacement without showing old implementation bodies",
+    "boundary_correction": "Supplied comment start included previous closing brace at base line195; restored after compiler detected omission",
+    "shared_helper": "volume_reg_decode retained because another caller exists",
+    "legacy_adapter": "Existing source_key_timing declaration selects immediate fixed sweep state initialization only for legacy callers, which can omit voice sweep ticks when no voice is active; no counter reset."
+  },
+  "validation": {
+    "implementation_commit": "d81431b793e877054bfc9c071ad0c247c096fda9",
+    "matrix_revision": 5,
+    "matrix_sha256": "0e6062d80be0cdf88b8c67849d8e80d95a2e22d90ef96d5aa2dfe5242c6254f6",
+    "cases": 678,
+    "observations_per_profile": 241260,
+    "registers_per_observation": 10,
+    "reference_repeat_equal": true,
+    "profiles": {
+      "source": {
+        "counts": {
+          "all_match": 1989330,
+          "unchanged_mismatch": 415550,
+          "corrected": 7720
+        },
+        "candidate_only_mismatches": 0,
+        "changed_mismatches": 0,
+        "snapshot_cases": 130,
+        "snapshot_roundtrip_equal": true
+      },
+      "legacy": {
+        "counts": {
+          "all_match": 2263713,
+          "unchanged_mismatch": 148016,
+          "corrected": 871
+        },
+        "candidate_only_mismatches": 0,
+        "changed_mismatches": 0,
+        "snapshot_cases": 130,
+        "snapshot_roundtrip_equal": true
+      }
+    },
+    "scope": "Sample-granularity opaque wrapper, silent CD, no BIOS/retail/CPU scheduler. Same-binary SPU/RAM snapshots; not full-system or cross-version validation."
+  },
+  "remaining_inventory": [
+    {
+      "routine": "SPU source_decode_word and interpolation table provenance",
+      "state": "Unresolved T77 audit candidate; untouched, no clearance claimed"
+    },
+    {
+      "routine": "GPU polygon coverage helpers",
+      "state": "Unresolved T77 audit candidate; untouched"
+    },
+    {
+      "routine": "Timer1/2, raster and service clock profile",
+      "state": "Unresolved T77 audit candidate; untouched"
+    },
+    {
+      "routine": "CD source_seek_lower_bound",
+      "state": "Unresolved T77 audit candidate; untouched"
+    },
+    {
+      "routine": "CPU timing, memory and instruction-cache profile",
+      "state": "Unresolved audit questions; untouched"
+    }
+  ]
+}

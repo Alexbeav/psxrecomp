@@ -1,0 +1,56 @@
+{
+  "task": "T172",
+  "status": "Independent CPU timing helper; exact validation complete; independent final review and push pending",
+  "base": "a697d2f4cf6e7f13b6fb61291b9737698ff68bdd",
+  "tested_commit": "ed855c9968ca2ae2ea87904d19c343e7de035cd7",
+  "source_boundary": "Primary PSX-SPX hardware context, T77 declaration/caller contracts, authored opaque measurements, actual public CPU wire data. Old psx_cyc bodies/comments, timing recipes, source-profile tests and adjacent implementation-bearing headers unread.",
+  "scope": "runtime/include/psx_cyc.h only; CPUState ABI, psx_cycles.h, memory timing consumer, public CPU codec and callers unchanged",
+  "validation": {
+    "cases": 48539,
+    "rows": 712644,
+    "events": 143703,
+    "event_cpu_states": 83343,
+    "scope_states": 30720,
+    "paired_restores": 1820
+  },
+  "datasets": 43,
+  "negative_controls": 32,
+  "evidence_plan": "cpu-timing-final-plan-v1.json",
+  "evidence_report": "cpu-timing-final-validation-v1.json",
+  "experiment_files": [
+    "cpu_timing_experiments.py",
+    "cpu_timing_interaction_experiments.py",
+    "cpu_timing_load_experiments.py",
+    "cpu_timing_slot_experiments.py",
+    "cpu_timing_holdout_experiments.py",
+    "cpu_timing_overflow_experiments.py",
+    "cpu_timing_publication_experiments.py",
+    "cpu_timing_scope_experiments.py",
+    "cpu_timing_wire_experiments.py",
+    "cpu_timing_memory_experiments.py",
+    "cpu_timing_event_experiments.py"
+  ],
+  "independent_model": "analyze_cpu_timing_observations.py explains pipeline transitions and cosim charges; direct ordered observation comparison covers batching, scopes, CPU wire, memory consumers and callback-entry state",
+  "review_corrections": [
+    "Retained overlay external load declaration boundary",
+    "Preserved conservative/replay priority over device-service inline publication",
+    "Preserved mirrored RAM watch offsets",
+    "Distinguished first direct charge from flushing an existing batch",
+    "Preserved global batch overflow and local 2^28 publication threshold",
+    "Preserved CPU state visible at base and load-wait callbacks"
+  ],
+  "rejected_input": "Original holdout crossed fixture cumulative u64 headroom at holdout_95 step83; preserved unchanged, replaced by holdout-v2 with high seed 2^64-2^40",
+  "limitations": [
+    "No full memory decoder or device scheduler qualification",
+    "No full CPU execution, boot restore or resynchronization claim",
+    "CPU wire omits globals; 1820 paired continuations explicitly restore clock, batch, deferral, local state, flags and RAM seed",
+    "Nested distinct local cleanup behavior preserved, not endorsed for arbitrary production configurations",
+    "Actual memory timing section compiled unchanged; its underlying reads and scheduler remain explicit test seams",
+    "GCC C builds tested; MSVC not claimed",
+    "No hardware accuracy or performance claim"
+  ],
+  "notice_status": "T77 reported no per-file copyright/license/SPDX banner in old psx_cyc.h; root LICENSE unchanged",
+  "exposure_incident": "Earlier service-clock compiler warning exposed three unrelated GPU command-cost fragments. Incident remains recorded; no unexposed claim for those fragments or blanket clean-room claim.",
+  "legal_claim": "None; no formal clean-room or legal clearance claim",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4"
+}

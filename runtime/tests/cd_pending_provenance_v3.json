@@ -1,0 +1,31 @@
+{
+  "task": "T172",
+  "status": "Supersedes provisional v1 qualification; independent v3 review pending",
+  "base": "98682c6b634065c648265203757443e70e76d870",
+  "tested_commit": "43a01a4c0dbfe6b3f5df2fae8142dfe001f6dadf",
+  "scope": "Exactly five guarded pending notification fragments in runtime/src/cdrom.c: state-clear, enqueue, present, ack-schedule, service",
+  "validation": {
+    "datasets": 12,
+    "profile_cases": 5956,
+    "rows": 374468,
+    "callback_entry_snapshots": 112744,
+    "negative_controls": 37,
+    "full_controller_and_declaration_compile_checks": 7
+  },
+  "plans": [
+    "cd-pending-plan-v3.json"
+  ],
+  "receipt": "validation-receipt-cd-pending-v3.json",
+  "preservation": "cd-pending-preservation-v2.json: all six original unowned raw regions preserved",
+  "inputs": "Declaration/storage/caller contract from T77, pinned primary PSX-SPX and independently authored opaque observations. Old CD bodies/comments, harness, resolver, compiler logs, source exports, historical tests and random tape remain unread.",
+  "retained_attempts": "f092e94/37b1b11f and v1 receipt remain provisional history. Operation-only v2 domain omitted a state accepted by the public snapshot reader. Root v3 fixture exposed an extra readiness callback and reschedule with no notification. Corrected service guard; reran all cohorts through v3.",
+  "limitations": [
+    "Notification fragment compatibility only; not a full CD pipeline replacement",
+    "No command, sector reading, data FIFO payload transfer, IRQ mask/INTC, drive timing or XA filtering integration",
+    "No actual snapshot continuation, full game, hardware accuracy, performance, quality graduation or legal clearance claim"
+  ],
+  "notice_status": "Original file header and all unowned bytes preserved. T77 reports no explicit notices inside owned fragments. LICENSE unchanged.",
+  "documentation_impact": "Internal replacement with unchanged public interface. Canonical Notion specification and regression ledger updated; no product API or configuration documentation change.",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4",
+  "state_domain": "Synthetic notification_state fixtures cover admitted field combinations. Root separately verified one 23890-byte public-codec accepted state. This suite does not execute actual restore or establish gameplay reachability."
+}

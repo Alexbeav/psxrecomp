@@ -1,0 +1,26 @@
+{
+  "schema": "t172-cdda-start-provenance-v1",
+  "base": "bf7a8f55f7bd4cd09568ae39ce01205414f39e58",
+  "tested_commit": "c164fe573e1a0ac68b50f5c24189602ab9acc161",
+  "owned_function": "static void start_source_cdda(int requested_track)",
+  "authority": "Sanitized T77 startup contract v1 and opaque observations; original implementation and root harness/model bodies not read.",
+  "primary_reference": {
+    "path": "I:/Projects/PSX-References/research-and-documentation/psx-spx/docs/cdromdrive.md",
+    "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
+    "sha256": "b37a3d10752919788ca1cf2495fb199ca9ec9b3894ffd0c2c7b5ab5a4707cdbf"
+  },
+  "correction": "Initial 8ff candidate missed nonzero seeking exclusion from early resume. Fresh repeated-start holdout and 101-case resume matrix isolated this; corrected c164 passes full suite.",
+  "receipt": "../evidence/validation-receipt-cdda-start-v1.json",
+  "receipt_sha256": "0021c45541005118a20cfbbc2a8ebfa8c470e9fd4fb1c23903aa78879459ff7d",
+  "totals": {
+    "cases": 1138,
+    "rows": 17850,
+    "events": 32402,
+    "fatal": 1258
+  },
+  "negative_controls": 39,
+  "full_translation_unit_checks": 7,
+  "scope": "Only start_source_cdda transition; track, seek, random, reset, peek and conversion dependencies are declared seams. Signed32 requested tracks and declared full storage domains; defined position arithmetic only. No actual media/CRC/transport/INTC/timing/audio/hardware/full restore claim. Fatal observer capture is test-only; production exit(2) and overflow abort preserved.",
+  "publication": "Pending independent T77 review; T77 owns publication.",
+  "canonical_spec": "https://app.notion.com/p/3e01cf959a4c816989bcef66453c4ab4"
+}

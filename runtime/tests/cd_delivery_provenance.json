@@ -1,0 +1,38 @@
+{
+  "task": "T172",
+  "status": "Qualified sector-delivery replacement; independent review pending",
+  "base": "b72e195ee90a5330e3d0e82d88af8ff2b85add54",
+  "tested_commit": "ca130ba5715d4445442bda363ea8cd7dee671d51",
+  "scope": [
+    "buffer-fill statement inside read_sector_at",
+    "deliver_read_sector and deliver_read_sector_without_irq"
+  ],
+  "validation": {
+    "datasets": 6,
+    "negative_controls": 36,
+    "profile_cases": 3424,
+    "rows": 105600,
+    "callback_entry_snapshots": 43302,
+    "independently_reconstructed_full_payload_dumps": 25344,
+    "per_row_slot_hash_reconstruction": true,
+    "full_controller_and_declaration_compile_checks": 7
+  },
+  "plans": [
+    "cd-delivery-plan-v1.json",
+    "cd-delivery-holdout-plan-v1.json"
+  ],
+  "receipt": "validation-receipt-cd-delivery-v1.json",
+  "preservation": "cd-delivery-preservation-v1.json preserves all three unowned regions, including accepted pending notification code",
+  "inputs": "T77 declaration/storage/caller contract, pinned primary CD hardware preflight and independently authored opaque observations; synthetic user/raw/slot bytes only",
+  "exposure_boundary": "Original CD bodies/comments, builders, harnesses, resolver, source exports, compiler logs and root selfcheck vectors unread",
+  "retained_attempts": "Validator initially expected v3 output schema from binary label. Actual metadata is t77-cd-delivery-observations-v1. Corrected validator before paired qualification; no production correction.",
+  "limitations": [
+    "Only two owned regions; no immediate/deferred admission, command execution, filtering/classification or data FIFO consumption coverage",
+    "No CDDA/XA decoding, random tape, real INTC/request/ACK, drive timing or position evolution coverage",
+    "Synthetic valid slots/full signed end states and bounded coordinates do not cover every possible controller snapshot",
+    "No actual full-controller restore continuation, hardware correctness, gameplay reachability, performance or legal-clearance claim"
+  ],
+  "notice_status": "Original header and all unowned bytes preserved. Root reports no explicit notices inside owned regions. LICENSE unchanged.",
+  "documentation_impact": "Internal compatibility replacement; canonical spec and regression records updated. No public API/configuration change.",
+  "canonical_record": "https://www.notion.so/3e01cf959a4c816989bcef66453c4ab4"
+}

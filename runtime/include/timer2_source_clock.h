@@ -1,78 +1,107 @@
 #ifndef PSX_TIMER2_SOURCE_CLOCK_H
 #define PSX_TIMER2_SOURCE_CLOCK_H
 #include <stdint.h>
-#include <string.h>
-/* Explicit original-Octoshock compatibility state. Independent expression of
- * the retained source transitions, qualified against an external scalar oracle.
- * This is not a claim that every original-core quirk describes PS1 hardware.
- * No guest memory, title addresses, input words or selected timing constants. */
+
+/* Independent compatibility implementation from hardware documentation and
+ * authored timer register experiments. This profile differs from silicon;
+ * see runtime/tests/timer2_provenance.json. Old implementations remain in Git.
+ */
 typedef struct PsxTimer2Source {
-    uint32_t counter,mode,target,divider;
-    int irq_done,counting;
+    uint32_t counter, mode, target, divider;
+    int irq_done, counting;
 } PsxTimer2Source;
-static inline void timer2_source_reset(PsxTimer2Source *s){memset(s,0,sizeof(*s));}
-static inline int timer2_source_target(PsxTimer2Source *s,unsigned *pulses){
-    s->mode|=0x800;
-    if(s->mode&8) s->counter%=s->target?s->target:1;
-    if(!(s->mode&0x10) || s->irq_done) return 0;
-    s->irq_done=1;(*pulses)++;
-    return !s->counter || s->counter==s->target;
+
+static inline void timer2_source_reset(PsxTimer2Source *timer)
+{
+    *timer = (PsxTimer2Source){0, 0, 0, 0, 0, 0};
 }
-static inline unsigned timer2_source_cpu(PsxTimer2Source *s,uint32_t cycles){
-    unsigned pulses=0;
-    /* Original TIMER_Update skips this encoding even for timer 2. */
-    if(s->mode&0x100) return 0;
-    if(s->counting<=0) cycles=0;
-    uint32_t divided=(s->divider+cycles)>>3;
-    s->divider=(s->divider+cycles)&7;
-    if(s->mode&0x200) cycles=divided;
-    if(s->mode&1) cycles=0;
-    if((s->mode&8) && !s->target && !s->counter){
-        (void)timer2_source_target(s,&pulses);return pulses;
-    }
-    if(!cycles) return 0;
-    uint32_t before=s->counter;
-    s->counter+=cycles;
-    if(s->mode&0x40) s->irq_done=0;
-    int exact=0;
-    if((before<s->target && s->counter>=s->target) || s->counter>=s->target+65536u)
-        exact=timer2_source_target(s,&pulses);
-    if(s->counter>=65536u){
-        s->mode|=0x1000;s->counter&=65535u;
-        if((s->mode&0x20) && !s->irq_done){
-            exact|=!s->counter;s->irq_done=1;pulses++;
-        }
-    }
-    if((s->mode&0x40) && !exact) s->irq_done=0;
+
+static inline unsigned timer2_source_pulse(PsxTimer2Source *timer, int requested)
+{
+    if (!requested || (timer->irq_done && !(timer->mode & 64u)))
+        return 0;
+    timer->irq_done = 1;
+    return 1;
+}
+
+static inline unsigned timer2_source_cpu(PsxTimer2Source *timer, uint32_t cycles)
+{
+    if ((timer->mode & 256u) || !timer->counting)
+        return 0;
+    uint64_t divided = (uint64_t)timer->divider + cycles;
+    uint64_t steps = timer->mode & 512u ? divided / 8u : cycles;
+    timer->divider = (uint32_t)(divided & 7u);
+    if (timer->mode & 1u)
+        return 0;
+
+    uint64_t start = timer->counter;
+    uint64_t end = start + steps;
+    if ((timer->mode & 64u) && steps && !((timer->mode & 8u) && start == timer->target))
+        timer->irq_done = 0;
+    uint64_t distance = start < timer->target ? timer->target - start
+                                            : 65536u - start + timer->target;
+    int target_hit = steps >= distance && !((timer->mode & 8u) && start == timer->target);
+    if ((timer->mode & 8u) && (target_hit || start == timer->target))
+        end = timer->target ? end % timer->target : 0;
+    int overflow = end >= 65536u;
+    timer->counter = (uint32_t)(end & 65535u);
+    if (target_hit) timer->mode |= 2048u;
+    if (overflow) timer->mode |= 4096u;
+    unsigned pulses = timer2_source_pulse(timer, (target_hit && (timer->mode & 16u)) ||
+                                                (overflow && (timer->mode & 32u)));
+    if ((timer->mode & 64u) && overflow && (target_hit || !(timer->mode & 32u)))
+        timer->irq_done = 0;
     return pulses;
 }
-static inline unsigned timer2_source_write(PsxTimer2Source *s,unsigned reg,uint16_t v){
-    unsigned pulses=0;
-    if(reg==0){s->counter=v;s->irq_done=0;}
-    if(reg==4){
-        s->mode=(s->mode&0x1c00)|(v&0x3ff);s->counter=0;s->irq_done=0;
-        s->counting=1; /* Divider deliberately survives mode writes. */
+
+static inline unsigned timer2_source_write(PsxTimer2Source *timer, unsigned reg, uint16_t value)
+{
+    if (reg == 0) {
+        timer->counter = value;
+        timer->irq_done = 0;
+    } else if (reg == 4) {
+        timer->mode = (timer->mode & 6144u) | (value & 1023u);
+        timer->counter = 0;
+        timer->irq_done = 0;
+        timer->counting = 1;
+    } else if (reg == 8) {
+        timer->target = value;
+    } else {
+        return 0;
     }
-    if(reg==8) s->target=v;
-    if(s->counter==s->target)(void)timer2_source_target(s,&pulses);
-    return pulses;
+    if (timer->counter != timer->target)
+        return 0;
+    timer->mode |= 2048u;
+    if (timer->mode & 8u)
+        timer->counter = 0;
+    return timer2_source_pulse(timer, !timer->irq_done && !!(timer->mode & 16u));
 }
-static inline uint32_t timer2_source_read(PsxTimer2Source *s,unsigned reg){
-    if(reg==0)return s->counter;
-    if(reg==8)return s->target;
-    if(reg!=4)return 0;
-    uint32_t value=s->mode;s->mode&=~0x1000u;
-    if(s->counter!=s->target)s->mode&=~0x800u;
-    return value;
+
+static inline uint32_t timer2_source_read(PsxTimer2Source *timer, unsigned reg)
+{
+    if (reg == 0) return timer->counter;
+    if (reg == 8) return timer->target;
+    if (reg != 4) return 0;
+    uint32_t result = timer->mode;
+    timer->mode &= ~UINT32_C(6144);
+    if (timer->counter == timer->target)
+        timer->mode |= result & 2048u;
+    return result;
 }
-static inline uint32_t timer2_source_next(const PsxTimer2Source *s){
-    /* Source periodic update bound, independent of CPU interrupt masking. */
-    if(!(s->mode&0x30))return 1024;
-    if((s->mode&8) && !s->counter && !s->target && !s->irq_done)return 1;
-    if((s->mode&1) || s->counting<=0)return 1024;
-    uint32_t target=((s->mode&0x18) && s->counter<s->target)?s->target:65536u;
-    uint32_t clocks=target-s->counter;
-    if(s->mode&0x200)clocks=clocks*8-s->divider;
-    return clocks<1024?clocks:1024;
+
+static inline uint32_t timer2_source_next(const PsxTimer2Source *timer)
+{
+    if ((timer->mode & 56u) == 40u && timer->counter == timer->target)
+        return 1;
+    if (!timer->counting || (timer->mode & 1u))
+        return 1024;
+    if (!(timer->mode & 48u)) return 1024;
+    uint64_t distance = 65536u - timer->counter;
+    if (((timer->mode & 16u) || ((timer->mode & 40u) == 40u)) &&
+        timer->counter < timer->target)
+        distance = timer->target - timer->counter;
+    if (timer->mode & 512u)
+        distance = distance * 8u - timer->divider;
+    return distance < 1024 ? (uint32_t)distance : 1024;
 }
 #endif

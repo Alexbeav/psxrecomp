@@ -288,59 +288,81 @@ static inline void put_opaque(const RTarget *t, int x, int y, uint16_t color) {
         gpu_vram_dirty_mark_row((uint32_t)y);
 }
 
-/* Native cache state for the opt-in source-comparison profile. Cache reads
- * sample only g_vram. Uploads invalidate texture tags, but deliberately leave
- * the palette cached until a palette-key change or GP0 cache clear. */
-static struct {
-    uint32_t tag[256],palette_key,page;
-    uint16_t line[256][4],palette[256];
-} source_texture_cache;
-void sw_source_texture_control(unsigned action,uint32_t page) {
-    int clear=action==0 || action==1 || action==2 || action==4;
-    if(action==3) {
-        unsigned old=source_texture_cache.page;
-        clear=((old^page)&31u)!=0 || (!!(old&0x180u)!=!!(page&0x180u));
+/* T172 authored texture cache control. */
+typedef struct {
+    uint32_t address;
+    uint16_t words[4];
+    int valid;
+} T172TextureLine;
+static T172TextureLine t172_texture_lines[256];
+static uint16_t t172_palette[256];
+static unsigned t172_palette_key, t172_palette_size;
+static int t172_palette_valid;
+static uint32_t t172_control_page;
+
+void sw_source_texture_control(unsigned action, uint32_t page)
+{
+    uint32_t selected = page & 0x19fu;
+    if (action == 3 && selected == t172_control_page) return;
+    for (unsigned i = 0; i < 256; ++i) t172_texture_lines[i].valid = 0;
+    if (action == 0 || action == 1 || action == 4) t172_palette_valid = 0;
+    if (action == 0) {
+        for (unsigned i = 0; i < 256; ++i) t172_palette[i] = 0;
     }
-    if(action==0)memset(&source_texture_cache,0,sizeof(source_texture_cache));
-    if(action==0 || action==1 || action==4)source_texture_cache.palette_key=UINT32_MAX;
-    if(clear)for(unsigned i=0;i<256;i++)source_texture_cache.tag[i]=UINT32_MAX;
-    if(action==3 || action==4)source_texture_cache.page=page&511u;
+    if (action == 0) t172_control_page = 0;
+    if (action == 3 || action == 4) t172_control_page = selected;
 }
+
 typedef struct SourceTriangleColors {
     RTarget target;
     int core_x,core_y,dither,extra_work,mode;
     uint32_t base[5],dx[5],dy[5];
     const SourceGPUTexture *texture;
 } SourceTriangleColors;
-static uint16_t source_texture_fetch(SourceTriangleColors *c,unsigned u,unsigned v) {
-    unsigned window=c->texture->window,page=c->texture->page;
-    unsigned mx=window&31u,my=(window>>5)&31u;
-    unsigned ux=(u&~(mx<<3))+(((window>>10)&mx)<<3)+((page&15u)<<(8-c->mode));
-    unsigned vy=(v&~(my<<3))+(((window>>15)&my)<<3)+((page&16u)<<4);
-    unsigned address=vy*1024u+((ux>>(2-c->mode))&1023u);
-    unsigned entry=c->mode==0?((address>>2)&3u)|((address>>8)&252u):
-                                ((address>>2)&7u)|((address>>7)&248u);
-    unsigned tag=address&~3u;
-    if(source_texture_cache.tag[entry]!=tag) {
-        c->extra_work+=4;
-        for(unsigned i=0;i<4;i++)source_texture_cache.line[entry][i]=g_vram[tag+i];
-        source_texture_cache.tag[entry]=tag;
+/* T172 authored texture sampling. */
+static uint16_t source_texture_fetch(SourceTriangleColors *colors, unsigned u, unsigned v)
+{
+    const SourceGPUTexture *texture = colors->texture;
+    unsigned mask_u = (texture->window & 31u) << 3;
+    unsigned mask_v = ((texture->window >> 5) & 31u) << 3;
+    u = (u & ~mask_u) | (((texture->window >> 10) << 3) & mask_u);
+    v = (v & ~mask_v) | (((texture->window >> 15) << 3) & mask_v);
+    unsigned shift = 2u - (unsigned)colors->mode;
+    unsigned x = ((texture->page & 15u) * 64u + (u >> shift)) & 1023u;
+    unsigned y = (((texture->page >> 4) & 1u) * 256u + v) & 511u;
+    unsigned slot = colors->mode == 0 ? ((v & 63u) * 4u + ((u >> 4) & 3u))
+        : ((v & 31u) * 8u + ((u >> (shift + 2)) & 7u));
+    uint32_t address = y * 1024u + (x & ~3u);
+    T172TextureLine *line = &t172_texture_lines[slot];
+    if (!line->valid || line->address != address) {
+        line->valid = 1;
+        line->address = address;
+        for (unsigned i = 0; i < 4; ++i) line->words[i] = g_vram[address + i];
+        colors->extra_work += 4;
     }
-    uint16_t value=source_texture_cache.line[entry][address&3u];
-    if(c->mode==0)return source_texture_cache.palette[(value>>((ux&3u)*4))&15u];
-    if(c->mode==1)return source_texture_cache.palette[(value>>((ux&1u)*8))&255u];
-    return value;
+    uint16_t word = line->words[x & 3u];
+    if (colors->mode == 2) return word;
+    unsigned bits = colors->mode == 0 ? 4u : 8u;
+    unsigned index = (word >> ((u & ((1u << shift) - 1u)) * bits)) & ((1u << bits) - 1u);
+    return t172_palette[index];
 }
-static void source_texture_palette(SourceTriangleColors *c) {
-    unsigned clut=c->texture->clut;
-    uint32_t key=(clut&32767u)|((unsigned)c->mode<<16);
-    if(c->mode>=2 || !c->texture->load_clut || source_texture_cache.palette_key==key)return;
-    unsigned count=c->mode?256:16;
-    c->extra_work+=(int)count;
-    for(unsigned i=0;i<count;i++)
-        source_texture_cache.palette[i]=g_vram[((clut>>6)&511u)*1024u+(((clut&63u)*16u+i)&1023u)];
-    source_texture_cache.palette_key=key;
+
+static void source_texture_palette(SourceTriangleColors *colors)
+{
+    const SourceGPUTexture *texture = colors->texture;
+    if (colors->mode == 2 || !texture->load_clut) return;
+    unsigned size = colors->mode == 0 ? 16u : 256u;
+    unsigned key = texture->clut & 0x7fffu;
+    if (t172_palette_valid && t172_palette_key == key && t172_palette_size == size) return;
+    unsigned x = (key & 63u) * 16u;
+    unsigned y = (key >> 6) & 511u;
+    for (unsigned i = 0; i < size; ++i) t172_palette[i] = g_vram[y * 1024u + ((x + i) & 1023u)];
+    t172_palette_key = key;
+    t172_palette_size = size;
+    t172_palette_valid = 1;
+    colors->extra_work += (int)size;
 }
+
 static unsigned source_triangle_component(const SourceTriangleColors *c,unsigned channel,int x,int y) {
     uint32_t fraction=c->base[channel]+c->dx[channel]*(uint32_t)(x-c->core_x)+c->dy[channel]*(uint32_t)(y-c->core_y);
     return (fraction>>12)&255u;
