@@ -139,14 +139,13 @@ static inline unsigned source_gpu_command_length(uint32_t word)
     }
 }
 
-/* Words the FIFO holds before the DMA request drops for this command. PSX-SPX
- * "Ready Bits": polygon and line commands drop it after the command word. The
- * rectangle rule is not documented (gap G2); it is the timing table's. */
+/* Words received before GPUSTAT.28 (ready for DMA block) drops. PSX-SPX
+ * "Ready Bits": polygon and line commands drop it right after the command
+ * word; every other command once the command and all its parameters arrive. */
 static inline unsigned source_gpu_command_feedback_length(uint32_t word)
 {
     unsigned opcode = source_gpu_opcode(word);
     if (source_gpu_polygon_supported(opcode) || source_gpu_line_supported(opcode)) return 1u;
-    if (source_gpu_sprite_opcode(opcode)) return SOURCE_GPU_T_SPRITE_FEEDBACK(opcode);
     return source_gpu_command_length(word);
 }
 
@@ -162,11 +161,28 @@ static inline int source_gpu_command_known(unsigned opcode)
     }
 }
 
-/* PSX-SPX: GP0(00h) and GP0(E3h..E5h) take no FIFO space. Whether they still
- * bypass a non-empty FIFO is a timing-table rule (gap G2). */
+/* No$PSX "GPU FIFO", FIFO Prefetch: NOP, DRAWAREA (E3h/E4h), DRAWBASE (E5h)
+ * and MASKBITS (E6h) execute as soon as they reach the head of the FIFO, even
+ * while a rendering command is busy. Words queued behind another command stay
+ * in order. */
 static inline int source_gpu_command_immediate(unsigned opcode)
 {
-    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE5u);
+    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE6u);
+}
+
+/* No$PSX "GPU FIFO", FIFO Prefetch: words a command may take out of the FIFO
+ * while a rendering command is still busy. */
+static inline unsigned source_gpu_command_prefetch(uint32_t word)
+{
+    unsigned opcode = source_gpu_opcode(word);
+    if (source_gpu_polygon_supported(opcode) || source_gpu_line_supported(opcode))
+        return SOURCE_GPU_T_PREFETCH_POLY_LINE;
+    if (source_gpu_sprite_opcode(opcode))
+        return (source_gpu_sprite_class(opcode) && !(opcode & 4u)) ?
+               SOURCE_GPU_T_PREFETCH_RECT_SMALL : SOURCE_GPU_T_PREFETCH_RECT_LARGE;
+    if (opcode == 0x02u) return SOURCE_GPU_T_PREFETCH_FILL;
+    if (opcode == 0x80u || opcode == 0xA0u || opcode == 0xC0u) return SOURCE_GPU_T_PREFETCH_COPY;
+    return SOURCE_GPU_T_PREFETCH_ATTRIBUTE;
 }
 
 /* Fixed setup class of a polygon: 0 flat, 1 gouraud, 2 textured, 3 both. */
@@ -357,6 +373,17 @@ static inline unsigned source_gpu_command_owed(const SourceGPUCommandProjection 
     return owed;
 }
 
+/* Words still occupying the 16-word FIFO. While drawing is busy, the next
+ * command at the head may already have taken its prefetch words out
+ * (No$PSX "GPU FIFO", FIFO Prefetch). */
+static inline unsigned source_gpu_command_fifo_size(const SourceGPUCommandProjection *s)
+{
+    if (!s->count || s->budget >= 0 || s->pline || s->phase != SOURCE_GPU_PHASE_IDLE)
+        return s->count;
+    unsigned taken = source_gpu_command_prefetch(s->queue[0]);
+    return s->count - (taken < s->count ? taken : s->count);
+}
+
 /* ---- Command execution --------------------------------------------------- */
 
 static inline int source_gpu_command_draw_rejected(const SourceGPUCommandProjection *s)
@@ -405,7 +432,7 @@ static inline int source_gpu_command_start_line(SourceGPUCommandProjection *s)
     unsigned length = source_gpu_command_length(s->queue[0]);
     uint32_t words[4];
     for (unsigned i = 0; i < length; ++i) words[i] = source_gpu_command_pop(s);
-    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_line_cost(s, words);
+    s->budget -= source_gpu_command_line_cost(s, words);
     s->command = opcode;
     if (source_gpu_line_polyline(opcode)) {
         s->pline = 1;
@@ -429,7 +456,7 @@ static inline int source_gpu_command_line_segment(SourceGPUCommandProjection *s)
     for (unsigned i = 0; i < step; ++i) words[n++] = source_gpu_command_pop(s);
     if (opcode & 0x10u) s->pline_color = words[2] & 0xFFFFFFu;
     s->pline_vertex = words[n - 1];
-    s->budget -= SOURCE_GPU_T_SEGMENT_OVERHEAD + source_gpu_command_line_cost(s, words);
+    s->budget -= source_gpu_command_line_cost(s, words);
     source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_COMMAND, words, n);
     return 1;
 }
@@ -440,7 +467,7 @@ static inline int source_gpu_command_start_block(SourceGPUCommandProjection *s)
     unsigned length = source_gpu_command_length(s->queue[0]);
     uint32_t words[4];
     for (unsigned i = 0; i < length; ++i) words[i] = source_gpu_command_pop(s);
-    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, words);
+    s->budget -= source_gpu_command_block_cost(s, words);
     s->command = opcode;
     source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_COMMAND, words, length);
     return 1;
@@ -474,9 +501,26 @@ static inline int source_gpu_command_start_other(SourceGPUCommandProjection *s)
     return 1;
 }
 
+/* An attribute that executes on reaching the FIFO head, busy or not. It takes
+ * no drawing time. */
+static inline int source_gpu_command_run_immediate(SourceGPUCommandProjection *s, uint32_t word)
+{
+    source_gpu_command_environment(s, word);
+    source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_COMMAND, &word, 1);
+    return 1;
+}
+
+static inline int source_gpu_command_at_boundary(const SourceGPUCommandProjection *s)
+{
+    return !s->pline && s->phase == SOURCE_GPU_PHASE_IDLE;
+}
+
 /* Run the head of the queue once, if it is complete and credit allows. */
 static inline int source_gpu_command_process(SourceGPUCommandProjection *s)
 {
+    if (s->count && source_gpu_command_at_boundary(s) &&
+        source_gpu_command_immediate(source_gpu_opcode(s->queue[0])))
+        return source_gpu_command_run_immediate(s, source_gpu_command_pop(s));
     if (!s->count || s->budget < SOURCE_GPU_T_ADMIT_AT) return 0;
     if (s->phase == SOURCE_GPU_PHASE_UPLOAD) {
         uint32_t word = source_gpu_command_pop(s);
@@ -512,18 +556,15 @@ static inline int source_gpu_command_write(SourceGPUCommandProjection *s, uint32
 {
     if (s->error) return 0;
     s->dispatch.kind = SOURCE_GPU_DISPATCH_NONE;
-    int starts_packet = !s->pline && s->phase == SOURCE_GPU_PHASE_IDLE &&
-                        !source_gpu_command_owed(s);
+    int starts_packet = source_gpu_command_at_boundary(s) && !source_gpu_command_owed(s);
     if (starts_packet) {
         unsigned opcode = source_gpu_opcode(word);
         if (!source_gpu_command_known(opcode))
             return source_gpu_command_fail(s, SOURCE_GPU_COMMAND_UNSUPPORTED);
-        if (source_gpu_command_immediate(opcode) && SOURCE_GPU_T_IMMEDIATE_BYPASS(s)) {
-            source_gpu_command_environment(s, word);
-            return 1;
-        }
+        if (source_gpu_command_immediate(opcode) && !s->count)
+            return source_gpu_command_run_immediate(s, word);
     }
-    if (s->count >= SOURCE_GPU_T_QUEUE_LIMIT(s))
+    if (source_gpu_command_fifo_size(s) >= SOURCE_GPU_T_FIFO_WORDS)
         return source_gpu_command_fail(s, SOURCE_GPU_COMMAND_OVERFLOW);
     s->queue[s->count++] = word;
     source_gpu_command_process(s);
@@ -541,11 +582,18 @@ static inline int source_gpu_command_update(SourceGPUCommandProjection *s, uint6
     return !s->error;
 }
 
+/* GPUSTAT.28, ready to receive a DMA block (PSX-SPX "Ready Bits"). It drops
+ * while a command executes, once a command has all its parameters, and right
+ * after a polygon or line command word. During a CPU-to-VRAM transfer it
+ * follows free FIFO space. */
 static inline int source_gpu_command_ready(const SourceGPUCommandProjection *s)
 {
-    if (s->pline || s->phase == SOURCE_GPU_PHASE_DOWNLOAD) return 0;
+    if (s->phase == SOURCE_GPU_PHASE_UPLOAD)
+        return source_gpu_command_fifo_size(s) < SOURCE_GPU_T_FIFO_WORDS;
+    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;
+    if (s->budget < 0) return 0;
     if (!s->count) return 1;
-    return SOURCE_GPU_T_READY(s);
+    return s->count < source_gpu_command_feedback_length(s->queue[0]);
 }
 
 /* GPUREAD during a C0h transfer consumes one data word. No time passes. */
