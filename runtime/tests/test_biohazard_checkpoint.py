@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory() as folder:
     for opt in ('-O0', '-O2'):
         for name in ('sio_checkpoint', 'sio_ack_timing', 'sio_nymashock_card', 'cdrom_checkpoint'):
             exe = Path(folder) / (name + opt + '.exe')
-            subprocess.run([a.cc, '-std=c11', opt, '-flto', '-fwhole-program',
+            subprocess.run([a.cc, '-std=c11', '-D_XOPEN_SOURCE=700', opt, '-flto', '-fwhole-program',
                             '-I' + str(root / 'include'), str(root / 'tests' / ('test_' + name + '.c')),
                             str(root / 'src' / 'psx_sha256.c'),
                             '-o', str(exe)], check=True)
