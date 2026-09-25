@@ -80,14 +80,15 @@ static inline int32_t source_gpu_t_credit(int32_t budget, uint64_t elapsed)
     (2u | (((op) >> 2) & 1u) | (source_gpu_sprite_class(op) == 0 ? 1u : 0u))
 
 /* ---- Lines ----------------------------------------------------------------------
- * [ORACLE FIXTURE] No route log so far draws lines. The oracle's
- * outputs for the 512 authored single-line cases in
+ * [ORACLE] Abe's route-05: 2,930 openings and 3,284 poly-line segments, all
+ * gouraud and semi-transparent, exact. [ORACLE FIXTURE] flat and opaque lines:
+ * the oracle's outputs for the 512 authored single-line cases in
  * runtime/tests/source_gpu_line_fixtures.json fit exactly: 16 per segment plus
  * 2 per step of the major axis, or 16 alone when the segment is too long to
  * draw (dx >= 1024 or dy >= 512, PSX-SPX "Vertex" size limit). Semi-transparency,
  * mask check, clip and interlace field do not change it. The opening segment
  * also pays the command charge; later poly-line segments do not
- * (test_source_gpu_line.c). Gouraud lines: [NOT OBSERVED], same rule assumed.
+ * (test_source_gpu_line.c; confirmed by the Abe's segments).
  * No$PSX New GPU: 40 (+60 gouraud) clocks precalc, 1 per pixel horizontal,
  * 2 otherwise, 2-5.5 per scanline. */
 #define SOURCE_GPU_T_LINE_SETUP 16
@@ -100,11 +101,15 @@ static inline int source_gpu_t_line(unsigned op, int reads_back, int dx, int dy,
 }
 #define SOURCE_GPU_T_LINE(op, rb, dx, dy, rows) source_gpu_t_line((op), (rb), (dx), (dy), (rows))
 /* ---- Fill and copy ------------------------------------------------------------------
- * [NOT FITTED] MMX5 has one size per class: every fill is 320x240 and costs
- * 11,808 in total (10,298 rows); every copy is 2x1 and costs 6 (10,298 rows).
- * One size cannot fix a formula, so these keep No$PSX New GPU in half-clocks
- * (fill 2 per 16 px + 10 per row; copy 2.5 per pixel + 39 per row) and do not
- * yet match the oracle. */
+ * Copy [ORACLE]: command charge 2 plus 2 per pixel, w*h after the PSX-SPX
+ * size masking (MMX5 2x1 = 6, 10,298 rows; Abe's 192x240 = 92,162, 8 rows;
+ * 384x240 = 184,322, 188 rows). Mask check: [NOT OBSERVED], same rule assumed.
+ * No$PSX New GPU: 1.25 clocks per pixel + 19.5 per row without mask check.
+ *
+ * Fill [NOT FITTED]: every logged fill so far is 320x240 and costs 11,808
+ * (MMX5, 10,298 rows). One size cannot fix a formula, so fill keeps No$PSX New
+ * GPU in half-clocks (2 per 16 px + 10 per row) and does not match yet. */
+#define SOURCE_GPU_T_COPY_PIXEL 2
 static inline int source_gpu_t_fill(unsigned width, unsigned height)
 {
     return (int)((width / 16u) * 2u * height + 10u * height);
@@ -112,11 +117,10 @@ static inline int source_gpu_t_fill(unsigned width, unsigned height)
 static inline int source_gpu_t_copy(unsigned width, unsigned height, int mask_check)
 {
     (void)mask_check;
-    return (int)((5u * width + 78u) * height / 2u);
+    return (int)(SOURCE_GPU_T_COPY_PIXEL * width * height);
 }
 #define SOURCE_GPU_T_FILL(w, h) source_gpu_t_fill((w), (h))
 #define SOURCE_GPU_T_COPY(w, h, m) source_gpu_t_copy((w), (h), (m))
-
 /* [ORACLE] A0h data words cost 0 (MMX5: 23,265,848 words). C0h GPUREAD words:
  * [NOT OBSERVED] (3 C0h commands, no charged read); kept at 0. No$PSX: 1.00
  * clock per pixel either way. */

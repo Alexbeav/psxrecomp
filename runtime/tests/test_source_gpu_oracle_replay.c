@@ -66,7 +66,7 @@ static SourceGPUCommandProjection state_from(char **f, const int *c)
 
 /* The charge the projection makes for one logged dispatch; *cls names it. */
 static long long expected_charge(const SourceGPUCommandProjection *s, int kind,
-                                 const uint32_t *w, int nw, const char **cls, int *fitted)
+                                 const uint32_t *w, int segment, const char **cls, int *fitted)
 {
     unsigned op = w[0] >> 24;
     *fitted = 1;
@@ -78,10 +78,10 @@ static long long expected_charge(const SourceGPUCommandProjection *s, int kind,
     }
     if (source_gpu_sprite_opcode(op)) { *cls = "rectangle"; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
     if (op == 0x02u) { *cls = "fill"; *fitted = 0; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
-    if (op == 0x80u) { *cls = "copy"; *fitted = 0; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
+    if (op == 0x80u) { *cls = "copy"; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
     if (source_gpu_line_supported(op)) {
-        *cls = "line"; *fitted = 0;
-        return (nw == 3 || nw == 4 ? SOURCE_GPU_T_COMMAND_OVERHEAD : 0) + source_gpu_command_line_cost(s, w);
+        *cls = segment ? "poly-line segment" : "line (opening)";
+        return (segment ? 0 : SOURCE_GPU_T_COMMAND_OVERHEAD) + source_gpu_command_line_cost(s, w);
     }
     if (source_gpu_command_immediate(op)) { *cls = "NOP/E3h-E5h"; return 0; }
     *cls = "attribute/transfer set-up";
@@ -94,7 +94,10 @@ int main(int argc, char **argv)
     static char line[1 << 16];
     int dc[12], dk = 0, dcharge = 0, dwords = 0;
     int cev = 0, cbefore = 0, cafter = 0, celapsed = 0;
-    int sphase = 0, scount = 0, spline = 0, sfv = 0, slv = 0, sfh = 0, slh = 0;
+    int sphase = 0, scount = 0, spline = 0, sfv = 0, slv = 0, sfh = 0, slh = 0, wword = 0;
+    /* A poly-line opens with its first line dispatch and closes on a
+     * terminator word; line dispatches in between are segments. */
+    int pline_open = 0, close_after = 0, wcount = 0;
     while (fgets(line, sizeof line, stdin)) {
         size_t len = strlen(line);
         if (len && line[len - 1] == '\n') line[--len] = 0;
@@ -121,6 +124,8 @@ int main(int argc, char **argv)
             } else if (h->ev == 'C') {
                 cev = column(h, "events"); cbefore = column(h, "budget_before_first");
                 cafter = column(h, "budget_after_credit_last"); celapsed = column(h, "elapsed_total");
+            } else if (h->ev == 'W') {
+                wword = column(h, "word"); wcount = column(h, "count_before");
             } else if (h->ev == 'S') {
                 sphase = column(h, "phase"); scount = column(h, "fifo_count"); spline = column(h, "pline");
                 sfv = column(h, "first_value"); slv = column(h, "last_value");
@@ -134,7 +139,14 @@ int main(int argc, char **argv)
         char *p = line + 2;
         f[nf++] = p;
         while ((p = strchr(p, '\t')) && nf < MAXF) { *p++ = 0; f[nf++] = p; }
-        if (line[0] == 'D') {
+        if (line[0] == 'W') {
+            /* The terminator ends the poly-line once the words queued ahead of it
+             * (the last segments) have been dispatched. */
+            if (pline_open && source_gpu_line_terminator((uint32_t)strtoul(f[wword], 0, 16))) {
+                close_after = atoi(f[wcount]);
+                if (!close_after) pline_open = 0;
+            }
+        } else if (line[0] == 'D') {
             uint32_t w[16];
             int nw = 0;
             char *s = f[dwords];
@@ -142,7 +154,15 @@ int main(int argc, char **argv)
             SourceGPUCommandProjection st = state_from(f, dc);
             const char *cls;
             int fitted;
-            long long want = expected_charge(&st, atoi(f[dk]), w, nw, &cls, &fitted);
+            unsigned op = w[0] >> 24;
+            int is_line = source_gpu_line_supported(op) && atoi(f[dk]) == 1;
+            int segment = is_line && pline_open;
+            if (!is_line) pline_open = close_after = 0;
+            else if (segment && close_after) {
+                close_after -= (int)source_gpu_line_segment_length(op);
+                if (close_after <= 0) pline_open = close_after = 0;
+            } else if (source_gpu_line_polyline(op)) pline_open = 1;
+            long long want = expected_charge(&st, atoi(f[dk]), w, segment, &cls, &fitted);
             long long got = atoll(f[dcharge]);
             char detail[200];
             snprintf(detail, sizeof detail, "logged %lld, model %lld: %s", got, want, f[dwords]);
