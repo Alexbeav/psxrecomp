@@ -9,8 +9,10 @@
  * Timings" / "GPU FIFO" value (sha256 a3b2131f3774..., 5767a2b3a5c8...) is
  * quoted beside it for comparison.
  *
- * [NOT OBSERVED] marks a rule no logged route exercises yet. It keeps the
- * documented behaviour until data exists.
+ * [ORACLE FIXTURE] marks a value fitted to oracle outputs for authored inputs
+ * that live in runtime/tests (not to route logs); check those fixtures'
+ * provenance. [NOT OBSERVED] marks a rule no log or fixture exercises yet; it
+ * keeps the documented behaviour until data exists.
  *
  * Budget unit: half a CPU clock (credit is 2 per CPU cycle).
  */
@@ -48,7 +50,7 @@ static inline int32_t source_gpu_t_credit(int32_t budget, uint64_t elapsed)
  *   first half: flat 84 (8,914), textured 264 (180,584), gouraud 372 (14,076)
  *   second half: flat 46 (296), textured 226 (180,584), gouraud 334 (13,716)
  * Semi-transparency does not change the set-up (textured 35,911; gouraud 2,220).
- * Gouraud+textured: extra 450, not 180+288 [ORACLE, authored fixture: all 1,536
+ * Gouraud+textured: extra 450, not 180+288 [ORACLE FIXTURE: all 1,536
  * cases of source_gpu_shaded_texture_family_fixtures.json, both halves].
  * No$PSX precalc: 10 base, +90 textured, +150 gouraud clocks (= 20/180/300
  * half-clocks). The textured extra (180) matches No$PSX; base and gouraud differ. */
@@ -78,7 +80,7 @@ static inline int32_t source_gpu_t_credit(int32_t budget, uint64_t elapsed)
     (2u | (((op) >> 2) & 1u) | (source_gpu_sprite_class(op) == 0 ? 1u : 0u))
 
 /* ---- Lines ----------------------------------------------------------------------
- * [ORACLE, authored fixture] No route log so far draws lines. The oracle's
+ * [ORACLE FIXTURE] No route log so far draws lines. The oracle's
  * outputs for the 512 authored single-line cases in
  * runtime/tests/source_gpu_line_fixtures.json fit exactly: 16 per segment plus
  * 2 per step of the major axis, or 16 alone when the segment is too long to
