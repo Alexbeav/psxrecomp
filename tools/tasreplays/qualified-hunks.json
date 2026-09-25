@@ -699,11 +699,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* The save-state wire and source_gpu_runtime.c copy these fields one by one. */",
-            "_Static_assert(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), \"dispatch words\");",
-            "_Static_assert(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
-            "_Static_assert(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
-            "_Static_assert(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");",
             "",
             "/* The cost tally collects geometry; the timing table prices it. */",
             "typedef struct SourceGPUCostTally {",
@@ -1500,6 +1495,22 @@
             "        s->draw_mode = (s->draw_mode & ~0x9FFu) | (page & 0x9FFu);",
             "    }"
           ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "#if defined(__cplusplus)",
+            "#define PSX_GPUPP_STATIC_ASSERT(c, m) static_assert(c, m)",
+            "#else",
+            "#define PSX_GPUPP_STATIC_ASSERT(c, m) _Static_assert(c, m)",
+            "#endif",
+            "",
+            "/* The save-state wire and source_gpu_runtime.c copy these fields one by one. */",
+            "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), \"dispatch words\");",
+            "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
+            "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
+            "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");"
+          ]
         }
       ],
       "repins": [
@@ -1515,6 +1526,14 @@
             "64319dab21d1",
             "af2052b6d72a"
           ]
+        },
+        {
+          "as_of": "worktree on ce5d9506cc6f4e1111d12f7b911cbbea69d1c9cf",
+          "issue": "PS1B-167",
+          "reason": "C++ build fix: bare _Static_assert behind PSX_GPUPP_STATIC_ASSERT",
+          "dropped_lines": 5,
+          "from_blocks": 59,
+          "to_blocks": 60
         }
       ],
       "note": "superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun"
@@ -1617,11 +1636,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* The save-state wire and source_gpu_runtime.c copy these fields one by one. */",
-            "_Static_assert(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), \"dispatch words\");",
-            "_Static_assert(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
-            "_Static_assert(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
-            "_Static_assert(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");",
             "",
             "/* The cost tally collects geometry; the timing table prices it. */",
             "typedef struct SourceGPUCostTally {",
@@ -2418,6 +2432,22 @@
             "        s->draw_mode = (s->draw_mode & ~0x9FFu) | (page & 0x9FFu);",
             "    }"
           ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "#if defined(__cplusplus)",
+            "#define PSX_GPUPP_STATIC_ASSERT(c, m) static_assert(c, m)",
+            "#else",
+            "#define PSX_GPUPP_STATIC_ASSERT(c, m) _Static_assert(c, m)",
+            "#endif",
+            "",
+            "/* The save-state wire and source_gpu_runtime.c copy these fields one by one. */",
+            "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), \"dispatch words\");",
+            "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
+            "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
+            "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");"
+          ]
         }
       ],
       "note": "Re-pinned to its current span on 2026-09-16: the poly-line family change (e4e25053) superseded the two-vertex-only predicate and its scope comment. The shaded-line behaviour is unchanged and now lives inside the widened 0x40-0x5F family. superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun",
@@ -2434,6 +2464,14 @@
             "64319dab21d1",
             "af2052b6d72a"
           ]
+        },
+        {
+          "as_of": "worktree on ce5d9506cc6f4e1111d12f7b911cbbea69d1c9cf",
+          "issue": "PS1B-167",
+          "reason": "C++ build fix: bare _Static_assert behind PSX_GPUPP_STATIC_ASSERT",
+          "dropped_lines": 5,
+          "from_blocks": 56,
+          "to_blocks": 57
         }
       ]
     },
@@ -3016,11 +3054,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* The save-state wire and source_gpu_runtime.c copy these fields one by one. */",
-            "_Static_assert(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), \"dispatch words\");",
-            "_Static_assert(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
-            "_Static_assert(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
-            "_Static_assert(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");",
             "",
             "/* The cost tally collects geometry; the timing table prices it. */",
             "typedef struct SourceGPUCostTally {",
@@ -3817,6 +3850,22 @@
             "        s->draw_mode = (s->draw_mode & ~0x9FFu) | (page & 0x9FFu);",
             "    }"
           ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "#if defined(__cplusplus)",
+            "#define PSX_GPUPP_STATIC_ASSERT(c, m) static_assert(c, m)",
+            "#else",
+            "#define PSX_GPUPP_STATIC_ASSERT(c, m) _Static_assert(c, m)",
+            "#endif",
+            "",
+            "/* The save-state wire and source_gpu_runtime.c copy these fields one by one. */",
+            "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), \"dispatch words\");",
+            "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
+            "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
+            "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");"
+          ]
         }
       ],
       "note": "Abe's Oddysee 5620M aborted at return 4,682 on GP0 5E030B0B; the projection admitted only two-vertex lines. Derived from Commands_40_5F/LINE_HELPER and ProcessFIFO's INCMD_PLINE branch. superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun",
@@ -3833,6 +3882,14 @@
             "64319dab21d1",
             "af2052b6d72a"
           ]
+        },
+        {
+          "as_of": "worktree on ce5d9506cc6f4e1111d12f7b911cbbea69d1c9cf",
+          "issue": "PS1B-167",
+          "reason": "C++ build fix: bare _Static_assert behind PSX_GPUPP_STATIC_ASSERT",
+          "dropped_lines": 5,
+          "from_blocks": 54,
+          "to_blocks": 55
         }
       ]
     },
@@ -6593,11 +6650,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* The save-state wire and source_gpu_runtime.c copy these fields one by one. */",
-            "_Static_assert(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), \"dispatch words\");",
-            "_Static_assert(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
-            "_Static_assert(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
-            "_Static_assert(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");",
             "",
             "/* The cost tally collects geometry; the timing table prices it. */",
             "typedef struct SourceGPUCostTally {",
@@ -7394,6 +7446,22 @@
             "        s->draw_mode = (s->draw_mode & ~0x9FFu) | (page & 0x9FFu);",
             "    }"
           ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "#if defined(__cplusplus)",
+            "#define PSX_GPUPP_STATIC_ASSERT(c, m) static_assert(c, m)",
+            "#else",
+            "#define PSX_GPUPP_STATIC_ASSERT(c, m) _Static_assert(c, m)",
+            "#endif",
+            "",
+            "/* The save-state wire and source_gpu_runtime.c copy these fields one by one. */",
+            "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), \"dispatch words\");",
+            "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
+            "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
+            "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");"
+          ]
         }
       ],
       "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion. Evolved for T168: restore retained section staging and canonical commit order; perform v10 content/presence/allocation admission before mutations. The old two-pass shape/apply path failed118/166 full-runtime checks. Updated blocks retain checkpoint semantics and reject malformed states atomically; current expanded fixture passes202 default and260 comparison-profile checks. This is not a new full-route replay verdict. superseded by T172 a01f2f6cede9; requalification pending the PS1B-102 Pegasus TAS rerun superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun",
@@ -7421,6 +7489,14 @@
             "64319dab21d1",
             "af2052b6d72a"
           ]
+        },
+        {
+          "as_of": "worktree on ce5d9506cc6f4e1111d12f7b911cbbea69d1c9cf",
+          "issue": "PS1B-167",
+          "reason": "C++ build fix: bare _Static_assert behind PSX_GPUPP_STATIC_ASSERT",
+          "dropped_lines": 5,
+          "from_blocks": 210,
+          "to_blocks": 211
         }
       ]
     },

@@ -50,11 +50,17 @@ typedef struct SourceGPUCommandProjection {
     int error;
 } SourceGPUCommandProjection;
 
+#if defined(__cplusplus)
+#define PSX_GPUPP_STATIC_ASSERT(c, m) static_assert(c, m)
+#else
+#define PSX_GPUPP_STATIC_ASSERT(c, m) _Static_assert(c, m)
+#endif
+
 /* The save-state wire and source_gpu_runtime.c copy these fields one by one. */
-_Static_assert(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), "dispatch words");
-_Static_assert(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), "dispatch layout");
-_Static_assert(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), "queue words");
-_Static_assert(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), "budget then queue");
+PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandDispatch *)0)->words) == 12 * sizeof(uint32_t), "dispatch words");
+PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), "dispatch layout");
+PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), "queue words");
+PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), "budget then queue");
 
 /* The cost tally collects geometry; the timing table prices it. */
 typedef struct SourceGPUCostTally {

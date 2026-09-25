@@ -411,6 +411,21 @@ if(BUILD_TESTING)
             $<TARGET_FILE:input_route_session_release>)
     endif()
 
+    # The source GPU/SPU headers must stay valid C++ (main.cpp includes them).
+    # Compiling succeeds or the build fails; the test only runs the result.
+    foreach(_std IN ITEMS 17 20)
+        add_executable(source_gpu_headers_cxx${_std}_test
+            ../runtime/tests/test_source_gpu_headers_cxx.cpp)
+        target_include_directories(source_gpu_headers_cxx${_std}_test PRIVATE ../runtime/include)
+        set_target_properties(source_gpu_headers_cxx${_std}_test PROPERTIES
+            CXX_STANDARD ${_std} CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+        # GCC rejects C-only constructs outright; Clang accepts them as extensions.
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(source_gpu_headers_cxx${_std}_test PRIVATE -Werror=c11-extensions)
+        endif()
+        add_test(NAME source_gpu_headers_cxx${_std}_test COMMAND source_gpu_headers_cxx${_std}_test)
+    endforeach()
+
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         foreach(_mode IN ITEMS O0 O2)
             add_executable(tas_cdrom_subq_position_${_mode}
