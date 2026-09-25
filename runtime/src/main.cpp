@@ -14712,10 +14712,14 @@ int main(int argc, char** argv) {
 
             lr = rui_rc;
 
-            if (lr == 0) {
+            /* The launcher hands back the player's edits on Quit as well as on
+             * Play (recomp_launcher.h: "*io still holds the edits"), so both
+             * fold them into seed. Disc choice stays Play-only: Quit launches
+             * nothing. */
+            if (lr == 0 || lr == 1) {
                 seed.netplay_player_name = ls.netplay_player_name;
                 seed.has_netplay_player_name = true;
-                if (rui_out_disc[0]) {
+                if (lr == 0 && rui_out_disc[0]) {
                     seed.disc_path = rui_out_disc;
                     seed.has_disc_path = true;
                 }
@@ -14724,7 +14728,7 @@ int main(int argc, char** argv) {
                  * launcher sees it as an ordinary settings row. Written for
                  * multi-disc titles only -- a single-disc game has nothing to
                  * select and should not grow a meaningless key. */
-                if (game_discs.size() > 1 && ls.disc_index > 0) {
+                if (lr == 0 && game_discs.size() > 1 && ls.disc_index > 0) {
                     selected_disc_index = ls.disc_index;
                     seed.disc_index = ls.disc_index;
                     seed.has_disc_index = true;
@@ -14962,6 +14966,9 @@ int main(int argc, char** argv) {
             }
 
             if (lr == 1) {
+                /* Keep settings changed and then dismissed with Quit. */
+                PSXRecompV4::save_user_settings(
+                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
                 if (overlay_init_thread.joinable())
                     overlay_init_thread.join();
