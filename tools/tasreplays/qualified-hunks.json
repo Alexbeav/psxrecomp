@@ -699,92 +699,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "",
-            "/* The cost tally collects geometry; the timing table prices it. */",
-            "typedef struct SourceGPUCostTally {",
-            "    const SourceGPUCommandProjection *state;",
-            "    unsigned opcode;",
-            "    int reads_back, all_rows, drawn_rows;",
-            "    int64_t quarters;          /* quarter CPU clocks */",
-            "} SourceGPUCostTally;",
-            "#include \"source_gpu_command_timing.h\"",
-            "",
-            "/* Phase values. 0 = no command in progress. */",
-            "enum { SOURCE_GPU_PHASE_IDLE = 0, SOURCE_GPU_PHASE_QUAD_SECOND = 2,",
-            "       SOURCE_GPU_PHASE_UPLOAD = 4, SOURCE_GPU_PHASE_DOWNLOAD = 8 };",
-            "",
-            "/* ---- Word decoding (PSX-SPX \"GPU Command Summary\", \"Render ... Commands\") */",
-            "",
-            "static inline unsigned source_gpu_opcode(uint32_t word) { return word >> 24; }",
-            "",
-            "/* Vertex word: X in bits 0-10, Y in bits 16-26, both signed 11-bit. */",
-            "static inline int source_gpu_command_coord(uint32_t word, unsigned shift)",
-            "{",
-            "    unsigned field = (word >> shift) & 0x7FFu;",
-            "    return (field & 0x400u) ? (int)field - 0x800 : (int)field;",
-            "}",
-            "",
-            "static inline int source_gpu_sprite_origin(uint32_t word, unsigned shift, int offset)",
-            "{",
-            "    return source_gpu_command_coord(word, shift) + offset;",
-            "}",
-            "",
-            "static inline int source_gpu_polygon_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x20u; }",
-            "static inline int source_gpu_line_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x40u; }",
-            "static inline int source_gpu_line_polyline(unsigned opcode) { return (opcode & 0x08u) != 0; }",
-            "",
-            "/* Words per vertex: optional colour (gouraud, bit 28), the vertex, and an",
-            " * optional UV word (textured, bit 26). */",
-            "static inline unsigned source_gpu_polygon_stride(unsigned opcode)",
-            "{",
-            "    return 1u + ((opcode >> 4) & 1u) + ((opcode >> 2) & 1u);",
-            "}",
-            "",
-            "/* Poly-line: each further vertex is an optional colour word and a vertex. */",
-            "static inline unsigned source_gpu_line_segment_length(unsigned opcode)",
-            "{",
-            "    return 1u + ((opcode >> 4) & 1u);",
-            "}",
-            "",
-            "/* PSX-SPX: the list ends on a word with (word AND F000F000h) = 50005000h. */",
-            "static inline int source_gpu_line_terminator(uint32_t word)",
-            "{",
-            "    return (word & 0xF000F000u) == 0x50005000u;",
-            "}",
-            "",
-            "static inline int source_gpu_block_supported(unsigned opcode)",
-            "{",
-            "    return opcode == 0x02u || opcode == 0x80u || source_gpu_sprite_opcode(opcode);",
-            "}",
-            "",
-            "/* Rectangle packet: command+colour, vertex, optional UV (bit 26), and a size",
-            " * word only for the variable-size class. */",
-            "static inline unsigned source_gpu_sprite_length(unsigned opcode)",
-            "{",
-            "    return 2u + ((opcode >> 2) & 1u) + (source_gpu_sprite_class(opcode) == 0);",
-            "}",
-            "",
-            "/* Words that must arrive before a command can start. For polygons and lines",
-            " * this is the first three / two vertices (PSX-SPX \"GPU Command Summary\"); a",
-            " * quad's fourth vertex and poly-line segments follow as a continuation. */",
-            "static inline unsigned source_gpu_command_length(uint32_t word)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(word);",
-            "    if (source_gpu_polygon_supported(opcode))",
-            "        return 1u + 3u * source_gpu_polygon_stride(opcode) - ((opcode >> 4) & 1u);",
-            "    if (source_gpu_line_supported(opcode))",
-            "        return 1u + 2u * source_gpu_line_segment_length(opcode) - ((opcode >> 4) & 1u);",
-            "    if (source_gpu_sprite_opcode(opcode)) return source_gpu_sprite_length(opcode);",
-            "    switch (opcode) {",
-            "    case 0x02: return 3u;          /* fill: colour, corner, size */",
-            "    case 0x80: return 4u;          /* VRAM copy: source, destination, size */",
-            "    case 0xA0: case 0xC0: return 3u; /* transfer: destination/source, size */",
-            "    default: return 1u;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "static inline unsigned source_gpu_command_feedback_length(uint32_t word)",
             "{",
             "    unsigned opcode = source_gpu_opcode(word);",
@@ -855,166 +769,6 @@
             "static inline int source_gpu_command_reads_back(const SourceGPUCommandProjection *s, unsigned opcode)",
             "{",
             "    return (opcode & 2u) || (s->mask_bits & 2u);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "",
-            "",
-            "static inline void source_gpu_command_polygon_row(void *context, int raw_y, int physical_x,",
-            "                                                  int width, int raw_interpolation_x)",
-            "{",
-            "    SourceGPUCostTally *tally = (SourceGPUCostTally *)context;",
-            "    (void)raw_y; (void)physical_x; (void)raw_interpolation_x;",
-            "    tally->drawn_rows++;",
-            "    tally->quarters += SOURCE_GPU_T_POLYGON_ROW(tally, width);",
-            "}",
-            "",
-            "static inline int source_gpu_command_polygon_cost(const SourceGPUCommandProjection *s,",
-            "                                                  const uint32_t *words, int second)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), stride = source_gpu_polygon_stride(opcode);",
-            "    int x[3], y[3];",
-            "    for (unsigned i = 0; i < 3; ++i) {",
-            "        unsigned v = i + (second ? 1u : 0u);",
-            "        x[i] = source_gpu_command_coord(words[1 + stride * v], 0) + s->offset_x;",
-            "        y[i] = source_gpu_command_coord(words[1 + stride * v], 16) + s->offset_y;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), 0, 0, 0 };",
-            "    int low = y[0], high = y[0];",
-            "    for (unsigned i = 1; i < 3; ++i) {",
-            "        if (y[i] < low) low = y[i];",
-            "        if (y[i] > high) high = y[i];"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    tally.all_rows = high - low;   /* polygons exclude their bottom row */",
-            "    int walked = source_poly_walk(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,",
-            "                                  0, 0, source_gpu_command_interlaced(s), s->skip_field,",
-            "                                  source_gpu_command_polygon_row, &tally);",
-            "    if (walked < 0) return -1;",
-            "    tally.quarters += SOURCE_GPU_T_POLYGON_TRIANGLE(&tally);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* Rectangle area after clipping to the drawing area (PSX-SPX E3h/E4h). */",
-            "static inline int source_gpu_command_sprite_cost(const SourceGPUCommandProjection *s,",
-            "                                                 const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), width, height;",
-            "    source_gpu_sprite_extent(opcode, words, &width, &height);",
-            "    int left = source_gpu_sprite_origin(words[1], 0, s->offset_x);",
-            "    int top = source_gpu_sprite_origin(words[1], 16, s->offset_y);",
-            "    int x0 = left > s->clip_x0 ? left : s->clip_x0;",
-            "    int x1 = left + (int)width - 1 < s->clip_x1 ? left + (int)width - 1 : s->clip_x1;",
-            "    int y0 = top > s->clip_y0 ? top : s->clip_y0;",
-            "    int y1 = top + (int)height - 1 < s->clip_y1 ? top + (int)height - 1 : s->clip_y1;",
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), (int)height, 0, 0 };",
-            "    if (x1 >= x0) {",
-            "        for (int row = y0; row <= y1; ++row) {",
-            "            if (source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field) continue;",
-            "            tally.drawn_rows++;",
-            "            tally.quarters += SOURCE_GPU_T_SPRITE_ROW(&tally, x1 - x0 + 1);",
-            "        }"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    tally.quarters += SOURCE_GPU_T_SPRITE_RECT(&tally);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* GP0(02h): PSX-SPX \"Masking and Rounding for FILL Command parameters\". */",
-            "static inline int source_gpu_command_fill_cost(const uint32_t *words)",
-            "{",
-            "    unsigned width = ((words[2] & 0x3FFu) + 0x0Fu) & ~0x0Fu;",
-            "    unsigned height = (words[2] >> 16) & 0x1FFu;",
-            "    if (!height) return 0;",
-            "    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_FILL(width, height));",
-            "}",
-            "",
-            "/* GP0(80h): PSX-SPX \"Masking for COPY Commands parameters\". */",
-            "static inline int source_gpu_command_copy_cost(const SourceGPUCommandProjection *s,",
-            "                                               const uint32_t *words)",
-            "{",
-            "    unsigned width = ((words[3] & 0xFFFFu) - 1u) % 0x400u + 1u;",
-            "    unsigned height = ((words[3] >> 16) - 1u) % 0x200u + 1u;",
-            "    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0));",
-            "}",
-            "",
-            "static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection *s,",
-            "                                                const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]);",
-            "    if (opcode == 0x02u) return source_gpu_command_fill_cost(words);",
-            "    if (opcode == 0x80u) return source_gpu_command_copy_cost(s, words);",
-            "    return source_gpu_command_sprite_cost(s, words);",
-            "}",
-            "",
-            "/* One line segment. Lines include both end points (PSX-SPX \"Render Line\"). */",
-            "static inline int source_gpu_command_line_cost(const SourceGPUCommandProjection *s,",
-            "                                               const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), step = source_gpu_line_segment_length(opcode);",
-            "    int ax = source_gpu_command_coord(words[1], 0) + s->offset_x;",
-            "    int ay = source_gpu_command_coord(words[1], 16) + s->offset_y;",
-            "    int bx = source_gpu_command_coord(words[1 + step], 0) + s->offset_x;",
-            "    int by = source_gpu_command_coord(words[1 + step], 16) + s->offset_y;",
-            "    int dx = bx > ax ? bx - ax : ax - bx, dy = by > ay ? by - ay : ay - by;",
-            "    int top = ay < by ? ay : by, bottom = ay < by ? by : ay;",
-            "    int first = top > s->clip_y0 ? top : s->clip_y0;",
-            "    int last = bottom < s->clip_y1 ? bottom : s->clip_y1;",
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode),",
-            "                                 dy + 1, last >= first ? last - first + 1 : 0, 0 };",
-            "    tally.quarters = SOURCE_GPU_T_LINE(&tally, dx, dy);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* ---- FIFO ---------------------------------------------------------------- */",
-            "",
-            "static inline uint32_t source_gpu_command_pop(SourceGPUCommandProjection *s)",
-            "{",
-            "    uint32_t word = s->queue[0];",
-            "    memmove(s->queue, s->queue + 1, (s->count - 1) * sizeof(s->queue[0]));",
-            "    s->queue[--s->count] = 0;",
-            "    return word;",
-            "}",
-            "",
-            "static inline void source_gpu_command_cold(SourceGPUCommandProjection *s)",
-            "{",
-            "    memset(s, 0, sizeof(*s));",
-            "}",
-            "",
-            "static inline int source_gpu_command_fail(SourceGPUCommandProjection *s, int code)",
-            "{",
-            "    s->error = code;",
-            "    return 0;",
-            "}",
-            "",
-            "static inline void source_gpu_command_publish(SourceGPUCommandProjection *s, unsigned kind,",
-            "                                              const uint32_t *words, unsigned count)",
-            "{",
-            "    s->dispatch.kind = kind;",
-            "    s->dispatch.count = count;",
-            "    memcpy(s->dispatch.words, words, count * sizeof(words[0]));",
-            "}",
-            "",
-            "/* Words the rest of the queue still owes: the unfinished tail packet. */",
-            "static inline unsigned source_gpu_command_owed(const SourceGPUCommandProjection *s)",
-            "{",
-            "    unsigned at = 0, owed = 0;",
-            "    if (s->phase == SOURCE_GPU_PHASE_QUAD_SECOND) {",
-            "        unsigned stride = source_gpu_polygon_stride(s->command);",
-            "        at = s->count < stride ? s->count : stride;",
-            "        owed = stride - at;"
           ]
         },
         {
@@ -1195,17 +949,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    if (!s->count || s->budget < SOURCE_GPU_T_ADMIT_AT) return 0;",
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD) {",
-            "        uint32_t word = source_gpu_command_pop(s);",
-            "        s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));",
-            "        source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_UPLOAD_WORD, &word, 1);",
-            "        if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    if (s->phase == SOURCE_GPU_PHASE_QUAD_SECOND) {",
             "        if (s->count < source_gpu_polygon_stride(s->command)) return 0;",
             "        return source_gpu_command_finish_quad(s);"
@@ -1287,19 +1030,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "}",
-            "",
-            "/* GPUREAD during a C0h transfer consumes one data word. No time passes. */",
-            "static inline void source_gpu_command_read(SourceGPUCommandProjection *s)",
-            "{",
-            "    if (s->phase != SOURCE_GPU_PHASE_DOWNLOAD || !s->transfer_words) return;",
-            "    s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));",
-            "    if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "static inline void source_gpu_command_clear(SourceGPUCommandProjection *s)",
             "{",
             "    memset(s->queue, 0, sizeof(s->queue));",
@@ -1360,36 +1090,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* No$PSX \"GPU FIFO\", FIFO Prefetch: NOP, DRAWAREA (E3h/E4h), DRAWBASE (E5h)",
-            " * and MASKBITS (E6h) execute as soon as they reach the head of the FIFO, even",
-            " * while a rendering command is busy. Words queued behind another command stay",
-            " * in order. */"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE6u);",
-            "}",
-            "",
-            "/* No$PSX \"GPU FIFO\", FIFO Prefetch: words a command may take out of the FIFO",
-            " * while a rendering command is still busy. */",
-            "static inline unsigned source_gpu_command_prefetch(uint32_t word)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(word);",
-            "    if (source_gpu_polygon_supported(opcode) || source_gpu_line_supported(opcode))",
-            "        return SOURCE_GPU_T_PREFETCH_POLY_LINE;",
-            "    if (source_gpu_sprite_opcode(opcode))",
-            "        return (source_gpu_sprite_class(opcode) && !(opcode & 4u)) ?",
-            "               SOURCE_GPU_T_PREFETCH_RECT_SMALL : SOURCE_GPU_T_PREFETCH_RECT_LARGE;",
-            "    if (opcode == 0x02u) return SOURCE_GPU_T_PREFETCH_FILL;",
-            "    if (opcode == 0x80u || opcode == 0xA0u || opcode == 0xC0u) return SOURCE_GPU_T_PREFETCH_COPY;",
-            "    return SOURCE_GPU_T_PREFETCH_ATTRIBUTE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "/* Words still occupying the 16-word FIFO. While drawing is busy, the next",
             " * command at the head may already have taken its prefetch words out",
             " * (No$PSX \"GPU FIFO\", FIFO Prefetch). */",
@@ -1407,12 +1107,6 @@
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
             "    s->budget -= source_gpu_command_line_cost(s, words);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    s->budget -= source_gpu_command_block_cost(s, words);"
           ]
         },
         {
@@ -1464,31 +1158,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* GPUSTAT.28. No$PSX \"GPU Status Register\" / \"Ready Bits\": \"Write FIFO empty\".",
-            " * During A0h and C0h data transfers it is exactly that. Otherwise, per the",
-            " * same section and PSX-SPX a253f078 \"Ready Bits\", it drops while a command",
-            " * executes, once a command has all its parameters, and right after a polygon",
-            " * or line command word. */"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)",
-            "        return source_gpu_command_fifo_size(s) == 0;",
-            "    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;",
-            "    if (s->budget < 0) return 0;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return s->count < source_gpu_command_feedback_length(s->queue[0]);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    /* PSX-SPX \"Texpage Attribute\": the second UV word's upper half sets",
             "     * GP0(E1h) bits 0-8 and 11 for textured polygons. */",
             "    if (opcode & 0x04u) {",
@@ -1511,6 +1180,136 @@
             "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
             "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
             "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Timing values live in one table; see its header for their sources. */",
+            "#include \"source_gpu_command_timing.h\"",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if (source_gpu_sprite_opcode(opcode)) return SOURCE_GPU_T_RECT_FEEDBACK(opcode);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Commands that execute on reaching the FIFO head without waiting for credit:",
+            " * NOP, drawing area (E3h/E4h) and drawing offset (E5h). Oracle-observed: with",
+            " * an empty FIFO these run at once even at negative credit, and cost nothing;",
+            " * MASKBITS (E6h) queues and is charged like E1h. (No$PSX \"GPU FIFO\" lists",
+            " * E6h with the immediate group; the oracle does not.) Words queued behind",
+            " * another command stay in order. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE5u);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Polygon work: a fixed set-up charge per triangle half plus the scanline",
+            " * walk of source_gpu_polygon_projection.h (pixels per drawn row, doubled for",
+            " * gouraud or textured, plus the read-back share for semi-transparency or mask",
+            " * check, and a charge per row outside the drawing area). */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    int work = source_poly_cost(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,",
+            "                                (opcode & 0x14u) != 0, source_gpu_command_reads_back(s, opcode),",
+            "                                source_gpu_command_interlaced(s), s->skip_field);",
+            "    if (work < 0) return -1;",
+            "    return SOURCE_GPU_T_POLYGON_SETUP(opcode, second) + work;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Rectangle work: set-up plus, per drawn row inside the drawing area, one unit",
+            " * per pixel and, with read-back, one per aligned pixel pair touched. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    int cost = SOURCE_GPU_T_SPRITE_SETUP;",
+            "    if (x1 < x0 || y1 < y0) return cost;",
+            "    int per_row = (x1 - x0 + 1) * SOURCE_GPU_T_SPRITE_PIXEL;",
+            "    if (source_gpu_command_reads_back(s, opcode))",
+            "        per_row += SOURCE_GPU_T_SPRITE_PAIR * ((x1 >> 1) - (x0 >> 1) + 1);",
+            "    for (int row = y0; row <= y1; ++row)",
+            "        if (!(source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field))",
+            "            cost += per_row;",
+            "    return cost;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_FILL(width, height);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_LINE(opcode, source_gpu_command_reads_back(s, opcode), dx, dy,",
+            "                             last >= first ? last - first + 1 : 0);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_line_cost(s, words);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, words);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        s->budget -= SOURCE_GPU_T_UPLOAD_WORD;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* GPUSTAT.28 (oracle-observed). During A0h and C0h data phases it is \"write",
+            " * FIFO empty\". While a quad's second half or a poly-line is pending it is 0.",
+            " * When idle it is 1 while fewer words are queued than the head command's",
+            " * threshold (timing table). Drawing credit is not consulted. No$PSX \"Ready",
+            " * Bits\" words the idle rule as clearing while a command executes. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return s->count < SOURCE_GPU_T_READY_BELOW(s->queue[0]);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_READ_WORD;"
           ]
         }
       ],
@@ -1542,6 +1341,18 @@
           "reason": "GPUSTAT.28 is write FIFO empty during A0h/C0h (No$PSX Ready Bits); comment citation corrected",
           "dropped_lines": 6,
           "added_lines": 7
+        },
+        {
+          "as_of": "82cb979088b38a8e1d68ecd1395ca549f0570113",
+          "issue": "PS1B-182",
+          "reason": "oracle-fitted GPU timing and GPUSTAT.28 (TAS/source-mode policy) replaced the projection's pricing and readiness code",
+          "dropped_lines": 266,
+          "from_blocks": 60,
+          "to_blocks": 64,
+          "replacement_blocks_added": 17,
+          "replacement_commits": [
+            "710729cdb020"
+          ]
         }
       ],
       "note": "superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun"
@@ -1644,92 +1455,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "",
-            "/* The cost tally collects geometry; the timing table prices it. */",
-            "typedef struct SourceGPUCostTally {",
-            "    const SourceGPUCommandProjection *state;",
-            "    unsigned opcode;",
-            "    int reads_back, all_rows, drawn_rows;",
-            "    int64_t quarters;          /* quarter CPU clocks */",
-            "} SourceGPUCostTally;",
-            "#include \"source_gpu_command_timing.h\"",
-            "",
-            "/* Phase values. 0 = no command in progress. */",
-            "enum { SOURCE_GPU_PHASE_IDLE = 0, SOURCE_GPU_PHASE_QUAD_SECOND = 2,",
-            "       SOURCE_GPU_PHASE_UPLOAD = 4, SOURCE_GPU_PHASE_DOWNLOAD = 8 };",
-            "",
-            "/* ---- Word decoding (PSX-SPX \"GPU Command Summary\", \"Render ... Commands\") */",
-            "",
-            "static inline unsigned source_gpu_opcode(uint32_t word) { return word >> 24; }",
-            "",
-            "/* Vertex word: X in bits 0-10, Y in bits 16-26, both signed 11-bit. */",
-            "static inline int source_gpu_command_coord(uint32_t word, unsigned shift)",
-            "{",
-            "    unsigned field = (word >> shift) & 0x7FFu;",
-            "    return (field & 0x400u) ? (int)field - 0x800 : (int)field;",
-            "}",
-            "",
-            "static inline int source_gpu_sprite_origin(uint32_t word, unsigned shift, int offset)",
-            "{",
-            "    return source_gpu_command_coord(word, shift) + offset;",
-            "}",
-            "",
-            "static inline int source_gpu_polygon_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x20u; }",
-            "static inline int source_gpu_line_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x40u; }",
-            "static inline int source_gpu_line_polyline(unsigned opcode) { return (opcode & 0x08u) != 0; }",
-            "",
-            "/* Words per vertex: optional colour (gouraud, bit 28), the vertex, and an",
-            " * optional UV word (textured, bit 26). */",
-            "static inline unsigned source_gpu_polygon_stride(unsigned opcode)",
-            "{",
-            "    return 1u + ((opcode >> 4) & 1u) + ((opcode >> 2) & 1u);",
-            "}",
-            "",
-            "/* Poly-line: each further vertex is an optional colour word and a vertex. */",
-            "static inline unsigned source_gpu_line_segment_length(unsigned opcode)",
-            "{",
-            "    return 1u + ((opcode >> 4) & 1u);",
-            "}",
-            "",
-            "/* PSX-SPX: the list ends on a word with (word AND F000F000h) = 50005000h. */",
-            "static inline int source_gpu_line_terminator(uint32_t word)",
-            "{",
-            "    return (word & 0xF000F000u) == 0x50005000u;",
-            "}",
-            "",
-            "static inline int source_gpu_block_supported(unsigned opcode)",
-            "{",
-            "    return opcode == 0x02u || opcode == 0x80u || source_gpu_sprite_opcode(opcode);",
-            "}",
-            "",
-            "/* Rectangle packet: command+colour, vertex, optional UV (bit 26), and a size",
-            " * word only for the variable-size class. */",
-            "static inline unsigned source_gpu_sprite_length(unsigned opcode)",
-            "{",
-            "    return 2u + ((opcode >> 2) & 1u) + (source_gpu_sprite_class(opcode) == 0);",
-            "}",
-            "",
-            "/* Words that must arrive before a command can start. For polygons and lines",
-            " * this is the first three / two vertices (PSX-SPX \"GPU Command Summary\"); a",
-            " * quad's fourth vertex and poly-line segments follow as a continuation. */",
-            "static inline unsigned source_gpu_command_length(uint32_t word)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(word);",
-            "    if (source_gpu_polygon_supported(opcode))",
-            "        return 1u + 3u * source_gpu_polygon_stride(opcode) - ((opcode >> 4) & 1u);",
-            "    if (source_gpu_line_supported(opcode))",
-            "        return 1u + 2u * source_gpu_line_segment_length(opcode) - ((opcode >> 4) & 1u);",
-            "    if (source_gpu_sprite_opcode(opcode)) return source_gpu_sprite_length(opcode);",
-            "    switch (opcode) {",
-            "    case 0x02: return 3u;          /* fill: colour, corner, size */",
-            "    case 0x80: return 4u;          /* VRAM copy: source, destination, size */",
-            "    case 0xA0: case 0xC0: return 3u; /* transfer: destination/source, size */",
-            "    default: return 1u;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "static inline unsigned source_gpu_command_feedback_length(uint32_t word)",
             "{",
             "    unsigned opcode = source_gpu_opcode(word);",
@@ -1800,166 +1525,6 @@
             "static inline int source_gpu_command_reads_back(const SourceGPUCommandProjection *s, unsigned opcode)",
             "{",
             "    return (opcode & 2u) || (s->mask_bits & 2u);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "",
-            "",
-            "static inline void source_gpu_command_polygon_row(void *context, int raw_y, int physical_x,",
-            "                                                  int width, int raw_interpolation_x)",
-            "{",
-            "    SourceGPUCostTally *tally = (SourceGPUCostTally *)context;",
-            "    (void)raw_y; (void)physical_x; (void)raw_interpolation_x;",
-            "    tally->drawn_rows++;",
-            "    tally->quarters += SOURCE_GPU_T_POLYGON_ROW(tally, width);",
-            "}",
-            "",
-            "static inline int source_gpu_command_polygon_cost(const SourceGPUCommandProjection *s,",
-            "                                                  const uint32_t *words, int second)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), stride = source_gpu_polygon_stride(opcode);",
-            "    int x[3], y[3];",
-            "    for (unsigned i = 0; i < 3; ++i) {",
-            "        unsigned v = i + (second ? 1u : 0u);",
-            "        x[i] = source_gpu_command_coord(words[1 + stride * v], 0) + s->offset_x;",
-            "        y[i] = source_gpu_command_coord(words[1 + stride * v], 16) + s->offset_y;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), 0, 0, 0 };",
-            "    int low = y[0], high = y[0];",
-            "    for (unsigned i = 1; i < 3; ++i) {",
-            "        if (y[i] < low) low = y[i];",
-            "        if (y[i] > high) high = y[i];"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    tally.all_rows = high - low;   /* polygons exclude their bottom row */",
-            "    int walked = source_poly_walk(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,",
-            "                                  0, 0, source_gpu_command_interlaced(s), s->skip_field,",
-            "                                  source_gpu_command_polygon_row, &tally);",
-            "    if (walked < 0) return -1;",
-            "    tally.quarters += SOURCE_GPU_T_POLYGON_TRIANGLE(&tally);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* Rectangle area after clipping to the drawing area (PSX-SPX E3h/E4h). */",
-            "static inline int source_gpu_command_sprite_cost(const SourceGPUCommandProjection *s,",
-            "                                                 const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), width, height;",
-            "    source_gpu_sprite_extent(opcode, words, &width, &height);",
-            "    int left = source_gpu_sprite_origin(words[1], 0, s->offset_x);",
-            "    int top = source_gpu_sprite_origin(words[1], 16, s->offset_y);",
-            "    int x0 = left > s->clip_x0 ? left : s->clip_x0;",
-            "    int x1 = left + (int)width - 1 < s->clip_x1 ? left + (int)width - 1 : s->clip_x1;",
-            "    int y0 = top > s->clip_y0 ? top : s->clip_y0;",
-            "    int y1 = top + (int)height - 1 < s->clip_y1 ? top + (int)height - 1 : s->clip_y1;",
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), (int)height, 0, 0 };",
-            "    if (x1 >= x0) {",
-            "        for (int row = y0; row <= y1; ++row) {",
-            "            if (source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field) continue;",
-            "            tally.drawn_rows++;",
-            "            tally.quarters += SOURCE_GPU_T_SPRITE_ROW(&tally, x1 - x0 + 1);",
-            "        }"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    tally.quarters += SOURCE_GPU_T_SPRITE_RECT(&tally);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* GP0(02h): PSX-SPX \"Masking and Rounding for FILL Command parameters\". */",
-            "static inline int source_gpu_command_fill_cost(const uint32_t *words)",
-            "{",
-            "    unsigned width = ((words[2] & 0x3FFu) + 0x0Fu) & ~0x0Fu;",
-            "    unsigned height = (words[2] >> 16) & 0x1FFu;",
-            "    if (!height) return 0;",
-            "    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_FILL(width, height));",
-            "}",
-            "",
-            "/* GP0(80h): PSX-SPX \"Masking for COPY Commands parameters\". */",
-            "static inline int source_gpu_command_copy_cost(const SourceGPUCommandProjection *s,",
-            "                                               const uint32_t *words)",
-            "{",
-            "    unsigned width = ((words[3] & 0xFFFFu) - 1u) % 0x400u + 1u;",
-            "    unsigned height = ((words[3] >> 16) - 1u) % 0x200u + 1u;",
-            "    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0));",
-            "}",
-            "",
-            "static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection *s,",
-            "                                                const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]);",
-            "    if (opcode == 0x02u) return source_gpu_command_fill_cost(words);",
-            "    if (opcode == 0x80u) return source_gpu_command_copy_cost(s, words);",
-            "    return source_gpu_command_sprite_cost(s, words);",
-            "}",
-            "",
-            "/* One line segment. Lines include both end points (PSX-SPX \"Render Line\"). */",
-            "static inline int source_gpu_command_line_cost(const SourceGPUCommandProjection *s,",
-            "                                               const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), step = source_gpu_line_segment_length(opcode);",
-            "    int ax = source_gpu_command_coord(words[1], 0) + s->offset_x;",
-            "    int ay = source_gpu_command_coord(words[1], 16) + s->offset_y;",
-            "    int bx = source_gpu_command_coord(words[1 + step], 0) + s->offset_x;",
-            "    int by = source_gpu_command_coord(words[1 + step], 16) + s->offset_y;",
-            "    int dx = bx > ax ? bx - ax : ax - bx, dy = by > ay ? by - ay : ay - by;",
-            "    int top = ay < by ? ay : by, bottom = ay < by ? by : ay;",
-            "    int first = top > s->clip_y0 ? top : s->clip_y0;",
-            "    int last = bottom < s->clip_y1 ? bottom : s->clip_y1;",
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode),",
-            "                                 dy + 1, last >= first ? last - first + 1 : 0, 0 };",
-            "    tally.quarters = SOURCE_GPU_T_LINE(&tally, dx, dy);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* ---- FIFO ---------------------------------------------------------------- */",
-            "",
-            "static inline uint32_t source_gpu_command_pop(SourceGPUCommandProjection *s)",
-            "{",
-            "    uint32_t word = s->queue[0];",
-            "    memmove(s->queue, s->queue + 1, (s->count - 1) * sizeof(s->queue[0]));",
-            "    s->queue[--s->count] = 0;",
-            "    return word;",
-            "}",
-            "",
-            "static inline void source_gpu_command_cold(SourceGPUCommandProjection *s)",
-            "{",
-            "    memset(s, 0, sizeof(*s));",
-            "}",
-            "",
-            "static inline int source_gpu_command_fail(SourceGPUCommandProjection *s, int code)",
-            "{",
-            "    s->error = code;",
-            "    return 0;",
-            "}",
-            "",
-            "static inline void source_gpu_command_publish(SourceGPUCommandProjection *s, unsigned kind,",
-            "                                              const uint32_t *words, unsigned count)",
-            "{",
-            "    s->dispatch.kind = kind;",
-            "    s->dispatch.count = count;",
-            "    memcpy(s->dispatch.words, words, count * sizeof(words[0]));",
-            "}",
-            "",
-            "/* Words the rest of the queue still owes: the unfinished tail packet. */",
-            "static inline unsigned source_gpu_command_owed(const SourceGPUCommandProjection *s)",
-            "{",
-            "    unsigned at = 0, owed = 0;",
-            "    if (s->phase == SOURCE_GPU_PHASE_QUAD_SECOND) {",
-            "        unsigned stride = source_gpu_polygon_stride(s->command);",
-            "        at = s->count < stride ? s->count : stride;",
-            "        owed = stride - at;"
           ]
         },
         {
@@ -2140,17 +1705,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    if (!s->count || s->budget < SOURCE_GPU_T_ADMIT_AT) return 0;",
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD) {",
-            "        uint32_t word = source_gpu_command_pop(s);",
-            "        s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));",
-            "        source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_UPLOAD_WORD, &word, 1);",
-            "        if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    if (s->phase == SOURCE_GPU_PHASE_QUAD_SECOND) {",
             "        if (s->count < source_gpu_polygon_stride(s->command)) return 0;",
             "        return source_gpu_command_finish_quad(s);"
@@ -2232,19 +1786,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "}",
-            "",
-            "/* GPUREAD during a C0h transfer consumes one data word. No time passes. */",
-            "static inline void source_gpu_command_read(SourceGPUCommandProjection *s)",
-            "{",
-            "    if (s->phase != SOURCE_GPU_PHASE_DOWNLOAD || !s->transfer_words) return;",
-            "    s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));",
-            "    if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "static inline void source_gpu_command_clear(SourceGPUCommandProjection *s)",
             "{",
             "    memset(s->queue, 0, sizeof(s->queue));",
@@ -2305,36 +1846,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* No$PSX \"GPU FIFO\", FIFO Prefetch: NOP, DRAWAREA (E3h/E4h), DRAWBASE (E5h)",
-            " * and MASKBITS (E6h) execute as soon as they reach the head of the FIFO, even",
-            " * while a rendering command is busy. Words queued behind another command stay",
-            " * in order. */"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE6u);",
-            "}",
-            "",
-            "/* No$PSX \"GPU FIFO\", FIFO Prefetch: words a command may take out of the FIFO",
-            " * while a rendering command is still busy. */",
-            "static inline unsigned source_gpu_command_prefetch(uint32_t word)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(word);",
-            "    if (source_gpu_polygon_supported(opcode) || source_gpu_line_supported(opcode))",
-            "        return SOURCE_GPU_T_PREFETCH_POLY_LINE;",
-            "    if (source_gpu_sprite_opcode(opcode))",
-            "        return (source_gpu_sprite_class(opcode) && !(opcode & 4u)) ?",
-            "               SOURCE_GPU_T_PREFETCH_RECT_SMALL : SOURCE_GPU_T_PREFETCH_RECT_LARGE;",
-            "    if (opcode == 0x02u) return SOURCE_GPU_T_PREFETCH_FILL;",
-            "    if (opcode == 0x80u || opcode == 0xA0u || opcode == 0xC0u) return SOURCE_GPU_T_PREFETCH_COPY;",
-            "    return SOURCE_GPU_T_PREFETCH_ATTRIBUTE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "/* Words still occupying the 16-word FIFO. While drawing is busy, the next",
             " * command at the head may already have taken its prefetch words out",
             " * (No$PSX \"GPU FIFO\", FIFO Prefetch). */",
@@ -2352,12 +1863,6 @@
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
             "    s->budget -= source_gpu_command_line_cost(s, words);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    s->budget -= source_gpu_command_block_cost(s, words);"
           ]
         },
         {
@@ -2409,31 +1914,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* GPUSTAT.28. No$PSX \"GPU Status Register\" / \"Ready Bits\": \"Write FIFO empty\".",
-            " * During A0h and C0h data transfers it is exactly that. Otherwise, per the",
-            " * same section and PSX-SPX a253f078 \"Ready Bits\", it drops while a command",
-            " * executes, once a command has all its parameters, and right after a polygon",
-            " * or line command word. */"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)",
-            "        return source_gpu_command_fifo_size(s) == 0;",
-            "    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;",
-            "    if (s->budget < 0) return 0;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return s->count < source_gpu_command_feedback_length(s->queue[0]);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    /* PSX-SPX \"Texpage Attribute\": the second UV word's upper half sets",
             "     * GP0(E1h) bits 0-8 and 11 for textured polygons. */",
             "    if (opcode & 0x04u) {",
@@ -2456,6 +1936,136 @@
             "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
             "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
             "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Timing values live in one table; see its header for their sources. */",
+            "#include \"source_gpu_command_timing.h\"",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if (source_gpu_sprite_opcode(opcode)) return SOURCE_GPU_T_RECT_FEEDBACK(opcode);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Commands that execute on reaching the FIFO head without waiting for credit:",
+            " * NOP, drawing area (E3h/E4h) and drawing offset (E5h). Oracle-observed: with",
+            " * an empty FIFO these run at once even at negative credit, and cost nothing;",
+            " * MASKBITS (E6h) queues and is charged like E1h. (No$PSX \"GPU FIFO\" lists",
+            " * E6h with the immediate group; the oracle does not.) Words queued behind",
+            " * another command stay in order. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE5u);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Polygon work: a fixed set-up charge per triangle half plus the scanline",
+            " * walk of source_gpu_polygon_projection.h (pixels per drawn row, doubled for",
+            " * gouraud or textured, plus the read-back share for semi-transparency or mask",
+            " * check, and a charge per row outside the drawing area). */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    int work = source_poly_cost(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,",
+            "                                (opcode & 0x14u) != 0, source_gpu_command_reads_back(s, opcode),",
+            "                                source_gpu_command_interlaced(s), s->skip_field);",
+            "    if (work < 0) return -1;",
+            "    return SOURCE_GPU_T_POLYGON_SETUP(opcode, second) + work;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Rectangle work: set-up plus, per drawn row inside the drawing area, one unit",
+            " * per pixel and, with read-back, one per aligned pixel pair touched. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    int cost = SOURCE_GPU_T_SPRITE_SETUP;",
+            "    if (x1 < x0 || y1 < y0) return cost;",
+            "    int per_row = (x1 - x0 + 1) * SOURCE_GPU_T_SPRITE_PIXEL;",
+            "    if (source_gpu_command_reads_back(s, opcode))",
+            "        per_row += SOURCE_GPU_T_SPRITE_PAIR * ((x1 >> 1) - (x0 >> 1) + 1);",
+            "    for (int row = y0; row <= y1; ++row)",
+            "        if (!(source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field))",
+            "            cost += per_row;",
+            "    return cost;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_FILL(width, height);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_LINE(opcode, source_gpu_command_reads_back(s, opcode), dx, dy,",
+            "                             last >= first ? last - first + 1 : 0);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_line_cost(s, words);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, words);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        s->budget -= SOURCE_GPU_T_UPLOAD_WORD;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* GPUSTAT.28 (oracle-observed). During A0h and C0h data phases it is \"write",
+            " * FIFO empty\". While a quad's second half or a poly-line is pending it is 0.",
+            " * When idle it is 1 while fewer words are queued than the head command's",
+            " * threshold (timing table). Drawing credit is not consulted. No$PSX \"Ready",
+            " * Bits\" words the idle rule as clearing while a command executes. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return s->count < SOURCE_GPU_T_READY_BELOW(s->queue[0]);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_READ_WORD;"
           ]
         }
       ],
@@ -2488,6 +2098,18 @@
           "reason": "GPUSTAT.28 is write FIFO empty during A0h/C0h (No$PSX Ready Bits); comment citation corrected",
           "dropped_lines": 6,
           "added_lines": 7
+        },
+        {
+          "as_of": "82cb979088b38a8e1d68ecd1395ca549f0570113",
+          "issue": "PS1B-182",
+          "reason": "oracle-fitted GPU timing and GPUSTAT.28 (TAS/source-mode policy) replaced the projection's pricing and readiness code",
+          "dropped_lines": 266,
+          "from_blocks": 57,
+          "to_blocks": 61,
+          "replacement_blocks_added": 17,
+          "replacement_commits": [
+            "710729cdb020"
+          ]
         }
       ]
     },
@@ -3070,92 +2692,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "",
-            "/* The cost tally collects geometry; the timing table prices it. */",
-            "typedef struct SourceGPUCostTally {",
-            "    const SourceGPUCommandProjection *state;",
-            "    unsigned opcode;",
-            "    int reads_back, all_rows, drawn_rows;",
-            "    int64_t quarters;          /* quarter CPU clocks */",
-            "} SourceGPUCostTally;",
-            "#include \"source_gpu_command_timing.h\"",
-            "",
-            "/* Phase values. 0 = no command in progress. */",
-            "enum { SOURCE_GPU_PHASE_IDLE = 0, SOURCE_GPU_PHASE_QUAD_SECOND = 2,",
-            "       SOURCE_GPU_PHASE_UPLOAD = 4, SOURCE_GPU_PHASE_DOWNLOAD = 8 };",
-            "",
-            "/* ---- Word decoding (PSX-SPX \"GPU Command Summary\", \"Render ... Commands\") */",
-            "",
-            "static inline unsigned source_gpu_opcode(uint32_t word) { return word >> 24; }",
-            "",
-            "/* Vertex word: X in bits 0-10, Y in bits 16-26, both signed 11-bit. */",
-            "static inline int source_gpu_command_coord(uint32_t word, unsigned shift)",
-            "{",
-            "    unsigned field = (word >> shift) & 0x7FFu;",
-            "    return (field & 0x400u) ? (int)field - 0x800 : (int)field;",
-            "}",
-            "",
-            "static inline int source_gpu_sprite_origin(uint32_t word, unsigned shift, int offset)",
-            "{",
-            "    return source_gpu_command_coord(word, shift) + offset;",
-            "}",
-            "",
-            "static inline int source_gpu_polygon_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x20u; }",
-            "static inline int source_gpu_line_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x40u; }",
-            "static inline int source_gpu_line_polyline(unsigned opcode) { return (opcode & 0x08u) != 0; }",
-            "",
-            "/* Words per vertex: optional colour (gouraud, bit 28), the vertex, and an",
-            " * optional UV word (textured, bit 26). */",
-            "static inline unsigned source_gpu_polygon_stride(unsigned opcode)",
-            "{",
-            "    return 1u + ((opcode >> 4) & 1u) + ((opcode >> 2) & 1u);",
-            "}",
-            "",
-            "/* Poly-line: each further vertex is an optional colour word and a vertex. */",
-            "static inline unsigned source_gpu_line_segment_length(unsigned opcode)",
-            "{",
-            "    return 1u + ((opcode >> 4) & 1u);",
-            "}",
-            "",
-            "/* PSX-SPX: the list ends on a word with (word AND F000F000h) = 50005000h. */",
-            "static inline int source_gpu_line_terminator(uint32_t word)",
-            "{",
-            "    return (word & 0xF000F000u) == 0x50005000u;",
-            "}",
-            "",
-            "static inline int source_gpu_block_supported(unsigned opcode)",
-            "{",
-            "    return opcode == 0x02u || opcode == 0x80u || source_gpu_sprite_opcode(opcode);",
-            "}",
-            "",
-            "/* Rectangle packet: command+colour, vertex, optional UV (bit 26), and a size",
-            " * word only for the variable-size class. */",
-            "static inline unsigned source_gpu_sprite_length(unsigned opcode)",
-            "{",
-            "    return 2u + ((opcode >> 2) & 1u) + (source_gpu_sprite_class(opcode) == 0);",
-            "}",
-            "",
-            "/* Words that must arrive before a command can start. For polygons and lines",
-            " * this is the first three / two vertices (PSX-SPX \"GPU Command Summary\"); a",
-            " * quad's fourth vertex and poly-line segments follow as a continuation. */",
-            "static inline unsigned source_gpu_command_length(uint32_t word)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(word);",
-            "    if (source_gpu_polygon_supported(opcode))",
-            "        return 1u + 3u * source_gpu_polygon_stride(opcode) - ((opcode >> 4) & 1u);",
-            "    if (source_gpu_line_supported(opcode))",
-            "        return 1u + 2u * source_gpu_line_segment_length(opcode) - ((opcode >> 4) & 1u);",
-            "    if (source_gpu_sprite_opcode(opcode)) return source_gpu_sprite_length(opcode);",
-            "    switch (opcode) {",
-            "    case 0x02: return 3u;          /* fill: colour, corner, size */",
-            "    case 0x80: return 4u;          /* VRAM copy: source, destination, size */",
-            "    case 0xA0: case 0xC0: return 3u; /* transfer: destination/source, size */",
-            "    default: return 1u;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "static inline unsigned source_gpu_command_feedback_length(uint32_t word)",
             "{",
             "    unsigned opcode = source_gpu_opcode(word);",
@@ -3226,166 +2762,6 @@
             "static inline int source_gpu_command_reads_back(const SourceGPUCommandProjection *s, unsigned opcode)",
             "{",
             "    return (opcode & 2u) || (s->mask_bits & 2u);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "",
-            "",
-            "static inline void source_gpu_command_polygon_row(void *context, int raw_y, int physical_x,",
-            "                                                  int width, int raw_interpolation_x)",
-            "{",
-            "    SourceGPUCostTally *tally = (SourceGPUCostTally *)context;",
-            "    (void)raw_y; (void)physical_x; (void)raw_interpolation_x;",
-            "    tally->drawn_rows++;",
-            "    tally->quarters += SOURCE_GPU_T_POLYGON_ROW(tally, width);",
-            "}",
-            "",
-            "static inline int source_gpu_command_polygon_cost(const SourceGPUCommandProjection *s,",
-            "                                                  const uint32_t *words, int second)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), stride = source_gpu_polygon_stride(opcode);",
-            "    int x[3], y[3];",
-            "    for (unsigned i = 0; i < 3; ++i) {",
-            "        unsigned v = i + (second ? 1u : 0u);",
-            "        x[i] = source_gpu_command_coord(words[1 + stride * v], 0) + s->offset_x;",
-            "        y[i] = source_gpu_command_coord(words[1 + stride * v], 16) + s->offset_y;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), 0, 0, 0 };",
-            "    int low = y[0], high = y[0];",
-            "    for (unsigned i = 1; i < 3; ++i) {",
-            "        if (y[i] < low) low = y[i];",
-            "        if (y[i] > high) high = y[i];"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    tally.all_rows = high - low;   /* polygons exclude their bottom row */",
-            "    int walked = source_poly_walk(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,",
-            "                                  0, 0, source_gpu_command_interlaced(s), s->skip_field,",
-            "                                  source_gpu_command_polygon_row, &tally);",
-            "    if (walked < 0) return -1;",
-            "    tally.quarters += SOURCE_GPU_T_POLYGON_TRIANGLE(&tally);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* Rectangle area after clipping to the drawing area (PSX-SPX E3h/E4h). */",
-            "static inline int source_gpu_command_sprite_cost(const SourceGPUCommandProjection *s,",
-            "                                                 const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), width, height;",
-            "    source_gpu_sprite_extent(opcode, words, &width, &height);",
-            "    int left = source_gpu_sprite_origin(words[1], 0, s->offset_x);",
-            "    int top = source_gpu_sprite_origin(words[1], 16, s->offset_y);",
-            "    int x0 = left > s->clip_x0 ? left : s->clip_x0;",
-            "    int x1 = left + (int)width - 1 < s->clip_x1 ? left + (int)width - 1 : s->clip_x1;",
-            "    int y0 = top > s->clip_y0 ? top : s->clip_y0;",
-            "    int y1 = top + (int)height - 1 < s->clip_y1 ? top + (int)height - 1 : s->clip_y1;",
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), (int)height, 0, 0 };",
-            "    if (x1 >= x0) {",
-            "        for (int row = y0; row <= y1; ++row) {",
-            "            if (source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field) continue;",
-            "            tally.drawn_rows++;",
-            "            tally.quarters += SOURCE_GPU_T_SPRITE_ROW(&tally, x1 - x0 + 1);",
-            "        }"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    tally.quarters += SOURCE_GPU_T_SPRITE_RECT(&tally);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* GP0(02h): PSX-SPX \"Masking and Rounding for FILL Command parameters\". */",
-            "static inline int source_gpu_command_fill_cost(const uint32_t *words)",
-            "{",
-            "    unsigned width = ((words[2] & 0x3FFu) + 0x0Fu) & ~0x0Fu;",
-            "    unsigned height = (words[2] >> 16) & 0x1FFu;",
-            "    if (!height) return 0;",
-            "    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_FILL(width, height));",
-            "}",
-            "",
-            "/* GP0(80h): PSX-SPX \"Masking for COPY Commands parameters\". */",
-            "static inline int source_gpu_command_copy_cost(const SourceGPUCommandProjection *s,",
-            "                                               const uint32_t *words)",
-            "{",
-            "    unsigned width = ((words[3] & 0xFFFFu) - 1u) % 0x400u + 1u;",
-            "    unsigned height = ((words[3] >> 16) - 1u) % 0x200u + 1u;",
-            "    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0));",
-            "}",
-            "",
-            "static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection *s,",
-            "                                                const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]);",
-            "    if (opcode == 0x02u) return source_gpu_command_fill_cost(words);",
-            "    if (opcode == 0x80u) return source_gpu_command_copy_cost(s, words);",
-            "    return source_gpu_command_sprite_cost(s, words);",
-            "}",
-            "",
-            "/* One line segment. Lines include both end points (PSX-SPX \"Render Line\"). */",
-            "static inline int source_gpu_command_line_cost(const SourceGPUCommandProjection *s,",
-            "                                               const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), step = source_gpu_line_segment_length(opcode);",
-            "    int ax = source_gpu_command_coord(words[1], 0) + s->offset_x;",
-            "    int ay = source_gpu_command_coord(words[1], 16) + s->offset_y;",
-            "    int bx = source_gpu_command_coord(words[1 + step], 0) + s->offset_x;",
-            "    int by = source_gpu_command_coord(words[1 + step], 16) + s->offset_y;",
-            "    int dx = bx > ax ? bx - ax : ax - bx, dy = by > ay ? by - ay : ay - by;",
-            "    int top = ay < by ? ay : by, bottom = ay < by ? by : ay;",
-            "    int first = top > s->clip_y0 ? top : s->clip_y0;",
-            "    int last = bottom < s->clip_y1 ? bottom : s->clip_y1;",
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode),",
-            "                                 dy + 1, last >= first ? last - first + 1 : 0, 0 };",
-            "    tally.quarters = SOURCE_GPU_T_LINE(&tally, dx, dy);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* ---- FIFO ---------------------------------------------------------------- */",
-            "",
-            "static inline uint32_t source_gpu_command_pop(SourceGPUCommandProjection *s)",
-            "{",
-            "    uint32_t word = s->queue[0];",
-            "    memmove(s->queue, s->queue + 1, (s->count - 1) * sizeof(s->queue[0]));",
-            "    s->queue[--s->count] = 0;",
-            "    return word;",
-            "}",
-            "",
-            "static inline void source_gpu_command_cold(SourceGPUCommandProjection *s)",
-            "{",
-            "    memset(s, 0, sizeof(*s));",
-            "}",
-            "",
-            "static inline int source_gpu_command_fail(SourceGPUCommandProjection *s, int code)",
-            "{",
-            "    s->error = code;",
-            "    return 0;",
-            "}",
-            "",
-            "static inline void source_gpu_command_publish(SourceGPUCommandProjection *s, unsigned kind,",
-            "                                              const uint32_t *words, unsigned count)",
-            "{",
-            "    s->dispatch.kind = kind;",
-            "    s->dispatch.count = count;",
-            "    memcpy(s->dispatch.words, words, count * sizeof(words[0]));",
-            "}",
-            "",
-            "/* Words the rest of the queue still owes: the unfinished tail packet. */",
-            "static inline unsigned source_gpu_command_owed(const SourceGPUCommandProjection *s)",
-            "{",
-            "    unsigned at = 0, owed = 0;",
-            "    if (s->phase == SOURCE_GPU_PHASE_QUAD_SECOND) {",
-            "        unsigned stride = source_gpu_polygon_stride(s->command);",
-            "        at = s->count < stride ? s->count : stride;",
-            "        owed = stride - at;"
           ]
         },
         {
@@ -3566,17 +2942,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    if (!s->count || s->budget < SOURCE_GPU_T_ADMIT_AT) return 0;",
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD) {",
-            "        uint32_t word = source_gpu_command_pop(s);",
-            "        s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));",
-            "        source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_UPLOAD_WORD, &word, 1);",
-            "        if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    if (s->phase == SOURCE_GPU_PHASE_QUAD_SECOND) {",
             "        if (s->count < source_gpu_polygon_stride(s->command)) return 0;",
             "        return source_gpu_command_finish_quad(s);"
@@ -3658,19 +3023,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "}",
-            "",
-            "/* GPUREAD during a C0h transfer consumes one data word. No time passes. */",
-            "static inline void source_gpu_command_read(SourceGPUCommandProjection *s)",
-            "{",
-            "    if (s->phase != SOURCE_GPU_PHASE_DOWNLOAD || !s->transfer_words) return;",
-            "    s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));",
-            "    if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "static inline void source_gpu_command_clear(SourceGPUCommandProjection *s)",
             "{",
             "    memset(s->queue, 0, sizeof(s->queue));",
@@ -3731,36 +3083,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* No$PSX \"GPU FIFO\", FIFO Prefetch: NOP, DRAWAREA (E3h/E4h), DRAWBASE (E5h)",
-            " * and MASKBITS (E6h) execute as soon as they reach the head of the FIFO, even",
-            " * while a rendering command is busy. Words queued behind another command stay",
-            " * in order. */"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE6u);",
-            "}",
-            "",
-            "/* No$PSX \"GPU FIFO\", FIFO Prefetch: words a command may take out of the FIFO",
-            " * while a rendering command is still busy. */",
-            "static inline unsigned source_gpu_command_prefetch(uint32_t word)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(word);",
-            "    if (source_gpu_polygon_supported(opcode) || source_gpu_line_supported(opcode))",
-            "        return SOURCE_GPU_T_PREFETCH_POLY_LINE;",
-            "    if (source_gpu_sprite_opcode(opcode))",
-            "        return (source_gpu_sprite_class(opcode) && !(opcode & 4u)) ?",
-            "               SOURCE_GPU_T_PREFETCH_RECT_SMALL : SOURCE_GPU_T_PREFETCH_RECT_LARGE;",
-            "    if (opcode == 0x02u) return SOURCE_GPU_T_PREFETCH_FILL;",
-            "    if (opcode == 0x80u || opcode == 0xA0u || opcode == 0xC0u) return SOURCE_GPU_T_PREFETCH_COPY;",
-            "    return SOURCE_GPU_T_PREFETCH_ATTRIBUTE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "/* Words still occupying the 16-word FIFO. While drawing is busy, the next",
             " * command at the head may already have taken its prefetch words out",
             " * (No$PSX \"GPU FIFO\", FIFO Prefetch). */",
@@ -3778,12 +3100,6 @@
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
             "    s->budget -= source_gpu_command_line_cost(s, words);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    s->budget -= source_gpu_command_block_cost(s, words);"
           ]
         },
         {
@@ -3835,31 +3151,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* GPUSTAT.28. No$PSX \"GPU Status Register\" / \"Ready Bits\": \"Write FIFO empty\".",
-            " * During A0h and C0h data transfers it is exactly that. Otherwise, per the",
-            " * same section and PSX-SPX a253f078 \"Ready Bits\", it drops while a command",
-            " * executes, once a command has all its parameters, and right after a polygon",
-            " * or line command word. */"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)",
-            "        return source_gpu_command_fifo_size(s) == 0;",
-            "    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;",
-            "    if (s->budget < 0) return 0;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return s->count < source_gpu_command_feedback_length(s->queue[0]);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    /* PSX-SPX \"Texpage Attribute\": the second UV word's upper half sets",
             "     * GP0(E1h) bits 0-8 and 11 for textured polygons. */",
             "    if (opcode & 0x04u) {",
@@ -3882,6 +3173,136 @@
             "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
             "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
             "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Timing values live in one table; see its header for their sources. */",
+            "#include \"source_gpu_command_timing.h\"",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if (source_gpu_sprite_opcode(opcode)) return SOURCE_GPU_T_RECT_FEEDBACK(opcode);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Commands that execute on reaching the FIFO head without waiting for credit:",
+            " * NOP, drawing area (E3h/E4h) and drawing offset (E5h). Oracle-observed: with",
+            " * an empty FIFO these run at once even at negative credit, and cost nothing;",
+            " * MASKBITS (E6h) queues and is charged like E1h. (No$PSX \"GPU FIFO\" lists",
+            " * E6h with the immediate group; the oracle does not.) Words queued behind",
+            " * another command stay in order. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE5u);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Polygon work: a fixed set-up charge per triangle half plus the scanline",
+            " * walk of source_gpu_polygon_projection.h (pixels per drawn row, doubled for",
+            " * gouraud or textured, plus the read-back share for semi-transparency or mask",
+            " * check, and a charge per row outside the drawing area). */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    int work = source_poly_cost(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,",
+            "                                (opcode & 0x14u) != 0, source_gpu_command_reads_back(s, opcode),",
+            "                                source_gpu_command_interlaced(s), s->skip_field);",
+            "    if (work < 0) return -1;",
+            "    return SOURCE_GPU_T_POLYGON_SETUP(opcode, second) + work;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Rectangle work: set-up plus, per drawn row inside the drawing area, one unit",
+            " * per pixel and, with read-back, one per aligned pixel pair touched. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    int cost = SOURCE_GPU_T_SPRITE_SETUP;",
+            "    if (x1 < x0 || y1 < y0) return cost;",
+            "    int per_row = (x1 - x0 + 1) * SOURCE_GPU_T_SPRITE_PIXEL;",
+            "    if (source_gpu_command_reads_back(s, opcode))",
+            "        per_row += SOURCE_GPU_T_SPRITE_PAIR * ((x1 >> 1) - (x0 >> 1) + 1);",
+            "    for (int row = y0; row <= y1; ++row)",
+            "        if (!(source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field))",
+            "            cost += per_row;",
+            "    return cost;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_FILL(width, height);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_LINE(opcode, source_gpu_command_reads_back(s, opcode), dx, dy,",
+            "                             last >= first ? last - first + 1 : 0);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_line_cost(s, words);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, words);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        s->budget -= SOURCE_GPU_T_UPLOAD_WORD;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* GPUSTAT.28 (oracle-observed). During A0h and C0h data phases it is \"write",
+            " * FIFO empty\". While a quad's second half or a poly-line is pending it is 0.",
+            " * When idle it is 1 while fewer words are queued than the head command's",
+            " * threshold (timing table). Drawing credit is not consulted. No$PSX \"Ready",
+            " * Bits\" words the idle rule as clearing while a command executes. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return s->count < SOURCE_GPU_T_READY_BELOW(s->queue[0]);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_READ_WORD;"
           ]
         }
       ],
@@ -3914,6 +3335,18 @@
           "reason": "GPUSTAT.28 is write FIFO empty during A0h/C0h (No$PSX Ready Bits); comment citation corrected",
           "dropped_lines": 6,
           "added_lines": 7
+        },
+        {
+          "as_of": "82cb979088b38a8e1d68ecd1395ca549f0570113",
+          "issue": "PS1B-182",
+          "reason": "oracle-fitted GPU timing and GPUSTAT.28 (TAS/source-mode policy) replaced the projection's pricing and readiness code",
+          "dropped_lines": 266,
+          "from_blocks": 55,
+          "to_blocks": 59,
+          "replacement_blocks_added": 17,
+          "replacement_commits": [
+            "710729cdb020"
+          ]
         }
       ]
     },
@@ -6674,92 +6107,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "",
-            "/* The cost tally collects geometry; the timing table prices it. */",
-            "typedef struct SourceGPUCostTally {",
-            "    const SourceGPUCommandProjection *state;",
-            "    unsigned opcode;",
-            "    int reads_back, all_rows, drawn_rows;",
-            "    int64_t quarters;          /* quarter CPU clocks */",
-            "} SourceGPUCostTally;",
-            "#include \"source_gpu_command_timing.h\"",
-            "",
-            "/* Phase values. 0 = no command in progress. */",
-            "enum { SOURCE_GPU_PHASE_IDLE = 0, SOURCE_GPU_PHASE_QUAD_SECOND = 2,",
-            "       SOURCE_GPU_PHASE_UPLOAD = 4, SOURCE_GPU_PHASE_DOWNLOAD = 8 };",
-            "",
-            "/* ---- Word decoding (PSX-SPX \"GPU Command Summary\", \"Render ... Commands\") */",
-            "",
-            "static inline unsigned source_gpu_opcode(uint32_t word) { return word >> 24; }",
-            "",
-            "/* Vertex word: X in bits 0-10, Y in bits 16-26, both signed 11-bit. */",
-            "static inline int source_gpu_command_coord(uint32_t word, unsigned shift)",
-            "{",
-            "    unsigned field = (word >> shift) & 0x7FFu;",
-            "    return (field & 0x400u) ? (int)field - 0x800 : (int)field;",
-            "}",
-            "",
-            "static inline int source_gpu_sprite_origin(uint32_t word, unsigned shift, int offset)",
-            "{",
-            "    return source_gpu_command_coord(word, shift) + offset;",
-            "}",
-            "",
-            "static inline int source_gpu_polygon_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x20u; }",
-            "static inline int source_gpu_line_supported(unsigned opcode) { return (opcode & 0xE0u) == 0x40u; }",
-            "static inline int source_gpu_line_polyline(unsigned opcode) { return (opcode & 0x08u) != 0; }",
-            "",
-            "/* Words per vertex: optional colour (gouraud, bit 28), the vertex, and an",
-            " * optional UV word (textured, bit 26). */",
-            "static inline unsigned source_gpu_polygon_stride(unsigned opcode)",
-            "{",
-            "    return 1u + ((opcode >> 4) & 1u) + ((opcode >> 2) & 1u);",
-            "}",
-            "",
-            "/* Poly-line: each further vertex is an optional colour word and a vertex. */",
-            "static inline unsigned source_gpu_line_segment_length(unsigned opcode)",
-            "{",
-            "    return 1u + ((opcode >> 4) & 1u);",
-            "}",
-            "",
-            "/* PSX-SPX: the list ends on a word with (word AND F000F000h) = 50005000h. */",
-            "static inline int source_gpu_line_terminator(uint32_t word)",
-            "{",
-            "    return (word & 0xF000F000u) == 0x50005000u;",
-            "}",
-            "",
-            "static inline int source_gpu_block_supported(unsigned opcode)",
-            "{",
-            "    return opcode == 0x02u || opcode == 0x80u || source_gpu_sprite_opcode(opcode);",
-            "}",
-            "",
-            "/* Rectangle packet: command+colour, vertex, optional UV (bit 26), and a size",
-            " * word only for the variable-size class. */",
-            "static inline unsigned source_gpu_sprite_length(unsigned opcode)",
-            "{",
-            "    return 2u + ((opcode >> 2) & 1u) + (source_gpu_sprite_class(opcode) == 0);",
-            "}",
-            "",
-            "/* Words that must arrive before a command can start. For polygons and lines",
-            " * this is the first three / two vertices (PSX-SPX \"GPU Command Summary\"); a",
-            " * quad's fourth vertex and poly-line segments follow as a continuation. */",
-            "static inline unsigned source_gpu_command_length(uint32_t word)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(word);",
-            "    if (source_gpu_polygon_supported(opcode))",
-            "        return 1u + 3u * source_gpu_polygon_stride(opcode) - ((opcode >> 4) & 1u);",
-            "    if (source_gpu_line_supported(opcode))",
-            "        return 1u + 2u * source_gpu_line_segment_length(opcode) - ((opcode >> 4) & 1u);",
-            "    if (source_gpu_sprite_opcode(opcode)) return source_gpu_sprite_length(opcode);",
-            "    switch (opcode) {",
-            "    case 0x02: return 3u;          /* fill: colour, corner, size */",
-            "    case 0x80: return 4u;          /* VRAM copy: source, destination, size */",
-            "    case 0xA0: case 0xC0: return 3u; /* transfer: destination/source, size */",
-            "    default: return 1u;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "static inline unsigned source_gpu_command_feedback_length(uint32_t word)",
             "{",
             "    unsigned opcode = source_gpu_opcode(word);",
@@ -6830,166 +6177,6 @@
             "static inline int source_gpu_command_reads_back(const SourceGPUCommandProjection *s, unsigned opcode)",
             "{",
             "    return (opcode & 2u) || (s->mask_bits & 2u);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "",
-            "",
-            "static inline void source_gpu_command_polygon_row(void *context, int raw_y, int physical_x,",
-            "                                                  int width, int raw_interpolation_x)",
-            "{",
-            "    SourceGPUCostTally *tally = (SourceGPUCostTally *)context;",
-            "    (void)raw_y; (void)physical_x; (void)raw_interpolation_x;",
-            "    tally->drawn_rows++;",
-            "    tally->quarters += SOURCE_GPU_T_POLYGON_ROW(tally, width);",
-            "}",
-            "",
-            "static inline int source_gpu_command_polygon_cost(const SourceGPUCommandProjection *s,",
-            "                                                  const uint32_t *words, int second)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), stride = source_gpu_polygon_stride(opcode);",
-            "    int x[3], y[3];",
-            "    for (unsigned i = 0; i < 3; ++i) {",
-            "        unsigned v = i + (second ? 1u : 0u);",
-            "        x[i] = source_gpu_command_coord(words[1 + stride * v], 0) + s->offset_x;",
-            "        y[i] = source_gpu_command_coord(words[1 + stride * v], 16) + s->offset_y;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), 0, 0, 0 };",
-            "    int low = y[0], high = y[0];",
-            "    for (unsigned i = 1; i < 3; ++i) {",
-            "        if (y[i] < low) low = y[i];",
-            "        if (y[i] > high) high = y[i];"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    tally.all_rows = high - low;   /* polygons exclude their bottom row */",
-            "    int walked = source_poly_walk(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,",
-            "                                  0, 0, source_gpu_command_interlaced(s), s->skip_field,",
-            "                                  source_gpu_command_polygon_row, &tally);",
-            "    if (walked < 0) return -1;",
-            "    tally.quarters += SOURCE_GPU_T_POLYGON_TRIANGLE(&tally);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* Rectangle area after clipping to the drawing area (PSX-SPX E3h/E4h). */",
-            "static inline int source_gpu_command_sprite_cost(const SourceGPUCommandProjection *s,",
-            "                                                 const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), width, height;",
-            "    source_gpu_sprite_extent(opcode, words, &width, &height);",
-            "    int left = source_gpu_sprite_origin(words[1], 0, s->offset_x);",
-            "    int top = source_gpu_sprite_origin(words[1], 16, s->offset_y);",
-            "    int x0 = left > s->clip_x0 ? left : s->clip_x0;",
-            "    int x1 = left + (int)width - 1 < s->clip_x1 ? left + (int)width - 1 : s->clip_x1;",
-            "    int y0 = top > s->clip_y0 ? top : s->clip_y0;",
-            "    int y1 = top + (int)height - 1 < s->clip_y1 ? top + (int)height - 1 : s->clip_y1;",
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), (int)height, 0, 0 };",
-            "    if (x1 >= x0) {",
-            "        for (int row = y0; row <= y1; ++row) {",
-            "            if (source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field) continue;",
-            "            tally.drawn_rows++;",
-            "            tally.quarters += SOURCE_GPU_T_SPRITE_ROW(&tally, x1 - x0 + 1);",
-            "        }"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    tally.quarters += SOURCE_GPU_T_SPRITE_RECT(&tally);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* GP0(02h): PSX-SPX \"Masking and Rounding for FILL Command parameters\". */",
-            "static inline int source_gpu_command_fill_cost(const uint32_t *words)",
-            "{",
-            "    unsigned width = ((words[2] & 0x3FFu) + 0x0Fu) & ~0x0Fu;",
-            "    unsigned height = (words[2] >> 16) & 0x1FFu;",
-            "    if (!height) return 0;",
-            "    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_FILL(width, height));",
-            "}",
-            "",
-            "/* GP0(80h): PSX-SPX \"Masking for COPY Commands parameters\". */",
-            "static inline int source_gpu_command_copy_cost(const SourceGPUCommandProjection *s,",
-            "                                               const uint32_t *words)",
-            "{",
-            "    unsigned width = ((words[3] & 0xFFFFu) - 1u) % 0x400u + 1u;",
-            "    unsigned height = ((words[3] >> 16) - 1u) % 0x200u + 1u;",
-            "    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0));",
-            "}",
-            "",
-            "static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection *s,",
-            "                                                const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]);",
-            "    if (opcode == 0x02u) return source_gpu_command_fill_cost(words);",
-            "    if (opcode == 0x80u) return source_gpu_command_copy_cost(s, words);",
-            "    return source_gpu_command_sprite_cost(s, words);",
-            "}",
-            "",
-            "/* One line segment. Lines include both end points (PSX-SPX \"Render Line\"). */",
-            "static inline int source_gpu_command_line_cost(const SourceGPUCommandProjection *s,",
-            "                                               const uint32_t *words)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(words[0]), step = source_gpu_line_segment_length(opcode);",
-            "    int ax = source_gpu_command_coord(words[1], 0) + s->offset_x;",
-            "    int ay = source_gpu_command_coord(words[1], 16) + s->offset_y;",
-            "    int bx = source_gpu_command_coord(words[1 + step], 0) + s->offset_x;",
-            "    int by = source_gpu_command_coord(words[1 + step], 16) + s->offset_y;",
-            "    int dx = bx > ax ? bx - ax : ax - bx, dy = by > ay ? by - ay : ay - by;",
-            "    int top = ay < by ? ay : by, bottom = ay < by ? by : ay;",
-            "    int first = top > s->clip_y0 ? top : s->clip_y0;",
-            "    int last = bottom < s->clip_y1 ? bottom : s->clip_y1;",
-            "    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode),",
-            "                                 dy + 1, last >= first ? last - first + 1 : 0, 0 };",
-            "    tally.quarters = SOURCE_GPU_T_LINE(&tally, dx, dy);",
-            "    return SOURCE_GPU_T_CLOCKS(tally.quarters);",
-            "}",
-            "",
-            "/* ---- FIFO ---------------------------------------------------------------- */",
-            "",
-            "static inline uint32_t source_gpu_command_pop(SourceGPUCommandProjection *s)",
-            "{",
-            "    uint32_t word = s->queue[0];",
-            "    memmove(s->queue, s->queue + 1, (s->count - 1) * sizeof(s->queue[0]));",
-            "    s->queue[--s->count] = 0;",
-            "    return word;",
-            "}",
-            "",
-            "static inline void source_gpu_command_cold(SourceGPUCommandProjection *s)",
-            "{",
-            "    memset(s, 0, sizeof(*s));",
-            "}",
-            "",
-            "static inline int source_gpu_command_fail(SourceGPUCommandProjection *s, int code)",
-            "{",
-            "    s->error = code;",
-            "    return 0;",
-            "}",
-            "",
-            "static inline void source_gpu_command_publish(SourceGPUCommandProjection *s, unsigned kind,",
-            "                                              const uint32_t *words, unsigned count)",
-            "{",
-            "    s->dispatch.kind = kind;",
-            "    s->dispatch.count = count;",
-            "    memcpy(s->dispatch.words, words, count * sizeof(words[0]));",
-            "}",
-            "",
-            "/* Words the rest of the queue still owes: the unfinished tail packet. */",
-            "static inline unsigned source_gpu_command_owed(const SourceGPUCommandProjection *s)",
-            "{",
-            "    unsigned at = 0, owed = 0;",
-            "    if (s->phase == SOURCE_GPU_PHASE_QUAD_SECOND) {",
-            "        unsigned stride = source_gpu_polygon_stride(s->command);",
-            "        at = s->count < stride ? s->count : stride;",
-            "        owed = stride - at;"
           ]
         },
         {
@@ -7170,17 +6357,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    if (!s->count || s->budget < SOURCE_GPU_T_ADMIT_AT) return 0;",
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD) {",
-            "        uint32_t word = source_gpu_command_pop(s);",
-            "        s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));",
-            "        source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_UPLOAD_WORD, &word, 1);",
-            "        if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    if (s->phase == SOURCE_GPU_PHASE_QUAD_SECOND) {",
             "        if (s->count < source_gpu_polygon_stride(s->command)) return 0;",
             "        return source_gpu_command_finish_quad(s);"
@@ -7262,19 +6438,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "}",
-            "",
-            "/* GPUREAD during a C0h transfer consumes one data word. No time passes. */",
-            "static inline void source_gpu_command_read(SourceGPUCommandProjection *s)",
-            "{",
-            "    if (s->phase != SOURCE_GPU_PHASE_DOWNLOAD || !s->transfer_words) return;",
-            "    s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));",
-            "    if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "static inline void source_gpu_command_clear(SourceGPUCommandProjection *s)",
             "{",
             "    memset(s->queue, 0, sizeof(s->queue));",
@@ -7335,36 +6498,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* No$PSX \"GPU FIFO\", FIFO Prefetch: NOP, DRAWAREA (E3h/E4h), DRAWBASE (E5h)",
-            " * and MASKBITS (E6h) execute as soon as they reach the head of the FIFO, even",
-            " * while a rendering command is busy. Words queued behind another command stay",
-            " * in order. */"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE6u);",
-            "}",
-            "",
-            "/* No$PSX \"GPU FIFO\", FIFO Prefetch: words a command may take out of the FIFO",
-            " * while a rendering command is still busy. */",
-            "static inline unsigned source_gpu_command_prefetch(uint32_t word)",
-            "{",
-            "    unsigned opcode = source_gpu_opcode(word);",
-            "    if (source_gpu_polygon_supported(opcode) || source_gpu_line_supported(opcode))",
-            "        return SOURCE_GPU_T_PREFETCH_POLY_LINE;",
-            "    if (source_gpu_sprite_opcode(opcode))",
-            "        return (source_gpu_sprite_class(opcode) && !(opcode & 4u)) ?",
-            "               SOURCE_GPU_T_PREFETCH_RECT_SMALL : SOURCE_GPU_T_PREFETCH_RECT_LARGE;",
-            "    if (opcode == 0x02u) return SOURCE_GPU_T_PREFETCH_FILL;",
-            "    if (opcode == 0x80u || opcode == 0xA0u || opcode == 0xC0u) return SOURCE_GPU_T_PREFETCH_COPY;",
-            "    return SOURCE_GPU_T_PREFETCH_ATTRIBUTE;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "/* Words still occupying the 16-word FIFO. While drawing is busy, the next",
             " * command at the head may already have taken its prefetch words out",
             " * (No$PSX \"GPU FIFO\", FIFO Prefetch). */",
@@ -7382,12 +6515,6 @@
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
             "    s->budget -= source_gpu_command_line_cost(s, words);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    s->budget -= source_gpu_command_block_cost(s, words);"
           ]
         },
         {
@@ -7439,31 +6566,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "/* GPUSTAT.28. No$PSX \"GPU Status Register\" / \"Ready Bits\": \"Write FIFO empty\".",
-            " * During A0h and C0h data transfers it is exactly that. Otherwise, per the",
-            " * same section and PSX-SPX a253f078 \"Ready Bits\", it drops while a command",
-            " * executes, once a command has all its parameters, and right after a polygon",
-            " * or line command word. */"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)",
-            "        return source_gpu_command_fifo_size(s) == 0;",
-            "    if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;",
-            "    if (s->budget < 0) return 0;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return s->count < source_gpu_command_feedback_length(s->queue[0]);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    /* PSX-SPX \"Texpage Attribute\": the second UV word's upper half sets",
             "     * GP0(E1h) bits 0-8 and 11 for textured polygons. */",
             "    if (opcode & 0x04u) {",
@@ -7486,6 +6588,136 @@
             "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(unsigned), \"dispatch layout\");",
             "PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), \"queue words\");",
             "PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), \"budget then queue\");"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Timing values live in one table; see its header for their sources. */",
+            "#include \"source_gpu_command_timing.h\"",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if (source_gpu_sprite_opcode(opcode)) return SOURCE_GPU_T_RECT_FEEDBACK(opcode);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Commands that execute on reaching the FIFO head without waiting for credit:",
+            " * NOP, drawing area (E3h/E4h) and drawing offset (E5h). Oracle-observed: with",
+            " * an empty FIFO these run at once even at negative credit, and cost nothing;",
+            " * MASKBITS (E6h) queues and is charged like E1h. (No$PSX \"GPU FIFO\" lists",
+            " * E6h with the immediate group; the oracle does not.) Words queued behind",
+            " * another command stay in order. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE5u);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Polygon work: a fixed set-up charge per triangle half plus the scanline",
+            " * walk of source_gpu_polygon_projection.h (pixels per drawn row, doubled for",
+            " * gouraud or textured, plus the read-back share for semi-transparency or mask",
+            " * check, and a charge per row outside the drawing area). */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    int work = source_poly_cost(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,",
+            "                                (opcode & 0x14u) != 0, source_gpu_command_reads_back(s, opcode),",
+            "                                source_gpu_command_interlaced(s), s->skip_field);",
+            "    if (work < 0) return -1;",
+            "    return SOURCE_GPU_T_POLYGON_SETUP(opcode, second) + work;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* Rectangle work: set-up plus, per drawn row inside the drawing area, one unit",
+            " * per pixel and, with read-back, one per aligned pixel pair touched. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    int cost = SOURCE_GPU_T_SPRITE_SETUP;",
+            "    if (x1 < x0 || y1 < y0) return cost;",
+            "    int per_row = (x1 - x0 + 1) * SOURCE_GPU_T_SPRITE_PIXEL;",
+            "    if (source_gpu_command_reads_back(s, opcode))",
+            "        per_row += SOURCE_GPU_T_SPRITE_PAIR * ((x1 >> 1) - (x0 >> 1) + 1);",
+            "    for (int row = y0; row <= y1; ++row)",
+            "        if (!(source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field))",
+            "            cost += per_row;",
+            "    return cost;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_FILL(width, height);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return SOURCE_GPU_T_LINE(opcode, source_gpu_command_reads_back(s, opcode), dx, dy,",
+            "                             last >= first ? last - first + 1 : 0);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_line_cost(s, words);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, words);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        s->budget -= SOURCE_GPU_T_UPLOAD_WORD;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* GPUSTAT.28 (oracle-observed). During A0h and C0h data phases it is \"write",
+            " * FIFO empty\". While a quad's second half or a poly-line is pending it is 0.",
+            " * When idle it is 1 while fewer words are queued than the head command's",
+            " * threshold (timing table). Drawing credit is not consulted. No$PSX \"Ready",
+            " * Bits\" words the idle rule as clearing while a command executes. */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return s->count < SOURCE_GPU_T_READY_BELOW(s->queue[0]);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    s->budget -= SOURCE_GPU_T_READ_WORD;"
           ]
         }
       ],
@@ -7529,6 +6761,18 @@
           "reason": "GPUSTAT.28 is write FIFO empty during A0h/C0h (No$PSX Ready Bits); comment citation corrected",
           "dropped_lines": 6,
           "added_lines": 7
+        },
+        {
+          "as_of": "82cb979088b38a8e1d68ecd1395ca549f0570113",
+          "issue": "PS1B-182",
+          "reason": "oracle-fitted GPU timing and GPUSTAT.28 (TAS/source-mode policy) replaced the projection's pricing and readiness code",
+          "dropped_lines": 266,
+          "from_blocks": 211,
+          "to_blocks": 215,
+          "replacement_blocks_added": 17,
+          "replacement_commits": [
+            "710729cdb020"
+          ]
         }
       ]
     },
