@@ -52,13 +52,6 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "    else if(s_nymashock_drive && distance>=3 && distance<12)",
-            "        cycles+=4*CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode&0x80)?2:1);"
-          ]
-        },
-        {
-          "file": "runtime/src/cdrom.c",
-          "lines": [
             "/* Nymashock 1.29.0 HandlePlayRead: after two pipeline fills and the",
             " * verified target header, standby advances to target+3 then retreats nine.",
             " * Keep this physical cursor separate from the guest's next-delivery cursor. */",
@@ -70,45 +63,8 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "static void source_drive_head_update(void) {",
-            "    if(!s_nymashock_drive || !source_drive_head_valid)return;",
-            "    while(psx_cycle_count>=source_drive_head_due) {"
-          ]
-        },
-        {
-          "file": "runtime/src/cdrom.c",
-          "lines": [
-            "        source_drive_head_lba++;",
-            "        if(source_drive_head_lba>=source_drive_head_target+(source_drive_hold_logical?2:0))source_drive_head_lba-=9;",
-            "        if(source_drive_head_lba < -150)source_drive_head_lba=-150;",
-            "        source_drive_head_due += CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg&0x80)?2:1);",
             "    }",
             "}"
-          ]
-        },
-        {
-          "file": "runtime/src/cdrom.c",
-          "lines": [
-            "        source_drive_head_update();",
-            "        if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;"
-          ]
-        },
-        {
-          "file": "runtime/src/cdrom.c",
-          "lines": [
-            "        source_drive_head_valid=0;"
-          ]
-        },
-        {
-          "file": "runtime/src/cdrom.c",
-          "lines": [
-            "    if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;"
-          ]
-        },
-        {
-          "file": "runtime/src/cdrom.c",
-          "lines": [
-            "        (s_nymashock_drive ? 2 : 1) * CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg & 0x80) ? 2 : 1) : 0;"
           ]
         },
         {
@@ -198,19 +154,6 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "    if(s_nymashock_drive) {",
-            "        while(s_source_reset_due && psx_cycle_count>=s_source_reset_due) {",
-            "            uint64_t due=s_source_reset_due;",
-            "            if(source_drive_hold_logical && source_reset_phase<3) {",
-            "                source_drive_head_lba=source_reset_phase++;",
-            "                s_source_reset_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES;",
-            "            } else {",
-            "                s_source_reset_due=0;source_reset_phase=0;",
-            "                source_drive_head_lba=source_drive_hold_logical?-6:-8;",
-            "                source_drive_head_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES*(source_drive_hold_logical?1:2);",
-            "                stat_reg&=~CDSTAT_SEEK;s_source_seek_paused=1;",
-            "                read_min=seek_min=0;read_sec=seek_sec=2;read_sect=seek_sect=0;",
-            "                source_drive_head_update();",
             "            }",
             "        }",
             "        return;",
@@ -277,50 +220,6 @@
           ]
         },
         {
-          "file": "runtime/src/memory.c",
-          "lines": [
-            "     * DMA_Read, IRQ_Read and CDC::Read likewise return stored registers without",
-            "     * another event update. CD status/FIFO reads must not observe an ACK or",
-            "     * data arrival crossed only by their width-dependent six-cycle wait. */"
-          ]
-        },
-        {
-          "file": "runtime/src/memory.c",
-          "lines": [
-            "static int source_cd_register_sample(uint32_t addr) {",
-            "    uint32_t physical=addr&0x1fffffffu;",
-            "    return source_gpu_runtime_active() && addr<0xc0000000u &&",
-            "           physical>=0x1f801800u && physical<=0x1f80180fu;",
-            "}"
-          ]
-        },
-        {
-          "file": "runtime/src/memory.c",
-          "lines": [
-            "        source_dma_register_sample(addr) || source_irq_register_sample(addr) ||",
-            "        source_cd_register_sample(addr));"
-          ]
-        },
-        {
-          "file": "runtime/src/memory.c",
-          "lines": [
-            "        source_irq_register_sample(addr) || source_cd_register_sample(addr));"
-          ]
-        },
-        {
-          "file": "runtime/src/memory.c",
-          "lines": [
-            "        source_irq_register_sample(addr) || source_cd_register_sample(addr));"
-          ]
-        },
-        {
-          "file": "runtime/src/memory.c",
-          "lines": [
-            "    completion = psx_cyc_readmem_prepare(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u,",
-            "                                         source_cd_register_sample(addr));"
-          ]
-        },
-        {
           "file": "runtime/src/traps.c",
           "lines": [
             "int psx_guest_syscalls_active(void) {",
@@ -366,9 +265,292 @@
             "    if (psx_guest_syscalls_active() || ((func == 1 || func == 2) && critical_exception_enabled())) {",
             "        return enter_guest_syscall_exception(cpu);"
           ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "#include \"cd_seek_delay.h\""
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* Caller retains jitter, drive state, scheduling and final timing clamps. */",
+            "static int source_seek_lower_bound(int origin, int target, int motor_on, int paused, uint8_t mode)",
+            "{",
+            "    return psx_cd_seek_delay(origin, target, motor_on, paused, mode, s_nymashock_drive);"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* T172 authored CD explicit seek. */",
+            "static int source_explicit_seek_cycles(uint8_t cmd)",
+            "{",
+            "    int origin = msf_to_lba(read_min, read_sec, read_sect);"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if (origin < 0) origin = 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if (reading) origin += 2;",
+            "    else if (s_nymashock_drive && source_drive_head_valid)",
+            "        origin = source_drive_head_lba;",
+            "    source_drive_head_valid = 0;",
+            "    int64_t total = source_seek_lower_bound(origin, target,",
+            "        (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg);",
+            "    if (cmd == 0x15) {",
+            "        int period = (mode_reg & 0x80) ? CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 :",
+            "                                      CDROM_SINGLE_SPEED_SECTOR_CYCLES;",
+            "        total += period * (s_nymashock_drive ? 2 : 1);"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if (s_source_clock) total += source_clock_random(25000);",
+            "    return total > INT32_MAX ? INT32_MAX : (int)total;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* T172 end CD explicit seek. */"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* T172 authored CD head. */",
+            "static void source_drive_head_update(void)",
+            "{",
+            "    if (!s_nymashock_drive || !source_drive_head_valid) return;",
+            "    uint64_t period = (mode_reg & 0x80) ?",
+            "        CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 : CDROM_SINGLE_SPEED_SECTOR_CYCLES;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    while (source_drive_head_due <= psx_cycle_count) {",
+            "        source_drive_subq_lba = source_drive_head_lba;",
+            "        source_drive_head_lba += source_drive_head_lba < limit ? 1 : -8;",
+            "        if (source_drive_head_lba < -150) source_drive_head_lba = -150;",
+            "        source_drive_head_due += period;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* T172 end CD head. */",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "/* T172 independent memory load timing. */",
+            "/* Derived from T172 authored memory boundary/state/environment observations. */",
+            "int psx_load_delay_enabled(void)",
+            "{"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "        const char *value = getenv(\"PSX_LOAD_DELAY\");",
+            "        g_psx_load_delay = value ? atoi(value) != 0 : 1;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "static uint32_t t172_memory_wait(uint32_t physical, unsigned width)",
+            "{",
+            "    static int mmio_wait = -1;",
+            "    if (mmio_wait < 0) {",
+            "        const char *value = getenv(\"PSX_MMIO_WAIT\");",
+            "        mmio_wait = value ? atoi(value) != 0 : 1;",
+            "    }",
+            "    if (physical < 0x800000u) return 7;",
+            "    if (physical >= 0x1f800000u && physical < 0x1f800400u) return 0;",
+            "    if (mmio_wait) {",
+            "        if (physical >= 0x1f801800u && physical < 0x1f801810u)",
+            "            return 4 + width * 6;",
+            "        if (physical >= 0x1f801c00u && physical < 0x1f802000u)",
+            "            return width == 4 ? 40 : 20;",
+            "        if ((physical >= 0x1f801000u && physical < 0x1f801024u) ||",
+            "            (physical >= 0x1f801040u && physical < 0x1f801060u) ||",
+            "            (physical >= 0x1f801070u && physical < 0x1f801078u) ||",
+            "            (physical >= 0x1f801080u && physical < 0x1f801140u) ||",
+            "            (physical >= 0x1f801810u && physical < 0x1f801818u) ||",
+            "            (physical >= 0x1f801820u && physical < 0x1f801828u)) return 5;",
+            "    }",
+            "    return 4;",
+            "}",
+            "",
+            "static void t172_memory_poll(uint32_t physical)",
+            "{"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "    static int extra = -1;",
+            "    if (extra < 0) {",
+            "        const char *value = getenv(\"PSX_POLL_PROOF\");",
+            "        extra = value ? atoi(value) : 0;",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "}",
+            "",
+            "static uint32_t t172_memory_before(CPUState *cpu, uint32_t addr, unsigned width,",
+            "                                   uint32_t rt, uint32_t mask, int coprocessor,",
+            "                                   int sampling)",
+            "{",
+            "    uint32_t physical = addr & 0x1fffffffu;",
+            "    if (!coprocessor) {",
+            "        psx_cyc_base(cpu);",
+            "        psx_cyc_deps(cpu, mask);",
+            "        if (cpu->ld_which_t == rt) cpu->ld_which_t = 0;",
+            "        psx_cyc_lds(cpu);",
+            "    }",
+            "    cpu->read_absorb[cpu->read_absorb_which] = 0;",
+            "    cpu->read_absorb_which = 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "    uint32_t tail = 0;",
+            "    if (wait) {",
+            "        wait += dma_cpu_read_penalty();",
+            "        if (coprocessor) --wait;",
+            "        cpu->ld_absorb = wait - 2;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "        if (physical >= 0x1f801000u && physical < 0x1f803000u)",
+            "            tail = coprocessor ? 1 : 2;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "        if (sample_early) psx_devices_service_to_now();",
+            "    } else {",
+            "        cpu->ld_absorb = 0;",
+            "    }",
+            "    cpu->ld_which_t = (uint8_t)rt;",
+            "    t172_memory_poll(physical);",
+            "    return tail;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "static uint32_t t172_memory_load(CPUState *cpu, uint32_t addr, uint32_t rt,",
+            "                                 uint32_t mask, unsigned width, int only_timing)",
+            "{",
+            "    uint32_t tail = 0, result = 0;",
+            "#ifdef PSX_ENABLE_BLOCK_CYCLES",
+            "    if (psx_load_delay_enabled())",
+            "        tail = t172_memory_before(cpu, addr, width, rt, mask, 0, !only_timing);",
+            "#else",
+            "    (void)cpu; (void)rt; (void)mask;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "    if (!only_timing) {",
+            "        if (width == 4) result = psx_read_word(addr);",
+            "        else if (width == 2) result = psx_read_half(addr);"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "    }",
+            "    if (tail) psx_advance_cycles(tail);",
+            "    return result;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "uint32_t psx_cyc_load_word_slow(CPUState *cpu, uint32_t addr, uint32_t rt, uint32_t mask)",
+            "{",
+            "    return t172_memory_load(cpu, addr, rt, mask, 4, 0);",
+            "}",
+            "uint16_t psx_cyc_load_half_slow(CPUState *cpu, uint32_t addr, uint32_t rt, uint32_t mask)",
+            "{",
+            "    return (uint16_t)t172_memory_load(cpu, addr, rt, mask, 2, 0);",
+            "}",
+            "uint8_t psx_cyc_load_byte(CPUState *cpu, uint32_t addr, uint32_t rt, uint32_t mask)",
+            "{",
+            "    return (uint8_t)t172_memory_load(cpu, addr, rt, mask, 1, 0);",
+            "}",
+            "void psx_cyc_load_word_timing_only(CPUState *cpu, uint32_t addr, uint32_t rt, uint32_t mask)",
+            "{",
+            "    (void)t172_memory_load(cpu, addr, rt, mask, 4, 1);",
+            "}",
+            "uint32_t psx_cyc_lwc2_read(CPUState *cpu, uint32_t addr)",
+            "{",
+            "    uint32_t tail = 0, result;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "    tail = t172_memory_before(cpu, addr, 4, 32, 0, 1, 0);"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "        memcpy(&result, ram + (physical & (RAM_SIZE - 1)), sizeof result);",
+            "    else"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "        result = psx_read_word(addr);",
+            "    if (tail) psx_advance_cycles(tail);",
+            "    return result;"
+          ]
         }
       ],
-      "note": "Bundles the early Bio Hazard CD/drive (Nymashock 1.29.0 physical head, reset, sub-Q), CPU/kernel (guest syscall exception model, CD register sample) and MDEC (512-cycle block model) fixes; the CPU/kernel lines are shared infrastructure but only the Bio Hazard pass depends on them. evolved: 3 dropped lines were rewritten by fa4d2267 (seek origin from the physical head); the other 21 are the Nymashock-drive savestate serialisation (cdrom_snap_emit/parse WI/RI fields, cdrom_snapshot_read drive_bytes validation and offsets, MDEC 512-cycle wire bytes) that split/06's cherry-pick 6224a262 left out - split refuses snapshots under that drive profile instead (cdrom_snapshot_bytes/write exit 2, 'Source CDDA/drive capture unqualified'). The power-on replay passes do not exercise savestates. evolved 2026-09-17: the Nymashock Reset block and the drive-model parse now select the order of its two random draws (octoshock-2.7 takes CalcSeekTime first, as MSVC does); the nymashock-1.29.0 branch keeps the qualified clang order unchanged."
+      "note": "Bundles the early Bio Hazard CD/drive (Nymashock 1.29.0 physical head, reset, sub-Q), CPU/kernel (guest syscall exception model, CD register sample) and MDEC (512-cycle block model) fixes; the CPU/kernel lines are shared infrastructure but only the Bio Hazard pass depends on them. evolved: 3 dropped lines were rewritten by fa4d2267 (seek origin from the physical head); the other 21 are the Nymashock-drive savestate serialisation (cdrom_snap_emit/parse WI/RI fields, cdrom_snapshot_read drive_bytes validation and offsets, MDEC 512-cycle wire bytes) that split/06's cherry-pick 6224a262 left out - split refuses snapshots under that drive profile instead (cdrom_snapshot_bytes/write exit 2, 'Source CDDA/drive capture unqualified'). The power-on replay passes do not exercise savestates. evolved 2026-09-17: the Nymashock Reset block and the drive-model parse now select the order of its two random draws (octoshock-2.7 takes CalcSeekTime first, as MSVC does); the nymashock-1.29.0 branch keeps the qualified clang order unchanged. superseded by T172 e0711885723e, 8adf61d12a81, e37b39ab6c42, 8b8555c46bef; requalification pending the PS1B-102 Pegasus TAS rerun",
+      "repins": [
+        {
+          "as_of": "6c813943011a356e97d8ecd02341254637d9adb2",
+          "issue": "PS1B-167",
+          "dropped_lines": 41,
+          "from_blocks": 37,
+          "to_blocks": 50,
+          "replacement_blocks_added": 25,
+          "replacement_commits": [
+            "e0711885723e",
+            "8adf61d12a81",
+            "e37b39ab6c42",
+            "8b8555c46bef"
+          ]
+        }
+      ]
     },
     {
       "id": "22fbb932-nymashock-subq-ahead-of-delivery",
@@ -634,27 +816,61 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "     * physical head while paused or in standby. Both use the source tape.",
-            "     *",
-            "     * The source measures a seek from CurSector, its physical read head. An",
-            "     * established read keeps that head CDC_SECTOR_PIPE_COUNT (2) sectors",
-            "     * ahead of the sector handed to the guest, because HandlePlayRead fills",
-            "     * the pipe before the guest drains it. A seek issued mid-read therefore",
-            "     * starts two sectors further along than the delivery cursor says, and",
-            "     * timing it from the delivery cursor makes its travel two sectors too",
-            "     * long. Command_Reset already accounts for the same lead below. */",
-            "    int cursor = msf_to_lba(read_min, read_sec, read_sect);",
-            "    if (cursor < 0) cursor = 0;",
-            "    int origin = reading ? cursor + 2 : cursor;"
+            "/* T172 authored CD explicit seek. */",
+            "static int source_explicit_seek_cycles(uint8_t cmd)",
+            "{",
+            "    int origin = msf_to_lba(read_min, read_sec, read_sect);"
           ]
         },
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "    if(s_nymashock_drive && !reading && source_drive_head_valid)origin=source_drive_head_lba;"
+            "    if (origin < 0) origin = 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if (reading) origin += 2;",
+            "    else if (s_nymashock_drive && source_drive_head_valid)",
+            "        origin = source_drive_head_lba;",
+            "    source_drive_head_valid = 0;",
+            "    int64_t total = source_seek_lower_bound(origin, target,",
+            "        (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg);",
+            "    if (cmd == 0x15) {",
+            "        int period = (mode_reg & 0x80) ? CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 :",
+            "                                      CDROM_SINGLE_SPEED_SECTOR_CYCLES;",
+            "        total += period * (s_nymashock_drive ? 2 : 1);"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if (s_source_clock) total += source_clock_random(25000);",
+            "    return total > INT32_MAX ? INT32_MAX : (int)total;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* T172 end CD explicit seek. */"
           ]
         }
-      ]
+      ],
+      "repins": [
+        {
+          "as_of": "6c813943011a356e97d8ecd02341254637d9adb2",
+          "issue": "PS1B-167",
+          "dropped_lines": 13,
+          "from_blocks": 2,
+          "to_blocks": 5,
+          "replacement_blocks_added": 5,
+          "replacement_commits": [
+            "8adf61d12a81"
+          ]
+        }
+      ],
+      "note": "superseded by T172 8adf61d12a81; requalification pending the PS1B-102 Pegasus TAS rerun"
     },
     {
       "id": "b1413e71-precise-slice-frontend-deadline",
@@ -798,23 +1014,85 @@
         {
           "file": "runtime/include/source_gpu_texture.h",
           "lines": [
-            "static inline int source_gpu_sprite_opcode(unsigned command) {",
-            "    return command>=0x60 && command<=0x7f;",
+            "#ifndef SOURCE_GPU_TEXTURE_H",
+            "#define SOURCE_GPU_TEXTURE_H"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_texture.h",
+          "lines": [
+            "#ifdef __cplusplus",
+            "extern \"C\" {",
+            "#endif"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_texture.h",
+          "lines": [
+            "typedef struct {",
+            "    uint32_t uv[3], window;",
+            "    uint16_t page, clut;",
+            "    int raw, load_clut;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_texture.h",
+          "lines": [
+            "",
+            "typedef struct {"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_texture.h",
+          "lines": [
+            "    uint32_t draw_mode, texture_window;",
+            "    int x, y, interlace, clip_left, clip_top, clip_right, clip_bottom;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_texture.h",
+          "lines": [
+            "",
+            "static inline int source_gpu_sprite_opcode(unsigned command)",
+            "{",
+            "    return command >= 0x60u && command <= 0x7fu;",
             "}",
-            "static inline unsigned source_gpu_sprite_class(unsigned command) { return (command>>3)&3u; }",
-            "/* Width and height of a sprite packet: from the size word for class 0, from",
-            " * the opcode otherwise. `words` is the packet base. */",
-            "static inline void source_gpu_sprite_extent(unsigned command,const uint32_t *words,",
-            "                                            unsigned *width,unsigned *height) {",
-            "    unsigned klass=source_gpu_sprite_class(command);",
-            "    if(klass){*width=*height=klass==1?1u:klass==2?8u:16u;return;}",
-            "    unsigned size=words[(command&4u)?3:2];",
-            "    *width=size&1023u;*height=(size>>16)&511u;",
-            "}"
+            "static inline unsigned source_gpu_sprite_class(unsigned command)",
+            "{",
+            "    return (command >> 3) & 3u;",
+            "}",
+            "static inline void source_gpu_sprite_extent(unsigned command, const uint32_t *words,",
+            "                                            unsigned *width, unsigned *height)",
+            "{",
+            "    unsigned size = source_gpu_sprite_class(command);",
+            "    if (size) {",
+            "        *width = *height = size == 1 ? 1u : size == 2 ? 8u : 16u;",
+            "    } else {",
+            "        uint32_t dimensions = words[(command & 4u) ? 3 : 2];",
+            "        *width = dimensions & 1023u;",
+            "        *height = (dimensions >> 16) & 511u;",
+            "    }",
+            "}",
+            "#ifdef __cplusplus",
+            "}",
+            "#endif"
           ]
         }
       ],
-      "note": "Mega Man X5 stopped at return 1589 on GP0 7D000000, a 16x16 raw textured sprite: the source projection admitted only the variable-size rectangles and the software renderer carried the same restriction. Derived from the source core's SPR_HELPER macro, whose len and fifo_fb_len formulas reproduce every value the projection already pinned. These shared helpers are the single definition the cost model and the renderer both use; if they go, both sides break. Commits 8eb45f93 and 20b06ddb."
+      "note": "Mega Man X5 stopped at return 1589 on GP0 7D000000, a 16x16 raw textured sprite: the source projection admitted only the variable-size rectangles and the software renderer carried the same restriction. Derived from the source core's SPR_HELPER macro, whose len and fifo_fb_len formulas reproduce every value the projection already pinned. These shared helpers are the single definition the cost model and the renderer both use; if they go, both sides break. Commits 8eb45f93 and 20b06ddb. superseded by T172 5608e347e05d; requalification pending the PS1B-102 Pegasus TAS rerun",
+      "repins": [
+        {
+          "as_of": "6c813943011a356e97d8ecd02341254637d9adb2",
+          "issue": "PS1B-167",
+          "dropped_lines": 13,
+          "from_blocks": 1,
+          "to_blocks": 6,
+          "replacement_blocks_added": 6,
+          "replacement_commits": [
+            "5608e347e05d"
+          ]
+        }
+      ]
     },
     {
       "id": "paused-drive-subq-cycle-20260915",
@@ -828,7 +1106,7 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "/* Source SubQBuf_Safe latch \u2014 the sector whose sub-Q the drive last decoded.",
+            "/* Source SubQBuf_Safe latch — the sector whose sub-Q the drive last decoded.",
             " * HandlePlayRead reads the sector AT CurSector and decodes its Q before",
             " * advancing the cursor, so the decoded position is the pre-increment value,",
             " * one behind the physical head tracked above. The source keeps calling",
@@ -837,12 +1115,6 @@
             " * which is exactly when source_drive_head_valid is cleared. -1 = never",
             " * decoded. */",
             "static int source_drive_subq_lba = -1;"
-          ]
-        },
-        {
-          "file": "runtime/src/cdrom.c",
-          "lines": [
-            "        source_drive_subq_lba=source_drive_head_lba;"
           ]
         },
         {
@@ -865,9 +1137,50 @@
           "lines": [
             "    source_drive_subq_lba=-1;"
           ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* T172 authored CD head. */",
+            "static void source_drive_head_update(void)",
+            "{",
+            "    if (!s_nymashock_drive || !source_drive_head_valid) return;",
+            "    uint64_t period = (mode_reg & 0x80) ?",
+            "        CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2 : CDROM_SINGLE_SPEED_SECTOR_CYCLES;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    while (source_drive_head_due <= psx_cycle_count) {",
+            "        source_drive_subq_lba = source_drive_head_lba;",
+            "        source_drive_head_lba += source_drive_head_lba < limit ? 1 : -8;",
+            "        if (source_drive_head_lba < -150) source_drive_head_lba = -150;",
+            "        source_drive_head_due += period;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* T172 end CD head. */",
+            ""
+          ]
         }
       ],
-      "note": "GetlocP returns SubQBuf_Safe, and the source keeps decoding sub-Q while the drive is stopped: Update() calls HandlePlayRead for DS_PAUSED and DS_STANDBY, whose tail runs CurSector++ then, while stopped, retreats nine whenever CurSector reaches SeekTarget+2. A paused drive therefore walks a nine-sector window, one decode per sector period. Reporting the last sector handed to the guest is correct only for the first tick after a Pause. Mega Man X5 returns 7311-7466 were the single GetlocP issued five frames after a Pause: source 185243, ours 185251, and twelve completed sector periods of the cycle from 185250 land on 185243 exactly. Scoped to a stopped Nymashock drive; the reading branch already matched and Octoshock titles never reach it."
+      "note": "GetlocP returns SubQBuf_Safe, and the source keeps decoding sub-Q while the drive is stopped: Update() calls HandlePlayRead for DS_PAUSED and DS_STANDBY, whose tail runs CurSector++ then, while stopped, retreats nine whenever CurSector reaches SeekTarget+2. A paused drive therefore walks a nine-sector window, one decode per sector period. Reporting the last sector handed to the guest is correct only for the first tick after a Pause. Mega Man X5 returns 7311-7466 were the single GetlocP issued five frames after a Pause: source 185243, ours 185251, and twelve completed sector periods of the cycle from 185250 land on 185243 exactly. Scoped to a stopped Nymashock drive; the reading branch already matched and Octoshock titles never reach it. superseded by T172 e37b39ab6c42; requalification pending the PS1B-102 Pegasus TAS rerun",
+      "repins": [
+        {
+          "as_of": "6c813943011a356e97d8ecd02341254637d9adb2",
+          "issue": "PS1B-167",
+          "dropped_lines": 1,
+          "from_blocks": 4,
+          "to_blocks": 6,
+          "replacement_blocks_added": 3,
+          "replacement_commits": [
+            "e37b39ab6c42"
+          ]
+        }
+      ]
     },
     {
       "id": "dualshock-query-model-45-20260915",
@@ -899,7 +1212,7 @@
           "lines": [
             "             * (axis5_sio_controller.md D8).",
             "             * That source index is the SECOND byte of the 0x4501 phase, i.e. the",
-            "             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 \u2014 not",
+            "             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 — not",
             "             * pad_response[3], which is the constant 0x02. Writing it there",
             "             * destroyed the constant and left a hard-coded analog-on in the real",
             "             * mode slot, so we answered 03 00 01 where the source answers",
@@ -931,7 +1244,7 @@
             "         * the data byte at position 3, which arrives paired with response index 2",
             "         * (frontio.c cases 0x4601, 0x4701, 0x4C01). The canned tables above are",
             "         * only the data == 0x00 variant, so a game that asks with 0x01 got the",
-            "         * wrong answer \u2014 Mega Man X5 issues 0x4C with 0x01 and the source replies",
+            "         * wrong answer — Mega Man X5 issues 0x4C with 0x01 and the source replies",
             "         * 07 where an unpatched table replies 04 (return 1098).",
             "         * Reply bytes 3..7 are the five phase-1 bytes; byte 2 is the phase-0 byte",
             "         * and does not vary. */",
@@ -1125,7 +1438,7 @@
             "                              [80]  clock_state.raster  (source_gpu_runtime.c)",
             "                              [160] draw_raster         (source_gpu_runtime.c)",
             "                              These `cycle`/`last_rise` values are INTERNAL",
-            "                              counters, not psx_cycle_count's time base \u2014 never",
+            "                              counters, not psx_cycle_count's time base — never",
             "                              rebase them; the fraction cross-check depends on",
             "                              that time base.                                   */",
             "    BS_SEC_GPU_SERVICE = 0x13, /* bounded-quad source GPU service: the service",
@@ -1269,16 +1582,6 @@
         {
           "file": "runtime/include/input_route_raster_clock.h",
           "lines": [
-            "/* Layout guard for #6 (see the campaign scope doc). 18 scalar fields",
-            " * (2 x uint64_t + 16 x uint32_t) = 16 + 64 = 80 bytes, no padding.",
-            " * If this fires, a field was added/removed/reordered and any serializer for the",
-            " * raster clock is stale. Resolve the discrepancy \u2014 do not \"fix\" the assert. */",
-            "#if defined(__cplusplus)",
-            "static_assert(sizeof(InputRouteRasterClock) == 80,",
-            "              \"raster clock layout changed; update the serializer\");",
-            "#else",
-            "_Static_assert(sizeof(InputRouteRasterClock) == 80,",
-            "               \"raster clock layout changed; update the serializer\");",
             "#endif",
             ""
           ]
@@ -1321,7 +1624,7 @@
             "",
             "/* Pure cycle-derived invariant: the fractional raster accumulator depends only",
             " * on the TOTAL cycles advanced since reset, not on how those cycles were sliced",
-            " * \u2014 fraction after N cycles is (N*103896) mod 65536. `cycle` is that total,",
+            " * — fraction after N cycles is (N*103896) mod 65536. `cycle` is that total,",
             " * because every advance adds the same delta to both `cycle` and the accumulator.",
             " *",
             " * This is the ONLY field cross-checked on load. scanline / field / readout_*",
@@ -1439,7 +1742,7 @@
             " *   so the tail pads 340 -> 344, which is what sizeof reports.",
             " * If this fires, a member was added/removed/reordered: the #8 accounting and the",
             " * BS_SEC_GPU_SERVICE serializer (source_gpu_service_wire_write/read) are stale.",
-            " * Resolve the discrepancy \u2014 do not \"fix\" the assert. */",
+            " * Resolve the discrepancy — do not \"fix\" the assert. */",
             "PSX_GPUPP_STATIC_ASSERT(sizeof(SourceGPUCommandProjection) == 344,",
             "    \"SourceGPUCommandProjection layout changed; update the #8 accounting\");",
             "#undef PSX_GPUPP_STATIC_ASSERT",
@@ -1547,7 +1850,7 @@
           "lines": [
             "/* v7 profile-aware section presence (amendment A): a section must exist",
             " * exactly when its subsystem is active. boot_state.c is shared code, so the",
-            " * three comparison-profile sections must NOT be always-required \u2014 under a",
+            " * three comparison-profile sections must NOT be always-required — under a",
             " * normal profile there is no raster clock, no source GPU service and no source",
             " * timers, and always-requiring them would break every normal boot state. */",
             "/* Deferred VBlank phase (reshaped #5). BS_SEC_IRQ is written before",
@@ -1667,7 +1970,7 @@
             "    /* Validate BEFORE creating anything, and write to a temporary that is only",
             "     * renamed into place on success. This kills the trap class where a refusal",
             "     * (or any write failure) inside the serializer leaves a zero-byte or short",
-            "     * artifact at `path` \u2014 a truncated file that still parses is the same",
+            "     * artifact at `path` — a truncated file that still parses is the same",
             "     * silent-stub failure, one layer down. */",
             "    if (!path || snprintf(tmp, sizeof tmp, \"%s.tmp\", path) >= (int)sizeof tmp)",
             "        return 0;",
@@ -1911,7 +2214,7 @@
             "        source_gpu_runtime_active()       != ((seen >> BS_SEC_GPU_SERVICE) & 1u) ||",
             "        timers_source_active()            != ((seen >> BS_SEC_TIMER_SRC) & 1u) ||",
             "        dma_src_active()                  != ((seen >> BS_SEC_DMA_SRC) & 1u)) {",
-            "        fprintf(stderr, \"boot_state: reject \u2014 comparison-profile section \"",
+            "        fprintf(stderr, \"boot_state: reject — comparison-profile section \"",
             "                        \"presence does not match the active profile \"",
             "                        \"(raster=%u service=%u timers=%u dma_src=%u)\\n\",",
             "                (unsigned)((seen >> BS_SEC_RASTER) & 1u),",
@@ -1954,13 +2257,13 @@
         {
           "file": "runtime/src/boot_state_replace.c",
           "lines": [
-            "/* boot_state_replace.c \u2014 atomic file replace for state saves.",
+            "/* boot_state_replace.c — atomic file replace for state saves.",
             " *",
             " * Separated from boot_state.c so the overwrite/refusal behaviour can be",
             " * regression-tested without linking the whole serializer.",
             " *",
             " * On Windows the CRT's rename() does NOT replace an existing target, and a",
-            " * remove()+rename() sequence is not atomic \u2014 a failure between them loses the",
+            " * remove()+rename() sequence is not atomic — a failure between them loses the",
             " * old file. MoveFileExW with MOVEFILE_REPLACE_EXISTING is the real atomic",
             " * replace. MOVEFILE_WRITE_THROUGH is added so the replace is not deferred.",
             " *",
@@ -2525,7 +2828,7 @@
             "",
             "/* BS_SEC_RASTER, instance [0]: the comparison raster clock owned by this module.",
             " * `cycle`/`last_rise` are INTERNAL counters (accumulated advanced cycles), not",
-            " * psx_cycle_count's time base \u2014 written as-is, never rebased. The wire reader",
+            " * psx_cycle_count's time base — written as-is, never rebased. The wire reader",
             " * refuses on a failed fraction/cycle cross-check. */",
             "uint32_t interrupts_raster_wire_bytes(void) { return INPUT_ROUTE_RASTER_WIRE_BYTES; }",
             "void interrupts_raster_wire_write(uint8_t *out) {",
@@ -2575,7 +2878,7 @@
             " * Restoring the VBlank phase is only meaningful when the state that DEFINES",
             " * that phase came with it. Under the raster comparison profile the phase lives",
             " * in BS_SEC_RASTER, so a blob written without that section would leave a zeroed",
-            " * raster clock behind a plausible-looking run \u2014 exactly the v4 no-stub",
+            " * raster clock behind a plausible-looking run — exactly the v4 no-stub",
             " * violation the old model-based refusal existed to prevent.",
             " *",
             " * So the predicate is now a PRESENCE question, not a model question: refuse",
@@ -2734,7 +3037,7 @@
         {
           "file": "runtime/src/main.cpp",
           "lines": [
-            "/* Savestate restore \u2192 audio pump: clear host output (declared early so"
+            "/* Savestate restore → audio pump: clear host output (declared early so"
           ]
         },
         {
@@ -2843,7 +3146,7 @@
             "         * re-plays the gap (observed: 170170042 -> 120, then \"reversed device",
             "         * time\" in source_gpu_runtime_advance). The guard on that rewind is",
             "         * s_devices_synced_cycle < target, which is TRUE BY CONSTRUCTION after a",
-            "         * restore \u2014 so it must be made resume-aware, not skipped.",
+            "         * restore — so it must be made resume-aware, not skipped.",
             "         *",
             "         * Every other loader in the tree already does this after a load",
             "         * (savestate.c:1102, psx_rewind.c:508, psx_selfcheck.c:787,",
@@ -3426,7 +3729,7 @@
             "    PstW w; pst_w_init(&w, out, SOURCE_GPU_SERVICE_WIRE_BYTES);",
             "    /* psx_cycle_count is restored exactly by BS_SEC_CLOCK, so every absolute",
             "     * stamp here (cycle, deadlines, frame_request_cycle, last_update) is",
-            "     * written as-is \u2014 no rebase. #7's existing delta-rebase is an identity op. */",
+            "     * written as-is — no rebase. #7's existing delta-rebase is an identity op. */",
             "    pst_w_u64(&w, clock_state.cycle);             pst_w_u64(&w, clock_state.gpu_deadline);",
             "    pst_w_u64(&w, clock_state.dma_deadline);      pst_w_u64(&w, clock_state.frame_request_cycle);",
             "    pst_w_u32(&w, clock_state.zero_reached);      pst_w_u32(&w, clock_state.frame_pending);",
@@ -3617,7 +3920,7 @@
             "    pst_w_u32(&w, source_timer1.target);    pst_w_i32(&w, source_timer1.counting);",
             "    pst_w_i32(&w, source_timer1.blank);",
             "    /* Absolute guest-cycle stamp: psx_cycle_count restores exactly (BS_SEC_CLOCK),",
-            "     * so written as-is. Note cycles_until_due() would CLAMP a past value to 0 \u2014",
+            "     * so written as-is. Note cycles_until_due() would CLAMP a past value to 0 —",
             "     * it is for future deadlines and must not be reused for a past stamp. */",
             "    pst_w_u64(&w, source_timer1_cycle);",
             "    pst_w_u32(&w, source_timer2.counter);   pst_w_u32(&w, source_timer2.mode);",
@@ -3625,7 +3928,7 @@
             "    pst_w_i32(&w, source_timer2.irq_done);  pst_w_i32(&w, source_timer2.counting);",
             "    /* Relative period counters (timers.c:289-293 uses deadline-elapsed and",
             "     * flushes when elapsed==deadline; timers.c:178 reloads it as a period",
-            "     * length) \u2014 not absolute, so no rebase. */",
+            "     * length) — not absolute, so no rebase. */",
             "    pst_w_u32(&w, source_timer2_elapsed);   pst_w_u32(&w, source_timer2_deadline);",
             "}",
             "int timers_source_wire_read(const uint8_t *in, uint32_t len) {",
@@ -3670,9 +3973,180 @@
             "            run_pc = cpu->pc;",
             "        }"
           ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "#ifndef INPUT_ROUTE_RASTER_CLOCK_H",
+            "#define INPUT_ROUTE_RASTER_CLOCK_H"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "typedef struct {"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "    uint32_t fraction, remaining, phase, alternate, scanline, lines, field, mode;",
+            "    uint32_t start, end, blank, rises, y_start, y_offset, readout_y, readout_field;"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "typedef void (*InputRouteRasterEvent)(void *, uint64_t, unsigned, int);"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "/* Independent measured timing model. See raster_clock_provenance.json. */",
+            "static inline void input_route_raster_reset(InputRouteRasterClock *s)",
+            "{",
+            "    *s = (InputRouteRasterClock){0};",
+            "    s->remaining = 3212;",
+            "    s->lines = 263;",
+            "    s->start = 16;",
+            "    s->end = 256;",
+            "    s->blank = 1;"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "static inline void input_route_raster_boundary(InputRouteRasterClock *s,",
+            "    uint64_t time, InputRouteRasterEvent event, void *context)",
+            "{",
+            "    if (!s->phase) {",
+            "        s->phase = 1;",
+            "        s->remaining = 200;",
+            "        if (event) event(context, time, 1, (int)s->blank);",
+            "        return;",
+            "    }",
+            "    s->phase = 0;",
+            "    s->alternate ^= 1;",
+            "    s->remaining = 3213 - s->alternate;",
+            "    ++s->scanline;",
+            "    if (s->scanline == s->lines - 1)",
+            "        s->field = (s->mode & 32) ? (s->field ^ 1) : 0;",
+            "    if (s->scanline >= s->lines) {",
+            "        s->scanline = 0;",
+            "        s->lines = 263 - s->field;",
+            "    }",
+            "    unsigned old_blank = s->blank;",
+            "    if (s->scanline == s->end) {",
+            "        s->blank = 1;",
+            "        if (!old_blank) {",
+            "            s->y_offset = 0;",
+            "            s->readout_field = (s->mode & 36) == 36 ? (s->field ^ 1) : 0;"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "    }",
+            "    if (s->scanline == s->start) s->blank = 0;",
+            "    if (s->blank != old_blank) {",
+            "        if (s->blank) {",
+            "            s->last_rise = time;",
+            "            ++s->rises;"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "        if (event) event(context, time, 2, (int)s->blank);",
+            "    }",
+            "    s->readout_y = s->y_start;",
+            "    if (!s->blank) {",
+            "        unsigned offset = s->y_offset;",
+            "        if ((s->mode & 36) == 36) offset = offset * 2 + s->readout_field;",
+            "        s->readout_y = (s->y_start + offset) & 511;",
+            "        s->y_offset = (s->y_offset + 1) & 511;"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "static inline void input_route_raster_advance_observed(InputRouteRasterClock *s,",
+            "    uint32_t cycles, InputRouteRasterEvent event, void *context)",
+            "{",
+            "    uint64_t fixed = s->fraction + (uint64_t)cycles * 103896;",
+            "    uint64_t ticks = fixed >> 16, consumed = 0;",
+            "    while (ticks >= s->remaining) {",
+            "        consumed += s->remaining;",
+            "        ticks -= s->remaining;",
+            "        uint64_t time = s->cycle + (consumed * 65536 - s->fraction + 103895) / 103896;",
+            "        input_route_raster_boundary(s, time, event, context);",
+            "    }",
+            "    s->remaining -= (uint32_t)ticks;",
+            "    s->fraction = (uint32_t)fixed & 65535;",
+            "    s->cycle += cycles;"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "static inline void input_route_raster_advance(InputRouteRasterClock *s, uint32_t cycles)",
+            "{",
+            "    input_route_raster_advance_observed(s, cycles, 0, 0);",
+            "}",
+            "",
+            "static inline int input_route_raster_gp1(InputRouteRasterClock *s, uint32_t word)",
+            "{",
+            "    switch ((word >> 24) & 63) {",
+            "    case 0: s->mode = 0; s->start = 16; s->end = 256; s->y_start = 0; break;",
+            "    case 5: s->y_start = (word >> 10) & 511; break;",
+            "    case 7: s->start = word & 1023; s->end = (word >> 10) & 1023; break;",
+            "    case 8:",
+            "        if (word & 8) return 0;",
+            "        s->mode = word & 255;",
+            "        break;"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "static inline uint32_t input_route_raster_status(const InputRouteRasterClock *s)",
+            "{",
+            "    return ((s->field ^ 1u) << 13) | ((s->readout_y & 1u) << 31);"
+          ]
+        },
+        {
+          "file": "runtime/include/input_route_raster_clock.h",
+          "lines": [
+            "static inline uint32_t input_route_raster_until_rise(const InputRouteRasterClock *s)",
+            "{",
+            "    InputRouteRasterClock future = *s;",
+            "    uint64_t ticks = 0;",
+            "    /* Two complete fields cover a missed start or an interlace-length change. */",
+            "    for (unsigned edge = 0; edge < 1056; ++edge) {",
+            "        ticks += future.remaining;",
+            "        input_route_raster_boundary(&future, 0, 0, 0);",
+            "        if (future.rises != s->rises) {",
+            "            uint64_t distance = (ticks * 65536 - s->fraction + 103895) / 103896;",
+            "            return distance > UINT32_MAX ? UINT32_MAX : (uint32_t)distance;",
+            "        }"
+          ]
         }
       ],
-      "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion. Evolved for T168: restore retained section staging and canonical commit order; perform v10 content/presence/allocation admission before mutations. The old two-pass shape/apply path failed118/166 full-runtime checks. Updated blocks retain checkpoint semantics and reject malformed states atomically; current expanded fixture passes202 default and260 comparison-profile checks. This is not a new full-route replay verdict."
+      "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion. Evolved for T168: restore retained section staging and canonical commit order; perform v10 content/presence/allocation admission before mutations. The old two-pass shape/apply path failed118/166 full-runtime checks. Updated blocks retain checkpoint semantics and reject malformed states atomically; current expanded fixture passes202 default and260 comparison-profile checks. This is not a new full-route replay verdict. superseded by T172 a01f2f6cede9; requalification pending the PS1B-102 Pegasus TAS rerun",
+      "repins": [
+        {
+          "as_of": "6c813943011a356e97d8ecd02341254637d9adb2",
+          "issue": "PS1B-167",
+          "dropped_lines": 10,
+          "from_blocks": 147,
+          "to_blocks": 159,
+          "replacement_blocks_added": 12,
+          "replacement_commits": [
+            "a01f2f6cede9"
+          ]
+        }
+      ]
     },
     {
       "id": "tas-checkpoint-manifest-identity",
@@ -3766,7 +4240,7 @@
           "lines": [
             "",
             "/* Guest RAM accessor (memory.c). Declared here so the manifest/digest call",
-            " * sites \u2014 including C++ \u2014 share one C-linkage declaration. */",
+            " * sites — including C++ — share one C-linkage declaration. */",
             "#ifdef __cplusplus",
             "extern \"C\" {",
             "#endif",
@@ -3789,7 +4263,7 @@
             "    uint32_t           entry_pc;",
             "    unsigned long long state_bytes;",
             "    /* v7 identity: the whole resolved configuration, not a hand-written flag",
-            "     * list, plus the two things a flag list can never cover \u2014 the exact runtime",
+            "     * list, plus the two things a flag list can never cover — the exact runtime",
             "     * binary and the exact route content. */",
             "    char               config_digest[65];",
             "    char               exe_sha256[65];",
@@ -3839,7 +4313,7 @@
             "    return 0;",
             "}",
             "",
-            "/* FNV-1a over guest RAM \u2014 same family as the RAM page probe, cheap enough to",
+            "/* FNV-1a over guest RAM — same family as the RAM page probe, cheap enough to",
             " * run once per checkpoint. */",
             "static inline uint64_t source_tas_stateio_ram_digest(const uint8_t *ram, size_t bytes) {",
             "    uint64_t h = UINT64_C(14695981039346656037);",
@@ -4171,7 +4645,7 @@
         {
           "file": "runtime/src/source_stateio_identity.c",
           "lines": [
-            "/* source_stateio_identity.c \u2014 v7 checkpoint identity dimensions.",
+            "/* source_stateio_identity.c — v7 checkpoint identity dimensions.",
             " *",
             " * Its own TU so it can include <windows.h> for the executable path without",
             " * dragging that into headers shared with main.cpp. */",
