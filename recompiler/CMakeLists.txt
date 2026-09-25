@@ -579,6 +579,16 @@ if(BUILD_TESTING)
             target_include_directories(tas_gpu_ready_transfer_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_ready_transfer_${_mode} PRIVATE -${_mode} -UNDEBUG)
             add_test(NAME tas_gpu_ready_transfer_${_mode} COMMAND tas_gpu_ready_transfer_${_mode})
+            # PS1B-182: oracle GPU logs replayed through the timing table. Skips
+            # (77) when the logs (lab share, not committed) are absent.
+            add_executable(tas_gpu_oracle_replay_${_mode}
+                ../runtime/tests/test_source_gpu_oracle_replay.c)
+            target_include_directories(tas_gpu_oracle_replay_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_oracle_replay_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_oracle_replay_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_oracle_replay.py
+                $<TARGET_FILE:tas_gpu_oracle_replay_${_mode}>)
+            set_tests_properties(tas_gpu_oracle_replay_${_mode} PROPERTIES SKIP_RETURN_CODE 77)
             add_executable(tas_gpu_line_${_mode}
                 ../runtime/tests/test_source_gpu_line.c ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)

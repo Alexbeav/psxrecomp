@@ -62,14 +62,6 @@ PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandDispatch, words) == 2 * sizeof(
 PSX_GPUPP_STATIC_ASSERT(sizeof(((SourceGPUCommandProjection *)0)->queue) == 32 * sizeof(uint32_t), "queue words");
 PSX_GPUPP_STATIC_ASSERT(offsetof(SourceGPUCommandProjection, queue) == sizeof(int32_t), "budget then queue");
 
-/* The cost tally collects geometry; the timing table prices it. */
-typedef struct SourceGPUCostTally {
-    const SourceGPUCommandProjection *state;
-    unsigned opcode;
-    int reads_back, all_rows, drawn_rows;
-    int64_t quarters;          /* quarter CPU clocks */
-} SourceGPUCostTally;
-#include "source_gpu_command_timing.h"
 
 /* Phase values. 0 = no command in progress. */
 enum { SOURCE_GPU_PHASE_IDLE = 0, SOURCE_GPU_PHASE_QUAD_SECOND = 2,
@@ -145,6 +137,9 @@ static inline unsigned source_gpu_command_length(uint32_t word)
     }
 }
 
+/* Timing values live in one table; see its header for their sources. */
+#include "source_gpu_command_timing.h"
+
 /* Words received before GPUSTAT.28 (ready for DMA block) drops. PSX-SPX
  * "Ready Bits": polygon and line commands drop it right after the command
  * word; every other command once the command and all its parameters arrive. */
@@ -152,6 +147,7 @@ static inline unsigned source_gpu_command_feedback_length(uint32_t word)
 {
     unsigned opcode = source_gpu_opcode(word);
     if (source_gpu_polygon_supported(opcode) || source_gpu_line_supported(opcode)) return 1u;
+    if (source_gpu_sprite_opcode(opcode)) return SOURCE_GPU_T_RECT_FEEDBACK(opcode);
     return source_gpu_command_length(word);
 }
 
@@ -167,13 +163,15 @@ static inline int source_gpu_command_known(unsigned opcode)
     }
 }
 
-/* No$PSX "GPU FIFO", FIFO Prefetch: NOP, DRAWAREA (E3h/E4h), DRAWBASE (E5h)
- * and MASKBITS (E6h) execute as soon as they reach the head of the FIFO, even
- * while a rendering command is busy. Words queued behind another command stay
- * in order. */
+/* Commands that execute on reaching the FIFO head without waiting for credit:
+ * NOP, drawing area (E3h/E4h) and drawing offset (E5h). Oracle-observed: with
+ * an empty FIFO these run at once even at negative credit, and cost nothing;
+ * MASKBITS (E6h) queues and is charged like E1h. (No$PSX "GPU FIFO" lists
+ * E6h with the immediate group; the oracle does not.) Words queued behind
+ * another command stay in order. */
 static inline int source_gpu_command_immediate(unsigned opcode)
 {
-    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE6u);
+    return opcode == 0x00u || (opcode >= 0xE3u && opcode <= 0xE5u);
 }
 
 /* No$PSX "GPU FIFO", FIFO Prefetch: words a command may take out of the FIFO
@@ -229,15 +227,10 @@ static inline int source_gpu_command_reads_back(const SourceGPUCommandProjection
 }
 
 
-static inline void source_gpu_command_polygon_row(void *context, int raw_y, int physical_x,
-                                                  int width, int raw_interpolation_x)
-{
-    SourceGPUCostTally *tally = (SourceGPUCostTally *)context;
-    (void)raw_y; (void)physical_x; (void)raw_interpolation_x;
-    tally->drawn_rows++;
-    tally->quarters += SOURCE_GPU_T_POLYGON_ROW(tally, width);
-}
-
+/* Polygon work: a fixed set-up charge per triangle half plus the scanline
+ * walk of source_gpu_polygon_projection.h (pixels per drawn row, doubled for
+ * gouraud or textured, plus the read-back share for semi-transparency or mask
+ * check, and a charge per row outside the drawing area). */
 static inline int source_gpu_command_polygon_cost(const SourceGPUCommandProjection *s,
                                                   const uint32_t *words, int second)
 {
@@ -248,22 +241,15 @@ static inline int source_gpu_command_polygon_cost(const SourceGPUCommandProjecti
         x[i] = source_gpu_command_coord(words[1 + stride * v], 0) + s->offset_x;
         y[i] = source_gpu_command_coord(words[1 + stride * v], 16) + s->offset_y;
     }
-    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), 0, 0, 0 };
-    int low = y[0], high = y[0];
-    for (unsigned i = 1; i < 3; ++i) {
-        if (y[i] < low) low = y[i];
-        if (y[i] > high) high = y[i];
-    }
-    tally.all_rows = high - low;   /* polygons exclude their bottom row */
-    int walked = source_poly_walk(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,
-                                  0, 0, source_gpu_command_interlaced(s), s->skip_field,
-                                  source_gpu_command_polygon_row, &tally);
-    if (walked < 0) return -1;
-    tally.quarters += SOURCE_GPU_T_POLYGON_TRIANGLE(&tally);
-    return SOURCE_GPU_T_CLOCKS(tally.quarters);
+    int work = source_poly_cost(x, y, s->clip_x0, s->clip_y0, s->clip_x1, s->clip_y1,
+                                (opcode & 0x14u) != 0, source_gpu_command_reads_back(s, opcode),
+                                source_gpu_command_interlaced(s), s->skip_field);
+    if (work < 0) return -1;
+    return SOURCE_GPU_T_POLYGON_SETUP(opcode, second) + work;
 }
 
-/* Rectangle area after clipping to the drawing area (PSX-SPX E3h/E4h). */
+/* Rectangle work: set-up plus, per drawn row inside the drawing area, one unit
+ * per pixel and, with read-back, one per aligned pixel pair touched. */
 static inline int source_gpu_command_sprite_cost(const SourceGPUCommandProjection *s,
                                                  const uint32_t *words)
 {
@@ -275,25 +261,23 @@ static inline int source_gpu_command_sprite_cost(const SourceGPUCommandProjectio
     int x1 = left + (int)width - 1 < s->clip_x1 ? left + (int)width - 1 : s->clip_x1;
     int y0 = top > s->clip_y0 ? top : s->clip_y0;
     int y1 = top + (int)height - 1 < s->clip_y1 ? top + (int)height - 1 : s->clip_y1;
-    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode), (int)height, 0, 0 };
-    if (x1 >= x0) {
-        for (int row = y0; row <= y1; ++row) {
-            if (source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field) continue;
-            tally.drawn_rows++;
-            tally.quarters += SOURCE_GPU_T_SPRITE_ROW(&tally, x1 - x0 + 1);
-        }
-    }
-    tally.quarters += SOURCE_GPU_T_SPRITE_RECT(&tally);
-    return SOURCE_GPU_T_CLOCKS(tally.quarters);
+    int cost = SOURCE_GPU_T_SPRITE_SETUP;
+    if (x1 < x0 || y1 < y0) return cost;
+    int per_row = (x1 - x0 + 1) * SOURCE_GPU_T_SPRITE_PIXEL;
+    if (source_gpu_command_reads_back(s, opcode))
+        per_row += SOURCE_GPU_T_SPRITE_PAIR * ((x1 >> 1) - (x0 >> 1) + 1);
+    for (int row = y0; row <= y1; ++row)
+        if (!(source_gpu_command_interlaced(s) && ((unsigned)row & 1u) == s->skip_field))
+            cost += per_row;
+    return cost;
 }
-
 /* GP0(02h): PSX-SPX "Masking and Rounding for FILL Command parameters". */
 static inline int source_gpu_command_fill_cost(const uint32_t *words)
 {
     unsigned width = ((words[2] & 0x3FFu) + 0x0Fu) & ~0x0Fu;
     unsigned height = (words[2] >> 16) & 0x1FFu;
     if (!height) return 0;
-    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_FILL(width, height));
+    return SOURCE_GPU_T_FILL(width, height);
 }
 
 /* GP0(80h): PSX-SPX "Masking for COPY Commands parameters". */
@@ -302,7 +286,7 @@ static inline int source_gpu_command_copy_cost(const SourceGPUCommandProjection 
 {
     unsigned width = ((words[3] & 0xFFFFu) - 1u) % 0x400u + 1u;
     unsigned height = ((words[3] >> 16) - 1u) % 0x200u + 1u;
-    return SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0));
+    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);
 }
 
 static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection *s,
@@ -327,10 +311,8 @@ static inline int source_gpu_command_line_cost(const SourceGPUCommandProjection 
     int top = ay < by ? ay : by, bottom = ay < by ? by : ay;
     int first = top > s->clip_y0 ? top : s->clip_y0;
     int last = bottom < s->clip_y1 ? bottom : s->clip_y1;
-    SourceGPUCostTally tally = { s, opcode, source_gpu_command_reads_back(s, opcode),
-                                 dy + 1, last >= first ? last - first + 1 : 0, 0 };
-    tally.quarters = SOURCE_GPU_T_LINE(&tally, dx, dy);
-    return SOURCE_GPU_T_CLOCKS(tally.quarters);
+    return SOURCE_GPU_T_LINE(opcode, source_gpu_command_reads_back(s, opcode), dx, dy,
+                             last >= first ? last - first + 1 : 0);
 }
 
 /* ---- FIFO ---------------------------------------------------------------- */
@@ -444,7 +426,7 @@ static inline int source_gpu_command_start_line(SourceGPUCommandProjection *s)
     unsigned length = source_gpu_command_length(s->queue[0]);
     uint32_t words[4];
     for (unsigned i = 0; i < length; ++i) words[i] = source_gpu_command_pop(s);
-    s->budget -= source_gpu_command_line_cost(s, words);
+    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_line_cost(s, words);
     s->command = opcode;
     if (source_gpu_line_polyline(opcode)) {
         s->pline = 1;
@@ -479,7 +461,7 @@ static inline int source_gpu_command_start_block(SourceGPUCommandProjection *s)
     unsigned length = source_gpu_command_length(s->queue[0]);
     uint32_t words[4];
     for (unsigned i = 0; i < length; ++i) words[i] = source_gpu_command_pop(s);
-    s->budget -= source_gpu_command_block_cost(s, words);
+    s->budget -= SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, words);
     s->command = opcode;
     source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_COMMAND, words, length);
     return 1;
@@ -536,7 +518,7 @@ static inline int source_gpu_command_process(SourceGPUCommandProjection *s)
     if (!s->count || s->budget < SOURCE_GPU_T_ADMIT_AT) return 0;
     if (s->phase == SOURCE_GPU_PHASE_UPLOAD) {
         uint32_t word = source_gpu_command_pop(s);
-        s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));
+        s->budget -= SOURCE_GPU_T_UPLOAD_WORD;
         source_gpu_command_publish(s, SOURCE_GPU_DISPATCH_UPLOAD_WORD, &word, 1);
         if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;
         return 1;
@@ -594,26 +576,25 @@ static inline int source_gpu_command_update(SourceGPUCommandProjection *s, uint6
     return !s->error;
 }
 
-/* GPUSTAT.28. No$PSX "GPU Status Register" / "Ready Bits": "Write FIFO empty".
- * During A0h and C0h data transfers it is exactly that. Otherwise, per the
- * same section and PSX-SPX a253f078 "Ready Bits", it drops while a command
- * executes, once a command has all its parameters, and right after a polygon
- * or line command word. */
+/* GPUSTAT.28 (oracle-observed). During A0h and C0h data phases it is "write
+ * FIFO empty". While a quad's second half or a poly-line is pending it is 0.
+ * When idle it is 1 while fewer words are queued than the head command's
+ * threshold (timing table). Drawing credit is not consulted. No$PSX "Ready
+ * Bits" words the idle rule as clearing while a command executes. */
 static inline int source_gpu_command_ready(const SourceGPUCommandProjection *s)
 {
     if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)
         return source_gpu_command_fifo_size(s) == 0;
     if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;
-    if (s->budget < 0) return 0;
     if (!s->count) return 1;
-    return s->count < source_gpu_command_feedback_length(s->queue[0]);
+    return s->count < SOURCE_GPU_T_READY_BELOW(s->queue[0]);
 }
 
 /* GPUREAD during a C0h transfer consumes one data word. No time passes. */
 static inline void source_gpu_command_read(SourceGPUCommandProjection *s)
 {
     if (s->phase != SOURCE_GPU_PHASE_DOWNLOAD || !s->transfer_words) return;
-    s->budget -= SOURCE_GPU_T_CLOCKS(SOURCE_GPU_T_TRANSFER_WORD(s));
+    s->budget -= SOURCE_GPU_T_READ_WORD;
     if (!--s->transfer_words) s->phase = SOURCE_GPU_PHASE_IDLE;
 }
 

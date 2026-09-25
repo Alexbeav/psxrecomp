@@ -1,27 +1,28 @@
-/* Source GPU command timing table. Approved by Alex 2026-09-25 (PS1B-166 G2).
+/* Source GPU command timing table (TAS/source mode).
  *
- * Budget unit: one 33.8688 MHz CPU clock. Costs are summed in quarter clocks
- * and rounded up to whole clocks once per command.
+ * Policy (Alex, 2026-09-25, PS1B-182): in TAS/source mode GPU timing and
+ * readiness follow the TAS oracle. Every value below is [ORACLE]: fitted to
+ * the PS1B-182 oracle GPU logs (Z:/Share/psxrecomp/evidence/T172/
+ * ps1b-182-oracle-gpu-logs-20260925/), observed behaviour only, and it
+ * reproduces every logged charge of its class exactly. The route and row
+ * counts behind each value are given next to it. The No$PSX "GPU Rendering
+ * Timings" / "GPU FIFO" value (sha256 a3b2131f3774..., 5767a2b3a5c8...) is
+ * quoted beside it for comparison.
  *
- * [DOC] No$PSX "GPU Rendering Timings" (problemkaputt.de/psx-spx.htm fetched
- *       2026-09-25, SHA-256 7879668170a8...; section extract a3b2131f3774...).
- *       New GPU values are used throughout; Old GPU values are ignored.
- *       FIFO depth and prefetch: No$PSX "GPU FIFO" (section extract 5767a2b3a5c8...).
- * [TEST] test-derived; origin = pre-T172 test goldens; hardware measurement
- *       owed. Used only for credit bookkeeping and model-scope rules, which
- *       the documentation does not cover.
+ * [NOT OBSERVED] marks a rule no logged route exercises yet. It keeps the
+ * documented behaviour until data exists.
+ *
+ * Budget unit: half a CPU clock (credit is 2 per CPU cycle).
  */
 #ifndef PSX_SOURCE_GPU_COMMAND_TIMING_H
 #define PSX_SOURCE_GPU_COMMAND_TIMING_H
 
-#define SOURCE_GPU_T_CLOCKS(quarters) ((int)(((quarters) + 3) / 4))
-
-/* ---- Credit ---------------------------------------------------------------- */
-
-/* [DOC] "Oscillators": rendering is bound to the 33 MHz CPU clock, so one
- * elapsed CPU cycle is one clock of credit. */
-#define SOURCE_GPU_T_CREDIT_PER_CYCLE 1
-/* [TEST] command_projection:49 — the most credit an idle GPU banks. */
+/* ---- Credit -------------------------------------------------------------------
+ * [ORACLE] +2 per elapsed CPU cycle, capped at 256 (T3 route-05: 7,092 rows;
+ * MMX5 route-03: 14,567,011 rows; no mismatch). No$PSX: rendering runs on the
+ * 33 MHz CPU clock; 0.50/0.25-clock steps "may rely on the GPU being clocked
+ * at twice 33MHz". */
+#define SOURCE_GPU_T_CREDIT_PER_CYCLE 2
 #define SOURCE_GPU_T_CREDIT_LIMIT 256
 #define SOURCE_GPU_T_CREDIT(s, elapsed) source_gpu_t_credit((s)->budget, (elapsed))
 static inline int32_t source_gpu_t_credit(int32_t budget, uint64_t elapsed)
@@ -31,129 +32,132 @@ static inline int32_t source_gpu_t_credit(int32_t budget, uint64_t elapsed)
     return (int32_t)credit;
 }
 
-/* [TEST] command_projection:53,102 — a command starts at zero credit. */
+/* [ORACLE] a queued command starts once credit is >= 0, one command per
+ * service call (T3, MMX5 W/D/C rows). */
 #define SOURCE_GPU_T_ADMIT_AT 0
-/* [TEST] command_projection:102-103 — charge for TEXPAGE, TEXWINDOW, FLUSHCACHE
- * and transfer set-up, which the documentation gives no time for. Drawing
- * commands are priced by the [DOC] tables alone; NOP and E3h-E6h cost nothing. */
+
+/* [ORACLE] charge for 01h, E1h, E2h, E6h, A0h/C0h set-up (MMX5: 801,826 E1h,
+ * 10,624 E2h, 10,630 E6h, 11,759 01h, 11,756 A0h, 3 C0h), and the command part
+ * of rectangles, lines, fills and copies. NOP and E3h-E5h cost 0 (MMX5:
+ * 57,380 / 20,933 each). No$PSX gives no time for attributes. */
 #define SOURCE_GPU_T_COMMAND_OVERHEAD 2
 
-/* ---- Polygons [DOC] "Polygons", New GPU -------------------------------------- */
+/* ---- Polygons -------------------------------------------------------------------
+ * [ORACLE] set-up per triangle half; the rest is the scanline walk of
+ * source_gpu_polygon_projection.h. MMX5 residuals are constant per class:
+ *   first half: flat 84 (8,914), textured 264 (180,584), gouraud 372 (14,076)
+ *   second half: flat 46 (296), textured 226 (180,584), gouraud 334 (13,716)
+ * Semi-transparency does not change the set-up (textured 35,911; gouraud 2,220).
+ * Gouraud+textured: extra 450, not 180+288 [ORACLE, authored fixture: all 1,536
+ * cases of source_gpu_shaded_texture_family_fixtures.json, both halves].
+ * No$PSX precalc: 10 base, +90 textured, +150 gouraud clocks (= 20/180/300
+ * half-clocks). The textured extra (180) matches No$PSX; base and gouraud differ. */
+#define SOURCE_GPU_T_POLY_FIRST 84
+#define SOURCE_GPU_T_POLY_SECOND 46
+#define SOURCE_GPU_T_POLY_TEXTURED 180
+#define SOURCE_GPU_T_POLY_GOURAUD 288
+#define SOURCE_GPU_T_POLY_GOURAUD_TEXTURED 450
+#define SOURCE_GPU_T_POLYGON_SETUP(op, second) \
+    (((second) ? SOURCE_GPU_T_POLY_SECOND : SOURCE_GPU_T_POLY_FIRST) + \
+     ((((op) & 0x14u) == 0x14u) ? SOURCE_GPU_T_POLY_GOURAUD_TEXTURED : \
+      (((op) & 0x04u) ? SOURCE_GPU_T_POLY_TEXTURED : 0) + (((op) & 0x10u) ? SOURCE_GPU_T_POLY_GOURAUD : 0)))
 
-static inline int source_gpu_t_shaded_or_textured(unsigned opcode) { return (opcode & 0x14u) != 0; }
+/* ---- Rectangles ------------------------------------------------------------------
+ * [ORACLE] command charge 2 + set-up 16 + per drawn row: 1 per pixel, and with
+ * semi-transparency 1 per aligned pixel pair (MMX5: 4,125,621 rects, all five
+ * observed classes constant residual 18). Texture and CLUT cache work is the
+ * renderer's own charge (dispatch sink), logged separately.
+ * No$PSX New GPU: per scanline 1.00-3.50 by width, 0.50 per pixel (pairs). */
+#define SOURCE_GPU_T_SPRITE_SETUP 16
+#define SOURCE_GPU_T_SPRITE_PIXEL 1
+#define SOURCE_GPU_T_SPRITE_PAIR 1
+/* [ORACLE] DMA feedback threshold of a rectangle at the FIFO head: 2, +1 if
+ * textured, +1 (OR) if variable size (MMX5 GPUSTAT: 0x7D ready at 1-2 words,
+ * not at 3; 0x62/0x7F not ready at 3). */
+#define SOURCE_GPU_T_RECT_FEEDBACK(op) \
+    (2u | (((op) >> 2) & 1u) | (source_gpu_sprite_class(op) == 0 ? 1u : 0u))
 
-/* Per triangle: precalc, plus 1.00 per any scanline of its Y span. */
-#define SOURCE_GPU_T_POLYGON_TRIANGLE(t) source_gpu_t_polygon_triangle(t)
-static inline int64_t source_gpu_t_polygon_triangle(const SourceGPUCostTally *t)
+/* ---- Lines ----------------------------------------------------------------------
+ * [ORACLE, authored fixture] No route log so far draws lines. The oracle's
+ * outputs for the 512 authored single-line cases in
+ * runtime/tests/source_gpu_line_fixtures.json fit exactly: 16 per segment plus
+ * 2 per step of the major axis, or 16 alone when the segment is too long to
+ * draw (dx >= 1024 or dy >= 512, PSX-SPX "Vertex" size limit). Semi-transparency,
+ * mask check, clip and interlace field do not change it. The opening segment
+ * also pays the command charge; later poly-line segments do not
+ * (test_source_gpu_line.c). Gouraud lines: [NOT OBSERVED], same rule assumed.
+ * No$PSX New GPU: 40 (+60 gouraud) clocks precalc, 1 per pixel horizontal,
+ * 2 otherwise, 2-5.5 per scanline. */
+#define SOURCE_GPU_T_LINE_SETUP 16
+#define SOURCE_GPU_T_LINE_STEP 2
+static inline int source_gpu_t_line(unsigned op, int reads_back, int dx, int dy, int drawn_rows)
 {
-    int64_t q = 40;                                   /* 10.00 base precalc */
-    if (t->opcode & 0x04u) q += 360;                  /* 90.00 textured */
-    if (t->opcode & 0x10u) q += 600;                  /* 150.00 gouraud */
-    return q + 4 * (int64_t)t->all_rows;              /* 1.00 per any-scanline */
+    (void)op; (void)reads_back; (void)drawn_rows;
+    if (dx >= 1024 || dy >= 512) return SOURCE_GPU_T_LINE_SETUP;
+    return SOURCE_GPU_T_LINE_SETUP + SOURCE_GPU_T_LINE_STEP * (dx > dy ? dx : dy);
 }
-
-/* Per drawn scanline of the given width. */
-#define SOURCE_GPU_T_POLYGON_ROW(t, width) source_gpu_t_polygon_row((t), (width))
-static inline int64_t source_gpu_t_polygon_row(const SourceGPUCostTally *t, int width)
+#define SOURCE_GPU_T_LINE(op, rb, dx, dy, rows) source_gpu_t_line((op), (rb), (dx), (dy), (rows))
+/* ---- Fill and copy ------------------------------------------------------------------
+ * [NOT FITTED] MMX5 has one size per class: every fill is 320x240 and costs
+ * 11,808 in total (10,298 rows); every copy is 2x1 and costs 6 (10,298 rows).
+ * One size cannot fix a formula, so these keep No$PSX New GPU in half-clocks
+ * (fill 2 per 16 px + 10 per row; copy 2.5 per pixel + 39 per row) and do not
+ * yet match the oracle. */
+static inline int source_gpu_t_fill(unsigned width, unsigned height)
 {
-    int rich = source_gpu_t_shaded_or_textured(t->opcode);
-    int64_t q;
-    if (!t->reads_back) {
-        q = 4;                                        /* 1.00 per scanline */
-        if (!rich) {
-            static const int by_width[8] = { 0, 8, 6, 5, 3, 3, 2, 2 };
-            q += width < 8 ? by_width[width] : 0;     /* 2.00/1.50/1.25/0.75/0.50/0 */
-        }
-    } else if (rich) {
-        q = 8;                                        /* 2.00 per scanline */
-    } else {
-        q = 21 + 15 * (int64_t)((width + 15) / 16);   /* 5.25 + 3.75 per 16pix chunk */
-    }
-    /* Exact pixel count: No$ states pixel-pair rounding only for Rectangles. */
-    return q + (rich ? 4 : 2) * (int64_t)width;       /* 1.00 or 0.50 per pixel */
+    return (int)((width / 16u) * 2u * height + 10u * height);
 }
-
-/* ---- Rectangles [DOC] "Rectangles", New GPU ---------------------------------- */
-
-#define SOURCE_GPU_T_SPRITE_ROW(t, width) source_gpu_t_sprite_row((t), (width))
-static inline int64_t source_gpu_t_sprite_row(const SourceGPUCostTally *t, int width)
+static inline int source_gpu_t_copy(unsigned width, unsigned height, int mask_check)
 {
-    int64_t q;
-    if (t->reads_back) {
-        q = 24 + 15 * (int64_t)((width + 15) / 16);   /* 6.00 + 3.75 per 16pix chunk */
-    } else {
-        q = width == 1 ? 14 : width <= 3 ? 10 : width <= 5 ? 8 : width <= 7 ? 6 : 4;
-    }
-    return q + 2 * (int64_t)(width & ~1);             /* 0.50 per pixel, pairs */
-}
-#define SOURCE_GPU_T_SPRITE_RECT(t) (4 * (int64_t)(t)->all_rows) /* 1.00 per any-scanline */
-
-/* ---- Lines [DOC] "Lines", New GPU ------------------------------------------- */
-
-#define SOURCE_GPU_T_LINE(t, dx, dy) source_gpu_t_line((t), (dx), (dy))
-static inline int64_t source_gpu_t_line(const SourceGPUCostTally *t, int dx, int dy)
-{
-    int64_t q = 160;                                  /* 40.00 base precalc */
-    if (t->opcode & 0x10u) q += 240;                  /* 60.00 gouraud */
-    int pixels = (dx > dy ? dx : dy) + 1;
-    q += (dy ? 8 : 4) * (int64_t)pixels;              /* 2.00 / 1.00 per pixel */
-    /* 5.50/2.50 steep (45..90'), 2.00 flat (0..30') and 40' without semi.
-     * UNDOCUMENTED: 30..45' with semi-transparency is "??" in No$; the flat
-     * 2.00 is used there without a documented basis. */
-    int64_t per_row = dy >= dx && dy ? (t->reads_back ? 22 : 10) : 8;
-    return q + per_row * t->drawn_rows;               /* offscreen scanlines 0.00 */
-}
-
-/* ---- Memory transfers [DOC] "Memory Transfers", New GPU ----------------------- */
-
-static inline int64_t source_gpu_t_fill(unsigned width, unsigned height)
-{
-    if (!width) return 4 * (int64_t)height;           /* 1.00 per scanline, xsiz=0 */
-    return 4 * (int64_t)(width / 16) * height + 20 * (int64_t)height; /* 1.00/16pix + 5.00 */
+    (void)mask_check;
+    return (int)((5u * width + 78u) * height / 2u);
 }
 #define SOURCE_GPU_T_FILL(w, h) source_gpu_t_fill((w), (h))
-
-static inline int64_t source_gpu_t_copy(unsigned width, unsigned height, int mask_check)
-{
-    if (!mask_check) return (5 * (int64_t)width + 78) * height;        /* 1.25/px + 19.50 */
-    if (width < 16) return (6 * (int64_t)width + 89) * height;         /* 1.50/px + 22.25 */
-    return (4 * (int64_t)width + 102 * (int64_t)((width + 15) / 16)) * height; /* 1.00/px + 25.50/chunk */
-}
 #define SOURCE_GPU_T_COPY(w, h, m) source_gpu_t_copy((w), (h), (m))
 
-/* A0h and C0h: 1.00 per pixel, two pixels per word. */
-#define SOURCE_GPU_T_TRANSFER_WORD(s) ((void)(s), 8)
+/* [ORACLE] A0h data words cost 0 (MMX5: 23,265,848 words). C0h GPUREAD words:
+ * [NOT OBSERVED] (3 C0h commands, no charged read); kept at 0. No$PSX: 1.00
+ * clock per pixel either way. */
+#define SOURCE_GPU_T_UPLOAD_WORD 0
+#define SOURCE_GPU_T_READ_WORD 0
 
-/* ---- FIFO [DOC] No$PSX "GPU FIFO" (section extract 5767a2b3a5c8...) --------- */
+/* ---- Readiness -------------------------------------------------------------------
+ * [ORACLE] GPUSTAT.28 while idle: 1 while fewer words are queued than the head
+ * command's threshold. MMX5 GPUSTAT runs: NOP 1 (never ready with it queued),
+ * 01h/E1h-E2h/E6h 2 (E1h ready at 1, not at 2), rectangles as above, polygons
+ * and lines 1 (never ready once queued), fill/copy/transfers their packet
+ * length (not ready once complete; shorter counts [NOT OBSERVED]).
+ * Credit is not consulted (MMX5: ready at negative credit with an empty FIFO,
+ * 4,472,544 reads). No$PSX: "Write FIFO empty". */
+static inline unsigned source_gpu_t_ready_below(uint32_t head)
+{
+    unsigned op = head >> 24;
+    if (op == 0x00u) return 1u;
+    if (op == 0x01u || op == 0xE1u || op == 0xE2u || op == 0xE6u) return 2u;
+    if (source_gpu_sprite_opcode(op)) return SOURCE_GPU_T_RECT_FEEDBACK(op);
+    if ((op & 0xE0u) == 0x20u || (op & 0xE0u) == 0x40u) return 1u;
+    return source_gpu_command_length(head);
+}
+#define SOURCE_GPU_T_READY_BELOW(head) source_gpu_t_ready_below(head)
 
-/* "a 16-word (64-byte) write FIFO". An overrun fails closed here; the
- * hardware's overwrite-and-repeat behaviour ("FIFO Overrun") is not modelled. */
+/* ---- FIFO [NOT OBSERVED beyond depth 10] -------------------------------------------
+ * No$PSX "GPU FIFO": 16 words; while drawing is busy the head command may take
+ * its prefetch words out. The deepest oracle FIFO seen is 10 words (MMX5). */
 #define SOURCE_GPU_T_FIFO_WORDS 16u
+#define SOURCE_GPU_T_PREFETCH_ATTRIBUTE 1u
+#define SOURCE_GPU_T_PREFETCH_POLY_LINE 0u
+#define SOURCE_GPU_T_PREFETCH_RECT_SMALL 1u
+#define SOURCE_GPU_T_PREFETCH_RECT_LARGE 2u
+#define SOURCE_GPU_T_PREFETCH_FILL 2u
+#define SOURCE_GPU_T_PREFETCH_COPY 1u
 
-/* "FIFO Prefetch": words the next command takes while a render is busy. */
-#define SOURCE_GPU_T_PREFETCH_ATTRIBUTE 1u   /* NOP..MASKBITS, TEXPAGE..REFRESH */
-#define SOURCE_GPU_T_PREFETCH_POLY_LINE 0u   /* POLY, LINE */
-#define SOURCE_GPU_T_PREFETCH_RECT_SMALL 1u  /* RECT fixed size, without texture */
-#define SOURCE_GPU_T_PREFETCH_RECT_LARGE 2u  /* RECT variable size, or with texture */
-#define SOURCE_GPU_T_PREFETCH_FILL 2u        /* VRAM FILL */
-#define SOURCE_GPU_T_PREFETCH_COPY 1u        /* VRAM-to-VRAM, CPU-to-VRAM, VRAM-to-CPU */
-
-/* ---- Model scope [TEST] ------------------------------------------------------ */
-
-/* The budget is this projection's own bookkeeping, not a hardware register.
- * GP1(00h)/(01h) clear the FIFO and abort the current command ([DOC] PSX-SPX
- * GP1 section); what happens to the credit is a model detail.
- * [TEST] verify_gpu_reset_projection.py — keeps positive credit, clears debt. */
+/* ---- Reset and model scope -----------------------------------------------------------
+ * GP1(00h)/(01h) clear the FIFO and abort the current command (PSX-SPX).
+ * [ORACLE] credit after reset: positive credit kept, debt cleared (G rows). */
 #define SOURCE_GPU_T_RESET_CREDIT(b) ((b) < 0 ? 0 : (b))
 
-/* [TEST] reset_projection:18-21; command_projection:80-83 — draw states the
- * model does not cover: 2 MB clip and PAL display.
- * Interlaced drawing is normal operation. PSX-SPX a253f078 "GP1(08h) Display
- * mode" (the Vertical Interlace flag affects GP0 draw commands) and "GP0(E1h)"
- * bit 10; No$PSX "GPU Status Register" bits 13 and 31 (the interlace field).
- * The projection skips the rows of the current field (source_poly_walk and
- * the rectangle walk), so it can draw whenever the field is known. It fails
- * closed only while the caller has not supplied one (!field_valid). */
+/* Draw states the model does not cover: 2 MB clip, PAL display, and
+ * interlaced drawing before the caller supplies a field (PS1B-180). */
 #define SOURCE_GPU_T_DRAW_REJECTED(s) \
     ((s)->clip_y0 > 511 || (s)->clip_y1 > 511 || \
      (source_gpu_command_interlaced(s) && !(s)->field_valid))
