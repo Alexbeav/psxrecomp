@@ -2,6 +2,7 @@
 #include "psx_icache.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int g_ls_replay_active = 0;
@@ -11,6 +12,20 @@ void psx_advance_cycles(uint32_t cycles) { test_cycles += cycles; }
 /* PSX_OVERLAY_DLL_BUILD makes the step boundary an extern. No observer is
  * installed in this fixture, matching the host inline with a null callback. */
 void psx_cpu_step_boundary(CPUState *cpu, uint32_t address) { (void)cpu; (void)address; }
+/* Referenced only by the step-boundary publish path in psx_icache.c, which runs
+ * after psx_cpu_step_boundary_enabled(); this fixture installs no observer. */
+void overlay_flush_cycles(void)
+{
+    fputs("overlay_flush_cycles: reached from psx_icache step-boundary path; "
+          "not modelled by this test\n", stderr);
+    abort();
+}
+uint64_t psx_get_cycle_count(void)
+{
+    fputs("psx_get_cycle_count: reached from psx_icache step-boundary path; "
+          "not modelled by this test\n", stderr);
+    abort();
+}
 
 static int expect(int condition, const char *message) {
     if (condition) return 1;
