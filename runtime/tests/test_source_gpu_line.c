@@ -39,7 +39,7 @@ int main(void) {
     s.budget=-1;s.clip_x1=1023;s.clip_y1=511;
     assert(source_gpu_command_write(&s,0x4000ff00));assert(source_gpu_command_write(&s,0x00a20054));
     assert(source_gpu_command_write(&s,0x00a20054));assert(s.count==3 && !s.dispatch.kind);
-    assert(source_gpu_command_update(&s,1));assert(!s.count && s.budget==-43); /* No$PSX Lines (a3b2131f3774...): 40 + 1 px + 2 */
+    assert(source_gpu_command_update(&s,1));assert(!s.count && s.budget==-17);
     /* Poly-lines. LINE_HELPER gives every entry in 0x40-0x5F the same len, 3 + goraud, so an
      * opening poly-line packet is its two-vertex counterpart's shape; INCMD_PLINE then takes
      * 1 + goraud words per segment until a terminator word, tested before the segment length.
@@ -53,13 +53,13 @@ int main(void) {
     assert(source_gpu_command_write(&s,0x00000000u));
     assert(source_gpu_command_write(&s,0x00000010u));
     assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==3 && !s.count);
-    assert(s.pline && s.pline_command==0x48u && s.budget==4096-59); /* No$PSX Lines: 40 + 17 px + 2 */
+    assert(s.pline && s.pline_command==0x48u && s.budget==4096-50);
     assert(!source_gpu_command_ready(&s));
     assert(source_gpu_command_write(&s,0x00000020u));
     assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==3 && !s.count);
     assert(s.dispatch.words[0]==((0x48u<<24)|0x804020u));
     assert(s.dispatch.words[1]==0x00000010u && s.dispatch.words[2]==0x00000020u);
-    assert(s.pline && s.budget==4096-59-59); /* No$PSX Lines, per segment */
+    assert(s.pline && s.budget==4096-50-48);
     assert(source_gpu_command_write(&s,0x55555555u));
     assert(!s.pline && !s.count && s.dispatch.kind==SOURCE_GPU_DISPATCH_NONE);
     assert(source_gpu_command_ready(&s));

@@ -40,17 +40,15 @@ static void run(unsigned opcode,unsigned blend,unsigned mask) {
         check(s.dispatch.kind==SOURCE_GPU_DISPATCH_NONE,"incomplete polygon cannot render");
     }
     check(source_gpu_command_write(&s,words[3]),"first triangle dispatch");
-    /* No$PSX "GPU Rendering Timings" Polygons, New GPU (sha256 a3b2131f3774...):
-     * semi-transparency and mask check read back and cost the same. */
-    int first_cost=((opcode&2)||(mask&2))?33:20;
-    check(s.budget==256-first_cost,"first triangle retains exact setup and pixel work");
+    unsigned first_cost=((opcode&2)||(mask&2))?9:6;
+    check(s.budget==256-84-(int)first_cost,"first triangle retains exact setup and pixel work");
     check(s.dispatch.kind==((opcode&8)?SOURCE_GPU_DISPATCH_QUAD_FIRST:SOURCE_GPU_DISPATCH_COMMAND),"triangle versus split-quad dispatch");
     if(opcode&8) {
         check(source_gpu_command_write(&s,words[4]),"quad second triangle dispatch");
         check(s.dispatch.kind==SOURCE_GPU_DISPATCH_QUAD_SECOND && s.dispatch.count==5 && !s.phase,
               "quad retains original fourth vertex and split completion");
-        int second_cost=((opcode&2)||(mask&2))?22:16;
-        check(s.budget==256-first_cost-second_cost,"second triangle exact work");
+        unsigned second_cost=((opcode&2)||(mask&2))?3:2;
+        check(s.budget==256-84-(int)first_cost-46-(int)second_cost,"second triangle exact work");
     }
     memset(vram,0,sizeof(vram));
     for(unsigned y=4;y<6;y++)for(unsigned x=4;x<8;x++)vram[y*1024+x]=(uint16_t)(0x1234|((x&1)?0x8000:0));

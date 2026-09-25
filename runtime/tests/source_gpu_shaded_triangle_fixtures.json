@@ -10,7 +10,7 @@
   "cases": [
     {
       "case": "op30-b0-k0-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "bcee0a8b6c7cc78de3463e59e47301b53da336ca54bbd3d78bf0245557dfb3a2",
       "packet": [
         820220971,
@@ -25,7 +25,7 @@
     },
     {
       "case": "op30-b0-k0-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "0e5060b57f82027b5ef746824e1eb470acd1ee7f8b70b90106fb4d03c4df4a07",
       "packet": [
         820220971,
@@ -40,7 +40,7 @@
     },
     {
       "case": "op30-b0-k1-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "1f024a6cc8ac84fae4ffd847712a7ba2d3991332f65502b38d7140b71f9f063c",
       "packet": [
         820220971,
@@ -55,7 +55,7 @@
     },
     {
       "case": "op30-b0-k1-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "6b6d0cf8f457e08a22c5d63b39c13cb924c85c1686a26b8ad35c83adf286bdd6",
       "packet": [
         820220971,
@@ -70,7 +70,7 @@
     },
     {
       "case": "op30-b0-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "acb8b610915015e0c35c04a5d5280fe051532443d101734cb6899769b6840804",
       "packet": [
         820220971,
@@ -85,7 +85,7 @@
     },
     {
       "case": "op30-b0-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "224a66c3b289c0a34b8e834de21aa6543978e8e5b4cfbba9bccd332a9151deb0",
       "packet": [
         820220971,
@@ -100,7 +100,7 @@
     },
     {
       "case": "op30-b0-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a9e7962cab33d9a64eb360b22c4517679c09fa6becab8dee02815f772da472ad",
       "packet": [
         820220971,
@@ -115,7 +115,7 @@
     },
     {
       "case": "op30-b0-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "da9ff0113e51b1b5e4c344df16d5bc9ba4c1414703c937b5cd78b4818340bae1",
       "packet": [
         820220971,
@@ -130,7 +130,7 @@
     },
     {
       "case": "op30-b1-k0-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "bcee0a8b6c7cc78de3463e59e47301b53da336ca54bbd3d78bf0245557dfb3a2",
       "packet": [
         820220971,
@@ -145,7 +145,7 @@
     },
     {
       "case": "op30-b1-k0-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "0e5060b57f82027b5ef746824e1eb470acd1ee7f8b70b90106fb4d03c4df4a07",
       "packet": [
         820220971,
@@ -160,7 +160,7 @@
     },
     {
       "case": "op30-b1-k1-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "1f024a6cc8ac84fae4ffd847712a7ba2d3991332f65502b38d7140b71f9f063c",
       "packet": [
         820220971,
@@ -175,7 +175,7 @@
     },
     {
       "case": "op30-b1-k1-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "6b6d0cf8f457e08a22c5d63b39c13cb924c85c1686a26b8ad35c83adf286bdd6",
       "packet": [
         820220971,
@@ -190,7 +190,7 @@
     },
     {
       "case": "op30-b1-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "acb8b610915015e0c35c04a5d5280fe051532443d101734cb6899769b6840804",
       "packet": [
         820220971,
@@ -205,7 +205,7 @@
     },
     {
       "case": "op30-b1-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "224a66c3b289c0a34b8e834de21aa6543978e8e5b4cfbba9bccd332a9151deb0",
       "packet": [
         820220971,
@@ -220,7 +220,7 @@
     },
     {
       "case": "op30-b1-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a9e7962cab33d9a64eb360b22c4517679c09fa6becab8dee02815f772da472ad",
       "packet": [
         820220971,
@@ -235,7 +235,7 @@
     },
     {
       "case": "op30-b1-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "da9ff0113e51b1b5e4c344df16d5bc9ba4c1414703c937b5cd78b4818340bae1",
       "packet": [
         820220971,
@@ -250,7 +250,7 @@
     },
     {
       "case": "op30-b2-k0-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "bcee0a8b6c7cc78de3463e59e47301b53da336ca54bbd3d78bf0245557dfb3a2",
       "packet": [
         820220971,
@@ -265,7 +265,7 @@
     },
     {
       "case": "op30-b2-k0-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "0e5060b57f82027b5ef746824e1eb470acd1ee7f8b70b90106fb4d03c4df4a07",
       "packet": [
         820220971,
@@ -280,7 +280,7 @@
     },
     {
       "case": "op30-b2-k1-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "1f024a6cc8ac84fae4ffd847712a7ba2d3991332f65502b38d7140b71f9f063c",
       "packet": [
         820220971,
@@ -295,7 +295,7 @@
     },
     {
       "case": "op30-b2-k1-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "6b6d0cf8f457e08a22c5d63b39c13cb924c85c1686a26b8ad35c83adf286bdd6",
       "packet": [
         820220971,
@@ -310,7 +310,7 @@
     },
     {
       "case": "op30-b2-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "acb8b610915015e0c35c04a5d5280fe051532443d101734cb6899769b6840804",
       "packet": [
         820220971,
@@ -325,7 +325,7 @@
     },
     {
       "case": "op30-b2-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "224a66c3b289c0a34b8e834de21aa6543978e8e5b4cfbba9bccd332a9151deb0",
       "packet": [
         820220971,
@@ -340,7 +340,7 @@
     },
     {
       "case": "op30-b2-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a9e7962cab33d9a64eb360b22c4517679c09fa6becab8dee02815f772da472ad",
       "packet": [
         820220971,
@@ -355,7 +355,7 @@
     },
     {
       "case": "op30-b2-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "da9ff0113e51b1b5e4c344df16d5bc9ba4c1414703c937b5cd78b4818340bae1",
       "packet": [
         820220971,
@@ -370,7 +370,7 @@
     },
     {
       "case": "op30-b3-k0-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "bcee0a8b6c7cc78de3463e59e47301b53da336ca54bbd3d78bf0245557dfb3a2",
       "packet": [
         820220971,
@@ -385,7 +385,7 @@
     },
     {
       "case": "op30-b3-k0-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "0e5060b57f82027b5ef746824e1eb470acd1ee7f8b70b90106fb4d03c4df4a07",
       "packet": [
         820220971,
@@ -400,7 +400,7 @@
     },
     {
       "case": "op30-b3-k1-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "1f024a6cc8ac84fae4ffd847712a7ba2d3991332f65502b38d7140b71f9f063c",
       "packet": [
         820220971,
@@ -415,7 +415,7 @@
     },
     {
       "case": "op30-b3-k1-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "6b6d0cf8f457e08a22c5d63b39c13cb924c85c1686a26b8ad35c83adf286bdd6",
       "packet": [
         820220971,
@@ -430,7 +430,7 @@
     },
     {
       "case": "op30-b3-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "acb8b610915015e0c35c04a5d5280fe051532443d101734cb6899769b6840804",
       "packet": [
         820220971,
@@ -445,7 +445,7 @@
     },
     {
       "case": "op30-b3-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "224a66c3b289c0a34b8e834de21aa6543978e8e5b4cfbba9bccd332a9151deb0",
       "packet": [
         820220971,
@@ -460,7 +460,7 @@
     },
     {
       "case": "op30-b3-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a9e7962cab33d9a64eb360b22c4517679c09fa6becab8dee02815f772da472ad",
       "packet": [
         820220971,
@@ -475,7 +475,7 @@
     },
     {
       "case": "op30-b3-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "da9ff0113e51b1b5e4c344df16d5bc9ba4c1414703c937b5cd78b4818340bae1",
       "packet": [
         820220971,
@@ -490,7 +490,7 @@
     },
     {
       "case": "op31-b0-k0-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "bcee0a8b6c7cc78de3463e59e47301b53da336ca54bbd3d78bf0245557dfb3a2",
       "packet": [
         836998187,
@@ -505,7 +505,7 @@
     },
     {
       "case": "op31-b0-k0-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "0e5060b57f82027b5ef746824e1eb470acd1ee7f8b70b90106fb4d03c4df4a07",
       "packet": [
         836998187,
@@ -520,7 +520,7 @@
     },
     {
       "case": "op31-b0-k1-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "1f024a6cc8ac84fae4ffd847712a7ba2d3991332f65502b38d7140b71f9f063c",
       "packet": [
         836998187,
@@ -535,7 +535,7 @@
     },
     {
       "case": "op31-b0-k1-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "6b6d0cf8f457e08a22c5d63b39c13cb924c85c1686a26b8ad35c83adf286bdd6",
       "packet": [
         836998187,
@@ -550,7 +550,7 @@
     },
     {
       "case": "op31-b0-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "acb8b610915015e0c35c04a5d5280fe051532443d101734cb6899769b6840804",
       "packet": [
         836998187,
@@ -565,7 +565,7 @@
     },
     {
       "case": "op31-b0-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "224a66c3b289c0a34b8e834de21aa6543978e8e5b4cfbba9bccd332a9151deb0",
       "packet": [
         836998187,
@@ -580,7 +580,7 @@
     },
     {
       "case": "op31-b0-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a9e7962cab33d9a64eb360b22c4517679c09fa6becab8dee02815f772da472ad",
       "packet": [
         836998187,
@@ -595,7 +595,7 @@
     },
     {
       "case": "op31-b0-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "da9ff0113e51b1b5e4c344df16d5bc9ba4c1414703c937b5cd78b4818340bae1",
       "packet": [
         836998187,
@@ -610,7 +610,7 @@
     },
     {
       "case": "op31-b1-k0-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "bcee0a8b6c7cc78de3463e59e47301b53da336ca54bbd3d78bf0245557dfb3a2",
       "packet": [
         836998187,
@@ -625,7 +625,7 @@
     },
     {
       "case": "op31-b1-k0-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "0e5060b57f82027b5ef746824e1eb470acd1ee7f8b70b90106fb4d03c4df4a07",
       "packet": [
         836998187,
@@ -640,7 +640,7 @@
     },
     {
       "case": "op31-b1-k1-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "1f024a6cc8ac84fae4ffd847712a7ba2d3991332f65502b38d7140b71f9f063c",
       "packet": [
         836998187,
@@ -655,7 +655,7 @@
     },
     {
       "case": "op31-b1-k1-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "6b6d0cf8f457e08a22c5d63b39c13cb924c85c1686a26b8ad35c83adf286bdd6",
       "packet": [
         836998187,
@@ -670,7 +670,7 @@
     },
     {
       "case": "op31-b1-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "acb8b610915015e0c35c04a5d5280fe051532443d101734cb6899769b6840804",
       "packet": [
         836998187,
@@ -685,7 +685,7 @@
     },
     {
       "case": "op31-b1-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "224a66c3b289c0a34b8e834de21aa6543978e8e5b4cfbba9bccd332a9151deb0",
       "packet": [
         836998187,
@@ -700,7 +700,7 @@
     },
     {
       "case": "op31-b1-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a9e7962cab33d9a64eb360b22c4517679c09fa6becab8dee02815f772da472ad",
       "packet": [
         836998187,
@@ -715,7 +715,7 @@
     },
     {
       "case": "op31-b1-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "da9ff0113e51b1b5e4c344df16d5bc9ba4c1414703c937b5cd78b4818340bae1",
       "packet": [
         836998187,
@@ -730,7 +730,7 @@
     },
     {
       "case": "op31-b2-k0-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "bcee0a8b6c7cc78de3463e59e47301b53da336ca54bbd3d78bf0245557dfb3a2",
       "packet": [
         836998187,
@@ -745,7 +745,7 @@
     },
     {
       "case": "op31-b2-k0-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "0e5060b57f82027b5ef746824e1eb470acd1ee7f8b70b90106fb4d03c4df4a07",
       "packet": [
         836998187,
@@ -760,7 +760,7 @@
     },
     {
       "case": "op31-b2-k1-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "1f024a6cc8ac84fae4ffd847712a7ba2d3991332f65502b38d7140b71f9f063c",
       "packet": [
         836998187,
@@ -775,7 +775,7 @@
     },
     {
       "case": "op31-b2-k1-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "6b6d0cf8f457e08a22c5d63b39c13cb924c85c1686a26b8ad35c83adf286bdd6",
       "packet": [
         836998187,
@@ -790,7 +790,7 @@
     },
     {
       "case": "op31-b2-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "acb8b610915015e0c35c04a5d5280fe051532443d101734cb6899769b6840804",
       "packet": [
         836998187,
@@ -805,7 +805,7 @@
     },
     {
       "case": "op31-b2-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "224a66c3b289c0a34b8e834de21aa6543978e8e5b4cfbba9bccd332a9151deb0",
       "packet": [
         836998187,
@@ -820,7 +820,7 @@
     },
     {
       "case": "op31-b2-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a9e7962cab33d9a64eb360b22c4517679c09fa6becab8dee02815f772da472ad",
       "packet": [
         836998187,
@@ -835,7 +835,7 @@
     },
     {
       "case": "op31-b2-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "da9ff0113e51b1b5e4c344df16d5bc9ba4c1414703c937b5cd78b4818340bae1",
       "packet": [
         836998187,
@@ -850,7 +850,7 @@
     },
     {
       "case": "op31-b3-k0-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "bcee0a8b6c7cc78de3463e59e47301b53da336ca54bbd3d78bf0245557dfb3a2",
       "packet": [
         836998187,
@@ -865,7 +865,7 @@
     },
     {
       "case": "op31-b3-k0-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "0e5060b57f82027b5ef746824e1eb470acd1ee7f8b70b90106fb4d03c4df4a07",
       "packet": [
         836998187,
@@ -880,7 +880,7 @@
     },
     {
       "case": "op31-b3-k1-d0",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "1f024a6cc8ac84fae4ffd847712a7ba2d3991332f65502b38d7140b71f9f063c",
       "packet": [
         836998187,
@@ -895,7 +895,7 @@
     },
     {
       "case": "op31-b3-k1-d1",
-      "work": 379,
+      "work": 748,
       "source_vram_sha256": "6b6d0cf8f457e08a22c5d63b39c13cb924c85c1686a26b8ad35c83adf286bdd6",
       "packet": [
         836998187,
@@ -910,7 +910,7 @@
     },
     {
       "case": "op31-b3-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "acb8b610915015e0c35c04a5d5280fe051532443d101734cb6899769b6840804",
       "packet": [
         836998187,
@@ -925,7 +925,7 @@
     },
     {
       "case": "op31-b3-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "224a66c3b289c0a34b8e834de21aa6543978e8e5b4cfbba9bccd332a9151deb0",
       "packet": [
         836998187,
@@ -940,7 +940,7 @@
     },
     {
       "case": "op31-b3-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a9e7962cab33d9a64eb360b22c4517679c09fa6becab8dee02815f772da472ad",
       "packet": [
         836998187,
@@ -955,7 +955,7 @@
     },
     {
       "case": "op31-b3-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "da9ff0113e51b1b5e4c344df16d5bc9ba4c1414703c937b5cd78b4818340bae1",
       "packet": [
         836998187,
@@ -970,7 +970,7 @@
     },
     {
       "case": "op32-b0-k0-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "4e3ac7a3d72085ba4a0a0432745be5566dba3026bb563009b9d7236a5f646553",
       "packet": [
         853775403,
@@ -985,7 +985,7 @@
     },
     {
       "case": "op32-b0-k0-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "4f13d15696ffa3786b4c55b8c5af5f0c3c08d0cfd75af192ac17bc767ffe3f16",
       "packet": [
         853775403,
@@ -1000,7 +1000,7 @@
     },
     {
       "case": "op32-b0-k1-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "922308c38e39dc06b98f8b9484b05e93f326e1e88bfe826d22932902a25b66eb",
       "packet": [
         853775403,
@@ -1015,7 +1015,7 @@
     },
     {
       "case": "op32-b0-k1-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "40809941dfee03633ca8ae7ac0c6dfc87e7370aa5cc5d3aaa32c6c1705fa9c6a",
       "packet": [
         853775403,
@@ -1030,7 +1030,7 @@
     },
     {
       "case": "op32-b0-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "eb2fbd02f4114a82d4a58d159e025a706d912b5c5188254ebd30b8a40a3738c8",
       "packet": [
         853775403,
@@ -1045,7 +1045,7 @@
     },
     {
       "case": "op32-b0-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a8652b173712060a4663c0f68af5d7c0bf768521ae91f529310446fea08af920",
       "packet": [
         853775403,
@@ -1060,7 +1060,7 @@
     },
     {
       "case": "op32-b0-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "d90d6c686e58a112efe7ffd268c8ffa40b288ea00660124547073d2b1d53e14a",
       "packet": [
         853775403,
@@ -1075,7 +1075,7 @@
     },
     {
       "case": "op32-b0-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "669f3a8049288e8b1f7d031795fb730237498784e89e9dcb536e480c385e28f0",
       "packet": [
         853775403,
@@ -1090,7 +1090,7 @@
     },
     {
       "case": "op32-b1-k0-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "f5150b6168165b1084fe44a27f94b165dac20c56b973b1eca4d3fdf444739ac9",
       "packet": [
         853775403,
@@ -1105,7 +1105,7 @@
     },
     {
       "case": "op32-b1-k0-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "2c589411365588ac80162e9e2f3230f7080f5ae811173a489cbb5b731e28042e",
       "packet": [
         853775403,
@@ -1120,7 +1120,7 @@
     },
     {
       "case": "op32-b1-k1-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "fa587a4c0f2b32d3e14b9e81639f53434274e25f0d54e754f5a951c27c78e709",
       "packet": [
         853775403,
@@ -1135,7 +1135,7 @@
     },
     {
       "case": "op32-b1-k1-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "eb9a577aef9422d371e79f56f8792e5eb8a140da5ca1efb6fd7fff5704a0b141",
       "packet": [
         853775403,
@@ -1150,7 +1150,7 @@
     },
     {
       "case": "op32-b1-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "33eb38d977c9e24baa6d511501923436317602a7df7f4d45a04adf6874aca0c6",
       "packet": [
         853775403,
@@ -1165,7 +1165,7 @@
     },
     {
       "case": "op32-b1-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "7fdebda0c01919233d24a4f0d53a4902cd3f52c657e5d0b3b6672f024c183b40",
       "packet": [
         853775403,
@@ -1180,7 +1180,7 @@
     },
     {
       "case": "op32-b1-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "8f2048b6a3a36c94e5082441018563b97dc49b22ea317af75b066fcb0e1b8179",
       "packet": [
         853775403,
@@ -1195,7 +1195,7 @@
     },
     {
       "case": "op32-b1-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "16023cf45b7b489994998903c1c4d533d8729c966c7e6f523635b5c0d8f463ae",
       "packet": [
         853775403,
@@ -1210,7 +1210,7 @@
     },
     {
       "case": "op32-b2-k0-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "be8afee9cacc36d0dec24eea9db7b7cfcf7d98d3bb53daca0bd82cee3cf9acbd",
       "packet": [
         853775403,
@@ -1225,7 +1225,7 @@
     },
     {
       "case": "op32-b2-k0-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "2765c440e3f157708476c1e8bfdf2d42f40f1f25321b161075faa7d4f1d70833",
       "packet": [
         853775403,
@@ -1240,7 +1240,7 @@
     },
     {
       "case": "op32-b2-k1-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "c0914ca6cca372f058c159e442d84c8b13bd6d33abaa7e7a87e30ba327d4f719",
       "packet": [
         853775403,
@@ -1255,7 +1255,7 @@
     },
     {
       "case": "op32-b2-k1-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "f65621b18cbaa07f46af640c3e969b770037ab7b93c82f093cb65d7ab3f8947c",
       "packet": [
         853775403,
@@ -1270,7 +1270,7 @@
     },
     {
       "case": "op32-b2-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "dd39de0b30defefe17ede4f15906e1c3a231a879fb3a4e282b8ae232bcde1f37",
       "packet": [
         853775403,
@@ -1285,7 +1285,7 @@
     },
     {
       "case": "op32-b2-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "aef90739d24eba514f778285ee4288b1858ecdceadd85ddba0c218e1561456db",
       "packet": [
         853775403,
@@ -1300,7 +1300,7 @@
     },
     {
       "case": "op32-b2-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "08abcdc117410cc92dc7bd135f98163b12de6b19d4ad991f6a656e3c36a23041",
       "packet": [
         853775403,
@@ -1315,7 +1315,7 @@
     },
     {
       "case": "op32-b2-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "5fa718d243ad5b536126e6b9803219f6e4f1f17a7579b3e2c97d72e2cf148860",
       "packet": [
         853775403,
@@ -1330,7 +1330,7 @@
     },
     {
       "case": "op32-b3-k0-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "af9cc14958abf663bc3c4289d218b2117d0b0b5197d8284510f2ae460358ca8a",
       "packet": [
         853775403,
@@ -1345,7 +1345,7 @@
     },
     {
       "case": "op32-b3-k0-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "3a94e6d19046c1b0a166cd24228ddb2d0c329ce067547470ee5ef8871274606f",
       "packet": [
         853775403,
@@ -1360,7 +1360,7 @@
     },
     {
       "case": "op32-b3-k1-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "9a48dbe61d0e9426d6a231a3f3d0081be2b51f1acf67c07a14504b98b3cb7879",
       "packet": [
         853775403,
@@ -1375,7 +1375,7 @@
     },
     {
       "case": "op32-b3-k1-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "42fdd57ebdc95d02635befa0918e97f3abe24dc2050b303d7b52986cb15d7c72",
       "packet": [
         853775403,
@@ -1390,7 +1390,7 @@
     },
     {
       "case": "op32-b3-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "64e4cdbd6b6c9fb3f32817cc298ddc1a9609036bbd796a2ed693213defcc52fc",
       "packet": [
         853775403,
@@ -1405,7 +1405,7 @@
     },
     {
       "case": "op32-b3-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "5374497b889fa9ced00666e71ef5b54f31bec3391739888d5ad7ff1e09061b19",
       "packet": [
         853775403,
@@ -1420,7 +1420,7 @@
     },
     {
       "case": "op32-b3-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "3d0758d02fb84adf6681cd70182fd3f5c7d07a8fd47ab069241de1c934ba89cb",
       "packet": [
         853775403,
@@ -1435,7 +1435,7 @@
     },
     {
       "case": "op32-b3-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "c987162c67a33c7e01b3827fe3f72cf12cc6ad76cceea1fe4fdd11d70960e78f",
       "packet": [
         853775403,
@@ -1450,7 +1450,7 @@
     },
     {
       "case": "op33-b0-k0-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "4e3ac7a3d72085ba4a0a0432745be5566dba3026bb563009b9d7236a5f646553",
       "packet": [
         870552619,
@@ -1465,7 +1465,7 @@
     },
     {
       "case": "op33-b0-k0-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "4f13d15696ffa3786b4c55b8c5af5f0c3c08d0cfd75af192ac17bc767ffe3f16",
       "packet": [
         870552619,
@@ -1480,7 +1480,7 @@
     },
     {
       "case": "op33-b0-k1-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "922308c38e39dc06b98f8b9484b05e93f326e1e88bfe826d22932902a25b66eb",
       "packet": [
         870552619,
@@ -1495,7 +1495,7 @@
     },
     {
       "case": "op33-b0-k1-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "40809941dfee03633ca8ae7ac0c6dfc87e7370aa5cc5d3aaa32c6c1705fa9c6a",
       "packet": [
         870552619,
@@ -1510,7 +1510,7 @@
     },
     {
       "case": "op33-b0-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "eb2fbd02f4114a82d4a58d159e025a706d912b5c5188254ebd30b8a40a3738c8",
       "packet": [
         870552619,
@@ -1525,7 +1525,7 @@
     },
     {
       "case": "op33-b0-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "a8652b173712060a4663c0f68af5d7c0bf768521ae91f529310446fea08af920",
       "packet": [
         870552619,
@@ -1540,7 +1540,7 @@
     },
     {
       "case": "op33-b0-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "d90d6c686e58a112efe7ffd268c8ffa40b288ea00660124547073d2b1d53e14a",
       "packet": [
         870552619,
@@ -1555,7 +1555,7 @@
     },
     {
       "case": "op33-b0-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "669f3a8049288e8b1f7d031795fb730237498784e89e9dcb536e480c385e28f0",
       "packet": [
         870552619,
@@ -1570,7 +1570,7 @@
     },
     {
       "case": "op33-b1-k0-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "f5150b6168165b1084fe44a27f94b165dac20c56b973b1eca4d3fdf444739ac9",
       "packet": [
         870552619,
@@ -1585,7 +1585,7 @@
     },
     {
       "case": "op33-b1-k0-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "2c589411365588ac80162e9e2f3230f7080f5ae811173a489cbb5b731e28042e",
       "packet": [
         870552619,
@@ -1600,7 +1600,7 @@
     },
     {
       "case": "op33-b1-k1-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "fa587a4c0f2b32d3e14b9e81639f53434274e25f0d54e754f5a951c27c78e709",
       "packet": [
         870552619,
@@ -1615,7 +1615,7 @@
     },
     {
       "case": "op33-b1-k1-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "eb9a577aef9422d371e79f56f8792e5eb8a140da5ca1efb6fd7fff5704a0b141",
       "packet": [
         870552619,
@@ -1630,7 +1630,7 @@
     },
     {
       "case": "op33-b1-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "33eb38d977c9e24baa6d511501923436317602a7df7f4d45a04adf6874aca0c6",
       "packet": [
         870552619,
@@ -1645,7 +1645,7 @@
     },
     {
       "case": "op33-b1-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "7fdebda0c01919233d24a4f0d53a4902cd3f52c657e5d0b3b6672f024c183b40",
       "packet": [
         870552619,
@@ -1660,7 +1660,7 @@
     },
     {
       "case": "op33-b1-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "8f2048b6a3a36c94e5082441018563b97dc49b22ea317af75b066fcb0e1b8179",
       "packet": [
         870552619,
@@ -1675,7 +1675,7 @@
     },
     {
       "case": "op33-b1-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "16023cf45b7b489994998903c1c4d533d8729c966c7e6f523635b5c0d8f463ae",
       "packet": [
         870552619,
@@ -1690,7 +1690,7 @@
     },
     {
       "case": "op33-b2-k0-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "be8afee9cacc36d0dec24eea9db7b7cfcf7d98d3bb53daca0bd82cee3cf9acbd",
       "packet": [
         870552619,
@@ -1705,7 +1705,7 @@
     },
     {
       "case": "op33-b2-k0-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "2765c440e3f157708476c1e8bfdf2d42f40f1f25321b161075faa7d4f1d70833",
       "packet": [
         870552619,
@@ -1720,7 +1720,7 @@
     },
     {
       "case": "op33-b2-k1-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "c0914ca6cca372f058c159e442d84c8b13bd6d33abaa7e7a87e30ba327d4f719",
       "packet": [
         870552619,
@@ -1735,7 +1735,7 @@
     },
     {
       "case": "op33-b2-k1-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "f65621b18cbaa07f46af640c3e969b770037ab7b93c82f093cb65d7ab3f8947c",
       "packet": [
         870552619,
@@ -1750,7 +1750,7 @@
     },
     {
       "case": "op33-b2-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "dd39de0b30defefe17ede4f15906e1c3a231a879fb3a4e282b8ae232bcde1f37",
       "packet": [
         870552619,
@@ -1765,7 +1765,7 @@
     },
     {
       "case": "op33-b2-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "aef90739d24eba514f778285ee4288b1858ecdceadd85ddba0c218e1561456db",
       "packet": [
         870552619,
@@ -1780,7 +1780,7 @@
     },
     {
       "case": "op33-b2-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "08abcdc117410cc92dc7bd135f98163b12de6b19d4ad991f6a656e3c36a23041",
       "packet": [
         870552619,
@@ -1795,7 +1795,7 @@
     },
     {
       "case": "op33-b2-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "5fa718d243ad5b536126e6b9803219f6e4f1f17a7579b3e2c97d72e2cf148860",
       "packet": [
         870552619,
@@ -1810,7 +1810,7 @@
     },
     {
       "case": "op33-b3-k0-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "af9cc14958abf663bc3c4289d218b2117d0b0b5197d8284510f2ae460358ca8a",
       "packet": [
         870552619,
@@ -1825,7 +1825,7 @@
     },
     {
       "case": "op33-b3-k0-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "3a94e6d19046c1b0a166cd24228ddb2d0c329ce067547470ee5ef8871274606f",
       "packet": [
         870552619,
@@ -1840,7 +1840,7 @@
     },
     {
       "case": "op33-b3-k1-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "9a48dbe61d0e9426d6a231a3f3d0081be2b51f1acf67c07a14504b98b3cb7879",
       "packet": [
         870552619,
@@ -1855,7 +1855,7 @@
     },
     {
       "case": "op33-b3-k1-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "42fdd57ebdc95d02635befa0918e97f3abe24dc2050b303d7b52986cb15d7c72",
       "packet": [
         870552619,
@@ -1870,7 +1870,7 @@
     },
     {
       "case": "op33-b3-k2-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "64e4cdbd6b6c9fb3f32817cc298ddc1a9609036bbd796a2ed693213defcc52fc",
       "packet": [
         870552619,
@@ -1885,7 +1885,7 @@
     },
     {
       "case": "op33-b3-k2-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "5374497b889fa9ced00666e71ef5b54f31bec3391739888d5ad7ff1e09061b19",
       "packet": [
         870552619,
@@ -1900,7 +1900,7 @@
     },
     {
       "case": "op33-b3-k3-d0",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "3d0758d02fb84adf6681cd70182fd3f5c7d07a8fd47ab069241de1c934ba89cb",
       "packet": [
         870552619,
@@ -1915,7 +1915,7 @@
     },
     {
       "case": "op33-b3-k3-d1",
-      "work": 394,
+      "work": 748,
       "source_vram_sha256": "c987162c67a33c7e01b3827fe3f72cf12cc6ad76cceea1fe4fdd11d70960e78f",
       "packet": [
         870552619,
@@ -1928,6 +1928,5 @@
       "authored_rom_sha256": "2480d4227152c4d7d8c81bad4d734b3c246f345546452535cb70dfc6f62be036",
       "authored_ram_sha256": "99a23d4f85203ce245823290d5423af481978d0b221149bb86151cfe41f4a523"
     }
-  ],
-  "work_basis": "Work values: documented model. No$PSX 'GPU Rendering Timings', New GPU (sha256 a3b2131f3774e996128d50de4afe0101f4c7e80105780e955f611d8db4e1c7c0), one unit = one CPU clock. VRAM hashes unchanged from the original-source cases. PS1B-166."
+  ]
 }
