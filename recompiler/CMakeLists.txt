@@ -546,6 +546,12 @@ if(BUILD_TESTING)
             target_compile_options(tas_gpu_flat_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
             target_link_libraries(tas_gpu_flat_blend_${_mode} PRIVATE m)
             add_test(NAME tas_gpu_flat_blend_${_mode} COMMAND tas_gpu_flat_blend_${_mode})
+            # PS1B-180: the SCPH550x 480i logo quad draws with field skipping.
+            add_executable(tas_gpu_interlace_draw_${_mode}
+                ../runtime/tests/test_source_gpu_interlace_draw.c)
+            target_include_directories(tas_gpu_interlace_draw_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_interlace_draw_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_interlace_draw_${_mode} COMMAND tas_gpu_interlace_draw_${_mode})
             add_executable(tas_gpu_line_${_mode}
                 ../runtime/tests/test_source_gpu_line.c ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)

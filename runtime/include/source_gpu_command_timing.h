@@ -147,9 +147,16 @@ static inline int64_t source_gpu_t_copy(unsigned width, unsigned height, int mas
 #define SOURCE_GPU_T_RESET_CREDIT(b) ((b) < 0 ? 0 : (b))
 
 /* [TEST] reset_projection:18-21; command_projection:80-83 — draw states the
- * model does not cover (interlaced drawing, 2 MB clip, PAL display). */
+ * model does not cover: 2 MB clip and PAL display.
+ * Interlaced drawing is normal operation. PSX-SPX a253f078 "GP1(08h) Display
+ * mode" (the Vertical Interlace flag affects GP0 draw commands) and "GP0(E1h)"
+ * bit 10; No$PSX "GPU Status Register" bits 13 and 31 (the interlace field).
+ * The projection skips the rows of the current field (source_poly_walk and
+ * the rectangle walk), so it can draw whenever the field is known. It fails
+ * closed only while the caller has not supplied one (!field_valid). */
 #define SOURCE_GPU_T_DRAW_REJECTED(s) \
-    ((s)->clip_y0 > 511 || (s)->clip_y1 > 511 || source_gpu_command_interlaced(s))
+    ((s)->clip_y0 > 511 || (s)->clip_y1 > 511 || \
+     (source_gpu_command_interlaced(s) && !(s)->field_valid))
 #define SOURCE_GPU_T_DISPLAY_REJECTED(s) (((s)->display_mode & 0x08u) != 0)
 
 #endif
