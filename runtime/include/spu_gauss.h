@@ -1,11 +1,21 @@
-/* spu_gauss.h - PS1 SPU hardware Gaussian interpolation table (512 entries).
- * Values from No$PSX docs / DuckStation core/spu.cpp (SPU::Voice::Interpolate).
- * Usage, with i = (phase >> 4) & 0xFF and s[0]=current, s[-1..-3]=history:
- *   out = (g[0x0FF-i]*s[-3] + g[0x1FF-i]*s[-2] + g[0x100+i]*s[-1] + g[i]*s[0]) >> 15
+/* SPU 4-point Gaussian interpolation.
+ *
+ * Source: PSX-SPX revision a253f078553f83b4e540f087abf0c28d954b6293,
+ * docs/soundprocessingunitspu.md, "4-Point Gaussian Interpolation" and
+ * "Pitch Counter". The table below is that document's 512-entry table,
+ * converted from hex to decimal by a script. It is identical, entry for
+ * entry, to the same table in the No$PSX specification
+ * (problemkaputt.de/psx-spx.htm, SHA-256 7879668170a8ed48...).
+ *
+ * Table layout: entry i and entry 0FFh-i weight the newest and oldest
+ * samples, entry 100h+i and entry 1FFh-i weight the old and older samples,
+ * where i is bits 4..11 of the voice pitch counter.
  */
 #ifndef PSX_SPU_GAUSS_H
 #define PSX_SPU_GAUSS_H
+
 #include <stdint.h>
+
 static const int16_t spu_gauss_table[512] = {
         -1,     -1,     -1,     -1,     -1,     -1,     -1,     -1,
         -1,     -1,     -1,     -1,     -1,     -1,     -1,     -1,
@@ -73,32 +83,25 @@ static const int16_t spu_gauss_table[512] = {
      22935,  22942,  22948,  22953,  22957,  22960,  22962,  22963,
 };
 
-/* Interpolate the current decoded sample using the SPU's four-tap Gaussian
- * filter. previous[] is the final three samples from the preceding ADPCM
- * block, oldest first; sample_index must address samples[]. */
-static inline int16_t spu_gaussian_interpolate(const int16_t previous[3],
-                                               const int16_t samples[28],
-                                               int sample_index,
-                                               uint32_t phase)
+/* Interpolated output for the sample at sample_index (0..27) of the current
+ * 28-sample ADPCM block. The three samples before it come from the current
+ * block, or from previous[] when sample_index < 3. previous[0..2] hold the
+ * last three samples of the preceding block, oldest first. The documented
+ * formula applies an arithmetic shift right by 15 to each product. */
+static inline int16_t spu_gaussian_interpolate(const int16_t previous[3], const int16_t samples[28],
+                                               int sample_index, uint32_t phase)
 {
-    const int gaussian_index = (int)((phase >> 4) & 0xFFu);
-    static const int tap_offset[4] = { 3, 2, 1, 0 };
-    int32_t accumulator = 0;
-
-    for (int tap = 0; tap < 4; ++tap) {
-        const int offset = sample_index - tap_offset[tap];
-        const int16_t sample = offset >= 0 ? samples[offset]
-                                           : previous[3 + offset];
-        int coefficient_index;
-        switch (tap) {
-        case 0: coefficient_index = 0x0FF - gaussian_index; break;
-        case 1: coefficient_index = 0x1FF - gaussian_index; break;
-        case 2: coefficient_index = 0x100 + gaussian_index; break;
-        default: coefficient_index = gaussian_index; break;
-        }
-        accumulator += (int32_t)spu_gauss_table[coefficient_index] * sample;
+    int32_t tap[4]; /* oldest, older, old, new */
+    for (int k = 0; k < 4; ++k) {
+        int at = sample_index - 3 + k;
+        tap[k] = at < 0 ? previous[at + 3] : samples[at];
     }
-
-    return (int16_t)(accumulator >> 15);
+    unsigned i = (phase >> 4) & 0xFFu;
+    int32_t out = (spu_gauss_table[0x0FFu - i] * tap[0]) >> 15;
+    out += (spu_gauss_table[0x1FFu - i] * tap[1]) >> 15;
+    out += (spu_gauss_table[0x100u + i] * tap[2]) >> 15;
+    out += (spu_gauss_table[0x000u + i] * tap[3]) >> 15;
+    return (int16_t)out;
 }
+
 #endif /* PSX_SPU_GAUSS_H */

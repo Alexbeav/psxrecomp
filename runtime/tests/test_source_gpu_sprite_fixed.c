@@ -11,7 +11,9 @@
  * that the previously admitted variable-size opcodes are unchanged, and checks
  * that the fixed classes take their extent from the opcode rather than reading
  * a word that is not in the packet. Source compatibility checks, not a PS1
- * hardware timing claim. */
+ * hardware timing claim.
+ * PS1B-166: feedback now follows PSX-SPX "Ready Bits" (full packet) and costs
+ * follow No$PSX "GPU Rendering Timings"; fifo_fb_len is no longer asserted. */
 #include "source_gpu_command_projection.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,11 +26,15 @@ static void check(int okay,const char *message) {
 
 /* The source macro, written out independently of the implementation. */
 static unsigned macro_len(unsigned cv){return 2u+((cv&0x4u)>>2)+((cv&0x18u)?0u:1u);}
-static unsigned macro_fifo(unsigned cv){return 2u|((cv&0x4u)>>2)|((cv&0x18u)?0u:1u);}
 
 /* Cost of one sprite drawn at (4,4) into a wide clip, with no blend or mask
- * work: the flat 16 setup clocks plus one clock per pixel of the extent. */
-static int expect_cost(unsigned w,unsigned h){return 16+(int)(w*h);}
+ * work, per No$PSX "GPU Rendering Timings" Rectangles, New GPU (sha256
+ * a3b2131f3774...), in quarter clocks: 1.00 per scanline, the width class
+ * (3.50/2.50/2.00/1.50/1.00) and 0.50 per pixel in pixel pairs. */
+static int expect_cost(unsigned w,unsigned h){
+    unsigned row=w==1?14:w<=3?10:w<=5?8:w<=7?6:4;
+    return (int)((4*h+h*(row+2*(w&~1u))+3)/4);
+}
 
 int main(void) {
     /* 1. Both formulas hold across the entire rectangle range. */
@@ -36,7 +42,8 @@ int main(void) {
         uint32_t word=cv<<24;
         check(source_gpu_block_supported(cv),"every rectangle opcode is admitted");
         check(source_gpu_command_length(word)==macro_len(cv),"packet length matches SPR_HELPER len");
-        check(source_gpu_command_feedback_length(word)==macro_fifo(cv),"feedback matches SPR_HELPER fifo_fb_len");
+        /* PSX-SPX "Ready Bits": GPUSTAT.28 drops once all parameters arrive. */
+        check(source_gpu_command_feedback_length(word)==macro_len(cv),"feedback is the full packet");
     }
 
     /* 2. Regression: the variable-size opcodes keep the lengths and the
@@ -44,7 +51,7 @@ int main(void) {
     for(unsigned cv=0x60;cv<=0x67;cv++) {
         uint32_t word=cv<<24;
         check(source_gpu_command_length(word)==((cv&4u)?4u:3u),"variable rectangle length unchanged");
-        check(source_gpu_command_feedback_length(word)==3u,"variable rectangle feedback unchanged");
+        check(source_gpu_command_feedback_length(word)==((cv&4u)?4u:3u),"variable rectangle feedback is the full packet");
     }
 
     /* 3. Fixed classes: 2 words flat, 3 textured, and feedback 2 vs 3. */
@@ -95,7 +102,7 @@ int main(void) {
         check(source_gpu_command_write(&s,words[2]),"complete 0x7D packet dispatches");
         check(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==3 && !s.count,
               "0x7D dispatches once as three words");
-        check(s.budget==1000-2-expect_cost(16,16),"0x7D charges two setup clocks plus the 16x16 walk");
+        check(s.budget==1000-expect_cost(16,16),"0x7D charges the documented 16x16 rectangle time");
     }
 
     printf("source GPU fixed-size sprite family: %u checks passed\n",checks);

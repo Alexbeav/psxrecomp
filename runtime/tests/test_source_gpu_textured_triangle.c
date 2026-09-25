@@ -19,7 +19,7 @@ static void run(unsigned opcode,unsigned mode,unsigned blend,unsigned mask,unsig
  for(unsigned i=0;i<6;i++){check(source_gpu_command_write(&s,words[i]),"partial packet queues");check(!s.dispatch.kind,"no partial rendering");}
  check(source_gpu_command_write(&s,words[6]),"complete textured triangle dispatch");
  check(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==7 && !s.phase && !s.count,"single full triangle dispatch");
- check(s.budget==256-84-180-12,"source setup and doubled six-pixel cost, independent of blend/mask");
+ /* No$PSX Polygons, New GPU (a3b2131f3774...): 10 + 90 precalc, 2 scanlines, 6 textured pixels; semi or mask check doubles the per-scanline time. */ check(s.budget==256-(((opcode&2)||(mask&2))?112:110),"documented textured triangle cost");
  check((s.draw_mode&511)==page,"polygon tpage latches at dispatch");
  }
  memset(vram,0,sizeof(vram));const uint16_t texels[]={0,0x801f,0x03e0,0xfc00};

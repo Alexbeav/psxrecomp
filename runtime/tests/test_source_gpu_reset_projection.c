@@ -15,8 +15,10 @@ int main(int argc,char **argv){
  fclose(f);assert(cases==4);
  for(unsigned kind=0;kind<2;kind++){
   SourceGPUCommandProjection s;source_gpu_command_cold(&s);assert(source_gpu_command_write(&s,0xe407ffff));assert(source_gpu_command_update(&s,128));
-  if(kind==0)assert(source_gpu_command_write(&s,0xe6000001));else assert(source_gpu_command_gp1(&s,0x08000024));
-  assert(source_gpu_command_write(&s,0x28000000));assert(source_gpu_command_write(&s,0));assert(source_gpu_command_write(&s,1));assert(!source_gpu_command_write(&s,0x10000));assert(s.error==SOURCE_GPU_COMMAND_UNSUPPORTED);
+  /* No$PSX "GPU FIFO" (5767a2b3a5c8...): MASKBITS executes at once and does not stop drawing. Interlace rejection is model scope. */
+  if(kind==0)assert(source_gpu_command_write(&s,0xe6000001) && s.mask_bits==1);else assert(source_gpu_command_gp1(&s,0x08000024));
+  assert(source_gpu_command_write(&s,0x28000000));assert(source_gpu_command_write(&s,0));assert(source_gpu_command_write(&s,1));
+  if(kind==0)assert(source_gpu_command_write(&s,0x10000) && !s.error);else{assert(!source_gpu_command_write(&s,0x10000));assert(s.error==SOURCE_GPU_COMMAND_UNSUPPORTED);}
  }
  SourceGPUCommandProjection s;source_gpu_command_cold(&s);assert(source_gpu_command_write(&s,0xe500ffff));assert(s.offset_x==-1&&s.offset_y==31);assert(!source_gpu_command_gp1(&s,0x08000008));
  puts("PASS four source reset states, mask/interlace rejection, signed offset and PAL rejection");return 0;
