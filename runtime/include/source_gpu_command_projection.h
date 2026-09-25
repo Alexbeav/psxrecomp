@@ -594,14 +594,15 @@ static inline int source_gpu_command_update(SourceGPUCommandProjection *s, uint6
     return !s->error;
 }
 
-/* GPUSTAT.28, ready to receive a DMA block (PSX-SPX "Ready Bits"). It drops
- * while a command executes, once a command has all its parameters, and right
- * after a polygon or line command word. During a CPU-to-VRAM transfer it
- * follows free FIFO space. */
+/* GPUSTAT.28. No$PSX "GPU Status Register" / "Ready Bits": "Write FIFO empty".
+ * During A0h and C0h data transfers it is exactly that. Otherwise, per the
+ * same section and PSX-SPX a253f078 "Ready Bits", it drops while a command
+ * executes, once a command has all its parameters, and right after a polygon
+ * or line command word. */
 static inline int source_gpu_command_ready(const SourceGPUCommandProjection *s)
 {
-    if (s->phase == SOURCE_GPU_PHASE_UPLOAD)
-        return source_gpu_command_fifo_size(s) < SOURCE_GPU_T_FIFO_WORDS;
+    if (s->phase == SOURCE_GPU_PHASE_UPLOAD || s->phase == SOURCE_GPU_PHASE_DOWNLOAD)
+        return source_gpu_command_fifo_size(s) == 0;
     if (s->pline || s->phase != SOURCE_GPU_PHASE_IDLE) return 0;
     if (s->budget < 0) return 0;
     if (!s->count) return 1;
