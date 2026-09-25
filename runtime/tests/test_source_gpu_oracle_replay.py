@@ -1,18 +1,18 @@
 """Replay every PS1B-182 oracle GPU log through test_source_gpu_oracle_replay.
 
-The logs hold commands from retail routes, so they stay on the lab share and
-are not committed. Set PSX_ORACLE_GPU_LOGS to their folder; without logs the
-test is skipped (exit 77).
+The logs hold retail command streams (including A0h texture data), so they are
+never committed. Set PSX_ORACLE_GPU_LOG_DIR to their folder. Without it, or with
+no logs there, the test exits 77 and CTest reports it SKIPPED, never passed.
 """
 import lzma, os, shutil, subprocess, sys
 from pathlib import Path
 
-DEFAULT = Path("Z:/Share/psxrecomp/evidence/T172/ps1b-182-oracle-gpu-logs-20260925")
 exe = sys.argv[1]
-logs = Path(os.environ.get("PSX_ORACLE_GPU_LOGS", DEFAULT))
-found = sorted(logs.glob("*.tsv.xz")) if logs.is_dir() else []
+where = os.environ.get("PSX_ORACLE_GPU_LOG_DIR", "")
+logs = Path(where) if where else None
+found = sorted(logs.glob("*.tsv.xz")) if logs and logs.is_dir() else []
 if not found:
-    print(f"SKIP: no oracle GPU logs under {logs}")
+    print("SKIP: PSX_ORACLE_GPU_LOG_DIR unset or holds no *.tsv.xz logs")
     sys.exit(77)
 failed = 0
 for log in found:
