@@ -300,10 +300,9 @@ def main() -> int:
             "  Scaffolding that program now. P1 has since landed: `discs` is a "
             "first-class config entry, the runtime builds a roster from it, "
             "and it mounts the SELECTED disc — remembered in disc_index — not "
-            "just the boot disc. Choosing a disc still means choosing it "
-            "before the game starts; swapping one mid-session is "
-            "docs/MULTI_DISC.md P3 (a faithful lid in cdrom.c), which has not "
-            "landed."
+            "just the boot disc. A disc can also be swapped mid-session from "
+            "the in-game menu (Disc > Change disc...), which opens the lid in "
+            "cdrom.c the way the game expects."
         )
 
     return EXIT_OK

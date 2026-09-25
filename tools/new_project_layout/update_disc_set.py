@@ -167,6 +167,27 @@ class TomlSurgeon:
         return "\n".join(self.lines) + "\n"
 
 
+def ensure_chd_reader(project_root: Path) -> bool:
+    """True when libchdr is available to probe a .chd, building it if needed.
+
+    probe_disc reads a .chd through libchdr, which recompiler/ builds next to
+    the emitters (CMake target ``chdr``). The setup wizard records the disc set
+    BEFORE Generate, and on a fresh kit Generate is what first builds that
+    target -- so every .chd set failed here and the roster kept its
+    placeholders (PS1B-118). Build it the same way Generate does.
+    """
+    framework_root = HERE.parent.parent
+    for d in (framework_root, framework_root / "tools"):
+        if str(d) not in sys.path:
+            sys.path.insert(0, str(d))
+    import psx_chd  # noqa: E402  tools/psx_chd.py
+    if psx_chd.find_libchdr(project_root, framework_root) is not None:
+        return True
+    import psxrecomp_cli  # noqa: E402
+    from sdk_progress import ProgressReporter  # noqa: E402
+    return psxrecomp_cli.ensure_chd_reader(project_root, ProgressReporter()) is not None
+
+
 def run_verify(probe_jsons: list[Path], out_json: Path) -> tuple[bool, str]:
     tool = HERE / "verify_disc_set.py"
     if not tool.is_file():
@@ -211,6 +232,11 @@ def main() -> int:
         if not c.is_file():
             print(f"error: missing disc image {c}", file=sys.stderr)
             return 1
+    if any(c.suffix.lower() == ".chd" for c in cues) and \
+            not ensure_chd_reader(game_toml.resolve().parent):
+        print("error: cannot read .chd: the CHD reader (libchdr) is not built "
+              "and could not be built -- nothing written", file=sys.stderr)
+        return 1
 
     # Probe each disc, writing the same per-disc artifacts the Retro path
     # leaves behind (disc_probe.json, disc_probe.2.json, ...).
