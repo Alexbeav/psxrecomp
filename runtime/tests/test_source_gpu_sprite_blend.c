@@ -78,24 +78,22 @@ int main(int argc,char **argv) {
     for(unsigned raw=0;raw<2;raw++) {
     const uint32_t words[]={((0x66u+raw)<<24)|0x808080,0x00040004,300u<<22,0x00010004};
     check(source_gpu_command_length(words[0])==4,"0x66/0x67 packet length");
-    /* PSX-SPX "Ready Bits": GPUSTAT.28 drops once all four words arrive. */
-    check(source_gpu_command_feedback_length(words[0])==4,"0x66/0x67 feedback is the full packet");
+    check(source_gpu_command_feedback_length(words[0])==3,"0x66/0x67 FIFO feedback length");
     SourceGPUCommandProjection s;source_gpu_command_cold(&s);
     s.clip_x1=1023;s.clip_y1=511;s.budget=100;
     for(unsigned i=0;i<3;i++) {
         check(source_gpu_command_write(&s,words[i]),"incomplete sprite packet is admitted");
         check(s.dispatch.kind==SOURCE_GPU_DISPATCH_NONE && s.budget==100,"no partial sprite dispatch or charge");
     }
-    check(source_gpu_command_ready(&s),"DMA stays ready until the fourth word arrives");
+    check(!source_gpu_command_ready(&s),"three-word feedback blocks DMA before fourth word");
     check(source_gpu_command_write(&s,words[3]),"complete sprite packet dispatches");
-    /* No$PSX Rectangles, New GPU, with semi (a3b2131f3774...): 1.00 + 6.00 + 3.75 + 4 x 0.50. */
-    check(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==4 && !s.count && s.budget==87,
-          "four words dispatch once, charged the documented 13 clocks");
-    s.clip_x0=5;s.clip_x1=6;check(source_gpu_command_block_cost(&s,words)==12,"clipped odd-start blend work");
+    check(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==4 && !s.count && s.budget==76,
+          "four words dispatch once, with two setup clocks plus 22 sprite clocks");
+    s.clip_x0=5;s.clip_x1=6;check(source_gpu_command_block_cost(&s,words)==20,"clipped odd-start blend work");
     s.clip_x0=0;s.clip_x1=1023;s.budget=-2;
     for(unsigned i=0;i<4;i++)check(source_gpu_command_write(&s,words[i]),"negative-credit packet queues");
     check(s.count==4 && s.dispatch.kind==SOURCE_GPU_DISPATCH_NONE,"negative credit cannot render");
-    check(source_gpu_command_update(&s,2) && s.budget==-13 && s.count==0,"exact zero credit releases sprite");
+    check(source_gpu_command_update(&s,1) && s.budget==-24 && s.count==0,"exact zero credit releases sprite");
     for(unsigned mode=0;mode<3;mode++)for(unsigned blend=0;blend<4;blend++)for(unsigned mask=0;mask<4;mask++) {
         pixels(mode,blend,mask,0x808080,raw);
         pixels(mode,blend,mask,0xe3942b,raw);
