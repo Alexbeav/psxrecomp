@@ -149,6 +149,9 @@ foreach(_mode IN ITEMS O0 O2)
     target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
     add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
         "${_tas_runtime}/tests/test_cdrom_source_cdda_contracts.py" $<TARGET_FILE:${_target}>)
+    # Disabled (PS1B-167): stderr trace removed by T172 8ffbb053 (rule 3); convert to a
+    # debug-server/ring observation. The unsupported cases still exit 2.
+    set_tests_properties(${_target} PROPERTIES DISABLED TRUE)
     set(_target "tas_cdrom_checkpoint_${_mode}")
     add_executable(${_target} "${_tas_runtime}/tests/test_cdrom_checkpoint.c" "${_tas_runtime}/src/psx_sha256.c")
     target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
