@@ -7900,8 +7900,12 @@
             "    if (!source_tas_stateio_parse_u64(text, \"bios_checksum\", &v) || v > 0xFFFFFFFFull) return 0;",
             "    out->bios_checksum = (uint32_t)v;",
             "    if (!source_tas_stateio_parse_u64(text, \"entry_pc\", &v) || v > 0xFFFFFFFFull) return 0;",
-            "    out->entry_pc = (uint32_t)v;",
-            "    if (!source_tas_stateio_parse_u64(text, \"state_bytes\", &out->state_bytes)) return 0;",
+            "    out->entry_pc = (uint32_t)v;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
             "    if (!source_tas_stateio_find_field(text, \"config_digest\", out->config_digest,",
             "                                       sizeof out->config_digest)) return 0;",
             "    if (!source_tas_stateio_find_field(text, \"exe_sha256\", out->exe_sha256,",
@@ -8124,9 +8128,30 @@
             "    return 1;",
             "}"
           ]
+        },
+        {
+          "file": "runtime/include/source_tas_stateio.h",
+          "lines": [
+            "    if (!source_tas_stateio_parse_u64(text, \"entry_pc\", &v) || v > 0xFFFFFFFFull) return 0;",
+            "    out->entry_pc = (uint32_t)v;",
+            "    /* state_bytes is unsigned long long (printed with %llu); uint64_t is",
+            "     * unsigned long on LP64 Linux, so parse through the uint64_t temporary. */",
+            "    if (!source_tas_stateio_parse_u64(text, \"state_bytes\", &v)) return 0;",
+            "    out->state_bytes = (unsigned long long)v;"
+          ]
         }
       ],
-      "note": "Checkpoint manifest writer, identity gate and v7 identity dimensions (foundation of the save-state port). Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row."
+      "note": "Checkpoint manifest writer, identity gate and v7 identity dimensions (foundation of the save-state port). Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row.",
+      "repins": [
+        {
+          "as_of": "worktree on 364f66ec01501a0eced71bae53073942d1b09cd5",
+          "issue": "PS1B-118",
+          "reason": "e5a020ac lp64 state_bytes parse through a uint64_t temporary (type fix)",
+          "dropped_lines": 1,
+          "from_blocks": 20,
+          "to_blocks": 22
+        }
+      ]
     },
     {
       "id": "tas-checkpoint-scheduler-section",
