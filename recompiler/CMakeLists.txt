@@ -426,6 +426,12 @@ if(BUILD_TESTING)
         add_test(NAME source_gpu_headers_cxx${_std}_test COMMAND source_gpu_headers_cxx${_std}_test)
     endforeach()
 
+    # GPUSTAT.28 is "write FIFO empty" during A0h/C0h transfers (No$PSX "Ready Bits").
+    add_executable(source_gpu_ready_fifo_empty_test ../runtime/tests/test_source_gpu_ready_fifo_empty.c)
+    target_include_directories(source_gpu_ready_fifo_empty_test PRIVATE ../runtime/include)
+    target_compile_options(source_gpu_ready_fifo_empty_test PRIVATE -UNDEBUG)
+    add_test(NAME source_gpu_ready_fifo_empty_test COMMAND source_gpu_ready_fifo_empty_test)
+
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         foreach(_mode IN ITEMS O0 O2)
             add_executable(tas_cdrom_subq_position_${_mode}
