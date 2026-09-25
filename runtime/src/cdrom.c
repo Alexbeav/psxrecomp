@@ -1679,7 +1679,13 @@ static int implicit_read_seek_cycles(void)
 {
     if (!s_source_clock) {
         if (!setloc_pending) return 0;
-        int origin = last_sector_lba < 0 ? 0 : last_sector_lba;
+        /* The seek travels from where the drive is: the read cursor. A
+         * completed SeekL/SeekP leaves it on the seek target without
+         * delivering data, reads advance it, reset clears it (PSX-SPX Setloc,
+         * SeekL, SeekP, ReadN/ReadS, GetlocP). The last delivered sector
+         * would re-charge travel a seek already made. */
+        int origin = msf_to_lba(read_min, read_sec, read_sect);
+        if (origin < 0) origin = 0;
         return apply_speed(source_seek_lower_bound(origin, s_setloc_lba,
             (stat_reg & CDSTAT_MOTOR) != 0, s_source_seek_paused, mode_reg));
     }

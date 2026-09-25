@@ -159,6 +159,10 @@ if(BUILD_TESTING)
     add_executable(cdrom_implicit_seek_test tests/test_cdrom_implicit_seek.c src/psx_sha256.c)
     target_include_directories(cdrom_implicit_seek_test PRIVATE include)
     add_test(NAME cdrom_implicit_seek_test COMMAND cdrom_implicit_seek_test)
+    # PS1B-118: the default-path implicit seek travels from the read cursor.
+    add_executable(cdrom_implicit_seek_origin_test tests/test_cdrom_implicit_seek_origin.c src/psx_sha256.c)
+    target_include_directories(cdrom_implicit_seek_origin_test PRIVATE include src)
+    add_test(NAME cdrom_implicit_seek_origin_test COMMAND cdrom_implicit_seek_origin_test)
     # This optional clock fixture takes a separately generated fixed tape path.
     add_executable(cdrom_source_clock_test tests/test_cdrom_source_clock.c src/psx_sha256.c)
     target_include_directories(cdrom_source_clock_test PRIVATE include)
