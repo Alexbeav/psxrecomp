@@ -109,13 +109,13 @@ int main(int argc,char **argv){
    default:abort();
   }
   if(getenv("PSX_TEST_ROUNDTRIP")) {
-   uint32_t n=mdec_snapshot_bytes(),dn=dma_snapshot_bytes();
-   uint8_t *wire=malloc(n),*dw=malloc(dn);if(!wire || !dw)abort();
-   mdec_snapshot_write(wire);dma_snapshot_write(dw);
+   uint32_t n=mdec_snapshot_bytes(),dn=dma_snapshot_bytes(),sn=dma_src_wire_bytes();
+   uint8_t *wire=malloc(n),*dw=malloc(dn),*sw=malloc(sn);if(!wire || !dw || !sw)abort();
+   mdec_snapshot_write(wire);dma_snapshot_write(dw);dma_src_wire_write(sw);
    /* Reset the decoder and DMA continuation without touching fixture RAM/IRQ. */
-   mdec_init();memset(mdec_source_dma,0,sizeof mdec_source_dma);mdec_source_last_cycle=0;
-   if(!mdec_snapshot_read(wire,n) || !dma_snapshot_read(dw,dn))abort();
-   free(wire);free(dw);
+   mdec_init();memset(dsm,0,sizeof dsm);dsm_mdec_clock=0;
+   if(!mdec_snapshot_read(wire,n) || !dma_snapshot_read(dw,dn) || !dma_src_wire_read(sw,sn))abort();
+   free(wire);free(dw);free(sw);
   }
   SourceMDEC *s=&source_mdec;
   uint32_t row[]={result,aux,mdec_read(0x1f801824),(uint32_t)s->credit,s->command,s->control,s->remaining,s->in_count,s->out_count,
