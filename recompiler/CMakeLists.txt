@@ -416,6 +416,12 @@ if(BUILD_TESTING)
     target_include_directories(gl_scale_limits_test PRIVATE ../runtime/include)
     add_test(NAME gl_scale_limits_test COMMAND gl_scale_limits_test)
 
+    # Internal resolution presets -> integer scale (pure header).
+    add_executable(internal_resolution_test
+        ../runtime/tests/test_internal_resolution.cpp)
+    target_include_directories(internal_resolution_test PRIVATE ../runtime/include)
+    add_test(NAME internal_resolution_test COMMAND internal_resolution_test)
+
     add_executable(cli_boot_path_test
         tests/cli_boot_path_test.cpp
         src/cli_boot_path.cpp

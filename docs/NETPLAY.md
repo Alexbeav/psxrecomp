@@ -128,11 +128,18 @@ When **OpenGL** is selected and netplay is active, psxrecomp can run a
 | Layer | Scale | Role |
 |-------|-------|------|
 | Software rasterizer | **1×** (headless authority) | Deterministic VRAM / digests / rollback snaps |
-| OpenGL | Player supersampling (e.g. 2×–4×) | Window present quality only |
+| OpenGL | Player internal resolution (Native … 8K, or legacy 2×–4×) | Window present quality only |
 
 Cost: extra CPU for the 1× SW pass. Benefit: peers can use different GL
 settings without desyncing the sim. SW-only netplay forces scale 1 for the
 whole path. Offline play keeps full supersampling with no dual-raster tax.
+
+**Internal resolution is a per-peer presentation setting.** Settings → Display →
+Internal resolution is not a mod, so it is not cleared for netplay: each peer
+keeps its own preset, clamped to its own GPU, and one peer at 4K next to another
+at Native is a supported match. Only the GL present surface changes; the 1×
+software authority, the digests and the rollback snapshots are the same on every
+peer. Widescreen and frame-rate mods, by contrast, are cleared for netplay.
 
 ---
 

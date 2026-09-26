@@ -385,6 +385,18 @@ struct RuntimeConfig {
     // driver's texture limits and a memory budget (gl_scale_limits.h).
     int                   video_supersampling = 1;
 
+    // internal_resolution: the "Internal resolution" preset (Settings ->
+    // Display), which supersedes supersampling when set. Encoding as in
+    // runtime/include/internal_resolution.h: 0 = unset (supersampling stands),
+    // 1 = native, -1 = match the display, N >= 2 = target output lines. In
+    // game.toml it is the shipped default ("native", "720p", "1080p",
+    // "1440p", "4k", "5k", "8k", "display", or a number of lines).
+    int                   video_internal_resolution = 0;
+    // resolution_reference_lines: the title's usual display height, which a
+    // preset divides into (S = ceil(target / reference)). 240 for NTSC
+    // 320x240 games; 120..1024.
+    int                   video_resolution_reference_lines = 240;
+
     // Optional initial window width declared by the title profile. Zero keeps
     // the historical fit-to-display behavior; player settings may override it.
     int                   video_window_width = 0;
@@ -1202,6 +1214,11 @@ struct UserSettings {
     // [video]
     bool has_renderer       = false; int  renderer       = DEFAULT_VIDEO_RENDERER; // 0=software,1=opengl,2=vulkan
     bool has_supersampling  = false; int  supersampling  = 1; // 1..32 (runtime clamps per backend)
+    // Internal resolution preset (RuntimeConfig::video_internal_resolution
+    // encoding). Written as a stable id ("4k") or a line count; when present
+    // it wins over supersampling, which is still written (capped at 4) so an
+    // older runtime reading the same file degrades gracefully.
+    bool has_internal_resolution = false; int internal_resolution = 0;
     // Window size: width in px; height is always width*3/4 (PSX 4:3). Applies to
     // both the launcher and the emulator window so they boot at the same size.
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960

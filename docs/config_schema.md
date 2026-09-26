@@ -450,7 +450,37 @@ a build compiled with Vulkan support. `offer_vulkan` controls launcher
 visibility only; it defaults to false so game projects must explicitly expose
 Vulkan after validating their visuals and stability.
 
-### Internal resolution (`supersampling`)
+### Internal resolution (`internal_resolution`, `supersampling`)
+
+The player picks a preset in Settings → Display → **Internal resolution**:
+Native, 720p, 1080p, 1440p, 4K, 5K, 8K or Match display. It is stored in the
+player's `settings.toml`, and a game may ship a default the same way:
+
+```toml
+[video]
+internal_resolution = "4k"          # native | 720p | 1080p | 1440p | 4k | 5k | 8k | display, or a number of lines
+resolution_reference_lines = 240    # game.toml only: the title's usual display height (120..1024)
+```
+
+A preset is a target height. The runtime renders at the integer scale
+`S = ceil(target / resolution_reference_lines)`: at the default 240 lines,
+720p is 3x, 1080p is 5x (1200 lines, area-resolved to 1080), 1440p 6x, 4K 9x,
+5K 12x and 8K 18x. A 480-line interlaced screen renders at twice the target
+and is resolved down. **Match display** takes the monitor's pixel height,
+measured from the game window's display when it opens. The backend clamps S
+to what it can allocate (below); `video_info` over TCP reports both numbers.
+
+Precedence: the game's `internal_resolution` is the default; a player's legacy
+`supersampling` in `settings.toml` outranks it; the player's own
+`internal_resolution` outranks both. The launcher writes the preset as a stable
+id (`"4k"`) beside `supersampling = min(S, 4)`, so an older runtime reading the
+same file still gets the nearest factor it supports. A legacy factor with no
+matching preset appears in the launcher as its own entry, for example
+"2x (480 lines)". `settings.toml` `window_width` accepts 640 to 7680.
+
+On OpenGL, any choice above native opens the game window with a
+high-pixel-density drawable (macOS Retina, Wayland scaling), so the window has
+the pixels to show it. Native keeps the window exactly as before.
 
 `supersampling = N` renders at N times the native resolution per axis and
 downsamples to the window. It accepts 1 to 32 in both `game.toml` and the

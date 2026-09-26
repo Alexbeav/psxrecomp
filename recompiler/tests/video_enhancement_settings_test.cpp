@@ -187,7 +187,97 @@ static void test_user_settings_round_trip() {
     fs::remove(p);
 }
 
+/* Internal resolution (Settings -> Display): game.toml shipped default,
+ * settings.toml precedence over the legacy factor, stable-id round trip,
+ * and the legacy supersampling range widened to the runtime's 1..32. */
+static void test_internal_resolution_game_toml() {
+    fs::path p = write_game_toml("psxrecomp_ir_default.toml", "");
+    auto gc = PSXRecompV4::load_game_config(p);
+    check(gc.runtime.video_internal_resolution == 0,
+          "internal_resolution defaults unset (supersampling stands)");
+    check(gc.runtime.video_resolution_reference_lines == 240,
+          "resolution_reference_lines defaults to 240");
+    fs::remove(p);
+
+    p = write_game_toml("psxrecomp_ir_4k.toml",
+        "[video]\n"
+        "internal_resolution = \"4K\"\n"
+        "resolution_reference_lines = 240\n"
+        "supersampling = 12\n");
+    gc = PSXRecompV4::load_game_config(p);
+    check(gc.runtime.video_internal_resolution == 2160, "game.toml \"4K\" parses (case-insensitive)");
+    check(gc.runtime.video_supersampling == 12, "supersampling accepts 12 (1..32)");
+    fs::remove(p);
+
+    p = write_game_toml("psxrecomp_ir_lines.toml",
+        "[video]\n"
+        "internal_resolution = 1600\n");
+    gc = PSXRecompV4::load_game_config(p);
+    check(gc.runtime.video_internal_resolution == 1600, "game.toml integer lines parse");
+    fs::remove(p);
+
+    for (const char* bad : { "internal_resolution = \"9k\"\n",
+                             "internal_resolution = 1\n",
+                             "resolution_reference_lines = 50\n",
+                             "supersampling = 33\n" }) {
+        p = write_game_toml("psxrecomp_ir_bad.toml", std::string("[video]\n") + bad);
+        bool rejected = false;
+        try { (void)PSXRecompV4::load_game_config(p); } catch (const std::exception&) { rejected = true; }
+        check(rejected, bad);
+        fs::remove(p);
+    }
+}
+
+static void test_internal_resolution_settings() {
+    fs::path p = write_temp("psxrecomp_ir_settings.toml",
+        "[video]\n"
+        "supersampling = 2\n"
+        "internal_resolution = \"display\"\n"
+        "window_width = 7680\n");
+    auto us = PSXRecompV4::load_user_settings(p);
+    check(us.has_internal_resolution && us.internal_resolution == -1,
+          "settings.toml internal_resolution = \"display\" reads -1");
+    check(us.has_supersampling && us.supersampling == 2, "legacy supersampling still read");
+    check(us.has_window_width && us.window_width == 7680,
+          "settings.toml window_width accepts 7680 (was capped at 3840)");
+    fs::remove(p);
+
+    p = write_temp("psxrecomp_ir_settings_bad.toml",
+        "[video]\n"
+        "internal_resolution = \"huge\"\n");
+    us = PSXRecompV4::load_user_settings(p);
+    check(!us.parse_error && !us.has_internal_resolution,
+          "an unknown preset is ignored, not an error");
+    fs::remove(p);
+
+    const int values[] = { 1, 720, 1080, 1440, 2160, 2880, 4320, -1, 480 };
+    const char* ids[]  = { "native", "720p", "1080p", "1440p", "4k", "5k", "8k", "display", nullptr };
+    for (int i = 0; i < 9; i++) {
+        PSXRecompV4::UserSettings out;
+        out.has_internal_resolution = true; out.internal_resolution = values[i];
+        out.has_supersampling = true;       out.supersampling = 4;
+        p = fs::temp_directory_path() / "psxrecomp_ir_roundtrip.toml";
+        check(PSXRecompV4::save_user_settings(p, out), "save_user_settings writes");
+        std::ifstream f(p);
+        std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (ids[i])
+            check(text.find(std::string("internal_resolution = \"") + ids[i] + "\"") != std::string::npos,
+                  "a preset is persisted by its stable id");
+        else
+            check(text.find("internal_resolution = 480") != std::string::npos,
+                  "a custom line count is persisted as an integer");
+        auto back = PSXRecompV4::load_user_settings(p);
+        check(back.has_internal_resolution && back.internal_resolution == values[i],
+              "internal_resolution survives a save/load round trip");
+        check(back.has_supersampling && back.supersampling == 4,
+              "the legacy supersampling key is still written beside it");
+        fs::remove(p);
+    }
+}
+
 int main() {
+    test_internal_resolution_game_toml();
+    test_internal_resolution_settings();
     test_defaults_off();
     test_game_toml_opt_in();
     test_game_window_width_validation();

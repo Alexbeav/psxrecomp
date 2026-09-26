@@ -70,6 +70,29 @@ class GlScaleGuards(unittest.TestCase):
         self.assertIn("(g_video_renderer == 1) ? GL_MAX_INTERNAL_SCALE", MAIN)
 
 
+class InternalResolutionGuards(unittest.TestCase):
+    def test_hidpi_window_only_when_opted_in(self):
+        self.assertIn("win_flags |= PSX_SDL_WINDOW_HIGH_DENSITY;", MAIN)
+        self.assertRegex(MAIN, r"g_video_hidpi_window = g_video_scale_applies &&\s*"
+                               r"\(g_video_requested_scale > 1 \|\| g_video_internal_res == PSX_IR_DISPLAY\);")
+        self.assertRegex(MAIN, r"if \(g_video_hidpi_window\)\s*win_flags \|= PSX_SDL_WINDOW_HIGH_DENSITY;")
+
+    def test_vocabulary_is_optional_abi(self):
+        # Builds against an older recomp-ui must still compile: every use of
+        # the new launcher fields sits behind the capability macro.
+        for field in ("gi->internal_resolution_labels", "ls.internal_resolution"):
+            for m in re.finditer(re.escape(field), MAIN):
+                before = MAIN[:m.start()]
+                opened = before.count("#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)")
+                closed = len(re.findall(r"#endif", before[before.rfind(
+                    "#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)"):]))
+                self.assertGreater(opened, 0, field)
+                self.assertEqual(closed, 0, field + " outside its #if block")
+
+    def test_unset_preset_leaves_supersampling(self):
+        self.assertIn("if (g_video_internal_res == PSX_IR_UNSET) return;", MAIN)
+
+
 class RunnerParsing(unittest.TestCase):
     def test_parse(self):
         self.assertEqual(parse_run("driver=x\ndigest=0123456789abcdef\nchecks=7 failures=0\n"),
