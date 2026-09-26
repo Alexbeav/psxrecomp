@@ -100,7 +100,9 @@ static inline unsigned source_gpu_line_segment_length(unsigned opcode)
     return 1u + ((opcode >> 4) & 1u);
 }
 
-/* PSX-SPX: the list ends on a word with (word AND F000F000h) = 50005000h. */
+/* PSX-SPX: the list ends on a word with (word AND F000F000h) = 50005000h.
+ * The first two vertices are never tested, and only the first word of each
+ * later vertex unit is [ORACLE FIXTURE G2]. */
 static inline int source_gpu_line_terminator(uint32_t word)
 {
     return (word & 0xF000F000u) == 0x50005000u;

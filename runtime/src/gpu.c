@@ -3012,14 +3012,18 @@ uint32_t gpu_read_gpustat(void) {
         case 3: stat |= (1u << 25); break; /* mirrors ready-to-send */
     }
 
-    /* Bit 26: ready to receive cmd word — 1 when not busy */
+    /* Bit 26: ready to receive cmd word — always set here. [NOT OBSERVED:
+     * release policy] The oracle reads GPUSTAT 00802000h (bits 26 and 28
+     * clear) while a new polyline waits for its vertices [ORACLE FIXTURE G2];
+     * the release path keeps both bits set (post-pin release-accuracy item). */
     stat |= (1u << 26);
 
     /* Bit 27: ready to send VRAM to CPU — 1 when VRAM read is active */
     if (vram_read_active)
         stat |= (1u << 27);
 
-    /* Bit 28: ready to receive DMA block — 1 when not busy */
+    /* Bit 28: ready to receive DMA block — always set here. [NOT OBSERVED:
+     * release policy; see bit 26 and [ORACLE FIXTURE G2].] */
     stat |= (1u << 28);
 
     /* Bits 29-30: DMA direction */
@@ -5683,13 +5687,14 @@ static void gpu_write_gp0_body(uint32_t val) {
         return;
     }
 
-    /* Polyline terminator rule (PSX-SPX "GPU Render Line Commands"):
+    /* Polyline terminator rule (PSX-SPX "GPU Render Line Commands";
+     * rules 1-3 [ORACLE FIXTURE G2]):
      *
      *  1. A polyline always has at least two vertices (PSX-SPX). The words of
      *     the first two vertices are consumed unconditionally — mono
      *     [V0][V1], shaded [V0][C1][V1] — and are NEVER tested for the
-     *     terminator. [Pending the PS1B-211 polyline fixture; PSX-SPX states
-     *     only the two-vertex minimum.]
+     *     terminator [ORACLE FIXTURE G2]; PSX-SPX states only the
+     *     two-vertex minimum.
      *  2. From the third vertex on, only the FIRST word of each vertex unit
      *     is tested: the vertex word itself for mono, the colour word for
      *     shaded (PSX-SPX: "the terminator value occurs on the first word of
