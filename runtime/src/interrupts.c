@@ -139,7 +139,15 @@ void psx_irq_set_cause_ptr(uint32_t *cause)
 {
     s_cop0_cause = cause;
     psx_irq_refresh_cause_ip2();
-}void psx_irq_raise(uint32_t bit, uint32_t detail)
+}
+
+/* Request interrupt source it (the I_STAT bit numbers of PSX-SPX
+ * "I_STAT": 0 VBLANK ... 10 lightpen). PSX-SPX a253f078 interrupts.md,
+ * "Interrupt Request / Execution": an I_STAT bit is set when its source goes
+ * from false to true, and stays set until the guest acknowledges it by writing
+ * 0. Setting it may raise CAUSE.IP2, so the line is recomputed. detail only
+ * tags the request for the device trace. */
+void psx_irq_raise(uint32_t bit, uint32_t detail)
 {
     i_stat |= (1u << bit);
     psx_irq_refresh_cause_ip2();
