@@ -158,6 +158,14 @@ typedef struct GlScaleInfo {
     int budget_mib;     /* memory budget for the hr surface (0 = none) */
     int fbo_w, fbo_h;   /* hr surface size in pixels */
     int drawable_w, drawable_h; /* window drawable in pixels */
+    /* Windowed high-resolution mode (true 8K on 16384-limit GPUs): the hr
+     * surface stays at hr_scale (1) and a window of columns [window_x,
+     * window_x + window_w) is kept at `effective` scale. */
+    int hr_scale;
+    int windowed;
+    int window_x, window_w;
+    int window_fbo_w, window_fbo_h;
+    int window_grows;
 } GlScaleInfo;
 int gl_renderer_scale_info(GlScaleInfo *out);
 

@@ -2,8 +2,11 @@
 
 The fixture runs once per internal scale; the guest-visible (native) VRAM
 digest must be identical at every scale, and each run checks line thickness
-at internal resolution. Two clamp runs check that an over-limit request (32x,
-and a tiny memory budget) stays on the GL backend at the clamped scale.
+at internal resolution. Window runs (PSX_GL_HIRES_WINDOW=1) keep VRAM at 1x
+and only the frame at S: their native digest must match too, and their frame
+at internal resolution must equal the full-VRAM surface's at the same scale.
+An 18x window run is 8K past a 16384 texture limit. Two clamp runs check that
+an over-limit request (32x, and a tiny memory budget) stays on GL.
 
 macOS/Linux: pass the SDL3 include directory and static library (for example
 from a runtime build tree's _deps/sdl3-src/include and
@@ -35,6 +38,11 @@ def parse_run(stdout):
     return int(summary[1]), int(summary[2]), digest[1] if digest else None
 
 
+def parse_hires(stdout):
+    m = re.search(r"^hires=([0-9a-f]{16})$", stdout, re.M)
+    return m[1] if m else None
+
+
 def digests_agree(results):
     """results: {scale: digest}. All present and equal."""
     values = list(results.values())
@@ -49,6 +57,7 @@ def main():
     ap.add_argument("--output", required=True)
     ap.add_argument("--fixture", type=pathlib.Path)
     ap.add_argument("--scales", default="1,2,3,5,9")
+    ap.add_argument("--window-scales", default="2,3,5,9,18")
     args = ap.parse_args()
     # ';'-separated when CMake hands over a target's include list.
     sdl_includes = [str(pathlib.Path(d).resolve()) for d in args.sdl_include.split(";") if d]
@@ -108,18 +117,35 @@ def main():
 
     ok = True
     digests = {}
+    hires_full = {}
     for s in [int(v) for v in args.scales.split(",") if v]:
         r = run([dest / "probe", s])
         parsed = parse_run(r.stdout)
-        print(f"scale {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-2:],
+        print(f"scale {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-3:],
               r.stderr.strip()[-600:])
         if r.returncode or not parsed or parsed[1]:
             ok = False
-        digests[s] = parsed[2] if parsed else None
-    if not digests_agree(digests):
-        print("FAIL native VRAM digest differs across scales:", digests)
-        ok = False
+        digests[("full", s)] = parsed[2] if parsed else None
+        hires_full[s] = parse_hires(r.stdout)
     env = os.environ.copy()
+    wenv = dict(env)
+    wenv["PSX_GL_HIRES_WINDOW"] = "1"
+    for s in [int(v) for v in args.window_scales.split(",") if v]:
+        r = run([dest / "probe", s, "window"], env=wenv)
+        parsed = parse_run(r.stdout)
+        print(f"window {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-3:],
+              r.stderr.strip()[-600:])
+        if r.returncode or not parsed or parsed[1]:
+            ok = False
+        digests[("window", s)] = parsed[2] if parsed else None
+        h = parse_hires(r.stdout)
+        if s in hires_full and hires_full[s] != h:
+            print(f"FAIL window {s}x frame differs from the full-VRAM surface at {s}x:",
+                  h, hires_full[s])
+            ok = False
+    if not digests_agree(digests):
+        print("FAIL native VRAM digest differs across scales/modes:", digests)
+        ok = False
     for label, s, budget in (("over-limit", 32, None), ("budget", 12, "40")):
         e = dict(env)
         if budget is not None:

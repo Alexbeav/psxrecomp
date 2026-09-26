@@ -1,13 +1,19 @@
 /* Internal-resolution invariance on a real, hidden OpenGL context.
  *
- * Run once per scale by run_gl_scale_invariance.py, which compares the
- * digests across runs. Checks, per scale:
- *   - the native VRAM the game can read back (pack of the hr surface) is the
- *     same at every scale: supersampling must never change guest-visible
- *     pixels (lines excepted, see LINE_BAND, and checked separately);
+ * Run once per scale (and mode) by run_gl_scale_invariance.py, which compares
+ * the digests across runs. Checks, per run:
+ *   - the native VRAM the game can read back (pack of the authoritative
+ *     surface) is the same at every scale and in every mode: supersampling
+ *     must never change guest-visible pixels (lines excepted, see LINE_*,
+ *     which are drawn differently above 1x and checked on their own);
  *   - a line is one NATIVE pixel thick at internal resolution (S hr rows);
- *   - a request the driver cannot hold is clamped inside GL, never dropped to
- *     the software renderer.
+ *   - a request the driver cannot hold is clamped inside GL, never dropped
+ *     to the software renderer;
+ *   - mode "window" (PSX_GL_HIRES_WINDOW=1): the windowed high-resolution
+ *     surface renders the frame region exactly like the full-VRAM surface at
+ *     the same scale (the runner compares the hires digests), including copies
+ *     whose source straddles or lies outside the window, fills and uploads
+ *     that cross its edge, and scales past the full-VRAM limit (18x = 8K).
  * Original source-owned scene; no retail payload. */
 #include "gpu_gl_renderer.c"
 #include "mod_texture_banks.c"
@@ -35,24 +41,27 @@ static void check(int ok, const char *label) {
     if (!ok) { fprintf(stderr, "FAIL %s\n", label); failures++; }
 }
 
-/* Lines are rasterised differently by design above 1x (a one-native-pixel quad
- * instead of GL_LINES, whose width is capped at 1 on core profiles), so their
- * band is excluded from the cross-scale digest and checked on its own. */
-#define LINE_X0 600
-#define LINE_Y0 300
-#define LINE_X1 700
-#define LINE_Y1 360
+/* The "displayed frame": 320x240 at the VRAM origin, the window in "window"
+ * mode. Lines live in LINE_* inside it, over a black fill. */
+#define FRAME_W 320
+#define FRAME_H 240
+#define LINE_X0 200
+#define LINE_Y0 100
+#define LINE_X1 300
+#define LINE_Y1 140
 
-static uint64_t fnv(const uint16_t *p, int n, uint64_t h) {
-    for (int i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ull; }
+static uint64_t fnv(const void *pp, size_t n, uint64_t h) {
+    const uint8_t *p = (const uint8_t *)pp;
+    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ull; }
     return h;
 }
 
 static void scene(void) {
     /* A 4-bit texture page at (512,0) with a 16-entry CLUT at (512,256). */
-    static uint16_t page[64*64], clut[16];
+    static uint16_t page[64*64], clut[16], patch[16*8];
     for (int i = 0; i < 64*64; i++) page[i] = (uint16_t)((i * 0x1357u) ^ (i >> 3));
     for (int i = 0; i < 16; i++) clut[i] = (uint16_t)(i ? (0x0421u * (uint16_t)i) | ((i & 1) << 15) : 0);
+    for (int i = 0; i < 16*8; i++) patch[i] = (uint16_t)(0x0C63 + i * 0x0101);
     glb_vram_transfer_in(512, 0, 64, 64, page);
     glb_vram_transfer_in(512, 256, 16, 1, clut);
 
@@ -62,8 +71,7 @@ static void scene(void) {
     glb_set_semi_transparency(0, 0);
     glb_set_color_modulation(128, 128, 128, 0);
 
-    /* Framebuffer-like region 0..319 x 0..239. */
-    glb_fill_rect(0, 0, 320, 240, 0x1084);
+    glb_fill_rect(0, 0, FRAME_W, FRAME_H, 0x1084);
     glb_draw_flat_rect(10, 10, 100, 60, 0x03e0);
     glb_draw_gouraud_triangle(20, 100, 0x001f, 180, 120, 0x7c00, 60, 230, 0x03ff);
     glb_draw_flat_triangle(200, 20, 310, 90, 230, 200, 0x5294);
@@ -88,23 +96,31 @@ static void scene(void) {
     glb_set_draw_area(40, 40, 90, 90);
     glb_draw_flat_rect(0, 0, 200, 200, 0x3def);
     glb_set_draw_area(0, 0, 1023, 511);
-    /* Copies: overlapping inside the frame, and from an off-screen area in. */
+    /* Copies: overlapping inside the frame; from an off-screen area in; and
+     * one whose source straddles the frame's right edge (x 300..339). */
     glb_copy_rect(10, 10, 14, 13, 80, 50);
     glb_draw_flat_rect(400, 300, 32, 32, 0x7c1f);
     glb_copy_rect(400, 300, 280, 200, 32, 32);
+    glb_draw_flat_rect(318, 150, 30, 20, 0x2d6b);
+    glb_copy_rect(300, 150, 250, 160, 40, 20);
+    /* A fill and an upload that cross the frame's edge. */
+    glb_fill_rect(300, 220, 40, 10, 0x1234);
+    glb_vram_transfer_in(312, 60, 16, 8, patch);
     /* A render-to-texture round trip: draw, then sample what was drawn. */
     glb_draw_flat_rect(576, 64, 32, 32, 0x03e0);
-    glb_draw_textured_rect(200, 200, 32, 32, 0, 64, 512, 256, 0x0009 | (1 << 7) * 0);
+    glb_draw_textured_rect(200, 200, 32, 32, 0, 64, 512, 256, 0x0009);
 
-    /* Lines, inside LINE_BAND only. */
+    /* Lines over a black band. */
+    glb_fill_rect(LINE_X0, LINE_Y0, LINE_X1 - LINE_X0, LINE_Y1 - LINE_Y0, 0);
     glb_draw_line(LINE_X0 + 5, LINE_Y0 + 10, LINE_X0 + 80, LINE_Y0 + 10, 0x7fff);   /* horizontal */
-    glb_draw_line(LINE_X0 + 5, LINE_Y0 + 20, LINE_X0 + 45, LINE_Y0 + 50, 0x03ff);   /* diagonal */
-    glb_draw_shaded_line(LINE_X0 + 90, LINE_Y0 + 5, 0x001f, LINE_X0 + 92, LINE_Y0 + 55, 0x7c00); /* steep */
+    glb_draw_line(LINE_X0 + 5, LINE_Y0 + 20, LINE_X0 + 45, LINE_Y0 + 35, 0x03ff);   /* diagonal */
+    glb_draw_shaded_line(LINE_X0 + 90, LINE_Y0 + 2, 0x001f, LINE_X0 + 92, LINE_Y0 + 38, 0x7c00); /* steep */
 }
 
 int main(int argc, char **argv) {
     int scale = argc > 1 ? atoi(argv[1]) : 1;
     const char *mode = argc > 2 ? argv[2] : "scene";
+    int window = !strcmp(mode, "window");
     if (SDL_Init(SDL_INIT_VIDEO) != 0) return 2;
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -122,18 +138,26 @@ int main(int argc, char **argv) {
     if (!gl_renderer_init_context(win)) { fprintf(stderr, "FAIL context\n"); return 2; }
     GlScaleInfo si;
     gl_renderer_scale_info(&si);
-    printf("driver=%s max_dim=%d requested=%d effective=%d\n",
-           (const char *)glGetString(GL_VERSION), si.max_dim, si.requested, si.effective);
+    printf("driver=%s max_dim=%d requested=%d effective=%d windowed=%d hr_scale=%d\n",
+           (const char *)glGetString(GL_VERSION), si.max_dim, si.requested, si.effective,
+           si.windowed, si.hr_scale);
 
     if (!strcmp(mode, "clamp")) {
-        /* Whatever was requested, the backend stays GL and never exceeds what
-         * the limits allow. */
-        int want = psx_gl_clamp_full_vram_scale(scale, GL_MAX_INTERNAL_SCALE, si.max_dim,
+        /* Whatever was requested, the backend stays GL and never allocates
+         * past the driver limit. With the window allowed (default) a request
+         * past the full-VRAM limit keeps its scale for the displayed area. */
+        int full = psx_gl_clamp_full_vram_scale(scale, GL_MAX_INTERNAL_SCALE, si.max_dim,
                                                 psx_gl_budget_bytes_from_env(getenv("PSX_GL_VRAM_BUDGET_MB")),
                                                 NULL);
         check(s_raster_ok == 1, "GL pipeline kept (no software fallback)");
-        check(si.effective == want, "effective scale is the limit-clamped request");
-        check(psx_gl_full_vram_fits(si.effective, si.max_dim, 0), "allocated surface within driver limit");
+        if (si.windowed) {
+            check(si.hr_scale == 1, "windowed: authoritative surface at 1x");
+            check(si.effective > full && (long)si.effective * 512 <= si.max_dim,
+                  "windowed: effective scale above the full-VRAM clamp, rows within the limit");
+        } else {
+            check(si.effective == full, "effective scale is the limit-clamped request");
+        }
+        check(psx_gl_full_vram_fits(si.hr_scale, si.max_dim, 0), "hr surface within driver limit");
         check(glGetError() == GL_NO_ERROR, "GL error");
         printf("checks=%d failures=%d\n", checks, failures);
         gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
@@ -141,45 +165,43 @@ int main(int argc, char **argv) {
     }
 
     check(si.effective == scale, "requested scale allocated");
+    if (window) {
+        check(si.windowed && si.hr_scale == 1, "window mode engaged");
+        check(hiw_ensure(0, FRAME_W), "window covers the frame");
+    }
     scene();
     gl_renderer_sync_cpu();
     check(gl_renderer_fbo_peek(0, 0, 1024, 512, peek), "native peek");
     /* Digest of guest-visible VRAM, the line band masked out. */
     for (int y = LINE_Y0; y < LINE_Y1; y++)
         for (int x = LINE_X0; x < LINE_X1; x++) peek[y * 1024 + x] = 0;
-    uint64_t digest = fnv(peek, 1024*512, 0xcbf29ce484222325ull);
-    check(memcmp(vram, vram, 2) == 0, "cpu mirror readable");
+    uint64_t digest = fnv(peek, sizeof peek, 0xcbf29ce484222325ull);
 
-    /* Line thickness at internal resolution: the horizontal line covers S hr
-     * rows (native 1 row); the steep line S hr columns. */
-    {
-        int w = 100, h = 60;
-        uint32_t *img = (uint32_t *)malloc((size_t)w * scale * h * scale * 4);
-        int ow = 0, oh = 0;
-        int n = img ? gl_renderer_read_display_hires(LINE_X0, LINE_Y0, w, h, img,
-                                                     w * scale * h * scale, &ow, &oh) : 0;
-        check(n == w * scale * h * scale && ow == w * scale && oh == h * scale,
-              "hires readback size");
-        if (n) {
-            int col = (30) * scale + scale / 2, rows = 0;       /* inside the horizontal line */
-            for (int yy = 0; yy < oh; yy++) {
-                uint32_t p = img[yy * ow + col] & 0xFFFFFFu;
-                if (p == 0xF8F8F8u) rows++;
-            }
-            if (rows != scale) fprintf(stderr, "horizontal line rows=%d scale=%d\n", rows, scale);
-            check(rows == scale, "horizontal line is one native pixel thick");
-            int row = 30 * scale + scale / 2, cols = 0;        /* across the steep line */
-            for (int xx = 85 * scale; xx < 98 * scale; xx++) {
-                uint32_t p = img[row * ow + xx];
-                if ((p & 0xFFFFFFu) != 0) cols++;
-            }
-            if (cols != scale) fprintf(stderr, "steep line cols=%d scale=%d\n", cols, scale);
-            check(cols == scale, "steep line is one native pixel thick");
-        }
-        free(img);
+    /* The frame at internal resolution. */
+    int fw = FRAME_W * scale, fh = FRAME_H * scale;
+    uint32_t *img = (uint32_t *)malloc((size_t)fw * fh * 4);
+    int ow = 0, oh = 0;
+    int n = img ? gl_renderer_read_display_hires(0, 0, FRAME_W, FRAME_H, img, fw * fh, &ow, &oh) : 0;
+    check(n == fw * fh && ow == fw && oh == fh, "hires readback size");
+    if (n) {
+        /* Line thickness: the horizontal line covers S rows at x=230; the
+         * steep line S columns at y=120. */
+        int col = 230 * scale + scale / 2, rows = 0;
+        for (int yy = LINE_Y0 * scale; yy < LINE_Y1 * scale; yy++)
+            if ((img[yy * ow + col] & 0xFFFFFFu) == 0xF8F8F8u) rows++;
+        if (rows != scale) fprintf(stderr, "horizontal line rows=%d scale=%d\n", rows, scale);
+        check(rows == scale, "horizontal line is one native pixel thick");
+        int row = 120 * scale + scale / 2, cols = 0;
+        for (int xx = 285 * scale; xx < 298 * scale; xx++)
+            if ((img[row * ow + xx] & 0xFFFFFFu) != 0) cols++;
+        if (cols != scale) fprintf(stderr, "steep line cols=%d scale=%d\n", cols, scale);
+        check(cols == scale, "steep line is one native pixel thick");
     }
+    uint64_t hires = n ? fnv(img, (size_t)fw * fh * 4, 0xcbf29ce484222325ull) : 0;
+    free(img);
     check(glGetError() == GL_NO_ERROR, "GL error");
     printf("digest=%016llx\n", (unsigned long long)digest);
+    printf("hires=%016llx\n", (unsigned long long)hires);
     printf("checks=%d failures=%d\n", checks, failures);
     gl_renderer_shutdown();
     SDL_DestroyWindow(win);

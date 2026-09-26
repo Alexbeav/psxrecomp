@@ -914,3 +914,39 @@ real GL context at 1, 2, 3, 5 and 9x and requires identical guest-visible VRAM
 internal resolution, and a 32x request that stays on GL at the driver clamp.
 In a running game, `video_info` reports the requested and effective scale and
 the drawable; `screenshot_hires` reads the hr FBO at full size.
+
+### IR2 — True 8K past a 16384 texture limit: the high-resolution window (2026-09-26)
+
+8K is 18x at the usual 240-line reference, and a full-VRAM surface at 18x is
+18432 px wide: over the 16384 limit of Apple's GL (and Intel, MoltenVK). The
+M4 returns `GL_INVALID_VALUE` for it. A title only needs the displayed frame at
+18x, so past that limit the GL backend splits the job:
+
+- The **authoritative** VRAM stays the ordinary hr surface at **1x**. It is the
+  native renderer unchanged, so pack, CPU readback, render-to-texture sampling
+  and VRAM copies are exactly the native results.
+- A **presentation-only** surface at S covers the displayed columns,
+  W = [x0, x1) × all 512 rows (R4: x 0..319, 5760×9216 at 18x, 405 MiB). Every
+  GPU write that touches W is mirrored into it: textured and flat batches,
+  lines (as quads), fills, uploads and the depth24 clear, and VRAM copies
+  (hi→hi when the source lies in W, otherwise the 1x source upscaled). It has
+  its own stencil, rebuilt from alpha like the hr surface.
+- W starts empty and grows, rounded to 64 columns, the first time a display
+  rectangle outside it is presented, seeded by upscaling the 1x content. The
+  present, hold-last, interpolation capture, `screenshot_hires` and the
+  native-wide centre read W; a display it cannot hold presents at 1x.
+- The mirror costs one extra submission of each primitive that touches W
+  (the 1x pass is cheap to fill), like the native-wide mirror.
+
+It engages only when the full-VRAM surface cannot hold the requested scale;
+below that (up to 16x on the M4) nothing changes. `PSX_GL_HIRES_WINDOW=0/1`
+disables or forces it.
+
+**Evidence.** `gl_scale_invariance_test` forces the window at 2, 3, 5 and 9x
+and requires the frame at internal resolution to be byte-identical to the
+full-VRAM surface at the same scale (copies inside, into and across the
+window edge, fills and uploads across it, mask set/check, all four blend
+modes), and the guest-visible VRAM to be identical to 1x; it also runs the
+window at 18x. In R4 on an M4, the 8K preset reports
+`effective_scale 18, internal_lines 4320, hr_scale 1, hires_fbo 5760x9216`, and
+`screenshot_hires` in a race is 5760×4320 with the rear-view mirror present.

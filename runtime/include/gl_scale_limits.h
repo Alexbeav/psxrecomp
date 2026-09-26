@@ -118,6 +118,30 @@ static inline int psx_gl_fit_wide_aspect(int disp_w, int max_w, int *num, int *d
     return 1;
 }
 
+/* Windowed high-resolution mode: the authoritative VRAM stays at 1x and only
+ * a window of the displayed columns (window_w native px, full 512-row height)
+ * is kept at S. Largest S <= req whose smallest useful window (min_window_w,
+ * e.g. a 320-px framebuffer) fits max_dim and budget_bytes. */
+static inline uint64_t psx_gl_window_bytes(int s, int window_w) {
+    if (s < 1) s = 1;
+    return (uint64_t)window_w * (uint64_t)s * (uint64_t)PSX_GL_VRAM_H * (uint64_t)s *
+           PSX_GL_HR_BYTES_PER_PX;
+}
+static inline int psx_gl_clamp_window_scale(int req, int ceiling, int max_dim,
+                                            uint64_t budget_bytes, int min_window_w) {
+    int s = req < 1 ? 1 : req;
+    if (ceiling > 0 && s > ceiling) s = ceiling;
+    while (s > 1) {
+        int dim_ok = !(max_dim > 0 &&
+                       ((int64_t)PSX_GL_VRAM_H * s > (int64_t)max_dim ||
+                        (int64_t)min_window_w * s > (int64_t)max_dim));
+        int mem_ok = !(budget_bytes && psx_gl_window_bytes(s, min_window_w) > budget_bytes);
+        if (dim_ok && mem_ok) break;
+        s--;
+    }
+    return s;
+}
+
 /* Parse a budget override in MiB (PSX_GL_VRAM_BUDGET_MB). NULL/empty/invalid
  * returns the default. "0" disables the budget. */
 static inline uint64_t psx_gl_budget_bytes_from_env(const char *mb) {

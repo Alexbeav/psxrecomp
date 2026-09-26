@@ -27,8 +27,14 @@ from run_gl_scale_invariance import digests_agree, parse_run  # noqa: E402
 
 
 def body(src, signature):
+    # The definition, not a prototype: the first occurrence whose next '{'
+    # comes before any ';'.
     start = src.index(signature)
-    brace = src.index("{", start)
+    while True:
+        brace, semi = src.find("{", start), src.find(";", start)
+        if brace != -1 and (semi == -1 or brace < semi):
+            break
+        start = src.index(signature, start + 1)
     depth = 0
     for i in range(brace, len(src)):
         if src[i] == "{":
@@ -51,11 +57,12 @@ class GlScaleGuards(unittest.TestCase):
                       "GL_MAX_VIEWPORT_DIMS", "psx_gl_clamp_full_vram_scale"):
             self.assertIn(token, init)
         # Retry lower inside GL; only a 1x failure returns 0 (software fallback).
-        self.assertRegex(init, r"while \(!alloc_hr_targets\(s_scale\)\) \{\s*if \(s_scale <= 1\) return 0;")
+        self.assertRegex(init, r"while \(!alloc_hr_targets\(s_hr_scale\)\) \{\s*if \(s_hr_scale <= 1\) return 0;")
 
     def test_s1_paths_unchanged(self):
         geo = body(GL, "static void gpu_geometry(")
-        self.assertIn("if (mode == GL_LINES && n == 2 && s_scale > 1) {", geo)
+        self.assertIn("if (is_line && s_hr_scale > 1) {", geo)
+        self.assertIn("if (draw_mode == GL_LINES) glLineWidth((float)s_hr_scale);", geo)
         quad = body(GL, "static void present_target_quad(GLuint tex, int tex_w, int tex_h,\n"
                         "                                int x, int y, int w, int h, int linear,\n"
                         "                                int lx, int ly, int lw, int lh, int v_flip,\n"
@@ -68,6 +75,30 @@ class GlScaleGuards(unittest.TestCase):
     def test_main_does_not_cap_gl_at_software_limit(self):
         self.assertNotIn("if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;", MAIN)
         self.assertIn("(g_video_renderer == 1) ? GL_MAX_INTERNAL_SCALE", MAIN)
+
+
+class HiresWindowGuards(unittest.TestCase):
+    """Windowed high-resolution mode (true 8K past a 16384 texture limit):
+    engaged only beyond the full-VRAM clamp (or forced for tests), and every
+    mirror is a no-op unless it is."""
+
+    def test_engaged_only_past_full_vram(self):
+        init = body(GL, "static int init_gpu_raster(void)")
+        self.assertIn("if (allow && want > 1 && (force || want > s_scale)) {", init)
+        self.assertIn("s_hr_scale = 1;", init)
+
+    def test_mirrors_gated(self):
+        for fn in ("static void hiw_mirror_uploads(", "static void hiw_mirror_copy(",
+                   "static void hiw_clear_rect(", "static int hiw_target_begin("):
+            self.assertIn("if (!hiw_on()", body(GL, fn))
+        present = body(GL, "void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,")
+        self.assertIn("if (s_hiw) {", present)
+        self.assertIn("int src_tw = VRAM_W, src_x = disp_x, src_scale = s_scale;", present)
+
+    def test_canonical_shaders_untouched(self):
+        # The window has its own blit program; BLIT_VS keeps the fixed 1024x512
+        # projection the canonical path always used.
+        self.assertIn('"  gl_Position = vec4((a_pos.x+u_shift)/512.0 - 1.0, (a_pos.y+u_shift)/256.0 - 1.0, 0.0, 1.0); }\\n";', GL)
 
 
 class InternalResolutionGuards(unittest.TestCase):

@@ -8995,12 +8995,16 @@ static void handle_video_info(int id, const char *json)
              "\"gl_clamp_reason\":%d,\"gl_alloc_retries\":%d,\"gl_budget_mib\":%d,"
              "\"fbo_w\":%d,\"fbo_h\":%d,\"hidpi_window\":%d,\"window_w\":%d,"
              "\"window_h\":%d,\"drawable_w\":%d,\"drawable_h\":%d,"
-             "\"display_w\":%u,\"display_h\":%u}",
+             "\"display_w\":%u,\"display_h\":%u,\"hr_scale\":%d,\"windowed\":%d,"
+             "\"hires_window_x\":%d,\"hires_window_w\":%d,\"hires_fbo_w\":%d,"
+             "\"hires_fbo_h\":%d,\"hires_window_grows\":%d}",
              id, gr_backend() == GR_BACKEND_OPENGL ? "opengl"
                  : gr_backend() == GR_BACKEND_VULKAN ? "vulkan" : "software",
              preset, ref, req, eff, di.height * (unsigned)(eff > 0 ? eff : 1), gl,
              si.max_dim, si.max_scale, si.clamp_reason, si.alloc_retries, si.budget_mib,
-             si.fbo_w, si.fbo_h, hidpi, ww, wh, pw, ph, di.width, di.height);
+             si.fbo_w, si.fbo_h, hidpi, ww, wh, pw, ph, di.width, di.height,
+             si.hr_scale, si.windowed, si.window_x, si.window_w, si.window_fbo_w,
+             si.window_fbo_h, si.window_grows);
 }
 
 /* screenshot_wide_hires — the displayed band of the native-wide surface at
