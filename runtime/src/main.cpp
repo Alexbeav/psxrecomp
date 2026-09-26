@@ -4555,6 +4555,9 @@ static bool controller_source_pressed_h(SDL_GameController* h, const ControllerS
  * (arrows=d-pad, X/S/Z/A=Cross/Circle/Square/Triangle, Q/W/E/R=L1/R1/L2/R2,
  * Return=Start, RShift=Select) plus T/Y=L3/R3 stick clicks. */
 static uint16_t pad_from_keyboard(int player) {
+    /* Without input focus the keyboard reads as released: the cached key array
+     * can hold keys pressed for another application (PS1B-208). */
+    if (!host_hotkey_input_focused()) return 0xFFFF;
     const Uint8* keys = SDL_GetKeyboardState(NULL);
     return psx_keybinds_pad_word(keys, player);
 }
@@ -4654,7 +4657,9 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
     if (p.kind == 1) {
         /* Keyboard analog: the configurable left/right stick-direction binds
          * (default = arrow keys on the LEFT stick; RIGHT stick unbound), so the
-         * old keyboard analog behaviour is preserved unless the user rebinds. */
+         * old keyboard analog behaviour is preserved unless the user rebinds.
+         * Without input focus the sticks stay centred (PS1B-208). */
+        if (!host_hotkey_input_focused()) return;
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         psx_keybinds_sticks(keys, player, out);
         return;
@@ -4828,7 +4833,7 @@ static bool controller_policy_dpad_active(const PlayerInput& p, int player,
                 return true;
         }
     }
-    if (src.keybinds) {
+    if (src.keybinds && host_hotkey_input_focused()) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         if (psx_keybinds_dpad_active(keys, player)) return true;
     }
@@ -5193,7 +5198,7 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * inside pad_sticks_for; psx_keybinds_sticks only widens a deflection, so
      * applying it twice is idempotent. */
     if (eff_analog) {
-        if (src.keybinds) {
+        if (src.keybinds && host_hotkey_input_focused()) {
             const Uint8* keys = SDL_GetKeyboardState(NULL);
             psx_keybinds_sticks(keys, player, st);
         }

@@ -1088,6 +1088,7 @@ if(BUILD_TESTING)
                 frame_interpolation_display_rate
                 gl_swap_self_heal
                 hybrid_dev_any_input
+                host_input_focus_guards
                 launcher_pad_mode_wiring
                 jalr_link_register_guards
                 launcher_vulkan_option
