@@ -1256,6 +1256,8 @@ static void dsm_start_mdec(int ch) {
     if ((chcr & 1u) != (ch == 0 ? 1u : 0u))
         dsm_fail("source MDEC DMA: direction outside the profile");
     if (((chcr >> 9) & 3u) != 1u) dsm_fail("source MDEC DMA: only SyncMode 1 is in the profile");
+    /* Scope guard: no fixture has measured a decrementing MDEC transfer. */
+    if (chcr & 2u) dsm_fail("source MDEC DMA: decrementing address step is not qualified");
     uint32_t bs = channels[ch].bcr & 0xFFFFu, ba = channels[ch].bcr >> 16;
     if (!bs) bs = 0x10000u;
     if (!ba) ba = 0x10000u;
