@@ -133,13 +133,25 @@ def transfer_entries(source, view):
     A detour farm is entered only through the package's patched transfers, so
     those instructions establish its entry points statically. Unpatched text is
     excluded: stock data words that happen to decode as a jump are not evidence.
+    Neither are package-written DATA words (for example a pack linked into the
+    EXE that the package replaced): `exclude_writes` names such intervals of
+    the loaded image, each with a reason, and their words are not transfers.
     """
     spec = source['spec']['transfer_entries']
     require(spec.get('from') == 'mod_package_writes' and hasattr(view, 'written_words'),
             'transfer_entries requires a mod package view')
+    excluded = []
+    for item in spec.get('exclude_writes', []):
+        start, end = number(item['start']), number(item['end'])
+        require(start < end and start % 4 == end % 4 == 0,
+                'Invalid excluded write interval')
+        require(item.get('reason', '').strip(), 'Excluded write interval needs a reason')
+        excluded.append((start, end))
     lo, hi = source['base'], source['base'] + len(source['body'])
     found = set()
     for address, word in view.written_words():
+        if any(start <= address < end for start, end in excluded):
+            continue
         if word >> 26 in (2, 3):
             target = ((address + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2)
             if lo <= target < hi:

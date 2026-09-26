@@ -245,6 +245,22 @@ class ModPackageImageTest(unittest.TestCase):
         self.assertTrue(record['strict_producer_ranges'])
         self.assertEqual(record['producer_ranges'], [dict(start='0x80780000', end='0x80780020')])
 
+    def test_excluded_package_writes_are_not_transfer_entries(self):
+        # The detour at 0x80010040 lies in an interval the profile declares as
+        # package-written data; only the call at 0x80010048 still counts.
+        exclude = [dict(start='0x80010040', end='0x80010048', reason='written data')]
+        inventory = self.prepare(self.profile(transfer_entries={
+            'from': 'mod_package_writes', 'count': 1, 'exclude_writes': exclude}))
+        self.assertEqual(inventory['jobs'][0]['required_entries'], [self.ENGINE])
+        for item, error in [(dict(start='0x80010040', end='0x80010048'), 'needs a reason'),
+                            (dict(start='0x80010042', end='0x80010048', reason='x'),
+                             'Invalid excluded write'),
+                            (dict(start='0x80010048', end='0x80010040', reason='x'),
+                             'Invalid excluded write')]:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                self.prepare(self.profile(transfer_entries={
+                    'from': 'mod_package_writes', 'count': 1, 'exclude_writes': [item]}))
+
     def test_extent_evidence_and_inventory_drift_fail_closed(self):
         for changes, error in [(dict(sha256='0' * 64), 'Extent bytes changed'),
                                (dict(transfer_entries={'from': 'mod_package_writes', 'count': 3}),
