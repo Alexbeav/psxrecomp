@@ -588,7 +588,11 @@ if(BUILD_TESTING)
             add_test(NAME tas_gpu_oracle_replay_${_mode} COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_oracle_replay.py
                 $<TARGET_FILE:tas_gpu_oracle_replay_${_mode}>)
-            set_tests_properties(tas_gpu_oracle_replay_${_mode} PROPERTIES SKIP_RETURN_CODE 77)
+            # Both oracle drivers outgrew CTest's 1500 s default once the log set
+            # gained megamanx4-route03. Measured on Eagle 2026-09-26: replay O2
+            # 1477 s, timing O2 2736 s under concurrent builds. 5400 s covers O0
+            # and a loaded host.
+            set_tests_properties(tas_gpu_oracle_replay_${_mode} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 5400)
             # PS1B-182: scheduling (when queued commands start), replayed from the
             # same share logs; skips (77) without them.
             add_executable(tas_gpu_oracle_timing_${_mode}
@@ -598,7 +602,7 @@ if(BUILD_TESTING)
             add_test(NAME tas_gpu_oracle_timing_${_mode} COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_oracle_replay.py
                 $<TARGET_FILE:tas_gpu_oracle_timing_${_mode}>)
-            set_tests_properties(tas_gpu_oracle_timing_${_mode} PROPERTIES SKIP_RETURN_CODE 77)
+            set_tests_properties(tas_gpu_oracle_timing_${_mode} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 5400)
             add_executable(tas_gpu_service_start_${_mode}
                 ../runtime/tests/test_source_gpu_service_start.c)
             target_include_directories(tas_gpu_service_start_${_mode} PRIVATE ../runtime/include)
