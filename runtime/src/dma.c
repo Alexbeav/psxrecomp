@@ -791,9 +791,13 @@ static void start_async_gpu_linked_list(void) {
  *     while the GPU is not ready ([NOT OBSERVED]: D9d timing is gated by the
  *     GPU FIFO model; the PS1B-182 route replays are its acceptance).
  *   - MDEC in/out (ch0/ch1) follow the same edges. A block starts only while the
- *     MDEC requests it (input FIFO empty / output FIFO full) and moves at once.
- *     The MDEC itself runs on a continuous clock that these machines feed
- *     ([ORACLE FIXTURE D11]: all c/d timelines and all a stall counts). */
+ *     MDEC requests it (input FIFO empty / output FIFO full) and moves at once
+ *     ([ORACLE FIXTURE D11a] stall counts).
+ *   - The source MDEC is clocked at every service edge, whether or not a DMA
+ *     runs, and at an MDEC DMA kick ([ORACLE FIXTURE D15b]: 8/8 status
+ *     timelines exact; D17a: the same model on the kick-phase sweep, where a
+ *     per-cycle clock fails; D17b: with no access at all the decoder still
+ *     advances). */
 
 int source_gpu_runtime_active(void);
 static void try_execute(int ch);
@@ -803,8 +807,10 @@ static void try_execute(int ch);
                                    * kick; [D10] no upload halt iff BA*(BS+7)<=64     */
 #define DSM_OTC_WORD           1  /* [DOC] "DMA Transfer Rates"; D9a exact            */
 #define DSM_GPU_WORD           1  /* [DOC]; D10 halt = BS+5 for one block             */
-#define DSM_GPU_BLOCK          7  /* [ORACLE FIXTURE D10] 1x57 and 2x24 do not halt,
-                                   * 1x58 and 2x32 do: BA*(BS+7) against the credit   */
+#define DSM_GPU_BLOCK          7  /* [ORACLE FIXTURE D10, D10b] no halt iff
+                                   * BA*(BS+7) <= 64: 1x57/1x58, 2x25/2x26, 3x14/3x15,
+                                   * 4x9/4x10 and 8x1/8x2 split exactly there (all 33
+                                   * D10b shapes; BA*BS <= 57 misses 17)              */
 #define DSM_CD_WORD            9  /* [ORACLE FIXTURE D9e] 128..512-word slope 8.99 and
                                    * 9.03 at both 1F801018 settings. PSX-SPX gives
                                    * 24 (BIOS) or 40 (games); the default path keeps
@@ -814,10 +820,6 @@ static void try_execute(int ch);
 #define DSM_UPLOAD_WAIT_CAP  201u /* [ORACLE FIXTURE D10] load wait = min(BS,201)-1   */
 #define DSM_MDEC_WORD          1  /* [DOC] MDEC in/out 1; D11 timelines do not depend
                                    * on it between 1 and 4                             */
-#define DSM_MDEC_KICK_LATENCY  8u /* [ORACLE FIXTURE D11c/d] the decoder gets no clock
-                                   * for this long after the DMA0 kick. D11: any of
-                                   * 7-9 fits (all 155 timeline checks; 6 and 10 do
-                                   * not). D13 is to narrow it.                        */
 #define DSM_MDEC_FEED_STEP   128u /* the MDEC credit cap: feeding in steps no longer
                                    * than this equals a per-cycle clock               */
 
@@ -857,8 +859,9 @@ static int dsm_profile_any(void) {
 }
 
 /* Clock the source MDEC up to `now` (mdec.h: its service is owned by source
- * DMA). Steps of at most the MDEC credit cap reproduce a per-cycle clock; after
- * many steps the decoder can only be waiting, so the rest is one step. */
+ * DMA). Callers pass a service edge or a kick time. Steps of at most the MDEC
+ * credit cap equal one feed per edge; after many steps the decoder can only be
+ * waiting, so the rest is one step. */
 static void dsm_mdec_feed(uint64_t now) {
     if (!mdec_source_active()) { dsm_mdec_clock = now; return; }
     for (unsigned n = 0; dsm_mdec_clock < now; n++) {
@@ -1155,7 +1158,7 @@ static void dsm_service(int k, uint64_t now) {
  * channels. [ORACLE FIXTURE D7]: OTC runs before the GPU payload when both
  * start together; D11c: MDEC in is served before MDEC out in both kick orders. */
 static void dsm_service_all(uint64_t now) {
-    dsm_mdec_feed(now);
+    dsm_mdec_feed(now - now % DSM_QUANTUM);
     dsm_service(DSM_OTC, now);
     dsm_service(DSM_CD, now);
     dsm_service(DSM_GPU, now);
@@ -1249,14 +1252,14 @@ static void dsm_start_mdec(int ch) {
     dsm_begin(k, channels[ch].madr, bs * ba);
     dsm[k].blk_words = bs;
     dsm_run_mdec(k);
-    if (ch == 0 && dsm_mdec_clock < psx_cycle_count + DSM_MDEC_KICK_LATENCY)
-        dsm_mdec_clock = psx_cycle_count + DSM_MDEC_KICK_LATENCY;
 }
 
 /* Cycles until the next source machine action (word movement or completion). */
 static uint32_t dsm_cycles_to_event(int armed_only) {
     uint32_t best = UINT32_MAX;
     uint64_t now = psx_cycle_count;
+    /* The source MDEC advances at every service edge (D17b). */
+    if (!armed_only && mdec_source_active()) best = (uint32_t)(DSM_QUANTUM - now % DSM_QUANTUM);
     for (int k = 0; k < DSM_COUNT; k++) {
         const DmaSrcMachine *m = &dsm[k];
         int ch = dsm_channel[k];
@@ -1739,7 +1742,7 @@ void dma_advance(uint32_t cycles) {
     if (cycles == 0) return;
     g_dma_exec_depth++;   /* async to-RAM DMA writes below run through psx_write_word */
     uint64_t now = psx_cycle_count;
-    dsm_mdec_feed(now);
+    dsm_mdec_feed(now - now % DSM_QUANTUM);
     dsm_service(DSM_OTC, now);
     dsm_service(DSM_CD, now);
     dsm_service(DSM_GPU, now);
