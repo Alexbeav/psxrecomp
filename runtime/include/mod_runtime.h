@@ -27,6 +27,9 @@ const std::filesystem::path& mod_runtime_effective_disc_path();
 
 #if defined(RECOMP_LAUNCHER)
 const ::RecompLauncherCModProvider* mod_runtime_launcher_provider();
+/* [runtime] hide_hidden_mod_features: the launcher never presents a hidden
+ * feature (recomp-ui RecompLauncherCModProvider::hide_hidden_features). */
+void mod_runtime_set_hide_hidden_features(bool hide);
 #endif
 
 } // namespace PSXRecompV4
