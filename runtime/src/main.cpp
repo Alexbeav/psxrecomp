@@ -1268,6 +1268,9 @@ static int           g_frame_interpolation_blend =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
 static int           g_frame_interpolation_blend_default =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
+/* Mod-owned blend source; reset_mod_owned_presentation() sets VBLANK. */
+static int           g_frame_interpolation_source =
+    PSX_MOD_FRAME_SOURCE_VBLANK;
 static std::array<int, PSX_MAX_PLAYERS> g_mod_controller_mode_override =
     [] {
         std::array<int, PSX_MAX_PLAYERS> modes{};
@@ -1468,6 +1471,7 @@ static void reset_mod_owned_presentation(void) {
     psx_mod_set_adaptive_backdrop_preload(0);
     g_bezel_path.clear();
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
+    g_frame_interpolation_source = PSX_MOD_FRAME_SOURCE_VBLANK;
 }
 
 extern "C" int psx_mod_set_native_vblank_rate(
@@ -1551,6 +1555,21 @@ extern "C" int psx_mod_set_frame_interpolation_blend(
     std::fprintf(stdout, "psxrecomp: frame-interpolation blend = %s\n",
         blend_mode == PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE
             ? "motion-adaptive clarity" : "linear crossfade");
+    return 1;
+}
+
+extern "C" int psx_mod_set_frame_interpolation_source(uint32_t source) {
+    if (source != PSX_MOD_FRAME_SOURCE_VBLANK &&
+        source != PSX_MOD_FRAME_SOURCE_FLIP) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid frame-interpolation source %u\n",
+            (unsigned)source);
+        return 0;
+    }
+    g_frame_interpolation_source = (int)source;
+    std::fprintf(stdout, "psxrecomp: frame-interpolation source = %s\n",
+        source == PSX_MOD_FRAME_SOURCE_FLIP
+            ? "guest frame flips" : "every guest VBlank");
     return 1;
 }
 
@@ -15427,6 +15446,7 @@ session_reboot:
                                           ? 1000.0 / g_frame_period_ms
                                           : 59.94,
                                       g_frame_interpolation_blend);
+        gl_renderer_set_interpolation_source(g_frame_interpolation_source);
     }
     /* Vulkan backend: create the instance/device/swapchain on the
      * SDL_WINDOW_VULKAN window. On failure, fall back to software (vkb_init

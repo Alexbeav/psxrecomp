@@ -239,6 +239,21 @@ enum {
     PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE = 1
 };
 int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
+/*
+ * Choose what the OpenGL presenter treats as a new source frame. VBLANK (the
+ * default, reset at every session start) treats every guest VBlank as one,
+ * which suits games that flip every VBlank. FLIP rotates the blend history
+ * only when the guest really flips (the displayed VRAM origin moves, or the
+ * displayed rect is redrawn) and spreads each crossfade over the measured
+ * flip period (1..4 VBlanks). A 30 Hz game then blends across its whole frame
+ * instead of blending for one VBlank and holding for the next. Guest timing
+ * is unchanged either way.
+ */
+enum {
+    PSX_MOD_FRAME_SOURCE_VBLANK = 0,
+    PSX_MOD_FRAME_SOURCE_FLIP = 1
+};
+int psx_mod_set_frame_interpolation_source(uint32_t source);
 int psx_mod_set_auto_skip_fmv(int enabled);
 /*
  * Draw still artwork behind the game image in OpenGL letterbox/pillarbox

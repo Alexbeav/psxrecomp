@@ -353,6 +353,17 @@ static double        s_interp_host_hz = 0.0;
 static double        s_interp_target_hz = 0.0;
 static double        s_interp_source_hz = 0.0;
 static FrameInterpolationSchedule s_interp_schedule;
+/* Blend source (psx_mod_set_frame_interpolation_source). VBLANK (0, the
+ * default) treats every guest VBlank present as a new frame, exactly as
+ * before. FLIP (1) rotates history only on a real flip -- the display origin
+ * moved or the displayed rect was redrawn -- and spreads one crossfade over
+ * the measured flip period, so 30 Hz content blends for the whole frame
+ * instead of blending for one VBlank and holding for the next. */
+static int           s_interp_source = 0;
+static FrameFlipTracker s_interp_flip;
+static int           s_interp_origin_x = -1, s_interp_origin_y = -1;
+static double        s_interp_phase_lo = 0.0, s_interp_phase_hi = 1.0;
+static uint64_t      s_interp_duplicates = 0;
 static void interp_reset_history(void);
 static int interp_present(float alpha);
 static void interp_present_source_interval(void);
@@ -3963,6 +3974,10 @@ static void interp_reset_history_unlocked(void) {
     s_interp_w = s_interp_h = 0;
     s_interp_source_path = -1;
     frame_interpolation_schedule_reset(&s_interp_schedule);
+    frame_flip_tracker_reset(&s_interp_flip);
+    s_interp_origin_x = s_interp_origin_y = -1;
+    s_interp_phase_lo = 0.0;
+    s_interp_phase_hi = 1.0;
 }
 
 static void interp_reset_history(void) {
@@ -4002,6 +4017,24 @@ void gl_renderer_set_interpolation_suspended(int suspended) {
     s_interp_suspended = suspended;
 }
 
+void gl_renderer_set_interpolation_source(int source) {
+    source = source == 1 ? 1 : 0;
+    if (source != s_interp_source) interp_reset_history_unlocked();
+    s_interp_source = source;
+    if (s_interp_enabled && source)
+        fprintf(stdout, "psxrecomp: GL temporal blending follows guest frame "
+                "flips (flip-aware source)\n");
+}
+
+void gl_renderer_interpolation_source_diag(int *source, uint32_t *flip_period,
+                                           uint64_t *captures,
+                                           uint64_t *duplicates) {
+    if (source) *source = s_interp_source;
+    if (flip_period) *flip_period = s_interp_flip.period;
+    if (captures) *captures = s_interp_captures;
+    if (duplicates) *duplicates = s_interp_duplicates;
+}
+
 int gl_renderer_interpolation_owns_cadence(void) {
     return s_ctx && s_interp_enabled && !s_interp_suspended;
 }
@@ -4021,11 +4054,32 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
 /* Copy a stable display image out of the mutable VRAM/wide render target.
  * Returns true when temporal blending owns this source-frame interval. */
 static int interp_capture(GLuint fbo, int x, int y, int w, int h,
-                          int linear, int force_4_3, int source_path) {
+                          int linear, int force_4_3, int source_path,
+                          int origin_x, int origin_y, int redrawn) {
     if (!s_interp_enabled || s_interp_suspended || !fbo || w <= 0 || h <= 0) return 0;
     int pw = w * s_scale, ph = h * s_scale;
-    if (pw != s_interp_w || ph != s_interp_h ||
-        source_path != s_interp_source_path || force_4_3 != s_interp_force_4_3) {
+    int geometry_changed =
+        pw != s_interp_w || ph != s_interp_h ||
+        source_path != s_interp_source_path || force_4_3 != s_interp_force_4_3;
+    if (s_interp_source == 1) {
+        /* FLIP source: a VBlank that re-presents the same displayed image is
+         * not a new source frame. Keep history and advance the phase window. */
+        int new_frame = geometry_changed || s_interp_valid == 0 || redrawn ||
+                        origin_x != s_interp_origin_x ||
+                        origin_y != s_interp_origin_y;
+        s_interp_origin_x = origin_x;
+        s_interp_origin_y = origin_y;
+        (void)frame_flip_tracker_vblank(&s_interp_flip, new_frame,
+                                        &s_interp_phase_lo, &s_interp_phase_hi);
+        if (!new_frame) {
+            s_interp_duplicates++;
+            return 1;
+        }
+    } else {
+        s_interp_phase_lo = 0.0;
+        s_interp_phase_hi = 1.0;
+    }
+    if (geometry_changed) {
         s_interp_valid = 0;
         s_interp_w = pw; s_interp_h = ph;
         s_interp_prev = s_interp_cur = 0;
@@ -4131,9 +4185,10 @@ static void interp_present_source_interval(void) {
     uint64_t deadline;
     float alpha;
 
-    if (!frame_interpolation_schedule_begin(
+    if (!frame_interpolation_schedule_begin_phase(
             &s_interp_schedule, now, frequency,
-            s_interp_source_hz, s_interp_target_hz))
+            s_interp_source_hz, s_interp_target_hz,
+            s_interp_phase_lo, s_interp_phase_hi))
         return;
 
     while (frame_interpolation_schedule_next(
@@ -4486,8 +4541,10 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     if (lx != 0 || ly != 0 || lw != ww || lh != wh) {
         glClearColor(0.f,0.f,0.f,1.f); glClear(GL_COLOR_BUFFER_BIT);
     }
-    int interp_pair = interp_capture(s_hr_fbo, disp_x, disp_y, w, h,
-                                     linear, force_4_3, GL_PRES_VRAM);
+    int interp_pair = interp_capture(
+        s_hr_fbo, disp_x, disp_y, w, h, linear, force_4_3, GL_PRES_VRAM,
+        disp_x, disp_y,
+        present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1));
     if (interp_pair) {
         /* Temporal blending owns this stock frame interval. Capture hold-last
          * before pacing; every blend and Swap remains on this context/thread. */
@@ -4592,8 +4649,10 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
     if (lx != 0 || ly != 0 || lw != ww || lh != wh) {
         glClearColor(0.f, 0.f, 0.f, 1.f); glClear(GL_COLOR_BUFFER_BIT);
     }
-    int interp_pair = interp_capture(fbo, 0, disp_y, g_wide_w, disp_h,
-                                     linear, 0, GL_PRES_WIDE);
+    int interp_pair = interp_capture(
+        fbo, 0, disp_y, g_wide_w, disp_h, linear, 0, GL_PRES_WIDE,
+        disp_x, disp_y,
+        present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1));
     if (interp_pair) {
         hold_capture_native_fbo(fbo, 0, disp_y, g_wide_w, disp_h, 0, linear);
         interp_present_source_interval();

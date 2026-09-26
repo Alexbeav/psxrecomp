@@ -33,6 +33,12 @@ void gl_renderer_set_swap_interval(int interval);
 void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz,
                                    double source_hz, int blend_mode);
 void gl_renderer_set_interpolation_suspended(int suspended);
+/* Blend source: 0 = every guest VBlank is a source frame (default),
+ * 1 = only real display flips are (psx_mod_set_frame_interpolation_source). */
+void gl_renderer_set_interpolation_source(int source);
+void gl_renderer_interpolation_source_diag(int *source, uint32_t *flip_period,
+                                           uint64_t *captures,
+                                           uint64_t *duplicates);
 int gl_renderer_interpolation_owns_cadence(void);
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
                                     int *history_frames,

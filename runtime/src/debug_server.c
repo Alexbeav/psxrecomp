@@ -7934,12 +7934,21 @@ static void handle_gl_interp(int id, const char *json)
     int enabled = 0, suspended = 0, history = 0;
     double host_hz = 0.0, target_hz = 0.0;
     uint64_t swaps = 0;
+    int source = 0;
+    uint32_t flip_period = 0;
+    uint64_t captures = 0, duplicates = 0;
     gl_renderer_interpolation_diag(&enabled, &suspended, &history,
                                    &host_hz, &target_hz, &swaps);
+    gl_renderer_interpolation_source_diag(&source, &flip_period, &captures,
+                                          &duplicates);
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"suspended\":%d,\"history\":%d,"
-             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu}",
+             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu,"
+             "\"source\":\"%s\",\"flip_period\":%u,\"captures\":%llu,"
+             "\"duplicates\":%llu}",
              id, enabled, suspended, history, host_hz, target_hz,
-             (unsigned long long)swaps);
+             (unsigned long long)swaps, source ? "flip" : "vblank",
+             (unsigned)flip_period, (unsigned long long)captures,
+             (unsigned long long)duplicates);
 }
 
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
