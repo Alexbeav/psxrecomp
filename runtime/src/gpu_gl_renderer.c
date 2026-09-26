@@ -4362,6 +4362,11 @@ static int      s_pb_raw_w = 0, s_pb_raw_h = 0;
 static GLuint   s_pb_wide_tex = 0, s_pb_wide_rb = 0, s_pb_wide_fbo = 0;
 static int      s_pb_wide_w = 0, s_pb_wide_h = 0;
 static GLuint   s_pb_wide_src = 0;
+/* The backup above still equals VRAM (the last pass restored it): rect and
+ * scale it was taken at. A later pass of the same frame reuses it. */
+static int      s_pb_valid = 0;
+static int      s_pb_x = 0, s_pb_y = 0, s_pb_w = 0, s_pb_h = 0, s_pb_scale = 0;
+static uint64_t s_pb_reused = 0;
 static uint16_t *s_pb_cpu = NULL;
 static size_t   s_pb_cpu_cap = 0;
 static DirtyRect s_pb_cpu_dirty, s_pb_pack_dirty, s_pb_up_rects[UP_RECTS_MAX];
@@ -4653,6 +4658,7 @@ static void pass_resources_release(void) {
         pass_free_color_fbo(&e->raw_tex, NULL, &e->raw_fbo, &e->raw_w, &e->raw_h);
     }
     s_pj_n = 0;
+    s_pb_valid = 0;
 }
 
 static int pass_journal_protect(int x, int y, int w, int h) {
@@ -4710,7 +4716,7 @@ static void pass_journal_rollback(void) {
 }
 
 int gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
-                           uint32_t period_vblanks) {
+                           uint32_t period_vblanks, int reuse_backup) {
     int S = s_scale, gi, wide, tw, th;
     PassGen *g;
     if (!gl_renderer_pass_ready() || s_pass_active) return 0;
@@ -4743,6 +4749,15 @@ int gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
         return 0;
     }
 
+    /* The previous pass of this frame restored exactly this backup and no
+     * guest code ran since: VRAM and the coherency state already equal it. */
+    if (reuse_backup && s_pb_valid && s_pb_x == x && s_pb_y == y &&
+        s_pb_w == w && s_pb_h == h && s_pb_scale == S &&
+        s_pb_wide_src == (g_wide_w > 0 ? pass_wide_fbo_for(x) : 0)) {
+        s_pb_reused++;
+        goto backed_up;
+    }
+    s_pb_valid = 0;
     /* Back up the rect: hr color + stencil, raw mirror, wide band, CPU rows. */
     if (!pass_make_color_fbo(&s_pb_hr_tex, &s_pb_hr_rb, &s_pb_hr_fbo,
                              &s_pb_hr_w, &s_pb_hr_h, w * S, h * S,
@@ -4783,7 +4798,9 @@ int gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
     s_pb_last_path = s_last_present_path;
     s_pb_last_dx = s_last_dx; s_pb_last_dy = s_last_dy;
     s_pb_last_dw = s_last_dw; s_pb_last_dh = s_last_dh;
+    s_pb_x = x; s_pb_y = y; s_pb_w = w; s_pb_h = h; s_pb_scale = S;
 
+backed_up:
     s_pass_x = x; s_pass_y = y; s_pass_w = w; s_pass_h = h;
     if (s_pass_verify < 0) {
         const char *e = getenv("PSX_RENDER_PASS_VERIFY");
@@ -4846,6 +4863,7 @@ void gl_renderer_pass_end(uint32_t alpha_q16, int keep) {
     s_last_dx = s_pb_last_dx; s_last_dy = s_pb_last_dy;
     s_last_dw = s_pb_last_dw; s_last_dh = s_pb_last_dh;
     s_pass_active = 0;
+    s_pb_valid = 1;
 
     if (s_pass_verify) {
         static uint8_t *after_hr = NULL, *after_raw = NULL;
@@ -4916,6 +4934,7 @@ void gl_renderer_pass_diag(uint64_t out[8]) {
 }
 
 uint64_t gl_renderer_pass_journaled(void) { return s_pj_total; }
+uint64_t gl_renderer_pass_backups_reused(void) { return s_pb_reused; }
 
 uint32_t gl_renderer_pass_image_textures(uint64_t *bytes) {
     uint32_t n = s_pgen_alloc_n[0] + s_pgen_alloc_n[1];

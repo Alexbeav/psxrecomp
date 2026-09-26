@@ -8001,7 +8001,8 @@ static void handle_render_pass_stats(int id, const char *json)
              "\"blended_presents\":%llu,\"expired\":%llu,"
              "\"unmatched_flips\":%llu,\"early_presents\":%llu,"
              "\"cost_us\":%llu,\"frame_images\":%llu,\"journaled\":%llu,"
-             "\"image_textures\":%u,\"image_bytes\":%llu,\"status\":%u}",
+             "\"image_textures\":%u,\"image_bytes\":%llu,\"status\":%u,"
+             "\"backups_reused\":%llu}",
              id, (unsigned long long)st.plans, (unsigned long long)st.planned,
              (unsigned long long)st.wanted, (unsigned long long)st.refused,
              (unsigned long long)st.passes, (unsigned long long)st.aborted,
@@ -8024,7 +8025,8 @@ static void handle_render_pass_stats(int id, const char *json)
              (unsigned long long)gd[6], (unsigned long long)gd[7],
              (unsigned long long)gl_renderer_pass_journaled(),
              (unsigned)image_textures, (unsigned long long)image_bytes,
-             (unsigned)psx_mod_render_pass_status());
+             (unsigned)psx_mod_render_pass_status(),
+             (unsigned long long)gl_renderer_pass_backups_reused());
 }
 
 /* render_pass_refuse on=<0|1>: make the OpenGL backend decline render passes

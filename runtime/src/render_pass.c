@@ -215,6 +215,12 @@ static RenderPassStats s_stats;
 static int s_verify = -1;
 static int s_open_generation;        /* next pass captures frame N's image */
 static uint32_t s_plan_period = 2;
+/* The last pass's restore left the machine as it found it; while no guest
+ * code runs (clock and store count unchanged) and the plan is the same, the
+ * next pass may reuse that pass's VRAM backup. */
+static uint64_t s_plan_serial, s_restored_plan;
+static uint64_t s_restored_cycle, s_restored_stores;
+static int s_restored_valid;
 
 /* PSX_RENDER_PASS_WATCHDOG=<guest cycles> lowers the cut-off (debug), so a
  * title's rollback path can be exercised on real passes. */
@@ -252,6 +258,7 @@ void render_pass_reset_session(void) {
     memset(&s_stats, 0, sizeof s_stats);
     memset(g_render_pass_dropped_writes, 0, sizeof g_render_pass_dropped_writes);
     s_open_generation = 0;
+    s_restored_valid = 0;
 }
 
 /* Everything that must hold before guest code may run frozen, as a
@@ -298,6 +305,7 @@ uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
     }
     s_stats.plans++;
     s_stats.planned += n;
+    s_plan_serial++;
     s_open_generation = 1;
     s_plan_period = period_vblanks;
     return n;
@@ -453,7 +461,7 @@ int psx_mod_render_pass(struct CPUState *cpu, const PSXModRenderPass *pass,
     uint64_t t0, t1, tb, tg, te, tr, hash_before = 0, hash_after = 0;
     uint64_t cycles_before;
     uint32_t leaks;
-    int ok = 0, open;
+    int ok = 0, open, reuse;
     static uint32_t s_leaks_before;
 
     if (!cpu || !pass || !fn || pass->struct_size < sizeof *pass ||
@@ -474,9 +482,12 @@ int psx_mod_render_pass(struct CPUState *cpu, const PSXModRenderPass *pass,
         if (inv == 0.0) inv = 1000.0 / (double)gl_renderer_perf_frequency();
         s_ms_per_tick = inv;
     }
+    reuse = !open && s_restored_valid && s_restored_plan == s_plan_serial &&
+            s_restored_cycle == psx_cycle_count &&
+            s_restored_stores == g_guest_store_count;
     /* Frame N's own image is captured by the first pass after a plan. */
     if (!gl_renderer_pass_begin(pass->x, pass->y, pass->w, pass->h, open,
-                                s_plan_period))
+                                s_plan_period, reuse))
         return 0;
     s_open_generation = 0;
     s_leaks_before = gl_renderer_pass_leaks();
@@ -528,6 +539,10 @@ int psx_mod_render_pass(struct CPUState *cpu, const PSXModRenderPass *pass,
     checkpoint_restore(cpu);
     psx_cycle_freeze_end(&s_freeze);
     s_nesting = 0;
+    s_restored_valid = 1;
+    s_restored_plan = s_plan_serial;
+    s_restored_cycle = psx_cycle_count;
+    s_restored_stores = g_guest_store_count;
     tr = gl_renderer_perf_ticks();
     s_stats.avg_begin_ms = ema_ms(s_stats.avg_begin_ms, tb - t0);
     s_stats.avg_guest_ms = ema_ms(s_stats.avg_guest_ms, tg - tb);

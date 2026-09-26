@@ -113,6 +113,11 @@ or before the deadline's phase is shown, crossfaded into the next one when
 passes were shed. Deadlines that fall due while passes run are presented
 between passes, so the frame on screen keeps moving.
 
+Consecutive passes of one frame reuse the VRAM backup the first one took:
+each pass's restore leaves the rect exactly as backed up, and no guest code
+runs in between (the clock and guest store count are unchanged), so only the
+first pass copies the rect out (`backups_reused` in `render_pass_stats`).
+
 Passes cost host time inside the game's frame. The budget per frame is
 `PSX_RENDER_PASS_BUDGET` percent (default 80) of the presenter's idle time
 plus the presents beyond two per frame, learnt from the previous frame, over

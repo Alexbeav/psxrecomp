@@ -58,9 +58,12 @@ uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
                                uint32_t *alpha_q16, uint32_t max,
                                uint32_t *wanted);
 /* Open the VRAM transaction for rect; open_gen first captures the game's own
- * image of it as a new generation. Returns 0 when refused (nothing changed). */
+ * image of it as a new generation. reuse_backup: the caller guarantees that
+ * no guest code ran since the previous pass ended (its restore left VRAM as
+ * backed up), so the backup of that pass is reused when it covers the same
+ * rect at the same scale. Returns 0 when refused (nothing changed). */
 int      gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
-                                uint32_t period_vblanks);
+                                uint32_t period_vblanks, int reuse_backup);
 /* Capture the drawn rect at alpha_q16 (keep) and roll the rect back. */
 void     gl_renderer_pass_end(uint32_t alpha_q16, int keep);
 uint32_t gl_renderer_pass_leaks(void);
@@ -73,6 +76,8 @@ void     gl_renderer_pass_service_presents(void);
 void     gl_renderer_pass_diag(uint64_t out[8]);
 /* Out-of-rect VRAM writes journaled and rolled back (lifetime count). */
 uint64_t gl_renderer_pass_journaled(void);
+/* Passes that reused the previous pass's VRAM backup (lifetime count). */
+uint64_t gl_renderer_pass_backups_reused(void);
 /* Pass image textures allocated now (both generations) and their bytes. */
 uint32_t gl_renderer_pass_image_textures(uint64_t *bytes);
 /* Debug: dump the images of the next `generations` shown frames as PNGs. */

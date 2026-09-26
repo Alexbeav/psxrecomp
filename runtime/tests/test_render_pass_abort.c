@@ -151,8 +151,9 @@ uint32_t gl_renderer_pass_plan(uint32_t p, uint32_t s, uint32_t *a,
 }
 static int s_open_passes, s_kept;
 int gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
-                           uint32_t period) {
+                           uint32_t period, int reuse_backup) {
     (void)x; (void)y; (void)w; (void)h; (void)open_gen; (void)period;
+    (void)reuse_backup;
     s_open_passes++;
     return 1;
 }
