@@ -30,7 +30,8 @@ if(BUILD_TESTING)
     target_include_directories(mod_texture_banks_test PRIVATE include)
     add_test(NAME mod_texture_banks_test COMMAND mod_texture_banks_test)
     if(NOT MSVC)
-        add_executable(ws_world_scene_test tests/test_ws_world_scene.c)
+        add_executable(ws_world_scene_test tests/test_ws_world_scene.c
+            src/psx_video_timing.c)
         target_include_directories(ws_world_scene_test PRIVATE include src)
         target_compile_options(ws_world_scene_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections)
         target_link_options(ws_world_scene_test PRIVATE -flto -Wl,--gc-sections)
@@ -275,7 +276,8 @@ if(BUILD_TESTING)
     add_test(NAME ws_hud_anchor_test COMMAND ws_hud_anchor_test)
 
     add_executable(gpu_textured_dot_nw_shift_exec_test
-        tests/test_gpu_textured_dot_nw_shift_exec.c)
+        tests/test_gpu_textured_dot_nw_shift_exec.c
+        src/psx_video_timing.c)
     target_include_directories(gpu_textured_dot_nw_shift_exec_test PRIVATE
         include
         src)
@@ -710,6 +712,12 @@ if(BUILD_TESTING)
         src/psx_vblank_clock.c)
     target_include_directories(psx_vblank_clock_test PRIVATE include)
     add_test(NAME psx_vblank_clock_test COMMAND psx_vblank_clock_test)
+
+    add_executable(psx_video_timing_test
+        tests/test_psx_video_timing.c
+        src/psx_video_timing.c)
+    target_include_directories(psx_video_timing_test PRIVATE include)
+    add_test(NAME psx_video_timing_test COMMAND psx_video_timing_test)
 
     add_executable(spu_end_without_repeat_test
         tests/test_spu_end_without_repeat.c)

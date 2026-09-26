@@ -26,6 +26,7 @@
 #include "debug_server.h"
 #include "cpu_state.h"
 #include "event_ring.h"
+#include "psx_video_timing.h"
 #include "color_lut.h"
 #include "mod_runtime.h"
 #include "mod_plugins.h"
@@ -2638,6 +2639,9 @@ static uint32_t hres2;            /* bit 16: horizontal resolution 2 (368 mode) 
 static uint32_t hres1;            /* bits 17-18: horizontal resolution 1 */
 static uint32_t vres;             /* bit 19: vertical resolution (0=240, 1=480) */
 static uint32_t video_mode;       /* bit 20: 0=NTSC, 1=PAL */
+/* Video standard at power-on, before any GP1(08h): the disc region stands in
+ * for a region BIOS's choice (gpu_set_power_on_video_mode). */
+static uint32_t s_power_on_video_mode;
 static uint32_t display_depth;    /* bit 21: 0=15bit, 1=24bit */
 static uint32_t vertical_interlace; /* bit 22 */
 
@@ -2929,7 +2933,8 @@ static void gpu_reset_state(int clear_vram) {
     hres2 = 0;
     hres1 = 0;
     vres = 0;
-    video_mode = 0;
+    video_mode = 0;   /* GP1(00h) resets GP1(08h) to 0 = NTSC */
+    (void)psx_video_timing_set_pal(0);
     display_depth = 0;
     vertical_interlace = 0;
 
@@ -2957,6 +2962,14 @@ static void gpu_reset_state(int clear_vram) {
 
 void gpu_init(void) {
     gpu_reset_state(1);
+    video_mode = s_power_on_video_mode;
+    (void)psx_video_timing_set_pal((int)video_mode);
+}
+
+void gpu_set_power_on_video_mode(int pal) {
+    s_power_on_video_mode = pal ? 1u : 0u;
+    video_mode = s_power_on_video_mode;
+    (void)psx_video_timing_set_pal((int)video_mode);
 }
 
 /* ---- GPUSTAT read (0x1F801814) ---- */
@@ -5975,7 +5988,10 @@ static void gp1_display_mode(uint32_t val) {
     uint32_t new_depth = (val >> 4) & 1;
     hres1 = val & 3;
     vres = (val >> 2) & 1;
-    video_mode = (val >> 3) & 1;
+    video_mode = (uint32_t)psx_gp1_display_mode_is_pal(val);
+    /* VBlank rate, Timer 1 HBlank clock and host pacing follow the live
+     * standard, whatever the disc region (psx_video_timing.h). */
+    (void)psx_video_timing_set_pal((int)video_mode);
     if (new_depth != display_depth)
         s_d24_upload_x1 = 0; /* rising/falling: drop stale coverage */
     display_depth = new_depth;
@@ -6216,6 +6232,7 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     if (len != gpu_snapshot_bytes()) return 0;
     pst_r_init(&r, p, len);
     if (!gpu_snap_parse(&r)) return 0;
+    (void)psx_video_timing_set_pal((int)video_mode);
     ws_reset_scene_history();
     ws_scene_hold_reset(&s_ws_scene_hold);
     ws_hud_anchor_clear(ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE);
