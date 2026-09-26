@@ -1776,8 +1776,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     *next_pc_out = pc + 4;
 
 #ifdef PSX_ENABLE_BLOCK_CYCLES
-    /* Instruction FETCH cost (I-cache) — charged FIRST, before the §1 base, exactly
-     * like Beetle ReadInstruction precedes the per-instruction base (cpu.cpp). HIT=+0,
+    /* Instruction FETCH cost (I-cache) — charged FIRST, before the §1 base (the order
+     * fitted to the oracle ruler loops, accuracy/load_readfudge_ldabsorb.md). HIT=+0,
      * KSEG1=+4, cached miss=+3+refill; a miss also clears the load give-back. */
     if(source_gpu_runtime_active())psx_icache_fetch_interp_after_boundary(cpu,pc);
     else psx_icache_fetch_interp(cpu, pc);

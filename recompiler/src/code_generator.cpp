@@ -38,7 +38,8 @@ static bool codegen_cycle_per_insn() {
     // charges its cost at its own site, so the running cycle count is correct
     // mid-block. This is REQUIRED for stateful timing — mult/div completion-stall
     // (mflo/mfhi wait for muldiv_ts_done) and later GTE stalls — to absorb
-    // correctly, exactly like Beetle's per-instruction timestamp. Block-up-front
+    // correctly, as the oracle ruler loops measure (accuracy/load_readfudge_ldabsorb.md).
+    // Block-up-front
     // charging loses the in-between timing and can only charge full latency.
     // Set PSX_CODEGEN_CYCLE_PER_INSN=0 to force the old block-up-front mode.
     const char* e = std::getenv("PSX_CODEGEN_CYCLE_PER_INSN");
@@ -1810,8 +1811,9 @@ std::string CodeGenerator::translate_basic_block(
         ss << "#endif\n";
     };
     // I-cache FETCH cost (faithful R3000A), emitted BEFORE the per-instruction
-    // interlock/load — exactly like Beetle ReadInstruction precedes the base, and so a
-    // fetch MISS clears any pending load give-back before the next load arms one. Only
+    // interlock/load: our model charges the fetch before the per-instruction base, so a
+    // fetch MISS clears any pending load give-back before the next load arms one (order
+    // fitted to the oracle ruler loops, accuracy/load_readfudge_ldabsorb.md). Only
     // emitted at cache-line LEADERS: a block leader / mid-block jump-table target (any
     // address reachable other than by fall-through, i.e. a possibly-cold cache entry) OR
     // a 16-byte-line start (addr&0xC==0, a sequential line crossing). Intra-line

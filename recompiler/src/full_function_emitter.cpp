@@ -846,8 +846,9 @@ bool FullFunctionEmitter::emit_function(
     };
 
     // I-cache FETCH cost (faithful R3000A), emitted BEFORE the per-instruction
-    // interlock/load — like Beetle ReadInstruction precedes the base, so a fetch MISS
-    // clears any pending load give-back before the next load arms one. Only emitted at
+    // interlock/load: our model charges the fetch before the per-instruction base, so a
+    // fetch MISS clears any pending load give-back before the next load arms one (order
+    // fitted to the oracle ruler loops, accuracy/load_readfudge_ldabsorb.md). Only emitted at
     // cache-line LEADERS: a block leader or interrupt resume entry (a possibly-cold
     // cache entry; cross-function targets are inserted into block_leaders above) OR a
     // 16-byte-line start (addr&0xC==0, a sequential line crossing). Intra-line followers
@@ -856,7 +857,7 @@ bool FullFunctionEmitter::emit_function(
     // ROM/compile-time address; relocate_ra maps
     // it to the RUNTIME guest PC the CPU actually fetches from (BIOS main stays in-place
     // KSEG1 0xBFC..; relocated kernel Part 2 → 0x500+, shell → 0x80030000+), so the
-    // shared I-cache evolves identically to the dirty-RAM interp (cpu->pc) and Beetle —
+    // shared I-cache evolves identically to the dirty-RAM interp (cpu->pc) —
     // and the KSEG1 uncached test (>=0xA0000000) sees the true virtual address. The
     // relocation preserves bits[3:0], so the line-leader test is space-independent.
     auto emit_icache_fetch = [&](uint32_t rom_addr) {

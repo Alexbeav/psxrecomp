@@ -2050,9 +2050,10 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
 
 /* ---- CPU guest-side data loads: faithful R3000A load-delay pipeline interlock ----
  * The R3000A has no usable D-cache (it is repurposed as the 1 KB scratchpad), so a
- * CPU data load from main DRAM stalls the pipeline. Beetle (cpu.cpp ReadMemory,
- * 364-451) models this as: a +2 "fudge" iff the predecessor committed no load, the
- * region wait (main RAM = +3, libretro.cpp:884), and a completion cost (+2 CPU /
+ * CPU data load from main DRAM stalls the pipeline. Our model, fitted to the oracle
+ * ruler loops (tools/cycle_testrom ruler #2 and the BIOS-kernel ruler #1; receipts
+ * in accuracy/load_readfudge_ldabsorb.md), charges: a +2 "fudge" iff the predecessor committed no
+ * load, the region wait (main RAM = +3), and a completion cost (+2 CPU /
  * +1 LWC2); the (region+completion) becomes a per-register LDAbsorb "give-back" that
  * following instructions consume instead of their own +1 base (pipeline write-back
  * overlap). The §1 base + GPR_DEPRES + DO_LDS that bracket this run in psx_cyc.h.
@@ -2064,8 +2065,8 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
  * data-access cost is charged exactly once, here). Keyed on the runtime effective
  * physical address (KUSEG/KSEG0/KSEG1 alias the same DRAM).
  *
- * DMACycleSteal residual: Beetle adds the (dynamic) DMACycleSteal to EVERY read
- * (libretro.cpp:868-869). That is non-zero only while a DMA channel is actively
+ * DMACycleSteal residual: the oracle adds a (dynamic) DMA cycle-steal cost to EVERY
+ * read. That is non-zero only while a DMA channel is actively
  * stealing the bus; modeling it needs the live steal count threaded out of the DMA
  * controller, and it can't be isolated by a static ruler. It remains an unmodeled
  * dynamic axis by default. The optional source VRAM-upload DMA profile now supplies
