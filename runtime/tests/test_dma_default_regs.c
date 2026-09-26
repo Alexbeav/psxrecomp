@@ -1,5 +1,6 @@
-/* Default-path register behaviour (PS1B-186 review): CHCR bit 28 at the kick,
- * the DPCR reset value and the default CD event bound. Authored; no BIOS or disc. */
+/* DMA register behaviour (PS1B-186 review): CHCR bit 28 at the kick (default
+ * clear, source retention), the OTC start rule, the DPCR reset value and the
+ * default CD event bound. Authored; no BIOS or disc. */
 #define _POSIX_C_SOURCE 200809L
 #include "../src/dma.c"
 #include <assert.h>
@@ -76,7 +77,8 @@ static void fresh(void) {
     dma_write(0x1F8010F0, 0x0FEDCBA9u);
 }
 int main(void) {
-    /* 1. [DOC] PSX-SPX "D#_CHCR": bit 28 clears when the transfer begins. */
+    /* 1. Default path: [DOC] PSX-SPX "D#_CHCR": bit 28 clears when the transfer
+     * begins (the oracle retains it, D20/D20b: [NOT OBSERVED: release policy]). */
     fresh(); kick(0x1F801080, 0x10000, (4u << 16) | 32, 0x11000201);   /* MDEC in, async */
     assert((channels[0].chcr >> 24) & 1u); assert(!((channels[0].chcr >> 28) & 1u));
     fresh(); kick(0x1F801090, 0x20000, (4u << 16) | 32, 0x11000200);   /* MDEC out, async */
@@ -95,13 +97,7 @@ int main(void) {
     set_option("PSX_INPUT_ROUTE_FILE", "authored-fixture");
     set_option("PSX_INPUT_ROUTE_DMA_MODEL", "octoshock-2.2.2-otc");
     dma_init(); assert(dpcr == 0u);
-    /* Source profile, chopped CD (the CPU runs, so CHCR is readable mid-transfer):
-     * the same clear [NOT OBSERVED]. */
-    set_option("PSX_CD_DMA_MODEL", "octoshock-2.2.2");
-    dma_init(); dma_write(0x1F8010F0, 0x0FEDCBA9u);
-    kick(0x1F8010B0, 0x20000, 0x00010200, 0x11000100);
-    assert((channels[3].chcr >> 24) & 1u); assert(!((channels[3].chcr >> 28) & 1u));
-    set_option("PSX_INPUT_ROUTE_DMA_MODEL", ""); set_option("PSX_CD_DMA_MODEL", "");
+    set_option("PSX_INPUT_ROUTE_DMA_MODEL", "");
     /* 3. The default CD event bound: active, words left, CHCR bit 24, ch3 enabled. */
     fresh(); cdrom_async.active = 1; cdrom_async.total_words = cdrom_async.remaining_words = 10;
     channels[3].chcr = (1u << 24) | 1u;                                 /* RAM->CD: cancel next tick */
@@ -110,6 +106,45 @@ int main(void) {
     assert(dma_cycles_to_internal_event() == UINT32_MAX);
     cdrom_async.remaining_words = 10; cdrom_async.cycles_accum = 0;     /* normal: per-word bound */
     assert(dma_cycles_to_internal_event() == DMA_CDROM_CYCLES_PER_WORD);
-    puts("PASS default CHCR bit 28 clear on ch0-4, DPCR reset (default and source), default CD event bound");
+    /* 4. [DOC] PSX-SPX "D#_CHCR" + [ORACLE FIXTURE D20b]: OTC needs bit 28 to start,
+     * in both modes. */
+    for (int src = 0; src < 2; src++) {
+        set_option("PSX_INPUT_ROUTE_FILE", "authored-fixture");
+        set_option("PSX_INPUT_ROUTE_DMA_MODEL", src ? "octoshock-2.2.2-otc" : "");
+        fresh(); ram[0x100 / 4] = 0xDEADBEEFu;
+        kick(0x1F8010E0, 0x100, 4, 0x01000002);
+        for (int i = 0; i < 4096; i++) { psx_cycle_count++; dma_advance(1); }
+        assert(channels[6].chcr == 0x01000002u); assert(ram[0x100 / 4] == 0xDEADBEEFu);
+        kick(0x1F8010E0, 0x100, 4, 0x11000002);
+        for (int i = 0; i < 4096; i++) { psx_cycle_count++; dma_advance(1); }
+        assert(!((channels[6].chcr >> 24) & 1u)); assert(ram[0x100 / 4] == 0x0000FCu);
+    }
+    /* 5. Source profile: [ORACLE FIXTURE D20, D20b] bit 28 stays set with bit 24
+     * through the transfer and both clear at completion. */
+    set_option("PSX_INPUT_ROUTE_DMA_MODEL", "octoshock-2.2.2-otc");
+    set_option("PSX_CD_DMA_MODEL", "octoshock-2.2.2");
+    static const struct { uint32_t base, madr, bcr, chcr; int completes; } live[] = {
+        { 0x1F801080, 0x10000, (4u << 16) | 32, 0x11000201, 0 },   /* MDEC in: decoder stubbed idle */
+        { 0x1F801090, 0x20000, (4u << 16) | 32, 0x11000200, 0 },   /* MDEC out */
+        { 0x1F8010A0, 0x30000, (4u << 16) | 16, 0x11000201, 1 },   /* GPU upload, SyncMode 1 */
+        { 0x1F8010B0, 0x20000, 0x00010200,      0x11000100, 1 },   /* CD, chopped */
+        { 0x1F8010C0, 0x10000, (4u << 16) | 16, 0x11000201, 1 },   /* SPU write */
+    };
+    for (int c = 0; c < 5; c++) {
+        fresh(); int ch = (int)((live[c].base - 0x1F801080u) / 0x10u);
+        kick(live[c].base, live[c].madr, live[c].bcr, live[c].chcr);
+        assert((channels[ch].chcr >> 24) & 1u); assert((channels[ch].chcr >> 28) & 1u);
+        int done = 0;
+        for (int i = 0; i < 200000 && !done; i++) {
+            psx_cycle_count++; dma_advance(1);
+            uint32_t v = channels[ch].chcr;
+            if (!((v >> 24) & 1u)) { assert(!((v >> 28) & 1u)); done = 1; }
+            else assert((v >> 28) & 1u);
+        }
+        assert(done == live[c].completes);
+    }
+    set_option("PSX_INPUT_ROUTE_DMA_MODEL", ""); set_option("PSX_CD_DMA_MODEL", "");
+    puts("PASS default CHCR bit 28 clear on ch0-4, DPCR reset (default and source), default CD event bound, "
+         "OTC needs bit 28 (both modes), source bit-28 retention to completion (D20/D20b)");
     return 0;
 }
