@@ -72,8 +72,15 @@ for fn in ("void debug_server_trace_write_check(",
 rp = (SRC / "render_pass.c").read_text(encoding="utf-8")
 for gate in ("psx_netplay_active()", "psx_rewind_is_open()",
              "psx_selfcheck_resim_active()", "psx_get_in_exception()",
-             "dma_gpu_linked_list_active()"):
+             "dma_gpu_linked_list_active()",
+             "psx_presentation_fast_forward()"):
     assert gate in rp, "passes must refuse to run when " + gate
+main = (SRC / "main.cpp").read_text(encoding="utf-8")
+ff = main[main.index("const int present_every ="):]
+ff = ff[:ff.index("turbo_skip = (turbo_skip + 1) % present_every;")]
+assert "s_presentation_fast_forward = 1;" in ff, (
+    "manual fast-forward must refuse render passes (it presents every 2nd "
+    "VBlank, so the plan would otherwise still see presents)")
 
 b = body(rp, "static void checkpoint_restore(CPUState *cpu) {")
 assert "nesting_restore(&s_ck.nest);" in b, (

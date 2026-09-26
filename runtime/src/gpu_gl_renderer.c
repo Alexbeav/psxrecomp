@@ -70,6 +70,7 @@
 #include "mod_texture_banks.h"
 #include "frame_interpolation.h"
 #include "render_pass_plan.h"
+#include "mod_plugins.h"      /* PSX_MOD_RENDER_PASS_* reasons */
 #include "host_osd.h"
 #include "psx_savestate_menu.h"
 #include "host_time.h"
@@ -4077,6 +4078,11 @@ void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz
                 "(host %.1f Hz)\n", host_hz);
 }
 
+void gl_renderer_set_interpolation_blend(int blend_mode) {
+    s_interp_blend_mode = blend_mode == 1 ? 1 : 0;
+    s_interp_hold = blend_mode == 2 ? 1 : 0;
+}
+
 void gl_renderer_set_interpolation_suspended(int suspended) {
     suspended = suspended ? 1 : 0;
     if (suspended != s_interp_suspended) interp_reset_history_unlocked();
@@ -4386,10 +4392,35 @@ static void pass_gens_invalidate(void) {
     s_pgen_promote = 0;
 }
 
+static int s_pass_force_refuse = -1;   /* -1: read PSX_RENDER_PASS_REFUSE */
+
+void gl_renderer_pass_force_refuse(int on) {
+    s_pass_force_refuse = on ? 1 : 0;
+}
+
+uint32_t gl_renderer_pass_unavailable(void) {
+    if (s_pass_force_refuse < 0) {
+        const char *e = getenv("PSX_RENDER_PASS_REFUSE");
+        s_pass_force_refuse = (e && e[0] && e[0] != '0') ? 1 : 0;
+        if (s_pass_force_refuse)
+            fprintf(stderr, "psxrecomp: render passes refused by the backend "
+                    "(PSX_RENDER_PASS_REFUSE, debug)\n");
+    }
+    if (!s_ctx || !s_raster_ok || !s_interp_enabled || s_interp_suspended ||
+        s_interp_source != 1 || !(s_interp_source_hz > 0.0))
+        return PSX_MOD_RENDER_PASS_NO_PRESENTER;
+    /* Dual raster (netplay CPU-authoritative VRAM) or a debug refusal. */
+    if (s_cpu_auth_dual || s_pass_force_refuse)
+        return PSX_MOD_RENDER_PASS_BACKEND;
+    /* The history restarts when the display mode changes (e.g. title ->
+     * race); passes wait for its first frame, a VBlank or two. */
+    if (s_interp_valid <= 0)
+        return PSX_MOD_RENDER_PASS_BUSY;
+    return PSX_MOD_RENDER_PASS_READY;
+}
+
 int gl_renderer_pass_ready(void) {
-    return s_ctx && s_raster_ok && !s_cpu_auth_dual && s_interp_enabled &&
-           !s_interp_suspended && s_interp_source == 1 && s_interp_valid > 0 &&
-           s_interp_source_hz > 0.0;
+    return gl_renderer_pass_unavailable() == PSX_MOD_RENDER_PASS_READY;
 }
 
 /* Slots per generation that fit a 256 MiB budget for both generations. */

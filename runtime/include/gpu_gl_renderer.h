@@ -33,6 +33,9 @@ void gl_renderer_set_swap_interval(int interval);
 void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz,
                                    double source_hz, int blend_mode);
 void gl_renderer_set_interpolation_suspended(int suspended);
+/* Change only the blend mode (0 linear, 1 change-adaptive, 2 hold), keeping
+ * the history and schedule; takes effect at the next present. */
+void gl_renderer_set_interpolation_blend(int blend_mode);
 /* Blend source: 0 = every guest VBlank is a source frame (default),
  * 1 = only real display flips are (psx_mod_set_frame_interpolation_source). */
 void gl_renderer_set_interpolation_source(int source);
@@ -43,6 +46,12 @@ void gl_renderer_interpolation_source_diag(int *source, uint32_t *flip_period,
 /* Render passes (render_pass.c; docs/RENDER_PASSES.md). The presenter is
  * ready for passes: GL raster, interpolation live with the FLIP source. */
 int      gl_renderer_pass_ready(void);
+/* Why not: 0 ready, PSX_MOD_RENDER_PASS_NO_PRESENTER or _BACKEND
+ * (mod_plugins.h). A backend mode that cannot host passes reports BACKEND. */
+uint32_t gl_renderer_pass_unavailable(void);
+/* Debug: make the backend decline passes (PSX_RENDER_PASS_REFUSE=1 at start,
+ * render_pass_refuse over TCP), as a renderer mode without them would. */
+void     gl_renderer_pass_force_refuse(int on);
 /* Phases the presenter will show for the frame the next flip displays. */
 uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
                                uint32_t shown_after_vblanks,

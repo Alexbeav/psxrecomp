@@ -18,6 +18,7 @@ uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
                                   uint32_t *alpha_q16, uint32_t max);
 int psx_mod_render_pass(struct CPUState *cpu, const PSXModRenderPass *pass,
                         PSXModRenderPassFn fn, void *user);
+uint32_t psx_mod_render_pass_status(void);
 ```
 
 Call both from an emulation-thread function-entry hook at the point where
@@ -41,13 +42,36 @@ flip, and a plugin that supplies passes normally selects
 `PSX_MOD_FRAME_INTERPOLATION_HOLD`, so wherever no pass image applies the
 newest game frame is repeated rather than crossfaded one frame late.
 
+### When passes are unavailable
+
+`psx_mod_render_pass_status()` says why a plan would be empty, the host-time
+budget aside (an empty plan while it says `READY` was shed for time):
+
+| Status | Meaning | Lasts |
+|---|---|---|
+| `READY` (0) | passes can run | |
+| `NO_PRESENTER` (1) | not OpenGL, interpolation off or suspended (FMV), or not the FLIP source | until the presenter changes |
+| `BACKEND` (2) | the renderer declines passes in its current mode | while that mode lasts |
+| `DISABLED` (3) | switched off after repeated faults | the session |
+| `SESSION` (4) | netplay, rollback, rewind, load/save replay, self-check resimulation | transient |
+| `FAST_FORWARD` (5) | manual fast-forward, turbo-through-loads, FMV auto-skip, TCP turbo | transient |
+| `BUSY` (6) | inside an exception, a pass or a GPU DMA walk, or no frame captured since the presenter's history restarted (a display mode change) | transient |
+
+A plugin that relies on passes should not leave the player on stock-rate
+frames while a lasting reason holds: it can switch the presenter to a
+crossfade with `psx_mod_set_frame_interpolation_blend()`, which may be called
+from a hook at any time and takes effect at the next present, and switch
+back to `HOLD` when the status is `READY` again. A backend mode that cannot
+host passes (for example a renderer path whose VRAM is not one texture) should
+report `BACKEND` from `gl_renderer_pass_unavailable()`.
+
 ## What a pass may and may not do
 
 While `fn` runs (`g_psx_render_pass_active`):
 
 | Area | Behaviour | Where |
 |---|---|---|
-| Guest clock | cycles are counted (GTE and mult/div deadlines work) but no device is serviced, no VBlank or device event fires | `psx_cycles.c` freeze |
+| Guest clock | cycles are counted (GTE and mult/div deadlines work) but no device is serviced, no VBlank or device event fires | `psx_cycles.c` freeze (`psx_cycle_freeze.h`, runtime-only: the codegen-hashed `psx_cycles.h` is untouched) |
 | Interrupts | never delivered | `interrupts.c` |
 | GPU DMA | linked lists and delayed completions finish synchronously | `dma.c` |
 | RAM / scratchpad stores | written directly, bypassing code-page tracking, overlay watch, write traces and fingerprints | `memory.c` `render_pass_store` |
@@ -72,10 +96,12 @@ After 8 faults (watchdog or refused writes) passes stay off for the session.
 ## Gates
 
 The plan returns 0 in netplay, rollback resimulation, self-check, rewind,
-lockstep, an exception, while a GPU DMA list is in flight, on anything but
-the OpenGL renderer with FLIP-source interpolation, while the presenter is
-suspended (FMV), and when no VBlank was presented since the last plan (debug
-turbo, headless).
+lockstep, an exception, while a GPU DMA list is in flight, during manual
+fast-forward, turbo-through-loads, FMV auto-skip and TCP turbo, on anything
+but the OpenGL renderer with FLIP-source interpolation, while the presenter
+is suspended (FMV), after repeated faults, and when no VBlank was presented
+since the last plan (headless). `psx_mod_render_pass()` refuses under the
+same conditions.
 
 ## Presentation and budget
 
@@ -102,7 +128,9 @@ internal resolutions; a size change frees the old set.
 
 - `render_pass_stats` (TCP): passes, shedding, faults, dropped device
   stores, timing split (backup / guest code / capture / restore), presents
-  made from pass images.
+  made from pass images, and `status`.
+- `render_pass_refuse on=1` (TCP) or `PSX_RENDER_PASS_REFUSE=1`: the backend
+  declines passes (`BACKEND`), to test a plugin's fallback.
 - `render_pass_dump path=<dir> count=<n>`: PNGs of the next n frames' images
   (the game's own frame, then each pass in phase order).
 - `PSX_RENDER_PASS_VERIFY=1`: hash CPU, RAM, scratchpad, I-cache, interrupt,

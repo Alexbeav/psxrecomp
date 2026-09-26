@@ -48,6 +48,7 @@
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
 #include "render_pass.h"
+#include "mod_plugins.h"   /* psx_mod_render_pass_status */
 #include "lockstep.h"
 #include "guest_tty.h"
 
@@ -8000,7 +8001,7 @@ static void handle_render_pass_stats(int id, const char *json)
              "\"blended_presents\":%llu,\"expired\":%llu,"
              "\"unmatched_flips\":%llu,\"early_presents\":%llu,"
              "\"cost_us\":%llu,\"frame_images\":%llu,\"journaled\":%llu,"
-             "\"image_textures\":%u,\"image_bytes\":%llu}",
+             "\"image_textures\":%u,\"image_bytes\":%llu,\"status\":%u}",
              id, (unsigned long long)st.plans, (unsigned long long)st.planned,
              (unsigned long long)st.wanted, (unsigned long long)st.refused,
              (unsigned long long)st.passes, (unsigned long long)st.aborted,
@@ -8022,7 +8023,19 @@ static void handle_render_pass_stats(int id, const char *json)
              (unsigned long long)gd[4], (unsigned long long)gd[5],
              (unsigned long long)gd[6], (unsigned long long)gd[7],
              (unsigned long long)gl_renderer_pass_journaled(),
-             (unsigned)image_textures, (unsigned long long)image_bytes);
+             (unsigned)image_textures, (unsigned long long)image_bytes,
+             (unsigned)psx_mod_render_pass_status());
+}
+
+/* render_pass_refuse on=<0|1>: make the OpenGL backend decline render passes
+ * (status BACKEND), as a renderer mode without them would; for testing a
+ * plugin's fallback. Same as PSX_RENDER_PASS_REFUSE=1 at start. */
+static void handle_render_pass_refuse(int id, const char *json)
+{
+    int on = json_get_int(json, "on", 1);
+    gl_renderer_pass_force_refuse(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"status\":%u}", id, on ? 1 : 0,
+             (unsigned)psx_mod_render_pass_status());
 }
 
 /* render_pass_dump path=<dir> count=<n>: write the images (the game's own
@@ -13955,6 +13968,7 @@ static const CmdEntry s_commands[] = {
     { "gl_interp",         handle_gl_interp },
     { "render_pass_stats", handle_render_pass_stats },
     { "render_pass_dump",  handle_render_pass_dump },
+    { "render_pass_refuse", handle_render_pass_refuse },
     { "gl_wide_fast",      handle_gl_wide_fast },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },

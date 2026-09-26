@@ -141,7 +141,8 @@ void gpu_pass_checkpoint_restore(void) {}
 static uint64_t s_ticks;
 uint64_t gl_renderer_perf_ticks(void) { return s_ticks += 1000; }
 uint64_t gl_renderer_perf_frequency(void) { return 1000000000u; }
-int gl_renderer_pass_ready(void) { return 1; }
+uint32_t gl_renderer_pass_unavailable(void) { return 0; }
+int psx_presentation_fast_forward(void) { return 0; }
 uint32_t gl_renderer_pass_plan(uint32_t p, uint32_t s, uint32_t *a,
                                uint32_t max, uint32_t *wanted) {
     (void)p; (void)s; (void)a; (void)max;

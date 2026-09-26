@@ -11,8 +11,9 @@
  * place (memory.c render_pass_store).
  *
  * Nothing here runs unless a trusted plugin calls the API, and the plan
- * refuses in netplay, rollback, rewind, turbo, self-check resimulation, or
- * without the OpenGL presenter's flip-aware interpolation. */
+ * refuses in netplay, rollback, rewind, fast-forward, self-check
+ * resimulation, or without the OpenGL presenter's flip-aware interpolation
+ * (psx_mod_render_pass_status says which). */
 
 #include "render_pass.h"
 
@@ -46,6 +47,7 @@ extern int      psx_netplay_active(void);
 extern int      psx_netplay_is_resimulating(void);
 extern int      psx_selfcheck_resim_active(void);
 extern int      psx_rewind_is_open(void);
+extern int      psx_presentation_fast_forward(void);
 extern uint64_t g_guest_store_count;
 extern uint64_t g_mmio_access_count;
 extern uint32_t g_debug_last_store_pc;
@@ -252,15 +254,30 @@ void render_pass_reset_session(void) {
     s_open_generation = 0;
 }
 
-/* Everything that must hold before guest code may run frozen. */
+/* Everything that must hold before guest code may run frozen, as a
+ * PSX_MOD_RENDER_PASS_* reason (READY = all of it holds). */
+static uint32_t pass_status(void) {
+    uint32_t gl;
+    if (s_stats.disabled) return PSX_MOD_RENDER_PASS_DISABLED;
+    if (psx_netplay_active() || psx_netplay_is_resimulating() ||
+        psx_selfcheck_resim_active() || psx_rewind_is_open() ||
+        g_ls_mode || g_ls_replay_active)
+        return PSX_MOD_RENDER_PASS_SESSION;
+    if (psx_presentation_fast_forward()) return PSX_MOD_RENDER_PASS_FAST_FORWARD;
+    gl = gl_renderer_pass_unavailable();
+    if (gl != PSX_MOD_RENDER_PASS_READY) return gl;
+    if (s_nesting || g_psx_render_pass_active || psx_get_in_exception() ||
+        dma_gpu_linked_list_active())
+        return PSX_MOD_RENDER_PASS_BUSY;
+    return PSX_MOD_RENDER_PASS_READY;
+}
+
 static int passes_allowed(void) {
-    if (s_stats.disabled || s_nesting || g_psx_render_pass_active) return 0;
-    if (psx_netplay_active() || psx_netplay_is_resimulating()) return 0;
-    if (psx_selfcheck_resim_active() || psx_rewind_is_open()) return 0;
-    if (g_ls_mode || g_ls_replay_active) return 0;
-    if (psx_get_in_exception()) return 0;
-    if (dma_gpu_linked_list_active()) return 0;
-    return 1;
+    return pass_status() == PSX_MOD_RENDER_PASS_READY;
+}
+
+uint32_t psx_mod_render_pass_status(void) {
+    return pass_status();
 }
 
 uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
@@ -443,7 +460,7 @@ int psx_mod_render_pass(struct CPUState *cpu, const PSXModRenderPass *pass,
         pass->w == 0 || pass->h == 0 || pass->alpha_q16 == 0 ||
         pass->alpha_q16 >= 65536u)
         return 0;
-    if (!passes_allowed() || !gl_renderer_pass_ready()) return 0;
+    if (!passes_allowed()) return 0;
 
     /* An overlay DLL may still hold cycles it has not published. They belong
      * to the live timeline: publish them now, or the pass's first store would
