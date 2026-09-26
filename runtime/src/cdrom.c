@@ -124,6 +124,11 @@ static uint32_t cdrom_intc_latched_generation;
  * Sized to comfortably outlast an ISR teardown (tens-to-hundreds of cycles)
  * while staying well under the second-response delays (10k-30k), so command
  * throughput is unaffected. */
+/* [NOT OBSERVED: release policy] The first response is presented 5,000
+ * cycles after the command executes. The oracle's first INT3 comes 21,536 to
+ * 28,912 cycles after the command write, by command and drive state (C1-C9
+ * row 2: idle 23,488, stopped 23,784, standby after a seek 21,536, Setmode
+ * 25,312, Setloc 28,912). */
 #define CDROM_IRQ_PRESENT_DELAY 5000
 /* Absolute guest cycle when an armed CD response may be presented to INTC.
  * 0 = no presentation hold. Relative remaining is derived for snaps/digests. */
@@ -414,6 +419,9 @@ uint32_t g_cd_overwrite_last_frame = 0;
  * MAX_PER_FRAME knob. */
 #define VBLANK_CYCLES_NTSC          564480   /* 33.8688 MHz / 60 Hz; matches interrupts.c */
 #define CDROM_INSTANT_MAX_PER_FRAME_DEFAULT 32
+/* One sector at single speed: SystemClock*930h/4/44100 (PSX-SPX CDROM drive
+ * timing); matches the measured INT1 period (C1-C9 row 1: s1 about 451,576,
+ * s2 225,768-225,808 per sector). */
 #define CDROM_SINGLE_SPEED_SECTOR_CYCLES 451584
 
 /* Runtime-tunable 'instant' budget (step 3). One knob drives three writers:
@@ -678,19 +686,22 @@ static int sector_delay_cycles(void) {
 }
 
 static int initial_read_delay_cycles(void) {
-    /* Explicit source-core comparison profile, not a hardware timing claim.
-     * Octoshock 2.2.2 fills two pipeline slots before presenting the oldest
-     * sector on its third fetch (cdc.h SectorPipe_Count / HandlePlayRead).
-     * This reproduces that start deadline only; seek jitter, command latency,
-     * and rotating drive state are separate, still-unqualified differences. */
+    /* Explicit comparison profile (the model name is a selector): the first
+     * sector is presented on the third sector period. [NOT OBSERVED: pending
+     * the CD replay harness against C1-C9 rows 16-17 (PS1B-212).] Seek jitter,
+     * command latency and rotating drive state are separate, still-unqualified
+     * differences. */
     const char *profile = getenv("PSX_CD_READ_START_MODEL");
     if (profile && strcmp(profile, "octoshock-2.2.2-pipeline") == 0)
         return apply_read_speed(((mode_reg & 0x80)
             ? CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2
             : CDROM_SINGLE_SPEED_SECTOR_CYCLES) * 3);
-    /* Beetle/PCSX model an additional read-start latency after ReadN/ReadS.
-     * In double-speed mode the first sector still waits one 1x sector period;
-     * subsequent sectors use the steady-state 2x cadence above. */
+    /* [NOT OBSERVED: release policy] The first sector after ReadN/ReadS waits
+     * one 1x sector period at double speed (two at single speed); later
+     * sectors use the steady cadence above. The oracle's first INT1 after
+     * ReadN from standby, short implicit seek, is 729,032 (2x) / 1,406,392
+     * (1x) cycles after the command; after a completed SeekL 730,976 /
+     * 1,408,352; after Pause 1,966,968 / 3,882,312 (C1-C9 rows 16-18). */
     int base = (mode_reg & 0x80)
         ? CDROM_SINGLE_SPEED_SECTOR_CYCLES
         : (CDROM_SINGLE_SPEED_SECTOR_CYCLES * 2);
@@ -698,9 +709,12 @@ static int initial_read_delay_cycles(void) {
 }
 
 static int seek_complete_delay_cycles(void) {
-    /* PCSX carries a far-SetLoc seek state and explicitly calls out Rockman X5:
-     * far SeekL/SeekP completes after roughly four 1x sector periods, while a
-     * near/already-settled seek returns quickly. */
+    /* [NOT OBSERVED: release policy] A far SeekL/SeekP completes after four
+     * 1x sector periods and a near one after 0x800 cycles (both x speed).
+     * The oracle's SeekL/SeekP INT2 (C1-C9 rows 11-15): short from standby or
+     * reading 277,440 / 51,656; short from paused 1,510,568 / 1,284,784;
+     * 4,500 sectors about 10.88M / 10.66M; 45,000 sectors about 15.12M (s2) /
+     * 14.90M (C2b-C3b). */
     int base = setloc_seek_far ? (CDROM_SINGLE_SPEED_SECTOR_CYCLES * 4) : 0x800;
     return apply_speed(base);
 }
@@ -1003,7 +1017,8 @@ static void set_irq(int type) {
      * 5000 cycles lets the next command's preparatory ACK erase a new sector
      * notification before the CPU has ever received it. This preserves the
      * single-outstanding latch and command queue; it changes no buffer owner.
-     * Octoshock 2.2.2 CheckAIP/WriteIRQ likewise publishes async flag+line together.
+     * [NOT OBSERVED: pending the C5 replay (PS1B-212)] whether the oracle
+     * publishes the async flag and line together.
      */
     cdrom_irq_present_due = (type == CDIRQ_DATA_READY || s_source_clock) ? psx_cycle_count
         : psx_cycle_count + (uint64_t)CDROM_IRQ_PRESENT_DELAY;
@@ -1615,10 +1630,9 @@ static void cdrom_clear_pending_dataready(void)
 
 /* A Read issued while the drive is ALREADY streaming the very sector the
  * pending Setloc names is not a new read -- it is the game saying "keep
- * going". DuckStation's Read handler does exactly this (cdrom.cpp: "Ignoring
- * read command with pending/same setloc, already reading"), and only calls
- * BeginReading -- the thing that clears the sector buffers and re-arms the
- * read-start latency -- when the request actually moves the drive.
+ * going": the oracle continues the stream, delivering the next INT1 one
+ * sector period later (C1-C9 row 20). Only a read that moves the drive
+ * clears the sector buffers and re-arms the read-start latency.
  *
  * Restarting instead costs two things, both measured on the palette load:
  *
@@ -1766,8 +1780,8 @@ static void start_read_stream(uint8_t cmd) {
     cdda_data_end_pending = 0;
     stat_reg &= (uint8_t)~CDSTAT_PLAY;
     clear_sector_buffer();
-    /* Drive-state change cancels any pended notification (Beetle clears
-     * AIP on Play/Read/Pause/Stop/Seek alike). */
+    /* Drive-state change cancels any pended notification. [NOT OBSERVED:
+     * pending the C5c replay (PS1B-212).] */
     cdrom_clear_pending_dataready();
     if (mode_reg & 0x40u) {
         xa_reset_decode();
@@ -2379,7 +2393,10 @@ static void queue_or_exec_command(uint8_t cmd) {
     cd_bisect_cmd_log("QUEUE", cmd, queued_cmd.params, queued_cmd.param_count);
 }
 
-/* Pause (0x09) completion latency — Beetle PS_CDC::Command_Pause.
+/* Pause (0x09) completion latency. From paused or stopped the INT2 comes
+ * about 5,000 cycles after INT3, matching C1-C9 row 4. From reading it is
+ * position-dependent; the oracle measured 1,157,528 (2x) / 2,291,632 (1x)
+ * (C2b row 5; PSX-SPX about 1.10M / 2.17M) [pending the replay harness].
  *
  * A Pause issued while the drive is reading/playing completes only after the
  * head settles: (1124584 + lba*42596/4500) CPU cycles in double-speed mode,
@@ -2428,11 +2445,10 @@ static int pause_complete_delay_cycles(void) {
 }
 
 /* Audio-only media cannot satisfy a normal data read, and the drive says so
- * before it looks at the transfer mode at all. Oracle (beetle-psx cdc.cpp,
- * PS_CDC::ReadBase): when !IsPSXDisc the command answers MakeStatus(true) +
- * ERRCODE_BAD_COMMAND (0x40) on CDCIRQ_DISC_ERROR and returns, ahead of every
- * mode-dependent path. IsPSXDisc is false exactly when SetDisc got no
- * SYSTEM.CNF disc id, i.e. for an audio CD. Setmode bit 0 (CDDA) therefore
+ * before it looks at the transfer mode at all: a data read on an audio CD
+ * (no SYSTEM.CNF disc id) answers INT5 with error 40h, ahead of every
+ * mode-dependent path. [NOT OBSERVED: no C fixture covers an audio-only
+ * disc.] Setmode bit 0 (CDDA) therefore
  * does NOT license a data read here; it only governs which sectors a read that
  * already started may deliver. Mixed-mode game discs have a data track, so
  * they keep their data path.
@@ -2476,8 +2492,8 @@ static void exec_command(uint8_t cmd) {
     /* ENQUEUE: a CD command was issued (aux = command byte). */
     event_ring_record_aux(EV_ENQ, (uint8_t)SRC_CD_CMD, (uint32_t)cmd);
     /* A new command CANCELS the previous command's outstanding second
-     * response (psx-spx command flow; DuckStation BeginCommand "command
-     * cancellation"). The sub-CPU runs one transaction at a time: once a
+     * response (psx-spx command flow). The sub-CPU runs one transaction at
+     * a time: once a
      * new command is accepted, the superseded command's INT2 is never
      * delivered. Two-phase handlers below already overwrite `pending`;
      * this clears it for single-phase commands (GetStat/Setmode/Setloc/…)
@@ -2573,6 +2589,9 @@ static void exec_command(uint8_t cmd) {
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
         {
+            /* [NOT OBSERVED: release policy] apply_speed(30000) on the default
+             * path; the oracle's MotorOn INT2 from stopped is 3,386,864 cycles
+             * after INT3 (C1-C9 row 8). */
             int lat = source_cdda.enabled?3386880:apply_speed(30000); /* motor spin-up */
             if(source_cdda.enabled){stat_reg|=CDSTAT_MOTOR;s_source_seek_paused=0;spu_cd_audio_reset();source_cdda.async_type=source_cdda.async_count=0;}
             pending_arm(0x07, lat, 1);
@@ -2601,6 +2620,9 @@ static void exec_command(uint8_t cmd) {
         response_push(source_cdda.enabled?old_status:stat_reg);
         set_irq(CDIRQ_ACK);
         {
+            /* [NOT OBSERVED: release policy] apply_speed(30000) on the default
+             * path; the oracle's Stop INT2 is 33,864 cycles after INT3 from
+             * reading and 5,008 from stopped (C1-C9 rows 6-7). */
             int lat = source_cdda.enabled?((old_status&CDSTAT_MOTOR)?33868:5000):apply_speed(30000); /* motor spin-down */
             if(source_cdda.enabled)stat_reg&=~CDSTAT_MOTOR;
             pending_arm(0x08, lat, 1);
@@ -2629,7 +2651,7 @@ static void exec_command(uint8_t cmd) {
         break;
     }
 
-    case 0x0A: /* Init (named Command_Reset in original Octoshock 2.2.2) */
+    case 0x0A: /* Init */
         if(s_nymashock_drive) {
             if(cdda_playing || (reading && (stat_reg&CDSTAT_SEEK))) {
                 fprintf(stderr,"[CDROM] Nymashock reset during audio/read seek is not qualified\n");exit(2);
@@ -2688,10 +2710,10 @@ static void exec_command(uint8_t cmd) {
         s_source_seek_paused = has_disc() ? 1 : 0;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        /* Retained default OpenBIOS timeout accommodation. This arbitrary
-         * 131072-cycle delay is not a measured hardware constant. Original
-         * Octoshock's Command_Reset is this same opcode, despite its name;
-         * the explicit source clock above uses that core's drive deadline. */
+        /* [NOT OBSERVED: release policy] Retained default OpenBIOS timeout
+         * accommodation: 131,072 cycles, not a measured constant. The oracle's
+         * Init INT2 comes 1,159,464 cycles after the command (about 1,135,976
+         * after INT3; C1-C9 row 9). */
         pending_arm(0x0A, 131072, 1);
         break;
 
@@ -2953,8 +2975,9 @@ static void exec_command(uint8_t cmd) {
          * or INT5 (ERROR) if no disc / lid open. */
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        /* Beetle PS_CDC::Command_ID: second response after 33868 cycles.
-         * Unscaled — same authentic-latency class as Pause/Init/ReadTOC. */
+        /* GetID second response 33,868 cycles after the ACK, matching the
+         * measured INT3-to-INT2 interval of 33,864 (C1-C9 row 3, C2-getid).
+         * Unscaled — same latency class as Pause/Init/ReadTOC. */
         pending_arm(0x1A, 33868, 1);
         break;
 
@@ -2974,9 +2997,9 @@ static void exec_command(uint8_t cmd) {
     case 0x1E: /* ReadTOC */
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        /* Beetle PS_CDC::Command_ReadTOC: ~30M cycles (a near-second TOC
-         * re-scan; Beetle adds a seek term on top — we keep the dominant
-         * constant). Unscaled — authentic-latency class. */
+        /* [NOT OBSERVED: release policy] ReadTOC INT2 30,000,000 cycles after
+         * the ACK. The oracle's is 30,138,120 from standby and 30,138,872 from
+         * reading (C2b row 10). Unscaled. */
         {
             int seek=s_source_toc_seek_model?source_toc_seek_cycles():0;
             int delay=seek>INT32_MAX-30000000?INT32_MAX:30000000+seek;
@@ -3217,7 +3240,8 @@ static int warm_route_consumer_blocked(void) {
  * At authentic cadence the guest is guaranteed a full sector period
  * (~6.6 ms at 2x) to ack each data-ready INT1 before the next sector can
  * clobber the buffer; hardware losing a sector there means the game really
- * was too slow, and the one-deep pend-then-lose below is Beetle-faithful.
+ * was too slow. The one-deep pend-then-lose below is [NOT OBSERVED:
+ * pending the C5b replay (PS1B-212)].
  * Accelerated pacing destroys that guarantee: sectors arrive in a fraction
  * of the period, so a guest that is merely BUSY (not slow) gets sectors
  * overwritten that real hardware would have delivered. That is a silent
@@ -3280,9 +3304,9 @@ static void process_read_stream(uint32_t cycles) {
         return;
     }
 
-    /* Disc time NEVER pauses while the drive reads (Beetle cdc.cpp
-     * HandleSectorRead: the sector pipeline advances on cycle deadlines
-     * regardless of INT ack state). XA-ADPCM realtime audio flows to the
+    /* Disc time NEVER pauses while the drive reads: the INT1 period is fixed
+     * (C1-C9 row 1). How unacknowledged INT1s are handled is pending the C5b
+     * replay (PS1B-212). XA-ADPCM realtime audio flows to the
      * SPU decoder unconditionally inside read_sector_at — gating it on the
      * guest's INT-ack latency is what caused the 6 Hz XA dropouts. */
     if (cycles > 0) {
@@ -3629,9 +3653,9 @@ void cdrom_write(uint32_t addr, uint32_t value) {
         if (index_reg == 2) {
             cd_pending_vol[0][1] = val;   /* Left-CD -> Right-SPU */
         } else if (index_reg == 3) {
-            /* Apply-changes latch (bit 5) copies pending -> live, exactly
-             * like Beetle cdc.cpp case 0x0B. (ADPMute bit 0 is not modeled
-             * by the Beetle oracle either.) */
+            /* Apply-changes latch (bit 5) copies pending -> live (PSX-SPX
+             * CD audio volume). The ADPCM-mute bit (bit 0) was observed to
+             * have no effect on the capture (C8), so it is not modelled. */
             if (val & 0x20) {
                 memcpy(cd_decode_vol, cd_pending_vol, sizeof(cd_decode_vol));
             }

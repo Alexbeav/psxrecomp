@@ -211,7 +211,7 @@ typedef struct CDROMDebugState {
      * nonzero = regression. */
     uint64_t read_hold_cycles;
     uint64_t read_hold_events;
-    /* One-deep pended data-ready INT1 accounting (Beetle SetAIP analog). */
+    /* One-deep pended data-ready INT1 accounting. */
     uint64_t int1_pended;
     uint64_t int1_lost;
     /* Accelerated-read flow control: holds where a faster-than-hardware
