@@ -117,6 +117,27 @@ static void test_budget_and_ema(void) {
     CHECK(render_pass_ema(0.0, 4.0) == 4.0, "first sample seeds the average");
     CHECK(fabs(render_pass_ema(4.0, 8.0) - 5.0) < 1e-9, "quarter-weight update");
     CHECK(render_pass_ema(4.0, -1.0) == 4.0, "bad samples are ignored");
+    {
+        /* First-use allocations (70 ms at 4K) must not set the average a
+         * shed-for-time plan then never revisits; steady passes (10 ms) do. */
+        unsigned skips = 0;
+        double e = 0.0;
+        e = render_pass_cost_sample(e, 70.0, 1, &skips);
+        CHECK(e == 0.0 && skips == 1, "an allocating pass is not a sample");
+        e = render_pass_cost_sample(e, 10.0, 0, &skips);
+        CHECK(e == 10.0 && skips == 0, "the next steady pass seeds the average");
+        e = render_pass_cost_sample(e, 70.0, 1, &skips);
+        CHECK(e == 10.0, "a later allocating pass leaves it alone");
+        for (unsigned i = 1; i < RENDER_PASS_ALLOC_SKIPS; i++)
+            e = render_pass_cost_sample(e, 70.0, 1, &skips);
+        CHECK(e == 10.0 && skips == RENDER_PASS_ALLOC_SKIPS,
+              "up to RENDER_PASS_ALLOC_SKIPS in a row");
+        e = render_pass_cost_sample(e, 70.0, 1, &skips);
+        CHECK(fabs(e - 25.0) < 1e-9 && skips == 0,
+              "then an allocating pass counts, so the average cannot freeze");
+        e = render_pass_cost_sample(e, 25.0, 0, NULL);
+        CHECK(fabs(e - 25.0) < 1e-9, "no skip counter: every pass counts");
+    }
 }
 
 static void test_store_policy(void) {

@@ -115,6 +115,16 @@ double render_pass_ema(double current, double sample) {
     return current * 0.75 + sample * 0.25;
 }
 
+double render_pass_cost_sample(double current, double sample, int allocated,
+                               unsigned *skips) {
+    if (allocated && skips && *skips < RENDER_PASS_ALLOC_SKIPS) {
+        (*skips)++;
+        return current;
+    }
+    if (skips) *skips = 0;
+    return render_pass_ema(current, sample);
+}
+
 double render_pass_budget(double idle_ticks, double pass_ticks,
                           double frame_length, double share) {
     double b;

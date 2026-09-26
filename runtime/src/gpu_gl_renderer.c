@@ -379,6 +379,10 @@ static uint64_t s_idle_ticks_accum_fwd(uint64_t add);
  * open, GPU writes are confined to its rect: the scissor is intersected with
  * it and writes that bypass the scissor are refused and counted. */
 static int      s_pass_active = 0;
+/* Textures/framebuffers made for passes (pass_make_color_fbo, pass image
+ * slots), and the count when the current pass began: a pass that allocated
+ * is left out of the pass-cost average (render_pass_cost_sample). */
+static uint32_t s_pass_allocs = 0, s_pass_allocs_begin = 0;
 static int      s_pass_x = 0, s_pass_y = 0, s_pass_w = 0, s_pass_h = 0;
 static uint32_t s_pass_leaks = 0;
 /* Policy and CPU rows of the out-of-rect journal (render_pass_plan.c,
@@ -4377,6 +4381,7 @@ static int      s_pb_force_present = 0, s_pb_last_path = -1;
 static int      s_pb_last_dx = 0, s_pb_last_dy = 0, s_pb_last_dw = 0, s_pb_last_dh = 0;
 
 static double   s_pass_cost_ema = 0.0;        /* host ticks per pass */
+static unsigned s_pass_cost_skips = 0;
 static uint64_t s_pass_ticks_accum = 0, s_idle_ticks_accum = 0;
 static uint64_t s_pass_ticks_last = 0, s_idle_ticks_last = 0;
 static uint64_t s_present_ticks_accum = 0, s_present_ticks_last = 0;
@@ -4490,7 +4495,11 @@ uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
 }
 
 void gl_renderer_pass_note_cost(uint64_t ticks) {
-    s_pass_cost_ema = render_pass_ema(s_pass_cost_ema, (double)ticks);
+    /* A pass that made pass textures or framebuffers (first use, a size
+     * change) is not a cost sample: see render_pass_cost_sample(). */
+    s_pass_cost_ema = render_pass_cost_sample(
+        s_pass_cost_ema, (double)ticks, s_pass_allocs != s_pass_allocs_begin,
+        &s_pass_cost_skips);
     s_pass_ticks_accum += ticks;
 }
 
@@ -4513,6 +4522,7 @@ static int pass_make_color_fbo(GLuint *tex, GLuint *rb, GLuint *fbo,
     if (*tex) glDeleteTextures(1, tex);
     if (rb && *rb) p_glDeleteRenderbuffers(1, rb);
     *fbo = 0; *tex = 0; if (rb) *rb = 0;
+    s_pass_allocs++;
     *tex = make_tex(internal, w, h, fmt, type);
     if (rb) {
         p_glGenRenderbuffers(1, rb);
@@ -4553,6 +4563,7 @@ static int pass_gen_reserve(int gi, uint32_t need, int w, int h) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA,
                      GL_UNSIGNED_BYTE, NULL);
         s_pgen_alloc_n[gi]++;
+        s_pass_allocs++;
     }
     return 1;
 }
@@ -4702,6 +4713,7 @@ int gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
     if (!gl_renderer_pass_ready() || s_pass_active) return 0;
     if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > VRAM_W || y + h > VRAM_H)
         return 0;
+    s_pass_allocs_begin = s_pass_allocs;
     flush_flat_batch();
     flush_tex_batch();
     flush_cpu_upload();

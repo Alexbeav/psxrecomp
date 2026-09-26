@@ -92,6 +92,18 @@ for name in ("gpu_fill", "gpu_copy_rect", "flush_cpu_upload",
              "glb_vram_transfer_in", "glb_vram_write"):
     assert "wide" not in definition(gl, name), (
         "journaled writes must not reach a native-wide surface: " + name)
+# One-time pass allocations are not cost samples (render_pass_plan_test):
+# every path that makes a pass texture or framebuffer must count it, and the
+# cost average must go through the tested sampling rule.
+for name in ("pass_make_color_fbo", "pass_gen_reserve"):
+    assert "s_pass_allocs++" in definition(gl, name), (
+        "pass allocations must be counted: " + name)
+assert "render_pass_cost_sample(" in body(
+    gl, "void gl_renderer_pass_note_cost(uint64_t ticks) {"), (
+    "the pass-cost average must leave allocating passes out")
+assert "s_pass_allocs_begin = s_pass_allocs;" in body(
+    gl, "int gl_renderer_pass_begin("), (
+    "each pass must mark where its allocations start")
 cls = body(plan, "int render_pass_mmio_class(")
 for dev in ("RENDER_PASS_DROP_SPU", "RENDER_PASS_DROP_CD",
             "RENDER_PASS_DROP_TIMER"):

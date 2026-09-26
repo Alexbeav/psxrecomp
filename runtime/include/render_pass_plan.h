@@ -51,6 +51,17 @@ int render_pass_select(const uint32_t *phases, uint32_t n, double p,
 /* Exponential moving average used for the per-pass host cost. */
 double render_pass_ema(double current, double sample);
 
+/* The pass-cost average after one pass that took `sample` host ticks.
+ * `allocated`: the pass created textures or framebuffers (first use, a size
+ * change). That one-time cost says nothing about the next pass -- at a high
+ * internal resolution the first passes cost several times the steady state
+ * -- and a plan that sheds every pass for time never measures again, so
+ * such a sample is left out, at most RENDER_PASS_ALLOC_SKIPS times in a row
+ * (*skips counts them; any kept sample resets it). */
+#define RENDER_PASS_ALLOC_SKIPS 8u
+double render_pass_cost_sample(double current, double sample, int allocated,
+                               unsigned *skips);
+
 /* Next frame's pass budget from the last frame: the host time the presenter
  * spent idle-waiting plus the time passes used, scaled by `share` (0..1) and
  * clamped to [0, frame_length]. No history (both zero) -> share of the frame. */
