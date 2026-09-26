@@ -1326,3 +1326,10 @@ if(Python3_EXECUTABLE)
     add_test(NAME load_delay_l1_clean_matrix COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1_matrix.py)
 endif()
+if(BUILD_TESTING)
+    add_test(NAME load_delay_overlay_transport COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_overlay.py
+        --recompiler $<TARGET_FILE:psxrecomp-game>)
+    add_test(NAME load_delay_l1_precise_matrix COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1_matrix.py --precise)
+endif()
