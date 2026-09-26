@@ -108,6 +108,10 @@ frame at very high internal resolutions.
   timer, DMA and GPU state and read back the VRAM rect before and after every
   pass, and check that a pass that returned normally left the host nesting
   balanced; `verify_mismatch` must stay 0.
+- `PSX_RENDER_PASS_WATCHDOG=<guest cycles>`: lower the watchdog (default
+  8 M) below a title's pass size to drive real passes through the rollback
+  path; with fingerprints (below) the run must still match one without
+  passes.
 - `frame_fingerprint reset_on_load=1` then a savestate load: the per-frame
   write/MMIO/cycle fingerprints of a run with passes must equal a run
   without them.

@@ -214,6 +214,23 @@ static int s_verify = -1;
 static int s_open_generation;        /* next pass captures frame N's image */
 static uint32_t s_plan_period = 2;
 
+/* PSX_RENDER_PASS_WATCHDOG=<guest cycles> lowers the cut-off (debug), so a
+ * title's rollback path can be exercised on real passes. */
+static uint64_t watchdog_cycles(void) {
+    static uint64_t v;
+    if (!v) {
+        const char *e = getenv("PSX_RENDER_PASS_WATCHDOG");
+        long long n = e ? atoll(e) : 0;
+        v = (n >= 1000 && n < (long long)RP_WATCHDOG_CYCLES)
+            ? (uint64_t)n : (uint64_t)RP_WATCHDOG_CYCLES;
+        if (v != RP_WATCHDOG_CYCLES)
+            fprintf(stderr, "psxrecomp: render pass watchdog lowered to %llu "
+                    "guest cycles (PSX_RENDER_PASS_WATCHDOG)\n",
+                    (unsigned long long)v);
+    }
+    return v;
+}
+
 static int verify_on(void) {
     if (s_verify < 0) {
         const char *e = getenv("PSX_RENDER_PASS_VERIFY");
@@ -456,7 +473,7 @@ int psx_mod_render_pass(struct CPUState *cpu, const PSXModRenderPass *pass,
     tb = gl_renderer_perf_ticks();
     s_nesting = 1;
     cycles_before = psx_cycle_count;
-    (void)psx_cycle_freeze_begin(&s_freeze, RP_WATCHDOG_CYCLES,
+    (void)psx_cycle_freeze_begin(&s_freeze, watchdog_cycles(),
                                  watchdog_overrun);
     if (setjmp(s_abort_jmp) == 0) {
         s_abort_armed = 1;
