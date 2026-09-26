@@ -1717,35 +1717,26 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
  * counted instead. */
 uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
 
+static void render_pass_mmio_write(uint32_t phys, uint32_t val,
+                                   uint32_t width) {
+    if (width == 4) mmio_write32(phys, val);
+    else if (width == 2) mmio_write16(phys, (uint16_t)val);
+    else mmio_write8(phys, (uint8_t)val);
+}
+
+/* The policy is render_pass_store_to (render_pass_plan.c, unit-tested by
+ * render_pass_sandbox_test); this only wires it to memory.c's arrays. */
 static void render_pass_store(uint32_t addr, uint32_t val, uint32_t width) {
-    uint32_t phys;
-    if (addr >= 0xC0000000u) {                       /* cache control, KSEG2 */
-        g_render_pass_dropped_writes[RENDER_PASS_DROP_OTHER]++;
-        return;
-    }
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;      /* IsC: cache-only store */
-    phys = psx_phys_addr(addr);
-    if (phys < RAM_SIZE) {
-        for (uint32_t i = 0; i < width; i++) ram[phys + i] = (uint8_t)(val >> (8u * i));
-        return;
-    }
-    if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
-        uint32_t off = phys - 0x1F800000u;
-        for (uint32_t i = 0; i < width && off + i < SCRATCHPAD_SIZE; i++)
-            scratchpad[off + i] = (uint8_t)(val >> (8u * i));
-        return;
-    }
-    if (phys >= 0x1F801000u && phys <= 0x1F803FFFu) {
-        int cls = render_pass_mmio_class(phys, val, width);  /* render_pass_plan.c */
-        if (cls >= 0) { g_render_pass_dropped_writes[cls]++; return; }
-        if (width == 4) mmio_write32(phys, val);
-        else if (width == 2) mmio_write16(phys, (uint16_t)val);
-        else mmio_write8(phys, (uint8_t)val);
-        return;
-    }
-    /* Mod memory, expansion, ROM, unmapped: never written by a pass (mod
-     * arenas are not part of the pass restore). */
-    g_render_pass_dropped_writes[RENDER_PASS_DROP_OTHER]++;
+    RenderPassStoreTarget t;
+    int cls;
+    t.ram = ram;
+    t.ram_size = RAM_SIZE;
+    t.scratchpad = scratchpad;
+    t.scratchpad_size = SCRATCHPAD_SIZE;
+    t.isolate_cache = (sr_ptr && (*sr_ptr & 0x10000u)) ? 1 : 0;
+    t.mmio_write = render_pass_mmio_write;
+    cls = render_pass_store_to(&t, addr, val, width);
+    if (cls >= 0) g_render_pass_dropped_writes[cls]++;
 }
 
 static void psx_write_word_raw(uint32_t addr, uint32_t val);

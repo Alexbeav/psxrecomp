@@ -150,6 +150,24 @@ internal resolutions; a size change frees the old set.
   write/MMIO/cycle fingerprints of a run with passes must equal a run
   without them.
 
-Tests: `render_pass_plan_test`, `render_pass_freeze_test` and
-`render_pass_abort_test` (runtime ctest),
-`render_pass_guards` (source guard, recompiler ctest).
+Tests (runtime ctest unless noted):
+
+- `render_pass_plan_test`: phase planning per rate, shedding, selection, the
+  MMIO allow-list.
+- `render_pass_freeze_test`: 10^6 frozen cycles, exact clock restore,
+  watchdog.
+- `render_pass_sandbox_test`: the store policy `memory.c` routes every pass
+  store through (SPU, CD, timer, other-DMA, GP1 and other device stores
+  dropped and counted per class, never delivered; GP0, I_STAT/I_MASK and
+  GPU/OTC DMA delivered); a real pass over `render_pass.c`, `psx_cycles.c`
+  and `timers.c` that makes those stores and runs 10^6 cycles while a timer
+  is armed to interrupt every 1000 (no device advances, no interrupt, RAM,
+  scratchpad, I_STAT/I_MASK, timers and clock restored); status gates; the
+  out-of-rect VRAM journal policy and its exact rollback of the CPU VRAM rows.
+- `render_pass_abort_test`: a watchdog abort from nested frames.
+- `render_pass_guards` (source guard, recompiler ctest): the choke points
+  above, and that the codegen-hashed headers do not carry the pass API.
+
+The GPU half of the VRAM transaction (hr colour, stencil, raw mirror blits)
+needs an OpenGL context and is checked at runtime by
+`PSX_RENDER_PASS_VERIFY=1`.

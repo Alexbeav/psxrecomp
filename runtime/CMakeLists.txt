@@ -634,6 +634,22 @@ if(BUILD_TESTING)
         add_test(NAME render_pass_abort_test COMMAND render_pass_abort_test)
     endif()
 
+    # Render-pass sandbox: the store policy memory.c uses, a real pass
+    # (render_pass.c, psx_cycles.c, timers.c) that makes device stores and
+    # runs frozen cycles, and the out-of-rect VRAM journal.
+    add_executable(render_pass_sandbox_test
+        tests/test_render_pass_sandbox.c
+        src/render_pass.c
+        src/render_pass_plan.c
+        src/psx_cycles.c
+        src/timers.c
+        src/psx_video_timing.c)
+    target_include_directories(render_pass_sandbox_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(render_pass_sandbox_test PRIVATE m)
+    endif()
+    add_test(NAME render_pass_sandbox_test COMMAND render_pass_sandbox_test)
+
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)

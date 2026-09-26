@@ -54,10 +54,22 @@ for fn in ("void psx_write_word(uint32_t addr, uint32_t val) {",
     lines = body(mem, fn).splitlines()[:6]
     assert any("render_pass_store" in l for l in lines), (
         "pass stores must bypass live-timeline observers: " + fn)
-assert "render_pass_mmio_class(phys, val, width)" in body(
-    mem, "static void render_pass_store("), (
-    "pass MMIO stores must go through the tested store policy")
+b = body(mem, "static void render_pass_store(")
+assert "render_pass_store_to(&t, addr, val, width)" in b and \
+    "g_render_pass_dropped_writes[cls]++" in b, (
+    "pass stores must go through the tested store policy "
+    "(render_pass_store_to, render_pass_sandbox_test) and count drops")
 plan = (SRC / "render_pass_plan.c").read_text(encoding="utf-8")
+assert "render_pass_mmio_class(phys, val, width)" in body(
+    plan, "int render_pass_store_to("), (
+    "pass MMIO stores must go through the MMIO allow-list")
+gl = (SRC / "gpu_gl_renderer.c").read_text(encoding="utf-8")
+assert "render_pass_vram_policy(&s_pj_cpu" in body(
+    gl, "static int pass_refuse_write("), (
+    "out-of-rect VRAM writes must go through the tested journal policy")
+assert "render_pass_journal_rollback(&s_pj_cpu" in body(
+    gl, "static void pass_journal_rollback("), (
+    "the journal rollback must restore the CPU VRAM rows")
 cls = body(plan, "int render_pass_mmio_class(")
 for dev in ("RENDER_PASS_DROP_SPU", "RENDER_PASS_DROP_CD",
             "RENDER_PASS_DROP_TIMER"):

@@ -381,10 +381,9 @@ static uint64_t s_idle_ticks_accum_fwd(uint64_t add);
 static int      s_pass_active = 0;
 static int      s_pass_x = 0, s_pass_y = 0, s_pass_w = 0, s_pass_h = 0;
 static uint32_t s_pass_leaks = 0;
-static int pass_rect_contains(int x0, int y0, int x1, int y1) {
-    return x0 >= s_pass_x && y0 >= s_pass_y &&
-           x1 < s_pass_x + s_pass_w && y1 < s_pass_y + s_pass_h;
-}
+/* Policy and CPU rows of the out-of-rect journal (render_pass_plan.c,
+ * render_pass_sandbox_test); the GPU copies live in s_pj below. */
+static RenderPassJournal s_pj_cpu;
 static int pass_journal_protect(int x, int y, int w, int h);
 /* A fill, copy or upload outside the pass rect (e.g. a game that moves a
  * few pixels of VRAM as part of every frame) is journaled -- its destination
@@ -392,15 +391,14 @@ static int pass_journal_protect(int x, int y, int w, int h);
  * full or native-wide is active, refused and counted (the pass is then rolled
  * back without an image). */
 static int pass_refuse_write(const char *what, int x, int y, int w, int h) {
+    int policy;
     if (!s_pass_active) return 0;
-    if (w <= 0 || h <= 0) return 0;
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > VRAM_W) w = VRAM_W - x;
-    if (y + h > VRAM_H) h = VRAM_H - y;
-    if (w <= 0 || h <= 0) return 0;
-    if (pass_rect_contains(x, y, x + w - 1, y + h - 1)) return 0;
-    if (pass_journal_protect(x, y, w, h)) return 0;
+    policy = render_pass_vram_policy(&s_pj_cpu, s_pass_x, s_pass_y, s_pass_w,
+                                     s_pass_h, VRAM_W, VRAM_H, 1,
+                                     &x, &y, &w, &h);
+    if (policy == RENDER_PASS_VRAM_ALLOW) return 0;
+    if (policy == RENDER_PASS_VRAM_JOURNAL && pass_journal_protect(x, y, w, h))
+        return 0;
     if (s_pass_leaks < 8)
         fprintf(stderr, "psxrecomp: render pass refused %s %d,%d %dx%d outside "
                 "%d,%d %dx%d\n", what, x, y, w, h, s_pass_x, s_pass_y,
@@ -4616,16 +4614,12 @@ static void pass_verify_read(uint8_t **hr, size_t *hr_cap, uint8_t **raw,
 }
 
 /* VRAM journal for out-of-rect writes during a pass (see pass_refuse_write). */
-#define PASS_JOURNAL_MAX 16
+#define PASS_JOURNAL_MAX RENDER_PASS_JOURNAL_MAX
 typedef struct PassJournal {
-    int x, y, w, h;
     GLuint hr_tex, hr_rb, hr_fbo, raw_tex, raw_fbo;
     int hr_w, hr_h, raw_w, raw_h;
-    uint16_t *cpu;
-    size_t cpu_cap;
 } PassJournal;
 static PassJournal s_pj[PASS_JOURNAL_MAX];
-static int s_pj_n = 0;
 static uint64_t s_pj_total = 0;
 
 static void pass_free_color_fbo(GLuint *tex, GLuint *rb, GLuint *fbo,
@@ -4657,21 +4651,16 @@ static void pass_resources_release(void) {
         pass_free_color_fbo(&e->hr_tex, &e->hr_rb, &e->hr_fbo, &e->hr_w, &e->hr_h);
         pass_free_color_fbo(&e->raw_tex, NULL, &e->raw_fbo, &e->raw_w, &e->raw_h);
     }
-    s_pj_n = 0;
+    render_pass_journal_free(&s_pj_cpu);
     s_pb_valid = 0;
 }
 
 static int pass_journal_protect(int x, int y, int w, int h) {
-    int S = s_scale;
+    int S = s_scale, i = s_pj_cpu.n;
     PassJournal *j;
     if (g_wide_w > 0) return 0;   /* wide margins are not journaled */
-    for (int i = 0; i < s_pj_n; i++) {
-        PassJournal *e = &s_pj[i];
-        if (x >= e->x && y >= e->y && x + w <= e->x + e->w && y + h <= e->y + e->h)
-            return 1;             /* already covered */
-    }
-    if (s_pj_n >= PASS_JOURNAL_MAX) return 0;
-    j = &s_pj[s_pj_n];
+    if (i >= PASS_JOURNAL_MAX) return 0;
+    j = &s_pj[i];
     if (!pass_make_color_fbo(&j->hr_tex, &j->hr_rb, &j->hr_fbo, &j->hr_w,
                              &j->hr_h, w * S, h * S, GL_RGBA8, GL_RGBA,
                              GL_UNSIGNED_BYTE) ||
@@ -4679,40 +4668,29 @@ static int pass_journal_protect(int x, int y, int w, int h) {
                              &j->raw_h, w, h, PSXGL_R16UI, PSXGL_RED_INTEGER,
                              GL_UNSIGNED_SHORT))
         return 0;
-    if (j->cpu_cap < (size_t)w * (size_t)h) {
-        free(j->cpu);
-        j->cpu = (uint16_t *)malloc((size_t)w * (size_t)h * sizeof(uint16_t));
-        j->cpu_cap = j->cpu ? (size_t)w * (size_t)h : 0;
-        if (!j->cpu) return 0;
-    }
     flush_flat_batch();
     flush_tex_batch();
     flush_cpu_upload();
-    j->x = x; j->y = y; j->w = w; j->h = h;
+    if (render_pass_journal_add(&s_pj_cpu, s_vram, VRAM_W, x, y, w, h) != i)
+        return 0;
     pass_blit(s_hr_fbo, j->hr_fbo, x * S, y * S, 0, 0, w * S, h * S,
               GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     pass_blit(s_raw_fbo, j->raw_fbo, x, y, 0, 0, w, h, GL_COLOR_BUFFER_BIT);
-    for (int row = 0; row < h; row++)
-        memcpy(j->cpu + (size_t)row * w, s_vram + (size_t)(y + row) * VRAM_W + x,
-               (size_t)w * sizeof(uint16_t));
-    s_pj_n++;
     s_pj_total++;
     return 1;
 }
 
 static void pass_journal_rollback(void) {
     int S = s_scale;
-    for (int i = s_pj_n - 1; i >= 0; i--) {
+    for (int i = s_pj_cpu.n - 1; i >= 0; i--) {
         PassJournal *j = &s_pj[i];
-        pass_blit(j->hr_fbo, s_hr_fbo, 0, 0, j->x * S, j->y * S, j->w * S,
-                  j->h * S, GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        pass_blit(j->raw_fbo, s_raw_fbo, 0, 0, j->x, j->y, j->w, j->h,
-                  GL_COLOR_BUFFER_BIT);
-        for (int row = 0; row < j->h; row++)
-            memcpy(s_vram + (size_t)(j->y + row) * VRAM_W + j->x,
-                   j->cpu + (size_t)row * j->w, (size_t)j->w * sizeof(uint16_t));
+        int x = s_pj_cpu.x[i], y = s_pj_cpu.y[i];
+        int w = s_pj_cpu.w[i], h = s_pj_cpu.h[i];
+        pass_blit(j->hr_fbo, s_hr_fbo, 0, 0, x * S, y * S, w * S, h * S,
+                  GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        pass_blit(j->raw_fbo, s_raw_fbo, 0, 0, x, y, w, h, GL_COLOR_BUFFER_BIT);
     }
-    s_pj_n = 0;
+    render_pass_journal_rollback(&s_pj_cpu, s_vram, VRAM_W);
 }
 
 int gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
@@ -4807,7 +4785,7 @@ backed_up:
         s_pass_verify = (e && e[0] && e[0] != '0') ? 1 : 0;
     }
     if (s_pass_verify) pass_verify_read(&s_pv_hr, &s_pv_hr_cap, &s_pv_raw, &s_pv_raw_cap);
-    s_pj_n = 0;
+    s_pj_cpu.n = 0;
     s_pass_active = 1;
     return 1;
 }
