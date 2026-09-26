@@ -22,7 +22,8 @@
 #include "audio_trace.h"
 #include "crc32.h"
 #include "psx_cycles.h"
-#include "spu_envelope_rate.h"
+#include "spu_envelope.h"
+#include "spu_envelope_rate.h"  /* volume sweep only, until fixture E9 */
 #include "spu_adpcm_sample.h"
 
 #include <stdio.h>
@@ -196,8 +197,8 @@ static void spu_event_record(uint8_t kind, int voice, uint32_t addr) {
  */
 static void adsr_run(int idx, SpuVoice *v)
 {
-    spu_envelope_adsr_step(&v->env_level, &v->adsr_divider, &v->adsr_phase,
-                           spu_regs[idx * 8 + 4], spu_regs[idx * 8 + 5]);
+    spu_env_adsr_tick(&v->env_level, &v->adsr_divider, &v->adsr_phase,
+                      spu_regs[idx * 8 + 4], spu_regs[idx * 8 + 5]);
 }
 
 static inline int16_t clamp16(int32_t v) {
