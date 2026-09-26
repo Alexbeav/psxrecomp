@@ -50,8 +50,11 @@ static inline int32_t source_gpu_t_credit(int32_t budget, uint64_t elapsed)
  *   first half: flat 84 (8,914), textured 264 (180,584), gouraud 372 (14,076)
  *   second half: flat 46 (296), textured 226 (180,584), gouraud 334 (13,716)
  * Semi-transparency does not change the set-up (textured 35,911; gouraud 2,220).
- * Gouraud+textured: extra 450, not 180+288 [ORACLE FIXTURE: all 1,536
- * cases of source_gpu_shaded_texture_family_fixtures.json, both halves].
+ * Gouraud+textured: extra 450, not 180+288 [ORACLE: Pepsiman route-04,
+ * 13,165,187 dispatches; ORACLE FIXTURE: all 1,536 cases of
+ * source_gpu_shaded_texture_family_fixtures.json, both halves]. Mask bit 0 (set
+ * mask while drawing) does not change any cost (Pepsiman: 42.5M polygons,
+ * 620k rectangles with it set).
  * No$PSX precalc: 10 base, +90 textured, +150 gouraud clocks (= 20/180/300
  * half-clocks). The textured extra (180) matches No$PSX; base and gouraud differ. */
 #define SOURCE_GPU_T_POLY_FIRST 84
@@ -107,7 +110,7 @@ static inline int source_gpu_t_line(unsigned op, int reads_back, int dx, int dy,
  * No$PSX New GPU: 1.25 clocks per pixel + 19.5 per row without mask check.
  *
  * Fill [NOT FITTED]: every logged fill so far is 320x240 and costs 11,808
- * (MMX5, 10,298 rows). One size cannot fix a formula, so fill keeps No$PSX New
+ * (MMX5 10,298 rows; Pepsiman 35,660 rows). One size cannot fix a formula, so fill keeps No$PSX New
  * GPU in half-clocks (2 per 16 px + 10 per row) and does not match yet. */
 #define SOURCE_GPU_T_COPY_PIXEL 2
 static inline int source_gpu_t_fill(unsigned width, unsigned height)

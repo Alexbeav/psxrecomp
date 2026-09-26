@@ -73,7 +73,6 @@ static long long expected_charge(const SourceGPUCommandProjection *s, int kind,
     if (kind == 4) { *cls = "A0h data word"; return SOURCE_GPU_T_UPLOAD_WORD; }
     if (source_gpu_polygon_supported(op)) {
         *cls = (op & 0x14u) == 0x14u ? "polygon gouraud+textured" : "polygon";
-        if ((op & 0x14u) == 0x14u) *fitted = 0;
         return source_gpu_command_polygon_cost(s, w, kind == 3);
     }
     if (source_gpu_sprite_opcode(op)) { *cls = "rectangle"; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
