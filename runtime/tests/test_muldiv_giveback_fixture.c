@@ -78,7 +78,7 @@ static uint32_t latency_for(unsigned kind, unsigned stall_class)
 }
 
 static uint64_t run(int measured, unsigned kind, unsigned stall_class,
-                    unsigned lw, unsigned d, unsigned k)
+                    unsigned lw, unsigned d, unsigned k, unsigned reads)
 {
     CPUState cpu;
     memset(&cpu, 0, sizeof cpu);
@@ -103,34 +103,64 @@ static uint64_t run(int measured, unsigned kind, unsigned stall_class,
         else
             psx_cyc_step(&cpu, 0);
     }
-    psx_cyc_step(&cpu, BIT(R_DEST));
-    if (measured) psx_muldiv_stall(&cpu);
+    for (unsigned r = 0; r < reads; ++r) {
+        psx_cyc_step(&cpu, BIT(R_DEST + r));
+        if (measured) psx_muldiv_stall(&cpu);
+    }
     uint64_t t2 = timer_read(&cpu, R_T2);
     return t2 - t1;
 }
 
+static unsigned bad;
+static void expect(uint64_t got, unsigned want, const char *what, unsigned kind, unsigned k)
+{
+    if (got == (uint64_t)want) return;
+    if (bad < 10) fprintf(stderr, "FAIL %s kind%u k%u: stall %llu, fixture %u\n",
+                          what, kind, k, (unsigned long long)got, want);
+    ++bad;
+}
+
+static uint64_t stall_of(unsigned kind, unsigned cls, unsigned lw, unsigned d, unsigned k, unsigned reads)
+{
+    return run(1, kind, cls, lw, d, k, reads) - run(0, kind, cls, lw, d, k, reads);
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 2) { fprintf(stderr, "usage: %s muldiv_f5_giveback_fixture.txt\n", argv[0]); return 2; }
+    if (argc != 3) {
+        fprintf(stderr, "usage: %s muldiv_f5_giveback_fixture.txt muldiv_f6_second_read_fixture.txt\n", argv[0]);
+        return 2;
+    }
+    char line[256];
+    unsigned n5 = 0, n6 = 0;
     FILE *f = fopen(argv[1], "r");
     if (!f) { fprintf(stderr, "FAIL: cannot open %s\n", argv[1]); return 1; }
-    char line[256];
-    unsigned n = 0, bad = 0;
     while (fgets(line, sizeof line, f)) {
         unsigned kind, cls, mfhi, lw, d, k, want;
         if (line[0] == '#') continue;
         if (sscanf(line, "%u %u %u %u %u %u %u", &kind, &cls, &mfhi, &lw, &d, &k, &want) != 7) continue;
         (void)mfhi;  /* MFHI and MFLO share the deadline */
-        uint64_t got = run(1, kind, cls, lw, d, k) - run(0, kind, cls, lw, d, k);
-        ++n;
-        if (got != want) {
-            if (bad < 10) fprintf(stderr, "FAIL kind%u class%u lw%u d%u k%u: stall %llu, fixture %u\n",
-                                  kind, cls, lw, d, k, (unsigned long long)got, want);
-            ++bad;
-        }
+        expect(stall_of(kind, cls, lw, d, k, 1), want, "F5", kind, k);
+        ++n5;
     }
     fclose(f);
-    if (n != 2288 || bad) { fprintf(stderr, "FAIL: %u of %u vectors differ\n", bad, n); return 1; }
-    printf("MFHI/MFLO give-back (oracle fixture F5): %u vectors match\n", n);
+    /* F6: a second HI/LO read straight after the first never waits again. */
+    f = fopen(argv[2], "r");
+    if (!f) { fprintf(stderr, "FAIL: cannot open %s\n", argv[2]); return 1; }
+    while (fgets(line, sizeof line, f)) {
+        unsigned kind, latency, lw_last, k, one, two;
+        if (line[0] == '#') continue;
+        if (sscanf(line, "%u %u %u %u %u %u", &kind, &latency, &lw_last, &k, &one, &two) != 6) continue;
+        unsigned cls = latency + 1u, lw = lw_last ? 3u : 0u;
+        expect(stall_of(kind, cls, lw, 0, k, 1), one, "F6 one read", kind, k);
+        expect(stall_of(kind, cls, lw, 0, k, 2), two, "F6 two reads", kind, k);
+        ++n6;
+    }
+    fclose(f);
+    if (n5 != 2288 || n6 != 144 || bad) {
+        fprintf(stderr, "FAIL: %u mismatches (F5 %u vectors, F6 %u vectors)\n", bad, n5, n6);
+        return 1;
+    }
+    printf("MFHI/MFLO give-back and second read (oracle fixtures F5, F6): %u + %u vectors match\n", n5, n6);
     return 0;
 }
