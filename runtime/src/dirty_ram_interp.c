@@ -2057,7 +2057,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             }
             psx_pgxp_muldiv(cpu, insn, cpu->hi, cpu->lo, cpu->gpr[rs], cpu->gpr[rt]);
 #ifdef PSX_ENABLE_BLOCK_CYCLES
-            psx_muldiv_set(cpu, 37u);   /* DIV completion deadline (fixed) */
+            psx_muldiv_set(cpu, PSX_DIV_LATENCY);   /* DIV completion deadline */
 #endif
             return 0;
         }
@@ -2071,7 +2071,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             }
             psx_pgxp_muldiv(cpu, insn, cpu->hi, cpu->lo, cpu->gpr[rs], cpu->gpr[rt]);
 #ifdef PSX_ENABLE_BLOCK_CYCLES
-            psx_muldiv_set(cpu, 37u);   /* DIVU completion deadline (fixed) */
+            psx_muldiv_set(cpu, PSX_DIV_LATENCY);   /* DIVU completion deadline */
 #endif
             return 0;
         case 0x20: /* ADD */
@@ -3336,7 +3336,7 @@ int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int 
                     uint32_t op = word >> 26, fn = word & 63u;
                     if ((op >= 0x20u && op <= 0x26u) || op == 0x32u) b_nosteal += 40u;   /* region36 + fudge2 + completion2, no 200 steal */
                     if (op == 0x12u && (word & (1u << 25))) { uint32_t l = psx_gte_cmd_latency(word); b_nosteal += l; b_nomem += l; }
-                    if (!op && fn >= 0x18u && fn <= 0x1bu) { b_nosteal += 37u; b_nomem += 37u; }
+                    if (!op && fn >= 0x18u && fn <= 0x1bu) { b_nosteal += PSX_DIV_LATENCY; b_nomem += PSX_DIV_LATENCY; }
                 }
                 int dma_idle = !dma_src_active();
                 if (dma_idle) g_sd_dma_idle_at_slice++;

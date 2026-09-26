@@ -17,7 +17,7 @@ static uint32_t source_cpu_block_bound_ex(CPUState *cpu,uint32_t pc,uint32_t cou
     /* Per instruction: base1 + maximum cache refill7; data read maximum
      * access_cost; newly issued GTE maximum43 and multiply/divide maximum37.
      * Summing mutually exclusive costs is intentionally conservative. */
-    uint64_t bound=(uint64_t)count*(8u+access_cost+43u+37u)+stalls;
+    uint64_t bound=(uint64_t)count*(8u+access_cost+43u+PSX_DIV_LATENCY)+stalls;
     if(bound<deadline)return (uint32_t)bound;
     uint32_t phys=pc&0x1fffffffu;
     if(count>0x80000u || phys>=0x200000u || (uint64_t)phys+4ull*count>0x200000u)return UINT32_MAX;
@@ -61,7 +61,7 @@ static void source_cpu_block_facts_scan(uint32_t phys,uint32_t count,SourceCpuBl
         uint32_t op=word>>26,fn=word&63u,rs=(word>>21)&31u,rt=(word>>16)&31u;
         if((op>=0x20u && op<=0x26u) || op==0x32u)f->accesses++;
         if(op==0x12u && (word&(1u<<25)))f->extra_latency+=psx_gte_cmd_latency(word);
-        if(!op && fn>=0x18u && fn<=0x1bu)f->extra_latency+=37u;
+        if(!op && fn>=0x18u && fn<=0x1bu)f->extra_latency+=PSX_DIV_LATENCY;
         if(op==0x12u && (rs==0u || rs==2u) && rt!=0u)f->gte_delay=1;
     }
 }
