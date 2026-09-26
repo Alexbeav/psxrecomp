@@ -905,12 +905,13 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME spu_envelope_rate_test COMMAND spu_envelope_rate_test)
 
     # PS1B-192: the ADSR envelope and volume sweep unit against oracle fixture
-    # sets S-spu E2-E7 and E1-E3-E9.
+    # sets S-spu E2-E7, E1-E3-E9 and E1R-E10-E8b.
     add_executable(spu_envelope_fixture_test tests/test_spu_envelope_fixture.c)
     target_include_directories(spu_envelope_fixture_test PRIVATE include)
     add_test(NAME spu_envelope_fixture_test COMMAND spu_envelope_fixture_test
              ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture.txt
-             ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture_e1_e9.txt)
+             ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture_e1_e9.txt
+             ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture_e1r_e10.txt)
     # PS1B-192: KON/KOFF latency through the register interface (fixtures E4, E5).
     add_executable(spu_key_latency_test tests/test_spu_key_latency.c)
     target_include_directories(spu_key_latency_test PRIVATE include)
