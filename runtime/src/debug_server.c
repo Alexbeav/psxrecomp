@@ -17,6 +17,7 @@
 #endif
 #include <time.h>
 #include "debug_server.h"
+#include "psx_video_timing.h"
 #include "psx_bss.h"
 #include "nd_intro_ot.h"
 #include "latency_ring.h"
@@ -5553,12 +5554,19 @@ static void handle_vblank_rate(int id, const char *json)
              "\"cycle_paced_raise\":%llu,"
              "\"delivered\":%llu,"
              "\"pollhack_raise\":%llu,"
-             "\"doff_min\":%d,\"doff_max\":%d,\"doff_cnt\":%u}",
+             "\"doff_min\":%d,\"doff_max\":%d,\"doff_cnt\":%u,"
+             "\"video_standard\":\"%s\",\"vblank_cycles\":%u,"
+             "\"hblank_cycles\":%u,\"lines_per_frame\":%u,"
+             "\"video_standard_changes\":%u}",
              id,
              (unsigned long long)g_vblank_raise_count,
              (unsigned long long)g_vblank_deliver_count,
              (unsigned long long)g_pollhack_vblank_count,
-             g_doff_min_last, g_doff_max_last, g_doff_cnt_last);
+             g_doff_min_last, g_doff_max_last, g_doff_cnt_last,
+             psx_video_timing_is_pal() ? "PAL" : "NTSC",
+             (unsigned)g_psx_vblank_cycles, (unsigned)g_psx_hblank_cycles,
+             (unsigned)g_psx_lines_per_frame,
+             (unsigned)psx_video_timing_generation());
 }
 
 static void handle_timers_state(int id, const char *json)
