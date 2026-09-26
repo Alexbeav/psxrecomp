@@ -640,161 +640,152 @@ void psx_cycles_reset_for_boot(void) {
     s_next_pc_sample       = 0;
 }
 
-/* ---- Mult/div completion-stall timing (faithful R3000A; Beetle muldiv_ts_done) ----
+/* ---- Mult/div completion-stall: deferred HI/LO deadlines -----------------
  *
- * MULT/MULTU/DIV/DIVU don't stall at the op; they set a completion DEADLINE.
- * A later MFLO/MFHI that reads HI/LO before the deadline STALLS (advances guest
- * cycles) until it. Instructions executed in between absorb the latency — so the
- * stall is (deadline - now), not a flat charge (this is why div+2filler+mflo costs
- * the same as div+mflo: the fillers ran during the latency window). REQUIRES
- * per-instruction cycle charging (PSX_CODEGEN_CYCLE_PER_INSN / the interp), so
- * `now` is the true cycle position at the op — block-up-front charging breaks it.
+ * MULT/MULTU/DIV/DIVU do not stall when issued. They set a completion
+ * deadline (muldiv_ts_done) = published guest time + latency. MFHI/MFLO call
+ * psx_muldiv_stall, which waits for that deadline; instructions between the
+ * operation and the read absorb the latency.
  *
- * Latencies transcribed from Beetle cpu.cpp: DIV/DIVU = 37 (fixed). MULT/MULTU =
- * MULT_Tab24 indexed by the leading-zero count of the (sign-folded, for signed)
- * first operand | 0x400 — i.e. 14 for small magnitudes (<12 significant bits),
- * 10 for medium, 7 for large. The | 0x400 caps the index at 21 (never l==0). */
+ * Latencies are not documented in PSX-SPX or No$PSX. They are oracle
+ * observations: fixture set F1-F4-muldiv-gte, TSV sha256 5eb5d9959673a858...,
+ * receipt set sha256 8b43a3fe95c8470d... (Z:/Share/psxrecomp/evidence/T172/
+ * clean-rewrite-fixtures-20260926). The fixture reports the extra cycles an
+ * MFLO placed directly after the operation takes; the latency passed here is
+ * that stall minus one, the same convention test_muldiv_deferred's measured
+ * MULT/MFLO sequence uses (latency 7 for the 8-cycle case).
+ *
+ * MULT/MULTU [ORACLE FIXTURE F1]: the stall depends only on the first operand
+ * (rs), by its count of leading zero bits (for MULT, of the value with the
+ * sign folded away). No dependence on rt was observed.
+ *   leading zeros  0-11 -> stall 15 -> latency 14
+ *   leading zeros 12-20 -> stall 11 -> latency 10
+ *   leading zeros 21-32 -> stall  8 -> latency  7
+ * DIV/DIVU [ORACLE FIXTURE F2]: stall 38 -> latency 37 for every operand pair
+ * observed, including divide by zero and 0x80000000 / -1. This value is
+ * PSX_DIV_LATENCY (cpu_state.h); the recompilers emit it as a literal and
+ * test_muldiv_latency_fixture checks that the literal matches. */
 
-static const uint8_t PSX_MULT_TAB24[24] = {
-    /* i<12: 7+4+3=14 */ 14,14,14,14,14,14,14,14,14,14,14,14,
-    /* 12<=i<21: 7+3=10 */ 10,10,10,10,10,10,10,10,10,
-    /* i>=21: 7 */ 7,7,7
-};
+#define PSX_MULT_LAT_WIDE   14u  /* [ORACLE FIXTURE F1] leading zeros 0-11  */
+#define PSX_MULT_LAT_MID    10u  /* [ORACLE FIXTURE F1] leading zeros 12-20 */
+#define PSX_MULT_LAT_NARROW  7u  /* [ORACLE FIXTURE F1] leading zeros 21-32 */
 
-static inline uint32_t psx_clz32(uint32_t v) {
-    /* v is never 0 here (callers OR in 0x400). */
+static inline uint32_t psx_leading_zeros32(uint32_t v)
+{
+    if (v == 0) return 32;
 #if defined(_MSC_VER)
-    unsigned long _idx;
-    _BitScanReverse(&_idx, v);   /* index of highest set bit */
-    return (uint32_t)(31u - _idx);
+    unsigned long msb;
+    _BitScanReverse(&msb, v);
+    return 31u - (uint32_t)msb;
 #else
     return (uint32_t)__builtin_clz(v);
 #endif
 }
 
-uint32_t psx_mult_latency_s(uint32_t rs) {  /* MULT (signed): sign-fold magnitude */
-    return PSX_MULT_TAB24[psx_clz32((rs ^ (uint32_t)((int32_t)rs >> 31)) | 0x400u)];
-}
-uint32_t psx_mult_latency_u(uint32_t rs) {  /* MULTU (unsigned) */
-    return PSX_MULT_TAB24[psx_clz32(rs | 0x400u)];
+static inline uint32_t psx_mult_latency_from_zeros(uint32_t zeros)
+{
+    if (zeros <= 11) return PSX_MULT_LAT_WIDE;
+    if (zeros <= 20) return PSX_MULT_LAT_MID;
+    return PSX_MULT_LAT_NARROW;
 }
 
-/* DIV/DIVU latency is the fixed constant 37 — emitted directly at the op site. */
+uint32_t psx_mult_latency_s(uint32_t rs) {  /* MULT: fold the sign away first */
+    uint32_t folded = (rs & 0x80000000u) ? ~rs : rs;
+    return psx_mult_latency_from_zeros(psx_leading_zeros32(folded));
+}
+uint32_t psx_mult_latency_u(uint32_t rs) {  /* MULTU */
+    return psx_mult_latency_from_zeros(psx_leading_zeros32(rs));
+}
 
+/* Arm the HI/LO deadline from the published guest time. Pending batched
+ * cycles are published first so the deadline counts from the real issue time. */
 void psx_muldiv_set(CPUState* cpu, uint32_t latency) {
-    /* The deadline belongs to this instruction, including unpublished CPU
-     * work from generated blocks and local charge accumulators. */
     psx_cyc_batch_flush();
-    cpu->muldiv_ts_done = psx_cycle_count + (uint64_t)latency;
+    cpu->muldiv_ts_done = psx_cycle_count + latency;
 }
 
+/* MFHI/MFLO: wait for the HI/LO deadline. [ORACLE FIXTURE F5] (fixture set
+ * F5-mflo-giveback, TSV sha256 83fb4efa6c7bf97f..., 96 cases), cross-checked
+ * against F1/F2; replayed through this file's timing primitives, the rule
+ * below reproduces every warm row of F5 (2288) and F1/F2 (8697):
+ *  - with two or more cycles left, the read waits until the deadline;
+ *  - with one cycle or less left, it does not wait at all;
+ *  - the wait overlaps the most recent load's outstanding give-back, so the
+ *    give-back left for later instructions shrinks by the cycles waited. */
 void psx_muldiv_stall(CPUState* cpu) {
-    /* Publish once before comparing; otherwise advance would add the pending
-     * work a second time on top of a stall computed from a stale clock. */
     psx_cyc_batch_flush();
-    /* MFLO/MFHI stall to the mult/div completion deadline (Beetle cpu.cpp:1723-1736).
-     * While stalling it CONSUMES a pending load-delay give-back (read_absorb) — each
-     * stalled cycle decrements read_absorb[read_absorb_which] — so cycles that would
-     * have been "free" for following instructions are spent here instead. Plus the
-     * off-by-one shortcut: a deadline exactly one cycle out just retracts (no stall).
-     * (No-load code has read_absorb==0, so this reduces to a plain advance.) */
-    if (cpu->muldiv_ts_done > psx_cycle_count) {
-        if (cpu->muldiv_ts_done == psx_cycle_count + 1u) {
-            cpu->muldiv_ts_done--;   /* off-by-one: retract the deadline, no advance */
-            return;
-        }
-        uint32_t stall = (uint32_t)(cpu->muldiv_ts_done - psx_cycle_count);
-        uint8_t w = cpu->read_absorb_which;          /* fixed during the stall */
-        uint32_t give = cpu->read_absorb[w];
-        cpu->read_absorb[w] = (uint8_t)(give > stall ? give - stall : 0u);  /* consume */
-        psx_advance_cycles(stall);
-    }
+    if (cpu->muldiv_ts_done <= psx_cycle_count + 1) return;
+    uint32_t stall = (uint32_t)(cpu->muldiv_ts_done - psx_cycle_count);
+    uint8_t* give = &cpu->read_absorb[cpu->read_absorb_which];
+    *give = stall >= *give ? 0 : (uint8_t)(*give - stall);
+    psx_advance_cycles(stall);
 }
 
-/* MFC2/CFC2 (GTE register read → GPR): stall to the GTE command completion deadline
- * AND hand the stall amount to the next instruction(s) as a load-delay give-back
- * (Beetle cpu.cpp:1332-1341: LDAbsorb = gte_ts_done - timestamp, LDWhich = rt). The
- * §1+DO_LDS that bracket this ran in the instruction's psx_cyc_step (COP2 is non-load).
- * MTC2/CTC2 (writes) use psx_gte_stall (stall only, no give-back). */
-void psx_gte_read(CPUState* cpu, uint32_t rt) {
-    /* Include deferred CPU work before computing a deadline or stall. A
-     * later advance publishes it too, so using the old clock double-counts
-     * that work in the stall and can arm a command deadline too early. */
-    psx_cyc_batch_flush();
-    if (cpu->gte_ts_done > psx_cycle_count) {
-        uint32_t stall = (uint32_t)(cpu->gte_ts_done - psx_cycle_count);
-        cpu->ld_absorb = stall;
-        psx_advance_cycles(stall);
-    } else {
-        cpu->ld_absorb = 0u;
-    }
-    cpu->ld_which_t = (uint8_t)rt;
-}
-
-/* ---- GTE (COP2) per-command completion-stall timing ----
+/* ---- GTE completion-stall: deferred COP2 deadline --------------------------
  *
- * Faithful R3000A/GTE model (Beetle cpu.cpp:1410-1412 + gte.cpp GTE_Instruction
- * return(ret-1)). Each GTE command takes `cost` cycles (gte.cpp per-op returns,
- * verified from source); the COP2 instruction's own +1 base is charged
- * separately by per-instruction charging, so the *added* deadline latency is
- * cost-1. A later COP2 register access (MFC2/CFC2/MTC2/CTC2/LWC2/SWC2) stalls
- * until the deadline. Back-to-back commands serialize: psx_gte_set stalls to the
- * prior deadline before arming the next (Beetle stalls timestamp to gte_ts_done
- * at the command site before computing the new gte_ts_done).
+ * A GTE command sets gte_ts_done = published time + its added latency, after
+ * first waiting for any earlier command still running. Every COP2 register
+ * access (MFC2, CFC2, MTC2, CTC2, LWC2, SWC2) waits for gte_ts_done. MFC2 and
+ * CFC2 also hand the actual stall to the delayed-load model as the target
+ * register's give-back. Stalls only advance guest cycles.
  *
- * Cost table = (cost-1), indexed by the 6-bit GTE command (instr & 0x3F).
- * cost values transcribed + verified from beetle-psx/mednafen/psx/gte.cpp op
- * returns: RTPS15 RTPT23 MVMVA8 SQR5 OP6 AVSZ3/4=5 NCLIP8 NCDS19 NCDT44 NCCS17
- * NCCT39 NCS14 NCT30 CC11 CDP13 DPCS8 DPCT17 DCPL8 INTPL8 GPF5 GPL5. Unknown/
- * undefined commands = 1 cycle (Beetle default ret=1) -> 0 added. */
-static const uint8_t PSX_GTE_LAT_M1[64] = {
-    [0x00] = 14, [0x01] = 14,            /* RTPS  */
-    [0x06] = 7,                          /* NCLIP */
-    [0x0C] = 5,                          /* OP    */
-    [0x10] = 7,                          /* DPCS  */
-    [0x11] = 7,                          /* INTPL */
-    [0x12] = 7,                          /* MVMVA */
-    [0x13] = 18,                         /* NCDS  */
-    [0x14] = 12,                         /* CDP   */
-    [0x16] = 43,                         /* NCDT  */
-    [0x1A] = 7,                          /* DCPL (alt of 0x29) */
-    [0x1B] = 16,                         /* NCCS  */
-    [0x1C] = 10,                         /* CC    */
-    [0x1E] = 13,                         /* NCS   */
-    [0x20] = 29,                         /* NCT   */
-    [0x28] = 4,                          /* SQR   */
-    [0x29] = 7,                          /* DCPL  */
-    [0x2A] = 16,                         /* DPCT  */
-    [0x2D] = 4,                          /* AVSZ3 */
-    [0x2E] = 4,                          /* AVSZ4 */
-    [0x30] = 22,                         /* RTPT  */
-    [0x3D] = 4,                          /* GPF   */
-    [0x3E] = 4,                          /* GPL   */
-    [0x3F] = 38,                         /* NCCT  */
+ * Latency = command cycle count - 1 (the issue cycle is charged by the
+ * caller). Counts are [DOC] PSX-SPX a253f078
+ * docs/geometrytransformationenginegte.md, "GTE Coordinate / General Purpose /
+ * Color Calculation Commands" headings, confirmed by fixture F3 (same set as
+ * above), except where marked [ORACLE FIXTURE F3]. */
+static const uint8_t PSX_GTE_LATENCY[64] = {
+    [0x00] = 14, /* undefined: [ORACLE FIXTURE F3] 15 cycles                  */
+    [0x01] = 14, /* RTPS  15 [DOC]                                            */
+    [0x06] =  7, /* NCLIP  8 [DOC]                                            */
+    [0x0C] =  5, /* OP     6 [DOC]                                            */
+    [0x10] =  7, /* DPCS   8 [DOC]                                            */
+    [0x11] =  7, /* INTPL  8 [DOC]                                            */
+    [0x12] =  7, /* MVMVA  8 [DOC]                                            */
+    [0x13] = 18, /* NCDS  19 [DOC]                                            */
+    [0x14] = 12, /* CDP   13 [DOC]                                            */
+    [0x16] = 43, /* NCDT  44 [DOC]                                            */
+    [0x1A] =  7, /* undefined: [ORACLE FIXTURE F3] 8 cycles                   */
+    [0x1B] = 16, /* NCCS  17 [DOC]                                            */
+    [0x1C] = 10, /* CC    11 [DOC]                                            */
+    [0x1E] = 13, /* NCS   14 [DOC]                                            */
+    [0x20] = 29, /* NCT   30 [DOC]                                            */
+    [0x28] =  4, /* SQR    5 [DOC]                                            */
+    [0x29] =  7, /* DCPL   8 [DOC]                                            */
+    [0x2A] = 16, /* DPCT  17 [DOC]                                            */
+    [0x2D] =  4, /* AVSZ3  5 [DOC]                                            */
+    [0x2E] =  4, /* AVSZ4: [ORACLE FIXTURE F3] 5 cycles; PSX-SPX lists 6      */
+    [0x30] = 22, /* RTPT  23 [DOC]                                            */
+    [0x3D] =  4, /* GPF    5 [DOC]                                            */
+    [0x3E] =  4, /* GPL    5 [DOC]                                            */
+    [0x3F] = 38, /* NCCT  39 [DOC]                                            */
+    /* All other command numbers: no added latency [ORACLE FIXTURE F3]. */
 };
 
 uint32_t psx_gte_cmd_latency(uint32_t cmd) {
-    return (uint32_t)PSX_GTE_LAT_M1[cmd & 0x3Fu];
+    return PSX_GTE_LATENCY[cmd & 0x3Fu];
+}
+
+/* Advance guest time to the GTE deadline if it lies ahead; returns the stall. */
+static inline uint32_t psx_gte_wait(const CPUState* cpu) {
+    psx_cyc_batch_flush();
+    if (psx_cycle_count >= cpu->gte_ts_done) return 0;
+    uint32_t stall = (uint32_t)(cpu->gte_ts_done - psx_cycle_count);
+    psx_advance_cycles(stall);
+    return stall;
 }
 
 void psx_gte_set(CPUState* cpu, uint32_t latency) {
-    /* Include deferred CPU work before computing a deadline or stall. A
-     * later advance publishes it too, so using the old clock double-counts
-     * that work in the stall and can arm a command deadline too early. */
-    psx_cyc_batch_flush();
-    /* Back-to-back GTE ops serialize: finish the prior op first. */
-    if (cpu->gte_ts_done > psx_cycle_count) {
-        psx_advance_cycles((uint32_t)(cpu->gte_ts_done - psx_cycle_count));
-    }
-    cpu->gte_ts_done = psx_cycle_count + (uint64_t)latency;
+    (void)psx_gte_wait(cpu);        /* the previous command finishes first */
+    cpu->gte_ts_done = psx_cycle_count + latency;
 }
 
 void psx_gte_stall(CPUState* cpu) {
-    /* Include deferred CPU work before computing a deadline or stall. A
-     * later advance publishes it too, so using the old clock double-counts
-     * that work in the stall and can arm a command deadline too early. */
-    psx_cyc_batch_flush();
-    if (cpu->gte_ts_done > psx_cycle_count) {
-        psx_advance_cycles((uint32_t)(cpu->gte_ts_done - psx_cycle_count));
-    }
+    (void)psx_gte_wait(cpu);
+}
+
+/* MFC2/CFC2: the stall becomes the pending load's give-back for rt. */
+void psx_gte_read(CPUState* cpu, uint32_t rt) {
+    cpu->ld_absorb = psx_gte_wait(cpu);
+    cpu->ld_which_t = (uint8_t)rt;
 }

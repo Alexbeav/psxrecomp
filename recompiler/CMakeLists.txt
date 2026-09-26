@@ -1179,6 +1179,32 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_link_options(${_target} PRIVATE -Wl,--gc-sections)
         add_test(NAME ${_target} COMMAND ${_target})
     endforeach()
+    # PS1B-185: MULT/DIV/GTE latencies against oracle fixture F1-F3, and the
+    # recompilers' inline DIV literal against PSX_DIV_LATENCY.
+    add_executable(muldiv_latency_fixture
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_muldiv_latency_fixture.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+    target_include_directories(muldiv_latency_fixture PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+    target_compile_definitions(muldiv_latency_fixture PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+    target_compile_options(muldiv_latency_fixture PRIVATE -O2 -UNDEBUG -ffunction-sections -fdata-sections)
+    target_link_options(muldiv_latency_fixture PRIVATE -Wl,--gc-sections)
+    add_test(NAME muldiv_latency_fixture COMMAND muldiv_latency_fixture
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/code_generator.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/strict_translator.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/dirty_ram_interp.c")
+    # PS1B-185: MFHI/MFLO deadline wait and load give-back against oracle fixture F5.
+    foreach(_mode IN ITEMS O0 O2)
+        set(_target "muldiv_giveback_fixture_${_mode}")
+        add_executable(${_target}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_muldiv_giveback_fixture.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+        target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+        add_test(NAME ${_target} COMMAND ${_target}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/muldiv_f5_giveback_fixture.txt")
+    endforeach()
 endif()
 
 # ---- test-registration completeness guard -----------------------------------
