@@ -16,8 +16,8 @@
  *     clamps (bilinear neighbours, S>1 interpolation overshoot).
  *
  *   psx_uv_tri_mirror_offset / psx_uv_rect_mirror_offset
- *     The Beetle-PSX / parallel-psx Calc_UVOffsets_Adjust_Verts model for
- *     CENTER-SAMPLED rasterizers (GL/VK). Their sample-grid shift
+ *     Our mirrored-uv compensation for CENTER-SAMPLED rasterizers
+ *     (GL/VK). Their sample-grid shift
  *     (u_shift = 0.5/S - 1/64) makes floor(uv) land on the exact PS1 texel
  *     for forward mappings, but mirrored ones interpolate 1/64 SHORT of
  *     each integer and floor one texel LOW — painting the cel's
@@ -28,7 +28,7 @@
  *
  * Derivative direction is area2-normalized (winding-independent); diagonal
  * (3D-ish) mappings — both derivatives nonzero on an axis — get no
- * compensation and no back-off tightening on that axis. Like Beetle, a rare
+ * compensation and no back-off tightening on that axis. By design, a rare
  * 3D poly that happens to be axis-aligned accepts a one-texel shift in
  * exchange for correct 2D sprites.
  *

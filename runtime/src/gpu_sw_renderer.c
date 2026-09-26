@@ -621,7 +621,7 @@ static uint16_t texel_fetch(int u, int v, uint16_t texpage,
     }
 }
 
-/* Per-prim uv sampling bounds (inclusive), Beetle-PSX model: bilinear
+/* Per-prim uv sampling bounds (inclusive), our enhancement design: bilinear
  * neighbours clamp to the prim's own texture rect so they never blend in
  * texels from a neighbouring sprite/tile or empty VRAM. Set by every
  * textured prim entry point; ignored while a texture window is active
@@ -641,7 +641,7 @@ static uint16_t bl_fetch(int u, int v, uint16_t texpage,
 /* Bilinear texel sample, in RGB space (after the CLUT lookup — never
  * interpolate palette indices). fu/fv are texel-space coordinates.
  *
- * Beetle-PSX formulation: the NEAREST texel is the base (cutout + STP
+ * Our formulation: the NEAREST texel is the base (cutout + STP
  * authority), the neighbours lie toward the sub-texel offset and clamp to
  * g_uv_lim, and each texel's weight is gated by its opacity with the colour
  * renormalised — so prim edges and cutout borders keep their colour instead

@@ -1153,7 +1153,7 @@ static const char *TEX_FS =
     "    rgb = col5(raw);\n"
     "    stp = (raw >> 15) & 1;\n"
     "  } else {\n"
-    "    /* Bilinear, Beetle-PSX formulation: the NEAREST texel is the base\n"
+    "    /* Bilinear, our formulation: the NEAREST texel is the base\n"
     "     * (cutout + STP authority), the neighbours lie toward the sub-texel\n"
     "     * offset and clamp to u_limits, and each texel's weight is gated by\n"
     "     * its opacity with the colour renormalised — so prim edges and\n"
