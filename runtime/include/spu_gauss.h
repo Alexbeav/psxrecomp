@@ -86,8 +86,15 @@ static const int16_t spu_gauss_table[512] = {
 /* Interpolated output for the sample at sample_index (0..27) of the current
  * 28-sample ADPCM block. The three samples before it come from the current
  * block, or from previous[] when sample_index < 3. previous[0..2] hold the
- * last three samples of the preceding block, oldest first. The documented
- * formula applies an arithmetic shift right by 15 to each product. */
+ * last three samples of the preceding block, oldest first.
+ *
+ * The four products are summed first and the sum is shifted right by 15
+ * (arithmetic, so negative results round down). PSX-SPX writes the shift on
+ * each product; the oracle does not. [ORACLE FIXTURE G1-G4] (set
+ * S-spu/G1-G4-gauss, tsv sha256 360026e6...): with this table, G1/G1s recover
+ * every entry at every index, and G2/G3 (two adjacent non-zero samples, levels
+ * 7FFFh/4000h/2AAAh) match the summed form on all rows while the per-product
+ * form misses hundreds. */
 static inline int16_t spu_gaussian_interpolate(const int16_t previous[3], const int16_t samples[28],
                                                int sample_index, uint32_t phase)
 {
@@ -97,11 +104,11 @@ static inline int16_t spu_gaussian_interpolate(const int16_t previous[3], const 
         tap[k] = at < 0 ? previous[at + 3] : samples[at];
     }
     unsigned i = (phase >> 4) & 0xFFu;
-    int32_t out = (spu_gauss_table[0x0FFu - i] * tap[0]) >> 15;
-    out += (spu_gauss_table[0x1FFu - i] * tap[1]) >> 15;
-    out += (spu_gauss_table[0x100u + i] * tap[2]) >> 15;
-    out += (spu_gauss_table[0x000u + i] * tap[3]) >> 15;
-    return (int16_t)out;
+    int32_t sum = spu_gauss_table[0x0FFu - i] * tap[0]
+                + spu_gauss_table[0x1FFu - i] * tap[1]
+                + spu_gauss_table[0x100u + i] * tap[2]
+                + spu_gauss_table[0x000u + i] * tap[3];
+    return (int16_t)(sum >> 15);
 }
 
 #endif /* PSX_SPU_GAUSS_H */

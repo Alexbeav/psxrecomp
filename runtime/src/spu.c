@@ -1034,10 +1034,9 @@ void spu_render(int16_t* out_stereo, int frames) {
     }
 
     /* MotK intro FMV (and other XA-only scenes): active_mask stays 0 while
-     * CD/XA plays. Keep capture / noise / reverb / main sweeps (issue #103
-     * fidelity — FMV is exactly the CD-with-reverb case) but skip the
-     * 24-voice walk and per-voice sweep steps. Shadow tap stays on the
-     * general path. */
+     * CD/XA plays. Keep capture / noise / reverb / main and voice sweeps
+     * (issue #103 fidelity — FMV is exactly the CD-with-reverb case) but
+     * skip the 24-voice walk. Shadow tap stays on the general path. */
     if (enabled && !any_voice && !s_shadow_tap_on) {
         static int16_t s_voice_silence[2048 * 2];
         int voice_tap_n = frames;
@@ -1065,6 +1064,11 @@ void spu_render(int16_t* out_stereo, int frames) {
                            spu_regs[reg_index(0x1F801D80u)]);
             sweep_env_step(&sweep_main_env[1],
                            spu_regs[reg_index(0x1F801D82u)]);
+            /* Voice sweeps run with no voice keyed on [ORACLE FIXTURE E10]. */
+            for (int v = 0; v < SPU_VOICE_COUNT; v++) {
+                sweep_env_step(&sweep_voice_env[v][0], voice_reg(v, 0));
+                sweep_env_step(&sweep_voice_env[v][1], voice_reg(v, 1));
+            }
 
             int16_t cd_l = 0;
             int16_t cd_r = 0;
@@ -1159,12 +1163,13 @@ void spu_render(int16_t* out_stereo, int frames) {
             int16_t v1_out = 0;   /* voice 1 post-envelope output (capture) */
             int16_t v3_out = 0;   /* voice 3 post-envelope output (capture) */
 
-            /* Volume sweeps step once per 44100 Hz sample on the same rate
-             * machinery as ADSR; no-ops for direct-mode registers. Voice
-             * sweeps only matter while a voice is active. */
+            /* Volume sweeps step once per 44100 Hz sample on the same step
+             * as ADSR. Voice sweeps run whether or not a voice is keyed on
+             * [ORACLE FIXTURE E10]; a disabled SPU is not measured and keeps
+             * the old gate. */
             sweep_env_step(&sweep_main_env[0], spu_regs[reg_index(0x1F801D80u)]);
             sweep_env_step(&sweep_main_env[1], spu_regs[reg_index(0x1F801D82u)]);
-            if (any_voice) {
+            if (enabled || any_voice) {
                 for (int v = 0; v < SPU_VOICE_COUNT; v++) {
                     sweep_env_step(&sweep_voice_env[v][0], voice_reg(v, 0));
                     sweep_env_step(&sweep_voice_env[v][1], voice_reg(v, 1));

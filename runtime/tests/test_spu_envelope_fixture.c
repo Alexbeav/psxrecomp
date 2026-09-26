@@ -11,7 +11,12 @@
  * T/S/r: E1 (rates), E3 (Decay exit), E5 (Release after key off) and E9 (volume
  *      sweep) traces; see run_traces. [ORACLE FIXTURE E1, E3, E5, E9]
  *
- * argv[1]: spu_envelope_fixture.txt  argv[2]: spu_envelope_fixture_e1_e9.txt */
+ * The same trace check covers set S-spu E1R-E10-E8b classes E1R (Release at
+ *      every shift) and E10 (voice sweeps with no voice keyed on).
+ *      [ORACLE FIXTURE E1R, E10]
+ *
+ * argv[1]: spu_envelope_fixture.txt  argv[2]: spu_envelope_fixture_e1_e9.txt
+ * argv[3]: spu_envelope_fixture_e1r_e10.txt */
 #include "spu_envelope.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -167,7 +172,11 @@ static unsigned run_traces(const char *path, unsigned *traces_out, unsigned *row
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) { fprintf(stderr, "usage: %s spu_envelope_fixture.txt spu_envelope_fixture_e1_e9.txt\n", argv[0]); return 2; }
+    if (argc != 4) {
+        fprintf(stderr, "usage: %s spu_envelope_fixture.txt spu_envelope_fixture_e1_e9.txt "
+                "spu_envelope_fixture_e1r_e10.txt\n", argv[0]);
+        return 2;
+    }
     FILE *f = fopen(argv[1], "r");
     if (!f) { fprintf(stderr, "FAIL: cannot open %s\n", argv[1]); return 1; }
     char line[256];
@@ -211,9 +220,11 @@ int main(int argc, char **argv)
         }
     }
     fclose(f);
-    unsigned traces2 = 0, rows2 = 0;
+    unsigned traces2 = 0, rows2 = 0, traces3 = 0, rows3 = 0;
     bad += run_traces(argv[2], &traces2, &rows2);
-    if (cases != 34 || reads != 30759 || traces != 128 || traces2 != 1114 || rows2 != 53625 || bad) {
+    bad += run_traces(argv[3], &traces3, &rows3);
+    if (cases != 34 || reads != 30759 || traces != 128 || traces2 != 1114 || rows2 != 53625 ||
+        traces3 != 106 || rows3 != 5815 || bad) {
         fprintf(stderr, "FAIL: %u mismatches (E2/E7: %u cases, %u reads, %u traces; E1-E9: %u traces, %u rows)\n",
                 bad, cases, reads, traces, traces2, rows2);
         return 1;
@@ -222,5 +233,7 @@ int main(int argc, char **argv)
            cases, reads, traces);
     printf("SPU envelope and sweep (oracle fixtures E1, E3, E5, E9): %u traces, %u timed rows match\n",
            traces2, rows2);
+    printf("SPU release and idle-voice sweep (oracle fixtures E1R, E10): %u traces, %u timed rows match\n",
+           traces3, rows3);
     return 0;
 }
