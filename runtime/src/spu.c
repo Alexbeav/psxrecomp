@@ -250,11 +250,18 @@ static void sweep_env_step(SweepEnv *sw, uint16_t raw)
     spu_env_sweep_tick(&sw->level, &sw->divider, raw);
 }
 
-/* Live effective volume of a volume register: the current level, which the
- * sample tick loads from a fixed-mode register and steps in sweep mode (see
- * sweep_env_write). */
+/* Live effective volume of a volume register for the mix: the register
+ * decode in direct mode, the sweep envelope's current level in sweep mode. */
 static inline int16_t chan_volume(uint16_t raw, const SweepEnv *sw) {
-    (void)raw;
+    if (raw & 0x8000u) return sw->level;
+    return volume_reg_decode(raw);
+}
+
+/* The current-volume registers (1DB8h/1DBAh, 1E00h+) read the level the
+ * sample tick loaded, so a fixed-mode write shows there from the next tick
+ * [ORACLE FIXTURE S4] (see sweep_env_write). The mix above is unchanged: S4
+ * observes the read-back only. */
+static inline int16_t current_volume(const SweepEnv *sw) {
     return sw->level;
 }
 
@@ -1430,14 +1437,10 @@ uint32_t spu_read(uint32_t addr) {
             }
             /* Current main volume L/R (psx-spx 1F801DB8h/1F801DBAh): the
              * LIVE sweep-aware level as a signed 16-bit value. */
-            if (addr == 0x1F801DB8u) {
-                return (uint32_t)(uint16_t)chan_volume(
-                    spu_regs[reg_index(0x1F801D80u)], &sweep_main_env[0]);
-            }
-            if (addr == 0x1F801DBAu) {
-                return (uint32_t)(uint16_t)chan_volume(
-                    spu_regs[reg_index(0x1F801D82u)], &sweep_main_env[1]);
-            }
+            if (addr == 0x1F801DB8u)
+                return (uint32_t)(uint16_t)current_volume(&sweep_main_env[0]);
+            if (addr == 0x1F801DBAu)
+                return (uint32_t)(uint16_t)current_volume(&sweep_main_env[1]);
             /* A volume register in SWEEP mode reads back as written,
              * immediately and two ticks later; the live level is only in the
              * current-volume registers 1DB8h/1DBAh and 1E00h+ [ORACLE FIXTURE
@@ -1475,10 +1478,8 @@ uint32_t spu_read(uint32_t addr) {
         uint32_t half = (addr - 0x1F801E00u) >> 1;
         int v  = (int)(half >> 1);
         int ch = (int)(half & 1u);
-        if (v < SPU_VOICE_COUNT) {
-            return (uint32_t)(uint16_t)chan_volume(
-                voice_reg(v, ch), &sweep_voice_env[v][ch]);
-        }
+        if (v < SPU_VOICE_COUNT)
+            return (uint32_t)(uint16_t)current_volume(&sweep_voice_env[v][ch]);
     }
 
     return 0;
