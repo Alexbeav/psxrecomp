@@ -3,7 +3,7 @@ This isolates CPU value semantics. It does not qualify timer IRQ recognition.
 """
 from pathlib import Path
 import json, tempfile, argparse, struct, subprocess
-ap=argparse.ArgumentParser();ap.add_argument("--native",type=Path);ap.add_argument("--case");args=ap.parse_args()
+ap=argparse.ArgumentParser();ap.add_argument("--precise",action="store_true");ap.add_argument("--native",type=Path);ap.add_argument("--case");ap.add_argument("--keep",type=Path);args=ap.parse_args()
 import source_fixture_link as link
 here=Path(__file__).resolve().parent
 fixture=json.loads((here/'load_delay_l1_clean.json').read_text())
@@ -35,14 +35,20 @@ def run_cases(selected,tmp,native=False):
   source=source.replace('int main(void){','int g_psx_cps_mode;\nint psx_vsync_query_hle_try(CPUState*c,uint32_t p){(void)c;(void)p;return 0;}\nint dirty_ram_text_native_ok_ranges_from(const uint32_t *r,uint32_t n,uint32_t p){(void)r;(void)n;(void)p;return 1;}\nint psx_dispatch_game_compiled(CPUState*,uint32_t);\nvoid debug_server_log_call_entry(uint32_t p){(void)p;}\nvoid debug_server_cyc_observe(uint32_t p){(void)p;}\nvoid psx_check_interrupts(CPUState*c){(void)c;}\nvoid psx_check_interrupts_at(CPUState*c,uint32_t p){(void)c;(void)p;}\nvoid psx_check_interrupts_dispatch_entry(CPUState*c,uint32_t p){(void)c;(void)p;}\nint main(void){')
   source=source.replace('uint32_t next=0;if(!l1_step(&c,c.pc,psx_read_word(c.pc),&next))c.pc=next;',
    'if(!psx_dispatch_game_compiled(&c,c.pc)){fprintf(stderr,"native dispatch miss %08x\\n",c.pc);return 1;}')
+ if args.precise:
+  source=source.replace(' l1_precise_control();',' g_psx_precise_slice=1;')
+  source=source.replace('int main(void){',(here/'load_delay_precise_seams.c.in').read_text()+'\nint main(void){')
+  source=source.replace('uint32_t next=0;if(!l1_step(&c,c.pc,psx_read_word(c.pc),&next))c.pc=next;',
+   'assert(psx_slice_block_impl(&c,c.pc,1,1));')
  (tmp/'matrix.c').write_text(source)
  for opt in ['-O0','-O2']:
   link.build_and_run('gcc',tmp,here.parent,opt,tmp,modules,'matrix.c')
 with tempfile.TemporaryDirectory() as td:
- root=Path(td)
+ root=args.keep.resolve() if args.keep else Path(td);root.mkdir(exist_ok=True,parents=True)
  if args.native:
   selected=[c for c in fixture['cases'] if not c['case'].startswith('g-') and (not args.case or c['case']==args.case)]
   for c in selected:
    tmp=root/c['case'];tmp.mkdir();run_cases([c],tmp,True);print(c['case'],'native O0/O2 PASS',flush=True)
- else:run_cases(fixture['cases'],root)
-print('L1 matrix PASS; native IRQ timing and overlay transport remain separate gates')
+ else:run_cases([c for c in fixture['cases'] if not args.precise or not c['case'].startswith('g-')],root)
+print('L1 matrix PASS; timer IRQ transport and full overlay matrix remain separate gates')
+
