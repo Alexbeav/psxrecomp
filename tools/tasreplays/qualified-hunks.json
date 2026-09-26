@@ -8800,6 +8800,138 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ps1b-215-dualshock-p2p3",
+      "titles": [
+        "megamanx5",
+        "biohazard"
+      ],
+      "origin_commit": "63386735d540d4dd355f4a653036e3553b09aa04",
+      "subject": "sio: dualshock p2/p3 fit (irq7 edge, ff 41 outside config, lock byte, ack replay)",
+      "qualified_tree": "542730c7237386d43aaf7cd53bc4b1695c49d429",
+      "blocks": [
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            " * 0xFF = unused (No$ \"Controllers and Memory Cards\"). The map powers up",
+            " * unassigned (4Dh returns FF x6 on first use) and is echoed back while a new",
+            " * map is latched [ORACLE FIXTURE P2, Octoshock 2.3]. */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "/* Analog-mode lock, per logical pad. Config command 0x44's lock byte: 03h",
+            " * locks, 02h unlocks, any other value leaves the lock unchanged; a locked pad",
+            " * ignores the physical Analog button [ORACLE FIXTURE P2, P2b, Octoshock 2.3]",
+            " * (No$ \"Controllers and Memory Cards\" documents 44h). We emulate the"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "#if SIO_MODEL_CYCLE_PACED",
+            "        pad_power_on_first[i] = sio_source_pad_ack == 1;",
+            "#else",
+            "        pad_power_on_first[i] = 0;",
+            "#endif"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            if (pad_active_logical >= 0 && pad_active_logical < PSX_MAX_PLAYERS &&",
+            "                pad_power_on_first[pad_active_logical]) {",
+            "                pad_power_on_first[pad_active_logical] = 0;",
+            "                sio_rx_data = 0x00;",
+            "            }"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "                 * poll frame here — identical framing to 0x42; 43h 00 without a",
+            "                 * prior enter answers like a 42h poll (41 5A FF FF) [ORACLE FIXTURE",
+            "                 * P2, Octoshock 2.3] — and only latches config entry from the 0x01",
+            "                 * data byte AFTERWARD."
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "                 * [ORACLE FIXTURE P2, Octoshock 2.3]; cur_id is 0xF3 while in config",
+            "                 * (No$ \"Controllers and Memory Cards\"). */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "             * analog-on [ORACLE FIXTURE P2] — see the modern path below. */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            /* Unknown command: the pad does not respond — return hi-z and end",
+            "             * the transaction. */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "         * analog (0x73); any other value => digital (0x41), including 02h",
+            "         * [ORACLE FIXTURE P2, Octoshock 2.3]. Honouring it makes the pad"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "         * lock, 0x02 => unlock, whatever the analog byte; any other value leaves",
+            "         * the lock unchanged [ORACLE FIXTURE P2b, Octoshock 2.3]. The analog byte",
+            "         * above takes effect even while locked [ORACLE FIXTURE P2b]. A locked",
+            "         * slot ignores the host hybrid auto-flip (see analog_mode_locked). */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            /* JOY_CTRL bit 4 clears the JOY_STAT bit 9 latch, so the next /ACK",
+            "             * sets it and raises IRQ7 again [ORACLE FIXTURE P3, Octoshock 2.3].",
+            "             * It does not clear the /ACK input pulse. */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "     * queue an ACK for replay when the guest later clears I_STAT.7. I_STAT",
+            "     * bit 7 is raised only on the 0->1 edge of JOY_STAT bit 9: while the latch",
+            "     * is still set, a new /ACK does not re-raise IRQ7, even if the guest has",
+            "     * cleared I_STAT bit 7 [ORACLE FIXTURE P3, Octoshock 2.3]. */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "    if (sio_stat & SIO_STAT_IRQ) {",
+            "        if (!sio_shift_active && !sio_tx_buffered && !sio_pending_ack &&",
+            "            !sio_ack_pulse_remaining)",
+            "            g_sio_timing_active = 0;",
+            "        return;",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            /* IRQ7 only on the 0->1 edge of JOY_STAT bit 9",
+            "             * [ORACLE FIXTURE P3, Octoshock 2.3]; see sio_fire_ack_irq. */",
+            "            if (sio_stat & SIO_STAT_IRQ) return;",
+            "            sio_stat |= SIO_STAT_IRQ;"
+          ]
+        }
+      ],
+      "note": "PS1B-215 blocks not owned by an earlier entry (reviewer: narrowed re-pin, the rest seeded here). Also from ce8d32e59. Qualified by the A1 short replay on 542730c72, landed as-is: Bio to return 500 and MMX5 to return 1200 prefix_pass with strict cpu-return PASS against the ADV-001 bound baseline (Pegasus validation/tas/a1-batch-542730c7-short/status.json, 2026-09-26). Short replay, not Tier 1."
     }
   ]
 }
