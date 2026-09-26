@@ -88,6 +88,11 @@ int main(void)
     spu_write(0x1F801DAAu, 0xC000u);                     /* enable */
     tick();
     check(slot_written(ram, 0x000, 34) && !slot_written(ram, 0x000, 35), "default mode: enable continues at slot 34");
+    spu_write(0x1F801DAAu, 0x0000u);                     /* disable again */
+    for (int k = 0; k < 10; ++k) tick();
+    spu_write(0x1F801DAAu, 0xC000u);                     /* re-enable */
+    tick();
+    check(slot_written(ram, 0x000, 45) && !slot_written(ram, 0x000, 46), "default mode: re-enable continues at slot 45");
 
     /* ---- source mode: byte-for-byte guard -------------------------------- */
     set_mode("octoshock-2.2.2-bounded-quad");
