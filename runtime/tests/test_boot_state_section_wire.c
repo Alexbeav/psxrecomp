@@ -82,8 +82,8 @@ static const Field gpu_service_fields[] = {
 #define DSM_FIELDS(m)     F(m ".running", 1),    F(m ".halts_cpu", 1),  F(m ".stage", 1),   F(m ".held", 1),     F(m ".cursor", 4),     F(m ".words_left", 4), F(m ".blk_words", 4),     F(m ".blk_pos", 4),    F(m ".node_count", 4), F(m ".link", 4),     F(m ".credit", 4),     F(m ".served_until", 8)
 static const Field dma_src_fields[] = {
     DSM_FIELDS("otc"), DSM_FIELDS("upload"), DSM_FIELDS("ll"),
-    DSM_FIELDS("cd"),  DSM_FIELDS("spu"),
-    F("wait.live", 4), F("wait.published", 4),
+    DSM_FIELDS("cd"),  DSM_FIELDS("spu"), DSM_FIELDS("mdec_in"), DSM_FIELDS("mdec_out"),
+    F("wait.live", 4), F("wait.published", 4), F("mdec.clock", 8),
 };
 
 static const Field irq_timing_fields[] = {

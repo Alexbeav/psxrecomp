@@ -16,6 +16,9 @@ void psx_advance_cycles_slow(uint32_t n) { psx_cycle_count+=n; dsm_service(DSM_O
 void psx_write_word(uint32_t addr, uint32_t value) { ram[(addr & 0x1ffffc)/4]=value; writes++; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)detail; i_stat|=1u<<bit; irqs++; }
 void event_ring_record_aux(uint16_t kind,uint8_t src,uint32_t value) { (void)kind; (void)src; (void)value; }
+/* The source MDEC is off in this OTC-only fixture. */
+int mdec_source_active(void) { return 0; }
+void mdec_source_advance(uint32_t n) { (void)n; abort(); }
 static void setup(uint32_t count, uint64_t phase) {
     dma_init();
     memset(ram,0xCC,sizeof(ram)); writes=irqs=i_stat=0;
