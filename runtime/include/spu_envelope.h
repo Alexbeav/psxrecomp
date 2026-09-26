@@ -18,7 +18,8 @@
  *    [ORACLE FIXTURE E2, E3];
  *  - a write to the current-level register changes the level only; the step
  *    counter keeps running [ORACLE FIXTURE E2].
- * The counter is cleared when a step is applied and when a phase begins.
+ * The counter is cleared when a step is applied, and when a phase begins
+ * [NOT OBSERVED: every fixture phase change falls where the counter is already 0].
  *
  * This unit only advances the envelope. Key on/off and the register write
  * are handled by the caller. */

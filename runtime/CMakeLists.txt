@@ -898,6 +898,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME spu_envelope_fixture_test COMMAND spu_envelope_fixture_test
              ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture.txt
              ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture_e1_e9.txt)
+    # PS1B-192: KON/KOFF latency through the register interface (fixtures E4, E5).
+    add_executable(spu_key_latency_test tests/test_spu_key_latency.c)
+    target_include_directories(spu_key_latency_test PRIVATE include)
+    add_test(NAME spu_key_latency_test COMMAND spu_key_latency_test)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
