@@ -159,6 +159,11 @@ int main(int argc,char **argv) {
     /* [ORACLE FIXTURE D14]: CHCR ch0-5 keeps 71770703; DICR reads 80FF803F. */
     dma_write(0x1f8010d8,0xFEFFFFFFu);assert(dma_read(0x1f8010d8)==0x70770703u);
     dma_write(0x1f8010f4,0x7F000000u);dma_write(0x1f8010f4,0x00FFFFFFu);assert(dma_read(0x1f8010f4)==0x80FF803Fu);
+    /* [ORACLE FIXTURE D19]: the flag latches on the channel enable alone; bit 31
+     * and IRQ3 follow when the master enable is set later. */
+    setup(1,1,0);dicr=1u<<18;try_execute(2);
+    assert((dma_read(0x1f8010f4)&(1u<<26)) && !(dma_read(0x1f8010f4)>>31) && !irqs);
+    dma_write(0x1f8010f4,(1u<<23)|(1u<<18));assert((dma_read(0x1f8010f4)>>31) && irqs==1);
     set_option("PSX_GPU_DMA_MODEL","");setup(12,16,0);try_execute(2);
     assert(upload_count==192 && !irqs && dma_cpu_read_penalty()==0 && delayed_complete[2].active);
 #endif
