@@ -5018,7 +5018,8 @@ static int any_controller_button_down(void) {
 
 static int savestate_resume_inputs_held(void) {
     const Uint8* keys = SDL_GetKeyboardState(NULL);
-    if (keys) {
+    /* A key latched across a focus change must not hold the resume guard. */
+    if (keys && host_hotkey_input_focused()) {
         if (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_KP_ENTER] ||
             keys[SDL_SCANCODE_SPACE] || keys[SDL_SCANCODE_L])
             return 1;
@@ -6807,13 +6808,16 @@ static void fast_forward_toggle_poll_buttons(void) {
 
 static void rewind_poll_nav(uint32_t now_ms) {
     const Uint8 *keys = SDL_GetKeyboardState(NULL);
-    int left = keys[SDL_SCANCODE_LEFT] ? 1 : 0;
-    int right = keys[SDL_SCANCODE_RIGHT] ? 1 : 0;
+    /* Without input focus the direct keys read as released, so a key latched
+     * across a focus change cannot keep the rewind cursor moving (PS1B-208). */
+    const int kb = host_hotkey_input_focused() ? 1 : 0;
+    int left = (kb && keys[SDL_SCANCODE_LEFT]) ? 1 : 0;
+    int right = (kb && keys[SDL_SCANCODE_RIGHT]) ? 1 : 0;
     /* Direct menu keys supplement the configured pad bindings below. Letter
      * aliases conflict with remaps: X is Cross by default, so treating X as
      * Cancel sets both edges and silently cancels every keyboard load. */
-    int acc = (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_SPACE]) ? 1 : 0;
-    int can = (keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_BACKSPACE]) ? 1 : 0;
+    int acc = (kb && (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_SPACE])) ? 1 : 0;
+    int can = (kb && (keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_BACKSPACE])) ? 1 : 0;
     /* Honor remapped Cross/Circle (and Select/R3) via the same pad path as
      * gameplay — GameController A/B alone miss keyboard-as-pad and remaps. */
     uint16_t btn = pad_buttons_for(g_players[0], 1, true);
