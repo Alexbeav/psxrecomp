@@ -390,7 +390,14 @@ static void complete_transfer(int ch) {
     uint32_t dicr_before = dicr;
     uint32_t i_stat_before = i_stat;
     channels[ch].chcr &= ~((1u << 24) | (1u << 28));
-    if (channel_irq_flag_armed(ch)) {
+    /* Source profile: [ORACLE FIXTURE D19] a channel's flag latches at completion
+     * iff its enable (bit 16+n) is set then; the master enable (bit 23) is not
+     * required (ch0, ch1, ch2, ch6). PSX-SPX "DICR" says the flag is set only
+     * when both bit 16+n and bit 23 are set. Bit 31 and the IRQ3 edge follow
+     * the master rule below either way (D19 rules 2-3). */
+    if ((gpu_upload_source_model || gpu_ll_source_model || cd_source_model ||
+         otc_source_model || mdec_source_active())
+            ? ((dicr >> (16 + ch)) & 1u) : channel_irq_flag_armed(ch)) {
         dicr |= (1u << (24 + ch));
         raise_dma_irq_on_master_edge(dicr_before);
     }
