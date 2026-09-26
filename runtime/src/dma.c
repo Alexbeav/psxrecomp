@@ -1306,6 +1306,23 @@ static int dsm_before_write(uint32_t addr, uint32_t val, uint32_t mask) {
         for (int k = 0; k < DSM_COUNT; k++)
             if (dsm[k].running && dsm_channel[k] == ch)
                 dsm_fail("source DMA: register write to a channel with a live transfer");
+        uint32_t reg = (addr - 0x1F801080u) & 0xFu;
+        /* [DOC] "D#_MADR": bits 24-31 are not used (always zero). */
+        if (ch <= 6 && reg == 0u) {
+            channels[ch].madr = ((channels[ch].madr & ~mask) | (val & mask)) & 0x00FFFFFFu;
+            return 1;
+        }
+        /* [DOC] "D#_CHCR": D6_CHCR has only bits 24, 28 and 30 writable; bit 1
+         * always reads 1 (-4 step) and the other bits 0. PSX-SPX gives no
+         * read-as-zero rule for the other channels' unused CHCR bits, or for
+         * BCR; D14 checks those on the oracle. */
+        if (ch == 6 && reg == 8u) {
+            uint32_t next = (channels[6].chcr & ~mask) | (val & mask);
+            channels[6].chcr = (next & 0x51000000u) | 0x2u;
+            if ((mask & (1u << 24)) && !((channels[6].chcr >> 24) & 1u)) cancel_async_transfer(6);
+            if ((mask & (1u << 24)) && ((channels[6].chcr >> 24) & 1u)) try_execute(6);
+            return 1;
+        }
     }
     return 0;
 }
