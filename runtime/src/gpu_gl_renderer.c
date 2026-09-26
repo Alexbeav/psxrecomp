@@ -1911,6 +1911,8 @@ static float s_fb[FLATBATCH_MAXV * 6];
 static int   s_fb_n = 0;
 static int   s_fb_semi = -2;
 static int   s_fb_mask = -1;
+/* GL_TRIANGLES, or GL_LINES for a batch of native-wide lines (gpu_geometry). */
+static GLenum s_fb_mode = GL_TRIANGLES;
 
 static int mirror_flat_batch_center_only(int nverts) {
     if (!s_wide_fast || nverts <= 0) return 0;
@@ -1926,17 +1928,19 @@ static int mirror_flat_batch_center_only(int nverts) {
 static void flush_flat_batch(void) {
     if (s_fb_n == 0) return;
     int nverts = s_fb_n, semi = s_fb_semi, mask = s_fb_mask;
+    GLenum fmode = s_fb_mode;
     s_fb_n = 0;
 
     hr_begin(1);
     if (semi >= 0) apply_psx_blend(semi); else glDisable(GL_BLEND);
     mask_stencil(mask);
+    if (fmode == GL_LINES) glLineWidth((float)s_scale);
     p_glUseProgram(s_geo_prog);
     p_glBindVertexArray(s_geo_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
     p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(nverts * 6 * sizeof(float)),
                    s_fb, PSXGL_STREAM_DRAW);
-    glDrawArrays(GL_TRIANGLES, 0, nverts);
+    glDrawArrays(fmode, 0, nverts);
 
     if (g_wide_cur && !s_wide_suppress && s_ws_ablate != 1 &&
         !(!g_ws_bd_stretch_on && mirror_flat_batch_center_only(nverts))) {
@@ -1946,7 +1950,7 @@ static void flush_flat_batch(void) {
         gl_perf_mirror_begin();
         wide_target_begin(dx, s_geo_uXoff, s_geo_uXhalf);
         wide_set_bd_scale(s_geo_uXscale, s_geo_uXcenter);
-        if (s_ws_ablate != 2) glDrawArrays(GL_TRIANGLES, 0, nverts);
+        if (s_ws_ablate != 2) glDrawArrays(fmode, 0, nverts);
         wide_clear_bd_scale(s_geo_uXscale, s_geo_uXcenter);
         wide_target_end(s_geo_uXoff, s_geo_uXhalf);
         gl_perf_mirror_end();
@@ -1964,7 +1968,37 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     /* Sub-pixel positions only describe a 3-vertex projected triangle. */
     const int precise = s_pc_valid && mode == GL_TRIANGLES && n == 3;
 
-    /* Lines stay immediate (rare); tris batch for MotK 0x68 starfields. */
+    /* Native-wide: a line joins the flat batch as a GL_LINES batch (same
+     * vertices, program, line width, painter order and batch keys, so the
+     * same pixels). Drawn one by one, every line flushed the textured batch
+     * and rebound the hr and wide surfaces for its mirror; R4 draws hundreds
+     * of lines per race frame, which held its 21:9 race at 1x to about 53
+     * frames/s. A line the backdrop-stretch gate would widen keeps the
+     * immediate path (the flat batch mirrors unstretched). Without
+     * native-wide nothing changes. */
+    if (mode == GL_LINES && n == 2 && g_wide_w > 0 && !bd_prim_gate(xs, n, 0)) {
+        if (s_fb_n > 0 && (s_fb_mode != GL_LINES || s_fb_semi != semi ||
+                           s_fb_mask != (int)s_mask_set))
+            flush_flat_batch();
+        if (s_fb_n + 2 > FLATBATCH_MAXV)
+            flush_flat_batch();
+        s_fb_mode = GL_LINES;
+        s_fb_semi = semi;
+        s_fb_mask = (int)s_mask_set;
+        float mask_a = s_mask_set ? 1.0f : 0.0f;
+        for (int i = 0; i < 2; i++) {
+            float *v = &s_fb[s_fb_n * 6];
+            v[0] = (float)xs[i];
+            v[1] = (float)ys[i];
+            v[2] = ((cs[i] & 0x1F) << 3) / 255.0f;
+            v[3] = (((cs[i] >> 5) & 0x1F) << 3) / 255.0f;
+            v[4] = (((cs[i] >> 10) & 0x1F) << 3) / 255.0f;
+            v[5] = mask_a;
+            s_fb_n++;
+        }
+        return;
+    }
+    /* Other lines stay immediate; tris batch for MotK 0x68 starfields. */
     if (mode != GL_TRIANGLES || n < 3) {
         flush_flat_batch();
         float verts[3 * 6];
@@ -2003,10 +2037,12 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         return;
     }
 
-    if (s_fb_n > 0 && (s_fb_semi != semi || s_fb_mask != (int)s_mask_set))
+    if (s_fb_n > 0 && (s_fb_mode != GL_TRIANGLES || s_fb_semi != semi ||
+                       s_fb_mask != (int)s_mask_set))
         flush_flat_batch();
     if (s_fb_n + n > FLATBATCH_MAXV)
         flush_flat_batch();
+    s_fb_mode = GL_TRIANGLES;
     s_fb_semi = semi;
     s_fb_mask = (int)s_mask_set;
 
@@ -3528,14 +3564,15 @@ static void glb_wide_configure(int wide_w, int offset) {
 static void glb_wide_set_target(int base_x) {
     if (!s_raster_ok) { g_wide_cur = 0; return; }
     double t0 = cw_ms(); s_cw_wide_sets++;
-    flush_tex_batch();   /* drain into the OLD target before switching */
+    flush_flat_batch();  /* drain into the OLD target before switching */
+    flush_tex_batch();
     g_wide_cur = wide_fbo_for(base_x);
     g_wide_cur_base = base_x;
     s_cw_wide_ms += cw_ms() - t0;
 }
 
 /* Stop mirroring (offscreen draws that don't target a framebuffer). */
-static void glb_wide_disable_target(void) { flush_tex_batch(); g_wide_cur = 0; }
+static void glb_wide_disable_target(void) { flush_flat_batch(); flush_tex_batch(); g_wide_cur = 0; }
 
 /* Mirror a framebuffer clear: fill the full wide width over [y, y+h) of the
  * surface for base_x, so the revealed margins are clean. Mirrors sw_wide_clear:

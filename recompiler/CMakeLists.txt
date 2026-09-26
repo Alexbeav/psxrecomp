@@ -891,6 +891,7 @@ if(BUILD_TESTING)
                 launcher_vulkan_option
                 mod_controller_override
                 mod_load_acceleration
+                native_wide_line_batching
                 overlay_candidate_capacity
                 release_zip
                 overlay_decodable_fallback
