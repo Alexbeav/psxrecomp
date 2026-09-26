@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 project(psxrecomp-runtime C CXX)
 include(CTest)
 
@@ -159,6 +159,10 @@ if(BUILD_TESTING)
     add_executable(cdrom_implicit_seek_test tests/test_cdrom_implicit_seek.c src/psx_sha256.c)
     target_include_directories(cdrom_implicit_seek_test PRIVATE include)
     add_test(NAME cdrom_implicit_seek_test COMMAND cdrom_implicit_seek_test)
+    # PS1B-189: CD status bit 7 (BUSYSTS), cited to PSX-SPX.
+    add_executable(cdrom_busysts_test tests/test_cdrom_busysts.c src/psx_sha256.c)
+    target_include_directories(cdrom_busysts_test PRIVATE include src)
+    add_test(NAME cdrom_busysts_test COMMAND cdrom_busysts_test)
     # PS1B-118: the default-path implicit seek travels from the read cursor.
     add_executable(cdrom_implicit_seek_origin_test tests/test_cdrom_implicit_seek_origin.c src/psx_sha256.c)
     target_include_directories(cdrom_implicit_seek_origin_test PRIVATE include src)
