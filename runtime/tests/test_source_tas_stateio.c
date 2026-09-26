@@ -42,6 +42,13 @@ int main(int argc, char **argv) {
     check(source_tas_stateio_binary_accept(&m, SHA, 1), "compatible rebuild accepted");
     m.compatibility[0] ^= 1;
     check(!source_tas_stateio_binary_accept(&m, SHA, 1), "incompatible rebuild refused");
+    /* A pre-T172 state keeps the v10 layout but not its meaning (PS1B-190), so
+     * even an explicit --resume-compatible-build must refuse its id. */
+    strcpy(m.compatibility, "psx-tas-v10-lane-2");
+    check(strcmp(PSX_TAS_STATEIO_COMPATIBILITY, "psx-tas-v10-lane-2") != 0,
+          "compatibility id bumped past the pre-T172 generation");
+    check(!source_tas_stateio_binary_accept(&m, SHA, 1),
+          "pre-T172 state refused even with --resume-compatible-build");
     strcpy(m.compatibility, PSX_TAS_STATEIO_COMPATIBILITY);
     snprintf(m.route_sha256, sizeof m.route_sha256, "%s", ROUTE);
     snprintf(m.card_sha256[0], sizeof m.card_sha256[0], "%s", ROUTE);   /* slot 1 present */

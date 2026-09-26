@@ -36,7 +36,15 @@
 /* Bump when a diagnostic state changes representation or continuation meaning.
  * This admits runtime-only rebuilds, never a different codegen ABI or profile;
  * boot_state_load independently checks its header and every device section. */
-#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v10-lane-2"
+/* Meaning includes the same bytes read differently: --resume-compatible-build
+ * trusts this id alone to let another build continue a state, and the section
+ * checks see layout, not what a field means.
+ * History: lane-1 -> lane-2 when the source pad DTR session bytes were added;
+ * lane-2 -> t172 when T172 (PS1B-102/182) changed what saved device state means
+ * with the layout unchanged, e.g. GPU projection budget units (the first BIOS
+ * quad saves -77025 before T172, -38832 after). "v10" is the boot-state format
+ * version, which T172 did not change (PS1B-190). */
+#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v10-t172"
 
 /* Guest RAM accessor (memory.c). Declared here so the manifest/digest call
  * sites — including C++ — share one C-linkage declaration. */

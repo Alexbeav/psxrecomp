@@ -141,7 +141,12 @@ cold rerun. Capturing never changes what a run qualifies; a resumed run is alway
 States are format v10 and manifests `psx-tas-stateio-v3`, which carry the memory card images
 beside the state. A state is bound to its exact executable unless `--resume-compatible-build`
 is given, and then only when `PSX_TAS_STATEIO_COMPATIBILITY` matches. Change that identifier
-in any commit that changes what a state represents.
+in any commit that changes what a state represents: its layout, and also its meaning with
+the layout unchanged. `boot_state_load` checks the header and the section layout, not what a
+field means, so a meaning change the identifier does not record lets a resume start silently
+from an inconsistent state. T172 was such a change: GPU projection budget units, among
+others, changed meaning, so the identifier went from `psx-tas-v10-lane-2` to
+`psx-tas-v10-t172` (PS1B-190). A state from before T172 no longer resumes on a T172 build.
 
 ## Adapters: derive constants, never clone them
 
