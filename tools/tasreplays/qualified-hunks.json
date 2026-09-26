@@ -2592,39 +2592,67 @@
         {
           "file": "runtime/src/sio.c",
           "lines": [
-            "            /* 0x45 \"Query Model and Mode\". The source builds this reply in two",
-            "             * phases (frontio.c case 0x4500/0x4501): transmit_buffer[0] = 0x01 for",
-            "             * the device type, then 0x02, analog_mode ? 1 : 0, 0x02, 0x01, 0x00.",
-            "             * After the 0xF3 0x5A header that is  01 02 <mode> 02 01 00. */",
-            "            static const uint8_t r_45[8]  = { 0xF3,0x5A,0x01,0x02,0x00,0x02,0x01,0x00 };"
-          ]
-        },
-        {
-          "file": "runtime/src/sio.c",
-          "lines": [
-            "             * analog-on (frontio.c case 0x4501, transmit_buffer[1]=analog_mode?1:0)."
-          ]
-        },
-        {
-          "file": "runtime/src/sio.c",
-          "lines": [
-            "             * (axis5_sio_controller.md D8).",
-            "             * That source index is the SECOND byte of the 0x4501 phase, i.e. the",
-            "             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 — not",
-            "             * pad_response[3], which is the constant 0x02. Writing it there",
-            "             * destroyed the constant and left a hard-coded analog-on in the real",
-            "             * mode slot, so we answered 03 00 01 where the source answers",
-            "             * 01 02 00 (Mega Man X5 return 1090). */"
-          ]
-        },
-        {
-          "file": "runtime/src/sio.c",
-          "lines": [
             "                pad_response[4] = pad_analog[lp] ? 0x01 : 0x00;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            /* 0x45 \"Query Model and Mode\" (No$ \"Controllers and Memory Cards\"):",
+            "             * after the 0xF3 0x5A header the reply is 01 02 <mode> 02 01 00, with",
+            "             * <mode> the LED/analog state [ORACLE FIXTURE P2, Octoshock 2.3:",
+            "             * 01 02 00 02 01 00 in digital]. 46h 00, 47h and 4Ch 00 below are",
+            "             * the P2 rows too. */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "             * analog-on. Reporting \"analog\" while we present digital (or",
+            "             * vice-versa) makes the driver mis-parse the poll frame length →",
+            "             * off-by-frame garbage buttons (axis5_sio_controller.md D8).",
+            "             * The mode is the fifth byte of the whole reply, after 0xF3 0x5A",
+            "             * <type> 0x02 — not pad_response[3], which is the constant 0x02",
+            "             * [ORACLE FIXTURE P2]. Writing it there destroyed the constant, so we",
+            "             * answered 03 00 01 where the reference answers 01 02 00 (Mega Man X5",
+            "             * return 1090). */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        } else if (ds && !g_pad_legacy_cfg &&",
+            "                   (tx_byte == 0x44 || tx_byte == 0x45 || tx_byte == 0x46 ||",
+            "                    tx_byte == 0x47 || tx_byte == 0x4C || tx_byte == 0x4D)) {",
+            "            /* A config command OUTSIDE config mode: the pad answers the command",
+            "             * byte with its ID, then gives no /ACK, so the transaction ends",
+            "             * (FF 41 in digital mode) [ORACLE FIXTURE P2, Octoshock 2.3]. The",
+            "             * analog-mode ID (73h) follows the same rule by extension; 48h-4Bh",
+            "             * and 4Fh are NOT OBSERVED and keep the hi-z answer below. */",
+            "            pad_state = PAD_IDLE;",
+            "            pad_response_len = 0;",
+            "            pad_response_idx = 0;",
+            "            pad_current_cmd = 0;",
+            "            sio_rx_data = cur_id;"
           ]
         }
       ],
-      "note": "Mega Man X5 return 1090 diverged by three bytes with an identical clock; the game queues SIO bytes verbatim, so the diverging RAM record was the reply. frontio.c builds 0x45 as 01 02 <analog_mode> 02 01 00. Two faults: device type 0x03 instead of 0x01, and the live-mode override writing pad_response[3] (the constant 0x02) instead of [4], destroying the constant and hard-coding analog-on in the mode slot. The pinned 260-transaction Nymashock fixture issues no 0x45, which is why this survived."
+      "note": "Mega Man X5 return 1090 diverged by three bytes with an identical clock; the game queues SIO bytes verbatim, so the diverging RAM record was the reply. frontio.c builds 0x45 as 01 02 <analog_mode> 02 01 00. Two faults: device type 0x03 instead of 0x01, and the live-mode override writing pad_response[3] (the constant 0x02) instead of [4], destroying the constant and hard-coding analog-on in the mode slot. The pinned 260-transaction Nymashock fixture issues no 0x45, which is why this survived.",
+      "repins": [
+        {
+          "as_of": "worktree on de5b1c249c2d0955a4a5330709f00fb26e3e000b",
+          "issue": "PS1B-215",
+          "reason": "A1 re-cites (No$ + P-fixtures) and P2/P3 fit; reviewer: evolved-hunk case, narrowed to this entry's own blocks; reply tables and data-variant code byte-identical",
+          "dropped_lines": 13,
+          "from_blocks": 4,
+          "to_blocks": 4,
+          "replacement_blocks_added": 3,
+          "replacement_commits": [
+            "63386735d",
+            "ce8d32e59"
+          ]
+        }
+      ]
     },
     {
       "id": "dualshock-config-data-variants-20260915",
@@ -2638,12 +2666,6 @@
         {
           "file": "runtime/src/sio.c",
           "lines": [
-            "        /* 0x46/0x47/0x4C do not have one fixed reply: the source selects it from",
-            "         * the data byte at position 3, which arrives paired with response index 2",
-            "         * (frontio.c cases 0x4601, 0x4701, 0x4C01). The canned tables above are",
-            "         * only the data == 0x00 variant, so a game that asks with 0x01 got the",
-            "         * wrong answer — Mega Man X5 issues 0x4C with 0x01 and the source replies",
-            "         * 07 where an unpatched table replies 04 (return 1098).",
             "         * Reply bytes 3..7 are the five phase-1 bytes; byte 2 is the phase-0 byte",
             "         * and does not vary. */",
             "        if (!g_pad_legacy_cfg && pad_response_idx == 2 && tx_byte != 0x00 &&",
@@ -2658,9 +2680,41 @@
             "            memcpy(&pad_response[3], variant, 5);",
             "        }"
           ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        /* 0x46/0x47/0x4C do not have one fixed reply: the pad selects it from"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "         * (No$ \"Controllers and Memory Cards\"). 46h 01 -> 00 00 01 01 01 14 and",
+            "         * 4Ch 01 -> 00 00 00 07 00 00 [ORACLE FIXTURE P2, Octoshock 2.3]. The",
+            "         * canned tables above are only the data == 0x00 variant, so a game that",
+            "         * asks with 0x01 got the wrong answer — Mega Man X5 issues 0x4C with 0x01",
+            "         * and the reference replies 07 where an unpatched table replies 04",
+            "         * (return 1098)."
+          ]
         }
       ],
-      "note": "With 0x45 fixed the divergence moved to return 1098, where Mega Man X5 issues 0x4C with data 0x01. The source selects these replies from the data byte; our canned tables held only the data==0x00 variant. 0x46: 00 -> 00 01 02 00 0A, 01 -> 00 01 01 01 14, else zeros. 0x47: 00 -> 00 02 00 01 00, else zeros. 0x4C: 00 -> 00 00 04 00 00, 01 -> 00 00 07 00 00, else zeros. The pinned 260-transaction Nymashock fixture issues none of 0x46/0x47/0x4C."
+      "note": "With 0x45 fixed the divergence moved to return 1098, where Mega Man X5 issues 0x4C with data 0x01. The source selects these replies from the data byte; our canned tables held only the data==0x00 variant. 0x46: 00 -> 00 01 02 00 0A, 01 -> 00 01 01 01 14, else zeros. 0x47: 00 -> 00 02 00 01 00, else zeros. 0x4C: 00 -> 00 00 04 00 00, 01 -> 00 00 07 00 00, else zeros. The pinned 260-transaction Nymashock fixture issues none of 0x46/0x47/0x4C.",
+      "repins": [
+        {
+          "as_of": "worktree on de5b1c249c2d0955a4a5330709f00fb26e3e000b",
+          "issue": "PS1B-215",
+          "reason": "A1 re-cites (No$ + P-fixtures) and P2/P3 fit; reviewer: evolved-hunk case, narrowed to this entry's own blocks; reply tables and data-variant code byte-identical",
+          "dropped_lines": 6,
+          "from_blocks": 1,
+          "to_blocks": 3,
+          "replacement_blocks_added": 2,
+          "replacement_commits": [
+            "63386735d",
+            "ce8d32e59"
+          ]
+        }
+      ]
     },
     {
       "id": "polyline-family-20260916",
@@ -3444,15 +3498,18 @@
             " *      source GPU service/timer/DMA state, IRQ timing, CPU timing and instruction",
             " *      continuation, SPU sample clock, exact MDEC timestamp, the game-start latch,",
             " *      source peripheral pipelines and queued GPU work. The two lineages both",
-            " *      used v6-v9 for different contents, so this merge takes a number neither",
-            " *      ever wrote. */",
-            "#define BOOT_STATE_VERSION 10u",
+            " *      used v6-v9 for different contents, so this merge takes a number neither"
+          ]
+        },
+        {
+          "file": "runtime/include/boot_state.h",
+          "lines": [
             "/* The version field is the ONLY guard against a blob written by an older",
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
             " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v10 therefore rejects every earlier state. */",
-            "#define BOOT_STATE_VERSION_MIN_READ 10u"
+            " * runtime's blob to a new loader. v11 therefore rejects every earlier state. */",
+            "#define BOOT_STATE_VERSION_MIN_READ 11u"
           ]
         },
         {
@@ -5344,7 +5401,12 @@
             "        }",
             "        if (sio_source_pad_ack &&",
             "            (!pst_w_bytes(w, pad_dtr_session_first, sizeof pad_dtr_session_first) ||",
-            "             !pst_w_bytes(w, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;",
+            "             !pst_w_bytes(w, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
             "    }",
             "#endif",
             "    return 1;"
@@ -5421,7 +5483,12 @@
             "        }",
             "        if (sio_source_pad_ack &&",
             "            (!pst_r_bytes(r, pad_dtr_session_first, sizeof pad_dtr_session_first) ||",
-            "             !pst_r_bytes(r, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;",
+            "             !pst_r_bytes(r, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
             "    }",
             "#endif"
           ]
@@ -5465,13 +5532,20 @@
             "        uint32_t config_bytes = (sio_source_pad_ack == 2 || sio_source_card) ?",
             "            2u * PSX_MAX_PLAYERS : 0u;",
             "        uint32_t session_bytes = sio_source_pad_ack ?",
-            "            (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;",
-            "        pst_r_init(&extra, p + len - session_bytes - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,",
+            "            (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
             "                   8u + 6u * PSX_MAX_PLAYERS);",
             "        if (!pst_r_i32(&extra, &pulse) || !pst_r_i32(&extra, &timed) ||",
-            "            pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;",
-            "        for (uint32_t j = 0; j < config_bytes + session_bytes; j++)",
-            "            if (p[len - session_bytes - config_bytes + j] > 1) return 0;",
+            "            pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
             "    }",
             "#endif"
           ]
@@ -6787,6 +6861,36 @@
             "     * written in the same cycle still start commands as they complete. */",
             "    if (cycle == s->last_update) return 1;"
           ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack == 1 &&",
+            "            !pst_w_bytes(w, pad_power_on_first, sizeof pad_power_on_first)) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack == 1 &&",
+            "            !pst_r_bytes(r, pad_power_on_first, sizeof pad_power_on_first)) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        uint32_t first_bytes = sio_source_pad_ack == 1 ?",
+            "            (uint32_t)sizeof pad_power_on_first : 0u;",
+            "        const uint32_t tail = first_bytes + session_bytes + config_bytes;",
+            "        pst_r_init(&extra, p + len - tail - 8u - 6u * PSX_MAX_PLAYERS,"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        for (uint32_t j = 0; j < tail; j++)",
+            "            if (p[len - tail + j] > 1) return 0;"
+          ]
         }
       ],
       "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion. Evolved for T168: restore retained section staging and canonical commit order; perform v10 content/presence/allocation admission before mutations. The old two-pass shape/apply path failed118/166 full-runtime checks. Updated blocks retain checkpoint semantics and reject malformed states atomically; current expanded fixture passes202 default and260 comparison-profile checks. This is not a new full-route replay verdict. superseded by T172 a01f2f6cede9; requalification pending the PS1B-102 Pegasus TAS rerun superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun",
@@ -6865,6 +6969,27 @@
           "replacement_commits": [
             "7a61737d38c6"
           ]
+        },
+        {
+          "as_of": "worktree on de5b1c249c2d0955a4a5330709f00fb26e3e000b",
+          "issue": "PS1B-215",
+          "reason": "A1 re-cites (No$ + P-fixtures) and P2/P3 fit; reviewer: evolved-hunk case, narrowed to this entry's own blocks; reply tables and data-variant code byte-identical",
+          "dropped_lines": 3,
+          "from_blocks": 217,
+          "to_blocks": 225,
+          "replacement_blocks_added": 4,
+          "replacement_commits": [
+            "63386735d",
+            "ce8d32e59"
+          ]
+        },
+        {
+          "as_of": "worktree on de5b1c249c2d0955a4a5330709f00fb26e3e000b",
+          "issue": "PS1B-211, PS1B-215",
+          "reason": "BOOT_STATE_VERSION 10 -> 11 for the GPUREAD data latch (PS1B-211) and the DualShock power-on flag (PS1B-215) (next free version, MANAGER rule 2026-09-26); the version-define lines in the same block are split out (the v11 comment and define replace them)",
+          "dropped_lines": 4,
+          "from_blocks": 225,
+          "to_blocks": 226
         }
       ]
     },
@@ -8167,15 +8292,17 @@
         {
           "file": "runtime/src/sio.c",
           "lines": [
-            "            (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;",
-            "        pst_r_init(&extra, p + len - session_bytes - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,"
+            "        uint32_t first_bytes = sio_source_pad_ack == 1 ?",
+            "            (uint32_t)sizeof pad_power_on_first : 0u;",
+            "        const uint32_t tail = first_bytes + session_bytes + config_bytes;",
+            "        pst_r_init(&extra, p + len - tail - 8u - 6u * PSX_MAX_PLAYERS,"
           ]
         },
         {
           "file": "runtime/src/sio.c",
           "lines": [
-            "        for (uint32_t j = 0; j < config_bytes + session_bytes; j++)",
-            "            if (p[len - session_bytes - config_bytes + j] > 1) return 0;"
+            "        for (uint32_t j = 0; j < tail; j++)",
+            "            if (p[len - tail + j] > 1) return 0;"
           ]
         }
       ],
@@ -8188,6 +8315,19 @@
           "dropped_lines": 1,
           "from_blocks": 12,
           "to_blocks": 12
+        },
+        {
+          "as_of": "worktree on de5b1c249c2d0955a4a5330709f00fb26e3e000b",
+          "issue": "PS1B-215",
+          "reason": "A1 re-cites (No$ + P-fixtures) and P2/P3 fit; reviewer: evolved-hunk case, narrowed to this entry's own blocks; reply tables and data-variant code byte-identical",
+          "dropped_lines": 4,
+          "from_blocks": 12,
+          "to_blocks": 12,
+          "replacement_blocks_added": 2,
+          "replacement_commits": [
+            "63386735d",
+            "ce8d32e59"
+          ]
         }
       ]
     },
@@ -8202,13 +8342,6 @@
       "subject": "sio: the digital source pad follows the same DTR session rule",
       "qualified_tree": "970ab88d22b7aed300fd2ae85588d1e8939a79a7",
       "blocks": [
-        {
-          "file": "runtime/src/sio.c",
-          "lines": [
-            "/* Source pads (Mednafen InputDevice_Gamepad and InputDevice_DualShock: Octoshock 2.2.2/2.3,",
-            " * Nymashock 1.29.0, Octoshock 2.7/2.10):"
-          ]
-        },
         {
           "file": "runtime/src/sio.c",
           "lines": [
@@ -8238,9 +8371,58 @@
           "lines": [
             "        uint32_t session_bytes = sio_source_pad_ack ?"
           ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "/* First transaction after power-on, octoshock-2.2.2-digital source profile",
+            " * only: the 01h address byte reads 00h, and every later one FFh [ORACLE",
+            " * FIXTURE P2] (DualShock on the same core; digital pad inferred). Octoshock",
+            " * returns 00 on the first transaction (P2); Nymashock and No$ give FF, so the",
+            " * nymashock-1.29.0-dualshock profile (committed golden",
+            " * nymashock_dualshock_transactions.jsonl, cold-digital) and the default path",
+            " * keep FFh. Armed by sio_init only, which runs once at power-on. */",
+            "static uint8_t pad_power_on_first[PSX_MAX_PLAYERS];",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "/* Source pads (the digital pad and DualShock of the source profiles: Octoshock 2.2.2/2.3,"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack == 1 &&",
+            "            !pst_w_bytes(w, pad_power_on_first, sizeof pad_power_on_first)) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack == 1 &&",
+            "            !pst_r_bytes(r, pad_power_on_first, sizeof pad_power_on_first)) return 0;"
+          ]
         }
       ],
-      "note": "The same DTR session rule for Octoshock 2.2.2/2.3 InputDevice_Gamepad; removed Abe's Oddysee's return-949 divergence (a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949."
+      "note": "The same DTR session rule for Octoshock 2.2.2/2.3 InputDevice_Gamepad; removed Abe's Oddysee's return-949 divergence (a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949.",
+      "repins": [
+        {
+          "as_of": "worktree on de5b1c249c2d0955a4a5330709f00fb26e3e000b",
+          "issue": "PS1B-215",
+          "reason": "A1 re-cites (No$ + P-fixtures) and P2/P3 fit; reviewer: evolved-hunk case, narrowed to this entry's own blocks; reply tables and data-variant code byte-identical",
+          "dropped_lines": 2,
+          "from_blocks": 6,
+          "to_blocks": 9,
+          "replacement_blocks_added": 4,
+          "replacement_commits": [
+            "63386735d",
+            "ce8d32e59"
+          ]
+        }
+      ]
     },
     {
       "id": "tekken3-codegen-repin-77fc84d1",
@@ -8529,13 +8711,20 @@
             "        uint32_t config_bytes = (sio_source_pad_ack == 2 || sio_source_card) ?",
             "            2u * PSX_MAX_PLAYERS : 0u;",
             "        uint32_t session_bytes = sio_source_pad_ack ?",
-            "            (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;",
-            "        pst_r_init(&extra, p + len - session_bytes - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,",
+            "            (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
             "                   8u + 6u * PSX_MAX_PLAYERS);",
             "        if (!pst_r_i32(&extra, &pulse) || !pst_r_i32(&extra, &timed) ||",
-            "            pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;",
-            "        for (uint32_t j = 0; j < config_bytes + session_bytes; j++)",
-            "            if (p[len - session_bytes - config_bytes + j] > 1) return 0;",
+            "            pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
             "    }",
             "#endif",
             "    const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +",
@@ -8563,9 +8752,54 @@
             "    return 1;",
             "}"
           ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack == 1 &&",
+            "            !pst_w_bytes(w, pad_power_on_first, sizeof pad_power_on_first)) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        if (sio_source_pad_ack == 1 &&",
+            "            !pst_r_bytes(r, pad_power_on_first, sizeof pad_power_on_first)) return 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        uint32_t first_bytes = sio_source_pad_ack == 1 ?",
+            "            (uint32_t)sizeof pad_power_on_first : 0u;",
+            "        const uint32_t tail = first_bytes + session_bytes + config_bytes;",
+            "        pst_r_init(&extra, p + len - tail - 8u - 6u * PSX_MAX_PLAYERS,"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        for (uint32_t j = 0; j < tail; j++)",
+            "            if (p[len - tail + j] > 1) return 0;"
+          ]
         }
       ],
-      "note": "The full-runtime regression failed 118 of 166 checks on 91086cc1. The expanded repair fixture passed 202 default and 260 comparison-profile checks before final source commit. Retained section storage, canonical commit order, incoming-RAM scheduler validation and variable MDEC FIFO admission replace the broken shape-only staging. Full catalogue qualification on the final pin remains pending."
+      "note": "The full-runtime regression failed 118 of 166 checks on 91086cc1. The expanded repair fixture passed 202 default and 260 comparison-profile checks before final source commit. Retained section storage, canonical commit order, incoming-RAM scheduler validation and variable MDEC FIFO admission replace the broken shape-only staging. Full catalogue qualification on the final pin remains pending.",
+      "repins": [
+        {
+          "as_of": "worktree on de5b1c249c2d0955a4a5330709f00fb26e3e000b",
+          "issue": "PS1B-215",
+          "reason": "A1 re-cites (No$ + P-fixtures) and P2/P3 fit; reviewer: evolved-hunk case, narrowed to this entry's own blocks; reply tables and data-variant code byte-identical",
+          "dropped_lines": 3,
+          "from_blocks": 6,
+          "to_blocks": 12,
+          "replacement_blocks_added": 4,
+          "replacement_commits": [
+            "63386735d",
+            "ce8d32e59"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -16,15 +16,16 @@ DMA = (ROOT / "src/dma.c").read_text(encoding="utf-8")
 # The per-word DMA2 cursor and XA DATA_END pending bit grow the snapshot wire.
 # Lock the current format so an old file is rejected before any state section
 # is applied. 68cb3183 (TAS checkpoint capture and resume) made it v10 and
-# raised the read floor to 10: every writer emits v10 and every earlier state
-# is refused. That matches the Wave 5 rule of a clean install with no save
+# raised the read floor to 10. PS1B-211 (the GPUREAD data latch) and PS1B-215
+# (the DualShock power-on flag) made it v11 with a read floor of 11: every
+# writer emits v11 and every earlier state is refused. That matches the Wave 5 rule of a clean install with no save
 # compatibility. Bumping either number is a deliberate format decision; update
 # these lines with it.
 assert "#define DMA_GPU_LL_WIRE (4u + (10u * 4u))" in DMA
-assert "#define BOOT_STATE_VERSION 10u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION 11u" in BOOT_STATE_H
 assert "h.version       = BOOT_STATE_VERSION;" in BOOT_STATE_C
-assert "#define BOOT_STATE_VERSION_MIN_READ 10u" in BOOT_STATE_H
-assert "v10 therefore rejects every earlier state." in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION_MIN_READ 11u" in BOOT_STATE_H
+assert "v11 therefore rejects every earlier state." in BOOT_STATE_H
 
 assert "void savestate_status_json(char* buf, size_t cap);" in HEADER
 assert '\\"generation\\"' in STATE and '\\"pending\\"' in STATE
