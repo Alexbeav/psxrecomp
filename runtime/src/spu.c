@@ -1300,8 +1300,10 @@ void spu_render(int16_t* out_stereo, int frames) {
              * ring keeps running, one slot per sample, and enabling does not reset
              * it [ORACLE FIXTURE E8c, set S-spu/E8c, tsv sha256 f43c38e3...: 34
              * slots were overwritten with 0 before a cold enable]. Only silence was
-             * measured, so the slots are written with 0. Source key-timing mode
-             * never reaches this branch. */
+             * measured, so the slots are written with 0. Each store still runs
+             * the IRQ9 address check; whether a capture store raises IRQ9 while
+             * the SPU is disabled is not measured [NOT OBSERVED]. Source
+             * key-timing mode never reaches this branch. */
             capture_write(0x0000u, 0);
             capture_write(0x0400u, 0);
             capture_write(0x0800u, 0);
