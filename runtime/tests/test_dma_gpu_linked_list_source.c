@@ -17,9 +17,9 @@ static void set_option(const char *key,const char *value) {
 }
 void psx_devices_service_to_now(void) {
 #ifdef PSX_TEST_SOURCE_GPU_IMPLEMENTED
-    advance_source_gpu();
+    dsm_service(DSM_GPU, psx_cycle_count);
 #ifdef PSX_TEST_SOURCE_LL_IMPLEMENTED
-    advance_source_gpu_ll();
+    dsm_service(DSM_LL, psx_cycle_count);
 #endif
 #endif
 }
@@ -114,15 +114,15 @@ int main(int argc,char **argv) {
         uint8_t base[512],source[512];
         assert(dma_snapshot_bytes()<=sizeof base && dma_src_wire_bytes()<=sizeof source);
         dma_snapshot_write(base);dma_src_wire_write(source);
-        memset(&gpu_ll_source,0,sizeof gpu_ll_source);
+        memset(&dsm[DSM_LL],0,sizeof dsm[DSM_LL]);
         memset(&channels[2],0,sizeof channels[2]);
         assert(dma_snapshot_read(base,dma_snapshot_bytes()));
         assert(dma_src_wire_read(source,dma_src_wire_bytes()));
-        psx_cycle_count=512;advance_source_gpu_ll();
+        psx_cycle_count=512;dsm_service(DSM_LL, psx_cycle_count);
         if(!ready){assert(!upload_count&&!irqs);ready_state=1;}
-        psx_cycle_count=640;advance_source_gpu_ll();
+        psx_cycle_count=640;dsm_service(DSM_LL, psx_cycle_count);
         assert(upload_count==n&&irqs==1&&channels[2].chcr==0x401);
-        psx_cycle_count=768;advance_source_gpu_ll();assert(irqs==1&&upload_count==n);
+        psx_cycle_count=768;dsm_service(DSM_LL, psx_cycle_count);assert(irqs==1&&upload_count==n);
 #endif
     }
 #ifdef PSX_TEST_SOURCE_LL_IMPLEMENTED
@@ -130,14 +130,14 @@ int main(int argc,char **argv) {
      * live after kick. Neither may be snapshotted by a metadata prepass. */
     setup(65,1);try_execute(2);assert(upload_count==49);
     ram[(0x1004+49*4)/4]=0xe1000001;
-    psx_cycle_count=128;advance_source_gpu_ll();assert(uploaded[49]==0xe1000001&&irqs==1);
+    psx_cycle_count=128;dsm_service(DSM_LL, psx_cycle_count);assert(uploaded[49]==0xe1000001&&irqs==1);
     setup(49,1);ram[0x1000/4]=(49u<<24)|0x2000;ram[0x2000/4]=0xffffff;
     try_execute(2);assert(upload_count==49&&!irqs);
     ram[0x2000/4]=(1u<<24)|0xffffff;ram[0x2004/4]=0xe2000002;
-    psx_cycle_count=128;advance_source_gpu_ll();assert(upload_count==50&&uploaded[49]==0xe2000002&&irqs==1);
+    psx_cycle_count=128;dsm_service(DSM_LL, psx_cycle_count);assert(upload_count==50&&uploaded[49]==0xe2000002&&irqs==1);
     /* Source does not bank positive credit while not ready. */
-    setup(255,0);try_execute(2);psx_cycle_count=512;advance_source_gpu_ll();
-    ready_state=1;psx_cycle_count=640;advance_source_gpu_ll();assert(upload_count==113&&!irqs);
+    setup(255,0);try_execute(2);psx_cycle_count=512;dsm_service(DSM_LL, psx_cycle_count);
+    ready_state=1;psx_cycle_count=640;dsm_service(DSM_LL, psx_cycle_count);assert(upload_count==113&&!irqs);
     /* Partial service precedes DICR replacement: completion sees old mask. */
     setup(50,1);dicr=1u<<23;try_execute(2);psx_cycle_count=28;
     dma_write(0x1f8010f4,(1u<<23)|(1u<<18));assert(upload_count==50&&!irqs);

@@ -532,9 +532,13 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
         ok = write_section(o, BS_SEC_TIMER_SRC, buf, sizeof buf);
     }
     if (ok && dma_src_active()) {
-        uint8_t buf[140u];                    /* four source-DMA state machines */
-        dma_src_wire_write(buf);
-        ok = write_section(o, BS_SEC_DMA_SRC, buf, sizeof buf);
+        uint8_t buf[256u];                    /* source-DMA state machines */
+        uint32_t n = dma_src_wire_bytes();
+        ok = n <= sizeof buf;
+        if (ok) {
+            dma_src_wire_write(buf);
+            ok = write_section(o, BS_SEC_DMA_SRC, buf, n);
+        }
     }
     if (ok) {
         /* Always present: none of these fields is model-gated. */

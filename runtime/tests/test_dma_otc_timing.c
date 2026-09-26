@@ -1,4 +1,7 @@
 /* Synthetic controller test: no BIOS, retail code, or disc is needed.
+ * Source-mode values [ORACLE FIXTURE D9a] (S-D9-grain.tsv sha 3d7a4c0e): n <= 64
+ * words finish at the kick, longer tables finish at the first 128-cycle service
+ * edge that covers n - 64 cycles, and the CPU waits for the whole transfer.
  * Include the implementation to isolate channel 6 from unrelated devices. */
 #include "../src/dma.c"
 #include <assert.h>
@@ -8,8 +11,8 @@ int psx_in_device_service, g_event_step_conservative, g_ls_replay_active;
 uint32_t g_psx_cyc_batch, g_psx_cyc_batch_limit;
 uint32_t i_stat, g_debug_current_func_addr, g_debug_last_store_pc;
 static uint32_t ram[0x80000], writes, irqs;
-void psx_devices_service_to_now(void) { advance_source_otc(); }
-void psx_advance_cycles_slow(uint32_t n) { psx_cycle_count+=n; advance_source_otc(); }
+void psx_devices_service_to_now(void) { dsm_service(DSM_OTC, psx_cycle_count); }
+void psx_advance_cycles_slow(uint32_t n) { psx_cycle_count+=n; dsm_service(DSM_OTC, psx_cycle_count); }
 void psx_write_word(uint32_t addr, uint32_t value) { ram[(addr & 0x1ffffc)/4]=value; writes++; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)detail; i_stat|=1u<<bit; irqs++; }
 void event_ring_record_aux(uint16_t kind,uint8_t src,uint32_t value) { (void)kind; (void)src; (void)value; }
@@ -21,30 +24,30 @@ static void setup(uint32_t count, uint64_t phase) {
     dpcr|=8u<<24;
     dicr=(1u<<23)|(1u<<22);
 }
-static void tick(uint32_t cycles) { psx_cycle_count+=cycles; advance_source_otc(); }
+static void tick(uint32_t cycles) { psx_cycle_count+=cycles; dsm_service(DSM_OTC, psx_cycle_count); }
 int main(void) {
     setup(1024,0);
     execute_ch6_otc();
     assert(writes==1024 && psx_cycle_count==0 && !(channels[6].chcr&(1u<<24)));
     for(uint32_t phase=0;phase<128;phase++) {
-        setup(1024,phase); start_source_otc();
-        assert(writes==64 && otc_source.remaining==960 && irqs==0);
+        setup(1024,phase); dsm_start_otc();
+        assert(writes==64 && dsm[DSM_OTC].words_left==960 && irqs==0);
         assert(ram[0x100000/4]==0xFFFFC && ram[(0x100000-64*4)/4]==0xCCCCCCCC);
         uint64_t expected=((phase+960+127)/128)*128;
         tick((uint32_t)(expected-psx_cycle_count)-1);
-        assert(otc_source.remaining && (channels[6].chcr&(1u<<24)) && irqs==0);
-        tick(1); assert(writes==1024 && !otc_source.remaining && irqs==1);
+        assert(dsm[DSM_OTC].words_left && (channels[6].chcr&(1u<<24)) && irqs==0);
+        tick(1); assert(writes==1024 && !dsm[DSM_OTC].words_left && irqs==1);
         assert(ram[(0x100000-1023*4)/4]==0xFFFFFF);
         tick(1000); assert(writes==1024 && irqs==1);
     }
     for(uint32_t n=1;n<=65;n++) {
-        setup(n,127); start_source_otc();
+        setup(n,127); dsm_start_otc();
         assert(writes==(n<64?n:64));
-        assert((otc_source.remaining==0)==(n<=64));
+        assert((dsm[DSM_OTC].words_left==0)==(n<=64));
         if(n==65) { tick(1); assert(writes==65 && irqs==1); }
     }
-    setup(0,0); start_source_otc(); tick(65536);
-    assert(writes==65536 && !otc_source.remaining && irqs==1);
+    setup(0,0); dsm_start_otc(); tick(65536);
+    assert(writes==65536 && !dsm[DSM_OTC].words_left && irqs==1);
     setup(1024,43); otc_source_model=1; execute_ch6_otc();
     assert(writes==1024 && irqs==1 && psx_cycle_count==1024);
     assert(dma_snapshot_read(NULL,0)==0); /* source model rejects restore before reading */

@@ -79,18 +79,11 @@ static const Field gpu_service_fields[] = {
     REP("command.queue", 4, 32),
 };
 
+#define DSM_FIELDS(m)     F(m ".running", 1),    F(m ".halts_cpu", 1),  F(m ".stage", 1),   F(m ".held", 1),     F(m ".cursor", 4),     F(m ".words_left", 4), F(m ".blk_words", 4),     F(m ".blk_pos", 4),    F(m ".node_count", 4), F(m ".link", 4),     F(m ".credit", 4),     F(m ".served_until", 8)
 static const Field dma_src_fields[] = {
-    F("upload.remaining", 4),  F("upload.block_size", 4), F("upload.in_block", 4),
-    F("upload.address", 4),    F("upload.budget", 4),
-    F("upload.last_cycle", 8), F("upload.next_cycle", 8),
-    F("ll.active", 4),         F("ll.address", 4),        F("ll.remaining", 4),
-    F("ll.nodes", 4),          F("ll.budget", 4),
-    F("ll.last_cycle", 8),     F("ll.next_cycle", 8),
-    F("spu.remaining", 4),     F("spu.block_size", 4),    F("spu.in_block", 4),
-    F("spu.address", 4),       F("spu.total_words", 4),   F("spu.start_addr", 4),
-    F("spu.budget", 4),        F("spu.last_cycle", 8),    F("spu.next_cycle", 8),
-    F("otc.remaining", 4),     F("otc.address", 4),
-    F("otc.last_cycle", 8),    F("otc.next_cycle", 8),
+    DSM_FIELDS("otc"), DSM_FIELDS("upload"), DSM_FIELDS("ll"),
+    DSM_FIELDS("cd"),  DSM_FIELDS("spu"),
+    F("wait.live", 4), F("wait.published", 4),
 };
 
 static const Field irq_timing_fields[] = {
