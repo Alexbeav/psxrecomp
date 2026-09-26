@@ -82,9 +82,11 @@ int main(void) {
     assert(!(stat()&0x80));
     setup(1,1);sio_write(0x1F801040,1);jump(1152);sio_write(0x1F80104A,0x40);
     assert(!(stat()&0x280) && !g_sio_timing_active);
-    /* Digital poll bytes and no ACK after the final response. */
+    /* Digital poll bytes and no ACK after the final response. This is the
+     * first transaction after power-on, so the address byte reads 00
+     * [ORACLE FIXTURE P2] (DualShock on the same core; digital pad inferred). */
     setup(1,1);
-    const unsigned tx[]={1,0x42,0,0,0},rx[]={0xFF,0x41,0x5A,0xFF,0xFF};
+    const unsigned tx[]={1,0x42,0,0,0},rx[]={0x00,0x41,0x5A,0xFF,0xFF};
     for(int i=0;i<5;i++) {
         sio_write(0x1F801040,tx[i]);jump(1088);
         assert(sio_read(0x1F801040)==rx[i]);jump(64);

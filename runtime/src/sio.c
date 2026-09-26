@@ -56,17 +56,19 @@ static uint8_t pad_stick[PSX_MAX_PLAYERS][4] = {
 
 /* DualShock command 0x4D maps the six writable bytes in a 0x42 poll onto the
  * two motors: 0x00 = small/high-frequency, 0x01 = large/low-frequency,
- * 0xFF = unused. The map powers up unassigned and is echoed back while a new
- * map is latched, matching the physical pad/Mednafen protocol. */
+ * 0xFF = unused (No$ "Controllers and Memory Cards"). The map powers up
+ * unassigned (4Dh returns FF x6 on first use) and is echoed back while a new
+ * map is latched [ORACLE FIXTURE P2, Octoshock 2.3]. */
 static uint8_t pad_rumble_map[PSX_MAX_PLAYERS][6] = {
     PSX_PAD_INIT({ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF })
 };
 static PSX_BSS uint8_t pad_rumble_small[PSX_MAX_PLAYERS];
 static PSX_BSS uint8_t pad_rumble_large[PSX_MAX_PLAYERS];
 
-/* Analog-mode lock, per logical pad. A real DualShock's config command 0x44
- * 0x..02/0x03 locks/unlocks the mode (dualshock.cpp:714-725); a locked pad
- * ignores the physical analog button (dualshock.cpp:203). We emulate the
+/* Analog-mode lock, per logical pad. Config command 0x44's lock byte: 03h
+ * locks, 02h unlocks, any other value leaves the lock unchanged; a locked pad
+ * ignores the physical Analog button [ORACLE FIXTURE P2, P2b, Octoshock 2.3]
+ * (No$ "Controllers and Memory Cards" documents 44h). We emulate the
  * analog button via the host hybrid heuristic (pad_type_req), so when a game
  * LOCKS the mode the hybrid auto-flip must not override it — else the type
  * flips underneath a game that pinned DualShock, the exact desync the
@@ -122,6 +124,15 @@ static int mtap_returned[2] = { MTAP_NEXT_SLOT_A, MTAP_NEXT_SLOT_A };
  * type via 0x43 before polling — e.g. Mega Man X6 loops 01 43 00 00 forever
  * and never reaches 0x42. (MMX6 ISSUES.md #2.) */
 static PSX_BSS uint8_t pad_in_config[PSX_MAX_PLAYERS];
+
+/* First transaction after power-on, octoshock-2.2.2-digital source profile
+ * only: the 01h address byte reads 00h, and every later one FFh [ORACLE
+ * FIXTURE P2] (DualShock on the same core; digital pad inferred). Octoshock
+ * returns 00 on the first transaction (P2); Nymashock and No$ give FF, so the
+ * nymashock-1.29.0-dualshock profile (committed golden
+ * nymashock_dualshock_transactions.jsonl, cold-digital) and the default path
+ * keep FFh. Armed by sio_init only, which runs once at power-on. */
+static uint8_t pad_power_on_first[PSX_MAX_PLAYERS];
 
 /* Whether the pad on a logical slot is a config-capable DualShock (1) or a
  * plain digital controller (0). A real SCPH-1080 digital pad (poll id 0x41)
@@ -348,7 +359,7 @@ typedef enum {
 
 static ActiveDevice active_device = DEV_NONE;
 
-/* Source pads (Mednafen InputDevice_Gamepad and InputDevice_DualShock: Octoshock 2.2.2/2.3,
+/* Source pads (the digital pad and DualShock of the source profiles: Octoshock 2.2.2/2.3,
  * Nymashock 1.29.0, Octoshock 2.7/2.10):
  * every device on a port sees every byte while that port's DTR is asserted, and the pad's
  * command phase restarts only when its DTR rises. A session whose first byte is not 0x01
@@ -838,6 +849,11 @@ void sio_init(void) {
         pad_analog[i] = 0;
         pad_stick[i][0] = pad_stick[i][1] = pad_stick[i][2] = pad_stick[i][3] = 0x80;
         pad_in_config[i] = 0;
+#if SIO_MODEL_CYCLE_PACED
+        pad_power_on_first[i] = sio_source_pad_ack == 1;
+#else
+        pad_power_on_first[i] = 0;
+#endif
         pad_type_req[i] = -1;
         analog_mode_locked[i] = 0;
         pad_supports_config[i] = 1;
@@ -1226,6 +1242,11 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_mtap_addr = 0x01;
             pad_state = PAD_WAIT_ACCESS;
             sio_rx_data = 0xFF;
+            if (pad_active_logical >= 0 && pad_active_logical < PSX_MAX_PLAYERS &&
+                pad_power_on_first[pad_active_logical]) {
+                pad_power_on_first[pad_active_logical] = 0;
+                sio_rx_data = 0x00;
+            }
             sio_stat |= SIO_STAT_ACK;
         } else if (selected_is_mtap_port() && tx_byte >= 0x02 && tx_byte <= 0x04) {
             pad_active_logical = mtap_slot_a_logical() + (int)(tx_byte - 1);
@@ -1339,8 +1360,10 @@ static void pad_process_byte(uint8_t tx_byte) {
                 pad_response_len = 8;
             } else if (!pad_in_config[lp]) {
                 /* ENTER attempt (normal mode): a real DualShock transmits the LIVE
-                 * poll frame here — identical framing to 0x42 (dualshock.cpp:471-490)
-                 * — and only latches config entry from the 0x01 data byte AFTERWARD.
+                 * poll frame here — identical framing to 0x42; 43h 00 without a
+                 * prior enter answers like a 42h poll (41 5A FF FF) [ORACLE FIXTURE
+                 * P2, Octoshock 2.3] — and only latches config entry from the 0x01
+                 * data byte AFTERWARD.
                  * The old all-zero frame fed any driver that reads the 0x43 frame as
                  * input (most do; 0x43-with-data is a poll on the wire) a phantom
                  * "all pressed"/centered-stick garbage — the hybrid phantom-input
@@ -1359,7 +1382,8 @@ static void pad_process_byte(uint8_t tx_byte) {
                 }
             } else {
                 /* EXIT attempt (in config): config-mode 0x43 returns the zero frame
-                 * (dualshock.cpp:660-674); cur_id is 0xF3 while in config. */
+                 * [ORACLE FIXTURE P2, Octoshock 2.3]; cur_id is 0xF3 while in config
+                 * (No$ "Controllers and Memory Cards"). */
                 pad_response[0] = cur_id;
                 pad_response[2] = 0x00; pad_response[3] = 0x00;
                 pad_response[4] = 0x00; pad_response[5] = 0x00;
@@ -1387,7 +1411,7 @@ static void pad_process_byte(uint8_t tx_byte) {
             else if (tx_byte == 0x4C) r = r_4c;
             memcpy(pad_response, r, 8);
             /* 0x45 status byte must report the LIVE analog mode, not a fixed
-             * analog-on (dualshock.cpp:743) — see fix below for the modern path. */
+             * analog-on [ORACLE FIXTURE P2] — see the modern path below. */
             if (tx_byte == 0x45)
                 pad_response[3] = pad_analog[lp] ? 0x01 : 0x00;
             pad_response_len = 8;
@@ -1402,10 +1426,11 @@ static void pad_process_byte(uint8_t tx_byte) {
              * responses; only valid while in config mode (a digital pad ignores
              * them, handled by the else branch below). */
             static const uint8_t r_def[8] = { 0xF3,0x5A,0x00,0x00,0x00,0x00,0x00,0x00 };
-            /* 0x45 "Query Model and Mode". The source builds this reply in two
-             * phases (frontio.c case 0x4500/0x4501): transmit_buffer[0] = 0x01 for
-             * the device type, then 0x02, analog_mode ? 1 : 0, 0x02, 0x01, 0x00.
-             * After the 0xF3 0x5A header that is  01 02 <mode> 02 01 00. */
+            /* 0x45 "Query Model and Mode" (No$ "Controllers and Memory Cards"):
+             * after the 0xF3 0x5A header the reply is 01 02 <mode> 02 01 00, with
+             * <mode> the LED/analog state [ORACLE FIXTURE P2, Octoshock 2.3:
+             * 01 02 00 02 01 00 in digital]. 46h 00, 47h and 4Ch 00 below are
+             * the P2 rows too. */
             static const uint8_t r_45[8]  = { 0xF3,0x5A,0x01,0x02,0x00,0x02,0x01,0x00 };
             static const uint8_t r_46[8]  = { 0xF3,0x5A,0x00,0x00,0x01,0x02,0x00,0x0A };
             static const uint8_t r_47[8]  = { 0xF3,0x5A,0x00,0x00,0x02,0x00,0x01,0x00 };
@@ -1418,16 +1443,14 @@ static void pad_process_byte(uint8_t tx_byte) {
             memcpy(pad_response, r, 8);
             /* 0x45 reports the analog-status byte: a driver polling 0x45 to learn
              * the live mode must read the CURRENT analog state, not a hard-coded
-             * analog-on (frontio.c case 0x4501, transmit_buffer[1]=analog_mode?1:0).
-             * Reporting "analog" while we present digital (or vice-versa) makes the
-             * driver mis-parse the poll frame length → off-by-frame garbage buttons
-             * (axis5_sio_controller.md D8).
-             * That source index is the SECOND byte of the 0x4501 phase, i.e. the
-             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 — not
-             * pad_response[3], which is the constant 0x02. Writing it there
-             * destroyed the constant and left a hard-coded analog-on in the real
-             * mode slot, so we answered 03 00 01 where the source answers
-             * 01 02 00 (Mega Man X5 return 1090). */
+             * analog-on. Reporting "analog" while we present digital (or
+             * vice-versa) makes the driver mis-parse the poll frame length →
+             * off-by-frame garbage buttons (axis5_sio_controller.md D8).
+             * The mode is the fifth byte of the whole reply, after 0xF3 0x5A
+             * <type> 0x02 — not pad_response[3], which is the constant 0x02
+             * [ORACLE FIXTURE P2]. Writing it there destroyed the constant, so we
+             * answered 03 00 01 where the reference answers 01 02 00 (Mega Man X5
+             * return 1090). */
             if (tx_byte == 0x45)
                 pad_response[4] = pad_analog[lp] ? 0x01 : 0x00;
             /* 0x4D returns the previous six-byte motor map while latching the
@@ -1438,9 +1461,22 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_state = PAD_SEND_RESPONSE;
             sio_rx_data = pad_response[0];
             sio_stat |= SIO_STAT_ACK;
+        } else if (ds && !g_pad_legacy_cfg &&
+                   (tx_byte == 0x44 || tx_byte == 0x45 || tx_byte == 0x46 ||
+                    tx_byte == 0x47 || tx_byte == 0x4C || tx_byte == 0x4D)) {
+            /* A config command OUTSIDE config mode: the pad answers the command
+             * byte with its ID, then gives no /ACK, so the transaction ends
+             * (FF 41 in digital mode) [ORACLE FIXTURE P2, Octoshock 2.3]. The
+             * analog-mode ID (73h) follows the same rule by extension; 48h-4Bh
+             * and 4Fh are NOT OBSERVED and keep the hi-z answer below. */
+            pad_state = PAD_IDLE;
+            pad_response_len = 0;
+            pad_response_idx = 0;
+            pad_current_cmd = 0;
+            sio_rx_data = cur_id;
         } else {
-            /* Unknown command, or a config command issued OUTSIDE config mode:
-             * a real pad does not respond — return hi-z and end the transaction. */
+            /* Unknown command: the pad does not respond — return hi-z and end
+             * the transaction. */
             pad_state = PAD_IDLE;
             pad_response_len = 0;
             pad_response_idx = 0;
@@ -1493,7 +1529,8 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_in_config[pad_active_logical] = (tx_byte == 0x01) ? 1 : 0;
         /* 0x44 set-mode (game owns the analog/digital mode): the mode byte rides
          * in the same slot as 0x43's enter/exit flag (data position 3). 0x01 =>
-         * analog (0x73), 0x00 => digital (0x41). Honouring it makes the pad
+         * analog (0x73); any other value => digital (0x41), including 02h
+         * [ORACLE FIXTURE P2, Octoshock 2.3]. Honouring it makes the pad
          * coherent — the type the game just selected is the type it then polls,
          * instead of the host hybrid silently winning. Drop any stale host
          * request so it can't immediately undo the game's choice. */
@@ -1502,12 +1539,14 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_analog[pad_active_logical] = (tx_byte == 0x01) ? 1 : 0;
             pad_type_req[pad_active_logical] = -1;
         }
-        /* 0x46/0x47/0x4C do not have one fixed reply: the source selects it from
+        /* 0x46/0x47/0x4C do not have one fixed reply: the pad selects it from
          * the data byte at position 3, which arrives paired with response index 2
-         * (frontio.c cases 0x4601, 0x4701, 0x4C01). The canned tables above are
-         * only the data == 0x00 variant, so a game that asks with 0x01 got the
-         * wrong answer — Mega Man X5 issues 0x4C with 0x01 and the source replies
-         * 07 where an unpatched table replies 04 (return 1098).
+         * (No$ "Controllers and Memory Cards"). 46h 01 -> 00 00 01 01 01 14 and
+         * 4Ch 01 -> 00 00 00 07 00 00 [ORACLE FIXTURE P2, Octoshock 2.3]. The
+         * canned tables above are only the data == 0x00 variant, so a game that
+         * asks with 0x01 got the wrong answer — Mega Man X5 issues 0x4C with 0x01
+         * and the reference replies 07 where an unpatched table replies 04
+         * (return 1098).
          * Reply bytes 3..7 are the five phase-1 bytes; byte 2 is the phase-0 byte
          * and does not vary. */
         if (!g_pad_legacy_cfg && pad_response_idx == 2 && tx_byte != 0x00 &&
@@ -1522,8 +1561,10 @@ static void pad_process_byte(uint8_t tx_byte) {
             memcpy(&pad_response[3], variant, 5);
         }
         /* 0x44 lock byte (data position 4, the byte after the mode byte): 0x03 =>
-         * lock analog mode, 0x02 => unlock (dualshock.cpp:714-725). A locked slot
-         * ignores the host hybrid auto-flip (see analog_mode_locked). */
+         * lock, 0x02 => unlock, whatever the analog byte; any other value leaves
+         * the lock unchanged [ORACLE FIXTURE P2b, Octoshock 2.3]. The analog byte
+         * above takes effect even while locked [ORACLE FIXTURE P2b]. A locked
+         * slot ignores the host hybrid auto-flip (see analog_mode_locked). */
         if (!g_pad_legacy_cfg && pad_current_cmd == 0x44 && pad_response_idx == 3 &&
             pad_active_logical >= 0 && pad_active_logical < PSX_MAX_PLAYERS) {
             if      (tx_byte == 0x03) analog_mode_locked[pad_active_logical] = 1;
@@ -2270,9 +2311,10 @@ void sio_write(uint32_t addr, uint32_t value) {
         }
 #endif
         if (value & SIO_CTRL_ACK) {
+            /* JOY_CTRL bit 4 clears the JOY_STAT bit 9 latch, so the next /ACK
+             * sets it and raises IRQ7 again [ORACLE FIXTURE P3, Octoshock 2.3].
+             * It does not clear the /ACK input pulse. */
             sio_stat &= ~SIO_STAT_IRQ;
-            /* Original source clears the IRQ latch, not the DSR pulse. Its
-             * optional level-sensitive reassert-on-clear is disabled. */
 #if SIO_MODEL_CYCLE_PACED
             if (!sio_ack_pulse_remaining)
 #endif
@@ -2591,8 +2633,17 @@ static void sio_fire_ack_irq(void) {
     }
 
     /* The device IRQ latch is independent of INTC acknowledgement. Do not
-     * queue an ACK for replay when the guest later clears I_STAT.7. */
+     * queue an ACK for replay when the guest later clears I_STAT.7. I_STAT
+     * bit 7 is raised only on the 0->1 edge of JOY_STAT bit 9: while the latch
+     * is still set, a new /ACK does not re-raise IRQ7, even if the guest has
+     * cleared I_STAT bit 7 [ORACLE FIXTURE P3, Octoshock 2.3]. */
     sio_pending_ack_irq_en = 0;
+    if (sio_stat & SIO_STAT_IRQ) {
+        if (!sio_shift_active && !sio_tx_buffered && !sio_pending_ack &&
+            !sio_ack_pulse_remaining)
+            g_sio_timing_active = 0;
+        return;
+    }
     sio_stat |= SIO_STAT_IRQ;
 
     uint32_t i_stat_before = i_stat;
@@ -2784,11 +2835,14 @@ void sio_tick(int cycles) {
             sio_irq_pending = 0;
             sio_stat |= SIO_STAT_ACK;
             sio_ack_visible_reads = 2;
-            sio_stat |= SIO_STAT_IRQ;
             /* Restore TX_RDY — the byte transfer is complete.
              * This unblocks the BIOS pad polling loop that spins
              * on TX_RDY before writing the next byte. */
             sio_stat |= SIO_STAT_TX_RDY | SIO_STAT_TX_EMPTY;
+            /* IRQ7 only on the 0->1 edge of JOY_STAT bit 9
+             * [ORACLE FIXTURE P3, Octoshock 2.3]; see sio_fire_ack_irq. */
+            if (sio_stat & SIO_STAT_IRQ) return;
+            sio_stat |= SIO_STAT_IRQ;
             uint32_t i_stat_before = i_stat;
             psx_irq_raise(IRQ_SIO0, 1); /* SIO shift IRQ */
             event_ring_record_aux(EV_DEQ, (uint8_t)SRC_SIO, 1u); /* SIO shift IRQ fired */
@@ -2967,6 +3021,8 @@ static int sio_snap_emit(PstW *w) {
         if (sio_source_pad_ack &&
             (!pst_w_bytes(w, pad_dtr_session_first, sizeof pad_dtr_session_first) ||
              !pst_w_bytes(w, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;
+        if (sio_source_pad_ack == 1 &&
+            !pst_w_bytes(w, pad_power_on_first, sizeof pad_power_on_first)) return 0;
     }
 #endif
     return 1;
@@ -3142,6 +3198,8 @@ static int sio_snap_parse(PstR *r) {
         if (sio_source_pad_ack &&
             (!pst_r_bytes(r, pad_dtr_session_first, sizeof pad_dtr_session_first) ||
              !pst_r_bytes(r, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;
+        if (sio_source_pad_ack == 1 &&
+            !pst_r_bytes(r, pad_power_on_first, sizeof pad_power_on_first)) return 0;
     }
 #endif
     if (r->p != r->end) return 0;
@@ -3194,12 +3252,15 @@ int sio_snapshot_validate(const uint8_t *p, uint32_t len) {
             2u * PSX_MAX_PLAYERS : 0u;
         uint32_t session_bytes = sio_source_pad_ack ?
             (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;
-        pst_r_init(&extra, p + len - session_bytes - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,
+        uint32_t first_bytes = sio_source_pad_ack == 1 ?
+            (uint32_t)sizeof pad_power_on_first : 0u;
+        const uint32_t tail = first_bytes + session_bytes + config_bytes;
+        pst_r_init(&extra, p + len - tail - 8u - 6u * PSX_MAX_PLAYERS,
                    8u + 6u * PSX_MAX_PLAYERS);
         if (!pst_r_i32(&extra, &pulse) || !pst_r_i32(&extra, &timed) ||
             pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;
-        for (uint32_t j = 0; j < config_bytes + session_bytes; j++)
-            if (p[len - session_bytes - config_bytes + j] > 1) return 0;
+        for (uint32_t j = 0; j < tail; j++)
+            if (p[len - tail + j] > 1) return 0;
     }
 #endif
     const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +

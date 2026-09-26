@@ -3,9 +3,11 @@
 #include <stdint.h>
 #include "sio.h"
 
-/* Nymashock2.9.1 AddAxis writes a byte into the high byte of the Nyma
- * 16-bit input. Pinned Mednafen ddf225cf DualShock.UpdateInput rounds it
- * onto the protocol byte range. This is a source bridge, not a deadzone. */
+/* Host-side conversion of a route axis byte through a 16-bit input value
+ * onto the protocol byte range. [NOT OBSERVED: sub-byte host input] The pad
+ * reports the axis bytes it is given exactly, in the order RX, RY, LX, LY
+ * [ORACLE FIXTURE P1, Octoshock 2.3]; that fixture takes whole bytes, so it
+ * cannot observe this rounding. This is a source bridge, not a deadzone. */
 static inline uint8_t input_dualshock_protocol_axis(uint8_t source)
 {
     return (uint8_t)(((uint32_t)source * 256u * 255u + 32767u) / 65535u);

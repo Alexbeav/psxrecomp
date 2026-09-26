@@ -3837,8 +3837,10 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
  * Bit 4 = UP, Bit 5 = RIGHT, Bit 6 = DOWN, Bit 7 = LEFT,
  * Bit 8 = L2, Bit 9 = R2, Bit 10 = L1, Bit 11 = R1,
  * Bit 12 = TRIANGLE, Bit 13 = CIRCLE, Bit 14 = CROSS, Bit 15 = SQUARE.
- * L3/R3 (stick clicks) exist on a DualShock only; the wire reports them like
- * Beetle's dualshock.cpp does — straight from the button word, no mode mask. */
+ * The wire carries the inverted button word (No$ "Controllers and Memory
+ * Cards"), identical in digital and analog mode; L3/R3 are reported even in
+ * digital mode, with no mode mask [ORACLE FIXTURE P4, Octoshock 2.3: 4D19 ->
+ * E6 B2, 0006 -> F9 FF]. */
 #define PAD_SELECT   (1 << 0)
 #define PAD_L3       (1 << 1)
 #define PAD_R3       (1 << 2)
