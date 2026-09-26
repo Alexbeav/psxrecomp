@@ -81,7 +81,7 @@ int debug_server_fmv_quiet(void){return 0;}
 int source_gpu_runtime_active(void){return 1;}
 int source_gpu_runtime_ready(void){return 1;}
 uint32_t source_gpu_runtime_cycles_to_event(void){return 128-(uint32_t)(psx_cycle_count%128);}
-void source_gpu_runtime_dma_write(void){dma_source_gpu_service_at(psx_cycle_count);}
+void source_gpu_runtime_dma_write(void){dma_source_gpu_service_at_exact(psx_cycle_count);}
 void source_gpu_runtime_copy(SourceGPUServiceClock *c,SourceGPUCommandProjection *s){(void)c;(void)s;abort();}
 int main(int argc,char **argv){
  if(argc!=3)return 2;FILE *in=fopen(argv[1],"rb"),*out=fixture_create_new(argv[2]);if(!in || !out)return 2;
@@ -94,8 +94,8 @@ int main(int argc,char **argv){
   uint32_t result=0,aux=0;psx_cycle_count=time;
   switch(op){
    case 0:dma_init();mdec_init();memset(ram,0,sizeof(ram));i_stat=irqs=0;break;
-   case 1:dma_source_gpu_service_at(time);break;
-   case 2:dma_source_gpu_service_at(time);dma_write(addr,value);break; /* the harness advances to each authored op time */
+   case 1:dma_source_gpu_service_at_exact(time);break;
+   case 2:dma_source_gpu_service_at_exact(time);dma_write(addr,value);break; /* the harness advances to each authored op time */
    case 3:result=dma_read(addr);break;
    case 4:psx_write_word(addr,value);break;
    case 5:result=psx_read_word(addr);break;
