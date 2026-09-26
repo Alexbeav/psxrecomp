@@ -9,6 +9,8 @@
  *    tick) with a linear Release at shift 12: the Attack still steps at E+1
  *    tick, nothing changes at E+2, and the first Release step (-8) is at E+3.
  *    [ORACLE FIXTURE E5]
+ *  - E8b/E8c: the capture takes the level from before the tick's step, and
+ *    SPUSTAT bit 11 flips on the tick that stores slot 256 / slot 0.
  * The harness renders one sample at each 768-cycle boundary, as the sample
  * event does, and reads 1F801C0Ch after it. */
 #include <stdbool.h>
@@ -98,6 +100,42 @@ int main(void)
         check(t2 == t1, "E5 no change at tick 2", off, t2);
         check(t3 == t2 - 8, "E5 first Release step at tick 3", off, t3);
     }
-    printf("SPU key latency (oracle fixtures E4, E5): %u checks, %u failures\n", checks, failures);
+    /* E8b (set S-spu E1R-E10-E8b, tsv sha256 6442635cbd5a581c...): voice 1,
+     * linear Attack shift 14 (+7 every 8 ticks), capture buffer 0x800-0xBFF.
+     * Observed: SPUSTAT bit 11 turns 0 one tick after an ENVX change, and the
+     * captured level changes at capture indices = 0 (mod 8). Bit 11 turns 0 on
+     * the tick that stores slot 0 (E8c, set S-spu/E8c, tsv sha256 f43c38e3...),
+     * so a level change on tick E shows in the capture from the next tick: the
+     * capture takes the level before that tick's step. [ORACLE FIXTURE E8b, E8c] */
+    {
+        setup(0x2868u, 0x5FCCu);                  /* voice 0 unused here */
+        spu_write(0x1F801C10u, 0x3FFFu);          /* voice 1: volume, pitch, start, ADSR */
+        spu_write(0x1F801C12u, 0x3FFFu);
+        spu_write(0x1F801C14u, 0x1000u);
+        spu_write(0x1F801C16u, 0x1000u >> 3);
+        spu_write(0x1F801C18u, 0x380Fu);
+        spu_write(0x1F801C1Au, 0x5FDFu);
+        uint8_t *ram = (uint8_t *)spu_get_ram();
+        memset(ram + 0x1000, 0x77, 16);           /* constant non-zero nibbles, shift 0, filter 0 */
+        ram[0x1000] = 0x00; ram[0x1001] = 0x07;
+        spu_write(0x1F801D88u, 2u);
+        spu_write(0x1F801D8Au, 0u);
+        enum { N = 1600 };
+        static int env[N]; static unsigned half[N];
+        for (int k = 0; k < N; ++k) { tick(); env[k] = (int16_t)spu_read(0x1F801C1Cu); half[k] = (spu_read(0x1F801DAEu) >> 11) & 1u; }
+        int F = -1, E = -1;
+        for (int k = N - 1; k > 0 && F < 0; --k) if (half[k - 1] == 1 && half[k] == 0) F = k;
+        for (int k = F; k > 0 && E < 0; --k) if (env[k] != env[k - 1]) E = k;
+        /* The ring holds the last 512 samples; recover each index's tick from F. */
+        int16_t cap[512];
+        memcpy(cap, ram + 0x800, sizeof cap);
+        int boundary = -1;
+        for (int i = 1; i < 512 && boundary < 0; ++i) if (cap[i] != cap[i - 1] && cap[i] != 0 && cap[i - 1] != 0) boundary = i;
+        int want = ((E - F + 1) % 8 + 8) % 8;
+        check(F > 0 && E > 0, "E8b found the bit-11 flip and an ENVX change", 0, F);
+        check(boundary >= 0 && boundary % 8 == want, "E8b capture level boundary phase", (unsigned)want, boundary);
+    }
+    printf("SPU key latency and capture phase (oracle fixtures E4, E5, E8b, E8c): %u checks, %u failures\n",
+           checks, failures);
     return failures != 0;
 }

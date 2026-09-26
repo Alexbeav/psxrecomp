@@ -1388,11 +1388,13 @@ uint32_t spu_read(uint32_t addr) {
                  * OpenBIOS's shell MOD player waits for (SPUSTAT & 0x7FF)
                  * == 0 after clearing SPUCNT and spun forever. Bit 11 is
                  * "currently writing the SECOND half of the capture
-                 * buffers" (capture offset >= 0x200). */
+                 * buffers": set from the tick that stores slot 256 up to the
+                 * one that stores slot 511 [ORACLE FIXTURE E8c]. capture_pos
+                 * already names the next slot, so test the one stored last. */
                 uint16_t cnt = spu_regs[reg_index(0x1F801DAAu)];
                 uint32_t st = (uint32_t)((spu_regs[idx] & 0x3Fu) | (((cnt >> 5) & 1u) << 7));
                 if (irq_flag) st |= 0x40u;
-                if (capture_pos & 0x200u) st |= 0x800u;
+                if ((capture_pos - 2u) & 0x200u) st |= 0x800u;
                 return st;
             }
             /* Current main volume L/R (psx-spx 1F801DB8h/1F801DBAh): the
