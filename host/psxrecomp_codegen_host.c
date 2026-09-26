@@ -4463,30 +4463,37 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
             "set /p PUBLISHED=<\"%%BUILD_DIR%%\\psxrecomp_exe_name-%%TARGET%%.txt\"\r\n"
             "if defined PUBLISHED if exist \"%%BUILD_DIR%%\\%%PUBLISHED%%.exe\" "
             "set \"EXE_FINAL=%%BUILD_DIR%%\\%%PUBLISHED%%.exe\"\r\n"
-            "if defined GEN_MARKER if not exist \"%%GEN_MARKER%%\" (\r\n"
-            "  echo.\r\n"
-            "  echo Build finished but the generated game code is missing:\r\n"
-            "  echo   %%GEN_MARKER%%\r\n"
-            "  echo Launching now would reopen setup in a loop. Please report\r\n"
-            "  echo this to the port maintainer: the boot-EXE name in\r\n"
-            "  echo game.toml disagrees with GEN_MARKER in CMakeLists.txt.\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
-            "if not exist \"%%EXE_FINAL%%\" (\r\n"
-            "  echo.\r\n"
-            "  echo Build finished but the game executable is missing:\r\n"
-            "  echo   %%EXE_FINAL%%\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
+            /* Path-bearing messages sit outside ( ) blocks: cmd expands
+             * %VAR% when it parses a block, so a ")" in an install folder
+             * such as "... (1)" would close the block early. */
+            "if defined GEN_MARKER if not exist \"%%GEN_MARKER%%\" goto no_gen\r\n"
+            "if not exist \"%%EXE_FINAL%%\" goto no_exe\r\n"
             "echo Starting %%DISPLAY%%...\r\n"
-            "if defined SELF (\r\n"
-            "  start \"\" /D \"%%ROOT%%\" \"%%SELF%%\" --diagnostic --launcher\r\n"
-            ") else (\r\n"
-            "  start \"\" /D \"%%ROOT%%\" \"%%EXE_FINAL%%\" --launcher\r\n"
-            ")\r\n"
-            "endlocal\r\n");
+            /* The diagnostic product relaunches itself; a plain build starts
+             * the game executable. Labels again, not ( ) blocks. */
+            "if defined SELF goto start_self\r\n"
+            "start \"\" /D \"%%ROOT%%\" \"%%EXE_FINAL%%\" --launcher\r\n"
+            "endlocal\r\n"
+            "exit /b 0\r\n"
+            ":start_self\r\n"
+            "start \"\" /D \"%%ROOT%%\" \"%%SELF%%\" --diagnostic --launcher\r\n"
+            "endlocal\r\n"
+            "exit /b 0\r\n"
+            ":no_gen\r\n"
+            "echo.\r\n"
+            "echo Build finished but the generated game code is missing:\r\n"
+            "echo   %%GEN_MARKER%%\r\n"
+            "echo Launching now would reopen setup in a loop. Please report\r\n"
+            "echo this to the port maintainer: the boot-EXE name in\r\n"
+            "echo game.toml disagrees with GEN_MARKER in CMakeLists.txt.\r\n"
+            "pause\r\n"
+            "exit /b 1\r\n"
+            ":no_exe\r\n"
+            "echo.\r\n"
+            "echo Build finished but the game executable is missing:\r\n"
+            "echo   %%EXE_FINAL%%\r\n"
+            "pause\r\n"
+            "exit /b 1\r\n");
     fclose(f);
     return 1;
 }
@@ -4654,7 +4661,11 @@ static void host_start_helper_and_exit(const char* helper) {
     memset(&pi, 0, sizeof(pi));
     si.cb = sizeof(si);
     fprintf(stderr, "psxrecomp-codegen: starting deferred rebuild helper\n");
-    snprintf(cmd, sizeof(cmd), "cmd.exe /C \"%s\"", helper);
+    /* cmd /C strips the first and last quote of the command line when it
+     * holds special characters such as the parentheses in
+     * "r4-1.0-windows-x64 (1)"; the doubled outer pair keeps the path's own
+     * quotes intact. */
+    snprintf(cmd, sizeof(cmd), "cmd.exe /C \"\"%s\"\"", helper);
     if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
                         g_project_root, &si, &pi)) {
         fprintf(stderr, "psxrecomp-codegen: CreateProcess failed\n");
