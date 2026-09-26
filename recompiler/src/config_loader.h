@@ -253,6 +253,14 @@ struct RuntimeConfig {
     bool                  bios_hle = true;
     bool                  bios_hle_keep_intro = false;
 
+    // hide_hidden_mod_features: the launcher never presents a mod feature its
+    // package marks `hidden` -- not even while enabled -- nor a package whose
+    // every feature is hidden, and Enable/Disable all leave such features alone
+    // (recomp-ui RecompLauncherCModProvider::hide_hidden_features). The feature
+    // still runs as its package default and mods/state.toml say. Default false:
+    // a hidden feature is listed while enabled so it can be turned off.
+    bool                  hide_hidden_mod_features = false;
+
     // hle_scheduler: the HLE tier's standing SUBSYSTEM REPLACEMENT for guest
     // thread switching (deterministic TCB scheduler vs the legacy
     // non-deterministic host-fiber bridge). Default ON under BOTH BIOS

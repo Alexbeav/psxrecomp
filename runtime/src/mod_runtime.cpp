@@ -1298,6 +1298,10 @@ const std::filesystem::path& mod_runtime_effective_disc_path() {
 const RecompLauncherCModProvider* mod_runtime_launcher_provider() {
     return &provider;
 }
+
+void mod_runtime_set_hide_hidden_features(bool hide) {
+    provider.hide_hidden_features = hide ? 1 : 0;
+}
 #endif
 
 } // namespace PSXRecompV4

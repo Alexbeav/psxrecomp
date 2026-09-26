@@ -231,6 +231,15 @@ feature-local: `when = { option = "value", ... }` requires every listed option
 to match. The legacy `when_option`/`when_value` pair remains accepted for a
 single condition.
 
+A feature with `hidden = true` is left out of the launcher's lists while it is
+disabled; while enabled it is listed so the player can turn it off. A title that
+sets `[runtime] hide_hidden_mod_features = true` in `game.toml` never shows it:
+the launcher does not list it (enabled or not), does not name it in the lobby
+summary, "Enable all" / "Disable all" leave it alone, and a package whose every
+feature is hidden is not listed under "Installed packages". Either way it runs
+exactly as `default_enabled` and `mods/state.toml` say, so a hidden default-on
+feature is simply active. (recomp-ui `launcher_mod_visibility.h`.)
+
 ## Bounded integer patches
 
 Package format 2 can encode a bounded integer option directly into a guarded

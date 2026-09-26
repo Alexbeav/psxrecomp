@@ -217,6 +217,23 @@ class ModPackageImageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'encoded twice'):
             self.view()
 
+    def test_presentation_keys_do_not_change_the_image(self):
+        # hidden / author / channel are launcher and release metadata the
+        # runtime accepts; a hidden default-on feature must still build.
+        base = self.view()
+        text = self.manifest.replace(
+            'format_version = 5\n', 'format_version = 6\nchannel = "stable"\n', 1)
+        text = text.replace(
+            '[[feature]]\nid = "engine"\nname = "Engine"\n',
+            '[[feature]]\nid = "engine"\nname = "Engine"\nauthor = "someone"\n'
+            'hidden = true\ndefault_enabled = true\nchannel = "stable"\n', 1)
+        self.assertNotEqual(text, self.manifest)
+        self.write_manifest(text)
+        view = self.view()
+        self.assertEqual(view.read('GAME.EXE'), base.read('GAME.EXE'))
+        self.assertEqual(view.read('DATA.BIN'), base.read('DATA.BIN'))
+        self.assertEqual(view.plugins, base.plugins)
+
     def test_extent_in_ram_mirror_uses_patched_transfers_as_entries(self):
         inventory = self.prepare(self.profile())
         job, = inventory['jobs']
@@ -227,6 +244,22 @@ class ModPackageImageTest(unittest.TestCase):
         record = json.loads(Path(job['input']).read_text())[0]
         self.assertTrue(record['strict_producer_ranges'])
         self.assertEqual(record['producer_ranges'], [dict(start='0x80780000', end='0x80780020')])
+
+    def test_excluded_package_writes_are_not_transfer_entries(self):
+        # The detour at 0x80010040 lies in an interval the profile declares as
+        # package-written data; only the call at 0x80010048 still counts.
+        exclude = [dict(start='0x80010040', end='0x80010048', reason='written data')]
+        inventory = self.prepare(self.profile(transfer_entries={
+            'from': 'mod_package_writes', 'count': 1, 'exclude_writes': exclude}))
+        self.assertEqual(inventory['jobs'][0]['required_entries'], [self.ENGINE])
+        for item, error in [(dict(start='0x80010040', end='0x80010048'), 'needs a reason'),
+                            (dict(start='0x80010042', end='0x80010048', reason='x'),
+                             'Invalid excluded write'),
+                            (dict(start='0x80010048', end='0x80010040', reason='x'),
+                             'Invalid excluded write')]:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                self.prepare(self.profile(transfer_entries={
+                    'from': 'mod_package_writes', 'count': 1, 'exclude_writes': [item]}))
 
     def test_extent_evidence_and_inventory_drift_fail_closed(self):
         for changes, error in [(dict(sha256='0' * 64), 'Extent bytes changed'),

@@ -1,4 +1,4 @@
-﻿/* main.cpp — Phase 3 runtime entry point.
+/* main.cpp — Phase 3 runtime entry point.
  *
  * Loads BIOS ROM, initializes CPU state + SDL display, calls into
  * the recompiled reset vector. BIOS drives execution; SDL presents
@@ -13066,6 +13066,10 @@ int main(int argc, char** argv) {
             fast_boot     = gc.runtime.fast_boot;
             bios_hle      = gc.runtime.bios_hle;
             bios_hle_keep_intro = gc.runtime.bios_hle_keep_intro;
+#if defined(RECOMP_LAUNCHER)
+            PSXRecompV4::mod_runtime_set_hide_hidden_features(
+                gc.runtime.hide_hidden_mod_features);
+#endif
             /* Developer compatibility finding, applied before BIOS selection.
              * Not exposed to settings.toml on purpose — see BIOS_SELECTION.md. */
             s_openbios_allowed  = gc.runtime.openbios;
