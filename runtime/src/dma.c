@@ -1280,8 +1280,12 @@ static uint32_t dsm_cycles_to_event(int armed_only) {
 static int dsm_before_write(uint32_t addr, uint32_t *valp, uint32_t mask) {
     if (!dsm_profile_any() && !dsm_spu_model) return 0;
     uint32_t val = *valp;
-    /* [ORACLE FIXTURE D14] readback after writing FFFFFFFF: DICR 80FF803F (bit 6
-     * is read-only here), CHCR 71770703 on ch0-5; BCR and DPCR keep all bits. */
+    /* [ORACLE FIXTURE D14] readback after writing FFFFFFFF:
+     *  - DICR 80FF803F. PSX-SPX "DICR" lists bits 0-6 as R/W (7Fh); on the
+     *    oracle bit 6 reads 0.
+     *  - CHCR 71770703 on ch0-5, the same bits PSX-SPX "D#_CHCR" defines (it
+     *    calls the rest "Unused" without a read value).
+     *  - BCR and DPCR keep all bits, as PSX-SPX's tables allow. */
     if (addr == 0x1F8010F4u) *valp = val = val & ~0x40u;
     if (addr >= 0x1F801080u && addr <= 0x1F8010DFu && ((addr - 0x1F801080u) & 0xFu) == 8u)
         *valp = val = val & 0x71770703u;

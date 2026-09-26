@@ -77,10 +77,11 @@ int main(int argc,char **argv) {
 #ifdef PSX_TEST_SOURCE_GPU_IMPLEMENTED
     if(argc==3 && !strcmp(argv[1],"--oracle")) {
         FILE *f=fopen(argv[2],"r");assert(f);
-        /* SPEC-PS1B-186 amendment 3: only the running word count mid-block may
-         * differ from these vectors, by at most one word (whether a block's
-         * overhead and its first word share one credit check; MADR, BCR, CHCR
-         * and the IRQ are identical either way). Every other field is exact. */
+        /* [NOT OBSERVABLE: D16] bus accesses stall for the whole block
+         * (SPEC-PS1B-186 amendments 3 and 6). Only the running word count
+         * mid-block may differ from these vectors, by at most one word: whether
+         * a block's overhead and its first word share one credit check. MADR,
+         * BCR, CHCR and the IRQ are identical either way, and stay exact. */
         unsigned count_rows=0,count_max=0;
         for(unsigned line=0;line<512;line++) {
             unsigned phase,t,count,madr,bcr,chcr,flags;
