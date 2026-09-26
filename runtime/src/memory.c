@@ -1165,7 +1165,9 @@ void memory_init(const char* bios_path) {
  * real hardware open-buses these (reads return garbage, writes vanish; no
  * fault) and games genuinely hit them — Tomba2's late attract sweeps a wild
  * byte loop across the whole window (bzero/read over a 0xDF80xxxx pointer).
- * Beetle returns 0 / ignores. Match it: count + (already ring-traced by the
+ * We return 0 and ignore writes. [NOT OBSERVED: PSX-SPX "Garbage Locations in
+ * I/O Area" says unused I/O addresses outside its short list trigger
+ * exceptions; a fixture decides (PS1B-214).] Count + (already ring-traced by the
  * callers' mmio trace hooks) + open-bus. Genuinely unknown-DEVICE reads are
  * still observable via the always-on MMIO rings and these counters — probes
  * query the rings, per the ring-buffer doctrine. mmio_fatal is retired. */
@@ -1252,7 +1254,7 @@ static uint32_t mmio_read32_impl(uint32_t addr) {
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
         return 0;
     }
-    { /* open-bus (Beetle parity) */ g_io_openbus_reads++;  return 0;; }
+    { /* open-bus read: 0 (see the unmapped-I/O note) */ g_io_openbus_reads++;  return 0;; }
     return 0;
 }
 
@@ -1330,7 +1332,7 @@ static void mmio_write32(uint32_t addr, uint32_t val) {
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
         return; /* POST port — ignore */
     }
-    { /* open-bus (Beetle parity) */ g_io_openbus_writes++; return;; }
+    { /* open-bus write: dropped (see the unmapped-I/O note) */ g_io_openbus_writes++; return;; }
 }
 
 static uint16_t mmio_read16_impl(uint32_t addr) {
@@ -1380,7 +1382,7 @@ static uint16_t mmio_read16_impl(uint32_t addr) {
     if (addr >= 0x1F801C00u && addr <= 0x1F801FFFu) {
         return (uint16_t)spu_read(addr);
     }
-    { /* open-bus (Beetle parity) */ g_io_openbus_reads++;  return 0;; }
+    { /* open-bus read: 0 (see the unmapped-I/O note) */ g_io_openbus_reads++;  return 0;; }
     return 0;
 }
 
@@ -1456,7 +1458,7 @@ static void mmio_write16(uint32_t addr, uint16_t val) {
         spu_write(addr, val);
         return;
     }
-    { /* open-bus (Beetle parity) */ g_io_openbus_writes++; return;; }
+    { /* open-bus write: dropped (see the unmapped-I/O note) */ g_io_openbus_writes++; return;; }
 }
 
 static uint8_t mmio_read8_impl(uint32_t addr) {
@@ -1505,7 +1507,7 @@ static uint8_t mmio_read8_impl(uint32_t addr) {
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
         return 0;
     }
-    { /* open-bus (Beetle parity) */ g_io_openbus_reads++;  return 0;; }
+    { /* open-bus read: 0 (see the unmapped-I/O note) */ g_io_openbus_reads++;  return 0;; }
     return 0;
 }
 
@@ -1593,7 +1595,7 @@ static void mmio_write8(uint32_t addr, uint8_t val) {
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
         return;
     }
-    { /* open-bus (Beetle parity) */ g_io_openbus_writes++; return;; }
+    { /* open-bus write: dropped (see the unmapped-I/O note) */ g_io_openbus_writes++; return;; }
 }
 
 /* --- Read functions --- */
@@ -1625,8 +1627,9 @@ uint32_t psx_read_word(uint32_t addr) {
 }
 /* Physical address of a CPU/DMA main-RAM access. Fold KUSEG/KSEG0/KSEG1 first
  * (0x1FFFFFFF), then fold the 2nd-4th main-RAM mirrors: real hardware mirrors the
- * 2 MB DRAM across the WHOLE 0..0x7FFFFF physical window (Beetle libretro.cpp:874
- * `A < 0x00800000` routes to main RAM; psx-spx "2048K RAM ... mirrored 4x"). A game
+ * 2 MB DRAM across the WHOLE 0..0x7FFFFF physical window (PSX-SPX "Memory
+ * Mirrors": "2MB RAM can be mirrored to the first 8MB (... enabled by
+ * default)"). A game
  * may legitimately place its stack at the top of that window — Tsumu Light computes
  * sp = (ramtop-8)|0x80000000 with its ramtop constant 0x00800000, giving sp=0x807FFFF8
  * (top of the 4th mirror). Without this fold those accesses miss DRAM (`< RAM_SIZE`
@@ -1637,9 +1640,10 @@ static uint32_t psx_read_word_raw(uint32_t addr) {
     /* KSEG2 cache control — before physical translation. */
     if (addr == 0xFFFE0130u) return cache_ctrl;
     /* KSEG2 (0xC0000000+): only cache control (0xFFFE0130, above where
-     * applicable) exists there. Real hardware maps NOTHING else — Beetle
-     * (cpu.cpp addr_mask[6..7]=0xFFFFFFFF) leaves KSEG2 addresses unmasked
-     * so they fall to unmapped space and the access is a no-op. Our flat
+     * applicable) exists there: PSX-SPX "KUSEG,KSEG0,KSEG1,KSEG2 Memory
+     * Regions" says KSEG2 holds only the cache control registers. We treat
+     * any other KSEG2 access as unmapped (no-op). [NOT OBSERVED whether it
+     * faults.] Our flat
      * 0x1FFFFFFF masking routed KSEG2 garbage onto LIVE registers: Tomba2's
      * attract runs a BIOS bzero over a wild 0xDF80xxxx pointer, which zeroed
      * the SIO/memctrl I/O block byte-by-byte and then hit the unmapped-MMIO
