@@ -980,6 +980,12 @@ void spu_init(void) {
     memset(spu_ram, 0, sizeof(spu_ram));
     memset(spu_regs, 0, sizeof(spu_regs));
     memset(voices, 0, sizeof(voices));
+    /* The source profile clocks every envelope, keyed or not. A voice that was
+     * never keyed on holds ENVX 0 until its first Key On: S1 logs no ENVX change
+     * between power-on and the first attack step from 0 (3800h at tick 5)
+     * [ORACLE FIXTURE S1]. So its envelope powers up in Release at level 0. */
+    if (source_key_timing)
+        for (int i = 0; i < SPU_VOICE_COUNT; i++) voices[i].adsr_phase = ADSR_RELEASE;
     memset(s_events, 0, sizeof(s_events));
     transfer_addr = 0;
     key_on_count = 0;

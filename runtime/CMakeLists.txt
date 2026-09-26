@@ -948,6 +948,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(spu_register_readback_test tests/test_spu_register_readback.c)
     target_include_directories(spu_register_readback_test PRIVATE include)
     add_test(NAME spu_register_readback_test COMMAND spu_register_readback_test)
+    add_executable(spu_s1_block_flags_test tests/test_spu_s1_block_flags.c)
+    target_include_directories(spu_s1_block_flags_test PRIVATE include)
+    add_test(NAME spu_s1_block_flags_test COMMAND spu_s1_block_flags_test)
 
     add_executable(spu_gaussian_test tests/test_spu_gaussian.c)
     target_include_directories(spu_gaussian_test PRIVATE include)
