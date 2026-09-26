@@ -1018,6 +1018,9 @@ extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) 
 
 extern "C" void psx_frontend_on_savestate_loaded(void) {
     mod_runtime_on_savestate_loaded();
+#ifndef PSX_NO_DEBUG_TOOLS
+    debug_server_note_savestate_loaded();
+#endif
     s_disabled_frame_presented = false;
     s_force_present_after_load = true;
     smooth_60_reset();

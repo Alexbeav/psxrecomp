@@ -5028,8 +5028,29 @@ static void handle_frame(int id, const char *json)
  * of two runs (native vs interp/oracle): the first frame whose wr or pc differs
  * is the first-divergence frame. Small integer fields only — no large/ragged
  * payload, so it never trips the trace-dump JSON/eviction problems. */
+/* frame_fingerprint reset_on_load=1: restart the rolling hashes and the ring
+ * when the next savestate load completes, so two runs that load the same state
+ * (for example with and without a presentation mod) compare frame by frame
+ * from that guest point on, independent of what happened before the load. */
+static int s_fp_reset_on_load = 0;
+void debug_server_note_savestate_loaded(void)
+{
+    if (!s_fp_reset_on_load) return;
+    s_fp_reset_on_load = 0;
+    g_fp_wr_hash = g_fp_pc_hash = 1469598103934665603ULL;
+    g_fp_mmio_hash = g_fp_sp_hash = 1469598103934665603ULL;
+    g_fp_write_count = g_fp_mmio_count = g_fp_sp_count = 0;
+    s_fp_head = 0;
+    s_fp_total = 0;
+}
+
 static void handle_frame_fingerprint(int id, const char *json)
 {
+    if (json_get_int(json, "reset_on_load", 0)) {
+        s_fp_reset_on_load = 1;
+        send_fmt("{\"id\":%d,\"ok\":true,\"armed\":1}", id);
+        return;
+    }
     int count = json_get_int(json, "count", 1024);
     if (count < 1) count = 1;
     if (count > FP_RING_CAP) count = FP_RING_CAP;
