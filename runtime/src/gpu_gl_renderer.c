@@ -3212,7 +3212,10 @@ void gl_renderer_set_swap_interval(int interval) {
     }
 }
 
+static void pass_resources_release(void);
+
 void gl_renderer_shutdown(void) {
+    pass_resources_release();
     if (s_ctx) {
         for (unsigned i = 1; i < 65536u; ++i)
             if (s_bank_tex[i]) glDeleteTextures(1, &s_bank_tex[i]);
@@ -4335,7 +4338,11 @@ typedef struct PassGen {
     double   t_start, t_len;      /* host ticks, set on promotion */
 } PassGen;
 static PassGen  s_pgen[2];
+/* Slot textures are made as slots fill: [0, s_pgen_alloc_n) exist, all at
+ * s_pgen_alloc_w x h. A generation never fills past pass_slot_cap, so two
+ * generations stay inside its budget whatever the internal scale. */
 static GLuint   s_pgen_tex[2][PASS_SLOTS];
+static uint32_t s_pgen_alloc_n[2];
 static int      s_pgen_alloc_w[2], s_pgen_alloc_h[2];
 static int      s_pgen_cur = 0;
 static int      s_pgen_promote = 0;
@@ -4484,17 +4491,32 @@ static int pass_make_color_fbo(GLuint *tex, GLuint *rb, GLuint *fbo,
     return 1;
 }
 
-static int pass_gen_textures(int gi, int w, int h) {
-    if (s_pgen_alloc_w[gi] == w && s_pgen_alloc_h[gi] == h && s_pgen_tex[gi][0])
-        return 1;
-    for (uint32_t i = 0; i < PASS_SLOTS; i++) {
-        if (!s_pgen_tex[gi][i]) glGenTextures(1, &s_pgen_tex[gi][i]);
-        glBindTexture(GL_TEXTURE_2D, s_pgen_tex[gi][i]);
+static void pass_gen_release(int gi) {
+    if (s_ctx && s_pgen_alloc_n[gi])
+        glDeleteTextures((GLsizei)s_pgen_alloc_n[gi], s_pgen_tex[gi]);
+    memset(s_pgen_tex[gi], 0, sizeof s_pgen_tex[gi]);
+    s_pgen_alloc_n[gi] = 0;
+    s_pgen_alloc_w[gi] = s_pgen_alloc_h[gi] = 0;
+}
+
+/* Make sure slots [0, need) of generation gi exist at w x h. A size change
+ * frees the old set first (the slot cap depends on the size only). */
+static int pass_gen_reserve(int gi, uint32_t need, int w, int h) {
+    if (need > PASS_SLOTS || need > pass_slot_cap(w, h)) return 0;
+    if (s_pgen_alloc_w[gi] != w || s_pgen_alloc_h[gi] != h) {
+        pass_gen_release(gi);
+        s_pgen_alloc_w[gi] = w;
+        s_pgen_alloc_h[gi] = h;
+    }
+    while (s_pgen_alloc_n[gi] < need) {
+        GLuint *t = &s_pgen_tex[gi][s_pgen_alloc_n[gi]];
+        glGenTextures(1, t);
+        if (!*t) return 0;
+        glBindTexture(GL_TEXTURE_2D, *t);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA,
                      GL_UNSIGNED_BYTE, NULL);
+        s_pgen_alloc_n[gi]++;
     }
-    s_pgen_alloc_w[gi] = w;
-    s_pgen_alloc_h[gi] = h;
     return 1;
 }
 
@@ -4570,6 +4592,38 @@ static PassJournal s_pj[PASS_JOURNAL_MAX];
 static int s_pj_n = 0;
 static uint64_t s_pj_total = 0;
 
+static void pass_free_color_fbo(GLuint *tex, GLuint *rb, GLuint *fbo,
+                                int *w, int *h) {
+    if (s_ctx) {
+        if (*fbo) p_glDeleteFramebuffers(1, fbo);
+        if (*tex) glDeleteTextures(1, tex);
+        if (rb && *rb) p_glDeleteRenderbuffers(1, rb);
+    }
+    *fbo = 0; *tex = 0;
+    if (rb) *rb = 0;
+    *w = *h = 0;
+}
+
+/* Context teardown (gl_renderer_shutdown): free the pass images, backups
+ * and journal, and forget their names so a new context makes fresh ones. */
+static void pass_resources_release(void) {
+    pass_gen_release(0);
+    pass_gen_release(1);
+    pass_gens_invalidate();
+    pass_free_color_fbo(&s_pb_hr_tex, &s_pb_hr_rb, &s_pb_hr_fbo,
+                        &s_pb_hr_w, &s_pb_hr_h);
+    pass_free_color_fbo(&s_pb_raw_tex, NULL, &s_pb_raw_fbo,
+                        &s_pb_raw_w, &s_pb_raw_h);
+    pass_free_color_fbo(&s_pb_wide_tex, &s_pb_wide_rb, &s_pb_wide_fbo,
+                        &s_pb_wide_w, &s_pb_wide_h);
+    for (int i = 0; i < PASS_JOURNAL_MAX; i++) {
+        PassJournal *e = &s_pj[i];
+        pass_free_color_fbo(&e->hr_tex, &e->hr_rb, &e->hr_fbo, &e->hr_w, &e->hr_h);
+        pass_free_color_fbo(&e->raw_tex, NULL, &e->raw_fbo, &e->raw_w, &e->raw_h);
+    }
+    s_pj_n = 0;
+}
+
 static int pass_journal_protect(int x, int y, int w, int h) {
     int S = s_scale;
     PassJournal *j;
@@ -4643,7 +4697,7 @@ int gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
     g = &s_pgen[gi];
     if (open_gen) {
         if (tw != s_interp_w || th != s_interp_h) return 0;  /* not what is presented */
-        if (!pass_gen_textures(gi, tw, th)) return 0;
+        if (!pass_gen_reserve(gi, 1u, tw, th)) return 0;
         memset(g, 0, sizeof *g);
         g->x = x; g->y = y; g->w = w; g->h = h;
         g->tex_w = tw; g->tex_h = th;
@@ -4718,7 +4772,8 @@ void gl_renderer_pass_end(uint32_t alpha_q16, int keep) {
     flush_tex_batch();
     flush_cpu_upload();
     if (keep && alpha_q16 && g->valid && !g->promoted && g->n < PASS_SLOTS &&
-        g->n < pass_slot_cap(g->tex_w, g->tex_h)) {
+        g->n < pass_slot_cap(g->tex_w, g->tex_h) &&
+        pass_gen_reserve(gi, g->n + 1u, g->tex_w, g->tex_h)) {
         /* Passes arrive in ascending phase; keep the list sorted anyway. */
         uint32_t slot = g->n, at = g->n;
         GLuint t;
@@ -4830,6 +4885,17 @@ void gl_renderer_pass_diag(uint64_t out[8]) {
 }
 
 uint64_t gl_renderer_pass_journaled(void) { return s_pj_total; }
+
+uint32_t gl_renderer_pass_image_textures(uint64_t *bytes) {
+    uint32_t n = s_pgen_alloc_n[0] + s_pgen_alloc_n[1];
+    if (bytes) {
+        *bytes = 0;
+        for (int gi = 0; gi < 2; gi++)
+            *bytes += (uint64_t)s_pgen_alloc_n[gi] * (uint64_t)s_pgen_alloc_w[gi] *
+                      (uint64_t)s_pgen_alloc_h[gi] * 4u;
+    }
+    return n;
+}
 
 static uint64_t s_idle_ticks_accum_fwd(uint64_t add) {
     s_idle_ticks_accum += add;

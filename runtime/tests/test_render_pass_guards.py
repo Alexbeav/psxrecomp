@@ -80,6 +80,17 @@ assert "nesting_restore(&s_ck.nest);" in b, (
     "a watchdog abort longjmps past the exits of the frames it leaves: the "
     "restore must put the host nesting back (render_pass_abort_test)")
 
+gl = (SRC / "gpu_gl_renderer.c").read_text(encoding="utf-8")
+b = body(gl, "static int pass_gen_reserve(int gi, uint32_t need, int w, int h) {")
+assert "need > pass_slot_cap(w, h)" in b, (
+    "pass image textures must stay inside the slot cap's memory budget")
+assert "pass_gen_reserve(gi, g->n + 1u, g->tex_w, g->tex_h)" in gl, (
+    "pass image textures are made as slots fill, not all PASS_SLOTS up front")
+assert "for (uint32_t i = 0; i < PASS_SLOTS; i++) {\n        if (!s_pgen_tex" not in gl, (
+    "no eager allocation of every slot texture")
+assert "pass_resources_release();" in body(gl, "void gl_renderer_shutdown(void) {"), (
+    "pass textures die with the context: forget them at shutdown")
+
 # Default off means no cost for other titles: the headers folded into the
 # overlay codegen hash (runtime/codegen_hash_sources.cmake) must not carry the
 # render-pass API, or every title's overlay cache and savestates would be

@@ -64,6 +64,8 @@ void     gl_renderer_pass_service_presents(void);
 void     gl_renderer_pass_diag(uint64_t out[8]);
 /* Out-of-rect VRAM writes journaled and rolled back (lifetime count). */
 uint64_t gl_renderer_pass_journaled(void);
+/* Pass image textures allocated now (both generations) and their bytes. */
+uint32_t gl_renderer_pass_image_textures(uint64_t *bytes);
 /* Debug: dump the images of the next `generations` shown frames as PNGs. */
 void     gl_renderer_pass_dump_arm(const char *dir, int generations);
 uint64_t gl_renderer_perf_ticks(void);

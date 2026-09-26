@@ -94,8 +94,9 @@ a smoothed per-pass cost. Nothing ever slows the guest down: when the budget
 runs out, fewer passes are rendered.
 
 Pass images are kept at internal resolution (the size the presenter
-captures); two generations fit a 256 MiB budget, which limits passes per
-frame at very high internal resolutions.
+captures). Their textures are made as the slots fill, never more slots than
+two generations fit in 256 MiB, which limits passes per frame at very high
+internal resolutions; a size change frees the old set.
 
 ## Verifying a title
 
