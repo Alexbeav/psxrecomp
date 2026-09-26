@@ -532,7 +532,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
         ok = write_section(o, BS_SEC_TIMER_SRC, buf, sizeof buf);
     }
     if (ok && dma_src_active()) {
-        uint8_t buf[256u];                    /* source-DMA state machines */
+        uint8_t buf[512u];                    /* source-DMA state machines */
         uint32_t n = dma_src_wire_bytes();
         ok = n <= sizeof buf;
         if (ok) {
