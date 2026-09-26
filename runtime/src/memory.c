@@ -149,8 +149,12 @@ uint8_t *g_psx_ram = ram;
 int g_psx_load_delay = -1;
 
 /* Physical address translation for guest accesses. The 2 MB main RAM is
- * mirrored 4x across the first 8 MB of each segment (mem-ctrl RAM_SIZE
- * register, default 0x0B88) and games rely on it — Kula World's crt0
+ * mirrored 4x across the first 8 MB of each segment, through KUSEG, KSEG0
+ * and KSEG1 alike, and a write through a mirror lands at the physical
+ * address [ORACLE FIXTURE R3]; +8 MB reads 0 with no bus error [ORACLE
+ * FIXTURE R3]. PSX-SPX ties the mirroring to the mem-ctrl RAM_SIZE register
+ * (1F801060h, default 0B88h); the oracle does not model 1F801060 (R3), so
+ * the fixed x4 mirror is all it confirms. Games rely on it — Kula World's crt0
  * parks $sp in the 4th mirror (0x807FFFF8). Fold the mirrors here so the
  * RAM bounds checks below see canonical offsets; without this, mirror
  * writes fell into the open-bus no-op and mirror reads returned 0 (the
@@ -957,7 +961,10 @@ static inline void overlay_watch_note_write(uint32_t phys, uint32_t size) {
 /* Memory control registers: 0x1F801000..0x1F80103F (16 words) + 0x1F801060 (RAM size).
  * Includes expansion base/size, COM_DELAY, SPU_DELAY, CDROM_DELAY etc. */
 static uint32_t mem_ctrl[16];   /* indices 0..15 → addresses 0x1F801000..0x1F80103C */
-static uint32_t ram_size_reg;   /* 0x1F801060 */
+/* 0x1F801060 RAM_SIZE: stored and read back as written (PSX-SPX "Memory
+ * Control"); the oracle does not model 1F801060 (R3): it reads 0 there and
+ * no value changes the mirroring. */
+static uint32_t ram_size_reg;
 
 /* KSEG2 no-op access telemetry (see the guards in the accessors). */
 uint64_t g_kseg2_ignored_reads;
@@ -1162,12 +1169,13 @@ void memory_init(const char* bios_path) {
 }
 
 /* Unmapped-register access INSIDE the I/O window (0x1F801000..0x1F803FFF):
- * real hardware open-buses these (reads return garbage, writes vanish; no
- * fault) and games genuinely hit them — Tomba2's late attract sweeps a wild
+ * reads return a fixed 0, not open bus and not the last bus value, with no
+ * exception, for the 1F801xxx gaps and expansion regions 1, 2 and 3; writes
+ * vanish [ORACLE FIXTURE R2]. PSX-SPX "Garbage Locations in I/O Area" says
+ * unused I/O addresses outside its short list trigger exceptions; the oracle
+ * raises none. Games genuinely hit them — Tomba2's late attract sweeps a wild
  * byte loop across the whole window (bzero/read over a 0xDF80xxxx pointer).
- * We return 0 and ignore writes. [NOT OBSERVED: PSX-SPX "Garbage Locations in
- * I/O Area" says unused I/O addresses outside its short list trigger
- * exceptions; a fixture decides (PS1B-214).] Count + (already ring-traced by the
+ * Count + (already ring-traced by the
  * callers' mmio trace hooks) + open-bus. Genuinely unknown-DEVICE reads are
  * still observable via the always-on MMIO rings and these counters — probes
  * query the rings, per the ring-buffer doctrine. mmio_fatal is retired. */
@@ -1237,9 +1245,11 @@ static uint32_t mmio_read32_impl(uint32_t addr) {
     if (addr >= 0x1F801100u && addr <= 0x1F80112Fu) {
         return timers_read(addr);
     }
-    /* CDROM: 0x1F801800..0x1F801803 */
-    if (addr >= 0x1F801800u && addr <= 0x1F801803u) {
-        return cdrom_read(addr);
+    /* CDROM: the 4-byte block at 0x1F801800 is mirrored across
+     * 0x1F801800..0x1F80180F [ORACLE FIXTURE R2: 1F801804/08/0C read the
+     * 1F801800 status, 00000018h]. */
+    if (addr >= 0x1F801800u && addr <= 0x1F80180Fu) {
+        return cdrom_read(0x1F801800u | (addr & 3u));
     }
     /* GPU: 0x1F801810 (GPUREAD), 0x1F801814 (GPUSTAT) */
     if (addr == 0x1F801810u) return gpu_read_gpuread();
@@ -1305,9 +1315,9 @@ static void mmio_write32(uint32_t addr, uint32_t val) {
         timers_write(addr, val);
         return;
     }
-    /* CDROM: 0x1F801800..0x1F801803 */
-    if (addr >= 0x1F801800u && addr <= 0x1F801803u) {
-        cdrom_write(addr, val);
+    /* CDROM: mirrored across 0x1F801800..0x1F80180F (see mmio_read32). */
+    if (addr >= 0x1F801800u && addr <= 0x1F80180Fu) {
+        cdrom_write(0x1F801800u | (addr & 3u), val);
         return;
     }
     /* GPU GP0: 0x1F801810, GP1: 0x1F801814 */
@@ -1499,9 +1509,9 @@ static uint8_t mmio_read8_impl(uint32_t addr) {
         uint32_t val = mdec_read(addr & ~3u);
         return (uint8_t)(val >> (8 * (addr & 3)));
     }
-    /* CDROM: 0x1F801800..0x1F801803 */
-    if (addr >= 0x1F801800u && addr <= 0x1F801803u) {
-        return (uint8_t)cdrom_read(addr);
+    /* CDROM: mirrored across 0x1F801800..0x1F80180F (see mmio_read32). */
+    if (addr >= 0x1F801800u && addr <= 0x1F80180Fu) {
+        return (uint8_t)cdrom_read(0x1F801800u | (addr & 3u));
     }
     /* Expansion 2 / POST: 0x1F802000..0x1F802FFF */
     if (addr >= 0x1F802000u && addr <= 0x1F802FFFu) {
@@ -1586,9 +1596,9 @@ static void mmio_write8(uint32_t addr, uint8_t val) {
         mdec_write(aligned, cur);
         return;
     }
-    /* CDROM: 0x1F801800..0x1F801803 */
-    if (addr >= 0x1F801800u && addr <= 0x1F801803u) {
-        cdrom_write(addr, val);
+    /* CDROM: mirrored across 0x1F801800..0x1F80180F (see mmio_read32). */
+    if (addr >= 0x1F801800u && addr <= 0x1F80180Fu) {
+        cdrom_write(0x1F801800u | (addr & 3u), val);
         return;
     }
     /* Expansion 2 / POST: 0x1F802000..0x1F802FFF */
@@ -1670,7 +1680,9 @@ static uint32_t psx_read_word_raw(uint32_t addr) {
             return v;
         }
     }
-    /* Expansion 1: 0x1F000000..0x1F7FFFFF — no device, open bus */
+    /* Expansion 1: 0x1F000000..0x1F7FFFFF — no device. The source profile
+     * reads 0 with no exception [ORACLE FIXTURE R2]. The default path keeps
+     * PSX-SPX's open-bus FFh [NOT OBSERVED: release policy; R2 reads 0]. */
     {
         uint32_t off;
         if (mod_memory_offset(phys, 4u, &off)) {
@@ -1680,7 +1692,7 @@ static uint32_t psx_read_word_raw(uint32_t addr) {
         }
     }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) {
-        return 0xFFFFFFFFu;
+        return source_gpu_runtime_active() ? 0u : 0xFFFFFFFFu;
     }
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         uint32_t off = phys - 0x1F800000u;
@@ -1921,7 +1933,8 @@ static uint16_t psx_read_half_raw(uint32_t addr) {
             return (uint16_t)mod_memory[off] |
                    ((uint16_t)mod_memory[off + 1u] << 8);
     }
-    if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return 0xFFFFu;
+    if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu)  /* see psx_read_word */
+        return source_gpu_runtime_active() ? 0u : 0xFFFFu;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         uint32_t off = phys - 0x1F800000u;
         return (uint16_t)scratchpad[off] | ((uint16_t)scratchpad[off + 1] << 8);
@@ -2042,7 +2055,8 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
         uint32_t off;
         if (mod_memory_offset(phys, 1u, &off)) return mod_memory[off];
     }
-    if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return 0xFFu;
+    if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu)  /* see psx_read_word */
+        return source_gpu_runtime_active() ? 0u : 0xFFu;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         return scratchpad[phys - 0x1F800000u];
     }
