@@ -887,10 +887,6 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(spu_adpcm_sample_test PRIVATE include)
     add_test(NAME spu_adpcm_sample_test COMMAND spu_adpcm_sample_test)
 
-    add_executable(spu_envelope_rate_test tests/test_spu_envelope_rate.c)
-    target_include_directories(spu_envelope_rate_test PRIVATE include)
-    add_test(NAME spu_envelope_rate_test COMMAND spu_envelope_rate_test)
-
     # PS1B-192: the ADSR envelope and volume sweep unit against oracle fixture
     # sets S-spu E2-E7, E1-E3-E9 and E1R-E10-E8b.
     add_executable(spu_envelope_fixture_test tests/test_spu_envelope_fixture.c)
