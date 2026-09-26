@@ -12383,8 +12383,8 @@ namespace {
     static int         g_ir_count = 0;
     static char        g_ir_custom_label[48];
     static const char  kIrNote[] =
-        "Above 4x needs OpenGL. Past the GPU's full-VRAM limit (16x on Apple "
-        "GPUs) the displayed area alone renders at full resolution.";
+        "Above 4x: OpenGL only. Past 16x on Apple GPUs only the displayed "
+        "frame is kept at full resolution.";
     static void build_internal_resolution_vocab(int current) {
         g_ir_count = 0;
         for (int i = 0; i < PSX_IR_PRESET_COUNT; i++) {
