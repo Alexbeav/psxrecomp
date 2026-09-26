@@ -50,10 +50,12 @@ void mdec_debug_dma_out_end(uint32_t a, uint32_t n) { (void)a; (void)n; }
 void gpu_set_gp0_linked_list_node(uint32_t a, uint32_t n) { (void)a; (void)n; }
 uint32_t gpu_read_gpuread(void) { return 0; }
 void gpu_set_gp0_source(uint32_t a) { (void)a; }
-static int gpu_rt; static uint64_t busy_until;
-void gpu_write_gp0(uint32_t v) { gp0_words++; gp0_sum = gp0_sum * 31u + v; if ((v >> 24) == 0x02u) busy_until = psx_cycle_count + 5000; }
+static int gpu_rt; static uint64_t busy_until; static unsigned poly_left;
+void gpu_write_gp0(uint32_t v) { gp0_words++; gp0_sum = gp0_sum * 31u + v; if ((v >> 24) == 0x02u) busy_until = psx_cycle_count + 5000;
+    /* GPUSTAT.28 as the source projection reports it: 0 once a polygon head is queued, until complete. */
+    if (poly_left) poly_left--; else if ((v >> 24) == 0x28u) poly_left = 4; }
 uint32_t gpu_dma_vram_upload_words(void) { return 1u << 20; }
-int gpu_dma_source_ll_ready(void) { return ll_ready && psx_cycle_count >= busy_until; }
+int gpu_dma_source_ll_ready(void) { return ll_ready && psx_cycle_count >= busy_until && !poly_left; }
 void gpu_ws_begin_linked_list(void) {}
 void gpu_ws_end_linked_list(void) {}
 void gpu_ws_prepass_linked_list(uint32_t a) { (void)a; }
@@ -98,15 +100,19 @@ static int run(int source, int ready_gap, int fills) {
     set_option("PSX_GPU_DMA_MODEL", source ? "octoshock-2.2.2-bounded-quad" : "");
     set_option("PSX_INPUT_ROUTE_DMA_MODEL", source ? "octoshock-2.2.2-otc" : "");
     dma_init(); memset(ram, 0, sizeof ram); psx_cycle_count = 1000; psx_next_service_cycle = 0;
-    i_stat = irqs = 0; gp0_words = 0; ll_ready = 1; busy_until = 0; gpu_rt = source; dma_last = psx_cycle_count; dma_next = 0;
+    i_stat = irqs = 0; gp0_words = 0; ll_ready = 1; busy_until = 0; poly_left = 0; gpu_rt = source; dma_last = psx_cycle_count; dma_next = 0;
     dma_write(0x1F8010F0, 0x0FEDCBA9u); dma_write(0x1F8010F4, (1u << 23) | (1u << 18));
-    build_list(fills ? 16 : 64, fills ? 3 : 15);
-    if (fills) for (uint32_t i = 0; i < 16; i++) ram[0x10000 / 4 + i * 4 + 1] = 0x02000000u;   /* FillRect per node */
+    build_list(fills == 1 ? 16 : 64, fills == 1 ? 3 : fills == 2 ? 6 : 15);
+    if (fills == 1) for (uint32_t i = 0; i < 16; i++) ram[0x10000 / 4 + i * 4 + 1] = 0x02000000u;   /* FillRect per node */
+    if (fills == 2) for (uint32_t i = 0; i < 64; i++) {   /* E6h then a flat quad (28h, 5 words) per node, as in the Bio list */
+        ram[0x10000 / 4 + i * 7 + 1] = 0xE6000000u; ram[0x10000 / 4 + i * 7 + 2] = 0x28808080u;
+        for (uint32_t w = 3; w < 7; w++) ram[0x10000 / 4 + i * 7 + w] = 0x00100010u;
+    }
     /* The game's order: ch2 list (bit 28 clear), then OTC set up and kicked. */
     dma_write(0x1F8010A0, 0x10000); dma_write(0x1F8010A4, 0); dma_write(0x1F8010A8, 0x01000401);
     resched();
     for (int i = 0; i < 390; i++) { tick(); if (ready_gap && i == 100) ll_ready = 0; }
-    if (fills && source && !((channels[2].chcr >> 24) & 1u)) return 10;                      /* list must still be live */
+    if (fills == 1 && source && !((channels[2].chcr >> 24) & 1u)) return 10;                      /* list must still be live */
     dma_write(0x1F8010E8, 0x00000000); dma_write(0x1F8010E0, 0x0EF8B4); dma_write(0x1F8010E4, 0x0400);
     dma_write(0x1F8010E8, 0x11000002); resched();
     while (dma_cpu_source_halted()) tick();                               /* the source CPU owns the halt */
@@ -118,16 +124,16 @@ static int run(int source, int ready_gap, int fills) {
     }
     if ((channels[2].chcr >> 24) & 1u) return 13;                          /* stranded */
     if (!(i_stat & 8u)) return 14;                                          /* no DMA IRQ */
-    if (gp0_words != (fills ? 16u * 3u : 64u * 15u)) return 15;
+    if (gp0_words != (fills == 1 ? 16u * 3u : fills == 2 ? 64u * 6u : 64u * 15u)) return 15;
     return 0;
 }
 int main(void) {
     for (int source = 0; source < 2; source++)
-        for (int gap = 0; gap < 2; gap++) for (int fills = 0; fills < 2; fills++) {
+        for (int gap = 0; gap < 2; gap++) for (int fills = 0; fills < 3; fills++) {
             int r = run(source, gap, fills);
             if (r) { fprintf(stderr, "OTC during ch2 list: source %d gpu-busy gap %d fills %d failed at %d (CHCR2 %08X)\n",
                              source, gap, fills, r, channels[2].chcr); return 1; }
         }
-    puts("PASS ch2 linked list resumes and completes with its IRQ after a mid-list OTC kick (default and source, GPU ready and busy)");
+    puts("PASS ch2 linked list resumes and completes with its IRQ after a mid-list OTC kick (default and source; GPU ready/busy; NOP, fill and E6h+polygon lists)");
     return 0;
 }
