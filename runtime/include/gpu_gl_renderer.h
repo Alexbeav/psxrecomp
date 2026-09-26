@@ -39,6 +39,35 @@ void gl_renderer_set_interpolation_source(int source);
 void gl_renderer_interpolation_source_diag(int *source, uint32_t *flip_period,
                                            uint64_t *captures,
                                            uint64_t *duplicates);
+
+/* Render passes (render_pass.c; docs/RENDER_PASSES.md). The presenter is
+ * ready for passes: GL raster, interpolation live with the FLIP source. */
+int      gl_renderer_pass_ready(void);
+/* Phases the presenter will show for the frame the next flip displays. */
+uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
+                               uint32_t shown_after_vblanks,
+                               uint32_t *alpha_q16, uint32_t max,
+                               uint32_t *wanted);
+/* Open the VRAM transaction for rect; open_gen first captures the game's own
+ * image of it as a new generation. Returns 0 when refused (nothing changed). */
+int      gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
+                                uint32_t period_vblanks);
+/* Capture the drawn rect at alpha_q16 (keep) and roll the rect back. */
+void     gl_renderer_pass_end(uint32_t alpha_q16, int keep);
+uint32_t gl_renderer_pass_leaks(void);
+int      gl_renderer_pass_verify_vram(void);
+void     gl_renderer_pass_note_cost(uint64_t ticks);
+/* Present output deadlines that fell due while guest code ran. */
+void     gl_renderer_pass_service_presents(void);
+/* promotions, presents, blended presents, expired, unmatched flips, presents
+ * made between VBlanks, smoothed pass cost (us), images in the shown frame. */
+void     gl_renderer_pass_diag(uint64_t out[8]);
+/* Out-of-rect VRAM writes journaled and rolled back (lifetime count). */
+uint64_t gl_renderer_pass_journaled(void);
+/* Debug: dump the images of the next `generations` shown frames as PNGs. */
+void     gl_renderer_pass_dump_arm(const char *dir, int generations);
+uint64_t gl_renderer_perf_ticks(void);
+uint64_t gl_renderer_perf_frequency(void);
 int gl_renderer_interpolation_owns_cadence(void);
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
                                     int *history_frames,

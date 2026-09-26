@@ -44,6 +44,16 @@ int frame_interpolation_schedule_begin_phase(FrameInterpolationSchedule *schedul
                                              double source_hz, double target_hz,
                                              double phase_lo, double phase_hi);
 
+/* Render passes present between guest VBlanks. The next output deadline, if
+ * it is already due (<= now) and not later than `horizon` (host ticks), with
+ * stale deadlines coalesced to the newest one as begin() does. It is not
+ * consumed: call frame_interpolation_schedule_consume() once it is shown, so
+ * the next source interval simply continues after it. */
+int frame_interpolation_schedule_due(FrameInterpolationSchedule *schedule,
+                                     uint64_t now, double horizon,
+                                     uint64_t *deadline);
+void frame_interpolation_schedule_consume(FrameInterpolationSchedule *schedule);
+
 uint64_t frame_interpolation_schedule_end(
     const FrameInterpolationSchedule *schedule);
 void frame_interpolation_schedule_reset(FrameInterpolationSchedule *schedule);

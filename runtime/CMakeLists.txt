@@ -605,6 +605,22 @@ if(BUILD_TESTING)
     add_test(NAME frame_interpolation_schedule_test
              COMMAND frame_interpolation_schedule_test)
 
+    add_executable(render_pass_plan_test
+        tests/test_render_pass_plan.c
+        src/render_pass_plan.c)
+    target_include_directories(render_pass_plan_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(render_pass_plan_test PRIVATE m)
+    endif()
+    add_test(NAME render_pass_plan_test COMMAND render_pass_plan_test)
+
+    # Render-pass time freeze against mock devices (psx_cycles.c only).
+    add_executable(render_pass_freeze_test
+        tests/test_render_pass_freeze.c
+        src/psx_cycles.c)
+    target_include_directories(render_pass_freeze_test PRIVATE include)
+    add_test(NAME render_pass_freeze_test COMMAND render_pass_freeze_test)
+
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)

@@ -47,6 +47,7 @@
 #include "card_data_writes.h"
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
+#include "render_pass.h"
 #include "lockstep.h"
 #include "guest_tty.h"
 
@@ -7951,6 +7952,64 @@ static void handle_gl_interp(int id, const char *json)
              (unsigned long long)duplicates);
 }
 
+/* render_pass_stats: host-timed render passes (docs/RENDER_PASSES.md).
+ * Counters are per mod session; `dropped` counts device stores a pass tried
+ * to make (SPU key-ons, CD, timers, ...), which never reach the device. */
+static void handle_render_pass_stats(int id, const char *json)
+{
+    (void)json;
+    RenderPassStats st;
+    uint64_t gd[8];
+    render_pass_get_stats(&st);
+    gl_renderer_pass_diag(gd);
+    send_fmt("{\"id\":%d,\"ok\":true,\"plans\":%llu,\"planned\":%llu,"
+             "\"wanted\":%llu,\"refused\":%llu,\"passes\":%llu,"
+             "\"aborted\":%llu,\"discarded\":%llu,\"watchdog\":%llu,\"vram_leaks\":%llu,"
+             "\"verify_checks\":%llu,\"verify_mismatch\":%llu,"
+             "\"dropped\":{\"spu\":%llu,\"cd\":%llu,\"timer\":%llu,"
+             "\"dma\":%llu,\"gpu\":%llu,\"other\":%llu},"
+             "\"last_pass_ms\":%.3f,\"avg_pass_ms\":%.3f,"
+             "\"avg_begin_ms\":%.3f,\"avg_guest_ms\":%.3f,"
+             "\"avg_end_ms\":%.3f,\"avg_restore_ms\":%.3f,"
+             "\"guest_cycles_last\":%llu,\"disabled\":%d,"
+             "\"promotions\":%llu,\"pass_presents\":%llu,"
+             "\"blended_presents\":%llu,\"expired\":%llu,"
+             "\"unmatched_flips\":%llu,\"early_presents\":%llu,"
+             "\"cost_us\":%llu,\"frame_images\":%llu,\"journaled\":%llu}",
+             id, (unsigned long long)st.plans, (unsigned long long)st.planned,
+             (unsigned long long)st.wanted, (unsigned long long)st.refused,
+             (unsigned long long)st.passes, (unsigned long long)st.aborted,
+             (unsigned long long)st.discarded, (unsigned long long)st.watchdog, (unsigned long long)st.vram_leaks,
+             (unsigned long long)st.verify_checks,
+             (unsigned long long)st.verify_mismatch,
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_SPU],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_CD],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_TIMER],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_DMA],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_GPU],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_OTHER],
+             st.last_pass_ms, st.avg_pass_ms,
+             st.avg_begin_ms, st.avg_guest_ms, st.avg_end_ms, st.avg_restore_ms,
+             (unsigned long long)st.guest_cycles_last, st.disabled,
+             (unsigned long long)gd[0], (unsigned long long)gd[1],
+             (unsigned long long)gd[2], (unsigned long long)gd[3],
+             (unsigned long long)gd[4], (unsigned long long)gd[5],
+             (unsigned long long)gd[6], (unsigned long long)gd[7],
+             (unsigned long long)gl_renderer_pass_journaled());
+}
+
+/* render_pass_dump path=<dir> count=<n>: write the images (the game's own
+ * frame, then each render pass in phase order) of the next n frames that get
+ * render passes, as <dir>/g<frame>_<index>_a<phase q16>.png. */
+static void handle_render_pass_dump(int id, const char *json)
+{
+    char dir[400];
+    int count = json_get_int(json, "count", 1);
+    if (!json_get_str(json, "path", dir, sizeof dir)) { send_err(id, "missing path"); return; }
+    gl_renderer_pass_dump_arm(dir, count);
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d}", id, count);
+}
+
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
  * the redundant centre mirror and copy the canonical 4:3 frame into the wide
  * surface centre at present (fast). 0 = re-rasterize the whole wide surface
@@ -9631,6 +9690,9 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
     return;
 #endif
     if (s_fmv_quiet) return;
+    /* Render passes are rolled back; keep them out of the live timeline's
+     * fingerprints and write traces (docs/RENDER_PASSES.md). */
+    if (g_psx_render_pass_active) return;
     if (is_card_critical_addr(phys)) card_trace_record(phys, old_val, new_val, width);
     fp_record_write(phys, new_val, g_debug_last_store_pc);
     {
@@ -9655,6 +9717,7 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
 /* MMIO write trace — called from memory.c mmio_write32/16/8. */
 void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width)
 {
+    if (g_psx_render_pass_active) return;   /* rolled back: not live */
 #ifdef PSX_NO_DEBUG_TOOLS
     (void)addr; (void)val; (void)width;
     return;
@@ -13863,6 +13926,8 @@ static const CmdEntry s_commands[] = {
     { "frame_perf",        handle_frame_perf },
     { "gl_ws_ablate",      handle_gl_ws_ablate },
     { "gl_interp",         handle_gl_interp },
+    { "render_pass_stats", handle_render_pass_stats },
+    { "render_pass_dump",  handle_render_pass_dump },
     { "gl_wide_fast",      handle_gl_wide_fast },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },

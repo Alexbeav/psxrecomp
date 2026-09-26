@@ -26,6 +26,7 @@
 #include "guest_tty.h"
 #include "psx_cycles.h"
 #include "psx_memory.h"
+#include "render_pass.h"
 #include "starvation_ring.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -1703,10 +1704,73 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
     e->frame = (uint32_t)s_frame_count;
 }
 
+/* ---- Render-pass stores (render_pass.c, docs/RENDER_PASSES.md) -------------
+ * A render pass runs guest draw code in frozen time and afterwards restores
+ * RAM, scratchpad, CPU, GPU and DMA state byte-for-byte. Its stores therefore
+ * bypass every observer of the live timeline (code-page tracking, overlay
+ * watch, write traces, card/parity hooks) and go straight to memory. MMIO is
+ * an allow-list: the GPU (GP0, and GP1 DMA-direction / info queries), the GPU
+ * and OTC DMA channels with DPCR/DICR, and I_STAT/I_MASK -- all of which the
+ * pass restores. Everything else (SPU key-ons, CD, timers, SIO, MDEC, memory
+ * control, other DMA channels) would escape the restore, so it is dropped and
+ * counted instead. */
+uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
+
+static int render_pass_mmio_class(uint32_t phys, uint32_t val, uint32_t width) {
+    if (phys == 0x1F801810u) return width == 4 ? -1 : RENDER_PASS_DROP_GPU;
+    if (phys == 0x1F801814u) {
+        uint32_t cmd = val >> 24;
+        return (width == 4 && (cmd == 0x04u || cmd == 0x10u))
+            ? -1 : RENDER_PASS_DROP_GPU;
+    }
+    if (phys >= 0x1F801070u && phys <= 0x1F801077u) return -1;
+    if ((phys >= 0x1F8010A0u && phys <= 0x1F8010AFu) ||   /* ch2 GPU */
+        (phys >= 0x1F8010E0u && phys <= 0x1F8010EFu) ||   /* ch6 OTC */
+        (phys >= 0x1F8010F0u && phys <= 0x1F8010F7u))     /* DPCR/DICR */
+        return -1;
+    if (phys >= 0x1F801080u && phys <= 0x1F8010FFu) return RENDER_PASS_DROP_DMA;
+    if (phys >= 0x1F801C00u && phys <= 0x1F801FFFu) return RENDER_PASS_DROP_SPU;
+    if (phys >= 0x1F801800u && phys <= 0x1F801803u) return RENDER_PASS_DROP_CD;
+    if (phys >= 0x1F801100u && phys <= 0x1F80112Fu) return RENDER_PASS_DROP_TIMER;
+    return RENDER_PASS_DROP_OTHER;
+}
+
+static void render_pass_store(uint32_t addr, uint32_t val, uint32_t width) {
+    uint32_t phys;
+    if (addr >= 0xC0000000u) {                       /* cache control, KSEG2 */
+        g_render_pass_dropped_writes[RENDER_PASS_DROP_OTHER]++;
+        return;
+    }
+    if (sr_ptr && (*sr_ptr & 0x10000u)) return;      /* IsC: cache-only store */
+    phys = psx_phys_addr(addr);
+    if (phys < RAM_SIZE) {
+        for (uint32_t i = 0; i < width; i++) ram[phys + i] = (uint8_t)(val >> (8u * i));
+        return;
+    }
+    if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
+        uint32_t off = phys - 0x1F800000u;
+        for (uint32_t i = 0; i < width && off + i < SCRATCHPAD_SIZE; i++)
+            scratchpad[off + i] = (uint8_t)(val >> (8u * i));
+        return;
+    }
+    if (phys >= 0x1F801000u && phys <= 0x1F803FFFu) {
+        int cls = render_pass_mmio_class(phys, val, width);
+        if (cls >= 0) { g_render_pass_dropped_writes[cls]++; return; }
+        if (width == 4) mmio_write32(phys, val);
+        else if (width == 2) mmio_write16(phys, (uint16_t)val);
+        else mmio_write8(phys, (uint8_t)val);
+        return;
+    }
+    /* Mod memory, expansion, ROM, unmapped: never written by a pass (mod
+     * arenas are not part of the pass restore). */
+    g_render_pass_dropped_writes[RENDER_PASS_DROP_OTHER]++;
+}
+
 static void psx_write_word_raw(uint32_t addr, uint32_t val);
 void psx_write_word(uint32_t addr, uint32_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 4); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 4, val); return; }
     if (g_ds_recording) {
         if (g_dma_exec_depth > 0) ds_note_dma_write();
@@ -1909,6 +1973,7 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val);
 void psx_write_half(uint32_t addr, uint16_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 2); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 2, val); return; }
     if (g_ds_recording) {
         if (g_dma_exec_depth > 0) ds_note_dma_write();
@@ -2252,6 +2317,7 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val);
 void psx_write_byte(uint32_t addr, uint8_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 1); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 1, val); return; }
     if (g_ls_mode != 1 || s_ls_op_active || g_ls_suppress_record || g_dma_exec_depth > 0) { psx_write_byte_raw(addr, val); return; }
     if (!psx_get_in_exception()) ls_write_hook(addr, 1, val);

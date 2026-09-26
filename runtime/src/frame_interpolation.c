@@ -95,6 +95,28 @@ int frame_interpolation_schedule_next(FrameInterpolationSchedule *schedule,
     return 1;
 }
 
+int frame_interpolation_schedule_due(FrameInterpolationSchedule *schedule,
+                                     uint64_t now, double horizon,
+                                     uint64_t *deadline) {
+    double now_d = (double)now;
+    if (!schedule || schedule->target_period <= 0.0 ||
+        schedule->next_present_deadline <= 0.0)
+        return 0;
+    while (schedule->next_present_deadline + schedule->target_period <= now_d &&
+           schedule->next_present_deadline + schedule->target_period <= horizon)
+        schedule->next_present_deadline += schedule->target_period;
+    if (schedule->next_present_deadline > now_d ||
+        schedule->next_present_deadline > horizon)
+        return 0;
+    if (deadline) *deadline = (uint64_t)(schedule->next_present_deadline + 0.5);
+    return 1;
+}
+
+void frame_interpolation_schedule_consume(FrameInterpolationSchedule *schedule) {
+    if (schedule && schedule->target_period > 0.0)
+        schedule->next_present_deadline += schedule->target_period;
+}
+
 uint64_t frame_interpolation_schedule_end(
     const FrameInterpolationSchedule *schedule) {
     if (!schedule || schedule->frame_end <= 0.0) return 0;

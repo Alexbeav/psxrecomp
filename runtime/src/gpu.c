@@ -6245,5 +6245,66 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     ws_nw_sync_target();
     return 1;
 }
+/* ---- Render-pass GPU checkpoint (render_pass.c) ---------------------------
+ * The same register set as a savestate (gpu_snap_emit), restored WITHOUT
+ * gpu_snapshot_read's side effects (widescreen scene history and HUD anchor
+ * tags belong to the live frame, which a pass must not reset). After the
+ * restore the renderer's mirrored draw state (area, offset, texture window,
+ * mask bits, native-wide target) is re-synced exactly as GP0(E2..E6) would. */
+static uint8_t  s_pass_regs[512];
+static uint32_t s_pass_regs_len;
+static uint32_t s_pass_poll_count;
+static int32_t  s_pass_doff_min, s_pass_doff_max;
+static uint32_t s_pass_doff_cnt;
+static GpuVerticalSplitTrace s_pass_split_this;
+
+int gpu_pass_checkpoint_save(void) {
+    PstW w;
+    uint32_t n = gpu_snapshot_bytes();
+    if (n > sizeof s_pass_regs) return 0;
+    pst_w_init(&w, s_pass_regs, n);
+    if (!gpu_snap_emit(&w)) return 0;
+    s_pass_regs_len = n;
+    s_pass_poll_count = gpustat_poll_count;
+    s_pass_doff_min = g_doff_min_this;
+    s_pass_doff_max = g_doff_max_this;
+    s_pass_doff_cnt = g_doff_cnt_this;
+    s_pass_split_this = split_trace_this;
+    return 1;
+}
+
+void gpu_pass_checkpoint_restore(void) {
+    PstR r;
+    if (!s_pass_regs_len) return;
+    pst_r_init(&r, s_pass_regs, s_pass_regs_len);
+    (void)gpu_snap_parse(&r);
+    gpustat_poll_count = s_pass_poll_count;
+    g_doff_min_this = s_pass_doff_min;
+    g_doff_max_this = s_pass_doff_max;
+    g_doff_cnt_this = s_pass_doff_cnt;
+    split_trace_this = s_pass_split_this;
+    gr_set_texture_window(texture_window_value);
+    gr_set_draw_area((int)draw_area_left, (int)draw_area_top,
+                     (int)draw_area_right, (int)draw_area_bottom);
+    gr_set_draw_offset(draw_offset_x, draw_offset_y);
+    gr_set_mask_bits((int)set_mask_bit, (int)check_mask_bit);
+    ws_nw_sync_target();
+    s_pass_regs_len = 0;
+}
+
+/* FNV-1a over the checkpointed register set (PSX_RENDER_PASS_VERIFY). */
+uint64_t gpu_pass_state_hash(void) {
+    uint8_t buf[512];
+    PstW w;
+    uint64_t h = 1469598103934665603ULL;
+    uint32_t n = gpu_snapshot_bytes();
+    if (n > sizeof buf) return 0;
+    pst_w_init(&w, buf, n);
+    if (!gpu_snap_emit(&w)) return 0;
+    for (uint32_t i = 0; i < n; i++) h = (h ^ buf[i]) * 1099511628211ULL;
+    h = (h ^ gpustat_poll_count) * 1099511628211ULL;
+    return h;
+}
+
 uint16_t* gpu_get_vram_ptr(void){ return vram; }
 uint32_t  gpu_get_vram_bytes(void){ return (uint32_t)sizeof(vram); }
