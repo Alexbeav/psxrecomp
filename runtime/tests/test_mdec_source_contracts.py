@@ -78,8 +78,21 @@ with tempfile.TemporaryDirectory(prefix='mdec-source-') as temp:
  if kind=='dma':
   cold=[(0,0,0,0),(2,0,0x1f8010f0,0x99)]
   start=[(2,0,0x1f801080,0x3000),(2,0,0x1f801084,0x10020),(2,0,0x1f801088,0x01000201)]
-  cases={
+  # A 16-word MDEC-in block is measured behaviour, not a scope limit:
+  # [ORACLE FIXTURE D11] ran block sizes 1, 8 and 16, so the model must accept it.
+  measured={
    'block-size':cold+[(2,0,0x1f801084,0x10010),start[-1]],
+  }
+  for name,ops in measured.items():
+   source=root/(name+'.input');actual=root/(name+'.output')
+   source.write_bytes(b''.join(struct.pack('<4I',*op) for op in ops))
+   run=subprocess.run([str(exe),str(source),str(actual)],env=env,capture_output=True,timeout=30)
+   assert run.returncode==0 and b'[dma-model]' not in run.stderr and b'[mdec-source]' not in run.stderr,(name,run.returncode,run.stderr)
+  # Scope guards, not hardware behaviour: not qualified: no fixture. No D fixture
+  # has measured these operations, so the model must refuse them (rc 2) rather
+  # than guess. D12 group c covers only a same-value DPCR write on DMA2, not a
+  # changed channel 0 DPCR nibble.
+  cases={
    'reverse':cold+start[:2]+[(2,0,0x1f801088,0x01000203)],
    'wrong-direction':cold+start[:2]+[(2,0,0x1f801088,0x01000200)],
    'active-replace':cold+start+[(2,0,0x1f801080,0x4000)],
