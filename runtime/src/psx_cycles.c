@@ -711,7 +711,11 @@ void psx_muldiv_set(CPUState* cpu, uint32_t latency) {
  *  - with two or more cycles left, the read waits until the deadline;
  *  - with one cycle or less left, it does not wait at all;
  *  - the wait overlaps the most recent load's outstanding give-back, so the
- *    give-back left for later instructions shrinks by the cycles waited. */
+ *    give-back left for later instructions shrinks by the cycles waited.
+ * The deadline is left as it is. [ORACLE FIXTURE F6] (F6-muldiv-second-read,
+ * TSV sha256 2dc08eb484012f77...): a second HI/LO read straight after the
+ * first never waits again, and after any read the deadline is at most one
+ * cycle ahead, so no later read can see a different value. */
 void psx_muldiv_stall(CPUState* cpu) {
     psx_cyc_batch_flush();
     if (cpu->muldiv_ts_done <= psx_cycle_count + 1) return;

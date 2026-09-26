@@ -1192,7 +1192,7 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
         "${CMAKE_CURRENT_SOURCE_DIR}/src/code_generator.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/strict_translator.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/dirty_ram_interp.c")
-    # PS1B-185: MFHI/MFLO deadline wait and load give-back against oracle fixture F5.
+    # PS1B-185: MFHI/MFLO deadline wait, load give-back and second read against oracle fixtures F5 and F6.
     foreach(_mode IN ITEMS O0 O2)
         set(_target "muldiv_giveback_fixture_${_mode}")
         add_executable(${_target}
@@ -1203,7 +1203,8 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
         target_link_options(${_target} PRIVATE -Wl,--gc-sections)
         add_test(NAME ${_target} COMMAND ${_target}
-            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/muldiv_f5_giveback_fixture.txt")
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/muldiv_f5_giveback_fixture.txt"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/muldiv_f6_second_read_fixture.txt")
     endforeach()
 endif()
 
