@@ -191,6 +191,18 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_source_clock_test PRIVATE include)
     add_executable(cdrom_source_reset_test tests/test_cdrom_source_reset.c src/psx_sha256.c)
     target_include_directories(cdrom_source_reset_test PRIVATE include)
+    # C1-C9/C2b-C3b/C8b replay (PS1B-212). The source sub-model profiles must
+    # match the proxy rows (C3/C3b seeks, C4/C9 read start). The tape is the
+    # first 256 words of the octoshock-2.2.2 cold random tape the TAS routes
+    # use (tools/tasreplays, sha d85f0dec...); each case starts at power-on.
+    add_executable(cdrom_c_fixture_replay_test tests/test_cdrom_c_fixture_replay.c src/psx_sha256.c)
+    target_include_directories(cdrom_c_fixture_replay_test PRIVATE include)
+    foreach(_profile tekken pepsiman)
+        add_test(NAME cdrom_c_fixture_replay_${_profile}_test COMMAND cdrom_c_fixture_replay_test
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_c_fixture_replay.txt ${_profile}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng
+            --classes C3,C3b,C4,C9)
+    endforeach()
 
     add_executable(input_route_file_test tests/test_input_route_file.c)
     target_include_directories(input_route_file_test PRIVATE include)
