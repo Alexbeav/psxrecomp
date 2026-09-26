@@ -1,23 +1,12 @@
-/* Authored production-controller fixture. No BIOS, disc or retail code. */
+/* [ORACLE FIXTURE D18d] register writes do not clock the source MDEC. Replays the
+ * D18 group a/d shape through the runtime schedule (dma_advance every cycle):
+ * DMA0 kick, DMA1 kick (at once, or 1000 cycles later), with and without one
+ * DMA5-MADR write mid-decode, at all 128 kick phases. The per-cycle MADR1/CHCR
+ * and MDEC status timelines must be identical. Authored stream; no BIOS or disc. */
 #define _POSIX_C_SOURCE 200809L
 #include "dma_gpu_ll.c"
 #include "dma.c"
 #include "mdec.c"
-/* Exclusive create without C11 fopen "x", which msvcrt rejects. */
-#include <fcntl.h>
-#ifdef _WIN32
-#include <io.h>
-static FILE *fixture_create_new(const char *p) {
-    int fd = _open(p, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, 0644);
-    return fd < 0 ? NULL : _fdopen(fd, "wb");
-}
-#else
-#include <unistd.h>
-static FILE *fixture_create_new(const char *p) {
-    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0644);
-    return fd < 0 ? NULL : fdopen(fd, "wb");
-}
-#endif
 #include <assert.h>
 uint64_t s_frame_count,psx_cycle_count,psx_next_service_cycle;
 int psx_in_device_service,g_event_step_conservative,g_ls_replay_active;
@@ -77,51 +66,57 @@ uint32_t spu_dma_read(void) {abort();}
 void audio_trace_event(uint16_t k,uint32_t a,uint32_t b) {(void)k;(void)a;(void)b;abort();}
 
 
-int debug_server_fmv_quiet(void){return 0;}
-int source_gpu_runtime_active(void){return 1;}
-int source_gpu_runtime_ready(void){return 1;}
-uint32_t source_gpu_runtime_cycles_to_event(void){return 128-(uint32_t)(psx_cycle_count%128);}
-void source_gpu_runtime_dma_write(void){dma_source_gpu_service_at(psx_cycle_count);}
-void source_gpu_runtime_copy(SourceGPUServiceClock *c,SourceGPUCommandProjection *s){(void)c;(void)s;abort();}
-int main(int argc,char **argv){
- if(argc!=3)return 2;FILE *in=fopen(argv[1],"rb"),*out=fixture_create_new(argv[2]);if(!in || !out)return 2;
- set_option("PSX_MDEC_SOURCE_MODEL","octoshock-2.3");
- set_option("PSX_INPUT_ROUTE_FILE","authored-fixture");
- set_option("PSX_GPU_DMA_MODEL","octoshock-2.2.2-bounded-quad");
- uint32_t op,time,addr,value;
- while(fread(&op,4,1,in)==1){
-  if(fread(&time,4,1,in)!=1 || fread(&addr,4,1,in)!=1 || fread(&value,4,1,in)!=1)abort();
-  uint32_t result=0,aux=0;psx_cycle_count=time;
-  switch(op){
-   case 0:dma_init();mdec_init();memset(ram,0,sizeof(ram));i_stat=irqs=0;break;
-   case 1:dma_source_gpu_service_at(time);break;
-   case 2:dma_source_gpu_service_at(time);dma_write(addr,value);break; /* the harness advances to each authored op time */
-   case 3:result=dma_read(addr);break;
-   case 4:psx_write_word(addr,value);break;
-   case 5:result=psx_read_word(addr);break;
-   case 6:i_stat&=value;break;
-   case 7:result=i_stat;break;
-   case 8:mdec_write(0x1f801820,value);break;
-   case 9:mdec_write(0x1f801824,value);break;
-   case 10:result=mdec_read(0x1f801820);break;
-   case 11:mdec_snapshot_bytes();break;
-   case 12:dma_snapshot_write(NULL);break;
-   default:abort();
-  }
-  if(getenv("PSX_TEST_ROUNDTRIP")) {
-   uint32_t n=mdec_snapshot_bytes(),dn=dma_snapshot_bytes(),sn=dma_src_wire_bytes();
-   uint8_t *wire=malloc(n),*dw=malloc(dn),*sw=malloc(sn);if(!wire || !dw || !sw)abort();
-   mdec_snapshot_write(wire);dma_snapshot_write(dw);dma_src_wire_write(sw);
-   /* Reset the decoder and DMA continuation without touching fixture RAM/IRQ. */
-   mdec_init();memset(dsm,0,sizeof dsm);dsm_mdec_clock=0;
-   if(!mdec_snapshot_read(wire,n) || !dma_snapshot_read(dw,dn) || !dma_src_wire_read(sw,sn))abort();
-   free(wire);free(dw);free(sw);
-  }
-  SourceMDEC *s=&source_mdec;
-  uint32_t row[]={result,aux,mdec_read(0x1f801824),(uint32_t)s->credit,s->command,s->control,s->remaining,s->in_count,s->out_count,
-   s->coefficient,s->block,s->pixel_count,s->pixel_at,s->row,s->word_in_row,s->row_words,s->busy,s->quant_index,s->matrix_index,
-   dma_read(0x1f801080),dma_read(0x1f801084),dma_read(0x1f801088),dma_read(0x1f801090),dma_read(0x1f801094),dma_read(0x1f801098),dma_get_dicr(),i_stat&8u};
-  if(fwrite(row,sizeof(row),1,out)!=1)abort();
- }
- if(ferror(in) || fclose(in) || fclose(out))return 4;return 0;
+
+/* A CPU store to the MDEC, 20 cycles after the previous one (runtime schedule). */
+static void mw(uint32_t addr, uint32_t v) { psx_cycle_count += 20; dma_advance(20); mdec_write(addr, v); }
+static uint64_t timeline(uint32_t phase, int late_dma1, int write_at) {
+    psx_cycle_count = 0;
+    dma_init(); mdec_init(); memset(ram, 0, sizeof ram); i_stat = irqs = 0;
+    dma_write(0x1F8010F0, 0x0FEDCBA9u);
+    mw(0x1f801824, 0x80000000u); mw(0x1f801824, 0x60000000u);
+    mw(0x1f801820, (2u << 29) | 1u);
+    for (int i = 0; i < 32; i++) mw(0x1f801820, 0x01010101u);
+    mw(0x1f801820, 3u << 29);
+    for (int i = 0; i < 32; i++) mw(0x1f801820, 0x5A825A82u);
+    for (int b = 0; b < 24; b++) ram[0x40000 / 4 + b] = 0xFE000000u | 0x0408u;   /* DC 8, q_scale 1, then FE00 */
+    for (int b = 24; b < 32; b++) ram[0x40000 / 4 + b] = 0xFE00FE00u;
+    mw(0x1f801820, (1u << 29) | (2u << 27) | 32u);
+    uint64_t t0 = 3000 + phase, h = 1469598103934665603ull;
+    for (uint64_t t = psx_cycle_count + 1; t < t0 + 16000; t++) {
+        psx_cycle_count = t; dma_advance(1);
+        if (t == t0) { dma_write(0x1F801080, 0x40000); dma_write(0x1F801084, (1u << 16) | 32); dma_write(0x1F801088, 0x01000201); }
+        uint64_t k1 = t0 + (late_dma1 ? 1000 : 15);
+        if (t == k1) { dma_write(0x1F801090, 0x60000); dma_write(0x1F801094, (24u << 16) | 32); dma_write(0x1F801098, 0x01000200); }
+        if (write_at && t == t0 + (uint64_t)write_at) dma_write(0x1F8010D0, 0);
+        if (t >= t0) {
+            uint32_t row[4] = { dma_read(0x1f801090), dma_read(0x1f801098), dma_read(0x1f801088), mdec_read(0x1f801824) };
+            for (int i = 0; i < 4; i++) h = (h ^ row[i]) * 1099511628211ull;
+        }
+    }
+    return h;
 }
+int main(void) {
+    set_option("PSX_MDEC_SOURCE_MODEL", "octoshock-2.3");
+    set_option("PSX_INPUT_ROUTE_FILE", "authored-fixture");
+    set_option("PSX_GPU_DMA_MODEL", "octoshock-2.2.2-bounded-quad");
+    for (uint32_t phase = 0; phase < 128; phase++) {
+        for (int late = 0; late < 2; late++) {
+            uint64_t base = timeline(phase, late, 0);
+            static const int at[4] = { 300, 332, 364, 396 };
+            for (int i = 0; i < 4; i++)
+                if (timeline(phase, late, at[i]) != base) {
+                    fprintf(stderr, "write changed the timeline: phase %u late %d at %d\n", phase, late, at[i]);
+                    return 1;
+                }
+        }
+    }
+    puts("PASS a DMA5-MADR write leaves the source MDEC timeline unchanged at all 128 phases (D18d)");
+    return 0;
+}
+
+int debug_server_fmv_quiet(void){return 0;}
+int source_gpu_runtime_active(void){return 0;}
+int source_gpu_runtime_ready(void){return 1;}
+uint32_t source_gpu_runtime_cycles_to_event(void){return UINT32_MAX;}
+void source_gpu_runtime_dma_write(void){}
+void source_gpu_runtime_copy(SourceGPUServiceClock *c,SourceGPUCommandProjection *s){(void)c;(void)s;abort();}
