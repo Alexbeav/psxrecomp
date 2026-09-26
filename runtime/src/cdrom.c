@@ -196,6 +196,12 @@ static uint32_t last_sector_frame;
 static uint8_t last_sector_mode;
 static uint8_t last_sector_have_raw;
 static uint8_t last_sector_raw_mode;
+/* last_sector_raw_mode also marks whether GetlocL has a header to report:
+ * GETLOCL_NO_HEADER means no data-sector header has been decoded since the
+ * last completed SeekL/SeekP, Init, fresh ReadN/ReadS start or power-on
+ * [ORACLE FIXTURE C6]. A decoded sector stores its real mode (0 for a cooked
+ * image without raw headers, reported as mode 2). */
+#define GETLOCL_NO_HEADER 0xFFu
 static uint8_t last_sector_xa_file;
 static uint8_t last_sector_xa_channel;
 static uint8_t last_sector_xa_submode;
@@ -1749,6 +1755,7 @@ static int source_explicit_seek_cycles(uint8_t cmd)
 /* T172 end CD explicit seek. */
 
 static void start_read_stream(uint8_t cmd) {
+    last_sector_raw_mode = GETLOCL_NO_HEADER;   /* until the first data sector */
     int source_target = setloc_pending ? s_setloc_lba :
         msf_to_lba(read_min, read_sec, read_sect);
     int seek_cycles = implicit_read_seek_cycles();
@@ -2735,6 +2742,20 @@ static void exec_command(uint8_t cmd) {
         break;
 
     case 0x10: { /* GetlocL */
+        /* INT5 (status | error, error byte 80h) while the drive is seeking,
+         * including a ReadN/ReadS before its first data sector, or on an audio
+         * sector (PSX-SPX "GetlocL"), and while no data-sector header has been
+         * decoded since the last completed SeekL/SeekP, Init or power-on, the
+         * standby case [ORACLE FIXTURE C6]. Whether Stop or Pause also clear
+         * the header is [NOT OBSERVED]. Otherwise INT3 with the newest
+         * sector's header and subheader. */
+        if ((stat_reg & CDSTAT_SEEK) || cdda_playing ||
+            last_sector_raw_mode == GETLOCL_NO_HEADER) {
+            response_push(stat_reg | CDSTAT_ERROR);
+            response_push(0x80);
+            set_irq(CDIRQ_ERROR);
+            break;
+        }
         int lba = (last_sector_lba >= 0)
             ? last_sector_lba
             : msf_to_lba(read_min, read_sec, read_sect);
@@ -3116,6 +3137,7 @@ static void process_pending(uint32_t cycles) {
         break;
 
     case 0x0A: /* Init complete */
+        last_sector_raw_mode = GETLOCL_NO_HEADER;
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
@@ -3127,6 +3149,7 @@ static void process_pending(uint32_t cycles) {
         stat_reg &= ~(CDSTAT_SEEK | CDSTAT_READ | CDSTAT_PLAY);
         setloc_seek_far = 0;
         setloc_pending = 0;
+        last_sector_raw_mode = GETLOCL_NO_HEADER;
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
@@ -3405,7 +3428,7 @@ void cdrom_init(const char* cue_path) {
     last_sector_frame = 0;
     last_sector_mode = 0;
     last_sector_have_raw = 0;
-    last_sector_raw_mode = 0;
+    last_sector_raw_mode = GETLOCL_NO_HEADER;
     last_sector_xa_file = 0;
     last_sector_xa_channel = 0;
     last_sector_xa_submode = 0;
