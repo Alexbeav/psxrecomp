@@ -346,6 +346,16 @@ static inline void source_gpu_command_publish(SourceGPUCommandProjection *s, uns
     memcpy(s->dispatch.words, words, count * sizeof(words[0]));
 }
 
+/* A0h and C0h: the size word gives width and height in halfwords; the data
+ * phase moves ceil(width * height / 2) words (PSX-SPX "Memory Transfer"). */
+static inline uint32_t source_gpu_command_transfer_words(uint32_t size)
+{
+    uint32_t width = ((size & 0xFFFFu) - 1u) & 0x3FFu;
+    uint32_t height = ((size >> 16) - 1u) & 0x1FFu;
+    uint32_t halfwords = (width + 1u) * (height + 1u);
+    return (halfwords + 1u) / 2u;
+}
+
 /* Words the rest of the queue still owes: the unfinished tail packet. */
 static inline unsigned source_gpu_command_owed(const SourceGPUCommandProjection *s)
 {
@@ -356,7 +366,22 @@ static inline unsigned source_gpu_command_owed(const SourceGPUCommandProjection 
         owed = stride - at;
     }
     while (at < s->count) {
-        unsigned length = source_gpu_command_length(s->queue[at]);
+        uint32_t head = s->queue[at];
+        unsigned opcode = source_gpu_opcode(head), length = source_gpu_command_length(head);
+        /* A queued quad still owes its fourth vertex group (PSX-SPX "Render
+         * Polygon": 4-point polygons carry four vertices). */
+        if (source_gpu_polygon_supported(opcode) && (opcode & 0x08u))
+            length += source_gpu_polygon_stride(opcode);
+        /* A queued CPU-to-VRAM transfer owes its data words. */
+        if (opcode == 0xA0u && at + 3 <= s->count)
+            length += source_gpu_command_transfer_words(s->queue[at + 2]);
+        /* A queued poly-line owes segments until its terminator word. */
+        if (source_gpu_line_supported(opcode) && source_gpu_line_polyline(opcode)) {
+            unsigned step = source_gpu_line_segment_length(opcode), next = at + length;
+            while (next < s->count && !source_gpu_line_terminator(s->queue[next])) next += step;
+            if (next >= s->count) return 1;
+            length = next - at + 1;
+        }
         owed = at + length > s->count ? at + length - s->count : 0;
         at += length;
     }
@@ -469,15 +494,6 @@ static inline int source_gpu_command_start_block(SourceGPUCommandProjection *s)
     return 1;
 }
 
-/* A0h and C0h: the size word gives width and height in halfwords; the data
- * phase moves ceil(width * height / 2) words (PSX-SPX "Memory Transfer"). */
-static inline uint32_t source_gpu_command_transfer_words(uint32_t size)
-{
-    uint32_t width = ((size & 0xFFFFu) - 1u) & 0x3FFu;
-    uint32_t height = ((size >> 16) - 1u) & 0x1FFu;
-    uint32_t halfwords = (width + 1u) * (height + 1u);
-    return (halfwords + 1u) / 2u;
-}
 
 static inline int source_gpu_command_start_other(SourceGPUCommandProjection *s)
 {
@@ -572,6 +588,13 @@ static inline int source_gpu_command_update(SourceGPUCommandProjection *s, uint6
     if (s->error) return 0;
     if (cycle < s->last_update) return source_gpu_command_fail(s, SOURCE_GPU_COMMAND_REVERSE_TIME);
     s->dispatch.kind = SOURCE_GPU_DISPATCH_NONE;
+    /* [ORACLE] A service call with no elapsed time starts nothing: the GPU's
+     * own tick and the DMA tick often fall on the same cycle, and the oracle
+     * starts at most one queued command per elapsed service step (PS1B-182:
+     * no zero-elapsed service event in any route log; MMX5 950,195,072 starts
+     * E1h and leaves the complete 7Dh queued until 950,195,200). Words
+     * written in the same cycle still start commands as they complete. */
+    if (cycle == s->last_update) return 1;
     s->budget = SOURCE_GPU_T_CREDIT(s, cycle - s->last_update);
     s->last_update = cycle;
     source_gpu_command_process(s);

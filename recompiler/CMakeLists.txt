@@ -568,6 +568,21 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_oracle_replay.py
                 $<TARGET_FILE:tas_gpu_oracle_replay_${_mode}>)
             set_tests_properties(tas_gpu_oracle_replay_${_mode} PROPERTIES SKIP_RETURN_CODE 77)
+            # PS1B-182: scheduling (when queued commands start), replayed from the
+            # same share logs; skips (77) without them.
+            add_executable(tas_gpu_oracle_timing_${_mode}
+                ../runtime/tests/test_source_gpu_oracle_timing.c)
+            target_include_directories(tas_gpu_oracle_timing_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_oracle_timing_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_oracle_timing_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_oracle_replay.py
+                $<TARGET_FILE:tas_gpu_oracle_timing_${_mode}>)
+            set_tests_properties(tas_gpu_oracle_timing_${_mode} PROPERTIES SKIP_RETURN_CODE 77)
+            add_executable(tas_gpu_service_start_${_mode}
+                ../runtime/tests/test_source_gpu_service_start.c)
+            target_include_directories(tas_gpu_service_start_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_service_start_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_service_start_${_mode} COMMAND tas_gpu_service_start_${_mode})
             # PS1B-182: authored oracle micro-fixtures (no retail data), committed.
             add_executable(tas_gpu_oracle_fixtures_${_mode}
                 ../runtime/tests/test_source_gpu_oracle_fixtures.c)
