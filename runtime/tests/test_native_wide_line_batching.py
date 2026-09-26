@@ -6,8 +6,9 @@ and rebind the hr and wide surfaces for its mirror. R4 draws hundreds of
 lines per race frame, which held its 21:9 race at 1x to about 53 frames/s.
 Native-wide lines now join the flat batch as GL_LINES batches. These guards
 keep the parts that make that pixel-identical and correctly ordered:
-  - only with native-wide, and never for a line the backdrop-stretch gate
-    would widen (the flat batch mirrors unstretched);
+  - only with native-wide at 1x (above 1x a line keeps its own drawing
+    path), and never for a line the backdrop-stretch gate would widen (the
+    flat batch mirrors unstretched);
   - a batch holds one primitive mode: a line after triangles (or the other
     way round) flushes first, and the batch draws with its own mode and the
     same line width the immediate path set;
@@ -39,6 +40,8 @@ geo = definition(GL, "gpu_geometry")
 m = re.search(r"if \(mode == GL_LINES && n == 2 && [^{]*g_wide_w > 0 &&[^{]*"
               r"!bd_prim_gate\(xs, n, 0\)\) \{", geo)
 assert m, "native-wide lines batch only when native-wide is on and unstretched"
+assert re.search(r"\bs_(hr_)?scale == 1\b", m.group(0)), (
+    "native-wide GL_LINES batches are 1x only")
 lines = geo[m.end():]
 lines = lines[:lines.index("return;")]
 assert "s_fb_mode != GL_LINES" in lines and "flush_flat_batch();" in lines, (

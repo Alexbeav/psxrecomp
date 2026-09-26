@@ -1975,8 +1975,11 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
      * of lines per race frame, which held its 21:9 race at 1x to about 53
      * frames/s. A line the backdrop-stretch gate would widen keeps the
      * immediate path (the flat batch mirrors unstretched). Without
-     * native-wide nothing changes. */
-    if (mode == GL_LINES && n == 2 && g_wide_w > 0 && !bd_prim_gate(xs, n, 0)) {
+     * native-wide nothing changes. 1x only: above 1x a line is drawn as its
+     * own shape (the internal-resolution work draws it as a one-native-pixel
+     * quad and batches that itself), so it is left to that path. */
+    if (mode == GL_LINES && n == 2 && s_scale == 1 && g_wide_w > 0 &&
+        !bd_prim_gate(xs, n, 0)) {
         if (s_fb_n > 0 && (s_fb_mode != GL_LINES || s_fb_semi != semi ||
                            s_fb_mask != (int)s_mask_set))
             flush_flat_batch();
