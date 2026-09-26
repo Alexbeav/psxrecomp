@@ -9,25 +9,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* x86-64 always has SSE2; MSVC x64 does not define __SSE2__. */
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64) || \
-    (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
-#include <emmintrin.h>
-#define MDEC_HAVE_SSE2 1
-#endif
-#if !defined(MDEC_HAVE_SSE2) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
-#include <arm_neon.h>
-#define MDEC_HAVE_NEON 1
-#endif
 
 extern uint64_t s_frame_count;
 
-/* FMV-activity detector: host display-frame stamp of the newest colour
- * (15/24-bit) MDEC decode. Used only by mdec_recently_active() for local
- * frontend / rewind policy — never folded into netplay digests. */
+
+
+
 static uint64_t mdec_last_color_decode_frame = (uint64_t)0 - 1000u;
-/* Guest-cycle stamp of the same event — snap age is relative to this so
- * peers with identical FIFO/tables but different present rates hash equal. */
+
+
 static uint64_t mdec_last_color_decode_cycle = (uint64_t)0 - 1000u;
 
 enum {
@@ -62,21 +52,6 @@ enum {
     MDEC_STOP_Y3 = 7
 };
 
-/* Zig-zag scatter table — Beetle ZigZag[64] (mdec.cpp:115), the column-major
- * order that pairs with Beetle's IDCT matrix transpose + IDCT_1D_Multi below.
- * (Our old table was the row-major transpose of this; it only decoded correctly
- * because our old IDCT was correspondingly transposed. The faithful pipeline
- * uses Beetle's table + matrix + IDCT together so the result is byte-exact.) */
-static const uint8_t zigzag_to_linear[64] = {
-    0x00, 0x08, 0x01, 0x02, 0x09, 0x10, 0x18, 0x11,
-    0x0a, 0x03, 0x04, 0x0b, 0x12, 0x19, 0x20, 0x28,
-    0x21, 0x1a, 0x13, 0x0c, 0x05, 0x06, 0x0d, 0x14,
-    0x1b, 0x22, 0x29, 0x30, 0x38, 0x31, 0x2a, 0x23,
-    0x1c, 0x15, 0x0e, 0x07, 0x0f, 0x16, 0x1d, 0x24,
-    0x2b, 0x32, 0x39, 0x3a, 0x33, 0x2c, 0x25, 0x1e,
-    0x17, 0x1f, 0x26, 0x2d, 0x34, 0x3b, 0x3c, 0x35,
-    0x2e, 0x27, 0x2f, 0x36, 0x3d, 0x3e, 0x37, 0x3f
-};
 
 typedef struct MDECState {
     uint32_t command;
@@ -150,15 +125,6 @@ static void trace_event(uint32_t kind, uint32_t value) {
 #endif
 }
 
-static int16_t sign_extend_10(uint16_t value) {
-    return (int16_t)((int16_t)(value << 6) >> 6);
-}
-
-static int clamp_int(int value, int lo, int hi) {
-    if (value < lo) return lo;
-    if (value > hi) return hi;
-    return value;
-}
 
 static void clear_output(void) {
     mdec.output_size = 0;
@@ -192,8 +158,8 @@ static void append_byte(uint8_t value) {
     mdec.output[mdec.output_size++] = value;
 }
 
-/* Reserve `bytes` of output room once (MotK FMV macroblocks write 512/768
- * bytes each). Avoids ensure_output_capacity per channel byte. */
+
+
 static uint8_t *output_reserve(uint32_t bytes) {
     if (!ensure_output_capacity(mdec.output_size + bytes)) return NULL;
     return mdec.output + mdec.output_size;
@@ -237,332 +203,180 @@ static void soft_reset(void) {
     mdec.current_block = 4;
 }
 
-/* Sign-extend the low `bits` of v to a full int (Beetle sign_x_to_s32). */
-static int sign_x_to_s32(int bits, int v) {
-    int shift = 32 - bits;
-    return (int)(((int32_t)((uint32_t)v << shift)) >> shift);
+
+
+
+/* Clean derivation: PSX-SPX "MDEC Decompression" and the authored M1-M11
+ * observations. No reference decoder code or prior decode bodies were used.
+ * Arithmetic and receipt identities: docs/testing/MDEC_CLEAN_DECODE.md. */
+static int floor_div(int value, int divisor) {
+    int quotient = value / divisor;
+    return quotient - (value % divisor < 0);
 }
-
-/* 9-bit mask then clamp to int8 (Beetle Mask9ClampS8, mdec.cpp:230). The MDEC
- * keeps intermediate samples to 9 bits before the ±127 clamp, so a value outside
- * the 9-bit window WRAPS before clamping — reproducing the hardware ringing. */
-static int mask9_clamp_s8(int v) {
-    v = sign_x_to_s32(9, v);
-    if (v < -128) v = -128;
-    if (v >  127) v =  127;
-    return v;
+static int clamp_int(int value, int lo, int hi) {
+    return value < lo ? lo : value > hi ? hi : value;
 }
-
-/* Faithful R3000A MDEC IDCT (Beetle IDCT/IDCT_1D_Multi). Two separable 1-D
- * passes over the >>3 scale matrix: pass 1 keeps int16 and transposes
- * (out[x*8+col]); pass 2 clamps via Mask9ClampS8. Rounding (sum+0x4000)>>15.
- * SSE2 path matches Beetle's madd_epi16 reduce (bit-identical to scalar). */
-
-static void idct_block_dc_only(int16_t *block)
-{
-    int16_t tmp0[8];
-    int dc = block[0];
-    int x, col;
-    for (x = 0; x < 8; x++) {
-        int sum = dc * (int)mdec.scale[x * 8];
-        tmp0[x] = (int16_t)((sum + 0x4000) >> 15);
-    }
-    for (col = 0; col < 8; col++) {
-        for (x = 0; x < 8; x++) {
-            int sum = (int)tmp0[col] * (int)mdec.scale[x * 8];
-            block[col * 8 + x] =
-                (int16_t)mask9_clamp_s8((sum + 0x4000) >> 15);
-        }
-    }
+static int sign_extend_10(uint16_t value) {
+    int low = value & 1023;
+    return low >= 512 ? low - 1024 : low;
 }
-
-static void idct_block_scalar(int16_t *block)
-{
-    int ac = 0;
-    int i, col, x, u;
-    int16_t tmp[64];
-
-    for (i = 1; i < 64; i++)
-        ac |= block[i];
-    if (!ac) {
-        idct_block_dc_only(block);
-        return;
-    }
-
-    for (col = 0; col < 8; col++) {
-        const int16_t *src = block + col * 8;
-        int col_or = (int)src[0] | (int)src[1] | (int)src[2] | (int)src[3] |
-                     (int)src[4] | (int)src[5] | (int)src[6] | (int)src[7];
-        if (!col_or) {
-            for (x = 0; x < 8; x++)
-                tmp[x * 8 + col] = 0;
-            continue;
-        }
-        for (x = 0; x < 8; x++) {
-            int sum = 0;
-            const int16_t *sc = mdec.scale + x * 8;
-            for (u = 0; u < 8; u++)
-                sum += (int)src[u] * (int)sc[u];
-            tmp[x * 8 + col] = (int16_t)((sum + 0x4000) >> 15);
-        }
-    }
-    for (col = 0; col < 8; col++) {
-        const int16_t *src = tmp + col * 8;
-        int col_or = (int)src[0] | (int)src[1] | (int)src[2] | (int)src[3] |
-                     (int)src[4] | (int)src[5] | (int)src[6] | (int)src[7];
-        if (!col_or) {
-            for (x = 0; x < 8; x++)
-                block[col * 8 + x] = 0;
-            continue;
-        }
-        for (x = 0; x < 8; x++) {
-            int sum = 0;
-            const int16_t *sc = mdec.scale + x * 8;
-            for (u = 0; u < 8; u++)
-                sum += (int)src[u] * (int)sc[u];
-            block[col * 8 + x] =
-                (int16_t)mask9_clamp_s8((sum + 0x4000) >> 15);
-        }
-    }
+static int coefficient_sign(int value) {
+    return (value > 0) - (value < 0);
 }
-
-#if defined(MDEC_HAVE_SSE2)
-/* Horizontal sum of 4×i32 after madd_epi16 — same reduce as Beetle mdec.c. */
-static int idct_sse2_dot8(const int16_t *src8, const int16_t *scale8)
-{
-    __m128i c = _mm_loadu_si128((const __m128i *)src8);
-    __m128i m = _mm_loadu_si128((const __m128i *)scale8);
-    __m128i sum = _mm_madd_epi16(m, c);
-    PSX_ALIGN(16) int32_t tmp[4];
-    sum = _mm_add_epi32(sum, _mm_shuffle_epi32(sum, _MM_SHUFFLE(0, 1, 2, 3)));
-    sum = _mm_add_epi32(sum, _mm_shuffle_epi32(sum, _MM_SHUFFLE(0, 0, 0, 1)));
-    _mm_store_si128((__m128i *)tmp, sum);
-    return tmp[0];
+static int mask9_clamp_s8(int value) {
+    int low = (int)((unsigned)value & 511u);
+    if (low >= 256) low -= 512;
+    return clamp_int(low, -128, 127);
 }
-
-static void idct_block_sse2(int16_t *block)
-{
-    int ac = 0;
-    int i, col, x;
-    PSX_ALIGN(16) int16_t tmp[64];
-
-    for (i = 1; i < 64; i++)
-        ac |= block[i];
-    if (!ac) {
-        idct_block_dc_only(block);
-        return;
+/* Inverse of the zigzag array in PSX-SPX "MDEC Decompression". */
+static const uint8_t coefficient_order[64] = {
+    0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,
+    12,19,26,33,40,48,41,34,27,20,13,6,7,14,21,28,
+    35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,
+    58,59,52,45,38,31,39,46,53,60,61,54,47,55,62,63
+};
+static void idct_block(int16_t block[64]) {
+    int16_t next[64];
+    for (unsigned pass = 0; pass < 2; ++pass) {
+        for (unsigned y = 0; y < 8; ++y) {
+            for (unsigned x = 0; x < 8; ++x) {
+                int sum = 0;
+                for (unsigned z = 0; z < 8; ++z)
+                    sum += block[y + z * 8] * floor_div(mdec.scale[x + z * 8], 8);
+                next[x + y * 8] = (int16_t)floor_div(sum + 16384, 32768);
+            }
+        }
+        memcpy(block, next, sizeof(next));
     }
-
-    for (col = 0; col < 8; col++) {
-        const int16_t *src = block + col * 8;
-        int col_or = (int)src[0] | (int)src[1] | (int)src[2] | (int)src[3] |
-                     (int)src[4] | (int)src[5] | (int)src[6] | (int)src[7];
-        if (!col_or) {
-            for (x = 0; x < 8; x++)
-                tmp[x * 8 + col] = 0;
-            continue;
-        }
-        for (x = 0; x < 8; x++) {
-            int sum = idct_sse2_dot8(src, mdec.scale + x * 8);
-            tmp[x * 8 + col] = (int16_t)((sum + 0x4000) >> 15);
-        }
-    }
-    for (col = 0; col < 8; col++) {
-        const int16_t *src = tmp + col * 8;
-        int col_or = (int)src[0] | (int)src[1] | (int)src[2] | (int)src[3] |
-                     (int)src[4] | (int)src[5] | (int)src[6] | (int)src[7];
-        if (!col_or) {
-            for (x = 0; x < 8; x++)
-                block[col * 8 + x] = 0;
-            continue;
-        }
-        for (x = 0; x < 8; x++) {
-            int sum = idct_sse2_dot8(src, mdec.scale + x * 8);
-            block[col * 8 + x] =
-                (int16_t)mask9_clamp_s8((sum + 0x4000) >> 15);
-        }
-    }
+    for (unsigned i = 0; i < 64; ++i) block[i] = (int16_t)mask9_clamp_s8(block[i]);
 }
-
-static void idct_simd_selfcheck(void)
-{
-    uint32_t seed = 0xC0FFEEu;
-    int n;
-    for (n = 0; n < 64; n++)
-        mdec.scale[n] = (int16_t)(((n % 9) - 4) * 256);
-    /* Deterministic patterns + PRNG — abort if SSE2 ever drifts from scalar. */
-    for (n = 0; n < 512; n++) {
-        int16_t a[64], b[64];
-        int i;
-        for (i = 0; i < 64; i++) {
-            seed = seed * 1664525u + 1013904223u;
-            a[i] = (int16_t)((int)(seed >> 16) - 32768);
-            if (n < 8)
-                a[i] = (i == 0) ? (int16_t)(n * 100) : 0; /* DC-only */
-            b[i] = a[i];
-        }
-        idct_block_scalar(a);
-        idct_block_sse2(b);
-        if (memcmp(a, b, sizeof(a)) != 0)
-            abort();
+static int decode_rle_block_from(const uint16_t *encoded, int16_t *block,
+                               const uint8_t *quant, uint32_t *pos, uint32_t end) {
+    while (*pos < end && encoded[*pos] == 0xfe00u) ++*pos;
+    if (*pos == end) return 0;
+    memset(block, 0, 64 * sizeof(*block));
+    uint16_t entry = encoded[(*pos)++];
+    unsigned q = entry >> 10;
+    int product = sign_extend_10(entry) * quant[0];
+    block[0] = (int16_t)clamp_int(16 * product - 8 * coefficient_sign(product), -16384, 16383);
+    unsigned index = 0;
+    while (*pos < end) {
+        entry = encoded[(*pos)++];
+        index += (entry >> 10) + 1;
+        if (index >= 64) break;
+        int level = sign_extend_10(entry);
+        product = level * quant[index] * (int)q;
+        int value = q ? 16 * floor_div(product, 8) - 8 * coefficient_sign(product) : 32 * level;
+        block[coefficient_order[index]] = (int16_t)clamp_int(value, -16384, 16383);
     }
-}
-
-static void idct_block(int16_t *block)
-{
-    idct_block_sse2(block);
-}
-#else
-static void idct_block(int16_t *block)
-{
-    idct_block_scalar(block);
-}
-#endif
-
-static int decode_rle_block_from(const uint16_t *encoded,int16_t *block, const uint8_t *quant,
-                            uint32_t *pos, uint32_t end) {
-    memset(block, 0, 64 * sizeof(int16_t));
-    if (*pos >= end) return 0;
-    mdec.decode_blocks++;
-
-    uint16_t word = encoded[(*pos)++];
-    while (word == 0xFE00u && *pos < end) {
-        word = encoded[(*pos)++];
-    }
-
-    /* Dequant in Beetle's <<4 fixed-point domain (mdec.cpp:439-485), clamp
-     * ±0x4000. DC uses quant[0] with no qscale; AC uses qscale*quant[k]. Each
-     * nonzero coeff gets the sign-magnitude rounding bias (ci<0 ? +8 : -8) the
-     * old +4/÷8 model omitted, and the <<4 domain feeds the >>3 IDCT matrix. */
-    uint32_t qscale = (word >> 10) & 0x3Fu;
-    uint32_t k = 0;
-    int ci = sign_extend_10(word & 0x03FFu);
-    int q  = (int)quant[0];
-    int tmp = (q != 0) ? (((ci * q) << 4) + (ci ? (ci < 0 ? 8 : -8) : 0))
-                       : ((ci * 2) << 4);
-    block[0] = (int16_t)clamp_int(tmp, -0x4000, 0x3FFF);
-
-    while (*pos < end && k < 63u) {
-        word = encoded[(*pos)++];
-        if (word == 0xFE00u) break;
-
-        k += ((word >> 10) & 0x3Fu) + 1u;
-        if (k >= 64u) break;
-
-        ci = sign_extend_10(word & 0x03FFu);
-        q  = (int)qscale * (int)quant[k];
-        tmp = (q != 0) ? ((((ci * q) >> 3) << 4) + (ci ? (ci < 0 ? 8 : -8) : 0))
-                       : ((ci * 2) << 4);
-        block[zigzag_to_linear[k]] = (int16_t)clamp_int(tmp, -0x4000, 0x3FFF);
-    }
-
     idct_block(block);
     return 1;
 }
-
-static int decode_rle_block(int16_t *block,const uint8_t *quant,uint32_t *pos,uint32_t end){
-    return decode_rle_block_from(mdec.input,block,quant,pos,end);
+static int decode_rle_block(int16_t *block, const uint8_t *quant,
+                           uint32_t *pos, uint32_t end) {
+    int decoded = decode_rle_block_from(mdec.input, block, quant, pos, end);
+    mdec.decode_blocks += (unsigned)decoded;
+    return decoded;
 }
-
-static uint8_t to_output_u8(int value) {
-    value = clamp_int(value, -128, 127);
-    if (mdec.output_signed) return (uint8_t)(int8_t)value;
-    return (uint8_t)(value + 128);
-}
-
-/* 8-bit unsigned channel → 5-bit, Beetle RGB_to_RGB555 rounding (mdec.cpp:306).
- * Beetle's RGB_to_RGB555 takes uint8 params, so the ^0x80 result is truncated to
- * 0..255 BEFORE the round/shift — `c` here is already that uint8. */
-static int rgb_to_555_chan(uint8_t c) {
-    int v = (c + 4) >> 3;
-    if (v > 0x1F) v = 0x1F;
-    return v;
-}
-
-/* Emit one YCbCr pixel into a pre-reserved output cursor (bit-identical to
- * the former append_byte path). Returns advanced cursor. */
-static uint8_t *emit_rgb_pixel(uint8_t *out, int y, int cr, int cb) {
-    /* Beetle YCbCr_to_RGB (mdec.cpp:293-304): /256 coeffs (359,-88/-183,454),
-     * +0x80 rounding, the reduced-precision GREEN mask (-88*cb &~0x1F, -183*cr
-     * &~0x07) — the hardware quirk our old /1024 path lacked, the main green-hue
-     * error — Mask9ClampS8, then ^0x80 to unsigned 0..255. */
-    int r = mask9_clamp_s8(y + (((359 * cr) + 0x80) >> 8));
-    int g = mask9_clamp_s8(y + ((((-88 * cb) & ~0x1F) + ((-183 * cr) & ~0x07) + 0x80) >> 8));
-    int b = mask9_clamp_s8(y + (((454 * cb) + 0x80) >> 8));
-    int ru = r ^ 0x80, gu = g ^ 0x80, bu = b ^ 0x80;   /* signed → unsigned */
-
-    if (mdec.output_depth == 3) {
-        /* 16bpp (mdec.cpp:397-418): RGB555 then pixel_xor = bit15(0x8000) |
-         * signed(0x4210 = MSB of each 5-bit channel). */
-        uint16_t packed = (uint16_t)(rgb_to_555_chan(ru)
-                                     | (rgb_to_555_chan(gu) << 5)
-                                     | (rgb_to_555_chan(bu) << 10));
-        uint16_t pixel_xor = (uint16_t)((mdec.output_bit15 ? 0x8000u : 0u)
-                                        | (mdec.output_signed ? 0x4210u : 0u));
-        packed ^= pixel_xor;
-        out[0] = (uint8_t)packed;
-        out[1] = (uint8_t)(packed >> 8);
-        return out + 2;
-    }
-    /* 24bpp (mdec.cpp:370-393): rgb_xor = signed ? 0x80 : 0x00. */
-    uint8_t rgb_xor = mdec.output_signed ? 0x80u : 0x00u;
-    out[0] = (uint8_t)(ru ^ rgb_xor);
-    out[1] = (uint8_t)(gu ^ rgb_xor);
-    out[2] = (uint8_t)(bu ^ rgb_xor);
-    return out + 3;
-}
-
-static void append_luma_block(const int16_t *yblk) {
-    if (mdec.output_depth == 0) {
-        const uint8_t output_xor = mdec.output_signed ? 0x00u : 0x88u;
-        uint8_t *out = output_reserve(32u);
-        int i;
-        if (!out) return;
-        for (i = 0; i < 64; i += 2) {
-            int v0 = yblk[i] + 8;
-            int v1 = yblk[i + 1] + 8;
-            uint8_t p0 = (uint8_t)(v0 > 127 ? 127 : v0);
-            uint8_t p1 = (uint8_t)(v1 > 127 ? 127 : v1);
-            out[i >> 1] = (uint8_t)(((p0 >> 4) | (p1 & 0xF0u)) ^ output_xor);
+static unsigned mono_bytes(const int16_t *block, unsigned depth, unsigned is_signed,
+                           uint8_t *output) {
+    for (unsigned i = 0; i < 64; ++i) {
+        unsigned value = (unsigned)(block[i] + 128);
+        if (depth == 1) output[i] = (uint8_t)(value ^ (is_signed ? 128u : 0u));
+        else {
+            unsigned nibble = (unsigned)clamp_int((int)(value + 8) / 16, 0, 15);
+            nibble ^= is_signed ? 8u : 0u;
+            if ((i & 1u) == 0) output[i / 2] = (uint8_t)nibble;
+            else output[i / 2] |= (uint8_t)(nibble << 4);
         }
-        mdec.output_size += 32u;
+    }
+    return depth == 1 ? 64 : 32;
+}
+static unsigned color_pixel(int y, int cb, int cr, uint32_t command, uint8_t *out) {
+    int r = mask9_clamp_s8(y + floor_div(359 * cr + 128, 256)) + 128;
+    int b = mask9_clamp_s8(y + floor_div(454 * cb + 128, 256)) + 128;
+    int green = floor_div(floor_div(-88 * cb, 32) + floor_div(-183 * cr, 32) + 4, 8);
+    int g = mask9_clamp_s8(y + green) + 128;
+    unsigned is_signed = (command >> 26) & 1;
+    if (((command >> 27) & 3) == 2) {
+        unsigned toggle = is_signed ? 128u : 0u;
+        out[0] = (uint8_t)((unsigned)r ^ toggle);
+        out[1] = (uint8_t)((unsigned)g ^ toggle);
+        out[2] = (uint8_t)((unsigned)b ^ toggle);
+        return 3;
+    }
+    unsigned pixel = (unsigned)clamp_int((r + 4) / 8, 0, 31)
+                   | ((unsigned)clamp_int((g + 4) / 8, 0, 31) << 5)
+                   | ((unsigned)clamp_int((b + 4) / 8, 0, 31) << 10);
+    pixel ^= is_signed ? 0x4210u : 0u;
+    pixel |= ((command >> 25) & 1u) << 15;
+    out[0] = (uint8_t)pixel; out[1] = (uint8_t)(pixel >> 8);
+    return 2;
+}
+static void append_luma_block(const int16_t *block) {
+    uint8_t *output = output_reserve(mdec.output_depth ? 64 : 32);
+    if (output) mdec.output_size += mono_bytes(block, mdec.output_depth, mdec.output_signed, output);
+}
+static void append_color_macroblock(const int16_t *cr, const int16_t *cb,
+                                   const int16_t yblocks[4][64]) {
+    unsigned bytes = mdec.output_depth == 2 ? 768 : 512;
+    uint8_t *output = output_reserve(bytes);
+    if (!output) return;
+    unsigned offset = 0;
+    for (unsigned y = 0; y < 16; ++y) {
+        for (unsigned x = 0; x < 16; ++x) {
+            unsigned chroma = (y / 2) * 8 + x / 2;
+            int luma = yblocks[(y / 8) * 2 + x / 8][(y % 8) * 8 + x % 8];
+            offset += color_pixel(luma, cb[chroma], cr[chroma], mdec.command, output + offset);
+        }
+    }
+    mdec.output_size += bytes;
+}
+static unsigned source_decode_block(void *context, uint32_t command, unsigned block,
+                                    const uint16_t *encoded, unsigned count, uint32_t *pixels) {
+    (void)context;
+    unsigned depth = (command >> 27) & 3;
+    uint32_t pos = 0;
+    int16_t decoded[64];
+    if (!decode_rle_block_from(encoded, decoded, depth >= 2 && block < 2 ? mdec.uv_quant : mdec.y_quant,
+                               &pos, count)) return 0;
+    uint8_t output[192];
+    unsigned bytes;
+    if (depth < 2) bytes = mono_bytes(decoded, depth, (command >> 26) & 1, output);
+    else if (block < 2) {
+        memcpy(block == 0 ? source_cr : source_cb, decoded, sizeof(decoded));
+        return 0;
     } else {
-        uint8_t *out = output_reserve(64u);
-        if (!out) return;
-        for (int i = 0; i < 64; i++) out[i] = to_output_u8(yblk[i]);
-        mdec.output_size += 64u;
+        unsigned origin_x = ((block - 2) & 1) * 8;
+        unsigned origin_y = ((block - 2) >> 1) * 8;
+        bytes = 0;
+        for (unsigned y = 0; y < 8; ++y) {
+            for (unsigned x = 0; x < 8; ++x) {
+                unsigned c = ((y + origin_y) / 2) * 8 + (x + origin_x) / 2;
+                bytes += color_pixel(decoded[y * 8 + x], source_cb[c], source_cr[c], command, output + bytes);
+            }
+        }
+    }
+    for (unsigned i = 0; i < bytes / 4; ++i)
+        pixels[i] = (uint32_t)output[i * 4] | ((uint32_t)output[i * 4 + 1] << 8)
+                  | ((uint32_t)output[i * 4 + 2] << 16) | ((uint32_t)output[i * 4 + 3] << 24);
+    return bytes / 4;
+}
+static void source_table_word(void *context, unsigned kind, unsigned index, uint32_t value) {
+    (void)context;
+    if (kind == MDEC_CMD_SET_QUANT) {
+        for (unsigned i = 0; i < 4; ++i) {
+            unsigned at = (index + i) & 127;
+            (at < 64 ? mdec.y_quant : mdec.uv_quant)[at & 63] = (uint8_t)(value >> (i * 8));
+        }
+    } else if (kind == MDEC_CMD_SET_SCALE) {
+        for (unsigned i = 0; i < 2; ++i) {
+            unsigned half = (value >> (i * 16)) & 65535u;
+            mdec.scale[(index + i) & 63] = (int16_t)(half >= 32768 ? (int)half - 65536 : (int)half);
+        }
     }
 }
 
-static unsigned source_decode_block(void *context,uint32_t command,unsigned block,
-                                    const uint16_t *encoded,unsigned count,uint32_t *pixels){
-    (void)context;
-    int16_t y[64];int16_t *decoded=block==0?source_cr:block==1?source_cb:y;
-    uint32_t position=0;
-    if(!decode_rle_block_from(encoded,decoded,block<2?mdec.uv_quant:mdec.y_quant,&position,count) || position!=count)
-        return 49; /* Rejected by the controller, never a partial decode. */
-    if(block<2)return 0;
-    mdec.output_depth=(uint8_t)((command>>27)&3u);
-    mdec.output_signed=(uint8_t)((command>>26)&1u);
-    mdec.output_bit15=(uint8_t)((command>>25)&1u);
-    if(mdec.output_depth<2)return 49; /* Monochrome source formats need their own gate. */
-    uint8_t *out=(uint8_t*)pixels,*begin=out;
-    unsigned quadrant=block-2;
-    for(unsigned row=0;row<8;row++)for(unsigned x=0;x<8;x++){
-        unsigned chroma=((row>>1)+((quadrant>>1)*4))*8+(quadrant&1u)*4+(x>>1);
-        out=emit_rgb_pixel(out,y[row*8+x],source_cr[chroma],source_cb[chroma]);
-    }
-    if(block==5){mdec.decode_macroblocks++;mdec_last_color_decode_frame=s_frame_count;mdec_last_color_decode_cycle=psx_cycle_count;}
-    return (unsigned)(out-begin)/4;
-}
-static void source_table_word(void *context,unsigned kind,unsigned index,uint32_t value){
-    (void)context;
-    if(kind==2){
-        for(unsigned i=0;i<4;i++){unsigned at=index+i;(at<64?mdec.y_quant:mdec.uv_quant)[at&63u]=(uint8_t)(value>>(i*8));}
-    } else {
-        for(unsigned i=0;i<2;i++){unsigned at=index+i;mdec.scale[((at&7u)<<3)|(at>>3)]=(int16_t)((int16_t)(value>>(i*16))>>3);}
-    }
-}
 static void source_mdec_require(void){
     if(source_mdec.error){fprintf(stderr,"[mdec-source] unqualified operation or decode\n");exit(2);}
 }
@@ -575,140 +389,9 @@ uint32_t mdec_source_dma_read(uint32_t *word_offset){
     uint32_t value=source_mdec_read(&source_mdec,1,word_offset);source_mdec_require();return value;
 }
 
-#if defined(MDEC_HAVE_SSE2)
-/* Beetle mdec.c EncodeRow24 — 8 luma + 4 chroma → 24 RGB bytes, bit-exact. */
-#define MDEC_MUL32(a, b)                                                       \
-    _mm_or_si128(                                                              \
-        _mm_and_si128(_mm_mul_epu32((a), (b)), _mm_set1_epi64x(0xFFFFFFFFull)),\
-        _mm_slli_epi64(                                                        \
-            _mm_mul_epu32(_mm_srli_epi64((a), 32), _mm_srli_epi64((b), 32)),  \
-            32))
-#define MDEC_M9(v)                                                             \
-    _mm_min_epi16(_mm_max_epi16(_mm_srai_epi16(_mm_slli_epi16((v), 7), 7),     \
-                                _mm_set1_epi16(-128)),                         \
-                  _mm_set1_epi16(127))
 
-static void mdec_encode_row24_sse2(const int16_t *by, const int16_t *cb4,
-                                   const int16_t *cr4, uint8_t rgb_xor,
-                                   uint8_t *out)
-{
-    int16_t cbd[8], crd[8];
-    int8_t by8[8];
-    int l, i;
-    __m128i R, G, B;
-    __m128i flip = _mm_set1_epi16((short)(0x80 ^ rgb_xor));
-    uint8_t r8[8], g8[8], b8[8];
-    __m128i y16, CB, CR, cb_lo, cb_hi, cr_lo, cr_hi, y_lo, y_hi;
-    const __m128i k359 = _mm_set1_epi32(359);
-    const __m128i k454 = _mm_set1_epi32(454);
-    const __m128i km88 = _mm_set1_epi32(-88);
-    const __m128i km183 = _mm_set1_epi32(-183);
-    const __m128i bias = _mm_set1_epi32(0x80);
-    __m128i r_lo, r_hi, b_lo, b_hi, a0, a1, c0, c1, g_lo, g_hi;
 
-    for (l = 0; l < 8; l++)
-        by8[l] = (int8_t)by[l];
-    for (l = 0; l < 4; l++) {
-        cbd[2 * l] = cbd[2 * l + 1] = (int16_t)cb4[l];
-        crd[2 * l] = crd[2 * l + 1] = (int16_t)cr4[l];
-    }
 
-    y16 = _mm_srai_epi16(
-        _mm_slli_epi16(
-            _mm_unpacklo_epi8(_mm_loadl_epi64((const __m128i *)by8),
-                              _mm_setzero_si128()),
-            8),
-        8);
-    CB = _mm_loadu_si128((const __m128i *)cbd);
-    CR = _mm_loadu_si128((const __m128i *)crd);
-    cb_lo = _mm_srai_epi32(_mm_unpacklo_epi16(CB, CB), 16);
-    cb_hi = _mm_srai_epi32(_mm_unpackhi_epi16(CB, CB), 16);
-    cr_lo = _mm_srai_epi32(_mm_unpacklo_epi16(CR, CR), 16);
-    cr_hi = _mm_srai_epi32(_mm_unpackhi_epi16(CR, CR), 16);
-    y_lo = _mm_srai_epi32(_mm_unpacklo_epi16(y16, y16), 16);
-    y_hi = _mm_srai_epi32(_mm_unpackhi_epi16(y16, y16), 16);
-
-    r_lo = _mm_add_epi32(
-        y_lo, _mm_srai_epi32(_mm_add_epi32(MDEC_MUL32(k359, cr_lo), bias), 8));
-    r_hi = _mm_add_epi32(
-        y_hi, _mm_srai_epi32(_mm_add_epi32(MDEC_MUL32(k359, cr_hi), bias), 8));
-    b_lo = _mm_add_epi32(
-        y_lo, _mm_srai_epi32(_mm_add_epi32(MDEC_MUL32(k454, cb_lo), bias), 8));
-    b_hi = _mm_add_epi32(
-        y_hi, _mm_srai_epi32(_mm_add_epi32(MDEC_MUL32(k454, cb_hi), bias), 8));
-    a0 = _mm_andnot_si128(_mm_set1_epi32(0x1F), MDEC_MUL32(km88, cb_lo));
-    a1 = _mm_andnot_si128(_mm_set1_epi32(0x1F), MDEC_MUL32(km88, cb_hi));
-    c0 = _mm_andnot_si128(_mm_set1_epi32(0x07), MDEC_MUL32(km183, cr_lo));
-    c1 = _mm_andnot_si128(_mm_set1_epi32(0x07), MDEC_MUL32(km183, cr_hi));
-    g_lo = _mm_add_epi32(
-        y_lo,
-        _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(a0, c0), bias), 8));
-    g_hi = _mm_add_epi32(
-        y_hi,
-        _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(a1, c1), bias), 8));
-    R = MDEC_M9(_mm_packs_epi32(r_lo, r_hi));
-    G = MDEC_M9(_mm_packs_epi32(g_lo, g_hi));
-    B = MDEC_M9(_mm_packs_epi32(b_lo, b_hi));
-    R = _mm_xor_si128(_mm_and_si128(R, _mm_set1_epi16(0xFF)), flip);
-    G = _mm_xor_si128(_mm_and_si128(G, _mm_set1_epi16(0xFF)), flip);
-    B = _mm_xor_si128(_mm_and_si128(B, _mm_set1_epi16(0xFF)), flip);
-    _mm_storel_epi64((__m128i *)r8, _mm_packus_epi16(R, R));
-    _mm_storel_epi64((__m128i *)g8, _mm_packus_epi16(G, G));
-    _mm_storel_epi64((__m128i *)b8, _mm_packus_epi16(B, B));
-    for (i = 0; i < 8; i++) {
-        out[i * 3 + 0] = r8[i];
-        out[i * 3 + 1] = g8[i];
-        out[i * 3 + 2] = b8[i];
-    }
-}
-#undef MDEC_MUL32
-#undef MDEC_M9
-#endif /* MDEC_HAVE_SSE2 */
-
-static void append_color_macroblock(const int16_t *crblk, const int16_t *cbblk,
-                                    const int16_t yblk[4][64]) {
-    /* 16×16: 512 bytes @15bpp, 768 @24bpp — reserve once per MB. */
-    uint32_t need = (mdec.output_depth == 3) ? 512u : 768u;
-    uint8_t *out = output_reserve(need);
-    if (!out) return;
-    uint8_t *p = out;
-#if defined(MDEC_HAVE_SSE2)
-    /* MotK FMV is 24bpp — row SIMD (Beetle EncodeRow24). 16bpp stays scalar. */
-    if (mdec.output_depth != 3) {
-        uint8_t rgb_xor = mdec.output_signed ? 0x80u : 0x00u;
-        int py;
-        for (py = 0; py < 16; py++) {
-            int y_left = (py >= 8 ? 2 : 0);
-            int y_right = y_left + 1;
-            int ly = py & 7;
-            int crow = (py >> 1) * 8;
-            mdec_encode_row24_sse2(&yblk[y_left][ly * 8], &cbblk[crow],
-                                   &crblk[crow], rgb_xor, p);
-            p += 24;
-            mdec_encode_row24_sse2(&yblk[y_right][ly * 8], &cbblk[crow + 4],
-                                   &crblk[crow + 4], rgb_xor, p);
-            p += 24;
-        }
-        mdec.output_size += need;
-        return;
-    }
-#endif
-    for (int py = 0; py < 16; py++) {
-        for (int px = 0; px < 16; px++) {
-            int y_index = (py >= 8 ? 2 : 0) + (px >= 8 ? 1 : 0);
-            int lx = px & 7;
-            int ly = py & 7;
-            int chroma = (px >> 1) + (py >> 1) * 8;
-            p = emit_rgb_pixel(p, yblk[y_index][lx + ly * 8],
-                               crblk[chroma], cbblk[chroma]);
-        }
-    }
-    mdec.output_size += need;
-}
-
-/* Monotonic count of decode invocations — the frontend FMV detector samples
- * this per display-frame to tell "MDEC is actively producing frames" (FMV)
- * from idle. */
 static volatile uint32_t g_mdec_decode_count = 0;
 uint32_t mdec_get_decode_count(void) { return g_mdec_decode_count; }
 
@@ -754,8 +437,8 @@ static void execute_decode(void) {
         mdec.decode_stop_reason = MDEC_STOP_INPUT_END;
     }
     mdec.decode_input_pos = pos;
-    /* FMV detector: stamp colour (15/24-bit) decodes only — streamed video.
-     * The 4/8-bit luma path above is texture decompression, not video. */
+
+
     mdec_last_color_decode_frame = s_frame_count;
     mdec_last_color_decode_cycle = psx_cycle_count;
     trace_event(MDEC_EVT_DECODE_DONE, mdec.output_size);
@@ -763,27 +446,18 @@ static void execute_decode(void) {
 
 static void execute_command(void) {
     uint32_t op = mdec.command >> 29;
-    if (op == MDEC_CMD_SET_QUANT) {
-        for (uint32_t i = 0; i < 64u; i++) {
-            mdec.y_quant[i] = input_byte(i);
-        }
-        if (mdec.command & 1u) {
-            for (uint32_t i = 0; i < 64u; i++) {
-                mdec.uv_quant[i] = input_byte(64u + i);
-            }
-        } else {
-            memcpy(mdec.uv_quant, mdec.y_quant, sizeof(mdec.uv_quant));
-        }
-    } else if (op == MDEC_CMD_SET_SCALE) {
-        /* Load the IDCT matrix exactly as Beetle (mdec.cpp:647): store each entry
-         * TRANSPOSED ([(i&7)<<3 | (i>>3)&7]) and pre-shifted >>3 (arithmetic), so
-         * IDCT_1D_Multi above can index it [x*8+u] directly with no per-tap /8. */
-        for (uint32_t i = 0; i < 64u; i++) {
-            uint32_t t = ((i & 7u) << 3) | ((i >> 3) & 7u);
-            mdec.scale[t] = (int16_t)((int16_t)mdec.input[i] >> 3);
-        }
-    } else if (op == MDEC_CMD_DECODE) {
+
+    if (op == MDEC_CMD_DECODE) {
         execute_decode();
+    } else if (op == MDEC_CMD_SET_QUANT) {
+        for (unsigned i = 0; i < 64; ++i) mdec.y_quant[i] = input_byte(i);
+        if (mdec.command & 1u)
+            for (unsigned i = 0; i < 64; ++i) mdec.uv_quant[i] = input_byte(i + 64);
+    } else if (op == MDEC_CMD_SET_SCALE) {
+        for (unsigned i = 0; i < 64; ++i) {
+            unsigned value = mdec.input[i];
+            mdec.scale[i] = (int16_t)(value >= 32768 ? (int)value - 65536 : (int)value);
+        }
     }
 
     finish_command();
@@ -837,9 +511,9 @@ static void write_data(uint32_t value) {
 }
 
 int mdec_recently_active(uint32_t within_frames) {
-    /* Guest-cycle hysteresis (not host s_frame_count). Present-skip / Replay
-     * leave s_frame_count stale so a single decode looked "recent" forever
-     * (false FMV lockstep on rematch; tip episodes into MotK FMV entry). */
+
+
+
     const uint64_t cycles_per_frame = 338688ull;
     const uint64_t window =
         (uint64_t)within_frames * cycles_per_frame + (cycles_per_frame / 2ull);
@@ -861,8 +535,8 @@ void mdec_init(void) {
     memset(mdec_trace, 0, sizeof(mdec_trace));
     mdec_trace_seq = 0;
     mdec_trace_head = 0;
-    /* Rematch resets s_frame_count; a stale stamp makes mdec_recently_active
-     * wrap and lie for the whole next session. */
+
+
     mdec_last_color_decode_frame = (uint64_t)0 - 1000u;
     mdec_last_color_decode_cycle = (uint64_t)0 - 1000u;
     for (int i = 0; i < 64; i++) {
@@ -871,60 +545,7 @@ void mdec_init(void) {
     }
     mdec.output_depth = 3;
     mdec.current_block = 4;
-#if defined(MDEC_HAVE_SSE2)
-    idct_simd_selfcheck();
-    memset(mdec.scale, 0, sizeof(mdec.scale));
-    /* YCbCr row vs scalar emit — MotK FMV path (depth 2 = 24bpp). */
-    {
-        uint32_t seed = 0xBADC0DEEu;
-        int n, i;
-        mdec.output_depth = 2;
-        mdec.output_signed = 0;
-        for (n = 0; n < 256; n++) {
-            int16_t by[8], cb4[4], cr4[4];
-            uint8_t sse[24], ref[24];
-            uint8_t *rp = ref;
-            for (i = 0; i < 8; i++) {
-                seed = seed * 1664525u + 1013904223u;
-                by[i] = (int16_t)((int)(seed % 255u) - 128);
-            }
-            for (i = 0; i < 4; i++) {
-                seed = seed * 1664525u + 1013904223u;
-                cb4[i] = (int16_t)((int)(seed % 255u) - 128);
-                seed = seed * 1664525u + 1013904223u;
-                cr4[i] = (int16_t)((int)(seed % 255u) - 128);
-            }
-            mdec_encode_row24_sse2(by, cb4, cr4, 0, sse);
-            for (i = 0; i < 8; i++)
-                rp = emit_rgb_pixel(rp, by[i], cr4[i >> 1], cb4[i >> 1]);
-            if (memcmp(sse, ref, 24) != 0)
-                abort();
-        }
-        mdec.output_signed = 1;
-        for (n = 0; n < 64; n++) {
-            int16_t by[8], cb4[4], cr4[4];
-            uint8_t sse[24], ref[24];
-            uint8_t *rp = ref;
-            for (i = 0; i < 8; i++) {
-                seed = seed * 1664525u + 1013904223u;
-                by[i] = (int16_t)((int)(seed % 255u) - 128);
-            }
-            for (i = 0; i < 4; i++) {
-                seed = seed * 1664525u + 1013904223u;
-                cb4[i] = (int16_t)((int)(seed % 255u) - 128);
-                seed = seed * 1664525u + 1013904223u;
-                cr4[i] = (int16_t)((int)(seed % 255u) - 128);
-            }
-            mdec_encode_row24_sse2(by, cb4, cr4, 0x80u, sse);
-            for (i = 0; i < 8; i++)
-                rp = emit_rgb_pixel(rp, by[i], cr4[i >> 1], cb4[i >> 1]);
-            if (memcmp(sse, ref, 24) != 0)
-                abort();
-        }
-        mdec.output_signed = 0;
-        mdec.output_depth = 3;
-    }
-#endif
+
     source_mdec_enabled=0;
     const char *source_mode=getenv("PSX_MDEC_SOURCE_MODEL");
     if(source_mode && *source_mode){
@@ -958,14 +579,7 @@ uint32_t mdec_read(uint32_t addr) {
     if (!write_ready) status |= 1u << 30;
     if (mdec.enable_dma_out && mdec_dma_read_ready()) status |= 1u << 27;
     if (mdec.enable_dma_in && write_ready) status |= 1u << 28;
-    /* Bit 29 (Command Busy) must stay set until the decoded output has been
- * drained, not merely until the last input halfword arrived. Beetle keeps
- * InCommand up for the whole decode state machine, which stalls on its
- * OutFIFO (mdec.cpp MDEC_Run cases 5-9), so DecDCTinSync(0) blocks for
- * ~1.3 frames on a 320x240 frame and returns only after the DMA1 slice
- * callbacks have fired. We decode synchronously and clear busy at once,
- * so the sync returned early and RE2 read its completion flag before the
- * producer had set it (T33, 2026-08-23). Hold busy while output pends. */
+
     if (mdec.busy || mdec.output_pos < mdec.output_size) status |= 1u << 29;
     if (mdec.output_pos >= mdec.output_size) status |= 1u << 31;
     mdec.last_status = status;
@@ -998,16 +612,16 @@ void mdec_dma_write_word(uint32_t value) {
     write_data(value);
 }
 
-/* Feed up to `max_words` from a contiguous LE word source (DMA ch0). Stops
- * early if the FIFO becomes not-ready after a decode completes mid-burst.
- * Guest bytes + decode triggers match N× mdec_dma_write_word. */
+
+
+
 uint32_t mdec_dma_write_words(const uint32_t *src, uint32_t max_words) {
     if(source_mdec_enabled){unsigned n=0;while(n<max_words && source_mdec.in_count<32)mdec_dma_write_word(src[n++]);return n;}
     uint32_t moved = 0;
     while (moved < max_words) {
         if (!mdec_dma_write_ready()) break;
-        /* Fast fill while a DECODE/QUANT/SCALE command is collecting input —
-         * same halfword packing + single execute_command as write_data. */
+
+
         if (mdec.busy && mdec.input_count < mdec.expected_halfwords) {
             uint32_t need_hw = mdec.expected_halfwords - mdec.input_count;
             uint32_t need_words = (need_hw + 1u) / 2u;
@@ -1060,7 +674,7 @@ uint32_t mdec_dma_read_word(void) {
     return value;
 }
 
-/* Drain up to `max_words` into a contiguous LE destination (DMA ch1). */
+
 uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words) {
     if(source_mdec_enabled){unsigned n=0;while(n<max_words && source_mdec.out_count)dst[n++]=mdec_dma_read_word();return n;}
     uint32_t moved = 0;
@@ -1151,12 +765,12 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words) {
     trace_event(MDEC_EVT_DMA_OUT_END, words);
 }
 
-/* ---- boot_state snapshot (variable-length input/output FIFOs) ------------ */
-#define MDEC_SNAP_VER 2u
-#define MDEC_SNAP_INPUT_MAX  (4u * 1024u * 1024u) /* halfwords */
-#define MDEC_SNAP_OUTPUT_MAX (8u * 1024u * 1024u) /* bytes */
 
-/* Host callbacks stay attached to this executable; only guest state is wired. */
+#define MDEC_SNAP_VER 2u
+#define MDEC_SNAP_INPUT_MAX  (4u * 1024u * 1024u)
+#define MDEC_SNAP_OUTPUT_MAX (8u * 1024u * 1024u)
+
+
 #define SOURCE_MDEC_WIRE_BYTES (905u+(source_mdec.block_cycles==512?4u:0u))
 #define SOURCE_MDEC_SCALARS(X) \
     X(in_at) X(in_count) X(out_at) X(out_count) X(command) X(control) \
@@ -1205,14 +819,14 @@ static int mdec_source_snap_parse(PstR *r, int apply) {
 }
 
 static uint32_t mdec_snap_fixed_bytes(void) {
-    /* ver + scalars + tables + counts + last_color_age (guest cycles) */
-    return 4u + /* ver */
-           4u * 14u + /* u32 scalars */
-           1u * 8u +  /* u8 flags */
-           64u + 64u + /* y/uv quant */
-           64u * 2u + /* scale i16 */
-           4u + 4u + /* input_count, output_size */
-           8u;       /* last_color_age in guest cycles */
+
+    return 4u +
+           4u * 14u +
+           1u * 8u +
+           64u + 64u +
+           64u * 2u +
+           4u + 4u +
+           8u;
 }
 
 uint32_t mdec_snapshot_bytes(void) {
@@ -1241,8 +855,8 @@ void mdec_snapshot_write(uint8_t *p) {
     (void)pst_w_u32(&w, mdec.dma_out_words);
     (void)pst_w_u32(&w, mdec.dma_read_underflows);
     (void)pst_w_u32(&w, mdec.output_pos);
-    (void)pst_w_u32(&w, 0u); /* reserved */
-    (void)pst_w_u32(&w, 0u); /* reserved */
+    (void)pst_w_u32(&w, 0u);
+    (void)pst_w_u32(&w, 0u);
     (void)pst_w_u8(&w, mdec.output_bit15);
     (void)pst_w_u8(&w, mdec.output_signed);
     (void)pst_w_u8(&w, mdec.output_depth);
@@ -1257,7 +871,7 @@ void mdec_snapshot_write(uint8_t *p) {
         (void)pst_w_i16(&w, mdec.scale[i]);
     (void)pst_w_u32(&w, mdec.input_count);
     (void)pst_w_u32(&w, mdec.output_size);
-    /* Preserve the absolute watermark, including the never-decoded sentinel. */
+
     (void)pst_w_u64(&w, mdec_last_color_decode_cycle);
     for (uint32_t i = 0; i < mdec.input_count; i++)
         (void)pst_w_u16(&w, mdec.input ? mdec.input[i] : 0u);
@@ -1335,7 +949,7 @@ int mdec_snapshot_prepare(const uint8_t *p, uint32_t len) {
     PstR payload;
     uint64_t last_decode_cycle;
     if (!mdec_snapshot_parse(p, len, &next, &payload, &last_decode_cycle)) return 0;
-    /* realloc preserves live FIFO bytes even if the other reserve fails. */
+
     return ensure_input_capacity(next.input_count ? next.input_count : 1u) &&
            ensure_output_capacity(next.output_size ? next.output_size : 1u);
 }
@@ -1361,14 +975,14 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     }
     if (output_size && !pst_r_bytes(&r, mdec.output, output_size))
         return 0;
-    /* The payload carries the absolute watermark, sentinel included. */
+
     if (source_mdec_enabled && !mdec_source_snap_parse(&r,1)) return 0;
     if (r.p!=r.end) return 0;
     mdec_last_color_decode_cycle = last_decode_cycle;
     age = psx_cycle_count >= last_decode_cycle ? psx_cycle_count-last_decode_cycle : UINT64_MAX;
     mdec = next;
-    /* Refresh host-frame hysteresis for local FMV policy only (~1 frame ≈
-     * 338688 cycles @ NTSC). Cap so recently_active stays meaningful. */
+
+
     {
         const uint64_t cycles_per_frame = 338688ull;
         uint64_t frames_ago = age / cycles_per_frame;
