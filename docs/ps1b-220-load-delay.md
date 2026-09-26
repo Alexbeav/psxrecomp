@@ -68,3 +68,13 @@ that historical identifier, so it is a lead rather than an available authority.
 The native trap helpers retain pre-existing fatal BREAK/overflow behavior.
 Full rule-8 exception qualification must distinguish that executor behavior from
 load-value retirement. No claim of full exception support follows from these checks.
+
+### 2026-09-27: complete clean-fixture ingestion and conditional decoder replay
+All119 authored RAM hashes and stock guest-log hashes match the clean L1 receipts; the fixture is now bound in runtime/tests/load_delay_l1_clean.json. Actual RAM program base is0x1000. The supplied human listing tool prints0x500-based addresses even though its RAM hash matches the0x1000 image; use rebuilt RAM/receipt identity, not listing address labels.
+
+runtime/tests/test_load_delay_l1_matrix.py runs all119 complete guest programs through the real decoder and GTE module at O0/O2 and matches all20 output words per case (ps1b-220-matrix5.log). IRQ EPC and Cause are replayed from the oracle as input stimuli, and SYSCALL is routed through the real interpreter exception-entry helper by a test seam. Handler instructions execute through the decoder. This is conditional CPU-value evidence, not timer recognition, real IRQ transport, native/overlay or full precise-slice qualification. Those gates remain open. First attempts exposed fixture seams (missing module name, hook signature, missing syscall route, Cause stimulus), not new production failures.
+
+### 2026-09-27: all 23 non-IRQ native L1 programs
+The same 23 complete non-IRQ programs now pass at O0/O2 through actual generated CFG functions and the generated production dispatch table (ps1b-220-native-matrix-all1.log). No interpreter fallback is permitted by this runner. Exact byte output matches all20 clean oracle words. Input code/addresses are unchanged; native code-range validity and optional HLE/debug hooks are explicit fixture seams. The syscall row uses the previously declared exception-transport seam. The96 timer cases are still decoder boundary replays only. Overlay DLL and actual precise/timer paths remain unqualified.
+
+Focused review found the existing savestate status protocol guard still demanded v10 after this branch's v11 bump. The old guard failed; it now checks v11 and passes. Updated the matching boot_state.h read-floor comment. No extra format change.

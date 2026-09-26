@@ -18,13 +18,14 @@ DMA = (ROOT / "src/dma.c").read_text(encoding="utf-8")
 # is applied. 68cb3183 (TAS checkpoint capture and resume) made it v10 and
 # raised the read floor to 10. PS1B-211 (the GPUREAD data latch) and PS1B-215
 # (the DualShock power-on flag) made it v11 with a read floor of 11: every
-# writer emits v11 and every earlier state is refused. That matches the Wave 5 rule of a clean install with no save
+# PS1B-220 provisionally uses v13 (v12 staged for 186). Every
+# writer emits v13 and every earlier state is refused. That matches the Wave 5 rule of a clean install with no save
 # compatibility. Bumping either number is a deliberate format decision; update
 # these lines with it.
 assert "#define DMA_GPU_LL_WIRE (4u + (10u * 4u))" in DMA
-assert "#define BOOT_STATE_VERSION 11u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION 13u" in BOOT_STATE_H
 assert "h.version       = BOOT_STATE_VERSION;" in BOOT_STATE_C
-assert "#define BOOT_STATE_VERSION_MIN_READ 11u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION_MIN_READ 13u" in BOOT_STATE_H
 assert "v11 therefore rejects every earlier state." in BOOT_STATE_H
 
 assert "void savestate_status_json(char* buf, size_t cap);" in HEADER

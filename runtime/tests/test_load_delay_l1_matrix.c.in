@@ -1,0 +1,57 @@
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include "cpu_state.h"
+#include "cpu_state_wire.h"
+int l1_step(CPUState *, uint32_t, uint32_t, uint32_t *);
+int source_gpu_runtime_active(void) { return 0; }
+int psx_ws_backdrop_preload(void) { return 0; }
+int psx_ws_is_cull_xclip_load_site(uint32_t pc) { (void)pc; return 0; }
+int psx_ws_is_cull_plane_nx_site(uint32_t pc) { (void)pc; return 0; }
+void psx_pgxp_load(CPUState *c,uint32_t i,uint32_t a,uint32_t v) {(void)c;(void)i;(void)a;(void)v;}
+void psx_pgxp_move(CPUState *c,uint32_t i,uint32_t v) {(void)c;(void)i;(void)v;}
+void psx_pgxp_alu(CPUState *c,uint32_t i,uint32_t a,uint32_t b,uint32_t v) {(void)c;(void)i;(void)a;(void)b;(void)v;}
+int psx_ws_angle_site(uint32_t p,uint32_t i,uint32_t *v) {(void)p;(void)i;(void)v;return 0;}
+int psx_ws_is_cull_bias_site(uint32_t p) {(void)p;return 0;}
+int psx_ws_is_signed_x_bound_site(uint32_t p,uint32_t i) {(void)p;(void)i;return 0;}
+
+#include "@MATRIX@"
+static uint8_t ram[2*1024*1024];
+uint8_t *memory_get_ram_ptr(void){return ram;}
+uint64_t psx_cycle_count;uint32_t i_stat,i_mask;
+uint32_t g_debug_last_store_pc;
+uint32_t psx_read_word(uint32_t a){a&=0x1fffffff;assert(a<sizeof ram-3);uint32_t v;memcpy(&v,ram+a,4);return v;}
+uint16_t psx_read_half(uint32_t a){return (uint16_t)(psx_read_word(a&~3u)>>(8*(a&3)));}
+uint8_t psx_read_byte(uint32_t a){return (uint8_t)(psx_read_word(a&~3u)>>(8*(a&3)));}
+uint8_t psx_cyc_load_byte(CPUState *c,uint32_t a,uint32_t r,uint32_t m){(void)c;(void)r;(void)m;return psx_read_byte(a);}
+void psx_write_word(uint32_t a,uint32_t v){a&=0x1fffffff;if(a>=0x1f800000u)return;assert(a<sizeof ram-3);memcpy(ram+a,&v,4);}
+void psx_write_half(uint32_t a,uint16_t v){a&=0x1fffffff;assert(a<sizeof ram-1);memcpy(ram+a,&v,2);}
+void psx_write_byte(uint32_t a,uint8_t v){a&=0x1fffffff;assert(a<sizeof ram);ram[a]=v;}
+void psx_pgxp_store(CPUState*c,uint32_t i,uint32_t a,uint32_t v){(void)c;(void)i;(void)a;(void)v;}
+void psx_pgxp_cop2(CPUState*c,uint32_t i,uint32_t v,uint32_t ctrl){(void)c;(void)i;(void)v;(void)ctrl;}
+void psx_rfe_mark_escape(void){}
+int l1_inject_syscall(CPUState *);
+int psx_syscall(CPUState *c,uint32_t code){(void)code;return l1_inject_syscall(c);}
+void l1_precise_control(void);void l1_inject_irq(CPUState*,uint32_t);
+int main(void){
+ l1_precise_control();
+ for(unsigned n=0;n<sizeof cases/sizeof cases[0];n++){
+  const Case *f=&cases[n];memset(ram,0,sizeof ram);
+  memcpy(ram+0x1000,f->code,f->size);memcpy(ram+0x200,handler,sizeof handler);memcpy(ram+0x40000,f->data,16);
+  psx_write_word(0x80,0x08000080);CPUState c={0};c.pc=0x80001000;
+  c.read_word=psx_read_word;c.read_half=psx_read_half;c.read_byte=psx_read_byte;
+  c.write_word=psx_write_word;c.write_half=psx_write_half;c.write_byte=psx_write_byte;
+  unsigned injected=0,steps=0;
+  for(;psx_read_word(0x100)!=0xfeed1234u && steps<1000;steps++){
+   if(f->name[0]=='g'&&!injected&&f->expected[17]&&c.pc==f->expected[17]){c.cop0[13]=f->expected[18];l1_inject_irq(&c,c.pc);injected=1;}
+   uint32_t next=0;if(!l1_step(&c,c.pc,psx_read_word(c.pc),&next))c.pc=next;
+  }
+  if(steps==1000){fprintf(stderr,"%s marker timeout pc=%08x\n",f->name,c.pc);return 1;}
+  for(unsigned j=0;j<20;j++){
+   uint32_t got=psx_read_word(j<16?0x100000+4*j:0x100800+4*(j-16));
+   if(got!=f->expected[j]){fprintf(stderr,"%s word%u %08x != %08x\n",f->name,j,got,f->expected[j]);return 1;}
+  }
+ }
+ return 0;
+}
+

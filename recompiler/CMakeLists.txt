@@ -1321,3 +1321,8 @@ if(BUILD_TESTING)
         --cc ${CMAKE_C_COMPILER} --recompiler $<TARGET_FILE:psxrecomp-game>
         --bios-emitter $<TARGET_FILE:full_function_emitter_test>)
 endif()
+
+if(Python3_EXECUTABLE)
+    add_test(NAME load_delay_l1_clean_matrix COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1_matrix.py)
+endif()
