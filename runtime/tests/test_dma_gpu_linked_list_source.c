@@ -2,6 +2,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../src/dma.c"
 #include <assert.h>
+/* Payload words the kick credit covers after one node header. */
+#define LLW (DSM_KICK_CREDIT - DSM_LL_NODE_PAYLOAD)
 uint64_t s_frame_count,psx_cycle_count,psx_next_service_cycle;
 int psx_in_device_service,g_event_step_conservative,g_ls_replay_active;
 uint32_t g_psx_cyc_batch,g_psx_cyc_batch_limit;
@@ -97,13 +99,14 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[1],"capture")){try_execute(2);dma_snapshot_write(NULL);return 1;}
         try_execute(2);return 1;
     }
-    /* Ten independent original-DLL expectations: GPU-ready x 0/6/49/50/65.
+    /* Ten independent original-DLL expectations: GPU-ready x 0/6/W/W+1/65, with
+     * W = the payload words the kick credit covers after one header (DSM_LL_NODE).
      * Only immediate completion/busy and eventual release are asserted here.
      * Source receipt owns exact guest read timing and source GPU behavior. */
-    const unsigned words[]={0,6,49,50,65};
+    const unsigned words[]={0,6,LLW,LLW+1,65};
     for(int ready=0;ready<2;ready++)for(unsigned i=0;i<5;i++) {
         unsigned n=words[i];setup(n,ready);try_execute(2);
-        unsigned expected=ready&&n<=49;
+        unsigned expected=ready&&n<=LLW;
         if(irqs!=expected || !!(channels[2].chcr&(1u<<24))==expected ||
            (!ready && upload_count)) {
             fprintf(stderr,"source startup mismatch ready=%d words=%u irq=%u expected=%u busy=%u sent=%u\n",ready,n,irqs,expected,!!(channels[2].chcr&(1u<<24)),upload_count);return 1;
@@ -128,22 +131,56 @@ int main(int argc,char **argv) {
 #ifdef PSX_TEST_SOURCE_LL_IMPLEMENTED
     /* Generic PSX-DMA-001 ownership: a future payload and future node remain
      * live after kick. Neither may be snapshotted by a metadata prepass. */
-    setup(65,1);try_execute(2);assert(upload_count==49);
-    ram[(0x1004+49*4)/4]=0xe1000001;
-    psx_cycle_count=128;dsm_service(DSM_LL, psx_cycle_count);assert(uploaded[49]==0xe1000001&&irqs==1);
-    setup(49,1);ram[0x1000/4]=(49u<<24)|0x2000;ram[0x2000/4]=0xffffff;
-    try_execute(2);assert(upload_count==49&&!irqs);
+    setup(65,1);try_execute(2);assert(upload_count==LLW);
+    ram[(0x1004+LLW*4)/4]=0xe1000001;
+    psx_cycle_count=128;dsm_service(DSM_LL, psx_cycle_count);assert(uploaded[LLW]==0xe1000001&&irqs==1);
+    setup(LLW,1);ram[0x1000/4]=((uint32_t)LLW<<24)|0x2000;ram[0x2000/4]=0xffffff;
+    try_execute(2);assert(upload_count==LLW&&!irqs);
     ram[0x2000/4]=(1u<<24)|0xffffff;ram[0x2004/4]=0xe2000002;
-    psx_cycle_count=128;dsm_service(DSM_LL, psx_cycle_count);assert(upload_count==50&&uploaded[49]==0xe2000002&&irqs==1);
+    psx_cycle_count=128;dsm_service(DSM_LL, psx_cycle_count);assert(upload_count==LLW+1&&uploaded[LLW]==0xe2000002&&irqs==1);
     /* Source does not bank positive credit while not ready. */
     setup(255,0);try_execute(2);psx_cycle_count=512;dsm_service(DSM_LL, psx_cycle_count);
-    ready_state=1;psx_cycle_count=640;dsm_service(DSM_LL, psx_cycle_count);assert(upload_count==113&&!irqs);
-    /* Partial service precedes DICR replacement: completion sees old mask. */
-    setup(50,1);dicr=1u<<23;try_execute(2);psx_cycle_count=28;
-    dma_write(0x1f8010f4,(1u<<23)|(1u<<18));assert(upload_count==50&&!irqs);
-    setup(50,1);try_execute(2);psx_cycle_count=28;
-    dma_write(0x1f8010f4,0);assert(upload_count==50&&irqs==1);
+    ready_state=1;psx_cycle_count=640;dsm_service(DSM_LL, psx_cycle_count);assert(upload_count==128-DSM_LL_NODE_PAYLOAD&&!irqs);
+    /* Partial service precedes DICR replacement: completion sees old mask.
+     * The walk moves on 128-cycle edges (D23), so the write is at the edge. */
+    setup(LLW+1,1);dicr=1u<<23;try_execute(2);psx_cycle_count=128;
+    dma_write(0x1f8010f4,(1u<<23)|(1u<<18));assert(upload_count==LLW+1&&!irqs);
+    setup(LLW+1,1);try_execute(2);psx_cycle_count=128;
+    dma_write(0x1f8010f4,0);assert(upload_count==LLW+1&&irqs==1);
     assert(!dma_snapshot_read(NULL,0));
+    /* [ORACLE FIXTURE D23] completion slices. Kick at cycle 32 (edges on the
+     * 128 grid), so the oracle's slice points dt = 96 + 128j fall on edges.
+     * a: 1 + N header-only nodes -> done at dt 224 / 608 / 2528 / 10208.
+     * b: 16 nodes of k NOP words -> k 1,2: 224; 4,8: 352; 15: 480. */
+    {
+        static const struct { unsigned nodes, k, done; } d23[] = {
+            {17,0,224},{65,0,608},{257,0,2528},{1025,0,10208},
+            {16,1,224},{16,2,224},{16,4,352},{16,8,352},{16,15,480},
+        };
+        for (unsigned c = 0; c < sizeof d23 / sizeof d23[0]; c++) {
+            dma_init();memset(ram,0,sizeof(ram));irqs=i_stat=upload_count=0;ready_state=1;
+            uint32_t a = 0x10000;
+            for (unsigned i = 0; i < d23[c].nodes; i++) {
+                uint32_t next = i + 1 < d23[c].nodes ? a + 4 * (d23[c].k + 1) : 0xFFFFFF;
+                ram[a / 4] = (d23[c].k << 24) | next;
+                for (unsigned w = 0; w < d23[c].k; w++) ram[a / 4 + 1 + w] = 0;
+                a += 4 * (d23[c].k + 1);
+            }
+            psx_cycle_count = 32; psx_next_service_cycle = 0;
+            channels[2].madr = 0x10000; channels[2].bcr = 0; channels[2].chcr = 0x01000401;
+            dpcr |= 8u << 8; dicr = (1u << 23) | (1u << 18);
+            try_execute(2);
+            unsigned done = 0;
+            for (uint64_t t = 128; t < 32 + 20000 && !done; t += 128) {
+                psx_cycle_count = t; dsm_service(DSM_LL, t);
+                if (!(channels[2].chcr & (1u << 24))) done = (unsigned)(t - 32);
+            }
+            if (done != d23[c].done) {
+                fprintf(stderr, "D23 nodes %u k %u: done at dt %u, oracle slice %u\n", d23[c].nodes, d23[c].k, done, d23[c].done);
+                return 1;
+            }
+        }
+    }
     /* The default model is the event-driven DMA2 walker (dma_gpu_ll.c): the kick
      * sends nothing synchronously, so the walk itself is live checkpoint state.
      * Restoring it into a cleared controller must resume the same walk. */
@@ -159,7 +196,7 @@ int main(int argc,char **argv) {
         assert(!memcmp(&live,&gpu_linked_list,sizeof live));
     }
 #endif
-    puts("PASS ten source startup states,49/50 boundary,live future words/nodes,stalls,write ordering,default");return 0;
+    puts("PASS ten source startup states,W/W+1 boundary,D23 completion slices,live future words/nodes,stalls,write ordering,default");return 0;
 }
 
 /* Source GPU projection is inactive in this isolated controller fixture. */
