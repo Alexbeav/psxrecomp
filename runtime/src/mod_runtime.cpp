@@ -1167,6 +1167,14 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     for (const std::string& scan_error : s.manager.scan_errors())
         std::fprintf(stderr, "psxrecomp: mod manifest ignored: %s\n",
                      scan_error.c_str());
+    /* state.toml may name a package this catalog does not hold (removed,
+     * stripped from a release, or a builtin the title excludes). resolve()
+     * never visits it and save_state() keeps it; say so once. */
+    for (const std::string& dormant : s.manager.dormant_selections())
+        std::fprintf(stdout,
+                     "psxrecomp: mod selection kept but inactive: %s is not "
+                     "in this build's mod catalog\n",
+                     dormant.c_str());
     if (!sha256_file(exe_path, s.exe_sha256, &s.error)) {
         /* Release installs commonly do not carry a loose PS-X EXE; game-id and
          * expected-byte guards remain available in that case. */

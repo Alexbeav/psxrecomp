@@ -18,9 +18,10 @@ Two catalog roots sit beside the executable, split by who owns the files:
 
 ```text
 <exe>/mods/
-  bundled/     build output — the framework's mods/builtin/packages plus the
-               title's mods/preloaded/packages. Every build WIPES and re-stages
-               this tree, so nothing a player owns may live here.
+  bundled/     build output — the framework's mods/builtin/packages (minus any
+               the title declines with EXCLUDE_BUILTIN_MODS) plus the title's
+               mods/preloaded/packages. Every build WIPES and re-stages this
+               tree, so nothing a player owns may live here.
   installed/   launcher-owned — .psxmod archives installed through the Mods
                manager. No build ever touches this tree.
   state.toml   user selection state (enabled features, option values).
@@ -80,6 +81,52 @@ psxrecomp_add_runtime_target(psx-runtime
 Pass `PRELOADED_MODS_DIR NONE` to declare that a target intentionally ships no
 game catalog. A target built with `COSIM` stages nothing: it has no launcher,
 and it shares an output directory with the real runtime.
+
+### Declining a framework builtin (`EXCLUDE_BUILTIN_MODS`)
+
+Every package under the framework's `mods/builtin/packages` targets
+`game_id = "*"`, so by default every title ships all of them. A title that does
+not want one — because it ships its own replacement, or because the feature is
+wrong for it — names it:
+
+```cmake
+psxrecomp_add_game_runtime(psx-runtime
+    ...
+    PRELOADED_MODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded"
+    # WipEout 3's own team-mark bezel replaces the generic file-picker one,
+    # and host-paced fast loading is not offered for it.
+    EXCLUDE_BUILTIN_MODS
+        psx.enhancement.fast-loading
+        psx.presentation.bezel
+)
+```
+
+`EXCLUDE_BUILTIN_MODS` is accepted by both `psxrecomp_add_game_runtime()` and
+`psxrecomp_add_runtime_target()` (the PGXP clone inherits it). An excluded
+package is **absent, not hidden**, the same rule as the developer channel:
+
+- it is never copied into `<exe-dir>/mods/bundled`, so the launcher cannot list
+  it and every release packager — which all ship the build's staged tree —
+  cannot ship it either;
+- the build publishes the exclusions beside the catalog manifest as
+  `psx_mod_catalog_<target>.excluded.txt`. The build-time guard fails if an
+  excluded id turns up in `mods/bundled` anyway, and `tools/release_stage.py
+  stage-mods` both refuses such a catalog and stops counting an excluded
+  builtin as *missing* when a caller passes the framework's `mods/builtin` as a
+  `--mod-source`;
+- the framework itself is unchanged: the package, its plugin and its C API stay
+  available to every other title.
+
+Configure fails loudly when an excluded id is not a framework builtin (a typo
+would otherwise leave the package shipping while the CMakeLists reads as if it
+did not), and when the title's own catalog provides the same id — that is an
+override, and excluding and overriding one id at once contradicts itself. The
+selection lives in `runtime/psx_mod_catalog_select.cmake`; both it and the guard
+are exercised by `runtime/tests/test_mod_catalog_layout.py`.
+
+A player's `mods/state.toml` written by an earlier build may still name an
+excluded package. That selection is dormant, not an error: see
+[State and migration](#state-and-migration).
 
 **Do NOT write your own `copy_directory` into `<exe-dir>/mods`.** Five titles
 did, and the reason it is now a build error is worth stating: a hand-written
@@ -526,6 +573,19 @@ artwork = "C:/Users/You/Pictures/example-bezel.png"
 State format 1 and package-only manifests remain readable as a migration aid.
 They appear through one synthetic legacy feature. New packages should use
 explicit features.
+
+**Selections for packages the catalog does not hold are dormant.** State can
+outlive the package it names: the player deleted an installed archive, a
+release build stripped a developer-only package, or the title now declines a
+framework builtin with `EXCLUDE_BUILTIN_MODS`. Resolution only visits packages
+that are present, so such a selection contributes nothing to the plan (and
+does not change its fingerprint), and it is not a launch error — the Mods page
+no longer lists the package, so the player would have no way to clear one.
+`save_state()` keeps the entry verbatim, so the choice applies again if the
+package ever returns, and the runtime names each one at startup
+(`mod selection kept but inactive: <id> is not in this build's mod catalog`).
+A selection pinned to a *version* that is missing while other versions of the
+package are present remains an error, because the Mods page can fix that one.
 
 The old `derived_disc` VCDIFF mechanism is legacy conversion scaffolding only.
 Feature-style manifests reject it. It is not a product mod primitive, fallback,

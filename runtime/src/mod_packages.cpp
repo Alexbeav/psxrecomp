@@ -2987,6 +2987,17 @@ bool ModPackageManager::set_feature_resource_path(
     return true;
 }
 
+std::vector<std::string> ModPackageManager::dormant_selections() const {
+    std::vector<std::string> dormant;
+    for (const auto& [id, selection] : selections_) {
+        (void)selection;
+        const auto found = packages_.find(id);
+        if (found == packages_.end() || found->second.empty())
+            dormant.push_back(id);
+    }
+    return dormant;
+}
+
 const ModPackage* ModPackageManager::selected_package(const std::string& id) const {
     const auto selection = selections_.find(id);
     const ModSelection blank;

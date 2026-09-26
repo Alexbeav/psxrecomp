@@ -796,6 +796,28 @@ def _find_catalog_manifest(build_path, runtime_target):
     return None
 
 
+def _excluded_manifest_for(manifest):
+    """psx_mod_catalog_<target>.txt -> psx_mod_catalog_<target>.excluded.txt.
+
+    runtime.cmake writes the pair side by side: the ids the target staged, and
+    the framework builtins it declined with EXCLUDE_BUILTIN_MODS.
+    """
+    if not manifest:
+        return None
+    root, ext = os.path.splitext(manifest)
+    return root + '.excluded' + (ext or '.txt')
+
+
+def _read_id_list(path):
+    ids = set()
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if ln and not ln.startswith('#'):
+                ids.add(ln)
+    return ids
+
+
 def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
                extra_sources=(), log=print):
     mods_src = os.path.join(build_path, 'mods')
@@ -834,16 +856,23 @@ def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
         manifest = _find_catalog_manifest(build_path, runtime_target)
     want = set()
     origin = None
+    excluded = set()
     if manifest and os.path.isfile(manifest):
-        with open(manifest) as f:
-            want = {ln.strip() for ln in f if ln.strip()}
+        want = _read_id_list(manifest)
         origin = manifest
+        excluded_manifest = _excluded_manifest_for(manifest)
+        if excluded_manifest and os.path.isfile(excluded_manifest):
+            excluded = _read_id_list(excluded_manifest)
     for src in extra_sources:
         pkgs = os.path.join(src, 'packages')
         if os.path.isdir(pkgs):
             want |= {d for d in os.listdir(pkgs)
                      if os.path.isdir(os.path.join(pkgs, d))}
             origin = origin or 'source trees'
+    # A --mod-source tree (the framework's mods/builtin, typically) lists every
+    # builtin; the ones this title declined with EXCLUDE_BUILTIN_MODS are
+    # meant to be absent, not missing.
+    want -= excluded
     if not want:
         _die('cannot verify the mod catalog: neither the build-published '
              'manifest (psx_mod_catalog_<target>.txt in %s) nor any --mod-source '
@@ -858,11 +887,23 @@ def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
              'Mods page the dev build does not have.'
              % (', '.join(missing), origin, staged_pkg_dir))
 
+    shipped_excluded = sorted(excluded & set(staged_ids))
+    if shipped_excluded:
+        _die('mod catalog contains package(s) the title EXCLUDES '
+             '(EXCLUDE_BUILTIN_MODS, per %s): %s. The build never stages an '
+             'excluded builtin, so something else put it into %s; the release '
+             'would ship a package the title declined.'
+             % (_excluded_manifest_for(manifest), ', '.join(shipped_excluded),
+                staged_pkg_dir))
+
     fw = [i for i in staged_ids if i.startswith('psx.')]
     game = [i for i in staged_ids if not i.startswith('psx.')]
     log('Bundled mod catalog: %d package(s) = %d game-owned + %d '
         'framework-owned (verified against %s)'
         % (len(staged_ids), len(game), len(fw), origin))
+    if excluded:
+        log('Excluded framework builtin(s), verified absent: %s'
+            % ', '.join(sorted(excluded)))
     return len(staged_ids)
 
 

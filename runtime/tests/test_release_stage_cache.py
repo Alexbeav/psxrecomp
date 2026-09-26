@@ -254,6 +254,49 @@ class ModCatalogStagingTest(unittest.TestCase):
         self.assertFalse(os.path.isdir(
             os.path.join(self.stage, 'mods', 'installed')))
 
+    def _exclude(self, *ids):
+        return touch(
+            os.path.join(self.build, 'psx_mod_catalog_psx-runtime.excluded.txt'),
+            '# framework builtin mod packages psx-runtime excludes\n'
+            + ''.join('%s\n' % i for i in ids))
+
+    def _framework_source(self):
+        src = os.path.join(self.tmp, 'fw_builtin')
+        for i in ('psx.enhancement.cd-speed', 'psx.enhancement.pgxp',
+                  'psx.enhancement.fast-loading', 'psx.presentation.bezel'):
+            touch(os.path.join(src, 'packages', i, '1.0.0', 'manifest.toml'))
+        return src
+
+    def test_excluded_builtins_are_not_missing(self):
+        # Add-ModCatalog hands the framework's mods/builtin over as a
+        # --mod-source; the builtins the title declined with
+        # EXCLUDE_BUILTIN_MODS must count as absent, not as missing.
+        self._exclude('psx.enhancement.fast-loading', 'psx.presentation.bezel')
+        n = rs.stage_mods(self.build, self.stage, runtime_target='psx-runtime',
+                          extra_sources=[self._framework_source()],
+                          log=self.log)
+        self.assertEqual(n, 3)
+        self.assertTrue(any('verified absent' in m and 'psx.presentation.bezel' in m
+                            for m in self.logged), self.logged)
+
+    def test_framework_source_without_exclusions_still_demands_every_builtin(self):
+        self._exclude()  # published, but empty
+        with self.assertRaises(rs.StageError) as cm:
+            rs.stage_mods(self.build, self.stage, runtime_target='psx-runtime',
+                          extra_sources=[self._framework_source()],
+                          log=self.log)
+        self.assertIn('psx.enhancement.fast-loading', str(cm.exception))
+
+    def test_an_excluded_builtin_that_reached_the_catalog_is_refused(self):
+        self._exclude('psx.presentation.bezel')
+        touch(os.path.join(self.build, 'mods', 'bundled',
+                           'psx.presentation.bezel', 'manifest.toml'))
+        with self.assertRaises(rs.StageError) as cm:
+            rs.stage_mods(self.build, self.stage, runtime_target='psx-runtime',
+                          log=self.log)
+        self.assertIn('EXCLUDES', str(cm.exception))
+        self.assertIn('psx.presentation.bezel', str(cm.exception))
+
     def test_unverifiable_catalog_is_refused(self):
         os.remove(self.manifest)
         with self.assertRaises(rs.StageError) as cm:

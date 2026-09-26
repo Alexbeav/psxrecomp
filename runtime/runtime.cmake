@@ -916,6 +916,11 @@ endfunction()
 #     anything the title itself registered) and fails the build if a declared
 #     package did not reach mods/bundled, or if any package this build stages
 #     turned up in the legacy mods/packages instead.
+#
+# A title may also decline individual framework builtins with
+# EXCLUDE_BUILTIN_MODS; the selection (and its loud failures) lives in
+# psx_mod_catalog_select.cmake so the tests can drive it via `cmake -P`.
+include("${CMAKE_CURRENT_LIST_DIR}/psx_mod_catalog_select.cmake")
 
 # Immediate subdirectory names of `root` (package ids), sorted.
 function(_psxrt_package_ids root out_var)
@@ -958,6 +963,7 @@ function(_psxrt_finalize_mod_catalog_guards)
     get_property(_targets   GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_TARGETS)
     get_property(_manifests GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_MANIFESTS)
     get_property(_dirs      GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_DIRS)
+    get_property(_excludeds GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_EXCLUDED)
     list(LENGTH _targets _n)
     if(_n EQUAL 0)
         return()
@@ -970,13 +976,16 @@ function(_psxrt_finalize_mod_catalog_guards)
     # deferred pass per directory and each pass handles only its own.
     set(_here_targets "")
     set(_here_manifests "")
+    set(_here_excludeds "")
     foreach(_i RANGE 0 ${_last})
         list(GET _dirs ${_i} _d)
         if(_d STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
             list(GET _targets ${_i} _t)
             list(GET _manifests ${_i} _m)
+            list(GET _excludeds ${_i} _x)
             list(APPEND _here_targets "${_t}")
             list(APPEND _here_manifests "${_m}")
+            list(APPEND _here_excludeds "${_x}")
         endif()
     endforeach()
     list(LENGTH _here_targets _n_here)
@@ -988,6 +997,7 @@ function(_psxrt_finalize_mod_catalog_guards)
     foreach(_i RANGE 0 ${_last_here})
         list(GET _here_targets ${_i} _t)
         list(GET _here_manifests ${_i} _own)
+        list(GET _here_excludeds ${_i} _own_excluded)
 
         # Sibling runtime targets in this directory. Two of them can share one
         # output directory (Tomba 2's US and Italian runtimes both land in the
@@ -1007,6 +1017,7 @@ function(_psxrt_finalize_mod_catalog_guards)
             COMMAND ${CMAKE_COMMAND}
                 "-DPSX_MODS_DIR=$<TARGET_FILE_DIR:${_t}>/mods"
                 "-DPSX_CATALOG_MANIFEST=${_own}"
+                "-DPSX_CATALOG_EXCLUDED=${_own_excluded}"
                 "-DPSX_CATALOG_ALT_MANIFESTS=${_alts_joined}"
                 "-DPSX_REQUIRE_STAGED=1"
                 "-DPSX_LABEL=${_t}"
@@ -1025,6 +1036,7 @@ function(_psxrt_finalize_mod_catalog_guards)
         set_property(GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_TEST_ADDED TRUE)
         list(GET _here_targets 0 _first)
         list(GET _here_manifests 0 _first_manifest)
+        list(GET _here_excludeds 0 _first_excluded)
         set(_first_alts "")
         foreach(_j RANGE 0 ${_last_here})
             if(NOT _j EQUAL 0)
@@ -1037,6 +1049,7 @@ function(_psxrt_finalize_mod_catalog_guards)
             COMMAND ${CMAKE_COMMAND}
                 "-DPSX_MODS_DIR=$<TARGET_FILE_DIR:${_first}>/mods"
                 "-DPSX_CATALOG_MANIFEST=${_first_manifest}"
+                "-DPSX_CATALOG_EXCLUDED=${_first_excluded}"
                 "-DPSX_CATALOG_ALT_MANIFESTS=${_first_alts_joined}"
                 "-DPSX_REQUIRE_STAGED=0"
                 "-DPSX_LABEL=${_first}"
@@ -1046,39 +1059,21 @@ endfunction()
 
 # Stage the framework's builtin packages and the title's own packages into
 # <exe-dir>/mods/bundled, and register the guards described above.
+#
+# Trailing arguments are the target's EXCLUDE_BUILTIN_MODS: framework builtins
+# this title declines to ship (runtime/psx_mod_catalog_select.cmake).
 function(_psxrt_stage_mod_catalog target preloaded_dir)
+    set(_excluded_builtins ${ARGN})
     set(_out "$<TARGET_FILE_DIR:${target}>")
     set(_ids "")
     set(_copy "")
-
-    # ---- framework-owned builtins (psx.*) ---------------------------------
-    # These target game_id "*" -- emulated-hardware features rather than
-    # per-disc content -- so every game gets them without carrying a copy of
-    # the manifests.
-    set(_builtin_root "${PSXRECOMP_ROOT}/mods/builtin/packages")
-    if(EXISTS "${_builtin_root}")
-        if(DEFINED PSX_BUILTIN_MOD_ALLOWLIST AND NOT
-           "${PSX_BUILTIN_MOD_ALLOWLIST}" STREQUAL "")
-            set(_builtin_ids ${PSX_BUILTIN_MOD_ALLOWLIST})
-            foreach(_id IN LISTS _builtin_ids)
-                if(NOT EXISTS "${_builtin_root}/${_id}")
-                    message(FATAL_ERROR
-                        "PSX_BUILTIN_MOD_ALLOWLIST names missing package: ${_id}")
-                endif()
-            endforeach()
-        else()
-            _psxrt_package_ids("${_builtin_root}" _builtin_ids)
-        endif()
-        foreach(_id IN LISTS _builtin_ids)
-            list(APPEND _ids "${_id}")
-            list(APPEND _copy
-                COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${_builtin_root}/${_id}"
-                    "${_out}/mods/bundled/${_id}")
-        endforeach()
-    endif()
+    set(_builtin_copy "")
+    set(_game_copy "")
+    set(_game_ids "")
 
     # ---- title-owned packages ---------------------------------------------
+    # Enumerated first so builtin selection can refuse an id the title both
+    # excludes and overrides; still COPIED after the builtins (see below).
     set(_readme_copy "")
     if(preloaded_dir STREQUAL "")
         # The missed-title tripwire. A title whose source tree carries a mod
@@ -1125,7 +1120,6 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
         # scaffold's initial state and must still configure -- only a bad path
         # is an error, because a wrong path is exactly how a title ends up
         # shipping an empty Mods page.
-        set(_game_ids "")
         if(IS_DIRECTORY "${preloaded_dir}/packages")
             _psxrt_package_ids("${preloaded_dir}/packages" _game_ids)
         endif()
@@ -1135,8 +1129,7 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
                 "${preloaded_dir}/packages; staging framework packages only")
         endif()
         foreach(_id IN LISTS _game_ids)
-            list(APPEND _ids "${_id}")
-            list(APPEND _copy
+            list(APPEND _game_copy
                 COMMAND ${CMAKE_COMMAND} -E copy_directory
                     "${preloaded_dir}/packages/${_id}"
                     "${_out}/mods/bundled/${_id}")
@@ -1151,6 +1144,45 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
                     "${_out}/mods/README.md")
         endif()
     endif()
+
+    # ---- framework-owned builtins (psx.*) ---------------------------------
+    # These target game_id "*" -- emulated-hardware features rather than
+    # per-disc content -- so every game gets them without carrying a copy of
+    # the manifests, minus any the title declines with EXCLUDE_BUILTIN_MODS.
+    set(_builtin_root "${PSXRECOMP_ROOT}/mods/builtin/packages")
+    set(_available_builtins "")
+    if(EXISTS "${_builtin_root}")
+        _psxrt_package_ids("${_builtin_root}" _available_builtins)
+    endif()
+    set(_allowlist "")
+    if(DEFINED PSX_BUILTIN_MOD_ALLOWLIST AND NOT
+       "${PSX_BUILTIN_MOD_ALLOWLIST}" STREQUAL "")
+        set(_allowlist ${PSX_BUILTIN_MOD_ALLOWLIST})
+    endif()
+    psx_select_builtin_mod_ids(_builtin_ids
+        LABEL "${target}"
+        AVAILABLE ${_available_builtins}
+        ALLOWLIST ${_allowlist}
+        EXCLUDE ${_excluded_builtins}
+        TITLE ${_game_ids})
+    if(_excluded_builtins)
+        set(_excluded_pretty ${_excluded_builtins})
+        list(REMOVE_DUPLICATES _excluded_pretty)
+        list(JOIN _excluded_pretty ", " _excluded_pretty)
+        message(STATUS
+            "psxrecomp: ${target} excludes framework builtin mod(s): "
+            "${_excluded_pretty}")
+    endif()
+    foreach(_id IN LISTS _builtin_ids)
+        list(APPEND _ids "${_id}")
+        list(APPEND _builtin_copy
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${_builtin_root}/${_id}"
+                "${_out}/mods/bundled/${_id}")
+    endforeach()
+    list(APPEND _ids ${_game_ids})
+    # Framework first, title second: the title's copy of a shared id wins.
+    set(_copy ${_builtin_copy} ${_game_copy})
 
     # The COPY commands above may legitimately name an id twice -- a title's
     # catalog is allowed to OVERRIDE a framework builtin at the same id and
@@ -1202,9 +1234,23 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
     list(SORT _ids)
     string(JOIN "\n" _manifest_text ${_ids})
     _psxrt_write_if_changed("${_manifest}" "${_manifest_text}\n")
+    # ...and the builtins this target declined, which must be ABSENT. Written
+    # even when empty so a packager reading it (tools/release_stage.py) never
+    # has to guess whether "no file" means "nothing excluded" or "old build".
+    set(_excluded_manifest
+        "${CMAKE_CURRENT_BINARY_DIR}/psx_mod_catalog_${target}.excluded.txt")
+    set(_excluded_sorted ${_excluded_builtins})
+    list(REMOVE_DUPLICATES _excluded_sorted)
+    list(SORT _excluded_sorted)
+    set(_excluded_text "# framework builtin mod packages ${target} excludes (EXCLUDE_BUILTIN_MODS)\n")
+    foreach(_id IN LISTS _excluded_sorted)
+        string(APPEND _excluded_text "${_id}\n")
+    endforeach()
+    _psxrt_write_if_changed("${_excluded_manifest}" "${_excluded_text}")
 
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_TARGETS "${target}")
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_MANIFESTS "${_manifest}")
+    set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_EXCLUDED "${_excluded_manifest}")
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}")
     # Schedule the guard pass once per directory, not once per target.
@@ -1256,7 +1302,12 @@ function(psxrecomp_add_runtime_target target)
     # monolithic full.c, so this argument may carry 1..N paths. A single path
     # is just a one-element list, so games still passing one file are
     # unaffected.
-    set(multiValueArgs EXTRAS_SOURCES GAME_GENERATED_FULL_C)
+    #
+    # EXCLUDE_BUILTIN_MODS names framework builtin packages (ids under
+    # mods/builtin/packages) this target does not ship. They are left out of
+    # <exe-dir>/mods/bundled entirely -- absent, not hidden -- so no packager
+    # can ship them either. An id that is not a builtin fails configure.
+    set(multiValueArgs EXTRAS_SOURCES GAME_GENERATED_FULL_C EXCLUDE_BUILTIN_MODS)
     cmake_parse_arguments(PSXRT "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     # DEBUG_PORT and WINDOW_TITLE were previously required cmake-time defaults.
@@ -1857,7 +1908,8 @@ function(psxrecomp_add_runtime_target target)
     # letting it stage would have it wipe and re-stage the runtime's catalog
     # with only the framework half.
     if(NOT PSXRT_COSIM)
-        _psxrt_stage_mod_catalog("${target}" "${PSXRT_PRELOADED_MODS_DIR}")
+        _psxrt_stage_mod_catalog("${target}" "${PSXRT_PRELOADED_MODS_DIR}"
+            ${PSXRT_EXCLUDE_BUILTIN_MODS})
     endif()
     endif()
 
@@ -2319,6 +2371,8 @@ endfunction()
 #     MAX_PLAYERS 2
 #     ENABLE_NETPLAY_IF_PRESENT
 #     ENABLE_SETUP_WIZARD
+#     PRELOADED_MODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded"
+#     EXCLUDE_BUILTIN_MODS psx.presentation.bezel   # optional; builtins not shipped
 #   )
 #
 # Remaining args are forwarded to psxrecomp_add_runtime_target.
@@ -2333,7 +2387,10 @@ function(psxrecomp_add_game_runtime target)
         NETPLAY_LOBBY_URL
         PRELOADED_MODS_DIR
     )
-    set(multiValueArgs GEN_FULL_GLOB CODEGEN_SETUP_SOURCES)
+    # EXCLUDE_BUILTIN_MODS is parsed here (not left in the unparsed tail) for
+    # the same reason as PRELOADED_MODS_DIR: an unknown keyword written after
+    # CODEGEN_SETUP_SOURCES would otherwise be swallowed as more source files.
+    set(multiValueArgs GEN_FULL_GLOB CODEGEN_SETUP_SOURCES EXCLUDE_BUILTIN_MODS)
     cmake_parse_arguments(PSXG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if(NOT PSXRECOMP_ROOT)
@@ -2517,6 +2574,17 @@ function(psxrecomp_add_game_runtime target)
     if(NOT "${PSXG_PRELOADED_MODS_DIR}" STREQUAL "")
         list(APPEND _psxg_forwarded_args
             PRELOADED_MODS_DIR "${PSXG_PRELOADED_MODS_DIR}")
+    endif()
+    if(PSXG_EXCLUDE_BUILTIN_MODS)
+        # Hand back any forwarded keyword (and its values) the multi-value
+        # parse swallowed after EXCLUDE_BUILTIN_MODS; see the helper.
+        psx_split_exclude_builtin_mods(_psxg_exclude_ids _psxg_exclude_tail
+            ${PSXG_EXCLUDE_BUILTIN_MODS})
+        if(_psxg_exclude_ids)
+            list(APPEND _psxg_forwarded_args
+                EXCLUDE_BUILTIN_MODS ${_psxg_exclude_ids})
+        endif()
+        list(APPEND _psxg_forwarded_args ${_psxg_exclude_tail})
     endif()
 
     set(_psxg_rt_args

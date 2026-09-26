@@ -437,6 +437,15 @@ public:
      * package is absent from the list. */
     const std::vector<std::string>& scan_errors() const { return scan_errors_; }
 
+    /* Package ids that mods/state.toml carries a selection for but that no
+     * catalog root holds -- a package the player removed, a developer-only
+     * package a release build stripped, or a framework builtin the title
+     * excludes (EXCLUDE_BUILTIN_MODS). Such a selection is DORMANT: resolve()
+     * never visits it, so it contributes nothing to the plan, and save_state()
+     * keeps it verbatim so the choice returns if the package ever does. The
+     * runtime names these once at startup instead of dropping them silently. */
+    std::vector<std::string> dormant_selections() const;
+
 private:
     /* One-time move of a pre-split <exe>/mods/packages tree into the two
      * owned roots. Anything the build also staged into bundled/ is dropped;

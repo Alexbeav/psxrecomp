@@ -1597,6 +1597,106 @@ int main() {
               "an unknown channel name must be rejected");
     }
 
+    /* A stale state.toml naming a package the catalog no longer holds: a
+     * framework builtin the title now excludes (EXCLUDE_BUILTIN_MODS), a
+     * developer package a release stripped, or one the player deleted. The
+     * selection must be dormant -- not a launch error the player cannot clear
+     * from a Mods page that no longer lists the package, never applied, and
+     * never silently thrown away. */
+    {
+        const fs::path stale_root = root / "stale";
+        const std::string kept =
+            "format_version = 5\n"
+            "id = \"kept.mod\"\n"
+            "version = \"1.0.0\"\n"
+            "name = \"Kept\"\n"
+            "[[target]]\n"
+            "game_id = \"*\"\n"
+            "[[feature]]\n"
+            "id = \"on\"\n"
+            "name = \"On\"\n"
+            "[[patch]]\n"
+            "feature = \"on\"\n"
+            "target = \"main_exe\"\n"
+            "address = 2147487744\n"
+            "expected = \"01 02 03 04\"\n"
+            "replace = \"05 06 07 08\"\n";
+        write_text(stale_root / "bundled/kept.mod/1.0.0/manifest.toml", kept);
+        write_text(stale_root / "state.toml",
+                   "format_version = 2\n"
+                   "\n[[package]]\nid = \"kept.mod\"\n"
+                   "\n[[package]]\nid = \"psx.enhancement.fast-loading\"\n"
+                   "\n[[package]]\nid = \"psx.presentation.bezel\"\n"
+                   "version = \"1.0.0\"\n"
+                   "\n[[feature]]\npackage_id = \"kept.mod\"\nid = \"on\"\n"
+                   "enabled = true\n"
+                   "\n[[feature]]\npackage_id = \"psx.enhancement.fast-loading\"\n"
+                   "id = \"fast-loading\"\nenabled = true\n"
+                   "[feature.values]\nmultiplier = \"8\"\n"
+                   "\n[[feature]]\npackage_id = \"psx.presentation.bezel\"\n"
+                   "id = \"bezel\"\nenabled = true\n"
+                   "[feature.resources]\nartwork = \"C:/art.png\"\n");
+
+        ModPackageManager stale(stale_root);
+        check(stale.scan(&error), error.c_str());
+        check(stale.load_state(&error), error.c_str());
+        const ModResolution plan = stale.resolve("SLUS-TEST");
+        check(plan.ok, "a selection naming an absent package must not fail resolution");
+        check(plan.ordered.size() == 1 && plan.ordered[0]->id == "kept.mod",
+              "only the present, enabled package may enter the plan");
+        check(plan.writes.size() == 1,
+              "the present package's operations must still resolve");
+        const std::vector<std::string> dormant = stale.dormant_selections();
+        check(dormant.size() == 2 &&
+                  std::find(dormant.begin(), dormant.end(),
+                            "psx.enhancement.fast-loading") != dormant.end() &&
+                  std::find(dormant.begin(), dormant.end(),
+                            "psx.presentation.bezel") != dormant.end(),
+              "both absent packages must be reported as dormant selections");
+        check(std::find(dormant.begin(), dormant.end(), "kept.mod") == dormant.end(),
+              "a present package is never dormant");
+
+        /* Saving (every launch commit does) must keep the dormant choices. */
+        check(stale.save_state(&error), error.c_str());
+        ModPackageManager reread(stale_root);
+        check(reread.scan(&error), error.c_str());
+        check(reread.load_state(&error), error.c_str());
+        const auto& sel = reread.selections();
+        const auto fast = sel.find("psx.enhancement.fast-loading");
+        check(fast != sel.end() &&
+                  fast->second.features.count("fast-loading") == 1 &&
+                  fast->second.features.at("fast-loading").enabled &&
+                  fast->second.features.at("fast-loading").values.at("multiplier") == "8",
+              "a dormant selection must survive save_state verbatim");
+        const auto bezel = sel.find("psx.presentation.bezel");
+        check(bezel != sel.end() && bezel->second.version == "1.0.0" &&
+                  bezel->second.features.count("bezel") == 1 &&
+                  bezel->second.features.at("bezel").resources.at("artwork") ==
+                      "C:/art.png",
+              "a dormant pinned version and resource must survive save_state");
+        check(reread.resolve("SLUS-TEST").fingerprint == plan.fingerprint,
+              "dormant selections must not perturb the plan fingerprint");
+
+        /* When the package comes back, the preserved choice applies again. */
+        write_text(stale_root / "bundled/psx.enhancement.fast-loading/1.0.0/manifest.toml",
+                   "format_version = 5\n"
+                   "id = \"psx.enhancement.fast-loading\"\n"
+                   "version = \"1.0.0\"\n"
+                   "name = \"Fast\"\n"
+                   "[[target]]\n"
+                   "game_id = \"*\"\n"
+                   "[[feature]]\n"
+                   "id = \"fast-loading\"\n"
+                   "name = \"Fast\"\n");
+        ModPackageManager restored(stale_root);
+        check(restored.scan(&error), error.c_str());
+        check(restored.load_state(&error), error.c_str());
+        check(restored.feature_enabled("psx.enhancement.fast-loading", "fast-loading"),
+              "a restored package must pick its preserved selection back up");
+        check(restored.dormant_selections().size() == 1,
+              "only the still-absent package remains dormant");
+    }
+
     fs::remove_all(root, ec);
     if (failures) {
         std::cerr << failures << " mod package test(s) failed\n";
