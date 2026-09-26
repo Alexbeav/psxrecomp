@@ -55,12 +55,15 @@ def classify(route, qualified, candidate, n, source='tier1', baseline=None):
                                        qualified=qr[i], candidate=cr[i], evidence=f'{candidate}#return={qr[0]}'))
     key = lambda e: (e['route'], e['ret'], e['pc_qualified'], e['column'], e['qualified'], e['candidate'])
     got = sorted({key(e) for e in exceptions})
-    base = sorted({tuple(x) for x in baseline}) if baseline is not None else []
+    # Only baseline tuples within the compared returns can be observed; later ones are reported, not required (a short prefix
+    # cannot contain them). A full-length run still requires the exact set.
+    base_all = sorted({tuple(x) for x in baseline}) if baseline is not None else []
+    base = [k for k in base_all if int(k[1]) <= n]; base_out_of_range = [list(k) for k in base_all if int(k[1]) > n]
     new = sorted(set(got) - set(base)); missing = sorted(set(base) - set(got))
     verdict = 'PASS' if not problems and not new and not missing else 'FAIL'
     return dict(route=route, returns=n, verdict=verdict, problems=problems, exceptions=exceptions,
                 exception_keys=[list(k) for k in got], new_vs_baseline=[list(k) for k in new], missing_vs_baseline=[list(k) for k in missing],
-                baseline_used=baseline is not None)
+                baseline_used=baseline is not None, baseline_out_of_range=base_out_of_range)
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
