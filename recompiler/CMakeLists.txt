@@ -1340,3 +1340,8 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
             --cc ${CMAKE_C_COMPILER}
             --bios-emitter $<TARGET_FILE:full_function_emitter_test>)
 endif()
+
+if(BUILD_TESTING)
+    add_test(NAME cpu_return_load_view COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cpu_return_load_view.py --cc ${CMAKE_C_COMPILER})
+endif()

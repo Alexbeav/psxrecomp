@@ -26,7 +26,15 @@ static void source_cpu_return_probe(CPUState *cpu,uint32_t pc,uint64_t cycle,uns
         fputc('\n',stream);
     }
     fprintf(stream,"%u\t%08X\t%llu\t%08X\t%08X\t%08X",frame,pc,(unsigned long long)cycle,cpu->cop0[12],cpu->cop0[13],cpu->cop0[14]);
-    for(unsigned i=0;i<32;i++)fprintf(stream,"\t%08X",cpu->gpr[i]);
+    /* After the successor retired, the carried value is architecturally
+     * visible even if executor write-back waits until the next instruction.
+     * Project it into this passive row; never advance the execution pipeline. */
+    for(unsigned i=0;i<32;i++) {
+        uint32_t value=cpu->gpr[i];
+        if(i && cpu->load_value_rt==i && cpu->load_value_age==1u)
+            value=cpu->load_value;
+        fprintf(stream,"\t%08X",value);
+    }
     fputc('\n',stream);fflush(stream);
 }
 /* Passive, bounded diagnostic at the existing functional pre-fetch boundary.
