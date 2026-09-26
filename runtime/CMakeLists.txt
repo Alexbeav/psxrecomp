@@ -494,7 +494,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
        AND CMAKE_C_COMPILER_ID STREQUAL "GNU"
        AND CMAKE_C_COMPILER_VERSION VERSION_EQUAL "16.1.0")
         add_executable(exit_critical_section_test
-            tests/test_exit_critical_section.c src/traps.c)
+            tests/test_exit_critical_section.c)
         target_include_directories(exit_critical_section_test PRIVATE include)
         target_compile_definitions(exit_critical_section_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
         target_compile_options(exit_critical_section_test PRIVATE -O3 -flto -ffunction-sections)

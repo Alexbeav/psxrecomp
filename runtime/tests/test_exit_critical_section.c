@@ -6,7 +6,9 @@
 #include <stdio.h>
 #include <string.h>
 
-int psx_syscall(CPUState *cpu, uint32_t code);
+/* Keep the constant selector visible while discarding unrelated trap paths. */
+__attribute__((always_inline)) inline int psx_syscall(CPUState *cpu, uint32_t code);
+#include "../src/traps.c"
 /* traps.c references these outside the SYS(02h) path: not in an exception,
  * source-GPU model disarmed. */
 int psx_get_in_exception(void) { return 0; }
