@@ -1,5 +1,5 @@
 {
- "scope": "Oracle output rows for mdec_source_dma_fixtures.json, stored so the contract test can compare per field (SPEC-PS1B-186 amendment 4).",
+ "scope": "RESTRICTED: clean-room implementers must not decode this file or search it. Oracle output rows for mdec_source_dma_fixtures.json, stored so the contract test can compare per field (SPEC-PS1B-186 amendment 4).",
  "provenance": {
   "produced_by": "runtime/tests/test_mdec_source_dma.c built at psxrecomp bab845282 (pre-rewrite model) with WinLibs UCRT gcc 16.1, -O2, cold and checkpoint modes",
   "check": "every stored output is byte-identical in both modes and matches the fixture expected_sha256 and expected_bytes, which were produced by the Original2.3 oracle",
