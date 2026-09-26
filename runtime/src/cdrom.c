@@ -1715,6 +1715,11 @@ static int implicit_read_seek_cycles(void)
     if (origin < 0) origin = 0;
     int target = setloc_pending ? s_setloc_lba : origin;
     if (target < 0) target = 0;
+    /* A ReadN to another target while reading seeks from the drive's head,
+     * two sectors past the next delivered one, as an explicit seek does
+     * [ORACLE FIXTURE C4: C4-readn-while-reading-other-s1/s2, first INT1 of
+     * the new stream]. */
+    if (reading) origin += 2;
     source_drive_head_update();
     if (s_nymashock_drive && source_drive_head_valid) origin = source_drive_head_lba;
     int delay = source_seek_lower_bound(origin, target,
