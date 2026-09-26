@@ -4647,14 +4647,15 @@ static void glb_wide_configure(int wide_w, int offset) {
 static void glb_wide_set_target(int base_x) {
     if (!s_raster_ok) { g_wide_cur = 0; return; }
     double t0 = cw_ms(); s_cw_wide_sets++;
-    flush_tex_batch();   /* drain into the OLD target before switching */
+    flush_flat_batch();  /* drain into the OLD target before switching */
+    flush_tex_batch();
     g_wide_cur = wide_fbo_for(base_x);
     g_wide_cur_base = base_x;
     s_cw_wide_ms += cw_ms() - t0;
 }
 
 /* Stop mirroring (offscreen draws that don't target a framebuffer). */
-static void glb_wide_disable_target(void) { flush_tex_batch(); g_wide_cur = 0; }
+static void glb_wide_disable_target(void) { flush_flat_batch(); flush_tex_batch(); g_wide_cur = 0; }
 
 /* Mirror a framebuffer clear: fill the full wide width over [y, y+h) of the
  * surface for base_x, so the revealed margins are clean. Mirrors sw_wide_clear:
