@@ -3711,19 +3711,7 @@ static void prepare_texture_triangle(int i0, int i1, int i2) {
     gr_set_perspective_triangle(1, q[0] / qmax, q[1] / qmax, q[2] / qmax);
 }
 
-/* Write a single pixel to VRAM with draw area clipping and mask bit handling */
-static void raster_pixel(int32_t x, int32_t y, uint16_t color) {
-    if (x < (int32_t)draw_area_left || x > (int32_t)draw_area_right) return;
-    if (y < (int32_t)draw_area_top  || y > (int32_t)draw_area_bottom) return;
-    uint32_t vx = (uint32_t)x & 1023u;
-    uint32_t vy = (uint32_t)y & 511u;
-    uint32_t idx = vy * 1024 + vx;
-    if (check_mask_bit && (vram[idx] & 0x8000u)) return;
-    vram[idx] = color | (set_mask_bit ? 0x8000u : 0u);
-    gpu_vram_dirty_mark_row(vy);
-}
-
-/* Inclusive draw-area reject (same predicate as raster_pixel / hardware clip).
+/* Inclusive draw-area reject (the hardware draw-area clip predicate).
  *
  * MotK inter-movie / title / char-select OT drains often set GP0(E3/E4) to
  * (0,0)-(0,0) then submit thousands of 1x1 dots and shaded quads. Real GPU
@@ -3799,88 +3787,6 @@ static inline int draw_area_out_rect(int32_t x, int32_t y, int w, int h) {
         || x > right
         || (y + h - 1) < (int32_t)draw_area_top
         || y > (int32_t)draw_area_bottom;
-}
-
-/* Rasterize a flat-shaded triangle using DDA scanline fill.
- * Vertices are in screen coordinates (draw offset already applied). */
-static void raster_triangle(int32_t x0, int32_t y0,
-                            int32_t x1, int32_t y1,
-                            int32_t x2, int32_t y2,
-                            uint16_t color)
-{
-    /* Sort vertices by Y (ascending). */
-    int32_t tx, ty;
-    if (y0 > y1) { tx=x0; ty=y0; x0=x1; y0=y1; x1=tx; y1=ty; }
-    if (y1 > y2) { tx=x1; ty=y1; x1=x2; y1=y2; x2=tx; y2=ty; }
-    if (y0 > y1) { tx=x0; ty=y0; x0=x1; y0=y1; x1=tx; y1=ty; }
-
-    /* Reject degenerate (zero-height) or oversized triangles. */
-    if (y0 == y2) return;
-    if ((x2 - x0) > 1023 || (x0 - x2) > 1023) return;
-    if ((y2 - y0) > 511) return;
-
-    /* 64-bit fixed-point DDA (32.32) matching PS1 hardware behavior.
-     * Reference: DuckStation gpu_sw_rasterizer.inl makefp_xy / makestep_xy */
-    #define FP_ONE  (1LL << 32)
-    #define MAKE_FP(v) (((int64_t)(v) << 32) + (FP_ONE - (1 << 11)))
-    #define MAKE_STEP(dx, dy) \
-        ((((int64_t)(dx) << 32) + ((dx) < 0 ? -((dy)-1) : (((dx) > 0) ? ((dy)-1) : 0))) / (dy))
-    #define UNFP(fp) ((int32_t)((uint64_t)(fp) >> 32))
-
-    /* Upper half: y0 to y1 */
-    if (y1 > y0) {
-        int32_t dy_long  = y2 - y0;
-        int32_t dy_short = y1 - y0;
-        int64_t base   = MAKE_FP(x0);
-        int64_t step_long  = MAKE_STEP(x2 - x0, dy_long);
-        int64_t step_short = MAKE_STEP(x1 - x0, dy_short);
-        /* Determine which edge is left vs right */
-        int64_t lx, rx, ls, rs;
-        if (step_long < step_short) {
-            lx = base; ls = step_long; rx = base; rs = step_short;
-        } else {
-            lx = base; ls = step_short; rx = base; rs = step_long;
-        }
-        for (int32_t y = y0; y < y1; y++) {
-            int32_t xl = UNFP(lx);
-            int32_t xr = UNFP(rx);
-            for (int32_t x = xl; x < xr; x++)
-                raster_pixel(x, y, color);
-            lx += ls; rx += rs;
-        }
-    }
-
-    /* Lower half: y1 to y2 */
-    if (y2 > y1) {
-        int32_t dy_long  = y2 - y0;
-        int32_t dy_short = y2 - y1;
-        /* Long edge continues from y0 to y2 */
-        int64_t step_long  = MAKE_STEP(x2 - x0, dy_long);
-        int64_t long_at_y1 = MAKE_FP(x0) + step_long * (y1 - y0);
-        int64_t short_start = MAKE_FP(x1);
-        int64_t step_short = MAKE_STEP(x2 - x1, dy_short);
-        /* Determine left/right from the upper half's orientation */
-        int64_t lx, rx, ls, rs;
-        int64_t full_step_short_upper = (y1 > y0) ? MAKE_STEP(x1 - x0, y1 - y0) : 0;
-        if (step_long < full_step_short_upper ||
-            (y1 == y0 && long_at_y1 <= short_start)) {
-            lx = long_at_y1; ls = step_long; rx = short_start; rs = step_short;
-        } else {
-            lx = short_start; ls = step_short; rx = long_at_y1; rs = step_long;
-        }
-        for (int32_t y = y1; y < y2; y++) {
-            int32_t xl = UNFP(lx);
-            int32_t xr = UNFP(rx);
-            for (int32_t x = xl; x < xr; x++)
-                raster_pixel(x, y, color);
-            lx += ls; rx += rs;
-        }
-    }
-
-    #undef FP_ONE
-    #undef MAKE_FP
-    #undef MAKE_STEP
-    #undef UNFP
 }
 
 /* Execute mono triangle (GP0 0x20-0x23) */
