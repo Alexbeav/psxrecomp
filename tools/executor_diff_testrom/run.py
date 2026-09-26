@@ -110,6 +110,10 @@ def main():
             i = int(off, 16) // 4
             row = {"native": [f"0x{w:08X}" for w in rt["native"][i:i + per]],
                    "interp": [f"0x{w:08X}" for w in rt["interp"][i:i + per]]}
+            if name in meta.get("timer_only", []):
+                # Raw timestamps from two different moments: informational only.
+                report["cases"][name] = row
+                continue
             row["native_eq_interp"] = rt["native"][i:i + tw] == rt["interp"][i:i + tw]
             report["checks"][f"{name}_native_eq_interp"] = row["native_eq_interp"]
             if bt is not None and bt["done"]:

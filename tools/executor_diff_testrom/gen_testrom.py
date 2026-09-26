@@ -42,14 +42,16 @@ REG.update({f"$s{i}": 16 + i for i in range(8)})
 
 LOAD_ADDR = 0x80010000
 RESULT_NATIVE = 0x800F0000
-RESULT_INTERP = 0x800F0200
+RESULT_INTERP = 0x800F0200  # 0x140 bytes per block
 DONE_ADDR = 0x800F0400
 COPY = 0x80100000
 DATA = 0x800E0000
 DONE_MAGIC = 0xE8EC0D1F
 TIMER2 = 0x1F801120
 CASES = ["1a_beq_slot_load", "1b_bgezal_slot_load", "2_syscall_in_load_slot",
-         "3_back_to_back_loads", "4_mtc2_mtc0_store", "5_load_ends_block"]
+         "3_back_to_back_loads", "4_mtc2_mtc0_store", "5_load_ends_block",
+         "6_timer_same_block", "7_timer_across_block",
+         "8_timer_ram_load_between", "9_timer_taken_branch_between"]
 V_OLD, V1, V2 = 0x0000A5A5, 0x11112222, 0x33334444
 
 
@@ -74,7 +76,8 @@ def emit_body(a):
         a.emit(lhu("$s5", 0, "$s6"))
 
     def timer_stop(base):
-        a.emit(lhu("$t9", 0, "$s6"), subu("$t9", "$t9", "$s5"), sw("$t9", base + 0x1C, "$s7"))
+        # The nop keeps the subtract out of the lhu's load-delay slot.
+        a.emit(lhu("$t9", 0, "$s6"), nop(), subu("$t9", "$t9", "$s5"), sw("$t9", base + 0x1C, "$s7"))
 
     def reset():
         a.emit(li("$t0", V_OLD), li("$t1", 0), li("$t2", 0), li("$t3", 0))
@@ -134,6 +137,37 @@ def emit_body(a):
     a.emit(addu("$t1", "$t0", "$zero"), addu("$t2", "$t0", "$zero"))
     timer_stop(0xA0); save(0xA0, "$t1", "$t2", "$t0")
 
+    # 6: two root-counter-2 reads in one straight-line block, 10 nops apart.
+    # Word 0 = first read, 1 = second read, 7 = delta (second - first).
+    a.emit(lhu("$s5", 0, "$s6"))
+    for _ in range(10):
+        a.emit(nop())
+    a.emit(lhu("$t9", 0, "$s6"), sw("$s5", 0xC0, "$s7"), sw("$t9", 0xC4, "$s7"),
+           subu("$t9", "$t9", "$s5"), sw("$t9", 0xDC, "$s7"))
+
+    # 7: the same two reads with a block boundary (a branch target) between them.
+    br = len(a.words)
+    a.emit(lhu("$s5", 0, "$s6"), bne("$zero", "$zero", 0), nop())
+    for _ in range(9):
+        a.emit(nop())
+    tgt = len(a.words)
+    a.words[br + 1] = bne("$zero", "$zero", tgt - (br + 1) - 1)
+    a.emit(lhu("$t9", 0, "$s6"), sw("$s5", 0xE0, "$s7"), sw("$t9", 0xE4, "$s7"),
+           subu("$t9", "$t9", "$s5"), sw("$t9", 0xFC, "$s7"))
+
+    # 8: a main-RAM load between the two reads, same block.
+    a.emit(lhu("$s5", 0, "$s6"), lw("$t0", 0, "$s4"), nop(),
+           lhu("$t9", 0, "$s6"), sw("$s5", 0x100, "$s7"), sw("$t9", 0x104, "$s7"),
+           subu("$t9", "$t9", "$s5"), sw("$t9", 0x11C, "$s7"))
+
+    # 9: a taken branch (no load) between the two reads.
+    br = len(a.words)
+    a.emit(lhu("$s5", 0, "$s6"), beq("$zero", "$zero", 0), nop(), nop(), nop())
+    tgt = len(a.words)
+    a.words[br + 1] = beq("$zero", "$zero", tgt - (br + 1) - 1)
+    a.emit(lhu("$t9", 0, "$s6"), sw("$s5", 0x120, "$s7"), sw("$t9", 0x124, "$s7"),
+           subu("$t9", "$t9", "$s5"), sw("$t9", 0x13C, "$s7"))
+
     a.emit(jr("$s3"), nop())
     a.label("body_end")
 
@@ -144,7 +178,7 @@ def build():
     a.emit(li("$s6", TIMER2), li("$s4", DATA), li("$t8", DONE_ADDR), sw("$zero", 0, "$t8"))
     for base in (RESULT_NATIVE, RESULT_INTERP):
         a.emit(li("$s7", base))
-        for off in range(0, 0xC0, 4):
+        for off in range(0, 0x140, 4):
             a.emit(sw("$zero", off, "$s7"))
     a.emit(li("$t4", V1), sw("$t4", 0, "$s4"), li("$t4", V2), sw("$t4", 4, "$s4"))
     a.emit(sh("$zero", 4, "$s6"))                    # root counter 2: system clock, free-run
@@ -189,6 +223,7 @@ def main():
         "cases": {name: f"0x{i * 0x20:02X}" for i, name in enumerate(CASES)},
         "values": {"old": f"0x{V_OLD:08X}", "first": f"0x{V1:08X}", "second": f"0x{V2:08X}"},
         "words_per_case": 8, "timer_word": 7,
+        "timer_only": [c for c in CASES if c[0] in "6789"],
         "labels": {k: f"0x{v:08X}" for k, v in a.labels.items()},
     }
     with open(out + ".json", "w") as fh:
