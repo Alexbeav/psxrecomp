@@ -272,17 +272,17 @@ int main(void) {
         run_section(&sections[i]);
     {
         uint8_t in[DIRTY_RAM_CHECKPOINT_BYTES],out[DIRTY_RAM_CHECKPOINT_BYTES];
-        const uint32_t fields[9]={1,0x80012344u,1,0x80045678u,1,17,0xa1b2c3d4u,1,1};
+        const uint32_t fields[9]={1,0x80012344u,1,0x80045678u,1,0,0,0,0};
         PstW w;pst_w_init(&w,in,sizeof in);
         for(unsigned i=0;i<9;i++)check(pst_w_u32(&w,fields[i]),"CPU_EXEC sentinel encode");
         check(dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC read");
         check(dirty_ram_checkpoint_pc(0)==fields[1],"CPU_EXEC exact instruction PC");
         check(dirty_ram_checkpoint_resume_pending(),"CPU_EXEC pending continuation");
         dirty_ram_checkpoint_write(out);
-        check(!memcmp(in,out,sizeof in),"CPU_EXEC round trip with live branch and load");
+        check(!memcmp(in,out,sizeof in),"CPU_EXEC round trip with live branch");
         in[20]=32;
         check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid load register");
-        in[20]=17;in[8]=2;
+        in[20]=0;in[8]=2;
         check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid branch state");
         check(!dirty_ram_checkpoint_read(in,sizeof in-1),"CPU_EXEC rejects truncated continuation");
     }

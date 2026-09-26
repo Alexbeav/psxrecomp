@@ -25,3 +25,46 @@ The timing model remains outside this change.
 Full L1 cross-executor comparison, save round trips, seven Tier 1 routes,
 Tier 3, and an interleaved two-title performance comparison remain required.
 The branch is private preparation and must not land before those gates.
+
+## Candidate checks
+
+The uncommitted candidate passes 32 decoder and save checks at O0 and O2.
+The checks cover the ordinary load widths, repeated destinations, merge pairs,
+cancellation, a fault in the successor, separate CPU states, and both pending ages.
+The focused runner also executes five authored sequences through generated CFG C
+and the production decoder at O0 and O2. These include a load in a branch slot.
+Evidence: `../ps1b-220-cross2.log` and `runtime/tests/test_load_delay_l1.py`.
+These are bounded instruction tests. They do not run source-profile device timing.
+Both recompiler executables build with WinLibs UCRT gcc 16.1.0.
+The full-function emitter, DLL transport, full 119-case L1 matrix and source-mode
+interrupt execution still need executable coverage before this branch is ready.
+
+The draft wire version is 11, overlay ABI is 25, and codegen version is 12.
+The integrator must reconcile these numbers with the final minted pin.
+The draft checks pending state at each emitted instruction. Its hot-path cost is
+unmeasured and must satisfy the two-title performance gate before landing.
+
+The first full-function generated-C branch-slot case passes O0/O2.
+Its fixture emits an authored ROM image and executes the generated C directly.
+Evidence: `../ps1b-220-cross-full.log` and the runner's `--bios-emitter` option.
+Five focused existing tests also pass: full-function emission, cross-page slots,
+LWL/LWR emission, CPS emission, and CPU wire validation.
+The CPU_EXEC section round-trip test passes O0/O2 after reserving its former load cells.
+The current session does not open prohibited source. The exposure statement above
+records the inherited handover warning, not a new source exposure.
+
+A rebuilt baseline CFG compiler at b8ccd50fa fails the expanded native fixture:
+check 39 returns BBBB0002 where the repeated-load slot requires AAAA0001.
+The test uses the same current harness and runtime headers with the baseline emitter.
+Evidence: `../ps1b-220-native-baseline.log`, baseline build logs, and `_scratch/baseline-source`.
+The candidate passes seven CFG programs and two full-function programs at O0/O2.
+These add branch-and-link behavior and the relocated link address.
+Evidence: `../ps1b-220-cross4.log`.
+
+Consulted PSX-SPX CPU Specifications again for exception and link ordering:
+https://psx-spx.consoledev.net/cpuspecifications/ (2026-09-26).
+The imported corpus has no current PSX-CPU-002 note. The failure catalog points to
+that historical identifier, so it is a lead rather than an available authority.
+The native trap helpers retain pre-existing fatal BREAK/overflow behavior.
+Full rule-8 exception qualification must distinguish that executor behavior from
+load-value retirement. No claim of full exception support follows from these checks.

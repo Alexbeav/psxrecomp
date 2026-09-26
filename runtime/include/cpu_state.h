@@ -65,7 +65,34 @@ typedef struct CPUState {
     uint8_t  read_fudge;        /* ReadFudge: last committed load's dest reg, or 0x20 = none */
     uint8_t  ld_which_t;        /* LDWhich (timing): pending load dest reg, 0x20 = none */
     uint32_t ld_absorb;         /* LDAbsorb: pending load's give-back (region+completion) */
+    /* Value pipeline, independent of the timing credit above. rt=0 is empty.
+     * age=0: successor still reads old GPR; age=1: successor has executed. */
+    uint32_t load_value_rt, load_value, load_value_age;
 } CPUState;
+
+static inline void psx_load_value_commit(CPUState *cpu) {
+    if (cpu->load_value_rt) cpu->gpr[cpu->load_value_rt] = cpu->load_value;
+    cpu->load_value_rt = cpu->load_value_age = 0;
+    cpu->gpr[0] = 0;
+}
+static inline void psx_load_value_begin(CPUState *cpu) {
+    if (cpu->load_value_rt) {
+        if (cpu->load_value_age) psx_load_value_commit(cpu);
+        else cpu->load_value_age = 1;
+    }
+}
+static inline void psx_load_value_cancel(CPUState *cpu, uint32_t rt) {
+    if (rt && cpu->load_value_rt == rt) cpu->load_value_rt = cpu->load_value_age = 0;
+}
+static inline uint32_t psx_load_value_merge(const CPUState *cpu, uint32_t rt) {
+    return rt && cpu->load_value_rt == rt ? cpu->load_value : cpu->gpr[rt];
+}
+static inline void psx_load_value_arm(CPUState *cpu, uint32_t rt, uint32_t value) {
+    if (cpu->load_value_rt && cpu->load_value_rt != rt) psx_load_value_commit(cpu);
+    cpu->load_value_rt = rt;
+    cpu->load_value = value;
+    cpu->load_value_age = 0;
+}
 
 /* Overlay DLLs batch per-instruction cycle charges in a DLL-local accumulator.
  * A guest store is an observation boundary: MMIO handlers must see the cycle

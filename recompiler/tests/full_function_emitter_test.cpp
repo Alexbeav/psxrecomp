@@ -110,7 +110,7 @@ void expect_dispatch_key_absent(const RunResult& result, uint32_t normalized,
            result.dispatch.substr(begin, end - begin).find(needle) == std::string::npos, message);
 }
 
-void delay_slot_load_falls_back() {
+void delay_slot_load_carries() {
     const auto result = run_case(
         "delay-slot",
         {
@@ -121,17 +121,13 @@ void delay_slot_load_falls_back() {
             0x00000000u,  // nop
         },
         {function_at(kBase, kBase + 16u, {kBase, kBase + 8u})});
-    expect(result.stats.functions_interpreted == 1,
-           "delay-slot load marks the function for interpretation");
-    expect(result.stats.functions_emitted == 0,
-           "delay-slot load function is not emitted");
-    expect_entry_absent(result, 0x00000500u,
-                        "delay-slot load function is absent from dispatch");
-    expect_dispatch_key_absent(result, 0x00000508u,
-                               "delay-slot successor continuation is absent from dispatch");
+    expect(result.stats.functions_interpreted == 0 && result.stats.functions_emitted == 1,
+           "branch-slot load remains native with CPU-owned pending value");
+    expect(result.full.find("psx_load_value_arm") != std::string::npos,
+           "branch-slot load carries its value across the target entry");
 }
 
-void label_split_load_falls_back() {
+void label_split_load_carries() {
     const auto result = run_case(
         "label-split",
         {
@@ -141,15 +137,13 @@ void label_split_load_falls_back() {
             0x00000000u,  // nop
         },
         {function_at(kBase, kBase + 12u, {kBase, kBase + 4u})});
-    expect(result.stats.functions_interpreted == 1,
-           "label-split load marks the function for interpretation");
-    expect_entry_absent(result, 0x00000500u,
-                        "label-split function is absent from dispatch");
-    expect_dispatch_key_absent(result, 0x00000504u,
-                               "label-split continuation is absent from dispatch");
+    expect(result.stats.functions_interpreted == 0 && result.stats.functions_emitted == 1,
+           "pending values carry through labeled and fragment entries");
+    expect(result.full.find("psx_load_value_arm") != std::string::npos,
+           "native loads arm the shared value pipeline");
 }
 
-void fragment_split_load_falls_back() {
+void fragment_split_load_carries() {
     const auto result = run_case(
         "fragment-split",
         {
@@ -162,15 +156,13 @@ void fragment_split_load_falls_back() {
             function_at(kBase, kBase, {kBase}),
             function_at(kBase + 4u, kBase + 12u, {kBase + 4u}),
         });
-    expect(result.stats.functions_interpreted == 1,
-           "fragment-split load marks only its owning function for interpretation");
-    expect(result.stats.functions_emitted == 1,
-           "unaffected neighboring fragment remains native");
-    expect_entry_absent(result, 0x00000500u,
-                        "fragment-split load owner is absent from dispatch");
+    expect(result.stats.functions_interpreted == 0 && result.stats.functions_emitted == 2,
+           "pending values carry through labeled and fragment entries");
+    expect(result.full.find("psx_load_value_arm") != std::string::npos,
+           "native loads arm the shared value pipeline");
 }
 
-void noncomplementary_lwl_falls_back() {
+void noncomplementary_lwl_carries() {
     const auto result = run_case(
         "lwl-dependent",
         {
@@ -180,10 +172,10 @@ void noncomplementary_lwl_falls_back() {
             0x00000000u,  // nop
         },
         {function_at(kBase, kBase + 12u, {kBase})});
-    expect(result.stats.functions_interpreted == 1,
-           "non-complementary LWL dependency falls back");
-    expect_entry_absent(result, 0x00000500u,
-                        "non-complementary LWL function is absent from dispatch");
+    expect(result.stats.functions_interpreted == 0 && result.stats.functions_emitted == 1,
+           "pending values carry through labeled and fragment entries");
+    expect(result.full.find("psx_load_value_arm") != std::string::npos,
+           "native loads arm the shared value pipeline");
 }
 
 void complementary_lwl_lwr_stays_native() {
@@ -328,6 +320,20 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (argc == 3 && (std::string(argv[2]) == "load-value" || std::string(argv[2]) == "load-value-link")) {
+        const bool link=std::string(argv[2]) == "load-value-link";
+        const uint32_t words[] = {link?0x04110002u:0x10000002u,0x8e2b0000u,0u,
+            0x01606021u,0x01606825u,link?0x03c00008u:0x03e00008u,0u};
+        std::vector<uint8_t> rom;
+        for(uint32_t word:words) append_word(rom,word);
+        DiscoveryResult discovery{};discovery.ok=true;
+        discovery.functions={function_at(kBase,kBase+24u,{kBase,kBase+12u})};
+        std::filesystem::create_directories(argv[1]);
+        FullFunctionEmitter::emit(rom,kBase,kBase+27u,discovery,
+            "authored L1 branch-slot",argv[1],"Test");
+        return 0;
+    }
+
     // A branch-slot return-address load crossing to a represented epilogue.
     // The first target instruction also reads RA: retiring at handoff is early.
     if (argc == 3 && (std::string(argv[2]) == "slice-load-return" ||
@@ -436,10 +442,10 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    delay_slot_load_falls_back();
-    label_split_load_falls_back();
-    fragment_split_load_falls_back();
-    noncomplementary_lwl_falls_back();
+    delay_slot_load_carries();
+    label_split_load_carries();
+    fragment_split_load_carries();
+    noncomplementary_lwl_carries();
     complementary_lwl_lwr_stays_native();
     patch_range_guards(config);
     patch_range_delay_boundaries(config);

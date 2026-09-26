@@ -1115,10 +1115,9 @@ void cfg_codegen_load_delay_test() {
     PSXRecomp::CodeGenerator generator(exe);
     const std::string code = generator.generate_function(function, cfg).full_code;
 
-    const size_t deferred = code.find("uint32_t psx_ldd_80003590 =");
+    const size_t deferred = code.find("psx_load_value_arm(cpu, 26u");
     const size_t successor = code.find("cpu->gpr[1] = cpu->gpr[26]");
-    const size_t writeback = code.find(
-        "cpu->gpr[26] = psx_ldd_80003590;  /* load-delay writeback */");
+    const size_t writeback = code.find("psx_load_value_begin(cpu);", successor);
     check(deferred != std::string::npos && successor != std::string::npos &&
           writeback != std::string::npos && deferred < successor &&
           successor < writeback,

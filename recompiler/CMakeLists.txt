@@ -1219,7 +1219,8 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
     add_test(NAME gpu_upload_history
         COMMAND ${Python3_EXECUTABLE}
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gpu_upload_history.py"
-            --cc ${CMAKE_C_COMPILER})
+            --cc ${CMAKE_C_COMPILER} --recompiler $<TARGET_FILE:psxrecomp-game>
+        --bios-emitter $<TARGET_FILE:full_function_emitter_test>)
 endif()
 # The TAS replay tooling is developer infrastructure and is stripped from
 # shipped setup packages, so a source tree may legitimately not have it.
@@ -1313,3 +1314,10 @@ psxrecomp_check_all_tests_registered()
 # case-insensitive filesystem. See the module header for the shipped-bug story.
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_target_name_collisions.cmake)
 psxrecomp_check_output_name_collisions()
+
+if(BUILD_TESTING)
+    add_test(NAME load_delay_l1 COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1.py
+        --cc ${CMAKE_C_COMPILER} --recompiler $<TARGET_FILE:psxrecomp-game>
+        --bios-emitter $<TARGET_FILE:full_function_emitter_test>)
+endif()

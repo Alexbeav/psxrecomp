@@ -1064,6 +1064,7 @@ static int enter_guest_syscall_exception(CPUState *cpu) {
 }
 
 int psx_syscall(CPUState* cpu, uint32_t code) {
+    psx_load_value_commit(cpu);
     /*
      * PS1 BIOS SYSCALL convention:
      *   $a0 = 1: EnterCriticalSection — disable interrupts, return old SR
@@ -1213,6 +1214,7 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
 }
 
 void psx_break(CPUState* cpu, uint32_t code, uint32_t pc) {
+    psx_load_value_commit(cpu);
     char buf[128];
     snprintf(buf, sizeof(buf), "BREAK @ PC=0x%08X, code=0x%05X", pc, code);
     trap_crash(buf);
@@ -1221,6 +1223,7 @@ void psx_break(CPUState* cpu, uint32_t code, uint32_t pc) {
 }
 
 void psx_arith_overflow(CPUState* cpu) {
+    psx_load_value_commit(cpu);
     char buf[128];
     snprintf(buf, sizeof(buf), "OVERFLOW @ PC=0x%08X", cpu->pc);
     trap_crash(buf);

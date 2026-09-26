@@ -4,7 +4,7 @@
 #include "pst_wire.h"
 
 /* Architectural registers plus guest-clock pipeline timing, without pointers. */
-#define CPU_STATE_WIRE_BYTES 580u
+#define CPU_STATE_WIRE_BYTES 592u
 static inline int cpu_state_wire_write(uint8_t *out, const CPUState *cpu) {
     PstW w; pst_w_init(&w, out, CPU_STATE_WIRE_BYTES);
     for (unsigned i=0;i<32;i++) pst_w_u32(&w,cpu->gpr[i]);
@@ -16,10 +16,15 @@ static inline int cpu_state_wire_write(uint8_t *out, const CPUState *cpu) {
     pst_w_bytes(&w,cpu->read_absorb,33);
     pst_w_u8(&w,cpu->read_absorb_which); pst_w_u8(&w,cpu->read_fudge);
     pst_w_u8(&w,cpu->ld_which_t); pst_w_u32(&w,cpu->ld_absorb);
+    pst_w_u32(&w,cpu->load_value_rt); pst_w_u32(&w,cpu->load_value);
+    pst_w_u32(&w,cpu->load_value_age);
     return w.written==CPU_STATE_WIRE_BYTES;
 }
 static inline int cpu_state_wire_read(const uint8_t *in, uint32_t len, CPUState *cpu) {
     if(len!=CPU_STATE_WIRE_BYTES || in[573]>32u || in[574]>32u || in[575]>32u) return 0;
+    PstR tail; uint32_t rt, value, age; pst_r_init(&tail,in+580,12);
+    pst_r_u32(&tail,&rt); pst_r_u32(&tail,&value); pst_r_u32(&tail,&age);
+    if(rt>31u || age>1u || (!rt && age)) return 0;
     PstR r; pst_r_init(&r,in,len);
     for (unsigned i=0;i<32;i++) pst_r_u32(&r,&cpu->gpr[i]);
     pst_r_u32(&r,&cpu->pc); pst_r_u32(&r,&cpu->hi); pst_r_u32(&r,&cpu->lo);
@@ -30,6 +35,7 @@ static inline int cpu_state_wire_read(const uint8_t *in, uint32_t len, CPUState 
     pst_r_bytes(&r,cpu->read_absorb,33);
     pst_r_u8(&r,&cpu->read_absorb_which); pst_r_u8(&r,&cpu->read_fudge);
     pst_r_u8(&r,&cpu->ld_which_t); pst_r_u32(&r,&cpu->ld_absorb);
+    cpu->load_value_rt=rt; cpu->load_value=value; cpu->load_value_age=age;
     return 1;
 }
 #endif

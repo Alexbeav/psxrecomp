@@ -12,8 +12,11 @@ int main(void) {
     assert(pst_w_u64(&w,0xfedcba9876543210ull));
     for(unsigned i=0;i<33;i++)assert(pst_w_u8(&w,(uint8_t)(i+1u)));
     assert(pst_w_u8(&w,31));assert(pst_w_u8(&w,32));assert(pst_w_u8(&w,17));
-    assert(pst_w_u32(&w,0xabcdef12u));assert(w.written==sizeof wire);
+    assert(pst_w_u32(&w,0xabcdef12u));
+    assert(pst_w_u32(&w,11));assert(pst_w_u32(&w,0xbbbb0002u));
+    assert(pst_w_u32(&w,1));assert(w.written==sizeof wire);
     assert(cpu_state_wire_read(wire,sizeof wire,&cpu));
+    assert(cpu.load_value_rt==11 && cpu.load_value==0xbbbb0002u && cpu.load_value_age==1);
     assert(cpu.muldiv_ts_done==0x0123456789abcdefull);
     assert(cpu.gte_ts_done==0xfedcba9876543210ull);
     assert(cpu.read_absorb[32]==33 && cpu.read_absorb_which==31);

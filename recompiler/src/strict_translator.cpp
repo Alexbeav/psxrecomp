@@ -576,8 +576,6 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
     //   This makes the C output architecturally correct for ALL
     //   branches, regardless of what their delay slot does.
     //
-    // BLTZAL / BGEZAL (REGIMM rt 0x10, 0x11) are NOT implemented: zero
-    // inventory hits.
     // -----------------------------------------------------------------
 
     // BEQ rs, rt, simm16 (op 0x04)
@@ -671,15 +669,14 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
     }
 
     // REGIMM (op 0x01): BLTZ (rt 0x00), BGEZ (rt 0x01).
-    // BLTZAL / BGEZAL (rt 0x10, 0x11) intentionally not implemented:
-    // no inventory hits.
+    // The link variants snapshot rs before writing RA.
     if (opcode == 0x01) {
         const uint8_t rs = (d.raw >> 21) & 0x1F;
         const uint8_t rt_field = (d.raw >> 16) & 0x1F;
         const int32_t simm = static_cast<int32_t>(static_cast<int16_t>(d.raw & 0xFFFF));
         const uint32_t target = d.address + 4 + static_cast<uint32_t>(simm * 4);
         const uint32_t fallthrough = d.address + 8;
-        if (rt_field == 0x00) { // BLTZ
+        if (rt_field == 0x00 || rt_field == 0x10) { // BLTZ / BLTZAL
             r.supported = true;
             r.is_terminator = true;
             r.terminator_kind = "branch_bltz";
@@ -687,6 +684,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
             r.pre_delay_code = fmt::format(
                 "uint32_t psx_brA_{:08X} = cpu->gpr[{}];",
                 d.address, static_cast<int>(rs));
+            if (rt_field & 0x10u) r.pre_delay_code += fmt::format(" cpu->gpr[31] = 0x{:08X}u;", fallthrough);
             r.c_code = fmt::format(
                 "if ((int32_t)psx_brA_{:08X} < 0) {{ cpu->pc = 0x{:08X}u; return; }} "
                 "cpu->pc = 0x{:08X}u; return;",
@@ -694,7 +692,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
             r.comment = fmt::format("bltz {}, 0x{:08X}", gpr_name(rs), target);
             return r;
         }
-        if (rt_field == 0x01) { // BGEZ
+        if (rt_field == 0x01 || rt_field == 0x11) { // BGEZ / BGEZAL
             r.supported = true;
             r.is_terminator = true;
             r.terminator_kind = "branch_bgez";
@@ -702,6 +700,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
             r.pre_delay_code = fmt::format(
                 "uint32_t psx_brA_{:08X} = cpu->gpr[{}];",
                 d.address, static_cast<int>(rs));
+            if (rt_field & 0x10u) r.pre_delay_code += fmt::format(" cpu->gpr[31] = 0x{:08X}u;", fallthrough);
             r.c_code = fmt::format(
                 "if ((int32_t)psx_brA_{:08X} >= 0) {{ cpu->pc = 0x{:08X}u; return; }} "
                 "cpu->pc = 0x{:08X}u; return;",
@@ -973,7 +972,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
                 "uint32_t psx_shift_left  = (3u - psx_byte_offset) * 8u; "
                 "uint32_t psx_keep_mask   = (1u << psx_shift_left) - 1u; "
                 "uint32_t psx_word        = psx_cyc_load_word(cpu, psx_aligned, {}, 0x{:X}u); "
-                "uint32_t psx_old_rt      = cpu->gpr[{}]; "
+                "uint32_t psx_old_rt      = psx_load_value_merge(cpu, {}u); "
                 "cpu->gpr[{}] = (psx_old_rt & psx_keep_mask) | (psx_word << psx_shift_left);",
                 static_cast<int>(rt), mask, static_cast<int>(rt), static_cast<int>(rt));
         r.c_code = fmt::format(
@@ -999,7 +998,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
                 "uint32_t psx_shift_right = psx_byte_offset * 8u; "
                 "uint32_t psx_keep_mask   = ~(0xFFFFFFFFu >> psx_shift_right); "
                 "uint32_t psx_word        = psx_cyc_load_word(cpu, psx_aligned, {}, 0x{:X}u); "
-                "uint32_t psx_old_rt      = cpu->gpr[{}]; "
+                "uint32_t psx_old_rt      = psx_load_value_merge(cpu, {}u); "
                 "cpu->gpr[{}] = (psx_old_rt & psx_keep_mask) | (psx_word >> psx_shift_right);",
                 static_cast<int>(rt), mask, static_cast<int>(rt), static_cast<int>(rt));
         r.c_code = fmt::format(

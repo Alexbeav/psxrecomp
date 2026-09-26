@@ -129,6 +129,7 @@ static inline void interp_cyc_step(CPUState *cpu, uint32_t reg_mask, uint32_t lo
  * interpreter.  Returns 1 (control transferred). */
 static int interp_exception(CPUState *cpu, uint32_t exc_code,
                             uint32_t badvaddr, uint32_t epc_pc) {
+    psx_load_value_commit(cpu);
     uint32_t sr = cpu->cop0[12];
     /* BadVAddr */
     cpu->cop0[8] = badvaddr;
@@ -159,7 +160,6 @@ static uint32_t cop0_write_resume_pc(uint32_t pc) {
 }
 static int interp_arithmetic_overflow(CPUState *cpu,uint32_t pc,uint32_t insn) {
     uint32_t pending=cpu->cop0[13]&0x0000ff00u;
-    dirty_ram_ld_delay_flush(cpu);
     interp_exception(cpu,12u,cpu->cop0[8],pc);
     cpu->cop0[13]=pending|(12u<<2)|((insn<<2)&0x30000000u);
     if(arithmetic_slot.active && arithmetic_slot.pc==pc) {
@@ -342,35 +342,8 @@ int psx_exec_phase(void) { return g_exec_phase; }
  * dispatch of candidate g_insn_freeze_addr the insn ring stops recording, so
  * its tail preserves the window immediately BEFORE that dispatch — query the
  * ring afterward at leisure (ring-first; no arm-then-hope). */
-/* ── R3000A load-delay VALUE semantics ──────────────────────────────────────
- * On MIPS-I there is no load interlock: a load's target register is NOT
- * visible to the instruction in the load-delay slot, which still sees the
- * PREVIOUS value. The writeback lands one instruction later.
- *
- * We already modelled the load-delay *interlock timing* (psx_cyc_load_*),
- * but wrote the destination register immediately — so the slot observed the
- * loaded value. That silently diverged from BOTH real hardware and our own
- * compiled backend (full_function_emitter defers the writeback past the
- * successor for dependent pairs), and hand-written kernel asm depends on it.
- *
- * The concrete casualty: OpenBIOS's cardfasttrack.s stashes the pointer
- * variable's BASE with `or $at,$k0,$zero` in the delay slot of
- * `lw $k0,off($k0)`, then writes the advanced pointer back through $at. With
- * an immediate writeback $at became the pointer itself, the write-back landed
- * in unrelated memory, the pointer never advanced, and every byte of a
- * 128-byte memory-card frame was stored to one address (cards read as
- * permanently unformatted; the send side transmitted one byte 128x).
- *
- * The original source commits the older load before an ordinary successor's
- * write, so that successor wins a same-register write conflict. A second load
- * to the same destination cancels the older load instead. Kernel transfers
- * retain this owner through the actual guest load-delay instruction. Mixed
- * compiled/interpreted handoffs outside that region remain separately scoped. */
-static uint32_t s_ld_pend_rt    = 0;
-static uint32_t s_ld_pend_val   = 0;
-static uint32_t s_ld_pend_age   = 0;  /* 0 = armed; 1 = delay slot has run */
-static int      s_ld_pend_armed = 0;
-
+/* Load values live in CPUState across every executor and host return.
+ * The continuation below records only the active instruction and branch. */
 static struct { uint32_t active,pc,slot,target,taken; } s_checkpoint;
 static int s_checkpoint_resume;
 void dirty_ram_checkpoint_enter(uint32_t pc,int slot,uint32_t target,int taken) {
@@ -386,17 +359,15 @@ void dirty_ram_checkpoint_write(uint8_t *out) {
     pst_w_u32(&w,s_checkpoint.active); pst_w_u32(&w,s_checkpoint.pc);
     pst_w_u32(&w,s_checkpoint.slot); pst_w_u32(&w,s_checkpoint.target);
     pst_w_u32(&w,s_checkpoint.taken);
-    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_rt : 0u);
-    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_val : 0u);
-    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_age : 0u);
-    pst_w_u32(&w,s_ld_pend_armed ? 1u : 0u);
+    /* Value pipeline belongs to CPU_STATE, never process-global continuation. */
+    for (unsigned i=0;i<4;i++) pst_w_u32(&w,0u);
 }
 static int checkpoint_parse(const uint8_t *in,uint32_t len,uint32_t v[9]) {
     PstR r;
     if(len!=DIRTY_RAM_CHECKPOINT_BYTES)return 0;
     pst_r_init(&r,in,len);
     for(unsigned i=0;i<9;i++)if(!pst_r_u32(&r,&v[i]))return 0;
-    if(v[0]>1u || v[2]>1u || v[4]>1u || v[5]>31u || v[7]>1u || v[8]>1u ||
+    if(v[0]>1u || v[2]>1u || v[4]>1u || (v[5]|v[6]|v[7]|v[8]) ||
        (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4])))return 0;
     return 1;
 }
@@ -408,28 +379,16 @@ int dirty_ram_checkpoint_read(const uint8_t *in,uint32_t len) {
     if (!checkpoint_parse(in,len,v)) return 0;
     s_checkpoint.active=v[0];s_checkpoint.pc=v[1];s_checkpoint.slot=v[2];
     s_checkpoint.target=v[3];s_checkpoint.taken=v[4];
-    s_ld_pend_rt=v[5];s_ld_pend_val=v[6];s_ld_pend_age=v[7];s_ld_pend_armed=(int)v[8];
     s_checkpoint_resume=(int)v[0];
     return 1;
 }
 int dirty_ram_checkpoint_resume_pending(void) { return s_checkpoint_resume; }
 
-/* Retire a deferred load writeback. Call wherever the interpreter stops
- * stepping instructions (hand-off to compiled code, exception entry), since
- * nothing downstream knows about the pending register write. */
-void dirty_ram_ld_delay_flush(CPUState *cpu) {
-    if (!s_ld_pend_armed) return;
-    s_ld_pend_armed = 0;
-    s_ld_pend_age   = 0;
-    if (s_ld_pend_rt != 0u) cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
-    cpu->gpr[0] = 0;
-}
+/* Retire only at an accepted guest exception boundary. Host handoffs preserve it. */
+void dirty_ram_ld_delay_flush(CPUState *cpu) { psx_load_value_commit(cpu); }
 
 void dirty_ram_ld_delay_discard(void) {
-    s_ld_pend_armed = 0;
-    s_ld_pend_age   = 0;
-    s_ld_pend_rt    = 0;
-    s_ld_pend_val   = 0;
+    /* No process-global value pipeline remains. Restore replaces CPU_STATE. */
 }
 
 void dirty_ram_irq_ambient_resync_after_restore(void) {
@@ -1528,7 +1487,6 @@ static int source_dirty_irq_before(CPUState *cpu,uint32_t pc) {
         uint64_t before=g_irq_deliver_count;
         uint32_t previous=g_dirty_safe_resume_pc;
         cpu->pc=pc;g_dirty_safe_resume_pc=pc;
-        dirty_ram_ld_delay_flush(cpu);
         psx_check_interrupts(cpu);
         g_dirty_safe_resume_pc=previous;
         if(g_irq_deliver_count!=before) {
@@ -1553,7 +1511,6 @@ static int exec_delay_slot(CPUState *cpu,uint32_t pc,uint32_t target,int taken) 
     uint32_t insn = fetch_word(ds_phys);
     if(source_gpu_runtime_active() && precise_irq_before(cpu,pc) &&
        irq_epc_resumable(pc-4u)) {
-        dirty_ram_ld_delay_flush(cpu);
         if(psx_check_interrupts_delay_slot(cpu,pc,target,taken,insn)) {
             g_slice_irq_taken++;return 1;
         }
@@ -1614,6 +1571,7 @@ static uint32_t delayed_value_writer(CPUState *cpu,uint32_t insn) {
         if(result<INT32_MIN || result>INT32_MAX)return 0u;
     }
     if(!op) {
+        if(fn==9u && (cpu->gpr[rs]&3u)) return 0u;
         if(fn==0u || (fn>=2u && fn<=4u) || fn==6u || fn==7u || fn==9u || fn==0x10u || fn==0x12u ||
            (fn>=0x20u && fn<=0x27u) || fn==0x2au || fn==0x2bu)
             return rd_field(insn);
@@ -1651,7 +1609,6 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
            irq_epc_resumable(in_slot ? pc-4u : pc)) {
             extern uint64_t g_irq_deliver_count;
             uint64_t before=g_irq_deliver_count;
-            dirty_ram_ld_delay_flush(cpu);
             if(in_slot) {
                 arithmetic_slot.active=0;
                 (void)psx_check_interrupts_delay_slot(cpu,pc,target,taken,insn);
@@ -1668,95 +1625,22 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
             }
         }
     }
-    const uint32_t ld_op = op_field(insn);
-    const uint32_t ld_rt = rt_field(insn);
-    const uint32_t pc_phys = pc & 0x1FFFFFFFu;
-    const int in_bios_rom = pc_phys >= 0x1FC00000u && pc_phys < 0x1FC80000u;
-    const int in_bios_kernel_ram = pc_phys < 0x00010000u;
-    /* Source COP2-to-GPR moves use the CPU's delayed value slot as well.
-     * Precise execution retains ownership while that slot is armed, including
-     * a move in a branch delay slot followed by a compiled block leader.
-     * Ordinary high-RAM mixed dispatch still has the historical eager-value
-     * contract; it cannot yet carry a pending value across every host return. */
-    const int source_gte_value = source_gpu_runtime_active() &&
-        (g_precise_mode || in_bios_rom || in_bios_kernel_ram) &&
-        ld_op==0x12u && (rs_field(insn)==0u || rs_field(insn)==2u) &&
-        (cpu->cop0[12]&0x40000000u);
-
-    /* A load's writeback becomes visible to the instruction AFTER its delay
-     * slot: load at N, hidden from N+1, visible from N+2. s_ld_pend_age tracks
-     * that: 0 = armed by the instruction just executed, 1 = the delay slot has
-     * now run, so retire it before executing anything else.
-     *
-     * Doing the retire HERE (rather than after the slot returns) is what makes
-     * branches correct: a branch's own delay slot is executed nested inside
-     * exec_one_fetched_inner, and re-enters this wrapper — by then age is 1, so
-     * the slot correctly observes the loaded value. */
-    if (s_ld_pend_armed && s_ld_pend_age != 0u) {
-        s_ld_pend_armed = 0;
-        if (s_ld_pend_rt != 0u) cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
-        cpu->gpr[0] = 0;
-    } else if (s_ld_pend_armed) {
-        /* LWL/LWR exemption. `lwl rt,x` immediately followed by `lwr rt,y` is
-         * THE unaligned-load idiom every MIPS compiler emits, and MIPS-I
-         * explicitly permits the pair back-to-back: the second half merges with
-         * the first's result rather than the pre-load register. Hiding the
-         * pending write here would make the merge read a stale rt and silently
-         * corrupt every unaligned load (it wedged Tomba 2 at boot). Retire the
-         * write early so the partner sees it — this is forwarding, not a
-         * shortcut around the delay slot. */
-        const uint32_t nx_op = op_field(insn);
-        const int is_lwlr = (nx_op == 0x22u || nx_op == 0x26u);
-        if (is_lwlr && rt_field(insn) == s_ld_pend_rt) {
-            s_ld_pend_armed = 0;
-            if (s_ld_pend_rt != 0u) cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
-            cpu->gpr[0] = 0;
-        } else {
-            s_ld_pend_age = 1u; /* this instruction IS the delay slot: stay hidden */
-            /* Its operands still see the old GPR. An ordinary write by this
-             * successor then supersedes the pending write. Loads retain the
-             * separate same-destination cancellation below. */
-            const int successor_load=(nx_op>=0x20u && nx_op<=0x26u) ||
-                (nx_op==0x10u && rs_field(insn)==0u) || source_gte_value;
-            if(!successor_load && delayed_value_writer(cpu,insn)==s_ld_pend_rt)
-                s_ld_pend_armed=0;
-        }
-    }
-
-    /* op 0x20..0x26 = LB/LH/LWL/LW/LBU/LHU/LWR. LWC2 (GTE, 0x32) targets a COP2
-     * register, not a GPR, so it needs no deferral here. */
-    /* OpenBIOS executes cardfasttrack both from ROM and from its low-RAM
-     * kernel copy (for example 0x3554..0x36D4). Its hand-written dependent
-     * load requires the real R3000A value delay. Game-owned dirty RAM crosses
-     * mixed compiled/interpreted boundaries that do not carry this pending
-     * writeback yet, so preserve the historical eager-value contract there. */
-    const int      mfc0_value = ld_op==0x10u && rs_field(insn)==0u &&
-                                rd_field(insn)<16u && ((1u<<rd_field(insn))&0xfbe8u);
-    const int      is_ld = (((in_bios_rom || in_bios_kernel_ram) &&
-                           ((ld_op >= 0x20u && ld_op <= 0x26u) || mfc0_value)) ||
-                           source_gte_value) &&
-                           (ld_rt != 0u);
-    const uint32_t ld_before = is_ld ? cpu->gpr[ld_rt] : 0u;
-
+    const uint32_t ld_op = op_field(insn), ld_rt = rt_field(insn);
+    psx_load_value_begin(cpu);
+    const int mfc0_value = ld_op==0x10u && rs_field(insn)==0u &&
+        rd_field(insn)<16u && ((1u<<rd_field(insn))&0xfbe8u);
+    const int gte_value = ld_op==0x12u &&
+        (rs_field(insn)==0u || rs_field(insn)==2u) && (cpu->cop0[12]&0x40000000u);
+    const int is_ld = ld_rt && ((ld_op>=0x20u && ld_op<=0x26u) || mfc0_value || gte_value);
+    const uint32_t before = is_ld ? cpu->gpr[ld_rt] : 0u;
+    /* Cancel before a nested branch slot executes, but never before a fault.
+     * delayed_value_writer evaluates overflow and rejects faulting operations. */
+    if (!is_ld) psx_load_value_cancel(cpu, delayed_value_writer(cpu,insn));
     const int rv = exec_one_fetched_inner(cpu, pc, insn, next_pc_out);
-
-    if (is_ld && rv==0) {
-        const uint32_t loaded = cpu->gpr[ld_rt];
-        {
-            /* Back-to-back loads: retire the older writeback before reusing the
-             * slot, otherwise its register write would be dropped entirely. */
-            if (s_ld_pend_armed && s_ld_pend_rt != ld_rt && s_ld_pend_rt != 0u)
-                cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
-            /* Undo the eager write; it becomes visible one instruction later.
-             * A same-register second load cancels the older pending write,
-             * including when the new loaded bytes equal the original GPR. */
-            cpu->gpr[ld_rt] = ld_before;
-            s_ld_pend_rt    = ld_rt;
-            s_ld_pend_val   = loaded;
-            s_ld_pend_age   = 0u;
-            s_ld_pend_armed = 1;
-            cpu->gpr[0]     = 0;
-        }
+    if (is_ld && !rv) {
+        const uint32_t value = cpu->gpr[ld_rt];
+        cpu->gpr[ld_rt] = before;
+        psx_load_value_arm(cpu,ld_rt,value);
     }
     return rv;
 }
@@ -2521,7 +2405,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x22: { /* LWL */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
         uint32_t word = psx_cyc_load_word(cpu, addr & ~3u, rt, 1u << rs);
-        cpu->gpr[rt] = lwl_merge(addr, word, cpu->gpr[rt]);
+        cpu->gpr[rt] = lwl_merge(addr, word, psx_load_value_merge(cpu, rt));
         psx_pgxp_load(cpu, insn, addr, cpu->gpr[rt]);
         cpu->gpr[0] = 0;
         return 0;
@@ -2560,7 +2444,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x26: { /* LWR */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
         uint32_t word = psx_cyc_load_word(cpu, addr & ~3u, rt, 1u << rs);
-        cpu->gpr[rt] = lwr_merge(addr, word, cpu->gpr[rt]);
+        cpu->gpr[rt] = lwr_merge(addr, word, psx_load_value_merge(cpu, rt));
         psx_pgxp_load(cpu, insn, addr, cpu->gpr[rt]);
         cpu->gpr[0] = 0;
         return 0;
@@ -2821,11 +2705,11 @@ static int precise_irq_deliverable(CPUState *cpu) {
  * Therefore the precise slicer must never hand control back at a mid-function
  * clean-text PC: it keeps interpreting (exec_one handles arbitrary mid-function
  * flow) until cpu->pc satisfies this predicate. */
-static int precise_pc_dispatchable(uint32_t pc) {
+static int precise_pc_dispatchable(CPUState *cpu, uint32_t pc) {
     /* Generated entries do not carry the interpreter's deferred GPR value.
      * Keep its owner through the actual load-delay instruction; an eager
      * boundary flush would change an immediate consumer's visible operand. */
-    if (s_ld_pend_armed) return 0;
+    if (cpu->load_value_rt) return 0;
     /* BIOS ROM and the clean relocated kernel window are re-enterable only at
      * compiled entries/continuations, exactly like clean game text (T110): a
      * slice that stepped into ROM must not hand back mid-block or at a delay
@@ -2906,7 +2790,6 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
             g_cosim_dirty_pump_site = 7;
             g_dirty_safe_resume_pc = committed;
             s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
-            dirty_ram_ld_delay_flush(cpu); /* accepted IRQ retires the prior load */
             psx_check_interrupts(cpu);
             if (cpu->pc == 0u && committed != 0u) {
                 cpu->pc = committed;
@@ -2919,7 +2802,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
             pc = cpu->pc ? cpu->pc : committed;
             cpu->pc = pc;
             uint32_t resume_phys = cpu->pc & 0x1FFFFFFFu;
-            if (precise_pc_dispatchable(cpu->pc) &&
+            if (precise_pc_dispatchable(cpu, cpu->pc) &&
                 !(resume_phys >= 0x1FC00000u && resume_phys < 0x1FC80000u)) {
                 g_slice_exit_reason = 1;
                 g_slice_exit_iter = (uint32_t)i;
@@ -2987,7 +2870,6 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
             g_cosim_dirty_pump_site = 7;
             g_dirty_safe_resume_pc = committed;   /* real EPC for exception entry */
             s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
-            dirty_ram_ld_delay_flush(cpu); /* before the handler's saved-GPR snapshot */
             psx_check_interrupts(cpu);            /* takes it; runs handler; restores GPRs */
             g_dirty_safe_resume_pc = 0;
             g_cosim_dirty_pump_site = prev_site;
@@ -3021,7 +2903,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
          * interrupted delay slot is not a completed control transfer. */
         uint32_t resume_phys = cpu->pc & 0x1FFFFFFFu;
         int rom_resume = resume_phys >= 0x1FC00000u && resume_phys < 0x1FC80000u;
-        if (want_exit && precise_pc_dispatchable(cpu->pc) &&
+        if (want_exit && precise_pc_dispatchable(cpu, cpu->pc) &&
             (!rom_resume || (transferred && !slot_irq_taken))) {
             g_slice_exit_reason = 1;
             g_slice_exit_iter = (uint32_t)i;
@@ -3037,7 +2919,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     cpu->pc = pc;
     g_slice_exit_pc = cpu->pc;
     psx_publish_note(PSX_PUB_PRECISE_EXIT, pc, g_slice_last_block);
-    g_slice_exit_dispatchable = precise_pc_dispatchable(cpu->pc) ? 1u : 0u;
+    g_slice_exit_dispatchable = precise_pc_dispatchable(cpu, cpu->pc) ? 1u : 0u;
     g_slice_exit_dirty = dirty_ram_is_dirty(cpu->pc & 0x1FFFFFFFu) ? 1u : 0u;
 #ifdef PSX_HAS_GAME_DISPATCH
     g_slice_exit_in_text = psx_game_address_in_text(cpu->pc) ? 1u : 0u;
@@ -3466,7 +3348,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
 /* Every exit retires any deferred load writeback: once we hand control back to
  * compiled code (or the dispatch loop) nothing downstream knows a register
  * write is still owed, and the pipeline would have drained by then anyway. */
-#define OV_FPLOG_RET1() do { dirty_ram_ld_delay_flush(cpu); if (_ovfp) overlay_fp_log(addr, _in_regs, cpu, 0); return 1; } while (0)
+#define OV_FPLOG_RET1() do { if (_ovfp) overlay_fp_log(addr, _in_regs, cpu, 0); return 1; } while (0)
 
     if (!dirty_ram_is_dirty(phys) && !clean_game_text_miss) {
         /* Bulk host transfers can populate post-EXE executable RAM without
@@ -3785,7 +3667,6 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 /* Retire an owed load writeback before vectoring: the R3000A
                  * pipeline drains on exception entry, and the handler must not
                  * observe a stale destination register. */
-                dirty_ram_ld_delay_flush(cpu);
                 psx_check_interrupts(cpu);
                 g_dirty_safe_resume_pc = saved_resume;
             }
@@ -3848,7 +3729,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             }
 #endif
             uint32_t target_phys = target & 0x1FFFFFFFu;
-            if(s_ld_pend_armed && target!=0u && target!=stop_addr &&
+            if(cpu->load_value_rt && target!=0u && target!=stop_addr &&
                target_phys<0x10000u && dirty_ram_is_dirty(target_phys)) {
                 /* A host dispatcher return is not a guest pipeline boundary.
                  * Preserve a load in a branch delay slot through the next
@@ -3985,7 +3866,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
          * Without this hand-back the kernel page stays dirty and straight-
          * line flow would interpret the whole function — which is why
          * declaring the slot alone never paid off. */
-        if (!s_ld_pend_armed && next_phys < DIRTY_RAM_KERNEL_WINDOW_END &&
+        if (!cpu->load_value_rt && next_phys < DIRTY_RAM_KERNEL_WINDOW_END &&
             psx_kernel_patch_range_ends_at(next_phys) &&
             psx_kernel_bless_dispatchable(next_phys)) {
             cpu->pc = pc;
@@ -4043,7 +3924,6 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             g_cosim_dirty_pump_site = 4;
             g_dirty_safe_resume_pc = committed;
             s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
-            dirty_ram_ld_delay_flush(cpu);   /* pipeline drains on exception entry */
             psx_check_interrupts(cpu);
             /* Frame-1997 fix (see outer pump): restore the committed PC if a game RFE
              * longjmp left cpu->pc=0, so the trampoline re-dispatches instead of exiting. */

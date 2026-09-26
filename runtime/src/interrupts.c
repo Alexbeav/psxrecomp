@@ -1913,6 +1913,7 @@ irq_deliver_eval:
         };
         g_irqctx_seq++;
     }
+    psx_load_value_commit(cpu);
     ls_note_exception_entry();
     /* Nested delivery: remember whether we interrupted an OUTER handler so
      * the epilogue restores in_exception to the pre-delivery value instead

@@ -1,4 +1,5 @@
 #include "code_generator.h"
+#include "load_value_emission.h"
 #include "pgxp_hook_emitter.h"
 #include "control_flow.h"
 #include "gte_register_classification.h"
@@ -460,7 +461,7 @@ std::string CodeGenerator::translate_lwl(uint32_t instr) {
         return fmt::format("(void)psx_lwl(cpu, {}, {}, 0, 0x{:X}u);", addr, reg_name(rt), mask);
     }
     return fmt::format("{} = psx_lwl(cpu, {}, {}, {}, 0x{:X}u);",
-                       reg_name(rt), addr, lwlr_merge_operand(rt), rt, mask);
+                       reg_name(rt), addr, fmt::format("psx_load_value_merge(cpu, {}u)", rt), rt, mask);
 }
 
 std::string CodeGenerator::translate_lwr(uint32_t instr) {
@@ -480,7 +481,7 @@ std::string CodeGenerator::translate_lwr(uint32_t instr) {
         return fmt::format("(void)psx_lwr(cpu, {}, {}, 0, 0x{:X}u);", addr, reg_name(rt), mask);
     }
     return fmt::format("{} = psx_lwr(cpu, {}, {}, {}, 0x{:X}u);",
-                       reg_name(rt), addr, lwlr_merge_operand(rt), rt, mask);
+                       reg_name(rt), addr, fmt::format("psx_load_value_merge(cpu, {}u)", rt), rt, mask);
 }
 
 std::string CodeGenerator::translate_swl(uint32_t instr) {
@@ -1926,9 +1927,11 @@ std::string CodeGenerator::translate_basic_block(
         }
         return rt == r;
     };
-    uint32_t delayed_load_addr = 0u;
-    uint32_t delayed_load_dest = 0u;
-    bool delayed_load_active = false;
+    auto emit_value = [&](uint32_t pc, uint32_t word) {
+        uint32_t writer = 0;
+        for (uint32_t r=1;r<32;r++) if (writes_gpr(word,r)) { writer=r; break; }
+        return emit_load_value(word,writer,translate_instruction(pc,word));
+    };
 
     /* Zero-word runs. Discovery reaches the zero-filled BSS / overlay load
      * areas of an EXE image through JAL targets, and each zero word (sll
@@ -1990,6 +1993,7 @@ std::string CodeGenerator::translate_basic_block(
             ss << in << in << in << fmt::format("psx_cyc_step(cpu, 0x{:X}u);\n", zero_nop_mask);
             ss << "#endif\n";
         }
+        ss << in << in << in << "psx_load_value_begin(cpu);\n";
         ss << "#ifdef PSX_COSIM\n";
         ss << in << in << in << fmt::format("cosim_instr({});\n", var);
         ss << "#endif\n";
@@ -2028,7 +2032,7 @@ std::string CodeGenerator::translate_basic_block(
                 ss << config_.indent << fmt::format("/* [NOTE] {} */\n", inote);
         }
 
-        if (instr == 0u && !is_cf && !delayed_load_active && addr >= zero_run_scanned_end) {
+        if (instr == 0u && !is_cf && addr >= zero_run_scanned_end) {
             zero_run_end = scan_zero_run(addr);
             zero_run_scanned_end = zero_run_end;
             if ((zero_run_end - addr) / 4u - 1u < kZeroRunMinFollowers) zero_run_end = 0u;
@@ -2037,76 +2041,7 @@ std::string CodeGenerator::translate_basic_block(
         if (!is_cf) {
             if (cycle_per_insn) emit_pre_icache(addr, config_.indent);
             if (cycle_per_insn) emit_pre_timing(instr, config_.indent);
-            // If this is the successor half of a deferred load pair AND it is an
-            // LWL/LWR merging into that same register, hardware forwards the
-            // pending load into the merge (see set_lwlr_merge_forward). Point
-            // the merge operand at the deferred temporary before translating.
-            const uint32_t succ_op = instr >> 26;
-            const bool succ_is_lwlr = (succ_op == 0x22u || succ_op == 0x26u);
-            const bool forward_to_lwlr =
-                delayed_load_active && addr == delayed_load_addr + 4u &&
-                succ_is_lwlr && get_rt(instr) == delayed_load_dest;
-            if (forward_to_lwlr) {
-                set_lwlr_merge_forward(
-                    delayed_load_dest,
-                    fmt::format("psx_ldd_{:08X}", delayed_load_addr));
-            }
-            std::string emitted = translate_instruction(addr, instr);
-            if (forward_to_lwlr) clear_lwlr_merge_forward();
-            int load_dest = simple_load_dest(instr);
-            bool defer_load = false;
-            if (!delayed_load_active && load_dest > 0 && addr + 4u <= block.end_addr &&
-                !extra_labels_.count(addr + 4u)) {
-                auto next = exe_.read_word(addr + 4u);
-                defer_load = next.has_value() &&
-                    !ControlFlowAnalyzer::is_control_flow(*next) &&
-                    reads_gpr(*next, static_cast<uint32_t>(load_dest));
-            }
-            if (defer_load) {
-                const std::string lhs = fmt::format("cpu->gpr[{}] =", load_dest);
-                const size_t pos = emitted.find(lhs);
-                if (pos != std::string::npos) {
-                    const std::string temp = fmt::format("psx_ldd_{:08X}", addr);
-                    // Declare the temp in the pair block, not inline at the
-                    // load: with PGXP the load already sits in its own
-                    // `{ uint32_t _pgxa = ...; <load> PGXP_LOAD(...); }`
-                    // wrapper, so an inline declaration would go out of
-                    // scope before the writeback below.
-                    emitted.replace(pos, lhs.size(), temp + " =");
-                    // Point the PGXP hook at the temp: the writeback is
-                    // deferred, so the GPR still holds the pre-load value.
-                    const std::string pgxp_tail =
-                        fmt::format(", _pgxa, cpu->gpr[{}]);", load_dest);
-                    const size_t hook = emitted.rfind(pgxp_tail);
-                    if (hook != std::string::npos)
-                        emitted.replace(hook, pgxp_tail.size(),
-                                        fmt::format(", _pgxa, {});", temp));
-                    ss << config_.indent << "{ /* MIPS-I load-delay pair */\n";
-                    ss << config_.indent
-                       << fmt::format("    uint32_t {} = 0;\n", temp);
-                    delayed_load_addr = addr;
-                    delayed_load_dest = static_cast<uint32_t>(load_dest);
-                    delayed_load_active = true;
-                }
-            }
-            ss << emitted << "\n";
-            if (delayed_load_active && addr == delayed_load_addr + 4u) {
-                if (forward_to_lwlr) {
-                    ss << config_.indent << fmt::format(
-                        "/* psx_ldd_{:08X} forwarded into the LWL/LWR merge above */\n",
-                        delayed_load_addr);
-                } else if (writes_gpr(instr, delayed_load_dest)) {
-                    ss << config_.indent << fmt::format(
-                        "(void)psx_ldd_{:08X};  /* successor write wins */\n",
-                        delayed_load_addr);
-                } else {
-                    ss << config_.indent << fmt::format(
-                        "cpu->gpr[{}] = psx_ldd_{:08X};  /* load-delay writeback */\n",
-                        delayed_load_dest, delayed_load_addr);
-                }
-                ss << config_.indent << "}\n";
-                delayed_load_active = false;
-            }
+            ss << emit_value(addr,instr);
             emit_cosim_instr(addr, config_.indent);
         } else {
             // Control flow is handled at block exit
@@ -2139,6 +2074,7 @@ std::string CodeGenerator::translate_basic_block(
                     ss << config_.indent
                        << fmt::format("{{ /* reserved opcode 0x{:08X}: architectural RI exception */\n",
                                       block.exit_instr.instruction);
+                    ss << "    psx_load_value_commit(cpu);\n";
                     ss << config_.indent << "  uint32_t psx_ri_sr = cpu->cop0[12];\n";
                     ss << config_.indent
                        << fmt::format("  cpu->cop0[14] = 0x{:08X}u;  /* EPC = faulting PC, BD=0 */\n", addr);
@@ -2161,6 +2097,8 @@ std::string CodeGenerator::translate_basic_block(
                 if (cycle_per_insn)
                     emit_pre_timing(block.exit_instr.instruction, config_.indent);
 
+                ss << "    psx_load_value_begin(cpu);\n";
+
                 // Register-indirect targets are resolved at the jump instruction.
                 // The delay slot may overwrite the source register, so all JR/JALR
                 // paths below consume this pre-delay snapshot.
@@ -2174,6 +2112,13 @@ std::string CodeGenerator::translate_basic_block(
                                       delay_saved_target, reg_name(target_rs));
                 }
 
+                            if (block.exit_instr.type == ControlFlowType::Branch) {
+                                std::string cond = generate_branch_condition(block.exit_instr.instruction, block.exit_instr.address);
+                                delay_saved_cond = fmt::format("_bc_{:08X}", addr);
+                                ss << config_.indent
+                                   << fmt::format("int {} = ({});  /* save branch cond before delay slot */\n",
+                                                  delay_saved_cond, cond);
+                            }
                 if (block.exit_instr.type == ControlFlowType::JumpLink) {
                     ss << config_.indent
                        << fmt::format("cpu->gpr[31] = 0x{:08X}u;  /* jal link before delay slot */\n",
@@ -2223,7 +2168,7 @@ std::string CodeGenerator::translate_basic_block(
                         if (block.exit_instr.is_likely) {
                             ss << config_.indent << "/* delay slot (likely) - conditional execution */\n";
                             ss << config_.indent << "if (" << generate_branch_condition(block.exit_instr.instruction, block.exit_instr.address) << ") {\n";
-                            ss << config_.indent << translate_instruction(delay_slot_addr, delay_instr) << "\n";
+                            ss << emit_value(delay_slot_addr, delay_instr);
                             emit_cosim_instr(delay_slot_addr, config_.indent + config_.indent);
                             ss << config_.indent << "}\n";
                         } else {
@@ -2231,18 +2176,15 @@ std::string CodeGenerator::translate_basic_block(
                             // In MIPS, the branch condition is evaluated at the branch
                             // instruction (before the delay slot). If the delay slot
                             // modifies a condition register we must save the result first.
-                            if (block.exit_instr.type == ControlFlowType::Branch) {
-                                std::string cond = generate_branch_condition(block.exit_instr.instruction, block.exit_instr.address);
-                                delay_saved_cond = fmt::format("_bc_{:08X}", addr);
-                                ss << config_.indent
-                                   << fmt::format("int {} = ({});  /* save branch cond before delay slot */\n",
-                                                  delay_saved_cond, cond);
+                            for (uint32_t r=1;r<32;r++) if (writes_gpr(instr,r)) {
+                                ss << fmt::format("    psx_load_value_cancel(cpu, {}u);\n",r);
+                                break;
                             }
                             ss << config_.indent << "/* delay slot (always executes) */\n";
                             // Delay slot's own fetch + §1+deps+DO_LDS, before its body (skipped if a load).
                             if (cycle_per_insn) emit_pre_icache(delay_slot_addr, config_.indent);
                             if (cycle_per_insn) emit_pre_timing(delay_instr, config_.indent);
-                            ss << translate_instruction(delay_slot_addr, delay_instr) << "\n";
+                            ss << emit_value(delay_slot_addr, delay_instr);
                             emit_cosim_instr(delay_slot_addr, config_.indent);
                         }
                     }
