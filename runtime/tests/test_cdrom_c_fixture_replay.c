@@ -17,7 +17,12 @@
  * drive; the Octoshock rows' ack schedule does not fit that drive).
  * --case NAME runs one case (a model that rejects an unqualified path exits
  * the process, so reports run one case per process).
- * Exit status: 0 when every case of the selected classes matches. */
+ * Exit status: 0 when every case of the selected classes matches.
+ *
+ * Tape provenance: tests/cd_source_cold_random_256.psxrng holds words 0-255 of
+ * octoshock222-cold-random.psxrng, the octoshock-2.2.2 cold random tape that
+ * tools/tasreplays builds for the TAS routes (sha256 d85f0dec13b00e50b10a52ce0f
+ * da3cdaa9797f058ad16dd57caa8e926fad7a6a). PRNG draws only. */
 #include "../src/cdrom.c"
 #include <stdarg.h>
 
