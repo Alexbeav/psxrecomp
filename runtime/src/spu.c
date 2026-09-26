@@ -230,12 +230,16 @@ static inline int16_t volume_reg_decode(uint16_t raw) {
     return (int16_t)((uint16_t)(raw << 1));
 }
 
-/* Writes retain state until the next sample applies the register value. */
+/* Writes retain state until the next sample applies the register value: a
+ * fixed-mode write reaches the current volume at the next tick [ORACLE
+ * FIXTURE S4: 1E04h reads the old value right after a 3ABCh write and 7578h
+ * two ticks later] (PSX-SPX: "the Bit15=0 setting isn't applied until the
+ * next 44.1kHz cycle"). The default path applies it at once only while the
+ * SPU is disabled, because its disabled path does not step the sweeps. */
 static void sweep_env_write(SweepEnv *sw, uint16_t raw)
 {
-    /* Legacy callers can skip voice sweep ticks while no voice is active.
-     * Preserve the fixed starting level for their later sweep transition. */
-    if (!source_key_timing && !(raw & 0x8000))
+    if (!source_key_timing && !(raw & 0x8000) &&
+        !(spu_regs[reg_index(0x1F801DAAu)] & 0x8000u))
         sw->level = (int16_t)(raw < 0x4000 ? (int32_t)raw * 2
                                          : (int32_t)raw * 2 - 65536);
 }
@@ -246,11 +250,12 @@ static void sweep_env_step(SweepEnv *sw, uint16_t raw)
     spu_env_sweep_tick(&sw->level, &sw->divider, raw);
 }
 
-/* Live effective volume of a volume register: the register decode in direct
- * mode, the sweep envelope's current level in sweep mode. */
+/* Live effective volume of a volume register: the current level, which the
+ * sample tick loads from a fixed-mode register and steps in sweep mode (see
+ * sweep_env_write). */
 static inline int16_t chan_volume(uint16_t raw, const SweepEnv *sw) {
-    if (raw & 0x8000u) return sw->level;
-    return volume_reg_decode(raw);
+    (void)raw;
+    return sw->level;
 }
 
 /* SPU RAM IRQ-address compare, called from EVERY SPU RAM access site (FIFO,
@@ -1411,7 +1416,14 @@ uint32_t spu_read(uint32_t addr) {
                  * one that stores slot 511 [ORACLE FIXTURE E8c]. capture_pos
                  * already names the next slot, so test the one stored last. */
                 uint16_t cnt = spu_regs[reg_index(0x1F801DAAu)];
-                uint32_t st = (uint32_t)((spu_regs[idx] & 0x3Fu) | (((cnt >> 5) & 1u) << 7));
+                /* Bit 7: PSX-SPX "seems to be same as SPUCNT.Bit5", but in
+                 * DMA-read mode "bit9 and bit7 aren't set immediately". After
+                 * a C0FFh (DMA-read) SPUCNT write it reads 0 immediately and
+                 * two ticks later [ORACLE FIXTURE S4]. So it follows the
+                 * applied mode and stays clear in DMA read; a later set in
+                 * DMA read, and bit 7 in DMA-write mode, are NOT OBSERVED. */
+                uint32_t bit7 = (spu_regs[idx] & 0x30u) == 0x20u;
+                uint32_t st = (uint32_t)((spu_regs[idx] & 0x3Fu) | (bit7 << 7));
                 if (irq_flag) st |= 0x40u;
                 if ((capture_pos - 2u) & 0x200u) st |= 0x800u;
                 return st;
@@ -1426,22 +1438,11 @@ uint32_t spu_read(uint32_t addr) {
                 return (uint32_t)(uint16_t)chan_volume(
                     spu_regs[reg_index(0x1F801D82u)], &sweep_main_env[1]);
             }
-            /* A volume register in SWEEP mode reads back the envelope's
-             * CURRENT level, not the sweep-parameter word — the live value
-             * is what actually multiplies the samples.
-             * DOCUMENTED-GAP: the exact readback encoding for a sweeping
-             * volume register is not settled; the live level as a signed
-             * 16-bit value was chosen. Candidate for oracle verification. */
-            if (idx < (uint32_t)SPU_VOICE_COUNT * 8u && (idx & 7u) <= 1u
-                && (spu_regs[idx] & 0x8000u)) {
-                return (uint32_t)(uint16_t)
-                    sweep_voice_env[idx >> 3][idx & 7u].level;
-            }
-            if ((addr == 0x1F801D80u || addr == 0x1F801D82u)
-                && (spu_regs[idx] & 0x8000u)) {
-                return (uint32_t)(uint16_t)
-                    sweep_main_env[(addr >> 1) & 1u].level;
-            }
+            /* A volume register in SWEEP mode reads back as written,
+             * immediately and two ticks later; the live level is only in the
+             * current-volume registers 1DB8h/1DBAh and 1E00h+ [ORACLE FIXTURE
+             * S4: C07Fh reads C07Fh]. PSX-SPX is silent. So the voice and main
+             * volume registers fall through to the register image below. */
             /* ENDX (end-block-reached latch). Real hw sets bit v when voice
              * v decodes a block whose flag byte has bit 0; KEYON[v] clears
              * it. Without this latch, music engines that poll ENDX to wait
@@ -1495,10 +1496,11 @@ void spu_write(uint32_t addr, uint32_t value) {
             audio_trace_event(AUDIO_EV_REG_WRITE, addr, value & 0xFFFFu);
             spu_regs[idx] = (uint16_t)value;
 
-            /* Source voice register 6 writes the live envelope, without
-             * resetting its phase or divider (PS_SPU::Write, case 0x0C). */
-            if (source_key_timing && idx < (uint32_t)SPU_VOICE_COUNT * 8u &&
-                (idx & 7u) == 6u)
+            /* Voice register 6 (ENVX) writes the live envelope level,
+             * without resetting its phase or divider (PSX-SPX "Current ADSR
+             * volume (R/W)": writing lets the generator jump to a level;
+             * [ORACLE FIXTURE S4]: a written 2468h reads back 2468h). */
+            if (idx < (uint32_t)SPU_VOICE_COUNT * 8u && (idx & 7u) == 6u)
                 voices[idx >> 3].env_level = (uint16_t)value;
 
             /* Voice repeat/loop address (voice reg 7) is LIVE state on real
@@ -1513,13 +1515,18 @@ void spu_write(uint32_t addr, uint32_t value) {
              * re-looping ~1400x/s, +11 dB over the oracle, clipping). */
             if (idx < (uint32_t)SPU_VOICE_COUNT * 8u && (idx & 7u) == 7u) {
                 int v = (int)(idx >> 3);
-                /* bit0 ignored (16-byte alignment) — same masking as KEYON. */
+                /* The register keeps the written value (an odd 0211h reads
+                 * back 0211h), but End+Repeat jumps to the 16-byte-aligned
+                 * block, so bit 0 is ignored when the address is used
+                 * [ORACLE FIXTURE S2b], as S3 shows for the Key On start
+                 * address. A CPU write replaces REPEAT at once and, in the
+                 * source path, disarms the Loop Start copy for the rest of
+                 * this key-on [ORACLE FIXTURE S2]. The default path has no
+                 * disarm [NOT OBSERVED: release policy; S2]. */
                 voices[v].repeat_addr =
                     ((uint32_t)((uint16_t)value & ~1u) << 3) & (SPU_RAM_SIZE - 1u);
-                if (source_key_timing) {
-                    voices[v].repeat_addr = ((uint32_t)(uint16_t)value << 3) & (SPU_RAM_SIZE - 1u);
+                if (source_key_timing)
                     source_decode[v].ignore_loop = 1;
-                }
             }
 
             /* Volume registers feed the sweep envelopes: a direct write
