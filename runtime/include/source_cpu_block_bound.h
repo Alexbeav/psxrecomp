@@ -27,7 +27,7 @@ static uint32_t source_cpu_block_bound_ex(CPUState *cpu,uint32_t pc,uint32_t cou
         uint32_t op=word>>26,fn=word&63u;
         if((op>=0x20u && op<=0x26u) || op==0x32u)bound+=access_cost;
         if(op==0x12u && (word&(1u<<25)))bound+=psx_gte_cmd_latency(word);
-        if(!op && fn>=0x18u && fn<=0x1bu)bound+=37u;
+        if(!op && fn>=0x18u && fn<=0x1bu)bound+=PSX_DIV_LATENCY;
     }
     return bound>UINT32_MAX?UINT32_MAX:(uint32_t)bound;
 }
@@ -114,7 +114,7 @@ static uint32_t source_cpu_block_bound_icache(CPUState *cpu,uint32_t pc,uint32_t
         uint32_t op=word>>26,fn=word&63u;
         if((op>=0x20u && op<=0x26u) || op==0x32u)bound+=access_cost;
         if(op==0x12u && (word&(1u<<25)))bound+=psx_gte_cmd_latency(word);
-        if(!op && fn>=0x18u && fn<=0x1bu)bound+=37u;
+        if(!op && fn>=0x18u && fn<=0x1bu)bound+=PSX_DIV_LATENCY;
     }
     return bound>UINT32_MAX?UINT32_MAX:(uint32_t)bound;
 }

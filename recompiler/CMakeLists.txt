@@ -1191,7 +1191,8 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_test(NAME muldiv_latency_fixture COMMAND muldiv_latency_fixture
         "${CMAKE_CURRENT_SOURCE_DIR}/src/code_generator.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/strict_translator.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/dirty_ram_interp.c")
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/dirty_ram_interp.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include/source_cpu_block_bound.h")
     # PS1B-185: MFHI/MFLO deadline wait, load give-back and second read against oracle fixtures F5 and F6.
     foreach(_mode IN ITEMS O0 O2)
         set(_target "muldiv_giveback_fixture_${_mode}")

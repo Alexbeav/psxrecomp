@@ -6,8 +6,8 @@
  * [ORACLE FIXTURE] The latency argument is that stall minus one for MULT/DIV
  * (MFLO), and equal to it for GTE commands (MFC2).
  *
- * argv[1..3]: code_generator.cpp, strict_translator.cpp, dirty_ram_interp.c;
- * their inline DIV/DIVU latency must equal PSX_DIV_LATENCY. */
+ * argv[1..4]: code_generator.cpp, strict_translator.cpp, dirty_ram_interp.c,
+ * source_cpu_block_bound.h; their DIV/DIVU latency must equal PSX_DIV_LATENCY. */
 #include "cpu_state.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -102,15 +102,19 @@ int main(int argc, char **argv)
     check(gte_max == 43u, "GTE latency maximum", gte_max, 43u);
     check(mult_max <= PSX_DIV_LATENCY, "multiply latency within the DIV bound", mult_max, PSX_DIV_LATENCY);
 
-    if (argc == 4) {
+    if (argc == 5) {
         char emitted[64], interp[64];
         snprintf(emitted, sizeof emitted, "psx_muldiv_set(cpu, %uu)", PSX_DIV_LATENCY);
         snprintf(interp, sizeof interp, "psx_muldiv_set(cpu, PSX_DIV_LATENCY)");
         check(count_in_file(argv[1], emitted) == 2, "code_generator DIV/DIVU literal", count_in_file(argv[1], emitted), 2);
         check(count_in_file(argv[2], emitted) == 2, "strict_translator DIV/DIVU literal", count_in_file(argv[2], emitted), 2);
         check(count_in_file(argv[3], interp) == 2, "dirty_ram_interp DIV/DIVU constant", count_in_file(argv[3], interp), 2);
+        check(count_in_file(argv[3], "+= PSX_DIV_LATENCY;") == 2, "dirty_ram_interp block bound", count_in_file(argv[3], "+= PSX_DIV_LATENCY;"), 2);
+        /* source_cpu_block_bound.h: the fast bound, both slow-path bounds and the feature scan. */
+        check(count_in_file(argv[4], "PSX_DIV_LATENCY") == 4, "block bound uses PSX_DIV_LATENCY", count_in_file(argv[4], "PSX_DIV_LATENCY"), 4);
+        check(count_in_file(argv[4], "37u") == 0, "block bound has no literal 37u", count_in_file(argv[4], "37u"), 0);
     } else if (argc != 1) {
-        fprintf(stderr, "usage: %s [code_generator.cpp strict_translator.cpp dirty_ram_interp.c]\n", argv[0]);
+        fprintf(stderr, "usage: %s [code_generator.cpp strict_translator.cpp dirty_ram_interp.c source_cpu_block_bound.h]\n", argv[0]);
         return 2;
     }
     printf("muldiv/GTE latencies (oracle fixture F1-F3): %u checks passed\n", checks);
