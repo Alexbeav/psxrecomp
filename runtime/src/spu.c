@@ -126,7 +126,8 @@ static uint64_t cd_push_frames;
 static uint64_t cd_overflow_frames;
 static uint64_t cd_underflow_frames;
 
-/* ADSR phases — match Beetle's order so cross-process diffs read straight. */
+/* ADSR phases, numbered like the oracle's trace output so cross-process diffs
+ * read straight. */
 #define ADSR_ATTACK   0
 #define ADSR_DECAY    1
 #define ADSR_SUSTAIN  2
@@ -382,9 +383,11 @@ static void decode_block(SpuVoice *v) {
 
     if (flags & 0x04u) {
         v->repeat_addr = addr;
-        /* The auto-latch updates the guest-visible register too (Beetle
-         * spu.cpp:386 + read path 1302): drivers read it back to save
-         * loop points. */
+        /* The auto-latch updates the guest-visible register too: PSX-SPX
+         * "Voice 0..23 ADPCM Repeat Address" (reading it senses a Loop Start
+         * bit), and [ORACLE FIXTURE S1] shows REPEAT changing when the
+         * Loop Start header is fetched. Drivers read it back to save loop
+         * points. */
         int v_idx = (int)(v - voices);
         if (v_idx >= 0 && v_idx < SPU_VOICE_COUNT)
             spu_regs[(uint32_t)v_idx * 8u + 7u] = (uint16_t)(addr >> 3);
@@ -787,16 +790,18 @@ static int16_t voice_next_sample(int idx) {
     if (v->sample_idx >= SPU_BLOCK_SAMPLES) {
         if (v->flags & 0x01u) {
             /* END flag: the decode pointer jumps to the latched repeat
-             * address in BOTH the loop and stop cases — Beetle spu.cpp:333
-             * (CurAddr = LoopAddr) does this unconditionally. */
+             * address in BOTH the loop and stop cases (PSX-SPX "Flag Bits":
+             * Code 1 End+Mute and Code 3 End+Repeat both "jump to
+             * Loop-address"; [ORACLE FIXTURE S1]). */
             v->cur_addr = v->repeat_addr & (SPU_RAM_SIZE - 1u);
             if (v->flags & 0x02u) {
                 spu_event_record(SPU_EV_END_LOOP, idx, v->repeat_addr);
             } else {
                 /* END without REPEAT: hardware forces the envelope to ZERO
-                 * and enters Release (Beetle spu.cpp:341-352 — "Force
-                 * enveloping to 0 if not looping"). The voice keeps decoding
-                 * from the repeat address, silently.
+                 * and enters Release (PSX-SPX Code 1 "Release, Env=0000h";
+                 * [ORACLE FIXTURE S1]: ENVX goes straight to 0000 with ENDX,
+                 * no release ramp). The voice keeps decoding from the repeat
+                 * address, silently.
                  *
                  * The previous shape decoded FORWARD past the terminator
                  * with the envelope intact, assuming the release would mask
@@ -880,8 +885,8 @@ static int16_t voice_next_sample(int idx) {
      * parks its two ambience voices that way when the pause menu opens: pitch
      * 0, envelope frozen mid-sustain, no key-off. Coerced, they ran ~0x790
      * bytes past their own repeat address and turned the menu into a
-     * continuous mid-band buzz. DuckStation and Beetle both just add the
-     * pitch to the counter, so zero holds. */
+     * continuous mid-band buzz. PSX-SPX "Pitch Counter": Step = VxPitch
+     * is added to the counter, so a pitch of zero holds. */
     uint32_t pitch = voice_reg(idx, 2) & 0x3FFFu;
     v->phase += pitch;
     while (v->phase >= 0x1000u) {
@@ -898,14 +903,14 @@ static void key_on(uint32_t mask) {
         SpuVoice *v = &voices[i];
         memset(v, 0, sizeof(*v));
         v->active = 1;
-        /* Address registers count 8-byte units but hardware ignores bit0
-         * — block fetches are 16-byte aligned (DuckStation Voice::KeyOn
-         * `adpcm_start_address & ~1u`; Beetle aligns identically). */
+        /* Address registers count 8-byte units (PSX-SPX) and samples are
+         * 16-byte blocks, so fetches are 16-byte aligned and bit0 is
+         * ignored. [That bit0 is ignored is NOT DOCUMENTED in PSX-SPX.] */
         v->cur_addr = ((uint32_t)(voice_reg(i, 3) & ~1u) << 3) & (SPU_RAM_SIZE - 1u);
         v->repeat_addr = ((uint32_t)(voice_reg(i, 7) & ~1u) << 3) & (SPU_RAM_SIZE - 1u);
         v->sample_idx = SPU_BLOCK_SAMPLES;
-        /* Reset ADSR — KEYON starts envelope at 0 in Attack phase
-         * (matches Beetle's PS_SPU::ResetEnvelope). */
+        /* Reset ADSR — KEYON starts envelope at 0 in Attack phase (PSX-SPX
+         * "Key ON": "automatically initializes ADSR Volume to zero"). */
         v->env_level = 0;
         v->adsr_divider = 0;
         v->adsr_phase = ADSR_ATTACK;
@@ -1498,7 +1503,9 @@ void spu_write(uint32_t addr, uint32_t value) {
 
             /* Voice repeat/loop address (voice reg 7) is LIVE state on real
              * hardware: writing it after KEYON retargets where the next
-             * END+REPEAT block jumps (Beetle spu.cpp:1150/333). X5's driver
+             * END+REPEAT block jumps (PSX-SPX Repeat Address: writing it can
+             * "redirect a one-shot sample"; [ORACLE FIXTURE S1]: KON keeps a
+             * preset repeat address). X5's driver
              * uses exactly this to end one-shots on looped samples — KEYON,
              * then point the loop register at a silent tail block; no KEYOFF
              * is ever sent. Caching repeat_addr only at KEYON left voices
