@@ -50,8 +50,8 @@ extern "C" {
  *      source peripheral pipelines and queued GPU work. The two lineages both
  *      used v6-v9 for different contents, so this merge takes a number neither
  *      ever wrote.
- * v11 = v10 with the rewritten source-DMA machines (BS_SEC_DMA_SRC layout: five
- *      machines, 208 bytes). */
+ * v11 = v10 with the rewritten source-DMA machines (BS_SEC_DMA_SRC layout: seven
+ *      machines and the source MDEC clock, 296 bytes). */
 #define BOOT_STATE_VERSION 11u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
