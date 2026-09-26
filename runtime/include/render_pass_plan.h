@@ -99,7 +99,7 @@ typedef struct RenderPassJournal {
 } RenderPassJournal;
 /* Clip the write (*x, *y, *w, *h) to vram_w x vram_h and decide it against
  * the pass rect (px, py, pw, ph) and the journal. can_journal = 0 refuses
- * every outside write (e.g. native-wide margins are not journaled). */
+ * every outside write. */
 int  render_pass_vram_policy(const RenderPassJournal *j, int px, int py,
                              int pw, int ph, int vram_w, int vram_h,
                              int can_journal, int *x, int *y, int *w, int *h);

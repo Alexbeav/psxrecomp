@@ -388,8 +388,11 @@ static int pass_journal_protect(int x, int y, int w, int h);
 /* A fill, copy or upload outside the pass rect (e.g. a game that moves a
  * few pixels of VRAM as part of every frame) is journaled -- its destination
  * backed up and restored at the end of the pass -- or, when the journal is
- * full or native-wide is active, refused and counted (the pass is then rolled
- * back without an image). */
+ * full, refused and counted (the pass is then rolled back without an image).
+ * Native-wide needs nothing more: fills, copies, uploads and pokes write the
+ * hr surface, the raw mirror and the CPU rows only, never a wide surface
+ * (the wide margins come from mirrored draws, which the pass scissor keeps
+ * inside the pass band). */
 static int pass_refuse_write(const char *what, int x, int y, int w, int h) {
     int policy;
     if (!s_pass_active) return 0;
@@ -4658,7 +4661,6 @@ static void pass_resources_release(void) {
 static int pass_journal_protect(int x, int y, int w, int h) {
     int S = s_scale, i = s_pj_cpu.n;
     PassJournal *j;
-    if (g_wide_w > 0) return 0;   /* wide margins are not journaled */
     if (i >= PASS_JOURNAL_MAX) return 0;
     j = &s_pj[i];
     if (!pass_make_color_fbo(&j->hr_tex, &j->hr_rb, &j->hr_fbo, &j->hr_w,

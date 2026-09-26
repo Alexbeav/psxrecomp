@@ -76,7 +76,7 @@ While `fn` runs (`g_psx_render_pass_active`):
 | GPU DMA | linked lists and delayed completions finish synchronously | `dma.c` |
 | RAM / scratchpad stores | written directly, bypassing code-page tracking, overlay watch, write traces and fingerprints | `memory.c` `render_pass_store` |
 | MMIO stores | allowed: GP0, GP1 DMA mode / info, GPU and OTC DMA channels, DPCR/DICR, I_STAT/I_MASK. Dropped and counted: SPU (key-ons), CD, timers, SIO, MDEC, other DMA channels, memory control | `memory.c` |
-| VRAM | only the declared rect; writes that bypass the scissor elsewhere are journaled and rolled back (refused under native-wide) | `gpu_gl_renderer.c` |
+| VRAM | only the declared rect; writes that bypass the scissor elsewhere (fills, copies, uploads, pokes: never a native-wide surface) are journaled and rolled back | `gpu_gl_renderer.c` |
 | Runaway code | an 8 M guest-cycle watchdog rolls the pass back | `render_pass.c` |
 
 After `fn` (success or not) everything is restored: CPU state with the GTE,

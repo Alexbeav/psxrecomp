@@ -70,6 +70,28 @@ assert "render_pass_vram_policy(&s_pj_cpu" in body(
 assert "render_pass_journal_rollback(&s_pj_cpu" in body(
     gl, "static void pass_journal_rollback("), (
     "the journal rollback must restore the CPU VRAM rows")
+# The journal backs up the hr surface, the raw mirror and the CPU rows. That
+# is complete in native-wide too only while the out-of-rect write paths never
+# touch a wide surface; R4 copies 2x1 pixels outside the display every frame,
+# so refusing them under native-wide rolled back every widescreen pass.
+def definition(text, name):
+    """The whole body of function `name` (its definition, not a prototype)."""
+    m = re.search(r"^static [\w ]+\b" + name + r"\([^;{]*\)\s*\{", text, re.M)
+    assert m, "no definition of " + name
+    depth, i = 0, m.end() - 1
+    while True:
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        if depth == 0:
+            return text[m.start():i + 1]
+        i += 1
+
+
+assert "g_wide" not in definition(gl, "pass_journal_protect"), (
+    "out-of-rect writes are journaled in native-wide as well")
+for name in ("gpu_fill", "gpu_copy_rect", "flush_cpu_upload",
+             "glb_vram_transfer_in", "glb_vram_write"):
+    assert "wide" not in definition(gl, name), (
+        "journaled writes must not reach a native-wide surface: " + name)
 cls = body(plan, "int render_pass_mmio_class(")
 for dev in ("RENDER_PASS_DROP_SPU", "RENDER_PASS_DROP_CD",
             "RENDER_PASS_DROP_TIMER"):
