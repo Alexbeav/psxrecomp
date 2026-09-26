@@ -410,7 +410,6 @@ static int pass_refuse_write(const char *what, int x, int y, int w, int h) {
 static void interp_reset_history(void);
 static int interp_present(float alpha);
 static void interp_present_source_interval(void);
-static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh);
 static void present_bezel(int ww, int wh, int lx, int ly, int lw, int lh);
 
 static int           s_raster_ok = 0;      /* full GPU pipeline available */
@@ -4207,14 +4206,11 @@ static void interp_draw_textures(GLuint prev_tex, GLuint curr_tex, float alpha,
     p_glActiveTexture(PSXGL_TEXTURE0);
 }
 
-static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh) {
-    interp_draw_textures(s_interp_tex[s_interp_prev], s_interp_tex[s_interp_cur],
-                         alpha, s_interp_blend_mode, lx, ly, lw, lh);
-}
-
+static uint64_t s_present_ticks_accum_fwd(uint64_t add);
 static int interp_present_pair(GLuint a, GLuint b, float t, int blend_mode) {
     if (!s_ctx || !s_interp_enabled || s_interp_suspended || s_interp_valid < 1)
         return 0;
+    uint64_t present_t0 = SDL_GetPerformanceCounter();
     int ww = 0, wh = 0; SDL_GL_GetDrawableSize(s_win, &ww, &wh);
     int lx, ly, lw, lh;
     if (s_interp_force_4_3)
@@ -4233,32 +4229,15 @@ static int interp_present_pair(GLuint a, GLuint b, float t, int blend_mode) {
                 lx, ly, lw, lh);
     gl_swap_with_osd();
     s_interp_swaps++;
+    (void)s_present_ticks_accum_fwd(SDL_GetPerformanceCounter() - present_t0);
     return 1;
 }
 
 static int interp_present(float alpha) {
     if (s_interp_hold) alpha = 1.0f;
-    if (!s_ctx || !s_interp_enabled || s_interp_suspended || s_interp_valid < 1)
-        return 0;
-    int ww = 0, wh = 0; SDL_GL_GetDrawableSize(s_win, &ww, &wh);
-    int lx, ly, lw, lh;
-    if (s_interp_force_4_3)
-        letterbox_rect_aspect(ww, wh, 4, 3, &lx, &ly, &lw, &lh);
-    else
-        letterbox_rect(ww, wh, &lx, &ly, &lw, &lh);
-    glDisable(GL_SCISSOR_TEST);
-    glViewport(0, 0, ww, wh);
-    if (lx != 0 || ly != 0 || lw != ww || lh != wh) {
-        glClearColor(0.f, 0.f, 0.f, 1.f);
-        glClear(GL_COLOR_BUFFER_BIT);
-    }
-    present_bezel(ww, wh, lx, ly, lw, lh);
-    interp_draw_quad(alpha, lx, ly, lw, lh);
-    pres_record(GL_PRES_INTERP, 0, 0, s_interp_w, s_interp_h,
-                lx, ly, lw, lh);
-    gl_swap_with_osd();
-    s_interp_swaps++;
-    return 1;
+    return interp_present_pair(s_interp_tex[s_interp_prev],
+                               s_interp_tex[s_interp_cur], alpha,
+                               s_interp_blend_mode);
 }
 
 static void interp_wait_until(uint64_t deadline, uint64_t frequency) {
@@ -4381,6 +4360,8 @@ static int      s_pb_last_dx = 0, s_pb_last_dy = 0, s_pb_last_dw = 0, s_pb_last_
 static double   s_pass_cost_ema = 0.0;        /* host ticks per pass */
 static uint64_t s_pass_ticks_accum = 0, s_idle_ticks_accum = 0;
 static uint64_t s_pass_ticks_last = 0, s_idle_ticks_last = 0;
+static uint64_t s_present_ticks_accum = 0, s_present_ticks_last = 0;
+static double   s_present_cost_ema = 0.0;     /* host ticks per present */
 static uint32_t s_intervals_since_plan = 0;
 static int      s_pass_budget_pct = -1;
 
@@ -4426,7 +4407,8 @@ uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
     /* One plan per game frame: close the previous frame's host-time books. */
     s_idle_ticks_last = s_idle_ticks_accum;
     s_pass_ticks_last = s_pass_ticks_accum;
-    s_idle_ticks_accum = s_pass_ticks_accum = 0;
+    s_present_ticks_last = s_present_ticks_accum;
+    s_idle_ticks_accum = s_pass_ticks_accum = s_present_ticks_accum = 0;
     live = s_intervals_since_plan > 0;   /* turbo/headless present nothing */
     s_intervals_since_plan = 0;
     if (!gl_renderer_pass_ready() || !live || !alpha_q16 || max == 0) return 0;
@@ -4449,9 +4431,16 @@ uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
                      (double)shown_after_vblanks * sp;
     in.frame_length = (double)period_vblanks * sp;
     in.pass_cost = s_pass_cost_ema;
-    in.budget = render_pass_budget((double)s_idle_ticks_last,
-                                   (double)s_pass_ticks_last, in.frame_length,
-                                   (double)s_pass_budget_pct / 100.0);
+    {
+        /* Presents beyond two per frame are traded for passes: a shed
+         * present is coalesced, a shed pass is a missing motion sample. */
+        double spare = (double)s_idle_ticks_last + (double)s_present_ticks_last -
+                       2.0 * s_present_cost_ema;
+        if (spare < 0.0) spare = 0.0;
+        in.budget = render_pass_budget(spare, (double)s_pass_ticks_last,
+                                       in.frame_length,
+                                       (double)s_pass_budget_pct / 100.0);
+    }
     in.max = max < cap - 1u ? max : cap - 1u;
     return render_pass_plan_phases(&in, alpha_q16, wanted);
 }
@@ -4845,6 +4834,12 @@ uint64_t gl_renderer_pass_journaled(void) { return s_pj_total; }
 static uint64_t s_idle_ticks_accum_fwd(uint64_t add) {
     s_idle_ticks_accum += add;
     return s_idle_ticks_accum;
+}
+
+static uint64_t s_present_ticks_accum_fwd(uint64_t add) {
+    s_present_ticks_accum += add;
+    s_present_cost_ema = render_pass_ema(s_present_cost_ema, (double)add);
+    return s_present_ticks_accum;
 }
 
 /* FLIP source saw a new frame: it is the flip a pending generation was built
