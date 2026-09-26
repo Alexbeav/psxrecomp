@@ -323,6 +323,25 @@ expected = "0x2402FF00" # addiu v0,zero,-256
 - Site identity is the normalized physical address plus the complete
   instruction word. The helper is identity at 4:3.
 
+Signed per-vertex screen-X culls can be listed site by site
+(`slti_sites`, `slti_lower_sites`, `bltz_sites`, `bgez_sites`,
+`clip_edge_x_load_sites` with `clip_edge_width`, `branch_keep_sites`). All are
+identity at 4:3, empty by default, and need a regen; `docs/WIDESCREEN.md`
+("Explicit screen-X cull sites") has the semantics of each kind:
+
+```toml
+[widescreen.cull]
+bgez_sites = ["0x80013F40"]              # bgez SX,keep: keep while SX >= -margin
+bltz_sites = ["0x80013F58"]              # bltz SX,reject: reject while SX < -margin
+clip_edge_x_load_sites = ["0x8005F5F4"]  # lh of a clip bound: 0 -> -m, W -> W+m
+clip_edge_width = 320                    # 1..1024; default screen_w_imms[0]
+```
+
+- Main-EXE generation fails when a listed address does not hold the expected
+  instruction (`bgez`; `lh`/`lhu`/`lw` to a nonzero register).
+- `bgez_sites` and `clip_edge_x_load_sites` (with the width) contribute to the
+  overlay-cache identity only when non-empty.
+
 Explicit `bias_sites` / `range_sites` may opt into an additional resident
 object lead without widening terrain or render queues:
 
