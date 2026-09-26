@@ -1,0 +1,2 @@
+# Preserve the exact observed bytes used by manifest.json on every checkout.
+*.tsv -text
