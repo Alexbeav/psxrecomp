@@ -815,8 +815,9 @@ static void try_execute(int ch);
 #define DSM_MDEC_WORD          1  /* [DOC] MDEC in/out 1; D11 timelines do not depend
                                    * on it between 1 and 4                             */
 #define DSM_MDEC_KICK_LATENCY  8u /* [ORACLE FIXTURE D11c/d] the decoder gets no clock
-                                   * for this long after the DMA0 kick; 7..9 fit all
-                                   * 155 timeline checks, 6 and 10 do not             */
+                                   * for this long after the DMA0 kick. D11: any of
+                                   * 7-9 fits (all 155 timeline checks; 6 and 10 do
+                                   * not). D13 is to narrow it.                        */
 #define DSM_MDEC_FEED_STEP   128u /* the MDEC credit cap: feeding in steps no longer
                                    * than this equals a per-cycle clock               */
 
