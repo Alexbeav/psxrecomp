@@ -35,6 +35,7 @@ typedef struct RenderPassStats {
     uint64_t discarded;       /* passes whose plugin declined the image */
     uint64_t watchdog;        /* of which: guest-cycle watchdog overruns */
     uint64_t vram_leaks;      /* GPU writes outside the declared rect (dropped) */
+    uint64_t nesting_repairs; /* aborts whose skipped exits the restore undid */
     uint64_t verify_checks;   /* PSX_RENDER_PASS_VERIFY comparisons */
     uint64_t verify_mismatch; /* ... that found a difference */
     uint64_t dropped[RENDER_PASS_DROP_CLASSES];

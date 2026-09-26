@@ -75,6 +75,11 @@ for gate in ("psx_netplay_active()", "psx_rewind_is_open()",
              "dma_gpu_linked_list_active()"):
     assert gate in rp, "passes must refuse to run when " + gate
 
+b = body(rp, "static void checkpoint_restore(CPUState *cpu) {")
+assert "nesting_restore(&s_ck.nest);" in b, (
+    "a watchdog abort longjmps past the exits of the frames it leaves: the "
+    "restore must put the host nesting back (render_pass_abort_test)")
+
 # Default off means no cost for other titles: the headers folded into the
 # overlay codegen hash (runtime/codegen_hash_sources.cmake) must not carry the
 # render-pass API, or every title's overlay cache and savestates would be

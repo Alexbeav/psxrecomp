@@ -621,6 +621,19 @@ if(BUILD_TESTING)
     target_include_directories(render_pass_freeze_test PRIVATE include)
     add_test(NAME render_pass_freeze_test COMMAND render_pass_freeze_test)
 
+    # Render-pass watchdog abort from nested guest frames: the real
+    # render_pass.c and psx_cycles.c against mock memory, devices and
+    # presenter (the frames use GCC/Clang cleanup handlers, as generated
+    # code does).
+    if(NOT MSVC)
+        add_executable(render_pass_abort_test
+            tests/test_render_pass_abort.c
+            src/render_pass.c
+            src/psx_cycles.c)
+        target_include_directories(render_pass_abort_test PRIVATE include)
+        add_test(NAME render_pass_abort_test COMMAND render_pass_abort_test)
+    endif()
+
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)

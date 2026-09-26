@@ -2233,6 +2233,21 @@ void overlay_loader_get_ci_skip_diag(uint64_t *unit, uint64_t *supp,
 }
 int overlay_loader_call_unit_depth(void) { return g_call_unit_depth; }
 
+/* Native-shard nesting for a landing that longjmps out of a shard and then
+ * resumes the interrupted code (the render-pass watchdog abort, render_pass.c):
+ * the active-candidate stack depth and the in-progress entry are put back by
+ * the dispatch frames the longjmp skips. */
+void overlay_loader_native_nesting(int *active_depth, uint32_t *inprogress) {
+    if (active_depth) *active_depth = s_active_depth;
+    if (inprogress) *inprogress = s_native_inprogress;
+}
+void overlay_loader_set_native_nesting(int active_depth, uint32_t inprogress) {
+    if (active_depth >= 0 &&
+        active_depth <= (int)(sizeof(s_active_stack) / sizeof(s_active_stack[0])))
+        s_active_depth = active_depth;
+    s_native_inprogress = inprogress;
+}
+
 static int overlay_irq_suppressed_now(void) {
     /* Differential replay (and its authoritative interpreter pass) is atomic.
      * Never let a previously armed rate-limit punch a real IRQ into a shadow. */

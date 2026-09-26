@@ -22,10 +22,12 @@
 #include <string.h>
 
 #include "cpu_state.h"
+#include "dirty_ram_interp.h"
 #include "dma.h"
 #include "gpu.h"
 #include "gpu_gl_renderer.h"
 #include "mod_plugins.h"
+#include "overlay_loader.h"
 #include "psx_icache.h"
 #include "timers.h"
 
@@ -53,6 +55,17 @@ extern int      g_psx_call_bail;
 extern int      g_ls_mode;
 extern int      g_ls_replay_active;
 extern void   (*g_overlay_flush_pending_cycles)(void);
+/* Host nesting that runtime frames set on entry and put back on exit. */
+extern int      g_call_unit_depth;        /* overlay_loader_call_native */
+extern int      g_dma_exec_depth;         /* dma.c kick / async writes */
+extern int      g_dma_cur_ch;
+extern uint32_t g_dma_cur_madr;
+extern uint32_t g_dma_cur_bcr;
+extern uint32_t g_dma_initiator_pc;
+extern int      g_dirty_interp_active;    /* dirty-RAM interpreter */
+extern int      g_exec_phase;
+extern int      g_precise_mode;
+extern uint32_t g_dirty_safe_resume_pc;
 extern uint32_t cdrom_snapshot_bytes(void);
 extern void     cdrom_snapshot_write(uint8_t *p);
 extern uint32_t spu_snapshot_bytes(void);
@@ -71,6 +84,108 @@ extern void     mdec_snapshot_write(uint8_t *p);
 /* Faults (watchdog, VRAM leaks) before passes stay off for the session. */
 #define RP_FAULT_LIMIT 8u
 
+/* Host-side nesting state. Generated functions, native overlay calls, DMA
+ * kicks, the dirty-RAM interpreter and GP0 processing each set some of this
+ * on entry and put it back on exit. The watchdog abort longjmps past those
+ * exits, so the landing puts the interrupted code's values back from the
+ * checkpoint, as the scheduler and exception landings reset theirs
+ * (traps.c psx_scheduler_run, interrupts.c psx_check_interrupts). The cycle
+ * deferral depth (g_psx_cyc_bb_defer) is part of PsxCycleFreeze. After a
+ * pass that returns normally all of it is already balanced. */
+typedef struct RenderPassNesting {
+    int      call_unit_depth;
+    int      dma_exec_depth, dma_cur_ch;
+    uint32_t dma_cur_madr, dma_cur_bcr, dma_initiator_pc;
+    int      dirty_interp_active, exec_phase, precise_mode;
+    uint32_t dirty_safe_resume_pc;
+    DirtyRamLoadDelay ld_delay;
+    int      ov_active_depth;
+    uint32_t ov_inprogress;
+    void   (*ov_flush)(void);
+} RenderPassNesting;
+
+static void nesting_save(RenderPassNesting *n) {
+    n->call_unit_depth = g_call_unit_depth;
+    n->dma_exec_depth = g_dma_exec_depth;
+    n->dma_cur_ch = g_dma_cur_ch;
+    n->dma_cur_madr = g_dma_cur_madr;
+    n->dma_cur_bcr = g_dma_cur_bcr;
+    n->dma_initiator_pc = g_dma_initiator_pc;
+    n->dirty_interp_active = g_dirty_interp_active;
+    n->exec_phase = g_exec_phase;
+    n->precise_mode = g_precise_mode;
+    n->dirty_safe_resume_pc = g_dirty_safe_resume_pc;
+    dirty_ram_ld_delay_save(&n->ld_delay);
+    overlay_loader_native_nesting(&n->ov_active_depth, &n->ov_inprogress);
+    n->ov_flush = g_overlay_flush_pending_cycles;
+}
+
+static void nesting_restore(const RenderPassNesting *n) {
+    g_call_unit_depth = n->call_unit_depth;
+    g_dma_exec_depth = n->dma_exec_depth;
+    g_dma_cur_ch = n->dma_cur_ch;
+    g_dma_cur_madr = n->dma_cur_madr;
+    g_dma_cur_bcr = n->dma_cur_bcr;
+    g_dma_initiator_pc = n->dma_initiator_pc;
+    g_dirty_interp_active = n->dirty_interp_active;
+    g_exec_phase = n->exec_phase;
+    g_precise_mode = n->precise_mode;
+    g_dirty_safe_resume_pc = n->dirty_safe_resume_pc;
+    dirty_ram_ld_delay_restore(&n->ld_delay);
+    overlay_loader_set_native_nesting(n->ov_active_depth, n->ov_inprogress);
+    g_overlay_flush_pending_cycles = n->ov_flush;
+}
+
+/* PSX_RENDER_PASS_VERIFY: a pass that returned normally must leave the
+ * nesting balanced; the restore would otherwise hide the imbalance. (The
+ * deferred load is not nesting: the interpreter retires it on exit.) */
+static int nesting_balanced(const RenderPassNesting *n) {
+    RenderPassNesting now;
+    memset(&now, 0, sizeof now);
+    nesting_save(&now);
+    return now.call_unit_depth == n->call_unit_depth &&
+           now.dma_exec_depth == n->dma_exec_depth &&
+           now.dirty_interp_active == n->dirty_interp_active &&
+           now.exec_phase == n->exec_phase &&
+           now.precise_mode == n->precise_mode &&
+           now.ov_active_depth == n->ov_active_depth &&
+           now.ov_flush == n->ov_flush;
+}
+
+/* After a watchdog abort, before the restore: which exits the longjmp
+ * skipped (for the fault log). Returns how many values it found changed. */
+static int nesting_describe(const RenderPassNesting *n, int bb_defer_ck,
+                            char *out, size_t cap) {
+    RenderPassNesting now;
+    int count = 0;
+    size_t len = 0;
+    memset(&now, 0, sizeof now);
+    nesting_save(&now);
+    out[0] = '\0';
+#define RP_NOTE(cond, ...) do { if (cond) { \
+        int w_ = snprintf(out + len, cap - len, "%s", count ? ", " : ""); \
+        if (w_ > 0 && (size_t)w_ < cap - len) len += (size_t)w_; \
+        w_ = snprintf(out + len, cap - len, __VA_ARGS__); \
+        if (w_ > 0 && (size_t)w_ < cap - len) len += (size_t)w_; \
+        count++; } } while (0)
+    RP_NOTE(g_psx_cyc_bb_defer != bb_defer_ck, "cycle deferral %+d",
+            g_psx_cyc_bb_defer - bb_defer_ck);
+    RP_NOTE(now.call_unit_depth != n->call_unit_depth, "call unit %+d",
+            now.call_unit_depth - n->call_unit_depth);
+    RP_NOTE(now.ov_active_depth != n->ov_active_depth, "shard stack %+d",
+            now.ov_active_depth - n->ov_active_depth);
+    RP_NOTE(now.ov_flush != n->ov_flush, "shard cycle hook");
+    RP_NOTE(now.dma_exec_depth != n->dma_exec_depth, "DMA depth %+d",
+            now.dma_exec_depth - n->dma_exec_depth);
+    RP_NOTE(now.dirty_interp_active != n->dirty_interp_active, "interpreter flag");
+    RP_NOTE(now.precise_mode != n->precise_mode, "precise flag");
+    RP_NOTE(now.exec_phase != n->exec_phase, "exec phase %d->%d",
+            now.exec_phase, n->exec_phase);
+    RP_NOTE(now.ld_delay.armed != n->ld_delay.armed, "pending load");
+#undef RP_NOTE
+    return count;
+}
+
 typedef struct RenderPassCheckpoint {
     CPUState cpu;
     uint8_t  spad[RP_SPAD_SIZE];
@@ -83,6 +198,7 @@ typedef struct RenderPassCheckpoint {
     uint32_t last_store_pc, current_func;
     int      dispatch_depth, call_bail;
     uint32_t dma_len;
+    RenderPassNesting nest;
 } RenderPassCheckpoint;
 
 static uint8_t *s_ram_copy;          /* RP_RAM_SIZE */
@@ -239,6 +355,8 @@ static int checkpoint_save(const CPUState *cpu) {
     s_ck.current_func = g_debug_current_func_addr;
     s_ck.dispatch_depth = g_psx_dispatch_depth;
     s_ck.call_bail = g_psx_call_bail;
+    memset(&s_ck.nest, 0, sizeof s_ck.nest);
+    nesting_save(&s_ck.nest);
     return 1;
 }
 
@@ -261,6 +379,7 @@ static void checkpoint_restore(CPUState *cpu) {
     g_debug_current_func_addr = s_ck.current_func;
     g_psx_dispatch_depth = s_ck.dispatch_depth;
     g_psx_call_bail = s_ck.call_bail;
+    nesting_restore(&s_ck.nest);
 }
 
 static double s_ms_per_tick = 0.0;
@@ -278,10 +397,15 @@ static void watchdog_overrun(void) {
     }
 }
 
+static char s_abort_detail[192];
+
 static void note_fault(const char *what) {
     s_stats.aborted++;
     if (s_stats.aborted <= 4)
-        fprintf(stderr, "psxrecomp: render pass rolled back (%s)\n", what);
+        fprintf(stderr, "psxrecomp: render pass rolled back (%s%s%s)\n", what,
+                s_abort_detail[0] ? "; restored skipped exits: " : "",
+                s_abort_detail);
+    s_abort_detail[0] = '\0';
     if (s_stats.watchdog + s_stats.vram_leaks >= RP_FAULT_LIMIT &&
         !s_stats.disabled) {
         s_stats.disabled = 1;
@@ -339,7 +463,21 @@ int psx_mod_render_pass(struct CPUState *cpu, const PSXModRenderPass *pass,
         ok = fn(cpu, user, pass->alpha_q16) ? 1 : 0;
         s_abort_armed = 0;
         if (!ok) s_stats.discarded++;
+        if (verify_on() && !nesting_balanced(&s_ck.nest)) {
+            s_stats.verify_mismatch++;
+            fprintf(stderr, "psxrecomp: RENDER PASS VERIFY mismatch "
+                    "(host nesting not balanced after the pass)\n");
+        }
     } else {
+        /* Watchdog abort from inside guest code. An overlay shard may still
+         * hold cycles it has not published: publish them now, into the
+         * frozen clock the restore discards, never into the live one. The
+         * nesting the longjmp skipped is put back by checkpoint_restore and
+         * psx_cycle_freeze_end below. */
+        if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+        if (nesting_describe(&s_ck.nest, s_freeze.bb_defer, s_abort_detail,
+                             sizeof s_abort_detail))
+            s_stats.nesting_repairs++;
         ok = 0;
     }
     s_stats.guest_cycles_last = psx_cycle_count - cycles_before;

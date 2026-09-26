@@ -60,6 +60,13 @@ After `fn` (success or not) everything is restored: CPU state with the GTE,
 registers (without the widescreen side effects of a savestate load), the
 VRAM rect (hr colour, mask stencil, raw 16-bit mirror, native-wide band, CPU
 VRAM rows), the renderer's coherency bookkeeping, and every clock value.
+A watchdog abort leaves by longjmp from inside guest code, skipping the
+exits of the frames it leaves, so the host nesting those frames own is put
+back from the checkpoint too: the cycle-deferral depth, the native overlay
+unit depth, shard stack and cycle-flush hook, the DMA execution depth, and
+the interpreter's active/phase/precise flags, resume latch and pending load
+(`render_pass_abort_test`). A plugin must likewise not keep state that only
+its callback's normal return resets.
 After 8 faults (watchdog or refused writes) passes stay off for the session.
 
 ## Gates
@@ -99,10 +106,12 @@ frame at very high internal resolutions.
   (the game's own frame, then each pass in phase order).
 - `PSX_RENDER_PASS_VERIFY=1`: hash CPU, RAM, scratchpad, I-cache, interrupt,
   timer, DMA and GPU state and read back the VRAM rect before and after every
-  pass; `verify_mismatch` must stay 0.
+  pass, and check that a pass that returned normally left the host nesting
+  balanced; `verify_mismatch` must stay 0.
 - `frame_fingerprint reset_on_load=1` then a savestate load: the per-frame
   write/MMIO/cycle fingerprints of a run with passes must equal a run
   without them.
 
-Tests: `render_pass_plan_test` and `render_pass_freeze_test` (runtime ctest),
+Tests: `render_pass_plan_test`, `render_pass_freeze_test` and
+`render_pass_abort_test` (runtime ctest),
 `render_pass_guards` (source guard, recompiler ctest).

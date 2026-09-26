@@ -110,11 +110,15 @@ int main(void) {
           s_cd_events >= cd0 + 3u,
           "devices resume on the live clock after the pass");
 
-    /* Watchdog: a pass that runs away is cut off. */
+    /* Watchdog: a pass that runs away is cut off. The longjmp skips the
+     * bb_defer exits of the generated frames it leaves (their cleanup
+     * handlers never run); end() puts the interrupted depth back. */
     s_overruns = 0;
     cyc0 = psx_cycle_count;
+    g_psx_cyc_bb_defer = 2;
     if (setjmp(s_jmp) == 0) {
         CHECK(psx_cycle_freeze_begin(&save, 200000u, overrun), "freeze with watchdog");
+        g_psx_cyc_bb_defer += 3;          /* three nested generated frames */
         for (int i = 0; i < 1000; i++) psx_advance_cycles(1000);
         CHECK(0, "watchdog should have fired");
     }
@@ -122,6 +126,9 @@ int main(void) {
     CHECK(s_overruns == 1, "watchdog fired once");
     CHECK(psx_cycle_count == cyc0 && !g_psx_render_pass_active,
           "state restored after a watchdog abort");
+    CHECK(g_psx_cyc_bb_defer == 2,
+          "cycle deferral depth restored after a watchdog abort");
+    g_psx_cyc_bb_defer = 0;
 
     printf(failures ? "FAILED (%d)\n" : "ALL PASS\n", failures);
     return failures ? 1 : 0;

@@ -33,6 +33,10 @@ typedef struct PsxCycleFreeze {
     uint32_t *local_acc;
     uint32_t local_acc_value;
     int      in_device_service;
+    /* Generated functions bump g_psx_cyc_bb_defer on entry and drop it in a
+     * cleanup handler, which a longjmp out of the pass (the watchdog) skips:
+     * end() puts the interrupted code's depth back. */
+    int      bb_defer;
 } PsxCycleFreeze;
 int  psx_cycle_freeze_begin(PsxCycleFreeze *save, uint64_t watchdog_cycles,
                             void (*overrun)(void));
