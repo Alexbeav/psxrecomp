@@ -27,6 +27,9 @@ void     gpu_set_gp0_source(uint32_t addr); /* diagnostic source for next GP0 wo
  * depth-sorted world packets without guessing from primitive shape. */
 void     gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count);
 void     gpu_vblank_tick(void);        /* Toggle LCF, called at each simulated vblank */
+/* Video standard before the first GP1(08h) (disc region: 1 = PAL). Applies
+ * now and on every later gpu_init(); GP1(00h) still resets to NTSC. */
+void     gpu_set_power_on_video_mode(int pal);
 
 /* Display presentation accessors (Phase 3). */
 const uint16_t* gpu_get_vram(void);    /* Pointer to 1024x512 16-bit VRAM */

@@ -38,6 +38,7 @@
 #include "lockstep.h"
 #include "psx_cycles.h"
 #include "psx_scheduler.h"
+#include "psx_video_timing.h"
 #include "spu.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -179,8 +180,9 @@ void psx_irq_raise(uint32_t bit, uint32_t detail)
 
 /* Dispatch counter for vblank scheduling. */
 #define VBLANK_INTERVAL 50000        /* legacy: dispatch-count fallback (unused for VBlank gating now) */
-#define VBLANK_DEFER_STALE_CYCLES (vblank_cycles * 10ull)
-uint32_t vblank_cycles = 564480u;    /* 33.8688 MHz / 60 Hz — real PSX NTSC VBlank period */
+#define VBLANK_DEFER_STALE_CYCLES (g_psx_vblank_cycles * 10ull)
+/* The VBlank period follows the GPU's live video standard (GP1(08h) bit 3):
+ * NTSC 564480 cycles (60 Hz), PAL 677376 (50 Hz). See psx_video_timing.h. */
 static uint32_t dispatch_count;
 static uint64_t total_checks;
 static uint32_t cycles_since_vblank;  /* incremented by interrupts_advance_cycles */
@@ -473,13 +475,13 @@ static void fire_vblank_edge(void) {
     /* Subtract one VBlank period rather than reset to 0 so cycle overshoot
      * carries forward. Prevents long-running blocks from rounding multiple
      * VBlanks together. */
-    cycles_since_vblank -= vblank_cycles;
+    psx_vblank_consume_edge(&cycles_since_vblank);
     dispatch_count = 0;
     /* DEQUEUE: this VBlank fired. ENQUEUE: next VBlank scheduled one period out. */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_VBLANK,
                           (uint32_t)psx_get_cycle_count());
     event_ring_record_aux(EV_ENQ, (uint8_t)SRC_VBLANK,
-                          (uint32_t)(psx_get_cycle_count() + vblank_cycles));
+                          (uint32_t)(psx_get_cycle_count() + g_psx_vblank_cycles));
     psx_irq_raise(IRQ_VBLANK, 0);
     g_vblank_raise_count++;
     event_ring_record(EV_ISTAT_RAISE, IRQ_VBLANK);
@@ -495,15 +497,14 @@ static void fire_vblank_edge(void) {
 void interrupts_service_scheduled_events(void) {
     note_sio_progress_cycle();
     if (in_exception) return;
-    while (cycles_since_vblank >= vblank_cycles) {
+    while (psx_vblank_edge_due(cycles_since_vblank)) {
         if (should_defer_vblank_for_sio()) return;
         fire_vblank_edge();
     }
 }
 
 uint32_t interrupts_cycles_to_vblank(void) {
-    if (cycles_since_vblank >= vblank_cycles) return 0;
-    return vblank_cycles - cycles_since_vblank;
+    return psx_vblank_cycles_to_edge(cycles_since_vblank);
 }
 
 uint32_t interrupts_get_cycles_since_vblank(void) {
@@ -1024,8 +1025,7 @@ uint32_t cycles_to_next_event(void) {
      * card-SIO case only pushes VBlank LATER, so this estimate stays a safe
      * under-estimate. */
     if (i_mask & (1u << IRQ_VBLANK)) {
-        uint32_t d = (cycles_since_vblank >= vblank_cycles)
-                       ? 0u : (vblank_cycles - cycles_since_vblank);
+        uint32_t d = psx_vblank_cycles_to_edge(cycles_since_vblank);
         if (d < best) best = d;
     }
     uint32_t t = timers_cycles_to_irq(i_mask); if (t < best) best = t;

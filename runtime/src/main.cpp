@@ -38,6 +38,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "interrupts.h"
+#include "psx_video_timing.h"
 #include "present_ring.h"
 #include "load_transition_ring.h"
 #include "gpu_sw_renderer.h"
@@ -211,8 +212,6 @@ extern "C" {
     extern int      g_call_unit_depth;
     /* psx_bios_backend.c */
     extern int      g_psx_dispatch_depth;
-    /* interrupts.c */
-    extern uint32_t vblank_cycles;
 }
 
 /* memory.c */
@@ -2910,6 +2909,46 @@ static void refresh_host_display_cadence(int force_log, int force_probe) {
 #else
     (void)force_log;
     (void)force_probe;
+#endif
+}
+
+/* Host pacing follows the guest's live video standard (GP1(08h) bit 3,
+ * psx_video_timing.h). A PAL disc that switches to NTSC, or the reverse,
+ * changes the guest VBlank rate; the wall-clock cadence, the host-refresh
+ * vsync match and the frame-blend source rate must change with it or the
+ * game runs at the wrong speed. A mod that owns native VBlank pacing keeps
+ * its own rate. Called once per guest VBlank; acts only on a change. */
+static uint32_t g_video_timing_generation_seen = 0;
+
+static double guest_video_standard_hz(void) {
+    return psx_video_timing_is_pal() ? 50.0 : 1000.0 / PSX_FRAME_PERIOD_MS;
+}
+
+static void sync_guest_cadence_to_video_standard(void) {
+    const uint32_t gen = psx_video_timing_generation();
+    if (gen == g_video_timing_generation_seen)
+        return;
+    g_video_timing_generation_seen = gen;
+    if (g_mod_native_vblank_rate)
+        return;
+    const double period_ms = psx_video_timing_is_pal()
+        ? 1000.0 / 50.0
+        : PSX_FRAME_PERIOD_MS;
+    if (period_ms == g_guest_frame_period_ms)
+        return;
+    g_guest_frame_period_ms = period_ms;
+    g_frame_period_ms = period_ms;
+    std::printf("psxrecomp: guest video standard %s: pacing %.2f Hz\n",
+                psx_video_timing_is_pal() ? "PAL" : "NTSC",
+                1000.0 / period_ms);
+#ifndef PSX_SDL_NO_RENDER
+    if (sdl_window)
+        refresh_host_display_cadence(1, 0);
+    if (g_frame_interpolation && g_gl_active)
+        gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
+                                      (double)g_frame_interpolation_fps,
+                                      1000.0 / g_frame_period_ms,
+                                      g_frame_interpolation_blend);
 #endif
 }
 
@@ -6556,7 +6595,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         } else if (frequency && now - s_fps_last_time >= frequency) {
             const double seconds = (double)(now - s_fps_last_time) / (double)frequency;
             const double fps = (double)(s_frame_count - s_fps_last_frame) / seconds;
-            const double speed = fps / 59.94;
+            const double speed = fps / guest_video_standard_hz();
             double display_fps = 0.0;
             if (g_frame_interpolation && g_gl_active) {
                 display_fps = g_frame_interpolation_fps > 0
@@ -7646,6 +7685,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 }
 
 static void sdl_vblank_present(void) {
+    sync_guest_cadence_to_video_standard();
     NetplayVblankEpilogue ep = sdl_vblank_present_body();
     /* Selfcheck span-end rewind: after present-body C++ RAII, before any
      * further guest progress. Longjmps on success — keeps every resim load
@@ -14984,6 +15024,11 @@ session_reboot:
                      route.arm_lba, route.lbas.size(),
                      route.instant_max_per_frame);
     }
+    /* A PAL console's BIOS starts the GPU in PAL; any other disc (or none)
+     * starts NTSC. The game's own GP1(08h) writes decide the rate from then
+     * on: VBlank, Timer 1 HBlank and host pacing all follow
+     * psx_video_timing. Re-derived on every session reboot (disc swap). */
+    int power_on_pal = 0;
     if (!disc_path_str.empty()) {
         /* GetID must report the inserted disc's license region (the BIOS CD
          * driver revalidates it mid-game). Derive it from the disc's boot
@@ -15003,12 +15048,7 @@ session_reboot:
             has_crc, /*compute_crc*/false);
         if (ident.region == "PAL") {
             cdrom_set_disc_scex("SCEE");
-
-            /* We need to adjust the frame pacing for PAL games to run at the
-             * correct speed */
-            vblank_cycles = 677376u;
-            g_guest_frame_period_ms = 1000.0 / 50.0;  /* 50hz refresh rate */
-            g_frame_period_ms = g_guest_frame_period_ms;
+            power_on_pal = 1;
         }
         else if (ident.region == "NTSC-J") cdrom_set_disc_scex("SCEI");
         else if (ident.region == "NTSC-U") cdrom_set_disc_scex("SCEA");
@@ -15016,6 +15056,8 @@ session_reboot:
             std::fprintf(stdout, "psxrecomp: disc region %s (serial %s)\n",
                          ident.region.c_str(), ident.detected_serial.c_str());
     }
+    gpu_set_power_on_video_mode(power_on_pal);
+    sync_guest_cadence_to_video_standard();
     /* Arm the text-image guard now that both possible sources are resolved:
      * the local EXE file (dev checkouts) and the disc image (every install). */
     if (game_config_path)
