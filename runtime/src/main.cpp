@@ -14982,7 +14982,16 @@ session_reboot:
      * keeps SW at 1×. SW-only netplay: force scale 1. Offline: full SSAA. */
     /* Internal resolution preset -> scale (no-op while unset). Match display
      * knows the monitor only once SDL video is up (launcher path); otherwise it
-     * is re-resolved from the game window's display before GL context init. */
+     * is re-resolved from the game window's display before GL context init.
+     * PSX_INTERNAL_RESOLUTION (a preset id or a line count) overrides every
+     * config layer for one run, like the other validation env overrides: two
+     * local netplay peers share one settings.toml but may differ here. */
+    if (const char* e = std::getenv("PSX_INTERNAL_RESOLUTION")) {
+        int v = 0;
+        if (psx_ir_parse(e, &v)) g_video_internal_res = v;
+        else std::fprintf(stdout, "psxrecomp: PSX_INTERNAL_RESOLUTION=%s not understood "
+                          "(native, 720p, 1080p, 1440p, 4k, 5k, 8k, display, or lines)\n", e);
+    }
     apply_internal_resolution(psx_sdl_display_pixel_height(nullptr));
     if (g_video_scale < 1) g_video_scale = 1;
     {
@@ -15093,9 +15102,14 @@ session_reboot:
             std::snprintf(custom, sizeof custom, "%d lines", g_video_internal_res);
             lbl = custom;
         }
-        std::fprintf(stdout,
-                     "psxrecomp: internal resolution %s (reference %d lines): "
-                     "%dx requested\n", lbl, g_video_ref_lines, requested_scale);
+        if (g_video_internal_res == PSX_IR_DISPLAY && requested_scale <= 1)
+            std::fprintf(stdout,
+                         "psxrecomp: internal resolution %s (reference %d lines): "
+                         "measured when the game window opens\n", lbl, g_video_ref_lines);
+        else
+            std::fprintf(stdout,
+                         "psxrecomp: internal resolution %s (reference %d lines): "
+                         "%dx requested\n", lbl, g_video_ref_lines, requested_scale);
     }
     if (requested_scale > 1 || g_video_texfilter)
         std::fprintf(stdout,
