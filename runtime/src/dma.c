@@ -1376,12 +1376,22 @@ static int dsm_before_write(uint32_t addr, uint32_t *valp, uint32_t mask) {
     return 0;
 }
 
+/* Runtime service point (source GPU WRITE and DMA events): DMA channels get
+ * exact credit to `cycle`, and the MDEC is fed only at edges and kicks
+ * ([ORACLE FIXTURE D18d]; reviewer ruling on the WRITE-event path). */
 void dma_source_gpu_service_at(uint64_t cycle) {
     g_dma_exec_depth++;
-    /* An explicit service point is a caller-driven advance to `cycle`: it
-     * clocks the MDEC and grants DMA credit exactly (SPEC-PS1B-186 ruling on
-     * the MDEC contract), MDEC channels included. The scheduler path keeps the
- * 128-cycle edges. */
+    dsm_write_service = 1;
+    dsm_service_all(cycle);
+    dsm_write_service = 0;
+    g_dma_exec_depth--;
+}
+
+/* Authored service point for the MDEC contract harness: a caller-driven
+ * advance to `cycle` that clocks the MDEC and grants credit exactly, MDEC
+ * channels included (SPEC-PS1B-186 ruling on the MDEC contract). */
+void dma_source_gpu_service_at_exact(uint64_t cycle) {
+    g_dma_exec_depth++;
     dsm_mdec_feed(cycle);
     dsm_write_service = 2;
     dsm_service_all(cycle);
