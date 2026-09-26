@@ -56,6 +56,12 @@ double render_pass_ema(double current, double sample);
 double render_pass_budget(double idle_ticks, double pass_ticks,
                           double frame_length, double share);
 
+/* Store policy inside a pass (memory.c): -1 = the MMIO store may reach its
+ * device (GP0; GP1 DMA mode 0x04 / info 0x10; GPU and OTC DMA channels;
+ * DPCR/DICR; I_STAT/I_MASK -- all restored after the pass), otherwise the
+ * RENDER_PASS_DROP_* class it is dropped and counted under (render_pass.h). */
+int render_pass_mmio_class(uint32_t phys, uint32_t val, uint32_t width);
+
 #ifdef __cplusplus
 }
 #endif

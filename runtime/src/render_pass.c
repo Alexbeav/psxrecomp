@@ -52,6 +52,15 @@ extern int      g_psx_dispatch_depth;
 extern int      g_psx_call_bail;
 extern int      g_ls_mode;
 extern int      g_ls_replay_active;
+extern void   (*g_overlay_flush_pending_cycles)(void);
+extern uint32_t cdrom_snapshot_bytes(void);
+extern void     cdrom_snapshot_write(uint8_t *p);
+extern uint32_t spu_snapshot_bytes(void);
+extern void     spu_snapshot_write(uint8_t *p);
+extern uint32_t sio_snapshot_bytes(void);
+extern void     sio_snapshot_write(uint8_t *p);
+extern uint32_t mdec_snapshot_bytes(void);
+extern void     mdec_snapshot_write(uint8_t *p);
 
 #define RP_RAM_SIZE   (2u * 1024u * 1024u)
 #define RP_SPAD_SIZE  1024u
@@ -183,6 +192,22 @@ static uint64_t state_hash(const CPUState *cpu) {
         uint64_t g = gpu_pass_state_hash();
         h = fnv(h, &g, sizeof g);
     }
+    /* Devices a pass must never touch (their stores are dropped, their
+     * clocks frozen): prove it. */
+    {
+        uint32_t (*bytes[4])(void) = { cdrom_snapshot_bytes, spu_snapshot_bytes,
+                                       sio_snapshot_bytes, mdec_snapshot_bytes };
+        void (*write[4])(uint8_t *) = { cdrom_snapshot_write, spu_snapshot_write,
+                                        sio_snapshot_write, mdec_snapshot_write };
+        for (int i = 0; i < 4; i++) {
+            uint32_t n = bytes[i]();
+            uint8_t *tmp = n ? (uint8_t *)malloc(n) : NULL;
+            if (!tmp) continue;
+            write[i](tmp);
+            h = fnv(h, tmp, n);
+            free(tmp);
+        }
+    }
     return h;
 }
 
@@ -278,6 +303,11 @@ int psx_mod_render_pass(struct CPUState *cpu, const PSXModRenderPass *pass,
         pass->alpha_q16 >= 65536u)
         return 0;
     if (!passes_allowed() || !gl_renderer_pass_ready()) return 0;
+
+    /* An overlay DLL may still hold cycles it has not published. They belong
+     * to the live timeline: publish them now, or the pass's first store would
+     * publish them into the frozen clock and the restore would drop them. */
+    if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
 
     t0 = gl_renderer_perf_ticks();
     open = s_open_generation;

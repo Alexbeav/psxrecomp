@@ -1,4 +1,5 @@
 #include "render_pass_plan.h"
+#include "render_pass.h"
 
 #include <math.h>
 
@@ -124,4 +125,23 @@ double render_pass_budget(double idle_ticks, double pass_ticks,
          (pass_ticks > 0.0 ? pass_ticks : 0.0)) * share;
     if (b > frame_length) b = frame_length;
     return b;
+}
+
+int render_pass_mmio_class(uint32_t phys, uint32_t val, uint32_t width) {
+    if (phys == 0x1F801810u) return width == 4 ? -1 : RENDER_PASS_DROP_GPU;
+    if (phys == 0x1F801814u) {
+        uint32_t cmd = val >> 24;
+        return (width == 4 && (cmd == 0x04u || cmd == 0x10u))
+            ? -1 : RENDER_PASS_DROP_GPU;
+    }
+    if (phys >= 0x1F801070u && phys <= 0x1F801077u) return -1;
+    if ((phys >= 0x1F8010A0u && phys <= 0x1F8010AFu) ||   /* ch2 GPU */
+        (phys >= 0x1F8010E0u && phys <= 0x1F8010EFu) ||   /* ch6 OTC */
+        (phys >= 0x1F8010F0u && phys <= 0x1F8010F7u))     /* DPCR/DICR */
+        return -1;
+    if (phys >= 0x1F801080u && phys <= 0x1F8010FFu) return RENDER_PASS_DROP_DMA;
+    if (phys >= 0x1F801C00u && phys <= 0x1F801FFFu) return RENDER_PASS_DROP_SPU;
+    if (phys >= 0x1F801800u && phys <= 0x1F801803u) return RENDER_PASS_DROP_CD;
+    if (phys >= 0x1F801100u && phys <= 0x1F80112Fu) return RENDER_PASS_DROP_TIMER;
+    return RENDER_PASS_DROP_OTHER;
 }

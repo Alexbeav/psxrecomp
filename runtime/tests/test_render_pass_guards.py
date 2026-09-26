@@ -54,7 +54,11 @@ for fn in ("void psx_write_word(uint32_t addr, uint32_t val) {",
     lines = body(mem, fn).splitlines()[:6]
     assert any("render_pass_store" in l for l in lines), (
         "pass stores must bypass live-timeline observers: " + fn)
-cls = body(mem, "static int render_pass_mmio_class(")
+assert "render_pass_mmio_class(phys, val, width)" in body(
+    mem, "static void render_pass_store("), (
+    "pass MMIO stores must go through the tested store policy")
+plan = (SRC / "render_pass_plan.c").read_text(encoding="utf-8")
+cls = body(plan, "int render_pass_mmio_class(")
 for dev in ("RENDER_PASS_DROP_SPU", "RENDER_PASS_DROP_CD",
             "RENDER_PASS_DROP_TIMER"):
     assert dev in cls, "a pass must never reach " + dev

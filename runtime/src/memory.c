@@ -27,6 +27,7 @@
 #include "psx_cycles.h"
 #include "psx_memory.h"
 #include "render_pass.h"
+#include "render_pass_plan.h"
 #include "starvation_ring.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -1716,25 +1717,6 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
  * counted instead. */
 uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
 
-static int render_pass_mmio_class(uint32_t phys, uint32_t val, uint32_t width) {
-    if (phys == 0x1F801810u) return width == 4 ? -1 : RENDER_PASS_DROP_GPU;
-    if (phys == 0x1F801814u) {
-        uint32_t cmd = val >> 24;
-        return (width == 4 && (cmd == 0x04u || cmd == 0x10u))
-            ? -1 : RENDER_PASS_DROP_GPU;
-    }
-    if (phys >= 0x1F801070u && phys <= 0x1F801077u) return -1;
-    if ((phys >= 0x1F8010A0u && phys <= 0x1F8010AFu) ||   /* ch2 GPU */
-        (phys >= 0x1F8010E0u && phys <= 0x1F8010EFu) ||   /* ch6 OTC */
-        (phys >= 0x1F8010F0u && phys <= 0x1F8010F7u))     /* DPCR/DICR */
-        return -1;
-    if (phys >= 0x1F801080u && phys <= 0x1F8010FFu) return RENDER_PASS_DROP_DMA;
-    if (phys >= 0x1F801C00u && phys <= 0x1F801FFFu) return RENDER_PASS_DROP_SPU;
-    if (phys >= 0x1F801800u && phys <= 0x1F801803u) return RENDER_PASS_DROP_CD;
-    if (phys >= 0x1F801100u && phys <= 0x1F80112Fu) return RENDER_PASS_DROP_TIMER;
-    return RENDER_PASS_DROP_OTHER;
-}
-
 static void render_pass_store(uint32_t addr, uint32_t val, uint32_t width) {
     uint32_t phys;
     if (addr >= 0xC0000000u) {                       /* cache control, KSEG2 */
@@ -1754,7 +1736,7 @@ static void render_pass_store(uint32_t addr, uint32_t val, uint32_t width) {
         return;
     }
     if (phys >= 0x1F801000u && phys <= 0x1F803FFFu) {
-        int cls = render_pass_mmio_class(phys, val, width);
+        int cls = render_pass_mmio_class(phys, val, width);  /* render_pass_plan.c */
         if (cls >= 0) { g_render_pass_dropped_writes[cls]++; return; }
         if (width == 4) mmio_write32(phys, val);
         else if (width == 2) mmio_write16(phys, (uint16_t)val);
