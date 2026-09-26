@@ -36,6 +36,14 @@ def load(path, n):
     if len(rows) < n: problems.append(f'{path}: covers returns 1..{len(rows)}, requested 1..{n} (coverage failure)')
     return rows, problems
 
+def load_baseline(path, route):
+    """Exception keys recorded for `route`. Accepts the legacy map (route -> list of keys) and the bound format
+    {"format": "tier1-bound-baseline-v1", "group": ..., "routes": {route: [{"key": [...], evidence...}, ...]}}."""
+    b = json.loads(Path(path).read_text())
+    if isinstance(b, dict) and b.get('format') == 'tier1-bound-baseline-v1':
+        return [e['key'] for e in b['routes'].get(route, [])]
+    return b.get(route, []) if isinstance(b, dict) else b
+
 def classify(route, qualified, candidate, n, source='tier1', baseline=None):
     q, pq = load(qualified, n); c, pc = load(candidate, n)
     problems = pq + pc; exceptions = []
@@ -62,7 +70,7 @@ def main():
     a = p.parse_args()
     baseline = None
     if a.baseline:
-        b = json.loads(Path(a.baseline).read_text()); baseline = b.get(a.route, []) if isinstance(b, dict) else b
+        baseline = load_baseline(a.baseline, a.route)
     r = classify(a.route, a.qualified, a.candidate, a.returns, a.source, baseline)
     if a.exceptions_out:
         hdr = ['source', 'route', 'return', 'pc_qualified', 'pc_candidate', 'column', 'qualified', 'candidate', 'evidence']

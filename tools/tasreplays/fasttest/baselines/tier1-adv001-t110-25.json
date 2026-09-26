@@ -1,0 +1,1353 @@
+{
+ "format": "tier1-bound-baseline-v1",
+ "ruling": "Z:/Share/psxrecomp/evidence/tier1-audit-ba05e567a/BASELINE-RULING-ADV-001.md",
+ "ruling_sha256": "42bad33be1fe0169b5422697e3ce996d03337b9ade840dc4772055f64218cbad",
+ "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+ "gate": "final Tier 1 and Tier 3 must show exactly this set; a new tuple needs its own trace",
+ "next_use_record": {
+  "file": "next-use/all-pairs-summary.json",
+  "sha256": "7f2deddd5457c6e658c8f3abde9a62961e93b7751d6ef5c0573e373fbb1928cf"
+ },
+ "staging": "Z:\\Share\\psxrecomp\\evidence\\tier1-audit-ba05e567a\\next-use",
+ "staging_sha256sums": "beab7a205e1da35e82d572cce807598a1cdb87c559e4ebb9f24e71ed7f89d3f7",
+ "provisional_baseline_sha256": "d421d2d31f05427a1b391fdf827c30faad0829200f76c65d4b63951f55cb9287",
+ "count": 25,
+ "routes": {
+  "biohazard": [
+   {
+    "key": [
+     "biohazard",
+     1932,
+     "00001B60",
+     "r3",
+     "A000E028",
+     "A0000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "biohazard",
+    "ret": 1932,
+    "pc": "00001B60",
+    "register": "r3",
+    "ld_which": {
+     "base": "3",
+     "candidate": "3"
+    },
+    "value": {
+     "base": "A000E028",
+     "candidate": "A0000000"
+    },
+    "capture_rows": [
+     305,
+     7205,
+     20043,
+     48549,
+     149368,
+     250274,
+     250564,
+     268701
+    ],
+    "trace_sha256": {
+     "base": "7860243e6e01324801cb80a111c6bf5f87fbab0fb0f4cab9bbb0db510f17d76f",
+     "candidate": "0b2d69d45f3b9edb975dc47ec45953070d3cae32fc323cad4739dcd86855def5"
+    },
+    "pair_receipt": {
+     "file": "next-use/bio1932-base-vs-ba05/diverge-trace.json",
+     "sha256": "d35ddcaa581b8ea5066977c60819fd4f57c1c5b0155e8157c57ee3ab9d5abb8d"
+    },
+    "result_check": {
+     "file": "next-use/bio1932-base-vs-ba05/result-check.json",
+     "sha256": "c974428272678f6e3cffef4eb55f53caca6a7028ee63cc887238d4ac863d7890",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\tier1-baseline-base-exe\\biohazard\\BioHazard-TAS.exe",
+      "6325fa3a71014a42ed8f5c703bd3335e4dd4812045d805291fabecc3a98846d7"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\biohazard-final-full\\BioHazard-TAS.exe",
+      "411f9d40ee1d001ad7dc1505a028867e7bdc17ceebb480b4dc75a11cc38e11f0"
+     ]
+    }
+   },
+   {
+    "key": [
+     "biohazard",
+     2730,
+     "00002668",
+     "r11",
+     "1F800004",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "biohazard",
+    "ret": 2730,
+    "pc": "00002668",
+    "register": "r11",
+    "ld_which": {
+     "base": "11",
+     "candidate": "11"
+    },
+    "value": {
+     "base": "1F800004",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     49765,
+     150553,
+     251452
+    ],
+    "trace_sha256": {
+     "base": "1d779e864002c92d04a1a5688932ada7b8242da146e34a60d4f027cc0d5ad51e",
+     "candidate": "19cb6fed58cf6bfdec7aa0357994f2da5074bff5b74f79c576f5e96562bc90ae"
+    },
+    "pair_receipt": {
+     "file": "next-use/biohazard2730-r11/trace-pair.json",
+     "sha256": "79bde95a1ac8ccac4b6c16892401f792fe4b7d1f9065362aceb13466de6d9888"
+    },
+    "result_check": {
+     "file": "next-use/biohazard2730-r11/result-check.json",
+     "sha256": "f71d34624df2cee8d341967db723e46a462fe4b93dc955a43233e3fb4d66e0d4",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-biohazard-route-03\\BioHazard-TAS.exe",
+      "6325fa3a71014a42ed8f5c703bd3335e4dd4812045d805291fabecc3a98846d7"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\biohazard-final-full\\BioHazard-TAS.exe",
+      "411f9d40ee1d001ad7dc1505a028867e7bdc17ceebb480b4dc75a11cc38e11f0"
+     ]
+    }
+   },
+   {
+    "key": [
+     "biohazard",
+     3255,
+     "0000269C",
+     "r14",
+     "1F80002D",
+     "1F800004"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "biohazard",
+    "ret": 3255,
+    "pc": "0000269C",
+    "register": "r14",
+    "ld_which": {
+     "base": "14",
+     "candidate": "14"
+    },
+    "value": {
+     "base": "1F80002D",
+     "candidate": "1F800004"
+    },
+    "capture_rows": [
+     49830,
+     150726,
+     251643
+    ],
+    "trace_sha256": {
+     "base": "24ef8f96e1ed0583b657c2c1312dfe9e6a7a0668bdac4e0d94a4a4bb5dccdc31",
+     "candidate": "d2035e834e541c7014e4c3e29e7fa4d9a5557c1b132cc705146b2a3eb8611246"
+    },
+    "pair_receipt": {
+     "file": "next-use/biohazard3255-r14/trace-pair.json",
+     "sha256": "379f0bb0b4d4580f6225a7c04642a783e6038c21df2118f895244cdf5cb0b164"
+    },
+    "result_check": {
+     "file": "next-use/biohazard3255-r14/result-check.json",
+     "sha256": "de890abf150c04d852cd1d43cad10aa5bd29a2e54b7f0bf3630effabf12559e0",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-biohazard-route-03\\BioHazard-TAS.exe",
+      "6325fa3a71014a42ed8f5c703bd3335e4dd4812045d805291fabecc3a98846d7"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\biohazard-final-full\\BioHazard-TAS.exe",
+      "411f9d40ee1d001ad7dc1505a028867e7bdc17ceebb480b4dc75a11cc38e11f0"
+     ]
+    }
+   },
+   {
+    "key": [
+     "biohazard",
+     3590,
+     "00000F48",
+     "r26",
+     "A000E294",
+     "00000100"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "biohazard",
+    "ret": 3590,
+    "pc": "00000F48",
+    "register": "r26",
+    "ld_which": {
+     "base": "26",
+     "candidate": "26"
+    },
+    "value": {
+     "base": "A000E294",
+     "candidate": "00000100"
+    },
+    "capture_rows": [
+     9893,
+     52017,
+     152939,
+     253886,
+     263886
+    ],
+    "trace_sha256": {
+     "base": "d4504b86327213b11306569e7f20bbe4fa12e4c0280cf0ea7366be8db1d46f91",
+     "candidate": "8dd4fc5d7974d03ca0de9fc61da63f4988c2dabc6ffafd771abae19897159a93"
+    },
+    "pair_receipt": {
+     "file": "next-use/biohazard3590-r26/trace-pair.json",
+     "sha256": "e2da523cd38fee80e2ad8dee7e5c10e627d55949e1be8b232415cdfdc2fb0823"
+    },
+    "result_check": {
+     "file": "next-use/biohazard3590-r26/result-check.json",
+     "sha256": "dc1d76a14cc544520f8a08e7e8c2c9fae031355e02b7e6b6e1d27fc818fa328f",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-biohazard-route-03\\BioHazard-TAS.exe",
+      "6325fa3a71014a42ed8f5c703bd3335e4dd4812045d805291fabecc3a98846d7"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\biohazard-final-full\\BioHazard-TAS.exe",
+      "411f9d40ee1d001ad7dc1505a028867e7bdc17ceebb480b4dc75a11cc38e11f0"
+     ]
+    }
+   },
+   {
+    "key": [
+     "biohazard",
+     7071,
+     "00004A70",
+     "r24",
+     "1F800005",
+     "000000FF"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "biohazard",
+    "ret": 7071,
+    "pc": "00004A70",
+    "register": "r24",
+    "ld_which": {
+     "base": "24",
+     "candidate": "24"
+    },
+    "value": {
+     "base": "1F800005",
+     "candidate": "000000FF"
+    },
+    "capture_rows": [
+     261915
+    ],
+    "trace_sha256": {
+     "base": "69dd5d3f9f71edfdcefb6820dfb480443fcee98a1aa83e0fab167e89e688b8fd",
+     "candidate": "098d03625c031ab1a8aa9748772e5016a329e56d5a78dfbf67070945cfae0603"
+    },
+    "pair_receipt": {
+     "file": "next-use/biohazard7071-r24/trace-pair.json",
+     "sha256": "9e5bc4974800a203cff7b2eed872f01911d086c77d9bc6e8235e56210e8ebbba"
+    },
+    "result_check": {
+     "file": "next-use/biohazard7071-r24/result-check.json",
+     "sha256": "4c08254781ac69cf27316a0473fdc810d25e8d02996f440c68bbd5f2413c070f",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-biohazard-route-03\\BioHazard-TAS.exe",
+      "6325fa3a71014a42ed8f5c703bd3335e4dd4812045d805291fabecc3a98846d7"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\biohazard-final-full\\BioHazard-TAS.exe",
+      "411f9d40ee1d001ad7dc1505a028867e7bdc17ceebb480b4dc75a11cc38e11f0"
+     ]
+    }
+   },
+   {
+    "key": [
+     "biohazard",
+     8584,
+     "00000FB4",
+     "r13",
+     "00000040",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "biohazard",
+    "ret": 8584,
+    "pc": "00000FB4",
+    "register": "r13",
+    "ld_which": {
+     "base": "13",
+     "candidate": "13"
+    },
+    "value": {
+     "base": "00000040",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     9775,
+     54507,
+     58840,
+     65679,
+     155349,
+     256242,
+     266041
+    ],
+    "trace_sha256": {
+     "base": "df0237bfa95d1e26eec2f1e19b9ae5b8a5eb8712c2e38ec4fa97793cd1dbc238",
+     "candidate": "7e712af9139c23a0a0c25e6ad8c0907ee1ba3f1b92baa8ee85d954745e28682b"
+    },
+    "pair_receipt": {
+     "file": "next-use/biohazard8584-r13/trace-pair.json",
+     "sha256": "535089bf67783be8fdd90a1b0d6a5898191969073c43b4a97f4b606ce0afc49b"
+    },
+    "result_check": {
+     "file": "next-use/biohazard8584-r13/result-check.json",
+     "sha256": "f53b8547d6d1a70a5ba989c5f9ccd9a2d830dde3385c03cb7e025108d5a1417b",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-biohazard-route-03\\BioHazard-TAS.exe",
+      "6325fa3a71014a42ed8f5c703bd3335e4dd4812045d805291fabecc3a98846d7"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\biohazard-final-full\\BioHazard-TAS.exe",
+      "411f9d40ee1d001ad7dc1505a028867e7bdc17ceebb480b4dc75a11cc38e11f0"
+     ]
+    }
+   },
+   {
+    "key": [
+     "biohazard",
+     8661,
+     "00000FC8",
+     "r18",
+     "8008F2E4",
+     "800ACD48"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "biohazard",
+    "ret": 8661,
+    "pc": "00000FC8",
+    "register": "r18",
+    "ld_which": {
+     "base": "18",
+     "candidate": "18"
+    },
+    "value": {
+     "base": "8008F2E4",
+     "candidate": "800ACD48"
+    },
+    "capture_rows": [
+     59375,
+     169010,
+     269945
+    ],
+    "trace_sha256": {
+     "base": "bdc9fc8c7e0f783fd73b908178ce330fe418568b464b66625cc675ca498515cb",
+     "candidate": "35d806bd9ecd7764ccb8ee22e087b5325f522cb0b086718777b1de215e6f4c37"
+    },
+    "pair_receipt": {
+     "file": "next-use/biohazard8661-r18/trace-pair.json",
+     "sha256": "d7fe1ccb979611f483a1384eeba08fc60a7b7c23fb7db30e8ea5d4133595c9a2"
+    },
+    "result_check": {
+     "file": "next-use/biohazard8661-r18/result-check.json",
+     "sha256": "e394e3710d61e01b1cf7c98e7545daf40d4a54f2c67a4bed6f616572767701c2",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-biohazard-route-03\\BioHazard-TAS.exe",
+      "6325fa3a71014a42ed8f5c703bd3335e4dd4812045d805291fabecc3a98846d7"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\biohazard-final-full\\BioHazard-TAS.exe",
+      "411f9d40ee1d001ad7dc1505a028867e7bdc17ceebb480b4dc75a11cc38e11f0"
+     ]
+    }
+   },
+   {
+    "key": [
+     "biohazard",
+     9381,
+     "00002518",
+     "r25",
+     "1F800004",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "biohazard",
+    "ret": 9381,
+    "pc": "00002518",
+    "register": "r25",
+    "ld_which": {
+     "base": "25",
+     "candidate": "25"
+    },
+    "value": {
+     "base": "1F800004",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     52654,
+     153204,
+     254096
+    ],
+    "trace_sha256": {
+     "base": "92b5db9f705536f41aa0d74130c27217548d836e1d75a63de1e8a4cdac065005",
+     "candidate": "a3612a7590bf35d914fac0273f00998597b60875227a1e368e3058b57e4c1148"
+    },
+    "pair_receipt": {
+     "file": "next-use/biohazard9381-r25/trace-pair.json",
+     "sha256": "572c361a44a5af8b0d2ec2e6bb88efbb8043825b2ff8e92f977dc1453d8fe2dc"
+    },
+    "result_check": {
+     "file": "next-use/biohazard9381-r25/result-check.json",
+     "sha256": "fbfc28d1b85e950a1a1b2930c992b41791018b95fe5804092336b607694410a1",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-biohazard-route-03\\BioHazard-TAS.exe",
+      "6325fa3a71014a42ed8f5c703bd3335e4dd4812045d805291fabecc3a98846d7"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\biohazard-final-full\\BioHazard-TAS.exe",
+      "411f9d40ee1d001ad7dc1505a028867e7bdc17ceebb480b4dc75a11cc38e11f0"
+     ]
+    }
+   }
+  ],
+  "redc": [
+   {
+    "key": [
+     "redc",
+     1932,
+     "00001B60",
+     "r3",
+     "A000E028",
+     "A0000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "redc",
+    "ret": 1932,
+    "pc": "00001B60",
+    "register": "r3",
+    "ld_which": {
+     "base": "3",
+     "candidate": "3"
+    },
+    "value": {
+     "base": "A000E028",
+     "candidate": "A0000000"
+    },
+    "capture_rows": [
+     305,
+     7205,
+     20043,
+     48549,
+     149368,
+     250274,
+     250564,
+     268701
+    ],
+    "trace_sha256": {
+     "base": "7860243e6e01324801cb80a111c6bf5f87fbab0fb0f4cab9bbb0db510f17d76f",
+     "candidate": "0b2d69d45f3b9edb975dc47ec45953070d3cae32fc323cad4739dcd86855def5"
+    },
+    "pair_receipt": {
+     "file": "next-use/redc1932-r3/trace-pair.json",
+     "sha256": "c088fa600b216bc55d4fb68e10321411fbe00986c48da9c8112539023ed813d3"
+    },
+    "result_check": {
+     "file": "next-use/redc1932-r3/result-check.json",
+     "sha256": "07e388ef8ef702e29e00278b208b2e090bb2da956e8ed9ee69d7936eb1d66eae",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-redc-route-03\\ResidentEvilDC-TAS.exe",
+      "87c55540f9de2aaf6c2ecdfc772a8846e9d2cc0e23f2421c602126b6d9f577ce"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\redc-final-full\\ResidentEvilDC-TAS.exe",
+      "910d11e2febd39ad728a35f275d8bb2156f62075a2c13061db0165dc883d187f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "redc",
+     2730,
+     "00002668",
+     "r11",
+     "1F800004",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "redc",
+    "ret": 2730,
+    "pc": "00002668",
+    "register": "r11",
+    "ld_which": {
+     "base": "11",
+     "candidate": "11"
+    },
+    "value": {
+     "base": "1F800004",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     49765,
+     150553,
+     251452
+    ],
+    "trace_sha256": {
+     "base": "1d779e864002c92d04a1a5688932ada7b8242da146e34a60d4f027cc0d5ad51e",
+     "candidate": "19cb6fed58cf6bfdec7aa0357994f2da5074bff5b74f79c576f5e96562bc90ae"
+    },
+    "pair_receipt": {
+     "file": "next-use/redc2730-r11/trace-pair.json",
+     "sha256": "292209ae73c0cd7e227ec4c62ad0727661c7163ede2d271f1027e60922fe67a3"
+    },
+    "result_check": {
+     "file": "next-use/redc2730-r11/result-check.json",
+     "sha256": "74fe9e27ca1cd2669e319c9d4163e836a63cee02983067369c506a1021c5c53a",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-redc-route-03\\ResidentEvilDC-TAS.exe",
+      "87c55540f9de2aaf6c2ecdfc772a8846e9d2cc0e23f2421c602126b6d9f577ce"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\redc-final-full\\ResidentEvilDC-TAS.exe",
+      "910d11e2febd39ad728a35f275d8bb2156f62075a2c13061db0165dc883d187f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "redc",
+     3255,
+     "0000269C",
+     "r14",
+     "1F80002D",
+     "1F800004"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "redc",
+    "ret": 3255,
+    "pc": "0000269C",
+    "register": "r14",
+    "ld_which": {
+     "base": "14",
+     "candidate": "14"
+    },
+    "value": {
+     "base": "1F80002D",
+     "candidate": "1F800004"
+    },
+    "capture_rows": [
+     49830,
+     150726,
+     251643
+    ],
+    "trace_sha256": {
+     "base": "24ef8f96e1ed0583b657c2c1312dfe9e6a7a0668bdac4e0d94a4a4bb5dccdc31",
+     "candidate": "d2035e834e541c7014e4c3e29e7fa4d9a5557c1b132cc705146b2a3eb8611246"
+    },
+    "pair_receipt": {
+     "file": "next-use/redc3255-r14/trace-pair.json",
+     "sha256": "e45b8566266e9cea3f00d1438edef9ade5694b04ca8fab563124a120b8b5452c"
+    },
+    "result_check": {
+     "file": "next-use/redc3255-r14/result-check.json",
+     "sha256": "ba10452528cc46c9b62ba5d986f63e5f21d97c955ddd1fdfc3d7e0d5ce4ae113",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-redc-route-03\\ResidentEvilDC-TAS.exe",
+      "87c55540f9de2aaf6c2ecdfc772a8846e9d2cc0e23f2421c602126b6d9f577ce"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\redc-final-full\\ResidentEvilDC-TAS.exe",
+      "910d11e2febd39ad728a35f275d8bb2156f62075a2c13061db0165dc883d187f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "redc",
+     3590,
+     "00000F48",
+     "r26",
+     "A000E294",
+     "00000100"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "redc",
+    "ret": 3590,
+    "pc": "00000F48",
+    "register": "r26",
+    "ld_which": {
+     "base": "26",
+     "candidate": "26"
+    },
+    "value": {
+     "base": "A000E294",
+     "candidate": "00000100"
+    },
+    "capture_rows": [
+     9893,
+     52017,
+     152939,
+     253886,
+     263886
+    ],
+    "trace_sha256": {
+     "base": "d4504b86327213b11306569e7f20bbe4fa12e4c0280cf0ea7366be8db1d46f91",
+     "candidate": "8dd4fc5d7974d03ca0de9fc61da63f4988c2dabc6ffafd771abae19897159a93"
+    },
+    "pair_receipt": {
+     "file": "next-use/redc3590-r26/trace-pair.json",
+     "sha256": "7935f3570077242c6dfa7aea82ee48408a712d9264a17df945461750db16da74"
+    },
+    "result_check": {
+     "file": "next-use/redc3590-r26/result-check.json",
+     "sha256": "f9b86352b7cfcca77c8437b018a16addaa2f3ad7fec53c148b141ccfe371ef0b",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-redc-route-03\\ResidentEvilDC-TAS.exe",
+      "87c55540f9de2aaf6c2ecdfc772a8846e9d2cc0e23f2421c602126b6d9f577ce"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\redc-final-full\\ResidentEvilDC-TAS.exe",
+      "910d11e2febd39ad728a35f275d8bb2156f62075a2c13061db0165dc883d187f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "redc",
+     7071,
+     "00004A70",
+     "r24",
+     "1F800005",
+     "000000FF"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "redc",
+    "ret": 7071,
+    "pc": "00004A70",
+    "register": "r24",
+    "ld_which": {
+     "base": "24",
+     "candidate": "24"
+    },
+    "value": {
+     "base": "1F800005",
+     "candidate": "000000FF"
+    },
+    "capture_rows": [
+     261915
+    ],
+    "trace_sha256": {
+     "base": "69dd5d3f9f71edfdcefb6820dfb480443fcee98a1aa83e0fab167e89e688b8fd",
+     "candidate": "098d03625c031ab1a8aa9748772e5016a329e56d5a78dfbf67070945cfae0603"
+    },
+    "pair_receipt": {
+     "file": "next-use/redc7071-r24/trace-pair.json",
+     "sha256": "ae05660f4976ab8ac88f3c3e15a47e411121e2e652deb8ab1a293b14d22352b2"
+    },
+    "result_check": {
+     "file": "next-use/redc7071-r24/result-check.json",
+     "sha256": "351852ba8db5d0c103b755a7e9ac4048b7a38f92b02004e28d59238f26a77f8b",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-redc-route-03\\ResidentEvilDC-TAS.exe",
+      "87c55540f9de2aaf6c2ecdfc772a8846e9d2cc0e23f2421c602126b6d9f577ce"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\redc-final-full\\ResidentEvilDC-TAS.exe",
+      "910d11e2febd39ad728a35f275d8bb2156f62075a2c13061db0165dc883d187f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "redc",
+     8584,
+     "00000FB4",
+     "r13",
+     "00000040",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "redc",
+    "ret": 8584,
+    "pc": "00000FB4",
+    "register": "r13",
+    "ld_which": {
+     "base": "13",
+     "candidate": "13"
+    },
+    "value": {
+     "base": "00000040",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     9775,
+     54507,
+     58840,
+     65679,
+     155349,
+     256242,
+     266041
+    ],
+    "trace_sha256": {
+     "base": "df0237bfa95d1e26eec2f1e19b9ae5b8a5eb8712c2e38ec4fa97793cd1dbc238",
+     "candidate": "7e712af9139c23a0a0c25e6ad8c0907ee1ba3f1b92baa8ee85d954745e28682b"
+    },
+    "pair_receipt": {
+     "file": "next-use/redc8584-r13/trace-pair.json",
+     "sha256": "02b260c961a3d95c7ec74412686b6980100fb1703ff824731033c2f98d2af134"
+    },
+    "result_check": {
+     "file": "next-use/redc8584-r13/result-check.json",
+     "sha256": "c461d66eb25cbd03f94c56c81d14a85bc521e6e4992d993379d0dae52ecf0219",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-redc-route-03\\ResidentEvilDC-TAS.exe",
+      "87c55540f9de2aaf6c2ecdfc772a8846e9d2cc0e23f2421c602126b6d9f577ce"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\redc-final-full\\ResidentEvilDC-TAS.exe",
+      "910d11e2febd39ad728a35f275d8bb2156f62075a2c13061db0165dc883d187f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "redc",
+     8661,
+     "00000FC8",
+     "r18",
+     "8008F2E4",
+     "800ACD48"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "redc",
+    "ret": 8661,
+    "pc": "00000FC8",
+    "register": "r18",
+    "ld_which": {
+     "base": "18",
+     "candidate": "18"
+    },
+    "value": {
+     "base": "8008F2E4",
+     "candidate": "800ACD48"
+    },
+    "capture_rows": [
+     59375,
+     169010,
+     269945
+    ],
+    "trace_sha256": {
+     "base": "bdc9fc8c7e0f783fd73b908178ce330fe418568b464b66625cc675ca498515cb",
+     "candidate": "35d806bd9ecd7764ccb8ee22e087b5325f522cb0b086718777b1de215e6f4c37"
+    },
+    "pair_receipt": {
+     "file": "next-use/redc8661-r18/trace-pair.json",
+     "sha256": "c7880817423b1ef901684a44460399a4666ebb4b0b928e6e4581ca30236d4e5a"
+    },
+    "result_check": {
+     "file": "next-use/redc8661-r18/result-check.json",
+     "sha256": "e32b14b6cdbe540cae4d8101236d7137b7daae9d31f2cb865432f6cedda53978",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-redc-route-03\\ResidentEvilDC-TAS.exe",
+      "87c55540f9de2aaf6c2ecdfc772a8846e9d2cc0e23f2421c602126b6d9f577ce"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\redc-final-full\\ResidentEvilDC-TAS.exe",
+      "910d11e2febd39ad728a35f275d8bb2156f62075a2c13061db0165dc883d187f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "redc",
+     9381,
+     "00002518",
+     "r25",
+     "1F800004",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "redc",
+    "ret": 9381,
+    "pc": "00002518",
+    "register": "r25",
+    "ld_which": {
+     "base": "25",
+     "candidate": "25"
+    },
+    "value": {
+     "base": "1F800004",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     52654,
+     153204,
+     254096
+    ],
+    "trace_sha256": {
+     "base": "92b5db9f705536f41aa0d74130c27217548d836e1d75a63de1e8a4cdac065005",
+     "candidate": "a3612a7590bf35d914fac0273f00998597b60875227a1e368e3058b57e4c1148"
+    },
+    "pair_receipt": {
+     "file": "next-use/redc9381-r25/trace-pair.json",
+     "sha256": "5ded109108cbc0afb1785a304a3d88c7e5872f475f6b31b19af23597c1262120"
+    },
+    "result_check": {
+     "file": "next-use/redc9381-r25/result-check.json",
+     "sha256": "765449411efeafa8ff155b602b912d9e66705a34bc071bb2493b452758e0c59f",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-redc-route-03\\ResidentEvilDC-TAS.exe",
+      "87c55540f9de2aaf6c2ecdfc772a8846e9d2cc0e23f2421c602126b6d9f577ce"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\redc-final-full\\ResidentEvilDC-TAS.exe",
+      "910d11e2febd39ad728a35f275d8bb2156f62075a2c13061db0165dc883d187f"
+     ]
+    }
+   }
+  ],
+  "megamanx5": [
+   {
+    "key": [
+     "megamanx5",
+     1270,
+     "00000E2C",
+     "r22",
+     "000074A8",
+     "80091BE8"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx5",
+    "ret": 1270,
+    "pc": "00000E2C",
+    "register": "r22",
+    "ld_which": {
+     "base": "22",
+     "candidate": "22"
+    },
+    "value": {
+     "base": "000074A8",
+     "candidate": "80091BE8"
+    },
+    "capture_rows": [
+     6739,
+     148117,
+     248554
+    ],
+    "trace_sha256": {
+     "base": "d8c4792194003045449443c9cc7285867a1d8430c86cc4d4eb1d16cb561a1e80",
+     "candidate": "e2b03d9a5b02ee7e2f1ed4090fba9032c9365d1c39a9dc204024fe87d58770fc"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx51270-r22/trace-pair.json",
+     "sha256": "b345f6603b070efb6ec48ce9eaeb06220fb835ef15913abac8925c71a1ff9f37"
+    },
+    "result_check": {
+     "file": "next-use/megamanx51270-r22/result-check.json",
+     "sha256": "3d190d85c4dbaf8d4350eb70a0b08183c3338848ce20cac052fd494d2c84a1cc",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx5-route-03\\MegaManX5-TAS.exe",
+      "0ffde50dc3e75b69d0b3728e46787ca05570c9e6de57c465d026eb286bb9edef"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx5-final-full\\MegaManX5-TAS.exe",
+      "cd0d03994f603e35ea02752564770418e2efa3cf9bba8c5b47cbc5a44f9a0932"
+     ]
+    }
+   },
+   {
+    "key": [
+     "megamanx5",
+     1444,
+     "00000DFC",
+     "r17",
+     "00004A4C",
+     "8006DC48"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx5",
+    "ret": 1444,
+    "pc": "00000DFC",
+    "register": "r17",
+    "ld_which": {
+     "base": "17",
+     "candidate": "17"
+    },
+    "value": {
+     "base": "00004A4C",
+     "candidate": "8006DC48"
+    },
+    "capture_rows": [
+     6715,
+     13154,
+     32792,
+     44980,
+     48480,
+     149060,
+     249758,
+     261942
+    ],
+    "trace_sha256": {
+     "base": "ca4492618d32bd651acd5ba3e153c1966756025edc7fa32126bb8448c49f0fc6",
+     "candidate": "16dfe942136ebc570154f89d6aaed749d7c831f8e0f3cac82b1edd340d9ef244"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx51444-r17/trace-pair.json",
+     "sha256": "e20ee5a656d02e19e662007dc09a840b53fb8f22121a40763f8ff409c8efe5b3"
+    },
+    "result_check": {
+     "file": "next-use/megamanx51444-r17/result-check.json",
+     "sha256": "bf0b3860909ebe6c4a0d5980ea468515ebeebaed9387b11b228d8f15b3c96a29",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx5-route-03\\MegaManX5-TAS.exe",
+      "0ffde50dc3e75b69d0b3728e46787ca05570c9e6de57c465d026eb286bb9edef"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx5-final-full\\MegaManX5-TAS.exe",
+      "cd0d03994f603e35ea02752564770418e2efa3cf9bba8c5b47cbc5a44f9a0932"
+     ]
+    }
+   },
+   {
+    "key": [
+     "megamanx5",
+     1881,
+     "00000E30",
+     "r22",
+     "00006D58",
+     "00006D68"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx5",
+    "ret": 1881,
+    "pc": "00000E30",
+    "register": "r22",
+    "ld_which": {
+     "base": "32",
+     "candidate": "32"
+    },
+    "value": {
+     "base": "00006D58",
+     "candidate": "00006D68"
+    },
+    "capture_rows": [
+     489,
+     13078,
+     16127,
+     17773,
+     34686,
+     47732,
+     148449,
+     249069,
+     267353,
+     270414,
+     272048
+    ],
+    "trace_sha256": {
+     "base": "8cf45d78dcff429089a24710b4badafd2ea98cff6863b69fdb19b5c39a09e590",
+     "candidate": "7433a7f57ad8e11316904acafe598ccb1d30577b4abf1732efae99493ce2b9c8"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx51881-r22/trace-pair.json",
+     "sha256": "f7addb3b879af599fbca37a655cbd61799dc8b82ce85255a304b707a40540ab8"
+    },
+    "result_check": {
+     "file": "next-use/megamanx51881-r22/result-check.json",
+     "sha256": "2739e029b90849d23dd2f59bca75e6c90f4b46cfcedec46055414b095747d07c",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx5-route-03\\MegaManX5-TAS.exe",
+      "0ffde50dc3e75b69d0b3728e46787ca05570c9e6de57c465d026eb286bb9edef"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx5-final-full\\MegaManX5-TAS.exe",
+      "cd0d03994f603e35ea02752564770418e2efa3cf9bba8c5b47cbc5a44f9a0932"
+     ]
+    }
+   },
+   {
+    "key": [
+     "megamanx5",
+     2356,
+     "00000DEC",
+     "r22",
+     "00006D98",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx5",
+    "ret": 2356,
+    "pc": "00000DEC",
+    "register": "r22",
+    "ld_which": {
+     "base": "22",
+     "candidate": "22"
+    },
+    "value": {
+     "base": "00006D98",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     7803,
+     13992,
+     17051,
+     18695,
+     21456,
+     23291,
+     42958,
+     143591,
+     244286,
+     256175,
+     259419,
+     262674,
+     264512,
+     266355
+    ],
+    "trace_sha256": {
+     "base": "af3762c65094e591720cbc08d399bb2e8194c5d99e1d084b0c13edb8fb0ad33b",
+     "candidate": "c10d8469207b98ba6a045dac23072b75163c2f02787169ff374ec89acf44e65e"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx52356-r22/trace-pair.json",
+     "sha256": "5c64b6c5e3cdafe512d6dfc32a682b79ee1a5f26aabaa0ea7eb1cbab8af1bd77"
+    },
+    "result_check": {
+     "file": "next-use/megamanx52356-r22/result-check.json",
+     "sha256": "8d9330ea74f7564dd8b0499ec9b3d787fc1c838145b015418693fda35d37e04a",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx5-route-03\\MegaManX5-TAS.exe",
+      "0ffde50dc3e75b69d0b3728e46787ca05570c9e6de57c465d026eb286bb9edef"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx5-final-full\\MegaManX5-TAS.exe",
+      "cd0d03994f603e35ea02752564770418e2efa3cf9bba8c5b47cbc5a44f9a0932"
+     ]
+    }
+   }
+  ],
+  "megamanx4": [
+   {
+    "key": [
+     "megamanx4",
+     884,
+     "00000E00",
+     "r16",
+     "BFC0506C",
+     "BFC050A4"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx4",
+    "ret": 884,
+    "pc": "00000E00",
+    "register": "r16",
+    "ld_which": {
+     "base": "16",
+     "candidate": "16"
+    },
+    "value": {
+     "base": "BFC0506C",
+     "candidate": "BFC050A4"
+    },
+    "capture_rows": [
+     41579,
+     122460,
+     203338
+    ],
+    "trace_sha256": {
+     "base": "5910dd25cb1caa671d8f5756ece53801a25f09faa22972e272eaf1043d67a0ef",
+     "candidate": "76824bb483135d562c0eb0ba256d377132f131da6d13a5d66665a865d040d4bb"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx4884-r16/trace-pair.json",
+     "sha256": "f3a42282f7caa3335363bd3557267def638d85de97fa90cbab150f4aadc0eee5"
+    },
+    "result_check": {
+     "file": "next-use/megamanx4884-r16/result-check.json",
+     "sha256": "b5e116df9661b6006f8da4e3319422bd6bed5acb8cdaf155b579eafc4f2dccbc",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx4-route-03\\MegaManX4-TAS.exe",
+      "eb915025be8828f3527be56069edcba2a540ad0ae1c4900ffbef6ea36b877f8b"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx4-final-full\\MegaManX4-TAS.exe",
+      "03fd08b3f9db40fb43270338e4c820261c3b60aa01d53bb09e335a1deceb3a9f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "megamanx4",
+     1825,
+     "0000179C",
+     "r2",
+     "1F801070",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx4",
+    "ret": 1825,
+    "pc": "0000179C",
+    "register": "r2",
+    "ld_which": {
+     "base": "2",
+     "candidate": "2"
+    },
+    "value": {
+     "base": "1F801070",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     632,
+     64952,
+     167624,
+     266023
+    ],
+    "trace_sha256": {
+     "base": "71576e0af658124cd3eb45f5eaa8d6270300c56b32ff89d8404bbf7a97ff217f",
+     "candidate": "da584f3e53d04a0f0196362587981d651f6d8b9e13928d9f0b17dc36c275be8a"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx41825-r2/trace-pair.json",
+     "sha256": "22d5f9a786341a8b5a44911d38382a40d4d00851fb0b7d2f97b0d98b7138f383"
+    },
+    "result_check": {
+     "file": "next-use/megamanx41825-r2/result-check.json",
+     "sha256": "fd9fa59598cc5e5ae97491595831aaf0618ef0ce4c26d9b726530b484c853204",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx4-route-03\\MegaManX4-TAS.exe",
+      "eb915025be8828f3527be56069edcba2a540ad0ae1c4900ffbef6ea36b877f8b"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx4-final-full\\MegaManX4-TAS.exe",
+      "03fd08b3f9db40fb43270338e4c820261c3b60aa01d53bb09e335a1deceb3a9f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "megamanx4",
+     2304,
+     "00001C48",
+     "r16",
+     "00000000",
+     "A000E290"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx4",
+    "ret": 2304,
+    "pc": "00001C48",
+    "register": "r16",
+    "ld_which": {
+     "base": "16",
+     "candidate": "16"
+    },
+    "value": {
+     "base": "00000000",
+     "candidate": "A000E290"
+    },
+    "capture_rows": [
+     7397,
+     15507,
+     48275,
+     148920,
+     249781,
+     250071,
+     263545
+    ],
+    "trace_sha256": {
+     "base": "4affdf47deb22a92638dcaa628dd2b52f33998c5aeaba74ff1e7411d6630ae84",
+     "candidate": "9831faf38ce955e18c6fb192408ac8596c8cc93aae083cb0ba04acfe243933d8"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx42304-r16/trace-pair.json",
+     "sha256": "0eee8d9e007d33054dc16ababde74b4e5cac9fefa102c05cd253f083c2f35ab3"
+    },
+    "result_check": {
+     "file": "next-use/megamanx42304-r16/result-check.json",
+     "sha256": "d92d32f2b647d8eaf0c233b5cf3413641e4ec9f8779c888b228917bc74c60783",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx4-route-03\\MegaManX4-TAS.exe",
+      "eb915025be8828f3527be56069edcba2a540ad0ae1c4900ffbef6ea36b877f8b"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx4-final-full\\MegaManX4-TAS.exe",
+      "03fd08b3f9db40fb43270338e4c820261c3b60aa01d53bb09e335a1deceb3a9f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "megamanx4",
+     3012,
+     "00000DD4",
+     "r29",
+     "000085D8",
+     "00000000"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx4",
+    "ret": 3012,
+    "pc": "00000DD4",
+    "register": "r29",
+    "ld_which": {
+     "base": "29",
+     "candidate": "29"
+    },
+    "value": {
+     "base": "000085D8",
+     "candidate": "00000000"
+    },
+    "capture_rows": [
+     101,
+     16644,
+     47658,
+     148219,
+     249024,
+     271305
+    ],
+    "trace_sha256": {
+     "base": "3068ca73fc5dac008409b3699a3f0c750670f502475ef5fe4fd0344ec2391b02",
+     "candidate": "ed8583d934d334b4d15eb002b133efbfbd3894fafbd5a5ef9971e62d6adae999"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx43012-r29/trace-pair.json",
+     "sha256": "35b40ecfee2437bd8cfb02857755cf8d362b0e0174104cc1a611126bbb8c6635"
+    },
+    "result_check": {
+     "file": "next-use/megamanx43012-r29/result-check.json",
+     "sha256": "009251746b01c1d7e7216e7ec3438cb0adaacad55afa0e0a1e0e32d5fef790b8",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx4-route-03\\MegaManX4-TAS.exe",
+      "eb915025be8828f3527be56069edcba2a540ad0ae1c4900ffbef6ea36b877f8b"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx4-final-full\\MegaManX4-TAS.exe",
+      "03fd08b3f9db40fb43270338e4c820261c3b60aa01d53bb09e335a1deceb3a9f"
+     ]
+    }
+   },
+   {
+    "key": [
+     "megamanx4",
+     3081,
+     "00000E2C",
+     "r22",
+     "00006D78",
+     "00006D88"
+    ],
+    "group": "T110 dispatchability: 702d1cd88 (+67af71726) — interpreted pending-load GPR view (observer representation)",
+    "route": "megamanx4",
+    "ret": 3081,
+    "pc": "00000E2C",
+    "register": "r22",
+    "ld_which": {
+     "base": "22",
+     "candidate": "22"
+    },
+    "value": {
+     "base": "00006D78",
+     "candidate": "00006D88"
+    },
+    "capture_rows": [
+     567,
+     16833,
+     47608,
+     148167,
+     248971,
+     270865
+    ],
+    "trace_sha256": {
+     "base": "be0a5a4fcd5100ed5ba9693f9cc0021a274a4784c9a11b918133b6ae193210c6",
+     "candidate": "118c1389ad96dd7682e9ea7c39f66cd334e57deb508df78f7b181bb35c4cc156"
+    },
+    "pair_receipt": {
+     "file": "next-use/megamanx43081-r22/trace-pair.json",
+     "sha256": "a3c49ba1da3a2e683272e9745e094b3371e456572dafb9f50f8e90fce6263396"
+    },
+    "result_check": {
+     "file": "next-use/megamanx43081-r22/result-check.json",
+     "sha256": "763296cd173120403ea586443a67c24d5ab11d6a64a93bac4bc62205b30fc4bd",
+     "result_unequal": 0
+    },
+    "binaries": {
+     "a": [
+      "D:\\psxrecomp\\validation\\tas\\native\\requal-megamanx4-route-03\\MegaManX4-TAS.exe",
+      "eb915025be8828f3527be56069edcba2a540ad0ae1c4900ffbef6ea36b877f8b"
+     ],
+     "b": [
+      "D:\\psxrecomp\\validation\\tas\\t172-spu-final-ba05e567-prefix\\megamanx4-final-full\\MegaManX4-TAS.exe",
+      "03fd08b3f9db40fb43270338e4c820261c3b60aa01d53bb09e335a1deceb3a9f"
+     ]
+    }
+   }
+  ]
+ }
+}

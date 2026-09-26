@@ -28,7 +28,7 @@ p.add_argument('--output', type=Path, required=True); p.add_argument('--returns'
 p.add_argument('--parallel', type=int, default=3); p.add_argument('--dry-run', action='store_true')
 p.add_argument('--only', help='comma-separated titles to run, in this order (default: all, template order)')
 p.add_argument('--returns-map', help='per-title returns, e.g. biohazard=10200,abesoddysee=16400 (overrides --returns)')
-p.add_argument('--baseline', type=Path, help='recorded exception baseline (JSON: route -> list of exception keys); none = any exception fails')
+p.add_argument('--baseline', type=Path, help='recorded exception baseline (JSON: route -> list of exception keys, or the bound tier1-bound-baseline-v1 format); none = any exception fails')
 a = p.parse_args()
 git = lambda *x: subprocess.check_output(['git', *x], cwd=a.source, text=True).strip()
 head = git('rev-parse', 'HEAD'); assert not git('status', '--porcelain'), 'worktree must be clean'
@@ -100,7 +100,7 @@ for j in ready:
     if q is None: res['cpu_return_check'] = 'n/a (oracle receipt is the judge)'; continue
     if not cr.exists(): res['cpu_return_check'] = 'FAIL: no cpu-return.tsv'; continue
     sys.path.insert(0, str(Path(__file__).resolve().parent)); import tier1_classify
-    base = json.loads(a.baseline.read_text()).get(t, []) if a.baseline else None
+    base = tier1_classify.load_baseline(a.baseline, t) if a.baseline else None
     r = tier1_classify.classify(t, NATIVE / q / 'cpu-return.tsv', cr, j['returns'], source=head[:9], baseline=base)
     (out / f'{t}-tier1.json').write_text(json.dumps(r, indent=1) + '\n')
     res['cpu_return_check'] = r['verdict']; res['cpu_rows_compared'] = j['returns']; res['exceptions'] = len(r['exceptions'])
