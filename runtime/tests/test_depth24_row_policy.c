@@ -18,6 +18,7 @@ void gr_vram_transfer_in(int x, int y, int w, int h, const uint16_t* p) {
 void text_xlate_vram_upload(int x, int y, int w, int h) {
     (void)x; (void)y; (void)w; (void)h;
 }
+void gr_display_mode_changed(void) {}
 
 int main(void) {
     GpuDisplayInfo di = {0};

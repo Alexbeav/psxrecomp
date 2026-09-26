@@ -19,6 +19,7 @@ static int s_d24_present_hold;
 static uint32_t s_d24_prev_disp_h, v_display_y1, v_display_y2;
 static uint32_t hres1, hres2, vres, video_mode, vertical_interlace, interlace_field, reverse_flag;
 static void gr_display_mode_changed(void) {}
+static void depth24_reset_rows(void) {}
 static void depth24_note_upload(uint32_t x, uint32_t w) { NOTE }
 static void gpu_depth24_upload_span_reset(void) { RESET }
 static void gp1_v_display_range(uint32_t val) { RANGE }

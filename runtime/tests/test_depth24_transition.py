@@ -64,6 +64,7 @@ static void depth24_upload_policy(void) { POLICY }
 static struct Backend { void (*display_mode_changed)(void); } backend = { CALLBACK };
 static struct Backend *g_b = &backend;
 static void gr_display_mode_changed(void) { DISPATCH }
+static void depth24_reset_rows(void) {}
 static void gp1_display_mode(uint32_t val) { MODE }
 static void glb_fill_rect(int x, int y, int w, int h, uint16_t c) { FILL }
 static void upload_first_movie_word(uint16_t word) {
