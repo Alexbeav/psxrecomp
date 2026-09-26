@@ -1586,11 +1586,17 @@ static void try_execute(int ch) {
     /* Transfer starts when bit 24 (start/busy) is set AND channel is enabled in DPCR */
     if (!((chcr >> 24) & 1)) return;
     if (!channel_enabled(ch)) return;
+    /* [DOC] PSX-SPX "D#_CHCR": bit 28 forces a start without waiting for DREQ,
+     * and OTC has no DREQ. [ORACLE FIXTURE D20b] 01000002h on ch6 never starts
+     * (bit 24 held 57k cycles, OT unwritten); 11000002h completes. The other
+     * channels start on bit 24 alone (D20/D20b: ch0-3 run with bit 28 clear). */
+    if (ch == 6 && !((chcr >> 28) & 1)) return;
 
-    /* [DOC] PSX-SPX "D#_CHCR": bit 28 (start/trigger) clears when the transfer
-     * begins. Source profile: the same clear; no D fixture sampled bit 28 during
-     * a live transfer [NOT OBSERVED]. */
-    channels[ch].chcr &= ~(1u << 28);
+    /* Bit 28 at the start. Source profile: [ORACLE FIXTURE D20, D20b] it stays
+     * set with bit 24 through the transfer on ch0-4 (every sampled channel) and
+     * both clear at completion. Default: PSX-SPX "D#_CHCR" clears it when the
+     * transfer begins; the oracle retains it [NOT OBSERVED: release policy]. */
+    if (!dsm_profile_any() && !dsm_spu_model) channels[ch].chcr &= ~(1u << 28);
     trace_dma('S', ch, transfer_word_count(ch), dicr, i_stat);
     event_ring_record_aux(EV_DMA_KICK, (uint8_t)ch, channels[ch].chcr);
     event_ring_record_aux(EV_ENQ, (uint8_t)(SRC_DMA0 + ch), transfer_word_count(ch));
