@@ -150,6 +150,11 @@ int main(int argc,char **argv) {
     setup(1,1,0);try_execute(2);assert(upload_count==1 && irqs==1 && dma_cpu_read_penalty()==0);
     setup(2,256,0);try_execute(2);assert(dma_cpu_read_penalty()==200);
     assert(!dma_snapshot_read(NULL,0));
+    /* [DOC] PSX-SPX "D#_MADR": bits 24-31 always read zero; "D#_CHCR": D6_CHCR
+     * keeps only bits 24/28/30, bit 1 reads 1. */
+    setup(1,1,0);try_execute(2);
+    for(uint32_t ch=0;ch<7;ch++){dma_write(0x1f801080+ch*16,0x80010000u|ch*4);assert(dma_read(0x1f801080+ch*16)==(0x10000u|ch*4));}
+    dma_write(0x1f8010e8,0x6EFFFFFFu);assert(dma_read(0x1f8010e8)==0x40000002u);
     set_option("PSX_GPU_DMA_MODEL","");setup(12,16,0);try_execute(2);
     assert(upload_count==192 && !irqs && dma_cpu_read_penalty()==0 && delayed_complete[2].active);
 #endif
