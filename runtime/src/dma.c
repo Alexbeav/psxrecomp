@@ -1347,6 +1347,9 @@ static int dsm_before_write(uint32_t addr, uint32_t *valp, uint32_t mask) {
                 dsm_fail("source DMA: register write to a channel with a live transfer");
         uint32_t reg = (addr - 0x1F801080u) & 0xFu;
         /* [DOC] "D#_MADR": bits 24-31 are not used (always zero). */
+        /* Every DMA register write syncs the source GPU service clock (the
+         * default path below does the same); these writes return early. */
+        if ((ch <= 6 && reg == 0u) || (ch == 6 && reg == 8u)) source_gpu_runtime_dma_write();
         if (ch <= 6 && reg == 0u) {
             channels[ch].madr = ((channels[ch].madr & ~mask) | (val & mask)) & 0x00FFFFFFu;
             return 1;
