@@ -34,7 +34,9 @@ def definition(text, name):
 
 
 geo = definition(GL, "gpu_geometry")
-m = re.search(r"if \(mode == GL_LINES && n == 2 && [^{]*g_wide_w > 0 &&\s*"
+# Other conditions may join (a branch that also batches lines above 1x adds
+# its windowed-mode exclusion here), but these two must stay.
+m = re.search(r"if \(mode == GL_LINES && n == 2 && [^{]*g_wide_w > 0 &&[^{]*"
               r"!bd_prim_gate\(xs, n, 0\)\) \{", geo)
 assert m, "native-wide lines batch only when native-wide is on and unstretched"
 lines = geo[m.end():]
