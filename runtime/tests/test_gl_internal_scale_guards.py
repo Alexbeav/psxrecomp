@@ -70,7 +70,7 @@ class GlScaleGuards(unittest.TestCase):
         self.assertIn("if (src_scale > 1 && lw > 0", quad)
         self.assertIn("float in = src_scale > 1 ? 0.5f / (float)src_scale : 0.5f;", quad)
         stencil = body(GL, "static void rebuild_mask_stencils(void)")
-        self.assertIn("if (s_scale <= 1) {", stencil)
+        self.assertIn("if (s_out_scale <= 1) {", stencil)
 
     def test_main_does_not_cap_gl_at_software_limit(self):
         self.assertNotIn("if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;", MAIN)
@@ -84,7 +84,7 @@ class HiresWindowGuards(unittest.TestCase):
 
     def test_engaged_only_past_full_vram(self):
         init = body(GL, "static int init_gpu_raster(void)")
-        self.assertIn("if (allow && want > 1 && (force || want > s_scale)) {", init)
+        self.assertIn("if (allow && want > 1 && (force || want > s_out_scale)) {", init)
         self.assertIn("s_hr_scale = 1;", init)
 
     def test_mirrors_gated(self):
@@ -106,12 +106,60 @@ class HiresWindowGuards(unittest.TestCase):
         self.assertIn("hiw_flush_queue();", body(GL, "static int hiw_ensure(int x0, int x1)"))
         present = body(GL, "void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,")
         self.assertIn("if (s_hiw) {", present)
-        self.assertIn("int src_tw = VRAM_W, src_x = disp_x, src_scale = s_scale;", present)
+        self.assertIn("int src_tw = VRAM_W, src_x = disp_x, src_scale = s_out_scale;", present)
 
     def test_canonical_shaders_untouched(self):
         # The window has its own blit program; BLIT_VS keeps the fixed 1024x512
         # projection the canonical path always used.
         self.assertIn('"  gl_Position = vec4((a_pos.x+u_shift)/512.0 - 1.0, (a_pos.y+u_shift)/256.0 - 1.0, 0.0, 1.0); }\\n";', GL)
+
+
+def functions(src):
+    """(name, body) for every top-level function definition."""
+    out = []
+    for m in re.finditer(r"\n((?:static\s+)?(?:inline\s+)?[A-Za-z_][\w \*]*?\b([A-Za-z_]\w*)"
+                         r"\s*\([^;{]*\))\s*\{", src):
+        start, depth = m.end() - 1, 0
+        for i in range(start, len(src)):
+            if src[i] == "{":
+                depth += 1
+            elif src[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    out.append((m.group(2), src[start:i + 1]))
+                    break
+    return out
+
+
+def strip_comments(src):
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    return re.sub(r"//[^\n]*", "", src)
+
+
+class ScaleContractGuards(unittest.TestCase):
+    """The GL backend has two scales: s_hr_scale (s_hr_fbo, the authoritative
+    VRAM surface) and s_out_scale (what is presented: the high-resolution
+    window, the wide surfaces, captures). They differ only in windowed
+    high-resolution mode, so a mix-up is invisible at every other scale."""
+
+    def test_single_scale_name_is_poisoned(self):
+        # Code written against the old single s_scale must not build.
+        self.assertRegex(GL, r"#if defined\(__GNUC__\) \|\| defined\(__clang__\)\s*"
+                             r"#pragma GCC poison s_scale\s*#endif")
+        code = strip_comments(GL).replace("#pragma GCC poison s_scale", "")
+        self.assertIsNone(re.search(r"\bs_scale\b", code))
+
+    def test_hr_surface_users_pick_the_right_scale(self):
+        # A function that binds s_hr_fbo and uses the presented scale must also
+        # handle the window (s_hiw / hiw_on): otherwise it reads or writes hr
+        # at the wrong scale in windowed mode.
+        code = strip_comments(GL)
+        for name, fn in functions(code):
+            if not re.search(r"FRAMEBUFFER,\s*s_hr_fbo\b", fn):
+                continue
+            if "s_out_scale" in fn:
+                self.assertTrue("s_hiw" in fn or "hiw_on()" in fn,
+                                name + " binds s_hr_fbo at s_out_scale without handling the window")
 
 
 class InternalResolutionGuards(unittest.TestCase):
