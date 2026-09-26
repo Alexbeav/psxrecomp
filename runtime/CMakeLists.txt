@@ -912,7 +912,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         # Include production owners, then discard unrelated runtime machinery.
         add_executable(vblank_in_exception_test tests/test_vblank_in_exception.c)
         add_executable(gpu_interlace_status_test tests/test_gpu_interlace_status.c)
-        foreach(_test vblank_in_exception gpu_interlace_status)
+        add_executable(gpu_gpuread_latch_test tests/test_gpu_gpuread_latch.c)
+        foreach(_test vblank_in_exception gpu_interlace_status gpu_gpuread_latch)
             target_include_directories(${_test}_test PRIVATE include)
             target_compile_definitions(${_test}_test PRIVATE
                 PSX_ENABLE_BLOCK_CYCLES=1 PSX_NO_DEBUG_TOOLS=1)
@@ -920,6 +921,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         endforeach()
         add_test(NAME vblank_in_exception_test COMMAND vblank_in_exception_test)
         add_test(NAME gpu_interlace_status_test COMMAND gpu_interlace_status_test)
+        add_test(NAME gpu_gpuread_latch_test COMMAND gpu_gpuread_latch_test)
     endif()
 
     add_executable(spu_end_without_repeat_test
