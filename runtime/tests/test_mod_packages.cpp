@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 #include <cstdlib>
@@ -1595,6 +1596,517 @@ int main() {
         check(!ModPackageManager::read_manifest(
                   chan_root / "bad-channel.toml", rejected, &error),
               "an unknown channel name must be rejected");
+    }
+
+    /* A stale state.toml naming a package the catalog no longer holds: a
+     * framework builtin the title now excludes (EXCLUDE_BUILTIN_MODS), a
+     * developer package a release stripped, or one the player deleted. The
+     * selection must be dormant -- not a launch error the player cannot clear
+     * from a Mods page that no longer lists the package, never applied, and
+     * never silently thrown away. */
+    {
+        const fs::path stale_root = root / "stale";
+        const std::string kept =
+            "format_version = 5\n"
+            "id = \"kept.mod\"\n"
+            "version = \"1.0.0\"\n"
+            "name = \"Kept\"\n"
+            "[[target]]\n"
+            "game_id = \"*\"\n"
+            "[[feature]]\n"
+            "id = \"on\"\n"
+            "name = \"On\"\n"
+            "[[patch]]\n"
+            "feature = \"on\"\n"
+            "target = \"main_exe\"\n"
+            "address = 2147487744\n"
+            "expected = \"01 02 03 04\"\n"
+            "replace = \"05 06 07 08\"\n";
+        write_text(stale_root / "bundled/kept.mod/1.0.0/manifest.toml", kept);
+        write_text(stale_root / "state.toml",
+                   "format_version = 2\n"
+                   "\n[[package]]\nid = \"kept.mod\"\n"
+                   "\n[[package]]\nid = \"psx.enhancement.fast-loading\"\n"
+                   "\n[[package]]\nid = \"psx.presentation.bezel\"\n"
+                   "version = \"1.0.0\"\n"
+                   "\n[[feature]]\npackage_id = \"kept.mod\"\nid = \"on\"\n"
+                   "enabled = true\n"
+                   "\n[[feature]]\npackage_id = \"psx.enhancement.fast-loading\"\n"
+                   "id = \"fast-loading\"\nenabled = true\n"
+                   "[feature.values]\nmultiplier = \"8\"\n"
+                   "\n[[feature]]\npackage_id = \"psx.presentation.bezel\"\n"
+                   "id = \"bezel\"\nenabled = true\n"
+                   "[feature.resources]\nartwork = \"C:/art.png\"\n");
+
+        ModPackageManager stale(stale_root);
+        check(stale.scan(&error), error.c_str());
+        check(stale.load_state(&error), error.c_str());
+        const ModResolution plan = stale.resolve("SLUS-TEST");
+        check(plan.ok, "a selection naming an absent package must not fail resolution");
+        check(plan.ordered.size() == 1 && plan.ordered[0]->id == "kept.mod",
+              "only the present, enabled package may enter the plan");
+        check(plan.writes.size() == 1,
+              "the present package's operations must still resolve");
+        const std::vector<std::string> dormant = stale.dormant_selections();
+        check(dormant.size() == 2 &&
+                  std::find(dormant.begin(), dormant.end(),
+                            "psx.enhancement.fast-loading") != dormant.end() &&
+                  std::find(dormant.begin(), dormant.end(),
+                            "psx.presentation.bezel") != dormant.end(),
+              "both absent packages must be reported as dormant selections");
+        check(std::find(dormant.begin(), dormant.end(), "kept.mod") == dormant.end(),
+              "a present package is never dormant");
+
+        /* Saving (every launch commit does) must keep the dormant choices. */
+        check(stale.save_state(&error), error.c_str());
+        ModPackageManager reread(stale_root);
+        check(reread.scan(&error), error.c_str());
+        check(reread.load_state(&error), error.c_str());
+        const auto& sel = reread.selections();
+        const auto fast = sel.find("psx.enhancement.fast-loading");
+        check(fast != sel.end() &&
+                  fast->second.features.count("fast-loading") == 1 &&
+                  fast->second.features.at("fast-loading").enabled &&
+                  fast->second.features.at("fast-loading").values.at("multiplier") == "8",
+              "a dormant selection must survive save_state verbatim");
+        const auto bezel = sel.find("psx.presentation.bezel");
+        check(bezel != sel.end() && bezel->second.version == "1.0.0" &&
+                  bezel->second.features.count("bezel") == 1 &&
+                  bezel->second.features.at("bezel").resources.at("artwork") ==
+                      "C:/art.png",
+              "a dormant pinned version and resource must survive save_state");
+        check(reread.resolve("SLUS-TEST").fingerprint == plan.fingerprint,
+              "dormant selections must not perturb the plan fingerprint");
+
+        /* When the package comes back, the preserved choice applies again. */
+        write_text(stale_root / "bundled/psx.enhancement.fast-loading/1.0.0/manifest.toml",
+                   "format_version = 5\n"
+                   "id = \"psx.enhancement.fast-loading\"\n"
+                   "version = \"1.0.0\"\n"
+                   "name = \"Fast\"\n"
+                   "[[target]]\n"
+                   "game_id = \"*\"\n"
+                   "[[feature]]\n"
+                   "id = \"fast-loading\"\n"
+                   "name = \"Fast\"\n");
+        ModPackageManager restored(stale_root);
+        check(restored.scan(&error), error.c_str());
+        check(restored.load_state(&error), error.c_str());
+        check(restored.feature_enabled("psx.enhancement.fast-loading", "fast-loading"),
+              "a restored package must pick its preserved selection back up");
+        check(restored.dormant_selections().size() == 1,
+              "only the still-absent package remains dormant");
+    }
+
+    /* Cross-package implicit requirements ([[requirement]], format 7). A
+     * feature's option selection needs a feature of ANOTHER package: the
+     * required feature is activated for the session even though it is hidden
+     * and off in state.toml, state.toml is never rewritten to include it, and
+     * an unmet requirement fails the plan loudly instead of running without
+     * it (WipEout 3's Extras = Full needs psx.enhancement.8mb-ram). */
+    {
+        const fs::path req_root = root / "requirements";
+        mod_clear_plugins_for_tests();
+        check(mod_register_activation_plugin("test.big-ram", +[]() {}),
+              "requirement test plugin must register");
+        check(mod_register_activation_plugin("test.mode", +[]() {}),
+              "requirement test plugin must register");
+        const std::string provider =
+            "format_version = 5\n"
+            "id = \"test.ram\"\n"
+            "version = \"1.2.0\"\n"
+            "name = \"Big RAM\"\n"
+            "[[target]]\n"
+            "game_id = \"*\"\n"
+            "[[feature]]\n"
+            "id = \"big-ram\"\n"
+            "name = \"Big RAM\"\n"
+            "default_enabled = false\n"
+            "hidden = true\n"
+            "[[plugin]]\n"
+            "feature = \"big-ram\"\n"
+            "id = \"test.big-ram\"\n";
+        const auto requiring = [](const std::string& extra) {
+            return std::string(
+                "format_version = 7\n"
+                "id = \"test.mode\"\n"
+                "version = \"1.0.0\"\n"
+                "name = \"Mode\"\n"
+                "[[target]]\n"
+                "game_id = \"SLUS-TEST\"\n"
+                "[[feature]]\n"
+                "id = \"mode\"\n"
+                "name = \"Mode\"\n"
+                "[[plugin]]\n"
+                "feature = \"mode\"\n"
+                "id = \"test.mode\"\n"
+                "[[option]]\n"
+                "feature = \"mode\"\n"
+                "id = \"extras\"\n"
+                "label = \"Extras\"\n"
+                "type = \"choice\"\n"
+                "default = \"none\"\n"
+                "[[option.choice]]\nvalue = \"none\"\nlabel = \"None\"\n"
+                "[[option.choice]]\nvalue = \"enhanced\"\nlabel = \"Enhanced\"\n"
+                "[[option.choice]]\nvalue = \"full\"\nlabel = \"Full\"\n"
+                "[[requirement]]\n"
+                "feature = \"mode\"\n"
+                "package = \"test.ram\"\n"
+                "requires_feature = \"big-ram\"\n"
+                "when = { extras = \"enhanced\" }\n"
+                "[[requirement]]\n"
+                "feature = \"mode\"\n"
+                "package = \"test.ram\"\n"
+                "requires_feature = \"big-ram\"\n"
+                "when = { extras = \"full\" }\n") + extra;
+        };
+        write_text(req_root / "bundled/test.ram/1.2.0/manifest.toml", provider);
+        write_text(req_root / "bundled/test.mode/1.0.0/manifest.toml",
+                   requiring(""));
+        /* The player chose Mode = Full and explicitly left Big RAM off. */
+        const std::string state_text =
+            "format_version = 2\n"
+            "\n[[package]]\nid = \"test.mode\"\n"
+            "\n[[feature]]\npackage_id = \"test.mode\"\nid = \"mode\"\n"
+            "enabled = true\n"
+            "[feature.values]\nextras = \"full\"\n"
+            "\n[[feature]]\npackage_id = \"test.ram\"\nid = \"big-ram\"\n"
+            "enabled = false\n";
+        write_text(req_root / "state.toml", state_text);
+
+        const auto has_plugin = [](const ModResolution& plan,
+                                   const std::string& id) {
+            return std::any_of(plan.plugins.begin(), plan.plugins.end(),
+                               [&](const ModResolution::Plugin& plugin) {
+                                   return plugin.id == id;
+                               });
+        };
+        const auto has_error = [](const ModResolution& plan,
+                                  const std::string& text) {
+            return std::any_of(plan.errors.begin(), plan.errors.end(),
+                               [&](const std::string& item) {
+                                   return item.find(text) != std::string::npos;
+                               });
+        };
+
+        ModPackageManager req(req_root);
+        check(req.scan(&error), error.c_str());
+        check(req.scan_errors().empty(), "requirement manifests must parse");
+        check(req.load_state(&error), error.c_str());
+        const ModResolution full = req.resolve("SLUS-TEST");
+        check(full.ok, "an active requirement on a present package must resolve");
+        check(has_plugin(full, "test.big-ram"),
+              "an active requirement must activate the hidden required "
+              "feature even though state.toml disables it");
+        check(has_plugin(full, "test.mode"),
+              "the requiring feature itself must stay active");
+        check(full.implicit_features.size() == 1 &&
+                  full.implicit_features[0].package_id == "test.ram" &&
+                  full.implicit_features[0].feature_id == "big-ram" &&
+                  full.implicit_features[0].required_by_package_id ==
+                      "test.mode" &&
+                  full.implicit_features[0].required_by_feature_id == "mode",
+              "the plan must name the derived activation and what required it");
+        check(std::any_of(full.ordered.begin(), full.ordered.end(),
+                          [](const ModPackage* p) { return p->id == "test.ram"; }),
+              "the required package must enter the ordered plan");
+        check(!req.feature_enabled("test.ram", "big-ram"),
+              "feature_enabled must keep reporting the player's own choice");
+        check(req.feature_implicitly_enabled("test.ram", "big-ram"),
+              "feature_implicitly_enabled must report the derived activation");
+        check(req.feature_option_value(full, "test.mode", "mode", "extras") ==
+                  "full",
+              "a plan must answer option values from its own selection");
+
+        /* state.toml is not a record of derived activations. */
+        check(req.save_state(&error), error.c_str());
+        {
+            ModPackageManager reread(req_root);
+            check(reread.scan(&error), error.c_str());
+            check(reread.load_state(&error), error.c_str());
+            const auto ram_sel = reread.selections().find("test.ram");
+            check(ram_sel != reread.selections().end() &&
+                      ram_sel->second.features.count("big-ram") == 1 &&
+                      !ram_sel->second.features.at("big-ram").enabled,
+                  "save_state must persist the player's explicit Big RAM = off, "
+                  "not the derived activation");
+            check(reread.resolve("SLUS-TEST").fingerprint == full.fingerprint,
+                  "a re-read state must reproduce the same plan");
+        }
+        /* With no prior entry at all, save_state must not invent one. */
+        write_text(req_root / "state.toml",
+                   "format_version = 2\n"
+                   "\n[[feature]]\npackage_id = \"test.mode\"\nid = \"mode\"\n"
+                   "enabled = true\n"
+                   "[feature.values]\nextras = \"enhanced\"\n");
+        {
+            ModPackageManager fresh(req_root);
+            check(fresh.scan(&error), error.c_str());
+            check(fresh.load_state(&error), error.c_str());
+            const ModResolution enhanced = fresh.resolve("SLUS-TEST");
+            check(enhanced.ok && has_plugin(enhanced, "test.big-ram"),
+                  "each `when` entry must activate the requirement on its own");
+            check(fresh.save_state(&error), error.c_str());
+            std::ifstream in(req_root / "state.toml");
+            const std::string saved((std::istreambuf_iterator<char>(in)),
+                                    std::istreambuf_iterator<char>());
+            check(saved.find("test.ram") == std::string::npos,
+                  "state.toml must never gain a derived activation");
+        }
+
+        /* Condition false: nothing is derived and the plan stays retail. */
+        check(req.set_feature_option("test.mode", "mode", "extras", "none",
+                                     &error),
+              error.c_str());
+        const ModResolution none = req.resolve("SLUS-TEST");
+        check(none.ok && has_plugin(none, "test.mode") &&
+                  !has_plugin(none, "test.big-ram") &&
+                  none.implicit_features.empty(),
+              "a requirement whose condition is false must not activate");
+        check(std::none_of(none.ordered.begin(), none.ordered.end(),
+                           [](const ModPackage* p) { return p->id == "test.ram"; }),
+              "an unrequired, disabled package must stay out of the plan");
+        check(none.fingerprint != full.fingerprint,
+              "a derived activation must change the plan fingerprint");
+        check(!req.feature_implicitly_enabled("test.ram", "big-ram"),
+              "feature_implicitly_enabled must follow the condition");
+
+        /* Requiring feature disabled: its requirements are inert. */
+        check(req.set_feature_option("test.mode", "mode", "extras", "full",
+                                     &error),
+              error.c_str());
+        check(req.set_feature_enabled("test.mode", "mode", false, &error),
+              error.c_str());
+        const ModResolution off = req.resolve("SLUS-TEST");
+        check(off.ok && off.plugins.empty() && off.implicit_features.empty(),
+              "a disabled feature's requirements must not activate anything");
+        check(req.set_feature_enabled("test.mode", "mode", true, &error),
+              error.c_str());
+
+        /* The player already enabled it: nothing is derived. */
+        check(req.set_feature_enabled("test.ram", "big-ram", true, &error),
+              error.c_str());
+        const ModResolution chosen = req.resolve("SLUS-TEST");
+        check(chosen.ok && has_plugin(chosen, "test.big-ram") &&
+                  chosen.implicit_features.empty(),
+              "an already-enabled required feature is not an implicit one");
+        check(req.set_feature_enabled("test.ram", "big-ram", false, &error),
+              error.c_str());
+
+        /* Unmet requirements fail loudly -- never "run the 8 MB build on
+         * 2 MB". Package absent (removed, or a title excluded the builtin): */
+        std::error_code rm_ec;
+        fs::remove_all(req_root / "bundled/test.ram", rm_ec);
+        {
+            ModPackageManager missing(req_root);
+            check(missing.scan(&error), error.c_str());
+            check(missing.load_state(&error), error.c_str());
+            check(missing.set_feature_enabled("test.mode", "mode", true, &error),
+                  error.c_str());
+            check(missing.set_feature_option("test.mode", "mode", "extras",
+                                             "full", &error),
+                  error.c_str());
+            const ModResolution plan = missing.resolve("SLUS-TEST");
+            check(!plan.ok && plan.plugins.empty() && plan.ordered.empty(),
+                  "a requirement on an absent package must reject the plan");
+            check(has_error(plan,
+                            "test.mode/mode requires test.ram/big-ram, but "
+                            "package test.ram is not in this build's mod "
+                            "catalog"),
+                  "the error must name the requiring feature and the "
+                  "missing package");
+            check(std::any_of(
+                      plan.diagnostics.begin(), plan.diagnostics.end(),
+                      [](const ModResolution::Diagnostic& d) {
+                          return d.package_id == "test.mode" &&
+                                 d.feature_id == "mode" &&
+                                 d.other_package_id == "test.ram" &&
+                                 d.other_feature_id == "big-ram";
+                      }),
+                  "the launcher must be able to mark the requiring feature row");
+            check(missing.set_feature_option("test.mode", "mode", "extras",
+                                             "none", &error),
+                  error.c_str());
+            check(missing.resolve("SLUS-TEST").ok,
+                  "with the condition false an absent provider is irrelevant");
+        }
+        /* Version outside the declared range: */
+        write_text(req_root / "bundled/test.ram/1.2.0/manifest.toml", provider);
+        write_text(req_root / "bundled/test.mode/1.0.0/manifest.toml",
+                   std::string(requiring("")).replace(
+                       requiring("").find("requires_feature = \"big-ram\"\n"
+                                          "when = { extras = \"full\" }"),
+                       std::string("requires_feature = \"big-ram\"\n").size(),
+                       "requires_feature = \"big-ram\"\nversion = \">=2.0.0\"\n"));
+        {
+            ModPackageManager versioned(req_root);
+            check(versioned.scan(&error), error.c_str());
+            check(versioned.scan_errors().empty(),
+                  "a versioned requirement must parse");
+            check(versioned.load_state(&error), error.c_str());
+            check(versioned.set_feature_option("test.mode", "mode", "extras",
+                                               "full", &error),
+                  error.c_str());
+            const ModResolution plan = versioned.resolve("SLUS-TEST");
+            check(!plan.ok &&
+                      has_error(plan, "test.ram 1.2.0 does not satisfy >=2.0.0"),
+                  "a provider outside the version range must reject the plan");
+        }
+        /* Provider present but without the named feature: */
+        write_text(req_root / "bundled/test.mode/1.0.0/manifest.toml",
+                   requiring(""));
+        write_text(req_root / "bundled/test.ram/1.2.0/manifest.toml",
+                   "format_version = 6\n"
+                   "id = \"test.ram\"\n"
+                   "version = \"1.2.0\"\n"
+                   "name = \"Big RAM\"\n"
+                   "[[target]]\n"
+                   "game_id = \"*\"\n"
+                   "[[feature]]\n"
+                   "id = \"big-ram\"\n"
+                   "name = \"Big RAM\"\n"
+                   "hidden = true\n"
+                   "channel = \"developer\"\n"
+                   "[[feature]]\n"
+                   "id = \"other\"\n"
+                   "name = \"Other\"\n");
+        {
+            /* A release build strips the developer feature, so the provider
+             * has no big-ram: the requirement is unmet, not silently dropped. */
+            ModPackageManager stripped(req_root);
+            stripped.set_developer_channel_visible(false);
+            check(stripped.scan(&error), error.c_str());
+            check(stripped.load_state(&error), error.c_str());
+            check(stripped.set_feature_option("test.mode", "mode", "extras",
+                                              "full", &error),
+                  error.c_str());
+            const ModResolution plan = stripped.resolve("SLUS-TEST");
+            check(!plan.ok &&
+                      has_error(plan, "test.ram 1.2.0 has no feature big-ram"),
+                  "a provider lacking the required feature must reject the plan");
+        }
+
+        /* Fixed point: a derived feature's own requirements, and its
+         * in-package requires_feature constraints, are derived too. */
+        write_text(req_root / "bundled/test.ram/1.2.0/manifest.toml",
+                   "format_version = 7\n"
+                   "id = \"test.ram\"\n"
+                   "version = \"1.2.0\"\n"
+                   "name = \"Big RAM\"\n"
+                   "[[target]]\n"
+                   "game_id = \"*\"\n"
+                   "[[feature]]\n"
+                   "id = \"big-ram\"\n"
+                   "name = \"Big RAM\"\n"
+                   "hidden = true\n"
+                   "[[feature]]\n"
+                   "id = \"map\"\n"
+                   "name = \"Map\"\n"
+                   "hidden = true\n"
+                   "[[constraint]]\n"
+                   "feature = \"big-ram\"\n"
+                   "kind = \"requires_feature\"\n"
+                   "requires_feature = \"map\"\n"
+                   "[[requirement]]\n"
+                   "feature = \"big-ram\"\n"
+                   "package = \"test.bus\"\n"
+                   "requires_feature = \"wide\"\n");
+        write_text(req_root / "bundled/test.bus/1.0.0/manifest.toml",
+                   "format_version = 5\n"
+                   "id = \"test.bus\"\n"
+                   "version = \"1.0.0\"\n"
+                   "name = \"Bus\"\n"
+                   "[[target]]\n"
+                   "game_id = \"*\"\n"
+                   "[[feature]]\n"
+                   "id = \"wide\"\n"
+                   "name = \"Wide\"\n"
+                   "hidden = true\n");
+        {
+            ModPackageManager chain(req_root);
+            check(chain.scan(&error), error.c_str());
+            check(chain.scan_errors().empty(), "chained manifests must parse");
+            check(chain.load_state(&error), error.c_str());
+            check(chain.set_feature_option("test.mode", "mode", "extras",
+                                           "full", &error),
+                  error.c_str());
+            const ModResolution plan = chain.resolve("SLUS-TEST");
+            check(plan.ok, "a chained requirement must resolve");
+            check(plan.implicit_features.size() == 2 &&
+                      plan.implicit_features[0].package_id == "test.ram" &&
+                      plan.implicit_features[1].package_id == "test.bus" &&
+                      plan.implicit_features[1].required_by_package_id ==
+                          "test.ram",
+                  "a derived feature's own requirement must be derived too");
+            const auto ram_sel = plan.selections.find("test.ram");
+            check(ram_sel != plan.selections.end() &&
+                      ram_sel->second.features.count("map") == 1 &&
+                      ram_sel->second.features.at("map").enabled,
+                  "a derived feature's in-package requires_feature must hold "
+                  "in the plan's selection");
+            check(!chain.feature_enabled("test.ram", "map") &&
+                      !chain.feature_enabled("test.bus", "wide"),
+                  "chained derivations must not leak into the player's state");
+
+            /* A package another feature requires is in use: not removable. */
+            fs::create_directories(req_root / "installed");
+            fs::rename(req_root / "bundled/test.bus",
+                       req_root / "installed/test.bus");
+            ModPackageManager in_use(req_root);
+            check(in_use.scan(&error), error.c_str());
+            check(in_use.load_state(&error), error.c_str());
+            check(in_use.set_feature_option("test.mode", "mode", "extras",
+                                            "full", &error),
+                  error.c_str());
+            std::string remove_error;
+            check(!in_use.remove_version("test.bus", "1.0.0", &remove_error) &&
+                      remove_error.find("required by test.ram/big-ram") !=
+                          std::string::npos,
+                  "a version an active requirement needs must not be removable");
+            check(in_use.set_feature_option("test.mode", "mode", "extras",
+                                            "none", &error),
+                  error.c_str());
+            check(in_use.remove_version("test.bus", "1.0.0", &remove_error),
+                  remove_error.c_str());
+        }
+
+        /* Schema: version-gated, owned, closed. */
+        const auto rejects = [&](const std::string& name,
+                                 const std::string& text, const char* why) {
+            ModPackage parsed;
+            std::string parse_error;
+            write_text(req_root / name, text);
+            check(!ModPackageManager::read_manifest(req_root / name, parsed,
+                                                    &parse_error),
+                  why);
+        };
+        std::string v6 = requiring("");
+        v6.replace(0, std::string("format_version = 7").size(),
+                   "format_version = 6");
+        rejects("v6.toml", v6, "[[requirement]] must require format_version 7");
+        rejects("self.toml",
+                requiring("[[requirement]]\nfeature = \"mode\"\n"
+                          "package = \"test.mode\"\n"
+                          "requires_feature = \"mode\"\n"),
+                "a requirement naming its own package must be rejected");
+        rejects("unknown-field.toml",
+                requiring("[[requirement]]\nfeature = \"mode\"\n"
+                          "package = \"test.ram\"\n"
+                          "requires_feature = \"big-ram\"\n"
+                          "enabled = true\n"),
+                "a requirement with an unknown field must be rejected");
+        rejects("unknown-owner.toml",
+                requiring("[[requirement]]\nfeature = \"nope\"\n"
+                          "package = \"test.ram\"\n"
+                          "requires_feature = \"big-ram\"\n"),
+                "a requirement owned by an unknown feature must be rejected");
+        rejects("bad-when.toml",
+                requiring("[[requirement]]\nfeature = \"mode\"\n"
+                          "package = \"test.ram\"\n"
+                          "requires_feature = \"big-ram\"\n"
+                          "when = { extras = \"ludicrous\" }\n"),
+                "a requirement condition must name a declared choice");
+        mod_clear_plugins_for_tests();
     }
 
     fs::remove_all(root, ec);

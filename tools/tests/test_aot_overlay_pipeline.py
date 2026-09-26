@@ -161,13 +161,60 @@ class ModPackageImageTest(unittest.TestCase):
                 self.write_manifest(self.manifest.replace(old, new, 1))
                 self.view()
         self.write_manifest(self.manifest)
-        # A disc overlay over the boot EXE must agree with its patched load image.
+        # The BIOS loads the boot EXE through CD reads, so a disc overlay over
+        # its header sector is part of the loaded image. Clobbering the header
+        # changes load geometry the view does not model: fail closed.
         exe_offset = self.disc.files['GAME.EXE'][0] * 2048
-        disagree = self.manifest + (
+        clobber = self.manifest + (
             '\n[[overlay]]\nfeature = "engine"\ntarget = "disc_user"\n'
             f'offset = {exe_offset}\nfile = "assets/data.overlay"\nsha256 = "{sha(self.overlay)}"\n')
-        self.write_manifest(disagree)
-        with self.assertRaisesRegex(ValueError, 'disagrees with the patched boot'):
+        self.write_manifest(clobber)
+        with self.assertRaisesRegex(ValueError, 'PS-X EXE header'):
+            self.view()
+
+    def boot_overlay_manifest(self, *, also_patch):
+        """The engine delivered as a disc overlay over the boot EXE's first text
+        sector, optionally ALSO as the stock-guarded main_exe patches (bead
+        beads-btt8.6: every WipEout 3 framerate build shipped both)."""
+        text = bytearray(self.exe[0x800:0x1000])
+        text[0x100:0x100 + len(self.engine)] = self.engine
+        text[0x40:0x48] = struct.pack('<II', 0x08000000 | ((self.ENGINE + 0x10) >> 2 & 0x3FFFFFF), 0)
+        text[0x48:0x50] = struct.pack('<II', 0x0C000000 | (self.ENGINE >> 2 & 0x3FFFFFF), 0)
+        payload = bytes(text)
+        (self.root / 'mods/example/1.0.0/assets/exe.overlay').write_bytes(payload)
+        lba = self.disc.files['GAME.EXE'][0]
+        body = self.manifest.split('[[patch]]', 1)[0]
+        if also_patch:
+            body = self.manifest.split('[[overlay]]', 1)[0]
+        return body + (
+            '[[overlay]]\nfeature = "engine"\ntarget = "disc_user"\n'
+            f'offset = {(lba + 1) * 2048}\nfile = "assets/exe.overlay"\n'
+            f'sha256 = "{sha(payload)}"\nexpected_sha256 = "{sha(self.exe[0x800:0x1000])}"\n'
+            'when = { build = "large" }\n')
+
+    def test_boot_exe_edits_encoded_once_as_disc_overlay(self):
+        # The runtime loads the boot EXE through the overlaid CD path; the
+        # view must see the engine there, and its transfers, with no main_exe
+        # patch at all.
+        self.write_manifest(self.boot_overlay_manifest(also_patch=False))
+        view = self.view()
+        exe = view.read('GAME.EXE')
+        self.assertEqual(exe[0x900:0x900 + len(self.engine)], self.engine)
+        self.assertEqual(view.receipt()['main_exe_writes'], 0)
+        written = dict(view.written_words())
+        self.assertIn(0x80010040, written, 'changed detour word must count as written')
+        self.assertNotIn(0x80010000, written,
+                         'an unchanged stock word inside the replaced sector is not evidence')
+        inventory = self.prepare(self.profile())
+        self.assertEqual(inventory['jobs'][0]['required_entries'],
+                         [self.ENGINE, self.ENGINE + 0x10])
+
+    def test_boot_exe_edit_encoded_twice_is_the_plan_the_runtime_rejects(self):
+        # Overlay AND stock-guarded main_exe patch for the same bytes: after
+        # the BIOS loads the overlaid EXE every guard fails, and the runtime
+        # logs "mod plan ... rejected" and boots with no main_exe writes.
+        self.write_manifest(self.boot_overlay_manifest(also_patch=True))
+        with self.assertRaisesRegex(ValueError, 'encoded twice'):
             self.view()
 
     def test_extent_in_ram_mirror_uses_patched_transfers_as_entries(self):
@@ -197,6 +244,27 @@ class ModPackageImageTest(unittest.TestCase):
         profile['mod_packages'] = [{**self.spec, 'plugins': []}]
         with self.assertRaisesRegex(ValueError, 'plugins changed'):
             self.prepare(profile)
+
+    def test_active_requirements_are_reported_and_pinned_by_the_profile(self):
+        # A [[requirement]] activates a feature of ANOTHER package (here the
+        # 8 MB RAM builtin) while its `when` holds. The view cannot model that
+        # package, so it reports the active set and the profile pins it
+        # exactly, like plugins: a manifest edit that changes what an image's
+        # selection pulls in must not pass unnoticed.
+        text = self.manifest.replace('format_version = 5', 'format_version = 7', 1) + (
+            '\n[[requirement]]\nfeature = "engine"\npackage = "psx.enhancement.8mb-ram"\n'
+            'requires_feature = "8mb-ram"\nwhen = { build = "large" }\n')
+        self.write_manifest(text)
+        self.assertEqual(self.view().requirements, ['psx.enhancement.8mb-ram/8mb-ram'])
+        self.assertEqual(self.view(features=dict(engine=dict(build='small'))).requirements, [])
+        with self.assertRaisesRegex(ValueError, 'requirements changed'):
+            self.prepare(self.profile())
+        self.spec['requirements'] = ['psx.enhancement.8mb-ram/8mb-ram']
+        self.prepare(self.profile())
+        self.write_manifest(text.replace('requires_feature = "8mb-ram"',
+                                         'requires_feature = "8mb-ram"\nenabled = true', 1))
+        with self.assertRaisesRegex(ValueError, r'\[\[requirement\]\] keys'):
+            self.view()
 
     def test_image_straddling_a_retail_mirror_needs_a_declared_8mb_profile(self):
         # 0x801FFFF0 crosses the retail 2 MiB end; 0x803FFFF0 crosses the

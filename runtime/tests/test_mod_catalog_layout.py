@@ -85,6 +85,7 @@ def run_guard(
     *,
     require_staged: int = 1,
     alt_manifests: list[Path] | None = None,
+    excluded: Path | None = None,
     label: str = "psx-runtime",
 ) -> subprocess.CompletedProcess[str]:
     argv = [
@@ -94,11 +95,53 @@ def run_guard(
         f"-DPSX_REQUIRE_STAGED={require_staged}",
         f"-DPSX_LABEL={label}",
     ]
+    if excluded is not None:
+        argv.append(f"-DPSX_CATALOG_EXCLUDED={excluded.as_posix()}")
     if alt_manifests:
         joined = "|".join(p.as_posix() for p in alt_manifests)
         argv.append(f"-DPSX_CATALOG_ALT_MANIFESTS={joined}")
     argv += ["-P", str(GUARD)]
     return subprocess.run(argv, capture_output=True, text=True)
+
+
+SELECT = REPO / "runtime" / "psx_mod_catalog_select.cmake"
+
+
+def run_select(
+    cmake: str,
+    tmp: Path,
+    *,
+    available: list[str],
+    exclude: list[str] = (),
+    title: list[str] = (),
+    allowlist: list[str] = (),
+) -> tuple[subprocess.CompletedProcess[str], list[str] | None]:
+    """Drive the REAL builtin selection (psx_mod_catalog_select.cmake) that
+    runtime.cmake's _psxrt_stage_mod_catalog calls, through `cmake -P`."""
+
+    def cm_list(name: str, ids) -> str:
+        return f" {name} " + " ".join(ids) if ids else f" {name}"
+
+    driver = tmp / "select_driver.cmake"
+    driver.write_text(
+        f'include("{SELECT.as_posix()}")\n'
+        "psx_select_builtin_mod_ids(_out LABEL psx-runtime"
+        + cm_list("AVAILABLE", available)
+        + cm_list("ALLOWLIST", allowlist)
+        + cm_list("EXCLUDE", exclude)
+        + cm_list("TITLE", title)
+        + ")\n"
+        'list(JOIN _out "," _joined)\n'
+        'message(STATUS "SELECTED=[${_joined}]")\n',
+        encoding="utf-8",
+    )
+    r = subprocess.run([cmake, "-P", str(driver)], capture_output=True, text=True)
+    selected = None
+    for line in (r.stdout + r.stderr).splitlines():
+        if "SELECTED=[" in line:
+            body = line.split("SELECTED=[", 1)[1].rsplit("]", 1)[0]
+            selected = [s for s in body.split(",") if s]
+    return r, selected
 
 
 def main() -> int:
@@ -241,6 +284,111 @@ def main() -> int:
             "does NOT accept a catalog matching neither target's id set",
         )
 
+        # ---- 9. EXCLUDE_BUILTIN_MODS: builtin selection ------------------
+        # WipEout 3 ships its own team-mark bezel and has no use for host-paced
+        # fast loading, so it declines both framework builtins. Excluded means
+        # ABSENT from mods/bundled, and a typo must never read as success.
+        print("[9] EXCLUDE_BUILTIN_MODS builtin selection")
+        builtins = sorted(FW_IDS + ["psx.enhancement.8mb-ram"])
+        r, sel = run_select(args.cmake, tmp, available=builtins)
+        check(r.returncode == 0 and sel == builtins,
+              "no exclusion stages every builtin")
+        r, sel = run_select(
+            args.cmake, tmp, available=builtins,
+            exclude=["psx.enhancement.fast-loading", "psx.presentation.bezel"],
+            title=["wipeout3.enhancement.bezel"])
+        check(r.returncode == 0, "a valid exclusion configures")
+        check(sel == ["psx.enhancement.8mb-ram", "psx.enhancement.cd-speed",
+                      "psx.enhancement.pgxp"],
+              f"excluded builtins are dropped, the rest kept in order (got {sel})")
+        r, sel = run_select(
+            args.cmake, tmp, available=builtins,
+            exclude=["psx.enhancement.fast-loading",
+                     "psx.enhancement.fast-loading"])
+        check(r.returncode == 0 and sel is not None
+              and "psx.enhancement.fast-loading" not in sel
+              and len(sel) == len(builtins) - 1,
+              "a repeated id is excluded once, not an error")
+        r, sel = run_select(
+            args.cmake, tmp, available=builtins,
+            exclude=["psx.enhancement.fast-laoding"])
+        out = r.stdout + r.stderr
+        check(r.returncode != 0, "an unknown excluded id FAILS configure")
+        check("psx.enhancement.fast-laoding" in out, "names the unknown id")
+        check("psx.enhancement.fast-loading" in out,
+              "lists the real builtins so the typo is obvious")
+        check(sel is None, "produces no selection after the failure")
+        r, sel = run_select(
+            args.cmake, tmp, available=builtins,
+            exclude=["wipeout3.enhancement.bezel"],
+            title=["wipeout3.enhancement.bezel"])
+        check(r.returncode != 0,
+              "excluding a TITLE package (not a builtin) FAILS configure")
+        r, sel = run_select(
+            args.cmake, tmp, available=builtins,
+            exclude=["psx.presentation.bezel"],
+            title=["psx.presentation.bezel"])
+        out = r.stdout + r.stderr
+        check(r.returncode != 0,
+              "excluding a builtin the title also overrides FAILS configure")
+        check("OVERRIDES" in out, "explains the exclude/override contradiction")
+        r, sel = run_select(
+            args.cmake, tmp, available=builtins,
+            allowlist=["psx.enhancement.pgxp", "psx.presentation.bezel"],
+            exclude=["psx.presentation.bezel"])
+        check(r.returncode == 0 and sel == ["psx.enhancement.pgxp"],
+              f"exclusion applies on top of PSX_BUILTIN_MOD_ALLOWLIST (got {sel})")
+        r, sel = run_select(
+            args.cmake, tmp, available=[],
+            exclude=["psx.presentation.bezel"])
+        check(r.returncode != 0,
+              "an exclusion with no builtin catalog at all FAILS configure")
+
+        # psxrecomp_add_game_runtime forwards keywords it does not parse, so
+        # its EXCLUDE_BUILTIN_MODS list can swallow one written after it.
+        split = tmp / "split_driver.cmake"
+        split.write_text(
+            f'include("{SELECT.as_posix()}")\n'
+            "psx_split_exclude_builtin_mods(_ids _tail psx.enhancement.fast-loading "
+            "psx.presentation.bezel GAME_OVERLAY_STATIC_C generated/x.c APP_ICON a.ico)\n"
+            'list(JOIN _ids "," _i)\nlist(JOIN _tail "," _t)\n'
+            'message(STATUS "IDS=[${_i}] TAIL=[${_t}]")\n', encoding="utf-8")
+        r = subprocess.run([args.cmake, "-P", str(split)], capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        check(r.returncode == 0
+              and "IDS=[psx.enhancement.fast-loading,psx.presentation.bezel]" in out
+              and "TAIL=[GAME_OVERLAY_STATIC_C,generated/x.c,APP_ICON,a.ico]" in out,
+              "a forwarded keyword after EXCLUDE_BUILTIN_MODS is handed back, not "
+              "swallowed as a package id")
+
+        # ---- 10. build-time guard: excluded ids must stay absent ---------
+        print("[10] build-time guard over excluded builtins")
+        kept = sorted(i for i in all_ids if i != "psx.presentation.bezel")
+        kept_manifest = write_manifest(tmp / "expected_excl.txt", kept)
+        excluded_file = tmp / "expected_excl.excluded.txt"
+        excluded_file.write_text(
+            "# framework builtin mod packages psx-runtime excludes\n"
+            "psx.presentation.bezel\n", encoding="utf-8")
+        mods = tmp / "excluded_ok" / "mods"
+        for pid in kept:
+            make_package(mods / "bundled", pid)
+        r = run_guard(args.cmake, mods, kept_manifest, excluded=excluded_file)
+        check(r.returncode == 0, "accepts a catalog with the excluded builtin absent")
+        mods = tmp / "excluded_back" / "mods"
+        for pid in kept + ["psx.presentation.bezel"]:
+            make_package(mods / "bundled", pid)
+        r = run_guard(args.cmake, mods, kept_manifest, excluded=excluded_file)
+        out = r.stdout + r.stderr
+        check(r.returncode != 0,
+              "FAILS the build when an excluded builtin reappears in mods/bundled")
+        check("psx.presentation.bezel" in out and "EXCLUDES" in out,
+              "names the resurrected package and why it is wrong")
+        sibling = write_manifest(tmp / "expected_sib.txt", all_ids)
+        r = run_guard(args.cmake, mods, kept_manifest, excluded=excluded_file,
+                      alt_manifests=[sibling])
+        check(r.returncode == 0,
+              "a sibling target that ships the id may own the shared directory")
+
     # ---- 8. source invariants in runtime.cmake ---------------------------
     print("[8] runtime.cmake source invariants")
     text = RUNTIME_CMAKE.read_text(encoding="utf-8", errors="replace")
@@ -261,6 +409,23 @@ def main() -> int:
     check(
         "psx_check_mod_catalog.cmake" in text,
         "runtime.cmake wires the guard script into the build",
+    )
+    check(
+        "psx_mod_catalog_select.cmake" in text
+        and "psx_select_builtin_mod_ids(" in text,
+        "runtime.cmake stages builtins through the tested selection function",
+    )
+    check(
+        text.count("EXCLUDE_BUILTIN_MODS)") >= 2
+        and "${PSXRT_EXCLUDE_BUILTIN_MODS}" in text
+        and "psx_split_exclude_builtin_mods(_psxg_exclude_ids" in text
+        and "EXCLUDE_BUILTIN_MODS ${_psxg_exclude_ids}" in text,
+        "both psxrecomp_add_runtime_target and psxrecomp_add_game_runtime "
+        "parse EXCLUDE_BUILTIN_MODS as a multi-value arg and pass it on",
+    )
+    check(
+        "-DPSX_CATALOG_EXCLUDED=" in text and ".excluded.txt" in text,
+        "the excluded-id list is published and handed to the build-time guard",
     )
     forwarded_args = "${_psxg_forwarded_args}"
     wrapper_extras = "EXTRAS_SOURCES ${_psxg_extras}"

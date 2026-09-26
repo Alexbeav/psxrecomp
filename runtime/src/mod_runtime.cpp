@@ -137,6 +137,19 @@ bool package_has_enabled_feature(const ModPackage& package) {
         });
 }
 
+/* In use = enabled by the player OR activated by another feature's
+ * [[requirement]]. Removal must respect both; the enabled checkbox shows only
+ * the player's own choice. */
+bool package_in_use(const ModPackage& package) {
+    return std::any_of(
+        package.features.begin(), package.features.end(),
+        [&](const ModFeature& feature) {
+            return state().manager.feature_enabled(package.id, feature.id) ||
+                   state().manager.feature_implicitly_enabled(package.id,
+                                                              feature.id);
+        });
+}
+
 std::string selected_value(const ModPackage& package, const ModOption& option) {
     const auto selection = state().manager.selections().find(package.id);
     if (selection != state().manager.selections().end()) {
@@ -665,7 +678,7 @@ int provider_package_get(void*, int index, RecompLauncherCModPackage* out) {
     out->option_count = (int)package->options.size();
     /* A bundled package is build output. Offering to remove it would succeed
      * and then be silently undone by the next build. */
-    out->removable = !out->enabled &&
+    out->removable = !package_in_use(*package) &&
                      package->origin == ModPackageOrigin::Installed;
     return 1;
 }
@@ -1011,7 +1024,7 @@ int provider_version_get(void*, const char* package_id, int index,
     const ModPackage* selected = selected_package(package_id);
     out->selected = selected && selected->version == version->first;
     out->removable = (!out->selected || !selected ||
-                      !package_has_enabled_feature(*selected)) &&
+                      !package_in_use(*selected)) &&
                      version->second.origin == ModPackageOrigin::Installed;
     return 1;
 }
@@ -1167,6 +1180,14 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     for (const std::string& scan_error : s.manager.scan_errors())
         std::fprintf(stderr, "psxrecomp: mod manifest ignored: %s\n",
                      scan_error.c_str());
+    /* state.toml may name a package this catalog does not hold (removed,
+     * stripped from a release, or a builtin the title excludes). resolve()
+     * never visits it and save_state() keeps it; say so once. */
+    for (const std::string& dormant : s.manager.dormant_selections())
+        std::fprintf(stdout,
+                     "psxrecomp: mod selection kept but inactive: %s is not "
+                     "in this build's mod catalog\n",
+                     dormant.c_str());
     if (!sha256_file(exe_path, s.exe_sha256, &s.error)) {
         /* Release installs commonly do not carry a loose PS-X EXE; game-id and
          * expected-byte guards remain available in that case. */
@@ -1213,6 +1234,15 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
     ModResolution plan =
         s.manager.resolve(s.game_id, s.exe_sha256, s.disc_sha256);
     s.validation = plan;
+    /* A derived activation is not in state.toml, so name it: a player (or a
+     * test) reading the log can see why a hidden feature is running. */
+    for (const ModResolution::ImplicitFeature& item : plan.implicit_features)
+        std::fprintf(stdout,
+                     "psxrecomp: mod feature %s/%s activated implicitly "
+                     "(required by %s/%s)\n",
+                     item.package_id.c_str(), item.feature_id.c_str(),
+                     item.required_by_package_id.c_str(),
+                     item.required_by_feature_id.c_str());
     if (!plan.ok) {
         s.error.clear();
         for (const std::string& item : plan.errors) {
@@ -1415,8 +1445,10 @@ extern "C" int psx_mod_option_value(const char* package_id,
      * to read and the caller must fall back to its own default rather than
      * treat an empty string as a value. */
     if (!s.initialized || !s.plan.ok) return 0;
+    /* Read the committed plan's selection, which includes features its
+     * [[requirement]]s activated, not live launcher state. */
     const std::string value = s.manager.feature_option_value(
-        package_id, feature_id, option_id);
+        s.plan, package_id, feature_id, option_id);
     if (value.empty()) return 0;
     if (value.size() + 1 > (size_t)out_size) return 0;
     std::memcpy(out, value.c_str(), value.size() + 1);

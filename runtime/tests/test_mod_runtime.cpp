@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -99,6 +100,11 @@ static void test_unselected_entry(CPUState*, uint32_t) { unselected_entry_hits++
 
 static void test_activation_plugin(void) {
     activation_calls++;
+}
+
+static int big_ram_activations;
+static void test_big_ram_activation(void) {
+    big_ram_activations++;
 }
 
 static void check(bool value, const char* message) {
@@ -540,6 +546,122 @@ int main() {
               bad_sparse_disc[24 + 22] == 0x33,
           "a failed sparse disc guard must leave every write in the sector "
           "untouched");
+
+    /* Implicit requirement through the real commit/activation path: the
+     * hidden required feature's activation plugin runs, the state.toml commit
+     * writes never gains the derived activation (it is not a choice),
+     * and a requirement on an absent package makes the launch commit fail
+     * rather than boot the requiring build without it. */
+    {
+        const fs::path req_root = root / "requirement-runtime";
+        write_text(req_root / "bundled/runtime.ram/1.0.0/manifest.toml",
+            "format_version = 5\n"
+            "id = \"runtime.ram\"\n"
+            "version = \"1.0.0\"\n"
+            "name = \"Runtime RAM\"\n"
+            "[[target]]\n"
+            "game_id = \"*\"\n"
+            "[[feature]]\n"
+            "id = \"big-ram\"\n"
+            "name = \"Big RAM\"\n"
+            "hidden = true\n"
+            "[[option]]\n"
+            "feature = \"big-ram\"\n"
+            "id = \"size\"\n"
+            "label = \"Size\"\n"
+            "type = \"choice\"\n"
+            "default = \"eight\"\n"
+            "[[option.choice]]\nvalue = \"eight\"\nlabel = \"8 MB\"\n"
+            "[[plugin]]\n"
+            "feature = \"big-ram\"\n"
+            "id = \"runtime.big-ram\"\n");
+        write_text(req_root / "bundled/runtime.mode/1.0.0/manifest.toml",
+            "format_version = 7\n"
+            "id = \"runtime.mode\"\n"
+            "version = \"1.0.0\"\n"
+            "name = \"Runtime Mode\"\n"
+            "[[target]]\n"
+            "game_id = \"SLUS-REQ\"\n"
+            "[[feature]]\n"
+            "id = \"mode\"\n"
+            "name = \"Mode\"\n"
+            "[[option]]\n"
+            "feature = \"mode\"\n"
+            "id = \"extras\"\n"
+            "label = \"Extras\"\n"
+            "type = \"choice\"\n"
+            "default = \"none\"\n"
+            "[[option.choice]]\nvalue = \"none\"\nlabel = \"None\"\n"
+            "[[option.choice]]\nvalue = \"full\"\nlabel = \"Full\"\n"
+            "[[requirement]]\n"
+            "feature = \"mode\"\n"
+            "package = \"runtime.ram\"\n"
+            "requires_feature = \"big-ram\"\n"
+            "when = { extras = \"full\" }\n");
+        const std::string state_text =
+            "format_version = 2\n"
+            "\n[[feature]]\npackage_id = \"runtime.mode\"\nid = \"mode\"\n"
+            "enabled = true\n"
+            "[feature.values]\nextras = \"full\"\n";
+        write_text(req_root / "state.toml", state_text);
+        const auto read_state = [&]() {
+            std::ifstream in(req_root / "state.toml", std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        };
+
+        big_ram_activations = 0;
+        check(PSXRecompV4::mod_register_activation_plugin(
+                  "runtime.big-ram", test_big_ram_activation),
+              "big-ram activation hook must register");
+        check(PSXRecompV4::mod_runtime_initialize(
+                  req_root, "SLUS-REQ", 0x80002000, {}, &error),
+              error.c_str());
+        check(PSXRecompV4::mod_runtime_commit(stock_path, &error),
+              "a satisfied implicit requirement must commit");
+        mod_runtime_activate_plugins();
+        check(big_ram_activations == 1,
+              "the implicitly required feature's plugin must activate");
+        char value[32];
+        check(psx_mod_option_value("runtime.ram", "big-ram", "size", value,
+                                   sizeof(value)) == 1 &&
+                  std::string(value) == "eight",
+              "an implicit feature's plugin must read its option values");
+        /* commit rewrites state.toml in canonical form; what matters is that
+         * the player's choice survives and the derived one is never added. */
+        const std::string after = read_state();
+        check(after.find("runtime.ram") == std::string::npos &&
+                  after.find("extras = \"full\"") != std::string::npos,
+              "committing must not write the derived activation to state.toml");
+
+        /* Condition false: the required plugin stays off. */
+        write_text(req_root / "state.toml",
+            "format_version = 2\n"
+            "\n[[feature]]\npackage_id = \"runtime.mode\"\nid = \"mode\"\n"
+            "enabled = true\n"
+            "[feature.values]\nextras = \"none\"\n");
+        big_ram_activations = 0;
+        check(PSXRecompV4::mod_runtime_initialize(
+                  req_root, "SLUS-REQ", 0x80002000, {}, &error),
+              error.c_str());
+        check(PSXRecompV4::mod_runtime_commit(stock_path, &error),
+              error.c_str());
+        mod_runtime_activate_plugins();
+        check(big_ram_activations == 0,
+              "a requirement whose condition is false must not activate");
+
+        /* Required package absent (e.g. the title excluded the builtin). */
+        write_text(req_root / "state.toml", state_text);
+        fs::remove_all(req_root / "bundled/runtime.ram", ec);
+        check(PSXRecompV4::mod_runtime_initialize(
+                  req_root, "SLUS-REQ", 0x80002000, {}, &error),
+              error.c_str());
+        std::string commit_error;
+        check(!PSXRecompV4::mod_runtime_commit(stock_path, &commit_error) &&
+                  commit_error.find("runtime.mode/mode requires "
+                                    "runtime.ram/big-ram") != std::string::npos,
+              "an unmet requirement must fail the launch commit loudly");
+    }
 
     /*
      * Display geometry passthrough. Ape Escape scans out 384 while its mode
