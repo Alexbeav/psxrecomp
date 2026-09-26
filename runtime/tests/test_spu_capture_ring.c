@@ -7,7 +7,11 @@
  * Source key-timing mode: a fixed scenario (disabled SPU, enable, KON with
  * attack/decay/sustain, a current-level write, sweeps, KOFF, capture) must
  * produce exactly the per-tick register reads and SPU RAM of tree ba05e567a,
- * whose TAS routes were qualified. SOURCE_GOLDEN is that tree's hash.
+ * whose TAS routes were qualified, except for S4's volume rules: a fixed
+ * volume write reaches the current volume at the next tick, and a sweep-mode
+ * volume register reads back as written [ORACLE FIXTURE S4]. Reverting only
+ * those two rules reproduces ba05e567a's hash, EC171FED067815D0.
+ * SOURCE_GOLDEN is the hash with them.
  * Build with -DPRINT_HASH to print the hash instead of checking it. */
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,7 +29,7 @@ bool spu_shadow_enabled(void) { return false; }
 void spu_shadow_reset(void) {}
 void spu_shadow_process(int16_t *canon, int frames) { (void)canon; (void)frames; }
 
-#define SOURCE_GOLDEN UINT64_C(0xEC171FED067815D0)
+#define SOURCE_GOLDEN UINT64_C(0x35BC3A10A2903500)
 
 static unsigned checks, failures;
 static void check(int ok, const char *what)
@@ -128,7 +132,7 @@ int main(void)
     printf("source hash 0x%016llX\n", (unsigned long long)hash);
     return 0;
 #else
-    check(hash == SOURCE_GOLDEN, "source mode: per-tick reads and capture areas equal tree ba05e567a");
+    check(hash == SOURCE_GOLDEN, "source mode: per-tick reads and capture areas equal tree ba05e567a plus S4");
     printf("SPU capture ring and source-mode guard (oracle fixture E8c): %u checks, %u failures\n", checks, failures);
     return failures != 0;
 #endif
