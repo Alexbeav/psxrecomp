@@ -169,6 +169,38 @@ static void run_first_transaction(void) {
     }
 }
 
+/* One address byte on a fresh transaction; returns its rx. */
+static unsigned address_rx(void) {
+    int js, is;
+    sio_write(0x1F80104A, 0);
+    sio_write(0x1F80104A, 0x1003);
+    unsigned rx = byte_b(0x01, &js, &is);
+    sio_write(0x1F80104A, 0x1013); i_stat &= ~0x80u;
+    sio_write(0x1F80104A, 0);
+    return rx;
+}
+
+/* The power-on flag survives a snapshot round trip: a state saved before the
+ * first transaction replays the 00 address byte after a restore, and a state
+ * saved after it does not. */
+static void run_snapshot_round_trip(void) {
+    power_on(profile);
+    uint32_t n = sio_snapshot_bytes();
+    uint8_t *fresh = malloc(n), *used = malloc(n);
+    CHECK(n && fresh && used, "snapshot size %u", n);
+    if (!n || !fresh || !used) { free(fresh); free(used); return; }
+    sio_snapshot_write(fresh);
+    CHECK(address_rx() == first_rx(), "first transaction before save");
+    sio_snapshot_write(used);
+    CHECK(address_rx() == 0xFF, "second transaction");
+    CHECK(sio_snapshot_read(fresh, n), "restore the power-on state");
+    CHECK(address_rx() == first_rx(), "first transaction after restoring the power-on state");
+    CHECK(address_rx() == 0xFF, "later transaction after restoring the power-on state");
+    CHECK(sio_snapshot_read(used, n), "restore the used state");
+    CHECK(address_rx() == 0xFF, "transaction after restoring the used state");
+    free(fresh); free(used);
+}
+
 int main(void) {
     static const char *const profiles[] = { "", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock" };
     for (size_t p = 0; p < 3; ++p) {
@@ -176,6 +208,7 @@ int main(void) {
         run_p2_outside();
         run_p3();
         run_first_transaction();
+        run_snapshot_round_trip();
     }
     if (failures) {
         fprintf(stderr, "%d failure(s)\n", failures);
