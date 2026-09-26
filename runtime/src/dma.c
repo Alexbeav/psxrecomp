@@ -1033,7 +1033,9 @@ static void dsm_run_ll(uint64_t now) {
         if (m->stage) ready = 1;
         /* [ORACLE FIXTURE D23] the walk moves on 128-cycle slices: MADR2 and
          * completion change only at slice points, so credit accrues per edge
-         * (after the kick credit), like the other channels. */
+         * (after the kick credit), like the other channels. [NOT FITTED: D23 e]
+         * an OTC kicked mid-walk delays the oracle's completion by exactly one
+         * slice (+128); here the walk keeps its credit through the OTC. */
         uint64_t edge = now - now % DSM_QUANTUM;
         if (edge > m->served_until) {
             if (ready) dsm_credit_add(m, edge - m->served_until);
