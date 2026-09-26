@@ -19,25 +19,31 @@ if kind=='dma':
  reference=json.loads(Path(__file__).with_name('mdec_source_dma_reference.json').read_text())
  assert reference['fields']==fixture['fields']
  assert [c['name'] for c in reference['cases']]==[c['name'] for c in fixture['cases']]
-relaxed={}
+# The model's implementer runs this test black-box, so by default it prints
+# no oracle values: per observable field only the mismatched row count and the
+# first case/mode/row index. PSX_MDEC_CONTRACT_SHOW_VALUES=1 adds the values;
+# only sessions exposed to the reference model may set it.
+SHOW_VALUES=os.environ.get('PSX_MDEC_CONTRACT_SHOW_VALUES')=='1'
+relaxed={};observed={}
 
 def compare_fields(case,ref_case,mode,output):
- """Exact on observable fields, relaxed on internal ones; returns failure text or None."""
+ """Count mismatches: exact on observable fields, relaxed on internal ones."""
  expected=zlib.decompress(base64.b64decode(ref_case['output_zlib_base64']))
  assert sha(expected)==case['expected_sha256']==ref_case['sha256'],case['name']
  fields=fixture['fields'];width=len(fields)*4
  if len(output)!=len(expected):
-  return f"{case['name']} {mode}: {len(output)} bytes, oracle {len(expected)}"
+  observed.setdefault('row_count',[0,(case['name'],mode,None),None])[0]+=1
+  return
  for r in range(len(expected)//width):
   want=struct.unpack_from(f'<{len(fields)}I',expected,r*width)
   got=struct.unpack_from(f'<{len(fields)}I',output,r*width)
   for name,w,g in zip(fields,want,got):
    if w==g:continue
    if name in OBSERVABLE:
-    return f"{case['name']} {mode}: row {r} {name} = {g:#x}, oracle {w:#x}"
-   entry=relaxed.setdefault(name,[0,0])
-   entry[0]+=1;entry[1]=max(entry[1],abs(((g-w+2**31)%2**32)-2**31))
- return None
+    entry=observed.setdefault(name,[0,(case['name'],mode,r),(g,w)]);entry[0]+=1
+   else:
+    entry=relaxed.setdefault(name,[0,0])
+    entry[0]+=1;entry[1]=max(entry[1],abs(((g-w+2**31)%2**32)-2**31))
 
 with tempfile.TemporaryDirectory(prefix='mdec-source-') as temp:
  root=Path(temp)
@@ -55,12 +61,20 @@ with tempfile.TemporaryDirectory(prefix='mdec-source-') as temp:
    output=target.read_bytes()
    if len(output)==case['expected_bytes'] and sha(output)==case['expected_sha256']:continue
    assert reference is not None,(case['name'],mode)
-   failure=compare_fields(case,reference['cases'][i],mode,output)
-   assert failure is None,failure
+   compare_fields(case,reference['cases'][i],mode,output)
  if relaxed:
   print('relaxed internal fields (SPEC-PS1B-186 amendment 4): field rows max_abs_diff')
   for name in fixture['fields']:
    if name in relaxed:print(f'  {name} {relaxed[name][0]} {relaxed[name][1]}')
+ if observed:
+  print('OBSERVABLE MISMATCHES: field rows first(case mode row)')
+  for name in fixture['fields']+['row_count']:
+   if name not in observed:continue
+   count,(cname,cmode,row),values=observed[name]
+   line=f'  {name} {count} {cname} {cmode} {row}'
+   if SHOW_VALUES and values:line+=f' got={values[0]:#x} oracle={values[1]:#x}'
+   print(line)
+  raise SystemExit(f'{kind}: observable fields differ from the oracle')
  if kind=='dma':
   cold=[(0,0,0,0),(2,0,0x1f8010f0,0x99)]
   start=[(2,0,0x1f801080,0x3000),(2,0,0x1f801084,0x10020),(2,0,0x1f801088,0x01000201)]
