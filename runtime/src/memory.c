@@ -15,6 +15,7 @@
 #include "fntrace.h"
 #include "gpu.h"
 #include "source_gpu_runtime.h"
+#include "irq_register_image.h"
 #include "mdec.h"
 #include "mod_memory.h"
 #include "pst_wire.h"
@@ -1056,13 +1057,17 @@ static void interrupt_write_stat_masked(uint32_t val, uint32_t mask) {
 
 static void interrupt_write_mask_masked(uint32_t val, uint32_t mask, uint8_t width) {
     uint32_t old = i_mask;
-    uint32_t next = ((i_mask & ~mask) | (val & mask)) & 0x7FFu;
+    /* The source profile stores bits 0-15 [ORACLE FIXTURE R1]; the default
+     * runtime keeps bits 0-10 (irq_register_image.h). IRQ decisions below use
+     * bits 0-10 only, which is all I_STAT can hold. */
+    uint32_t next = ((i_mask & ~mask) | (val & mask)) &
+                    irq_mask_store_bits(source_gpu_runtime_active());
     /* INTC mask writes are owned by the guest, never by a device repair. */
     i_mask = next;
     imask_trace_record(old, i_mask, width);
     {
         extern void sio_card_handoff_on_imask(uint32_t old_mask, uint32_t new_mask);
-        sio_card_handoff_on_imask(old, i_mask);
+        sio_card_handoff_on_imask(old & IRQ_REG_DEFAULT_BITS, i_mask & IRQ_REG_DEFAULT_BITS);
     }
     psx_irq_refresh_cause_ip2();
 }
@@ -1199,11 +1204,10 @@ static void unmapped_fatal(uint32_t vaddr, uint32_t phys, const char* op) {
 /* --- MMIO read/write helpers --- */
 
 static uint32_t irq_read_image(uint32_t value) {
-    /* Retained Octoshock 2.2.2 IRQ_Read supplies these fixed upper bits
-     * before selecting the byte lane. This is source compatibility, not
-     * an emulation of a measured physical open bus. Keep stored IRQ state
-     * and the default runtime's read image unchanged. */
-    return value | (source_gpu_runtime_active() ? 0x1F800000u : 0u);
+    /* The source profile reads the fixed upper halfword 1F80h before the byte
+     * lane is selected [ORACLE FIXTURE R1]. The default runtime's read image
+     * is the stored value (irq_register_image.h). */
+    return irq_register_read_image(value, source_gpu_runtime_active());
 }
 
 static uint32_t mmio_read32_impl(uint32_t addr) {
