@@ -481,12 +481,19 @@ static void test_capture_buffer_contents(void) {
     }
     CHECK(capture_pos == 8);
 
+    /* SPUSTAT bit 11 reports the half of the slot stored on the latest tick:
+     * it sets on the tick that stores slot 256 and clears on the tick that
+     * stores slot 0 [ORACLE FIXTURE E8c, set S-spu/E8c, tsv sha256 f43c38e3...]. */
     render_n(508);                   /* 512 total -> exactly one wrap */
     CHECK(capture_pos == 0);
-    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* first half again */
-    render_n(256);
+    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* slot 511 just stored */
+    render_n(1);
+    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* slot 0 stored: first half */
+    render_n(255);
     CHECK(capture_pos == 0x200);
-    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* second half */
+    CHECK((rd(R_SPUSTAT) & 0x800u) == 0);   /* slot 255 stored */
+    render_n(1);
+    CHECK((rd(R_SPUSTAT) & 0x800u) != 0);   /* slot 256 stored: second half */
 }
 
 /* ==== 5. Savestate round-trip =============================================== */
