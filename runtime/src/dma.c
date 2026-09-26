@@ -827,7 +827,13 @@ static void try_execute(int ch);
                                    * 24 (BIOS) or 40 (games); the default path keeps
                                    * its own cost.                                     */
 #define DSM_SPU_WORD          48  /* [ORACLE FIXTURE D3] read and write, all sizes    */
-#define DSM_LL_NODE           15  /* [NOT OBSERVED] per-node header cost              */
+#define DSM_LL_NODE           10  /* [ORACLE FIXTURE D23] header-only node: slope
+                                   * 10.0 (N 256..1024); with the kick credit and
+                                   * edge credit below, groups a/e land on the
+                                   * observed slices                                  */
+#define DSM_LL_NODE_PAYLOAD   15  /* [ORACLE FIXTURE D23 b] header of a node with
+                                   * payload: bounded to 13.4 < h <= 15.4 by the
+                                   * k = 2/4/8/15 slice edges (word cost 1)            */
 #define DSM_UPLOAD_WAIT_CAP  201u /* [ORACLE FIXTURE D10] load wait = min(BS,201)-1   */
 #define DSM_MDEC_WORD          1  /* [DOC] MDEC in/out 1; D11 timelines do not depend
                                    * on it between 1 and 4                             */
@@ -1025,9 +1031,13 @@ static void dsm_run_ll(uint64_t now) {
          * boot return 96). Mid-node words move on credit alone; D22 fill16
          * advances MADR2 one node per fill. */
         if (m->stage) ready = 1;
-        if (now > m->served_until) {
-            if (ready) dsm_credit_add(m, now - m->served_until);
-            m->served_until = now;
+        /* [ORACLE FIXTURE D23] the walk moves on 128-cycle slices: MADR2 and
+         * completion change only at slice points, so credit accrues per edge
+         * (after the kick credit), like the other channels. */
+        uint64_t edge = now - now % DSM_QUANTUM;
+        if (edge > m->served_until) {
+            if (ready) dsm_credit_add(m, edge - m->served_until);
+            m->served_until = edge;
         }
         if (!ready) {
             if (m->credit > 0) m->credit = 0;
@@ -1043,7 +1053,7 @@ static void dsm_run_ll(uint64_t now) {
             gpu_set_gp0_linked_list_node(m->cursor, m->words_left);
             channels[2].madr = m->cursor;
             m->node_count++;
-            m->credit -= DSM_LL_NODE;
+            m->credit -= m->words_left ? DSM_LL_NODE_PAYLOAD : DSM_LL_NODE;
             m->stage = 1;
             m->cursor = (m->cursor + 4u) & 0x1FFFFCu;
         } else if (m->words_left) {
@@ -1301,7 +1311,13 @@ static uint32_t dsm_cycles_to_event(int armed_only) {
         uint32_t d;
         if (k == DSM_LL) {
             if (m->held) continue; /* the GPU side schedules its own readiness */
-            d = m->credit > 0 ? 1u : (uint32_t)(1 - m->credit);
+            if (m->credit > 0) d = 1u;
+            else {                  /* the first edge that brings credit above 0 */
+                uint64_t e = now - now % DSM_QUANTUM + DSM_QUANTUM;
+                uint64_t need = (uint64_t)(1 - m->credit);
+                while (e - m->served_until < need) e += DSM_QUANTUM;
+                d = (uint32_t)(e - now);
+            }
         } else {
             d = (uint32_t)(DSM_QUANTUM - now % DSM_QUANTUM);
         }
