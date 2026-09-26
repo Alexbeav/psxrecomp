@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <exception>
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
@@ -82,7 +83,26 @@ void materialize_alias_groups(PSXRecomp::FunctionAnalysisResult& result,
 
 } // namespace
 
+static int psxrecomp_game_main(int argc, char** argv);
+
+// Configuration and generation errors are reported by throwing: a malformed
+// game.toml (a bad hex address, an out-of-range value, a wrong TOML type),
+// or an input the emitter must refuse (an overlay whose mandatory delay slot
+// lies outside the image). Left uncaught, the exception terminates through
+// abort(): the process dies by SIGABRT and macOS files a crash report instead
+// of the caller seeing a diagnostic. Every caller already treats any non-zero
+// status as failure, so print the message and exit with status 1.
 int main(int argc, char** argv) {
+    try {
+        return psxrecomp_game_main(argc, argv);
+    } catch (const std::exception& e) {
+        std::fflush(stdout);
+        fmt::print(stderr, "ERROR: {}\n", e.what());
+        return 1;
+    }
+}
+
+static int psxrecomp_game_main(int argc, char** argv) {
     const auto print_usage = [&]() {
         fmt::print("Usage: {} --config <game.toml>\n", argv[0]);
         fmt::print("       {} <PS1-EXE file> [--seeds <file>] [--out-dir <dir>] [--strict] [--inspect]\n", argv[0]);
