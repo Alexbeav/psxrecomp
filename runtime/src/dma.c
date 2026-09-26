@@ -1277,8 +1277,14 @@ static uint32_t dsm_cycles_to_event(int armed_only) {
 /* Register writes in the source profile: finish the work due before the write,
  * so a completion sees the old DICR, then refuse changes the machines cannot
  * follow. Returns 1 when the write was handled here. */
-static int dsm_before_write(uint32_t addr, uint32_t val, uint32_t mask) {
+static int dsm_before_write(uint32_t addr, uint32_t *valp, uint32_t mask) {
     if (!dsm_profile_any() && !dsm_spu_model) return 0;
+    uint32_t val = *valp;
+    /* [ORACLE FIXTURE D14] readback after writing FFFFFFFF: DICR 80FF803F (bit 6
+     * is read-only here), CHCR 71770703 on ch0-5; BCR and DPCR keep all bits. */
+    if (addr == 0x1F8010F4u) *valp = val = val & ~0x40u;
+    if (addr >= 0x1F801080u && addr <= 0x1F8010DFu && ((addr - 0x1F801080u) & 0xFu) == 8u)
+        *valp = val = val & 0x71770703u;
     dsm_write_service = 1;
     dsm_service_all(psx_cycle_count);
     dsm_write_service = 0;
@@ -1890,7 +1896,7 @@ bad:
 }
 
 void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
-    if (dsm_before_write(addr, val, mask)) return;
+    if (dsm_before_write(addr, &val, mask)) return;
     source_gpu_runtime_dma_write();
     /* DPCR */
     if (addr == 0x1F8010F0u) {

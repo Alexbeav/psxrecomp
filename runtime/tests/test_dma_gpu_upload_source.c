@@ -155,6 +155,9 @@ int main(int argc,char **argv) {
     setup(1,1,0);try_execute(2);
     for(uint32_t ch=0;ch<7;ch++){dma_write(0x1f801080+ch*16,0x80010000u|ch*4);assert(dma_read(0x1f801080+ch*16)==(0x10000u|ch*4));}
     dma_write(0x1f8010e8,0x6EFFFFFFu);assert(dma_read(0x1f8010e8)==0x40000002u);
+    /* [ORACLE FIXTURE D14]: CHCR ch0-5 keeps 71770703; DICR reads 80FF803F. */
+    dma_write(0x1f8010d8,0xFEFFFFFFu);assert(dma_read(0x1f8010d8)==0x70770703u);
+    dma_write(0x1f8010f4,0x7F000000u);dma_write(0x1f8010f4,0x00FFFFFFu);assert(dma_read(0x1f8010f4)==0x80FF803Fu);
     set_option("PSX_GPU_DMA_MODEL","");setup(12,16,0);try_execute(2);
     assert(upload_count==192 && !irqs && dma_cpu_read_penalty()==0 && delayed_complete[2].active);
 #endif
