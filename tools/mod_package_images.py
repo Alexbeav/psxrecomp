@@ -46,14 +46,20 @@ import tomllib
 SECTOR = 2048
 MANIFEST_KEYS = {'format_version', 'id', 'version', 'name', 'author', 'description', 'license',
                  'source_name', 'source_url', 'resolver', 'save_compatibility', 'author_link',
-                 'target', 'feature', 'option', 'plugin', 'patch', 'overlay', 'requirement'}
+                 'target', 'feature', 'option', 'plugin', 'patch', 'overlay', 'requirement',
+                 # Presentation / release metadata the runtime parses
+                 # (mod_packages.cpp); it never changes the image.
+                 'channel'}
 CONDITION_KEYS = {'when', 'when_option', 'when_value'}
 SECTION_KEYS = {
     'patch': {'feature', 'target', 'address', 'offset', 'expected', 'replace'} | CONDITION_KEYS,
     'overlay': {'feature', 'target', 'offset', 'file', 'sha256', 'expected_sha256'} | CONDITION_KEYS,
     'plugin': {'feature', 'id', 'order'} | CONDITION_KEYS,
     'requirement': {'feature', 'package', 'version', 'requires_feature'} | CONDITION_KEYS,
-    'feature': {'id', 'name', 'description', 'group', 'default_enabled'},
+    # author / hidden / channel are launcher presentation and release
+    # filtering (mod_packages.cpp parse); they never change the image.
+    'feature': {'id', 'name', 'author', 'description', 'group', 'default_enabled', 'hidden',
+                'channel'},
     'option': {'feature', 'id', 'label', 'description', 'group', 'type', 'default', 'choice',
                'min', 'max', 'step'},
     'target': {'game_id', 'disc_sha256', 'exe_sha256'},

@@ -217,6 +217,23 @@ class ModPackageImageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'encoded twice'):
             self.view()
 
+    def test_presentation_keys_do_not_change_the_image(self):
+        # hidden / author / channel are launcher and release metadata the
+        # runtime accepts; a hidden default-on feature must still build.
+        base = self.view()
+        text = self.manifest.replace(
+            'format_version = 5\n', 'format_version = 6\nchannel = "stable"\n', 1)
+        text = text.replace(
+            '[[feature]]\nid = "engine"\nname = "Engine"\n',
+            '[[feature]]\nid = "engine"\nname = "Engine"\nauthor = "someone"\n'
+            'hidden = true\ndefault_enabled = true\nchannel = "stable"\n', 1)
+        self.assertNotEqual(text, self.manifest)
+        self.write_manifest(text)
+        view = self.view()
+        self.assertEqual(view.read('GAME.EXE'), base.read('GAME.EXE'))
+        self.assertEqual(view.read('DATA.BIN'), base.read('DATA.BIN'))
+        self.assertEqual(view.plugins, base.plugins)
+
     def test_extent_in_ram_mirror_uses_patched_transfers_as_entries(self):
         inventory = self.prepare(self.profile())
         job, = inventory['jobs']
