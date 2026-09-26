@@ -8081,7 +8081,7 @@
         {
           "file": "runtime/include/source_tas_stateio.h",
           "lines": [
-            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v10-lane-2\""
+            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v10-t172\""
           ]
         },
         {
@@ -8179,7 +8179,17 @@
           ]
         }
       ],
-      "note": "Source pads ignore a DTR session whose first byte is not 0x01 until DTR rises again; Crash 7798S return 1153 (card probe leaves DTR asserted, the BIOS pad read times out, a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949."
+      "note": "Source pads ignore a DTR session whose first byte is not 0x01 until DTR rises again; Crash 7798S return 1153 (card probe leaves DTR asserted, the BIOS pad read times out, a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949.",
+      "repins": [
+        {
+          "as_of": "worktree on b5b1dc9c3f7e3d580d06afa05e0288757d942a28",
+          "issue": "PS1B-190",
+          "reason": "deliberate compatibility-id bump for the T172 state-meaning change (layout unchanged); reviewer OK 2026-09-26",
+          "dropped_lines": 1,
+          "from_blocks": 12,
+          "to_blocks": 12
+        }
+      ]
     },
     {
       "id": "source-pad-dtr-session-digital",
