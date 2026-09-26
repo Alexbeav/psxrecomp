@@ -24,8 +24,13 @@ void iso_close(void *p) { (void)p; }
 int iso_read_sector(void *p, uint32_t lba, uint8_t *b, int n) {
     (void)p; memset(b, (int)(lba & 255u), (size_t)n); reads++; return 1;
 }
+/* Raw sectors are served only when raw_mode_byte >= 0: the header's mode byte
+ * (offset 15) takes that value, so a test can author any mode, including 0xFF. */
+static int raw_mode_byte = -1;
 int iso_read_raw_sector(void *p, uint32_t lba, uint8_t *b, int n) {
-    (void)p; (void)lba; (void)b; (void)n; return 0;
+    (void)p; (void)lba;
+    if (raw_mode_byte < 0) return 0;
+    memset(b, 0, (size_t)n); b[15] = (uint8_t)raw_mode_byte; return 1;
 }
 int iso_read_subq(void *p, uint32_t lba, uint8_t *b, int n, int *v) {
     (void)p; (void)lba; (void)b; (void)n; *v=0; return 0;
@@ -106,6 +111,33 @@ int main(void) {
     start_reading(500); command(0x09); ack(); wait_complete(); ack();
     cdda_playing=1;
     CHECK(getlocl()==CDIRQ_ERROR && error80(),"CD-DA track is INT5 80h");
+    ack();
+
+    /* No collision: a raw header whose mode byte is 0xFF is still a decoded
+     * header, so GetlocL answers INT3 and reports that byte. */
+    raw_mode_byte = 0xFF;
+    start_reading(600);
+    CHECK(getlocl()==CDIRQ_ACK && response_count==8 &&
+          response_fifo[(response_read+3)&15]==0xFF,"mode-FFh raw header is INT3, mode byte FFh");
+    ack();
+    raw_mode_byte = -1;
+
+    /* A savestate round trip keeps the no-header state (standby after SeekL)... */
+    static uint8_t snap[1u<<20];
+    setup(); target(1000); command(0x15); ack(); wait_complete(); ack();
+    uint32_t n = cdrom_snapshot_bytes();
+    CHECK(n <= sizeof snap, "snapshot fits");
+    cdrom_snapshot_write(snap);
+    start_reading(700);                          /* a different live state */
+    CHECK(cdrom_snapshot_read(snap, n), "snapshot restores");
+    CHECK(getlocl()==CDIRQ_ERROR && error80(),"restored standby state is INT5 80h");
+    ack();
+    /* ...and the header state. */
+    start_reading(800);
+    n = cdrom_snapshot_bytes(); cdrom_snapshot_write(snap);
+    setup();
+    CHECK(cdrom_snapshot_read(snap, n), "snapshot restores");
+    CHECK(getlocl()==CDIRQ_ACK && response_count==8,"restored reading state is INT3");
     ack();
 
     if(failures){fprintf(stderr,"FAILED (%d)\n",failures);return 1;}
