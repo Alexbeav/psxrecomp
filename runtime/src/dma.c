@@ -9,7 +9,6 @@
  * request-mode transfers are advanced from the guest cycle clock so games
  * which synchronize video decode through DMA busy/request state see realistic
  * backpressure.
- * Reference: nocash PSX specs, DuckStation src/core/dma.cpp
  */
 
 #include "dma.h"
@@ -112,9 +111,9 @@ void     cd_dma_log_get_entry(uint32_t idx, int *lba, uint32_t *dest, uint32_t *
 #define DMA_MDEC_OUT_CYCLES_PER_WORD 14u
 #define DMA_GPU_CYCLES_PER_WORD       1u
 #define DMA_CDROM_CYCLES_PER_WORD     1u
-/* SPU DMA (ch4) per-word cost. Faithful to the Beetle/mednafen oracle, which
- * charges `extra_cyc_overhead = 47` per word plus the universal 1 cyc/word in
- * RunChannel (mednafen/psx/dma.cpp:267,294,456) => 48 cyc/word. Previously ch4
+/* SPU DMA (ch4) per-word cost: 48 cycles per word [ORACLE FIXTURE D3] (read and
+ * write, block sizes 16/32 and counts 1/4; PSX-SPX gives 4, marked uncertain).
+ * Previously ch4
  * completed in ZERO cycles (instant complete_transfer), so the DMA-completion
  * IRQ fired the same cycle as the kick. Once the I-cache cycle model lands, the
  * BIOS SPU-init loop's instruction timing interleaves with that instant IRQ into
@@ -905,7 +904,8 @@ static void dsm_credit_add(DmaSrcMachine *m, uint64_t cycles) {
     m->credit = c > 0x40000000 ? 0x40000000 : (int32_t)c;
 }
 
-/* Set while a guest write to a DMA register services the machines. */
+/* 1 while a guest write to a DMA register services the machines, 2 during an
+ * explicit service point. */
 static int dsm_write_service;
 
 /* Credit whole service edges passed since the last grant. A guest write to any
@@ -914,7 +914,11 @@ static int dsm_write_service;
  * no-access control by the elapsed credit, while completion stays on the
  * service edge; a DICR read leaves them unchanged). */
 static void dsm_credit_edges(DmaSrcMachine *m, uint64_t now) {
-    uint64_t edge = dsm_write_service ? now : now - now % DSM_QUANTUM;
+    /* MDEC in/out take credit only at edges and kicks even on a register write
+     * ([ORACLE FIXTURE D18d]: 512/512 timelines unchanged by a write). */
+    int exact = dsm_write_service == 2 ||
+                (dsm_write_service && m != &dsm[DSM_MDEC_IN] && m != &dsm[DSM_MDEC_OUT]);
+    uint64_t edge = exact ? now : now - now % DSM_QUANTUM;
     if (edge <= m->served_until) return;
     dsm_credit_add(m, edge - m->served_until);
     m->served_until = edge;
@@ -1170,7 +1174,10 @@ static void dsm_service(int k, uint64_t now) {
  * channels. [ORACLE FIXTURE D7]: OTC runs before the GPU payload when both
  * start together; D11c: MDEC in is served before MDEC out in both kick orders. */
 static void dsm_service_all(uint64_t now) {
-    dsm_mdec_feed(dsm_write_service ? now : now - now % DSM_QUANTUM);
+    /* [ORACLE FIXTURE D18d] register writes do not clock the decoder: a
+     * DMA5-MADR write, a timer-1 write and a no-op MDEC control write leave all
+     * 512 timelines byte-identical. Only kicks, edges and explicit service do. */
+    dsm_mdec_feed(now - now % DSM_QUANTUM);
     dsm_service(DSM_OTC, now);
     dsm_service(DSM_CD, now);
     dsm_service(DSM_GPU, now);
@@ -1358,9 +1365,10 @@ void dma_source_gpu_service_at(uint64_t cycle) {
     g_dma_exec_depth++;
     /* An explicit service point is a caller-driven advance to `cycle`: it
      * clocks the MDEC and grants DMA credit exactly (SPEC-PS1B-186 ruling on
-     * the MDEC contract). The scheduler path keeps the 128-cycle edges. */
+     * the MDEC contract), MDEC channels included. The scheduler path keeps the
+ * 128-cycle edges. */
     dsm_mdec_feed(cycle);
-    dsm_write_service = 1;
+    dsm_write_service = 2;
     dsm_service_all(cycle);
     dsm_write_service = 0;
     g_dma_exec_depth--;
@@ -1577,6 +1585,10 @@ static void try_execute(int ch) {
     if (!((chcr >> 24) & 1)) return;
     if (!channel_enabled(ch)) return;
 
+    /* [DOC] PSX-SPX "D#_CHCR": bit 28 (start/trigger) clears when the transfer
+     * begins. Source profile: the same clear; no D fixture sampled bit 28 during
+     * a live transfer [NOT OBSERVED]. */
+    channels[ch].chcr &= ~(1u << 28);
     trace_dma('S', ch, transfer_word_count(ch), dicr, i_stat);
     event_ring_record_aux(EV_DMA_KICK, (uint8_t)ch, channels[ch].chcr);
     event_ring_record_aux(EV_ENQ, (uint8_t)(SRC_DMA0 + ch), transfer_word_count(ch));
@@ -1705,7 +1717,8 @@ uint32_t dma_cycles_to_internal_event(void) {
 
     /* CD-ROM DMA writes guest RAM incrementally. Expose each word on time;
      * the source CD profile schedules through its own machine. */
-    if (!cd_source_model && dma_cdrom_transfer_active()) {
+    if (!cd_source_model && cdrom_async.active && cdrom_async.remaining_words > 0 &&
+        ((channels[3].chcr >> 24) & 1u) && channel_enabled(3)) {
         if ((channels[3].chcr & 1u) != 0) {
             return 1u; /* unsupported RAM->CD direction cancels next tick */
         }
@@ -1873,6 +1886,7 @@ void dma_init(void) {
     /* [ORACLE FIXTURE D8] every DMA register reads 0 at power-on in the source
      * profile (PSX-SPX documents DPCR = 07654321h). */
     if (dsm_profile_any()) dpcr = 0u;
+    else dpcr = 0x07654321u;   /* [DOC] PSX-SPX "DPCR": initial value on reset */
     dicr = 0;
     dma_debug_clear_trace();
     dma_debug_clear_cdrom_history();
@@ -1914,7 +1928,8 @@ bad:
     /* Unmapped words inside the DMA register block (0x1F8010F8/0xFC, channel
      * reg offset 0x0C variants): real hardware open-buses them and Tomba2's
      * late-attract wild I/O sweep (BIOS bzero/read over a 0xDF80xxxx pointer)
-     * reads straight through here. Beetle parity: return 0, no fault. */
+     * reads straight through here. [ORACLE FIXTURE D8] 1F8010F8/FC read 0 at
+     * every width, before and after writes; the access does not fault. */
     {
         extern uint64_t g_io_openbus_reads;
         g_io_openbus_reads++;
@@ -1993,7 +2008,7 @@ void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
     }
 
 bad:
-    /* See the read-side note: open-bus, Beetle parity. */
+    /* See the read-side note: writes are ignored [ORACLE FIXTURE D8]. */
     {
         extern uint64_t g_io_openbus_writes;
         g_io_openbus_writes++;
@@ -2165,6 +2180,9 @@ void dma_snapshot_write(uint8_t *p) {
  * and the source MDEC clock (u64). */
 #define DSM_WIRE_MACHINE 40u
 #define DSM_WIRE_BYTES   (DSM_COUNT * DSM_WIRE_MACHINE + 16u)
+/* A new DmaSrcMachine field must be added to the wire as well. */
+_Static_assert(sizeof(DmaSrcMachine) == DSM_WIRE_MACHINE,
+               "DmaSrcMachine changed: update BS_SEC_DMA_SRC field by field");
 
 uint32_t dma_src_wire_bytes(void) {
     return DSM_WIRE_BYTES;
