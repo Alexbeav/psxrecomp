@@ -772,13 +772,15 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
                            cond);
     };
 
-    // REGIMM branches. R3000A hardware decodes EVERY rt value here, not just
-    // the four assembler mnemonics: the branch sense is rt bit 0 (0 = bltz,
-    // 1 = bgez) and the link register is written iff (rt & 0x1E) == 0x10 —
-    // Beetle cpu.cpp op_BCOND: result = (int32)(rs ^ (rt<<31)) < 0,
-    // link = ((rt & 0x1E) == 0x10). Undefined rt values appear when discovery
-    // sweeps data-as-code into a function; emitting the hardware decode keeps
-    // the regen alive AND matches the oracle if the word is ever executed.
+    // REGIMM branches (PSX-SPX CPU "BcondZ"). The documented encodings are
+    // rt = 00h bltz, 01h bgez, 10h bltzal, 11h bgezal: the branch sense is
+    // rt bit 0 (0 = branch if rs < 0, 1 = branch if rs >= 0), and 10h/11h
+    // also write $ra whether or not the branch is taken. Every other rt value
+    // is decoded the same way (sense from bit 0, link only when rt is 10h or
+    // 11h, i.e. (rt & 0x1E) == 0x10). That rule for the undefined rt values is
+    // [NOT DOCUMENTED] in the pinned PSX-SPX. Undefined rt values appear when
+    // discovery sweeps data-as-code into a function; emitting one decode for
+    // every rt keeps the regen alive if such a word is ever executed.
     if (opcode == 0x01) {
         uint32_t regimm_op = (instr >> 16) & 0x1F;
         if ((regimm_op & 0x01u) == 0x00u) { // bltz family (incl. bltzal + undefined mirrors)
@@ -2114,9 +2116,9 @@ std::string CodeGenerator::translate_basic_block(
                     (block.exit_instr.instruction >> 26) & 0x3Fu;
                 if (branch_opcode >= 0x14u && branch_opcode <= 0x17u) {
                     /* Opcodes 0x14-0x17 (the MIPS-II branch-likely family) are
-                     * RESERVED on the R3000A: real hardware raises the Reserved
-                     * Instruction exception at this PC (Beetle cpu.cpp opcode
-                     * table row 0x10: op_ILL). Discovery can sweep data-as-code
+                     * N/A on the R3000A: PSX-SPX CPU "Illegal Opcodes" says every
+                     * N/A primary opcode raises the Reserved Instruction
+                     * exception (excode 0Ah) at this PC. Discovery can sweep data-as-code
                      * into a function body; aborting the WHOLE regen here (the
                      * old throw) broke "every title regenerates at tip" over one
                      * bogus word, and emitting the word as a real branch would

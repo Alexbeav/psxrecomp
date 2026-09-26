@@ -1927,9 +1927,10 @@ irq_deliver_eval:
      * preserves the whole IP field, because a pure software interrupt must
      * present the guest-written IP0/IP1 bits unmodified (the guest's dispatcher
      * discriminates stages by exactly those bits — see the sw_pending rationale
-     * at the top of this function). Everything else is per-exception: BD/BT
-     * and CE describe THIS exception, so they are cleared, exactly as Beetle's
-     * PS_CPU::Exception does (CAUSE &= 0x0000FF00). The old ~0x7C mask kept a
+     * at the top of this function). Everything else is per-exception: PSX-SPX
+     * "cop0r13 - CAUSE" says CAUSE describes the most recently recognised
+     * exception, and BD/BT/CE describe THIS one, so everything outside the
+     * Sw/IP field (bits 8-15) is cleared (CAUSE &= 0x0000FF00). The old ~0x7C mask kept a
      * previous delay-slot exception's BD set on this compiled-boundary IRQ
      * (T110).
      *

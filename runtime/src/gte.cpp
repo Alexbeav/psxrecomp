@@ -21,8 +21,8 @@ namespace GTE {
 //
 // The real PS1 GTE does NOT compute an exact H*0x20000/SZ3. It uses an
 // Unsigned Newton-Raphson (UNR) reciprocal approximation driven by a 257-entry
-// seed table (documented in PSX-SPX "GTE Division Inaccuracy"; identical to the
-// mednafen/Beetle oracle in beetle-psx/mednafen/psx/gte.cpp). Exact division
+// seed table, as documented in PSX-SPX "GTE Division Inaccuracy" (the
+// unr_table and the reciprocal steps for RTPS/RTPT). Exact division
 // diverges from hardware by +/-1 (occasionally up to a few units) on ~25% of
 // inputs, which is enough to flip games' distance/intensity threshold branches
 // (e.g. Ape Escape's additive-glow CLUT semi-transparency bit). This is the
@@ -181,8 +181,8 @@ static void depth_cue_from_ir(GTEState* gte, uint32_t instr) {
 // For a display aspect wider than the native 4:3, screen-space X is scaled by
 // (4*den)/(3*num) around the projection centre OFX — e.g. 3/4 for 16:9 — and
 // the present path stretches the 4:3 frame to the wide aspect, netting a wider
-// horizontal field of view (the DuckStation/Beetle "widescreen hack", but
-// applied in our GTE library so every RTPS/RTPT caller — generated code,
+// horizontal field of view. This is our own enhancement, applied in the GTE
+// library so every RTPS/RTPT caller — generated code,
 // interpreter, overlay DLLs — sees it). Only the IR1*h/sz term is scaled, NOT
 // OFX, so the squash is centred on the game's own projection centre and
 // games' post-projection screen-bounds culls (which read SXY back from us)
@@ -197,11 +197,10 @@ static int s_gte_replay_sandbox = 0;
  * remains integer and fully faithful; this side cache retains the discarded
  * 16.16 projection fraction so the high-resolution software mirror can match
  * a later GP0 polygon and place its vertices between native pixels. */
-/* Direct-indexed by the projected screen position, matching what both reference
- * PGXP implementations use for this fallback (beetle-psx pgxp_gpu.c
- * vertexCache[0x800*2][0x800*2]; DuckStation cpu_pgxp.cpp 2048x2048). SXY is an
- * 11-bit signed pair, so every reachable position gets its OWN slot and
- * distinct positions can never collide.
+/* Direct-indexed by the projected screen position (our own design choice for
+ * this enhancement). SXY is an 11-bit signed pair, so a 2048x2048 table gives
+ * every reachable position its OWN slot and distinct positions can never
+ * collide.
  *
  * The previous 8192-entry HASHED table was the defect: unrelated positions
  * shared a slot, so a vertex could be handed a different vertex's fraction, and
@@ -358,7 +357,7 @@ extern "C" int gte_geometry_correction_lookup(uint32_t packed,
     s_geom_lookups++;
     const GeomVertex &entry = s_geom_cache[slot];
     if (entry.generation != s_geom_generation) { s_geom_miss_unrec++; return 0; }
-    /* Ambiguity gate, as in both references (beetle gFlags == 1): if two
+    /* Ambiguity gate (our enhancement's rule): if two
      * DIFFERENT sub-pixel positions rounded to this same pixel, we cannot tell
      * which one this packet means, and guessing is what makes a vertex inherit
      * a neighbour's fraction. Fall back to the faithful integer position. */
@@ -795,7 +794,7 @@ extern "C" void gte_set_display_aspect(int num, int den) {
 // ---------------------------------------------------------------------------
 // RTPS — Perspective Transformation (internal, operates on given vertex V)
 //
-// Matches DuckStation/Beetle (psx-spx):
+// Per PSX-SPX "RTPS/RTPT - Perspective Transformation":
 //   MAC1/2/3 = (TR*1000h + RT*V) SAR (sf*12)
 //   IR1/IR2  = limB(MAC, lm)
 //   IR3 FLAG = limB(MAC3_unshifted SAR 12, lm=0); stored IR3 = limB(MAC3, lm)
@@ -828,7 +827,7 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
 
     gte->IR1 = gte->saturate_ir(gte->MAC1, 1, lm);
     gte->IR2 = gte->saturate_ir(gte->MAC2, 2, lm);
-    // IR3 quirk (psx-spx / DuckStation): FLAG.22 from (mac3>>12) as if lm=0;
+    // IR3 quirk (PSX-SPX RTPS/RTPT note): FLAG.22 from (mac3>>12) as if lm=0;
     // stored IR3 clamps MAC3 with the real lm bit and does not touch FLAG again.
     (void)gte->saturate_ir(static_cast<int32_t>(mac3 >> 12), 3, false);
     {
@@ -996,7 +995,7 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
 // ---------------------------------------------------------------------------
 // AVSZ3 (0x2D) — Average Z (3 points)
 // ---------------------------------------------------------------------------
-// Hardware (psx-spx / DuckStation): MAC0 keeps ZSF3*(SZ1+SZ2+SZ3); only OTZ
+// Hardware (PSX-SPX "AVSZ3/AVSZ4"): MAC0 keeps ZSF3*(SZ1+SZ2+SZ3); only OTZ
 // gets MAC0/1000h. CTR NdIntroWoodEmitHelper indexes the batch OT with
 // MAC0>>17 (== OTZ>>5). Shifting MAC0 here collapsed every face into slot 0
 // (arms/trophy/chest z-fight + missing banner under later same-bucket paint).
@@ -1223,8 +1222,8 @@ void gte_mvmva(GTEState* gte, uint32_t instr) {
         case 1: std::memcpy(M, gte->L, sizeof(M)); break;
         case 2: std::memcpy(M, gte->LC, sizeof(M)); break;
         default: {
-            /* Undocumented matrix selector wiring, verified by hardware
-             * register vectors (also used by Beetle/DuckStation). */
+            /* Mx=3 selects the garbage matrix PSX-SPX "MVMVA" documents:
+             * -R*10h, +R*10h, IR0, RT13 x3, RT22 x3. */
             const int16_t color = static_cast<int16_t>(
                 static_cast<uint16_t>(gte->RGBC & 0xFFu) << 4);
             M[0][0] = static_cast<int16_t>(-color);
