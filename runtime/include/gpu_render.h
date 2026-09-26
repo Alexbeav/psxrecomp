@@ -30,6 +30,12 @@ GrBackend gr_backend(void);                   /* effective backend after init */
 void gr_init(uint16_t *vram);
 void gr_set_scale(int scale);
 int  gr_scale(void);
+
+/* Compile-time ceiling for the OpenGL backend's internal-resolution scale. The
+ * effective scale is decided at GL context init from the driver's size limits
+ * and a memory budget (gl_scale_limits.h), so this is only an upper bound.
+ * Software and Vulkan stay at SW_MAX_INTERNAL_SCALE (4). */
+#define GL_MAX_INTERNAL_SCALE 32
 void gr_set_texture_filter(int bilinear);
 int  gr_texture_filter(void);
 

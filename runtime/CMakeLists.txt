@@ -85,6 +85,30 @@ if(BUILD_TESTING)
     else()
         message(STATUS "gl_readback_region_test: not registered (requires MinGW, SDL3 headers/static library in PSX_GL_READBACK_SDL_ROOT and gcc.exe/g++.exe in PSX_GL_READBACK_COMPILER_BIN)")
     endif()
+    # Real-GL internal-resolution invariance (macOS/Linux, hidden window): the
+    # guest-visible VRAM is identical at every scale, lines stay one native
+    # pixel thick, and an over-limit request clamps inside GL. Needs the SDL3
+    # this tree fetched and a GPU session; labelled hardware like the readback
+    # test above.
+    if(NOT WIN32 AND Python3_Interpreter_FOUND AND TARGET SDL3::SDL3)
+        if(DEFINED sdl3_SOURCE_DIR)
+            set(_gl_scale_sdl_inc "${sdl3_SOURCE_DIR}/include")
+        else()
+            set(_gl_scale_sdl_inc "$<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>")
+        endif()
+        add_test(NAME gl_scale_invariance_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_scale_invariance.py"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_scale_invariance.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "${_gl_scale_sdl_inc}"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-scale-results")
+        set_tests_properties(gl_scale_invariance_test PROPERTIES LABELS "gpu;opengl;hardware" TIMEOUT 300)
+        unset(_gl_scale_sdl_inc)
+    else()
+        message(STATUS "gl_scale_invariance_test: not registered (needs a non-Windows host, Python 3 and SDL3)")
+    endif()
     add_executable(launcher_device_roundtrip_test
         tests/test_launcher_device_roundtrip.cpp)
     target_include_directories(launcher_device_roundtrip_test PRIVATE include)
