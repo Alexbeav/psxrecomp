@@ -23,7 +23,6 @@
 #include "crc32.h"
 #include "psx_cycles.h"
 #include "spu_envelope.h"
-#include "spu_envelope_rate.h"  /* volume sweep only, until fixture E9 */
 #include "spu_adpcm_sample.h"
 
 #include <stdio.h>
@@ -97,7 +96,7 @@ static int32_t  rev_out_r;
  * inside these rings, so each write runs the IRQ check. */
 static uint32_t capture_pos;
 
-/* Envelope timing is provided by spu_envelope_rate.h. */
+/* Envelope and sweep ticks are provided by spu_envelope.h. */
 typedef struct {
     int16_t  level;      /* live effective volume, full signed 16-bit */
     uint32_t divider;    /* rate divider, same overflow scheme as ADSR */
@@ -191,10 +190,8 @@ static void spu_event_record(uint8_t kind, int voice, uint32_t addr) {
     s_event_idx++;
 }
 
-/* Independent envelope replacement from hardware documentation and measured
- * register behavior. See runtime/tests/spu_envelope_rate_provenance.json.
- * Earlier implementations remain in history; this is no license clearance.
- */
+/* ADSR tick: spu_envelope.h, from PSX-SPX and oracle fixture set S-spu
+ * (runtime/tests/spu_envelope_fixture.txt). */
 static void adsr_run(int idx, SpuVoice *v)
 {
     spu_env_adsr_tick(&v->env_level, &v->adsr_divider, &v->adsr_phase,
@@ -242,10 +239,10 @@ static void sweep_env_write(SweepEnv *sw, uint16_t raw)
                                          : (int32_t)raw * 2 - 65536);
 }
 
-/* Advance the independently authored sweep at the sample boundary. */
+/* Advance the volume sweep (spu_envelope.h) at the sample boundary. */
 static void sweep_env_step(SweepEnv *sw, uint16_t raw)
 {
-    spu_envelope_sweep_step(&sw->level, &sw->divider, raw);
+    spu_env_sweep_tick(&sw->level, &sw->divider, raw);
 }
 
 /* Live effective volume of a volume register: the register decode in direct
