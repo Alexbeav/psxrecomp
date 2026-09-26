@@ -123,7 +123,9 @@ static inline void source_mdec_control(SourceMDEC *s,uint32_t value){
     s->control=value&0x7fffffffu;
 }
 static inline void source_mdec_write(SourceMDEC *s,uint32_t value,int dma){
-    if(s->in_count==32){s->error=1;return;}
+    /* [ORACLE FIXTURE D17c] a write to a full input FIFO is dropped: every write
+     * costs the same, and a DMA1 drain comes up short by the dropped words. */
+    if(s->in_count==32)return;
     s->in[(s->in_at+s->in_count)&31u]=value;s->in_count++;
     if(!dma && !s->busy && s->credit<1)s->credit=1;
     source_mdec_run(s,0);
