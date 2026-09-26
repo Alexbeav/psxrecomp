@@ -329,7 +329,7 @@ static int           s_swap_interval = 1; /* SDL_GL swap interval (vsync mode) *
  *              draws and scissors, pack, CPU readback, VRAM copies and their
  *              scratch, mask stencils on hr.
  * s_out_scale  the internal resolution presented (gr_scale/glb_scale): the
- *              high-resolution window (s_hiw_fbo), the native-wide surfaces,
+ *              high-resolution window (s_hiw_t tiles), the native-wide surfaces,
  *              present, hold-last, interpolation captures, screenshot_hires.
  * They are equal except in windowed high-resolution mode (s_hiw, below),
  * where s_hr_scale is 1 and the presented image lives in the window, not in
@@ -361,25 +361,39 @@ static int           s_wide_refused_logged = 0;
  * stays the ordinary hr surface at 1x — exactly the native renderer, so pack,
  * CPU readback, render-to-texture and copies are the 1x results — and a
  * second, presentation-only surface at S covers just the columns the game
- * displays: W = [s_hiw_x0, s_hiw_x1) x full VRAM height, W*S x 512*S. Every
+ * displays: W = [x0, x1) x full VRAM height, W*S x 512*S. Every
  * GPU write that touches W (draws, fills, copies, uploads, the depth24 clear)
  * is mirrored into it, like the native-wide surfaces; present, hold-last,
  * interpolation and the wide centre read it. W starts empty and grows to the
  * union of displayed rects (rounded to 64 px) the first time each is shown,
  * seeded by upscaling the 1x content, so it never needs to guess the layout.
- * A copy whose source lies outside W is taken from the 1x surface (nearest).
- * Engaged only when the full-VRAM surface cannot hold the requested scale
- * (driver limit or memory budget), or with PSX_GL_HIRES_WINDOW=1. */
+ * When the union no longer fits one surface (side-by-side 512-wide buffers at
+ * 18x need 18432 px), W becomes up to HIW_MAX_TILES tiles, each a column
+ * range of its own surface; every write goes to each tile it touches, so a
+ * game flipping between horizontally adjacent buffers presents every buffer
+ * at S. Tiles may overlap; overlapping columns hold identical pixels.
+ * A copy whose source lies outside every tile is taken from the 1x surface
+ * (nearest). Engaged only when the full-VRAM surface cannot hold the
+ * requested scale (driver limit or memory budget), or with
+ * PSX_GL_HIRES_WINDOW=1. */
 #define HIW_ALIGN 64
+#define HIW_MAX_TILES 4
+typedef struct HiwTile {
+    int    x0, x1;                              /* native columns [x0, x1) */
+    GLuint tex, fbo, rb;
+} HiwTile;
 static int           s_hiw = 0;                 /* windowed mode engaged */
-static int           s_hiw_x0 = 0, s_hiw_x1 = 0;/* window columns; empty until shown */
-static GLuint        s_hiw_tex = 0, s_hiw_fbo = 0, s_hiw_rb = 0;
+static HiwTile       s_hiw_t[HIW_MAX_TILES];    /* empty until a display is shown */
+static int           s_hiw_n = 0;
+static int           s_hiw_last_x0 = 0, s_hiw_last_x1 = 0; /* last presented columns */
+/* Staging for a copy's S-scaled source (hiw_mirror_copy), apart from the
+ * shared scratch that holds the 1x source. */
 static GLuint        s_hiw_scratch_tex = 0, s_hiw_scratch_fbo = 0;
 static int           s_hiw_scratch_w = 0, s_hiw_scratch_h = 0;
 static int           s_hiw_refused_logged = 0;
-static int           s_hiw_grows = 0;           /* reallocations (diagnostic) */
+static int           s_hiw_grows = 0;           /* tile allocations (diagnostic) */
 static int  hiw_on(void);
-static int  hiw_ensure(int x0, int x1);
+static const HiwTile *hiw_ensure(int x0, int x1);
 static void hiw_flush_queue(void);
 static GLuint make_tex(GLenum internal, int w, int h, GLenum fmt, GLenum type);
 static int  make_fbo(GLuint *out_fbo, GLuint color_tex, GLuint stencil_rb);
@@ -1606,17 +1620,50 @@ static void rebuild_target_stencil(GLuint target_fbo, int target_w, int target_h
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
 }
 
+/* Grow a staging texture to at least w x h (never shrinks). The recorded
+ * size is committed only after the driver accepted the new storage: a size
+ * past the GPU limit is refused, and a failed allocation puts the old storage
+ * back, so the recorded size always matches the texture. Logs the first
+ * refusal. Returns 1 when the texture holds at least w x h. */
+static int stage_tex_grow(GLuint tex, int *cur_w, int *cur_h, int w, int h,
+                          const char *what, int *logged) {
+    if (w <= *cur_w && h <= *cur_h) return 1;
+    int nw = w > *cur_w ? w : *cur_w, nh = h > *cur_h ? h : *cur_h;
+    int ok = !(s_gl_max_dim > 0 && (nw > s_gl_max_dim || nh > s_gl_max_dim)) &&
+             nw > 0 && nh > 0;
+    if (ok) {
+        while (glGetError() != GL_NO_ERROR) {}
+        p_glActiveTexture(PSXGL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, nw, nh, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        if (glGetError() != GL_NO_ERROR) {
+            ok = 0;
+            if (*cur_w > 0 && *cur_h > 0)
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, *cur_w, *cur_h, 0, GL_RGBA,
+                             GL_UNSIGNED_BYTE, NULL);
+            while (glGetError() != GL_NO_ERROR) {}
+        }
+    }
+    if (!ok) {
+        if (!*logged) {
+            fprintf(stdout, "psxrecomp: GL %s %dx%d refused (GPU limit %d); kept at "
+                    "%dx%d\n", what, nw, nh, s_gl_max_dim, *cur_w, *cur_h);
+            *logged = 1;
+        }
+        return 0;
+    }
+    *cur_w = nw; *cur_h = nh;
+    return 1;
+}
+
 /* Grow the shared scratch texture to at least w x h (never shrinks). The
  * scratch holds copy sources and stencil-rebuild tiles; at S > 1 it is sized
- * to what those operations actually need instead of the whole hr surface. */
-static void scratch_ensure(int w, int h) {
-    if (w <= s_scratch_w && h <= s_scratch_h) return;
-    if (w > s_scratch_w) s_scratch_w = w;
-    if (h > s_scratch_h) s_scratch_h = h;
-    p_glActiveTexture(PSXGL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_scratch_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, s_scratch_w, s_scratch_h,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+ * to what those operations actually need instead of the whole hr surface.
+ * Returns 0 (scratch unchanged) when w x h cannot be allocated. */
+static int s_scratch_refused_logged = 0;
+static int scratch_ensure(int w, int h) {
+    return stage_tex_grow(s_scratch_tex, &s_scratch_w, &s_scratch_h, w, h,
+                          "copy/stencil scratch", &s_scratch_refused_logged);
 }
 
 /* Rebuild the stencil mask of [x, x+w) x [y, y+h) (target px) from alpha, in
@@ -1632,7 +1679,7 @@ static void rebuild_target_stencil_tiled(GLuint target_fbo, int target_w, int ta
     if (w <= 0 || h <= 0) return;
     int tile_w = w < GL_SCRATCH_TILE ? w : GL_SCRATCH_TILE;
     int tile_h = h < GL_SCRATCH_TILE ? h : GL_SCRATCH_TILE;
-    scratch_ensure(tile_w, tile_h);
+    if (!scratch_ensure(tile_w, tile_h)) return;
     for (int ty = y; ty < y + h; ty += tile_h) {
         for (int tx = x; tx < x + w; tx += tile_w) {
             int cw = (x + w - tx) < tile_w ? (x + w - tx) : tile_w;
@@ -1694,12 +1741,13 @@ static void rebuild_mask_stencils(void) {
                 s_stencil_stale.x0 * S, s_stencil_stale.y0 * S,
                 (s_stencil_stale.x1 - s_stencil_stale.x0 + 1) * S,
                 (s_stencil_stale.y1 - s_stencil_stale.y0 + 1) * S);
-            if (hiw_on()) {
-                int x0 = s_stencil_stale.x0 > s_hiw_x0 ? s_stencil_stale.x0 : s_hiw_x0;
-                int x1 = s_stencil_stale.x1 + 1 < s_hiw_x1 ? s_stencil_stale.x1 + 1 : s_hiw_x1;
+            for (int t = 0; hiw_on() && t < s_hiw_n; t++) {
+                const HiwTile *T = &s_hiw_t[t];
+                int x0 = s_stencil_stale.x0 > T->x0 ? s_stencil_stale.x0 : T->x0;
+                int x1 = s_stencil_stale.x1 + 1 < T->x1 ? s_stencil_stale.x1 + 1 : T->x1;
                 if (x1 > x0)
-                    rebuild_target_stencil_tiled(s_hiw_fbo, (s_hiw_x1 - s_hiw_x0) * s_out_scale,
-                        VRAM_H * s_out_scale, (x0 - s_hiw_x0) * s_out_scale,
+                    rebuild_target_stencil_tiled(T->fbo, (T->x1 - T->x0) * s_out_scale,
+                        VRAM_H * s_out_scale, (x0 - T->x0) * s_out_scale,
                         s_stencil_stale.y0 * s_out_scale, (x1 - x0) * s_out_scale,
                         (s_stencil_stale.y1 - s_stencil_stale.y0 + 1) * s_out_scale);
             }
@@ -1716,32 +1764,43 @@ static void rebuild_mask_stencils(void) {
 }
 
 /* ---- windowed high-resolution surface: mirror plumbing ------------------ */
-static int hiw_on(void) { return s_hiw && s_hiw_fbo && s_hiw_x1 > s_hiw_x0; }
+static int hiw_on(void) { return s_hiw && s_hiw_n > 0; }
 
-/* Scissored clear of [x, x+w) x [y, y+h) (native) in the hi window. Leaves the
- * scissor test enabled and the hi FBO bound; callers rebind. */
+/* The first tile that holds all of [x0, x1), or NULL. */
+static const HiwTile *hiw_tile_holding(int x0, int x1) {
+    for (int t = 0; t < s_hiw_n; t++)
+        if (x0 >= s_hiw_t[t].x0 && x1 <= s_hiw_t[t].x1) return &s_hiw_t[t];
+    return NULL;
+}
+
+/* Scissored clear of [x, x+w) x [y, y+h) (native) in every tile it touches.
+ * Leaves the scissor test enabled and a tile FBO bound; callers rebind. */
 static void hiw_clear_rect(int x, int y, int w, int h, float r, float g, float b,
                            float a, int stencil) {
     if (!hiw_on() || w <= 0 || h <= 0) return;
     hiw_flush_queue();
-    int x0 = x > s_hiw_x0 ? x : s_hiw_x0, x1 = x + w < s_hiw_x1 ? x + w : s_hiw_x1;
-    if (x1 <= x0) return;
     int S = s_out_scale;
-    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_hiw_fbo);
-    glViewport(0, 0, (s_hiw_x1 - s_hiw_x0) * S, VRAM_H * S);
-    glEnable(GL_SCISSOR_TEST);
-    glScissor((x0 - s_hiw_x0) * S, y * S, (x1 - x0) * S, h * S);
-    glClearColor(r, g, b, a);
-    glClearStencil(stencil);
-    glStencilMask(0xFF);
-    glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    for (int t = 0; t < s_hiw_n; t++) {
+        const HiwTile *T = &s_hiw_t[t];
+        int x0 = x > T->x0 ? x : T->x0, x1 = x + w < T->x1 ? x + w : T->x1;
+        if (x1 <= x0) continue;
+        p_glBindFramebuffer(PSXGL_FRAMEBUFFER, T->fbo);
+        glViewport(0, 0, (T->x1 - T->x0) * S, VRAM_H * S);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor((x0 - T->x0) * S, y * S, (x1 - x0) * S, h * S);
+        glClearColor(r, g, b, a);
+        glClearStencil(stencil);
+        glStencilMask(0xFF);
+        glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    }
 }
 
-/* Bind the hi blit program for the window: projection and shift set, the
- * source texture on unit 0. */
-static void hiw_blit_begin(GLuint src_tex, int src_div, int off_x, int off_y, int maskset) {
-    int S = s_out_scale, ww = s_hiw_x1 - s_hiw_x0;
-    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_hiw_fbo);
+/* Bind the hi blit program for tile T: projection and shift set, the source
+ * texture on unit 0. */
+static void hiw_blit_begin(const HiwTile *T, GLuint src_tex, int src_div, int off_x,
+                           int off_y, int maskset) {
+    int S = s_out_scale, ww = T->x1 - T->x0;
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, T->fbo);
     glViewport(0, 0, ww * S, VRAM_H * S);
     glEnable(GL_SCISSOR_TEST);
     glDisable(GL_BLEND);
@@ -1753,7 +1812,7 @@ static void hiw_blit_begin(GLuint src_tex, int src_div, int off_x, int off_y, in
     p_glUniform1i(s_uBhSrcDiv, src_div);
     p_glUniform2i(s_uBhSrcOff, off_x, off_y);
     p_glUniform1f(s_uBhShift, s_shift_hi);
-    p_glUniform1f(s_uBhXoff, (float)(-s_hiw_x0));
+    p_glUniform1f(s_uBhXoff, (float)(-T->x0));
     p_glUniform1f(s_uBhXhalf, (float)ww / 2.0f);
     p_glBindVertexArray(s_blit_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_blit_vbo);
@@ -1768,118 +1827,146 @@ static void blit_quad_verts(int x, int y, int w, int h) {
     p_glBufferData(PSXGL_ARRAY_BUFFER, sizeof verts, verts, PSXGL_STREAM_DRAW);
 }
 
-/* CPU->VRAM uploads into the window: the same staged native texels (s_up_tex,
- * VRAM-aligned) drawn at S, texel = frag/S + window origin. */
+/* CPU->VRAM uploads into the tiles: the same staged native texels (s_up_tex,
+ * VRAM-aligned) drawn at S, texel = frag/S + tile origin. */
 static void hiw_mirror_uploads(const DirtyRect *rects, int nrects) {
     if (!hiw_on() || nrects <= 0) return;
     hiw_flush_queue();
     int S = s_out_scale;
-    int any = 0;
-    for (int i = 0; i < nrects; i++) {
-        int x0 = rects[i].x0 > s_hiw_x0 ? rects[i].x0 : s_hiw_x0;
-        int x1 = rects[i].x1 + 1 < s_hiw_x1 ? rects[i].x1 + 1 : s_hiw_x1;
-        if (x1 <= x0) continue;
-        if (!any) { hiw_blit_begin(s_up_tex, S, s_hiw_x0, 0, 0); any = 1; }
-        int y = rects[i].y0, h = rects[i].y1 - rects[i].y0 + 1;
-        glScissor((x0 - s_hiw_x0) * S, y * S, (x1 - x0) * S, h * S);
-        blit_quad_verts(x0, y, x1 - x0, h);
-        plain_stencil(0); p_glUniform1i(s_uBhPass, 1); glDrawArrays(GL_TRIANGLES, 0, 6);
-        plain_stencil(1); p_glUniform1i(s_uBhPass, 2); glDrawArrays(GL_TRIANGLES, 0, 6);
+    for (int t = 0; t < s_hiw_n; t++) {
+        const HiwTile *T = &s_hiw_t[t];
+        int any = 0;
+        for (int i = 0; i < nrects; i++) {
+            int x0 = rects[i].x0 > T->x0 ? rects[i].x0 : T->x0;
+            int x1 = rects[i].x1 + 1 < T->x1 ? rects[i].x1 + 1 : T->x1;
+            if (x1 <= x0) continue;
+            if (!any) { hiw_blit_begin(T, s_up_tex, S, T->x0, 0, 0); any = 1; }
+            int y = rects[i].y0, h = rects[i].y1 - rects[i].y0 + 1;
+            glScissor((x0 - T->x0) * S, y * S, (x1 - x0) * S, h * S);
+            blit_quad_verts(x0, y, x1 - x0, h);
+            plain_stencil(0); p_glUniform1i(s_uBhPass, 1); glDrawArrays(GL_TRIANGLES, 0, 6);
+            plain_stencil(1); p_glUniform1i(s_uBhPass, 2); glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+        if (any) hr_end();
     }
-    if (any) hr_end();
 }
 
-/* VRAM->VRAM copy into the window. The canonical copy (1x) has just staged its
- * source at the scratch origin (rows [0, h)); gpu_copy_rect sized the scratch
- * so the window's own source fits below it (rows [h, h + h*S)). Dest columns
- * whose source also lies in the window copy hi->hi at S; the rest take the 1x
- * source, upscaled nearest. Both sources are staged before anything is drawn,
- * so an overlapping copy reads pre-copy pixels, like the canonical one. Two
- * passes by source bit15, so the window's stencil tracks the mask. */
-static void hiw_mirror_copy(int sx, int sy, int dx, int dy, int w, int h) {
-    if (!hiw_on()) return;
-    hiw_flush_queue();
-    int S = s_out_scale;
-    int d0 = dx > s_hiw_x0 ? dx : s_hiw_x0;
-    int d1 = dx + w < s_hiw_x1 ? dx + w : s_hiw_x1;
-    if (d1 <= d0) return;
-    /* Dest columns whose source column is inside the window. */
-    int shift = sx - dx;
-    int h0 = d0, h1 = d1;
-    if (s_hiw_x0 - shift > h0) h0 = s_hiw_x0 - shift;
-    if (s_hiw_x1 - shift < h1) h1 = s_hiw_x1 - shift;
-    if (h1 < h0) h1 = h0;
-    if (h1 > h0) {
-        int cw = h1 - h0, src_x = h0 + shift;
-        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hiw_fbo);
-        p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_scratch_fbo);
-        glDisable(GL_SCISSOR_TEST);
-        p_glBlitFramebuffer((src_x - s_hiw_x0) * S, sy * S,
-                            (src_x - s_hiw_x0 + cw) * S, (sy + h) * S,
-                            0, h, cw * S, h + h * S, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+/* One column chunk [a, b) (dest columns) of hiw_mirror_copy. Dest columns
+ * whose source column lies in a tile take it at S: every tile holding part
+ * of the source stages it into the window scratch at ((c - a) * S, 0) before
+ * anything is drawn. The rest take the 1x source the canonical copy staged
+ * at the shared scratch origin, upscaled nearest. Two passes by source bit15,
+ * so each tile's stencil tracks the mask. */
+static int s_hiw_scratch_refused_logged = 0;
+static void hiw_mirror_copy_chunk(int a, int b, int shift, int sy, int dx, int dy,
+                                  int h) {
+    static uint8_t hi_src[VRAM_W];
+    int S = s_out_scale, staged = 0;
+    memset(hi_src + a, 0, (size_t)(b - a));
+    for (int t = 0; t < s_hiw_n; t++) {
+        const HiwTile *T = &s_hiw_t[t];
+        int s0 = a + shift > T->x0 ? a + shift : T->x0;
+        int s1 = b + shift < T->x1 ? b + shift : T->x1;
+        if (s1 <= s0) continue;
+        if (!staged) {
+            if (!s_hiw_scratch_fbo ||
+                !stage_tex_grow(s_hiw_scratch_tex, &s_hiw_scratch_w, &s_hiw_scratch_h,
+                                (b - a) * S, h * S, "high-resolution copy scratch",
+                                &s_hiw_scratch_refused_logged))
+                break;   /* every column takes the 1x source */
+            p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_hiw_scratch_fbo);
+            glDisable(GL_SCISSOR_TEST);
+            staged = 1;
+        }
+        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, T->fbo);
+        p_glBlitFramebuffer((s0 - T->x0) * S, sy * S, (s1 - T->x0) * S, (sy + h) * S,
+                            (s0 - shift - a) * S, 0, (s1 - shift - a) * S, h * S,
+                            GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        memset(hi_src + (s0 - shift), 1, (size_t)(s1 - s0));
+    }
+    if (staged) {
         p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
         p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
     }
-    /* 1x-sourced columns: [d0, h0) and [h1, d1), or all of [d0, d1). */
-    {
-        int parts[2][2] = { { d0, h1 > h0 ? h0 : d1 }, { h1 > h0 ? h1 : d1, d1 } };
-        int began = 0;
-        for (int i = 0; i < 2; i++) {
-            int a = parts[i][0], b = parts[i][1];
-            if (b <= a) continue;
-            if (!began) { hiw_blit_begin(s_scratch_tex, S, s_hiw_x0 - dx, -dy, s_mask_set); began = 1; }
-            glScissor((a - s_hiw_x0) * S, dy * S, (b - a) * S, h * S);
-            blit_quad_verts(a, dy, b - a, h);
-            mask_stencil(s_mask_set); p_glUniform1i(s_uBhPass, 1); glDrawArrays(GL_TRIANGLES, 0, 6);
-            mask_stencil(1);          p_glUniform1i(s_uBhPass, 2); glDrawArrays(GL_TRIANGLES, 0, 6);
+    for (int t = 0; t < s_hiw_n; t++) {
+        const HiwTile *T = &s_hiw_t[t];
+        int d0 = a > T->x0 ? a : T->x0, d1 = b < T->x1 ? b : T->x1;
+        if (d1 <= d0) continue;
+        for (int from_hi = 0; from_hi < 2; from_hi++) {
+            int began = 0;
+            for (int c = d0; c < d1;) {
+                int e = c + 1;
+                while (e < d1 && hi_src[e] == hi_src[c]) e++;
+                if (hi_src[c] == from_hi) {
+                    if (!began) {
+                        if (from_hi)   /* texel = frag - chunk origin in the tile */
+                            hiw_blit_begin(T, s_hiw_scratch_tex, 1, -(a - T->x0) * S,
+                                           -dy * S, s_mask_set);
+                        else           /* texel = frag/S + tile origin - dest */
+                            hiw_blit_begin(T, s_scratch_tex, S, T->x0 - dx, -dy,
+                                           s_mask_set);
+                        began = 1;
+                    }
+                    glScissor((c - T->x0) * S, dy * S, (e - c) * S, h * S);
+                    blit_quad_verts(c, dy, e - c, h);
+                    mask_stencil(s_mask_set); p_glUniform1i(s_uBhPass, 1); glDrawArrays(GL_TRIANGLES, 0, 6);
+                    mask_stencil(1);          p_glUniform1i(s_uBhPass, 2); glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                c = e;
+            }
+            if (began) hr_end();
         }
-        if (began) hr_end();
-    }
-    if (h1 > h0) {
-        int cw = h1 - h0;
-        /* texel = frag - dest origin + (0, h) (the window's source rows). */
-        hiw_blit_begin(s_scratch_tex, 1, -(h0 - s_hiw_x0) * S, h - dy * S, s_mask_set);
-        glScissor((h0 - s_hiw_x0) * S, dy * S, cw * S, h * S);
-        blit_quad_verts(h0, dy, cw, h);
-        mask_stencil(s_mask_set); p_glUniform1i(s_uBhPass, 1); glDrawArrays(GL_TRIANGLES, 0, 6);
-        mask_stencil(1);          p_glUniform1i(s_uBhPass, 2); glDrawArrays(GL_TRIANGLES, 0, 6);
-        hr_end();
     }
 }
 
-/* Create or grow the window to cover columns [x0, x1). The new surface is
- * seeded by upscaling the 1x content (nearest), the old window's pixels are
- * carried over at S, and the stencil is rebuilt from alpha. Returns 0 (and
- * logs once) when the grown window would exceed the driver limit or the
- * memory budget; that display then presents from the 1x surface. */
-static int hiw_ensure(int x0, int x1) {
-    if (!s_hiw || !s_raster_ok) return 0;
-    if (x0 < 0) x0 = 0;
-    if (x1 > VRAM_W) x1 = VRAM_W;
-    if (x1 <= x0) return 0;
-    hiw_flush_queue();   /* every caller is about to read the window */
-    if (s_hiw_fbo && x0 >= s_hiw_x0 && x1 <= s_hiw_x1) return 1;
-    int nx0 = x0, nx1 = x1;
-    if (s_hiw_fbo) {
-        if (s_hiw_x0 < nx0) nx0 = s_hiw_x0;
-        if (s_hiw_x1 > nx1) nx1 = s_hiw_x1;
+/* VRAM->VRAM copy into the tiles. The canonical copy (1x) has just staged its
+ * source at the shared scratch origin. The dest columns any tile holds are
+ * copied in chunks narrow enough for the window scratch at S (the GPU limit),
+ * in memmove order: a source right of its dest walks the chunks left to
+ * right, one left of it right to left, so no chunk overwrites a later chunk's
+ * source and an overlapping copy reads pre-copy pixels like the canonical
+ * one. */
+static void hiw_mirror_copy(int sx, int sy, int dx, int dy, int w, int h) {
+    if (!hiw_on()) return;
+    hiw_flush_queue();
+    int S = s_out_scale, shift = sx - dx, lo = VRAM_W, hi = 0;
+    for (int t = 0; t < s_hiw_n; t++) {
+        int a = dx > s_hiw_t[t].x0 ? dx : s_hiw_t[t].x0;
+        int b = dx + w < s_hiw_t[t].x1 ? dx + w : s_hiw_t[t].x1;
+        if (b > a) { if (a < lo) lo = a; if (b > hi) hi = b; }
     }
-    nx0 = nx0 / HIW_ALIGN * HIW_ALIGN;
-    nx1 = (nx1 + HIW_ALIGN - 1) / HIW_ALIGN * HIW_ALIGN;
-    if (nx1 > VRAM_W) nx1 = VRAM_W;
+    if (hi <= lo) return;
+    int cols = s_gl_max_dim > 0 ? s_gl_max_dim / S : hi - lo;
+    if (cols < 1) cols = 1;
+    int n = (hi - lo + cols - 1) / cols;
+    for (int k = 0; k < n; k++) {
+        int i = shift < 0 ? n - 1 - k : k;
+        int a = lo + i * cols, b = a + cols < hi ? a + cols : hi;
+        hiw_mirror_copy_chunk(a, b, shift, sy, dx, dy, h);
+    }
+}
+
+static uint64_t hiw_tile_bytes(int x0, int x1) {
+    return psx_gl_window_bytes(s_out_scale, x1 - x0);
+}
+
+/* Allocate a tile over [nx0, nx1) (64-aligned) and release the tiles in
+ * `drop` (a bitmask of indices). The new surface is seeded by upscaling the
+ * 1x content (nearest), then every existing tile's overlapping columns are
+ * carried over at S, and the stencil is rebuilt from alpha. Returns NULL,
+ * leaving the tiles as they were, when the new tile would exceed the driver
+ * limit, the memory budget (all tiles kept plus the new one) or
+ * HIW_MAX_TILES, or fails to allocate. */
+static const HiwTile *hiw_alloc_tile(int nx0, int nx1, unsigned drop) {
     int S = s_out_scale, W = (nx1 - nx0) * S, H = VRAM_H * S;
-    uint64_t bytes = (uint64_t)W * (uint64_t)H * PSX_GL_HR_BYTES_PER_PX;
+    uint64_t bytes = hiw_tile_bytes(nx0, nx1);
+    int kept = 0;
+    for (int t = 0; t < s_hiw_n; t++)
+        if (!(drop & (1u << t))) { kept++; bytes += hiw_tile_bytes(s_hiw_t[t].x0, s_hiw_t[t].x1); }
+    if (kept >= HIW_MAX_TILES) return NULL;
     if ((s_gl_max_dim > 0 && (W > s_gl_max_dim || H > s_gl_max_dim)) ||
-        (s_vram_budget && bytes > s_vram_budget)) {
-        if (!s_hiw_refused_logged) {
-            fprintf(stdout, "psxrecomp: GL high-resolution window [%d,%d) at %dx "
-                    "(%dx%d) exceeds the GPU limit %d or the %llu MiB budget; "
-                    "that display presents at 1x\n", nx0, nx1, S, W, H,
-                    s_gl_max_dim, (unsigned long long)(s_vram_budget >> 20));
-            s_hiw_refused_logged = 1;
-        }
-        return 0;
-    }
+        (s_vram_budget && bytes > s_vram_budget))
+        return NULL;
     while (glGetError() != GL_NO_ERROR) {}
     GLuint tex = make_tex(GL_RGBA8, W, H, GL_RGBA, GL_UNSIGNED_BYTE), rb = 0, fbo = 0;
     p_glGenRenderbuffers(1, &rb);
@@ -1896,33 +1983,89 @@ static int hiw_ensure(int x0, int x1) {
                     "allocate; that display presents at 1x\n", W, H);
             s_hiw_refused_logged = 1;
         }
-        return 0;
+        return NULL;
     }
-    /* Seed from the authoritative 1x surface, then carry the old window over. */
+    /* Seed from the authoritative 1x surface, then carry the tiles over. */
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hr_fbo);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, fbo);
     glDisable(GL_SCISSOR_TEST);
     p_glBlitFramebuffer(nx0 * s_hr_scale, 0, nx1 * s_hr_scale, VRAM_H * s_hr_scale,
                         0, 0, W, H, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    if (s_hiw_fbo) {
-        int ow = (s_hiw_x1 - s_hiw_x0) * S;
-        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hiw_fbo);
-        p_glBlitFramebuffer(0, 0, ow, H, (s_hiw_x0 - nx0) * S, 0,
-                            (s_hiw_x0 - nx0) * S + ow, H,
+    for (int t = 0; t < s_hiw_n; t++) {
+        const HiwTile *T = &s_hiw_t[t];
+        int i0 = nx0 > T->x0 ? nx0 : T->x0, i1 = nx1 < T->x1 ? nx1 : T->x1;
+        if (i1 <= i0) continue;
+        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, T->fbo);
+        p_glBlitFramebuffer((i0 - T->x0) * S, 0, (i1 - T->x0) * S, H,
+                            (i0 - nx0) * S, 0, (i1 - nx0) * S, H,
                             GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        p_glDeleteFramebuffers(1, &s_hiw_fbo);
-        p_glDeleteRenderbuffers(1, &s_hiw_rb);
-        glDeleteTextures(1, &s_hiw_tex);
     }
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
-    s_hiw_tex = tex; s_hiw_rb = rb; s_hiw_fbo = fbo;
-    s_hiw_x0 = nx0; s_hiw_x1 = nx1;
+    int n = 0;
+    for (int t = 0; t < s_hiw_n; t++) {
+        if (drop & (1u << t)) {
+            p_glDeleteFramebuffers(1, &s_hiw_t[t].fbo);
+            p_glDeleteRenderbuffers(1, &s_hiw_t[t].rb);
+            glDeleteTextures(1, &s_hiw_t[t].tex);
+        } else {
+            s_hiw_t[n++] = s_hiw_t[t];
+        }
+    }
+    HiwTile *nt = &s_hiw_t[n];
+    nt->x0 = nx0; nt->x1 = nx1; nt->tex = tex; nt->rb = rb; nt->fbo = fbo;
+    s_hiw_n = n + 1;
     s_hiw_grows++;
-    rebuild_target_stencil_tiled(s_hiw_fbo, W, H, 0, 0, W, H);
+    rebuild_target_stencil_tiled(fbo, W, H, 0, 0, W, H);
     fprintf(stdout, "psxrecomp: GL high-resolution window x=[%d,%d) at %dx: %dx%d "
-            "(%llu MiB)\n", nx0, nx1, S, W, H, (unsigned long long)(bytes >> 20));
-    return 1;
+            "(%llu MiB; %d tile%s)\n", nx0, nx1, S, W, H,
+            (unsigned long long)(hiw_tile_bytes(nx0, nx1) >> 20), s_hiw_n,
+            s_hiw_n == 1 ? "" : "s");
+    return nt;
+}
+
+/* The tile holding columns [x0, x1), created or grown on first sight:
+ * 1. one surface over the union of every display shown so far (a single
+ *    window growing with the layout, as long as it fits);
+ * 2. else this display merged with the tiles it overlaps;
+ * 3. else a tile of its own (side-by-side buffers too wide together).
+ * Returns NULL (logged once) when none fits the driver limit, the memory
+ * budget or HIW_MAX_TILES; that display then presents from the 1x surface. */
+static const HiwTile *hiw_ensure(int x0, int x1) {
+    if (!s_hiw || !s_raster_ok) return NULL;
+    if (x0 < 0) x0 = 0;
+    if (x1 > VRAM_W) x1 = VRAM_W;
+    if (x1 <= x0) return NULL;
+    hiw_flush_queue();   /* every caller is about to read the window */
+    const HiwTile *T = hiw_tile_holding(x0, x1);
+    if (T) return T;
+    int a0 = x0 / HIW_ALIGN * HIW_ALIGN;
+    int a1 = (x1 + HIW_ALIGN - 1) / HIW_ALIGN * HIW_ALIGN;
+    if (a1 > VRAM_W) a1 = VRAM_W;
+    int u0 = a0, u1 = a1, m0 = a0, m1 = a1;
+    unsigned all = 0, over = 0;
+    for (int t = 0; t < s_hiw_n; t++) {
+        all |= 1u << t;
+        if (s_hiw_t[t].x0 < u0) u0 = s_hiw_t[t].x0;
+        if (s_hiw_t[t].x1 > u1) u1 = s_hiw_t[t].x1;
+        if (s_hiw_t[t].x1 > a0 && s_hiw_t[t].x0 < a1) {
+            over |= 1u << t;
+            if (s_hiw_t[t].x0 < m0) m0 = s_hiw_t[t].x0;
+            if (s_hiw_t[t].x1 > m1) m1 = s_hiw_t[t].x1;
+        }
+    }
+    T = hiw_alloc_tile(u0, u1, all);
+    if (!T && over && over != all) T = hiw_alloc_tile(m0, m1, over);
+    if (!T && s_hiw_n) T = hiw_alloc_tile(a0, a1, 0);
+    if (T) return T;
+    if (!s_hiw_refused_logged) {
+        fprintf(stdout, "psxrecomp: GL high-resolution window [%d,%d) at %dx does not "
+                "fit beside %d tile%s (GPU limit %d, %llu MiB budget); that display "
+                "presents at 1x\n", a0, a1, s_out_scale, s_hiw_n, s_hiw_n == 1 ? "" : "s",
+                s_gl_max_dim, (unsigned long long)(s_vram_budget >> 20));
+        s_hiw_refused_logged = 1;
+    }
+    return NULL;
 }
 
 /* ---- coherency: hr FBO -> raw mirror (pack) ------------------------------ */
@@ -2369,9 +2512,12 @@ static HiCmd *hiw_enqueue(int kind, const float *verts, int nverts, int stride) 
     return c;
 }
 
-/* The draw area intersects the window at all (else nothing to mirror). */
+/* The draw area intersects a tile at all (else nothing to mirror). */
 static int hiw_area_touches(void) {
-    return s_area_x2 >= s_hiw_x0 && s_area_x1 < s_hiw_x1 && s_area_y2 >= s_area_y1;
+    if (s_area_y2 < s_area_y1) return 0;
+    for (int t = 0; t < s_hiw_n; t++)
+        if (s_area_x2 >= s_hiw_t[t].x0 && s_area_x1 < s_hiw_t[t].x1) return 1;
+    return 0;
 }
 
 static void hiw_enqueue_tex(int nverts, int semi) {
@@ -2393,60 +2539,69 @@ static void hiw_enqueue_geo(const float *verts, int nverts, int semi, int mask) 
     c->mask = (uint8_t)(mask ? 1 : 0);
 }
 
+/* Replay the queued draws into every tile they touch: the window projection
+ * and each command's draw area (clipped to the tile) as the scissor. A tile no
+ * command touches is not bound. */
 static void hiw_flush_queue(void) {
     if (s_hq_n == 0) return;
     if (!hiw_on()) { s_hq_n = 0; s_hq_vn = 0; return; }
-    int S = s_out_scale, ww = s_hiw_x1 - s_hiw_x0;
+    int S = s_out_scale;
     s_hq_flushes++;
-    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_hiw_fbo);
-    glViewport(0, 0, ww * S, VRAM_H * S);
-    glEnable(GL_SCISSOR_TEST);
-    /* The window projection on both programs for the whole replay. */
-    p_glUseProgram(s_geo_prog);
-    p_glUniform1f(s_geo_uShift, s_shift_hi);
-    p_glUniform1f(s_geo_uXoff, (float)(-s_hiw_x0));
-    p_glUniform1f(s_geo_uXhalf, (float)ww / 2.0f);
-    p_glUseProgram(s_tex_prog);
-    p_glUniform1f(s_tex_uShift, s_shift_hi);
-    p_glUniform1f(s_tex_uXoff, (float)(-s_hiw_x0));
-    p_glUniform1f(s_tex_uXhalf, (float)ww / 2.0f);
-    p_glUniform1i(s_uVram, 0);
-    p_glActiveTexture(PSXGL_TEXTURE0);
-    int cur = 0;
-    for (int i = 0; i < s_hq_n; i++) {
-        const HiCmd *c = &s_hq[i];
-        int cx0 = c->ax0 > s_hiw_x0 ? c->ax0 : s_hiw_x0;
-        int cx1 = c->ax1 + 1 < s_hiw_x1 ? c->ax1 + 1 : s_hiw_x1;
-        int cy0 = c->ay0 < 0 ? 0 : c->ay0;
-        int cy1 = c->ay1 + 1 > VRAM_H ? VRAM_H : c->ay1 + 1;
-        if (cx1 <= cx0 || cy1 <= cy0) continue;
-        glScissor((cx0 - s_hiw_x0) * S, cy0 * S, (cx1 - cx0) * S, (cy1 - cy0) * S);
-        if (c->kind == HQ_TEX) {
-            if (cur != HQ_TEX) {
-                p_glUseProgram(s_tex_prog);
-                p_glBindVertexArray(s_tex_vao);
-                p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_tex_vbo);
-                cur = HQ_TEX;
-            }
-            glBindTexture(GL_TEXTURE_2D, c->tex);
-            p_glUniform4i(s_uTwin, c->twin[0], c->twin[1], c->twin[2], c->twin[3]);
-            p_glUniform1i(s_uMaskset, c->mask);
-            p_glUniform1i(s_uFilter, c->filter);
-            p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
-                           s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
-            tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0);
-        } else {
-            if (cur != HQ_GEO) {
+    for (int t = 0; t < s_hiw_n; t++) {
+        const HiwTile *T = &s_hiw_t[t];
+        int ww = T->x1 - T->x0, bound = 0, cur = 0;
+        for (int i = 0; i < s_hq_n; i++) {
+            const HiCmd *c = &s_hq[i];
+            int cx0 = c->ax0 > T->x0 ? c->ax0 : T->x0;
+            int cx1 = c->ax1 + 1 < T->x1 ? c->ax1 + 1 : T->x1;
+            int cy0 = c->ay0 < 0 ? 0 : c->ay0;
+            int cy1 = c->ay1 + 1 > VRAM_H ? VRAM_H : c->ay1 + 1;
+            if (cx1 <= cx0 || cy1 <= cy0) continue;
+            if (!bound) {
+                p_glBindFramebuffer(PSXGL_FRAMEBUFFER, T->fbo);
+                glViewport(0, 0, ww * S, VRAM_H * S);
+                glEnable(GL_SCISSOR_TEST);
+                /* The tile projection on both programs for its replay. */
                 p_glUseProgram(s_geo_prog);
-                p_glBindVertexArray(s_geo_vao);
-                p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
-                cur = HQ_GEO;
+                p_glUniform1f(s_geo_uShift, s_shift_hi);
+                p_glUniform1f(s_geo_uXoff, (float)(-T->x0));
+                p_glUniform1f(s_geo_uXhalf, (float)ww / 2.0f);
+                p_glUseProgram(s_tex_prog);
+                p_glUniform1f(s_tex_uShift, s_shift_hi);
+                p_glUniform1f(s_tex_uXoff, (float)(-T->x0));
+                p_glUniform1f(s_tex_uXhalf, (float)ww / 2.0f);
+                p_glUniform1i(s_uVram, 0);
+                p_glActiveTexture(PSXGL_TEXTURE0);
+                bound = 1;
             }
-            if (c->semi >= 0) apply_psx_blend(c->semi); else glDisable(GL_BLEND);
-            mask_stencil_ex(c->mask, c->check);
-            p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * 6 * sizeof(float)),
-                           s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
-            glDrawArrays(GL_TRIANGLES, 0, c->vcount);
+            glScissor((cx0 - T->x0) * S, cy0 * S, (cx1 - cx0) * S, (cy1 - cy0) * S);
+            if (c->kind == HQ_TEX) {
+                if (cur != HQ_TEX) {
+                    p_glUseProgram(s_tex_prog);
+                    p_glBindVertexArray(s_tex_vao);
+                    p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_tex_vbo);
+                    cur = HQ_TEX;
+                }
+                glBindTexture(GL_TEXTURE_2D, c->tex);
+                p_glUniform4i(s_uTwin, c->twin[0], c->twin[1], c->twin[2], c->twin[3]);
+                p_glUniform1i(s_uMaskset, c->mask);
+                p_glUniform1i(s_uFilter, c->filter);
+                p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
+                               s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
+                tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0);
+            } else {
+                if (cur != HQ_GEO) {
+                    p_glUseProgram(s_geo_prog);
+                    p_glBindVertexArray(s_geo_vao);
+                    p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
+                    cur = HQ_GEO;
+                }
+                if (c->semi >= 0) apply_psx_blend(c->semi); else glDisable(GL_BLEND);
+                mask_stencil_ex(c->mask, c->check);
+                p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * 6 * sizeof(float)),
+                               s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
+                glDrawArrays(GL_TRIANGLES, 0, c->vcount);
+            }
         }
     }
     /* Canonical projection back on both programs. */
@@ -2979,11 +3134,10 @@ static void gpu_copy_rect(int sx,int sy,int dx,int dy,int w,int h) {
     /* Stage the source at the scratch ORIGIN (not at its own hr coords), so
      * the scratch only has to be as large as the biggest copy. The integer
      * texelFetch in BLIT_FS makes the placement invisible in the result.
-     * With the high-resolution window on, leave room below for its own
-     * S-scaled source (hiw_mirror_copy): growing the scratch later would
-     * discard the 1x source staged here. */
-    if (hiw_on()) scratch_ensure(w * s_out_scale, h + h * s_out_scale);
-    scratch_ensure(w * S, h * S);
+     * w*S and h*S fit the GPU limit whenever the hr surface does; the
+     * high-resolution window stages its S-scaled source in a scratch of its
+     * own (hiw_mirror_copy), so this one never grows past the hr surface. */
+    if (!scratch_ensure(w * S, h * S)) return;
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hr_fbo);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_scratch_fbo);
     glDisable(GL_SCISSOR_TEST);
@@ -3571,6 +3725,13 @@ static int init_gpu_raster(void) {
         if (max_vp[0] > 0 && (lim == 0 || max_vp[0] < lim)) lim = max_vp[0];
         if (max_vp[1] > 0 && (lim == 0 || max_vp[1] < lim)) lim = max_vp[1];
         s_gl_max_dim = lim;
+        {
+            /* PSX_GL_MAX_DIM lowers the limit, never raises it: it stands in
+             * for a smaller GPU (tests, and checking a layout's fallback). */
+            const char *md = getenv("PSX_GL_MAX_DIM");
+            int v = md ? atoi(md) : 0;
+            if (v > 0 && (s_gl_max_dim == 0 || v < s_gl_max_dim)) s_gl_max_dim = v;
+        }
         s_vram_budget = psx_gl_budget_bytes_from_env(getenv("PSX_GL_VRAM_BUDGET_MB"));
         s_out_scale = psx_gl_clamp_full_vram_scale(s_req_scale, GL_MAX_INTERNAL_SCALE,
                                                s_gl_max_dim, s_vram_budget,
@@ -3581,9 +3742,14 @@ static int init_gpu_raster(void) {
          * window (see s_hiw). PSX_GL_HIRES_WINDOW=0 disables it (clamp as
          * above); =1 forces it at any scale above 1 (testing). */
         s_hiw = 0;
-        s_hiw_x0 = s_hiw_x1 = 0;
-        s_hiw_tex = s_hiw_fbo = s_hiw_rb = 0;
+        memset(s_hiw_t, 0, sizeof s_hiw_t);   /* the old context took the surfaces */
+        s_hiw_n = 0;
+        s_hiw_last_x0 = s_hiw_last_x1 = 0;
+        s_hiw_scratch_tex = s_hiw_scratch_fbo = 0;
+        s_hiw_scratch_w = s_hiw_scratch_h = 0;
         s_hiw_refused_logged = 0;
+        s_hiw_scratch_refused_logged = 0;
+        s_scratch_refused_logged = 0;
         s_hiw_grows = 0;
         {
             const char *env = getenv("PSX_GL_HIRES_WINDOW");
@@ -3656,6 +3822,19 @@ static int init_gpu_raster(void) {
         s_scale_alloc_retries++;
     }
     if (!make_fbo(&s_raw_fbo, s_raw_tex, 0)) return 0;
+    if (s_hiw) {
+        /* The window's copy staging; grown on demand (hiw_mirror_copy). */
+        s_hiw_scratch_w = s_hiw_scratch_h = HIW_ALIGN;
+        s_hiw_scratch_tex = make_tex(GL_RGBA8, s_hiw_scratch_w, s_hiw_scratch_h,
+                                     GL_RGBA, GL_UNSIGNED_BYTE);
+        if (!make_fbo(&s_hiw_scratch_fbo, s_hiw_scratch_tex, 0)) {
+            /* Not fatal: window copies then take the 1x source. */
+            if (s_hiw_scratch_fbo) p_glDeleteFramebuffers(1, &s_hiw_scratch_fbo);
+            glDeleteTextures(1, &s_hiw_scratch_tex);
+            s_hiw_scratch_tex = s_hiw_scratch_fbo = 0;
+            s_hiw_scratch_w = s_hiw_scratch_h = 0;
+        }
+    }
 
     s_uVram  = p_glGetUniformLocation(s_tex_prog, "u_vram");
     s_uTpage = p_glGetUniformLocation(s_tex_prog, "u_tpage");
@@ -3831,10 +4010,21 @@ int gl_renderer_scale_info(GlScaleInfo *out) {
     out->fbo_h = s_raster_ok ? VRAM_H * s_hr_scale : 0;
     out->hr_scale = s_raster_ok ? s_hr_scale : 0;
     out->windowed = s_hiw;
-    out->window_x = s_hiw_x0;
-    out->window_w = s_hiw_x1 - s_hiw_x0;
-    out->window_fbo_w = s_hiw_fbo ? (s_hiw_x1 - s_hiw_x0) * s_out_scale : 0;
-    out->window_fbo_h = s_hiw_fbo ? VRAM_H * s_out_scale : 0;
+    {
+        /* The tile of the last presented display (else the first tile). */
+        const HiwTile *T = hiw_tile_holding(s_hiw_last_x0, s_hiw_last_x1);
+        if (!T && s_hiw_n) T = &s_hiw_t[0];
+        if (T) {
+            out->window_x = T->x0;
+            out->window_w = T->x1 - T->x0;
+            out->window_fbo_w = (T->x1 - T->x0) * s_out_scale;
+            out->window_fbo_h = VRAM_H * s_out_scale;
+        }
+        out->window_tiles = s_hiw_n;
+        uint64_t b = 0;
+        for (int t = 0; t < s_hiw_n; t++) b += hiw_tile_bytes(s_hiw_t[t].x0, s_hiw_t[t].x1);
+        out->window_mib = (int)(b >> 20);
+    }
     out->window_grows = s_hiw_grows;
     out->max_scale = psx_gl_clamp_full_vram_scale(GL_MAX_INTERNAL_SCALE,
                                                   GL_MAX_INTERNAL_SCALE,
@@ -3866,11 +4056,12 @@ int gl_renderer_read_display_hires(int x, int y, int w, int h, uint32_t *out,
     GLuint fbo = s_hr_fbo;
     int rx = x;
     if (s_hiw) {
-        /* Windowed: the S-scaled pixels exist only inside the window. */
+        /* Windowed: the S-scaled pixels exist only inside the tiles. */
         hiw_flush_queue();
-        if (!hiw_on() || x < s_hiw_x0 || x + w > s_hiw_x1) return 0;
-        fbo = s_hiw_fbo;
-        rx = x - s_hiw_x0;
+        const HiwTile *T = hiw_on() ? hiw_tile_holding(x, x + w) : NULL;
+        if (!T) return 0;
+        fbo = T->fbo;
+        rx = x - T->x0;
     }
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, fbo);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
@@ -5412,9 +5603,11 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     GLuint src_fbo = s_hr_fbo, src_tex = s_hr_tex, interp_fbo = s_hr_fbo;
     int src_tw = VRAM_W, src_x = disp_x, src_scale = s_out_scale;
     if (s_hiw) {
-        if (hiw_ensure(disp_x, disp_x + w)) {
-            src_fbo = interp_fbo = s_hiw_fbo; src_tex = s_hiw_tex;
-            src_tw = s_hiw_x1 - s_hiw_x0; src_x = disp_x - s_hiw_x0;
+        const HiwTile *T = hiw_ensure(disp_x, disp_x + w);
+        s_hiw_last_x0 = disp_x; s_hiw_last_x1 = disp_x + w;
+        if (T) {
+            src_fbo = interp_fbo = T->fbo; src_tex = T->tex;
+            src_tw = T->x1 - T->x0; src_x = disp_x - T->x0;
         } else {
             src_scale = s_hr_scale;
             interp_fbo = 0;
@@ -5480,35 +5673,31 @@ static void wide_blit_center(GLuint wide_fbo, int base_x, int disp_y, int disp_h
      * have drawn there for every band, so nothing the present reads is ever left
      * black. The margins (x outside the centre) are untouched. */
     if (s_hiw) {
-        /* Windowed high-resolution mode: the centre comes from the window at
-         * S; any column the window cannot hold is the 1x surface, upscaled. */
+        /* Windowed high-resolution mode: the centre comes from a tile at S
+         * (grown to it on first sight). Columns no tile holds are the 1x
+         * surface, upscaled; tiles overwrite the columns they hold. */
         int cx0 = base_x, cx1 = base_x + native_w;
-        int in = hiw_ensure(cx0, cx1);
-        int h0 = cx0, h1 = cx0;
-        if (in || hiw_on()) {
-            h0 = cx0 > s_hiw_x0 ? cx0 : s_hiw_x0;
-            h1 = cx1 < s_hiw_x1 ? cx1 : s_hiw_x1;
-            if (h1 < h0) h1 = h0;
-        }
+        const HiwTile *in = hiw_ensure(cx0, cx1);
+        int R = s_hr_scale;
         glDisable(GL_SCISSOR_TEST);
         p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, wide_fbo);
-        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hr_fbo);
-        int R = s_hr_scale;
-        int lo_parts[2][2] = { { cx0, h1 > h0 ? h0 : cx1 }, { h1 > h0 ? h1 : cx1, cx1 } };
-        for (int i = 0; i < 2; i++) {
-            int a = lo_parts[i][0], b = lo_parts[i][1];
-            if (b <= a) continue;
-            p_glBlitFramebuffer(a * R, 0, b * R, VRAM_H * R,
-                                (g_wide_off + a - cx0) * S, 0,
-                                (g_wide_off + b - cx0) * S, VRAM_H * S,
+        if (!in) {
+            p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hr_fbo);
+            p_glBlitFramebuffer(cx0 * R, 0, cx1 * R, VRAM_H * R,
+                                g_wide_off * S, 0, (g_wide_off + native_w) * S, VRAM_H * S,
                                 GL_COLOR_BUFFER_BIT, GL_NEAREST);
         }
-        if (h1 > h0) {
-            p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hiw_fbo);
-            p_glBlitFramebuffer((h0 - s_hiw_x0) * S, 0, (h1 - s_hiw_x0) * S, VRAM_H * S,
-                                (g_wide_off + h0 - cx0) * S, 0,
-                                (g_wide_off + h1 - cx0) * S, VRAM_H * S,
-                                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        for (int t = 0; t < s_hiw_n; t++) {
+            const HiwTile *T = in ? in : &s_hiw_t[t];
+            int h0 = cx0 > T->x0 ? cx0 : T->x0, h1 = cx1 < T->x1 ? cx1 : T->x1;
+            if (h1 > h0) {
+                p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, T->fbo);
+                p_glBlitFramebuffer((h0 - T->x0) * S, 0, (h1 - T->x0) * S, VRAM_H * S,
+                                    (g_wide_off + h0 - cx0) * S, 0,
+                                    (g_wide_off + h1 - cx0) * S, VRAM_H * S,
+                                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            }
+            if (in) break;
         }
         p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
         p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);

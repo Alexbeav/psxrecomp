@@ -103,10 +103,41 @@ class HiresWindowGuards(unittest.TestCase):
         self.assertLess(upload.index("hiw_flush_queue();"), upload.index("glTexSubImage2D"))
         self.assertIn("hiw_flush_queue();", body(GL, "static void depth24_clear_skipped_fb(void)"))
         self.assertIn("hiw_flush_queue();", body(GL, "static void rebuild_mask_stencils(void)"))
-        self.assertIn("hiw_flush_queue();", body(GL, "static int hiw_ensure(int x0, int x1)"))
+        self.assertIn("hiw_flush_queue();", body(GL, "static const HiwTile *hiw_ensure(int x0, int x1)"))
         present = body(GL, "void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,")
         self.assertIn("if (s_hiw) {", present)
         self.assertIn("int src_tw = VRAM_W, src_x = disp_x, src_scale = s_out_scale;", present)
+
+    def test_every_tile_is_written(self):
+        # Side-by-side buffers too wide for one surface become tiles; every
+        # mirror writes each tile it touches, and a display the union cannot
+        # hold gets a tile of its own instead of presenting at 1x.
+        for fn in ("static void hiw_flush_queue(void)", "static void hiw_clear_rect(",
+                   "static void hiw_mirror_uploads(", "static void hiw_mirror_copy_chunk(",
+                   "static void rebuild_mask_stencils(void)"):
+            self.assertIn("for (int t = 0; ", body(GL, fn), fn)
+        ensure = body(GL, "static const HiwTile *hiw_ensure(int x0, int x1)")
+        self.assertIn("T = hiw_alloc_tile(u0, u1, all);", ensure)
+        self.assertIn("T = hiw_alloc_tile(a0, a1, 0);", ensure)
+
+    def test_window_copy_staging_fits_the_limit(self):
+        # The window's S-scaled copy source has its own scratch, staged in
+        # column chunks that fit the GPU limit; the shared scratch never grows
+        # past the hr surface for it.
+        copy = body(GL, "static void gpu_copy_rect(int sx,int sy,int dx,int dy,int w,int h)")
+        self.assertNotIn("s_out_scale", copy)
+        self.assertIn("if (!scratch_ensure(w * S, h * S)) return;", copy)
+        self.assertIn("int cols = s_gl_max_dim > 0 ? s_gl_max_dim / S : hi - lo;",
+                      body(GL, "static void hiw_mirror_copy("))
+
+    def test_staging_size_committed_after_allocation(self):
+        grow = body(GL, "static int stage_tex_grow(")
+        self.assertIn("nw > s_gl_max_dim || nh > s_gl_max_dim", grow)
+        self.assertLess(grow.index("glTexImage2D"), grow.index("*cur_w = nw; *cur_h = nh;"))
+        self.assertLess(grow.index("glGetError() != GL_NO_ERROR) {"),
+                        grow.index("*cur_w = nw; *cur_h = nh;"))
+        self.assertIn("stage_tex_grow(s_scratch_tex, &s_scratch_w, &s_scratch_h",
+                      body(GL, "static int scratch_ensure(int w, int h)"))
 
     def test_canonical_shaders_untouched(self):
         # The window has its own blit program; BLIT_VS keeps the fixed 1024x512

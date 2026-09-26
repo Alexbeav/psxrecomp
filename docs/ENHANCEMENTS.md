@@ -934,7 +934,25 @@ M4 returns `GL_INVALID_VALUE` for it. A title only needs the displayed frame at
 - W starts empty and grows, rounded to 64 columns, the first time a display
   rectangle outside it is presented, seeded by upscaling the 1x content. The
   present, hold-last, interpolation capture, `screenshot_hires` and the
-  native-wide centre read W; a display it cannot hold presents at 1x.
+  native-wide centre read W.
+- When the union of the displayed rectangles no longer fits one surface
+  (side-by-side 512-wide buffers at x 0 and 512 need 18432 px at 18x), W
+  becomes up to four **tiles**, each its own surface over a column range
+  (there: one per buffer, 9216×9216 and 648 MiB each). Every mirrored write
+  goes to each tile it touches, so a game flipping between horizontally
+  adjacent buffers presents every frame at S instead of alternating with 1x.
+  A display that no tile can hold within the GPU limit, the memory budget
+  (all tiles together) or the four-tile cap presents at 1x, with a log line.
+  Everything drawn inside a tile, and axis-aligned rects, fills, copies and
+  uploads across a tile edge, match the single surface byte for byte; a
+  sloped primitive that crosses a tile edge is clipped there by GL, which
+  can move its interpolated colour by one step or its coverage by a subpixel
+  along it.
+- A VRAM copy into W stages its S-scaled source in a scratch of its own, in
+  column chunks that fit the GPU limit (910 columns at 18x on a 16384 GPU),
+  walked in memmove order so an overlapping copy still reads pre-copy
+  pixels. Staging textures record a new size only after the driver accepted
+  it; a request past the limit is refused with a log line.
 - The window's copies of textured, flat and line draws are **queued** and
   replayed into it in one pass at the next sync point: anything that changes
   what they sample (a pack of the raw mirror, an upload, the depth24 clear),
@@ -947,13 +965,17 @@ M4 returns `GL_INVALID_VALUE` for it. A title only needs the displayed frame at
 
 It engages only when the full-VRAM surface cannot hold the requested scale;
 below that (up to 16x on the M4) nothing changes. `PSX_GL_HIRES_WINDOW=0/1`
-disables or forces it.
+disables or forces it. `PSX_GL_MAX_DIM=N` lowers the GPU limit the backend
+plans with (never raises it), to check a layout on a smaller GPU.
 
 **Evidence.** `gl_scale_invariance_test` forces the window at 2, 3, 5 and 9x
 and requires the frame at internal resolution to be byte-identical to the
 full-VRAM surface at the same scale (copies inside, into and across the
 window edge, fills and uploads across it, mask set/check, all four blend
 modes), and the guest-visible VRAM to be identical to 1x; it also runs the
-window at 18x. In R4 on an M4, the 8K preset reports
+window at 18x. Its side-by-side runs flip two 512-wide buffers: one surface at
+5x and two tiles at 9x under `PSX_GL_MAX_DIM=8192` must equal the full-VRAM
+surface, including copies between the buffers and 1000-column copies staged
+in chunks; at 18x both buffers must read back at S with two tiles. In R4 on an M4, the 8K preset reports
 `effective_scale 18, internal_lines 4320, hr_scale 1, hires_fbo 5760x9216`, and
 `screenshot_hires` in a race is 5760×4320 with the rear-view mirror present.

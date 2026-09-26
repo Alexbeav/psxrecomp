@@ -14,6 +14,17 @@
  *     the same scale (the runner compares the hires digests), including copies
  *     whose source straddles or lies outside the window, fills and uploads
  *     that cross its edge, and scales past the full-VRAM limit (18x = 8K).
+ *   - mode "sbs" (with or without the window): side-by-side double buffering,
+ *     two 512-wide frames at x=0 and x=512 flipped every frame, plus copies
+ *     between them and copies wider than the GPU limit allows at S. Both
+ *     buffers must stay held at S (in two tiles when their union is too wide
+ *     for one surface) and render exactly like the full-VRAM surface; every
+ *     staging texture's recorded size must match its real storage, and a
+ *     scratch request past the GPU limit must be refused and leave it intact.
+ *     Rows SBS_XBAND_Y0.. hold a sloped primitive across both tiles: GL clips
+ *     it at each tile's edge, which can move interpolated colour by one step
+ *     or coverage by a subpixel along it, so that band is only checked for
+ *     being rendered at S (not an upscaled 1x image), not digested.
  * Original source-owned scene; no retail payload. */
 #include "gpu_gl_renderer.c"
 #include "mod_texture_banks.c"
@@ -35,6 +46,7 @@ void psx_ws_dbg_gate_frame_snapshot(void){}
 void gpu_depth24_upload_span_reset(void){}
 
 static uint16_t vram[1024*512], peek[1024*512];
+static int si_max_dim(void) { return s_gl_max_dim > 0 ? s_gl_max_dim : 1 << 30; }
 static int checks, failures;
 static void check(int ok, const char *label) {
     checks++;
@@ -117,6 +129,175 @@ static void scene(void) {
     glb_draw_shaded_line(LINE_X0 + 90, LINE_Y0 + 2, 0x001f, LINE_X0 + 92, LINE_Y0 + 38, 0x7c00); /* steep */
 }
 
+/* ---- mode "sbs": side-by-side 512-wide double buffering ----------------- */
+#define SBS_W 512
+#define SBS_H 240
+#define SBS_TPAGE 0x001C      /* 4-bit page at (768, 256) */
+#define SBS_CLUT_X 768
+#define SBS_CLUT_Y 496
+#define SBS_LINE_Y0 200       /* line band per frame, masked in the native digest */
+#define SBS_LINE_Y1 232
+#define SBS_XBAND_Y0 480      /* a sloped primitive across both tiles */
+
+/* S x S blocks of rows [y0, y1) (native) of a buffer image that are not one
+ * colour: an image rendered at S has them along every sloped edge, an
+ * upscaled 1x image has none. */
+static long sbs_detail_blocks(const uint32_t *img, int ow, int scale, int y0, int y1) {
+    long n = 0;
+    for (int y = y0; y < y1; y++)
+        for (int x = 0; x < SBS_W; x++) {
+            const uint32_t *b = img + (size_t)y * scale * ow + (size_t)x * scale;
+            uint32_t c = b[0] & 0xFFFFFFu;
+            int same = 1;
+            for (int j = 0; j < scale && same; j++)
+                for (int i = 0; i < scale; i++)
+                    if ((b[(size_t)j * ow + i] & 0xFFFFFFu) != c) { same = 0; break; }
+            n += !same;
+        }
+    return n;
+}
+
+/* Present stand-in: the GL present asks the window for the displayed rect. */
+static void sbs_show(int base) {
+    if (s_hiw) check(hiw_ensure(base, base + SBS_W) != NULL, "displayed buffer held at S");
+}
+
+static void sbs_frame(int base, int k) {
+    glb_set_draw_area(base, 0, base + SBS_W - 1, SBS_H - 1);
+    glb_set_semi_transparency(0, 0);
+    glb_set_mask_bits(0, 0);
+    glb_fill_rect(base, 0, SBS_W, SBS_H, (uint16_t)(0x0c63 + k * 0x0421));
+    glb_draw_gouraud_triangle(base + 20 + k * 7, 30, 0x001f, base + 480, 60 + k * 5, 0x7c00,
+                              base + 100, 190, 0x03ff);
+    glb_draw_flat_triangle(base + 300, 10, base + 505, 100 + k * 3, base + 350, 195, 0x5294);
+    glb_draw_textured_rect(base + 200 + k, 110, 64, 48, 0, 0, SBS_CLUT_X, SBS_CLUT_Y, SBS_TPAGE);
+    glb_draw_shaded_textured_triangle(base + 60, 120, 0, 0, 0x808080,
+                                      base + 250, 135, 63, 4, 0x6090b0,
+                                      base + 90, 195, 8, 63, 0xb09060,
+                                      SBS_CLUT_X, SBS_CLUT_Y, SBS_TPAGE, 0);
+    glb_set_semi_transparency(1, k & 3);
+    glb_draw_flat_rect(base + 380, 140, 90, 50, (uint16_t)(0x2108 + k * 0x0842));
+    glb_set_semi_transparency(0, 0);
+    glb_set_mask_bits(1, 0);
+    glb_draw_flat_rect(base + 30, 150, 30, 30, 0x4210);
+    glb_set_mask_bits(0, 1);
+    glb_draw_flat_rect(base + 20, 140, 50, 50, 0x7fff);
+    glb_set_mask_bits(0, 0);
+    /* Clipped by the draw area: reaches into the other buffer. */
+    glb_draw_flat_rect(base + 470, 60, 100, 20, 0x3def);
+    glb_fill_rect(base, SBS_LINE_Y0, SBS_W, SBS_LINE_Y1 - SBS_LINE_Y0, 0);
+    glb_draw_line(base + 10, SBS_LINE_Y0 + 8, base + 500, SBS_LINE_Y0 + 20, 0x7fff);
+    glb_draw_shaded_line(base + 400, SBS_LINE_Y0 + 2, 0x001f, base + 404, SBS_LINE_Y1 - 2, 0x7c00);
+}
+
+static int sbs_main(int scale) {
+    static uint16_t page[64*64], clut[16], patch[40*6];
+    for (int i = 0; i < 64*64; i++) page[i] = (uint16_t)((i * 0x2469u) ^ (i >> 2));
+    for (int i = 0; i < 16; i++) clut[i] = (uint16_t)(i ? (0x0842u * (uint16_t)i) | ((i & 2) << 14) : 0);
+    for (int i = 0; i < 40*6; i++) patch[i] = (uint16_t)(0x1ce7 + i * 0x0103);
+    glb_vram_transfer_in(768, 256, 64, 64, page);
+    glb_vram_transfer_in(SBS_CLUT_X, SBS_CLUT_Y, 16, 1, clut);
+    glb_set_draw_offset(0, 0);
+    glb_set_color_modulation(128, 128, 128, 0);
+    /* Draw the back buffer, flip; four frames, so each buffer is last drawn
+     * while both are shown (held) at S. */
+    for (int k = 0; k < 4; k++) {
+        int back = (k & 1) ? 0 : SBS_W;
+        sbs_frame(back, k);
+        sbs_show(back);
+    }
+    /* Front to back and back to front (across the tiles), and a fill and an
+     * upload that cross x=512. */
+    glb_set_draw_area(0, 0, 1023, 511);
+    glb_copy_rect(40, 40, 552, 50, 200, 100);
+    glb_copy_rect(900, 100, 400, 120, 124, 50);
+    glb_fill_rect(490, 225, 44, 10, 0x1234);
+    glb_vram_transfer_in(492, 236, 40, 6, patch);
+    /* Rows 400..470 across all of VRAM (each triangle inside one buffer, a
+     * rect across x=512), then copies 1000 px wide: past the columns one
+     * GPU-limit-wide staging can hold at 16x and up. One moves right to left
+     * over itself (shift -6, overlapping rows too). */
+    glb_draw_gouraud_triangle(0, 400, 0x7c1f, 511, 404, 0x03e0, 256, 470, 0x001f);
+    glb_draw_gouraud_triangle(512, 402, 0x03e0, 1023, 400, 0x7c1f, 700, 468, 0x7fff);
+    glb_draw_flat_triangle(0, 470, 511, 430, 200, 405, 0x2d6b);
+    glb_draw_flat_triangle(512, 405, 1023, 470, 600, 440, 0x5ad6);
+    glb_draw_flat_rect(300, 404, 500, 30, 0x1f3c);
+    glb_copy_rect(8, 400, 0, 420, 1000, 16);
+    glb_copy_rect(0, 440, 6, 444, 1000, 20);
+    /* The band across both tiles (see the header). */
+    glb_draw_gouraud_triangle(0, 482, 0x7c00, 1023, 486, 0x001f, 512, 509, 0x03e0);
+    sbs_show(0);
+    sbs_show(SBS_W);
+    gl_renderer_sync_cpu();
+    check(gl_renderer_fbo_peek(0, 0, 1024, 512, peek), "native peek");
+    for (int y = SBS_LINE_Y0; y < SBS_LINE_Y1; y++)
+        for (int x = 0; x < 1024; x++) peek[y * 1024 + x] = 0;
+    uint64_t digest = fnv(peek, sizeof peek, 0xcbf29ce484222325ull);
+    uint64_t hi[2] = { 0, 0 };
+    for (int b = 0; b < 2; b++) {
+        int fw = SBS_W * scale, fh = 512 * scale, ow = 0, oh = 0;
+        uint32_t *img = (uint32_t *)malloc((size_t)fw * fh * 4);
+        int n = img ? gl_renderer_read_display_hires(b * SBS_W, 0, SBS_W, 512, img, fw * fh,
+                                                     &ow, &oh) : 0;
+        check(n == fw * fh && ow == fw && oh == fh, "buffer readback at internal resolution");
+        /* Line bands: drawn as quads above 1x in both surfaces, compared too.
+         * Top row first; the cross-tile band is left out. */
+        if (n) hi[b] = fnv(img, (size_t)fw * SBS_XBAND_Y0 * scale * 4, 0xcbf29ce484222325ull);
+        if (n && scale > 1) {
+            long frame = sbs_detail_blocks(img, ow, scale, 0, SBS_H);
+            long band = sbs_detail_blocks(img, ow, scale, SBS_XBAND_Y0, 512);
+            if (frame < 500 || band < 100)
+                fprintf(stderr, "buffer %d detail blocks frame=%ld band=%ld\n", b, frame, band);
+            check(frame >= 500, "buffer rendered at S (not an upscaled 1x image)");
+            check(band >= 100, "cross-tile band rendered at S");
+        }
+        free(img);
+    }
+    /* Staging textures: recorded size == real storage, within the limit. */
+    GLint tw = 0, th = 0;
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_scratch_tex);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+    check(tw == s_scratch_w && th == s_scratch_h, "scratch size recorded == storage");
+    if (s_hiw) {
+        glBindTexture(GL_TEXTURE_2D, s_hiw_scratch_tex);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+        check(tw == s_hiw_scratch_w && th == s_hiw_scratch_h,
+              "window copy scratch size recorded == storage");
+        check(s_hiw_scratch_w <= si_max_dim(), "window copy scratch within the GPU limit");
+        check(!s_hiw_scratch_refused_logged, "no window copy staging refused");
+    }
+    check(!s_scratch_refused_logged, "no scratch growth refused");
+    if (s_hiw) {
+        /* One surface while the union of both buffers fits the limit, else
+         * one tile per buffer. */
+        int want = (long)1024 * scale <= si_max_dim() ? 1 : 2;
+        if (s_hiw_n != want) fprintf(stderr, "tiles=%d want %d\n", s_hiw_n, want);
+        check(s_hiw_n == want, "tile count for the layout");
+    }
+    /* A scratch request past the GPU limit is refused, logged and harmless. */
+    {
+        int w0 = s_scratch_w, h0 = s_scratch_h;
+        check(!scratch_ensure(si_max_dim() + 1, 8), "over-limit scratch refused");
+        check(s_scratch_w == w0 && s_scratch_h == h0, "refused scratch keeps its size");
+        check(s_scratch_refused_logged == 1, "refusal logged");
+        check(scratch_ensure(w0, h0 + 8) && s_scratch_h == h0 + 8, "scratch still grows");
+        glBindTexture(GL_TEXTURE_2D, s_scratch_tex);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+        check(tw == s_scratch_w && th == s_scratch_h, "scratch storage after refusal");
+    }
+    check(glGetError() == GL_NO_ERROR, "GL error");
+    printf("tiles=%d\n", s_hiw_n);
+    printf("digest=%016llx\n", (unsigned long long)digest);
+    printf("hires=%016llx\n", (unsigned long long)hi[0]);
+    printf("wide=%016llx\n", (unsigned long long)hi[1]);
+    printf("checks=%d failures=%d\n", checks, failures);
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     int scale = argc > 1 ? atoi(argv[1]) : 1;
     const char *mode = argc > 2 ? argv[2] : "scene";
@@ -165,9 +346,14 @@ int main(int argc, char **argv) {
     }
 
     check(si.effective == scale, "requested scale allocated");
+    if (!strcmp(mode, "sbs")) {
+        int rc = sbs_main(scale);
+        gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
+        return rc;
+    }
     if (window) {
         check(si.windowed && si.hr_scale == 1, "window mode engaged");
-        check(hiw_ensure(0, FRAME_W), "window covers the frame");
+        check(hiw_ensure(0, FRAME_W) != NULL, "window covers the frame");
     }
     scene();
     gl_renderer_sync_cpu();

@@ -8,6 +8,11 @@ and native-wide (16:9) surface at internal resolution must equal the
 full-VRAM run's at the same scale.
 An 18x window run is 8K past a 16384 texture limit. Two clamp runs check that
 an over-limit request (32x, and a tiny memory budget) stays on GL.
+Side-by-side runs (mode sbs) flip two 512-wide buffers at x=0 and x=512: the
+window must hold both at S and match the full-VRAM surface, as one surface
+while their union fits (5x) and as two tiles when it does not (9x under a
+simulated 8192 limit, PSX_GL_MAX_DIM, and 18x on a 16384 GPU); copies 1000 px
+wide are staged in chunks the limit allows.
 
 macOS/Linux: pass the SDL3 include directory and static library (for example
 from a runtime build tree's _deps/sdl3-src/include and
@@ -146,6 +151,38 @@ def main():
             ok = False
     if not digests_agree(digests):
         print("FAIL native VRAM digest differs across scales/modes:", digests)
+        ok = False
+    # Side-by-side flips: (label, scale, env, reference run or None, tiles).
+    sbs = {}
+    sbs_runs = (
+        ("full", 1, {}, None, None),
+        ("full", 5, {}, None, None),
+        ("full", 9, {}, None, None),
+        ("window", 5, {"PSX_GL_HIRES_WINDOW": "1"}, ("full", 5), 1),
+        ("window-8192", 9, {"PSX_GL_MAX_DIM": "8192"}, ("full", 9), 2),
+        ("window", 18, {"PSX_GL_HIRES_WINDOW": "1"}, None, None),
+    )
+    for label, s, extra, ref, tiles in sbs_runs:
+        e = dict(env)
+        e.update(extra)
+        r = run([dest / "probe", s, "sbs"], env=e)
+        parsed = parse_run(r.stdout)
+        got_tiles = re.search(r"^tiles=(\d+)$", r.stdout, re.M)
+        print(f"sbs {label} {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-5:],
+              r.stderr.strip()[-600:])
+        if r.returncode or not parsed or parsed[1]:
+            ok = False
+        sbs[(label, s)] = (parsed[2] if parsed else None,
+                           parse_hires(r.stdout), parse_hires(r.stdout, "wide"))
+        if tiles is not None and (not got_tiles or int(got_tiles[1]) != tiles):
+            print(f"FAIL sbs {label} {s}x: tiles", got_tiles and got_tiles[1], "want", tiles)
+            ok = False
+        if ref is not None and sbs.get(ref, (None,))[1:] != sbs[(label, s)][1:]:
+            print(f"FAIL sbs {label} {s}x buffers differ from {ref}:",
+                  sbs[(label, s)][1:], sbs.get(ref))
+            ok = False
+    if not digests_agree({k: v[0] for k, v in sbs.items()}):
+        print("FAIL sbs native VRAM digest differs across scales/modes:", sbs)
         ok = False
     for label, s, budget in (("over-limit", 32, None), ("budget", 12, "40")):
         e = dict(env)
