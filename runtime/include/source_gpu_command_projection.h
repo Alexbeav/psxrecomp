@@ -583,6 +583,12 @@ static inline int source_gpu_command_write(SourceGPUCommandProjection *s, uint32
     return !s->error;
 }
 
+/* Callers advance time in service steps of at most 128 cycles: the service
+ * clock (source_gpu_service_clock.h) sets the GPU and DMA deadlines at most 128
+ * cycles apart, and every oracle service event spans <= 128 cycles (PS1B-182:
+ * MMX5, 14.6M events, maximum 128). That is what makes "one queued command
+ * per elapsed step" hold. The unit tests call this with larger spans on
+ * purpose, so it is not asserted here. */
 static inline int source_gpu_command_update(SourceGPUCommandProjection *s, uint64_t cycle)
 {
     if (s->error) return 0;
