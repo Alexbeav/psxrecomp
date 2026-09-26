@@ -45,7 +45,7 @@ if __name__ == '__main__':
             exe=root/'l1.psx';exe.write_bytes(header+image)
             seeds=root/'seeds.txt';seeds.write_text(''.join(f'0x{0x80010000+i*0x100:08x}\n' for i in range(len(cases))))
             out=root/'generated';out.mkdir()
-            subprocess.run([str(args.recompiler.resolve()),str(exe),'--seeds',str(seeds),'--out-dir',str(out)],
+            subprocess.run([str(args.recompiler.resolve()),str(exe),'--project-root',str(here.parents[1]),'--seeds',str(seeds),'--out-dir',str(out)],
                            check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             driver=root/'native.c'
             lines=['#define main decoder_only_main',f'#include "{(here / "test_load_delay_l1.c").as_posix()}"',

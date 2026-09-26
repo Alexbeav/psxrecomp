@@ -26,7 +26,7 @@ assert "#define DMA_GPU_LL_WIRE (4u + (10u * 4u))" in DMA
 assert "#define BOOT_STATE_VERSION 13u" in BOOT_STATE_H
 assert "h.version       = BOOT_STATE_VERSION;" in BOOT_STATE_C
 assert "#define BOOT_STATE_VERSION_MIN_READ 13u" in BOOT_STATE_H
-assert "v11 therefore rejects every earlier state." in BOOT_STATE_H
+assert "v13 therefore rejects every earlier state." in BOOT_STATE_H
 
 assert "void savestate_status_json(char* buf, size_t cap);" in HEADER
 assert '\\"generation\\"' in STATE and '\\"pending\\"' in STATE
