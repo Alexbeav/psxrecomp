@@ -47,6 +47,8 @@
 #include "input_route_raster_clock.h"
 #include "source_gpu_runtime.h"
 #include "dispatch_publish.h"
+#include "device_trace.h"
+#include "irq_cause_ip2.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -114,71 +116,30 @@ static void irq_record_outcome(uint8_t kind, uint8_t detail, uint32_t aux) {
     if (!repeat) event_ring_record(kind, detail);/* GATE: edge only */
 }
 
-/* COP0 register indices */
+/* COP0 register numbers (PSX-SPX cpuspecifications "COP0 Register Summary":
+ * cop0r12 SR, cop0r13 CAUSE, cop0r14 EPC). */
 #define COP0_SR    12
 #define COP0_CAUSE 13
 #define COP0_EPC   14
 
-/* I_STAT and I_MASK are owned by memory.c */
-extern uint32_t i_stat;
-extern uint32_t i_mask;
+/* I_STAT and I_MASK live with the other I/O registers in memory.c. */
+extern uint32_t i_stat, i_mask;
 
-/* Device-event cycle ring (device_trace.c): every hardware IRQ-raise edge is
- * recorded here with its guest cycle. */
-#include "device_trace.h"
-
-/* ---- CAUSE.IP2 is COMBINATIONAL, not latched ---------------------------
- *
- * On R3000A the Cause.IP field is not storage: it reflects the current state
- * of the interrupt input pins. On the PSX only IP2 (bit 10) is wired, and it
- * carries the interrupt controller's output line, i.e. (I_STAT & I_MASK) != 0.
- * It therefore RISES when a device raises and FALLS the instant the guest acks
- * I_STAT or masks the source — with no CPU involvement either way.
- *
- * This runtime previously only ever OR'd bit 10 in at delivery and never
- * cleared it, leaving a phantom IP2 in COP0.CAUSE. A kernel exception
- * dispatcher that loops on CAUSE.IP & SR.IM to decide whether to service
- * again sees a pending interrupt that no longer exists and can spin in its
- * event scan forever.
- *
- * Verified against the independent Beetle oracle rather than asserted:
- * beetle-psx/mednafen/psx/irq.cpp defines
- *     #define Recalc() PSX_CPU->AssertIRQ(0, (bool)(Status & Mask))
- * and calls it from IRQ_Assert (raise), from IRQ_Write for BOTH the Status ack
- * and the Mask write, and at power-on; cpu.cpp's AssertIRQ clears bit (10+n)
- * unconditionally and re-sets it only when the level is asserted. So the line
- * is recomputed at every point (I_STAT & I_MASK) can change, which is exactly
- * the set of call sites below.
- *
- * Ownership: this function is the ONLY writer of CAUSE bit 10. The delivery
- * path no longer ORs it in separately — one owner, no divergence.
- *
- * Derived from PR #102 by Alexandros Mandravillis; the mirror call sites and
- * the single-owner refactor are ours. */
-static uint32_t *s_cause_ptr;
+/* CAUSE.IP2 follows (I_STAT AND I_MASK); see irq_cause_ip2.h for the rule and
+ * its PSX-SPX sources. It is recomputed wherever I_STAT, I_MASK or CAUSE may
+ * change. */
+static uint32_t *s_cop0_cause;
 
 void psx_irq_refresh_cause_ip2(void)
 {
-    if (!s_cause_ptr) return;
-    if ((i_stat & i_mask & 0x7FFu) != 0u)
-        *s_cause_ptr |= (1u << 10);
-    else
-        *s_cause_ptr &= ~(1u << 10);
+    psx_cause_ip2_apply(s_cop0_cause, i_stat, i_mask);
 }
 
-void psx_irq_set_cause_ptr(uint32_t *p)
+void psx_irq_set_cause_ptr(uint32_t *cause)
 {
-    s_cause_ptr = p;
-    /* Power-on recompute, mirroring Beetle's IRQ_Power() -> Recalc(). Without
-     * this the first mirror only happens at the first raise/ack, so a CAUSE
-     * read before any interrupt activity would show a stale bit. */
+    s_cop0_cause = cause;
     psx_irq_refresh_cause_ip2();
-}
-
-/* Central IRQ-raise choke point. All device sources call this to set their
- * I_STAT bit so the device-event ring sees every raise from one place with the
- * exact guest cycle. */
-void psx_irq_raise(uint32_t bit, uint32_t detail)
+}void psx_irq_raise(uint32_t bit, uint32_t detail)
 {
     i_stat |= (1u << bit);
     psx_irq_refresh_cause_ip2();

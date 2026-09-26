@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 project(psxrecomp-runtime C CXX)
 include(CTest)
 
@@ -259,6 +259,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         tests/test_cause_ip2_combinational.c)
     add_test(NAME cause_ip2_combinational_test
              COMMAND cause_ip2_combinational_test)
+    # PS1B-187: the CAUSE.IP2 rule interrupts.c applies, cited to PSX-SPX.
+    add_executable(irq_cause_ip2_doc_test tests/test_irq_cause_ip2_doc.c)
+    target_include_directories(irq_cause_ip2_doc_test PRIVATE include)
+    add_test(NAME irq_cause_ip2_doc_test COMMAND irq_cause_ip2_doc_test)
 
     add_executable(psx_cyc_batch_test tests/test_psx_cyc_batch.c)
     target_include_directories(psx_cyc_batch_test PRIVATE include)
