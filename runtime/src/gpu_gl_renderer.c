@@ -2764,7 +2764,41 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     /* Sub-pixel positions only describe a 3-vertex projected triangle. */
     const int precise = s_pc_valid && mode == GL_TRIANGLES && n == 3;
 
-    /* Lines stay immediate (rare); tris batch for MotK 0x68 starfields. */
+    /* Above 1x (full-VRAM surface, no window) a line is a quad of two
+     * triangles (line_to_quad), so it joins the flat batch like any gouraud
+     * triangle: same vertices, same program, same painter order and batch
+     * keys, so the same pixels. Drawn one by one, every line flushed the
+     * textured batch and, with native-wide, rebound the hr and wide surfaces
+     * twice; R4 draws hundreds of lines per race frame, and at 9x those
+     * render-pass switches held its 21:9 race to 22-30 frames/s. A line the
+     * backdrop-stretch gate would widen keeps the immediate path (the flat
+     * batch mirrors unstretched). 1x keeps GL_LINES exactly as before, and
+     * the windowed high-resolution mode (hr at 1x) keeps its own path. */
+    if (mode == GL_LINES && n == 2 && s_hr_scale > 1 && !s_hiw &&
+        !bd_prim_gate(xs, n, 0)) {
+        float lv[2 * 6], quad[6 * 6];
+        float mask_a = s_mask_set ? 1.0f : 0.0f;
+        for (int i = 0; i < 2; i++) {
+            lv[i*6+0] = (float)xs[i];
+            lv[i*6+1] = (float)ys[i];
+            lv[i*6+2] = ((cs[i] & 0x1F) << 3) / 255.0f;
+            lv[i*6+3] = (((cs[i] >> 5) & 0x1F) << 3) / 255.0f;
+            lv[i*6+4] = (((cs[i] >> 10) & 0x1F) << 3) / 255.0f;
+            lv[i*6+5] = mask_a;
+        }
+        line_to_quad(lv, quad);
+        if (s_fb_n > 0 && (s_fb_semi != semi || s_fb_mask != (int)s_mask_set))
+            flush_flat_batch();
+        if (s_fb_n + 6 > FLATBATCH_MAXV)
+            flush_flat_batch();
+        s_fb_semi = semi;
+        s_fb_mask = (int)s_mask_set;
+        memcpy(&s_fb[s_fb_n * 6], quad, sizeof quad);
+        s_fb_n += 6;
+        return;
+    }
+    /* Lines at 1x (and in windowed mode) stay immediate; tris batch for MotK
+     * 0x68 starfields. */
     if (mode != GL_TRIANGLES || n < 3) {
         flush_flat_batch();
         float verts[3 * 6];

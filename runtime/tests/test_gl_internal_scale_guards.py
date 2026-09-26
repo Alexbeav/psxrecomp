@@ -72,6 +72,19 @@ class GlScaleGuards(unittest.TestCase):
         stencil = body(GL, "static void rebuild_mask_stencils(void)")
         self.assertIn("if (s_out_scale <= 1) {", stencil)
 
+    def test_lines_batch_above_1x(self):
+        # Above 1x a line quad joins the flat batch (one draw, one wide mirror
+        # per batch instead of two surface switches per line); 1x, windowed
+        # mode and backdrop-stretched lines keep the immediate path. The
+        # invariance runner's line bands prove the pixels are unchanged.
+        geo = body(GL, "static void gpu_geometry(")
+        self.assertIn("if (mode == GL_LINES && n == 2 && s_hr_scale > 1 && !s_hiw &&\n"
+                      "        !bd_prim_gate(xs, n, 0)) {", geo)
+        batched = geo[geo.index("line_to_quad(lv, quad);"):]
+        batched = batched[:batched.index("return;")]
+        self.assertIn("s_fb_n += 6;", batched)
+        self.assertNotIn("glDrawArrays", batched)
+
     def test_main_does_not_cap_gl_at_software_limit(self):
         self.assertNotIn("if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;", MAIN)
         self.assertIn("(g_video_renderer == 1) ? GL_MAX_INTERNAL_SCALE", MAIN)
