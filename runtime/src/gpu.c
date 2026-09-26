@@ -7,7 +7,8 @@
  *   - GP0 command write — ABORTS (not yet implemented)
  *   - GPUREAD — returns last latched value
  *
- * Reference: nocash PSX specs, DuckStation src/core/gpu.cpp
+ * Documentation: PSX-SPX (nocash) "Graphics Processing Unit (GPU)", plus the
+ * oracle fixtures cited at each rule.
  */
 
 #include "gpu.h"
@@ -3072,8 +3073,9 @@ uint32_t gpu_read_gpuread(void) {
 
         if (++vram_read_col == vram_read_w) {
             if(source_gpu_runtime_active()) {
-                /* Original source reads both halves of the final word. For
-                 * odd extents its extra half uses the next X on the final row. */
+                /* The source profile reads both halves of the final word; for
+                 * odd extents the extra half is the next X on the final row
+                 * [ORACLE FIXTURE G1]. */
                 if(vram_read_row+1==vram_read_h)vram_read_active=0;
                 else {vram_read_row++;vram_read_col=0;}
             } else if (++vram_read_row == vram_read_h) {
@@ -3487,7 +3489,7 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
     out->depth24   = (int)(display_depth & 1u);
     out->disabled  = (int)display_disabled;
 
-    /* Dot-clock divider from GP1(08h) hres (psx-spx / DuckStation). */
+    /* Dot-clock divider from GP1(08h) hres (PSX-SPX GPU "Dotclocks"). */
     uint32_t cycles;
     uint32_t mode_w;
     if (hres2) {
@@ -3509,10 +3511,11 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
         if (w == 0u) w = 4u;
     }
 
-    /* DuckStation GetFullDisplayResolution: clamp Y1/Y2 to the broadcast
-     * active region before taking the difference. Unclamped Y2 past the
-     * active end (common overscan programming) includes a flickering junk
-     * line at the bottom of present that DuckStation crops away. */
+    /* Our presentation policy (host display, not emulation): clamp Y1/Y2 to
+     * the broadcast active region (PSX-SPX "Vertical Video Timings") before
+     * taking the difference. Unclamped Y2 past the active end (common
+     * overscan programming) includes a flickering junk line at the bottom of
+     * present. */
     PsxDisplayVerticalLayout vertical = psx_display_vertical_layout(
         video_mode != 0, v_display_y1, v_display_y2);
     uint32_t h = psx_display_source_height(vertical, 240u);
@@ -3527,8 +3530,9 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
             screen_source_skip_y, 1);
     }
 
-    /* 24-bit scanout uses the same CRTC pixel width as 15-bit (DuckStation /
-     * Beetle: coordinates stay 16-bit-based; W RGB occupies W*3/2 halfwords).
+    /* 24-bit scanout uses the same CRTC pixel width as 15-bit: coordinates
+     * stay 16-bit-based, and W RGB pixels occupy W*3/2 halfwords. [NOT
+     * DOCUMENTED in PSX-SPX; our model, checked on the MotK FMV below.]
      * MotK FMV: GP1(06h) yields 512; the logo is centered in that RGB line.
      * A blanket (W*2)/3 (512→341) left-shifts the frame and clips the right
      * of the video — do not reintroduce it. Right-edge junk is a separate
@@ -3973,7 +3977,7 @@ static uint16_t current_texpage(void) {
  * (GPUSTAT bits 0-8) exactly like GP0(E1) bits 0-8 — the poly's own word, not
  * the last E1, decides its semi-transparency mode, and later rectangle/sprite
  * prims (which carry no texpage word) consume the state the poly left behind.
- * Beetle: SetTPage(CB[4 + ((cc>>4)&1)] >> 16) on every textured poly.
+ * PSX-SPX "Texpage Attribute": bits 0-8 are the same as GP0(E1h) bits 0-8.
  * Bits 9-10 (dither / draw-to-display) exist only in E1; bit 11 (texture
  * disable) only latches when GP1(09h) allowed it, which polys can't grant. */
 static void set_tpage_from_poly(uint16_t tpage_word) {
@@ -4881,7 +4885,9 @@ static int gp0_command_word_count(uint8_t opcode) {
         case 0xE6: return 1;  /* mask bits */
 
         default:
-            /* 0x03-0x1E, 0xE7-0xEF, 0xFF: NOP (1 word) per DuckStation */
+            /* NOP (1 word): 0x04-0x1E and 0xE7-0xEF are PSX-SPX "Mirrors of
+             * GP0(00h)". 0x03 and 0xFF are treated the same way, which PSX-SPX
+             * does not state [NOT DOCUMENTED]. */
             if ((opcode >= 0x03 && opcode <= 0x1E) ||
                 (opcode >= 0xE7 && opcode <= 0xEF) ||
                 opcode == 0xFF) {
@@ -5677,16 +5683,18 @@ static void gpu_write_gp0_body(uint32_t val) {
         return;
     }
 
-    /* Polyline terminator rule (Beetle mednafen/psx/gpu.c INCMD_PLINE,
-     * DuckStation gpu.cpp HandleRenderPolyLineCommand/DrawingPolyLine):
+    /* Polyline terminator rule (PSX-SPX "GPU Render Line Commands"):
      *
-     *  1. A polyline always has at least two vertices. The words of the first
-     *     two vertices are consumed unconditionally — mono [V0][V1], shaded
-     *     [V0][C1][V1] — and are NEVER tested for the terminator.
+     *  1. A polyline always has at least two vertices (PSX-SPX). The words of
+     *     the first two vertices are consumed unconditionally — mono
+     *     [V0][V1], shaded [V0][C1][V1] — and are NEVER tested for the
+     *     terminator. [Pending the PS1B-211 polyline fixture; PSX-SPX states
+     *     only the two-vertex minimum.]
      *  2. From the third vertex on, only the FIRST word of each vertex unit
      *     is tested: the vertex word itself for mono, the colour word for
-     *     shaded. Shaded vertex words are never tested.
-     *  3. The test is (word & 0xF000F000) == 0x50005000 (0x55555555).
+     *     shaded (PSX-SPX: "the terminator value occurs on the first word of
+     *     the vertex"). Shaded vertex words are never tested.
+     *  3. The test is (word & 0xF000F000) == 0x50005000 (0x55555555; PSX-SPX).
      *
      * Testing every word is wrong in a way games actually hit: Psy-Q leaves
      * the top byte of LINE_G* colour words as junk, so a colour such as
@@ -6038,9 +6046,10 @@ static void gp1_display_mode(uint32_t val) {
 }
 
 static void gp1_get_info(uint32_t val) {
-    /* GP1(10h): Get GPU info — writes result to GPUREAD latch.
-     * Mednafen-psx masks the subcommand to 4 bits (val & 0x0F) and
-     * services cases 2..5, 7, 8. Tomba's ResetGraph() uses param 7 to
+    /* GP1(10h): Get GPU info — writes result to GPUREAD latch. PSX-SPX
+     * "GP1(10h)" (v2 GPU): indices 10h-FFFFFFh mirror 00h..0Fh (so val &
+     * 0x0F), and only 02h-05h, 07h and 08h return data; the others leave
+     * GPUREAD unchanged. Tomba's ResetGraph() uses param 7 to
      * read the GPU version (must be 2) to pick its video-mode path —
      * the wrong value here lands the game on a no-draw branch. */
     uint32_t which = val & 0x0F;
@@ -6049,9 +6058,9 @@ static void gp1_get_info(uint32_t val) {
             gpuread_latch = texture_window_value;
             break;
         case 3: /* draw area top-left */
-            /* T97: merge into the low 20 bits and retain the upper 12, the way
-             * the pinned Octoshock 2.3 source does (psx/gpu.cpp case 0x3:
-             * DataReadBufferEx &= 0xFFF00000, then OR). Assigning dropped bits a
+            /* T97: merge into the low 20 bits and retain the upper 12 (PSX-SPX
+             * GP1(10h): "20bit/MSBs=Nothing", so the MSBs keep GPUREAD's old
+             * value). Assigning dropped bits a
              * game can read back and store: Abe's Oddysee ORs the result under
              * 0xE3000000 into its DRAWENV packet, so the discarded bits surfaced
              * as a RAM divergence at 801F069C. draw_area_* are 10 bits each, so
@@ -6068,10 +6077,10 @@ static void gp1_get_info(uint32_t val) {
             gpuread_latch = ((uint32_t)draw_offset_x & 0x7FFu) |
                             (((uint32_t)draw_offset_y & 0x7FFu) << 11);
             break;
-        case 7: /* GPU version (real-hw + mednafen return 2) */
+        case 7: /* GPU version: 2 (PSX-SPX GP1(10h): "1 or 2") */
             gpuread_latch = 2;
             break;
-        case 8: /* unknown info index, real hw / mednafen return 0 */
+        case 8: /* unknown info index: 00000000h (PSX-SPX GP1(10h)) */
             gpuread_latch = 0;
             break;
         default:
