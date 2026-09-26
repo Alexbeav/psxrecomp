@@ -16,7 +16,7 @@ OBSERVABLE={'result','ram_word_offset','status','MADR0','BCR0','CHCR0',
             'MADR1','BCR1','CHCR1','DICR','IRQ3'}
 reference=None
 if kind=='dma':
- reference=json.loads(Path(__file__).with_name('mdec_source_dma_reference.json').read_text())
+ reference=json.loads((Path(__file__).parent/'restricted'/'mdec_source_dma_reference.json').read_text())
  assert reference['fields']==fixture['fields']
  assert [c['name'] for c in reference['cases']]==[c['name'] for c in fixture['cases']]
 # The model's implementer runs this test black-box, so by default it prints
