@@ -74,7 +74,8 @@ class InternalResolutionGuards(unittest.TestCase):
     def test_hidpi_window_only_when_opted_in(self):
         self.assertIn("win_flags |= PSX_SDL_WINDOW_HIGH_DENSITY;", MAIN)
         self.assertRegex(MAIN, r"g_video_hidpi_window = g_video_scale_applies &&\s*"
-                               r"\(g_video_requested_scale > 1 \|\| g_video_internal_res == PSX_IR_DISPLAY\);")
+                               r"\(g_video_requested_scale > 1 \|\|\s*"
+                               r"effective_internal_resolution\(\) == PSX_IR_DISPLAY\);")
         self.assertRegex(MAIN, r"if \(g_video_hidpi_window\)\s*win_flags \|= PSX_SDL_WINDOW_HIGH_DENSITY;")
 
     def test_vocabulary_is_optional_abi(self):
@@ -90,7 +91,16 @@ class InternalResolutionGuards(unittest.TestCase):
                 self.assertEqual(closed, 0, field + " outside its #if block")
 
     def test_unset_preset_leaves_supersampling(self):
-        self.assertIn("if (g_video_internal_res == PSX_IR_UNSET) return;", MAIN)
+        self.assertIn("if (preset == PSX_IR_UNSET) return;",
+                      body(MAIN, "static void apply_internal_resolution(int display_px_h)"))
+
+    def test_env_override_is_never_persisted(self):
+        # PSX_INTERNAL_RESOLUTION wins for the run only: the launcher shows and
+        # settings.toml saves the configured preset.
+        self.assertIn("if (psx_ir_parse(e, &v)) g_video_internal_res_env = v;", MAIN)
+        self.assertNotRegex(MAIN, r"g_video_internal_res\s*=\s*v;")
+        self.assertIn("g_video_internal_res_env != PSX_IR_UNSET ? g_video_internal_res_env",
+                      body(MAIN, "static int effective_internal_resolution(void)"))
 
 
 class RunnerParsing(unittest.TestCase):

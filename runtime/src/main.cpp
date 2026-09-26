@@ -1213,8 +1213,13 @@ static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 
 /* Settings -> Display -> Internal resolution (internal_resolution.h). The
  * preset supersedes the legacy supersampling factor once set; PSX_IR_UNSET
- * leaves the factor as the player (or game.toml) wrote it. */
+ * leaves the factor as the player (or game.toml) wrote it. This is the
+ * configured preset (game.toml < settings.toml < launcher) and the only one
+ * the launcher shows or settings.toml saves. PSX_INTERNAL_RESOLUTION lives
+ * apart in g_video_internal_res_env: it wins for the run but is never
+ * persisted, so two local peers sharing one settings.toml stay independent. */
 static int           g_video_internal_res = PSX_IR_UNSET;
+static int           g_video_internal_res_env = PSX_IR_UNSET;
 static int           g_video_ref_lines = PSX_IR_DEFAULT_REF_LINES;
 /* The scale asked of the backend before its own clamp (GL reports its real
  * scale only after context init), and whether that request applies (netplay
@@ -1227,12 +1232,20 @@ static int video_scale_ceiling(void) {
     return g_video_renderer == 1 ? GL_MAX_INTERNAL_SCALE : SW_MAX_INTERNAL_SCALE;
 }
 
+/* The preset in effect this run: the environment override, else the
+ * configured one. */
+static int effective_internal_resolution(void) {
+    return g_video_internal_res_env != PSX_IR_UNSET ? g_video_internal_res_env
+                                                    : g_video_internal_res;
+}
+
 /* Resolve the Internal resolution preset into g_video_scale. display_px_h is
  * the monitor's pixel height for Match display (0 = not known yet: 1x until
  * the window exists). No-op while unset. */
 static void apply_internal_resolution(int display_px_h) {
-    if (g_video_internal_res == PSX_IR_UNSET) return;
-    g_video_scale = psx_resolve_internal_scale(g_video_internal_res, g_video_ref_lines,
+    const int preset = effective_internal_resolution();
+    if (preset == PSX_IR_UNSET) return;
+    g_video_scale = psx_resolve_internal_scale(preset, g_video_ref_lines,
                                                display_px_h, video_scale_ceiling());
 }
 
@@ -1868,7 +1881,7 @@ static std::atomic<int> s_present_shot_ok{0};    /* 1 = last completion wrote a 
 extern "C" void psx_video_resolution_info(int *preset, int *ref_lines, int *requested,
                                           int *hidpi, int *win_w, int *win_h,
                                           int *px_w, int *px_h) {
-    if (preset) *preset = g_video_internal_res;
+    if (preset) *preset = effective_internal_resolution();
     if (ref_lines) *ref_lines = g_video_ref_lines;
     if (requested) *requested = g_video_requested_scale;
     if (hidpi) *hidpi = g_video_hidpi_window ? 1 : 0;
@@ -14988,7 +15001,7 @@ session_reboot:
      * local netplay peers share one settings.toml but may differ here. */
     if (const char* e = std::getenv("PSX_INTERNAL_RESOLUTION")) {
         int v = 0;
-        if (psx_ir_parse(e, &v)) g_video_internal_res = v;
+        if (psx_ir_parse(e, &v)) g_video_internal_res_env = v;
         else std::fprintf(stdout, "psxrecomp: PSX_INTERNAL_RESOLUTION=%s not understood "
                           "(native, 720p, 1080p, 1440p, 4k, 5k, 8k, display, or lines)\n", e);
     }
@@ -15095,14 +15108,14 @@ session_reboot:
     /* Present-time screen-colour model (verified-enhancement LUT). Default raw
      * is byte-identical; PSX_SCREEN env overrides this at scanout. */
     gpu_set_screen_kind(g_video_screen);
-    if (g_video_internal_res != PSX_IR_UNSET) {
-        const char* lbl = psx_ir_label_for(g_video_internal_res);
+    if (const int ir = effective_internal_resolution(); ir != PSX_IR_UNSET) {
+        const char* lbl = psx_ir_label_for(ir);
         char custom[32];
         if (!lbl) {
-            std::snprintf(custom, sizeof custom, "%d lines", g_video_internal_res);
+            std::snprintf(custom, sizeof custom, "%d lines", ir);
             lbl = custom;
         }
-        if (g_video_internal_res == PSX_IR_DISPLAY && requested_scale <= 1)
+        if (ir == PSX_IR_DISPLAY && requested_scale <= 1)
             std::fprintf(stdout,
                          "psxrecomp: internal resolution %s (reference %d lines): "
                          "measured when the game window opens\n", lbl, g_video_ref_lines);
@@ -15436,7 +15449,8 @@ session_reboot:
          * more than native resolution, so the default window, OSD and bezel
          * maths stay exactly as they were. */
         g_video_hidpi_window = g_video_scale_applies &&
-            (g_video_requested_scale > 1 || g_video_internal_res == PSX_IR_DISPLAY);
+            (g_video_requested_scale > 1 ||
+             effective_internal_resolution() == PSX_IR_DISPLAY);
         if (g_video_hidpi_window)
             win_flags |= PSX_SDL_WINDOW_HIGH_DENSITY;
     }
@@ -15481,7 +15495,7 @@ session_reboot:
         /* Match display: the monitor's pixel height, now that the window says
          * which monitor. glb_set_scale only records the request; the hr
          * surface is allocated at context init below. */
-        if (g_video_internal_res == PSX_IR_DISPLAY && g_video_scale_applies) {
+        if (effective_internal_resolution() == PSX_IR_DISPLAY && g_video_scale_applies) {
             const int dh = psx_sdl_display_pixel_height(sdl_window);
             const int s = psx_resolve_internal_scale(PSX_IR_DISPLAY, g_video_ref_lines,
                                                      dh, GL_MAX_INTERNAL_SCALE);

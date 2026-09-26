@@ -480,6 +480,8 @@ matching preset appears in the launcher as its own entry, for example
 
 `PSX_INTERNAL_RESOLUTION=<preset or lines>` overrides every layer for one
 run (validation, and two local netplay peers that share one `settings.toml`).
+It is never written to `settings.toml`: the launcher shows and saves the
+configured preset.
 
 On OpenGL, any choice above native opens the game window with a
 high-pixel-density drawable (macOS Retina, Wayland scaling), so the window has
