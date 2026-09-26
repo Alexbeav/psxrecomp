@@ -1436,7 +1436,6 @@ uint32_t spu_read(uint32_t addr) {
                  * buffers": set from the tick that stores slot 256 up to the
                  * one that stores slot 511 [ORACLE FIXTURE E8c]. capture_pos
                  * already names the next slot, so test the one stored last. */
-                uint16_t cnt = spu_regs[reg_index(0x1F801DAAu)];
                 /* Bit 7: PSX-SPX "seems to be same as SPUCNT.Bit5", but in
                  * DMA-read mode "bit9 and bit7 aren't set immediately". After
                  * a C0FFh (DMA-read) SPUCNT write it reads 0 immediately and
