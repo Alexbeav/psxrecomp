@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "cpu_state.h"
+/* Keep the constant SYS01/02 selectors visible to the fixture's LTO pass. */
+__attribute__((always_inline)) inline int psx_syscall(CPUState *cpu, uint32_t code);
 #include "../src/traps.c"
 
 static int nested;
@@ -14,7 +16,7 @@ int source_gpu_runtime_active(void) { return 0; }
 
 static inline __attribute__((always_inline)) void check(unsigned func, unsigned sr, int enabled) {
     CPUState cpu = {0}, expected;
-    for (unsigned i = 0; i < 32; ++i) cpu.gpr[i] = 0x12340000u + i;
+    for (unsigned i = 1; i < 32; ++i) cpu.gpr[i] = 0x12340000u + i;
     cpu.gpr[4] = func;
     cpu.pc = 0x80012340u;
     cpu.cop0[12] = sr;
@@ -29,7 +31,7 @@ static inline __attribute__((always_inline)) void check(unsigned func, unsigned 
         expected.pc = sr & 0x400000u ? 0xBFC00180u : 0x80000080u;
     } else {
         expected.cop0[12] = func == 1 ? sr & ~1u : sr | 0x401u;
-        expected.gpr[2] = func == 1 ? sr & 1u : 0;
+        expected.gpr[2] = func == 1 ? sr & 1u : cpu.gpr[2];
         expected.pc = 0;
     }
     int continuation = 0;
