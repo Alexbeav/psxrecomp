@@ -50,6 +50,9 @@ static inline int32_t source_gpu_t_credit(int32_t budget, uint64_t elapsed)
  *   first half: flat 84 (8,914), textured 264 (180,584), gouraud 372 (14,076)
  *   second half: flat 46 (296), textured 226 (180,584), gouraud 334 (13,716)
  * Semi-transparency does not change the set-up (textured 35,911; gouraud 2,220).
+ * Mask check (E6h bit 1) adds the same read-back work as semi-transparency
+ * [ORACLE FIXTURE: flat quad 612 -> 884, rectangles +512; shaded and textured
+ * polygons unchanged, as the doubled walk has no read-back share].
  * Gouraud+textured: extra 450, not 180+288 [ORACLE: Pepsiman route-04,
  * 13,165,187 dispatches; ORACLE FIXTURE: all 1,536 cases of
  * source_gpu_shaded_texture_family_fixtures.json, both halves]. Mask bit 0 (set
@@ -106,16 +109,26 @@ static inline int source_gpu_t_line(unsigned op, int reads_back, int dx, int dy,
 /* ---- Fill and copy ------------------------------------------------------------------
  * Copy [ORACLE]: command charge 2 plus 2 per pixel, w*h after the PSX-SPX
  * size masking (MMX5 2x1 = 6, 10,298 rows; Abe's 192x240 = 92,162, 8 rows;
- * 384x240 = 184,322, 188 rows). Mask check: [NOT OBSERVED], same rule assumed.
+ * 384x240 = 184,322, 188 rows). Mask check does not change it [ORACLE FIXTURE:
+ * 6 geometries x E6h 0/2, all 2 + 2 per pixel].
  * No$PSX New GPU: 1.25 clocks per pixel + 19.5 per row without mask check.
  *
- * Fill [NOT FITTED]: every logged fill so far is 320x240 and costs 11,808
- * (MMX5 10,298 rows; Pepsiman 35,660 rows). One size cannot fix a formula, so fill keeps No$PSX New
- * GPU in half-clocks (2 per 16 px + 10 per row) and does not match yet. */
+ * Fill [ORACLE FIXTURE]: command charge 2 + 46 + per drawn row (9 + 2 per
+ * 16-pixel chunk of the masked width). Interlaced drawing with draw-to-display
+ * off draws half the rows. The authored oracle micro-fixtures fit exactly
+ * (Z:/Share/psxrecomp/evidence/T172/ps1b-182-oracle-micro-fixtures-20260926,
+ * sha256 9f057a04...: 16x1 59, 32x1 61, 16x2 70, zero width 57 (the case
+ * labelled 1024x1: its 10-bit width wraps to 0), 16x511
+ * 5,669, 320x240 11,808, 640x480i 21,408 / 42,768), and so do the routes
+ * (MMX5 and Pepsiman: 45,958 fills, all 320x240 = 11,808).
+ * No$PSX New GPU: 1 clock per 16 pixels + 5 per row. */
+#define SOURCE_GPU_T_FILL_SETUP 46
+#define SOURCE_GPU_T_FILL_ROW 9
+#define SOURCE_GPU_T_FILL_CHUNK 2
 #define SOURCE_GPU_T_COPY_PIXEL 2
-static inline int source_gpu_t_fill(unsigned width, unsigned height)
+static inline int source_gpu_t_fill(unsigned width, unsigned rows)
 {
-    return (int)((width / 16u) * 2u * height + 10u * height);
+    return (int)(SOURCE_GPU_T_FILL_SETUP + rows * (SOURCE_GPU_T_FILL_ROW + SOURCE_GPU_T_FILL_CHUNK * (width / 16u)));
 }
 static inline int source_gpu_t_copy(unsigned width, unsigned height, int mask_check)
 {
@@ -124,8 +137,9 @@ static inline int source_gpu_t_copy(unsigned width, unsigned height, int mask_ch
 }
 #define SOURCE_GPU_T_FILL(w, h) source_gpu_t_fill((w), (h))
 #define SOURCE_GPU_T_COPY(w, h, m) source_gpu_t_copy((w), (h), (m))
-/* [ORACLE] A0h data words cost 0 (MMX5: 23,265,848 words). C0h GPUREAD words:
- * [NOT OBSERVED] (3 C0h commands, no charged read); kept at 0. No$PSX: 1.00
+/* [ORACLE] A0h data words cost 0 (MMX5: 23,265,848 words). C0h set-up costs 2
+ * [ORACLE FIXTURE: 5 read cases]. C0h GPUREAD words: not observable (the oracle
+ * trace shows no budget change on a read); kept at 0. No$PSX: 1.00
  * clock per pixel either way. */
 #define SOURCE_GPU_T_UPLOAD_WORD 0
 #define SOURCE_GPU_T_READ_WORD 0
@@ -149,9 +163,12 @@ static inline unsigned source_gpu_t_ready_below(uint32_t head)
 }
 #define SOURCE_GPU_T_READY_BELOW(head) source_gpu_t_ready_below(head)
 
-/* ---- FIFO [NOT OBSERVED beyond depth 10] -------------------------------------------
+/* ---- FIFO ---------------------------------------------------------------------------
  * No$PSX "GPU FIFO": 16 words; while drawing is busy the head command may take
- * its prefetch words out. The deepest oracle FIFO seen is 10 words (MMX5). */
+ * its prefetch words out. Oracle: the deepest route FIFO is 10 words (MMX5); the
+ * FIFO-depth fixtures queue up to 17 words (E1h, rectangles, polygon) behind a
+ * busy fill without overrun and never queue NOPs [ORACLE FIXTURE]. Depth 18 and
+ * beyond is not probed, so the 16 + 1 limit is documented, not oracle-fixed. */
 #define SOURCE_GPU_T_FIFO_WORDS 16u
 #define SOURCE_GPU_T_PREFETCH_ATTRIBUTE 1u
 #define SOURCE_GPU_T_PREFETCH_POLY_LINE 0u
