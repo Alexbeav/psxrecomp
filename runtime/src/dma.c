@@ -1106,7 +1106,12 @@ static void dsm_run_mdec(int k) {
     int32_t step = dsm_step(k);
     while (m->words_left && m->credit > 0) {
         if (!m->stage) {
-            if (ch == 0 ? !mdec_dma_write_ready() : !mdec_dma_read_ready()) break;
+            if (ch == 0 ? !mdec_dma_write_ready() : !mdec_dma_read_ready()) {
+                /* No banked credit while the MDEC is not requesting (the linked-list
+                 * rule; D15b/D17a fits are unchanged by it). */
+                if (m->credit > 0) m->credit = 0;
+                break;
+            }
             channels[ch].bcr = (channels[ch].bcr & 0xFFFFu) |
                                ((((channels[ch].bcr >> 16) - 1u) & 0xFFFFu) << 16);
             m->stage = 1;
@@ -1158,7 +1163,7 @@ static void dsm_service(int k, uint64_t now) {
  * channels. [ORACLE FIXTURE D7]: OTC runs before the GPU payload when both
  * start together; D11c: MDEC in is served before MDEC out in both kick orders. */
 static void dsm_service_all(uint64_t now) {
-    dsm_mdec_feed(now - now % DSM_QUANTUM);
+    dsm_mdec_feed(dsm_write_service ? now : now - now % DSM_QUANTUM);
     dsm_service(DSM_OTC, now);
     dsm_service(DSM_CD, now);
     dsm_service(DSM_GPU, now);
@@ -1342,7 +1347,13 @@ static int dsm_before_write(uint32_t addr, uint32_t *valp, uint32_t mask) {
 
 void dma_source_gpu_service_at(uint64_t cycle) {
     g_dma_exec_depth++;
+    /* An explicit service point is a caller-driven advance to `cycle`: it
+     * clocks the MDEC and grants DMA credit exactly (SPEC-PS1B-186 ruling on
+     * the MDEC contract). The scheduler path keeps the 128-cycle edges. */
+    dsm_mdec_feed(cycle);
+    dsm_write_service = 1;
     dsm_service_all(cycle);
+    dsm_write_service = 0;
     g_dma_exec_depth--;
 }
 
