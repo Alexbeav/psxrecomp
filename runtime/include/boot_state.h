@@ -49,14 +49,16 @@ extern "C" {
  *      continuation, SPU sample clock, exact MDEC timestamp, the game-start latch,
  *      source peripheral pipelines and queued GPU work. The two lineages both
  *      used v6-v9 for different contents, so this merge takes a number neither
- *      ever wrote. */
-#define BOOT_STATE_VERSION 10u
+ *      ever wrote.
+ * v11 = v10 with the rewritten source-DMA machines (BS_SEC_DMA_SRC layout: five
+ *      machines, 208 bytes). */
+#define BOOT_STATE_VERSION 11u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v10 therefore rejects every earlier state. */
-#define BOOT_STATE_VERSION_MIN_READ 10u
+ * runtime's blob to a new loader. v11 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 11u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
