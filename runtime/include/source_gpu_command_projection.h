@@ -272,12 +272,14 @@ static inline int source_gpu_command_sprite_cost(const SourceGPUCommandProjectio
     return cost;
 }
 /* GP0(02h): PSX-SPX "Masking and Rounding for FILL Command parameters". */
-static inline int source_gpu_command_fill_cost(const uint32_t *words)
+static inline int source_gpu_command_fill_cost(const SourceGPUCommandProjection *s, const uint32_t *words)
 {
     unsigned width = ((words[2] & 0x3FFu) + 0x0Fu) & ~0x0Fu;
     unsigned height = (words[2] >> 16) & 0x1FFu;
-    if (!height) return 0;
-    return SOURCE_GPU_T_FILL(width, height);
+    unsigned top = (words[1] >> 16) & 0x1FFu, rows = 0;
+    for (unsigned row = top; row < top + height; ++row)
+        if (!(source_gpu_command_interlaced(s) && (row & 1u) == s->skip_field)) ++rows;
+    return SOURCE_GPU_T_FILL(width, rows);
 }
 
 /* GP0(80h): PSX-SPX "Masking for COPY Commands parameters". */
@@ -293,7 +295,7 @@ static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection
                                                 const uint32_t *words)
 {
     unsigned opcode = source_gpu_opcode(words[0]);
-    if (opcode == 0x02u) return source_gpu_command_fill_cost(words);
+    if (opcode == 0x02u) return source_gpu_command_fill_cost(s, words);
     if (opcode == 0x80u) return source_gpu_command_copy_cost(s, words);
     return source_gpu_command_sprite_cost(s, words);
 }

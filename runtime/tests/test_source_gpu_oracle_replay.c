@@ -76,7 +76,7 @@ static long long expected_charge(const SourceGPUCommandProjection *s, int kind,
         return source_gpu_command_polygon_cost(s, w, kind == 3);
     }
     if (source_gpu_sprite_opcode(op)) { *cls = "rectangle"; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
-    if (op == 0x02u) { *cls = "fill"; *fitted = 0; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
+    if (op == 0x02u) { *cls = "fill"; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
     if (op == 0x80u) { *cls = "copy"; return SOURCE_GPU_T_COMMAND_OVERHEAD + source_gpu_command_block_cost(s, w); }
     if (source_gpu_line_supported(op)) {
         *cls = segment ? "poly-line segment" : "line (opening)";
