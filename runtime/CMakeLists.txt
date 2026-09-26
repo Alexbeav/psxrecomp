@@ -891,11 +891,13 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(spu_envelope_rate_test PRIVATE include)
     add_test(NAME spu_envelope_rate_test COMMAND spu_envelope_rate_test)
 
-    # PS1B-192: the ADSR envelope unit against oracle fixture set S-spu E2-E7.
+    # PS1B-192: the ADSR envelope and volume sweep unit against oracle fixture
+    # sets S-spu E2-E7 and E1-E3-E9.
     add_executable(spu_envelope_fixture_test tests/test_spu_envelope_fixture.c)
     target_include_directories(spu_envelope_fixture_test PRIVATE include)
     add_test(NAME spu_envelope_fixture_test COMMAND spu_envelope_fixture_test
-             ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture.txt)
+             ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture.txt
+             ${CMAKE_CURRENT_SOURCE_DIR}/tests/spu_envelope_fixture_e1_e9.txt)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)

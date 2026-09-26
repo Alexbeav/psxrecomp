@@ -13,8 +13,9 @@
  *  - the Decay shift field (4 bits) is used as the shift directly
  *    [ORACLE FIXTURE E2];
  *  - a phase ends only on a tick that applied a step: Attack when the level
- *    reaches 7FFFh, Decay when the level is <= the Sustain Level
- *    [ORACLE FIXTURE E2];
+ *    reaches 7FFFh [ORACLE FIXTURE E2], Decay when the level is below the
+ *    Sustain Level (a level equal to it takes one more Decay step)
+ *    [ORACLE FIXTURE E2, E3];
  *  - a write to the current-level register changes the level only; the step
  *    counter keeps running [ORACLE FIXTURE E2].
  * The counter is cleared when a step is applied and when a phase begins.
@@ -85,10 +86,30 @@ static inline void spu_env_adsr_tick(uint16_t *level, uint32_t *counter, uint8_t
     if (*phase == SPU_ENV_ATTACK && value >= 0x7FFF) {
         *phase = SPU_ENV_DECAY;
         *counter = 0;
-    } else if (*phase == SPU_ENV_DECAY && value <= (int32_t)(((lo & 15u) + 1u) << 11)) {
+    } else if (*phase == SPU_ENV_DECAY && value < (int32_t)(((lo & 15u) + 1u) << 11)) {
         *phase = SPU_ENV_SUSTAIN;
         *counter = 0;
     }
+}
+
+/* One tick of a volume register (1F801C00h/02h+N*10h, 1F801D80h/82h) and its
+ * current volume. [DOC] "1F801D80h - Mainvolume left ...": Bit15=0 is a fixed
+ * volume, bits 0-14 = volume/2, taken on the next 44.1 kHz tick; Bit15=1 sweeps
+ * with the same "Envelope Operation" (mode bit 14, direction bit 13, phase bit
+ * 12, shift bits 6-2, step bits 1-0), starting from the current volume.
+ * The sweep rates, the 6000h break and the saturation match every changing
+ * trace of fixture set S-spu E1-E3-E9 class E9 [ORACLE FIXTURE E9]; phase-negative
+ * sweeps were not measured and follow PSX-SPX. */
+static inline void spu_env_sweep_tick(int16_t *level, uint32_t *counter, uint16_t raw)
+{
+    if (!(raw & 0x8000u)) {
+        *level = (int16_t)(uint16_t)(raw << 1);
+        return;
+    }
+    int32_t value = *level;
+    spu_env_tick(&value, counter, (raw >> 14) & 1u, (raw >> 13) & 1u, (raw >> 2) & 31u, raw & 3u,
+                 (raw >> 12) & 1u);
+    *level = (int16_t)value;
 }
 
 #endif
