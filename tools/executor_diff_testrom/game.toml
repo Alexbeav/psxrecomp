@@ -1,0 +1,21 @@
+# Cross-executor load-delay test ROM. gen_testrom.py writes the EXE;
+# psxrecomp-game recompiles it; run.py runs it native and with
+# PSX_FORCE_INTERP=1, and psx-beetle boots the same disc as the reference.
+[game]
+name = "ExecutorDiffTestROM"
+id = "XDIF-00101"
+exe = "executor_diff_testrom.exe"
+disc = "disc/xdiff.cue"   # synthetic licensed disc (tools/mkpsxiso)
+load_address = "0x80010000"
+entry_pc = "0x80010000"
+text_size = "0x00001000"
+
+[recompiler]
+seeds = "seeds.txt"
+out_dir = "generated"
+strict = true
+
+[runtime]
+debug_port = 4611
+window_title = "Executor Diff Test ROM"
+bios_hle = false

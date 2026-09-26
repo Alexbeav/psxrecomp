@@ -1,0 +1,10 @@
+# Regenerable build artifacts (produced by gen_testrom.py / psxrecomp-game).
+executor_diff_testrom.exe
+executor_diff_testrom.exe.json
+generated/
+# Synthetic boot disc: LOCAL ONLY, never commit or push. license_data.dat is the
+# PlayStation license region from a disc you own (see ../cycle_testrom/README.md,
+# "Boot disc"); the built .bin/.cue embed it.
+disc/license_data.dat
+disc/*.bin
+disc/*.cue
