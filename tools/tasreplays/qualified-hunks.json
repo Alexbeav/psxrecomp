@@ -1256,12 +1256,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    return SOURCE_GPU_T_FILL(width, height);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);"
           ]
         },
@@ -1311,6 +1305,27 @@
           "lines": [
             "    s->budget -= SOURCE_GPU_T_READ_WORD;"
           ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "static inline int source_gpu_command_fill_cost(const SourceGPUCommandProjection *s, const uint32_t *words)"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    unsigned top = (words[1] >> 16) & 0x1FFu, rows = 0;",
+            "    for (unsigned row = top; row < top + height; ++row)",
+            "        if (!(source_gpu_command_interlaced(s) && (row & 1u) == s->skip_field)) ++rows;",
+            "    return SOURCE_GPU_T_FILL(width, rows);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if (opcode == 0x02u) return source_gpu_command_fill_cost(s, words);"
+          ]
         }
       ],
       "repins": [
@@ -1352,6 +1367,18 @@
           "replacement_blocks_added": 17,
           "replacement_commits": [
             "710729cdb020"
+          ]
+        },
+        {
+          "as_of": "baf333b140b42b135393192fa0d2adb88a7cf280",
+          "issue": "PS1B-182",
+          "reason": "fill pricing now takes the draw state (interlaced rows), fitted to the oracle micro-fixtures",
+          "dropped_lines": 1,
+          "from_blocks": 64,
+          "to_blocks": 66,
+          "replacement_blocks_added": 3,
+          "replacement_commits": [
+            "baf333b140b4"
           ]
         }
       ],
@@ -2012,12 +2039,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    return SOURCE_GPU_T_FILL(width, height);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);"
           ]
         },
@@ -2067,6 +2088,27 @@
           "lines": [
             "    s->budget -= SOURCE_GPU_T_READ_WORD;"
           ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "static inline int source_gpu_command_fill_cost(const SourceGPUCommandProjection *s, const uint32_t *words)"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    unsigned top = (words[1] >> 16) & 0x1FFu, rows = 0;",
+            "    for (unsigned row = top; row < top + height; ++row)",
+            "        if (!(source_gpu_command_interlaced(s) && (row & 1u) == s->skip_field)) ++rows;",
+            "    return SOURCE_GPU_T_FILL(width, rows);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if (opcode == 0x02u) return source_gpu_command_fill_cost(s, words);"
+          ]
         }
       ],
       "note": "Re-pinned to its current span on 2026-09-16: the poly-line family change (e4e25053) superseded the two-vertex-only predicate and its scope comment. The shaded-line behaviour is unchanged and now lives inside the widened 0x40-0x5F family. superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun",
@@ -2109,6 +2151,18 @@
           "replacement_blocks_added": 17,
           "replacement_commits": [
             "710729cdb020"
+          ]
+        },
+        {
+          "as_of": "baf333b140b42b135393192fa0d2adb88a7cf280",
+          "issue": "PS1B-182",
+          "reason": "fill pricing now takes the draw state (interlaced rows), fitted to the oracle micro-fixtures",
+          "dropped_lines": 1,
+          "from_blocks": 61,
+          "to_blocks": 63,
+          "replacement_blocks_added": 3,
+          "replacement_commits": [
+            "baf333b140b4"
           ]
         }
       ]
@@ -3249,12 +3303,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    return SOURCE_GPU_T_FILL(width, height);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);"
           ]
         },
@@ -3304,6 +3352,27 @@
           "lines": [
             "    s->budget -= SOURCE_GPU_T_READ_WORD;"
           ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "static inline int source_gpu_command_fill_cost(const SourceGPUCommandProjection *s, const uint32_t *words)"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    unsigned top = (words[1] >> 16) & 0x1FFu, rows = 0;",
+            "    for (unsigned row = top; row < top + height; ++row)",
+            "        if (!(source_gpu_command_interlaced(s) && (row & 1u) == s->skip_field)) ++rows;",
+            "    return SOURCE_GPU_T_FILL(width, rows);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if (opcode == 0x02u) return source_gpu_command_fill_cost(s, words);"
+          ]
         }
       ],
       "note": "Abe's Oddysee 5620M aborted at return 4,682 on GP0 5E030B0B; the projection admitted only two-vertex lines. Derived from Commands_40_5F/LINE_HELPER and ProcessFIFO's INCMD_PLINE branch. superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun",
@@ -3346,6 +3415,18 @@
           "replacement_blocks_added": 17,
           "replacement_commits": [
             "710729cdb020"
+          ]
+        },
+        {
+          "as_of": "baf333b140b42b135393192fa0d2adb88a7cf280",
+          "issue": "PS1B-182",
+          "reason": "fill pricing now takes the draw state (interlaced rows), fitted to the oracle micro-fixtures",
+          "dropped_lines": 1,
+          "from_blocks": 59,
+          "to_blocks": 61,
+          "replacement_blocks_added": 3,
+          "replacement_commits": [
+            "baf333b140b4"
           ]
         }
       ]
@@ -6664,12 +6745,6 @@
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
-            "    return SOURCE_GPU_T_FILL(width, height);"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
             "    return SOURCE_GPU_T_COPY(width, height, (s->mask_bits & 2u) != 0);"
           ]
         },
@@ -6718,6 +6793,27 @@
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
             "    s->budget -= SOURCE_GPU_T_READ_WORD;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "static inline int source_gpu_command_fill_cost(const SourceGPUCommandProjection *s, const uint32_t *words)"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    unsigned top = (words[1] >> 16) & 0x1FFu, rows = 0;",
+            "    for (unsigned row = top; row < top + height; ++row)",
+            "        if (!(source_gpu_command_interlaced(s) && (row & 1u) == s->skip_field)) ++rows;",
+            "    return SOURCE_GPU_T_FILL(width, rows);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if (opcode == 0x02u) return source_gpu_command_fill_cost(s, words);"
           ]
         }
       ],
@@ -6772,6 +6868,18 @@
           "replacement_blocks_added": 17,
           "replacement_commits": [
             "710729cdb020"
+          ]
+        },
+        {
+          "as_of": "baf333b140b42b135393192fa0d2adb88a7cf280",
+          "issue": "PS1B-182",
+          "reason": "fill pricing now takes the draw state (interlaced rows), fitted to the oracle micro-fixtures",
+          "dropped_lines": 1,
+          "from_blocks": 215,
+          "to_blocks": 217,
+          "replacement_blocks_added": 3,
+          "replacement_commits": [
+            "baf333b140b4"
           ]
         }
       ]
