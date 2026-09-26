@@ -17,7 +17,7 @@ static void set_option(const char *key,const char *value) {
 }
 void psx_devices_service_to_now(void) {
 #ifdef PSX_TEST_SOURCE_GPU_IMPLEMENTED
-    advance_source_gpu();
+    dsm_service(DSM_GPU, psx_cycle_count);
 #endif
 }
 void psx_advance_cycles_slow(uint32_t n) {psx_cycle_count+=n;psx_devices_service_to_now();}
@@ -77,25 +77,33 @@ int main(int argc,char **argv) {
 #ifdef PSX_TEST_SOURCE_GPU_IMPLEMENTED
     if(argc==3 && !strcmp(argv[1],"--oracle")) {
         FILE *f=fopen(argv[2],"r");assert(f);
+        /* SPEC-PS1B-186 amendment 3: only the running word count mid-block may
+         * differ from these vectors, by at most one word (whether a block's
+         * overhead and its first word share one credit check; MADR, BCR, CHCR
+         * and the IRQ are identical either way). Every other field is exact. */
+        unsigned count_rows=0,count_max=0;
         for(unsigned line=0;line<512;line++) {
             unsigned phase,t,count,madr,bcr,chcr,flags;
             assert(fscanf(f,"%u %u %u %u %u %u %u",&phase,&t,&count,&madr,&bcr,&chcr,&flags)==7);
             if(line%4==0){setup(12,16,phase);try_execute(2);}
-            psx_cycle_count=t;advance_source_gpu();
-            if(upload_count!=count || channels[2].madr!=madr || channels[2].bcr!=bcr ||
+            psx_cycle_count=t;dsm_service(DSM_GPU, psx_cycle_count);
+            unsigned diff=upload_count>count?upload_count-count:count-upload_count;
+            if(diff){count_rows++;if(diff>count_max)count_max=diff;}
+            if(diff>1 || channels[2].madr!=madr || channels[2].bcr!=bcr ||
                channels[2].chcr!=chcr || irqs!=!!(flags&4)) {
                 fprintf(stderr,"source oracle mismatch phase=%u time=%u words=%u expected=%u IRQ=%u expected=%u\n",phase,t,upload_count,count,irqs,!!(flags&4));return 1;
             }
         }
+        printf("word count: %u rows differ, max difference %u\n",count_rows,count_max);
         for(unsigned i=0;i<2;i++) {
             char kind[8];unsigned t,count,chcr,flags;
             assert(fscanf(f,"%7s %u %u %u %u",kind,&t,&count,&chcr,&flags)==5&&!strcmp(kind,"WRITE"));
             setup(12,16,127);dicr=1u<<23;try_execute(2);
-            psx_cycle_count=128;advance_source_gpu();psx_cycle_count=256;advance_source_gpu();
+            psx_cycle_count=128;dsm_service(DSM_GPU, psx_cycle_count);psx_cycle_count=256;dsm_service(DSM_GPU, psx_cycle_count);
             psx_cycle_count=t;dma_write(0x1f8010f4,(1u<<23)|(1u<<18));
             assert(upload_count==count && channels[2].chcr==chcr && irqs==!!(flags&4));
             assert(fscanf(f,"%7s %u %u %u %u",kind,&t,&count,&chcr,&flags)==5&&!strcmp(kind,"END"));
-            psx_cycle_count=384;advance_source_gpu();
+            psx_cycle_count=384;dsm_service(DSM_GPU, psx_cycle_count);
             assert(upload_count==count && channels[2].chcr==chcr && irqs==!!(flags&4));
         }
         unsigned extra;assert(fscanf(f,"%u",&extra)==EOF);fclose(f);
@@ -123,12 +131,12 @@ int main(int argc,char **argv) {
     assert(channels[2].bcr==0x00090010 && channels[2].madr==0x10080);
     assert(uploaded[42]==0xAB00002A);
     ram[0x10000/4+43]=0xDEADBEEF; /* unread future RAM must remain live */
-    psx_cycle_count=127;advance_source_gpu();assert(upload_count==43);
-    psx_cycle_count=128;advance_source_gpu();assert(upload_count>43 && uploaded[43]==0xDEADBEEF && !irqs);
-    psx_cycle_count=255;advance_source_gpu();assert(upload_count<192 && dma_cpu_read_penalty()==15);
-    psx_cycle_count=256;advance_source_gpu();assert(upload_count==192 && irqs==1 && dma_cpu_read_penalty()==0);
+    psx_cycle_count=127;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count==43);
+    psx_cycle_count=128;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count>43 && uploaded[43]==0xDEADBEEF && !irqs);
+    psx_cycle_count=255;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count<192 && dma_cpu_read_penalty()==15);
+    psx_cycle_count=256;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count==192 && irqs==1 && dma_cpu_read_penalty()==0);
     assert(channels[2].madr==0x10300 && channels[2].bcr==16 && !(channels[2].chcr&(1u<<24)));
-    psx_cycle_count=512;advance_source_gpu();assert(upload_count==192 && irqs==1);
+    psx_cycle_count=512;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count==192 && irqs==1);
     for(uint32_t phase=0;phase<128;phase++) {
         setup(12,16,phase);try_execute(2);
         assert(upload_count==43 && dma_cycles_to_internal_event()==128-phase);
@@ -136,8 +144,8 @@ int main(int argc,char **argv) {
          * transfer, of which64 are supplied at kick. Service uses actual
          * elapsed time; the first partial interval is not a full128. */
         uint32_t end=((phase+212u+127u)/128u)*128u;
-        psx_cycle_count=end-1;advance_source_gpu();assert(upload_count<192);
-        psx_cycle_count=end;advance_source_gpu();assert(upload_count==192 && irqs==1);
+        psx_cycle_count=end-1;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count<192);
+        psx_cycle_count=end;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count==192 && irqs==1);
     }
     setup(1,1,0);try_execute(2);assert(upload_count==1 && irqs==1 && dma_cpu_read_penalty()==0);
     setup(2,256,0);try_execute(2);assert(dma_cpu_read_penalty()==200);

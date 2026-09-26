@@ -69,47 +69,13 @@ static DMAGPULinkedList gpu_linked_list;
 static DMAGpuOtStats gpu_ot_stats;
 static uint64_t gpu_ot_start_cycle;
 static uint32_t gpu_ot_polls_this_walk;
-
-/* Optional source-core experiment. This deliberately models Octoshock 2.2.2
- * OTC service granularity and whole-CPU waiting, not PS1 bus arbitration.
- * Facts consulted: original dma.cpp RunChannelI/DMA_Update/DMA_Write.
- * No reference implementation text is incorporated. */
+/* Source-profile selectors, parsed in dma_init. */
 static int otc_source_model;
-static struct {
-    uint32_t remaining, address;
-    uint64_t last_cycle, next_cycle;
-} otc_source;
-/* Optional manual CD DMA timing only. Register conventions remain native.
- * Source facts: 64 initial clocks, 9 clocks/word, 128-clock service and CPU
- * halt. These are original-core compatibility rules, not bus measurements. */
 static int cd_source_model;
-static struct {
-    int32_t budget;
-    uint64_t last_cycle, next_cycle;
-} cd_source;
-/* Optional source request timing for an already active VRAM upload only. */
 static int gpu_upload_source_model;
 static int gpu_ll_source_model;
-static struct {
-    uint32_t active, address, remaining, nodes;
-    int32_t budget;
-    uint64_t last_cycle, next_cycle;
-} gpu_ll_source;
-uint32_t g_dma_cpu_read_wait;
-static uint32_t gpu_upload_live_read_wait;
-static int cpu_read_wait_latched;
-static struct {
-    uint32_t remaining, block_size, in_block, address;
-    int32_t budget;
-    uint64_t last_cycle, next_cycle;
-} gpu_upload_source;
-/* Source SPU request DMA:64 initial clocks,48 per word, global128-clock
- * updates. Payload and register progress belong to those service calls. */
-static struct {
-    uint32_t remaining, block_size, in_block, address, total_words, start_addr;
-    int32_t budget;
-    uint64_t last_cycle, next_cycle;
-} spu_source;
+
+uint32_t g_dma_cpu_read_wait;  /* upload load wait published to the CPU (psx_cyc.h) */
 
 /* ---- CD DMA transfer log ---- */
 /* Every forward CH3 DMA that lands below 0x1C0000 (game data region) records
@@ -424,10 +390,7 @@ static void complete_transfer(int ch) {
     uint32_t dicr_before = dicr;
     uint32_t i_stat_before = i_stat;
     channels[ch].chcr &= ~((1u << 24) | (1u << 28));
-    /* Source channel4 latches its enabled completion flag even when the
-     * master IRQ output is disabled; the master gate belongs to IRQ output. */
-    if (((ch==4 && source_gpu_runtime_active()) || (ch<2 && mdec_source_active())) ?
-        ((dicr>>(16+ch))&1u) : channel_irq_flag_armed(ch)) {
+    if (channel_irq_flag_armed(ch)) {
         dicr |= (1u << (24 + ch));
         raise_dma_irq_on_master_edge(dicr_before);
     }
@@ -869,184 +832,469 @@ static void start_async_gpu_linked_list(void) {
     gpu_ot_polls_this_walk = 0;
 }
 
-static void source_gpu_upload_words(void) {
-    int queued=source_gpu_runtime_active();
-    unsigned to_gpu=channels[2].chcr&1u;
-    g_dma_cur_ch=2;g_dma_initiator_pc=s_dma_ch_initiator_pc[2];
-    g_dma_cur_madr=channels[2].madr;g_dma_cur_bcr=channels[2].bcr;
-    while(gpu_upload_source.remaining && gpu_upload_source.budget>0) {
-        if(!queued && gpu_dma_vram_upload_words()<gpu_upload_source.remaining) {
-            fprintf(stderr,"[dma-model] source GPU upload changed during transfer\n");exit(2);
-        }
-        if(!gpu_upload_source.in_block) {
-            /* Request feedback is sampled at block boundaries, including
-             * when the packet header is still queued behind a draw. */
-            if(queued && to_gpu && gpu_dma_source_ll_ready()!=1)break;
-            gpu_upload_source.in_block=gpu_upload_source.block_size;
-            gpu_upload_source.address=channels[2].madr&0xfffffcu;
-            channels[2].bcr-=1u<<16;
-            gpu_upload_source.budget-=7;
-        }
-        if(gpu_upload_source.address&0x800000u) {
-            fprintf(stderr,"[dma-model] unsupported source GPU request payload address\n");exit(2);
-        }
-        uint32_t at=gpu_upload_source.address&0x1ffffcu;
-        if(to_gpu) {
-            uint32_t value=psx_read_word(at);
-            gpu_set_gp0_source(at);gpu_write_gp0(value);
-        } else psx_write_word(at,gpu_read_gpuread());
-        gpu_upload_source.address=(gpu_upload_source.address+((channels[2].chcr&2u)?-4u:4u))&0xffffffu;
-        gpu_upload_source.in_block--;gpu_upload_source.remaining--;
-        gpu_upload_source.budget--;
-        if(!gpu_upload_source.in_block)channels[2].madr=gpu_upload_source.address;
-        if(!gpu_upload_source.remaining)complete_transfer(2);
-    }
-    if(gpu_upload_source.budget>0)gpu_upload_source.budget=0;
-    uint32_t n=gpu_upload_source.block_size?gpu_upload_source.block_size-1u:0u;
-    int can= !queued || !to_gpu || gpu_dma_source_ll_ready()==1;
-    gpu_upload_live_read_wait=gpu_upload_source.remaining && can?(n>200u?200u:n):0u;
-    if(!cpu_read_wait_latched)g_dma_cpu_read_wait=gpu_upload_live_read_wait;
+/* ---- Source-profile DMA machines (TAS/source mode) ----
+ *
+ * Selected by PSX_GPU_DMA_MODEL (GPU upload, GPU linked list, SPU),
+ * PSX_CD_DMA_MODEL (CD-ROM) and PSX_INPUT_ROUTE_DMA_MODEL (OTC), each with
+ * PSX_INPUT_ROUTE_FILE. The default paths above and below are unchanged.
+ *
+ * Register semantics follow PSX-SPX "DMA Channels" (SyncMode 0/1/2, MADR/BCR
+ * update rules, the linked-list header and end code, OTC fill order). The
+ * timing below is fitted to authored oracle fixtures; each constant cites its
+ * rows. Receipts are under evidence/T172/clean-rewrite-fixtures-20260926.
+ *
+ * One machine per channel. A machine owns a cycle credit. The kick grants
+ * DSM_KICK_CREDIT; after that, credit is granted for elapsed guest cycles.
+ * Work items (words, block overheads, node headers) are taken while the
+ * credit is positive, so the last item may overdraw it.
+ *   - OTC, GPU upload, CD and SPU are credited only at the global 128-cycle
+ *     service edges ([ORACLE FIXTURE D9a]: the OTC halt steps linearly with the
+ *     kick phase over one 128-cycle span; D9e reproduces all 12 halting CD rows
+ *     with the same edge phase; D9b/D3 completions quantise the same way).
+ *   - The linked list is credited continuously and banks no positive credit
+ *     while the GPU is not ready ([NOT OBSERVED]: D9d timing is gated by the
+ *     GPU FIFO model; the PS1B-182 route replays are its acceptance). */
+
+int source_gpu_runtime_active(void);
+static void try_execute(int ch);
+
+#define DSM_QUANTUM          128u /* [ORACLE FIXTURE D9a, D9e] service edge period  */
+#define DSM_KICK_CREDIT       64  /* [ORACLE FIXTURE D9a] OTC n<=64 completes at the
+                                   * kick; [D10] no upload halt iff BA*(BS+7)<=64     */
+#define DSM_OTC_WORD           1  /* [DOC] "DMA Transfer Rates"; D9a exact            */
+#define DSM_GPU_WORD           1  /* [DOC]; D10 halt = BS+5 for one block             */
+#define DSM_GPU_BLOCK          7  /* [ORACLE FIXTURE D10] 1x57 and 2x24 do not halt,
+                                   * 1x58 and 2x32 do: BA*(BS+7) against the credit   */
+#define DSM_CD_WORD            9  /* [ORACLE FIXTURE D9e] 128..512-word slope 8.99 and
+                                   * 9.03 at both 1F801018 settings. PSX-SPX gives
+                                   * 24 (BIOS) or 40 (games); the default path keeps
+                                   * its own cost.                                     */
+#define DSM_SPU_WORD          48  /* [ORACLE FIXTURE D3] read and write, all sizes    */
+#define DSM_LL_NODE           15  /* [NOT OBSERVED] per-node header cost              */
+#define DSM_UPLOAD_WAIT_CAP  201u /* [ORACLE FIXTURE D10] load wait = min(BS,201)-1   */
+
+enum { DSM_OTC, DSM_GPU, DSM_LL, DSM_CD, DSM_SPU, DSM_COUNT };
+static const uint8_t dsm_channel[DSM_COUNT] = { 6, 2, 2, 3, 4 };
+static const char *const dsm_name[DSM_COUNT] = { "otc", "upload", "ll", "cd", "spu" };
+
+typedef struct {
+    uint8_t  running;      /* the machine owns this channel's transfer            */
+    uint8_t  halts_cpu;    /* CPU held until the machine finishes                 */
+    uint8_t  stage;        /* upload: block overhead paid; LL: inside a node     */
+    uint8_t  held;         /* LL: stopped on a GPU that is not ready              */
+    uint32_t cursor;       /* next RAM word address                               */
+    uint32_t words_left;   /* words still to move (LL: in the current node)       */
+    uint32_t blk_words;    /* SyncMode 1 block length                             */
+    uint32_t blk_pos;      /* words moved in the current block                    */
+    uint32_t node_count;   /* LL nodes started                                    */
+    uint32_t link;         /* LL: next-node pointer of the current header         */
+    int32_t  credit;       /* cycles available to spend                           */
+    uint64_t served_until; /* guest cycle credited so far                         */
+} DmaSrcMachine;
+
+static DmaSrcMachine dsm[DSM_COUNT];
+static int dsm_spu_model;      /* SPU follows the GPU source profile (spu.c uses the same switch) */
+static uint32_t dsm_wait_live; /* upload load wait at this instant */
+
+static void dsm_fail(const char *what) {
+    fprintf(stderr, "[dma-model] %s\n", what);
+    exit(2);
 }
-static void start_source_gpu_upload(void) {
-    uint32_t bs=channels[2].bcr&0xffffu,bc=channels[2].bcr>>16;
-    uint64_t total=(uint64_t)bs*bc;
-    unsigned mode=channels[2].chcr&0x00ffffffu;
-    int queued=source_gpu_runtime_active();
-    if((queued?(mode&~3u)!=0x200u:mode!=0x201u) || !bs || !bc ||
-       (channels[2].madr&0x800000u) || (!queued && total>gpu_dma_vram_upload_words())) {
-        fprintf(stderr,"[dma-model] unsupported source GPU request: CHCR=%08X BCR=%08X MADR=%08X upload=%u\n",channels[2].chcr,channels[2].bcr,channels[2].madr,gpu_dma_vram_upload_words());exit(2);
-    }
-    gpu_upload_source.remaining=(uint32_t)total;
-    gpu_upload_source.block_size=bs;gpu_upload_source.in_block=0;
-    gpu_upload_source.budget=64;
-    gpu_upload_source.last_cycle=psx_cycle_count;
-    gpu_upload_source.next_cycle=psx_cycle_count+128u-(psx_cycle_count&127u);
-    source_gpu_upload_words();
+
+static int dsm_profile_any(void) {
+    return gpu_upload_source_model || gpu_ll_source_model || cd_source_model ||
+           otc_source_model;
 }
-static void advance_source_gpu(void) {
-    while(gpu_upload_source.remaining && psx_cycle_count>=gpu_upload_source.next_cycle) {
-        gpu_upload_source.budget+=(int32_t)(gpu_upload_source.next_cycle-gpu_upload_source.last_cycle);
-        gpu_upload_source.last_cycle=gpu_upload_source.next_cycle;
-        gpu_upload_source.next_cycle+=128;
-        source_gpu_upload_words();
+
+static int dsm_live_any(void) {
+    for (int k = 0; k < DSM_COUNT; k++) if (dsm[k].running) return 1;
+    return 0;
+}
+
+/* The source CPU owner (source_gpu_runtime) halts the CPU and latches the load
+ * wait at instruction boundaries. Without it, a halting kick advances the
+ * guest clock itself and the wait is published at once. */
+static int dsm_cpu_owner(void) {
+    return source_gpu_runtime_active();
+}
+
+static void dsm_publish_wait(void) {
+    dsm_wait_live = dsm[DSM_GPU].running
+        ? (dsm[DSM_GPU].blk_words < DSM_UPLOAD_WAIT_CAP ? dsm[DSM_GPU].blk_words
+                                                        : DSM_UPLOAD_WAIT_CAP) - 1u
+        : 0u;
+    if (!dsm_cpu_owner()) g_dma_cpu_read_wait = dsm_wait_live;
+}
+
+static void dsm_credit_add(DmaSrcMachine *m, uint64_t cycles) {
+    int64_t c = (int64_t)m->credit + (int64_t)(cycles > 0x40000000u ? 0x40000000u : cycles);
+    m->credit = c > 0x40000000 ? 0x40000000 : (int32_t)c;
+}
+
+/* Set while a guest write to a DMA register services the machines. */
+static int dsm_write_service;
+
+/* Credit whole service edges passed since the last grant. A guest write to any
+ * DMA register instead grants the exact elapsed cycles ([ORACLE FIXTURE D12]:
+ * after a DICR/DPCR/idle-MADR write the upload's MADR and BCR read ahead of the
+ * no-access control by the elapsed credit, while completion stays on the
+ * service edge; a DICR read leaves them unchanged). */
+static void dsm_credit_edges(DmaSrcMachine *m, uint64_t now) {
+    uint64_t edge = dsm_write_service ? now : now - now % DSM_QUANTUM;
+    if (edge <= m->served_until) return;
+    dsm_credit_add(m, edge - m->served_until);
+    m->served_until = edge;
+}
+
+static void dsm_begin(int k, uint32_t cursor, uint32_t words) {
+    DmaSrcMachine *m = &dsm[k];
+    memset(m, 0, sizeof *m);
+    m->running = 1;
+    m->cursor = cursor & 0x1FFFFCu;
+    m->words_left = words;
+    m->credit = DSM_KICK_CREDIT;
+    m->served_until = psx_cycle_count;
+}
+
+static void dsm_end(int k) {
+    dsm[k].running = 0;
+    dsm[k].halts_cpu = 0;
+    dsm[k].held = 0;
+    dsm[k].credit = 0;
+    if (k == DSM_GPU) dsm_publish_wait();
+    complete_transfer(dsm_channel[k]);
+}
+
+static int32_t dsm_step(int k) {
+    int32_t step = ((channels[dsm_channel[k]].chcr >> 1) & 1u) ? -4 : 4;
+    return step;
+}
+
+/* OTC (ch6): fills backwards; the last entry written is the end code. MADR and
+ * BCR are not updated (SyncMode 0) [DOC]; D9a end MADR = start. */
+static void dsm_run_otc(void) {
+    DmaSrcMachine *m = &dsm[DSM_OTC];
+    while (m->words_left && m->credit > 0) {
+        uint32_t v = m->words_left == 1u ? 0x00FFFFFFu : ((m->cursor - 4u) & 0x00FFFFFFu);
+        psx_write_word(m->cursor, v);
+        m->cursor = (m->cursor - 4u) & 0x1FFFFCu;
+        m->words_left--;
+        m->credit -= DSM_OTC_WORD;
+    }
+    if (!m->words_left) dsm_end(DSM_OTC);
+}
+
+/* GPU VRAM upload (ch2 SyncMode 1, RAM to GPU). Each block pays its overhead
+ * before its first word. BA counts blocks not yet started; MADR holds the
+ * current block's start and the end address at the finish [DOC]. */
+static void dsm_run_upload(void) {
+    DmaSrcMachine *m = &dsm[DSM_GPU];
+    int32_t step = dsm_step(DSM_GPU);
+    while (m->words_left && m->credit > 0) {
+        if (!m->stage) {
+            uint32_t ba = channels[2].bcr >> 16;
+            channels[2].bcr = (channels[2].bcr & 0xFFFFu) | (((ba - 1u) & 0xFFFFu) << 16);
+            m->credit -= DSM_GPU_BLOCK;
+            m->stage = 1;
+            continue;
+        }
+        uint32_t word = psx_read_word(m->cursor);
+        gpu_set_gp0_source(m->cursor);
+        gpu_write_gp0(word);
+        m->cursor = (m->cursor + (uint32_t)step) & 0x1FFFFCu;
+        m->words_left--;
+        m->credit -= DSM_GPU_WORD;
+        if (++m->blk_pos == m->blk_words) {
+            m->blk_pos = 0;
+            m->stage = 0;
+            channels[2].madr = m->cursor;
+        }
+    }
+    if (!m->words_left) {
+        channels[2].madr = m->cursor;
+        dsm_end(DSM_GPU);
     }
 }
-/* Bounded source compatibility experiment. Independently implemented from
- * observed original-core facts: 64 startup clocks, 15/10 per header, one per
- * payload, ready checked at a node boundary, 128-clock subsequent service.
- * Only NOP/environment payloads and the qualified parser-ready states are
- * admitted. General draw/FIFO timing, forced stop and restore are excluded. */
-static void source_gpu_ll_words(void) {
-    g_dma_cur_ch=2;g_dma_initiator_pc=s_dma_ch_initiator_pc[2];
-    while(gpu_ll_source.active && gpu_ll_source.budget>0) {
-        if(!gpu_ll_source.remaining) {
-            int ready=gpu_dma_source_ll_ready();
-            if(ready<0) {
-                fprintf(stderr,"[dma-model] unsupported source linked-list GPU parser state\n");exit(2);
+
+/* Profile scope: without the source GPU projection, the bounded linked-list
+ * profile only carries single-word commands whose cost the GPU side does not
+ * need to model (NOP, cache clear, the E1h-E6h environment commands). */
+static void dsm_ll_check_word(uint32_t word) {
+    if (source_gpu_runtime_active()) return;
+    uint32_t op = word >> 24;
+    if (op == 0x00u || op == 0x01u || (op >= 0xE1u && op <= 0xE6u)) return;
+    dsm_fail("source GPU linked list: command outside the bounded profile");
+}
+
+/* GPU linked list (ch2 SyncMode 2): header = next pointer (bits 0-23) + word
+ * count (bits 24-31); bit 23 of the pointer ends the list; MADR holds the
+ * current node and the end code at the finish [DOC]. Every header and payload
+ * word is read from RAM when it is consumed. */
+static void dsm_run_ll(uint64_t now) {
+    DmaSrcMachine *m = &dsm[DSM_LL];
+    for (;;) {
+        int ready = gpu_dma_source_ll_ready();
+        if (ready < 0) dsm_fail("source GPU linked list: GPU state outside the profile");
+        if (now > m->served_until) {
+            if (ready) dsm_credit_add(m, now - m->served_until);
+            m->served_until = now;
+        }
+        if (!ready) {
+            if (m->credit > 0) m->credit = 0;
+            m->held = 1;
+            return;
+        }
+        m->held = 0;
+        if (m->credit <= 0) return;
+        if (!m->stage) {
+            uint32_t header = psx_read_word(m->cursor);
+            m->words_left = header >> 24;
+            m->link = header & 0x00FFFFFFu;
+            gpu_set_gp0_linked_list_node(m->cursor, m->words_left);
+            channels[2].madr = m->cursor;
+            m->node_count++;
+            m->credit -= DSM_LL_NODE;
+            m->stage = 1;
+            m->cursor = (m->cursor + 4u) & 0x1FFFFCu;
+        } else if (m->words_left) {
+            uint32_t word = psx_read_word(m->cursor);
+            dsm_ll_check_word(word);
+            gpu_set_gp0_source(m->cursor);
+            gpu_write_gp0(word);
+            m->cursor = (m->cursor + 4u) & 0x1FFFFCu;
+            m->words_left--;
+            m->credit -= 1;
+        }
+        if (m->stage && !m->words_left) {
+            if (m->link & 0x00800000u) {
+                channels[2].madr = m->link;
+                dsm_end(DSM_LL);
+                return;
             }
-            if(!ready)break;
-            if(channels[2].madr&0x800000u) {
-                fprintf(stderr,"[dma-model] unsupported source linked-list address %08X\n",channels[2].madr);exit(2);
-            }
-            uint32_t at=channels[2].madr&0x1ffffcu;
-            uint32_t header=psx_read_word(at);
-            gpu_ll_source.remaining=header>>24;
-            gpu_ll_source.address=(channels[2].madr+4u)&0xffffffu;
-            channels[2].madr=header&0xffffffu;
-            gpu_set_gp0_linked_list_node(at,gpu_ll_source.nodes++);
-            gpu_ll_source.budget-=gpu_ll_source.remaining?15:10;
+            m->stage = 0;
+            m->cursor = m->link & 0x1FFFFCu;
+        }
+    }
+}
+
+/* CD-ROM (ch3 SyncMode 0, to RAM). Missing sector data reads as zero. MADR is
+ * not updated ([DOC]; [ORACLE FIXTURE D9e] end MADR = start in all 16 rows). */
+static void dsm_run_cd(void) {
+    DmaSrcMachine *m = &dsm[DSM_CD];
+    int32_t step = dsm_step(DSM_CD);
+    while (m->words_left && m->credit > 0) {
+        uint32_t word = cdrom_dma_read_padded();
+        psx_write_word(m->cursor, word);
+        record_cdrom_dma_word(word);
+        dirty_ram_mark_executable_range(m->cursor, 4);
+        m->cursor = (m->cursor + (uint32_t)step) & 0x1FFFFCu;
+        m->words_left--;
+        cdrom_async.remaining_words = m->words_left;
+        m->credit -= DSM_CD_WORD;
+    }
+    if (!m->words_left) {
+        uint32_t start = channels[3].madr;
+        m->running = 0;
+        m->halts_cpu = 0;
+        finish_async_cdrom_transfer(m->cursor);
+        channels[3].madr = start;
+    }
+}
+
+/* SPU (ch4 SyncMode 1). MADR advances per block and BA reaches zero [DOC];
+ * D3 end MADR = start + 4 x words. */
+static void dsm_run_spu(void) {
+    DmaSrcMachine *m = &dsm[DSM_SPU];
+    int32_t step = dsm_step(DSM_SPU);
+    int to_spu = channels[4].chcr & 1u;
+    while (m->words_left && m->credit > 0) {
+        if (to_spu) spu_dma_write(psx_read_word(m->cursor));
+        else psx_write_word(m->cursor, spu_dma_read());
+        m->cursor = (m->cursor + (uint32_t)step) & 0x1FFFFCu;
+        m->words_left--;
+        m->credit -= DSM_SPU_WORD;
+        if (++m->blk_pos == m->blk_words) {
+            m->blk_pos = 0;
+            channels[4].madr = m->cursor;
+            channels[4].bcr = (channels[4].bcr & 0xFFFFu) |
+                              ((((channels[4].bcr >> 16) - 1u) & 0xFFFFu) << 16);
+        }
+    }
+    if (!m->words_left) {
+        channels[4].madr = m->cursor;
+        dsm_end(DSM_SPU);
+    }
+}
+
+static void dsm_service(int k, uint64_t now) {
+    DmaSrcMachine *m = &dsm[k];
+    if (!m->running) return;
+    if (!((channels[dsm_channel[k]].chcr >> 24) & 1u) || !channel_enabled(dsm_channel[k]))
+        return;
+    g_dma_cur_ch = dsm_channel[k];
+    g_dma_initiator_pc = s_dma_ch_initiator_pc[dsm_channel[k]];
+    switch (k) {
+        case DSM_OTC: dsm_credit_edges(m, now); dsm_run_otc(); break;
+        case DSM_GPU: dsm_credit_edges(m, now); dsm_run_upload(); break;
+        case DSM_LL:  dsm_run_ll(now); break;
+        case DSM_CD:  dsm_credit_edges(m, now); dsm_run_cd(); break;
+        case DSM_SPU: dsm_credit_edges(m, now); dsm_run_spu(); break;
+    }
+    g_dma_cur_ch = -1;
+}
+
+/* Service order is the dma_advance order. [ORACLE FIXTURE D7]: OTC runs before
+ * the GPU payload when both start together. */
+static void dsm_service_all(uint64_t now) {
+    dsm_service(DSM_OTC, now);
+    dsm_service(DSM_CD, now);
+    dsm_service(DSM_GPU, now);
+    dsm_service(DSM_LL, now);
+    dsm_service(DSM_SPU, now);
+}
+
+/* A halting kick without the source CPU owner: advance the guest clock to
+ * each service edge until the machine finishes. */
+static void dsm_hold_here(int k) {
+    while (dsm[k].running) {
+        uint64_t now = psx_cycle_count;
+        uint64_t edge = now - now % DSM_QUANTUM + DSM_QUANTUM;
+        psx_advance_cycles((uint32_t)(edge - now));
+        dsm_service(k, psx_cycle_count);
+    }
+}
+
+static void dsm_start_otc(void) {
+    uint32_t n = channels[6].bcr & 0xFFFFu;
+    dsm_begin(DSM_OTC, channels[6].madr, n ? n : 0x10000u);
+    dsm[DSM_OTC].halts_cpu = 1; /* burst: the CPU waits ([DOC] "CPU Operation during DMA"; D9a) */
+    dsm_run_otc();
+}
+
+static void dsm_start_upload(void) {
+    uint32_t chcr = channels[2].chcr;
+    if (!(chcr & 1u) || ((chcr >> 9) & 3u) != 1u)
+        dsm_fail("source GPU upload: only SyncMode 1 from RAM is in the profile");
+    if (chcr & (1u << 8)) dsm_fail("source GPU upload: chopping is outside the profile");
+    uint32_t bs = channels[2].bcr & 0xFFFFu, ba = channels[2].bcr >> 16;
+    if (!bs) bs = 0x10000u;
+    if (!ba) ba = 0x10000u;
+    uint32_t words = bs * ba;
+    if (gpu_dma_vram_upload_words() < words)
+        dsm_fail("source GPU upload: the GPU is not expecting this many VRAM words");
+    dsm_begin(DSM_GPU, channels[2].madr, words);
+    dsm[DSM_GPU].blk_words = bs;
+    dsm_run_upload();
+    dsm_publish_wait();
+}
+
+static void dsm_start_ll(void) {
+    if (!(channels[2].chcr & 1u)) dsm_fail("source GPU linked list: direction to RAM");
+    if ((channels[2].madr & 0x00FFFFFFu) >= 0x200000u)
+        dsm_fail("source GPU linked list: start address outside main RAM");
+    dsm_begin(DSM_LL, channels[2].madr, 0);
+    dsm_run_ll(psx_cycle_count);
+}
+
+static void dsm_start_cd(void) {
+    uint32_t chcr = channels[3].chcr;
+    dsm_begin(DSM_CD, channels[3].madr, cdrom_async.total_words);
+    /* Manual, non-chopped: the CPU waits ([ORACLE FIXTURE D9e]: halt = done - ~20). */
+    dsm[DSM_CD].halts_cpu = !(chcr & (1u << 8));
+    if (!cdrom_async.total_words) return;
+    dsm_run_cd();
+}
+
+/* Kick paths that halt the CPU: hold here unless the source CPU owner does. */
+static void dsm_kick_hold(int k) {
+    if (dsm[k].running && dsm[k].halts_cpu && !dsm_cpu_owner()) dsm_hold_here(k);
+}
+
+static void dsm_start_spu(void) {
+    uint32_t bs = channels[4].bcr & 0xFFFFu, ba = channels[4].bcr >> 16;
+    uint32_t sync = (channels[4].chcr >> 9) & 3u;
+    if (sync == 2u) dsm_fail("source SPU DMA: linked-list mode");
+    if (!bs) bs = 0x10000u;
+    if (sync == 0u) ba = 1u;
+    else if (!ba) ba = 0x10000u;
+    dsm_begin(DSM_SPU, channels[4].madr, bs * ba);
+    dsm[DSM_SPU].blk_words = sync == 1u ? bs : 0u;
+    audio_trace_event((channels[4].chcr & 1u) ? AUDIO_EV_DMA_WRITE : AUDIO_EV_DMA_READ,
+                      bs * ba, channels[4].madr & 0x1FFFFCu);
+    dsm_run_spu();
+}
+
+/* Cycles until the next source machine action (word movement or completion). */
+static uint32_t dsm_cycles_to_event(int armed_only) {
+    uint32_t best = UINT32_MAX;
+    uint64_t now = psx_cycle_count;
+    for (int k = 0; k < DSM_COUNT; k++) {
+        const DmaSrcMachine *m = &dsm[k];
+        int ch = dsm_channel[k];
+        if (!m->running || !((channels[ch].chcr >> 24) & 1u) || !channel_enabled(ch)) continue;
+        if (armed_only && !channel_irq_flag_armed(ch)) continue;
+        uint32_t d;
+        if (k == DSM_LL) {
+            if (m->held) continue; /* the GPU side schedules its own readiness */
+            d = m->credit > 0 ? 1u : (uint32_t)(1 - m->credit);
         } else {
-            if(gpu_ll_source.address&0x800000u) {
-                fprintf(stderr,"[dma-model] unsupported source linked-list payload address\n");exit(2);
-            }
-            uint32_t at=gpu_ll_source.address&0x1ffffcu;
-            uint32_t value=psx_read_word(at),opcode=value>>24;
-            if(!source_gpu_runtime_active() && (gpu_dma_source_ll_ready()!=1 ||
-               !(opcode==0 || opcode==1 || (opcode>=0xe1 && opcode<=0xe6)))) {
-                fprintf(stderr,"[dma-model] unsupported source linked-list payload %08X at %08X\n",value,at);exit(2);
-            }
-            gpu_set_gp0_source(at);gpu_write_gp0(value);
-            gpu_ll_source.address=(gpu_ll_source.address+4u)&0xffffffu;
-            gpu_ll_source.remaining--;gpu_ll_source.budget--;
+            d = (uint32_t)(DSM_QUANTUM - now % DSM_QUANTUM);
         }
-        if(!gpu_ll_source.remaining && channels[2].madr==0xffffffu) {
-            gpu_ll_source.active=0;complete_transfer(2);
+        if (d < best) best = d;
+    }
+    return best;
+}
+
+/* Register writes in the source profile: finish the work due before the write,
+ * so a completion sees the old DICR, then refuse changes the machines cannot
+ * follow. Returns 1 when the write was handled here. */
+static int dsm_before_write(uint32_t addr, uint32_t val, uint32_t mask) {
+    if (!dsm_profile_any() && !dsm_spu_model) return 0;
+    dsm_write_service = 1;
+    dsm_service_all(psx_cycle_count);
+    dsm_write_service = 0;
+    if (addr == 0x1F8010F0u) {
+        uint32_t next = (dpcr & ~mask) | (val & mask);
+        for (int k = 0; k < DSM_COUNT; k++) {
+            int ch = dsm_channel[k];
+            if (dsm[k].running && ((dpcr ^ next) >> (ch * 4)) & 0xFu)
+                dsm_fail("source DMA: DPCR change for a channel with a live transfer");
         }
+        uint32_t enabling = 0;
+        for (int ch = 0; ch < 7; ch++)
+            if (!((dpcr >> (ch * 4 + 3)) & 1u) && ((next >> (ch * 4 + 3)) & 1u) &&
+                ((channels[ch].chcr >> 24) & 1u))
+                enabling |= 1u << ch;
+        dpcr = next;
+        /* [ORACLE FIXTURE D7]: OTC starts before the GPU in all three DPCR
+         * priority orders. Other pairs keep channel order. */
+        if (enabling & (1u << 6)) try_execute(6);
+        for (int ch = 0; ch < 6; ch++) if (enabling & (1u << ch)) try_execute(ch);
+        return 1;
     }
-    /* Source discards unused positive clocks at a ready stall/completion. */
-    if(gpu_ll_source.budget>0)gpu_ll_source.budget=0;
-}
-static void start_source_gpu_ll(void) {
-    if((channels[2].chcr&0x00ffffffu)!=0x401u) {
-        fprintf(stderr,"[dma-model] unsupported source linked-list CHCR=%08X\n",channels[2].chcr);exit(2);
+    if (addr >= 0x1F801080u && addr <= 0x1F8010EFu) {
+        int ch = (int)((addr - 0x1F801080u) / 0x10u);
+        for (int k = 0; k < DSM_COUNT; k++)
+            if (dsm[k].running && dsm_channel[k] == ch)
+                dsm_fail("source DMA: register write to a channel with a live transfer");
     }
-    memset(&gpu_ll_source,0,sizeof(gpu_ll_source));
-    gpu_ll_source.active=1;gpu_ll_source.budget=64;
-    gpu_ll_source.last_cycle=psx_cycle_count;
-    gpu_ll_source.next_cycle=psx_cycle_count+128u-(psx_cycle_count&127u);
-    source_gpu_ll_words();
-    psx_devices_service_to_now();
+    return 0;
 }
-static void advance_source_gpu_ll(void) {
-    while(gpu_ll_source.active && psx_cycle_count>=gpu_ll_source.next_cycle) {
-        gpu_ll_source.budget+=(int32_t)(gpu_ll_source.next_cycle-gpu_ll_source.last_cycle);
-        gpu_ll_source.last_cycle=gpu_ll_source.next_cycle;
-        gpu_ll_source.next_cycle+=128u;source_gpu_ll_words();
-    }
-}
-static void advance_source_cdrom(void);
-static void source_cdrom_words(void);
-static void advance_source_otc(void);
-static void advance_source_otc_words(uint32_t budget);
-static void advance_source_spu(void);
-static void source_spu_words(void);
+
 void dma_source_gpu_service_at(uint64_t cycle) {
-    if(cycle!=psx_cycle_count) {
-        fprintf(stderr,"[dma-model] source GPU service outside scheduler cycle\n");exit(2);
-    }
     g_dma_exec_depth++;
-    service_source_mdec(cycle);
-    advance_source_gpu();
-    if(gpu_upload_source.remaining && cycle>gpu_upload_source.last_cycle) {
-        gpu_upload_source.budget+=(int32_t)(cycle-gpu_upload_source.last_cycle);
-        gpu_upload_source.last_cycle=cycle;source_gpu_upload_words();
-    }
-    advance_source_gpu_ll();
-    if(gpu_ll_source.active && cycle>gpu_ll_source.last_cycle) {
-        gpu_ll_source.budget+=(int32_t)(cycle-gpu_ll_source.last_cycle);
-        gpu_ll_source.last_cycle=cycle;source_gpu_ll_words();
-    }
-    /* Original DMA_Update services every channel on register writes and
-     * frontend returns, including the fraction since the last 128-clock
-     * event. Preserve that global event phase and charge each interval once. */
-    advance_source_cdrom();
-    if(cd_source_model && cdrom_async.active && cycle>cd_source.last_cycle) {
-        cd_source.budget+=(int32_t)(cycle-cd_source.last_cycle);
-        cd_source.last_cycle=cycle;source_cdrom_words();
-    }
-    advance_source_spu();
-    if(spu_source.remaining && cycle>spu_source.last_cycle) {
-        spu_source.budget+=(int32_t)(cycle-spu_source.last_cycle);
-        spu_source.last_cycle=cycle;source_spu_words();
-    }
-    advance_source_otc();
-    if(otc_source_model && otc_source.remaining && cycle>otc_source.last_cycle) {
-        uint32_t elapsed=(uint32_t)(cycle-otc_source.last_cycle);
-        otc_source.last_cycle=cycle;advance_source_otc_words(elapsed);
-    }
+    dsm_service_all(cycle);
     g_dma_exec_depth--;
 }
+
+/* Load wait while an upload runs, sampled once per load by memory.c. */
 uint32_t dma_cpu_read_penalty(void) {
     return g_dma_cpu_read_wait;
 }
+
+/* The source CPU owner publishes the wait at each instruction boundary. */
 void dma_cpu_read_wait_boundary(void) {
-    /* Source RunReal does not service an event crossed by fetch/base cycles
-     * until the instruction's memory access (MMIO) or retirement (RAM/ROM).
-     * Its ReadMemory therefore sees the DMA steal from instruction entry.
-     * Our scheduler may already have completed DMA during the fetch refill;
-     * preserve that entry wait, including for compiled RAM fast-path routing. */
-    cpu_read_wait_latched=1;
-    g_dma_cpu_read_wait=gpu_upload_live_read_wait;
+    g_dma_cpu_read_wait = dsm_wait_live;
 }
 
 static uint32_t execute_ch2_gpu(void) {
@@ -1117,73 +1365,21 @@ static uint32_t execute_ch2_gpu(void) {
     return actual_words;
 }
 
-static void source_cdrom_words(void) {
-    DMAAsyncChannel *a=&cdrom_async;
-    uint32_t addr=channels[3].madr&0x1FFFFCu;
-    int32_t step=(channels[3].chcr&2u)?-4:4;
-    if(a->remaining_words==a->total_words) {
-        uint32_t bytes=a->total_words*4u;
-        if(bytes>0x200000u-addr)bytes=0x200000u-addr;
-        if(addr<0x1C0000u)overlay_capture_before_dma(addr,bytes);
-    }
-    while(a->active && a->remaining_words && cd_source.budget>0) {
-        uint32_t word=cdrom_dma_read_padded();
-        g_dma_cur_ch=3;g_dma_cur_madr=addr;g_dma_cur_bcr=channels[3].bcr;
-        g_dma_initiator_pc=s_dma_ch_initiator_pc[3];
-        psx_write_word(addr,word);record_cdrom_dma_word(word);
-        dirty_ram_mark_executable_range(addr,4);
-        addr=(addr+step)&0x1FFFFCu;
-        a->remaining_words--;cd_source.budget-=9;
-        channels[3].madr=addr;
-        if(!a->remaining_words)finish_async_cdrom_transfer(addr);
-    }
-}
-
-static void start_source_cdrom(void) {
-    cd_source.budget=64;cd_source.last_cycle=psx_cycle_count;
-    cd_source.next_cycle=psx_cycle_count+128u-(psx_cycle_count&127u);
-    source_cdrom_words();
-}
-
-static void advance_source_cdrom(void) {
-    while(cd_source_model && cdrom_async.active && psx_cycle_count>=cd_source.next_cycle) {
-        cd_source.budget+=(int32_t)(cd_source.next_cycle-cd_source.last_cycle);
-        cd_source.last_cycle=cd_source.next_cycle;cd_source.next_cycle+=128u;
-        source_cdrom_words();
-    }
-}
-
 static void execute_ch3_cdrom(void) {
     uint32_t chcr = channels[3].chcr;
     uint32_t direction = chcr & 1;           /* 0=to RAM, 1=from RAM */
 
-    if(cd_source_model && ((chcr&0x601u)!=0 || (channels[3].madr&0x800000u))) {
-        fprintf(stderr,"[dma-model] source CD timing requires valid manual to-RAM transfer: frame=%llu cycle=%llu CHCR=%08X MADR=%08X BCR=%08X\n",
-                (unsigned long long)s_frame_count,(unsigned long long)psx_cycle_count,
-                chcr,channels[3].madr,channels[3].bcr);
-        exit(2);
-    }
+    if (cd_source_model && ((chcr >> 9) & 3u) != 0u)
+        dsm_fail("source CD DMA: only SyncMode 0 is in the profile");
     if (direction != 0) {
         channels[3].chcr &= ~((1u << 24) | (1u << 28));
         return;
     }
 
     start_async_cdrom_transfer();
-    if(cd_source_model) {
-        start_source_cdrom();
-        /* Source's CPU owns fetch attempts during a manual DMA halt, just as
-         * for OTC. Let the CHCR store retire before that boundary runs.
-         * Standalone controller callers retain their synchronous contract. */
-        if(source_gpu_runtime_active())return;
-        while(cdrom_async.active && !(chcr&0x100u)) {
-            uint32_t wait=cd_source.next_cycle>psx_cycle_count?
-                (uint32_t)(cd_source.next_cycle-psx_cycle_count):1u;
-            psx_advance_cycles(wait);
-            /* The MMIO pre-barrier can cache a later device deadline before
-             * this transfer is armed. Service each new DMA boundary even when
-             * that cached deadline has not expired, as the OTC halt does. */
-            psx_devices_service_to_now();
-        }
+    if (cd_source_model && cdrom_async.active) {
+        dsm_start_cd();
+        dsm_kick_hold(DSM_CD);
     }
 }
 
@@ -1228,110 +1424,10 @@ static uint32_t execute_ch4_spu(void) {
     return total_words;
 }
 
-static void source_spu_words(void) {
-    g_dma_cur_ch=4;g_dma_initiator_pc=s_dma_ch_initiator_pc[4];
-    while(spu_source.remaining && spu_source.budget>0) {
-        if(!spu_source.in_block) {
-            spu_source.in_block=spu_source.block_size;
-            spu_source.address=channels[4].madr&0xffffffu;
-            channels[4].bcr-=1u<<16;
-        }
-        if(spu_source.address&0x800000u) {
-            fprintf(stderr,"[dma-model] source SPU request payload address unsupported\n");exit(2);
-        }
-        uint32_t at=spu_source.address&0x1ffffcu;
-        g_dma_cur_madr=spu_source.address;g_dma_cur_bcr=channels[4].bcr;
-        if(channels[4].chcr&1u)spu_dma_write(psx_read_word(at));
-        else psx_write_word(at,spu_dma_read());
-        spu_source.address=(spu_source.address+((channels[4].chcr&2u)?-4u:4u))&0xffffffu;
-        spu_source.budget-=48;spu_source.in_block--;spu_source.remaining--;
-        if(!spu_source.in_block)channels[4].madr=spu_source.address;
-        if(!spu_source.remaining) {
-            audio_trace_event((channels[4].chcr&1u)?AUDIO_EV_DMA_WRITE:AUDIO_EV_DMA_READ,
-                              spu_source.total_words,spu_source.start_addr);
-            complete_transfer(4);
-        }
-    }
-    if(spu_source.budget>0)spu_source.budget=0;
-}
-static void start_source_spu(void) {
-    uint32_t bs=channels[4].bcr&0xffffu,bc=channels[4].bcr>>16;
-    if((channels[4].chcr&0x00fffffcu)!=0x200u || !bs || !bc ||
-       (channels[4].madr&0x800000u)) {
-        fprintf(stderr,"[dma-model] source SPU request unsupported CHCR=%08X BCR=%08X MADR=%08X\n",
-                channels[4].chcr,channels[4].bcr,channels[4].madr);exit(2);
-    }
-    spu_source.remaining=spu_source.total_words=bs*bc;
-    spu_source.block_size=bs;spu_source.in_block=0;spu_source.budget=64;
-    spu_source.start_addr=channels[4].madr&0x1ffffcu;
-    spu_source.last_cycle=psx_cycle_count;
-    spu_source.next_cycle=psx_cycle_count+128u-(psx_cycle_count&127u);
-    source_spu_words();
-}
-static void advance_source_spu(void) {
-    while(spu_source.remaining && psx_cycle_count>=spu_source.next_cycle) {
-        spu_source.budget+=(int32_t)(spu_source.next_cycle-spu_source.last_cycle);
-        spu_source.last_cycle=spu_source.next_cycle;spu_source.next_cycle+=128;
-        source_spu_words();
-    }
-}
-
-static void advance_source_otc_words(uint32_t budget) {
-    while (budget-- && otc_source.remaining) {
-        if (otc_source.address & 0x800000u) {
-            otc_source.remaining = 0;
-            channels[6].chcr &= ~((1u << 24) | (1u << 28));
-            uint32_t before = dicr;
-            dicr |= 0x8000u;
-            raise_dma_irq_on_master_edge(before);
-            return;
-        }
-        uint32_t value = otc_source.remaining == 1u ? 0xFFFFFFu :
-                         (otc_source.address - 4u) & 0xFFFFFFu;
-        g_dma_cur_ch = 6; g_dma_cur_madr = otc_source.address;
-        g_dma_cur_bcr = channels[6].bcr;
-        g_dma_initiator_pc = s_dma_ch_initiator_pc[6];
-        psx_write_word(otc_source.address & 0x1FFFFCu, value);
-        otc_source.address = (otc_source.address - 4u) & 0xFFFFFFu;
-        if (--otc_source.remaining == 0) complete_transfer(6);
-    }
-}
-
-static void start_source_otc(void) {
-    otc_source.remaining = channels[6].bcr & 0xFFFFu;
-    if (!otc_source.remaining) otc_source.remaining = 65536u;
-    otc_source.address = channels[6].madr & 0xFFFFFCu;
-    otc_source.last_cycle = psx_cycle_count;
-    otc_source.next_cycle = psx_cycle_count + 128u - (psx_cycle_count & 127u);
-    advance_source_otc_words(64u);
-}
-
-static void advance_source_otc(void) {
-    while (otc_source.remaining && psx_cycle_count >= otc_source.next_cycle) {
-        uint32_t elapsed = (uint32_t)(otc_source.next_cycle - otc_source.last_cycle);
-        otc_source.last_cycle = otc_source.next_cycle;
-        otc_source.next_cycle += 128u;
-        advance_source_otc_words(elapsed);
-    }
-}
-
 static void execute_ch6_otc(void) {
     if (otc_source_model) {
-        start_source_otc();
-        /* The source CPU fetches while halted. Its functional instruction
-         * boundary owns that overlap when the source CPU/GPU profile is on.
-         * Standalone controller callers retain the synchronous contract. */
-        if(source_gpu_runtime_active())return;
-        /* The ordinary CHCR store does not return to guest execution until
-         * the source-style halt ends. All devices keep advancing. Source's
-         * next instruction fetch may overlap this halt; this adapter does
-         * not claim fetch/cache phase or physical write-queue equivalence. */
-        while (otc_source.remaining) {
-            uint32_t wait = otc_source.next_cycle > psx_cycle_count ?
-                (uint32_t)(otc_source.next_cycle - psx_cycle_count) : 1u;
-            psx_advance_cycles(wait);
-            psx_devices_service_to_now();
-        }
+        dsm_start_otc();
+        dsm_kick_hold(DSM_OTC);
         return;
     }
     /* OTC (Ordering Table Clear): writes a backward-linked list to RAM.
@@ -1359,15 +1455,12 @@ static void execute_ch6_otc(void) {
 }
 
 int dma_cpu_otc_halted(void) {
-    return otc_source_model && otc_source.remaining!=0u;
+    return dsm[DSM_OTC].running && dsm[DSM_OTC].halts_cpu;
 }
 
 int dma_cpu_source_halted(void) {
-    return dma_cpu_otc_halted() ||
-           (cd_source_model && cdrom_async.active &&
-            !(channels[3].chcr&0x100u));
+    return dma_cpu_otc_halted() || (dsm[DSM_CD].running && dsm[DSM_CD].halts_cpu);
 }
-
 static void execute_ch5_pio(void) {
     /* PIO (Parallel I/O) — used for expansion port / parallel port transfers.
      * Very simple: just move words directly to/from RAM with no device interaction.
@@ -1405,11 +1498,6 @@ static void try_execute(int ch) {
     if (!((chcr >> 24) & 1)) return;
     if (!channel_enabled(ch)) return;
 
-    /* Source CD and SPU retain the trigger in their live registers until
-     * completion, observable while the CPU is allowed to keep running.
-     * Default and standalone controller callers retain their old image. */
-    if(!((ch==4 || (ch==3 && cd_source_model)) && source_gpu_runtime_active()))
-        channels[ch].chcr &= ~(1u << 28);
     trace_dma('S', ch, transfer_word_count(ch), dicr, i_stat);
     event_ring_record_aux(EV_DMA_KICK, (uint8_t)ch, channels[ch].chcr);
     event_ring_record_aux(EV_ENQ, (uint8_t)(SRC_DMA0 + ch), transfer_word_count(ch));
@@ -1433,10 +1521,10 @@ static void try_execute(int ch) {
             else start_async_mdec_transfer(1);
             break;
         case 2:
-            if(gpu_upload_source_model && ((channels[2].chcr>>9)&3u)==1u)
-                start_source_gpu_upload();
-            else if(gpu_ll_source_model && ((channels[2].chcr>>9)&3u)==2u)
-                start_source_gpu_ll();
+            if (gpu_ll_source_model && ((channels[2].chcr >> 9) & 3u) == 2u)
+                dsm_start_ll();
+            else if (gpu_upload_source_model && ((channels[2].chcr >> 9) & 3u) != 2u)
+                dsm_start_upload();
             else if ((channels[2].chcr & 1u) != 0u &&
                 ((channels[2].chcr >> 9) & 3u) == 2u) {
                 start_async_gpu_linked_list();
@@ -1449,7 +1537,7 @@ static void try_execute(int ch) {
             execute_ch3_cdrom();
             break;
         case 4:
-            if(source_gpu_runtime_active())start_source_spu();
+            if (dsm_spu_model) dsm_start_spu();
             else schedule_delayed_complete(4, execute_ch4_spu(),
                                            DMA_SPU_CYCLES_PER_WORD);
             break;
@@ -1489,32 +1577,9 @@ int dma_cdrom_transfer_active(void) {
  * already accumulated (always <= the true remaining, since per-word cost >= 1),
  * and the exact countdown for delayed-complete channels. Over-slicing on a
  * channel whose DICR completion is masked is safe. See PRECISE_IRQ_SLICE.md. */
-static uint32_t source_gpu_dma_irq_bound(void) {
-    uint32_t best=0xFFFFFFFFu;
-    if(gpu_ll_source.active)
-        best=gpu_ll_source.next_cycle>psx_cycle_count?
-            (uint32_t)(gpu_ll_source.next_cycle-psx_cycle_count):1u;
-    if(gpu_upload_source.remaining) {
-        uint32_t d=gpu_upload_source.next_cycle>psx_cycle_count?
-            (uint32_t)(gpu_upload_source.next_cycle-psx_cycle_count):1u;
-        if(d<best)best=d;
-    }
-    return best;
-}
-
 uint32_t dma_cycles_to_irq(uint32_t i_mask) {
-    if (!(i_mask & (1u << 3))) return 0xFFFFFFFFu;   /* IRQ_DMA masked */
-    /* Source GPU transfers complete during periodic DMA service, without a
-     * delayed_complete entry. A compiled block must stop before that service
-     * can raise its completion IRQ. This is a conservative bound, not a new
-     * transfer duration: readiness can postpone completion beyond the event. */
-    uint32_t best = source_gpu_dma_irq_bound();
-    uint32_t mdec_bound=source_mdec_dma_bound(0);if(mdec_bound<best)best=mdec_bound;
-    if(spu_source.remaining) {
-        uint32_t d=spu_source.next_cycle>psx_cycle_count?
-            (uint32_t)(spu_source.next_cycle-psx_cycle_count):1u;
-        if(d<best)best=d;
-    }
+    if (!(i_mask & (1u << 3))) return UINT32_MAX;
+    uint32_t best = dsm_cycles_to_event(0);
     const DMAAsyncChannel *async_ch[3] = { &mdec_async[0], &mdec_async[1], &cdrom_async };
     for (int i = 0; i < 3; i++) {
         const DMAAsyncChannel *a = async_ch[i];
@@ -1536,30 +1601,7 @@ uint32_t dma_cycles_to_irq(uint32_t i_mask) {
 }
 
 uint32_t dma_cycles_to_internal_event(void) {
-    uint32_t best = source_mdec_dma_bound(0);
-    if(gpu_ll_source.active) {
-        best=gpu_ll_source.next_cycle>psx_cycle_count?
-            (uint32_t)(gpu_ll_source.next_cycle-psx_cycle_count):1u;
-    }
-    if(gpu_upload_source.remaining) {
-        best=gpu_upload_source.next_cycle>psx_cycle_count?
-            (uint32_t)(gpu_upload_source.next_cycle-psx_cycle_count):1u;
-    }
-    if (otc_source.remaining) {
-        uint32_t d = otc_source.next_cycle > psx_cycle_count ?
-            (uint32_t)(otc_source.next_cycle - psx_cycle_count) : 1u;
-        if(d<best)best=d;
-    }
-    if(cd_source_model && cdrom_async.active) {
-        uint32_t d=cd_source.next_cycle>psx_cycle_count?
-            (uint32_t)(cd_source.next_cycle-psx_cycle_count):1u;
-        if(d<best)best=d;
-    }
-    if(spu_source.remaining) {
-        uint32_t d=spu_source.next_cycle>psx_cycle_count?
-            (uint32_t)(spu_source.next_cycle-psx_cycle_count):1u;
-        if(d<best)best=d;
-    }
+    uint32_t best = dsm_cycles_to_event(0);
 
     /* Async MDEC channels move one word whenever their cycle accumulator
      * reaches the channel cost. Completion-only scheduling batches many RAM
@@ -1583,9 +1625,8 @@ uint32_t dma_cycles_to_internal_event(void) {
     }
 
     /* CD-ROM DMA writes guest RAM incrementally. Expose each word on time;
-     * waiting only for the channel-complete IRQ can delay hundreds of writes. */
-    if (!cd_source_model && cdrom_async.active && cdrom_async.remaining_words != 0 &&
-        ((channels[3].chcr >> 24) & 1u) && channel_enabled(3)) {
+     * the source CD profile schedules through its own machine. */
+    if (!cd_source_model && dma_cdrom_transfer_active()) {
         if ((channels[3].chcr & 1u) != 0) {
             return 1u; /* unsupported RAM->CD direction cancels next tick */
         }
@@ -1613,13 +1654,7 @@ uint32_t dma_cycles_to_internal_event(void) {
 
 uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask) {
     if (!(i_mask & (1u << 3))) return 0xFFFFFFFFu;
-    uint32_t best = channel_irq_flag_armed(2)?source_gpu_dma_irq_bound():0xFFFFFFFFu;
-    uint32_t mdec_bound=source_mdec_dma_bound(1);if(mdec_bound<best)best=mdec_bound;
-    if(spu_source.remaining && channel_irq_flag_armed(4)) {
-        uint32_t d=spu_source.next_cycle>psx_cycle_count?
-            (uint32_t)(spu_source.next_cycle-psx_cycle_count):1u;
-        if(d<best)best=d;
-    }
+    uint32_t best = dsm_cycles_to_event(1);
     const int async_num[3] = { 0, 1, 3 };
     const DMAAsyncChannel *async_ch[3] = {
         &mdec_async[0], &mdec_async[1], &cdrom_async
@@ -1647,12 +1682,13 @@ uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask) {
 void dma_advance(uint32_t cycles) {
     if (cycles == 0) return;
     g_dma_exec_depth++;   /* async to-RAM DMA writes below run through psx_write_word */
-    advance_source_otc();
-    advance_source_cdrom();
-    advance_source_gpu();
-    advance_source_gpu_ll();
+    uint64_t now = psx_cycle_count;
+    dsm_service(DSM_OTC, now);
+    dsm_service(DSM_CD, now);
+    dsm_service(DSM_GPU, now);
+    dsm_service(DSM_LL, now);
     advance_mdec_channel(0, cycles);
-    advance_source_spu();
+    dsm_service(DSM_SPU, now);
     advance_mdec_channel(1, cycles);
     if (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
         channel_enabled(2)) {
@@ -1726,18 +1762,12 @@ void dma_advance(uint32_t cycles) {
 void dma_init(void) {
     memset(mdec_source_dma,0,sizeof(mdec_source_dma));mdec_source_last_cycle=0;
     g_dma_cpu_read_wait=0;
-    gpu_upload_live_read_wait=0;cpu_read_wait_latched=0;
-    memset(&gpu_ll_source,0,sizeof(gpu_ll_source));
-    memset(&gpu_upload_source,0,sizeof(gpu_upload_source));
-    memset(&spu_source,0,sizeof(spu_source));
     const char *gpu_model=getenv("PSX_GPU_DMA_MODEL");
     gpu_upload_source_model=gpu_model && *gpu_model;
     gpu_ll_source_model=gpu_model && (!strcmp(gpu_model,"octoshock-2.2.2-bounded-linked-list") || !strcmp(gpu_model,"octoshock-2.2.2-bounded-quad"));
     if(gpu_upload_source_model && ((!gpu_ll_source_model && strcmp(gpu_model,"octoshock-2.2.2-vram-upload")) || !getenv("PSX_INPUT_ROUTE_FILE"))) {
         fprintf(stderr,"[dma-model] invalid source GPU upload model or missing route\n");exit(2);
     }
-    memset(&otc_source, 0, sizeof(otc_source));
-    memset(&cd_source,0,sizeof(cd_source));
     const char *cd_model=getenv("PSX_CD_DMA_MODEL");
     cd_source_model=cd_model && *cd_model;
     if(cd_source_model && (strcmp(cd_model,"octoshock-2.2.2") || !getenv("PSX_INPUT_ROUTE_FILE"))) {
@@ -1755,9 +1785,12 @@ void dma_init(void) {
     memset(&cdrom_async, 0, sizeof(cdrom_async));
     memset(&gpu_linked_list, 0, sizeof(gpu_linked_list));
     memset(delayed_complete, 0, sizeof(delayed_complete));
-    /* Original2.2.2 Power clears DMAControl. Keep that source-profile cold
-     * value distinct from the default hardware-style priority reset image. */
-    dpcr = gpu_ll_source_model ? 0u : 0x07654321u;
+    memset(dsm, 0, sizeof dsm);
+    dsm_wait_live = 0;
+    dsm_spu_model = gpu_upload_source_model;
+    /* [ORACLE FIXTURE D8] every DMA register reads 0 at power-on in the source
+     * profile (PSX-SPX documents DPCR = 07654321h). */
+    if (dsm_profile_any()) dpcr = 0u;
     dicr = 0;
     dma_debug_clear_trace();
     dma_debug_clear_cdrom_history();
@@ -1808,6 +1841,7 @@ bad:
 }
 
 void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
+    if (dsm_before_write(addr, val, mask)) return;
     source_gpu_runtime_dma_write();
     if(mdec_source_active())for(int ch=0;ch<2;ch++)
         if((channels[ch].chcr&(1u<<24)) &&
@@ -1815,54 +1849,6 @@ void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
             (addr==0x1f8010f0u && ((dpcr^val)&mask&(15u<<(4*ch)))))) {
             fprintf(stderr,"[dma-model] active MDEC register replacement unsupported\n");exit(2);
         }
-    if(spu_source.remaining &&
-       ((addr>=0x1f8010c0u && addr<=0x1f8010cbu) ||
-        (addr==0x1f8010f0u && ((dpcr^val)&mask&0xf0000u)))) {
-        fprintf(stderr,"[dma-model] active source SPU request register replacement unsupported\n");exit(2);
-    }
-    if(gpu_ll_source.active) {
-        advance_source_gpu_ll();
-        if(gpu_ll_source.active && psx_cycle_count>gpu_ll_source.last_cycle) {
-            gpu_ll_source.budget+=(int32_t)(psx_cycle_count-gpu_ll_source.last_cycle);
-            gpu_ll_source.last_cycle=psx_cycle_count;source_gpu_ll_words();
-        }
-        /* Source DMA_Write services elapsed work first. With no payload left,
-         * clearing start stops before the next header: no GPU FIFO flush, no
-         * completion IRQ, and no retained positive DMA credit. Other active
-         * register changes and partial-payload cancellation remain guarded. */
-        if(gpu_ll_source.active && !gpu_ll_source.remaining &&
-           addr==0x1f8010a8u && mask==0xffffffffu &&
-           channels[2].chcr==0x01000401u && val==0x00000401u) {
-            gpu_ll_source.active=0;
-            gpu_ll_source.budget=0;
-        }
-        if(gpu_ll_source.active &&
-           ((addr>=0x1f8010a0u && addr<=0x1f8010abu) ||
-            (addr==0x1f8010f0u && ((dpcr^val)&mask&0xf00u)))) {
-            SourceGPUCommandProjection state;source_gpu_runtime_copy(0,&state);
-            fprintf(stderr,"[dma-model] active source linked-list register replacement unsupported at %llu addr=%08X value=%08X mask=%08X pc=%08X MADR=%08X BCR=%08X CHCR=%08X payload=%08X remaining=%u nodes=%u budget=%d last=%llu next=%llu GPU=%d,%u,%u,%u,%08X\n",
-                (unsigned long long)psx_cycle_count,addr,val,mask,g_debug_last_store_pc,
-                channels[2].madr,channels[2].bcr,channels[2].chcr,gpu_ll_source.address,
-                gpu_ll_source.remaining,gpu_ll_source.nodes,gpu_ll_source.budget,
-                (unsigned long long)gpu_ll_source.last_cycle,(unsigned long long)gpu_ll_source.next_cycle,
-                state.budget,state.phase,state.count,state.command,state.count?state.queue[0]:0);
-            exit(2);
-        }
-    }
-    if(gpu_upload_source.remaining) {
-        /* The source synchronizes elapsed DMA work before changing any DMA
-         * register. In particular, completion at this timestamp must see the
-         * previous DICR enables. Reads do not perform this partial service. */
-        advance_source_gpu();
-        if(gpu_upload_source.remaining && psx_cycle_count>gpu_upload_source.last_cycle) {
-            gpu_upload_source.budget+=(int32_t)(psx_cycle_count-gpu_upload_source.last_cycle);
-            gpu_upload_source.last_cycle=psx_cycle_count;
-            source_gpu_upload_words();
-        }
-    }
-    if(gpu_upload_source.remaining && addr==0x1f8010f0u && ((dpcr^val)&mask&0xf00u)) {
-        fprintf(stderr,"[dma-model] active source GPU channel control change unsupported\n");exit(2);
-    }
     /* DPCR */
     if (addr == 0x1F8010F0u) {
         dpcr = (dpcr & ~mask) | (val & mask);
@@ -1888,9 +1874,6 @@ void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
         return;
     }
 
-    if(gpu_upload_source.remaining && addr>=0x1f8010a0u && addr<=0x1f8010abu) {
-        fprintf(stderr,"[dma-model] source GPU upload register replacement unsupported\n");exit(2);
-    }
     /* Per-channel registers */
     if (addr >= 0x1F801080u && addr <= 0x1F8010EFu) {
         uint32_t offset = addr - 0x1F801080u;
@@ -2054,31 +2037,21 @@ static int dma_r_delay(PstR *r, DMADelayedComplete *d) {
            pst_r_u32(r, &d->cycles_remaining);
 }
 
-/* Any source-DMA timing model selected at all. Upstream this sits inside the
- * save-state wire section, but it is only a predicate over the model flags and
- * the precise-slice diagnostic counters want it, so it lives here instead. */
+/* The BS_SEC_DMA_SRC section is present exactly when a source DMA profile is on. */
 int dma_src_active(void) {
-    return gpu_upload_source_model || gpu_ll_source_model || cd_source_model || otc_source_model;
+    return dsm_profile_any();
 }
-/* Is a source-model DMA transfer moving words right now? This ignores leftover
- * budget/address state that persists after completion; a new transfer resets
- * budget on start. Used by the precise-slice guard. */
+
 unsigned dma_source_transfer_active_mask(void) {
-    /* bit0 upload words remaining, bit1 upload mid-block, bit2 LL active, bit3 LL node words
-     * remaining, bit4 SPU words remaining, bit5 SPU mid-block, bit6 OTC remaining.
-     * gpu_ll_source.nodes is a monotonically increasing node index, not transfer state. */
-    return (gpu_upload_source.remaining != 0u) | ((gpu_upload_source.in_block != 0u) << 1) |
-           ((gpu_ll_source.active != 0u) << 2) | ((gpu_ll_source.remaining != 0u) << 3) |
-           ((spu_source.remaining != 0u) << 4) | ((spu_source.in_block != 0u) << 5) |
-           ((otc_source_model && otc_source.remaining != 0u) << 6);
+    unsigned mask = 0;
+    for (int k = 0; k < DSM_COUNT; k++)
+        if (dsm[k].running) mask |= 1u << dsm_channel[k];
+    return mask;
 }
+
 int dma_source_transfer_active(void) {
-    return dma_source_transfer_active_mask() != 0u;
+    return dma_source_transfer_active_mask() != 0;
 }
-/* Any channel with its CHCR start/busy bit (24) set, regardless of model:
- * MDEC in/out, CD, OTC and the GPU/SPU channels. A busy channel can complete
- * and raise its IRQ from a DMA service tick, which cycles_to_next_event()
- * does not predict. Bitmask of busy channels. */
 unsigned dma_channels_busy_mask(void) {
     unsigned m = 0;
     for (int i = 0; i < 7; i++) if (channels[i].chcr & 0x01000000u) m |= 1u << i;
@@ -2093,6 +2066,8 @@ void dma_snapshot_write(uint8_t *p) {
     /* Source GPU/SPU/OTC continuations live in the required DMA_SRC section.
      * CD and MDEC continuations are included below, including active transfers. */
     PstW w;
+    if (!p && dsm_live_any())
+        dsm_fail("source DMA: capture during a live source transfer is unsupported");
     if (!p) return;
     pst_w_init(&w, p, dma_snapshot_bytes());
     for (int i = 0; i < 7; i++) {
@@ -2116,122 +2091,91 @@ void dma_snapshot_write(uint8_t *p) {
         }
         pst_w_u64(&w,mdec_source_last_cycle);
     }
-    if (cd_source_model) {
-        pst_w_i32(&w,cd_source.budget);
-        pst_w_u64(&w,cd_source.last_cycle);
-        pst_w_u64(&w,cd_source.next_cycle);
-    }
 }
 
-/* BS_SEC_DMA_SRC: the four source-DMA state machines (bounded-quad GPU upload,
- * GPU linked list, SPU request, OTC). Measured live at 98.1%/98.4%/57.7% (and
- * OTC in the same family) of frame boundaries, so the queue[32] quiescence
- * precedent does NOT apply -- these must be serialized, not guarded.
- * Every member is a flat scalar: `address`/`start_addr` are GUEST physical
- * addresses (masked to 0xffffff/0x1ffffc), never host pointers.
- * Cycle classification (amendment B): `last_cycle`/`next_cycle` are absolute
- * stamps in psx_cycle_count's base, which BS_SEC_CLOCK restores exactly, so they
- * are written as-is. */
-/* Encoded size = the sum of the field widths below (no struct padding on the
- * wire), NOT the sum of sizeof(gpu_upload_source) + sizeof(gpu_ll_source) +
- * sizeof(spu_source) + sizeof(otc_source) = 40+40+48+24 = 152. Declaring 152
- * left the last 12 bytes of the section unwritten, and boot_state.c hands this
- * function an uninitialized buffer, so those bytes were stack garbage in every
- * save. The _Static_asserts below still pin each struct's sizeof. */
-#define DMA_SRC_WIRE_BYTES 140u
-uint32_t dma_src_wire_bytes(void) { return DMA_SRC_WIRE_BYTES; }
+/* ---- BS_SEC_DMA_SRC: the source machines, field by field ----
+ * Per machine, in DSM order (otc, upload, ll, cd, spu): running, halts_cpu,
+ * stage, held (u8); cursor, words_left, blk_words, blk_pos, node_count, link,
+ * credit (u32); served_until (u64). Then the live and published load waits. */
+#define DSM_WIRE_MACHINE 40u
+#define DSM_WIRE_BYTES   (DSM_COUNT * DSM_WIRE_MACHINE + 8u)
+
+uint32_t dma_src_wire_bytes(void) {
+    return DSM_WIRE_BYTES;
+}
+
 void dma_src_wire_write(uint8_t *out) {
-    PstW w; pst_w_init(&w, out, DMA_SRC_WIRE_BYTES);
-    pst_w_u32(&w, gpu_upload_source.remaining);
-    pst_w_u32(&w, gpu_upload_source.block_size);
-    pst_w_u32(&w, gpu_upload_source.in_block);
-    pst_w_u32(&w, gpu_upload_source.address);
-    pst_w_i32(&w, gpu_upload_source.budget);
-    pst_w_u64(&w, gpu_upload_source.last_cycle);
-    pst_w_u64(&w, gpu_upload_source.next_cycle);
-    pst_w_u32(&w, gpu_ll_source.active);
-    pst_w_u32(&w, gpu_ll_source.address);
-    pst_w_u32(&w, gpu_ll_source.remaining);
-    pst_w_u32(&w, gpu_ll_source.nodes);
-    pst_w_i32(&w, gpu_ll_source.budget);
-    pst_w_u64(&w, gpu_ll_source.last_cycle);
-    pst_w_u64(&w, gpu_ll_source.next_cycle);
-    pst_w_u32(&w, spu_source.remaining);
-    pst_w_u32(&w, spu_source.block_size);
-    pst_w_u32(&w, spu_source.in_block);
-    pst_w_u32(&w, spu_source.address);
-    pst_w_u32(&w, spu_source.total_words);
-    pst_w_u32(&w, spu_source.start_addr);
-    pst_w_i32(&w, spu_source.budget);
-    pst_w_u64(&w, spu_source.last_cycle);
-    pst_w_u64(&w, spu_source.next_cycle);
-    pst_w_u32(&w, otc_source.remaining);
-    pst_w_u32(&w, otc_source.address);
-    pst_w_u64(&w, otc_source.last_cycle);
-    pst_w_u64(&w, otc_source.next_cycle);
+    PstW w;
+    pst_w_init(&w, out, DSM_WIRE_BYTES);
+    for (int k = 0; k < DSM_COUNT; k++) {
+        const DmaSrcMachine *m = &dsm[k];
+        pst_w_u8(&w, m->running);     pst_w_u8(&w, m->halts_cpu);
+        pst_w_u8(&w, m->stage);       pst_w_u8(&w, m->held);
+        pst_w_u32(&w, m->cursor);     pst_w_u32(&w, m->words_left);
+        pst_w_u32(&w, m->blk_words);  pst_w_u32(&w, m->blk_pos);
+        pst_w_u32(&w, m->node_count); pst_w_u32(&w, m->link);
+        pst_w_i32(&w, m->credit);     pst_w_u64(&w, m->served_until);
+    }
+    pst_w_u32(&w, dsm_wait_live);
+    pst_w_u32(&w, g_dma_cpu_read_wait);
 }
-int dma_src_perturb(const char *field) {
-    if (!field || strcmp(field,"dma_upload_cycle")) return 0;
-    gpu_upload_source.last_cycle += 1u;
-    return 1;
-}
+
 int dma_src_wire_read(const uint8_t *in, uint32_t len) {
+    if (!in || len != DSM_WIRE_BYTES) return 0;
+    DmaSrcMachine next[DSM_COUNT];
+    uint32_t live, published;
     PstR r;
-    if (len != DMA_SRC_WIRE_BYTES) return 0;
     pst_r_init(&r, in, len);
-    if (!pst_r_u32(&r, &gpu_upload_source.remaining)) return 0;
-    if (!pst_r_u32(&r, &gpu_upload_source.block_size)) return 0;
-    if (!pst_r_u32(&r, &gpu_upload_source.in_block)) return 0;
-    if (!pst_r_u32(&r, &gpu_upload_source.address)) return 0;
-    if (!pst_r_i32(&r, &gpu_upload_source.budget)) return 0;
-    if (!pst_r_u64(&r, &gpu_upload_source.last_cycle)) return 0;
-    if (!pst_r_u64(&r, &gpu_upload_source.next_cycle)) return 0;
-    if (!pst_r_u32(&r, &gpu_ll_source.active)) return 0;
-    if (!pst_r_u32(&r, &gpu_ll_source.address)) return 0;
-    if (!pst_r_u32(&r, &gpu_ll_source.remaining)) return 0;
-    if (!pst_r_u32(&r, &gpu_ll_source.nodes)) return 0;
-    if (!pst_r_i32(&r, &gpu_ll_source.budget)) return 0;
-    if (!pst_r_u64(&r, &gpu_ll_source.last_cycle)) return 0;
-    if (!pst_r_u64(&r, &gpu_ll_source.next_cycle)) return 0;
-    if (!pst_r_u32(&r, &spu_source.remaining)) return 0;
-    if (!pst_r_u32(&r, &spu_source.block_size)) return 0;
-    if (!pst_r_u32(&r, &spu_source.in_block)) return 0;
-    if (!pst_r_u32(&r, &spu_source.address)) return 0;
-    if (!pst_r_u32(&r, &spu_source.total_words)) return 0;
-    if (!pst_r_u32(&r, &spu_source.start_addr)) return 0;
-    if (!pst_r_i32(&r, &spu_source.budget)) return 0;
-    if (!pst_r_u64(&r, &spu_source.last_cycle)) return 0;
-    if (!pst_r_u64(&r, &spu_source.next_cycle)) return 0;
-    if (!pst_r_u32(&r, &otc_source.remaining)) return 0;
-    if (!pst_r_u32(&r, &otc_source.address)) return 0;
-    if (!pst_r_u64(&r, &otc_source.last_cycle)) return 0;
-    if (!pst_r_u64(&r, &otc_source.next_cycle)) return 0;
+    for (int k = 0; k < DSM_COUNT; k++) {
+        DmaSrcMachine *m = &next[k];
+        if (!pst_r_u8(&r, &m->running) || !pst_r_u8(&r, &m->halts_cpu) ||
+            !pst_r_u8(&r, &m->stage) || !pst_r_u8(&r, &m->held) ||
+            !pst_r_u32(&r, &m->cursor) || !pst_r_u32(&r, &m->words_left) ||
+            !pst_r_u32(&r, &m->blk_words) || !pst_r_u32(&r, &m->blk_pos) ||
+            !pst_r_u32(&r, &m->node_count) || !pst_r_u32(&r, &m->link) ||
+            !pst_r_i32(&r, &m->credit) || !pst_r_u64(&r, &m->served_until))
+            return 0;
+    }
+    if (!pst_r_u32(&r, &live) || !pst_r_u32(&r, &published)) return 0;
+    memcpy(dsm, next, sizeof dsm);
+    dsm_wait_live = live;
+    g_dma_cpu_read_wait = published;
     return 1;
 }
-/* Layout guards: a future field addition becomes a build break instead of a
- * silent drop (the E5 R10 failure mode). */
-_Static_assert(sizeof gpu_upload_source == 40, "gpu_upload_source layout changed; update dma_src_wire_write");
-_Static_assert(sizeof gpu_ll_source == 40, "gpu_ll_source layout changed; update dma_src_wire_write");
-_Static_assert(sizeof spu_source == 48, "spu_source layout changed; update dma_src_wire_write");
-_Static_assert(sizeof otc_source == 24, "otc_source layout changed; update dma_src_wire_write");
 
-/* E survey (M2 apparatus): report whether each source-DMA state machine holds
- * live mid-transfer state at the frame boundary that arms a checkpoint. If a
- * machine is provably idle there, a quiescence precondition can replace both
- * serializing it and the model-based refusal; if it is live, it must be
- * serialized field by field. */
-void dma_source_dma_live(int *upload, int *ll, int *spu) {
-    if (upload)
-        *upload = (gpu_upload_source.remaining != 0u) || (gpu_upload_source.in_block != 0u) ||
-                  (gpu_upload_source.address != 0u) || (gpu_upload_source.budget != 0);
-    if (ll)
-        *ll = (gpu_ll_source.active != 0u) || (gpu_ll_source.remaining != 0u) ||
-              (gpu_ll_source.nodes != 0u) || (gpu_ll_source.budget != 0);
-    if (spu)
-        *spu = (spu_source.remaining != 0u) || (spu_source.in_block != 0u) ||
-               (spu_source.budget != 0);
+/* Flips bit 0 of one named field, "<machine>.<field>", for the section-wire test. */
+int dma_src_perturb(const char *field) {
+    if (!field) return 0;
+    for (int k = 0; k < DSM_COUNT; k++) {
+        size_t n = strlen(dsm_name[k]);
+        if (strncmp(field, dsm_name[k], n) || field[n] != '.') continue;
+        const char *f = field + n + 1;
+        DmaSrcMachine *m = &dsm[k];
+        if (!strcmp(f, "running"))           m->running ^= 1u;
+        else if (!strcmp(f, "halts_cpu"))    m->halts_cpu ^= 1u;
+        else if (!strcmp(f, "stage"))        m->stage ^= 1u;
+        else if (!strcmp(f, "held"))         m->held ^= 1u;
+        else if (!strcmp(f, "cursor"))       m->cursor ^= 1u;
+        else if (!strcmp(f, "words_left"))   m->words_left ^= 1u;
+        else if (!strcmp(f, "blk_words"))    m->blk_words ^= 1u;
+        else if (!strcmp(f, "blk_pos"))      m->blk_pos ^= 1u;
+        else if (!strcmp(f, "node_count"))   m->node_count ^= 1u;
+        else if (!strcmp(f, "link"))         m->link ^= 1u;
+        else if (!strcmp(f, "credit"))       m->credit ^= 1;
+        else if (!strcmp(f, "served_until")) m->served_until ^= 1u;
+        else return 0;
+        return 1;
+    }
+    if (!strcmp(field, "wait.live"))      { dsm_wait_live ^= 1u; return 1; }
+    if (!strcmp(field, "wait.published")) { g_dma_cpu_read_wait ^= 1u; return 1; }
+    return 0;
 }
 
+void dma_source_dma_live(int *upload, int *ll, int *spu) {
+    if (upload) *upload = dsm[DSM_GPU].running;
+    if (ll)     *ll = dsm[DSM_LL].running;
+    if (spu)    *spu = dsm[DSM_SPU].running;
+}
 int dma_snapshot_read(const uint8_t *p, uint32_t len) {
     /* The three model-based refusals that used to live here (source GPU upload,
      * source CD timing, source OTC) are now PRESENCE-based, exactly as #5 was:
@@ -2262,11 +2206,6 @@ int dma_snapshot_read(const uint8_t *p, uint32_t len) {
                 !pst_r_i32(&r,&mdec_source_dma[i].credit)) return 0;
         }
         if (!pst_r_u64(&r,&mdec_source_last_cycle)) return 0;
-    }
-    if (cd_source_model) {
-        if (!pst_r_i32(&r,&cd_source.budget) ||
-            !pst_r_u64(&r,&cd_source.last_cycle) ||
-            !pst_r_u64(&r,&cd_source.next_cycle)) return 0;
     }
     if (gpu_ll_was_active) gpu_ws_end_linked_list();
     if (gpu_linked_list.active) {

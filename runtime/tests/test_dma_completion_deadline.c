@@ -22,7 +22,7 @@ static void set_option(const char *key,const char *value) {
 #ifndef PSX_TEST_REAL_CYCLE_SCHEDULER
 void psx_devices_service_to_now(void) {
 #ifdef PSX_TEST_SOURCE_CD_IMPLEMENTED
-    advance_source_cdrom();
+    dsm_service(DSM_CD, psx_cycle_count);
 #endif
 }
 void psx_advance_cycles_slow(uint32_t n) {psx_cycle_count+=n;psx_devices_service_to_now();}
