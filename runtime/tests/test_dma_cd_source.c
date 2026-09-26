@@ -21,7 +21,7 @@ static void set_option(const char *key,const char *value) {
 #ifndef PSX_TEST_REAL_CYCLE_SCHEDULER
 void psx_devices_service_to_now(void) {
 #ifdef PSX_TEST_SOURCE_CD_IMPLEMENTED
-    advance_source_cdrom();
+    dsm_service(DSM_CD, psx_cycle_count);
 #endif
 }
 void psx_advance_cycles_slow(uint32_t n) {psx_cycle_count+=n;psx_devices_service_to_now();}
@@ -85,7 +85,7 @@ int main(int argc,char **argv) {
         setup(512,0);
         if(!strcmp(argv[1],"request-mode"))channels[3].chcr|=0x200;
         else if(!strcmp(argv[1],"capture-active")) {
-            start_async_cdrom_transfer();start_source_cdrom();dma_snapshot_write(NULL);return 1;
+            start_async_cdrom_transfer();dsm_start_cd();dma_snapshot_write(NULL);return 1;
         }
         execute_ch3_cdrom();return 1;
     }
@@ -99,20 +99,22 @@ int main(int argc,char **argv) {
     }
 #ifdef PSX_TEST_SOURCE_CD_IMPLEMENTED
     for(uint32_t phase=0;phase<128;phase++) {
-        setup(512,phase);start_async_cdrom_transfer();start_source_cdrom();
+        setup(512,phase);start_async_cdrom_transfer();dsm_start_cd();
         assert(writes==8 && cdrom_async.remaining_words==504 && irqs==0);
         uint8_t wire[512];assert(dma_snapshot_bytes()<=sizeof wire);
         dma_snapshot_write(wire);
-        memset(&cdrom_async,0,sizeof cdrom_async);memset(&cd_source,0,sizeof cd_source);
-        assert(dma_snapshot_read(wire,dma_snapshot_bytes()));
+        uint8_t machines[512];assert(dma_src_wire_bytes()<=sizeof machines);dma_src_wire_write(machines);
+        memset(&cdrom_async,0,sizeof cdrom_async);memset(&dsm[DSM_CD],0,sizeof dsm[DSM_CD]);
+        assert(dma_snapshot_read(wire,dma_snapshot_bytes()) && dma_src_wire_read(machines,dma_src_wire_bytes()));
         assert(ram[0x10000/4]==0xCA000000 && ram[0x10020/4]==0xCCCCCCCC);
         uint64_t expected=((phase+4536+127)/128)*128;
-        psx_cycle_count=expected-1;advance_source_cdrom();
+        psx_cycle_count=expected-1;dsm_service(DSM_CD, psx_cycle_count);
         assert(cdrom_async.active && irqs==0 && writes<512);
-        psx_cycle_count++;advance_source_cdrom();
+        psx_cycle_count++;dsm_service(DSM_CD, psx_cycle_count);
         assert(writes==512 && irqs==1 && !cdrom_async.active);
-        assert(channels[3].madr==0x10800 && ram[0x107FC/4]==0xCA0001FF);
-        psx_cycle_count+=256;advance_source_cdrom();assert(writes==512 && irqs==1);
+        /* [ORACLE FIXTURE D9e] SyncMode 0 leaves MADR at the start address (16/16 rows). */
+        assert(channels[3].madr==0x10000 && ram[0x107FC/4]==0xCA0001FF);
+        psx_cycle_count+=256;dsm_service(DSM_CD, psx_cycle_count);assert(writes==512 && irqs==1);
     }
     for(uint32_t count=1;count<=17;count++) {
         setup(count,0);execute_ch3_cdrom();assert(writes==count && irqs==1);
@@ -120,7 +122,7 @@ int main(int argc,char **argv) {
     }
     setup(512,27);channels[3].chcr|=0x100;execute_ch3_cdrom();
     assert(psx_cycle_count==27 && writes==8 && cdrom_async.active && irqs==0);
-    psx_cycle_count=4608;advance_source_cdrom();assert(writes==512 && irqs==1);
+    psx_cycle_count=4608;dsm_service(DSM_CD, psx_cycle_count);assert(writes==512 && irqs==1);
     setup(1,43);channels[3].chcr=0x11400100;available=0;execute_ch3_cdrom();
     assert(psx_cycle_count==43 && writes==1 && ram[0x10000/4]==0 && irqs==1 && !cdrom_async.active);
     setup(12,0);available=2;execute_ch3_cdrom();

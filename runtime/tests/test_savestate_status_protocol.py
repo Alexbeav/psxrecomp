@@ -21,9 +21,9 @@ DMA = (ROOT / "src/dma.c").read_text(encoding="utf-8")
 # compatibility. Bumping either number is a deliberate format decision; update
 # these lines with it.
 assert "#define DMA_GPU_LL_WIRE (4u + (10u * 4u))" in DMA
-assert "#define BOOT_STATE_VERSION 10u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION 11u" in BOOT_STATE_H
 assert "h.version       = BOOT_STATE_VERSION;" in BOOT_STATE_C
-assert "#define BOOT_STATE_VERSION_MIN_READ 10u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION_MIN_READ 11u" in BOOT_STATE_H
 assert "v10 therefore rejects every earlier state." in BOOT_STATE_H
 
 assert "void savestate_status_json(char* buf, size_t cap);" in HEADER
