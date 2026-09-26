@@ -803,7 +803,9 @@ static void start_async_gpu_linked_list(void) {
  *     runs, and at an MDEC DMA kick ([ORACLE FIXTURE D15b]: 8/8 status
  *     timelines exact; D17a: the same model on the kick-phase sweep, where a
  *     per-cycle clock fails; D17b: with no access at all the decoder still
- *     advances). */
+ *     advances). [NOT FITTED: D18a] with one global edge offset, 50 of the
+ *     128 DMA0 kick phases have at least one block complete one service edge
+ *     (128 cycles) early; no slip exceeds one edge. */
 
 int source_gpu_runtime_active(void);
 static void try_execute(int ch);
