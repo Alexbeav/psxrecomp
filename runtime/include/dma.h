@@ -26,6 +26,7 @@ extern "C" {
  * runtime cycle, including DMA writes and frame returns between periodic
  * events. No register/input/state override is performed. */
 void dma_source_gpu_service_at(uint64_t cycle);
+void dma_source_gpu_service_at_exact(uint64_t cycle); /* MDEC contract harness only */
 /* E survey (M2 apparatus): are the three source-DMA state machines holding live
  * mid-transfer state at this frame boundary? 1 = live. */
 void dma_source_dma_live(int *upload, int *ll, int *spu);
