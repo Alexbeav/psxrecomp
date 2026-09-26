@@ -124,7 +124,7 @@ Current consumers:
   members have unresolved load paths and are explicitly excluded.
 - WipEout 3 SE PAL: `aot/overlays.json`, the front-end menu overlay (member 5
   of `WIPEOUT3/NFE.PB`, `indexed_lzss_members`) from the stock disc and from the
-  framerate package's patched disc, plus that package's engine image; all
+  NTSC / PAL Mode package's patched disc, plus that package's engine image; all
   linked with `static` (see below). The other 88 packs on the disc (`TRACK*.PBP`)
   hold data only.
 
@@ -148,13 +148,22 @@ The reader checks the manifest hash, id/version, a `[[target]]` matching the
 game id, original disc and boot-EXE hashes, every selected feature and option
 value, and the exact set of selected plugins (native callbacks; they add no
 guest bytes and are reported, not modelled). It applies the static declarative
-subset of the runtime resolver: equal-length `main_exe` patches checked against
-the original boot EXE and applied to its load image, and `disc_user` patches and
-file-backed overlays checked against payload and stock-range hashes. It rejects
-`replace_from`, `fields`, `when_integer`, `disc_raw`, legacy packages and any
-unknown section or key rather than approximating them. A disc operation over the
-boot EXE's own sectors must agree with the patched load image. Overlapping
-operations fail.
+subset of the runtime resolver, in the runtime's order: `disc_user` patches and
+file-backed overlays (checked against payload and stock-range hashes) feed every
+file read, **including the boot EXE**, because the BIOS loads it through CD
+reads; equal-length `main_exe` patches then apply to that loaded image, with
+their guards checked against it exactly as the runtime checks RAM after the
+load. A guard that matches the stock EXE but not the loaded one is the plan the
+runtime rejects ("expected-byte guard failed; booting unmodified") — the edit is
+encoded twice — and the reader refuses it. It rejects `replace_from`, `fields`,
+`when_integer`, `disc_raw`, legacy packages, a disc operation that changes the
+boot EXE's PS-X header, and any unknown section or key rather than
+approximating them. Overlapping operations fail.
+
+`transfer_entries` counts words the package WROTE: every word a `main_exe`
+patch covers, and every boot-EXE word a disc operation changes from the stock
+value (a sector-granular overlay also rewrites unchanged words, which are not
+evidence).
 
 Establish the destination from the patched loader exactly as for a disc image:
 a `words` check with `mod_package` pins the copy loop or load call, and a
@@ -163,9 +172,12 @@ farm is entered only from the package's patched transfers; `transfer_entries`
 turns those into required entries without accepting stock data words that
 happen to decode as jumps.
 
-WipEout 3 SE PAL (`aot/overlays.json`) uses this for the 1.0.14 framerate
-package's `ntscfull8` engine: the patched entry copies 0x790 words from
-`0x800D03B8` to `0x80780000`, and 46 patched J/JAL sites establish its entries.
+WipEout 3 SE PAL (`aot/overlays.json`) uses this for the NTSC / PAL Mode
+package's NTSC + Full (hueponik `ntscfull8`) engine: the patched entry copies
+0x790 words from `0x800D03B8` to `0x80780000`, and 46 patched J/JAL sites
+establish its entries. Since package 1.1.0 every one of those edits arrives
+through the disc overlays over the EXE's sectors; 1.0.14 also carried them as
+stock-guarded `main_exe` patches, which the runtime rejected at boot.
 
 ### Linking recipes into the runtime (`static`)
 

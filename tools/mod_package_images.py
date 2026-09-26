@@ -13,18 +13,26 @@ resolver (runtime/src/mod_packages.cpp) and fails closed on anything else:
 * Selection: named features with explicit or default option values. Choice and
   boolean values are validated; `when` / `when_option` conditions compare the
   effective values exactly as the runtime does.
-* `main_exe` patches: equal-length `expected`/`replace` bytes, checked against
-  the original boot EXE and applied to its load image (the runtime applies them
-  to RAM after the BIOS loads the stock EXE, before its entry point).
 * `disc_user` patches and file-backed `[[overlay]]` operations: payload and
-  stock-range SHA-256 checks, applied to logical 2048-byte sector data.
+  stock-range SHA-256 checks, applied to logical 2048-byte sector data --
+  INCLUDING the boot EXE's own sectors, because the runtime serves every CD
+  read through them and the BIOS loads the boot EXE with CD reads.
+* `main_exe` patches: equal-length `expected`/`replace` bytes. The runtime
+  checks every guard against RAM after the BIOS has loaded the boot EXE (so
+  against the disc-operation-applied image) and, if any guard fails, rejects
+  every main_exe write and boots unmodified. The view models exactly that: a
+  guard must match the image as loaded, or the view fails closed rather than
+  describe bytes the runtime would never produce.
 * Plugins select native host callbacks. They carry no guest bytes, so they are
   reported, never modelled; a profile must list the exact selected set.
 
 `replace_from`, `fields`, `when_integer`, `disc_raw`, legacy packages and any
-unknown manifest section or key are rejected rather than approximated. A disc
-operation that touches the boot EXE's sectors must agree with the patched load
-image, so the two paths the runtime can use to fetch those bytes cannot differ.
+unknown manifest section or key are rejected rather than approximated.
+
+A package that encodes the same boot-EXE edit twice -- once as a disc overlay
+over the EXE's sectors and again as a main_exe patch guarded by the STOCK bytes
+-- is exactly the plan the runtime rejects ("expected-byte guard failed"): the
+disc copy has already changed the bytes the patch guards. Encode each edit once.
 """
 import hashlib
 from pathlib import Path, PurePosixPath
@@ -114,7 +122,6 @@ class ModPackageView:
         self._user_writes = []     # (offset, bytes) in logical 2048-byte user data
         self._main_writes = []     # (address, bytes)
         self._collect()
-        self._check_boot_agreement()
 
     # -- identity and selection ------------------------------------------------
     def _verify_target(self, game_id, exe):
@@ -179,7 +186,7 @@ class ModPackageView:
         return data[start:start + size]
 
     def _collect(self):
-        exe = self.disc.read(self.boot)
+        main_patches = []
         for patch in self.manifest.get('patch', []):
             if not self._active(patch):
                 continue
@@ -188,13 +195,7 @@ class ModPackageView:
                     'Mod patch expected/replace must be equal-length non-empty hex')
             target = patch['target']
             if target == 'main_exe':
-                address = number(patch['address'])
-                start = 0x800 + address - self.exe_base
-                require(address >= self.exe_base and start + len(expected) <= len(exe),
-                        f'main_exe patch outside the boot executable image: {address:#x}')
-                require(exe[start:start + len(expected)] == expected,
-                        f'main_exe expected bytes changed at {address:#x}')
-                self._main_writes.append((address, replace))
+                main_patches.append((number(patch['address']), expected, replace))
             elif target == 'disc_user':
                 offset = number(patch['offset'])
                 require(offset // SECTOR == (offset + len(expected) - 1) // SECTOR,
@@ -221,50 +222,87 @@ class ModPackageView:
                 require(hashlib.sha256(original).hexdigest() == overlay['expected_sha256'],
                         f'Mod overlay stock range changed: {overlay["file"]}')
             self._user_writes.append((offset, payload))
-        for writes, label in ((self._main_writes, 'main_exe'), (self._user_writes, 'disc_user')):
-            spans = sorted((start, start + len(body)) for start, body in writes)
-            require(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])),
-                    f'Overlapping {label} mod operations')
+        spans = sorted((start, start + len(body)) for start, body in self._user_writes)
+        require(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])),
+                'Overlapping disc_user mod operations')
 
-    def _check_boot_agreement(self):
-        lba, size = self.files[self.boot]
-        start, end = lba * SECTOR, lba * SECTOR + size
-        image = self.read(self.boot)
+        # The boot EXE exactly as the BIOS loads it: through the CD path, so
+        # with every disc operation over its sectors applied. main_exe guards
+        # are checked against THAT image -- the runtime checks them against RAM
+        # after the load -- and a failure there rejects the whole main_exe plan.
+        exe = self._disc_file(self.boot)
+        stock = self.disc.read(self.boot)
+        require(exe[:8] == b'PS-X EXE' and exe[0x10:0x20] == stock[0x10:0x20],
+                "Disc operations change the boot executable's PS-X EXE header "
+                '(entry, load address or size); not modelled for AOT')
+        for address, expected, replace in main_patches:
+            start = 0x800 + address - self.exe_base
+            require(address >= self.exe_base and start + len(expected) <= len(exe),
+                    f'main_exe patch outside the boot executable image: {address:#x}')
+            if exe[start:start + len(expected)] != expected:
+                if stock[start:start + len(expected)] == expected:
+                    raise ValueError(
+                        f'main_exe expected-byte guard at {address:#x} matches the stock boot '
+                        'executable but not the one the BIOS loads: a disc operation over the '
+                        "EXE's sectors has already changed those bytes, so the runtime would "
+                        'reject every main_exe write (the edit is encoded twice; keep one)')
+                raise ValueError(f'main_exe expected bytes changed at {address:#x}')
+            self._main_writes.append((address, replace))
+        spans = sorted((start, start + len(body)) for start, body in self._main_writes)
+        require(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])),
+                'Overlapping main_exe mod operations')
+
+    def _disc_file(self, name):
+        """A file's bytes as CD reads return them: disc operations applied."""
+        data = bytearray(self.disc.read(name))
+        lba, size = self.files[name]
+        start = lba * SECTOR
         for offset, body in self._user_writes:
-            lo, hi = max(start, offset), min(end, offset + len(body))
+            lo, hi = max(start, offset), min(start + size, offset + len(body))
             if lo < hi:
-                require(image[lo - start:hi - start] == body[lo - offset:hi - offset],
-                        'Disc operation disagrees with the patched boot executable')
+                data[lo - start:hi - start] = body[lo - offset:hi - offset]
+        return data
 
     def read(self, name):
         name = name.upper()
         if name in self._files:
             return self._files[name]
-        data = bytearray(self.disc.read(name))
+        data = self._disc_file(name)
         if name == self.boot:
             for address, body in self._main_writes:
                 offset = 0x800 + address - self.exe_base
                 data[offset:offset + len(body)] = body
-        else:
-            lba, size = self.files[name]
-            start = lba * SECTOR
-            for offset, body in self._user_writes:
-                lo, hi = max(start, offset), min(start + size, offset + len(body))
-                if lo < hi:
-                    data[lo - start:hi - start] = body[lo - offset:hi - offset]
         self._files[name] = bytes(data)
         return self._files[name]
 
     def written_words(self):
-        """(address, word) for every aligned boot-EXE word a main_exe write covers."""
+        """(address, word) for every aligned boot-EXE word the package wrote.
+
+        A main_exe write owns every word it covers. A disc operation over the
+        boot EXE's sectors is sector-granular, so it owns only the words whose
+        loaded value differs from the stock EXE -- an unchanged stock word
+        inside a replaced sector is not evidence of anything the package did.
+        Both layers count, because the runtime delivers both."""
         image = self.read(self.boot)
-        words = []
+        stock = self.disc.read(self.boot)
+        words = {}
         for address, body in sorted(self._main_writes):
             start = (address + 3) & ~3
             for word_address in range(start, address + len(body) - 3, 4):
                 offset = 0x800 + word_address - self.exe_base
-                words.append((word_address, struct.unpack_from('<I', image, offset)[0]))
-        return words
+                words[word_address] = struct.unpack_from('<I', image, offset)[0]
+        lba, size = self.files[self.boot]
+        file_start = lba * SECTOR
+        for offset, body in self._user_writes:
+            lo = max(file_start, offset) - file_start
+            hi = min(file_start + size, offset + len(body)) - file_start
+            lo = max(lo, 0x800)  # the PS-X EXE header is not loaded to RAM
+            lo = (lo + 3) & ~3
+            for file_offset in range(lo, hi - 3, 4):
+                word = struct.unpack_from('<I', image, file_offset)[0]
+                if word != struct.unpack_from('<I', stock, file_offset)[0]:
+                    words.setdefault(self.exe_base + file_offset - 0x800, word)
+        return sorted(words.items())
 
     def receipt(self):
         """Inventory facts about the applied operations; never game bytes."""
