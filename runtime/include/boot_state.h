@@ -51,14 +51,16 @@ extern "C" {
  *      used v6-v9 for different contents, so this merge takes a number neither
  *      ever wrote.
  * v11 = v10 with the rewritten source-DMA machines (BS_SEC_DMA_SRC layout: seven
- *      machines and the source MDEC clock, 296 bytes). */
-#define BOOT_STATE_VERSION 11u
+ *      machines and the source MDEC clock, 296 bytes).
+ * v12 = v11 with the GPUREAD data latch (gpuread_data_last) in the GPU
+ *      section (PS1B-211). */
+#define BOOT_STATE_VERSION 12u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v11 therefore rejects every earlier state. */
-#define BOOT_STATE_VERSION_MIN_READ 11u
+ * runtime's blob to a new loader. v12 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 12u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 

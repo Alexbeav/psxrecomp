@@ -17,15 +17,16 @@ DMA = (ROOT / "src/dma.c").read_text(encoding="utf-8")
 # Lock the current format so an old file is rejected before any state section
 # is applied. 68cb3183 (TAS checkpoint capture and resume) made it v10 and
 # raised the read floor to 10. PS1B-186 (the rewritten source-DMA section
-# layout) made it v11 with a read floor of 11: every writer emits v11 and
-# every earlier state is refused. That matches the Wave 5 rule of a clean install with no save
+# layout) made it v11 with a read floor of 11. PS1B-211 (the GPUREAD data
+# latch in the GPU section) made it v12 with a read floor of 12: every writer
+# emits v12 and every earlier state is refused. That matches the Wave 5 rule of a clean install with no save
 # compatibility. Bumping either number is a deliberate format decision; update
 # these lines with it.
 assert "#define DMA_GPU_LL_WIRE (4u + (10u * 4u))" in DMA
-assert "#define BOOT_STATE_VERSION 11u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION 12u" in BOOT_STATE_H
 assert "h.version       = BOOT_STATE_VERSION;" in BOOT_STATE_C
-assert "#define BOOT_STATE_VERSION_MIN_READ 11u" in BOOT_STATE_H
-assert "v11 therefore rejects every earlier state." in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION_MIN_READ 12u" in BOOT_STATE_H
+assert "v12 therefore rejects every earlier state." in BOOT_STATE_H
 
 assert "void savestate_status_json(char* buf, size_t cap);" in HEADER
 assert '\\"generation\\"' in STATE and '\\"pending\\"' in STATE
