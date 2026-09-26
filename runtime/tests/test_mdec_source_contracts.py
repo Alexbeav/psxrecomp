@@ -5,6 +5,40 @@ exe=Path(sys.argv[1]).resolve(strict=True);kind=sys.argv[2]
 fixture=json.loads(Path(__file__).with_name(f'mdec_source_{kind}_fixtures.json').read_text())
 env={k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
 sha=lambda b:hashlib.sha256(b).hexdigest()
+
+# SPEC-PS1B-186 amendment 4: for the DMA transcripts, every guest-observable
+# field must match the oracle exactly in every row, and only internal model
+# fields may differ. The rows follow the transcript's operations, so an exact
+# per-row match of CHCR, DICR, IRQ3 and the MDEC status also fixes the CHCR
+# bit 24 clear cycle, the IRQ cycle and every status read cycle. DMA1 RAM
+# landing is observed through MADR1/BCR1 at each row and the RAM read results.
+OBSERVABLE={'result','ram_word_offset','status','MADR0','BCR0','CHCR0',
+            'MADR1','BCR1','CHCR1','DICR','IRQ3'}
+reference=None
+if kind=='dma':
+ reference=json.loads(Path(__file__).with_name('mdec_source_dma_reference.json').read_text())
+ assert reference['fields']==fixture['fields']
+ assert [c['name'] for c in reference['cases']]==[c['name'] for c in fixture['cases']]
+relaxed={}
+
+def compare_fields(case,ref_case,mode,output):
+ """Exact on observable fields, relaxed on internal ones; returns failure text or None."""
+ expected=zlib.decompress(base64.b64decode(ref_case['output_zlib_base64']))
+ assert sha(expected)==case['expected_sha256']==ref_case['sha256'],case['name']
+ fields=fixture['fields'];width=len(fields)*4
+ if len(output)!=len(expected):
+  return f"{case['name']} {mode}: {len(output)} bytes, oracle {len(expected)}"
+ for r in range(len(expected)//width):
+  want=struct.unpack_from(f'<{len(fields)}I',expected,r*width)
+  got=struct.unpack_from(f'<{len(fields)}I',output,r*width)
+  for name,w,g in zip(fields,want,got):
+   if w==g:continue
+   if name in OBSERVABLE:
+    return f"{case['name']} {mode}: row {r} {name} = {g:#x}, oracle {w:#x}"
+   entry=relaxed.setdefault(name,[0,0])
+   entry[0]+=1;entry[1]=max(entry[1],abs(((g-w+2**31)%2**32)-2**31))
+ return None
+
 with tempfile.TemporaryDirectory(prefix='mdec-source-') as temp:
  root=Path(temp)
  for i,case in enumerate(fixture['cases']):
@@ -19,7 +53,14 @@ with tempfile.TemporaryDirectory(prefix='mdec-source-') as temp:
    run=subprocess.run([str(exe),str(source),str(target)],env=mode_env,capture_output=True,timeout=600)
    assert run.returncode==0,(case['name'],mode,run.returncode,run.stderr)
    output=target.read_bytes()
-   assert len(output)==case['expected_bytes'] and sha(output)==case['expected_sha256'],(case['name'],mode)
+   if len(output)==case['expected_bytes'] and sha(output)==case['expected_sha256']:continue
+   assert reference is not None,(case['name'],mode)
+   failure=compare_fields(case,reference['cases'][i],mode,output)
+   assert failure is None,failure
+ if relaxed:
+  print('relaxed internal fields (SPEC-PS1B-186 amendment 4): field rows max_abs_diff')
+  for name in fixture['fields']:
+   if name in relaxed:print(f'  {name} {relaxed[name][0]} {relaxed[name][1]}')
  if kind=='dma':
   cold=[(0,0,0,0),(2,0,0x1f8010f0,0x99)]
   start=[(2,0,0x1f801080,0x3000),(2,0,0x1f801084,0x10020),(2,0,0x1f801088,0x01000201)]
