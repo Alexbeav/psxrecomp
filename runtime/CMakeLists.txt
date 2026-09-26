@@ -156,6 +156,11 @@ if(BUILD_TESTING)
         target_compile_options(dma_cd_source_test PRIVATE -O2 -flto -fwhole-program)
         target_link_options(dma_cd_source_test PRIVATE -flto)
         add_test(NAME dma_cd_source_test COMMAND dma_cd_source_test)
+        add_executable(dma_default_regs_test tests/test_dma_default_regs.c src/dma_gpu_ll.c)
+        target_include_directories(dma_default_regs_test PRIVATE include)
+        target_compile_options(dma_default_regs_test PRIVATE -O2 -flto -fwhole-program)
+        target_link_options(dma_default_regs_test PRIVATE -flto)
+        add_test(NAME dma_default_regs_test COMMAND dma_default_regs_test)
         # Source-profile GPU DMA controller fixtures (PS1B-186). Each negative must
         # stop the bounded profile with its [dma-model] diagnostic (exit 2).
         foreach(_dma_src upload linked_list)
@@ -256,6 +261,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sio_nymashock_dualshock.py
         $<TARGET_FILE:sio_nymashock_dualshock_test>)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_executable(mdec_dma_write_invariance_test tests/test_mdec_dma_write_invariance.c)
+        target_include_directories(mdec_dma_write_invariance_test PRIVATE src include ../recompiler/include)
+        target_compile_options(mdec_dma_write_invariance_test PRIVATE -O2 -UNDEBUG)
+        add_test(NAME mdec_dma_write_invariance_test COMMAND mdec_dma_write_invariance_test)
         foreach(_kind IN ITEMS pipeline dma)
             if(_kind STREQUAL "pipeline")
                 set(_fixture tests/test_mdec_source_pipeline.c)
