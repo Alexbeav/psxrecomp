@@ -779,6 +779,15 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
     // link = ((rt & 0x1E) == 0x10). Undefined rt values appear when discovery
     // sweeps data-as-code into a function; emitting the hardware decode keeps
     // the regen alive AND matches the oracle if the word is ever executed.
+    // A listed bgez site must be exactly `bgez` (REGIMM rt=1) in the main
+    // EXE; a wrong address is a hard error. Overlay variants at the same
+    // address keep their vanilla semantics.
+    if (config_.ws_cull_bgez_sites.count(addr) && !config_.overlay_mode &&
+        !(opcode == 0x01 && ((instr >> 16) & 0x1F) == 0x01)) {
+        fmt::print(stderr, "ERROR: [widescreen.cull] bgez site 0x{:08X} is not "
+                   "bgez (0x{:08X})\n", addr, instr);
+        std::exit(1);
+    }
     if (opcode == 0x01) {
         uint32_t regimm_op = (instr >> 16) & 0x1F;
         if ((regimm_op & 0x01u) == 0x00u) { // bltz family (incl. bltzal + undefined mirrors)
@@ -801,11 +810,17 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
             return keep_branch_if_wide(
                 fmt::format("(int32_t){} < 0", reg_name(rs)));
         } else {                            // bgez family (incl. bgezal + undefined mirrors)
+            // Explicit [widescreen.cull] bgez_sites: the LEFT-edge keep of a
+            // signed per-vertex chain (`bgez x0,keep; ...; bltz xN,reject`).
+            // Keep while x >= -margin so the chain rejects only when every
+            // vertex is left of the revealed edge. Identity at 4:3.
+            if (regimm_op == 0x01 && config_.ws_cull_bgez_sites.count(addr))
+                return fmt::format("psx_ws_cull_bgez({}) /* ws cull (left keep) */",
+                                   reg_name(rs));
             return keep_branch_if_wide(
                 fmt::format("(int32_t){} >= 0", reg_name(rs)));
         }
     }
-
     // Standard branches
     switch (opcode) {
         case 0x04: // beq
@@ -1125,6 +1140,51 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         if (!config_.overlay_mode) {
             fmt::print(stderr, "ERROR: [widescreen.cull] plane_nx site 0x{:08X} is not "
                        "lw (opcode 0x{:02X})\n", addr, opcode);
+            std::exit(1);
+        }
+        // Overlay variant at the same address: leave nonmatching code unchanged.
+    }
+
+    // A listed bgez site that reaches the straight-line translator is not a
+    // branch at all (branches go through generate_branch_condition).
+    if (config_.ws_cull_bgez_sites.count(addr) && !config_.overlay_mode) {
+        fmt::print(stderr, "ERROR: [widescreen.cull] bgez site 0x{:08X} is not "
+                   "bgez (0x{:08X})\n", addr, instr);
+        std::exit(1);
+    }
+    // Screen-X clip-bound load ([widescreen.cull] clip_edge_x_load_sites):
+    // lh/lhu/lw of a clip rectangle edge the renderer compares vertices
+    // against. The loaded value (extended as the opcode does) goes through
+    // psx_ws_clip_edge_x: 0 -> -margin, W -> W+margin while revealed, any
+    // other bound unchanged. Identity at 4:3.
+    if (config_.ws_cull_clip_edge_x_load_sites.count(addr)) {
+        if ((opcode == 0x21 || opcode == 0x25 || opcode == 0x23) &&
+            get_rt(instr) != 0) {
+            uint32_t rs = get_rs(instr), rt = get_rt(instr);
+            int16_t offset = get_imm16(instr);
+            std::string laddr = (offset == 0)
+                ? reg_name(rs)
+                : fmt::format("{} + {}", reg_name(rs), (int)offset);
+            uint32_t mask = 1u << rs;
+            std::string load;
+            if (opcode == 0x21)
+                load = fmt::format("(uint32_t)(int32_t)(int16_t)psx_cyc_load_half(cpu, {}, {}, 0x{:X}u)",
+                                   laddr, rt, mask);
+            else if (opcode == 0x25)
+                load = fmt::format("(uint32_t)psx_cyc_load_half(cpu, {}, {}, 0x{:X}u)",
+                                   laddr, rt, mask);
+            else
+                load = fmt::format("psx_cyc_load_word(cpu, {}, {}, 0x{:X}u)",
+                                   laddr, rt, mask);
+            return fmt::format("{} = psx_ws_clip_edge_x({}, {}u);"
+                               "  /* ws cull clip edge x load */{}",
+                               reg_name(rt), load,
+                               config_.ws_cull_clip_edge_width, comment);
+        }
+        if (!config_.overlay_mode) {
+            fmt::print(stderr, "ERROR: [widescreen.cull] clip_edge_x_load site 0x{:08X} "
+                       "is not lh/lhu/lw to a nonzero register (0x{:08X})\n",
+                       addr, instr);
             std::exit(1);
         }
         // Overlay variant at the same address: leave nonmatching code unchanged.
@@ -3331,6 +3391,8 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int  psx_ws_cull_slti(uint32_t sx, uint32_t imm);   /* ws cull signed right edge (gpu.c) */\n";
     ss << "extern int  psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm); /* ws cull signed lower edge (gpu.c) */\n";
     ss << "extern int  psx_ws_cull_bltz(uint32_t v);                  /* ws cull signed left edge (gpu.c) */\n";
+    ss << "extern int  psx_ws_cull_bgez(uint32_t v);                  /* ws cull signed left keep (gpu.c) */\n";
+    ss << "extern uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w); /* ws cull clip-edge bound load (gpu.c) */\n";
     ss << "extern int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm); /* ws masked-u16 X window */\n";
     ss << "extern int32_t psx_ws_depth_bound(int32_t imm);            /* ws aspect-scaled far bound */\n";
     ss << "extern int32_t psx_ws_plane_nx(int32_t nx);                /* ws side-plane normal-X scale (gpu.c) */\n";

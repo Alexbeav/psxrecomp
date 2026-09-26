@@ -594,6 +594,23 @@ static int ws_cull_bltz_site(uint32_t pc) {
     return flag;
 }
 
+/* Explicit [widescreen.cull] branch_keep_sites: the reject branch is forced
+ * not-taken only while a widened view is configured, exactly like the
+ * native emit (code_generator.cpp keep_branch_if_wide). Empty list or 4:3:
+ * the vanilla verdict. */
+static inline int ws_branch_keep(uint32_t pc, int taken) {
+    return (taken && psx_ws_is_cull_branch_keep_site(pc) &&
+            psx_ws_x_margin() > 0) ? 0 : taken;
+}
+
+/* Explicit [widescreen.cull] clip_edge_x_load_sites (lh/lhu/lw): the loaded
+ * screen-X clip bound moves out by the live margin when it equals a screen
+ * edge (gpu.c psx_ws_clip_edge_x). Identity for unlisted PCs and at 4:3. */
+static inline uint32_t ws_clip_edge_load(uint32_t pc, uint32_t value) {
+    if (!psx_ws_is_cull_clip_edge_x_load_site(pc)) return value;
+    return psx_ws_clip_edge_x(value, psx_ws_clip_edge_width());
+}
+
 /* Widescreen far-backdrop column-PRELOAD site classification for the interpreter
  * ([widescreen.cull] auto_backdrop). The scrolling-backdrop column-window
  * generators run interpreted in the dev build, so the recompiler emit can't
@@ -1934,28 +1951,28 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #undef XRES
     }
     case 0x04: { /* BEQ rs, rt, simm */
-        int taken = (cpu->gpr[rs] == cpu->gpr[rt]);
+        int taken = ws_branch_keep(pc, cpu->gpr[rs] == cpu->gpr[rt]);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x05: { /* BNE */
-        int taken = (cpu->gpr[rs] != cpu->gpr[rt]);
+        int taken = ws_branch_keep(pc, cpu->gpr[rs] != cpu->gpr[rt]);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x06: { /* BLEZ */
-        int taken = ((int32_t)cpu->gpr[rs] <= 0);
+        int taken = ws_branch_keep(pc, (int32_t)cpu->gpr[rs] <= 0);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x07: { /* BGTZ */
-        int taken = ((int32_t)cpu->gpr[rs] > 0);
+        int taken = ws_branch_keep(pc, (int32_t)cpu->gpr[rs] > 0);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
@@ -1968,18 +1985,27 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             /* Widescreen render-funnel LEFT-edge widen (auto_screen_x): a
              * classified funnel bltz rejects only past the revealed margin.
              * Identity at 4:3 (margin 0). Gated per-game, cheap cached scan. */
-            if (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc))
+            if (psx_ws_is_cull_bltz_site(pc) ||
+                (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc)))
                 taken = psx_ws_cull_bltz(cpu->gpr[rs]);
             else
                 taken = ((int32_t)cpu->gpr[rs] <  0);
             break;
-        case 0x01: /* BGEZ */    taken = ((int32_t)cpu->gpr[rs] >= 0); break;
+        case 0x01: /* BGEZ */
+            /* Explicit [widescreen.cull] bgez_sites: the exact left-edge
+             * keep that pairs with bltz_sites. Identity at 4:3. */
+            if (psx_ws_is_cull_bgez_site(pc))
+                taken = psx_ws_cull_bgez(cpu->gpr[rs]);
+            else
+                taken = ((int32_t)cpu->gpr[rs] >= 0);
+            break;
         case 0x10: /* BLTZAL */  taken = ((int32_t)cpu->gpr[rs] <  0);
                                   cpu->gpr[31] = pc + 8; break;
         case 0x11: /* BGEZAL */  taken = ((int32_t)cpu->gpr[rs] >= 0);
                                   cpu->gpr[31] = pc + 8; break;
         default: return abort_unsupported(pc, insn, "REGIMM rt");
         }
+        taken = ws_branch_keep(pc, taken);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
@@ -2231,7 +2257,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x21: { /* LH */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
         if (addr & 1) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
-        cpu->gpr[rt] = (uint32_t)(int32_t)(int16_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs);
+        cpu->gpr[rt] = ws_clip_edge_load(pc,
+            (uint32_t)(int32_t)(int16_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs));
         psx_pgxp_load(cpu, insn, addr, cpu->gpr[rt]);
         cpu->gpr[0] = 0;
         return 0;
@@ -2255,7 +2282,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             /* Per-prim X-reject bound: INT32_MAX while revealed (gpu.c). */
             cpu->gpr[rt] = psx_ws_xclip_bound(psx_cyc_load_word(cpu, addr, rt, 1u << rs));
         else
-            cpu->gpr[rt] = psx_cyc_load_word(cpu, addr, rt, 1u << rs);
+            cpu->gpr[rt] = ws_clip_edge_load(pc,
+                psx_cyc_load_word(cpu, addr, rt, 1u << rs));
         psx_pgxp_load(cpu, insn, addr, cpu->gpr[rt]);
         cpu->gpr[0] = 0;
         return 0;
@@ -2270,7 +2298,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x25: { /* LHU */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
         if (addr & 1) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
-        cpu->gpr[rt] = (uint32_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs);
+        cpu->gpr[rt] = ws_clip_edge_load(pc,
+            (uint32_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs));
         psx_pgxp_load(cpu, insn, addr, cpu->gpr[rt]);
         cpu->gpr[0] = 0;
         return 0;
