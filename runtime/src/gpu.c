@@ -5,7 +5,7 @@
  *   - GP1 commands 00h-08h (reset, display config)
  *   - VRAM storage (1024x512 x 16-bit)
  *   - GP0 command write — ABORTS (not yet implemented)
- *   - GPUREAD — returns last latched value
+ *   - GPUREAD — VRAM data during C0h, else the GP1(10h) info latch
  *
  * Documentation: PSX-SPX (nocash) "Graphics Processing Unit (GPU)", plus the
  * oracle fixtures cited at each rule.
@@ -2798,8 +2798,14 @@ static uint32_t h_display_x2;
 static uint32_t v_display_y1;
 static uint32_t v_display_y2;
 
-/* GPUREAD latch (GP1(10h) get-info result, or VRAM read data) */
-static uint32_t gpuread_latch;
+/* GPUREAD is two registers [ORACLE FIXTURE G1b, G1c]:
+ * - gpuread_data_last: the last word latched, by a C0h VRAM read or by a
+ *   GP1(10h) info write. GP1(10h) 02h-05h keep its upper bits.
+ * - gpuread_info: the GP1(10h) result, which GPUREAD returns while no C0h
+ *   transfer is active.
+ * Both are 0 at power-on. */
+static uint32_t gpuread_data_last;
+static uint32_t gpuread_info;
 
 /* C0 (VRAM→CPU) capture slot — forward declaration for gpu_read_gpuread */
 #define C0_HISTORY_CAP_FWD 32
@@ -2917,7 +2923,8 @@ static void gpu_reset_state(int clear_vram) {
     v_display_y1 = 0x010;
     v_display_y2 = 0x100;
 
-    gpuread_latch = 0;
+    gpuread_data_last = 0;
+    gpuread_info = 0;
     gpustat_poll_count = 0;
     s_ws_fmv_frame_cache = 0xFFFFFFFFu;
     s_ws_fmv_cached = 0;
@@ -3062,8 +3069,11 @@ uint32_t gpu_read_gpustat(void) {
 /* ---- GPUREAD (0x1F801810 read) ---- */
 
 uint32_t gpu_read_gpuread(void) {
+    /* Outside a C0h transfer GPUREAD returns the info latch, so reads after a
+     * transfer return the pre-C0h info value, or 0 at power-on
+     * [ORACLE FIXTURE G1b]. */
     if (!vram_read_active)
-        return gpuread_latch;
+        return gpuread_info;
 
     /* Read two 16-bit pixels from VRAM and pack into one 32-bit word.
      * Routed through the renderer facade: under the GL backend the GPU-side
@@ -3076,20 +3086,14 @@ uint32_t gpu_read_gpuread(void) {
         value |= (uint32_t)gr_vram_read((int)rx, (int)ry) << (i * 16);
 
         if (++vram_read_col == vram_read_w) {
-            if(source_gpu_runtime_active()) {
-                /* The source profile reads both halves of the final word; for
-                 * odd extents the extra half is the next X on the final row
-                 * [ORACLE FIXTURE G1]. */
-                if(vram_read_row+1==vram_read_h)vram_read_active=0;
-                else {vram_read_row++;vram_read_col=0;}
-            } else if (++vram_read_row == vram_read_h) {
-                /* Transfer complete */
-                vram_read_col = 0;
-                vram_read_active = 0;
-                break;
-            } else vram_read_col=0;
+            /* Both halves of the final word are read. For odd w*h the extra
+             * half is the next X on the final row, (x+w mod 1024, h-1)
+             * [ORACLE FIXTURE G1]. */
+            if(vram_read_row+1==vram_read_h)vram_read_active=0;
+            else {vram_read_row++;vram_read_col=0;}
         }
     }
+    gpuread_data_last = value;
 
     /* Capture first words for C0 debug */
     if (c0_capture_slot_fwd >= 0 && c0_capture_slot_fwd < C0_HISTORY_CAP_FWD) {
@@ -3101,7 +3105,6 @@ uint32_t gpu_read_gpuread(void) {
     }
 
     if(source_gpu_runtime_active())source_gpu_runtime_read();
-    else gpuread_latch = value;
     return value;
 }
 
@@ -6051,47 +6054,56 @@ static void gp1_display_mode(uint32_t val) {
 }
 
 static void gp1_get_info(uint32_t val) {
-    /* GP1(10h): Get GPU info — writes result to GPUREAD latch. PSX-SPX
-     * "GP1(10h)" (v2 GPU): indices 10h-FFFFFFh mirror 00h..0Fh (so val &
-     * 0x0F), and only 02h-05h, 07h and 08h return data; the others leave
-     * GPUREAD unchanged. Tomba's ResetGraph() uses param 7 to
-     * read the GPU version (must be 2) to pick its video-mode path —
-     * the wrong value here lands the game on a no-draw branch. */
+    /* GP1(10h): Get GPU info into the GPUREAD info latch. PSX-SPX "GP1(10h)"
+     * (v2 GPU): indices 10h-FFFFFFh mirror 00h..0Fh, so the index is val & 0Fh
+     * [ORACLE FIXTURE G1b: 13h behaves as 03h]. Tomba's ResetGraph() uses
+     * index 7 to read the GPU version (must be 2) to pick its video-mode path.
+     *
+     * The field replaces the low bits; the upper bits come from the last word
+     * latched (gpuread_data_last), which is the last VRAM word after a C0h and
+     * the previous result after a GP1(10h) [ORACLE FIXTURE G1b: 03 after a C0h
+     * ending 44443333 -> 44411523; 03 mid-C0h after 22221111 -> 22211523]
+     * [ORACLE FIXTURE G1c: 03 after an 05 that read 00CFC87A -> 00C11523].
+     * PSX-SPX documents the upper bits of 02h-04h as "MSBs=Nothing"
+     * (unchanged). A GP1(10h) during a C0h transfer does not disturb the
+     * transfer [ORACLE FIXTURE G1b]. Abe's Oddysee ORs the 03h/04h result under
+     * E3000000h/E4000000h into its DRAWENV packet, so the upper bits reach
+     * guest RAM. */
     uint32_t which = val & 0x0F;
     switch (which) {
-        case 2: /* texture window */
-            gpuread_latch = texture_window_value;
+        case 2: /* texture window: 20-bit field (PSX-SPX; G1b) */
+            gpuread_info = (gpuread_data_last & 0xFFF00000u) |
+                           (texture_window_value & 0xFFFFFu);
             break;
-        case 3: /* draw area top-left */
-            /* T97: merge into the low 20 bits and retain the upper 12 (PSX-SPX
-             * GP1(10h): "20bit/MSBs=Nothing", so the MSBs keep GPUREAD's old
-             * value). Assigning dropped bits a
-             * game can read back and store: Abe's Oddysee ORs the result under
-             * 0xE3000000 into its DRAWENV packet, so the discarded bits surfaced
-             * as a RAM divergence at 801F069C. draw_area_* are 10 bits each, so
-             * the OR cannot reach the retained field. */
-            gpuread_latch = (gpuread_latch & 0xFFF00000u) |
-                            (draw_area_left | (draw_area_top << 10));
+        case 3: /* draw area top-left: 20-bit field (PSX-SPX v2; G1b) */
+            gpuread_info = (gpuread_data_last & 0xFFF00000u) |
+                           (draw_area_left | (draw_area_top << 10));
             break;
-        case 4: /* draw area bottom-right */
-            /* Same retain as case 3; observed at 801F06A0 under 0xE4000000. */
-            gpuread_latch = (gpuread_latch & 0xFFF00000u) |
-                            (draw_area_right | (draw_area_bottom << 10));
+        case 4: /* draw area bottom-right: 20-bit field (PSX-SPX v2; G1b) */
+            gpuread_info = (gpuread_data_last & 0xFFF00000u) |
+                           (draw_area_right | (draw_area_bottom << 10));
             break;
-        case 5: /* draw offset */
-            gpuread_latch = ((uint32_t)draw_offset_x & 0x7FFu) |
-                            (((uint32_t)draw_offset_y & 0x7FFu) << 11);
+        case 5: /* draw offset: 22-bit field y<<11 | x, keeping bits 22-31
+                 * [ORACLE FIXTURE G1c: last word FFF03333, y 5F9h ->
+                 * FFEFC87A]. PSX-SPX v2 lists it as "22bit" without
+                 * "MSBs=Nothing". */
+            gpuread_info = (gpuread_data_last & 0xFFC00000u) |
+                           ((uint32_t)draw_offset_x & 0x7FFu) |
+                           (((uint32_t)draw_offset_y & 0x7FFu) << 11);
             break;
-        case 7: /* GPU version: 2 (PSX-SPX GP1(10h): "1 or 2") */
-            gpuread_latch = 2;
+        case 7: /* GPU version: 2, full word (PSX-SPX "1 or 2"; G1b 00000002h) */
+            gpuread_info = 2;
             break;
-        case 8: /* unknown info index: 00000000h (PSX-SPX GP1(10h)) */
-            gpuread_latch = 0;
+        case 8: /* 00000000h (PSX-SPX; G1b) */
+            gpuread_info = 0;
             break;
         default:
-            /* N=0,1,6,9..15: leave latch unchanged */
-            break;
+            /* 00h, 01h, 06h and 09h-0Fh leave the whole latch unchanged
+             * [ORACLE FIXTURE G1b, G1c: 09, 0F, 10h, 11h after an 03]
+             * (PSX-SPX agrees). */
+            return;
     }
+    gpuread_data_last = gpuread_info;
 }
 
 void gpu_write_gp1(uint32_t val) {
@@ -6137,7 +6149,7 @@ void gpu_write_gp1(uint32_t val) {
     X(display_disabled) X(irq1_flag) X(dma_direction) X(lcf) \
     X(display_area_x) X(display_area_y) \
     X(h_display_x1) X(h_display_x2) X(v_display_y1) X(v_display_y2) \
-    X(gpuread_latch) \
+    X(gpuread_info) X(gpuread_data_last) \
     X(gp0_state) \
     X(gp0_cmd_buf) X(gp0_words_collected) X(gp0_words_needed) \
     X(gp0_next_source_addr) X(gp0_cmd_source_addr) \
@@ -6158,7 +6170,7 @@ void gpu_write_gp1(uint32_t val) {
     X(display_disabled) X(irq1_flag) X(dma_direction) X(lcf) \
     X(display_area_x) X(display_area_y) \
     X(h_display_x1) X(h_display_x2) X(v_display_y1) X(v_display_y2) \
-    X(gpuread_latch) \
+    X(gpuread_info) X(gpuread_data_last) \
     X(gp0_state) \
     X(gp0_cmd_buf) X(gp0_words_collected) X(gp0_words_needed) \
     X(polyline_color) X(polyline_prev_x) X(polyline_prev_y) X(polyline_prev_c) \
@@ -6184,7 +6196,7 @@ static int gpu_snap_emit(PstW *w) {
     WU(display_disabled); WU(irq1_flag); WU(dma_direction); WU(lcf);
     WU(display_area_x); WU(display_area_y);
     WU(h_display_x1); WU(h_display_x2); WU(v_display_y1); WU(v_display_y2);
-    WU(gpuread_latch);
+    WU(gpuread_info); WU(gpuread_data_last);
     WU((uint32_t)gp0_state);
     for (int i = 0; i < 16; i++) WU(gp0_cmd_buf[i]);
     WI(gp0_words_collected); WI(gp0_words_needed);
@@ -6217,7 +6229,7 @@ static int gpu_snap_parse(PstR *r) {
     RU(display_disabled); RU(irq1_flag); RU(dma_direction); RU(lcf);
     RU(display_area_x); RU(display_area_y);
     RU(h_display_x1); RU(h_display_x2); RU(v_display_y1); RU(v_display_y2);
-    RU(gpuread_latch);
+    RU(gpuread_info); RU(gpuread_data_last);
     if (!pst_r_u32(r, &u)) return 0;
     gp0_state = (Gp0State)u;
     for (int k = 0; k < 16; k++) RU(gp0_cmd_buf[k]);
@@ -6270,7 +6282,7 @@ void gpu_cosim_dump(char *out, int cap) {
     X(display_disabled) X(irq1_flag) X(dma_direction) X(lcf)
     X(display_area_x) X(display_area_y)
     X(h_display_x1) X(h_display_x2) X(v_display_y1) X(v_display_y2)
-    X(gpuread_latch)
+    X(gpuread_info) X(gpuread_data_last)
     X(gp0_state)
     for (int i = 0; i < 16; i++) {
         APPEND(" gp0_cmd_buf%d %08x", i, gp0_cmd_buf[i]);
