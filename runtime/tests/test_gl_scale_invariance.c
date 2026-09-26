@@ -199,9 +199,31 @@ int main(int argc, char **argv) {
     }
     uint64_t hires = n ? fnv(img, (size_t)fw * fh * 4, 0xcbf29ce484222325ull) : 0;
     free(img);
+
+    /* Native-wide surface (16:9 on the 320 frame: 426 wide, 53 each side) at
+     * the same scale: margin-reaching draws are mirrored into it and its
+     * centre comes from the frame (the window in "window" mode). */
+    glb_wide_configure(426, 53);
+    glb_wide_set_target(0);
+    glb_set_draw_area(0, 0, 319, 239);
+    glb_draw_flat_rect(-40, 20, 90, 30, 0x5ad6);                      /* into the left margin */
+    glb_draw_gouraud_triangle(250, 60, 0x001f, 372, 90, 0x7c00, 280, 150, 0x03e0); /* right */
+    glb_draw_textured_rect(300, 160, 64, 40, 0, 0, 512, 256, 0x0008);  /* textured, right */
+    glb_draw_line(-30, 225, 350, 225, 0x7fff);                         /* line across both */
+    glb_set_draw_area(0, 0, 1023, 511);
+    uint64_t wide = 0;
+    {
+        int ww = 426 * scale, wh = 512 * scale, gw = 0, gh = 0;
+        uint32_t *wb = (uint32_t *)malloc((size_t)ww * wh * 4);
+        int got = wb ? glb_wide_dump_full(wb, ww * wh, &gw, &gh, 0) : 0;
+        check(got == ww * wh && gw == ww && gh == wh, "wide surface dump size");
+        if (got) wide = fnv(wb, (size_t)ww * wh * 4, 0xcbf29ce484222325ull);
+        free(wb);
+    }
     check(glGetError() == GL_NO_ERROR, "GL error");
     printf("digest=%016llx\n", (unsigned long long)digest);
     printf("hires=%016llx\n", (unsigned long long)hires);
+    printf("wide=%016llx\n", (unsigned long long)wide);
     printf("checks=%d failures=%d\n", checks, failures);
     gl_renderer_shutdown();
     SDL_DestroyWindow(win);

@@ -4,7 +4,8 @@ The fixture runs once per internal scale; the guest-visible (native) VRAM
 digest must be identical at every scale, and each run checks line thickness
 at internal resolution. Window runs (PSX_GL_HIRES_WINDOW=1) keep VRAM at 1x
 and only the frame at S: their native digest must match too, and their frame
-at internal resolution must equal the full-VRAM surface's at the same scale.
+and native-wide (16:9) surface at internal resolution must equal the
+full-VRAM run's at the same scale.
 An 18x window run is 8K past a 16384 texture limit. Two clamp runs check that
 an over-limit request (32x, and a tiny memory budget) stays on GL.
 
@@ -38,8 +39,8 @@ def parse_run(stdout):
     return int(summary[1]), int(summary[2]), digest[1] if digest else None
 
 
-def parse_hires(stdout):
-    m = re.search(r"^hires=([0-9a-f]{16})$", stdout, re.M)
+def parse_hires(stdout, key="hires"):
+    m = re.search(r"^" + key + r"=([0-9a-f]{16})$", stdout, re.M)
     return m[1] if m else None
 
 
@@ -126,7 +127,7 @@ def main():
         if r.returncode or not parsed or parsed[1]:
             ok = False
         digests[("full", s)] = parsed[2] if parsed else None
-        hires_full[s] = parse_hires(r.stdout)
+        hires_full[s] = (parse_hires(r.stdout), parse_hires(r.stdout, "wide"))
     env = os.environ.copy()
     wenv = dict(env)
     wenv["PSX_GL_HIRES_WINDOW"] = "1"
@@ -138,10 +139,10 @@ def main():
         if r.returncode or not parsed or parsed[1]:
             ok = False
         digests[("window", s)] = parsed[2] if parsed else None
-        h = parse_hires(r.stdout)
+        h = (parse_hires(r.stdout), parse_hires(r.stdout, "wide"))
         if s in hires_full and hires_full[s] != h:
-            print(f"FAIL window {s}x frame differs from the full-VRAM surface at {s}x:",
-                  h, hires_full[s])
+            print(f"FAIL window {s}x frame/wide surface differ from the full-VRAM "
+                  f"surface at {s}x:", h, hires_full[s])
             ok = False
     if not digests_agree(digests):
         print("FAIL native VRAM digest differs across scales/modes:", digests)
