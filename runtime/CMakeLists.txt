@@ -903,6 +903,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(spu_key_latency_test tests/test_spu_key_latency.c)
     target_include_directories(spu_key_latency_test PRIVATE include)
     add_test(NAME spu_key_latency_test COMMAND spu_key_latency_test)
+    # PS1B-192: default-mode capture ring while disabled (E8c) + source-mode guard.
+    add_executable(spu_capture_ring_test tests/test_spu_capture_ring.c)
+    target_include_directories(spu_capture_ring_test PRIVATE include)
+    add_test(NAME spu_capture_ring_test COMMAND spu_capture_ring_test)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)

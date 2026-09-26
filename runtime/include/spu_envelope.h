@@ -20,6 +20,9 @@
  *    counter keeps running [ORACLE FIXTURE E2].
  * The counter is cleared when a step is applied, and when a phase begins
  * [NOT OBSERVED: every fixture phase change falls where the counter is already 0].
+ * Clearing and subtracting 8000h differ only when the increment changes in the
+ * middle of a count (an exponential increase crossing 6000h at shift 11 or
+ * more); no fixture measures that case [NOT OBSERVED].
  *
  * This unit only advances the envelope. Key on/off and the register write
  * are handled by the caller. */

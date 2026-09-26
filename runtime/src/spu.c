@@ -1295,6 +1295,18 @@ void spu_render(int16_t* out_stereo, int frames) {
             mix_r = clamp16(mix_r);
             mix_l = ((int32_t)mix_l * main_l) >> 15;
             mix_r = ((int32_t)mix_r * main_r) >> 15;
+        } else {
+            /* Default mode with the SPU disabled: nothing plays, but the capture
+             * ring keeps running, one slot per sample, and enabling does not reset
+             * it [ORACLE FIXTURE E8c, set S-spu/E8c, tsv sha256 f43c38e3...: 34
+             * slots were overwritten with 0 before a cold enable]. Only silence was
+             * measured, so the slots are written with 0. Source key-timing mode
+             * never reaches this branch. */
+            capture_write(0x0000u, 0);
+            capture_write(0x0400u, 0);
+            capture_write(0x0800u, 0);
+            capture_write(0x0C00u, 0);
+            capture_pos = (capture_pos + 2u) & 0x3FFu;
         }
 
         if (source_key_timing) {
