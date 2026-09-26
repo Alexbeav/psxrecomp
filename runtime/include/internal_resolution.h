@@ -126,3 +126,70 @@ static inline int psx_ir_from_supersampling(int n, int ref_lines) {
     long lines = (long)ref_lines * n;
     return lines > PSX_IR_MAX_LINES ? PSX_IR_MAX_LINES : (int)lines;
 }
+
+/* ---- The launcher round trip -------------------------------------------------
+ * The host seeds the launcher with its video state, the player may change it,
+ * and the host adopts what comes back. A recomp-ui built with the Internal
+ * resolution row (RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION) owns the preset.
+ * An older one only has the legacy Supersampling row, a 1x..4x cycle that
+ * clamps whatever it is seeded with. There a pick in that row must win over
+ * any preset, and a preset the player cannot see (game.toml, a hand-edited
+ * settings.toml) must survive an untouched row. With no preset the round trip
+ * is exactly the historical one: seed the factor, take the factor back. */
+#define PSX_IR_LEGACY_SS_MAX 4   /* the legacy row's range, and settings.toml's
+                                  * supersampling for an older runtime */
+
+/* The value seeded into the legacy Supersampling row. has_row: the launcher
+ * shows the Internal resolution row instead (the factor passes through). */
+static inline int psx_ir_launcher_seed_supersampling(int has_row, int preset,
+                                                     int supersampling,
+                                                     int ref_lines,
+                                                     int display_px_h) {
+    if (has_row || preset == PSX_IR_UNSET) return supersampling;
+    /* The preset's scale, as near as the row can show it. */
+    return psx_resolve_internal_scale(preset, ref_lines, display_px_h,
+                                      PSX_IR_LEGACY_SS_MAX);
+}
+
+typedef struct PsxIrAdopted {
+    int preset;   /* the preset kept (PSX_IR_UNSET: the factor stands) */
+    int scale;    /* the scale to request */
+    int save_ss;  /* settings.toml supersampling */
+    int save_ir;  /* settings.toml internal_resolution; PSX_IR_UNSET omits it */
+} PsxIrAdopted;
+
+/* What the host adopts when the launcher returns.
+ *   has_row       the launcher showed the Internal resolution row
+ *   preset        the host's preset when it seeded the launcher
+ *   ss_seed       what psx_ir_launcher_seed_supersampling returned
+ *   ss_result     the Supersampling row's value on return
+ *   ir_result     the Internal resolution row's value (has_row only)
+ *   s_max         the chosen renderer's ceiling */
+static inline PsxIrAdopted psx_ir_adopt_launcher(int has_row, int preset,
+                                                 int ss_seed, int ss_result,
+                                                 int ir_result, int ref_lines,
+                                                 int display_px_h, int s_max) {
+    PsxIrAdopted a;
+    if (has_row) {
+        if (psx_ir_value_valid(ir_result)) a.preset = ir_result;
+        else if (preset != PSX_IR_UNSET) a.preset = preset;
+        else a.preset = psx_ir_from_supersampling(ss_seed < 1 ? 1 : ss_seed, ref_lines);
+    } else {
+        int shown = ss_seed < 1 ? 1 : ss_seed > PSX_IR_LEGACY_SS_MAX
+                                                ? PSX_IR_LEGACY_SS_MAX : ss_seed;
+        a.preset = (preset != PSX_IR_UNSET && ss_result == shown) ? preset
+                                                                  : PSX_IR_UNSET;
+    }
+    if (a.preset == PSX_IR_UNSET) {
+        a.scale = ss_result;
+        a.save_ss = ss_result;
+        a.save_ir = PSX_IR_UNSET;
+    } else {
+        a.scale = psx_resolve_internal_scale(a.preset, ref_lines, display_px_h, s_max);
+        /* An older runtime reading settings.toml only knows supersampling
+         * (1..4): leave it the nearest it can do. */
+        a.save_ss = a.scale < PSX_IR_LEGACY_SS_MAX ? a.scale : PSX_IR_LEGACY_SS_MAX;
+        a.save_ir = a.preset;
+    }
+    return a;
+}

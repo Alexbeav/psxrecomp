@@ -96,6 +96,13 @@ extern "C" void psx_event_step_conservative_env_init(void);
 
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
+/* A recomp-ui that shows the Internal resolution row; an older one only has
+ * the legacy Supersampling row (internal_resolution.h, launcher round trip). */
+#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
+static constexpr int kLauncherHasInternalResolution = 1;
+#else
+static constexpr int kLauncherHasInternalResolution = 0;
+#endif
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
 #include "launcher_boot_timing.h" /* PSX_LAUNCHER_BOOT_TIMING stamps */
 #if defined(PSX_HAS_CODEGEN_SETUP_HOST)
@@ -1228,6 +1235,9 @@ static int           g_video_requested_scale = 1;
 static bool          g_video_scale_applies = true;
 static bool          g_video_hidpi_window = false;
 
+static_assert(PSX_IR_LEGACY_SS_MAX == SW_MAX_INTERNAL_SCALE,
+              "settings.toml supersampling for an older runtime is the software ceiling");
+
 static int video_scale_ceiling(void) {
     return g_video_renderer == 1 ? GL_MAX_INTERNAL_SCALE : SW_MAX_INTERNAL_SCALE;
 }
@@ -1251,7 +1261,7 @@ static void apply_internal_resolution(int display_px_h) {
 
 /* The value the launcher row starts on: the preset, or the legacy factor shown
  * as the preset it matches (3 -> 720p) or as its own "Nx" entry. */
-static int internal_resolution_for_launcher(void) {
+[[maybe_unused]] static int internal_resolution_for_launcher(void) {
     if (g_video_internal_res != PSX_IR_UNSET) return g_video_internal_res;
     return psx_ir_from_supersampling(g_video_scale < 1 ? 1 : g_video_scale, g_video_ref_lines);
 }
@@ -13904,9 +13914,19 @@ int main(int argc, char** argv) {
             std::filesystem::path match_session_bios_path;
             bool match_session_bios_set = false;
             seed.renderer = g_video_renderer;             seed.has_renderer = true;
-            seed.supersampling = g_video_scale;           seed.has_supersampling = true;
+            /* Internal resolution round trip (internal_resolution.h): only a
+             * launcher with the row seeds and returns the preset. An older one
+             * gets the legacy Supersampling row, and a pick there wins. */
+            const int ir_preset_seeded = g_video_internal_res;
+            const int ir_ss_seeded = psx_ir_launcher_seed_supersampling(
+                kLauncherHasInternalResolution, g_video_internal_res, g_video_scale,
+                g_video_ref_lines, psx_sdl_display_pixel_height(nullptr));
+            seed.supersampling = ir_ss_seeded;            seed.has_supersampling = true;
+            int ir_row_result = PSX_IR_UNSET;   /* the row's pick, when it has one */
+#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
             seed.internal_resolution = internal_resolution_for_launcher();
             seed.has_internal_resolution = true;
+#endif
             seed.antialiasing = g_video_aa;               seed.has_antialiasing = true;
             seed.texture_filter = g_video_texfilter;      seed.has_texture_filter = true;
             seed.fmv_filter = g_video_fmv_filter;         seed.has_fmv_filter = true;
@@ -14407,10 +14427,7 @@ int main(int argc, char** argv) {
                 seed.renderer              = ls.renderer;              seed.has_renderer              = true;
                 seed.supersampling         = ls.supersampling;         seed.has_supersampling         = true;
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-                if (psx_ir_value_valid(ls.internal_resolution)) {
-                    seed.internal_resolution = ls.internal_resolution;
-                    seed.has_internal_resolution = true;
-                }
+                ir_row_result = ls.internal_resolution;
 #endif
                 seed.antialiasing          = ls.antialiasing != 0;     seed.has_antialiasing          = true;
                 seed.geometry_correction   = ls.geometry_correction != 0;
@@ -14645,15 +14662,16 @@ int main(int argc, char** argv) {
                     g_netplay_from_lobby = 0;
                 }
                 g_video_renderer  = seed.renderer;
-                g_video_scale     = seed.supersampling;
-                if (seed.has_internal_resolution &&
-                    psx_ir_value_valid(seed.internal_resolution)) {
-                    g_video_internal_res = seed.internal_resolution;
-                    apply_internal_resolution(psx_sdl_display_pixel_height(nullptr));
-                    /* An older runtime reading this settings.toml only knows
-                     * supersampling (1..4): leave it the nearest it can do. */
-                    seed.supersampling = g_video_scale < SW_MAX_INTERNAL_SCALE
-                                             ? g_video_scale : SW_MAX_INTERNAL_SCALE;
+                {
+                    const PsxIrAdopted ir = psx_ir_adopt_launcher(
+                        kLauncherHasInternalResolution, ir_preset_seeded, ir_ss_seeded,
+                        seed.supersampling, ir_row_result, g_video_ref_lines,
+                        psx_sdl_display_pixel_height(nullptr), video_scale_ceiling());
+                    g_video_internal_res = ir.preset;
+                    g_video_scale        = ir.scale;
+                    seed.supersampling   = ir.save_ss;
+                    seed.has_internal_resolution = ir.save_ir != PSX_IR_UNSET;
+                    seed.internal_resolution     = ir.save_ir;
                 }
                 g_video_aa        = seed.antialiasing;
                 g_video_texfilter = seed.texture_filter;
@@ -16250,7 +16268,12 @@ soft_return_lobby:
         ls.renderer = g_video_renderer;
         if (ls.renderer < 0 || ls.renderer > (vulkan_offered ? 2 : 1))
             ls.renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
-        ls.supersampling = g_video_scale;
+        /* Internal resolution round trip, as at first boot. */
+        const int ir_preset_seeded = g_video_internal_res;
+        const int ir_ss_seeded = psx_ir_launcher_seed_supersampling(
+            kLauncherHasInternalResolution, g_video_internal_res, g_video_scale,
+            g_video_ref_lines, psx_sdl_display_pixel_height(nullptr));
+        ls.supersampling = ir_ss_seeded;
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
         ls.internal_resolution = internal_resolution_for_launcher();
 #endif
@@ -16534,6 +16557,15 @@ soft_return_lobby:
                     player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
                 }
             }
+            int ir_row_result = PSX_IR_UNSET;
+#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
+            ir_row_result = ls.internal_resolution;
+#endif
+            const PsxIrAdopted ir = psx_ir_adopt_launcher(
+                kLauncherHasInternalResolution, ir_preset_seeded, ir_ss_seeded,
+                ls.supersampling, ir_row_result, g_video_ref_lines,
+                psx_sdl_display_pixel_height(nullptr),
+                ls.renderer == 1 ? GL_MAX_INTERNAL_SCALE : SW_MAX_INTERNAL_SCALE);
             /* Persist controller (and rematch video) choices without wiping
              * the rest of settings.toml — merge into the on-disk file. */
             {
@@ -16597,19 +16629,10 @@ soft_return_lobby:
                 }
                 us.renderer = ls.renderer;
                 us.has_renderer = true;
-                us.supersampling = ls.supersampling;
+                us.supersampling = ir.save_ss;
                 us.has_supersampling = true;
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-                if (psx_ir_value_valid(ls.internal_resolution)) {
-                    us.internal_resolution = ls.internal_resolution;
-                    us.has_internal_resolution = true;
-                    int s = psx_resolve_internal_scale(ls.internal_resolution, g_video_ref_lines,
-                                                       psx_sdl_display_pixel_height(nullptr),
-                                                       ls.renderer == 1 ? GL_MAX_INTERNAL_SCALE
-                                                                        : SW_MAX_INTERNAL_SCALE);
-                    us.supersampling = s < SW_MAX_INTERNAL_SCALE ? s : SW_MAX_INTERNAL_SCALE;
-                }
-#endif
+                us.internal_resolution = ir.save_ir;
+                us.has_internal_resolution = ir.save_ir != PSX_IR_UNSET;
                 us.antialiasing = ls.antialiasing != 0;
                 us.has_antialiasing = true;
                 us.texture_filter = ls.texture_filter;
@@ -16685,12 +16708,8 @@ soft_return_lobby:
                 (void)PSXRecompV4::save_user_settings(settings_path, us);
             }
             g_video_renderer = ls.renderer;
-            g_video_scale = ls.supersampling;
-#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
-            if (psx_ir_value_valid(ls.internal_resolution))
-                g_video_internal_res = ls.internal_resolution;
-            apply_internal_resolution(psx_sdl_display_pixel_height(nullptr));
-#endif
+            g_video_internal_res = ir.preset;
+            g_video_scale = ir.scale;
             g_video_aa = ls.antialiasing;
             g_video_texfilter = ls.texture_filter;
             g_video_fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);

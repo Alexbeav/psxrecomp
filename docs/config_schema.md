@@ -478,6 +478,14 @@ same file still gets the nearest factor it supports. A legacy factor with no
 matching preset appears in the launcher as its own entry, for example
 "2x (480 lines)". `settings.toml` `window_width` accepts 640 to 7680.
 
+A host built against a recomp-ui without the Internal resolution row keeps
+the legacy Supersampling row (1x to 4x) and that row stays in charge: with no
+preset configured the launcher round trip is exactly the historical one, and
+no `internal_resolution` key is written. A preset from `game.toml` or a
+hand-edited `settings.toml` starts the row on the nearest factor it can show
+and survives if the row is left alone; picking a different factor there
+drops the preset.
+
 `PSX_INTERNAL_RESOLUTION=<preset or lines>` overrides every layer for one
 run (validation, and two local netplay peers that share one `settings.toml`).
 It is never written to `settings.toml`: the launcher shows and saves the
