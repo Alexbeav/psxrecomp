@@ -53,7 +53,8 @@ extern "C" {
  * v11 = v10 with the rewritten source-DMA machines (BS_SEC_DMA_SRC layout: seven
  *      machines and the source MDEC clock, 296 bytes).
  * v12 = v11 with the GPUREAD data latch (gpuread_data_last) in the GPU
- *      section (PS1B-211). */
+ *      section (PS1B-211), and the DualShock power-on flag
+ *      (pad_power_on_first) in the octoshock-digital sio tail (PS1B-215). */
 #define BOOT_STATE_VERSION 12u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
