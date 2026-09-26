@@ -803,9 +803,12 @@ static void start_async_gpu_linked_list(void) {
  *     runs, and at an MDEC DMA kick ([ORACLE FIXTURE D15b]: 8/8 status
  *     timelines exact; D17a: the same model on the kick-phase sweep, where a
  *     per-cycle clock fails; D17b: with no access at all the decoder still
- *     advances). [NOT FITTED: D18a] with one global edge offset, 50 of the
- *     128 DMA0 kick phases have at least one block complete one service edge
- *     (128 cycles) early; no slip exceeds one edge. */
+ *     advances). [NOT FITTED: D18a] scoring MADR1 step times (+-10 cycles)
+ *     with one global edge offset, 59 of the 128 DMA0 kick phases miss. A
+ *     kick-anchored 32-cycle visibility rule would leave 24, but it may be the
+ *     sampling loop's own period (D21 checks). The remaining misses are one
+ *     block one service edge early (47 steps at about -123 cycles); no slip
+ *     exceeds one edge. */
 
 int source_gpu_runtime_active(void);
 static void try_execute(int ch);
