@@ -398,7 +398,11 @@ static void decode_block(SpuVoice *v) {
 
     /* Latch end-block-reached so the BIOS music engine sees ENDX[v] = 1
      * when it polls 0x1F801D9C/D9E. Without this latch one-shot music
-     * engines never advance, leaving subsequent voices unkeyed. */
+     * engines never advance, leaving subsequent voices unkeyed.
+     * [NOT OBSERVED: release policy] This default path latches ENDX when it
+     * fetches the End block, about 23 ticks early at pitch 1000h; the oracle
+     * sets it about 8-10 samples before the block's last sample plays
+     * (decode-ahead, not whole-block consumption) [ORACLE FIXTURE S1]. */
     if (flags & 0x01u) {
         int v_idx = (int)(v - voices);
         if (v_idx >= 0 && v_idx < SPU_VOICE_COUNT) {
@@ -813,6 +817,10 @@ static int16_t voice_next_sample(int idx) {
                  * parked there at full envelope; a handful of ice-block
                  * hits in the X4 attract demo railed the whole mix at
                  * +32767 for ~35 s ("static" / music cut-out). */
+                /* [NOT OBSERVED: release policy] This default path zeroes
+                 * ENVX when the block is consumed, 5 ticks after the ENDX
+                 * tick at pitch 1000h; the oracle zeroes it in the ENDX tick
+                 * [ORACLE FIXTURE S1]. */
                 spu_event_record(SPU_EV_END_STOP, idx, v->cur_addr);
                 v->adsr_phase = ADSR_RELEASE;
                 v->adsr_divider = 0;
@@ -1556,6 +1564,10 @@ void spu_write(uint32_t addr, uint32_t value) {
                 spu_irq_check(transfer_addr, 2u);
             }
 
+            /* [NOT OBSERVED: release policy] The default path keys on at the
+             * write, so its attack starts 5 ticks before the oracle's (first
+             * attack step at tick 5 after the KON store) [ORACLE FIXTURE S1];
+             * the source profile applies KON at the sample boundary. */
             if (addr == 0x1F801D88u) {
                 kon_latch = (kon_latch & 0xFFFF0000u) | (uint32_t)(uint16_t)value;
                 if (source_key_timing)
