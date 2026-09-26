@@ -364,6 +364,7 @@ static int           s_hiw_refused_logged = 0;
 static int           s_hiw_grows = 0;           /* reallocations (diagnostic) */
 static int  hiw_on(void);
 static int  hiw_ensure(int x0, int x1);
+static void hiw_flush_queue(void);
 static GLuint make_tex(GLenum internal, int w, int h, GLenum fmt, GLenum type);
 static int  make_fbo(GLuint *out_fbo, GLuint color_tex, GLuint stencil_rb);
 static void hiw_clear_rect(int x, int y, int w, int h, float r, float g, float b,
@@ -1394,10 +1395,10 @@ static inline uint32_t conv_1555_to_rgba8(uint16_t p) {
  *              value to the test reference, so write a 1 via INVERT (the
  *              stored value is known to be 0 when the test passed) and a 0
  *              via KEEP. */
-static void mask_stencil(int write_val) {
+static void mask_stencil_ex(int write_val, int check) {
     glEnable(GL_STENCIL_TEST);
     glStencilMask(0x01);
-    if (s_mask_check) {
+    if (check) {
         glStencilFunc(GL_EQUAL, 0, 0x01);
         glStencilOp(GL_KEEP, GL_KEEP, write_val ? GL_INVERT : GL_KEEP);
     } else {
@@ -1405,6 +1406,7 @@ static void mask_stencil(int write_val) {
         glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
     }
 }
+static void mask_stencil(int write_val) { mask_stencil_ex(write_val, s_mask_check); }
 /* Like mask_stencil but never checks (uploads: gpu.c already applied mask). */
 static void plain_stencil(int write_val) {
     glEnable(GL_STENCIL_TEST);
@@ -1472,6 +1474,7 @@ static void flush_cpu_upload(void) {
     if (diag) { s_rt_up_diag[0]++; s_rt_up_diag[1] += (uint64_t)s_up_nrects; }
     flush_flat_batch();  /* queued flat GEO before upload mutates VRAM */
     flush_tex_batch();   /* queued textured draws before this upload writes VRAM */
+    hiw_flush_queue();   /* ...and their high-resolution-window replay */
     /* Snapshot + clear first (re-entrancy safe; up_add overflow calls back in). */
     DirtyRect rects[UP_RECTS_MAX];
     int nrects = s_up_nrects;
@@ -1655,6 +1658,7 @@ static void rebuild_target_stencil_tiled(GLuint target_fbo, int target_w, int ta
 
 static void rebuild_mask_stencils(void) {
     if (s_stencil_valid || !s_raster_ok) return;
+    hiw_flush_queue();
     int hw = VRAM_W * s_hr_scale, hh = VRAM_H * s_hr_scale;
     if (s_scale <= 1) {
         /* Native: the historical whole-surface rebuild, unchanged. */
@@ -1698,46 +1702,12 @@ static void rebuild_mask_stencils(void) {
 /* ---- windowed high-resolution surface: mirror plumbing ------------------ */
 static int hiw_on(void) { return s_hiw && s_hiw_fbo && s_hiw_x1 > s_hiw_x0; }
 
-/* Bind the hi window for the mirror of a draw already issued into hr (the
- * program, VAO/VBO, blend and stencil state stay as the caller set them).
- * Scissor = draw area (or all of VRAM) intersected with the window, in
- * window-local hr px; projection via u_xoff/u_xhalf like the wide passes,
- * with the hi surface's own sample-grid shift. 0 = nothing to draw. */
-static int hiw_target_begin(int clip_to_draw_area, GLint uShift, GLint uXoff,
-                            GLint uXhalf) {
-    if (!hiw_on()) return 0;
-    int S = s_scale, ww = s_hiw_x1 - s_hiw_x0;
-    int cx0 = s_hiw_x0, cx1 = s_hiw_x1, cy0 = 0, cy1 = VRAM_H;
-    if (clip_to_draw_area) {
-        if (s_area_x1 > cx0) cx0 = s_area_x1;
-        if (s_area_x2 + 1 < cx1) cx1 = s_area_x2 + 1;
-        cy0 = s_area_y1 < 0 ? 0 : s_area_y1;
-        cy1 = s_area_y2 + 1 > VRAM_H ? VRAM_H : s_area_y2 + 1;
-    }
-    if (cx1 <= cx0 || cy1 <= cy0) return 0;
-    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_hiw_fbo);
-    glViewport(0, 0, ww * S, VRAM_H * S);
-    glEnable(GL_SCISSOR_TEST);
-    glScissor((cx0 - s_hiw_x0) * S, cy0 * S, (cx1 - cx0) * S, (cy1 - cy0) * S);
-    p_glUniform1f(uShift, s_shift_hi);
-    p_glUniform1f(uXoff, (float)(-s_hiw_x0));
-    p_glUniform1f(uXhalf, (float)ww / 2.0f);
-    return 1;
-}
-/* Restore the canonical projection on the program and rebind hr. */
-static void hiw_target_end(GLint uShift, GLint uXoff, GLint uXhalf) {
-    p_glUniform1f(uShift, s_shift_hr);
-    p_glUniform1f(uXoff, 0.0f);
-    p_glUniform1f(uXhalf, 512.0f);
-    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_hr_fbo);
-    glViewport(0, 0, VRAM_W * s_hr_scale, VRAM_H * s_hr_scale);
-}
-
 /* Scissored clear of [x, x+w) x [y, y+h) (native) in the hi window. Leaves the
  * scissor test enabled and the hi FBO bound; callers rebind. */
 static void hiw_clear_rect(int x, int y, int w, int h, float r, float g, float b,
                            float a, int stencil) {
     if (!hiw_on() || w <= 0 || h <= 0) return;
+    hiw_flush_queue();
     int x0 = x > s_hiw_x0 ? x : s_hiw_x0, x1 = x + w < s_hiw_x1 ? x + w : s_hiw_x1;
     if (x1 <= x0) return;
     int S = s_scale;
@@ -1786,6 +1756,7 @@ static void blit_quad_verts(int x, int y, int w, int h) {
  * VRAM-aligned) drawn at S, texel = frag/S + window origin. */
 static void hiw_mirror_uploads(const DirtyRect *rects, int nrects) {
     if (!hiw_on() || nrects <= 0) return;
+    hiw_flush_queue();
     int S = s_scale;
     int any = 0;
     for (int i = 0; i < nrects; i++) {
@@ -1811,6 +1782,7 @@ static void hiw_mirror_uploads(const DirtyRect *rects, int nrects) {
  * passes by source bit15, so the window's stencil tracks the mask. */
 static void hiw_mirror_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (!hiw_on()) return;
+    hiw_flush_queue();
     int S = s_scale;
     int d0 = dx > s_hiw_x0 ? dx : s_hiw_x0;
     int d1 = dx + w < s_hiw_x1 ? dx + w : s_hiw_x1;
@@ -1869,6 +1841,7 @@ static int hiw_ensure(int x0, int x1) {
     if (x0 < 0) x0 = 0;
     if (x1 > VRAM_W) x1 = VRAM_W;
     if (x1 <= x0) return 0;
+    hiw_flush_queue();   /* every caller is about to read the window */
     if (s_hiw_fbo && x0 >= s_hiw_x0 && x1 <= s_hiw_x1) return 1;
     int nx0 = x0, nx1 = x1;
     if (s_hiw_fbo) {
@@ -1939,6 +1912,7 @@ static int hiw_ensure(int x0, int x1) {
 /* ---- coherency: hr FBO -> raw mirror (pack) ------------------------------ */
 static void pack_flush(void) {
     if (!s_raster_ok || !s_pack_dirty.set) return;
+    hiw_flush_queue();   /* queued window draws sample the raw mirror as it is now */
     int x = s_pack_dirty.x0, y = s_pack_dirty.y0;
     int w = s_pack_dirty.x1 - s_pack_dirty.x0 + 1;
     int h = s_pack_dirty.y1 - s_pack_dirty.y0 + 1;
@@ -2238,25 +2212,29 @@ void gl_renderer_batch_diag(uint64_t out[8]) {
  * blended per the PSX mode. Cross-prim order is kept by isolating semi prims to
  * one per batch (see gpu_textured_triangle), so this batch holds a single prim
  * whose two passes do not self-overlap. */
-static void tex_batch_draw_passes(int nverts, int semi) {
+/* tb_mask / check are the batch's set-mask and the mask-check state it was
+ * drawn under; track_stencil lets the canonical pass record deferred stencil
+ * (a replay into the high-resolution window must not touch that flag). */
+static void tex_draw_passes_ex(int nverts, int semi, int tb_mask, int check,
+                               int track_stencil) {
     p_glUniform1i(s_uSemimode, semi < 0 ? 0 : semi);
     if (semi < 0) {
         glDisable(GL_BLEND);
-        mask_stencil(s_tb_mask);
+        mask_stencil_ex(tb_mask, check);
         p_glUniform1i(s_uSemipass, 0);                 /* all texels, one ordered colour pass */
         glDrawArrays(GL_TRIANGLES, 0, nverts);
-        if (s_mask_check) {
+        if (check) {
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);  /* stencil-only fixup */
-            mask_stencil(1);
+            mask_stencil_ex(1, check);
             p_glUniform1i(s_uSemipass, 2);             /* STP=1 texels set the mask bit */
             glDrawArrays(GL_TRIANGLES, 0, nverts);
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        } else if (!s_tb_mask) {
+        } else if (!tb_mask) {
             /* Alpha is already exact; defer its duplicate stencil encoding
              * until a later GP0(E6h) actually enables destination masking. */
-            s_stencil_valid = 0;
+            if (track_stencil) s_stencil_valid = 0;
         }
-    } else if (!s_mask_check && semi == 4) {
+    } else if (!check && semi == 4) {
         /* Modes 0/1/3 can select opaque-vs-semi behavior per fragment with
          * dual-source factors, so the whole painter-ordered batch is one draw.
          * Mode 2 needs a different blend equation and stays on the conservative
@@ -2264,20 +2242,23 @@ static void tex_batch_draw_passes(int nverts, int semi) {
         glEnable(GL_BLEND);
         p_glBlendEquationSeparate(PSXGL_FUNC_ADD, PSXGL_FUNC_ADD);
         p_glBlendFuncSeparate(GL_ONE, PSXGL_SRC1_ALPHA, GL_ONE, GL_ZERO);
-        if (s_tb_mask) mask_stencil(1); else glDisable(GL_STENCIL_TEST);
+        if (tb_mask) mask_stencil_ex(1, check); else glDisable(GL_STENCIL_TEST);
         p_glUniform1i(s_uSemipass, 0);
         glDrawArrays(GL_TRIANGLES, 0, nverts);
-        if (!s_tb_mask) s_stencil_valid = 0;
+        if (!tb_mask && track_stencil) s_stencil_valid = 0;
     } else {
         glDisable(GL_BLEND);                           /* Pass 1: STP=0 texels (opaque) */
-        mask_stencil(s_tb_mask);
+        mask_stencil_ex(tb_mask, check);
         p_glUniform1i(s_uSemipass, 1);
         glDrawArrays(GL_TRIANGLES, 0, nverts);
         apply_psx_blend(semi);                         /* Pass 2: STP=1 texels (blended) */
-        mask_stencil(1);
+        mask_stencil_ex(1, check);
         p_glUniform1i(s_uSemipass, 2);
         glDrawArrays(GL_TRIANGLES, 0, nverts);
     }
+}
+static void tex_batch_draw_passes(int nverts, int semi) {
+    tex_draw_passes_ex(nverts, semi, s_tb_mask, s_mask_check, 1);
 }
 
 /* ---- frame_perf CPU attribution (native-wide wedge hunt) ----------------- *
@@ -2314,6 +2295,158 @@ static int mirror_batch_center_only(int nverts) {
     return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
 }
 
+/* ---- windowed high-resolution surface: deferred mirror queue ------------
+ * Mirroring each batch into the window as it is flushed switches framebuffers
+ * twice per batch, and on Apple's GL (Metal underneath) every switch ends a
+ * render pass: about 80 us each, ~10 ms per R4 frame. So the window's copies
+ * of textured / flat / line draws are queued (vertices + the state they were
+ * drawn with) and replayed into the window in ONE pass at the next sync
+ * point: anything that changes what they sample (the raw mirror: pack,
+ * uploads, the depth24 clear), any other write to the window (fill, copy,
+ * upload, stencil rebuild), and every read of it (present, capture, growth).
+ * Order within the window is preserved; its content equals an immediate
+ * mirror at every point it is observed. */
+enum { HQ_TEX = 1, HQ_GEO = 2 };
+typedef struct {
+    uint8_t kind;
+    int8_t  semi;            /* tex: batch semi key; geo: blend mode, -1 opaque */
+    uint8_t mask;            /* tex: batch set-mask; geo: stencil write value */
+    uint8_t check;           /* mask-check state at draw time */
+    uint8_t filter;
+    GLuint  tex;             /* sampled texture (bank or raw mirror) */
+    int     twin[4];
+    int     ax0, ay0, ax1, ay1;  /* draw area, inclusive */
+    size_t  vfirst;          /* float offset into s_hq_v */
+    int     vcount;          /* vertices */
+} HiCmd;
+static HiCmd  *s_hq = NULL;
+static int     s_hq_n = 0, s_hq_cap = 0;
+static float  *s_hq_v = NULL;
+static size_t  s_hq_vn = 0, s_hq_vcap = 0;
+static uint64_t s_hq_flushes = 0, s_hq_cmds = 0;
+
+static HiCmd *hiw_enqueue(int kind, const float *verts, int nverts, int stride) {
+    size_t nf = (size_t)nverts * (size_t)stride;
+    if (s_hq_n == s_hq_cap) {
+        int cap = s_hq_cap ? s_hq_cap * 2 : 256;
+        HiCmd *q = (HiCmd *)realloc(s_hq, (size_t)cap * sizeof(HiCmd));
+        if (!q) return NULL;
+        s_hq = q; s_hq_cap = cap;
+    }
+    if (s_hq_vn + nf > s_hq_vcap) {
+        size_t cap = s_hq_vcap ? s_hq_vcap : 65536;
+        while (cap < s_hq_vn + nf) cap *= 2;
+        float *v = (float *)realloc(s_hq_v, cap * sizeof(float));
+        if (!v) return NULL;
+        s_hq_v = v; s_hq_vcap = cap;
+    }
+    HiCmd *c = &s_hq[s_hq_n++];
+    memset(c, 0, sizeof *c);
+    c->kind = (uint8_t)kind;
+    c->vfirst = s_hq_vn;
+    c->vcount = nverts;
+    memcpy(s_hq_v + s_hq_vn, verts, nf * sizeof(float));
+    s_hq_vn += nf;
+    c->check = (uint8_t)s_mask_check;
+    c->ax0 = s_area_x1; c->ay0 = s_area_y1; c->ax1 = s_area_x2; c->ay1 = s_area_y2;
+    s_hq_cmds++;
+    return c;
+}
+
+/* The draw area intersects the window at all (else nothing to mirror). */
+static int hiw_area_touches(void) {
+    return s_area_x2 >= s_hiw_x0 && s_area_x1 < s_hiw_x1 && s_area_y2 >= s_area_y1;
+}
+
+static void hiw_enqueue_tex(int nverts, int semi) {
+    if (!hiw_area_touches()) return;
+    HiCmd *c = hiw_enqueue(HQ_TEX, s_tb, nverts, TEXV);
+    if (!c) { hiw_flush_queue(); return; }
+    c->semi = (int8_t)semi;
+    c->mask = (uint8_t)s_tb_mask;
+    c->filter = (uint8_t)s_tb_filter;
+    c->tex = s_tb_bank_tex ? s_tb_bank_tex : s_raw_tex;
+    memcpy(c->twin, s_tb_twin, sizeof c->twin);
+}
+
+static void hiw_enqueue_geo(const float *verts, int nverts, int semi, int mask) {
+    if (!hiw_area_touches()) return;
+    HiCmd *c = hiw_enqueue(HQ_GEO, verts, nverts, 6);
+    if (!c) { hiw_flush_queue(); return; }
+    c->semi = (int8_t)semi;
+    c->mask = (uint8_t)(mask ? 1 : 0);
+}
+
+static void hiw_flush_queue(void) {
+    if (s_hq_n == 0) return;
+    if (!hiw_on()) { s_hq_n = 0; s_hq_vn = 0; return; }
+    int S = s_scale, ww = s_hiw_x1 - s_hiw_x0;
+    s_hq_flushes++;
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_hiw_fbo);
+    glViewport(0, 0, ww * S, VRAM_H * S);
+    glEnable(GL_SCISSOR_TEST);
+    /* The window projection on both programs for the whole replay. */
+    p_glUseProgram(s_geo_prog);
+    p_glUniform1f(s_geo_uShift, s_shift_hi);
+    p_glUniform1f(s_geo_uXoff, (float)(-s_hiw_x0));
+    p_glUniform1f(s_geo_uXhalf, (float)ww / 2.0f);
+    p_glUseProgram(s_tex_prog);
+    p_glUniform1f(s_tex_uShift, s_shift_hi);
+    p_glUniform1f(s_tex_uXoff, (float)(-s_hiw_x0));
+    p_glUniform1f(s_tex_uXhalf, (float)ww / 2.0f);
+    p_glUniform1i(s_uVram, 0);
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    int cur = 0;
+    for (int i = 0; i < s_hq_n; i++) {
+        const HiCmd *c = &s_hq[i];
+        int cx0 = c->ax0 > s_hiw_x0 ? c->ax0 : s_hiw_x0;
+        int cx1 = c->ax1 + 1 < s_hiw_x1 ? c->ax1 + 1 : s_hiw_x1;
+        int cy0 = c->ay0 < 0 ? 0 : c->ay0;
+        int cy1 = c->ay1 + 1 > VRAM_H ? VRAM_H : c->ay1 + 1;
+        if (cx1 <= cx0 || cy1 <= cy0) continue;
+        glScissor((cx0 - s_hiw_x0) * S, cy0 * S, (cx1 - cx0) * S, (cy1 - cy0) * S);
+        if (c->kind == HQ_TEX) {
+            if (cur != HQ_TEX) {
+                p_glUseProgram(s_tex_prog);
+                p_glBindVertexArray(s_tex_vao);
+                p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_tex_vbo);
+                cur = HQ_TEX;
+            }
+            glBindTexture(GL_TEXTURE_2D, c->tex);
+            p_glUniform4i(s_uTwin, c->twin[0], c->twin[1], c->twin[2], c->twin[3]);
+            p_glUniform1i(s_uMaskset, c->mask);
+            p_glUniform1i(s_uFilter, c->filter);
+            p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
+                           s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
+            tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0);
+        } else {
+            if (cur != HQ_GEO) {
+                p_glUseProgram(s_geo_prog);
+                p_glBindVertexArray(s_geo_vao);
+                p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
+                cur = HQ_GEO;
+            }
+            if (c->semi >= 0) apply_psx_blend(c->semi); else glDisable(GL_BLEND);
+            mask_stencil_ex(c->mask, c->check);
+            p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * 6 * sizeof(float)),
+                           s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLES, 0, c->vcount);
+        }
+    }
+    /* Canonical projection back on both programs. */
+    p_glUseProgram(s_geo_prog);
+    p_glUniform1f(s_geo_uShift, s_shift_hr);
+    p_glUniform1f(s_geo_uXoff, 0.0f);
+    p_glUniform1f(s_geo_uXhalf, 512.0f);
+    p_glUseProgram(s_tex_prog);
+    p_glUniform1f(s_tex_uShift, s_shift_hr);
+    p_glUniform1f(s_tex_uXoff, 0.0f);
+    p_glUniform1f(s_tex_uXhalf, 512.0f);
+    hr_end();
+    s_hq_n = 0;
+    s_hq_vn = 0;
+}
+
 static void flush_tex_batch(void) {
     if (s_tb_n == 0) return;
     int nverts = s_tb_n, semi = s_tb_semi;
@@ -2335,12 +2468,10 @@ static void flush_tex_batch(void) {
 
     tex_batch_draw_passes(nverts, semi);
 
-    /* Windowed high-resolution surface: the same batch at S, clipped to the
-     * draw area inside the window. No-op unless that mode is engaged. */
-    if (hiw_on() && hiw_target_begin(1, s_tex_uShift, s_tex_uXoff, s_tex_uXhalf)) {
-        tex_batch_draw_passes(nverts, semi);
-        hiw_target_end(s_tex_uShift, s_tex_uXoff, s_tex_uXhalf);
-    }
+    /* Windowed high-resolution surface: the same batch at S, queued and
+     * replayed in one render pass at the next sync point (see s_hq). No-op
+     * unless that mode is engaged. */
+    if (hiw_on()) hiw_enqueue_tex(nverts, semi);
 
     /* Native-wide mirror — skipped for a batch fully inside the 4:3 frame (its
      * centre content comes from the present-time canonical blit; nothing to add
@@ -2396,10 +2527,7 @@ static void flush_flat_batch(void) {
     p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(nverts * 6 * sizeof(float)),
                    s_fb, PSXGL_STREAM_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, nverts);
-    if (hiw_on() && hiw_target_begin(1, s_geo_uShift, s_geo_uXoff, s_geo_uXhalf)) {
-        glDrawArrays(GL_TRIANGLES, 0, nverts);
-        hiw_target_end(s_geo_uShift, s_geo_uXoff, s_geo_uXhalf);
-    }
+    if (hiw_on()) hiw_enqueue_geo(s_fb, nverts, semi, mask);
 
     if (g_wide_cur && !s_wide_suppress && s_ws_ablate != 1 &&
         !(!g_ws_bd_stretch_on && mirror_flat_batch_center_only(nverts))) {
@@ -2507,10 +2635,9 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
                            quad, PSXGL_STREAM_DRAW);
             draw_mode = GL_TRIANGLES; draw_n = 6;
         }
-        if (hiw_on() && hiw_target_begin(1, s_geo_uShift, s_geo_uXoff, s_geo_uXhalf)) {
-            glDrawArrays(draw_mode, 0, draw_n);
-            hiw_target_end(s_geo_uShift, s_geo_uXoff, s_geo_uXhalf);
-        }
+        if (hiw_on())
+            hiw_enqueue_geo(draw_mode == GL_TRIANGLES && is_line ? quad : verts,
+                            draw_n, semi, s_mask_set);
         if (g_wide_cur && !s_wide_suppress && s_ws_ablate != 1 &&
             !(!g_ws_bd_stretch_on && mirror_geo_center_only(xs, n))) {
             int dx = wide_dx();
@@ -3095,6 +3222,7 @@ static void depth24_clear_skipped_fb(void) {
     if (!s_raster_ok || !s_d24_skip_fb.set) return;
     flush_flat_batch();
     flush_tex_batch();
+    hiw_flush_queue();
     int x0 = s_d24_skip_fb.x0, y0 = s_d24_skip_fb.y0;
     int x1 = s_d24_skip_fb.x1, y1 = s_d24_skip_fb.y1;
     int rw = x1 - x0 + 1, rh = y1 - y0 + 1;
@@ -3723,6 +3851,7 @@ int gl_renderer_read_display_hires(int x, int y, int w, int h, uint32_t *out,
     int rx = x;
     if (s_hiw) {
         /* Windowed: the S-scaled pixels exist only inside the window. */
+        hiw_flush_queue();
         if (!hiw_on() || x < s_hiw_x0 || x + w > s_hiw_x1) return 0;
         fbo = s_hiw_fbo;
         rx = x - s_hiw_x0;
@@ -3883,6 +4012,7 @@ void gl_renderer_shutdown(void) {
         SDL_GL_DeleteContext(s_ctx); s_ctx = NULL;
     }
     free(s_conv); s_conv = NULL;
+    s_hq_n = 0; s_hq_vn = 0;   /* queued window draws die with the context */
     s_raster_ok = 0;
     /* New context regenerates s_present_tex empty; a stale size makes
      * upload_present_tex take glTexSubImage2D into an unallocated texture

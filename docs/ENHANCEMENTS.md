@@ -935,8 +935,15 @@ M4 returns `GL_INVALID_VALUE` for it. A title only needs the displayed frame at
   rectangle outside it is presented, seeded by upscaling the 1x content. The
   present, hold-last, interpolation capture, `screenshot_hires` and the
   native-wide centre read W; a display it cannot hold presents at 1x.
-- The mirror costs one extra submission of each primitive that touches W
-  (the 1x pass is cheap to fill), like the native-wide mirror.
+- The window's copies of textured, flat and line draws are **queued** and
+  replayed into it in one pass at the next sync point: anything that changes
+  what they sample (a pack of the raw mirror, an upload, the depth24 clear),
+  any other write to the window (fill, copy, upload, stencil rebuild), and
+  every read of it (present, capture, growth). Mirroring each batch as it was
+  flushed switched framebuffers twice per batch; on Apple's GL (Metal
+  underneath) each switch ends a render pass, which measured ~80 us, 10 ms
+  per R4 frame (8K ran at 21 fps). Queued, the flush CPU cost is 0.6 ms per
+  frame and 8K holds R4's 60 Hz present cadence on an M4.
 
 It engages only when the full-VRAM surface cannot hold the requested scale;
 below that (up to 16x on the M4) nothing changes. `PSX_GL_HIRES_WINDOW=0/1`

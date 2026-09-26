@@ -89,8 +89,21 @@ class HiresWindowGuards(unittest.TestCase):
 
     def test_mirrors_gated(self):
         for fn in ("static void hiw_mirror_uploads(", "static void hiw_mirror_copy(",
-                   "static void hiw_clear_rect(", "static int hiw_target_begin("):
+                   "static void hiw_clear_rect("):
             self.assertIn("if (!hiw_on()", body(GL, fn))
+            # an immediate write into the window lands after every queued draw
+            self.assertIn("hiw_flush_queue();", body(GL, fn))
+        for site in ("flush_tex_batch(void)", "flush_flat_batch(void)"):
+            self.assertIn("if (hiw_on()) hiw_enqueue_", body(GL, "static void " + site))
+
+    def test_queue_syncs_before_the_raw_mirror_changes(self):
+        # Queued window draws sample the raw mirror; it must not change under them.
+        self.assertIn("hiw_flush_queue();", body(GL, "static void pack_flush(void)"))
+        upload = body(GL, "static void flush_cpu_upload(void)")
+        self.assertLess(upload.index("hiw_flush_queue();"), upload.index("glTexSubImage2D"))
+        self.assertIn("hiw_flush_queue();", body(GL, "static void depth24_clear_skipped_fb(void)"))
+        self.assertIn("hiw_flush_queue();", body(GL, "static void rebuild_mask_stencils(void)"))
+        self.assertIn("hiw_flush_queue();", body(GL, "static int hiw_ensure(int x0, int x1)"))
         present = body(GL, "void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,")
         self.assertIn("if (s_hiw) {", present)
         self.assertIn("int src_tw = VRAM_W, src_x = disp_x, src_scale = s_scale;", present)
