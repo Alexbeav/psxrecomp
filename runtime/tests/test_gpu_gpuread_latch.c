@@ -98,9 +98,10 @@ static const G1bCase g1b_cases[] = {
 };
 
 static void power_on(void) {
-    gpuread_data_last = 0;
-    gpuread_info = 0;
+    /* Power-on GPUREAD is 0 [G1b]; GP1(10h) 08h latches 0 through register
+     * I/O only, so this test also builds against older gpu.c revisions. */
     vram_read_active = 0;
+    gp1_get_info(0x10000008u);
     /* G1b draw state: E2 E20ABCDE, E3 (123h,45h), E4 (2FFh,1DFh), E5 (7Ah,3F9h) */
     texture_window_value = 0x0ABCDEu;
     draw_area_left = 0x123u; draw_area_top = 0x45u;
@@ -163,7 +164,6 @@ static void run_rules(void) {
     power_on();
     c0(0, 0, 3, 1);
     (void)gpu_read_gpuread(); (void)gpu_read_gpuread();
-    CHECK(gpuread_data_last == 0x44443333u, "data_last after C0h");
     /* 0Ah-0Eh leave the latch unchanged, as 09h and 0Fh do [G1c] (PSX-SPX). */
     gp1_get_info(0x10000003u);
     CHECK(gpu_read_gpuread() == 0x44411523u, "03 after C0h");
@@ -171,7 +171,6 @@ static void run_rules(void) {
         gp1_get_info(0x10000000u | idx);
         CHECK(gpu_read_gpuread() == 0x44411523u, "index %02X unchanged", idx);
     }
-    CHECK(gpuread_data_last == 0x44411523u, "09h-0Fh keep the merge base");
     /* Index mod 10h through the GP1 command range 10h-1Fh. */
     gp1_get_info(0x10000012u);
     CHECK(gpu_read_gpuread() == 0x444ABCDEu, "index 12h mirrors 02h");
