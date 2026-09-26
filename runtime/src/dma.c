@@ -1018,6 +1018,13 @@ static void dsm_run_ll(uint64_t now) {
     for (;;) {
         int ready = gpu_dma_source_ll_ready();
         if (ready < 0) dsm_fail("source GPU linked list: GPU state outside the profile");
+        /* [DOC] PSX-SPX GPUSTAT.28 "Ready to receive DMA Block": readiness gates
+         * a block (a node here), not each word. The GPU projection reports 28 = 0
+         * as soon as a polygon or line head is queued (its oracle GPUSTAT rule),
+         * so a per-word gate strands the node's remaining words (PS1B-186 Tier 1,
+         * boot return 96). Mid-node words move on credit alone; D22 fill16
+         * advances MADR2 one node per fill. */
+        if (m->stage) ready = 1;
         if (now > m->served_until) {
             if (ready) dsm_credit_add(m, now - m->served_until);
             m->served_until = now;
