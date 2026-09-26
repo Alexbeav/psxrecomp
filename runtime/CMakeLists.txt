@@ -164,6 +164,10 @@ if(BUILD_TESTING)
         target_compile_options(dma_default_regs_test PRIVATE -O2 -flto -fwhole-program)
         target_link_options(dma_default_regs_test PRIVATE -flto)
         add_test(NAME dma_default_regs_test COMMAND dma_default_regs_test)
+        add_executable(dma_otc_during_ll_test tests/test_dma_otc_during_ll.c src/dma_gpu_ll.c)
+        target_include_directories(dma_otc_during_ll_test PRIVATE include)
+        target_compile_options(dma_otc_during_ll_test PRIVATE -O2 -UNDEBUG)
+        add_test(NAME dma_otc_during_ll_test COMMAND dma_otc_during_ll_test)
         # Source-profile GPU DMA controller fixtures (PS1B-186). Each negative must
         # stop the bounded profile with its [dma-model] diagnostic (exit 2).
         foreach(_dma_src upload linked_list)
