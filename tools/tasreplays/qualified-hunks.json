@@ -3507,9 +3507,7 @@
             "/* The version field is the ONLY guard against a blob written by an older",
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
-            " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v11 therefore rejects every earlier state. */",
-            "#define BOOT_STATE_VERSION_MIN_READ 11u"
+            " * three unchanged. A pin bump without a code regen would otherwise hand an old"
           ]
         },
         {
@@ -3986,10 +3984,12 @@
             "        timers_source_wire_write(buf);",
             "        ok = write_section(o, BS_SEC_TIMER_SRC, buf, sizeof buf);",
             "    }",
-            "    if (ok && dma_src_active()) {",
-            "        uint8_t buf[140u];                    /* four source-DMA state machines */",
-            "        dma_src_wire_write(buf);",
-            "        ok = write_section(o, BS_SEC_DMA_SRC, buf, sizeof buf);",
+            "    if (ok && dma_src_active()) {"
+          ]
+        },
+        {
+          "file": "runtime/src/boot_state.c",
+          "lines": [
             "    }",
             "    if (ok) {",
             "        /* Always present: none of these fields is model-gated. */",
@@ -4641,21 +4641,6 @@
         {
           "file": "runtime/src/dma.c",
           "lines": [
-            "uint32_t dma_snapshot_bytes(void) {",
-            "    return DMA_SNAP_WIRE_BYTES + (mdec_source_active()?32u:0u) + (cd_source_model?20u:0u);",
-            "}"
-          ]
-        },
-        {
-          "file": "runtime/src/dma.c",
-          "lines": [
-            "    /* Source GPU/SPU/OTC continuations live in the required DMA_SRC section.",
-            "     * CD and MDEC continuations are included below, including active transfers. */"
-          ]
-        },
-        {
-          "file": "runtime/src/dma.c",
-          "lines": [
             "    if (!p) return;",
             "    pst_w_init(&w, p, dma_snapshot_bytes());"
           ]
@@ -4663,164 +4648,29 @@
         {
           "file": "runtime/src/dma.c",
           "lines": [
-            "    if (mdec_source_active()) {",
-            "        for (int i=0;i<2;i++) {",
-            "            pst_w_u32(&w,mdec_source_dma[i].address);",
-            "            pst_w_u32(&w,mdec_source_dma[i].in_block);",
-            "            pst_w_i32(&w,mdec_source_dma[i].credit);",
-            "        }",
-            "        pst_w_u64(&w,mdec_source_last_cycle);",
-            "    }",
-            "    if (cd_source_model) {",
-            "        pst_w_i32(&w,cd_source.budget);",
-            "        pst_w_u64(&w,cd_source.last_cycle);",
-            "        pst_w_u64(&w,cd_source.next_cycle);",
             "    }",
             "}",
-            "",
-            "/* BS_SEC_DMA_SRC: the four source-DMA state machines (bounded-quad GPU upload,",
-            " * GPU linked list, SPU request, OTC). Measured live at 98.1%/98.4%/57.7% (and",
-            " * OTC in the same family) of frame boundaries, so the queue[32] quiescence",
-            " * precedent does NOT apply -- these must be serialized, not guarded.",
-            " * Every member is a flat scalar: `address`/`start_addr` are GUEST physical",
-            " * addresses (masked to 0xffffff/0x1ffffc), never host pointers.",
-            " * Cycle classification (amendment B): `last_cycle`/`next_cycle` are absolute",
-            " * stamps in psx_cycle_count's base, which BS_SEC_CLOCK restores exactly, so they",
-            " * are written as-is. */",
-            "/* Encoded size = the sum of the field widths below (no struct padding on the",
-            " * wire), NOT the sum of sizeof(gpu_upload_source) + sizeof(gpu_ll_source) +",
-            " * sizeof(spu_source) + sizeof(otc_source) = 40+40+48+24 = 152. Declaring 152",
-            " * left the last 12 bytes of the section unwritten, and boot_state.c hands this",
-            " * function an uninitialized buffer, so those bytes were stack garbage in every",
-            " * save. The _Static_asserts below still pin each struct's sizeof. */",
-            "#define DMA_SRC_WIRE_BYTES 140u",
-            "uint32_t dma_src_wire_bytes(void) { return DMA_SRC_WIRE_BYTES; }",
-            "void dma_src_wire_write(uint8_t *out) {",
-            "    PstW w; pst_w_init(&w, out, DMA_SRC_WIRE_BYTES);",
-            "    pst_w_u32(&w, gpu_upload_source.remaining);",
-            "    pst_w_u32(&w, gpu_upload_source.block_size);",
-            "    pst_w_u32(&w, gpu_upload_source.in_block);",
-            "    pst_w_u32(&w, gpu_upload_source.address);",
-            "    pst_w_i32(&w, gpu_upload_source.budget);",
-            "    pst_w_u64(&w, gpu_upload_source.last_cycle);",
-            "    pst_w_u64(&w, gpu_upload_source.next_cycle);",
-            "    pst_w_u32(&w, gpu_ll_source.active);",
-            "    pst_w_u32(&w, gpu_ll_source.address);",
-            "    pst_w_u32(&w, gpu_ll_source.remaining);",
-            "    pst_w_u32(&w, gpu_ll_source.nodes);",
-            "    pst_w_i32(&w, gpu_ll_source.budget);",
-            "    pst_w_u64(&w, gpu_ll_source.last_cycle);",
-            "    pst_w_u64(&w, gpu_ll_source.next_cycle);",
-            "    pst_w_u32(&w, spu_source.remaining);",
-            "    pst_w_u32(&w, spu_source.block_size);",
-            "    pst_w_u32(&w, spu_source.in_block);",
-            "    pst_w_u32(&w, spu_source.address);",
-            "    pst_w_u32(&w, spu_source.total_words);",
-            "    pst_w_u32(&w, spu_source.start_addr);",
-            "    pst_w_i32(&w, spu_source.budget);",
-            "    pst_w_u64(&w, spu_source.last_cycle);",
-            "    pst_w_u64(&w, spu_source.next_cycle);",
-            "    pst_w_u32(&w, otc_source.remaining);",
-            "    pst_w_u32(&w, otc_source.address);",
-            "    pst_w_u64(&w, otc_source.last_cycle);",
-            "    pst_w_u64(&w, otc_source.next_cycle);",
-            "}",
-            "int dma_src_perturb(const char *field) {",
-            "    if (!field || strcmp(field,\"dma_upload_cycle\")) return 0;",
-            "    gpu_upload_source.last_cycle += 1u;",
-            "    return 1;",
-            "}",
-            "int dma_src_wire_read(const uint8_t *in, uint32_t len) {",
-            "    PstR r;",
-            "    if (len != DMA_SRC_WIRE_BYTES) return 0;",
-            "    pst_r_init(&r, in, len);",
-            "    if (!pst_r_u32(&r, &gpu_upload_source.remaining)) return 0;",
-            "    if (!pst_r_u32(&r, &gpu_upload_source.block_size)) return 0;",
-            "    if (!pst_r_u32(&r, &gpu_upload_source.in_block)) return 0;",
-            "    if (!pst_r_u32(&r, &gpu_upload_source.address)) return 0;",
-            "    if (!pst_r_i32(&r, &gpu_upload_source.budget)) return 0;",
-            "    if (!pst_r_u64(&r, &gpu_upload_source.last_cycle)) return 0;",
-            "    if (!pst_r_u64(&r, &gpu_upload_source.next_cycle)) return 0;",
-            "    if (!pst_r_u32(&r, &gpu_ll_source.active)) return 0;",
-            "    if (!pst_r_u32(&r, &gpu_ll_source.address)) return 0;",
-            "    if (!pst_r_u32(&r, &gpu_ll_source.remaining)) return 0;",
-            "    if (!pst_r_u32(&r, &gpu_ll_source.nodes)) return 0;",
-            "    if (!pst_r_i32(&r, &gpu_ll_source.budget)) return 0;",
-            "    if (!pst_r_u64(&r, &gpu_ll_source.last_cycle)) return 0;",
-            "    if (!pst_r_u64(&r, &gpu_ll_source.next_cycle)) return 0;",
-            "    if (!pst_r_u32(&r, &spu_source.remaining)) return 0;",
-            "    if (!pst_r_u32(&r, &spu_source.block_size)) return 0;",
-            "    if (!pst_r_u32(&r, &spu_source.in_block)) return 0;",
-            "    if (!pst_r_u32(&r, &spu_source.address)) return 0;",
-            "    if (!pst_r_u32(&r, &spu_source.total_words)) return 0;",
-            "    if (!pst_r_u32(&r, &spu_source.start_addr)) return 0;",
-            "    if (!pst_r_i32(&r, &spu_source.budget)) return 0;",
-            "    if (!pst_r_u64(&r, &spu_source.last_cycle)) return 0;",
-            "    if (!pst_r_u64(&r, &spu_source.next_cycle)) return 0;",
-            "    if (!pst_r_u32(&r, &otc_source.remaining)) return 0;",
-            "    if (!pst_r_u32(&r, &otc_source.address)) return 0;",
-            "    if (!pst_r_u64(&r, &otc_source.last_cycle)) return 0;",
-            "    if (!pst_r_u64(&r, &otc_source.next_cycle)) return 0;",
-            "    return 1;",
-            "}",
-            "/* Layout guards: a future field addition becomes a build break instead of a",
-            " * silent drop (the E5 R10 failure mode). */",
-            "_Static_assert(sizeof gpu_upload_source == 40, \"gpu_upload_source layout changed; update dma_src_wire_write\");",
-            "_Static_assert(sizeof gpu_ll_source == 40, \"gpu_ll_source layout changed; update dma_src_wire_write\");",
-            "_Static_assert(sizeof spu_source == 48, \"spu_source layout changed; update dma_src_wire_write\");",
-            "_Static_assert(sizeof otc_source == 24, \"otc_source layout changed; update dma_src_wire_write\");",
-            "",
-            "/* E survey (M2 apparatus): report whether each source-DMA state machine holds",
-            " * live mid-transfer state at the frame boundary that arms a checkpoint. If a",
-            " * machine is provably idle there, a quiescence precondition can replace both",
-            " * serializing it and the model-based refusal; if it is live, it must be",
-            " * serialized field by field. */",
-            "void dma_source_dma_live(int *upload, int *ll, int *spu) {",
-            "    if (upload)",
-            "        *upload = (gpu_upload_source.remaining != 0u) || (gpu_upload_source.in_block != 0u) ||",
-            "                  (gpu_upload_source.address != 0u) || (gpu_upload_source.budget != 0);",
-            "    if (ll)",
-            "        *ll = (gpu_ll_source.active != 0u) || (gpu_ll_source.remaining != 0u) ||",
-            "              (gpu_ll_source.nodes != 0u) || (gpu_ll_source.budget != 0);",
-            "    if (spu)",
-            "        *spu = (spu_source.remaining != 0u) || (spu_source.in_block != 0u) ||",
-            "               (spu_source.budget != 0);"
+            ""
           ]
         },
         {
           "file": "runtime/src/dma.c",
           "lines": [
-            "    /* The three model-based refusals that used to live here (source GPU upload,",
-            "     * source CD timing, source OTC) are now PRESENCE-based, exactly as #5 was:",
-            "     * boot_state refuses a comparison-profile state that arrives without",
-            "     * BS_SEC_DMA_SRC, and refuses BS_SEC_DMA_SRC when no source model is active.",
-            "     * Every restore path funnels through boot_state_load_buffer -> apply_section",
-            "     * (savestate, rewind, netplay rings, selfcheck, TAS resume), so the leaf",
-            "     * guard is redundant; keeping it would refuse the very state we now write. */"
+            "    return 1;",
+            "}"
+          ]
+        },
+        {
+          "file": "runtime/src/dma.c",
+          "lines": [
+            "    return 1;",
+            "}"
           ]
         },
         {
           "file": "runtime/src/dma.c",
           "lines": [
             "    if (!p || len != dma_snapshot_bytes()) return 0;"
-          ]
-        },
-        {
-          "file": "runtime/src/dma.c",
-          "lines": [
-            "    if (mdec_source_active()) {",
-            "        for (int i=0;i<2;i++) {",
-            "            if (!pst_r_u32(&r,&mdec_source_dma[i].address) ||",
-            "                !pst_r_u32(&r,&mdec_source_dma[i].in_block) ||",
-            "                !pst_r_i32(&r,&mdec_source_dma[i].credit)) return 0;",
-            "        }",
-            "        if (!pst_r_u64(&r,&mdec_source_last_cycle)) return 0;",
-            "    }",
-            "    if (cd_source_model) {",
-            "        if (!pst_r_i32(&r,&cd_source.budget) ||",
-            "            !pst_r_u64(&r,&cd_source.last_cycle) ||",
-            "            !pst_r_u64(&r,&cd_source.next_cycle)) return 0;",
-            "    }"
           ]
         },
         {
@@ -6891,9 +6741,25 @@
             "        for (uint32_t j = 0; j < tail; j++)",
             "            if (p[len - tail + j] > 1) return 0;"
           ]
+        },
+        {
+          "file": "runtime/include/boot_state.h",
+          "lines": [
+            " *      (pad_power_on_first) in the octoshock-digital sio tail (PS1B-215).",
+            " * v12 = v11 with the rewritten source-DMA machines (BS_SEC_DMA_SRC layout: seven",
+            " *      machines and the source MDEC clock, 296 bytes) (PS1B-186). */",
+            "#define BOOT_STATE_VERSION 12u"
+          ]
+        },
+        {
+          "file": "runtime/include/boot_state.h",
+          "lines": [
+            " * runtime's blob to a new loader. v12 therefore rejects every earlier state. */",
+            "#define BOOT_STATE_VERSION_MIN_READ 12u"
+          ]
         }
       ],
-      "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion. Evolved for T168: restore retained section staging and canonical commit order; perform v10 content/presence/allocation admission before mutations. The old two-pass shape/apply path failed118/166 full-runtime checks. Updated blocks retain checkpoint semantics and reject malformed states atomically; current expanded fixture passes202 default and260 comparison-profile checks. This is not a new full-route replay verdict. superseded by T172 a01f2f6cede9; requalification pending the PS1B-102 Pegasus TAS rerun superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun",
+      "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion. Evolved for T168: restore retained section staging and canonical commit order; perform v10 content/presence/allocation admission before mutations. The old two-pass shape/apply path failed118/166 full-runtime checks. Updated blocks retain checkpoint semantics and reject malformed states atomically; current expanded fixture passes202 default and260 comparison-profile checks. This is not a new full-route replay verdict. superseded by T172 a01f2f6cede9; requalification pending the PS1B-102 Pegasus TAS rerun superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun Source-DMA serializer superseded by the PS1B-186 T172 rewrite (reviewer ruling (a), 2026-09-26); requalification pending the PS1B-186 Tier 1; seed the new dma_src_wire_* writer/reader after Tier 1 with checkpoint resume cohorts passes (ruling (b)).",
       "repins": [
         {
           "as_of": "6c813943011a356e97d8ecd02341254637d9adb2",
@@ -6990,6 +6856,18 @@
           "dropped_lines": 4,
           "from_blocks": 225,
           "to_blocks": 226
+        },
+        {
+          "as_of": "worktree on 3a9b185243ce2da71fbe5fa70829f4f249d8a10d",
+          "issue": "PS1B-186",
+          "reason": "BOOT_STATE_VERSION 11 -> 12 for the rewritten source-DMA section layout (next free version on the A1 stage); reviewer OK ruling (a)",
+          "dropped_lines": 142,
+          "from_blocks": 226,
+          "to_blocks": 227,
+          "replacement_blocks_added": 2,
+          "replacement_commits": [
+            "3a9b185243ce"
+          ]
         }
       ]
     },
