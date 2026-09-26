@@ -245,6 +245,27 @@ class ModPackageImageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'plugins changed'):
             self.prepare(profile)
 
+    def test_active_requirements_are_reported_and_pinned_by_the_profile(self):
+        # A [[requirement]] activates a feature of ANOTHER package (here the
+        # 8 MB RAM builtin) while its `when` holds. The view cannot model that
+        # package, so it reports the active set and the profile pins it
+        # exactly, like plugins: a manifest edit that changes what an image's
+        # selection pulls in must not pass unnoticed.
+        text = self.manifest.replace('format_version = 5', 'format_version = 7', 1) + (
+            '\n[[requirement]]\nfeature = "engine"\npackage = "psx.enhancement.8mb-ram"\n'
+            'requires_feature = "8mb-ram"\nwhen = { build = "large" }\n')
+        self.write_manifest(text)
+        self.assertEqual(self.view().requirements, ['psx.enhancement.8mb-ram/8mb-ram'])
+        self.assertEqual(self.view(features=dict(engine=dict(build='small'))).requirements, [])
+        with self.assertRaisesRegex(ValueError, 'requirements changed'):
+            self.prepare(self.profile())
+        self.spec['requirements'] = ['psx.enhancement.8mb-ram/8mb-ram']
+        self.prepare(self.profile())
+        self.write_manifest(text.replace('requires_feature = "8mb-ram"',
+                                         'requires_feature = "8mb-ram"\nenabled = true', 1))
+        with self.assertRaisesRegex(ValueError, r'\[\[requirement\]\] keys'):
+            self.view()
+
     def test_image_straddling_a_retail_mirror_needs_a_declared_8mb_profile(self):
         # 0x801FFFF0 crosses the retail 2 MiB end; 0x803FFFF0 crosses the
         # second/third mirror boundary. psx_ram_resolve rejects both on a 2 MiB

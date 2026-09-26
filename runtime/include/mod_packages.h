@@ -109,6 +109,25 @@ struct ModRequirement {
     std::string version;
 };
 
+/* A feature of this package that needs a feature of ANOTHER package while a
+ * condition on its own options holds (manifest [[requirement]], format 7).
+ *
+ * Package-level [[dependency]] is unconditional, and an in-package
+ * requires_feature constraint cannot name another package. This is the
+ * missing shape: "Extras = Full needs psx.enhancement.8mb-ram/8mb-ram". The
+ * required feature is DERIVED for the session -- resolve() activates it even
+ * when it is hidden or disabled in state.toml -- and is never written to
+ * state.toml, because the player did not choose it. A requirement that cannot
+ * be met (package absent, excluded, wrong version, feature missing) fails the
+ * plan loudly; it never runs the requiring selection without it. */
+struct ModFeatureRequirement {
+    std::string feature_id;           /* the requiring feature (owner) */
+    std::string package_id;           /* the package that provides it */
+    std::string version = "*";        /* same range syntax as [[dependency]] */
+    std::string required_feature_id;  /* feature of package_id to activate */
+    std::map<std::string, std::string> when;  /* owner's option conditions */
+};
+
 struct ModTarget {
     std::string game_id;
     std::string exe_sha256;
@@ -262,6 +281,7 @@ struct ModPackage {
     std::vector<ModFeature> features;
     std::vector<ModOption> options;
     std::vector<ModConstraint> constraints;
+    std::vector<ModFeatureRequirement> requirements;
     std::vector<ModPatch> patches;
     std::vector<ModOverlay> overlays;
     std::vector<ModPlugin> plugins;
@@ -343,6 +363,20 @@ struct ModResolution {
         std::string other_feature_id;
     };
     std::vector<Diagnostic> diagnostics;
+    /* Features the plan activates because an active [[requirement]] needs
+     * them, not because state.toml enables them. One entry per derived
+     * feature (the first requirement that activated it). */
+    struct ImplicitFeature {
+        std::string package_id;
+        std::string feature_id;
+        std::string required_by_package_id;
+        std::string required_by_feature_id;
+    };
+    std::vector<ImplicitFeature> implicit_features;
+    /* The selection the plan was built from: state.toml's selection plus the
+     * implicit activations above. Plugins read option values from this, so a
+     * committed plan and the values its plugins observe cannot disagree. */
+    std::map<std::string, ModSelection> selections;
     std::vector<std::string> errors;
 };
 
@@ -423,6 +457,18 @@ public:
         const std::string& package_id,
         const std::string& feature_id,
         const std::string& resource_id) const;
+    /* True when an active [[requirement]] activates this feature for the
+     * session although state.toml does not enable it. feature_enabled() keeps
+     * answering for the player's own choice, which is what the launcher shows
+     * and what save_state() persists. */
+    bool feature_implicitly_enabled(const std::string& package_id,
+                                    const std::string& feature_id) const;
+    /* An option value as a resolved plan sees it (plan.selections), for
+     * plugins running under that plan. */
+    std::string feature_option_value(const ModResolution& plan,
+                                     const std::string& package_id,
+                                     const std::string& feature_id,
+                                     const std::string& option_id) const;
 
     ModResolution resolve(const std::string& game_id,
                           const std::string& exe_sha256 = {},
@@ -453,6 +499,14 @@ private:
     void migrate_legacy_root();
     bool scan_root(const std::filesystem::path& packages_root,
                    ModPackageOrigin origin, std::string* error);
+    /* selections_ plus every feature an active [[requirement]] derives,
+     * iterated to a fixed point (a derived feature may carry requirements of
+     * its own). Unmet requirements are reported through errors/diagnostics.
+     * Never touches selections_: derived activations are not player choices. */
+    std::map<std::string, ModSelection> effective_selections(
+        std::vector<ModResolution::ImplicitFeature>* implicit,
+        std::vector<ModResolution::Diagnostic>* diagnostics,
+        std::vector<std::string>* errors) const;
 
     std::filesystem::path root_;
     bool developer_channel_ = kDeveloperChannelDefault;

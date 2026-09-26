@@ -158,12 +158,12 @@ stale the moment either side gains a mod.
 
 ## Feature manifest
 
-Write new manifests at the current format version, which is **6**. Older
+Write new manifests at the current format version, which is **7**. Older
 versions stay readable so installed packages survive an update, and each
 section below notes the version a field first required.
 
 ```toml
-format_version = 6
+format_version = 7
 id = "example.localization"
 version = "1.2.0"
 name = "Example Localization Pack"
@@ -449,8 +449,8 @@ catalog root:
 
 - **`bundled/` is filtered when it is staged.** `tools/mod_channel_filter.py`
   emits a manifest without the developer features and without the `[[option]]`,
-  `[[patch]]`, `[[overlay]]`, `[[plugin]]`, `[[resource]]` and `[[constraint]]`
-  entries that only served them; a package whose every feature is developer has
+  `[[patch]]`, `[[overlay]]`, `[[plugin]]`, `[[resource]]`, `[[constraint]]` and
+  `[[requirement]]` entries that only served them; a package whose every feature is developer has
   its directory removed. This is generation, not rewriting: the staged catalog
   is build output and the author's manifest in the repo is never touched.
 - **`installed/` is refused at load.** A third-party archive is never modified,
@@ -597,7 +597,9 @@ oracles while converting known mods to native operations.
 Before boot, the manager:
 
 1. verifies the selected stock game and revision;
-2. expands only enabled features and their selected options;
+2. expands only enabled features and their selected options, plus every
+   feature an active `[[requirement]]` activates (see
+   [Implicit requirements](#implicit-requirements-across-packages));
 3. orders active packages deterministically by dependencies;
 4. verifies enabled payloads and operation bounds;
 5. collision-checks the complete owned byte-range plan and guard
@@ -621,7 +623,91 @@ that exact location. Exact duplicate operations may be coalesced.
 
 Package-level dependencies and conflicts are reserved for actual implementation
 relationships. Mutually exclusive choices such as US versus Japanese artwork
-belong inside one feature as option values.
+belong inside one feature as option values. A relationship that holds only for
+some selections of one feature is a `[[requirement]]`, not a dependency.
+
+## Implicit requirements across packages
+
+Package format 7 lets a feature, while a condition on its own options holds,
+need a feature of **another** package:
+
+```toml
+format_version = 7
+id = "wipeout3.enhancement.framerate"
+
+[[requirement]]
+feature = "framerate"                 # the requiring feature (owner)
+package = "psx.enhancement.8mb-ram"   # the package that provides it
+requires_feature = "8mb-ram"          # its feature to activate
+when = { extras = "enhanced" }        # same condition syntax as [[plugin]]
+
+[[requirement]]
+feature = "framerate"
+package = "psx.enhancement.8mb-ram"
+requires_feature = "8mb-ram"
+when = { extras = "full" }
+```
+
+`when` (or `when_option`/`when_value`) is the same feature-local condition
+plugins and overlays use; every listed option must match, so a requirement that
+holds for several values is written once per value. Omit it for a requirement
+that holds whenever the feature is enabled. `version` optionally restricts the
+provider with the `[[dependency]]` range syntax (`"*"` by default). Unknown
+fields are rejected, and so is a requirement naming its own package: a feature of
+the same package is a `requires_feature` `[[constraint]]`.
+
+The two existing mechanisms could not express this. `[[dependency]]` is
+package-level and unconditional, so WipEout 3's "NTSC / PAL Mode" would need
+8 MB RAM even with Extras = None; a `requires_feature` constraint cannot name
+another package.
+
+**Resolution.** While the requiring feature is enabled and its condition holds,
+`resolve()` activates the required feature for the session:
+
+- even when it is `hidden`, default-off, or explicitly disabled in
+  `mods/state.toml` -- the player chose the requiring option, and the requiring
+  option cannot run without it;
+- recursively: a derived feature's own `[[requirement]]`s and in-package
+  `requires_feature` constraints are derived too, to a fixed point;
+- **without writing it to `state.toml`**. A derived activation is not a player
+  choice, so `save_state()` persists only what the player selected, and turning
+  the requiring option back off leaves nothing behind. `feature_enabled()` keeps
+  reporting the player's choice (the launcher's checkbox, so a hidden required
+  feature stays hidden); `feature_implicitly_enabled()` reports the derived one.
+
+The plan lists each derived feature in `ModResolution::implicit_features` with
+what required it, plans with and without the derivation have different
+fingerprints, and a committed plan's plugins read option values from
+`ModResolution::selections` -- the selection the plan was actually built from.
+The runtime names every derived feature at launch:
+
+```text
+psxrecomp: mod feature psx.enhancement.8mb-ram/8mb-ram activated implicitly (required by wipeout3.enhancement.framerate/framerate)
+```
+
+**An unmet requirement fails loudly.** When the provider is absent from the
+catalog (removed, stripped from a release, or declined with
+`EXCLUDE_BUILTIN_MODS`), the selected version is missing, the version is out of
+range, or the provider has no such feature, the plan is rejected before launch:
+
+```text
+wipeout3.enhancement.framerate/framerate requires psx.enhancement.8mb-ram/8mb-ram, but package psx.enhancement.8mb-ram is not in this build's mod catalog
+```
+
+It is also a diagnostic on the requiring feature, so the launcher marks that
+row. The requiring selection never runs without what it requires -- an 8 MB
+build on 2 MB RAM is exactly the failure this prevents. A package an active
+requirement uses cannot be removed from the Mods manager.
+
+AOT profiles pin active requirements the way they pin plugins:
+`tools/mod_package_images.py` reports each active one as `"<package>/<feature>"`
+and a `mod_packages` entry must list the exact set under `requirements`.
+
+The launcher needs no change for a hidden required feature: it lists a hidden
+feature only when the player enabled it, and the player did not. A *visible*
+required feature still shows the player's own checkbox state while it is
+derived; showing "on, required by X" needs a launcher field that does not exist
+yet.
 
 ## Trusted adapters and archive safety
 

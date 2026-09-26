@@ -552,6 +552,8 @@ def mod_package_views(profile, disc, project_root):
         view = ModPackageView(disc, project_root, spec, profile['game_id'])
         require(view.plugins == sorted(spec.get('plugins', [])),
                 f'Selected mod plugins changed: {name} {view.plugins}')
+        require(view.requirements == sorted(spec.get('requirements', [])),
+                f'Selected mod requirements changed: {name} {view.requirements}')
         views[name] = view
     return views
 

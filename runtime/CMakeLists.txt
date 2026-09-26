@@ -783,6 +783,12 @@ if(BUILD_TESTING)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_catalog_layout.py
                          --cmake ${CMAKE_COMMAND})
+        # tools/mod_channel_filter.py strips developer features from a staged
+        # catalog; every entry that served one ([[requirement]] included) must
+        # leave with it.
+        add_test(NAME mod_channel_filter_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${PSXRECOMP_ROOT}/tools/tests/test_mod_channel_filter.py)
         # The overlay cache tag may be formatted in exactly two files. Three
         # release packagers hand-built it instead, the flavor-suffix fix reached
         # one of them, and the other two could not stage a matching Linux cache

@@ -25,6 +25,10 @@ resolver (runtime/src/mod_packages.cpp) and fails closed on anything else:
   describe bytes the runtime would never produce.
 * Plugins select native host callbacks. They carry no guest bytes, so they are
   reported, never modelled; a profile must list the exact selected set.
+* `[[requirement]]` entries activate a feature of ANOTHER package while their
+  `when` holds (runtime: implicit requirements). That package is not this view,
+  so an active requirement is reported as "<package>/<feature>", never
+  modelled; a profile must list the exact active set, the same rule as plugins.
 
 `replace_from`, `fields`, `when_integer`, `disc_raw`, legacy packages and any
 unknown manifest section or key are rejected rather than approximated.
@@ -42,12 +46,13 @@ import tomllib
 SECTOR = 2048
 MANIFEST_KEYS = {'format_version', 'id', 'version', 'name', 'author', 'description', 'license',
                  'source_name', 'source_url', 'resolver', 'save_compatibility', 'author_link',
-                 'target', 'feature', 'option', 'plugin', 'patch', 'overlay'}
+                 'target', 'feature', 'option', 'plugin', 'patch', 'overlay', 'requirement'}
 CONDITION_KEYS = {'when', 'when_option', 'when_value'}
 SECTION_KEYS = {
     'patch': {'feature', 'target', 'address', 'offset', 'expected', 'replace'} | CONDITION_KEYS,
     'overlay': {'feature', 'target', 'offset', 'file', 'sha256', 'expected_sha256'} | CONDITION_KEYS,
     'plugin': {'feature', 'id', 'order'} | CONDITION_KEYS,
+    'requirement': {'feature', 'package', 'version', 'requires_feature'} | CONDITION_KEYS,
     'feature': {'id', 'name', 'description', 'group', 'default_enabled'},
     'option': {'feature', 'id', 'label', 'description', 'group', 'type', 'default', 'choice',
                'min', 'max', 'step'},
@@ -116,6 +121,8 @@ class ModPackageView:
         self._verify_target(game_id, exe)
         self.values = self._select(spec.get('features', {}))
         self.plugins = sorted(p['id'] for p in m.get('plugin', []) if self._active(p))
+        self.requirements = sorted({f"{r['package']}/{r['requires_feature']}"
+                                    for r in m.get('requirement', []) if self._active(r)})
         self.exe_base = struct.unpack_from('<I', exe, 0x18)[0]
         self.exe_size = struct.unpack_from('<I', exe, 0x1C)[0]
         self._files = {}
@@ -307,7 +314,8 @@ class ModPackageView:
     def receipt(self):
         """Inventory facts about the applied operations; never game bytes."""
         return dict(name=self.name, id=self.manifest['id'], version=self.manifest['version'],
-                    features=self.values, plugins=self.plugins, boot_executable=self.boot,
+                    features=self.values, plugins=self.plugins,
+                    requirements=self.requirements, boot_executable=self.boot,
                     main_exe_writes=len(self._main_writes), disc_user_writes=len(self._user_writes),
                     main_exe_bytes=sum(len(b) for _, b in self._main_writes),
                     disc_user_bytes=sum(len(b) for _, b in self._user_writes))
