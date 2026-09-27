@@ -149,6 +149,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <chrono>
 #include <vector>
 
 #ifdef _WIN32
@@ -7332,7 +7333,11 @@ extern "C" int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap) {
  * replay ends (replay_overlay_unpin_if_idle). */
 static int s_replay_native_saved = -1;
 static void replay_overlay_pin(void) {
-    if (s_replay_native_saved >= 0)
+    static const bool no_pin = [] {   /* diagnostic: measure without the pin */
+        const char *e = std::getenv("PSX_REPLAY_NO_OVERLAY_PIN");
+        return e && e[0] == '1';
+    }();
+    if (s_replay_native_saved >= 0 || no_pin)
         return;
     s_replay_native_saved = overlay_loader_get_native_exec();
     overlay_loader_set_native_exec(0);
@@ -7442,7 +7447,11 @@ extern "C" uint64_t replay_host_cycle(void) {
  * same partitions a rollback resimulation is verified against. */
 static CPUState *s_replay_cpu;
 extern "C" int replay_host_state_digest(uint32_t out[4]) {
-    if (!s_replay_cpu)
+    static const bool no_digests = [] {   /* diagnostic: measure without digests */
+        const char *e = std::getenv("PSX_REPLAY_NO_DIGESTS");
+        return e && e[0] == '1';
+    }();
+    if (!s_replay_cpu || no_digests)
         return 0;
     out[0] = netplay_core_digest(s_replay_cpu);
     static int log_parts = -1;
@@ -7526,7 +7535,42 @@ static void replay_live_p1(int override, uint16_t *buttons, uint8_t sticks[4]) {
 
 /* Once per vblank, after the route boundary: runs the scripted entry points
  * and the replay boundary. Replaces *override with the replay's P1 word. */
+/* Diagnostic: PSX_REPLAY_FRAME_TIMES=FILE writes "vblank,us,state" per
+ * vblank at exit, the host time between consecutive replay boundaries. */
+static std::vector<uint64_t> s_replay_frame_times;   /* us << 8 | state */
+static std::string s_replay_frame_times_path;
+static void replay_frame_times_write(void) {
+    FILE *f = std::fopen(s_replay_frame_times_path.c_str(), "wb");
+    if (!f) return;
+    std::fprintf(f, "vblank,us,state\n");
+    for (size_t i = 0; i < s_replay_frame_times.size(); ++i)
+        std::fprintf(f, "%zu,%llu,%u\n", i, (unsigned long long)(s_replay_frame_times[i] >> 8),
+                     (unsigned)(s_replay_frame_times[i] & 0xFF));
+    std::fclose(f);
+}
+static void replay_frame_times_tick(void) {
+    static int armed = -1;
+    static std::chrono::steady_clock::time_point last;
+    if (armed < 0) {
+        const char *e = std::getenv("PSX_REPLAY_FRAME_TIMES");
+        armed = e && e[0];
+        if (armed) {
+            s_replay_frame_times_path = e;
+            s_replay_frame_times.reserve(1u << 16);
+            std::atexit(replay_frame_times_write);
+        }
+        last = std::chrono::steady_clock::now();
+        return;
+    }
+    if (!armed) return;
+    const auto now = std::chrono::steady_clock::now();
+    const uint64_t us = (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(now - last).count();
+    last = now;
+    s_replay_frame_times.push_back(us << 8 | (uint64_t)replay_session_state());
+}
+
 static void replay_frame_boundary(int *override) {
+    replay_frame_times_tick();
     host_osd_set_rec(replay_session_rec_visible((uint64_t)SDL_GetTicks()));
     static int env_read = 0, exit_at_end = 0, fast_play = 0, fast_saved = -1;
     static const char *play_path = nullptr, *record_file = nullptr;
