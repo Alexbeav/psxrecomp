@@ -232,7 +232,7 @@ if(BUILD_TESTING)
     foreach(_product IN ITEMS diagnostic release)
         set(_target input_route_session_${_product})
         add_executable(${_target} tests/test_input_route_session.c
-            src/input_route_session.c src/psx_sha256.c)
+            src/input_route_session.c src/disc_digest_cache.c src/psx_sha256.c)
         target_include_directories(${_target} PRIVATE include)
         target_compile_definitions(${_target} PRIVATE
             "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
@@ -372,6 +372,12 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
     target_link_libraries(host_osd_rec_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_osd_rec_test COMMAND host_osd_rec_test)
+
+    # Disc digest cache for replay identity (PS1B-191).
+    add_executable(disc_digest_cache_test tests/test_disc_digest_cache.c
+        src/disc_digest_cache.c src/psx_sha256.c)
+    target_include_directories(disc_digest_cache_test PRIVATE include)
+    add_test(NAME disc_digest_cache_test COMMAND disc_digest_cache_test ${CMAKE_CURRENT_BINARY_DIR})
 
     # Replays page of the save-state menu (PS1B-191): notice line, DELETE hint.
     add_executable(savestate_menu_replays_test tests/test_savestate_menu_replays.c)

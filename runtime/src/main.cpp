@@ -21,6 +21,7 @@
 #include "input_route_session.h"
 #include "replay_session.h"
 #include "netplay_state_digest.h"
+#include "disc_digest_cache.h"
 #include "psx_bios_known_images.h"
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
@@ -16261,6 +16262,10 @@ session_reboot:
         std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
         input_route_session_set_product(route_disc_serial.c_str(),
                                         disc_path_str.c_str(), bios_path_str.c_str());
+        /* Disc digests persist beside the memory cards, keyed by path, size
+         * and mtime, so an unchanged image (often on a NAS) is not re-read. */
+        disc_digest_cache_set_path(memcard_dir.empty() ? ""
+            : (memcard_dir / "disc_digests.tsv").string().c_str());
     }
     s_replay_disc_serial = route_disc_serial;
     /* Hash the disc for replays in the background (see replay_host_identity).

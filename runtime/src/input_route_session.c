@@ -2,6 +2,7 @@
  * See input_route_session.h. Every entry point is one branch when no route
  * or recording is armed. */
 #include "input_route_session.h"
+#include "disc_digest_cache.h"
 #include "input_route_v3_file.h"
 #include "input_dualshock_delivery.h"
 #include "psx_sha256.h"
@@ -106,24 +107,6 @@ void input_route_session_set_product(const char *disc_serial,
 
 /* ---- Disc digest (run_native.checkpoint_asset_digest) ---- */
 
-static int sha256_file(const char *path, uint8_t out[32])
-{
-    enum { CHUNK = 1 << 20 };
-    psx_sha256_ctx ctx;
-    unsigned char *buffer;
-    size_t n;
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-    buffer = (unsigned char *)malloc(CHUNK);
-    if (!buffer) { fclose(f); return 0; }
-    psx_sha256_init(&ctx);
-    while ((n = fread(buffer, 1, CHUNK, f)) > 0) psx_sha256_update(&ctx, buffer, n);
-    n = (size_t)ferror(f);
-    free(buffer);
-    if (fclose(f) || n) return 0;
-    psx_sha256_final(&ctx, out);
-    return 1;
-}
 
 static int ends_with_ci(const char *text, const char *suffix)
 {
@@ -193,7 +176,7 @@ static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32])
     uint8_t digest[32];
     char text[65];
     if (!s_product_disc[0]) return "no disc is mounted";
-    if (!sha256_file(s_product_disc, digest)) return "cannot read the disc image";
+    if (!disc_digest_cache_sha256(s_product_disc, digest)) return "cannot read the disc image";
     if (!ends_with_ci(s_product_disc, ".cue")) {
         *kind = INPUT_ROUTE_DISC_DIGEST_FILE;
         memcpy(out, digest, 32);
@@ -235,7 +218,7 @@ static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32])
             else {
                 memcpy(track, dir, dir_len);
                 strcpy(track + dir_len, name);
-                if (!sha256_file(track, digest)) error = "cannot read a cue track";
+                if (!disc_digest_cache_sha256(track, digest)) error = "cannot read a cue track";
                 else {
                     hex(digest, 32, text);
                     psx_sha256_update(&ctx, (const uint8_t *)"\n", 1);
