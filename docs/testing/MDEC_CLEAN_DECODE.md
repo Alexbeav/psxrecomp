@@ -54,6 +54,7 @@ retail code or decoder source in this data.
 | M10 boundaries | 185 | 84 single-entry and 32 group-b residuals of a rejected integer model, plus zero and sign controls |
 | M11 controls | 432 | Summing-column, single-coefficient and explicit-zero controls around pass-rounding boundaries |
 | M12 | 2 | Zero quantization entries in exact and DC-only color macroblocks; raw CPU-read output retained |
+| M13 | 48 | Zero/one table entries, q=0/1/8/63, signed DC and AC at encoded positions 1/8; raw mono observations |
 
 Every row is checked through the public command/DMA FIFO and through the
 production source decode/table callback seam. The second adapter assembles
@@ -77,7 +78,10 @@ python runtime/tests/test_mdec_clean_fixtures.py --library ./probe.so
 
 The replay accepts additional TSV paths and an optional `--receipt result.json`.
 It rejects an empty input set. With no paths supplied, it verifies the retained
-fixture hashes before running 1,346 entry checks. Both O0 and O2 pass.
+fixture hashes before running 1,442 entry checks. The M1–M12 subset passed
+1,346 checks at both O0 and O2. The later M13 addition independently passed
+96 checks at each level using the same hash-bound binaries; the earlier
+subsets were not repeated because production source did not change.
 Removing the half-unit bias from a scratch copy of the new core causes 684
 of the original 1,342 checks to fail; the production core passes without that
 mutation. M12 also retains raw output in four successive RGB24 blocks. The
@@ -96,6 +100,9 @@ The existing output-lifetime test and timing fixture pass. The original
 candidate failed the inherited source pipeline and DMA contract runners at
 their first AC/color cases. With the M12 correction, both runners pass at
 O0 and O2. Their golden values were not read or edited by this worker.
-Independent review still applies. Broader zero-table controls are pending;
-the two M12 cases alone do not establish behavior for every input.
+Independent review still applies. M13 supplies 48 additional controls:
+q=0/1/8/63, table entries 0/1, DC levels ±64 and AC levels ±32 at encoded
+positions 1/8. The original candidate fails 40 of 96 entry checks at each
+optimization level; the corrected candidate passes all 96. These observations
+support the fix within this domain, not for every possible input.
 Full runtime route, retail, performance and release gates remain separate.
