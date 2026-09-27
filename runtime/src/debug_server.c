@@ -14332,6 +14332,12 @@ void debug_server_init(int port)
         fprintf(stdout, "psxrecomp: debug server socket() FAILED\n");
         return;
     }
+#ifdef _WIN32
+    /* Winsock sockets are inheritable by default: child processes (e.g. the
+     * overlay autocompile's cmd.exe/python) inherit this listener and keep the
+     * debug port bound after the game exits, so the next launch cannot bind. */
+    SetHandleInformation((HANDLE)s_listen, HANDLE_FLAG_INHERIT, 0);
+#endif
 
     int yes = 1;
     setsockopt(s_listen, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
