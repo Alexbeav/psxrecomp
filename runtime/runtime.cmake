@@ -328,6 +328,7 @@ endif()
 set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/input_route_observer.c
     ${PSXRECOMP_ROOT}/runtime/src/input_route_session.c
+    ${PSXRECOMP_ROOT}/runtime/src/replay_session.c
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_window_icon.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp

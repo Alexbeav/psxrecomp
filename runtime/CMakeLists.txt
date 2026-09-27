@@ -221,6 +221,14 @@ if(BUILD_TESTING)
     add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)
     target_include_directories(input_route_v3_file_test PRIVATE include)
     add_test(NAME input_route_v3_file_test COMMAND input_route_v3_file_test)
+    # Player replays (PS1B-191): recorder/player state machine against a
+    # deterministic stand-in machine behind the replay_host_* hooks.
+    add_executable(replay_session_test tests/test_replay_session.c
+        src/replay_session.c src/psx_sha256.c)
+    target_include_directories(replay_session_test PRIVATE include)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
+    add_test(NAME replay_session_test COMMAND replay_session_test
+        ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
     foreach(_product IN ITEMS diagnostic release)
         set(_target input_route_session_${_product})
         add_executable(${_target} tests/test_input_route_session.c

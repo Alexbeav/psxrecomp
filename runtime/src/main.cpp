@@ -19,6 +19,7 @@
 #include "bios_hle.h"
 #include "bios_hle_plan.h"
 #include "input_route_session.h"
+#include "replay_session.h"
 #include "psx_bios_known_images.h"
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
@@ -5059,7 +5060,19 @@ static int savestate_input_guard_active(void) {
  * the resolved type goes through the same coherent request channel as real
  * sampling — never slammed mid-
  * handshake (the v0.5.0 phantom-input lesson). */
+/* P1 state a player replay delivers this frame (see replay_frame_boundary). */
+static uint16_t g_replay_p1_buttons = 0xFFFFu;
+static uint8_t  g_replay_p1_sticks[4] = { 0x80u, 0x80u, 0x80u, 0x80u };
+
 static void apply_input_override_to_sio(int override_word) {
+    if (replay_session_owns_p1()) {
+        /* A replay records or plays P1: deliver exactly the recorded state,
+         * with no pad-type request (the type is part of the anchor). */
+        sio_set_pad_state_slot(0, g_replay_p1_buttons);
+        sio_set_pad_sticks(0, g_replay_p1_sticks[0], g_replay_p1_sticks[1],
+                           g_replay_p1_sticks[2], g_replay_p1_sticks[3]);
+        return;
+    }
 #ifndef PSX_NO_DEBUG_TOOLS
     if (debug_server_apply_dualshock_input(override_word)) return;
 #else
@@ -6506,6 +6519,10 @@ static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
         host_osd_push("Save states are off while recording a route", 1500);
         return;
     }
+    if (replay_session_state() != REPLAY_IDLE) {
+        host_osd_push("Save states are off while a replay records or plays", 1500);
+        return;
+    }
     if (savestate_menu_open) {
         savestate_menu_close();
         return;
@@ -7047,6 +7064,238 @@ static int route_record_live_p1_word(void) {
 }
 #endif
 
+/* ---- Player replays (PS1B-191) ------------------------------------------
+ * replay_session.c owns the recorder and player; these are its host hooks.
+ * While a replay records or plays it owns P1: the word and sticks it returns
+ * at each vblank boundary go to SIO slot 0 directly, and host pad-type
+ * changes are suspended, so a recording and its playback deliver identical
+ * P1 state.
+ *
+ * Headless and scripted use (the determinism test):
+ *   --replay FILE / PSX_REPLAY_FILE=FILE  play FILE from the first vblank
+ *   PSX_REPLAY_RECORD_FILE=F, PSX_REPLAY_RECORD_AT=N, PSX_REPLAY_RECORD_FRAMES=M
+ *       record M frames into F from vblank N (P1 comes from the armed input
+ *       route when one plays, else from the device)
+ *   PSX_REPLAY_EXIT_AT_END=1  exit when the recording is written (0) or the
+ *       playback ends: 0 in sync, 3 out of sync, 4 not played or taken over */
+static const char *g_replay_cli_path = nullptr;
+static std::string s_replay_disc_serial;
+static std::string s_replay_saved_settings;
+static char s_replay_export_dir[1024];
+
+extern "C" void replay_host_osd(const char *text, int ms) {
+    std::fprintf(stdout, "replay_osd: %s\n", text);
+    std::fflush(stdout);
+    host_osd_push(text, ms);
+}
+
+static int g_replay_scripted_record = 0;
+
+extern "C" int replay_host_can_record(char *why, size_t cap) {
+    char slot0[600];
+    if (psx_netplay_active()) { std::snprintf(why, cap, "netplay is active"); return 0; }
+    if (sio_get_multitap()) { std::snprintf(why, cap, "a multitap is attached"); return 0; }
+    if (input_route_session_recording()) { std::snprintf(why, cap, "a route is recording"); return 0; }
+    if (input_route_session_owns_ports() && !g_replay_scripted_record) {
+        std::snprintf(why, cap, "an input route is playing"); return 0;
+    }
+    if (!savestate_slot_path(0, slot0, sizeof(slot0))) {
+        std::snprintf(why, cap, "save states are not available for this game"); return 0;
+    }
+    if (psx_rewind_is_open()) { std::snprintf(why, cap, "rewind is open"); return 0; }
+    return 1;
+}
+
+extern "C" int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap) {
+    return input_route_session_identity(meta, psx_bios_hle_enabled(),
+                                        psx_bios_hle_boot_skip_enabled(), why, cap);
+}
+
+extern "C" int replay_host_request_anchor(void) { return savestate_request_anchor(); }
+extern "C" int replay_host_take_anchor(uint8_t **data, size_t *size) {
+    return savestate_take_anchor(data, size);
+}
+extern "C" int replay_host_load_anchor(const void *data, size_t size) {
+    return savestate_request_load_blob_quiet(data, size);
+}
+extern "C" int replay_host_take_load_result(void) {
+    if (savestate_take_load_completed()) return 1;
+    if (savestate_take_load_failed()) return -1;
+    return 0;
+}
+
+/* The settings that change guest timing but are not in a save state. */
+static std::string replay_mods_fingerprint(void) {
+    std::string out;
+    for (char c : PSXRecompV4::mod_runtime_fingerprint())
+        if (c >= 0x21 && c <= 0x7e && out.size() < 200) out.push_back(c);
+    return out.empty() ? std::string("none") : out;
+}
+
+extern "C" void replay_host_settings_capture(char *out, size_t cap) {
+    std::snprintf(out, cap,
+                  "cd_speed=%d\nturbo_loads=%d\nturbo_load_wall=%d\n"
+                  "p1_connected=%d\np1_config_capable=%d\nmods=%s\n",
+                  cdrom_get_speed(), g_turbo_loads_enabled,
+                  g_turbo_load_wall_multiplier, sio_get_pad_connected(0),
+                  sio_get_pad_config_capable(0), replay_mods_fingerprint().c_str());
+}
+
+static void replay_settings_apply_text(const char *text, char *differs, size_t cap) {
+    if (differs && cap) differs[0] = 0;
+    const char *p = text ? text : "";
+    while (*p) {
+        const char *end = std::strchr(p, '\n');
+        std::string line = end ? std::string(p, (size_t)(end - p)) : std::string(p);
+        p = end ? end + 1 : p + line.size();
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = line.substr(0, eq), value = line.substr(eq + 1);
+        const int v = std::atoi(value.c_str());
+        bool ok = true;
+        if (key == "cd_speed") cdrom_set_speed(v);
+        else if (key == "turbo_loads") g_turbo_loads_enabled = v ? 1 : 0;
+        else if (key == "turbo_load_wall") g_turbo_load_wall_multiplier = v;
+        else if (key == "p1_connected") sio_set_pad_connected(0, v ? 1 : 0);
+        else if (key == "p1_config_capable") sio_set_pad_config_capable(0, v ? 1 : 0);
+        else if (key == "mods") ok = value == replay_mods_fingerprint();
+        else ok = false;
+        if (!ok && differs && cap) {
+            const size_t n = std::strlen(differs);
+            std::snprintf(differs + n, cap - n, "%s%s", n ? ", " : "",
+                          key == "mods" ? "enabled mods" : key.c_str());
+        }
+    }
+}
+
+extern "C" void replay_host_settings_apply(const char *settings, char *differs, size_t cap) {
+    char now[INPUT_ROUTE_REPLAY_SETTINGS_MAX + 1];
+    replay_host_settings_capture(now, sizeof(now));
+    s_replay_saved_settings = now;
+    replay_settings_apply_text(settings, differs, cap);
+}
+
+extern "C" void replay_host_settings_restore(void) {
+    replay_settings_apply_text(s_replay_saved_settings.c_str(), nullptr, 0);
+}
+
+extern "C" const uint8_t *replay_host_ram(void) {
+    extern uint8_t *g_psx_ram;
+    return g_psx_ram;
+}
+extern "C" uint64_t replay_host_cycle(void) {
+    extern uint64_t psx_cycle_count;
+    return psx_cycle_count;
+}
+
+/* Replay slots sit next to the save-state slots: state_<key>_slotNN.pst
+ * becomes replay_<key>_slotNN.psxrpl. */
+extern "C" int replay_host_slot_base(char *dir, size_t dir_cap, char *prefix, size_t prefix_cap) {
+    char slot0[600];
+    if (!savestate_slot_path(0, slot0, sizeof(slot0))) return 0;
+    std::string path = slot0;
+    const size_t sep = path.find_last_of("/\\");
+    std::string name = sep == std::string::npos ? path : path.substr(sep + 1);
+    const std::string folder = sep == std::string::npos ? std::string(".") : path.substr(0, sep);
+    const size_t slot = name.rfind("_slot");
+    if (slot == std::string::npos || name.compare(0, 6, "state_") != 0) return 0;
+    name = "replay_" + name.substr(6, slot - 6);
+    std::snprintf(dir, dir_cap, "%s", folder.c_str());
+    std::snprintf(prefix, prefix_cap, "%s", name.c_str());
+    return 1;
+}
+
+extern "C" const char *replay_host_export_dir(void) {
+    const char *root = savestate_root_dir();
+    if (!root || !root[0]) root = savestate_dir();
+    std::snprintf(s_replay_export_dir, sizeof(s_replay_export_dir), "%s/replays", root ? root : ".");
+    return s_replay_export_dir;
+}
+
+extern "C" const char *replay_host_disc_serial(void) {
+    return s_replay_disc_serial.empty() ? "replay" : s_replay_disc_serial.c_str();
+}
+
+/* P1 as the host would deliver it this frame: the armed route or debug
+ * override when there is one, else the device. */
+static void replay_live_p1(int override, uint16_t *buttons, uint8_t sticks[4]) {
+    sticks[0] = sticks[1] = sticks[2] = sticks[3] = 0x80u;
+    *buttons = 0xFFFFu;
+    if (override >= 0) { *buttons = (uint16_t)override; return; }
+    PsxNetPad pad;
+    if (g_headless || !capture_pad_slot(0, &pad)) return;
+    *buttons = pad.buttons;
+    sticks[0] = pad.lx; sticks[1] = pad.ly; sticks[2] = pad.rx; sticks[3] = pad.ry;
+}
+
+/* Once per vblank, after the route boundary: runs the scripted entry points
+ * and the replay boundary. Replaces *override with the replay's P1 word. */
+static void replay_frame_boundary(int *override) {
+    static int env_read = 0, exit_at_end = 0;
+    static const char *play_path = nullptr, *record_file = nullptr;
+    static long long record_at = -1, record_frames = 0, recorded = 0;
+    static uint64_t vblanks = 0;
+    static ReplayState previous = REPLAY_IDLE;
+    if (!env_read) {
+        env_read = 1;
+        play_path = g_replay_cli_path ? g_replay_cli_path : std::getenv("PSX_REPLAY_FILE");
+        if (play_path && !play_path[0]) play_path = nullptr;
+        record_file = std::getenv("PSX_REPLAY_RECORD_FILE");
+        if (record_file && !record_file[0]) record_file = nullptr;
+        if (const char *e = std::getenv("PSX_REPLAY_RECORD_AT")) record_at = std::atoll(e);
+        if (const char *e = std::getenv("PSX_REPLAY_RECORD_FRAMES")) record_frames = std::atoll(e);
+        const char *x = std::getenv("PSX_REPLAY_EXIT_AT_END");
+        exit_at_end = x && std::strcmp(x, "1") == 0;
+        g_replay_scripted_record = record_file != nullptr;
+    }
+    const uint64_t vb = vblanks++;
+    if (play_path) {
+        const char *path = play_path;
+        play_path = nullptr;
+        if (!replay_session_play_file(path) && exit_at_end) {
+            std::fflush(stdout);
+            psx_crash_trace_set_exit_origin("replay_not_played");
+            std::exit(4);
+        }
+    }
+    if (record_file && record_at >= 0 && (long long)vb == record_at) {
+        if (!replay_session_record_to(record_file) && exit_at_end) {
+            std::fflush(stdout);
+            psx_crash_trace_set_exit_origin("replay_not_recorded");
+            std::exit(5);
+        }
+    }
+    const ReplayState state = replay_session_state();
+    if (state == REPLAY_IDLE && previous == REPLAY_IDLE) return;
+    uint16_t live, b;
+    uint8_t live_sticks[4], s[4];
+    replay_live_p1(*override, &live, live_sticks);
+    if (replay_session_boundary(live, live_sticks, &b, s)) {
+        g_replay_p1_buttons = b;
+        std::memcpy(g_replay_p1_sticks, s, 4);
+        *override = b;
+        if (record_file && replay_session_state() == REPLAY_RECORDING &&
+            record_frames > 0 && ++recorded == record_frames)
+            replay_session_toggle_record();   /* ends on the next boundary */
+    }
+    const ReplayState now = replay_session_state();
+    if (exit_at_end && previous != REPLAY_IDLE && now == REPLAY_IDLE) {
+        int status = 0;
+        if (previous == REPLAY_RECORDING || previous == REPLAY_ARMING) {
+            FILE *written = record_file ? std::fopen(record_file, "rb") : nullptr;
+            status = written ? 0 : 5;
+            if (written) std::fclose(written);
+        } else {
+            const ReplayResult r = replay_session_last_result();
+            status = r == REPLAY_RESULT_IN_SYNC ? 0 : r == REPLAY_RESULT_OUT_OF_SYNC ? 3 : 4;
+        }
+        std::fflush(stdout);
+        psx_crash_trace_set_exit_origin("replay_end");
+        std::exit(status);
+    }
+    previous = now;
+}
+
 /* Called from gpu_vblank_tick() at each simulated vblank. */
 static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     NetplayVblankEpilogue ep{};
@@ -7083,6 +7332,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (override < 0) override = route_record_live_p1_word();
         input_route_session_record_input((uint16_t)override);
     }
+    replay_frame_boundary(&override);
 #else
     /* Production: skip debug server. Still need to advance frame counter
      * locally so anything else that reads it continues to work. */
@@ -7091,6 +7341,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     route_session_boundary();
     /* PSX_INPUT_ROUTE_FILE replay; -1 (live input) when no route is loaded. */
     int override = input_route_session_release_override();
+    replay_frame_boundary(&override);
 #endif
 
     {
@@ -7260,9 +7511,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     return ep;
                 }
 #ifndef PSX_NO_DEBUG_TOOLS
-                /* Route recording markers: F11 MENU, F12 GAMEPLAY. */
+                /* Route recording markers: Shift+F11 MENU, F12 GAMEPLAY.
+                 * Plain F11 is the player replay recorder (PS1B-191). */
                 if (!key_repeat && input_route_session_recording() &&
-                    (key == SDLK_F11 || key == SDLK_F12)) {
+                    ((key == SDLK_F11 && (mod & KMOD_SHIFT)) || key == SDLK_F12)) {
                     const bool menu = key == SDLK_F11;
                     input_route_session_request_marker(
                         menu ? INPUT_ROUTE_MARKER_MENU : INPUT_ROUTE_MARKER_GAMEPLAY);
@@ -7271,9 +7523,21 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 else
 #endif
                 if (!key_repeat &&
+                    host_keymap_match_event(HOST_KEYMAP_REPLAY_RECORD, (int)key,
+                                            (int)scancode, (int)mod)) {
+                    if (psx_rewind_is_open() || runtime_settings_menu_open ||
+                        savestate_menu_open)
+                        host_osd_push("Close the menu to record a replay", 1500);
+                    else
+                        replay_session_toggle_record();
+                }
+                else if (!key_repeat &&
                     host_keymap_match_event(HOST_KEYMAP_REWIND, (int)key,
                                             (int)scancode, (int)mod)) {
-                    psx_rewind_toggle();
+                    if (replay_session_state() != REPLAY_IDLE)
+                        host_osd_push("Rewind is off while a replay records or plays", 1500);
+                    else
+                        psx_rewind_toggle();
                 }
                 else if (!key_repeat &&
                          host_keymap_match_event(HOST_KEYMAP_SAVE_STATE_MENU,
@@ -13113,6 +13377,8 @@ int main(int argc, char** argv) {
             force_launcher = true;
         } else if (std::strcmp(argv[i], "--no-launcher") == 0) {
             force_no_launcher = true;
+        } else if (std::strcmp(argv[i], "--replay") == 0 && i + 1 < argc) {
+            g_replay_cli_path = argv[++i];
         } else if (std::strcmp(argv[i], "--headless") == 0) {
             g_headless = 1;
             force_no_launcher = true;
@@ -15604,6 +15870,9 @@ session_reboot:
      * Nothing is read or hashed unless one of them is set. */
     input_route_session_set_product(route_disc_serial.c_str(),
                                     disc_path_str.c_str(), bios_path_str.c_str());
+    s_replay_disc_serial = route_disc_serial;
+    /* A recording in progress is written from its last boundary at exit. */
+    std::atexit(replay_session_shutdown);
     /* Arm the text-image guard now that both possible sources are resolved:
      * the local EXE file (dev checkouts) and the disc image (every install). */
     if (game_config_path)
