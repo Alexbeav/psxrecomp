@@ -794,7 +794,7 @@ static void start_async_gpu_linked_list(void) {
  * register write raises its WRITE event, a frame return its FRAME_END DMA
  * event). Without it, dma_advance() serves the grid edges and a register
  * write serves itself. At a service point (spec 1.3): the MDEC decoder
- * advances by the elapsed cycles, then channels 0, 1, 2, 3, 4 and 6 each gain
+ * advances by the elapsed cycles (not at a register write, D18d), then channels 0, 1, 2, 3, 4 and 6 each gain
  * the elapsed cycles as allowance and take steps while the allowance is above
  * zero (the last step may overdraw). A positive remainder is discarded (spec
  * 2.2). Missed grid edges are served one by one (spec 1.4). Readiness is
@@ -805,9 +805,8 @@ static void start_async_gpu_linked_list(void) {
  * nothing from the list; D23 e's one-slice delay is the kick landing at another
  * grid phase (spec 11). [NOT FITTED: D18a] its misses were scored with one
  * global edge offset; re-score with the phase taken from register steps.
- * [OPEN: spec 1.3 vs D18d] advancing the decoder at a DMA register write moves
- * the MDEC status remaining-count one edge earlier in the D18d shape, where the
- * oracle rows show it unchanged; MADR1/CHCR are unchanged either way.
+ * [ORACLE FIXTURE D18d] a DMA register write serves the channels but does not
+ * advance the MDEC decoder (ruling on spec v2 1.3); see dsm_serve_at().
  */
 
 int source_gpu_runtime_active(void);
@@ -858,7 +857,7 @@ typedef struct {
 static DmaSrcMachine dsm[DSM_COUNT];
 static int dsm_spu_model;      /* SPU follows the GPU source profile (spu.c uses the same switch) */
 static uint32_t dsm_wait_live; /* upload read stall at the latest evaluation (spec 5.2) */
-static uint64_t dsm_mdec_clock; /* the latest service point; the source MDEC is clocked to it */
+static uint64_t dsm_mdec_clock; /* guest cycle the source MDEC has been advanced to */
 static int dsm_write_serviced; /* the current register write has had its service point */
 
 static void dsm_fail(const char *what) {
@@ -1209,9 +1208,24 @@ static void dsm_eval_halt_stall(void) {
     if (!dsm_cpu_owner()) g_dma_cpu_read_wait = wait;
 }
 
-/* One service point at `now` (spec 1.3; the GPU is already up to `now`). */
+/* The latest service point: every machine is served at each one. */
+static uint64_t dsm_service_clock(void) {
+    uint64_t c = 0;
+    for (int k = 0; k < DSM_COUNT; k++) if (dsm[k].served_until > c) c = dsm[k].served_until;
+    return c;
+}
+
+/* Set while a DMA register write brings the GPU and the machines up to it. */
+static int dsm_write_sync;
+
+/* One service point at `now` (spec 1.3; the GPU is already up to `now`).
+ * [ORACLE FIXTURE D18d] a DMA register write does not advance the MDEC
+ * decoder: in D18 group d a DMA5-MADR write, a timer-1 write and a no-op MDEC
+ * control write give timelines byte-identical to group a (reviewer ruling on
+ * spec v2 1.3; v3 corrects it). The channels are still served; grid edges and
+ * frame returns advance the decoder. */
 static void dsm_serve_at(uint64_t now) {
-    dsm_mdec_feed(now);
+    if (!(dsm_write_sync && now == psx_cycle_count && now % DSM_QUANTUM)) dsm_mdec_feed(now);
     for (int i = 0; i < DSM_COUNT; i++) dsm_service(dsm_order[i], now);
     dsm_eval_halt_stall();
 }
@@ -1220,12 +1234,13 @@ static void dsm_serve_at(uint64_t now) {
  * (spec 1.4). With nothing running and no source MDEC there is no state to
  * move, so the clock jumps to the last edge. */
 static void dsm_service_edges(uint64_t now) {
-    uint64_t e = dsm_mdec_clock - dsm_mdec_clock % DSM_QUANTUM + DSM_QUANTUM;
+    uint64_t clock = dsm_service_clock();
+    uint64_t e = clock - clock % DSM_QUANTUM + DSM_QUANTUM;
     if (e > now) return;
     if (!dsm_live_any() && !mdec_source_active()) {
         uint64_t last = now - now % DSM_QUANTUM;
         for (int k = 0; k < DSM_COUNT; k++) dsm[k].served_until = last;
-        dsm_mdec_clock = last;
+        if (last > dsm_mdec_clock) dsm_mdec_clock = last;
         dsm_eval_halt_stall();
         return;
     }
@@ -1235,7 +1250,7 @@ static void dsm_service_edges(uint64_t now) {
 /* A service point at `now`: missed edges first (spec 1.5), then `now` itself. */
 static void dsm_service_point(uint64_t now) {
     dsm_service_edges(now);
-    if (now > dsm_mdec_clock) dsm_serve_at(now);
+    if (now > dsm_service_clock()) dsm_serve_at(now);
     else dsm_eval_halt_stall();
 }
 
@@ -1344,8 +1359,10 @@ static int dsm_before_write(uint32_t *addrp, uint32_t *valp, uint32_t mask) {
     uint32_t addr = *addrp, val = *valp;
     if (!dsm_write_serviced) {
         dsm_write_serviced = 1;
+        dsm_write_sync = 1;
         if (source_gpu_runtime_active()) source_gpu_runtime_dma_write();
         else dsm_service_point(psx_cycle_count);
+        dsm_write_sync = 0;
     }
     if (addr == 0x1F8010F4u) {
         /* [ORACLE FIXTURE D14] DICR reads back 80FF803Fh after FFFFFFFFh. */
@@ -1408,7 +1425,7 @@ void dma_source_gpu_service_at(uint64_t cycle) {
  * so no grid edges are inserted between them. */
 void dma_source_gpu_service_at_exact(uint64_t cycle) {
     g_dma_exec_depth++;
-    if (cycle > dsm_mdec_clock) dsm_serve_at(cycle);
+    if (cycle > dsm_service_clock()) dsm_serve_at(cycle);
     else dsm_eval_halt_stall();
     g_dma_exec_depth--;
 }
@@ -1932,6 +1949,7 @@ void dma_init(void) {
     memset(dsm, 0, sizeof dsm);
     dsm_wait_live = 0;
     dsm_mdec_clock = psx_cycle_count;
+    for (int k = 0; k < DSM_COUNT; k++) dsm[k].served_until = psx_cycle_count;
     dsm_spu_model = gpu_upload_source_model;
     /* [ORACLE FIXTURE D8] every DMA register reads 0 at power-on in the source
      * profile (PSX-SPX documents DPCR = 07654321h). */
