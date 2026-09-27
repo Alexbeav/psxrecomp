@@ -38,6 +38,9 @@ int host_osd_needs_present(void);
  * deciding neither is active), call host_osd_present_done(). */
 int host_osd_image(const uint32_t **pixels, int *w, int *h);          /* text */
 int host_osd_volume_image(const uint32_t **pixels, int *w, int *h);   /* bar */
+/* Replay REC badge (top right): shown while visible is 1; the caller blinks it. */
+void host_osd_set_rec(int visible);
+int host_osd_rec_image(const uint32_t **pixels, int *w, int *h);
 void host_osd_present_done(void);
 
 /* Software / SDL_Renderer path: draw overlays over the current backbuffer. */

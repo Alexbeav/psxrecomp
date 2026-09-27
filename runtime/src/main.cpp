@@ -7252,6 +7252,7 @@ static void replay_live_p1(int override, uint16_t *buttons, uint8_t sticks[4]) {
 /* Once per vblank, after the route boundary: runs the scripted entry points
  * and the replay boundary. Replaces *override with the replay's P1 word. */
 static void replay_frame_boundary(int *override) {
+    host_osd_set_rec(replay_session_rec_visible((uint64_t)SDL_GetTicks()));
     static int env_read = 0, exit_at_end = 0;
     static const char *play_path = nullptr, *record_file = nullptr;
     static long long record_at = -1, record_frames = 0, recorded = 0;

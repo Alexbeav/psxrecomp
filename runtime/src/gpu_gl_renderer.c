@@ -4258,6 +4258,20 @@ static void gl_swap_with_osd(void) {
                 int vy = (wh > dh) ? ((wh - dh) / 2) : margin;
                 gl_draw_osd_image(px, ow, oh, dw, dh, vx, vy, ww, wh);
             }
+            if (host_osd_rec_image(&px, &ow, &oh) && px) {
+                /* The OSD draw does not blend, so the REC badge (transparent
+                 * background) is drawn as one solid quad per opaque run. */
+                const int rx = (ww > ow * ui + margin) ? (ww - ow * ui - margin) : margin;
+                for (int row = 0; row < oh; row++)
+                    for (int col = 0; col < ow;) {
+                        if ((px[row * ow + col] >> 24) == 0) { col++; continue; }
+                        int end = col;
+                        while (end < ow && (px[row * ow + end] >> 24) != 0) end++;
+                        gl_draw_osd_image(&px[row * ow + col], 1, 1, (end - col) * ui, ui,
+                                          rx + col * ui, margin + row * ui, ww, wh);
+                        col = end;
+                    }
+            }
             if (psx_rewind_overlay_image(&px, &ow, &oh) && px) {
                 float slide = psx_rewind_slide();
                 int dw = ww;
