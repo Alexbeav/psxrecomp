@@ -54,14 +54,17 @@ extern "C" {
  *      section (PS1B-211), and the DualShock power-on flag
  *      (pad_power_on_first) in the octoshock-digital sio tail (PS1B-215).
  * v12 = v11 with the CPU-owned load-value pipeline; CPU_EXEC load cells are
- *       reserved (PS1B-220). Test pin test-20260927-a-nodma. */
-#define BOOT_STATE_VERSION 12u
+ *       reserved (PS1B-220). Test pin test-20260927-a-nodma.
+ * v13 = v12 with the rewritten source-DMA machines (BS_SEC_DMA_SRC layout: seven
+ *       machines and the source MDEC clock, 296 bytes) (PS1B-186). Test pin
+ *       test-20260927-b-dma. */
+#define BOOT_STATE_VERSION 13u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v12 therefore rejects every earlier state. */
-#define BOOT_STATE_VERSION_MIN_READ 12u
+ * runtime's blob to a new loader. v13 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 13u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
