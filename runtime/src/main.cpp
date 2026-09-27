@@ -7551,14 +7551,17 @@ static void replay_live_p1(int override, uint16_t *buttons, uint8_t sticks[4]) {
 /* Diagnostic: PSX_REPLAY_FRAME_TIMES=FILE writes "vblank,us,state" per
  * vblank at exit, the host time between consecutive replay boundaries. */
 static std::vector<uint64_t> s_replay_frame_times;   /* us << 8 | state */
+static std::vector<uint64_t> s_replay_frame_cycles;  /* guest cycles << 1 | GPU PAL bit */
 static std::string s_replay_frame_times_path;
 static void replay_frame_times_write(void) {
     FILE *f = std::fopen(s_replay_frame_times_path.c_str(), "wb");
     if (!f) return;
-    std::fprintf(f, "vblank,us,state\n");
+    std::fprintf(f, "vblank,us,state,cycles,pal\n");
     for (size_t i = 0; i < s_replay_frame_times.size(); ++i)
-        std::fprintf(f, "%zu,%llu,%u\n", i, (unsigned long long)(s_replay_frame_times[i] >> 8),
-                     (unsigned)(s_replay_frame_times[i] & 0xFF));
+        std::fprintf(f, "%zu,%llu,%u,%llu,%u\n", i, (unsigned long long)(s_replay_frame_times[i] >> 8),
+                     (unsigned)(s_replay_frame_times[i] & 0xFF),
+                     (unsigned long long)(s_replay_frame_cycles[i] >> 1),
+                     (unsigned)(s_replay_frame_cycles[i] & 1));
     std::fclose(f);
 }
 static void replay_frame_times_tick(void) {
@@ -7570,6 +7573,7 @@ static void replay_frame_times_tick(void) {
         if (armed) {
             s_replay_frame_times_path = e;
             s_replay_frame_times.reserve(1u << 16);
+            s_replay_frame_cycles.reserve(1u << 16);
             std::atexit(replay_frame_times_write);
         }
         last = std::chrono::steady_clock::now();
@@ -7580,6 +7584,10 @@ static void replay_frame_times_tick(void) {
     const uint64_t us = (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(now - last).count();
     last = now;
     s_replay_frame_times.push_back(us << 8 | (uint64_t)replay_session_state());
+    static uint64_t last_cycle;
+    const uint64_t cyc = replay_host_cycle();
+    s_replay_frame_cycles.push_back((cyc - last_cycle) << 1 | (uint64_t)(gpu_video_standard_is_pal() ? 1 : 0));
+    last_cycle = cyc;
 }
 
 static void replay_frame_boundary(int *override) {
