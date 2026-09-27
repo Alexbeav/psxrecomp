@@ -168,6 +168,11 @@ if(BUILD_TESTING)
         target_include_directories(dma_otc_during_ll_test PRIVATE include)
         target_compile_options(dma_otc_during_ll_test PRIVATE -O2 -UNDEBUG)
         add_test(NAME dma_otc_during_ll_test COMMAND dma_otc_during_ll_test)
+        add_executable(dma_source_spec2_test tests/test_dma_source_spec2.c src/dma_gpu_ll.c)
+        target_include_directories(dma_source_spec2_test PRIVATE include)
+        target_compile_options(dma_source_spec2_test PRIVATE -O2 -flto -fwhole-program -UNDEBUG)
+        target_link_options(dma_source_spec2_test PRIVATE -flto)
+        add_test(NAME dma_source_spec2_test COMMAND dma_source_spec2_test)
         # Source-profile GPU DMA controller fixtures (PS1B-186). Each negative must
         # stop the bounded profile with its [dma-model] diagnostic (exit 2).
         foreach(_dma_src upload linked_list)
@@ -182,9 +187,13 @@ if(BUILD_TESTING)
             target_compile_definitions(${_target} PRIVATE PSX_TEST_SOURCE_GPU_IMPLEMENTED)
             if(_dma_src STREQUAL "linked_list")
                 target_compile_definitions(${_target} PRIVATE PSX_TEST_SOURCE_LL_IMPLEMENTED)
-                set(_negatives parser draw reverse address replace dpcr capture)
+                # SPEC-PS1B-186-DMA-BEHAVIOUR-v2: a start address with bit 23 is a bus
+                # error (3.2) and live MADR/DPCR writes are accepted (7.2, 7.8).
+                set(_negatives parser draw reverse capture)
             else()
-                set(_negatives no-upload short-upload reverse chopped replace dpcr capture)
+                # The spec defines GPU-to-RAM uploads (6.5), chopping (2.3) and live
+                # MADR/DPCR writes (7.2, 7.8); none may stop the run.
+                set(_negatives no-upload short-upload capture)
             endif()
             target_compile_options(${_target} PRIVATE -O2 -flto -fwhole-program)
             target_link_options(${_target} PRIVATE -flto)

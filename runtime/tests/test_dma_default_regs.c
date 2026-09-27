@@ -73,7 +73,8 @@ static void kick(uint32_t base, uint32_t madr, uint32_t bcr, uint32_t chcr) {
     dma_write(base, madr); dma_write(base + 4, bcr); dma_write(base + 8, chcr);
 }
 static void fresh(void) {
-    dma_init(); memset(ram, 0, sizeof ram); psx_cycle_count = 0; psx_next_service_cycle = 0;
+    psx_cycle_count = 0; psx_next_service_cycle = 0;
+    dma_init(); memset(ram, 0, sizeof ram);
     dma_write(0x1F8010F0, 0x0FEDCBA9u);
 }
 int main(void) {
