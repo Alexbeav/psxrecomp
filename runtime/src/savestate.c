@@ -72,6 +72,7 @@ static int      s_anchor_pending = 0;
 static int      s_anchor_result = 0;   /* 1 done, -1 failed, 0 none */
 static uint8_t *s_anchor_blob = NULL;
 static size_t   s_anchor_len = 0;
+static double   s_anchor_request_ms = 0.0;   /* when the anchor was asked for */
 /* A replay load: no slot toast; the replay reports its own result. */
 static int      s_quiet_load = 0;
 
@@ -752,6 +753,7 @@ int savestate_request_anchor(void) {
     s_anchor_result = 0;
     if (!request_save_inner(0)) return 0;
     s_anchor_pending = 1;
+    s_anchor_request_ms = savestate_mono_ms();
     return 1;
 }
 
@@ -772,6 +774,7 @@ int savestate_request_load_blob_quiet(const void* data, size_t size) {
     if (netplay_user_blocked()) return 0;
     if (!savestate_request_load_blob_protocol(data, size)) return 0;
     s_quiet_load = 1;
+    s_anchor_request_ms = savestate_mono_ms();
     return 1;
 }
 
@@ -880,8 +883,11 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_anchor_pending = 0;
             s_status_pending = 0;
             s_status_generation++;
-            if (!boot_state_save_buffer(&snap, s_bios_checksum, s_entry_pc, &buf, &len) ||
-                !savestate_request_load_blob_protocol(buf, len)) {
+            const double t_save0 = savestate_mono_ms();
+            const int saved = boot_state_save_buffer(&snap, s_bios_checksum, s_entry_pc, &buf, &len);
+            fprintf(stderr, "savestate: replay anchor wait=%.1f ms save=%.1f ms\n",
+                    t_save0 - s_anchor_request_ms, savestate_mono_ms() - t_save0);
+            if (!saved || !savestate_request_load_blob_protocol(buf, len)) {
                 free(buf);
                 s_anchor_result = -1;
                 s_status_last_ok = 0;
@@ -944,6 +950,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         s_load_pending = -1;
         char path[600];
         const double t_load0 = savestate_mono_ms();
+        if (quiet)
+            fprintf(stderr, "savestate: quiet load wait=%.1f ms\n", t_load0 - s_anchor_request_ms);
         double t_after_boot = t_load0;
         double t_after_frontend = t_load0;
         path[0] = '\0';
