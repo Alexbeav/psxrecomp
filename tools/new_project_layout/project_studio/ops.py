@@ -1144,6 +1144,29 @@ def op_probe_disc_refresh(root: Path, options: MigrateOptions) -> ApplyResult:
     )
 
 
+def _record_pins_via_git(root: Path, dst: Path, options: MigrateOptions) -> ApplyResult:
+    """Pure-Python pin snapshot: git rev-parse HEAD in each submodule."""
+    lines = []
+    for name in ("psxrecomp", "recomp-ui"):
+        sub = root / name
+        if not sub.is_dir():
+            continue
+        ok, out = _run(["git", "rev-parse", "HEAD"], sub, options.dry_run)
+        if ok and out:
+            short = out[:7] if not options.dry_run else "dryrun"
+            lines.append(f"{name}={short} ({out})")
+    if not lines:
+        return ApplyResult(
+            "record_framework_pins",
+            False,
+            "No psxrecomp submodule to record pins from",
+            [],
+        )
+    text = "\n".join(lines) + "\n"
+    _write(dst, text, options.dry_run)
+    return ApplyResult("record_framework_pins", True, "Wrote framework_pins.txt", ["framework_pins.txt"])
+
+
 def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult:
     record = None
     for base in (root / "psxrecomp", root / "psxrecomp-v4"):
@@ -1152,27 +1175,12 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
             record = cand
             break
     dst = root / "framework_pins.txt"
-    if record is None:
-        # Best-effort: git rev-parse in submodules
-        lines = []
-        for name in ("psxrecomp", "recomp-ui"):
-            sub = root / name
-            if not sub.is_dir():
-                continue
-            ok, out = _run(["git", "rev-parse", "HEAD"], sub, options.dry_run)
-            if ok and out:
-                short = out[:7] if not options.dry_run else "dryrun"
-                lines.append(f"{name}={short} ({out})")
-        if not lines:
-            return ApplyResult(
-                "record_framework_pins",
-                False,
-                "No psxrecomp submodule to record pins from",
-                [],
-            )
-        text = "\n".join(lines) + "\n"
-        _write(dst, text, options.dry_run)
-        return ApplyResult("record_framework_pins", True, "Wrote framework_pins.txt", ["framework_pins.txt"])
+    # Resolve bash through PATH. A bare "bash" given to CreateProcess on
+    # Windows searches System32 first and launches WSL's bash, which cannot
+    # see D:/ paths (and a CRLF checkout of the script breaks any bash).
+    bash = shutil.which("bash")
+    if record is None or bash is None:
+        return _record_pins_via_git(root, dst, options)
 
     if options.dry_run:
         return ApplyResult(
@@ -1182,7 +1190,8 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
             ["framework_pins.txt"],
         )
     proc = subprocess.run(
-        ["bash", str(record), "--root", str(root)],
+        # POSIX-style paths: Git Bash / MSYS2 read backslashes as escapes.
+        [bash, record.as_posix(), "--root", root.as_posix()],
         capture_output=True,
         text=True,
         check=False,
@@ -1190,12 +1199,8 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
     )
     body = (proc.stdout or "").strip()
     if proc.returncode != 0 and not body:
-        return ApplyResult(
-            "record_framework_pins",
-            False,
-            (proc.stderr or f"exit {proc.returncode}").strip(),
-            [],
-        )
+        # The script could not run here; the git fallback records the same pins.
+        return _record_pins_via_git(root, dst, options)
     if body:
         dst.write_text(body + "\n", encoding="utf-8")
     return ApplyResult(
