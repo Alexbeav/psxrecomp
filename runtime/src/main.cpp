@@ -7453,7 +7453,9 @@ extern "C" int replay_host_state_digest(uint32_t out[4]) {
     }();
     if (!s_replay_cpu || no_digests)
         return 0;
+    const auto t0 = std::chrono::steady_clock::now();
     out[0] = netplay_core_digest(s_replay_cpu);
+    const auto t1 = std::chrono::steady_clock::now();
     static int log_parts = -1;
     if (log_parts < 0) {
         const char *e = std::getenv("PSX_REPLAY_DIGEST_PARTS");
@@ -7466,9 +7468,20 @@ extern "C" int replay_host_state_digest(uint32_t out[4]) {
                      "dirty=%08x pc=%08x\n", p.cpu, p.clock_irq, p.timers, p.ram, p.dirty,
                      s_replay_cpu->pc);
     }
+    const auto t2 = std::chrono::steady_clock::now();
     out[1] = netplay_av_digest();
+    const auto t3 = std::chrono::steady_clock::now();
     out[2] = netplay_aux_digest();
+    const auto t4 = std::chrono::steady_clock::now();
     out[3] = netplay_baseline_ext_digest();
+    const auto t5 = std::chrono::steady_clock::now();
+    if (log_parts) {
+        auto us = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
+            return (long long)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+        };
+        std::fprintf(stdout, "replay_digest_us: core=%lld av=%lld aux=%lld ext=%lld\n",
+                     us(t0, t1), us(t2, t3), us(t3, t4), us(t4, t5));
+    }
     return 1;
 }
 
