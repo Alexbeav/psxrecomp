@@ -301,6 +301,43 @@ static int debt_discarded(void) {
     return 0;
 }
 
+/* Spec 1.8, 13 (D12 a, c, d): a DICR or DPCR rewrite, or a DMA5 MADR write,
+ * after an upload kick splits the allowance but never moves the completion,
+ * at every kick phase, for the 12x16 and 4x64 uploads. The completion cycle
+ * is compared with the run without the write (kick cycle matched). */
+static uint64_t upload_done(uint32_t phase, uint32_t ba, uint32_t bs, int x, uint32_t d) {
+    fresh(0x0FEDCBA9u);
+    run(phase);
+    kick(2, 0x10000, (ba << 16) | bs, 0x01000201);
+    uint64_t k = psx_cycle_count;
+    for (uint32_t t = 0; t < 4000; t++) {
+        if (t == d) {
+            if (x == 'a') dma_write(DICR, dicr & 0x00FFFFFFu);
+            else if (x == 'c') dma_write(DPCR, dpcr);
+            else if (x == 'd') dma_write(REG(5, 0), 0);
+        }
+        if (!(channels[2].chcr & (1u << 24))) return psx_cycle_count - k;
+        run(1);
+    }
+    return 0;
+}
+static int d12_kick_matched(void) {
+    static const uint32_t shapes[2][2] = { { 12, 16 }, { 4, 64 } };
+    static const uint32_t ds[5] = { 20, 40, 60, 90, 110 };
+    for (unsigned s = 0; s < 2; s++)
+        for (uint32_t phase = 0; phase < 128; phase++) {
+            uint64_t f = upload_done(phase, shapes[s][0], shapes[s][1], 'f', 0);
+            CHECK(f, "d12: %ux%u phase %u never completed", shapes[s][0], shapes[s][1], phase);
+            for (unsigned i = 0; i < 5; i++)
+                for (const char *x = "acd"; *x; x++) {
+                    uint64_t done = upload_done(phase, shapes[s][0], shapes[s][1], *x, ds[i]);
+                    CHECK(done == f, "d12 %c: %ux%u phase %u d %u: done %llu, f %llu", *x, shapes[s][0], shapes[s][1],
+                          phase, ds[i], (unsigned long long)done, (unsigned long long)f);
+                }
+        }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     set_option("PSX_INPUT_ROUTE_FILE", "authored-fixture");
     set_option("PSX_GPU_DMA_MODEL", "octoshock-2.2.2-bounded-quad");
@@ -321,6 +358,7 @@ int main(int argc, char **argv) {
         { "3.5 SPU count", spu_count_at_start },
         { "6.5 shapes", shapes_accepted },
         { "2.2 debt", debt_discarded },
+        { "1.8/13 D12 kick-matched", d12_kick_matched },
     };
     int failed = 0;
     if (argc == 2) {                                           /* one case, by index */
@@ -331,6 +369,6 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++)
         if (cases[i].fn()) { fprintf(stderr, "FAIL spec %s\n", cases[i].name); failed++; }
     if (failed) return 1;
-    puts("PASS spec v2: stop, DPCR, upload readiness/stall, frame return, list at a write, busy MADR, no restart, channel 5, CHCR mirror, bus error, SPU count, shapes, debt");
+    puts("PASS spec v2: stop, DPCR, upload readiness/stall, frame return, list at a write, busy MADR, no restart, channel 5, CHCR mirror, bus error, SPU count, shapes, debt, D12 kick-matched");
     return 0;
 }
