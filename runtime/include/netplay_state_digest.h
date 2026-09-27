@@ -62,6 +62,9 @@ typedef struct NetplaySioParts {
 void netplay_sio_digest_parts(NetplaySioParts *out);
 /* Baseline dig_c: crc(aux, cd, spad, dma, sio). Refuse doomed Replay. */
 uint32_t netplay_baseline_ext_digest(void);
+/* Same value, from an aux digest the caller already computed (saves the
+ * second SPU RAM pass when both are wanted). */
+uint32_t netplay_baseline_ext_digest_with_aux(uint32_t aux);
 
 #ifdef __cplusplus
 }

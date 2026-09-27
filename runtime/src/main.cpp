@@ -7473,7 +7473,7 @@ extern "C" int replay_host_state_digest(uint32_t out[4]) {
     const auto t3 = std::chrono::steady_clock::now();
     out[2] = netplay_aux_digest();
     const auto t4 = std::chrono::steady_clock::now();
-    out[3] = netplay_baseline_ext_digest();
+    out[3] = netplay_baseline_ext_digest_with_aux(out[2]);
     const auto t5 = std::chrono::steady_clock::now();
     if (log_parts) {
         auto us = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
