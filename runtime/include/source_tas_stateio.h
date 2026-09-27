@@ -43,8 +43,12 @@
  * lane-2 -> t172 when T172 (PS1B-102/182) changed what saved device state means
  * with the layout unchanged, e.g. GPU projection budget units (the first BIOS
  * quad saves -77025 before T172, -38832 after). "v10" is the boot-state format
- * version, which T172 did not change (PS1B-190). */
-#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v10-t172"
+ * version, which T172 did not change (PS1B-190).
+ * t172 -> v12-t172-test-a (test pin A, 2026-09-27): boot state v12; GPUREAD latch
+ * (PS1B-211), DualShock power-on flag (PS1B-215), GetlocL no-header marker
+ * (PS1B-212), SPU readback state (PS1B-213), clean MDEC state meaning
+ * (PS1B-188), CPU load-value pipeline (PS1B-220). */
+#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v12-t172-test-a"
 
 /* Guest RAM accessor (memory.c). Declared here so the manifest/digest call
  * sites — including C++ — share one C-linkage declaration. */

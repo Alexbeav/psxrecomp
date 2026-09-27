@@ -3508,8 +3508,8 @@
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
             " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v13 therefore rejects every earlier state. */",
-            "#define BOOT_STATE_VERSION_MIN_READ 13u"
+            " * runtime's blob to a new loader. v12 therefore rejects every earlier state. */",
+            "#define BOOT_STATE_VERSION_MIN_READ 12u"
           ]
         },
         {
@@ -5256,7 +5256,6 @@
         {
           "file": "runtime/src/mdec.c",
           "lines": [
-            "/* Host callbacks stay attached to this executable; only guest state is wired. */",
             "#define SOURCE_MDEC_WIRE_BYTES (905u+(source_mdec.block_cycles==512?4u:0u))",
             "#define SOURCE_MDEC_SCALARS(X) \\",
             "    X(in_at) X(in_count) X(out_at) X(out_count) X(command) X(control) \\",
@@ -5310,13 +5309,6 @@
           "file": "runtime/src/mdec.c",
           "lines": [
             "                 (uint64_t)mdec.output_size + (source_mdec_enabled?SOURCE_MDEC_WIRE_BYTES:0u);"
-          ]
-        },
-        {
-          "file": "runtime/src/mdec.c",
-          "lines": [
-            "    /* Preserve the absolute watermark, including the never-decoded sentinel. */",
-            "    (void)pst_w_u64(&w, mdec_last_color_decode_cycle);"
           ]
         },
         {
@@ -6993,6 +6985,14 @@
           "dropped_lines": 4,
           "from_blocks": 225,
           "to_blocks": 226
+        },
+        {
+          "as_of": "worktree on 2581bdcff144721d5b57730a1c964016e6715cd3",
+          "issue": "PS1B-102 test pin A",
+          "reason": "test pin A: BOOT_STATE_VERSION -> 12 and stateio id -> psx-tas-v12-t172-test-a; mdec.c comment lines removed by the PS1B-188 clean rewrite split out (code unchanged)",
+          "dropped_lines": 5,
+          "from_blocks": 226,
+          "to_blocks": 225
         }
       ],
       "contract_amendments": [
@@ -8232,7 +8232,7 @@
         {
           "file": "runtime/include/source_tas_stateio.h",
           "lines": [
-            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v10-t172\""
+            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v12-t172-test-a\""
           ]
         },
         {
@@ -8354,6 +8354,14 @@
             "63386735d",
             "ce8d32e59"
           ]
+        },
+        {
+          "as_of": "worktree on 2581bdcff144721d5b57730a1c964016e6715cd3",
+          "issue": "PS1B-102 test pin A",
+          "reason": "test pin A: BOOT_STATE_VERSION -> 12 and stateio id -> psx-tas-v12-t172-test-a; mdec.c comment lines removed by the PS1B-188 clean rewrite split out (code unchanged)",
+          "dropped_lines": 1,
+          "from_blocks": 12,
+          "to_blocks": 12
         }
       ]
     },
