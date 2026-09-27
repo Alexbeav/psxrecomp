@@ -16,5 +16,12 @@
     "sha256": "92084cc19c2b1c623ac8804eab3729dbafef34870674daf7180f6497c0e3fb8d",
     "rows": 432,
     "parent_sha256": "7ffe415609a69047c9a64702113a10a1e1229076a6efa9efdc0ecb1c699611fa"
+  },
+  {
+    "selection": "Exact and DC-only independently observed macroblocks; raw block bytes retained in rows, raster conversion independently checked.",
+    "parent_request_sha256": "91cff48b0ce4497e7aaf6fb1e4a205480e8cf84040b5980d4d02fb2fe917c1e9",
+    "rows": 2,
+    "file": "M12.tsv",
+    "sha256": "f6d90301fcad7fd1ccbb95dac973c6ec93f6be429eecaf3958e3c045c2fa3059"
   }
 ]

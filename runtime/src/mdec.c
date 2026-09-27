@@ -258,7 +258,8 @@ static int decode_rle_block_from(const uint16_t *encoded, int16_t *block,
     uint16_t entry = encoded[(*pos)++];
     unsigned q = entry >> 10;
     int product = sign_extend_10(entry) * quant[0];
-    block[0] = (int16_t)clamp_int(16 * product - 8 * coefficient_sign(product), -16384, 16383);
+    int dc = quant[0] ? 16 * product - 8 * coefficient_sign(product) : 32 * sign_extend_10(entry);
+    block[0] = (int16_t)clamp_int(dc, -16384, 16383);
     unsigned index = 0;
     while (*pos < end) {
         entry = encoded[(*pos)++];
@@ -266,7 +267,7 @@ static int decode_rle_block_from(const uint16_t *encoded, int16_t *block,
         if (index >= 64) break;
         int level = sign_extend_10(entry);
         product = level * quant[index] * (int)q;
-        int value = q ? 16 * floor_div(product, 8) - 8 * coefficient_sign(product) : 32 * level;
+        int value = q && quant[index] ? 16 * floor_div(product, 8) - 8 * coefficient_sign(product) : 32 * level;
         block[coefficient_order[index]] = (int16_t)clamp_int(value, -16384, 16383);
     }
     idct_block(block);
