@@ -7227,12 +7227,39 @@ extern "C" int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap) {
                                         psx_bios_hle_boot_skip_enabled(), why, cap);
 }
 
-extern "C" int replay_host_request_anchor(void) { return savestate_request_anchor(); }
+/* STOPGAP (PS1B-191): native and interpreted overlay code do not yet produce
+ * identical guest cycles, and background compiles switch tiers at wall-clock
+ * times, so a replay would depend on the overlay cache. Recording and playback
+ * both run overlays interpreted from the anchor on; the tier returns when the
+ * replay ends (replay_overlay_unpin_if_idle). */
+static int s_replay_native_saved = -1;
+static void replay_overlay_pin(void) {
+    if (s_replay_native_saved >= 0)
+        return;
+    s_replay_native_saved = overlay_loader_get_native_exec();
+    overlay_loader_set_native_exec(0);
+}
+static void replay_overlay_unpin_if_idle(void) {
+    if (s_replay_native_saved < 0 || replay_session_state() != REPLAY_IDLE)
+        return;
+    overlay_loader_set_native_exec(s_replay_native_saved);
+    s_replay_native_saved = -1;
+}
+
+extern "C" int replay_host_request_anchor(void) {
+    if (!savestate_request_anchor())
+        return 0;
+    replay_overlay_pin();
+    return 1;
+}
 extern "C" int replay_host_take_anchor(uint8_t **data, size_t *size) {
     return savestate_take_anchor(data, size);
 }
 extern "C" int replay_host_load_anchor(const void *data, size_t size) {
-    return savestate_request_load_blob_quiet(data, size);
+    if (!savestate_request_load_blob_quiet(data, size))
+        return 0;
+    replay_overlay_pin();
+    return 1;
 }
 extern "C" int replay_host_take_load_result(void) {
     if (savestate_take_load_completed()) return 1;
@@ -7311,6 +7338,18 @@ extern "C" int replay_host_state_digest(uint32_t out[4]) {
     if (!s_replay_cpu)
         return 0;
     out[0] = netplay_core_digest(s_replay_cpu);
+    static int log_parts = -1;
+    if (log_parts < 0) {
+        const char *e = std::getenv("PSX_REPLAY_DIGEST_PARTS");
+        log_parts = e && e[0] == '1';
+    }
+    if (log_parts) {   /* diagnostic: which core partition a divergence is in */
+        NetplayCoreParts p;
+        netplay_core_digest_parts(s_replay_cpu, &p);
+        std::fprintf(stdout, "replay_digest_parts: cpu=%08x clock_irq=%08x timers=%08x ram=%08x "
+                     "dirty=%08x pc=%08x\n", p.cpu, p.clock_irq, p.timers, p.ram, p.dirty,
+                     s_replay_cpu->pc);
+    }
     out[1] = netplay_av_digest();
     out[2] = netplay_aux_digest();
     out[3] = netplay_baseline_ext_digest();
@@ -7421,6 +7460,7 @@ static void replay_frame_boundary(int *override) {
         }
     }
     const ReplayState state = replay_session_state();
+    replay_overlay_unpin_if_idle();
     if (state == REPLAY_IDLE && previous == REPLAY_IDLE) return;
     uint16_t live, b;
     uint8_t live_sticks[4], s[4];
@@ -7434,6 +7474,7 @@ static void replay_frame_boundary(int *override) {
             replay_session_toggle_record();   /* ends on the next boundary */
     }
     const ReplayState now = replay_session_state();
+    replay_overlay_unpin_if_idle();
     if (fast_play) {   /* latched fast-forward only while a replay plays */
         const bool playing = now == REPLAY_LOADING || now == REPLAY_PLAYING;
         if (playing && fast_saved < 0) {

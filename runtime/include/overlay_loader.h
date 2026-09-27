@@ -49,6 +49,11 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr);
  * so a load mid-pass#1 that is visible at the start of pass#2 forks BB-edge
  * IRQ cadence (matched clocks, mismatched GPRs). */
 void overlay_loader_set_load_freeze(int freeze);
+
+/* Native overlay execution on (1, default) or all overlays interpreted (0).
+ * Replays pin 0 while they record or play (PS1B-191 stopgap). */
+void overlay_loader_set_native_exec(int on);
+int  overlay_loader_get_native_exec(void);
 int  overlay_loader_load_frozen(void);
 
 /* Drop the negative lazy-lookup memo (host-only). Call on snap restore so
