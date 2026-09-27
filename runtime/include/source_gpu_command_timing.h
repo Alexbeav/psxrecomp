@@ -2,7 +2,7 @@
  *
  * Policy (Alex, 2026-09-25, PS1B-182): in TAS/source mode GPU timing and
  * readiness follow the TAS oracle. Every value below is [ORACLE]: fitted to
- * the PS1B-182 oracle GPU logs (Z:/Share/psxrecomp/evidence/T172/
+ * the PS1B-182 oracle GPU logs (<evidence-root>/T172/
  * ps1b-182-oracle-gpu-logs-20260925/), observed behaviour only, and it
  * reproduces every logged charge of its class exactly. The route and row
  * counts behind each value are given next to it. The No$PSX "GPU Rendering
@@ -116,7 +116,7 @@ static inline int source_gpu_t_line(unsigned op, int reads_back, int dx, int dy,
  * Fill [ORACLE FIXTURE]: command charge 2 + 46 + per drawn row (9 + 2 per
  * 16-pixel chunk of the masked width). Interlaced drawing with draw-to-display
  * off draws half the rows. The authored oracle micro-fixtures fit exactly
- * (Z:/Share/psxrecomp/evidence/T172/ps1b-182-oracle-micro-fixtures-20260926,
+ * (<evidence-root>/T172/ps1b-182-oracle-micro-fixtures-20260926,
  * sha256 9f057a04...: 16x1 59, 32x1 61, 16x2 70, zero width 57 (the case
  * labelled 1024x1: its 10-bit width wraps to 0), 16x511
  * 5,669, 320x240 11,808, 640x480i 21,408 / 42,768), and so do the routes

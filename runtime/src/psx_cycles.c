@@ -649,7 +649,7 @@ void psx_cycles_reset_for_boot(void) {
  *
  * Latencies are not documented in PSX-SPX or No$PSX. They are oracle
  * observations: fixture set F1-F4-muldiv-gte, TSV sha256 5eb5d9959673a858...,
- * receipt set sha256 8b43a3fe95c8470d... (Z:/Share/psxrecomp/evidence/T172/
+ * receipt set sha256 8b43a3fe95c8470d... (<evidence-root>/T172/
  * clean-rewrite-fixtures-20260926). The fixture reports the extra cycles an
  * MFLO placed directly after the operation takes; the latency passed here is
  * that stall minus one, the same convention test_muldiv_deferred's measured
