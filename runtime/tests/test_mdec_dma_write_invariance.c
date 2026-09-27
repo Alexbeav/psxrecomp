@@ -1,14 +1,11 @@
-/* [ORACLE FIXTURE D18d] in the D18 group d shape (DMA0 kick, DMA1 kick 1000
- * cycles later), one access 300-396 cycles after the DMA0 kick leaves the
- * per-cycle MADR1, CHCR1 and CHCR0 timelines byte-identical, at all 128 kick
- * phases. The access is a service point (SPEC-PS1B-186-DMA-BEHAVIOUR-v2 1.1 b):
- * a DMA5 MADR/BCR/CHCR write, a DICR rewrite, or a bare service point; spec 1.8
- * (note on D18d) states that MADR1 is unchanged by it. [OPEN: spec 1.3 vs D18d]
- * D18d also shows the MDEC status timeline unchanged; advancing the decoder at
- * the write (spec 1.3 step 2) moves its remaining-count field one edge earlier
- * here, so the status word is not compared. Runtime schedule: dma_advance
- * every cycle.
- * Authored stream; no BIOS or disc. */
+/* [ORACLE FIXTURE D18d] one access 300-396 cycles after the DMA0 kick leaves
+ * the per-cycle MADR1, CHCR1, CHCR0 and MDEC status timelines byte-identical to
+ * the run without it, at all 128 kick phases, with DMA1 kicked 15 or 1000
+ * cycles after DMA0 (D18 groups a/d). The accesses: DMA5 MADR, BCR and CHCR
+ * writes and a DICR rewrite (service points that serve the channels but do not
+ * advance the MDEC decoder: reviewer ruling on spec v2 1.3), and a no-op MDEC
+ * control write (1F801824h = 60000000h). Runtime schedule: dma_advance every
+ * cycle. Authored stream; no BIOS or disc. */
 #define _POSIX_C_SOURCE 200809L
 #include "dma_gpu_ll.c"
 #include "dma.c"
@@ -98,11 +95,11 @@ static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) 
             else if (kind == 1) dma_write(0x1F8010D4, 0);
             else if (kind == 2) dma_write(0x1F8010D8, 0);
             else if (kind == 3) dma_write(0x1F8010F4, dma_read(0x1F8010F4) & 0x00FFFFFFu);
-            else dma_source_gpu_service_at(t);
+            else mdec_write(0x1f801824, 0x60000000u);
         }
         if (t >= t0) {
-            uint32_t row[3] = { dma_read(0x1f801090), dma_read(0x1f801098), dma_read(0x1f801088) };
-            for (int i = 0; i < 3; i++) h = (h ^ row[i]) * 1099511628211ull;
+            uint32_t row[4] = { dma_read(0x1f801090), dma_read(0x1f801098), dma_read(0x1f801088), mdec_read(0x1f801824) };
+            for (int i = 0; i < 4; i++) h = (h ^ row[i]) * 1099511628211ull;
         }
     }
     return h;
@@ -112,7 +109,7 @@ int main(void) {
     set_option("PSX_INPUT_ROUTE_FILE", "authored-fixture");
     set_option("PSX_GPU_DMA_MODEL", "octoshock-2.2.2-bounded-quad");
     for (uint32_t phase = 0; phase < 128; phase++) {
-        for (int late = 1; late < 2; late++) {                /* group d */
+        for (int late = 0; late < 2; late++) {
             uint64_t base = timeline(phase, late, 0, 0);
             static const int at[4] = { 300, 332, 364, 396 };
             for (int kind = 0; kind < 5; kind++) for (int i = 0; i < 4; i++)
@@ -122,7 +119,7 @@ int main(void) {
                 }
         }
     }
-    puts("PASS D18d shape: DMA5 MADR/BCR/CHCR, DICR and a bare service point leave MADR1/CHCR1/CHCR0 unchanged at all 128 phases");
+    puts("PASS D18d: DMA5 MADR/BCR/CHCR, DICR and a no-op MDEC control write leave the MADR1/CHCR and MDEC status timelines unchanged at all 128 phases");
     return 0;
 }
 
