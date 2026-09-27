@@ -7221,6 +7221,27 @@ extern "C" const char *replay_host_disc_serial(void) {
 static void replay_live_p1(int override, uint16_t *buttons, uint8_t sticks[4]) {
     sticks[0] = sticks[1] = sticks[2] = sticks[3] = 0x80u;
     *buttons = 0xFFFFu;
+    /* Determinism test only: PSX_REPLAY_TEST_INPUT_SEED drives a scripted
+     * recording with pseudo-random D-pad and face-button presses that change
+     * every 8 frames (never Start/Select). */
+    static int seed_read = 0;
+    static uint32_t seed = 0, frame = 0;
+    static uint16_t word = 0xFFFFu;
+    if (!seed_read) {
+        seed_read = 1;
+        if (const char *e = std::getenv("PSX_REPLAY_TEST_INPUT_SEED")) seed = (uint32_t)std::strtoul(e, nullptr, 10);
+    }
+    if (seed && g_replay_scripted_record && replay_session_state() != REPLAY_IDLE &&
+        replay_session_state() != REPLAY_PLAYING && replay_session_state() != REPLAY_LOADING) {
+        if (frame++ % 8u == 0u) {
+            seed = seed * 1664525u + 1013904223u;
+            const uint16_t held = (uint16_t)((1u << (4u + (seed >> 28) % 4u)) |
+                                             (1u << (12u + (seed >> 24) % 4u)));
+            word = (seed >> 20) & 1u ? (uint16_t)~held : 0xFFFFu;
+        }
+        *buttons = word;
+        return;
+    }
     if (override >= 0) { *buttons = (uint16_t)override; return; }
     PsxNetPad pad;
     if (g_headless || !capture_pad_slot(0, &pad)) return;
