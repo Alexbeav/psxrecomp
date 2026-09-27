@@ -1516,9 +1516,7 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
             import _ctypes
             import ctypes
             import shutil
-            gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-                   if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-                   else shutil.which('gcc'))
+            gcc = shutil.which('gcc')
             assert gcc and os.path.isfile(gcc), "real loaded-DLL regression needs MinGW gcc"
             with tempfile.TemporaryDirectory() as tmp:
                 # The actual host compiler must export the same 64-bit identity
@@ -2224,9 +2222,7 @@ def check_candidate_capacity_publication():
     if os.name == 'nt':
         # Exact pairs racing to distinct names may both commit: the namespace
         # lock makes the second writer observe the first pair's dedup identity.
-        gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-               if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-               else shutil.which('gcc'))
+        gcc = shutil.which('gcc')
         assert gcc and os.path.isfile(gcc)
         with tempfile.TemporaryDirectory() as tmp:
             pair_id = 0x1020304050607080
@@ -3126,9 +3122,7 @@ def check_tcc_runtime_define_parity():
 
 def check_real_batched_fragment_publication(recompiler):
     """A poorer same-byte pair stays intact while one richer supplement wins."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = shutil.which('gcc')
     if not gcc:
         return
 
@@ -3212,9 +3206,7 @@ def check_real_batched_fragment_publication(recompiler):
 
 def check_real_hosted_fragment_publication(recompiler):
     """Only exact cached-owner identity may authorize a hosted alias pair."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = shutil.which('gcc')
     if not gcc:
         return
     data = bytearray(0x100)
@@ -3437,9 +3429,7 @@ def check_observed_dispatch_fragment_recovery():
 
 def check_observed_dispatch_cli_recovery(recompiler):
     """An empty shared seed set still recovers once, with byte-variant guards."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = shutil.which('gcc')
     if not gcc:
         return
     data, entry, cap = make_observed_orphan_capture()
@@ -3519,9 +3509,7 @@ def check_observed_dispatch_cli_recovery(recompiler):
 
 def check_full_hosted_fixed_point(recompiler):
     """A clean two-variant CLI build must make its second run a true no-op."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = shutil.which('gcc')
     if not gcc:
         return
     host = LOAD
@@ -3636,9 +3624,7 @@ def check_full_hosted_fixed_point(recompiler):
 
 def check_full_candidate_cli_fastpath(recompiler):
     """An already-full single-tier cache must bypass every compile recipe."""
-    gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
-           if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
-           else shutil.which('gcc'))
+    gcc = shutil.which('gcc')
     if not gcc:
         return
     with tempfile.TemporaryDirectory() as td:
