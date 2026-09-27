@@ -3508,8 +3508,8 @@
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
             " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v11 therefore rejects every earlier state. */",
-            "#define BOOT_STATE_VERSION_MIN_READ 11u"
+            " * runtime's blob to a new loader. v13 therefore rejects every earlier state. */",
+            "#define BOOT_STATE_VERSION_MIN_READ 13u"
           ]
         },
         {
@@ -3586,7 +3586,7 @@
             "#include \"pst_wire.h\"",
             "",
             "/* Architectural registers plus guest-clock pipeline timing, without pointers. */",
-            "#define CPU_STATE_WIRE_BYTES 580u",
+            "#define CPU_STATE_WIRE_BYTES 592u",
             "static inline int cpu_state_wire_write(uint8_t *out, const CPUState *cpu) {",
             "    PstW w; pst_w_init(&w, out, CPU_STATE_WIRE_BYTES);",
             "    for (unsigned i=0;i<32;i++) pst_w_u32(&w,cpu->gpr[i]);",
@@ -3598,10 +3598,15 @@
             "    pst_w_bytes(&w,cpu->read_absorb,33);",
             "    pst_w_u8(&w,cpu->read_absorb_which); pst_w_u8(&w,cpu->read_fudge);",
             "    pst_w_u8(&w,cpu->ld_which_t); pst_w_u32(&w,cpu->ld_absorb);",
+            "    pst_w_u32(&w,cpu->load_value_rt); pst_w_u32(&w,cpu->load_value);",
+            "    pst_w_u32(&w,cpu->load_value_age);",
             "    return w.written==CPU_STATE_WIRE_BYTES;",
             "}",
             "static inline int cpu_state_wire_read(const uint8_t *in, uint32_t len, CPUState *cpu) {",
             "    if(len!=CPU_STATE_WIRE_BYTES || in[573]>32u || in[574]>32u || in[575]>32u) return 0;",
+            "    PstR tail; uint32_t rt, value, age; pst_r_init(&tail,in+580,12);",
+            "    pst_r_u32(&tail,&rt); pst_r_u32(&tail,&value); pst_r_u32(&tail,&age);",
+            "    if(rt>31u || age>1u || (!rt && age)) return 0;",
             "    PstR r; pst_r_init(&r,in,len);",
             "    for (unsigned i=0;i<32;i++) pst_r_u32(&r,&cpu->gpr[i]);",
             "    pst_r_u32(&r,&cpu->pc); pst_r_u32(&r,&cpu->hi); pst_r_u32(&r,&cpu->lo);",
@@ -3612,6 +3617,7 @@
             "    pst_r_bytes(&r,cpu->read_absorb,33);",
             "    pst_r_u8(&r,&cpu->read_absorb_which); pst_r_u8(&r,&cpu->read_fudge);",
             "    pst_r_u8(&r,&cpu->ld_which_t); pst_r_u32(&r,&cpu->ld_absorb);",
+            "    cpu->load_value_rt=rt; cpu->load_value=value; cpu->load_value_age=age;",
             "    return 1;",
             "}",
             "#endif"
@@ -4565,17 +4571,15 @@
             "    pst_w_u32(&w,s_checkpoint.active); pst_w_u32(&w,s_checkpoint.pc);",
             "    pst_w_u32(&w,s_checkpoint.slot); pst_w_u32(&w,s_checkpoint.target);",
             "    pst_w_u32(&w,s_checkpoint.taken);",
-            "    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_rt : 0u);",
-            "    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_val : 0u);",
-            "    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_age : 0u);",
-            "    pst_w_u32(&w,s_ld_pend_armed ? 1u : 0u);",
+            "    /* Value pipeline belongs to CPU_STATE, never process-global continuation. */",
+            "    for (unsigned i=0;i<4;i++) pst_w_u32(&w,0u);",
             "}",
             "static int checkpoint_parse(const uint8_t *in,uint32_t len,uint32_t v[9]) {",
             "    PstR r;",
             "    if(len!=DIRTY_RAM_CHECKPOINT_BYTES)return 0;",
             "    pst_r_init(&r,in,len);",
             "    for(unsigned i=0;i<9;i++)if(!pst_r_u32(&r,&v[i]))return 0;",
-            "    if(v[0]>1u || v[2]>1u || v[4]>1u || v[5]>31u || v[7]>1u || v[8]>1u ||",
+            "    if(v[0]>1u || v[2]>1u || v[4]>1u || (v[5]|v[6]|v[7]|v[8]) ||",
             "       (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4])))return 0;",
             "    return 1;",
             "}",
@@ -4587,7 +4591,6 @@
             "    if (!checkpoint_parse(in,len,v)) return 0;",
             "    s_checkpoint.active=v[0];s_checkpoint.pc=v[1];s_checkpoint.slot=v[2];",
             "    s_checkpoint.target=v[3];s_checkpoint.taken=v[4];",
-            "    s_ld_pend_rt=v[5];s_ld_pend_val=v[6];s_ld_pend_age=v[7];s_ld_pend_armed=(int)v[8];",
             "    s_checkpoint_resume=(int)v[0];",
             "    return 1;",
             "}",
@@ -6990,6 +6993,29 @@
           "dropped_lines": 4,
           "from_blocks": 225,
           "to_blocks": 226
+        }
+      ],
+      "contract_amendments": [
+        {
+          "date": "2026-09-27",
+          "issue": "PS1B-220",
+          "coordination": "PS1B-102",
+          "source_revision": "8d49501a20466f52a04dc46869b6370f67d821d5",
+          "source_tree": "dfd359eac5b722dfb2cc920a45d0d515c619e2e2",
+          "replaced_block_indices_zero_based": [
+            1,
+            6,
+            66
+          ],
+          "preserved_blocks": 223,
+          "reason": "Bind the existing provisional read floor13,592-byte CPU_STATE pending-load fields and zero-reserved CPU_EXEC cells to reviewed authored state-contract evidence. No source or version changes.",
+          "evidence_package_sha256": "37df9f1f2b9caeee12c7343df39e1647ca09538519b77a39274d5fbd0167a637",
+          "evidence_manifest_sha256": "de0e4e569b28176fe65d47f6323effd82f54202cd33b1acf7d32534e90c6df18",
+          "replacement_proposal_sha256": "a42f0782ef71d1d39d61f47978e0d3ed12077f065d0a7ef0705e65ad88c173bc",
+          "review": "PERF220-STATE-CONTRACT-REVIEW.md, PS1B-224,2026-09-27, accepted for separately named registry amendment only",
+          "evidence_scope": "Actual CPU wire round trips for pending ages0/1 and1198 rejected reads per mode preserve CPU bytes. Actual continuation parser rejects each nonzero reserved cell and truncations without changing continuation/resume. Loader rejects versions0..12 without changing CPU/continuation/resume. Authored guest LW/BEQ produces age1 pending99 while branch retains41; capture follows production boundary callback; same/fresh restores produce slot99 and target1234.",
+          "limits": "Only dirty_ram_interp.c,boot_state.c and driver rebuilt at O0/O2 with assertions; other objects retain Release/O3. Rejections do not compare every device/memory byte. Named authored pre-slot capture does not prove arbitrary observer safety, natural frontend cadence or complete device restore. Existing profile warnings remain. Historical qualified_tree,note,repins and two known_absent debts are preserved and not relabelled. No retail/performance/Tier3 qualification, setup retry, final version allocation or source-pin approval follows.",
+          "next_gate": "Independent review of named registry-only successor and explicit A1/successor pair before separately released unmeasured preflight."
         }
       ]
     },
