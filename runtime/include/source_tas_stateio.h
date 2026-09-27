@@ -49,8 +49,10 @@
  * (PS1B-212), SPU readback state (PS1B-213), clean MDEC state meaning
  * (PS1B-188), CPU load-value pipeline (PS1B-220).
  * v12-t172-test-a -> v13-t172-test-b (test pin B): boot state v13; source-DMA
- * wire rewritten (PS1B-186). */
-#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v13-t172-test-b"
+ * wire rewritten (PS1B-186).
+ * v13-t172-test-b -> v14-t172-test-b2: PS1B-186 spec v2 changes what the source-DMA
+ * fields mean (served_until, link) with the layout unchanged. */
+#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v14-t172-test-b2"
 
 /* Guest RAM accessor (memory.c). Declared here so the manifest/digest call
  * sites — including C++ — share one C-linkage declaration. */

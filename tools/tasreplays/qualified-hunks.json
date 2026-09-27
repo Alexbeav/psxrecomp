@@ -3509,8 +3509,8 @@
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
             " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v13 therefore rejects every earlier state. */",
-            "#define BOOT_STATE_VERSION_MIN_READ 13u"
+            " * runtime's blob to a new loader. v14 therefore rejects every earlier state. */",
+            "#define BOOT_STATE_VERSION_MIN_READ 14u"
           ]
         },
         {
@@ -6862,6 +6862,14 @@
           "dropped_lines": 140,
           "from_blocks": 225,
           "to_blocks": 224
+        },
+        {
+          "as_of": "worktree on 2da8fef246085e7416dbb6a28c6f7e024a7581bc",
+          "issue": "PS1B-186 spec v2 (stage B2)",
+          "reason": "BOOT_STATE_VERSION 13 -> 14 and stateio id -> psx-tas-v14-t172-test-b2",
+          "dropped_lines": 2,
+          "from_blocks": 224,
+          "to_blocks": 224
         }
       ],
       "contract_amendments": [
@@ -8101,7 +8109,7 @@
         {
           "file": "runtime/include/source_tas_stateio.h",
           "lines": [
-            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v13-t172-test-b\""
+            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v14-t172-test-b2\""
           ]
         },
         {
@@ -8236,6 +8244,14 @@
           "as_of": "worktree on fa90ad9eebe8b82d2ff1ee5cec8166d843bb2542",
           "issue": "PS1B-102 test pin B",
           "reason": "test pin B: BOOT_STATE_VERSION -> 13 and stateio id -> psx-tas-v13-t172-test-b",
+          "dropped_lines": 1,
+          "from_blocks": 12,
+          "to_blocks": 12
+        },
+        {
+          "as_of": "worktree on 2da8fef246085e7416dbb6a28c6f7e024a7581bc",
+          "issue": "PS1B-186 spec v2 (stage B2)",
+          "reason": "BOOT_STATE_VERSION 13 -> 14 and stateio id -> psx-tas-v14-t172-test-b2",
           "dropped_lines": 1,
           "from_blocks": 12,
           "to_blocks": 12
