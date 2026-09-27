@@ -1332,3 +1332,11 @@ if(BUILD_TESTING)
     add_test(NAME load_delay_l1_precise_matrix COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1_matrix.py --precise)
 endif()
+
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
+    add_test(NAME orphan_jump_target_codegen
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_orphan_jump_target_codegen.py"
+            --cc ${CMAKE_C_COMPILER}
+            --bios-emitter $<TARGET_FILE:full_function_emitter_test>)
+endif()

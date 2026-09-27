@@ -514,11 +514,6 @@ bool FullFunctionEmitter::emit_function(
             branch_decls += fmt::format("    uint32_t psx_jrt_{:08X} = 0;\n", pb.terminator_addr);
         }
     }
-    for (uint32_t addr : orphaned_delay_slots) {
-        const uint32_t raw=addr_to_raw.at(addr);
-        if ((raw>>26)==0u && ((raw&63u)==8u || (raw&63u)==9u))
-            branch_decls += fmt::format("    uint32_t psx_jrt_{:08X} = 0;\n", addr);
-    }
 
     // T110 — exact-EPC resume points.
     //

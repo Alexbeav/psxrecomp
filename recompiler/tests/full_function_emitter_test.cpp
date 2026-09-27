@@ -297,6 +297,40 @@ int main(int argc, char** argv) {
     FunctionDiscovery::set_address_model(&model);
     FullFunctionEmitter::set_address_model(&model);
 
+    if (argc == 3 && std::string(argv[2]) == "orphan-targets") {
+        config.address_copies.clear();
+        BiosAddressModel rom_model = BiosAddressModel::from_config(config);
+        FunctionDiscovery::set_address_model(&rom_model);
+        FullFunctionEmitter::set_address_model(&rom_model);
+        for (const std::string name : {"orphan-jr", "orphan-jalr", "complete-jr",
+                                      "complete-jalr", "orphan-j", "orphan-jalr-link"}) {
+            const bool link = name.find("jalr") != std::string::npos;
+            const bool direct = name == "orphan-j";
+            const bool read_link = name == "orphan-jalr-link";
+            const bool complete = name.find("complete") == 0;
+            const uint32_t jump = link ? 0x0100F809u : direct ? 0x0BF00010u : 0x01000008u;
+            const uint32_t slot = read_link ? 0x03E08021u : direct ? 0x24100009u : 0x24080007u;
+            std::vector<uint8_t> rom;
+            for (uint32_t word : {0x3C08BFC0u, 0x35080040u, jump, slot}) append_word(rom, word);
+            DiscoveryResult discovery{}; discovery.ok = true;
+            discovery.functions = {function_at(kBase, kBase + (complete ? 12u : 8u), {kBase})};
+            if (!complete) discovery.functions.push_back(function_at(kBase + 12u, kBase + 12u, {kBase + 12u}));
+            const auto path = std::filesystem::path(argv[1]) / name;
+            std::filesystem::create_directories(path);
+            const auto stats = FullFunctionEmitter::emit(rom, kBase, kBase + 15u,
+                discovery, "authored orphan target declaration", path.string(), "Test");
+            expect(stats.functions_emitted == (complete ? 1u : 2u) && stats.functions_skipped == 0 &&
+                   stats.functions_interpreted == 0, "orphan target fixture is generated, never fallback");
+            std::ofstream data(path / "authored-rom.bin", std::ios::binary);
+            data.write(reinterpret_cast<const char*>(rom.data()), rom.size());
+            std::ofstream admission(path / "admission.json");
+            admission << "{\"emitted\":" << stats.functions_emitted
+                      << ",\"skipped\":" << stats.functions_skipped
+                      << ",\"interpreted\":" << stats.functions_interpreted << "}\n";
+        }
+        return failures ? 1 : 0;
+    }
+
     if (argc == 3 && std::string(argv[2]).rfind("rom-irq", 0) == 0) {
         config.address_copies.clear();
         BiosAddressModel rom_model = BiosAddressModel::from_config(config);
