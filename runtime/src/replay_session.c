@@ -488,7 +488,11 @@ int replay_session_play_file(const char *path)
         fprintf(stderr, "replay: recorded on build %s, this is %s\n", meta.pin, product.pin);
     } else if (differs[0]) {
         char msg[640];
-        snprintf(msg, sizeof msg, "Replay settings differ: %s", differs);
+        /* Only settings playback cannot switch are listed (the others are
+         * switched for playback and restored after, so they are not news). */
+        /* Only settings playback cannot switch are listed (the others are
+         * switched for playback and restored after, so they are not news). */
+        snprintf(msg, sizeof msg, "Replay may go out of sync: different %s", differs);
         replay_host_osd(msg, 2600);
     } else {
         replay_host_osd("Replay playing", 1200);

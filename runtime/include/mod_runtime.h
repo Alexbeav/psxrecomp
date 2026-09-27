@@ -23,6 +23,8 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path = {},
  * now (no synced mod plans). */
 bool mod_runtime_clear_for_netplay(std::string* error = nullptr);
 const std::string& mod_runtime_fingerprint();
+/* The enabled mods a replay must match (PS1B-191); "none" when there are none. */
+std::string mod_runtime_replay_fingerprint();
 const std::filesystem::path& mod_runtime_effective_disc_path();
 
 #if defined(RECOMP_LAUNCHER)

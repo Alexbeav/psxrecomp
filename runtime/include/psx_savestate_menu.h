@@ -13,6 +13,8 @@ void psx_savestate_menu_set_state(int open, int selected_slot);
 void psx_savestate_menu_note_slots_changed(void);
 /* 1 shows the Replays page (PS1B-191) instead of the save-state slots. */
 void psx_savestate_menu_set_replays(int replays);
+/* A message drawn inside the menu (the menu covers the OSD); "" clears it. */
+void psx_savestate_menu_set_notice(const char *text);
 /* The renderer historically owns the full-screen save-state bitmap through
  * this module. Reuse that single overlay plane for the paused runtime menu so
  * GL/Vulkan/software all present identical host UI. Only one panel opens at a

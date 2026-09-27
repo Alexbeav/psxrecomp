@@ -66,12 +66,13 @@ int replay_host_take_load_result(void) {
 }
 static char settings_now[256] = "cd_speed=1\n", settings_saved[256], settings_applied[256];
 static int restores;
+static char stub_differs[64];      /* settings the host could not switch */
 void replay_host_settings_capture(char *out, size_t cap) { snprintf(out, cap, "%s", settings_now); }
 void replay_host_settings_apply(const char *s, char *differs, size_t cap) {
     snprintf(settings_saved, sizeof settings_saved, "%s", settings_now);
     snprintf(settings_applied, sizeof settings_applied, "%s", s);
     snprintf(settings_now, sizeof settings_now, "%s", s);
-    differs[0] = 0; (void)cap;
+    snprintf(differs, cap, "%s", stub_differs);
 }
 void replay_host_settings_restore(void) { snprintf(settings_now, sizeof settings_now, "%s", settings_saved); restores++; }
 const uint8_t *replay_host_ram(void) { return ram; }
@@ -264,6 +265,15 @@ static void test_identity(void) {
     CHECK(strstr(osd_last, "different build") != NULL, "build warning: %s", osd_last);
     for (unsigned i = 0; i < 30 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
     snprintf(product_pin, sizeof product_pin, "0123456789abcdef0123456789abcdef01234567");
+    /* Settings the host switches say nothing; one it cannot switch is named. */
+    osd_last[0] = 0;
+    CHECK(replay_session_play_slot(0) && !strcmp(osd_last, "Replay playing"), "switched settings: plain start (%s)", osd_last);
+    for (unsigned i = 0; i < 30 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
+    snprintf(stub_differs, sizeof stub_differs, "enabled mods");
+    CHECK(replay_session_play_slot(0), "plays with different mods");
+    CHECK(strstr(osd_last, "may go out of sync") && strstr(osd_last, "enabled mods"), "mods warning: %s", osd_last);
+    for (unsigned i = 0; i < 30 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
+    stub_differs[0] = 0;
     /* Another game: refused. */
     snprintf(product_serial, sizeof product_serial, "SLUS-00002");
     CHECK(!replay_session_play_slot(0), "another disc is refused");

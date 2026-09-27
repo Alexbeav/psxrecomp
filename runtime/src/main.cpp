@@ -6199,6 +6199,7 @@ static int hotkey_pad_binding_down(int binding) {
 }
 
 static int savestate_menu_open = 0;
+static uint32_t savestate_menu_notice_until;   /* in-menu notice expiry (PS1B-191) */
 static int savestate_menu_slot = 0;
 static int savestate_menu_ignore_toggle_release = 0;
 static SDL_Keycode savestate_menu_open_key = 0;
@@ -6508,6 +6509,8 @@ static void savestate_menu_sync_overlay(void) {
 }
 
 static void savestate_menu_close(void) {
+    savestate_menu_notice_until = 0;
+    psx_savestate_menu_set_notice("");
     savestate_menu_open = 0;
     savestate_menu_sync_overlay();
     host_osd_push("Save states closed", 800);
@@ -6649,9 +6652,27 @@ static int savestate_menu_replays;
 static int savestate_menu_delete_armed = -1;
 static uint32_t savestate_menu_delete_armed_ms;
 
+/* The menu covers the OSD, so while it is open a message is also drawn in the
+ * menu's own notice line until it expires (savestate_menu_poll_nav). */
+static void savestate_menu_notice(const char *msg, int ms) {
+    host_osd_push(msg, ms);
+    if (!savestate_menu_open)
+        return;
+    psx_savestate_menu_set_notice(msg);
+    savestate_menu_notice_until = SDL_GetTicks() + (uint32_t)ms;
+    if (!savestate_menu_notice_until)
+        savestate_menu_notice_until = 1;
+}
+
+static void savestate_menu_notice_clear(void) {
+    savestate_menu_notice_until = 0;
+    psx_savestate_menu_set_notice("");
+}
+
 static void savestate_menu_set_page(int replays) {
     savestate_menu_replays = replays ? 1 : 0;
     savestate_menu_delete_armed = -1;
+    savestate_menu_notice_clear();
     psx_savestate_menu_set_replays(savestate_menu_replays);
     savestate_menu_sync_overlay();
 }
@@ -6661,14 +6682,15 @@ static void savestate_menu_replay_action(int action) {
     char msg[160];
     if (!replay_session_slot_exists(slot)) {
         snprintf(msg, sizeof(msg), "Replay %d is empty", slot + 1);
-        host_osd_push(msg, 1200);
+        savestate_menu_notice(msg, 1500);
         return;
     }
     if (action == 0) {
         if (psx_netplay_active()) {
-            host_osd_push("Replays are unavailable during netplay", 1500);
+            savestate_menu_notice("Replays are unavailable during netplay", 1800);
             return;
         }
+        savestate_menu_notice_clear();
         savestate_menu_open = 0;
         savestate_menu_sync_overlay();
         savestate_input_guard_arm();
@@ -6680,9 +6702,9 @@ static void savestate_menu_replay_action(int action) {
             const char *base2 = strrchr(path, '\\');
             if (!base || (base2 && base2 > base)) base = base2;
             snprintf(msg, sizeof(msg), "Exported to replays/%s", base ? base + 1 : path);
-            host_osd_push(msg, 2400);
+            savestate_menu_notice(msg, 3000);
         } else {
-            host_osd_push("Replay export failed", 1800);
+            savestate_menu_notice("Replay export failed", 2000);
         }
     } else {
         const uint32_t now = SDL_GetTicks();
@@ -6691,13 +6713,13 @@ static void savestate_menu_replay_action(int action) {
             savestate_menu_delete_armed = slot;
             savestate_menu_delete_armed_ms = now;
             snprintf(msg, sizeof(msg), "Press delete again to delete replay %d", slot + 1);
-            host_osd_push(msg, 2000);
+            savestate_menu_notice(msg, 2000);
             return;
         }
         savestate_menu_delete_armed = -1;
         snprintf(msg, sizeof(msg), replay_session_delete_slot(slot) ?
                  "Replay %d deleted" : "Replay %d could not be deleted", slot + 1);
-        host_osd_push(msg, 1500);
+        savestate_menu_notice(msg, 1800);
         psx_savestate_menu_note_slots_changed();
         savestate_menu_sync_overlay();
     }
@@ -6707,14 +6729,14 @@ static int savestate_submit_slot(int slot, int save) {
     if (!save && !savestate_slot_exists(slot)) {
         char msg[32];
         snprintf(msg, sizeof(msg), "Slot %d is empty", slot + 1);
-        host_osd_push(msg, 1200);
+        savestate_menu_notice(msg, 1500);
         return 0;
     }
     if (!save)
         savestate_input_guard_arm();
     if (psx_netplay_active()) {
         if (!psx_netplay_is_host()) {
-            host_osd_push("Save states are host-only in netplay", 1500);
+            savestate_menu_notice("Save states are host-only in netplay", 1800);
             return 0;
         }
         if (save)
@@ -6846,6 +6868,8 @@ static void savestate_menu_poll_nav(uint32_t now_ms) {
     prev_cancel = cancel;
     prev_page = page;
     prev_del = del;
+    if (savestate_menu_notice_until && (int32_t)(now_ms - savestate_menu_notice_until) >= 0)
+        savestate_menu_notice_clear();
 
     if (!savestate_menu_open)
         return;
@@ -7213,16 +7237,16 @@ extern "C" int replay_host_take_load_result(void) {
 /* The settings that change guest timing but are not in a save state. */
 static std::string replay_mods_fingerprint(void) {
     std::string out;
-    for (char c : PSXRecompV4::mod_runtime_fingerprint())
+    for (char c : PSXRecompV4::mod_runtime_replay_fingerprint())
         if (c >= 0x21 && c <= 0x7e && out.size() < 200) out.push_back(c);
     return out.empty() ? std::string("none") : out;
 }
 
 extern "C" void replay_host_settings_capture(char *out, size_t cap) {
     std::snprintf(out, cap,
-                  "cd_speed=%d\nturbo_loads=%d\nturbo_load_wall=%d\n"
+                  "cd_speed=%d\ncd_instant_rate=%d\nturbo_loads=%d\nturbo_load_wall=%d\n"
                   "p1_connected=%d\np1_config_capable=%d\nmods=%s\n",
-                  cdrom_get_speed(), g_turbo_loads_enabled,
+                  cdrom_get_speed(), cdrom_get_instant_rate(), g_turbo_loads_enabled,
                   g_turbo_load_wall_multiplier, sio_get_pad_connected(0),
                   sio_get_pad_config_capable(0), replay_mods_fingerprint().c_str());
 }
@@ -7240,6 +7264,7 @@ static void replay_settings_apply_text(const char *text, char *differs, size_t c
         const int v = std::atoi(value.c_str());
         bool ok = true;
         if (key == "cd_speed") cdrom_set_speed(v);
+        else if (key == "cd_instant_rate") { if (v > 0) cdrom_set_instant_rate(v); }
         else if (key == "turbo_loads") g_turbo_loads_enabled = v ? 1 : 0;
         else if (key == "turbo_load_wall") g_turbo_load_wall_multiplier = v;
         else if (key == "p1_connected") sio_set_pad_connected(0, v ? 1 : 0);
@@ -13499,6 +13524,7 @@ int main(int argc, char** argv) {
             force_no_launcher = true;
         } else if (std::strcmp(argv[i], "--replay") == 0 && i + 1 < argc) {
             g_replay_cli_path = argv[++i];
+            force_no_launcher = true;   /* a replay launch boots straight in */
         } else if (std::strcmp(argv[i], "--headless") == 0) {
             g_headless = 1;
             force_no_launcher = true;

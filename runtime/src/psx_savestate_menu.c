@@ -63,6 +63,7 @@ static const uint8_t FONT8[59][8] = {
 static int s_open;
 static int s_selected;
 static int s_replays;   /* 1: the Replays page (PS1B-191) */
+static char s_notice[96]; /* drawn over the key hints while set */
 static int s_runtime_open;
 static int s_route_swapped;
 static int s_route_available;
@@ -147,6 +148,11 @@ static void draw_psx_button(uint32_t *dst, int x, int y, char kind)
     case 'o':
         fill_disc(dst, x + 9, y + 9, 8, 0xFFFF6B6Bu);
         fill_disc(dst, x + 9, y + 9, 5, 0xFF171B25u);
+        break;
+    case 't':
+        draw_line(dst, x + 9, y + 3, x + 3, y + 15, 2, 0xFF5FE0B0u);
+        draw_line(dst, x + 9, y + 3, x + 15, y + 15, 2, 0xFF5FE0B0u);
+        draw_line(dst, x + 3, y + 15, x + 15, y + 15, 2, 0xFF5FE0B0u);
         break;
     default:
         fill_rect(dst, x + 7, y + 2, 5, 15, 0xFFD7DCE6u);
@@ -252,7 +258,8 @@ static void rasterize_panel(void)
 
     fill_rect(s_panel, 0, 0, SSM_W, 46, 0xFF171B25u);
     draw_text(s_panel, 24, 14, s_replays ? "REPLAYS" : "SAVE STATES", 0xFFFFD24Du, 2);
-    draw_text(s_panel, 250, 18, s_replays ? "TAB: STATES" : "TAB: REPLAYS", 0xFF7F8796u, 1);
+    draw_text(s_panel, 330, 18, s_replays ? "TAB / L1 R1: STATES" : "TAB / L1 R1: REPLAYS",
+              0xFF7F8796u, 1);
     host_keymap_label(HOST_KEYMAP_SAVE_STATE_MENU, key, sizeof(key));
     snprintf(buf, sizeof(buf), "%s MENU",
              key[0] ? key : "F7");
@@ -311,10 +318,16 @@ static void rasterize_panel(void)
     draw_text(s_panel, 156, 428, s_replays ? "PLAY" : "LOAD", 0xFFE2E5EBu, 1);
     draw_psx_button(s_panel, 230, 424, 's');
     draw_text(s_panel, 254, 428, s_replays ? "EXPORT" : "SAVE", 0xFFE2E5EBu, 1);
-    draw_psx_button(s_panel, 344, 424, 'o');
-    draw_text(s_panel, 368, 428, "BACK", 0xFFE2E5EBu, 1);
     if (s_replays) {
-        draw_text(s_panel, 448, 428, "Y: DELETE", 0xFFE2E5EBu, 1);
+        draw_psx_button(s_panel, 352, 424, 't');
+        draw_text(s_panel, 376, 428, "DELETE", 0xFFE2E5EBu, 1);
+    }
+    draw_psx_button(s_panel, s_replays ? 470 : 352, 424, 'o');
+    draw_text(s_panel, s_replays ? 494 : 376, 428, "BACK", 0xFFE2E5EBu, 1);
+    if (s_notice[0]) {
+        fill_rect(s_panel, 0, 446, SSM_W, 24, 0xFF3A3218u);
+        draw_text(s_panel, 32, 454, s_notice, 0xFFFFD24Du, 1);
+    } else if (s_replays) {
         draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER PLAY  E EXPORT  DEL DELETE  ESC BACK",
                   0xFFB8BDC8u, 1);
     } else {
@@ -388,6 +401,14 @@ void psx_savestate_menu_set_state(int open, int selected_slot)
 
 void psx_savestate_menu_note_slots_changed(void)
 {
+    s_dirty = 1;
+}
+
+void psx_savestate_menu_set_notice(const char *text)
+{
+    const char *t = text ? text : "";
+    if (strncmp(s_notice, t, sizeof(s_notice) - 1) == 0) return;
+    snprintf(s_notice, sizeof(s_notice), "%s", t);
     s_dirty = 1;
 }
 

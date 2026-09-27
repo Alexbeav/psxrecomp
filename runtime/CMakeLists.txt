@@ -373,6 +373,11 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(host_osd_rec_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_osd_rec_test COMMAND host_osd_rec_test)
 
+    # Replays page of the save-state menu (PS1B-191): notice line, DELETE hint.
+    add_executable(savestate_menu_replays_test tests/test_savestate_menu_replays.c)
+    target_include_directories(savestate_menu_replays_test PRIVATE include)
+    add_test(NAME savestate_menu_replays_test COMMAND savestate_menu_replays_test)
+
     add_executable(keyboard_pad_chord_test
         tests/test_keyboard_pad_chord.c
         src/psx_keybinds.c)
