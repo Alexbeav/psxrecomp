@@ -62,6 +62,7 @@ $TemplateDir = Join-Path $ScriptDir "templates"
 $ProbeDisc = Join-Path $ScriptDir "probe_disc.py"
 $FillTokens = Join-Path $ScriptDir "fill_tokens.py"
 $FetchBoxartPy = Join-Path $ScriptDir "fetch_boxart.py"
+$WriteRecompJson = Join-Path $ScriptDir "write_recomp_json.py"
 $DefaultLobbyHost = "netplay.retcomm.net"
 
 function Normalize-LobbyUrl([string]$In) {
@@ -598,6 +599,15 @@ print(m.group(1) if m else '')
     Write-Warning "-Disc is not a .cue; skipped probe autofill."
 }
 
+# Community metadata (https://recomp.fyi/spec) — serial from the probe if it ran.
+Write-Host "== Writing .recomp.json =="
+python $WriteRecompJson (Join-Path $Root ".recomp.json") `
+    --game $GameName `
+    --project $Name `
+    --region $Region `
+    --probe-json (Join-Path $Root "disc_probe.json")
+if ($LASTEXITCODE -ne 0) { Write-Warning ".recomp.json not written" }
+
 if ($doBoxart) {
     Write-Host "== Fetching libretro boxart =="
     $cueHint = if ($DiscBasename) { $DiscBasename } else { $GameName }
@@ -639,6 +649,9 @@ if (Test-Path (Join-Path $Root "catalog_identity.json")) {
 }
 if (Test-Path (Join-Path $Root "disc_probe.json")) {
     git add disc_probe.json 2>$null
+}
+if (Test-Path (Join-Path $Root ".recomp.json")) {
+    git add .recomp.json 2>$null
 }
 if ($HasBoxart) {
     git add launcher_assets/img/boxart.tga launcher_assets/img/boxart.png launcher_assets/img/BOXART_SOURCE.txt 2>$null
