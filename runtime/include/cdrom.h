@@ -121,6 +121,7 @@ int cdrom_load_in_progress(void);
 /* Physical non-XA data-read command state, without the logical load gap
  * bridge used by cdrom_load_in_progress(). Diagnostics only. */
 int cdrom_data_read_active(void);
+void cdrom_debug_read_state(uint32_t out[6]);
 
 /* boot_state / netplay digest — full controller FSM (sector FIFOs included). */
 uint32_t cdrom_snapshot_bytes(void);

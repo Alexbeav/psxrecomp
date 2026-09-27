@@ -3976,6 +3976,18 @@ int cdrom_data_read_active(void) {
     return reading && !xa_stream_active;
 }
 
+/* Diagnostic snapshot of the drive for load-detection traces (PS1B-241):
+ * reading, mode register, XA stream active, CD-DA playing, read command,
+ * current read LBA. */
+void cdrom_debug_read_state(uint32_t out[6]) {
+    out[0] = (uint32_t)reading;
+    out[1] = mode_reg;
+    out[2] = (uint32_t)xa_stream_active;
+    out[3] = (uint32_t)cdda_playing;
+    out[4] = read_cmd;
+    out[5] = (uint32_t)((read_min * 60 + read_sec) * 75 + read_sect);
+}
+
 /* Savestate post-load: authentic CD second-response delays (ReadTOC ~30M
  * cycles, Init ~1.1M, far seeks, etc.) leave the restored frame on screen
  * for up to ~1s+ of wall time. Clamp those timers so the next cdrom_advance

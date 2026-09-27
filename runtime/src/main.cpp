@@ -8125,6 +8125,24 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
     load_transition_note(cdrom_data_read_active(), logical_load_active,
                          turbo_loads_active, load_run_value);
+    {   /* Diagnostic (PS1B-241): PSX_TURBO_LOADS_TRACE=FILE logs, per vblank,
+         * the load predicate and the drive state it is built from. */
+        static FILE *trace = [] {
+            const char *e = std::getenv("PSX_TURBO_LOADS_TRACE");
+            FILE *f = (e && e[0]) ? std::fopen(e, "wb") : nullptr;
+            if (f) std::fprintf(f, "vblank,logical_load,turbo,reading,mode,xa,cdda,read_cmd,lba,mdec\n");
+            return f;
+        }();
+        static uint64_t trace_vblank = 0;
+        if (trace) {
+            uint32_t cd[6];
+            cdrom_debug_read_state(cd);
+            std::fprintf(trace, "%llu,%d,%d,%u,0x%02x,%u,%u,0x%02x,%u,%d\n",
+                         (unsigned long long)trace_vblank, logical_load_active, turbo_loads_active,
+                         cd[0], cd[1], cd[2], cd[3], cd[4], cd[5], mdec_recently_active(2) ? 1 : 0);
+        }
+        ++trace_vblank;
+    }
 
     /* FMV auto-skip ([video] auto_skip_fmv). A streaming FMV is XA audio + MDEC
      * video together. Detect "MDEC produced a frame since the last vblank AND XA
