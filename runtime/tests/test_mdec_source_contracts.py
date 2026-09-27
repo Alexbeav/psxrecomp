@@ -82,7 +82,9 @@ with tempfile.TemporaryDirectory(prefix='mdec-source-') as temp:
   # [ORACLE FIXTURE D11] ran block sizes 1, 8 and 16, so the model must accept it.
   # SPEC-PS1B-186-DMA-BEHAVIOUR-v2 defines the rest, so none may stop the run:
   # a decrementing step (3.1), MDEC in with direction 0 (9.6), a MADR write to a
-  # live channel (7.2) and a DPCR change (7.8, 6.2).
+  # live channel (7.2) and a DPCR change (7.8, 6.2). Observables: CHCR keeps the
+  # step and direction bits (7.1); the MADR write reads back at once (7.2); a
+  # DPCR change neither stops nor pauses the channel (7.8).
   measured={
    'block-size':cold+[(2,0,0x1f801084,0x10010),start[-1]],
    'reverse':cold+start[:2]+[(2,0,0x1f801088,0x01000203)],
@@ -95,4 +97,12 @@ with tempfile.TemporaryDirectory(prefix='mdec-source-') as temp:
    source.write_bytes(b''.join(struct.pack('<4I',*op) for op in ops))
    run=subprocess.run([str(exe),str(source),str(actual)],env=env,capture_output=True,timeout=30)
    assert run.returncode==0 and b'[dma-model]' not in run.stderr and b'[mdec-source]' not in run.stderr,(name,run.returncode,run.stderr)
+   # One observable per shape. The cold MDEC requests no input, so DMA0 waits
+   # busy at its block start (spec 2.4). Row fields 19-21: MADR0, BCR0, CHCR0.
+   raw=actual.read_bytes();last=struct.unpack('<27I',raw[-108:])
+   madr0,chcr0=last[19],last[21]
+   want={'block-size':(0,0x01000201),'reverse':(0x3000,0x01000203),
+         'wrong-direction':(0x3000,0x01000200),'active-replace':(0x4000,0x01000201),
+         'active-control':(0x3000,0x01000201)}[name]
+   assert (madr0,chcr0)==want,(name,hex(madr0),hex(chcr0))
 print(f"{kind}: {len(fixture['cases'])} complete source-oracle transcripts PASS")

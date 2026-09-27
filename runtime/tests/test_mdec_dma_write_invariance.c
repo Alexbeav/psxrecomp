@@ -4,8 +4,8 @@
  * cycles after DMA0 (D18 groups a/d). The accesses: DMA5 MADR, BCR and CHCR
  * writes and a DICR rewrite (service points that serve the channels but do not
  * advance the MDEC decoder: reviewer ruling on spec v2 1.3), and a no-op MDEC
- * control write (1F801824h = 60000000h). Runtime schedule: dma_advance every
- * cycle. Authored stream; no BIOS or disc. */
+ * control write (1F801824h = 60000000h). The source GPU runtime serves: grid
+ * edges come from its clock and a DMA register write through its WRITE event. Authored stream; no BIOS or disc. */
 #define _POSIX_C_SOURCE 200809L
 #include "dma_gpu_ll.c"
 #include "dma.c"
@@ -70,8 +70,16 @@ void audio_trace_event(uint16_t k,uint32_t a,uint32_t b) {(void)k;(void)a;(void)
 
 
 
+/* One guest cycle. The source GPU runtime owns the service points here, as in
+ * the routes: its clock raises a DMA event at every grid edge, and a DMA
+ * register write reaches the machines through its WRITE event. */
+static void tick(void) {
+    psx_cycle_count++;
+    dma_advance(1);
+    if (psx_cycle_count % 128 == 0) dma_source_gpu_service_at(psx_cycle_count);
+}
 /* A CPU store to the MDEC, 20 cycles after the previous one (runtime schedule). */
-static void mw(uint32_t addr, uint32_t v) { psx_cycle_count += 20; dma_advance(20); mdec_write(addr, v); }
+static void mw(uint32_t addr, uint32_t v) { for (int i = 0; i < 20; i++) tick(); mdec_write(addr, v); }
 static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) {
     psx_cycle_count = 0;
     dma_init(); mdec_init(); memset(ram, 0, sizeof ram); i_stat = irqs = 0;
@@ -86,7 +94,7 @@ static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) 
     mw(0x1f801820, (1u << 29) | (2u << 27) | 32u);
     uint64_t t0 = 3000 + phase, h = 1469598103934665603ull;
     for (uint64_t t = psx_cycle_count + 1; t < t0 + 16000; t++) {
-        psx_cycle_count = t; dma_advance(1);
+        tick();
         if (t == t0) { dma_write(0x1F801080, 0x40000); dma_write(0x1F801084, (1u << 16) | 32); dma_write(0x1F801088, 0x01000201); }
         uint64_t k1 = t0 + (late_dma1 ? 1000 : 15);
         if (t == k1) { dma_write(0x1F801090, 0x60000); dma_write(0x1F801094, (24u << 16) | 32); dma_write(0x1F801098, 0x01000200); }
@@ -124,8 +132,8 @@ int main(void) {
 }
 
 int debug_server_fmv_quiet(void){return 0;}
-int source_gpu_runtime_active(void){return 0;}
+int source_gpu_runtime_active(void){return 1;}
 int source_gpu_runtime_ready(void){return 1;}
 uint32_t source_gpu_runtime_cycles_to_event(void){return UINT32_MAX;}
-void source_gpu_runtime_dma_write(void){}
+void source_gpu_runtime_dma_write(void){dma_source_gpu_service_at(psx_cycle_count);}
 void source_gpu_runtime_copy(SourceGPUServiceClock *c,SourceGPUCommandProjection *s){(void)c;(void)s;abort();}

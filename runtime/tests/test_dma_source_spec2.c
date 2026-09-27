@@ -301,6 +301,31 @@ static int debt_discarded(void) {
     return 0;
 }
 
+/* Spec 3.1, 3.5: a decrementing upload (CHCR bit 1) steps the address by -4;
+ * MADR takes the address after the block. */
+static int upload_reverse(void) {
+    fresh(0x0FEDCBA9u);
+    for (uint32_t i = 0; i < 64; i++) ram[0x10000 / 4 + i] = 0xC0000000u + i;
+    kick(2, 0x10080, (1u << 16) | 16, 0x01000203);             /* 7 + 16 <= 64: whole block */
+    CHECK(gp0_words == 16 && gp0_last == 0xC0000000u + 0x20 - 15, "reverse: last word %08X", gp0_last);
+    CHECK(dma_read(REG(2, 0)) == 0x10080u - 64, "reverse: MADR2 %08X", dma_read(REG(2, 0)));
+    return 0;
+}
+
+/* Spec 2.3, 3.4: a chopped SyncMode 0 upload costs 8 cycles a word, and MADR
+ * and BCR bits 0-15 track each word. */
+static int upload_chopped(void) {
+    fresh(0x0FEDCBA9u);
+    kick(2, 0x10000, 20, 0x01000101);
+    CHECK(gp0_words == 8, "chop: kick moved %u words, want 8 (64 / 8)", gp0_words);
+    CHECK(dma_read(REG(2, 0)) == 0x10020u && (dma_read(REG(2, 4)) & 0xFFFFu) == 12u,
+          "chop: MADR2 %08X BCR2 %08X after the kick", dma_read(REG(2, 0)), dma_read(REG(2, 4)));
+    run_to(128);
+    CHECK(gp0_words == 20 && dma_read(REG(2, 0)) == 0x10050u && (dma_read(REG(2, 4)) & 0xFFFFu) == 0u &&
+          !(channels[2].chcr & (1u << 24)), "chop: at the edge words %u MADR2 %08X", gp0_words, dma_read(REG(2, 0)));
+    return 0;
+}
+
 /* Spec 1.8, 13 (D12 a, c, d): a DICR or DPCR rewrite, or a DMA5 MADR write,
  * after an upload kick splits the allowance but never moves the completion,
  * at every kick phase, for the 12x16 and 4x64 uploads. The completion cycle
@@ -359,6 +384,8 @@ int main(int argc, char **argv) {
         { "6.5 shapes", shapes_accepted },
         { "2.2 debt", debt_discarded },
         { "1.8/13 D12 kick-matched", d12_kick_matched },
+        { "3.1 reverse upload", upload_reverse },
+        { "3.4 chopped upload", upload_chopped },
     };
     int failed = 0;
     if (argc == 2) {                                           /* one case, by index */
@@ -369,6 +396,6 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++)
         if (cases[i].fn()) { fprintf(stderr, "FAIL spec %s\n", cases[i].name); failed++; }
     if (failed) return 1;
-    puts("PASS spec v2: stop, DPCR, upload readiness/stall, frame return, list at a write, busy MADR, no restart, channel 5, CHCR mirror, bus error, SPU count, shapes, debt, D12 kick-matched");
+    puts("PASS spec v2: stop, DPCR, upload readiness/stall, frame return, list at a write, busy MADR, no restart, channel 5, CHCR mirror, bus error, SPU count, shapes, debt, D12 kick-matched, reverse and chopped uploads");
     return 0;
 }
