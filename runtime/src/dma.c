@@ -1219,11 +1219,12 @@ static uint64_t dsm_service_clock(void) {
 static int dsm_write_sync;
 
 /* One service point at `now` (spec 1.3; the GPU is already up to `now`).
- * [ORACLE FIXTURE D18d] a DMA register write does not advance the MDEC
- * decoder: in D18 group d a DMA5-MADR write, a timer-1 write and a no-op MDEC
- * control write give timelines byte-identical to group a (reviewer ruling on
- * spec v2 1.3; v3 corrects it). The channels are still served; grid edges and
- * frame returns advance the decoder. */
+ * Grid edges and frame returns advance the MDEC decoder. [NOT OBSERVED:
+ * write-to-edge window; D18d-consistent] any other DMA register write serves
+ * the channels but does not advance it (spec v3 1.9): in D18 group d a
+ * DMA5-MADR write, a timer-1 write and a no-op MDEC control write give
+ * timelines byte-identical to group a. A channel 0 or 1 kick does advance it
+ * (dsm_kick). */
 static void dsm_serve_at(uint64_t now) {
     if (!(dsm_write_sync && now == psx_cycle_count && now % DSM_QUANTUM)) dsm_mdec_feed(now);
     for (int i = 0; i < DSM_COUNT; i++) dsm_service(dsm_order[i], now);
@@ -1311,6 +1312,9 @@ static void dsm_kick(int k) {
         audio_trace_event((chcr & 1u) ? AUDIO_EV_DMA_WRITE : AUDIO_EV_DMA_READ,
                           (bs ? bs : 0x10000u) * (ba ? ba : 0x10000u), channels[4].madr & 0x1FFFFCu);
     }
+    /* [ORACLE FIXTURE D15b, D17a] an MDEC channel kick advances the decoder to
+     * the kick (spec v3 1.9). */
+    if (k == DSM_MDEC_IN || k == DSM_MDEC_OUT) dsm_mdec_feed(psx_cycle_count);
     memset(m, 0, sizeof *m);
     m->running = 1;
     m->credit = DSM_KICK_CREDIT;
@@ -1340,7 +1344,7 @@ static void dsm_stop(int k) {
     } else if (m->stage && k != DSM_OTC) {
         g_dma_cur_ch = dsm_channel[k];
         while (m->words_left && budget > 0 && !(m->cursor & 0x00800000u)) {
-            if (!dsm_block_word(k, &budget)) return;
+            if (!dsm_block_word(k, &budget)) { g_dma_cur_ch = -1; return; }
         }
         g_dma_cur_ch = -1;
     }
