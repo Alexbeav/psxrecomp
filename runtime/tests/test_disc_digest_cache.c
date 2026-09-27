@@ -6,6 +6,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <sys/utime.h>
+#define utime _utime
+#define utimbuf _utimbuf
+#else
+#include <utime.h>
+#endif
 
 static int failures;
 #define CHECK(c, m) do { if (!(c)) { fprintf(stderr, "FAIL: %s\n", m); failures++; } } while (0)
@@ -38,7 +46,8 @@ int main(int argc, char **argv) {
     size_t n = f ? fread(text, 1, sizeof text - 1, f) : 0;
     if (f) fclose(f);
     text[n] = 0;
-    char *hit = strstr(text, "ba7816bf");
+    /* The full digest (a small file's spot hash starts with the same bytes). */
+    char *hit = strstr(text, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     CHECK(hit != NULL, "cache line written");
     if (hit) memset(hit, '0', 64);
     write_file(cache, text);
@@ -46,6 +55,22 @@ int main(int argc, char **argv) {
     hexs(d, h);
     CHECK(!strcmp(h, "0000000000000000000000000000000000000000000000000000000000000000"),
           "a matching path, size and mtime reuse the cached digest");
+
+    /* Same size, mtime put back: the head/tail spot check still sees the
+     * rewrite and the file is hashed again. */
+    {
+        struct stat st;
+        struct utimbuf t;
+        stat(disc, &st);
+        write_file(disc, "abd");
+        t.actime = st.st_atime;
+        t.modtime = st.st_mtime;
+        utime(disc, &t);
+        CHECK(disc_digest_cache_sha256(disc, d), "hash the same-size rewrite");
+        hexs(d, h);
+        CHECK(!strcmp(h, "a52d159f262b2c6ddb724a61840befc36eb30c88877a4030b65cbe86298449c9"),
+              "a same-size rewrite with the old mtime is hashed, not taken from the cache");
+    }
 
     /* A changed file (different size) is hashed again. */
     write_file(disc, "abcd");

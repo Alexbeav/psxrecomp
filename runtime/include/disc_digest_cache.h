@@ -2,9 +2,11 @@
  *
  * A replay's identity includes the disc digest, which means hashing the whole
  * image. The cache file keeps one line per hashed file:
- *   <size>\t<mtime>\t<sha256 hex>\t<path>
- * A line is reused only when path, size and mtime all match, so a changed or
- * replaced image is hashed again. Lines are appended; stale lines never match. */
+ *   <size>\t<mtime>\t<spot>\t<sha256 hex>\t<path>
+ * where <spot> hashes the first and last 64 KiB. A line is reused only when
+ * path, size, mtime and spot all match, so a changed or replaced image (even a
+ * same-size rewrite that kept its mtime, unless it only changed bytes in the
+ * middle) is hashed again. Lines are appended; stale lines never match. */
 #ifndef DISC_DIGEST_CACHE_H
 #define DISC_DIGEST_CACHE_H
 
