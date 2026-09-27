@@ -80,6 +80,7 @@ static void tick(void) {
 }
 /* A CPU store to the MDEC, 20 cycles after the previous one (runtime schedule). */
 static void mw(uint32_t addr, uint32_t v) { for (int i = 0; i < 20; i++) tick(); mdec_write(addr, v); }
+static uint64_t mdec_clock_after_kick, mdec_clock_after_write;
 static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) {
     psx_cycle_count = 0;
     dma_init(); mdec_init(); memset(ram, 0, sizeof ram); i_stat = irqs = 0;
@@ -95,7 +96,7 @@ static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) 
     uint64_t t0 = 3000 + phase, h = 1469598103934665603ull;
     for (uint64_t t = psx_cycle_count + 1; t < t0 + 16000; t++) {
         tick();
-        if (t == t0) { dma_write(0x1F801080, 0x40000); dma_write(0x1F801084, (1u << 16) | 32); dma_write(0x1F801088, 0x01000201); }
+        if (t == t0) { dma_write(0x1F801080, 0x40000); dma_write(0x1F801084, (1u << 16) | 32); dma_write(0x1F801088, 0x01000201); mdec_clock_after_kick = dsm_mdec_clock; }
         uint64_t k1 = t0 + (late_dma1 ? 1000 : 15);
         if (t == k1) { dma_write(0x1F801090, 0x60000); dma_write(0x1F801094, (24u << 16) | 32); dma_write(0x1F801098, 0x01000200); }
         if (write_at && t == t0 + (uint64_t)write_at) {
@@ -104,6 +105,7 @@ static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) 
             else if (kind == 2) dma_write(0x1F8010D8, 0);
             else if (kind == 3) dma_write(0x1F8010F4, dma_read(0x1F8010F4) & 0x00FFFFFFu);
             else mdec_write(0x1f801824, 0x60000000u);
+            mdec_clock_after_write = dsm_mdec_clock;
         }
         if (t >= t0) {
             uint32_t row[4] = { dma_read(0x1f801090), dma_read(0x1f801098), dma_read(0x1f801088), mdec_read(0x1f801824) };
@@ -116,6 +118,16 @@ int main(void) {
     set_option("PSX_MDEC_SOURCE_MODEL", "octoshock-2.3");
     set_option("PSX_INPUT_ROUTE_FILE", "authored-fixture");
     set_option("PSX_GPU_DMA_MODEL", "octoshock-2.2.2-bounded-quad");
+    /* [ORACLE FIXTURE D15b, D17a] a DMA0 kick advances the decoder to the kick
+     * (spec v3 1.3, 1.9); a later DMA register write does not advance it
+     * [NOT OBSERVED: write-to-edge window; D18d-consistent]. Kick at cycle 3017
+     * and a DMA5 MADR write at 3381, both mid-slice (last edge 3328). */
+    timeline(17, 1, 364, 0);
+    if (mdec_clock_after_kick != 3017 || mdec_clock_after_write != 3328) {
+        fprintf(stderr, "MDEC clock %llu after the kick (want 3017), %llu after the write (want 3328, the last edge)\n",
+                (unsigned long long)mdec_clock_after_kick, (unsigned long long)mdec_clock_after_write);
+        return 1;
+    }
     for (uint32_t phase = 0; phase < 128; phase++) {
         for (int late = 0; late < 2; late++) {
             uint64_t base = timeline(phase, late, 0, 0);
@@ -127,7 +139,7 @@ int main(void) {
                 }
         }
     }
-    puts("PASS D18d: DMA5 MADR/BCR/CHCR, DICR and a no-op MDEC control write leave the MADR1/CHCR and MDEC status timelines unchanged at all 128 phases");
+    puts("PASS MDEC kick feed (D15b, D17a); D18d: DMA5 MADR/BCR/CHCR, DICR and a no-op MDEC control write leave the MADR1/CHCR and MDEC status timelines unchanged at all 128 phases");
     return 0;
 }
 
