@@ -196,9 +196,11 @@ def main() -> int:
             log = runs / f'{name}.log'
             code = run(base, log, timeout=args.timeout, env=player_env({
                 'PSX_REPLAY_FILE': str(path), 'PSX_REPLAY_EXIT_AT_END': '1'}))
-            end = next((l.strip() for l in log.read_text(errors='replace').splitlines()
-                        if l.startswith('replay_end:')), '')
-            results.append({'run': name, 'exit': code, 'expected': want, 'replay_end': end})
+            lines = log.read_text(errors='replace').splitlines()
+            end = next((l.strip() for l in lines if l.startswith('replay_end:')), '')
+            diverged = next((l.strip() for l in lines if l.startswith('replay_diverged:')), '')
+            results.append({'run': name, 'exit': code, 'expected': want, 'replay_end': end,
+                            'replay_diverged': diverged})
             ok = ok and code == want
         entry['playbacks'] = results
         report['runs'].append(entry)
