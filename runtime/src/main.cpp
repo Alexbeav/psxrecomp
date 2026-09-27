@@ -16254,8 +16254,13 @@ session_reboot:
     input_route_session_set_product(route_disc_serial.c_str(),
                                     disc_path_str.c_str(), bios_path_str.c_str());
     s_replay_disc_serial = route_disc_serial;
-    /* A recording in progress is written from its last boundary at exit. */
-    std::atexit(replay_session_shutdown);
+    /* A recording in progress is written from its last boundary at exit.
+     * Registered once: this path runs again on every session reboot. */
+    static bool replay_atexit_registered = false;
+    if (!replay_atexit_registered) {
+        std::atexit(replay_session_shutdown);
+        replay_atexit_registered = true;
+    }
     /* Arm the text-image guard now that both possible sources are resolved:
      * the local EXE file (dev checkouts) and the disc image (every install). */
     if (game_config_path)

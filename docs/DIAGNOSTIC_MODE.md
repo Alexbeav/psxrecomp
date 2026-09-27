@@ -78,7 +78,7 @@ Open the zip before attaching it if you want to check.
 ## Recording an input route
 
 The diagnostic product can record what you play as a frame-exact input route
-(`PSX_INPUT_ROUTE_RECORD`, F11/F12 markers) that any product can replay. See
+(`PSX_INPUT_ROUTE_RECORD`, Shift+F11/F12 markers) that any product can replay. See
 [INPUT_ROUTES.md](INPUT_ROUTES.md).
 
 ## For maintainers
