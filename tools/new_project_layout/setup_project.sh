@@ -41,6 +41,7 @@ TEMPLATE_DIR="$SCRIPT_DIR/templates"
 PROBE_DISC="$SCRIPT_DIR/probe_disc.py"
 FILL_TOKENS="$SCRIPT_DIR/fill_tokens.py"
 FETCH_BOXART="$SCRIPT_DIR/fetch_boxart.py"
+WRITE_RECOMP_JSON="$SCRIPT_DIR/write_recomp_json.py"
 
 NAME=""
 DISC=""
@@ -834,6 +835,15 @@ print(m.group(1) if m else "")
         ;;
 esac
 
+# Community metadata (https://recomp.fyi/spec) — serial from the probe if it ran.
+echo "== Writing .recomp.json =="
+python3 "$WRITE_RECOMP_JSON" "$ROOT/.recomp.json" \
+    --game "$GAME_NAME" \
+    --project "$NAME" \
+    --region "$REGION" \
+    --probe-json "$ROOT/disc_probe.json" \
+    || echo "warning: .recomp.json not written" >&2
+
 if [ "$FETCH_BOXART_FLAG" -eq 1 ]; then
     echo "== Fetching libretro boxart =="
     CUE_HINT="${DISC_BASENAME:-$GAME_NAME}"
@@ -871,6 +881,9 @@ if [ -f "$ROOT/catalog_identity.json" ]; then
 fi
 if [ -f "$ROOT/disc_probe.json" ]; then
     git add disc_probe.json || true
+fi
+if [ -f "$ROOT/.recomp.json" ]; then
+    git add .recomp.json || true
 fi
 if [ "$HAS_BOXART" -eq 1 ]; then
     git add launcher_assets/img/boxart.tga launcher_assets/img/boxart.png launcher_assets/img/BOXART_SOURCE.txt || true

@@ -121,6 +121,7 @@ With a Redump-style `**.cue**`:
 | `seeds/ghidra_funcs.txt` | Entry PC + direct **JAL targets** inside the boot EXE text (first-pass; MotK-class ~850 addrs)                                                         |
 | `catalog_identity.json`  | Digests + `track_counts` + `disc_fp` + optional `marketing` (description / publisher / year / region / players) |
 | `disc_probe.json`        | Full probe dump |
+| `.recomp.json`           | Community metadata ([recomp.fyi spec](https://recomp.fyi/spec)): game, system, type, toolchain, `status: exploring`, and `original` region + serial. Written with or without `--disc`; region comes from the serial prefix when known. `write_recomp_json.py` only fills missing fields, so re-running it never overwrites your edits |
 | `symbols.toml` + `psx_symbols.h` | Boot entry stub + `PSX_FN_*` header (`tools/sync_symbols.py`; see [`SYMBOLS.md`](SYMBOLS.md)) |
 
 
@@ -308,6 +309,7 @@ YourGameRecomp/                 # your git repo
 ├── CMakeLists.txt              # thin: psxrecomp_add_game_runtime(...)
 ├── game.toml                   # probe autofills identity / netplay gates
 ├── catalog_identity.json       # Retro / catalog digests + track_counts + disc_fp
+├── .recomp.json                # community metadata (recomp.fyi); keep `status` current
 ├── framework_pins.txt          # optional scaffold snapshot (gitlinks are authoritative)
 ├── README.md                   # scaffold stub (legal + quick start)
 ├── VERSION                     # release pin (e.g. 0.1.0)
@@ -575,6 +577,9 @@ Use this before tagging a setup-host release that matches other titles
   online against full Redump cues
   ```
 - [ ] Optional: commit `catalog_identity.json` (+ `framework_pins.txt` snapshot)
+- [ ] `.recomp.json` `status` matches reality (`exploring` → `in-progress` →
+  `playable` → `released`, or `paused`) — community lists read it daily, and a
+  stale status is worse than none
 - [ ] `seeds/ghidra_funcs.txt` covers the boot path (probe JAL pass + discoveries);
   ```
   `VERSION` matches the release you will tag

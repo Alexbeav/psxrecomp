@@ -92,4 +92,4 @@ For **bulk ops across many titles / platforms**, use the sibling tool
 
 Wizard + `recomp-ui` are forced on for `apply` (setup-host requirement).
 
-Helpers reused: `probe_disc.py`, `fill_tokens.py`, `sync_symbols.py`, `templates/*`.
+Helpers reused: `probe_disc.py`, `fill_tokens.py`, `sync_symbols.py`, `write_recomp_json.py` (`.recomp.json`, [recomp.fyi spec](https://recomp.fyi/spec)), `templates/*`.
