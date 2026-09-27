@@ -3,6 +3,7 @@
 #include "psx_savestate_menu.h"
 
 #include "host_keymap.h"
+#include "replay_session.h"
 #include "savestate.h"
 
 #if defined(RECOMP_LAUNCHER)
@@ -11,6 +12,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #define SSM_W 640
@@ -60,6 +62,7 @@ static const uint8_t FONT8[59][8] = {
 
 static int s_open;
 static int s_selected;
+static int s_replays;   /* 1: the Replays page (PS1B-191) */
 static int s_runtime_open;
 static int s_route_swapped;
 static int s_route_available;
@@ -199,14 +202,24 @@ static void blit_thumb(uint32_t *dst, int x0, int y0, int w, int h,
     }
 }
 
+static int replay_slot_mtime(int slot, int64_t *out)
+{
+    char path[1024];
+    struct stat st;
+    if (!replay_session_slot_path(slot, path, sizeof(path)) || stat(path, &st) != 0)
+        return 0;
+    *out = (int64_t)st.st_mtime;
+    return 1;
+}
+
 static void format_slot_status(int slot, char *out, size_t cap)
 {
     int64_t mt64 = 0;
     time_t mt;
     struct tm tmv;
     if (!out || cap == 0) return;
-    if (!savestate_slot_mtime(slot, &mt64)) {
-        snprintf(out, cap, "NEW SLOT");
+    if (!(s_replays ? replay_slot_mtime(slot, &mt64) : savestate_slot_mtime(slot, &mt64))) {
+        snprintf(out, cap, s_replays ? "EMPTY" : "NEW SLOT");
         return;
     }
     mt = (time_t)mt64;
@@ -238,13 +251,15 @@ static void rasterize_panel(void)
         s_panel[i] = 0xFF0F1118u;
 
     fill_rect(s_panel, 0, 0, SSM_W, 46, 0xFF171B25u);
-    draw_text(s_panel, 24, 14, "SAVE STATES", 0xFFFFD24Du, 2);
+    draw_text(s_panel, 24, 14, s_replays ? "REPLAYS" : "SAVE STATES", 0xFFFFD24Du, 2);
+    draw_text(s_panel, 250, 18, s_replays ? "TAB: STATES" : "TAB: REPLAYS", 0xFF7F8796u, 1);
     host_keymap_label(HOST_KEYMAP_SAVE_STATE_MENU, key, sizeof(key));
     snprintf(buf, sizeof(buf), "%s MENU",
              key[0] ? key : "F7");
     draw_text(s_panel, 432, 18, buf, 0xFFB8BDC8u, 1);
 
-    refresh_thumbs();
+    if (s_replays) memset(s_have_thumb, 0, sizeof(s_have_thumb));
+    else refresh_thumbs();
     first = s_selected - 1;
     if (first < 0) first = 0;
     if (first > SAVESTATE_SLOTS - SSM_VISIBLE_ROWS)
@@ -263,7 +278,7 @@ static void rasterize_panel(void)
         fill_rect(s_panel, SSM_ROWS_X, y, SSM_ROWS_W, SSM_ROW_H, bg);
         stroke_rect(s_panel, SSM_ROWS_X, y, SSM_ROWS_W, SSM_ROW_H,
                     sel ? 0xFFFFD24Du : 0xFF303746u);
-        snprintf(buf, sizeof(buf), "SLOT %02d", i + 1);
+        snprintf(buf, sizeof(buf), s_replays ? "REPLAY %02d" : "SLOT %02d", i + 1);
         draw_text(s_panel, SSM_ROWS_X + 18, y + 18, buf, fg, 1);
         if (s_have_thumb[i]) {
             blit_thumb(s_panel, SSM_ROWS_X + 118, y + 3,
@@ -273,8 +288,14 @@ static void rasterize_panel(void)
                       SSM_THUMB_W, SSM_THUMB_H, 0xFF242A35u);
             stroke_rect(s_panel, SSM_ROWS_X + 118, y + 3,
                         SSM_THUMB_W, SSM_THUMB_H, 0xFF3A4352u);
-            draw_text(s_panel, SSM_ROWS_X + 169, y + 46, "NEW",
-                      0xFF707887u, 1);
+            if (s_replays && replay_session_slot_exists(i)) {
+                /* No thumbnail: a red record dot marks a stored replay. */
+                fill_disc(s_panel, SSM_ROWS_X + 118 + SSM_THUMB_W / 2,
+                          y + 3 + SSM_THUMB_H / 2, 12, 0xFFE8262Au);
+            } else {
+                draw_text(s_panel, SSM_ROWS_X + 169, y + 46,
+                          s_replays ? "---" : "NEW", 0xFF707887u, 1);
+            }
         }
         format_slot_status(i, buf, sizeof(buf));
         draw_text(s_panel, SSM_ROWS_X + 278, y + 42, buf, sub, 1);
@@ -287,13 +308,19 @@ static void rasterize_panel(void)
     draw_psx_button(s_panel, 32, 424, 'd');
     draw_text(s_panel, 56, 428, "SLOT", 0xFFE2E5EBu, 1);
     draw_psx_button(s_panel, 132, 424, 'x');
-    draw_text(s_panel, 156, 428, "LOAD", 0xFFE2E5EBu, 1);
+    draw_text(s_panel, 156, 428, s_replays ? "PLAY" : "LOAD", 0xFFE2E5EBu, 1);
     draw_psx_button(s_panel, 230, 424, 's');
-    draw_text(s_panel, 254, 428, "SAVE", 0xFFE2E5EBu, 1);
-    draw_psx_button(s_panel, 328, 424, 'o');
-    draw_text(s_panel, 352, 428, "BACK", 0xFFE2E5EBu, 1);
-    draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER/L LOAD  SHIFT+ENTER/S SAVE  ESC BACK",
-              0xFFB8BDC8u, 1);
+    draw_text(s_panel, 254, 428, s_replays ? "EXPORT" : "SAVE", 0xFFE2E5EBu, 1);
+    draw_psx_button(s_panel, 344, 424, 'o');
+    draw_text(s_panel, 368, 428, "BACK", 0xFFE2E5EBu, 1);
+    if (s_replays) {
+        draw_text(s_panel, 448, 428, "Y: DELETE", 0xFFE2E5EBu, 1);
+        draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER PLAY  E EXPORT  DEL DELETE  ESC BACK",
+                  0xFFB8BDC8u, 1);
+    } else {
+        draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER/L LOAD  SHIFT+ENTER/S SAVE  ESC BACK",
+                  0xFFB8BDC8u, 1);
+    }
     s_dirty = 0;
 }
 
@@ -362,6 +389,13 @@ void psx_savestate_menu_set_state(int open, int selected_slot)
 void psx_savestate_menu_note_slots_changed(void)
 {
     s_dirty = 1;
+}
+
+void psx_savestate_menu_set_replays(int replays)
+{
+    replays = replays ? 1 : 0;
+    if (s_replays != replays) s_dirty = 1;
+    s_replays = replays;
 }
 
 void psx_savestate_menu_set_runtime_settings(int open, int route_swapped,

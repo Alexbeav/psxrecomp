@@ -6641,6 +6641,67 @@ static void savestate_menu_move(int delta) {
     savestate_menu_sync_overlay();
 }
 
+/* PS1B-191: the F7 menu's second page lists the replay slots. Tab or a pad
+ * shoulder switches pages; play, export and delete act on the selection.
+ * Delete needs a second press within two seconds. */
+static int savestate_menu_replays;
+static int savestate_menu_delete_armed = -1;
+static uint32_t savestate_menu_delete_armed_ms;
+
+static void savestate_menu_set_page(int replays) {
+    savestate_menu_replays = replays ? 1 : 0;
+    savestate_menu_delete_armed = -1;
+    psx_savestate_menu_set_replays(savestate_menu_replays);
+    savestate_menu_sync_overlay();
+}
+
+static void savestate_menu_replay_action(int action) {
+    const int slot = savestate_menu_slot;
+    char msg[160];
+    if (!replay_session_slot_exists(slot)) {
+        snprintf(msg, sizeof(msg), "Replay %d is empty", slot + 1);
+        host_osd_push(msg, 1200);
+        return;
+    }
+    if (action == 0) {
+        if (psx_netplay_active()) {
+            host_osd_push("Replays are unavailable during netplay", 1500);
+            return;
+        }
+        savestate_menu_open = 0;
+        savestate_menu_sync_overlay();
+        savestate_input_guard_arm();
+        replay_session_play_slot(slot);
+    } else if (action == 1) {
+        char path[1024];
+        if (replay_session_export_slot(slot, path, sizeof(path))) {
+            const char *base = strrchr(path, '/');
+            const char *base2 = strrchr(path, '\\');
+            if (!base || (base2 && base2 > base)) base = base2;
+            snprintf(msg, sizeof(msg), "Exported to replays/%s", base ? base + 1 : path);
+            host_osd_push(msg, 2400);
+        } else {
+            host_osd_push("Replay export failed", 1800);
+        }
+    } else {
+        const uint32_t now = SDL_GetTicks();
+        if (savestate_menu_delete_armed != slot ||
+            (uint32_t)(now - savestate_menu_delete_armed_ms) > 2000u) {
+            savestate_menu_delete_armed = slot;
+            savestate_menu_delete_armed_ms = now;
+            snprintf(msg, sizeof(msg), "Press delete again to delete replay %d", slot + 1);
+            host_osd_push(msg, 2000);
+            return;
+        }
+        savestate_menu_delete_armed = -1;
+        snprintf(msg, sizeof(msg), replay_session_delete_slot(slot) ?
+                 "Replay %d deleted" : "Replay %d could not be deleted", slot + 1);
+        host_osd_push(msg, 1500);
+        psx_savestate_menu_note_slots_changed();
+        savestate_menu_sync_overlay();
+    }
+}
+
 static int savestate_submit_slot(int slot, int save) {
     if (!save && !savestate_slot_exists(slot)) {
         char msg[32];
@@ -6667,6 +6728,10 @@ static int savestate_submit_slot(int slot, int save) {
 }
 
 static void savestate_menu_submit(int save) {
+    if (savestate_menu_replays) {
+        savestate_menu_replay_action(save ? 1 : 0);
+        return;
+    }
     if (savestate_submit_slot(savestate_menu_slot, save) && savestate_menu_open) {
         savestate_menu_open = 0;
         savestate_menu_sync_overlay();
@@ -6706,6 +6771,15 @@ static void savestate_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode,
         savestate_menu_move(-1);
     } else if (key == SDLK_RIGHT || key == SDLK_DOWN) {
         savestate_menu_move(+1);
+    } else if (key == SDLK_TAB) {
+        savestate_menu_set_page(!savestate_menu_replays);
+    } else if (savestate_menu_replays) {
+        if (key == SDLK_RETURN || key == SDLK_SPACE || key == SDLK_l)
+            savestate_menu_replay_action(0);
+        else if (key == SDLK_e)
+            savestate_menu_replay_action(1);
+        else if (key == SDLK_DELETE)
+            savestate_menu_replay_action(2);
     } else if (key == SDLK_s) {
         savestate_menu_submit(1);
     } else if (key == SDLK_l) {
@@ -6716,9 +6790,9 @@ static void savestate_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode,
 }
 
 static void savestate_menu_poll_nav(uint32_t now_ms) {
-    static int prev_load, prev_save, prev_cancel, prev_toggle;
+    static int prev_load, prev_save, prev_cancel, prev_toggle, prev_page, prev_del;
     static int held_dir, last_step_ms;
-    int prev = 0, next = 0, load = 0, save = 0, cancel = 0;
+    int prev = 0, next = 0, load = 0, save = 0, cancel = 0, page = 0, del = 0;
     int dir = 0;
 
     SDL_GameController *h = g_players[0].handle;
@@ -6740,6 +6814,11 @@ static void savestate_menu_poll_nav(uint32_t now_ms) {
             save = 1;
         if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B))
             cancel = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ||
+            SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER))
+            page = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_Y))
+            del = 1;
     }
 
     const int toggle = hotkey_pad_binding_down(g_hotkey_pad_save_state_menu);
@@ -6755,11 +6834,17 @@ static void savestate_menu_poll_nav(uint32_t now_ms) {
         savestate_menu_submit(0);
     if (save && !prev_save)
         savestate_menu_submit(1);
+    if (page && !prev_page && savestate_menu_open)
+        savestate_menu_set_page(!savestate_menu_replays);
+    if (del && !prev_del && savestate_menu_open && savestate_menu_replays)
+        savestate_menu_replay_action(2);
     if (cancel && !prev_cancel)
         savestate_menu_close();
     prev_load = load;
     prev_save = save;
     prev_cancel = cancel;
+    prev_page = page;
+    prev_del = del;
 
     if (!savestate_menu_open)
         return;
