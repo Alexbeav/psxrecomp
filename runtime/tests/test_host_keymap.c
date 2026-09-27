@@ -49,6 +49,14 @@ int main(int argc, char **argv) {
     check(host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
                             (int)SDLK_F6, mod_ctrl()),
           "default controller port swap is Ctrl+F6");
+    check(host_keymap_match(HOST_KEYMAP_REPLAY_RECORD, (int)SDLK_F11, 0),
+          "default replay record is F11");
+    check(!host_keymap_match(HOST_KEYMAP_REPLAY_RECORD, (int)SDLK_F11,
+                             (int)KMOD_SHIFT),
+          "Shift+F11 is not replay record (the route MENU marker)");
+    check(!strcmp(host_keymap_label(HOST_KEYMAP_REPLAY_RECORD, label,
+                                    sizeof(label)), "F11"),
+          "replay record label is F11");
 
     f = fopen(cfg, "wb");
     check(f != NULL, "create temporary config.ini");
@@ -60,7 +68,8 @@ int main(int argc, char **argv) {
           "VolumeDown = Down\n"
           "DisplayPerf = F10\n"
           "RuntimeMenu = F2\n"
-          "SwapControllerPorts = F5\n",
+          "SwapControllerPorts = F5\n"
+          "ReplayRecord = F12\n",
           f);
     fclose(f);
 
@@ -94,6 +103,9 @@ int main(int argc, char **argv) {
     check(host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
                             (int)SDLK_F5, 0),
           "controller port swap rebind uses F5");
+    check(host_keymap_match(HOST_KEYMAP_REPLAY_RECORD, (int)SDLK_F12, 0) &&
+          !host_keymap_match(HOST_KEYMAP_REPLAY_RECORD, (int)SDLK_F11, 0),
+          "replay record rebind uses F12 and drops F11");
     check(host_keymap_match_event(HOST_KEYMAP_DISPLAY_PERF,
                                   (int)SDLK_UNKNOWN,
                                   (int)SDL_SCANCODE_F10, 0),

@@ -32,6 +32,11 @@ extern uint64_t psx_cycle_count;
 static char s_product_serial[INPUT_ROUTE_V3_TEXT];
 static char s_product_disc[PATH_BYTES];
 static char s_product_bios_stem[INPUT_ROUTE_V3_TEXT];
+/* The disc does not change under a running product (a disc swap calls
+ * set_product again), so its digest is hashed once. */
+static int s_digest_cached;
+static uint32_t s_digest_kind;
+static uint8_t s_digest[32];
 
 /* Armed state shared by replay and record. */
 static int s_active;         /* markers to check, or recording */
@@ -89,6 +94,7 @@ void input_route_session_set_product(const char *disc_serial,
     size_t n;
     copy_text(s_product_serial, sizeof(s_product_serial), disc_serial);
     copy_text(s_product_disc, sizeof(s_product_disc), disc_path);
+    s_digest_cached = 0;
     for (const char *p = base; *p; ++p)
         if (*p == '/' || *p == '\\') base = p + 1;
     dot = strrchr(base, '.');
@@ -161,7 +167,21 @@ static int cue_file_line(const char *line, char *name, size_t size)
     return *p ? -1 : 1;
 }
 
+static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32]);
+
 static const char *disc_digest(uint32_t *kind, uint8_t out[32])
+{
+    if (!s_digest_cached) {
+        const char *error = disc_digest_uncached(&s_digest_kind, s_digest);
+        if (error) return error;
+        s_digest_cached = 1;
+    }
+    *kind = s_digest_kind;
+    memcpy(out, s_digest, 32);
+    return NULL;
+}
+
+static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32])
 {
     uint8_t digest[32];
     char text[65];
@@ -517,6 +537,31 @@ int input_route_session_verify_identity(int call_hle, int boot_skip)
     if (mismatches) return 0;
     fprintf(stdout, "input_route_identity: match pin=%s disc=%s bios=%s boot=%s\n",
             pin, s_product_serial, s_product_bios_stem, boot);
+    return 1;
+}
+
+int input_route_session_identity(InputRouteV3 *meta, int call_hle, int boot_skip,
+                                 char *why, size_t why_size)
+{
+    const char *pin = PSX_FRAMEWORK_PIN;
+    uint32_t kind = 0;
+    uint8_t digest[32];
+    const char *error = NULL;
+    if (!s_product_serial[0] || !s_product_bios_stem[0])
+        error = "a disc with a boot serial and a BIOS file are required";
+    else
+        error = disc_digest(&kind, digest);
+    if (error) { snprintf(why, why_size, "%s", error); return 0; }
+    meta->has_identity = 1;
+    /* A product built outside a git checkout has no pin; replays still carry
+     * a (non-matching) placeholder so playback can warn. */
+    copy_text(meta->pin, sizeof(meta->pin),
+              valid_pin(pin) ? pin : "0000000000000000000000000000000000000000");
+    copy_text(meta->disc_serial, sizeof(meta->disc_serial), s_product_serial);
+    copy_text(meta->bios_stem, sizeof(meta->bios_stem), s_product_bios_stem);
+    copy_text(meta->boot_mode, sizeof(meta->boot_mode), boot_mode_name(call_hle, boot_skip));
+    meta->disc_digest_kind = kind;
+    memcpy(meta->disc_digest, digest, 32);
     return 1;
 }
 

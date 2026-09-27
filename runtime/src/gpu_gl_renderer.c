@@ -4183,6 +4183,10 @@ static void interp_present_source_interval(void) {
 /* Draw one host OSD ARGB image into the default framebuffer at (vx,vy)
  * in top-left window coordinates (y down). Bitmap is ow×oh; viewport is
  * dw×dh (may upscale for HiDPI / large windows). */
+/* 1 while drawing an OSD image with a transparent background (the REC badge):
+ * straight alpha blending instead of the opaque-panel no-blend path. */
+static int s_osd_alpha_blend;
+
 static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
                               int dw, int dh, int vx, int vy, int ww, int wh) {
     if (!px || ow <= 0 || oh <= 0 || dw <= 0 || dh <= 0 ||
@@ -4213,7 +4217,12 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
     glDisable(GL_DEPTH_TEST);
     /* host_osd bakes opaque panels (A=0xFF). Do not blend — PSX mode-2
      * REVERSE_SUBTRACT left armed across FMV present made toasts solid black. */
-    glDisable(GL_BLEND);
+    if (s_osd_alpha_blend) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    } else {
+        glDisable(GL_BLEND);
+    }
     if (p_glBlendEquationSeparate)
         p_glBlendEquationSeparate(PSXGL_FUNC_ADD, PSXGL_FUNC_ADD);
     /* GL viewport origin is bottom-left. */
@@ -4233,6 +4242,8 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
         p_glBindVertexArray(0);
     }
     p_glUseProgram(0);
+    if (s_osd_alpha_blend)
+        glDisable(GL_BLEND);
 }
 
 /* Composite host toast + volume bar into the default framebuffer, then swap. */
@@ -4257,6 +4268,15 @@ static void gl_swap_with_osd(void) {
                 int vx = (ww > dw + margin) ? (ww - dw - margin) : margin;
                 int vy = (wh > dh) ? ((wh - dh) / 2) : margin;
                 gl_draw_osd_image(px, ow, oh, dw, dh, vx, vy, ww, wh);
+            }
+            if (host_osd_rec_image(&px, &ow, &oh) && px) {
+                /* One alpha-blended draw: the badge has a transparent
+                 * background (a quad per opaque run cost ~100 texture
+                 * updates per frame while recording). */
+                const int rx = (ww > ow * ui + margin) ? (ww - ow * ui - margin) : margin;
+                s_osd_alpha_blend = 1;
+                gl_draw_osd_image(px, ow, oh, ow * ui, oh * ui, rx, margin, ww, wh);
+                s_osd_alpha_blend = 0;
             }
             if (psx_rewind_overlay_image(&px, &ow, &oh) && px) {
                 float slide = psx_rewind_slide();
