@@ -17,7 +17,7 @@ static void set_option(const char *key,const char *value) {
 }
 void psx_devices_service_to_now(void) {
 #ifdef PSX_TEST_SOURCE_GPU_IMPLEMENTED
-    dsm_service(DSM_GPU, psx_cycle_count);
+    dsm_service_edges(psx_cycle_count);
 #endif
 }
 void psx_advance_cycles_slow(uint32_t n) {psx_cycle_count+=n;psx_devices_service_to_now();}
@@ -64,9 +64,10 @@ void spu_dma_write(uint32_t v) {(void)v;abort();}
 uint32_t spu_dma_read(void) {abort();}
 void audio_trace_event(uint16_t k,uint32_t a,uint32_t b) {(void)k;(void)a;(void)b;abort();}
 static void setup(uint32_t blocks,uint32_t words,uint64_t phase) {
+    psx_cycle_count=phase;psx_next_service_cycle=0;
     dma_init();memset(ram,0,sizeof(ram));irqs=i_stat=upload_count=0;
     for(uint32_t i=0;i<65536;i++)ram[0x10000/4+i]=0xAB000000+i;
-    upload_left=blocks*words;psx_cycle_count=phase;psx_next_service_cycle=0;
+    upload_left=blocks*words;
     channels[2].madr=0x10000;channels[2].bcr=(blocks<<16)|words;
     channels[2].chcr=0x01000201;dpcr|=8u<<8;dicr=(1u<<23)|(1u<<18);
 }
@@ -87,7 +88,7 @@ int main(int argc,char **argv) {
             unsigned phase,t,count,madr,bcr,chcr,flags;
             assert(fscanf(f,"%u %u %u %u %u %u %u",&phase,&t,&count,&madr,&bcr,&chcr,&flags)==7);
             if(line%4==0){setup(12,16,phase);try_execute(2);}
-            psx_cycle_count=t;dsm_service(DSM_GPU, psx_cycle_count);
+            psx_cycle_count=t;dsm_service_edges(psx_cycle_count);
             unsigned diff=upload_count>count?upload_count-count:count-upload_count;
             if(diff){count_rows++;if(diff>count_max)count_max=diff;}
             if(diff>1 || channels[2].madr!=madr || channels[2].bcr!=bcr ||
@@ -100,11 +101,11 @@ int main(int argc,char **argv) {
             char kind[8];unsigned t,count,chcr,flags;
             assert(fscanf(f,"%7s %u %u %u %u",kind,&t,&count,&chcr,&flags)==5&&!strcmp(kind,"WRITE"));
             setup(12,16,127);dicr=1u<<23;try_execute(2);
-            psx_cycle_count=128;dsm_service(DSM_GPU, psx_cycle_count);psx_cycle_count=256;dsm_service(DSM_GPU, psx_cycle_count);
+            psx_cycle_count=128;dsm_service_edges(psx_cycle_count);psx_cycle_count=256;dsm_service_edges(psx_cycle_count);
             psx_cycle_count=t;dma_write(0x1f8010f4,(1u<<23)|(1u<<18));
             assert(upload_count==count && channels[2].chcr==chcr && irqs==!!(flags&4));
             assert(fscanf(f,"%7s %u %u %u %u",kind,&t,&count,&chcr,&flags)==5&&!strcmp(kind,"END"));
-            psx_cycle_count=384;dsm_service(DSM_GPU, psx_cycle_count);
+            psx_cycle_count=384;dsm_service_edges(psx_cycle_count);
             assert(upload_count==count && channels[2].chcr==chcr && irqs==!!(flags&4));
         }
         unsigned extra;assert(fscanf(f,"%u",&extra)==EOF);fclose(f);
@@ -132,12 +133,12 @@ int main(int argc,char **argv) {
     assert(channels[2].bcr==0x00090010 && channels[2].madr==0x10080);
     assert(uploaded[42]==0xAB00002A);
     ram[0x10000/4+43]=0xDEADBEEF; /* unread future RAM must remain live */
-    psx_cycle_count=127;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count==43);
-    psx_cycle_count=128;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count>43 && uploaded[43]==0xDEADBEEF && !irqs);
-    psx_cycle_count=255;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count<192 && dma_cpu_read_penalty()==15);
-    psx_cycle_count=256;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count==192 && irqs==1 && dma_cpu_read_penalty()==0);
+    psx_cycle_count=127;dsm_service_edges(psx_cycle_count);assert(upload_count==43);
+    psx_cycle_count=128;dsm_service_edges(psx_cycle_count);assert(upload_count>43 && uploaded[43]==0xDEADBEEF && !irqs);
+    psx_cycle_count=255;dsm_service_edges(psx_cycle_count);assert(upload_count<192 && dma_cpu_read_penalty()==15);
+    psx_cycle_count=256;dsm_service_edges(psx_cycle_count);assert(upload_count==192 && irqs==1 && dma_cpu_read_penalty()==0);
     assert(channels[2].madr==0x10300 && channels[2].bcr==16 && !(channels[2].chcr&(1u<<24)));
-    psx_cycle_count=512;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count==192 && irqs==1);
+    psx_cycle_count=512;dsm_service_edges(psx_cycle_count);assert(upload_count==192 && irqs==1);
     for(uint32_t phase=0;phase<128;phase++) {
         setup(12,16,phase);try_execute(2);
         assert(upload_count==43 && dma_cycles_to_internal_event()==128-phase);
@@ -145,8 +146,8 @@ int main(int argc,char **argv) {
          * transfer, of which64 are supplied at kick. Service uses actual
          * elapsed time; the first partial interval is not a full128. */
         uint32_t end=((phase+212u+127u)/128u)*128u;
-        psx_cycle_count=end-1;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count<192);
-        psx_cycle_count=end;dsm_service(DSM_GPU, psx_cycle_count);assert(upload_count==192 && irqs==1);
+        psx_cycle_count=end-1;dsm_service_edges(psx_cycle_count);assert(upload_count<192);
+        psx_cycle_count=end;dsm_service_edges(psx_cycle_count);assert(upload_count==192 && irqs==1);
     }
     setup(1,1,0);try_execute(2);assert(upload_count==1 && irqs==1 && dma_cpu_read_penalty()==0);
     setup(2,256,0);try_execute(2);assert(dma_cpu_read_penalty()==200);
@@ -171,7 +172,9 @@ int main(int argc,char **argv) {
 }
 
 /* LL option is off in this adjacent fixture. */
-int gpu_dma_source_ll_ready(void) {abort();}
+/* GPUSTAT.28 "ready to receive DMA block": the upload checks it at each block start (spec 2.4). */
+static int gpu_block_ready=1;
+int gpu_dma_source_ll_ready(void) {return gpu_block_ready;}
 
 /* Source GPU projection is inactive in this isolated controller fixture. */
 int source_gpu_runtime_active(void) {return 0;}

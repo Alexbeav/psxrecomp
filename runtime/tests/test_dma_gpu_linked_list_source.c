@@ -75,8 +75,9 @@ uint32_t spu_dma_read(void) {abort();}
 void audio_trace_event(uint16_t k,uint32_t a,uint32_t b) {(void)k;(void)a;(void)b;abort();}
 
 static void setup(uint32_t words,int ready) {
+    psx_cycle_count=27;psx_next_service_cycle=0;
     dma_init();memset(ram,0,sizeof(ram));irqs=i_stat=upload_count=0;
-    ready_state=ready;psx_cycle_count=27;psx_next_service_cycle=0;
+    ready_state=ready;
     ram[0x1000/4]=(words<<24)|0xffffff;
     channels[2].madr=0x1000;channels[2].bcr=0;
     channels[2].chcr=0x01000401;dpcr|=8u<<8;dicr=(1u<<23)|(1u<<18);

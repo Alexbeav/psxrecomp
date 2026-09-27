@@ -777,66 +777,57 @@ static void start_async_gpu_linked_list(void) {
 /* ---- Source-profile DMA machines (TAS/source mode) ----
  *
  * Selected by PSX_GPU_DMA_MODEL (GPU upload, GPU linked list, SPU),
- * PSX_CD_DMA_MODEL (CD-ROM) and PSX_INPUT_ROUTE_DMA_MODEL (OTC), each with
- * PSX_INPUT_ROUTE_FILE. The default paths above and below are unchanged.
+ * PSX_CD_DMA_MODEL (CD-ROM), PSX_INPUT_ROUTE_DMA_MODEL (OTC) and the source
+ * MDEC, each with PSX_INPUT_ROUTE_FILE. The default paths above and below are
+ * unchanged.
  *
- * Register semantics follow PSX-SPX "DMA Channels" (SyncMode 0/1/2, MADR/BCR
- * update rules, the linked-list header and end code, OTC fill order). The
- * timing below is fitted to authored oracle fixtures; each constant cites its
- * rows. Receipts are under evidence/T172/clean-rewrite-fixtures-20260926.
+ * Behaviour follows SPEC-PS1B-186-DMA-BEHAVIOUR-v2 (evidence/T172/clean-
+ * rewrite-specs-20260926); "spec n.m" cites its sections. Register semantics
+ * follow PSX-SPX "DMA Channels" [DOC]; [EMU] marks oracle behaviour where
+ * PSX-SPX differs or is silent (spec 14).
  *
- * One machine per channel. A machine owns a cycle credit. The kick grants
- * DSM_KICK_CREDIT; after that, credit is granted for elapsed guest cycles.
- * Work items (words, block overheads, node headers) are taken while the
- * credit is positive, so the last item may overdraw it.
- *   - OTC, GPU upload, CD and SPU are credited only at the global 128-cycle
- *     service edges ([ORACLE FIXTURE D9a]: the OTC halt steps linearly with the
- *     kick phase over one 128-cycle span; D9e reproduces all 12 halting CD rows
- *     with the same edge phase; D9b/D3 completions quantise the same way).
- *   - The linked list is credited continuously and banks no positive credit
- *     while the GPU is not ready ([NOT OBSERVED]: D9d timing is gated by the
- *     GPU FIFO model; the PS1B-182 route replays are its acceptance).
- *   - MDEC in/out (ch0/ch1) follow the same edges. A block starts only while the
- *     MDEC requests it (input FIFO empty / output FIFO full) and moves at once
- *     ([ORACLE FIXTURE D11a] stall counts).
- *   - The source MDEC is clocked at every service edge, whether or not a DMA
- *     runs, and at an MDEC DMA kick ([ORACLE FIXTURE D15b]: 8/8 status
- *     timelines exact; D17a: the same model on the kick-phase sweep, where a
- *     per-cycle clock fails; D17b: with no access at all the decoder still
- *     advances). [NOT FITTED: D18a] scoring MADR1 step times (+-10 cycles)
- *     with one global edge offset, 59 of the 128 DMA0 kick phases miss. A
- *     kick-anchored 32-cycle visibility rule would leave 24, but it may be the
- *     sampling loop's own period (D21 checks). The remaining misses are one
- *     block one service edge early (47 steps at about -123 cycles); no slip
- *     exceeds one edge. */
+ * Service points (spec 1.1): every 128-cycle grid edge (cycle 0 = power-on),
+ * every guest write to 1F801080h-1F8010FFh before it takes effect, and every
+ * frontend frame return. With the source GPU runtime, all three reach
+ * dma_source_gpu_service_at() from the GPU service clock after the GPU has
+ * been brought up to the cycle (its DMA events fall on the grid, a DMA
+ * register write raises its WRITE event, a frame return its FRAME_END DMA
+ * event). Without it, dma_advance() serves the grid edges and a register
+ * write serves itself. At a service point (spec 1.3): the MDEC decoder
+ * advances by the elapsed cycles, then channels 0, 1, 2, 3, 4 and 6 each gain
+ * the elapsed cycles as allowance and take steps while the allowance is above
+ * zero (the last step may overdraw). A positive remainder is discarded (spec
+ * 2.2). Missed grid edges are served one by one (spec 1.4). Readiness is
+ * checked only at a block start or a list header fetch (spec 2.4). Reads are
+ * not service points (spec 1.2).
+ *
+ * [ORACLE FIXTURE D23 e: grid phase] an OTC kicked during a list walk takes
+ * nothing from the list; D23 e's one-slice delay is the kick landing at another
+ * grid phase (spec 11). [NOT FITTED: D18a] its misses were scored with one
+ * global edge offset; re-score with the phase taken from register steps.
+ * [OPEN: spec 1.3 vs D18d] advancing the decoder at a DMA register write moves
+ * the MDEC status remaining-count one edge earlier in the D18d shape, where the
+ * oracle rows show it unchanged; MADR1/CHCR are unchanged either way.
+ */
 
 int source_gpu_runtime_active(void);
 static void try_execute(int ch);
 
-#define DSM_QUANTUM          128u /* [ORACLE FIXTURE D9a, D9e] service edge period  */
-#define DSM_KICK_CREDIT       64  /* [ORACLE FIXTURE D9a] OTC n<=64 completes at the
-                                   * kick; [D10] no upload halt iff BA*(BS+7)<=64     */
+#define DSM_QUANTUM          128u /* [EMU] grid edge period (spec 1.1); D9a, D9e     */
+#define DSM_KICK_CREDIT       64  /* [EMU] kick allowance (spec 6.3); D9a, D10       */
 #define DSM_OTC_WORD           1  /* [DOC] "DMA Transfer Rates"; D9a exact            */
-#define DSM_GPU_WORD           1  /* [DOC]; D10 halt = BS+5 for one block             */
-#define DSM_GPU_BLOCK          7  /* [ORACLE FIXTURE D10, D10b] no halt iff
-                                   * BA*(BS+7) <= 64: 1x57/1x58, 2x25/2x26, 3x14/3x15,
-                                   * 4x9/4x10 and 8x1/8x2 split exactly there (all 33
-                                   * D10b shapes; BA*BS <= 57 misses 17)              */
-#define DSM_CD_WORD            9  /* [ORACLE FIXTURE D9e] 128..512-word slope 8.99 and
-                                   * 9.03 at both 1F801018 settings. PSX-SPX gives
-                                   * 24 (BIOS) or 40 (games); the default path keeps
-                                   * its own cost.                                     */
-#define DSM_SPU_WORD          48  /* [ORACLE FIXTURE D3] read and write, all sizes    */
-#define DSM_LL_NODE           10  /* [ORACLE FIXTURE D23] header-only node: slope
-                                   * 10.0 (N 256..1024); with the kick credit and
-                                   * edge credit below, groups a/e land on the
-                                   * observed slices                                  */
-#define DSM_LL_NODE_PAYLOAD   15  /* [ORACLE FIXTURE D23 b] header of a node with
-                                   * payload: bounded to 13.4 < h <= 15.4 by the
-                                   * k = 2/4/8/15 slice edges (word cost 1)            */
-#define DSM_UPLOAD_WAIT_CAP  201u /* [ORACLE FIXTURE D10] load wait = min(BS,201)-1   */
-#define DSM_MDEC_WORD          1  /* [DOC] MDEC in/out 1; D11 timelines do not depend
-                                   * on it between 1 and 4                             */
+#define DSM_GPU_BLOCK          7  /* [EMU] SyncMode 1 block start on channel 2 (spec
+                                   * 2.3); D10, D10b. Charged as its own step before
+                                   * the first word: amendment 6 ruled the one-step
+                                   * order unobservable (D16 relaxation)              */
+#define DSM_CD_WORD            9  /* [EMU] spec 2.3; D9e (PSX-SPX: 24 or 40)          */
+#define DSM_SPU_WORD          48  /* [EMU] spec 2.3; D3 (PSX-SPX: 4, uncertain)       */
+#define DSM_CHOP_WORD          8  /* [EMU] spec 2.3: a word with CHCR bit 8 on 0-2    */
+#define DSM_LL_NODE           10  /* [EMU] empty list node header (spec 2.3); D23     */
+#define DSM_LL_NODE_PAYLOAD   15  /* [EMU] header of a node with payload (spec 2.3);
+                                   * D23 b agrees                                    */
+#define DSM_STALL_CAP        200u /* [EMU] upload read stall BS-1, capped (spec 5.2)  */
+#define DSM_STOP_BUDGET     2048  /* [EMU] cycles of work a stop may move (spec 7.5)  */
 #define DSM_MDEC_FEED_STEP   128u /* the MDEC credit cap: feeding in steps no longer
                                    * than this equals a per-cycle clock               */
 
@@ -844,26 +835,31 @@ enum { DSM_OTC, DSM_GPU, DSM_LL, DSM_CD, DSM_SPU, DSM_MDEC_IN, DSM_MDEC_OUT, DSM
 static const uint8_t dsm_channel[DSM_COUNT] = { 6, 2, 2, 3, 4, 0, 1 };
 static const char *const dsm_name[DSM_COUNT] = { "otc", "upload", "ll", "cd", "spu",
                                                  "mdec_in", "mdec_out" };
+/* Channel order at a service point (spec 1.3): 0, 1, 2, 3, 4, 6. */
+static const uint8_t dsm_order[DSM_COUNT] = { DSM_MDEC_IN, DSM_MDEC_OUT, DSM_GPU, DSM_LL,
+                                              DSM_CD, DSM_SPU, DSM_OTC };
 
 typedef struct {
-    uint8_t  running;      /* the machine owns this channel's transfer            */
-    uint8_t  halts_cpu;    /* CPU held until the machine finishes                 */
-    uint8_t  stage;        /* upload: block overhead paid; LL: inside a node     */
-    uint8_t  held;         /* LL: stopped on a GPU that is not ready              */
-    uint32_t cursor;       /* next RAM word address                               */
-    uint32_t words_left;   /* words still to move (LL: in the current node)       */
-    uint32_t blk_words;    /* SyncMode 1 block length                             */
-    uint32_t blk_pos;      /* words moved in the current block                    */
-    uint32_t node_count;   /* LL nodes started                                    */
-    uint32_t link;         /* LL: next-node pointer of the current header         */
-    int32_t  credit;       /* cycles available to spend                           */
-    uint64_t served_until; /* guest cycle credited so far                         */
+    uint8_t  running;      /* the machine owns this channel's busy transfer       */
+    uint8_t  halts_cpu;    /* the transfer holds the CPU now (spec 5.1)           */
+    uint8_t  stage;        /* a block (SyncMode 0: the transfer; list: a node) is
+                            * in progress                                         */
+    uint8_t  held;         /* waiting for the device at a block start (spec 2.4)  */
+    uint32_t cursor;       /* next word address, 24 bits (spec 3.1)               */
+    uint32_t words_left;   /* words left in the block, node or SyncMode 0 transfer */
+    uint32_t blk_words;    /* length of the SyncMode 1 block in progress          */
+    uint32_t blk_pos;      /* words moved in that block                           */
+    uint32_t node_count;   /* blocks started / list headers fetched               */
+    uint32_t link;         /* SyncMode 1: start address of the block in progress  */
+    int32_t  credit;       /* allowance; below zero is a debt (spec 2.1)          */
+    uint64_t served_until; /* the machine's latest service point                  */
 } DmaSrcMachine;
 
 static DmaSrcMachine dsm[DSM_COUNT];
 static int dsm_spu_model;      /* SPU follows the GPU source profile (spu.c uses the same switch) */
-static uint32_t dsm_wait_live; /* upload load wait at this instant */
-static uint64_t dsm_mdec_clock; /* guest cycle up to which the source MDEC has been clocked */
+static uint32_t dsm_wait_live; /* upload read stall at the latest evaluation (spec 5.2) */
+static uint64_t dsm_mdec_clock; /* the latest service point; the source MDEC is clocked to it */
+static int dsm_write_serviced; /* the current register write has had its service point */
 
 static void dsm_fail(const char *what) {
     fprintf(stderr, "[dma-model] %s\n", what);
@@ -875,12 +871,11 @@ static int dsm_profile_any(void) {
            otc_source_model || mdec_source_active();
 }
 
-/* Clock the source MDEC up to `now` (mdec.h: its service is owned by source
- * DMA). Callers pass a service edge or a kick time. Steps of at most the MDEC
- * credit cap equal one feed per edge; after many steps the decoder can only be
- * waiting, so the rest is one step. */
+/* Advance the source MDEC to `now` (mdec.h: its service is owned by source
+ * DMA). Steps of at most the MDEC credit cap equal a per-cycle clock; after
+ * many steps the decoder can only be waiting, so the rest is one step. */
 static void dsm_mdec_feed(uint64_t now) {
-    if (!mdec_source_active()) { dsm_mdec_clock = now; return; }
+    if (!mdec_source_active()) { if (now > dsm_mdec_clock) dsm_mdec_clock = now; return; }
     for (unsigned n = 0; dsm_mdec_clock < now; n++) {
         uint64_t step = now - dsm_mdec_clock;
         if (step > DSM_MDEC_FEED_STEP && n < 4096u) step = DSM_MDEC_FEED_STEP;
@@ -895,19 +890,11 @@ static int dsm_live_any(void) {
     return 0;
 }
 
-/* The source CPU owner (source_gpu_runtime) halts the CPU and latches the load
- * wait at instruction boundaries. Without it, a halting kick advances the
- * guest clock itself and the wait is published at once. */
+/* The source CPU owner (source_gpu_runtime) halts the CPU and latches the read
+ * stall at instruction boundaries. Without it, a halting kick advances the
+ * guest clock itself and the stall is published at once. */
 static int dsm_cpu_owner(void) {
     return source_gpu_runtime_active();
-}
-
-static void dsm_publish_wait(void) {
-    dsm_wait_live = dsm[DSM_GPU].running
-        ? (dsm[DSM_GPU].blk_words < DSM_UPLOAD_WAIT_CAP ? dsm[DSM_GPU].blk_words
-                                                        : DSM_UPLOAD_WAIT_CAP) - 1u
-        : 0u;
-    if (!dsm_cpu_owner()) g_dma_cpu_read_wait = dsm_wait_live;
 }
 
 static void dsm_credit_add(DmaSrcMachine *m, uint64_t cycles) {
@@ -915,93 +902,71 @@ static void dsm_credit_add(DmaSrcMachine *m, uint64_t cycles) {
     m->credit = c > 0x40000000 ? 0x40000000 : (int32_t)c;
 }
 
-/* 1 while a guest write to a DMA register services the machines, 2 during an
- * explicit service point. */
-static int dsm_write_service;
-
-/* Credit whole service edges passed since the last grant. A guest write to any
- * DMA register instead grants the exact elapsed cycles ([ORACLE FIXTURE D12]:
- * after a DICR/DPCR/idle-MADR write the upload's MADR and BCR read ahead of the
- * no-access control by the elapsed credit, while completion stays on the
- * service edge; a DICR read leaves them unchanged). */
-static void dsm_credit_edges(DmaSrcMachine *m, uint64_t now) {
-    /* MDEC in/out take credit only at edges and kicks even on a register write
-     * ([ORACLE FIXTURE D18d]: 512/512 timelines unchanged by a write). */
-    int exact = dsm_write_service == 2 ||
-                (dsm_write_service && m != &dsm[DSM_MDEC_IN] && m != &dsm[DSM_MDEC_OUT]);
-    uint64_t edge = exact ? now : now - now % DSM_QUANTUM;
-    if (edge <= m->served_until) return;
-    dsm_credit_add(m, edge - m->served_until);
-    m->served_until = edge;
-}
-
-static void dsm_begin(int k, uint32_t cursor, uint32_t words) {
+static void dsm_idle(int k) {
     DmaSrcMachine *m = &dsm[k];
-    memset(m, 0, sizeof *m);
-    m->running = 1;
-    m->cursor = cursor & 0x1FFFFCu;
-    m->words_left = words;
-    m->credit = DSM_KICK_CREDIT;
-    m->served_until = psx_cycle_count;
+    m->running = 0;
+    m->halts_cpu = 0;
+    m->stage = 0;
+    m->held = 0;
+    m->words_left = 0;
+    m->credit = 0;
 }
 
+/* Completion (spec 4.1): CHCR bits 24 and 28 clear and the flag latches in
+ * complete_transfer(). CD keeps its capture bookkeeping; its MADR stays as the
+ * transfer left it (spec 3.3, 3.4). */
 static void dsm_end(int k) {
-    dsm[k].running = 0;
-    dsm[k].halts_cpu = 0;
-    dsm[k].held = 0;
-    dsm[k].credit = 0;
-    if (k == DSM_GPU) dsm_publish_wait();
+    uint32_t cursor = dsm[k].cursor;
+    dsm_idle(k);
+    if (k == DSM_CD && !(channels[3].chcr & 1u)) {
+        uint32_t madr = channels[3].madr;
+        finish_async_cdrom_transfer(cursor & 0x1FFFFCu);
+        channels[3].madr = madr;
+        return;
+    }
     complete_transfer(dsm_channel[k]);
 }
 
-static int32_t dsm_step(int k) {
-    int32_t step = ((channels[dsm_channel[k]].chcr >> 1) & 1u) ? -4 : 4;
-    return step;
+/* [EMU] bus error (spec 3.2): a word or header due at an address with bit 23
+ * set stops the channel with no word moved and no channel flag; DICR bit 15
+ * sets and the IRQ line is re-evaluated. */
+static void dsm_bus_error(int k) {
+    int ch = dsm_channel[k];
+    uint32_t before = dicr;
+    dsm_idle(k);
+    if (ch == 3) cancel_async_transfer(3);
+    channels[ch].chcr &= ~((1u << 24) | (1u << 28));
+    dicr |= 1u << 15;
+    raise_dma_irq_on_master_edge(before);
 }
 
-/* OTC (ch6): fills backwards; the last entry written is the end code. MADR and
- * BCR are not updated (SyncMode 0) [DOC]; D9a end MADR = start. */
-static void dsm_run_otc(void) {
-    DmaSrcMachine *m = &dsm[DSM_OTC];
-    while (m->words_left && m->credit > 0) {
-        uint32_t v = m->words_left == 1u ? 0x00FFFFFFu : ((m->cursor - 4u) & 0x00FFFFFFu);
-        psx_write_word(m->cursor, v);
-        m->cursor = (m->cursor - 4u) & 0x1FFFFCu;
-        m->words_left--;
-        m->credit -= DSM_OTC_WORD;
+/* Device readiness at a block start (spec 2.4). */
+static int dsm_ready(int k) {
+    switch (dsm_channel[k]) {
+        case 0: return mdec_dma_write_ready();
+        case 1: return mdec_dma_read_ready();
+        case 2: {
+            if (!(channels[2].chcr & 1u)) return 1;          /* GPU to RAM: always */
+            int r = gpu_dma_source_ll_ready();
+            if (k == DSM_LL && r < 0)
+                dsm_fail("source GPU linked list: GPU state outside the profile");
+            /* An upload into a GPU state the source projection does not describe
+             * (a VRAM transfer without the projection) keeps the pre-spec
+             * ungated start [NOT OBSERVED]. */
+            return r != 0;
+        }
+        case 6: return (channels[6].chcr >> 28) & 1u;        /* D20b */
+        default: return 1;                                    /* CD, SPU */
     }
-    if (!m->words_left) dsm_end(DSM_OTC);
 }
 
-/* GPU VRAM upload (ch2 SyncMode 1, RAM to GPU). Each block pays its overhead
- * before its first word. BA counts blocks not yet started; MADR holds the
- * current block's start and the end address at the finish [DOC]. */
-static void dsm_run_upload(void) {
-    DmaSrcMachine *m = &dsm[DSM_GPU];
-    int32_t step = dsm_step(DSM_GPU);
-    while (m->words_left && m->credit > 0) {
-        if (!m->stage) {
-            uint32_t ba = channels[2].bcr >> 16;
-            channels[2].bcr = (channels[2].bcr & 0xFFFFu) | (((ba - 1u) & 0xFFFFu) << 16);
-            m->credit -= DSM_GPU_BLOCK;
-            m->stage = 1;
-            continue;
-        }
-        uint32_t word = psx_read_word(m->cursor);
-        gpu_set_gp0_source(m->cursor);
-        gpu_write_gp0(word);
-        m->cursor = (m->cursor + (uint32_t)step) & 0x1FFFFCu;
-        m->words_left--;
-        m->credit -= DSM_GPU_WORD;
-        if (++m->blk_pos == m->blk_words) {
-            m->blk_pos = 0;
-            m->stage = 0;
-            channels[2].madr = m->cursor;
-        }
-    }
-    if (!m->words_left) {
-        channels[2].madr = m->cursor;
-        dsm_end(DSM_GPU);
+static int32_t dsm_word_cost(int k) {
+    uint32_t chcr = channels[dsm_channel[k]].chcr;
+    switch (dsm_channel[k]) {
+        case 3: return (chcr & 1u) ? 1 : DSM_CD_WORD;        /* spec 9.6: RAM to CD, 1 */
+        case 4: return DSM_SPU_WORD;
+        case 6: return DSM_OTC_WORD;
+        default: return ((chcr >> 8) & 1u) ? DSM_CHOP_WORD : 1;
     }
 }
 
@@ -1015,403 +980,450 @@ static void dsm_ll_check_word(uint32_t word) {
     dsm_fail("source GPU linked list: command outside the bounded profile");
 }
 
-/* GPU linked list (ch2 SyncMode 2): header = next pointer (bits 0-23) + word
- * count (bits 24-31); bit 23 of the pointer ends the list; MADR holds the
- * current node and the end code at the finish [DOC]. Every header and payload
- * word is read from RAM when it is consumed. */
-static void dsm_run_ll(uint64_t now) {
-    DmaSrcMachine *m = &dsm[DSM_LL];
+/* One data word between RAM and the channel's device. RAM uses the low 21
+ * address bits (spec 3.1). Direction quirks follow spec 9.6. */
+static void dsm_device_word(int k, uint32_t addr) {
+    uint32_t ra = addr & 0x1FFFFCu;
+    int to_dev = (int)(channels[dsm_channel[k]].chcr & 1u);
+    switch (dsm_channel[k]) {
+        case 0:
+            if (to_dev) mdec_dma_write_word(psx_read_word(ra));
+            else psx_write_word(ra, 0);                       /* spec 9.6 */
+            break;
+        case 1:
+            if (!to_dev) {
+                uint32_t offset;
+                uint32_t word = mdec_source_dma_read(&offset);
+                uint32_t a = (addr + 4u * offset) & 0x1FFFFCu; /* spec 9.1 */
+                g_dma_cur_madr = a;
+                psx_write_word(a, word);
+            } else {
+                (void)psx_read_word(ra);                      /* spec 9.6 */
+            }
+            break;
+        case 2:
+            if (to_dev) {
+                uint32_t word = psx_read_word(ra);
+                gpu_set_gp0_source(ra);
+                gpu_write_gp0(word);
+            } else {
+                psx_write_word(ra, gpu_read_gpuread());
+            }
+            break;
+        case 3:
+            if (!to_dev) {
+                uint32_t word = cdrom_dma_read_padded();
+                psx_write_word(ra, word);
+                record_cdrom_dma_word(word);
+                dirty_ram_mark_executable_range(ra, 4);
+            } else {
+                (void)psx_read_word(ra);                      /* spec 9.6 */
+            }
+            break;
+        case 4:
+            if (to_dev) spu_dma_write(psx_read_word(ra));
+            else psx_write_word(ra, spu_dma_read());
+            break;
+    }
+}
+
+/* One word of a block, a SyncMode 0 transfer or a stop. With chopping in
+ * SyncMode 0 the word reloads its address and count from MADR and BCR and
+ * writes them back after it moves (spec 3.4). Returns 0 on a bus error. */
+static int dsm_block_word(int k, int32_t *budget) {
+    DmaSrcMachine *m = &dsm[k];
+    int ch = dsm_channel[k];
+    uint32_t chcr = channels[ch].chcr;
+    int chop0 = ((chcr >> 9) & 3u) == 0u && ((chcr >> 8) & 1u);
+    if (chop0) {
+        uint32_t n = channels[ch].bcr & 0xFFFFu;
+        m->cursor = channels[ch].madr & 0x00FFFFFFu;
+        if (n != (m->words_left & 0xFFFFu)) m->words_left = n;
+    }
+    if (m->cursor & 0x00800000u) { dsm_bus_error(k); return 0; }
+    dsm_device_word(k, m->cursor);
+    m->cursor = (m->cursor + ((chcr & 2u) ? (uint32_t)-4 : 4u)) & 0x00FFFFFFu;
+    m->words_left--;
+    m->blk_pos++;
+    *budget -= dsm_word_cost(k);
+    if (ch == 3) cdrom_async.remaining_words = m->words_left;
+    if (chop0) {
+        channels[ch].madr = m->cursor;
+        channels[ch].bcr = (channels[ch].bcr & 0xFFFF0000u) | (m->words_left & 0xFFFFu);
+    }
+    return 1;
+}
+
+/* Channels 0-4 in SyncMode 0 or 1 (spec 3.3-3.5, 9). MADR and BCR are read
+ * when a block starts, so writes between blocks steer the next one (spec 7.2,
+ * 7.3); CHCR is read each step (spec 7.4). */
+static void dsm_run_block(int k) {
+    DmaSrcMachine *m = &dsm[k];
+    int ch = dsm_channel[k];
     for (;;) {
-        int ready = gpu_dma_source_ll_ready();
-        if (ready < 0) dsm_fail("source GPU linked list: GPU state outside the profile");
-        /* [DOC] PSX-SPX GPUSTAT.28 "Ready to receive DMA Block": readiness gates
-         * a block (a node here), not each word. The GPU projection reports 28 = 0
-         * as soon as a polygon or line head is queued (its oracle GPUSTAT rule),
-         * so a per-word gate strands the node's remaining words (PS1B-186 Tier 1,
-         * boot return 96). Mid-node words move on credit alone; D22 fill16
-         * advances MADR2 one node per fill. */
-        if (m->stage) ready = 1;
-        /* [ORACLE FIXTURE D23] the walk moves on 128-cycle slices: MADR2 and
-         * completion change only at slice points, so credit accrues per edge
-         * (after the kick credit), like the other channels. [NOT FITTED: D23 e]
-         * an OTC kicked mid-walk delays the oracle's completion by exactly one
-         * slice (+128); here the walk keeps its credit through the OTC. */
-        uint64_t edge = now - now % DSM_QUANTUM;
-        if (edge > m->served_until) {
-            if (ready) dsm_credit_add(m, edge - m->served_until);
-            m->served_until = edge;
-        }
-        if (!ready) {
-            if (m->credit > 0) m->credit = 0;
-            m->held = 1;
-            return;
-        }
-        m->held = 0;
+        uint32_t chcr = channels[ch].chcr;
+        uint32_t sync = (chcr >> 9) & 3u;
         if (m->credit <= 0) return;
         if (!m->stage) {
-            uint32_t header = psx_read_word(m->cursor);
-            m->words_left = header >> 24;
-            m->link = header & 0x00FFFFFFu;
-            gpu_set_gp0_linked_list_node(m->cursor, m->words_left);
-            channels[2].madr = m->cursor;
-            m->node_count++;
-            m->credit -= m->words_left ? DSM_LL_NODE_PAYLOAD : DSM_LL_NODE;
+            if (!dsm_ready(k)) { m->held = 1; return; }
+            m->held = 0;
             m->stage = 1;
-            m->cursor = (m->cursor + 4u) & 0x1FFFFCu;
+            m->blk_pos = 0;
+            m->node_count++;
+            if (sync == 1u) {
+                /* [EMU] the block count decreases at the block start (spec 3.5). */
+                uint32_t bcr = channels[ch].bcr, bs = bcr & 0xFFFFu;
+                channels[ch].bcr = (bcr & 0xFFFFu) | ((((bcr >> 16) - 1u) & 0xFFFFu) << 16);
+                m->blk_words = m->words_left = bs ? bs : 0x10000u;
+                m->cursor = m->link = channels[ch].madr & 0x00FFFFFFu;
+                if (ch == 2) { m->credit -= DSM_GPU_BLOCK; continue; }
+            } else {
+                uint32_t n = channels[ch].bcr & 0xFFFFu;
+                m->blk_words = m->words_left = n ? n : 0x10000u;
+                m->cursor = channels[ch].madr & 0x00FFFFFFu;
+            }
+            continue;
+        }
+        if (!dsm_block_word(k, &m->credit)) return;
+        if (m->words_left) continue;
+        if (sync == 1u) {
+            channels[ch].madr = m->cursor;
+            m->stage = 0;
+            if (channels[ch].bcr >> 16) continue;
+        }
+        dsm_end(k);
+        return;
+    }
+}
+
+/* GPU linked list (channel 2, SyncMode 2; spec 3.6). Before each header fetch
+ * the GPU must be ready and MADR must not have bit 23 set. The fetch sets MADR
+ * to the next pointer at once [EMU]; the payload follows without a readiness
+ * check. The list ends when MADR reads 00FFFFFFh after a node. */
+static void dsm_run_ll(void) {
+    DmaSrcMachine *m = &dsm[DSM_LL];
+    for (;;) {
+        if (m->credit <= 0) return;
+        if (!m->stage) {
+            if (!dsm_ready(DSM_LL)) { m->held = 1; return; }
+            m->held = 0;
+            uint32_t at = channels[2].madr & 0x00FFFFFFu;
+            if (at & 0x00800000u) { dsm_bus_error(DSM_LL); return; }
+            uint32_t header = psx_read_word(at & 0x1FFFFCu);
+            uint32_t n = header >> 24;
+            channels[2].madr = header & 0x00FFFFFFu;
+            gpu_set_gp0_linked_list_node(at & 0x1FFFFCu, n);
+            m->cursor = (at + 4u) & 0x00FFFFFFu;
+            m->words_left = n;
+            m->node_count++;
+            m->credit -= n ? DSM_LL_NODE_PAYLOAD : DSM_LL_NODE;
+            m->stage = 1;
         } else if (m->words_left) {
-            uint32_t word = psx_read_word(m->cursor);
+            if (m->cursor & 0x00800000u) { dsm_bus_error(DSM_LL); return; }
+            uint32_t word = psx_read_word(m->cursor & 0x1FFFFCu);
             dsm_ll_check_word(word);
-            gpu_set_gp0_source(m->cursor);
+            gpu_set_gp0_source(m->cursor & 0x1FFFFCu);
             gpu_write_gp0(word);
-            m->cursor = (m->cursor + 4u) & 0x1FFFFCu;
+            m->cursor = (m->cursor + 4u) & 0x00FFFFFFu;
             m->words_left--;
             m->credit -= 1;
         }
         if (m->stage && !m->words_left) {
-            if (m->link & 0x00800000u) {
-                channels[2].madr = m->link;
-                dsm_end(DSM_LL);
-                return;
-            }
             m->stage = 0;
-            m->cursor = m->link & 0x1FFFFCu;
+            if (channels[2].madr == 0x00FFFFFFu) { dsm_end(DSM_LL); return; }
         }
     }
 }
 
-/* CD-ROM (ch3 SyncMode 0, to RAM). Missing sector data reads as zero. MADR is
- * not updated ([DOC]; [ORACLE FIXTURE D9e] end MADR = start in all 16 rows). */
-static void dsm_run_cd(void) {
-    DmaSrcMachine *m = &dsm[DSM_CD];
-    int32_t step = dsm_step(DSM_CD);
-    while (m->words_left && m->credit > 0) {
-        uint32_t word = cdrom_dma_read_padded();
-        psx_write_word(m->cursor, word);
-        record_cdrom_dma_word(word);
-        dirty_ram_mark_executable_range(m->cursor, 4);
-        m->cursor = (m->cursor + (uint32_t)step) & 0x1FFFFCu;
-        m->words_left--;
-        cdrom_async.remaining_words = m->words_left;
-        m->credit -= DSM_CD_WORD;
-    }
-    if (!m->words_left) {
-        uint32_t start = channels[3].madr;
-        m->running = 0;
-        m->halts_cpu = 0;
-        finish_async_cdrom_transfer(m->cursor);
-        channels[3].madr = start;
-    }
-}
-
-/* SPU (ch4 SyncMode 1). MADR advances per block and BA reaches zero [DOC];
- * D3 end MADR = start + 4 x words. */
-static void dsm_run_spu(void) {
-    DmaSrcMachine *m = &dsm[DSM_SPU];
-    int32_t step = dsm_step(DSM_SPU);
-    int to_spu = channels[4].chcr & 1u;
-    while (m->words_left && m->credit > 0) {
-        if (to_spu) spu_dma_write(psx_read_word(m->cursor));
-        else psx_write_word(m->cursor, spu_dma_read());
-        m->cursor = (m->cursor + (uint32_t)step) & 0x1FFFFCu;
-        m->words_left--;
-        m->credit -= DSM_SPU_WORD;
-        if (++m->blk_pos == m->blk_words) {
-            m->blk_pos = 0;
-            channels[4].madr = m->cursor;
-            channels[4].bcr = (channels[4].bcr & 0xFFFFu) |
-                              ((((channels[4].bcr >> 16) - 1u) & 0xFFFFu) << 16);
-        }
-    }
-    if (!m->words_left) {
-        channels[4].madr = m->cursor;
-        dsm_end(DSM_SPU);
-    }
-}
-
-/* MDEC in (ch0, RAM to MDEC) and out (ch1, MDEC to RAM), SyncMode 1. A block
- * starts only while the MDEC requests it and then moves whole within its
- * credit ([ORACLE FIXTURE D11a]: DMA0 stalls after 10/16/16/32 words for BS
- * 1/8/16/32; D11b: DMA1 never finishes a last unit shorter than 32 words).
- * Output words land at the current address plus the MDEC's row offset, which
- * places 15/24 bpp macroblocks in raster order. MADR advances per block and BA
- * counts blocks not yet started [DOC]. */
-static void dsm_run_mdec(int k) {
-    DmaSrcMachine *m = &dsm[k];
-    int ch = dsm_channel[k];
-    int32_t step = dsm_step(k);
-    while (m->words_left && m->credit > 0) {
+/* OTC (channel 6): a backward SyncMode 0 burst (spec 3.7). It starts only
+ * with CHCR bit 28 set (spec 2.4, D20b). Each entry is (address - 4) masked
+ * to 21 bits [EMU]; the last is 00FFFFFFh. MADR and BCR stay unchanged. */
+static void dsm_run_otc(void) {
+    DmaSrcMachine *m = &dsm[DSM_OTC];
+    for (;;) {
+        if (m->credit <= 0) return;
         if (!m->stage) {
-            if (ch == 0 ? !mdec_dma_write_ready() : !mdec_dma_read_ready()) {
-                /* No banked credit while the MDEC is not requesting (the linked-list
-                 * rule; D15b/D17a fits are unchanged by it). */
-                if (m->credit > 0) m->credit = 0;
-                break;
-            }
-            channels[ch].bcr = (channels[ch].bcr & 0xFFFFu) |
-                               ((((channels[ch].bcr >> 16) - 1u) & 0xFFFFu) << 16);
+            if (!dsm_ready(DSM_OTC)) { m->held = 1; return; }
+            uint32_t n = channels[6].bcr & 0xFFFFu;
+            m->held = 0;
             m->stage = 1;
+            m->node_count++;
+            m->words_left = m->blk_words = n ? n : 0x10000u;
+            m->cursor = channels[6].madr & 0x00FFFFFFu;
+            continue;
         }
-        if (ch == 0) {
-            mdec_dma_write_word(psx_read_word(m->cursor));
-        } else {
-            uint32_t offset;
-            uint32_t word = mdec_source_dma_read(&offset);
-            uint32_t addr = (m->cursor + 4u * offset) & 0x1FFFFCu;
-            g_dma_cur_madr = addr;
-            psx_write_word(addr, word);
-        }
-        m->cursor = (m->cursor + (uint32_t)step) & 0x1FFFFCu;
+        if (m->cursor & 0x00800000u) { dsm_bus_error(DSM_OTC); return; }
+        uint32_t v = m->words_left == 1u ? 0x00FFFFFFu : ((m->cursor - 4u) & 0x001FFFFFu);
+        psx_write_word(m->cursor & 0x1FFFFCu, v);
+        m->cursor = (m->cursor - 4u) & 0x00FFFFFFu;
         m->words_left--;
-        m->credit -= DSM_MDEC_WORD;
-        if (++m->blk_pos == m->blk_words) {
-            m->blk_pos = 0;
-            m->stage = 0;
-            channels[ch].madr = m->cursor;
-        }
-    }
-    if (!m->words_left) {
-        channels[ch].madr = m->cursor;
-        dsm_end(k);
+        m->credit -= DSM_OTC_WORD;
+        if (!m->words_left) { dsm_end(DSM_OTC); return; }
     }
 }
 
-static void dsm_service(int k, uint64_t now) {
-    DmaSrcMachine *m = &dsm[k];
-    if (!m->running) return;
-    if (!((channels[dsm_channel[k]].chcr >> 24) & 1u) || !channel_enabled(dsm_channel[k]))
-        return;
-    g_dma_cur_ch = dsm_channel[k];
-    g_dma_initiator_pc = s_dma_ch_initiator_pc[dsm_channel[k]];
-    switch (k) {
-        case DSM_OTC: dsm_credit_edges(m, now); dsm_run_otc(); break;
-        case DSM_GPU: dsm_credit_edges(m, now); dsm_run_upload(); break;
-        case DSM_LL:  dsm_run_ll(now); break;
-        case DSM_CD:  dsm_credit_edges(m, now); dsm_run_cd(); break;
-        case DSM_SPU: dsm_credit_edges(m, now); dsm_run_spu(); break;
-        case DSM_MDEC_IN:
-        case DSM_MDEC_OUT: dsm_credit_edges(m, now); dsm_run_mdec(k); break;
-    }
+static void dsm_take_steps(int k) {
+    int ch = dsm_channel[k];
+    g_dma_cur_ch = ch;
+    g_dma_initiator_pc = s_dma_ch_initiator_pc[ch];
+    if (k == DSM_OTC) dsm_run_otc();
+    else if (k == DSM_LL) dsm_run_ll();
+    else dsm_run_block(k);
     g_dma_cur_ch = -1;
 }
 
-/* Service order is the dma_advance order: the MDEC clock first, then the
- * channels. [ORACLE FIXTURE D7]: OTC runs before the GPU payload when both
- * start together; D11c: MDEC in is served before MDEC out in both kick orders. */
-static void dsm_service_all(uint64_t now) {
-    /* [ORACLE FIXTURE D18d] register writes do not clock the decoder: a
-     * DMA5-MADR write, a timer-1 write and a no-op MDEC control write leave all
-     * 512 timelines byte-identical. Only kicks, edges and explicit service do. */
-    dsm_mdec_feed(now - now % DSM_QUANTUM);
-    dsm_service(DSM_OTC, now);
-    dsm_service(DSM_CD, now);
-    dsm_service(DSM_GPU, now);
-    dsm_service(DSM_LL, now);
-    dsm_service(DSM_MDEC_IN, now);
-    dsm_service(DSM_SPU, now);
-    dsm_service(DSM_MDEC_OUT, now);
-}
-
-/* A halting kick without the source CPU owner: advance the guest clock to
- * each service edge until the machine finishes. */
-static void dsm_hold_here(int k) {
-    while (dsm[k].running) {
-        uint64_t now = psx_cycle_count;
-        uint64_t edge = now - now % DSM_QUANTUM + DSM_QUANTUM;
-        psx_advance_cycles((uint32_t)(edge - now));
-        dsm_service(k, psx_cycle_count);
+/* Serve one machine at a service point: the allowance grows by the cycles
+ * since its last one, steps follow, and a positive remainder is dropped
+ * (spec 1.3, 2.1, 2.2). The kick resets progress and the allowance (spec 6.3). */
+static void dsm_service(int k, uint64_t now) {
+    DmaSrcMachine *m = &dsm[k];
+    if (now > m->served_until) {
+        if (m->running) dsm_credit_add(m, now - m->served_until);
+        m->served_until = now;
     }
+    if (!m->running) return;
+    dsm_take_steps(k);
+    if (m->running && m->credit > 0) m->credit = 0;
 }
 
-static void dsm_start_otc(void) {
-    uint32_t n = channels[6].bcr & 0xFFFFu;
-    dsm_begin(DSM_OTC, channels[6].madr, n ? n : 0x10000u);
-    dsm[DSM_OTC].halts_cpu = 1; /* burst: the CPU waits ([DOC] "CPU Operation during DMA"; D9a) */
-    dsm_run_otc();
-}
-
-static void dsm_start_upload(void) {
-    uint32_t chcr = channels[2].chcr;
-    if (!(chcr & 1u) || ((chcr >> 9) & 3u) != 1u)
-        dsm_fail("source GPU upload: only SyncMode 1 from RAM is in the profile");
-    if (chcr & (1u << 8)) dsm_fail("source GPU upload: chopping is outside the profile");
-    uint32_t bs = channels[2].bcr & 0xFFFFu, ba = channels[2].bcr >> 16;
-    if (!bs) bs = 0x10000u;
-    if (!ba) ba = 0x10000u;
-    uint32_t words = bs * ba;
-    if (gpu_dma_vram_upload_words() < words)
-        dsm_fail("source GPU upload: the GPU is not expecting this many VRAM words");
-    dsm_begin(DSM_GPU, channels[2].madr, words);
-    dsm[DSM_GPU].blk_words = bs;
-    dsm_run_upload();
-    dsm_publish_wait();
-}
-
-static void dsm_start_ll(void) {
-    if (!(channels[2].chcr & 1u)) dsm_fail("source GPU linked list: direction to RAM");
-    if ((channels[2].madr & 0x00FFFFFFu) >= 0x200000u)
-        dsm_fail("source GPU linked list: start address outside main RAM");
-    dsm_begin(DSM_LL, channels[2].madr, 0);
-    dsm_run_ll(psx_cycle_count);
-}
-
-static void dsm_start_cd(void) {
-    uint32_t chcr = channels[3].chcr;
-    dsm_begin(DSM_CD, channels[3].madr, cdrom_async.total_words);
-    /* Manual, non-chopped: the CPU waits ([ORACLE FIXTURE D9e]: halt = done - ~20). */
-    dsm[DSM_CD].halts_cpu = !(chcr & (1u << 8));
-    if (!cdrom_async.total_words) return;
-    dsm_run_cd();
-}
-
-/* Kick paths that halt the CPU: hold here unless the source CPU owner does. */
-static void dsm_kick_hold(int k) {
-    if (dsm[k].running && dsm[k].halts_cpu && !dsm_cpu_owner()) dsm_hold_here(k);
-}
-
-static void dsm_start_spu(void) {
-    uint32_t bs = channels[4].bcr & 0xFFFFu, ba = channels[4].bcr >> 16;
-    uint32_t sync = (channels[4].chcr >> 9) & 3u;
-    if (sync == 2u) dsm_fail("source SPU DMA: linked-list mode");
-    if (!bs) bs = 0x10000u;
-    if (sync == 0u) ba = 1u;
-    else if (!ba) ba = 0x10000u;
-    dsm_begin(DSM_SPU, channels[4].madr, bs * ba);
-    dsm[DSM_SPU].blk_words = sync == 1u ? bs : 0u;
-    audio_trace_event((channels[4].chcr & 1u) ? AUDIO_EV_DMA_WRITE : AUDIO_EV_DMA_READ,
-                      bs * ba, channels[4].madr & 0x1FFFFCu);
-    dsm_run_spu();
-}
-
-static void dsm_start_mdec(int ch) {
-    uint32_t chcr = channels[ch].chcr;
-    if ((chcr & 1u) != (ch == 0 ? 1u : 0u))
-        dsm_fail("source MDEC DMA: direction outside the profile");
-    if (((chcr >> 9) & 3u) != 1u) dsm_fail("source MDEC DMA: only SyncMode 1 is in the profile");
-    /* Scope guard: no fixture has measured a decrementing MDEC transfer. */
-    if (chcr & 2u) dsm_fail("source MDEC DMA: decrementing address step is not qualified");
-    uint32_t bs = channels[ch].bcr & 0xFFFFu, ba = channels[ch].bcr >> 16;
-    if (!bs) bs = 0x10000u;
-    if (!ba) ba = 0x10000u;
-    int k = ch == 0 ? DSM_MDEC_IN : DSM_MDEC_OUT;
-    dsm_mdec_feed(psx_cycle_count);
-    dsm_begin(k, channels[ch].madr, bs * ba);
-    dsm[k].blk_words = bs;
-    dsm_run_mdec(k);
-}
-
-/* Cycles until the next source machine action (word movement or completion). */
-static uint32_t dsm_cycles_to_event(int armed_only) {
-    uint32_t best = UINT32_MAX;
-    uint64_t now = psx_cycle_count;
-    /* The source MDEC advances at every service edge (D17b). */
-    if (!armed_only && mdec_source_active()) best = (uint32_t)(DSM_QUANTUM - now % DSM_QUANTUM);
+/* Halt and read stall (spec 5), re-evaluated at every service point and every
+ * DMA register write. */
+static void dsm_eval_halt_stall(void) {
+    int halted = 0;
     for (int k = 0; k < DSM_COUNT; k++) {
-        const DmaSrcMachine *m = &dsm[k];
-        int ch = dsm_channel[k];
-        if (!m->running || !((channels[ch].chcr >> 24) & 1u) || !channel_enabled(ch)) continue;
-        if (armed_only && !channel_irq_flag_armed(ch)) continue;
-        uint32_t d;
-        if (k == DSM_LL) {
-            if (m->held) continue; /* the GPU side schedules its own readiness */
-            if (m->credit > 0) d = 1u;
-            else {                  /* the first edge that brings credit above 0 */
-                uint64_t e = now - now % DSM_QUANTUM + DSM_QUANTUM;
-                uint64_t need = (uint64_t)(1 - m->credit);
-                while (e - m->served_until < need) e += DSM_QUANTUM;
-                d = (uint32_t)(e - now);
-            }
-        } else {
-            d = (uint32_t)(DSM_QUANTUM - now % DSM_QUANTUM);
-        }
-        if (d < best) best = d;
+        DmaSrcMachine *m = &dsm[k];
+        uint32_t chcr = channels[dsm_channel[k]].chcr;
+        m->halts_cpu = (uint8_t)(m->running && k != DSM_LL && m->stage && m->words_left &&
+                                 ((chcr >> 8) & 7u) == 0u);
+        halted |= m->halts_cpu;
     }
-    return best;
+    uint32_t wait = 0;
+    const DmaSrcMachine *u = &dsm[DSM_GPU];
+    uint32_t chcr = channels[2].chcr;
+    if (u->running && !halted && ((chcr >> 9) & 3u) == 1u && !((chcr >> 8) & 1u) &&
+        dsm_ready(DSM_GPU)) {
+        uint32_t bs = channels[2].bcr & 0xFFFFu;
+        wait = bs ? (bs - 1u < DSM_STALL_CAP ? bs - 1u : DSM_STALL_CAP) : 0u;
+    }
+    dsm_wait_live = wait;
+    if (!dsm_cpu_owner()) g_dma_cpu_read_wait = wait;
 }
 
-/* Register writes in the source profile: finish the work due before the write,
- * so a completion sees the old DICR, then refuse changes the machines cannot
- * follow. Returns 1 when the write was handled here. */
-static int dsm_before_write(uint32_t addr, uint32_t *valp, uint32_t mask) {
-    if (!dsm_profile_any() && !dsm_spu_model) return 0;
-    uint32_t val = *valp;
-    /* [ORACLE FIXTURE D14] readback after writing FFFFFFFF:
-     *  - DICR 80FF803F. PSX-SPX "DICR" lists bits 0-6 as R/W (7Fh); on the
-     *    oracle bit 6 reads 0.
-     *  - CHCR 71770703 on ch0-5, the same bits PSX-SPX "D#_CHCR" defines (it
-     *    calls the rest "Unused" without a read value).
-     *  - BCR and DPCR keep all bits, as PSX-SPX's tables allow. */
-    if (addr == 0x1F8010F4u) *valp = val = val & ~0x40u;
-    if (addr >= 0x1F801080u && addr <= 0x1F8010DFu && ((addr - 0x1F801080u) & 0xFu) == 8u)
-        *valp = val = val & 0x71770703u;
-    dsm_write_service = 1;
-    dsm_service_all(psx_cycle_count);
-    dsm_write_service = 0;
-    if (addr == 0x1F8010F0u) {
-        uint32_t next = (dpcr & ~mask) | (val & mask);
-        for (int k = 0; k < DSM_COUNT; k++) {
-            int ch = dsm_channel[k];
-            if (dsm[k].running && ((dpcr ^ next) >> (ch * 4)) & 0xFu)
-                dsm_fail("source DMA: DPCR change for a channel with a live transfer");
+/* One service point at `now` (spec 1.3; the GPU is already up to `now`). */
+static void dsm_serve_at(uint64_t now) {
+    dsm_mdec_feed(now);
+    for (int i = 0; i < DSM_COUNT; i++) dsm_service(dsm_order[i], now);
+    dsm_eval_halt_stall();
+}
+
+/* Serve the grid edges after the latest service point, up to `now`, one by one
+ * (spec 1.4). With nothing running and no source MDEC there is no state to
+ * move, so the clock jumps to the last edge. */
+static void dsm_service_edges(uint64_t now) {
+    uint64_t e = dsm_mdec_clock - dsm_mdec_clock % DSM_QUANTUM + DSM_QUANTUM;
+    if (e > now) return;
+    if (!dsm_live_any() && !mdec_source_active()) {
+        uint64_t last = now - now % DSM_QUANTUM;
+        for (int k = 0; k < DSM_COUNT; k++) dsm[k].served_until = last;
+        dsm_mdec_clock = last;
+        dsm_eval_halt_stall();
+        return;
+    }
+    for (; e <= now; e += DSM_QUANTUM) dsm_serve_at(e);
+}
+
+/* A service point at `now`: missed edges first (spec 1.5), then `now` itself. */
+static void dsm_service_point(uint64_t now) {
+    dsm_service_edges(now);
+    if (now > dsm_mdec_clock) dsm_serve_at(now);
+    else dsm_eval_halt_stall();
+}
+
+/* A halting kick without the source CPU owner: advance the guest clock edge by
+ * edge until no channel holds the CPU (spec 5.1). */
+static void dsm_hold_here(void) {
+    for (;;) {
+        int halted = 0;
+        for (int k = 0; k < DSM_COUNT; k++) halted |= dsm[k].halts_cpu;
+        if (!halted) return;
+        uint64_t now = psx_cycle_count;
+        psx_advance_cycles((uint32_t)(DSM_QUANTUM - now % DSM_QUANTUM));
+        dsm_service_edges(psx_cycle_count);
+    }
+}
+
+/* The machine a channel's kick starts in the source profile, or -1. */
+static int dsm_kick_machine(int ch) {
+    uint32_t sync = (channels[ch].chcr >> 9) & 3u;
+    switch (ch) {
+        case 0: return mdec_source_active() ? DSM_MDEC_IN : -1;
+        case 1: return mdec_source_active() ? DSM_MDEC_OUT : -1;
+        case 2: return sync == 2u ? (gpu_ll_source_model ? DSM_LL : -1)
+                                  : (gpu_upload_source_model ? DSM_GPU : -1);
+        case 3: return cd_source_model ? DSM_CD : -1;
+        case 4: return dsm_spu_model ? DSM_SPU : -1;
+        case 6: return otc_source_model ? DSM_OTC : -1;
+        default: return -1;
+    }
+}
+
+/* The source machine running on a channel, or -1. */
+static int dsm_running_machine(int ch) {
+    for (int k = 0; k < DSM_COUNT; k++)
+        if (dsm[k].running && dsm_channel[k] == ch) return k;
+    return -1;
+}
+
+/* A kick (spec 6.3): the write's service point has run and CHCR is stored.
+ * Progress resets, the channel runs at once on a 64-cycle allowance, and the
+ * halt and read stall are re-evaluated (spec 6.4). */
+static void dsm_kick(int k) {
+    DmaSrcMachine *m = &dsm[k];
+    int ch = dsm_channel[k];
+    uint32_t chcr = channels[ch].chcr;
+    uint32_t sync = (chcr >> 9) & 3u;
+    if (k == DSM_LL && !(chcr & 1u)) dsm_fail("source GPU linked list: direction to RAM");
+    if (k != DSM_LL && k != DSM_OTC && sync > 1u)
+        dsm_fail("source DMA: SyncMode 2/3 outside channel 2");
+    if (k == DSM_GPU && sync == 1u && (chcr & 1u)) {
+        uint32_t bs = channels[2].bcr & 0xFFFFu, ba = channels[2].bcr >> 16;
+        if ((uint64_t)(bs ? bs : 0x10000u) * (ba ? ba : 0x10000u) > gpu_dma_vram_upload_words())
+            dsm_fail("source GPU upload: the GPU is not expecting this many VRAM words");
+    }
+    if (k == DSM_CD && !(chcr & 1u)) start_async_cdrom_transfer();
+    if (k == DSM_SPU) {
+        uint32_t bs = channels[4].bcr & 0xFFFFu, ba = sync ? channels[4].bcr >> 16 : 1u;
+        audio_trace_event((chcr & 1u) ? AUDIO_EV_DMA_WRITE : AUDIO_EV_DMA_READ,
+                          (bs ? bs : 0x10000u) * (ba ? ba : 0x10000u), channels[4].madr & 0x1FFFFCu);
+    }
+    memset(m, 0, sizeof *m);
+    m->running = 1;
+    m->credit = DSM_KICK_CREDIT;
+    m->served_until = psx_cycle_count;
+    dsm_take_steps(k);
+    if (m->running && m->credit > 0) m->credit = 0;
+    dsm_eval_halt_stall();
+}
+
+/* [EMU] a stop (spec 7.5): CHCR bit 24 cleared on a busy channel. After the
+ * write's service point, only the rest of the block or node in progress moves,
+ * at most DSM_STOP_BUDGET cycles of work, with no readiness check and no CPU
+ * time. No new block starts, MADR is not advanced for a stopped block, no flag
+ * latches and no IRQ is raised. */
+static void dsm_stop(int k) {
+    DmaSrcMachine *m = &dsm[k];
+    int32_t budget = DSM_STOP_BUDGET;
+    if (m->stage && k == DSM_LL) {
+        while (m->words_left && budget > 0 && !(m->cursor & 0x00800000u)) {
+            uint32_t word = psx_read_word(m->cursor & 0x1FFFFCu);
+            gpu_set_gp0_source(m->cursor & 0x1FFFFCu);
+            gpu_write_gp0(word);
+            m->cursor = (m->cursor + 4u) & 0x00FFFFFFu;
+            m->words_left--;
+            budget -= 1;
         }
-        uint32_t enabling = 0;
-        for (int ch = 0; ch < 7; ch++)
-            if (!((dpcr >> (ch * 4 + 3)) & 1u) && ((next >> (ch * 4 + 3)) & 1u) &&
-                ((channels[ch].chcr >> 24) & 1u))
-                enabling |= 1u << ch;
-        dpcr = next;
-        /* [ORACLE FIXTURE D7]: OTC starts before the GPU in all three DPCR
-         * priority orders. Other pairs keep channel order. */
-        if (enabling & (1u << 6)) try_execute(6);
-        for (int ch = 0; ch < 6; ch++) if (enabling & (1u << ch)) try_execute(ch);
+    } else if (m->stage && k != DSM_OTC) {
+        g_dma_cur_ch = dsm_channel[k];
+        while (m->words_left && budget > 0 && !(m->cursor & 0x00800000u)) {
+            if (!dsm_block_word(k, &budget)) return;
+        }
+        g_dma_cur_ch = -1;
+    }
+    dsm_idle(k);
+    if (k == DSM_CD) cancel_async_transfer(3);
+}
+
+/* Register writes in the source profile (spec 1.1 b, 7). The service point
+ * comes first: with the source GPU runtime its WRITE event brings the GPU up to
+ * the write and serves the edges and the write; without it the write serves
+ * itself. Then the stored bits follow spec 7.1 and a write to a busy channel
+ * follows spec 7.2-7.5; none is refused. Returns 1 when handled here; 0 hands
+ * the (masked) value to the default path. */
+static int dsm_before_write(uint32_t *addrp, uint32_t *valp, uint32_t mask) {
+    if (!dsm_profile_any() && !dsm_spu_model) return 0;
+    uint32_t addr = *addrp, val = *valp;
+    if (!dsm_write_serviced) {
+        dsm_write_serviced = 1;
+        if (source_gpu_runtime_active()) source_gpu_runtime_dma_write();
+        else dsm_service_point(psx_cycle_count);
+    }
+    if (addr == 0x1F8010F4u) {
+        /* [ORACLE FIXTURE D14] DICR reads back 80FF803Fh after FFFFFFFFh. */
+        *valp = val & ~0x40u;
+        return 0;
+    }
+    if (addr < 0x1F801080u || addr > 0x1F8010EFu) return 0;  /* DPCR, 1F8010F8h/FCh */
+    int ch = (int)((addr - 0x1F801080u) / 0x10u);
+    uint32_t reg = (addr - 0x1F801080u) & 0xFu;
+    /* [EMU] offset +Ch is a second CHCR address (spec 7.11). */
+    if (reg == 0xCu) { reg = 8u; *addrp = addr = addr - 4u; }
+    if (reg == 0u) {
+        /* [DOC] "D#_MADR": bits 24-31 are not used (always zero). */
+        channels[ch].madr = ((channels[ch].madr & ~mask) | (val & mask)) & 0x00FFFFFFu;
         return 1;
     }
-    if (addr >= 0x1F801080u && addr <= 0x1F8010EFu) {
-        int ch = (int)((addr - 0x1F801080u) / 0x10u);
-        for (int k = 0; k < DSM_COUNT; k++)
-            if (dsm[k].running && dsm_channel[k] == ch)
-                dsm_fail("source DMA: register write to a channel with a live transfer");
-        uint32_t reg = (addr - 0x1F801080u) & 0xFu;
-        /* [DOC] "D#_MADR": bits 24-31 are not used (always zero). */
-        if (ch <= 6 && reg == 0u) {
-            channels[ch].madr = ((channels[ch].madr & ~mask) | (val & mask)) & 0x00FFFFFFu;
-            return 1;
-        }
-        /* [DOC] "D#_CHCR": D6_CHCR has only bits 24, 28 and 30 writable; bit 1
-         * always reads 1 (-4 step) and the other bits 0. PSX-SPX gives no
-         * read-as-zero rule for the other channels' unused CHCR bits, or for
-         * BCR; D14 checks those on the oracle. */
-        if (ch == 6 && reg == 8u) {
-            uint32_t next = (channels[6].chcr & ~mask) | (val & mask);
-            channels[6].chcr = (next & 0x51000000u) | 0x2u;
-            if ((mask & (1u << 24)) && !((channels[6].chcr >> 24) & 1u)) cancel_async_transfer(6);
-            if ((mask & (1u << 24)) && ((channels[6].chcr >> 24) & 1u)) try_execute(6);
-            return 1;
-        }
+    if (reg != 8u) return 0;                                  /* BCR keeps all bits */
+    /* [ORACLE FIXTURE D14] CHCR keeps 71770703h on channels 0-5; [DOC] D6_CHCR
+     * keeps bits 24, 28 and 30, and bit 1 reads 1. */
+    uint32_t old = channels[ch].chcr;
+    uint32_t next = (old & ~mask) | (val & mask);
+    next = ch == 6 ? ((next & 0x51000000u) | 0x2u) : (next & 0x71770703u);
+    int was_busy = (old >> 24) & 1u, busy = (next >> 24) & 1u;
+    int k = dsm_running_machine(ch);
+    if (k >= 0) {
+        channels[ch].chcr = next;                             /* spec 7.4 */
+        if (!busy) dsm_stop(k);                               /* spec 7.5 */
+        return 1;
     }
+    if (ch == 5) {                                            /* [EMU] spec 9.5 */
+        channels[5].chcr = next;
+        return 1;
+    }
+    if (!was_busy && busy && dsm_kick_machine(ch) >= 0) {     /* spec 6.1, 7.6 */
+        channels[ch].chcr = next;
+        try_execute(ch);
+        return 1;
+    }
+    if (ch == 6) {
+        channels[6].chcr = next;
+        if (was_busy && !busy) cancel_async_transfer(6);
+        if (!was_busy && busy) try_execute(6);
+        return 1;
+    }
+    *valp = next;
     return 0;
 }
 
-/* Runtime service point (source GPU WRITE and DMA events): DMA channels get
- * exact credit to `cycle`, and the MDEC is fed only at edges and kicks
- * ([ORACLE FIXTURE D18d]; reviewer ruling on the WRITE-event path). */
+/* Service point entry for the source GPU runtime (grid-edge DMA events, the
+ * WRITE event of a DMA register write, the frame-return DMA event). */
 void dma_source_gpu_service_at(uint64_t cycle) {
     g_dma_exec_depth++;
-    dsm_write_service = 1;
-    dsm_service_all(cycle);
-    dsm_write_service = 0;
+    dsm_service_point(cycle);
     g_dma_exec_depth--;
 }
 
-/* Authored service point for the MDEC contract harness: a caller-driven
- * advance to `cycle` that clocks the MDEC and grants credit exactly, MDEC
- * channels included (SPEC-PS1B-186 ruling on the MDEC contract). */
+/* The MDEC contract harness's authored service point. The harness's own calls
+ * are its service points: its time base has no known grid phase against the
+ * oracle that produced the transcripts (spec 11: do not assume an offset of 0),
+ * so no grid edges are inserted between them. */
 void dma_source_gpu_service_at_exact(uint64_t cycle) {
     g_dma_exec_depth++;
-    dsm_mdec_feed(cycle);
-    dsm_write_service = 2;
-    dsm_service_all(cycle);
-    dsm_write_service = 0;
+    if (cycle > dsm_mdec_clock) dsm_serve_at(cycle);
+    else dsm_eval_halt_stall();
     g_dma_exec_depth--;
+}
+
+/* Cycles until the next source service point (the next grid edge) while a
+ * machine runs or the source MDEC is active. */
+static uint32_t dsm_cycles_to_event(int armed_only) {
+    uint32_t edge = (uint32_t)(DSM_QUANTUM - psx_cycle_count % DSM_QUANTUM);
+    if (!armed_only && mdec_source_active()) return edge;
+    for (int k = 0; k < DSM_COUNT; k++) {
+        if (!dsm[k].running) continue;
+        if (armed_only && !channel_irq_flag_armed(dsm_channel[k])) continue;
+        return edge;
+    }
+    return UINT32_MAX;
 }
 
 /* Load wait while an upload runs, sampled once per load by memory.c. */
@@ -1496,18 +1508,12 @@ static void execute_ch3_cdrom(void) {
     uint32_t chcr = channels[3].chcr;
     uint32_t direction = chcr & 1;           /* 0=to RAM, 1=from RAM */
 
-    if (cd_source_model && ((chcr >> 9) & 3u) != 0u)
-        dsm_fail("source CD DMA: only SyncMode 0 is in the profile");
     if (direction != 0) {
         channels[3].chcr &= ~((1u << 24) | (1u << 28));
         return;
     }
 
     start_async_cdrom_transfer();
-    if (cd_source_model && cdrom_async.active) {
-        dsm_start_cd();
-        dsm_kick_hold(DSM_CD);
-    }
 }
 
 /* Returns the number of words moved so the caller can schedule a faithful
@@ -1552,11 +1558,6 @@ static uint32_t execute_ch4_spu(void) {
 }
 
 static void execute_ch6_otc(void) {
-    if (otc_source_model) {
-        dsm_start_otc();
-        dsm_kick_hold(DSM_OTC);
-        return;
-    }
     /* OTC (Ordering Table Clear): writes a backward-linked list to RAM.
      * Node N = address of node N-1, node 0 = 0xFFFFFF (end marker).
      * Direction is always to-RAM, step is always backward.
@@ -1582,11 +1583,14 @@ static void execute_ch6_otc(void) {
 }
 
 int dma_cpu_otc_halted(void) {
-    return dsm[DSM_OTC].running && dsm[DSM_OTC].halts_cpu;
+    return dsm[DSM_OTC].halts_cpu;
 }
 
+/* Spec 5.1: any source channel busy in SyncMode 0 without chopping, with a
+ * started transfer that has words left. */
 int dma_cpu_source_halted(void) {
-    return dma_cpu_otc_halted() || (dsm[DSM_CD].running && dsm[DSM_CD].halts_cpu);
+    for (int k = 0; k < DSM_COUNT; k++) if (dsm[k].halts_cpu) return 1;
+    return 0;
 }
 static void execute_ch5_pio(void) {
     /* PIO (Parallel I/O) — used for expansion port / parallel port transfers.
@@ -1620,15 +1624,20 @@ static void execute_ch5_pio(void) {
 
 static void try_execute(int ch) {
     uint32_t chcr = channels[ch].chcr;
+    /* Source profile: the channel's machine owns the kick (spec 6). DPCR is not
+     * consulted [EMU] (spec 6.2, D7), and channel 5 only stays busy [EMU]
+     * (spec 9.5). */
+    int src = dsm_kick_machine(ch);
+    if (ch == 5 && dsm_profile_any()) return;
 
     /* Transfer starts when bit 24 (start/busy) is set AND channel is enabled in DPCR */
     if (!((chcr >> 24) & 1)) return;
-    if (!channel_enabled(ch)) return;
+    if (src < 0 && !channel_enabled(ch)) return;
     /* [DOC] PSX-SPX "D#_CHCR": bit 28 forces a start without waiting for DREQ,
      * and OTC has no DREQ. [ORACLE FIXTURE D20b] 01000002h on ch6 never starts
      * (bit 24 held 57k cycles, OT unwritten); 11000002h completes. The other
      * channels start on bit 24 alone (D20/D20b: ch0-3 run with bit 28 clear). */
-    if (ch == 6 && !((chcr >> 28) & 1)) return;
+    if (src < 0 && ch == 6 && !((chcr >> 28) & 1)) return;
 
     /* Bit 28 at the start. Source profile: [ORACLE FIXTURE D20, D20b] it stays
      * set with bit 24 through the transfer on ch0-4 (every sampled channel) and
@@ -1640,7 +1649,7 @@ static void try_execute(int ch) {
     event_ring_record_aux(EV_ENQ, (uint8_t)(SRC_DMA0 + ch), transfer_word_count(ch));
 
     /* After the kick is in the rings, refuse corrupt-length transfers. */
-    validate_transfer_length(ch);
+    if (src < 0) validate_transfer_length(ch);
 
     /* Capture the kick PC (this CHCR store) so both the immediate (sync) writes
      * below and any deferred async writes for this channel attribute to it. */
@@ -1648,21 +1657,22 @@ static void try_execute(int ch) {
     g_dma_initiator_pc        = g_debug_last_store_pc;
     g_dma_exec_depth++;
     g_dma_cur_ch = ch; g_dma_cur_madr = channels[ch].madr; g_dma_cur_bcr = channels[ch].bcr;
+    if (src >= 0) {
+        dsm_kick(src);
+        if (dsm[src].halts_cpu && !dsm_cpu_owner()) dsm_hold_here();
+        g_dma_exec_depth--;
+        g_dma_cur_ch = -1;
+        return;
+    }
     switch (ch) {
         case 0:
-            if (mdec_source_active()) dsm_start_mdec(0);
-            else start_async_mdec_transfer(0);
+            start_async_mdec_transfer(0);
             break;
         case 1:
-            if (mdec_source_active()) dsm_start_mdec(1);
-            else start_async_mdec_transfer(1);
+            start_async_mdec_transfer(1);
             break;
         case 2:
-            if (gpu_ll_source_model && ((channels[2].chcr >> 9) & 3u) == 2u)
-                dsm_start_ll();
-            else if (gpu_upload_source_model && ((channels[2].chcr >> 9) & 3u) != 2u)
-                dsm_start_upload();
-            else if ((channels[2].chcr & 1u) != 0u &&
+            if ((channels[2].chcr & 1u) != 0u &&
                 ((channels[2].chcr >> 9) & 3u) == 2u) {
                 start_async_gpu_linked_list();
             } else {
@@ -1674,9 +1684,8 @@ static void try_execute(int ch) {
             execute_ch3_cdrom();
             break;
         case 4:
-            if (dsm_spu_model) dsm_start_spu();
-            else schedule_delayed_complete(4, execute_ch4_spu(),
-                                           DMA_SPU_CYCLES_PER_WORD);
+            schedule_delayed_complete(4, execute_ch4_spu(),
+                                      DMA_SPU_CYCLES_PER_WORD);
             break;
         case 5:
             execute_ch5_pio();
@@ -1820,17 +1829,12 @@ uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask) {
 void dma_advance(uint32_t cycles) {
     if (cycles == 0) return;
     g_dma_exec_depth++;   /* async to-RAM DMA writes below run through psx_write_word */
-    uint64_t now = psx_cycle_count;
-    dsm_mdec_feed(now - now % DSM_QUANTUM);
-    dsm_service(DSM_OTC, now);
-    dsm_service(DSM_CD, now);
-    dsm_service(DSM_GPU, now);
-    dsm_service(DSM_LL, now);
+    /* Source profile: the grid edges up to now are service points (spec 1.1 a).
+     * The source GPU runtime serves them from its own clock, GPU first. */
+    if ((dsm_profile_any() || dsm_spu_model) && !source_gpu_runtime_active())
+        dsm_service_edges(psx_cycle_count);
     advance_mdec_channel(0, cycles);
-    dsm_service(DSM_MDEC_IN, now);
-    dsm_service(DSM_SPU, now);
     advance_mdec_channel(1, cycles);
-    dsm_service(DSM_MDEC_OUT, now);
     if (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
         channel_enabled(2)) {
         g_dma_cur_ch = 2;
@@ -1939,6 +1943,11 @@ void dma_init(void) {
 }
 
 uint32_t dma_read(uint32_t addr) {
+    /* Source profile: a read is not a service point, but grid edges at or before
+     * it are served first (spec 1.2). The source GPU runtime serves them from
+     * its clock. */
+    int src = dsm_profile_any() || dsm_spu_model;
+    if (src && !source_gpu_runtime_active()) dsm_service_edges(psx_cycle_count);
     /* DPCR */
     if (addr == 0x1F8010F0u) return dpcr;
     /* DICR */
@@ -1965,7 +1974,7 @@ uint32_t dma_read(uint32_t addr) {
                     }
                 }
                 return channels[ch].chcr;
-            case 0x0C: return 0;
+            case 0x0C: return src ? channels[ch].chcr : 0;  /* [EMU] spec 7.11 */
             default: goto bad;
         }
     }
@@ -1983,9 +1992,21 @@ bad:
     return 0;
 }
 
+static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask);
+
 void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
-    if (dsm_before_write(addr, &val, mask)) return;
-    source_gpu_runtime_dma_write();
+    if (!dsm_before_write(&addr, &val, mask)) {
+        if (!dsm_write_serviced) source_gpu_runtime_dma_write();
+        dma_write_default(addr, val, mask);
+    }
+    /* Spec 5.2, 7.8: the halt and read stall follow every DMA register write. */
+    if (dsm_write_serviced) {
+        dsm_eval_halt_stall();
+        dsm_write_serviced = 0;
+    }
+}
+
+static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
     /* DPCR */
     if (addr == 0x1F8010F0u) {
         dpcr = (dpcr & ~mask) | (val & mask);

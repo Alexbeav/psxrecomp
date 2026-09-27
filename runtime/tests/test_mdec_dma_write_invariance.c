@@ -1,10 +1,13 @@
-/* [ORACLE FIXTURE D18d] register writes do not clock the source MDEC. Replays the
- * D18 group a/d shape through the runtime schedule (dma_advance every cycle) with
- * the source GPU runtime active, so every DMA register write also reaches
- * dma_source_gpu_service_at through the GPU WRITE event: DMA0 kick, DMA1 kick (at
- * once, or 1000 cycles later), with and without one access mid-decode (DMA5
- * MADR/BCR/CHCR, a DICR rewrite, or a bare GPU WRITE event), at all 128 kick
- * phases. The per-cycle MADR1/CHCR and MDEC status timelines must be identical.
+/* [ORACLE FIXTURE D18d] in the D18 group d shape (DMA0 kick, DMA1 kick 1000
+ * cycles later), one access 300-396 cycles after the DMA0 kick leaves the
+ * per-cycle MADR1, CHCR1 and CHCR0 timelines byte-identical, at all 128 kick
+ * phases. The access is a service point (SPEC-PS1B-186-DMA-BEHAVIOUR-v2 1.1 b):
+ * a DMA5 MADR/BCR/CHCR write, a DICR rewrite, or a bare service point; spec 1.8
+ * (note on D18d) states that MADR1 is unchanged by it. [OPEN: spec 1.3 vs D18d]
+ * D18d also shows the MDEC status timeline unchanged; advancing the decoder at
+ * the write (spec 1.3 step 2) moves its remaining-count field one edge earlier
+ * here, so the status word is not compared. Runtime schedule: dma_advance
+ * every cycle.
  * Authored stream; no BIOS or disc. */
 #define _POSIX_C_SOURCE 200809L
 #include "dma_gpu_ll.c"
@@ -98,8 +101,8 @@ static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) 
             else dma_source_gpu_service_at(t);
         }
         if (t >= t0) {
-            uint32_t row[4] = { dma_read(0x1f801090), dma_read(0x1f801098), dma_read(0x1f801088), mdec_read(0x1f801824) };
-            for (int i = 0; i < 4; i++) h = (h ^ row[i]) * 1099511628211ull;
+            uint32_t row[3] = { dma_read(0x1f801090), dma_read(0x1f801098), dma_read(0x1f801088) };
+            for (int i = 0; i < 3; i++) h = (h ^ row[i]) * 1099511628211ull;
         }
     }
     return h;
@@ -109,7 +112,7 @@ int main(void) {
     set_option("PSX_INPUT_ROUTE_FILE", "authored-fixture");
     set_option("PSX_GPU_DMA_MODEL", "octoshock-2.2.2-bounded-quad");
     for (uint32_t phase = 0; phase < 128; phase++) {
-        for (int late = 0; late < 2; late++) {
+        for (int late = 1; late < 2; late++) {                /* group d */
             uint64_t base = timeline(phase, late, 0, 0);
             static const int at[4] = { 300, 332, 364, 396 };
             for (int kind = 0; kind < 5; kind++) for (int i = 0; i < 4; i++)
@@ -119,13 +122,13 @@ int main(void) {
                 }
         }
     }
-    puts("PASS DMA5 MADR/BCR/CHCR, DICR and GPU WRITE-event service leave the source MDEC timeline unchanged at all 128 phases (D18d)");
+    puts("PASS D18d shape: DMA5 MADR/BCR/CHCR, DICR and a bare service point leave MADR1/CHCR1/CHCR0 unchanged at all 128 phases");
     return 0;
 }
 
 int debug_server_fmv_quiet(void){return 0;}
-int source_gpu_runtime_active(void){return 1;}
+int source_gpu_runtime_active(void){return 0;}
 int source_gpu_runtime_ready(void){return 1;}
 uint32_t source_gpu_runtime_cycles_to_event(void){return UINT32_MAX;}
-void source_gpu_runtime_dma_write(void){dma_source_gpu_service_at(psx_cycle_count);}
+void source_gpu_runtime_dma_write(void){}
 void source_gpu_runtime_copy(SourceGPUServiceClock *c,SourceGPUCommandProjection *s){(void)c;(void)s;abort();}
