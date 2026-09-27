@@ -5,7 +5,7 @@
   "owned_function": "static void start_source_cdda(int requested_track)",
   "authority": "Sanitized T77 startup contract v1 and opaque observations; original implementation and root harness/model bodies not read.",
   "primary_reference": {
-    "path": "I:/Projects/PSX-References/research-and-documentation/psx-spx/docs/cdromdrive.md",
+    "path": "<psx-spx>/docs/cdromdrive.md",
     "revision": "a253f078553f83b4e540f087abf0c28d954b6293",
     "sha256": "b37a3d10752919788ca1cf2495fb199ca9ec9b3894ffd0c2c7b5ab5a4707cdbf"
   },
