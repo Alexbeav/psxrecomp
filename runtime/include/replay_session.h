@@ -77,6 +77,21 @@ int replay_session_boundary(uint16_t live_buttons, const uint8_t live_sticks[4],
 /* REC indicator: 1 while recording and in the visible half of the blink. */
 int replay_session_rec_visible(uint64_t now_ms);
 
+/* Rollback state digests (netplay_state_digest.h) taken every
+ * REPLAY_DIGEST_INTERVAL frames while recording and compared during playback.
+ * CORE (CPU, RAM, clock, IRQ, timers) and EXT (SPU, MDEC, CD, scratchpad, DMA,
+ * SIO) decide the result; AV (GPU + VRAM) is reported only, because GL and
+ * Vulkan readback fork VRAM while the guest still matches. */
+#define REPLAY_DIGEST_INTERVAL 60u
+#define REPLAY_DIGEST_CORE 1u
+#define REPLAY_DIGEST_AV   2u
+#define REPLAY_DIGEST_AUX  4u
+#define REPLAY_DIGEST_EXT  8u
+/* 1 when the last playback's digests diverged: the first frame and the
+ * partitions that differed there. */
+int replay_session_first_divergence(uint32_t *frame, unsigned *parts);
+unsigned replay_session_digests_checked(void);
+
 /* Process exit or a disc change: finish a recording from the last complete
  * boundary, and end a playback (settings restored). */
 void replay_session_shutdown(void);
@@ -106,6 +121,8 @@ void replay_host_settings_apply(const char *settings, char *differs, size_t cap)
 void replay_host_settings_restore(void);
 /* Guest main RAM (2 MiB) and cycle count at the current boundary. */
 const uint8_t *replay_host_ram(void);
+/* core, av, aux, ext; 0 when no digest is available (none are recorded). */
+int replay_host_state_digest(uint32_t out[4]);
 uint64_t replay_host_cycle(void);
 /* Directory of the save-state slots and the slot-name key ("state_<entry>"
  * style prefix is replaced by "replay_"); the disc serial for exports. */

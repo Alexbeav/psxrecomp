@@ -39,6 +39,10 @@ static size_t s_anchor_size;
 static uint8_t *s_last_ram;
 static uint64_t s_last_cycle;
 static uint32_t s_last_frame;
+/* Rollback state digests: frame, core, av, aux, ext. */
+#define DIGEST_CAP (INPUT_ROUTE_MAX_FRAMES / REPLAY_DIGEST_INTERVAL + 2u)
+static uint32_t (*s_digests)[5];
+static uint32_t s_digest_count;
 
 /* Playback. */
 static InputDualShockRouteStep *s_steps_play;
@@ -46,6 +50,11 @@ static uint32_t s_play_steps, s_play_frames, s_play_step, s_play_left, s_play_fr
 static InputRouteCheckpoint s_end;
 static int s_takeover_armed;
 static int s_settings_switched;
+static uint32_t (*s_play_digests)[5];
+static uint32_t s_play_digest_count, s_play_digest_next;
+static unsigned s_digests_checked, s_div_parts;
+static uint32_t s_div_frame;
+static int s_diverged;
 
 ReplayState replay_session_state(void) { return s_state; }
 ReplayResult replay_session_last_result(void) { return s_result; }
@@ -155,10 +164,32 @@ static void checkpoint_of(uint32_t frame, const uint8_t *ram, uint64_t cycle, In
     }
 }
 
+static const char *digest_parts_text(unsigned parts, char *out, size_t cap)
+{
+    static const char *const names[4] = {"core", "av", "aux", "ext"};
+    size_t n = 0;
+    out[0] = 0;
+    for (unsigned i = 0; i < 4; ++i)
+        if (parts & (1u << i)) n += (size_t)snprintf(out + n, n < cap ? cap - n : 0, "%s%s", n ? "," : "", names[i]);
+    if (!out[0]) snprintf(out, cap, "none");
+    return out;
+}
+
+int replay_session_first_divergence(uint32_t *frame, unsigned *parts)
+{
+    if (!s_diverged) return 0;
+    if (frame) *frame = s_div_frame;
+    if (parts) *parts = s_div_parts;
+    return 1;
+}
+
+unsigned replay_session_digests_checked(void) { return s_digests_checked; }
+
 /* ---- Recording ---- */
 
 static void free_recording(void)
 {
+    free(s_digests); s_digests = NULL; s_digest_count = 0;
     free(s_words); s_words = NULL;
     free(s_anchor); s_anchor = NULL; s_anchor_size = 0;
     free(s_last_ram); s_last_ram = NULL;
@@ -185,7 +216,9 @@ static int begin_recording(const char *path, int slot)
     }
     s_words = (InputRouteDualShockWord *)malloc(INPUT_ROUTE_MAX_FRAMES * sizeof *s_words);
     s_last_ram = (uint8_t *)malloc(RAM_BYTES);
-    if (!s_words || !s_last_ram || !replay_host_request_anchor()) {
+    s_digests = (uint32_t (*)[5])malloc(DIGEST_CAP * sizeof *s_digests);
+    s_digest_count = 0;
+    if (!s_words || !s_last_ram || !s_digests || !replay_host_request_anchor()) {
         free_recording();
         replay_host_osd("Replay not recorded: out of memory", 2200);
         return 0;
@@ -213,6 +246,8 @@ static void finish_recording(void)
     const char *error = NULL;
     InputRouteMarker end_marker;
     InputRouteCheckpoint *end = NULL;
+    unsigned char *digests = NULL;
+    uint32_t digests_length = 0;
     FILE *f = NULL;
     s_state = REPLAY_IDLE;
     if (!s_frames) {
@@ -229,11 +264,22 @@ static void finish_recording(void)
         s_meta.frames = s_last_frame;
         s_meta.record_size = INPUT_DUALSHOCK_ROUTE_RECORD_BYTES;
         s_meta.marker_count = s_meta.checkpoint_count = 1;
-        if (!create_exclusive(s_rec_path, &f)) error = "the file already exists or cannot be created";
+        if (s_digest_count) {
+            digests_length = 4u + s_digest_count * INPUT_ROUTE_REPLAY_DIGEST_BYTES;
+            if (!(digests = (unsigned char *)malloc(digests_length))) error = "out of memory";
+            else {
+                input_route_put32(digests, s_digest_count);
+                for (uint32_t i = 0; i < s_digest_count; ++i)
+                    for (uint32_t k = 0; k < 5; ++k)
+                        input_route_put32(digests + 4 + i * INPUT_ROUTE_REPLAY_DIGEST_BYTES + 4 * k, s_digests[i][k]);
+            }
+        }
+        if (!error && !create_exclusive(s_rec_path, &f)) error = "the file already exists or cannot be created";
     }
     if (!error) {
         error = input_route_v3_write_ex(f, &s_meta, NULL, s_words, s_last_frame, &end_marker, end,
-                                        s_anchor, (uint32_t)s_anchor_size, s_settings);
+                                        s_anchor, (uint32_t)s_anchor_size, s_settings,
+                                        digests, digests_length);
         if (fclose(f) && !error) error = "close error";
         if (error) remove(s_rec_path);
     }
@@ -248,12 +294,14 @@ static void finish_recording(void)
         error = !steps || !markers || !cps || !r ? "cannot reopen the replay"
               : input_route_v3_read_ex(r, &meta, NULL, steps, markers, cps, &rp);
         if (r) fclose(r);
-        if (!error && (meta.frames != s_last_frame || rp.anchor_length != s_anchor_size))
+        if (!error && (meta.frames != s_last_frame || rp.anchor_length != s_anchor_size ||
+                       rp.digest_count != s_digest_count))
             error = "the replay does not read back identically";
         free(steps); free(markers); free(cps);
         if (error) remove(s_rec_path);
     }
     free(end);
+    free(digests);
     if (error) {
         snprintf(msg, sizeof msg, "Replay not saved: %s", error);
         fprintf(stderr, "replay: %s (%s)\n", msg, s_rec_path);
@@ -297,6 +345,14 @@ static void record_boundary(uint16_t b, const uint8_t sticks[4])
     s_last_frame = s_frames;
     s_last_cycle = replay_host_cycle();
     memcpy(s_last_ram, replay_host_ram(), RAM_BYTES);
+    if (s_frames % REPLAY_DIGEST_INTERVAL == 0 && s_digest_count < DIGEST_CAP) {
+        uint32_t d[4];
+        if (replay_host_state_digest(d)) {
+            s_digests[s_digest_count][0] = s_frames;
+            memcpy(&s_digests[s_digest_count][1], d, sizeof d);
+            s_digest_count++;
+        }
+    }
     if (s_stop_requested) { finish_recording(); return; }
     InputRouteDualShockWord w;
     w.buttons = b;
@@ -321,6 +377,8 @@ static void end_playback(ReplayResult result, const char *osd)
     if (s_settings_switched) replay_host_settings_restore();
     s_settings_switched = 0;
     free(s_steps_play); s_steps_play = NULL;
+    free(s_play_digests); s_play_digests = NULL;
+    s_play_digest_count = s_play_digest_next = 0;
     s_state = REPLAY_IDLE;
     s_result = result;
     if (osd) replay_host_osd(osd, 2400);
@@ -351,6 +409,8 @@ int replay_session_play_file(const char *path)
     InputRouteCheckpoint *cps = NULL;
     InputDualShockRouteStep *steps = NULL;
     uint8_t *anchor = NULL;
+    unsigned char *dig = NULL;
+    uint32_t (*digests)[5] = NULL;
     const char *error = NULL;
     char why[256] = "";
     FILE *f;
@@ -366,6 +426,21 @@ int replay_session_play_file(const char *path)
     if (!error && (fseek(f, rp->anchor_offset, SEEK_SET) ||
                    fread(anchor, 1, rp->anchor_length, f) != rp->anchor_length))
         error = "cannot read the anchor";
+    if (!error && rp->digest_count) {
+        const uint32_t n = rp->digest_length - 4u;
+        dig = (unsigned char *)malloc(n);
+        digests = (uint32_t (*)[5])malloc(rp->digest_count * sizeof *digests);
+        if (!dig || !digests) error = "out of memory";
+        else if (fseek(f, rp->digest_offset + 4, SEEK_SET) || fread(dig, 1, n, f) != n)
+            error = "cannot read the state digests";
+        for (uint32_t i = 0; !error && i < rp->digest_count; ++i) {
+            for (uint32_t k = 0; k < 5; ++k)
+                digests[i][k] = input_route_le32(dig + i * INPUT_ROUTE_REPLAY_DIGEST_BYTES + 4 * k);
+            if (digests[i][0] > meta.frames || (i && digests[i][0] <= digests[i - 1][0]))
+                error = "state digest order";
+        }
+    }
+    free(dig);
     fclose(f);
     memset(&product, 0, sizeof product);
     if (!error && !replay_host_identity(&product, why, sizeof why)) error = why;
@@ -380,7 +455,7 @@ int replay_session_play_file(const char *path)
     if (error) {
         char e[256];
         snprintf(e, sizeof e, "%s", error);
-        free(rp); free(markers); free(cps); free(steps); free(anchor);
+        free(rp); free(markers); free(cps); free(steps); free(anchor); free(digests);
         return refuse_play(e);
     }
     int other_build = strcmp(meta.pin, product.pin) != 0;
@@ -388,7 +463,7 @@ int replay_session_play_file(const char *path)
     replay_host_settings_apply(rp->settings, differs, sizeof differs);
     s_settings_switched = 1;
     if (!replay_host_load_anchor(anchor, rp->anchor_length)) {
-        free(rp); free(markers); free(cps); free(steps); free(anchor);
+        free(rp); free(markers); free(cps); free(steps); free(anchor); free(digests);
         end_playback(REPLAY_RESULT_FAILED, "Replay not played: the anchor state cannot be loaded");
         return 0;
     }
@@ -400,6 +475,12 @@ int replay_session_play_file(const char *path)
     s_play_left = s_play_steps ? steps[0].frames : 0;
     s_play_frame = 0;
     s_takeover_armed = 0;
+    s_play_digests = digests;
+    s_play_digest_count = rp->digest_count;
+    s_play_digest_next = 0;
+    s_digests_checked = s_div_parts = 0;
+    s_div_frame = 0;
+    s_diverged = 0;
     s_result = REPLAY_RESULT_NONE;
     s_state = REPLAY_LOADING;
     if (other_build) {
@@ -436,21 +517,50 @@ static int live_input(uint16_t buttons, const uint8_t sticks[4])
     return 0;
 }
 
+/* Compares the rollback state digest recorded for this boundary, if any. */
+static void check_digest(void)
+{
+    uint32_t d[4];
+    unsigned parts = 0;
+    char text[32];
+    if (s_play_digest_next >= s_play_digest_count ||
+        s_play_digests[s_play_digest_next][0] != s_play_frame) return;
+    const uint32_t *want = &s_play_digests[s_play_digest_next++][1];
+    if (!replay_host_state_digest(d)) return;
+    s_digests_checked++;
+    for (unsigned k = 0; k < 4; ++k) parts |= (d[k] != want[k]) << k;
+    if (!parts || s_diverged) return;
+    s_diverged = 1;
+    s_div_frame = s_play_frame;
+    s_div_parts = parts;
+    fprintf(stdout, "replay_diverged: frame=%u parts=%s core=%08x/%08x av=%08x/%08x aux=%08x/%08x ext=%08x/%08x\n",
+            (unsigned)s_play_frame, digest_parts_text(parts, text, sizeof text),
+            d[0], want[0], d[1], want[1], d[2], want[2], d[3], want[3]);
+    fflush(stdout);
+}
+
 static int play_boundary(uint16_t live, const uint8_t live_sticks[4],
                          uint16_t *out_buttons, uint8_t out_sticks[4])
 {
+    check_digest();
     if (s_play_frame == s_play_frames) {
         InputRouteCheckpoint now;
         checkpoint_of(s_play_frame, replay_host_ram(), replay_host_cycle(), &now);
         const int ram = !memcmp(now.ram_sha256, s_end.ram_sha256, 32);
         const int cyc = now.cycle == s_end.cycle;
         unsigned differing = 0;
+        char text[32];
         for (uint32_t p = 0; p < INPUT_ROUTE_RAM_PAGES; ++p) differing += now.pages[p] != s_end.pages[p];
-        fprintf(stdout, "replay_end: frames=%u result=%s cycle=%llu recorded_cycle=%llu differing_pages=%u\n",
-                (unsigned)s_play_frame, ram && cyc ? "in_sync" : "out_of_sync",
-                (unsigned long long)now.cycle, (unsigned long long)s_end.cycle, differing);
+        /* AV alone does not fail a replay (see REPLAY_DIGEST_AV). */
+        const int state = !(s_diverged && (s_div_parts & ~REPLAY_DIGEST_AV));
+        fprintf(stdout, "replay_end: frames=%u result=%s cycle=%llu recorded_cycle=%llu differing_pages=%u "
+                "digests_checked=%u first_divergence=%d divergence_parts=%s\n",
+                (unsigned)s_play_frame, ram && cyc && state ? "in_sync" : "out_of_sync",
+                (unsigned long long)now.cycle, (unsigned long long)s_end.cycle, differing,
+                s_digests_checked, s_diverged ? (int)s_div_frame : -1,
+                digest_parts_text(s_diverged ? s_div_parts : 0, text, sizeof text));
         fflush(stdout);
-        if (ram && cyc) {
+        if (ram && cyc && state) {
             end_playback(REPLAY_RESULT_IN_SYNC, "Replay finished (in sync)");
         } else {
             char msg[160];

@@ -22,6 +22,8 @@
 static uint8_t ram[RAM_BYTES];
 static uint64_t cycle;
 static int drift;                  /* perturb the guest during playback */
+static uint32_t vram_word;         /* stand-in for state outside RAM (the AV digest) */
+static int drift_av;               /* perturb only that during playback */
 
 /* ---- host stubs ---- */
 static char osd_last[256];
@@ -73,6 +75,15 @@ void replay_host_settings_apply(const char *s, char *differs, size_t cap) {
 }
 void replay_host_settings_restore(void) { snprintf(settings_now, sizeof settings_now, "%s", settings_saved); restores++; }
 const uint8_t *replay_host_ram(void) { return ram; }
+static int digest_calls;
+int replay_host_state_digest(uint32_t out[4]) {
+    uint32_t h = 2166136261u;
+    for (unsigned i = 0; i < RAM_BYTES; ++i) h = (h ^ ram[i]) * 16777619u;   /* all of RAM, like the core digest */
+    for (unsigned i = 0; i < 8; ++i) h = (h ^ (uint8_t)(cycle >> (8 * i))) * 16777619u;
+    out[0] = h; out[1] = vram_word; out[2] = 0xA0A0u; out[3] = 0xE0E0u;
+    digest_calls++;
+    return 1;
+}
 uint64_t replay_host_cycle(void) { return cycle; }
 static char dir[512];
 int replay_host_slot_base(char *d, size_t dc, char *p, size_t pc) { snprintf(d, dc, "%s", dir); snprintf(p, pc, "replay_80010000"); return 1; }
@@ -99,6 +110,7 @@ static void run_frame(uint16_t buttons, const uint8_t st[4]) {
     uint32_t h = (uint32_t)(cycle * 2654435761u) ^ buttons ^ ((uint32_t)st[0] << 16) ^ ((uint32_t)st[3] << 24);
     for (unsigned i = 0; i < 64; ++i) ram[(h + i * 4099u) % RAM_BYTES] ^= (uint8_t)(h >> (i % 24));
     if (drift && replay_session_state() == REPLAY_PLAYING) ram[12345]++;
+    if (drift_av && replay_session_state() == REPLAY_PLAYING) vram_word++;
     cycle += 564480u + (buttons & 7u);
 }
 /* One vblank: the boundary decides P1, then the guest runs a frame. */
@@ -157,6 +169,9 @@ static void test_record_and_play_in_sync(void) {
     CHECK(!err && rp.has_anchor && rp.anchor_length == RAM_BYTES + 8, "anchor embedded");
     CHECK(!err && !strcmp(rp.settings, "cd_speed=2\n"), "settings embedded: %s", rp.settings);
     CHECK(!err && markers[meta.marker_count - 1].kind == INPUT_ROUTE_MARKER_END, "END marker");
+    /* A rollback state digest every REPLAY_DIGEST_INTERVAL frames: 0, 60, 120. */
+    CHECK(!err && rp.digest_count == 3 && rp.digest_length == 4 + 3 * 20,
+          "state digests embedded (count %u)", err ? 0u : rp.digest_count);
     if (f) { fseek(f, 0, SEEK_SET); err = input_route_v3_read(f, &meta, NULL, steps, markers, cps); fclose(f); }
     CHECK(err && !strcmp(err, "unsupported mandatory extension tag"), "plain route reader refuses a replay: %s", err ? err : "accepted");
     free(steps); free(cps);
@@ -176,6 +191,9 @@ static void test_record_and_play_in_sync(void) {
     CHECK(frames == 121, "120 records then the END boundary (took %u)", frames);
     CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "in sync (result %d, osd %s)", replay_session_last_result(), osd_last);
     CHECK(restores == 1 && !strcmp(settings_now, "cd_speed=1\n"), "settings restored");
+    uint32_t df = 0; unsigned parts = 0;
+    CHECK(!replay_session_first_divergence(&df, &parts), "no digest divergence in sync");
+    CHECK(replay_session_digests_checked() == 3, "3 digests checked (got %u)", replay_session_digests_checked());
 }
 
 static void test_out_of_sync_is_reported(void) {
@@ -185,6 +203,19 @@ static void test_out_of_sync_is_reported(void) {
     drift = 0;
     CHECK(replay_session_last_result() == REPLAY_RESULT_OUT_OF_SYNC, "drift reported (result %d)", replay_session_last_result());
     CHECK(strstr(osd_last, "out of sync") != NULL, "OSD says out of sync: %s", osd_last);
+    /* The first digest after the drift names the frame and the core partition. */
+    uint32_t df = 0; unsigned parts = 0;
+    CHECK(replay_session_first_divergence(&df, &parts) && df == 60 && (parts & REPLAY_DIGEST_CORE),
+          "first divergence at frame 60 in core (frame %u parts %u)", df, parts);
+    /* State outside the verdict partitions (the AV digest: GPU + VRAM, which
+     * forks on GL/Vulkan readback) is reported but does not fail the replay. */
+    drift_av = 1;
+    CHECK(replay_session_play_slot(0), "play slot 0 with AV drift");
+    for (unsigned i = 0; i < 130 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
+    drift_av = 0;
+    CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "AV-only drift stays in sync (result %d)", replay_session_last_result());
+    CHECK(replay_session_first_divergence(&df, &parts) && df == 60 && parts == REPLAY_DIGEST_AV,
+          "AV divergence reported (frame %u parts %u)", df, parts);
 }
 
 static void test_take_over(void) {

@@ -50,9 +50,14 @@
  * replays refuses the file instead of replaying it from power-on.
  *   ANCHOR    the machine state (.pst blob) the replay starts from
  *   SETTINGS  ASCII "key=value" lines of the host settings that change
- *             guest timing, switched on for playback and restored after */
+ *             guest timing, switched on for playback and restored after
+ *   DIGESTS   u32 count, then count entries of u32 frame and the u32 core,
+ *             av, aux and ext rollback state digests at that boundary
+ *             (netplay_state_digest.h), frames strictly increasing */
 #define INPUT_ROUTE_TAG_REPLAY_ANCHOR   0x00000301u
 #define INPUT_ROUTE_TAG_REPLAY_SETTINGS 0x00000302u
+#define INPUT_ROUTE_TAG_REPLAY_DIGESTS  0x00000303u
+#define INPUT_ROUTE_REPLAY_DIGEST_BYTES 20u
 #define INPUT_ROUTE_REPLAY_SETTINGS_MAX 4096u
 
 /* Disc digest kinds. CUE: SHA-256 over the ASCII hex digests of the cue file
@@ -104,6 +109,9 @@ typedef struct {
     uint32_t anchor_length;
     uint32_t settings_length;
     char settings[INPUT_ROUTE_REPLAY_SETTINGS_MAX + 1];
+    uint32_t digest_count;   /* DIGESTS entries, located like the anchor */
+    uint32_t digest_length;
+    long digest_offset;
 } InputRouteV3Replay;
 
 static inline uint64_t input_route_le64(const unsigned char *p)
@@ -262,6 +270,18 @@ static inline const char *input_route_v3_read_ex(
             rp.settings[length] = 0;
             rp.settings_length = length;
             break;
+        case INPUT_ROUTE_TAG_REPLAY_DIGESTS:
+            if (!replay) { error = "unsupported mandatory extension tag"; break; }
+            if (rp.digest_length) { error = "duplicate replay digests"; break; }
+            if (length < 4 || fread(small, 1, 4, f) != 4) { error = "replay digests length"; break; }
+            rp.digest_count = input_route_le32(small);
+            if (rp.digest_count > s.frames + 1u ||
+                length != 4u + rp.digest_count * INPUT_ROUTE_REPLAY_DIGEST_BYTES)
+                { error = "replay digests length"; break; }
+            rp.digest_length = length;
+            rp.digest_offset = ftell(f) - start - 4;   /* the payload, count first */
+            if (fseek(f, (long)(length - 4u), SEEK_CUR)) error = "short replay digests";
+            break;
         default:
             if (!(tag & INPUT_ROUTE_TAG_SKIPPABLE)) { error = "unsupported mandatory extension tag"; break; }
             if ((tag & 0x7fffff00u) == 0x100u) { error = "unsupported identity/marker tag"; break; }
@@ -352,7 +372,8 @@ static inline const char *input_route_v3_write_ex(
     FILE *f, const InputRouteV3 *meta, const uint16_t *words,
     const InputRouteDualShockWord *dual, uint32_t frames,
     const InputRouteMarker *markers, const InputRouteCheckpoint *checkpoints,
-    const void *anchor, uint32_t anchor_length, const char *settings)
+    const void *anchor, uint32_t anchor_length, const char *settings,
+    const void *digests, uint32_t digests_length)
 {
     unsigned char h[INPUT_ROUTE_V3_HEADER_BYTES], small[36], r[8];
     unsigned char cp[INPUT_ROUTE_CHECKPOINT_BYTES];
@@ -374,6 +395,7 @@ static inline const char *input_route_v3_write_ex(
         if (strlen(settings) > INPUT_ROUTE_REPLAY_SETTINGS_MAX) return "replay settings length";
         ext += input_route_v3_entry_bytes((uint32_t)strlen(settings));
     }
+    if (digests) ext += input_route_v3_entry_bytes(digests_length);
     ext += (uint64_t)meta->marker_count * input_route_v3_entry_bytes(INPUT_ROUTE_MARKER_BYTES);
     ext += (uint64_t)meta->checkpoint_count * input_route_v3_entry_bytes(INPUT_ROUTE_CHECKPOINT_BYTES);
     if (ext > INPUT_ROUTE_V3_MAX_EXT) return "extension size";
@@ -402,6 +424,9 @@ static inline const char *input_route_v3_write_ex(
         !input_route_v3_put_entry(f, INPUT_ROUTE_TAG_REPLAY_SETTINGS,
                                   (const unsigned char *)settings, (uint32_t)strlen(settings)))
         return "write replay settings";
+    if (digests && !input_route_v3_put_entry(f, INPUT_ROUTE_TAG_REPLAY_DIGESTS,
+                                             (const unsigned char *)digests, digests_length))
+        return "write replay digests";
     for (uint32_t i = 0; i < meta->marker_count; ++i) {
         memset(small, 0, INPUT_ROUTE_MARKER_BYTES);
         input_route_put32(small, markers[i].frame);
@@ -448,6 +473,6 @@ static inline const char *input_route_v3_write_digital(
     const InputRouteMarker *markers, const InputRouteCheckpoint *checkpoints)
 {
     return input_route_v3_write_ex(f, meta, words, NULL, frames, markers, checkpoints,
-                                   NULL, 0, NULL);
+                                   NULL, 0, NULL, NULL, 0);
 }
 #endif

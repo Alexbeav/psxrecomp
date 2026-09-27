@@ -20,6 +20,7 @@
 #include "bios_hle_plan.h"
 #include "input_route_session.h"
 #include "replay_session.h"
+#include "netplay_state_digest.h"
 #include "psx_bios_known_images.h"
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
@@ -7271,6 +7272,18 @@ extern "C" const uint8_t *replay_host_ram(void) {
 extern "C" uint64_t replay_host_cycle(void) {
     extern uint64_t psx_cycle_count;
     return psx_cycle_count;
+}
+/* The rollback state digests (netplay_state_digest.h), so a replay checks the
+ * same partitions a rollback resimulation is verified against. */
+static CPUState *s_replay_cpu;
+extern "C" int replay_host_state_digest(uint32_t out[4]) {
+    if (!s_replay_cpu)
+        return 0;
+    out[0] = netplay_core_digest(s_replay_cpu);
+    out[1] = netplay_av_digest();
+    out[2] = netplay_aux_digest();
+    out[3] = netplay_baseline_ext_digest();
+    return 1;
 }
 
 /* Replay slots sit next to the save-state slots: state_<key>_slotNN.pst
@@ -16830,6 +16843,7 @@ session_reboot:
     debug_server_set_cpu(&cpu);
     /* Master digests / FRAME_COMMIT for netplay hash_confirm watermark. */
     psx_netplay_bind_cpu(&cpu);
+    s_replay_cpu = &cpu;
     /* Solo rollback resim self-check (PSX_RB_SELFCHECK=1, offline only). */
     psx_selfcheck_init(&cpu, memory_get_bios_checksum(), game_entry_pc);
 
