@@ -92,6 +92,11 @@ int replay_session_rec_visible(uint64_t now_ms);
 int replay_session_first_divergence(uint32_t *frame, unsigned *parts);
 unsigned replay_session_digests_checked(void);
 
+/* Machine-readable verdict: when set, every playback that starts writes this
+ * JSON file when it ends (result in_sync | diverged | stopped_by_input |
+ * failed, frames, first divergence, recorded and player builds). NULL clears. */
+void replay_session_set_verdict_path(const char *path);
+
 /* Process exit or a disc change: finish a recording from the last complete
  * boundary, and end a playback (settings restored). */
 void replay_session_shutdown(void);

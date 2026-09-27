@@ -7187,8 +7187,14 @@ static int route_record_live_p1_word(void) {
  *       record M frames into F from vblank N (P1 comes from the armed input
  *       route when one plays, else from the device)
  *   PSX_REPLAY_EXIT_AT_END=1  exit when the recording is written (0) or the
- *       playback ends: 0 in sync, 3 out of sync, 4 not played or taken over */
+ *       playback ends: 0 in sync, 3 out of sync, 4 not played or taken over
+ *   --replay-verdict FILE / PSX_REPLAY_VERDICT=FILE  write the playback's
+ *       verdict JSON to FILE when it ends (replay_session_set_verdict_path)
+ *   --replay-fast / PSX_REPLAY_FAST=1  play with fast-forward latched, as if
+ *       F9 were held; the previous fast-forward state returns afterwards */
 static const char *g_replay_cli_path = nullptr;
+static const char *g_replay_cli_verdict = nullptr;
+static bool g_replay_cli_fast = false;
 static std::string s_replay_disc_serial;
 static std::string s_replay_saved_settings;
 static char s_replay_export_dir[1024];
@@ -7376,7 +7382,7 @@ static void replay_live_p1(int override, uint16_t *buttons, uint8_t sticks[4]) {
  * and the replay boundary. Replaces *override with the replay's P1 word. */
 static void replay_frame_boundary(int *override) {
     host_osd_set_rec(replay_session_rec_visible((uint64_t)SDL_GetTicks()));
-    static int env_read = 0, exit_at_end = 0;
+    static int env_read = 0, exit_at_end = 0, fast_play = 0, fast_saved = -1;
     static const char *play_path = nullptr, *record_file = nullptr;
     static long long record_at = -1, record_frames = 0, recorded = 0;
     static uint64_t vblanks = 0;
@@ -7391,6 +7397,10 @@ static void replay_frame_boundary(int *override) {
         if (const char *e = std::getenv("PSX_REPLAY_RECORD_FRAMES")) record_frames = std::atoll(e);
         const char *x = std::getenv("PSX_REPLAY_EXIT_AT_END");
         exit_at_end = x && std::strcmp(x, "1") == 0;
+        const char *verdict = g_replay_cli_verdict ? g_replay_cli_verdict : std::getenv("PSX_REPLAY_VERDICT");
+        if (verdict && verdict[0]) replay_session_set_verdict_path(verdict);
+        const char *fast = std::getenv("PSX_REPLAY_FAST");
+        fast_play = g_replay_cli_fast || (fast && std::strcmp(fast, "1") == 0);
         g_replay_scripted_record = record_file != nullptr;
     }
     const uint64_t vb = vblanks++;
@@ -7424,6 +7434,16 @@ static void replay_frame_boundary(int *override) {
             replay_session_toggle_record();   /* ends on the next boundary */
     }
     const ReplayState now = replay_session_state();
+    if (fast_play) {   /* latched fast-forward only while a replay plays */
+        const bool playing = now == REPLAY_LOADING || now == REPLAY_PLAYING;
+        if (playing && fast_saved < 0) {
+            fast_saved = g_manual_turbo_latched;
+            g_manual_turbo_latched = 1;
+        } else if (!playing && fast_saved >= 0) {
+            g_manual_turbo_latched = fast_saved;
+            fast_saved = -1;
+        }
+    }
     if (exit_at_end && previous != REPLAY_IDLE && now == REPLAY_IDLE) {
         int status = 0;
         if (previous == REPLAY_RECORDING || previous == REPLAY_ARMING) {
@@ -13525,6 +13545,10 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(argv[i], "--replay") == 0 && i + 1 < argc) {
             g_replay_cli_path = argv[++i];
             force_no_launcher = true;   /* a replay launch boots straight in */
+        } else if (std::strcmp(argv[i], "--replay-verdict") == 0 && i + 1 < argc) {
+            g_replay_cli_verdict = argv[++i];
+        } else if (std::strcmp(argv[i], "--replay-fast") == 0) {
+            g_replay_cli_fast = true;
         } else if (std::strcmp(argv[i], "--headless") == 0) {
             g_headless = 1;
             force_no_launcher = true;

@@ -56,6 +56,58 @@ static unsigned s_digests_checked, s_div_parts;
 static uint32_t s_div_frame;
 static int s_diverged;
 
+static const char *digest_parts_text(unsigned parts, char *out, size_t cap);
+
+/* Verdict file (replay_session_set_verdict_path) and what it reports. */
+static char s_verdict_path[PATH_BYTES];
+static char s_play_path[PATH_BYTES];
+static char s_rec_pin[INPUT_ROUTE_V3_TEXT], s_player_pin[INPUT_ROUTE_V3_TEXT];
+static uint64_t s_end_cycle, s_end_recorded_cycle;
+static unsigned s_end_pages;
+static int s_end_reached;
+
+void replay_session_set_verdict_path(const char *path)
+{
+    snprintf(s_verdict_path, sizeof s_verdict_path, "%s", path ? path : "");
+}
+
+static void json_string(FILE *f, const char *s)
+{
+    fputc('"', f);
+    for (; s && *s; ++s) {
+        const unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') fprintf(f, "\\%c", c);
+        else if (c < 0x20) fprintf(f, "\\u%04x", c);
+        else fputc(c, f);
+    }
+    fputc('"', f);
+}
+
+static void write_verdict(ReplayResult result, const char *reason)
+{
+    static const char *const names[] = {"incomplete", "in_sync", "diverged", "stopped_by_input", "failed"};
+    char parts[32];
+    FILE *f;
+    if (!s_verdict_path[0] || !(f = fopen(s_verdict_path, "wb"))) return;
+    fprintf(f, "{\n  \"schema\": \"psxrecomp-replay-verdict/1\",\n  \"result\": \"%s\",\n",
+            names[result <= REPLAY_RESULT_FAILED ? result : 0]);
+    fprintf(f, "  \"frames_played\": %u,\n  \"frames_total\": %u,\n",
+            (unsigned)s_play_frame, (unsigned)s_play_frames);
+    if (s_diverged) fprintf(f, "  \"first_divergence_frame\": %u,\n  \"divergence_parts\": \"%s\",\n",
+                            (unsigned)s_div_frame, digest_parts_text(s_div_parts, parts, sizeof parts));
+    else fprintf(f, "  \"first_divergence_frame\": null,\n  \"divergence_parts\": null,\n");
+    fprintf(f, "  \"digests_checked\": %u,\n", s_digests_checked);
+    if (s_end_reached)
+        fprintf(f, "  \"end_cycle\": %llu,\n  \"recorded_end_cycle\": %llu,\n  \"differing_ram_pages\": %u,\n",
+                (unsigned long long)s_end_cycle, (unsigned long long)s_end_recorded_cycle, s_end_pages);
+    fputs("  \"recorded_build\": ", f); json_string(f, s_rec_pin);
+    fputs(",\n  \"player_build\": ", f); json_string(f, s_player_pin);
+    fputs(",\n  \"replay\": ", f); json_string(f, s_play_path);
+    fputs(",\n  \"reason\": ", f); json_string(f, reason ? reason : "");
+    fputs("\n}\n", f);
+    fclose(f);
+}
+
 ReplayState replay_session_state(void) { return s_state; }
 ReplayResult replay_session_last_result(void) { return s_result; }
 int replay_session_owns_p1(void) { return s_state == REPLAY_RECORDING || s_state == REPLAY_PLAYING; }
@@ -374,6 +426,7 @@ static void record_boundary(uint16_t b, const uint8_t sticks[4])
 
 static void end_playback(ReplayResult result, const char *osd)
 {
+    write_verdict(result, osd);
     if (s_settings_switched) replay_host_settings_restore();
     s_settings_switched = 0;
     free(s_steps_play); s_steps_play = NULL;
@@ -398,6 +451,7 @@ static int refuse_play(const char *why)
     fprintf(stderr, "replay: %s\n", msg);
     replay_host_osd(msg, 2600);
     s_result = REPLAY_RESULT_FAILED;
+    write_verdict(REPLAY_RESULT_FAILED, msg);
     return 0;
 }
 
@@ -415,6 +469,12 @@ int replay_session_play_file(const char *path)
     char why[256] = "";
     FILE *f;
     if (s_state != REPLAY_IDLE) return refuse_play("a replay is already recording or playing");
+    snprintf(s_play_path, sizeof s_play_path, "%s", path ? path : "");
+    s_rec_pin[0] = s_player_pin[0] = 0;
+    s_play_frame = s_play_frames = 0;
+    s_diverged = 0;
+    s_digests_checked = 0;
+    s_end_reached = 0;
     if (!(f = fopen(path, "rb"))) return refuse_play("cannot open the file");
     rp = (InputRouteV3Replay *)malloc(sizeof *rp);
     markers = (InputRouteMarker *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *markers);
@@ -459,6 +519,8 @@ int replay_session_play_file(const char *path)
         return refuse_play(e);
     }
     int other_build = strcmp(meta.pin, product.pin) != 0;
+    snprintf(s_rec_pin, sizeof s_rec_pin, "%s", meta.pin);
+    snprintf(s_player_pin, sizeof s_player_pin, "%s", product.pin);
     char differs[512] = "";
     replay_host_settings_apply(rp->settings, differs, sizeof differs);
     s_settings_switched = 1;
@@ -557,6 +619,10 @@ static int play_boundary(uint16_t live, const uint8_t live_sticks[4],
         for (uint32_t p = 0; p < INPUT_ROUTE_RAM_PAGES; ++p) differing += now.pages[p] != s_end.pages[p];
         /* AV alone does not fail a replay (see REPLAY_DIGEST_AV). */
         const int state = !(s_diverged && (s_div_parts & ~REPLAY_DIGEST_AV));
+        s_end_reached = 1;
+        s_end_cycle = now.cycle;
+        s_end_recorded_cycle = s_end.cycle;
+        s_end_pages = differing;
         fprintf(stdout, "replay_end: frames=%u result=%s cycle=%llu recorded_cycle=%llu differing_pages=%u "
                 "digests_checked=%u first_divergence=%d divergence_parts=%s\n",
                 (unsigned)s_play_frame, ram && cyc && state ? "in_sync" : "out_of_sync",

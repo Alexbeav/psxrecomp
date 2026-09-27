@@ -126,6 +126,18 @@ static uint16_t script(unsigned i) { return (uint16_t)~(1u << (i % 16)); }
 static int failures, checks;
 #define CHECK(c, ...) do { checks++; if (!(c)) { failures++; fprintf(stderr, "FAIL line %d: ", __LINE__); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
+static char verdict_path[700];
+static char verdict[4096];
+static int read_verdict(void) {
+    FILE *f = fopen(verdict_path, "rb");
+    size_t n = 0;
+    verdict[0] = 0;
+    if (f) { n = fread(verdict, 1, sizeof verdict - 1, f); fclose(f); }
+    verdict[n] = 0;
+    remove(verdict_path);
+    return f != NULL;
+}
+
 static void slot_path(int s, char *out, size_t cap) { CHECK(replay_session_slot_path(s, out, cap), "slot path %d", s); }
 static long file_size(const char *p) { FILE *f = fopen(p, "rb"); long n = -1; if (f) { fseek(f, 0, SEEK_END); n = ftell(f); fclose(f); } return n; }
 static void clear_slots(void) { char p[700]; for (int s = 0; s < REPLAY_SLOTS; ++s) { slot_path(s, p, sizeof p); remove(p); } }
@@ -194,6 +206,12 @@ static void test_record_and_play_in_sync(void) {
     CHECK(restores == 1 && !strcmp(settings_now, "cd_speed=1\n"), "settings restored");
     uint32_t df = 0; unsigned parts = 0;
     CHECK(!replay_session_first_divergence(&df, &parts), "no digest divergence in sync");
+    CHECK(read_verdict(), "verdict written at the end of playback");
+    CHECK(strstr(verdict, "\"result\": \"in_sync\"") && strstr(verdict, "\"frames_played\": 120") &&
+          strstr(verdict, "\"frames_total\": 120") && strstr(verdict, "\"first_divergence_frame\": null") &&
+          strstr(verdict, "\"recorded_build\": \"0123456789abcdef0123456789abcdef01234567\"") &&
+          strstr(verdict, "\"player_build\": \"0123456789abcdef0123456789abcdef01234567\""),
+          "in-sync verdict: %s", verdict);
     CHECK(replay_session_digests_checked() == 3, "3 digests checked (got %u)", replay_session_digests_checked());
 }
 
@@ -208,6 +226,9 @@ static void test_out_of_sync_is_reported(void) {
     uint32_t df = 0; unsigned parts = 0;
     CHECK(replay_session_first_divergence(&df, &parts) && df == 60 && (parts & REPLAY_DIGEST_CORE),
           "first divergence at frame 60 in core (frame %u parts %u)", df, parts);
+    CHECK(read_verdict() && strstr(verdict, "\"result\": \"diverged\"") &&
+          strstr(verdict, "\"first_divergence_frame\": 60") && strstr(verdict, "\"divergence_parts\": \"core\""),
+          "diverged verdict: %s", verdict);
     /* State outside the verdict partitions (the AV digest: GPU + VRAM, which
      * forks on GL/Vulkan readback) is reported but does not fail the replay. */
     drift_av = 1;
@@ -230,6 +251,8 @@ static void test_take_over(void) {
     int driven = replay_session_boundary(0xFFFF, pushed, &b, st);   /* stick past the deadzone */
     CHECK(!driven && replay_session_state() == REPLAY_IDLE, "stick takes over");
     CHECK(replay_session_last_result() == REPLAY_RESULT_TAKEN_OVER && restores == 1, "take-over result and restore");
+    CHECK(read_verdict() && strstr(verdict, "\"result\": \"stopped_by_input\"") &&
+          strstr(verdict, "\"frames_played\": 1,"), "take-over verdict: %s", verdict);
     /* A button held when playback starts does not take over until released. */
     CHECK(replay_session_play_slot(0), "play again");
     vblank(0xFFBF, neutral);
@@ -315,6 +338,8 @@ static void test_rec_blink(void) {
 int main(int argc, char **argv) {
     snprintf(dir, sizeof dir, "%s", argc > 1 ? argv[1] : "replay_session_test_dir");
     mkdir_p(dir);
+    snprintf(verdict_path, sizeof verdict_path, "%s/verdict.json", dir);
+    replay_session_set_verdict_path(verdict_path);
     test_record_and_play_in_sync();
     test_out_of_sync_is_reported();
     test_take_over();
