@@ -97,6 +97,17 @@ unsigned replay_session_digests_checked(void);
  * failed, frames, first divergence, recorded and player builds). NULL clears. */
 void replay_session_set_verdict_path(const char *path);
 
+/* Thumbnail (taken at the anchor) and name stored in the replay. The default
+ * name is "<game> · m:ss · YYYY-MM-DD HH:MM" (UTF-8 middle dots). */
+#define REPLAY_THUMB_W 128
+#define REPLAY_THUMB_H 96
+#define REPLAY_NAME_MAX 96
+/* Either output may be NULL. Returns 0 when the slot has no readable replay;
+ * a replay without a thumbnail leaves `thumb` untouched and still returns 1. */
+int replay_session_slot_info(int slot, char *name, size_t cap, uint32_t *thumb);
+/* Rewrites only the name entry. Refuses an empty name or a control byte. */
+int replay_session_rename_slot(int slot, const char *name);
+
 /* Process exit or a disc change: finish a recording from the last complete
  * boundary, and end a playback (settings restored). */
 void replay_session_shutdown(void);
@@ -126,6 +137,10 @@ void replay_host_settings_apply(const char *settings, char *differs, size_t cap)
 void replay_host_settings_restore(void);
 /* Guest main RAM (2 MiB) and cycle count at the current boundary. */
 const uint8_t *replay_host_ram(void);
+/* REPLAY_THUMB_W x REPLAY_THUMB_H ARGB of the current display; 0 if none. */
+int replay_host_thumb(uint32_t *out);
+const char *replay_host_game_title(void);
+int replay_host_frame_rate(void);   /* guest vblanks per second, 50 or 60 */
 /* core, av, aux, ext; 0 when no digest is available (none are recorded). */
 int replay_host_state_digest(uint32_t out[4]);
 uint64_t replay_host_cycle(void);

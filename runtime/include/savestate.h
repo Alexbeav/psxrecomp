@@ -86,6 +86,8 @@ int savestate_slot_mtime(int slot, int64_t* out_time);
 
 /* Per-slot screenshot thumbnails captured after a successful save. */
 int savestate_capture_thumb(int slot);
+/* The current display scaled to SAVESTATE_THUMB_W x SAVESTATE_THUMB_H ARGB. */
+void savestate_render_thumb(uint32_t* out_argb);
 int savestate_read_thumb(int slot, uint32_t* out_argb,
                          int out_w, int out_h);
 

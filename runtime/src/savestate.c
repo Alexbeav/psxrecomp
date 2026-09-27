@@ -490,14 +490,9 @@ int savestate_slot_mtime(int slot, int64_t* out_time) {
 #endif
 }
 
-int savestate_capture_thumb(int slot) {
-    char path[600];
-    FILE* f;
-    SavestateThumbHeader hdr;
-    uint32_t thumb[SAVESTATE_THUMB_W * SAVESTATE_THUMB_H];
+void savestate_render_thumb(uint32_t* thumb) {
     GpuDisplayInfo di;
     uint32_t dw, dh, x, y;
-    if (!savestate_thumb_path(slot, path, sizeof(path))) return 0;
     gpu_get_display_info(&di);
     dw = di.width ? di.width : 320u;
     dh = di.height ? di.height : 240u;
@@ -510,6 +505,15 @@ int savestate_capture_thumb(int slot) {
                 : (gpu_display_pixel_argb(&di, sx, sy) | 0xFF000000u);
         }
     }
+}
+
+int savestate_capture_thumb(int slot) {
+    char path[600];
+    FILE* f;
+    SavestateThumbHeader hdr;
+    uint32_t thumb[SAVESTATE_THUMB_W * SAVESTATE_THUMB_H];
+    if (!savestate_thumb_path(slot, path, sizeof(path))) return 0;
+    savestate_render_thumb(thumb);
     hdr.magic[0] = 'P';
     hdr.magic[1] = 'S';
     hdr.magic[2] = 'T';

@@ -6508,7 +6508,9 @@ static void savestate_menu_sync_overlay(void) {
     psx_savestate_menu_set_state(savestate_menu_open, savestate_menu_slot);
 }
 
+static void savestate_menu_rename_end(void);
 static void savestate_menu_close(void) {
+    savestate_menu_rename_end();
     savestate_menu_notice_until = 0;
     psx_savestate_menu_set_notice("");
     savestate_menu_open = 0;
@@ -6669,6 +6671,87 @@ static void savestate_menu_notice_clear(void) {
     psx_savestate_menu_set_notice("");
 }
 
+/* F2 on the Replays page renames the selected replay with keyboard text
+ * input: Enter saves, Esc cancels. There is no on-screen keyboard. */
+static int savestate_menu_rename_slot = -1;
+static std::string savestate_menu_rename_text;
+
+static void savestate_menu_rename_show(void) {
+    std::string shown;
+    const std::string &t = savestate_menu_rename_text;
+    for (size_t i = 0; i < t.size(); ++i) {
+        const unsigned char c = (unsigned char)t[i];
+        if (c == 0xC2 && i + 1 < t.size() && (unsigned char)t[i + 1] == 0xB7) { shown += '-'; ++i; }
+        else if (c >= 0x80) { if ((c & 0xC0) != 0x80) shown += '?'; }
+        else shown += (char)c;
+    }
+    if (shown.size() > 52) shown = ".." + shown.substr(shown.size() - 50);
+    savestate_menu_notice_until = 0;
+    psx_savestate_menu_set_notice(("NAME: " + shown + "_   ENTER SAVE  ESC CANCEL").c_str());
+}
+
+static void savestate_menu_rename_end(void) {
+    if (savestate_menu_rename_slot < 0) return;
+    savestate_menu_rename_slot = -1;
+    savestate_menu_rename_text.clear();
+#if defined(PSX_SDL3)
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
+#else
+    SDL_StopTextInput();
+#endif
+    psx_savestate_menu_set_notice("");
+}
+
+static void savestate_menu_rename_begin(int slot) {
+    char name[REPLAY_NAME_MAX + 1] = "";
+    if (!replay_session_slot_info(slot, name, sizeof(name), nullptr)) {
+        savestate_menu_notice("That replay cannot be read", 1800);
+        return;
+    }
+    savestate_menu_rename_slot = slot;
+    savestate_menu_rename_text = name;
+#if defined(PSX_SDL3)
+    SDL_StartTextInput(SDL_GetKeyboardFocus());
+#else
+    SDL_StartTextInput();
+#endif
+    savestate_menu_rename_show();
+}
+
+static void savestate_menu_rename_text_input(const char *text) {
+    if (savestate_menu_rename_slot < 0 || !text) return;
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
+        if (*p < 0x20 || *p == 0x7f) return;
+    if (savestate_menu_rename_text.size() + std::strlen(text) > REPLAY_NAME_MAX) return;
+    savestate_menu_rename_text += text;
+    savestate_menu_rename_show();
+}
+
+/* Returns 1 when the key belonged to the rename field. */
+static int savestate_menu_rename_key(SDL_Keycode key) {
+    if (savestate_menu_rename_slot < 0) return 0;
+    if (key == SDLK_ESCAPE) {
+        savestate_menu_rename_end();
+        savestate_menu_notice("Rename cancelled", 1200);
+    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+        const int slot = savestate_menu_rename_slot;
+        const std::string text = savestate_menu_rename_text;
+        savestate_menu_rename_end();
+        if (replay_session_rename_slot(slot, text.c_str())) {
+            psx_savestate_menu_note_slots_changed();
+            savestate_menu_notice("Replay renamed", 1500);
+        } else {
+            savestate_menu_notice("Rename failed: the name is empty or the file cannot be rewritten", 2600);
+        }
+    } else if (key == SDLK_BACKSPACE) {
+        std::string &t = savestate_menu_rename_text;
+        while (!t.empty() && ((unsigned char)t.back() & 0xC0) == 0x80) t.pop_back();
+        if (!t.empty()) t.pop_back();
+        savestate_menu_rename_show();
+    }
+    return 1;
+}
+
 static void savestate_menu_set_page(int replays) {
     savestate_menu_replays = replays ? 1 : 0;
     savestate_menu_delete_armed = -1;
@@ -6776,6 +6859,8 @@ static int savestate_menu_slot_from_key(SDL_Keycode key) {
 static void savestate_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode,
                                       int mod, int repeat) {
     int slot;
+    if (savestate_menu_rename_key(key))
+        return;
     if (repeat)
         return;
     if (savestate_menu_open_key && key == savestate_menu_open_key)
@@ -6797,7 +6882,12 @@ static void savestate_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode,
     } else if (key == SDLK_TAB) {
         savestate_menu_set_page(!savestate_menu_replays);
     } else if (savestate_menu_replays) {
-        if (key == SDLK_RETURN || key == SDLK_SPACE || key == SDLK_l)
+        if (key == SDLK_F2) {
+            if (replay_session_slot_exists(savestate_menu_slot))
+                savestate_menu_rename_begin(savestate_menu_slot);
+            else
+                savestate_menu_notice("That replay slot is empty", 1500);
+        } else if (key == SDLK_RETURN || key == SDLK_SPACE || key == SDLK_l)
             savestate_menu_replay_action(0);
         else if (key == SDLK_e)
             savestate_menu_replay_action(1);
@@ -6817,6 +6907,8 @@ static void savestate_menu_poll_nav(uint32_t now_ms) {
     static int held_dir, last_step_ms;
     int prev = 0, next = 0, load = 0, save = 0, cancel = 0, page = 0, del = 0;
     int dir = 0;
+    if (savestate_menu_rename_slot >= 0)
+        return;   /* the pad does not act while a name is being typed */
 
     SDL_GameController *h = g_players[0].handle;
     if (h) {
@@ -7072,6 +7164,12 @@ static void savestate_menu_host_pause_loop(void) {
                 const int repeat = ev.key.repeat ? 1 : 0;
 #endif
                 savestate_menu_handle_key(key, scancode, (int)mod, repeat);
+#if defined(PSX_SDL3)
+            } else if (ev.type == SDL_EVENT_TEXT_INPUT) {
+#else
+            } else if (ev.type == SDL_TEXTINPUT) {
+#endif
+                savestate_menu_rename_text_input(ev.text.text);
             } else if (ev.type == SDL_KEYUP) {
 #if defined(PSX_SDL3)
                 const SDL_Keycode key = ev.key.key;
@@ -7322,6 +7420,15 @@ extern "C" void replay_host_settings_apply(const char *settings, char *differs, 
 extern "C" void replay_host_settings_restore(void) {
     replay_settings_apply_text(s_replay_saved_settings.c_str(), nullptr, 0);
 }
+
+extern "C" int replay_host_thumb(uint32_t *out) {
+    static_assert(REPLAY_THUMB_W == SAVESTATE_THUMB_W && REPLAY_THUMB_H == SAVESTATE_THUMB_H,
+                  "replay thumbnails reuse the save-state size");
+    savestate_render_thumb(out);
+    return 1;
+}
+extern "C" const char *replay_host_game_title(void) { return s_picker_game_name.c_str(); }
+extern "C" int replay_host_frame_rate(void) { return gpu_video_standard_is_pal() ? 50 : 60; }
 
 extern "C" const uint8_t *replay_host_ram(void) {
     extern uint8_t *g_psx_ram;

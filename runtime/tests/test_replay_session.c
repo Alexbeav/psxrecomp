@@ -76,6 +76,12 @@ void replay_host_settings_apply(const char *s, char *differs, size_t cap) {
 }
 void replay_host_settings_restore(void) { snprintf(settings_now, sizeof settings_now, "%s", settings_saved); restores++; }
 const uint8_t *replay_host_ram(void) { return ram; }
+int replay_host_thumb(uint32_t *out) {
+    for (unsigned i = 0; i < REPLAY_THUMB_W * REPLAY_THUMB_H; ++i) out[i] = 0xFF000000u | (i * 2654435761u >> 8);
+    return 1;
+}
+const char *replay_host_game_title(void) { return "Test Game"; }
+int replay_host_frame_rate(void) { return 60; }
 static int digest_calls;
 int replay_host_state_digest(uint32_t out[4]) {
     uint32_t h = 2166136261u;
@@ -215,6 +221,29 @@ static void test_record_and_play_in_sync(void) {
     CHECK(replay_session_digests_checked() == 3, "3 digests checked (got %u)", replay_session_digests_checked());
 }
 
+static void test_thumb_and_name(void) {
+    char name[REPLAY_NAME_MAX + 1], expect[64], exported[700];
+    static uint32_t thumb[REPLAY_THUMB_W * REPLAY_THUMB_H];
+    CHECK(replay_session_slot_info(0, name, sizeof name, thumb), "slot 0 info");
+    CHECK(thumb[0] == 0xFF000000u && thumb[5] == (0xFF000000u | (5u * 2654435761u >> 8)), "thumbnail stored");
+    snprintf(expect, sizeof expect, "Test Game \xC2\xB7 0:02 \xC2\xB7 ");
+    CHECK(!strncmp(name, expect, strlen(expect)) && strlen(name) == strlen(expect) + 16,
+          "default name '<game> . m:ss . YYYY-MM-DD HH:MM': %s", name);
+    CHECK(!replay_session_rename_slot(0, ""), "empty name refused");
+    CHECK(replay_session_rename_slot(0, "Boss fight: take 2"), "rename");
+    CHECK(replay_session_slot_info(0, name, sizeof name, NULL) && !strcmp(name, "Boss fight: take 2"), "renamed: %s", name);
+    CHECK(replay_session_slot_info(0, NULL, 0, thumb) && thumb[5] == (0xFF000000u | (5u * 2654435761u >> 8)),
+          "thumbnail survives the rename");
+    CHECK(replay_session_export_slot(0, exported, sizeof exported), "export");
+    CHECK(strstr(exported, "/replays/Boss fight_ take 2.psxrpl") != NULL, "export uses the sanitised name: %s", exported);
+    remove(exported);
+    /* The renamed replay still plays in sync. */
+    CHECK(replay_session_play_slot(0), "play after rename");
+    for (unsigned i = 0; i < 130 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
+    CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "renamed replay in sync (result %d)", replay_session_last_result());
+    read_verdict();
+}
+
 static void test_out_of_sync_is_reported(void) {
     drift = 1;
     CHECK(replay_session_play_slot(0), "play slot 0 again");
@@ -341,6 +370,7 @@ int main(int argc, char **argv) {
     snprintf(verdict_path, sizeof verdict_path, "%s/verdict.json", dir);
     replay_session_set_verdict_path(verdict_path);
     test_record_and_play_in_sync();
+    test_thumb_and_name();
     test_out_of_sync_is_reported();
     test_take_over();
     test_no_free_slots();

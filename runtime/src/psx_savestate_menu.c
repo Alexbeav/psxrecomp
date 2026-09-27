@@ -64,6 +64,7 @@ static int s_open;
 static int s_selected;
 static int s_replays;   /* 1: the Replays page (PS1B-191) */
 static char s_notice[96]; /* drawn over the key hints while set */
+static char s_names[SAVESTATE_SLOTS][REPLAY_NAME_MAX + 1];
 static int s_runtime_open;
 static int s_route_swapped;
 static int s_route_available;
@@ -247,6 +248,32 @@ static void refresh_thumbs(void)
     }
 }
 
+/* Replay names and thumbnails come from the replay files themselves. */
+static void refresh_replay_info(void)
+{
+    int i;
+    for (i = 0; i < SAVESTATE_SLOTS; i++) {
+        s_thumbs[i][0] = 0;
+        s_names[i][0] = 0;
+        s_have_thumb[i] = replay_session_slot_info(i, s_names[i], sizeof(s_names[i]), s_thumbs[i]) &&
+                          (s_thumbs[i][0] >> 24) != 0;
+    }
+}
+
+/* The 8x8 font is ASCII: the middle dot becomes '-', other non-ASCII '?'. */
+static void ascii_name(const char *in, char *out, size_t cap, size_t max_chars)
+{
+    size_t n = 0;
+    const unsigned char *p = (const unsigned char *)in;
+    for (; *p && n + 1 < cap; ++p) {
+        if (n == max_chars) { if (n >= 2) { out[n - 2] = '.'; out[n - 1] = '.'; } break; }
+        if (p[0] == 0xC2 && p[1] == 0xB7) { out[n++] = '-'; ++p; }
+        else if (*p >= 0x80) { out[n++] = '?'; while ((p[1] & 0xC0) == 0x80) ++p; }
+        else out[n++] = (char)*p;
+    }
+    out[n] = 0;
+}
+
 static void rasterize_panel(void)
 {
     int i, first;
@@ -265,7 +292,7 @@ static void rasterize_panel(void)
              key[0] ? key : "F7");
     draw_text(s_panel, 432, 18, buf, 0xFFB8BDC8u, 1);
 
-    if (s_replays) memset(s_have_thumb, 0, sizeof(s_have_thumb));
+    if (s_replays) refresh_replay_info();
     else refresh_thumbs();
     first = s_selected - 1;
     if (first < 0) first = 0;
@@ -304,6 +331,10 @@ static void rasterize_panel(void)
                           s_replays ? "---" : "NEW", 0xFF707887u, 1);
             }
         }
+        if (s_replays && s_names[i][0]) {
+            ascii_name(s_names[i], buf, sizeof(buf), 36);
+            draw_text(s_panel, SSM_ROWS_X + 278, y + 22, buf, fg, 1);
+        }
         format_slot_status(i, buf, sizeof(buf));
         draw_text(s_panel, SSM_ROWS_X + 278, y + 42, buf, sub, 1);
         if (sel)
@@ -328,7 +359,7 @@ static void rasterize_panel(void)
         fill_rect(s_panel, 0, 446, SSM_W, 24, 0xFF3A3218u);
         draw_text(s_panel, 32, 454, s_notice, 0xFFFFD24Du, 1);
     } else if (s_replays) {
-        draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER PLAY  E EXPORT  DEL DELETE  ESC BACK",
+        draw_text(s_panel, 32, 454, "KEYS: ARROWS  ENTER PLAY  E EXPORT  DEL DELETE  F2 RENAME  ESC",
                   0xFFB8BDC8u, 1);
     } else {
         draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER/L LOAD  SHIFT+ENTER/S SAVE  ESC BACK",

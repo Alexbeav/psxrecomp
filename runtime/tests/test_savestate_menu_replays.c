@@ -7,6 +7,12 @@ int savestate_slot_mtime(int slot, int64_t *out) { (void)slot; (void)out; return
 int savestate_read_thumb(int slot, uint32_t *px, int w, int h) { (void)slot; (void)px; (void)w; (void)h; return 0; }
 int replay_session_slot_path(int slot, char *out, size_t cap) { (void)slot; (void)out; (void)cap; return 0; }
 int replay_session_slot_exists(int slot) { return slot == 0; }
+int replay_session_slot_info(int slot, char *name, size_t cap, uint32_t *thumb) {
+    if (slot != 0) return 0;
+    if (name && cap) snprintf(name, cap, "Boss fight \xC2\xB7 1:05");
+    if (thumb) for (int i = 0; i < REPLAY_THUMB_W * REPLAY_THUMB_H; ++i) thumb[i] = 0xFF123456u;
+    return 1;
+}
 const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) { (void)action; if (cap) out[0] = 0; return out; }
 
 static int failures;
@@ -33,6 +39,10 @@ int main(void) {
     CHECK(px != NULL, "replays page renders");
     CHECK(px && count_color(px, 0, 410, SSM_W, SSM_H, 0xFF5FE0B0u) > 10, "triangle DELETE hint on the replays page");
     CHECK(px && count_color(px, 0, 446, SSM_W, 470, 0xFFFFD24Du) == 0, "no notice by default");
+    CHECK(px && count_color(px, SSM_ROWS_X + 118, SSM_ROWS_Y, SSM_ROWS_X + 118 + SSM_THUMB_W,
+                            SSM_ROWS_Y + SSM_ROW_H, 0xFF123456u) > 1000, "replay thumbnail shown");
+    CHECK(px && count_color(px, SSM_ROWS_X + 278, SSM_ROWS_Y + 22, SSM_ROWS_X + SSM_ROWS_W,
+                            SSM_ROWS_Y + 30, 0xFFFFD24Du) > 40, "replay name drawn on the selected row");
 
     psx_savestate_menu_set_notice("Press delete again to delete replay 1");
     px = render();

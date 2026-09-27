@@ -39,6 +39,10 @@ static size_t s_anchor_size;
 static uint8_t *s_last_ram;
 static uint64_t s_last_cycle;
 static uint32_t s_last_frame;
+/* Thumbnail at the anchor and the wall-clock start, for the default name. */
+static uint32_t *s_thumb;
+static int s_have_thumb;
+static time_t s_rec_started;
 /* Rollback state digests: frame, core, av, aux, ext. */
 #define DIGEST_CAP (INPUT_ROUTE_MAX_FRAMES / REPLAY_DIGEST_INTERVAL + 2u)
 static uint32_t (*s_digests)[5];
@@ -164,9 +168,32 @@ static int create_exclusive(const char *path, FILE **out)
     return *out != NULL;
 }
 
+/* A file name from a replay name: path and reserved characters become '_',
+ * the middle dot '-', other non-ASCII '_'; trailing spaces and dots go. */
+static void sanitize_name(const char *in, char *out, size_t cap)
+{
+    size_t n = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && n + 1 < cap; ++p) {
+        char c;
+        if (p[0] == 0xC2 && p[1] == 0xB7) { c = '-'; ++p; }
+        else if (*p >= 0x80) { c = '_'; while ((p[1] & 0xC0) == 0x80) ++p; }
+        else if (strchr("<>:\"/\\|?*", *p) || *p < 0x20) c = '_';
+        else c = (char)*p;
+        out[n++] = c;
+    }
+    while (n && (out[n - 1] == ' ' || out[n - 1] == '.')) --n;
+    out[n] = 0;
+}
+
+static int read_slot_replay(int slot, InputRouteV3Replay *rp, char *path, size_t path_cap);
+
 int replay_session_export_slot(int slot, char *out_path, size_t cap)
 {
-    char src[PATH_BYTES], dst[PATH_BYTES];
+    char src[PATH_BYTES], dst[PATH_BYTES], base[REPLAY_NAME_MAX + 1] = "";
+    InputRouteV3Replay *rp = (InputRouteV3Replay *)malloc(sizeof *rp);
+    if (rp && read_slot_replay(slot, rp, src, sizeof src) && rp->name[0])
+        sanitize_name(rp->name, base, sizeof base);
+    free(rp);
     const char *dir = replay_host_export_dir();
     time_t now = time(NULL);
     struct tm tm_now;
@@ -182,8 +209,11 @@ int replay_session_export_slot(int slot, char *out_path, size_t cap)
     char stamp[32];
     strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm_now);
     for (int n = 0; n < 100 && !out; ++n) {
-        snprintf(dst, sizeof dst, n ? "%s/%s-%s-%d.psxrpl" : "%s/%s-%s.psxrpl",
-                 dir, replay_host_disc_serial(), stamp, n);
+        if (base[0])
+            snprintf(dst, sizeof dst, n ? "%s/%s-%d.psxrpl" : "%s/%s.psxrpl", dir, base, n);
+        else
+            snprintf(dst, sizeof dst, n ? "%s/%s-%s-%d.psxrpl" : "%s/%s-%s.psxrpl",
+                     dir, replay_host_disc_serial(), stamp, n);
         create_exclusive(dst, &out);
     }
     if (!out || !(in = fopen(src, "rb"))) { if (out) { fclose(out); remove(dst); } return 0; }
@@ -198,6 +228,131 @@ int replay_session_export_slot(int slot, char *out_path, size_t cap)
     if (!ok) { remove(dst); return 0; }
     snprintf(out_path, cap, "%s", dst);
     return 1;
+}
+
+/* Reads a slot's replay extension (name, thumbnail location). */
+static int read_slot_replay(int slot, InputRouteV3Replay *rp, char *path, size_t path_cap)
+{
+    InputRouteV3 meta;
+    InputDualShockRouteStep *steps;
+    InputRouteMarker *markers;
+    InputRouteCheckpoint *cps;
+    const char *error;
+    FILE *f;
+    if (!replay_session_slot_path(slot, path, path_cap) || !(f = fopen(path, "rb"))) return 0;
+    steps = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof *steps);
+    markers = (InputRouteMarker *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *markers);
+    cps = (InputRouteCheckpoint *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *cps);
+    error = !steps || !markers || !cps ? "memory"
+          : input_route_v3_read_ex(f, &meta, NULL, steps, markers, cps, rp);
+    fclose(f);
+    free(steps); free(markers); free(cps);
+    return error == NULL;
+}
+
+int replay_session_slot_info(int slot, char *name, size_t cap, uint32_t *thumb)
+{
+    char path[PATH_BYTES];
+    InputRouteV3Replay *rp = (InputRouteV3Replay *)malloc(sizeof *rp);
+    int ok = rp && read_slot_replay(slot, rp, path, sizeof path);
+    if (ok && name && cap) snprintf(name, cap, "%s", rp->name);
+    if (ok && thumb && rp->thumb_w == REPLAY_THUMB_W && rp->thumb_h == REPLAY_THUMB_H) {
+        FILE *f = fopen(path, "rb");
+        unsigned char *raw = (unsigned char *)malloc(4u * REPLAY_THUMB_W * REPLAY_THUMB_H);
+        if (f && raw && !fseek(f, rp->thumb_offset, SEEK_SET) &&
+            fread(raw, 4, REPLAY_THUMB_W * REPLAY_THUMB_H, f) == REPLAY_THUMB_W * REPLAY_THUMB_H)
+            for (unsigned i = 0; i < REPLAY_THUMB_W * REPLAY_THUMB_H; ++i)
+                thumb[i] = input_route_le32(raw + 4 * i);
+        free(raw);
+        if (f) fclose(f);
+    }
+    free(rp);
+    return ok;
+}
+
+/* Copies the file with its NAME entry replaced: every other entry and the
+ * records keep their bytes, the header's extension size is adjusted. */
+int replay_session_rename_slot(int slot, const char *name)
+{
+    char path[PATH_BYTES], tmp[PATH_BYTES + 8];
+    unsigned char h[INPUT_ROUTE_V3_HEADER_BYTES], e[8];
+    InputRouteV3Replay *rp;
+    FILE *in = NULL, *out = NULL;
+    uint32_t ext, used = 0, new_ext;
+    size_t len = name ? strlen(name) : 0;
+    int ok;
+    if (s_state != REPLAY_IDLE || !input_route_v3_name_ok(name ? name : "", len)) return 0;
+    rp = (InputRouteV3Replay *)malloc(sizeof *rp);
+    ok = rp && read_slot_replay(slot, rp, path, sizeof path);
+    free(rp);
+    if (!ok || !(in = fopen(path, "rb"))) return 0;
+    snprintf(tmp, sizeof tmp, "%s.rename", path);
+    remove(tmp);
+    ok = fread(h, 1, sizeof h, in) == sizeof h && create_exclusive(tmp, &out);
+    ext = ok ? input_route_le32(h + 24) : 0;
+    new_ext = ext;
+    /* First pass: the size without the old name, plus the new one. */
+    while (ok && used < ext) {
+        uint32_t tag, length, padded;
+        ok = fread(e, 1, 8, in) == 8;
+        tag = input_route_le32(e);
+        length = input_route_le32(e + 4);
+        padded = (length + 3u) & ~3u;
+        if (ok && tag == INPUT_ROUTE_TAG_REPLAY_NAME) new_ext -= 8u + padded;
+        ok = ok && !fseek(in, (long)padded, SEEK_CUR);
+        used += 8u + padded;
+    }
+    new_ext += input_route_v3_entry_bytes((uint32_t)len);
+    ok = ok && new_ext <= INPUT_ROUTE_V3_MAX_EXT && !fseek(in, (long)sizeof h, SEEK_SET);
+    if (ok) {
+        input_route_put32(h + 24, new_ext);
+        ok = fwrite(h, 1, sizeof h, out) == sizeof h;
+    }
+    /* Second pass: copy entries except the old name, then the new name. */
+    used = 0;
+    while (ok && used < ext) {
+        uint32_t tag, length, padded;
+        unsigned char buf[65536];
+        ok = fread(e, 1, 8, in) == 8;
+        tag = input_route_le32(e);
+        length = input_route_le32(e + 4);
+        padded = (length + 3u) & ~3u;
+        used += 8u + padded;
+        if (ok && tag == INPUT_ROUTE_TAG_REPLAY_NAME) { ok = !fseek(in, (long)padded, SEEK_CUR); continue; }
+        ok = ok && fwrite(e, 1, 8, out) == 8;
+        for (uint32_t left = padded; ok && left; ) {
+            const size_t n = left < sizeof buf ? left : sizeof buf;
+            ok = fread(buf, 1, n, in) == n && fwrite(buf, 1, n, out) == n;
+            left -= (uint32_t)n;
+        }
+    }
+    ok = ok && input_route_v3_put_entry(out, INPUT_ROUTE_TAG_REPLAY_NAME, (const unsigned char *)name, (uint32_t)len);
+    while (ok) {   /* the records */
+        unsigned char buf[65536];
+        const size_t n = fread(buf, 1, sizeof buf, in);
+        if (!n) { ok = !ferror(in); break; }
+        ok = fwrite(buf, 1, n, out) == n;
+    }
+    fclose(in);
+    if (out && fclose(out)) ok = 0;
+    if (ok) {
+        /* The rewritten file must read back with the new name before it
+         * replaces the original. */
+        InputRouteV3 meta;
+        InputRouteV3Replay *check = (InputRouteV3Replay *)malloc(sizeof *check);
+        InputDualShockRouteStep *steps = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof *steps);
+        InputRouteMarker *markers = (InputRouteMarker *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *markers);
+        InputRouteCheckpoint *cps = (InputRouteCheckpoint *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *cps);
+        FILE *r = fopen(tmp, "rb");
+        ok = check && steps && markers && cps && r &&
+             !input_route_v3_read_ex(r, &meta, NULL, steps, markers, cps, check) &&
+             !strcmp(check->name, name);
+        if (r) fclose(r);
+        free(check); free(steps); free(markers); free(cps);
+    }
+    if (ok) ok = remove(path) == 0 && rename(tmp, path) == 0;
+    if (!ok) remove(tmp);
+    return ok;
 }
 
 /* ---- Checkpoints (the same hashes as input_route_session's markers) ---- */
@@ -241,6 +396,7 @@ unsigned replay_session_digests_checked(void) { return s_digests_checked; }
 
 static void free_recording(void)
 {
+    free(s_thumb); s_thumb = NULL; s_have_thumb = 0;
     free(s_digests); s_digests = NULL; s_digest_count = 0;
     free(s_words); s_words = NULL;
     free(s_anchor); s_anchor = NULL; s_anchor_size = 0;
@@ -270,7 +426,9 @@ static int begin_recording(const char *path, int slot)
     s_last_ram = (uint8_t *)malloc(RAM_BYTES);
     s_digests = (uint32_t (*)[5])malloc(DIGEST_CAP * sizeof *s_digests);
     s_digest_count = 0;
-    if (!s_words || !s_last_ram || !s_digests || !replay_host_request_anchor()) {
+    s_thumb = (uint32_t *)malloc(REPLAY_THUMB_W * REPLAY_THUMB_H * sizeof *s_thumb);
+    s_have_thumb = 0;
+    if (!s_words || !s_last_ram || !s_digests || !s_thumb || !replay_host_request_anchor()) {
         free_recording();
         replay_host_osd("Replay not recorded: out of memory", 2200);
         return 0;
@@ -289,6 +447,32 @@ int replay_session_record_to(const char *path)
     if (!path || !path[0] || strlen(path) >= PATH_BYTES) return 0;
     if ((probe = fopen(path, "rb"))) { fclose(probe); return 0; }
     return begin_recording(path, -1);
+}
+
+/* "<game> · m:ss · YYYY-MM-DD HH:MM", cut to fit on a UTF-8 boundary. */
+static void default_name(char *out, size_t cap)
+{
+    char when[32] = "", tail[64];
+    struct tm tm_start;
+    const int rate = replay_host_frame_rate() > 0 ? replay_host_frame_rate() : 60;
+    const unsigned secs = (unsigned)(s_last_frame / (uint32_t)rate);
+    const char *title = replay_host_game_title();
+    size_t n;
+#ifdef _WIN32
+    localtime_s(&tm_start, &s_rec_started);
+#else
+    localtime_r(&s_rec_started, &tm_start);
+#endif
+    strftime(when, sizeof when, "%Y-%m-%d %H:%M", &tm_start);
+    snprintf(tail, sizeof tail, " \xC2\xB7 %u:%02u \xC2\xB7 %s", secs / 60u, secs % 60u, when);
+    if (!title || !title[0]) title = "Replay";
+    n = strlen(title);
+    if (cap <= strlen(tail) + 1) { snprintf(out, cap, "%s", tail + 1); return; }
+    if (n > cap - strlen(tail) - 1) {
+        n = cap - strlen(tail) - 1;
+        while (n && ((unsigned char)title[n] & 0xC0) == 0x80) --n;   /* keep whole characters */
+    }
+    snprintf(out, cap, "%.*s%s", (int)n, title, tail);
 }
 
 /* Writes the recording that ended on boundary s_last_frame. */
@@ -329,9 +513,18 @@ static void finish_recording(void)
         if (!error && !create_exclusive(s_rec_path, &f)) error = "the file already exists or cannot be created";
     }
     if (!error) {
-        error = input_route_v3_write_ex(f, &s_meta, NULL, s_words, s_last_frame, &end_marker, end,
-                                        s_anchor, (uint32_t)s_anchor_size, s_settings,
-                                        digests, digests_length);
+        InputRouteV3ReplayOut rx;
+        char name[REPLAY_NAME_MAX + 1];
+        default_name(name, sizeof name);
+        memset(&rx, 0, sizeof rx);
+        rx.anchor = s_anchor;
+        rx.anchor_length = (uint32_t)s_anchor_size;
+        rx.settings = s_settings;
+        rx.digests = digests;
+        rx.digests_length = digests_length;
+        if (s_have_thumb) { rx.thumb = s_thumb; rx.thumb_w = REPLAY_THUMB_W; rx.thumb_h = REPLAY_THUMB_H; }
+        rx.name = name;
+        error = input_route_v3_write_ex(f, &s_meta, NULL, s_words, s_last_frame, &end_marker, end, &rx);
         if (fclose(f) && !error) error = "close error";
         if (error) remove(s_rec_path);
     }
@@ -687,6 +880,8 @@ int replay_session_boundary(uint16_t live, const uint8_t live_sticks[4],
         }
         s_state = REPLAY_RECORDING;
         s_frames = s_steps = 0;
+        s_have_thumb = s_thumb && replay_host_thumb(s_thumb);
+        s_rec_started = time(NULL);
         replay_host_osd("Recording replay", 1200);
         fprintf(stdout, "replay_recording: path=%s\n", s_rec_path);
         fflush(stdout);
