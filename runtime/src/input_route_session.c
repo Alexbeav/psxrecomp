@@ -181,6 +181,13 @@ static const char *disc_digest(uint32_t *kind, uint8_t out[32])
     return NULL;
 }
 
+int input_route_session_prefetch_disc_digest(void)
+{
+    uint32_t kind;
+    uint8_t digest[32];
+    return disc_digest(&kind, digest) == NULL;
+}
+
 static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32])
 {
     uint8_t digest[32];

@@ -7321,7 +7321,13 @@ extern "C" int replay_host_can_record(char *why, size_t cap) {
     return 1;
 }
 
+/* The replay identity needs the SHA-256 of the whole disc image (~1.7 s for
+ * RE3's 712 MB bin). A host thread hashes it at startup so the first F11 or
+ * playback does not stall a frame; this mutex keeps the product identity and
+ * the digest cache consistent between that thread and the frame path. */
+static std::mutex s_replay_identity_mutex;
 extern "C" int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap) {
+    std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
     return input_route_session_identity(meta, psx_bios_hle_enabled(),
                                         psx_bios_hle_boot_skip_enabled(), why, cap);
 }
@@ -16251,9 +16257,20 @@ session_reboot:
     }
     /* Route identity sides for PSX_INPUT_ROUTE_FILE / PSX_INPUT_ROUTE_RECORD.
      * Nothing is read or hashed unless one of them is set. */
-    input_route_session_set_product(route_disc_serial.c_str(),
-                                    disc_path_str.c_str(), bios_path_str.c_str());
+    {
+        std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
+        input_route_session_set_product(route_disc_serial.c_str(),
+                                        disc_path_str.c_str(), bios_path_str.c_str());
+    }
     s_replay_disc_serial = route_disc_serial;
+    /* Hash the disc for replays in the background (see replay_host_identity).
+     * Skipped when an input route is armed: that path uses the digest at boot. */
+    if (!std::getenv("PSX_INPUT_ROUTE_FILE") && !std::getenv("PSX_INPUT_ROUTE_RECORD")) {
+        std::thread([] {
+            std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
+            input_route_session_prefetch_disc_digest();
+        }).detach();
+    }
     /* A recording in progress is written from its last boundary at exit.
      * Registered once: this path runs again on every session reboot. */
     static bool replay_atexit_registered = false;
