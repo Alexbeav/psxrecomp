@@ -149,3 +149,5 @@ int main(void) {
          "OTC needs bit 28 (both modes), source bit-28 retention to completion (D20/D20b)");
     return 0;
 }
+
+#include "gpu_queue_test_stubs.h"

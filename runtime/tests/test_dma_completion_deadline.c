@@ -57,6 +57,8 @@ UNUSED_DMA_STUB(mdec_debug_dma_in_start)
 UNUSED_DMA_STUB(mdec_debug_dma_out_start)
 UNUSED_DMA_STUB(mdec_debug_dma_in_end)
 UNUSED_DMA_STUB(mdec_debug_dma_out_end)
+UNUSED_DMA_STUB(gpu_ws_validate_linked_list_header)
+UNUSED_DMA_STUB(gpu_ws_validate_linked_list_node)
 void gpu_set_gp0_linked_list_node(uint32_t a,uint32_t n){(void)a;(void)n;gpu_headers++;}
 uint32_t gpu_read_gpuread(void) {abort();}
 uint32_t gpu_dma_vram_upload_words(void) {abort();}
@@ -156,3 +158,5 @@ void source_gpu_runtime_dma_write(void) {}
 /* No source GPU consumer in this device-isolation control. */
 void source_gpu_runtime_advance(void) {}
 uint32_t source_gpu_runtime_cycles_to_event(void) {return UINT32_MAX;}
+
+#include "gpu_queue_test_stubs.h"

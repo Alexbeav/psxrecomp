@@ -137,3 +137,5 @@ int main(void) {
     puts("PASS ch2 linked list resumes and completes with its IRQ after a mid-list OTC kick (default and source; GPU ready/busy; NOP, fill and E6h+polygon lists)");
     return 0;
 }
+
+#include "gpu_queue_test_stubs.h"

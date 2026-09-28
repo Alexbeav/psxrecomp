@@ -52,6 +52,8 @@ UNUSED_DMA_STUB(mdec_debug_dma_out_start)
 UNUSED_DMA_STUB(mdec_debug_dma_in_end)
 UNUSED_DMA_STUB(mdec_debug_dma_out_end)
 UNUSED_DMA_STUB(gpu_set_gp0_linked_list_node)
+UNUSED_DMA_STUB(gpu_ws_validate_linked_list_header)
+UNUSED_DMA_STUB(gpu_ws_validate_linked_list_node)
 uint32_t gpu_read_gpuread(void) {abort();}
 void gpu_set_gp0_source(uint32_t a) {(void)a;}
 void gpu_write_gp0(uint32_t v) {assert(upload_left);upload_left--;uploaded[upload_count++]=v;}
@@ -166,7 +168,9 @@ int main(int argc,char **argv) {
     assert((dma_read(0x1f8010f4)&(1u<<26)) && !(dma_read(0x1f8010f4)>>31) && !irqs);
     dma_write(0x1f8010f4,(1u<<23)|(1u<<18));assert((dma_read(0x1f8010f4)>>31) && irqs==1);
     set_option("PSX_GPU_DMA_MODEL","");setup(12,16,0);try_execute(2);
-    assert(upload_count==192 && !irqs && dma_cpu_read_penalty()==0 && delayed_complete[2].active);
+    assert(upload_count==0 && !irqs && dma_cpu_read_penalty()==0 && gpu_block.active);
+    psx_cycle_count+=192; dma_advance(192);
+    assert(upload_count==192 && !gpu_block.active);
 #endif
     puts("PASS source VRAM request DMA phases, live RAM, block overhead, read penalty, partial completion, IRQ and default");return 0;
 }
@@ -179,3 +183,5 @@ int gpu_dma_source_ll_ready(void) {return gpu_block_ready;}
 /* Source GPU projection is inactive in this isolated controller fixture. */
 int source_gpu_runtime_active(void) {return 0;}
 void source_gpu_runtime_dma_write(void) {}
+
+#include "gpu_queue_test_stubs.h"

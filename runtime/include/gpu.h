@@ -16,6 +16,10 @@ extern "C" {
 #endif
 
 void     gpu_init(void);
+/* Ordinary renderer queue: service only on the device clock. */
+void gpu_queue_service(void);
+uint32_t gpu_queue_cycles_to_event(void);
+int gpu_queue_has_space(void);
 uint32_t gpu_dma_vram_upload_words(void); /* Active GP0(A0) payload remaining. */
 /* Experimental LL gate: 1 idle, 0 qualified mono-polyline wait, -1 outside
  * scope. This does not represent source draw budget or FIFO occupancy. */

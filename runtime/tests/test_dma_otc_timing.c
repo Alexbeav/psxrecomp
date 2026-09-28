@@ -85,3 +85,5 @@ uint32_t psx_read_word(uint32_t a) { (void)a; abort(); }
 uint32_t spu_dma_read(void) { abort(); }
 void spu_dma_write(uint32_t v) { (void)v; abort(); }
 void audio_trace_event(uint16_t k, uint32_t a, uint32_t b) { (void)k; (void)a; (void)b; abort(); }
+
+#include "gpu_queue_test_stubs.h"

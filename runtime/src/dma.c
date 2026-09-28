@@ -64,6 +64,7 @@ typedef struct {
 
 static DMAAsyncChannel mdec_async[2];
 static DMAAsyncChannel cdrom_async;
+static DMAAsyncChannel gpu_block;
 static DMAGPULinkedList gpu_linked_list;
 static DMAGpuOtStats gpu_ot_stats;
 static uint64_t gpu_ot_start_cycle;
@@ -421,6 +422,7 @@ static void cancel_async_transfer(int ch) {
         cdrom_async.remaining_words = 0;
         cdrom_async.cycles_accum = 0;
     }
+    if (ch == 2) memset(&gpu_block,0,sizeof gpu_block);
     if (ch == 2 && gpu_linked_list.active) {
         channels[2].madr = gpu_linked_list.current_addr;
         uint64_t cycles = psx_cycle_count - gpu_ot_start_cycle;
@@ -1700,6 +1702,13 @@ static void try_execute(int ch) {
             if ((channels[2].chcr & 1u) != 0u &&
                 ((channels[2].chcr >> 9) & 3u) == 2u) {
                 start_async_gpu_linked_list();
+            } else if(channels[2].chcr & 1u) {
+                memset(&gpu_block,0,sizeof gpu_block);
+                gpu_block.total_words=transfer_word_count(2);
+                gpu_block.remaining_words=gpu_block.total_words;
+                gpu_block.active=gpu_block.remaining_words!=0;
+                if(!gpu_block.active) complete_transfer(2);
+                psx_next_service_cycle=0;
             } else {
                 schedule_delayed_complete(2, execute_ch2_gpu(),
                                           DMA_GPU_CYCLES_PER_WORD);
@@ -1751,6 +1760,10 @@ int dma_cdrom_transfer_active(void) {
 uint32_t dma_cycles_to_irq(uint32_t i_mask) {
     if (!(i_mask & (1u << 3))) return UINT32_MAX;
     uint32_t best = dsm_cycles_to_event(0);
+    if(gpu_block.active && channel_enabled(2)) {
+        uint32_t q=gpu_queue_has_space()?1u:gpu_queue_cycles_to_event();
+        if(q<best) best=q;
+    }
     const DMAAsyncChannel *async_ch[3] = { &mdec_async[0], &mdec_async[1], &cdrom_async };
     for (int i = 0; i < 3; i++) {
         const DMAAsyncChannel *a = async_ch[i];
@@ -1773,6 +1786,10 @@ uint32_t dma_cycles_to_irq(uint32_t i_mask) {
 
 uint32_t dma_cycles_to_internal_event(void) {
     uint32_t best = dsm_cycles_to_event(0);
+    if(gpu_block.active && channel_enabled(2)) {
+        uint32_t q=gpu_queue_has_space()?1u:gpu_queue_cycles_to_event();
+        if(q<best) best=q;
+    }
 
     /* Async MDEC channels move one word whenever their cycle accumulator
      * reaches the channel cost. Completion-only scheduling batches many RAM
@@ -1812,7 +1829,8 @@ uint32_t dma_cycles_to_internal_event(void) {
 
     if (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
         channel_enabled(2)) {
-        uint32_t d = dma_gpu_ll_cycles_to_event(&gpu_linked_list);
+        uint32_t d = gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD && !gpu_queue_has_space()
+                   ? gpu_queue_cycles_to_event() : dma_gpu_ll_cycles_to_event(&gpu_linked_list);
         if (d < best) best = d;
     }
 
@@ -1827,6 +1845,10 @@ uint32_t dma_cycles_to_internal_event(void) {
 uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask) {
     if (!(i_mask & (1u << 3))) return 0xFFFFFFFFu;
     uint32_t best = dsm_cycles_to_event(1);
+    if(gpu_block.active && channel_enabled(2)) {
+        uint32_t q=gpu_queue_has_space()?1u:gpu_queue_cycles_to_event();
+        if(q<best) best=q;
+    }
     const int async_num[3] = { 0, 1, 3 };
     const DMAAsyncChannel *async_ch[3] = {
         &mdec_async[0], &mdec_async[1], &cdrom_async
@@ -1866,7 +1888,31 @@ void dma_advance(uint32_t cycles) {
         g_dma_cur_madr = gpu_linked_list.current_addr;
         g_dma_cur_bcr = channels[2].bcr;
         g_dma_initiator_pc = s_dma_ch_initiator_pc[2];
-        dma_gpu_ll_advance(&gpu_linked_list, cycles, &gpu_ll_ops, NULL);
+        /* Preserve live RAM reads at each word event. A full GPU FIFO pauses
+         * payload delivery; elapsed blocked time is not later transfer credit. */
+        uint32_t left=cycles;
+        while(left && gpu_linked_list.active) {
+            if(gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD && !gpu_queue_has_space()) break;
+            uint32_t step=dma_gpu_ll_cycles_to_event(&gpu_linked_list);
+            if(step>left) step=left;
+            dma_gpu_ll_advance(&gpu_linked_list,step,&gpu_ll_ops,NULL);
+            left-=step;
+        }
+    }
+    if(gpu_block.active && channel_enabled(2) && (channels[2].chcr&(1u<<24))) {
+        g_dma_cur_ch=2; g_dma_cur_madr=channels[2].madr;
+        g_dma_cur_bcr=channels[2].bcr; g_dma_initiator_pc=s_dma_ch_initiator_pc[2];
+        uint32_t left=cycles;
+        while(left-- && gpu_block.remaining_words && gpu_queue_has_space()) {
+            uint32_t addr=channels[2].madr&0x1ffffcu;
+            gpu_set_gp0_source(addr);
+            gpu_write_gp0(psx_read_word(addr));
+            channels[2].madr=(addr+((channels[2].chcr&2u)?-4u:4u))&0x1ffffcu;
+            if(!--gpu_block.remaining_words) {
+                gpu_block.active=0;
+                complete_transfer(2);
+            }
+        }
     }
     DMAAsyncChannel *a = &cdrom_async;
     if (!cd_source_model && dma_cdrom_transfer_active()) {
@@ -1952,6 +1998,7 @@ void dma_init(void) {
     memset(channels, 0, sizeof(channels));
     memset(mdec_async, 0, sizeof(mdec_async));
     memset(&cdrom_async, 0, sizeof(cdrom_async));
+    memset(&gpu_block,0,sizeof gpu_block);
     memset(&gpu_linked_list, 0, sizeof(gpu_linked_list));
     memset(delayed_complete, 0, sizeof(delayed_complete));
     memset(dsm, 0, sizeof dsm);
@@ -2079,10 +2126,15 @@ static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
                 if (ch == 2 && gpu_linked_list.active && channel_enabled(2) &&
                     (mask & (1u << 24)) && !(val & (1u << 24)) &&
                     gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD) {
-                    uint32_t remaining = gpu_linked_list.word_count -
-                                         gpu_linked_list.payload_index;
-                    psx_advance_cycles(remaining);
-                    psx_devices_service_to_now();
+                    uint32_t packet=gpu_linked_list.current_addr;
+                    while(gpu_linked_list.active &&
+                          gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD &&
+                          gpu_linked_list.current_addr==packet) {
+                        uint32_t wait=gpu_queue_has_space() ? 1u : gpu_queue_cycles_to_event();
+                        if(wait==UINT32_MAX) psx_fatal_halt("GPU DMA stop has no pending consumption event");
+                        psx_advance_cycles(wait);
+                        psx_devices_service_to_now();
+                    }
                 }
                 channels[ch].chcr = (channels[ch].chcr & ~mask) | (val & mask);
                 if ((mask & (1u << 24)) && !((channels[ch].chcr >> 24) & 1u)) {
@@ -2176,7 +2228,7 @@ void dma_debug_get_state(DMADebugState* out) {
 #define DMA_DELAY_WIRE (1u + 4u + 4u)                 /* 9 */
 #define DMA_GPU_LL_WIRE (4u + (10u * 4u))             /* 44 */
 #define DMA_SNAP_WIRE_BYTES ( \
-    (7u * 12u) + 4u + 4u + (2u * DMA_ASYNC_WIRE) + DMA_ASYNC_WIRE + \
+    (7u * 12u) + 4u + 4u + (4u * DMA_ASYNC_WIRE) + \
     DMA_GPU_LL_WIRE + (7u * DMA_DELAY_WIRE))
 
 static int dma_w_async(PstW *w, const DMAAsyncChannel *a) {
@@ -2261,6 +2313,7 @@ void dma_snapshot_write(uint8_t *p) {
     dma_w_async(&w, &mdec_async[0]);
     dma_w_async(&w, &mdec_async[1]);
     dma_w_async(&w, &cdrom_async);
+    dma_w_async(&w, &gpu_block);
     dma_w_gpu_ll(&w, &gpu_linked_list);
     for (int i = 0; i < 7; i++)
         dma_w_delay(&w, &delayed_complete[i]);
@@ -2370,7 +2423,7 @@ int dma_snapshot_read(const uint8_t *p, uint32_t len) {
     }
     if (!pst_r_u32(&r, &dpcr) || !pst_r_u32(&r, &dicr)) return 0;
     if (!dma_r_async(&r, &mdec_async[0]) || !dma_r_async(&r, &mdec_async[1]) ||
-        !dma_r_async(&r, &cdrom_async) || !dma_r_gpu_ll(&r, &gpu_linked_list))
+        !dma_r_async(&r, &cdrom_async) || !dma_r_async(&r, &gpu_block) || !dma_r_gpu_ll(&r, &gpu_linked_list))
         return 0;
     for (int i = 0; i < 7; i++)
         if (!dma_r_delay(&r, &delayed_complete[i])) return 0;

@@ -420,3 +420,5 @@ int main(int argc, char **argv) {
     puts("PASS spec v2: stop, DPCR, upload readiness/stall, frame return, list at a write, busy MADR, no restart, channel 5, CHCR mirror, bus error, SPU count, shapes, debt, D12 kick-matched, reverse and chopped uploads");
     return 0;
 }
+
+#include "gpu_queue_test_stubs.h"

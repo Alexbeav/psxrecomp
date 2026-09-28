@@ -119,3 +119,5 @@ int main(void) {
                     "idle skip bounded by the SPU sample deadline\n");
     return 0;
 }
+
+#include "gpu_queue_test_stubs.h"

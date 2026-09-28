@@ -60,14 +60,15 @@ extern "C" {
  *       test-20260927-b-dma.
  * v14 = v13 with the PS1B-186 spec v2 source-DMA meanings: same 296-byte
  *       BS_SEC_DMA_SRC layout, but served_until is the last service point and
- *       link is the SyncMode 1 block start. */
-#define BOOT_STATE_VERSION 14u
+ *       link is the SyncMode 1 block start.
+ * v15 = v14 plus the ordinary GPU FIFO and pending default GPU block DMA. */
+#define BOOT_STATE_VERSION 15u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v14 therefore rejects every earlier state. */
-#define BOOT_STATE_VERSION_MIN_READ 14u
+ * runtime's blob to a new loader. v15 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 15u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 

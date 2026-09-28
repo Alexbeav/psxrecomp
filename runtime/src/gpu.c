@@ -71,6 +71,18 @@ static uint32_t gp0_cmd_buf[16];   /* max fixed-length command is 12 words */
 static int      gp0_words_collected;
 static int      gp0_words_needed;
 static uint32_t gp0_next_source_addr = 0xFFFFFFFFu;
+/* Ordinary-renderer FIFO. Source/TAS retains its independent owner. Each
+ * accepted word keeps its DMA provenance until the existing parser consumes it. */
+static struct {
+    uint32_t words[16], sources[16], ranks[16], count;
+    int32_t credit;
+    uint64_t cycle;
+} gpu_queue;
+static void gpu_queue_reset(void) {
+    memset(&gpu_queue, 0, sizeof gpu_queue);
+    if(!source_gpu_runtime_active()) gpu_queue.cycle = psx_get_cycle_count();
+}
+
 static uint32_t gp0_cmd_source_addr  = 0xFFFFFFFFu;
 static uint16_t gp0_ot_rank = 0xFFFFu;
 
@@ -2851,6 +2863,7 @@ static void gpu_reset_state(int clear_vram) {
     }
     gr_init(vram);
 
+    gpu_queue_reset();
     /* Reset GP0 state machine (+ leftover cmd/xfer crumbs that survive in
      * gpu_snapshot and fork av digests on rematch). */
     gp0_state = GP0_IDLE;
@@ -3006,32 +3019,17 @@ uint32_t gpu_read_gpustat(void) {
     stat |= (display_disabled & 1) << 23;
     stat |= (irq1_flag & 1) << 24;
 
-    /* Bit 25: DMA request — depends on DMA direction.
-     * Direction 0: always 0
-     * Direction 1: FIFO not full (always 1 for now — we process instantly)
-     * Direction 2: same as bit 28 (ready to receive DMA block)
-     * Direction 3: same as bit 27 (ready to send VRAM to CPU)
-     */
-    switch (dma_direction) {
-        case 0: break; /* bit 25 = 0 */
-        case 1: stat |= (1u << 25); break;
-        case 2: stat |= (1u << 25); break; /* mirrors ready-to-receive */
-        case 3: stat |= (1u << 25); break; /* mirrors ready-to-send */
-    }
-
-    /* Bit 26: ready to receive cmd word — always set here. [NOT OBSERVED:
-     * release policy] The oracle reads GPUSTAT 00802000h (bits 26 and 28
-     * clear) while a new polyline waits for its vertices [ORACLE FIXTURE G2];
-     * the release path keeps both bits set (post-pin release-accuracy item). */
-    stat |= (1u << 26);
-
-    /* Bit 27: ready to send VRAM to CPU — 1 when VRAM read is active */
-    if (vram_read_active)
-        stat |= (1u << 27);
-
-    /* Bit 28: ready to receive DMA block — always set here. [NOT OBSERVED:
-     * release policy; see bit 26 and [ORACLE FIXTURE G2].] */
-    stat |= (1u << 28);
+    /* PSX-SPX Ready Bits: status observes pending work, never services it.
+     * A partial polygon/line is not idle; transfer payloads use FIFO space. */
+    int idle = gpu_queue.count == 0 && gpu_queue.credit >= 0 && gp0_state == GP0_IDLE;
+    int ready = gpu_queue.count == 0 &&
+        (gp0_state == GP0_IDLE || gp0_state == GP0_VRAM_WRITE);
+    if (idle) stat |= 1u << 26;
+    if (ready) stat |= 1u << 28;
+    if (vram_read_active) stat |= 1u << 27;
+    if ((dma_direction == 1 && gpu_queue.count < 16) ||
+        (dma_direction == 2 && ready) ||
+        (dma_direction == 3 && vram_read_active)) stat |= 1u << 25;
 
     /* Bits 29-30: DMA direction */
     stat |= (dma_direction & 3) << 29;
@@ -5929,17 +5927,90 @@ static int gpu_source_dispatch(const SourceGPUCommandDispatch *event) {
     return extra_work;
 }
 
+/* Reuse the owned cost helpers as a compatibility schedule. These costs are
+ * not a claim of physical GPU timing or texture-cache work on every backend. */
+static int gpu_queue_command_cost(void) {
+    SourceGPUCommandProjection state = {0};
+    state.clip_x0=draw_area_left; state.clip_y0=draw_area_top;
+    state.clip_x1=draw_area_right; state.clip_y1=draw_area_bottom;
+    state.offset_x=draw_offset_x; state.offset_y=draw_offset_y;
+    state.mask_bits=(check_mask_bit<<1)|set_mask_bit;
+    /* The ordinary renderer owns interlace and enhancement policies. */
+    unsigned op=gp0_cmd_buf[0]>>24;
+    if (source_gpu_polygon_supported(op)) {
+        int cost=source_gpu_command_polygon_cost(&state,gp0_cmd_buf,0);
+        if(op&8u) cost+=source_gpu_command_polygon_cost(&state,gp0_cmd_buf,1);
+        return cost > 0 ? cost : 0;
+    }
+    if ((op & 0xe0u)==0x80u) return 2+source_gpu_command_copy_cost(&state,gp0_cmd_buf);
+    if (source_gpu_block_supported(op)) return 2+source_gpu_command_block_cost(&state,gp0_cmd_buf);
+    if (source_gpu_line_supported(op)) return 2+source_gpu_command_line_cost(&state,gp0_cmd_buf);
+    return op==0 || (op>=0xe3 && op<=0xe5) ? 0 : 2;
+}
+
+static void gpu_queue_consume(void) {
+    while (gpu_queue.count && gpu_queue.credit >= 0 && !vram_read_active) {
+        uint32_t value=gpu_queue.words[0];
+        uint32_t saved_source=gp0_next_source_addr;
+        uint16_t saved_rank=gp0_ot_rank;
+        gp0_next_source_addr=gpu_queue.sources[0];
+        gp0_ot_rank=(uint16_t)gpu_queue.ranks[0];
+        --gpu_queue.count;
+        memmove(gpu_queue.words,gpu_queue.words+1,gpu_queue.count*4u);
+        memmove(gpu_queue.sources,gpu_queue.sources+1,gpu_queue.count*4u);
+        memmove(gpu_queue.ranks,gpu_queue.ranks+1,gpu_queue.count*4u);
+        gpu_queue.words[gpu_queue.count]=gpu_queue.sources[gpu_queue.count]=gpu_queue.ranks[gpu_queue.count]=0;
+        Gp0State before=gp0_state;
+        int previous_vertices=polyline_has_prev;
+        int x=polyline_prev_x,y=polyline_prev_y;
+        extern int g_exec_phase;
+        int old_phase=g_exec_phase; g_exec_phase=4;
+        gpu_write_gp0_body(value);
+        g_exec_phase=old_phase;
+        if ((before==GP0_IDLE || before==GP0_COLLECTING) &&
+            (gp0_state==GP0_IDLE || gp0_state==GP0_VRAM_WRITE))
+            gpu_queue.credit-=gpu_queue_command_cost();
+        else if ((before==GP0_POLYLINE_MONO && previous_vertices && gp0_state==before) ||
+                 (before==GP0_POLYLINE_SHADED && previous_vertices==2)) {
+            int dx=abs(polyline_prev_x-x),dy=abs(polyline_prev_y-y);
+            gpu_queue.credit-=source_gpu_t_line(0,0,dx,dy,0);
+        }
+        gp0_next_source_addr=saved_source; gp0_ot_rank=saved_rank;
+    }
+}
+
+void gpu_queue_service(void) {
+    if (source_gpu_runtime_active()) return;
+    uint64_t now=psx_get_cycle_count();
+    if(now < gpu_queue.cycle) psx_fatal_halt("GPU queue clock moved backwards");
+    gpu_queue.credit=source_gpu_t_credit(gpu_queue.credit,now-gpu_queue.cycle);
+    gpu_queue.cycle=now;
+    gpu_queue_consume();
+}
+
+uint32_t gpu_queue_cycles_to_event(void) {
+    if(source_gpu_runtime_active() || (!gpu_queue.count && gpu_queue.credit>=0) || vram_read_active)
+        return UINT32_MAX;
+    return gpu_queue.credit<0 ? (uint32_t)(-gpu_queue.credit+1)/2u : 1u;
+}
+
+int gpu_queue_has_space(void) { return gpu_queue.count < 16u; }
+
 void gpu_write_gp0(uint32_t val) {
     gp0_write_count++;
     if(source_gpu_runtime_active()) {
         source_gpu_runtime_gp0(val);
         return;
     }
-    extern int g_exec_phase;
-    int prev_phase = g_exec_phase;
-    g_exec_phase = 4;
-    gpu_write_gp0_body(val);
-    g_exec_phase = prev_phase;
+    /* MMIO already synchronizes device time; DMA arrives at its word event. */
+    gpu_queue_service();
+    if (!gpu_queue_has_space()) psx_fatal_halt("GPU command FIFO overflow");
+    unsigned at=gpu_queue.count++;
+    gpu_queue.words[at]=val;
+    gpu_queue.sources[at]=gp0_next_source_addr;
+    gpu_queue.ranks[at]=gp0_ot_rank;
+    gpu_queue_consume();
+    psx_next_service_cycle=0;
 }
 
 /* ---- GP1 write (0x1F801814 write) ---- */
@@ -5952,6 +6023,7 @@ static void gp1_reset(void) {
 }
 
 static void gp1_reset_command_buffer(void) {
+    gpu_queue_reset();
     /* GP1(01h): Reset command buffer — clears FIFO, aborts current command */
     gp0_state = GP0_IDLE;
     source_ll_polyline_vertices=0;source_ll_incomplete_terminator=0;
@@ -6209,6 +6281,9 @@ static int gpu_snap_emit(PstW *w) {
     WH(vram_read_col); WH(vram_read_row);
     /* Depth24 present helpers (MotK FMV) — must resume with upload span. */
     WU(s_d24_upload_x1); WI(s_d24_present_hold); WU(s_d24_prev_disp_h);
+    WU(gpu_queue.count); WI(gpu_queue.credit);
+    if(!pst_w_u64(w,gpu_queue.cycle)) return 0;
+    for(unsigned q=0;q<16;q++) { WU(gpu_queue.words[q]); WU(gpu_queue.sources[q]); WU(gpu_queue.ranks[q]); }
 #undef WU
 #undef WI
 #undef WH
@@ -6242,6 +6317,9 @@ static int gpu_snap_parse(PstR *r) {
     RI(vram_read_active); RH(vram_read_x); RH(vram_read_y); RH(vram_read_w); RH(vram_read_h);
     RH(vram_read_col); RH(vram_read_row);
     RU(s_d24_upload_x1); RI(s_d24_present_hold); RU(s_d24_prev_disp_h);
+    RU(gpu_queue.count); RI(gpu_queue.credit);
+    if(gpu_queue.count>16 || !pst_r_u64(r,&gpu_queue.cycle)) return 0;
+    for(unsigned q=0;q<16;q++) { RU(gpu_queue.words[q]); RU(gpu_queue.sources[q]); RU(gpu_queue.ranks[q]); }
 #undef RU
 #undef RI
 #undef RH
@@ -6301,7 +6379,11 @@ void gpu_cosim_dump(char *out, int cap) {
 }
 int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
-    if (len != gpu_snapshot_bytes()) return 0;
+    if (!p || len != gpu_snapshot_bytes()) return 0;
+    /* Reject a malformed queue before applying any GPU field. */
+    PstR tail; uint32_t count; int32_t credit;
+    pst_r_init(&tail,p+len-208u,208u);
+    if(!pst_r_u32(&tail,&count) || count>16u || !pst_r_i32(&tail,&credit) || credit>256) return 0;
     pst_r_init(&r, p, len);
     if (!gpu_snap_parse(&r)) return 0;
     ws_scene_hold_reset(&s_ws_scene_hold);

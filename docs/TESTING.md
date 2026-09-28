@@ -104,3 +104,59 @@ alternative existed. The `ctest` suite above is a candidate: it is hermetic
 (no BIOS, no disc, no network), takes under five seconds, and is currently
 green. Restoring a per-PR check on top of it is a smaller decision than
 restoring the old one.
+
+## Ordinary GPU command queue (PS1B-97/105)
+
+The default renderer now keeps up to 16 pending GP0 words with their DMA
+provenance. Device-clock events consume them through the existing parser.
+GPUSTAT observes pending work without advancing it. The existing clean
+source-GPU cost helpers supply a compatibility schedule; this is not a claim
+of measured hardware timing. The source/TAS projection is unchanged.
+
+Default RAM-to-GPU linked-list and block DMA pause when that queue is full.
+They read each later RAM word when it is due. A linked-list CHCR stop finishes
+the actual current packet before exposing the next header. No CPU fetch or
+data wait was added. The shared device deadline now includes pending GPU work.
+Save-state format 15 stores the queue and default block DMA progress and rejects
+older versions. GPUREAD latch behavior is unchanged.
+
+Two authored fixtures include the production owners and need no BIOS or game:
+
+```sh
+gcc -O2 -flto -fwhole-program -UNDEBUG -DPSX_ENABLE_BLOCK_CYCLES=1 -Iruntime/include runtime/tests/test_gpu_command_queue.c -o gpu_queue_test
+gcc -O2 -flto -fwhole-program -UNDEBUG -DPSX_ENABLE_BLOCK_CYCLES=1 -Iruntime/include runtime/tests/test_dma_gpu_command_queue.c runtime/src/dma_gpu_ll.c -o dma_gpu_queue_test
+```
+
+Run the first with `pending`, `deferred`, `reset`, `snapshot`, and `packets`.
+Run the second with no argument, `upload`, and `scheduler`. CMake registers the
+same eight cases for GNU builds. The packet case checks a split quad and a
+polyline terminator followed by an attribute. The DMA cases check FIFO pressure,
+one-word release at the clock boundary, stop/resume, live later-word mutation,
+pending snapshot restoration, and GPU progress without MMIO polling.
+
+The exact-base negative controls use revision
+`23a01bd460dd5d9bd80b8fc2767e22d176b0af5f`, with `TEST_BASE` selecting only the
+old clock seam. Pending/deferred/reset/snapshot/packets, linked-list pressure,
+and upload each fail their behavioral assertion there. Intermediate controls
+also reproduce FIFO overflow before DMA gating and premature next-header
+exposure before the stop fix. Receipts belong to the task's immutable evidence.
+
+`test_dma_completion_deadline.c` still asserts legacy eager linked-list payload
+delivery. That assertion fails on both this candidate and the exact base; it
+is an existing adjacent fixture failure, not a passed acceptance gate.
+
+Implementation provenance: only the assigned clean runtime and hardware
+behavior documentation were used. No reference-emulator source or preserved
+repair implementation was opened. Consulted hardware descriptions:
+[GPU status](https://psx-spx.consoledev.net/ps1/gpu/status-register/) and
+[GPU ports and FIFO](https://psx-spx.consoledev.net/ps1/gpu/i-o-ports-dma-channels-commands-vram/).
+Corpus PSX-BIOS-002, PSX-GPU-001 and PSX-DMA-001 are unreviewed historical leads.
+The earlier repair's retail results do not qualify this candidate.
+
+External acceptance still requires the LLE logo, intro speed, RE2 progress,
+Spot menu/password text, unchanged Tier 1 seven-route 10k results, and Alex's
+visual check. Unit tests do not establish any of those results. In particular,
+retaining the parser checks authored ordering but does not prove Spot behavior.
+Review must examine the DMA stop path (including its no-consumption-event fatal
+case), default block timing, snapshot compatibility, and shared projection
+call sites before an integrator builds and runs the retail candidate.
