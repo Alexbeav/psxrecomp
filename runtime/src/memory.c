@@ -1730,7 +1730,7 @@ static void render_pass_store(uint32_t addr, uint32_t val, uint32_t width) {
     RenderPassStoreTarget t;
     int cls;
     t.ram = ram;
-    t.ram_size = RAM_SIZE;
+    t.ram_size = psx_ram_live_bytes();   /* live geometry, as psx_ram_map_write */
     t.scratchpad = scratchpad;
     t.scratchpad_size = SCRATCHPAD_SIZE;
     t.isolate_cache = (sr_ptr && (*sr_ptr & 0x10000u)) ? 1 : 0;

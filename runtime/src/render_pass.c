@@ -34,6 +34,10 @@
 
 extern uint8_t *memory_get_ram_ptr(void);
 extern uint8_t *memory_get_scratchpad_ptr(void);
+/* Live main-RAM geometry (psx_ram_geometry.c): 2 MiB retail, or 8 MiB with
+ * the opt-in 8 MB RAM mod. Latched by memory_init() once per boot, so it
+ * cannot change inside a pass, but it can between sessions. */
+extern uint32_t memory_get_ram_bytes(void);
 extern uint32_t i_stat;
 extern uint32_t i_mask;
 extern uint32_t dma_snapshot_bytes(void);
@@ -77,7 +81,6 @@ extern void     sio_snapshot_write(uint8_t *p);
 extern uint32_t mdec_snapshot_bytes(void);
 extern void     mdec_snapshot_write(uint8_t *p);
 
-#define RP_RAM_SIZE   (2u * 1024u * 1024u)
 #define RP_SPAD_SIZE  1024u
 /* ~8 M guest cycles is about four PS1 frames of CPU time: far beyond any
  * frame's draw code, short enough that a pass stuck on a wait loop costs the
@@ -200,10 +203,12 @@ typedef struct RenderPassCheckpoint {
     uint32_t last_store_pc, current_func;
     int      dispatch_depth, call_bail;
     uint32_t dma_len;
+    uint32_t ram_bytes;               /* live RAM geometry at the checkpoint */
     RenderPassNesting nest;
 } RenderPassCheckpoint;
 
-static uint8_t *s_ram_copy;          /* RP_RAM_SIZE */
+static uint8_t *s_ram_copy;          /* s_ram_copy_cap bytes */
+static uint32_t s_ram_copy_cap;
 static uint8_t *s_dma_copy;
 static RenderPassCheckpoint s_ck;
 static PsxCycleFreeze s_freeze;
@@ -331,7 +336,7 @@ static uint64_t state_hash(const CPUState *cpu) {
     h = fnv(h, cpu->cop0, sizeof cpu->cop0);
     h = fnv(h, cpu->gte_data, sizeof cpu->gte_data);
     h = fnv(h, cpu->gte_ctrl, sizeof cpu->gte_ctrl);
-    h = fnv(h, memory_get_ram_ptr(), RP_RAM_SIZE);
+    h = fnv(h, memory_get_ram_ptr(), memory_get_ram_bytes());
     h = fnv(h, memory_get_scratchpad_ptr(), RP_SPAD_SIZE);
     h = fnv(h, g_psx_icache_tv, sizeof g_psx_icache_tv);
     h = fnv(h, &i_stat, sizeof i_stat);
@@ -371,9 +376,14 @@ static uint64_t state_hash(const CPUState *cpu) {
 
 static int checkpoint_save(const CPUState *cpu) {
     uint32_t dma_len = dma_snapshot_bytes();
-    if (!s_ram_copy) {
-        s_ram_copy = (uint8_t *)malloc(RP_RAM_SIZE);
-        if (!s_ram_copy) return 0;
+    /* The whole live RAM: a pass's stores fold through the same geometry
+     * (render_pass_store_to), so every byte one can reach is in here. */
+    uint32_t ram_bytes = memory_get_ram_bytes();
+    if (s_ram_copy_cap < ram_bytes) {
+        uint8_t *p = (uint8_t *)realloc(s_ram_copy, ram_bytes);
+        if (!p) return 0;
+        s_ram_copy = p;
+        s_ram_copy_cap = ram_bytes;
     }
     if (!s_dma_copy) {
         s_dma_copy = (uint8_t *)malloc(dma_len);
@@ -381,7 +391,8 @@ static int checkpoint_save(const CPUState *cpu) {
     }
     if (!gpu_pass_checkpoint_save()) return 0;
     s_ck.cpu = *cpu;
-    memcpy(s_ram_copy, memory_get_ram_ptr(), RP_RAM_SIZE);
+    s_ck.ram_bytes = ram_bytes;
+    memcpy(s_ram_copy, memory_get_ram_ptr(), ram_bytes);
     memcpy(s_ck.spad, memory_get_scratchpad_ptr(), RP_SPAD_SIZE);
     memcpy(s_ck.icache, g_psx_icache_tv, sizeof s_ck.icache);
     s_ck.i_stat = i_stat;
@@ -410,7 +421,7 @@ static void checkpoint_restore(CPUState *cpu) {
     interrupts_set_cycles_since_vblank(s_ck.csv);
     i_stat = s_ck.i_stat;
     i_mask = s_ck.i_mask;
-    memcpy(memory_get_ram_ptr(), s_ram_copy, RP_RAM_SIZE);
+    memcpy(memory_get_ram_ptr(), s_ram_copy, s_ck.ram_bytes);
     memcpy(memory_get_scratchpad_ptr(), s_ck.spad, RP_SPAD_SIZE);
     memcpy(g_psx_icache_tv, s_ck.icache, sizeof s_ck.icache);
     *cpu = s_ck.cpu;

@@ -58,6 +58,7 @@ static uint32_t s_tm[3] = {7, 8, 9}, s_tf[3];
 static int32_t  s_ti[3];
 
 uint8_t *memory_get_ram_ptr(void) { return s_ram; }
+uint32_t memory_get_ram_bytes(void) { return (uint32_t)sizeof s_ram; }
 uint8_t *memory_get_scratchpad_ptr(void) { return s_spad; }
 uint32_t dma_snapshot_bytes(void) { return sizeof s_dma_regs; }
 void dma_snapshot_write(uint8_t *p) { memcpy(p, s_dma_regs, sizeof s_dma_regs); }

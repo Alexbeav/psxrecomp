@@ -82,8 +82,10 @@ int render_pass_mmio_class(uint32_t phys, uint32_t val, uint32_t width);
  * pass restores), else the RENDER_PASS_DROP_* class it was dropped under,
  * which the caller counts. */
 typedef struct RenderPassStoreTarget {
-    uint8_t *ram;              /* main RAM, ram_size bytes (mirrored) */
-    uint32_t ram_size;
+    uint8_t *ram;              /* main RAM backing store */
+    uint32_t ram_size;         /* LIVE geometry, a power of two: 2 MiB retail
+                                  (mirrored 4x in the 8 MiB window) or 8 MiB
+                                  (psx_ram_live_bytes()) */
     uint8_t *scratchpad;
     uint32_t scratchpad_size;
     int      isolate_cache;    /* COP0 SR IsC is set */

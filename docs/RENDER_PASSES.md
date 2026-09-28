@@ -74,14 +74,15 @@ While `fn` runs (`g_psx_render_pass_active`):
 | Guest clock | cycles are counted (GTE and mult/div deadlines work) but no device is serviced, no VBlank or device event fires | `psx_cycles.c` freeze (`psx_cycle_freeze.h`, runtime-only: the codegen-hashed `psx_cycles.h` is untouched) |
 | Interrupts | never delivered | `interrupts.c` |
 | GPU DMA | linked lists and delayed completions finish synchronously | `dma.c` |
-| RAM / scratchpad stores | written directly, bypassing code-page tracking, overlay watch, write traces and fingerprints | `memory.c` `render_pass_store` |
+| RAM / scratchpad stores | written directly, bypassing code-page tracking, overlay watch, write traces and fingerprints; RAM addresses fold through the live geometry (2 MiB mirrored, or 8 MiB with the 8 MB RAM mod), as outside a pass | `memory.c` `render_pass_store` |
 | MMIO stores | allowed: GP0, GP1 DMA mode / info, GPU and OTC DMA channels, DPCR/DICR, I_STAT/I_MASK. Dropped and counted: SPU (key-ons), CD, timers, SIO, MDEC, other DMA channels, memory control | `memory.c` |
 | VRAM | only the declared rect; writes that bypass the scissor elsewhere (fills, copies, uploads, pokes: never a native-wide surface) are journaled and rolled back | `gpu_gl_renderer.c` |
 | Runaway code | an 8 M guest-cycle watchdog rolls the pass back | `render_pass.c` |
 
 After `fn` (success or not) everything is restored: CPU state with the GTE,
-2 MiB RAM, scratchpad, I-cache tags, I_STAT/I_MASK, timers, DMA and GPU
-registers (without the widescreen side effects of a savestate load), the
+all of main RAM at its live size (2 MiB, or 8 MiB with the opt-in 8 MB RAM
+mod; `psx_memory.h`), scratchpad, I-cache tags, I_STAT/I_MASK, timers, DMA
+and GPU registers (without the widescreen side effects of a savestate load), the
 VRAM rect (hr colour, mask stencil, raw 16-bit mirror, native-wide band, CPU
 VRAM rows), the renderer's coherency bookkeeping, and every clock value.
 A watchdog abort leaves by longjmp from inside guest code, skipping the
@@ -163,7 +164,10 @@ Tests (runtime ctest unless noted):
   and `timers.c` that makes those stores and runs 10^6 cycles while a timer
   is armed to interrupt every 1000 (no device advances, no interrupt, RAM,
   scratchpad, I_STAT/I_MASK, timers and clock restored); status gates; the
-  out-of-rect VRAM journal policy and its exact rollback of the CPU VRAM rows.
+  same store folding and restore with 8 MiB RAM live (unique addresses up to
+  0x7FFFFF, restored after a pass, and a retail pass after it folding again);
+  the out-of-rect VRAM journal policy and its exact rollback of the CPU VRAM
+  rows.
 - `render_pass_abort_test`: a watchdog abort from nested frames.
 - `render_pass_guards` (source guard, recompiler ctest): the choke points
   above, and that the codegen-hashed headers do not carry the pass API.

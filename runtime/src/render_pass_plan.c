@@ -164,7 +164,10 @@ int render_pass_store_to(const RenderPassStoreTarget *t, uint32_t addr,
     if (addr >= 0xC0000000u) return RENDER_PASS_DROP_OTHER;   /* KSEG2 */
     if (t->isolate_cache) return -1;                /* cache-only store */
     phys = addr & 0x1FFFFFFFu;
-    if (phys < 0x00800000u) phys &= t->ram_size - 1u;       /* RAM mirrors */
+    /* The 8 MiB DRAM decode window folds through the live geometry, exactly
+     * as psx_ram_map_write: retail mirrors 2 MiB four times, the 8 MB RAM
+     * map is unique. */
+    if (phys < 0x00800000u) phys &= t->ram_size - 1u;
     if (phys < t->ram_size) {
         for (uint32_t i = 0; i < width; i++)
             t->ram[phys + i] = (uint8_t)(val >> (8u * i));

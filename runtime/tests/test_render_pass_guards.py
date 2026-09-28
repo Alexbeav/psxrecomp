@@ -59,6 +59,17 @@ assert "render_pass_store_to(&t, addr, val, width)" in b and \
     "g_render_pass_dropped_writes[cls]++" in b, (
     "pass stores must go through the tested store policy "
     "(render_pass_store_to, render_pass_sandbox_test) and count drops")
+assert "t.ram_size = psx_ram_live_bytes();" in b, (
+    "pass stores must fold RAM through the LIVE 2/8 MiB geometry, as "
+    "psx_ram_map_write does (not the 8 MiB backing size)")
+rp = (SRC / "render_pass.c").read_text(encoding="utf-8")
+assert "uint32_t ram_bytes = memory_get_ram_bytes();" in body(
+    rp, "static int checkpoint_save(") and \
+    "memcpy(memory_get_ram_ptr(), s_ram_copy, s_ck.ram_bytes);" in body(
+    rp, "static void checkpoint_restore(") and \
+    "memory_get_ram_bytes()" in body(rp, "static uint64_t state_hash("), (
+    "the pass checkpoint, restore and verify hash must cover the live RAM "
+    "size (8 MiB with the 8 MB RAM mod)")
 plan = (SRC / "render_pass_plan.c").read_text(encoding="utf-8")
 assert "render_pass_mmio_class(phys, val, width)" in body(
     plan, "int render_pass_store_to("), (

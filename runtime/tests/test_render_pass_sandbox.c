@@ -11,7 +11,9 @@
  *    interrupts: the drops are counted per class, no device advances, no
  *    timer IRQ is raised, and RAM, scratchpad, I_STAT/I_MASK, timers and the
  *    clock are exactly as before. Status gates refuse the pass without
- *    running it.
+ *    running it. The same with 8 MiB RAM live (the opt-in 8 MB RAM map):
+ *    stores reach unique RAM up to 0x7FFFFF and all 8 MiB are restored; a
+ *    retail pass after it folds mirrors again.
  * 3. VRAM journal (render_pass_vram_policy / _journal_add / _rollback, the
  *    CPU side of gpu_gl_renderer.c's out-of-rect journal): writes inside the
  *    pass rect are allowed, writes outside are backed up first and rolled
@@ -61,8 +63,13 @@ int      g_exec_phase = 0;
 uint32_t g_dirty_safe_resume_pc = 0;
 
 /* ---- memory and the MMIO devices a pass may reach ----------------------- */
-#define RAM_SIZE (2u * 1024u * 1024u)
-static uint8_t s_ram[RAM_SIZE];
+/* Backing store sized for the largest geometry, as memory.c's; the live size
+ * (what memory_get_ram_bytes() answers and memory.c passes the store policy)
+ * is 2 MiB retail or 8 MiB with the 8 MB RAM mod. */
+#define RAM_2MB (2u * 1024u * 1024u)
+#define RAM_8MB (8u * 1024u * 1024u)
+static uint8_t s_ram[RAM_8MB];
+static uint32_t s_ram_live = RAM_2MB;
 static uint8_t s_spad[1024];
 static uint8_t s_dma_regs[64];
 static uint32_t s_csv = 1234;
@@ -85,7 +92,7 @@ static RenderPassStoreTarget target(void) {
     RenderPassStoreTarget t;
     memset(&t, 0, sizeof t);
     t.ram = s_ram;
-    t.ram_size = RAM_SIZE;
+    t.ram_size = s_ram_live;
     t.scratchpad = s_spad;
     t.scratchpad_size = sizeof s_spad;
     t.mmio_write = mock_mmio_write;
@@ -106,6 +113,7 @@ static void guest_store(uint32_t addr, uint32_t val, uint32_t width) {
 }
 
 uint8_t *memory_get_ram_ptr(void) { return s_ram; }
+uint32_t memory_get_ram_bytes(void) { return s_ram_live; }
 uint8_t *memory_get_scratchpad_ptr(void) { return s_spad; }
 uint32_t dma_snapshot_bytes(void) { return sizeof s_dma_regs; }
 void dma_snapshot_write(uint8_t *p) { memcpy(p, s_dma_regs, sizeof s_dma_regs); }
@@ -390,6 +398,81 @@ static void test_pass(void) {
     CHECK(psx_mod_render_pass_status() == PSX_MOD_RENDER_PASS_READY, "ready again");
 }
 
+/* ---- 2b. 8 MiB main RAM live (psx.enhancement.8mb-ram) ------------------ */
+static int s_retail_fold_seen;
+static int pass8_fn(struct CPUState *cpu, void *user, uint32_t alpha_q16) {
+    (void)user; (void)alpha_q16;
+    cpu->gpr[9] = 0xBEEFu;
+    guest_store(0x80600000u, 0xCAFEBABEu, 4);        /* unique above 2 MiB */
+    guest_store(0xA07FFFFCu, 0x01020304u, 4);        /* last word of the map */
+    guest_store(0x80200010u, 0x55u, 1);              /* no retail fold */
+    guest_store(0x80000100u, 0x66u, 1);              /* low RAM as well */
+    return 1;
+}
+
+static int pass_retail_fn(struct CPUState *cpu, void *user, uint32_t alpha_q16) {
+    const uint8_t *before = (const uint8_t *)user;
+    (void)cpu; (void)alpha_q16;
+    guest_store(0x80600010u, 0x77u, 1);              /* retail: folds onto 0x10 */
+    s_retail_fold_seen = s_ram[0x10] == 0x77 && s_ram[0x600010] == before[0x600010];
+    return 1;
+}
+
+static void test_ram_8mb(void) {
+    RenderPassStoreTarget t;
+    CPUState cpu;
+    PSXModRenderPass pass;
+    RenderPassStats st0, st1;
+    uint8_t *ram0 = (uint8_t *)malloc(RAM_8MB);
+    if (!ram0) { CHECK(0, "8 MiB test buffer"); return; }
+
+    /* Store policy with the expanded map: the window no longer mirrors. */
+    s_ram_live = RAM_8MB;
+    t = target();
+    memset(s_ram, 0, sizeof s_ram);
+    CHECK(render_pass_store_to(&t, 0x80600000u, 0x11223344u, 4) == -1 &&
+          s_ram[0x600000] == 0x44 && s_ram[0x600003] == 0x11 && s_ram[0] == 0,
+          "8 MiB: 0x80600000 is its own RAM, not a mirror of 0");
+    CHECK(render_pass_store_to(&t, 0x00201008u, 0x5Au, 1) == -1 &&
+          s_ram[0x201008] == 0x5A && s_ram[0x1008] == 0,
+          "8 MiB: 0x00201008 is not folded onto 0x1008");
+    CHECK(render_pass_store_to(&t, 0xA07FFFFEu, 0xBEEFu, 2) == -1 &&
+          s_ram[0x7FFFFE] == 0xEF && s_ram[0x7FFFFF] == 0xBE,
+          "8 MiB: the top of the window is RAM");
+    CHECK(render_pass_store_to(&t, 0x80800000u, 1u, 1) == RENDER_PASS_DROP_OTHER,
+          "8 MiB: past the decode window is not RAM");
+
+    /* A real pass: all 8 MiB come back, the upper 6 MiB included. */
+    for (uint32_t i = 0; i < RAM_8MB; i++)
+        s_ram[i] = (uint8_t)((i * 2654435761u) >> 24);
+    memcpy(ram0, s_ram, RAM_8MB);
+    memset(&cpu, 0, sizeof cpu);
+    memset(&pass, 0, sizeof pass);
+    pass.struct_size = sizeof pass;
+    pass.w = 320; pass.h = 240;
+    pass.alpha_q16 = 16384u;
+    render_pass_get_stats(&st0);
+    CHECK(psx_mod_render_pass(&cpu, &pass, pass8_fn, NULL) == 1,
+          "8 MiB: the pass ran and was kept");
+    render_pass_get_stats(&st1);
+    CHECK(st1.passes == st0.passes + 1, "8 MiB: one more pass");
+    CHECK(memcmp(ram0, s_ram, RAM_8MB) == 0,
+          "8 MiB: all of RAM restored, above 2 MiB too");
+    CHECK(cpu.gpr[9] == 0u, "8 MiB: CPU registers restored");
+
+    /* The next session without the mod (retail again): stores fold into the
+     * low 2 MiB and the restore covers them; the backing bytes above the
+     * live size are neither written nor needed. */
+    s_ram_live = RAM_2MB;
+    s_retail_fold_seen = 0;
+    CHECK(psx_mod_render_pass(&cpu, &pass, pass_retail_fn, ram0) == 1,
+          "retail after 8 MiB: the pass ran");
+    CHECK(s_retail_fold_seen, "retail after 8 MiB: 0x80600010 folded onto 0x10");
+    CHECK(memcmp(ram0, s_ram, RAM_8MB) == 0,
+          "retail after 8 MiB: RAM restored");
+    free(ram0);
+}
+
 /* ---- 3. VRAM journal ----------------------------------------------------- */
 #define VW 1024
 #define VH 512
@@ -477,6 +560,7 @@ static void test_journal(void) {
 int main(void) {
     test_store_policy();
     test_pass();
+    test_ram_8mb();
     test_journal();
     printf(failures ? "FAILED (%d)\n" : "ALL PASS\n", failures);
     return failures ? 1 : 0;
