@@ -2409,6 +2409,19 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
     return true;
 }
 
+/* compiler.txt relative paths belong to the installed overlay toolchain,
+ * never the caller's working directory or PATH. */
+static std::filesystem::path resolve_overlay_compiler_path(
+    const std::filesystem::path& toolchain, const std::string& configured) {
+    if (configured.empty()) return {};
+    std::filesystem::path path(configured);
+    if (path.is_relative()) path = toolchain / path;
+    std::error_code error;
+    path = std::filesystem::absolute(path, error).lexically_normal();
+    if (error || !std::filesystem::is_regular_file(path, error)) return {};
+    return path;
+}
+
 static std::filesystem::path normalize_disc_path_for_launch(const std::filesystem::path& path) {
     // Keep the resolver's mount path so a usable CUE retains its track map.
     return PSXRecompV4::resolve_disc_path(path).mount;
@@ -14843,8 +14856,12 @@ int main(int argc, char** argv) {
             if (cf.is_open() && std::getline(cf, line)) {
                 while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
                     line.pop_back();
-                std::error_code cec;
-                if (!line.empty() && std::filesystem::exists(line, cec)) tk_compiler = line;
+                tk_compiler = resolve_overlay_compiler_path(tk_dir, line).string();
+                if (!line.empty() && std::filesystem::path(line).is_relative() && tk_compiler.empty()) {
+                    std::fprintf(stderr, "psxrecomp: bundled overlay compiler is missing: %s (toolchain %s)\n",
+                                 line.c_str(), tk_dir.string().c_str());
+                    return 1;
+                }
             }
         }
         auto build_toolchain_cmd = [&](const char *compiler) {

@@ -1,0 +1,56 @@
+"""Compile the runtime resolver; invoke only its bundled compiler from another cwd."""
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--compiler', default=os.environ.get('CXX', 'c++'))
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parents[1]
+    text = (root / 'src/main.cpp').read_text(encoding='utf-8')
+    start = text.index('static std::filesystem::path resolve_overlay_compiler_path(')
+    end = text.index('\n}\n', start) + 2
+    with tempfile.TemporaryDirectory(prefix='overlay compiler spaces ') as temp:
+        base = Path(temp)
+        toolkit = base / 'moved product/overlay_toolchain'
+        bundled = toolkit / ('clang/bin/clang.exe' if os.name == 'nt' else 'clang/bin/clang')
+        bundled.parent.mkdir(parents=True)
+        unrelated = base / 'unrelated cwd'
+        unrelated.mkdir()
+        source = base / 'resolver.cpp'
+        source.write_text('#include <filesystem>\n#include <string>\n#include <iostream>\n' + text[start:end] + '''
+int main(int argc, char** argv) {
+    const auto path = resolve_overlay_compiler_path(argv[1], argv[2]);
+    if (path.empty()) return 2;
+    std::cout << path.string();
+}
+''')
+        stub = base / 'compiler.cpp'
+        stub.write_text('#include <cstdio>\nint main(){std::puts("bundled compiler invoked");}\n')
+        probe = base / ('resolver.exe' if os.name == 'nt' else 'resolver')
+        compiler = shutil.which(args.compiler) or args.compiler
+        env = os.environ.copy()
+        env['PATH'] = str(Path(compiler).parent) + os.pathsep + env.get('PATH', '')
+        for src, dst in ((source, probe), (stub, bundled)):
+            subprocess.run([compiler, '-std=c++17', '-static', str(src), '-o', str(dst)], check=True, env=env)
+        relative = bundled.relative_to(toolkit).as_posix()
+        for configured in (relative, str(bundled)):
+            resolved = subprocess.check_output([str(probe), str(toolkit), configured], cwd=unrelated, text=True)
+            assert Path(resolved) == bundled
+            assert subprocess.check_output([resolved], cwd=unrelated, text=True).strip() == 'bundled compiler invoked'
+        # A matching compiler on cwd/PATH must not satisfy a missing bundle.
+        shutil.copy2(bundled, unrelated / bundled.name)
+        bundled.unlink()
+        env['PATH'] = str(unrelated) + os.pathsep + env['PATH']
+        assert subprocess.run([str(probe), str(toolkit), relative], cwd=unrelated, env=env).returncode == 2
+        assert subprocess.run([str(probe), str(toolkit), str(bundled)], cwd=unrelated, env=env).returncode == 2
+    print('PASS: relative and legacy absolute compiler paths; spaces/unrelated cwd; missing bundle rejects host fallback')
+
+
+if __name__ == '__main__':
+    main()
