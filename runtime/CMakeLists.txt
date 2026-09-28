@@ -745,6 +745,8 @@ if(BUILD_TESTING)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
         endif()
+        add_test(NAME disc_picker_ascii_test COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
         add_test(NAME frame_interpolation_context_ownership_test
