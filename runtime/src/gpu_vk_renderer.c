@@ -285,6 +285,12 @@ static VkImage         s_ds_img;
 static VkDeviceMemory  s_ds_mem;
 static VkImageView     s_ds_view;
 static VkFormat        s_ds_format;
+/* Both candidate formats (D24S8 / D32S8) are COMBINED depth+stencil: views,
+ * barriers and image clears must name BOTH aspects unless
+ * separateDepthStencilLayouts is enabled (it is not). Stencil-only leaves the
+ * depth half in UNDEFINED; on AMD (no D24S8 -> D32S8) depth and stencil share
+ * compression metadata. */
+#define DS_ASPECT (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)
 
 /* Scratch hr image for VRAM->VRAM copies (resolves overlap). */
 static VkImage         s_scratch_img;
@@ -1057,7 +1063,7 @@ static int create_render_targets(void) {
                     VK_IMAGE_ASPECT_COLOR_BIT, &s_raw_img, &s_raw_mem, &s_raw_view)) return 0;
     s_ds_format = choose_ds_format();
     if (!make_image(s_ds_format, VRAM_W * S, VRAM_H * S,
-                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_STENCIL_BIT,
+                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, DS_ASPECT,
                     &s_ds_img, &s_ds_mem, &s_ds_view)) return 0;
     if (!make_image(VK_FORMAT_R8G8B8A8_UNORM, VRAM_W * S, VRAM_H * S,
                     VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -1079,12 +1085,12 @@ static int create_render_targets(void) {
         db.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; db.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         db.srcQueueFamilyIndex = db.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         db.image = s_ds_img; db.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        db.subresourceRange.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+        db.subresourceRange.aspectMask = DS_ASPECT;
         db.subresourceRange.levelCount = 1; db.subresourceRange.layerCount = 1;
         p_vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                0, 0, NULL, 0, NULL, 1, &db);
         VkClearDepthStencilValue dsv = { 0.0f, 0 };
-        VkImageSubresourceRange srng = { VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1 };
+        VkImageSubresourceRange srng = { DS_ASPECT, 0, 1, 0, 1 };
         p_vkCmdClearDepthStencilImage(cb, s_ds_img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &dsv, 1, &srng);
         db.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         db.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -1973,7 +1979,7 @@ static void begin_geo_pass(VkCommandBuffer cb) {
     db.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     db.srcQueueFamilyIndex = db.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     db.image = s_ds_img;
-    db.subresourceRange.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+    db.subresourceRange.aspectMask = DS_ASPECT;
     db.subresourceRange.levelCount = 1;
     db.subresourceRange.layerCount = 1;
     db.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -2026,7 +2032,9 @@ static int make_staging(VkDeviceSize bytes, VkBuffer *buf, VkDeviceMemory *mem, 
     }
 
     VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-    bci.size = bytes; bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    /* Staging buffers serve uploads (copy source) AND readbacks via
+     * vkCmdCopyImageToBuffer (copy destination). */
+    bci.size = bytes; bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (p_vkCreateBuffer(s_dev, &bci, NULL, buf) != VK_SUCCESS) return 0;
     VkMemoryRequirements req; p_vkGetBufferMemoryRequirements(s_dev, *buf, &req);
@@ -2570,7 +2578,7 @@ static int wide_surf_for(int base_x) {
             return -1;
         if (!make_image(s_ds_format, w, h,
                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                        VK_IMAGE_ASPECT_STENCIL_BIT, &s_wide_ds_img[i], &s_wide_ds_mem[i], &s_wide_ds_view[i]))
+                        DS_ASPECT, &s_wide_ds_img[i], &s_wide_ds_mem[i], &s_wide_ds_view[i]))
             return -1;
         VkImageView views[2] = { s_wide_view[i], s_wide_ds_view[i] };
         VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
@@ -2590,12 +2598,12 @@ static int wide_surf_for(int base_x) {
         db.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; db.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         db.srcQueueFamilyIndex = db.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         db.image = s_wide_ds_img[i]; db.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        db.subresourceRange.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+        db.subresourceRange.aspectMask = DS_ASPECT;
         db.subresourceRange.levelCount = 1; db.subresourceRange.layerCount = 1;
         p_vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                0, 0, NULL, 0, NULL, 1, &db);
         VkClearDepthStencilValue dsv = { 0.0f, 0 };
-        VkImageSubresourceRange srng = { VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1 };
+        VkImageSubresourceRange srng = { DS_ASPECT, 0, 1, 0, 1 };
         p_vkCmdClearDepthStencilImage(cb, s_wide_ds_img[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &dsv, 1, &srng);
         db.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         db.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -2626,7 +2634,7 @@ static void wide_pass_begin(VkCommandBuffer cb) {
     db.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     db.srcQueueFamilyIndex = db.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     db.image = s_wide_ds_img[i];
-    db.subresourceRange.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+    db.subresourceRange.aspectMask = DS_ASPECT;
     db.subresourceRange.levelCount = 1; db.subresourceRange.layerCount = 1;
     db.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     db.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
