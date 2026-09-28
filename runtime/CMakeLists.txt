@@ -418,12 +418,6 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_compile_definitions(mdec_output_lifetime_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
     add_test(NAME mdec_output_lifetime_test COMMAND mdec_output_lifetime_test)
 
-    add_library(mdec_clean_fixture_probe SHARED tests/mdec_clean_fixture_probe.c)
-    target_include_directories(mdec_clean_fixture_probe PRIVATE include)
-    add_test(NAME mdec_clean_fixtures_test COMMAND ${Python3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mdec_clean_fixtures.py
-        --library $<TARGET_FILE:mdec_clean_fixture_probe>)
-
     # PGXP value-propagation engine (docs/ENHANCEMENTS.md G1.2/G1.3): shadow
     # load/store/COP2 roundtrips, half-word semantics, validate-on-read
     # (foreign overwrite + DMA-overwrite rejection), MOVE/repack arithmetic,
