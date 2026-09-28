@@ -362,7 +362,7 @@ static void write_json_window(FILE *f, uint32_t win_lo_page,
                 size += 4u;
                 guard_bytes = 4u;
             }
-            uint32_t virt = 0x80000000u | psx_ram_canonical_offset(phys);
+            uint32_t virt = PSX_OVERLAY_CODE_SEGMENT | psx_ram_canonical_offset(phys);
             in_run = 0;
 
             /* Seeds: only per-PC interpreter hits — execution-verified. */
@@ -417,7 +417,7 @@ static void write_json_window(FILE *f, uint32_t win_lo_page,
                 uint32_t wi = ep >> 2;
                 if (!((exec_pc_bitmap[wi >> 5] >> (wi & 31u)) & 1u))
                     continue;
-                uint32_t seed_virt = 0x80000000u | ep;
+                uint32_t seed_virt = PSX_OVERLAY_CODE_SEGMENT | ep;
                 if (emitted_exec++) fprintf(f, ", ");
                 fprintf(f, "\"0x%08X\"", seed_virt);
             }
@@ -429,7 +429,7 @@ static void write_json_window(FILE *f, uint32_t win_lo_page,
                 uint32_t wi = ep >> 2;
                 if (!((dispatch_pc_bitmap[wi >> 5] >> (wi & 31u)) & 1u))
                     continue;
-                uint32_t seed_virt = 0x80000000u | ep;
+                uint32_t seed_virt = PSX_OVERLAY_CODE_SEGMENT | ep;
                 if (emitted_dispatch++) fprintf(f, ", ");
                 fprintf(f, "\"0x%08X\"", seed_virt);
             }
@@ -443,7 +443,7 @@ static void write_json_window(FILE *f, uint32_t win_lo_page,
                 uint32_t wi = ep >> 2;
                 if (!((dispatch_pc_bitmap[wi >> 5] >> (wi & 31u)) & 1u))
                     continue;
-                uint32_t seed_virt = 0x80000000u | ep;
+                uint32_t seed_virt = PSX_OVERLAY_CODE_SEGMENT | ep;
                 if (emitted_dispatch++) fprintf(f, ", ");
                 fprintf(f, "\"0x%08X\"", seed_virt);
             }
