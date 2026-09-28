@@ -86,6 +86,8 @@ int savestate_slot_mtime(int slot, int64_t* out_time);
 
 /* Per-slot screenshot thumbnails captured after a successful save. */
 int savestate_capture_thumb(int slot);
+/* The current display scaled to SAVESTATE_THUMB_W x SAVESTATE_THUMB_H ARGB. */
+void savestate_render_thumb(uint32_t* out_argb);
 int savestate_read_thumb(int slot, uint32_t* out_argb,
                          int out_w, int out_h);
 
@@ -110,6 +112,16 @@ int savestate_request_load_protocol(int slot);
 /* Netplay LOAD transfer: stage an in-memory .pst (no disk write). Copied
  * internally; applied by savestate_poll like a normal slot load. */
 int savestate_request_load_blob_protocol(const void* data, size_t size);
+
+/* Replay anchor (PS1B-191): at the next safe boundary, save the machine into
+ * memory and load that blob straight back, so a recording and every playback
+ * start from the same freshly loaded state. savestate_take_anchor returns 1
+ * with the blob (caller frees), -1 when the save failed, 0 while pending. */
+int savestate_request_anchor(void);
+int savestate_take_anchor(uint8_t** data, size_t* size);
+/* Load a replay's anchor blob without the slot toast. The result is reported
+ * through savestate_take_load_completed / savestate_take_load_failed. */
+int savestate_request_load_blob_quiet(const void* data, size_t size);
 
 /* 1 while a staged save/load has not yet been consumed by savestate_poll. */
 int savestate_pending(void);

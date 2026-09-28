@@ -330,8 +330,12 @@ void netplay_sio_digest_parts(NetplaySioParts *out)
 
 uint32_t netplay_baseline_ext_digest(void)
 {
+    return netplay_baseline_ext_digest_with_aux(netplay_aux_digest());
+}
+
+uint32_t netplay_baseline_ext_digest_with_aux(uint32_t aux)
+{
     uint32_t crc = 0xFFFFFFFFu;
-    uint32_t aux = netplay_aux_digest();
     uint32_t cd = netplay_cdrom_digest();
     uint32_t spad = netplay_spad_digest();
     uint32_t dma = netplay_dma_digest();

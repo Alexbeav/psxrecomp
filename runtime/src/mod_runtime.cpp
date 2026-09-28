@@ -1218,6 +1218,38 @@ const std::string& mod_runtime_fingerprint() {
     return state().plan.fingerprint;
 }
 
+/* PS1B-191: the enabled mods that a replay must match. The two loading-speed
+ * mods are left out because a replay records and switches their effect (disc
+ * speed, instant rate, load acceleration) itself; psx.presentation.* packages
+ * only draw on the host. Everything else counts, with its option values. */
+std::string mod_runtime_replay_fingerprint() {
+    const RuntimeMods& s = state();
+    std::string text;
+    for (const ModPackage* p : s.plan.ordered) {
+        if (!p || p->id == "psx.enhancement.cd-speed" ||
+            p->id == "psx.enhancement.fast-loading" ||
+            p->id.rfind("psx.presentation.", 0) == 0) continue;
+        text += p->id + "@" + p->version + "\n";
+        for (const ModOption& o : p->options) {
+            char value[256] = "";
+            psx_mod_option_value(p->id.c_str(), o.feature_id.c_str(), o.id.c_str(),
+                                 value, sizeof value);
+            text += " " + o.feature_id + "." + o.id + "=" + value + "\n";
+        }
+        for (const ModResolution::Plugin& plugin : s.plan.plugins)
+            if (plugin.package_id == p->id) text += " plugin " + plugin.id + "\n";
+        for (const ModResolution::Write& w : s.plan.writes)
+            if (w.package_id == p->id) text += " write " + w.feature_id + "\n";
+    }
+    if (text.empty()) return "none";
+    uint8_t digest[32];
+    psx_sha256_compute(reinterpret_cast<const uint8_t*>(text.data()), text.size(), digest);
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    for (int i = 0; i < 12; ++i) { out += hex[digest[i] >> 4]; out += hex[digest[i] & 15]; }
+    return out;
+}
+
 const std::filesystem::path& mod_runtime_effective_disc_path() {
     return state().effective_disc_path;
 }

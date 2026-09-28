@@ -1558,15 +1558,53 @@ static void vk_osd_copy_rect(VkCommandBuffer cb, VkImage sc,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
 }
 
+/* Copy only the opaque runs of an ARGB image (a buffer-to-image copy cannot
+ * blend), so a badge with a transparent background shows no box. The whole
+ * image is staged at buf_off; each opaque run is its own copy region. */
+static void vk_osd_copy_opaque(VkCommandBuffer cb, VkImage sc,
+                               const uint32_t *px, int w, int h,
+                               int x, int y, VkDeviceSize buf_off) {
+    if (!px || w <= 0 || h <= 0) return;
+    memcpy((uint8_t *)s_osd_map + (size_t)buf_off, px, (size_t)w * (size_t)h * 4u);
+    for (int row = 0; row < h; row++) {
+        if (y + row >= (int)s_sc_extent.height) break;
+        for (int col = 0; col < w;) {
+            if ((px[row * w + col] >> 24) == 0) { col++; continue; }
+            int end = col;
+            while (end < w && (px[row * w + end] >> 24) != 0) end++;
+            int dw = end - col;
+            if (x + col + dw > (int)s_sc_extent.width) dw = (int)s_sc_extent.width - x - col;
+            if (dw > 0) {
+                VkBufferImageCopy bc = {0};
+                bc.bufferOffset = buf_off + ((VkDeviceSize)row * (VkDeviceSize)w + (VkDeviceSize)col) * 4u;
+                bc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                bc.imageSubresource.layerCount = 1;
+                bc.imageOffset.x = x + col;
+                bc.imageOffset.y = y + row;
+                bc.imageExtent.width = (uint32_t)dw;
+                bc.imageExtent.height = 1;
+                bc.imageExtent.depth = 1;
+                bc.bufferRowLength = (uint32_t)w;
+                bc.bufferImageHeight = 1;
+                p_vkCmdCopyBufferToImage(cb, s_osd_buf, sc,
+                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+            }
+            col = end;
+        }
+    }
+}
+
 static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
     const uint32_t *text_px = NULL, *vol_px = NULL, *rw_px = NULL, *ssm_px = NULL;
-    int tw = 0, th = 0, vw = 0, vh = 0, rw = 0, rh = 0, sw = 0, sh = 0;
+    const uint32_t *rec_px = NULL;
+    int tw = 0, th = 0, vw = 0, vh = 0, rw = 0, rh = 0, sw = 0, sh = 0, cw = 0, ch = 0;
     const int have_text = host_osd_image(&text_px, &tw, &th) && text_px;
     const int have_vol = host_osd_volume_image(&vol_px, &vw, &vh) && vol_px;
+    const int have_rec = host_osd_rec_image(&rec_px, &cw, &ch) && rec_px;
     const int have_rw = psx_rewind_overlay_image(&rw_px, &rw, &rh) && rw_px;
     const int have_ssm =
         psx_savestate_menu_overlay_image(&ssm_px, &sw, &sh) && ssm_px;
-    if (!have_text && !have_vol && !have_rw && !have_ssm) {
+    if (!have_text && !have_vol && !have_rw && !have_ssm && !have_rec) {
         host_osd_present_done();
         return;
     }
@@ -1584,7 +1622,9 @@ static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
         have_rw ? (VkDeviceSize)rw * (VkDeviceSize)rh * 4u : 0;
     VkDeviceSize ssm_bytes =
         have_ssm ? (VkDeviceSize)sw * (VkDeviceSize)sh * 4u : 0;
-    VkDeviceSize bytes = text_bytes + vol_bytes + rw_bytes + ssm_bytes;
+    VkDeviceSize rec_bytes =
+        have_rec ? (VkDeviceSize)cw * (VkDeviceSize)ch * 4u : 0;
+    VkDeviceSize bytes = text_bytes + vol_bytes + rw_bytes + ssm_bytes + rec_bytes;
     if (bytes > s_osd_cap) {
         p_vkQueueWaitIdle(s_queue);
         osd_staging_free();
@@ -1609,6 +1649,13 @@ static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
                     : margin;
         vk_osd_copy_rect(cb, sc, vol_px, vw, vh, x, y, off);
         off += vol_bytes;
+    }
+    if (have_rec) {
+        int x = ((int)s_sc_extent.width > cw + margin)
+                    ? ((int)s_sc_extent.width - cw - margin)
+                    : margin;
+        vk_osd_copy_opaque(cb, sc, rec_px, cw, ch, x, margin, off);
+        off += rec_bytes;
     }
     if (have_rw) {
         float slide = psx_rewind_slide();

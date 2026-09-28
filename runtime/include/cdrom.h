@@ -37,6 +37,7 @@ void cdrom_set_disc_scex(const char scex[4]);
 
 /* Set disc speed multiplier immediately. divisor=0 → instant, 1 → 1x, 2 → 2x. */
 void cdrom_set_speed(int divisor);
+int  cdrom_get_speed(void);
 /* Store configured game speed (applied post-BIOS via cdrom_notify_game_started). */
 void cdrom_set_game_speed(int divisor);
 /* Called by fntrace on first game-range dispatch; switches to game speed. */

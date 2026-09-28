@@ -339,6 +339,12 @@ void cdrom_set_speed(int divisor) {
     g_disc_speed_divisor = divisor;
 }
 
+/* Current operating divisor. A replay records it: it is host configuration,
+ * not part of a save state, and it changes CD timing (PS1B-191). */
+int cdrom_get_speed(void) {
+    return g_disc_speed_divisor;
+}
+
 /* Store the configured speed for post-BIOS application. Boot stays at 1x. */
 void cdrom_set_game_speed(int divisor) {
     g_game_divisor = divisor;
