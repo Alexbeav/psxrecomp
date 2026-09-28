@@ -794,7 +794,7 @@ static void start_async_gpu_linked_list(void) {
  * register write raises its WRITE event, a frame return its FRAME_END DMA
  * event). Without it, dma_advance() serves the grid edges and a register
  * write serves itself. At a service point (spec 1.3): the MDEC decoder
- * advances by the elapsed cycles (not at a register write, D18d), then channels 0, 1, 2, 3, 4 and 6 each gain
+ * advances by the elapsed cycles, then channels 0, 1, 2, 3, 4 and 6 each gain
  * the elapsed cycles as allowance and take steps while the allowance is above
  * zero (the last step may overdraw). A positive remainder is discarded (spec
  * 2.2). Missed grid edges are served one by one (spec 1.4). Readiness is
@@ -805,8 +805,8 @@ static void start_async_gpu_linked_list(void) {
  * nothing from the list; D23 e's one-slice delay is the kick landing at another
  * grid phase (spec 11). [NOT FITTED: D18a] its misses were scored with one
  * global edge offset; re-score with the phase taken from register steps.
- * [ORACLE FIXTURE D18d] a DMA register write serves the channels but does not
- * advance the MDEC decoder (ruling on spec v2 1.3); see dsm_serve_at().
+ * [EMU] the MDEC decoder advances at every service point, DMA register
+ * writes included (spec v4 1.3, 1.9); see dsm_serve_at().
  */
 
 int source_gpu_runtime_active(void);
@@ -1215,18 +1215,14 @@ static uint64_t dsm_service_clock(void) {
     return c;
 }
 
-/* Set while a DMA register write brings the GPU and the machines up to it. */
-static int dsm_write_sync;
-
 /* One service point at `now` (spec 1.3; the GPU is already up to `now`).
- * Grid edges and frame returns advance the MDEC decoder. [NOT OBSERVED:
- * write-to-edge window; D18d-consistent] any other DMA register write serves
- * the channels but does not advance it (spec v3 1.9): in D18 group d a
- * DMA5-MADR write, a timer-1 write and a no-op MDEC control write give
- * timelines byte-identical to group a. A channel 0 or 1 kick does advance it
- * (dsm_kick). */
+ * [EMU: the oracle advances the MDEC decoder at every DMA register write (spec
+ * v4 1.9); D18d-consistent from the next grid edge] the decoder advances at
+ * every service point: grid edges, frame returns and every DMA register write,
+ * MDEC channel kicks included. In D18 group d the timelines with and without
+ * the access differ only until the next grid edge, before D18d's sampling. */
 static void dsm_serve_at(uint64_t now) {
-    if (!(dsm_write_sync && now == psx_cycle_count && now % DSM_QUANTUM)) dsm_mdec_feed(now);
+    dsm_mdec_feed(now);
     for (int i = 0; i < DSM_COUNT; i++) dsm_service(dsm_order[i], now);
     dsm_eval_halt_stall();
 }
@@ -1312,9 +1308,6 @@ static void dsm_kick(int k) {
         audio_trace_event((chcr & 1u) ? AUDIO_EV_DMA_WRITE : AUDIO_EV_DMA_READ,
                           (bs ? bs : 0x10000u) * (ba ? ba : 0x10000u), channels[4].madr & 0x1FFFFCu);
     }
-    /* [ORACLE FIXTURE D15b, D17a] an MDEC channel kick advances the decoder to
-     * the kick (spec v3 1.9). */
-    if (k == DSM_MDEC_IN || k == DSM_MDEC_OUT) dsm_mdec_feed(psx_cycle_count);
     memset(m, 0, sizeof *m);
     m->running = 1;
     m->credit = DSM_KICK_CREDIT;
@@ -1363,10 +1356,8 @@ static int dsm_before_write(uint32_t *addrp, uint32_t *valp, uint32_t mask) {
     uint32_t addr = *addrp, val = *valp;
     if (!dsm_write_serviced) {
         dsm_write_serviced = 1;
-        dsm_write_sync = 1;
         if (source_gpu_runtime_active()) source_gpu_runtime_dma_write();
         else dsm_service_point(psx_cycle_count);
-        dsm_write_sync = 0;
     }
     if (addr == 0x1F8010F4u) {
         /* [ORACLE FIXTURE D14] DICR reads back 80FF803Fh after FFFFFFFFh. */
