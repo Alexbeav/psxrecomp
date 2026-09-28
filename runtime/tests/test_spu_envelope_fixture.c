@@ -250,6 +250,33 @@ int main(int argc, char **argv)
                     level, (unsigned)counter);
             ++bad;
         }
+        /* Oracle fixture PS1B-242 R1-R8 (Octoshock 2.3, deterministic x2;
+         * evidence/T172/clean-rewrite-fixtures-20260926/PS1B-242-spu-release-1f):
+         * keyed 2 s (88,200 ticks), then 6 s of Release. At key off, after 6 s,
+         * and the number of ENVX changes after key off. [ORACLE FIXTURE PS1B-242] */
+        static const struct { unsigned lo, hi, at_off, final, changes; } rel[] = {
+            {0x80FF, 0x5FDF, 0x7FF7, 0x7FF7, 0}, {0x80FF, 0x5FFF, 0x7FF7, 0x7FF7, 0},
+            {0x80FF, 0x5FDE, 0x7FF7, 0x7FB7, 8}, {0x80FF, 0x5FFE, 0x7FF7, 0x7FB7, 8},
+            {0x80FF, 0x5FDD, 0x7FF7, 0x7FB7, 8}, {0x80FF, 0x1FDF, 0x7FF7, 0x7FF7, 0},
+            {0x80FF, 0x5E9F, 0x7FEB, 0x7FEB, 0}, {0x8000, 0x5FDF, 0x07FF, 0x07FF, 0},
+        };
+        for (unsigned k = 0; k < sizeof rel / sizeof rel[0]; ++k) {
+            uint16_t lv = 0; uint32_t ct = 0; uint8_t ph = SPU_ENV_ATTACK;
+            for (int t = 0; t < 88200; ++t) spu_env_adsr_tick(&lv, &ct, &ph, (uint16_t)rel[k].lo, (uint16_t)rel[k].hi);
+            const unsigned at_off = lv;
+            ph = SPU_ENV_RELEASE;
+            unsigned changes = 0; uint16_t prev = lv;
+            for (int t = 0; t < 264600; ++t) {
+                spu_env_adsr_tick(&lv, &ct, &ph, (uint16_t)rel[k].lo, (uint16_t)rel[k].hi);
+                if (lv != prev) { ++changes; prev = lv; }
+            }
+            if (at_off != rel[k].at_off || lv != rel[k].final || changes != rel[k].changes) {
+                fprintf(stderr, "FAIL fixture PS1B-242 R%u (%04X/%04X): %04X -> %04X, %u changes; "
+                        "oracle %04X -> %04X, %u\n", k + 1, rel[k].lo, rel[k].hi, at_off, lv, changes,
+                        rel[k].at_off, rel[k].final, rel[k].changes);
+                ++bad;
+            }
+        }
         /* One below all ones still steps: shift 30, linear, -8 per 8000h ticks. */
         level = 0x7FF7; counter = 0; phase = SPU_ENV_RELEASE;
         for (int i = 0; i < 0x8000; ++i) spu_env_adsr_tick(&level, &counter, &phase, lo, 0x5FDE);
@@ -270,6 +297,6 @@ int main(int argc, char **argv)
            traces2, rows2);
     printf("SPU release and idle-voice sweep (oracle fixtures E1R, E10): %u traces, %u timed rows match\n",
            traces3, rows3);
-    printf("SPU release rate 1Fh never steps (PSX-SPX all-ones rule; Bio voice 0 holds 7FF7)\n");
+    printf("SPU release rate 1Fh never steps (PSX-SPX all-ones rule; oracle fixture PS1B-242 R1-R8 match)\n");
     return 0;
 }

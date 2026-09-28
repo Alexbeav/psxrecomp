@@ -84,10 +84,11 @@ static inline void spu_env_adsr_tick(uint16_t *level, uint32_t *counter, uint8_t
         exponential = (hi >> 5) & 1u; decrease = 1; shift = hi & 31u; step = 0;
         /* An all-ones Release rate (shift 1Fh; Release has no step bits) never
          * steps and never saturates [DOC] PSX-SPX "Envelope Operation ...":
-         * "0x7f, or 0x1f for decay/release". Release shifts 25-31 are beyond
-         * fixture E1R; Bio Hazard DC's voice 0 holds its level here in the TAS
-         * oracle (PS1B-242). Passing step 0 would otherwise force the counter
-         * increment to at least 1 and step -8 every 8000h ticks. */
+         * "0x7f, or 0x1f for decay/release". Measured for linear and
+         * exponential Release from 7FF7h, 7FEBh and 07FFh, while 1Dh and 1Eh
+         * step -8 every 8000h ticks [ORACLE FIXTURE PS1B-242 R1-R8]; Bio Hazard
+         * DC's voice 0 holds its level here in the TAS oracle. Passing step 0
+         * would otherwise force the counter increment to at least 1. */
         if (shift == 31u) return;
         break;
     }
