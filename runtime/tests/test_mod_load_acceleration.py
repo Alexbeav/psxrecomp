@@ -84,7 +84,7 @@ assert ("turbo_loads_gate_step(&s_turbo_gate, data_read, load_hold, "
         "g_turbo_load_release_frames)") in _flat_main
 assert "g->release = release_frames;" in GATE_C
 assert ("turbo_loads_gate_allowed(g_turbo_loads_enabled, psx_netplay_active(), "
-        "psx_selfcheck_resim_active(), input_route_session_owns_ports())") in _flat_main
+        "psx_selfcheck_resim_active(), input_route_session_armed())") in _flat_main
 assert ("g_frame_period_ms / (double)g_turbo_load_wall_multiplier" in MAIN or "present_effective_frame_period_ms() / (double)g_turbo_load_wall_multiplier" in MAIN)
 assert "if (!manual_turbo_active && !turbo_load_paced && present_should_wall_pace())" in MAIN
 assert "if (g_mod_disc_speed_divisor >= 0)" in MAIN

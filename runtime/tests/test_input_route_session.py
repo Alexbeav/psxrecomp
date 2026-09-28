@@ -172,6 +172,14 @@ with tempfile.TemporaryDirectory() as temp:
                      b''.join(struct.pack('<IH6B', i + 1, b, *axes, 0, 0) for i, (b, *axes) in enumerate(rows)))
     code, out, err = run(release, 'words', dual, 3, markers_exit=False)
     check(code == 0 and out.splitlines()[-1] == 'ffbf,ffff,ffff', 'PSXRTI2 release replay', out + err)
+
+    # Every admitted route format reports armed (Fast Loading stays off under
+    # any route), on both products; nothing admitted is not armed.
+    for exe in (diagnostic, release):
+        for name, path in (('PSXRTI1', legacy), ('PSXRTI2 DualShock', dual), ('PSXRTI3', route)):
+            code, out, err = run(exe, 'armed', path, markers_exit=False)
+            check(code == 0 and 'before=0 admitted=1 armed=1' in out,
+                  f'{name} route is armed on {exe.name}', out + err)
     broken = root / 'broken.psxrti'
     broken.write_bytes(legacy.read_bytes()[:-1])
     code, out, err = run(release, 'words', broken, 1, markers_exit=False)
