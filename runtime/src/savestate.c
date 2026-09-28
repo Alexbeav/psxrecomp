@@ -66,6 +66,15 @@ static int      s_save_defer_slot = -1;
 static double   s_save_defer_t0 = 0.0;
 static uint8_t *s_load_blob = NULL;   /* optional in-memory .pst for netplay */
 static size_t   s_load_blob_len = 0;
+/* Replay anchor (PS1B-191): a save into memory that is loaded straight back,
+ * so a recording starts from the same post-load machine as its playback. */
+static int      s_anchor_pending = 0;
+static int      s_anchor_result = 0;   /* 1 done, -1 failed, 0 none */
+static uint8_t *s_anchor_blob = NULL;
+static size_t   s_anchor_len = 0;
+static double   s_anchor_request_ms = 0.0;   /* when the anchor was asked for */
+/* A replay load: no slot toast; the replay reports its own result. */
+static int      s_quiet_load = 0;
 
 typedef struct SavestateThumbHeader {
     char magic[4];
@@ -482,14 +491,9 @@ int savestate_slot_mtime(int slot, int64_t* out_time) {
 #endif
 }
 
-int savestate_capture_thumb(int slot) {
-    char path[600];
-    FILE* f;
-    SavestateThumbHeader hdr;
-    uint32_t thumb[SAVESTATE_THUMB_W * SAVESTATE_THUMB_H];
+void savestate_render_thumb(uint32_t* thumb) {
     GpuDisplayInfo di;
     uint32_t dw, dh, x, y;
-    if (!savestate_thumb_path(slot, path, sizeof(path))) return 0;
     gpu_get_display_info(&di);
     dw = di.width ? di.width : 320u;
     dh = di.height ? di.height : 240u;
@@ -502,6 +506,15 @@ int savestate_capture_thumb(int slot) {
                 : (gpu_display_pixel_argb(&di, sx, sy) | 0xFF000000u);
         }
     }
+}
+
+int savestate_capture_thumb(int slot) {
+    char path[600];
+    FILE* f;
+    SavestateThumbHeader hdr;
+    uint32_t thumb[SAVESTATE_THUMB_W * SAVESTATE_THUMB_H];
+    if (!savestate_thumb_path(slot, path, sizeof(path))) return 0;
+    savestate_render_thumb(thumb);
     hdr.magic[0] = 'P';
     hdr.magic[1] = 'S';
     hdr.magic[2] = 'T';
@@ -727,6 +740,44 @@ int savestate_request_load_blob_protocol(const void* data, size_t size) {
     return 1;
 }
 
+int savestate_request_anchor(void) {
+    if (netplay_user_blocked()) return 0;
+    if (!psx_hle_scheduler_enabled()) {
+        fprintf(stderr, "savestate: replay anchor requires the HLE scheduler\n");
+        return 0;
+    }
+    if (s_save_pending >= 0 || s_load_pending >= 0) return 0;
+    free(s_anchor_blob);
+    s_anchor_blob = NULL;
+    s_anchor_len = 0;
+    s_anchor_result = 0;
+    if (!request_save_inner(0)) return 0;
+    s_anchor_pending = 1;
+    s_anchor_request_ms = savestate_mono_ms();
+    return 1;
+}
+
+int savestate_take_anchor(uint8_t** data, size_t* size) {
+    const int r = s_anchor_result;
+    if (r == 0) return 0;
+    s_anchor_result = 0;
+    if (r > 0) {
+        *data = s_anchor_blob;
+        *size = s_anchor_len;
+        s_anchor_blob = NULL;
+        s_anchor_len = 0;
+    }
+    return r;
+}
+
+int savestate_request_load_blob_quiet(const void* data, size_t size) {
+    if (netplay_user_blocked()) return 0;
+    if (!savestate_request_load_blob_protocol(data, size)) return 0;
+    s_quiet_load = 1;
+    s_anchor_request_ms = savestate_mono_ms();
+    return 1;
+}
+
 int savestate_pending(void) {
     return (s_save_pending >= 0 || s_load_pending >= 0) ? 1 : 0;
 }
@@ -814,7 +865,42 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     (unsigned)psx_netplay_rb_sticky_bb_pc(),
                     (unsigned)(cpu ? cpu->gpr[31] : 0u),
                     snapshot_safe, snapshot_site);
-            psx_frontend_on_savestate_notify(0, slot, 0);
+            if (s_anchor_pending) {
+                s_anchor_pending = 0;
+                s_anchor_result = -1;
+            } else {
+                psx_frontend_on_savestate_notify(0, slot, 0);
+            }
+        } else if (s_anchor_pending) {
+            /* Replay anchor: save into memory, then load that blob straight
+             * back below in this same poll. */
+            CPUState snap = *cpu;
+            uint8_t *buf = NULL;
+            size_t len = 0;
+            snap.pc = pc;
+            s_save_pending = -1;
+            s_save_defer_slot = -1;
+            s_anchor_pending = 0;
+            s_status_pending = 0;
+            s_status_generation++;
+            const double t_save0 = savestate_mono_ms();
+            const int saved = boot_state_save_buffer(&snap, s_bios_checksum, s_entry_pc, &buf, &len);
+            fprintf(stderr, "savestate: replay anchor wait=%.1f ms save=%.1f ms\n",
+                    t_save0 - s_anchor_request_ms, savestate_mono_ms() - t_save0);
+            if (!saved || !savestate_request_load_blob_protocol(buf, len)) {
+                free(buf);
+                s_anchor_result = -1;
+                s_status_last_ok = 0;
+                fprintf(stderr, "savestate: replay anchor save FAILED @ pc=0x%08X\n", (unsigned)pc);
+            } else {
+                s_anchor_blob = buf;
+                s_anchor_len = len;
+                s_anchor_result = 1;
+                s_status_last_ok = 1;
+                s_quiet_load = 1;
+                fprintf(stderr, "savestate: replay anchor saved @ pc=0x%08X (%zu bytes)\n",
+                        (unsigned)pc, len);
+            }
         } else {
             s_save_pending = -1;
             s_save_defer_slot = -1;
@@ -857,11 +943,15 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
 
     if (s_load_pending >= 0) {
         int slot = s_load_pending;
+        const int quiet = s_quiet_load;
         int loaded = 0;
+        s_quiet_load = 0;
         uint32_t saved_pc = 0;
         s_load_pending = -1;
         char path[600];
         const double t_load0 = savestate_mono_ms();
+        if (quiet)
+            fprintf(stderr, "savestate: quiet load wait=%.1f ms\n", t_load0 - s_anchor_request_ms);
         double t_after_boot = t_load0;
         double t_after_frontend = t_load0;
         path[0] = '\0';
@@ -883,7 +973,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                         "savestate: LOAD FAILED blob (%zu bytes, entry=%08X)\n",
                         blob_len, (unsigned)s_entry_pc);
                 s_load_failed = 1;
-                psx_frontend_on_savestate_notify(1, slot, 0);
+                if (!quiet) psx_frontend_on_savestate_notify(1, slot, 0);
             }
         } else if (savestate_slot_path(slot, path, sizeof(path))) {
             if (boot_state_peek_cpu_pc(path, &saved_pc) &&
@@ -911,7 +1001,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     slot, (unsigned)cpu->pc, path[0] ? "" : " [blob]");
             loaded = 0;
             s_load_failed = 1;
-            psx_frontend_on_savestate_notify(1, slot, 0);
+            if (!quiet) psx_frontend_on_savestate_notify(1, slot, 0);
         }
         if (!loaded) {
             s_status_pending = 0;
@@ -946,7 +1036,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     t_after_frontend - t_after_boot,
                     t_after_frontend - t_load0,
                     path[0] ? "" : " [blob]");
-            psx_frontend_on_savestate_notify(1, slot, 1);
+            if (!quiet) psx_frontend_on_savestate_notify(1, slot, 1);
             /* Unwind to the scheduler and re-dispatch the restored PC. Never
              * returns; abandons the suspended CPS frames on the current stack. */
             psx_scheduler_resume_at(cpu->pc);

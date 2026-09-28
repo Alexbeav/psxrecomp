@@ -266,10 +266,18 @@ if(BUILD_TESTING)
     add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)
     target_include_directories(input_route_v3_file_test PRIVATE include)
     add_test(NAME input_route_v3_file_test COMMAND input_route_v3_file_test)
+    # Player replays (PS1B-191): recorder/player state machine against a
+    # deterministic stand-in machine behind the replay_host_* hooks.
+    add_executable(replay_session_test tests/test_replay_session.c
+        src/replay_session.c src/psx_sha256.c)
+    target_include_directories(replay_session_test PRIVATE include)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
+    add_test(NAME replay_session_test COMMAND replay_session_test
+        ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
     foreach(_product IN ITEMS diagnostic release)
         set(_target input_route_session_${_product})
         add_executable(${_target} tests/test_input_route_session.c
-            src/input_route_session.c src/psx_sha256.c)
+            src/input_route_session.c src/disc_digest_cache.c src/psx_sha256.c)
         target_include_directories(${_target} PRIVATE include)
         target_compile_definitions(${_target} PRIVATE
             "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
@@ -403,6 +411,32 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
     target_link_libraries(host_keymap_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_keymap_test COMMAND host_keymap_test)
+
+    # Replay REC badge (PS1B-191), with the launcher OSD compiled in.
+    add_executable(host_osd_rec_test tests/test_host_osd_rec.c)
+    target_include_directories(host_osd_rec_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(host_osd_rec_test PRIVATE
+        SDL_MAIN_HANDLED
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(host_osd_rec_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME host_osd_rec_test COMMAND host_osd_rec_test)
+
+    # Fast Loading engage/hold gate (PS1B-241).
+    add_executable(turbo_loads_gate_test tests/test_turbo_loads_gate.c src/turbo_loads_gate.c)
+    target_include_directories(turbo_loads_gate_test PRIVATE include)
+    add_test(NAME turbo_loads_gate_test COMMAND turbo_loads_gate_test)
+
+    # Disc digest cache for replay identity (PS1B-191).
+    add_executable(disc_digest_cache_test tests/test_disc_digest_cache.c
+        src/disc_digest_cache.c src/psx_sha256.c)
+    target_include_directories(disc_digest_cache_test PRIVATE include)
+    add_test(NAME disc_digest_cache_test COMMAND disc_digest_cache_test ${CMAKE_CURRENT_BINARY_DIR})
+
+    # Replays page of the save-state menu (PS1B-191): notice line, DELETE hint.
+    add_executable(savestate_menu_replays_test tests/test_savestate_menu_replays.c)
+    target_include_directories(savestate_menu_replays_test PRIVATE include)
+    add_test(NAME savestate_menu_replays_test COMMAND savestate_menu_replays_test)
 
     add_executable(keyboard_pad_chord_test
         tests/test_keyboard_pad_chord.c

@@ -37,6 +37,7 @@ void cdrom_set_disc_scex(const char scex[4]);
 
 /* Set disc speed multiplier immediately. divisor=0 → instant, 1 → 1x, 2 → 2x. */
 void cdrom_set_speed(int divisor);
+int  cdrom_get_speed(void);
 /* Store configured game speed (applied post-BIOS via cdrom_notify_game_started). */
 void cdrom_set_game_speed(int divisor);
 /* Called by fntrace on first game-range dispatch; switches to game speed. */
@@ -120,6 +121,9 @@ int cdrom_load_in_progress(void);
 /* Physical non-XA data-read command state, without the logical load gap
  * bridge used by cdrom_load_in_progress(). Diagnostics only. */
 int cdrom_data_read_active(void);
+void cdrom_debug_read_state(uint32_t out[6]);
+int cdrom_data_load_read_now(void);   /* data sectors now: not XA audio, not CD-DA */
+int cdrom_xa_mode_enabled(void);      /* SetMode bit 6 (XA-ADPCM) */
 
 /* boot_state / netplay digest — full controller FSM (sector FIFOs included). */
 uint32_t cdrom_snapshot_bytes(void);

@@ -142,6 +142,16 @@ static int      s_vol_dirty = 1;
 
 static int      s_needs_clear;
 
+/* Replay REC badge (PS1B-191): a filled red circle and "REC" in the 8x8 font,
+ * all red, no border or background. The caller drives the blink. */
+#define REC_CELLS   4                    /* circle, gap, R E C -> 4 glyph cells */
+#define REC_IMG_W   ((REC_CELLS * OSD_GLYPH_W + OSD_GLYPH_W / 2) * OSD_SCALE)
+#define REC_IMG_H   (OSD_GLYPH_H * OSD_SCALE)
+#define REC_RED     0xFFE8262Au
+static uint32_t s_rec_img[REC_IMG_W * REC_IMG_H];
+static int      s_rec_visible;
+static int      s_rec_ready;
+
 #define OSD_IMG_W  ((OSD_PAD_X * 2 + OSD_MAX_CHARS * OSD_GLYPH_W) * OSD_SCALE)
 #define OSD_IMG_H  ((OSD_PAD_Y * 2 + OSD_GLYPH_H) * OSD_SCALE)
 static uint32_t s_img[OSD_IMG_W * OSD_IMG_H];
@@ -166,6 +176,9 @@ static int          s_sdl_vol_th;
 static SDL_Texture *s_sdl_rw_tex;
 static int          s_sdl_rw_tw;
 static int          s_sdl_rw_th;
+static SDL_Texture *s_sdl_rec_tex;
+static int          s_sdl_rec_tw;
+static int          s_sdl_rec_th;
 static SDL_Texture *s_sdl_ssm_tex;
 static int          s_sdl_ssm_tw;
 static int          s_sdl_ssm_th;
@@ -264,6 +277,33 @@ static void rasterize_volume(void) {
             s_vol_img[y * s_vol_w + x] = 0xFFFFFFFFu;
     }
     s_vol_dirty = 0;
+}
+
+static void rec_plot(int x, int y) {
+    for (int dy = 0; dy < OSD_SCALE; dy++)
+        for (int dx = 0; dx < OSD_SCALE; dx++) {
+            const int px = x * OSD_SCALE + dx, py = y * OSD_SCALE + dy;
+            if (px < REC_IMG_W && py < REC_IMG_H) s_rec_img[py * REC_IMG_W + px] = REC_RED;
+        }
+}
+
+static void rasterize_rec(void) {
+    for (int i = 0; i < REC_IMG_W * REC_IMG_H; i++) s_rec_img[i] = 0x00000000u;
+    /* Filled circle in the first cell: radius 3.5 around (3.5, 3.5). */
+    for (int y = 0; y < OSD_GLYPH_H; y++)
+        for (int x = 0; x < OSD_GLYPH_W; x++) {
+            const int cx = 2 * x - 7, cy = 2 * y - 7;
+            if (cx * cx + cy * cy <= 64) rec_plot(x, y);
+        }
+    static const char text[] = "REC";
+    for (int c = 0; c < 3; c++) {
+        const uint8_t *g = FONT8X8[text[c] - 32];
+        const int x0 = OSD_GLYPH_W + OSD_GLYPH_W / 2 + c * OSD_GLYPH_W;
+        for (int row = 0; row < OSD_GLYPH_H; row++)
+            for (int col = 0; col < OSD_GLYPH_W; col++)
+                if (g[row] & (1u << col)) rec_plot(x0 + col, row);
+    }
+    s_rec_ready = 1;
 }
 
 #ifndef PSX_SDL_NO_RENDER
@@ -392,13 +432,44 @@ int host_volume_adjust(int delta) {
     return s_volume;
 }
 
+void host_osd_set_rec(int visible) {
+#if !HOST_OSD_VISUAL
+    (void)visible;
+#else
+    visible = visible ? 1 : 0;
+    if (s_rec_visible && !visible) s_needs_clear = 1;
+    s_rec_visible = visible;
+#endif
+}
+
+int host_osd_rec_image(const uint32_t **pixels, int *w, int *h) {
+#if !HOST_OSD_VISUAL
+    if (pixels) *pixels = NULL;
+    if (w) *w = 0;
+    if (h) *h = 0;
+    return 0;
+#else
+    if (!s_rec_visible) {
+        if (pixels) *pixels = NULL;
+        if (w) *w = 0;
+        if (h) *h = 0;
+        return 0;
+    }
+    if (!s_rec_ready) rasterize_rec();
+    if (pixels) *pixels = s_rec_img;
+    if (w) *w = REC_IMG_W;
+    if (h) *h = REC_IMG_H;
+    return 1;
+#endif
+}
+
 int host_osd_needs_present(void) {
     if (psx_rewind_needs_present()) return 1;
     if (psx_savestate_menu_needs_present()) return 1;
 #if !HOST_OSD_VISUAL
     return 0;
 #else
-    if (msg_visible() || s_status_active || vol_visible()) return 1;
+    if (msg_visible() || s_status_active || vol_visible() || s_rec_visible) return 1;
     return s_needs_clear;
 #endif
 }
@@ -457,7 +528,7 @@ void host_osd_present_done(void) {
 #if !HOST_OSD_VISUAL
     return;
 #else
-    if (!s_active && !s_status_active && !s_vol_active) s_needs_clear = 0;
+    if (!s_active && !s_status_active && !s_vol_active && !s_rec_visible) s_needs_clear = 0;
 #endif
 }
 
@@ -486,6 +557,12 @@ void host_osd_draw_sdl(struct SDL_Renderer *renderer) {
             int y = (lh > dh) ? ((lh - dh) / 2) : margin;
             sdl_blit_argb(renderer, &s_sdl_vol_tex, &s_sdl_vol_tw, &s_sdl_vol_th,
                           px, w, h, x, y, dw, dh);
+        }
+        if (host_osd_rec_image(&px, &w, &h) && px) {
+            const int dw = w * ui, dh = h * ui;
+            const int x = (lw > dw + margin) ? (lw - dw - margin) : margin;
+            sdl_blit_argb(renderer, &s_sdl_rec_tex, &s_sdl_rec_tw, &s_sdl_rec_th,
+                          px, w, h, x, margin, dw, dh);
         }
     }
     host_osd_present_done();

@@ -339,6 +339,12 @@ void cdrom_set_speed(int divisor) {
     g_disc_speed_divisor = divisor;
 }
 
+/* Current operating divisor. A replay records it: it is host configuration,
+ * not part of a save state, and it changes CD timing (PS1B-191). */
+int cdrom_get_speed(void) {
+    return g_disc_speed_divisor;
+}
+
 /* Store the configured speed for post-BIOS application. Boot stays at 1x. */
 void cdrom_set_game_speed(int divisor) {
     g_game_divisor = divisor;
@@ -3968,6 +3974,28 @@ int cdrom_load_in_progress(void) {
 
 int cdrom_data_read_active(void) {
     return reading && !xa_stream_active;
+}
+
+/* Fast Loading inputs (PS1B-241): the drive is delivering data sectors now —
+ * not XA-ADPCM audio (mode bit 6 on or an XA stream decoding) and not CD-DA. */
+int cdrom_data_load_read_now(void) {
+    return reading && !xa_stream_active && !(mode_reg & 0x40) && !cdda_playing;
+}
+
+int cdrom_xa_mode_enabled(void) {
+    return (mode_reg & 0x40) != 0;
+}
+
+/* Diagnostic snapshot of the drive for load-detection traces (PS1B-241):
+ * reading, mode register, XA stream active, CD-DA playing, read command,
+ * current read LBA. */
+void cdrom_debug_read_state(uint32_t out[6]) {
+    out[0] = (uint32_t)reading;
+    out[1] = mode_reg;
+    out[2] = (uint32_t)xa_stream_active;
+    out[3] = (uint32_t)cdda_playing;
+    out[4] = read_cmd;
+    out[5] = (uint32_t)((read_min * 60 + read_sec) * 75 + read_sect);
 }
 
 /* Savestate post-load: authentic CD second-response delays (ReadTOC ~30M

@@ -14,6 +14,7 @@ CONFIG_H = (ROOT / "recompiler/src/config_loader.h").read_text(encoding="utf-8")
 CONFIG_CPP = (ROOT / "recompiler/src/config_loader.cpp").read_text(
     encoding="utf-8"
 )
+GATE_C = (ROOT / "runtime/src/turbo_loads_gate.c").read_text(encoding="utf-8")
 
 assert "psx_mod_set_load_acceleration" in HEADER
 # The accepted range was widened from 2..16 to 1..PSX_MOD_LOAD_ACCEL_MAX (the
@@ -73,7 +74,17 @@ assert (
     < MAIN.index(apply)
 )
 
-assert "release_run = g_turbo_load_release_frames;" in MAIN
+# The mod's release hold still governs how long acceleration lasts after a
+# load (PS1B-241 moved the engage/hold logic into turbo_loads_gate): the
+# present path hands g_turbo_load_release_frames to the gate, the gate re-arms
+# its release counter from it on every load vblank, and only a mod-enabled,
+# route-free, non-netplay session reaches the gate at all.
+_flat_main = " ".join(MAIN.split())
+assert ("turbo_loads_gate_step(&s_turbo_gate, data_read, load_hold, "
+        "g_turbo_load_release_frames)") in _flat_main
+assert "g->release = release_frames;" in GATE_C
+assert ("turbo_loads_gate_allowed(g_turbo_loads_enabled, psx_netplay_active(), "
+        "psx_selfcheck_resim_active(), input_route_session_owns_ports())") in _flat_main
 assert ("g_frame_period_ms / (double)g_turbo_load_wall_multiplier" in MAIN or "present_effective_frame_period_ms() / (double)g_turbo_load_wall_multiplier" in MAIN)
 assert "if (!manual_turbo_active && !turbo_load_paced && present_should_wall_pace())" in MAIN
 assert "if (g_mod_disc_speed_divisor >= 0)" in MAIN

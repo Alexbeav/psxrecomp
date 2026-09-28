@@ -10,6 +10,7 @@
  *   replay  <route> <disc> <bios> [perturb]  replay until the markers are done
  *   inert   print the release entry points with nothing armed */
 #include "input_route_session.h"
+#include "disc_digest_cache.h"
 #include "sio.h"
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,10 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc < 5) return 64;
+    /* A player-replay digest cache may be configured in the same process; a
+     * route's identity must still come from a full hash of the disc. */
+    if (getenv("PSX_TEST_DISC_DIGEST_CACHE"))
+        disc_digest_cache_set_path(getenv("PSX_TEST_DISC_DIGEST_CACHE"));
     input_route_session_set_product("SLUS-00662", argv[3], argv[4]);
     if (!strcmp(argv[1], "record")) {
         uint32_t frames = argc > 5 ? (uint32_t)strtoul(argv[5], NULL, 10) : 200u;

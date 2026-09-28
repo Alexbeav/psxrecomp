@@ -29,8 +29,9 @@ def check(ok, what, detail=''):
     checks += 1
 
 
-def run(exe, *args, markers_exit=True):
+def run(exe, *args, markers_exit=True, extra_env=None):
     env = dict(os.environ)
+    env.update(extra_env or {})
     env.pop('PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS', None)
     if markers_exit:
         env['PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS'] = '1'
@@ -86,6 +87,24 @@ with tempfile.TemporaryDirectory() as temp:
         checkpoint_asset_digest = None
     if checkpoint_asset_digest:
         check(checkpoint_asset_digest(cue) == digest, 'digest equals run_native.checkpoint_asset_digest')
+
+    # A route never trusts the player-replay digest cache (path, size, mtime
+    # and a head/tail spot hash): with a forged cache for this disc, the
+    # recorded identity still carries the full-hash digest.
+    forged = root / 'disc_digests.tsv'
+    lines = []
+    for p in (cue, disc / 'Game (Track 1).bin', disc / 'Game (Track 2).bin'):
+        data = p.read_bytes()
+        spot = hashlib.sha256(data[:65536] + (data[-65536:] if len(data) > 65536 else b'')).hexdigest()[:16]
+        lines.append(f'{len(data)}\t{int(p.stat().st_mtime)}\t{spot}\t{"f" * 64}\t{p}\n')
+    forged.write_text(''.join(lines))
+    route_cached = root / 'cached.psxrti3'
+    code, out, err = run(diagnostic, 'record', route_cached, cue, bios, 200, markers_exit=False,
+                         extra_env={'PSX_TEST_DISC_DIGEST_CACHE': str(forged)})
+    check(code == 0, 'record with a forged digest cache configured', out + err)
+    cached_identity = input_route_v3.read(route_cached)['identity']
+    check(cached_identity['disc_digest'] == digest,
+          'route identity uses a full disc hash, not the digest cache', cached_identity)
 
     # Replay on the release product: identity matches, both checkpoints match.
     code, out, err = run(release, 'replay', route, cue, bios)
