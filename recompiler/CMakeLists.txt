@@ -420,7 +420,8 @@ if(BUILD_TESTING)
         foreach(_product IN ITEMS diagnostic release)
             set(_target input_route_session_${_product})
             add_executable(${_target} ../runtime/tests/test_input_route_session.c
-                ../runtime/src/input_route_session.c ../runtime/src/psx_sha256.c)
+                ../runtime/src/input_route_session.c ../runtime/src/disc_digest_cache.c
+                ../runtime/src/psx_sha256.c)
             target_include_directories(${_target} PRIVATE ../runtime/include)
             target_compile_definitions(${_target} PRIVATE
                 "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
