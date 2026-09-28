@@ -2132,6 +2132,14 @@ static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
                 channels[ch].bcr = (channels[ch].bcr & ~mask) | (val & mask);
                 return;
             case 0x08:
+                /* A repeated stop preserves a paused packet. With busy already
+                 * clear, DMA cannot advance it toward a synchronous boundary. */
+                if (ch == 2 && gpu_linked_list.active &&
+                    !(channels[ch].chcr & (1u << 24)) &&
+                    (mask & (1u << 24)) && !(val & (1u << 24))) {
+                    channels[ch].chcr=(channels[ch].chcr&~mask)|(val&mask);
+                    return;
+                }
                 /* A linked-list stop takes effect between packets. Keep the
                  * already-started packet on the normal word-event clock before
                  * exposing its next header to BreakDraw/DrawOTag callers. */

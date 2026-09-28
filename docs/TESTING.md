@@ -118,7 +118,8 @@ They read each later RAM word when it is due. A linked-list CHCR stop finishes
 the actual current packet before exposing the next header when the consumer
 can progress. If active VRAM readback blocks that boundary, stop clears busy
 and preserves the unread packet and FIFO so the CPU can finish the readback.
-A matching restart resumes it; a new address or transfer mode abandons that
+Repeated stops preserve that paused state without advancing time or losing the
+unread tail. A matching restart resumes it; a new address or transfer mode abandons that
 packet through normal cancellation and starts the requested transfer. No CPU fetch or
 data wait was added. The shared device deadline now includes pending GPU work.
 Save-state format 15 stores the queue and default block DMA progress and rejects

@@ -87,6 +87,14 @@ int main(int argc,char **argv) {
         (void)gpu_read_gpuread(); assert(!vram_read_active);
         psx_advance_cycles(100); psx_devices_service_to_now();
         assert(gpu_linked_list.payload_index==16 && !(dicr&(1u<<26)));
+        /* Stopping an already-paused list cannot clock or discard its tail. */
+        uint64_t repeat_cycle=psx_cycle_count;
+        printf("before repeated stop: busy=%u active=%u count=%u index=%u\n",
+            (channels[2].chcr>>24)&1,gpu_linked_list.active,gpu_queue.count,gpu_linked_list.payload_index);
+        fflush(stdout);
+        dma_write(0x1f8010a8,0);
+        assert(psx_cycle_count==repeat_cycle && gpu_linked_list.active);
+        assert(gpu_linked_list.payload_index==16 && !(dicr&(1u<<26)));
         psx_cycle_count=stopped;
         assert(gpu_snapshot_read(gw,gn) && dma_snapshot_read(dw,dn));
         psx_cycles_resync_after_restore(NULL);
