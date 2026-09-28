@@ -2419,6 +2419,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Reports print non-ASCII marks (e.g. an arrow). On a Windows console whose
+    # code page cannot encode them (cp1250, cp437, ...) print() raised
+    # UnicodeEncodeError mid-audit; degrade those characters instead.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
     ap = build_parser()
     args = ap.parse_args(argv)
     return int(args.func(args))
