@@ -287,6 +287,26 @@ static int shapes_accepted(void) {
     return 0;
 }
 
+/* Spec 2.3 (channel 2, SyncMode 1): the block-start charge and the block's
+ * first word are one step, so that word moves even when the charge alone would
+ * exhaust the allowance. Bio return 19,576 samples this exact frontier: the
+ * kick at 11,081,809,930 plus 10,636 elapsed cycles gives an allowance of
+ * 10,700 = 465 blocks (7+16) + 5, one word short of the frontier word 0x1D852C
+ * (PS1B-186). */
+static int gpu_block_start_charges_one_step(void) {
+    fresh(0x0FEDCBA9u);
+    kick(2, 0x10000, (8u << 16) | 16, 0x01000200);   /* GPU to RAM, 8 blocks of 16 */
+    CHECK(gpuread_next == 43u, "block start: the kick moved %u words, want 43 (two blocks + 11)", gpuread_next);
+    run_to(5);
+    dma_source_gpu_service_at_exact(5);              /* +5 credit: block 3 ends, credit 0 */
+    CHECK(gpuread_next == 48u, "block start: %u words after block 3, want 48", gpuread_next);
+    run_to(7);
+    dma_source_gpu_service_at_exact(7);              /* +2 credit: the block-4 charge exceeds it */
+    CHECK(gpuread_next == 49u, "block start: %u words, want the charge and the first word in one step", gpuread_next);
+    CHECK(ram[(0x10000u + 48u * 4u) / 4] == 0x6E000030u, "block start: the frontier word is not in RAM");
+    return 0;
+}
+
 /* Spec 2.2: a debt left by the last header is cancelled by the first service
  * point that lifts the allowance above zero, even while the GPU is not ready. */
 static int debt_discarded(void) {
@@ -382,6 +402,7 @@ int main(int argc, char **argv) {
         { "3.2 bus error", bus_error },
         { "3.5 SPU count", spu_count_at_start },
         { "6.5 shapes", shapes_accepted },
+        { "2.3 GPU block start in one step", gpu_block_start_charges_one_step },
         { "2.2 debt", debt_discarded },
         { "1.8/13 D12 kick-matched", d12_kick_matched },
         { "3.1 reverse upload", upload_reverse },

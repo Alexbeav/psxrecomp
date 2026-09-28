@@ -816,9 +816,11 @@ static void try_execute(int ch);
 #define DSM_KICK_CREDIT       64  /* [EMU] kick allowance (spec 6.3); D9a, D10       */
 #define DSM_OTC_WORD           1  /* [DOC] "DMA Transfer Rates"; D9a exact            */
 #define DSM_GPU_BLOCK          7  /* [EMU] SyncMode 1 block start on channel 2 (spec
-                                   * 2.3); D10, D10b. Charged as its own step before
-                                   * the first word: amendment 6 ruled the one-step
-                                   * order unobservable (D16 relaxation)              */
+                                   * 2.3); D10, D10b. Charged in the same step as the
+                                   * block's first word, which moves even when the
+                                   * charge alone exhausts the allowance: amendment 6
+                                   * called the order unobservable, but the Bio return
+                                   * 19,576 readback frontier samples it (PS1B-186)   */
 #define DSM_CD_WORD            9  /* [EMU] spec 2.3; D9e (PSX-SPX: 24 or 40)          */
 #define DSM_SPU_WORD          48  /* [EMU] spec 2.3; D3 (PSX-SPX: 4, uncertain)       */
 #define DSM_CHOP_WORD          8  /* [EMU] spec 2.3: a word with CHCR bit 8 on 0-2    */
@@ -1059,10 +1061,12 @@ static int dsm_block_word(int k, int32_t *budget) {
 static void dsm_run_block(int k) {
     DmaSrcMachine *m = &dsm[k];
     int ch = dsm_channel[k];
+    int block_word_due = 0;  /* a ch2 block start owes its first word in the same step */
     for (;;) {
         uint32_t chcr = channels[ch].chcr;
         uint32_t sync = (chcr >> 9) & 3u;
-        if (m->credit <= 0) return;
+        if (m->credit <= 0 && !block_word_due) return;
+        block_word_due = 0;
         if (!m->stage) {
             if (!dsm_ready(k)) { m->held = 1; return; }
             m->held = 0;
@@ -1075,7 +1079,16 @@ static void dsm_run_block(int k) {
                 channels[ch].bcr = (bcr & 0xFFFFu) | ((((bcr >> 16) - 1u) & 0xFFFFu) << 16);
                 m->blk_words = m->words_left = bs ? bs : 0x10000u;
                 m->cursor = m->link = channels[ch].madr & 0x00FFFFFFu;
-                if (ch == 2) { m->credit -= DSM_GPU_BLOCK; continue; }
+                if (ch == 2) {
+                    /* [EMU] spec 2.3: the GPU block-start charge and the block's
+                     * first word are one step, so the word moves even when the
+                     * charge alone would exhaust the allowance. Amendment 6 called
+                     * the order unobservable; Bio return 19,576 samples the readback
+                     * frontier at exactly such a block start (PS1B-186). */
+                    m->credit -= DSM_GPU_BLOCK;
+                    block_word_due = 1;
+                    continue;
+                }
             } else {
                 uint32_t n = channels[ch].bcr & 0xFFFFu;
                 m->blk_words = m->words_left = n ? n : 0x10000u;
