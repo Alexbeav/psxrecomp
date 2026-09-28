@@ -15,6 +15,9 @@ def main():
     text = (root / 'src/main.cpp').read_text(encoding='utf-8')
     start = text.index('static std::filesystem::path resolve_overlay_compiler_path(')
     end = text.index('\n}\n', start) + 2
+    block_start = text.index('        std::string tk_compiler;')
+    block_end = text.index('        auto build_toolchain_cmd', block_start)
+    metadata = text[block_start:block_end]
     with tempfile.TemporaryDirectory(prefix='overlay compiler spaces ') as temp:
         base = Path(temp)
         toolkit = base / 'moved product/overlay_toolchain'
@@ -23,9 +26,16 @@ def main():
         unrelated = base / 'unrelated cwd'
         unrelated.mkdir()
         source = base / 'resolver.cpp'
-        source.write_text('#include <filesystem>\n#include <string>\n#include <iostream>\n' + text[start:end] + '''
+        source.write_text('#include <filesystem>\n#include <string>\n#include <iostream>\n#include <fstream>\n#include <stdexcept>\n#include <type_traits>\n' + text[start:end] + '''
 int main(int argc, char** argv) {
-    const auto path = resolve_overlay_compiler_path(argv[1], argv[2]);
+    const std::filesystem::path tk_dir(argv[1]);
+    { std::ofstream config(tk_dir / "compiler.txt"); config << argv[2] << "\\n"; }
+    auto init = [&]() {
+''' + metadata + '''
+    };
+    static_assert(std::is_same_v<decltype(init()), void>, "overlay init must remain void");
+    try { init(); } catch (const std::runtime_error&) { return 2; }
+    const auto path = resolve_overlay_compiler_path(tk_dir, argv[2]);
     if (path.empty()) return 2;
     std::cout << path.string();
 }
@@ -37,7 +47,7 @@ int main(int argc, char** argv) {
         env = os.environ.copy()
         env['PATH'] = str(Path(compiler).parent) + os.pathsep + env.get('PATH', '')
         for src, dst in ((source, probe), (stub, bundled)):
-            subprocess.run([compiler, '-std=c++17', '-static', str(src), '-o', str(dst)], check=True, env=env)
+            subprocess.run([compiler, '-std=c++17', '-Werror=return-type', '-static', str(src), '-o', str(dst)], check=True, env=env)
         relative = bundled.relative_to(toolkit).as_posix()
         for configured in (relative, str(bundled)):
             resolved = subprocess.check_output([str(probe), str(toolkit), configured], cwd=unrelated, text=True)

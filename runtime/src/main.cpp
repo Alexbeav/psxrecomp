@@ -14858,9 +14858,8 @@ int main(int argc, char** argv) {
                     line.pop_back();
                 tk_compiler = resolve_overlay_compiler_path(tk_dir, line).string();
                 if (!line.empty() && std::filesystem::path(line).is_relative() && tk_compiler.empty()) {
-                    std::fprintf(stderr, "psxrecomp: bundled overlay compiler is missing: %s (toolchain %s)\n",
-                                 line.c_str(), tk_dir.string().c_str());
-                    return 1;
+                    throw std::runtime_error("bundled overlay compiler is missing: " +
+                                             (tk_dir / line).string());
                 }
             }
         }
