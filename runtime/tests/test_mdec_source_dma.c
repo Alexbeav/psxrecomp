@@ -125,3 +125,4 @@ int main(int argc,char **argv){
  }
  if(ferror(in) || fclose(in) || fclose(out))return 4;return 0;
 }
+#include "gpu_queue_test_stubs.h"

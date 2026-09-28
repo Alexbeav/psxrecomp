@@ -220,3 +220,4 @@ int source_gpu_runtime_ready(void){return 1;}
 uint32_t source_gpu_runtime_cycles_to_event(void){return UINT32_MAX;}
 void source_gpu_runtime_dma_write(void){dma_source_gpu_service_at(psx_cycle_count);}
 void source_gpu_runtime_copy(SourceGPUServiceClock *c,SourceGPUCommandProjection *s){(void)c;(void)s;abort();}
+#include "gpu_queue_test_stubs.h"
