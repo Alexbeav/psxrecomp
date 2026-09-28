@@ -38,7 +38,11 @@ int main(int argc, char** argv) {
     const auto resolved = std::string(argv[1]) == "persisted"
         ? resolve_persisted_disc_path(path, argv[3])
         : normalize_disc_path_for_launch(path);
-    std::cout << resolved.generic_string();
+    // libstdc++'s generic_string() collapses a UNC "\\server" root to "/server";
+    // print the native spelling with forward slashes so both C++ libraries agree.
+    std::string out = resolved.string();
+    for (char& c : out) if (c == '\\\\') c = '/';
+    std::cout << out;
 }
 ''', encoding='utf-8')
         compiler = shutil.which(args.compiler) or args.compiler
