@@ -517,6 +517,83 @@ frames. Trusted callbacks receive only the narrow C services exposed by
 `runtime/include/mod_plugins.h`. Games should continue to use declarative
 patches and overlays when those operations are sufficient.
 
+### Session starts and mod-owned state
+
+What a plugin sets up should last only for a session whose resolved plan
+activates it. Function-entry hooks follow that rule by construction: the commit
+and the netplay clear empty the hook table, and only activation rebuilds it, so
+a hook never runs in a session that did not activate its id (including a
+netplay session, which clears the plan). The host state a plugin changes
+through the `psx_mod_*` setters is process-wide, so the runtime resets it at
+every session start instead.
+
+An offline session ends the process when the player closes the game. The one
+in-process second session is the lobby rematch: a netplay match launched from
+the lobby returns to the lobby launcher when it ends, and the next launch from
+there, netplay or offline, re-enters the emulator in the same process. The
+session before a rematch is therefore always a netplay match, which ran with
+the plan cleared, so no plugin activated in it.
+
+The reset runs immediately before activation in the first session, and on the
+rematch path after its commit or netplay clear. What it fixes today is the
+netplay local viewport's Fit and fixed aspect carrying from a match into an
+offline rematch. The rest of the table is defensive, for the state listed here.
+
+| State | Setter | Reset to | When |
+|---|---|---|---|
+| Fit / capped adaptive aspect | `psx_mod_set_adaptive_display_aspect` | off | every session |
+| World-scene predicate | `psx_mod_set_world_scene_predicate` | NULL | every session |
+| Retained-scene predicate | `psx_mod_set_retained_scene_predicate` | NULL | every session |
+| Adaptive backdrop preload | `psx_mod_set_adaptive_backdrop_preload` | 0 | every session |
+| Bezel artwork | `psx_mod_set_bezel_artwork` | none | every session |
+| Frame-interpolation blend mode | `psx_mod_set_frame_interpolation_blend` | default | every session |
+| Native VBlank pacing | `psx_mod_set_native_vblank_rate` | off | every session |
+| Frame period, if native VBlank pacing was on | `psx_mod_set_native_vblank_rate` | first-session value | later sessions |
+| Frame interpolation and its rate | `psx_mod_set_frame_interpolation` | first-session value | later sessions |
+| Vsync forced off | `psx_mod_set_frame_interpolation`, `psx_mod_set_native_vblank_rate` | first-session value | later sessions |
+| Automatic FMV skipping | `psx_mod_set_auto_skip_fmv` | first-session value | later sessions |
+| 8 MiB main RAM request | `psx_mod_set_main_ram_8mb` | retail 2 MiB | later sessions |
+| Texture-bank resolver and batching | `psx_mod_set_texture_bank_resolver`, `psx_mod_set_texture_bank_batching` | NULL, off | later sessions |
+
+"First-session value" is what settings, environment overrides (such as
+`PSX_VSYNC`) and the launcher resolved before the process's first activation.
+The first call records those values and changes nothing that is not already at
+its initial value, so the first session, and every run that never
+soft-returns, behaves exactly as without the reset. The RAM request matters on
+a rematch because `memory_init()` latches the requested geometry again at every
+boot, including the rematch's.
+
+Not reset, and why:
+
+- The **fixed display aspect** (`psx_mod_set_fixed_display_aspect`) and the
+  **renderer** (OpenGL, which `psx_mod_set_frame_interpolation` and
+  `psx_mod_set_bezel_artwork` force) are launcher controls. A rematch takes
+  both from the lobby launcher, which is seeded from the live values. For the
+  aspect, the rematch path then re-applies the Settings clamp (4:3, since
+  widescreen is mod-owned) before the netplay local viewport, so a match's
+  16:9 or 21:9 does not carry into an offline rematch. A renderer forced by a
+  plugin would be carried the same way, but no plugin activates in the session
+  before a rematch.
+- **Guest memory, GPU-DMA memory, texture-packet arenas and defined texture
+  banks** (`psx_mod_alloc_guest_memory`, `psx_mod_alloc_gpu_dma_memory`,
+  `psx_mod_alloc_texture_packet_memory`, `psx_mod_define_texture_bank`) live
+  for the process. A bank ID is read only from packets in a plugin's own arena,
+  which stock game code does not use.
+
+**A rematch is not a full session start.** It re-enters below the first
+session's setup block, so it does not run `mod_runtime_activate_plugins()` and
+does not reset controller overrides and policies, load acceleration or disc
+speed (the first session resets those before activation). An offline rematch
+with mods enabled therefore applies the plan's main-EXE and disc patches and
+runs its VBlank callbacks, but no activation callback runs and no
+function-entry hook runs. A VBlank callback must not assume its plugin's
+activation ran in the same session. If the rematch path ever activates
+plugins, the reset must run before that activation.
+
+A plugin should establish what it needs in its activation callback and not rely
+on state from an earlier session; its own static variables are its
+responsibility.
+
 `psx_mod_set_load_acceleration(multiplier, release_frames)` is the narrow
 pre-boot service for a game-owned fast-loading feature. It changes host
 wall-clock pacing only: guest VBlanks, CD deadlines, interrupts, callbacks, and
