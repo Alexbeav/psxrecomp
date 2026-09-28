@@ -59,6 +59,9 @@ int input_route_session_identity(InputRouteV3 *meta, int call_hle, int boot_skip
 /* True while a PSXRTI3 route or a recording declares the controller ports:
  * one digital pad on P1, nothing else. Host hotplug must not change them. */
 int input_route_session_owns_ports(void);
+/* True while any input route is admitted (PSXRTI1, PSXRTI2 or PSXRTI3,
+ * digital or DualShock) or a recording is running. */
+int input_route_session_armed(void);
 
 /* Once per guest vblank, before the input for the next record is taken.
  * Returns -1 normally, or a process exit status when the last marker was

@@ -56,6 +56,13 @@ int main(int argc, char **argv)
                input_route_session_release_dualshock(0xffff));
         return 0;
     }
+    if (argc >= 3 && !strcmp(argv[1], "armed")) {
+        /* Any admitted route, whatever its format, reports armed. */
+        const int before = input_route_session_armed();
+        const int ok = input_route_session_admit(argv[2]);
+        printf("before=%d admitted=%d armed=%d\n", before, ok, input_route_session_armed());
+        return 0;
+    }
     if (argc >= 4 && !strcmp(argv[1], "words")) {
         /* Release replay of any route format without identity checks. */
         const uint32_t count = (uint32_t)strtoul(argv[3], NULL, 10);

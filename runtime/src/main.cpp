@@ -8099,7 +8099,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     static TurboLoadsGate s_turbo_gate;
     if (turbo_loads_gate_allowed(g_turbo_loads_enabled, psx_netplay_active(),
                                  psx_selfcheck_resim_active(),
-                                 input_route_session_owns_ports())) {
+                                 input_route_session_armed())) {
         /* PS1B-241: engage only for sustained data loads (turbo_loads_gate.h).
          * An armed input route never runs Fast Loading, whatever the mods say.
          * The old rule engaged on any read held for 4 vblanks plus the 30-vblank

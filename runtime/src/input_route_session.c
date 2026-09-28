@@ -46,6 +46,7 @@ static uint8_t s_replay_digest[32];
 /* Armed state shared by replay and record. */
 static int s_active;         /* markers to check, or recording */
 static int s_owns_ports;     /* PSXRTI3 digital route or recording */
+static int s_route_armed;    /* any route admitted, whatever its format */
 static int s_recording;
 static int s_exit_after_markers;
 static int s_all_matched = 1;
@@ -361,7 +362,7 @@ int input_route_session_admit(const char *path)
     v3 = !memcmp(magic, "PSXRTI3\0", 8);
 #ifndef PSX_NO_DEBUG_TOOLS
     /* PSXRTI1/PSXRTI2 stay entirely with the debug-server preload. */
-    if (!v3) { fclose(f); return 1; }
+    if (!v3) { fclose(f); s_route_armed = 1; return 1; }
 #else
     if (!v3 && memcmp(magic, "PSXRTI1\0", 8) && memcmp(magic, "PSXRTI2\0", 8)) {
         fclose(f); return refuse(path, "unsupported route format");
@@ -392,6 +393,7 @@ int input_route_session_admit(const char *path)
         memset(s_markers, 0, sizeof(s_markers));
         return refuse(path, error);
     }
+    s_route_armed = 1;
 #ifdef PSX_NO_DEBUG_TOOLS
     /* Release replay owns the steps. The diagnostic product reparses them in
      * its debug-server preload, which keeps its evidence observers. */
@@ -583,6 +585,11 @@ int input_route_session_identity(InputRouteV3 *meta, int call_hle, int boot_skip
 int input_route_session_owns_ports(void)
 {
     return s_owns_ports;
+}
+
+int input_route_session_armed(void)
+{
+    return s_route_armed || s_owns_ports || input_route_session_recording();
 }
 
 /* ---- Per-vblank boundary ---- */
