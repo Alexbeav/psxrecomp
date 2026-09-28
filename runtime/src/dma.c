@@ -1699,9 +1699,21 @@ static void try_execute(int ch) {
             start_async_mdec_transfer(1);
             break;
         case 2:
+            if (gpu_linked_list.active &&
+                (channels[2].madr != gpu_linked_list.current_addr ||
+                 (channels[2].chcr & 0x601u) != 0x401u)) {
+                uint32_t restart_addr=channels[2].madr;
+                cancel_async_transfer(2);
+                channels[2].madr=restart_addr;
+            }
             if ((channels[2].chcr & 1u) != 0u &&
                 ((channels[2].chcr >> 9) & 3u) == 2u) {
-                start_async_gpu_linked_list();
+                /* A readback-blocked stop retains its unread payload. Restart
+                 * at the same MADR resumes it; a new MADR starts a new list. */
+                if (!gpu_linked_list.active ||
+                    channels[2].madr != gpu_linked_list.current_addr)
+                    start_async_gpu_linked_list();
+                psx_next_service_cycle=0;
             } else if(channels[2].chcr & 1u) {
                 memset(&gpu_block,0,sizeof gpu_block);
                 gpu_block.total_words=transfer_word_count(2);
@@ -2131,7 +2143,14 @@ static void dma_write_default(uint32_t addr, uint32_t val, uint32_t mask) {
                           gpu_linked_list.phase==DMA_GPU_LL_PHASE_PAYLOAD &&
                           gpu_linked_list.current_addr==packet) {
                         uint32_t wait=gpu_queue_has_space() ? 1u : gpu_queue_cycles_to_event();
-                        if(wait==UINT32_MAX) psx_fatal_halt("GPU DMA stop has no pending consumption event");
+                        if(wait==UINT32_MAX) {
+                            /* Readback needs CPU access to GPUREAD/reset. Pause
+                             * without losing the current packet or queued words. */
+                            channels[ch].chcr=(channels[ch].chcr&~mask)|(val&mask);
+                            channels[ch].madr=gpu_linked_list.current_addr;
+                            psx_next_service_cycle=0;
+                            return;
+                        }
                         psx_advance_cycles(wait);
                         psx_devices_service_to_now();
                     }

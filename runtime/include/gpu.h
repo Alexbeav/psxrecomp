@@ -18,6 +18,8 @@ extern "C" {
 void     gpu_init(void);
 /* Ordinary renderer queue: service only on the device clock. */
 void gpu_queue_service(void);
+/* Non-mutating admission shared with the full machine-state loader. */
+int gpu_snapshot_validate(const uint8_t *p, uint32_t len);
 uint32_t gpu_queue_cycles_to_event(void);
 int gpu_queue_has_space(void);
 uint32_t gpu_dma_vram_upload_words(void); /* Active GP0(A0) payload remaining. */

@@ -999,6 +999,7 @@ static int section_content_ok(uint32_t tag, const BsSection *sec,
         return pst_r_u32(&r, &count) && count <= 32u;
     }
     case BS_SEC_MODMEM: return psx_mod_memory_snapshot_validate(p, len);
+    case BS_SEC_GPU: return gpu_snapshot_validate(p, len);
     case BS_SEC_SPU: return spu_snapshot_validate(p, len);
     case BS_SEC_CDROM: return cdrom_snapshot_validate(p, len);
     case BS_SEC_SIO: return sio_snapshot_validate(p, len);

@@ -6377,13 +6377,17 @@ void gpu_cosim_dump(char *out, int cap) {
     APPEND("%s", "\n");
 #undef APPEND
 }
-int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
-    PstR r;
+int gpu_snapshot_validate(const uint8_t *p, uint32_t len) {
     if (!p || len != gpu_snapshot_bytes()) return 0;
     /* Reject a malformed queue before applying any GPU field. */
     PstR tail; uint32_t count; int32_t credit;
     pst_r_init(&tail,p+len-208u,208u);
     if(!pst_r_u32(&tail,&count) || count>16u || !pst_r_i32(&tail,&credit) || credit>256) return 0;
+    return 1;
+}
+int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
+    PstR r;
+    if (!gpu_snapshot_validate(p,len)) return 0;
     pst_r_init(&r, p, len);
     if (!gpu_snap_parse(&r)) return 0;
     ws_scene_hold_reset(&s_ws_scene_hold);

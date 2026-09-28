@@ -63,10 +63,48 @@ void dirty_ram_ld_delay_discard(void) {}
 void dirty_ram_irq_ambient_resync_after_restore(void) {}
 void source_gpu_runtime_advance(void) {}
 
+#ifndef GPU_QUEUE_BOOT_ADMISSION
 int main(int argc,char **argv) {
     reset_gpu_state_for_test(); dma_init(); psx_cycles_resync_after_restore(NULL);
     dma_write(0x1f8010f0,0x0fedcba9);
     dma_write(0x1f8010f4,(1u<<23)|(1u<<18));
+    if(argc>1 && !strncmp(argv[1],"stop-read",9)) {
+        gpu_write_gp0(0xc0000000); gpu_write_gp0(0); gpu_write_gp0(0x00010002);
+        assert(vram_read_active); gp1_dma_direction(0x04000002);
+        psx_write_word(0x1000,0x14ffffff);
+        for(unsigned i=0;i<20;i++) psx_write_word(0x1004+4*i,0xe1000001);
+        dma_write(0x1f8010a0,0x1000); dma_write(0x1f8010a8,0x01000401);
+        psx_advance_cycles(25); psx_devices_service_to_now();
+        assert(gpu_queue.count==16 && gpu_linked_list.payload_index==16);
+        uint64_t stopped=psx_cycle_count;
+        dma_write(0x1f8010a8,0);
+        assert(psx_cycle_count==stopped && !(channels[2].chcr&(1u<<24)));
+        assert(gpu_linked_list.active && gpu_linked_list.payload_index==16);
+        assert(vram_read_active && gpu_queue.count==16 && !(dicr&(1u<<26)));
+        uint32_t gn=gpu_snapshot_bytes(),dn=dma_snapshot_bytes();
+        uint8_t *gw=malloc(gn),*dw=malloc(dn);
+        gpu_snapshot_write(gw); dma_snapshot_write(dw);
+        (void)gpu_read_gpuread(); assert(!vram_read_active);
+        psx_advance_cycles(100); psx_devices_service_to_now();
+        assert(gpu_linked_list.payload_index==16 && !(dicr&(1u<<26)));
+        psx_cycle_count=stopped;
+        assert(gpu_snapshot_read(gw,gn) && dma_snapshot_read(dw,dn));
+        psx_cycles_resync_after_restore(NULL);
+        (void)gpu_read_gpuread();
+        psx_write_word(0x1004+18*4,0xe2000123);
+        int new_list=!strcmp(argv[1],"stop-read-new");
+        int block=!strcmp(argv[1],"stop-read-block");
+        if(new_list || block) {
+            psx_write_word(0x2000,new_list?0x01ffffff:0xe2000321);
+            psx_write_word(0x2004,0xe2000321);
+            dma_write(0x1f8010a0,0x2000); dma_write(0x1f8010a4,1);
+        }
+        dma_write(0x1f8010a8,block?0x11000001:0x01000401);
+        psx_advance_cycles(100); psx_devices_service_to_now();
+        assert(!gpu_linked_list.active && texture_window_value==((new_list||block)?0x321:0x123));
+        assert(dicr&(1u<<26)); free(gw); free(dw);
+        puts("PASS readback-blocked stop, paused snapshot and live resume"); return 0;
+    }
     if(argc>1 && !strcmp(argv[1],"scheduler")) {
         fill(); gpu_write_gp0(0xe1000123);
         assert(texpage_x==0);
@@ -127,3 +165,5 @@ int main(int argc,char **argv) {
     puts("PASS production GPU backpressure, packet stop, live later packet, completion");
     return 0;
 }
+
+#endif
