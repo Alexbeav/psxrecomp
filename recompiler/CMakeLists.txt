@@ -910,6 +910,21 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     endforeach()
 endif()
 
+# Mult/div deadline ownership: the same rule for MULT/DIV and MFLO/MFHI.
+if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    foreach(_mode IN ITEMS O0 O2)
+        set(_target "muldiv_deferred_${_mode}")
+        add_executable(${_target}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_muldiv_deferred.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+        target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
+endif()
+
 # ---- test-registration completeness guard -----------------------------------
 if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
     add_test(NAME gpu_upload_history
