@@ -534,10 +534,11 @@ there, netplay or offline, re-enters the emulator in the same process. The
 session before a rematch is therefore always a netplay match, which ran with
 the plan cleared, so no plugin activated in it.
 
-The reset runs immediately before activation in the first session, and on the
-rematch path after its commit or netplay clear. What it fixes today is the
-netplay local viewport's Fit and fixed aspect carrying from a match into an
-offline rematch. The rest of the table is defensive, for the state listed here.
+The reset is one step of the session start that every session runs,
+immediately before activation (see *A rematch is a full session start* below).
+What it fixes today is the netplay local viewport's Fit and fixed aspect
+carrying from a match into an offline rematch. The rest of the table is
+defensive, for the state listed here.
 
 | State | Setter | Reset to | When |
 |---|---|---|---|
@@ -576,7 +577,8 @@ Not reset, and why:
   `psx_mod_set_bezel_artwork` force) are launcher controls. A rematch takes
   both from the lobby launcher, which is seeded from the live values. For the
   aspect, the rematch path then re-applies the Settings clamp (4:3, since
-  widescreen is mod-owned) before the netplay local viewport, so a match's
+  widescreen is mod-owned) before its session start, where a plugin's
+  activation or the netplay local viewport can still replace it, so a match's
   16:9 or 21:9 does not carry into an offline rematch. A renderer forced by a
   plugin would be carried the same way, but no plugin activates in the session
   before a rematch.
@@ -586,15 +588,24 @@ Not reset, and why:
   for the process. A bank ID is read only from packets in a plugin's own arena,
   which stock game code does not use.
 
-**A rematch is not a full session start.** It re-enters below the first
-session's setup block, so it does not run `mod_runtime_activate_plugins()` and
-does not reset controller overrides and policies, load acceleration or disc
-speed (the first session resets those before activation). An offline rematch
-with mods enabled therefore applies the plan's main-EXE and disc patches and
-runs its VBlank callbacks, but no activation callback runs and no
-function-entry hook runs. A VBlank callback must not assume its plugin's
-activation ran in the same session. If the rematch path ever activates
-plugins, the reset must run before that activation.
+**A rematch is a full session start.** It re-enters below the first session's
+setup block, so after its commit or netplay clear it runs the same sequence as
+the first session:
+
+1. Clear controller-mode overrides and presentation policies, load
+   acceleration and disc speed.
+2. Reset the mod-owned state in the table above.
+3. Run `mod_runtime_activate_plugins()`: the plan's activation callbacks, then
+   its function-entry hook table.
+4. Apply what activation chose: the netplay local viewport, controller-mode
+   overrides and load acceleration. Disc speed is read when the session boots.
+5. Mount the plan's derived disc image if it built one, else the stock disc.
+
+An offline rematch with mods enabled therefore runs like a first launch with
+those mods: activation callbacks, function-entry hooks, VBlank callbacks and
+the main-EXE and disc patches. A netplay rematch clears the plan, so none of
+them run and the match stays vanilla. Either way activation still precedes
+renderer and window creation, which every session reaches only when it boots.
 
 A plugin should establish what it needs in its activation callback and not rely
 on state from an earlier session; its own static variables are its

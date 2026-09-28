@@ -393,6 +393,27 @@ int main() {
     check(active_entry_hits == 4 && disabled_entry_hits == 0 &&
               unselected_entry_hits == 0,
           "re-activation restores exactly the active plan's hooks");
+    /* The lobby rematch, in the order main.cpp's start_mod_session() drives
+     * it: a netplay match (plan cleared, then activated) and an offline
+     * rematch that commits and activates exactly like a first boot. */
+    check(PSXRecompV4::mod_runtime_clear_for_netplay(&error), error.c_str());
+    mod_runtime_activate_plugins();
+    mod_runtime_on_vblank();
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(activation_calls == 2 && plugin_calls == 1 &&
+              g_psx_mod_function_entry_hooks == 0 && active_entry_hits == 4,
+          "a netplay session must stay vanilla: no activation, VBlank or hook");
+    check(PSXRecompV4::mod_runtime_commit(cue_path, &error), error.c_str());
+    mod_runtime_activate_plugins();
+    check(activation_calls == 3,
+          "an offline rematch after netplay must run activation callbacks");
+    mod_runtime_on_vblank();
+    check(plugin_calls == 2,
+          "an offline rematch after netplay must run VBlank plugins");
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(g_psx_mod_function_entry_hooks == 1 && active_entry_hits == 5 &&
+              disabled_entry_hits == 0 && unselected_entry_hits == 0,
+          "an offline rematch after netplay must arm exactly its plan's hooks");
 
     ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
     ram[0x1100] = 0; ram[0x1101] = 0;
