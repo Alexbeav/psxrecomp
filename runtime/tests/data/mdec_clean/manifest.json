@@ -23,12 +23,5 @@
     "rows": 2,
     "file": "M12.tsv",
     "sha256": "f6d90301fcad7fd1ccbb95dac973c6ec93f6be429eecaf3958e3c045c2fa3059"
-  },
-  {
-    "parent_request_sha256": "3bc3903a82c545de782f7f6c575b608025b3a38c4d6e177c1fde866dd71d2aae",
-    "file": "M13.tsv",
-    "sha256": "07d48a2d801ee0b2570cb62fb56ba6c6ca68d1d5dd451a08fd4b875ca91cf52c",
-    "rows": 48,
-    "selection": "All48 authored controls. Raw64-byte CPU MMIO outputs; all four fresh stock/observer outputs agree for each case. No conversion or expected-value model."
   }
 ]
