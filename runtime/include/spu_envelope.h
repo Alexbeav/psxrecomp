@@ -65,7 +65,7 @@ static inline int spu_env_tick(int32_t *level, uint32_t *counter, unsigned expon
 }
 
 /* One ADSR tick for a voice. lo/hi are the ADSR register halves
- * (1F801C08h/1F801C0Ah+N*10h). */
+ * (1F801C08h/1F801C0Ah+N*10h). A Release rate of 1Fh never steps (PS1B-242). */
 static inline void spu_env_adsr_tick(uint16_t *level, uint32_t *counter, uint8_t *phase,
                                      uint16_t lo, uint16_t hi)
 {
@@ -82,6 +82,13 @@ static inline void spu_env_adsr_tick(uint16_t *level, uint32_t *counter, uint8_t
         break;
     default:
         exponential = (hi >> 5) & 1u; decrease = 1; shift = hi & 31u; step = 0;
+        /* An all-ones Release rate (shift 1Fh; Release has no step bits) never
+         * steps and never saturates [DOC] PSX-SPX "Envelope Operation ...":
+         * "0x7f, or 0x1f for decay/release". Release shifts 25-31 are beyond
+         * fixture E1R; Bio Hazard DC's voice 0 holds its level here in the TAS
+         * oracle (PS1B-242). Passing step 0 would otherwise force the counter
+         * increment to at least 1 and step -8 every 8000h ticks. */
+        if (shift == 31u) return;
         break;
     }
     int32_t value = (int16_t)*level;
