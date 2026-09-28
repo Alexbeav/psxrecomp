@@ -1,11 +1,14 @@
 /* [ORACLE FIXTURE D18d] one access 300-396 cycles after the DMA0 kick leaves
- * the per-cycle MADR1, CHCR1, CHCR0 and MDEC status timelines byte-identical to
- * the run without it, at all 128 kick phases, with DMA1 kicked 15 or 1000
- * cycles after DMA0 (D18 groups a/d). The accesses: DMA5 MADR, BCR and CHCR
- * writes and a DICR rewrite (service points that serve the channels but do not
- * advance the MDEC decoder: reviewer ruling on spec v2 1.3), and a no-op MDEC
- * control write (1F801824h = 60000000h). The source GPU runtime serves: grid
- * edges come from its clock and a DMA register write through its WRITE event. Authored stream; no BIOS or disc. */
+ * the MADR1, CHCR1, CHCR0 and MDEC status timelines byte-identical to the run
+ * without it from kick + 1085 (D18d's sampling window), at all 128 kick
+ * phases, with DMA1 kicked 15 or 1000 cycles after DMA0 (D18 groups a/d). The
+ * accesses: DMA5 MADR, BCR and CHCR writes and a DICR rewrite (service points
+ * that advance the MDEC decoder [EMU], spec v4 1.3, 1.9), and a no-op MDEC
+ * control write (1F801824h = 60000000h). Per cycle, the two runs are also
+ * identical from the first grid edge after the access: a split feed of the
+ * decoder converges there (PS1B-188 item). The source GPU runtime serves:
+ * grid edges come from its clock and a DMA register write through its WRITE
+ * event. Authored stream; no BIOS or disc. */
 #define _POSIX_C_SOURCE 200809L
 #include "dma_gpu_ll.c"
 #include "dma.c"
@@ -81,7 +84,8 @@ static void tick(void) {
 /* A CPU store to the MDEC, 20 cycles after the previous one (runtime schedule). */
 static void mw(uint32_t addr, uint32_t v) { for (int i = 0; i < 20; i++) tick(); mdec_write(addr, v); }
 static uint64_t mdec_clock_after_kick, mdec_clock_after_write;
-static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) {
+/* Hash of the per-cycle timeline from kick + `from` on. */
+static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind, uint32_t from) {
     psx_cycle_count = 0;
     dma_init(); mdec_init(); memset(ram, 0, sizeof ram); i_stat = irqs = 0;
     dma_write(0x1F8010F0, 0x0FEDCBA9u);
@@ -107,39 +111,106 @@ static uint64_t timeline(uint32_t phase, int late_dma1, int write_at, int kind) 
             else mdec_write(0x1f801824, 0x60000000u);
             mdec_clock_after_write = dsm_mdec_clock;
         }
-        if (t >= t0) {
+        if (t >= t0 + from) {
             uint32_t row[4] = { dma_read(0x1f801090), dma_read(0x1f801098), dma_read(0x1f801088), mdec_read(0x1f801824) };
             for (int i = 0; i < 4; i++) h = (h ^ row[i]) * 1099511628211ull;
         }
     }
     return h;
 }
+/* ---- Spec v4 1.9 acceptance: per-cycle edge identity of the decoder ---- */
+static uint8_t snap_a[1 << 16], snap_b[1 << 16], base_state[1 << 16];
+static uint32_t snap_len;
+static void mdec_tables(void) {
+    mdec_init();
+    mdec_write(0x1f801824, 0x80000000u); mdec_write(0x1f801824, 0x60000000u);
+    mdec_write(0x1f801820, (2u << 29) | 1u);
+    for (int i = 0; i < 32; i++) mdec_write(0x1f801820, 0x01010101u);
+    mdec_write(0x1f801820, 3u << 29);
+    for (int i = 0; i < 32; i++) mdec_write(0x1f801820, 0x5A825A82u);
+    for (int i = 0; i < 64; i++) mdec_source_advance(128);
+}
+static void mdec_input(uint32_t words) {                       /* one DC block per word pair */
+    for (uint32_t i = 0; i < words; i++) mdec_dma_write_word(i % 32 < 24 ? 0xFE000408u : 0xFE00FE00u);
+}
+/* State at the start of a slice: 0 decoding with credit, 1 waiting on input,
+ * 2 waiting on a full output FIFO for 20 slices (past the 128-cycle cap). */
+static void mdec_state(int which) {
+    mdec_tables();
+    mdec_write(0x1f801820, (1u << 29) | (2u << 27) | 64u);
+    if (which == 0) { mdec_input(32); }
+    else if (which == 1) { mdec_input(4); for (int i = 0; i < 20; i++) mdec_source_advance(128); }
+    else { mdec_input(32); for (int i = 0; i < 20; i++) mdec_source_advance(128); }
+    snap_len = mdec_snapshot_bytes();
+    mdec_snapshot_write(base_state);
+}
+/* One slice fed split at `s` (event at the split) or unsplit (event at the same
+ * point, no feed there); then 4 more slices. The event is DMA0 input (spec
+ * 1.9: "DMA0 input arriving at the split point") or nothing. */
+static void feed(int split, uint32_t s, int event, uint8_t *out) {
+    if (!mdec_snapshot_read(base_state, snap_len)) abort();
+    if (split) mdec_source_advance(s);
+    if (event) mdec_input(28);
+    mdec_source_advance(split ? 128 - s : 128);
+    for (int k = 0; k < 4; k++) {
+        mdec_snapshot_write(out + (size_t)k * snap_len);
+        mdec_source_advance(128);
+    }
+}
+static int split_feed_identity(void) {
+    static uint8_t out_a[4 << 16], out_b[4 << 16];
+    for (int which = 0; which < 3; which++)
+        for (int event = 0; event < 2; event++) {
+            mdec_state(which);
+            if (snap_len * 4 > sizeof out_a) abort();
+            feed(0, 0, event, out_b);
+            for (uint32_t s = 1; s < 128; s++) {
+                feed(1, s, event, out_a);
+                for (int k = 0; k < 4; k++)
+                    if (memcmp(out_a + (size_t)k * snap_len, out_b + (size_t)k * snap_len, snap_len)) {
+                        fprintf(stderr, "split feed: state %d event %d split %u differs at edge +%d\n", which, event, s, k);
+                        return 1;
+                    }
+            }
+        }
+    return 0;
+}
+
 int main(void) {
     set_option("PSX_MDEC_SOURCE_MODEL", "octoshock-2.3");
     set_option("PSX_INPUT_ROUTE_FILE", "authored-fixture");
     set_option("PSX_GPU_DMA_MODEL", "octoshock-2.2.2-bounded-quad");
-    /* [ORACLE FIXTURE D15b, D17a] a DMA0 kick advances the decoder to the kick
-     * (spec v3 1.3, 1.9); a later DMA register write does not advance it
-     * [NOT OBSERVED: write-to-edge window; D18d-consistent]. Kick at cycle 3017
-     * and a DMA5 MADR write at 3381, both mid-slice (last edge 3328). */
-    timeline(17, 1, 364, 0);
-    if (mdec_clock_after_kick != 3017 || mdec_clock_after_write != 3328) {
-        fprintf(stderr, "MDEC clock %llu after the kick (want 3017), %llu after the write (want 3328, the last edge)\n",
+    /* [EMU] the decoder advances to every DMA register write (spec v4 1.3,
+     * 1.9): an MDEC kick at cycle 3017 and a DMA5 MADR write at 3381, both
+     * mid-slice (last edge 3328), leave the MDEC clock at the access. */
+    timeline(17, 1, 364, 0, 0);
+    if (mdec_clock_after_kick != 3017 || mdec_clock_after_write != 3381) {
+        fprintf(stderr, "MDEC clock %llu after the kick (want 3017), %llu after the write (want 3381)\n",
                 (unsigned long long)mdec_clock_after_kick, (unsigned long long)mdec_clock_after_write);
         return 1;
     }
+    if (split_feed_identity()) return 1;
+    static const int at[4] = { 300, 332, 364, 396 };
     for (uint32_t phase = 0; phase < 128; phase++) {
         for (int late = 0; late < 2; late++) {
-            uint64_t base = timeline(phase, late, 0, 0);
-            static const int at[4] = { 300, 332, 364, 396 };
-            for (int kind = 0; kind < 5; kind++) for (int i = 0; i < 4; i++)
-                if (timeline(phase, late, at[i], kind) != base) {
-                    fprintf(stderr, "access kind %d changed the timeline: phase %u late %d at %d\n", kind, phase, late, at[i]);
-                    return 1;
+            uint64_t window = timeline(phase, late, 0, 0, 1085);
+            for (int i = 0; i < 4; i++) {
+                uint32_t t0 = 3000 + phase, edge = ((t0 + at[i]) / 128 + 1) * 128 - t0;
+                uint64_t from_edge = timeline(phase, late, 0, 0, edge);
+                for (int kind = 0; kind < 5; kind++) {
+                    if (timeline(phase, late, at[i], kind, 1085) != window) {
+                        fprintf(stderr, "D18d: access kind %d changed the timeline from kick+1085: phase %u late %d at %d\n", kind, phase, late, at[i]);
+                        return 1;
+                    }
+                    if (timeline(phase, late, at[i], kind, edge) != from_edge) {
+                        fprintf(stderr, "split feed: access kind %d still differs after the next edge: phase %u late %d at %d\n", kind, phase, late, at[i]);
+                        return 1;
+                    }
                 }
+            }
         }
     }
-    puts("PASS MDEC kick feed (D15b, D17a); D18d: DMA5 MADR/BCR/CHCR, DICR and a no-op MDEC control write leave the MADR1/CHCR and MDEC status timelines unchanged at all 128 phases");
+    puts("PASS MDEC clock at the access; split-feed edge identity (credit, input and output waits, DMA0 input at the split); D18d from kick+1085 and per-cycle identity from the next edge for DMA5 MADR/BCR/CHCR, DICR and a no-op MDEC control write at all 128 phases");
     return 0;
 }
 
