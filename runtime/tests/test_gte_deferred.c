@@ -110,3 +110,4 @@ int main(void) {
  }
  printf("PASS %u production GTE pending-charge/deadline checks\n",checks);return 0;
 }
+#include "gpu_queue_test_stubs.h"

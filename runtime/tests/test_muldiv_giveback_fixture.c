@@ -164,3 +164,4 @@ int main(int argc, char **argv)
     printf("MFHI/MFLO give-back and second read (oracle fixtures F5, F6): %u + %u vectors match\n", n5, n6);
     return 0;
 }
+#include "gpu_queue_test_stubs.h"

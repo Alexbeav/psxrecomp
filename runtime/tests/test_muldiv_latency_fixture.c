@@ -120,3 +120,4 @@ int main(int argc, char **argv)
     printf("muldiv/GTE latencies (oracle fixture F1-F3): %u checks passed\n", checks);
     return 0;
 }
+#include "gpu_queue_test_stubs.h"
