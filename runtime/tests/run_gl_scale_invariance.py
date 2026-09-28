@@ -13,6 +13,10 @@ window must hold both at S and match the full-VRAM surface, as one surface
 while their union fits (5x) and as two tiles when it does not (9x under a
 simulated 8192 limit, PSX_GL_MAX_DIM, and 18x on a 16384 GPU); copies 1000 px
 wide are staged in chunks the limit allows.
+Line runs (mode lines) batch lines with triangles over native-wide: the window
+runs' native frame must equal the 1x run's (the 1x authoritative surface draws
+its lines as GL_LINES, in painter order), and their frame and wide surface at S
+the full-VRAM run's at the same scale.
 
 macOS/Linux: pass the SDL3 include directory and static library (for example
 from a runtime build tree's _deps/sdl3-src/include and
@@ -183,6 +187,30 @@ def main():
             ok = False
     if not digests_agree({k: v[0] for k, v in sbs.items()}):
         print("FAIL sbs native VRAM digest differs across scales/modes:", sbs)
+        ok = False
+    # Lines batched with triangles: (label, scale, env).
+    lines = {}
+    for label, s, extra in (("full", 1, {}), ("full", 9, {}),
+                            ("window", 9, {"PSX_GL_HIRES_WINDOW": "1"}),
+                            ("window", 18, {"PSX_GL_HIRES_WINDOW": "1"})):
+        e = dict(env)
+        e.update(extra)
+        r = run([dest / "probe", s, "lines"], env=e)
+        parsed = parse_run(r.stdout)
+        print(f"lines {label} {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-4:],
+              r.stderr.strip()[-600:])
+        if r.returncode or not parsed or parsed[1]:
+            ok = False
+        lines[(label, s)] = (parse_hires(r.stdout, "lband"), parse_hires(r.stdout),
+                             parse_hires(r.stdout, "wide"))
+    for key in (("window", 9), ("window", 18)):
+        if lines[key][0] is None or lines[key][0] != lines[("full", 1)][0]:
+            print(f"FAIL lines {key}: native frame differs from the 1x run:",
+                  lines[key][0], lines[("full", 1)][0])
+            ok = False
+    if None in lines[("window", 9)][1:] or lines[("window", 9)][1:] != lines[("full", 9)][1:]:
+        print("FAIL lines window 9x frame/wide surface differ from the full-VRAM run:",
+              lines[("window", 9)][1:], lines[("full", 9)][1:])
         ok = False
     for label, s, budget in (("over-limit", 32, None), ("budget", 12, "40")):
         e = dict(env)

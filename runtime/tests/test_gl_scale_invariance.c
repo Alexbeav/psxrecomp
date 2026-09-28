@@ -25,6 +25,13 @@
  *     it at each tile's edge, which can move interpolated colour by one step
  *     or coverage by a subpixel along it, so that band is only checked for
  *     being rendered at S (not an upscaled 1x image), not digested.
+ *   - mode "lines" (with or without the window): lines interleaved with
+ *     triangles that overlap them, over native-wide. Above 1x they share one
+ *     flat batch (checked); in windowed mode each batched line also keeps its
+ *     GL_LINES vertices for the 1x authoritative surface. The runner checks
+ *     the window runs' native frame (lband) against the 1x run's, so the 1x
+ *     surface draws exactly what 1x draws, in painter order, and their frame
+ *     and wide surface at S against the full-VRAM run at the same scale.
  * Original source-owned scene; no retail payload. */
 #include "gpu_gl_renderer.c"
 #include "mod_texture_banks.c"
@@ -190,6 +197,69 @@ static void sbs_frame(int base, int k) {
     glb_draw_shaded_line(base + 400, SBS_LINE_Y0 + 2, 0x001f, base + 404, SBS_LINE_Y1 - 2, 0x7c00);
 }
 
+/* ---- mode "lines": lines batched with triangles --------------------------- */
+static int lines_main(int scale, int window) {
+    glb_set_draw_area(0, 0, 1023, 511);
+    glb_set_draw_offset(0, 0);
+    glb_set_mask_bits(0, 0);
+    glb_set_semi_transparency(0, 0);
+    if (window) check(hiw_ensure(0, FRAME_W) != NULL, "window covers the frame");
+    glb_fill_rect(0, 0, FRAME_W, FRAME_H, 0);
+    glb_wide_configure(426, 53);
+    glb_wide_set_target(0);
+    glb_set_draw_area(0, 0, FRAME_W - 1, FRAME_H - 1);
+    /* One batch: two lines, a triangle over parts of both, a steep shaded
+     * line over the triangle, and a line into both margins. */
+    glb_draw_line(10, 30, 200, 30, 0x7fff);
+    glb_draw_line(20, 40, 180, 90, 0x03ff);
+    glb_draw_flat_triangle(50, 25, 150, 25, 100, 80, 0x7c00);
+    glb_draw_shaded_line(90, 22, 0x001f, 110, 110, 0x7c1f);
+    glb_draw_line(-40, 60, 360, 70, 0x5ef7);
+    if (scale > 1) {
+        if (s_fb_n != 4 * 6 + 3 || s_fbl_n != (window ? 4 : 0))
+            fprintf(stderr, "batch verts=%d lines=%d\n", s_fb_n, s_fbl_n);
+        check(s_fb_n == 4 * 6 + 3, "lines and the triangle share one flat batch");
+        check(s_fbl_n == (window ? 4 : 0), "a windowed line keeps its GL_LINES vertices");
+    }
+    /* A key change (semi-transparent), then lines around a triangle. */
+    glb_set_semi_transparency(1, 1);
+    glb_draw_line(30, 100, 290, 100, 0x7fff);
+    glb_draw_flat_triangle(200, 50, 300, 60, 250, 115, 0x03e0);
+    glb_draw_line(250, 40, 260, 118, 0x001f);
+    glb_draw_shaded_line(240, 118, 0x7c00, 180, 20, 0x03e0);
+    glb_set_semi_transparency(0, 0);
+    glb_draw_line(300, 140, 400, 150, 0x7fff);
+    glb_draw_flat_triangle(10, 150, 80, 150, 40, 200, 0x5294);
+    glb_draw_line(5, 160, 90, 190, 0x7fff);
+    glb_set_draw_area(0, 0, 1023, 511);
+    gl_renderer_sync_cpu();
+    check(gl_renderer_fbo_peek(0, 0, 1024, 512, peek), "native peek");
+    uint64_t lband = 0xcbf29ce484222325ull;   /* the native frame */
+    for (int y = 0; y < FRAME_H; y++)
+        lband = fnv(&peek[y * 1024], FRAME_W * sizeof peek[0], lband);
+    int fw = FRAME_W * scale, fh = FRAME_H * scale, ow = 0, oh = 0;
+    uint32_t *img = (uint32_t *)malloc((size_t)fw * fh * 4);
+    int n = img ? gl_renderer_read_display_hires(0, 0, FRAME_W, FRAME_H, img, fw * fh, &ow, &oh) : 0;
+    check(n == fw * fh && ow == fw && oh == fh, "hires readback size");
+    uint64_t hires = n ? fnv(img, (size_t)fw * fh * 4, 0xcbf29ce484222325ull) : 0;
+    free(img);
+    uint64_t wide = 0;
+    {
+        int ww = 426 * scale, wh = 512 * scale, gw = 0, gh = 0;
+        uint32_t *wb = (uint32_t *)malloc((size_t)ww * wh * 4);
+        int got = wb ? glb_wide_dump_full(wb, ww * wh, &gw, &gh, 0) : 0;
+        check(got == ww * wh && gw == ww && gh == wh, "wide surface dump size");
+        if (got) wide = fnv(wb, (size_t)ww * wh * 4, 0xcbf29ce484222325ull);
+        free(wb);
+    }
+    check(glGetError() == GL_NO_ERROR, "GL error");
+    printf("lband=%016llx\n", (unsigned long long)lband);
+    printf("hires=%016llx\n", (unsigned long long)hires);
+    printf("wide=%016llx\n", (unsigned long long)wide);
+    printf("checks=%d failures=%d\n", checks, failures);
+    return failures ? 1 : 0;
+}
+
 static int sbs_main(int scale) {
     static uint16_t page[64*64], clut[16], patch[40*6];
     for (int i = 0; i < 64*64; i++) page[i] = (uint16_t)((i * 0x2469u) ^ (i >> 2));
@@ -348,6 +418,12 @@ int main(int argc, char **argv) {
     check(si.effective == scale, "requested scale allocated");
     if (!strcmp(mode, "sbs")) {
         int rc = sbs_main(scale);
+        gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
+        return rc;
+    }
+    if (!strcmp(mode, "lines")) {
+        if (si.windowed) check(si.hr_scale == 1, "window mode engaged");
+        int rc = lines_main(scale, si.windowed);
         gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
         return rc;
     }

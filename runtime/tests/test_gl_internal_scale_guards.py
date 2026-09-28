@@ -74,16 +74,42 @@ class GlScaleGuards(unittest.TestCase):
 
     def test_lines_batch_above_1x(self):
         # Above 1x a line quad joins the flat batch (one draw, one wide mirror
-        # per batch instead of two surface switches per line); 1x, windowed
-        # mode and backdrop-stretched lines keep the immediate path. The
-        # invariance runner's line bands prove the pixels are unchanged.
+        # per batch instead of two surface switches per line), windowed mode
+        # included; 1x and backdrop-stretched lines keep the immediate path.
+        # The invariance runner's line bands and lines runs prove the pixels
+        # are unchanged.
         geo = body(GL, "static void gpu_geometry(")
-        self.assertIn("if (mode == GL_LINES && n == 2 && s_hr_scale > 1 && !s_hiw &&\n"
-                      "        !bd_prim_gate(xs, n, 0)) {", geo)
+        self.assertIn("if (mode == GL_LINES && n == 2 && s_out_scale > 1 && "
+                      "!bd_prim_gate(xs, n, 0)) {", geo)
         batched = geo[geo.index("line_to_quad(lv, quad);"):]
         batched = batched[:batched.index("return;")]
         self.assertIn("s_fb_n += 6;", batched)
         self.assertNotIn("glDrawArrays", batched)
+        # Windowed: the 1x hr surface keeps the line's GL_LINES vertices.
+        self.assertIn("if (s_hiw) {", batched)
+        self.assertIn("s_fbl_at[s_fbl_n] = s_fb_n;", batched)
+
+    def test_windowed_lines_two_vertex_sets(self):
+        # A batch with windowed lines draws on the hr surface (1x in windowed
+        # mode) through flat_batch_draw_hr_lines, lines as GL_LINES from the
+        # copy uploaded after the batch; any other batch keeps its one draw.
+        # The window and the wide surface draw only the batch's nverts
+        # vertices (triangles and line quads). (A GL_LINES batch at 1x, where
+        # one exists, draws with its own mode in both places.)
+        flush = body(GL, "static void flush_flat_batch(void)")
+        self.assertIn("s_fbl_n = 0;", flush)
+        self.assertIn("memcpy(&s_fb[nverts * 6], s_fbl,", flush)
+        self.assertIn("(nverts + 2 * nl) * 6 * sizeof(float)", flush)
+        self.assertRegex(flush, r"if \(nl\) flat_batch_draw_hr_lines\(nverts, nl\);\n"
+                                r"\s*else glDrawArrays\((GL_TRIANGLES|fmode), 0, nverts\);")
+        self.assertIn("hiw_enqueue_geo(s_fb, nverts, semi, mask);", flush)
+        wide = flush[flush.index("wide_target_begin("):]
+        self.assertRegex(wide, r"glDrawArrays\((GL_TRIANGLES|fmode), 0, nverts\);")
+        hr = body(GL, "static void flat_batch_draw_hr_lines(int nverts, int nl)")
+        self.assertIn("glDrawArrays(GL_LINES, nverts + 2 * i, 2 * (j - i));", hr)
+        # Room for the copy: every line takes six batch vertices.
+        self.assertIn("#define FLATBATCH_MAXL (FLATBATCH_MAXV / 6)", GL)
+        self.assertIn("static float s_fb[(FLATBATCH_MAXV + 2 * FLATBATCH_MAXL) * 6];", GL)
 
     def test_main_does_not_cap_gl_at_software_limit(self):
         self.assertNotIn("if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;", MAIN)

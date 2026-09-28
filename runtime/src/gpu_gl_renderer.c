@@ -2668,10 +2668,24 @@ static void flush_tex_batch(void) {
  * GP0(68h) 1x1 dots; each was two immediate gpu_triangle draws (BufferData +
  * DrawArrays each). Coalesce opaque/semi-uniform tris into one draw. */
 #define FLATBATCH_MAXV 8190                 /* multiple of 3 */
-static float s_fb[FLATBATCH_MAXV * 6];
+#define FLATBATCH_MAXL (FLATBATCH_MAXV / 6)   /* line quads the batch can hold */
+/* The batch, then room for its windowed lines' GL_LINES vertices (s_fbl),
+ * which flush_flat_batch uploads right after it. */
+static float s_fb[(FLATBATCH_MAXV + 2 * FLATBATCH_MAXL) * 6];
 static int   s_fb_n = 0;
 static int   s_fb_semi = -2;
 static int   s_fb_mask = -1;
+/* Windowed high-resolution mode (s_hiw): the hr surface is the 1x
+ * authoritative VRAM, where a line stays GL_LINES, while the window and the
+ * wide surfaces draw its one-native-pixel quad. A batched line therefore
+ * carries two vertex sets: its quad in s_fb with the triangles (everything
+ * the S surfaces draw) and its two GL_LINES vertices in s_fbl, s_fbl_at[i]
+ * being the s_fb vertex line i's quad starts at, so the 1x draw
+ * (flat_batch_draw_hr_lines) keeps painter order. Empty outside windowed
+ * mode. */
+static float s_fbl[FLATBATCH_MAXL * 2 * 6];
+static int   s_fbl_at[FLATBATCH_MAXL];
+static int   s_fbl_n = 0;
 
 static int mirror_flat_batch_center_only(int nverts) {
     if (!s_wide_fast || nverts <= 0) return 0;
@@ -2684,10 +2698,28 @@ static int mirror_flat_batch_center_only(int nverts) {
     return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
 }
 
+/* A batch holding windowed lines (nl > 0) on the 1x hr surface, in painter
+ * order as runs: triangles from s_fb, lines as GL_LINES from the s_fbl copy
+ * uploaded after the batch's nverts vertices. */
+static void flat_batch_draw_hr_lines(int nverts, int nl) {
+    glLineWidth((float)s_hr_scale);
+    int pos = 0;
+    for (int i = 0; i < nl;) {
+        int j = i + 1;   /* lines i..j-1 are back to back in the batch */
+        while (j < nl && s_fbl_at[j] == s_fbl_at[j - 1] + 6) j++;
+        if (s_fbl_at[i] > pos) glDrawArrays(GL_TRIANGLES, pos, s_fbl_at[i] - pos);
+        glDrawArrays(GL_LINES, nverts + 2 * i, 2 * (j - i));
+        pos = s_fbl_at[j - 1] + 6;
+        i = j;
+    }
+    if (nverts > pos) glDrawArrays(GL_TRIANGLES, pos, nverts - pos);
+}
+
 static void flush_flat_batch(void) {
     if (s_fb_n == 0) return;
-    int nverts = s_fb_n, semi = s_fb_semi, mask = s_fb_mask;
+    int nverts = s_fb_n, semi = s_fb_semi, mask = s_fb_mask, nl = s_fbl_n;
     s_fb_n = 0;
+    s_fbl_n = 0;
 
     hr_begin(1);
     if (semi >= 0) apply_psx_blend(semi); else glDisable(GL_BLEND);
@@ -2695,9 +2727,11 @@ static void flush_flat_batch(void) {
     p_glUseProgram(s_geo_prog);
     p_glBindVertexArray(s_geo_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
-    p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(nverts * 6 * sizeof(float)),
+    if (nl) memcpy(&s_fb[nverts * 6], s_fbl, (size_t)nl * 2 * 6 * sizeof(float));
+    p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((nverts + 2 * nl) * 6 * sizeof(float)),
                    s_fb, PSXGL_STREAM_DRAW);
-    glDrawArrays(GL_TRIANGLES, 0, nverts);
+    if (nl) flat_batch_draw_hr_lines(nverts, nl);
+    else glDrawArrays(GL_TRIANGLES, 0, nverts);
     if (hiw_on()) hiw_enqueue_geo(s_fb, nverts, semi, mask);
 
     if (g_wide_cur && !s_wide_suppress && s_ws_ablate != 1 &&
@@ -2764,18 +2798,19 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     /* Sub-pixel positions only describe a 3-vertex projected triangle. */
     const int precise = s_pc_valid && mode == GL_TRIANGLES && n == 3;
 
-    /* Above 1x (full-VRAM surface, no window) a line is a quad of two
-     * triangles (line_to_quad), so it joins the flat batch like any gouraud
-     * triangle: same vertices, same program, same painter order and batch
-     * keys, so the same pixels. Drawn one by one, every line flushed the
-     * textured batch and, with native-wide, rebound the hr and wide surfaces
-     * twice; R4 draws hundreds of lines per race frame, and at 9x those
-     * render-pass switches held its 21:9 race to 22-30 frames/s. A line the
-     * backdrop-stretch gate would widen keeps the immediate path (the flat
-     * batch mirrors unstretched). 1x keeps GL_LINES exactly as before, and
-     * the windowed high-resolution mode (hr at 1x) keeps its own path. */
-    if (mode == GL_LINES && n == 2 && s_hr_scale > 1 && !s_hiw &&
-        !bd_prim_gate(xs, n, 0)) {
+    /* Above 1x a line is a quad of two triangles (line_to_quad), so it joins
+     * the flat batch like any gouraud triangle: same vertices, same program,
+     * same painter order and batch keys, so the same pixels. Drawn one by
+     * one, every line flushed the textured batch and, with native-wide,
+     * rebound the hr and wide surfaces twice; R4 draws hundreds of lines per
+     * race frame, and at 9x those render-pass switches held its 21:9 race to
+     * 22-30 frames/s (at 8K in windowed mode, ~10). In windowed mode the 1x
+     * hr surface still draws the line as GL_LINES, from the second vertex
+     * set kept in s_fbl; the window and the wide surfaces take the quad. A
+     * line the backdrop-stretch gate would widen keeps the immediate path
+     * (the flat batch mirrors unstretched). 1x keeps GL_LINES exactly as
+     * before. */
+    if (mode == GL_LINES && n == 2 && s_out_scale > 1 && !bd_prim_gate(xs, n, 0)) {
         float lv[2 * 6], quad[6 * 6];
         float mask_a = s_mask_set ? 1.0f : 0.0f;
         for (int i = 0; i < 2; i++) {
@@ -2793,12 +2828,17 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
             flush_flat_batch();
         s_fb_semi = semi;
         s_fb_mask = (int)s_mask_set;
+        if (s_hiw) {   /* the 1x hr surface draws the line itself */
+            s_fbl_at[s_fbl_n] = s_fb_n;
+            memcpy(&s_fbl[s_fbl_n * 2 * 6], lv, sizeof lv);
+            s_fbl_n++;
+        }
         memcpy(&s_fb[s_fb_n * 6], quad, sizeof quad);
         s_fb_n += 6;
         return;
     }
-    /* Lines at 1x (and in windowed mode) stay immediate; tris batch for MotK
-     * 0x68 starfields. */
+    /* Lines at 1x and backdrop-stretched lines stay immediate; tris batch for
+     * MotK 0x68 starfields. */
     if (mode != GL_TRIANGLES || n < 3) {
         flush_flat_batch();
         float verts[3 * 6];
