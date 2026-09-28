@@ -2764,16 +2764,11 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
         return cached;
     }
 
-    launcher_info((s_picker_game_name + " — game disc image needed").c_str(),
-        "Step 2 of 2 — game disc image\n\n"
-        "In the next window, select your " + s_picker_game_name +
-        (game_id.empty() ? std::string() : " (" + game_id + ")") +
-        " disc image ripped from your own disc.\n\n"
-        "Accepted formats: .cue (preferred, with its .bin next to it), "
-        ".bin, .img, .iso, .car (Steam), or .chd.\n\n"
-        "(This is NOT the BIOS — the BIOS was already chosen.)");
+    // Go straight to the native picker. A preliminary modal was redundant,
+    // visually inconsistent with the picker, and was easy to encounter on
+    // ordinary direct launches with no remembered disc path.
     std::string disc_title =
-        s_picker_game_name + " — Step 2 of 2: select " + s_picker_game_name +
+        "Select " + s_picker_game_name +
         " disc image (.cue / .bin / .img / .iso / .car / .chd)";
     for (;;) {
         std::filesystem::path picked;
