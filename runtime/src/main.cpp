@@ -2427,6 +2427,12 @@ static std::filesystem::path normalize_disc_path_for_launch(const std::filesyste
     return PSXRecompV4::resolve_disc_path(path).mount;
 }
 
+static std::filesystem::path resolve_persisted_disc_path(
+    const std::filesystem::path& path, const std::filesystem::path& exe_dir) {
+    if (path.empty()) return {};
+    return normalize_disc_path_for_launch(PSXRecompV4::host_resolve(exe_dir, path));
+}
+
 /* Which image of a MULTI-DISC set to mount, given the roster this build was
  * made from (game.toml [game] discs), the player's persisted [disc] selected
  * index, and the [disc] path the launcher last wrote.
@@ -2656,7 +2662,7 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
 
     std::filesystem::path cached = read_cached_path(argv0, "disc.cfg");
     if (!cached.empty()) {
-        cached = normalize_disc_path_for_launch(cached);
+        cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0));
     }
     if (!cached.empty() && std::filesystem::exists(cached) &&
         validate_disc_for_launch(cached, game_id)) {
@@ -14514,7 +14520,7 @@ int main(int argc, char** argv) {
             bios_explicit = true;
         }
         if (us.has_disc_path && !disc_override_path)
-            resolved_disc = normalize_disc_path_for_launch(us.disc_path);
+            resolved_disc = resolve_persisted_disc_path(us.disc_path, exe_dir_from_argv(argv[0]));
         /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
          * PRESENT; absent it, [disc] path decides and the index is derived
          * from it.
