@@ -1226,7 +1226,7 @@ static int dsm_write_sync;
  * timelines byte-identical to group a. A channel 0 or 1 kick does advance it
  * (dsm_kick). */
 static void dsm_serve_at(uint64_t now) {
-    if (!(dsm_write_sync && now == psx_cycle_count && now % DSM_QUANTUM)) dsm_mdec_feed(now);
+    dsm_mdec_feed(now);   /* PROBE: the decoder advances at every service point, DMA register writes included */
     for (int i = 0; i < DSM_COUNT; i++) dsm_service(dsm_order[i], now);
     dsm_eval_halt_stall();
 }
