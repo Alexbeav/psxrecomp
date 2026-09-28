@@ -102,7 +102,7 @@ class GlScaleGuards(unittest.TestCase):
         self.assertIn("(nverts + 2 * nl) * 6 * sizeof(float)", flush)
         self.assertRegex(flush, r"if \(nl\) flat_batch_draw_hr_lines\(nverts, nl\);\n"
                                 r"\s*else glDrawArrays\((GL_TRIANGLES|fmode), 0, nverts\);")
-        self.assertIn("hiw_enqueue_geo(s_fb, nverts, semi, mask);", flush)
+        self.assertIn("hiw_enqueue_geo(s_fb, nverts, semi, mask, mirror, 0)", flush)
         wide = flush[flush.index("wide_target_begin("):]
         self.assertRegex(wide, r"glDrawArrays\((GL_TRIANGLES|fmode), 0, nverts\);")
         hr = body(GL, "static void flat_batch_draw_hr_lines(int nverts, int nl)")
@@ -133,7 +133,50 @@ class HiresWindowGuards(unittest.TestCase):
             # an immediate write into the window lands after every queued draw
             self.assertIn("hiw_flush_queue();", body(GL, fn))
         for site in ("flush_tex_batch(void)", "flush_flat_batch(void)"):
-            self.assertIn("if (hiw_on()) hiw_enqueue_", body(GL, "static void " + site))
+            self.assertIn("if (hiw_on() && hiw_enqueue_", body(GL, "static void " + site))
+
+    def test_wide_mirror_queued_in_windowed_mode(self):
+        # Windowed mode: a draw's native-wide mirror rides in its window queue
+        # entry and is replayed in the queue's flush (one pass per wide
+        # surface), not as a surface switch per batch. The immediate mirror
+        # runs only when the entry did not take it.
+        for site, call in (("static void flush_tex_batch(void)",
+                            "if (hiw_on() && hiw_enqueue_tex(nverts, semi, mirror, s_tb_gate)) mirror = 0;"),
+                           ("static void flush_flat_batch(void)",
+                            "if (hiw_on() && hiw_enqueue_geo(s_fb, nverts, semi, mask, mirror, 0)) mirror = 0;"),
+                           ("static void gpu_geometry(", "mirror = 0;")):
+            fn = body(GL, site)
+            self.assertIn(call, fn, site)
+            self.assertLess(fn.index(call), fn.index("if (mirror) {"), site)
+            self.assertIn("wide_target_begin(", fn[fn.index("if (mirror) {"):], site)
+        ok = body(GL, "static int hiw_wide_queue_ok(int mirror)")
+        self.assertIn("return mirror && g_wide_cur && s_ws_ablate == 0;", ok)
+        for fn in ("static int hiw_enqueue_tex(", "static int hiw_enqueue_geo("):
+            b = body(GL, fn)
+            self.assertIn("if (!wq && !hiw_area_touches()) return 0;", b)
+            self.assertIn("if (wq) hiw_wide_set(c, gate);", b)
+        flush = body(GL, "static void hiw_flush_queue(void)")
+        self.assertIn("hiw_replay_wide();", flush)
+        self.assertLess(flush.index("hiw_replay_wide();"), flush.index("hr_end();"))
+        replay = body(GL, "static void hiw_replay_wide(void)")
+        for need in ("if (!c->wfbo) continue;", "p_glBindFramebuffer(PSXGL_FRAMEBUFFER, c->wfbo);",
+                     "glViewport(0, 0, g_wide_w * S, VRAM_H * S);",
+                     "glScissor(0, sy * S, g_wide_w * S, sh * S);",
+                     "p_glUniform1f(s_tex_uXoff, (float)c->wdx);",
+                     "p_glUniform1f(s_geo_uXoff, (float)c->wdx);",
+                     "tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0);",
+                     "mask_stencil_ex(c->mask, c->check);"):
+            self.assertIn(need, replay)
+        # Every other write to a wide surface, and every read of one, lands
+        # after the queued mirrors.
+        overlay = body(GL, "static void gpu_flat_rect(")
+        self.assertLess(overlay.index("hiw_flush_queue();"),
+                        overlay.index("wide_flat_rect_direct(0, y, g_wide_w, h, c, semi);"))
+        for fn in ("static void glb_wide_configure(",
+                   "static void glb_wide_clear(", "static void glb_wide_clear_margins(",
+                   "static int glb_render_wide_display(", "static int glb_wide_dump_full(",
+                   "int gl_renderer_present_wide_fbo(", "static void rebuild_mask_stencils(void)"):
+            self.assertIn("hiw_flush_queue();", body(GL, fn), fn)
 
     def test_queue_syncs_before_the_raw_mirror_changes(self):
         # Queued window draws sample the raw mirror; it must not change under them.

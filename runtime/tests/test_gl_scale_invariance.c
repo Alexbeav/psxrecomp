@@ -28,7 +28,8 @@
  *   - mode "lines" (with or without the window): lines interleaved with
  *     triangles that overlap them, over native-wide. Above 1x they share one
  *     flat batch (checked); in windowed mode each batched line also keeps its
- *     GL_LINES vertices for the 1x authoritative surface. The runner checks
+ *     GL_LINES vertices for the 1x authoritative surface, and the batches'
+ *     native-wide mirrors wait in the window's queue (checked). The runner checks
  *     the window runs' native frame (lband) against the 1x run's, so the 1x
  *     surface draws exactly what 1x draws, in painter order, and their frame
  *     and wide surface at S against the full-VRAM run at the same scale.
@@ -232,6 +233,14 @@ static int lines_main(int scale, int window) {
     glb_draw_flat_triangle(10, 150, 80, 150, 40, 200, 0x5294);
     glb_draw_line(5, 160, 90, 190, 0x7fff);
     glb_set_draw_area(0, 0, 1023, 511);
+    {
+        /* Windowed: the batches' native-wide mirrors wait in the window's
+         * queue (replayed in one pass per surface at the next sync point). */
+        int wq = 0;
+        for (int i = 0; i < s_hq_n; i++) wq += s_hq[i].wfbo != 0;
+        if (window && wq < 3) fprintf(stderr, "queued wide mirrors=%d\n", wq);
+        check(window ? wq >= 3 : s_hq_n == 0, "windowed: native-wide mirrors queued");
+    }
     gl_renderer_sync_cpu();
     check(gl_renderer_fbo_peek(0, 0, 1024, 512, peek), "native peek");
     uint64_t lband = 0xcbf29ce484222325ull;   /* the native frame */
