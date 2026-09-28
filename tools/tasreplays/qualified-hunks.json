@@ -3509,8 +3509,8 @@
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
             " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v14 therefore rejects every earlier state. */",
-            "#define BOOT_STATE_VERSION_MIN_READ 14u"
+            " * runtime's blob to a new loader. v15 therefore rejects every earlier state. */",
+            "#define BOOT_STATE_VERSION_MIN_READ 15u"
           ]
         },
         {
@@ -6870,6 +6870,23 @@
           "dropped_lines": 2,
           "from_blocks": 224,
           "to_blocks": 224
+        },
+        {
+          "as_of": "af6c297d2a86a76d223a10b8a98be6b01c225072",
+          "issue": "PS1B-97/105",
+          "reason": "Evolved-hunk case, narrowed to this entry's own blocks. The BIOS repair raises the snapshot boundary v14 -> v15 (BOOT_STATE_VERSION and BOOT_STATE_VERSION_MIN_READ) and says so in the version-history comment; the pinned block covers the same two facts, so only its two version lines change. No state-capture, resume or checkpoint behaviour is removed. Evidence: the BIOS candidate's gpu_queue_boot_admission receipt (valid full load admitted; invalid count/credit and version 14 rejected with CPU/RAM/GPU/clock unchanged) plus its unit matrix. Behaviour is qualified by the route gates on this head, not by this re-pin.",
+          "detail": "runtime/include/boot_state.h: 'v14 therefore rejects every earlier state. */' -> v15; '#define BOOT_STATE_VERSION_MIN_READ 14u' -> 15u. Two pinned lines changed, none removed.",
+          "dropped_lines": 2,
+          "added_lines": 2,
+          "from_blocks": 224,
+          "to_blocks": 224,
+          "replacement_blocks_added": 1,
+          "replacement_commits": [
+            "1dccf33691b17b1b4e3ad30e96b6d5ab8a06985a",
+            "d2d10537ee52ab5017cbea39f317e5145cf6face",
+            "6d2f8b9f74fa173f87ad648e4fee02402f4dc585"
+          ],
+          "signature": "pending - Claude MANAGER, independent of the BIOS implementation (Alex, 2026-09-28)"
         }
       ],
       "contract_amendments": [
@@ -8522,6 +8539,7 @@
             "        return pst_r_u32(&r, &count) && count <= 32u;",
             "    }",
             "    case BS_SEC_MODMEM: return psx_mod_memory_snapshot_validate(p, len);",
+            "    case BS_SEC_GPU: return gpu_snapshot_validate(p, len);",
             "    case BS_SEC_SPU: return spu_snapshot_validate(p, len);",
             "    case BS_SEC_CDROM: return cdrom_snapshot_validate(p, len);",
             "    case BS_SEC_SIO: return sio_snapshot_validate(p, len);",
@@ -8725,6 +8743,23 @@
             "63386735d",
             "ce8d32e59"
           ]
+        },
+        {
+          "as_of": "af6c297d2a86a76d223a10b8a98be6b01c225072",
+          "issue": "PS1B-97/105",
+          "reason": "Evolved-hunk case, narrowed to this entry's own blocks. The BIOS repair adds GPU-queue validation to the load-admission path - this entry's own subject, 'validate the complete v10 state before mutation' - by routing the new BS_SEC_GPU section through gpu_snapshot_validate inside section_content_ok. No pinned line is removed and the reject-before-mutation contract is unchanged; the receipt shows invalid count, invalid credit and version 14 rejecting with zero mutations.",
+          "detail": "runtime/src/boot_state.c: one line inserted in section_content_ok after the BS_SEC_MODMEM case - 'case BS_SEC_GPU: return gpu_snapshot_validate(p, len);'. Pinned span 44 -> 45 lines, no line removed.",
+          "dropped_lines": 0,
+          "added_lines": 1,
+          "from_blocks": 12,
+          "to_blocks": 12,
+          "replacement_blocks_added": 1,
+          "replacement_commits": [
+            "1dccf33691b17b1b4e3ad30e96b6d5ab8a06985a",
+            "d2d10537ee52ab5017cbea39f317e5145cf6face",
+            "6d2f8b9f74fa173f87ad648e4fee02402f4dc585"
+          ],
+          "signature": "pending - Claude MANAGER, independent of the BIOS implementation (Alex, 2026-09-28)"
         }
       ]
     },
