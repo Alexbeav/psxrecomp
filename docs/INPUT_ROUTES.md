@@ -21,7 +21,8 @@ PSX_INPUT_ROUTE_RECORD=pe-title-to-gameplay.psxrti3 build-diagnostic/Parasite_Ev
 - Play with the keyboard or a controller. P1 is recorded as a digital pad: the
   button word only, no sticks. Recording declares one digital pad on port 1 and
   nothing on the other ports, whatever controllers are plugged in.
-- Press **F11** to drop a MENU marker and **F12** to drop a GAMEPLAY marker.
+- Press **Shift+F11** to drop a MENU marker and **F12** to drop a GAMEPLAY
+  marker. (Plain F11 is the player replay recorder.)
   The marker lands on the next frame boundary. At each marker the recorder
   stores the guest cycle count, the SHA-256 of main RAM and a hash of every
   4 KiB RAM page.

@@ -37,6 +37,9 @@ int input_route_session_record_begin(const char *path);
 /* After the BIOS HLE plan is fixed: compare the admitted identity (replay) or
  * capture it (record). Returns 0 and prints both sides on a mismatch. */
 int input_route_session_verify_identity(int call_hle, int boot_skip);
+/* Hashes and caches the disc digest now; 1 on success. Not thread-safe by
+ * itself: the host serialises it with set_product and identity. */
+int input_route_session_prefetch_disc_digest(void);
 
 /* Debug-server preload of a PSXRTI3 body (diagnostic product). */
 const char *input_route_session_read_v3_digital(FILE *f, InputRouteStep *steps,
@@ -46,6 +49,12 @@ const char *input_route_session_read_v3_dualshock(FILE *f,
                                                   InputDualShockRouteStep *steps,
                                                   uint32_t *step_count,
                                                   uint32_t *frame_count);
+
+/* Identity of this product for a player replay (PS1B-191): pin, disc serial
+ * and digest, BIOS stem and boot mode. The disc digest is hashed on first use
+ * and cached. Returns 0 and a reason when the product has no disc or BIOS. */
+int input_route_session_identity(InputRouteV3 *meta, int call_hle, int boot_skip,
+                                 char *why, size_t why_size);
 
 /* True while a PSXRTI3 route or a recording declares the controller ports:
  * one digital pad on P1, nothing else. Host hotplug must not change them. */
