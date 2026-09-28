@@ -373,6 +373,11 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(host_osd_rec_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_osd_rec_test COMMAND host_osd_rec_test)
 
+    # Fast Loading engage/hold gate (PS1B-241).
+    add_executable(turbo_loads_gate_test tests/test_turbo_loads_gate.c src/turbo_loads_gate.c)
+    target_include_directories(turbo_loads_gate_test PRIVATE include)
+    add_test(NAME turbo_loads_gate_test COMMAND turbo_loads_gate_test)
+
     # Disc digest cache for replay identity (PS1B-191).
     add_executable(disc_digest_cache_test tests/test_disc_digest_cache.c
         src/disc_digest_cache.c src/psx_sha256.c)

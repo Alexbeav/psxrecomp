@@ -122,6 +122,8 @@ int cdrom_load_in_progress(void);
  * bridge used by cdrom_load_in_progress(). Diagnostics only. */
 int cdrom_data_read_active(void);
 void cdrom_debug_read_state(uint32_t out[6]);
+int cdrom_data_load_read_now(void);   /* data sectors now: not XA audio, not CD-DA */
+int cdrom_xa_mode_enabled(void);      /* SetMode bit 6 (XA-ADPCM) */
 
 /* boot_state / netplay digest — full controller FSM (sector FIFOs included). */
 uint32_t cdrom_snapshot_bytes(void);

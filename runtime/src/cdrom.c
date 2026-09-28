@@ -3976,6 +3976,16 @@ int cdrom_data_read_active(void) {
     return reading && !xa_stream_active;
 }
 
+/* Fast Loading inputs (PS1B-241): the drive is delivering data sectors now —
+ * not XA-ADPCM audio (mode bit 6 on or an XA stream decoding) and not CD-DA. */
+int cdrom_data_load_read_now(void) {
+    return reading && !xa_stream_active && !(mode_reg & 0x40) && !cdda_playing;
+}
+
+int cdrom_xa_mode_enabled(void) {
+    return (mode_reg & 0x40) != 0;
+}
+
 /* Diagnostic snapshot of the drive for load-detection traces (PS1B-241):
  * reading, mode register, XA stream active, CD-DA playing, read command,
  * current read LBA. */
