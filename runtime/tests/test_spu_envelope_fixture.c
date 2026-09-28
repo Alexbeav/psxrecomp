@@ -223,6 +223,41 @@ int main(int argc, char **argv)
     unsigned traces2 = 0, rows2 = 0, traces3 = 0, rows3 = 0;
     bad += run_traces(argv[2], &traces2, &rows2);
     bad += run_traces(argv[3], &traces3, &rows3);
+
+    /* PS1B-242: Release with an all-ones rate (shift field 1Fh) never steps.
+     * [DOC] PSX-SPX "Envelope Operation depending on Shift/Step/Mode/Direction":
+     * "Using a step value of all-ones causes the volume to never step, and
+     * additionally never saturate. i.e. 0x7f, or 0x1f for decay/release."
+     * Release shifts 25-31 are beyond fixture E1R (it stops at 24). Case: Bio
+     * Hazard DC voice 0 (ADSR 5FDF80FFh), whose level the game copies to RAM
+     * every frame: Attack to 7FFFh, one Decay step to 7FF7h, Sustain (step 3,
+     * shift 31: all ones) holds, key off, Release (shift 1Fh) must hold 7FF7h
+     * [TAS oracle, Pegasus validation/tas/ps1b-242-bio52878, return 52,878]. */
+    {
+        uint16_t level = 0; uint32_t counter = 0; uint8_t phase = SPU_ENV_ATTACK;
+        const uint16_t lo = 0x80FF, hi = 0x5FDF;
+        for (int i = 0; i < 100000; ++i) spu_env_adsr_tick(&level, &counter, &phase, lo, hi);
+        if (phase != SPU_ENV_SUSTAIN || level != 0x7FF7) {
+            fprintf(stderr, "FAIL Bio voice 0 before key off: phase %u level %04X, want sustain 7FF7\n",
+                    phase, level);
+            ++bad;
+        }
+        phase = SPU_ENV_RELEASE;   /* key off: the level carries over */
+        counter = 0;
+        for (int i = 0; i < 200000; ++i) spu_env_adsr_tick(&level, &counter, &phase, lo, hi);
+        if (level != 0x7FF7 || counter != 0) {
+            fprintf(stderr, "FAIL release rate 1Fh stepped: level %04X counter %u, want 7FF7 and 0\n",
+                    level, (unsigned)counter);
+            ++bad;
+        }
+        /* One below all ones still steps: shift 30, linear, -8 per 8000h ticks. */
+        level = 0x7FF7; counter = 0; phase = SPU_ENV_RELEASE;
+        for (int i = 0; i < 0x8000; ++i) spu_env_adsr_tick(&level, &counter, &phase, lo, 0x5FDE);
+        if (level != 0x7FEF) {
+            fprintf(stderr, "FAIL release rate 1Eh: level %04X after 8000h ticks, want 7FEF\n", level);
+            ++bad;
+        }
+    }
     if (cases != 34 || reads != 30759 || traces != 128 || traces2 != 1114 || rows2 != 53625 ||
         traces3 != 106 || rows3 != 5815 || bad) {
         fprintf(stderr, "FAIL: %u mismatches (E2/E7: %u cases, %u reads, %u traces; E1-E9: %u traces, %u rows)\n",
@@ -235,5 +270,6 @@ int main(int argc, char **argv)
            traces2, rows2);
     printf("SPU release and idle-voice sweep (oracle fixtures E1R, E10): %u traces, %u timed rows match\n",
            traces3, rows3);
+    printf("SPU release rate 1Fh never steps (PSX-SPX all-ones rule; Bio voice 0 holds 7FF7)\n");
     return 0;
 }
