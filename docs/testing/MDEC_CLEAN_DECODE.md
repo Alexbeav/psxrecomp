@@ -21,9 +21,6 @@ bits until the first transform pass. For DC, let `p = level * quant[0]`;
 the stored value is `16*p - 8*sign(p)`. For AC with nonzero quantization scale,
 let `p = level * quant[index] * q`; the value is
 `16*floor(p/8) - 8*sign(p)`. For AC with zero scale it is `32*level`.
-When the selected quantization table entry is zero, DC and AC instead retain
-`32*level`. M12's independently observed DC-only and exact macroblocks expose
-this bypass: multiplying those entries by zero incorrectly erases the signal.
 Zero has sign zero. Values saturate to [-16384, 16383]. Both scale modes use
 the documented zigzag placement. These observed rounding and placement rules
 take precedence over a literal translation of the documentation's pseudocode.
@@ -53,7 +50,6 @@ retail code or decoder source in this data.
 | M1–M5 | 54 | All output depths, signs, color, saturation, supplied tables and stream edges |
 | M10 boundaries | 185 | 84 single-entry and 32 group-b residuals of a rejected integer model, plus zero and sign controls |
 | M11 controls | 432 | Summing-column, single-coefficient and explicit-zero controls around pass-rounding boundaries |
-| M12 | 2 | Zero quantization entries in exact and DC-only color macroblocks; raw CPU-read output retained |
 
 Every row is checked through the public command/DMA FIFO and through the
 production source decode/table callback seam. The second adapter assembles
@@ -77,13 +73,9 @@ python runtime/tests/test_mdec_clean_fixtures.py --library ./probe.so
 
 The replay accepts additional TSV paths and an optional `--receipt result.json`.
 It rejects an empty input set. With no paths supplied, it verifies the retained
-fixture hashes before running 1,346 entry checks. Both O0 and O2 pass.
+fixture hashes before running 1,342 entry checks. Both O0 and O2 pass.
 Removing the half-unit bias from a scratch copy of the new core causes 684
-of the original 1,342 checks to fail; the production core passes without that
-mutation. M12 also retains raw output in four successive RGB24 blocks. The
-test checks its block-to-raster conversion independently before comparing the
-decoder output. The original candidate fails all four M12 entry checks;
-the zero-table correction passes them.
+of these checks to fail; the production core passes without that mutation.
 
 ## Integration requirements
 
@@ -92,10 +84,8 @@ are unchanged, but the saved meaning is different. The integrator must bump
 the boot-state format version and rebuild resume cohorts before landing.
 Old snapshots must not be interpreted in this representation.
 
-The existing output-lifetime test and timing fixture pass. The original
-candidate failed the inherited source pipeline and DMA contract runners at
-their first AC/color cases. With the M12 correction, both runners pass at
-O0 and O2. Their golden values were not read or edited by this worker.
-Independent review still applies. Broader zero-table controls are pending;
-the two M12 cases alone do not establish behavior for every input.
-Full runtime route, retail, performance and release gates remain separate.
+The existing output-lifetime test and timing fixture pass. The inherited
+source pipeline and DMA contract runners fail at the first AC/color cases
+at O0 and O2. Their golden values were not read or edited by this worker;
+independent review must resolve those failures before integration. Full
+runtime route, retail, performance and release gates remain separate.

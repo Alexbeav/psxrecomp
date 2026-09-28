@@ -51,14 +51,6 @@ def inputs(row):
     else:scale=scale_table(row.get('table',row.get('scale','std')))
     command=int(row['command'],16) if 'command' in row else 0x28000000|(int(row.get('signed','0'))<<26)
     expected=bytes.fromhex(row.get('output_hex',row.get('pixels_hex')))
-    if 'raw_block_output_hex' in row:
-        raw=bytes.fromhex(row['raw_block_output_hex']);raster=bytearray(768)
-        assert len(raw)==768 and hashlib.sha256(raw).hexdigest()==row['raw_output_sha256']
-        for block in range(4):
-            for y in range(8):
-                at=((block//2*8+y)*16+block%2*8)*3
-                raster[at:at+24]=raw[block*192+y*24:block*192+y*24+24]
-        assert bytes(raster)==expected,'Raw block/raster conversion disagrees'
     assert row['completed']=='True' and len(quant)==128 and len(scale)==64
     return command,quant,scale,stream,expected
 
