@@ -7328,6 +7328,12 @@ extern "C" int replay_host_can_record(char *why, size_t cap) {
  * playback does not stall a frame; this mutex keeps the product identity and
  * the digest cache consistent between that thread and the frame path. */
 static std::mutex s_replay_identity_mutex;
+static std::thread s_replay_digest_thread;
+static void replay_digest_thread_join(void) {
+    disc_digest_cache_cancel(1);
+    if (s_replay_digest_thread.joinable())
+        s_replay_digest_thread.join();
+}
 extern "C" int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap) {
     std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
     return input_route_session_identity(meta, psx_bios_hle_enabled(),
@@ -8091,9 +8097,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         (cdrom_load_in_progress() || cdrom_savestate_cd_wait_active());
     int load_run_value = 0;
     static TurboLoadsGate s_turbo_gate;
-    if (g_turbo_loads_enabled && !psx_netplay_active() &&
-        !psx_selfcheck_resim_active()) {
+    if (turbo_loads_gate_allowed(g_turbo_loads_enabled, psx_netplay_active(),
+                                 psx_selfcheck_resim_active(),
+                                 input_route_session_owns_ports())) {
         /* PS1B-241: engage only for sustained data loads (turbo_loads_gate.h).
+         * An armed input route never runs Fast Loading, whatever the mods say.
          * The old rule engaged on any read held for 4 vblanks plus the 30-vblank
          * burst tail, so RE3's short in-play reads ran 4x with 1-in-30 presents.
          * XA-ADPCM streaming, CD-DA and FMV (24-bit display) never count.
@@ -16291,10 +16299,19 @@ session_reboot:
     /* Hash the disc for replays in the background (see replay_host_identity).
      * Skipped when an input route is armed: that path uses the digest at boot. */
     if (!std::getenv("PSX_INPUT_ROUTE_FILE") && !std::getenv("PSX_INPUT_ROUTE_RECORD")) {
-        std::thread([] {
+        /* Joined at exit (after cancelling the hash) so shutdown never races
+         * it; a session reboot waits for the previous one first. */
+        static bool join_registered = false;
+        if (s_replay_digest_thread.joinable())
+            s_replay_digest_thread.join();
+        s_replay_digest_thread = std::thread([] {
             std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
             input_route_session_prefetch_disc_digest();
-        }).detach();
+        });
+        if (!join_registered) {
+            std::atexit(replay_digest_thread_join);
+            join_registered = true;
+        }
     }
     /* A recording in progress is written from its last boundary at exit.
      * Registered once: this path runs again on every session reboot. */

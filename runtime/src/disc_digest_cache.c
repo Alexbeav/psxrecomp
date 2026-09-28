@@ -11,6 +11,13 @@
 
 static char s_cache_path[CACHE_PATH_BYTES];
 
+static volatile int s_cancel;   /* set from the shutdown thread; read per chunk */
+
+void disc_digest_cache_cancel(int cancel)
+{
+    s_cancel = cancel ? 1 : 0;
+}
+
 void disc_digest_cache_set_path(const char *cache_file)
 {
     snprintf(s_cache_path, sizeof s_cache_path, "%s", cache_file ? cache_file : "");
@@ -41,10 +48,10 @@ static int sha256_file(const char *path, uint8_t out[32])
     buffer = (unsigned char *)malloc(CHUNK);
     if (!buffer) { fclose(f); return 0; }
     psx_sha256_init(&ctx);
-    while ((n = fread(buffer, 1, CHUNK, f)) > 0) psx_sha256_update(&ctx, buffer, n);
+    while (!s_cancel && (n = fread(buffer, 1, CHUNK, f)) > 0) psx_sha256_update(&ctx, buffer, n);
     n = (size_t)ferror(f);
     free(buffer);
-    if (fclose(f) || n) return 0;
+    if (fclose(f) || n || s_cancel) return 0;
     psx_sha256_final(&ctx, out);
     return 1;
 }
@@ -125,6 +132,11 @@ static int cache_lookup(const char *path, unsigned long long size, long long mti
     }
     fclose(f);
     return found;
+}
+
+int disc_digest_full_sha256(const char *path, uint8_t out[32])
+{
+    return path && path[0] && sha256_file(path, out);
 }
 
 int disc_digest_cache_sha256(const char *path, uint8_t out[32])

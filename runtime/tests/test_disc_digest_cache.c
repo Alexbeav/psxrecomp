@@ -79,6 +79,23 @@ int main(int argc, char **argv) {
     CHECK(!strcmp(h, "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589"),
           "a changed file is hashed, not taken from the cache");
 
+    /* Cancelled (shutdown): hashing fails and writes no cache line. */
+    {
+        char other[600];
+        snprintf(other, sizeof other, "%s/digest_cache_other.bin", dir);
+        write_file(other, "cancel me");
+        disc_digest_cache_cancel(1);
+        CHECK(!disc_digest_cache_sha256(other, d), "a cancelled hash fails");
+        disc_digest_cache_cancel(0);
+        f = fopen(cache, "rb");
+        n = f ? fread(text, 1, sizeof text - 1, f) : 0;
+        if (f) fclose(f);
+        text[n] = 0;
+        CHECK(strstr(text, "digest_cache_other.bin") == NULL, "a cancelled hash writes no cache line");
+        CHECK(disc_digest_cache_sha256(other, d), "hashing works again after cancel(0)");
+        remove(other);
+    }
+
     /* Without a cache path the file is always hashed. */
     disc_digest_cache_set_path("");
     write_file(disc, "abc");

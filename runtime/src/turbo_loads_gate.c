@@ -10,6 +10,11 @@ void turbo_loads_gate_reset(TurboLoadsGate *g)
     g->release = 0;
 }
 
+int turbo_loads_gate_allowed(int mod_enabled, int netplay, int selfcheck_resim, int input_route_armed)
+{
+    return mod_enabled && !netplay && !selfcheck_resim && !input_route_armed;
+}
+
 int turbo_loads_gate_window_reads(const TurboLoadsGate *g)
 {
     int n = 0;

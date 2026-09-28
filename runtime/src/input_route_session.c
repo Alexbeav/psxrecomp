@@ -38,6 +38,10 @@ static char s_product_bios_stem[INPUT_ROUTE_V3_TEXT];
 static int s_digest_cached;
 static uint32_t s_digest_kind;
 static uint8_t s_digest[32];
+/* Player-replay digest, which may come from the persistent file cache. */
+static int s_replay_digest_cached;
+static uint32_t s_replay_digest_kind;
+static uint8_t s_replay_digest[32];
 
 /* Armed state shared by replay and record. */
 static int s_active;         /* markers to check, or recording */
@@ -96,6 +100,7 @@ void input_route_session_set_product(const char *disc_serial,
     copy_text(s_product_serial, sizeof(s_product_serial), disc_serial);
     copy_text(s_product_disc, sizeof(s_product_disc), disc_path);
     s_digest_cached = 0;
+    s_replay_digest_cached = 0;
     for (const char *p = base; *p; ++p)
         if (*p == '/' || *p == '\\') base = p + 1;
     dot = strrchr(base, '.');
@@ -150,12 +155,17 @@ static int cue_file_line(const char *line, char *name, size_t size)
     return *p ? -1 : 1;
 }
 
-static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32]);
+static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32], int use_file_cache);
+
+/* Route evidence (PSXRTI3 identity) always hashes the whole disc. Player
+ * replays may use the persistent per-file cache (disc_digest_cache.h), which
+ * trusts path, size, mtime and a head/tail spot hash. A full hash taken in
+ * this process serves both (the s_replay_digest* cache is declared above). */
 
 static const char *disc_digest(uint32_t *kind, uint8_t out[32])
 {
     if (!s_digest_cached) {
-        const char *error = disc_digest_uncached(&s_digest_kind, s_digest);
+        const char *error = disc_digest_uncached(&s_digest_kind, s_digest, 0);
         if (error) return error;
         s_digest_cached = 1;
     }
@@ -164,19 +174,34 @@ static const char *disc_digest(uint32_t *kind, uint8_t out[32])
     return NULL;
 }
 
+static const char *replay_disc_digest(uint32_t *kind, uint8_t out[32])
+{
+    if (s_digest_cached) return disc_digest(kind, out);
+    if (!s_replay_digest_cached) {
+        const char *error = disc_digest_uncached(&s_replay_digest_kind, s_replay_digest, 1);
+        if (error) return error;
+        s_replay_digest_cached = 1;
+    }
+    *kind = s_replay_digest_kind;
+    memcpy(out, s_replay_digest, 32);
+    return NULL;
+}
+
 int input_route_session_prefetch_disc_digest(void)
 {
     uint32_t kind;
     uint8_t digest[32];
-    return disc_digest(&kind, digest) == NULL;
+    return replay_disc_digest(&kind, digest) == NULL;
 }
 
-static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32])
+static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32], int use_file_cache)
 {
+    int (*sha256_file)(const char *, uint8_t[32]) =
+        use_file_cache ? disc_digest_cache_sha256 : disc_digest_full_sha256;
     uint8_t digest[32];
     char text[65];
     if (!s_product_disc[0]) return "no disc is mounted";
-    if (!disc_digest_cache_sha256(s_product_disc, digest)) return "cannot read the disc image";
+    if (!sha256_file(s_product_disc, digest)) return "cannot read the disc image";
     if (!ends_with_ci(s_product_disc, ".cue")) {
         *kind = INPUT_ROUTE_DISC_DIGEST_FILE;
         memcpy(out, digest, 32);
@@ -218,7 +243,7 @@ static const char *disc_digest_uncached(uint32_t *kind, uint8_t out[32])
             else {
                 memcpy(track, dir, dir_len);
                 strcpy(track + dir_len, name);
-                if (!disc_digest_cache_sha256(track, digest)) error = "cannot read a cue track";
+                if (!sha256_file(track, digest)) error = "cannot read a cue track";
                 else {
                     hex(digest, 32, text);
                     psx_sha256_update(&ctx, (const uint8_t *)"\n", 1);
@@ -540,7 +565,7 @@ int input_route_session_identity(InputRouteV3 *meta, int call_hle, int boot_skip
     if (!s_product_serial[0] || !s_product_bios_stem[0])
         error = "a disc with a boot serial and a BIOS file are required";
     else
-        error = disc_digest(&kind, digest);
+        error = replay_disc_digest(&kind, digest);   /* player replays only */
     if (error) { snprintf(why, why_size, "%s", error); return 0; }
     meta->has_identity = 1;
     /* A product built outside a git checkout has no pin; replays still carry

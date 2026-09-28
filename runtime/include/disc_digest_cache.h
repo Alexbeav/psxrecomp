@@ -18,8 +18,15 @@ extern "C" {
 
 /* The cache file; NULL or "" hashes every time without a cache. */
 void disc_digest_cache_set_path(const char *cache_file);
-/* 1 and the digest in out, or 0 when the file cannot be read. */
+/* 1 stops any hash in progress (checked per 1 MiB) and makes later hashes
+ * fail without touching the cache; 0 re-enables. For a clean shutdown of a
+ * background prefetch. */
+void disc_digest_cache_cancel(int cancel);
+/* 1 and the digest in out, or 0 when the file cannot be read or hashing was
+ * cancelled. */
 int disc_digest_cache_sha256(const char *path, uint8_t out[32]);
+/* The whole file, never the cache: for evidence (input-route identity). */
+int disc_digest_full_sha256(const char *path, uint8_t out[32]);
 
 #ifdef __cplusplus
 }

@@ -85,6 +85,12 @@ int main(void) {
         on = turbo_loads_gate_step(&g, 1, 0, 6);
         CHECK(!on, "one read after release does not re-engage");
     }
+    /* Who may run Fast Loading at all. */
+    CHECK(turbo_loads_gate_allowed(1, 0, 0, 0), "mod on, nothing else: allowed");
+    CHECK(!turbo_loads_gate_allowed(0, 0, 0, 0), "mod off: not allowed");
+    CHECK(!turbo_loads_gate_allowed(1, 1, 0, 0), "netplay: not allowed");
+    CHECK(!turbo_loads_gate_allowed(1, 0, 1, 0), "selfcheck resim: not allowed");
+    CHECK(!turbo_loads_gate_allowed(1, 0, 0, 1), "an armed input route: not allowed");
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     puts("PASS: fast loading gate");
     return 0;

@@ -33,6 +33,11 @@ void turbo_loads_gate_reset(TurboLoadsGate *g);
  * audio, not CD-DA). load_hold: the drive's load-in-progress tail (burst gap)
  * outside XA streaming. Returns 1 while Fast Loading should run. */
 int turbo_loads_gate_step(TurboLoadsGate *g, int data_read, int load_hold, int release_frames);
+/* Whether Fast Loading may run at all this vblank: the mod is on, and no
+ * netplay, selfcheck resimulation or armed input route (a route's timing must
+ * not depend on the mod state). */
+int turbo_loads_gate_allowed(int mod_enabled, int netplay, int selfcheck_resim, int input_route_armed);
+
 /* Data-read vblanks in the current window (for load telemetry). */
 int turbo_loads_gate_window_reads(const TurboLoadsGate *g);
 
