@@ -710,6 +710,11 @@ if(BUILD_TESTING)
     add_test(NAME overlay_store_pc_forwarding_test
              COMMAND overlay_store_pc_forwarding_test)
 
+    # frame_fingerprint judge columns are blind to device-write service order.
+    add_executable(frame_fingerprint_test tests/test_frame_fingerprint.c)
+    target_include_directories(frame_fingerprint_test PRIVATE include)
+    add_test(NAME frame_fingerprint_test COMMAND frame_fingerprint_test)
+
     add_executable(psx_cycle_event_boundaries_test
         tests/test_psx_cycle_event_boundaries.c
         src/psx_cycles.c)

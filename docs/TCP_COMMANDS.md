@@ -181,6 +181,61 @@ re-dispatches the guest's true target. Counters in
 
 ---
 
+## `frame_fingerprint` — per-frame guest-write fingerprint (native only)
+
+Cumulative write hashes, snapshotted at every VBlank into a 32768-frame ring
+(`runtime/include/frame_fingerprint.h`). Diff two runs of the same seeded
+input, such as native overlay shards against the interpreter or two builds, to
+find the first frame where guest behaviour forks. Then arm
+`record_frame` on that frame in both runs and compare the two ordered logs.
+
+- `{"cmd":"frame_fingerprint","count":1024,"frame_lo":N,"frame_hi":M}`: all
+  parameters are optional. Entries come back oldest first.
+
+| Column | Role | Covers |
+|---|---|---|
+| `cyc` | judge | guest cycle counter at the snapshot |
+| `wc`, `ws` | judge | main-RAM write count, and an order-independent sum over `(addr, value)` |
+| `mmio`, `mc` | judge | device-register writes: ordered hash over `(addr, value, store PC)`, and a count |
+| `sp`, `sc` | judge | scratchpad writes: ordered hash over `(addr, value, store PC)`, and a count |
+| `qc` | judge | writes that FMV-quiet kept out of every other column |
+| `wr`, `pc` | locator | main-RAM writes: ordered hash over `(addr, value)`, and an ordered hash over store PCs |
+
+**Judge on the judge columns.** Two runs that behaved the same agree on all of
+them at every frame. `wr` and `pc` can differ even when guest state is
+identical. DMA and device writes to RAM (MDEC-out, CD, SPU, GPU→RAM) are
+recorded in the order the host services the device. A native shard flushes
+cycles at every store barrier, but batched interpreted and static code
+services the device after the block. As a result, the same writes can
+interleave differently with CPU stores. A device write also takes whatever
+CPU store PC came last. Use `wr` and `pc` only to narrow down a fork once a
+judge column has found it.
+
+**Store PCs are exact on every backend.** Static code and the interpreter set
+`g_debug_last_store_pc` themselves. Native overlay shards write the runtime's
+copy through the ABI v24 `last_store_pc` pointer. Before v24, shards kept a
+private copy, so `pc`, `mmio` and `sp` named an older store for every overlay
+store.
+
+**One-frame straddles are not divergences.** Batched code services devices up
+to a basic block late. So a device write due at, for example, VBlank + 1 cycle
+can land on the other side of the snapshot in one run. `ws` and `wc` then
+differ for that single frame, with `wc` off by the number of straddled writes,
+and agree again at the next one. In a 12000-frame R4 A/B of native shards
+against the interpreter, 497 frames straddled by exactly one write, and every
+one re-converged on the next frame.
+
+**Turn FMV-quiet off for identity runs.** `PSX_DEBUG_FMV_QUIET` is on unless it
+is set to `0`. While the MDEC has decoded recently, it stops write recording,
+and those frames' writes add only to `qc`. If a straddled write falls into a
+quiet frame in one run and not the other, `ws`, `wc` and `qc` never agree
+again. `wc + qc` still agrees, which tells this case apart from a real fork.
+For A/B identity, set `PSX_DEBUG_FMV_QUIET=0` in both runs.
+
+`ws` is a multiset sum. It cannot see two writes to one address arriving in
+the opposite order, even though the final RAM differs. Such a fork shows up in
+later writes, `cyc`, or `read_ram`.
+
 ## `bios_info` — linked recompiled-BIOS identity (native only)
 
 Reports which BIOS image this build's recompiled C was generated from
@@ -338,7 +393,7 @@ The TCP server is the canonical instrumentation surface. Rule 3 in `CLAUDE.md` i
 
 **316 commands registered** — 303 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-54 of 316 have prose above; **262 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+55 of 316 have prose above; **261 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -451,7 +506,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `fntrace_reset` |  | ✓ |  |
 | `fntrace_unfiltered` |  | ✓ |  |
 | `frame` | ✓ |  | ✓ |
-| `frame_fingerprint` | ✓ |  |  |
+| `frame_fingerprint` | ✓ |  | ✓ |
 | `frame_perf` | ✓ |  |  |
 | `frame_range` | ✓ | ✓ | ✓ |
 | `frame_timeseries` | ✓ | ✓ | ✓ |
