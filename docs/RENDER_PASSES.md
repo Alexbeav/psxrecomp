@@ -26,6 +26,14 @@ the game has finished the logic of tick n+1 but the display still has to
 flip to frame n. For a PsyQ double-buffered loop that is the entry of the
 `VSync(0)` that precedes `PutDispEnv`.
 
+Register that hook with `psx_mod_register_function_entry_plugin()` under the
+plugin's manifest `[[plugin]]` id (see [MOD_PACKAGES.md](MOD_PACKAGES.md)):
+it then runs only while the resolved mod plan activates the plugin, so never
+while the package is disabled or in netplay. Register once, for example from
+the plugin's constructor; a repeated id and address returns 0. Entry hooks
+also fire for the guest functions a pass itself calls, the plugin's own
+included, so a hook that plans passes must ignore entries made inside one.
+
 1. `psx_mod_render_pass_plan(P, D, a, max)` returns the phases (Q16, in
    (0, 1)) at which the presenter will show frame n: its output deadlines
    during the P VBlanks the frame stays on screen, starting after D more
