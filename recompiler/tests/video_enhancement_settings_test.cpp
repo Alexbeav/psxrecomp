@@ -258,8 +258,11 @@ static void test_internal_resolution_settings() {
         out.has_supersampling = true;       out.supersampling = 4;
         p = fs::temp_directory_path() / "psxrecomp_ir_roundtrip.toml";
         check(PSXRecompV4::save_user_settings(p, out), "save_user_settings writes");
-        std::ifstream f(p);
-        std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::string text;
+        {   // closed before fs::remove: Windows cannot delete an open file
+            std::ifstream f(p);
+            text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        }
         if (ids[i])
             check(text.find(std::string("internal_resolution = \"") + ids[i] + "\"") != std::string::npos,
                   "a preset is persisted by its stable id");
