@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guard PSX display enhancements as trusted-mod-only features."""
 
+import re
 from pathlib import Path
 
 
@@ -47,29 +48,91 @@ assert MAIN.index("g_auto_skip_fmv = 0;") < MAIN.index("mod_runtime_activate_plu
 # netplay match; it jumps past the first-boot block, so the reset runs on both
 # paths. The reachable leak is the netplay local viewport's Fit/aspect into an
 # offline rematch; the rest of the list is defensive. The first-call capture
-# itself is exercised by mod_session_baseline_test (behavioural); this guard
-# pins main.cpp to that helper and to the call sites.
-helper_start = MAIN.index("static void reset_mod_owned_presentation(void) {")
+# itself is exercised by mod_session_baseline_test (behavioural), which cannot
+# see main.cpp; this guard pins main.cpp's glue to that helper (the baseline it
+# passes, the native-pacing flag as the helper reads it, the copy in and out)
+# and to the call sites.
+HELPER_SIG = "static void reset_mod_owned_presentation(void) {"
+helper_start = MAIN.index(HELPER_SIG)
 helper = MAIN[helper_start:MAIN.index("\n}\n", helper_start)]
 assert '#include "mod_session_baseline.h"' in MAIN
-assert "psx_mod_session_baseline_apply(" in helper, \
-    "reset must go through the tested first-call capture helper"
+
+
+def c_statements(block):
+    """Comment-free, whitespace-normalised statements of straight-line C."""
+    block = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+    block = re.sub(r"//[^\n]*", "", block)
+    return [" ".join(part.split()) + ";" for part in block.split(";") if part.strip()]
+
+
+# The baseline must outlive a session: one file-scope static that only the
+# helper's call touches. A local or re-zeroed baseline makes every call a first
+# call, so a rematch would restore nothing and skip the later-call resets.
+assert re.findall(r"^static PSXModSessionBaseline g_mod_owned_baseline;$",
+                  MAIN, re.M) == ["static PSXModSessionBaseline g_mod_owned_baseline;"], \
+    "the session baseline must be one file-scope static"
+assert MAIN.index("static PSXModSessionBaseline g_mod_owned_baseline;") < helper_start
+assert MAIN.count("PSXModSessionBaseline") == 1, \
+    "no other session baseline may exist (every call would be a first call)"
+assert MAIN.count("g_mod_owned_baseline") == 2, \
+    "only reset_mod_owned_presentation() may use the session baseline"
+
+# The call: the persistent baseline, and the native-pacing flag as it stands
+# (a plugin's psx_mod_set_native_vblank_rate owns the frame periods only then).
+CALL = "const int first = psx_mod_session_baseline_apply("
+assert helper.count("psx_mod_session_baseline_apply(") == 1, \
+    "reset must go through the tested first-call capture helper, once"
+call_at = helper.index(CALL)
+call_end = helper.index(";", call_at) + 1
+assert "".join(helper[call_at:call_end].split()) == (
+    "constintfirst=psx_mod_session_baseline_apply("
+    "&g_mod_owned_baseline,&live,g_mod_native_vblank_rate?1:0);"
+), "the helper must get the persistent baseline and the live native-pacing flag"
+
+# Before the call: only the copy-in, so nothing (such as clearing the native
+# pacing flag) can change what the helper sees.
+COPIES = (
+    ("video_vsync", "g_video_vsync"),
+    ("frame_interpolation", "g_frame_interpolation"),
+    ("frame_interpolation_fps", "g_frame_interpolation_fps"),
+    ("auto_skip_fmv", "g_auto_skip_fmv"),
+    ("guest_frame_period_ms", "g_guest_frame_period_ms"),
+    ("frame_period_ms", "g_frame_period_ms"),
+)
+before = c_statements(helper[len(HELPER_SIG):call_at])
+expected = ["PSXModSessionScalars live;"] + [f"live.{f} = {g};" for f, g in COPIES]
+assert sorted(before) == sorted(expected), \
+    f"only the scalar copy-in may precede the baseline call, got {before}"
+
+# After the call: the copy-out, each once, then the native-pacing flag cleared.
+after = helper[call_end:]
+for field, name in COPIES:
+    assert helper.count(f"{name} = live.{field};") == 1 and \
+        f"{name} = live.{field};" in after, f"copy-out missing: {name}"
+assert helper.count("g_mod_native_vblank_rate") == 2 and \
+    "g_mod_native_vblank_rate = false;" in after, \
+    "native pacing must be read by the call and cleared only after it"
+
+# Every call: back to the initial value (checked against the file-scope
+# initialiser where it is a literal).
 for reset in (
-    "g_video_vsync = live.video_vsync;",
-    "g_frame_interpolation = live.frame_interpolation;",
-    "g_frame_interpolation_fps = live.frame_interpolation_fps;",
-    "g_auto_skip_fmv = live.auto_skip_fmv;",
-    "g_guest_frame_period_ms = live.guest_frame_period_ms;",
-    "g_frame_period_ms = live.frame_period_ms;",
     "g_mod_native_vblank_rate = false;",
+    "g_mod_native_vblank_fps = 0;",
     "g_ws_adaptive_view = false;",
+    "g_ws_adaptive_max_num = 16;",
+    "g_ws_adaptive_max_den = 9;",
     "psx_mod_set_world_scene_predicate(nullptr);",
     "psx_mod_set_retained_scene_predicate(nullptr);",
     "psx_mod_set_adaptive_backdrop_preload(0);",
     "g_bezel_path.clear();",
     "g_frame_interpolation_blend = g_frame_interpolation_blend_default;",
 ):
-    assert reset in helper, f"mod-owned session reset is missing: {reset}"
+    assert reset in after, f"mod-owned session reset is missing: {reset}"
+    literal = re.fullmatch(r"(g_\w+) = (false|true|\d+);", reset)
+    if literal:
+        name, value = literal.groups()
+        assert re.search(rf"^static\s+\w+\s+{name} = {value};", MAIN, re.M), \
+            f"{reset} must match the file-scope initialiser"
 
 # Later calls only (the first call changes nothing that is not already at its
 # initial value): the 8 MiB RAM request, which memory_init() re-latches at
