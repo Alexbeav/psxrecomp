@@ -12,7 +12,9 @@ starting from a fresh clone of the official Beetle repository:
 - `ping` answers `backend=beetle`, and `guest_cycles` advances about 565,050
   cycles per frame (33.8688 MHz at 59.94 Hz is 565,045);
 - ruler #2 (`tools/cycle_testrom`) reproduces the oracle values recorded in
-  `internal/FAITHFUL_TIMING_PLAN.md`, `icache_miss +14` included (see step 6).
+  `internal/FAITHFUL_TIMING_PLAN.md` on all 13 loops of the 13-loop ROM
+  (`icache_miss +14`) and on all 15 loops of the current ROM, where
+  `icache_miss` reads +16 (see step 6).
 
 The Linux recipe is in `beetle-linux.md`. The Beetle side of both is the same
 patch set.

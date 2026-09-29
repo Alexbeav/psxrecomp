@@ -896,6 +896,10 @@ on a fixed region -> next.
   rebuild runtime/cyctest. New ruler #2 loops `mmio_timer` (Timer0 read → +3 = 1 dev + 2 compl)
   and `mmio_spu` (32-bit SPU read → +38 = 36 + 2). VALIDATED: cyctest COMPILED (4600) == Beetle
   (4382) EXACT on ALL 15 loops incl. mmio_timer +3 / mmio_spu +38; the 13 prior loops unchanged.
+  (Correction, 2026-09-29: except `icache_miss`, which reads +16 on this 15-loop ROM on both
+  backends, not +14. The two new loops sit before it and move its loop top from 0x80010144 to
+  0x80010170, a different offset in its cache line, so each of its two misses costs one cycle
+  more. Re-measured against live psx-beetle; see tools/cycle_testrom/README.md.)
   Tomba 2 boots past the BIOS to its "SCEA Presents" intro splash, total_checks advancing, no
   freeze (the faster-MMIO change did not trigger a device-timing cascade like load=4 did).
   RESIDUAL (documented, unmodeled dynamic axis): DMACycleSteal — Beetle adds the live DMA
