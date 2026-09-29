@@ -213,6 +213,20 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-29 (segment-aware code — rebased on master, first Beetle run of the probe):**
+  #417, #418 and #420 merged; the design branch (#419) is rebased onto master and
+  docs/SEGMENT_AWARE_CODE.md now records PR A (#429) and its passed LLE land gate
+  (shell entry −126 OpenBIOS / −454 SCPH-1001; residue = the IsC gap and SCPH-1001's
+  KSEG1 kernel entry `0xA0000500`, −9, which PR D closes). The synthetic EXE ran in
+  psx-beetle on macOS (recipe #431). Disc boot works on OpenBIOS and SCPH-1001;
+  sideloading does not, because Beetle's loader forces a KSEG0 start. Links
+  `0x00010018/24/38` and the three segment probes came back as designed. The T2 deltas
+  were garbage: the subtraction sat in the load delay slot, unmasked. Fixed (`nop`,
+  `andi 0xFFFF`), and the call sites and `probe_run` are line-aligned. Beetle now
+  reads 56/56/82 cycles for KUSEG/KSEG0/KSEG1 on both BIOSes, a 26-cycle KSEG1
+  surcharge equal to the fetch model's. Ledger unchanged (11 ids); cited source lines
+  refreshed for current master. No behaviour change.
+
 - **2026-09-29 (uncached KSEG1 fetch charged per instruction, both emitters):**
   Beetle ReadInstruction never fills a line for a fetch at 0xA0000000 or above:
   each one costs +4 and clears the load give-back. The interp fetches at every PC,
