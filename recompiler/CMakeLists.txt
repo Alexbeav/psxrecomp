@@ -731,6 +731,7 @@ if(BUILD_TESTING)
                 cursor_writers
                 disc_companion
                 duckstation_oracle
+                fp_identity
                 gpu_frame
                 menu_scan
                 mips_tagged_relocations

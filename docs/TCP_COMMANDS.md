@@ -236,6 +236,35 @@ For A/B identity, set `PSX_DEBUG_FMV_QUIET=0` in both runs.
 the opposite order, even though the final RAM differs. Such a fork shows up in
 later writes, `cyc`, or `read_ram`.
 
+### A/B identity with `tools/fp_identity.py`
+
+`tools/fp_identity.py` applies these rules to two seeded runs of any title.
+`run` starts the runtime from a command template or from `--runtime`,
+`--game` and `--disc`. It turbos with no input to frame N and saves this ring
+and the dispatch-miss count. It sets `PSX_DEBUG_FMV_QUIET=0` and
+`PSX_OVERLAY_AUTOCOMPILE_OFF=1` unless told otherwise. `--seed` installs a
+saved overlay state first, so a run can start from a warm or a cold cache.
+`compare` judges the two runs on the judge columns and reports `wr` and `pc`
+only as the frame where the runs part. It tolerates the one-write straddle
+above, and the `wc + qc` shift when FMV-quiet was on. Every tolerated frame is
+counted and listed, and `--strict` disables both tolerances. It exits
+`0` IDENTICAL, `1` MISMATCH, `3` INCOMPLETE (frame window, wrapped ring,
+missing columns from an older runtime, or an unconfirmable last-frame
+straddle), `4` MISSES (dispatch misses), or `2` on a usage error.
+
+```sh
+L='tools/run_game.sh {build} --debug-port {port} {headless}'
+python3 psxrecomp/tools/fp_identity.py snapshot build /tmp/seed-warm
+mkdir -p /tmp/seed-cold
+python3 psxrecomp/tools/fp_identity.py run warm.json --launch "$L" --port 4781 --frames 12000 --seed /tmp/seed-warm
+python3 psxrecomp/tools/fp_identity.py run cold.json --launch "$L" --port 4781 --frames 12000 --seed /tmp/seed-cold
+python3 psxrecomp/tools/fp_identity.py compare warm.json cold.json
+```
+
+Run an A/A pair first to show that the run is deterministic. The tool's
+docstring (`--help`) lists every option. The self-test is
+`tools/tests/test_fp_identity.py` (ctest `fp_identity`).
+
 ## `bios_info` — linked recompiled-BIOS identity (native only)
 
 Reports which BIOS image this build's recompiled C was generated from
