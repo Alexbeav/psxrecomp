@@ -109,6 +109,12 @@ int render_pass_select(const uint32_t *phases, uint32_t n, double p,
     return 1;
 }
 
+int render_pass_gen_select(const uint32_t *phases, uint32_t n, double p,
+                           uint32_t *lo, uint32_t *hi, float *t) {
+    if (!(p <= RENDER_PASS_GEN_HOLD_MAX)) return 0;
+    return render_pass_select(phases, n, p, lo, hi, t);
+}
+
 double render_pass_ema(double current, double sample) {
     if (!(sample >= 0.0) || !isfinite(sample)) return current;
     if (!(current > 0.0)) return sample;

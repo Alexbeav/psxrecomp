@@ -4359,6 +4359,7 @@ static int      s_pgen_cur = 0;
 static int      s_pgen_promote = 0;
 static uint64_t s_pgen_promotions = 0, s_pgen_presents = 0, s_pgen_blends = 0;
 static uint64_t s_pgen_expired = 0, s_pgen_unmatched = 0, s_pgen_early = 0;
+static uint64_t s_pgen_late = 0;     /* presents past the frame's planned end */
 
 static GLuint   s_pb_hr_tex = 0, s_pb_hr_rb = 0, s_pb_hr_fbo = 0;
 static int      s_pb_hr_w = 0, s_pb_hr_h = 0;
@@ -4882,18 +4883,23 @@ static int pass_gen_present(uint64_t deadline) {
         g->tex_h != s_interp_h)
         return 0;
     p = ((double)deadline - g->t_start) / g->t_len;
-    if (p > 1.0 + 0.5 / (double)g->period) {
-        /* The next flip is late: stop showing this frame's passes. */
+    /* Past phase 1 the next flip is late (a lagging tick): the newest image
+     * holds until it comes. Only a game that stops flipping for several
+     * frame lengths expires the generation. */
+    if (!render_pass_gen_select(g->phase, g->n, p, &lo, &hi, &t)) {
         g->valid = 0;
         s_pgen_expired++;
         return 0;
     }
-    if (!render_pass_select(g->phase, g->n, p, &lo, &hi, &t)) return 0;
     if (!interp_present_pair(s_pgen_tex[s_pgen_cur][lo],
                              s_pgen_tex[s_pgen_cur][hi], t, 0))
         return 0;
     s_pgen_presents++;
     if (lo != hi) s_pgen_blends++;
+    /* A frame's own last deadline falls at p = 1 (the end of its planned
+     * VBlanks); one past it by more than 1/64 is in a VBlank it was not
+     * planned to cover. */
+    if (p > 1.0 + 1.0 / 64.0) s_pgen_late++;
     return 1;
 }
 
@@ -4913,7 +4919,7 @@ void gl_renderer_pass_service_presents(void) {
     }
 }
 
-void gl_renderer_pass_diag(uint64_t out[8]) {
+void gl_renderer_pass_diag(uint64_t out[9]) {
     out[0] = s_pgen_promotions;
     out[1] = s_pgen_presents;
     out[2] = s_pgen_blends;
@@ -4923,6 +4929,7 @@ void gl_renderer_pass_diag(uint64_t out[8]) {
     out[6] = (uint64_t)(s_pass_cost_ema * 1e6 /
                         (double)SDL_GetPerformanceFrequency()); /* us */
     out[7] = (uint64_t)s_pgen[s_pgen_cur].n;
+    out[8] = s_pgen_late;
 }
 
 uint64_t gl_renderer_pass_journaled(void) { return s_pj_total; }

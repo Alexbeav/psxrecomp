@@ -115,6 +115,13 @@ assert "render_pass_cost_sample(" in body(
 assert "s_pass_allocs_begin = s_pass_allocs;" in body(
     gl, "int gl_renderer_pass_begin("), (
     "each pass must mark where its allocations start")
+# A frame on screen longer than planned (a lagging tick) must hold its newest
+# pass image, never fall back to the older capture (render_pass_plan_test).
+pgp = definition(gl, "pass_gen_present")
+assert "render_pass_gen_select(g->phase, g->n, p, &lo, &hi, &t)" in pgp, (
+    "pass images must be selected through the tested late-flip rule")
+assert "render_pass_select(" not in pgp and "0.5 / (double)g->period" not in pgp, (
+    "no early expiry of a late frame's images")
 cls = body(plan, "int render_pass_mmio_class(")
 for dev in ("RENDER_PASS_DROP_SPU", "RENDER_PASS_DROP_CD",
             "RENDER_PASS_DROP_TIMER"):

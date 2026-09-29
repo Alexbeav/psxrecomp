@@ -48,6 +48,20 @@ uint32_t render_pass_plan_phases(const RenderPassPlanInput *in,
 int render_pass_select(const uint32_t *phases, uint32_t n, double p,
                        uint32_t *lo, uint32_t *hi, float *t);
 
+/* How long a promoted generation stays on screen without the next flip, in
+ * frame lengths (phase units), before it expires. */
+#define RENDER_PASS_GEN_HOLD_MAX 4.0
+
+/* What a promoted generation shows at phase p: render_pass_select, except
+ * that it expires (returns 0) past RENDER_PASS_GEN_HOLD_MAX or for a p that
+ * is not a number. Phase 1 and beyond means the next flip is late (the game
+ * frame lasts longer than the plan assumed, e.g. a lagging tick): the newest
+ * image holds, as a late stock frame would, and the presenter never falls
+ * back to its own capture of the frame, which is older (phase 0). Only a
+ * game that stops flipping for several frame lengths gets that back. */
+int render_pass_gen_select(const uint32_t *phases, uint32_t n, double p,
+                           uint32_t *lo, uint32_t *hi, float *t);
+
 /* Exponential moving average used for the per-pass host cost. */
 double render_pass_ema(double current, double sample);
 

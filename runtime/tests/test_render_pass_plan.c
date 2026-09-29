@@ -106,6 +106,34 @@ static void test_select(void) {
           "before the frame starts show its first image");
 }
 
+/* A frame on screen longer than planned (a 30 Hz tick that takes three
+ * VBlanks) keeps its newest image until the next flip; it must never go back
+ * to the game's own image (phase 0), which is older. */
+static void test_gen_select_late(void) {
+    const uint32_t ph[] = {0u, 16384u, 32768u, 49152u};
+    const double late[] = {1.0, 1.25, 1.2501, 1.3, 1.5, 2.0, 3.99,
+                           RENDER_PASS_GEN_HOLD_MAX};
+    uint32_t lo = 99, hi = 99;
+    float t = -1.0f;
+    CHECK(render_pass_gen_select(ph, 4, 0.375, &lo, &hi, &t) && lo == 1 &&
+          hi == 2 && fabsf(t - 0.5f) < 1e-4f,
+          "inside the frame it selects as render_pass_select");
+    for (unsigned i = 0; i < sizeof late / sizeof late[0]; i++) {
+        char msg[96];
+        lo = hi = 99;
+        snprintf(msg, sizeof msg, "late flip (p = %.4f) holds the newest image",
+                 late[i]);
+        CHECK(render_pass_gen_select(ph, 4, late[i], &lo, &hi, &t) &&
+              lo == 3 && hi == 3 && t == 0.0f, msg);
+    }
+    CHECK(!render_pass_gen_select(ph, 4, RENDER_PASS_GEN_HOLD_MAX + 0.01,
+                                  &lo, &hi, &t),
+          "a game that stops flipping expires the frame after the hold");
+    CHECK(!render_pass_gen_select(ph, 4, NAN, &lo, &hi, &t),
+          "a phase that is not a number expires it");
+    CHECK(!render_pass_gen_select(ph, 0, 0.5, &lo, &hi, &t), "no items, no pick");
+}
+
 static void test_budget_and_ema(void) {
     CHECK(fabs(render_pass_budget(0, 0, 100.0, 0.5) - 50.0) < 1e-9,
           "no history spends the share of the frame");
@@ -168,6 +196,7 @@ int main(void) {
     test_counts_per_rate();
     test_shedding();
     test_select();
+    test_gen_select_late();
     test_budget_and_ema();
     printf(failures ? "FAILED (%d)\n" : "ALL PASS\n", failures);
     return failures ? 1 : 0;

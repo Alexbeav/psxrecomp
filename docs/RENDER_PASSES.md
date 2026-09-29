@@ -120,7 +120,13 @@ FLIP source sees the display flip to its rect; from that interval's start
 its phases map onto host time. At each output deadline the newest image at
 or before the deadline's phase is shown, crossfaded into the next one when
 passes were shed. Deadlines that fall due while passes run are presented
-between passes, so the frame on screen keeps moving.
+between passes, so the frame on screen keeps moving. A frame that stays on
+screen longer than the plan's period (a lagging tick: three VBlanks instead
+of two) holds its newest image until the next flip, as a late stock frame
+holds; it never steps back to the game's own image of the frame, which is
+older (`late_presents` in `render_pass_stats`). Only a game that stops
+flipping for four frame lengths expires the frame's images (`expired`), and
+the presenter then shows its own newest capture.
 
 Consecutive passes of one frame reuse the VRAM backup the first one took:
 each pass's restore leaves the rect exactly as backed up, and no guest code
@@ -161,8 +167,8 @@ internal resolutions; a size change frees the old set.
 
 Tests (runtime ctest unless noted):
 
-- `render_pass_plan_test`: phase planning per rate, shedding, selection, the
-  MMIO allow-list.
+- `render_pass_plan_test`: phase planning per rate, shedding, selection,
+  holding the newest image when the next flip is late, the MMIO allow-list.
 - `render_pass_freeze_test`: 10^6 frozen cycles, exact clock restore,
   watchdog.
 - `render_pass_sandbox_test`: the store policy `memory.c` routes every pass
