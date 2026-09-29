@@ -886,6 +886,7 @@ if(BUILD_TESTING)
                 fmv_quiet_guards
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
+                frame_interpolation_flip_source
                 hybrid_dev_any_input
                 launcher_pad_mode_wiring
                 jalr_link_register_guards
