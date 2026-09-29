@@ -84,6 +84,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "launcher_device.h"
 #include "game_options.h"
 #include "mod_plugins.h"
+#include "mod_session_baseline.h"
 #include "mod_runtime.h"
 #include "crc32.h"
 #include "disc_identity.h"
@@ -216,6 +217,8 @@ extern "C" {
 
 /* memory.c */
 extern "C" void     memory_init(const char* bios_path);
+/* psx_ram_geometry.c: drop a plugin's 8 MiB request before the next boot. */
+extern "C" void     psx_ram_reset_size_request(void);
 extern "C" void     memory_set_sr_ptr(const uint32_t *p);
 /* interrupts.c */
 extern "C" void     psx_irq_set_cause_ptr(uint32_t *p);
@@ -1395,6 +1398,76 @@ extern "C" int psx_mod_set_adaptive_display_aspect(
         g_video_aspect_num, g_video_aspect_den,
         (unsigned)max_numerator, (unsigned)max_denominator);
     return 1;
+}
+
+/*
+ * Mod-owned session state: what a trusted plugin's psx_mod_* setters (or the
+ * netplay local viewport, through the same setters) change and no launcher
+ * control owns. Called at every session start, BEFORE activation: immediately
+ * before mod_runtime_activate_plugins() in the first-boot session block, and
+ * on the lobby rematch path after its commit or netplay clear. Anything added
+ * to the rematch path that activates plugins must come after this call.
+ *
+ * The rematch is the only in-process second session, and the session before
+ * it is always a netplay match: an offline session ends the process, and only
+ * a netplay match launched from the lobby soft-returns. Netplay clears the mod
+ * plan, so no plugin activated before a rematch. What can leak today is the
+ * Fit and fixed aspect apply_netplay_local_viewport_aspect() set, into an
+ * offline rematch. The rest is defensive, for the state listed here only; see
+ * docs/MOD_PACKAGES.md "Session starts" for what is exempt and why (the
+ * renderer and fixed aspect are launcher controls; guest/GPU-DMA memory,
+ * texture-packet arenas and defined texture banks live for the process).
+ *
+ * The rematch path jumps past the first-boot block (goto session_reboot), so
+ * it does not re-run mod_runtime_activate_plugins() or the controller, load
+ * and disc-speed resets there. Function-entry hooks need nothing here: the
+ * commit or netplay clear empties upstream's hook table, and only activation
+ * rebuilds it.
+ *
+ * The first call captures the pre-activation scalars (mod_session_baseline.h)
+ * and changes nothing that is not already at its initial value, so the first
+ * session -- every run that never soft-returns -- behaves exactly as before.
+ * Later calls restore those scalars and also clear the 8 MiB RAM request
+ * (memory_init() at session_reboot re-latches it) and the texture-bank
+ * resolver and batching flag, which a plugin sets in activation.
+ */
+static PSXModSessionBaseline g_mod_owned_baseline;
+
+static void reset_mod_owned_presentation(void) {
+    PSXModSessionScalars live;
+    live.video_vsync = g_video_vsync;
+    live.frame_interpolation = g_frame_interpolation;
+    live.frame_interpolation_fps = g_frame_interpolation_fps;
+    live.auto_skip_fmv = g_auto_skip_fmv;
+    live.guest_frame_period_ms = g_guest_frame_period_ms;
+    live.frame_period_ms = g_frame_period_ms;
+    /* psx_mod_set_frame_interpolation / _native_vblank_rate force vsync off;
+     * _auto_skip_fmv changes guest-visible FMV timing. */
+    const int first = psx_mod_session_baseline_apply(
+        &g_mod_owned_baseline, &live, g_mod_native_vblank_rate ? 1 : 0);
+    g_video_vsync = live.video_vsync;
+    g_frame_interpolation = live.frame_interpolation;
+    g_frame_interpolation_fps = live.frame_interpolation_fps;
+    g_auto_skip_fmv = live.auto_skip_fmv;
+    g_guest_frame_period_ms = live.guest_frame_period_ms;
+    g_frame_period_ms = live.frame_period_ms;
+    g_mod_native_vblank_rate = false;
+    g_mod_native_vblank_fps = 0;
+    if (!first) {
+        psx_ram_reset_size_request();
+        psx_mod_set_texture_bank_resolver(nullptr);
+        psx_mod_set_texture_bank_batching(0);
+    }
+    /* Fit / capped resize-driven aspect. The fixed aspect is the launcher's
+     * (and netplay's) to set, so it is left alone here. */
+    g_ws_adaptive_view = false;
+    g_ws_adaptive_max_num = 16;
+    g_ws_adaptive_max_den = 9;
+    psx_mod_set_world_scene_predicate(nullptr);
+    psx_mod_set_retained_scene_predicate(nullptr);
+    psx_mod_set_adaptive_backdrop_preload(0);
+    g_bezel_path.clear();
+    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
 }
 
 extern "C" int psx_mod_set_native_vblank_rate(
@@ -14648,7 +14721,12 @@ int main(int argc, char** argv) {
     g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
     if (!turbo_loads_offered)
         g_turbo_loads_enabled = 0;
-    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
+    /* The helper restores interpolation and Skip FMVs to their pre-activation
+     * values, which is only right while no launcher control owns them. */
+    static_assert(!frame_interpolation_offered && !skip_fmv_offered,
+                  "reset_mod_owned_presentation() would clobber a launcher "
+                  "setting; restore only when the feature is mod-owned");
+    reset_mod_owned_presentation();
     mod_runtime_activate_plugins();
     apply_netplay_local_viewport_aspect(net_cfg.enabled);
     for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
@@ -16569,6 +16647,24 @@ soft_return_lobby:
                     return 1;
                 }
             }
+            /* `goto session_reboot` re-enters below the first-boot session
+             * block, so redo its mod-owned presentation reset here, after the
+             * commit/clear above (which also emptied the function-entry hook
+             * table; only activation rebuilds it). Only a netplay match
+             * returns here, so the reachable leak is the Fit and fixed aspect
+             * its local viewport set. The launcher round-trips the previous
+             * session's aspect through ls.aspect_index; widescreen is
+             * mod-owned on PSX, so the Settings aspect is the 4:3 clamp
+             * applied at startup. Unlike the first-boot block, this path does
+             * not run activation or the controller, load and disc-speed
+             * resets: an offline rematch with mods applies the plan's patches
+             * and runs its VBlank callbacks without activation, and no
+             * function-entry hook runs. */
+            if (!ws_offered) {
+                g_video_aspect_num = 4;
+                g_video_aspect_den = 3;
+            }
+            reset_mod_owned_presentation();
             apply_netplay_local_viewport_aspect(net_cfg.enabled);
             std::printf("psxrecomp: rematch from lobby (netplay=%d)\n",
                         net_cfg.enabled ? 1 : 0);

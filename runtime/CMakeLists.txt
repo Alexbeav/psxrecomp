@@ -29,6 +29,11 @@ if(BUILD_TESTING)
     add_executable(mod_texture_banks_test tests/test_mod_texture_banks.c src/mod_texture_banks.c)
     target_include_directories(mod_texture_banks_test PRIVATE include)
     add_test(NAME mod_texture_banks_test COMMAND mod_texture_banks_test)
+    # First-call capture / later-call restore behind main.cpp's
+    # reset_mod_owned_presentation() (header-only, no runtime link).
+    add_executable(mod_session_baseline_test tests/test_mod_session_baseline.c)
+    target_include_directories(mod_session_baseline_test PRIVATE include)
+    add_test(NAME mod_session_baseline_test COMMAND mod_session_baseline_test)
     if(NOT MSVC)
         add_executable(ws_world_scene_test tests/test_ws_world_scene.c
             src/psx_video_timing.c)

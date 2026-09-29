@@ -3146,6 +3146,10 @@ void gl_renderer_shutdown(void) {
     if (s_ctx) {
         for (unsigned i = 1; i < 65536u; ++i)
             if (s_bank_tex[i]) glDeleteTextures(1, &s_bank_tex[i]);
+        /* Bezel artwork belongs to the session that loaded it: a lobby
+         * rematch creates a new context and loads its own artwork (or none),
+         * and present_bezel() must not bind this name in that context. */
+        gl_renderer_set_bezel(NULL, 0, 0);
     }
     memset(s_bank_tex, 0, sizeof s_bank_tex);
     s_selected_bank_tex = s_tb_bank_tex = 0;
