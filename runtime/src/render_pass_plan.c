@@ -51,8 +51,10 @@ uint32_t render_pass_plan_phases(const RenderPassPlanInput *in,
     if (n > in->max) n = in->max;
     if (n > RENDER_PASS_MAX_PHASES) n = RENDER_PASS_MAX_PHASES;
     if (in->budget >= 0.0) {
+        /* Cost unknown (no pass measured at this image size yet): one pass
+         * measures it without stalling the guest for a whole plan. */
         double fit = in->pass_cost > 0.0 ? floor(in->budget / in->pass_cost)
-                                         : (double)n;
+                                         : (in->budget > 0.0 ? 1.0 : 0.0);
         if (fit < 0.0) fit = 0.0;
         if (fit < (double)n) n = (uint32_t)fit;
     }
@@ -121,14 +123,33 @@ double render_pass_ema(double current, double sample) {
     return current * 0.75 + sample * 0.25;
 }
 
-double render_pass_cost_sample(double current, double sample, int allocated,
-                               unsigned *skips) {
-    if (allocated && skips && *skips < RENDER_PASS_ALLOC_SKIPS) {
-        (*skips)++;
-        return current;
+void render_pass_cost_add(RenderPassCost *cost, double sample, int allocated) {
+    if (!cost || !(sample >= 0.0) || !isfinite(sample)) return;
+    if (allocated && cost->skips < RENDER_PASS_ALLOC_SKIPS) {
+        cost->skips++;
+        return;
     }
-    if (skips) *skips = 0;
-    return render_pass_ema(current, sample);
+    cost->skips = 0;
+    if (cost->kept < RENDER_PASS_COST_WARMUP) {
+        cost->warm[cost->kept++] = sample;
+        if (cost->kept == RENDER_PASS_COST_WARMUP) {
+            /* Median of the warm-up samples (insertion sort of three). */
+            double w[RENDER_PASS_COST_WARMUP];
+            memcpy(w, cost->warm, sizeof w);
+            for (unsigned i = 1; i < RENDER_PASS_COST_WARMUP; i++)
+                for (unsigned j = i; j > 0 && w[j - 1] > w[j]; j--) {
+                    double t = w[j]; w[j] = w[j - 1]; w[j - 1] = t;
+                }
+            cost->ema = w[RENDER_PASS_COST_WARMUP / 2u];
+        }
+        return;
+    }
+    cost->ema = render_pass_ema(cost->ema, sample);
+}
+
+double render_pass_cost_estimate(const RenderPassCost *cost) {
+    if (!cost || cost->kept < RENDER_PASS_COST_WARMUP) return 0.0;
+    return cost->ema;
 }
 
 double render_pass_budget(double idle_ticks, double pass_ticks,

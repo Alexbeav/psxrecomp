@@ -109,12 +109,24 @@ for name in ("gpu_fill", "gpu_copy_rect", "flush_cpu_upload",
 for name in ("pass_make_color_fbo", "pass_gen_reserve"):
     assert "s_pass_allocs++" in definition(gl, name), (
         "pass allocations must be counted: " + name)
-assert "render_pass_cost_sample(" in body(
+assert "render_pass_cost_add(" in body(
     gl, "void gl_renderer_pass_note_cost(uint64_t ticks) {"), (
     "the pass-cost average must leave allocating passes out")
 assert "s_pass_allocs_begin = s_pass_allocs;" in body(
     gl, "int gl_renderer_pass_begin("), (
     "each pass must mark where its allocations start")
+# The average belongs to one presented image size. A plan at another size
+# passes an unknown cost (0), for which render_pass_plan_phases plans a single
+# measuring pass (render_pass_plan_test): passes run on the emulation thread.
+nc = body(gl, "void gl_renderer_pass_note_cost(uint64_t ticks) {")
+assert "s_pass_cost_w != s_interp_w || s_pass_cost_h != s_interp_h" in nc and \
+    "memset(&s_pass_cost, 0, sizeof s_pass_cost);" in nc, (
+    "a new image size must start the pass-cost average over")
+assert re.search(r"in\.pass_cost = \(s_pass_cost_w == s_interp_w && "
+                 r"s_pass_cost_h == s_interp_h\)\s*"
+                 r"\? render_pass_cost_estimate\(&s_pass_cost\) : 0\.0;",
+                 gl[gl.index("uint32_t gl_renderer_pass_plan("):][:4000]), (
+    "a plan must not use a cost measured at another image size")
 # A frame on screen longer than planned (a lagging tick) must hold its newest
 # pass image, never fall back to the older capture (render_pass_plan_test).
 pgp = definition(gl, "pass_gen_present")

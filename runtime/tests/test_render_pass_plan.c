@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "render_pass.h"
 #include "render_pass_plan.h"
@@ -74,6 +75,20 @@ static void test_shedding(void) {
     in.budget = 1e6;
     CHECK(render_pass_plan_phases(&in, a, &wanted) == 0 && wanted == 10,
           "less than one pass of budget renders none");
+
+    /* No pass measured yet (first plans, or a new image size): passes run on
+     * the emulation thread, so one measures the cost; a whole plan of
+     * unknown cost could stall the guest for frames (46.9 ms each at 4K). */
+    in.pass_cost = 0.0;
+    in.budget = 26e6;
+    n = render_pass_plan_phases(&in, a, &wanted);
+    CHECK(n == 1 && wanted == 10, "unknown cost plans one pass");
+    CHECK(n == 1 && a[0] > 16384u && a[0] < 49152u,
+          "the one pass sits mid-frame, as a shed subset of one does");
+    in.budget = 0.0;
+    CHECK(render_pass_plan_phases(&in, a, NULL) == 0,
+          "no budget: not even the measuring pass");
+    in.pass_cost = 2e6;
 
     in.budget = -1.0;
     in.max = 4;
@@ -148,23 +163,49 @@ static void test_budget_and_ema(void) {
     {
         /* First-use allocations (70 ms at 4K) must not set the average a
          * shed-for-time plan then never revisits; steady passes (10 ms) do. */
-        unsigned skips = 0;
-        double e = 0.0;
-        e = render_pass_cost_sample(e, 70.0, 1, &skips);
-        CHECK(e == 0.0 && skips == 1, "an allocating pass is not a sample");
-        e = render_pass_cost_sample(e, 10.0, 0, &skips);
-        CHECK(e == 10.0 && skips == 0, "the next steady pass seeds the average");
-        e = render_pass_cost_sample(e, 70.0, 1, &skips);
-        CHECK(e == 10.0, "a later allocating pass leaves it alone");
+        RenderPassCost c;
+        memset(&c, 0, sizeof c);
+        render_pass_cost_add(&c, 70.0, 1);
+        CHECK(render_pass_cost_estimate(&c) == 0.0 && c.skips == 1 && c.kept == 0,
+              "an allocating pass is not a sample");
+        render_pass_cost_add(&c, 10.0, 0);
+        render_pass_cost_add(&c, 10.0, 0);
+        CHECK(render_pass_cost_estimate(&c) == 0.0 && c.skips == 0,
+              "two samples: still warming up (unknown: one pass per plan)");
+        render_pass_cost_add(&c, 10.0, 0);
+        CHECK(render_pass_cost_estimate(&c) == 10.0, "three samples seed the average");
+        render_pass_cost_add(&c, 70.0, 1);
+        CHECK(render_pass_cost_estimate(&c) == 10.0,
+              "a later allocating pass leaves it alone");
         for (unsigned i = 1; i < RENDER_PASS_ALLOC_SKIPS; i++)
-            e = render_pass_cost_sample(e, 70.0, 1, &skips);
-        CHECK(e == 10.0 && skips == RENDER_PASS_ALLOC_SKIPS,
+            render_pass_cost_add(&c, 70.0, 1);
+        CHECK(render_pass_cost_estimate(&c) == 10.0 &&
+              c.skips == RENDER_PASS_ALLOC_SKIPS,
               "up to RENDER_PASS_ALLOC_SKIPS in a row");
-        e = render_pass_cost_sample(e, 70.0, 1, &skips);
-        CHECK(fabs(e - 25.0) < 1e-9 && skips == 0,
+        render_pass_cost_add(&c, 70.0, 1);
+        CHECK(fabs(render_pass_cost_estimate(&c) - 25.0) < 1e-9 && c.skips == 0,
               "then an allocating pass counts, so the average cannot freeze");
-        e = render_pass_cost_sample(e, 25.0, 0, NULL);
-        CHECK(fabs(e - 25.0) < 1e-9, "no skip counter: every pass counts");
+        render_pass_cost_add(&c, -1.0, 0);
+        render_pass_cost_add(&c, NAN, 0);
+        CHECK(fabs(render_pass_cost_estimate(&c) - 25.0) < 1e-9,
+              "bad samples are ignored");
+    }
+    {
+        /* One slow first pass (a busy host: 24 ms against a steady 3 ms)
+         * must not price passes out: the median of the warm-up wins. */
+        RenderPassCost c;
+        memset(&c, 0, sizeof c);
+        render_pass_cost_add(&c, 24.0, 0);
+        render_pass_cost_add(&c, 3.0, 0);
+        render_pass_cost_add(&c, 3.5, 0);
+        CHECK(render_pass_cost_estimate(&c) == 3.5,
+              "warm-up median ignores one outlier");
+        memset(&c, 0, sizeof c);
+        render_pass_cost_add(&c, 47.0, 0);
+        render_pass_cost_add(&c, 46.0, 0);
+        render_pass_cost_add(&c, 48.0, 0);
+        CHECK(render_pass_cost_estimate(&c) == 47.0,
+              "a truly expensive size (4K) still prices itself out");
     }
 }
 

@@ -133,11 +133,22 @@ each pass's restore leaves the rect exactly as backed up, and no guest code
 runs in between (the clock and guest store count are unchanged), so only the
 first pass copies the rect out (`backups_reused` in `render_pass_stats`).
 
-Passes cost host time inside the game's frame. The budget per frame is
-`PSX_RENDER_PASS_BUDGET` percent (default 80) of the presenter's idle time
-plus the presents beyond two per frame, learnt from the previous frame, over
-a smoothed per-pass cost. Nothing ever slows the guest down: when the budget
-runs out, fewer passes are rendered.
+Passes cost host time inside the game's frame: they run on the emulation
+thread. The budget per frame is `PSX_RENDER_PASS_BUDGET` percent (default 80)
+of the presenter's idle time plus the presents beyond two per frame, learnt
+from the previous frame, over a smoothed per-pass cost. When the budget runs
+out, fewer passes are rendered, and a pass that costs more than the budget is
+not planned at all. The cost is measured per presented image size: until
+three passes have been measured at the current size (the first plans, and
+after an aspect or internal-resolution change) a plan asks for one pass, so
+an expensive size costs at most one pass per frame while it is learnt. The
+three seed the average with their median, so one slow pass on a busy host
+does not price passes out. A pass that creates pass textures or
+framebuffers (the first frames at a size, or a slot filled for the first
+time) is not a cost sample, at most eight in a row. Only passes that run
+are measured, so while the measured cost stays above every frame's budget,
+passes stay shed until the image size changes (a plugin can fall back to a
+crossfade, as described under "When passes are unavailable").
 
 Pass images are kept at internal resolution (the size the presenter
 captures). Their textures are made as the slots fill, never more slots than
@@ -167,7 +178,8 @@ internal resolutions; a size change frees the old set.
 
 Tests (runtime ctest unless noted):
 
-- `render_pass_plan_test`: phase planning per rate, shedding, selection,
+- `render_pass_plan_test`: phase planning per rate, shedding (one pass while
+  the cost is unknown), the cost warm-up and allocation rule, selection,
   holding the newest image when the next flip is late, the MMIO allow-list.
 - `render_pass_freeze_test`: 10^6 frozen cycles, exact clock restore,
   watchdog.

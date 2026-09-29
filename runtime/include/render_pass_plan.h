@@ -26,7 +26,9 @@ typedef struct RenderPassPlanInput {
     double target_period;   /* ticks per output frame; <= 0 = unknown */
     double frame_start;     /* predicted first-present tick of the frame */
     double frame_length;    /* ticks the frame stays on screen */
-    double pass_cost;       /* smoothed host ticks per pass; 0 = unknown */
+    double pass_cost;       /* smoothed host ticks per pass; 0 = unknown:
+                               with a budget, one pass is planned until one
+                               has been measured */
     double budget;          /* host ticks the passes may use; < 0 = unlimited */
     uint32_t max;           /* caller's array capacity */
 } RenderPassPlanInput;
@@ -35,8 +37,9 @@ typedef struct RenderPassPlanInput {
  * the frame (the output deadlines that fall strictly inside it, excluding
  * ones within 1/64 of phase 0, which the game's own image already covers).
  * When the budget cannot pay for all of them, an evenly spread subset is
- * returned; *wanted (optional) receives the unshed count. Returns the count
- * (0 when nothing is wanted or affordable). */
+ * returned; while the pass cost is unknown that subset is one phase, since
+ * passes run on the emulation thread. *wanted (optional) receives the
+ * unshed count. Returns the count (0 when nothing is wanted or affordable). */
 uint32_t render_pass_plan_phases(const RenderPassPlanInput *in,
                                  uint32_t *alpha_q16, uint32_t *wanted);
 
@@ -65,16 +68,32 @@ int render_pass_gen_select(const uint32_t *phases, uint32_t n, double p,
 /* Exponential moving average used for the per-pass host cost. */
 double render_pass_ema(double current, double sample);
 
-/* The pass-cost average after one pass that took `sample` host ticks.
- * `allocated`: the pass created textures or framebuffers (first use, a size
- * change). That one-time cost says nothing about the next pass -- at a high
- * internal resolution the first passes cost several times the steady state
- * -- and a plan that sheds every pass for time never measures again, so
- * such a sample is left out, at most RENDER_PASS_ALLOC_SKIPS times in a row
- * (*skips counts them; any kept sample resets it). */
+/* Smoothed host cost of one pass at one presented image size (the renderer
+ * starts a new one when the size changes). Fed one sample per pass.
+ *
+ * - `allocated`: the pass created textures or framebuffers (first use, a
+ *   size change). That one-time cost says nothing about the next pass -- at
+ *   a high internal resolution the first passes cost several times the
+ *   steady state -- and a plan that sheds every pass for time never
+ *   measures again, so such a sample is left out, at most
+ *   RENDER_PASS_ALLOC_SKIPS times in a row (any kept sample resets that).
+ * - Warm-up: the first RENDER_PASS_COST_WARMUP kept samples seed the average
+ *   with their median, so one slow pass (a busy host at the first race
+ *   frame) cannot price passes out; a plan then sheds everything and never
+ *   measures again. Until then the estimate is 0 (unknown), for which a plan
+ *   asks for one pass (render_pass_plan_phases).
+ * - Then an exponential moving average (render_pass_ema). */
 #define RENDER_PASS_ALLOC_SKIPS 8u
-double render_pass_cost_sample(double current, double sample, int allocated,
-                               unsigned *skips);
+#define RENDER_PASS_COST_WARMUP 3u
+typedef struct RenderPassCost {
+    double   ema;
+    double   warm[RENDER_PASS_COST_WARMUP];
+    unsigned kept;                  /* kept samples, saturating at WARMUP */
+    unsigned skips;                 /* allocating samples left out in a row */
+} RenderPassCost;
+void   render_pass_cost_add(RenderPassCost *cost, double sample, int allocated);
+/* Host ticks per pass for planning; 0 while the cost is unknown. */
+double render_pass_cost_estimate(const RenderPassCost *cost);
 
 /* Next frame's pass budget from the last frame: the host time the presenter
  * spent idle-waiting plus the time passes used, scaled by `share` (0..1) and

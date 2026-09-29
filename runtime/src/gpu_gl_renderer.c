@@ -381,7 +381,7 @@ static uint64_t s_idle_ticks_accum_fwd(uint64_t add);
 static int      s_pass_active = 0;
 /* Textures/framebuffers made for passes (pass_make_color_fbo, pass image
  * slots), and the count when the current pass began: a pass that allocated
- * is left out of the pass-cost average (render_pass_cost_sample). */
+ * is left out of the pass-cost average (render_pass_cost_add). */
 static uint32_t s_pass_allocs = 0, s_pass_allocs_begin = 0;
 static int      s_pass_x = 0, s_pass_y = 0, s_pass_w = 0, s_pass_h = 0;
 static uint32_t s_pass_leaks = 0;
@@ -4381,8 +4381,12 @@ static uint64_t s_pb_present_dirty[PRES_ROWS];
 static int      s_pb_force_present = 0, s_pb_last_path = -1;
 static int      s_pb_last_dx = 0, s_pb_last_dy = 0, s_pb_last_dw = 0, s_pb_last_dh = 0;
 
-static double   s_pass_cost_ema = 0.0;        /* host ticks per pass */
-static unsigned s_pass_cost_skips = 0;
+/* Per-pass host cost (render_pass_plan.h RenderPassCost), and the presented
+ * image size it was measured at. Another size (an aspect or internal-
+ * resolution change) starts it over: pass cost does not scale with pixels
+ * alone, and while it is unknown a plan asks for one pass. */
+static RenderPassCost s_pass_cost;
+static int      s_pass_cost_w = 0, s_pass_cost_h = 0;
 static uint64_t s_pass_ticks_accum = 0, s_idle_ticks_accum = 0;
 static uint64_t s_pass_ticks_last = 0, s_idle_ticks_last = 0;
 static uint64_t s_present_ticks_accum = 0, s_present_ticks_last = 0;
@@ -4480,7 +4484,8 @@ uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
     in.frame_start = s_interp_schedule.source_deadline +
                      (double)shown_after_vblanks * sp;
     in.frame_length = (double)period_vblanks * sp;
-    in.pass_cost = s_pass_cost_ema;
+    in.pass_cost = (s_pass_cost_w == s_interp_w && s_pass_cost_h == s_interp_h)
+                   ? render_pass_cost_estimate(&s_pass_cost) : 0.0;
     {
         /* Presents beyond two per frame are traded for passes: a shed
          * present is coalesced, a shed pass is a missing motion sample. */
@@ -4496,11 +4501,15 @@ uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
 }
 
 void gl_renderer_pass_note_cost(uint64_t ticks) {
+    if (s_pass_cost_w != s_interp_w || s_pass_cost_h != s_interp_h) {
+        memset(&s_pass_cost, 0, sizeof s_pass_cost);
+        s_pass_cost_w = s_interp_w;
+        s_pass_cost_h = s_interp_h;
+    }
     /* A pass that made pass textures or framebuffers (first use, a size
-     * change) is not a cost sample: see render_pass_cost_sample(). */
-    s_pass_cost_ema = render_pass_cost_sample(
-        s_pass_cost_ema, (double)ticks, s_pass_allocs != s_pass_allocs_begin,
-        &s_pass_cost_skips);
+     * change) is not a cost sample: see render_pass_cost_add(). */
+    render_pass_cost_add(&s_pass_cost, (double)ticks,
+                         s_pass_allocs != s_pass_allocs_begin);
     s_pass_ticks_accum += ticks;
 }
 
@@ -4926,7 +4935,7 @@ void gl_renderer_pass_diag(uint64_t out[9]) {
     out[3] = s_pgen_expired;
     out[4] = s_pgen_unmatched;
     out[5] = s_pgen_early;
-    out[6] = (uint64_t)(s_pass_cost_ema * 1e6 /
+    out[6] = (uint64_t)(render_pass_cost_estimate(&s_pass_cost) * 1e6 /
                         (double)SDL_GetPerformanceFrequency()); /* us */
     out[7] = (uint64_t)s_pgen[s_pgen_cur].n;
     out[8] = s_pgen_late;
