@@ -23,6 +23,7 @@
 #include "overlay_capture.h"
 #include "psx_cycles.h"
 #include "psx_memory.h"
+#include "psx_cycle_freeze.h"
 #include "spu.h"
 #include "audio_trace.h"
 #include "event_ring.h"
@@ -437,7 +438,9 @@ static void cancel_async_transfer(int ch) {
 
 static void schedule_delayed_complete(int ch, uint32_t total_words,
                                       uint32_t cycles_per_word) {
-    if (total_words == 0 || cycles_per_word == 0) {
+    /* Render passes run in frozen guest time: a delayed completion would
+     * never arrive, so finish now (the pass restores DMA state after). */
+    if (total_words == 0 || cycles_per_word == 0 || g_psx_render_pass_active) {
         complete_transfer(ch);
         return;
     }
@@ -968,6 +971,13 @@ static void try_execute(int ch) {
             if ((channels[2].chcr & 1u) != 0u &&
                 ((channels[2].chcr >> 9) & 3u) == 2u) {
                 start_async_gpu_linked_list();
+                /* Render pass: devices never advance in frozen time, so walk
+                 * the whole list now. The walk is the same event-driven code,
+                 * only with an unlimited budget; completion flags and the IRQ
+                 * latch it raises are rolled back with the pass. */
+                while (g_psx_render_pass_active && gpu_linked_list.active)
+                    dma_gpu_ll_advance(&gpu_linked_list, UINT32_MAX,
+                                       &gpu_ll_ops, NULL);
             } else {
                 schedule_delayed_complete(2, execute_ch2_gpu(),
                                           DMA_GPU_CYCLES_PER_WORD);
@@ -1002,6 +1012,8 @@ static void try_execute(int ch) {
 /* ---- Public interface ---- */
 
 uint32_t dma_get_dicr(void) { return dicr_read_value(dicr); }
+/* A GPU linked-list walk is in flight (render passes refuse to start then). */
+int dma_gpu_linked_list_active(void) { return gpu_linked_list.active != 0; }
 uint32_t dma_get_dpcr(void) { return dpcr; }
 int dma_cdrom_transfer_active(void) {
     return cdrom_async.active &&

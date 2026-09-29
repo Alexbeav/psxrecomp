@@ -350,6 +350,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_video_timing.c
     ${PSXRECOMP_ROOT}/runtime/src/frame_pacing.c
     ${PSXRECOMP_ROOT}/runtime/src/frame_interpolation.c
+    ${PSXRECOMP_ROOT}/runtime/src/render_pass.c
+    ${PSXRECOMP_ROOT}/runtime/src/render_pass_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/host_time.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_fiber.c
     ${PSXRECOMP_ROOT}/runtime/src/sio.c
@@ -912,9 +914,9 @@ endfunction()
 #   * configure time -- a title that has mods/preloaded/packages in its source
 #     tree but did not declare it is a hard configure error, because that is
 #     exactly the missed-title state, and it is detectable before any build.
-#   * build time -- runtime/psx_check_mod_catalog.cmake runs as the LAST
-#     POST_BUILD step (registered via cmake_language(DEFER), so it lands after
-#     anything the title itself registered) and fails the build if a declared
+#   * build time -- a small catalog-staging target runs before its game target.
+#     It re-stages only package files, never recompiles or relinks the game,
+#     then runs runtime/psx_check_mod_catalog.cmake and fails if a declared
 #     package did not reach mods/bundled, or if any package this build stages
 #     turned up in the legacy mods/packages instead.
 #
@@ -950,10 +952,9 @@ function(_psxrt_write_if_changed path content)
 endfunction()
 
 # Registered via cmake_language(DEFER) so it runs at the END of the directory
-# that created the runtime targets. POST_BUILD commands execute in registration
-# order, so deferring is what puts this check AFTER any add_custom_command a
-# title registered after its psxrecomp_add_runtime_target() call -- including
-# the stray legacy copy this check exists to catch.
+# that created the runtime targets. The staging targets already exist by then;
+# this function adds sibling-aware validation targets after it has collected all
+# targets sharing an output directory.
 #
 # Takes NO arguments and reads the pending targets out of global properties:
 # cmake_language(DEFER CALL <fn> <arg>) does not carry a function-local
@@ -965,6 +966,7 @@ function(_psxrt_finalize_mod_catalog_guards)
     get_property(_manifests GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_MANIFESTS)
     get_property(_dirs      GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_DIRS)
     get_property(_excludeds GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_EXCLUDED)
+    get_property(_stage_targets GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_STAGE_TARGETS)
     list(LENGTH _targets _n)
     if(_n EQUAL 0)
         return()
@@ -978,15 +980,18 @@ function(_psxrt_finalize_mod_catalog_guards)
     set(_here_targets "")
     set(_here_manifests "")
     set(_here_excludeds "")
+    set(_here_stage_targets "")
     foreach(_i RANGE 0 ${_last})
         list(GET _dirs ${_i} _d)
         if(_d STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
             list(GET _targets ${_i} _t)
             list(GET _manifests ${_i} _m)
             list(GET _excludeds ${_i} _x)
+            list(GET _stage_targets ${_i} _s)
             list(APPEND _here_targets "${_t}")
             list(APPEND _here_manifests "${_m}")
             list(APPEND _here_excludeds "${_x}")
+            list(APPEND _here_stage_targets "${_s}")
         endif()
     endforeach()
     list(LENGTH _here_targets _n_here)
@@ -999,6 +1004,7 @@ function(_psxrt_finalize_mod_catalog_guards)
         list(GET _here_targets ${_i} _t)
         list(GET _here_manifests ${_i} _own)
         list(GET _here_excludeds ${_i} _own_excluded)
+        list(GET _here_stage_targets ${_i} _stage_target)
 
         # Sibling runtime targets in this directory. Two of them can share one
         # output directory (Tomba 2's US and Italian runtimes both land in the
@@ -1014,7 +1020,8 @@ function(_psxrt_finalize_mod_catalog_guards)
         # cmake list separator and would split the -D into two arguments.
         list(JOIN _alts "|" _alts_joined)
 
-        add_custom_command(TARGET ${_t} POST_BUILD
+        set(_guard_target "${_t}_mod_catalog_check")
+        add_custom_target("${_guard_target}"
             COMMAND ${CMAKE_COMMAND}
                 "-DPSX_MODS_DIR=$<TARGET_FILE_DIR:${_t}>/mods"
                 "-DPSX_CATALOG_MANIFEST=${_own}"
@@ -1025,12 +1032,14 @@ function(_psxrt_finalize_mod_catalog_guards)
                 -P "${PSXRECOMP_ROOT}/runtime/psx_check_mod_catalog.cmake"
             COMMENT "Verifying staged mod catalog for ${_t}"
             VERBATIM)
+        add_dependencies("${_guard_target}" "${_stage_target}")
+        add_dependencies(${_t} "${_guard_target}")
     endforeach()
 
     # One ctest, registered against the first staging target's output
     # directory. REQUIRE_STAGED is 0 here: `ctest` may run in a tree where the
     # runtime was never built, and a skip is more useful there than a spurious
-    # failure. The POST_BUILD invocations above pass 1, since they run
+    # failure. The staging validation targets above pass 1, since they run
     # immediately after staging where an absent catalog IS the defect.
     get_property(_test_done GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_TEST_ADDED)
     if(BUILD_TESTING AND NOT _test_done)
@@ -1210,26 +1219,6 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
         list(APPEND _purge "${_out}/mods/packages/${_id}")
     endforeach()
 
-    list(LENGTH _ids _n_ids)
-    add_custom_command(TARGET ${target} POST_BUILD
-        # Wipe first: copy_directory MERGES, so a package deleted from source
-        # would otherwise survive in the build output forever and keep
-        # appearing on the Mods page (and inflate release catalog assertions).
-        #
-        # Scoped to mods/bundled, which is build output and nothing else.
-        # mods/installed/ is the launcher's (player-installed .psxmod archives)
-        # and mods/state.toml is user selection state; a build must never touch
-        # either. Before the split this wipe was scoped to mods/packages, which
-        # ALSO held everything the player had installed -- so a rebuild,
-        # including the one a self-compiling setup release runs on the player's
-        # own machine, deleted their mods without a word.
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_out}/mods/bundled"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf ${_purge}
-        ${_copy}
-        ${_readme_copy}
-        COMMENT "Staging mod catalog for ${target} (${_n_ids} package(s) -> mods/bundled)"
-        VERBATIM)
-
     # The id list the build-time guard and the ctest assert against.
     set(_manifest "${CMAKE_CURRENT_BINARY_DIR}/psx_mod_catalog_${target}.txt")
     list(SORT _ids)
@@ -1249,9 +1238,37 @@ function(_psxrt_stage_mod_catalog target preloaded_dir)
     endforeach()
     _psxrt_write_if_changed("${_excluded_manifest}" "${_excluded_text}")
 
+    # A custom target, rather than LINK_DEPENDS + POST_BUILD, is portable to
+    # Ninja, Make, Visual Studio, and Xcode. It is intentionally always
+    # out-of-date: the catalog is small, and that makes added/removed package
+    # assets correct without forcing CMake to reconfigure or the game to link.
+    # The target is wired as a prerequisite below, so building the game always
+    # stages the catalog first while leaving its code objects untouched.
+    set(_stage_target "${target}_mod_catalog_stage")
+    list(LENGTH _ids _n_ids)
+    add_custom_target("${_stage_target}"
+        # Wipe first: copy_directory MERGES, so a package deleted from source
+        # would otherwise survive in the build output forever and keep
+        # appearing on the Mods page (and inflate release catalog assertions).
+        #
+        # Scoped to mods/bundled, which is build output and nothing else.
+        # mods/installed/ is the launcher's (player-installed .psxmod archives)
+        # and mods/state.toml is user selection state; a build must never touch
+        # either. Before the split this wipe was scoped to mods/packages, which
+        # ALSO held everything the player had installed -- so a rebuild,
+        # including the one a self-compiling setup release runs on the player's
+        # own machine, deleted their mods without a word.
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_out}/mods/bundled"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf ${_purge}
+        ${_copy}
+        ${_readme_copy}
+        COMMENT "Staging mod catalog for ${target} (${_n_ids} package(s) -> mods/bundled)"
+        VERBATIM)
+
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_TARGETS "${target}")
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_MANIFESTS "${_manifest}")
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_EXCLUDED "${_excluded_manifest}")
+    set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_STAGE_TARGETS "${_stage_target}")
     set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}")
     # Schedule the guard pass once per directory, not once per target.

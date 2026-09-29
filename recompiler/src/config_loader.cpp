@@ -82,6 +82,14 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.words("cull_h_imms", c.ws_cull_h_imms);
     h.words("backdrop_x", c.ws_backdrop_x_sites);
     h.words("backdrop_unsquash", c.ws_backdrop_unsquash_funcs);
+    // Kinds added after the v1 hash layout enter the identity only when a
+    // title uses them, so every existing overlay cache stays valid.
+    if (!c.ws_cull_bgez_sites.empty())
+        h.words("cull_bgez", c.ws_cull_bgez_sites);
+    if (!c.ws_cull_clip_edge_x_load_sites.empty()) {
+        h.words("cull_clip_edge_x_load", c.ws_cull_clip_edge_x_load_sites);
+        h.u32(ws_cull_clip_edge_width(c));
+    }
 
     h.tag("flags");
     h.u32(c.ws_auto_screen_x_cull ? 1u : 0u);
@@ -1751,6 +1759,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_nclip_keep_sites;
     std::vector<uint32_t> ws_cull_nclip_exact_sites;
     std::vector<uint32_t> ws_cull_branch_keep_sites;
+    std::vector<uint32_t> ws_cull_bgez_sites;
+    std::vector<uint32_t> ws_cull_clip_edge_x_load_sites;
+    uint32_t ws_cull_clip_edge_width = 0;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
@@ -1787,6 +1798,16 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("nclip_keep_sites", ws_cull_nclip_keep_sites);
             load_sites("nclip_exact_sites", ws_cull_nclip_exact_sites);
             load_sites("branch_keep_sites", ws_cull_branch_keep_sites);
+            load_sites("bgez_sites", ws_cull_bgez_sites);
+            load_sites("clip_edge_x_load_sites", ws_cull_clip_edge_x_load_sites);
+            if (cull.contains("clip_edge_width")) {
+                const int64_t width = toml::find<int64_t>(cull, "clip_edge_width");
+                if (width <= 0 || width > 1024)
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull] clip_edge_width must be 1..1024",
+                        config_path.string()));
+                ws_cull_clip_edge_width = (uint32_t)width;
+            }
             if (cull.contains("keep")) {
                 std::set<uint32_t> seen;
                 for (const auto& item : toml::find<toml::array>(cull, "keep")) {
@@ -2152,7 +2173,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         }
     }
 
-    return GameConfig{
+    GameConfig loaded{
         /*config_path*/      config_path,
         /*project_root*/     root,
         /*name*/             name,
@@ -2268,6 +2289,11 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_bg2d_init_func*/     ws_bg2d_init_func,
         /*ws_bg2d_packet_cap*/    ws_bg2d_packet_cap,
     };
+    loaded.ws_cull_bgez_sites = std::move(ws_cull_bgez_sites);
+    loaded.ws_cull_clip_edge_x_load_sites =
+        std::move(ws_cull_clip_edge_x_load_sites);
+    loaded.ws_cull_clip_edge_width = ws_cull_clip_edge_width;
+    return loaded;
 }
 
 // ---- GameOptions (game_options.toml) — the game's own native settings ----

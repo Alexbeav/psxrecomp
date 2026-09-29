@@ -41,6 +41,7 @@ uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask);
 uint32_t dma_get_dicr(void);
 uint32_t dma_get_dpcr(void);
 int      dma_cdrom_transfer_active(void);
+int      dma_gpu_linked_list_active(void);
 
 typedef struct DMAChannelDebugState {
     uint32_t madr;

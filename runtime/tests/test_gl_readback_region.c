@@ -19,6 +19,7 @@ int g_ws_tex_edge_pct=0;
 int psx_ws_prim_is_tagged(void){return 0;}
 void gpu_depth24_upload_span_reset(void){}
 void frame_interpolation_schedule_reset(FrameInterpolationSchedule *p){memset(p,0,sizeof(*p));}
+void frame_flip_tracker_reset(FrameFlipTracker *p){memset(p,0,sizeof(*p));p->period=1;}
 static int checks,failures;
 static void check(int ok,const char *label){checks++;if(!ok){fprintf(stderr,"FAIL %s\n",label);failures++;}}
 static void verify(const char *label){

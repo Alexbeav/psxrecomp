@@ -225,6 +225,71 @@ class StaticDispatchApiTests(unittest.TestCase):
             subprocess.run([exe], check=True)
 
 
+    def test_segment_aliases_stay_interpreted(self):
+        # Bodies bake the KSEG0 PCs they were compiled for ($ra, EPC, I-cache
+        # tags); a KUSEG/KSEG1 alias of the same bytes must not reach them.
+        cc = shutil.which('gcc') or shutil.which('clang')
+        if cc is None:
+            self.skipTest('no C compiler available')
+        variants = [{'addr': 0x8000281C, 'symbol': 'ov_func_k', 'crc': 0x11111111,
+                     'ranges': ((0x0000281C, 16),)}]
+        dispatch = compile_overlays.generate_overlay_dispatch(variants)
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'psx_runtime.h').write_text(
+                '#include <stdint.h>\n'
+                'typedef struct CPUState { uint32_t pc; } CPUState;\n',
+                encoding='utf-8')
+            exe = os.path.join(tmp, 'segment.exe' if os.name == 'nt'
+                               else 'segment')
+            src = os.path.join(tmp, 'segment.c')
+            Path(src).write_text(textwrap.dedent(f'''
+                #include "psx_runtime.h"
+
+                void ov_func_k(CPUState *cpu);
+
+                {dispatch}
+
+                static int calls;
+
+                int psx_overlay_static_code_matches(
+                    const uint32_t *lo_len_pairs, uint32_t count,
+                    uint32_t expected_crc)
+                {{
+                    (void)lo_len_pairs;
+                    (void)count;
+                    return expected_crc == 0x11111111u;
+                }}
+
+                void ov_func_k(CPUState *cpu) {{ (void)cpu; calls++; }}
+
+                int main(void)
+                {{
+                    CPUState cpu = {{0}};
+                    uint64_t checks = 0, hits = 0, vm = 0, am = 0;
+                    if (psx_overlay_static_can_dispatch(0x0000281Cu)) return 1;
+                    if (psx_overlay_static_can_dispatch(0xA000281Cu)) return 2;
+                    if (psx_overlay_dispatch(&cpu, 0x0000281Cu)) return 3;
+                    if (psx_overlay_dispatch(&cpu, 0xA000281Cu)) return 4;
+                    if (calls != 0) return 5;
+                    psx_overlay_static_get_stats(&checks, &hits, &vm, &am);
+                    if (checks != 0 || hits != 0 || am != 4) return 6;
+                    if (!psx_overlay_static_can_dispatch(0x8000281Cu)) return 7;
+                    if (!psx_overlay_dispatch(&cpu, 0x8000281Cu)) return 8;
+                    if (calls != 1) return 9;
+                    return 0;
+                }}
+            '''), encoding='utf-8')
+            subprocess.run([cc, src, '-I', tmp, '-std=c99', '-Wall', '-Werror',
+                            '-o', exe], check=True)
+            subprocess.run([exe], check=True)
+
+    def test_non_kseg0_entry_is_rejected(self):
+        with self.assertRaises(ValueError):
+            compile_overlays.generate_overlay_dispatch(
+                [{'addr': 0x0000281C, 'symbol': 'ov_func_k', 'crc': 1,
+                  'ranges': ((0x0000281C, 16),)}])
+
+
 class StaticWorkerContractTests(unittest.TestCase):
     def test_worker_is_picklable_for_a_process_pool(self):
         # ProcessPoolExecutor pickles the callable by qualified name; a nested

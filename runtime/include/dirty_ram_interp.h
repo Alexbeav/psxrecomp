@@ -53,6 +53,18 @@ void dirty_ram_ld_delay_flush(CPUState* cpu);
  * on the next interp step (selfcheck MotK v0=countdown vs v0=1 forks). */
 void dirty_ram_ld_delay_discard(void);
 
+/* Save / put back the deferred load-delay writeback exactly. For a landing
+ * that longjmps out of interpreted code and then resumes the interrupted
+ * code (the render-pass watchdog abort, render_pass.c): the pass's pending
+ * load must not reach the resumed timeline, and the interrupted one's must
+ * survive. */
+typedef struct DirtyRamLoadDelay {
+    uint32_t rt, val, age;
+    int      armed;
+} DirtyRamLoadDelay;
+void dirty_ram_ld_delay_save(DirtyRamLoadDelay *out);
+void dirty_ram_ld_delay_restore(const DirtyRamLoadDelay *in);
+
 /* Re-anchor host-only dirty IRQ pump ambient (entry-poll stride + 4096-insn
  * gap) after snap restore. Not in boot_state — peers that drifted through FMV
  * otherwise entered the post-FMV dirty wait on opposite poll phases. */

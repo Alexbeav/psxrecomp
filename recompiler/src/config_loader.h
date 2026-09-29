@@ -1192,7 +1192,30 @@ struct GameConfig {
     //   reveal pixels once before the new stage background is submitted.
     uint32_t ws_bg2d_init_func    = 0;
     uint32_t ws_bg2d_packet_cap       = 1000;
+
+    // [widescreen.cull] bgez_sites -- `bgez SX, keep` sites of a signed
+    // per-vertex left-edge chain (`bgez x0,keep; ...; bltz xN,reject`). Keeps
+    // while SX >= -margin (psx_ws_cull_bgez), the exact partner of bltz_sites:
+    // bltz_sites alone still rejects a primitive whose earlier vertices sit in
+    // the revealed band. Must be REGIMM bgez (main EXE: hard error otherwise).
+    // Empty by default; identity at 4:3; regen required.
+    std::vector<uint32_t> ws_cull_bgez_sites;
+    // [widescreen.cull] clip_edge_x_load_sites -- lh/lhu/lw loads of a screen-X
+    // clip bound (e.g. a scratchpad clip rectangle compared with slt). While
+    // revealed, a loaded 0 becomes -margin and a loaded clip_edge_width becomes
+    // width+margin; interior bounds (mirrors, split-screen halves) stay
+    // vanilla. Empty by default; identity at 4:3; regen required.
+    std::vector<uint32_t> ws_cull_clip_edge_x_load_sites;
+    // [widescreen.cull] clip_edge_width -- the screen width a right-edge clip
+    // bound equals. 0 = the first screen_w_imms entry (0x140 by default).
+    uint32_t ws_cull_clip_edge_width = 0;
 };
+
+// Effective clip_edge_width: explicit value, else screen_w_imms[0], else 320.
+inline uint32_t ws_cull_clip_edge_width(const GameConfig& c) {
+    if (c.ws_cull_clip_edge_width) return c.ws_cull_clip_edge_width;
+    return c.ws_cull_w_imms.empty() ? 0x140u : c.ws_cull_w_imms.front();
+}
 
 // UserSettings — the launcher-written, user-editable override layer.
 //

@@ -2532,6 +2532,10 @@ def generate_overlay_dispatch(variants: list) -> str:
     unique = []
     seen = set()
     for variant in variants:
+        # The lookup keys on the exact PC; every body is compiled for KSEG0.
+        if variant['addr'] & 0xE0000000 != 0x80000000:
+            raise ValueError(f"static overlay entry 0x{variant['addr']:08X} "
+                             "is not a KSEG0 PC")
         ranges = tuple((lo & 0x1FFFFFFF, length)
                        for lo, length in variant['ranges'])
         key = (variant['addr'], variant['crc'], ranges)
@@ -2712,7 +2716,15 @@ def generate_overlay_dispatch(variants: list) -> str:
         'static uint32_t psx_ov_found_entry = 0;',
         '',
         'static const PsxOvVariant *psx_overlay_static_find_variant(uint32_t addr) {',
-        '    const uint32_t key = (addr & 0x1FFFFFFFu) | 0x80000000u;',
+        '    /* Entries are the KSEG0 PCs their bodies were compiled for',
+        '     * (PSX_OVERLAY_CODE_SEGMENT, overlay_loader.h). A KUSEG or KSEG1',
+        '     * alias of the same bytes is a different architectural PC and',
+        '     * stays in the interpreter. */',
+        '    if ((addr & 0xE0000000u) != 0x80000000u) {',
+        '        psx_ov_static_address_misses++;',
+        '        return 0;',
+        '    }',
+        '    const uint32_t key = addr;',
     ]
 
     if not flat_variants:

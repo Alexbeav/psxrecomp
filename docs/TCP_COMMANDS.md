@@ -55,6 +55,10 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `screenshot_wide_hires` | ✓ |   | `path`, `base_x` | The displayed band of the native-wide surface at internal resolution (`wide_w×S` by `height×S`). `present_shot` is capped at the window; this checks a widescreen + internal-resolution combination at full size |
 | `present_shot` | ✓ |   | `path` | PNG of the **composed present surface** — the frame after the backend fits the display buffer to the window, so it carries the presented aspect. ⚠ every other capture resolves the display buffer *before* that fit: on a 508×256 display in a 4:3 window they answer 508×256 while the player sees 640×480. Use this one for anything aspect-shaped (widescreen, letterbox), where a pre-fit buffer would hide the very stage the change touches. Staged and fulfilled on the next present, so the ack means *queued* — poll `present_shot_seq`. Unavailable headless and on the Vulkan backend (its swapchain has no readback hook) |
 | `present_shot_seq` | ✓ |   | — | Completion counter for `present_shot`, plus `wrote` (1 = that completion produced a PNG). Sample before staging, poll until `seq` moves. Advances on success *and* failure, so the poll always terminates |
+| `gl_interp` | ✓ |   | — | OpenGL frame-rate presenter ([FRAME_RATE.md](FRAME_RATE.md)): enabled/suspended, host and target Hz, swaps, `source` (`vblank`/`flip`), `flip_period`, `captures` (new source frames) and `duplicates` (VBlanks that re-presented the same frame) |
+| `render_pass_stats` | ✓ |   | — | Render passes ([RENDER_PASSES.md](RENDER_PASSES.md)): plans, phases wanted/planned (shedding), passes, rollbacks (`nesting_repairs`: watchdog aborts whose skipped frame exits the restore undid), dropped device stores by class, `verify_mismatch` under `PSX_RENDER_PASS_VERIFY=1`, host-time split per pass, smoothed pass cost (`cost_us`; `cost_rewarms`: estimates no pass had run on for a while, measured again), presents made from pass images (`late_presents`: held past the frame's planned end because the next flip was late; `expired`: frames whose images stopped showing after several frame lengths without a flip), pass image textures allocated (`image_textures`, `image_bytes`), `status` (`psx_mod_render_pass_status`: 0 ready, 1 no presenter, 2 backend, 3 disabled, 4 session, 5 fast-forward, 6 busy), `backups_reused` (passes that reused the previous pass's VRAM backup) |
+| `render_pass_dump` | ✓ |   | `path`, `count` | Write the images (the game's own frame, then each pass in phase order) of the next `count` frames that get passes as `<path>/g<frame>_<index>_a<phase q16>.png` |
+| `render_pass_refuse` | ✓ |   | `on` | Make the OpenGL backend decline render passes (`status` 2, BACKEND), as a renderer mode without them would; tests a plugin's fallback. `PSX_RENDER_PASS_REFUSE=1` does the same from start |
 | `geom_correction` |   | ✓ | — | `[video] geometry_correction` / `perspective_texturing` engagement: enable flag plus free-running `geometry_vertex_hits` and `perspective_triangles` totals. Both enhancements silently fall back to the faithful path on anything they cannot prove is projected geometry, so a zero counter with the flag on means the title never qualifies — sample twice and diff for a rate |
 | `sio_state` | ✓ | ✓ | — | SIO registers + (native only) pad/memcard protocol + TX/RX history |
 | `irq_state` | ✓ | ✓ | — | `I_STAT`, `I_MASK` (both), plus chain state on native |
@@ -182,6 +186,61 @@ re-dispatches the guest's true target. Counters in
   anything else is a runtime bug).
 
 ---
+
+## `frame_fingerprint` — per-frame guest-write fingerprint (native only)
+
+Cumulative write hashes, snapshotted at every VBlank into a 32768-frame ring
+(`runtime/include/frame_fingerprint.h`). Diff two runs of the same seeded
+input, such as native overlay shards against the interpreter or two builds, to
+find the first frame where guest behaviour forks. Then arm
+`record_frame` on that frame in both runs and compare the two ordered logs.
+
+- `{"cmd":"frame_fingerprint","count":1024,"frame_lo":N,"frame_hi":M}`: all
+  parameters are optional. Entries come back oldest first.
+
+| Column | Role | Covers |
+|---|---|---|
+| `cyc` | judge | guest cycle counter at the snapshot |
+| `wc`, `ws` | judge | main-RAM write count, and an order-independent sum over `(addr, value)` |
+| `mmio`, `mc` | judge | device-register writes: ordered hash over `(addr, value, store PC)`, and a count |
+| `sp`, `sc` | judge | scratchpad writes: ordered hash over `(addr, value, store PC)`, and a count |
+| `qc` | judge | writes that FMV-quiet kept out of every other column |
+| `wr`, `pc` | locator | main-RAM writes: ordered hash over `(addr, value)`, and an ordered hash over store PCs |
+
+**Judge on the judge columns.** Two runs that behaved the same agree on all of
+them at every frame. `wr` and `pc` can differ even when guest state is
+identical. DMA and device writes to RAM (MDEC-out, CD, SPU, GPU→RAM) are
+recorded in the order the host services the device. A native shard flushes
+cycles at every store barrier, but batched interpreted and static code
+services the device after the block. As a result, the same writes can
+interleave differently with CPU stores. A device write also takes whatever
+CPU store PC came last. Use `wr` and `pc` only to narrow down a fork once a
+judge column has found it.
+
+**Store PCs are exact on every backend.** Static code and the interpreter set
+`g_debug_last_store_pc` themselves. Native overlay shards write the runtime's
+copy through the ABI v24 `last_store_pc` pointer. Before v24, shards kept a
+private copy, so `pc`, `mmio` and `sp` named an older store for every overlay
+store.
+
+**One-frame straddles are not divergences.** Batched code services devices up
+to a basic block late. So a device write due at, for example, VBlank + 1 cycle
+can land on the other side of the snapshot in one run. `ws` and `wc` then
+differ for that single frame, with `wc` off by the number of straddled writes,
+and agree again at the next one. In a 12000-frame R4 A/B of native shards
+against the interpreter, 497 frames straddled by exactly one write, and every
+one re-converged on the next frame.
+
+**Turn FMV-quiet off for identity runs.** `PSX_DEBUG_FMV_QUIET` is on unless it
+is set to `0`. While the MDEC has decoded recently, it stops write recording,
+and those frames' writes add only to `qc`. If a straddled write falls into a
+quiet frame in one run and not the other, `ws`, `wc` and `qc` never agree
+again. `wc + qc` still agrees, which tells this case apart from a real fork.
+For A/B identity, set `PSX_DEBUG_FMV_QUIET=0` in both runs.
+
+`ws` is a multiset sum. It cannot see two writes to one address arriving in
+the opposite order, even though the final RAM differs. Such a fork shows up in
+later writes, `cyc`, or `read_ram`.
 
 ## `bios_info` — linked recompiled-BIOS identity (native only)
 
@@ -338,9 +397,9 @@ The TCP server is the canonical instrumentation surface. Rule 3 in `CLAUDE.md` i
 
 ## Complete command index (generated)
 
-**318 commands registered** — 305 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**321 commands registered** — 308 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-56 of 318 have prose above; **262 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+61 of 321 have prose above; **260 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -453,7 +512,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `fntrace_reset` |  | ✓ |  |
 | `fntrace_unfiltered` |  | ✓ |  |
 | `frame` | ✓ |  | ✓ |
-| `frame_fingerprint` | ✓ |  |  |
+| `frame_fingerprint` | ✓ |  | ✓ |
 | `frame_perf` | ✓ |  |  |
 | `frame_range` | ✓ | ✓ | ✓ |
 | `frame_timeseries` | ✓ | ✓ | ✓ |
@@ -466,7 +525,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `get_snapshots` | ✓ | ✓ | ✓ |
 | `gl_coh_ring` | ✓ |  |  |
 | `gl_fbo_peek` | ✓ |  |  |
-| `gl_interp` | ✓ |  |  |
+| `gl_interp` | ✓ |  | ✓ |
 | `gl_present_ring` | ✓ |  |  |
 | `gl_vram_diff` | ✓ |  |  |
 | `gl_wide_fast` | ✓ |  |  |
@@ -555,6 +614,9 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `record_frame` | ✓ |  |  |
 | `record_frame_dump` | ✓ |  |  |
 | `record_reads_dump` | ✓ |  |  |
+| `render_pass_dump` | ✓ |  | ✓ |
+| `render_pass_refuse` | ✓ |  | ✓ |
+| `render_pass_stats` | ✓ |  | ✓ |
 | `restore_trace` | ✓ |  |  |
 | `restore_trace_clear` | ✓ |  |  |
 | `restore_trace_window` | ✓ |  |  |

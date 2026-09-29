@@ -45,6 +45,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "gpu_sw_renderer.h"
 #include "gpu_render.h"
 #include "gpu_gl_renderer.h"
+#include "render_pass.h"
 /* Declarations only: STB_IMAGE_IMPLEMENTATION lives in psx_window_icon.cpp. */
 #define STBI_NO_STDIO
 #include "../third_party/stb_image.h"
@@ -85,6 +86,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "launcher_device.h"
 #include "game_options.h"
 #include "mod_plugins.h"
+#include "mod_session_baseline.h"
 #include "mod_runtime.h"
 #include "crc32.h"
 #include "disc_identity.h"
@@ -224,6 +226,8 @@ extern "C" {
 
 /* memory.c */
 extern "C" void     memory_init(const char* bios_path);
+/* psx_ram_geometry.c: drop a plugin's 8 MiB request before the next boot. */
+extern "C" void     psx_ram_reset_size_request(void);
 extern "C" void     memory_set_sr_ptr(const uint32_t *p);
 /* interrupts.c */
 extern "C" void     psx_irq_set_cause_ptr(uint32_t *p);
@@ -1023,6 +1027,9 @@ extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) 
 
 extern "C" void psx_frontend_on_savestate_loaded(void) {
     mod_runtime_on_savestate_loaded();
+#ifndef PSX_NO_DEBUG_TOOLS
+    debug_server_note_savestate_loaded();
+#endif
     s_disabled_frame_presented = false;
     s_force_present_after_load = true;
     smooth_60_reset();
@@ -1322,6 +1329,15 @@ static int           g_frame_interpolation_blend =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
 static int           g_frame_interpolation_blend_default =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
+/* Presentation is sped up this VBlank (manual fast-forward, turbo-through-
+ * loads, FMV auto-skip, TCP turbo). Render passes are refused meanwhile. */
+static int           s_presentation_fast_forward = 0;
+extern "C" int psx_presentation_fast_forward(void) {
+    return s_presentation_fast_forward;
+}
+/* Mod-owned blend source; reset_mod_owned_presentation() sets VBLANK. */
+static int           g_frame_interpolation_source =
+    PSX_MOD_FRAME_SOURCE_VBLANK;
 static std::array<int, PSX_MAX_PLAYERS> g_mod_controller_mode_override =
     [] {
         std::array<int, PSX_MAX_PLAYERS> modes{};
@@ -1454,6 +1470,90 @@ extern "C" int psx_mod_set_adaptive_display_aspect(
     return 1;
 }
 
+/*
+ * Mod-owned session state: what a trusted plugin's psx_mod_* setters (or the
+ * netplay local viewport, through the same setters) change and no launcher
+ * control owns. Called at every session start, BEFORE activation: by
+ * start_mod_session() in main(), immediately before
+ * mod_runtime_activate_plugins(). The first boot and the lobby rematch both
+ * run that sequence after their commit or netplay clear.
+ *
+ * The rematch is the only in-process second session, and the session before
+ * it is always a netplay match: an offline session ends the process, and only
+ * a netplay match launched from the lobby soft-returns. Netplay clears the mod
+ * plan, so no plugin activated before a rematch. What can leak today is the
+ * Fit and fixed aspect apply_netplay_local_viewport_aspect() set, into an
+ * offline rematch. The rest is defensive, for the state listed here only; see
+ * docs/MOD_PACKAGES.md "Session starts" for what is exempt and why (the
+ * renderer and fixed aspect are launcher controls; guest/GPU-DMA memory,
+ * texture-packet arenas and defined texture banks live for the process).
+ *
+ * Function-entry hooks need nothing here: the commit or netplay clear empties
+ * upstream's hook table, and only activation rebuilds it.
+ *
+ * The first call captures the pre-activation scalars (mod_session_baseline.h)
+ * and changes nothing that is not already at its initial value, so the first
+ * session -- every run that never soft-returns -- behaves exactly as before.
+ * Later calls restore those scalars and also clear the 8 MiB RAM request
+ * (memory_init() at session_reboot re-latches it) and the texture-bank
+ * resolver and batching flag, which a plugin sets in activation.
+ */
+static PSXModSessionBaseline g_mod_owned_baseline;
+
+static void reset_mod_owned_presentation(void) {
+    PSXModSessionScalars live;
+    live.video_vsync = g_video_vsync;
+    live.frame_interpolation = g_frame_interpolation;
+    live.frame_interpolation_fps = g_frame_interpolation_fps;
+    live.auto_skip_fmv = g_auto_skip_fmv;
+    live.guest_frame_period_ms = g_guest_frame_period_ms;
+    live.frame_period_ms = g_frame_period_ms;
+    /* psx_mod_set_frame_interpolation / _native_vblank_rate force vsync off;
+     * _auto_skip_fmv changes guest-visible FMV timing. */
+    const int first = psx_mod_session_baseline_apply(
+        &g_mod_owned_baseline, &live, g_mod_native_vblank_rate ? 1 : 0);
+    g_video_vsync = live.video_vsync;
+    g_frame_interpolation = live.frame_interpolation;
+    g_frame_interpolation_fps = live.frame_interpolation_fps;
+    g_auto_skip_fmv = live.auto_skip_fmv;
+    g_guest_frame_period_ms = live.guest_frame_period_ms;
+    g_frame_period_ms = live.frame_period_ms;
+    g_mod_native_vblank_rate = false;
+    g_mod_native_vblank_fps = 0;
+    if (!first) {
+        psx_ram_reset_size_request();
+        psx_mod_set_texture_bank_resolver(nullptr);
+        psx_mod_set_texture_bank_batching(0);
+    }
+    /* Fit / capped resize-driven aspect. The fixed aspect is the launcher's
+     * (and netplay's) to set, so it is left alone here. */
+    g_ws_adaptive_view = false;
+    g_ws_adaptive_max_num = 16;
+    g_ws_adaptive_max_den = 9;
+    psx_mod_set_world_scene_predicate(nullptr);
+    psx_mod_set_retained_scene_predicate(nullptr);
+    psx_mod_set_adaptive_backdrop_preload(0);
+    g_bezel_path.clear();
+    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
+    g_frame_interpolation_source = PSX_MOD_FRAME_SOURCE_VBLANK;
+    /* Render-pass counters, the disabled-after-faults latch and any open
+     * plan generation belong to the session that made them. */
+    render_pass_reset_session();
+}
+
+/* The disc a session mounts: a disc-patching mod's private patched image when
+ * the committed plan built one, else the stock disc, which stays untouched
+ * (master behaviour). Every session start calls it after its commit. */
+static std::string session_disc_path(const std::filesystem::path& stock_disc) {
+    const std::filesystem::path& mod_disc =
+        PSXRecompV4::mod_runtime_effective_disc_path();
+    if (mod_disc.empty()) return stock_disc.string();
+    std::fprintf(stdout,
+        "psxrecomp: stock disc remains %s; mounting private mod cache %s\n",
+        stock_disc.string().c_str(), mod_disc.string().c_str());
+    return mod_disc.string();
+}
+
 extern "C" int psx_mod_set_native_vblank_rate(
     uint32_t frames_per_second) {
     if (frames_per_second != 0 &&
@@ -1525,16 +1625,38 @@ extern "C" int psx_mod_set_frame_interpolation(
 extern "C" int psx_mod_set_frame_interpolation_blend(
     uint32_t blend_mode) {
     if (blend_mode != PSX_MOD_FRAME_INTERPOLATION_LINEAR &&
-        blend_mode != PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE) {
+        blend_mode != PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE &&
+        blend_mode != PSX_MOD_FRAME_INTERPOLATION_HOLD) {
         std::fprintf(stderr,
             "psxrecomp: mod rejected invalid frame-interpolation blend %u\n",
             (unsigned)blend_mode);
         return 0;
     }
     g_frame_interpolation_blend = (int)blend_mode;
+    /* Live when the presenter is already configured (a later call from a
+     * hook); before that, session start hands it over with the rates. */
+    gl_renderer_set_interpolation_blend(g_frame_interpolation_blend);
     std::fprintf(stdout, "psxrecomp: frame-interpolation blend = %s\n",
         blend_mode == PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE
-            ? "motion-adaptive clarity" : "linear crossfade");
+            ? "motion-adaptive clarity"
+        : blend_mode == PSX_MOD_FRAME_INTERPOLATION_HOLD
+            ? "hold (render passes supply in-between frames)"
+            : "linear crossfade");
+    return 1;
+}
+
+extern "C" int psx_mod_set_frame_interpolation_source(uint32_t source) {
+    if (source != PSX_MOD_FRAME_SOURCE_VBLANK &&
+        source != PSX_MOD_FRAME_SOURCE_FLIP) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid frame-interpolation source %u\n",
+            (unsigned)source);
+        return 0;
+    }
+    g_frame_interpolation_source = (int)source;
+    std::fprintf(stdout, "psxrecomp: frame-interpolation source = %s\n",
+        source == PSX_MOD_FRAME_SOURCE_FLIP
+            ? "guest frame flips" : "every guest VBlank");
     return 1;
 }
 
@@ -2740,16 +2862,11 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
         return cached;
     }
 
-    launcher_info((s_picker_game_name + " — game disc image needed").c_str(),
-        "Step 2 of 2 — game disc image\n\n"
-        "In the next window, select your " + s_picker_game_name +
-        (game_id.empty() ? std::string() : " (" + game_id + ")") +
-        " disc image ripped from your own disc.\n\n"
-        "Accepted formats: .cue (preferred, with its .bin next to it), "
-        ".bin, .img, .iso, .car (Steam), or .chd.\n\n"
-        "(This is NOT the BIOS — the BIOS was already chosen.)");
+    // Go straight to the native picker. A preliminary modal was redundant,
+    // visually inconsistent with the picker, and was easy to encounter on
+    // ordinary direct launches with no remembered disc path.
     std::string disc_title =
-        s_picker_game_name + " — Step 2 of 2: select " + s_picker_game_name +
+        "Select " + s_picker_game_name +
         " disc image (.cue / .bin / .img / .iso / .car / .chd)";
     for (;;) {
         std::filesystem::path picked;
@@ -7074,6 +7191,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     }
 #endif
 
+    /* Render passes (render_pass.c) stay off while presentation is sped up. */
+    s_presentation_fast_forward =
+        (turbo_loads_active || fmv_skip_active) ? 1 : 0;
+
     if (g_headless) {
         ep.skip_pace = 1;
         return ep;
@@ -7086,6 +7207,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * presentation and wall-clock pacing. */
 #ifndef PSX_NO_DEBUG_TOOLS
     if (debug_server_turbo_enabled()) {
+        s_presentation_fast_forward = 1;
         ep.skip_pace = 1;
         return ep;
     }
@@ -7114,6 +7236,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
             manual_turbo_active = true;
+            s_presentation_fast_forward = 1;
             if (!turbo_was_down && !g_manual_turbo_latched) {
                 char msg[40];
                 if (mult < 0)
@@ -13066,6 +13189,15 @@ int main(int argc, char** argv) {
                 gc.ws_cull_plane_nx_sites.data(), (int)gc.ws_cull_plane_nx_sites.size());
             gpu_ws_set_xclip_load_sites(
                 gc.ws_cull_xclip_load_sites.data(), (int)gc.ws_cull_xclip_load_sites.size());
+            gpu_ws_set_branch_cull_sites(
+                gc.ws_cull_bltz_sites.data(), (int)gc.ws_cull_bltz_sites.size(),
+                gc.ws_cull_bgez_sites.data(), (int)gc.ws_cull_bgez_sites.size(),
+                gc.ws_cull_branch_keep_sites.data(),
+                (int)gc.ws_cull_branch_keep_sites.size());
+            gpu_ws_set_clip_edge_x_load_sites(
+                gc.ws_cull_clip_edge_x_load_sites.data(),
+                (int)gc.ws_cull_clip_edge_x_load_sites.size(),
+                PSXRecompV4::ws_cull_clip_edge_width(gc));
             {
                 std::vector<uint32_t> addresses, expected, results;
                 addresses.reserve(gc.ws_cull_keep_sites.size());
@@ -14814,49 +14946,65 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-    /* Activation callbacks are re-run after every launcher session. Clear
-     * game-owned controller overrides/policies first so disabling a package
-     * cannot leave its prior state latched across a soft return. */
-    g_mod_controller_mode_override.fill(-1);
-    for (auto& policy : g_mod_controller_policy)
-        policy = ModControllerPresentationPolicy{};
-    g_mod_load_wall_multiplier = -1;
-    g_mod_load_release_frames = -1;
-    g_mod_disc_speed_divisor = -1;
-    g_mod_disc_instant_rate = -1;
-    g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
-    g_turbo_load_wall_multiplier = 0;
-    g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
-    if (!turbo_loads_offered)
-        g_turbo_loads_enabled = 0;
-    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
-    mod_runtime_activate_plugins();
-    apply_netplay_local_viewport_aspect(net_cfg.enabled);
-    for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
-        if (g_mod_controller_mode_override[i] >= 0)
-            player_mode[i] = g_mod_controller_mode_override[i];
-    }
-    if (g_mod_load_wall_multiplier >= 0) {
-        g_turbo_loads_enabled = 1;
-        g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
-        g_turbo_load_release_frames = g_mod_load_release_frames;
-        /* Fast Loading advances the guest at a host rate greater than real
-         * time. Keep the canonical SPU/CD stream running, but discard the
-         * accelerated presentation-side audio until pacing resumes; otherwise
-         * the SDL bridge overflows and the load becomes observably unstable. */
-        g_turbo_audio_sink_enabled = g_turbo_load_wall_multiplier > 1;
-        if (g_turbo_load_wall_multiplier) {
-            std::fprintf(stdout,
-                "psxrecomp: mod selected %dx load acceleration "
-                "(%d release frames)\n",
-                g_turbo_load_wall_multiplier, g_turbo_load_release_frames);
-        } else {
-            std::fprintf(stdout,
-                "psxrecomp: mod selected uncapped load acceleration "
-                "(%d release frames)\n",
-                g_turbo_load_release_frames);
+    /* Session start: every session runs this after its mod commit or netplay
+     * clear -- the first boot here, and the lobby rematch, which re-enters at
+     * session_reboot below this block and so calls it itself. Both paths reach
+     * renderer and window creation only after session_reboot, so activation
+     * precedes them either way. A netplay clear leaves no plan, so nothing
+     * activates and the session stays vanilla. */
+    auto start_mod_session = [&](bool netplay) {
+        /* Clear game-owned controller overrides/policies and load/disc-speed
+         * choices first so disabling a package cannot leave its prior state
+         * latched across a soft return. */
+        g_mod_controller_mode_override.fill(-1);
+        for (auto& policy : g_mod_controller_policy)
+            policy = ModControllerPresentationPolicy{};
+        g_mod_load_wall_multiplier = -1;
+        g_mod_load_release_frames = -1;
+        g_mod_disc_speed_divisor = -1;
+        g_mod_disc_instant_rate = -1;
+        g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
+        g_turbo_load_wall_multiplier = 0;
+        g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
+        if (!turbo_loads_offered)
+            g_turbo_loads_enabled = 0;
+        /* The helper restores interpolation and Skip FMVs to their
+         * pre-activation values, which is only right while no launcher
+         * control owns them. */
+        static_assert(!frame_interpolation_offered && !skip_fmv_offered,
+                      "reset_mod_owned_presentation() would clobber a launcher "
+                      "setting; restore only when the feature is mod-owned");
+        reset_mod_owned_presentation();
+        mod_runtime_activate_plugins();
+        apply_netplay_local_viewport_aspect(netplay);
+        for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
+            if (g_mod_controller_mode_override[i] >= 0)
+                player_mode[i] = g_mod_controller_mode_override[i];
         }
-    }
+        if (g_mod_load_wall_multiplier >= 0) {
+            g_turbo_loads_enabled = 1;
+            g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
+            g_turbo_load_release_frames = g_mod_load_release_frames;
+            /* Fast Loading advances the guest at a host rate greater than real
+             * time. Keep the canonical SPU/CD stream running, but discard the
+             * accelerated presentation-side audio until pacing resumes;
+             * otherwise the SDL bridge overflows and the load becomes
+             * observably unstable. */
+            g_turbo_audio_sink_enabled = g_turbo_load_wall_multiplier > 1;
+            if (g_turbo_load_wall_multiplier) {
+                std::fprintf(stdout,
+                    "psxrecomp: mod selected %dx load acceleration "
+                    "(%d release frames)\n",
+                    g_turbo_load_wall_multiplier, g_turbo_load_release_frames);
+            } else {
+                std::fprintf(stdout,
+                    "psxrecomp: mod selected uncapped load acceleration "
+                    "(%d release frames)\n",
+                    g_turbo_load_release_frames);
+            }
+        }
+    };
+    start_mod_session(net_cfg.enabled);
 
     /* Re-apply the resolved language to the translation layer. text_xlate_init
      * (at config load) only saw the game.toml default; this folds in the
@@ -14888,17 +15036,7 @@ int main(int argc, char** argv) {
 
     std::string bios_path_str    = resolved_bios.string();
     std::string memcard_dir_str  = memcard_dir.string();
-    /* A disc-patching mod builds a private patched image; mount that instead of
-     * the stock disc, leaving the user's original untouched (master behaviour). */
-    const std::filesystem::path& mod_disc =
-        PSXRecompV4::mod_runtime_effective_disc_path();
-    std::string disc_path_str =
-        (mod_disc.empty() ? resolved_disc : mod_disc).string();
-    if (!mod_disc.empty()) {
-        std::fprintf(stdout,
-            "psxrecomp: stock disc remains %s; mounting private mod cache %s\n",
-            resolved_disc.string().c_str(), mod_disc.string().c_str());
-    }
+    std::string disc_path_str = session_disc_path(resolved_disc);
 
 session_reboot:
     /* Rematch after lobby soft-return re-enters here with updated net_cfg. */
@@ -15591,6 +15729,7 @@ session_reboot:
                                           ? 1000.0 / g_frame_period_ms
                                           : 59.94,
                                       g_frame_interpolation_blend);
+        gl_renderer_set_interpolation_source(g_frame_interpolation_source);
     }
     /* Vulkan backend: create the instance/device/swapchain on the
      * SDL_WINDOW_VULKAN window. On failure, fall back to software (vkb_init
@@ -16542,14 +16681,10 @@ soft_return_lobby:
                                    player_device[i]) <= 1) {
                         player_device[i] = "gamepad";
                     }
-                    /* Same resolution as the first launcher-exit path, and the
-                     * mod-override arm matters HERE specifically: `goto
-                     * session_reboot` re-enters the emulator BELOW the block
-                     * that applies g_mod_controller_mode_override, so a soft
-                     * return from the lobby never re-runs it. Before this
-                     * helper existed, an override survived a rematch only
-                     * because it round-tripped through ls.pad_mode[]; a bare
-                     * lock clamp here would have silently dropped it. */
+                    /* Same resolution as the first launcher-exit path. The
+                     * override here is the previous session's; the rematch's
+                     * start_mod_session() below clears it, re-runs activation
+                     * and applies the new session's override over this. */
                     player_mode[i] =
                         PSXRecompV4::resolve_player_mode_after_launcher(
                             ls.pad_mode[i], ctrl_lock_mode,
@@ -16730,7 +16865,9 @@ soft_return_lobby:
              * clobber whatever the Fast Loading / CD Speed / Tweaks plugins
              * decided with a stale pre-activation value — turning a player's
              * enabled mod silently back off on the first in-game Apply. The
-             * offered flags are false for both, so leave both globals alone. */
+             * offered flags are false for both, so leave both globals alone;
+             * the rematch's start_mod_session() below resets and re-decides
+             * both. */
             if (skip_fmv_offered)     g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
             if (turbo_loads_offered)  g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
             g_fullscreen = ls.fullscreen != 0;
@@ -16840,7 +16977,25 @@ soft_return_lobby:
                     return 1;
                 }
             }
-            apply_netplay_local_viewport_aspect(net_cfg.enabled);
+            /* `goto session_reboot` re-enters below the first-boot session
+             * block, so run the same session start here, after the
+             * commit/clear above: the controller, load and disc-speed resets,
+             * the mod-owned presentation reset, activation (which rebuilds the
+             * function-entry hook table the commit/clear emptied), then what
+             * activation chose. A netplay rematch has no plan, so it stays
+             * vanilla. Only a netplay match returns here, so the reachable
+             * leak the reset closes is the Fit and fixed aspect its local
+             * viewport set. The launcher round-trips the previous session's
+             * aspect through ls.aspect_index; widescreen is mod-owned on PSX,
+             * so re-apply the Settings 4:3 clamp from startup first, where a
+             * plugin's activation or the netplay local viewport can still
+             * replace it. */
+            if (!ws_offered) {
+                g_video_aspect_num = 4;
+                g_video_aspect_den = 3;
+            }
+            start_mod_session(net_cfg.enabled);
+            disc_path_str = session_disc_path(resolved_disc);
             std::printf("psxrecomp: rematch from lobby (netplay=%d)\n",
                         net_cfg.enabled ? 1 : 0);
             std::fflush(stdout);

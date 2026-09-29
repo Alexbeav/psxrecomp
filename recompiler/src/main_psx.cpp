@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <exception>
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
@@ -82,7 +83,26 @@ void materialize_alias_groups(PSXRecomp::FunctionAnalysisResult& result,
 
 } // namespace
 
+static int psxrecomp_game_main(int argc, char** argv);
+
+// Configuration and generation errors are reported by throwing: a malformed
+// game.toml (a bad hex address, an out-of-range value, a wrong TOML type),
+// or an input the emitter must refuse (an overlay whose mandatory delay slot
+// lies outside the image). Left uncaught, the exception terminates through
+// abort(): the process dies by SIGABRT and macOS files a crash report instead
+// of the caller seeing a diagnostic. Every caller already treats any non-zero
+// status as failure, so print the message and exit with status 1.
 int main(int argc, char** argv) {
+    try {
+        return psxrecomp_game_main(argc, argv);
+    } catch (const std::exception& e) {
+        std::fflush(stdout);
+        fmt::print(stderr, "ERROR: {}\n", e.what());
+        return 1;
+    }
+}
+
+static int psxrecomp_game_main(int argc, char** argv) {
     const auto print_usage = [&]() {
         fmt::print("Usage: {} --config <game.toml>\n", argv[0]);
         fmt::print("       {} <PS1-EXE file> [--seeds <file>] [--out-dir <dir>] [--strict] [--inspect]\n", argv[0]);
@@ -212,6 +232,9 @@ int main(int argc, char** argv) {
     std::set<uint32_t>    ws_cull_nclip_keep;   // [widescreen.cull] nclip_keep_sites
     std::set<uint32_t>    ws_cull_nclip_exact;  // [widescreen.cull] nclip_exact_sites
     std::set<uint32_t>    ws_cull_branch_keep;  // [widescreen.cull] branch_keep_sites
+    std::set<uint32_t>    ws_cull_bgez;         // [widescreen.cull] bgez_sites
+    std::set<uint32_t>    ws_cull_clip_edge_x_load; // [widescreen.cull] clip_edge_x_load_sites
+    uint32_t              ws_cull_clip_edge_width = 0; // [widescreen.cull] clip_edge_width
     std::vector<PSXRecompV4::WidescreenCullKeepSite> ws_cull_keep;
     std::vector<PSXRecompV4::WidescreenAngleSite> ws_cull_angle;
     PSXRecompV4::WidescreenAspectConeConfig ws_aspect_cone;
@@ -276,6 +299,11 @@ int main(int argc, char** argv) {
         ws_cull_nclip_keep.insert(cfg.ws_cull_nclip_keep_sites.begin(), cfg.ws_cull_nclip_keep_sites.end());
         ws_cull_nclip_exact.insert(cfg.ws_cull_nclip_exact_sites.begin(), cfg.ws_cull_nclip_exact_sites.end());
         ws_cull_branch_keep.insert(cfg.ws_cull_branch_keep_sites.begin(), cfg.ws_cull_branch_keep_sites.end());
+        ws_cull_bgez.insert(cfg.ws_cull_bgez_sites.begin(), cfg.ws_cull_bgez_sites.end());
+        ws_cull_clip_edge_x_load.insert(cfg.ws_cull_clip_edge_x_load_sites.begin(),
+                                        cfg.ws_cull_clip_edge_x_load_sites.end());
+        if (!cfg.ws_cull_clip_edge_x_load_sites.empty())
+            ws_cull_clip_edge_width = PSXRecompV4::ws_cull_clip_edge_width(cfg);
         ws_cull_keep = cfg.ws_cull_keep_sites;
         ws_cull_angle = cfg.ws_cull_angle_sites;
         ws_aspect_cone = cfg.ws_aspect_cone;
@@ -372,6 +400,11 @@ int main(int argc, char** argv) {
         ws_cull_nclip_keep.insert(wscfg.ws_cull_nclip_keep_sites.begin(), wscfg.ws_cull_nclip_keep_sites.end());
         ws_cull_nclip_exact.insert(wscfg.ws_cull_nclip_exact_sites.begin(), wscfg.ws_cull_nclip_exact_sites.end());
         ws_cull_branch_keep.insert(wscfg.ws_cull_branch_keep_sites.begin(), wscfg.ws_cull_branch_keep_sites.end());
+        ws_cull_bgez.insert(wscfg.ws_cull_bgez_sites.begin(), wscfg.ws_cull_bgez_sites.end());
+        ws_cull_clip_edge_x_load.insert(wscfg.ws_cull_clip_edge_x_load_sites.begin(),
+                                        wscfg.ws_cull_clip_edge_x_load_sites.end());
+        if (!wscfg.ws_cull_clip_edge_x_load_sites.empty() && !ws_cull_clip_edge_width)
+            ws_cull_clip_edge_width = PSXRecompV4::ws_cull_clip_edge_width(wscfg);
         if (ws_cull_keep.empty()) ws_cull_keep = wscfg.ws_cull_keep_sites;
         if (ws_cull_angle.empty()) ws_cull_angle = wscfg.ws_cull_angle_sites;
         if (ws_aspect_cone.sites.empty())
@@ -1244,6 +1277,12 @@ int main(int argc, char** argv) {
     codegen_config.ws_cull_nclip_keep_sites = ws_cull_nclip_keep;
     codegen_config.ws_cull_nclip_exact_sites = ws_cull_nclip_exact;
     codegen_config.ws_cull_branch_keep_sites = ws_cull_branch_keep;
+    codegen_config.ws_cull_bgez_sites = ws_cull_bgez;
+    codegen_config.ws_cull_clip_edge_x_load_sites = ws_cull_clip_edge_x_load;
+    if (ws_cull_clip_edge_width)
+        codegen_config.ws_cull_clip_edge_width = ws_cull_clip_edge_width;
+    else if (!ws_cull_w_imms.empty())
+        codegen_config.ws_cull_clip_edge_width = ws_cull_w_imms.front();
     codegen_config.ws_cull_keep_sites = ws_cull_keep;
     codegen_config.ws_cull_angle_sites = ws_cull_angle;
     codegen_config.ws_aspect_cone = ws_aspect_cone;

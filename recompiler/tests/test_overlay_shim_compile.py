@@ -30,6 +30,10 @@ def main() -> int:
     source = r'''#include "cpu_state.h"
 #include "overlay_dispatch_preamble.c.inc"
 
+/* As CodeGenerator::emit_runtime_externs declares them in every shard. */
+extern int  psx_ws_cull_bgez(uint32_t v);
+extern uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w);
+
 void func_80010000(CPUState *cpu) {
     psx_cyc_bb_defer_begin();
     psx_cyc_charge(1u);
@@ -37,6 +41,10 @@ void func_80010000(CPUState *cpu) {
     cpu->gpr[2] = psx_cyc_load_word(cpu, cpu->gpr[4], 2u, 0u);
     cpu->gpr[3] = psx_cyc_load_half(cpu, cpu->gpr[5], 3u, 0u);
     cpu->gpr[6] = psx_ws_cull_slti_lower(cpu->gpr[7], 0xff00u);
+    /* [widescreen.cull] bgez_sites / clip_edge_x_load_sites: the emitter
+     * writes both in overlay code, so the shim must define them. */
+    cpu->gpr[8] = (uint32_t)psx_ws_cull_bgez(cpu->gpr[9]);
+    cpu->gpr[10] = psx_ws_clip_edge_x(cpu->gpr[11], 0x140u);
     psx_cyc_bb_defer_flush();
     psx_cyc_bb_defer_end();
     if (psx_slice_block(cpu, 0x80010000u, 1u, 0)) return;
