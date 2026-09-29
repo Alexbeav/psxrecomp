@@ -70,6 +70,52 @@ class GlScaleGuards(unittest.TestCase):
         self.assertIn("(g_video_renderer == 1) ? GL_MAX_INTERNAL_SCALE", MAIN)
 
 
+class InternalResolutionGuards(unittest.TestCase):
+    def test_hidpi_window_only_when_opted_in(self):
+        self.assertIn("win_flags |= PSX_SDL_WINDOW_HIGH_DENSITY;", MAIN)
+        self.assertRegex(MAIN, r"g_video_hidpi_window = g_video_scale_applies &&\s*"
+                               r"\(g_video_requested_scale > 1 \|\|\s*"
+                               r"effective_internal_resolution\(\) == PSX_IR_DISPLAY\);")
+        self.assertRegex(MAIN, r"if \(g_video_hidpi_window\)\s*win_flags \|= PSX_SDL_WINDOW_HIGH_DENSITY;")
+
+    def test_vocabulary_is_optional_abi(self):
+        # Builds against an older recomp-ui must still compile: every use of
+        # the new launcher fields sits behind the capability macro.
+        for field in ("gi->internal_resolution_labels", "ls.internal_resolution",
+                      "= internal_resolution_for_launcher();"):
+            for m in re.finditer(re.escape(field), MAIN):
+                before = MAIN[:m.start()]
+                opened = before.count("#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)")
+                closed = len(re.findall(r"#endif", before[before.rfind(
+                    "#if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)"):]))
+                self.assertGreater(opened, 0, field)
+                self.assertEqual(closed, 0, field + " outside its #if block")
+
+    def test_unset_preset_leaves_supersampling(self):
+        self.assertIn("if (preset == PSX_IR_UNSET) return;",
+                      body(MAIN, "static void apply_internal_resolution(int display_px_h)"))
+
+    def test_launcher_trips_use_the_round_trip_helpers(self):
+        # Both launcher exits (first boot, netplay soft-return) seed and adopt
+        # through internal_resolution.h, whose behaviour with and without the
+        # Internal resolution row is unit-tested (internal_resolution_test).
+        # A bare factor copy next to a sticky preset let the preset override
+        # a pick in an older launcher's Supersampling row.
+        self.assertEqual(MAIN.count("psx_ir_launcher_seed_supersampling("), 2)
+        self.assertEqual(MAIN.count("psx_ir_adopt_launcher("), 2)
+        self.assertEqual(MAIN.count("kLauncherHasInternalResolution, ir_preset_seeded, ir_ss_seeded,"), 2)
+        self.assertNotRegex(MAIN, r"g_video_scale\s*=\s*(seed|ls)\.supersampling;")
+        self.assertIn("g_video_internal_res = ir.preset;", MAIN)
+
+    def test_env_override_is_never_persisted(self):
+        # PSX_INTERNAL_RESOLUTION wins for the run only: the launcher shows and
+        # settings.toml saves the configured preset.
+        self.assertIn("if (psx_ir_parse(e, &v)) g_video_internal_res_env = v;", MAIN)
+        self.assertNotRegex(MAIN, r"g_video_internal_res\s*=\s*v;")
+        self.assertIn("g_video_internal_res_env != PSX_IR_UNSET ? g_video_internal_res_env",
+                      body(MAIN, "static int effective_internal_resolution(void)"))
+
+
 class RunnerParsing(unittest.TestCase):
     def test_parse(self):
         self.assertEqual(parse_run("driver=x\ndigest=0123456789abcdef\nchecks=7 failures=0\n"),

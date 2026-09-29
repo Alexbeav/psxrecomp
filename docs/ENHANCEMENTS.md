@@ -868,3 +868,49 @@ tooling defect found on the way: `screenshot_hires` produces a tiled/black
 PNG at 768x480 scale-2 windowed (row-pitch bug in the hires readback) —
 the census + the player's own captures carried the session; fix it before
 the formal Crash/Tomba2 A/B.
+
+## IR1 — Internal resolution presets (Native … 8K) and the GL scale ceiling (2026-09-26)
+
+**What the player gets.** Settings → Display → **Internal resolution**: Native,
+720p, 1080p, 1440p, 4K, 5K, 8K, Match display. A preset is a target height and
+resolves to an integer scale over the title's reference height
+(`[video] resolution_reference_lines`, 240 by default): 3x, 5x (1200 lines,
+area-resolved to 1080), 6x, 9x, 12x, 18x. It is a Settings row, not a mod,
+because it needs no game hooks; it is presentation-only, so it also applies in
+netplay (each peer its own). Keys and precedence: `docs/config_schema.md`.
+
+**Why the old ceiling was 4.** The software renderer keeps a CPU mirror of
+1 MiB·S², so it caps at 4, and every backend inherited that cap. OpenGL keeps
+the hr surface on the GPU; its real limits are the driver's texture,
+renderbuffer and viewport sizes (the surface is `1024·S × 512·S`) and memory.
+The GL backend now clamps at context init to those limits and a 2 GiB budget,
+logs the clamp, and steps down instead of failing (a failure used to drop the
+whole backend to software). Measured on an Apple M4 (`4.1 Metal - 91.7`): all
+three limits are 16384, so the full-VRAM surface stops at 16x.
+
+**Fixes that only bite above 1x** (all gated on S > 1, so native is
+byte-identical):
+
+- Lines: `glLineWidth(S)` is capped at 1 on core profiles (macOS reports
+  `GL_ALIASED_LINE_WIDTH_RANGE` 1..1), so every line was one hr pixel thick.
+  Lines are now quads one native pixel thick that include both endpoints, like
+  the software rasterizer.
+- Present: a supersampled source more than 1.25x the output is area-resolved
+  (bilinear taps over the pixel's footprint) instead of one tap, and the UV
+  inset is half a texel, not half a native pixel (which cropped (S-1)/2 texels
+  per edge).
+- The copy scratch is sized to the largest copy and the mask stencil is
+  rebuilt in tiles over the primitive bbox union, so a large S does not cost
+  another full-size surface.
+- The CPU present path under GL presents at 1x (its readout is native) and its
+  staging buffer no longer grows with S².
+- The macOS game window gets a high-pixel-density drawable when the player
+  picks anything above native; without it the drawable is in points and the
+  compositor stretches it, throwing half the resolution away.
+
+**Verification.** `gl_scale_invariance_test` renders one GP0 scene on a hidden
+real GL context at 1, 2, 3, 5 and 9x and requires identical guest-visible VRAM
+(the pack of the hr surface) at every scale, one-native-pixel lines at
+internal resolution, and a 32x request that stays on GL at the driver clamp.
+In a running game, `video_info` reports the requested and effective scale and
+the drawable; `screenshot_hires` reads the hr FBO at full size.

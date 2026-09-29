@@ -8985,6 +8985,16 @@ static void handle_screenshot_hires(int id, const char *json)
      * deterministic black, never whatever the allocator handed back. */
     uint32_t *argb = (uint32_t *)calloc((size_t)ow * oh, sizeof(uint32_t));
     if (!argb) { send_err(id, "alloc failed"); return; }
+    /* OpenGL keeps the internal resolution in its FBO only (the CPU-side
+     * mirror is native), so read it from there. This is the capture that
+     * proves what an internal-resolution preset really renders. */
+    if (gr_backend() == GR_BACKEND_OPENGL && scale > 1) {
+        int gw = 0, gh = 0;
+        int n = gl_renderer_read_display_hires((int)di.display_x, (int)di.display_y,
+                                               (int)w, (int)h, argb,
+                                               (int)((size_t)ow * oh), &gw, &gh);
+        if (n > 0 && (uint32_t)gw == ow && (uint32_t)gh == oh) goto encode;
+    }
     /* Renderer pitches are byte strides (the live SDL presentation path uses
      * the same contract). Passing `ow` here advanced each row by only one
      * quarter of its ARGB width, overlapping four rows and producing a PNG
@@ -9014,6 +9024,7 @@ static void handle_screenshot_hires(int id, const char *json)
         }
     }
 
+encode:;
     uint8_t *rgb = (uint8_t *)malloc((size_t)ow * oh * 3);
     if (!rgb) { free(argb); send_err(id, "alloc failed"); return; }
     for (size_t i = 0; i < (size_t)ow * oh; i++) {
@@ -9033,6 +9044,90 @@ static void handle_screenshot_hires(int id, const char *json)
 
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,"
              "\"height\":%u,\"scale\":%d}", id, path, ow, oh, scale);
+}
+
+/* video_info — the Internal resolution state end to end: the preset and its
+ * reference height, the scale requested of the backend, the scale the GL hr
+ * surface was actually allocated at (after the driver/memory clamp), the
+ * driver limit, the hr surface size, and the window's point and pixel sizes
+ * (the HiDPI drawable). Everything a preset needs to be verified against. */
+static void handle_video_info(int id, const char *json)
+{
+    (void)json;
+    extern void psx_video_resolution_info(int *preset, int *ref_lines, int *requested,
+                                          int *hidpi, int *win_w, int *win_h,
+                                          int *px_w, int *px_h);
+    int preset = 0, ref = 0, req = 0, hidpi = 0, ww = 0, wh = 0, pw = 0, ph = 0;
+    psx_video_resolution_info(&preset, &ref, &req, &hidpi, &ww, &wh, &pw, &ph);
+    GlScaleInfo si;
+    int gl = gl_renderer_scale_info(&si);
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    int eff = gr_scale();
+    send_fmt("{\"id\":%d,\"ok\":true,\"backend\":\"%s\",\"preset\":%d,"
+             "\"reference_lines\":%d,\"requested_scale\":%d,\"effective_scale\":%d,"
+             "\"internal_lines\":%u,\"gl\":%d,\"gl_max_dim\":%d,\"gl_max_scale\":%d,"
+             "\"gl_clamp_reason\":%d,\"gl_alloc_retries\":%d,\"gl_budget_mib\":%d,"
+             "\"fbo_w\":%d,\"fbo_h\":%d,\"hidpi_window\":%d,\"window_w\":%d,"
+             "\"window_h\":%d,\"drawable_w\":%d,\"drawable_h\":%d,"
+             "\"display_w\":%u,\"display_h\":%u}",
+             id, gr_backend() == GR_BACKEND_OPENGL ? "opengl"
+                 : gr_backend() == GR_BACKEND_VULKAN ? "vulkan" : "software",
+             preset, ref, req, eff, di.height * (unsigned)(eff > 0 ? eff : 1), gl,
+             si.max_dim, si.max_scale, si.clamp_reason, si.alloc_retries, si.budget_mib,
+             si.fbo_w, si.fbo_h, hidpi, ww, wh, pw, ph, di.width, di.height);
+}
+
+/* screenshot_wide_hires — the displayed band of the native-wide surface at
+ * internal resolution (GL): wide_w*S x h*S. present_shot is capped at the
+ * window, so this is how a widescreen + internal-resolution combination is
+ * checked without an 8K monitor. */
+static void handle_screenshot_wide_hires(int id, const char *json)
+{
+    extern int gr_wide_dump_full(uint32_t *out, int cap_pixels, int *ow, int *oh, int base_x);
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.height == 0) { send_err(id, "display disabled"); return; }
+    int S = gr_scale();
+    if (S < 1) S = 1;
+    int base_x = json_get_int(json, "base_x", (int)di.display_x);
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_screenshot_wide_hires.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+    /* The dump reads rows from the top of the surface: size it to reach the
+     * end of the displayed band (at 8K the lower double-buffer band ends at
+     * row 8640, past a fixed 8192x8192 budget for a 21:9 or wider surface). */
+    long long need = (long long)ws_nw_present_width() * S *
+                     (((long long)di.display_y + di.height) * S);
+    int cap = need > 8192LL * 8192 && need < (1LL << 28) ? (int)need : 8192 * 8192;
+    uint32_t *buf = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+    if (!buf) { send_err(id, "alloc failed"); return; }
+    int W = 0, H = 0;
+    int n = gr_wide_dump_full(buf, cap, &W, &H, base_x);
+    if (n <= 0) { free(buf); send_err(id, "no wide surface (native-wide not engaged?)"); return; }
+    int y0 = (int)di.display_y * S, oh = (int)di.height * S;
+    if (y0 < 0) y0 = 0;
+    if (y0 + oh > H) oh = H - y0;
+    if (oh <= 0) { free(buf); send_err(id, "display band outside the surface"); return; }
+    uint8_t *rgb = (uint8_t *)malloc((size_t)W * oh * 3);
+    if (!rgb) { free(buf); send_err(id, "alloc failed"); return; }
+    for (int y = 0; y < oh; y++)
+        for (int x = 0; x < W; x++) {
+            uint32_t px = buf[(size_t)(y0 + y) * W + x];
+            uint8_t *p = rgb + ((size_t)y * W + x) * 3;
+            p[0] = (uint8_t)((px >> 16) & 0xFF);
+            p[1] = (uint8_t)((px >> 8) & 0xFF);
+            p[2] = (uint8_t)(px & 0xFF);
+        }
+    free(buf);
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(rgb); send_err(id, "cannot open file"); return; }
+    int ok = png_write_rgb(f, rgb, (uint32_t)W, (uint32_t)oh);
+    free(rgb); fclose(f);
+    if (!ok) { send_err(id, "png encode failed"); return; }
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%d,\"height\":%d,"
+             "\"scale\":%d}", id, path, W, oh, S);
 }
 
 /* present_shot — PNG of the COMPOSED renderer output: the frame after SDL fits
@@ -14121,6 +14216,8 @@ static const CmdEntry s_commands[] = {
     { "display_ring_stats", handle_display_ring_stats },
     { "dump_buffer",       handle_dump_buffer },
     { "wide_full",         handle_wide_full },
+    { "video_info",        handle_video_info },
+    { "screenshot_wide_hires", handle_screenshot_wide_hires },
     { "wide_shot",         handle_wide_shot },
     { "gpu_opcodes",       handle_gpu_opcodes },
     { "gpu_ring_stats",    handle_gpu_ring_stats },

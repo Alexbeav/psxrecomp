@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "bios_rom_alias.h"
+#include "../../runtime/include/internal_resolution.h"
 #include "host_path.h"
 #include "fmt/format.h"
 #include "ps1_exe_parser.h"
@@ -589,6 +590,32 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[video] supersampling out of range (1..32): {}", n));
             }
             rt.video_supersampling = static_cast<int>(n);
+        }
+        if (video.contains("internal_resolution")) {
+            const toml::value& ir = toml::find(video, "internal_resolution");
+            int value = 0;
+            bool ok = false;
+            if (ir.is_string()) {
+                ok = psx_ir_parse(ir.as_string().str.c_str(), &value) != 0;
+            } else if (ir.is_integer()) {
+                const auto n = ir.as_integer();
+                ok = n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES;
+                value = static_cast<int>(n);
+            }
+            if (!ok) {
+                throw std::runtime_error(
+                    "[video] internal_resolution must be native, 720p, 1080p, "
+                    "1440p, 4k, 5k, 8k, display, or a number of lines");
+            }
+            rt.video_internal_resolution = value;
+        }
+        if (video.contains("resolution_reference_lines")) {
+            const auto n = toml::find<int64_t>(video, "resolution_reference_lines");
+            if (n < 120 || n > 1024) {
+                throw std::runtime_error(fmt::format(
+                    "[video] resolution_reference_lines out of range (120..1024): {}", n));
+            }
+            rt.video_resolution_reference_lines = static_cast<int>(n);
         }
         if (video.contains("window_width")) {
             const auto n = toml::find<int64_t>(video, "window_width");
@@ -2343,9 +2370,23 @@ UserSettings load_user_settings(const fs::path& path) {
             const auto n = toml::find<int64_t>(v, "supersampling");
             if (n >= 1 && n <= 32) { s.supersampling = (int)n; s.has_supersampling = true; }
         });
+        if (v.contains("internal_resolution")) try_get([&]{
+            const toml::value& ir = toml::find(v, "internal_resolution");
+            int value = 0;
+            if (ir.is_string()) {
+                if (psx_ir_parse(ir.as_string().str.c_str(), &value)) {
+                    s.internal_resolution = value; s.has_internal_resolution = true;
+                }
+            } else if (ir.is_integer()) {
+                const auto n = ir.as_integer();
+                if (n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES) {
+                    s.internal_resolution = (int)n; s.has_internal_resolution = true;
+                }
+            }
+        });
         if (v.contains("window_width")) try_get([&]{
             const auto n = toml::find<int64_t>(v, "window_width");
-            if (n >= 640 && n <= 3840) { s.window_width = (int)n; s.has_window_width = true; }
+            if (n >= 640 && n <= 7680) { s.window_width = (int)n; s.has_window_width = true; }
         });
         if (v.contains("antialiasing")) try_get([&]{
             s.antialiasing = toml::find<bool>(v, "antialiasing"); s.has_antialiasing = true;
@@ -2696,6 +2737,13 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
           << "\"\n";
     if (s.has_supersampling)
         f << "supersampling     = " << s.supersampling << "\n";
+    if (s.has_internal_resolution && psx_ir_value_valid(s.internal_resolution)) {
+        const char* id = psx_ir_id_for(s.internal_resolution);
+        if (id)
+            f << "internal_resolution = \"" << id << "\"\n";
+        else
+            f << "internal_resolution = " << s.internal_resolution << "\n";
+    }
     if (s.has_window_width)
         f << "window_width      = " << s.window_width << "\n";
     if (s.has_antialiasing)

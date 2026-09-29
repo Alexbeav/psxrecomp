@@ -50,7 +50,9 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `read_scratch` |   | ✓ | `addr`, `len` | Read PS1 scratchpad (0x1F800000 region) |
 | `read_vram` / `vram_peek` | ✓¹ | ✓ | `x`, `y`, `w`, `h` | Read 16-bit VRAM pixels (max 128×128) |
 | `gpu_state` | ✓ | ✓ | — | Display area, display depth, `screen_offset_y`, draw offset, GPUSTAT, clip rect, xfer state. A positive screen offset moves 24-bit scanout down from the PAL or NTSC broadcast centre |
-| `screenshot_hires` | ✓ | ✓ | `path` | PNG of the **supersampled** surface (the present path the window uses), at `display × gr_scale()`. ⚠ `screenshot`/`screenshot_file` capture native 15-bit VRAM and are **blind to anything that only exists in the hi-res mirror** — geometry correction, SSAA edges, perspective UVs — so they show a clean frame while the player sees a broken one. Use this one to verify those. Falls back to the native resolve (and reports `scale: 1`) when no hi-res surface exists |
+| `screenshot_hires` | ✓ | ✓ | `path` | PNG of the **supersampled** surface (the present path the window uses), at `display × gr_scale()`. ⚠ `screenshot`/`screenshot_file` capture native 15-bit VRAM and are **blind to anything that only exists in the hi-res mirror** — geometry correction, SSAA edges, perspective UVs — so they show a clean frame while the player sees a broken one. Use this one to verify those. Under OpenGL it reads the hr FBO directly (the CPU-side mirror is native there), so it is the capture that proves an internal-resolution preset: 4K is 2880×2160 for a 320×240 display. Falls back to the native resolve (and reports `scale: 1`) when no hi-res surface exists |
+| `video_info` | ✓ |   | — | Internal resolution end to end: `preset` (0 unset, 1 native, -1 match display, else target lines), `reference_lines`, `requested_scale` (what the preset asked for), `effective_scale` (what the backend allocated), `internal_lines`, the GL limit (`gl_max_dim`, `gl_max_scale`, `gl_clamp_reason`: 1 texture, 2 budget, 4 ceiling; `gl_alloc_retries`, `gl_budget_mib`), the hr surface (`fbo_w`/`fbo_h`), and the window in points (`window_w`/`window_h`) and pixels (`drawable_w`/`drawable_h`, `hidpi_window`) |
+| `screenshot_wide_hires` | ✓ |   | `path`, `base_x` | The displayed band of the native-wide surface at internal resolution (`wide_w×S` by `height×S`). `present_shot` is capped at the window; this checks a widescreen + internal-resolution combination at full size |
 | `present_shot` | ✓ |   | `path` | PNG of the **composed present surface** — the frame after the backend fits the display buffer to the window, so it carries the presented aspect. ⚠ every other capture resolves the display buffer *before* that fit: on a 508×256 display in a 4:3 window they answer 508×256 while the player sees 640×480. Use this one for anything aspect-shaped (widescreen, letterbox), where a pre-fit buffer would hide the very stage the change touches. Staged and fulfilled on the next present, so the ack means *queued* — poll `present_shot_seq`. Unavailable headless and on the Vulkan backend (its swapchain has no readback hook) |
 | `present_shot_seq` | ✓ |   | — | Completion counter for `present_shot`, plus `wrote` (1 = that completion produced a PNG). Sample before staging, poll until `seq` moves. Advances on success *and* failure, so the poll always terminates |
 | `gl_interp` | ✓ |   | — | OpenGL frame-rate presenter ([FRAME_RATE.md](FRAME_RATE.md)): enabled/suspended, host and target Hz, swaps, `source` (`vblank`/`flip`), `flip_period`, `captures` (new source frames) and `duplicates` (VBlanks that re-presented the same frame) |
@@ -395,9 +397,9 @@ The TCP server is the canonical instrumentation surface. Rule 3 in `CLAUDE.md` i
 
 ## Complete command index (generated)
 
-**319 commands registered** — 306 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**321 commands registered** — 308 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-59 of 319 have prose above; **260 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+61 of 321 have prose above; **260 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -634,6 +636,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `screenshot` | ✓ | ✓ | ✓ |
 | `screenshot_file` | ✓ | ✓ | ✓ |
 | `screenshot_hires` | ✓ |  | ✓ |
+| `screenshot_wide_hires` | ✓ |  | ✓ |
 | `set_input` | ✓ | ✓ | ✓ |
 | `set_snapshot` | ✓ | ✓ | ✓ |
 | `sio_arm_audit` | ✓ |  |  |
@@ -675,6 +678,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `unknown_dispatch_log` | ✓ |  |  |
 | `unwatch` | ✓ |  | ✓ |
 | `vblank_rate` | ✓ |  |  |
+| `video_info` | ✓ |  | ✓ |
 | `vk_perf` | ✓ |  |  |
 | `vram_peek` | ✓ | ✓ | ✓ |
 | `vsync_query_hle` | ✓ |  |  |
