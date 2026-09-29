@@ -16,7 +16,10 @@
 #include <string>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <cstdlib>
+#include <process.h>
+#else
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -121,12 +124,31 @@ PSXRecomp::GeneratedFunction generate_first_instruction(
 
 // Runs `body` in a child and reports whether it exited with a failure status.
 // The main-EXE guards call std::exit(1), which a plain call cannot observe.
+// Windows has no fork: the Nth call re-runs this binary as `--exit-probe N`,
+// which repeats the tests but runs only the Nth body (every other call returns
+// false unrun) and exits 0 when that body returns.
+const char* g_self = nullptr;
+int g_exit_probe = -1;
+int g_probe_seq = 0;
+
 template <class F>
 bool exits_with_failure(F&& body) {
 #if defined(_WIN32)
-    (void)body;
-    return true;  // not exercised on Windows (no fork); POSIX CI covers it
+    const int seq = g_probe_seq++;
+    if (g_exit_probe >= 0) {
+        if (seq != g_exit_probe) return false;
+        body();
+        std::fflush(nullptr);
+        std::_Exit(0);
+    }
+    std::fflush(nullptr);
+    const std::string quoted = std::string("\"") + g_self + "\"";
+    const std::string n = std::to_string(seq);
+    const intptr_t rc = _spawnl(_P_WAIT, g_self, quoted.c_str(), "--exit-probe",
+                                n.c_str(), nullptr);
+    return rc > 0;
 #else
+    (void)g_probe_seq;
     std::fflush(nullptr);
     const pid_t pid = fork();
     if (pid == 0) {
@@ -395,7 +417,12 @@ void runtime_math() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    g_self = argv[0];
+    if (argc == 3 && std::string(argv[1]) == "--exit-probe") {
+        g_exit_probe = std::atoi(argv[2]);
+        if (!std::freopen("NUL", "w", stderr)) return 3;
+    }
     loader_parses_new_kinds();
     hash_identity_only_changes_when_used();
     codegen_emits_bgez();
@@ -406,6 +433,7 @@ int main() {
     shared_decls_include_new_helpers();
     runtime_math();
 
+    if (g_exit_probe >= 0) return 3;  // no call had that probe index
     if (failures != 0) {
         std::fprintf(stderr, "ws_cull_edge_codegen_test: %d failure(s)\n",
                      failures);
