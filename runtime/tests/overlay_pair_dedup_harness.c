@@ -23,6 +23,10 @@ _Static_assert(PSX_OVERLAY_TEST_CANDIDATE_CAP == 4,
 static uint8_t s_ram[RAM_SIZE];
 static uint8_t s_scratch[1024];
 
+/* Live RAM geometry (psx_memory.h): retail 2 MiB. */
+uint32_t g_psx_ram_size = RAM_SIZE;
+uint32_t g_psx_ram_mask = RAM_SIZE - 1u;
+
 uint32_t g_debug_current_func_addr;
 uint32_t g_debug_last_store_pc;
 uint32_t g_overlay_region_floor;
@@ -302,6 +306,39 @@ static int reveal_second_pair(const char *second) {
     return 1;
 }
 
+/* A shard compiled for KSEG0 runs only for KSEG0 PCs. The same bytes reached
+ * through KUSEG or KSEG1 are a different architectural PC ($ra, EPC, I-cache
+ * tag), so those dispatches must fall to the interpreter without touching the
+ * shard (overlay_loader.h, PSX_OVERLAY_CODE_SEGMENT). */
+static int segment_alias(const char *first) {
+    CPUState cpu;
+    int ok = 1;
+    ok &= expect_int("registered", overlay_loader_registered_count(), 2);
+    static const uint32_t aliases[] = { 0x00010000u, 0xA0010000u };
+    for (unsigned i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
+        memset(&cpu, 0, sizeof(cpu));
+        ok &= expect_int("alias dispatch",
+                         overlay_loader_dispatch(&cpu, aliases[i]), 0);
+        ok &= expect_int("alias left registers", cpu.gpr[2], 0);
+    }
+    ok &= expect_int("alias calls", counter_value(first, "test_call_count"), 0);
+    ok &= expect_int("alias counter",
+                     (long long)overlay_loader_segment_alias_interp(), 2);
+    memset(&cpu, 0, sizeof(cpu));
+    ok &= expect_int("kseg0 dispatch",
+                     overlay_loader_dispatch(&cpu, 0x80010000u), 1);
+    ok &= expect_int("kseg0 marker", cpu.gpr[2], TEST_MARKER);
+    ok &= expect_int("kseg0 calls", counter_value(first, "test_call_count"), 1);
+    ok &= expect_int("kseg0 counter",
+                     (long long)overlay_loader_segment_alias_interp(), 2);
+    if (!ok) {
+        fprintf(stderr, "loader: %s\n", overlay_loader_last_msg());
+        return 1;
+    }
+    printf("PASS segment-alias\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 5) {
         fprintf(stderr, "usage: %s <cache-root> <scenario> <first> <second>\n",
@@ -313,6 +350,7 @@ int main(int argc, char **argv) {
     const char *second = argv[4];
     memset(s_ram, 0, sizeof(s_ram));
     overlay_loader_init(argv[1], "PAIR-TEST", 0);
+    if (strcmp(scenario, "segment-alias") == 0) return segment_alias(first);
 
     int alias = strcmp(scenario, "alias-at-cap") == 0;
     int partial = strcmp(scenario, "partial-first") == 0;

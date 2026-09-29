@@ -503,6 +503,61 @@ if(BUILD_TESTING)
     add_test(NAME signed_x_bound_codegen_test
              COMMAND signed_x_bound_codegen_test)
 
+    add_executable(ws_cull_edge_codegen_test
+        tests/ws_cull_edge_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(ws_cull_edge_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(ws_cull_edge_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME ws_cull_edge_codegen_test
+             COMMAND ws_cull_edge_codegen_test)
+
+    # The same explicit cull kinds in the dirty-RAM interpreter: gpu.c's
+    # sorted, capped site store and real interpreted bgez/bltz/branch-keep/
+    # clip-edge instructions at margin 0 and at a forced margin. The test
+    # #includes gpu.c and dirty_ram_interp.c; link-time dead-code removal
+    # keeps the stub set small (dead_strip is Apple ld's --gc-sections).
+    if(NOT MSVC)
+        add_executable(ws_cull_edge_interp_test
+            ../runtime/tests/test_ws_cull_edge_interp.c
+            ../runtime/src/ws_aspect_cone_math.c)
+        target_include_directories(ws_cull_edge_interp_test PRIVATE
+            ../runtime/include
+            ../runtime/src)
+        target_compile_options(ws_cull_edge_interp_test PRIVATE
+            -O2 -flto -ffunction-sections -fdata-sections)
+        if(APPLE)
+            target_link_options(ws_cull_edge_interp_test PRIVATE
+                -flto -Wl,-dead_strip)
+        else()
+            target_link_options(ws_cull_edge_interp_test PRIVATE
+                -flto -Wl,--gc-sections)
+        endif()
+        if(NOT WIN32)
+            target_link_libraries(ws_cull_edge_interp_test PRIVATE m)
+        endif()
+        add_test(NAME ws_cull_edge_interp_test
+                 COMMAND ws_cull_edge_interp_test
+                         ${CMAKE_CURRENT_BINARY_DIR}/ws_cull_edge_interp_stderr.txt)
+    endif()
+
     add_executable(recompiler_patch_cxx17_header_test
         tests/recompiler_patch_cxx17_header_test.cpp
     )
@@ -599,6 +654,18 @@ if(BUILD_TESTING)
             NAME runtime_exe_name
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_exe_name.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # Bad input (game.toml errors, main-EXE [widescreen.cull] sites with
+        # the wrong opcode, an overlay the emitter must refuse) must end
+        # psxrecomp-game with exit status 1 and a message, never abort();
+        # the test requires exactly 1.
+        add_test(
+            NAME recompiler_error_exit
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_recompiler_error_exit.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --project-root ${CMAKE_CURRENT_SOURCE_DIR}/..
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # These two invoke psxrecomp-game, whose BIOS-profile resolution
@@ -831,6 +898,7 @@ if(BUILD_TESTING)
                 fmv_quiet_guards
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
+                frame_interpolation_flip_source
                 hybrid_dev_any_input
                 launcher_pad_mode_wiring
                 jalr_link_register_guards
@@ -838,11 +906,14 @@ if(BUILD_TESTING)
                 launcher_vulkan_option
                 mod_controller_override
                 mod_load_acceleration
+                native_wide_line_batching
                 overlay_candidate_capacity
                 release_zip
                 overlay_decodable_fallback
                 overlay_init_guard
+                overlay_segment_gate
                 recomp_ui_root_override
+                render_pass_guards
                 pal_cadence_host_refresh
                 sdl3_main_single_include
                 spu_sample_scheduler_default
@@ -914,6 +985,21 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
         set(_target "tas_gte_deferred_${_mode}")
         add_executable(${_target}
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gte_deferred.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+        target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
+endif()
+
+# Mult/div deadline ownership: the same rule for MULT/DIV and MFLO/MFHI.
+if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    foreach(_mode IN ITEMS O0 O2)
+        set(_target "muldiv_deferred_${_mode}")
+        add_executable(${_target}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_muldiv_deferred.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
         target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
         target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)

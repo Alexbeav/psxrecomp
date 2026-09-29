@@ -14,10 +14,11 @@
 // 2. An ACTIVE mod controller-mode override outranks the lock. The first
 //    version of the clamp was an unconditional `if (lock) mode = locked`,
 //    which is correct for (1) and silently wrong here: `goto session_reboot`
-//    re-enters the emulator BELOW the block that applies
-//    g_mod_controller_mode_override, so a soft return from the lobby never
-//    re-runs it. The override used to survive a rematch only because it
-//    round-tripped through ls.pad_mode[]; the clamp cut that path.
+//    re-enters the emulator BELOW the first-boot block that applied
+//    g_mod_controller_mode_override, so a soft return from the lobby did not
+//    re-run it (the rematch now runs start_mod_session() itself). The
+//    override survived a rematch only because it round-tripped through
+//    ls.pad_mode[]; the clamp cut that path.
 //
 // 3. Whatever this returns is what gets persisted (seed.p_mode[] /
 //    us.p_mode[]), so a mode the game does not support must never come out of

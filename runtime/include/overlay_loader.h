@@ -19,6 +19,19 @@
 extern "C" {
 #endif
 
+/* The segment every overlay shard is compiled for. Captures record their
+ * bytes at the KSEG0 address (overlay_capture.c) and the manifest parser keys
+ * entries there; the emitter bakes that segment into every PC a shard makes:
+ * the $ra a jal/jalr writes, its jump and exception-resume PCs, and its I-cache
+ * fetch tags. The same bytes reached through KUSEG or KSEG1 run at a different
+ * architectural PC (a different link value; KSEG1 is uncached), so a shard runs
+ * only for PCs in this segment and any other alias is interpreted at its own
+ * PC. (OpenBIOS's exception path enters its RAM patch slots at KUSEG.) */
+#define PSX_OVERLAY_CODE_SEGMENT 0x80000000u
+static inline int psx_overlay_code_segment_pc(uint32_t pc) {
+    return (pc & 0xE0000000u) == PSX_OVERLAY_CODE_SEGMENT;
+}
+
 /* Called at game handoff to set the cache root directory and game ID.
  * cache_dir: absolute path to the cache root (e.g. "build-dev/cache")
  * game_id:   product code (e.g. "SCUS-94236") */
@@ -138,6 +151,9 @@ int      overlay_loader_lazy_manifest_count(void);
 int      overlay_loader_lazy_manifest_overflow(void);
 uint64_t overlay_loader_candidate_overflow(void);
 uint64_t overlay_loader_pair_aliases(void);
+/* Dispatches sent to the interpreter because the PC is a KUSEG/KSEG1 alias of
+ * code compiled for PSX_OVERLAY_CODE_SEGMENT. */
+uint64_t overlay_loader_segment_alias_interp(void);
 int      overlay_loader_dump_lazy_at(uint32_t addr, char *out, int cap);
 
 /* Overlay CI wrapper early-return attribution (PSX_POST_LOAD_PROBE). */
@@ -145,6 +161,11 @@ void overlay_loader_get_ci_skip_diag(uint64_t *unit, uint64_t *supp,
                                      uint64_t *none, uint64_t *sr,
                                      uint64_t *deliv, uint64_t *enter);
 int  overlay_loader_call_unit_depth(void);
+/* Native-shard nesting (active-candidate stack depth, in-progress entry),
+ * saved before and restored after a landing that longjmps out of a shard
+ * and resumes the interrupted code (render_pass.c watchdog abort). */
+void overlay_loader_native_nesting(int *active_depth, uint32_t *inprogress);
+void overlay_loader_set_native_nesting(int active_depth, uint32_t inprogress);
 
 #ifdef __cplusplus
 }

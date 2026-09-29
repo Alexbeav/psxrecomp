@@ -26,6 +26,8 @@
 #include "guest_tty.h"
 #include "psx_cycles.h"
 #include "psx_memory.h"
+#include "render_pass.h"
+#include "render_pass_plan.h"
 #include "starvation_ring.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -1703,10 +1705,45 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
     e->frame = (uint32_t)s_frame_count;
 }
 
+/* ---- Render-pass stores (render_pass.c, docs/RENDER_PASSES.md) -------------
+ * A render pass runs guest draw code in frozen time and afterwards restores
+ * RAM, scratchpad, CPU, GPU and DMA state byte-for-byte. Its stores therefore
+ * bypass every observer of the live timeline (code-page tracking, overlay
+ * watch, write traces, card/parity hooks) and go straight to memory. MMIO is
+ * an allow-list: the GPU (GP0, and GP1 DMA-direction / info queries), the GPU
+ * and OTC DMA channels with DPCR/DICR, and I_STAT/I_MASK -- all of which the
+ * pass restores. Everything else (SPU key-ons, CD, timers, SIO, MDEC, memory
+ * control, other DMA channels) would escape the restore, so it is dropped and
+ * counted instead. */
+uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
+
+static void render_pass_mmio_write(uint32_t phys, uint32_t val,
+                                   uint32_t width) {
+    if (width == 4) mmio_write32(phys, val);
+    else if (width == 2) mmio_write16(phys, (uint16_t)val);
+    else mmio_write8(phys, (uint8_t)val);
+}
+
+/* The policy is render_pass_store_to (render_pass_plan.c, unit-tested by
+ * render_pass_sandbox_test); this only wires it to memory.c's arrays. */
+static void render_pass_store(uint32_t addr, uint32_t val, uint32_t width) {
+    RenderPassStoreTarget t;
+    int cls;
+    t.ram = ram;
+    t.ram_size = psx_ram_live_bytes();   /* live geometry, as psx_ram_map_write */
+    t.scratchpad = scratchpad;
+    t.scratchpad_size = SCRATCHPAD_SIZE;
+    t.isolate_cache = (sr_ptr && (*sr_ptr & 0x10000u)) ? 1 : 0;
+    t.mmio_write = render_pass_mmio_write;
+    cls = render_pass_store_to(&t, addr, val, width);
+    if (cls >= 0) g_render_pass_dropped_writes[cls]++;
+}
+
 static void psx_write_word_raw(uint32_t addr, uint32_t val);
 void psx_write_word(uint32_t addr, uint32_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 4); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 4, val); return; }
     if (g_ds_recording) {
         if (g_dma_exec_depth > 0) ds_note_dma_write();
@@ -1909,6 +1946,7 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val);
 void psx_write_half(uint32_t addr, uint16_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 2); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 2, val); return; }
     if (g_ds_recording) {
         if (g_dma_exec_depth > 0) ds_note_dma_write();
@@ -2252,6 +2290,7 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val);
 void psx_write_byte(uint32_t addr, uint8_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
+    if (g_psx_render_pass_active) { render_pass_store(addr, val, 1); return; }
     if (g_ls_mode == 2) { ls_write_hook(addr, 1, val); return; }
     if (g_ls_mode != 1 || s_ls_op_active || g_ls_suppress_record || g_dma_exec_depth > 0) { psx_write_byte_raw(addr, val); return; }
     if (!psx_get_in_exception()) ls_write_hook(addr, 1, val);

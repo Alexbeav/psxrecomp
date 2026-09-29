@@ -37,6 +37,7 @@
 #include "event_ring.h"
 #include "lockstep.h"
 #include "psx_cycles.h"
+#include "psx_cycle_freeze.h"
 #include "psx_scheduler.h"
 #include "psx_video_timing.h"
 #include "spu.h"
@@ -1067,6 +1068,8 @@ void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
 }
 
 int psx_interrupt_delivery_needed(const CPUState* cpu) {
+    /* Render passes run in frozen guest time: nothing is delivered. */
+    if (g_psx_render_pass_active) return 0;
     if (s_defer_switch_pending) { s_need_defer++; return 1; }
     if ((i_stat & i_mask) == 0) { s_skip_none++; return 0; }
 
@@ -1091,6 +1094,9 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
 }
 
 void psx_check_interrupts(CPUState* cpu) {
+    /* Render passes run in frozen guest time (psx_cycles.h): no delivery, and
+     * no check-boundary bookkeeping that the stock timeline would not do. */
+    if (g_psx_render_pass_active) return;
     psx_cyc_batch_flush();
     extern int g_ls_suppress_record;
     extern int psx_netplay_active(void);
