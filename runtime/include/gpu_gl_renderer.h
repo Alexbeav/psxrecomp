@@ -74,8 +74,8 @@ void     gl_renderer_pass_service_presents(void);
 /* promotions, presents, blended presents, expired, unmatched flips, presents
  * made between VBlanks, smoothed pass cost (us), images in the shown frame,
  * presents past the frame's planned end (the next flip was late; the newest
- * image held). */
-void     gl_renderer_pass_diag(uint64_t out[9]);
+ * image held), stale pass-cost estimates measured again. */
+void     gl_renderer_pass_diag(uint64_t out[10]);
 /* Out-of-rect VRAM writes journaled and rolled back (lifetime count). */
 uint64_t gl_renderer_pass_journaled(void);
 /* Passes that reused the previous pass's VRAM backup (lifetime count). */

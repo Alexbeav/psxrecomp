@@ -207,6 +207,69 @@ static void test_budget_and_ema(void) {
         CHECK(render_pass_cost_estimate(&c) == 47.0,
               "a truly expensive size (4K) still prices itself out");
     }
+    {
+        /* The first passes of a race can all run in a transient (14.8 ms
+         * against a steady 6.9 ms in a verify run). Priced out, no pass runs
+         * to correct it: an estimate no pass was measured against for
+         * RENDER_PASS_REWARM_MIN plans is measured again. */
+        RenderPassCost c;
+        unsigned i, rewarms = 0;
+        memset(&c, 0, sizeof c);
+        CHECK(!render_pass_cost_note_plan(&c), "unknown cost: nothing to re-measure");
+        for (i = 0; i < RENDER_PASS_COST_WARMUP; i++) render_pass_cost_add(&c, 14.8, 0);
+        CHECK(render_pass_cost_estimate(&c) == 14.8, "the transient sets the estimate");
+        for (i = 1; i < RENDER_PASS_REWARM_MIN; i++)
+            rewarms += (unsigned)render_pass_cost_note_plan(&c);
+        CHECK(rewarms == 0 && render_pass_cost_estimate(&c) == 14.8,
+              "29 plans without a pass: still trusted");
+        CHECK(render_pass_cost_note_plan(&c) && render_pass_cost_estimate(&c) == 0.0,
+              "the 30th: unknown again, so plans ask for one pass");
+        CHECK(!render_pass_cost_note_plan(&c), "no second restart while warming up");
+        for (i = 0; i < RENDER_PASS_COST_WARMUP; i++) render_pass_cost_add(&c, 6.9, 0);
+        CHECK(render_pass_cost_estimate(&c) == 6.9, "the steady cost replaces it");
+        CHECK(c.rewarm_after == 0, "a stale estimate found: the wait stays at the minimum");
+        /* Passes run on it: each measured pass restarts the count. */
+        for (i = 0; i < 10u * RENDER_PASS_REWARM_MIN; i++) {
+            rewarms += (unsigned)render_pass_cost_note_plan(&c);
+            render_pass_cost_add(&c, 6.9, 0);
+        }
+        CHECK(rewarms == 0, "an estimate passes run against is never restarted");
+        /* Priced out again (a busier host): re-measured after the minimum. */
+        for (i = 0; i < RENDER_PASS_REWARM_MIN; i++)
+            rewarms += (unsigned)render_pass_cost_note_plan(&c);
+        CHECK(rewarms == 1, "priced out again: re-measured after the minimum wait");
+    }
+    {
+        /* A size that is truly too expensive (47 ms passes), or a machine at
+         * its limit (10 ms re-measured as 9): each re-measure confirms the
+         * estimate, so the waits double to RENDER_PASS_REWARM_MAX and the
+         * one-pass warm-ups become rare. */
+        static const double cases[][2] = {{47.0, 47.0}, {10.0, 9.0}};
+        for (unsigned k = 0; k < 2; k++) {
+            RenderPassCost c;
+            unsigned i, plans = 0, waits[8] = {0}, w = 0, first = 1;
+            memset(&c, 0, sizeof c);
+            while (w < 8u && plans < 4000u) {
+                if (render_pass_cost_estimate(&c) == 0.0) {
+                    /* the warm-up's passes */
+                    render_pass_cost_add(&c, first ? cases[k][0] : cases[k][1], 0);
+                } else {
+                    first = 0;
+                    plans++;
+                    if (render_pass_cost_note_plan(&c)) {
+                        waits[w++] = plans;
+                        plans = 0;
+                    }
+                }
+            }
+            CHECK(w == 8u && waits[0] == RENDER_PASS_REWARM_MIN &&
+                  waits[1] == 2u * RENDER_PASS_REWARM_MIN &&
+                  waits[2] == 4u * RENDER_PASS_REWARM_MIN,
+                  "a confirmed estimate: the waits double");
+            for (i = 5; i < 8; i++)
+                CHECK(waits[i] == RENDER_PASS_REWARM_MAX, "and stop at the maximum");
+        }
+    }
 }
 
 static void test_store_policy(void) {

@@ -130,6 +130,7 @@ void render_pass_cost_add(RenderPassCost *cost, double sample, int allocated) {
         return;
     }
     cost->skips = 0;
+    cost->unsampled = 0;
     if (cost->kept < RENDER_PASS_COST_WARMUP) {
         cost->warm[cost->kept++] = sample;
         if (cost->kept == RENDER_PASS_COST_WARMUP) {
@@ -141,6 +142,18 @@ void render_pass_cost_add(RenderPassCost *cost, double sample, int allocated) {
                     double t = w[j]; w[j] = w[j - 1]; w[j - 1] = t;
                 }
             cost->ema = w[RENDER_PASS_COST_WARMUP / 2u];
+            if (cost->rewarm_from > 0.0) {
+                /* A re-measure: wait longer before the next one unless it
+                 * found the old estimate stale. */
+                unsigned limit = cost->rewarm_after ? cost->rewarm_after
+                                                    : RENDER_PASS_REWARM_MIN;
+                if (cost->ema <= cost->rewarm_from * RENDER_PASS_REWARM_STALE)
+                    cost->rewarm_after = 0;
+                else
+                    cost->rewarm_after = limit >= RENDER_PASS_REWARM_MAX / 2u
+                                         ? RENDER_PASS_REWARM_MAX : limit * 2u;
+                cost->rewarm_from = 0.0;
+            }
         }
         return;
     }
@@ -150,6 +163,21 @@ void render_pass_cost_add(RenderPassCost *cost, double sample, int allocated) {
 double render_pass_cost_estimate(const RenderPassCost *cost) {
     if (!cost || cost->kept < RENDER_PASS_COST_WARMUP) return 0.0;
     return cost->ema;
+}
+
+int render_pass_cost_note_plan(RenderPassCost *cost) {
+    unsigned limit;
+    /* Warming up: its one-pass plans are what measures the cost. */
+    if (!cost || cost->kept < RENDER_PASS_COST_WARMUP) return 0;
+    limit = cost->rewarm_after ? cost->rewarm_after : RENDER_PASS_REWARM_MIN;
+    if (++cost->unsampled < limit) return 0;
+    /* No pass has been measured against the estimate for `limit` plans:
+     * measure again (render_pass_cost_add sets the next wait). */
+    cost->rewarm_from = cost->ema;
+    cost->kept = 0;
+    cost->skips = 0;
+    cost->unsampled = 0;
+    return 1;
 }
 
 double render_pass_budget(double idle_ticks, double pass_ticks,

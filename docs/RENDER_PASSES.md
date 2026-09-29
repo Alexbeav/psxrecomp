@@ -146,9 +146,18 @@ three seed the average with their median, so one slow pass on a busy host
 does not price passes out. A pass that creates pass textures or
 framebuffers (the first frames at a size, or a slot filled for the first
 time) is not a cost sample, at most eight in a row. Only passes that run
-are measured, so while the measured cost stays above every frame's budget,
-passes stay shed until the image size changes (a plugin can fall back to a
-crossfade, as described under "When passes are unavailable").
+are measured, and the first passes of a race can all run in a transient (a
+busy host, code run for the first time) that costs several times the steady
+state; an estimate that high prices every plan out, so no pass would ever
+correct it. An estimate that no pass has been measured against for 30
+plans that wanted passes (about a second of a 30 Hz game) is measured again:
+the warm-up restarts, with one pass per plan (`cost_rewarms` in
+`render_pass_stats`). When the new median is not at least a quarter below
+the old estimate, the old one was right (a size that is truly too
+expensive, or a host at its limit), and the next wait doubles, up to 960
+plans, so these one-pass warm-ups stay rare; a re-measure that finds the
+old estimate stale keeps the wait at 30. A plugin can show a crossfade while
+passes are shed (see "When passes are unavailable").
 
 Pass images are kept at internal resolution (the size the presenter
 captures). Their textures are made as the slots fill, never more slots than
@@ -179,7 +188,8 @@ internal resolutions; a size change frees the old set.
 Tests (runtime ctest unless noted):
 
 - `render_pass_plan_test`: phase planning per rate, shedding (one pass while
-  the cost is unknown), the cost warm-up and allocation rule, selection,
+  the cost is unknown), the cost warm-up and allocation rule, re-measuring a
+  stale estimate (and backing off when it stays too expensive), selection,
   holding the newest image when the next flip is late, the MMIO allow-list.
 - `render_pass_freeze_test`: 10^6 frozen cycles, exact clock restore,
   watchdog.

@@ -79,21 +79,40 @@ double render_pass_ema(double current, double sample);
  *   RENDER_PASS_ALLOC_SKIPS times in a row (any kept sample resets that).
  * - Warm-up: the first RENDER_PASS_COST_WARMUP kept samples seed the average
  *   with their median, so one slow pass (a busy host at the first race
- *   frame) cannot price passes out; a plan then sheds everything and never
- *   measures again. Until then the estimate is 0 (unknown), for which a plan
- *   asks for one pass (render_pass_plan_phases).
- * - Then an exponential moving average (render_pass_ema). */
+ *   frame) cannot price passes out. Until then the estimate is 0 (unknown),
+ *   for which a plan asks for one pass (render_pass_plan_phases).
+ * - Then an exponential moving average (render_pass_ema).
+ * - Re-measuring (render_pass_cost_note_plan): only passes that run are
+ *   measured, so an estimate that prices every plan out is never corrected
+ *   by one -- and the first passes of a race can all run in a transient
+ *   (a busy host, code seen for the first time) that costs several times the
+ *   steady state. An estimate no pass has been measured against for
+ *   `rewarm_after` plans (RENDER_PASS_REWARM_MIN, about a second of 30 Hz
+ *   frames) restarts the warm-up. When the new median is more than
+ *   RENDER_PASS_REWARM_STALE of the old estimate, the old one was right -- a
+ *   size that is truly too expensive, or a machine at its limit -- and the
+ *   next wait doubles, up to RENDER_PASS_REWARM_MAX; a stale estimate found
+ *   keeps the wait at the minimum. */
 #define RENDER_PASS_ALLOC_SKIPS 8u
 #define RENDER_PASS_COST_WARMUP 3u
+#define RENDER_PASS_REWARM_MIN  30u
+#define RENDER_PASS_REWARM_MAX  960u
+#define RENDER_PASS_REWARM_STALE 0.75
 typedef struct RenderPassCost {
     double   ema;
     double   warm[RENDER_PASS_COST_WARMUP];
     unsigned kept;                  /* kept samples, saturating at WARMUP */
     unsigned skips;                 /* allocating samples left out in a row */
+    unsigned unsampled;             /* plans since the last kept sample */
+    unsigned rewarm_after;          /* 0 = RENDER_PASS_REWARM_MIN */
+    double   rewarm_from;           /* estimate being re-measured; 0 = none */
 } RenderPassCost;
 void   render_pass_cost_add(RenderPassCost *cost, double sample, int allocated);
 /* Host ticks per pass for planning; 0 while the cost is unknown. */
 double render_pass_cost_estimate(const RenderPassCost *cost);
+/* Call once per plan that wanted passes at this cost's image size. Returns 1
+ * when the plan found the estimate stale and restarted the warm-up. */
+int    render_pass_cost_note_plan(RenderPassCost *cost);
 
 /* Next frame's pass budget from the last frame: the host time the presenter
  * spent idle-waiting plus the time passes used, scaled by `share` (0..1) and

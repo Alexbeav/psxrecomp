@@ -127,6 +127,18 @@ assert re.search(r"in\.pass_cost = \(s_pass_cost_w == s_interp_w && "
                  r"\? render_pass_cost_estimate\(&s_pass_cost\) : 0\.0;",
                  gl[gl.index("uint32_t gl_renderer_pass_plan("):][:4000]), (
     "a plan must not use a cost measured at another image size")
+# Only passes that run are measured: an estimate that prices every plan out
+# (measured in a transient) must be measured again, or passes stay shed and a
+# plugin's crossfade fallback never ends (render_pass_plan_test).
+gp = gl[gl.index("uint32_t gl_renderer_pass_plan("):]
+gp = gp[:gp.index("\n}\n")]
+assert re.search(r"if \(want && s_pass_cost_w == s_interp_w && "
+                 r"s_pass_cost_h == s_interp_h &&\s*"
+                 r"render_pass_cost_note_plan\(&s_pass_cost\)\) \{", gp) and \
+    re.search(r"in\.pass_cost = 0\.0;\s*n = render_pass_plan_phases\(&in, alpha_q16, NULL\);",
+              gp), (
+    "every plan that wants passes must let a stale estimate be re-measured, "
+    "and the re-measuring plan must ask for one pass")
 # A frame on screen longer than planned (a lagging tick) must hold its newest
 # pass image, never fall back to the older capture (render_pass_plan_test).
 pgp = definition(gl, "pass_gen_present")

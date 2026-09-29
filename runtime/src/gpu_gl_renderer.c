@@ -4387,6 +4387,7 @@ static int      s_pb_last_dx = 0, s_pb_last_dy = 0, s_pb_last_dw = 0, s_pb_last_
  * alone, and while it is unknown a plan asks for one pass. */
 static RenderPassCost s_pass_cost;
 static int      s_pass_cost_w = 0, s_pass_cost_h = 0;
+static uint64_t s_pass_cost_rewarms = 0;   /* stale estimates re-measured */
 static uint64_t s_pass_ticks_accum = 0, s_idle_ticks_accum = 0;
 static uint64_t s_pass_ticks_last = 0, s_idle_ticks_last = 0;
 static uint64_t s_present_ticks_accum = 0, s_present_ticks_last = 0;
@@ -4497,7 +4498,19 @@ uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
                                        (double)s_pass_budget_pct / 100.0);
     }
     in.max = max < cap - 1u ? max : cap - 1u;
-    return render_pass_plan_phases(&in, alpha_q16, wanted);
+    {
+        uint32_t want = 0, n = render_pass_plan_phases(&in, alpha_q16, &want);
+        if (wanted) *wanted = want;
+        /* An estimate no pass has confirmed for a while is measured again
+         * (render_pass_cost_note_plan): its plans then ask for one pass. */
+        if (want && s_pass_cost_w == s_interp_w && s_pass_cost_h == s_interp_h &&
+            render_pass_cost_note_plan(&s_pass_cost)) {
+            s_pass_cost_rewarms++;
+            in.pass_cost = 0.0;
+            n = render_pass_plan_phases(&in, alpha_q16, NULL);
+        }
+        return n;
+    }
 }
 
 void gl_renderer_pass_note_cost(uint64_t ticks) {
@@ -4928,7 +4941,7 @@ void gl_renderer_pass_service_presents(void) {
     }
 }
 
-void gl_renderer_pass_diag(uint64_t out[9]) {
+void gl_renderer_pass_diag(uint64_t out[10]) {
     out[0] = s_pgen_promotions;
     out[1] = s_pgen_presents;
     out[2] = s_pgen_blends;
@@ -4939,6 +4952,7 @@ void gl_renderer_pass_diag(uint64_t out[9]) {
                         (double)SDL_GetPerformanceFrequency()); /* us */
     out[7] = (uint64_t)s_pgen[s_pgen_cur].n;
     out[8] = s_pgen_late;
+    out[9] = s_pass_cost_rewarms;
 }
 
 uint64_t gl_renderer_pass_journaled(void) { return s_pj_total; }

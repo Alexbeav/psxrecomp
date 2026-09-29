@@ -7981,7 +7981,7 @@ static void handle_render_pass_stats(int id, const char *json)
 {
     (void)json;
     RenderPassStats st;
-    uint64_t gd[9], image_bytes = 0;
+    uint64_t gd[10], image_bytes = 0;
     uint32_t image_textures;
     render_pass_get_stats(&st);
     gl_renderer_pass_diag(gd);
@@ -8000,7 +8000,8 @@ static void handle_render_pass_stats(int id, const char *json)
              "\"promotions\":%llu,\"pass_presents\":%llu,"
              "\"blended_presents\":%llu,\"expired\":%llu,\"late_presents\":%llu,"
              "\"unmatched_flips\":%llu,\"early_presents\":%llu,"
-             "\"cost_us\":%llu,\"frame_images\":%llu,\"journaled\":%llu,"
+             "\"cost_us\":%llu,\"cost_rewarms\":%llu,\"frame_images\":%llu,"
+             "\"journaled\":%llu,"
              "\"image_textures\":%u,\"image_bytes\":%llu,\"status\":%u,"
              "\"backups_reused\":%llu}",
              id, (unsigned long long)st.plans, (unsigned long long)st.planned,
@@ -8023,7 +8024,8 @@ static void handle_render_pass_stats(int id, const char *json)
              (unsigned long long)gd[2], (unsigned long long)gd[3],
              (unsigned long long)gd[8],
              (unsigned long long)gd[4], (unsigned long long)gd[5],
-             (unsigned long long)gd[6], (unsigned long long)gd[7],
+             (unsigned long long)gd[6], (unsigned long long)gd[9],
+             (unsigned long long)gd[7],
              (unsigned long long)gl_renderer_pass_journaled(),
              (unsigned)image_textures, (unsigned long long)image_bytes,
              (unsigned)psx_mod_render_pass_status(),
