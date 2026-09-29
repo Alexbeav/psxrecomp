@@ -224,9 +224,10 @@ on a fixed region -> next.
   psx_icache.c also uses. The A0/B0/C0 call-vector stubs charge one fetch per
   executed word.
   - Cached code keeps the leader rule. R4's regenerated game C (50 shards and the
-    dispatch table) is byte-identical, as are the 26 R4 overlay shards compiled in
-    both runs.
-  - The OpenBIOS diff is insertions only: 5,477 fetches plus 5 stub fetches.
+    dispatch table) is byte-identical. So is every R4 overlay shard compiled in
+    more than one run (26 of the 45 captured; runs capture different sets).
+  - For the uncached fix, the OpenBIOS diff is insertions only: 5,477 fetches
+    plus 5 stub fetches.
   - The codegen hash changes because the emitter sources do, and
     psx_instr_cost.h is now in the hash list. Every title reshards its overlay
     cache once.
@@ -238,6 +239,16 @@ on a fixed region -> next.
     game entry 0x8007D8F4 moves from guest cycle 97,718,389 to 100,583,391
     (+2,865,002, about 5.1 frames). The count was the same on two baseline
     boots. R4 reached a race with 0 dispatch misses.
+  - Same day, second fix in the BIOS emitter: the cached line-start test now
+    uses the runtime PC instead of the ROM address. OpenBIOS copies its kernel
+    from ROM 0x1FC1E4D4 to RAM 0x500, which shifts bits[3:0] by 4. Each kernel
+    line crossing was charged one instruction early (a hit), and the real
+    crossing went uncharged: 1,152 kernel sites differed from the interp.
+    In the OpenBIOS kernel, 823 misplaced fetch sites go and 773 are added at
+    runtime line starts. Retail profiles are unaffected: SCPH-1001's windows
+    are 16-byte aligned and SCPH-101/5552 declare none. With both fixes, the
+    R4 game entry is at 100,589,404 (+2,871,015 over master; +6,013 from this
+    fix). R4 reached a race with 0 dispatch misses.
   - Closes `bios-kseg1-fetch-charge` in the segment-aware ledger (PR #419).
   - OPEN: full LLE boot (`bios_hle = false`) cycle parity against live Beetle.
     There is no oracle binary on the Mac.

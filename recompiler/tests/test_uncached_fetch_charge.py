@@ -20,9 +20,14 @@ instruction's (cycles, give-back cleared) pair must be the same both ways:
   model    psx_icache.c (both entry points) equals a transcription of Beetle
            ReadInstruction on synthetic sequences: uncached repeat, cached cold
            then warm, KSEG0 -> KUSEG alias refill, partial refill.
-  bios     psxrecomp-bios on bios/OpenBIOS.toml. Every straight-line KSEG1
-           run (the ROM in place) is replayed, and every KSEG1 instruction
-           must carry a fetch naming its own runtime PC.
+  bios     psxrecomp-bios on bios/OpenBIOS.toml. Every straight-line run from
+           a label is replayed from a cold cache: KSEG1 runs (ROM in place)
+           and cached runs (kernel at 0x500+, shell at 0x80030000+) alike.
+           Every KSEG1 instruction must carry a fetch naming its own runtime
+           PC. Cached runs pin the line-start test to the runtime PC:
+           OpenBIOS copies its kernel from ROM 0x1FC1E4D4 to RAM 0x500, so a
+           ROM-address test charged each kernel line crossing one
+           instruction early (a hit) and missed the real one.
   stubs    The A0/B0/C0 call-vector native stubs charge one fetch per
            executed word, so a KSEG1 call pays like the interpreter.
 
@@ -347,7 +352,7 @@ def main():
             if not run["from_label"]:
                 first = next((i for i, (_, t) in enumerate(insns) if t is not None), len(insns))
                 insns = [x for i, x in enumerate(insns) if i >= first or uncached(x[0])]
-            if not insns or not all(uncached(pc) for pc, _ in insns):
+            if not insns:
                 continue
             for pc, tag in insns:
                 if uncached(pc):

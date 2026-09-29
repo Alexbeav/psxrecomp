@@ -136,6 +136,14 @@ observe added to the recompiler so ANY block leader is anchorable on both backen
   (compiled == interp fetch path == Beetle transcription, per instruction, on
   OpenBIOS) and `uncached_fetch_codegen_test` (game emitter). OPEN: full LLE boot
   (`bios_hle = false`) parity against live Beetle (no oracle binary on the Mac).
+- [x] **BIOS emitter tests cache-line starts on the runtime PC (2026-09-29).** The
+  line-leader test used the ROM address, assuming every copy window preserves
+  bits[3:0]. OpenBIOS copies its kernel from ROM 0x1FC1E4D4 to RAM 0x500, so every
+  kernel line crossing was charged one instruction early (a hit) and the real
+  crossing went uncharged: 1,152 kernel instruction sites differed from the interp.
+  Retail profiles are unaffected (SCPH-1001's windows are 16-byte aligned;
+  SCPH-101/5552 declare none). Covered by ctest `uncached_fetch_charge` (cached runs
+  compared from a cold cache).
 - [ ] **HW test-ROM ruler (#2)** — Amidog CPU/GTE timing ROMs for hand-crafted
   single-COMPONENT isolation (div-only, load-only loops) that organic BIOS code
   can't give (the prologue combines div+loads in one block). Strongest validator.

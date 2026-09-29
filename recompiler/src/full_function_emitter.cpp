@@ -772,10 +772,13 @@ bool FullFunctionEmitter::emit_function(
     // to the dirty-RAM interp (cpu->pc) and Beetle.
     //  - CACHED runtime PC: emitted only at cache-line LEADERS: a block leader (any
     //    branch/dispatch entry — a possibly-cold cache entry; cross-function targets
-    //    are inserted into block_leaders above) OR a 16-byte-line start (addr&0xC==0,
-    //    a sequential line crossing). Intra-line followers reached by fall-through are
-    //    guaranteed hits (the leader refilled the line to its end) → no call (+0). The
-    //    relocation preserves bits[3:0], so the line-leader test is space-independent.
+    //    are inserted into block_leaders above) OR a 16-byte-line start of the RUNTIME
+    //    PC (pc&0xC==0, a sequential line crossing). Intra-line followers reached by
+    //    fall-through are guaranteed hits (the leader refilled the line to its end) →
+    //    no call (+0). The line test must use the runtime PC: a copy window need not
+    //    preserve bits[3:0]. OpenBIOS copies its kernel from ROM 0x1FC1E4D4 to RAM
+    //    0x500, so a ROM-address test put every line crossing of the kernel one
+    //    instruction early (a hit) and left the real crossing uncharged.
     //  - UNCACHED runtime PC (psx_fetch_uncached: the ROM run in place at KSEG1): no
     //    fetch ever fills a line, so there is no follower to elide. Every instruction
     //    pays +4 and clears the load give-back, exactly as the interpreter (a fetch at
@@ -785,7 +788,7 @@ bool FullFunctionEmitter::emit_function(
         if (!per_insn_cycles) return;
         const uint32_t pc = relocate_ra(rom_addr);
         if (!psx_fetch_uncached(pc) &&
-            !(block_leaders.count(rom_addr) || (rom_addr & 0xCu) == 0)) return;
+            !(block_leaders.count(rom_addr) || (pc & 0xCu) == 0)) return;
         out += fmt::format("#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_icache_fetch(cpu, 0x{:08X}u);\n#endif\n",
                            pc);
     };
