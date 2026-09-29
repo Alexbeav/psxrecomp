@@ -73,8 +73,8 @@ clear_reveal       = true              # clear synthetic native-wide side margin
                                        # at opted-in scene/map boundaries (default false).
 nw_left_hud_packet_lo = "0x000E3400"  # optional targeted left-HUD packet range
 nw_left_hud_packet_hi = "0x000E4100"  # (half-open); avoids shifting 2D scenery.
-offer_ultrawide    = true              # separate experimental 21:9 launcher row.
-adaptive_view      = true              # expose live resize-driven aspect mode.
+offer_ultrawide    = true              # inert on PSX (see below)
+adaptive_view      = true              # inert on PSX (see below)
 
 # Proven object/model participation comparisons may be forced only while a
 # widened world view is configured. The complete instruction word guards
@@ -85,16 +85,18 @@ expected = "0x28A21C01"                # SLT/SLTU/SLTI/SLTIU only
 result   = 1                           # forced comparison result, 0 or 1
 ```
 
-When `adaptive_view` is enabled by the game, the launcher's **Aspect ratio**
-selector gains an **Adaptive** entry. The previously selected fixed aspect
-still determines the initial window shape. Once the game window exists,
-resizing it continuously
-updates the GTE/native-wide projection, cull margins, wide render target, and
-present aspect. The live ratio is clamped to 4:3 on the narrow side and to the
-widest mode the game offers (`16:9`, or `21:9` with `offer_ultrawide`). BIOS,
-FMV, menus, and other title-classified 2D frames retain their existing 4:3
-pillarbox policy. The user choice persists as `[video] adaptive_view` in
-`settings.toml`.
+**`offer`, `offer_ultrawide` and `adaptive_view` are inert on PSX.** They are
+still parsed, but the runtime no longer offers widescreen in Settings
+(`main.cpp` pins `ws_offered`/`ws_ultrawide_offered` false) and nothing reads
+`adaptive_view`. Widescreen is owned by each title's mod catalog: a trusted
+plugin selects the view on activation with `psx_mod_set_fixed_display_aspect()`
+(which also shapes the first window) and, for Fit to Window,
+`psx_mod_set_adaptive_display_aspect(0, 0)` (follow every resize from 4:3 with
+no upper limit; pass a maximum to cap it). Once the game window exists,
+resizing it updates the projection, cull margins, wide render target and
+present aspect. BIOS, FMV, menus and other title-classified 2D frames keep
+their 4:3 pillarbox policy. TombaRecomp's and RidgeRacerType4Recomp's
+`*.enhancement.widescreen` packages are worked examples.
 
 The native-wide draw-area early-out correction was independently identified
 and contributed by **OpokXeno** in
@@ -118,6 +120,56 @@ emitted into the generated C). `widescreen.cull.keep` is consumed by both the
 native recompiler and the dirty-RAM interpreter: regenerate main/overlay native
 code after changing it, while the interpreter reads the same guarded records
 from the runtime config.
+
+### Explicit screen-X cull sites
+
+When a title's per-vertex screen-X rejects are not the shapes
+`auto_screen_x` recognises, list them. Every kind below is identity at 4:3
+(the live margin `m = psx_ws_x_margin()` is 0), emits nothing when its list is
+empty, and requires a regen after a change. In the main EXE a listed address
+holding anything but the instruction in the table is a hard build error
+(psxrecomp-game exits 1 and names the site); in captured overlays a different
+instruction at the same address is left vanilla, and a matching one is
+widened like the main EXE. Native code, overlay shards (the helpers are
+defined in `overlay_dispatch_preamble.c.inc`) and the dirty-RAM interpreter
+apply the same helpers.
+
+| Key | Instruction | While widened |
+|---|---|---|
+| `slti_sites` | `slti rt, SX, W` (right edge) | `rt = SX < W + m` |
+| `slti_lower_sites` | `slti rt, SX, -W` | `rt = SX < -W - m` |
+| `bltz_sites` | `bltz SX, reject` (last vertex of a left chain) | taken while `SX < -m` |
+| `bgez_sites` | `bgez SX, keep` (other vertices of a left chain) | taken while `SX >= -m` |
+| `clip_edge_x_load_sites` | `lh`/`lhu`/`lw` of a clip-rectangle X bound, to a nonzero register | a loaded `0` becomes `-m`, a loaded `clip_edge_width` becomes `W + m`; other values unchanged |
+| `branch_keep_sites` | a conditional reject branch (`beq`, `bne`, `blez`, `bgtz` or REGIMM) | not taken |
+
+`bgez_sites` pairs with `bltz_sites`. A compiled renderer often tests the left
+edge as `bgez x0,keep; bgez x1,keep; bgez x2,keep; bltz x3,reject`: widening
+only the `bltz` still rejects a quad whose first vertices sit in the revealed
+band (x0 in `[-m, 0)`, x3 `< -m`), so the quad pops out at the left edge.
+With both kinds listed the chain rejects exactly when every vertex is left of
+`-m`.
+
+`clip_edge_x_load_sites` covers renderers that compare vertices against a
+clip rectangle they load (R4 keeps one in scratchpad for each viewport). Only
+bounds equal to a screen edge move, so full-width viewports widen on each side
+that touches the display edge while interior viewports (a rear-view mirror,
+one half of a split screen) keep their vanilla culls. `clip_edge_width`
+defaults to the first `screen_w_imms` entry (`0x140`).
+
+```toml
+[widescreen.cull]
+slti_sites = ["0x80013F60"]              # slti v0,v0,0x140
+bgez_sites = ["0x80013F40", "0x80013F48", "0x80013F50"]
+bltz_sites = ["0x80013F58"]              # bltz a3,reject
+clip_edge_x_load_sites = ["0x8005F5F4"]  # lh v0,0x70(a0)
+clip_edge_width = 320                    # optional; default screen_w_imms[0]
+```
+
+The interpreter's copies of these lists are sorted and capped at 256 entries
+per key; a longer list is logged rather than silently truncated. `bgez_sites`
+and `clip_edge_x_load_sites` enter the overlay-cache identity only when they
+are non-empty, so titles that do not use them keep their caches.
 
 ---
 

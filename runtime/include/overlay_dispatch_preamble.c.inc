@@ -1,4 +1,5 @@
 #include "overlay_api.h"
+#include "ws_cull_edge.h"   /* psx_ws_cull_bgez / psx_ws_clip_edge_x math */
 
 /* ---- Overlay dispatch shim (inserted by compile_overlays.py) ----------- */
 static OverlayCallbacks g_cbs;
@@ -208,6 +209,16 @@ int psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm) {
 }
 int psx_ws_cull_bltz(uint32_t v) {
     return ((int32_t)v < -psx_ws_x_margin()) ? 1 : 0;
+}
+/* [widescreen.cull] bgez_sites and clip_edge_x_load_sites. The emitter writes
+ * these at a listed address whose instruction matches in overlay code too, so
+ * the shard must define them. Same math as gpu.c: both call the pure helpers
+ * in ws_cull_edge.h (stdint-only), over psx_ws_x_margin() above. */
+int psx_ws_cull_bgez(uint32_t v) {
+    return psx_ws_cull_bgez_value((int32_t)v, psx_ws_x_margin());
+}
+uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w) {
+    return psx_ws_clip_edge_x_value(v, w, psx_ws_x_margin());
 }
 int psx_ws_cull_vxrange(uint32_t x, uint32_t imm) {
     int32_t margin = psx_ws_x_margin();
