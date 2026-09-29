@@ -263,8 +263,9 @@ on a fixed region -> next.
     (20 and 92 bytes): 2,824 -> 4,744 cycles, +1,920, about 0.17% of the
     frame. Only memcpy was measured; other ROM services scale the same way.
   - Closes `bios-kseg1-fetch-charge` in the segment-aware ledger (PR #419).
-  - LAND GATE (DONE, 2026-09-29, live psx-beetle built on macOS from the
-    docs/beetle-linux.md recipe plus the local `docs/beetle-macos` branch):
+  - LAND GATE (DONE, 2026-09-29, live psx-beetle built on macOS from
+    docs/beetle-macos.md, the official Beetle 5759277b plus the
+    docs/beetle_*.patch hooks):
     SEGMENT_AWARE_CODE.md §7.2's LLE boot parity to the
     shell and ruler #1, run twice with the same image on both sides: OpenBIOS
     (`bios/openbios.bin`, SHA-1 95419841b5104d552b14810b1ecbe6c1358bcdf1) and
@@ -272,21 +273,26 @@ on a fixed region -> next.
     10155d8d6e6e832d6ea66db9bc098321fb5e8ebf). Native: master `44a45d3c` and
     this branch, each with #418 merged locally so the mult/div flush cannot
     mask the fetch change. `PSX_BIOS_HLE=0`, cyc_watch armed from power-on on
-    both backends, first hit per anchor; tools/cycle_compare.py `--no-arm`
-    reads the same values. Current master `470f03b7` (#418 merged) emits the
-    same BIOS C as the baseline and gives the same cycle at every anchor
-    checked.
+    both backends through `PSX_CYC_WATCH` / `PSX_CYC_WATCH_N` (psx-beetle
+    also `PSX_BEETLE_UNPACED=1`; docs/beetle-macos.md step 7), first hit per
+    anchor; tools/cycle_compare.py `--no-arm` reads the same values. Anchors
+    are the same PC on both sides except the shell, which both profiles
+    declare `dispatch_key = "rom"`: native keys it at its ROM copy
+    (OpenBIOS 0xBFC0A500, SCPH-1001 0xBFC18000; a native watch on
+    0x80030000 records nothing). Current master `470f03b7` (#418 merged)
+    emits the same BIOS C as the baseline and gives the same cycle at every
+    anchor checked.
     - OpenBIOS, native − Beetle (master / this branch): kernel copy done
       0xBFC00330 (Beetle 178,560) −96,208 / 0; main 0xBFC00144 (311,434)
       −149,433 / 0; first C0, B0 and A0 calls (1,572,770 to 1,588,895)
       −679,408 to −685,851 / 0; initEvents (1,764,760) −753,238 / −126;
-      startShell (1,845,885) −783,706 / −126; shell entry 0x80030000
-      (5,015,670) −2,165,591 / −126.
+      startShell (1,845,885) −783,706 / −126; shell entry (Beetle
+      0x80030000, native 0xBFC0A500) (5,015,670) −2,165,591 / −126.
     - SCPH-1001: cache init done 0xBFC00328 (7,560) −4,404 / 0; main
       0xBFC06EC4 (86,887) −42,489 / 0; kernel copy done 0xBFC0044C (393,861)
       −195,802 / 0; kernel init 0x598 (393,901) −195,819 / −9; first C0, A0
       and B0 calls (406,782 to 414,468) −198,576 to −202,796 / −9; shell entry
-      0x80030000 (15,051,449) −7,049,462 / −454.
+      (Beetle 0x80030000, native 0xBFC18000) (15,051,449) −7,049,462 / −454.
     - Both residuals are known unmodeled axes, not this change. (1) IsC stores
       do not reach the I-cache model (ACCURACY_BURNDOWN axis 4). Each
       FlushCache in Beetle invalidates the I-cache tags through isolated
