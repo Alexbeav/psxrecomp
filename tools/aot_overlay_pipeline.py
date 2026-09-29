@@ -704,7 +704,8 @@ def extract(profile_path, game_toml, recompiler, output, cue=None, disc=None, pr
     command = [sys.executable, str(FRAMEWORK / 'tools/aot_overlay_spike/extract_generic.py'),
                '--game-toml', str(game_toml), '--recompiler', str(recompiler),
                '--disc', str(cue),
-               '--out', str(output / 'generic.json'), '--tmp', str(output / 'extract-tmp')]
+               '--out', str(output / 'generic.json'), '--tmp', str(output / 'extract-tmp'),
+               '--project-root', str(FRAMEWORK)]
     command += ['--require-bios-resident'] if profile.get('bios_resident') else ['--no-bios-resident']
     with (output / 'extract.log').open('w') as log:
         result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
