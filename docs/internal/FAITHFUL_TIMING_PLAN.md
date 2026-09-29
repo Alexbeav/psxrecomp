@@ -351,6 +351,22 @@ on a fixed region -> next.
   497 one-write straddles, the same count #420 reported. With FMV-quiet on,
   warm/cold is IDENTICAL over 8076 frames, with 497 carried shifts. Self-test:
   ctest `fp_identity`.
+
+- **2026-09-29 (segment-aware code — owner decisions, store-PC correction, no behaviour change):**
+  docs/SEGMENT_AWARE_CODE.md §10 records the owner's four decisions, all as recommended:
+  I-cache tags follow Beetle (hardware bit-31 difference recorded, ACCURACY_BURNDOWN
+  axis 4); static-code segment misses interpret loudly until regenerated; extra
+  segments come from segment-qualified seeds; the overlay cache uses per-segment
+  subdirectories. Correction: `g_debug_last_store_pc` is not debug-only. memory.c's
+  RAM 0x0-0xF store filters compare it with exact PCs in every build, and #420 (ABI
+  v24) forwards overlay stamps to the host. It is now a baked PC that goes through
+  `runtime_pc()`. Option A's re-measured cost with the 1,261 store-PC stamps is
+  +3.8 % / +27.6 % (it was +3.2 % / +27.2 %). New ledger id `store-pc-segment` (11 known gaps).
+  BIOS filter keys in SCPH1001's relocated windows name ROM addresses and must be
+  re-keyed with the BIOS stamp (§9). Rollout PR A (`fix/uncached-fetch-per-insn`,
+  on master) is in preparation; the ledger drops `bios-kseg1-fetch-charge` when
+  this branch is rebased after A lands.
+
 - **2026-09-28 (segment-aware code — design + acceptance ledger, no behaviour change):**
   docs/SEGMENT_AWARE_CODE.md. Compiled code bakes KSEG0 into links, CPS/IRQ resume PCs
   and I-cache tags; KUSEG-linked EXEs (Kula World, Alien Resurrection) run KUSEG PCs

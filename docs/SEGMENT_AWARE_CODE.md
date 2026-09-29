@@ -1,8 +1,10 @@
 # Segment-aware code
 
-Status: design proposal (2026-09-28). Stacked on
-RetroPortingToolKit/psxrecomp#417 (`fix/overlay-segment-alias`). This change
-adds only this document and an acceptance test; it does not change behaviour.
+Status: design proposal (2026-09-28). The four owner decisions in §10 were
+settled on 2026-09-29; each follows this document's recommendation.
+Stacked on RetroPortingToolKit/psxrecomp#417 (`fix/overlay-segment-alias`).
+This change adds only this document and an acceptance test; it does not change
+behaviour.
 
 Acceptance test: `recompiler/tests/test_segment_aware_codegen.py` (ctest
 `segment_aware_codegen`). Synthetic EXE: `tools/segment_testrom/gen_segment_exe.py`.
@@ -53,8 +55,8 @@ emission.**
 
 For every existing KSEG0 title the emitted code is byte-identical, so the
 static fast path costs nothing. Segment-relative emission would cost
-+3.2 % code size for the constants alone, and +27 % with exact KSEG1 charging
-(measured on R4, §6).
++3.8 % code size for the constants alone, and +27.6 % with exact KSEG1
+charging (measured on R4, §6).
 
 ## 2. What the segment changes: the Beetle model
 
@@ -88,14 +90,15 @@ return through EPC. All three already go through dispatch with the full PC.
 So a body compiled for segment S only ever reaches other S bodies by direct
 edges.
 
-**Oracle deviation to record.** Beetle's own comment (719-730) says hardware
-clears bit 31 of a KSEG0 fetch address before the tag compare and the tag
-write. On hardware, KUSEG and KSEG0 aliases therefore *do* share lines. We
-follow the oracle, as `psx_icache.c` does today. The acceptance test pins
-this: its Beetle model and `psx_icache.c` must agree. Moving to hardware
-semantics would be a separate, oracle-backed change. §5.6 keeps the tag
-computation in one place so that change stays one line. The deviation is
-recorded under ACCURACY_BURNDOWN axis 4 ("KUSEG/KSEG0/KSEG1 mirroring").
+**Oracle deviation (decided 2026-09-29, §10).** Beetle's own comment
+(719-730) says hardware clears bit 31 of a KSEG0 fetch address before the tag
+compare and the tag write. On hardware, KUSEG and KSEG0 aliases therefore *do*
+share lines. I-cache tags follow the oracle, as `psx_icache.c` does today. The
+acceptance test pins this: its Beetle model and `psx_icache.c` must agree.
+Moving to hardware semantics would be a separate, oracle-backed change. §5.6
+keeps the tag computation in one place so that change stays one line. The
+hardware difference is recorded under ACCURACY_BURNDOWN axis 4
+("KUSEG/KSEG0/KSEG1 mirroring").
 
 ## 3. Where psxrecomp loses the segment today
 
@@ -109,6 +112,7 @@ Every one of these sites writes the compile address, which is always KSEG0.
 | `psx_icache_fetch(cpu, 0x…u)` (fetch tags) | 1820-1826 | 61,181 |
 | `psx_check_interrupts_at(cpu, 0x…u)` (resume PC → EPC) | 170-175, ~20 callers | 30,596 |
 | `cpu->pc = 0x…u; return;` (CPS exits, stale-static guard) | 115, 2199-2547, 2895, 3148 | 6,927 |
+| `g_debug_last_store_pc = 0x…u` (before every `sb`/`sh`/`sw`/`swl`/`swr`/`swc2`) | 1307, 1446, 1615-1619, 1666 | 22,936 |
 | CPS continuation keys `case 0x…u: goto block_…` | 2747-2773, 3065-3110 | — |
 | Reserved-instruction EPC `cpu->cop0[14] = 0x…u` | 2059 | — |
 | `psx_slice_block(cpu, 0x…u, …)` (the interpreter resumes here) | 1789 | — |
@@ -116,9 +120,26 @@ Every one of these sites writes the compile address, which is always KSEG0.
 The R4 figures come from all 50 generated shards: 2,994 functions and
 141,335 emitted instruction sites.
 
+**The store-PC stamp is guest-affecting, not a debug hook.** Its name and the
+emitted `extern` comment describe debug attribution, but the runtime reads it
+in every build:
+- `memory.c` `psx_write_word_raw` drops a word store to RAM `0x0`-`0xF` when
+  the stamp equals one of a list of exact PCs (1742-1765). An opt-in Tomba
+  card filter (`PSX_TOMB_CARD_EVCB_PROTECT`, 1789) keys on it the same way.
+- The interpreter stamps the full executing PC (`dirty_ram_interp.c`
+  2288-2348). A compiled body that stamps a different segment than the one it
+  runs in can make a filter match in one execution path and miss in the
+  other.
+- #420 (`fix/fingerprint-guest-facts`, ABI v24) makes overlay shards write the
+  host's copy in every build. Before it, overlay stores wrote a private copy,
+  so after an overlay store the filters saw the PC of an older store.
+
+So the stamp is a baked PC like the others in the table, and §5.2 routes it
+through `runtime_pc()`.
+
 Two other groups carry PCs but are identity keys, not architectural state:
-- debug and identity hooks: `g_debug_last_store_pc` (22,936 sites), `cosim_*`,
-  `debug_server_*`, `psx_mod_function_entry`;
+- debug and identity hooks: `cosim_*`, `debug_server_*`,
+  `psx_mod_function_entry`;
 - `.ranges` manifests.
 
 The dispatch file (`main_psx.cpp` 1460-1724):
@@ -202,7 +223,8 @@ One body per function takes the segment at run time: from a field set by
 dispatch, or from a parameter. It emits `seg | phys` at every site in §3.1.
 
 - **Code and speed.** Every baked constant becomes an OR with a live register.
-  That is about 104k sites in R4, before continuation keys and switch tables.
+  That is about 127k sites in R4 (22,936 of them store-PC stamps), before
+  continuation keys and switch tables.
   CPS continuation switches can no longer be `case` constants; they need a
   physical-address switch plus a segment check.
 - **Exact KSEG1 charging.** The body cannot know statically whether it is
@@ -214,7 +236,7 @@ dispatch, or from a parameter. It emits `seg | phys` at every site in §3.1.
   - direct calls must carry it;
   - dispatch must scope it;
   - the overlay DLL ABI (`PSX_OVERLAY_ABI_TAG`) and mod entry hooks change.
-- **Measured cost** (§6): +3.2 % `__TEXT` for the constants, +27.2 % with
+- **Measured cost** (§6): +3.8 % `__TEXT` for the constants, +27.6 % with
   exact KSEG1 charging.
 - **Benefit:** one body serves any segment, and no variant set has to be
   chosen.
@@ -239,7 +261,7 @@ Reasons to choose B:
   per instruction.
 - It follows the model the BIOS emitter already uses: per-window runtime PCs
   through `BiosAddressModel::runtime_pc`.
-- Option A spends 3-27 % of every title's code on a case most titles never
+- Option A spends 4-28 % of every title's code on a case most titles never
   hit.
 
 ## 5. Design
@@ -257,11 +279,12 @@ A compiled body is identified by `seg | phys`:
 
 - `CodeGenerator` gets `runtime_pc(compile_addr) = code_seg | (compile_addr &
   0x1FFFFFFF)`, modelled on `bios_runtime_pc`.
-- Every site in §3.1 goes through it. That is 9 helpers, about 40 format
-  sites.
+- Every site in §3.1 goes through it, the store-PC stamp included. That is
+  9 helpers and about 40 format sites, plus 8 store-PC format sites.
 - The helper also covers `generate_alias_group` bodies and the dispatch
   emitter's rows (`addr`, `resume_pc`).
-- Identity keys (block labels, `.ranges`) may keep the compile address.
+- Identity keys (block labels, `.ranges`) may keep the compile address. The
+  store-PC stamp is not an identity key (§3.1).
 - `code_seg` defaults to KSEG0.
 - **Acceptance:** regenerating any KSEG0 title is byte-identical. That proves
   the refactor has zero fast-path cost. Closes nothing in the ledger on its
@@ -270,7 +293,11 @@ A compiled body is identified by `seg | phys`:
 The BIOS emitter's precedent has holes to close in the same pass:
 - the fallthrough `cpu->pc = next_addr` (`full_function_emitter.cpp:1652`);
 - the `strict_translator` syscall, break and unaligned-access PCs, which use
-  the ROM address.
+  the ROM address;
+- the `strict_translator` store-PC stamp, which also uses the ROM address.
+  Moving it changes which `memory.c` filters match. Several of their keys
+  are ROM addresses of code that runs relocated, so those keys must be
+  re-keyed to runtime PCs in the same change (§9).
 
 ### 5.3 EXE parser keeps the link segment
 
@@ -285,13 +312,15 @@ The BIOS emitter's precedent has holes to close in the same pass:
   home seed.
 
 Closes `link-segment`, `fetch-tag-segment`, `irq-resume-segment`,
-`resume-pc-segment`, `home-seed-accepted` and `alias-fetch-coherence`.
+`resume-pc-segment`, `store-pc-segment`, `home-seed-accepted` and
+`alias-fetch-coherence`.
 
 ### 5.4 Variant requests and closure
 
 - A seed whose segment differs from the link segment requests a variant, for
   example `0xA00100C0`. This reuses the seeds file; no new configuration
-  surface is needed.
+  surface is needed. Decided 2026-09-29 (§10): segment-qualified seeds are the
+  only request mechanism, with no `game.toml` table.
 - The recompiler compiles the variant's **direct-edge closure** in that
   segment:
   - direct calls;
@@ -320,6 +349,8 @@ Closes `segment-variants`.
 - Resolving it follows the project rule for any dispatch miss: add the
   segment-qualified seed, then regenerate.
 - It never runs another segment's body.
+- Decided 2026-09-29 (§10): a segment miss in static game code interprets
+  loudly until the title is regenerated. It does not fail fast.
 
 Closes `segment-miss`. `psx_call_contract`'s segment-masked return check
 (`cpu_state.h:308`) can become exact in the same PR.
@@ -335,8 +366,9 @@ instruction.
   lockstep replay, and does no tag lookup.
 - It is equivalent to `psx_icache_fetch(cpu, kseg1_pc)` because psxrecomp
   never writes a KSEG1 tag (it does not model tag-test mode).
-- The tag compare stays in `psx_icache.c`, as the one place a future
-  hardware-tag decision (§2) would change.
+- The tag compare stays in `psx_icache.c`. Tags follow Beetle (decided, §10),
+  and this is the one place a later, oracle-backed move to hardware tags (§2)
+  would change.
 
 It applies in three places:
 - **BIOS emitter:** `relocate_ra(rom) >= 0xA0000000`, which is the ROM run in
@@ -381,10 +413,10 @@ joins only the *entry* identity and the *compiled artifact* key.
   segment in its table and matches exactly, replacing the #417 rejection at
   2535.
 
-**Cache keys**
+**Cache keys** (layout decided 2026-09-29, §10)
 - KSEG0 artifacts keep today's path and names, so no existing cache
   invalidates.
-- Other segments go in a subdirectory of the same cache tag:
+- Other segments go in a per-segment subdirectory of the same cache tag:
   `…/cg<N>_<hash>_gc<hash>_f<n>/seg-kuseg/{phys}_{crc}.{dll,so}` (and
   `seg-kseg1/`).
 - The filename grammar (`psx_overlay_cache_name_parse`, `8_8` or `8_8_8`)
@@ -393,6 +425,9 @@ joins only the *entry* identity and the *compiled artifact* key.
   for KUSEG, `ov_s5_…` for KSEG1), so static variants can link side by side.
 - Exports are `func_{VA}` (§5.1), so they are distinct per segment.
 - `pair_id` hashes the C source, so variants never pair-alias one another.
+- A variant shard stamps its own segment's store PCs (§5.2). This relies on
+  #420 (ABI v24), which forwards overlay stamps to the host's
+  `g_debug_last_store_pc` in every build, so the `memory.c` filters see them.
 
 **Manifest**
 - `.ranges` gains `S <segment>`; if it is absent, the segment is KSEG0.
@@ -420,10 +455,10 @@ drops to 0 on a warm cache.
 
 | | Option A (segment-relative) | Option B (variants), this design |
 |---|---|---|
-| Home-segment code | +3.2 % `__TEXT`; +27.2 % with exact KSEG1 charging | **0**: byte-identical for KSEG0 titles |
+| Home-segment code | +3.8 % `__TEXT`; +27.6 % with exact KSEG1 charging | **0**: byte-identical for KSEG0 titles |
 | Per-instruction work | an OR at each baked PC, plus a KSEG1 test at about 80k non-leader sites | none added |
 | Dispatch | segment scoping on every dispatch | one `row.addr == addr` compare per dispatch; with no variants, the same row count as today |
-| ABI | every generated function and the overlay DLL ABI | unchanged |
+| ABI | every generated function and the overlay DLL ABI | unchanged (it relies on #420's v24 store-PC forwarding, which is independent of this design) |
 | Extra code | none | the requested variant closures only |
 | KSEG1 fetch fix | runtime test everywhere | a per-instruction charge only in KSEG1 bodies: 5,477 added call sites in OpenBIOS ROM code, paid only while ROM code runs |
 
@@ -431,10 +466,13 @@ drops to 0 on a warm cache.
 - R4 shards 00, 17 and 33 (911,454 B `__TEXT`), compiled with the build's own
   command (Apple clang 21, arm64, `-O3`).
 - Rewritten in a scratch copy to load the segment once per function and OR it
-  into every link, fetch-tag, IRQ-resume and CPS-exit constant:
-  940,382 B (+3.2 %).
+  into every link, fetch-tag, IRQ-resume, CPS-exit and store-PC constant:
+  946,046 B (+3.8 %).
 - With `if (seg >= KSEG1) fetch` added before each non-leader instruction:
-  1,159,826 B (+27.2 %).
+  1,163,390 B (+27.6 %).
+- The first measurement (2026-09-28) left out the 1,261 store-PC stamps in
+  these shards, because it treated them as debug-only. Without them the
+  figures were 940,382 B (+3.2 %) and 1,159,826 B (+27.2 %).
 - This is a size measurement, not a timing one. The per-instruction test
   sits on the hottest path and is only exact if it runs every time.
 
@@ -479,7 +517,7 @@ the real `psxrecomp-game` and `psxrecomp-bios` on it (OpenBIOS for the latter,
 
 **Gap ledger.** `KNOWN_GAPS` in the test lists each id with the section that
 closes it. The test passes only when the observed gaps equal the ledger. Today
-all ten are open:
+all eleven are open:
 
 | id | observed today | closed by |
 |---|---|---|
@@ -487,6 +525,7 @@ all ten are open:
 | `fetch-tag-segment` | 25 fetch tags in KSEG0 | §5.3 |
 | `irq-resume-segment` | 4 resume PCs in KSEG0 | §5.3 |
 | `resume-pc-segment` | 10 exit PCs / continuation keys in KSEG0 | §5.3 |
+| `store-pc-segment` | 10 store-PC stamps in KSEG0, e.g. `0x8001000C` | §5.3 |
 | `home-seed-accepted` | KUSEG seed loaded 0 of 1 | §5.3 |
 | `alias-fetch-coherence` | interp-then-compiled `leaf`: 14 cycles vs Beetle 7 (the #417 shape) | §5.3 |
 | `segment-variants` | `0xA00100C0` resolves to the `0x800100C0` body | §5.4 |
@@ -494,7 +533,10 @@ all ten are open:
 | `kseg1-fetch-charge` | no KSEG1 body (Beetle: 40 cycles for the 10-instruction run) | §5.4 + §5.6 |
 | `bios-kseg1-fetch-charge` | 5,477 of 9,592 OpenBIOS KSEG1 instruction sites uncharged | §5.6 |
 
-Each implementation PR removes the ids it closes. The overlay half (§5.7)
+Each implementation PR removes the ids it closes. The exception is PR A
+(§8): it is based on master, which does not have this test. When A lands,
+this PR is rebased onto it, and the ledger drops `bios-kseg1-fetch-charge` in
+that rebase. The overlay half (§5.7)
 gets its own acceptance case in `runtime/tests/test_overlay_segment_gate.py`:
 - a KUSEG-compiled fixture shard runs natively for its KUSEG PC;
 - the same shard is interpreted for the KSEG0 and KSEG1 aliases.
@@ -533,12 +575,15 @@ log.
 
 - **A: `fix/uncached-fetch-per-insn`** (§5.6, BIOS emitter). Independent of
   the rest and the smallest. Closes `bios-kseg1-fetch-charge`. Needs the LLE
-  Beetle parity run.
-- **B: `refactor/emitter-runtime-pc`** (§5.2). No behaviour change; proven by
-  byte-identical regeneration.
+  Beetle parity run. Status (2026-09-29): being prepared, based on master.
+  Once it lands, this PR is rebased and drops the id from the ledger (§7.1).
+- **B: `refactor/emitter-runtime-pc`** (§5.2). No behaviour change for game
+  code, including the store-PC stamps; proven by byte-identical regeneration
+  of KSEG0 titles. The BIOS-emitter holes in §5.2 do change BIOS output. The
+  store-PC one ships with the `memory.c` filter re-key (§9).
 - **C: `feat/kuseg-linked-exe`** (§5.3, §5.5). Also rewrites the alias
   assertions in `test_kuseg_dispatch_lookup.py`: an alias with no body now
-  misses. Closes six ids.
+  misses. Closes seven ids.
 - **D: `feat/segment-variants`** (§5.4, and §5.6 in the game emitter). Closes
   `segment-variants` and `kseg1-fetch-charge`.
 - **E: `feat/overlay-segment-keys`** (§5.7). Includes the runtime acceptance
@@ -553,22 +598,40 @@ log.
 - **IsC stores are dropped** (`memory.c:1731`). Beetle writes the I-cache tag
   and valid bits through them (`WriteMemory_IsC_misc`, 623-641), so a
   `FlushCache` in psxrecomp does not invalidate the I-cache model.
+- **BIOS store-PC filter keys are ROM addresses.** The `strict_translator`
+  stamp is the ROM address; the interpreter stamps the runtime PC. Several
+  `memory.c` filter keys lie in SCPH1001's relocated windows
+  (`bios/SCPH1001.toml`):
+  - Kernel Part 2, which runs at `0x500`: `0xBFC10A00` and the Tomba key
+    `0xBFC117E4`;
+  - Shell, which runs at `0x80030000`: `0xBFC3EEB4`, `0xBFC405E4`,
+    `0xBFC40788` and `0xBFC41C50`.
+
+  For these keys a filter fires only while that code runs compiled. If the
+  same code runs interpreted, the store lands. Routing the BIOS stamp through
+  `runtime_pc()` (§5.2) without re-keying would silently disable them.
+  Re-keying them to runtime PCs in the same change also makes the
+  interpreted path agree.
 - **Syscall EPC in compiled code** comes from `cpu->pc` (`traps.c:1040`), but
   the emitted `syscall` site does not set it. Confirm what `cpu->pc` holds
   there; §5.2's pass is the place to make it the syscall's own
   `runtime_pc`.
 
-## 10. Questions for the owner
+## 10. Decisions (2026-09-29)
 
-1. **I-cache tags: Beetle or hardware?** Beetle uses full-VA tags;
-   hardware clears bit 31 for KSEG0. The recommendation is Beetle, because it
-   is the oracle; the hardware deviation would be recorded in
-   ACCURACY_BURNDOWN.
-2. **Segment misses on static text:** interpret loudly until the title is
-   regenerated (the recommendation, matching today's clean-text-miss path),
-   or fail fast?
-3. **How variants are requested:** segment-qualified seeds (the
-   recommendation) or a `game.toml` table?
-4. **Overlay cache layout:** `seg-<name>/` subdirectories (the
-   recommendation; no filename-grammar change) or the segment in the
-   filename stem?
+The owner delegated the four open questions and accepted this document's
+recommendations. They are settled; implementation PRs follow them.
+
+1. **I-cache tags follow Beetle, the oracle.** Tags compare the full virtual
+   address. Hardware clears bit 31 of KSEG0 fetches first; that difference
+   is recorded in ACCURACY_BURNDOWN axis 4 (§2). A move to hardware tags
+   would be a separate, oracle-backed change.
+2. **Segment misses in static game code interpret loudly until the title is
+   regenerated.** They are counted, recorded in the TCP-visible ring and
+   taken down the existing clean-text-miss path (§5.5). There is no
+   fail-fast mode.
+3. **Extra segments are requested through segment-qualified seeds** (§5.4).
+   There is no `game.toml` table.
+4. **The overlay cache uses per-segment subdirectories** (`seg-kuseg/`,
+   `seg-kseg1/`) under the existing cache tag (§5.7). The filename grammar
+   does not change.

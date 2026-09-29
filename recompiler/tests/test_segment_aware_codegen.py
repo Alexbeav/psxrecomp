@@ -50,6 +50,7 @@ KNOWN_GAPS = {
     "fetch-tag-segment": ("5.3", "I-cache fetch tags carry KSEG0, not the link segment"),
     "irq-resume-segment": ("5.3", "psx_check_interrupts_at resume PCs (future EPCs) carry KSEG0"),
     "resume-pc-segment": ("5.3", "CPS exit PCs and continuation keys carry KSEG0"),
+    "store-pc-segment": ("5.3", "store-PC stamps (memory.c store filters read them) carry KSEG0"),
     "home-seed-accepted": ("5.3", "a seed written in the EXE's own KUSEG segment is dropped"),
     "alias-fetch-coherence": ("5.3", "a compiled body misses I-cache lines the interpreter filled at the real PC"),
     "segment-variants": ("5.4", "a seeded KSEG1 entry gets no body of its own"),
@@ -206,6 +207,9 @@ PC_SITES = {
     "fetch-tag-segment": r"psx_icache_fetch\(cpu, 0x([0-9A-F]{8})u\)",
     "irq-resume-segment": r"psx_check_interrupts_at\(cpu, 0x([0-9A-F]{8})u\)",
     "resume-pc-segment": r"cpu->pc = 0x([0-9A-F]{8})u;|case 0x([0-9A-F]{8})u: goto",
+    # Not a debug-only breadcrumb: memory.c's RAM 0x0-0xF store filters compare
+    # it with exact PCs in every build, and the interpreter stamps the full PC.
+    "store-pc-segment": r"g_debug_last_store_pc = 0x([0-9A-F]{8})u;",
 }
 
 
