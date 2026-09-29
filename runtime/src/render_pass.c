@@ -316,9 +316,19 @@ uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
     return n;
 }
 
+/* FNV-1a step over 64-bit words, then the tail bytes. Each step is a
+ * bijection of h, so a change confined to one word always changes the hash.
+ * Word steps take an eighth of the time of byte steps, which keeps
+ * PSX_RENDER_PASS_VERIFY affordable with 8 MiB of RAM live. */
 static uint64_t fnv(uint64_t h, const void *p, size_t n) {
     const uint8_t *b = (const uint8_t *)p;
-    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211ULL;
+    size_t i = 0;
+    for (; i + 8u <= n; i += 8u) {
+        uint64_t w;
+        memcpy(&w, b + i, sizeof w);
+        h = (h ^ w) * 1099511628211ULL;
+    }
+    for (; i < n; i++) h = (h ^ b[i]) * 1099511628211ULL;
     return h;
 }
 
