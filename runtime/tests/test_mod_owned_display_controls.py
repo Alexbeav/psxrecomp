@@ -83,6 +83,22 @@ for reset in (
 ):
     assert reset in later, f"later-session reset is missing: {reset}"
 
+# Bezel artwork: clearing g_bezel_path only stops the next load. The loaded
+# texture must not outlive the session's GL context either, or a rematch would
+# bind the stale name in its new context (present_bezel() draws whenever it is
+# nonzero). Only a soft return and process exit shut the renderer down.
+GL = (ROOT / "runtime" / "src" / "gpu_gl_renderer.c").read_text(encoding="utf-8")
+shutdown = GL[GL.index("void gl_renderer_shutdown(void) {"):]
+shutdown = shutdown[:shutdown.index("\n}\n")]
+live_ctx = shutdown[shutdown.index("if (s_ctx) {"):shutdown.index("SDL_GL_DeleteContext(s_ctx);")]
+assert "gl_renderer_set_bezel(NULL, 0, 0);" in live_ctx, \
+    "gl_renderer_shutdown() must drop the bezel texture while its context is current"
+set_bezel = GL[GL.index("int gl_renderer_set_bezel(const void *rgba, int w, int h) {"):]
+assert set_bezel.index("if (s_bezel_tex) { glDeleteTextures(1, &s_bezel_tex); s_bezel_tex = 0; }") < \
+    set_bezel.index("if (!rgba || w <= 0 || h <= 0) return 1;"), \
+    "gl_renderer_set_bezel(NULL, ...) must delete and forget the texture"
+assert "if (!s_bezel_tex || ww <= 0 || wh <= 0) return;" in GL
+
 # First-boot session block: reset immediately before activation.
 assert "reset_mod_owned_presentation();\n    mod_runtime_activate_plugins();" in MAIN, \
     "reset must run immediately before mod activation"
