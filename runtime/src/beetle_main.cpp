@@ -1,6 +1,7 @@
 /* beetle_main.cpp — psx-beetle entry point.
  * Standalone harness around Beetle PSX libretro core. SDL window for
- * Beetle's framebuffer, keyboard input, TCP debug server on port 4380. */
+ * Beetle's framebuffer, keyboard input, TCP debug server on port 4382
+ * (--port N). */
 
 #include "psx_sdl.h"
 #include "frame_pacing.h"

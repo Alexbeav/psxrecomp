@@ -872,7 +872,8 @@ endif()
 #
 # Standalone binary that runs Beetle PSX (mednafen-psx libretro core) with
 # a debug server exposing the SAME wire-protocol commands as psx-runtime,
-# on a different port (4380). No recomp code linked.
+# on its own port (default 4382, set in beetle_main.cpp; --port N). No recomp
+# code linked.
 #
 # Requires beetle-psx with the docs/beetle_*.patch hooks, built via:
 #   cd beetle-psx && make platform=mingw_x86_64 STATIC_LINKING=1 HAVE_LIGHTREC=0

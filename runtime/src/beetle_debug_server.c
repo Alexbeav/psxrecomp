@@ -5,7 +5,8 @@
  * set_input, clear_input, pad_status, screenshot_file, sio_trace_*,
  * wtrace_*, fntrace_*.
  *
- * Default port: 4380 (compile-time DEFAULT_DEBUG_PORT).
+ * Port: psx-beetle passes 4382 unless --port is given (beetle_main.cpp);
+ * 4380 is only the fallback for a port <= 0.
  * JSON-over-newline protocol, same as recomp side.
  */
 
