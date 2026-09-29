@@ -19,6 +19,16 @@ The native side (psx-runtime) implements `cyc_watch` / `cyc_watch_dump` /
 `cyc_watch_clear` in runtime/src/debug_server.c. The Beetle side
 (psx-beetle) implements the SAME commands to the SAME spec (added parent-side).
 
+BOOT ANCHORS: reset, the kernel copy, the first syscalls and the shell pass in
+the first frames, before a TCP arm can land. Arm them from power-on instead:
+start each backend with PSX_CYC_WATCH=<pc> (or <pc>-<end> for REGION mode) and
+PSX_CYC_WATCH_N=<hits> (default 16) in its environment, then run this tool with
+--no-arm to dump and diff. The anchor key can differ per side: a BIOS copy
+window with dispatch_key = "rom" (the shell, in both bios/OpenBIOS.toml and
+bios/SCPH1001.toml) is keyed natively at its ROM address, so the OpenBIOS shell
+entry is 0x80030000 in Beetle but 0xBFC0A500 natively (SCPH-1001: 0xBFC18000).
+Windows with dispatch_key = "ram" (the kernels) use the RAM PC on both sides.
+
 Wire format (request):
     {"cmd":"cyc_watch","pc":"0x80012345","n":16}
     {"cmd":"cyc_watch_dump"}

@@ -5,7 +5,8 @@
  * set_input, clear_input, pad_status, screenshot_file, sio_trace_*,
  * wtrace_*, fntrace_*.
  *
- * Default port: 4380 (compile-time DEFAULT_DEBUG_PORT).
+ * Port: psx-beetle passes 4382 unless --port is given (beetle_main.cpp);
+ * 4380 is only the fallback for a port <= 0.
  * JSON-over-newline protocol, same as recomp side.
  */
 
@@ -14,6 +15,8 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
+
+#include "host_time.h"
 
 #ifndef DEFAULT_DEBUG_PORT
 #error DEFAULT_DEBUG_PORT must be defined by the beetle runtime target.
@@ -28,6 +31,7 @@
 #  define sock_close closesocket
 #else
 #  include <sys/socket.h>
+#  include <sys/select.h>
 #  include <netinet/in.h>
 #  include <unistd.h>
 #  include <fcntl.h>
@@ -189,17 +193,50 @@ static int s_input_override = -1;
 static int s_input_frames   = 0;
 
 /* ---- Send helpers ---- */
+
+/* The client socket is non-blocking. A reply larger than the free space in
+ * the kernel send buffer (a 2 MB read_ram is ~4 MB of hex; macOS starts a
+ * TCP send buffer at 128 KB) makes send() fail with EWOULDBLOCK
+ * part-way through. Wait for the socket to drain and carry on, like
+ * debug_server.c's send_all_blocking, instead of dropping the connection
+ * and leaving the client a truncated JSON line. */
+#define SEND_TOTAL_BUDGET_MS 15000
+
+static int send_would_block(void) {
+#ifdef _WIN32
+    return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+#endif
+}
+
+/* Wait up to 100 ms for the client socket to become writable. */
+static int send_wait_writable(void) {
+    fd_set wr;
+    FD_ZERO(&wr);
+    FD_SET(s_client, &wr);
+    struct timeval tv = { 0, 100 * 1000 };
+    return select((int)s_client + 1, NULL, &wr, NULL, &tv) >= 0;
+}
+
 static void send_raw(const char *data, int n) {
     if (s_client == SOCK_INVALID) return;
     int off = 0;
+    const uint64_t t_start = psx_host_mono_ms();
     while (off < n) {
         int k = send(s_client, data + off, n - off, 0);
-        if (k <= 0) {
-            sock_close(s_client);
-            s_client = SOCK_INVALID;
-            return;
+        if (k > 0) {
+            off += k;
+            continue;
         }
-        off += k;
+        if (k < 0 && send_would_block() &&
+            psx_host_mono_ms() - t_start < SEND_TOTAL_BUDGET_MS &&
+            send_wait_writable()) {
+            continue;
+        }
+        sock_close(s_client);
+        s_client = SOCK_INVALID;
+        return;
     }
 }
 

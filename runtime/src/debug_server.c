@@ -9991,24 +9991,12 @@ static void handle_wtrace_ranges(int id, const char *json)
 
 /* ---- cyc_watch command handlers (see cyc_watch_observe above) ---- */
 
-/* cyc_watch — arm an anchor PC. {"pc":"0x...","n":16}. Clears the ring,
- * masks the anchor to physical, and starts recording. The Beetle side
- * (psx-beetle, added parent-side) implements the SAME command/spec. */
-static void handle_cyc_watch(int id, const char *json)
+/* Arm cyc_watch: clear the ring, mask the anchor(s) to physical, start
+ * recording. end_raw != 0 selects REGION mode (each entry = Δcycles A->B). */
+static void cyc_watch_arm(uint32_t raw, uint32_t end_raw, int n)
 {
-    char pcbuf[64];
-    if (!json_get_str(json, "pc", pcbuf, sizeof(pcbuf))) {
-        send_err(id, "cyc_watch requires pc");
-        return;
-    }
-    uint32_t raw = hex_to_u32(pcbuf);
-    int n = json_get_int(json, "n", 16);
     if (n < 1) n = 1;
     if (n > CYC_WATCH_RING_CAP) n = CYC_WATCH_RING_CAP;
-    /* Optional second anchor -> REGION mode: each entry = Δcycles of one A->B pass. */
-    char endbuf[64];
-    uint32_t end_raw = json_get_str(json, "end", endbuf, sizeof(endbuf)) ? hex_to_u32(endbuf) : 0u;
-
     /* Disarm first so the hot path can't sample mid-reset. */
     s_cyc_watch_armed = 0;
     s_cyc_watch_anchor_raw  = raw;
@@ -10023,6 +10011,22 @@ static void handle_cyc_watch(int id, const char *json)
     s_cyc_watch_last_cycle  = 0xFFFFFFFFFFFFFFFFull;
     memset(s_cyc_watch_ring, 0, sizeof(s_cyc_watch_ring));
     s_cyc_watch_armed = 1;
+}
+
+/* cyc_watch — arm an anchor PC. {"pc":"0x...","n":16}. Clears the ring,
+ * masks the anchor to physical, and starts recording. The Beetle side
+ * (psx-beetle, added parent-side) implements the SAME command/spec. */
+static void handle_cyc_watch(int id, const char *json)
+{
+    char pcbuf[64];
+    if (!json_get_str(json, "pc", pcbuf, sizeof(pcbuf))) {
+        send_err(id, "cyc_watch requires pc");
+        return;
+    }
+    /* Optional second anchor -> REGION mode: each entry = Δcycles of one A->B pass. */
+    char endbuf[64];
+    uint32_t end_raw = json_get_str(json, "end", endbuf, sizeof(endbuf)) ? hex_to_u32(endbuf) : 0u;
+    cyc_watch_arm(hex_to_u32(pcbuf), end_raw, json_get_int(json, "n", 16));
 
     send_fmt("{\"id\":%d,\"ok\":true,\"anchor\":\"0x%08X\","
              "\"anchor_phys\":\"0x%08X\",\"end\":\"0x%08X\",\"end_phys\":\"0x%08X\","
@@ -14464,6 +14468,24 @@ void debug_server_init(int port)
                     s_pc_probe_armed = 1;
                     fprintf(stdout, "psxrecomp: pc_probe armed (%d pcs)\n", s_pc_probe_n);
                 }
+            }
+        }
+        /* PSX_CYC_WATCH="<pc>" or "<pc>-<end>" (region mode) arms cyc_watch
+         * before the first guest instruction, with PSX_CYC_WATCH_N hits
+         * (default 16). Boot anchors (reset, the kernel copy, the first
+         * syscalls, the shell) pass before any TCP arm can land. psx-beetle
+         * reads the same variables, so one boot of each backend gives the
+         * same anchor from cycle 0 (tools/cycle_compare.py --no-arm). */
+        {
+            const char *cw = getenv("PSX_CYC_WATCH");
+            if (cw && *cw) {
+                char *e = NULL;
+                uint32_t pc = (uint32_t)strtoul(cw, &e, 0);
+                uint32_t end = (e && *e == '-') ? (uint32_t)strtoul(e + 1, NULL, 0) : 0u;
+                const char *ns = getenv("PSX_CYC_WATCH_N");
+                cyc_watch_arm(pc, end, (ns && *ns) ? (int)strtol(ns, NULL, 0) : 16);
+                fprintf(stdout, "psxrecomp: cyc_watch armed from boot pc=0x%08X end=0x%08X n=%u\n",
+                        pc, end, s_cyc_watch_max_hits);
             }
         }
     }

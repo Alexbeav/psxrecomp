@@ -957,14 +957,18 @@ if(NOT MSVC)
     )
 endif()
 
-# ---- psx-beetle target (Beetle PSX libretro standalone, MinGW) ----
+# ---- psx-beetle target (Beetle PSX libretro standalone; MinGW, Linux, macOS) ----
 #
 # Standalone binary that runs Beetle PSX (mednafen-psx libretro core) with
 # a debug server exposing the SAME wire-protocol commands as psx-runtime,
-# on a different port (4380). No recomp code linked.
+# on its own port (default 4382, set in beetle_main.cpp; --port N). No recomp
+# code linked.
 #
-# Requires beetle-psx built via:
+# Requires beetle-psx with the docs/beetle_*.patch hooks, built via:
 #   cd beetle-psx && make platform=mingw_x86_64 STATIC_LINKING=1 HAVE_LIGHTREC=0
+# (platform=unix on Linux, platform=osx on macOS; there the archive is named
+# mednafen_psx_libretro.so/.dylib; copy it to libmednafen_psx.a). Recipes:
+# docs/beetle-linux.md, docs/beetle-macos.md.
 
 set(BEETLE_LIB "${CMAKE_SOURCE_DIR}/../beetle-psx/libmednafen_psx.a")
 
