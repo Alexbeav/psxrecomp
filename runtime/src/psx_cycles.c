@@ -641,11 +641,13 @@ void psx_cycles_reset_for_boot(void) {
  * the same as div+mflo: the fillers ran during the latency window). REQUIRES
  * per-instruction cycle charging (PSX_CODEGEN_CYCLE_PER_INSN / the interp), so
  * `now` is the true cycle position at the op — block-up-front charging breaks it.
+ * Charges still pending in the batch or a local accumulator are part of `now`:
+ * both helpers publish them before reading the clock (test_muldiv_deferred.c).
  *
  * Latencies transcribed from Beetle cpu.cpp: DIV/DIVU = 37 (fixed). MULT/MULTU =
  * MULT_Tab24 indexed by the leading-zero count of the (sign-folded, for signed)
- * first operand | 0x400 — i.e. 14 for small magnitudes (<12 significant bits),
- * 10 for medium, 7 for large. The | 0x400 caps the index at 21 (never l==0). */
+ * first operand | 0x400 — i.e. 7 when it fits in 11 bits, 10 in 20 bits, 14
+ * otherwise. The | 0x400 caps the index at 21 (never l==0). */
 
 static const uint8_t PSX_MULT_TAB24[24] = {
     /* i<12: 7+4+3=14 */ 14,14,14,14,14,14,14,14,14,14,14,14,
@@ -674,10 +676,16 @@ uint32_t psx_mult_latency_u(uint32_t rs) {  /* MULTU (unsigned) */
 /* DIV/DIVU latency is the fixed constant 37 — emitted directly at the op site. */
 
 void psx_muldiv_set(CPUState* cpu, uint32_t latency) {
+    /* The deadline belongs to this instruction, including unpublished CPU
+     * work from generated blocks and local charge accumulators. */
+    psx_cyc_batch_flush();
     cpu->muldiv_ts_done = psx_cycle_count + (uint64_t)latency;
 }
 
 void psx_muldiv_stall(CPUState* cpu) {
+    /* Publish once before comparing; otherwise advance would add the pending
+     * work a second time on top of a stall computed from a stale clock. */
+    psx_cyc_batch_flush();
     /* MFLO/MFHI stall to the mult/div completion deadline (Beetle cpu.cpp:1723-1736).
      * While stalling it CONSUMES a pending load-delay give-back (read_absorb) — each
      * stalled cycle decrements read_absorb[read_absorb_which] — so cycles that would
