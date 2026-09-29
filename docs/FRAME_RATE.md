@@ -61,4 +61,8 @@ FLIP mode shows about 30 captures and 30 duplicates per second.
 - Vsync is off: on a fixed-refresh panel pick the display refresh rate.
 
 Tests: `frame_interpolation_schedule_test` (runtime ctest) covers the phase
-windows, the flip tracker and output counts per rate at 30 Hz.
+windows, the flip tracker, the new-frame decision and output counts per rate
+at 30 Hz. `frame_interpolation_flip_source` (source guard, recompiler ctest)
+pins the wiring no unit test reaches: the session-start hand-off of the
+source to the renderer, and `interp_capture`'s FLIP branch (origin and redraw
+into the decision, an early return on a duplicate).

@@ -108,6 +108,13 @@ void frame_flip_tracker_reset(FrameFlipTracker *tracker) {
     tracker->frames = 0;
 }
 
+int frame_flip_is_new_frame(int geometry_changed, int history_empty,
+                            int redrawn, int origin_x, int origin_y,
+                            int last_x, int last_y) {
+    return geometry_changed || history_empty || redrawn ||
+           origin_x != last_x || origin_y != last_y;
+}
+
 uint32_t frame_flip_tracker_vblank(FrameFlipTracker *tracker, int new_frame,
                                    double *phase_lo, double *phase_hi) {
     uint32_t k, p;

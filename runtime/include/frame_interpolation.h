@@ -64,6 +64,14 @@ typedef struct FrameFlipTracker {
 } FrameFlipTracker;
 
 void frame_flip_tracker_reset(FrameFlipTracker *tracker);
+/* Whether a presented VBlank shows a new guest frame (the tracker's
+ * new_frame): the presented geometry changed, no frame is held yet, the
+ * displayed rect was redrawn since the last present, or the display origin
+ * moved from (last_x, last_y) to (origin_x, origin_y), i.e. a flip. Anything
+ * else re-presents the image already held and is a duplicate. */
+int frame_flip_is_new_frame(int geometry_changed, int history_empty,
+                            int redrawn, int origin_x, int origin_y,
+                            int last_x, int last_y);
 /* Returns k for this VBlank. */
 uint32_t frame_flip_tracker_vblank(FrameFlipTracker *tracker, int new_frame,
                                    double *phase_lo, double *phase_hi);

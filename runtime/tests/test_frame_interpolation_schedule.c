@@ -193,6 +193,26 @@ static void test_phase_windows(void) {
     }
 }
 
+/* interp_capture's FLIP branch asks this whether a present is a new frame;
+ * a duplicate keeps the history and only advances the tracker's phase. */
+static void test_flip_new_frame(void) {
+    /* The same origin, nothing redrawn, a frame already held: duplicate. */
+    CHECK(!frame_flip_is_new_frame(0, 0, 0, 0, 240, 0, 240),
+          "a re-presented image is a duplicate");
+    CHECK(frame_flip_is_new_frame(0, 0, 0, 0, 0, 0, 240),
+          "the display origin moving in y is a flip");
+    CHECK(frame_flip_is_new_frame(0, 0, 0, 320, 240, 0, 240),
+          "the display origin moving in x is a flip");
+    CHECK(frame_flip_is_new_frame(0, 0, 1, 0, 240, 0, 240),
+          "a redraw of the displayed rect is a new frame");
+    CHECK(frame_flip_is_new_frame(0, 1, 0, 0, 240, 0, 240),
+          "the first frame after a history reset is new");
+    CHECK(frame_flip_is_new_frame(1, 0, 0, 0, 240, 0, 240),
+          "a presented-geometry change is a new frame");
+    CHECK(frame_flip_is_new_frame(0, 0, 0, 0, 0, -1, -1),
+          "the first present after a reset (origin unknown) is new");
+}
+
 static void test_flip_rates(void) {
     static const struct { double hz; int lo; int hi; } rates[] = {
         {60.0, 2, 3}, {100.0, 3, 4}, {120.0, 4, 5}, {200.0, 6, 7},
@@ -222,6 +242,7 @@ static void test_flip_rates(void) {
 
 int main(void) {
     test_flip_tracker_table();
+    test_flip_new_frame();
     test_phase_windows();
     test_flip_rates();
 

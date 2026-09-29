@@ -4064,9 +4064,9 @@ static int interp_capture(GLuint fbo, int x, int y, int w, int h,
     if (s_interp_source == 1) {
         /* FLIP source: a VBlank that re-presents the same displayed image is
          * not a new source frame. Keep history and advance the phase window. */
-        int new_frame = geometry_changed || s_interp_valid == 0 || redrawn ||
-                        origin_x != s_interp_origin_x ||
-                        origin_y != s_interp_origin_y;
+        int new_frame = frame_flip_is_new_frame(
+            geometry_changed, s_interp_valid == 0, redrawn, origin_x, origin_y,
+            s_interp_origin_x, s_interp_origin_y);
         s_interp_origin_x = origin_x;
         s_interp_origin_y = origin_y;
         (void)frame_flip_tracker_vblank(&s_interp_flip, new_frame,
