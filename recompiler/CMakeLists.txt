@@ -829,6 +829,7 @@ if(BUILD_TESTING)
                 release_zip
                 overlay_decodable_fallback
                 overlay_init_guard
+                overlay_segment_gate
                 recomp_ui_root_override
                 pal_cadence_host_refresh
                 sdl3_main_single_include

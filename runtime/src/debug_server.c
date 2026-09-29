@@ -12262,7 +12262,8 @@ static void handle_overlay_loader_status(int id, const char *json)
             "\"reval_attempts\":%u,\"reval_crc_miss\":%u,\"last_reval_crc\":\"0x%08X\","
             "\"gen_fastpath\":%llu,\"range_links\":%d,\"range_index_overflow\":%d,"
             "\"lazy_manifests\":%d,\"lazy_manifest_overflow\":%d,"
-            "\"candidate_overflow\":%llu,\"pair_aliases\":%llu",
+            "\"candidate_overflow\":%llu,\"pair_aliases\":%llu,"
+            "\"segment_alias_interp\":%llu",
             r0v, r0w, r0lo, r0hi, r0crc, ratt, rmiss, rlast,
             (unsigned long long)overlay_loader_gen_fastpath(),
             overlay_loader_range_link_count(),
@@ -12270,7 +12271,8 @@ static void handle_overlay_loader_status(int id, const char *json)
             overlay_loader_lazy_manifest_count(),
             overlay_loader_lazy_manifest_overflow(),
             (unsigned long long)overlay_loader_candidate_overflow(),
-            (unsigned long long)overlay_loader_pair_aliases());
+            (unsigned long long)overlay_loader_pair_aliases(),
+            (unsigned long long)overlay_loader_segment_alias_interp());
         uint64_t nd=0, ni=0, sn=0, ss=0, sc=0, sx=0;
         psx_interrupt_delivery_diag(&nd, &ni, &sn, &ss, &sc, &sx);
         n += snprintf(buf + n, sizeof(buf) - n,

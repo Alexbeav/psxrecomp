@@ -501,6 +501,7 @@ static uint32_t s_rehash_miss    = 0;   /* hashes that didn't match crc_code  */
 static uint64_t s_gen_fastpath   = 0;   /* dispatches that skipped the crc32   */
                                         /* via the unchanged page-generation   */
                                         /* fast path (overlay-cache v2 P2)      */
+static uint64_t s_segment_alias_interp = 0; /* KUSEG/KSEG1 PCs kept off shards  */
 static uint64_t s_diffgate_interp = 0;  /* CPS interior re-entries sent to the  */
                                         /* interp because their candidate is    */
                                         /* still inside the diff verify budget  */
@@ -938,7 +939,7 @@ static ManFn *parse_manifest(const char *path, int *out_n,
                     arr = na;
                 }
                 cur = &arr[n++];
-                cur->entry   = ((uint32_t)parsed_e & 0x1FFFFFFFu) | 0x80000000u;
+                cur->entry   = ((uint32_t)parsed_e & 0x1FFFFFFFu) | PSX_OVERLAY_CODE_SEGMENT;
                 cur->crc     = (uint32_t)parsed_crc;
                 cur->has_crc = 1;
                 cur->n = 0;
@@ -3660,6 +3661,15 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
      * overlay-off + CPS game hit this and wedged at boot before any game code ran
      * (found via Ape Escape, the only overlay-off title). Fail closed here. */
     if (!s_active) return 0;
+    /* A shard's body bakes the KSEG0 PCs it was compiled for; a KUSEG or KSEG1
+     * alias of its bytes must run at its own PC ($ra, EPC, I-cache tags). The
+     * CPS continuation switch already rejects such a PC (bad entry); this
+     * keeps function entries to the same rule. */
+    if (!psx_overlay_code_segment_pc(addr)) {
+        s_segment_alias_interp++;
+        s_disp_interp++;
+        return 0;
+    }
     if (overlay_cache_window_contains(phys) && lazy_miss_cached(phys)) {
         s_disp_interp++;
         return 0;
@@ -4096,6 +4106,7 @@ int overlay_loader_lazy_manifest_count(void) { return s_lazy_man_n; }
 int overlay_loader_lazy_manifest_overflow(void) { return s_lazy_man_overflow; }
 uint64_t overlay_loader_candidate_overflow(void) { return s_cand_overflow; }
 uint64_t overlay_loader_pair_aliases(void) { return s_pair_aliases; }
+uint64_t overlay_loader_segment_alias_interp(void) { return s_segment_alias_interp; }
 
 /* (sljit removed 2026-07-15: overlay_loader_sljit_obsoleted and the
  * overlay_loader_sljit_probe one-shot JIT helper lived here.) */
