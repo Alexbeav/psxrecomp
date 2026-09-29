@@ -2242,7 +2242,10 @@ static std::filesystem::path read_cached_path(const char* argv0, const char* fil
 static void write_cached_path(const char* argv0, const char* filename,
                               const std::filesystem::path& path) {
     std::ofstream f(sidecar_cfg_path(argv0, filename), std::ios::trunc);
-    if (f.is_open()) f << path.string() << "\n";
+    // Relative inside the game folder so a moved portable folder still works;
+    // read_cached_path's callers anchor relative paths on the exe directory.
+    if (f.is_open())
+        f << PSXRecompV4::relative_to_folder(path, exe_dir_from_argv(argv0)).generic_string() << "\n";
 }
 
 static void launcher_warning(const char* title, const std::string& msg) {
