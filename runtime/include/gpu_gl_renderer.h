@@ -161,6 +161,12 @@ typedef struct GlScaleInfo {
 } GlScaleInfo;
 int gl_renderer_scale_info(GlScaleInfo *out);
 
+/* Narrow a native-wide display aspect num:den to the widest whose surface
+ * this context can allocate at its internal scale (psx_gl_fit_wide_aspect;
+ * disp_w is the display width the margins derive from). Returns 1 when it
+ * changed num:den; 0, leaving it alone, before init or with no known limit. */
+int gl_renderer_fit_wide_aspect(int disp_w, int *num, int *den);
+
 /* Read the display rect at internal resolution from the hr FBO: (w*S) x (h*S)
  * ARGB8888, top row first. Returns the pixel count, 0 if unavailable or larger
  * than cap_px. Debug/verification only (screenshot_hires under GL). */

@@ -1738,6 +1738,14 @@ static void update_adaptive_widescreen() {
         num /= divisor;
         den /= divisor;
     }
+    /* Native-wide margins live in a GL surface g_wide_w*S wide, which the
+     * driver limit bounds (1024 native columns at 16x on a 16384 limit, about
+     * 38:9 at a 320-px display). The backend refuses a wider one and that
+     * frame drops to a 1x CPU present without the margins, so narrow the
+     * aspect to the widest the surface holds; the window pillarboxes the rest.
+     * A no-op unless the surface would be refused. */
+    if (g_ws_native_wide && (int64_t)num * 3 > (int64_t)den * 4)
+        gl_renderer_fit_wide_aspect(gpu_ws_display_width(), &num, &den);
     if (num == g_video_aspect_num && den == g_video_aspect_den) return;
 
     g_video_aspect_num = num;

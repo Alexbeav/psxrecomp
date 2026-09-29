@@ -84,6 +84,40 @@ static inline int psx_gl_max_wide_width(int s, int max_dim) {
     return max_dim / s;
 }
 
+/* Native-wide surface width (native px) for a display disp_w px wide at aspect
+ * num:den: the display plus two margins of disp_w*(3*num - 4*den)/(8*den),
+ * rounded exactly as gpu.c's ws_nw_configured_offset rounds them (16:9, 21:9
+ * and 32:9 at 320 wide give 426, 560 and 854). */
+static inline int psx_gl_native_wide_width(int disp_w, int num, int den) {
+    if (disp_w <= 0 || num <= 0 || den <= 0 ||
+        (int64_t)num * 3 <= (int64_t)den * 4)
+        return disp_w;
+    int64_t numr = (int64_t)3 * num - (int64_t)4 * den;
+    return disp_w + 2 * (int)(((int64_t)disp_w * numr + (int64_t)4 * den) /
+                              ((int64_t)8 * den));
+}
+
+/* Narrow num:den, if needed, to the widest aspect whose native-wide surface
+ * is at most max_w native px (psx_gl_max_wide_width) at display width disp_w;
+ * 4:3 when not even one more column fits. 4*(max_w-1) : 3*disp_w rounds to at
+ * most max_w columns. Returns 1 when it changed num:den. */
+static inline int psx_gl_fit_wide_aspect(int disp_w, int max_w, int *num, int *den) {
+    if (disp_w <= 0 || max_w <= 0 || !num || !den ||
+        psx_gl_native_wide_width(disp_w, *num, *den) <= max_w)
+        return 0;
+    int64_t n = 4, d = 3;
+    if (max_w - 1 > disp_w) {
+        n = 4 * (int64_t)(max_w - 1);
+        d = 3 * (int64_t)disp_w;
+        int64_t a = n, b = d;
+        while (b) { int64_t t = a % b; a = b; b = t; }
+        n /= a; d /= a;
+    }
+    *num = (int)n;
+    *den = (int)d;
+    return 1;
+}
+
 /* Parse a budget override in MiB (PSX_GL_VRAM_BUDGET_MB). NULL/empty/invalid
  * returns the default. "0" disables the budget. */
 static inline uint64_t psx_gl_budget_bytes_from_env(const char *mb) {

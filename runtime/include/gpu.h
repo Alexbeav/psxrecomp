@@ -227,6 +227,8 @@ void psx_ws_sprite_tag(struct CPUState* cpu);
 int  ws_native_wide_active(void);
 int  ws_nw_extra(void);
 int  ws_nw_present_width(void);
+/* Display width (native px) the native-wide margins are derived from. */
+int  gpu_ws_display_width(void);
 void gpu_ws_set_netplay_local_viewport(int enabled, int slot);
 int  gpu_ws_netplay_local_viewport_base_x(void);
 int  gpu_ws_netplay_local_viewport_width(void);

@@ -54,6 +54,42 @@ int main(void) {
     expect_int("wide 18x", psx_gl_max_wide_width(18, 16384), 910);
     expect_int("wide too tall", psx_gl_max_wide_width(40, 16384), 0);
 
+    /* Native-wide width at a 320-px display, as gpu.c rounds it. */
+    expect_int("nw 4:3", psx_gl_native_wide_width(320, 4, 3), 320);
+    expect_int("nw 16:9", psx_gl_native_wide_width(320, 16, 9), 426);
+    expect_int("nw 21:9", psx_gl_native_wide_width(320, 21, 9), 560);
+    expect_int("nw 32:9", psx_gl_native_wide_width(320, 32, 9), 854);
+    /* Fit to Window narrows only an aspect whose surface would not fit. */
+    {
+        int n = 32, d = 9;   /* 1600x450 at 18x: 854 <= 910, unchanged */
+        expect_int("fit 32:9 at 18x", psx_gl_fit_wide_aspect(320, 910, &n, &d), 0);
+        expect_int("fit 32:9 num", n, 32);
+        n = 6; d = 1;        /* 2400x400 at 18x: narrowed to 303:80 (~34:9) */
+        expect_int("fit 6:1 at 18x", psx_gl_fit_wide_aspect(320, 910, &n, &d), 1);
+        expect_int("fit 6:1 num", n, 303);
+        expect_int("fit 6:1 den", d, 80);
+        expect_int("fit 6:1 width", psx_gl_native_wide_width(320, n, d), 910);
+        n = 40; d = 9;       /* 16x: 1024 columns, 341:80 (~38:9) */
+        expect_int("fit 40:9 at 16x", psx_gl_fit_wide_aspect(320, 1024, &n, &d), 1);
+        expect_int("fit 40:9 width", psx_gl_native_wide_width(320, n, d), 1024);
+        n = 32; d = 9;       /* a 512-px display at 18x */
+        expect_int("fit 512 32:9", psx_gl_fit_wide_aspect(512, 910, &n, &d), 1);
+        expect_int("fit 512 width", psx_gl_native_wide_width(512, n, d), 910);
+        n = 16; d = 9;       /* no room for a margin: 4:3 */
+        expect_int("fit none", psx_gl_fit_wide_aspect(320, 321, &n, &d), 1);
+        expect_int("fit none num", n * 3 == d * 4, 1);
+        /* Every aspect from 4:3 to 12:1 at 320 and 512 px lands within the limit. */
+        for (int w = 320; w <= 512; w += 192)
+            for (int num = 4; num <= 36; num++) {
+                int a = num, b = 3;
+                psx_gl_fit_wide_aspect(w, 910, &a, &b);
+                if (psx_gl_native_wide_width(w, a, b) > 910) {
+                    printf("FAIL fit sweep %d %d:3 -> %d:%d\n", w, num, a, b);
+                    ++g_failures;
+                }
+            }
+    }
+
     /* Budget override parsing. */
     expect_int("env null", (long long)psx_gl_budget_bytes_from_env(NULL), (long long)budget);
     expect_int("env 64", (long long)psx_gl_budget_bytes_from_env("64"), (long long)(64 * MiB));

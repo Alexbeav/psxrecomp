@@ -2179,6 +2179,7 @@ static int32_t ws_disp_w(void) {
     gpu_get_display_info(&di);
     return di.width ? (int32_t)di.width : 320;
 }
+int gpu_ws_display_width(void) { return (int)ws_disp_w(); }
 
 static int32_t ws_disp_h(void) {
     GpuDisplayInfo di;

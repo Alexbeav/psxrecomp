@@ -3270,6 +3270,12 @@ static int init_gpu_raster(void) {
 
 int gl_renderer_texture_banks_supported(void) { return s_raster_ok && !s_cpu_auth_dual; }
 
+int gl_renderer_fit_wide_aspect(int disp_w, int *num, int *den) {
+    if (!s_raster_ok || s_gl_max_dim <= 0) return 0;
+    int max_w = psx_gl_max_wide_width(s_scale, s_gl_max_dim);
+    return psx_gl_fit_wide_aspect(disp_w, max_w > 0 ? max_w : 1, num, den);
+}
+
 int gl_renderer_scale_info(GlScaleInfo *out) {
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
@@ -3782,10 +3788,13 @@ static GLuint wide_fbo_for(int base_x) {
     if (g_wide_w <= 0) return 0;
     for (int i = 0; i < WIDE_MAX_SURF; i++)
         if (s_wide_fbo[i] && s_wide_base[i] == base_x) return s_wide_fbo[i];
-    /* An uncapped Fit aspect can ask for a surface wider than the driver can
-     * allocate at this scale (about 38:9 at 18x on a 16384 limit). Refuse it
-     * with one log line: the frame then presents pillarboxed 4:3 instead of
-     * failing mid-draw. */
+    /* A native-wide surface is g_wide_w*S wide, and the driver limit bounds
+     * it: on a 16384 limit, 1024 native columns at 16x, about 38:9 at a
+     * 320-px display. Fit to Window narrows its aspect to fit
+     * (gl_renderer_fit_wide_aspect, main.cpp); a fixed aspect on a wide
+     * display mode can still ask for more. Refuse that with one log line
+     * instead of failing mid-draw: the frame then presents 4:3 through the CPU
+     * path at 1x, without the native-wide margins. */
     if (s_gl_max_dim > 0 &&
         ((int64_t)g_wide_w * s_scale > s_gl_max_dim ||
          (int64_t)VRAM_H * s_scale > s_gl_max_dim)) {
