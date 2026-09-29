@@ -161,6 +161,11 @@ void overlay_loader_get_ci_skip_diag(uint64_t *unit, uint64_t *supp,
                                      uint64_t *none, uint64_t *sr,
                                      uint64_t *deliv, uint64_t *enter);
 int  overlay_loader_call_unit_depth(void);
+/* Native-shard nesting (active-candidate stack depth, in-progress entry),
+ * saved before and restored after a landing that longjmps out of a shard
+ * and resumes the interrupted code (render_pass.c watchdog abort). */
+void overlay_loader_native_nesting(int *active_depth, uint32_t *inprogress);
+void overlay_loader_set_native_nesting(int active_depth, uint32_t inprogress);
 
 #ifdef __cplusplus
 }

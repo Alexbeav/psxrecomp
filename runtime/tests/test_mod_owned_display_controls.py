@@ -127,6 +127,7 @@ for reset in (
     "g_bezel_path.clear();",
     "g_frame_interpolation_blend = g_frame_interpolation_blend_default;",
     "g_frame_interpolation_source = PSX_MOD_FRAME_SOURCE_VBLANK;",
+    "render_pass_reset_session();",
 ):
     assert reset in after, f"mod-owned session reset is missing: {reset}"
     literal = re.fullmatch(r"(g_\w+) = (false|true|\d+);", reset)

@@ -605,6 +605,51 @@ if(BUILD_TESTING)
     add_test(NAME frame_interpolation_schedule_test
              COMMAND frame_interpolation_schedule_test)
 
+    add_executable(render_pass_plan_test
+        tests/test_render_pass_plan.c
+        src/render_pass_plan.c)
+    target_include_directories(render_pass_plan_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(render_pass_plan_test PRIVATE m)
+    endif()
+    add_test(NAME render_pass_plan_test COMMAND render_pass_plan_test)
+
+    # Render-pass time freeze against mock devices (psx_cycles.c only).
+    add_executable(render_pass_freeze_test
+        tests/test_render_pass_freeze.c
+        src/psx_cycles.c)
+    target_include_directories(render_pass_freeze_test PRIVATE include)
+    add_test(NAME render_pass_freeze_test COMMAND render_pass_freeze_test)
+
+    # Render-pass watchdog abort from nested guest frames: the real
+    # render_pass.c and psx_cycles.c against mock memory, devices and
+    # presenter (the frames use GCC/Clang cleanup handlers, as generated
+    # code does).
+    if(NOT MSVC)
+        add_executable(render_pass_abort_test
+            tests/test_render_pass_abort.c
+            src/render_pass.c
+            src/psx_cycles.c)
+        target_include_directories(render_pass_abort_test PRIVATE include)
+        add_test(NAME render_pass_abort_test COMMAND render_pass_abort_test)
+    endif()
+
+    # Render-pass sandbox: the store policy memory.c uses, a real pass
+    # (render_pass.c, psx_cycles.c, timers.c) that makes device stores and
+    # runs frozen cycles, and the out-of-rect VRAM journal.
+    add_executable(render_pass_sandbox_test
+        tests/test_render_pass_sandbox.c
+        src/render_pass.c
+        src/render_pass_plan.c
+        src/psx_cycles.c
+        src/timers.c
+        src/psx_video_timing.c)
+    target_include_directories(render_pass_sandbox_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(render_pass_sandbox_test PRIVATE m)
+    endif()
+    add_test(NAME render_pass_sandbox_test COMMAND render_pass_sandbox_test)
+
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)

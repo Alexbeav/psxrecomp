@@ -46,6 +46,10 @@ typedef struct {
 } GpuDisplayInfo;
 
 void gpu_get_display_info(GpuDisplayInfo* out);
+/* Render-pass GPU register checkpoint (render_pass.c). One at a time. */
+int gpu_pass_checkpoint_save(void);
+void gpu_pass_checkpoint_restore(void);
+uint64_t gpu_pass_state_hash(void);
 
 /* Perspective-correct UV arming rate, per condition. armed/attempts is the
  * real perspective coverage: attempts counts only textured triangles, so it is

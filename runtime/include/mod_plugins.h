@@ -236,8 +236,17 @@ int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
  */
 enum {
     PSX_MOD_FRAME_INTERPOLATION_LINEAR = 0,
-    PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE = 1
+    PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE = 1,
+    /* No crossfade: every output frame repeats the newest game frame. For a
+     * plugin that supplies its own in-between images with render passes
+     * (below); wherever it has none, the output matches stock timing and
+     * nothing is shown later than the game shows it. */
+    PSX_MOD_FRAME_INTERPOLATION_HOLD = 2
 };
+/* Usually called from activation. It may also be called later from the
+ * emulation thread (a function-entry hook or VBlank callback), e.g. to swap
+ * HOLD for a crossfade while render passes are unavailable; the OpenGL
+ * presenter then uses the new mode from its next present. */
 int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
 /*
  * Choose what the OpenGL presenter treats as a new source frame. VBLANK (the
@@ -254,6 +263,82 @@ enum {
     PSX_MOD_FRAME_SOURCE_FLIP = 1
 };
 int psx_mod_set_frame_interpolation_source(uint32_t source);
+
+/*
+ * Host-timed render passes: true in-between frames for a game whose logic
+ * runs slower than the presentation rate. Default off: nothing happens unless
+ * a trusted plugin calls these. OpenGL, frame interpolation enabled with the
+ * FLIP source, never in netplay, rollback, rewind, fast-forward (manual,
+ * turbo-through-loads, FMV auto-skip) or while the presenter is suspended
+ * (FMV); psx_mod_render_pass_plan() returns 0 then, and
+ * psx_mod_render_pass_status() says why.
+ *
+ * Call both from an emulation-thread function-entry hook placed where the
+ * game has finished its logic for game frame N+1 but the display still has to
+ * flip to frame N (for a PsyQ double-buffered loop: the VSync(0) that precedes
+ * PutDispEnv). Each pass runs `fn`, which may call guest functions with
+ * psx_dispatch_call() to draw an intermediate image of the scene. While it
+ * runs, guest time is frozen: cycles are counted but no device advances, no
+ * interrupt is delivered and GPU DMA completes synchronously; SPU, CD, timer
+ * and other device stores are dropped (counted). Afterwards CPU state
+ * (including the GTE), RAM, scratchpad, I-cache tags, interrupt, timer, DMA
+ * and GPU registers, and the VRAM rect are exactly as before: the pass's only
+ * product is the image of the rect, which the presenter shows at `alpha_q16`
+ * of the way through frame N's time on screen (Q16, 0 = frame N's own image).
+ * The display rect is the one the next flip shows (its DISPENV); the pass may
+ * draw only inside it.
+ */
+/* Returns nonzero to keep the image, 0 to discard it (state is restored
+ * either way). */
+typedef int (*PSXModRenderPassFn)(struct CPUState* cpu, void* user,
+                                  uint32_t alpha_q16);
+typedef struct PSXModRenderPass {
+    uint32_t struct_size;        /* sizeof(PSXModRenderPass) */
+    uint32_t alpha_q16;          /* a phase returned by the plan */
+    uint16_t x, y, w, h;         /* VRAM display rect the pass draws */
+} PSXModRenderPass;
+/*
+ * Phases (Q16, ascending, excluding 0) at which the presenter will actually
+ * show frame N: its output deadlines during the `period_vblanks` guest VBlanks
+ * the frame stays on screen, starting after `shown_after_vblanks` more
+ * VBlank presents (R4 at its VSync(0) entry: 1 -- the next VBlank still shows
+ * the previous frame). When the host cannot afford them all, an evenly spread
+ * subset is returned and the presenter crossfades the gaps. The first
+ * psx_mod_render_pass() after a plan captures frame N's own image. Returns 0
+ * when passes are unavailable or unaffordable.
+ */
+uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
+                                  uint32_t shown_after_vblanks,
+                                  uint32_t* alpha_q16, uint32_t max);
+/* Returns 1 when the pass ran and its image was queued, 0 when it was refused
+ * or rolled back (state is restored either way). */
+int psx_mod_render_pass(struct CPUState* cpu, const PSXModRenderPass* pass,
+                        PSXModRenderPassFn fn, void* user);
+/*
+ * Why passes cannot run right now, the host-time budget aside (a plan that
+ * returns 0 while this says READY was shed for time). A plugin that relies on
+ * passes uses it to fall back, e.g. to a crossfade with
+ * psx_mod_set_frame_interpolation_blend(), while the reason lasts.
+ * NO_PRESENTER, BACKEND and DISABLED persist; the others are transient.
+ */
+enum {
+    PSX_MOD_RENDER_PASS_READY = 0,
+    /* Not OpenGL, interpolation off or suspended (FMV), or not the FLIP
+     * source. */
+    PSX_MOD_RENDER_PASS_NO_PRESENTER = 1,
+    /* The renderer declines passes in its current mode. */
+    PSX_MOD_RENDER_PASS_BACKEND = 2,
+    /* Switched off for this session after repeated faults. */
+    PSX_MOD_RENDER_PASS_DISABLED = 3,
+    /* Netplay, rollback, rewind, load/save replay or self-check resim. */
+    PSX_MOD_RENDER_PASS_SESSION = 4,
+    /* Fast-forward, turbo-through-loads or FMV auto-skip is running. */
+    PSX_MOD_RENDER_PASS_FAST_FORWARD = 5,
+    /* Inside an exception, a pass or a GPU DMA walk, or the presenter has not
+     * captured a frame since its history restarted (display mode change). */
+    PSX_MOD_RENDER_PASS_BUSY = 6
+};
+uint32_t psx_mod_render_pass_status(void);
 int psx_mod_set_auto_skip_fmv(int enabled);
 /*
  * Draw still artwork behind the game image in OpenGL letterbox/pillarbox

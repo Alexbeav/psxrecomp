@@ -33,12 +33,59 @@ void gl_renderer_set_swap_interval(int interval);
 void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz,
                                    double source_hz, int blend_mode);
 void gl_renderer_set_interpolation_suspended(int suspended);
+/* Change only the blend mode (0 linear, 1 change-adaptive, 2 hold), keeping
+ * the history and schedule; takes effect at the next present. */
+void gl_renderer_set_interpolation_blend(int blend_mode);
 /* Blend source: 0 = every guest VBlank is a source frame (default),
  * 1 = only real display flips are (psx_mod_set_frame_interpolation_source). */
 void gl_renderer_set_interpolation_source(int source);
 void gl_renderer_interpolation_source_diag(int *source, uint32_t *flip_period,
                                            uint64_t *captures,
                                            uint64_t *duplicates);
+
+/* Render passes (render_pass.c; docs/RENDER_PASSES.md). The presenter is
+ * ready for passes: GL raster, interpolation live with the FLIP source. */
+int      gl_renderer_pass_ready(void);
+/* Why not: 0 ready, PSX_MOD_RENDER_PASS_NO_PRESENTER or _BACKEND
+ * (mod_plugins.h). A backend mode that cannot host passes reports BACKEND. */
+uint32_t gl_renderer_pass_unavailable(void);
+/* Debug: make the backend decline passes (PSX_RENDER_PASS_REFUSE=1 at start,
+ * render_pass_refuse over TCP), as a renderer mode without them would. */
+void     gl_renderer_pass_force_refuse(int on);
+/* Phases the presenter will show for the frame the next flip displays. */
+uint32_t gl_renderer_pass_plan(uint32_t period_vblanks,
+                               uint32_t shown_after_vblanks,
+                               uint32_t *alpha_q16, uint32_t max,
+                               uint32_t *wanted);
+/* Open the VRAM transaction for rect; open_gen first captures the game's own
+ * image of it as a new generation. reuse_backup: the caller guarantees that
+ * no guest code ran since the previous pass ended (its restore left VRAM as
+ * backed up), so the backup of that pass is reused when it covers the same
+ * rect at the same scale. Returns 0 when refused (nothing changed). */
+int      gl_renderer_pass_begin(int x, int y, int w, int h, int open_gen,
+                                uint32_t period_vblanks, int reuse_backup);
+/* Capture the drawn rect at alpha_q16 (keep) and roll the rect back. */
+void     gl_renderer_pass_end(uint32_t alpha_q16, int keep);
+uint32_t gl_renderer_pass_leaks(void);
+int      gl_renderer_pass_verify_vram(void);
+void     gl_renderer_pass_note_cost(uint64_t ticks);
+/* Present output deadlines that fell due while guest code ran. */
+void     gl_renderer_pass_service_presents(void);
+/* promotions, presents, blended presents, expired, unmatched flips, presents
+ * made between VBlanks, smoothed pass cost (us), images in the shown frame,
+ * presents past the frame's planned end (the next flip was late; the newest
+ * image held), stale pass-cost estimates measured again. */
+void     gl_renderer_pass_diag(uint64_t out[10]);
+/* Out-of-rect VRAM writes journaled and rolled back (lifetime count). */
+uint64_t gl_renderer_pass_journaled(void);
+/* Passes that reused the previous pass's VRAM backup (lifetime count). */
+uint64_t gl_renderer_pass_backups_reused(void);
+/* Pass image textures allocated now (both generations) and their bytes. */
+uint32_t gl_renderer_pass_image_textures(uint64_t *bytes);
+/* Debug: dump the images of the next `generations` shown frames as PNGs. */
+void     gl_renderer_pass_dump_arm(const char *dir, int generations);
+uint64_t gl_renderer_perf_ticks(void);
+uint64_t gl_renderer_perf_frequency(void);
 int gl_renderer_interpolation_owns_cadence(void);
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
                                     int *history_frames,

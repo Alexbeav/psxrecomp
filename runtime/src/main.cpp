@@ -44,6 +44,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "gpu_sw_renderer.h"
 #include "gpu_render.h"
 #include "gpu_gl_renderer.h"
+#include "render_pass.h"
 /* Declarations only: STB_IMAGE_IMPLEMENTATION lives in psx_window_icon.cpp. */
 #define STBI_NO_STDIO
 #include "../third_party/stb_image.h"
@@ -1017,6 +1018,9 @@ extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) 
 
 extern "C" void psx_frontend_on_savestate_loaded(void) {
     mod_runtime_on_savestate_loaded();
+#ifndef PSX_NO_DEBUG_TOOLS
+    debug_server_note_savestate_loaded();
+#endif
     s_disabled_frame_presented = false;
     s_force_present_after_load = true;
     smooth_60_reset();
@@ -1268,6 +1272,12 @@ static int           g_frame_interpolation_blend =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
 static int           g_frame_interpolation_blend_default =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
+/* Presentation is sped up this VBlank (manual fast-forward, turbo-through-
+ * loads, FMV auto-skip, TCP turbo). Render passes are refused meanwhile. */
+static int           s_presentation_fast_forward = 0;
+extern "C" int psx_presentation_fast_forward(void) {
+    return s_presentation_fast_forward;
+}
 /* Mod-owned blend source; reset_mod_owned_presentation() sets VBLANK. */
 static int           g_frame_interpolation_source =
     PSX_MOD_FRAME_SOURCE_VBLANK;
@@ -1469,6 +1479,9 @@ static void reset_mod_owned_presentation(void) {
     g_bezel_path.clear();
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     g_frame_interpolation_source = PSX_MOD_FRAME_SOURCE_VBLANK;
+    /* Render-pass counters, the disabled-after-faults latch and any open
+     * plan generation belong to the session that made them. */
+    render_pass_reset_session();
 }
 
 /* The disc a session mounts: a disc-patching mod's private patched image when
@@ -1555,16 +1568,23 @@ extern "C" int psx_mod_set_frame_interpolation(
 extern "C" int psx_mod_set_frame_interpolation_blend(
     uint32_t blend_mode) {
     if (blend_mode != PSX_MOD_FRAME_INTERPOLATION_LINEAR &&
-        blend_mode != PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE) {
+        blend_mode != PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE &&
+        blend_mode != PSX_MOD_FRAME_INTERPOLATION_HOLD) {
         std::fprintf(stderr,
             "psxrecomp: mod rejected invalid frame-interpolation blend %u\n",
             (unsigned)blend_mode);
         return 0;
     }
     g_frame_interpolation_blend = (int)blend_mode;
+    /* Live when the presenter is already configured (a later call from a
+     * hook); before that, session start hands it over with the rates. */
+    gl_renderer_set_interpolation_blend(g_frame_interpolation_blend);
     std::fprintf(stdout, "psxrecomp: frame-interpolation blend = %s\n",
         blend_mode == PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE
-            ? "motion-adaptive clarity" : "linear crossfade");
+            ? "motion-adaptive clarity"
+        : blend_mode == PSX_MOD_FRAME_INTERPOLATION_HOLD
+            ? "hold (render passes supply in-between frames)"
+            : "linear crossfade");
     return 1;
 }
 
@@ -7078,6 +7098,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     }
 #endif
 
+    /* Render passes (render_pass.c) stay off while presentation is sped up. */
+    s_presentation_fast_forward =
+        (turbo_loads_active || fmv_skip_active) ? 1 : 0;
+
     if (g_headless) {
         ep.skip_pace = 1;
         return ep;
@@ -7090,6 +7114,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * presentation and wall-clock pacing. */
 #ifndef PSX_NO_DEBUG_TOOLS
     if (debug_server_turbo_enabled()) {
+        s_presentation_fast_forward = 1;
         ep.skip_pace = 1;
         return ep;
     }
@@ -7118,6 +7143,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
             manual_turbo_active = true;
+            s_presentation_fast_forward = 1;
             if (!turbo_was_down && !g_manual_turbo_latched) {
                 char msg[40];
                 if (mult < 0)

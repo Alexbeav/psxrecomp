@@ -47,6 +47,8 @@
 #include "card_data_writes.h"
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
+#include "render_pass.h"
+#include "mod_plugins.h"   /* psx_mod_render_pass_status */
 #include "lockstep.h"
 #include "guest_tty.h"
 #include "frame_fingerprint.h"
@@ -4988,8 +4990,27 @@ static void handle_frame(int id, const char *json)
 /* Longest entry the format below can produce: every hash at 16 hex digits and
  * every counter at 20 decimal digits comes to 284 bytes with the separator. */
 #define FP_JSON_ENTRY_MAX 320
+/* frame_fingerprint reset_on_load=1: restart the rolling hashes and the ring
+ * when the next savestate load completes, so two runs that load the same state
+ * (for example with and without a presentation mod) compare frame by frame
+ * from that guest point on, independent of what happened before the load. */
+static int s_fp_reset_on_load = 0;
+void debug_server_note_savestate_loaded(void)
+{
+    if (!s_fp_reset_on_load) return;
+    s_fp_reset_on_load = 0;
+    s_fp = (PsxFrameFingerprint)PSX_FRAME_FINGERPRINT_INIT;
+    s_fp_head = 0;
+    s_fp_total = 0;
+}
+
 static void handle_frame_fingerprint(int id, const char *json)
 {
+    if (json_get_int(json, "reset_on_load", 0)) {
+        s_fp_reset_on_load = 1;
+        send_fmt("{\"id\":%d,\"ok\":true,\"armed\":1}", id);
+        return;
+    }
     int count = json_get_int(json, "count", 1024);
     if (count < 1) count = 1;
     if (count > FP_RING_CAP) count = FP_RING_CAP;
@@ -7915,6 +7936,87 @@ static void handle_gl_interp(int id, const char *json)
              (unsigned long long)duplicates);
 }
 
+/* render_pass_stats: host-timed render passes (docs/RENDER_PASSES.md).
+ * Counters are per mod session; `dropped` counts device stores a pass tried
+ * to make (SPU key-ons, CD, timers, ...), which never reach the device. */
+static void handle_render_pass_stats(int id, const char *json)
+{
+    (void)json;
+    RenderPassStats st;
+    uint64_t gd[10], image_bytes = 0;
+    uint32_t image_textures;
+    render_pass_get_stats(&st);
+    gl_renderer_pass_diag(gd);
+    image_textures = gl_renderer_pass_image_textures(&image_bytes);
+    send_fmt("{\"id\":%d,\"ok\":true,\"plans\":%llu,\"planned\":%llu,"
+             "\"wanted\":%llu,\"refused\":%llu,\"passes\":%llu,"
+             "\"aborted\":%llu,\"discarded\":%llu,\"watchdog\":%llu,\"vram_leaks\":%llu,"
+             "\"nesting_repairs\":%llu,"
+             "\"verify_checks\":%llu,\"verify_mismatch\":%llu,"
+             "\"dropped\":{\"spu\":%llu,\"cd\":%llu,\"timer\":%llu,"
+             "\"dma\":%llu,\"gpu\":%llu,\"other\":%llu},"
+             "\"last_pass_ms\":%.3f,\"avg_pass_ms\":%.3f,"
+             "\"avg_begin_ms\":%.3f,\"avg_guest_ms\":%.3f,"
+             "\"avg_end_ms\":%.3f,\"avg_restore_ms\":%.3f,"
+             "\"guest_cycles_last\":%llu,\"disabled\":%d,"
+             "\"promotions\":%llu,\"pass_presents\":%llu,"
+             "\"blended_presents\":%llu,\"expired\":%llu,\"late_presents\":%llu,"
+             "\"unmatched_flips\":%llu,\"early_presents\":%llu,"
+             "\"cost_us\":%llu,\"cost_rewarms\":%llu,\"frame_images\":%llu,"
+             "\"journaled\":%llu,"
+             "\"image_textures\":%u,\"image_bytes\":%llu,\"status\":%u,"
+             "\"backups_reused\":%llu}",
+             id, (unsigned long long)st.plans, (unsigned long long)st.planned,
+             (unsigned long long)st.wanted, (unsigned long long)st.refused,
+             (unsigned long long)st.passes, (unsigned long long)st.aborted,
+             (unsigned long long)st.discarded, (unsigned long long)st.watchdog, (unsigned long long)st.vram_leaks,
+             (unsigned long long)st.nesting_repairs,
+             (unsigned long long)st.verify_checks,
+             (unsigned long long)st.verify_mismatch,
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_SPU],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_CD],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_TIMER],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_DMA],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_GPU],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_OTHER],
+             st.last_pass_ms, st.avg_pass_ms,
+             st.avg_begin_ms, st.avg_guest_ms, st.avg_end_ms, st.avg_restore_ms,
+             (unsigned long long)st.guest_cycles_last, st.disabled,
+             (unsigned long long)gd[0], (unsigned long long)gd[1],
+             (unsigned long long)gd[2], (unsigned long long)gd[3],
+             (unsigned long long)gd[8],
+             (unsigned long long)gd[4], (unsigned long long)gd[5],
+             (unsigned long long)gd[6], (unsigned long long)gd[9],
+             (unsigned long long)gd[7],
+             (unsigned long long)gl_renderer_pass_journaled(),
+             (unsigned)image_textures, (unsigned long long)image_bytes,
+             (unsigned)psx_mod_render_pass_status(),
+             (unsigned long long)gl_renderer_pass_backups_reused());
+}
+
+/* render_pass_refuse on=<0|1>: make the OpenGL backend decline render passes
+ * (status BACKEND), as a renderer mode without them would; for testing a
+ * plugin's fallback. Same as PSX_RENDER_PASS_REFUSE=1 at start. */
+static void handle_render_pass_refuse(int id, const char *json)
+{
+    int on = json_get_int(json, "on", 1);
+    gl_renderer_pass_force_refuse(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"status\":%u}", id, on ? 1 : 0,
+             (unsigned)psx_mod_render_pass_status());
+}
+
+/* render_pass_dump path=<dir> count=<n>: write the images (the game's own
+ * frame, then each render pass in phase order) of the next n frames that get
+ * render passes, as <dir>/g<frame>_<index>_a<phase q16>.png. */
+static void handle_render_pass_dump(int id, const char *json)
+{
+    char dir[400];
+    int count = json_get_int(json, "count", 1);
+    if (!json_get_str(json, "path", dir, sizeof dir)) { send_err(id, "missing path"); return; }
+    gl_renderer_pass_dump_arm(dir, count);
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d}", id, count);
+}
+
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
  * the redundant centre mirror and copy the canonical 4:3 frame into the wide
  * surface centre at present (fast). 0 = re-rasterize the whole wide surface
@@ -9594,6 +9696,9 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
     (void)phys; (void)old_val; (void)new_val; (void)width;
     return;
 #endif
+    /* Render passes are rolled back; keep them out of the live timeline's
+     * fingerprints and write traces (docs/RENDER_PASSES.md). */
+    if (g_psx_render_pass_active) return;
     if (s_fmv_quiet) {
         if (psx_fp_write_eligible(phys, psx_ram_live_bytes())) psx_fp_note_quiet(&s_fp);
         return;
@@ -9622,6 +9727,7 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
 /* MMIO write trace — called from memory.c mmio_write32/16/8. */
 void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width)
 {
+    if (g_psx_render_pass_active) return;   /* rolled back: not live */
 #ifdef PSX_NO_DEBUG_TOOLS
     (void)addr; (void)val; (void)width;
     return;
@@ -13832,6 +13938,9 @@ static const CmdEntry s_commands[] = {
     { "frame_perf",        handle_frame_perf },
     { "gl_ws_ablate",      handle_gl_ws_ablate },
     { "gl_interp",         handle_gl_interp },
+    { "render_pass_stats", handle_render_pass_stats },
+    { "render_pass_dump",  handle_render_pass_dump },
+    { "render_pass_refuse", handle_render_pass_refuse },
     { "gl_wide_fast",      handle_gl_wide_fast },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },

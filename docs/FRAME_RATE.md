@@ -29,9 +29,11 @@ netplay session or a later offline one never inherits them.
 |---|---|
 | `LINEAR` (default) | crossfade `mix(prev, cur, a)` |
 | `MOTION_ADAPTIVE` | crossfade small changes, switch large changes at a = 0.5 |
+| `HOLD` | no crossfade: repeat the newest frame (for titles whose plugin supplies in-between images with render passes) |
 
 Blending never invents motion: moving objects ghost, and the image is one
-source frame behind the newest one.
+source frame behind the newest one. True in-between frames need the game's
+own draw code: see [RENDER_PASSES.md](RENDER_PASSES.md).
 
 ## Blend source: every VBlank or real flips
 

@@ -900,6 +900,7 @@ if(BUILD_TESTING)
                 overlay_init_guard
                 overlay_segment_gate
                 recomp_ui_root_override
+                render_pass_guards
                 pal_cadence_host_refresh
                 sdl3_main_single_include
                 spu_sample_scheduler_default

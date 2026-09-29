@@ -1,6 +1,7 @@
 /* psx_cycles.c — PSX guest CPU cycle clock. */
 
 #include "psx_cycles.h"
+#include "psx_cycle_freeze.h"
 #include "cpu_state.h"
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,26 @@ int      g_psx_cyc_bb_defer = 0;
 uint32_t *g_psx_cyc_local_acc = NULL;
 static int      s_cycle_replay_active = 0;
 static uint64_t s_cycle_replay_live = 0;
+
+/* ---- render-pass freeze (see psx_cycle_freeze.h) ---- */
+int g_psx_render_pass_active = 0;
+static uint64_t s_freeze_start = 0;
+static uint64_t s_freeze_limit = 0;
+static void   (*s_freeze_overrun)(void) = 0;
+
+static void psx_cycle_freeze_tick(void) {
+    extern uint64_t g_psx_cycle_fast_limit;
+    /* Come back at most every 16K cycles for the watchdog; never service. */
+    psx_next_service_cycle = psx_cycle_count + 16384u;
+    g_psx_cycle_fast_limit = 0;
+    if (s_freeze_limit &&
+        psx_cycle_count - s_freeze_start > s_freeze_limit &&
+        s_freeze_overrun) {
+        void (*overrun)(void) = s_freeze_overrun;
+        s_freeze_overrun = 0;
+        overrun();
+    }
+}
 
 int psx_cycle_replay_begin(uint64_t start_cycle) {
     extern int g_ls_replay_active;
@@ -181,6 +202,7 @@ static void psx_devices_recompute_deadline(void) {
 }
 
 void psx_devices_service_to_now(void) {
+    if (g_psx_render_pass_active) { psx_cycle_freeze_tick(); return; }
     if (s_in_device_service) return;                 /* device code charged cycles: absorb */
     if (g_plp_cycle_diag) g_plp_svc_calls++;
     g_psx_cycle_fast_limit = 0;
@@ -243,6 +265,7 @@ void psx_devices_service_to_now(void) {
  * that on every GPU/CD/MDEC MMIO touch. Recompute here instead. */
 void psx_devices_mmio_sync(void) {
     psx_cyc_batch_flush();
+    if (g_psx_render_pass_active) { psx_cycle_freeze_tick(); return; }
     if (s_devices_synced_cycle != psx_cycle_count) {
         psx_devices_service_to_now();
     } else {
@@ -304,6 +327,11 @@ void psx_advance_cycles_slow(uint32_t cycles) {
       }
     }
     if (cycles == 0) return;
+    if (g_psx_render_pass_active) {
+        psx_cycle_count += (uint64_t)cycles;
+        if (psx_cycle_count >= psx_next_service_cycle) psx_cycle_freeze_tick();
+        return;
+    }
 #ifdef PSX_COSIM
     psx_advance_cycles_exact(cycles);
 #else
@@ -791,4 +819,48 @@ void psx_gte_stall(CPUState* cpu) {
     if (cpu->gte_ts_done > psx_cycle_count) {
         psx_advance_cycles((uint32_t)(cpu->gte_ts_done - psx_cycle_count));
     }
+}
+
+int psx_cycle_freeze_begin(PsxCycleFreeze *save, uint64_t watchdog_cycles,
+                           void (*overrun)(void)) {
+    extern uint64_t g_psx_cycle_fast_limit;
+    if (!save || g_psx_render_pass_active) return 0;
+    save->cycle_count = psx_cycle_count;
+    save->next_service = psx_next_service_cycle;
+    save->fast_limit = g_psx_cycle_fast_limit;
+    save->batch = g_psx_cyc_batch;
+    save->batch_limit = g_psx_cyc_batch_limit;
+    save->local_acc = g_psx_cyc_local_acc;
+    save->local_acc_value = g_psx_cyc_local_acc ? *g_psx_cyc_local_acc : 0u;
+    save->in_device_service = psx_in_device_service;
+    save->bb_defer = g_psx_cyc_bb_defer;
+    /* Pending deferred charges stay pending: they belong to the interrupted
+     * guest code and are republished, unchanged, after the pass. */
+    g_psx_cyc_batch = 0;
+    g_psx_cyc_batch_limit = 0;
+    g_psx_cyc_local_acc = NULL;
+    psx_in_device_service = 0;
+    s_freeze_start = psx_cycle_count;
+    s_freeze_limit = watchdog_cycles;
+    s_freeze_overrun = overrun;
+    g_psx_render_pass_active = 1;
+    psx_cycle_freeze_tick();
+    return 1;
+}
+
+void psx_cycle_freeze_end(const PsxCycleFreeze *save) {
+    extern uint64_t g_psx_cycle_fast_limit;
+    g_psx_render_pass_active = 0;
+    s_freeze_overrun = 0;
+    s_freeze_limit = 0;
+    if (!save) return;
+    psx_cycle_count = save->cycle_count;
+    psx_next_service_cycle = save->next_service;
+    g_psx_cycle_fast_limit = save->fast_limit;
+    g_psx_cyc_batch = save->batch;
+    g_psx_cyc_batch_limit = save->batch_limit;
+    g_psx_cyc_local_acc = save->local_acc;
+    if (save->local_acc) *save->local_acc = save->local_acc_value;
+    psx_in_device_service = save->in_device_service;
+    g_psx_cyc_bb_defer = save->bb_defer;
 }

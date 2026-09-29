@@ -349,6 +349,22 @@ void dirty_ram_ld_delay_discard(void) {
     s_ld_pend_val   = 0;
 }
 
+void dirty_ram_ld_delay_save(DirtyRamLoadDelay *out) {
+    if (!out) return;
+    out->rt = s_ld_pend_rt;
+    out->val = s_ld_pend_val;
+    out->age = s_ld_pend_age;
+    out->armed = s_ld_pend_armed;
+}
+
+void dirty_ram_ld_delay_restore(const DirtyRamLoadDelay *in) {
+    if (!in) return;
+    s_ld_pend_rt = in->rt;
+    s_ld_pend_val = in->val;
+    s_ld_pend_age = in->age;
+    s_ld_pend_armed = in->armed;
+}
+
 void dirty_ram_irq_ambient_resync_after_restore(void) {
     /* Re-anchor host-only IRQ pump ambient at the restored timeline so both
      * peers take the first post-load dirty entry poll from the same phase. */
