@@ -213,6 +213,19 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-29 (generic A/B identity tool, `feat/fp-identity-tool` on #420):**
+  `tools/fp_identity.py` moves R4's warm/cold check into the framework for
+  any title (launch template or `--runtime/--game/--disc`, `--seed` overlay
+  state, FMV-quiet and autocompile off by default). It judges on
+  cyc/mmio/mc/sp/sc/wc/ws/qc. `wr`/`pc` only locate a fork. The one-write VBlank
+  straddle and the FMV-quiet `wc+qc` shift are tolerated, counted and listed,
+  and `--strict` rejects them. Measurement only; no runtime or codegen change.
+  R4 on #420+#417+#418, 12000 seeded frames: warm/warm and cold/cold are
+  IDENTICAL with no tolerance, even on `wr`/`pc`. Warm/cold is IDENTICAL with
+  497 one-write straddles, the same count #420 reported. With FMV-quiet on,
+  warm/cold is IDENTICAL over 8076 frames, with 497 carried shifts. Self-test:
+  ctest `fp_identity`.
+
 - **2026-09-13 (SIO card hack removal — branch-only review checkpoint):**
   Reproduced fixed-Ape-RAM IRQ7/mask injection after an absent-card probe,
   plus SELECT-time ACK fabrication and INTC-pending ACK requeueing with the
