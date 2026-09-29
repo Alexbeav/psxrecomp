@@ -330,6 +330,14 @@ on a fixed region -> next.
       cost 860 and 3,884 cycles. This branch matches: 39 per byte and the same
       entry-to-return cost on all 16 boot calls, and 42 / 860 / 3,884 in the
       R4 race measurement above. Master: 22 and 25 per byte.
+    - Rebased onto master `470f03b7`, which carries #418, and re-checked on
+      that tree with no local merges: the regenerated OpenBIOS and SCPH-1001
+      C is byte-identical to the gated build's, every boot anchor above gives
+      the same cycle, ruler #1 matches Beetle on all 64 passes, and ruler #2
+      equals Beetle on all 14 components on an HLE and an LLE boot. The two
+      new ctests pass; the recompiler suite shows only the three
+      environmental failures that master shows here (`cli_generate_aot_static`,
+      `gpu_frame`, `aot_overlay_discovery`).
 
 - **2026-09-29 (generic A/B identity tool, `feat/fp-identity-tool` on #420):**
   `tools/fp_identity.py` moves R4's warm/cold check into the framework for
