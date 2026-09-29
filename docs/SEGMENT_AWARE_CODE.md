@@ -126,10 +126,18 @@ in every build:
 - `memory.c` `psx_write_word_raw` drops a word store to RAM `0x0`-`0xF` when
   the stamp equals one of a list of exact PCs (1742-1765). An opt-in Tomba
   card filter (`PSX_TOMB_CARD_EVCB_PROTECT`, 1789) keys on it the same way.
+- `memory.c`'s GP0 write path (1292) compares it with `0xBFC38B1C`, a
+  BIOS store to GP0. On a match it hands `gpu_set_gp0_source()` a RAM source
+  key taken from `$a0`. No preprocessor gate covers this, and `main.cpp`
+  binds `debug_cpu_ptr` at startup (`debug_server_set_cpu`), so it also runs
+  in every build. The resulting `gp0_cmd_source_addr` feeds the opt-in
+  presentation paths (widescreen prim matching `ws_*` in `gpu.c` 1975-2397,
+  geometry/texture correction, mod texture keys) and prim-ring diagnostics.
+  The faithful rendering path does not branch on it.
 - The interpreter stamps the full executing PC (`dirty_ram_interp.c`
   2288-2348). A compiled body that stamps a different segment than the one it
-  runs in can make a filter match in one execution path and miss in the
-  other.
+  runs in can make a filter or key match in one execution path and miss in
+  the other.
 - #420 (`fix/fingerprint-guest-facts`, ABI v24) makes overlay shards write the
   host's copy in every build. Before it, overlay stores wrote a private copy,
   so after an overlay store the filters saw the PC of an older store.
@@ -295,9 +303,11 @@ The BIOS emitter's precedent has holes to close in the same pass:
 - the `strict_translator` syscall, break and unaligned-access PCs, which use
   the ROM address;
 - the `strict_translator` store-PC stamp, which also uses the ROM address.
-  Moving it changes which `memory.c` filters match. Several of their keys
-  are ROM addresses of code that runs relocated, so those keys must be
-  re-keyed to runtime PCs in the same change (§9).
+  Moving it changes which `memory.c` keys match: the store filters (RAM
+  `0x0`-`0xF` and the opt-in Tomba EvCB filter) and the GP0 source key
+  (§3.1). Seven of those keys, six store-filter keys and the GP0 key
+  `0xBFC38B1C`, are ROM addresses of code that runs relocated, so they must
+  be re-keyed to runtime PCs in the same change (§9).
 
 ### 5.3 EXE parser keeps the link segment
 
@@ -580,10 +590,11 @@ log.
 - **B: `refactor/emitter-runtime-pc`** (§5.2). No behaviour change for game
   code, including the store-PC stamps; proven by byte-identical regeneration
   of KSEG0 titles. The BIOS-emitter holes in §5.2 do change BIOS output. The
-  store-PC one ships with the `memory.c` filter re-key (§9).
+  store-PC one ships with the re-key of the seven `memory.c` keys: six
+  store-filter keys and the GP0 source key (§9).
 - **C: `feat/kuseg-linked-exe`** (§5.3, §5.5). Also rewrites the alias
   assertions in `test_kuseg_dispatch_lookup.py`: an alias with no body now
-  misses. Closes seven ids.
+  misses. Closes eight ids: §5.3's seven and `segment-miss` (§5.5).
 - **D: `feat/segment-variants`** (§5.4, and §5.6 in the game emitter). Closes
   `segment-variants` and `kseg1-fetch-charge`.
 - **E: `feat/overlay-segment-keys`** (§5.7). Includes the runtime acceptance
@@ -598,20 +609,23 @@ log.
 - **IsC stores are dropped** (`memory.c:1731`). Beetle writes the I-cache tag
   and valid bits through them (`WriteMemory_IsC_misc`, 623-641), so a
   `FlushCache` in psxrecomp does not invalidate the I-cache model.
-- **BIOS store-PC filter keys are ROM addresses.** The `strict_translator`
-  stamp is the ROM address; the interpreter stamps the runtime PC. Several
-  `memory.c` filter keys lie in SCPH1001's relocated windows
-  (`bios/SCPH1001.toml`):
-  - Kernel Part 2, which runs at `0x500`: `0xBFC10A00` and the Tomba key
-    `0xBFC117E4`;
-  - Shell, which runs at `0x80030000`: `0xBFC3EEB4`, `0xBFC405E4`,
-    `0xBFC40788` and `0xBFC41C50`.
+- **BIOS store-PC keys are ROM addresses.** The `strict_translator` stamp is
+  the ROM address; the interpreter stamps the runtime PC. Seven `memory.c`
+  keys lie in SCPH1001's relocated windows (`bios/SCPH1001.toml`). The
+  runtime PC shown for each is what `BiosAddressModel::runtime_pc()` returns:
+  - Kernel Part 2, which runs at `0x500`: the RAM filter key `0xBFC10A00`
+    (`0x00000F00`) and the Tomba key `0xBFC117E4` (`0x00001CE4`);
+  - Shell, which runs at `0x80030000`: the RAM filter keys `0xBFC3EEB4`
+    (`0x80056EB4`), `0xBFC405E4` (`0x800585E4`), `0xBFC40788`
+    (`0x80058788`) and `0xBFC41C50` (`0x80059C50`), and the GP0 source key
+    `0xBFC38B1C` (`0x80050B1C`, `memory.c:1292`).
 
-  For these keys a filter fires only while that code runs compiled. If the
-  same code runs interpreted, the store lands. Routing the BIOS stamp through
-  `runtime_pc()` (§5.2) without re-keying would silently disable them.
-  Re-keying them to runtime PCs in the same change also makes the
-  interpreted path agree.
+  For these keys a filter fires, or the GP0 write gets a RAM source key,
+  only while that code runs compiled. If the same code runs interpreted, the
+  store lands and the GP0 source stays the register address. Routing the
+  BIOS stamp through `runtime_pc()` (§5.2) without re-keying would silently
+  disable all seven. Re-keying them to runtime PCs in the same change also
+  makes the interpreted path agree.
 - **Syscall EPC in compiled code** comes from `cpu->pc` (`traps.c:1040`), but
   the emitted `syscall` site does not set it. Confirm what `cpu->pc` holds
   there; §5.2's pass is the place to make it the syscall's own

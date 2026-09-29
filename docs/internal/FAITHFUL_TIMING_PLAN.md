@@ -358,11 +358,13 @@ on a fixed region -> next.
   axis 4); static-code segment misses interpret loudly until regenerated; extra
   segments come from segment-qualified seeds; the overlay cache uses per-segment
   subdirectories. Correction: `g_debug_last_store_pc` is not debug-only. memory.c's
-  RAM 0x0-0xF store filters compare it with exact PCs in every build, and #420 (ABI
-  v24) forwards overlay stamps to the host. It is now a baked PC that goes through
+  store filters (RAM 0x0-0xF, opt-in Tomba EvCB) compare it with exact PCs, and its
+  GP0 write path (1292) keys the widescreen GP0 source on `0xBFC38B1C`; both run in
+  every build. #420 (ABI v24) forwards overlay stamps to the host. It is now a baked PC that goes through
   `runtime_pc()`. Option A's re-measured cost with the 1,261 store-PC stamps is
   +3.8 % / +27.6 % (it was +3.2 % / +27.2 %). New ledger id `store-pc-segment` (11 known gaps).
-  BIOS filter keys in SCPH1001's relocated windows name ROM addresses and must be
+  Seven memory.c keys in SCPH1001's relocated windows name ROM addresses (six
+  store-filter keys and the GP0 key `0xBFC38B1C`, runtime `0x80050B1C`) and must be
   re-keyed with the BIOS stamp (§9). Rollout PR A (`fix/uncached-fetch-per-insn`,
   on master) is in preparation; the ledger drops `bios-kseg1-fetch-charge` when
   this branch is rebased after A lands.
