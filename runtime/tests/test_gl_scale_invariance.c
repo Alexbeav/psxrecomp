@@ -433,7 +433,8 @@ static int capture_main(int scale, int window) {
     /* Blend history: nearest filtering (linear = 0), a 4:3 present. */
     s_interp_enabled = 1;
     s_interp_suspended = 0;
-    check(interp_capture(fbo, sx, 0, FRAME_W, FRAME_H, 0, 1, GL_PRES_VRAM) == 1,
+    check(interp_capture(fbo, sx, 0, FRAME_W, FRAME_H, 0, 1, GL_PRES_VRAM,
+                         0, 0, 1) == 1,
           "blend history captured");
     if (s_interp_w != cw || s_interp_h != ch)
         fprintf(stderr, "blend capture %dx%d want %dx%d (source %dx%d)\n",
