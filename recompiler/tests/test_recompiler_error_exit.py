@@ -10,8 +10,8 @@ apart, so this test requires exactly 1 and the diagnostic. Main-EXE
 [widescreen.cull] sites that hold the wrong opcode exit 1 through their own
 guard and are checked the same way.
 
-It also checks that one valid bgez site still generates, so a harness problem
-cannot pass as a rejection.
+It also checks that a valid bgez site and a valid branch_keep site still
+generate, so a harness problem cannot pass as a rejection.
 """
 
 import argparse
@@ -66,10 +66,31 @@ CASES = [
     ("clip_edge_site_wrong_opcode",
      'clip_edge_x_load_sites = ["0x80010008"]\n',
      1, "clip_edge_x_load site 0x80010008 is not lh/lhu/lw"),
+    ("bltz_site_wrong_opcode",
+     'bltz_sites = ["0x80010008"]\n',
+     1, "bltz site 0x80010008 is not bltz"),
+    ("bltz_site_on_bgez",
+     'bltz_sites = ["0x80010000"]\n',
+     1, "bltz site 0x80010000 is not bltz"),
+    ("branch_keep_site_wrong_opcode",
+     'branch_keep_sites = ["0x80010008"]\n',
+     1, "branch_keep site 0x80010008 is not a conditional branch"),
+    ("branch_keep_site_on_jump",
+     'branch_keep_sites = ["0x8001000C"]\n',
+     1, "branch_keep site 0x8001000C is not a conditional branch"),
     ("bgez_site_valid",
      'bgez_sites = ["0x80010000"]\n',
      0, None),
+    ("branch_keep_site_valid",
+     'branch_keep_sites = ["0x80010000"]\n',
+     0, None),
 ]
+
+# What a valid case must emit, so a harness problem cannot pass as success.
+VALID_EMIT = {
+    "bgez_site_valid": "psx_ws_cull_bgez(",
+    "branch_keep_site_valid": "ws branch keep",
+}
 
 
 def make_psxexe() -> bytes:
@@ -165,9 +186,9 @@ def main() -> int:
                             with open(os.path.join(out_dir, fname),
                                       encoding="utf-8") as f:
                                 generated += f.read()
-                    if "psx_ws_cull_bgez(" not in generated:
-                        failures.append(f"{label}: valid bgez site was not "
-                                        "emitted through psx_ws_cull_bgez")
+                    if VALID_EMIT[name] not in generated:
+                        failures.append(f"{label}: valid site was not "
+                                        f"emitted ({VALID_EMIT[name]!r})")
 
         proc = run_truncated_overlay(args.recompiler, args.project_root, root)
         if proc.returncode != 1:
@@ -186,7 +207,7 @@ def main() -> int:
     if failures:
         return 1
     print(f"PASS: {len(CASES) * 2} widescreen.cull config cases and a "
-          "truncated overlay exit 1 with a message; a valid site generates")
+          "truncated overlay exit as expected; valid sites generate")
     return 0
 
 

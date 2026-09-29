@@ -337,8 +337,11 @@ clip_edge_x_load_sites = ["0x8005F5F4"]  # lh of a clip bound: 0 -> -m, W -> W+m
 clip_edge_width = 320                    # 1..1024; default screen_w_imms[0]
 ```
 
-- Main-EXE generation fails when a listed address does not hold the expected
-  instruction (`bgez`; `lh`/`lhu`/`lw` to a nonzero register).
+- Main-EXE generation fails (exit 1) when a listed address does not hold the
+  expected instruction: `slti` for both slti kinds, exactly `bltz` / `bgez`,
+  `lh`/`lhu`/`lw` to a nonzero register for clip-edge loads, and a
+  conditional branch (`beq`, `bne`, `blez`, `bgtz` or REGIMM) for
+  `branch_keep_sites`.
 - `bgez_sites` and `clip_edge_x_load_sites` (with the width) contribute to the
   overlay-cache identity only when non-empty.
 

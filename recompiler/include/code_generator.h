@@ -451,6 +451,9 @@ private:
         std::map<uint32_t, std::vector<uint32_t>>& out_edges);
 
     // Control flow translation
+    // Main-EXE opcode guard for bltz_sites, bgez_sites and branch_keep_sites
+    // (exits 1 on a mismatch; overlay mode keeps vanilla code).
+    void check_explicit_branch_site(uint32_t addr, uint32_t instr) const;
     std::string generate_branch_condition(uint32_t instr, uint32_t addr);
     std::string translate_branch(const ControlFlowInstr& cf, uint32_t fall_through);
     std::string translate_jump(const ControlFlowInstr& cf);

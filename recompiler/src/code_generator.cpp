@@ -761,6 +761,34 @@ std::string CodeGenerator::translate_mtlo(uint32_t instr) {
     return fmt::format("cpu->lo = {};", reg_name(rs));
 }
 
+// Explicit branch-site kinds ([widescreen.cull] bltz_sites, bgez_sites,
+// branch_keep_sites) name one conditional branch each. In the main EXE a
+// listed address holding anything else is a hard error, as for the other
+// explicit kinds: bltz_sites needs `bltz` (REGIMM rt=0), bgez_sites `bgez`
+// (REGIMM rt=1), branch_keep_sites a conditional branch the emitter can keep
+// (REGIMM, beq, bne, blez, bgtz). Overlay variants at the same address keep
+// their vanilla code.
+void CodeGenerator::check_explicit_branch_site(uint32_t addr, uint32_t instr) const {
+    if (config_.overlay_mode) return;
+    const uint32_t op = (instr >> 26) & 0x3Fu;
+    const uint32_t rt = (instr >> 16) & 0x1Fu;
+    const char* kind = nullptr;
+    const char* want = nullptr;
+    if (config_.ws_cull_bltz_sites.count(addr) && !(op == 0x01u && rt == 0x00u)) {
+        kind = "bltz"; want = "bltz";
+    } else if (config_.ws_cull_bgez_sites.count(addr) &&
+               !(op == 0x01u && rt == 0x01u)) {
+        kind = "bgez"; want = "bgez";
+    } else if (config_.ws_cull_branch_keep_sites.count(addr) &&
+               !(op == 0x01u || (op >= 0x04u && op <= 0x07u))) {
+        kind = "branch_keep"; want = "a conditional branch";
+    }
+    if (!kind) return;
+    fmt::print(stderr, "ERROR: [widescreen.cull] {} site 0x{:08X} is not {} "
+               "(0x{:08X})\n", kind, addr, want, instr);
+    std::exit(1);
+}
+
 std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t addr) {
     uint32_t opcode = (instr >> 26) & 0x3F;
     uint32_t rs = get_rs(instr);
@@ -779,15 +807,7 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
     // link = ((rt & 0x1E) == 0x10). Undefined rt values appear when discovery
     // sweeps data-as-code into a function; emitting the hardware decode keeps
     // the regen alive AND matches the oracle if the word is ever executed.
-    // A listed bgez site must be exactly `bgez` (REGIMM rt=1) in the main
-    // EXE; a wrong address is a hard error. Overlay variants at the same
-    // address keep their vanilla semantics.
-    if (config_.ws_cull_bgez_sites.count(addr) && !config_.overlay_mode &&
-        !(opcode == 0x01 && ((instr >> 16) & 0x1F) == 0x01)) {
-        fmt::print(stderr, "ERROR: [widescreen.cull] bgez site 0x{:08X} is not "
-                   "bgez (0x{:08X})\n", addr, instr);
-        std::exit(1);
-    }
+    check_explicit_branch_site(addr, instr);
     if (opcode == 0x01) {
         uint32_t regimm_op = (instr >> 16) & 0x1F;
         if ((regimm_op & 0x01u) == 0x00u) { // bltz family (incl. bltzal + undefined mirrors)
@@ -1145,13 +1165,10 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         // Overlay variant at the same address: leave nonmatching code unchanged.
     }
 
-    // A listed bgez site that reaches the straight-line translator is not a
-    // branch at all (branches go through generate_branch_condition).
-    if (config_.ws_cull_bgez_sites.count(addr) && !config_.overlay_mode) {
-        fmt::print(stderr, "ERROR: [widescreen.cull] bgez site 0x{:08X} is not "
-                   "bgez (0x{:08X})\n", addr, instr);
-        std::exit(1);
-    }
+    // A listed bltz/bgez/branch-keep site that reaches the straight-line
+    // translator is not a block-ending branch (those go through
+    // generate_branch_condition).
+    check_explicit_branch_site(addr, instr);
     // Screen-X clip-bound load ([widescreen.cull] clip_edge_x_load_sites):
     // lh/lhu/lw of a clip rectangle edge the renderer compares vertices
     // against. The loaded value (extended as the opcode does) goes through
@@ -2086,6 +2103,9 @@ std::string CodeGenerator::translate_basic_block(
         } else {
             // Control flow is handled at block exit
             if (addr == exit_branch_addr) {
+                // Jumps (j/jal/jr/jalr) and reserved words never reach
+                // generate_branch_condition; check them here.
+                check_explicit_branch_site(addr, block.exit_instr.instruction);
                 std::string delay_saved_cond;    // branch condition captured before delay
                 std::string delay_saved_target;  // JR/JALR target captured before delay
 

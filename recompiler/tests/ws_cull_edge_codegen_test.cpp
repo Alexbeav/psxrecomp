@@ -1,6 +1,7 @@
 // [widescreen.cull] bgez_sites and clip_edge_x_load_sites: config parsing,
-// overlay-cache identity, emitted native code, main-EXE opcode guards, and the
-// shared runtime math (ws_cull_edge.h) the emitted helpers call.
+// overlay-cache identity, emitted native code, main-EXE opcode guards (also
+// for bltz_sites and branch_keep_sites), and the shared runtime math
+// (ws_cull_edge.h) the emitted helpers call.
 #include "code_generator.h"
 #include "config_loader.h"
 #include "control_flow.h"
@@ -146,6 +147,9 @@ constexpr uint32_t kLhuV0 = 0x94820070u;     // lhu   v0, 0x70(a0)
 constexpr uint32_t kLwV0 = 0x8C820070u;      // lw    v0, 0x70(a0)
 constexpr uint32_t kAddiuV0 = 0x24820070u;   // addiu v0, a0, 0x70
 constexpr uint32_t kLhZero = 0x84800070u;    // lh    zero, 0x70(a0)
+constexpr uint32_t kBltzalV0 = 0x04500002u;  // bltzal v0, +2
+constexpr uint32_t kBeqV0 = 0x10400002u;     // beq   v0, zero, +2
+constexpr uint32_t kJumpJr = 0x08004003u;    // j     kBase+12 (the jr)
 
 void loader_parses_new_kinds() {
     auto config = load(base_config() + R"toml(bgez_sites = ["0x80010010", "0x80010014"]
@@ -280,6 +284,76 @@ void main_exe_guards_fail_the_build() {
           "overlay variant at a clip-edge site stays vanilla");
 }
 
+// bltz_sites and branch_keep_sites get the same main-EXE guard as bgez_sites
+// (docs/WIDESCREEN.md "Explicit screen-X cull sites"); jumps, which never
+// reach generate_branch_condition, are checked at the block exit.
+void branch_site_guards() {
+    PSXRecomp::CodeGenConfig bltz{};
+    bltz.ws_cull_bltz_sites.insert(kBase);
+    check(generate_first_instruction(kBltzV0, bltz).full_code.find(
+              "psx_ws_cull_bltz(cpu->gpr[2])") != std::string::npos,
+          "a bltz site on bltz emits the helper");
+    check(!exits_with_failure([&] { generate_first_instruction(kBltzV0, bltz); }),
+          "a bltz site on bltz generates");
+    check(exits_with_failure([&] { generate_first_instruction(kBgezV0, bltz); }),
+          "a bltz site holding bgez fails main-EXE generation");
+    check(exits_with_failure([&] { generate_first_instruction(kBltzalV0, bltz); }),
+          "a bltz site holding bltzal fails main-EXE generation");
+    check(exits_with_failure([&] { generate_first_instruction(kAddiuV0, bltz); }),
+          "a bltz site holding a non-branch fails main-EXE generation");
+    check(exits_with_failure([&] { generate_first_instruction(kJumpJr, bltz); }),
+          "a bltz site holding a jump fails main-EXE generation");
+
+    PSXRecomp::CodeGenConfig bgez{};
+    bgez.ws_cull_bgez_sites.insert(kBase);
+    check(exits_with_failure([&] { generate_first_instruction(kJumpJr, bgez); }),
+          "a bgez site holding a jump fails main-EXE generation");
+
+    PSXRecomp::CodeGenConfig keep{};
+    keep.ws_cull_branch_keep_sites.insert(kBase);
+    check(generate_first_instruction(kBeqV0, keep).full_code.find(
+              "ws branch keep") != std::string::npos,
+          "a branch-keep site on beq keeps the branch while wide");
+    check(!exits_with_failure([&] { generate_first_instruction(kBeqV0, keep); }) &&
+              !exits_with_failure([&] { generate_first_instruction(kBgezV0, keep); }) &&
+              !exits_with_failure([&] { generate_first_instruction(kBltzalV0, keep); }),
+          "a branch-keep site on a conditional branch generates");
+    check(exits_with_failure([&] { generate_first_instruction(kAddiuV0, keep); }),
+          "a branch-keep site holding a non-branch fails main-EXE generation");
+    check(exits_with_failure([&] { generate_first_instruction(kJumpJr, keep); }),
+          "a branch-keep site holding a jump fails main-EXE generation");
+
+    // Captured overlays may hold unrelated code at a listed address: keep it.
+    bltz.overlay_mode = true;
+    keep.overlay_mode = true;
+    check(!exits_with_failure([&] { generate_first_instruction(kAddiuV0, bltz); }) &&
+              !exits_with_failure([&] { generate_first_instruction(kJumpJr, bltz); }) &&
+              !exits_with_failure([&] { generate_first_instruction(kAddiuV0, keep); }),
+          "overlay variants at bltz/branch-keep sites generate vanilla code");
+    check(generate_first_instruction(kBgezV0, bltz).full_code.find(
+              "psx_ws_cull_bltz") == std::string::npos,
+          "overlay variant at a bltz site stays vanilla");
+}
+
+// In overlay code a listed address whose instruction matches is widened like
+// the main EXE (the dirty-RAM interpreter does the same), so the shard must
+// link both helpers: overlay_dispatch_preamble.c.inc defines them
+// (overlay_shim_compile_contract, overlay_widescreen_callbacks).
+void overlay_matching_sites_emit_helpers() {
+    PSXRecomp::CodeGenConfig bgez{};
+    bgez.ws_cull_bgez_sites.insert(kBase);
+    bgez.overlay_mode = true;
+    check(generate_first_instruction(kBgezV0, bgez).full_code.find(
+              "psx_ws_cull_bgez(cpu->gpr[2])") != std::string::npos,
+          "overlay bgez at a bgez site emits psx_ws_cull_bgez");
+    PSXRecomp::CodeGenConfig clip{};
+    clip.ws_cull_clip_edge_x_load_sites.insert(kBase);
+    clip.overlay_mode = true;
+    check(generate_first_instruction(kLhV0, clip).full_code.find(
+              "psx_ws_clip_edge_x(") != std::string::npos,
+          "overlay lh at a clip-edge site emits psx_ws_clip_edge_x");
+}
+
 void shared_decls_include_new_helpers() {
     PSXRecomp::PS1Executable exe{};
     exe.header.load_address = kBase;
@@ -327,6 +401,8 @@ int main() {
     codegen_emits_bgez();
     codegen_emits_clip_edge_loads();
     main_exe_guards_fail_the_build();
+    branch_site_guards();
+    overlay_matching_sites_emit_helpers();
     shared_decls_include_new_helpers();
     runtime_math();
 

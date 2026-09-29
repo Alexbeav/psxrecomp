@@ -127,9 +127,12 @@ When a title's per-vertex screen-X rejects are not the shapes
 `auto_screen_x` recognises, list them. Every kind below is identity at 4:3
 (the live margin `m = psx_ws_x_margin()` is 0), emits nothing when its list is
 empty, and requires a regen after a change. In the main EXE a listed address
-holding the wrong instruction is a hard build error; in captured overlays a
-different instruction at the same address is left vanilla. Native code and
-the dirty-RAM interpreter apply the same helpers.
+holding anything but the instruction in the table is a hard build error
+(psxrecomp-game exits 1 and names the site); in captured overlays a different
+instruction at the same address is left vanilla, and a matching one is
+widened like the main EXE. Native code, overlay shards (the helpers are
+defined in `overlay_dispatch_preamble.c.inc`) and the dirty-RAM interpreter
+apply the same helpers.
 
 | Key | Instruction | While widened |
 |---|---|---|
@@ -137,8 +140,8 @@ the dirty-RAM interpreter apply the same helpers.
 | `slti_lower_sites` | `slti rt, SX, -W` | `rt = SX < -W - m` |
 | `bltz_sites` | `bltz SX, reject` (last vertex of a left chain) | taken while `SX < -m` |
 | `bgez_sites` | `bgez SX, keep` (other vertices of a left chain) | taken while `SX >= -m` |
-| `clip_edge_x_load_sites` | `lh`/`lhu`/`lw` of a clip-rectangle X bound | a loaded `0` becomes `-m`, a loaded `clip_edge_width` becomes `W + m`; other values unchanged |
-| `branch_keep_sites` | any conditional reject branch | not taken |
+| `clip_edge_x_load_sites` | `lh`/`lhu`/`lw` of a clip-rectangle X bound, to a nonzero register | a loaded `0` becomes `-m`, a loaded `clip_edge_width` becomes `W + m`; other values unchanged |
+| `branch_keep_sites` | a conditional reject branch (`beq`, `bne`, `blez`, `bgtz` or REGIMM) | not taken |
 
 `bgez_sites` pairs with `bltz_sites`. A compiled renderer often tests the left
 edge as `bgez x0,keep; bgez x1,keep; bgez x2,keep; bltz x3,reject`: widening
