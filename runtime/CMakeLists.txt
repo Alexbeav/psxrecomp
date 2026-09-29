@@ -700,6 +700,16 @@ if(BUILD_TESTING)
     add_test(NAME overlay_store_cycle_barrier_test
              COMMAND overlay_store_cycle_barrier_test)
 
+    # Overlay stores update the host's store-PC breadcrumb (ABI v24). Built
+    # with the defines compile_overlays.py gives every shard.
+    add_executable(overlay_store_pc_forwarding_test
+        tests/test_overlay_store_pc_forwarding.c)
+    target_include_directories(overlay_store_pc_forwarding_test PRIVATE include)
+    target_compile_definitions(overlay_store_pc_forwarding_test PRIVATE
+        PSX_OVERLAY_DLL_BUILD PSX_NO_DEBUG_TOOLS PSX_ENABLE_BLOCK_CYCLES=1)
+    add_test(NAME overlay_store_pc_forwarding_test
+             COMMAND overlay_store_pc_forwarding_test)
+
     add_executable(psx_cycle_event_boundaries_test
         tests/test_psx_cycle_event_boundaries.c
         src/psx_cycles.c)

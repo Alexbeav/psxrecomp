@@ -2398,6 +2398,13 @@ static void init_callbacks(void) {
     s_callbacks.call_bail_flag = &g_psx_call_bail;
     s_callbacks.bail_first     = &g_psx_bail_first;
     s_callbacks.bail_resolved  = &g_psx_bail_resolved;
+    /* Store-PC breadcrumb (ABI v24): overlay stores update the same value
+     * static and interpreted stores do, in every build, because memory.c's
+     * store filters read it as well as the debug tooling. */
+    {
+        extern uint32_t g_debug_last_store_pc;
+        s_callbacks.last_store_pc = &g_debug_last_store_pc;
+    }
     /* Widescreen hooks (ABI v3): overlay-emitted psx_ws_* calls forward to
      * the runtime's live widescreen state (gpu.c). */
     {
