@@ -27,7 +27,6 @@ int g_ws_tex_edge_pct=0;
 int psx_ws_prim_is_tagged(void){return 0;}
 void psx_ws_dbg_gate_frame_snapshot(void){}
 void gpu_depth24_upload_span_reset(void){}
-void frame_interpolation_schedule_reset(FrameInterpolationSchedule *p){memset(p,0,sizeof(*p));}
 
 static uint16_t vram[1024*512], peek[1024*512];
 static int checks, failures;

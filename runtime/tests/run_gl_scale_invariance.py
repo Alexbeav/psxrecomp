@@ -73,11 +73,23 @@ def main():
     includes = ["-I", framework / "runtime/include", "-I", framework / "runtime/src"]
     for d in sdl_includes:
         includes += ["-I", d]
+    # The fixture #includes gpu_gl_renderer.c; these are the other runtime
+    # sources the renderer calls into. render_pass_plan.c exists once the
+    # frame-rate render passes have landed, and the renderer calls it from then
+    # on, so it is linked whenever it is there.
+    sources = [("probe", fixture), ("sw", framework / "runtime/src/gpu_sw_renderer.c"),
+               ("fi", framework / "runtime/src/frame_interpolation.c")]
+    if (framework / "runtime/src/render_pass_plan.c").exists():
+        sources.append(("rp", framework / "runtime/src/render_pass_plan.c"))
+    # Unused renderer functions reference the rest of the runtime; the linker
+    # drops them (-dead_strip, or per-function sections with --gc-sections).
+    # Anything still unresolved is a link error, not a NULL call at run time.
+    sections = [] if platform.system() == "Darwin" else ["-ffunction-sections", "-fdata-sections"]
     objs = []
-    for name, src in (("probe", fixture), ("sw", framework / "runtime/src/gpu_sw_renderer.c")):
+    for name, src in sources:
         o = dest / (name + ".o")
         r = run([args.cc, "-std=gnu11", "-O1", "-DPSX_SDL3=1", "-DPSX_NO_DEBUG_TOOLS=1",
-                 "-DGL_SILENCE_DEPRECATION=1", "-w", *includes, "-c", src, "-o", o])
+                 "-DGL_SILENCE_DEPRECATION=1", "-w", *sections, *includes, "-c", src, "-o", o])
         if r.returncode:
             print(r.stderr[-3000:])
             return 2
@@ -86,10 +98,9 @@ def main():
     if platform.system() == "Darwin":
         for f in MAC_FRAMEWORKS:
             link += ["-framework", f]
-        link += ["-liconv", "-lm", "-Wl,-undefined,dynamic_lookup", "-Wl,-dead_strip"]
+        link += ["-liconv", "-lm", "-Wl,-dead_strip"]
     else:
-        link += ["-lGL", "-lm", "-ldl", "-lpthread", "-Wl,--unresolved-symbols=ignore-all",
-                 "-Wl,--gc-sections"]
+        link += ["-lGL", "-lm", "-ldl", "-lpthread", "-Wl,--gc-sections"]
     r = run(link)
     if r.returncode:
         print(r.stderr[-3000:])
