@@ -41,7 +41,7 @@ release-stage/
 *.zip
 
 # Vendored upstream sources (cloned locally, not checked in)
-beetle-psx/
+beetle-psx
 
 # Explicit-fallback SDL2 / dep zips (large, regenerable)
 sdl2-dev.zip

@@ -1018,7 +1018,9 @@ extern "C" uint64_t beetle_spu_event_total(void) { return s_spu_event_seq; }
  * Returns 0 if the CDC isn't up. */
 extern "C" int beetle_cdc_decode_volume(unsigned out[4])
 {
-    extern PS_CDC *PSX_CDC;
+    /* PSX_CDC is declared by mednafen/psx/psx.h. A block-scope redeclaration
+     * here would get C language linkage from the enclosing extern "C"
+     * function, which clang rejects against psx.h's C++ declaration. */
     if (!PSX_CDC) return 0;
     uint8 m[2][2];
     PSX_CDC->PSXRecomp_GetDecodeVolume(m);
