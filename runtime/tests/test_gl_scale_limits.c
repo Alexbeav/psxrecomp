@@ -89,6 +89,13 @@ int main(void) {
                 }
             }
     }
+    /* Windowed mode: 512 rows bound S at 32 on a 16384 limit; 8K (18x) fits,
+     * as does the 2 GiB budget for a 320-wide window (405 MiB at 18x). */
+    expect_int("window 18x", psx_gl_clamp_window_scale(18, 32, 16384, budget, 320), 18);
+    expect_int("window 40x", psx_gl_clamp_window_scale(40, 32, 16384, budget, 320), 32);
+    expect_int("window bytes 18x", (long long)(psx_gl_window_bytes(18, 320) >> 20), 405);
+    expect_int("window 8192 limit", psx_gl_clamp_window_scale(18, 32, 8192, budget, 320), 16);
+    expect_int("window budget", psx_gl_clamp_window_scale(18, 32, 16384, 40 * MiB, 320), 5);
 
     /* Budget override parsing. */
     expect_int("env null", (long long)psx_gl_budget_bytes_from_env(NULL), (long long)budget);

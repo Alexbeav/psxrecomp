@@ -533,6 +533,19 @@ The runtime clamps N per backend:
   to software because of the scale. The log line
   `GL internal scale Nx clamped to Mx (...)` names the limit that applied.
 
+**Past the full-VRAM limit** (8K is 18x, over Apple's 16384), OpenGL keeps
+the whole VRAM at 1x — the native renderer, so everything the game reads back
+is exactly native — and renders only the columns it displays at the full
+scale, in a separate high-resolution window (`5760x9216` for a 320-wide
+game at 18x, about 405 MiB). The window grows to cover each displayed
+rectangle the first time it is shown; when the displayed rectangles are too
+far apart for one surface (side-by-side 512-wide buffers), it splits into up
+to four tiles so every buffer still presents at the full scale. A copy whose
+source lies outside it is taken from the 1x surface. `PSX_GL_HIRES_WINDOW=0`
+turns the mode off (the scale is then clamped as above) and `=1` forces it at
+any scale above 1. `PSX_GL_MAX_DIM=N` lowers the GPU limit the backend plans
+with, to check a layout on a smaller GPU.
+
 Above 1x the OpenGL present averages the whole footprint of each output pixel
 when the internal image is more than 1.25 times larger than the window (for
 example 1200 internal lines into a 1080-line window), and lines are drawn one
