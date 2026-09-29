@@ -20,6 +20,7 @@ class OverlayWidescreenCallbacks(unittest.TestCase):
 static CPUState *seen_cpu;
 static uint32_t seen_address, cycles;
 static int32_t bound(int32_t x) { return x * 2; }
+static int margin120(void) { return 120; }
 static void advance(uint32_t n) { cycles += n; }
 static void entry(CPUState *cpu, uint32_t address) {
     assert(cycles == 17); seen_cpu = cpu; seen_address = address;
@@ -42,6 +43,19 @@ int main(void) {
     assert(psx_ws_screen_x_bound(-256) == -256);
     psx_mod_function_entry(&cpu, 0);
     assert(seen_address == 0x80045770);
+    /* bgez_sites / clip_edge_x_load_sites in overlay code: identity with no
+     * margin callback (4:3 host), widened by the live margin with one. */
+    assert(psx_ws_cull_bgez(0u) == 1 && psx_ws_cull_bgez((uint32_t)-1) == 0);
+    assert(psx_ws_clip_edge_x(0u, 0x140u) == 0u);
+    assert(psx_ws_clip_edge_x(0x140u, 0x140u) == 0x140u);
+    callbacks.ws_x_margin = margin120;
+    overlay_init(&callbacks);
+    assert(psx_ws_cull_bgez((uint32_t)-120) == 1);
+    assert(psx_ws_cull_bgez((uint32_t)-121) == 0);
+    assert(psx_ws_clip_edge_x(0u, 0x140u) == (uint32_t)-120);
+    assert(psx_ws_clip_edge_x(0x140u, 0x140u) == 0x140u + 120u);
+    assert(psx_ws_clip_edge_x(98u, 0x140u) == 98u);     /* interior viewport edge */
+    assert(psx_ws_clip_edge_x(222u, 0x140u) == 222u);
     return 0;
 }
 '''
