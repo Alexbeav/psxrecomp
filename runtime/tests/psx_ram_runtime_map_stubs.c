@@ -110,6 +110,19 @@ void dma_gpu_ll_advance(void *s, uint32_t c, const void *ops, void *o) {
 void gpu_set_gp0_linked_list_node(uint32_t a, uint32_t n) { (void)a; (void)n; }
 void gpu_ws_validate_linked_list_header(uint32_t a, uint32_t h) { (void)a; (void)h; }
 void gpu_ws_validate_linked_list_node(uint32_t a, uint32_t n) { (void)a; (void)n; }
+/* MMIO readers: the render-pass store path in memory.c keeps them in this
+ * link (mingw-w64 GCC 15 + LTO fails without them). No test access reaches
+ * MMIO, so these trap too. */
+void debug_server_trace_mmio_read(uint32_t a, uint32_t v, uint8_t w) {
+    (void)a; (void)v; (void)w; __builtin_trap();
+}
+uint32_t cdrom_read(uint32_t a) { (void)a; __builtin_trap(); }
+uint32_t mdec_read(uint32_t a) { (void)a; __builtin_trap(); }
+uint32_t gpu_read_gpustat(void) { __builtin_trap(); }
+uint32_t spu_read(uint32_t a) { (void)a; __builtin_trap(); }
+uint32_t timers_read(uint32_t a) { (void)a; __builtin_trap(); }
+uint32_t sio_read(uint32_t a) { (void)a; __builtin_trap(); }
+void sio_tick(int c) { (void)c; __builtin_trap(); }
 
 /* ---- device snapshot sections (fixed-size doubles; readers count) --------- */
 #define STUB_SECTION(name, size)                                             \
