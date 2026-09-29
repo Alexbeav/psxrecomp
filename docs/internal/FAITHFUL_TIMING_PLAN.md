@@ -249,9 +249,27 @@ on a fixed region -> next.
     are 16-byte aligned and SCPH-101/5552 declare none. With both fixes, the
     R4 game entry is at 100,589,404 (+2,871,015 over master; +6,013 from this
     fix). R4 reached a race with 0 dispatch misses.
+  - LLE boot of R4 (`PSX_BIOS_HLE=0`, the OpenBIOS shell runs), both fixes:
+    the game entry moves from 265,829,410 to 268,764,320 (+2,934,910,
+    +1.10%), identical on two boots of each build; 0 dispatch misses.
+  - In-game cost on OpenBIOS: the charge is not boot-only. OpenBIOS runs its
+    A0/B0/C0 services in place: after boot, 148 of the 192 A0 table entries
+    point into ROM, A(2Ah) memcpy at 0xBFC085D8 among them. During gameplay,
+    every such call now pays the +4 fetch on each instruction, not only at
+    block leaders and line starts. This holds on every title that uses the
+    OpenBIOS default. Measured in an R4 race with cyc_watch: memcpy's byte
+    loop goes from 25 to 42 cycles per byte (four more fetches, +16, and one
+    lost load give-back, +1). R4 makes two memcpy calls per 30 fps game frame
+    (20 and 92 bytes): 2,824 -> 4,744 cycles, +1,920, about 0.17% of the
+    frame. Only memcpy was measured; other ROM services scale the same way.
   - Closes `bios-kseg1-fetch-charge` in the segment-aware ledger (PR #419).
-  - OPEN: full LLE boot (`bios_hle = false`) cycle parity against live Beetle.
-    There is no oracle binary on the Mac.
+  - LAND GATE (OPEN): SEGMENT_AWARE_CODE.md §7.2 requires, before this lands,
+    a full LLE boot (`bios_hle = false`) with per-anchor cycle parity against
+    psx-beetle to the shell, plus ruler #1 [0x80001C5C->0x80001CA4] native vs
+    Beetle. Neither has run: the Mac that built this has no psx-beetle build
+    and no SCPH-1001 image. The PR stays draft until both are done on an
+    oracle machine. Record the per-anchor deltas here and tick the
+    ACCURACY_BURNDOWN axis-2 gate item.
 
 - **2026-09-29 (generic A/B identity tool, `feat/fp-identity-tool` on #420):**
   `tools/fp_identity.py` moves R4's warm/cold check into the framework for

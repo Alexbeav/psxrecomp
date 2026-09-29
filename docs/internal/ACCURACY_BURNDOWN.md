@@ -134,8 +134,8 @@ observe added to the recompiler so ANY block leader is anchorable on both backen
   call-vector stubs charge one fetch per executed word. Cached code keeps the leader
   rule, and KSEG0 game output is byte-identical. Tests: ctest `uncached_fetch_charge`
   (compiled == interp fetch path == Beetle transcription, per instruction, on
-  OpenBIOS) and `uncached_fetch_codegen_test` (game emitter). OPEN: full LLE boot
-  (`bios_hle = false`) parity against live Beetle (no oracle binary on the Mac).
+  OpenBIOS) and `uncached_fetch_codegen_test` (game emitter). Not yet validated
+  against live Beetle: see the land gate below.
 - [x] **BIOS emitter tests cache-line starts on the runtime PC (2026-09-29).** The
   line-leader test used the ROM address, assuming every copy window preserves
   bits[3:0]. OpenBIOS copies its kernel from ROM 0x1FC1E4D4 to RAM 0x500, so every
@@ -144,6 +144,15 @@ observe added to the recompiler so ANY block leader is anchorable on both backen
   Retail profiles are unaffected (SCPH-1001's windows are 16-byte aligned;
   SCPH-101/5552 declare none). Covered by ctest `uncached_fetch_charge` (cached runs
   compared from a cold cache).
+- [ ] **Land gate for the two 2026-09-29 fixes above: live-Beetle validation.**
+  SEGMENT_AWARE_CODE.md §7.2 requires, before they land: (1) a full LLE boot
+  (`bios_hle = false`) with per-anchor cycle parity against psx-beetle to the shell,
+  and (2) ruler #1 [0x80001C5C→0x80001CA4] native vs Beetle. Neither has run: the
+  Mac that built the fix has no psx-beetle build and no SCPH-1001 image. The PR stays
+  draft until both are done on an oracle machine; record the deltas in
+  FAITHFUL_TIMING_PLAN §5 and tick this. Native-only evidence so far: the OpenBIOS
+  LLE boot of R4 reaches its game entry with 0 dispatch misses, 1.10% later than
+  on master. That shift follows the model but has not been checked against Beetle.
 - [ ] **HW test-ROM ruler (#2)** — Amidog CPU/GTE timing ROMs for hand-crafted
   single-COMPONENT isolation (div-only, load-only loops) that organic BIOS code
   can't give (the prologue combines div+loads in one block). Strongest validator.
