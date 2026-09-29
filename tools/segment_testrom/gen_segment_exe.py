@@ -31,8 +31,16 @@ image, so the stores never touch code pages. Timer 2 is put in mode 0
 which is the same for all three runs. Each delta is (after - before) & 0xFFFF,
 because T2 is a 16-bit counter that wraps. The subtraction waits one `nop`
 after the second `lw`: it would otherwise sit in the load delay slot and read
-the stale register. The program ends in a `j .` spin, where an oracle run can
-read R.
+the stale register.
+
+The deltas compare like with like. Each of the three call sequences starts
+on an I-cache line, so the main-loop fetches between the two T2 reads cost
+the same in every run. `probe_run` starts its own line, so no earlier code
+(`seeded`) leaves one of its lines filled. Beetle tags lines with the full
+virtual address, so every run starts with the probe body cold. The KSEG0 and
+KUSEG deltas are then equal, and the KSEG1 delta exceeds them by the uncached
+fetch surcharge alone. The program ends in a `j .` spin, where an oracle run
+can read R.
 
 The MIPS is hand-encoded, so the output needs no toolchain and is
 reproducible byte for byte. recompiler/tests/test_segment_aware_codegen.py
@@ -99,6 +107,11 @@ class Asm:
     def emit(self, *words):
         self.words.extend(words)
 
+    def line_up(self, before=0):
+        """Pad with nops until here() + before starts a 16-byte I-cache line."""
+        while (self.here() + before) & 0xF:
+            self.words.append(nop())
+
     def jal(self, name):
         self.fixups.append((len(self.words), "jal", name))
         self.words.append(0)
@@ -150,6 +163,7 @@ def _assemble():
     a.la("t0", "seeded", KUSEG)
     a.emit(jalr("t0"), nop(), sw("v0", 0x08, "s0"))
     for n, segment in enumerate((KUSEG, KSEG0, KSEG1)):
+        a.line_up(8)                            # each `lw t1` starts a line
         a.la("t0", "probe_run", segment)
         # T2 before and after the call. The nop keeps subu out of the second
         # lw's load delay slot; T2 is 16 bits, so mask the difference.
@@ -165,6 +179,7 @@ def _assemble():
     a.label("seeded")                           # entered through a register
     a.emit(jr("ra"), or_("v0", "ra", "zero"))
 
+    a.line_up()                                 # no line shared with `seeded`
     a.label("probe_run")
     a.emit(addu("t9", "ra", "zero"))
     a.jal("getpc"); a.emit(nop())
