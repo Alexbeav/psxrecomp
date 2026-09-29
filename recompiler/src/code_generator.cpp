@@ -1885,17 +1885,23 @@ std::string CodeGenerator::translate_basic_block(
     };
     // I-cache FETCH cost (faithful R3000A), emitted BEFORE the per-instruction
     // interlock/load — exactly like Beetle ReadInstruction precedes the base, and so a
-    // fetch MISS clears any pending load give-back before the next load arms one. Only
-    // emitted at cache-line LEADERS: a block leader / mid-block jump-table target (any
-    // address reachable other than by fall-through, i.e. a possibly-cold cache entry) OR
-    // a 16-byte-line start (addr&0xC==0, a sequential line crossing). Intra-line
-    // followers reached by fall-through are guaranteed hits — the leader's fetch
-    // refilled the line to its end — so they need no call (+0). Extra fetch points are
-    // harmless (a hit is +0); only UNDER-counting a cold entry would diverge, which the
-    // leader set prevents. The game runs at its KSEG0 load address, so `insn_addr` is
-    // already the runtime guest PC (matching the dirty-RAM interp's cpu->pc and Beetle).
+    // fetch MISS clears any pending load give-back before the next load arms one. The
+    // game runs at its load address, so `insn_addr` is already the runtime guest PC
+    // (matching the dirty-RAM interp's cpu->pc and Beetle).
+    //  - CACHED PC: only emitted at cache-line LEADERS: a block leader / mid-block
+    //    jump-table target (any address reachable other than by fall-through, i.e. a
+    //    possibly-cold cache entry) OR a 16-byte-line start (addr&0xC==0, a sequential
+    //    line crossing). Intra-line followers reached by fall-through are guaranteed
+    //    hits — the leader's fetch refilled the line to its end — so they need no call
+    //    (+0). Extra fetch points are harmless (a hit is +0); only UNDER-counting a cold
+    //    entry would diverge, which the leader set prevents.
+    //  - UNCACHED PC (psx_fetch_uncached, KSEG1): no fetch fills a line, so every
+    //    instruction pays +4 and clears the load give-back — a fetch before EVERY
+    //    instruction, exactly as the interpreter and Beetle charge it. KSEG0 code never
+    //    takes this branch, so its output is unchanged.
     auto emit_pre_icache = [&](uint32_t insn_addr, const std::string& indent) {
-        if (!(insn_addr == block.start_addr || (insn_addr & 0xCu) == 0 ||
+        if (!psx_fetch_uncached(insn_addr) &&
+            !(insn_addr == block.start_addr || (insn_addr & 0xCu) == 0 ||
               extra_labels_.count(insn_addr))) return;
         ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
         ss << indent << fmt::format("psx_icache_fetch(cpu, 0x{:08X}u);\n", insn_addr);

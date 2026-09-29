@@ -213,6 +213,35 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-29 (uncached KSEG1 fetch charged per instruction, both emitters):**
+  Beetle ReadInstruction never fills a line for a fetch at 0xA0000000 or above:
+  each one costs +4 and clears the load give-back. The interp fetches at every PC,
+  but both emitters emitted `psx_icache_fetch` only at line leaders, which is exact
+  for cached code only. In OpenBIOS, 5,477 of the 9,592 in-place ROM (KSEG1)
+  instruction sites were uncharged: 21,908 cycles per pass through that code.
+  Both emitters now charge a fetch before every instruction whose runtime PC is
+  uncached. The predicate is `psx_fetch_uncached` (psx_instr_cost.h), which
+  psx_icache.c also uses. The A0/B0/C0 call-vector stubs charge one fetch per
+  executed word.
+  - Cached code keeps the leader rule. R4's regenerated game C (50 shards and the
+    dispatch table) is byte-identical, as are the 26 R4 overlay shards compiled in
+    both runs.
+  - The OpenBIOS diff is insertions only: 5,477 fetches plus 5 stub fetches.
+  - The codegen hash changes because the emitter sources do, and
+    psx_instr_cost.h is now in the hash list. Every title reshards its overlay
+    cache once.
+  - Tests: ctest `uncached_fetch_charge` checks compiled == interp fetch path ==
+    Beetle transcription per instruction on OpenBIOS, the stubs and synthetic
+    sequences. `uncached_fetch_codegen_test` checks the game emitter at KSEG1
+    and KSEG0. Both fail on master.
+  - R4 (OpenBIOS: recompiled LLE kernel, HLE boot that skips the shell): the
+    game entry 0x8007D8F4 moves from guest cycle 97,718,389 to 100,583,391
+    (+2,865,002, about 5.1 frames). The count was the same on two baseline
+    boots. R4 reached a race with 0 dispatch misses.
+  - Closes `bios-kseg1-fetch-charge` in the segment-aware ledger (PR #419).
+  - OPEN: full LLE boot (`bios_hle = false`) cycle parity against live Beetle.
+    There is no oracle binary on the Mac.
+
 - **2026-09-29 (generic A/B identity tool, `feat/fp-identity-tool` on #420):**
   `tools/fp_identity.py` moves R4's warm/cold check into the framework for
   any title (launch template or `--runtime/--game/--disc`, `--seed` overlay

@@ -124,6 +124,18 @@ observe added to the recompiler so ANY block leader is anchorable on both backen
   + no-regression (no interp-path ruler yet — see below).
 - [x] Instruction-fetch / I-cache timing — DONE (see above; commits 958a928 + 0edb935).
   The ruler's 56→84 cold spread (I-cache line-refill transient) now reproduced natively.
+- [x] **Uncached (KSEG1) fetch is charged per instruction in both emitters (2026-09-29).**
+  Beetle ReadInstruction charges +4 and clears the load give-back on EVERY fetch at
+  0xA0000000 and above. The interp fetches at every PC, but both emitters charged only
+  at line leaders. In OpenBIOS, 5,477 of 9,592 in-place ROM (KSEG1) instruction sites
+  were uncharged: 21,908 cycles short per pass through that code. Both emitters now
+  emit a fetch before every instruction whose runtime PC is uncached
+  (`psx_fetch_uncached`, psx_instr_cost.h, shared with psx_icache.c). The A0/B0/C0
+  call-vector stubs charge one fetch per executed word. Cached code keeps the leader
+  rule, and KSEG0 game output is byte-identical. Tests: ctest `uncached_fetch_charge`
+  (compiled == interp fetch path == Beetle transcription, per instruction, on
+  OpenBIOS) and `uncached_fetch_codegen_test` (game emitter). OPEN: full LLE boot
+  (`bios_hle = false`) parity against live Beetle (no oracle binary on the Mac).
 - [ ] **HW test-ROM ruler (#2)** — Amidog CPU/GTE timing ROMs for hand-crafted
   single-COMPONENT isolation (div-only, load-only loops) that organic BIOS code
   can't give (the prologue combines div+loads in one block). Strongest validator.
@@ -143,6 +155,10 @@ Status: PARTIAL.
 
 Status: MODERATE-STRONG (regions games use).
 - [ ] KUSEG/KSEG0/KSEG1 mirroring, scratchpad, cache-isolation (IsC) — psx-spx.
+- [ ] BIU bit 11 (I-cache disable, 0xFFFE0130) does not reach the fetch model:
+  memory.c stores it, psx_icache.c and the interp ignore it. Beetle charges +4 per
+  fetch while the cache is disabled (CPU_SetBIU). This matters only for RAM code run
+  with the cache off; `psx_fetch_uncached` is an address test and does not cover it.
 - [ ] I/O register semantics: read-to-clear, write-1-ack (I_STAT), masking,
   unmapped/garbage reads — psx-spx "I/O Map"; Beetle memory.cpp.
 

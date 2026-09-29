@@ -765,22 +765,29 @@ bool FullFunctionEmitter::emit_function(
 
     // I-cache FETCH cost (faithful R3000A), emitted BEFORE the per-instruction
     // interlock/load — like Beetle ReadInstruction precedes the base, so a fetch MISS
-    // clears any pending load give-back before the next load arms one. Only emitted at
-    // cache-line LEADERS: a block leader (any branch/dispatch entry — a possibly-cold
-    // cache entry; cross-function targets are inserted into block_leaders above) OR a
-    // 16-byte-line start (addr&0xC==0, a sequential line crossing). Intra-line followers
-    // reached by fall-through are guaranteed hits (the leader refilled the line to its
-    // end) → no call (+0). `rom_addr` is the ROM/compile-time address; relocate_ra maps
-    // it to the RUNTIME guest PC the CPU actually fetches from (BIOS main stays in-place
-    // KSEG1 0xBFC..; relocated kernel Part 2 → 0x500+, shell → 0x80030000+), so the
-    // shared I-cache evolves identically to the dirty-RAM interp (cpu->pc) and Beetle —
-    // and the KSEG1 uncached test (>=0xA0000000) sees the true virtual address. The
-    // relocation preserves bits[3:0], so the line-leader test is space-independent.
+    // clears any pending load give-back before the next load arms one. `rom_addr` is
+    // the ROM/compile-time address; relocate_ra maps it to the RUNTIME guest PC the CPU
+    // actually fetches from (BIOS main stays in-place KSEG1 0xBFC..; relocated kernel
+    // Part 2 → 0x500+, shell → 0x80030000+), so the shared I-cache evolves identically
+    // to the dirty-RAM interp (cpu->pc) and Beetle.
+    //  - CACHED runtime PC: emitted only at cache-line LEADERS: a block leader (any
+    //    branch/dispatch entry — a possibly-cold cache entry; cross-function targets
+    //    are inserted into block_leaders above) OR a 16-byte-line start (addr&0xC==0,
+    //    a sequential line crossing). Intra-line followers reached by fall-through are
+    //    guaranteed hits (the leader refilled the line to its end) → no call (+0). The
+    //    relocation preserves bits[3:0], so the line-leader test is space-independent.
+    //  - UNCACHED runtime PC (psx_fetch_uncached: the ROM run in place at KSEG1): no
+    //    fetch ever fills a line, so there is no follower to elide. Every instruction
+    //    pays +4 and clears the load give-back, exactly as the interpreter (a fetch at
+    //    every cpu->pc) and Beetle charge it. Emitting only at leaders left 5,477 of
+    //    OpenBIOS's 9,592 KSEG1 instruction sites 4 cycles short.
     auto emit_icache_fetch = [&](uint32_t rom_addr) {
         if (!per_insn_cycles) return;
-        if (!(block_leaders.count(rom_addr) || (rom_addr & 0xCu) == 0)) return;
+        const uint32_t pc = relocate_ra(rom_addr);
+        if (!psx_fetch_uncached(pc) &&
+            !(block_leaders.count(rom_addr) || (rom_addr & 0xCu) == 0)) return;
         out += fmt::format("#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_icache_fetch(cpu, 0x{:08X}u);\n#endif\n",
-                           relocate_ra(rom_addr));
+                           pc);
     };
 
     auto emit_patch_range_guard = [&](uint32_t addr) {
@@ -2073,7 +2080,11 @@ void FullFunctionEmitter::emit_dispatch(
     // that changes even one word fails closed to dirty_ram_interp below. The
     // cycle steps charge exactly the instructions the guest executes on that
     // shape (shape B's fourth word is never reached: the jr's delay slot is
-    // word 2).
+    // word 2). Each executed word gets its own fetch, in Beetle order (fetch,
+    // then the step), because `addr` keeps the caller's segment: at KUSEG/KSEG0
+    // the first fetch fills the line and the rest are +0 hits, while a KSEG1
+    // call (e.g. `jalr 0xA00000A0`) pays +4 and a give-back clear per word,
+    // as the interpreter does.
     out += fmt::format("static const PsxNativeStub {}psx_bios_native_stubs[3] = {{\n",
                        g_sym_prefix);
     out += "    { 0x000000A0u, 0x000000A0u, 0x000000B0u },\n";
@@ -2082,6 +2093,12 @@ void FullFunctionEmitter::emit_dispatch(
     out += "};\n";
     out += fmt::format("static const uint32_t {}psx_bios_native_stub_count = 3u;\n\n",
                        g_sym_prefix);
+    auto emit_stub_insn = [&](uint32_t offset, uint32_t word) {
+        out += offset ? fmt::format("        psx_icache_fetch(cpu, addr + {}u);\n", offset)
+                      : std::string("        psx_icache_fetch(cpu, addr);\n");
+        out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",
+                           psx_cyc_dep_res_mask(word));
+    };
     out += "static int psx_bios_try_native_call_stub(CPUState* cpu, "
            "uint32_t addr) {\n";
     out += "    uint32_t phys = addr & 0x1FFFFFFFu;\n";
@@ -2098,28 +2115,19 @@ void FullFunctionEmitter::emit_dispatch(
     out += "        target = ((w0 & 0xFFFFu) << 16) +\n";
     out += "                 (uint32_t)(int32_t)(int16_t)(w1 & 0xFFFFu);\n";
     out += "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
-    out += "        psx_icache_fetch(cpu, addr);\n";
-    out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",
-                       psx_cyc_dep_res_mask(0x3C080000u));
-    out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",
-                       psx_cyc_dep_res_mask(0x25080000u));
-    out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",
-                       psx_cyc_dep_res_mask(0x01000008u));
-    out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",
-                       psx_cyc_dep_res_mask(0x00000000u));
+    emit_stub_insn(0u, 0x3C080000u);
+    emit_stub_insn(4u, 0x25080000u);
+    emit_stub_insn(8u, 0x01000008u);
+    emit_stub_insn(12u, 0x00000000u);
     out += "#endif\n";
     out += "    } else if ((w0 & 0xFFFF0000u) == 0x24080000u &&\n";
     out += "               w1 == 0x01000008u && w2 == 0u && w3 == 0u) {\n";
     out += "        /* shape B: addiu $t0,$zero,lo; jr $t0; nop; nop */\n";
     out += "        target = (uint32_t)(int32_t)(int16_t)(w0 & 0xFFFFu);\n";
     out += "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
-    out += "        psx_icache_fetch(cpu, addr);\n";
-    out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",
-                       psx_cyc_dep_res_mask(0x24080000u));
-    out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",
-                       psx_cyc_dep_res_mask(0x01000008u));
-    out += fmt::format("        psx_cyc_step(cpu, 0x{:X}u);\n",
-                       psx_cyc_dep_res_mask(0x00000000u));
+    emit_stub_insn(0u, 0x24080000u);
+    emit_stub_insn(4u, 0x01000008u);
+    emit_stub_insn(8u, 0x00000000u);
     out += "#endif\n";
     out += "    } else {\n";
     out += "        return 0;\n";
