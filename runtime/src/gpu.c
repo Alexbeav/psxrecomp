@@ -33,6 +33,7 @@
 #include "ws_scene_hold.h"
 #include "sio.h"
 #include "ws_cull_detect.h"
+#include "ws_cull_edge.h"
 #include "ws_backdrop_margin.h"
 #include "ws_aspect_cone_math.h"
 #include "ws_ui_group.h"
@@ -560,33 +561,70 @@ void gpu_ws_set_activation_guard_pixels(int pixels) {
     ws_activation_guard_pixels = pixels;
 }
 
-#define WS_EXPLICIT_CULL_SITES_MAX 64
-static uint32_t ws_explicit_bias_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static uint32_t ws_explicit_slti_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static uint32_t ws_explicit_range_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static int ws_explicit_bias_n = 0;
-static int ws_explicit_slti_n = 0;
-static int ws_explicit_range_n = 0;
-void gpu_ws_set_explicit_cull_sites(const uint32_t *bias, int nbias,
-                                    const uint32_t *slti, int nslti,
-                                    const uint32_t *range, int nrange) {
-    if (nbias < 0) nbias = 0;
-    if (nslti < 0) nslti = 0;
-    if (nrange < 0) nrange = 0;
-    if (nbias > WS_EXPLICIT_CULL_SITES_MAX) nbias = WS_EXPLICIT_CULL_SITES_MAX;
-    if (nslti > WS_EXPLICIT_CULL_SITES_MAX) nslti = WS_EXPLICIT_CULL_SITES_MAX;
-    if (nrange > WS_EXPLICIT_CULL_SITES_MAX) nrange = WS_EXPLICIT_CULL_SITES_MAX;
-    ws_explicit_bias_n = nbias;
-    ws_explicit_slti_n = nslti;
-    ws_explicit_range_n = nrange;
-    for (int i = 0; i < nbias; i++) ws_explicit_bias_sites[i] = bias[i] & 0x1FFFFFFFu;
-    for (int i = 0; i < nslti; i++) ws_explicit_slti_sites[i] = slti[i] & 0x1FFFFFFFu;
-    for (int i = 0; i < nrange; i++) ws_explicit_range_sites[i] = range[i] & 0x1FFFFFFFu;
+/* Runtime copies of the explicit [widescreen.cull] site lists, consulted by
+ * the dirty-RAM interpreter (native code has the sites compiled in). Stored
+ * sorted and de-duplicated so a lookup is a binary search: a title may list
+ * dozens of sites, and the interpreter asks on every candidate instruction.
+ * A list longer than the cap is logged, never silently truncated. */
+#define WS_EXPLICIT_CULL_SITES_MAX 256
+static int ws_explicit_cmp_u32(const void *a, const void *b) {
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+static int ws_explicit_store(uint32_t *dst, const uint32_t *src, int n,
+                             const char *key) {
+    int count = 0;
+    if (n < 0 || !src) n = 0;
+    if (n > WS_EXPLICIT_CULL_SITES_MAX) {
+        fprintf(stderr,
+                "[widescreen] %s: %d sites exceed the interpreter cap of %d; "
+                "sites past the cap stay vanilla in interpreted code\n",
+                key, n, WS_EXPLICIT_CULL_SITES_MAX);
+        n = WS_EXPLICIT_CULL_SITES_MAX;
+    }
+    for (int i = 0; i < n; i++) dst[i] = src[i] & 0x1FFFFFFFu;
+    qsort(dst, (size_t)n, sizeof(dst[0]), ws_explicit_cmp_u32);
+    for (int i = 0; i < n; i++)
+        if (count == 0 || dst[count - 1] != dst[i]) dst[count++] = dst[i];
+    return count;
 }
 static int ws_explicit_site(const uint32_t *sites, int n, uint32_t pc) {
     uint32_t p = pc & 0x1FFFFFFFu;
-    for (int i = 0; i < n; i++) if (sites[i] == p) return 1;
-    return 0;
+    int lo = 0, hi = n;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (sites[mid] < p) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < n && sites[lo] == p;
+}
+#define WS_EXPLICIT_LIST(name)                                              \
+    static uint32_t ws_explicit_##name##_sites[WS_EXPLICIT_CULL_SITES_MAX]; \
+    static int ws_explicit_##name##_n = 0
+WS_EXPLICIT_LIST(bias);
+WS_EXPLICIT_LIST(slti);
+WS_EXPLICIT_LIST(range);
+WS_EXPLICIT_LIST(slti_lower);
+WS_EXPLICIT_LIST(negsub);
+WS_EXPLICIT_LIST(vxrange);
+WS_EXPLICIT_LIST(depth);
+WS_EXPLICIT_LIST(plane_nx);
+WS_EXPLICIT_LIST(xclip_load);
+WS_EXPLICIT_LIST(bltz);
+WS_EXPLICIT_LIST(bgez);
+WS_EXPLICIT_LIST(branch_keep);
+WS_EXPLICIT_LIST(clip_edge_x_load);
+static uint32_t ws_clip_edge_width = 320;
+
+void gpu_ws_set_explicit_cull_sites(const uint32_t *bias, int nbias,
+                                    const uint32_t *slti, int nslti,
+                                    const uint32_t *range, int nrange) {
+    ws_explicit_bias_n = ws_explicit_store(ws_explicit_bias_sites, bias,
+                                           nbias, "bias_sites");
+    ws_explicit_slti_n = ws_explicit_store(ws_explicit_slti_sites, slti,
+                                           nslti, "slti_sites");
+    ws_explicit_range_n = ws_explicit_store(ws_explicit_range_sites, range,
+                                            nrange, "range_sites");
 }
 int psx_ws_is_cull_bias_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_bias_sites, ws_explicit_bias_n, pc);
@@ -594,52 +632,31 @@ int psx_ws_is_cull_bias_site(uint32_t pc) {
 int psx_ws_is_cull_slti_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_slti_sites, ws_explicit_slti_n, pc);
 }
-static uint32_t ws_explicit_slti_lower_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static int ws_explicit_slti_lower_n = 0;
 void gpu_ws_set_slti_lower_cull_sites(const uint32_t *sites, int nsites) {
-    if (nsites < 0) nsites = 0;
-    if (nsites > WS_EXPLICIT_CULL_SITES_MAX)
-        nsites = WS_EXPLICIT_CULL_SITES_MAX;
-    ws_explicit_slti_lower_n = nsites;
-    for (int i = 0; i < nsites; i++)
-        ws_explicit_slti_lower_sites[i] = sites[i] & 0x1FFFFFFFu;
+    ws_explicit_slti_lower_n = ws_explicit_store(
+        ws_explicit_slti_lower_sites, sites, nsites, "slti_lower_sites");
 }
 int psx_ws_is_cull_slti_lower_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_slti_lower_sites,
                             ws_explicit_slti_lower_n, pc);
 }
-static uint32_t ws_explicit_negsub_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static int ws_explicit_negsub_n = 0;
 void gpu_ws_set_negsub_cull_sites(const uint32_t *sites, int nsites) {
-    if (nsites < 0) nsites = 0;
-    if (nsites > WS_EXPLICIT_CULL_SITES_MAX) nsites = WS_EXPLICIT_CULL_SITES_MAX;
-    ws_explicit_negsub_n = nsites;
-    for (int i = 0; i < nsites; i++)
-        ws_explicit_negsub_sites[i] = sites[i] & 0x1FFFFFFFu;
+    ws_explicit_negsub_n = ws_explicit_store(
+        ws_explicit_negsub_sites, sites, nsites, "negsub_sites");
 }
 int psx_ws_is_cull_negsub_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_negsub_sites, ws_explicit_negsub_n, pc);
 }
-static uint32_t ws_explicit_vxrange_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static int ws_explicit_vxrange_n = 0;
 void gpu_ws_set_vxrange_cull_sites(const uint32_t *sites, int nsites) {
-    if (nsites < 0) nsites = 0;
-    if (nsites > WS_EXPLICIT_CULL_SITES_MAX) nsites = WS_EXPLICIT_CULL_SITES_MAX;
-    ws_explicit_vxrange_n = nsites;
-    for (int i = 0; i < nsites; i++)
-        ws_explicit_vxrange_sites[i] = sites[i] & 0x1FFFFFFFu;
+    ws_explicit_vxrange_n = ws_explicit_store(
+        ws_explicit_vxrange_sites, sites, nsites, "vxrange_sites");
 }
 int psx_ws_is_cull_vxrange_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_vxrange_sites, ws_explicit_vxrange_n, pc);
 }
-static uint32_t ws_explicit_depth_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static int ws_explicit_depth_n = 0;
 void gpu_ws_set_depth_cull_sites(const uint32_t *sites, int nsites) {
-    if (nsites < 0) nsites = 0;
-    if (nsites > WS_EXPLICIT_CULL_SITES_MAX) nsites = WS_EXPLICIT_CULL_SITES_MAX;
-    ws_explicit_depth_n = nsites;
-    for (int i = 0; i < nsites; i++)
-        ws_explicit_depth_sites[i] = sites[i] & 0x1FFFFFFFu;
+    ws_explicit_depth_n = ws_explicit_store(
+        ws_explicit_depth_sites, sites, nsites, "depth_sites");
 }
 int psx_ws_is_cull_depth_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_depth_sites, ws_explicit_depth_n, pc);
@@ -657,14 +674,9 @@ int32_t psx_ws_depth_bound(int32_t imm) {
 int psx_ws_is_cull_range_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_range_sites, ws_explicit_range_n, pc);
 }
-static uint32_t ws_explicit_plane_nx_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static int ws_explicit_plane_nx_n = 0;
 void gpu_ws_set_plane_nx_sites(const uint32_t *sites, int nsites) {
-    if (nsites < 0) nsites = 0;
-    if (nsites > WS_EXPLICIT_CULL_SITES_MAX) nsites = WS_EXPLICIT_CULL_SITES_MAX;
-    ws_explicit_plane_nx_n = nsites;
-    for (int i = 0; i < nsites; i++)
-        ws_explicit_plane_nx_sites[i] = sites[i] & 0x1FFFFFFFu;
+    ws_explicit_plane_nx_n = ws_explicit_store(
+        ws_explicit_plane_nx_sites, sites, nsites, "plane_nx_sites");
 }
 int psx_ws_is_cull_plane_nx_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_plane_nx_sites, ws_explicit_plane_nx_n, pc);
@@ -685,17 +697,59 @@ int32_t psx_ws_plane_nx(int32_t nx) {
     return (int32_t)result;
 }
 
-static uint32_t ws_explicit_xclip_load_sites[WS_EXPLICIT_CULL_SITES_MAX];
-static int ws_explicit_xclip_load_n = 0;
 void gpu_ws_set_xclip_load_sites(const uint32_t *sites, int nsites) {
-    if (nsites < 0) nsites = 0;
-    if (nsites > WS_EXPLICIT_CULL_SITES_MAX) nsites = WS_EXPLICIT_CULL_SITES_MAX;
-    ws_explicit_xclip_load_n = nsites;
-    for (int i = 0; i < nsites; i++)
-        ws_explicit_xclip_load_sites[i] = sites[i] & 0x1FFFFFFFu;
+    ws_explicit_xclip_load_n = ws_explicit_store(
+        ws_explicit_xclip_load_sites, sites, nsites, "xclip_load_sites");
 }
 int psx_ws_is_cull_xclip_load_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_xclip_load_sites, ws_explicit_xclip_load_n, pc);
+}
+
+/* Explicit left-edge branch kinds and forced-keep branches for interpreted
+ * code. Native code compiles the same lists in (code_generator.cpp); these
+ * keep a dirty-RAM copy of a listed site on the same semantics. */
+void gpu_ws_set_branch_cull_sites(const uint32_t *bltz, int nbltz,
+                                  const uint32_t *bgez, int nbgez,
+                                  const uint32_t *keep, int nkeep) {
+    ws_explicit_bltz_n = ws_explicit_store(ws_explicit_bltz_sites, bltz,
+                                           nbltz, "bltz_sites");
+    ws_explicit_bgez_n = ws_explicit_store(ws_explicit_bgez_sites, bgez,
+                                           nbgez, "bgez_sites");
+    ws_explicit_branch_keep_n = ws_explicit_store(
+        ws_explicit_branch_keep_sites, keep, nkeep, "branch_keep_sites");
+}
+int psx_ws_is_cull_bltz_site(uint32_t pc) {
+    return ws_explicit_site(ws_explicit_bltz_sites, ws_explicit_bltz_n, pc);
+}
+int psx_ws_is_cull_bgez_site(uint32_t pc) {
+    return ws_explicit_site(ws_explicit_bgez_sites, ws_explicit_bgez_n, pc);
+}
+int psx_ws_is_cull_branch_keep_site(uint32_t pc) {
+    return ws_explicit_site(ws_explicit_branch_keep_sites,
+                            ws_explicit_branch_keep_n, pc);
+}
+void gpu_ws_set_clip_edge_x_load_sites(const uint32_t *sites, int nsites,
+                                       uint32_t width) {
+    ws_explicit_clip_edge_x_load_n = ws_explicit_store(
+        ws_explicit_clip_edge_x_load_sites, sites, nsites,
+        "clip_edge_x_load_sites");
+    ws_clip_edge_width = width ? width : 320u;
+}
+int psx_ws_is_cull_clip_edge_x_load_site(uint32_t pc) {
+    return ws_explicit_site(ws_explicit_clip_edge_x_load_sites,
+                            ws_explicit_clip_edge_x_load_n, pc);
+}
+uint32_t psx_ws_clip_edge_width(void) { return ws_clip_edge_width; }
+/* [widescreen.cull] bgez_sites: `bgez SX, keep` keeps while SX >= -margin.
+ * Returns the branch predicate. Identity at margin 0 (4:3). */
+int psx_ws_cull_bgez(uint32_t v) {
+    return psx_ws_cull_bgez_value((int32_t)v, psx_ws_x_margin());
+}
+/* [widescreen.cull] clip_edge_x_load_sites: a loaded clip bound equal to the
+ * screen's left edge (0) becomes -margin and one equal to its right edge (w)
+ * becomes w+margin; interior bounds are unchanged. Identity at margin 0. */
+uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w) {
+    return psx_ws_clip_edge_x_value(v, w, psx_ws_x_margin());
 }
 /* Per-primitive X-reject bound ([widescreen.cull] xclip_load_sites). While
  * the margins are revealed the reject is disabled (INT32_MAX passes every

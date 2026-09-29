@@ -51,6 +51,7 @@
 #include "mod_plugins.h"   /* psx_mod_render_pass_status */
 #include "lockstep.h"
 #include "guest_tty.h"
+#include "frame_fingerprint.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -155,58 +156,26 @@ int debug_server_fmv_quiet(void)
 uint64_t s_frame_count = 0;
 
 /* ---- Layer-1 first-divergence per-frame fingerprint ----------------------
- * Cumulative, ORDER-DEPENDENT rolling hashes over MAIN-RAM guest writes.
- * The point: native and dirty-interp are the SAME deterministic program run
- * two ways; they must produce an identical sequence of (addr,val,store_pc)
- * guest-RAM writes until a codegen/timing bug forks them. A guest RAM write
- * (and the PC issuing it) is pure guest semantics — granularity-invariant
- * across native vs interp (unlike host block/dispatch counts). We accumulate
- * two rolling hashes and snapshot them once per guest frame. Diff two runs'
- * per-frame columns: the FIRST frame whose hash differs is the first-divergence
- * frame, found in O(1) instead of O(n) function guesses. wr_hash vs pc_hash
- * classifies the fork: pc differs but wr matches => same writes via a different
- * control path; wr differs => actual state divergence. Reusable for any title.
- * Hashed over live main RAM (phys < live RAM end) only — game state lives there; MMIO/
- * scratchpad churn (device polling) would add benign cross-backend noise. */
-uint64_t g_fp_wr_hash    = 1469598103934665603ULL;  /* FNV-1a-style seed (main RAM) */
-uint64_t g_fp_pc_hash    = 1469598103934665603ULL;  /* store-PC path sig (main RAM)  */
-uint64_t g_fp_write_count = 0;
-uint64_t g_fp_mmio_hash  = 1469598103934665603ULL;  /* SEPARATE: device-register writes */
-uint64_t g_fp_mmio_count = 0;
-uint64_t g_fp_sp_hash    = 1469598103934665603ULL;  /* SEPARATE: scratchpad (0x1F8000xx) writes */
-uint64_t g_fp_sp_count   = 0;
+ * Cumulative hashes over guest writes, snapshotted once per guest frame.
+ * Native and dirty-interp are the SAME deterministic program run two ways;
+ * diff two runs' per-frame columns and the FIRST frame that differs is the
+ * first-divergence frame, found in O(1) instead of O(n) function guesses.
+ * Column semantics (which ones judge guest state, which only locate a fork)
+ * live in frame_fingerprint.h and docs/TCP_COMMANDS.md. Reusable for any
+ * title. */
+static PsxFrameFingerprint s_fp = PSX_FRAME_FINGERPRINT_INIT;
 #define FP_RING_CAP 32768
-typedef struct { uint32_t frame; uint64_t wr_hash; uint64_t pc_hash; uint64_t wcount;
-                 uint64_t mmio_hash; uint64_t mmio_count;
-                 uint64_t sp_hash; uint64_t sp_count; uint64_t cyc; } FpEntry;
+typedef struct { uint32_t frame; PsxFrameFingerprint fp; uint64_t cyc; } FpEntry;
 static PSX_BSS FpEntry  s_fp_ring[FP_RING_CAP];
 static uint32_t s_fp_head  = 0;
 static uint64_t s_fp_total = 0;
 
-/* Record a guest WRITE into the per-frame fingerprint. Live main RAM
- * feeds the proven wr/pc hashes. Scratchpad (0x1F800000..0x1F8003FF) feeds a
- * SEPARATE sp_hash — it was previously dropped entirely (the blind spot that
- * hid a possible pre-1823 scratchpad-state fork), but folding it into wr_hash
- * would pollute the main-RAM signal with benign device-poll churn, so it gets
- * its own classified column instead. */
+/* Record a guest WRITE into the per-frame fingerprint. Live main RAM feeds
+ * the wr/pc/wc/ws columns; scratchpad (0x1F800000..0x1F8003FF) feeds its own
+ * sp column so device-poll churn there cannot pollute the main-RAM signal. */
 static inline void fp_record_write(uint32_t phys, uint32_t val, uint32_t pc)
 {
-    if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {   /* scratchpad — separate hash */
-        uint64_t s = g_fp_sp_hash;
-        s = (s ^ (uint64_t)phys) * 1099511628211ULL;
-        s = (s ^ (uint64_t)val)  * 1099511628211ULL;
-        s = (s ^ (uint64_t)pc)   * 1099511628211ULL;
-        g_fp_sp_hash = s;
-        g_fp_sp_count++;
-        return;
-    }
-    if (phys >= psx_ram_live_bytes()) return;       /* main RAM only */
-    uint64_t h = g_fp_wr_hash;
-    h = (h ^ (uint64_t)phys) * 1099511628211ULL;
-    h = (h ^ (uint64_t)val)  * 1099511628211ULL;
-    g_fp_wr_hash = h;
-    g_fp_pc_hash = (g_fp_pc_hash ^ (uint64_t)pc) * 1099511628211ULL;
-    g_fp_write_count++;
+    psx_fp_record_write(&s_fp, phys, val, pc, psx_ram_live_bytes());
 }
 
 /* MMIO/device-register write signature — separate hash so the diff can tell a
@@ -215,25 +184,14 @@ static inline void fp_record_write(uint32_t phys, uint32_t val, uint32_t pc)
  * only sees the RAM AFTERMATH of a CD/IRQ-register divergence. */
 static inline void fp_record_mmio(uint32_t addr, uint32_t val, uint32_t pc)
 {
-    uint64_t h = g_fp_mmio_hash;
-    h = (h ^ (uint64_t)addr) * 1099511628211ULL;
-    h = (h ^ (uint64_t)val)  * 1099511628211ULL;
-    h = (h ^ (uint64_t)pc)   * 1099511628211ULL;
-    g_fp_mmio_hash = h;
-    g_fp_mmio_count++;
+    psx_fp_record_mmio(&s_fp, addr, val, pc);
 }
 
 static void fp_snapshot(uint32_t frame)
 {
     FpEntry *e = &s_fp_ring[s_fp_head];
-    e->frame      = frame;
-    e->wr_hash    = g_fp_wr_hash;
-    e->pc_hash    = g_fp_pc_hash;
-    e->wcount     = g_fp_write_count;
-    e->mmio_hash  = g_fp_mmio_hash;
-    e->mmio_count = g_fp_mmio_count;
-    e->sp_hash    = g_fp_sp_hash;
-    e->sp_count   = g_fp_sp_count;
+    e->frame = frame;
+    e->fp    = s_fp;
     { extern uint64_t psx_get_cycle_count(void); e->cyc = psx_get_cycle_count(); }
     s_fp_head  = (s_fp_head + 1) % FP_RING_CAP;
     s_fp_total++;
@@ -5025,10 +4983,13 @@ static void handle_frame(int id, const char *json)
 
 /* Layer-1 first-divergence: dump the per-frame write fingerprint ring.
  * Params: count (default 1024), frame_lo / frame_hi (optional inclusive
- * filter). Entries are oldest-first within the window. Diff the wr/pc columns
- * of two runs (native vs interp/oracle): the first frame whose wr or pc differs
- * is the first-divergence frame. Small integer fields only — no large/ragged
+ * filter). Entries are oldest-first within the window. Judge two runs
+ * (native vs interp/oracle) on cyc/wc/ws/mmio/mc/sp/sc/qc; wr/pc are ordered
+ * locators (frame_fingerprint.h). Small integer fields only — no large/ragged
  * payload, so it never trips the trace-dump JSON/eviction problems. */
+/* Longest entry the format below can produce: every hash at 16 hex digits and
+ * every counter at 20 decimal digits comes to 284 bytes with the separator. */
+#define FP_JSON_ENTRY_MAX 320
 /* frame_fingerprint reset_on_load=1: restart the rolling hashes and the ring
  * when the next savestate load completes, so two runs that load the same state
  * (for example with and without a presentation mod) compare frame by frame
@@ -5038,9 +4999,7 @@ void debug_server_note_savestate_loaded(void)
 {
     if (!s_fp_reset_on_load) return;
     s_fp_reset_on_load = 0;
-    g_fp_wr_hash = g_fp_pc_hash = 1469598103934665603ULL;
-    g_fp_mmio_hash = g_fp_sp_hash = 1469598103934665603ULL;
-    g_fp_write_count = g_fp_mmio_count = g_fp_sp_count = 0;
+    s_fp = (PsxFrameFingerprint)PSX_FRAME_FINGERPRINT_INIT;
     s_fp_head = 0;
     s_fp_total = 0;
 }
@@ -5061,7 +5020,7 @@ static void handle_frame_fingerprint(int id, const char *json)
     uint32_t avail = (s_fp_total < FP_RING_CAP) ? (uint32_t)s_fp_total : FP_RING_CAP;
     uint32_t start = (s_fp_total < FP_RING_CAP) ? 0 : s_fp_head;
 
-    size_t BUF = 512 + (size_t)count * 224;
+    size_t BUF = 512 + (size_t)count * FP_JSON_ENTRY_MAX;
     char *out = (char *)malloc(BUF);
     if (!out) { send_err(id, "oom"); return; }
     size_t pos = 0;
@@ -5075,16 +5034,19 @@ static void handle_frame_fingerprint(int id, const char *json)
         if (fhi >= 0 && (int)e->frame > fhi) continue;
         pos += snprintf(out + pos, BUF - pos,
                         "%s{\"frame\":%u,\"wr\":\"0x%016llx\",\"pc\":\"0x%016llx\",\"wc\":%llu,"
+                        "\"ws\":\"0x%016llx\","
                         "\"mmio\":\"0x%016llx\",\"mc\":%llu,"
-                        "\"sp\":\"0x%016llx\",\"sc\":%llu,\"cyc\":%llu}",
+                        "\"sp\":\"0x%016llx\",\"sc\":%llu,\"qc\":%llu,\"cyc\":%llu}",
                         emitted ? "," : "", e->frame,
-                        (unsigned long long)e->wr_hash,
-                        (unsigned long long)e->pc_hash,
-                        (unsigned long long)e->wcount,
-                        (unsigned long long)e->mmio_hash,
-                        (unsigned long long)e->mmio_count,
-                        (unsigned long long)e->sp_hash,
-                        (unsigned long long)e->sp_count,
+                        (unsigned long long)e->fp.wr_hash,
+                        (unsigned long long)e->fp.pc_hash,
+                        (unsigned long long)e->fp.wcount,
+                        (unsigned long long)e->fp.wsum,
+                        (unsigned long long)e->fp.mmio_hash,
+                        (unsigned long long)e->fp.mmio_count,
+                        (unsigned long long)e->fp.sp_hash,
+                        (unsigned long long)e->fp.sp_count,
+                        (unsigned long long)e->fp.quiet_count,
                         (unsigned long long)e->cyc);
         emitted++;
     }
@@ -9734,10 +9696,13 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
     (void)phys; (void)old_val; (void)new_val; (void)width;
     return;
 #endif
-    if (s_fmv_quiet) return;
     /* Render passes are rolled back; keep them out of the live timeline's
      * fingerprints and write traces (docs/RENDER_PASSES.md). */
     if (g_psx_render_pass_active) return;
+    if (s_fmv_quiet) {
+        if (psx_fp_write_eligible(phys, psx_ram_live_bytes())) psx_fp_note_quiet(&s_fp);
+        return;
+    }
     if (is_card_critical_addr(phys)) card_trace_record(phys, old_val, new_val, width);
     fp_record_write(phys, new_val, g_debug_last_store_pc);
     {
@@ -9767,7 +9732,7 @@ void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width)
     (void)addr; (void)val; (void)width;
     return;
 #endif
-    if (s_fmv_quiet) return;
+    if (s_fmv_quiet) { psx_fp_note_quiet(&s_fp); return; }
     /* First-divergence fingerprint + frame recorder also see device writes. */
     fp_record_mmio(addr, val, g_debug_last_store_pc);
     rec_event(REC_KIND_MMIO_W, addr, val, g_debug_last_store_pc,
@@ -12379,7 +12344,8 @@ static void handle_overlay_loader_status(int id, const char *json)
             "\"reval_attempts\":%u,\"reval_crc_miss\":%u,\"last_reval_crc\":\"0x%08X\","
             "\"gen_fastpath\":%llu,\"range_links\":%d,\"range_index_overflow\":%d,"
             "\"lazy_manifests\":%d,\"lazy_manifest_overflow\":%d,"
-            "\"candidate_overflow\":%llu,\"pair_aliases\":%llu",
+            "\"candidate_overflow\":%llu,\"pair_aliases\":%llu,"
+            "\"segment_alias_interp\":%llu",
             r0v, r0w, r0lo, r0hi, r0crc, ratt, rmiss, rlast,
             (unsigned long long)overlay_loader_gen_fastpath(),
             overlay_loader_range_link_count(),
@@ -12387,7 +12353,8 @@ static void handle_overlay_loader_status(int id, const char *json)
             overlay_loader_lazy_manifest_count(),
             overlay_loader_lazy_manifest_overflow(),
             (unsigned long long)overlay_loader_candidate_overflow(),
-            (unsigned long long)overlay_loader_pair_aliases());
+            (unsigned long long)overlay_loader_pair_aliases(),
+            (unsigned long long)overlay_loader_segment_alias_interp());
         uint64_t nd=0, ni=0, sn=0, ss=0, sc=0, sx=0;
         psx_interrupt_delivery_diag(&nd, &ni, &sn, &ss, &sc, &sx);
         n += snprintf(buf + n, sizeof(buf) - n,

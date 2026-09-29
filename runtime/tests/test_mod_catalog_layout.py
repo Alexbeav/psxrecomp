@@ -23,7 +23,7 @@ It also pins two source invariants in runtime.cmake, so the layout cannot drift
 back into per-title copies:
   * the framework declares PRELOADED_MODS_DIR and stages the title's catalog,
   * the build-time guard is registered through cmake_language(DEFER), which is
-    what makes it run AFTER any POST_BUILD command a title registered later.
+    what lets it validate the sibling runtime targets in one output directory.
 """
 
 from __future__ import annotations
@@ -247,7 +247,7 @@ def main() -> int:
         r = run_guard(args.cmake, mods, manifest, require_staged=1)
         check(
             r.returncode != 0,
-            "POST_BUILD invocation FAILS when staging produced nothing",
+            "staging invocation FAILS when staging produced nothing",
         )
 
         # ---- 7. sibling runtime target sharing one output directory ------
@@ -404,7 +404,13 @@ def main() -> int:
     )
     check(
         "cmake_language(DEFER CALL _psxrt_finalize_mod_catalog_guards" in text,
-        "the build-time guard is deferred, so it runs after a title's POST_BUILD",
+        "the build-time guard is deferred so sibling runtime targets are known",
+    )
+    check(
+        'add_custom_target("${_stage_target}"' in text
+        and 'add_custom_target("${_guard_target}"' in text
+        and 'add_dependencies(${_t} "${_guard_target}")' in text,
+        "catalog staging and validation are portable prerequisite targets",
     )
     check(
         "psx_check_mod_catalog.cmake" in text,

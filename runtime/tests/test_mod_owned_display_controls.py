@@ -45,8 +45,8 @@ assert MAIN.index("g_auto_skip_fmv = 0;") < MAIN.index("mod_runtime_activate_plu
 
 # Session hygiene: mod-owned presentation state must not outlive the session
 # that set it. The one in-process second session is the lobby rematch after a
-# netplay match; it jumps past the first-boot block, so the reset runs on both
-# paths. The reachable leak is the netplay local viewport's Fit/aspect into an
+# netplay match; it jumps past the first-boot block, so both paths call the
+# same session start, which resets before activating. The reachable leak is the netplay local viewport's Fit/aspect into an
 # offline rematch; the rest of the list is defensive. The first-call capture
 # itself is exercised by mod_session_baseline_test (behavioural), which cannot
 # see main.cpp; this guard pins main.cpp's glue to that helper (the baseline it
@@ -164,34 +164,63 @@ assert set_bezel.index("if (s_bezel_tex) { glDeleteTextures(1, &s_bezel_tex); s_
     "gl_renderer_set_bezel(NULL, ...) must delete and forget the texture"
 assert "if (!s_bezel_tex || ww <= 0 || wh <= 0) return;" in GL
 
-# First-boot session block: reset immediately before activation.
-assert "reset_mod_owned_presentation();\n    mod_runtime_activate_plugins();" in MAIN, \
-    "reset must run immediately before mod activation"
+# Session start: one sequence for every session, after its commit or netplay
+# clear. It clears the controller, load and disc-speed choices, resets
+# mod-owned presentation state, activates, then applies what activation chose.
+session_start = MAIN.index("auto start_mod_session = [&](bool netplay) {")
+session = MAIN[session_start:MAIN.index("\n    };\n", session_start)]
+order = [session.index(step) for step in (
+    "g_mod_controller_mode_override.fill(-1);",
+    "policy = ModControllerPresentationPolicy{};",
+    "g_mod_load_wall_multiplier = -1;",
+    "g_mod_disc_speed_divisor = -1;",
+    "g_mod_disc_instant_rate = -1;",
+    "g_turbo_load_wall_multiplier = 0;",
+    "reset_mod_owned_presentation();\n        mod_runtime_activate_plugins();",
+    "apply_netplay_local_viewport_aspect(netplay);",
+    "player_mode[i] = g_mod_controller_mode_override[i];",
+    "g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;",
+)]
+assert order == sorted(order), \
+    "session start must reset, then activate, then apply what activation chose"
+# Nothing activates or resets outside that sequence.
+assert MAIN.count("mod_runtime_activate_plugins();") == 1, \
+    "plugins must activate only in start_mod_session"
+assert MAIN.count("reset_mod_owned_presentation();") == 1, \
+    "the mod-owned reset must run only in start_mod_session"
+
+# First boot: commit (or netplay clear), then the session start, then the
+# disc the plan selects, all above session_reboot.
+reboot = MAIN.index("\nsession_reboot:\n")
+first_commit = MAIN.index("mod_runtime_commit(resolved_disc, &mod_error)")
+first_start = MAIN.index("start_mod_session(net_cfg.enabled);")
+first_disc = MAIN.index("std::string disc_path_str = session_disc_path(resolved_disc);")
+assert first_commit < session_start < first_start < first_disc < reboot, \
+    "first boot must commit, start the session, then mount the plan's disc"
 
 # Soft return (rematch) re-enters below that block via `goto session_reboot`,
-# so the rematch path must reset too, after its commit / netplay clear.
+# so the rematch path runs the same session start after its commit / netplay
+# clear, and mounts the disc the new plan selects.
 rematch = MAIN[MAIN.index('"psxrecomp: cannot clear mods for netplay "'):]
 rematch = rematch[:rematch.index("goto session_reboot;")]
 commit = rematch.index("mod_runtime_commit(resolved_disc,")
-reset_at = rematch.index("reset_mod_owned_presentation();")
-viewport = rematch.index("apply_netplay_local_viewport_aspect(net_cfg.enabled);")
-assert commit < reset_at < viewport, \
-    "rematch must reset mod-owned state after its commit, before netplay aspect"
-# If the rematch path ever activates plugins, the reset must come first, or it
-# would undo what activation just set.
-if "mod_runtime_activate_plugins();" in rematch:
-    assert reset_at < rematch.index("mod_runtime_activate_plugins();"), \
-        "rematch must reset mod-owned state before activation"
+rematch_session = rematch.index("start_mod_session(net_cfg.enabled);")
+rematch_disc = rematch.index("disc_path_str = session_disc_path(resolved_disc);")
+assert commit < rematch_session < rematch_disc, \
+    "rematch must commit, start the session, then mount the plan's disc"
+assert MAIN.count("start_mod_session(net_cfg.enabled);") == 2, \
+    "exactly the first boot and the rematch start a session"
 
 # Rematch 4:3 re-clamp: the launcher round-trips the previous match's aspect
 # (16:9/21:9 from the netplay local viewport) through ls.aspect_index. While
 # widescreen is mod-owned the Settings aspect is 4:3, so the rematch path
-# re-applies that clamp after the launcher, before the local viewport.
+# re-applies that clamp after the launcher, before the session start, where
+# a plugin's activation or the netplay local viewport can still replace it.
 clamp = "if (!ws_offered) {\n                g_video_aspect_num = 4;\n                g_video_aspect_den = 3;\n            }"
 assert rematch.count(clamp) == 1, "rematch must re-clamp the aspect to 4:3"
 clamp_at = rematch.index(clamp)
-assert commit < clamp_at < viewport, \
-    "4:3 re-clamp must follow the commit and precede the netplay local viewport"
+assert commit < clamp_at < rematch_session, \
+    "4:3 re-clamp must follow the commit and precede the session start"
 rematch_start = MAIN.index('"psxrecomp: cannot clear mods for netplay "')
 assert MAIN.rfind("case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; break;",
                   0, rematch_start) > MAIN.index("soft_return_lobby:"), \

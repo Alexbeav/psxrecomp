@@ -106,7 +106,13 @@
  *      the version stays. The emit-content change (PGXP_*() macros in all
  *      generated C) is covered by the codegen hash + CODEGEN_VER below. */
 /* v23: native overlay forwarding for signed screen bounds and mod entry hooks. */
-#define PSX_OVERLAY_ABI_VERSION 23
+/* v24: last_store_pc pointer. The emitter writes g_debug_last_store_pc before
+ *      every guest store, and the runtime reads it in every build: memory.c's
+ *      store filters key on it, and debug tooling attributes writes with it.
+ *      DLLs used to keep a private copy, so an overlay store left the host's
+ *      value naming an older store. The DLL now writes through this pointer
+ *      (cpu_state.h maps the name in PSX_OVERLAY_DLL_BUILD). */
+#define PSX_OVERLAY_ABI_VERSION 24
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -342,6 +348,10 @@ typedef struct {
     const PGXPHooks *pgxp;
     int32_t (*ws_screen_x_bound)(int32_t vanilla);
     void (*mod_function_entry)(CPUState *cpu, uint32_t address);
+    /* The host's g_debug_last_store_pc (ABI v24; see the version-history note
+     * above). Overlay stores write it exactly as static and interpreted stores
+     * do. NULL leaves the DLL writing a private copy nothing reads. */
+    uint32_t *last_store_pc;
 } OverlayCallbacks;
 
 #ifdef __cplusplus

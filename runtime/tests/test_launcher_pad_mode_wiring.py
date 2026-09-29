@@ -127,10 +127,12 @@ assert calls[1] < MAIN.index(PERSIST_US), (
 )
 
 # ---- the mod override still cannot be lost across a soft return ----------
-# `goto session_reboot` re-enters the emulator BELOW the block that applies
-# g_mod_controller_mode_override, so the soft-return readback is the only place
-# an active override can be re-asserted. That is precisely why the resolution
-# helper takes it as an argument instead of the clamp being unconditional.
+# `goto session_reboot` re-enters the emulator BELOW the first-boot block, so
+# the rematch calls start_mod_session() itself: it clears the override,
+# re-runs activation and applies the new session's override after the
+# soft-return readback. The readback still passes the live override so the
+# resolution helper never clamps an active one away, which is why it takes it
+# as an argument instead of the clamp being unconditional.
 APPLY = "player_mode[i] = g_mod_controller_mode_override[i];"
 assert APPLY in MAIN, "the mod controller-mode override apply block is gone"
 assert "goto session_reboot;" in MAIN

@@ -750,6 +750,21 @@ if(BUILD_TESTING)
     add_test(NAME overlay_store_cycle_barrier_test
              COMMAND overlay_store_cycle_barrier_test)
 
+    # Overlay stores update the host's store-PC breadcrumb (ABI v24). Built
+    # with the defines compile_overlays.py gives every shard.
+    add_executable(overlay_store_pc_forwarding_test
+        tests/test_overlay_store_pc_forwarding.c)
+    target_include_directories(overlay_store_pc_forwarding_test PRIVATE include)
+    target_compile_definitions(overlay_store_pc_forwarding_test PRIVATE
+        PSX_OVERLAY_DLL_BUILD PSX_NO_DEBUG_TOOLS PSX_ENABLE_BLOCK_CYCLES=1)
+    add_test(NAME overlay_store_pc_forwarding_test
+             COMMAND overlay_store_pc_forwarding_test)
+
+    # frame_fingerprint judge columns are blind to device-write service order.
+    add_executable(frame_fingerprint_test tests/test_frame_fingerprint.c)
+    target_include_directories(frame_fingerprint_test PRIVATE include)
+    add_test(NAME frame_fingerprint_test COMMAND frame_fingerprint_test)
+
     add_executable(psx_cycle_event_boundaries_test
         tests/test_psx_cycle_event_boundaries.c
         src/psx_cycles.c)
@@ -795,6 +810,8 @@ if(BUILD_TESTING)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
         endif()
+        add_test(NAME disc_picker_ascii_test COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
         add_test(NAME frame_interpolation_context_ownership_test

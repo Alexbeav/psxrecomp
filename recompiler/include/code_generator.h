@@ -120,6 +120,15 @@ struct CodeGenConfig {
     // LEFT-edge counterpart to ws_cull_slti_sites ([widescreen.cull]
     // bltz_sites), for X-only funnels the auto-detector cannot qualify.
     std::set<uint32_t> ws_cull_bltz_sites;
+    // `bgez rs, keep` emitted through psx_ws_cull_bgez ([widescreen.cull]
+    // bgez_sites): keep while rs >= -margin. Pairs with bltz_sites to make a
+    // signed per-vertex left-edge chain exact. Identity at 4:3.
+    std::set<uint32_t> ws_cull_bgez_sites;
+    // lh/lhu/lw screen-X clip-bound loads emitted through psx_ws_clip_edge_x
+    // ([widescreen.cull] clip_edge_x_load_sites): 0 -> -margin and
+    // ws_cull_clip_edge_width -> width+margin while revealed; identity at 4:3.
+    std::set<uint32_t> ws_cull_clip_edge_x_load_sites;
+    uint32_t ws_cull_clip_edge_width = 0x140;
 
     // Explicit horizontal low-edge widen sites ([widescreen.cull]
     // negsub_sites): `subu rd, zero, rs` becomes `-rs - x_margin`.
@@ -442,6 +451,9 @@ private:
         std::map<uint32_t, std::vector<uint32_t>>& out_edges);
 
     // Control flow translation
+    // Main-EXE opcode guard for bltz_sites, bgez_sites and branch_keep_sites
+    // (exits 1 on a mismatch; overlay mode keeps vanilla code).
+    void check_explicit_branch_site(uint32_t addr, uint32_t instr) const;
     std::string generate_branch_condition(uint32_t instr, uint32_t addr);
     std::string translate_branch(const ControlFlowInstr& cf, uint32_t fall_through);
     std::string translate_jump(const ControlFlowInstr& cf);
