@@ -156,3 +156,49 @@ These are the recorded oracle values. `icache_miss` is 19 (+16) on the current
 ROM and 17 (+14) on the 13-loop ROM of 2026-06-27, because the loop moved
 within its cache line (see the README). If a build disagrees, fix the oracle
 before comparing anything against it.
+
+## 7. Boot anchors: arm cyc_watch from power-on
+
+Reset, the kernel copy, the first A0/B0/C0 calls and the shell pass within the
+first frames, before a TCP `cyc_watch` arm can land. Both backends therefore
+read the watch from their environment at start-up:
+
+| variable | meaning |
+|---|---|
+| `PSX_CYC_WATCH` | anchor PC, or `<pc>-<end>` for region mode (each hit is one pass's cycle count) |
+| `PSX_CYC_WATCH_N` | hits to record (default 16) |
+| `PSX_BEETLE_UNPACED=1` | psx-beetle only: skip the 59.94 Hz wall-clock pacing. Guest timing is unchanged; headless boots just finish sooner |
+
+Read the rings with `tools/cycle_compare.py <pc> --no-arm` (or `cyc_watch_dump`
+on each port). For an LLE boot on the native side, set `PSX_BIOS_HLE=0`.
+
+Anchor keys can differ between the two sides. A BIOS copy window declared with
+`dispatch_key = "rom"` keeps its ROM address as the native key; Beetle sees the
+PC the code runs at. Both `bios/OpenBIOS.toml` and `bios/SCPH1001.toml` declare
+the shell that way:
+
+| anchor | Beetle | native |
+|---|---|---|
+| OpenBIOS shell entry | `0x80030000` | `0xBFC0A500` |
+| SCPH-1001 shell entry | `0x80030000` | `0xBFC18000` |
+
+A native watch on `0x80030000` records nothing. Kernel windows
+(`dispatch_key = "ram"`) and ROM code use the same PC on both sides.
+
+Example, OpenBIOS shell entry (the cycle-test disc from step 6 inserted):
+
+```bash
+PSX_CYC_WATCH=0x80030000 PSX_CYC_WATCH_N=1 PSX_BEETLE_UNPACED=1 \
+SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+    "$PSXRECOMP/runtime/build-beetle/psx-beetle" ~/psx-oracle/bios/scph5501.bin \
+    --port 4382 --disc disc/cyctest.cue &
+PSX_CYC_WATCH=0xBFC0A500 PSX_CYC_WATCH_N=1 PSX_BIOS_HLE=0 \
+    build/Cycle_Test_ROM --no-launcher --headless --game game.toml \
+    --bios ../../bios/openbios.bin --disc disc/cyctest.cue --debug-port 4600 &
+python3 ../cycle_compare.py 0x80030000 --no-arm --hits 1 --native-port 4600
+```
+
+(run from `tools/cycle_testrom`). Beetle records its first hit at guest cycle
+5,015,670 with `bios/openbios.bin` (SHA-1 `95419841…`). `cycle_compare.py`
+warns that `anchor_phys` differs between the backends; for a ROM-keyed window
+that is expected.
