@@ -15,11 +15,11 @@ The program exercises each place the segment reaches:
   R+0x00  $ra seen by `leaf` after `jal`                    (link, KUSEG)
   R+0x04  $ra seen by `leaf` after `bgezal`                 (link, KUSEG)
   R+0x08  $ra seen by `seeded` after `jalr`                 (link, KUSEG)
-  R+0x10  T2 cycles around `probe_run` at its KUSEG home    (cached fetch)
+  R+0x10  T2 ticks around `probe_run` at its KUSEG home     (cached fetch)
   R+0x14  `getpc` link inside that run                      (0x0001xxxx)
-  R+0x18  T2 cycles around `probe_run` via its KSEG0 alias  (cached fetch)
+  R+0x18  T2 ticks around `probe_run` via its KSEG0 alias   (cached fetch)
   R+0x1C  `getpc` link inside that run                      (0x8001xxxx)
-  R+0x20  T2 cycles around `probe_run` via its KSEG1 alias  (uncached, +4/fetch)
+  R+0x20  T2 ticks around `probe_run` via its KSEG1 alias   (uncached, +4/fetch)
   R+0x24  `getpc` link inside that run                      (0xA001xxxx)
 
 `seeded` is entered through a register. The test seeds it in the link
@@ -28,8 +28,11 @@ its `getpc` call returns, which is enough to show per-instruction uncached
 fetch charging. The results block R (0x00011000) lies outside the loaded
 image, so the stores never touch code pages. Timer 2 is put in mode 0
 (system clock, free-running) first. The T2 deltas include the call overhead,
-which is the same for all three runs. The program ends in a `j .` spin, where
-an oracle run can read R.
+which is the same for all three runs. Each delta is (after - before) & 0xFFFF,
+because T2 is a 16-bit counter that wraps. The subtraction waits one `nop`
+after the second `lw`: it would otherwise sit in the load delay slot and read
+the stale register. The program ends in a `j .` spin, where an oracle run can
+read R.
 
 The MIPS is hand-encoded, so the output needs no toolchain and is
 reproducible byte for byte. recompiler/tests/test_segment_aware_codegen.py
@@ -74,6 +77,7 @@ def or_(rd, rs, rt):    return R(0x25, rs, rt, rd)
 def jr(rs):             return R(0x08, rs)
 def jalr(rs, rd="ra"):  return R(0x09, rs, 0, rd)
 def addiu(rt, rs, imm): return I(0x09, rs, rt, imm)
+def andi(rt, rs, imm):  return I(0x0C, rs, rt, imm)
 def ori(rt, rs, imm):   return I(0x0D, rs, rt, imm)
 def lui(rt, imm):       return I(0x0F, 0, rt, imm)
 def lw(rt, off, base):  return I(0x23, base, rt, off)
@@ -147,8 +151,11 @@ def _assemble():
     a.emit(jalr("t0"), nop(), sw("v0", 0x08, "s0"))
     for n, segment in enumerate((KUSEG, KSEG0, KSEG1)):
         a.la("t0", "probe_run", segment)
+        # T2 before and after the call. The nop keeps subu out of the second
+        # lw's load delay slot; T2 is 16 bits, so mask the difference.
         a.emit(lw("t1", 0x1120, "s1"), jalr("t0"), nop(),
-               lw("t2", 0x1120, "s1"), subu("t2", "t2", "t1"),
+               lw("t2", 0x1120, "s1"), nop(), subu("t2", "t2", "t1"),
+               andi("t2", "t2", 0xFFFF),
                sw("t2", 0x10 + 8 * n, "s0"), sw("v1", 0x14 + 8 * n, "s0"))
     a.label("spin")
     a.j("spin"); a.emit(nop())
