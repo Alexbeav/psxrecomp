@@ -25,8 +25,10 @@ the game repo's root:
 
 --launch placeholders: {build} (--build, default "build"), {port}, {headless}
 ("--headless", or nothing with --windowed) and {state_dir}. The template is
-split like a shell command line but not run through a shell. Arguments after
-`--` are appended unchanged. --runtime launches
+split like a shell command line but not run through a shell; on Windows a
+backslash is a path separator, not an escape, so C:\\psx\\game.exe works
+(quote paths with spaces). Arguments after `--` are appended unchanged.
+--runtime launches
 `RUNTIME --game TOML --disc DISC --no-launcher --debug-port PORT [--headless]`.
 
 Environment: runs set PSX_DEBUG_FMV_QUIET=0 (FMV-quiet would keep MDEC-era
@@ -68,14 +70,19 @@ Tolerances, each counted and listed in the output, never silent:
                 --frames, frames missing at either end of one run, a wrapped
                 fingerprint ring, an empty run, no dispatch-miss count, a
                 judge column the runtime did not report (runtimes before
-                psxrecomp #420 lack ws and qc), different FMV-quiet settings,
-                or a straddle on the last shared frame
+                psxrecomp #420 lack ws and qc), or a straddle on the last
+                shared frame. Also different FMV-quiet settings once a quiet
+                frame occurred (qc > 0, or the frame sets differ): quiet
+                frames are not fingerprinted and their writes count only in
+                qc, so the frames and columns are not judged at all
   4 MISSES      everything else holds but a run had dispatch misses (resolve
                 them before trusting an identity result)
   2             usage error
 Every problem found is listed, not only the first. `run` exits 0 once the
-dump is written, 3 when the runtime did not produce one (did not start, port
-already taken, exited, stalled or timed out), and 2 on usage errors.
+dump is written, 3 when it did not write one (the runtime did not start, the
+port was taken, the runtime exited, stalled, timed out or dropped the
+connection, or seeding or writing failed), and 2 on usage errors. `snapshot`
+exits 3 when the copy fails.
 """
 import argparse
 import json
@@ -139,14 +146,32 @@ def resolve_state_dir(args, cwd):
     return None
 
 
-def launch_argv(args, state_dir):
+def split_template(text, windows=None):
+    """Split a --launch template into arguments, without a shell.
+
+    POSIX: shell quoting and backslash escapes (shlex.split). Windows:
+    backslashes are path separators, not escapes, so C:\\psx\\game.exe stays
+    as written; quote a path with spaces as "C:\\Program Files\\...".
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return shlex.split(text)
+    lex = shlex.shlex(text, posix=True)
+    lex.whitespace_split = True
+    lex.commenters = ""
+    lex.escape = ""
+    return list(lex)
+
+
+def launch_argv(args, state_dir, windows=None):
     headless = [] if args.windowed else ["--headless"]
     if not args.launch:
         return [args.runtime, "--game", args.game, "--disc", args.disc,
                 "--no-launcher", "--debug-port", str(args.port),
                 *headless, *args.extra]
     try:
-        tokens = shlex.split(args.launch)
+        tokens = split_template(args.launch, windows)
     except ValueError as e:
         raise UsageError(f"--launch: {e}")
     if args.windowed and "--headless" in tokens:
@@ -178,7 +203,9 @@ def port_in_use(port):
 
 
 def stop(proc):
-    """Stop the launched process group: a launcher script may not exec."""
+    """Stop the launched process group: a launcher script may not exec.
+
+    Returns None, or why the runtime could not be stopped."""
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
@@ -189,15 +216,22 @@ def stop(proc):
         pass
     try:
         proc.wait(timeout=15)
+        return None
     except subprocess.TimeoutExpired:
+        pass
+    try:
         if os.name == "nt":
             proc.kill()
         else:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
+            os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
         proc.wait(timeout=10)
+        return None
+    except subprocess.TimeoutExpired:
+        return (f"runtime pid {proc.pid} did not exit after SIGKILL; it may "
+                f"still hold its port")
 
 
 def ask(port, obj, timeout):
@@ -245,12 +279,32 @@ def drive(proc, args, log_path):
             raise RunError(f"reached only frame {frame} of {args.frames} in "
                            f"{args.timeout}s (see {log_path})")
         time.sleep(0.2)
-    fp = ask(port, {"cmd": "frame_fingerprint",
-                    "count": min(args.frames + 1, RING_CAP),
-                    "frame_lo": 0, "frame_hi": args.frames}, 300)
-    if fp.get("ok") is False or "entries" not in fp:
-        raise RunError(f"frame_fingerprint failed: {fp.get('error', fp)}")
-    stats = ask(port, {"cmd": "dispatch_stats"}, 120)
+    replies = []
+    for req, timeout in (({"cmd": "frame_fingerprint",
+                           "count": min(args.frames + 1, RING_CAP),
+                           "frame_lo": 0, "frame_hi": args.frames}, 300),
+                         ({"cmd": "dispatch_stats"}, 120)):
+        try:
+            reply = ask(port, req, timeout)
+        except (OSError, ValueError) as e:
+            # A crash, a dropped connection or a socket timeout after frame
+            # N: no dump, so INCOMPLETE rather than a traceback.
+            try:
+                proc.wait(timeout=2)    # a crash drops the socket first
+            except subprocess.TimeoutExpired:
+                pass
+            state = ("exited (status %s)" % proc.returncode
+                     if proc.returncode is not None else "did not answer")
+            raise RunError(f"runtime {state} on {req['cmd']} after reaching "
+                           f"frame {frame} ({e!r}; see {log_path})")
+        if not isinstance(reply, dict):
+            raise RunError(f"{req['cmd']} replied {reply!r}, not an object")
+        if reply.get("ok") is False:
+            raise RunError(f"{req['cmd']} failed: {reply.get('error', reply)}")
+        replies.append(reply)
+    fp, stats = replies
+    if "entries" not in fp:
+        raise RunError(f"frame_fingerprint returned no entries: {fp}")
     return fp, stats
 
 
@@ -270,6 +324,10 @@ def cmd_run(args):
             raise UsageError(f"--seed {args.seed} is not a directory")
         if not os.path.isdir(state_dir):
             raise UsageError(f"state directory {state_dir} does not exist")
+    out = os.path.abspath(args.out)
+    if not os.path.isdir(os.path.dirname(out)):
+        raise UsageError(f"output directory {os.path.dirname(out)} does not "
+                         f"exist")
     argv = launch_argv(args, state_dir)
     env = dict(os.environ)
     record = dict(DEFAULT_ENV)
@@ -288,7 +346,6 @@ def cmd_run(args):
                        f"--port so the run cannot query another runtime")
     if args.seed:
         copy_overlay_state(args.seed, state_dir)
-    out = os.path.abspath(args.out)
     log_path = out + ".log"
     label = args.label or (args.build if args.launch else args.runtime)
     with open(log_path, "w") as log:
@@ -298,21 +355,42 @@ def cmd_run(args):
                                     start_new_session=(os.name != "nt"))
         except OSError as e:
             raise RunError(f"cannot launch {argv[0]}: {e}")
+        failure = None
         try:
             fp, stats = drive(proc, args, log_path)
-        finally:
+        except RunError as e:
+            failure = str(e)
+        except BaseException:
             stop(proc)
+            raise
+        stuck = stop(proc)
+        if stuck:
+            failure = f"{failure}; {stuck}" if failure else stuck
+        if failure:
+            raise RunError(failure)
     entries = fp.get("entries", [])
-    with open(out, "w") as f:
-        json.dump({"schema": SCHEMA, "build": label, "frames": args.frames,
-                   "launch": argv, "cwd": cwd, "state_dir": state_dir,
-                   "seed": os.path.abspath(args.seed) if args.seed else None,
-                   "env": record, "port": args.port,
-                   "miss_total": stats.get("miss_total"),
-                   "miss_unique": stats.get("miss_unique"),
-                   "ring_total": fp.get("total"),
-                   "ring_available": fp.get("available"),
-                   "entries": entries}, f)
+    # Write then rename: an interrupted write never leaves a partial dump.
+    tmp = out + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump({"schema": SCHEMA, "build": label,
+                       "frames": args.frames, "launch": argv, "cwd": cwd,
+                       "state_dir": state_dir,
+                       "seed": os.path.abspath(args.seed) if args.seed
+                       else None,
+                       "env": record, "port": args.port,
+                       "miss_total": stats.get("miss_total"),
+                       "miss_unique": stats.get("miss_unique"),
+                       "ring_total": fp.get("total"),
+                       "ring_available": fp.get("available"),
+                       "entries": entries}, f)
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
     print(f"{label}: {len(entries)} frames fingerprinted to frame "
           f"{args.frames}, dispatch misses total={stats.get('miss_total')} "
           f"unique={stats.get('miss_unique')} -> {out}")
@@ -490,48 +568,75 @@ def compare(a_path, b_path, limit):
                           f"{runs['A'].get('frames')}, B at "
                           f"{runs['B'].get('frames')}")
 
-    for tag, other_tag in (("A", "B"), ("B", "A")):
-        only = sorted(set(fps[tag]) - set(fps[other_tag]))
-        other = fps[other_tag]
-        if not only:
-            continue
-        if other:
-            lo, hi = min(other), max(other)
-            inside = [f for f in only if lo <= f <= hi]
-            outside = [f for f in only if not lo <= f <= hi]
-            where = f"outside its range {lo}..{hi}"
-        else:
-            inside, outside, where = [], only, "(it has none)"
-        if inside:
-            mismatch.append(f"{len(inside)} frames fingerprinted by {tag} are "
-                            f"missing inside {other_tag}'s range: "
-                            f"{frame_ranges(inside)}")
-        if outside:
-            incomplete.append(f"{other_tag} lacks {len(outside)} of {tag}'s "
-                              f"frames {where}: {frame_ranges(outside)}")
-
     judged = [c for c in JUDGE if c in present["A"] and c in present["B"]]
     common = sorted(set(fa) & set(fb))
-    qc_seen = "qc" in judged and any(fps[t][f]["qc"] for t in fps
-                                     for f in fps[t])
     quiet = any(q is not False for q in quiet_set.values())
     effective = {t: quiet_set[t] is not False for t in quiet_set}
-    if effective["A"] != effective["B"] and (qc_seen or "qc" not in judged):
-        incomplete.append(f"the runs used different FMV-quiet settings (A "
-                          f"{quiet_text(quiet_set['A'])}, B "
-                          f"{quiet_text(quiet_set['B'])}): quiet frames record "
-                          f"different columns, so wc/ws/qc cannot agree")
-    if quiet:
-        why = ", ".join(f"{t} {quiet_text(q)}" for t, q in quiet_set.items())
-        notes.append(f"FMV-quiet ({why}): "
-                     f"wc+qc must agree; wc, qc and ws are judged against the "
-                     f"offsets carried from any FMV-quiet shift. Rerun without "
-                     f"--fmv-quiet for the strict rule")
-    else:
-        notes.append("FMV-quiet off in both runs: wc, qc and ws judged "
-                     "directly")
+    # FMV-quiet frames are not fingerprinted and their writes count only in
+    # qc. With the setting different in the two runs, once a quiet frame has
+    # happened the frame sets and every write column part for that reason
+    # alone: a DIVERGE or a missing frame would be an artefact, not a fork.
+    comparable = True
+    if effective["A"] != effective["B"]:
+        settings = (f"A {quiet_text(quiet_set['A'])}, "
+                    f"B {quiet_text(quiet_set['B'])}")
+        signs = [f"{t} counted quiet writes (qc > 0)" for t in fps
+                 if "qc" in judged and any(fps[t][f]["qc"] for f in fps[t])]
+        if set(fa) != set(fb):
+            signs.append(f"the frame sets differ ({len(fa)} and {len(fb)} "
+                         f"frames fingerprinted)")
+        if "qc" not in judged:
+            signs.append("qc is not reported, so quiet frames cannot be "
+                         "ruled out")
+        if signs:
+            comparable = False
+            incomplete.append(
+                f"the runs used different FMV-quiet settings ({settings}) "
+                f"and {'; '.join(signs)}: quiet frames are not fingerprinted "
+                f"and their writes count only in qc, so frames and columns "
+                f"were not judged. Rerun both with the same setting (the "
+                f"default is off)")
+        else:
+            notes.append(f"FMV-quiet settings differ ({settings}), but no "
+                         f"quiet frame occurred (qc = 0, same frame set): "
+                         f"judged as usual")
 
-    result = scan(common, fa, fb, judged, quiet, limit)
+    if comparable:
+        for tag, other_tag in (("A", "B"), ("B", "A")):
+            only = sorted(set(fps[tag]) - set(fps[other_tag]))
+            other = fps[other_tag]
+            if not only:
+                continue
+            if other:
+                lo, hi = min(other), max(other)
+                inside = [f for f in only if lo <= f <= hi]
+                outside = [f for f in only if not lo <= f <= hi]
+                where = f"outside its range {lo}..{hi}"
+            else:
+                inside, outside, where = [], only, "(it has none)"
+            if inside:
+                mismatch.append(f"{len(inside)} frames fingerprinted by {tag} "
+                                f"are missing inside {other_tag}'s range: "
+                                f"{frame_ranges(inside)}")
+            if outside:
+                incomplete.append(f"{other_tag} lacks {len(outside)} of "
+                                  f"{tag}'s frames {where}: "
+                                  f"{frame_ranges(outside)}")
+        if quiet:
+            why = ", ".join(f"{t} {quiet_text(q)}"
+                            for t, q in quiet_set.items())
+            notes.append(f"FMV-quiet ({why}): "
+                         f"wc+qc must agree; wc, qc and ws are judged against "
+                         f"the offsets carried from any FMV-quiet shift. Rerun "
+                         f"without --fmv-quiet for the strict rule")
+        else:
+            notes.append("FMV-quiet off in both runs: wc, qc and ws judged "
+                         "directly")
+        result = scan(common, fa, fb, judged, quiet, limit)
+    else:
+        result = {"straddles": [], "shifts": [], "diverge": None,
+                  "unconfirmed": None}
+
     if result["diverge"]:
         f, cols, note = result["diverge"]
         text = f"DIVERGE at frame {f}: judge columns {cols}"
@@ -565,6 +670,10 @@ def compare(a_path, b_path, limit):
     notes += [f"tolerated: {t}" for t in tolerated]
 
     for loc in LOCATORS:
+        if not comparable:
+            notes.append(f"locator {loc}: not compared (FMV-quiet settings "
+                         f"differ)")
+            continue
         if loc not in present["A"] or loc not in present["B"]:
             notes.append(f"locator {loc}: not reported by both runs")
             continue
@@ -593,8 +702,10 @@ def compare(a_path, b_path, limit):
             if tolerated else "; no tolerance applied")
         print(f"IDENTICAL: {len(common)} frames ({common[0]}..{common[-1]}) "
               f"agree on {','.join(judged)}{tol}")
-    else:
+    elif comparable:
         print(f"{verdict}: {shared}, judged on {','.join(judged) or 'nothing'}")
+    else:
+        print(f"{verdict}: {shared}, not judged (FMV-quiet settings differ)")
     for problem in mismatch + incomplete + misses:
         print(f"  {problem}")
     for note in notes:
@@ -681,6 +792,7 @@ def main(argv):
         i = argv.index("--")
         argv, extra = argv[:i], argv[i + 1:]
     top = parser()
+    args = None
     try:
         args = top.parse_args(argv)
         if not getattr(args, "func", None):
@@ -695,6 +807,12 @@ def main(argv):
         return EXIT_USAGE
     except RunError as e:
         print(f"fp_identity.py: run failed: {e}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    except (OSError, subprocess.SubprocessError) as e:
+        # Seeding, the log or the dump could not be written: no result, and
+        # never exit 1, which means MISMATCH.
+        what = getattr(args, "command", None) or "command"
+        print(f"fp_identity.py: {what} failed: {e}", file=sys.stderr)
         return EXIT_INCOMPLETE
 
 

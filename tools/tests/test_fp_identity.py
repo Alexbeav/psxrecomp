@@ -10,6 +10,8 @@ environment defaults and a taken port.
 
   python3 tools/tests/test_fp_identity.py        (or ctest -R fp_identity)
 """
+import argparse
+import importlib.util
 import json
 import os
 import shlex
@@ -20,9 +22,17 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.join(os.path.dirname(HERE), "fp_identity.py")
+
+
+def load_tool():
+    spec = importlib.util.spec_from_file_location("fp_identity", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 # Sparse like a real run: the ring holds one entry per guest frame that
 # snapshotted, not one per vblank.
@@ -376,6 +386,51 @@ class FmvQuietTest(Base):
         self.assertVerdict(self.compare(a, b), 3, "INCOMPLETE",
                            "different FMV-quiet settings (A on, B off)")
 
+    def test_mixed_settings_with_quiet_frames_are_not_judged(self):
+        # As on R4: the quiet run skips the fingerprint on quiet frames and
+        # counts their writes (MMIO too) in qc, so frames and columns part
+        # from the first quiet frame. That is the setting, not a fork.
+        a = run_dump()
+        quiet_frames = set(FRAMES[300:400])
+        b = run_dump([f for f in FRAMES if f not in quiet_frames])
+        b["env"]["PSX_DEBUG_FMV_QUIET"] = "1"
+        for e in b["entries"]:
+            if e["frame"] > FRAMES[300]:
+                e["qc"], e["mmio"], e["mc"] = 50, "0x1", 0
+        out = self.assertVerdict(
+            self.compare(a, b), 3, "INCOMPLETE",
+            "not judged (FMV-quiet settings differ)",
+            "different FMV-quiet settings (A off, B on)",
+            "B counted quiet writes (qc > 0)",
+            f"the frame sets differ ({len(FRAMES)} and {len(FRAMES) - 100} "
+            f"frames fingerprinted)",
+            "Rerun both with the same setting",
+            "locator wr: not compared")
+        for artefact in ("DIVERGE", "record_frame", "missing inside",
+                         "tolerated:"):
+            self.assertNotIn(artefact, out)
+
+    def test_mixed_settings_without_qc_column_are_not_judged(self):
+        a, b = run_dump(), run_dump(env=False)
+        for dump in (a, b):
+            for e in dump["entries"]:
+                del e["qc"]
+        self.assertVerdict(self.compare(a, b), 3, "INCOMPLETE",
+                           "qc is not reported, so quiet frames cannot be "
+                           "ruled out")
+
+    def test_mixed_settings_without_a_quiet_frame_are_judged(self):
+        # FMV-quiet on in B, but no MDEC decode: nothing was kept quiet.
+        b = run_dump()
+        b["env"]["PSX_DEBUG_FMV_QUIET"] = "1"
+        self.assertVerdict(self.compare(run_dump(), b), 0, "IDENTICAL",
+                           "FMV-quiet settings differ (A off, B on), but no "
+                           "quiet frame occurred")
+        b["entries"][300]["cyc"] = 1
+        self.assertVerdict(self.compare(run_dump(), b), 1, "MISMATCH",
+                           f"DIVERGE at frame {at(300)}: judge columns "
+                           f"['cyc']")
+
     def test_unrecorded_quiet_setting_uses_the_quiet_rule(self):
         a, b = run_dump(quiet=True, env=False), self.shifted(300, env=False)
         self.assertVerdict(self.compare(a, b), 0, "IDENTICAL",
@@ -423,6 +478,45 @@ class UsageTest(Base):
         self.assertIn("--seed needs --state-dir", out)
 
 
+class LaunchTemplateTest(unittest.TestCase):
+    """How --launch is split into arguments (no runtime needed)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fp = load_tool()
+
+    def argv(self, template, windows, **extra):
+        args = argparse.Namespace(launch=template, build="build", port=4781,
+                                  windowed=False, extra=[], **extra)
+        return self.fp.launch_argv(args, None, windows=windows)
+
+    def test_windows_paths_keep_their_backslashes(self):
+        self.assertEqual(
+            self.argv(r"C:\psx\build\game-runtime.exe --game "
+                      r"build\game.toml --debug-port {port} {headless}", True),
+            [r"C:\psx\build\game-runtime.exe", "--game", r"build\game.toml",
+             "--debug-port", "4781", "--headless"])
+
+    def test_windows_quoted_path_with_spaces(self):
+        self.assertEqual(
+            self.argv(r'"C:\Program Files\psx\game.exe" --debug-port {port}',
+                      True),
+            [r"C:\Program Files\psx\game.exe", "--debug-port", "4781"])
+
+    def test_posix_keeps_shell_escapes(self):
+        self.assertEqual(
+            self.argv(r"tools/run\ game.sh '{build}' --debug-port {port}",
+                      False),
+            ["tools/run game.sh", "build", "--debug-port", "4781"])
+
+    def test_unbalanced_quote_is_a_usage_error(self):
+        for windows in (False, True):
+            with self.subTest(windows=windows):
+                with self.assertRaises(self.fp.UsageError):
+                    self.argv('"C:\\psx\\game.exe --debug-port {port}',
+                              windows)
+
+
 # ---- fake runtime ------------------------------------------------------------
 
 def fake_runtime(argv):
@@ -454,6 +548,12 @@ def fake_runtime(argv):
             req = json.loads(line or b"{}")
             frame = int((time.time() - start) * 40000)
             cmd = req.get("cmd")
+            if "--crash-on" in argv and cmd == argv[argv.index("--crash-on")
+                                                    + 1]:
+                os._exit(9)                 # dies mid-request, no reply
+            if "--hang-up-on" in argv and cmd == argv[
+                    argv.index("--hang-up-on") + 1]:
+                continue                    # closes the connection, no reply
             if cmd == "frame_fingerprint":
                 lo, hi = req.get("frame_lo", 0), req.get("frame_hi", frame)
                 entries = [entry(f) for f in FRAMES if lo <= f <= hi]
@@ -580,6 +680,81 @@ class RunTest(Base):
         self.assertEqual(status, 3, text)
         self.assertIn("already has a listener", text)
         self.assertFalse(os.path.exists(os.path.join(self.dir, "rep.json")))
+
+    def test_runtime_that_fails_while_dumping(self):
+        # Reaches frame N, then crashes or drops the connection on one of
+        # the final queries: exit 3 with a reason, never 1 (MISMATCH) with a
+        # traceback, and no dump.
+        for how, cmd, reason in (
+                ("--crash-on", "frame_fingerprint",
+                 "runtime exited (status 9) on frame_fingerprint after "
+                 "reaching frame"),
+                ("--crash-on", "dispatch_stats",
+                 "runtime exited (status 9) on dispatch_stats"),
+                ("--hang-up-on", "frame_fingerprint",
+                 "runtime did not answer on frame_fingerprint"),
+                ("--hang-up-on", "dispatch_stats",
+                 "runtime did not answer on dispatch_stats")):
+            with self.subTest(how=how, cmd=cmd):
+                rep = os.path.join(self.dir, "rep.json")
+                status, text = self.launch(
+                    "a.json", "--launch", self.template(rep, f"{how} {cmd}"),
+                    "--port", str(free_port()))
+                self.assertEqual(status, 3, text)
+                self.assertIn(reason, text)
+                self.assertNotIn("Traceback", text)
+                for name in ("a.json", "a.json.tmp"):
+                    self.assertFalse(os.path.exists(os.path.join(self.dir,
+                                                                 name)))
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
+                     "root reads a mode-000 file")
+    def test_io_errors_exit_incomplete(self):
+        seed = os.path.join(self.dir, "seed")
+        os.makedirs(os.path.join(seed, "cache"))
+        locked = os.path.join(seed, "cache", "shard.bin")
+        with open(locked, "w") as f:
+            f.write("x")
+        os.chmod(locked, 0)
+        state = os.path.join(self.dir, "state")
+        os.makedirs(state)
+        rep = os.path.join(self.dir, "rep.json")
+        try:
+            status, text = self.launch("a.json", "--launch",
+                                       self.template(rep), "--port",
+                                       str(free_port()), "--state-dir", state,
+                                       "--seed", seed)
+            self.assertEqual(status, 3, text)
+            self.assertIn("run failed", text)
+            self.assertNotIn("Traceback", text)
+            self.assertFalse(os.path.exists(rep))    # never launched
+            status, text = self.tool("snapshot", seed,
+                                     os.path.join(self.dir, "copy"))
+            self.assertEqual(status, 3, text)
+            self.assertIn("snapshot failed", text)
+        finally:
+            os.chmod(locked, 0o644)
+
+    def test_missing_output_directory_is_a_usage_error(self):
+        status, text = self.launch(os.path.join("no", "such", "a.json"),
+                                   "--launch", self.template("rep.json"),
+                                   "--port", str(free_port()))
+        self.assertEqual(status, 2, text)
+        self.assertIn("output directory", text)
+
+    def test_stop_reports_a_process_that_will_not_exit(self):
+        fp = load_tool()
+
+        class Stuck:
+            pid = 999999999
+
+            def wait(self, timeout):
+                raise subprocess.TimeoutExpired("runtime", timeout)
+
+        with mock.patch.object(fp.os, "killpg") as killpg:
+            self.assertIn("did not exit after SIGKILL", fp.stop(Stuck()))
+        self.assertEqual([c.args[1] for c in killpg.call_args_list],
+                         [signal.SIGTERM, signal.SIGKILL])
 
     def test_runtime_that_exits_early(self):
         rep = os.path.join(self.dir, "rep.json")

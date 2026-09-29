@@ -249,8 +249,11 @@ only as the frame where the runs part. It tolerates the one-write straddle
 above, and the `wc + qc` shift when FMV-quiet was on. Every tolerated frame is
 counted and listed, and `--strict` disables both tolerances. It exits
 `0` IDENTICAL, `1` MISMATCH, `3` INCOMPLETE (frame window, wrapped ring,
-missing columns from an older runtime, or an unconfirmable last-frame
-straddle), `4` MISSES (dispatch misses), or `2` on a usage error.
+missing columns from an older runtime, an unconfirmable last-frame
+straddle, or different FMV-quiet settings once a quiet frame occurred,
+which leaves the runs not comparable), `4` MISSES (dispatch misses), or `2`
+on a usage error. `run` exits `3` when it writes no dump. On Windows, a
+`--launch` backslash is a path separator, not an escape.
 
 ```sh
 L='tools/run_game.sh {build} --debug-port {port} {headless}'
