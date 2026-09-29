@@ -409,3 +409,22 @@ int gr_draw_source_triangle(const int *x, const int *y, const uint32_t *colors,
     (void)skip_field; (void)texture; (void)extra_work;
     abort();
 }
+
+/* gpu.c dependencies added after this fixture was written. The queue path
+ * (gpu_init, gpu_queue_service, gpu_write_gp0) reads the guest cycle and writes
+ * the service deadline. This fixture links gpu.c directly, so whichever test
+ * consumes it must supply both symbols. Declared as in psx_cycles.h:
+ *   extern uint64_t psx_next_service_cycle;   (line 17)
+ *   uint64_t psx_get_cycle_count(void);       (line 161)
+ *
+ * The standalone case runs the shipping default: the guest clock stands still,
+ * so gpu_queue_service() always observes now == gpu_queue.cycle and the
+ * backwards-clock guard cannot trip. psx_next_service_cycle is private to this
+ * fixture, so it does not cover real cycle accounting or the deadline recompute
+ * path. A consumer that supplies its own clock defines GPU_QUEUE_HOST_CLOCK
+ * (test_gpu_command_queue.c keeps a live clock; test_dma_gpu_command_queue.c
+ * links the real ../src/psx_cycles.c), and the stubs are compiled out there. */
+#ifndef GPU_QUEUE_HOST_CLOCK
+uint64_t psx_next_service_cycle;
+uint64_t psx_get_cycle_count(void) { return 0; }
+#endif

@@ -1,5 +1,7 @@
 /* Authored ordinary-renderer queue checks. Reuse renderer seams only;
  * production gpu.c owns parsing, status, timing and snapshots. No guest ROM. */
+/* This test supplies its own live clock, so the fixture must not define one. */
+#define GPU_QUEUE_HOST_CLOCK 1
 #define main textured_dot_fixture_main
 #include "test_gpu_textured_dot_nw_shift_exec.c"
 #undef main

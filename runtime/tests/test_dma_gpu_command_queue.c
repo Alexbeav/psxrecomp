@@ -1,5 +1,6 @@
 /* Authored production DMA + production GPU, no BIOS or disc. */
 #define GPU_QUEUE_NO_MAIN
+#define GPU_QUEUE_HOST_CLOCK 1
 #define GPU_QUEUE_REAL_CLOCK
 #include "test_gpu_command_queue.c"
 #undef main
