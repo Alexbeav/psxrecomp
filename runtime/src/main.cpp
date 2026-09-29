@@ -1407,6 +1407,7 @@ extern "C" void debug_get_fmv_config(int *auto_skip, uint32_t *total_table,
 /* Display aspect W:H (default 4:3 = native). Wider aspects enable the
  * widescreen hack: GTE X-squash + stretched present (see [video] aspect_ratio
  * in config_loader.h). */
+static int           g_video_depth24_trailing_margin = 8;
 static int           g_video_aspect_num = 4;
 static int           g_video_aspect_den = 3;
 /* Resize-driven widescreen. The user's fixed aspect is still used to shape the
@@ -6240,7 +6241,9 @@ static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
 
     /* Default: last 8 columns. If the upload span is known and ends earlier
      * inside that margin, start blanking from the span edge instead. */
-    uint32_t start = w - 8u;
+    const uint32_t margin = (uint32_t)g_video_depth24_trailing_margin;
+    if (margin == 0u || margin >= w) return;
+    uint32_t start = w - margin;
     uint32_t lim = gpu_depth24_rgb_limit(display_x, w);
     if (lim > 0u && lim < w && lim < start)
         start = lim;
@@ -13081,6 +13084,8 @@ int main(int argc, char** argv) {
             for (uint32_t site : gc.vsync_event_horizon_extra_sites)
                 psx_vsync_query_hle_add_extra_event_horizon_site(site);
             g_video_scale      = gc.runtime.video_supersampling;
+            g_video_depth24_trailing_margin =
+                gc.runtime.video_depth24_trailing_margin;
             g_video_internal_res = gc.runtime.video_internal_resolution;
             g_video_ref_lines    = gc.runtime.video_resolution_reference_lines;
             if (gc.runtime.video_window_width > 0) {
