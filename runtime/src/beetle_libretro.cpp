@@ -1291,26 +1291,90 @@ extern "C" int beetle_history_get_snapshot(int slot, uint32_t *out_addr, int *ou
     return 1;
 }
 
-/* ---- cyc_watch / exc_ring stubs ----
- * Full per-instruction sampling lives in a beetle-psx DebugMode CPUHook that
- * was never checked into docs/*.patch. GPU/OT oracle work only needs these
- * symbols to link; wire returns empty/unarmed until the hook patch lands. */
+/* ---- cyc_watch: Beetle half of the per-anchor cycle comparator ----
+ * Same spec and wire format as the native cyc_watch (runtime/src/debug_server.c,
+ * tools/cycle_compare.py, tools/cycle_testrom/measure.py): an entry is taken
+ * BEFORE the anchor instruction is fetched, and its `cycles` is the absolute
+ * guest cycle count charged for all prior instructions. With an `end` anchor
+ * (region mode) each entry is instead the cycles of one A->B pass.
+ *
+ * Driven by the beetle-psx per-instruction PC hook g_psxrecomp_pc_cb
+ * (docs/beetle_guest_cycles_hook.patch). The hook is installed only while a
+ * watch is armed, so an idle oracle pays one untaken branch per instruction.
+ * Beetle samples before every instruction; native samples at block leaders,
+ * so anchor a block leader (branch target / function entry) on both. */
+#define BEETLE_CYC_WATCH_CAP 1024   /* == native CYC_WATCH_RING_CAP */
+struct BeetleCycWatchEntry {
+    uint32_t hit_index;
+    uint32_t pc;        /* matched physical PC */
+    uint64_t cycles;    /* absolute guest cycles (region mode: A->B delta) */
+};
+static BeetleCycWatchEntry s_cw_ring[BEETLE_CYC_WATCH_CAP];
 static uint32_t s_cw_anchor_raw = 0, s_cw_anchor_phys = 0;
 static uint32_t s_cw_end_raw = 0, s_cw_end_phys = 0;
 static uint32_t s_cw_max_hits = 0, s_cw_hits = 0;
-static int s_cw_armed = 0;
+static int      s_cw_armed = 0;
+static int      s_cw_in_region = 0;
+static uint64_t s_cw_region_start = 0;
+
+static void cyc_watch_disarm(void) {
+    s_cw_armed = 0;
+    g_psxrecomp_pc_cb = NULL;
+}
+
+/* Runs on the emulation thread before every instruction while armed. */
+static void cyc_watch_pc_cb(uint32_t pc, uint64_t guest_cycles) {
+    const uint32_t phys = pc & 0x1FFFFFFFu;
+    if (s_cw_end_phys != 0u) {                      /* REGION mode (A..B) */
+        if (!s_cw_in_region) {
+            if (phys == s_cw_anchor_phys) {
+                s_cw_region_start = guest_cycles;
+                s_cw_in_region = 1;
+            }
+        } else if (phys == s_cw_end_phys) {
+            BeetleCycWatchEntry *e = &s_cw_ring[s_cw_hits];
+            e->hit_index = s_cw_hits;
+            e->pc        = phys;
+            e->cycles    = guest_cycles - s_cw_region_start;
+            s_cw_hits++;
+            s_cw_in_region = 0;
+            if (s_cw_hits >= s_cw_max_hits) cyc_watch_disarm();
+        }
+        return;
+    }
+    if (phys != s_cw_anchor_phys) return;           /* single-anchor mode */
+    BeetleCycWatchEntry *e = &s_cw_ring[s_cw_hits];
+    e->hit_index = s_cw_hits;
+    e->pc        = phys;
+    e->cycles    = guest_cycles;
+    s_cw_hits++;
+    if (s_cw_hits >= s_cw_max_hits) cyc_watch_disarm();
+}
 
 extern "C" void beetle_cyc_watch_arm(uint32_t anchor_raw, uint32_t end_raw, int n) {
-    s_cw_anchor_raw = anchor_raw;
-    s_cw_anchor_phys = anchor_raw & 0x1FFFFFFFu;
-    s_cw_end_raw = end_raw;
-    s_cw_end_phys = end_raw & 0x1FFFFFFFu;
-    s_cw_max_hits = (n > 0) ? (uint32_t)n : 16u;
-    s_cw_hits = 0;
+    if (n < 1) n = 1;
+    if (n > BEETLE_CYC_WATCH_CAP) n = BEETLE_CYC_WATCH_CAP;
+    cyc_watch_disarm();                             /* no sampling mid-reset */
+    s_cw_anchor_raw   = anchor_raw;
+    s_cw_anchor_phys  = anchor_raw & 0x1FFFFFFFu;
+    s_cw_end_raw      = end_raw;
+    s_cw_end_phys     = end_raw & 0x1FFFFFFFu;
+    s_cw_max_hits     = (uint32_t)n;
+    s_cw_hits         = 0;
+    s_cw_in_region    = 0;
+    s_cw_region_start = 0;
+    std::memset(s_cw_ring, 0, sizeof(s_cw_ring));
     s_cw_armed = 1;
+    g_psxrecomp_pc_cb = cyc_watch_pc_cb;
 }
 extern "C" void beetle_cyc_watch_clear(void) {
-    s_cw_armed = 0; s_cw_hits = 0;
+    cyc_watch_disarm();
+    s_cw_hits = 0;
+    s_cw_anchor_raw = s_cw_anchor_phys = 0;
+    s_cw_end_raw = s_cw_end_phys = 0;
+    s_cw_in_region = 0;
+    s_cw_region_start = 0;
+    std::memset(s_cw_ring, 0, sizeof(s_cw_ring));
 }
 extern "C" void beetle_cyc_watch_get_state(uint32_t *anchor_raw, uint32_t *anchor_phys,
                                           uint32_t *end_raw, uint32_t *end_phys,
@@ -1325,10 +1389,16 @@ extern "C" void beetle_cyc_watch_get_state(uint32_t *anchor_raw, uint32_t *ancho
 }
 extern "C" int beetle_cyc_watch_get(uint32_t i, uint32_t *hit_index, uint32_t *pc,
                                    unsigned long long *cyc) {
-    (void)i; (void)hit_index; (void)pc; (void)cyc;
-    return 0;
+    if (i >= s_cw_hits) return 0;
+    const BeetleCycWatchEntry *e = &s_cw_ring[i];
+    if (hit_index) *hit_index = e->hit_index;
+    if (pc)        *pc        = e->pc;
+    if (cyc)       *cyc       = (unsigned long long)e->cycles;
+    return 1;
 }
 
+/* exc_ring stays a stub: no psxrecomp tool reads it, and the exception-ring
+ * hook it wrapped was never published. The wire answers an empty ring. */
 extern "C" int retro_psxref_exc_ring_dump(char *out, int cap) {
     if (!out || cap < 32) return -1;
     return std::snprintf(out, (size_t)cap, "{\"ok\":true,\"entries\":[]}");
