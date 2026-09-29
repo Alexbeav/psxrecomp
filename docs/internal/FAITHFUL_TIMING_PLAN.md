@@ -263,13 +263,67 @@ on a fixed region -> next.
     (20 and 92 bytes): 2,824 -> 4,744 cycles, +1,920, about 0.17% of the
     frame. Only memcpy was measured; other ROM services scale the same way.
   - Closes `bios-kseg1-fetch-charge` in the segment-aware ledger (PR #419).
-  - LAND GATE (OPEN): SEGMENT_AWARE_CODE.md §7.2 requires, before this lands,
-    a full LLE boot (`bios_hle = false`) with per-anchor cycle parity against
-    psx-beetle to the shell, plus ruler #1 [0x80001C5C->0x80001CA4] native vs
-    Beetle. Neither has run: the Mac that built this has no psx-beetle build
-    and no SCPH-1001 image. The PR stays draft until both are done on an
-    oracle machine. Record the per-anchor deltas here and tick the
-    ACCURACY_BURNDOWN axis-2 gate item.
+  - LAND GATE (DONE, 2026-09-29, live psx-beetle built on macOS from the
+    docs/beetle-linux.md recipe plus the local `docs/beetle-macos` branch):
+    SEGMENT_AWARE_CODE.md §7.2's LLE boot parity to the
+    shell and ruler #1, run twice with the same image on both sides: OpenBIOS
+    (`bios/openbios.bin`, SHA-1 95419841b5104d552b14810b1ecbe6c1358bcdf1) and
+    the owner's own SCPH-1001 dump (v2.2, SHA-1
+    10155d8d6e6e832d6ea66db9bc098321fb5e8ebf). Native: master `44a45d3c` and
+    this branch, each with #418 merged locally so the mult/div flush cannot
+    mask the fetch change. `PSX_BIOS_HLE=0`, cyc_watch armed from power-on on
+    both backends, first hit per anchor; tools/cycle_compare.py `--no-arm`
+    reads the same values. Current master `470f03b7` (#418 merged) emits the
+    same BIOS C as the baseline and gives the same cycle at every anchor
+    checked.
+    - OpenBIOS, native − Beetle (master / this branch): kernel copy done
+      0xBFC00330 (Beetle 178,560) −96,208 / 0; main 0xBFC00144 (311,434)
+      −149,433 / 0; first C0, B0 and A0 calls (1,572,770 to 1,588,895)
+      −679,408 to −685,851 / 0; initEvents (1,764,760) −753,238 / −126;
+      startShell (1,845,885) −783,706 / −126; shell entry 0x80030000
+      (5,015,670) −2,165,591 / −126.
+    - SCPH-1001: cache init done 0xBFC00328 (7,560) −4,404 / 0; main
+      0xBFC06EC4 (86,887) −42,489 / 0; kernel copy done 0xBFC0044C (393,861)
+      −195,802 / 0; kernel init 0x598 (393,901) −195,819 / −9; first C0, A0
+      and B0 calls (406,782 to 414,468) −198,576 to −202,796 / −9; shell entry
+      0x80030000 (15,051,449) −7,049,462 / −454.
+    - Both residuals are known unmodeled axes, not this change. (1) IsC stores
+      do not reach the I-cache model (ACCURACY_BURNDOWN axis 4). Each
+      FlushCache in Beetle invalidates the I-cache tags through isolated
+      stores. Native drops those stores, so the cached kernel handlers keep
+      hitting where Beetle refills them (7 cycles per full line). The residual
+      grows only after a flush: −42 after each of the three OpenBIOS flushes
+      between 1,592,251 and 1,606,381, and −445 in all after the first four
+      SCPH-1001 flushes (−52, −149, −149, −95). A local prototype of
+      Beetle's IsC tag write brings OpenBIOS to 0 at every anchor to the shell
+      and SCPH-1001 to −9. (2) That −9: the retail BIOS enters its copied
+      kernel through the KSEG1 alias (`jr` to 0xA0000500). Beetle runs the four
+      trampoline words uncached (4 × 5 = 20 cycles); native runs the body
+      compiled for 0x500 (cached: one line refill, 11 cycles). That is the
+      KSEG1-alias gap of SEGMENT_AWARE_CODE.md §3.3, closed by PR D.
+      Beetle takes no exception before the shell on either BIOS, so the IRQ
+      and exception axes do not enter the gate.
+    - After the shell the backends part for reasons outside the gate: CD-ROM
+      and frame-paced device timing. For example, the cycle-test EXE entry on
+      OpenBIOS: Beetle 225,409,068, master −29,367,622, this branch
+      −26,435,449, unchanged by the IsC prototype.
+    - Ruler #1 [0x80001C5C->0x80001CA4], SCPH-1001, 64 region passes: Beetle,
+      master and this branch agree pass for pass (84 cold, 56 steady, 77 on a
+      refill; 53 × 56, 9 × 77, 2 × 84). The range is cached SCPH-1001 kernel
+      code, which this change does not touch. Under OpenBIOS the address holds
+      other code; the OpenBIOS boot anchors above cover its kernel.
+    - Ruler #2 (tools/cycle_testrom, 15-loop ROM): this branch with #418, on
+      both an HLE and an LLE boot, equals Beetle on all 14 components (alu +1,
+      load +5, load2 +11, load_use +5, div +38, div_spaced +38, mult +15,
+      gte_rtps +11, gte_nclip +4, gte_read_use +11, ld_div +46, mmio_timer +3,
+      mmio_spu +38, icache_miss +16). Master with #418 does too; master without
+      it reads div +39, div_spaced +41, mult +16.
+    - memcpy A(2Ah) at 0xBFC085D8 (OpenBIOS) in Beetle: 39 cycles per byte
+      during boot (ROM source). In R4 after its game entry (the attract loop;
+      RAM source) it is 42 per byte, and R4's per-frame 20- and 92-byte calls
+      cost 860 and 3,884 cycles. This branch matches: 39 per byte and the same
+      entry-to-return cost on all 16 boot calls, and 42 / 860 / 3,884 in the
+      R4 race measurement above. Master: 22 and 25 per byte.
 
 - **2026-09-29 (generic A/B identity tool, `feat/fp-identity-tool` on #420):**
   `tools/fp_identity.py` moves R4's warm/cold check into the framework for
