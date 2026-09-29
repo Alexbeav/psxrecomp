@@ -9020,7 +9020,12 @@ static void handle_screenshot_wide_hires(int id, const char *json)
     if (!json_get_str(json, "path", path, sizeof(path)))
         strncpy(path, "psx_screenshot_wide_hires.png", sizeof(path) - 1);
     path[sizeof(path) - 1] = '\0';
-    int cap = 8192 * 8192;
+    /* The dump reads rows from the top of the surface: size it to reach the
+     * end of the displayed band (at 8K the lower double-buffer band ends at
+     * row 8640, past a fixed 8192x8192 budget for a 21:9 or wider surface). */
+    long long need = (long long)ws_nw_present_width() * S *
+                     (((long long)di.display_y + di.height) * S);
+    int cap = need > 8192LL * 8192 && need < (1LL << 28) ? (int)need : 8192 * 8192;
     uint32_t *buf = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
     if (!buf) { send_err(id, "alloc failed"); return; }
     int W = 0, H = 0;
