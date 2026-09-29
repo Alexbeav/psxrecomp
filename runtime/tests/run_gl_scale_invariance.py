@@ -17,6 +17,9 @@ Line runs (mode lines) batch lines with triangles over native-wide: the window
 runs' native frame must equal the 1x run's (the 1x authoritative surface draws
 its lines as GL_LINES, in painter order), and their frame and wide surface at S
 the full-VRAM run's at the same scale.
+Capture runs (mode capture) check the frame-blend history and hold-last
+captures: at the source scale outside the window mode, at the presented
+(letterbox) size in it.
 
 macOS/Linux: pass the SDL3 include directory and static library (for example
 from a runtime build tree's _deps/sdl3-src/include and
@@ -212,6 +215,22 @@ def main():
         print("FAIL lines window 9x frame/wide surface differ from the full-VRAM run:",
               lines[("window", 9)][1:], lines[("full", 9)][1:])
         ok = False
+    # Frame-blend and hold-last captures: (label, scale, env, windowed).
+    for label, s, extra, windowed in (("full", 9, {}, False),
+                                      ("window", 9, {"PSX_GL_HIRES_WINDOW": "1"}, True),
+                                      ("window", 18, {"PSX_GL_HIRES_WINDOW": "1"}, True)):
+        e = dict(env)
+        e.update(extra)
+        r = run([dest / "probe", s, "capture"], env=e)
+        parsed = parse_run(r.stdout)
+        print(f"capture {label} {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-2:],
+              r.stderr.strip()[-600:])
+        if r.returncode or not parsed or parsed[1]:
+            ok = False
+        m = re.search(r"^capture=(\d+)x(\d+) source=(\d+)x(\d+)$", r.stdout, re.M)
+        if not m or ((m[1], m[2]) == (m[3], m[4])) == windowed:
+            print(f"FAIL capture {label} {s}x: size", m and m.group(0))
+            ok = False
     for label, s, budget in (("over-limit", 32, None), ("budget", 12, "40")):
         e = dict(env)
         if budget is not None:

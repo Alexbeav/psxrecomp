@@ -434,6 +434,8 @@ static int           s_interp_suspended = 0;
 static int           s_interp_blend_mode = 0;
 static int           s_interp_prev = 0, s_interp_cur = 0;
 static int           s_interp_w = 0, s_interp_h = 0, s_interp_linear = 0;
+static int           s_interp_src_w = 0, s_interp_src_h = 0; /* source band, S px */
+static GLuint        s_interp_fbo = 0;   /* draw target of a scaled capture */
 static int           s_interp_force_4_3 = 0, s_interp_source_path = -1;
 static uint64_t      s_interp_swaps = 0;
 static uint64_t      s_interp_captures = 0;
@@ -855,20 +857,49 @@ static void hold_capture_drawable(void) {
     s_hold_linear = 0;
 }
 
+/* Defined after present_target_quad (letterbox helpers). */
+static void letterbox_rect_aspect(int ww, int wh, int num, int den,
+                                  int *x, int *y, int *w, int *h);
+static void letterbox_rect(int ww, int wh, int *x, int *y, int *w, int *h);
+
+/* Size of a display-band capture (temporal-blend history, hold-last) whose
+ * source band is sw x sh pixels at the output scale. Normally that size. In
+ * the windowed high-resolution mode the band is up to 15372x4320 (8K at
+ * 32:9), and copying it at full size every game frame (twice: blend history
+ * and hold-last) cost more than the frame itself, only for the presenter to
+ * draw it at the letterbox size. There the capture is taken at the letterbox
+ * size instead (one filtered blit; the presenter then draws it 1:1), unless
+ * the band is already smaller. force_4_3 picks the letterbox the present
+ * uses. */
+static void hiw_capture_size(int sw, int sh, int force_4_3, int *cw, int *ch) {
+    int ww = 0, wh = 0, lx, ly, lw, lh;
+    *cw = sw; *ch = sh;
+    if (!s_hiw || !s_win) return;
+    SDL_GL_GetDrawableSize(s_win, &ww, &wh);
+    if (ww < 1 || wh < 1) return;
+    if (force_4_3) letterbox_rect_aspect(ww, wh, 4, 3, &lx, &ly, &lw, &lh);
+    else letterbox_rect(ww, wh, &lx, &ly, &lw, &lh);
+    if (lw > 0 && lh > 0 && (int64_t)lw * lh < (int64_t)sw * sh) {
+        *cw = lw; *ch = lh;
+    }
+}
+
 /* Snapshot a native display band from an FBO when the main thread will not
- * Swap (interpolation owns the cadence). Scale-aware blit into hold tex. */
+ * Swap (interpolation owns the cadence). Scale-aware blit into hold tex (at
+ * the presented size in the windowed high-resolution mode). */
 static void hold_capture_native_fbo(GLuint src_fbo, int dx, int dy, int dw, int dh,
                                     int force_4_3, int linear) {
-    int S = s_out_scale > 0 ? s_out_scale : 1;
+    int S = s_out_scale > 0 ? s_out_scale : 1, cw, ch;
     if (!s_ctx || !src_fbo || dw < 1 || dh < 1)
         return;
-    hold_ensure_tex(dw * S, dh * S);
+    hiw_capture_size(dw * S, dh * S, force_4_3, &cw, &ch);
+    hold_ensure_tex(cw, ch);
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, src_fbo);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_hold_fbo);
     glDisable(GL_SCISSOR_TEST);
     p_glBlitFramebuffer(dx * S, dy * S, (dx + dw) * S, (dy + dh) * S,
-                        0, 0, dw * S, dh * S,
-                        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                        0, 0, cw, ch, GL_COLOR_BUFFER_BIT,
+                        (cw == dw * S && ch == dh * S) || !linear ? GL_NEAREST : GL_LINEAR);
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
     s_hold_kind = HOLD_NATIVE;
@@ -881,9 +912,6 @@ static void hold_invalidate(void) {
 }
 
 /* Defined after present_target_quad / letterbox helpers. */
-static void letterbox_rect_aspect(int ww, int wh, int num, int den,
-                                  int *x, int *y, int *w, int *h);
-static void letterbox_rect(int ww, int wh, int *x, int *y, int *w, int *h);
 static void present_target_quad(GLuint tex, int tex_w, int tex_h,
                                 int x, int y, int w, int h, int linear,
                                 int lx, int ly, int lw, int lh, int v_flip,
@@ -4430,6 +4458,7 @@ void gl_renderer_shutdown(void) {
     s_hold_fbo = 0;
     s_hold_tw = 0;
     s_hold_th = 0;
+    s_interp_fbo = 0;   /* died with the context */
 }
 
 /* CPU-readout present (24-bit FMV frames and the PSX_GL_FORCE_CPU_PRESENT
@@ -5242,6 +5271,7 @@ int  gl_renderer_get_ws_ablate(void)     { return s_ws_ablate; }
 static void interp_reset_history_unlocked(void) {
     s_interp_valid = 0;
     s_interp_w = s_interp_h = 0;
+    s_interp_src_w = s_interp_src_h = 0;
     s_interp_source_path = -1;
     frame_interpolation_schedule_reset(&s_interp_schedule);
 }
@@ -5304,11 +5334,14 @@ void gl_renderer_interpolation_diag(int *enabled, int *suspended,
 static int interp_capture(GLuint fbo, int x, int y, int w, int h,
                           int linear, int force_4_3, int source_path) {
     if (!s_interp_enabled || s_interp_suspended || !fbo || w <= 0 || h <= 0) return 0;
-    int pw = w * s_out_scale, ph = h * s_out_scale;
+    int sw = w * s_out_scale, sh = h * s_out_scale, pw, ph;
+    hiw_capture_size(sw, sh, force_4_3, &pw, &ph);
     if (pw != s_interp_w || ph != s_interp_h ||
+        sw != s_interp_src_w || sh != s_interp_src_h ||
         source_path != s_interp_source_path || force_4_3 != s_interp_force_4_3) {
         s_interp_valid = 0;
         s_interp_w = pw; s_interp_h = ph;
+        s_interp_src_w = sw; s_interp_src_h = sh;
         s_interp_prev = s_interp_cur = 0;
         for (int i = 0; i < 3; i++) {
             glBindTexture(GL_TEXTURE_2D, s_interp_tex[i]);
@@ -5321,9 +5354,22 @@ static int interp_capture(GLuint fbo, int x, int y, int w, int h,
     if (s_interp_valid == 1) dst = s_interp_cur == 0 ? 1 : 0;
     else if (s_interp_valid >= 2) dst = s_interp_prev;
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, fbo);
-    glBindTexture(GL_TEXTURE_2D, s_interp_tex[dst]);
-    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
-                        x * s_out_scale, y * s_out_scale, pw, ph);
+    if (pw == sw && ph == sh) {
+        glBindTexture(GL_TEXTURE_2D, s_interp_tex[dst]);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                            x * s_out_scale, y * s_out_scale, pw, ph);
+    } else {   /* windowed high-resolution mode: at the presented size */
+        if (!s_interp_fbo) p_glGenFramebuffers(1, &s_interp_fbo);
+        p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_interp_fbo);
+        p_glFramebufferTexture2D(PSXGL_DRAW_FRAMEBUFFER, PSXGL_COLOR_ATTACHMENT0,
+                                 GL_TEXTURE_2D, s_interp_tex[dst], 0);
+        glDisable(GL_SCISSOR_TEST);
+        p_glBlitFramebuffer(x * s_out_scale, y * s_out_scale,
+                            x * s_out_scale + sw, y * s_out_scale + sh,
+                            0, 0, pw, ph, GL_COLOR_BUFFER_BIT,
+                            linear ? GL_LINEAR : GL_NEAREST);
+        p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
+    }
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
     if (s_interp_valid == 0) {
         s_interp_cur = dst;
@@ -5360,8 +5406,9 @@ static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh) {
     present_set_gamma(s_interp_uGamma, 1);
     p_glUniform4f(s_interp_uUvRect, 0.f, 0.f, 1.f, 1.f);
     /* Interp textures hold exactly the display rect (uv_rect is 0..1), so pitch
-     * == display height == s_interp_h. */
-    INTERP_SCANLINE(s_interp_h, s_interp_h, lh);
+     * == display height == s_interp_src_h rows at the output scale (the
+     * texture itself can be smaller, see hiw_capture_size). */
+    INTERP_SCANLINE(s_interp_src_h, s_interp_src_h, lh);
     p_glBindVertexArray(s_present_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     p_glBindVertexArray(0);

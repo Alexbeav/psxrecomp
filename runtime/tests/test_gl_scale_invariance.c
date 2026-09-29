@@ -33,6 +33,11 @@
  *     the window runs' native frame (lband) against the 1x run's, so the 1x
  *     surface draws exactly what 1x draws, in painter order, and their frame
  *     and wide surface at S against the full-VRAM run at the same scale.
+ *   - mode "capture" (with or without the window): the frame-blend history and
+ *     hold-last captures of the displayed frame. Outside the window mode they
+ *     stay at the source scale (FRAME_W*S x FRAME_H*S); in the window mode they
+ *     are taken at the presented letterbox size instead, each texel the source
+ *     pixel under its centre (nearest filtering).
  * Original source-owned scene; no retail payload. */
 #include "gpu_gl_renderer.c"
 #include "mod_texture_banks.c"
@@ -269,6 +274,91 @@ static int lines_main(int scale, int window) {
     return failures ? 1 : 0;
 }
 
+/* ---- mode "capture": blend-history and hold-last capture size ------------ */
+/* Read back texture `tex` when its storage is w x h (else -1), and count the
+ * texels that are not the source pixel under their centre (nearest), the
+ * source being sw x sh RGBA8. */
+static long capture_mismatches(const uint8_t *cap, int w, int h,
+                               const uint8_t *src, int sw, int sh);
+static long capture_check(GLuint tex, uint8_t *cap, int w, int h,
+                          const uint8_t *src, int sw, int sh) {
+    GLint tw = 0, th = 0;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+    if (tw != w || th != h) { glBindTexture(GL_TEXTURE_2D, 0); return -1; }
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, cap);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return capture_mismatches(cap, w, h, src, sw, sh);
+}
+static long capture_mismatches(const uint8_t *cap, int w, int h,
+                               const uint8_t *src, int sw, int sh) {
+    long bad = 0;
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++) {
+            int sx = (int)(((double)i + 0.5) * sw / w), sy = (int)(((double)j + 0.5) * sh / h);
+            if (memcmp(cap + ((size_t)j * w + i) * 4, src + ((size_t)sy * sw + sx) * 4, 3)) bad++;
+        }
+    return bad;
+}
+
+static int capture_main(int scale, int window) {
+    GLuint fbo = s_hr_fbo;
+    int sx = 0;
+    if (window) {
+        const HiwTile *T = hiw_ensure(0, FRAME_W);
+        check(T != NULL, "window covers the frame");
+        if (!T) return 1;
+        fbo = T->fbo; sx = -T->x0;
+    }
+    scene();
+    flush_flat_batch();
+    flush_tex_batch();
+    flush_cpu_upload();
+    hiw_flush_queue();
+    int S = s_out_scale, sw = FRAME_W * S, sh = FRAME_H * S;
+    int ww = 0, wh = 0, lx, ly, lw, lh, cw = sw, ch = sh;
+    SDL_GL_GetDrawableSize(s_win, &ww, &wh);
+    letterbox_rect_aspect(ww, wh, 4, 3, &lx, &ly, &lw, &lh);
+    if (window && (long)lw * lh < (long)sw * sh) { cw = lw; ch = lh; }
+    uint8_t *src = (uint8_t *)malloc((size_t)sw * sh * 4);
+    uint8_t *cap = (uint8_t *)malloc((size_t)cw * ch * 4);
+    if (!src || !cap) { free(src); free(cap); check(0, "capture buffers"); return 1; }
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, fbo);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(sx * S, 0, sw, sh, GL_RGBA, GL_UNSIGNED_BYTE, src);
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
+
+    /* Blend history: nearest filtering (linear = 0), a 4:3 present. */
+    s_interp_enabled = 1;
+    s_interp_suspended = 0;
+    check(interp_capture(fbo, sx, 0, FRAME_W, FRAME_H, 0, 1, GL_PRES_VRAM) == 1,
+          "blend history captured");
+    if (s_interp_w != cw || s_interp_h != ch)
+        fprintf(stderr, "blend capture %dx%d want %dx%d (source %dx%d)\n",
+                s_interp_w, s_interp_h, cw, ch, sw, sh);
+    check(s_interp_w == cw && s_interp_h == ch, "blend capture size");
+    check(s_interp_src_w == sw && s_interp_src_h == sh, "blend source band at the output scale");
+    long bad = capture_check(s_interp_tex[s_interp_cur], cap, cw, ch, src, sw, sh);
+    if (bad) fprintf(stderr, "blend capture: %ld of %d texels differ (-1: storage size)\n",
+                     bad, cw * ch);
+    check(bad >= 0 && bad * 1000 <= (long)cw * ch, "blend capture holds the source (nearest)");
+
+    /* Hold-last snapshot of the same band. */
+    hold_capture_native_fbo(fbo, sx, 0, FRAME_W, FRAME_H, 1, 0);
+    check(s_hold_tw == cw && s_hold_th == ch, "hold-last capture size");
+    bad = capture_check(s_hold_tex, cap, cw, ch, src, sw, sh);
+    if (bad) fprintf(stderr, "hold capture: %ld of %d texels differ (-1: storage size)\n",
+                     bad, cw * ch);
+    check(bad >= 0 && bad * 1000 <= (long)cw * ch, "hold-last capture holds the source (nearest)");
+    free(src);
+    free(cap);
+    check(glGetError() == GL_NO_ERROR, "GL error");
+    printf("capture=%dx%d source=%dx%d\n", cw, ch, sw, sh);
+    printf("checks=%d failures=%d\n", checks, failures);
+    return failures ? 1 : 0;
+}
+
 static int sbs_main(int scale) {
     static uint16_t page[64*64], clut[16], patch[40*6];
     for (int i = 0; i < 64*64; i++) page[i] = (uint16_t)((i * 0x2469u) ^ (i >> 2));
@@ -427,6 +517,12 @@ int main(int argc, char **argv) {
     check(si.effective == scale, "requested scale allocated");
     if (!strcmp(mode, "sbs")) {
         int rc = sbs_main(scale);
+        gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
+        return rc;
+    }
+    if (!strcmp(mode, "capture")) {
+        if (si.windowed) check(si.hr_scale == 1, "window mode engaged");
+        int rc = capture_main(scale, si.windowed);
         gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
         return rc;
     }
