@@ -52,12 +52,18 @@
  *
  * Known divergences from the software rasterizer (accepted, documented):
  *   - GL triangle/line coverage rules differ from the PS1 DDA by ±1px on
- *     edges; lines use GL_LINES (width S) instead of Bresenham.
+ *     edges; lines use GL_LINES at 1x and, above 1x, a quad one native pixel
+ *     thick that covers both endpoints (line_to_quad) instead of Bresenham.
  *   - No dithering (the software path doesn't dither either).
  *   - Gouraud interpolation happens at 8-bit precision instead of 5-bit
  *     (smoother gradients; readback re-quantizes to 5-bit).
  *   - VRAM-wrapping draws are clamped, except GP0(02h) fills which split
  *     into wrapped segments. Wrapping copies/draws are unused by real SDKs.
+ *
+ * INTERNAL SCALE LIMITS. S is clamped at init to the driver's texture,
+ * renderbuffer and viewport limits and to a memory budget (gl_scale_limits.h),
+ * and an FBO that still fails to allocate is retried one scale lower. A large
+ * S therefore never costs the GL backend itself.
  *
  * Init is all-or-nothing: if any shader/FBO fails, gl_renderer_init_context
  * returns 0 and the runtime falls back to the pure software renderer — no
@@ -65,6 +71,7 @@
 
 #include "gpu.h"
 #include "gpu_render.h"
+#include "gl_scale_limits.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
 #include "mod_texture_banks.h"
@@ -131,7 +138,16 @@
 
 #define VRAM_W 1024
 #define VRAM_H 512
-#define GL_MAX_INTERNAL_SCALE 4
+/* GL_MAX_INTERNAL_SCALE (the compile-time ceiling) lives in gpu_render.h; the
+ * effective scale is clamped to the driver and memory limits at init. */
+#ifndef PSXGL_MAX_RENDERBUFFER_SIZE
+#define PSXGL_MAX_RENDERBUFFER_SIZE 0x84E8
+#endif
+#ifndef GL_MAX_VIEWPORT_DIMS
+#define GL_MAX_VIEWPORT_DIMS 0x0D3A
+#endif
+/* Scratch tile edge (hr px) for the tiled stencil rebuild at S > 1. */
+#define GL_SCRATCH_TILE 2048
 
 /* ---- Loaded modern-GL entry points ------------------------------------- */
 typedef GLuint (APIENTRY *PFN_glCreateShader)(GLenum);
@@ -313,6 +329,13 @@ static int           s_scale = 1;          /* internal-res scale (hr FBO) */
 /* Netplay: SW@1× + GPU@s_scale dual write; CPU VRAM always authoritative. */
 static int           s_cpu_auth_dual = 0;
 static int           s_req_scale = 1;      /* requested before context init */
+/* Driver limits queried at init: min(GL_MAX_TEXTURE_SIZE,
+ * GL_MAX_RENDERBUFFER_SIZE, GL_MAX_VIEWPORT_DIMS); 0 before init. */
+static int           s_gl_max_dim = 0;
+static int           s_scale_clamp_reason = 0;   /* PSX_GL_SCALE_* mask */
+static int           s_scale_alloc_retries = 0;  /* FBO failures stepped down */
+static uint64_t      s_vram_budget = 0;          /* bytes; 0 = none */
+static int           s_wide_refused_logged = 0;
 
 static GLuint        s_present_tex = 0;    /* CPU-readout present path (24bpp) */
 static int           s_present_w = 0, s_present_h = 0;
@@ -504,7 +527,7 @@ static GLint s_uBlitSrc = -1, s_uBlitPass = -1, s_uBlitMaskset = -1;
 static GLint s_uBlitSrcDiv = -1, s_uBlitSrcOff = -1;
 /* PACK program uniforms. */
 static GLint s_uPackHr = -1, s_uPackScale = -1;
-static GLint s_uStencilSrc = -1;
+static GLint s_uStencilSrc = -1, s_uStencilOff = -1;
 
 static uint32_t     *s_conv = NULL;        /* RGBA8 staging for uploads      */
 static int           s_gpu_dirty = 0;      /* CPU VRAM array may be stale    */
@@ -513,6 +536,10 @@ static int           s_gpu_dirty = 0;      /* CPU VRAM array may be stale    */
 typedef struct { int x0, y0, x1, y1, set; } DirtyRect;
 static DirtyRect s_cpu_dirty; /* conservative GPU-written area not yet read into CPU VRAM */
 static DirtyRect s_pack_dirty;             /* hr FBO content not in raw mirror */
+/* Native-coords union of primitive bboxes since the last stencil rebuild: the
+ * only area whose stencil can lag its alpha (deferred-stencil draws). Used at
+ * S > 1 so a mask-check toggle rebuilds that rect, not the whole surface. */
+static DirtyRect s_stencil_stale;
 
 /* CPU writes not yet in the FBO — an EXACT rect list, NOT a single union.
  *
@@ -845,7 +872,7 @@ static void letterbox_rect(int ww, int wh, int *x, int *y, int *w, int *h);
 static void present_target_quad(GLuint tex, int tex_w, int tex_h,
                                 int x, int y, int w, int h, int linear,
                                 int lx, int ly, int lw, int lh, int v_flip,
-                                int apply_gamma);
+                                int apply_gamma, int src_scale);
 
 static void coh_record(int kind, int x0, int y0, int x1, int y1) {
     GlCohEvent *e = &s_coh_ring[s_coh_seq % GL_COH_RING_CAP];
@@ -1017,10 +1044,33 @@ static const char *PRESENT_FS =
     "  return r;\n"
     "}\n"
     PSX_SCANLINE_FUNC
+    /* Area resolve (u_sharp == 3) for a supersampled source larger than the
+     * output: average the whole footprint of the output pixel instead of one
+     * tap, which skips source texels (aliasing) once the ratio passes ~1.25.
+     * u_sharp_scale is output px per texel, so 1/u_sharp_scale is the
+     * footprint in texels. Each tap is bilinear and taps are spaced up to two
+     * texels apart, so every tap averages a 2x2 texel block: an exact box at
+     * even ratios, a close tent otherwise. Taps clamp to u_uv_rect so the
+     * neighbouring VRAM never bleeds in. */
+    "vec4 area_resolve(vec2 uv){\n"
+    "  vec2 fp = 1.0 / max(u_sharp_scale, vec2(1.0e-6));\n"
+    "  vec2 nf = clamp(ceil(fp * 0.5), vec2(1.0), vec2(8.0));\n"
+    "  ivec2 n = ivec2(nf);\n"
+    "  vec2 st = fp / nf;\n"
+    "  vec2 base = uv * u_tex_size - 0.5 * fp + 0.5 * st;\n"
+    "  vec2 lo = min(u_uv_rect.xy, u_uv_rect.zw);\n"
+    "  vec2 hi = max(u_uv_rect.xy, u_uv_rect.zw);\n"
+    "  vec4 acc = vec4(0.0);\n"
+    "  for (int j = 0; j < n.y; j++)\n"
+    "    for (int i = 0; i < n.x; i++)\n"
+    "      acc += texture(u_tex, clamp((base + vec2(i, j) * st) / u_tex_size, lo, hi));\n"
+    "  return acc / float(n.x * n.y);\n"
+    "}\n"
     "void main(){\n"
     "  vec2 uv = v_uv;\n"
     "  vec4 c;\n"
     "  if (u_sharp == 2) { c = bicubic(uv); }\n"
+    "  else if (u_sharp == 3) { c = area_resolve(uv); }\n"
     "  else {\n"
     "    if (u_sharp == 1) {\n"
     "      vec2 scale = max(u_sharp_scale, vec2(1.0));\n"
@@ -1300,7 +1350,8 @@ static const char *PACK_FS =
 static const char *STENCIL_FS =
     "#version 330\n"
     "uniform sampler2D u_src; out vec4 frag;\n"
-    "void main(){ vec4 c=texelFetch(u_src,ivec2(gl_FragCoord.xy),0);\n"
+    "uniform ivec2 u_off;  /* tile origin in the target; (0,0) for a full copy */\n"
+    "void main(){ vec4 c=texelFetch(u_src,ivec2(gl_FragCoord.xy)-u_off,0);\n"
     "  if(c.a<0.5) discard; frag=vec4(0.0); }\n";
 
 static GLuint compile_shader(GLenum type, const char *src) {
@@ -1546,14 +1597,100 @@ static void rebuild_target_stencil(GLuint target_fbo, int target_w, int target_h
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
 }
 
+/* Grow the shared scratch texture to at least w x h (never shrinks). The
+ * scratch holds copy sources and stencil-rebuild tiles; at S > 1 it is sized
+ * to what those operations actually need instead of the whole hr surface. */
+static void scratch_ensure(int w, int h) {
+    if (w <= s_scratch_w && h <= s_scratch_h) return;
+    if (w > s_scratch_w) s_scratch_w = w;
+    if (h > s_scratch_h) s_scratch_h = h;
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_scratch_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, s_scratch_w, s_scratch_h,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+}
+
+/* Rebuild the stencil mask of [x, x+w) x [y, y+h) (target px) from alpha, in
+ * tiles no larger than GL_SCRATCH_TILE so the scratch never has to match a
+ * multi-gigapixel surface. Same result as rebuild_target_stencil over that
+ * rect; used only at S > 1. */
+static void rebuild_target_stencil_tiled(GLuint target_fbo, int target_w, int target_h,
+                                         int x, int y, int w, int h) {
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > target_w) w = target_w - x;
+    if (y + h > target_h) h = target_h - y;
+    if (w <= 0 || h <= 0) return;
+    int tile_w = w < GL_SCRATCH_TILE ? w : GL_SCRATCH_TILE;
+    int tile_h = h < GL_SCRATCH_TILE ? h : GL_SCRATCH_TILE;
+    scratch_ensure(tile_w, tile_h);
+    for (int ty = y; ty < y + h; ty += tile_h) {
+        for (int tx = x; tx < x + w; tx += tile_w) {
+            int cw = (x + w - tx) < tile_w ? (x + w - tx) : tile_w;
+            int ch = (y + h - ty) < tile_h ? (y + h - ty) : tile_h;
+            p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, target_fbo);
+            p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_scratch_fbo);
+            glDisable(GL_SCISSOR_TEST);
+            p_glBlitFramebuffer(tx, ty, tx + cw, ty + ch, 0, 0, cw, ch,
+                                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            p_glBindFramebuffer(PSXGL_FRAMEBUFFER, target_fbo);
+            glViewport(0, 0, target_w, target_h);
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(tx, ty, cw, ch);
+            glDisable(GL_BLEND);
+            glEnable(GL_STENCIL_TEST);
+            glStencilMask(0x01);
+            glClearStencil(0);
+            glClear(GL_STENCIL_BUFFER_BIT);
+            glStencilFunc(GL_ALWAYS, 1, 0x01);
+            glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+            p_glUseProgram(s_stencil_prog);
+            p_glActiveTexture(PSXGL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, s_scratch_tex);
+            p_glUniform1i(s_uStencilSrc, 0);
+            p_glUniform2i(s_uStencilOff, tx, ty);
+            p_glBindVertexArray(s_empty_vao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        }
+    }
+    p_glUniform2i(s_uStencilOff, 0, 0);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    p_glBindVertexArray(0);
+    p_glUseProgram(0);
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
+}
+
 static void rebuild_mask_stencils(void) {
     if (s_stencil_valid || !s_raster_ok) return;
     int hw = VRAM_W * s_scale, hh = VRAM_H * s_scale;
-    rebuild_target_stencil(s_hr_fbo, hw, hh);
-    for (int i = 0; i < WIDE_MAX_SURF; i++) {
-        if (s_wide_fbo[i])
-            rebuild_target_stencil(s_wide_fbo[i], g_wide_w * s_scale, hh);
+    if (s_scale <= 1) {
+        /* Native: the historical whole-surface rebuild, unchanged. */
+        rebuild_target_stencil(s_hr_fbo, hw, hh);
+        for (int i = 0; i < WIDE_MAX_SURF; i++) {
+            if (s_wide_fbo[i])
+                rebuild_target_stencil(s_wide_fbo[i], g_wide_w * s_scale, hh);
+        }
+    } else {
+        /* S > 1: only primitives can leave stencil behind alpha, so rebuild
+         * their bbox union, tiled. Wide surfaces keep a full rebuild (their
+         * margins are not in canonical coordinates), also tiled. */
+        if (s_stencil_stale.set) {
+            int S = s_scale;
+            rebuild_target_stencil_tiled(s_hr_fbo, hw, hh,
+                s_stencil_stale.x0 * S, s_stencil_stale.y0 * S,
+                (s_stencil_stale.x1 - s_stencil_stale.x0 + 1) * S,
+                (s_stencil_stale.y1 - s_stencil_stale.y0 + 1) * S);
+        }
+        for (int i = 0; i < WIDE_MAX_SURF; i++) {
+            if (s_wide_fbo[i])
+                rebuild_target_stencil_tiled(s_wide_fbo[i], g_wide_w * s_scale, hh,
+                                             0, 0, g_wide_w * s_scale, hh);
+        }
     }
+    rect_clear(&s_stencil_stale);
     s_stencil_valid = 1;
 }
 
@@ -1673,6 +1810,7 @@ static void mark_prim_dirty(const int *xs, const int *ys, int n, int textured) {
     if (x1 > s_area_x2) x1 = s_area_x2;
     if (y1 > s_area_y2) y1 = s_area_y2;
     rect_add(&s_pack_dirty, x0, y0, x1, y1);
+    if (s_scale > 1) rect_add(&s_stencil_stale, x0, y0, x1, y1);
     if (!s_cpu_auth_dual) rect_add(&s_cpu_dirty, x0, y0, x1, y1);
     /* Dual-raster keeps CPU current via SW writes — do not mark GPU-ahead. */
     if (!s_cpu_auth_dual)
@@ -2029,6 +2167,44 @@ static void flush_flat_batch(void) {
     hr_end();
 }
 
+/* A PS1 line as a quad one NATIVE pixel thick (used at S > 1).
+ *
+ * glLineWidth(S) was the old way to keep a line's thickness at internal scale,
+ * but core-profile contexts only guarantee width 1 (macOS reports
+ * GL_ALIASED_LINE_WIDTH_RANGE 1..1 and rejects anything wider), so every line
+ * came out one HR pixel thick: 1/9 of native at S=9. The quad follows the PS1
+ * rule instead: one pixel per step along the major axis, one pixel across the
+ * minor axis. It spans pixel centres p0..p1 extended half a pixel along the
+ * major axis at both ends (so both endpoint pixels are covered) and offset
+ * +-0.5 px across the minor axis. Positions are native VRAM px, the space the
+ * GEO shader already takes. v = two (x, y, r, g, b, a) vertices; q = six. */
+static void line_to_quad(const float *v, float *q) {
+    float x0 = v[0] + 0.5f, y0 = v[1] + 0.5f;
+    float x1 = v[6] + 0.5f, y1 = v[7] + 0.5f;
+    float dx = x1 - x0, dy = y1 - y0;
+    float ax = fabsf(dx), ay = fabsf(dy);
+    float ex, ey, nx, ny;      /* half-pixel extension along, offset across */
+    if (ax >= ay) {            /* X-major (also the single-pixel case) */
+        float sx = dx < 0.0f ? -1.0f : 1.0f;
+        ex = 0.5f * sx; ey = ax > 0.0f ? 0.5f * sx * dy / dx : 0.0f;
+        nx = 0.0f; ny = 0.5f;
+    } else {                   /* Y-major */
+        float sy = dy < 0.0f ? -1.0f : 1.0f;
+        ey = 0.5f * sy; ex = 0.5f * sy * dx / dy;
+        nx = 0.5f; ny = 0.0f;
+    }
+    const float a[2] = { x0 - ex, y0 - ey }, b[2] = { x1 + ex, y1 + ey };
+    /* corners: a-, b-, a+ / b-, a+, b+ ; colour follows the nearer endpoint */
+    const float cx[6] = { a[0]-nx, b[0]-nx, a[0]+nx, b[0]-nx, a[0]+nx, b[0]+nx };
+    const float cy[6] = { a[1]-ny, b[1]-ny, a[1]+ny, b[1]-ny, a[1]+ny, b[1]+ny };
+    const int   end[6] = { 0, 1, 0, 1, 0, 1 };
+    for (int i = 0; i < 6; i++) {
+        const float *src = v + end[i] * 6;
+        q[i*6+0] = cx[i]; q[i*6+1] = cy[i];
+        q[i*6+2] = src[2]; q[i*6+3] = src[3]; q[i*6+4] = src[4]; q[i*6+5] = src[5];
+    }
+}
+
 /* Flat / gouraud triangles and lines share the GEO program. mode: GL_TRIANGLES
  * or GL_LINES; verts are (x, y, r, g, b, a) tuples with colors as 1555. */
 static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
@@ -2089,16 +2265,26 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
             verts[i*6+4] = (((cs[i] >> 10) & 0x1F) << 3) / 255.0f;
             verts[i*6+5] = mask_a;
         }
+        /* S > 1: a line becomes a one-native-pixel quad (see line_to_quad);
+         * native keeps GL_LINES exactly as before. */
+        float quad[6 * 6];
+        GLenum draw_mode = mode;
+        const float *draw_verts = verts;
+        int draw_n = n;
+        if (mode == GL_LINES && n == 2 && s_scale > 1) {
+            line_to_quad(verts, quad);
+            draw_mode = GL_TRIANGLES; draw_verts = quad; draw_n = 6;
+        }
         hr_begin(1);
         if (semi >= 0) apply_psx_blend(semi); else glDisable(GL_BLEND);
         mask_stencil(s_mask_set);
-        if (mode == GL_LINES) glLineWidth((float)s_scale);
+        if (draw_mode == GL_LINES) glLineWidth((float)s_scale);
         p_glUseProgram(s_geo_prog);
         p_glBindVertexArray(s_geo_vao);
         p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
-        p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(n * 6 * sizeof(float)),
-                       verts, PSXGL_STREAM_DRAW);
-        glDrawArrays(mode, 0, n);
+        p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(draw_n * 6 * sizeof(float)),
+                       draw_verts, PSXGL_STREAM_DRAW);
+        glDrawArrays(draw_mode, 0, draw_n);
         if (g_wide_cur && !s_wide_suppress && s_ws_ablate != 1 &&
             !(!g_ws_bd_stretch_on && mirror_geo_center_only(xs, n))) {
             int dx = wide_dx();
@@ -2106,7 +2292,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
             gl_perf_mirror_begin();
             wide_target_begin(dx, s_geo_uXoff, s_geo_uXhalf);
             wide_set_bd_scale(s_geo_uXscale, s_geo_uXcenter);
-            if (s_ws_ablate != 2) glDrawArrays(mode, 0, n);
+            if (s_ws_ablate != 2) glDrawArrays(draw_mode, 0, draw_n);
             wide_clear_bd_scale(s_geo_uXscale, s_geo_uXcenter);
             wide_target_end(s_geo_uXoff, s_geo_uXhalf);
             gl_perf_mirror_end();
@@ -2428,11 +2614,15 @@ static void gpu_copy_rect(int sx,int sy,int dx,int dy,int w,int h) {
     if (w <= 0 || h <= 0) return;
 
     int S = s_scale;
+    /* Stage the source at the scratch ORIGIN (not at its own hr coords), so
+     * the scratch only has to be as large as the biggest copy. The integer
+     * texelFetch in BLIT_FS makes the placement invisible in the result. */
+    scratch_ensure(w * S, h * S);
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hr_fbo);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_scratch_fbo);
     glDisable(GL_SCISSOR_TEST);
     p_glBlitFramebuffer(sx*S, sy*S, (sx+w)*S, (sy+h)*S,
-                        sx*S, sy*S, (sx+w)*S, (sy+h)*S,
+                        0, 0, w*S, h*S,
                         GL_COLOR_BUFFER_BIT, GL_NEAREST);
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
@@ -2445,9 +2635,9 @@ static void gpu_copy_rect(int sx,int sy,int dx,int dy,int w,int h) {
     glBindTexture(GL_TEXTURE_2D, s_scratch_tex);
     p_glUniform1i(s_uBlitSrc, 0);
     p_glUniform1i(s_uBlitMaskset, s_mask_set);
-    /* Scratch holds the source at its own hr coords: texel = frag + (src-dst)*S. */
+    /* Scratch holds the source at its origin: texel = frag - dst*S. */
     p_glUniform1i(s_uBlitSrcDiv, 1);
-    p_glUniform2i(s_uBlitSrcOff, (sx - dx) * S, (sy - dy) * S);
+    p_glUniform2i(s_uBlitSrcOff, -dx * S, -dy * S);
     float fx0 = (float)dx, fy0 = (float)dy, fx1 = (float)(dx + w), fy1 = (float)(dy + h);
     float verts[6 * 2] = {
         fx0, fy0,  fx1, fy0,  fx0, fy1,
@@ -2476,6 +2666,8 @@ static void glb_init(uint16_t *vram) { s_vram = vram; sw_renderer_init(vram); }
  * (software mirror, readbacks, screenshots) stays native, so the reported
  * scale is 1 and the software hi-res mirror stays off. */
 static void glb_set_scale(int s) {
+    /* Only the compile-time ceiling here: the driver and memory limits are
+     * known at context init (init_gpu_raster), which clamps further. */
     if (s < 1) s = 1;
     if (s > GL_MAX_INTERNAL_SCALE) s = GL_MAX_INTERNAL_SCALE;
     s_req_scale = s;
@@ -2962,8 +3154,75 @@ static int make_fbo(GLuint *out_fbo, GLuint color_tex, GLuint stencil_rb) {
     return 1;
 }
 
+/* Release the scale-dependent render targets (hr colour + depth-stencil +
+ * copy scratch). Used when an allocation fails and init steps S down. */
+static void free_hr_targets(void) {
+    if (s_hr_fbo)      { p_glDeleteFramebuffers(1, &s_hr_fbo); s_hr_fbo = 0; }
+    if (s_scratch_fbo) { p_glDeleteFramebuffers(1, &s_scratch_fbo); s_scratch_fbo = 0; }
+    if (s_hr_rb)       { p_glDeleteRenderbuffers(1, &s_hr_rb); s_hr_rb = 0; }
+    if (s_hr_tex)      { glDeleteTextures(1, &s_hr_tex); s_hr_tex = 0; }
+    if (s_scratch_tex) { glDeleteTextures(1, &s_scratch_tex); s_scratch_tex = 0; }
+    s_scratch_w = s_scratch_h = 0;
+}
+
+/* Allocate the authoritative hr surface at scale S. Returns 1 when every
+ * target is complete and the driver reported no error (a too-large texture
+ * surfaces as GL_INVALID_VALUE or GL_OUT_OF_MEMORY, not always as an
+ * incomplete FBO). */
+static int alloc_hr_targets(int S) {
+    while (glGetError() != GL_NO_ERROR) {}
+    int hw = VRAM_W * S, hh = VRAM_H * S;
+    s_hr_tex = make_tex(GL_RGBA8, hw, hh, GL_RGBA, GL_UNSIGNED_BYTE);
+    /* Copy/stencil scratch. Up to 2x it covers the whole surface as before
+     * (<= 8 MiB); above that it starts at one tile and grows to the largest
+     * copy on demand (scratch_ensure), instead of costing 4 MiB*S^2 up front. */
+    if (S <= 2) { s_scratch_w = hw; s_scratch_h = hh; }
+    else {
+        s_scratch_w = hw < GL_SCRATCH_TILE ? hw : GL_SCRATCH_TILE;
+        s_scratch_h = hh < GL_SCRATCH_TILE ? hh : GL_SCRATCH_TILE;
+    }
+    s_scratch_tex = make_tex(GL_RGBA8, s_scratch_w, s_scratch_h, GL_RGBA, GL_UNSIGNED_BYTE);
+    p_glGenRenderbuffers(1, &s_hr_rb);
+    p_glBindRenderbuffer(PSXGL_RENDERBUFFER, s_hr_rb);
+    p_glRenderbufferStorage(PSXGL_RENDERBUFFER, PSXGL_DEPTH24_STENCIL8, hw, hh);
+    p_glBindRenderbuffer(PSXGL_RENDERBUFFER, 0);
+    int ok = glGetError() == GL_NO_ERROR;
+    if (ok) ok = make_fbo(&s_hr_fbo, s_hr_tex, s_hr_rb);
+    if (ok) ok = make_fbo(&s_scratch_fbo, s_scratch_tex, 0);
+    if (ok) ok = glGetError() == GL_NO_ERROR;
+    if (!ok) free_hr_targets();
+    return ok;
+}
+
 static int init_gpu_raster(void) {
-    s_scale = s_req_scale;
+    /* Effective scale: the request, clamped to what the driver can allocate
+     * for the full-VRAM surface and to the memory budget. Logged whenever it
+     * differs from the request so a preset that cannot be honoured says so. */
+    {
+        GLint max_tex = 0, max_rb = 0, max_vp[2] = { 0, 0 };
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_tex);
+        glGetIntegerv(PSXGL_MAX_RENDERBUFFER_SIZE, &max_rb);
+        glGetIntegerv(GL_MAX_VIEWPORT_DIMS, max_vp);
+        while (glGetError() != GL_NO_ERROR) {}
+        int lim = max_tex > 0 ? max_tex : 0;
+        if (max_rb > 0 && (lim == 0 || max_rb < lim)) lim = max_rb;
+        if (max_vp[0] > 0 && (lim == 0 || max_vp[0] < lim)) lim = max_vp[0];
+        if (max_vp[1] > 0 && (lim == 0 || max_vp[1] < lim)) lim = max_vp[1];
+        s_gl_max_dim = lim;
+        s_vram_budget = psx_gl_budget_bytes_from_env(getenv("PSX_GL_VRAM_BUDGET_MB"));
+        s_scale = psx_gl_clamp_full_vram_scale(s_req_scale, GL_MAX_INTERNAL_SCALE,
+                                               s_gl_max_dim, s_vram_budget,
+                                               &s_scale_clamp_reason);
+        if (s_scale != s_req_scale)
+            fprintf(stdout, "psxrecomp: GL internal scale %dx clamped to %dx "
+                    "(%s%s%s; GPU max texture %d, budget %llu MiB)\n",
+                    s_req_scale, s_scale,
+                    (s_scale_clamp_reason & PSX_GL_SCALE_TEXTURE) ? "texture limit " : "",
+                    (s_scale_clamp_reason & PSX_GL_SCALE_BUDGET) ? "memory budget " : "",
+                    (s_scale_clamp_reason & PSX_GL_SCALE_CEILING) ? "ceiling " : "",
+                    s_gl_max_dim, (unsigned long long)(s_vram_budget >> 20));
+        s_scale_alloc_retries = 0;
+    }
 
     s_geo_prog  = build_program(GEO_VS, GEO_FS);
     s_tex_prog  = build_program_ex(TEX_VS, TEX_FS, 1);
@@ -2975,11 +3234,6 @@ static int init_gpu_raster(void) {
     s_conv = (uint32_t *)malloc((size_t)VRAM_W * VRAM_H * sizeof(uint32_t));
     if (!s_conv) return 0;
 
-    int hw = VRAM_W * s_scale, hh = VRAM_H * s_scale;
-    s_hr_tex      = make_tex(GL_RGBA8, hw, hh, GL_RGBA, GL_UNSIGNED_BYTE);
-    s_scratch_tex = make_tex(GL_RGBA8, hw, hh, GL_RGBA, GL_UNSIGNED_BYTE);
-    s_scratch_w = hw;
-    s_scratch_h = hh;
     s_up_tex      = make_tex(GL_RGBA8, VRAM_W, VRAM_H, GL_RGBA, GL_UNSIGNED_BYTE);
     s_raw_tex     = make_tex(PSXGL_R16UI, VRAM_W, VRAM_H, PSXGL_RED_INTEGER, GL_UNSIGNED_SHORT);
     /* Force the driver's first texture-upload allocation while the renderer is
@@ -2997,14 +3251,18 @@ static int init_gpu_raster(void) {
         glFinish();
     }
 
-    p_glGenRenderbuffers(1, &s_hr_rb);
-    p_glBindRenderbuffer(PSXGL_RENDERBUFFER, s_hr_rb);
-    p_glRenderbufferStorage(PSXGL_RENDERBUFFER, PSXGL_DEPTH24_STENCIL8, hw, hh);
-    p_glBindRenderbuffer(PSXGL_RENDERBUFFER, 0);
-
-    if (!make_fbo(&s_hr_fbo, s_hr_tex, s_hr_rb)) return 0;
+    /* The hr surface: step the scale down inside GL when the driver cannot
+     * allocate it (out of memory, or a limit it under-reported). Only a
+     * failure at 1x takes the whole backend down, as before. */
+    while (!alloc_hr_targets(s_scale)) {
+        if (s_scale <= 1) return 0;
+        fprintf(stdout, "psxrecomp: GL hr surface %dx%d (%dx) failed to allocate; "
+                "retrying at %dx\n", VRAM_W * s_scale, VRAM_H * s_scale,
+                s_scale, s_scale - 1);
+        s_scale--;
+        s_scale_alloc_retries++;
+    }
     if (!make_fbo(&s_raw_fbo, s_raw_tex, 0)) return 0;
-    if (!make_fbo(&s_scratch_fbo, s_scratch_tex, 0)) return 0;
 
     s_uVram  = p_glGetUniformLocation(s_tex_prog, "u_vram");
     s_uTpage = p_glGetUniformLocation(s_tex_prog, "u_tpage");
@@ -3025,6 +3283,7 @@ static int init_gpu_raster(void) {
     s_uPackHr    = p_glGetUniformLocation(s_pack_prog, "u_hr");
     s_uPackScale = p_glGetUniformLocation(s_pack_prog, "u_scale");
     s_uStencilSrc = p_glGetUniformLocation(s_stencil_prog, "u_src");
+    s_uStencilOff = p_glGetUniformLocation(s_stencil_prog, "u_off");
     s_geo_uXoff  = p_glGetUniformLocation(s_geo_prog, "u_xoff");
     s_geo_uXhalf = p_glGetUniformLocation(s_geo_prog, "u_xhalf");
     s_tex_uXoff  = p_glGetUniformLocation(s_tex_prog, "u_xoff");
@@ -3114,6 +3373,7 @@ static int init_gpu_raster(void) {
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
     rect_clear(&s_pack_dirty);
+    rect_clear(&s_stencil_stale);
     s_up_nrects = 0;
     up_add(0, 0, VRAM_W - 1, VRAM_H - 1);
     s_gpu_dirty = 0;
@@ -3143,6 +3403,56 @@ static int init_gpu_raster(void) {
 }
 
 int gl_renderer_texture_banks_supported(void) { return s_raster_ok && !s_cpu_auth_dual; }
+
+int gl_renderer_fit_wide_aspect(int disp_w, int *num, int *den) {
+    if (!s_raster_ok || s_gl_max_dim <= 0) return 0;
+    int max_w = psx_gl_max_wide_width(s_scale, s_gl_max_dim);
+    return psx_gl_fit_wide_aspect(disp_w, max_w > 0 ? max_w : 1, num, den);
+}
+
+int gl_renderer_scale_info(GlScaleInfo *out) {
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    out->requested = s_req_scale;
+    out->effective = s_raster_ok ? s_scale : 0;
+    out->max_dim = s_gl_max_dim;
+    out->clamp_reason = s_scale_clamp_reason;
+    out->alloc_retries = s_scale_alloc_retries;
+    out->budget_mib = (int)(s_vram_budget >> 20);
+    out->fbo_w = s_raster_ok ? VRAM_W * s_scale : 0;
+    out->fbo_h = s_raster_ok ? VRAM_H * s_scale : 0;
+    out->max_scale = psx_gl_clamp_full_vram_scale(GL_MAX_INTERNAL_SCALE,
+                                                  GL_MAX_INTERNAL_SCALE,
+                                                  s_gl_max_dim, s_vram_budget, NULL);
+    if (s_ctx && s_win) SDL_GL_GetDrawableSize(s_win, &out->drawable_w, &out->drawable_h);
+    return s_raster_ok;
+}
+
+/* Read the display rect at internal resolution straight from the hr FBO:
+ * (w*S) x (h*S) ARGB8888, top row first. The CPU-side hires path under GL is
+ * native (the software mirror stays 1x), so this is the only capture that
+ * shows what the internal resolution actually rendered. cap_px bounds the
+ * output; returns the pixel count, 0 when unavailable or too large. */
+int gl_renderer_read_display_hires(int x, int y, int w, int h, uint32_t *out,
+                                   int cap_px, int *ow, int *oh) {
+    if (!s_raster_ok || !s_ctx || !out || w <= 0 || h <= 0) return 0;
+    if (x < 0 || y < 0 || x + w > VRAM_W || y + h > VRAM_H) return 0;
+    int S = s_scale, W = w * S, H = h * S;
+    if ((int64_t)W * H > (int64_t)cap_px) return 0;
+    flush_flat_batch();
+    flush_tex_batch();
+    flush_cpu_upload();
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_hr_fbo);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(x * S, y * S, W, H, GL_BGRA, GL_UNSIGNED_BYTE, out);
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
+    /* The hr FBO stores PS1 y=0 at GL row 0 and glReadPixels reads bottom-up,
+     * so row 0 is already the display's top line (see glb_render_wide_display). */
+    for (int64_t i = 0; i < (int64_t)W * H; i++) out[i] |= 0xFF000000u;
+    if (ow) *ow = W;
+    if (oh) *oh = H;
+    return W * H;
+}
 
 int gl_renderer_select_texture_bank(uint16_t id) {
     uint32_t width, height;
@@ -3619,6 +3929,24 @@ static GLuint wide_fbo_for(int base_x) {
     if (g_wide_w <= 0) return 0;
     for (int i = 0; i < WIDE_MAX_SURF; i++)
         if (s_wide_fbo[i] && s_wide_base[i] == base_x) return s_wide_fbo[i];
+    /* A native-wide surface is g_wide_w*S wide, and the driver limit bounds
+     * it: on a 16384 limit, 1024 native columns at 16x, about 38:9 at a
+     * 320-px display. Fit to Window narrows its aspect to fit
+     * (gl_renderer_fit_wide_aspect, main.cpp); a fixed aspect on a wide
+     * display mode can still ask for more. Refuse that with one log line
+     * instead of failing mid-draw: the frame then presents 4:3 through the CPU
+     * path at 1x, without the native-wide margins. */
+    if (s_gl_max_dim > 0 &&
+        ((int64_t)g_wide_w * s_scale > s_gl_max_dim ||
+         (int64_t)VRAM_H * s_scale > s_gl_max_dim)) {
+        if (!s_wide_refused_logged) {
+            fprintf(stdout, "psxrecomp: GL native-wide surface %dx%d at %dx exceeds "
+                    "the GPU limit %d; presenting 4:3\n", g_wide_w * s_scale,
+                    VRAM_H * s_scale, s_scale, s_gl_max_dim);
+            s_wide_refused_logged = 1;
+        }
+        return 0;
+    }
     for (int i = 0; i < WIDE_MAX_SURF; i++) {
         if (!s_wide_fbo[i]) {
             int w = g_wide_w * s_scale, h = VRAM_H * s_scale;
@@ -3660,7 +3988,7 @@ static void glb_wide_configure(int wide_w, int offset) {
     flush_line_batch();
     flush_tex_batch();   /* a queued batch's wide mirror targets the CURRENT surfaces */
     if (wide_w <= 0) { wide_free_all(); g_wide_w = 0; g_wide_off = 0; s_cw_wide_ms += cw_ms() - t0; return; }
-    if (wide_w != g_wide_w) wide_free_all();
+    if (wide_w != g_wide_w) { wide_free_all(); s_wide_refused_logged = 0; }
     g_wide_w = wide_w;
     g_wide_off = offset;
     s_cw_wide_ms += cw_ms() - t0;
@@ -5239,23 +5567,52 @@ static void gl_swap_with_osd(void) {
     SDL_GL_SwapWindow(s_win);
 }
 
+/* Output pixels per source texel below which a supersampled present switches
+ * from one tap to the area resolve (1 / 1.25: the source is 25% larger than the
+ * output). Only used for S > 1 sources, so native presents never change. */
+#define PRESENT_AREA_MIN_RATIO 1.25f
+
+/* tex_w/tex_h and x/y/w/h are in the texture's NATIVE units; src_scale is how
+ * many texels one native unit spans (the internal scale for the hr FBO and the
+ * wide surfaces, 1 for textures that hold native or already-composed pixels).
+ * src_scale <= 1 is exactly the historical behaviour. */
 static void present_target_quad(GLuint tex, int tex_w, int tex_h,
                                 int x, int y, int w, int h, int linear,
                                 int lx, int ly, int lw, int lh, int v_flip,
-                                int apply_gamma) {
+                                int apply_gamma, int src_scale) {
     float u0, v0, u1, v1;
+    int area = 0;
+    if (src_scale > 1 && lw > 0 && lh > 0 && w > 0 && h > 0) {
+        float rx = (float)(w * src_scale) / (float)lw;
+        float ry = (float)(h * src_scale) / (float)lh;
+        area = (rx > PRESENT_AREA_MIN_RATIO || ry > PRESENT_AREA_MIN_RATIO);
+    }
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
     glViewport(lx, ly, lw, lh);
     p_glActiveTexture(PSXGL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    /* The area resolve averages bilinear taps; it needs LINEAR whatever the
+     * AA setting (the source is already the supersampled image). */
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (linear || area) ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (linear || area) ? GL_LINEAR : GL_NEAREST);
     p_glUseProgram(s_present_prog);
     p_glUniform1i(s_present_uTex, 0);
     present_set_gamma(s_present_uGamma, apply_gamma);
     /* The rasterized path already renders at the internal scale, so it has no
-     * low-res source to reconstruct — keep the plain sample. */
-    present_set_sharp(0, 0, 0, 0, 0);
+     * low-res source to reconstruct — keep the plain sample, unless the
+     * internal image is larger than the output: then resolve its area. */
+    if (area && s_present_uSharp >= 0) {
+        p_glUniform1i(s_present_uSharp, 3);
+        if (s_present_uTexSize >= 0)
+            p_glUniform2f(s_present_uTexSize, (float)(tex_w * src_scale),
+                          (float)(tex_h * src_scale));
+        if (s_present_uSharpScale >= 0)   /* output px per source texel */
+            p_glUniform2f(s_present_uSharpScale,
+                          (float)lw / (float)(w * src_scale),
+                          (float)lh / (float)(h * src_scale));
+    } else {
+        present_set_sharp(0, 0, 0, 0, 0);
+    }
     /* Scanline at the native line grid. v_uv is normalized against tex_h (the
      * full VRAM/FBO texture), and one texel row is one PS1 scanline, so tex_h is
      * the phase pitch; h is the displayed line count for the output-scale gate.
@@ -5266,10 +5623,16 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
      * dest pixels blend the border texel with VRAM outside the content rect
      * (visible edge stripe with AA on). Center-mapped UVs keep edge samples
      * inside the rect; interior sampling is unchanged. */
-    u0 = ((float)x + 0.5f) / (float)tex_w;
-    v0 = ((float)y + 0.5f) / (float)tex_h;
-    u1 = ((float)(x + w) - 0.5f) / (float)tex_w;
-    v1 = ((float)(y + h) - 0.5f) / (float)tex_h;
+    /* The inset is half a TEXEL. For a supersampled source that is 0.5/S of a
+     * native unit; the old 0.5 native units cropped (S-1)/2 texels per edge
+     * (about 4 px at 9x) and zoomed the image. src_scale <= 1: unchanged. */
+    {
+        float in = src_scale > 1 ? 0.5f / (float)src_scale : 0.5f;
+        u0 = ((float)x + in) / (float)tex_w;
+        v0 = ((float)y + in) / (float)tex_h;
+        u1 = ((float)(x + w) - in) / (float)tex_w;
+        v1 = ((float)(y + h) - in) / (float)tex_h;
+    }
     /* PRESENT_VS always samples with mix(v0,v1,1-p.y). For CPU/FBO guest
      * bands that is the correct PSX top-down → GL mapping (v_flip=1). For a
      * glCopyTexSubImage2D of the already-presented drawable, the texture
@@ -5371,7 +5734,7 @@ int gl_renderer_present_hold_last(void) {
         }
         /* v_flip=0: drawable capture is already screen-oriented. */
         present_target_quad(s_hold_tex, s_hold_tw, s_hold_th,
-                            0, 0, s_hold_tw, s_hold_th, 0, lx, ly, lw, lh, 0, 0);
+                            0, 0, s_hold_tw, s_hold_th, 0, lx, ly, lw, lh, 0, 0, 1);
     } else {
         if (s_hold_force_4_3)
             letterbox_rect_aspect(ww, wh, 4, 3, &lx, &ly, &lw, &lh);
@@ -5379,7 +5742,7 @@ int gl_renderer_present_hold_last(void) {
             letterbox_rect(ww, wh, &lx, &ly, &lw, &lh);
         present_target_quad(s_hold_tex, s_hold_tw, s_hold_th,
                             0, 0, s_hold_tw, s_hold_th, s_hold_linear,
-                            lx, ly, lw, lh, 1, 1);
+                            lx, ly, lw, lh, 1, 1, 1);
         /* Upgrade to drawable after letterboxing once. Live+interp leaves
          * HOLD_NATIVE (no Swap on main); drawable path is the soak-proven
          * full-window image (GL without interp). */
@@ -5446,7 +5809,7 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     }
     present_bezel(ww, wh, lx, ly, lw, lh);
     present_target_quad(s_hr_tex, VRAM_W, VRAM_H,
-                        disp_x, disp_y, w, h, linear, lx, ly, lw, lh, 1, 1);
+                        disp_x, disp_y, w, h, linear, lx, ly, lw, lh, 1, 1, s_scale);
     pres_record(GL_PRES_VRAM, disp_x, disp_y, w, h, lx, ly, lw, lh);
     hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
@@ -5552,7 +5915,7 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
         return 1;
     }
     present_target_quad(tex, g_wide_w, VRAM_H,
-                        0, disp_y, g_wide_w, disp_h, linear, lx, ly, lw, lh, 1, 1);
+                        0, disp_y, g_wide_w, disp_h, linear, lx, ly, lw, lh, 1, 1, s_scale);
     pres_record(GL_PRES_WIDE, disp_x, disp_y, g_wide_w, disp_h, lx, ly, lw, lh);
     hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);

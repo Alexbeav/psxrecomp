@@ -200,6 +200,32 @@ float gl_renderer_get_post_gamma(void);
  * path. Textured edge expansion needs the complete mirror surface. */
 void gl_renderer_set_wide_fast(int on);
 
+/* Internal-resolution scale state of the live GL context (0 before init). */
+typedef struct GlScaleInfo {
+    int requested;      /* scale requested before context init (gr_set_scale) */
+    int effective;      /* scale the hr surface was allocated at */
+    int max_scale;      /* largest scale this context could allocate */
+    int max_dim;        /* min(GL_MAX_TEXTURE_SIZE, _RENDERBUFFER_SIZE, _VIEWPORT_DIMS) */
+    int clamp_reason;   /* PSX_GL_SCALE_* mask (gl_scale_limits.h) */
+    int alloc_retries;  /* FBO allocations that failed and stepped the scale down */
+    int budget_mib;     /* memory budget for the hr surface (0 = none) */
+    int fbo_w, fbo_h;   /* hr surface size in pixels */
+    int drawable_w, drawable_h; /* window drawable in pixels */
+} GlScaleInfo;
+int gl_renderer_scale_info(GlScaleInfo *out);
+
+/* Narrow a native-wide display aspect num:den to the widest whose surface
+ * this context can allocate at its internal scale (psx_gl_fit_wide_aspect;
+ * disp_w is the display width the margins derive from). Returns 1 when it
+ * changed num:den; 0, leaving it alone, before init or with no known limit. */
+int gl_renderer_fit_wide_aspect(int disp_w, int *num, int *den);
+
+/* Read the display rect at internal resolution from the hr FBO: (w*S) x (h*S)
+ * ARGB8888, top row first. Returns the pixel count, 0 if unavailable or larger
+ * than cap_px. Debug/verification only (screenshot_hires under GL). */
+int gl_renderer_read_display_hires(int x, int y, int w, int h, uint32_t *out,
+                                   int cap_px, int *ow, int *oh);
+
 void gl_renderer_shutdown(void);
 
 /* Diagnostics (debug server): read GPU-side VRAM without touching the CPU

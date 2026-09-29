@@ -410,6 +410,12 @@ if(BUILD_TESTING)
     target_include_directories(display_scanout_test PRIVATE ../runtime/include)
     add_test(NAME display_scanout_test COMMAND display_scanout_test)
 
+    # Pure header arithmetic for the OpenGL internal-resolution clamp.
+    add_executable(gl_scale_limits_test
+        ../runtime/tests/test_gl_scale_limits.c)
+    target_include_directories(gl_scale_limits_test PRIVATE ../runtime/include)
+    add_test(NAME gl_scale_limits_test COMMAND gl_scale_limits_test)
+
     add_executable(cli_boot_path_test
         tests/cli_boot_path_test.cpp
         src/cli_boot_path.cpp
@@ -890,6 +896,7 @@ if(BUILD_TESTING)
                 hybrid_dev_any_input
                 launcher_pad_mode_wiring
                 jalr_link_register_guards
+                gl_internal_scale_guards
                 launcher_vulkan_option
                 mod_controller_override
                 mod_load_acceleration

@@ -1,0 +1,87 @@
+"""Source guards for the OpenGL internal-resolution scale (source-only).
+
+The real-GL behaviour is covered by run_gl_scale_invariance.py (needs a GPU and
+SDL3). These guards pin the structural promises that keep native (1x) output
+byte-identical and keep a large scale from costing the GL backend:
+  - no local 4x cap in the GL backend; the ceiling lives in gpu_render.h;
+  - init queries the driver limits and clamps, and only a 1x allocation
+    failure can drop the backend to software;
+  - line quads, the area resolve and the half-texel inset change are all
+    gated on a scale above 1;
+  - the dual-raster re-arm and the offline clamp no longer cap GL at the
+    software mirror's 4x.
+Also unit-tests the invariance runner's result parsing.
+"""
+import pathlib
+import re
+import sys
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+GL = (ROOT / "runtime/src/gpu_gl_renderer.c").read_text(encoding="utf-8")
+MAIN = (ROOT / "runtime/src/main.cpp").read_text(encoding="utf-8")
+RENDER_H = (ROOT / "runtime/include/gpu_render.h").read_text(encoding="utf-8")
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from run_gl_scale_invariance import digests_agree, parse_run  # noqa: E402
+
+
+def body(src, signature):
+    start = src.index(signature)
+    brace = src.index("{", start)
+    depth = 0
+    for i in range(brace, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[brace:i + 1]
+    raise AssertionError("unbalanced " + signature)
+
+
+class GlScaleGuards(unittest.TestCase):
+    def test_ceiling_is_shared(self):
+        self.assertIsNone(re.search(r"#define\s+GL_MAX_INTERNAL_SCALE\s+4\b", GL))
+        self.assertRegex(RENDER_H, r"#define\s+GL_MAX_INTERNAL_SCALE\s+32\b")
+
+    def test_init_clamps_to_driver_limits(self):
+        init = body(GL, "static int init_gpu_raster(void)")
+        for token in ("GL_MAX_TEXTURE_SIZE", "PSXGL_MAX_RENDERBUFFER_SIZE",
+                      "GL_MAX_VIEWPORT_DIMS", "psx_gl_clamp_full_vram_scale"):
+            self.assertIn(token, init)
+        # Retry lower inside GL; only a 1x failure returns 0 (software fallback).
+        self.assertRegex(init, r"while \(!alloc_hr_targets\(s_scale\)\) \{\s*if \(s_scale <= 1\) return 0;")
+
+    def test_s1_paths_unchanged(self):
+        geo = body(GL, "static void gpu_geometry(")
+        self.assertIn("if (mode == GL_LINES && n == 2 && s_scale > 1) {", geo)
+        quad = body(GL, "static void present_target_quad(GLuint tex, int tex_w, int tex_h,\n"
+                        "                                int x, int y, int w, int h, int linear,\n"
+                        "                                int lx, int ly, int lw, int lh, int v_flip,\n"
+                        "                                int apply_gamma, int src_scale) {")
+        self.assertIn("if (src_scale > 1 && lw > 0", quad)
+        self.assertIn("float in = src_scale > 1 ? 0.5f / (float)src_scale : 0.5f;", quad)
+        stencil = body(GL, "static void rebuild_mask_stencils(void)")
+        self.assertIn("if (s_scale <= 1) {", stencil)
+
+    def test_main_does_not_cap_gl_at_software_limit(self):
+        self.assertNotIn("if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;", MAIN)
+        self.assertIn("(g_video_renderer == 1) ? GL_MAX_INTERNAL_SCALE", MAIN)
+
+
+class RunnerParsing(unittest.TestCase):
+    def test_parse(self):
+        self.assertEqual(parse_run("driver=x\ndigest=0123456789abcdef\nchecks=7 failures=0\n"),
+                         (7, 0, "0123456789abcdef"))
+        self.assertIsNone(parse_run("garbage"))
+
+    def test_digests(self):
+        self.assertTrue(digests_agree({1: "a", 3: "a"}))
+        self.assertFalse(digests_agree({1: "a", 3: "b"}))
+        self.assertFalse(digests_agree({1: "a", 3: None}))
+        self.assertFalse(digests_agree({}))
+
+
+if __name__ == "__main__":
+    unittest.main()

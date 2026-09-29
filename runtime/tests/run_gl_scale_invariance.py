@@ -1,0 +1,138 @@
+"""Build and run test_gl_scale_invariance.c on a hidden real OpenGL context.
+
+The fixture runs once per internal scale; the guest-visible (native) VRAM
+digest must be identical at every scale, and each run checks line thickness
+at internal resolution. Two clamp runs check that an over-limit request (32x,
+and a tiny memory budget) stays on the GL backend at the clamped scale.
+
+macOS/Linux: pass the SDL3 include directory and static library (for example
+from a runtime build tree's _deps/sdl3-src/include and
+_deps/sdl3-build/libSDL3.a) and a C compiler. Evidence (commands, output) is
+written to receipt.json under --output.
+"""
+import argparse
+import json
+import os
+import pathlib
+import platform
+import re
+import subprocess
+import sys
+import tempfile
+
+MAC_FRAMEWORKS = ["Cocoa", "OpenGL", "IOKit", "CoreVideo", "CoreAudio", "AudioToolbox",
+                  "Carbon", "ForceFeedback", "GameController", "Metal", "QuartzCore",
+                  "CoreMedia", "AVFoundation", "Foundation", "CoreHaptics",
+                  "UniformTypeIdentifiers"]
+
+
+def parse_run(stdout):
+    """Return (checks, failures, digest or None) from a fixture run."""
+    summary = re.search(r"^checks=(\d+) failures=(\d+)$", stdout, re.M)
+    digest = re.search(r"^digest=([0-9a-f]{16})$", stdout, re.M)
+    if not summary:
+        return None
+    return int(summary[1]), int(summary[2]), digest[1] if digest else None
+
+
+def digests_agree(results):
+    """results: {scale: digest}. All present and equal."""
+    values = list(results.values())
+    return bool(values) and all(v is not None for v in values) and len(set(values)) == 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--cc", default="cc")
+    ap.add_argument("--sdl-include", required=True)
+    ap.add_argument("--sdl-library", required=True)
+    ap.add_argument("--output", required=True)
+    ap.add_argument("--fixture", type=pathlib.Path)
+    ap.add_argument("--scales", default="1,2,3,5,9")
+    args = ap.parse_args()
+    # ';'-separated when CMake hands over a target's include list.
+    sdl_includes = [str(pathlib.Path(d).resolve()) for d in args.sdl_include.split(";") if d]
+    args.sdl_library = str(pathlib.Path(args.sdl_library).resolve())
+    framework = pathlib.Path(__file__).resolve().parents[2]
+    fixture = args.fixture or framework / "runtime/tests/test_gl_scale_invariance.c"
+    out_root = pathlib.Path(args.output).resolve()
+    out_root.mkdir(parents=True, exist_ok=True)
+    dest = pathlib.Path(tempfile.mkdtemp(prefix="scale-", dir=out_root))
+    print("Evidence directory:", dest)
+    receipt = []
+
+    def run(command, env=None):
+        command = [str(c) for c in command]
+        r = subprocess.run(command, cwd=dest, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env)
+        receipt.append({"cmd": command, "exit": r.returncode,
+                        "stdout": r.stdout, "stderr": r.stderr[-4000:]})
+        (dest / "receipt.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+        return r
+
+    includes = ["-I", framework / "runtime/include", "-I", framework / "runtime/src"]
+    for d in sdl_includes:
+        includes += ["-I", d]
+    # The fixture #includes gpu_gl_renderer.c; these are the other runtime
+    # sources the renderer calls into. render_pass_plan.c exists once the
+    # frame-rate render passes have landed, and the renderer calls it from then
+    # on, so it is linked whenever it is there.
+    sources = [("probe", fixture), ("sw", framework / "runtime/src/gpu_sw_renderer.c"),
+               ("fi", framework / "runtime/src/frame_interpolation.c")]
+    if (framework / "runtime/src/render_pass_plan.c").exists():
+        sources.append(("rp", framework / "runtime/src/render_pass_plan.c"))
+    # Unused renderer functions reference the rest of the runtime; the linker
+    # drops them (-dead_strip, or per-function sections with --gc-sections).
+    # Anything still unresolved is a link error, not a NULL call at run time.
+    sections = [] if platform.system() == "Darwin" else ["-ffunction-sections", "-fdata-sections"]
+    objs = []
+    for name, src in sources:
+        o = dest / (name + ".o")
+        r = run([args.cc, "-std=gnu11", "-O1", "-DPSX_SDL3=1", "-DPSX_NO_DEBUG_TOOLS=1",
+                 "-DGL_SILENCE_DEPRECATION=1", "-w", *sections, *includes, "-c", src, "-o", o])
+        if r.returncode:
+            print(r.stderr[-3000:])
+            return 2
+        objs.append(o)
+    link = [args.cc, *objs, args.sdl_library, "-o", dest / "probe"]
+    if platform.system() == "Darwin":
+        for f in MAC_FRAMEWORKS:
+            link += ["-framework", f]
+        link += ["-liconv", "-lm", "-Wl,-dead_strip"]
+    else:
+        link += ["-lGL", "-lm", "-ldl", "-lpthread", "-Wl,--gc-sections"]
+    r = run(link)
+    if r.returncode:
+        print(r.stderr[-3000:])
+        return 2
+
+    ok = True
+    digests = {}
+    for s in [int(v) for v in args.scales.split(",") if v]:
+        r = run([dest / "probe", s])
+        parsed = parse_run(r.stdout)
+        print(f"scale {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-2:],
+              r.stderr.strip()[-600:])
+        if r.returncode or not parsed or parsed[1]:
+            ok = False
+        digests[s] = parsed[2] if parsed else None
+    if not digests_agree(digests):
+        print("FAIL native VRAM digest differs across scales:", digests)
+        ok = False
+    env = os.environ.copy()
+    for label, s, budget in (("over-limit", 32, None), ("budget", 12, "40")):
+        e = dict(env)
+        if budget is not None:
+            e["PSX_GL_VRAM_BUDGET_MB"] = budget
+        r = run([dest / "probe", s, "clamp"], env=e)
+        parsed = parse_run(r.stdout)
+        print(f"clamp {label}: exit={r.returncode}", r.stdout.strip().splitlines()[-2:],
+              r.stderr.strip()[-600:])
+        if r.returncode or not parsed or parsed[1]:
+            ok = False
+    print("PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

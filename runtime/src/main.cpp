@@ -407,6 +407,7 @@ static void apply_offline_pad_count(int game_players, bool multitap_enabled)
 /* ARGB8888 staging buffer. The 576-row maximum preserves the full interlaced
  * PAL active canvas. Allocated once the supersampling scale is known. */
 static uint32_t*     sdl_pixel_buf = nullptr;
+static size_t        s_pixel_buf_px = 0;   /* sdl_pixel_buf capacity in pixels */
 
 typedef void (*ModFrameHook)(void);
 
@@ -1859,6 +1860,14 @@ static void update_adaptive_widescreen() {
         num /= divisor;
         den /= divisor;
     }
+    /* Native-wide margins live in a GL surface g_wide_w*S wide, which the
+     * driver limit bounds (1024 native columns at 16x on a 16384 limit, about
+     * 38:9 at a 320-px display). The backend refuses a wider one and that
+     * frame drops to a 1x CPU present without the margins, so narrow the
+     * aspect to the widest the surface holds; the window pillarboxes the rest.
+     * A no-op unless the surface would be refused. */
+    if (g_ws_native_wide && (int64_t)num * 3 > (int64_t)den * 4)
+        gl_renderer_fit_wide_aspect(gpu_ws_display_width(), &num, &den);
     if (num == g_video_aspect_num && den == g_video_aspect_den) return;
 
     g_video_aspect_num = num;
@@ -2061,10 +2070,11 @@ static int ensure_sw_sdl_present(void) {
                                 g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
     }
     if (!sdl_pixel_buf) {
-        const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
-        sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
-            tex_scale * sizeof(uint32_t));
+        int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
+        if (tex_scale > SW_MAX_INTERNAL_SCALE) tex_scale = SW_MAX_INTERNAL_SCALE;
+        s_pixel_buf_px = (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
+                         tex_scale;
+        sdl_pixel_buf = (uint32_t*)std::malloc(s_pixel_buf_px * sizeof(uint32_t));
         if (!sdl_pixel_buf) {
             std::fprintf(stderr, "psxrecomp: netplay SW present: staging alloc failed\n");
             return -1;
@@ -2082,8 +2092,10 @@ extern "C" void psx_frontend_netplay_force_sw_gpu(void) {
 #ifndef PSX_SDL_NO_RENDER
     /* Already locked on dual-raster GL quality present. */
     if (s_netplay_sw_gpu_locked && netplay_gl_dual_quality()) {
+        /* The GL present surface is not bound by the software mirror's 4x
+         * (dual-raster keeps SW at 1x); the backend clamps to its own limits. */
         int want = g_video_scale < 1 ? 1 : g_video_scale;
-        if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;
+        if (want > GL_MAX_INTERNAL_SCALE) want = GL_MAX_INTERNAL_SCALE;
         gr_set_backend(GR_BACKEND_OPENGL);
         gl_renderer_set_cpu_auth_dual(1);
         /* FBO scale is fixed at context init — keep request in sync. */
@@ -2123,8 +2135,10 @@ extern "C" void psx_frontend_netplay_force_sw_gpu(void) {
 #ifndef PSX_SDL_NO_RENDER
     if (g_gl_active) {
         /* Dual-raster: OPENGL backend, SW@1× + GPU@Nx, FBO present. */
+        /* The GL present surface is not bound by the software mirror's 4x
+         * (dual-raster keeps SW at 1x); the backend clamps to its own limits. */
         int want = g_video_scale < 1 ? 1 : g_video_scale;
-        if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;
+        if (want > GL_MAX_INTERNAL_SCALE) want = GL_MAX_INTERNAL_SCALE;
         gr_set_backend(GR_BACKEND_OPENGL);
         gl_renderer_set_cpu_auth_dual(1);
         gr_set_scale(want);
@@ -3283,7 +3297,7 @@ static void teardown_game_session_keep_lobby(void) {
     if (sdl_texture) { SDL_DestroyTexture(sdl_texture); sdl_texture = nullptr; }
     if (sdl_renderer) { SDL_DestroyRenderer(sdl_renderer); sdl_renderer = nullptr; }
     if (sdl_window) { SDL_DestroyWindow(sdl_window); sdl_window = nullptr; }
-    if (sdl_pixel_buf) { std::free(sdl_pixel_buf); sdl_pixel_buf = nullptr; }
+    if (sdl_pixel_buf) { std::free(sdl_pixel_buf); sdl_pixel_buf = nullptr; s_pixel_buf_px = 0; }
     /* Rematch must re-run force_sw (and prefer CPU-auth GL present again). */
     s_netplay_sw_gpu_locked = 0;
     s_netplay_gl_present = 0;
@@ -7510,7 +7524,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * native path for those frames (the present filter still upscales).
          * SW-only netplay present: native scanout. Dual-raster FBO present
          * already returned above at GL SSAA. */
+        /* Under OpenGL the CPU-side display readout is native (the software
+         * mirror stays 1x; the internal resolution lives in the GL FBO), so
+         * this path presents at 1x. Treating that native image as S-scaled
+         * showed a magnified top-left slice. */
         if (netplay_cpu_auth_gpu() && !netplay_gl_dual_quality())
+            active_scale = 1;
+        else if (g_gl_active)
             active_scale = 1;
         else
             active_scale = (g_video_scale > 1 && !di.depth24) ? g_video_scale : 1;
@@ -7529,8 +7549,12 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             int base_x = local_viewport_wide
                 ? gpu_ws_netplay_local_viewport_base_x()
                 : (int)di.display_x;
-            int n = gr_render_wide_display(sdl_pixel_buf, (int)(sw * sizeof(uint32_t)),
-                                           base_x, (int)di.display_y, (int)h);
+            /* The staging buffer is sized for at most SW_MAX_INTERNAL_SCALE;
+             * a GL wide surface at a higher scale falls back to canonical. */
+            int n = ((size_t)sw * (size_t)h * (size_t)s <= s_pixel_buf_px)
+                ? gr_render_wide_display(sdl_pixel_buf, (int)(sw * sizeof(uint32_t)),
+                                         base_x, (int)di.display_y, (int)h)
+                : 0;
             if (n > 0) {
                 active_scale = s;
             } else {
@@ -14975,7 +14999,20 @@ session_reboot:
      * Dual-raster: gr_set_scale(N) arms GL hr FBO @ N× while glb_set_scale
      * keeps SW at 1×. SW-only netplay: force scale 1. Offline: full SSAA. */
     if (g_video_scale < 1) g_video_scale = 1;
-    if (g_video_scale > SW_MAX_INTERNAL_SCALE) g_video_scale = SW_MAX_INTERNAL_SCALE;
+    {
+        /* Per-backend ceiling. OpenGL allocates its hr surface at context init
+         * and clamps there to the driver's texture limits and a memory budget
+         * (gl_scale_limits.h), so only its compile-time bound applies here.
+         * Software keeps a CPU mirror of 1 MiB*S^2 and Vulkan accepts 1..4. */
+        const int ceiling = (g_video_renderer == 1) ? GL_MAX_INTERNAL_SCALE
+                                                    : SW_MAX_INTERNAL_SCALE;
+        if (g_video_scale > ceiling) {
+            std::fprintf(stdout, "psxrecomp: supersampling %dx clamped to %dx "
+                         "(%s maximum)\n", g_video_scale, ceiling,
+                         g_video_renderer == 2 ? "vulkan" : "software");
+            g_video_scale = ceiling;
+        }
+    }
     if (net_cfg.enabled && s_netplay_gl_present && gl_renderer_cpu_auth_dual()) {
         gr_set_scale(g_video_scale);
         if (g_video_scale > 1) {
@@ -15564,10 +15601,14 @@ session_reboot:
     /* Staging buffer + backing texture preserve the 576-row interlaced PAL
      * canvas, times the supersampling factor. Netplay: 1×. */
     {
-        const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
-        sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
-            tex_scale * sizeof(uint32_t));
+        /* The CPU present path only runs above 1x on the software backend
+         * (<= SW_MAX_INTERNAL_SCALE); under OpenGL it is native (see
+         * active_scale), so an 8K GL scale never sizes this buffer by S^2. */
+        int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
+        if (tex_scale > SW_MAX_INTERNAL_SCALE) tex_scale = SW_MAX_INTERNAL_SCALE;
+        s_pixel_buf_px = (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
+                         tex_scale;
+        sdl_pixel_buf = (uint32_t*)std::malloc(s_pixel_buf_px * sizeof(uint32_t));
         if (!sdl_pixel_buf) {
             std::fprintf(stderr, "failed to allocate %dx staging buffer\n", tex_scale);
             return 1;

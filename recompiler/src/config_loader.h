@@ -378,9 +378,11 @@ struct RuntimeConfig {
 
     // ---- [video] block — visual enhancement options ----
     // supersampling: internal-resolution SSAA factor (per axis). 1 = native
-    // (default, behaves exactly as before). 2..4 render geometry/shading into
+    // (default, behaves exactly as before). 2..32 render geometry/shading into
     // an N*-scaled mirror of VRAM and downsample on present — true ordered-grid
-    // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate.
+    // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate. The
+    // runtime clamps per backend: software and Vulkan at 4, OpenGL at the
+    // driver's texture limits and a memory budget (gl_scale_limits.h).
     int                   video_supersampling = 1;
 
     // Optional initial window width declared by the title profile. Zero keeps
@@ -1222,7 +1224,7 @@ struct UserSettings {
 
     // [video]
     bool has_renderer       = false; int  renderer       = DEFAULT_VIDEO_RENDERER; // 0=software,1=opengl,2=vulkan
-    bool has_supersampling  = false; int  supersampling  = 1; // 1..4
+    bool has_supersampling  = false; int  supersampling  = 1; // 1..32 (runtime clamps per backend)
     // Window size: width in px; height is always width*3/4 (PSX 4:3). Applies to
     // both the launcher and the emulator window so they boot at the same size.
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960

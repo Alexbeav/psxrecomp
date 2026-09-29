@@ -472,6 +472,29 @@ a build compiled with Vulkan support. `offer_vulkan` controls launcher
 visibility only; it defaults to false so game projects must explicitly expose
 Vulkan after validating their visuals and stability.
 
+### Internal resolution (`supersampling`)
+
+`supersampling = N` renders at N times the native resolution per axis and
+downsamples to the window. It accepts 1 to 32 in both `game.toml` and the
+player's `settings.toml`; 1 (the default) is native and unchanged.
+
+The runtime clamps N per backend:
+
+- Software and Vulkan stop at 4.
+- OpenGL keeps VRAM as one `1024*N x 512*N` surface and clamps N at context
+  init to the driver's `GL_MAX_TEXTURE_SIZE`, `GL_MAX_RENDERBUFFER_SIZE` and
+  `GL_MAX_VIEWPORT_DIMS`, and to a memory budget of 2 GiB for that surface
+  (`PSX_GL_VRAM_BUDGET_MB` overrides it; `0` removes it). Apple's OpenGL
+  reports 16384, so 16 is the largest full-VRAM scale there. A surface that
+  still fails to allocate is retried one scale lower; the backend never drops
+  to software because of the scale. The log line
+  `GL internal scale Nx clamped to Mx (...)` names the limit that applied.
+
+Above 1x the OpenGL present averages the whole footprint of each output pixel
+when the internal image is more than 1.25 times larger than the window (for
+example 1200 internal lines into a 1080-line window), and lines are drawn one
+native pixel thick at any scale.
+
 `offer_skip_fmv` defaults to true for compatibility with the shared PSX
 Settings surface. A game migrating Skip FMVs into its built-in mod catalog sets
 it to false. The runtime then hides the Settings row, ignores stale persisted
