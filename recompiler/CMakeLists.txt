@@ -918,6 +918,15 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aot_overlay_discovery.py
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Original-disc extraction's normal-mode discovery resolves its BIOS
+        # profile from --project-root, not the cwd, and a failed recompiler run
+        # aborts extraction instead of silently shipping fewer native pairs.
+        add_test(
+            NAME extract_discovery_project_root
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_extract_discovery_project_root.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # ---- runtime source-invariant guards --------------------------------
         # These live in runtime/tests/ but only READ runtime source, so they

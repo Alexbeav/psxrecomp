@@ -646,20 +646,52 @@ def parse_full_discovery_ranges(lines):
             pending=None
     return sorted(seeds),sorted(set(aliases))
 
-def full_discovery_seeds(data, recompiler, tmp):
-    """Run NORMAL mode; return discovered entries plus exact alias recipes."""
+class DiscoveryError(RuntimeError):
+    """Normal-mode discovery could not run; the extraction must not continue."""
+
+
+# The framework this tool belongs to (tools/aot_overlay_spike/ -> root). Normal
+# mode resolves its BIOS profile against --project-root; without it the
+# recompiler probes the process cwd, so the same release run found every entry
+# from a framework checkout and none from a directory without bios/ (it exits
+# "no BIOS profile found"), shipping fewer native pairs with no error.
+FRAMEWORK_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+_project_root = None   # set by main() from --project-root
+
+
+def discovery_project_root(explicit=None):
+    """The --project-root every normal-mode run uses: explicit, else the
+    framework root. It must hold bios/SCPH1001.toml, or nothing can resolve."""
+    root = os.path.abspath(explicit or _project_root or FRAMEWORK_ROOT)
+    if not os.path.isfile(os.path.join(root, 'bios', 'SCPH1001.toml')):
+        raise DiscoveryError(f"no BIOS profile at {os.path.join(root, 'bios', 'SCPH1001.toml')}; "
+                             "pass --project-root <framework or game-project root>")
+    return root
+
+
+def full_discovery_seeds(data, recompiler, tmp, project_root=None):
+    """Run NORMAL mode; return discovered entries plus exact alias recipes.
+
+    A run that does not complete raises DiscoveryError with the recompiler's
+    own message. Falling back here would silently drop every normal-mode entry
+    and alias the producer has. (None, []) means the run completed and found
+    no entry, which the callers' prologue fallback covers."""
     exe_path = os.path.join(tmp, 'producer.exe')
     open(exe_path,'wb').write(data)
     out = os.path.join(tmp, f'disc_out_{binascii.crc32(data)&0xFFFFFFFF:08X}')
     os.makedirs(out, exist_ok=True)
+    cmd = [recompiler, exe_path, '--out-dir', out,
+           '--project-root', discovery_project_root(project_root)]
     try:
         # errors='replace': the recompiler prints non-ASCII (✓) that would raise
         # a decode error under text=True and lose the (already-written) ranges.
-        subprocess.run([recompiler, exe_path, '--out-dir', out],
-                       capture_output=True, text=True, errors='replace', timeout=300)
-    except Exception as e:
-        print(f"    full-discovery failed ({e}); falling back to prologue scan")
-        return None,[]
+        r = subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=300)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise DiscoveryError(f"normal-mode discovery did not run: {' '.join(cmd)}: {e}") from e
+    if r.returncode != 0:
+        tail = '\n'.join(((r.stdout or '') + (r.stderr or '')).strip().splitlines()[-12:])
+        raise DiscoveryError(f"normal-mode discovery failed (exit {r.returncode}): "
+                             f"{' '.join(cmd)}\n{tail}")
     lines=[]
     for rf in [f for f in os.listdir(out) if f.endswith('.ranges')]:
         lines.extend(open(os.path.join(out,rf), errors='ignore'))
@@ -908,6 +940,9 @@ def main():
                     help="cue to read (default: the game config's [game].disc)")
     ap.add_argument('--out', required=True)
     ap.add_argument('--tmp', default=None)
+    ap.add_argument('--project-root', default=None,
+                    help='root holding bios/SCPH1001.toml for normal-mode discovery '
+                         '(default: this framework)')
     ap.add_argument('--bios', default=None,
                     help='BIOS ROM for exact-hash resident-code recipes (default: '
                          'PSXRECOMP_BIOS_ROM or framework bios/SCPH1001.BIN)')
@@ -920,6 +955,8 @@ def main():
     ap.add_argument('--only-bios-resident', action='store_true',
                     help='emit only exact-hash BIOS-installed RAM code captures')
     a=ap.parse_args()
+    global _project_root
+    _project_root=a.project_root
     if a.require_bios_resident and a.no_bios_resident:
         ap.error('--require-bios-resident conflicts with --no-bios-resident')
     if a.only_bios_resident and a.no_bios_resident:
@@ -1227,4 +1264,9 @@ def main():
           f"{nc} adjacent composites, {nb} BIOS resident; "
           f"{len(records)} regions -> {a.out}")
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    try:
+        main()
+    except DiscoveryError as e:
+        print(f"extract_generic: FATAL: {e}", file=sys.stderr)
+        sys.exit(2)
