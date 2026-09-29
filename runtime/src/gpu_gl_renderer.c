@@ -3426,9 +3426,15 @@ static int  glb_texture_filter(void) { return s_tex_filter; }
 static void glb_set_semi_transparency(int e, int m) { s_semi_en = e; s_semi_mode = m & 3; sw_set_semi_transparency(e, m); }
 static void glb_set_mask_bits(int s, int c) {
     int next_check = c ? 1 : 0;
+    if (next_check != s_mask_check) {
+        /* The flat and textured batches take the mask check that is current
+         * when they are drawn (mask_stencil reads s_mask_check), so draw what
+         * was queued under the old check bit before it changes. */
+        flush_flat_batch();
+        flush_tex_batch();
+    }
     if (next_check && !s_mask_check) {
         /* Land all alpha-authoritative work before deriving stencil from it. */
-        flush_tex_batch();
         flush_cpu_upload();
         rebuild_mask_stencils();
     }

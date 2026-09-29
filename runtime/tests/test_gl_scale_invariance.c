@@ -38,6 +38,12 @@
  *     stay at the source scale (FRAME_W*S x FRAME_H*S); in the window mode they
  *     are taken at the presented letterbox size instead, each texel the source
  *     pixel under its centre (nearest filtering).
+ *   - mode "mask" (with or without the window): a GP0(E6) mask-check change
+ *     applies only to what is drawn after it. A line, a flat triangle and an
+ *     opaque textured rect are each drawn across a mask-set rect with the
+ *     check on (then off) or off (then on) before their batch is drawn: with
+ *     the check on the rect's pixels stay, with it off they are overwritten,
+ *     in the native VRAM and in the frame at S.
  * Original source-owned scene; no retail payload. */
 #include "gpu_gl_renderer.c"
 #include "mod_texture_banks.c"
@@ -302,6 +308,73 @@ static long capture_mismatches(const uint8_t *cap, int w, int h,
     return bad;
 }
 
+/* Mode "mask": see the header. Row MASK_ROW crosses the mask-set rect
+ * (MASK_X0.., MASK_W wide); every primitive covers that whole stretch. */
+#define MASK_X0 100
+#define MASK_W 40
+#define MASK_ROW 120
+static int mask_main(int scale, int window) {
+    static uint16_t page[64 * 64];          /* 15-bit texels, white, STP 0 */
+    for (int i = 0; i < 64 * 64; i++) page[i] = 0x7fff;
+    glb_vram_transfer_in(512, 0, 64, 64, page);
+    glb_set_draw_area(0, 0, 1023, 511);
+    glb_set_draw_offset(0, 0);
+    glb_set_semi_transparency(0, 0);
+    glb_set_color_modulation(128, 128, 128, 0);
+    if (window) check(hiw_ensure(0, FRAME_W) != NULL, "window covers the frame");
+    static const char *const kinds[] = { "line", "triangle", "textured" };
+    int fw = FRAME_W * scale, fh = FRAME_H * scale;
+    uint32_t *img = (uint32_t *)malloc((size_t)fw * fh * 4);
+    for (int k = 0; k < 3; k++) {
+        for (int on = 1; on >= 0; on--) {
+            glb_set_mask_bits(0, 0);
+            glb_fill_rect(0, 0, FRAME_W, FRAME_H, 0);
+            glb_set_mask_bits(1, 0);                       /* the rect sets bit 15 */
+            glb_draw_flat_rect(MASK_X0, MASK_ROW - 20, MASK_W, MASK_W, 0x001f);
+            glb_set_mask_bits(0, on);
+            if (k == 0) glb_draw_line(MASK_X0 - 10, MASK_ROW, MASK_X0 + MASK_W + 10, MASK_ROW, 0x7fff);
+            else if (k == 1) glb_draw_flat_triangle(80, MASK_ROW - 10, 200, MASK_ROW - 10,
+                                                    80, MASK_ROW + 40, 0x7fff);
+            else glb_draw_textured_rect(MASK_X0 - 10, MASK_ROW - 2, MASK_W + 20, 5,
+                                        0, 0, 0, 0, 0x0108);
+            glb_set_mask_bits(0, !on);                     /* E6 before the batch draws */
+            gl_renderer_sync_cpu();
+            check(gl_renderer_fbo_peek(0, 0, 1024, 512, peek), "native peek");
+            int kept = 0, drawn = 0;
+            for (int x = MASK_X0; x < MASK_X0 + MASK_W; x++) {
+                uint16_t p = peek[MASK_ROW * 1024 + x] & 0x7fff;
+                kept += p == 0x001f;
+                drawn += p == 0x7fff;
+            }
+            int ow = 0, oh = 0, hkept = 0, hdrawn = 0;
+            int n = img ? gl_renderer_read_display_hires(0, 0, FRAME_W, FRAME_H, img,
+                                                         fw * fh, &ow, &oh) : 0;
+            check(n == fw * fh && ow == fw && oh == fh, "hires readback size");
+            if (n) {
+                const uint32_t *row = img + (size_t)(MASK_ROW * scale + scale / 2) * ow;
+                for (int x = MASK_X0 * scale; x < (MASK_X0 + MASK_W) * scale; x++) {
+                    uint32_t c = row[x] & 0xFFFFFFu;   /* red rect; white (texels at 8 bits) */
+                    hkept += c == 0xF80000u;
+                    hdrawn += c == 0xF8F8F8u || c == 0xFFFFFFu;
+                }
+            }
+            printf("mask %s check-%s: native kept=%d drawn=%d, at S kept=%d drawn=%d\n",
+                   kinds[k], on ? "on" : "off", kept, drawn, hkept, hdrawn);
+            int want_kept = on ? MASK_W : 0, want_drawn = on ? 0 : MASK_W;
+            char label[96];
+            snprintf(label, sizeof label, "mask %s check-%s: native VRAM", kinds[k], on ? "on" : "off");
+            check(kept == want_kept && drawn == want_drawn, label);
+            snprintf(label, sizeof label, "mask %s check-%s: frame at S", kinds[k], on ? "on" : "off");
+            check(hkept == want_kept * scale && hdrawn == want_drawn * scale, label);
+        }
+    }
+    free(img);
+    glb_set_mask_bits(0, 0);
+    check(glGetError() == GL_NO_ERROR, "GL error");
+    printf("checks=%d failures=%d\n", checks, failures);
+    return failures ? 1 : 0;
+}
+
 static int capture_main(int scale, int window) {
     GLuint fbo = s_hr_fbo;
     int sx = 0;
@@ -532,6 +605,12 @@ int main(int argc, char **argv) {
         gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
         return rc;
     }
+    if (!strcmp(mode, "mask")) {
+        if (si.windowed) check(si.hr_scale == 1, "window mode engaged");
+        int rc = mask_main(scale, si.windowed);
+        gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
+        return rc;
+    }
     if (window) {
         check(si.windowed && si.hr_scale == 1, "window mode engaged");
         check(hiw_ensure(0, FRAME_W) != NULL, "window covers the frame");
@@ -539,6 +618,10 @@ int main(int argc, char **argv) {
     scene();
     gl_renderer_sync_cpu();
     check(gl_renderer_fbo_peek(0, 0, 1024, 512, peek), "native peek");
+    /* The mask-checked white rect kept the masked rect under it (the part
+     * the later copy does not cover). */
+    check(peek[152 * 1024 + 255] == 0xC210 && peek[185 * 1024 + 285] == 0x7fff,
+          "mask check kept the masked rect");
     /* Digest of guest-visible VRAM, the line band masked out. */
     for (int y = LINE_Y0; y < LINE_Y1; y++)
         for (int x = LINE_X0; x < LINE_X1; x++) peek[y * 1024 + x] = 0;

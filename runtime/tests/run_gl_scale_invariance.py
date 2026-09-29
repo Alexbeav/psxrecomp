@@ -20,6 +20,10 @@ the full-VRAM run's at the same scale.
 Capture runs (mode capture) check the frame-blend history and hold-last
 captures: at the source scale outside the window mode, at the presented
 (letterbox) size in it.
+Mask runs (mode mask) change the GP0(E6) mask-check bit after a line, a flat
+triangle or an opaque textured rect and before its batch is drawn: the draw
+must keep the check bit it was submitted under, at 1x, above it and in the
+window mode.
 
 macOS/Linux: pass the SDL3 include directory and static library (for example
 from a runtime build tree's _deps/sdl3-src/include and
@@ -230,6 +234,18 @@ def main():
         m = re.search(r"^capture=(\d+)x(\d+) source=(\d+)x(\d+)$", r.stdout, re.M)
         if not m or ((m[1], m[2]) == (m[3], m[4])) == windowed:
             print(f"FAIL capture {label} {s}x: size", m and m.group(0))
+            ok = False
+    # Mask-check changes between a draw and its batch: (label, scale, env).
+    for label, s, extra in (("full", 1, {}), ("full", 4, {}), ("full", 9, {}),
+                            ("window", 9, {"PSX_GL_HIRES_WINDOW": "1"}),
+                            ("window", 18, {"PSX_GL_HIRES_WINDOW": "1"})):
+        e = dict(env)
+        e.update(extra)
+        r = run([dest / "probe", s, "mask"], env=e)
+        parsed = parse_run(r.stdout)
+        print(f"mask {label} {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-1:],
+              r.stderr.strip()[-600:])
+        if r.returncode or not parsed or parsed[1]:
             ok = False
     for label, s, budget in (("over-limit", 32, None), ("budget", 12, "40")):
         e = dict(env)
