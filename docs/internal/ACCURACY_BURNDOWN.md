@@ -124,6 +124,41 @@ observe added to the recompiler so ANY block leader is anchorable on both backen
   + no-regression (no interp-path ruler yet — see below).
 - [x] Instruction-fetch / I-cache timing — DONE (see above; commits 958a928 + 0edb935).
   The ruler's 56→84 cold spread (I-cache line-refill transient) now reproduced natively.
+- [x] **Uncached (KSEG1) fetch is charged per instruction in both emitters (2026-09-29).**
+  Beetle ReadInstruction charges +4 and clears the load give-back on EVERY fetch at
+  0xA0000000 and above. The interp fetches at every PC, but both emitters charged only
+  at line leaders. In OpenBIOS, 5,477 of 9,592 in-place ROM (KSEG1) instruction sites
+  were uncharged: 21,908 cycles short per pass through that code. Both emitters now
+  emit a fetch before every instruction whose runtime PC is uncached
+  (`psx_fetch_uncached`, psx_instr_cost.h, shared with psx_icache.c). The A0/B0/C0
+  call-vector stubs charge one fetch per executed word. Cached code keeps the leader
+  rule, and KSEG0 game output is byte-identical. Tests: ctest `uncached_fetch_charge`
+  (compiled == interp fetch path == Beetle transcription, per instruction, on
+  OpenBIOS) and `uncached_fetch_codegen_test` (game emitter). Validated against live
+  Beetle: see the land gate below.
+- [x] **BIOS emitter tests cache-line starts on the runtime PC (2026-09-29).** The
+  line-leader test used the ROM address, assuming every copy window preserves
+  bits[3:0]. OpenBIOS copies its kernel from ROM 0x1FC1E4D4 to RAM 0x500, so every
+  kernel line crossing was charged one instruction early (a hit) and the real
+  crossing went uncharged: 1,152 kernel instruction sites differed from the interp.
+  Retail profiles are unaffected (SCPH-1001's windows are 16-byte aligned;
+  SCPH-101/5552 declare none). Covered by ctest `uncached_fetch_charge` (cached runs
+  compared from a cold cache).
+- [x] **Land gate for the two 2026-09-29 fixes above: live-Beetle validation (done
+  2026-09-29).** SEGMENT_AWARE_CODE.md §7.2's two runs against psx-beetle, each with
+  the same BIOS image on both sides: OpenBIOS (SHA-1
+  95419841b5104d552b14810b1ecbe6c1358bcdf1) and the owner's own SCPH-1001 dump (SHA-1
+  10155d8d6e6e832d6ea66db9bc098321fb5e8ebf). Native builds carry #418, so the mult/div
+  axis cannot mask the result. (1) LLE boot (`bios_hle = false`) per-anchor parity to
+  the shell: at the shell entry native − Beetle goes from −2,165,591 to −126 cycles on
+  OpenBIOS and from −7,049,462 to −454 on SCPH-1001. The ROM boot path (reset, kernel
+  copy, main) is exact on both. The residuals are the IsC gap (axis 4 below) and, on
+  SCPH-1001 only, −9 from the kernel entry through its KSEG1 alias
+  (SEGMENT_AWARE_CODE.md §3.3). (2) Ruler #1 [0x80001C5C→0x80001CA4] on
+  SCPH-1001: native (master and the fix) equals Beetle on all 64 passes. Ruler #2
+  (15 loops) stays exact, and Beetle confirms the OpenBIOS memcpy cost (39 cycles per
+  byte in boot, 42 in R4 in game). Per-anchor numbers: FAITHFUL_TIMING_PLAN §5,
+  2026-09-29.
 - [ ] **HW test-ROM ruler (#2)** — Amidog CPU/GTE timing ROMs for hand-crafted
   single-COMPONENT isolation (div-only, load-only loops) that organic BIOS code
   can't give (the prologue combines div+loads in one block). Strongest validator.
@@ -143,6 +178,19 @@ Status: PARTIAL.
 
 Status: MODERATE-STRONG (regions games use).
 - [ ] KUSEG/KSEG0/KSEG1 mirroring, scratchpad, cache-isolation (IsC) — psx-spx.
+- [ ] IsC stores do not reach the I-cache model. memory.c drops every store made while
+  SR.IsC is set. Beetle's WriteMemory rewrites the tag and valid bits of the addressed
+  line when the I-cache is enabled and BIU has a tag-test, invalidate or lock mode bit
+  set; that is how FlushCache (A 44h) invalidates the cache. Natively the cached
+  kernel handlers keep hitting after a flush where Beetle refills them. Measured in the
+  axis-2 land gate: −42 cycles after each of three OpenBIOS flushes and −445 after four
+  SCPH-1001 flushes, all before the shell. A local prototype of Beetle's write (a few lines in the three
+  `psx_write_*_raw` IsC branches) makes both LLE boots match Beetle at every anchor to
+  the shell, apart from SCPH-1001's −9 KSEG1 kernel entry.
+- [ ] BIU bit 11 (I-cache disable, 0xFFFE0130) does not reach the fetch model:
+  memory.c stores it, psx_icache.c and the interp ignore it. Beetle charges +4 per
+  fetch while the cache is disabled (CPU_SetBIU). This matters only for RAM code run
+  with the cache off; `psx_fetch_uncached` is an address test and does not cover it.
 - [ ] I/O register semantics: read-to-clear, write-1-ack (I_STAT), masking,
   unmapped/garbage reads — psx-spx "I/O Map"; Beetle memory.cpp.
 

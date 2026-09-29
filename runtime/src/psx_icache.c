@@ -8,6 +8,7 @@
 #include "psx_icache.h"
 #include "cpu_state.h"
 #include "psx_cycles.h"
+#include "psx_instr_cost.h"   /* psx_fetch_uncached: shared with both emitters */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,7 +84,7 @@ void psx_icache_fetch_miss(CPUState* cpu, uint32_t addr) {
     cpu->read_absorb[cpu->read_absorb_which] = 0u;
     cpu->read_absorb_which = 0u;
 
-    if (addr >= 0xA0000000u) { /* KSEG1 / uncached (BIOS ROM) */
+    if (psx_fetch_uncached(addr)) { /* KSEG1 / uncached (BIOS ROM): every fetch */
         psx_advance_cycles(4u);
         return;
     }

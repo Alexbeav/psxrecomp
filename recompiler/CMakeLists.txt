@@ -558,6 +558,35 @@ if(BUILD_TESTING)
                          ${CMAKE_CURRENT_BINARY_DIR}/ws_cull_edge_interp_stderr.txt)
     endif()
 
+    # Uncached (KSEG1) code charges a fetch before every instruction; cached
+    # code keeps the line-leader rule (test_uncached_fetch_charge.py checks
+    # the BIOS emitter on OpenBIOS and the cycle model).
+    add_executable(uncached_fetch_codegen_test
+        tests/uncached_fetch_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(uncached_fetch_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(uncached_fetch_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME uncached_fetch_codegen_test
+             COMMAND uncached_fetch_codegen_test)
+
     add_executable(recompiler_patch_cxx17_header_test
         tests/recompiler_patch_cxx17_header_test.cpp
     )
@@ -790,6 +819,15 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_vector_stub_shapes.py
                     --recompiler $<TARGET_FILE:psxrecomp-bios>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Compiled BIOS fetch charges == the interpreter's (psx_icache.c) ==
+        # Beetle, per instruction, on OpenBIOS: KSEG1 ROM code pays every fetch.
+        add_test(
+            NAME uncached_fetch_charge
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_uncached_fetch_charge.py
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME stall_report
