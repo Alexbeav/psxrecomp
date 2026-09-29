@@ -311,7 +311,11 @@ int main(void) {
     Live live;
     uint8_t ram_before[64];
 
+#ifdef _WIN32
+    _putenv_s("PSX_RENDER_PASS_VERIFY", "1");
+#else
     setenv("PSX_RENDER_PASS_VERIFY", "1", 1);
+#endif
     memset(&cpu, 0, sizeof cpu);
     cpu.gpr[8] = 0x55u;
     psx_cycles_resync_after_restore(NULL);
