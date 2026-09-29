@@ -206,6 +206,10 @@ Status: STRONG (most project effort lives here).
   targets) — resolve all dispatch misses each run (Tomba2Recomp CLAUDE.md).
 - [ ] Call/return contract + stack fidelity — the blue-screen/wedge class.
 - [ ] Backend equivalence (compiled == interp) — necessary, not sufficient.
+  Measured with `tools/fp_identity.py` (2026-09-29): seeded warm vs cold
+  overlay-cache runs, judged on the `frame_fingerprint` guest-fact columns. R4,
+  12000 frames on #417+#418+#420: IDENTICAL with 497 tolerated one-write VBlank
+  straddles.
 
 ## Axis 7 — Determinism
 
