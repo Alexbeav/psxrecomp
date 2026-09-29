@@ -275,6 +275,28 @@ class ScaleContractGuards(unittest.TestCase):
                                 name + " binds s_hr_fbo at s_out_scale without handling the window")
 
 
+class RenderPassGuards(unittest.TestCase):
+    """Render passes (the frame-rate stack) back up and restore only
+    s_hr_fbo, at s_hr_scale. In the window mode the presented surfaces are the
+    tiles at s_out_scale, which a pass would not restore, and the queued wide
+    mirror replay has no pass clamp: the backend must refuse passes there.
+    Skipped where the renderer has no render passes; the GL fixture's passes
+    runs check the same refusal on a real context."""
+
+    def test_window_mode_refuses_passes(self):
+        if "uint32_t gl_renderer_pass_unavailable(void)" not in GL:
+            self.skipTest("no render passes in this tree")
+        refuse = body(GL, "uint32_t gl_renderer_pass_unavailable(void)")
+        self.assertRegex(strip_comments(refuse),
+                         r"if \([^;{}]*\bs_hiw\b[^;{}]*\)\s*return PSX_MOD_RENDER_PASS_BACKEND;")
+        # Every way in goes through that refusal.
+        for sig in ("int gl_renderer_pass_begin(", "uint32_t gl_renderer_pass_plan("):
+            if sig in GL:
+                self.assertIn("gl_renderer_pass_ready()", body(GL, sig), sig)
+        self.assertIn("gl_renderer_pass_unavailable() == PSX_MOD_RENDER_PASS_READY",
+                      body(GL, "int gl_renderer_pass_ready(void)"))
+
+
 class InternalResolutionGuards(unittest.TestCase):
     def test_hidpi_window_only_when_opted_in(self):
         self.assertIn("win_flags |= PSX_SDL_WINDOW_HIGH_DENSITY;", MAIN)

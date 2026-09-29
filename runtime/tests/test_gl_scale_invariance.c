@@ -44,6 +44,12 @@
  *     check on (then off) or off (then on) before their batch is drawn: with
  *     the check on the rect's pixels stay, with it off they are overwritten,
  *     in the native VRAM and in the frame at S.
+ *   - mode "passes" (built only where the renderer has render passes, the
+ *     frame-rate stack; the runner defines PSX_TEST_RENDER_PASSES): with the
+ *     flip-aware frame blend ready, the full-VRAM surface offers render passes
+ *     and the window mode refuses them (PSX_MOD_RENDER_PASS_BACKEND), and
+ *     gl_renderer_pass_begin opens nothing there: a pass backs up and restores
+ *     only the authoritative surface, never the window's tiles.
  * Original source-owned scene; no retail payload. */
 #include "gpu_gl_renderer.c"
 #include "mod_texture_banks.c"
@@ -375,6 +381,28 @@ static int mask_main(int scale, int window) {
     return failures ? 1 : 0;
 }
 
+#if defined(PSX_TEST_RENDER_PASSES)
+/* Mode "passes": see the header. */
+static int passes_main(int scale, int window) {
+    (void)scale;
+    gl_renderer_set_interpolation(1, 120.0, 120.0, 60.0, 2);
+    gl_renderer_set_interpolation_source(1);
+    s_interp_valid = 2;                    /* as after the first presented frame */
+    uint32_t why = gl_renderer_pass_unavailable();
+    printf("passes: unavailable=%u\n", (unsigned)why);
+    if (window) {
+        check(why == PSX_MOD_RENDER_PASS_BACKEND, "window mode refuses render passes");
+        check(!gl_renderer_pass_begin(0, 0, FRAME_W, FRAME_H, 1, 1, 0) && !s_pass_active,
+              "window mode: pass_begin opens nothing");
+    } else {
+        check(why == PSX_MOD_RENDER_PASS_READY, "full-VRAM surface offers render passes");
+    }
+    check(glGetError() == GL_NO_ERROR, "GL error");
+    printf("checks=%d failures=%d\n", checks, failures);
+    return failures ? 1 : 0;
+}
+#endif
+
 static int capture_main(int scale, int window) {
     GLuint fbo = s_hr_fbo;
     int sx = 0;
@@ -605,6 +633,14 @@ int main(int argc, char **argv) {
         gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
         return rc;
     }
+#if defined(PSX_TEST_RENDER_PASSES)
+    if (!strcmp(mode, "passes")) {
+        if (si.windowed) check(si.hr_scale == 1, "window mode engaged");
+        int rc = passes_main(scale, si.windowed);
+        gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
+        return rc;
+    }
+#endif
     if (!strcmp(mode, "mask")) {
         if (si.windowed) check(si.hr_scale == 1, "window mode engaged");
         int rc = mask_main(scale, si.windowed);

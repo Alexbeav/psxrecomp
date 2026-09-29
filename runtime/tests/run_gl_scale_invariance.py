@@ -24,6 +24,9 @@ Mask runs (mode mask) change the GP0(E6) mask-check bit after a line, a flat
 triangle or an opaque textured rect and before its batch is drawn: the draw
 must keep the check bit it was submitted under, at 1x, above it and in the
 window mode.
+Pass runs (mode passes, where the renderer has the frame-rate stack's render
+passes) check that the window mode refuses them and the full-VRAM surface
+offers them.
 
 macOS/Linux: pass the SDL3 include directory and static library (for example
 from a runtime build tree's _deps/sdl3-src/include and
@@ -111,6 +114,11 @@ def main():
     # drops them (-dead_strip, or per-function sections with --gc-sections).
     # Anything still unresolved is a link error, not a NULL call at run time.
     sections = [] if platform.system() == "Darwin" else ["-ffunction-sections", "-fdata-sections"]
+    # Render passes (the frame-rate stack): build the fixture's passes mode.
+    renderer = (framework / "runtime/src/gpu_gl_renderer.c").read_text(encoding="utf-8")
+    passes = "uint32_t gl_renderer_pass_unavailable(void)" in renderer
+    if passes:
+        sections.append("-DPSX_TEST_RENDER_PASSES=1")
     objs = []
     for name, src in sources:
         o = dest / (name + ".o")
@@ -244,6 +252,19 @@ def main():
         r = run([dest / "probe", s, "mask"], env=e)
         parsed = parse_run(r.stdout)
         print(f"mask {label} {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-1:],
+              r.stderr.strip()[-600:])
+        if r.returncode or not parsed or parsed[1]:
+            ok = False
+    # Render passes: offered on the full-VRAM surface, refused in the window mode.
+    if not passes:
+        print("passes: skipped (this renderer has no render passes)")
+    for label, s, extra in ((("full", 9, {}), ("window", 9, {"PSX_GL_HIRES_WINDOW": "1"}),
+                             ("window", 18, {"PSX_GL_HIRES_WINDOW": "1"})) if passes else ()):
+        e = dict(env)
+        e.update(extra)
+        r = run([dest / "probe", s, "passes"], env=e)
+        parsed = parse_run(r.stdout)
+        print(f"passes {label} {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-2:],
               r.stderr.strip()[-600:])
         if r.returncode or not parsed or parsed[1]:
             ok = False
