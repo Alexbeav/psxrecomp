@@ -178,6 +178,10 @@ Status: PARTIAL.
 
 Status: MODERATE-STRONG (regions games use).
 - [ ] KUSEG/KSEG0/KSEG1 mirroring, scratchpad, cache-isolation (IsC) — psx-spx.
+  Code segment (links, EPC, I-cache tags, KSEG1 fetch cost) is designed in
+  docs/SEGMENT_AWARE_CODE.md (acceptance ledger `segment_aware_codegen`). Oracle
+  note: Beetle tags the I-cache by full virtual address; hardware clears bit 31 of
+  KSEG0 fetches first (cpu.c 719-730). psx_icache.c follows Beetle.
 - [ ] IsC stores do not reach the I-cache model. memory.c drops every store made while
   SR.IsC is set. Beetle's WriteMemory rewrites the tag and valid bits of the addressed
   line when the I-cache is enabled and BIU has a tag-test, invalidate or lock mode bit

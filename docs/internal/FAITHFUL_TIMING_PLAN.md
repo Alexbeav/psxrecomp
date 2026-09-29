@@ -351,6 +351,17 @@ on a fixed region -> next.
   497 one-write straddles, the same count #420 reported. With FMV-quiet on,
   warm/cold is IDENTICAL over 8076 frames, with 497 carried shifts. Self-test:
   ctest `fp_identity`.
+- **2026-09-28 (segment-aware code — design + acceptance ledger, no behaviour change):**
+  docs/SEGMENT_AWARE_CODE.md. Compiled code bakes KSEG0 into links, CPS/IRQ resume PCs
+  and I-cache tags; KUSEG-linked EXEs (Kula World, Alien Resurrection) run KUSEG PCs
+  through those bodies, and KUSEG seeds are silently dropped. New finding: both
+  emitters charge the uncached KSEG1 fetch (+4, Beetle ReadInstruction) only at line
+  leaders, so compiled BIOS ROM code is 4 cycles short on 5,477 of 9,592 OpenBIOS KSEG1
+  sites vs the interp and Beetle. Recommends per-segment compiled variants (0 cost for
+  KSEG0 titles) over segment-relative emission (measured +3.2 % / +27.2 % .text on R4).
+  Ledger `recompiler/tests/test_segment_aware_codegen.py` (synthetic KUSEG EXE,
+  Beetle fetch transcription vs psx_icache.c): 10 known gaps, model checks exact.
+  Not a live Beetle run (no oracle binary on the Mac); §7.2 lists the oracle runs.
 
 - **2026-09-13 (SIO card hack removal — branch-only review checkpoint):**
   Reproduced fixed-Ape-RAM IRQ7/mask injection after an absent-card probe,

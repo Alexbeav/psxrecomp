@@ -790,6 +790,16 @@ if(BUILD_TESTING)
                     --recompiler $<TARGET_FILE:psxrecomp-game>
                     --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Gap ledger for docs/SEGMENT_AWARE_CODE.md: a synthetic KUSEG-linked
+        # EXE, checked against a Beetle fetch-model transcription.
+        add_test(
+            NAME segment_aware_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_aware_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME overlay_shim_compile_contract
             COMMAND ${Python3_EXECUTABLE}
