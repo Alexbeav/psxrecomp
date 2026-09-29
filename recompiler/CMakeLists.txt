@@ -542,7 +542,8 @@ if(BUILD_TESTING)
             target_link_libraries(ws_cull_edge_interp_test PRIVATE m)
         endif()
         add_test(NAME ws_cull_edge_interp_test
-                 COMMAND ws_cull_edge_interp_test)
+                 COMMAND ws_cull_edge_interp_test
+                         ${CMAKE_CURRENT_BINARY_DIR}/ws_cull_edge_interp_stderr.txt)
     endif()
 
     add_executable(recompiler_patch_cxx17_header_test

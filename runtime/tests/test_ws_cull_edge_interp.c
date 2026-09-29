@@ -152,11 +152,21 @@ static uint32_t load(CPUState *cpu, uint32_t pc, uint32_t insn) {
 static void put_half(uint32_t addr, uint16_t v) { memcpy(test_ram + (addr & 0x1FFFFFu), &v, 2); }
 static void put_word(uint32_t addr, uint32_t v) { memcpy(test_ram + (addr & 0x1FFFFFu), &v, 4); }
 
+/* stderr is captured through a named file (argv[1]; ctest passes one in its
+ * binary directory) rather than tmpfile(): on MSYS2 MinGW64 (msvcrt)
+ * tmpfile() creates its file in the root of the current drive, which fails
+ * for a normal account. */
+static const char *s_capture_path = "ws_cull_edge_interp_stderr.txt";
+
 /* Runs `fn` with stderr captured into `buf`. */
 static void capture_stderr(void (*fn)(void), char *buf, size_t cap) {
-    FILE *tmp = tmpfile();
+    FILE *tmp = fopen(s_capture_path, "w+b");
     buf[0] = '\0';
-    if (!tmp) { fn(); return; }
+    if (!tmp) {
+        CHECK(0, "cannot open the stderr capture file %s", s_capture_path);
+        fn();
+        return;
+    }
     fflush(stderr);
     int saved = dup(fileno(stderr));
     dup2(fileno(tmp), fileno(stderr));
@@ -168,6 +178,7 @@ static void capture_stderr(void (*fn)(void), char *buf, size_t cap) {
     size_t n = fread(buf, 1, cap - 1, tmp);
     buf[n] = '\0';
     fclose(tmp);
+    remove(s_capture_path);
 }
 
 /* ---- store ----------------------------------------------------------------- */
@@ -378,7 +389,8 @@ static void test_interpreter(void) {
     gpu_ws_set_clip_edge_x_load_sites(NULL, 0, 0);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1) s_capture_path = argv[1];
     test_store();
     test_helpers();
     test_interpreter();
