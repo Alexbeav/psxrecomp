@@ -7,8 +7,10 @@ Based on master. It was first stacked on RetroPortingToolKit/psxrecomp#417
 (mult/div deadlines) and #420 (store-PC forwarding, ABI v24). Rollout PR A
 merged as #429 on 2026-09-29 (§8). This change adds only this document and an
 acceptance test; it does not change behaviour. Rollout PR B
-(`refactor/emitter-runtime-pc`, stacked on this design) implements §5.2, and
-rollout PR C (`feat/kuseg-linked-exe`, stacked on B) implements §5.3 and §5.5.
+(`refactor/emitter-runtime-pc`, stacked on this design) implements §5.2,
+rollout PR C (`feat/kuseg-linked-exe`, stacked on B) implements §5.3 and §5.5,
+and rollout PR D (`feat/segment-variants`, stacked on C) implements §5.4, the
+exact return checks of §5.5 and the KSEG1 variants of §5.6.
 
 Acceptance test: `recompiler/tests/test_segment_aware_codegen.py` (ctest
 `segment_aware_codegen`). Synthetic EXE: `tools/segment_testrom/gen_segment_exe.py`.
@@ -53,8 +55,10 @@ emission.**
   - static code: the EXE's link segment, plus variants requested with
     segment-qualified seeds;
   - overlays: the segments the capture observed.
-- A PC with no body for its segment is a loud dispatch miss. It never runs
-  another segment's body.
+- A PC with no body for its segment is a loud dispatch miss. In game and
+  overlay code it never runs another segment's body. The compiled BIOS, whose
+  dispatch is keyed by the normalized address, still runs its window's body
+  for such a PC, but records it as a BIOS segment miss (§5.4).
 - Uncached variants charge fetch on every instruction.
 
 For every existing KSEG0 title the emitted code is byte-identical, so the
@@ -194,16 +198,17 @@ Before PR C, a KSEG1 or KSEG0 alias of static text resolved to the same body
 (§3.1). The uncached cases are rare but real: code that ORs `0xA0000000` into
 a function address to run it uncached, and cache-maintenance trampolines.
 Those ran with the wrong fetch cost and the wrong links. Since C they miss and
-run interpreted (§5.5). There is still no way to request a body for a second
-segment: since C a segment-qualified seed is reported and not compiled; D
-compiles it (§5.4).
+run interpreted (§5.5). Since D a segment-qualified seed compiles a body for the
+second segment (§5.4).
 
 **Measured in the BIOS (2026-09-29).** SCPH-1001 enters its relocated kernel
 through the uncached alias `0xA0000500`. In #429's Beetle gate (§7.2) Beetle
 charges the four instructions there as uncached fetches, 20 cycles; native
 runs the cached body and charges 11. That is the −9 cycles native − Beetle at
 SCPH-1001's kernel entry and first kernel calls. The BIOS emitter needs a
-KSEG1 variant of that entry to close it, which PR D (§8) provides.
+KSEG1 variant of that entry to close it, which PR D (§8) provides: SCPH-1001's
+seeds ask for `0xA0000500`, and the first hit of every SCPH-1001 boot anchor
+now matches Beetle (§7.2).
 
 ### 3.4 Overlays (after #417)
 
@@ -357,10 +362,14 @@ address. So does `debug_server_cyc_observe`: the game emitter passes the
 compile address and the runtime masks it to physical.
 
 Jump-table `case` values are data words, the PCs the `jr` reaches, and are
-emitted as read. Each case continues in the current body. That is exact
-while every table value is in the body's own segment, which holds for every
-title before PR D. A variant (§5.4) must tail-transfer a case whose segment
-differs from its own; D adds that.
+emitted as read. In B each case continues in the current body. That is exact
+only while every table value is in the body's own segment. A variant (§5.4)
+has tables in another segment than its own, and so does a home or overlay
+compile whose table holds another segment's PCs of its own bytes (a
+KSEG0-compiled overlay shard of code that runs at KUSEG). From PR D every
+game and overlay compile tail-transfers a case whose segment differs from its
+own (`CodeGenerator::foreign_segment_case()`); the BIOS emitter applies the
+same test in its variants.
 
 The BIOS side is `StrictTranslator::translate(d, runtime_pc)`: the store-PC
 stamp, the syscall EPC and the break and unaligned-access PCs use the runtime
@@ -499,6 +508,92 @@ Closes `segment-variants`.
 Until D, PR C reports such a seed and compiles nothing for it (§5.3), so the
 PC stays a recorded segment miss (§5.5).
 
+**Implemented in PR D.**
+- `main_psx.cpp` compiles the home image first. `plan_segment_variants()`
+  (`segment_variants.cpp`) then maps each variant seed to the home compile's
+  final pieces (`CodeGenerator::last_functions()`, after the split pass): a
+  seed at a function entry roots that function, a seed at a CPS continuation
+  roots its owner, and an alias entry brings its whole alias group (one shared
+  body). The closure follows `direct_successors()`: branch and jump targets and
+  not-taken paths that leave a function, call targets, call returns split into
+  another piece and a fall-through past its last block. A seed that names no
+  home dispatch entry stops the build with its home PC. So does a seed in a
+  segment that does not map physical memory (`maps_physical()`: KUSEG below
+  `0x20000000`, KSEG0 and KSEG1 do). `0x20000000`-`0x7FFFFFFF` and KSEG2 are
+  no alias of the image: Beetle's `addr_mask` leaves them unmasked, so they
+  address no RAM. Such a seed is refused where the seeds file is read and
+  again by the planner, and `collect_game_misses.py` reports such a segment
+  miss instead of writing it as a seed.
+- Each segment compiles through `segment_view()`, the image with its header
+  moved into that segment, so the variant's code identity is its VA (§5.1:
+  `func_A00100F0`, `block_A00100FC`, `psx_alias_body_A…`), the generator's
+  code segment is the view's, and `runtime_pc()` is the identity again. The
+  CFGs are re-derived on the view (the same bytes give the same blocks). The
+  split pre-pass is off: the closure is already made of the home pieces.
+- `rebase_codegen_config()` moves every exact-match config code site that
+  names the image into the variant's segment, so a variant gets the same
+  hooks and substitutions as its home body (for example `hot_funcs`, mod
+  entry hooks, widescreen sites). Physically matched kinds are kept as
+  written.
+- The variant's bodies join the home shards and declarations header, its F/R
+  records join `.ranges`, and its rows join the dispatch table
+  (`emit_game_dispatch()` takes one unit per compile).
+- A cached variant is the home C with the segment swapped
+  (`kuseg_dispatch_lookup` compares them); a KSEG1 variant charges a fetch
+  before every instruction (§5.6).
+- A jump-table case whose value is in another segment than its body is not a
+  local case (`foreign_segment_case()`); the default tail-transfer dispatches
+  it with its full PC. This applies to every game and overlay compile, not
+  only to variants. A variant has such cases whenever it switches on its home
+  segment's PCs. A home or overlay compile has one only when its table holds
+  another segment's PCs of its own bytes, for example a KSEG0-compiled overlay
+  shard of code that runs at KUSEG (a KUSEG-linked title's overlays, or
+  BIOS-installed RAM code). Such a case used to continue in the KSEG0 body with
+  KSEG0 links and fetch tags; now a game-text PC with no row in its segment is
+  a recorded segment miss (§5.5), and #417's gate sends an overlay PC to the
+  interpreter. Both run it at its own PC. R4's game C and its 26 overlay shard
+  sources are unchanged (§8 D); no other title was regenerated here.
+- Overlay compiles have no variants yet (§5.7, PR E); a variant seed there is
+  reported and not compiled, as before.
+
+**BIOS.** The BIOS emitter keys its dispatch by the normalized address, so a
+PC in any segment runs the body compiled for its window's segment. A BIOS
+seed that is a runtime PC inside a relocated copy window, in another segment
+than the window runs in, now asks for a variant (`main_bios.cpp`
+`split_segment_variant_seeds()`): the function at those ROM bytes and its
+direct-edge closure (branch and J/JAL targets that leave it, the call return
+and fall-through past its end) are emitted again with every runtime PC in the
+seed's segment (`bios_runtime_pc()` under `g_variant_seg`). The variants and
+their continuations get exact-PC rows in `segment_variant_table`. A variant
+seed in a segment that does not map physical memory stops the build; a
+runtime PC in its window's own segment is no variant request and stays a
+discovery seed.
+
+The dispatch still finds the word by its normalized key (so the kernel-bless
+guard still applies); `psx_bios_hit_body()` then picks the body for the exact
+PC. A variant compiled for that PC runs. Any other PC runs the word's home
+body as before, and when it is in another segment than the one that body was
+compiled for, it is a **BIOS segment miss**: the home body bakes its own
+segment's links, EPCs, fetch tags and store PCs, so the run goes into the
+segment-miss ring with kind `bios` and the home PC (TCP `segment_misses`,
+`dispatch_stats`, the exit report). The miss is loud, as in game code (§5.5),
+but the home body still runs. Sending the PC to the dirty-RAM interpreter
+instead would change what runs, which needs a measured case (there is none),
+and ROM code has no such path. The fix is a seed in the BIOS profile's
+seeds; `collect_game_misses.py` lists such a row instead of writing it into
+the game's seeds.
+`psx_bios_key_home_pc()`, emitted from the address model next to
+`normalize()`, gives each key's home PC: its copy window's runtime address,
+or the ROM run in place. SCPH-1001's seeds ask for `0xA0000500` (§3.3). Every
+BIOS's dispatch C gains the two helpers; a BIOS without variant seeds keeps
+its full C.
+
+Measured (§7.2): through the probe's spin (an LLE disc boot through the shell
+into the game, 198 M cycles on OpenBIOS and 399 M on SCPH-1001) neither BIOS
+records a BIOS segment miss, so `0xA0000500` is the only alias entry either
+boot makes. Without SCPH-1001's `0xA0000500` seed the same run records
+exactly that PC (kind `bios`, home `0x00000500`, frame 0).
+
 ### 5.5 Dispatch is exact; a segment miss is a dispatch miss
 
 - The table is keyed by the full VA. `psx_game_find_entry` keeps its
@@ -519,8 +614,8 @@ PC stays a recorded segment miss (§5.5).
   loudly until the title is regenerated. It does not fail fast.
 
 Closes `segment-miss`. The plan was to make `psx_call_contract`'s
-segment-masked return check (`cpu_state.h:307`, compares at 312 and 322)
-exact in the same PR; C defers it to PR D, below.
+segment-masked return check (`cpu_state.h`, its bail-resolve and `$ra`
+compares) exact in the same PR; C deferred it to PR D, below.
 
 **Implemented in PR C.**
 - `game_dispatch_emitter.cpp` (moved out of `main_psx.cpp`) sorts rows by
@@ -553,6 +648,26 @@ exact in the same PR; C defers it to PR D, below.
   `dirty_ram_dispatch_inner`, the TCP command, the `dispatch_stats` and
   `ping` fields and the exit-report section.
 
+**Implemented in PR D.**
+- A word may carry a row per compiled segment (the home body and its
+  variants, §5.4), adjacent and in PC order. When any word has more than one
+  row, the lookup finds the word's first row (the index points at it; the
+  binary search finds the lowest row of the word) and then searches that
+  word's rows for the exact PC. A table without variants emits the lookup as
+  before. Two rows for one PC stay a build error.
+- The five return checks compare the full PC: `psx_call_contract`'s
+  bail-resolve PC and `$ra` check, and the emitted BIOS dispatch loop's
+  return boundary, bail resolve, wild-return test and exception-stack
+  straddle. A guest that returns to another segment's alias of its call site
+  did not return to that body, so the suspended C continuation no longer runs
+  there. B's `runtime_pc()` and C/D's per-segment bodies make every legitimate
+  link match in full; LLE boots and R4 fingerprints are unchanged by it
+  (§7.2). Ledger guard `exact-return-contract`.
+- The segment-miss ring carries a kind: `game` (static game text, run
+  interpreted) or `bios` (a compiled BIOS window entered in another segment,
+  run through its home body, §5.4). TCP `segment_misses` rows and the exit
+  report name it.
+
 ### 5.6 Per-instruction fetch charging for uncached code
 
 Landed in PR A, #429 (2026-09-29). The rule: an instruction whose **runtime
@@ -582,8 +697,9 @@ Where it applies:
   charge a KSEG1 variant at line leaders alone. With both routed, a KSEG1
   variant (§5.4) is charged per instruction with no further emitter change;
   `emitter_runtime_pc_test` checks that a KSEG1 code segment charges exactly
-  what a KSEG1 image does. `kseg1-fetch-charge` stays open until PR D adds
-  those variants.
+  what a KSEG1 image does. PR D adds those variants and closes
+  `kseg1-fetch-charge`; the ledger checks the KSEG1 `probe_run` variant against
+  Beetle's fetch model.
 - **Interpreter:** unchanged; it already charges every fetch.
 
 BIU bit 11 (cache disable) makes every fetch uncached in Beetle. It is a run-time
@@ -726,9 +842,10 @@ the real `psxrecomp-game` and `psxrecomp-bios` on it (OpenBIOS for the latter,
 
 **Gap ledger.** `KNOWN_GAPS` in the test lists each id with the section that
 closes it. The test passes only when the observed gaps equal the ledger. Ten
-were open when the ledger landed; PR C closed eight, and two are open:
+were open when the ledger landed; PR C closed eight and PR D the last two, so
+`KNOWN_GAPS` is empty:
 
-| id | observed before PR C | closed by | state |
+| id | observed before the closing PR | closed by | state |
 |---|---|---|---|
 | `link-segment` | 7 link constants, e.g. `0x80010018` | §5.3 | closed (C) |
 | `fetch-tag-segment` | 30 fetch tags in KSEG0 | §5.3 | closed (C) |
@@ -737,9 +854,9 @@ were open when the ledger landed; PR C closed eight, and two are open:
 | `store-pc-segment` | 10 store-PC stamps in KSEG0, e.g. `0x8001000C` | §5.3 | closed (C) |
 | `home-seed-accepted` | KUSEG seed loaded 0 of 1 | §5.3 | closed (C) |
 | `alias-fetch-coherence` | interp-then-compiled `leaf`: 22 cycles vs Beetle 11 (the #417 shape) | §5.3 | closed (C) |
-| `segment-variants` | `0xA00100F0` resolves to the `0x800100F0` body; after C it misses | §5.4 | open |
+| `segment-variants` | `0xA00100F0` resolved to the `0x800100F0` body; after C it missed | §5.4 | closed (D) |
 | `segment-miss` | unrequested KSEG0/KSEG1 aliases resolve; KUSEG PCs resolve to KSEG0 rows | §5.5 | closed (C) |
-| `kseg1-fetch-charge` | no KSEG1 body (Beetle: 40 cycles for the 10-instruction run) | §5.4 + §5.6 | open |
+| `kseg1-fetch-charge` | no KSEG1 body (Beetle: 40 cycles for the 10-instruction run) | §5.4 + §5.6 | closed (D) |
 
 Each implementation PR removes the ids it closes. PR A (#429, §8) was the
 exception: it landed on master before this test did. This PR dropped its id,
@@ -768,6 +885,16 @@ PR B closes no id. It adds two more regression guards, which are
 PR C removes its eight ids from `KNOWN_GAPS` and lists them in
 `REGRESSION_GUARDS`, so each reports a new gap if it breaks again.
 `resume-pc-segment` now also checks every dispatch row's key and resume PC.
+
+PR D moves `segment-variants` and `kseg1-fetch-charge` to `REGRESSION_GUARDS`.
+With variants in the table, `resume-pc-segment` requires each row's key and
+resume PC to be in the segment of the body it enters, and `segment-variants`
+also requires every PC a variant body bakes (links, fetch tags, IRQ resume
+PCs, exits and continuation keys, store PCs) and its name to be in its
+segment. D adds the guard `exact-return-contract` (§5.5): the test compiles
+`psx_call_contract` and checks that another segment's alias of the call site
+starts a bail and resolves none, and that the emitted OpenBIOS dispatch loop
+has its four exact return checks and no masked one.
 
 The overlay half (§5.7) gets its own acceptance case in
 `runtime/tests/test_overlay_segment_gate.py`:
@@ -863,6 +990,55 @@ misses and run interpreted.
 - Apart from segments, the compiled probe C equals B's. The dispatch file
   differs only in the lookup (§5.5).
 
+**Compiled column after PR D (2026-09-29).** The probe runtime is rebuilt
+with the variant seeds `0x800100F0` and `0xA00100F0` added to C's seeds. They
+compile `probe_run` in KSEG0 and KSEG1 with its `getpc` callee and the call's
+continuation (6 variant rows), so every run of `probe_run` is native.
+
+| | links | segment probes | T2 KUSEG / KSEG0 / KSEG1 |
+|---|---|---|---|
+| Beetle | `0x00010018/24/38` | `0x000100FC`, `0x800100FC`, `0xA00100FC` | 56 / 56 / 82 |
+| interpreter | same | same | 56 / 56 / 82 |
+| compiled (D) | same | same | 56 / 56 / 82 |
+
+- The same on OpenBIOS and SCPH-1001.
+- Cycle watch: from one `probe_run` entry to the next, all three take 90 and
+  90 cycles; from `probe_run` to `getpc`, all three take 10 / 10 / 15.
+- The compiled build and the interpreter reach the spin on the same cycle as
+  in C (198,522,602 on OpenBIOS, 398,724,722 on SCPH-1001).
+- The segment-miss ring at the spin is empty on both BIOSes (C: six entries),
+  with 0 dispatch misses.
+
+**LLE boot after PR D (2026-09-29).** Native − Beetle at each hit, the same
+anchors as #429's gate:
+- OpenBIOS: unchanged from C (FLUSH ×5 0 → −126, A0 ×12, shell entry −126).
+- SCPH-1001: the first hit of every anchor is 0 (FLUSH, A0, B0 and C0; it was
+  −9 in A, B and C), and every later hit moves by the same +9: the shell
+  entry is −445 (was −454). That is the IsC gap alone (−52, −149, −149 and −95
+  at SCPH-1001's four boot flushes, §9).
+- With #435 (IsC) merged locally on top of D: both BIOSes are at 0 at every hit
+  of every anchor up to and including the shell entry (OpenBIOS FLUSH ×5,
+  A0 ×12, shell; SCPH-1001 FLUSH ×5, A0 ×17, B0 ×147, C0 ×7, shell).
+- After the shell entry SCPH-1001 still differs, as it did before D: the C0
+  hit 1,460 cycles after the shell entry is −836 with #435 (−864 relative to
+  the shell entry without it), and a FLUSH about 14 s after power-on is
+  −66,558,224.
+  These lie outside this gate and are not caused by the segment work.
+
+**After PR D's review fixes (2026-09-30).** The BIOS dispatch now picks the
+body through `psx_bios_hit_body()` and records BIOS segment misses (§5.4);
+the variant rules refuse seeds outside the physical segments. Rerun on the
+rebuilt probe runtime:
+- Every LLE anchor hit above is identical to D before the fixes, on both
+  BIOSes, with and without #435 on top.
+- The probe's results, spin cycles and cycle-watch intervals are identical.
+- The segment-miss ring at the probe's spin is empty on both BIOSes: neither
+  boot enters a compiled BIOS window through another segment's alias, apart
+  from SCPH-1001's `0xA0000500`, which has its variant.
+- The same build with SCPH-1001's `0xA0000500` seed removed records exactly
+  one BIOS segment miss, `0xA0000500` (home `0x00000500`, `$ra`
+  `0xBFC0683C`, frame 0), and its shell entry returns to −454.
+
 **Other runs**
 - **§5.6 BIOS fix (PR A, #429): done, passed.** LLE boot (`bios_hle = false`)
   cycle parity against live Beetle to the shell, OpenBIOS and the owner's
@@ -945,7 +1121,47 @@ log.
   KSEG1 variant of SCPH-1001's kernel entry `0xA0000500`, which closes the
   −9 cycles left at that entry in #429's gate (§3.3), and makes the five
   segment-masked return checks exact together: `psx_call_contract` and the
-  four in the generated BIOS dispatch loop (§5.5).
+  four in the generated BIOS dispatch loop (§5.5). Implemented 2026-09-29:
+  - Segment-qualified seeds compile the direct-edge closure per segment
+    through a segment view of the image; dispatch keeps a row per compiled
+    segment of a word and looks up the exact PC; jump-table cases in another
+    segment than their body are dispatched, in every game and overlay compile
+    (§5.4, §5.5). BIOS seeds for a copy window's alias compile BIOS variants
+    with exact-PC rows, and a BIOS window entered through another segment's
+    alias with no variant is recorded as a BIOS segment miss (§5.4). Seeds in
+    a segment that does not map physical memory stop the build.
+  - The ledger is at zero gaps; new guard `exact-return-contract`. New tests
+    `segment_variants_test` and `bios_segment_variants`; the latter compiles
+    the emitted BIOS hit lookup, with and without variants, and queries every
+    variant row, every home key's home PC and every other segment's alias of
+    it. Two single-site mutation sweeps kill every mutant: 21 sites in D
+    (planner, dispatch lookup, jump-table filter, BIOS variant emission, the
+    five checks) and 21 sites of the review fixes (seed refusal, alias-group
+    declarations, the data-stub row filter, the home jump-table filter, the
+    BIOS branch closure and same-segment seeds, the BIOS hit lookup and its
+    recording, the key home PCs, the ring's kind and the seed tool's filters).
+  - Probe: every run of `probe_run` is native and equals Beetle and the
+    interpreter; the segment-miss ring is empty (§7.2).
+  - LLE boot: SCPH-1001's first hits are at 0 and its shell entry at −445;
+    with #435 both BIOSes are at 0 through the shell entry (§7.2). Neither
+    boot records a BIOS segment miss.
+  - R4 (KSEG0): the 50 game shards, the declarations header, the `.ranges`
+    manifest and the dispatch table are byte-identical to C, and so are all 26
+    overlay shard sources compiled from C's race captures. OpenBIOS's full C is
+    unchanged; its dispatch C changes in the four exact return checks and
+    gains `psx_bios_key_home_pc()` and `psx_bios_hit_body()`. Fingerprints
+    (12000 frames, cold and warm) are identical to C on every column, `mmio`
+    and the `pc`/`wr` locators included, and an A/A pair is identical;
+    against R4 master's pin they show the same split as B and C (#429). A
+    smoke run reaches a live race with 0 dispatch misses and 0 segment misses
+    of either kind.
+  - The codegen hash changes (`eea16175` → `bd3a72ac`: `code_generator.*`,
+    `full_function_emitter.*`, `ps1_exe_parser.h` and `cpu_state.h` are
+    hashed), so every title's overlay cache recompiles once and pre-D
+    savestates, rewind buffers and boot-state caches are refused. SCPH-1001's
+    generated C gains the variant and its table. Titles without variant seeds
+    get the same game C, except where a table holds another segment's PCs of
+    the image's bytes (§5.4); the same applies to overlay shards.
 - **E: `feat/overlay-segment-keys`** (§5.7). Includes the runtime acceptance
   case, and the R4 warm-cache check that `segment_alias_interp` reaches 0.
   It also returns a KUSEG-linked title's overlay code to native shards, which
@@ -965,8 +1181,9 @@ log.
   95 at SCPH-1001's four (−445, plus the −9 of §3.3, gives −454). Native keeps
   hitting lines that Beetle has invalidated. A local prototype that
   invalidates the model on IsC stores brings OpenBIOS to 0 through the shell
-  and SCPH-1001 to −9 (the §3.3 kernel entry). It is planned as its own small
-  PR.
+  and SCPH-1001 to −9 (the §3.3 kernel entry). It is its own small PR, #435.
+  With PR D's kernel-entry variant and #435 together, both BIOSes are at 0
+  through the shell entry (§7.2).
 - **BIOS store-PC keys are ROM addresses.** The `strict_translator` stamp is
   the ROM address; the interpreter stamps the runtime PC. Seven `memory.c`
   keys lie in SCPH1001's relocated windows (`bios/SCPH1001.toml`). The

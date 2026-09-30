@@ -213,6 +213,71 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-30 (segment-aware code, rollout PR D review fixes):** folded into
+  `feat/segment-variants` (docs/SEGMENT_AWARE_CODE.md §5.4, §5.5, §7.2, §8 D).
+  - The BIOS dispatch picks the body through `psx_bios_hit_body()`. An alias PC
+    of a compiled BIOS window with no variant still runs the home body, as
+    before, but is now recorded in the segment-miss ring as kind `bios` (TCP
+    `segment_misses`, exit report) instead of passing silently. Timing is
+    unchanged: every LLE anchor hit on both BIOSes, with and without #435, and
+    the probe's results and cycles equal D before the fixes. Neither boot
+    records a BIOS segment miss through the probe's spin. With SCPH-1001's
+    `0xA0000500` seed removed, the ring records exactly that PC and the shell
+    entry returns to −454, so the next alias entry cannot hide.
+  - Seeds in segments that do not map physical memory (`0x20000000`-`0x7FFFFFFF`,
+    KSEG2) stop the game and BIOS builds instead of compiling variants that no
+    fetch can reach.
+  - Claim corrected: the jump-table rule (a case in another segment is
+    dispatched) applies to every game and overlay compile, not only to
+    variants. R4's game C and 26 overlay shard sources are still byte-identical.
+  - Tests: the emitted BIOS hit lookup is compiled and queried; new cases for
+    a BIOS branch-only closure, same-segment BIOS seeds, variant data stubs,
+    variant alias groups declared for every shard, KSEG0 home tables of KUSEG
+    PCs and seeds outside the physical segments. 21 new single-site mutants,
+    all killed.
+  - R4 against D before the fixes: fingerprints (12000 frames, cold and warm)
+    IDENTICAL on every column, locators included; smoke reaches a live race
+    with 0 dispatch misses and 0 segment misses of either kind.
+
+- **2026-09-29 (segment-aware code, rollout PR D: per-segment compiled variants):**
+  `feat/segment-variants`, stacked on PR C (docs/SEGMENT_AWARE_CODE.md §5.4, §5.5,
+  §5.6).
+  - A segment-qualified seed compiles a variant: the home functions it reaches by
+    direct edges, compiled again through a view of the image in that segment. Its
+    names, dispatch rows and every baked PC are that segment's; a KSEG1 variant
+    charges a fetch per instruction. A cached variant is the home C with the
+    segment swapped. Dispatch keeps a row per compiled segment of a word and
+    looks up the exact PC; a jump-table case in another segment is dispatched.
+  - BIOS: a runtime-PC seed in another segment than its copy window compiles a
+    variant too. SCPH-1001's seeds gain `0xA0000500` (the reset code's KSEG1 entry
+    into the relocated kernel): its 4-instruction trampoline now charges 20
+    cycles, as Beetle does, instead of the cached body's 11.
+  - The call contract compares return PCs in full: `psx_call_contract` and the
+    four checks of the emitted BIOS dispatch loop.
+  - Timing, against live Beetle: LLE boot, SCPH-1001: the first hit of every
+    anchor now matches (0; it was −9), and the shell entry moves from −454 to
+    −445, the IsC gap alone. OpenBIOS is unchanged (−126). With #435 (IsC) merged
+    locally on top, both BIOSes are at 0 at every hit of every anchor up to and
+    including the shell entry. The synthetic probe compiles its KSEG0 and KSEG1
+    `probe_run` variants: result words and cycle-watch intervals equal Beetle and
+    the interpreter on both BIOSes (T2 56/56/82, 90/90, 10/10/15), and the
+    segment-miss ring at the spin is empty (C had six entries).
+  - R4 (KSEG0): game C and the 26 overlay shard sources are byte-identical to C;
+    OpenBIOS C changes only in the four exact return checks. Fingerprints (12000
+    frames, cold and warm) are identical to C on every column, locators included;
+    against R4 master's pin they show #429's known split. Smoke reaches a live
+    race with 0 dispatch misses and 0 segment misses.
+  - Ledger: `segment-variants` and `kseg1-fetch-charge` close, `KNOWN_GAPS` is
+    empty; new guard `exact-return-contract`. New tests `segment_variants_test`
+    and `bios_segment_variants`. A 21-site mutation sweep kills every mutant.
+  - Cross-title: the codegen hash changes (`eea16175` → `bd3a72ac` with the
+    2026-09-30 review fixes), so overlay caches recompile once and pre-D
+    savestates, rewind buffers and boot-state caches are refused. Game C and
+    overlay shards change only for a title with variant seeds or with a jump
+    table of another segment's PCs of its own bytes. BIOS C: every dispatch
+    changes in the four return checks and gains the hit helpers (review fixes);
+    SCPH-1001 also gains the kernel-entry variant.
+
 - **2026-09-29 (segment-aware code, rollout PR C: KUSEG-linked EXEs, exact dispatch):**
   `feat/kuseg-linked-exe`, stacked on PR B (docs/SEGMENT_AWARE_CODE.md §5.3, §5.5).
   - The EXE parser keeps the header's segment (`link_segment()`); the image is
