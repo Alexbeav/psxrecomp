@@ -91,6 +91,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "bios_rom_alias.h"
 #include "host_path.h"
 #include "launcher_device.h"
+#include "offline_seats.h"
 #include "game_options.h"
 #include "mod_plugins.h"
 #include "mod_runtime.h"
@@ -5835,6 +5836,7 @@ done:
 }
 
 static void sample_mouse_ports(void);
+static bool mouse_seat_configured(void);
 
 static void sample_pad_into_sio(int override) {
     /* Selfcheck fighter mash owns P1 when enabled (headless-safe). */
@@ -5847,11 +5849,12 @@ static void sample_pad_into_sio(int override) {
         apply_input_override_to_sio(override);
         return;
     }
-    int n = g_offline_pad_count;
-    if (n < 1) n = 1;
-    /* A one-player title still needs console port 2 sampled after a live swap. */
-    if (g_controller_ports_swapped && n < 2) n = 2;
-    if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
+    /* A one-player title still needs console port 2 sampled after a live swap,
+     * or next to a PS1 Mouse (offline_seats.h). */
+    const int n = offline_sampled_seat_count(g_offline_pad_count,
+                                             g_controller_ports_swapped ? 1 : 0,
+                                             mouse_seat_configured() ? 1 : 0,
+                                             PSX_MAX_PLAYERS);
     const uint32_t consumer_sim =
         psx_start_consumer_enabled() ? psx_start_consumer_offline_frame() : 0u;
     for (int s = 0; s < n; s++) {
