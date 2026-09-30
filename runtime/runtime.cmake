@@ -361,6 +361,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/debug_trace_ranges.c
     ${PSXRECOMP_ROOT}/runtime/src/dirty_ram_interp.c
     ${PSXRECOMP_ROOT}/runtime/src/game_dispatch_compat.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_segment_miss.c
     ${PSXRECOMP_ROOT}/runtime/src/fntrace.c
     ${PSXRECOMP_ROOT}/runtime/src/text_xlate.cpp
     ${PSXRECOMP_ROOT}/runtime/src/parity_trace.c

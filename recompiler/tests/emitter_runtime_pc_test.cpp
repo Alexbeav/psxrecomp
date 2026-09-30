@@ -33,12 +33,16 @@
 // address. The syscall form follows PSX_CPS at process start, so ctest runs
 // this binary twice (emitter_runtime_pc_test and _legacy).
 //
-// Not covered here: the game dispatch rows main_psx.cpp writes. Until PR C
-// sets a non-KSEG0 code segment for a real executable they equal the compile
-// address; C's ledger checks query them.
+// Game dispatch rows (game_dispatch_emitter.cpp, PR C): each row's key and
+// resume PC go through runtime_pc() while its func_ name keeps the compile
+// identity, and the emitted lookup requires the exact PC. A real executable
+// compiles in its own link segment, where runtime_pc() is the identity, so
+// only this test (code segment != compile segment) sees the routes; the
+// ledger and test_kuseg_dispatch_lookup.py check the emitted lookup end to end.
 
 #include "code_generator.h"
 #include "control_flow.h"
+#include "game_dispatch_emitter.h"
 #include "mips_decoder.h"
 #include "strict_translator.h"
 
@@ -191,8 +195,13 @@ constexpr uint32_t kPersistSite = 0x14u;     // sb
 // unreachable; data and undecodable words become stubs.
 const std::set<uint32_t> kNoFetch = {0x48u, 0x4Cu, 0xACu, 0xB0u, 0xB4u, 0xB8u};
 
+struct Compiled {
+    std::string code;      // every generated function
+    std::string dispatch;  // the game dispatch source
+};
+
 // seg_override < 0: leave the code segment at its default.
-std::string generate(uint32_t image_seg, long long seg_override, Mode mode) {
+Compiled generate_all(uint32_t image_seg, long long seg_override, Mode mode) {
     set_env("PSX_CPS", mode == Mode::Legacy ? "0" : "1");
     const uint32_t base = image_seg | kPhys;
     PSXRecomp::PS1Executable exe{};
@@ -235,9 +244,25 @@ std::string generate(uint32_t image_seg, long long seg_override, Mode mode) {
     for (const auto& f : funcs)
         if (!f.is_data_section) cfgs[f.start_addr] = analyzer.analyze_function(f);
 
-    std::string out;
-    for (const auto& gf : generator.generate_all_functions(funcs, cfgs)) out += gf.full_code;
+    Compiled out;
+    std::set<uint32_t> dispatch_addrs;
+    for (const auto& gf : generator.generate_all_functions(funcs, cfgs)) {
+        out.code += gf.full_code;
+        // main_psx.cpp's rule: dispatchable func_ entries only.
+        if (gf.dispatchable && gf.function_name.rfind("func_", 0) == 0)
+            dispatch_addrs.insert(static_cast<uint32_t>(
+                std::stoul(gf.function_name.substr(5, 8), nullptr, 16)));
+    }
+    std::string error;
+    if (!PSXRecomp::emit_game_dispatch(generator, exe, dispatch_addrs,
+                                       generator.generate_ranges_manifest(funcs, cfgs),
+                                       out.dispatch, error))
+        check(false, std::string("emit_game_dispatch: ") + error);
     return out;
+}
+
+std::string generate(uint32_t image_seg, long long seg_override, Mode mode) {
+    return generate_all(image_seg, seg_override, mode).code;
 }
 
 // Constants of one site class, in emission order.
@@ -419,6 +444,86 @@ void check_game_emitter(Mode mode) {
           m + ": the cached KSEG0 body lost the line-leader rule");
 }
 
+// Dispatch rows: {key, resume, range index, range count, func_ owner}.
+struct Row {
+    uint32_t addr, resume, owner;
+};
+std::vector<Row> dispatch_rows(const std::string& src) {
+    std::vector<Row> rows;
+    static const std::regex re(
+        R"(\{0x([0-9A-F]{8})u, 0x([0-9A-F]{8})u, \d+u, \d+u, func_([0-9A-F]{8})\})");
+    for (auto it = std::sregex_iterator(src.begin(), src.end(), re);
+         it != std::sregex_iterator(); ++it)
+        rows.push_back({static_cast<uint32_t>(std::stoul((*it)[1].str(), nullptr, 16)),
+                        static_cast<uint32_t>(std::stoul((*it)[2].str(), nullptr, 16)),
+                        static_cast<uint32_t>(std::stoul((*it)[3].str(), nullptr, 16))});
+    return rows;
+}
+
+void check_dispatch_rows(Mode mode) {
+    const std::string m = mode_name(mode) + std::string("/dispatch");
+    const std::string def = generate_all(KSEG0, -1, mode).dispatch;
+    check(def == generate_all(KSEG0, KSEG0, mode).dispatch,
+          m + ": an explicit KSEG0 code segment changed the dispatch source");
+    const auto def_rows = dispatch_rows(def);
+    check(def_rows.size() >= 10, m + ": too few dispatch rows parsed");
+    // The lookup indexes the physical word, then requires the exact PC.
+    check(def.find("if (!index || k_psx_game_dispatch[index - 1u].addr != addr) return 0;") !=
+              std::string::npos,
+          m + ": the lookup does not require the exact PC");
+    for (uint32_t seg : {KUSEG, KSEG1}) {
+        const std::string sn = seg == KUSEG ? "KUSEG" : "KSEG1";
+        const std::string src = generate_all(KSEG0, seg, mode).dispatch;
+        const auto rows = dispatch_rows(src);
+        check(rows.size() == def_rows.size(), m + "/" + sn + ": row count changed");
+        bool continuation = false;
+        for (size_t i = 0; i < rows.size() && i < def_rows.size(); ++i) {
+            const Row& r = rows[i];
+            check((r.addr & 0xE0000000u) == seg,
+                  m + "/" + sn + ": row key 0x" + hex(r.addr) + " is not in " + sn);
+            check(r.resume == 0 || (r.resume & 0xE0000000u) == seg,
+                  m + "/" + sn + ": resume PC 0x" + hex(r.resume) + " is not in " + sn);
+            check((r.owner & 0xE0000000u) == KSEG0 && r.owner == def_rows[i].owner,
+                  m + "/" + sn + ": func_" + hex(r.owner) + " is not the compile identity");
+            check((r.addr & 0x1FFFFFFFu) == (def_rows[i].addr & 0x1FFFFFFFu),
+                  m + "/" + sn + ": row 0x" + hex(r.addr) + " moved");
+            continuation |= r.resume != 0;
+        }
+        if (mode != Mode::Legacy)
+            check(continuation, m + "/" + sn + ": no continuation row (resume PC) emitted");
+        if (seg == KUSEG)
+            check(to_phys(src) == to_phys(def),
+                  m + "/" + sn + ": dispatch differs from KSEG0 beyond constant segments");
+    }
+}
+
+// One compile has one code segment, so two rows on one physical word (a
+// variant of another segment, §5.4) are a build error until PR D's variants
+// share the table: never a row that silently shadows the other.
+void check_dispatch_duplicate_word() {
+    const uint32_t base = KSEG0 | kPhys;
+    PSXRecomp::PS1Executable exe{};
+    exe.header.load_address = base;
+    exe.header.initial_pc = base;
+    exe.header.file_size = kCount * 4u;
+    for (uint32_t w : kProgram) append_word(exe.code_data, w);
+    PSXRecomp::CodeGenConfig config{};
+    PSXRecomp::CodeGenerator generator(exe, config);
+    std::string out, error;
+    check(PSXRecomp::emit_game_dispatch(generator, exe, {base, base + 0x20u}, "", out, error) &&
+              error.empty() && !out.empty(),
+          "dispatch: rows on distinct words must emit");
+    for (uint32_t alias : {KUSEG | kPhys, KSEG1 | (kPhys + 0x20u)}) {
+        out.clear();
+        error.clear();
+        check(!PSXRecomp::emit_game_dispatch(generator, exe, {base, base + 0x20u, alias}, "",
+                                             out, error),
+              "dispatch: two rows on one physical word (0x" + hex(alias) + ") must be an error");
+        check(error.find("share a physical word") != std::string::npos,
+              "dispatch: the duplicate-word error must say why, got: " + error);
+    }
+}
+
 void check_strict_translator(bool strict_cps) {
     // SCPH-1001 Kernel Part 2 runs at 0x500 from ROM 0xBFC10000: the store at
     // ROM 0xBFC10A00 executes at 0x00000F00 (memory.c's RAM-0 filter key).
@@ -490,6 +595,9 @@ int main() {
     check_game_emitter(Mode::Cps);
     check_game_emitter(Mode::CpsOverlay);
     check_game_emitter(Mode::Legacy);
+    check_dispatch_rows(Mode::Cps);
+    check_dispatch_rows(Mode::Legacy);
+    check_dispatch_duplicate_word();
     check_strict_translator(strict_cps);
     if (failures != 0) {
         std::fprintf(stderr, "emitter_runtime_pc_test: %d failure(s)\n", failures);

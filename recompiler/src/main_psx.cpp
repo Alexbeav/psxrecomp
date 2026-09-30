@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <map>
 #include <sstream>
 #include <string>
@@ -15,6 +16,7 @@
 #include "function_analysis.h"
 #include "control_flow.h"
 #include "code_generator.h"
+#include "game_dispatch_emitter.h"
 #include "annotations.hpp"
 #include "config_loader.h"
 #include "rabbitizer.hpp"
@@ -245,6 +247,10 @@ static int psxrecomp_game_main(int argc, char** argv) {
     std::set<uint32_t>    ws_backdrop_unsquash; // [widescreen.backdrop] unsquash_funcs
     bool                  ws_auto_screen_x_cull = false; // [widescreen.cull] auto_screen_x
     std::set<uint32_t>    persist_init_sites;   // [persist_options] init-store hooks (game_options.toml)
+    // [load_accel.vsync_query] event_horizon[_extra]_sites: return PCs the
+    // runtime compares exactly with $ra (load_accel.c). Not emitted; read here
+    // only for the segment check below.
+    std::vector<uint32_t> vsync_horizon_sites, vsync_horizon_extra_sites;
     std::vector<PSXRecompV4::RecompilerPatch> instruction_patches;
     std::vector<PSXRecompV4::WidescreenSignedBoundSite> ws_signed_x_bound_sites;
     bool                  ws_auto_backdrop_preload = false; // [widescreen.cull] auto_backdrop
@@ -324,6 +330,8 @@ static int psxrecomp_game_main(int argc, char** argv) {
         if (cfg.ws_bg2d_cap_site)     ws_bg2d_cap_site     = cfg.ws_bg2d_cap_site;
         if (cfg.ws_bg2d_init_func)    ws_bg2d_init_func    = cfg.ws_bg2d_init_func;
         ws_signed_x_bound_sites = cfg.ws_signed_x_bound_sites;
+        vsync_horizon_sites = cfg.vsync_event_horizon_sites;
+        vsync_horizon_extra_sites = cfg.vsync_event_horizon_extra_sites;
         // [persist_options] init-store hook sites live in a dedicated
         // game_options.toml next to game.toml (the game's own native OPTION
         // settings, kept separate from game.toml/settings.toml). Best-effort:
@@ -563,6 +571,84 @@ static int psxrecomp_game_main(int argc, char** argv) {
                    exe->header.initial_pc);
     }
 
+    // Config code sites are code identities, and code identity is the full
+    // virtual address in the image's link segment (docs/SEGMENT_AWARE_CODE.md
+    // §5.1, §5.3). The kinds checked below are matched exactly (by the
+    // emitter, or by the runtime against a PC or $ra), so a site that names
+    // this image's bytes in another segment would silently match nothing (the
+    // EXE parser no longer folds a KUSEG header to KSEG0): refuse it and name
+    // the spelling that matches. Not checked, because they are matched by
+    // physical address and a foreign spelling already reaches the same bytes:
+    // [[recompiler.patches]] (byte patches), [widescreen.cull] keep, angle and
+    // aspect_cone sites, [[widescreen.signed_x_bound]] (the emitter's
+    // full-word-guarded substitutions) and [widescreen.dome] call_sites (the
+    // runtime masks them). Overlay compiles wrap captures at KSEG0 and take
+    // the game's config as --ws-config; their segment keys arrive with PR E
+    // (§5.7).
+    if (!overlay_mode) {
+        std::vector<std::pair<const char*, uint32_t>> foreign;
+        auto check = [&](const char* what, uint32_t addr) {
+            if (addr != 0 && exe->contains_phys(addr) &&
+                (addr & PSXRecomp::kSegmentMask) != exe->link_segment())
+                foreign.emplace_back(what, addr);
+        };
+        auto check_set = [&](const char* what, const std::set<uint32_t>& set) {
+            for (uint32_t a : set) check(what, a);
+        };
+        check_set("widescreen.sprite_tag_funcs", ws_tag_funcs);
+        check_set("data_shards.funcs", ds_funcs);
+        check_set("recompiler.mod_function_entry_funcs", mod_entry_funcs);
+        check_set("recompiler.hot_funcs", hot_funcs);
+        check_set("recompiler.load_charge_batch_funcs", load_charge_batch_funcs);
+        for (const auto& [func, addrs] : vsync_query_hle_funcs) {
+            (void)addrs;
+            check("load_accel.vsync_query.func", func);
+        }
+        for (uint32_t site : vsync_horizon_sites)
+            check("load_accel.vsync_query.event_horizon_sites", site);
+        for (uint32_t site : vsync_horizon_extra_sites)
+            check("load_accel.vsync_query.event_horizon_extra_sites", site);
+        check_set("widescreen.cull.bias_sites", ws_cull_bias);
+        check_set("widescreen.cull.range_sites", ws_cull_range);
+        check_set("widescreen.cull.a1_sites", ws_cull_a1);
+        check_set("widescreen.cull.screen_x_sites", ws_cull_screen_x);
+        check_set("widescreen.cull.slti_sites", ws_cull_slti);
+        check_set("widescreen.cull.slti_lower_sites", ws_cull_slti_lower);
+        check_set("widescreen.cull.bltz_sites", ws_cull_bltz);
+        check_set("widescreen.cull.negsub_sites", ws_cull_negsub);
+        check_set("widescreen.cull.vxrange_sites", ws_cull_vxrange);
+        check_set("widescreen.cull.depth_sites", ws_cull_depth);
+        check_set("widescreen.cull.plane_nx_sites", ws_cull_plane_nx);
+        check_set("widescreen.cull.xclip_load_sites", ws_cull_xclip_load);
+        check_set("widescreen.cull.nclip_keep_sites", ws_cull_nclip_keep);
+        check_set("widescreen.cull.nclip_exact_sites", ws_cull_nclip_exact);
+        check_set("widescreen.cull.branch_keep_sites", ws_cull_branch_keep);
+        check_set("widescreen.cull.bgez_sites", ws_cull_bgez);
+        check_set("widescreen.cull.clip_edge_x_load_sites", ws_cull_clip_edge_x_load);
+        check_set("widescreen.backdrop.x_sites", ws_backdrop_x);
+        check_set("widescreen.backdrop.unsquash_funcs", ws_backdrop_unsquash);
+        check_set("persist_options.init_store_pc", persist_init_sites);
+        check("widescreen.bg2d.count_site", ws_bg2d_count_site);
+        check("widescreen.bg2d.startcol_site", ws_bg2d_startcol_site);
+        check("widescreen.bg2d.startx_site", ws_bg2d_startx_site);
+        check("widescreen.bg2d.stream_left_site", ws_bg2d_stream_left_site);
+        check("widescreen.bg2d.stream_right_site", ws_bg2d_stream_right_site);
+        check("widescreen.bg2d.bufbase_site", ws_bg2d_bufbase_site);
+        check("widescreen.bg2d.cap_site", ws_bg2d_cap_site);
+        check("widescreen.bg2d.init_func", ws_bg2d_init_func);
+        if (!foreign.empty()) {
+            fmt::print(stderr,
+                "ERROR: {} config code site(s) name this image's bytes in another "
+                "segment than its link segment 0x{:08X}. Code identity is the full "
+                "PC (docs/SEGMENT_AWARE_CODE.md §5.1), so write each in the link "
+                "segment:\n", foreign.size(), exe->link_segment());
+            for (const auto& [what, addr] : foreign)
+                fmt::print(stderr, "  {}: 0x{:08X} -> 0x{:08X}\n", what, addr,
+                           exe->link_segment() | (addr & PSXRecomp::kPhysMask));
+            return 1;
+        }
+    }
+
     if (inspect_mode) {
     // Disassemble first 20 instructions from entry point
     fmt::print("Disassembly at Entry Point (0x{:08X}):\n", exe->header.initial_pc);
@@ -681,8 +767,19 @@ static int psxrecomp_game_main(int argc, char** argv) {
      * Seeds are accepted within the loaded image's own bounds — overlay mode
      * wraps arbitrary regions (kernel RAM at 0x80000000, overlays at
      * 0x800E7000, ...), so a hardcoded game-RAM window would silently drop
-     * valid seeds. */
+     * valid seeds.
+     *
+     * A seed is a PC, so it carries a segment (docs/SEGMENT_AWARE_CODE.md
+     * §5.3, §5.4). The bounds are checked by physical address: a seed in the
+     * image's link segment (0x000100E4 for a KUSEG-linked EXE, 0x800100E4
+     * for a KSEG0 one) is an entry of the image. A seed for the same bytes in
+     * another segment asks for a segment variant (§5.4), which is not
+     * compiled yet: it is listed below and never folded into the home body,
+     * so that PC stays a loud segment miss at run time. Seeds outside the
+     * image are counted. */
     std::vector<uint32_t> file_seeds;
+    std::vector<std::pair<uint32_t, std::string>> variant_seeds;  // PC, line kind
+    size_t outside_seeds = 0;
     std::vector<uint32_t> interior_seeds;
     std::map<uint32_t, uint32_t> hosted_interior_seeds;
     std::set<uint32_t> hosted_interior_hosts;
@@ -697,6 +794,42 @@ static int psxrecomp_game_main(int argc, char** argv) {
         if (ef.is_open()) {
             const uint32_t seed_lo = exe->header.load_address;
             const uint32_t seed_hi = exe->analysis_end_address();
+            // The directive lines below name code by PC too, so they follow
+            // the seed rule (§5.3): an address that names this image's bytes
+            // in another segment is refused with its link-segment spelling,
+            // instead of failing the raw bounds check with no hint. (A
+            // variant request is a plain seed line; directives have none.)
+            // `end_exclusive`: the last address is a range end, which names
+            // the image when its last byte does.
+            auto foreign_directive = [&](const std::string& text,
+                                         std::initializer_list<uint32_t> addrs,
+                                         bool end_exclusive = false) {
+                auto in_image = [&](uint32_t a, bool is_end) {
+                    return is_end ? a != 0 && exe->contains_phys(a - 1u)
+                                  : exe->contains_phys(a);
+                };
+                bool foreign = false;
+                size_t i = 0;
+                for (uint32_t a : addrs) {
+                    const bool is_end = end_exclusive && ++i == addrs.size();
+                    foreign |= in_image(a, is_end) &&
+                               (a & PSXRecomp::kSegmentMask) != exe->link_segment();
+                }
+                if (!foreign) return false;
+                std::string fixed;
+                i = 0;
+                for (uint32_t a : addrs) {
+                    const bool is_end = end_exclusive && ++i == addrs.size();
+                    fixed += fmt::format(" 0x{:08X}", in_image(a, is_end)
+                        ? exe->link_segment() | (a & PSXRecomp::kPhysMask) : a);
+                }
+                fmt::print(stderr,
+                    "ERROR: seeds directive names this image's bytes in another "
+                    "segment than its link segment 0x{:08X} "
+                    "(docs/SEGMENT_AWARE_CODE.md §5.3): {}\n  write its "
+                    "addresses as:{}\n", exe->link_segment(), text, fixed);
+                return true;
+            };
             std::string line;
             while (std::getline(ef, line)) {
                 if (line.empty() || line[0] == '#') continue;
@@ -708,6 +841,9 @@ static int psxrecomp_game_main(int argc, char** argv) {
                         std::strtoul(lo_text.c_str(), nullptr, 16));
                     uint32_t hi = static_cast<uint32_t>(
                         std::strtoul(hi_text.c_str(), nullptr, 16));
+                    if (!lo_text.empty() && !hi_text.empty() &&
+                        foreign_directive(line, {lo, hi}, /*end_exclusive=*/true))
+                        return 1;
                     if (lo_text.empty() || hi_text.empty() ||
                         lo < seed_lo || lo >= hi || hi > seed_hi) {
                         fmt::print(stderr, "ERROR: invalid producer_range: {}\n", line);
@@ -720,6 +856,7 @@ static int psxrecomp_game_main(int argc, char** argv) {
                     const char* p = line.c_str() + 16;
                     uint32_t addr = static_cast<uint32_t>(
                         std::strtoul(p, nullptr, 16));
+                    if (foreign_directive(line, {addr})) return 1;
                     if (addr < seed_lo || addr >= seed_hi) {
                         fmt::print(stderr, "ERROR: invalid cross_call_allow: {}\n", line);
                         return 1;
@@ -749,6 +886,11 @@ static int psxrecomp_game_main(int argc, char** argv) {
                         return true;
                     };
                     uint32_t target = 0, host = 0;
+                    if (tag == "hosted_interior" && trailing.empty() &&
+                        parse_hex_u32(target_text, target) &&
+                        parse_hex_u32(host_text, host) &&
+                        foreign_directive(line, {target, host}))
+                        return 1;
                     if (tag != "hosted_interior" || !trailing.empty() ||
                         !parse_hex_u32(target_text, target) ||
                         !parse_hex_u32(host_text, host) ||
@@ -796,15 +938,21 @@ static int psxrecomp_game_main(int argc, char** argv) {
                     p += 9;
                 }
                 uint32_t addr = (uint32_t)std::strtoul(p, nullptr, 16);
-                if (addr >= seed_lo && addr < seed_hi) {
-                    if (interior) {
-                        interior_seeds.push_back(addr);
-                    } else {
-                        if (trusted_root) trusted_root_seeds.insert(addr);
-                        if (trusted_call_root) trusted_call_root_seeds.insert(addr);
-                        file_seeds.push_back(addr);
-                        exact_entries.push_back(addr);
-                    }
+                const uint32_t phys = addr & PSXRecomp::kPhysMask;
+                if (phys < (seed_lo & PSXRecomp::kPhysMask) ||
+                    phys >= (seed_lo & PSXRecomp::kPhysMask) + (seed_hi - seed_lo)) {
+                    ++outside_seeds;
+                } else if ((addr & PSXRecomp::kSegmentMask) != exe->link_segment()) {
+                    variant_seeds.emplace_back(
+                        addr, interior ? "interior" : trusted_root ? "dispatch_root"
+                                  : trusted_call_root ? "call_root" : "entry");
+                } else if (interior) {
+                    interior_seeds.push_back(addr);
+                } else {
+                    if (trusted_root) trusted_root_seeds.insert(addr);
+                    if (trusted_call_root) trusted_call_root_seeds.insert(addr);
+                    file_seeds.push_back(addr);
+                    exact_entries.push_back(addr);
                 }
             }
             std::sort(producer_ranges.begin(), producer_ranges.end());
@@ -839,6 +987,30 @@ static int psxrecomp_game_main(int argc, char** argv) {
                        trusted_call_root_seeds.size(),
                        producer_ranges.size(), cross_call_allow.size(),
                        extra_funcs_path);
+            if (outside_seeds) {
+                fmt::print("  {} seed(s) lie outside this image (0x{:08X}-0x{:08X}) "
+                           "and were not used\n",
+                           outside_seeds, seed_lo, seed_hi);
+            }
+            if (!variant_seeds.empty()) {
+                auto seg_name = [](uint32_t seg) {
+                    return seg == PSXRecomp::kSegKUSEG ? "KUSEG"
+                         : seg == PSXRecomp::kSegKSEG0 ? "KSEG0"
+                         : seg == PSXRecomp::kSegKSEG1 ? "KSEG1" : "an unmapped segment";
+                };
+                fmt::print("WARNING: {} seed(s) name this image's bytes in another segment "
+                           "than its link segment {}. Each asks for a segment variant "
+                           "(docs/SEGMENT_AWARE_CODE.md §5.4), which is not compiled "
+                           "yet: that PC runs interpreted and is recorded as a segment "
+                           "miss. A seed for the image's own code is written in {}.\n",
+                           variant_seeds.size(), seg_name(exe->link_segment()),
+                           seg_name(exe->link_segment()));
+                for (const auto& [addr, kind] : variant_seeds) {
+                    fmt::print("  variant seed 0x{:08X} ({}, {}): home PC would be 0x{:08X}\n",
+                               addr, kind, seg_name(addr & PSXRecomp::kSegmentMask),
+                               exe->link_segment() | (addr & PSXRecomp::kPhysMask));
+                }
+            }
         } else {
             fmt::print("WARNING: Cannot open extra-funcs file: {}\n", extra_funcs_path);
         }
@@ -1503,271 +1675,14 @@ static int psxrecomp_game_main(int argc, char** argv) {
         std::filesystem::path dispatch_filename = out_dir / (exe_stem + "_dispatch.c");
         fmt::print("Generating dispatch table: {}\n", dispatch_filename.string());
 
-        std::ostringstream ds;
-        ds << "/* Generated by PSXRecomp - dynamic dispatch table */\n";
-        ds << "#include \"psx_runtime.h\"\n\n";
-        ds << "extern void psx_check_interrupts_dispatch_entry(CPUState* cpu, uint32_t resume_pc);\n\n";
-        ds << "extern int dirty_ram_text_native_ok_ranges_from(const uint32_t* lo_len_pairs, uint32_t count, uint32_t exec_pc);\n\n";
-        ds << "extern int dirty_ram_text_native_ok_ranges(const uint32_t* lo_len_pairs, uint32_t count);\n\n";
-
-        // Forward declarations
-        ds << "/* Forward declarations for all recompiled functions */\n";
-        for (uint32_t addr : dispatch_addrs) {
-            ds << fmt::format("extern void func_{:08X}(CPUState* cpu);\n", addr);
+        std::string dispatch_source, dispatch_error;
+        if (!PSXRecomp::emit_game_dispatch(codegen, *exe, dispatch_addrs,
+                                           ranges_manifest, dispatch_source,
+                                           dispatch_error)) {
+            fmt::print(stderr, "ERROR: {}\n", dispatch_error);
+            return 1;
         }
-        ds << "\n";
-
-        // Dispatch function
-        uint32_t game_text_start = exe->load_address() & 0x1FFFFFFFu;
-        uint32_t game_text_end = game_text_start + exe->code_size();
-        ds << "int psx_game_address_in_text(uint32_t addr) {\n";
-        ds << "    uint32_t phys = addr & 0x1FFFFFFFu;\n";
-        ds << fmt::format("    return phys >= 0x{:08X}u && phys < 0x{:08X}u;\n",
-                          game_text_start, game_text_end);
-        ds << "}\n\n";
-
-        // Materialize one sorted data table for dispatch and entry probes. A
-        // giant sparse switch is catastrophically slow in Debug/-O0 builds:
-        // GCC lowers X4's roughly 60K cases to a multi-megabyte linear compare
-        // chain. Binary search stays O(log N) at every optimizer level and
-        // avoids emitting the same case set twice.
-        struct DispatchRecord {
-            uint32_t addr;
-            uint32_t resume;
-            uint32_t owner;
-            uint32_t range_index;
-            uint32_t range_count;
-        };
-        std::vector<DispatchRecord> records;
-        records.reserve(dispatch_addrs.size() +
-                        (codegen.cps_enabled() ? codegen.cps_continuations().size() : 0));
-        for (uint32_t addr : dispatch_addrs)
-            records.push_back({addr, 0, addr, 0, 0});
-        if (codegen.cps_enabled()) {
-            const auto& conts = codegen.cps_continuations();
-            for (const auto& [cont, owner] : conts) {
-                if (dispatch_addrs.count(cont)) continue;
-                // A continuation owned by a fail-closed stub is no more
-                // executable than the stub entry itself.
-                if (!dispatch_addrs.count(owner)) continue;
-                records.push_back({cont, cont, owner, 0, 0});
-            }
-        }
-        // Sort by PHYSICAL address. psx_game_find_entry() compares masked
-        // addresses so a KUSEG-executing guest still matches KSEG-normalized
-        // keys; the search invariant must therefore be the masked order too.
-        // Within one segment this is identical to sorting by the raw address.
-        std::sort(records.begin(), records.end(),
-                  [](const DispatchRecord& a, const DispatchRecord& b) {
-                      return (a.addr & 0x1FFFFFFFu) < (b.addr & 0x1FFFFFFFu);
-                  });
-
-        // Attach the exact CFG instruction ranges from the manifest to every
-        // dispatch owner. Mid-function alias wrappers have no separate F record,
-        // so resolve them to the containing host range. Mutable data and
-        // jump-table gaps sharing a page remain deliberately excluded.
-        using CodeRange = std::pair<uint32_t, uint32_t>;  // virtual lo, byte len
-        std::map<uint32_t, std::vector<CodeRange>> function_ranges;
-        {
-            std::istringstream input(ranges_manifest);
-            std::string line;
-            uint32_t current_owner = 0;
-            while (std::getline(input, line)) {
-                std::istringstream fields(line);
-                char kind = 0;
-                fields >> kind;
-                if (kind == 'F') {
-                    fields >> std::hex >> current_owner;
-                    function_ranges[current_owner];
-                } else if (kind == 'R' && current_owner != 0) {
-                    uint32_t lo = 0, len = 0;
-                    fields >> std::hex >> lo >> len;
-                    if (len != 0)
-                        function_ranges[current_owner].push_back({lo, len});
-                }
-            }
-        }
-        std::vector<CodeRange> flat_ranges;
-        std::map<uint32_t, std::pair<uint32_t, uint32_t>> owner_spans;
-        auto resolve_owner_ranges = [&](uint32_t owner)
-            -> const std::vector<CodeRange>* {
-            auto exact = function_ranges.find(owner);
-            if (exact != function_ranges.end() && !exact->second.empty())
-                return &exact->second;
-            for (const auto& [entry, ranges] : function_ranges) {
-                (void)entry;
-                for (const auto& [lo, len] : ranges) {
-                    const uint64_t hi = (uint64_t)lo + len;
-                    if (owner >= lo && (uint64_t)owner < hi) return &ranges;
-                }
-            }
-            return nullptr;
-        };
-        for (auto& rec : records) {
-            auto cached = owner_spans.find(rec.owner);
-            if (cached == owner_spans.end()) {
-                const uint32_t first = (uint32_t)flat_ranges.size();
-                const auto* ranges = resolve_owner_ranges(rec.owner);
-                if (ranges)
-                    flat_ranges.insert(flat_ranges.end(), ranges->begin(), ranges->end());
-                const uint32_t count = (uint32_t)flat_ranges.size() - first;
-                cached = owner_spans.emplace(rec.owner,
-                                             std::make_pair(first, count)).first;
-            }
-            rec.range_index = cached->second.first;
-            rec.range_count = cached->second.second;
-        }
-
-        ds << "typedef struct { uint32_t lo; uint32_t len; } PsxGameCodeRange;\n";
-        ds << "static const PsxGameCodeRange k_psx_game_code_ranges[] = {\n";
-        if (flat_ranges.empty()) ds << "    {0u, 0u},\n";
-        for (const auto& [lo, len] : flat_ranges)
-            ds << fmt::format("    {{0x{:08X}u, 0x{:X}u}},\n", lo, len);
-        ds << "};\n\n";
-
-        ds << "typedef void (*PsxGameDispatchFn)(CPUState* cpu);\n";
-        ds << "typedef struct {\n";
-        ds << "    uint32_t addr;\n";
-        ds << "    uint32_t resume_pc;\n";
-        ds << "    uint32_t range_index;\n";
-        ds << "    uint32_t range_count;\n";
-        ds << "    PsxGameDispatchFn fn;\n";
-        ds << "} PsxGameDispatchEntry;\n\n";
-        ds << "static const PsxGameDispatchEntry k_psx_game_dispatch[] = {\n";
-        // Row keys and resume PCs are the PCs the guest executes, so they go
-        // through the emitter's runtime_pc() (docs/SEGMENT_AWARE_CODE.md
-        // §5.2); func_ names stay the compile identity. resume 0 means "entry
-        // at the prologue", not a PC.
-        for (const auto& rec : records) {
-            ds << fmt::format("    {{0x{:08X}u, 0x{:08X}u, {}u, {}u, func_{:08X}}},\n",
-                              codegen.runtime_pc(rec.addr),
-                              rec.resume ? codegen.runtime_pc(rec.resume) : 0u,
-                              rec.range_index, rec.range_count, rec.owner);
-        }
-        ds << "};\n";
-        ds << fmt::format("#define PSX_GAME_DISPATCH_COUNT {}u\n\n", records.size());
-        // WO-6: resident dispatch keys are immutable. Index them once at build
-        // time instead of binary-searching on every overlay-to-EXE call and
-        // every text-validity query. This caches resolution, NEVER validity:
-        // callers below still check live instruction ranges on every dispatch.
-        // Bound the indexed span to one PS1 RAM image; wider or ambiguous
-        // tables retain the existing binary search. No mutable cache or flag.
-        const uint32_t lookup_lo = records.empty() ? 0u : (records.front().addr & 0x1FFFFFFFu);
-        const uint32_t lookup_hi = records.empty() ? 0u : (records.back().addr & 0x1FFFFFFFu);
-        bool indexed_lookup = !records.empty() && lookup_hi - lookup_lo < 0x200000u;
-        for (size_t i = 0; i < records.size(); ++i) {
-            const uint32_t key = records[i].addr & 0x1FFFFFFFu;
-            if ((key & 3u) || (i && key == (records[i - 1].addr & 0x1FFFFFFFu)))
-                indexed_lookup = false;
-        }
-        if (indexed_lookup) {
-            std::vector<uint32_t> index((lookup_hi - lookup_lo) / 4u + 1u, 0u);
-            for (size_t i = 0; i < records.size(); ++i)
-                index[((records[i].addr & 0x1FFFFFFFu) - lookup_lo) / 4u] = (uint32_t)i + 1u;
-            ds << "/* Immutable physical-word index; zero denotes a dispatch miss. */\n";
-            ds << "static const " << (records.size() <= 65535u ? "uint16_t" : "uint32_t")
-               << " k_psx_game_dispatch_index[] = {\n";
-            for (size_t i = 0; i < index.size(); ++i) {
-                if ((i & 15u) == 0) ds << "    ";
-                ds << index[i] << "u,";
-                ds << (((i & 15u) == 15u || i + 1 == index.size()) ? "\n" : " ");
-            }
-            ds << "};\n\n";
-        }
-        ds << "/* PS1 segments alias the same physical RAM. A game whose PS-X EXE\n";
-        ds << " * header carries KUSEG addresses (load address and entry PC without the\n";
-        ds << " * KSEG bit) executes with a KUSEG PC, while this table is keyed by the\n";
-        ds << " * recompiler's KSEG-normalized addresses. Comparing raw values made every\n";
-        ds << " * lookup fail for such a title: 0x0001xxxx is always below 0x8001xxxx, so\n";
-        ds << " * the search collapsed and returned no entry, silently routing all game\n";
-        ds << " * code to the interpreter. Compare the 29-bit physical address instead;\n";
-        ds << " * the table is sorted by the same masked key. */\n";
-        ds << "static const PsxGameDispatchEntry* psx_game_find_entry(uint32_t addr) {\n";
-        ds << "    const uint32_t want = addr & 0x1FFFFFFFu;\n";
-        if (indexed_lookup) {
-            ds << fmt::format("    const uint32_t offset = want - 0x{:08X}u;\n", lookup_lo);
-            ds << fmt::format("    if ((want & 3u) || offset > 0x{:X}u) return 0;\n", lookup_hi - lookup_lo);
-            ds << "    const uint32_t index = k_psx_game_dispatch_index[offset >> 2];\n";
-            ds << "    return index ? &k_psx_game_dispatch[index - 1u] : 0;\n";
-        } else {
-            ds << "    uint32_t lo = 0, hi = PSX_GAME_DISPATCH_COUNT;\n";
-            ds << "    while (lo < hi) {\n";
-            ds << "        uint32_t mid = lo + (hi - lo) / 2;\n";
-            ds << "        uint32_t key = k_psx_game_dispatch[mid].addr & 0x1FFFFFFFu;\n";
-            ds << "        if (want < key) hi = mid;\n";
-            ds << "        else if (want > key) lo = mid + 1;\n";
-            ds << "        else return &k_psx_game_dispatch[mid];\n";
-            ds << "    }\n";
-            ds << "    return 0;\n";
-        }
-        ds << "}\n\n";
-
-        ds << "/* Exact static-code validity for this entry's emitted CFG ranges. */\n";
-        ds << "int psx_game_text_native_ok(uint32_t addr) {\n";
-        ds << "    const PsxGameDispatchEntry* entry = psx_game_find_entry(addr);\n";
-        ds << "    if (!entry || entry->range_count == 0) return 0;\n";
-        ds << "    return dirty_ram_text_native_ok_ranges_from(\n";
-        ds << "        &k_psx_game_code_ranges[entry->range_index].lo, entry->range_count, addr);\n";
-        ds << "}\n\n";
-
-        ds << "/* Full-range validity for straight-line interpreter-to-AOT handoff. */\n";
-        ds << "int psx_game_text_native_ok_full(uint32_t addr) {\n";
-        ds << "    const PsxGameDispatchEntry* entry = psx_game_find_entry(addr);\n";
-        ds << "    if (!entry || entry->range_count == 0) return 0;\n";
-        ds << "    return dirty_ram_text_native_ok_ranges(\n";
-        ds << "        &k_psx_game_code_ranges[entry->range_index].lo, entry->range_count);\n";
-        ds << "}\n\n";
-
-        ds << "/* Maps PS1 address to compiled game code. Returns 1 if dispatched, 0 if unknown. */\n";
-        ds << "int psx_dispatch_game_compiled(CPUState* cpu, uint32_t addr) {\n";
-        ds << "    const PsxGameDispatchEntry* entry = psx_game_find_entry(addr);\n";
-        ds << "    if (!entry) return 0;\n";
-        ds << "    if (entry->range_count == 0 || !dirty_ram_text_native_ok_ranges_from(\n";
-        ds << "            &k_psx_game_code_ranges[entry->range_index].lo, entry->range_count, addr)) return 0;\n";
-        ds << "    psx_check_interrupts_dispatch_entry(cpu, addr);\n";
-        if (codegen.cps_enabled())
-            ds << "    cpu->pc = entry->resume_pc;\n";
-        ds << "    /* load_accel: cycle-faithful VSync(-1) query (config-gated). */\n";
-        ds << "    {\n";
-        ds << "        extern int psx_vsync_query_hle_try(CPUState* cpu, uint32_t addr);\n";
-        ds << "        if (psx_vsync_query_hle_try(cpu, addr)) return 1;\n";
-        ds << "    }\n";
-        ds << "    entry->fn(cpu);\n";
-        ds << "    return 1;\n";
-        ds << "}\n";
-
-        // Non-destructive companion to psx_dispatch_game_compiled: is `addr` a PC
-        // the top-level dispatch can re-enter (a compiled function entry, or a CPS
-        // continuation resume-point)? The precise event slicer (dirty_ram_interp.c)
-        // needs this to know when it may hand a resume PC back to the dispatcher:
-        // a MID-function clean-text PC is NOT re-enterable (the switch falls to
-        // `default: return 0` and the dirty path returns 0 -> top-level PC=0 exit),
-        // so the slicer must keep interpreting until cpu->pc lands on a true entry.
-        // Same precise address set as dispatch, without executing the entry.
-        ds << "\n/* 1 iff addr is a re-enterable compiled entry/continuation (no exec). */\n";
-        ds << "int psx_game_is_function_entry(uint32_t addr) {\n";
-        ds << "    return psx_game_find_entry(addr) != 0;\n";
-        ds << "}\n";
-
-        if (codegen.cps_enabled()) {
-            // RECURSION_BUG.md §25 — mark CPS mode at startup so runtime code that
-            // routes CPS continuations (overlay_loader.c) sees the contract.
-            // Static ctor: no clash with the BIOS dispatch's marker.
-            ds << "\n/* CPS runtime-mode marker (the overlay loader reads g_psx_cps_mode). */\n";
-            ds << "static void psx_cps_mark_game(void) {\n";
-            ds << "    extern int g_psx_cps_mode; g_psx_cps_mode = 1;\n";
-            ds << "}\n";
-            // Run psx_cps_mark_game before main(). __attribute__((constructor)) is
-            // GCC/Clang-only; MSVC uses a static initializer pointer in .CRT$XCU.
-            ds << "#if defined(_MSC_VER)\n";
-            ds << "#pragma section(\".CRT$XCU\", read)\n";
-            ds << "__declspec(allocate(\".CRT$XCU\")) static void (*psx_cps_mark_game_ctor)(void) = psx_cps_mark_game;\n";
-            ds << "#else\n";
-            ds << "__attribute__((constructor)) static void psx_cps_mark_game_ctor(void) { psx_cps_mark_game(); }\n";
-            ds << "#endif\n";
-        }
-
-        if (write_file_if_changed(dispatch_filename, ds.str())) {
+        if (write_file_if_changed(dispatch_filename, dispatch_source)) {
             fmt::print("✓ Dispatch table written ({} entries)\n\n",
                        dispatch_addrs.size());
         } else {

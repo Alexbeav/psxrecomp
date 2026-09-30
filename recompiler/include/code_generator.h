@@ -341,10 +341,10 @@ public:
     // store-PC stamps, the reserved-instruction EPC, the slice resume PC and
     // dispatch rows. Identity keys (func_/block_ names, .ranges, entry-hook
     // ids) keep the compile address. The default is the segment of the
-    // image's load address, so runtime_pc(addr) == addr for every address in
-    // the image and the output is byte-identical to the pre-segment emitter.
-    // The EXE parser folds KUSEG headers to KSEG0 (until §5.3), so today that
-    // default is KSEG0 for every executable title.
+    // image's load address, which is the EXE's link segment (§5.3: the parser
+    // keeps a KUSEG header's segment), so runtime_pc(addr) == addr for every
+    // address in the image. Only a compile of the same bytes for another
+    // segment (a variant, §5.4) sets a different code segment.
     static constexpr uint32_t kSegmentMask = 0xE0000000u;
     static constexpr uint32_t kPhysMask = 0x1FFFFFFFu;
     void set_code_segment(uint32_t seg) { code_seg_ = seg & kSegmentMask; }

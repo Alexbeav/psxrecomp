@@ -46,15 +46,7 @@ SEG_MASK, PHYS_MASK = 0xE0000000, 0x1FFFFFFF
 # id -> (design section, what is missing). Remove an entry in the change
 # that closes it; the test fails until the ledger matches.
 KNOWN_GAPS = {
-    "link-segment": ("5.3", "jal/jalr/bgezal links carry KSEG0, not the EXE's link segment"),
-    "fetch-tag-segment": ("5.3", "I-cache fetch tags carry KSEG0, not the link segment"),
-    "irq-resume-segment": ("5.3", "psx_check_interrupts_at resume PCs (future EPCs) carry KSEG0"),
-    "resume-pc-segment": ("5.3", "CPS exit PCs and continuation keys carry KSEG0"),
-    "store-pc-segment": ("5.3", "store-PC stamps (memory.c store filters read them) carry KSEG0"),
-    "home-seed-accepted": ("5.3", "a seed written in the EXE's own KUSEG segment is dropped"),
-    "alias-fetch-coherence": ("5.3", "a compiled body misses I-cache lines the interpreter filled at the real PC"),
     "segment-variants": ("5.4", "a seeded KSEG1 entry gets no body of its own"),
-    "segment-miss": ("5.5", "an alias PC with no body of its own resolves to another segment's body"),
     "kseg1-fetch-charge": ("5.6", "compiled KSEG1 code does not charge +4 per fetch"),
 }
 
@@ -64,6 +56,16 @@ REGRESSION_GUARDS = {
     "bios-kseg1-fetch-charge": "5.6",   # PR A (#429)
     "bios-runtime-pc": "5.2",           # PR B: BIOS PCs handed to the runtime
     "store-pc-keys-runtime": "9",       # PR B: memory.c keys re-keyed
+    # PR C: a KUSEG-linked EXE compiles for its link segment, and dispatch
+    # is exact.
+    "link-segment": "5.3",
+    "fetch-tag-segment": "5.3",
+    "irq-resume-segment": "5.3",
+    "resume-pc-segment": "5.3",
+    "store-pc-segment": "5.3",
+    "home-seed-accepted": "5.3",
+    "alias-fetch-coherence": "5.3",
+    "segment-miss": "5.5",
 }
 
 
@@ -441,6 +443,11 @@ def main():
         for gid, pattern in PC_SITES.items():
             off = sorted({pc for fn in home_bodies for pc in pc_constants(bodies[fn], pattern)
                           if (pc & SEG_MASK) != link})
+            if gid == "resume-pc-segment":
+                # The dispatch rows' keys and resume PCs are PCs too (§5.2):
+                # dispatch sets cpu->pc = resume_pc before entering a body.
+                off = sorted(set(off) | {pc for a, r, _ in rows for pc in (a, r)
+                                         if pc and (pc & SEG_MASK) != link})
             if off:
                 gaps.add(gid)
                 notes[gid] = "%d constants, e.g. 0x%08X" % (len(off), off[0])
@@ -563,7 +570,7 @@ def main():
 
     known = set(KNOWN_GAPS)
     print("segment-aware codegen ledger (docs/SEGMENT_AWARE_CODE.md):")
-    for gid in sorted(known | gaps):
+    for gid in sorted(known | gaps | set(REGRESSION_GUARDS)):
         state = ("gap" if gid in gaps else "closed")
         sec = KNOWN_GAPS.get(gid, (REGRESSION_GUARDS.get(gid, "?"), ""))[0]
         print("  %-24s %-6s section %-4s %s" % (gid, state, sec, notes.get(gid, "")))
