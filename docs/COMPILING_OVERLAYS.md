@@ -113,7 +113,15 @@ CPU architectures, and codegen versions never mix:
 ```
 <out-dir>/<game-id>/<gcc|tcc>/<os>-<arch>/cg<N>_<hash>/<phys>_<crc>.dll
                                                         <phys>_<crc>.ranges
+                                                        seg-kuseg/<phys>_<crc>.dll
+                                                        seg-kseg1/<phys>_<crc>.dll
 ```
+
+Overlay code that runs at KUSEG or KSEG1 PCs gets its own shard, compiled for
+that segment, in the `seg-kuseg/` or `seg-kseg1/` subdirectory: a capture
+records the segment each entry entered through, and each segment's entries
+compile separately (docs/SEGMENT_AWARE_CODE.md §5.7). KSEG0 shards keep the
+layout above.
 
 e.g. `cache/SLUS-01395/gcc/win-x64/cg7_1a2b3c4d/000E7000_B476006F.dll`. The
 loader computes the exact same path, so if you build into the right game's cache

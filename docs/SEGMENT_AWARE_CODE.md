@@ -9,8 +9,9 @@ merged as #429 on 2026-09-29 (§8). This change adds only this document and an
 acceptance test; it does not change behaviour. Rollout PR B
 (`refactor/emitter-runtime-pc`, stacked on this design) implements §5.2,
 rollout PR C (`feat/kuseg-linked-exe`, stacked on B) implements §5.3 and §5.5,
-and rollout PR D (`feat/segment-variants`, stacked on C) implements §5.4, the
-exact return checks of §5.5 and the KSEG1 variants of §5.6.
+rollout PR D (`feat/segment-variants`, stacked on C) implements §5.4, the
+exact return checks of §5.5 and the KSEG1 variants of §5.6, and rollout PR E
+(`feat/overlay-segment-keys`, stacked on D) implements §5.7.
 
 Acceptance test: `recompiler/tests/test_segment_aware_codegen.py` (ctest
 `segment_aware_codegen`). Synthetic EXE: `tools/segment_testrom/gen_segment_exe.py`.
@@ -229,7 +230,7 @@ Segment is lost at every stage:
 
 In R4 that is about 27 dispatches per frame: OpenBIOS enters its RAM patch
 slots `0x0000281C` and `0x0000357C` at KUSEG. Nothing ever asks for a KUSEG
-shard.
+shard. PR E records the segment at capture and keys shards by it (§5.7).
 
 ### 3.5 Uncached fetch in compiled code
 
@@ -479,7 +480,9 @@ emitter change.
   caller's segment, and `call_by_address` takes `runtime_pc()`), and #417's
   gate keeps every non-KSEG0 PC off the KSEG0-compiled shards
   (`segment_alias_interp` counts them). Before C the folded KSEG0 static code
-  entered them at KSEG0 and ran the shards natively, with KSEG0 links.
+  entered them at KSEG0 and ran the shards natively, with KSEG0 links. Since
+  PR E those entries are captured with their segment and compile to KUSEG
+  shards (§5.7).
 - A KSEG0 title that enters its own static text through a KUSEG or KSEG1
   alias (§3.3) runs that path interpreted after it is regenerated, recorded
   as segment misses, until PR D compiles a variant. Before C the alias ran the
@@ -553,8 +556,10 @@ PC stays a recorded segment miss (§5.5).
   a recorded segment miss (§5.5), and #417's gate sends an overlay PC to the
   interpreter. Both run it at its own PC. R4's game C and its 26 overlay shard
   sources are unchanged (§8 D); no other title was regenerated here.
-- Overlay compiles have no variants yet (§5.7, PR E); a variant seed there is
-  reported and not compiled, as before.
+- Overlay compiles take no variant seeds; a variant seed there is reported and
+  not compiled, as before. Overlay code gets its segments another way: capture
+  records the segment of each entry, and each segment's entries compile as
+  their own shard (§5.7, PR E).
 
 **BIOS.** The BIOS emitter keys its dispatch by the normalized address, so a
 PC in any segment runs the body compiled for its window's segment. A BIOS
@@ -776,6 +781,124 @@ names `guest_entry_vaddr`; this design makes that VA include the segment.
 KUSEG entries of the kernel page and get a KUSEG shard. `segment_alias_interp`
 drops to 0 on a warm cache.
 
+**Implemented in PR E.**
+- **Capture.** `g_dirty_ram_dispatch_seg_bitmap[3]` (`dirty_ram_interp.h`)
+  holds one bit per word for KUSEG, KSEG0 and KSEG1. `dirty_ram_dispatch_inner`
+  sets the bit for the full PC next to the any-segment bit. A PC in
+  `0x20000000`-`0x7FFFFFFF` or KSEG2 maps no RAM in Beetle, so it gets no bit.
+  Every site that drops dispatch evidence clears the siblings too
+  (`dirty_ram_dispatch_evidence_clear()`): boot reset, a store into an
+  executed page, DMA preservation and the autocapture epoch. Snapshot jobs
+  copy the siblings with the rest of their evidence.
+- **Schema v3** (`overlay_capture.c`). Each region adds
+  `"dispatch_entry_segments": {"kuseg": [...], "kseg0": [...], "kseg1":
+  [...]}`, each PC spelled in its segment. `dispatch_entry_pcs` keeps its v2
+  meaning and spelling (entered in any segment, written at KSEG0), so v2
+  readers keep working. `coverage_vault.py` unions the record when it merges
+  variants and crops it when it compacts regions. A v2 record's entries are
+  KSEG0 entries.
+- **Compile** (`compile_overlays.py`). `capture_segment_views()` splits a
+  capture into one view per segment with entries. A dispatch entry that no
+  segment list names is a KSEG0 entry, and a v2 capture comes back unchanged.
+  A view is the capture seen from one segment: `load_addr` and every PC in it
+  are spelled in that segment, its dispatch entries are that segment's alone,
+  and it carries all the execution evidence (it has no segment). Two kinds of
+  record also get a view where they saw no dispatch entry:
+  - a record with no dispatch entry in any segment (execution evidence only,
+    which the runtime writes) is one KSEG0 view, exactly as a v2 reader reads
+    it, so its classification, forced interiors, declared entries and prior
+    manifests apply as before;
+  - a demand from outside the capture names its segment
+    (`declared_view_segments()`): a `--force-interior` PC inside the record
+    (KSEG0, since a physical and a KUSEG PC are the same number) asks for the
+    KSEG0 view, and a `game.toml` `[[overlays]]` table asks for the segment its
+    load address, or else each of its entries inside the record, is spelled in.
+
+  Each view is one ordinary compile, region and fragment pass alike:
+  - the image is compiled at `segment | phys`, so the recompiler's §5.3 path
+    names and bakes it in that segment;
+  - helpers that name PCs without an image address spell them in the view's
+    segment (the `image_segment()` context);
+  - the shard lands in `segment_cache_dir()`.
+
+  The static generator emits the exact PC in its table: KUSEG, KSEG0 and
+  KSEG1 rows of one word coexist, and its segment gate admits the segments it
+  compiled. Its isolated-fragment pass compiles each (entry, image) demand
+  against its own segment's view of the image, so one entry dispatched in two
+  segments gets a fragment in each. `--force-interior` PCs are KSEG0 as
+  before, so they force KSEG0 views only. `[[overlays]]` entries in
+  `game.toml` match their spelled load address.
+- **Config code sites.** The recompiler compiles an overlay view with
+  `overlay_codegen_config()` (`segment_variants.cpp`): every exact-match site
+  kind that D's `rebase_codegen_config()` moves, and whose physical address
+  lies in the image in any segment that maps RAM, moves into the view's
+  segment. The config names overlay code by its bytes, and those bytes run in
+  any segment. The runtime keys mod function-entry hooks by physical address,
+  and the interpreter fires them at every entry, whatever its segment, so a
+  KUSEG or KSEG1 shard must emit the same `psx_mod_function_entry` calls as its
+  KSEG0 sibling. Otherwise a hook fires on a cold cache and not on a warm one.
+  Widescreen, data-shard and persisted-store sites reach every view the same
+  way. A KSEG0 view whose sites are spelled at KSEG0, as every pre-§5.7 overlay
+  compile's are, compiles exactly as before.
+- **Cache keys**, as decided: KSEG0 shards keep their directory and names, and
+  KUSEG and KSEG1 shards go in `seg-kuseg/` and `seg-kseg1/` under the same
+  cache tag, with the same `{phys}_{crc}` names. The candidate-capacity
+  namespace counts the segment directories with their leaf, because the
+  runtime's candidate table is shared. Static namespaces are `ov_s0_{phys}_…`
+  (KUSEG) and `ov_s5_…` (KSEG1).
+- **Manifest.** A KUSEG or KSEG1 manifest starts with `S <segment>` (the base,
+  `00000000` or `A0000000`) before its first `F`. `F` entries are full VAs in
+  that segment. `R` records stay KSEG0-spelled byte extents. A KSEG0 manifest
+  is unchanged, with no `S`. The loader (`parse_manifest`) and the tool
+  (`parse_runtime_shard_manifest`) apply the same rule, and both refuse:
+  - a manifest whose segment differs from its directory's;
+  - an `F` entry outside the manifest's segment;
+  - `S` after an `F`, `S` twice, or an `S` that is not a RAM segment base.
+- **Loader.** Each candidate records its segment. The physical indexes stay
+  (the bytes are one identity) and every lookup matches the PC's segment:
+  - the entry chain;
+  - CPS range ownership;
+  - the lazy manifest index;
+  - `try_load_region`;
+  - the interpreter's call contract (`overlay_loader_call_native`).
+
+  The negative caches (the lazy-miss and range-owner memos) are keyed by the
+  full PC. A PC in a segment that maps no RAM never runs a shard. Exports are
+  resolved by their full VA. `segment_alias_interp` now counts the KUSEG and
+  KSEG1 dispatches the loader leaves to the interpreter (no shard of their
+  segment yet), and the new `segment_native` counts those a shard of their
+  own segment runs. Both are in `overlay_loader_status`. A warm cache takes
+  the first to 0, except for dispatches at a PC in a segment that maps no RAM
+  (`0x20000000`-`0x7FFFFFFF`, KSEG2): those are counted there too and never
+  get a shard (none occur in R4 or the probe). The `overlay_candidates` reply
+  gains each candidate's `seg` and each lazy manifest's `entry`.
+- **Full-VA compares.** `overlay_idle_note_is_internal_or_return` compares the
+  resume PC with `$ra` exactly, and treats it as internal only for a running
+  shard of its own segment. The shadow diff's two "returned to the caller"
+  tests compare the exact PC; these were the last masked compares against a
+  call's link (§5.5). The diff mode's kernel-window exclusion now tests the
+  physical address, so KSEG0 and KUSEG kernel candidates are treated alike.
+  Before, it tested the full PC, so only a KUSEG PC matched, and #417's gate
+  never let one reach it.
+- Tests:
+  - `overlay_segment_keys` (new) runs capture views, manifests, the cache
+    layout, the real `compile_overlays.py` driver on a v3 capture, and the
+    real loader on the shards it builds. The driver cases also cover
+    dispatch-less records and forced interiors against their v2 reading, a
+    `--static` isolated fragment per segment of one entry, a KUSEG/KSEG1 view
+    compiled into a cache that holds KSEG0 manifests and fragments of the same
+    region, and mod function-entry hooks spelled in another segment than the
+    view's;
+  - `segment_variants_test` (extended) checks `overlay_codegen_config()` in
+    every segment's view;
+  - `overlay_segment_gate` (extended) covers, in the loader harness:
+    per-segment shards, stale bytes, CPS continuations, lazy loads, refused
+    manifests (including through live publication), the native-call
+    contract and the capture wiring;
+  - `overlay_capture_retry_test` (extended) checks the schema v3 record;
+  - `coverage_vault` (extended) covers segment unions and crops;
+  - the ledger adds the guard `overlay-segment-shards` (§7.1).
+
 ## 6. Cost for the static fast path
 
 | | Option A (segment-relative) | Option B (variants), this design |
@@ -886,6 +1009,9 @@ PR C removes its eight ids from `KNOWN_GAPS` and lists them in
 `REGRESSION_GUARDS`, so each reports a new gap if it breaks again.
 `resume-pc-segment` now also checks every dispatch row's key and resume PC.
 
+PR E closes no id (§5.7 had none in the ledger) and adds the guard
+`overlay-segment-shards`, described below; `KNOWN_GAPS` stays empty.
+
 PR D moves `segment-variants` and `kseg1-fetch-charge` to `REGRESSION_GUARDS`.
 With variants in the table, `resume-pc-segment` requires each row's key and
 resume PC to be in the segment of the body it enters, and `segment-variants`
@@ -901,6 +1027,19 @@ The overlay half (§5.7) gets its own acceptance case in
 - a KUSEG-compiled fixture shard runs natively for its KUSEG PC;
 - the same shard is interpreted for the KSEG0 and KSEG1 aliases.
 
+PR E implements it there, loaded lazily from `seg-kuseg/`, entry and CPS
+continuation alike, together with a shard per segment for one word and the
+manifests the loader must refuse. `recompiler/tests/test_overlay_segment_keys.py`
+runs the same property end to end: the real `compile_overlays.py` builds KUSEG
+and KSEG1 shards from a v3 capture, and the real loader runs them. Each run
+links, stamps and fetches in its segment, and costs what Beetle's fetch model
+charges. PR E also adds the ledger guard `overlay-segment-shards`. It compiles
+the probe's disc-loaded `ov_run` (§7.2) from a v3 capture, one view per
+segment, with `compile_overlays.py`'s own helpers and the real recompiler. It
+requires every PC a shard bakes and its names to be in its segment, the `S`
+record, and `ov_run`'s straight run to cost Beetle's cycles: line leaders
+cached at KUSEG and KSEG0, +4 per fetch at KSEG1.
+
 ### 7.2 Oracle runs (implementation PRs)
 
 **The synthetic EXE is also an oracle probe.** It writes into a results block
@@ -908,6 +1047,15 @@ at `0x00011000`, outside the image:
 - the three link values;
 - the executing-segment link from each of the three `probe_run` entries;
 - a Timer 2 delta around each of those entries.
+
+Since PR E it then loads an overlay (§5.7): it leaves the critical section,
+reads its own EXE file back from the disc through the BIOS file calls (B0:32
+open, B0:34 read, B0:36 close; the kernel DMAs the sectors) into RAM at
+`0x000A0000`, and calls the copy of the position-independent `ov_run` there
+through KUSEG, KSEG0 and KSEG1. It records each run's T2 delta and
+`ov_getpc` link at `R+0x28`-`R+0x3C`, and the file descriptor and byte count
+at `R+0x40`/`R+0x44`. The overlay phase replaces the old `j .` with a `j` of
+the same size, so every earlier label keeps its address.
 
 It then spins. Procedure:
 - Boot it from a `tools/cycle_testrom`-style disc (SYSTEM.CNF plus the EXE).
@@ -1039,6 +1187,61 @@ rebuilt probe runtime:
   one BIOS segment miss, `0xA0000500` (home `0x00000500`, `$ra`
   `0xBFC0683C`, frame 0), and its shell entry returns to −454.
 
+**Overlay phase after PR E (2026-09-30).** The probe runtime is rebuilt with
+`overlay_cache = true` in its `game.toml`. At the spin, the cold run's capture
+(schema v3) holds one region, `0x800A0000`, with its dispatch entry
+`0x000A0A20` in all three segments. `compile_overlays.py` builds one shard per
+segment from it: `000A0000_*` at KSEG0, `seg-kuseg/`, `seg-kseg1/`. Each is an
+isolated fragment, because `ov_run` has no callable boundary.
+
+| | links (`ov_getpc`) | T2 KUSEG / KSEG0 / KSEG1 |
+|---|---|---|
+| Beetle | `0x000A0A2C`, `0x800A0A2C`, `0xA00A0A2C` | 56 / 56 / 82 |
+| interpreter (`PSX_FORCE_INTERP=1`, overlay native off) | same | 56 / 56 / 82 |
+| compiled, cold cache (overlay interpreted) | same | 56 / 56 / 82 |
+| compiled, warm cache (a shard per segment) | same | 56 / 56 / 82 |
+
+- The same on OpenBIOS and SCPH-1001. The fd is 2, and 0x1000 bytes are read,
+  on every backend.
+- Cycle watch at the copy's `ov_run` and `ov_getpc`: from one `ov_run` entry to
+  the next, every backend takes 90 and 90 cycles; from `ov_run` to `ov_getpc`,
+  10 / 10 / 15. The static `probe_run` watches equal D's on every backend,
+  Beetle included (first hit 198,522,323 native and 224,958,018 Beetle on
+  OpenBIOS; 398,724,443 and 496,646,350 on SCPH-1001).
+- The three native modes reach the spin on the same cycle: 205,367,484 on
+  OpenBIOS and 400,644,561 on SCPH-1001.
+- `overlay_loader_status` at the spin: cold `segment_alias_interp` 2 and
+  `segment_native` 0 (the KUSEG and KSEG1 entries interpreted); warm 0 and 6
+  (the KUSEG and KSEG1 runs native, each through its `ov_getpc` call and
+  continuation). There are 0 dispatch misses and 0 segment misses.
+
+**LLE boot after PR E (2026-09-30).** Every anchor hit on both BIOSes equals
+D's (FLUSH, A0, B0, C0 and the shell entry, whose native − Beetle stays −126 on
+OpenBIOS and −445 on SCPH-1001). This is with the overlay cache enabled, which
+the D probe runtime did not have.
+
+**R4 after PR E (2026-09-30).** A cold boot-to-race smoke run with the
+runtime's own autocapture and autocompile produced two non-KSEG0 shards:
+- `seg-kuseg/00002000_82812130`: OpenBIOS's patch slots `0x0000281C`,
+  `0x00003554` and `0x0000357C`;
+- `seg-kseg1/0000D000_E54B69C3`: kernel RAM code entered uncached at
+  `0xA000DFAC`, `0xA000DFC0` and `0xA000DFD4`.
+
+Neither region was entered at KSEG0 in that run, so it has no KSEG0 shard. The
+KSEG0 shards earlier compilers built from these regions' KSEG0-spelled entries
+did not run in these runs either: #417's gate kept the KUSEG and KSEG1 entries
+off them.
+Counters:
+- during that run, before and after the shards arrived:
+  `segment_alias_interp` 101,373, `segment_native` 21,355;
+- in a warm run: `segment_alias_interp` 0 and `segment_native` 66,508 (at
+  frame 8,857), with 0 dispatch misses and 0 segment misses. The native count
+  grows with the frame the smoke script reaches in wall time: earlier warm
+  runs counted 66,309 and 66,344 (frame 8,792).
+
+Every baked PC in both shards is in its segment, and the KSEG1 shard charges a
+fetch before each of its instructions.
+
 **Other runs**
 - **§5.6 BIOS fix (PR A, #429): done, passed.** LLE boot (`bios_hle = false`)
   cycle parity against live Beetle to the shell, OpenBIOS and the owner's
@@ -1165,7 +1368,55 @@ log.
 - **E: `feat/overlay-segment-keys`** (§5.7). Includes the runtime acceptance
   case, and the R4 warm-cache check that `segment_alias_interp` reaches 0.
   It also returns a KUSEG-linked title's overlay code to native shards, which
-  C sends to the interpreter (§5.3).
+  C sends to the interpreter (§5.3). Implemented 2026-09-30:
+  - Capture records each interpreted dispatch's segment (schema v3,
+    `dispatch_entry_segments`). `compile_overlays.py` compiles one shard per
+    (region, segment with entries), with KUSEG and KSEG1 shards in
+    `seg-kuseg/` and `seg-kseg1/` and `S` in their manifests. The loader runs
+    a shard only for PCs of its segment (§5.7). The ledger stays at zero gaps
+    and gains the guard `overlay-segment-shards`.
+  - Tests: the new `overlay_segment_keys`, and extended versions of
+    `overlay_segment_gate` (per-segment shards, stale bytes, CPS
+    continuations, lazy loads, refused manifests, the native-call contract,
+    capture wiring), `overlay_capture_retry_test`, `coverage_vault`,
+    `compile_overlays_static_split`, `overlay_init_guard` and
+    `overlay_retry_c11`. A single-site mutation sweep of 47 sites kills 42.
+    Of the five survivors, three are equivalent (a validated memo key, the
+    early reject of unmapped segments, and the region pass's segment context,
+    whose canonical PCs are only compared with each other). The other two sit
+    in the opt-in idle-skip note and the opt-in shadow diff, which no unit
+    test drives.
+  - Review fixes (2026-09-30): the static isolated-fragment pass keys its
+    images by segment; a dispatch-less record, a forced interior and a
+    declared `[[overlays]]` table keep their view; overlay views move config
+    code sites into their segment (`overlay_codegen_config()`); two
+    segment-routing sites that no test reached (the empty-primary
+    reconciliation's and the prior-manifest merge's cache directory) are now
+    tested. A second sweep of 17 single-site mutants of these fixes kills all
+    17. After them, the probe's shards and R4's game C, OpenBIOS C and every
+    shard source and manifest compiled from D's and E's captures are
+    byte-identical; a cold R4 smoke run's autocompile builds the same KUSEG and
+    KSEG1 shards, and R4 fingerprints (12000 frames, cold and warm) are
+    IDENTICAL to E's, locators included.
+  - Probe: the new overlay phase equals Beetle and the interpreter in every
+    result word and cycle-watch interval, cold and warm, on both BIOSes; warm
+    runs its KUSEG and KSEG1 entries natively (§7.2). LLE boot anchors equal
+    D's at every hit.
+  - R4 (KSEG0): the 53 game C files, OpenBIOS's C and all 52 shard sources and
+    manifests compiled from D's race captures are byte-identical to D. The
+    codegen hash is unchanged (`bd3a72ac`); no hashed file changes.
+    Fingerprints (12000 frames):
+    - cold, and warm with D's cache, are IDENTICAL to D, locators included;
+    - warm with the new KUSEG and KSEG1 kernel shards is IDENTICAL to warm
+      without them, locators included, and to cold with the 501 VBlank
+      straddles any warm-vs-cold pair shows;
+    - against R4 master's pin, the same #429 split as B, C and D.
+
+    Smoke runs reach a live race with 0 dispatch misses and 0 segment misses;
+    warm, `segment_alias_interp` is 0 (§7.2).
+  - No existing cache is invalidated, and savestates are unaffected: the
+    codegen hash, the ABI and the KSEG0 layout are unchanged, and the capture
+    bitmaps are host-only.
 
 ## 9. Adjacent gaps (not in scope, recorded)
 

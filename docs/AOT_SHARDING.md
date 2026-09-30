@@ -78,7 +78,10 @@ Profiles declare these reusable methods:
 | `images[].excluded_ranges` | Explicit fallback intervals with aligned start/end, original-byte SHA-256 and a reason. Requires strict bounds; required loader entries cannot be excluded. |
 
 Image addresses must lie in the KSEG0 main-RAM decode window
-`0x80000000..0x80800000`. Retail 2 MiB hardware mirrors DRAM across all of it and
+`0x80000000..0x80800000`. Extraction recipes describe bytes and KSEG0 entries,
+so their shards are KSEG0 shards. Code a title runs at KUSEG or KSEG1 gets
+shards of that segment from runtime captures, which record each entry's
+segment (docs/SEGMENT_AWARE_CODE.md §5.7). Retail 2 MiB hardware mirrors DRAM across all of it and
 expanded 8 MiB targets decode it uniquely, so an image a loader places in a
 mirror is valid; the runtime gates it on the folded bytes the CPU executes.
 On retail RAM an image must also fit inside one 2 MiB mirror: one that crosses
