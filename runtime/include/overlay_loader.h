@@ -19,14 +19,19 @@
 extern "C" {
 #endif
 
-/* The segment every overlay shard is compiled for. Captures record their
- * bytes at the KSEG0 address (overlay_capture.c) and the manifest parser keys
- * entries there; the emitter bakes that segment into every PC a shard makes:
- * the $ra a jal/jalr writes, its jump and exception-resume PCs, and its I-cache
- * fetch tags. The same bytes reached through KUSEG or KSEG1 run at a different
- * architectural PC (a different link value; KSEG1 is uncached), so a shard runs
- * only for PCs in this segment and any other alias is interpreted at its own
- * PC. (OpenBIOS's exception path enters its RAM patch slots at KUSEG.) */
+/* The segment an overlay shard is compiled for unless its manifest says
+ * otherwise (docs/SEGMENT_AWARE_CODE.md §5.7). Captures record their bytes and
+ * dispatch_entry_pcs at the KSEG0 address (overlay_capture.c), and a manifest
+ * without an S record keys its entries there. The emitter bakes a shard's
+ * segment into every PC it makes: the $ra a jal/jalr writes, its jump and
+ * exception-resume PCs, its I-cache fetch tags and its store-PC stamps. The
+ * same bytes reached through KUSEG or KSEG1 run at a different architectural
+ * PC (a different link value; KSEG1 is uncached), so capture records each
+ * dispatch's segment, compile_overlays.py builds a shard per segment with
+ * entries (KUSEG and KSEG1 ones in the seg-kuseg/ and seg-kseg1/ cache
+ * subdirectories), and a shard runs only for PCs in its own segment; a PC with
+ * no shard of its segment is interpreted at its own PC. (OpenBIOS's exception
+ * path enters its RAM patch slots at KUSEG.) */
 #define PSX_OVERLAY_CODE_SEGMENT 0x80000000u
 static inline int psx_overlay_code_segment_pc(uint32_t pc) {
     return (pc & 0xE0000000u) == PSX_OVERLAY_CODE_SEGMENT;
@@ -151,9 +156,13 @@ int      overlay_loader_lazy_manifest_count(void);
 int      overlay_loader_lazy_manifest_overflow(void);
 uint64_t overlay_loader_candidate_overflow(void);
 uint64_t overlay_loader_pair_aliases(void);
-/* Dispatches sent to the interpreter because the PC is a KUSEG/KSEG1 alias of
- * code compiled for PSX_OVERLAY_CODE_SEGMENT. */
+/* KUSEG/KSEG1 (and unmapped-segment) dispatches the loader left to the
+ * interpreter: no shard compiled for their segment is cached or valid yet
+ * (docs/SEGMENT_AWARE_CODE.md §5.7). Capture records their segment, so a
+ * warm cache takes this to 0. */
 uint64_t overlay_loader_segment_alias_interp(void);
+/* KUSEG/KSEG1 dispatches run natively by a shard compiled for their segment. */
+uint64_t overlay_loader_segment_native(void);
 int      overlay_loader_dump_lazy_at(uint32_t addr, char *out, int cap);
 
 /* Overlay CI wrapper early-return attribution (PSX_POST_LOAD_PROBE). */
