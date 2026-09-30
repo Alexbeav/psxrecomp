@@ -109,6 +109,7 @@ set(PSXRECOMP_GAME_SOURCES
     src/annotations.cpp
     src/config_loader.cpp
     src/recompiler_patch.cpp
+    src/game_dispatch_emitter.cpp
     src/main_psx.cpp
 )
 
@@ -598,6 +599,7 @@ if(BUILD_TESTING)
         src/control_flow.cpp
         src/function_analysis.cpp
         src/code_generator.cpp
+        src/game_dispatch_emitter.cpp
         src/strict_translator.cpp
         src/pgxp_hook_emitter.cpp
         src/annotations.cpp
@@ -892,6 +894,7 @@ if(BUILD_TESTING)
         # (PSXRECOMP_LIBCHDR); its container/selection cases always run.
         foreach(_t IN ITEMS
                 aligned_lzss_banks
+                collect_game_misses
                 cursor_writers
                 disc_companion
                 duckstation_oracle

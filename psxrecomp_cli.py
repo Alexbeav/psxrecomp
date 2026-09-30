@@ -1356,7 +1356,7 @@ def generated_game_is_cps(marker: Path) -> bool:
     """True when psxrecomp-game emitted continuation-passing game C.
 
     In CPS mode the emitter writes a psx_cps_mark_game constructor into the
-    dispatch it produces (recompiler/src/main_psx.cpp); overlay C compiled into
+    dispatch it produces (recompiler/src/game_dispatch_emitter.cpp); overlay C compiled into
     the same binary must use the same contract, so this reads the output
     rather than guessing from the environment."""
     try:

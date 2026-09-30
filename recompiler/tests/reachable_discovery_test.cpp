@@ -831,15 +831,48 @@ int main() {
     CHECK(!PSXRecomp::PS1ExeParser::parse_buffer(mirror_image, mirror_error).has_value() &&
               mirror_error.find("beyond 0x80800000") != std::string::npos,
           "image crossing the RAM decode window end is rejected");
-    // A KUSEG header anywhere in the window names the same RAM as KSEG0.
+    // A KUSEG header names the same RAM as KSEG0 but keeps its segment: the
+    // program runs at KUSEG PCs, so it compiles there
+    // (docs/SEGMENT_AWARE_CODE.md §5.3).
     put32(mirror_image, 0x10, 0x00780000u);
     put32(mirror_image, 0x18, 0x00780000u);
     {
         auto kuseg = PSXRecomp::PS1ExeParser::parse_buffer(mirror_image, mirror_error);
-        CHECK(kuseg.has_value() && kuseg->load_address() == 0x80780000u &&
-                  kuseg->header.initial_pc == 0x80780000u,
-              "KUSEG mirror-window header addresses normalize to KSEG0");
+        CHECK(kuseg.has_value() && kuseg->load_address() == 0x00780000u &&
+                  kuseg->header.initial_pc == 0x00780000u &&
+                  kuseg->link_segment() == PSXRecomp::kSegKUSEG &&
+                  kuseg->phys_load_address() == 0x00780000u &&
+                  kuseg->contains_phys(0x80780FFCu) &&
+                  !kuseg->contains_phys(0x00781000u) &&
+                  kuseg->read_word(0x00780000u).has_value() &&
+                  !kuseg->read_word(0x80780000u).has_value(),
+              "a KUSEG header keeps its segment; bytes are addressed physically");
     }
+    put32(mirror_image, 0x10, 0x007FF800u);
+    put32(mirror_image, 0x18, 0x007FF800u);
+    CHECK(!PSXRecomp::PS1ExeParser::parse_buffer(mirror_image, mirror_error).has_value() &&
+              mirror_error.find("beyond 0x00800000") != std::string::npos,
+          "a KUSEG image crossing its RAM window end is rejected");
+    // KSEG1 is accepted as an uncached home segment.
+    put32(mirror_image, 0x10, 0xA0010000u);
+    put32(mirror_image, 0x18, 0xA0010000u);
+    {
+        auto kseg1 = PSXRecomp::PS1ExeParser::parse_buffer(mirror_image, mirror_error);
+        CHECK(kseg1.has_value() && kseg1->link_segment() == PSXRecomp::kSegKSEG1,
+              "a KSEG1-linked header is accepted in its own segment");
+    }
+    // One image, one link segment.
+    put32(mirror_image, 0x10, 0x80010000u);
+    put32(mirror_image, 0x18, 0x00010000u);
+    CHECK(!PSXRecomp::PS1ExeParser::parse_buffer(mirror_image, mirror_error).has_value() &&
+              mirror_error.find("different segments") != std::string::npos,
+          "an entry in another segment than the load address is rejected");
+    // Outside main RAM (KSEG2, the BIOS ROM) is not a PS-X EXE target.
+    put32(mirror_image, 0x10, 0xBFC00000u);
+    put32(mirror_image, 0x18, 0xBFC00000u);
+    CHECK(!PSXRecomp::PS1ExeParser::parse_buffer(mirror_image, mirror_error).has_value() &&
+              mirror_error.find("Must be in main RAM") != std::string::npos,
+          "a load address outside the main-RAM windows is rejected");
 
     if (failures) {
         std::fprintf(stderr, "FAILED (%d)\n", failures);
