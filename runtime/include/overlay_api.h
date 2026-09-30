@@ -198,7 +198,10 @@
 #  define PSX_OVERLAY_CODEGEN_HASH 0u
 #endif
 
-typedef struct {
+/* Named so consumers that only forward the table (overlay_loader.h,
+ * psx_bios_module.h) can declare `struct OverlayCallbacks` without pulling
+ * this header in. Layout unchanged. */
+typedef struct OverlayCallbacks {
     /* Core dispatch: routes call_by_address() and out-of-overlay jal */
     void (*dispatch_call)(CPUState *cpu, uint32_t addr, uint32_t ra);
     /* Interrupt check: called after every function return in overlay */

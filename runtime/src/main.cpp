@@ -20,6 +20,7 @@
 #include "bios_hle_plan.h"
 #include "psx_bios_known_images.h"
 #include "psx_bios_backend.h"
+#include "psx_bios_module.h"
 #include "psx_cycles.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
@@ -2696,6 +2697,16 @@ static const PsxBiosBackend* bios_backend_for_file(const std::filesystem::path& 
 
 /* What a player may supply, for mismatch and picker copy. The bundled image is
  * excluded: it is never something to go and find. */
+/* Directory of the running executable, for the BIOS module cache and
+ * toolchain (psx_bios_module.h). Set by resolve_bios_for_runtime before any
+ * selection; empty means "unknown", which disables module building. */
+static std::string s_bios_exe_dir;
+
+static bool bios_module_supported_here() {
+    return !s_bios_exe_dir.empty() &&
+           psx_bios_module_supported(s_bios_exe_dir.c_str()) != 0;
+}
+
 static std::string bios_accepted_images() {
     std::string s;
     for (uint32_t i = 0; i < psx_bios_registry_count; i++) {
@@ -2705,6 +2716,16 @@ static std::string bios_accepted_images() {
         s += b->image->image_id;
         s += " (" + std::to_string(b->image->image_size / 1024u) + " KB)";
     }
+    /* A bundled build can also BUILD a backend for any image it ships a
+     * profile for (psx_bios_module.h), so those count as accepted too. */
+    if (bios_module_supported_here()) {
+        for (const PsxKnownBiosImage& k : psx_known_bios_images) {
+            if (s.find(k.id) != std::string::npos) continue;
+            if (!s.empty()) s += ", ";
+            s += k.id;
+            s += " (" + std::to_string(k.size / 1024u) + " KB, built on first use)";
+        }
+    }
     return s.empty() ? std::string("(this build ships its own BIOS)") : s;
 }
 
@@ -2713,6 +2734,32 @@ static bool validate_bios_for_launch(const std::filesystem::path& path) {
     uint32_t crc = 0; uint64_t size = 0;
     const PsxBiosBackend* b = bios_backend_for_file(path, &crc, &size);
     if (b) return psx_bios_activate(b) != 0;
+
+    /* Not linked, but this build can build it from the player's dump
+     * (docs/BIOS_SELECTION.md, "player-side backend build"). A cached
+     * module loads silently; a first build is announced, since it can take
+     * a minute with gcc, and its failure explained before falling through
+     * to the ordinary mismatch/fallback path. */
+    if (bios_module_supported_here() &&
+        psx_bios_module_known_id(crc, (uint32_t)size)) {
+        const std::string dump = path.string();
+        char err[256] = {0};
+        if (!psx_bios_module_is_cached(dump.c_str(), s_bios_exe_dir.c_str())) {
+            launcher_info("Preparing your BIOS",
+                std::string(psx_bios_module_known_id(crc, (uint32_t)size)) +
+                " is not part of this build, so it will be compiled from your "
+                "own image now. This happens once and can take a minute; the "
+                "game starts when it finishes.");
+        }
+        const PsxBiosBackend* m = psx_bios_module_acquire(
+            dump.c_str(), s_bios_exe_dir.c_str(), /*allow_build=*/1, err, sizeof(err));
+        if (m) return psx_bios_activate(m) != 0;
+        launcher_warning("BIOS Not Prepared",
+            std::string("Could not build a backend for this BIOS: ") + err +
+            "\n\nSee the log beside the executable. Clear the BIOS field to "
+            "play on the bundled OpenBIOS.");
+        return false;
+    }
 
     char buf[512];
     std::snprintf(buf, sizeof(buf),
@@ -2743,7 +2790,9 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
                                                       bool requested_is_explicit) {
     const bool openbios_allowed = s_openbios_allowed;
     const PsxBiosBackend* bundled = psx_bios_bundled();
-    const bool player_bios_selectable = psx_bios_has_selectable() != 0;
+    s_bios_exe_dir = exe_dir_from_argv(argv0).string();
+    const bool player_bios_selectable =
+        psx_bios_has_selectable() != 0 || bios_module_supported_here();
     const bool bundled_only =
         openbios_allowed && bundled && !player_bios_selectable;
 
@@ -2938,8 +2987,12 @@ static bool retail_bios_file_ok(const std::filesystem::path& path) {
     std::error_code ec;
     if (!std::filesystem::is_regular_file(path, ec)) return false;
     if (psx_bios_registry_count > 0) {
-        const PsxBiosBackend* b = bios_backend_for_file(path, nullptr, nullptr);
-        return b && b->image && !b->image->image_bundled;
+        uint32_t crc = 0; uint64_t size = 0;
+        const PsxBiosBackend* b = bios_backend_for_file(path, &crc, &size);
+        if (b) return b->image && !b->image->image_bundled;
+        /* Bundled build: a dump this build can compile a backend from. */
+        return bios_module_supported_here() &&
+               psx_bios_module_known_id(crc, (uint32_t)size) != nullptr;
     }
     /* Setup host (no backends linked yet): accept the retail image THIS build
      * pins, from psx_bios_known_images.h. This used to hardcode SCPH-1001, so
@@ -8062,8 +8115,13 @@ namespace {
         /* Bundled build with only its shipped backend and no way to compile
          * another: a retail image can never be used here, whatever its CRC.
          * Say so before the identity checks, whose "this build expects
-         * SCPH-1001" wording describes the pinned stem, not a linked backend. */
-        if (!g_lnch_can_regen && psx_bios_registry_count > 0 &&
+         * SCPH-1001" wording describes the pinned stem, not a linked backend.
+         * (With the toolchain present a module CAN be built; that case falls
+         * through to the identity check and the module branch below.) */
+        const bool lnch_module_ok =
+            psx_bios_module_supported(exe_dir_from_argv(
+                g_lnch_argv0 ? g_lnch_argv0 : "").string().c_str()) != 0;
+        if (!g_lnch_can_regen && !lnch_module_ok && psx_bios_registry_count > 0 &&
             !psx_bios_has_selectable()) {
             out->ok = 0;
             out->needs_regen = 0;
@@ -8135,7 +8193,22 @@ namespace {
                 return 1;
             }
             out->ok = 0;
-            if (g_lnch_can_regen) {
+            if (lnch_module_ok && psx_bios_module_known_id(crc, (uint32_t)size)) {
+                /* Buildable from this dump: usable, no Generate & rebuild.
+                 * The build itself runs at launch (validate_bios_for_launch). */
+                const std::string exe_dir =
+                    exe_dir_from_argv(g_lnch_argv0 ? g_lnch_argv0 : "").string();
+                const bool cached =
+                    psx_bios_module_is_cached(open_path.c_str(), exe_dir.c_str()) != 0;
+                out->ok = 1;
+                out->warn = 0;
+                out->needs_regen = 0;
+                std::snprintf(out->detail, sizeof(out->detail),
+                              cached ? "%s (CRC OK, ready)."
+                                     : "%s (CRC OK). Compiled from your image on first "
+                                       "launch — one-time, about a minute.",
+                              psx_bios_module_known_id(crc, (uint32_t)size));
+            } else if (g_lnch_can_regen) {
                 out->needs_regen = 1;
                 std::snprintf(out->detail, sizeof(out->detail),
                               "This BIOS is not compiled into the current build. "
@@ -14198,7 +14271,9 @@ int main(int argc, char** argv) {
             recomp_launcher_set_preserve_sdl(1);
             int lr = 2; /* 0 = launch, 1 = quit, 2 = unavailable */
             const bool bios_choice_supported =
-                psx_bios_has_selectable() != 0 || psx_bios_registry_count == 0;
+                psx_bios_has_selectable() != 0 || psx_bios_registry_count == 0 ||
+                psx_bios_module_supported(
+                    exe_dir_from_argv(argv[0]).string().c_str()) != 0;
             PSXRecompV4::UserSettings seed;
             /* Netplay session BIOS is match-only; never overwrite seed/bios.cfg. */
             std::filesystem::path match_session_bios_path;
@@ -14619,7 +14694,9 @@ int main(int argc, char** argv) {
              * offered "Generate & rebuild" with no CLI or toolchain to run it. */
             g_lnch_can_regen = gi.prepare_with_progress != nullptr ||
                                psx_bios_registry_count == 0;
-            gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen) ? 1 : 0;
+            gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen ||
+                           psx_bios_module_supported(
+                               exe_dir_from_argv(argv[0]).string().c_str())) ? 1 : 0;
 #endif
 #endif /* PSX_HAS_SETUP_WIZARD */
             launcher_boot_timing_mark("host:setup_checks_done");
@@ -16745,7 +16822,9 @@ soft_return_lobby:
         psx_game_codegen_setup_apply(&gi);
         g_lnch_can_regen = gi.prepare_with_progress != nullptr ||
                            psx_bios_registry_count == 0;
-        gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen) ? 1 : 0;
+        gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen ||
+                       psx_bios_module_supported(
+                           exe_dir_from_argv(argv[0]).string().c_str())) ? 1 : 0;
 #endif
 
         char rui_out_disc[1024] = {0};

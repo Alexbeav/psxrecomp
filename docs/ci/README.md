@@ -60,7 +60,8 @@ the ICD dynamically via SDL; CI only needs headers and the shader compiler.
 | `ci/sign_windows.sh` | Authenticode-sign the staged Windows binaries (no-op without a certificate) |
 | `fetch_toolchain.sh` | Download/unpack cmake-clang-v1 (Windows emitter builds on the CI machine only) |
 | `package_game_release.sh` | Bundled zip: compiled game + runtime data + OpenBIOS + mods + overlay toolchain |
-| `release_stage.py` | Shared staging surface (mod catalog, overlay toolchain, overlay cache tag/shards) |
+| `release_stage.py` | Shared staging surface (mod catalog, overlay toolchain incl. the BIOS emitter/profiles/seeds, overlay cache tag/shards) |
+| `bios_module_build.py` | Ships inside the toolchain; builds a retail BIOS backend from the player's dump at runtime |
 | `bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs |
 | `templates/game.gitignore` | Suggested gitignore for title repos (`generated/` tracked) |
 

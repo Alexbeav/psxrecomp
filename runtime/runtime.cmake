@@ -428,6 +428,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/mod_texture_banks.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_bios_backend.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_bios_module.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c
@@ -741,12 +742,12 @@ file(WRITE "${_psxrt_registry_c}"
 "
 "${_psxrt_registry_externs}"
 "
-const PsxBiosBackend *const psx_bios_registry[] = {
+const PsxBiosBackend *const psx_bios_builtin_registry[] = {
 "
 "${_psxrt_registry_entries}"
 "};
 "
-"const uint32_t psx_bios_registry_count = ${_psxrt_bios_count}u;
+"const uint32_t psx_bios_builtin_registry_count = ${_psxrt_bios_count}u;
 ")
 list(APPEND PSXRECOMP_BIOS_GENERATED "${_psxrt_registry_c}")
 

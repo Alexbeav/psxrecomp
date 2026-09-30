@@ -40,6 +40,15 @@ static inline int psx_overlay_code_segment_pc(uint32_t pc) {
 /* Called at game handoff to set the cache root directory and game ID.
  * cache_dir: absolute path to the cache root (e.g. "build-dev/cache")
  * game_id:   product code (e.g. "SCUS-94236") */
+/* Host callback table handed to every loaded module (overlay shards and BIOS
+ * modules alike). Safe before overlay_loader_init. */
+struct OverlayCallbacks;
+const struct OverlayCallbacks *overlay_loader_callbacks(void);
+
+/* "<os>-<arch>" of this build (PSX_OVERLAY_ARCH_ABI), the cache layout's
+ * arch-abi segment. Also keyed into the BIOS module cache. */
+const char *overlay_loader_arch_abi(void);
+
 void overlay_loader_init(const char *cache_dir, const char *game_id,
                          uint32_t config_hash);
 

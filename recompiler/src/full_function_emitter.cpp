@@ -2498,6 +2498,10 @@ void FullFunctionEmitter::emit_dispatch(
         // RECURSION_BUG.md §25 — mark CPS mode at startup for runtime code that
         // routes CPS continuations (overlay_loader.c).
         out += "\n/* CPS runtime-mode marker (the overlay loader reads g_psx_cps_mode). */\n";
+        out += "/* Not in a loadable BIOS module (psx_bios_module.h): the host that\n";
+        out += " * loads one already runs in CPS mode, and a constructor firing at\n";
+        out += " * dlopen would write a runtime global the module cannot reach. */\n";
+        out += "#ifndef PSX_BIOS_MODULE_BUILD\n";
         out += "static void psx_cps_mark_bios(void) {\n";
         out += "    extern int g_psx_cps_mode; g_psx_cps_mode = 1;\n";
         out += "}\n";
@@ -2509,6 +2513,7 @@ void FullFunctionEmitter::emit_dispatch(
         out += "#else\n";
         out += "__attribute__((constructor)) static void psx_cps_mark_bios_ctor(void) { psx_cps_mark_bios(); }\n";
         out += "#endif\n";
+        out += "#endif /* !PSX_BIOS_MODULE_BUILD */\n";
     }
 
     // --- Backend descriptor (runtime/include/psx_bios_backend.h) ---

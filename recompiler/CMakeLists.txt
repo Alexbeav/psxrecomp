@@ -730,6 +730,17 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_project_packaging.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+        # tools/bios_module_build.py end to end: recompile the bundled OpenBIOS
+        # image with the psxrecomp-bios built here, compile it as a loadable
+        # BIOS module, and read the descriptor back (psx_bios_module.h).
+        # Skips itself without a C compiler on PATH.
+        add_test(
+            NAME bios_module_build
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_module_build.py
+                    --emitter $<TARGET_FILE:psxrecomp-bios>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
         # tools/coverage_vault.py's history compaction and streaming JSON
         # reader. Pure unit test — loads the module by path, needs no built
         # target and no generated BIOS. It sat in tools/ with no add_test()

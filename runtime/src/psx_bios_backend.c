@@ -39,6 +39,61 @@ uint32_t                   psx_bios_kernel_patch_range_count = 0;
  * could not be linked together. */
 int g_psx_dispatch_depth = 0;
 
+/* ── Registry ───────────────────────────────────────────────────────────────
+ *
+ * The build lists the backends it LINKS in psx_bios_builtin_registry (written
+ * by runtime.cmake as psx_bios_registry.c). The registry every consumer walks
+ * is this mutable table: it starts as a copy of the builtins and grows when a
+ * BIOS module built on the player's machine registers itself
+ * (psx_bios_module.c). A backend is never removed: the published image and
+ * kernel tables may point into it for the life of the process. */
+#define PSX_BIOS_REGISTRY_CAP 8
+
+const PsxBiosBackend *psx_bios_registry[PSX_BIOS_REGISTRY_CAP];
+uint32_t              psx_bios_registry_count = 0;
+static int            s_registry_seeded = 0;
+
+static void registry_seed(void)
+{
+    uint32_t i;
+    if (s_registry_seeded) return;
+    s_registry_seeded = 1;
+    for (i = 0; i < psx_bios_builtin_registry_count && i < PSX_BIOS_REGISTRY_CAP; i++) {
+        const PsxBiosBackend *b = psx_bios_builtin_registry[i];
+        if (b) psx_bios_registry[psx_bios_registry_count++] = b;
+    }
+}
+
+int psx_bios_register(const PsxBiosBackend *backend)
+{
+    uint32_t i;
+    registry_seed();
+    if (!backend || !backend->image) return 0;
+    for (i = 0; i < psx_bios_registry_count; i++)
+        if (psx_bios_registry[i] == backend) return 1;
+    if (psx_bios_registry_count >= PSX_BIOS_REGISTRY_CAP) return 0;
+    psx_bios_registry[psx_bios_registry_count++] = backend;
+    return 1;
+}
+
+uint32_t psx_bios_registry_seeded_count(void)
+{
+    registry_seed();
+    return psx_bios_registry_count;
+}
+
+/* main.cpp walks psx_bios_registry[] directly in a dozen places, some before
+ * any lookup here has run, and "count == 0" there means "setup host". Seed
+ * before main() so those walks are never wrong; the same constructor idiom
+ * the generated BIOS uses for its CPS marker. */
+#if defined(_MSC_VER)
+static void psx_bios_registry_ctor(void) { registry_seed(); }
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) static void (*psx_bios_registry_ctor_p)(void) = psx_bios_registry_ctor;
+#else
+__attribute__((constructor)) static void psx_bios_registry_ctor(void) { registry_seed(); }
+#endif
+
 /* ── Forwarders ─────────────────────────────────────────────────────────────
  *
  * The generated BIOS C defines <STEM>_psx_dispatch; these keep the unprefixed
@@ -60,6 +115,7 @@ void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t return_addr)
 
 const PsxBiosBackend *psx_bios_find(const char *image_id)
 {
+    registry_seed();
     if (!image_id) return 0;
     for (uint32_t i = 0; i < psx_bios_registry_count; i++) {
         const PsxBiosBackend *b = psx_bios_registry[i];
@@ -72,6 +128,7 @@ const PsxBiosBackend *psx_bios_find(const char *image_id)
 
 const PsxBiosBackend *psx_bios_bundled(void)
 {
+    registry_seed();
     for (uint32_t i = 0; i < psx_bios_registry_count; i++) {
         const PsxBiosBackend *b = psx_bios_registry[i];
         if (b && b->image && b->image->image_bundled) return b;
@@ -102,6 +159,7 @@ int psx_bios_activate(const PsxBiosBackend *backend)
  * the retail one (and clear back). */
 int psx_bios_has_selectable(void)
 {
+    registry_seed();
     for (uint32_t i = 0; i < psx_bios_registry_count; i++) {
         const PsxBiosBackend *b = psx_bios_registry[i];
         if (b && b->image && !b->image->image_bundled) return 1;

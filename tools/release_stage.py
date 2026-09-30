@@ -619,6 +619,8 @@ TOOLCHAIN_PY_REL = {'win': os.path.join('python', 'python.exe'),
                     'macos-arm64': os.path.join('python', 'bin', 'python3')}
 TOOLCHAIN_RECOMPILER = {'win': 'psxrecomp-game.exe', 'linux': 'psxrecomp-game',
                         'macos-x64': 'psxrecomp-game', 'macos-arm64': 'psxrecomp-game'}
+TOOLCHAIN_BIOS_EMITTER = {'win': 'psxrecomp-bios.exe', 'linux': 'psxrecomp-bios',
+                          'macos-x64': 'psxrecomp-bios', 'macos-arm64': 'psxrecomp-bios'}
 
 
 def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
@@ -691,6 +693,18 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
             % (copied, dll_src, '' if copied else ' -- assuming a static recompiler'))
 
     shutil.copy2(os.path.join(recomp_tools, 'compile_overlays.py'), toolchain)
+    # The BIOS module builder (docs/BIOS_SELECTION.md, "player-side backend
+    # build"): turns the player's own retail dump into a loadable backend with
+    # the same interpreter and compiler the overlay path uses. It needs the
+    # BIOS emitter, every shipped profile, and the seeds the profiles name.
+    shutil.copy2(os.path.join(recomp_tools, 'bios_module_build.py'), toolchain)
+    bios_emitter = TOOLCHAIN_BIOS_EMITTER[platform_tag]
+    src_bios_emitter = os.path.join(recomp_dir, bios_emitter)
+    if not os.path.isfile(src_bios_emitter):
+        _die('overlay toolchain needs the BIOS emitter at %s; build the '
+             'psxrecomp-bios target first' % src_bios_emitter)
+    shutil.copy2(src_bios_emitter, os.path.join(toolchain, bios_emitter))
+    os.chmod(os.path.join(toolchain, bios_emitter), 0o755)
     tool_inc = _mkdirs(os.path.join(toolchain, 'include'))
     for h in os.listdir(recomp_include):
         if h.endswith(('.h', '.c.inc')):
@@ -698,10 +712,16 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
     recomp_root = os.path.abspath(os.path.join(recomp_include, '..', '..'))
     bios_src = os.path.join(recomp_root, 'bios')
     bios_dest = _mkdirs(os.path.join(toolchain, 'bios'))
-    for profile in ('SCPH1001.toml', 'OpenBIOS.toml'):
-        src = os.path.join(bios_src, profile)
-        if os.path.isfile(src):
-            shutil.copy2(src, bios_dest)
+    # Profiles only (TOML): never an image. A retail .BIN beside them in a
+    # developer's bios/ must not ride along, so the copy is by extension.
+    for profile in sorted(os.listdir(bios_src)):
+        if profile.endswith('.toml'):
+            shutil.copy2(os.path.join(bios_src, profile), bios_dest)
+    seeds_src = os.path.join(recomp_root, 'recompiler', 'seeds')
+    seeds_dest = _mkdirs(os.path.join(toolchain, 'recompiler', 'seeds'))
+    for seed in sorted(os.listdir(seeds_src)):
+        if seed.endswith('.json'):
+            shutil.copy2(os.path.join(seeds_src, seed), seeds_dest)
 
     # The runtime gates autocompile on this exact file. If the layout ever
     # changes, fail here rather than shipping a toolchain the runtime ignores.
@@ -713,7 +733,11 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
              % os.path.relpath(probe, toolchain))
     os.chmod(probe, 0o755)
     for required in (os.path.join('include', 'overlay_dispatch_preamble.c.inc'),
-                     os.path.join('bios', 'SCPH1001.toml')):
+                     os.path.join('include', 'psx_bios_module_glue.c.inc'),
+                     os.path.join('include', 'psx_bios_module.h'),
+                     'bios_module_build.py',
+                     os.path.join('bios', 'SCPH1001.toml'),
+                     os.path.join('recompiler', 'seeds', 'phase2_ghidra_seeds.json')):
         path = os.path.join(toolchain, required)
         if not os.path.isfile(path):
             _die('staged overlay_toolchain is missing %s; bundled shard '
@@ -737,7 +761,7 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
                 links += 1
                 continue
             total += st.st_size
-    log('Bundled overlay toolchain (pinned python%s + recompiler + headers): '
+    log('Bundled overlay toolchain (pinned python%s + recompiler + BIOS emitter + headers): '
         '~%d MB in %d file(s) + %d symlink(s)'
         % (' + tcc' if pins['tcc_url'] else '', total // (1 << 20),
            sum(len(f) for _r, _d, f in os.walk(toolchain)) - links, links))

@@ -264,6 +264,37 @@ if(BUILD_TESTING)
         add_test(NAME isc_store_test COMMAND isc_store_test)
     endif()
 
+    # Loadable BIOS backends (psx_bios_module.h): the host loader against
+    # three fake modules built here from one source -- good, wrong ABI tag,
+    # wrong codegen hash. Real dlopen/LoadLibrary, real registry, stubbed core.
+    if(NOT MSVC)
+        foreach(_fake IN ITEMS good bad_abi bad_hash)
+            add_library(bios_module_fake_${_fake} SHARED tests/bios_module_fake.c)
+            target_include_directories(bios_module_fake_${_fake} PRIVATE include)
+            target_compile_definitions(bios_module_fake_${_fake} PRIVATE
+                PSX_OVERLAY_DLL_BUILD PSX_NO_DEBUG_TOOLS)
+            set_target_properties(bios_module_fake_${_fake} PROPERTIES PREFIX "")
+        endforeach()
+        target_compile_definitions(bios_module_fake_bad_abi PRIVATE FAKE_ABI_TAG=0x7fff)
+        target_compile_definitions(bios_module_fake_bad_hash PRIVATE FAKE_CODEGEN_HASH=0x1u)
+        add_executable(bios_module_host_test
+            tests/test_bios_module_host.c
+            src/psx_bios_module.c
+            src/psx_bios_backend.c
+            src/overlay_posix.c
+            src/crc32.c)
+        target_include_directories(bios_module_host_test PRIVATE include src)
+        target_compile_definitions(bios_module_host_test PRIVATE
+            PSX_NO_DEBUG_TOOLS
+            FAKE_GOOD="$<TARGET_FILE:bios_module_fake_good>"
+            FAKE_BAD_ABI="$<TARGET_FILE:bios_module_fake_bad_abi>"
+            FAKE_BAD_HASH="$<TARGET_FILE:bios_module_fake_bad_hash>")
+        target_link_libraries(bios_module_host_test PRIVATE ${CMAKE_DL_LIBS})
+        add_dependencies(bios_module_host_test
+            bios_module_fake_good bios_module_fake_bad_abi bios_module_fake_bad_hash)
+        add_test(NAME bios_module_host_test COMMAND bios_module_host_test)
+    endif()
+
     add_executable(host_keymap_test
         tests/test_host_keymap.c
         src/host_keymap.c)

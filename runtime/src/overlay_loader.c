@@ -2951,6 +2951,16 @@ static int load_bios_resident_shards(void) {
     return functions;
 }
 
+/* The host callback table, for a consumer that loads overlay-style modules
+ * before (or without) overlay_loader_init: the BIOS module host activates a
+ * player's retail backend during BIOS selection, ahead of the deferred
+ * overlay init thread. init_callbacks() is pure assignment, so filling it
+ * here and again in overlay_loader_init is harmless. */
+const OverlayCallbacks *overlay_loader_callbacks(void) {
+    init_callbacks();
+    return &s_callbacks;
+}
+
 void overlay_loader_init(const char *cache_dir, const char *game_id,
                          uint32_t config_hash) {
     {

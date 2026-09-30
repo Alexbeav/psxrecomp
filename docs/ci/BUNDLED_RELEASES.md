@@ -63,8 +63,9 @@ A release relies on two things instead:
 - the **static AOT shard** committed under `generated/` and linked into the
   executable (titles with an `aot/overlays.json` `static_output`);
 - the bundled **`overlay_toolchain/`** (pinned relocatable Python +
-  `psxrecomp-game` + headers, tcc on Windows), which lets the runtime compile
-  any other overlay it streams from the player's disc.
+  `psxrecomp-game` + `psxrecomp-bios` + headers + BIOS profiles and seeds, tcc
+  on Windows), which lets the runtime compile any other overlay it streams
+  from the player's disc, and a retail BIOS backend from the player's dump.
 
 A developer packaging locally with a cache can ship it:
 `PSX_OVERLAY_CACHE_ROOT=<cache root> scripts/package_release.sh …`. The packager
@@ -90,7 +91,7 @@ link-only rebuild of the tens of MB of generated C.
 |------|---------|
 | Install | Extract the zip. Run the game. Pick the disc on first run. |
 | Update | Extract the new zip over the old one (raw zip extract: this is a prebuilt Play binary). Saves and settings live beside the exe and are preserved. |
-| Retail BIOS | Not needed and not shipped; the release runs on the bundled OpenBIOS. |
+| Retail BIOS | Not shipped. A player who owns a dump picks it in the launcher; the release builds that backend from the dump on their machine, once (`docs/BIOS_SELECTION.md`). |
 
 ## Title checklist (short)
 

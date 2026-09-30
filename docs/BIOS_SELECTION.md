@@ -15,19 +15,42 @@ is decided when the game launches, not when it is built.
 translation of the Sony ROM's code, so it is never committed or built in CI
 (`tools/ci/check_generated.sh` refuses it; see `docs/ci/BUNDLED_RELEASES.md`).
 Requiring the player's dump at runtime would not change what the zip
-distributes. In such a build the launcher hides the BIOS row, an explicit
-`--bios` or stale `bios.cfg` is ignored, and a verify of a retail image
-reports "runs its bundled OpenBIOS only" rather than offering
-Generate & rebuild, which has no CLI, sources or toolchain to run there.
+distributes.
 
-Planned, not built (2026-09-30): a **player-side backend build**. The bundle
-already ships `overlay_toolchain/` and compiles game code from the player's
-own disc at runtime; the same mechanism can validate a retail dump, run
-`psxrecomp-bios` on it, compile the resulting C into a loadable module and
-register it, so "bring your own BIOS" works without any Sony-derived code in
-the release. It needs the backend registry to accept a dynamically loaded
-`PsxBiosBackend`, `psxrecomp-bios` in the toolchain, and a compiler on Linux
-and macOS where the toolchain relies on the system one.
+**Bring your own BIOS: the backend is built on the player's machine.** The
+release already ships `overlay_toolchain/` and compiles game code from the
+player's own disc at runtime; the same mechanism builds a retail backend from
+the player's own dump (`runtime/include/psx_bios_module.h`,
+`runtime/src/psx_bios_module.c`, `tools/bios_module_build.py`). When the
+player selects a dump whose size and CRC match a shipped profile
+(`psx_bios_known_images.h`: SCPH-1001, SCPH-5552), the runtime:
+
+1. looks for `<exe>/cache/bios/<os-arch>/bm<abi>_<codegen hash>_f<flavor>/<STEM>_<crc>.{so,dll}`
+   and loads it if present (ABI tag and codegen hash gated, like an overlay shard);
+2. otherwise announces a one-time build, runs `bios_module_build.py` from the
+   toolchain (the bundled `psxrecomp-bios` recompiles the dump — the profile's
+   SHA-256 pin refuses any other image — and tcc or the system compiler turns
+   the C plus the module glue into a self-contained shared library), then
+   loads it;
+3. registers the descriptor with `psx_bios_register()` and activates it. Every
+   existing selection path then sees it as one more linked backend: `bios.cfg`
+   remembers it, netplay settle sees it, and it is hot-swapped like OpenBIOS.
+
+The module imports nothing from the executable. Everything it calls goes
+through `OverlayCallbacks` plus a BIOS-specific `PsxBiosModuleCallbacks`
+table, and the runtime globals the generated dispatcher reads are aliased by
+pointer (the `#define`s in `psx_bios_module.h` rewrite the emitter's own
+`extern` lines). The generated C is untouched apart from the emitter no longer
+writing its CPS-marker constructor in a module build. A build takes about a
+minute with gcc for the 32 MB SCPH-1001 output, seconds with tcc; it happens
+once per dump and per framework codegen hash.
+
+What the launcher shows in a bundled build: the BIOS row is present when the
+toolchain is beside the executable (it is, in every release zip). A matching
+dump verifies as "ready" or "compiled on first launch"; an image no profile
+covers is refused with the accepted list. Without the toolchain the row is
+hidden and a stray `--bios` is ignored, and no build ever offers
+Generate & rebuild for a BIOS.
 
 ## The rule
 

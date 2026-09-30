@@ -29,10 +29,27 @@ HOST = (ROOT / "host" / "psxrecomp_codegen_host.c").read_text(encoding="utf-8")
 assert "gi->has_bios = 1;" not in HOST
 assert MAIN.count("gi.has_bios = 1;") == 0
 assert MAIN.count("g_lnch_can_regen = gi.prepare_with_progress != nullptr") == 2
-assert "gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen) ? 1 : 0;" in MAIN
+assert MAIN.count("gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen ||") == 2
 assert "if (g_lnch_can_regen) {" in MAIN
 assert MAIN.index("if (g_lnch_can_regen) {") < MAIN.index(
     '"Generate & rebuild to switch (or use OpenBIOS)."')
 assert "cannot be selected. Clear the BIOS field to play." in MAIN
+
+# Loadable BIOS backends (psx_bios_module.h): a bundled build with the
+# toolchain beside it can BUILD a retail backend from the player's dump, so a
+# player choice is meaningful there, discovery accepts a known dump, and the
+# launcher verify reports the dump usable without offering Generate & rebuild.
+assert "psx_bios_module_acquire(" in MAIN
+assert "psx_bios_module_is_cached(" in MAIN
+assert "psx_bios_has_selectable() != 0 || bios_module_supported_here();" in MAIN
+assert MAIN.count("psx_bios_module_supported(") >= 4
+assert "Preparing your BIOS" in MAIN
+# The registry is mutable and seeded from the builtins before main().
+BACKEND = (ROOT / "runtime" / "src" / "psx_bios_backend.c").read_text(encoding="utf-8")
+assert "int psx_bios_register(const PsxBiosBackend *backend)" in BACKEND
+assert "psx_bios_registry_ctor" in BACKEND
+CMAKE = (ROOT / "runtime" / "runtime.cmake").read_text(encoding="utf-8")
+assert "psx_bios_builtin_registry[]" in CMAKE
+assert "psx_bios_module.c" in CMAKE
 
 print("BIOS selection capability guards passed")
