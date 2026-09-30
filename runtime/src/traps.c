@@ -1135,7 +1135,13 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
                  * be a transfer — return 0 so the syscall wrapper falls through
                  * to its own jr $ra and this thread resumes at its caller via
                  * the flat trampoline. Legacy ignores the return value (it uses
-                 * cpu->pc == 0 + the nested-dispatch C-return to resume). */
+                 * cpu->pc == 0 + the nested-dispatch C-return to resume).
+                 * The HLE scheduler's same-thread ChangeThread also lands here
+                 * and leaves the SYSCALL's own PC in cpu->pc. The dirty-RAM
+                 * interpreter transfers on cpu->pc != 0, so it re-executed the
+                 * SYSCALL forever (PS1G-58, Rival Schools). Clear it, as the
+                 * SYS01/02 continuations do. */
+                cpu->pc = 0;
                 return 0;
             }
 

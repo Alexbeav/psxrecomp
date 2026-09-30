@@ -124,6 +124,8 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_biohazard_checkpoint.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME interp_refused_text_handoff_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_refused_text_handoff.py --cc ${CMAKE_C_COMPILER})
+        add_test(NAME syscall_change_thread_self_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syscall_change_thread_self.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME tas_resume_interval_test COMMAND ${Python3_EXECUTABLE}
             ${PSXRECOMP_ROOT}/tools/tasreplays/test_resume_interval.py)
         foreach(_opt IN ITEMS 0 2)
