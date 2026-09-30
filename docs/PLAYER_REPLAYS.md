@@ -117,6 +117,9 @@ and BIOS are named by hash only, and main RAM appears only as hashes.
 - **Mouse, neGcon and GunCon.** Replays carry pad input only. Recording refuses
   to start while either port holds one of these devices. PS1B-313 tracks
   peripherals in replays.
+- **Disc changes.** Changing the disc from the in-game menu ends the recording
+  there, and the replay is saved up to the change. A multi-disc game can be
+  recorded up to its first disc swap.
 - **Pad type changes.** A pad keeps the type it had at boot for the whole
   recording; a Hybrid pad does not switch between digital and analog.
   Controller hotplug does not change the ports during a recording.
