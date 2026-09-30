@@ -8020,6 +8020,11 @@ namespace {
     bool        g_lnch_has_crc       = false;
     const char* g_lnch_argv0         = nullptr;
     bool        g_lnch_netplay_available = false;
+    /* True when this process can turn a player's retail dump into a linked
+     * backend: the codegen host wired Generate (dev tree / setup kit), or
+     * nothing is linked yet (setup host). A shipped bundled build is neither,
+     * and must never answer a BIOS pick with "Generate & rebuild". */
+    bool        g_lnch_can_regen     = false;
 
     int ae_bios_verify(const char* bios_path, RecompLauncherCBiosVerify* out) {
         if (!out) return 0;
@@ -8051,6 +8056,19 @@ namespace {
             std::snprintf(out->detail, sizeof(out->detail),
                           "PlayStation BIOS required (%s).",
                           psx_expected_bios_label());
+            return 1;
+        }
+        /* Bundled build with only its shipped backend and no way to compile
+         * another: a retail image can never be used here, whatever its CRC.
+         * Say so before the identity checks, whose "this build expects
+         * SCPH-1001" wording describes the pinned stem, not a linked backend. */
+        if (!g_lnch_can_regen && psx_bios_registry_count > 0 &&
+            !psx_bios_has_selectable()) {
+            out->ok = 0;
+            out->needs_regen = 0;
+            std::snprintf(out->detail, sizeof(out->detail),
+                          "This build runs its bundled OpenBIOS only; a retail "
+                          "BIOS cannot be selected. Clear the BIOS field to play.");
             return 1;
         }
         /* Match runtime resolve: relative picks like bios/SCPH1001.BIN must not
@@ -8116,10 +8134,18 @@ namespace {
                 return 1;
             }
             out->ok = 0;
-            out->needs_regen = 1;
-            std::snprintf(out->detail, sizeof(out->detail),
-                          "This BIOS is not compiled into the current build. "
-                          "Generate & rebuild to switch (or use OpenBIOS).");
+            if (g_lnch_can_regen) {
+                out->needs_regen = 1;
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "This BIOS is not compiled into the current build. "
+                              "Generate & rebuild to switch (or use OpenBIOS).");
+            } else {
+                out->needs_regen = 0;
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "This BIOS is not compiled into this build and "
+                              "cannot be added to it. Use one this build accepts, "
+                              "or clear the field for OpenBIOS.");
+            }
             return 1;
         } catch (const std::exception& e) {
             std::snprintf(out->detail, sizeof(out->detail),
@@ -14585,9 +14611,14 @@ int main(int argc, char** argv) {
             /* Local codegen: missing generated/ or MOTK_FORCE_SETUP opens the
              * generate & rebuild wizard (may also set prepare_required). */
             psx_game_codegen_setup_apply(&gi);
-            /* host_apply forces has_bios for OpenBIOS-only setup packages. */
-            if (gi.setup_wizard_supported)
-                gi.has_bios = 1;
+            /* The BIOS row exists when a choice can mean something: a retail
+             * backend is linked, nothing is linked yet (setup host), or the
+             * host wired Generate so a dump can be ingested and compiled in.
+             * A shipped bundled build is none of these; forcing the row there
+             * offered "Generate & rebuild" with no CLI or toolchain to run it. */
+            g_lnch_can_regen = gi.prepare_with_progress != nullptr ||
+                               psx_bios_registry_count == 0;
+            gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen) ? 1 : 0;
 #endif
 #endif /* PSX_HAS_SETUP_WIZARD */
             launcher_boot_timing_mark("host:setup_checks_done");
@@ -16711,6 +16742,9 @@ soft_return_lobby:
         gi.num_discs = (int)rui_discs.size();
 #if defined(PSX_HAS_SETUP_WIZARD) && defined(PSX_HAS_CODEGEN_SETUP_HOST)
         psx_game_codegen_setup_apply(&gi);
+        g_lnch_can_regen = gi.prepare_with_progress != nullptr ||
+                           psx_bios_registry_count == 0;
+        gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen) ? 1 : 0;
 #endif
 
         char rui_out_disc[1024] = {0};
