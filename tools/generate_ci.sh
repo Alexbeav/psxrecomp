@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Write the setup-host release workflow into an existing PSX project (Linux /
+# Write the bundled release workflow into an existing PSX project (Linux /
 # macOS / WSL / Git Bash). The logic is tools/generate_ci.py; this finds Python.
 #
 #   sh psxrecomp/tools/generate_ci.sh                 # cwd is the project

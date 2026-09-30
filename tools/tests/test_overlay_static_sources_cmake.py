@@ -108,11 +108,13 @@ message(STATUS "PROBE_SOURCES=${{srcs}}")
         self.profile(static_output='generated/overlays_static.c')
         code, out, _ = self.configure(None)
         self.assertNotEqual(code, 0)
-        self.assertIn('passes no GAME_OVERLAY_STATIC_C', out)
+        # CMake re-wraps message() text at ~72 columns, so this phrase can
+        # straddle a line break; compare with whitespace collapsed.
+        self.assertIn('passes no GAME_OVERLAY_STATIC_C', ' '.join(out.split()))
         other = self.project / 'elsewhere' / 'overlays_static.c'
         code, out, _ = self.configure(other)
         self.assertNotEqual(code, 0)
-        self.assertIn('Make them name the same file', out)
+        self.assertIn('Make them name the same file', ' '.join(out.split()))
 
     def test_undeclared_profiles_and_capture_built_shards_are_unaffected(self):
         # A release/DLL-cache title: profile without static_output, no static C.

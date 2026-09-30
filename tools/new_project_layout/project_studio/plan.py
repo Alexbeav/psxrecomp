@@ -42,16 +42,16 @@ _OP_TITLES = {
     "emit_version": "Emit VERSION",
     "emit_symbols_toml": "Emit symbols.toml stub",
     "emit_sync_symbols": "Install tools/sync_symbols.py",
-    "merge_gitignore": "Merge setup-host .gitignore rules",
+    "merge_gitignore": "Merge .gitignore rules (un-ignore generated/)",
     "emit_mods_preloaded": "Stub mods/preloaded catalog",
     "relocate_boxart": "Relocate boxart → launcher_assets/",
     "emit_boxart_stub": "Create launcher_assets stub dir",
     "ensure_app_icon": "Install assets/psxrecomp app icon",
-    "rewrite_cmake_setup_host": "Rewrite CMakeLists.txt (setup-host)",
-    "emit_packager": "Emit scripts/package_setup_release.sh",
+    "rewrite_cmake_setup_host": "Rewrite CMakeLists.txt (psxrecomp_add_game_runtime)",
+    "emit_packager": "Emit scripts/package_release.sh (bundled release)",
     "sync_packager_project_dirs": "Stage src/ + mods/ the release zip is missing",
-    "emit_ci_workflow": "Emit setup-host release.yml",
-    "annotate_legacy_packaging": "Annotate legacy prebuilt packaging",
+    "emit_ci_workflow": "Emit bundled release.yml",
+    "annotate_legacy_packaging": "Annotate hand-forked packaging scripts",
     "probe_disc_refresh": "Refresh disc identity via probe_disc.py",
     "record_framework_pins": "Write framework_pins.txt",
     "patch_readme_metrics": "Patch README badges, Retro Launcher, and R.A.I.D. footer",
@@ -101,7 +101,7 @@ def build_plan(
         if options.enable_ci:
             wanted.add("emit_ci_workflow")
 
-    # Always ensure wizard/codegen for setup-host policy when rewriting
+    # Always ensure wizard/codegen (first-run disc picker) when rewriting
     if "rewrite_cmake_setup_host" in wanted:
         wanted.add("emit_codegen_setup")
 
