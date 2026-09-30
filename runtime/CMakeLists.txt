@@ -40,6 +40,22 @@ if(BUILD_TESTING)
     add_executable(mod_texture_banks_test tests/test_mod_texture_banks.c src/mod_texture_banks.c)
     target_include_directories(mod_texture_banks_test PRIVATE include)
     add_test(NAME mod_texture_banks_test COMMAND mod_texture_banks_test)
+    # PS1B-286: libjuice resolves from third_party/ with the network sealed,
+    # and a recomp-net pinning another libjuice stops the configure.
+    foreach(_psx_juice_case same other)
+        add_test(NAME netplay_libjuice_offline_${_psx_juice_case}
+            COMMAND ${CMAKE_COMMAND}
+                -S "${CMAKE_CURRENT_SOURCE_DIR}/tests/netplay_libjuice_offline"
+                -B "${CMAKE_CURRENT_BINARY_DIR}/netplay_libjuice_offline_${_psx_juice_case}"
+                -G "${CMAKE_GENERATOR}"
+                "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+                -DPSX_DEPS_OFFLINE=ON
+                "-DFAKE_RECOMP_NET=${CMAKE_CURRENT_SOURCE_DIR}/tests/netplay_libjuice_offline/recomp-net-${_psx_juice_case}")
+        set_tests_properties(netplay_libjuice_offline_${_psx_juice_case} PROPERTIES
+            ENVIRONMENT "HTTP_PROXY=http://127.0.0.1:9;HTTPS_PROXY=http://127.0.0.1:9;ALL_PROXY=http://127.0.0.1:9;NO_PROXY=")
+    endforeach()
+    set_tests_properties(netplay_libjuice_offline_other PROPERTIES
+        PASS_REGULAR_EXPRESSION "recomp-net pins libjuice SHA256")
     if(NOT MSVC)
         add_executable(ws_world_scene_test tests/test_ws_world_scene.c)
         target_include_directories(ws_world_scene_test PRIVATE include src)

@@ -11,14 +11,21 @@ downloaded one; nothing here is trusted because it is local.
 
 ## What is committed, and why only that
 
-Only **libchdr** (`libchdr-<sha>.tar.gz`, ~520 KB, BSD-3-Clause — see
-`../THIRD_PARTY_ATTRIBUTION.md`).
+Only **libchdr** (`libchdr-<sha>.tar.gz`, ~520 KB, BSD-3-Clause) and
+**libjuice** (`libjuice-v1.7.2.tar.gz`, ~110 KB, MPL-2.0) — see
+`../THIRD_PARTY_ATTRIBUTION.md`.
 
 `runtime/runtime.cmake` includes `chd_dependency.cmake` unconditionally, and
 libchdr has no `find_package` path and ships in no toolchain pack — so it is
 both the *first* network access a build makes and the only one with no local
 fallback. A player building a released game behind a firewall used to fail
 there, inside a FetchContent subbuild, before reaching any other dependency.
+
+libjuice is what recomp-net's ICE transport downloads at configure time when
+`PSX_NETPLAY=ON`. It has no local fallback either, so a sealed netplay build
+failed the same way. `runtime/netplay_dependency.cmake` declares the vendored
+copy before recomp-net asks for it, and stops the configure if recomp-net's pin
+and this manifest row ever differ.
 
 SDL3 (~15 MB) and zlib resolve from a system package or a toolchain pack first
 and are **not** committed; `.gitignore` keeps them out. Stage them on demand:
