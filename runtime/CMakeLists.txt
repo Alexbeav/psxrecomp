@@ -34,6 +34,12 @@ if(BUILD_TESTING)
     add_executable(irq_register_image_test tests/test_irq_register_image.c)
     target_include_directories(irq_register_image_test PRIVATE include)
     add_test(NAME irq_register_image_test COMMAND irq_register_image_test)
+    # PS1B-289: which BIOS a netplay match boots, and its wire helpers.
+    add_executable(netplay_bios_settle_test
+        tests/test_netplay_bios_settle.c
+        src/netplay_bios_settle.c)
+    target_include_directories(netplay_bios_settle_test PRIVATE include)
+    add_test(NAME netplay_bios_settle_test COMMAND netplay_bios_settle_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
@@ -925,7 +931,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             # is needed and none can drift from what the runtime links.
             target_sources(lobby_chat_ring_test PRIVATE
                 "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_ws.c"
-                "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_sha1.c")
+                "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_sha1.c"
+                "${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c")
             target_link_libraries(lobby_chat_ring_test PRIVATE recomp_net)
             add_test(NAME lobby_chat_ring_test COMMAND lobby_chat_ring_test)
         endif()
