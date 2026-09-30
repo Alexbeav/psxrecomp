@@ -647,6 +647,16 @@ if(BUILD_TESTING)
                 --cmake ${CMAKE_COMMAND} --cc ${CMAKE_C_COMPILER}
                 --cxx ${CMAKE_CXX_COMPILER} --ninja ${CMAKE_MAKE_PROGRAM})
     endif()
+    # MFC0/CFC0 read COP0 from before their own cycle charge: the production
+    # interpreter decoder with cycle charging on, a device event that raises
+    # CAUSE.IP2 on the read's own cycle, other seams stubbed to abort()
+    # (runtime/tests/fixture_link.py needs nm and GNU ld diagnostics).
+    if(Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME interp_cop0_read_sample
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_interp_cop0_read_sample.py"
+                --cc ${CMAKE_C_COMPILER})
+    endif()
     if(Python3_Interpreter_FOUND)
         add_test(NAME optional_netplay_auth
             COMMAND ${Python3_EXECUTABLE}
