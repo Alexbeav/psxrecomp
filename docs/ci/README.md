@@ -63,6 +63,7 @@ the ICD dynamically via SDL; CI only needs headers and the shader compiler.
 | `bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs |
 | `package_setup_host.sh` | Lean setup-host zip (optional `--embed-toolchain`) |
 | `../cmake/toolchain-mingw-w64.cmake` | Linux→Windows MinGW cross toolchain |
+| `../cmake/toolchain-macos-osxcross.cmake` | Linux→macOS (x86_64 / arm64) osxcross cross toolchain |
 | `../host/psxrecomp_codegen_host.*` | Portable Generate & rebuild host (via CMake helper) |
 | `templates/game.gitignore` | Suggested gitignore for title repos |
 
