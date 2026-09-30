@@ -152,6 +152,10 @@ if(BUILD_TESTING)
     add_executable(launcher_device_roundtrip_test
         tests/test_launcher_device_roundtrip.cpp)
     target_include_directories(launcher_device_roundtrip_test PRIVATE include)
+    # The checks are assert()s; keep them in Release builds.
+    if(NOT MSVC)
+        target_compile_options(launcher_device_roundtrip_test PRIVATE -UNDEBUG)
+    endif()
     add_test(NAME launcher_device_roundtrip_test
              COMMAND launcher_device_roundtrip_test)
 

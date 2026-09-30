@@ -20,5 +20,26 @@ int main() {
     assert(launcher_device_from_source(
         2, " 030000005e0400008e02000000000000 ") ==
         "030000005e0400008e02000000000000");
+
+    /* neGcon pad type. A launcher with the mode
+     * (RECOMP_LAUNCHER_HAS_NEGCON_MODE) passes 3 through both ways. */
+    using PSXRecompV4::launcher_pad_mode_from_launcher;
+    using PSXRecompV4::launcher_pad_mode_to_launcher;
+    constexpr int kAnalog = 1, kDigital = 2, kNegcon = 3;
+    assert(launcher_pad_mode_to_launcher(kNegcon, true) == kNegcon);
+    assert(launcher_pad_mode_from_launcher(kNegcon, kAnalog, true) == kNegcon);
+    assert(launcher_pad_mode_from_launcher(kAnalog, kNegcon, true) == kAnalog);
+    /* An older launcher never sees 3: the seat goes in as Analog, and an
+     * Analog coming back keeps the neGcon; D-Pad replaces it. */
+    assert(launcher_pad_mode_to_launcher(kNegcon, false) == kAnalog);
+    assert(launcher_pad_mode_from_launcher(kAnalog, kNegcon, false) == kNegcon);
+    assert(launcher_pad_mode_from_launcher(kDigital, kNegcon, false) == kDigital);
+    /* Analog and digital seats are untouched either way. */
+    for (bool with_mode : { false, true }) {
+        assert(launcher_pad_mode_to_launcher(kAnalog, with_mode) == kAnalog);
+        assert(launcher_pad_mode_to_launcher(kDigital, with_mode) == kDigital);
+        assert(launcher_pad_mode_from_launcher(kAnalog, kDigital, with_mode) == kAnalog);
+        assert(launcher_pad_mode_from_launcher(kDigital, kAnalog, with_mode) == kDigital);
+    }
     return 0;
 }

@@ -105,6 +105,13 @@ static constexpr int kLauncherHasInternalResolution = 1;
 #else
 static constexpr int kLauncherHasInternalResolution = 0;
 #endif
+/* A recomp-ui that offers "NeGcon" as pad type 3; an older one would clamp it
+ * to D-Pad, so a neGcon seat goes to it as Analog (launcher_device.h). */
+#if defined(RECOMP_LAUNCHER_HAS_NEGCON_MODE)
+static constexpr bool kLauncherNegconMode = true;
+#else
+static constexpr bool kLauncherNegconMode = false;
+#endif
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
 #include "launcher_boot_timing.h" /* PSX_LAUNCHER_BOOT_TIMING stamps */
 #if defined(PSX_HAS_CODEGEN_SETUP_HOST)
@@ -4675,6 +4682,15 @@ static int effective_player_mode_for_sio(const PlayerInput& p, int sio_slot) {
     return effective_player_mode(p);
 }
 
+/* The console-side device a seat presents (sio SIO_DEVICE_*): a neGcon for a
+ * pad or keyboard seat whose pad type is neGcon, otherwise the digital pad /
+ * DualShock. */
+static int sio_device_for_player(const PlayerInput& p) {
+    if ((p.kind == 1 || p.kind == 2) && p.mode == PSXRecompV4::PAD_MODE_NEGCON)
+        return SIO_DEVICE_NEGCON;
+    return SIO_DEVICE_PAD;
+}
+
 /* Open/close SDL handles so they match g_players, and (re)assert each slot's
  * PSX connection + pad type. Safe to call repeatedly (hotplug, boot).
  * While delay-sync netplay is active, SIO connection/type are owned by
@@ -4690,6 +4706,7 @@ static void refresh_player_devices(void) {
         const ModControllerPresentationPolicy& policy =
             g_mod_controller_policy[s];
         const int boot_mode = policy.callback ? policy.initial_mode : mode;
+        sio_set_port_device(s, sio_device_for_player(p));
         sio_set_pad_connected(s, p.kind != 0 ? 1 : 0);
         sio_set_pad_analog(s, pad_mode_boot_analog(boot_mode),
                            0x80, 0x80, 0x80, 0x80);
@@ -5890,6 +5907,42 @@ done:
     freeze_heartbeat_set_paused(0);
 }
 
+/* neGcon host mapping. The seat's pad or keyboard drives the port: left stick
+ * X is the twist; I and II are the right and left triggers as analog values,
+ * with Cross and Square as full presses; L1 is the digital L; Circle, Triangle
+ * and R1 are A, B and R. On the DualShock button word those three sit on the
+ * neGcon's own bit positions (13, 12, 11), as do Start and the D-pad, so the
+ * word passes through and sio forces the bits the neGcon lacks to 1. Returns
+ * 0 unless SIO slot `s` is a neGcon. */
+static int sample_negcon_slot(int s) {
+    if (sio_get_port_device(s) != SIO_DEVICE_NEGCON) return 0;
+    const PlayerInput& p = g_players[s];
+    const int player = s + 1;               /* keybinds.ini section */
+    if (savestate_input_guard_active()) {
+        sio_set_negcon_state(s, 0xFFFFu, 0x80, 0x00, 0x00, 0x00);
+        return 1;
+    }
+    /* The stick is the twist, never the D-pad. */
+    const uint16_t w = pad_buttons_for(p, player, true);
+    uint8_t st[4];
+    pad_sticks_for(p, player, st);
+    uint8_t trig_i = 0, trig_ii = 0;
+    if (p.kind == 2 && p.handle) {
+        const int r = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+        const int l = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+        trig_i  = (uint8_t)(r <= 0 ? 0 : (r >= 32767 ? 255 : (r * 255 + 16383) / 32767));
+        trig_ii = (uint8_t)(l <= 0 ? 0 : (l >= 32767 ? 255 : (l * 255 + 16383) / 32767));
+    }
+    const bool cross  = (w & 0x4000u) == 0;
+    const bool square = (w & 0x8000u) == 0;
+    const bool l1     = (w & 0x0400u) == 0;
+    sio_set_negcon_state(s, w, st[0],
+                         cross ? (uint8_t)0xFF : trig_i,
+                         square ? (uint8_t)0xFF : trig_ii,
+                         l1 ? (uint8_t)0xFF : (uint8_t)0x00);
+    return 1;
+}
+
 static void sample_pad_into_sio(int override) {
     /* Selfcheck fighter mash owns P1 when enabled (headless-safe). */
     if (override < 0) {
@@ -5907,6 +5960,7 @@ static void sample_pad_into_sio(int override) {
     const uint32_t consumer_sim =
         psx_start_consumer_enabled() ? psx_start_consumer_offline_frame() : 0u;
     for (int s = 0; s < n; s++) {
+        if (sample_negcon_slot(s)) continue;       /* a neGcon, not a pad */
         PsxNetPad pad;
         if (!capture_pad_slot(s, &pad)) continue;  /* no device in this port */
         /* Push sticks every frame; request the pad type (digital/analog) through
@@ -14235,6 +14289,8 @@ int main(int argc, char** argv) {
                      * persist. The keyboard's runtime behaviour does not
                      * depend on this value (effective_player_mode). */
                     ls.pad_mode[i] = player_mode[i];
+                    ls.pad_mode[i] = PSXRecompV4::launcher_pad_mode_to_launcher(
+                        ls.pad_mode[i], kLauncherNegconMode);
                     ls.player_gamepad_guid[i][0] = '\0';
                     if (ls.player_src[i] == 2 && !d.empty() && d != "auto" &&
                         d != "gamepad" && d != "controller") {
@@ -14542,7 +14598,10 @@ int main(int argc, char** argv) {
                          * depend on that to boot the declared pad type. */
                         player_mode[i] =
                             PSXRecompV4::resolve_player_mode_after_launcher(
-                                ls.pad_mode[i], ctrl_lock_mode,
+                                PSXRecompV4::launcher_pad_mode_from_launcher(
+                                    ls.pad_mode[i], player_mode[i],
+                                    kLauncherNegconMode),
+                                ctrl_lock_mode,
                                 ctrl_locked_mode[i],
                                 g_mod_controller_mode_override[i]);
                         player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
@@ -15327,6 +15386,7 @@ session_reboot:
              * keyboard / any plugged-in controller can drive port 1 standalone. */
             const bool dev_p1 = (dev_any_input_enabled() && s == 0);
             const int mode = effective_player_mode_for_sio(g_players[s], s);
+            sio_set_port_device(s, sio_device_for_player(g_players[s]));
             sio_set_pad_connected(s, (g_players[s].kind != 0 || dev_p1) ? 1 : 0);
             sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
             sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
@@ -16525,6 +16585,8 @@ soft_return_lobby:
                     (player_deadzone[i] * 100 + 32767 / 2) / 32767;
                 /* Verbatim, as in the first launcher entry above. */
                 ls.pad_mode[i] = player_mode[i];
+                ls.pad_mode[i] = PSXRecompV4::launcher_pad_mode_to_launcher(
+                    ls.pad_mode[i], kLauncherNegconMode);
                 ls.player_gamepad_guid[i][0] = '\0';
                 if (ls.player_src[i] == 2 && !d.empty() && d != "auto" &&
                     d != "gamepad" && d != "controller") {
@@ -16692,7 +16754,10 @@ soft_return_lobby:
                      * and applies the new session's override over this. */
                     player_mode[i] =
                         PSXRecompV4::resolve_player_mode_after_launcher(
-                            ls.pad_mode[i], ctrl_lock_mode,
+                            PSXRecompV4::launcher_pad_mode_from_launcher(
+                                ls.pad_mode[i], player_mode[i],
+                                kLauncherNegconMode),
+                            ctrl_lock_mode,
                             ctrl_locked_mode[i],
                             g_mod_controller_mode_override[i]);
                     player_deadzone[i] = ls.deadzone[i] * 32767 / 100;

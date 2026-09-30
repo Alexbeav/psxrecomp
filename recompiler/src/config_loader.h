@@ -33,7 +33,10 @@ namespace PSXRecompV4 {
 //   analog  — always present a DualShock/analog pad (id 0x73). The D-pad is
 //             independent from both sticks, matching real hardware. Default.
 //   digital — always present a digital pad (id 0x41); sticks disabled.
-enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };
+//   negcon  — present a Namco neGcon (id 0x23) driven by the seat's pad or
+//             keyboard. A player choice in settings.toml and the launcher
+//             only; game.toml modes stay analog or digital.
+enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2, PAD_MODE_NEGCON = 3 };
 
 // Renderer IDs shared by game.toml/settings parsing and runtime startup.
 // OpenGL is the default because the Windows software/SDL_Renderer path is slow
@@ -1351,7 +1354,7 @@ struct UserSettings {
     //   "none"     — no pad in this port (port not connected)
     //   "keyboard" — driven by the keyboard map (input.ini)
     //   "<GUID>"   — an SDL game-controller GUID (SDL_JoystickGetGUIDString)
-    // Modes (see PadMode): analog / digital. Hybrid is mod-only. Defaults: P1 keyboard,
+    // Modes (see PadMode): analog / digital / negcon. Hybrid is mod-only. Defaults: P1 keyboard,
     // P2–P5 none. Deadzone default is 10% (3277/32767). TOML keys:
     // pN_device / pN_mode / pN_deadzone (N=1..5). Legacy bare `deadzone`
     // still fills any slot that lacks pN_deadzone.
