@@ -988,7 +988,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             target_compile_options(${_queue_test}_test PRIVATE -O2 -flto -fwhole-program -UNDEBUG)
             target_link_options(${_queue_test}_test PRIVATE -flto)
         endforeach()
-        foreach(_case pending deferred reset snapshot packets)
+        foreach(_case pending deferred reset snapshot packets interlace-charge)
             add_test(NAME gpu_command_queue_${_case} COMMAND gpu_command_queue_test ${_case})
         endforeach()
         add_test(NAME dma_gpu_command_queue_linked_list COMMAND dma_gpu_command_queue_test)
