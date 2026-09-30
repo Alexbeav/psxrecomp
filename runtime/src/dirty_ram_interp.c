@@ -535,6 +535,19 @@ extern int psx_game_text_native_ok_full(uint32_t addr);
 #endif
 extern void psx_dispatch_call(CPUState* cpu, uint32_t addr, uint32_t return_addr);
 
+/* PS1B-97: game text that dispatch refuses because its live bytes differ from
+ * the boot EXE. Outside the source/TAS profile, straight-line interpretation
+ * keeps going instead of handing such a PC back (see the hand-back below). */
+static int interp_refused_game_text(uint32_t pc) {
+#ifdef PSX_HAS_GAME_DISPATCH
+    return !source_gpu_runtime_active() && psx_game_address_in_text(pc) &&
+           !psx_game_text_native_ok(pc);
+#else
+    (void)pc;
+    return 0;
+#endif
+}
+
 /* Forward decls from memory.c — used to read instruction bytes. */
 extern uint8_t *memory_get_ram_ptr(void);
 extern void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
@@ -3891,12 +3904,19 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
          * static dispatch by setting cpu->pc and returning. */
         uint32_t next_page = next_phys >> 12;
         if ((!current_page_dirty || next_page != current_page) &&
-            !dirty_ram_is_dirty(next_phys) && !psx_is_dispatchable(pc)) {
+            !dirty_ram_is_dirty(next_phys) &&
+            (!psx_is_dispatchable(pc) || interp_refused_game_text(pc))) {
             /* T110: the clean page is compiled code the static table can only
              * re-enter at an entry/continuation. Handing back here (mid-block,
              * e.g. a relocated kernel body) published a PC nothing could
              * dispatch. Keep interpreting and re-test every instruction until
-             * the flow reaches a re-enterable boundary. */
+             * the flow reaches a re-enterable boundary.
+             * PS1B-97: game text whose live bytes differ from the boot EXE
+             * (the SCPH5552 shell runs interpreted in RAM a large game's EXE
+             * later owns) is refused by dispatch, which re-entered the
+             * interpreter one instruction later: about 200k hand-backs per
+             * intro field. The source/TAS profile keeps its qualified
+             * hand-back schedule. */
             current_page_dirty = 0;
             current_page = next_page;
             continue;

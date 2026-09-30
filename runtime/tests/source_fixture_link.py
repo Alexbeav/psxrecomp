@@ -62,13 +62,14 @@ def write_stubs(path, symbols):
     path.write_text("\n".join(lines) + "\n")
 
 
-def build_and_run(cc, here, src_root, opt, work, modules, test_name):
+def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=()):
     tag = opt.replace("-", "")
     include = str(src_root / "include")
     objs = []
     for src in modules:
         obj = work / (Path(src).stem + tag + ".o")
         subprocess.run([cc, "-std=c11", opt, "-w", "-I", include,
+                        *["-D" + d for d in defines],
                         "-c", str(src_root / "src" / src), "-o", str(obj)],
                        check=True)
         objs.append(obj)
