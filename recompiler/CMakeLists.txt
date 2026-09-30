@@ -1140,6 +1140,7 @@ if(BUILD_TESTING)
                 hybrid_dev_any_input
                 host_input_focus_guards
                 launcher_pad_mode_wiring
+                negcon_twist_wiring
                 jalr_link_register_guards
                 launcher_vulkan_option
                 mod_controller_override

@@ -133,8 +133,94 @@ int main(void) {
         txn(0,probe45,3,rx,ack);
         check(rx[1] == 0xFF && ack[1] == 0,"45h gets hi-z and no /ACK");
     }
+    /* Every command byte but 42h, including the DualShock config set (43h-47h,
+     * 4Ch, 4Dh, 4Fh) and bytes no controller uses: hi-z and no /ACK. The
+     * neGcon has no config mode to fall into, and no byte gets a zero reply. */
+    {
+        unsigned silent = 0;
+        for (unsigned cmd = 0; cmd <= 0xFF; ++cmd) {
+            if (cmd == 0x42) continue;
+            const uint8_t probe[3] = { 0x01,(uint8_t)cmd,0x00 };
+            uint8_t rx[3], ack[3];
+            txn(0,probe,3,rx,ack);
+            if (!(rx[0] == 0xFF && ack[0] == 1 && rx[1] == 0xFF && ack[1] == 0 && rx[2] == 0xFF)) {
+                fprintf(stderr,"FAIL: command %02Xh: got %02X%s %02X%s %02X (+ = /ACK)\n",
+                        cmd,rx[0],ack[0]?"+":"",rx[1],ack[1]?"+":"",rx[2]);
+                exit(1);
+            }
+            silent++;
+        }
+        check(silent == 255,"all 255 other command bytes get hi-z and no /ACK");
+    }
+    EXPECT(0,"still a neGcon after every probe", 0xFF,0x23,0x5A,0x1F,0xFF,0x80,0x00,0x00,0x00);
     sio_set_negcon_state(0,NB(A),0x40,0x10,0x20,0x00);
     EXPECT(0,"a read after a probe still works", 0xFF,0x23,0x5A,0xFF,0xDF,0x40,0x10,0x20,0x00);
+
+    /* The reply is taken when 42h arrives: a host update during the read
+     * shows on the next read, not partway through this one. */
+    {
+        static const uint8_t tx[9] = { 0x01,0x42,0x00,0x00,0x00,0x00,0x00,0x00,0x00 };
+        uint8_t rx[9];
+        sio_set_negcon_state(0,NB(0),0x10,0x20,0x30,0x40);
+        sio_write(0x1F80104A,0);
+        sio_write(0x1F80104A,0x1003u);
+        for (unsigned i=0;i<9;++i) {
+            if (i == 4) sio_set_negcon_state(0,NB(A),0xE0,0xD0,0xC0,0xB0);
+            sio_write(0x1F801040,tx[i]); advance(1088);
+            rx[i] = (uint8_t)sio_read(0x1F801040);
+            advance(256);
+            sio_write(0x1F80104A,0x1013u); i_stat &= ~0x80u;
+        }
+        sio_write(0x1F80104A,0);
+        advance(2000);
+        check(rx[3] == 0xFF && rx[4] == 0xFF && rx[5] == 0x10 && rx[6] == 0x20 &&
+              rx[7] == 0x30 && rx[8] == 0x40,"a read keeps the state it started with");
+    }
+    EXPECT(0,"the update shows on the next read", 0xFF,0x23,0x5A,0xFF,0xDF,0xE0,0xD0,0xC0,0xB0);
+
+    /* Every twist value, and each of I, II and L at 0, 1, 127, 128, 254 and
+     * 255 with the other axes elsewhere: the four bytes are independent and
+     * never change the button bytes. */
+    {
+        static const uint8_t tx[9] = { 0x01,0x42,0x00,0x00,0x00,0x00,0x00,0x00,0x00 };
+        uint8_t rx[9], ack[9];
+        for (unsigned v=0;v<=0xFF;++v) {
+            sio_set_negcon_state(0,NB(START),(uint8_t)v,0x11,0x22,0x33);
+            txn(0,tx,9,rx,ack);
+            if (rx[3] != 0xF7 || rx[4] != 0xFF || rx[5] != v || rx[6] != 0x11 ||
+                rx[7] != 0x22 || rx[8] != 0x33) {
+                fprintf(stderr,"FAIL: twist %02Xh read back wrong\n",v);
+                exit(1);
+            }
+        }
+        checks++;
+        static const uint8_t levels[6] = { 0x00,0x01,0x7F,0x80,0xFE,0xFF };
+        for (unsigned axis=0;axis<3;++axis) {
+            for (unsigned k=0;k<6;++k) {
+                uint8_t p[3] = { 0x5A,0xA5,0x3C };
+                p[axis] = levels[k];
+                sio_set_negcon_state(0,NB(0),0x9C,p[0],p[1],p[2]);
+                txn(0,tx,9,rx,ack);
+                if (rx[3] != 0xFF || rx[4] != 0xFF || rx[5] != 0x9C || rx[6] != p[0] ||
+                    rx[7] != p[1] || rx[8] != p[2]) {
+                    fprintf(stderr,"FAIL: pressure axis %u at %02Xh read back wrong\n",
+                            axis,levels[k]);
+                    exit(1);
+                }
+            }
+        }
+        checks++;
+    }
+
+    /* Out-of-range slots are ignored, not written. */
+    sio_set_negcon_state(0,NB(A),0x40,0x10,0x20,0x00);
+    sio_set_port_device(-1,SIO_DEVICE_NEGCON);
+    sio_set_port_device(PSX_MAX_PLAYERS,SIO_DEVICE_NEGCON);
+    sio_set_negcon_state(-1,NB(B),0,0xFF,0xFF,0xFF);
+    sio_set_negcon_state(PSX_MAX_PLAYERS,NB(B),0,0xFF,0xFF,0xFF);
+    check(sio_get_port_device(-1) == SIO_DEVICE_PAD &&
+          sio_get_port_device(PSX_MAX_PLAYERS) == SIO_DEVICE_PAD,"out-of-range slots read as pads");
+    EXPECT(0,"slot 0 is untouched by out-of-range writes", 0xFF,0x23,0x5A,0xFF,0xDF,0x40,0x10,0x20,0x00);
 
     /* The host state setter is ignored for a slot that is not a neGcon. */
     sio_set_negcon_state(1,NB(A),0x00,0xFF,0xFF,0xFF);

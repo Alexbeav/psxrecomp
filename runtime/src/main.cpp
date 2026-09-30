@@ -4763,6 +4763,12 @@ static void axes_to_pad_pair(int16_t vx, int16_t vy, uint8_t* obx, uint8_t* oby,
                            deadzone_raw > 0 ? deadzone_raw : controller_deadzone,
                            controller_anti_deadzone, obx, oby);
 }
+/* One axis alone, same settings: for a one-dimensional control (the neGcon
+ * twist, PS1B-304), which must not move when the other axis does. */
+static uint8_t axis_to_pad_byte(int16_t v, int deadzone_raw) {
+    return psx_stick_axis_to_byte(v, deadzone_raw > 0 ? deadzone_raw : controller_deadzone,
+                                  controller_anti_deadzone);
+}
 
 /* Buttons for a player's selected device (0xFFFF = none pressed). `player` is
  * 1..5 — selects which keybinds.ini section drives a keyboard port. */
@@ -4791,8 +4797,13 @@ static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_
  *
  * The keyboard branch is unaffected: psx_keybinds_sticks maps that player's
  * bound stick-direction keys onto the axes, which is their only stick
- * source. */
-static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
+ * source.
+ *
+ * left_x_alone: out[0] is the left stick's X by itself (axis_to_pad_byte), for
+ * the neGcon twist. The keyboard and remapped-stick paths are per-axis
+ * already. */
+static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4],
+                           bool left_x_alone = false) {
     out[0] = out[1] = out[2] = out[3] = 0x80;
     if (p.kind == 1) {
         /* Keyboard analog: the configurable left/right stick-direction binds
@@ -4848,9 +4859,11 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
 
         if (sticks_default_axes("ls_up", "ls_down", "ls_left", "ls_right",
                                 SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY)) {
-            axes_to_pad_pair(SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTX),
+            const int16_t lx = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTX);
+            axes_to_pad_pair(lx,
                              SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTY),
                              &out[0], &out[1], p.deadzone);
+            if (left_x_alone) out[0] = axis_to_pad_byte(lx, p.deadzone);
         } else {
             apply_discrete_stick("ls_up", "ls_down", "ls_left", "ls_right",
                                  &out[0], &out[1]);
@@ -5884,10 +5897,12 @@ static int sample_negcon_slot(int s) {
         sio_set_negcon_state(s, 0xFFFFu, 0x80, 0x00, 0x00, 0x00);
         return 1;
     }
-    /* The stick is the twist, never the D-pad. */
+    /* The stick is the twist, never the D-pad. The twist is the left stick's
+     * X alone: steering is one-dimensional, so moving the stick up or down
+     * must not change it (the DualShock stick transform is radial). */
     const uint16_t w = pad_buttons_for(p, player, true);
     uint8_t st[4];
-    pad_sticks_for(p, player, st);
+    pad_sticks_for(p, player, st, true);
     uint8_t trig_i = 0, trig_ii = 0;
     if (p.kind == 2 && p.handle) {
         const int r = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
