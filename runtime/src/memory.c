@@ -832,8 +832,7 @@ void dirty_ram_reset_for_boot(void) {
     memset(overlay_page_gen, 0, sizeof(overlay_page_gen));
     memset(g_dirty_ram_exec_page_bitmap, 0, sizeof(g_dirty_ram_exec_page_bitmap));
     memset(g_dirty_ram_exec_pc_bitmap, 0, sizeof(g_dirty_ram_exec_pc_bitmap));
-    memset(g_dirty_ram_dispatch_pc_bitmap, 0,
-           sizeof(g_dirty_ram_dispatch_pc_bitmap));
+    dirty_ram_dispatch_evidence_clear(0u, DIRTY_RAM_EXEC_BITMAP_WORDS);
     g_dirty_ram_code_gen++;
 }
 
@@ -936,8 +935,7 @@ static inline void overlay_watch_note_write(uint32_t phys, uint32_t size) {
         uint32_t bitmap_word = pg * (4096u / 4u / 32u);
         memset(&g_dirty_ram_exec_pc_bitmap[bitmap_word], 0,
                (4096u / 4u / 32u) * sizeof(uint32_t));
-        memset(&g_dirty_ram_dispatch_pc_bitmap[bitmap_word], 0,
-               (4096u / 4u / 32u) * sizeof(uint32_t));
+        dirty_ram_dispatch_evidence_clear(bitmap_word, 4096u / 4u / 32u);
         g_dirty_ram_exec_page_bitmap[pg >> 5] &= ~(1u << (pg & 31u));
     }
     if ((overlay_watch_bitmap[pg >> 5] >> (pg & 31u)) & 1u) {

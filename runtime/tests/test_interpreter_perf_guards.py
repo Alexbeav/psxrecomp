@@ -56,7 +56,7 @@ def main():
     commit = before_dma.find("preserve_snapshot_async(evidence_lo, evidence_hi)")
     clear_exec = before_dma.find("memset(&g_dirty_ram_exec_pc_bitmap", commit)
     clear_dispatch = before_dma.find(
-        "memset(&g_dirty_ram_dispatch_pc_bitmap", commit)
+        "dirty_ram_dispatch_evidence_clear(", commit)
     if min(commit, clear_exec, clear_dispatch) < 0 or not commit < clear_exec < clear_dispatch:
         raise AssertionError("outgoing variant is not queued before evidence reset")
     if "first_page = lo >> page_shift" not in before_dma:
