@@ -2667,7 +2667,7 @@ void debug_server_cyc_observe(uint32_t block_leader_phys) {
             if (a2) {
                 uint32_t fl = psx_read_word(a2 + 184u);
                 if (fl & 0x80u)
-                    psx_write_word(a2 + 184u, fl & ~0x80u);
+                    psx_host_write_word(a2 + 184u, fl & ~0x80u);
             }
         }
     }
@@ -5236,7 +5236,7 @@ static void handle_write_ram(int id, const char *json)
     }
     uint32_t addr = hex_to_u32(addr_str);
     uint8_t val = (uint8_t)hex_to_u32(val_str);
-    psx_write_byte(addr, val);
+    psx_host_write_byte(addr, val);
     send_ok(id);
 }
 

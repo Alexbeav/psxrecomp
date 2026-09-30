@@ -2,8 +2,10 @@
 
 This guide is for **title developers**: you keep game code and config in your
 own repository, pin this framework and `recomp-ui` as **root-level submodules**,
-and (optionally) ship a **setup-host** zip that users generate from a legal disc
-locally — the same model as Bomberman Party Edition / Masters of Teräs Käsi.
+commit the recompiled game C under `generated/`, and ship a **bundled** zip:
+the compiled game, built by CI from that committed C. Players bring their own
+disc and play; nothing is generated or built on their machine
+(`docs/ci/BUNDLED_RELEASES.md`).
 
 Related docs:
 
@@ -79,7 +81,7 @@ Non-interactive / CI (`--yes` / `-Yes` or `PSXRECOMP_SETUP_YES=1`): requires
 | Netplay lobby URL? | Only if netplay = Y (players ≥ 2); default host `netplay.retcomm.net` → `ws://…:8765` |
 | GitHub Actions release workflow? | Y → `.github/workflows/release.yml` (logs submodule SHAs via `record_pins.sh`) |
 | Fetch libretro boxart? | Needs network |
-| Run Generate now? | Emitters + OpenBIOS + game C (`generated/` gitignored) |
+| Run Generate now? | Emitters + OpenBIOS + game C; `generated/` is **committed** (release CI builds from it) |
 | Configure & build after Generate? | Only if Generate = Y |
 | Create GitHub repo (`gh`)? | Opt-in; needs `gh` auth |
 
@@ -196,8 +198,8 @@ disc identity, digests and netplay gates.
 
 Older titles (e.g. `psxrecomp-v4` submodule, `psxrecomp_add_runtime_target`,
 `packaging/` prebuilt zips) can be audited and migrated onto this layout with
-**Project Studio**. Releases remain **setup-host only** — the tool does not
-create prebuilt generated-C packages.
+**Project Studio**. Releases are **bundled**: the tool un-ignores and expects
+committed `generated/`, and emits the packager + CI that ship the compiled game.
 
 | Entry | Role |
 | ----- | ---- |
@@ -214,13 +216,13 @@ python3 tools/new_project_layout/migrate_project.py gui
 ```
 
 Typical apply order: rename `psxrecomp-v4` → emit `codegen_setup` → rewrite
-CMake (`psxrecomp_add_game_runtime` + wizard) → setup-host packager + CI →
+CMake (`psxrecomp_add_game_runtime` + wizard) → bundled packager + CI →
 optional `probe_disc` / pins. CMake rewrites keep
 `CMakeLists.txt.pre_migrate.bak` plus `CMakeLists.migrate_extras.txt` when the
 old file had tests / `EXTRAS_SOURCES` / mod `POST_BUILD` hooks.
 
-`apply` always enables **recomp-ui + setup wizard** (required for
-`PSXRECOMP_FORCE_SETUP_HOST`). Netplay stays opt-in (`--enable-netplay` / GUI).
+`apply` always enables **recomp-ui + setup wizard** (the shipped game's
+first-run disc picker). Netplay stays opt-in (`--enable-netplay` / GUI).
 
 ### After scaffold (still not automatic)
 
@@ -230,9 +232,9 @@ playable tree (OpenBIOS / optional retail BIOS C). You still must:
 1. **Boot / soak** — fix missing seeds, overlays, FMV/runtime quirks in `game.toml`
 2. **Netplay QA** — LAN then lobby; confirm digests + TOC fp; pin `VERSION`
 3. **Polish** — more symbols in `symbols.toml`, boxart name mismatches
-4. **Ship** — scaffold already creates the repo and pushes once at the end when
-   you opt in; otherwise push manually. Enable Actions, tag `vX.Y.Z` (CI ships
-   setup-host **without** `generated/` — end users run Generate locally / via wizard)
+4. **Ship** — commit `generated/` (the scaffold does this after a successful
+   Generate), push, enable Actions, tag `vX.Y.Z`. CI builds the committed C and
+   attaches the compiled game for every platform.
 
 **Legacy layout** (CLI `psxrecomp build`, nested UI under older trees,
 `tools/setup_dev.sh` for framework-only boots) remains supported. Prefer the
@@ -332,20 +334,20 @@ YourGameRecomp/                 # your git repo
 │                               # your own POST_BUILD command — see
 │                               # docs/MOD_PACKAGES.md ("How bundled/ gets staged").
 ├── scripts/
-│   └── package_setup_release.sh   # scaffold fills from package_setup_release.sh.in
+│   └── package_release.sh      # scaffold fills from package_release.sh.in
 ├── .github/workflows/
-│   └── release.yml             # scaffold fills from docs/ci/templates/setup-release.yml
+│   └── release.yml             # scaffold fills from docs/ci/templates/game-release.yml
 ├── psxrecomp/                  # submodule → framework + CLI + codegen host + CI tools
 │   ├── host/psxrecomp_codegen_host.*
 │   └── lib/recomp-net/         # nested submodule (netplay)
 ├── recomp-ui/                  # submodule → launcher UI
-├── generated/                  # local only — gitignore (not in CI setup zip)
+├── generated/                  # COMMITTED recompiled game C — release CI builds it
 └── disc/                       # local disc working tree — gitignore
 ```
 
-Minimal `CMakeLists.txt` shape for a **setup-host** title (CI zip / first-run
-Generate & rebuild). Wizard is required whenever you ship
-`PSXRECOMP_FORCE_SETUP_HOST=ON` — without it the launcher never opens first-run.
+Minimal `CMakeLists.txt` shape. The wizard is the shipped game's first-run disc
+picker; `GEN_MARKER` / `GEN_FULL_GLOB` name the committed `generated/` C, which
+release CI requires (`-DPSXRECOMP_REQUIRE_GAME_C=ON`).
 
 ```cmake
 set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp")
@@ -407,12 +409,16 @@ After scaffold (or a manual clone):
    python3 psxrecomp/psxrecomp_cli.py generate \
      --config game.toml --project-root . --disc disc/game.cue
   ```
-5. **Build the playable runtime**:
+5. **Commit the generated C** — it is the release's input:
+  ```bash
+   git add generated && git commit -m "Regenerate game C"
+  ```
+6. **Build the playable runtime**:
   ```bash
    cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
    cmake --build build-release --target psx-runtime -j"$(nproc)"
   ```
-6. **Soak** — offline boot → LAN netplay → lobby. Tune `[runtime]` quirks only
+7. **Soak** — offline boot → LAN netplay → lobby. Tune `[runtime]` quirks only
   after you have evidence (see MotK `game.toml` comments for the pattern).
 
 Details: `[LOCAL_CODEGEN_SDK.md](LOCAL_CODEGEN_SDK.md)`, `[BUILDING.md](BUILDING.md)`,
@@ -420,34 +426,24 @@ Details: `[LOCAL_CODEGEN_SDK.md](LOCAL_CODEGEN_SDK.md)`, `[BUILDING.md](BUILDING
 
 ---
 
-## Setup-host releases (self-build zip)
+## Bundled releases (compiled game zip)
 
-CI ships a zip **without** `generated/` game C, retail BIOS dumps, or an
-embedded `toolchain/`. The zip includes:
+CI builds the committed `generated/` C and ships a zip that is the game:
 
-- Setup host exe (`recomp-ui` + generate/rebuild wizard)
-- Your game sources (`game.toml`, seeds, CMake, host glue, …)
-- `psxrecomp/` (runtime + CLI + OpenBIOS profiles + emitters)
-- `recomp-ui/` sources (needed to rebuild)
-- On Windows: MinGW runtime DLLs beside the host and emitters
+- The game executable (signed on Windows when a certificate is configured)
+- `assets/`, `mods/bundled/` (catalog verified against the build's manifest),
+  `game.toml` / `game_options.toml`
+- `bios/openbios.bin` + its MIT notice — the release runs on OpenBIOS
+- `overlay_toolchain/` so overlays outside the compiled static shard can be
+  turned native from the player's disc at runtime
+- `licenses/` (third-party notices), `README.txt`
 
-Players (or [Retro](https://github.com/RetroPortingToolKit/Retro-Launcher))
-run **Generate once** (wizard or Retro Build & Install) with a legal disc.
-Retro / the wizard download `cmake-clang-v1` from
-[retcomm-toolchains](https://github.com/RetroPortingToolKit/RetroPorting-Toolchains)
-(or accept an offline zip / `RETCOMM_TOOLCHAIN_DIR`). Pass
-`--embed-toolchain` to `package_setup_host.sh` only for special offline-first
-packs.
-
-### Player updates (after first Generate)
-
-| Action | Meaning |
-|--------|---------|
-| **Update** (Retro) | New setup-host zip → refresh source → cmake rebuild. Skips disc→C when `codegen-cache` fingerprints (ROM/BIOS/emitters) still match. |
-| **Generate & Rebuild** | Force regenerate game C from the disc, then rebuild. Use when emit inputs change or cache is wrong. |
-
-Ordinary host/UI releases do **not** require Generate & Rebuild. Details:
-[`ci/HOST_ONLY_RELEASES.md`](ci/HOST_ONLY_RELEASES.md). CI tip: leave the
+It contains **no** sources, emitters at the root, CLI, `psxrecomp/` or
+`recomp-ui/` tree, generated C, disc, or BIOS dump. Players (or
+[Retro](https://github.com/RetroPortingToolKit/Retro-Launcher)) extract it,
+pick their legal disc on first run, and play; an update is a raw zip extract
+over the previous one. Details and the exact CI steps:
+[`ci/BUNDLED_RELEASES.md`](ci/BUNDLED_RELEASES.md). CI tip: leave the
 `psxrecomp` gitlink pinned and use `reuse_cached_emitters` so release jobs skip
 rebuilding emitters when only host sources moved.
 
@@ -461,13 +457,14 @@ Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`
 | Tool                            | Role                                                     |
 | ------------------------------- | -------------------------------------------------------- |
 | `tools/ci/normalize_version.sh` | `vX.Y.Z` → `VERSION` / `TAG`                             |
-| `tools/ci/clear_generated.sh`   | Wipe `generated/` for setup-host CI                      |
+| `tools/ci/check_generated.sh`   | Committed game C present + tracked; no retail BIOS C     |
+| `tools/ci/generate_openbios.sh` | Emit the OpenBIOS backend in CI from the bundled image   |
 | `tools/ci/record_pins.sh`       | Log submodule SHAs                                       |
 | `tools/ci/build_emitters.sh`    | Build `psxrecomp-game` + `psxrecomp-bios`                |
-| `tools/fetch_toolchain.sh`      | Optional download/unpack (embed packs only)              |
-| `tools/stage_setup_sdk.sh`      | Emitters + OpenBIOS + optional `toolchain/` + MinGW DLLs |
+| `tools/fetch_toolchain.sh`      | Windows emitter build on the CI machine (never shipped)  |
 | `tools/bundle_mingw_dlls.sh`    | Windows runtime DLL copy                                 |
-| `tools/package_setup_host.sh`   | Full setup-host zip (title args)                         |
+| `tools/package_game_release.sh` | Bundled zip: compiled game + runtime data (title args)   |
+| `tools/release_stage.py`        | Mod catalog / overlay toolchain / overlay cache staging  |
 
 
 Composite actions (from the game repo after checkout):
@@ -502,16 +499,16 @@ powershell -File psxrecomp\tools\generate_ci.ps1
 
 It is the single-purpose face of Project Studio's `emit_ci_workflow`: the
 template comes from the project's own psxrecomp submodule, the zip prefix from
-`scripts/package_setup_release.sh` so CI uploads the zips the packager built,
+`scripts/package_release.sh` so CI uploads the zips the packager built,
 and an installed workflow is compared by step name -- `--check` exits 1 when
 it is missing or stale, and only `--force` overwrites one.
 
 The New Project Layout scaffold **copies and fills** this for you after
 submodules land:
 
-- `.github/workflows/release.yml` ← `docs/ci/templates/setup-release.yml`
+- `.github/workflows/release.yml` ← `docs/ci/templates/game-release.yml`
 (Linux x64, Windows x64, macOS arm64 + Intel)
-- `scripts/package_setup_release.sh` ← zip prefix / exe / display name
+- `scripts/package_release.sh` ← zip prefix / exe / display name
 
 `--exe-name` / `codegen_setup.exe_basename` should match CMake `OUTPUT_NAME`
 (`MAKE_C_IDENTIFIER(WINDOW_TITLE)`, e.g. `TwistedMetal4_Recompiled`), not the
@@ -538,16 +535,16 @@ Manual install (existing repos):
 
 ```bash
 mkdir -p .github/workflows scripts
-cp psxrecomp/docs/ci/templates/setup-release.yml .github/workflows/release.yml
+cp psxrecomp/docs/ci/templates/game-release.yml .github/workflows/release.yml
 # replace YOUR_ZIP_PREFIX / YOUR_GAME_TITLE / yourgame-release
-# add scripts/package_setup_release.sh (see MotK / BPE)
+# add scripts/package_release.sh (fill tools/new_project_layout/templates/package_release.sh.in)
 ```
 
 Or re-run token fill against the submodule template:
 
 ```bash
 python3 psxrecomp/tools/new_project_layout/fill_tokens.py \
-  psxrecomp/docs/ci/templates/setup-release.yml \
+  psxrecomp/docs/ci/templates/game-release.yml \
   .github/workflows/release.yml \
   --ci-placeholders \
   --set ZIP_PREFIX=mygame \
@@ -560,8 +557,7 @@ Full action reference: `[ci/README.md](ci/README.md)`.
 
 ## Bundled release checklist
 
-Use this before tagging a setup-host release that matches other titles
-(BPE / MotK / Retro).
+Use this before tagging a release.
 
 ### Repository
 
@@ -584,73 +580,52 @@ Use this before tagging a setup-host release that matches other titles
   ```
   `VERSION` matches the release you will tag
   ```
-- [ ] Disc images, `generated/`, BIOS, logs, and runtime dumps are gitignored
-  ```
-  (scaffold writes a rich `.gitignore`; see also `docs/ci/templates/game.gitignore`)
-  ```
+- [ ] Disc images, BIOS, logs, and runtime dumps are gitignored; `generated/`
+  is **not** (scaffold writes a rich `.gitignore`; see also
+  `docs/ci/templates/game.gitignore`)
+- [ ] `generated/<boot>_dispatch.c` + `_full_*.c` (+ `overlays_static*.c` when
+  the AOT profile declares it) are committed and current for the pinned
+  framework (`tools/ci/check_generated.sh` passes locally)
+- [ ] No `generated/SCPH*` anywhere (retail-BIOS-derived C never ships)
 - [ ] Submodule gitlinks (`psxrecomp` / `recomp-ui` / nested `recomp-net`) are
   ```
   the SHAs you intend to ship (CI builds those; `record_pins.sh` only logs)
   ```
-- [ ] Setup-host CMake path builds with **no** game C and **no** BIOS backends
-  ```
-  CI: `-DPSXRECOMP_FORCE_SETUP_HOST=ON -DPSXRECOMP_ALLOW_NO_BIOS=ON
-  -DPSX_SETUP_WIZARD=ON` (CMakeLists must also set `PSX_SETUP_WIZARD` /
-  `ENABLE_SETUP_WIZARD` — FORCE_SETUP_HOST alone does not open the wizard;
-  `psxrecomp_add_game_runtime` FATAL_ERRORs if FORCE_SETUP_HOST is on without
-  the wizard). clear_generated.sh wipes OpenBIOS C; users Generate via wizard.
-  ```
+- [ ] Full build configures from the committed C: CI passes
+  `-DPSXRECOMP_REQUIRE_GAME_C=ON -DPSX_SETUP_WIZARD=ON` and asserts the
+  configure log says `linking generated game C (full runtime)` and
+  `BIOS backends linked: OpenBIOS`
+- [ ] `[runtime] overlay_cache = true` in `game.toml` (the packager refuses
+  otherwise)
 - [ ] Thin `codegen_setup.c` + `psxrecomp_add_game_runtime` (codegen host is in
-  ```
   `psxrecomp/host/`). Must export `psx_game_codegen_forward_if_built` (see
-  `codegen_setup.c.in`) — setup-host CI links `main.cpp`, which always calls it.
-  ```
+  `codegen_setup.c.in`) — `main.cpp` always calls it; in a full build it is a
+  no-op
 
 ### Packaging (shared helpers)
 
-- [ ] CI uses `./psxrecomp/.github/actions/build-emitters`
-- [ ] Packager calls `psxrecomp/tools/package_setup_host.sh` (lean zip by
-  ```
-  default; optional `--embed-toolchain`) or `stage_setup_sdk.sh` after a
-  custom stage
-  ```
-- [ ] Staged tree includes `psxrecomp/psxrecomp_cli.py`
-- [ ] Staged `psxrecomp/bios/` has `OpenBIOS.toml`, `openbios.bin`,
-  ```
-  `OpenBIOS.LICENSE`, `SCPH1001.toml` — and **no** retail `.BIN`
-  ```
-- [ ] Windows zip has `libstdc++-6.dll` + `libgcc_s_seh-1.dll` next to both
-  ```
-  emitters (and host deps such as `zlib1.dll` next to the exe)
-  ```
-- [ ] Zip mtimes are normalized (packager `touch`) so Ninja does not see
-  ```
-  “future” files after extract
-  ```
+- [ ] CI uses `./psxrecomp/.github/actions/build-emitters` (OpenBIOS emission
+  and the shipped overlay toolchain need them)
+- [ ] `scripts/package_release.sh` calls `psxrecomp/tools/package_game_release.sh`
+- [ ] Staged tree has the game exe, `psx_game_version.txt`, `assets/`,
+  `mods/bundled/`, `game.toml`, `bios/openbios.bin` + `OpenBIOS.LICENSE`,
+  `overlay_toolchain/`, `licenses/` — and **no** `psxrecomp/`, `recomp-ui/`,
+  CLI, root-level emitters, sources, generated C, retail `.BIN`
+- [ ] Windows zip has the runtime DLLs the exe imports beside it
+  (`bundle_mingw_dlls.sh`), signed when a certificate is configured
 
 ### Zip contents smoke test
 
 - [ ] Linux / macOS / Windows artifacts named consistently
-  ```
   (`YOUR_PREFIX-<ver>-<linux-x64|windows-x64|macos-arm64|macos-x64>.zip`)
-  ```
-- [ ] Extract → run host → Generate with a legal disc succeeds end-to-end
-- [ ] After rebuild, game launches; saves/settings land beside the exe
+- [ ] Extract → run → pick a legal disc → the game boots; saves/settings land
+  beside the exe
 - [ ] Retro install/update (if you publish a catalog entry) uses this **same**
-  ```
-  zip — no separate tools pack required; Update rebuilds via codegen-cache
-  (not raw zip extract over a Play binary)
-  ```
-- [ ] Release notes: first Generate once; later Updates are host/UI rebuilds
-  ```
-  unless emitters/ROM/BIOS fingerprints change (see ci/HOST_ONLY_RELEASES.md)
-  ```
+  zip as a prebuilt Play binary (raw zip extract; no build step)
 
 ### Publish
 
 - [ ] Tag `vX.Y.Z`; GitHub Release attaches all four platform zips
-- [ ] Release notes say the zip is a setup host (no disc / no retail BIOS /
-  ```
-  no pre-generated game C)
-  ```
+- [ ] Release notes say the zip is the compiled game: bring your own disc,
+  no BIOS, no build
 - [ ] Catalog / Retro entry points at the release assets when ready

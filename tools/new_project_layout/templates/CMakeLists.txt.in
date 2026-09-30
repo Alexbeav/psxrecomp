@@ -13,8 +13,9 @@ project(@PROJECT_CMAKE_NAME@ LANGUAGES C CXX)
 
 # --- Opt-in product surfaces (OFF by default in the framework) -------------
 # Scaffold prompts / flags fill these. Without recomp-ui, PSX_RECOMP_UI is OFF.
-# Setup-host CI requires WIZARD_CMAKE_BLOCK / ENABLE_SETUP_WIZARD (FORCE_SETUP_HOST
-# alone does not open first-run / Generate & rebuild).
+# The wizard (WIZARD_CMAKE_BLOCK / ENABLE_SETUP_WIZARD) is the first-run disc
+# picker; releases are compiled from the committed generated/ C, so it never
+# needs to generate or rebuild anything on a player's machine.
 @RECOMP_UI_CMAKE_BLOCK@
 @NETPLAY_CMAKE_BLOCK@
 @WIZARD_CMAKE_BLOCK@
@@ -40,6 +41,9 @@ psxrecomp_add_game_runtime(psx-runtime
     MAX_PLAYERS @PLAYERS@
 @BOXART_CMAKE_ARG@
 @APP_ICON_CMAKE_ARG@
+    # Committed game C (psxrecomp_cli.py generate; git add generated). Release
+    # CI configures with -DPSXRECOMP_REQUIRE_GAME_C=ON so a checkout without
+    # it fails instead of building a setup host.
     GEN_MARKER "generated/@BOOT_EXE@_dispatch.c"
     GEN_FULL_GLOB "generated/@BOOT_EXE@_full_*.c"
 @CODEGEN_SETUP_ARG@

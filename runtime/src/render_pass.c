@@ -64,6 +64,7 @@ extern void   (*g_overlay_flush_pending_cycles)(void);
 /* Host nesting that runtime frames set on entry and put back on exit. */
 extern int      g_call_unit_depth;        /* overlay_loader_call_native */
 extern int      g_dma_exec_depth;         /* dma.c kick / async writes */
+extern int      g_host_store_depth;       /* memory.c psx_host_write_* */
 extern int      g_dma_cur_ch;
 extern uint32_t g_dma_cur_madr;
 extern uint32_t g_dma_cur_bcr;
@@ -99,7 +100,7 @@ extern void     mdec_snapshot_write(uint8_t *p);
  * pass that returns normally all of it is already balanced. */
 typedef struct RenderPassNesting {
     int      call_unit_depth;
-    int      dma_exec_depth, dma_cur_ch;
+    int      dma_exec_depth, dma_cur_ch, host_store_depth;
     uint32_t dma_cur_madr, dma_cur_bcr, dma_initiator_pc;
     int      dirty_interp_active, exec_phase, precise_mode;
     uint32_t dirty_safe_resume_pc;
@@ -112,6 +113,7 @@ typedef struct RenderPassNesting {
 static void nesting_save(RenderPassNesting *n) {
     n->call_unit_depth = g_call_unit_depth;
     n->dma_exec_depth = g_dma_exec_depth;
+    n->host_store_depth = g_host_store_depth;
     n->dma_cur_ch = g_dma_cur_ch;
     n->dma_cur_madr = g_dma_cur_madr;
     n->dma_cur_bcr = g_dma_cur_bcr;
@@ -128,6 +130,7 @@ static void nesting_save(RenderPassNesting *n) {
 static void nesting_restore(const RenderPassNesting *n) {
     g_call_unit_depth = n->call_unit_depth;
     g_dma_exec_depth = n->dma_exec_depth;
+    g_host_store_depth = n->host_store_depth;
     g_dma_cur_ch = n->dma_cur_ch;
     g_dma_cur_madr = n->dma_cur_madr;
     g_dma_cur_bcr = n->dma_cur_bcr;
@@ -150,6 +153,7 @@ static int nesting_balanced(const RenderPassNesting *n) {
     nesting_save(&now);
     return now.call_unit_depth == n->call_unit_depth &&
            now.dma_exec_depth == n->dma_exec_depth &&
+           now.host_store_depth == n->host_store_depth &&
            now.dirty_interp_active == n->dirty_interp_active &&
            now.exec_phase == n->exec_phase &&
            now.precise_mode == n->precise_mode &&
@@ -182,6 +186,8 @@ static int nesting_describe(const RenderPassNesting *n, int bb_defer_ck,
     RP_NOTE(now.ov_flush != n->ov_flush, "shard cycle hook");
     RP_NOTE(now.dma_exec_depth != n->dma_exec_depth, "DMA depth %+d",
             now.dma_exec_depth - n->dma_exec_depth);
+    RP_NOTE(now.host_store_depth != n->host_store_depth, "host store depth %+d",
+            now.host_store_depth - n->host_store_depth);
     RP_NOTE(now.dirty_interp_active != n->dirty_interp_active, "interpreter flag");
     RP_NOTE(now.precise_mode != n->precise_mode, "precise flag");
     RP_NOTE(now.exec_phase != n->exec_phase, "exec phase %d->%d",
