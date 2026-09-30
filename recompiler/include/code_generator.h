@@ -333,9 +333,30 @@ public:
     // Set annotation table (optional — no-op if not called)
     void set_annotations(const AnnotationTable* at) { annotations_ = at; }
 
+    // The segment this compile's code executes in (docs/SEGMENT_AWARE_CODE.md
+    // §5.2): KUSEG 0x00000000, KSEG0 0x80000000 or KSEG1 0xA0000000. Every
+    // program counter the emitter bakes into guest-visible state goes through
+    // runtime_pc(): link values, fetch tags (and the uncached-fetch test),
+    // interrupt resume PCs (future EPCs), CPS exit PCs and continuation keys,
+    // store-PC stamps, the reserved-instruction EPC, the slice resume PC and
+    // dispatch rows. Identity keys (func_/block_ names, .ranges, entry-hook
+    // ids) keep the compile address. The default is the segment of the
+    // image's load address, so runtime_pc(addr) == addr for every address in
+    // the image and the output is byte-identical to the pre-segment emitter.
+    // The EXE parser folds KUSEG headers to KSEG0 (until §5.3), so today that
+    // default is KSEG0 for every executable title.
+    static constexpr uint32_t kSegmentMask = 0xE0000000u;
+    static constexpr uint32_t kPhysMask = 0x1FFFFFFFu;
+    void set_code_segment(uint32_t seg) { code_seg_ = seg & kSegmentMask; }
+    uint32_t code_segment() const { return code_seg_; }
+    uint32_t runtime_pc(uint32_t compile_addr) const {
+        return code_seg_ | (compile_addr & kPhysMask);
+    }
+
 private:
     const PS1Executable& exe_;
     CodeGenConfig config_;
+    uint32_t code_seg_;  // set from the image in the constructor; see set_code_segment()
     std::set<uint32_t> known_functions_;  // Addresses of functions in this compilation unit
     std::string last_ranges_manifest_;
     std::set<uint32_t> extra_labels_;    // Mid-block addresses that need inline labels (jump table targets)

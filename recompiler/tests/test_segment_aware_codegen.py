@@ -58,6 +58,14 @@ KNOWN_GAPS = {
     "kseg1-fetch-charge": ("5.6", "compiled KSEG1 code does not charge +4 per fetch"),
 }
 
+# Closed ids that stay as regression guards: each reports a new gap if the
+# property breaks again. id -> design section.
+REGRESSION_GUARDS = {
+    "bios-kseg1-fetch-charge": "5.6",   # PR A (#429)
+    "bios-runtime-pc": "5.2",           # PR B: BIOS PCs handed to the runtime
+    "store-pc-keys-runtime": "9",       # PR B: memory.c keys re-keyed
+}
+
 
 def load_generator():
     path = os.path.join(ROOT, "tools", "segment_testrom", "gen_segment_exe.py")
@@ -261,6 +269,82 @@ def bios_uncharged_kseg1(bios_c):
     return total, uncharged
 
 
+def copy_windows(profile):
+    """(rom_lo, rom_hi, runtime_base, name) of a BIOS profile's relocated copy
+    windows; ROM ranges are [lo, hi).
+
+    A regex, not tomllib, so the test runs on any Python 3 the build has.
+    """
+    with open(profile) as f:
+        text = f.read()
+    out = []
+    for block in text.split("[[recompiler.address_model.copy]]")[1:]:
+        lo = re.search(r'^rom_lo\s*=\s*"(0x[0-9A-Fa-f]+)"', block, re.M)
+        hi = re.search(r'^rom_hi\s*=\s*"(0x[0-9A-Fa-f]+)"', block, re.M)
+        rt = re.search(r'^runtime_base\s*=\s*"(0x[0-9A-Fa-f]+)"', block, re.M)
+        name = re.search(r'^name\s*=\s*"([^"]*)"', block, re.M)
+        if lo and hi and rt:
+            out.append((int(lo.group(1), 16), int(hi.group(1), 16),
+                        int(rt.group(1), 16), name.group(1) if name else "?"))
+    return out
+
+
+def in_rom_window(pc, windows):
+    phys = pc & PHYS_MASK
+    return any(lo <= phys < hi for lo, hi, _, _ in windows)
+
+
+def in_runtime_window(pc, windows):
+    return any(rt <= pc < rt + (hi - lo) for lo, hi, rt, _ in windows)
+
+
+def window_runtime_pc(rom, windows):
+    """BiosAddressModel::runtime_pc: a ROM PC inside a copy window runs at
+    runtime_base + its offset; None outside every window."""
+    phys = rom & PHYS_MASK
+    for lo, hi, rt, _ in windows:
+        if lo <= phys < hi:
+            return rt + (phys - lo)
+    return None
+
+
+# PCs the BIOS emitter hands the runtime (§5.2). A relocated window runs at its
+# RAM address, so none of these may name a ROM address inside a copy window.
+BIOS_PC_SITES = {
+    "store-pc": r"g_debug_last_store_pc = 0x([0-9A-F]{8})u;",
+    "syscall-epc": r"cpu->pc = 0x([0-9A-F]{8})u; (?:if \()?psx_syscall",
+    "break-pc": r"psx_break\(cpu, 0x[0-9A-F]+u, 0x([0-9A-F]{8})u\)",
+    "unaligned-pc": r"psx_unaligned_access\(cpu, psx_addr, 0x([0-9A-F]{8})u\)",
+    "fallthrough-pc": r"cpu->pc = 0x([0-9A-F]{8})u; return;  /\* fallthrough \*/",
+}
+
+
+def bios_rom_pcs(bios_c, windows):
+    """{site: (sites seen, ROM-window PCs)} over the emitted BIOS."""
+    out = {}
+    for site, pattern in BIOS_PC_SITES.items():
+        vals = [int(v, 16) for v in re.findall(pattern, bios_c)]
+        out[site] = (len(vals), sorted({v for v in vals if in_rom_window(v, windows)}))
+    return out
+
+
+def memory_c_store_pc_keys():
+    """runtime/src/memory.c's store-PC keys: (raw keys, gated pairs).
+
+    Raw keys are compared with g_debug_last_store_pc directly. Gated pairs are
+    scph1001_relocated_store(pc, rom) calls: keys for relocated SCPH-1001 code,
+    which match only while that ROM instruction is what sits at pc.
+    """
+    with open(os.path.join(RUNTIME, "src", "memory.c")) as f:
+        text = f.read()
+    keys = [int(v, 16) for v in re.findall(r"g_debug_last_store_pc == 0x([0-9A-F]{8})u", text)]
+    for body in re.findall(r"switch \(g_debug_last_store_pc\) \{(.*?)\n\s*\}", text, re.S):
+        keys += [int(v, 16) for v in re.findall(r"case 0x([0-9A-F]{8})u:", body)]
+    gated = [(int(pc, 16), int(rom, 16)) for pc, rom in re.findall(
+        r"scph1001_relocated_store\(0x([0-9A-F]{8})u, 0x([0-9A-F]{8})u\)", text)]
+    return keys, gated
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--recompiler",
@@ -410,22 +494,78 @@ def main():
             notes["alias-fetch-coherence"] = "emitted %s, Beetle %d" % (got, want)
 
     # -- 5: the BIOS emitter charges every KSEG1 (ROM) fetch ------------------
+    openbios_toml = os.path.join(ROOT, "bios", "OpenBIOS.toml")
     with tempfile.TemporaryDirectory() as tmp:
-        run_recompiler(args.bios_recompiler,
-                       ["--config", os.path.join(ROOT, "bios", "OpenBIOS.toml"), "--out-dir", tmp])
+        run_recompiler(args.bios_recompiler, ["--config", openbios_toml, "--out-dir", tmp])
         with open(os.path.join(tmp, "OpenBIOS_full.c")) as f:
-            total, uncharged = bios_uncharged_kseg1(f.read())
+            bios_c = f.read()
+    total, uncharged = bios_uncharged_kseg1(bios_c)
     if total == 0:
         model_fail.append("OpenBIOS: no KSEG1 instructions found (parser drift?)")
     elif uncharged:
         gaps.add("bios-kseg1-fetch-charge")
         notes["bios-kseg1-fetch-charge"] = "%d of %d KSEG1 instructions uncharged" % (uncharged, total)
 
+    # -- 5.2: the BIOS emitter hands the runtime runtime PCs, not ROM ones ---
+    # Closed by PR B, kept as a regression guard: a store-PC stamp, syscall
+    # EPC, break/unaligned PC or fallthrough PC naming a ROM address inside a
+    # relocated window reports the id again.
+    windows = copy_windows(openbios_toml)
+    if not windows:
+        model_fail.append("OpenBIOS.toml: no copy windows parsed")
+    rom_pcs = bios_rom_pcs(bios_c, windows)
+    if not rom_pcs["store-pc"][0] or not rom_pcs["syscall-epc"][0]:
+        model_fail.append("OpenBIOS: no store-PC or syscall sites found (parser drift?)")
+    leaked = {k: v[1] for k, v in rom_pcs.items() if v[1]}
+    # The output only shows the translations OpenBIOS exercises: most of the
+    # orphaned-delay-slot paths never inline a PC-bearing instruction there.
+    # So every StrictTranslator::translate() call in the full-function
+    # emitter must also pass the runtime PC (relocate_ra).
+    with open(os.path.join(ROOT, "recompiler", "src", "full_function_emitter.cpp")) as f:
+        calls = re.findall(r"StrictTranslator::translate\(([^;]*?)\);", f.read())
+    if not calls:
+        model_fail.append("full_function_emitter.cpp: no StrictTranslator::translate calls found")
+    unrouted = [c for c in calls if "relocate_ra(" not in c]
+    if leaked or unrouted:
+        gaps.add("bios-runtime-pc")
+        parts = ["%d %s, e.g. 0x%08X" % (len(v), k, v[0]) for k, v in sorted(leaked.items())]
+        if unrouted:
+            parts.append("%d emitter translate() calls without a runtime PC, e.g. (%s)"
+                         % (len(unrouted), unrouted[0]))
+        notes["bios-runtime-pc"] = "; ".join(parts)
+
+    # -- 9: memory.c store-PC keys are runtime PCs ---------------------------
+    # The keys name SCPH-1001 stores. A key inside one of its relocated ROM
+    # windows can only match a ROM-address stamp, which no backend makes. A
+    # key for relocated code must be the runtime PC of its ROM store
+    # (BiosAddressModel::runtime_pc) and go through the gated helper: a raw
+    # RAM key would also match other BIOSes and game code at that address.
+    scph_windows = copy_windows(os.path.join(ROOT, "bios", "SCPH1001.toml"))
+    keys, gated = memory_c_store_pc_keys()
+    if not keys or not gated or not scph_windows:
+        model_fail.append("memory.c store-PC keys or SCPH1001.toml windows not parsed")
+    bad = sorted({k for k in keys if in_rom_window(k, scph_windows)})
+    bad += sorted({pc for pc, _ in gated if in_rom_window(pc, scph_windows)})
+    raw_ram = sorted({k for k in keys if in_runtime_window(k, scph_windows)})
+    mismatched = sorted((pc, rom) for pc, rom in gated
+                        if window_runtime_pc(rom, scph_windows) != pc)
+    if bad or raw_ram or mismatched:
+        gaps.add("store-pc-keys-runtime")
+        parts = []
+        if bad:
+            parts.append("%d ROM-address keys, e.g. 0x%08X" % (len(bad), bad[0]))
+        if raw_ram:
+            parts.append("%d ungated relocated-code keys, e.g. 0x%08X" % (len(raw_ram), raw_ram[0]))
+        if mismatched:
+            parts.append("%d keys that are not their ROM store's runtime PC, e.g. "
+                         "0x%08X for 0x%08X" % (len(mismatched), mismatched[0][0], mismatched[0][1]))
+        notes["store-pc-keys-runtime"] = "; ".join(parts)
+
     known = set(KNOWN_GAPS)
     print("segment-aware codegen ledger (docs/SEGMENT_AWARE_CODE.md):")
     for gid in sorted(known | gaps):
         state = ("gap" if gid in gaps else "closed")
-        sec = KNOWN_GAPS.get(gid, ("?", ""))[0]
+        sec = KNOWN_GAPS.get(gid, (REGRESSION_GUARDS.get(gid, "?"), ""))[0]
         print("  %-24s %-6s section %-4s %s" % (gid, state, sec, notes.get(gid, "")))
     for msg in model_fail:
         print("  MODEL FAIL: " + msg)
