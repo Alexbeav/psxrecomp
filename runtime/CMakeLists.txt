@@ -500,6 +500,20 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(keyboard_pad_chord_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME keyboard_pad_chord_test COMMAND keyboard_pad_chord_test)
 
+    # GunCon controls in keybinds.ini [guncon] (PS1B-305).
+    add_executable(guncon_keybinds_test
+        tests/test_guncon_keybinds.c
+        src/psx_keybinds.c)
+    target_include_directories(guncon_keybinds_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(guncon_keybinds_test PRIVATE
+        SDL_MAIN_HANDLED
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(guncon_keybinds_test PRIVATE ${PSX_SDL_LIBRARIES})
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/guncon_keybinds)
+    add_test(NAME guncon_keybinds_test
+        COMMAND guncon_keybinds_test ${CMAKE_CURRENT_BINARY_DIR}/guncon_keybinds)
+
     # Generic external replacement-pack core. The renderer integration is a
     # separate consumer; this target pins pack discovery, deterministic keying,
     # VRAM residency, portable tracking state, and bounded asynchronous decode.
