@@ -892,8 +892,11 @@ if(BUILD_TESTING)
         # directories too, so a new one fails configure until it is listed.
         # test_psx_chd skips its decode cases unless a shared libchdr is found
         # (PSXRECOMP_LIBCHDR); its container/selection cases always run.
+        # test_bundled_release_layout pins the bundled-release contract (CI
+        # template, scaffold, check_generated.sh, Project Studio audit/ops).
         foreach(_t IN ITEMS
                 aligned_lzss_banks
+                bundled_release_layout
                 collect_game_misses
                 cursor_writers
                 disc_companion

@@ -907,7 +907,7 @@ def bulk_install_ci(
     jobs: int = 1,
     on_repo: OnRepoResults | None = None,
 ) -> list[CmdResult]:
-    """Install/push setup-host ``release.yml`` on each selected game repo."""
+    """Install/push the bundled ``release.yml`` on each selected game repo."""
     from fill_tokens import derive_zip_prefix
 
     def one(label: str, root: Path) -> list[CmdResult]:

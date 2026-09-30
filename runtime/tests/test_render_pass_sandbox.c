@@ -56,6 +56,7 @@ uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
 void   (*g_overlay_flush_pending_cycles)(void) = NULL;
 int      g_call_unit_depth = 0;
 int      g_dma_exec_depth = 0;
+int      g_host_store_depth = 0;
 int      g_dma_cur_ch = -1;
 uint32_t g_dma_cur_madr = 0, g_dma_cur_bcr = 0, g_dma_initiator_pc = 0;
 int      g_dirty_interp_active = 0;

@@ -1634,7 +1634,7 @@ irq_deliver_eval:
             g_exc_escape_reason  = PSX_EXC_ESCAPE_NONE; /* set at the actual RFE/SYSCALL return */
         } else {
             uint32_t sentinel = PSX_EXC_SENTINEL_PC;
-            cpu->write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
+            psx_host_write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
             cpu->cop0[COP0_EPC]  = sentinel;
             g_exception_real_epc = sentinel;
             g_exc_escape_reason  = PSX_EXC_ESCAPE_LEGACY_SENTINEL;

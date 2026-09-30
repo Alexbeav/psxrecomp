@@ -23,6 +23,18 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    # Netplay: which BIOS a match boots, and its wire helpers.
+    add_executable(netplay_bios_settle_test
+        tests/test_netplay_bios_settle.c
+        src/netplay_bios_settle.c)
+    target_include_directories(netplay_bios_settle_test PRIVATE include)
+    add_test(NAME netplay_bios_settle_test COMMAND netplay_bios_settle_test)
+    # Netplay: why a match ended, and when a boot-digest mismatch is final.
+    add_executable(netplay_exit_reason_test
+        tests/test_netplay_exit_reason.c
+        src/netplay_exit_reason.c)
+    target_include_directories(netplay_exit_reason_test PRIVATE include)
+    add_test(NAME netplay_exit_reason_test COMMAND netplay_exit_reason_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
@@ -34,6 +46,22 @@ if(BUILD_TESTING)
     add_executable(mod_session_baseline_test tests/test_mod_session_baseline.c)
     target_include_directories(mod_session_baseline_test PRIVATE include)
     add_test(NAME mod_session_baseline_test COMMAND mod_session_baseline_test)
+    # Netplay: libjuice resolves from third_party/ with the network sealed,
+    # and a recomp-net pinning another libjuice stops the configure.
+    foreach(_psx_juice_case same other)
+        add_test(NAME netplay_libjuice_offline_${_psx_juice_case}
+            COMMAND ${CMAKE_COMMAND}
+                -S "${CMAKE_CURRENT_SOURCE_DIR}/tests/netplay_libjuice_offline"
+                -B "${CMAKE_CURRENT_BINARY_DIR}/netplay_libjuice_offline_${_psx_juice_case}"
+                -G "${CMAKE_GENERATOR}"
+                "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+                -DPSX_DEPS_OFFLINE=ON
+                "-DFAKE_RECOMP_NET=${CMAKE_CURRENT_SOURCE_DIR}/tests/netplay_libjuice_offline/recomp-net-${_psx_juice_case}")
+        set_tests_properties(netplay_libjuice_offline_${_psx_juice_case} PROPERTIES
+            ENVIRONMENT "HTTP_PROXY=http://127.0.0.1:9;HTTPS_PROXY=http://127.0.0.1:9;ALL_PROXY=http://127.0.0.1:9;NO_PROXY=")
+    endforeach()
+    set_tests_properties(netplay_libjuice_offline_other PROPERTIES
+        PASS_REGULAR_EXPRESSION "recomp-net pins libjuice SHA256")
     if(NOT MSVC)
         add_executable(ws_world_scene_test tests/test_ws_world_scene.c
             src/psx_video_timing.c)
@@ -211,6 +239,29 @@ if(BUILD_TESTING)
             -flto -Wl,--gc-sections -Wno-lto-type-mismatch)
         target_link_libraries(psx_ram_runtime_map_test PRIVATE ZLIB::ZLIB)
         add_test(NAME psx_ram_runtime_map_test COMMAND psx_ram_runtime_map_test)
+
+        # Cache-isolated (SR.IsC) CPU stores through the REAL memory.c store
+        # paths and the REAL psx_icache.c tag model, against Beetle's
+        # WriteMemory IsC branch: FlushCache invalidation, tag-test valid bits,
+        # the D-cache scratchpad write, the BIU and DMA exclusions. Same link
+        # doubles as psx_ram_runtime_map_test, minus the I-cache ones.
+        add_executable(isc_store_test
+            tests/test_isc_store.c
+            tests/psx_ram_runtime_map_stubs.c
+            src/memory.c
+            src/dma.c
+            src/boot_state.c
+            src/psx_icache.c
+            src/psx_ram_geometry.c)
+        target_include_directories(isc_store_test PRIVATE include src)
+        target_compile_definitions(isc_store_test PRIVATE
+            PSX_ENABLE_BLOCK_CYCLES=1 PSX_STUBS_REAL_ICACHE=1)
+        target_compile_options(isc_store_test PRIVATE
+            -O2 -flto -ffunction-sections -fdata-sections -Wno-lto-type-mismatch)
+        target_link_options(isc_store_test PRIVATE -flto -Wno-lto-type-mismatch
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+        target_link_libraries(isc_store_test PRIVATE ZLIB::ZLIB)
+        add_test(NAME isc_store_test COMMAND isc_store_test)
     endif()
 
     add_executable(host_keymap_test
@@ -326,8 +377,7 @@ if(BUILD_TESTING)
         target_compile_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
             -ffunction-sections -fdata-sections)
         target_link_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
-            -Wl,--gc-sections
-            -Wl,--error-limit=0)
+            -Wl,--gc-sections)
     endif()
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
@@ -758,7 +808,8 @@ if(BUILD_TESTING)
             # is needed and none can drift from what the runtime links.
             target_sources(lobby_chat_ring_test PRIVATE
                 "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_ws.c"
-                "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_sha1.c")
+                "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_sha1.c"
+                "${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c")
             target_link_libraries(lobby_chat_ring_test PRIVATE recomp_net)
             add_test(NAME lobby_chat_ring_test COMMAND lobby_chat_ring_test)
         endif()

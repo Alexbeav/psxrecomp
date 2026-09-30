@@ -50,9 +50,9 @@ static void case_room_order(void)
     memset(&g_lc, 0, sizeof(g_lc));
     snprintf(g_lc.player_id, sizeof(g_lc.player_id), "%s", "me");
 
-    chat_push("them", "Them", "first", 0);
-    chat_push("me",   "Me",   "second", 0);
-    chat_push("",     "",     "third", 1);
+    chat_push("them", "Them", "first", NULL, NULL, 0);
+    chat_push("me",   "Me",   "second", NULL, NULL, 0);
+    chat_push("",     "",     "third", NULL, NULL, 1);
 
     ck(psx_lobby_chat_count() == 3, "three lines land");
     ck(psx_lobby_chat_get(0, &got) && strcmp(got.text, "first") == 0,
@@ -90,7 +90,7 @@ static void case_wrap_drops_oldest(void)
      * what was just said is worse than no chat at all. */
     for (i = 0; i < PSX_LOBBY_CHAT_RING + 10; ++i) {
         snprintf(buf, sizeof(buf), "line%d", i);
-        chat_push("them", "Them", buf, 0);
+        chat_push("them", "Them", buf, NULL, NULL, 0);
     }
     ck(psx_lobby_chat_count() == PSX_LOBBY_CHAT_RING,
        "the ring stops at its capacity");
@@ -109,11 +109,11 @@ static void case_empty_and_clear(void)
     printf("  empty/clear\n");
     memset(&g_lc, 0, sizeof(g_lc));
 
-    chat_push("them", "Them", "", 0);
-    chat_push("them", "Them", NULL, 0);
+    chat_push("them", "Them", "", NULL, NULL, 0);
+    chat_push("them", "Them", NULL, NULL, NULL, 0);
     ck(psx_lobby_chat_count() == 0, "an empty line is not a line");
 
-    chat_push("them", "Them", "hello", 0);
+    chat_push("them", "Them", "hello", NULL, NULL, 0);
     ck(psx_lobby_chat_count() == 1, "a real line is");
     (void)psx_lobby_chat_get(0, &m);
     before = m.seq;
@@ -121,7 +121,7 @@ static void case_empty_and_clear(void)
     psx_lobby_chat_clear();
     ck(psx_lobby_chat_count() == 0, "clear empties the room log");
 
-    chat_push("them", "Them", "new room", 0);
+    chat_push("them", "Them", "new room", NULL, NULL, 0);
     (void)psx_lobby_chat_get(0, &m);
     /* seq must NOT restart. A UI tracking "newest seen" would otherwise
      * mistake the first line of a new room for one it had already scrolled
@@ -138,7 +138,7 @@ static void case_long_line_is_truncated_not_dropped(void)
     memset(big, 'x', sizeof(big) - 1);
     big[sizeof(big) - 1] = '\0';
 
-    chat_push("them", "Them", big, 0);
+    chat_push("them", "Them", big, NULL, NULL, 0);
     ck(psx_lobby_chat_count() == 1, "an over-long line still arrives");
     ck(psx_lobby_chat_get(0, &got), "and reads back");
     ck(strlen(got.text) == PSX_LOBBY_CHAT_TEXT_LEN - 1,

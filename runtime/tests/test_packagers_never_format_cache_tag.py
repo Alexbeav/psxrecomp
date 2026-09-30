@@ -104,7 +104,7 @@ SCANNED_NAMES = ('CMakeLists.txt',)
 
 SKIP_DIRS = {'.git', 'build', 'generated', 'node_modules', '__pycache__',
              'lib', '_deps', 'beetle-psx', 'recomp-ui', 'psxrecomp-v4',
-             'ghidra', 'seeds', 'assets'}
+             'ghidra', 'seeds', 'assets', 'overlay_toolchain'}
 
 # A release packager that touches the OVERLAY CACHE must route through the
 # framework's shared staging surface rather than reimplementing it. The
@@ -117,9 +117,26 @@ SKIP_DIRS = {'.git', 'build', 'generated', 'node_modules', '__pycache__',
 # but that is a separate change with a separate proof (macOS in particular
 # cannot be built or verified here), so this test does not pretend to cover it.
 PACKAGER_RE = re.compile(r'^package_.*\.(sh|ps1)$')
+# `overlay_cache` followed by `=` (in any grep/sed spelling of whitespace) is
+# the game.toml KEY `[runtime] overlay_cache = true`, which packagers gate on
+# (Wave-5 F4) without touching the cache itself, and `overlay_cache_...` is an
+# identifier continuing (SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE, the reason flag).
+# Neither is tag consumption.
 TAG_CONSUMER_RE = re.compile(
-    r'cg_?tag|CgTag|cache_tag|overlay_cache|overlay_toolchain', re.I)
+    r'cg_?tag|CgTag|cache_tag|overlay_cache(?!\w|(\[\[:space:\]\]|\\s|\s)*\*?=)|overlay_toolchain',
+    re.I)
 SHARED_SURFACE_RE = re.compile(r'release_overlay_stage|release_stage\.py')
+
+
+def check_consumer_detection():
+    # Config validation is not cache staging. Retain positive controls so the
+    # narrower heuristic cannot silently exempt real cache consumers.
+    assert not TAG_CONSUMER_RE.search('overlay_cache = true')
+    assert not TAG_CONSUMER_RE.search('${SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE}')
+    for example in ('${overlay_cache}', '$overlay_cache', '$Overlay_Cache',
+                    'overlay_cache/gcc', 'cache_tag()', '$CgTag', 'cg_tag=foo',
+                    'overlay_toolchain'):
+        assert TAG_CONSUMER_RE.search(example), example
 
 
 def _is_scanned(name):
@@ -172,6 +189,7 @@ def framework_root():
 
 
 def main(argv=None):
+    check_consumer_detection()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--root', action='append', default=[],
                     help='extra tree to check (repeatable). In an extra tree '

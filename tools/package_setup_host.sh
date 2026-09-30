@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# RETIRED (2026-09-30): setup-host zip packager. Public releases are bundled
+# (tools/package_game_release.sh ships the compiled game built from the
+# title's committed generated/ C; docs/ci/BUNDLED_RELEASES.md). Kept only for
+# a locally built self-compile kit; no release workflow calls it.
+#
 # Universal setup-host zip packager for PSXRecomp game repos.
 #
 # Stages the host exe, title sources, filtered psxrecomp/ + recomp-ui/, then
@@ -553,7 +558,7 @@ if [[ -f "${STAGE}/CMakeLists.txt" ]]; then
   if (( ${#missing_refs[@]} )); then
     echo "error: CMakeLists.txt references paths that are not staged in the zip:" >&2
     for r in "${missing_refs[@]}"; do echo "  - ${r}" >&2; done
-    echo "  add them via --project-file / --project-dir in scripts/package_setup_release.sh" >&2
+    echo "  add them via --project-file / --project-dir in the title's setup-host wrapper" >&2
     exit 1
   fi
 fi
@@ -597,7 +602,7 @@ done
 if (( ${#missing_incs[@]} )); then
   echo "error: staged project sources include files that are not in the zip:" >&2
   printf '  - %s\n' "${missing_incs[@]}" >&2
-  echo "  add them via --project-file / --project-dir in scripts/package_setup_release.sh" >&2
+  echo "  add them via --project-file / --project-dir in the title's setup-host wrapper" >&2
   exit 1
 fi
 
