@@ -2246,6 +2246,17 @@ static std::filesystem::path sidecar_cfg_path(const char* argv0, const char* fil
     return exe_dir_from_argv(argv0) / filename;
 }
 
+/* settings.toml and the bios.cfg / disc.cfg sidecars store paths inside the
+ * game folder relative to it (PS1B-252). Resolve them against the exe
+ * directory, never the working directory: a shortcut or frontend that starts
+ * the game elsewhere must still find its own cards, states and BIOS
+ * (PS1B-310). Absolute paths are returned unchanged; empty stays empty. */
+static std::filesystem::path anchor_on_exe_dir(const char* argv0,
+                                               const std::filesystem::path& p) {
+    if (p.empty()) return p;
+    return PSXRecompV4::host_resolve(exe_dir_from_argv(argv0), p);
+}
+
 static std::filesystem::path read_cached_path(const char* argv0, const char* filename) {
     std::ifstream f(sidecar_cfg_path(argv0, filename));
     if (!f.is_open()) return {};
@@ -2254,7 +2265,8 @@ static std::filesystem::path read_cached_path(const char* argv0, const char* fil
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
         line.pop_back();
     }
-    return line.empty() ? std::filesystem::path{} : std::filesystem::path(line);
+    return line.empty() ? std::filesystem::path{}
+                        : anchor_on_exe_dir(argv0, std::filesystem::path(line));
 }
 
 static void write_cached_path(const char* argv0, const char* filename,
@@ -14704,7 +14716,7 @@ int main(int argc, char** argv) {
             g_hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                 us.hotkey_pad_fast_forward_toggle, 0);
         if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
-            settings_bios_storage = us.bios_path.string();
+            settings_bios_storage = anchor_on_exe_dir(argv[0], us.bios_path).string();
             bios_path = settings_bios_storage.c_str();
             bios_explicit = true;
         }
@@ -14742,9 +14754,11 @@ int main(int argc, char** argv) {
                 if (idx >= 0) selected_disc_index = idx + 1;
             }
         }
-        if (us.has_memcard_dir)                      memcard_dir   = us.memcard_dir;
-        if (us.has_memcard1_path)    memcard1_path    = us.memcard1_path;
-        if (us.has_memcard2_path)    memcard2_path    = us.memcard2_path;
+        /* Relative [memcard] values anchor on the exe directory (PS1B-310);
+         * the save-state root and disc digest cache derive from memcard_dir. */
+        if (us.has_memcard_dir)   memcard_dir   = anchor_on_exe_dir(argv[0], us.memcard_dir);
+        if (us.has_memcard1_path) memcard1_path = anchor_on_exe_dir(argv[0], us.memcard1_path);
+        if (us.has_memcard2_path) memcard2_path = anchor_on_exe_dir(argv[0], us.memcard2_path);
         if (us.has_memcard1_enabled) memcard1_enabled = us.memcard1_enabled;
         if (us.has_memcard2_enabled) memcard2_enabled = us.memcard2_enabled;
         if (us.has_multitap_enabled) multitap_enabled = us.multitap_enabled;
@@ -16037,8 +16051,8 @@ int main(int argc, char** argv) {
                 }
                 memcard1_enabled = seed.memcard1_enabled;
                 memcard2_enabled = seed.memcard2_enabled;
-                if (seed.has_memcard1_path) memcard1_path = seed.memcard1_path;
-                if (seed.has_memcard2_path) memcard2_path = seed.memcard2_path;
+                if (seed.has_memcard1_path) memcard1_path = anchor_on_exe_dir(argv[0], seed.memcard1_path);
+                if (seed.has_memcard2_path) memcard2_path = anchor_on_exe_dir(argv[0], seed.memcard2_path);
                 if (seed.has_language) resolved_language = seed.language;
                 {
                     const int n = std::min(PSX_MAX_PLAYERS,
