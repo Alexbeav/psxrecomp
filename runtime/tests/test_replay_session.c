@@ -96,6 +96,29 @@ static char dir[512];
 int replay_host_slot_base(char *d, size_t dc, char *p, size_t pc) { snprintf(d, dc, "%s", dir); snprintf(p, pc, "replay_80010000"); return 1; }
 const char *replay_host_export_dir(void) { static char e[600]; snprintf(e, sizeof e, "%s/replays", dir); return e; }
 const char *replay_host_disc_serial(void) { return product_serial; }
+/* PS1B-316 power-on replays. The host's cards are what a cold boot finds;
+ * the guest reads whichever cards are in (see run_frame). */
+static int power_on_now;
+int replay_host_at_power_on(void) { return power_on_now; }
+static int power_on_begins;
+void replay_host_power_on_begin(void) { power_on_begins++; }
+#define CARD_BYTES INPUT_ROUTE_REPLAY_CARD_BYTES
+static uint8_t host_cards[2][CARD_BYTES];
+static uint32_t host_cards_mask = 1;
+static uint8_t replay_cards[2][CARD_BYTES];
+static uint32_t replay_cards_mask;
+static int replay_cards_in;
+int replay_host_cards_capture(uint8_t *images, uint32_t *mask) {
+    memcpy(images, host_cards, sizeof host_cards); *mask = host_cards_mask; return 1;
+}
+int replay_host_cards_install(const uint8_t *images, uint32_t mask) {
+    memcpy(replay_cards, images, sizeof replay_cards); replay_cards_mask = mask; replay_cards_in = 1; return 1;
+}
+void replay_host_cards_restore(void) { replay_cards_in = 0; }
+static char product_lines[256] =
+    "exe_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+    "codegen=12345678\nbios_crc32=1234abcd\nrenderer=software\n";
+void replay_host_product(char *out, size_t cap) { snprintf(out, cap, "%s", product_lines); }
 
 /* ---- the stand-in machine ---- */
 /* The host's safe boundary: a pending anchor saves the machine and reloads
@@ -116,6 +139,12 @@ static void run_frame(uint16_t buttons, const uint8_t st[4]) {
     safe_point();
     uint32_t h = (uint32_t)(cycle * 2654435761u) ^ buttons ^ ((uint32_t)st[0] << 16) ^ ((uint32_t)st[3] << 24);
     for (unsigned i = 0; i < 64; ++i) ram[(h + i * 4099u) % RAM_BYTES] ^= (uint8_t)(h >> (i % 24));
+    /* The guest reads its memory cards: the replay's while they are in. */
+    for (unsigned c = 0; c < 2; ++c) {
+        const uint32_t mask = replay_cards_in ? replay_cards_mask : host_cards_mask;
+        const uint8_t *card = replay_cards_in ? replay_cards[c] : host_cards[c];
+        ram[777 + c] = (uint8_t)(ram[777 + c] * 31u + ((mask >> c & 1u) ? card[h % CARD_BYTES] : 0x5Au));
+    }
     if (drift && replay_session_state() == REPLAY_PLAYING) ram[12345]++;
     if (drift_av && replay_session_state() == REPLAY_PLAYING) vram_word++;
     cycle += 564480u + (buttons & 7u);
@@ -364,6 +393,224 @@ static void test_rec_blink(void) {
     clear_slots();
 }
 
+/* ---- PS1B-316 power-on replays ---- */
+
+static int file_exists(const char *p) { FILE *f = fopen(p, "rb"); if (f) fclose(f); return f != NULL; }
+
+static void copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb"), *out = fopen(to, "wb");
+    char buf[65536];
+    size_t n;
+    while (in && out && (n = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, n, out);
+    if (in) fclose(in);
+    if (out) fclose(out);
+}
+
+/* The replay reader's view of a file. */
+static const char *read_replay(const char *p, InputRouteV3 *meta, InputRouteV3Replay *rp) {
+    InputDualShockRouteStep *steps = calloc(INPUT_ROUTE_MAX_STEPS, sizeof *steps);
+    InputRouteMarker markers[INPUT_ROUTE_V3_MAX_MARKERS];
+    InputRouteCheckpoint *cps = calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *cps);
+    FILE *f = fopen(p, "rb");
+    const char *err = f ? input_route_v3_read_ex(f, meta, NULL, steps, markers, cps, rp) : "open";
+    if (f) fclose(f);
+    free(steps); free(cps);
+    return err;
+}
+
+/* A cold boot of the stand-in machine, with the host's own cards. */
+static void cold_boot(void) {
+    memset(ram, 0, sizeof ram);
+    cycle = 0;
+    vram_word = 0;
+    for (unsigned i = 0; i < CARD_BYTES; ++i) { host_cards[0][i] = (uint8_t)(i * 7u + 1u); host_cards[1][i] = (uint8_t)(i * 13u + 5u); }
+}
+
+/* Plays `p` from a cold boot (vblank 0) to the end; returns the result. With
+ * `new_host_cards` the player's own cards differ from the recording's. */
+static ReplayResult play_from_boot(const char *p, unsigned max_frames, int new_host_cards) {
+    cold_boot();
+    if (new_host_cards)
+        for (unsigned i = 0; i < CARD_BYTES; ++i) { host_cards[0][i] ^= 0xFF; host_cards[1][i] ^= 0xFF; }
+    power_on_now = 1;
+    int started = replay_session_play_file(p);
+    CHECK(started, "power-on playback starts at boot: %s", osd_last);
+    CHECK(!started || replay_session_state() == REPLAY_PLAYING, "no anchor to load: playing at once");
+    if (!started) { power_on_now = 0; return replay_session_last_result(); }
+    vblank(0xFFFF, neutral);                       /* vblank 0 feeds record 0 */
+    power_on_now = 0;
+    for (unsigned i = 0; i < max_frames && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
+    return replay_session_last_result();
+}
+
+static void test_power_on_record_and_play(void) {
+    char path[700], partial[700], crash_copy[700];
+    InputRouteV3 meta;
+    InputRouteV3Replay *rp = malloc(sizeof *rp);
+    const unsigned frames = REPLAY_PARTIAL_INTERVAL + 60u;
+    snprintf(path, sizeof path, "%s/Test_Game-boot-19700101T000000Z.psxrpl", dir);
+    CHECK(replay_session_partial_path(path, partial, sizeof partial), "partial path");
+    snprintf(crash_copy, sizeof crash_copy, "%s/crash-copy.psxrpl", dir);
+    remove(path); remove(partial); remove(crash_copy);
+    snprintf(settings_now, sizeof settings_now, "cd_speed=1\ncd_game_speed=2\n");
+
+    /* Not at vblank 0: refused, nothing written. */
+    cold_boot();
+    power_on_now = 0;
+    osd_last[0] = 0;
+    CHECK(!replay_session_record_power_on(path) && replay_session_state() == REPLAY_IDLE,
+          "power-on recording refused after boot");
+    CHECK(strstr(osd_last, "must start at boot") != NULL, "refusal says why: %s", osd_last);
+
+    /* Record from vblank 0; the first boundary records record 0. */
+    power_on_begins = 0;
+    power_on_now = 1;
+    CHECK(replay_session_record_power_on(path), "power-on recording starts at boot");
+    CHECK(replay_session_state() == REPLAY_RECORDING && replay_session_owns_p1(), "recording at once, no anchor");
+    CHECK(power_on_begins == 1, "the host pins overlays for the recording");
+    for (unsigned i = 0; i < frames; ++i) {
+        uint8_t st[4] = { (uint8_t)(0x80 + i), 0x80, 0x80, 0x80 };
+        vblank(script(i / 3u), st);
+        power_on_now = 0;
+        if (i + 1 == REPLAY_PARTIAL_INTERVAL + 1) {
+            /* The boundary after record 1799 wrote the crash-recovery copy. */
+            const char *err = read_replay(partial, &meta, rp);
+            CHECK(!err, "partial copy reads back: %s", err ? err : "");
+            CHECK(!err && meta.frames == REPLAY_PARTIAL_INTERVAL && rp->power_on && !rp->has_anchor &&
+                  rp->has_cards && rp->cards_mask == 1u, "partial copy: 1800 frames, power-on, card 1");
+            copy_file(partial, crash_copy);        /* what a crash would leave */
+        }
+    }
+    CHECK(!file_exists(path), "nothing final until the recording ends");
+    replay_session_shutdown();                     /* the window was closed */
+    CHECK(file_exists(path), "exit writes the replay");
+    CHECK(!file_exists(partial), "the finished replay removes its partial copy");
+    const char *err = read_replay(path, &meta, rp);
+    CHECK(!err, "power-on replay reads back: %s", err ? err : "");
+    /* Exit ends on the last completed boundary: the last vblank's record
+     * never ran, so N vblanks leave N - 1 records. */
+    CHECK(!err && meta.frames == frames - 1u && rp->power_on && !rp->has_anchor && rp->has_cards &&
+          rp->cards_mask == 1u && !strcmp(rp->settings, "cd_speed=1\ncd_game_speed=2\n") &&
+          strstr(rp->product, "bios_crc32=1234abcd") && strstr(rp->product, "exe_sha256=aaaa"),
+          "power-on replay: frames, cards, settings, product");
+    CHECK(!err && rp->thumb_w == 0, "no thumbnail at power-on (the screen is black)");
+    /* The plain route reader refuses it, so it is never replayed as a route. */
+    {
+        FILE *f = fopen(path, "rb");
+        InputDualShockRouteStep *steps = calloc(INPUT_ROUTE_MAX_STEPS, sizeof *steps);
+        InputRouteMarker markers[INPUT_ROUTE_V3_MAX_MARKERS];
+        InputRouteCheckpoint *cps = calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *cps);
+        err = f ? input_route_v3_read(f, &meta, NULL, steps, markers, cps) : "open";
+        if (f) fclose(f);
+        free(steps); free(cps);
+        CHECK(err && !strcmp(err, "unsupported mandatory extension tag"), "route reader refuses it: %s", err ? err : "accepted");
+    }
+
+    /* Play from a cold boot. The host's cards have changed since: the replay
+     * brings its own, and puts the host's back afterwards. */
+    snprintf(settings_now, sizeof settings_now, "cd_speed=1\ncd_game_speed=1\n");
+    restores = 0;
+    CHECK(play_from_boot(path, frames + 10u, 1) == REPLAY_RESULT_IN_SYNC, "power-on replay in sync (%s)", osd_last);
+    CHECK(!replay_cards_in, "the player's cards are back after playback");
+    CHECK(!strcmp(settings_applied, "cd_speed=1\ncd_game_speed=2\n") && restores == 1 &&
+          !strcmp(settings_now, "cd_speed=1\ncd_game_speed=1\n"), "recorded settings switched, then restored");
+    CHECK(read_verdict() && strstr(verdict, "\"result\": \"in_sync\"") && strstr(verdict, "\"power_on\": true") &&
+          strstr(verdict, "\"recorded_exe_sha256\": \"aaaa") && strstr(verdict, "\"player_exe_sha256\": \"aaaa"),
+          "power-on verdict: %s", verdict);
+
+    /* What a crash leaves (the partial copy) plays in sync up to its end. */
+    CHECK(play_from_boot(crash_copy, frames, 1) == REPLAY_RESULT_IN_SYNC, "the crash copy plays in sync");
+    CHECK(read_verdict() && strstr(verdict, "\"frames_played\": 1800,"), "crash copy: 1800 frames: %s", verdict);
+
+    /* Another exe plays with the build warning; another BIOS image is refused. */
+    char saved_product[256];
+    snprintf(saved_product, sizeof saved_product, "%s", product_lines);
+    snprintf(product_lines, sizeof product_lines,
+             "exe_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+             "codegen=12345678\nbios_crc32=1234abcd\n");
+    cold_boot();
+    power_on_now = 1;
+    CHECK(replay_session_play_file(path) && strstr(osd_last, "different build"), "another exe: warned (%s)", osd_last);
+    replay_session_shutdown();
+    CHECK(!replay_cards_in, "ending playback early puts the cards back");
+    read_verdict();
+    snprintf(product_lines, sizeof product_lines, "%s", saved_product);
+    char *crc = strstr(product_lines, "1234abcd");
+    memcpy(crc, "99999999", 8);
+    CHECK(!replay_session_play_file(path) && strstr(osd_last, "different BIOS"), "another BIOS image: refused (%s)", osd_last);
+    read_verdict();
+    snprintf(product_lines, sizeof product_lines, "%s", saved_product);
+    /* After boot, a power-on replay cannot start. */
+    power_on_now = 0;
+    CHECK(!replay_session_play_file(path) && strstr(osd_last, "starts at power-on"), "refused after boot (%s)", osd_last);
+    read_verdict();
+    power_on_now = 1;
+    CHECK(!replay_session_record_power_on(path) && replay_session_state() == REPLAY_IDLE,
+          "an existing file is never overwritten");
+    power_on_now = 0;
+
+    /* Different cards at boot make a replay that ignored them go out of sync:
+     * the snapshot is load-bearing. Record with card 2 inserted, then damage
+     * the stored image of card 2 in the file. */
+    remove(crash_copy);
+    host_cards_mask = 3u;
+    cold_boot();
+    power_on_now = 1;
+    CHECK(replay_session_record_power_on(crash_copy), "record with both cards");
+    for (unsigned i = 0; i < 120; ++i) { vblank(script(i), neutral); power_on_now = 0; }
+    replay_session_toggle_record();
+    vblank(0xFFFF, neutral);
+    err = read_replay(crash_copy, &meta, rp);
+    CHECK(!err && rp->cards_mask == 3u, "both cards stored");
+    CHECK(play_from_boot(crash_copy, 200, 1) == REPLAY_RESULT_IN_SYNC, "two-card replay in sync");
+    read_verdict();
+    if (!err) {
+        FILE *f = fopen(crash_copy, "r+b");
+        static uint8_t image[CARD_BYTES];
+        const long at = rp->cards_offset + (long)CARD_BYTES;   /* card 2's image */
+        if (f && !fseek(f, at, SEEK_SET) && fread(image, 1, CARD_BYTES, f) == CARD_BYTES) {
+            for (unsigned k = 0; k < CARD_BYTES; ++k) image[k] ^= 0xFF;
+            fseek(f, at, SEEK_SET);
+            fwrite(image, 1, CARD_BYTES, f);
+        }
+        if (f) fclose(f);
+    }
+    CHECK(play_from_boot(crash_copy, 200, 0) == REPLAY_RESULT_OUT_OF_SYNC, "a different card 2 goes out of sync");
+    read_verdict();
+    host_cards_mask = 1u;
+    remove(crash_copy);
+    remove(path);
+    free(rp);
+}
+
+static void test_boot_names(void) {
+    char p[700], expect[700], partial[700], rdir[600];
+    snprintf(rdir, sizeof rdir, "%s/names", dir);
+    mkdir_p(rdir);
+    snprintf(expect, sizeof expect, "%s/Resident_Evil_2_USA_Disc_1-boot-19700101T000000Z.psxrpl", rdir);
+    remove(expect);
+    CHECK(replay_session_boot_path(rdir, "Resident Evil 2 (USA) [Disc 1]", 0, p, sizeof p) && !strcmp(p, expect),
+          "title reduced, UTC stamp: %s", p);
+    /* 2026-10-01 12:34:56 UTC. */
+    CHECK(replay_session_boot_path(rdir, "..Caf\xC3\xA9: menu/test?", INT64_C(1790858096), p, sizeof p) &&
+          strstr(p, "/Caf_menu_test-boot-20261001T123456Z.psxrpl"), "no leading dots, one '_' per run: %s", p);
+    CHECK(replay_session_boot_path(rdir, "", 0, p, sizeof p) && strstr(p, "/replay-boot-19700101T000000Z.psxrpl"),
+          "empty title: %s", p);
+    /* Taken names (or their partial copies) are never reused. */
+    FILE *f = fopen(expect, "wb"); if (f) fclose(f);
+    CHECK(replay_session_boot_path(rdir, "Resident Evil 2 (USA) [Disc 1]", 0, p, sizeof p) &&
+          strstr(p, "Z-2.psxrpl"), "a taken name gets -2: %s", p);
+    CHECK(replay_session_partial_path(p, partial, sizeof partial) && strstr(partial, "Z-2.partial.psxrpl"),
+          "partial copy name: %s", partial);
+    f = fopen(partial, "wb"); if (f) fclose(f);
+    CHECK(replay_session_boot_path(rdir, "Resident Evil 2 (USA) [Disc 1]", 0, p, sizeof p) &&
+          strstr(p, "Z-3.psxrpl"), "a crash's partial copy blocks its name too: %s", p);
+    remove(expect); remove(partial);
+    CHECK(replay_session_partial_path("x/y", partial, sizeof partial) && !strcmp(partial, "x/y.partial.psxrpl"),
+          "partial of a name without the extension: %s", partial);
+    CHECK(!replay_session_boot_path("", "t", 0, p, sizeof p), "no folder, no name");
+}
+
 int main(int argc, char **argv) {
     snprintf(dir, sizeof dir, "%s", argc > 1 ? argv[1] : "replay_session_test_dir");
     mkdir_p(dir);
@@ -377,6 +624,8 @@ int main(int argc, char **argv) {
     test_identity();
     test_shutdown_while_recording();
     test_rec_blink();
+    test_power_on_record_and_play();
+    test_boot_names();
     clear_slots();
     if (failures) { fprintf(stderr, "%d of %d checks failed\n", failures, checks); return 1; }
     printf("PASS: replay session, %d checks\n", checks);
