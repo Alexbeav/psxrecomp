@@ -152,6 +152,11 @@ void psx_netplay_rb_pump(void);
  * dig0 not received. Latches open once both digests match (sticky latches —
  * HC ring may age tick-0 out; must not re-stall after sync). */
 int  psx_netplay_rb_boot_dig0_gate(void);
+/* psx_host_mono_ms() since when the peers' boot digests have been known and
+ * different (the same pair throughout), or 0. The watchdog ends the match once
+ * that has lasted NETPLAY_BOOT_MISMATCH_GRACE_MS: the peers booted different
+ * BIOS images or boot settings, and waiting cannot fix it. */
+uint32_t psx_netplay_rb_boot_dig0_mismatch_since_ms(void);
 /* Record dig0 cores outside the HC ring (emit / peer FC drain). */
 void psx_netplay_rb_boot_dig0_note_local(uint32_t core);
 void psx_netplay_rb_boot_dig0_note_peer(uint32_t core);

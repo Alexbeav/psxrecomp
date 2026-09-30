@@ -196,7 +196,7 @@ if (-not $useRecompUi) {
     }
     Write-Host "  (recomp-ui declined -- skipping wizard/netplay; PSX_RECOMP_UI=OFF)"
 } else {
-    # Default ON (interactive + non-interactive): setup-host CI needs the wizard.
+    # Default ON (interactive + non-interactive): the wizard is the first-run disc picker.
     $useWizard = Resolve-BoolOpt -Enable:$EnableWizard -No:$NoWizard -PromptDefault:$true `
         -Question "Enable first-run setup wizard + Generate & rebuild?"
     if (-not $interactive -and -not $NoWizard) { $useWizard = $true }
@@ -230,7 +230,7 @@ $useCi = Resolve-BoolOpt -Enable:$EnableCi -No:$NoCi -PromptDefault:$true `
 $doBoxart = Resolve-BoolOpt -Enable:$FetchBoxart -No:$NoFetchBoxart -PromptDefault:$true `
     -Question "Fetch libretro boxart now? (needs network)"
 $doGenerate = Resolve-BoolOpt -Enable:$Generate -No:$NoGenerate -PromptDefault:$false `
-    -Question "Run Generate now (emitters + OpenBIOS + game C)?"
+    -Question "Run Generate now (emitters + OpenBIOS + game C; generated/ is committed for release CI)?"
 
 $doBuild = $false
 if ($doGenerate) {
@@ -476,11 +476,11 @@ if ($useNetplay -and -not (Test-Path "psxrecomp\lib\recomp-net\CMakeLists.txt"))
 }
 
 Write-Host "== Packager stub =="
-Fill-Template (Join-Path $TemplateDir "package_setup_release.sh.in") (Join-Path $Root "scripts\package_setup_release.sh")
+Fill-Template (Join-Path $TemplateDir "package_release.sh.in") (Join-Path $Root "scripts\package_release.sh")
 
 if ($useCi) {
     Write-Host "== CI release workflow =="
-    $WfSrc = Join-Path $Root "psxrecomp\docs\ci\templates\setup-release.yml"
+    $WfSrc = Join-Path $Root "psxrecomp\docs\ci\templates\game-release.yml"
     $WfDst = Join-Path $Root ".github\workflows\release.yml"
     if (Test-Path -LiteralPath $WfSrc) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $WfDst) | Out-Null
@@ -731,7 +731,15 @@ if ($doGenerate) {
         }
         python @genArgs
         $GeneratedOk = $true
-        Write-Host "  generate OK (generated/ is gitignored -- not committed)"
+        # Release CI builds the compiled game from this tree, so it is part
+        # of the repo, not a local by-product.
+        git add generated 2>$null
+        git -c user.email=setup@localhost -c user.name=setup commit -q -m "Add generated game C" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  generate OK (generated/ committed -- release CI builds from it)"
+        } else {
+            Write-Host "  generate OK -- commit generated/ before tagging a release: git add generated"
+        }
     } catch {
         Write-Warning "Generate failed -- fix seeds/disc and re-run generate by hand."
         $doBuild = $false
@@ -845,16 +853,17 @@ Build playable runtime:
 "@
 } else {
 @"
-Build emitters, Generate, then playable runtime:
+Build emitters, Generate (and commit it -- release CI builds from generated/), then playable runtime:
 
        bash psxrecomp/tools/ci/build_emitters.sh
        python psxrecomp\psxrecomp_cli.py generate --config game.toml --project-root . --disc $GenDiscHint
+       git add generated; git commit -m "Add generated game C"
        cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
        cmake --build build-release --target psx-runtime
 "@
 }
 $CiNote = if ($useCi) {
-    $n = "CI: .github/workflows/release.yml ready (zip prefix=$ZipPrefix; submodule gitlinks pin the build)."
+    $n = "CI: .github/workflows/release.yml ready (zip prefix=$ZipPrefix; builds the committed generated/ C into the shipped game; submodule gitlinks pin the build)."
     if ($githubPushed) { $n += " Pushed -- open Actions -> Release builds (workflow_dispatch)." }
     $n
 } else {

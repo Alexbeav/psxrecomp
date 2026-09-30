@@ -117,12 +117,14 @@ SKIP_DIRS = {'.git', 'build', 'generated', 'node_modules', '__pycache__',
 # but that is a separate change with a separate proof (macOS in particular
 # cannot be built or verified here), so this test does not pretend to cover it.
 PACKAGER_RE = re.compile(r'^package_.*\.(sh|ps1)$')
+# `overlay_cache` followed by `=` (in any grep/sed spelling of whitespace) is
+# the game.toml KEY `[runtime] overlay_cache = true`, which packagers gate on
+# (Wave-5 F4) without touching the cache itself, and `overlay_cache_...` is an
+# identifier continuing (SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE, the reason flag).
+# Neither is tag consumption.
 TAG_CONSUMER_RE = re.compile(
-    r'cg_?tag|CgTag|cache_tag|overlay_toolchain|'
-    r'overlay_cache[/\\]|\$\{?\w*overlay_cache(?!\w)|\$\(?\w*overlay_cache(?!\w)', re.I)
-# A TOML check for `overlay_cache = true` does not stage or format a cache.
-# Keep actual cache paths and shell variables covered, but do not require the
-# setup-host packager's config validation to call the cache staging surface.
+    r'cg_?tag|CgTag|cache_tag|overlay_cache(?!\w|(\[\[:space:\]\]|\\s|\s)*\*?=)|overlay_toolchain',
+    re.I)
 SHARED_SURFACE_RE = re.compile(r'release_overlay_stage|release_stage\.py')
 
 
