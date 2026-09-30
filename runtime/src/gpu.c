@@ -5935,7 +5935,11 @@ static int gpu_queue_command_cost(void) {
     state.clip_x1=draw_area_right; state.clip_y1=draw_area_bottom;
     state.offset_x=draw_offset_x; state.offset_y=draw_offset_y;
     state.mask_bits=(check_mask_bit<<1)|set_mask_bit;
-    /* The ordinary renderer owns interlace and enhancement policies. */
+    /* The ordinary renderer owns interlace and enhancement policies. Charge
+     * only the rows it draws: 480i with drawing to the displayed field
+     * prohibited skips that field's rows. */
+    int skipped=gpu_raster_skipped_row();
+    if (skipped >= 0) { state.display_mode=0x24u; state.skip_field=(unsigned)skipped; }
     unsigned op=gp0_cmd_buf[0]>>24;
     if (source_gpu_polygon_supported(op)) {
         int cost=source_gpu_command_polygon_cost(&state,gp0_cmd_buf,0);
