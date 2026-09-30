@@ -1732,9 +1732,14 @@ uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
  * Nothing else happens: an isolated store to RAM, MMIO or the BIU register
  * itself is dropped (Beetle routes 0xFFFE0130 through MemRW, libretro.cpp:1053,
  * which only non-isolated stores reach). DMA is not a CPU store; Beetle's DMA
- * writes RAM directly, so IsC does not apply while a transfer moves data. */
+ * writes RAM directly, so IsC does not apply while a transfer moves data.
+ * Neither is a host store (psx_host_write_*: mods, FMV skip, debug pokes,
+ * enhancement fills); like DMA it reaches memory whatever SR says. */
+int g_host_store_depth;   /* >0 inside psx_host_write_* */
+
 static inline int cpu_store_isolated(void) {
-    return sr_ptr && (*sr_ptr & 0x10000u) && g_dma_exec_depth == 0;
+    return sr_ptr && (*sr_ptr & 0x10000u) && g_dma_exec_depth == 0 &&
+           g_host_store_depth == 0;
 }
 
 static void isc_store(uint32_t addr, uint32_t val, uint32_t width) {
@@ -2335,6 +2340,25 @@ void psx_write_byte(uint32_t addr, uint8_t val) {
     psx_write_byte_raw(addr, val);
     s_ls_op_active = 0;
 }
+
+/* Host stores: the same paths as a guest store, but never cache-isolated
+ * (cpu_store_isolated). */
+void psx_host_write_word(uint32_t addr, uint32_t val) {
+    g_host_store_depth++;
+    psx_write_word(addr, val);
+    g_host_store_depth--;
+}
+void psx_host_write_half(uint32_t addr, uint16_t val) {
+    g_host_store_depth++;
+    psx_write_half(addr, val);
+    g_host_store_depth--;
+}
+void psx_host_write_byte(uint32_t addr, uint8_t val) {
+    g_host_store_depth++;
+    psx_write_byte(addr, val);
+    g_host_store_depth--;
+}
+
 static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     g_guest_store_count++;
     if (cpu_store_isolated()) { isc_store(addr, val, 1); return; }

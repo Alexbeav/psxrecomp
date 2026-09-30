@@ -186,10 +186,12 @@ Status: MODERATE-STRONG (regions games use).
   With the D-cache on and lock mode off, the store lands in the scratchpad at
   addr & 0x3FF. Nothing reaches the bus, not even the BIU register. Now
   `psx_icache_isc_store` plus memory.c's `isc_store`, at the top of the three
-  `psx_write_*_raw` chokepoints that every backend stores through. DMA is not isolated.
+  `psx_write_*_raw` chokepoints that every backend stores through. DMA and host
+  stores (`psx_host_write_*`: mods, FMV skip, debug pokes) are not isolated.
   Beetle land gate (LLE boot to the shell, both BIOS images): OpenBIOS 0 at every
-  anchor (was −126 from the first flushes on); SCPH-1001 −9 at every anchor from the
-  kernel entry on (was −454), which is the KSEG1 entry of SEGMENT_AWARE_CODE.md §3.3.
+  anchor (was −126 from the first flushes on); SCPH-1001 −9 at every anchor from
+  kernel init 0x598 on (was −454), which is the KSEG1 entry of SEGMENT_AWARE_CODE.md
+  §3.3.
   Rulers #1 and #2 are unchanged. Covered by ctest `isc_store_test`. Details:
   FAITHFUL_TIMING_PLAN §5, 2026-09-29.
 - [ ] IsC SWL/SWR: the emitters and both interpreters run SWL/SWR as a

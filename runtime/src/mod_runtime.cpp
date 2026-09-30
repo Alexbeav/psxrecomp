@@ -208,8 +208,8 @@ void set_error(const std::string& error) {
 void apply_main_write(const ModResolution::Write& write) {
     if (write.fields.empty()) {
         for (size_t i = 0; i < write.replacement.size(); ++i)
-            psx_write_byte((uint32_t)write.location + (uint32_t)i,
-                           write.replacement[i]);
+            psx_host_write_byte((uint32_t)write.location + (uint32_t)i,
+                                write.replacement[i]);
         dirty_ram_mark_executable_range(
             (uint32_t)write.location & 0x1FFFFFFFu,
             (uint32_t)write.replacement.size());
@@ -217,7 +217,7 @@ void apply_main_write(const ModResolution::Write& write) {
     }
     for (const ModResolution::Write::Field& field : write.fields) {
         for (size_t i = 0; i < field.replacement.size(); ++i)
-            psx_write_byte(
+            psx_host_write_byte(
                 (uint32_t)write.location +
                     (uint32_t)field.offset + (uint32_t)i,
                 field.replacement[i]);
@@ -1485,7 +1485,7 @@ extern "C" uint8_t psx_mod_read_byte(uint32_t address) {
 }
 
 extern "C" void psx_mod_write_byte(uint32_t address, uint8_t value) {
-    psx_write_byte(address, value);
+    psx_host_write_byte(address, value);
 }
 
 extern "C" uint16_t psx_mod_read_half(uint32_t address) {
@@ -1493,7 +1493,7 @@ extern "C" uint16_t psx_mod_read_half(uint32_t address) {
 }
 
 extern "C" void psx_mod_write_half(uint32_t address, uint16_t value) {
-    psx_write_half(address, value);
+    psx_host_write_half(address, value);
 }
 
 extern "C" uint32_t psx_mod_read_word(uint32_t address) {
@@ -1501,11 +1501,11 @@ extern "C" uint32_t psx_mod_read_word(uint32_t address) {
 }
 
 extern "C" void psx_mod_write_word(uint32_t address, uint32_t value) {
-    psx_write_word(address, value);
+    psx_host_write_word(address, value);
 }
 
 extern "C" void psx_mod_write_code_word(uint32_t address, uint32_t value) {
-    psx_write_word(address, value);
+    psx_host_write_word(address, value);
     dirty_ram_mark_executable_range(address & 0x1FFFFFFFu, 4u);
 }
 

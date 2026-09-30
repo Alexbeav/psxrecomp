@@ -230,7 +230,9 @@ on a fixed region -> next.
     routes it through MemRW, which only non-isolated stores reach. Beetle does
     not model SR.SwC.
   - DMA is not a CPU store. Beetle's DMA writes RAM directly, so native DMA now
-    bypasses IsC instead of being dropped.
+    bypasses IsC instead of being dropped. Host stores (mods, FMV skip, debug
+    pokes, enhancement fills) are not CPU stores either: they go through
+    `psx_host_write_*`, which bypasses IsC the same way.
   - Implementation: `psx_icache_isc_store` (psx_icache.c) is the tag write, and
     memory.c's `isc_store` runs at the top of the three `psx_write_*_raw`
     chokepoints. Static code, overlay shards and both interpreters all store
@@ -245,12 +247,14 @@ on a fixed region -> next.
     each was also run with this fix. Deltas are native − Beetle:
     - OpenBIOS, 15 anchors from `_boot` to shell main: master is 0 up to the
       first flushes and −126 from initEvents on; master + fix is 0 at all 15.
-      pre goes from −2,165,591 to −2,165,478 at the shell entry with the fix.
+      pre goes from −2,165,591 to −2,165,478 at the shell entry with the fix:
+      113 of master's 126 flush cycles (36, 40 and 37 per flush, against 42).
       The remaining gap is #429's.
     - SCPH-1001, 14 anchors from cache init to the shell entry: master is −9
       from kernel init 0x598 and −438/−454 from the boot functions on. master
       + fix is −9 at every anchor from 0x598 on. pre goes from −7,049,462 to
-      −7,049,017 at the shell entry.
+      −7,049,017 at the shell entry, the same 445 cycles the fix removes on
+      master.
     - The −9 is the retail kernel entry through its KSEG1 alias
       (SEGMENT_AWARE_CODE.md §3.3, PR D). It is the only residual left before
       the shell.
@@ -276,8 +280,8 @@ on a fixed region -> next.
     digest already carry the tags, so their formats do not change.
   - Test: ctest `isc_store_test` drives the real memory.c and psx_icache.c
     stores. It covers flush invalidation, tag-test valid bits, data mode, the
-    scratchpad write, the BIU and the DMA exclusions, and lockstep replay.
-    15 of its checks fail on master.
+    scratchpad write, the BIU, DMA and host-store exclusions, and lockstep
+    replay. 17 of its checks fail on master.
   - Left: IsC SWL/SWR differ from Beetle in two corner cases (ACCURACY_BURNDOWN
     axis 4). The BIU bit 11 fetch cost is still open.
 - **2026-09-29 (uncached KSEG1 fetch charged per instruction, both emitters):**

@@ -22,7 +22,8 @@
  *     scratchpad at addr & 0x3FF; RAM never changes.
  *  5. An isolated store to 0xFFFE0130 does not change the BIU.
  *  6. A DMA write is not a CPU store: it reaches RAM while IsC is set and
- *     leaves the tags alone.
+ *     leaves the tags alone. Neither is a host store (psx_host_write_*: mods,
+ *     FMV skip, debug pokes), even one that would load valid bits.
  *  7. A non-isolated store never touches the I-cache.
  *  8. Lockstep replay does not move the shared tags. */
 #include "cpu_state.h"
@@ -36,6 +37,7 @@
 extern void     psx_write_word(uint32_t addr, uint32_t val);
 extern void     psx_write_half(uint32_t addr, uint16_t val);
 extern void     psx_write_byte(uint32_t addr, uint8_t val);
+extern int      g_host_store_depth;
 extern uint32_t psx_read_word(uint32_t addr);
 extern uint8_t *memory_get_ram_ptr(void);
 extern uint8_t *memory_get_scratchpad_ptr(void);
@@ -192,6 +194,21 @@ int main(void) {
     sr = 0;
     check(ram_word(0x900u) == 0x12345678u, "DMA write reaches RAM under IsC");
     check(fetch_cost(0x80000900u) == 0u, "DMA write keeps the tags");
+
+    /* ... nor is a host store. Tag-test mode with lane-0 value 0xF would mark
+     * a cold line valid if the store were taken as isolated. */
+    psx_icache_reset();
+    g_psx_icache_active = 1;
+    set_biu(BIU_FLUSH_TAGS);
+    sr = SR_ISC;
+    psx_host_write_half(0x80000944u, 0xBEEFu);
+    psx_host_write_byte(0x80000946u, 0x5Au);
+    psx_host_write_word(0x80000940u, 0x0000000Fu);  /* last: its tags stand */
+    sr = 0;
+    check(ram_word(0x940u) == 0x0000000Fu, "host word reaches RAM under IsC");
+    check(ram_word(0x944u) == 0x005ABEEFu, "host half/byte reach RAM under IsC");
+    check(fetch_cost(0x80000940u) == 7u, "host store loads no valid bits");
+    check(g_host_store_depth == 0, "host store depth unwinds");
 
     /* 7. Without IsC a store is a bus store; the I-cache does not snoop. */
     warm(0x80000A00u);

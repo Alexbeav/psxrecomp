@@ -146,6 +146,10 @@ void psx_write_half(uint32_t addr, uint16_t val) {
     (void)val;
 }
 
+void psx_host_write_half(uint32_t addr, uint16_t val) {
+    psx_write_half(addr, val);
+}
+
 int mdec_recently_active(uint32_t within_frames) {
     (void)within_frames;
     return 0;
