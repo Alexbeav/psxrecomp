@@ -546,7 +546,14 @@ static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) 
     }
 }
 
+/* PSX_FORCE_INTERP=1 (tooling, defined below): no game text is native-safe,
+ * so every dispatch into it takes the dirty-RAM interpreter. The byte
+ * compare in the two checks below would otherwise pass for untouched text
+ * and run the compiled image, since force-interp only marks pages dirty. */
+static int dirty_ram_force_interp(void);
+
 int dirty_ram_text_native_ok(uint32_t phys) {
+    if (dirty_ram_force_interp() && phys >= DIRTY_RAM_KERNEL_TRACK_BYTES) return 0;
     if (!text_ref_image || phys < text_ref_lo || phys >= text_ref_hi)
         return !dirty_ram_is_dirty(phys);
 
@@ -597,6 +604,7 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
                                          uint32_t count,
                                          uint32_t exec_pc) {
     if (!text_ref_image || !lo_len_pairs || count == 0) return 0;
+    if (dirty_ram_force_interp()) return 0;
     (void)exec_pc;
     int any = 0;
     for (uint32_t i = 0; i < count; i++) {
