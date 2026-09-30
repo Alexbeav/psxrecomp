@@ -24,7 +24,8 @@
 //    here for a locked title -- not even when the launcher returns garbage.
 //
 // PadMode values are the engine's (recompiler/src/config_loader.h:
-// PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2; 0 is Hybrid, mod-only). They are
+// PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2, PAD_MODE_NEGCON = 3; 0 is Hybrid,
+// mod-only). They are
 // hard-coded here rather than dragged in through config_loader.h's dependency
 // chain -- tests/test_launcher_pad_mode_wiring.py pins the enum so this cannot
 // drift.
