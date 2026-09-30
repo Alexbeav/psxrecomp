@@ -92,6 +92,13 @@ if(BUILD_TESTING)
         target_compile_definitions(${_target} PRIVATE PSX_MAX_PLAYERS=${_players})
         add_test(NAME ${_target} COMMAND ${_target})
     endforeach()
+    # neGcon twist: the one-axis stick transform.
+    add_executable(psx_stick_axis_test tests/test_psx_stick_axis.c)
+    target_include_directories(psx_stick_axis_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(psx_stick_axis_test PRIVATE m)
+    endif()
+    add_test(NAME psx_stick_axis_test COMMAND psx_stick_axis_test)
     # Optional real-hardware regression. Configure its dependencies explicitly;
     # absence must remain visible, never counted as a passing GPU test.
     set(PSX_GL_READBACK_SDL_ROOT "" CACHE PATH "SDL3 static build root for GL readback test")

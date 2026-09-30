@@ -19,6 +19,16 @@ void psx_stick_to_dualshock(int16_t x, int16_t y,
                             int deadzone, int anti_deadzone,
                             uint8_t *out_x, uint8_t *out_y);
 
+/*
+ * Convert one SDL axis alone to an unsigned axis byte, for a one-dimensional
+ * control such as the neGcon twist. The radial transform above scales each
+ * axis by the whole stick's length, so moving the other axis would move this
+ * one. This uses the same deadzone and anti_deadzone with the other axis held
+ * at centre: the result depends on `value` only, and matches
+ * psx_stick_to_dualshock for a stick pushed straight left or right.
+ */
+uint8_t psx_stick_axis_to_byte(int16_t value, int deadzone, int anti_deadzone);
+
 #ifdef __cplusplus
 }
 #endif

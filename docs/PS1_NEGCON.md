@@ -35,8 +35,11 @@ in their controller options, which is the quickest check.
 | R | R1 | the R1 key |
 | Start, D-pad | Start, D-pad | the same keys |
 
-The stick's deadzone setting applies to the twist. A pad whose triggers are
-on/off only (for example Switch controllers) gives full I and II.
+The twist reads the stick's left/right position only. Moving the stick up or
+down does not change it, so a full-lock turn stays full lock on a diagonal.
+The stick's deadzone setting applies to the twist, measured on left/right
+alone. A pad whose triggers are on/off only (for example Switch controllers)
+gives full I and II.
 
 ## Limits
 
@@ -57,7 +60,12 @@ on/off only (for example Switch controllers) gives full I and II.
 ## Tests
 
 - `sio_negcon_p2_test`, `sio_negcon_p5_test`: the byte protocol, including a
-  multitap seat.
+  multitap seat; a read keeps the state it started with; every twist value
+  and the pressure ends; hi-z with no /ACK for every command byte except 42h.
+- `psx_stick_axis_test`: the twist's one-axis stick transform (exact ends and
+  centre, never decreasing, the same as before for a straight left/right push).
+- recompiler `negcon_twist_wiring`: the neGcon sampler takes the twist from
+  that transform, not from the DualShock stick transform.
 - `sio_pad_bus_identity_p{2,5}_test_kinds`: pad and memory card traffic stays
   byte-identical to the recorded goldens after every port was a neGcon and
   went back to a pad.
