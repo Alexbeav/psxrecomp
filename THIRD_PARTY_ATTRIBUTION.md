@@ -31,6 +31,19 @@ The archive also carries libchdr's own bundled decompressors — Zstandard
 built from the same pinned tree; `WITH_SYSTEM_ZLIB`/`WITH_SYSTEM_ZSTD` are
 forced OFF so the disc decoder cannot change with the host's packages.
 
+## libjuice — ICE transport for netplay
+
+[libjuice](https://github.com/paullouisageneau/libjuice) by Paul-Louis Ageneau
+and contributors, licensed **MPL-2.0**. Only netplay builds link it
+(`PSX_NETPLAY=ON` with recomp-net's `RNET_ENABLE_ICE`, the default); single-player
+builds do not. Vendored unmodified as `third_party/libjuice-v1.7.2.tar.gz`, the
+same URL and SHA-256 recomp-net pins; `runtime/netplay_dependency.cmake` declares
+it for recomp-net and stops the configure if the two pins ever differ. It is
+compiled in statically, so its notice and the source location ship with any
+netplay binary: `runtime/licenses/libjuice-NOTICES.txt`. MPL-2.0 is file-level
+copyleft: a change to a libjuice file must be published under MPL-2.0. The build
+changes none.
+
 ## Vendored libraries
 
 These are checked in under `recompiler/lib/` and `runtime/third_party/` with
