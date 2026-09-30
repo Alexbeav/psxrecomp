@@ -6,10 +6,11 @@ A seed is a PC, so it carries a segment (docs/SEGMENT_AWARE_CODE.md §5.3,
 §5.4). dirty_ram_stats keys its rows by physical address, so the tool writes
 each one in the title's link segment: the segment of its EXE's load address
 (KSEG0 0x8001xxxx for most titles, KUSEG 0x0001xxxx for Kula World or Alien
-Resurrection). The recompiler reports a seed in any other segment as a
-variant request and does not compile it as an entry. Segment misses (TCP
-`segment_misses`: static text entered in a segment with no body of its own)
-are written with their full PC; each is a variant request (§5.4).
+Resurrection). The recompiler takes a seed in any other segment as a variant
+request, not an entry: it compiles the home body's direct-edge closure again
+in that segment (§5.4). Segment misses (TCP `segment_misses`: static text
+entered in a segment with no body of its own) are written with their full PC,
+so the next regeneration compiles a variant for each.
 
 The link segment comes from --segment, from --game-toml ([game].load_address,
 or the header of its [game].exe), or from game_text_lo when that is written as
@@ -39,6 +40,13 @@ except ModuleNotFoundError:  # Python < 3.11
 PHYS_MASK = 0x1FFFFFFF
 SEG_MASK = 0xE0000000
 SEGMENTS = {"kuseg": 0x00000000, "kseg0": 0x80000000, "kseg1": 0xA0000000}
+
+
+def maps_physical(pc):
+    """KUSEG below 0x20000000, KSEG0 and KSEG1 map physical memory; a PC
+    anywhere else addresses no RAM, so it names no code of the image, and the
+    recompiler refuses it as a seed."""
+    return pc < 0x20000000 or (pc & SEG_MASK) in (0x80000000, 0xA0000000)
 
 
 def parse_segment(text):
@@ -145,6 +153,10 @@ def main(argv=None):
     if sm.get("ok"):
         for row in sm.get("summary", []):
             vaddr = int(row["pc"], 16)
+            if not maps_physical(vaddr):
+                print("warning: segment miss 0x%08X is in a segment that does not map "
+                      "physical memory; not a seed (the recompiler refuses it)" % vaddr)
+                continue
             if lo_phys <= (vaddr & PHYS_MASK) < hi_phys and vaddr not in known:
                 new_entries.append((vaddr, row["count"],
                                     "segment miss: %d hits, home %s (variant request)"

@@ -110,6 +110,7 @@ set(PSXRECOMP_GAME_SOURCES
     src/config_loader.cpp
     src/recompiler_patch.cpp
     src/game_dispatch_emitter.cpp
+    src/segment_variants.cpp
     src/main_psx.cpp
 )
 
@@ -625,6 +626,35 @@ if(BUILD_TESTING)
              COMMAND emitter_runtime_pc_test)
     set_tests_properties(emitter_runtime_pc_test_legacy PROPERTIES
                          ENVIRONMENT "PSX_CPS=0")
+
+    # Segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): the planner's
+    # direct-edge closure per segment, the segment view and the variant's
+    # codegen config.
+    add_executable(segment_variants_test
+        tests/segment_variants_test.cpp
+        src/segment_variants.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(segment_variants_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(segment_variants_test PRIVATE fmt rabbitizer)
+    add_test(NAME segment_variants_test COMMAND segment_variants_test)
 
     add_executable(recompiler_patch_cxx17_header_test
         tests/recompiler_patch_cxx17_header_test.cpp

@@ -308,7 +308,14 @@ public:
     // and forward declarations for every recompiled function plus every
     // overlapping-alias shared body. Byte-for-byte the same declaration set
     // the monolith emits inline, just hoisted into a header.
-    std::string build_shared_decls_header(const std::vector<GeneratedFunction>& gen_funcs) const;
+    // `extra_decls` adds the alias-body prototypes of other generators whose
+    // functions share these shards (segment variants, §5.4).
+    std::string build_shared_decls_header(const std::vector<GeneratedFunction>& gen_funcs,
+                                          const std::vector<std::string>& extra_decls = {}) const;
+
+    // Prototypes of the psx_alias_body_XXXXXXXX() bodies the most recent
+    // generate_all_functions() emitted.
+    const std::vector<std::string>& alias_body_decls() const { return alias_body_decls_; }
 
     // Generate the per-function code-range manifest consumed by the overlay
     // loader's per-entry validity hash (design §8). For each function, emits its
@@ -324,6 +331,12 @@ public:
     // Exact manifest for the final function/CFG set emitted by the most recent
     // generate_file() call, including functions synthesized by its split pass.
     const std::string& last_ranges_manifest() const { return last_ranges_manifest_; }
+
+    // The final function set and CFGs the most recent generate_file() call
+    // emitted, after its split pass: what a segment variant's direct-edge
+    // closure is planned over (docs/SEGMENT_AWARE_CODE.md §5.4).
+    const std::vector<Function>& last_functions() const { return last_functions_; }
+    const std::map<uint32_t, ControlFlowGraph>& last_cfgs() const { return last_cfgs_; }
 
     // Set known functions for this compilation unit (for linking)
     void set_known_functions(const std::set<uint32_t>& functions) {
@@ -352,6 +365,15 @@ public:
     uint32_t runtime_pc(uint32_t compile_addr) const {
         return code_seg_ | (compile_addr & kPhysMask);
     }
+    // A jump-table case whose value (the PC the jr reaches) names the same
+    // bytes as `image_addr` in another segment than this body's. Such a case
+    // is not a local edge: the body bakes its own segment's PCs, so the value
+    // is dispatched with its full PC instead (§5.4). Never true when the table
+    // holds this body's own segment, which is every title's home compile.
+    bool foreign_segment_case(uint32_t case_value, uint32_t image_addr) const {
+        return (case_value & kPhysMask) == (image_addr & kPhysMask) &&
+               case_value != runtime_pc(image_addr);
+    }
 
 private:
     const PS1Executable& exe_;
@@ -359,6 +381,8 @@ private:
     uint32_t code_seg_;  // set from the image in the constructor; see set_code_segment()
     std::set<uint32_t> known_functions_;  // Addresses of functions in this compilation unit
     std::string last_ranges_manifest_;
+    std::vector<Function> last_functions_;
+    std::map<uint32_t, ControlFlowGraph> last_cfgs_;
     std::set<uint32_t> extra_labels_;    // Mid-block addresses that need inline labels (jump table targets)
     const AnnotationTable* annotations_ = nullptr;
 

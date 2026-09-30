@@ -17,21 +17,39 @@
 #include <cstdint>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "code_generator.h"
 #include "ps1_exe_parser.h"
 
 namespace PSXRecomp {
 
-// Emits the dispatch source for `dispatch_addrs` (compile addresses of the
-// dispatchable func_ entries) and the generator's CPS continuations. Row keys
-// and resume PCs go through codegen.runtime_pc() (§5.2); func_ names keep the
-// compile identity. `ranges_manifest` is the emitted .ranges text, whose F/R
-// records give each row its exact instruction ranges.
+// One compile whose bodies the table dispatches: the home compile, or a
+// segment variant (§5.4). `dispatch_addrs` are the compile addresses of its
+// dispatchable func_ entries; its CPS continuations come from the generator.
+struct GameDispatchUnit {
+    const CodeGenerator* codegen;
+    std::set<uint32_t> dispatch_addrs;
+};
+
+// Emits the dispatch source for every unit's entries and CPS continuations.
+// Row keys and resume PCs go through the unit's runtime_pc() (§5.2); func_
+// names keep the compile identity. `ranges_manifest` is the emitted .ranges
+// text of all units, whose F/R records give each row its exact instruction
+// ranges. Rows are sorted by physical word; one word may carry a row per
+// compiled segment (the home body and its variants), and the lookup requires
+// the exact PC. The first unit's CPS mode applies to the table.
 //
-// Returns false with `error` set when two rows would share a physical word:
-// one compile has one code segment, so that can only be a caller error until
-// per-segment variants (§5.4) share the table.
+// Returns false with `error` set when two rows name the same PC. Within one
+// compile that means two rows on one physical word: one compile has one code
+// segment.
+bool emit_game_dispatch(const std::vector<GameDispatchUnit>& units,
+                        const PS1Executable& exe,
+                        const std::string& ranges_manifest,
+                        std::string& out,
+                        std::string& error);
+
+// The single-compile form (no segment variants).
 bool emit_game_dispatch(const CodeGenerator& codegen,
                         const PS1Executable& exe,
                         const std::set<uint32_t>& dispatch_addrs,

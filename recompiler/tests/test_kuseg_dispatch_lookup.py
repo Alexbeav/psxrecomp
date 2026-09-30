@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Recompiler codegen regression test: a KUSEG-linked EXE compiles for KUSEG,
-and dispatch is exact (docs/SEGMENT_AWARE_CODE.md §5.3, §5.5).
+segment-qualified seeds compile segment variants, and dispatch is exact
+(docs/SEGMENT_AWARE_CODE.md §5.3, §5.4, §5.5).
 
 PS1 segments alias the same physical RAM, but a PC carries its segment into
 every link value, EPC and I-cache tag. Most PS-X EXE headers carry KSEG0
@@ -16,8 +17,19 @@ KSEG0 or KSEG1 alias ran it too. Now:
     PC, so an alias PC with no body of its own misses; psx_game_address_in_text
     stays physical, which sends that segment miss to the interpreter;
   - a seed in the link segment is an entry; a seed for the same bytes in
-    another segment is reported as a variant request (§5.4), never folded into
-    the home body and never silently dropped;
+    another segment is a variant request (§5.4), never folded into the home
+    body: the home functions it reaches through direct edges are compiled
+    again in its segment, with their own names, rows and baked PCs (a cached
+    variant is the home C with the segment swapped; a KSEG1 one is charged a
+    fetch per instruction), and several rows then share a physical word in
+    both lookup forms. A jump-table case whose value is in another segment
+    than its body tail-transfers instead of continuing locally, in a variant
+    and in a home compile alike. A variant closure that reaches a data stub
+    compiles it with no dispatch row, and one that reaches an alias entry
+    compiles its whole alias group, whose shared body every shard can call
+    through the declarations header. A variant seed that names no home
+    dispatch entry, or that lies in a segment that does not map physical
+    memory (0x20000000-0x7FFFFFFF, KSEG2), stops the build;
   - a header whose entry and load address are in different segments is
     rejected, a KSEG1-linked image compiles as uncached (a fetch charge per
     instruction), and a config code site in a foreign segment is refused.
@@ -126,6 +138,18 @@ def compile_and_run(compiler, harness, sources, include):
         subprocess.run([binary], check=True, cwd=tmp)
 
 
+def compile_only(compiler, sources, includes):
+    """Compile `sources` without linking (syntax and declarations only)."""
+    if os.path.basename(compiler).lower() in ("cl", "cl.exe", "clang-cl", "clang-cl.exe"):
+        command = [compiler, "/nologo", "/Zs"] + ["/I" + i for i in includes] + sources
+    else:
+        command = [compiler, "-std=c11", "-fsyntax-only",
+                   "-Werror=implicit-function-declaration"] + \
+                  [a for i in includes for a in ("-I", i)] + sources
+    r = subprocess.run(command, capture_output=True, text=True)
+    return r.returncode == 0, r.stdout + r.stderr
+
+
 def run(recompiler, args, cwd=ROOT):
     return subprocess.run([recompiler] + args, capture_output=True, text=True, cwd=cwd)
 
@@ -153,6 +177,50 @@ def generate(recompiler, tmp, name, entry, load, seeds, body=None):
             with open(os.path.join(out, n)) as f:
                 full += f.read()
     return dsrc, full, r.stdout
+
+
+def bodies_of(full):
+    """{func_ name: body text} of the emitted C."""
+    return {m.group(1): m.group(2) for m in re.finditer(
+        r"^void (func_[0-9A-F]{8})\(CPUState\* cpu\)\s*\{(.*?)^\}", full, re.M | re.S)}
+
+
+def to_segment(text, seg):
+    """Every 8-digit hex token of the image moved into `seg` (constants,
+    labels and names alike)."""
+    return re.sub(r"(?<![0-9A-Fa-f])([0-9A-F])([0-9A-F]{7})(?![0-9A-Fa-f])",
+                  lambda m: "%08X" % (seg | (int(m.group(0), 16) & PHYS_MASK))
+                  if (int(m.group(0), 16) & PHYS_MASK) >> 16 == (LOAD >> 16) else m.group(0),
+                  text)
+
+
+def build_switch_body(load=LOAD, case_seg=None):
+    """A bounded jump table in an image at `load`: sltiu/beq guard, lw of a
+    table of case PCs in `case_seg` (default: the image's own segment), jr.
+    Each case branches to one shared jr $ra."""
+    if case_seg is None:
+        case_seg = load & SEG_MASK
+    body = w([0x3C080000 | (load >> 16), 0x25100100, 0, 0x2C620003, 0x10400010, 0,
+              0x00031080, 0x00501021, 0x8C420000, 0, 0x00400008, 0,
+              0x24020001, 0x10000007, 0, 0x24020002, 0x10000004, 0,
+              0x24020003, 0x10000001, 0, 0x03E00008, 0])
+    body += b"\x00" * (0x100 - len(body))
+    phys = load & PHYS_MASK
+    return body + w([case_seg | (phys + 0x30), case_seg | (phys + 0x3C), case_seg | (phys + 0x48)])
+
+
+def build_stub_body():
+    """A function whose jal target decodes as data: the target is a data stub
+    (psx_unknown_dispatch, no dispatch row), in the home compile and in a
+    variant that reaches it."""
+    return w([0x27BDFFF8, 0xAFBF0004, jal(LOAD + 0x20), 0, 0x8FBF0004, 0x27BD0008,
+              0x03E00008, 0, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF])
+
+
+def build_alias_body(n=40):
+    """One straight-line host function with interior seeds at +0x10 and +0x20:
+    an alias group (one shared psx_alias_body_ body, a wrapper per entry)."""
+    return w([0x24420001] * n + [0x03E00008, 0])
 
 
 def rows_of(src):
@@ -185,24 +253,28 @@ def main():
         check("Loaded 2 extra function addresses" in log,
               "KUSEG seeds in the link segment must be loaded (log: %r)"
               % re.findall(r"Loaded .*", log))
-        check("variant seed 0x80010020 (entry, KSEG0): home PC would be 0x00010020" in log,
-              "a KSEG0 seed for a KUSEG image must be reported as a variant request")
+        check("variant seed 0x80010020 (entry, KSEG0): home PC would be 0x00010020" in log
+              and "Segment variant 0x80000000" in log,
+              "a KSEG0 seed for a KUSEG image must be compiled as a variant request")
         rows = rows_of(src)
-        check(len(rows) >= 2, "expected at least two dispatch entries, got %d" % len(rows))
-        check(all((a & SEG_MASK) == KUSEG and (r == 0 or (r & SEG_MASK) == KUSEG)
-                  for a, r, _ in rows),
-              "every row key and resume PC is a KUSEG PC: %s" % rows)
-        check(all((int(fn[5:], 16) & SEG_MASK) == KUSEG and (r != 0 or fn == "func_%08X" % a)
-                  for a, r, fn in rows),
-              "func_ names are the KUSEG identity: %s" % rows)
+        check(len(rows) >= 3, "expected at least three dispatch entries, got %d" % len(rows))
+        check(all((a & SEG_MASK) == (int(fn[5:], 16) & SEG_MASK) and
+                  (r == 0 or (r & SEG_MASK) == (a & SEG_MASK)) for a, r, fn in rows),
+              "every row key and resume PC is in its body's segment: %s" % rows)
+        check(all(r != 0 or fn == "func_%08X" % a for a, r, fn in rows),
+              "entry rows name their own body: %s" % rows)
+        check([(a, fn) for a, _, fn in rows if (a & SEG_MASK) != KUSEG] ==
+              [(KSEG0 | (LOAD + 0x20), "func_80010020")],
+              "the only row outside KUSEG is the requested KSEG0 variant: %s" % rows)
         check({a for a, r, _ in rows} >= {LOAD, LOAD + 0x20}, "both functions have rows")
-        check("void func_00010000(CPUState* cpu)" in full and
-              "void func_00010020(CPUState* cpu)" in full,
-              "bodies are named by their KUSEG PC (§5.1)")
-        check("cpu->gpr[31] = 0x00010010u;" in full, "the jal links a KUSEG PC")
-        check("psx_icache_fetch(cpu, 0x00010000u)" in full, "fetch tags are KUSEG")
-        check(not re.search(r"0x8001[0-9A-F]{4}u", full),
-              "no KSEG0 PC of the image appears in the KUSEG body")
+        bodies = bodies_of(full)
+        check({"func_00010000", "func_00010020", "func_80010020"} <= set(bodies),
+              "bodies are named by their PC, the variant's included (§5.1): %s" % sorted(bodies))
+        home = bodies["func_00010000"] + bodies["func_00010020"]
+        check("cpu->gpr[31] = 0x00010010u;" in home, "the jal links a KUSEG PC")
+        check("psx_icache_fetch(cpu, 0x00010000u)" in home, "fetch tags are KUSEG")
+        check(not re.search(r"0x8001[0-9A-F]{4}u", home),
+              "no KSEG0 PC of the image appears in the KUSEG bodies")
         keys = [a & PHYS_MASK for a, _, _ in rows]
         check(keys == sorted(keys), "dispatch table is sorted by physical address")
 
@@ -212,20 +284,154 @@ def main():
         body = m.group(1)
         check("0x1FFFFFFFu" in body and "k_psx_game_dispatch_index" in body,
               "small resident tables index the physical word")
-        check(".addr != addr" in body, "the lookup requires the exact PC")
+        check("k_psx_game_dispatch[row].addr == addr" in body,
+              "a word with rows in two segments is searched for the exact PC")
+
+        # -- segment variants: the direct-edge closure, per segment (§5.4) ----
+        vsrc, vfull, vlog = generate(
+            args.recompiler, tmp, "variants", LOAD, LOAD,
+            [LOAD, LOAD + 0x20, KSEG0 | LOAD, KSEG1 | LOAD, KSEG0 | (LOAD + 0x10)])
+        vrows = {a: (r, fn) for a, r, fn in rows_of(vsrc)}
+        for seg in (KSEG0, KSEG1):
+            name = "func_%08X" % (seg | LOAD)
+            want = {seg | LOAD: (0, name), seg | (LOAD + 0x10): (seg | (LOAD + 0x10), name),
+                    seg | (LOAD + 0x20): (0, "func_%08X" % (seg | (LOAD + 0x20)))}
+            got = {a: v for a, v in vrows.items() if (a & SEG_MASK) == seg}
+            check(got == want, "the 0x%08X variant is A, its call return and its jal callee B "
+                  "(the closure), with rows in that segment: %s" % (seg, got))
+        vbodies = bodies_of(vfull)
+        for fn in ("func_00010000", "func_00010020"):
+            v0 = "func_%08X" % (KSEG0 | int(fn[5:], 16))
+            check(to_segment(vbodies[fn], KSEG0) == vbodies[v0],
+                  "a cached variant is the home C with the segment swapped (%s)" % v0)
+            v1 = vbodies["func_%08X" % (KSEG1 | int(fn[5:], 16))]
+            insns = re.findall(r"/\* 0x([0-9A-F]{8}): ", v1)
+            fetched = set(re.findall(r"psx_icache_fetch\(cpu, 0x([0-9A-F]{8})u\)", v1))
+            check(insns and all(i in fetched and i.startswith("A") for i in insns),
+                  "every instruction of a KSEG1 variant is charged its own fetch (§5.6)")
+            check(not re.search(r"0x[08]001[0-9A-F]{4}u", v1),
+                  "a KSEG1 variant bakes no KUSEG or KSEG0 PC of the image")
+
+        # A variant seed must name a home dispatch entry.
+        psx = os.path.join(tmp, "variants.psx")
+        bad_seeds = os.path.join(tmp, "unplaced.seeds.txt")
+        with open(bad_seeds, "w") as f:
+            f.write("0x%08X\n0x%08X\n" % (LOAD, KSEG0 | (LOAD + 4)))
+        r = run(args.recompiler, [psx, "--seeds", bad_seeds, "--out-dir",
+                                  os.path.join(tmp, "unplaced")])
+        check(r.returncode != 0 and "variant seed 0x80010004 cannot be compiled" in r.stderr,
+              "a variant seed with no home dispatch entry stops the build:\n%s"
+              % (r.stderr or r.stdout)[-2000:])
+
+        # A jump-table case is local only in its own segment: the KSEG0
+        # variant of a KUSEG switch tail-transfers every KUSEG case value.
+        _, sfull, _ = generate(args.recompiler, tmp, "switch", LOAD, LOAD,
+                               [LOAD, KSEG0 | LOAD], body=build_switch_body())
+        sbodies = bodies_of(sfull)
+        check("/* jump table 0x00010100" in sbodies["func_00010000"] and
+              re.search(r"case 0x00010030u:\s*\n(.*\n)*?\s*goto block_00010030;",
+                        sbodies["func_00010000"]),
+              "the home body switches locally on its own segment's case PCs")
+        v = sbodies["func_80010000"]
+        check("jump table" not in v and not re.search(r"case 0x0001[0-9A-F]{4}u", v) and
+              "cpu->pc = _jt_80010028; return;" in v,
+              "the KSEG0 variant tail-transfers a KUSEG case value to dispatch")
+
+        # A home compile follows the same rule. Its tables normally hold its
+        # own segment's PCs and stay local switches; a table whose values are
+        # another segment's PCs of the image's bytes (a KSEG0 image whose table
+        # holds KUSEG PCs) dispatches those cases with their full PC, where
+        # they are segment misses, instead of continuing in the KSEG0 body.
+        for case_seg, local in ((KSEG0, True), (KUSEG, False)):
+            name = "switch_k0_" + ("own" if local else "kuseg")
+            _, hfull, _ = generate(args.recompiler, tmp, name, KSEG0 | LOAD, KSEG0 | LOAD,
+                                   [KSEG0 | LOAD], body=build_switch_body(KSEG0 | LOAD, case_seg))
+            h = bodies_of(hfull)["func_80010000"]
+            if local:
+                check("/* jump table 0x80010100" in h and
+                      re.search(r"case 0x80010030u:\s*\n(.*\n)*?\s*goto block_80010030;", h),
+                      "a KSEG0 home body switches locally on its own segment's case PCs")
+            else:
+                check("jump table" not in h and not re.search(r"case 0x0001[0-9A-F]{4}u", h) and
+                      "cpu->pc = _jt_80010028; return;" in h,
+                      "a KSEG0 home body tail-transfers a KUSEG case value to dispatch")
+
+        # Only KUSEG below 0x20000000, KSEG0 and KSEG1 map the image's bytes. A
+        # seed in 0x20000000-0x7FFFFFFF or in KSEG2 names no code of the image:
+        # it stops the build with the link-segment spelling of its bytes.
+        for bad in (0x20000000 | LOAD, 0xC0000000 | LOAD):
+            bad_seeds = os.path.join(tmp, "badseg.seeds.txt")
+            with open(bad_seeds, "w") as f:
+                f.write("0x%08X\n0x%08X\n" % (LOAD, bad))
+            r = run(args.recompiler, [psx, "--seeds", bad_seeds, "--out-dir",
+                                      os.path.join(tmp, "badseg")])
+            check(r.returncode != 0 and
+                  ("seed 0x%08X is in segment 0x%08X, which does not map physical memory"
+                   % (bad, bad & SEG_MASK)) in r.stderr and
+                  ("are 0x%08X in its link segment" % LOAD) in r.stderr and
+                  "Segment variant" not in r.stdout,
+                  "a seed in a segment that does not map physical memory stops the build:\n%s"
+                  % (r.stderr or r.stdout)[-2000:])
+
+        # A variant closure that reaches a data stub compiles the stub in its
+        # segment, and the stub gets no dispatch row, as at home.
+        dsrc, dfull, _ = generate(args.recompiler, tmp, "stub", LOAD, LOAD, [LOAD, KSEG0 | LOAD],
+                                  body=build_stub_body())
+        drows = {a for a, _, _ in rows_of(dsrc)}
+        check("psx_unknown_dispatch(cpu, 0x80010020u, 0x00010020u);" in
+              bodies_of(dfull).get("func_80010020", ""),
+              "the variant's jal target is compiled as its data stub")
+        check((KSEG0 | LOAD) in drows and not drows & {LOAD + 0x20, KSEG0 | (LOAD + 0x20)},
+              "a data stub has no dispatch row, at home or in a variant: %s"
+              % sorted("%08X" % a for a in drows))
+
+        # A variant seed at an alias entry compiles its alias group: one shared
+        # psx_alias_body_ in the variant's segment and a wrapper per entry.
+        # The shards share one declarations header; every alias body a shard
+        # defines is declared there, so a wrapper in another shard can call it
+        # (compiled below against the header alone), and every emitted file
+        # compiles.
+        _, afull, _ = generate(args.recompiler, tmp, "alias", LOAD, LOAD,
+                               [LOAD, LOAD + 0x10, LOAD + 0x20, KSEG0 | (LOAD + 0x10)],
+                               body=build_alias_body())
+        abodies = bodies_of(afull)
+        check("psx_alias_body_80010000(cpu, 0x80010010u);" in abodies.get("func_80010010", "") and
+              "psx_alias_body_80010000(cpu, 0x80010020u);" in abodies.get("func_80010020", ""),
+              "an alias entry's variant brings its whole alias group: %s" % sorted(abodies))
+        adir = os.path.join(tmp, "alias")
+        hosts = sorted(set(re.findall(r"^void (psx_alias_body_[0-9A-F]{8})\(", afull, re.M)))
+        check(hosts == ["psx_alias_body_00010000", "psx_alias_body_80010000"],
+              "the home and the variant alias bodies are emitted: %s" % hosts)
+        if args.compiler:
+            probe = os.path.join(tmp, "alias_decls_probe.c")
+            with open(probe, "w") as f:
+                f.write('#include "alias.psx_decls.h"\n'
+                        "void (*const alias_bodies_probe[])(CPUState*, uint32_t) = {%s};\n"
+                        % ", ".join(hosts))
+            sources = [probe] + sorted(os.path.join(adir, n) for n in os.listdir(adir)
+                                       if n.endswith(".c"))
+            ok, out = compile_only(args.compiler, sources, [adir, os.path.join(ROOT, "runtime", "include")])
+            check(ok, "every alias body is declared in the shared header and the variant "
+                  "output compiles:\n" + out[-3000:])
 
         # -- a table spanning 2 MiB or more takes the binary-search form ------
         wide_src, _, _ = generate(args.recompiler, tmp, "kuseg_wide", LOAD, LOAD,
-                                  [LOAD, LOAD + WIDE_SPAN], body=build_wide_body())
+                                  [LOAD, LOAD + WIDE_SPAN, KSEG1 | (LOAD + WIDE_SPAN)],
+                                  body=build_wide_body())
         wide_rows = rows_of(wide_src)
-        check({LOAD, LOAD + WIDE_SPAN} <= {a for a, _, _ in wide_rows} and
-              all((a & SEG_MASK) == KUSEG for a, _, _ in wide_rows),
-              "the wide KUSEG image has KUSEG rows at both ends: %s" % wide_rows)
+        check({LOAD, LOAD + WIDE_SPAN, KSEG1 | (LOAD + WIDE_SPAN)} <=
+              {a for a, _, _ in wide_rows} and
+              all((a & SEG_MASK) == KUSEG for a, _, _ in wide_rows
+                  if a != KSEG1 | (LOAD + WIDE_SPAN)),
+              "the wide KUSEG image has KUSEG rows at both ends and one KSEG1 variant: %s"
+              % wide_rows)
         wm = re.search(r"static const PsxGameDispatchEntry\* psx_game_find_entry"
                        r"\(uint32_t addr\) \{(.*?)\n\}", wide_src, re.DOTALL)
         check(wm and "k_psx_game_dispatch_index" not in wm.group(1) and
-              "while (lo < hi)" in wm.group(1),
-              "a table spanning 2 MiB or more binary-searches the physical word")
+              "while (lo < hi)" in wm.group(1) and
+              "k_psx_game_dispatch[row].addr == addr" in wm.group(1),
+              "a table spanning 2 MiB or more binary-searches the physical word, "
+              "then the exact PC among the word's rows")
 
         # -- JAL-driven discovery takes the call's segment, not KSEG0 --------
         jsrc, _, jlog = generate(args.recompiler, tmp, "kuseg_jal", LOAD, LOAD, [],
@@ -272,6 +478,16 @@ def main():
             if ok:
                 check(r.returncode == 0, "a link-segment config site is accepted:\n%s"
                       % (r.stderr or r.stdout)[-2000:])
+                # The seeds ask for a KSEG0 variant of that function: a config
+                # code site applies to every segment compiled for its bytes.
+                hot = ""
+                for n in os.listdir(os.path.join(tmp, "cfg_%08X" % site)):
+                    if n.endswith(".c"):
+                        with open(os.path.join(tmp, "cfg_%08X" % site, n)) as f:
+                            hot += f.read()
+                for fn in ("func_00010020", "func_80010020"):
+                    check("__attribute__((hot))\n#endif\nvoid %s(CPUState* cpu)" % fn in hot,
+                          "the link-segment hot_funcs site reaches %s" % fn)
             else:
                 check(r.returncode != 0 and
                       "recompiler.hot_funcs: 0x80010020 -> 0x00010020" in r.stderr,
@@ -402,12 +618,14 @@ int main(void) {
                         expected = &k_psx_game_dispatch[i];
                 assert(psx_game_find_entry(addr) == expected);
                 assert(psx_game_is_function_entry(addr) == (expected != 0));
-                if (segments[s] != 0x00000000u) assert(!expected);
+                /* Outside KUSEG only the requested variant has a body. */
+                if (segments[s] != 0x00000000u) assert(!expected || addr == 0x80010020u);
+                if (addr == 0x80010020u) assert(expected && expected->addr == addr);
                 int has_home = 0;
                 for (unsigned i = 0; i < PSX_GAME_DISPATCH_COUNT; ++i)
                     if ((k_psx_game_dispatch[i].addr & 0x1FFFFFFFu) == phys) has_home = 1;
                 if (has_home) assert(psx_game_address_in_text(addr));
-                if (has_home && segments[s] != 0x00000000u) {
+                if (has_home && !expected) {
                     int old_calls = calls, old_irqs = irqs;
                     cpu.pc = 0xDEADBEEFu;
                     assert(!psx_game_text_native_ok(addr));
@@ -448,7 +666,7 @@ int main(void) {
         assert(!psx_game_find_entry(0xFFFFFFFFu));
         assert(!psx_game_find_entry(0));
     }
-    assert(home_hits >= 4);   /* both functions, both geometries */
+    assert(home_hits >= 6);   /* both functions and the variant, both geometries */
     return 0;
 }
 """
@@ -484,6 +702,8 @@ int main(void) {
     assert(PSX_GAME_DISPATCH_COUNT >= 2);
     for (unsigned i = 0; i < PSX_GAME_DISPATCH_COUNT; ++i) {
         const uint32_t phys = k_psx_game_dispatch[i].addr & 0x1FFFFFFFu;
+        /* Each word once: a variant's row follows its home row's word. */
+        if (i && (k_psx_game_dispatch[i - 1].addr & 0x1FFFFFFFu) == phys) continue;
         for (unsigned s = 0; s < 3; ++s) {
             for (int d = -4; d <= 4; d += 4) {
                 const uint32_t addr = segments[s] | (phys + (uint32_t)d);
@@ -492,7 +712,9 @@ int main(void) {
                     if (k_psx_game_dispatch[j].addr == addr) expected = &k_psx_game_dispatch[j];
                 assert(psx_game_find_entry(addr) == expected);
                 assert(psx_game_is_function_entry(addr) == (expected != 0));
-                if (segments[s] != 0x00000000u) assert(!expected);
+                /* Outside KUSEG only the requested KSEG1 variant has a body. */
+                if (segments[s] != 0x00000000u)
+                    assert(!expected || addr == (0xA0000000u | (0x00010000u + 0x200000u)));
                 const int before = calls;
                 assert(psx_dispatch_game_compiled(&cpu, addr) == (expected != 0));
                 assert(calls == before + (expected != 0));
@@ -506,11 +728,15 @@ int main(void) {
 """
     compile_and_run(args.compiler, wide, [], include)
 
-    print("KUSEG-linked EXE test passed (%d KUSEG rows, exact lookup in the indexed and "
-          "binary-search forms, aliases miss, variant seeds reported, KSEG1 image charged "
-          "per instruction, foreign config sites and directives refused, physically "
-          "matched sites accepted, mirror PCs never run compiled code in 2 or 8 MiB "
-          "geometry)" % len(rows))
+    print("KUSEG-linked EXE test passed (%d rows, exact lookup in the indexed and "
+          "binary-search forms with variant rows, unrequested aliases miss, variants "
+          "compiled as their direct-edge closure, cached variants equal the home C, KSEG1 "
+          "variants and images charged per instruction, foreign jump-table cases "
+          "dispatched at home and in variants, data stubs rowless, variant alias groups "
+          "declared for every shard, seeds outside the physical segments refused, foreign "
+          "config sites and directives refused, physically matched "
+          "sites accepted, mirror PCs never run compiled code in 2 or 8 MiB geometry)"
+          % len(rows))
 
 
 if __name__ == "__main__":

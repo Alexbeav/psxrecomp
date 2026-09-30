@@ -45,10 +45,7 @@ SEG_MASK, PHYS_MASK = 0xE0000000, 0x1FFFFFFF
 
 # id -> (design section, what is missing). Remove an entry in the change
 # that closes it; the test fails until the ledger matches.
-KNOWN_GAPS = {
-    "segment-variants": ("5.4", "a seeded KSEG1 entry gets no body of its own"),
-    "kseg1-fetch-charge": ("5.6", "compiled KSEG1 code does not charge +4 per fetch"),
-}
+KNOWN_GAPS = {}
 
 # Closed ids that stay as regression guards: each reports a new gap if the
 # property breaks again. id -> design section.
@@ -66,6 +63,10 @@ REGRESSION_GUARDS = {
     "home-seed-accepted": "5.3",
     "alias-fetch-coherence": "5.3",
     "segment-miss": "5.5",
+    # PR D: segment-qualified seeds compile per-segment variants, and KSEG1
+    # variants charge a fetch per instruction.
+    "segment-variants": "5.4",
+    "kseg1-fetch-charge": "5.6",
 }
 
 
@@ -431,6 +432,19 @@ def main():
             gaps.add("segment-variants")
             notes["segment-variants"] = ", ".join(
                 "0x%08X->%s" % (q, "0x%08X" % found[q][0] if found[q] else "miss") for q in bad)
+        else:
+            # A variant body is its segment's code identity: every PC it bakes
+            # (links, fetch tags, IRQ resume PCs, exits and continuation keys,
+            # store PCs) is in that segment, and so is its name.
+            foreign = sorted({pc for q in variant_q for gid, pattern in PC_SITES.items()
+                              for pc in pc_constants(bodies[found[q][2]], pattern)
+                              if (pc & SEG_MASK) != (q & SEG_MASK)} |
+                             {int(found[q][2][5:], 16) for q in variant_q
+                              if (int(found[q][2][5:], 16) & SEG_MASK) != (q & SEG_MASK)})
+            if foreign:
+                gaps.add("segment-variants")
+                notes["segment-variants"] = "%d PCs baked in another segment, e.g. 0x%08X" % (
+                    len(foreign), foreign[0])
         wrong_home = [q for q in home_q if not found[q] or found[q][0] != q]
         stray = [q for q in miss_q if found[q]]
         if stray or wrong_home:
@@ -445,9 +459,11 @@ def main():
                           if (pc & SEG_MASK) != link})
             if gid == "resume-pc-segment":
                 # The dispatch rows' keys and resume PCs are PCs too (§5.2):
-                # dispatch sets cpu->pc = resume_pc before entering a body.
-                off = sorted(set(off) | {pc for a, r, _ in rows for pc in (a, r)
-                                         if pc and (pc & SEG_MASK) != link})
+                # dispatch sets cpu->pc = resume_pc before entering a body, so
+                # each row's key and resume PC are in the segment of the body
+                # it enters (the home body's, or a variant's, §5.4).
+                off = sorted(set(off) | {pc for a, r, fn in rows for pc in (a, r)
+                                         if pc and (pc & SEG_MASK) != (int(fn[5:], 16) & SEG_MASK)})
             if off:
                 gaps.add(gid)
                 notes[gid] = "%d constants, e.g. 0x%08X" % (len(off), off[0])
@@ -506,6 +522,7 @@ def main():
         run_recompiler(args.bios_recompiler, ["--config", openbios_toml, "--out-dir", tmp])
         with open(os.path.join(tmp, "OpenBIOS_full.c")) as f:
             bios_c = f.read()
+
     total, uncharged = bios_uncharged_kseg1(bios_c)
     if total == 0:
         model_fail.append("OpenBIOS: no KSEG1 instructions found (parser drift?)")
