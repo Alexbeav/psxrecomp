@@ -207,8 +207,24 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]);
  * has changes nothing. A kind this build does not know selects the pad.
  * Connection is still sio_set_pad_connected. */
 #define SIO_DEVICE_PAD 0
+/* SIO_DEVICE_MOUSE is the Sony PS1 Mouse (SCPH-1030/1090, PSX-SPX
+ * "Controllers - Mouse"): ID 5A12h, it answers only the 42h read with 6 bytes
+ * (12h 5Ah FFh buttons dX dY) and ignores every other command. Switching a
+ * slot to or from it clears its motion and buttons. */
+#define SIO_DEVICE_MOUSE 1
 void sio_set_port_device(int slot, int kind);
 int  sio_get_port_device(int slot);
+/* Host mouse motion in device counts (positive X = right, positive Y = down).
+ * Added to a per-slot accumulator that each read drains by at most one byte
+ * (-128..+127) per axis; the rest carries to the next read. The accumulator
+ * is clamped to +/-SIO_MOUSE_ACCUM_MAX so a long gap between reads does not
+ * store a large jump. No effect unless the slot is a mouse. */
+#define SIO_MOUSE_ACCUM_MAX 1024
+void sio_mouse_add_motion(int slot, int dx, int dy);
+/* Host button state: nonzero = pressed. No effect unless the slot is a mouse. */
+void sio_set_mouse_buttons(int slot, int left, int right);
+/* Drop any motion not yet read (capture released, focus lost). */
+void sio_mouse_clear_motion(int slot);
 
 /* ---- SIO byte-level trace ring buffer ----
  * 1M entries × ~28 B ≈ 32 MB.  At ~600 byte/sec that's ~30 min of history. */
