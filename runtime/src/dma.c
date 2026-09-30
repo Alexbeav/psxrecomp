@@ -776,6 +776,27 @@ static void start_async_gpu_linked_list(void) {
     gpu_ot_polls_this_walk = 0;
 }
 
+/* Bound on the kick hold: a walk that has fetched more headers than 2 MiB of
+ * RAM has words must be cyclic. */
+#define GPU_LL_HOLD_MAX_NODES 0x80000u
+
+/* PSX-SPX "CPU Operation during DMA": DMA outruns CPU memory access, and a CPU
+ * read of RAM or I/O waits while DMA moves data. The kicking store therefore
+ * returns only when the list walk needs GPU FIFO space or ends. Guest code that
+ * rewrites a packet right after DrawOTag (the SCPH1001 intro's shared text
+ * packets) cannot reach it before the walk does. A cyclic walk releases the
+ * CPU and keeps running as before. */
+static void hold_cpu_for_gpu_linked_list(void) {
+    if (psx_in_device_service || g_ls_replay_active) return;
+    while (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
+           channel_enabled(2) &&
+           gpu_linked_list.nodes_processed < GPU_LL_HOLD_MAX_NODES &&
+           !(gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD && !gpu_queue_has_space())) {
+        psx_advance_cycles(dma_gpu_ll_cycles_to_event(&gpu_linked_list));
+        psx_devices_service_to_now();
+    }
+}
+
 /* ---- Source-profile DMA machines (TAS/source mode) ----
  *
  * Selected by PSX_GPU_DMA_MODEL (GPU upload, GPU linked list, SPU),
@@ -1714,6 +1735,7 @@ static void try_execute(int ch) {
                     channels[2].madr != gpu_linked_list.current_addr)
                     start_async_gpu_linked_list();
                 psx_next_service_cycle=0;
+                hold_cpu_for_gpu_linked_list();
             } else if(channels[2].chcr & 1u) {
                 memset(&gpu_block,0,sizeof gpu_block);
                 gpu_block.total_words=transfer_word_count(2);

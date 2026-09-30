@@ -114,6 +114,34 @@ int main(int argc,char **argv) {
         assert(dicr&(1u<<26)); free(gw); free(dw);
         puts("PASS readback-blocked stop, paused snapshot and live resume"); return 0;
     }
+    if(argc>1 && !strcmp(argv[1],"kick-hold")) {
+        /* An ordering table of 64 header-only entries walked from the top,
+         * with one packet linked from entry 1 (PS1B-97). The walk finishes
+         * inside the kicking store, so clearing the packet's link right after
+         * the kick (the intro's template copy) cannot send it to address 0. */
+        for(unsigned i=0;i<64;i++)
+            psx_write_word(0x4000+4*i,i?0x4000+4*(i-1):0x00ffffff);
+        psx_write_word(0x4004,0x5000);
+        psx_write_word(0x5000,0x01004000); psx_write_word(0x5004,0xe1000005);
+        uint64_t kicked=psx_cycle_count;
+        dma_write(0x1f8010a0,0x40fc); dma_write(0x1f8010a8,0x01000401);
+        assert(!gpu_linked_list.active && psx_cycle_count>=kicked+64);
+        psx_write_word(0x5000,0x01000000);
+        psx_advance_cycles(25000); psx_devices_service_to_now();
+        assert(!gpu_linked_list.active && texpage_x==5 && (dicr&(1u<<26)));
+        puts("PASS a list kick holds the CPU until the walk needs the GPU"); return 0;
+    }
+    if(argc>1 && !strcmp(argv[1],"kick-cycle")) {
+        /* A header-only node that links to itself never ends. The kick
+         * releases the CPU after more headers than RAM has words. */
+        psx_write_word(0x6000,0x00006000);
+        uint64_t kicked=psx_cycle_count;
+        dma_write(0x1f8010a0,0x6000); dma_write(0x1f8010a8,0x01000401);
+        assert(gpu_linked_list.active && psx_cycle_count>=kicked+0x80000u);
+        dma_write(0x1f8010a8,0);
+        assert(!gpu_linked_list.active);
+        puts("PASS a cyclic header-only list releases the CPU"); return 0;
+    }
     if(argc>1 && !strcmp(argv[1],"scheduler")) {
         fill(); gpu_write_gp0(0xe1000123);
         assert(texpage_x==0);
