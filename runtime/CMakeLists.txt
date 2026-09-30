@@ -299,6 +299,24 @@ add_test(NAME sio_dualshock_dtr_session_test COMMAND sio_dualshock_dtr_session_t
 add_executable(sio_dualshock_p2_p3_test tests/test_sio_dualshock_p2_p3.c)
 target_include_directories(sio_dualshock_p2_p3_test PRIVATE include)
 add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
+    # PS1 Mouse (PS1B-279): the byte protocol, and pin F byte identity of the
+    # pad/card bus when no port is a mouse. Two builds: 2 ports, and 5 players
+    # for the multitap seat.
+    foreach(_players IN ITEMS 2 5)
+        add_executable(sio_mouse_p${_players}_test tests/test_sio_mouse.c)
+        target_include_directories(sio_mouse_p${_players}_test PRIVATE include)
+        target_compile_definitions(sio_mouse_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
+        add_test(NAME sio_mouse_p${_players}_test COMMAND sio_mouse_p${_players}_test)
+        set(_target sio_port_device_identity_p${_players}_test)
+        add_executable(${_target} tests/test_sio_port_device_identity.c)
+        target_include_directories(${_target} PRIVATE include)
+        target_compile_definitions(${_target} PRIVATE PSX_MAX_PLAYERS=${_players})
+        foreach(_profile IN ITEMS 0 1 2)
+            add_test(NAME ${_target}_${_profile} COMMAND ${_target} ${_profile})
+            add_test(NAME ${_target}_${_profile}_mouse_roundtrip
+                COMMAND ${_target} ${_profile} --touch-mouse)
+        endforeach()
+    endforeach()
 add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
     target_include_directories(sio_nymashock_dualshock_test PRIVATE include)
     add_test(NAME sio_nymashock_dualshock_test COMMAND ${Python3_EXECUTABLE}
@@ -337,6 +355,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(launcher_device_roundtrip_test
         tests/test_launcher_device_roundtrip.cpp)
     target_include_directories(launcher_device_roundtrip_test PRIVATE include)
+    # The checks are assert()s; keep them in Release builds.
+    if(NOT MSVC)
+        target_compile_options(launcher_device_roundtrip_test PRIVATE -UNDEBUG)
+    endif()
     add_test(NAME launcher_device_roundtrip_test
              COMMAND launcher_device_roundtrip_test)
 

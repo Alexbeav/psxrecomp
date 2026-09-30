@@ -20,5 +20,13 @@ int main() {
     assert(launcher_device_from_source(
         2, " 030000005e0400008e02000000000000 ") ==
         "030000005e0400008e02000000000000");
+
+    /* PS1 Mouse seat: shown as None, kept as mouse if left there. */
+    assert(PSXRecompV4::launcher_device_is_mouse(" Mouse "));
+    assert(!PSXRecompV4::launcher_device_is_mouse("keyboard"));
+    assert(launcher_source_from_device("mouse") == 0);
+    assert(launcher_device_from_source(0, "mouse") == "mouse");
+    assert(launcher_device_from_source(1, "mouse") == "keyboard");
+    assert(launcher_device_from_source(2, "mouse") == "gamepad");
     return 0;
 }

@@ -198,6 +198,32 @@ int sio_get_pad_analog(int slot);
 int sio_get_pad_config_capable(int slot);
 void sio_get_pad_sticks(int slot, uint8_t out[4]);
 
+/* ---- Port device kind (PS1B-279) ----
+ * Which device answers on a logical pad slot. SIO_DEVICE_PAD (the default) is
+ * the digital pad / DualShock above; nothing about it changes. SIO_DEVICE_MOUSE
+ * is the Sony PS1 Mouse (SCPH-1030/1090): ID 5A12h, it answers only the 42h
+ * read with 6 bytes (12h 5Ah FFh buttons dX dY) and ignores every other
+ * command. Spec: recomp-corpus references/ps1/PERIPHERAL-MOUSE-SPEC.md.
+ * The kind is a host preference (which plug is in the port), like the
+ * multitap: it survives sio_init and is not part of the snapshot wire.
+ * Switching a slot's kind clears that slot's mouse motion, buttons, config
+ * latch and rumble map. Connection is still sio_set_pad_connected. */
+#define SIO_DEVICE_PAD   0
+#define SIO_DEVICE_MOUSE 1
+void sio_set_port_device(int slot, int kind);
+int  sio_get_port_device(int slot);
+/* Host mouse motion in device counts (positive X = right, positive Y = down).
+ * Added to a per-slot accumulator that each read drains by at most one byte
+ * (-128..+127) per axis; the rest carries to the next read. The accumulator
+ * is clamped to +/-SIO_MOUSE_ACCUM_MAX so a long gap between reads does not
+ * store a large jump. No effect unless the slot is a mouse. */
+#define SIO_MOUSE_ACCUM_MAX 1024
+void sio_mouse_add_motion(int slot, int dx, int dy);
+/* Host button state: nonzero = pressed. */
+void sio_set_mouse_buttons(int slot, int left, int right);
+/* Drop any motion not yet read (capture released, focus lost). */
+void sio_mouse_clear_motion(int slot);
+
 /* ---- SIO byte-level trace ring buffer ----
  * 1M entries × ~28 B ≈ 32 MB.  At ~600 byte/sec that's ~30 min of history. */
 #define SIO_TRACE_CAP (1 << 20)

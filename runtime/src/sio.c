@@ -163,6 +163,17 @@ static int8_t pad_type_req[PSX_MAX_PLAYERS] = {
     PSX_PAD_INIT(-1)
 };
 
+/* Device kind per logical slot (PS1B-279): SIO_DEVICE_PAD (0, the default)
+ * or SIO_DEVICE_MOUSE. A host preference, like the multitap: sio_init keeps
+ * it and the snapshot wire does not carry it, so a slot that stays a pad is
+ * byte-identical to a build without the mouse. */
+static PSX_BSS uint8_t pad_device_kind[PSX_MAX_PLAYERS];
+/* PS1 Mouse (PSX-SPX "Controllers - Mouse"): motion not yet read, per axis
+ * (X right-positive, Y down-positive), and the buttons (bit0 left, bit1
+ * right; 1 = pressed). */
+static PSX_BSS int16_t mouse_motion[PSX_MAX_PLAYERS][2];
+static PSX_BSS uint8_t mouse_buttons[PSX_MAX_PLAYERS];
+
 /* ---- Logical pad ↔ physical SIO port mapping ----
  *
  * Multitap off (default / PSX_MAX_PLAYERS==2):
@@ -255,13 +266,48 @@ static void mtap_finish_42(void) {
     }
 }
 
+static int slot_is_mouse(int logical) {
+    return logical >= 0 && logical < PSX_MAX_PLAYERS &&
+           pad_device_kind[logical] == SIO_DEVICE_MOUSE;
+}
+
+/* One reply byte of motion: at most -128..+127; the rest stays for the next
+ * read (host policy; PSX-SPX does not say what the mouse does past a byte). */
+static uint8_t mouse_take_axis(int16_t *pending) {
+    int v = *pending;
+    if (v > 127) v = 127;
+    if (v < -128) v = -128;
+    *pending = (int16_t)(*pending - v);
+    return (uint8_t)(int8_t)v;
+}
+
+/* The mouse's four data bytes after its 12h 5Ah ID (PSX-SPX): FFh; buttons
+ * with bits 0-1 = 0, bit 2 = right, bit 3 = left (0 = pressed), bits 4-7 = 1;
+ * then dX and dY. Reporting motion consumes it. */
+static void mouse_fill_data(int logical, uint8_t out[4]) {
+    out[0] = 0xFF;
+    out[1] = (uint8_t)(0xF0u |
+                       ((mouse_buttons[logical] & 2u) ? 0x00u : 0x04u) |
+                       ((mouse_buttons[logical] & 1u) ? 0x00u : 0x08u));
+    out[2] = mouse_take_axis(&mouse_motion[logical][0]);
+    out[3] = mouse_take_axis(&mouse_motion[logical][1]);
+}
+
 /* Fill 8-byte per-pad status block used in multitap bulk 0x42 responses.
  * Disconnected → all 0xFF. Digital → 0x41 0x5A btnL btnH + 0xFF pad.
- * Analog/config → 0x73/0xF3 0x5A btn + stick bytes. */
+ * Analog/config → 0x73/0xF3 0x5A btn + stick bytes. Mouse → 0x12 0x5A and
+ * its four data bytes, then 0xFF pad (PSX-SPX multitap method 1). */
 static void pad_fill_status8(int logical, uint8_t out[8]) {
     if (logical < 0 || logical >= PSX_MAX_PLAYERS ||
         !(pad_connected & (1u << logical))) {
         memset(out, 0xFF, 8);
+        return;
+    }
+    if (slot_is_mouse(logical)) {
+        out[0] = 0x12;
+        out[1] = 0x5A;
+        mouse_fill_data(logical, &out[2]);
+        out[6] = out[7] = 0xFF;
         return;
     }
     const uint8_t id = pad_in_config[logical] ? 0xF3
@@ -857,6 +903,10 @@ void sio_init(void) {
         pad_type_req[i] = -1;
         analog_mode_locked[i] = 0;
         pad_supports_config[i] = 1;
+        /* The device kind is a host preference and stays; its motion and
+         * buttons are power-on state. */
+        mouse_motion[i][0] = mouse_motion[i][1] = 0;
+        mouse_buttons[i] = 0;
     }
     pad_connected = 0;
     /* Multitap enable/port are host preferences — leave them alone across
@@ -1018,6 +1068,8 @@ void sio_netplay_canonicalize_session_pads(int slot_count)
         active_device = DEV_NONE;
 
     for (i = 0; i < PSX_MAX_PLAYERS; i++) {
+        /* Netplay carries pad blobs only; every seat is a pad on every peer. */
+        sio_set_port_device(i, SIO_DEVICE_PAD);
         if (i < slot_count) {
             sio_connect_pad(i);
             /* Immediate digital — sio_request_pad_type is deferred and left
@@ -1153,6 +1205,51 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]) {
     out[2] = pad_stick[slot][2]; out[3] = pad_stick[slot][3];
 }
 
+void sio_set_port_device(int slot, int kind) {
+    if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
+    const uint8_t k = (kind == SIO_DEVICE_MOUSE) ? SIO_DEVICE_MOUSE : SIO_DEVICE_PAD;
+    /* Re-asserting the same kind (hotplug, route refresh) must not disturb a
+     * DualShock's config latch or rumble map. */
+    if (pad_device_kind[slot] == k) return;
+    pad_device_kind[slot] = k;
+    /* A different plug: nothing of the old device's state carries over. */
+    mouse_motion[slot][0] = mouse_motion[slot][1] = 0;
+    mouse_buttons[slot] = 0;
+    pad_in_config[slot] = 0;
+    pad_type_req[slot] = -1;
+    analog_mode_locked[slot] = 0;
+    memset(pad_rumble_map[slot], 0xFF, sizeof(pad_rumble_map[slot]));
+    pad_rumble_small[slot] = 0;
+    pad_rumble_large[slot] = 0;
+}
+
+int sio_get_port_device(int slot) {
+    return (slot >= 0 && slot < PSX_MAX_PLAYERS) ? pad_device_kind[slot]
+                                                 : SIO_DEVICE_PAD;
+}
+
+static int16_t mouse_clamp_pending(long long v) {
+    if (v > SIO_MOUSE_ACCUM_MAX) v = SIO_MOUSE_ACCUM_MAX;
+    if (v < -SIO_MOUSE_ACCUM_MAX) v = -SIO_MOUSE_ACCUM_MAX;
+    return (int16_t)v;
+}
+
+void sio_mouse_add_motion(int slot, int dx, int dy) {
+    if (!slot_is_mouse(slot)) return;
+    mouse_motion[slot][0] = mouse_clamp_pending((long long)mouse_motion[slot][0] + dx);
+    mouse_motion[slot][1] = mouse_clamp_pending((long long)mouse_motion[slot][1] + dy);
+}
+
+void sio_set_mouse_buttons(int slot, int left, int right) {
+    if (!slot_is_mouse(slot)) return;
+    mouse_buttons[slot] = (uint8_t)((left ? 1u : 0u) | (right ? 2u : 0u));
+}
+
+void sio_mouse_clear_motion(int slot) {
+    if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
+    mouse_motion[slot][0] = mouse_motion[slot][1] = 0;
+}
+
 /* ── LEGACY pad-config compatibility (Tomba "Hybrid" controller) ─────────────
  *
  * Why this exists, and why it is explicitly LEGACY:
@@ -1286,6 +1383,7 @@ static void pad_process_byte(uint8_t tx_byte) {
             /* HiZ,80h,5Ah,LSB(Slot A id) then abort (psx-spx). */
             const int a = mtap_slot_a_logical();
             const uint8_t id = (!(pad_connected & (1u << a))) ? 0xFFu
+                               : slot_is_mouse(a) ? 0x12u
                                : (pad_in_config[a] ? 0xF3u
                                   : (pad_analog[a] ? 0x73u : 0x41u));
             pad_response[0] = 0x80;
@@ -1311,6 +1409,28 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_response_idx = 0;
             pad_current_cmd = 0;
             sio_rx_data = 0xFF;
+            break;
+        }
+        if (slot_is_mouse(lp)) {
+            /* PS1 Mouse: it answers only the 42h read, with 12h 5Ah and four
+             * data bytes. It has no config mode; any other command gets hi-z
+             * and no /ACK, like a plain digital pad (runtime choice, open in
+             * PERIPHERAL-MOUSE-SPEC.md). */
+            if (tx_byte == 0x42) {
+                pad_response[0] = 0x12;
+                pad_response[1] = 0x5A;
+                mouse_fill_data(lp, &pad_response[2]);
+                pad_response_len = 6;
+                pad_state = PAD_SEND_RESPONSE;
+                sio_rx_data = pad_response[0];
+                sio_stat |= SIO_STAT_ACK;
+            } else {
+                pad_state = PAD_IDLE;
+                pad_response_len = 0;
+                pad_response_idx = 0;
+                pad_current_cmd = 0;
+                sio_rx_data = 0xFF;
+            }
             break;
         }
         /* Controller ID reported as the first response byte. Real hardware
