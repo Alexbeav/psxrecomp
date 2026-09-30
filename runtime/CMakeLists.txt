@@ -326,12 +326,19 @@ add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
                 COMMAND ${_target} ${_profile} --touch-mouse)
             add_test(NAME ${_target}_${_profile}_negcon_roundtrip
                 COMMAND ${_target} ${_profile} --touch-negcon)
+            add_test(NAME ${_target}_${_profile}_guncon_roundtrip
+                COMMAND ${_target} ${_profile} --touch-guncon)
         endforeach()
         # neGcon (PS1B-304): the byte protocol, same two builds.
         add_executable(sio_negcon_p${_players}_test tests/test_sio_negcon.c)
         target_include_directories(sio_negcon_p${_players}_test PRIVATE include)
         target_compile_definitions(sio_negcon_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
         add_test(NAME sio_negcon_p${_players}_test COMMAND sio_negcon_p${_players}_test)
+        # GunCon (PS1B-305): the byte protocol, same two builds.
+        add_executable(sio_guncon_p${_players}_test tests/test_sio_guncon.c)
+        target_include_directories(sio_guncon_p${_players}_test PRIVATE include)
+        target_compile_definitions(sio_guncon_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
+        add_test(NAME sio_guncon_p${_players}_test COMMAND sio_guncon_p${_players}_test)
     endforeach()
     # neGcon twist (PS1B-304): the one-axis stick transform.
     add_executable(psx_stick_axis_test tests/test_psx_stick_axis.c)

@@ -216,6 +216,15 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]);
  * references/ps1/PERIPHERAL-NEGCON-SPEC.md. Switching a slot to or from it
  * resets its neGcon state to idle (no button, twist centred, I/II/L 00h). */
 #define SIO_DEVICE_NEGCON 2
+/* SIO_DEVICE_GUNCON (PS1B-305) is the Namco GunCon cinch-type light gun: ID
+ * 5A63h, it answers only the 42h read with 8 bytes (63h 5Ah, two button
+ * bytes, X and Y as little-endian halfwords) and ignores every other command.
+ * Spec: recomp-corpus references/ps1/PERIPHERAL-GUNCON-SPEC.md. Switching a
+ * slot to or from it resets it to idle: no button, "no light" (X=0001h,
+ * Y=000Ah). */
+#define SIO_DEVICE_GUNCON 3
+#define SIO_GUNCON_NO_LIGHT_X 0x0001u
+#define SIO_GUNCON_NO_LIGHT_Y 0x000Au
 void sio_set_port_device(int slot, int kind);
 int  sio_get_port_device(int slot);
 /* Host mouse motion in device counts (positive X = right, positive Y = down).
@@ -235,6 +244,12 @@ void sio_mouse_clear_motion(int slot);
  * No effect unless the slot is a neGcon. */
 void sio_set_negcon_state(int slot, uint16_t buttons, uint8_t twist,
                           uint8_t i, uint8_t ii, uint8_t l);
+/* GunCon state for the next reads. buttons is the GunCon halfword as sent
+ * (active low: bit 3 A, bit 13 trigger, bit 14 B); bits it does not have are
+ * forced to 1. x is 8 MHz clocks since HSYNC, y scanlines since VSYNC; pass
+ * SIO_GUNCON_NO_LIGHT_X/Y when the gun sees no light. No effect unless the
+ * slot is a GunCon. */
+void sio_set_guncon_state(int slot, uint16_t buttons, uint16_t x, uint16_t y);
 
 /* ---- SIO byte-level trace ring buffer ----
  * 1M entries × ~28 B ≈ 32 MB.  At ~600 byte/sec that's ~30 min of history. */
