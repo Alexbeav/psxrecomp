@@ -222,6 +222,17 @@ differ. Peers that cannot apply the settled BIOS abort instead of falling
 back. That choice boots the match only — it does not change each peer’s saved
 BIOS preference. See `docs/BIOS_SELECTION.md` (Netplay lobby settle).
 
+**Why a match ended:** a match that ends early returns every peer to the lobby
+(`netplay_soft_exit`), and the launcher's status line says why, from
+`runtime/src/netplay_exit_reason.c`: the other player left, the shared save
+state failed or timed out, the link timed out, the games stopped running in
+step, or the consoles started differently. The last one is the rollback boot
+digest: when both peers' tick-0 digests are known and differ, and the same pair
+holds for 3 s (`NETPLAY_BOOT_MISMATCH_GRACE_MS`), the match ends at once instead
+of waiting out the 20 s admit-stall watchdog. A peer that receives the other
+side's BYE while it sees the same mismatch reports the mismatch, not a
+disconnect. Window close and Escape end the match with no message.
+
 ---
 
 ## Disc identity for multi-track titles
