@@ -1057,6 +1057,16 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     endforeach()
 endif()
 
+# ChangeThread to the running thread continues after the SYSCALL: the
+# production traps.c linked into a fixture, other seams stubbed to abort()
+# (runtime/tests/fixture_link.py needs nm and GNU ld diagnostics).
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_test(NAME syscall_change_thread_self
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_syscall_change_thread_self.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
 # ---- test-registration completeness guard -----------------------------------
 if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
     add_test(NAME gpu_upload_history
