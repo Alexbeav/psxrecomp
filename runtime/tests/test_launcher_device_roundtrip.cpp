@@ -39,6 +39,27 @@ int main() {
     assert(launcher_device_from_source(0, "mouse", true) == "none");
     assert(launcher_device_from_source(1, "mouse", true) == "keyboard");
 
+    /* GunCon seat (PS1B-305): an older launcher shows it as None and None
+     * keeps it; it is never mistaken for a pad GUID. */
+    using PSXRecompV4::kLauncherSourceGuncon;
+    assert(PSXRecompV4::launcher_device_is_guncon(" GunCon "));
+    assert(launcher_source_from_device("guncon") == 0);
+    assert(launcher_source_from_device("guncon", true) == 0);
+    assert(launcher_device_from_source(0, "guncon") == "guncon");
+    assert(launcher_device_from_source(0, "guncon", true) == "guncon");
+    assert(launcher_device_from_source(2, "guncon") == "gamepad");
+    assert(launcher_device_from_source(1, "guncon") == "keyboard");
+    /* A launcher with the "GunCon" source (RECOMP_LAUNCHER_HAS_GUNCON_SOURCE):
+     * source 4 both ways, and None means none. */
+    assert(launcher_source_from_device("guncon", true, true) == kLauncherSourceGuncon);
+    assert(launcher_source_from_device("mouse", true, true) == kLauncherSourceMouse);
+    assert(launcher_device_from_source(kLauncherSourceGuncon, "keyboard", true, true) == "guncon");
+    assert(launcher_device_from_source(0, "guncon", true, true) == "none");
+    assert(launcher_device_from_source(kLauncherSourceMouse, "guncon", true, true) == "mouse");
+    /* A mouse-only launcher keeps a GunCon seat and returns a mouse seat. */
+    assert(launcher_device_from_source(0, "guncon", true, false) == "guncon");
+    assert(launcher_device_from_source(0, "mouse", false, true) == "mouse");
+
     /* neGcon pad type (PS1B-304). A launcher with the mode
      * (RECOMP_LAUNCHER_HAS_NEGCON_MODE) passes 3 through both ways. */
     using PSXRecompV4::launcher_pad_mode_from_launcher;
