@@ -386,3 +386,34 @@ int memcard_reload_bound(void) {
     }
     return 0;
 }
+
+/* The player's bound paths while replay cards are in. */
+static char replay_saved_path[MAX_CARDS][512];
+static int replay_cards_in;
+
+int memcard_replay_begin(const uint8_t *images, unsigned mask) {
+    int i;
+    if (!images) return -1;
+    if (!replay_cards_in) {
+        memcard_flush_all();
+        for (i = 0; i < MAX_CARDS; i++)
+            memcpy(replay_saved_path[i], cards[i].filepath, sizeof(replay_saved_path[i]));
+        replay_cards_in = 1;
+    }
+    for (i = 0; i < MAX_CARDS; i++) {
+        cards[i].filepath[0] = '\0';   /* no file: memcard_flush skips it */
+        cards[i].present = (mask >> i) & 1u;
+        cards[i].dirty = 0;
+        memcpy(cards[i].data, images + (size_t)i * MEMCARD_SIZE, MEMCARD_SIZE);
+    }
+    return 0;
+}
+
+void memcard_replay_end(void) {
+    int i;
+    if (!replay_cards_in) return;
+    for (i = 0; i < MAX_CARDS; i++)
+        memcpy(cards[i].filepath, replay_saved_path[i], sizeof(cards[i].filepath));
+    replay_cards_in = 0;
+    (void)memcard_reload_bound();
+}

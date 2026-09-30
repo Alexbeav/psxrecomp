@@ -285,6 +285,20 @@ if(BUILD_TESTING)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
     add_test(NAME replay_session_test COMMAND replay_session_test
         ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
+    # PS1B-316 power-on replays: playback swaps in the recorded memory cards
+    # without touching the player's card files; the launcher's "Record
+    # replay" choice reaches the runtime without being persisted.
+    add_executable(memcard_replay_test tests/test_memcard_replay.c src/memcard.c)
+    target_include_directories(memcard_replay_test PRIVATE include)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/memcard_replay_scratch)
+    add_test(NAME memcard_replay_test COMMAND memcard_replay_test
+        ${CMAKE_CURRENT_BINARY_DIR}/memcard_replay_scratch)
+    add_executable(launcher_record_replay_test tests/test_launcher_record_replay.cpp)
+    target_include_directories(launcher_record_replay_test PRIVATE include)
+    if(NOT MSVC)
+        target_compile_options(launcher_record_replay_test PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME launcher_record_replay_test COMMAND launcher_record_replay_test)
     foreach(_product IN ITEMS diagnostic release)
         set(_target input_route_session_${_product})
         add_executable(${_target} tests/test_input_route_session.c

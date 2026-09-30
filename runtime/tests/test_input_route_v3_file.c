@@ -269,6 +269,100 @@ int main(void)
     check(read_bytes(n, &meta) != NULL, "record reserved");
     cases += 2;
 
+    /* PS1B-316 power-on replay: POWER_ON + CARDS instead of an anchor, and
+     * the optional PRODUCT lines. */
+    {
+        static unsigned char card2[INPUT_ROUTE_REPLAY_CARD_BYTES];
+        static InputRouteCheckpoint end;
+        InputRouteDualShockWord words[6];
+        InputRouteMarker end_marker = {6, INPUT_ROUTE_MARKER_END};
+        InputRouteV3 w;
+        InputRouteV3ReplayOut rx;
+        InputRouteV3Replay rp;
+        size_t size;
+        FILE *f;
+        memset(&w, 0, sizeof(w));
+        w.has_identity = 1;
+        strcpy(w.pin, pin); strcpy(w.disc_serial, "SLUS-00662");
+        strcpy(w.bios_stem, "SCPH1001"); strcpy(w.boot_mode, "lle");
+        w.disc_digest_kind = INPUT_ROUTE_DISC_DIGEST_FILE;
+        w.marker_count = w.checkpoint_count = 1;
+        end.frame = 6;
+        for (unsigned i = 0; i < 6; ++i) {
+            words[i].buttons = (uint16_t)(0xffff ^ (i << 4));
+            memset(words[i].axes_ly_lx_ry_rx, 0x80, 4);
+        }
+        for (unsigned i = 0; i < sizeof(card2); ++i) card2[i] = (unsigned char)(i * 5u + 3u);
+        memset(&rx, 0, sizeof(rx));
+        rx.settings = "cd_game_speed=2\n";
+        rx.power_on = 1;
+        rx.cards = card2;
+        rx.cards_mask = 2u;                        /* only card 2 inserted */
+        rx.product = "exe_sha256=ab\nbios_crc32=1234abcd\n";
+        f = tmpfile();
+        check(f && !input_route_v3_write_ex(f, &w, NULL, words, 6, &end_marker, &end, &rx), "write power-on replay");
+        rewind(f);
+        check(!input_route_v3_read_ex(f, &meta, NULL, dual, markers, checkpoints, &rp), "read power-on replay");
+        check(rp.power_on && !rp.has_anchor && rp.has_cards && rp.cards_mask == 2u &&
+              !strcmp(rp.product, "exe_sha256=ab\nbios_crc32=1234abcd\n") &&
+              !strcmp(rp.settings, "cd_game_speed=2\n") && meta.frames == 6, "power-on round trip");
+        {
+            static unsigned char back[INPUT_ROUTE_REPLAY_CARD_BYTES];
+            check(!fseek(f, rp.cards_offset, SEEK_SET) && fread(back, 1, sizeof(back), f) == sizeof(back) &&
+                  !memcmp(back, card2, sizeof(back)), "card 2's image at cards_offset");
+        }
+        rewind(f);
+        check(input_route_v3_read(f, &meta, NULL, dual, markers, checkpoints) != NULL,
+              "the route reader refuses a power-on replay");
+        fseek(f, 0, SEEK_END);
+        size = (size_t)ftell(f);
+        rewind(f);
+        check(size <= sizeof(bytes) && fread(bytes, 1, size, f) == size, "read back bytes");
+        fclose(f);
+        /* Locate an entry by tag in the extension block. */
+        {
+            const uint32_t ext_len = input_route_le32(bytes + 24);
+            size_t cards_at = 0, power_at = 0;
+            for (size_t at = 28; at < 28u + ext_len; ) {
+                const uint32_t tag = input_route_le32(bytes + at), len = input_route_le32(bytes + at + 4);
+                if (tag == INPUT_ROUTE_TAG_REPLAY_CARDS) cards_at = at;
+                if (tag == INPUT_ROUTE_TAG_REPLAY_POWER_ON) power_at = at;
+                at += 8u + ((len + 3u) & ~3u);
+            }
+            check(cards_at && power_at, "POWER_ON and CARDS entries present");
+            FILE *g;
+            const char *err;
+            input_route_put32(bytes + power_at + 8, 5);   /* start vblank must be 0 */
+            g = as_file(bytes, size);
+            err = input_route_v3_read_ex(g, &meta, NULL, dual, markers, checkpoints, &rp);
+            fclose(g);
+            check(err && !strcmp(err, "replay power-on vblank"), "power-on at another vblank refused");
+            input_route_put32(bytes + power_at + 8, 0);
+            input_route_put32(bytes + cards_at, 0x80000399u);   /* CARDS hidden as skippable */
+            g = as_file(bytes, size);
+            err = input_route_v3_read_ex(g, &meta, NULL, dual, markers, checkpoints, &rp);
+            fclose(g);
+            check(err && !strcmp(err, "replay cards missing"), "power-on without cards refused");
+            input_route_put32(bytes + cards_at, INPUT_ROUTE_TAG_REPLAY_CARDS);
+            input_route_put32(bytes + cards_at + 8, 4u);         /* mask bit 2: no such slot */
+            g = as_file(bytes, size);
+            err = input_route_v3_read_ex(g, &meta, NULL, dual, markers, checkpoints, &rp);
+            fclose(g);
+            check(err && !strcmp(err, "replay cards length"), "card mask beyond two slots refused");
+        }
+        /* An anchor and a power-on start cannot both be written. */
+        {
+            static const unsigned char blob[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+            rx.anchor = blob;
+            rx.anchor_length = sizeof(blob);
+            f = tmpfile();
+            check(f && input_route_v3_write_ex(f, &w, NULL, words, 6, &end_marker, &end, &rx) != NULL,
+                  "anchor plus power-on refused by the writer");
+            if (f) fclose(f);
+        }
+        cases += 9;
+    }
+
     printf("input_route_v3_file: %d cases passed\n", cases);
     return 0;
 }
