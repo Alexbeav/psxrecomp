@@ -168,6 +168,19 @@ def must(argv, log: Path, env=None):
         raise SystemExit(f'failed: see {log}')
 
 
+EXE = '.exe' if os.name == 'nt' else ''
+
+
+def host_bash() -> Path:
+    """Git for Windows bash on Windows; the system bash elsewhere."""
+    if os.name == 'nt':
+        return media_container.find_git_bash()
+    found = shutil.which('bash')
+    if not found:
+        raise SystemExit('bash is missing from PATH')
+    return Path(found)
+
+
 def build(args, out: Path) -> dict[str, Path]:
     for tool in ('gcc', 'g++', 'cmake', 'ninja'):
         if not shutil.which(tool):
@@ -215,13 +228,13 @@ renderer = "software"
     must(['cmake', '-S', ROOT / 'recompiler', '-B', tools, *common, '-DCMAKE_BUILD_TYPE=Release',
           '-DPSXRECOMP_ENABLE_CHD=ON', '-DBUILD_TESTING=OFF'], out / 'configure-tools.log')
     must(['cmake', '--build', tools, '--parallel', args.jobs], out / 'build-tools.log')
-    must([tools / 'psxrecomp-bios.exe', '--config', bios_profile, '--rom', staged_bios,
+    must([tools / f'psxrecomp-bios{EXE}', '--config', bios_profile, '--rom', staged_bios,
           '--out-dir', ROOT / 'generated'], out / 'generate-bios.log')
-    bash = media_container.find_git_bash()
+    bash = host_bash()
     fingerprint = subprocess.check_output([str(bash), (ROOT / 'tools/bios_emitter_fingerprint.sh').as_posix(),
                                            bios_profile.as_posix()], cwd=ROOT, text=True, encoding='utf-8', errors='replace').strip()
     (ROOT / 'generated/SCPH1001.emitter.sha').write_text(fingerprint + '\n')
-    must([tools / 'psxrecomp-game.exe', '--config', game], out / 'generate-game.log')
+    must([tools / f'psxrecomp-game{EXE}', '--config', game], out / 'generate-game.log')
     players = {}
     for opt in args.opt:
         native = out / f'native-{opt}'
@@ -234,7 +247,7 @@ renderer = "software"
               '-D_psxrt_bash=' + str(bash), '-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE',
               '-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE'], out / f'configure-{opt}.log')
         must(['cmake', '--build', native, '--parallel', args.jobs], out / f'build-{opt}.log')
-        players[opt] = native / 'Tekken3-Replay.exe'
+        players[opt] = native / f'Tekken3-Replay{EXE}'
     return {'players': players, 'game': game, 'disc': cue, 'bios': staged_bios}
 
 
