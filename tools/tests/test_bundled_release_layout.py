@@ -33,10 +33,20 @@ sys.path.insert(0, str(TOOLKIT))
 TEMPLATE = FW / "docs" / "ci" / "templates" / "game-release.yml"
 CHECK_GENERATED = FW / "tools" / "ci" / "check_generated.sh"
 BOOT = "SLUS_012.34"
+GIT = shutil.which("git")
+BASH = shutil.which("bash")
+if os.name == "nt":
+    # PATH can resolve bash to the WSL launcher and git to an MSYS shim.
+    # Neither reliably accepts the native Windows fixture/script paths.
+    git_root = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git"
+    if (git_root / "cmd/git.exe").is_file():
+        GIT = str(git_root / "cmd/git.exe")
+    if (git_root / "bin/bash.exe").is_file():
+        BASH = str(git_root / "bin/bash.exe")
 
 
 def _git(root, *args):
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+    return subprocess.run([GIT, "-C", str(root), *args], capture_output=True,
                           text=True, check=False)
 
 
@@ -167,7 +177,7 @@ class ScaffoldContract(unittest.TestCase):
 
 class CheckGeneratedScript(unittest.TestCase):
     def run_check(self, root):
-        return subprocess.run(["bash", str(CHECK_GENERATED), "--root", str(root)],
+        return subprocess.run([BASH, CHECK_GENERATED.as_posix(), "--root", root.as_posix()],
                               capture_output=True, text=True, check=False)
 
     def test_passes_on_committed_game_c(self):
@@ -278,12 +288,12 @@ class PackagerScriptContract(unittest.TestCase):
                     "tools/ci/generate_openbios.sh"):
             p = FW / rel
             self.assertTrue(os.access(p, os.X_OK), f"{rel} not executable")
-            r = subprocess.run(["bash", "-n", str(p)], capture_output=True, text=True)
+            r = subprocess.run([BASH, "-n", p.as_posix()], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == "__main__":
-    if shutil.which("git") is None or shutil.which("bash") is None:
+    if GIT is None or BASH is None:
         print("git and bash are required", file=sys.stderr)
         sys.exit(2)
     unittest.main(verbosity=1)
