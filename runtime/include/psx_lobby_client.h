@@ -94,6 +94,9 @@ typedef struct PsxLobbyMember {
     int  bios_can_openbios;   /* linked OpenBIOS backend */
     int  bios_can_scph1001;   /* linked retail + validated dump available */
     int  bios_prefer_openbios; /* explicit OpenBIOS pick (not retail) */
+    /* CRC-32 of the retail image this seat would boot (bios_offer.retail_crc);
+     * 0 = not sent (older client). See netplay_bios_settle.h. */
+    uint32_t bios_retail_crc;
     /* Peer memory-card offer from set_ready memcard_offer (0 if legacy). */
     int  memcard_offer_valid;
     int  memcard_has_card;    /* a slot-1 card is enabled locally */
@@ -114,6 +117,9 @@ typedef struct PsxLobbyBiosOffer {
     int  can_openbios;
     int  can_scph1001;
     int  prefer_openbios; /* 1 = OpenBIOS selected; 0 = retail / willing SCPH */
+    /* CRC-32 of the retail file this peer would boot for a retail match;
+     * 0 when can_scph1001 is 0. The settle compares these, not the token. */
+    uint32_t retail_crc;
 } PsxLobbyBiosOffer;
 
 /*
@@ -181,8 +187,12 @@ typedef struct PsxLobbyMatchCaps {
      * so a toggle racing the start cannot split the room. */
     int  guest_memcard_active;
     char language[PSX_LOBBY_LANG_LEN];
-    /* Settled match BIOS: "openbios" | "scph1001" | "" (unset / legacy). */
+    /* Settled match BIOS: "openbios" | "scph1001" | "" (unset / legacy).
+     * "scph1001" means "the retail image named by session_bios_crc". */
     char session_bios[16];
+    /* Retail match: CRC-32 of the image every peer boots. 0 = not sent (an
+     * older host); peers then accept any retail dump, as before PS1B-289. */
+    uint32_t session_bios_crc;
 } PsxLobbyMatchCaps;
 
 typedef struct PsxLobbyJoinInfo {
@@ -213,7 +223,9 @@ typedef struct PsxLobbyJoinInfo {
     /* Launch: the host watches from the gallery but runs the match from
      * session slot 0 (pad muted); player seats sit at lobby seat + 1. */
     int      host_spectates;
-    char     last_error[64]; /* need_password | bad_password | … */
+    /* A server code (need_password | bad_password | …) or, from
+     * psx_lobby_set_last_error, one sentence the launcher shows as is. */
+    char     last_error[192];
 } PsxLobbyJoinInfo;
 
 /* Default URL when PSX_NET_LOBBY_URL unset. Order:
@@ -446,14 +458,22 @@ int  psx_lobby_chat_get(int index, PsxLobbyChatMsg *out);
 void psx_lobby_chat_clear(void);
 
 /*
- * Settle session BIOS from seated peers' bios_offer (+ local offer):
- *   OpenBIOS if anyone cannot run SCPH-1001 (missing offer ⇒ cannot);
- *   else SCPH-1001 when the host prefers retail and every peer can;
- *   else OpenBIOS if anyone prefers OpenBIOS; else SCPH-1001.
- * Host preference wins over guest OpenBIOS picks when all can SCPH.
- * Writes "openbios" or "scph1001" into out. Returns 0 on success.
+ * Settle session BIOS from seated peers' bios_offer (+ local offer), by the
+ * rule in netplay_bios_settle.h: retail only when every seat offers the same
+ * retail image CRC; else OpenBIOS when every seat links it.
+ * Returns 0 and writes "openbios" or "scph1001" into out (and the retail CRC
+ * into *out_crc, 0 for OpenBIOS). Returns 1 when no BIOS suits every seat:
+ * out is "", and why (when non-NULL) says which images differ; the host must
+ * not start. Returns -1 on bad arguments.
  */
-int  psx_lobby_settle_session_bios(char *out, size_t out_cap);
+int  psx_lobby_settle_session_bios(char *out, size_t out_cap, uint32_t *out_crc,
+                                   char *why, size_t why_cap);
+
+/*
+ * Put one sentence on the launcher's status line (through last_error, which
+ * the launcher shows as "Lobby error: <text>"). NULL or "" clears it.
+ */
+void psx_lobby_set_last_error(const char *text);
 
 /*
  * Host: ask server to broadcast launch. When match_caps is non-NULL and valid,
