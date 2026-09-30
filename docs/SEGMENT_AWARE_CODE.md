@@ -4,9 +4,9 @@ Status: design proposal (2026-09-28). The four owner decisions in §10 were
 settled on 2026-09-29; each follows this document's recommendation.
 Based on master. It was first stacked on RetroPortingToolKit/psxrecomp#417
 (`fix/overlay-segment-alias`), which merged on 2026-09-29 together with #418
-(mult/div deadlines) and #420 (store-PC forwarding, ABI v24). Rollout PR A is
-#429 (§8). This change adds only this document and an acceptance test; it does
-not change behaviour.
+(mult/div deadlines) and #420 (store-PC forwarding, ABI v24). Rollout PR A
+merged as #429 on 2026-09-29 (§8). This change adds only this document and an
+acceptance test; it does not change behaviour.
 
 Acceptance test: `recompiler/tests/test_segment_aware_codegen.py` (ctest
 `segment_aware_codegen`). Synthetic EXE: `tools/segment_testrom/gen_segment_exe.py`.
@@ -35,11 +35,11 @@ remain:
 2. **Overlay code at KUSEG or KSEG1.** Overlay code that genuinely executes at
    KUSEG or KSEG1 is interpreted forever, because nothing records or compiles
    its segment.
-3. **Uncached fetch charging (new finding).** Compiled KSEG1 code charges the
-   uncached +4 fetch only at cache-line leaders. Beetle and the interpreter
-   charge it for every instruction. This already affects the BIOS ROM
-   today: 5,477 of the 9,592 KSEG1 instruction sites in OpenBIOS are
-   undercharged.
+3. **Uncached fetch charging.** Compiled KSEG1 code charged the uncached +4
+   fetch only at cache-line leaders; Beetle and the interpreter charge it for
+   every instruction. In the BIOS ROM, 5,477 of the 9,592 KSEG1 instruction
+   sites in OpenBIOS were undercharged. PR A (#429) fixed that in both
+   emitters (§5.6). Game code still has no KSEG1 bodies to charge (§5.4).
 
 **Recommendation: per-segment compiled variants, not segment-relative
 emission.**
@@ -110,13 +110,13 @@ Every one of these sites writes the compile address, which is always KSEG0.
 
 | Site | Lines | R4 static count |
 |---|---|---|
-| `cpu->gpr[31] = 0x…u` (jal, jalr, bgezal, bltzal links) | 2174, 2180, 2189 | 5,373 |
-| `psx_icache_fetch(cpu, 0x…u)` (fetch tags) | 1897-1903 | 61,181 |
+| `cpu->gpr[31] = 0x…u` (jal, jalr, bgezal, bltzal links) | 2180, 2186, 2195 | 5,373 |
+| `psx_icache_fetch(cpu, 0x…u)` (fetch tags) | 1902-1909 | 61,181 |
 | `psx_check_interrupts_at(cpu, 0x…u)` (resume PC → EPC) | 170-175, ~20 callers | 30,596 |
-| `cpu->pc = 0x…u; return;` (CPS exits, stale-static guard) | 115, 2279-2627, 2975, 3228 | 6,927 |
+| `cpu->pc = 0x…u; return;` (CPS exits, stale-static guard) | 115, 2285-2633, 2981, 3234 | 6,927 |
 | `g_debug_last_store_pc = 0x…u` (before every `sb`/`sh`/`sw`/`swl`/`swr`/`swc2`) | 1384, 1523, 1692-1696, 1743 | 22,936 |
-| CPS continuation keys `case 0x…u: goto block_…` | 2827-2853, 3145-3190 | — |
-| Reserved-instruction EPC `cpu->cop0[14] = 0x…u` | 2139 | — |
+| CPS continuation keys `case 0x…u: goto block_…` | 2833-2859, 3151-3196 | — |
+| Reserved-instruction EPC `cpu->cop0[14] = 0x…u` | 2145 | — |
 | `psx_slice_block(cpu, 0x…u, …)` (the interpreter resumes here) | 1866 | — |
 
 The R4 figures come from all 50 generated shards: 2,994 functions and
@@ -215,21 +215,25 @@ shard.
 
 ### 3.5 Uncached fetch in compiled code
 
-Both emitters emit `psx_icache_fetch` only at cache-line leaders:
+Fixed by #429 (§5.6). This section records the gap as it was on master
+before that PR.
+
+Both emitters emitted `psx_icache_fetch` only at cache-line leaders:
 - block leaders, jump-table targets, and `addr & 0xC == 0`
-  (`code_generator.cpp:1898`, `full_function_emitter.cpp:781`).
+  (the leader test, now `code_generator.cpp:1903` and
+  `full_function_emitter.cpp:790`).
 
 The stated reason is that "intra-line followers reached by fall-through are
 guaranteed hits". That holds for cached segments only. Every KSEG1 fetch
 misses and costs +4 (§2).
 
 The BIOS main ROM runs in place at `0xBFC0…` (KSEG1). In OpenBIOS, 5,477 of
-its 9,592 KSEG1 instruction sites have no fetch call. Each is:
+its 9,592 KSEG1 instruction sites had no fetch call. Each was:
 - 4 cycles short;
 - missing the load give-back clear.
 
 The interpreter charges every one. Compiled and interpreted ROM code
-therefore disagree, against the "one shared per-instruction cost" rule
+therefore disagreed, against the "one shared per-instruction cost" rule
 (CLAUDE.md RULE −1). Ruler #2 and ruler #1 both run in cached RAM, so neither
 caught it.
 
@@ -309,7 +313,7 @@ A compiled body is identified by `seg | phys`:
   own; enables §5.3-5.6.
 
 The BIOS emitter's precedent has holes to close in the same pass:
-- the fallthrough `cpu->pc = next_addr` (`full_function_emitter.cpp:1652`);
+- the fallthrough `cpu->pc = next_addr` (`full_function_emitter.cpp:1662`);
 - the `strict_translator` syscall, break and unaligned-access PCs, which use
   the ROM address;
 - the `strict_translator` store-PC stamp, which also uses the ROM address.
@@ -377,24 +381,34 @@ Closes `segment-miss`. `psx_call_contract`'s segment-masked return check
 
 ### 5.6 Per-instruction fetch charging for uncached code
 
-The rule is: a body whose runtime PCs are uncached charges fetch on **every**
-instruction.
-- Cached bodies keep the leader rule. It is exact for them; the ledger's model
-  check proves it against Beetle for the probe block.
-- The charge is `psx_icache_fetch_uncached(cpu)`. It clears the load
-  give-back and adds +4 when the I-cache model is active, skips during
-  lockstep replay, and does no tag lookup.
-- It is equivalent to `psx_icache_fetch(cpu, kseg1_pc)` because psxrecomp
-  never writes a KSEG1 tag (it does not model tag-test mode).
+Landed in PR A, #429 (2026-09-29). The rule: an instruction whose **runtime
+PC** is uncached is charged a fetch of its own.
+- Cached code keeps the leader rule, which is exact for it: the ledger's model
+  check proves that against Beetle for the probe block.
+- Both emitters emit `psx_icache_fetch(cpu, pc)` before every instruction for
+  which `psx_fetch_uncached(pc)` holds (`psx_instr_cost.h`, `pc >=
+  0xA0000000`). `psx_icache.c` uses the same predicate: such a fetch never
+  hits, so it clears the load give-back, adds +4 and fills nothing, as Beetle
+  does. The A0/B0/C0 call-vector stubs charge one fetch per executed word.
+- The same PR fixed the BIOS emitter's cached line-start test, which used the
+  ROM address. It now tests the runtime PC (`relocate_ra`): OpenBIOS copies
+  its kernel from ROM `0x1FC1E4D4` to RAM `0x500`, which shifts bits[3:0] by
+  4, and 1,152 kernel instruction sites were charged one instruction early.
 - The tag compare stays in `psx_icache.c`. Tags follow Beetle (decided, §10),
   and this is the one place a later, oracle-backed move to hardware tags (§2)
   would change.
 
-It applies in three places:
-- **BIOS emitter:** `relocate_ra(rom) >= 0xA0000000`, which is the ROM run in
-  place. Closes `bios-kseg1-fetch-charge`.
-- **Game and overlay emitter:** `code_seg == KSEG1`. Closes
-  `kseg1-fetch-charge` together with §5.4.
+Where it applies:
+- **BIOS emitter:** `relocate_ra(rom)` is uncached for the ROM run in place.
+  Done in #429, which closed `bios-kseg1-fetch-charge`.
+- **Game and overlay emitter:** the predicate is already there, but
+  `emit_pre_icache` (`code_generator.cpp:1902-1909`) tests the compile
+  address, which is always KSEG0 today. §5.2 must route two things through
+  `runtime_pc()`: the `psx_fetch_uncached(insn_addr)` argument (1903) and the
+  fetch tag. Routing only the tag would charge a KSEG1 variant at line
+  leaders alone. With both routed, a KSEG1 variant (§5.4) is charged per
+  instruction with no further emitter change. `kseg1-fetch-charge` stays open
+  until PR D adds those variants.
 - **Interpreter:** unchanged; it already charges every fetch.
 
 BIU bit 11 (cache disable) makes every fetch uncached in Beetle. It is a run-time
@@ -537,7 +551,7 @@ the real `psxrecomp-game` and `psxrecomp-bios` on it (OpenBIOS for the latter,
 
 **Gap ledger.** `KNOWN_GAPS` in the test lists each id with the section that
 closes it. The test passes only when the observed gaps equal the ledger. Today
-all eleven are open:
+ten are open:
 
 | id | observed today | closed by |
 |---|---|---|
@@ -551,12 +565,12 @@ all eleven are open:
 | `segment-variants` | `0xA00100F0` resolves to the `0x800100F0` body | §5.4 |
 | `segment-miss` | unrequested KSEG0/KSEG1 aliases resolve; KUSEG PCs resolve to KSEG0 rows | §5.5 |
 | `kseg1-fetch-charge` | no KSEG1 body (Beetle: 40 cycles for the 10-instruction run) | §5.4 + §5.6 |
-| `bios-kseg1-fetch-charge` | 5,477 of 9,592 OpenBIOS KSEG1 instruction sites uncharged | §5.6 |
 
-Each implementation PR removes the ids it closes. The exception is PR A
-(#429, §8): it is based on master, which does not have this test. When A
-lands, this PR is rebased onto it, and the ledger drops
-`bios-kseg1-fetch-charge` in that rebase. The overlay half (§5.7)
+Each implementation PR removes the ids it closes. PR A (#429, §8) was the
+exception: it landed on master before this test did. This PR dropped its id,
+`bios-kseg1-fetch-charge`, when it was rebased onto it. The BIOS check stays
+as a regression guard: an OpenBIOS KSEG1 instruction without its own fetch
+reports that id again, as a new gap. The overlay half (§5.7)
 gets its own acceptance case in `runtime/tests/test_overlay_segment_gate.py`:
 - a KUSEG-compiled fixture shard runs natively for its KUSEG PC;
 - the same shard is interpreted for the KSEG0 and KSEG1 aliases.
@@ -582,8 +596,8 @@ It then spins. Procedure:
   surcharge: 26 cycles for the 15 KSEG1 fetches (Beetle's fetch model: 60
   uncached against 34 cold cached).
 
-**Beetle results (2026-09-29).** psx-beetle built on macOS (#431 has the
-recipe), disc boot, OpenBIOS and SCPH-1001:
+**Beetle results (2026-09-29).** psx-beetle built on macOS
+(`docs/beetle-macos.md`, from #431), disc boot, OpenBIOS and SCPH-1001:
 - The first run found a probe bug: the T2 subtraction sat in the second
   `lw`'s load delay slot and read the stale register, and the difference was
   not masked to T2's 16 bits. Every delta was unusable. The generator now
@@ -619,11 +633,15 @@ recipe), disc boot, OpenBIOS and SCPH-1001:
 Small PRs in this order. Each PR updates the ledger and FAITHFUL_TIMING_PLAN's
 log.
 
-- **A: `fix/uncached-fetch-per-insn`** (§5.6, BIOS emitter). Independent of
-  the rest and the smallest. Closes `bios-kseg1-fetch-charge`. Status
-  (2026-09-29): #429, ready for review, based on master. Its LLE Beetle
-  parity gate passed (§7.2). Once it lands, this PR is rebased and drops the
-  id from the ledger (§7.1).
+- **A: `fix/uncached-fetch-per-insn`** (§5.6). Merged on 2026-09-29 as
+  #429. Both emitters charge `psx_icache_fetch` before every instruction whose
+  runtime PC is uncached, and the BIOS emitter's cache-line start test uses
+  the runtime PC. Closed `bios-kseg1-fetch-charge`; this PR dropped the id
+  when it was rebased onto A (§7.1). Beetle parity (LLE boot to the shell,
+  §7.2): native − Beetle at the shell entry is −126 on OpenBIOS and −454 on
+  SCPH-1001, down from −2,165,591 and −7,049,462. The residuals are the IsC
+  gap (§9) and SCPH-1001's KSEG1 kernel entry (§3.3). The oracle recipe for
+  macOS is `docs/beetle-macos.md` (#431).
 - **B: `refactor/emitter-runtime-pc`** (§5.2). No behaviour change for game
   code, including the store-PC stamps; proven by byte-identical regeneration
   of KSEG0 titles. The BIOS-emitter holes in §5.2 do change BIOS output. The
@@ -632,8 +650,10 @@ log.
 - **C: `feat/kuseg-linked-exe`** (§5.3, §5.5). Also rewrites the alias
   assertions in `test_kuseg_dispatch_lookup.py`: an alias with no body now
   misses. Closes eight ids: §5.3's seven and `segment-miss` (§5.5).
-- **D: `feat/segment-variants`** (§5.4, and §5.6 in the game emitter). Closes
-  `segment-variants` and `kseg1-fetch-charge`. Also gives the BIOS emitter a
+- **D: `feat/segment-variants`** (§5.4). Closes `segment-variants` and
+  `kseg1-fetch-charge`. Since #429, D only needs the KSEG1 variants: with B's
+  `runtime_pc()`, #429's per-instruction rule charges them (§5.6), and
+  `kseg1-fetch-charge` stays open until D lands. Also gives the BIOS emitter a
   KSEG1 variant of SCPH-1001's kernel entry `0xA0000500`, which closes the
   −9 cycles left at that entry in #429's gate (§3.3).
 - **E: `feat/overlay-segment-keys`** (§5.7). Includes the runtime acceptance

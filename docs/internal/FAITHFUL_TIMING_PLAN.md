@@ -213,6 +213,16 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-29 (segment-aware code — rebased after #429, #431 and #433 merged):**
+  PR A (#429) is on master, so the ledger no longer lists `bios-kseg1-fetch-charge`
+  and `segment_aware_codegen` passes with 10 known gaps. Its OpenBIOS check stays as a
+  regression guard. docs/SEGMENT_AWARE_CODE.md §5.6, §7.1 and §8 record A as landed;
+  PR D now needs only the KSEG1 variants (`kseg1-fetch-charge` stays open until D).
+  §5.6 notes that PR B must route `emit_pre_icache`'s `psx_fetch_uncached()` argument,
+  not just the fetch tag, through `runtime_pc()`. The macOS oracle recipe is
+  docs/beetle-macos.md (#431). Emitter line citations refreshed for #429's shift.
+  No behaviour change.
+
 - **2026-09-29 (segment-aware code — rebased on master, first Beetle run of the probe):**
   #417, #418 and #420 merged; the design branch (#419) is rebased onto master and
   docs/SEGMENT_AWARE_CODE.md now records PR A (#429) and its passed LLE land gate
