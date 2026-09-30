@@ -712,7 +712,7 @@ def _build_recompiler_targets(
 
     progress.log(" ".join(cmake_args))
     proc = subprocess.run(
-        cmake_args, cwd=str(project_root), capture_output=True, text=True
+        cmake_args, cwd=str(project_root), capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     for stream in (proc.stdout, proc.stderr):
         if stream:
@@ -729,7 +729,7 @@ def _build_recompiler_targets(
     for target in targets:
         build_cmd += ["--target", target]
     progress.log(" ".join(build_cmd))
-    proc = subprocess.run(build_cmd, capture_output=True, text=True)
+    proc = subprocess.run(build_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     for stream in (proc.stdout, proc.stderr):
         if stream:
             for line in stream.splitlines():
@@ -842,7 +842,7 @@ def regen_bios_profile(
         [str(bios_tool), "--config", profile_rel],
         cwd=str(fw),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     for stream in (proc.stdout, proc.stderr):
         if not stream:
@@ -1007,7 +1007,7 @@ def run_prepare_disc(
         str(project_root),
         str(source),
     ]
-    proc = subprocess.run(cmd, cwd=str(project_root), capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=str(project_root), capture_output=True, text=True, encoding="utf-8", errors="replace")
     out = (proc.stdout or "") + (proc.stderr or "")
     for line in out.splitlines():
         if line.strip():
@@ -1218,7 +1218,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         cmd,
         cwd=str(project_root),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     ri_warn = 0
     for stream in (proc.stdout, proc.stderr):
@@ -1415,7 +1415,7 @@ def _cmake_configure(
         *extra,
     ]
     progress.log(" ".join(cmd))
-    proc = subprocess.run(cmd, cwd=str(project_root), capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=str(project_root), capture_output=True, text=True, encoding="utf-8", errors="replace")
     for stream in (proc.stdout, proc.stderr):
         if stream:
             for line in stream.splitlines():
@@ -1498,7 +1498,7 @@ def _cmake_build(
         target,
     ]
     progress.log(" ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     for stream in (proc.stdout, proc.stderr):
         if stream:
             for line in stream.splitlines():
@@ -1653,7 +1653,7 @@ def run_pgo_train(
                 r = subprocess.run(
                     ["xcrun", "--find", "llvm-profdata"],
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                     check=False,
                 )
                 if r.returncode == 0 and r.stdout.strip():
@@ -2034,7 +2034,7 @@ def cmd_analyze(args: argparse.Namespace, progress: ProgressReporter) -> int:
 
     progress.phase("analyze", pct=0.3, message=f"Analyzing {exe_path.name}…")
     progress.log(" ".join(cmd))
-    proc = subprocess.run(cmd, cwd=str(project_root), capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=str(project_root), capture_output=True, text=True, encoding="utf-8", errors="replace")
     for stream in (proc.stdout, proc.stderr):
         if stream:
             for line in stream.splitlines():
