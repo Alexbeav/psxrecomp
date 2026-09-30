@@ -1350,6 +1350,8 @@ struct UserSettings {
     // device is one of:
     //   "none"     — no pad in this port (port not connected)
     //   "keyboard" — driven by the keyboard map (input.ini)
+    //   "mouse"    — a Sony PS1 Mouse in this port, driven by the host mouse
+    //                (pN_mode does not apply)
     //   "<GUID>"   — an SDL game-controller GUID (SDL_JoystickGetGUIDString)
     // Modes (see PadMode): analog / digital. Hybrid is mod-only. Defaults: P1 keyboard,
     // P2–P5 none. Deadzone default is 10% (3277/32767). TOML keys:
@@ -1377,6 +1379,15 @@ struct UserSettings {
     // DualShock-on-tap hack (settings.toml [controller] multitap_analog).
     // Default on when unset; game.toml / global prefs may override.
     bool has_multitap_analog = false; bool multitap_analog = true;
+    // PS1 Mouse host mapping (settings.toml [controller]). Used only when a
+    // port's pN_device is "mouse". ps1_mouse_sensitivity scales host pointer
+    // motion into mouse counts (0.05..10.0, default 1.0). ps1_mouse_capture:
+    // capture the pointer (relative mode, hidden cursor) when the game starts
+    // (default true); the [KeyMap] MouseCapture hotkey toggles it at run time.
+    // Separate from recomp-ui's mouse_sensitivity, which is an aiming rate
+    // for has_mouse_controls titles.
+    bool has_ps1_mouse_sensitivity = false; double ps1_mouse_sensitivity = 1.0;
+    bool has_ps1_mouse_capture = false; bool ps1_mouse_capture = true;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.

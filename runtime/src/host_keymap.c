@@ -110,6 +110,8 @@ static void apply_defaults(void) {
         add_bind(HOST_KEYMAP_SCANLINES, (int)SDLK_F6, (int)SDL_SCANCODE_F6, 0);
     if (want_default(HOST_KEYMAP_TURBO_TOGGLE))
         add_bind(HOST_KEYMAP_TURBO_TOGGLE, (int)SDLK_F9, (int)SDL_SCANCODE_F9, 0);
+    if (want_default(HOST_KEYMAP_MOUSE_CAPTURE))
+        add_bind(HOST_KEYMAP_MOUSE_CAPTURE, (int)SDLK_F10, (int)SDL_SCANCODE_F10, 0);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
@@ -169,6 +171,7 @@ static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "SaveStateMenu")) return HOST_KEYMAP_SAVE_STATE_MENU;
     if (ieq(name, "Scanlines")) return HOST_KEYMAP_SCANLINES;
     if (ieq(name, "TurboToggle")) return HOST_KEYMAP_TURBO_TOGGLE;
+    if (ieq(name, "MouseCapture")) return HOST_KEYMAP_MOUSE_CAPTURE;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 
@@ -323,6 +326,8 @@ const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
 #endif
         if (action == HOST_KEYMAP_SAVE_STATE_MENU)
             snprintf(out, cap, "F7");
+        else if (action == HOST_KEYMAP_MOUSE_CAPTURE)
+            snprintf(out, cap, "F10");
         return out;
     }
     b = &a->binds[0];

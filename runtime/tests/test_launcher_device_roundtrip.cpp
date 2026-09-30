@@ -20,5 +20,24 @@ int main() {
     assert(launcher_device_from_source(
         2, " 030000005e0400008e02000000000000 ") ==
         "030000005e0400008e02000000000000");
+
+    /* PS1 Mouse seat with an older launcher: shown as None, kept as mouse if
+     * left there. */
+    assert(PSXRecompV4::launcher_device_is_mouse(" Mouse "));
+    assert(!PSXRecompV4::launcher_device_is_mouse("keyboard"));
+    assert(launcher_source_from_device("mouse") == 0);
+    assert(launcher_device_from_source(0, "mouse") == "mouse");
+    assert(launcher_device_from_source(1, "mouse") == "keyboard");
+    assert(launcher_device_from_source(2, "mouse") == "gamepad");
+
+    /* A launcher with the "PS1 Mouse" source (RECOMP_LAUNCHER_HAS_MOUSE_SOURCE):
+     * the seat is source 3 both ways, and None now really means none. */
+    using PSXRecompV4::kLauncherSourceMouse;
+    assert(launcher_source_from_device("mouse", true) == kLauncherSourceMouse);
+    assert(launcher_source_from_device("keyboard", true) == 1);
+    assert(launcher_device_from_source(kLauncherSourceMouse, "keyboard", true) == "mouse");
+    assert(launcher_device_from_source(kLauncherSourceMouse, "none", true) == "mouse");
+    assert(launcher_device_from_source(0, "mouse", true) == "none");
+    assert(launcher_device_from_source(1, "mouse", true) == "keyboard");
     return 0;
 }
