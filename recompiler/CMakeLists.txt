@@ -629,6 +629,21 @@ if(BUILD_TESTING)
     target_link_libraries(rewind_settings_test PRIVATE fmt)
     add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
 
+    # Launcher-saved paths stay relative inside a portable game folder.
+    add_executable(portable_settings_paths_test
+        tests/portable_settings_paths_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(portable_settings_paths_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(portable_settings_paths_test PRIVATE fmt)
+    add_test(NAME portable_settings_paths_test COMMAND portable_settings_paths_test)
+
     # Needs bios/SCPH1001.toml — run from the framework root.
     add_test(NAME bios_address_model_test
              COMMAND bios_address_model_test

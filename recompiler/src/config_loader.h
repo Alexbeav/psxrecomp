@@ -1429,6 +1429,11 @@ UserSettings load_user_settings(const std::filesystem::path& path);
 // Write settings.toml deterministically. Returns false on I/O failure.
 bool save_user_settings(const std::filesystem::path& path, const UserSettings& s);
 
+// `p` relative to `folder` when it lies inside it; otherwise `p` unchanged.
+// Keeps portable game folders portable once the launcher saves a path.
+std::filesystem::path relative_to_folder(const std::filesystem::path& p,
+                                         const std::filesystem::path& folder);
+
 // Surgical upsert of `key = true|false` under [controller] in game.toml.
 // Preserves comments and unrelated keys. Creates [controller] if missing.
 // Used to persist launcher multitap_analog into the title game config.
