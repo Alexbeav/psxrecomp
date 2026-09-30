@@ -425,6 +425,16 @@ void psx_kernel_bless_stats(uint64_t out[8]) {
     out[7] = kbless_patch_skips;
 }
 
+/* Does the active image's bless table fit kbless_state? kbless_on()
+ * turns bless off when it does not, and nothing else says so. This only
+ * reports that decision for the start-up line and the run report; it reads
+ * the selected backend's constants and changes no state. */
+int psx_kernel_bless_table_fits(uint32_t *entries, uint32_t *capacity) {
+    if (entries) *entries = psx_bios_kernel_body_count;
+    if (capacity) *capacity = KBLESS_MAX_ENTRIES;
+    return psx_bios_kernel_body_count <= KBLESS_MAX_ENTRIES;
+}
+
 void psx_kernel_bless_resync_after_restore(void) {
     /* kbless_state is host-only. CLEAN/MISMATCH are sticky across guest
      * stores only via kbless_note_write; savestate RAM memcpy never hits

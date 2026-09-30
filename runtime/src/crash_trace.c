@@ -429,6 +429,21 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         g_dirty_ram_last_unsupported_entry_sp,
         g_dirty_ram_last_unsupported_insns);
 
+    /* Kernel bless is off for the whole run when the active image's
+     * table overflows the runtime's verify-state array. That moves every
+     * relocated kernel function into the interpreter, so say it here. */
+    {
+        uint32_t kb_entries = 0, kb_capacity = 0;
+        int kb_fits = psx_kernel_bless_table_fits(&kb_entries, &kb_capacity);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"kbless\": {\n"
+            "    \"table_entries\": %u,\n"
+            "    \"capacity\": %u,\n"
+            "    \"disabled_by_overflow\": %d\n"
+            "  },\n",
+            kb_entries, kb_capacity, kb_fits ? 0 : 1);
+    }
+
 #ifdef _WIN32
     if (seh_info) {
         EXCEPTION_POINTERS *info = (EXCEPTION_POINTERS *)seh_info;

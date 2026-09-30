@@ -852,6 +852,13 @@ if(BUILD_TESTING)
         endif()
         add_test(NAME disc_picker_ascii_test COMMAND ${Python3_EXECUTABLE}
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
+        # Each generated BIOS profile's kernel-bless table fits the runtime,
+        # or is a declared overflow (bless off for that profile).
+        add_test(NAME kbless_table_capacity_test COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kbless_table_capacity.py
+                 --generated ${PSXRECOMP_ROOT}/generated
+                 --memory-c ${CMAKE_CURRENT_SOURCE_DIR}/src/memory.c)
+        set_tests_properties(kbless_table_capacity_test PROPERTIES SKIP_RETURN_CODE 77)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
         add_test(NAME frame_interpolation_context_ownership_test

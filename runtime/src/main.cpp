@@ -229,6 +229,7 @@ extern "C" void     memory_init(const char* bios_path);
 /* psx_ram_geometry.c: drop a plugin's 8 MiB request before the next boot. */
 extern "C" void     psx_ram_reset_size_request(void);
 extern "C" void     memory_set_sr_ptr(const uint32_t *p);
+extern "C" int      psx_kernel_bless_table_fits(uint32_t *entries, uint32_t *capacity);
 /* interrupts.c */
 extern "C" void     psx_irq_set_cause_ptr(uint32_t *p);
 extern "C" void     psx_set_midframe_audio_pump(void (*fn)(void));
@@ -16023,6 +16024,14 @@ session_reboot:
                      psx_bios_hle_boot_skip_enabled()
                          ? "HLE (shell skipped)" : "LLE (real intro)",
                      psx_bios_image.image_id ? psx_bios_image.image_id : "?");
+        /* An oversized bless table turns kernel bless off for the whole run,
+         * silently. Say so; the decision itself is unchanged. */
+        uint32_t kb_entries = 0, kb_capacity = 0;
+        if (!psx_kernel_bless_table_fits(&kb_entries, &kb_capacity))
+            std::fprintf(stdout,
+                         "psxrecomp: kbless: disabled (%u > %u); relocated kernel "
+                         "code runs in the interpreter\n",
+                         (unsigned)kb_entries, (unsigned)kb_capacity);
     }
 
     /* R3000A reset state. */
