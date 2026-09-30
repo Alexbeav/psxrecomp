@@ -30,7 +30,8 @@ This test drives the real pieces:
      a record with execution evidence only compiles as its v2 reading, and a
      --force-interior PC gets its KSEG0 view where no KSEG0 entry was seen;
      each segment's shard reads only its own segment's prior manifest and
-     fragments;
+     fragments; config code sites (mod function-entry hooks) reach every
+     segment's view whatever segment the config spells them in;
   5. the real overlay loader (runtime/tests/overlay_pair_dedup_harness.c) on
      those shards: each segment's PC runs its own shard through its CPS
      continuations, links and stamps in its segment, and the fetch tags it hands
@@ -570,6 +571,38 @@ def check_segment_isolation(recompiler, compiler, data, labels, tmp):
               f"{os.path.basename(os.path.dirname(cache + os.sep))}'s own-segment shards")
 
 
+def check_config_sites(recompiler, compiler, data, labels, tmp):
+    """A mod function-entry hook reaches every segment's shard of the bytes it
+    names, however the config spells it (the runtime keys hooks by physical
+    address, and the interpreter fires them in every segment)."""
+    print("compile_overlays.py: config code sites in every view")
+    proj = os.path.join(tmp, "hookproj")
+    os.makedirs(proj)
+    toml = os.path.join(proj, "game.toml")
+    with open(GAME_TOML) as f:
+        text = f.read()
+    text = text.replace("[recompiler]\n", "[recompiler]\nmod_function_entry_funcs = "
+                        f'["0x{KSEG0 | labels["ov_run"]:08X}", '
+                        f'"0x{KSEG1 | labels["ov_getpc"]:08X}"]\n', 1)
+    with open(toml, "w") as f:
+        f.write(text)
+    out = os.path.join(tmp, "hooks")
+    os.makedirs(out)
+    code, _log = run_compile(recompiler, compiler,
+                             [capture(data, labels, {KUSEG, KSEG0, KSEG1})], out,
+                             toml=toml)
+    crc = __import__("binascii").crc32(data) & 0xFFFFFFFF
+    leaf = leaf_dir(out)
+    check(code == 0, "the three views build with the hook config")
+    for seg, sub in ((KUSEG, "seg-kuseg"), (KSEG0, ""), (KSEG1, "seg-kseg1")):
+        with open(os.path.join(leaf, sub, f"{crc:08X}_patched.c")) as f:
+            hooks = {int(a, 16) for a in re.findall(
+                r"psx_mod_function_entry\(cpu, 0x([0-9A-F]{8})u\)", f.read())}
+        check(hooks == {seg | labels["ov_run"], seg | labels["ov_getpc"]},
+              f"{seg:08X}: both hooks fire at the segment's entries "
+              f"(got {sorted(f'{h:08X}' for h in hooks)})")
+
+
 # ---------------------------------------------------------------------------
 # 5. the loader
 # ---------------------------------------------------------------------------
@@ -639,6 +672,7 @@ def main() -> int:
         check_demands(args.recompiler, args.compiler, data, labels, tmp)
         check_static_fragments(args.recompiler, args.compiler, tmp)
         check_segment_isolation(args.recompiler, args.compiler, data, labels, tmp)
+        check_config_sites(args.recompiler, args.compiler, data, labels, tmp)
         check_loader(args.compiler, data, labels, cache, tmp)
     if FAILURES:
         print(f"FAIL: {len(FAILURES)} check(s)")

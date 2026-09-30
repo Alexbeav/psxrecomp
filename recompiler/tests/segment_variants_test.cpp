@@ -32,6 +32,10 @@
 // rebase_codegen_config moves the exact-match code sites that name the image
 // into the variant's segment, keeps other addresses and the physically
 // matched kinds as written, and turns the split pre-pass off.
+// overlay_codegen_config (an overlay capture view, §5.7) moves every
+// exact-match site whose bytes lie in the image, in any segment that maps RAM,
+// into the view's segment, and keeps everything else, the split pre-pass
+// setting included.
 
 #include "segment_variants.h"
 
@@ -262,6 +266,53 @@ int main() {
               "a physically matched site is kept as written");
         check(!v.split_mid_function_targets && cfg.split_mid_function_targets,
               "a variant compiles the home compile's final pieces: no split pre-pass");
+    }
+
+    // overlay_codegen_config: an overlay view in each segment gets every
+    // exact-match site that names its bytes, however the config spells it.
+    {
+        const uint32_t p = B & 0x1FFFFFFFu;
+        PSXRecomp::CodeGenConfig cfg;
+        cfg.overlay_mode = true;
+        cfg.split_mid_function_targets = false;
+        cfg.mod_function_entry_funcs = {KUSEG | p, KSEG1 | (p + 0x18)};
+        cfg.hot_funcs = {B + 0x20, 0x80090000u, 0xC0000000u | (p + 0x2C)};
+        cfg.ws_cull_bias_sites = {0x20000000u | (p + 0x28)};
+        cfg.vsync_query_hle_funcs[KSEG1 | (p + 0x20)] = {1u, 2u, 3u, 4u};
+        cfg.ws_bg2d_count_site = KUSEG | (p + 0x28);
+        PSXRecompV4::WidescreenSignedBoundSite bound{};
+        bound.address = KUSEG | (p + 0x28);
+        cfg.ws_signed_x_bound_sites = {bound};
+        for (uint32_t seg : {KUSEG, 0x80000000u, KSEG1}) {
+            const auto view = PSXRecomp::segment_view(exe, seg);
+            const auto v = PSXRecomp::overlay_codegen_config(cfg, view);
+            const std::string at = " (view " + hex(seg) + ")";
+            check(v.mod_function_entry_funcs == std::set<uint32_t>{seg | p, seg | (p + 0x18)},
+                  "mod entry hooks spelled in any segment move into the view" + at);
+            check(v.hot_funcs == std::set<uint32_t>{seg | (p + 0x20), 0x80090000u,
+                                                    0xC0000000u | (p + 0x2C)},
+                  "an address outside the image and a KSEG2 spelling stay" + at);
+            check(v.ws_cull_bias_sites == cfg.ws_cull_bias_sites,
+                  "a spelling in a segment that maps no RAM stays" + at);
+            check(v.vsync_query_hle_funcs.size() == 1 &&
+                      v.vsync_query_hle_funcs.count(seg | (p + 0x20)),
+                  "the VSync-query function moves" + at);
+            check(v.ws_bg2d_count_site == (seg | (p + 0x28)), "scalar sites move" + at);
+            check(v.ws_signed_x_bound_sites.size() == 1 &&
+                      v.ws_signed_x_bound_sites[0].address == (KUSEG | (p + 0x28)),
+                  "a physically matched site is kept as written" + at);
+            check(v.overlay_mode && !v.split_mid_function_targets,
+                  "non-site settings are kept" + at);
+        }
+        const auto k0 = PSXRecomp::overlay_codegen_config(cfg, exe);
+        PSXRecomp::CodeGenConfig same;
+        same.mod_function_entry_funcs = {B, B + 0x18};
+        same.ws_bg2d_count_site = B + 0x28;
+        check(PSXRecomp::overlay_codegen_config(same, exe).mod_function_entry_funcs ==
+                      same.mod_function_entry_funcs &&
+                  PSXRecomp::overlay_codegen_config(same, exe).ws_bg2d_count_site == B + 0x28 &&
+                  k0.mod_function_entry_funcs == same.mod_function_entry_funcs,
+              "a KSEG0 view keeps KSEG0-spelled sites as written");
     }
 
     if (failures) {

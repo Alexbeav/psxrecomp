@@ -584,9 +584,11 @@ static int psxrecomp_game_main(int argc, char** argv) {
     // [[recompiler.patches]] (byte patches), [widescreen.cull] keep, angle and
     // aspect_cone sites, [[widescreen.signed_x_bound]] (the emitter's
     // full-word-guarded substitutions) and [widescreen.dome] call_sites (the
-    // runtime masks them). Overlay compiles wrap captures at KSEG0 and take
-    // the game's config as --ws-config; their segment keys arrive with PR E
-    // (§5.7).
+    // runtime masks them). Overlay compiles are not checked: a capture view is
+    // wrapped at `segment | phys` in whichever segment it ran (§5.7), and the
+    // game config, passed as --ws-config, names overlay code by its bytes, so
+    // overlay_codegen_config() below moves each exact-match site that lies in
+    // the image into the view's segment.
     if (!overlay_mode) {
         std::vector<std::pair<const char*, uint32_t>> foreign;
         auto check = [&](const char* what, uint32_t addr) {
@@ -1516,6 +1518,12 @@ static int psxrecomp_game_main(int argc, char** argv) {
         else
             fmt::print("  (No annotations file found at {})\n\n", ann_path);
     }
+
+    // Overlay capture views (docs/SEGMENT_AWARE_CODE.md §5.7): every view of
+    // the same bytes gets the same hooks and substitutions, whatever segment
+    // it runs in and however the config spells the site.
+    if (overlay_mode)
+        codegen_config = PSXRecomp::overlay_codegen_config(codegen_config, *exe);
 
     PSXRecomp::CodeGenerator codegen(*exe, codegen_config);
     codegen.set_annotations(&annotations);
