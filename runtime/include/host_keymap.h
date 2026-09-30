@@ -26,6 +26,7 @@ typedef enum HostKeymapAction {
     HOST_KEYMAP_RUNTIME_MENU,     /* default F1 */
     HOST_KEYMAP_SWAP_CONTROLLER_PORTS, /* default Ctrl+F6 */
     HOST_KEYMAP_REPLAY_RECORD,    /* default F11; starts/stops a replay recording */
+    HOST_KEYMAP_MOUSE_CAPTURE,    /* default F10; captures/releases the pointer for a PS1 Mouse port */
     HOST_KEYMAP_ACTION_COUNT
 } HostKeymapAction;
 

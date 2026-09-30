@@ -383,7 +383,7 @@ static SDL_Texture*  sdl_texture;
  * [controller] settings the launcher writes; the runtime opens the matching
  * SDL controller (or uses the keyboard) and feeds each PSX pad slot. */
 struct PlayerInput {
-    int   kind = 0;            /* 0=none, 1=keyboard, 2=controller */
+    int   kind = 0;            /* 0=none, 1=keyboard, 2=controller, 3=PS1 Mouse (host pointer) */
     char  guid[40] = {0};      /* SDL joystick GUID string when kind==controller */
     /* Pad input mode (PSXRecompV4::PadMode): 1=analog (default), 2=digital.
      * Game-owned plugins may register a trusted per-sample presentation policy
@@ -399,6 +399,15 @@ struct PlayerInput {
     bool    rumble_warned = false;
 };
 static PlayerInput g_players[PSX_MAX_PLAYERS];
+/* PS1 Mouse host mapping (PS1B-279), from settings.toml [controller]. Only
+ * read when a seat's device is "mouse" (kind 3). The *_set flags remember that
+ * settings.toml had the key, so a launcher save keeps it. */
+static double g_mouse_sensitivity = 1.0;
+static bool   g_mouse_sensitivity_set = false;
+static bool   g_mouse_capture_wanted = true;   /* mouse_capture; MouseCapture hotkey toggles */
+static bool   g_mouse_capture_set = false;
+static bool   g_mouse_captured = false;        /* SDL relative mode is on */
+static double g_mouse_frac[2] = { 0.0, 0.0 };  /* sub-count remainder per axis */
 /* Host-side routing permutation. False: host P1->console port 1. True: host
  * P1->console port 2 (and host P2->console port 1). It deliberately is not
  * serialized in guest save states: this models physically moving plugs. */
@@ -4564,6 +4573,8 @@ static void refresh_sio_port_routes(void) {
         const int mode = effective_player_mode_for_sio(p, sio_slot);
         const ModControllerPresentationPolicy& policy = g_mod_controller_policy[sio_slot];
         const int boot_mode = policy.callback ? policy.initial_mode : mode;
+        sio_set_port_device(sio_slot, p.kind == 3 ? SIO_DEVICE_MOUSE
+                                                  : SIO_DEVICE_PAD);
         sio_set_pad_connected(sio_slot,
                               (p.kind != 0 || dev_host_p1) ? 1 : 0);
         sio_set_pad_analog(sio_slot, pad_mode_boot_analog(boot_mode),
@@ -4590,13 +4601,15 @@ static void refresh_player_devices(void) {
 }
 
 /* Parse a [controller] device string into a player slot:
- *   "none" -> no pad; "keyboard" -> keyboard map; otherwise an SDL GUID. */
+ *   "none" -> no pad; "keyboard" -> keyboard map; "mouse" -> a PS1 Mouse
+ *   driven by the host pointer; otherwise an SDL GUID. */
 static void set_player_device(PlayerInput& p, const std::string& dev, int mode) {
     p.mode = mode;
     p.guid[0] = '\0';
     std::string d = lower_copy(trim_copy(dev));
     if (d.empty() || d == "none") { p.kind = 0; }
     else if (d == "keyboard")     { p.kind = 1; }
+    else if (d == "mouse")        { p.kind = 3; }
     else if (d == "auto" || d == "gamepad" || d == "controller") {
         /* First available SDL game controller (guid empty -> open_player falls
          * back to the first connected pad). Lets a user default to "my
@@ -5238,6 +5251,7 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * controller (PSX_DEV_INPUT=1). Default is strict per-slot routing. */
     const bool dev_here = (dev_any_input_enabled() && host == 0);
     if (p.kind == 0 && !dev_here) return 0;  /* no device in this port */
+    if (p.kind == 3) return 0;  /* a PS1 Mouse, not a pad: sample_mouse_ports */
 
     /* Resolve the pad type this frame FIRST — the effective analog/digital
      * state gates how the left stick is read for BOTH the button word and the
@@ -5331,6 +5345,7 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
     const int  player  = s + 1;             /* keybinds.ini section (1..5) */
     const bool dev_here = false;
     if (p.kind == 0) return 0;  /* no device in this port */
+    if (p.kind == 3) return 0;  /* netplay carries pads only; no PS1 Mouse */
 
     /* Same predicate as capture_pad_slot, with dev-any-input disabled:
      * netplay must stay exclusive so peers hash-agree. */
@@ -5809,6 +5824,8 @@ done:
     freeze_heartbeat_set_paused(0);
 }
 
+static void sample_mouse_ports(void);
+
 static void sample_pad_into_sio(int override) {
     /* Selfcheck fighter mash owns P1 when enabled (headless-safe). */
     if (override < 0) {
@@ -5847,6 +5864,7 @@ static void sample_pad_into_sio(int override) {
                                  0, 0);
         }
     }
+    sample_mouse_ports();
 }
 
 static void sample_headless_pad_into_sio(int override) {
@@ -6620,6 +6638,95 @@ static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
     savestate_menu_ignore_toggle_release = 1;
     savestate_menu_open_key = opened_by_key;
     savestate_menu_sync_overlay();
+}
+
+/* ---- PS1 Mouse host mapping (PS1B-279) ----
+ * A seat whose [controller] device is "mouse" (kind 3) is a Sony PS1 Mouse
+ * (sio SIO_DEVICE_MOUSE) driven by the host pointer in SDL relative mode.
+ * Host policy: recomp-corpus references/ps1/PERIPHERAL-MOUSE-SPEC.md. Nothing
+ * here touches SDL unless a seat is a mouse. */
+static bool mouse_seat_configured(void) {
+    for (int s = 0; s < PSX_MAX_PLAYERS; s++)
+        if (g_players[s].kind == 3) return true;
+    return false;
+}
+
+static void mouse_set_relative(bool on) {
+    if (on == g_mouse_captured || !sdl_window) return;
+#if defined(PSX_SDL3)
+    SDL_SetWindowRelativeMouseMode(sdl_window, on);
+#else
+    SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE);
+#endif
+    g_mouse_captured = on;
+}
+
+/* Capture while the player wants it, the window has focus and no host menu
+ * is open; release otherwise so the pointer is usable. */
+static void mouse_capture_sync(void) {
+    if (g_headless || !mouse_seat_configured()) {
+        mouse_set_relative(false);
+        return;
+    }
+    const bool menu = savestate_menu_open || runtime_settings_menu_open ||
+                      psx_rewind_is_open();
+    mouse_set_relative(g_mouse_capture_wanted && host_hotkey_input_focused() &&
+                       !menu);
+}
+
+static void mouse_capture_toggle(void) {
+    if (!mouse_seat_configured()) return;
+    g_mouse_capture_wanted = !g_mouse_capture_wanted;
+    mouse_capture_sync();
+    char key[32];
+    char msg[80];
+    host_keymap_label(HOST_KEYMAP_MOUSE_CAPTURE, key, sizeof(key));
+    if (g_mouse_capture_wanted)
+        std::snprintf(msg, sizeof(msg), "Mouse captured (%s releases)", key);
+    else
+        std::snprintf(msg, sizeof(msg), "Mouse released (%s captures)", key);
+    host_osd_push(msg, 1500);
+}
+
+/* Feed host pointer motion and buttons into every mouse seat. Motion is
+ * scaled by mouse_sensitivity; the sub-count remainder carries to the next
+ * frame. Released capture or lost focus feeds nothing and drops unread
+ * motion, and both buttons read released. */
+static void sample_mouse_ports(void) {
+    if (g_headless || !mouse_seat_configured()) return;
+    mouse_capture_sync();
+    float fx = 0.0f, fy = 0.0f;
+#if defined(PSX_SDL3)
+    const SDL_MouseButtonFlags buttons = SDL_GetRelativeMouseState(&fx, &fy);
+#else
+    int ix = 0, iy = 0;
+    const Uint32 buttons = SDL_GetRelativeMouseState(&ix, &iy);
+    fx = (float)ix;
+    fy = (float)iy;
+#endif
+    const bool live = g_mouse_captured;
+    int dx = 0, dy = 0;
+    if (live) {
+        const double x = (double)fx * g_mouse_sensitivity + g_mouse_frac[0];
+        const double y = (double)fy * g_mouse_sensitivity + g_mouse_frac[1];
+        dx = (int)x;
+        dy = (int)y;
+        g_mouse_frac[0] = x - dx;
+        g_mouse_frac[1] = y - dy;
+    } else {
+        g_mouse_frac[0] = g_mouse_frac[1] = 0.0;
+    }
+    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
+        if (g_players[host_player_for_sio_slot(s)].kind != 3) continue;
+        if (!live) {
+            sio_mouse_clear_motion(s);
+            sio_set_mouse_buttons(s, 0, 0);
+            continue;
+        }
+        sio_mouse_add_motion(s, dx, dy);
+        sio_set_mouse_buttons(s, (buttons & SDL_BUTTON_LMASK) != 0,
+                              (buttons & SDL_BUTTON_RMASK) != 0);
+    }
 }
 
 static void runtime_settings_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode, int mod,
@@ -8027,6 +8134,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                                            (int)key, (int)scancode, (int)mod)) {
                     controller_port_route_toggle();
                 }
+                else if (!key_repeat && mouse_seat_configured() &&
+                         host_keymap_match_event(HOST_KEYMAP_MOUSE_CAPTURE,
+                                           (int)key, (int)scancode, (int)mod)) {
+                    mouse_capture_toggle();
+                }
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
                     std::fprintf(stdout, "[DEBUG] Forzando reinserción de CD...\n");
                     debug_force_cd_reinsert();
@@ -8098,6 +8210,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         savestate_menu_poll_toggle_buttons();
         rewind_poll_toggle_buttons();
         fast_forward_toggle_poll_buttons();
+        /* Release a PS1 Mouse capture before any host menu pause loop. */
+        mouse_capture_sync();
         psx_rewind_note_frame();
         psx_rewind_present_tick((uint32_t)SDL_GetTicks());
         if (savestate_menu_open)
@@ -14638,6 +14752,14 @@ int main(int argc, char** argv) {
             }
             if (us.has_deadzone) resolved_deadzone = us.deadzone;
         }
+        if (us.has_mouse_sensitivity) {
+            g_mouse_sensitivity = us.mouse_sensitivity;
+            g_mouse_sensitivity_set = true;
+        }
+        if (us.has_mouse_capture) {
+            g_mouse_capture_wanted = us.mouse_capture;
+            g_mouse_capture_set = true;
+        }
         apply_offline_pad_count(game_players, multitap_enabled);
         if (us.has_low_latency_input) g_low_latency_input = us.low_latency_input ? 1 : 0;
         if (us.has_vsync)             g_video_vsync       = us.vsync;
@@ -15174,6 +15296,11 @@ int main(int argc, char** argv) {
             seed.memcard2_enabled = memcard2_enabled; seed.has_memcard2_enabled = true;
             seed.multitap_enabled = multitap_enabled; seed.has_multitap_enabled = true;
             seed.multitap_analog = multitap_analog; seed.has_multitap_analog = true;
+            /* No launcher control yet: carry hand-edited mouse keys through. */
+            seed.mouse_sensitivity = g_mouse_sensitivity;
+            seed.has_mouse_sensitivity = g_mouse_sensitivity_set;
+            seed.mouse_capture = g_mouse_capture_wanted;
+            seed.has_mouse_capture = g_mouse_capture_set;
             if (!memcard1_path.empty()) { seed.memcard1_path = memcard1_path; seed.has_memcard1_path = true; }
             if (!memcard2_path.empty()) { seed.memcard2_path = memcard2_path; seed.has_memcard2_path = true; }
             seed.language = resolved_language; seed.has_language = true;
@@ -15532,7 +15659,11 @@ int main(int argc, char** argv) {
                         if (ls.player_src[i] == 1) {
                             player_device[i] = "keyboard";
                         } else if (ls.player_src[i] == 0) {
-                            player_device[i] = "none";
+                            /* A PS1 Mouse seat shows as None; left there, it
+                             * stays a mouse (launcher_device.h). */
+                            player_device[i] =
+                                PSXRecompV4::launcher_device_is_mouse(player_device[i])
+                                    ? "mouse" : "none";
                         } else if (ls.player_gamepad_guid[i][0]) {
                             player_device[i] = ls.player_gamepad_guid[i];
                         } else if (PSXRecompV4::launcher_source_from_device(
@@ -16288,6 +16419,8 @@ session_reboot:
              * keyboard / any plugged-in controller can drive port 1 standalone. */
             const bool dev_p1 = (dev_any_input_enabled() && s == 0);
             const int mode = effective_player_mode_for_sio(g_players[s], s);
+            sio_set_port_device(s, g_players[s].kind == 3 ? SIO_DEVICE_MOUSE
+                                                          : SIO_DEVICE_PAD);
             sio_set_pad_connected(s, (g_players[s].kind != 0 || dev_p1) ? 1 : 0);
             sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
             sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
@@ -17822,7 +17955,9 @@ soft_return_lobby:
                     if (ls.player_src[i] == 1) {
                         player_device[i] = "keyboard";
                     } else if (ls.player_src[i] == 0) {
-                        player_device[i] = "none";
+                        player_device[i] =
+                            PSXRecompV4::launcher_device_is_mouse(player_device[i])
+                                ? "mouse" : "none";
                     } else if (ls.player_gamepad_guid[i][0]) {
                         player_device[i] = ls.player_gamepad_guid[i];
                     } else if (PSXRecompV4::launcher_source_from_device(
