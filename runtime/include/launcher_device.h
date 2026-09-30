@@ -98,4 +98,26 @@ inline int resolve_player_mode_after_launcher(int launcher_mode,
     return launcher_mode;
 }
 
+// neGcon pad type (PS1B-304) at the launcher seam. A recomp-ui that defines
+// RECOMP_LAUNCHER_HAS_NEGCON_MODE offers it as pad mode 3; the caller passes
+// negcon_mode = true for that launcher. An older one has no such mode and
+// would clamp 3 to D-Pad, so for it a neGcon seat goes in as Analog, and an
+// Analog that comes back for a seat that went in as neGcon stays neGcon.
+// Picking D-Pad replaces the neGcon.
+constexpr int kLauncherPadModeNegcon = 3;   // PAD_MODE_NEGCON
+constexpr int kLauncherPadModeAnalog = 1;   // PAD_MODE_ANALOG
+
+inline int launcher_pad_mode_to_launcher(int mode, bool negcon_mode) {
+    return (!negcon_mode && mode == kLauncherPadModeNegcon) ? kLauncherPadModeAnalog
+                                                            : mode;
+}
+
+inline int launcher_pad_mode_from_launcher(int launcher_mode, int previous_mode,
+                                           bool negcon_mode) {
+    if (!negcon_mode && previous_mode == kLauncherPadModeNegcon &&
+        launcher_mode == kLauncherPadModeAnalog)
+        return kLauncherPadModeNegcon;
+    return launcher_mode;
+}
+
 } // namespace PSXRecompV4

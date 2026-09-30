@@ -55,7 +55,7 @@ assert (
 # The C++ unit test hard-codes 1/2 rather than dragging config_loader.h's
 # dependency chain into a header-only test. Pin the enum so it cannot drift.
 assert (
-    "enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };"
+    "enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2, PAD_MODE_NEGCON = 3 };"
     in CONFIG_LOADER
 ), "PadMode values changed; test_launcher_pad_mode_resolve.cpp hard-codes them"
 
