@@ -152,7 +152,8 @@ static const Profile profiles[] = {
     { "nymashock-1.29.0-dualshock","nymashock-1.29.0-dualshock", "nymashock-1.29.0", 0x11B28ADCB1A3E907ull, 0x94190B1DA4039FA2ull },
 };
 
-static uint64_t run(const Profile *p, int touch_mouse, int touch_negcon) {
+static uint64_t run(const Profile *p, int touch_mouse, int touch_negcon,
+                    int touch_guncon) {
     set_profile(p->pad,p->card);
     hash = 0xCBF29CE484222325ull; bytes = 0; clock_now = 0; i_stat = 0;
     sio_init();
@@ -181,22 +182,35 @@ static uint64_t run(const Profile *p, int touch_mouse, int touch_negcon) {
 #else
     (void)touch_negcon;
 #endif
+#ifdef SIO_DEVICE_GUNCON
+    if (touch_guncon) {
+        /* A GunCon was plugged in, aimed and fired, then replaced by the pad. */
+        for (int s=0;s<PSX_MAX_PLAYERS;++s) {
+            sio_set_port_device(s,SIO_DEVICE_GUNCON);
+            sio_set_guncon_state(s,0x0000,0x0155,0x0077);
+            sio_set_port_device(s,SIO_DEVICE_PAD);
+        }
+    }
+#else
+    (void)touch_guncon;
+#endif
     script();
     return hash;
 }
 
-/* usage: <profile index> [--touch-mouse] [--touch-negcon] [--print]
+/* usage: <profile index> [--touch-mouse] [--touch-negcon] [--touch-guncon] [--print]
  * One profile per process: sio_init deliberately keeps the trace and IRQ
  * sequence counters, and the snapshot carries sio_irq_seq, so a second run in
  * the same process would not start from power-on. */
 int main(int argc, char **argv) {
     const unsigned nprof = (unsigned)(sizeof profiles/sizeof profiles[0]);
-    int touch = 0, touch_negcon = 0, print = 0;
-    if (argc < 2) { fprintf(stderr,"usage: %s <0..%u> [--touch-mouse] [--touch-negcon] [--print]\n",argv[0],nprof-1); return 2; }
+    int touch = 0, touch_negcon = 0, touch_guncon = 0, print = 0;
+    if (argc < 2) { fprintf(stderr,"usage: %s <0..%u> [--touch-mouse] [--touch-negcon] [--touch-guncon] [--print]\n",argv[0],nprof-1); return 2; }
     const unsigned idx = (unsigned)atoi(argv[1]);
     for (int a=2;a<argc;++a) {
         if (!strcmp(argv[a],"--touch-mouse")) touch = 1;
         else if (!strcmp(argv[a],"--touch-negcon")) touch_negcon = 1;
+        else if (!strcmp(argv[a],"--touch-guncon")) touch_guncon = 1;
         else if (!strcmp(argv[a],"--print")) print = 1;
     }
     if (idx >= nprof) { fprintf(stderr,"profile index out of range\n"); return 2; }
@@ -206,11 +220,15 @@ int main(int argc, char **argv) {
 #ifndef SIO_DEVICE_NEGCON
     if (touch_negcon) { fprintf(stderr,"--touch-negcon needs the neGcon API\n"); return 2; }
 #endif
+#ifndef SIO_DEVICE_GUNCON
+    if (touch_guncon) { fprintf(stderr,"--touch-guncon needs the GunCon API\n"); return 2; }
+#endif
     const Profile *p = &profiles[idx];
     const uint64_t golden = PSX_MAX_PLAYERS >= 5 ? p->golden5 : p->golden2;
-    const uint64_t h = run(p,touch,touch_negcon);
+    const uint64_t h = run(p,touch,touch_negcon,touch_guncon);
     const char *trip = touch ? " after a mouse round-trip"
-                     : touch_negcon ? " after a neGcon round-trip" : "";
+                     : touch_negcon ? " after a neGcon round-trip"
+                     : touch_guncon ? " after a GunCon round-trip" : "";
     if (print) {
         printf("players=%d profile=%s bytes=%u hash=0x%016llXull\n",
                PSX_MAX_PLAYERS,p->name,bytes,(unsigned long long)h);
