@@ -6562,6 +6562,12 @@ static int runtime_ui_change_disc(PsxRuntimeUiContext *context) {
         std::memcpy(scex, "SCEA", sizeof(scex)); scex_ptr = scex;
     }
 
+    /* A replay does not record disc swaps: a recording ends on the boundary
+     * before the swap and a playback stops (replay_session_shutdown). The
+     * next vblank returns the overlay tier. */
+    if (replay_session_state() != REPLAY_IDLE)
+        replay_session_shutdown();
+
     const std::string mount = resolved.mount.string();
     if (!cdrom_replace_disc(mount.c_str(), scex_ptr)) {
         host_osd_push("Disc change failed; current disc is still mounted",
