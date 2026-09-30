@@ -348,7 +348,9 @@ bool FullFunctionEmitter::emit_function(
     // First pass: identify terminators and their delay slots.
     for (const auto& [addr, raw] : addr_to_raw) {
         PSXRecomp::DecodedInstruction d = PSXRecomp::MipsDecoder::decode(raw, addr);
-        TranslateResult tr = StrictTranslator::translate(d);
+        // Only terminator metadata is read here, and it stays in ROM space;
+        // every translation in this emitter still gets its runtime PC (§5.2).
+        TranslateResult tr = StrictTranslator::translate(d, relocate_ra(addr));
         if (tr.is_terminator) {
             PendingBranch pb;
             pb.kind = tr.terminator_kind ? tr.terminator_kind : "";
@@ -950,7 +952,9 @@ bool FullFunctionEmitter::emit_function(
 
         // Decode and translate.
         PSXRecomp::DecodedInstruction d = PSXRecomp::MipsDecoder::decode(raw, addr);
-        TranslateResult tr = StrictTranslator::translate(d);
+        // Runtime PC for the PCs the translation hands the runtime (store-PC
+        // stamp, syscall EPC, break/unaligned diagnostics), §5.2.
+        TranslateResult tr = StrictTranslator::translate(d, relocate_ra(addr));
 
         if (!tr.supported) {
             out += fmt::format("    /* UNSUPPORTED 0x{:08X}: {:08X} {} */\n",
@@ -1091,7 +1095,7 @@ bool FullFunctionEmitter::emit_function(
                             uint32_t ds_offset = ds_phys - base_phys;
                             uint32_t ds_raw = read_u32_le(rom, ds_offset);
                             auto ds_d = PSXRecomp::MipsDecoder::decode(ds_raw, ds_addr);
-                            auto ds_tr = StrictTranslator::translate(ds_d);
+                            auto ds_tr = StrictTranslator::translate(ds_d, relocate_ra(ds_addr));
                             if (ds_tr.supported && !ds_tr.is_terminator) {
                                 out += fmt::format("    /* DELAY (orphaned) 0x{:08X}: {:08X}  {} */\n",
                                                    ds_addr, ds_raw, ds_tr.comment);
@@ -1133,7 +1137,7 @@ bool FullFunctionEmitter::emit_function(
                         uint32_t ds_offset = ds_phys - base_phys;
                         uint32_t ds_raw = read_u32_le(rom, ds_offset);
                         auto ds_d = PSXRecomp::MipsDecoder::decode(ds_raw, ds_addr);
-                        auto ds_tr = StrictTranslator::translate(ds_d);
+                        auto ds_tr = StrictTranslator::translate(ds_d, relocate_ra(ds_addr));
                         if (ds_tr.supported && !ds_tr.is_terminator) {
                             out += fmt::format("    /* DELAY (orphaned) 0x{:08X}: {:08X}  {} */\n",
                                                ds_addr, ds_raw, ds_tr.comment);
@@ -1202,7 +1206,7 @@ bool FullFunctionEmitter::emit_function(
                         uint32_t ds_offset = ds_phys - base_phys;
                         uint32_t ds_raw = read_u32_le(rom, ds_offset);
                         auto ds_d = PSXRecomp::MipsDecoder::decode(ds_raw, ds_addr);
-                        auto ds_tr = StrictTranslator::translate(ds_d);
+                        auto ds_tr = StrictTranslator::translate(ds_d, relocate_ra(ds_addr));
                         if (ds_tr.supported && !ds_tr.is_terminator) {
                             out += fmt::format("    /* DELAY (orphaned) 0x{:08X}: {:08X}  {} */\n",
                                                ds_addr, ds_raw, ds_tr.comment);
@@ -1232,7 +1236,7 @@ bool FullFunctionEmitter::emit_function(
                         uint32_t ds_offset = ds_phys - base_phys;
                         uint32_t ds_raw = read_u32_le(rom, ds_offset);
                         auto ds_d = PSXRecomp::MipsDecoder::decode(ds_raw, ds_addr);
-                        auto ds_tr = StrictTranslator::translate(ds_d);
+                        auto ds_tr = StrictTranslator::translate(ds_d, relocate_ra(ds_addr));
                         if (ds_tr.supported && !ds_tr.is_terminator) {
                             out += fmt::format("    /* DELAY (orphaned) 0x{:08X}: {:08X}  {} */\n",
                                                ds_addr, ds_raw, ds_tr.comment);
@@ -1289,7 +1293,7 @@ bool FullFunctionEmitter::emit_function(
                         uint32_t ds_offset = ds_phys - base_phys;
                         uint32_t ds_raw = read_u32_le(rom, ds_offset);
                         auto ds_d = PSXRecomp::MipsDecoder::decode(ds_raw, ds_addr);
-                        auto ds_tr = StrictTranslator::translate(ds_d);
+                        auto ds_tr = StrictTranslator::translate(ds_d, relocate_ra(ds_addr));
                         if (ds_tr.supported && !ds_tr.is_terminator) {
                             out += fmt::format("    /* DELAY (orphaned) 0x{:08X}: {:08X}  {} */\n",
                                                ds_addr, ds_raw, ds_tr.comment);
@@ -1638,7 +1642,7 @@ bool FullFunctionEmitter::emit_function(
         uint32_t last_addr = addr_to_raw.rbegin()->first;
         uint32_t last_raw  = addr_to_raw.rbegin()->second;
         PSXRecomp::DecodedInstruction last_d = PSXRecomp::MipsDecoder::decode(last_raw, last_addr);
-        TranslateResult last_tr = StrictTranslator::translate(last_d);
+        TranslateResult last_tr = StrictTranslator::translate(last_d, relocate_ra(last_addr));
 
         // If the last instruction is a delay slot with a pending branch,
         // check whether it fully handles control flow.  Unconditional control
@@ -1657,9 +1661,12 @@ bool FullFunctionEmitter::emit_function(
         }
         if (!has_control_flow) {
             // Fallthrough tail call: set cpu->pc and return; dispatch loop re-dispatches.
+            // Publish the RUNTIME PC, like every other transfer here (a
+            // relocated window runs at its RAM address; §5.2).
             uint32_t next_addr = last_addr + 4;
             out += emit_irq_check(next_addr);
-            out += fmt::format("    cpu->pc = 0x{:08X}u; return;  /* fallthrough */\n", next_addr);
+            out += fmt::format("    cpu->pc = 0x{:08X}u; return;  /* fallthrough */\n",
+                               relocate_ra(next_addr));
         }
     }
 

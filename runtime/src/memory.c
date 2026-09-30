@@ -547,7 +547,14 @@ static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) 
     }
 }
 
+/* PSX_FORCE_INTERP=1 (tooling, defined below): no game text is native-safe,
+ * so every dispatch into it takes the dirty-RAM interpreter. The byte
+ * compare in the two checks below would otherwise pass for untouched text
+ * and run the compiled image, since force-interp only marks pages dirty. */
+static int dirty_ram_force_interp(void);
+
 int dirty_ram_text_native_ok(uint32_t phys) {
+    if (dirty_ram_force_interp() && phys >= DIRTY_RAM_KERNEL_TRACK_BYTES) return 0;
     if (!text_ref_image || phys < text_ref_lo || phys >= text_ref_hi)
         return !dirty_ram_is_dirty(phys);
 
@@ -598,6 +605,7 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
                                          uint32_t count,
                                          uint32_t exec_pc) {
     if (!text_ref_image || !lo_len_pairs || count == 0) return 0;
+    if (dirty_ram_force_interp()) return 0;
     (void)exec_pc;
     int any = 0;
     for (uint32_t i = 0; i < count; i++) {
@@ -1113,6 +1121,34 @@ static inline uint16_t read_ram_half(uint32_t phys) {
     return (uint16_t)ram[phys] | ((uint16_t)ram[phys + 1] << 8);
 }
 
+/* SCPH-1001 store-PC keys for code that runs relocated (docs/SEGMENT_AWARE_CODE.md
+ * §9). `pc` is the PC the CPU executes the store at, which the compiled BIOS
+ * (BiosAddressModel::runtime_pc) and the interpreter both stamp; `rom` is the
+ * store's address in the image. A RAM PC alone is ambiguous: another BIOS, or
+ * game code once the region is reused, can run a store there. So the key
+ * matches only SCPH-1001's own instruction: the active image is SCPH-1001 and
+ * the RAM word at `pc` is still the ROM word it was copied from. That limits
+ * each key to the one store its ROM-address key named before the re-key, now
+ * whichever backend runs it. */
+#include "psx_bios_known_images.h"
+static inline int scph1001_relocated_store(uint32_t pc, uint32_t rom) {
+    if (g_debug_last_store_pc != pc) return 0;
+    static uint32_t s_scph1001_crc = 0;
+    if (!s_scph1001_crc) {
+        const PsxKnownBiosImage* img = psx_known_bios_by_stem("SCPH1001");
+        s_scph1001_crc = img ? img->crc32 : 0xFFFFFFFFu;
+    }
+    if (psx_bios_image.image_crc32 != s_scph1001_crc) return 0;
+    const uint32_t phys = pc & 0x1FFFFFFFu;
+    const uint32_t off = rom & (BIOS_ROM_SIZE - 1u);
+    if (phys + 4u > RAM_SIZE) return 0;
+    const uint32_t rom_word = (uint32_t)bios_rom[off]
+                            | ((uint32_t)bios_rom[off + 1] << 8)
+                            | ((uint32_t)bios_rom[off + 2] << 16)
+                            | ((uint32_t)bios_rom[off + 3] << 24);
+    return read_ram_word(phys) == rom_word;
+}
+
 /* SPU registers are now handled by spu.c */
 
 void memory_set_sr_ptr(const uint32_t *p) { sr_ptr = p; }
@@ -1291,7 +1327,10 @@ static void mmio_write32(uint32_t addr, uint32_t val) {
     /* GPU GP0: 0x1F801810, GP1: 0x1F801814 */
     if (addr == 0x1F801810u) {
         uint32_t src = addr;
-        if (g_debug_last_store_pc == 0xBFC38B1Cu && debug_cpu_ptr) {
+        /* SCPH-1001 shell store to GP0. The shell runs relocated at
+         * 0x80030000, so ROM 0xBFC38B1C executes at 0x80050B1C
+         * (scph1001_relocated_store). */
+        if (debug_cpu_ptr && scph1001_relocated_store(0x80050B1Cu, 0xBFC38B1Cu)) {
             /* Word-aligned RAM key through the live geometry (retail: the
              * 0x1FFFFC fold, identical to the DMA/GPU source keys). */
             src = psx_ram_canonical_offset(debug_cpu_ptr->gpr[4] - 4u) & ~3u;
@@ -1817,9 +1856,12 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
      * boot. On hardware this mirror copy is not visible in RAM; only the real
      * exception vector at 0x80000080 is. Tomba 2 later passes buffer=0 to the
      * BIOS card write routine, so stale mirror bytes at 0 corrupt the sector 63
-     * management write and leave the load menu stuck checking the card. */
+     * management write and leave the load menu stuck checking the card.
+     * Keys for relocated SCPH-1001 code go through scph1001_relocated_store()
+     * (runtime PC, ROM address); Kernel Part 2 runs at 0x500 from ROM
+     * 0xBFC10000. */
     if (fntrace_is_game_started() &&
-        phys < 0x10u && g_debug_last_store_pc == 0xBFC10A00u) return;
+        phys < 0x10u && scph1001_relocated_store(0x00000F00u, 0xBFC10A00u)) return;
 
     /* BIOS helpers use RAM address zero as a tiny delay-loop scratch between
      * device-register polls. Treat these two dummy stores as non-visible; real
@@ -1827,20 +1869,22 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
      * when it passes buffer=0 to _card_write. */
     if (fntrace_is_game_started() && phys == 0u) {
         switch (g_debug_last_store_pc) {
-        case 0xBFC04E90u:
+        case 0xBFC04E90u:   /* ROM, runs in place */
         case 0xBFC04EF0u:
         case 0xBFC05164u:
         case 0xBFC0D634u:
-        case 0xBFC3EEB4u:
-        case 0xBFC405E4u:
-        case 0xBFC40788u:
-        case 0xBFC41C50u:
         case 0x80012434u:
         case 0x800125ACu:
             return;
         default:
             break;
         }
+        /* SCPH-1001 shell, which runs relocated at 0x80030000. */
+        if (scph1001_relocated_store(0x80056EB4u, 0xBFC3EEB4u) ||
+            scph1001_relocated_store(0x800585E4u, 0xBFC405E4u) ||
+            scph1001_relocated_store(0x80058788u, 0xBFC40788u) ||
+            scph1001_relocated_store(0x80059C50u, 0xBFC41C50u))
+            return;
     }
 
     if (phys < RAM_SIZE) {
@@ -1865,7 +1909,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
             }
             if (s_tomb_evcb_protect &&
                 fntrace_is_game_started() &&
-                g_debug_last_store_pc == 0xBFC117E4u &&
+                scph1001_relocated_store(0x00001CE4u, 0xBFC117E4u) &&  /* kernel */
                 val == 0x2000u &&
                 phys >= 4u && (phys + 8u) < RAM_SIZE &&
                 read_ram_word(phys) == 0x4000u &&

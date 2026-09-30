@@ -845,10 +845,15 @@ Attempted the LOAD-GAME unblock (skip the name grid) to reach a dynamic HUD:
   from the game's first GP0 write (frame 554), a full 554→3754 capture shows the
   HUD (screen y≈8) is **never** drawn as glyph quads or any top-region primitive;
   steady gameplay frames contain only the animated 3D scene (~8 textured `0x2C`
-  quads at screen y≥31, via BIOS DMA `0xBFC38B1C`). The HUD is composed once at
-  stage-load and thereafter only displayed. In the demo its values are static
+  quads at screen y≥31, attributed to the BIOS store `0xBFC38B1C`). The HUD is
+  composed once at stage-load and thereafter only displayed. In the demo its values are static
   (`0-5` / `∞`), so there is **no dynamic HUD draw to intercept** and no
   discriminator to capture.
+  (Later note: that attribution came from the store-PC stamp before #420, when
+  overlay stores kept a private copy of it, so it may name an older store. The
+  shell's GP0 store at ROM `0xBFC38B1C` executes at `0x80050B1C`, and since
+  segment-aware PR B that runtime PC is the stamp and the `memory.c` key;
+  SEGMENT_AWARE_CODE.md §9.)
 
 **Net:** the drawer + font-tile scheme are cracked (see above), but capturing the
 HUD label's own glyph quads (kana U,Vs + a call-context/screen-region

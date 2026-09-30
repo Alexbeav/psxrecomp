@@ -1634,10 +1634,15 @@ static int psxrecomp_game_main(int argc, char** argv) {
         ds << "    PsxGameDispatchFn fn;\n";
         ds << "} PsxGameDispatchEntry;\n\n";
         ds << "static const PsxGameDispatchEntry k_psx_game_dispatch[] = {\n";
+        // Row keys and resume PCs are the PCs the guest executes, so they go
+        // through the emitter's runtime_pc() (docs/SEGMENT_AWARE_CODE.md
+        // §5.2); func_ names stay the compile identity. resume 0 means "entry
+        // at the prologue", not a PC.
         for (const auto& rec : records) {
             ds << fmt::format("    {{0x{:08X}u, 0x{:08X}u, {}u, {}u, func_{:08X}}},\n",
-                              rec.addr, rec.resume, rec.range_index,
-                              rec.range_count, rec.owner);
+                              codegen.runtime_pc(rec.addr),
+                              rec.resume ? codegen.runtime_pc(rec.resume) : 0u,
+                              rec.range_index, rec.range_count, rec.owner);
         }
         ds << "};\n";
         ds << fmt::format("#define PSX_GAME_DISPATCH_COUNT {}u\n\n", records.size());
