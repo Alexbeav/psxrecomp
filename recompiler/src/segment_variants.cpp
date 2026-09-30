@@ -139,14 +139,12 @@ std::vector<SegmentVariantPlan> plan_segment_variants(
     return out;
 }
 
-CodeGenConfig rebase_codegen_config(const CodeGenConfig& cfg,
-                                    const PS1Executable& exe, uint32_t seg) {
-    seg &= kSegmentMask;
-    const uint32_t link = exe.link_segment();
-    auto at = [&](uint32_t a) {
-        return (a != 0 && exe.contains_phys(a) && (a & kSegmentMask) == link)
-                   ? (seg | (a & kPhysMask)) : a;
-    };
+namespace {
+
+// Every config code site the emitter matches exactly, each passed through
+// `at`. Kinds matched by physical address are left as written.
+template <typename At>
+CodeGenConfig move_exact_config_sites(const CodeGenConfig& cfg, At at) {
     auto move_set = [&](std::set<uint32_t>& s) {
         std::set<uint32_t> moved;
         for (uint32_t a : s) moved.insert(at(a));
@@ -193,10 +191,32 @@ CodeGenConfig rebase_codegen_config(const CodeGenConfig& cfg,
     v.ws_bg2d_cap_site = at(v.ws_bg2d_cap_site);
     // Physically matched, kept as written: ws_signed_x_bound_sites,
     // ws_cull_keep_sites, ws_cull_angle_sites, ws_aspect_cone.sites.
+    return v;
+}
+
+}  // namespace
+
+CodeGenConfig rebase_codegen_config(const CodeGenConfig& cfg,
+                                    const PS1Executable& exe, uint32_t seg) {
+    seg &= kSegmentMask;
+    const uint32_t link = exe.link_segment();
+    CodeGenConfig v = move_exact_config_sites(cfg, [&](uint32_t a) {
+        return (a != 0 && exe.contains_phys(a) && (a & kSegmentMask) == link)
+                   ? (seg | (a & kPhysMask)) : a;
+    });
     // The split pre-pass ran on the home compile: the closure is already made
     // of its final pieces.
     v.split_mid_function_targets = false;
     return v;
+}
+
+CodeGenConfig overlay_codegen_config(const CodeGenConfig& cfg,
+                                     const PS1Executable& exe) {
+    const uint32_t seg = exe.link_segment();
+    return move_exact_config_sites(cfg, [&](uint32_t a) {
+        return (a != 0 && maps_physical(a) && exe.contains_phys(a))
+                   ? (seg | (a & kPhysMask)) : a;
+    });
 }
 
 }  // namespace PSXRecomp

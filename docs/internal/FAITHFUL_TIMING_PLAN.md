@@ -213,6 +213,54 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-30 (segment-aware code, rollout PR E review fixes):** folded into
+  `feat/overlay-segment-keys` (docs/SEGMENT_AWARE_CODE.md §5.7, §8 E).
+  - Overlay views move every exact-match config site that names their bytes
+    into their segment (`overlay_codegen_config()`), so a KUSEG or KSEG1 shard
+    emits the same mod function-entry hooks as the interpreter fires. Before,
+    such a hook fired on a cold cache and not on a warm one.
+  - A capture record with execution evidence only compiles as its v2 reading
+    again, and a `--force-interior` PC or a `game.toml` `[[overlays]]` table
+    keeps its view where the record saw no entry. The `--static`
+    isolated-fragment pass compiles each demand against its own segment's
+    view.
+  - `psx_ram_runtime_map_test` links on GNU toolchains again (its link doubles
+    lacked the new segment bitmap).
+  - No guest-visible change for existing titles. R4's game C, OpenBIOS C and
+    every shard compiled from D's and E's captures are byte-identical, and the
+    probe's shards too. R4 fingerprints (12000 frames) at the fixed head are
+    IDENTICAL to E's, cold and warm, locators included. A warm run with the
+    fixed head's own autocompiled KUSEG and KSEG1 shards is IDENTICAL to one
+    with E's, and to the cold run with the usual 501 VBlank straddles.
+  - Found by the probe, not caused by E: a BIOS file read takes about half
+    Beetle's cycles (ACCURACY_BURNDOWN axis 5, CDROM).
+
+- **2026-09-30 (segment-aware code, rollout PR E: overlay shards keyed by
+  segment):** `feat/overlay-segment-keys`, stacked on PR D
+  (docs/SEGMENT_AWARE_CODE.md §5.7, §7.2, §8 E). Overlay code now runs natively
+  in the segment it runs in. Before, it could run natively only at KSEG0, and
+  #417's gate interpreted every KUSEG or KSEG1 entry.
+  - Capture records the segment of each interpreted dispatch (schema v3).
+    `compile_overlays.py` builds one shard per segment with entries: KUSEG and
+    KSEG1 shards go in the cache tag's `seg-kuseg/` and `seg-kseg1/` with an
+    `S` record, and KSEG0 shards keep their place and names. The loader runs a
+    shard only for its own segment's PCs.
+  - Timing parity:
+    - On the probe's new disc-loaded overlay, KUSEG, KSEG0 and KSEG1 runs
+      equal Beetle in T2 deltas (56 / 56 / 82), links and cycle-watch
+      intervals, on both BIOSes, whether interpreted or run as shards.
+    - Warm and cold reach the spin on the same cycle.
+    - LLE boot anchors are unchanged from D (shell entry −126 on OpenBIOS,
+      −445 on SCPH-1001).
+  - R4: OpenBIOS's patch slots (`0x0000281C`, `0x00003554`, `0x0000357C`) and
+    its kernel code entered at KSEG1 (`0xA000DFAC`...) run as KUSEG and KSEG1
+    shards. `segment_alias_interp` falls to 0 on a warm cache. Fingerprints
+    against the same run with those entries interpreted are IDENTICAL,
+    locators included. Neither region is entered at KSEG0 in these runs, so
+    the KSEG0 shards built for them before did not run.
+  - Nothing reshards: the codegen hash, the ABI and the KSEG0 cache layout are
+    unchanged.
+
 - **2026-09-30 (segment-aware code, rollout PR D review fixes):** folded into
   `feat/segment-variants` (docs/SEGMENT_AWARE_CODE.md §5.4, §5.5, §7.2, §8 D).
   - The BIOS dispatch picks the body through `psx_bios_hit_body()`. An alias PC

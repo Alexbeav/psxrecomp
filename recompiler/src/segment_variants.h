@@ -77,4 +77,16 @@ std::vector<SegmentVariantPlan> plan_segment_variants(
 CodeGenConfig rebase_codegen_config(const CodeGenConfig& cfg,
                                     const PS1Executable& exe, uint32_t seg);
 
+// The codegen config for an overlay capture view (§5.7). A view is compiled
+// at `segment | phys` (the image's link segment), and the game config names
+// overlay code by its bytes: the runtime keys mod function-entry hooks by
+// physical address, and one overlay's bytes run in any segment. Each
+// exact-match site whose physical address lies in the image, in any segment
+// that maps RAM, therefore moves into the view's segment, so every view of
+// the same bytes gets the same hooks and substitutions. A KSEG0 view with
+// KSEG0-spelled sites (every pre-§5.7 overlay compile) is unchanged. Other
+// addresses, the physically matched kinds and every non-site setting are kept.
+CodeGenConfig overlay_codegen_config(const CodeGenConfig& cfg,
+                                     const PS1Executable& exe);
+
 }  // namespace PSXRecomp

@@ -505,7 +505,9 @@ id. A function-entry hook (`psx_mod_register_function_entry_plugin`) runs at the
 top of a generated function the game config lists in
 `[recompiler] mod_function_entry_funcs`, and at every interpreted entry to the
 same address (segment bits ignored), so the backend running the page does not
-matter. Like the other kinds it satisfies a manifest `[[plugin]]` and runs only
+matter. Overlay shards compiled for any segment get the hook at the listed
+function's bytes, however the config spells its segment
+(docs/SEGMENT_AWARE_CODE.md §5.7). Like the other kinds it satisfies a manifest `[[plugin]]` and runs only
 while the resolved plan activates its id: the active hooks are flattened into an
 address table at plugin activation, and a plan change drops them until the next
 activation. Activation runs after the

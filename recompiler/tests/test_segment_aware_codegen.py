@@ -70,6 +70,10 @@ REGRESSION_GUARDS = {
     # PR D: the call contract compares return PCs in full, in
     # psx_call_contract and in the BIOS dispatch loop alike.
     "exact-return-contract": "5.5",
+    # PR E: overlay code captured at KUSEG/KSEG0/KSEG1 compiles one shard per
+    # segment, each baking its own segment and a KSEG1 one charging every
+    # fetch as Beetle does.
+    "overlay-segment-shards": "5.7",
 }
 
 
@@ -394,6 +398,86 @@ def memory_c_store_pc_keys():
     return keys, gated
 
 
+def overlay_shard_gaps(recompiler, gen, info, icache, tmp):
+    """§5.7: the probe's overlay phase reads its own EXE file back into RAM at
+    OVL_BUF and calls the copy of `ov_run` through KUSEG, KSEG0 and KSEG1.
+    Build the capture record overlay_capture.c writes for that (schema v3),
+    split it with compile_overlays.py's capture_segment_views(), and compile
+    each view the way its fragment pass does (the entry has no callable
+    boundary: a dispatch_root) with the real recompiler. Each shard must bake
+    only its segment's PCs and name its entries by their VA, its manifest must
+    carry S, and ov_run's straight run must cost what Beetle charges: cached
+    at KUSEG/KSEG0 (line leaders), +4 per fetch at KSEG1. Returns a note, or
+    None when every property holds."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import compile_overlays as co
+    import base64
+    import binascii
+    L, ov = info["labels"], info["overlay"]
+    data = gen.build()                   # the file: 2 KiB header, then the image
+    buf, entry = ov["buffer"], ov["ov_run"]
+    copy = lambda label: buf + 0x800 + L[label] - info["load"]
+    executed = list(range(copy("ov_run"), copy("ov_getpc") + 8, 4))
+    cap = {
+        "schema": "psxrecomp overlay capture v3",
+        "load_addr": "0x%08X" % (KSEG0 | buf), "size": len(data), "guard_bytes": 0,
+        "bytes_b64": base64.b64encode(data).decode(),
+        "executed_pcs": ["0x%08X" % (KSEG0 | pc) for pc in executed],
+        "dispatch_entry_pcs": ["0x%08X" % (KSEG0 | entry)],
+        "dispatch_entry_segments": {n: ["0x%08X" % (s | entry)] for n, s in
+                                    (("kuseg", KUSEG), ("kseg0", KSEG0), ("kseg1", KSEG1))},
+        "function_entry_pcs": [], "seeds": ["0x%08X" % (KSEG0 | entry)],
+    }
+    crc = binascii.crc32(data) & 0xFFFFFFFF
+    straight = list(range(copy("ov_run_straight"), copy("ov_run_end"), 4))
+    problems = []
+    views = co.capture_segment_views(cap)
+    if [int(v["load_addr"], 16) & SEG_MASK for v in views] != [KSEG0, KUSEG, KSEG1]:
+        return "capture views: %s" % [v["load_addr"] for v in views]
+    for view in views:
+        load = int(view["load_addr"], 16)
+        seg = load & SEG_MASK
+        with co.image_segment(seg):
+            _seeds, audit = co.classify_overlay_seeds(view, data, load, len(data), crc, {})
+        # No callable boundary: the entry is an isolated-fragment demand, in
+        # the view's segment.
+        if audit["dispatch_fragment_demands"] != {seg | entry}:
+            problems.append("%08X: fragment demands %s" % (
+                seg, sorted("%08X" % a for a in audit["dispatch_fragment_demands"])))
+        out = os.path.join(tmp, "ovl_%08X" % seg)
+        os.makedirs(out)
+        exe = os.path.join(out, "ovl.psx")
+        with open(exe, "wb") as f:
+            f.write(co.make_psxexe(load, seg | entry, data, guard_bytes=0))
+        seeds_path = os.path.join(out, "seeds.txt")
+        with open(seeds_path, "w") as f:
+            f.write("dispatch_root 0x%08X\n" % (seg | entry))
+        run_recompiler(recompiler, [exe, "--seeds", seeds_path, "--out-dir", out, "--overlay"])
+        bodies = parse_functions(out, r".*_full\.c$")
+        ranges = next(os.path.join(out, n) for n in os.listdir(out) if n.endswith("_full.ranges"))
+        with co.image_segment(seg):
+            func_ids = co.parse_overlay_func_ids(ranges, data, load, len(data))
+        manifest = co.overlay_ranges_text(func_ids)
+        want_names = {"func_%08X" % (seg | entry), "func_%08X" % (seg | copy("ov_getpc"))}
+        if set(bodies) != want_names:
+            problems.append("%08X: functions %s" % (seg, sorted(bodies)))
+        foreign = sorted({pc for body in bodies.values() for pattern in PC_SITES.values()
+                          for pc in pc_constants(body, pattern) if pc & SEG_MASK != seg})
+        if foreign:
+            problems.append("%08X: %d PCs baked in another segment, e.g. 0x%08X"
+                            % (seg, len(foreign), foreign[0]))
+        if (("S %08X\n" % seg in manifest) != (seg != KSEG0) or
+                "F %08X " % (seg | entry) not in manifest):
+            problems.append("%08X: manifest S/F records" % seg)
+        body = bodies.get("func_%08X" % (seg | entry))
+        tags = block_fetches(body, seg | copy("ov_run_straight")) if body else None
+        want = beetle_cycles([seg | pc for pc in straight])
+        got = icache.cycles([tags])[0] if tags else None
+        if got != want:
+            problems.append("%08X: straight run %s cycles, Beetle %d" % (seg, got, want))
+    return "; ".join(problems) or None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--recompiler",
@@ -561,6 +645,12 @@ def main():
         if got != want:
             gaps.add("alias-fetch-coherence")
             notes["alias-fetch-coherence"] = "emitted %s, Beetle %d" % (got, want)
+
+        # -- 5.7: overlay code gets a shard per segment it was captured in ----
+        note = overlay_shard_gaps(args.recompiler, gen, info, icache, tmp)
+        if note:
+            gaps.add("overlay-segment-shards")
+            notes["overlay-segment-shards"] = note
 
     # -- 5: the BIOS emitter charges every KSEG1 (ROM) fetch ------------------
     openbios_toml = os.path.join(ROOT, "bios", "OpenBIOS.toml")

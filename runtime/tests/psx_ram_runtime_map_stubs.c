@@ -38,6 +38,7 @@ uint64_t s_frame_count;
 uint64_t psx_next_service_cycle;
 int psx_in_device_service;
 uint32_t g_dirty_ram_dispatch_pc_bitmap[(0x00800000u / 4u + 31u) / 32u];
+uint32_t g_dirty_ram_dispatch_seg_bitmap[3][(0x00800000u / 4u + 31u) / 32u];
 uint32_t g_dirty_ram_exec_pc_bitmap[(0x00800000u / 4u + 31u) / 32u];
 uint32_t g_dirty_ram_exec_page_bitmap[((0x00800000u / 4096u) + 31u) / 32u];
 

@@ -70,6 +70,9 @@ enum { ENTRY_VALID = 0, ENTRY_INVALID = 1, ENTRY_BLACKLIST = 2 };
 
 typedef struct {
     uint32_t  addr;                      /* phys entry address                 */
+    uint32_t  seg;                       /* segment the shard was compiled for
+                                          * (docs/SEGMENT_AWARE_CODE.md §5.7):
+                                          * it runs only for PCs in it        */
     OverlayFn fn;
     uint32_t  range_lo[MAX_CODE_RANGES]; /* phys code-range starts             */
     uint32_t  range_len[MAX_CODE_RANGES];
@@ -131,7 +134,7 @@ static int       s_range_index_overflow = 0;
  * hundreds of historical, currently-invalid owners in a reused region. */
 #define RANGE_PC_CACHE_CAP 16384u
 #define RANGE_PC_CACHE_MASK (RANGE_PC_CACHE_CAP - 1u)
-typedef struct { uint32_t phys, generation; int cand; } RangePcCache;
+typedef struct { uint32_t phys, generation; int cand; } RangePcCache; /* phys = full PC */
 static RangePcCache s_range_pc_cache[RANGE_PC_CACHE_CAP];
 static uint32_t s_range_candidate_generation = 1u;
 
@@ -216,6 +219,10 @@ static void idx_set_head(uint32_t phys, int head) {
         }
     }
 }
+/* The chain keeps every segment's candidates for one physical entry (the
+ * bytes are one identity); a PC may run only its own segment's (§5.7). First
+ * candidate of the chain compiled for `seg`, or -1. */
+static int idx_head_seg(uint32_t phys, uint32_t seg);
 
 /* Active native-entry stack (self-modification detection, §8.5). */
 static int s_active_stack[64];
@@ -501,7 +508,8 @@ static uint32_t s_rehash_miss    = 0;   /* hashes that didn't match crc_code  */
 static uint64_t s_gen_fastpath   = 0;   /* dispatches that skipped the crc32   */
                                         /* via the unchanged page-generation   */
                                         /* fast path (overlay-cache v2 P2)      */
-static uint64_t s_segment_alias_interp = 0; /* KUSEG/KSEG1 PCs kept off shards  */
+static uint64_t s_segment_alias_interp = 0; /* KUSEG/KSEG1 PCs interpreted     */
+static uint64_t s_segment_native = 0;       /* KUSEG/KSEG1 PCs run by own shard */
 static uint64_t s_diffgate_interp = 0;  /* CPS interior re-entries sent to the  */
                                         /* interp because their candidate is    */
                                         /* still inside the diff verify budget  */
@@ -798,7 +806,13 @@ enum {
 static int man_structurally_valid(const ManFn *m) {
     if (!m || !m->has_crc || m->n < 1 || m->n > MAX_CODE_RANGES)
         return 0;
-    if ((m->entry & OVERLAY_KSEG0_WINDOW_MASK) != 0x80000000u) return 0;
+    /* F entries carry the full VA of the segment the shard was compiled for
+     * (docs/SEGMENT_AWARE_CODE.md §5.7): KUSEG, KSEG0 or KSEG1, inside that
+     * segment's RAM decode window. R ranges stay byte extents, written at
+     * KSEG0 whatever the shard's segment. */
+    if (psx_code_segment_index(m->entry) < 0 ||
+        (m->entry & OVERLAY_KSEG0_WINDOW_MASK) != (m->entry & 0xE0000000u))
+        return 0;
     uint32_t entry = m->entry & 0x1FFFFFFFu;
     if ((entry & 3u) != 0u || entry >= OVERLAY_RAM_SIZE) return 0;
     int entry_covered = 0;
@@ -853,18 +867,25 @@ static int manifest_record_end(const char *cursor) {
     return *manifest_skip_space(cursor) == '\0';
 }
 
+/* `S <seg>` (§5.7) names the segment the shard was compiled for: 00000000
+ * (KUSEG), 80000000 (KSEG0) or A0000000 (KSEG1). It is optional and absent
+ * means KSEG0, so every manifest written before it stays valid. Every F entry
+ * must lie in that segment; *out_seg receives it. */
 static ManFn *parse_manifest(const char *path, int *out_n,
                              uint64_t *out_pair_id,
                              int *out_has_pair_id,
-                             int *out_provenance) {
+                             int *out_provenance,
+                             uint32_t *out_seg) {
     *out_n = 0;
+    if (out_seg) *out_seg = PSX_OVERLAY_CODE_SEGMENT;
     if (out_pair_id) *out_pair_id = 0;
     if (out_has_pair_id) *out_has_pair_id = 0;
     if (out_provenance) *out_provenance = MANIFEST_PROVENANCE_AUTHORITY;
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
     int cap = 1024, n = 0;
-    int invalid = 0, pair_seen = 0, provenance_seen = 0;
+    int invalid = 0, pair_seen = 0, provenance_seen = 0, seg_seen = 0;
+    uint32_t seg = PSX_OVERLAY_CODE_SEGMENT;
     int provenance = MANIFEST_PROVENANCE_AUTHORITY;
     ManFn *arr = (ManFn *)malloc(sizeof(ManFn) * cap);
     if (!arr) { fclose(f); return NULL; }
@@ -900,7 +921,8 @@ static ManFn *parse_manifest(const char *path, int *out_n,
                 ? parsed_provenance : MANIFEST_PROVENANCE_AMBIGUOUS;
         }
         const char *record = manifest_skip_space(line);
-        int recognized = ((*record == 'P' || *record == 'F' || *record == 'R') &&
+        int recognized = ((*record == 'P' || *record == 'F' || *record == 'R' ||
+                           *record == 'S') &&
                           (record[1] == '\0' ||
                            manifest_is_space((unsigned char)record[1])));
         int embedded_nul = memchr(line, '\0', line_len) != NULL;
@@ -916,7 +938,18 @@ static ManFn *parse_manifest(const char *path, int *out_n,
             continue;
         }
         if (!recognized) continue;
-        if (*record == 'P') {
+        if (*record == 'S') {
+            const char *cursor = record + 1;
+            uint64_t parsed = 0;
+            if (!seg_seen && n == 0 &&
+                manifest_hex_field(&cursor, 8, &parsed) &&
+                manifest_record_end(cursor) &&
+                psx_code_segment_index((uint32_t)parsed) >= 0 &&
+                ((uint32_t)parsed & 0x1FFFFFFFu) == 0u) {
+                seg = (uint32_t)parsed;
+                seg_seen = 1;
+            } else invalid = 1;   /* twice, after an F, or not a RAM segment */
+        } else if (*record == 'P') {
             const char *cursor = record + 1;
             uint64_t parsed = 0;
             if (manifest_hex_field(&cursor, 16, &parsed) &&
@@ -939,7 +972,8 @@ static ManFn *parse_manifest(const char *path, int *out_n,
                     arr = na;
                 }
                 cur = &arr[n++];
-                cur->entry   = ((uint32_t)parsed_e & 0x1FFFFFFFu) | PSX_OVERLAY_CODE_SEGMENT;
+                cur->entry   = (uint32_t)parsed_e;
+                if ((cur->entry & 0xE0000000u) != seg) invalid = 1;
                 cur->crc     = (uint32_t)parsed_crc;
                 cur->has_crc = 1;
                 cur->n = 0;
@@ -981,6 +1015,7 @@ static ManFn *parse_manifest(const char *path, int *out_n,
         return NULL;
     }
     if (out_provenance) *out_provenance = provenance;
+    if (out_seg) *out_seg = seg;
     *out_n = n;
     return arr;
 }
@@ -1169,6 +1204,7 @@ static int cand_register(uint32_t phys, OverlayFn fn, const ManFn *m, int dll,
     int idx = s_cand_n++;
     Candidate *c = &s_cand[idx];
     c->addr    = phys;
+    c->seg     = m->entry & 0xE0000000u;
     c->fn      = fn;
     c->dll     = dll;
     c->tier    = (uint8_t)tier;
@@ -1222,6 +1258,12 @@ static int cand_register(uint32_t phys, OverlayFn fn, const ManFn *m, int dll,
     return 1;
 }
 
+static int idx_head_seg(uint32_t phys, uint32_t seg) {
+    for (int i = idx_head(phys); i >= 0; i = s_cand[i].next)
+        if (s_cand[i].seg == seg) return i;
+    return -1;
+}
+
 /* (sljit removed 2026-07-15: register_sljit_candidate, the JIT-on-miss memo,
  * the async compile-worker glue, the master tier gate, and try_sljit_region
  * lived here. Overlay misses now fall to the interpreter.) */
@@ -1265,6 +1307,7 @@ enum { CACHE_TIER_UNKNOWN = 0, CACHE_TIER_TCC = 1, CACHE_TIER_GCC = 2 };
 typedef struct {
     uint32_t region_start;
     uint32_t logical_crc;
+    uint32_t seg;          /* shard segment, from its directory (§5.7)       */
     uint64_t mtime;
     int func_count;
     int indexed_func_count;
@@ -1347,6 +1390,33 @@ static int cache_tier_from_path(const char *path) {
     if (path_component_eq(path, "gcc")) return CACHE_TIER_GCC;
     if (path_component_eq(path, "tcc")) return CACHE_TIER_TCC;
     return CACHE_TIER_UNKNOWN;
+}
+
+/* Per-segment cache layout (docs/SEGMENT_AWARE_CODE.md §5.7, decision 4):
+ * KSEG0 shards stay directly in the cache tag directory, under their old
+ * names, so no existing cache is invalidated; KUSEG and KSEG1 shards live in
+ * the seg-kuseg/ and seg-kseg1/ subdirectories of the same tag, under the
+ * same {phys}_{crc} grammar. A shard's segment is its directory's, and its
+ * manifest's S record must agree. */
+#define OVERLAY_SEG_DIR_KUSEG "seg-kuseg"
+#define OVERLAY_SEG_DIR_KSEG1 "seg-kseg1"
+static int cache_dir_name_eq(const char *start, size_t len, const char *want) {
+    if (len != strlen(want)) return 0;
+    for (size_t i = 0; i < len; i++)
+        if (tolower((unsigned char)start[i]) != want[i]) return 0;
+    return 1;
+}
+static uint32_t cache_seg_from_path(const char *path) {
+    const char *end = NULL;
+    for (const char *p = path; *p; p++)
+        if (*p == '/' || *p == '\\') end = p;
+    if (!end) return PSX_OVERLAY_CODE_SEGMENT;
+    const char *start = end;
+    while (start > path && start[-1] != '/' && start[-1] != '\\') start--;
+    size_t len = (size_t)(end - start);
+    if (cache_dir_name_eq(start, len, OVERLAY_SEG_DIR_KUSEG)) return 0x00000000u;
+    if (cache_dir_name_eq(start, len, OVERLAY_SEG_DIR_KSEG1)) return 0xA0000000u;
+    return PSX_OVERLAY_CODE_SEGMENT;
 }
 
 static int cache_name_is_immutable(const char *name) {
@@ -1564,7 +1634,7 @@ static int       s_lazy_range_link_n = 0;
 #define LAZY_MISS_CACHE_CAP 16384u
 #define LAZY_MISS_CACHE_MASK (LAZY_MISS_CACHE_CAP - 1u)
 typedef struct {
-    uint32_t phys;
+    uint32_t phys;           /* the full PC (segment | phys)                  */
     uint32_t code_gen;
     uint32_t watched_code_gen;
     uint32_t loader_gen;
@@ -1581,16 +1651,18 @@ static void lazy_miss_invalidate_loader(void) {
     }
 }
 
-static int lazy_miss_cached(uint32_t phys) {
-    LazyMissEntry *e = &s_lazy_miss_cache[(phys >> 2) & LAZY_MISS_CACHE_MASK];
-    return e->phys == phys && e->code_gen == g_dirty_ram_code_gen &&
+/* Keyed by the full PC: a miss for one segment says nothing about another
+ * segment's shard of the same bytes (§5.7). */
+static int lazy_miss_cached(uint32_t pc) {
+    LazyMissEntry *e = &s_lazy_miss_cache[(pc >> 2) & LAZY_MISS_CACHE_MASK];
+    return e->phys == pc && e->code_gen == g_dirty_ram_code_gen &&
            e->watched_code_gen == s_lazy_watched_code_gen &&
            e->loader_gen == s_lazy_loader_gen;
 }
 
-static void lazy_miss_record(uint32_t phys) {
-    LazyMissEntry *e = &s_lazy_miss_cache[(phys >> 2) & LAZY_MISS_CACHE_MASK];
-    e->phys = phys;
+static void lazy_miss_record(uint32_t pc) {
+    LazyMissEntry *e = &s_lazy_miss_cache[(pc >> 2) & LAZY_MISS_CACHE_MASK];
+    e->phys = pc;
     e->code_gen = g_dirty_ram_code_gen;
     e->watched_code_gen = s_lazy_watched_code_gen;
     e->loader_gen = s_lazy_loader_gen;
@@ -1630,8 +1702,18 @@ static void rebuild_lazy_manifest_index(void) {
         snprintf(path + n - OVERLAY_SHARED_EXT_LEN,
                  sizeof(path) - (n - OVERLAY_SHARED_EXT_LEN), ".ranges");
         int man_n = 0;
-        ManFn *man = parse_manifest(path, &man_n, NULL, NULL, NULL);
+        uint32_t man_seg = 0;
+        ManFn *man = parse_manifest(path, &man_n, NULL, NULL, NULL, &man_seg);
         if (!man) continue;
+        if (man_seg != s_cache_idx[ci].seg) {
+            /* A shard runs only in the segment it was compiled for, and its
+             * directory says which one; a disagreeing manifest is not used. */
+            loader_log("manifest %s names segment 0x%08X, its directory 0x%08X "
+                       "-- left to the interpreter", path, man_seg,
+                       s_cache_idx[ci].seg);
+            free(man);
+            continue;
+        }
         s_cache_idx[ci].manifest_ok = 1;
         s_cache_idx[ci].func_count = man_n;
         for (int mi = 0; mi < man_n; mi++) {
@@ -1774,6 +1856,7 @@ const char *overlay_loader_arch_abi(void) { return PSX_OVERLAY_ARCH_ABI; }
 #ifndef _WIN32
 static int add_posix_cache_file(const PsxOverlayCacheFile *file, void *opaque) {
     int tier = opaque ? *(const int *)opaque : CACHE_TIER_UNKNOWN;
+    const uint32_t seg = cache_seg_from_path(file->path);
     /* Legacy 8_8 pairs were published by a replace protocol that could leave a
      * new manifest beside an old DLL. Keep them on disk for Python seed
      * migration, but never let them suppress or execute instead of a bound
@@ -1789,6 +1872,7 @@ static int add_posix_cache_file(const PsxOverlayCacheFile *file, void *opaque) {
     CacheEntry *e = &s_cache_idx[s_cache_idx_count++];
     e->region_start = file->region_start;
     e->logical_crc = file->content_crc;
+    e->seg = seg;
     e->mtime = file->mtime;
     e->func_count = 0;
     e->indexed_func_count = 0;
@@ -1832,6 +1916,7 @@ static void scan_one_cache_dir(const char *dir, int tier) {
         CacheEntry *e = &s_cache_idx[s_cache_idx_count++];
         e->region_start = addr;
         e->logical_crc = crc;
+        e->seg = cache_seg_from_path(full);
         e->mtime = ((uint64_t)fd.ftLastWriteTime.dwHighDateTime << 32) |
                    (uint64_t)fd.ftLastWriteTime.dwLowDateTime;
         e->func_count = 0;
@@ -2042,23 +2127,31 @@ static void abi_preflight_sweep(const char *dir) {
 #endif
 }
 
-static void scan_cache_dir(void) {
+static void scan_tier_cache_dirs(const char *tier_name, int tier) {
     char dir[768];
+    snprintf(dir, sizeof(dir), "%s/%s/%s/%s/cg%d_%08x_gc%08x_f%u",
+             s_cache_dir, s_game_id, tier_name, PSX_OVERLAY_ARCH_ABI,
+             PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH,
+             (unsigned)s_config_hash, (unsigned)PSX_OVERLAY_FLAVOR);
+    scan_one_cache_dir(dir, tier);
+    abi_preflight_sweep(dir);
+    /* KUSEG and KSEG1 shards: per-segment subdirectories of the same tag. */
+    static const char *const seg_dirs[] = {
+        OVERLAY_SEG_DIR_KUSEG, OVERLAY_SEG_DIR_KSEG1 };
+    for (size_t i = 0; i < sizeof(seg_dirs) / sizeof(seg_dirs[0]); i++) {
+        char seg_dir[800];
+        snprintf(seg_dir, sizeof(seg_dir), "%s/%s", dir, seg_dirs[i]);
+        scan_one_cache_dir(seg_dir, tier);
+        abi_preflight_sweep(seg_dir);
+    }
+}
+
+static void scan_cache_dir(void) {
     /* Index both tiers and every immutable artifact. Runtime selection prefers
      * usable GCC over TCC; an invalid GCC artifact cannot suppress a valid TCC
      * fallback merely because its filename was enumerated first. */
-    snprintf(dir, sizeof(dir), "%s/%s/gcc/%s/cg%d_%08x_gc%08x_f%u",
-             s_cache_dir, s_game_id, PSX_OVERLAY_ARCH_ABI, PSX_OVERLAY_CODEGEN_VER,
-             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash,
-             (unsigned)PSX_OVERLAY_FLAVOR);
-    scan_one_cache_dir(dir, CACHE_TIER_GCC);
-    abi_preflight_sweep(dir);
-    snprintf(dir, sizeof(dir), "%s/%s/tcc/%s/cg%d_%08x_gc%08x_f%u",
-             s_cache_dir, s_game_id, PSX_OVERLAY_ARCH_ABI, PSX_OVERLAY_CODEGEN_VER,
-             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash,
-             (unsigned)PSX_OVERLAY_FLAVOR);
-    scan_one_cache_dir(dir, CACHE_TIER_TCC);
-    abi_preflight_sweep(dir);
+    scan_tier_cache_dirs("gcc", CACHE_TIER_GCC);
+    scan_tier_cache_dirs("tcc", CACHE_TIER_TCC);
 
     refresh_bios_resident_flags();
     rebuild_lazy_manifest_index();
@@ -2302,12 +2395,16 @@ static void overlay_ci_wrapper(CPUState *cpu) {
     psx_check_interrupts(cpu);
 }
 
+/* Full-VA compares (§5.7): the resume PC a shard bakes is in its own segment,
+ * so it is the caller's return point only when it equals $ra exactly, and it
+ * is internal only to a running shard of the same segment. */
 static int overlay_idle_note_is_internal_or_return(const CPUState *cpu,
                                                    uint32_t resume_pc) {
     uint32_t phys = resume_pc & 0x1FFFFFFFu;
-    if ((resume_pc & 0x1FFFFFFFu) == (cpu->gpr[31] & 0x1FFFFFFFu)) return 1;
+    if (resume_pc == cpu->gpr[31]) return 1;
     if (s_active_depth <= 0) return 0;
     Candidate *c = &s_cand[s_active_stack[s_active_depth - 1]];
+    if ((resume_pc & 0xE0000000u) != c->seg) return 0;
     for (int r = 0; r < c->nranges; r++) {
         uint32_t lo = c->range_lo[r];
         if (phys >= lo && phys < lo + c->range_len[r]) return 1;
@@ -3139,12 +3236,22 @@ static int load_one_dll(const char *dll_path,
     uint64_t manifest_pair_id = 0;
     int manifest_has_pair_id = 0;
     int manifest_provenance = MANIFEST_PROVENANCE_AUTHORITY;
+    uint32_t manifest_seg = 0;
     ManFn *man = parse_manifest(ranges_path, &man_n,
                                 &manifest_pair_id,
                                 &manifest_has_pair_id,
-                                &manifest_provenance);
+                                &manifest_provenance,
+                                &manifest_seg);
     if (!man || man_n == 0) {
         loader_log("no/empty manifest %s — DLL left to interpreter", ranges_path);
+        free(man);
+        overlay_library_close(prepared);
+        return 0;
+    }
+    if (manifest_seg != cache_seg_from_path(dll_path)) {
+        loader_log("manifest %s names segment 0x%08X, not its directory's "
+                   "0x%08X -- DLL left to interpreter", ranges_path,
+                   manifest_seg, cache_seg_from_path(dll_path));
         free(man);
         overlay_library_close(prepared);
         return 0;
@@ -3308,7 +3415,8 @@ void overlay_loader_discard_prepared(OverlayPreparedImage *image) {
     free(image);
 }
 
-static int lazy_man_contains(const ManFn *m, uint32_t phys) {
+static int lazy_man_contains(const ManFn *m, uint32_t seg, uint32_t phys) {
+    if ((m->entry & 0xE0000000u) != seg) return 0;   /* another segment's shard */
     if ((m->entry & 0x1FFFFFFFu) == phys) return 1;
     for (int r = 0; r < m->n; r++) {
         uint32_t lo = m->lo[r] & 0x1FFFFFFFu;
@@ -3402,18 +3510,21 @@ static void overlay_image_warm_seed_boot_text(void) {
     overlay_image_warm_queue(indices, count);
 }
 
-static int lazy_is_loadable(int li, uint32_t region_start, uint32_t phys,
-                            int require_region_start) {
+static int lazy_is_loadable(int li, uint32_t region_start, uint32_t seg,
+                            uint32_t phys, int require_region_start) {
     if (li < 0 || li >= s_lazy_man_n) return 0;
     LazyMan *lm = &s_lazy_man[li];
     int ci = lm->cache_idx;
     if (ci < 0 || ci >= s_cache_idx_count) return 0;
+    /* A manifest's entries are in its directory's segment (checked when the
+     * index is built), so lazy_man_contains()'s segment test selects the
+     * shards of `seg`. */
     return (!require_region_start ||
             s_cache_idx[ci].region_start == region_start) &&
         !s_cache_idx[ci].load_failed &&
         !s_cache_idx[ci].capacity_suppressed &&
         !dll_already_loaded(s_cache_idx[ci].path) &&
-        lazy_man_contains(&lm->fn, phys) && lazy_man_matches(lm);
+        lazy_man_contains(&lm->fn, seg, phys) && lazy_man_matches(lm);
 }
 
 static int lazy_better_bundle(int li, int best) {
@@ -3445,7 +3556,10 @@ static int lazy_load_selected(int li) {
     return loaded;
 }
 
-static int try_load_region(uint32_t phys) {
+/* Load the cached shard of `seg` (§5.7) that serves phys. The region walkback
+ * and the manifest indexes are physical: the bytes, and so the region, are the
+ * same in every segment. lazy_is_loadable() admits only `seg`'s manifests. */
+static int try_load_region(uint32_t seg, uint32_t phys) {
     extern uint32_t dirty_ram_get_bitmap_word(uint32_t word_index);
 
     if (!overlay_loads_allowed())
@@ -3499,7 +3613,7 @@ retry_artifact:
          * variants, so walkback can recover an older adjacent run's base
          * (e.g. 0x106000 instead of an exact live 0x108000 shard). Rejecting
          * the exact entry on that heuristic strands valid DLLs forever. */
-        if (!lazy_is_loadable(li, region_start, phys, 0)) continue;
+        if (!lazy_is_loadable(li, region_start, seg, phys, 0)) continue;
         int ci = s_lazy_man[li].cache_idx;
         /* Cross-region recovery is safe only for a fully coherent CPS bundle.
          * A partial exact-function match can have snapshot-specific internal
@@ -3525,7 +3639,7 @@ retry_artifact:
             /* Non-exact range ownership remains region-narrowed: unlike an
              * exact manifested entry, an interior PC alone is not a unique
              * identity for a reused-address CPS bundle. */
-            if (!lazy_is_loadable(li, region_start, phys, 1)) continue;
+            if (!lazy_is_loadable(li, region_start, seg, phys, 1)) continue;
             if (lazy_candidate_preferred(li, fallback)) fallback = li;
             int ci = s_lazy_man[li].cache_idx;
             if (lazy_bundle_matches(ci) && lazy_candidate_preferred(li, best))
@@ -3546,7 +3660,7 @@ retry_artifact:
  * interior CPS continuation. The latter must use its already-loaded range owner
  * first (the Whoopee 0x107624 fix); the former must be allowed to publish its
  * exact DLL even when a broader conservative owner contains the same PC. */
-static int lazy_has_exact_entry(uint32_t phys) {
+static int lazy_has_exact_entry(uint32_t seg, uint32_t phys) {
     /* Same overlay-off hazard as overlay_find_by_range: the lazy entry index
      * (s_lazy_entry_head) is -1-initialized only when overlay_cache is enabled;
      * with overlay off it is zero-initialized and the link traversal below
@@ -3555,7 +3669,7 @@ static int lazy_has_exact_entry(uint32_t phys) {
     uint32_t bucket = (phys * 2654435761u) & LAZY_ENTRY_MASK;
     for (int li = s_lazy_entry_head[bucket]; li >= 0;
          li = s_lazy_man[li].next_entry) {
-        if ((s_lazy_man[li].fn.entry & 0x1FFFFFFFu) == phys)
+        if (s_lazy_man[li].fn.entry == (seg | phys))
             return 1;
     }
     return 0;
@@ -3570,9 +3684,10 @@ static int lazy_has_exact_entry(uint32_t phys) {
  * idx_head() (entry-keyed) misses; we re-enter the owning function with
  * cpu->pc = that address so its entry-switch routes to the right block. Returns
  * the candidate index, or -1. */
-static int range_candidate_matches(int i, uint32_t phys) {
+static int range_candidate_matches(int i, uint32_t seg, uint32_t phys) {
     Candidate *c = &s_cand[i];
     if (c->state == ENTRY_BLACKLIST) return 0;
+    if (c->seg != seg) return 0;   /* another segment's shard (§5.7) */
     int contains = 0;
     uint32_t first_range_lo = UINT32_MAX;
     for (int r = 0; r < c->nranges; r++) {
@@ -3629,7 +3744,7 @@ static int range_candidate_preferred(int candidate, int current) {
     return candidate > current; /* newest same-tier repair */
 }
 
-static int overlay_find_by_range(uint32_t phys) {
+static int overlay_find_by_range(uint32_t seg, uint32_t phys) {
     /* Definitive guard for the overlay-off case: the range page index
      * (s_range_page_head) is only initialized to -1 by overlay_loader_init,
      * which runs solely when overlay_cache is enabled. With overlay off it is
@@ -3640,36 +3755,39 @@ static int overlay_find_by_range(uint32_t phys) {
     uint32_t page = phys >> 12;
     if (page >= RANGE_PAGE_COUNT) return -1;
 
+    /* Cached by the full PC: each segment has its own owner (§5.7). */
+    const uint32_t key = seg | phys;
     RangePcCache *pc = &s_range_pc_cache[
-        (phys * 2654435761u) & RANGE_PC_CACHE_MASK];
+        (key * 2654435761u) & RANGE_PC_CACHE_MASK];
     if (pc->generation == s_range_candidate_generation &&
-        pc->cand >= 0 && pc->phys == phys &&
-        range_candidate_matches(pc->cand, phys))
+        pc->cand >= 0 && pc->phys == key &&
+        range_candidate_matches(pc->cand, seg, phys))
         return pc->cand;
 
     int best = -1;
     if (s_range_index_overflow) {
         for (int i = 0; i < s_cand_n; i++)
-            if (range_candidate_matches(i, phys) &&
+            if (range_candidate_matches(i, seg, phys) &&
                 range_candidate_preferred(i, best))
                 best = i;
     } else {
         for (int li = s_range_page_head[page]; li >= 0;
              li = s_range_links[li].next) {
             int i = s_range_links[li].cand;
-            if (range_candidate_matches(i, phys) &&
+            if (range_candidate_matches(i, seg, phys) &&
                 range_candidate_preferred(i, best))
                 best = i;
         }
     }
-    pc->phys = phys;
+    pc->phys = key;
     pc->generation = s_range_candidate_generation;
     pc->cand = best;
     return best;
 }
 
+static int overlay_loader_dispatch_seg(CPUState *cpu, uint32_t addr);
+
 int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
-    uint32_t phys = addr & 0x1FFFFFFFu;
     /* Overlay dispatch is a no-op when the overlay loader is inactive
      * (overlay_cache=false): there are no candidates to match, so this must
      * return 0 (dispatch to interp). This guard is also a HARD SAFETY:
@@ -3683,28 +3801,46 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
      * overlay-off + CPS game hit this and wedged at boot before any game code ran
      * (found via Ape Escape, the only overlay-off title). Fail closed here. */
     if (!s_active) return 0;
-    /* A shard's body bakes the KSEG0 PCs it was compiled for; a KUSEG or KSEG1
-     * alias of its bytes must run at its own PC ($ra, EPC, I-cache tags). The
-     * CPS continuation switch already rejects such a PC (bad entry); this
-     * keeps function entries to the same rule. */
+    int ran = overlay_loader_dispatch_seg(cpu, addr);
+    /* KUSEG/KSEG1 dispatches, split by outcome (docs/SEGMENT_AWARE_CODE.md
+     * §5.7): run by a shard compiled for their segment, or left to the
+     * interpreter (none is cached or valid yet). The interpreted ones are
+     * what capture records for the next compile, so on a warm cache the
+     * second count falls to 0. */
     if (!psx_overlay_code_segment_pc(addr)) {
-        s_segment_alias_interp++;
+        if (ran) s_segment_native++;
+        else     s_segment_alias_interp++;
+    }
+    return ran;
+}
+
+/* A shard's body bakes the PCs of the segment it was compiled for: the $ra a
+ * jal/jalr writes, its jump and exception-resume PCs, its I-cache fetch tags
+ * and store-PC stamps (docs/SEGMENT_AWARE_CODE.md §5.7). A PC therefore runs
+ * only a shard of its own segment; another segment's shard of the same bytes
+ * is not a candidate for it. Candidates, manifests and the negative caches
+ * are indexed physically (the bytes are one identity) and matched by segment;
+ * a PC outside the three segments that map RAM never runs a shard. */
+static int overlay_loader_dispatch_seg(CPUState *cpu, uint32_t addr) {
+    const uint32_t phys = addr & 0x1FFFFFFFu;
+    const uint32_t seg = addr & 0xE0000000u;
+    if (psx_code_segment_index(addr) < 0) {
         s_disp_interp++;
         return 0;
     }
-    if (overlay_cache_window_contains(phys) && lazy_miss_cached(phys)) {
+    if (overlay_cache_window_contains(phys) && lazy_miss_cached(addr)) {
         s_disp_interp++;
         return 0;
     }
     int lazy_loaded = 0;
 retry_candidates:
     ; /* C11 labels must precede a statement. */
-    int head = idx_head(phys);
+    int head = idx_head_seg(phys, seg);
     int loaded_range_ci = -1;
     int lazy_exact = 0;
     int exact_needs_load = 0;
     if (head < 0 && s_active && overlay_cache_window_contains(phys)) {
-        lazy_exact = head < 0 && lazy_has_exact_entry(phys);
+        lazy_exact = head < 0 && lazy_has_exact_entry(seg, phys);
         /* A CPS continuation is normally not a registered function ENTRY. Its
          * already-loaded range owner must be checked before lazy discovery:
          * try_load_region otherwise scans the 12K+ manifest index and may load
@@ -3713,11 +3849,11 @@ retry_candidates:
          * manifested entries are different: a broader range owner must not mask
          * their valid cached DLL (Tomba FMV's 0x80106424/0x80106688 case). */
         if (head < 0 && g_psx_cps_mode)
-            loaded_range_ci = overlay_find_by_range(phys);
+            loaded_range_ci = overlay_find_by_range(seg, phys);
         exact_needs_load = lazy_exact &&
             (loaded_range_ci < 0 || s_cand[loaded_range_ci].device_touch);
         if (head < 0 && (loaded_range_ci < 0 || exact_needs_load) &&
-            !lazy_loaded && try_load_region(phys)) {
+            !lazy_loaded && try_load_region(seg, phys)) {
             lazy_loaded = 1;
             goto retry_candidates;
         }
@@ -3735,7 +3871,7 @@ retry_candidates:
      * so they run native directly here; device-touch funcs still go to interp. */
     if (head < 0 && g_psx_cps_mode) {
         int ci = loaded_range_ci >= 0 ? loaded_range_ci
-                                      : overlay_find_by_range(phys);
+                                      : overlay_find_by_range(seg, phys);
         int _probe = (s_cps_probe_pc && phys == s_cps_probe_pc);
         if (_probe) {
             s_cps_probe_count++;
@@ -3785,7 +3921,7 @@ retry_candidates:
                 int in_own_shadow = (s_in_shadow && (const void *)c == s_shadow_cand);
                 if (!in_own_shadow) {
                     int want_diff = s_diff_mode && cand_selected_for_diff(c);
-                    if (want_diff && addr < 0x10000u) want_diff = 0;
+                    if (want_diff && phys < 0x10000u) want_diff = 0;
                     if (want_diff && (s_diff_addr || c->diff_passes < OVERLAY_DIFF_BUDGET)) {
                         if (_probe) s_cps_probe_outcome = 5;
                         s_diffgate_interp++;
@@ -3844,6 +3980,7 @@ retry_candidates:
 
     for (int i = head; i >= 0; i = s_cand[i].next) {
         Candidate *c = &s_cand[i];
+        if (c->seg != seg) continue;   /* another segment's shard */
         if (c->state == ENTRY_BLACKLIST) continue;
 
         /* Generation-gated validation (overlay-cache v2 P2). The ONLY way this
@@ -3905,7 +4042,7 @@ retry_candidates:
              * "diverges" (observed: 2016/2017 calls, all 0xB0, flooding the
              * ring). The diff harness validates OVERLAY shard codegen against
              * the interp oracle; kernel gates stay on their normal route. */
-            if (want_diff && addr < 0x10000u) want_diff = 0;
+            if (want_diff && phys < 0x10000u) want_diff = 0;
             if (want_diff && !s_in_shadow &&
                 (s_diff_addr || c->diff_passes < OVERLAY_DIFF_BUDGET)) {
                 /* NEVER start a shadow inside an exception dispatch: the guest's
@@ -4004,12 +4141,12 @@ retry_candidates:
      * preserves additive variant coverage without turning one guest transition
      * into an unbounded synchronous LoadLibrary loop. */
     if (!lazy_loaded && s_active && overlay_cache_window_contains(phys) &&
-        try_load_region(phys)) {
+        try_load_region(seg, phys)) {
         lazy_loaded = 1;
         goto retry_candidates;
     }
 
-    if (overlay_cache_window_contains(phys)) lazy_miss_record(phys);
+    if (overlay_cache_window_contains(phys)) lazy_miss_record(addr);
     s_disp_interp++;
     return 0;
 }
@@ -4129,6 +4266,7 @@ int overlay_loader_lazy_manifest_overflow(void) { return s_lazy_man_overflow; }
 uint64_t overlay_loader_candidate_overflow(void) { return s_cand_overflow; }
 uint64_t overlay_loader_pair_aliases(void) { return s_pair_aliases; }
 uint64_t overlay_loader_segment_alias_interp(void) { return s_segment_alias_interp; }
+uint64_t overlay_loader_segment_native(void) { return s_segment_native; }
 
 /* (sljit removed 2026-07-15: overlay_loader_sljit_obsoleted and the
  * overlay_loader_sljit_probe one-shot JIT helper lived here.) */
@@ -4321,7 +4459,7 @@ static void run_shadow_diff_legacy(CPUState *cpu, Candidate *c, uint32_t addr) {
         int guard = 0;
         while (cpu->pc != 0 && !g_psx_call_bail && guard++ < 8192) {
             uint32_t tv = cpu->pc;
-            if ((tv & 0x1FFFFFFFu) == (stop_ra & 0x1FFFFFFFu)) break;  /* returned */
+            if (tv == stop_ra) break;  /* returned (the exact PC, §5.7) */
             cpu->pc = 0;
             int prev_phase = g_exec_phase;
             g_exec_phase = 3;   /* compiled route; dirty/native callees re-tag inside */
@@ -4540,7 +4678,7 @@ static void run_shadow_diff(CPUState *cpu, Candidate *c, uint32_t addr) {
             int guard = 0;
             while (cpuN.pc != 0 && !g_psx_call_bail && guard++ < 8192) {
                 uint32_t tv = cpuN.pc;
-                if ((tv & 0x1FFFFFFFu) == (stop_ra & 0x1FFFFFFFu)) break;
+                if (tv == stop_ra) break;
                 cpuN.pc = 0;
                 int prev_phase = g_exec_phase;
                 g_exec_phase = 3;
@@ -4811,7 +4949,9 @@ int overlay_loader_call_native(CPUState *cpu, uint32_t addr) {
     if (!s_active || !s_native_exec)
         return 0;  /* inactive/interp mode: keep the legacy inline path */
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (idx_head(phys) < 0 && !lazy_has_exact_entry(phys))
+    uint32_t seg = addr & 0xE0000000u;
+    if (psx_code_segment_index(addr) < 0 ||
+        (idx_head_seg(phys, seg) < 0 && !lazy_has_exact_entry(seg, phys)))
         return 0; /* neither a registered nor an exact cached entry */
     uint32_t in_regs[34];
     int fp = overlay_fp_enabled();
@@ -4929,11 +5069,12 @@ int overlay_loader_dump_candidates_at(uint32_t addr, char *out, int cap) {
         const int live_ok = cand_live_crc(c, &live);
         uint32_t sum  = cand_gensum(c);
         n += snprintf(out + n, cap - n,
-            "%s{\"index\":%d,\"addr\":\"0x%08X\",\"state\":%d,\"nranges\":%d,"
+            "%s{\"index\":%d,\"addr\":\"0x%08X\",\"seg\":\"0x%08X\","
+            "\"state\":%d,\"nranges\":%d,"
             "\"crc\":\"0x%08X\",\"live\":\"0x%08X\",\"match\":%d,"
             "\"val_gen\":%u,\"gen\":%u,\"dll\":%d,\"diff_passes\":%u,"
             "\"device_touch\":%d}",
-            first ? "" : ",", i, c->addr, c->state, c->nranges,
+            first ? "" : ",", i, c->addr, c->seg, c->state, c->nranges,
             c->crc_code, live, (live_ok && live == c->crc_code) ? 1 : 0,
             c->val_gen, sum, c->dll, c->diff_passes, c->device_touch);
         first = 0;
@@ -4971,13 +5112,15 @@ int overlay_loader_dump_lazy_at(uint32_t addr, char *out, int cap) {
         const int live_ok = lazy_man_crc(&lm->fn, &live);
         n += snprintf(out + n, cap - n,
             "%s{\"li\":%d,\"ci\":%d,\"region\":\"0x%08X\","
-            "\"file\":\"%s\",\"funcs\":%d,\"indexed\":%d,"
+            "\"entry\":\"0x%08X\",\"file\":\"%s\",\"funcs\":%d,\"indexed\":%d,"
             "\"loaded\":%d,\"crc\":\"0x%08X\",\"live\":\"0x%08X\","
             "\"match\":%d,\"contains\":%d}",
             first ? "" : ",", li, ci, s_cache_idx[ci].region_start,
-            base, s_cache_idx[ci].func_count, s_cache_idx[ci].indexed_func_count,
+            lm->fn.entry, base, s_cache_idx[ci].func_count,
+            s_cache_idx[ci].indexed_func_count,
             dll_already_loaded(s_cache_idx[ci].path), lm->fn.crc, live,
-            live_ok && live == lm->fn.crc, lazy_man_contains(&lm->fn, phys));
+            live_ok && live == lm->fn.crc,
+            lazy_man_contains(&lm->fn, lm->fn.entry & 0xE0000000u, phys));
         first = 0;
     }
     n += snprintf(out + n, cap - n, "]}");

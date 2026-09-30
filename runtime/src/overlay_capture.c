@@ -323,6 +323,7 @@ static void write_json_window(FILE *f, uint32_t win_lo_page,
                               uint32_t win_hi_page, int *first_region,
                               const uint32_t *bitmap,
                               const uint32_t *dispatch_pc_bitmap,
+                              const uint32_t *dispatch_seg_bitmap,
                               const uint32_t *exec_pc_bitmap,
                               const uint8_t *ram_base)
 {
@@ -395,7 +396,7 @@ static void write_json_window(FILE *f, uint32_t win_lo_page,
             *first_region = 0;
 
             fprintf(f, "  {\n");
-            fprintf(f, "    \"schema\": \"psxrecomp overlay capture v2\",\n");
+            fprintf(f, "    \"schema\": \"psxrecomp overlay capture v3\",\n");
             fprintf(f, "    \"load_addr\": \"0x%08X\",\n", virt);
             fprintf(f, "    \"size\": %u,\n", size);
             /* How many of the trailing bytes above are the delay-slot guard,
@@ -435,6 +436,30 @@ static void write_json_window(FILE *f, uint32_t win_lo_page,
             }
             fprintf(f, "],\n");
 
+            /* Schema v3 (docs/SEGMENT_AWARE_CODE.md §5.7): the segments each
+             * dispatch entry above entered through, each PC spelled in its
+             * segment. dispatch_entry_pcs keeps its v2 meaning and spelling
+             * (entered in any segment, written at KSEG0); a reader of a v2
+             * capture, which has no such field, takes every entry as KSEG0. */
+            fprintf(f, "    \"dispatch_entry_segments\": {");
+            for (int seg = 0; seg < PSX_CODE_SEGMENT_COUNT; seg++) {
+                const uint32_t *seg_bitmap =
+                    dispatch_seg_bitmap + (size_t)seg * DIRTY_RAM_EXEC_BITMAP_WORDS;
+                int emitted_seg = 0;
+                fprintf(f, "%s\"%s\": [", seg ? ", " : "",
+                        psx_code_segment_name(seg));
+                for (uint32_t ep = phys; ep < phys + size; ep += 4u) {
+                    uint32_t wi = ep >> 2;
+                    if (!((dispatch_pc_bitmap[wi >> 5] >> (wi & 31u)) & 1u) ||
+                        !((seg_bitmap[wi >> 5] >> (wi & 31u)) & 1u))
+                        continue;
+                    if (emitted_seg++) fprintf(f, ", ");
+                    fprintf(f, "\"0x%08X\"", psx_code_segment_base(seg) | ep);
+                }
+                fprintf(f, "]");
+            }
+            fprintf(f, "},\n");
+
             fprintf(f, "    \"function_entry_pcs\": [],\n");
 
             fprintf(f, "    \"seeds\": [");
@@ -456,6 +481,7 @@ static void write_json_window(FILE *f, uint32_t win_lo_page,
 static int write_json_snapshot(const char *path, uint32_t bw,
                                const uint32_t *bitmap,
                                const uint32_t *dispatch_pc_bitmap,
+                               const uint32_t *dispatch_seg_bitmap,
                                const uint32_t *exec_pc_bitmap,
                                const uint8_t *ram_base)
 {
@@ -479,13 +505,15 @@ static int write_json_snapshot(const char *path, uint32_t bw,
      * are unchanged). */
     write_json_window(f, 0u,
                       DIRTY_RAM_KERNEL_WINDOW_END / page_sz, &first_region,
-                      bitmap, dispatch_pc_bitmap, exec_pc_bitmap, ram_base);
+                      bitmap, dispatch_pc_bitmap, dispatch_seg_bitmap,
+                      exec_pc_bitmap, ram_base);
     write_json_window(f, DIRTY_RAM_KERNEL_WINDOW_END / page_sz,
                       OVERLAY_REGION_FLOOR / page_sz, &first_region,
-                      bitmap, dispatch_pc_bitmap, exec_pc_bitmap, ram_base);
+                      bitmap, dispatch_pc_bitmap, dispatch_seg_bitmap,
+                      exec_pc_bitmap, ram_base);
     write_json_window(f, OVERLAY_REGION_FLOOR / page_sz, bw * 32u,
                       &first_region, bitmap, dispatch_pc_bitmap,
-                      exec_pc_bitmap, ram_base);
+                      dispatch_seg_bitmap, exec_pc_bitmap, ram_base);
 
     fprintf(f, "\n]\n");
     {
@@ -782,6 +810,7 @@ static uint64_t capture_commit_temp(const char *temp_path, const char *reason,
 static uint64_t write_and_commit_snapshot(uint32_t bw,
                                           const uint32_t *bitmap,
                                           const uint32_t *dispatch_pc_bitmap,
+                                          const uint32_t *dispatch_seg_bitmap,
                                           const uint32_t *exec_pc_bitmap,
                                           const uint8_t *ram_base,
                                           const char *reason,
@@ -791,7 +820,7 @@ static uint64_t write_and_commit_snapshot(uint32_t bw,
     snprintf(temp_path, sizeof(temp_path), "%s.%lu.%llu.tmp", s_capture_path,
              CAPTURE_PID(), (unsigned long long)sequence);
     if (!write_json_snapshot(temp_path, bw, bitmap, dispatch_pc_bitmap,
-                             exec_pc_bitmap, ram_base))
+                             dispatch_seg_bitmap, exec_pc_bitmap, ram_base))
         return 0;
     return capture_commit_temp(temp_path, reason, sequence);
 }
@@ -840,6 +869,7 @@ static uint64_t overlay_capture_write_current(const char *reason,
                            scope_lo, scope_hi, include_halo);
     sig = write_and_commit_snapshot(bw, bitmap,
                                     g_dirty_ram_dispatch_pc_bitmap,
+                                    &g_dirty_ram_dispatch_seg_bitmap[0][0],
                                     g_dirty_ram_exec_pc_bitmap,
                                     memory_get_ram_ptr(),
                                     reason,
@@ -903,8 +933,7 @@ void overlay_capture_before_dma(uint32_t load_addr, uint32_t size)
     uint32_t bitmap_words = (last_word - first_word) >> 5;
     memset(&g_dirty_ram_exec_pc_bitmap[first_bitmap_word], 0,
            (size_t)bitmap_words * sizeof(uint32_t));
-    memset(&g_dirty_ram_dispatch_pc_bitmap[first_bitmap_word], 0,
-           (size_t)bitmap_words * sizeof(uint32_t));
+    dirty_ram_dispatch_evidence_clear(first_bitmap_word, bitmap_words);
     for (uint32_t page = first_page; page <= last_page; page++)
         g_dirty_ram_exec_page_bitmap[page >> 5] &= ~(1u << (page & 31u));
 }
@@ -1002,6 +1031,7 @@ enum {
 typedef struct {
     uint8_t *ram;
     uint32_t *dispatch_pc_bitmap;
+    uint32_t *dispatch_seg_bitmap;   /* [PSX_CODE_SEGMENT_COUNT][words] */
     uint32_t *exec_pc_bitmap;
     uint32_t *bitmap;
     uint32_t bitmap_words;
@@ -1105,7 +1135,8 @@ int overlay_capture_test_provider_pending(void) {
 static void autocap_write_job_free(AutocapWriteJob *job)
 {
     if (!job) return;
-    free(job->ram); free(job->dispatch_pc_bitmap); free(job->exec_pc_bitmap);
+    free(job->ram); free(job->dispatch_pc_bitmap);
+    free(job->dispatch_seg_bitmap); free(job->exec_pc_bitmap);
     free(job->bitmap); free(job);
 }
 
@@ -1115,7 +1146,8 @@ static int autocap_write_thread_main(void *opaque)
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     job->manifest_sig = write_and_commit_snapshot(
         job->bitmap_words, job->bitmap, job->dispatch_pc_bitmap,
-        job->exec_pc_bitmap, job->ram, "autocap", job->sequence);
+        job->dispatch_seg_bitmap, job->exec_pc_bitmap, job->ram, "autocap",
+        job->sequence);
     SDL_AtomicSet(&s_autocap_write_state, 2);
     return 0;
 }
@@ -1198,15 +1230,19 @@ static AutocapWriteJob *capture_snapshot_create(uint32_t scope_lo,
     job->ram = (uint8_t *)malloc(ram_size);
     job->dispatch_pc_bitmap = (uint32_t *)malloc(
         sizeof(g_dirty_ram_dispatch_pc_bitmap));
+    job->dispatch_seg_bitmap = (uint32_t *)malloc(
+        sizeof(g_dirty_ram_dispatch_seg_bitmap));
     job->exec_pc_bitmap = (uint32_t *)malloc(sizeof(g_dirty_ram_exec_pc_bitmap));
     job->bitmap = (uint32_t *)malloc((size_t)bw * sizeof(uint32_t));
-    if (!job->ram || !job->dispatch_pc_bitmap ||
+    if (!job->ram || !job->dispatch_pc_bitmap || !job->dispatch_seg_bitmap ||
         !job->exec_pc_bitmap || !job->bitmap) {
         autocap_write_job_free(job); return NULL;
     }
     memcpy(job->ram, memory_get_ram_ptr(), ram_size);
     memcpy(job->dispatch_pc_bitmap, g_dirty_ram_dispatch_pc_bitmap,
            sizeof(g_dirty_ram_dispatch_pc_bitmap));
+    memcpy(job->dispatch_seg_bitmap, g_dirty_ram_dispatch_seg_bitmap,
+           sizeof(g_dirty_ram_dispatch_seg_bitmap));
     memcpy(job->exec_pc_bitmap, g_dirty_ram_exec_pc_bitmap,
            sizeof(g_dirty_ram_exec_pc_bitmap));
     if (scoped) {
@@ -1258,7 +1294,8 @@ static int preserve_write_thread_main(void *opaque)
 
         job->snapshot.manifest_sig = write_and_commit_snapshot(
             job->snapshot.bitmap_words, job->snapshot.bitmap,
-            job->snapshot.dispatch_pc_bitmap, job->snapshot.exec_pc_bitmap,
+            job->snapshot.dispatch_pc_bitmap,
+            job->snapshot.dispatch_seg_bitmap, job->snapshot.exec_pc_bitmap,
             job->snapshot.ram, "preserve-outgoing", job->snapshot.sequence);
         if (!job->snapshot.manifest_sig) {
             job->attempts++;
@@ -1439,8 +1476,7 @@ void overlay_autocapture_tick(void)
          * jobs remain queued and retry; normal shutdown drains them. */
         memset(g_dirty_ram_exec_pc_bitmap, 0,
                sizeof(g_dirty_ram_exec_pc_bitmap));
-        memset(g_dirty_ram_dispatch_pc_bitmap, 0,
-               sizeof(g_dirty_ram_dispatch_pc_bitmap));
+        dirty_ram_dispatch_evidence_clear(0u, DIRTY_RAM_EXEC_BITMAP_WORDS);
         memset(g_dirty_ram_exec_page_bitmap, 0,
                sizeof(g_dirty_ram_exec_page_bitmap));
     }

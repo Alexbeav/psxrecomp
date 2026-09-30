@@ -219,6 +219,8 @@ DirtyRamPcEntry g_dirty_ram_pc_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
 uint32_t g_dirty_ram_exec_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_exec_page_bitmap[DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_dispatch_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
+uint32_t g_dirty_ram_dispatch_seg_bitmap[PSX_CODE_SEGMENT_COUNT]
+                                        [DIRTY_RAM_EXEC_BITMAP_WORDS] = {{0}};
 
 DirtyRamBlockLogEntry g_dirty_ram_block_log[DIRTY_RAM_BLOCK_LOG_CAP] = {0};
 uint64_t              g_dirty_ram_block_log_seq = 0;
@@ -2980,6 +2982,13 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     {
         uint32_t word = phys >> 2;
         g_dirty_ram_dispatch_pc_bitmap[word >> 5] |= 1u << (word & 31u);
+        /* ...and the segment it entered through, from the full PC
+         * (docs/SEGMENT_AWARE_CODE.md §5.7): capture records it so the next
+         * compile builds a shard for that segment. One bit per interpreted
+         * dispatch, not per instruction. */
+        int seg = psx_code_segment_index(addr);
+        if (seg >= 0)
+            g_dirty_ram_dispatch_seg_bitmap[seg][word >> 5] |= 1u << (word & 31u);
     }
 
     /* External-entry attribution: when the previous interp run exited by

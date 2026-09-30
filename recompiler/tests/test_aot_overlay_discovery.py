@@ -1649,11 +1649,18 @@ def check_candidate_capacity_publication():
             capacity_lock, cache_dirs = MOD._candidate_capacity_namespace(final)
             assert capacity_lock == os.path.join(
                 tmp, 'GAME', '.overlay-candidate-capacity.lock')
+            # Each tier's leaf, then its per-segment shard directories
+            # (docs/SEGMENT_AWARE_CODE.md §5.7): one process-global table.
             assert cache_dirs == [
                 os.path.join(tmp, 'GAME', tier, 'win-x64',
-                             'cg9_a3003734_gc76b225b8')
+                             'cg9_a3003734_gc76b225b8', *sub)
                 for tier in ('gcc', 'tcc')
+                for sub in ((), ('seg-kuseg',), ('seg-kseg1',))
             ]
+            # A KUSEG shard counts against the same namespace and lock.
+            assert MOD._candidate_capacity_namespace(os.path.join(
+                leaf, 'seg-kuseg', '00010000_00000001.dll')) == (
+                    capacity_lock, cache_dirs)
 
         with tempfile.TemporaryDirectory() as tmp:
             first = os.path.join(tmp, '00010000_00000001.dll')

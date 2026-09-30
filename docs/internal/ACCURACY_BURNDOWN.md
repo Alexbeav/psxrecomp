@@ -198,7 +198,7 @@ Status: MODERATE-STRONG (regions games use).
     the full PC, so an alias of static text runs interpreted with its own segment
     instead of through another segment's body. On the synthetic probe, compiled code
     now equals Beetle and the interpreter in every result word and cycle-watch
-    interval on both BIOSes. Open: overlay segments (PR E).
+    interval on both BIOSes. Overlay segments followed in PR E (below).
   - 2026-09-29, segment-aware PR D: segment-qualified seeds compile per-segment
     variants of static code (the direct-edge closure, with its own names, rows and
     PCs; KSEG1 variants charge a fetch per instruction), and dispatch finds the
@@ -218,6 +218,21 @@ Status: MODERATE-STRONG (regions games use).
     (`psx_game_address_in_text` masks), where Beetle's `addr_mask` does not fold
     it onto RAM. The recompiler now refuses such seeds; the runtime side is
     unmeasured.
+  - 2026-09-30, segment-aware PR E: overlay code is keyed by segment too.
+    Capture records the segment each interpreted dispatch entered through
+    (schema v3, `dispatch_entry_segments`). `compile_overlays.py` builds one
+    shard per segment with entries, and KUSEG/KSEG1 shards go in the cache tag's
+    `seg-kuseg/`/`seg-kseg1/`. The loader runs a shard only for PCs of its own
+    segment. On the probe's disc-loaded overlay, the warm-cache KUSEG and KSEG1
+    runs are native and equal Beetle, the interpreter and the cold cache in every
+    result word, cycle-watch interval and the spin cycle, on both BIOSes. In R4
+    the OpenBIOS patch slots (`0x0000281C` and friends) and kernel code entered
+    at KSEG1 (`0xA000DFAC`...) now run as KUSEG and KSEG1 shards:
+    `segment_alias_interp` is 0 on a warm cache, and fingerprints against the
+    same run with those entries interpreted are IDENTICAL, locators included.
+    The shard loader and the static dispatcher still take a PC in
+    `0x20000000`-`0x7FFFFFFF` or KSEG2 as no shard's (interpreted); the
+    interpreter itself still folds such a PC onto RAM, as above.
   2026-09-29: with segment-aware PR D (which closes the −9) and #435 merged
   locally, both LLE boots are at 0 at every hit of every anchor through the shell
   entry.
@@ -313,6 +328,20 @@ bug**, not timing.
     - Method reminder (top-of-doc LESSON): these were HYPOTHESES until OUTPUT
       validation — the MMX6/Tomba playtest soak WAS that validation. Revert any
       that regress a shipped title.
+  - **OPEN 2026-09-30: a BIOS file read takes about half Beetle's cycles.**
+    Found by the segment-aware probe's overlay phase (PR E), not caused by it.
+    The probe leaves the critical section and reads the first 0x1000 bytes of
+    its own EXE (two sectors) through B0:32/34/36 into RAM; the kernel DMAs
+    the sectors. From the last `probe_run` cycle-watch hit (`0x00010124`) to the
+    first hit of the loaded `ov_run` (`0x000A0A20`), LLE boot from disc, the
+    same BIOS image on both sides:
+    - OpenBIOS: 6,844,687 cycles native, 14,153,983 in Beetle (0.48×);
+    - SCPH-1001: 1,919,644 native, 3,746,244 in Beetle (0.51×).
+    Native is the same with the overlay compiled, cold or forced interpreted, so
+    the gap is CD/kernel timing, not code. Not yet attributed. Candidates: seek
+    and read response timing, and the controller-version divergence above,
+    which changes the shell's CD-init path. The probe's overlay timings start
+    after the read and match Beetle.
 - [ ] **DMA**: all 7 channels, block/linked-list/chain modes, timing, DICR/DPCR —
   Beetle dma.cpp; psx-spx "DMA".
 - [ ] **MDEC**: macroblock decode, IDCT, color conversion, RLE — Beetle mdec.cpp;
@@ -348,8 +377,10 @@ Status: STRONG (most project effort lives here).
   §5.3, §5.5). Kula World and Alien Resurrection were not run (no discs here);
   they need a regeneration with seeds, seeds directives and exact-match config
   sites in KUSEG (`tools/collect_game_misses.py --game-toml` now writes KUSEG
-  seeds). Until PR E their overlay code runs interpreted: static code enters it at
-  KUSEG PCs, which #417's gate keeps off the KSEG0-compiled shards.
+  seeds). Until PR E their overlay code ran interpreted: static code enters it at
+  KUSEG PCs, which #417's gate kept off the KSEG0-compiled shards. Since PR E
+  (2026-09-30) capture records those entries as KUSEG and they compile to KUSEG
+  shards; neither title has been run to confirm it.
 - [x] **Call-contract return checks mask the segment (fixed 2026-09-29,
   segment-aware PR D).** `psx_call_contract` (`cpu_state.h`) and the four return
   checks of the generated BIOS dispatch loop compared `$ra`/`pc` with the call
@@ -361,11 +392,26 @@ Status: STRONG (most project effort lives here).
   return checks against a call's link: the overlay shadow run's return test
   (`overlay_loader.c`, PR E's scope) and the interrupt/pump "did the PC move"
   tests (`dirty_ram_same_pc`, `same_guest_pc`, savestate's resume match).
+  2026-09-30, PR E: the shadow run's two return tests and the overlay idle
+  note's return test compare the exact PC too. What remains masked are the
+  interrupt/pump tests, which ask whether the guest moved, not where it returned.
+- [x] **Mod function-entry hooks in KUSEG/KSEG1 overlay shards (fixed
+  2026-09-30, segment-aware PR E review).** The runtime keys these hooks by
+  physical address, and the interpreter fires them at every entry, whatever its
+  segment. PR E's first KUSEG and KSEG1 shards were compiled against the config
+  as spelled (KSEG0), so they emitted no hook: a hooked overlay function fired on
+  a cold cache and not on a warm one. Overlay views now move every exact-match
+  config site that names their bytes into their segment
+  (`overlay_codegen_config()`), so all three segments' shards emit the hook.
+  R4's shards are byte-identical: its sites are in KSEG0 static text.
 - [ ] Backend equivalence (compiled == interp) — necessary, not sufficient.
   Measured with `tools/fp_identity.py` (2026-09-29): seeded warm vs cold
   overlay-cache runs, judged on the `frame_fingerprint` guest-fact columns. R4,
   12000 frames on #417+#418+#420: IDENTICAL with 497 tolerated one-write VBlank
-  straddles.
+  straddles. 2026-09-30, segment-aware PR E: with KUSEG and KSEG1 kernel shards
+  in the warm cache, IDENTICAL to the cold run with 501 tolerated straddles (the
+  same 501 as a warm cache without them), and IDENTICAL to that warm run on every
+  column, locators included.
 
 ## Axis 7 — Determinism
 
