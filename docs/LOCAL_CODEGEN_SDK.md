@@ -7,17 +7,21 @@ automation. This does **not** redistribute disc images.
 PGO (optional) runs **only on the user’s machine** during local rebuild when
 `game.toml` has `[pgo] enabled = true`. CI must not set `PSX_PGO`.
 
-## Setup host (CI without game/BIOS generated C)
+## Where this sits now (bundled releases)
 
-Games can ship a **setup host**: `psx-runtime` linked **without** game C and
-**without** BIOS backends (`-DPSXRECOMP_FORCE_SETUP_HOST=ON`, or legacy
-`-DBPE_FORCE_SETUP_HOST=ON`) via `psxrecomp_add_game_runtime(...)`, and with
-`PSX_SETUP_WIZARD=ON` / `ENABLE_SETUP_WIZARD` so first-run Generate & rebuild
-actually appears. CI never
-needs BIOS dumps or private assets. First-run Generate emits OpenBIOS (from
-bundled `openbios.bin`) and optional SCPH1001 (player dump), then game C, then
-rebuild links everything into `build-release/` (or the title’s
-`build_dir_name`).
+Public releases are **bundled**: the title commits `generated/`, CI builds the
+compiled game and ships it (`docs/ci/BUNDLED_RELEASES.md`). Players never run
+Generate. The contract below is the **developer** and Retro-automation path
+for producing that committed C, and the runtime's own Generate & rebuild
+wizard for a locally built setup host (`-DPSXRECOMP_FORCE_SETUP_HOST=ON`,
+a developer convenience — not what CI ships).
+
+A setup host is `psx-runtime` linked **without** game C and **without** BIOS
+backends via `psxrecomp_add_game_runtime(...)`, with `PSX_SETUP_WIZARD=ON` /
+`ENABLE_SETUP_WIZARD` so first-run Generate & rebuild appears. First-run
+Generate emits OpenBIOS (from bundled `openbios.bin`) and optional SCPH1001
+(local dump), then game C, then rebuild links everything into `build-release/`
+(or the title’s `build_dir_name`).
 
 **Layout after Generate & rebuild:** the zip-root exe stays the setup host;
 the playable product (exe + `bios/` + `mods/` + `assets/` + `settings.toml`)
@@ -31,15 +35,16 @@ product binary (`psxrecomp_codegen_host_forward_if_built`). Opt out with
 | Product exe | `build-release/<exe>` — Play, bios/mods/assets/settings |
 | Game zip `psxrecomp/` | submodule tree: CLI, tools, emitters, OpenBIOS profiles |
 | `psxrecomp_cli.py` | Generate / rebuild / verify-disc (in the submodule) |
-| `tools/package_setup_host.sh` | Universal setup-host zip packager |
-| `tools/ci/*.sh` | normalize version, clear generated, record pins, build emitters |
+| `tools/package_game_release.sh` | Bundled zip packager (what CI ships) |
+| `tools/package_setup_host.sh` | Retired setup-host zip packager (not used by release CI) |
+| `tools/ci/*.sh` | normalize version, check generated, generate OpenBIOS, record pins, build emitters |
 | `tools/fetch_toolchain.sh` | Optional: download/unpack `cmake-clang-v1` (CI embed or local) |
 | `tools/toolchain_pack.py` | CLI: resolve / download / unpack into `toolchain/` + shared cache |
 | `tools/stage_setup_sdk.sh` | Pack: emitters, OpenBIOS checks, optional `toolchain/`, MinGW DLLs |
 | `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
 | Project `toolchain/` | Stamp file `.psxrecomp-bin` pointing at the shared pack `bin/` |
 | Shared toolchain cache | `%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/` (Windows) or `~/.local/share/retcomm/toolchains/cmake-clang-v1/` — same tree Retro uses |
-| `docs/ci/` | Composite actions + [`templates/setup-release.yml`](ci/templates/setup-release.yml) |
+| `docs/ci/` | Composite actions + [`templates/game-release.yml`](ci/templates/game-release.yml) |
 | `docs/GAME_PROJECT_SETUP.md` | Submodules, CI template usage, bundled-release checklist |
 | Game sources | `game.toml`, seeds, `CMakeLists.txt` at repo root; `psxrecomp/`, `recomp-ui/` submodules |
 

@@ -194,9 +194,11 @@ with exactly the audited files plus `AOT_STATIC_AUDIT.json`. Point the game's
 runtime flavor the DLL release cannot target (for example a PGXP build); pass
 `--cps` when the runtime is continuation-passing, as the compiler requires.
 
-**Players get it from Generate.** Titles ship without game bytes, so the shard
-has to be built on the player's machine. A profile opts in by declaring where
-the build links it:
+**It ships compiled.** The shard is generated on the developer's machine,
+committed with the rest of `generated/`, and linked by release CI into the
+shipped executable (`docs/ci/BUNDLED_RELEASES.md`); the overlay *cache* is
+never built in CI, so this shard is the native overlay coverage a release
+carries. A profile opts in by declaring where the build links it:
 
 ```json
 "static_output": "generated/overlays_static.c"

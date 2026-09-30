@@ -385,6 +385,12 @@ struct RuntimeConfig {
     // driver's texture limits and a memory budget (gl_scale_limits.h).
     int                   video_supersampling = 1;
 
+    // depth24_trailing_margin: columns blanked at the right edge of every
+    // 24-bit (FMV) frame, working around MDEC leaving stale pixels there.
+    // 8 is the historical default; a title whose MDEC uploads the full width
+    // can set 0 and keep those columns.
+    int                   video_depth24_trailing_margin = 8;
+
     // internal_resolution: the "Internal resolution" preset (Settings ->
     // Display), which supersedes supersampling when set. Encoding as in
     // runtime/include/internal_resolution.h: 0 = unset (supersampling stands),

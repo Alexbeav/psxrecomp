@@ -4702,10 +4702,12 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
 
     /* Master switch for recomp-ui: first-run wizard + Generate & rebuild. */
     gi->setup_wizard_supported = 1;
-    /* Setup SDKs often link OpenBIOS only (retail C comes from Generate).
-     * psx_bios_has_selectable() is then 0 and would hide the BIOS row — keep
-     * the optional SCPH1001 picker so prepare can ingest a dump first. */
-    gi->has_bios = 1;
+    /* has_bios is NOT forced here. A setup SDK links OpenBIOS only and needs
+     * the retail picker so prepare can ingest a dump, but a shipped bundled
+     * build has no CLI, sources or toolchain to compile one in, and forcing
+     * the row there offered "Generate & rebuild" that could never run.
+     * main.cpp decides after this returns, from whether prepare_with_progress
+     * was actually wired below (or nothing is linked yet). */
 
     if (!discover_project_root(g_project_root, sizeof(g_project_root))) {
         /* Still force the wizard when generated/ is missing — discover may

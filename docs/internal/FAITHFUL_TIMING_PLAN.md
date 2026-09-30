@@ -432,6 +432,77 @@ on a fixed region -> next.
   surcharge equal to the fetch model's. Ledger unchanged (11 ids); cited source lines
   refreshed for current master. No behaviour change.
 
+- **2026-09-29 (cache-isolated stores reach the caches, as in Beetle):**
+  memory.c dropped every store made while SR.IsC was set, so the I-cache model
+  never saw FlushCache (A 44h) or the boot cache init. Beetle's
+  PS_CPU::WriteMemory (mednafen/psx/cpu.cpp:482-512) handles an isolated store
+  before any address decode:
+  - With the I-cache on (BIU bit 11) and a tag-test, invalidate or lock mode bit,
+    the store rewrites the tag and valid bits of its line's four words. In
+    tag-test mode the valid bits come from the stored byte lane; otherwise none
+    are set.
+  - With the I-cache on and no mode bit, Beetle writes an instruction word. The
+    tag model holds no words, so nothing changes.
+  - With the D-cache on and lock mode off ((BIU & 0x81) == 0x80), the store
+    lands in the scratchpad at addr & 0x3FF, whatever the address.
+  - Nothing reaches the bus, the BIU register at 0xFFFE0130 included: Beetle
+    routes it through MemRW, which only non-isolated stores reach. Beetle does
+    not model SR.SwC.
+  - DMA is not a CPU store. Beetle's DMA writes RAM directly, so native DMA now
+    bypasses IsC instead of being dropped. Host stores (mods, FMV skip, debug
+    pokes, enhancement fills) are not CPU stores either: they go through
+    `psx_host_write_*`, which bypasses IsC the same way.
+  - Implementation: `psx_icache_isc_store` (psx_icache.c) is the tag write, and
+    memory.c's `isc_store` runs at the top of the three `psx_write_*_raw`
+    chokepoints. Static code, overlay shards and both interpreters all store
+    through those chokepoints. A render pass applies the same effect, and its
+    checkpoint restores tags and scratchpad afterwards. The overlay shadow
+    record (PSX_OVERLAY_DIFF) fails closed on an isolated store, because its
+    replay cannot redo it. Lockstep replay leaves the shared tags alone, as it
+    does for refills.
+  - LAND GATE (live psx-beetle, same images and method as the #429 gate below).
+    The LLE boot to the shell was run on four native builds. "master" is
+    1ec24e9d (#429 merged), "pre" is 9a8737d5 (master just before #429), and
+    each was also run with this fix. Deltas are native − Beetle:
+    - OpenBIOS, 15 anchors from `_boot` to shell main: master is 0 up to the
+      first flushes and −126 from initEvents on; master + fix is 0 at all 15.
+      pre goes from −2,165,591 to −2,165,478 at the shell entry with the fix:
+      113 of master's 126 flush cycles (36, 40 and 37 per flush, against 42).
+      The remaining gap is #429's.
+    - SCPH-1001, 14 anchors from cache init to the shell entry: master is −9
+      from kernel init 0x598 and −438/−454 from the boot functions on. master
+      + fix is −9 at every anchor from 0x598 on. pre goes from −7,049,462 to
+      −7,049,017 at the shell entry, the same 445 cycles the fix removes on
+      master.
+    - The −9 is the retail kernel entry through its KSEG1 alias
+      (SEGMENT_AWARE_CODE.md §3.3, PR D). It is the only residual left before
+      the shell.
+    - Every hit, counted separately: FlushCache (5 hits on each BIOS), the A0
+      gate (12 OpenBIOS, 17 SCPH-1001) and the B0 gate (147 SCPH-1001). On
+      master the gap grew after each flush: −42 per OpenBIOS flush, and −52,
+      −149, −149, −95 on SCPH-1001. With the fix it stays at 0 (OpenBIOS)
+      and −9 (SCPH-1001) on every hit.
+  - Ruler #1 [0x80001C5C→0x80001CA4], SCPH-1001, 64 passes: all four builds
+    equal Beetle pass for pass (53 × 56, 9 × 77, 2 × 84).
+  - Ruler #2 (15-loop ROM, OpenBIOS): all four builds equal Beetle on all 14
+    components, on an HLE boot and on an LLE boot.
+  - R4 (SLUS-00797, OpenBIOS): with the default boot (recompiled LLE kernel,
+    HLE boot-skip), the game entry 0x8007D8F4 moves from 100,589,404 to
+    100,589,746 (+342). With the LLE boot, it moves from 268,764,292 to
+    268,764,310 (+18); the CD-ROM waits absorb most of it. Two boots of each
+    build gave the same numbers. R4 reached a race with 0 dispatch misses, and
+    R4's 10 developer tests pass.
+  - Every title changes timing, toward Beetle: each boot-time and in-game cache
+    flush now costs the refills Beetle charges. The change is runtime-only. The
+    codegen hash is unchanged (04ed5e51), generated BIOS and game C are
+    byte-identical, and overlay caches stay valid. Savestates and the netplay
+    digest already carry the tags, so their formats do not change.
+  - Test: ctest `isc_store_test` drives the real memory.c and psx_icache.c
+    stores. It covers flush invalidation, tag-test valid bits, data mode, the
+    scratchpad write, the BIU, DMA and host-store exclusions, and lockstep
+    replay. 17 of its checks fail on master.
+  - Left: IsC SWL/SWR differ from Beetle in two corner cases (ACCURACY_BURNDOWN
+    axis 4). The BIU bit 11 fetch cost is still open.
 - **2026-09-29 (uncached KSEG1 fetch charged per instruction, both emitters):**
   Beetle ReadInstruction never fills a line for a fetch at 0xA0000000 or above:
   each one costs +4 and clears the load give-back. The interp fetches at every PC,
