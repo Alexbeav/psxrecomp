@@ -3489,6 +3489,7 @@ enum { LS_TRACE_CAP = 65536 };
 static ls_op_t  s_ls_trace[LS_TRACE_CAP];
 static int      s_ls_trace_n = 0, s_ls_trace_idx = 0;
 static int      s_ls_overflow = 0, s_ls_mismatch = 0;
+static int      s_ls_unreplayable = 0;   /* whole-call record saw a non-replayable effect */
 static int      s_ls_replay_done = 0;   /* trace exhausted: stop replay (benign count mismatch) */
 static uint32_t s_ls_cur_pc = 0;          /* pc of the instruction being replayed */
 static int      s_ls_shadow_owner = 0;     /* 0 none, 1 record, 2 replay */
@@ -3557,6 +3558,7 @@ int ls_shadow_record_begin(void) {
     s_ls_trace_n = 0;
     s_ls_trace_idx = 0;
     s_ls_overflow = 0;
+    s_ls_unreplayable = 0;
     s_ls_mismatch = 0;
     s_ls_m_kind = 0;
     s_ls_replay_done = 0;
@@ -3572,12 +3574,16 @@ int ls_shadow_record_end(uint32_t *ops, int *saw_exception) {
     s_ls_shadow_owner = 0;
     if (ops) *ops = (uint32_t)s_ls_trace_n;
     if (saw_exception) *saw_exception = s_ls_shadow_saw_exception;
-    return !s_ls_overflow;
+    return !s_ls_overflow && !s_ls_unreplayable;
+}
+
+void ls_shadow_record_unreplayable(void) {
+    if (s_ls_shadow_owner == 1) s_ls_unreplayable = 1;
 }
 
 int ls_shadow_replay_begin(void) {
     if (s_ls_shadow_owner || g_ls_mode != 0 || g_ls_replay_active ||
-        s_ls_overflow)
+        s_ls_overflow || s_ls_unreplayable)
         return 0;
     s_ls_trace_idx = 0;
     s_ls_mismatch = 0;

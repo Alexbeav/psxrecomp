@@ -25,6 +25,7 @@
 #include "dirty_ram_interp.h"
 #include "guest_tty.h"
 #include "psx_cycles.h"
+#include "psx_icache.h"
 #include "psx_memory.h"
 #include "render_pass.h"
 #include "render_pass_plan.h"
@@ -962,9 +963,8 @@ uint64_t g_kseg2_ignored_writes;
 static uint32_t cache_ctrl;
 
 /* Pointer to cpu->cop0[12] (SR).  Set once at init.
- * Used by write functions to check the IsC (Isolate Cache) bit.
- * When IsC is set, RAM/scratchpad writes are silently dropped — the
- * real R3000A sends them to the data cache only. */
+ * Used by write functions to check the IsC (Isolate Cache) bit: while it is
+ * set, a CPU store goes to the caches and never reaches the bus (isc_store). */
 static const uint32_t *sr_ptr;
 
 /* Interrupt controller — non-static so hardware subsystems can set I_STAT bits. */
@@ -1717,6 +1717,42 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
  * counted instead. */
 uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
 
+/* SR.IsC (Isolate Cache, bit 16). While it is set, a CPU store goes to the
+ * caches, never to the bus. This is Beetle PS_CPU::WriteMemory's IsC branch
+ * (mednafen/psx/cpu.cpp:482-512), which runs before any address decode:
+ *   - I-cache enabled (BIU bit 11) with a tag-test, invalidate or lock mode
+ *     bit: the store rewrites the tag and valid bits of its line
+ *     (psx_icache_isc_store). FlushCache (A 44h) invalidates the I-cache this
+ *     way.
+ *   - I-cache enabled, no mode bit: Beetle writes an instruction word, which
+ *     the model does not hold.
+ *   - D-cache enabled and lock mode clear ((BIU & 0x81) == 0x80): the store
+ *     lands in the scratchpad, the D-cache array, at addr & 0x3FF, whatever
+ *     region addr is in.
+ * Nothing else happens: an isolated store to RAM, MMIO or the BIU register
+ * itself is dropped (Beetle routes 0xFFFE0130 through MemRW, libretro.cpp:1053,
+ * which only non-isolated stores reach). DMA is not a CPU store; Beetle's DMA
+ * writes RAM directly, so IsC does not apply while a transfer moves data. */
+static inline int cpu_store_isolated(void) {
+    return sr_ptr && (*sr_ptr & 0x10000u) && g_dma_exec_depth == 0;
+}
+
+static void isc_store(uint32_t addr, uint32_t val, uint32_t width) {
+    /* The overlay shadow replay cannot redo this (lockstep.h). */
+    if (g_ls_mode == 1) ls_shadow_record_unreplayable();
+    psx_icache_isc_store(cache_ctrl, addr, val);
+    if ((cache_ctrl & (PSX_BIU_DCACHE_ENABLE | PSX_BIU_LOCK)) ==
+        PSX_BIU_DCACHE_ENABLE) {
+        uint32_t off = addr & 0x3FFu;
+        uint32_t old = 0;
+        for (uint32_t i = 0; i < width; i++)
+            old |= (uint32_t)scratchpad[(off + i) & 0x3FFu] << (8u * i);
+        debug_server_trace_write_check(0x1F800000u + off, old, val, (uint8_t)width);
+        for (uint32_t i = 0; i < width; i++)
+            scratchpad[(off + i) & 0x3FFu] = (uint8_t)(val >> (8u * i));
+    }
+}
+
 static void render_pass_mmio_write(uint32_t phys, uint32_t val,
                                    uint32_t width) {
     if (width == 4) mmio_write32(phys, val);
@@ -1733,7 +1769,10 @@ static void render_pass_store(uint32_t addr, uint32_t val, uint32_t width) {
     t.ram_size = psx_ram_live_bytes();   /* live geometry, as psx_ram_map_write */
     t.scratchpad = scratchpad;
     t.scratchpad_size = SCRATCHPAD_SIZE;
-    t.isolate_cache = (sr_ptr && (*sr_ptr & 0x10000u)) ? 1 : 0;
+    t.isolate_cache = cpu_store_isolated();
+    /* Same cache effect as outside a pass; the pass checkpoint restores the
+     * I-cache tags and the scratchpad when it ends. */
+    if (t.isolate_cache) isc_store(addr, val, width);
     t.mmio_write = render_pass_mmio_write;
     cls = render_pass_store_to(&t, addr, val, width);
     if (cls >= 0) g_render_pass_dropped_writes[cls]++;
@@ -1760,14 +1799,12 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     /* (pgxp) plain-store shadow invalidation retired: the PGXP engine
      * validates tracked words against the actual packet word on read, so an
      * overwritten word can never be believed (docs/ENHANCEMENTS.md G1). */
+    /* IsC first, before any decode (cpu_store_isolated). */
+    if (cpu_store_isolated()) { isc_store(addr, val, 4); return; }
     /* KSEG2 cache control — before physical translation. */
     if (addr == 0xFFFE0130u) { cache_ctrl = val; return; }
     /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
-
-    /* IsC (Isolate Cache): when set, writes go to D-cache only.
-     * We have no cache model, so silently discard RAM/scratchpad writes. */
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
 
     uint32_t phys = psx_phys_addr_store(addr);
 
@@ -1960,7 +1997,7 @@ void psx_write_half(uint32_t addr, uint16_t val) {
 }
 static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     g_guest_store_count++;
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
+    if (cpu_store_isolated()) { isc_store(addr, val, 2); return; }
 
         /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
@@ -2300,7 +2337,7 @@ void psx_write_byte(uint32_t addr, uint8_t val) {
 }
 static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     g_guest_store_count++;
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
+    if (cpu_store_isolated()) { isc_store(addr, val, 1); return; }
 
         /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
