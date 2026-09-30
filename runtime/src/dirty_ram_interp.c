@@ -509,6 +509,19 @@ extern int psx_game_text_native_ok_full(uint32_t addr);
 #endif
 extern void psx_dispatch_call(CPUState* cpu, uint32_t addr, uint32_t return_addr);
 
+/* Game text that dispatch refuses because its live bytes differ from the boot
+ * EXE. Dispatch routes such a PC straight back to the interpreter, so
+ * straight-line interpretation keeps going instead of handing it back (see
+ * the hand-back in dirty_ram_dispatch_inner). */
+static int interp_refused_game_text(uint32_t pc) {
+#ifdef PSX_HAS_GAME_DISPATCH
+    return psx_game_address_in_text(pc) && !psx_game_text_native_ok(pc);
+#else
+    (void)pc;
+    return 0;
+#endif
+}
+
 /* Forward decls from memory.c — used to read instruction bytes. */
 extern uint8_t *memory_get_ram_ptr(void);
 extern void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
@@ -3425,6 +3438,17 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
         uint32_t next_page = next_phys >> 12;
         if ((!current_page_dirty || next_page != current_page) &&
             !dirty_ram_is_dirty(next_phys)) {
+            /* Clean game text whose live bytes differ from the boot EXE (for
+             * example a BIOS shell that runs interpreted in RAM the game's
+             * EXE later owns): dispatch refuses it and re-enters the
+             * interpreter one instruction later. Handing back here cost a
+             * full dispatch round trip per instruction. Keep interpreting and
+             * re-test every instruction until dispatch can take the flow. */
+            if (interp_refused_game_text(pc)) {
+                current_page_dirty = 0;
+                current_page = next_page;
+                continue;
+            }
             cpu->pc = pc;
             if (dirty_ram_pump_boundary(cpu, pc, 3)) {
                 g_dirty_ram_blocks_run++;

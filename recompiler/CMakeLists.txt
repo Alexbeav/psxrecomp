@@ -1027,6 +1027,17 @@ target_include_directories(reachable_discovery_test PRIVATE
 )
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
 
+# Straight-line interpretation keeps going through game text that dispatch
+# refuses (live bytes differ from the boot EXE) instead of handing each
+# instruction back: the production interpreter linked into a fixture, other
+# seams stubbed to abort() (runtime/tests/fixture_link.py needs nm and GNU ld).
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_test(NAME interp_refused_game_text
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_interp_refused_game_text.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
 # GTE deadline ownership includes pending CPU charges from both host sinks.
 if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     foreach(_mode IN ITEMS O0 O2)
