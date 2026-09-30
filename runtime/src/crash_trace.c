@@ -41,6 +41,7 @@
 #include "psx_memory.h"
 #include "psx_bss.h"
 #include "crash_trace.h"
+#include "psx_segment_miss.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */
 
@@ -772,6 +773,32 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
                 i == 0 ? "" : ",",
                 (unsigned long long)e.seq, e.addr, e.phys,
                 e.ra, e.a0, e.a1, e.frame);
+        }
+        append_str(buf, sizeof(buf), &pos, "]\n  },\n");
+    }
+
+    /* segment misses (docs/SEGMENT_AWARE_CODE.md §5.5): static game text
+     * entered at a PC whose compiled row is in another segment, each run
+     * interpreted (kind "game"), and compiled BIOS windows entered in another
+     * segment than their body's, each run through the home body (kind
+     * "bios", §5.4). Top 50 PCs by count. */
+    {
+        enum { kRows = 50 };
+        uint32_t addrs[kRows], homes[kRows], kinds[kRows];
+        uint64_t counts[kRows];
+        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kinds, kRows);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"segment_misses\": {\n"
+            "    \"total\": %llu,\n"
+            "    \"unique\": %u,\n"
+            "    \"top\": [",
+            (unsigned long long)psx_segment_miss_total(), psx_segment_miss_unique());
+        for (uint32_t i = 0; i < n; i++) {
+            append_fmt(buf, sizeof(buf), &pos,
+                "%s{\"pc\":\"0x%08X\",\"home\":\"0x%08X\",\"count\":%llu,"
+                "\"kind\":\"%s\"}",
+                i == 0 ? "" : ",", addrs[i], homes[i], (unsigned long long)counts[i],
+                psx_segment_miss_kind_name(kinds[i]));
         }
         append_str(buf, sizeof(buf), &pos, "]\n  },\n");
     }

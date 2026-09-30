@@ -11,6 +11,18 @@ import sys
 import tempfile
 import time
 
+if os.name == 'nt':
+    import ctypes
+    # Several publication checks deliberately probe non-PE synthetic DLLs.
+    # CTest's Windows child error mode can display a loader error dialog and
+    # block LoadLibrary indefinitely. Keep the real loader/export validation,
+    # but make its expected failures noninteractive in this test process.
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.GetErrorMode.restype = ctypes.c_uint
+    kernel32.SetErrorMode.argtypes = [ctypes.c_uint]
+    kernel32.SetErrorMode.restype = ctypes.c_uint
+    kernel32.SetErrorMode(kernel32.GetErrorMode() | 0x0001 | 0x8000)
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -1637,11 +1649,18 @@ def check_candidate_capacity_publication():
             capacity_lock, cache_dirs = MOD._candidate_capacity_namespace(final)
             assert capacity_lock == os.path.join(
                 tmp, 'GAME', '.overlay-candidate-capacity.lock')
+            # Each tier's leaf, then its per-segment shard directories
+            # (docs/SEGMENT_AWARE_CODE.md §5.7): one process-global table.
             assert cache_dirs == [
                 os.path.join(tmp, 'GAME', tier, 'win-x64',
-                             'cg9_a3003734_gc76b225b8')
+                             'cg9_a3003734_gc76b225b8', *sub)
                 for tier in ('gcc', 'tcc')
+                for sub in ((), ('seg-kuseg',), ('seg-kseg1',))
             ]
+            # A KUSEG shard counts against the same namespace and lock.
+            assert MOD._candidate_capacity_namespace(os.path.join(
+                leaf, 'seg-kuseg', '00010000_00000001.dll')) == (
+                    capacity_lock, cache_dirs)
 
         with tempfile.TemporaryDirectory() as tmp:
             first = os.path.join(tmp, '00010000_00000001.dll')

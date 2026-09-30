@@ -58,6 +58,19 @@ extern "C" void psx_write_word(uint32_t address, uint32_t value) {
     ram[offset + 3] = (uint8_t)(value >> 24);
 }
 
+/* Mod writes are host stores (memory.c psx_host_write_*). */
+extern "C" void psx_host_write_byte(uint32_t address, uint8_t value) {
+    psx_write_byte(address, value);
+}
+
+extern "C" void psx_host_write_half(uint32_t address, uint16_t value) {
+    psx_write_half(address, value);
+}
+
+extern "C" void psx_host_write_word(uint32_t address, uint32_t value) {
+    psx_write_word(address, value);
+}
+
 extern "C" uint32_t psx_mod_memory_alloc(uint32_t, uint32_t) { return 0; }
 extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t, uint32_t) {
     return 0;

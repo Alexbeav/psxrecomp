@@ -8,6 +8,26 @@
 
 namespace PSXRecomp {
 
+// Segments of the MIPS address space (docs/SEGMENT_AWARE_CODE.md §2). A PC
+// carries one: it reaches link values, EPCs and I-cache tags, and KSEG1
+// fetches are uncached. Data loads and stores reduce all three to the same
+// physical address.
+inline constexpr uint32_t kSegmentMask = 0xE0000000u;
+inline constexpr uint32_t kPhysMask    = 0x1FFFFFFFu;
+inline constexpr uint32_t kSegKUSEG    = 0x00000000u;
+inline constexpr uint32_t kSegKSEG0    = 0x80000000u;
+inline constexpr uint32_t kSegKSEG1    = 0xA0000000u;
+
+// True when `pc` lies in one of the three windows that map the physical
+// address space: KUSEG below 0x20000000, KSEG0 and KSEG1. The rest of KUSEG
+// (0x20000000-0x7FFFFFFF) and KSEG2 are not mirrors of it: Beetle's addr_mask
+// leaves them unmasked, so they address no RAM or BIOS ROM, and a PC there
+// never names the bytes at `pc & kPhysMask`.
+inline constexpr bool maps_physical(uint32_t pc) {
+    return pc < 0x20000000u || (pc & kSegmentMask) == kSegKSEG0 ||
+           (pc & kSegmentMask) == kSegKSEG1;
+}
+
 // PS-X EXE header structure (2048 bytes)
 #pragma pack(push, 1)
 struct PS1ExeHeader {
@@ -119,10 +139,26 @@ public:
     // that is not an overlay capture wrapped by compile_overlays.
     uint32_t analysis_guard_bytes = 0;
 
-    // Computed properties
+    // Computed properties. Addresses are the header's, in its link segment:
+    // the parser does not rewrite them (docs/SEGMENT_AWARE_CODE.md §5.3).
     uint32_t load_address() const { return header.load_address; }
     uint32_t entry_point() const { return header.initial_pc; }
     uint32_t code_size() const { return header.file_size; }
+
+    // The segment the program is linked for and runs in: KUSEG, KSEG0 or
+    // KSEG1. validate_header() requires the load address and the entry to
+    // share it. Code identity is the full virtual address in this segment
+    // (§5.1); an address in another segment names the same bytes but a
+    // different code identity (a segment variant, §5.4).
+    uint32_t link_segment() const { return header.load_address & kSegmentMask; }
+
+    // Physical helpers for byte addressing: the same RAM in every segment.
+    uint32_t phys_load_address() const { return header.load_address & kPhysMask; }
+    bool contains_phys(uint32_t address) const {
+        const uint32_t phys = address & kPhysMask;
+        return phys >= phys_load_address() &&
+               phys - phys_load_address() < header.file_size;
+    }
 
     // READ bound: one past the last byte the image physically supplies. Used
     // by read_word so a mandatory delay slot living at a guard word resolves.

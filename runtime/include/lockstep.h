@@ -38,6 +38,11 @@ int      ls_shadow_replay_end(uint32_t *ops, int *mismatch_kind,
                               uint32_t *pc, uint32_t *addr,
                               uint32_t *expected, uint32_t *actual);
 void     ls_shadow_abort(void);
+/* A recorded effect the replay cannot reproduce fails the record closed (the
+ * comparison is skipped, as for a device touch). memory.c calls it for a
+ * cache-isolated store: its I-cache effect depends on BIU state, and the
+ * replay neither writes the BIU nor stores. No-op outside a shadow record. */
+void     ls_shadow_record_unreplayable(void);
 
 /* Memory chokepoint hooks, called from the psx_read_ and psx_write_ funcs. */
 uint32_t ls_read_hook(uint32_t addr, int size, uint32_t real_val);

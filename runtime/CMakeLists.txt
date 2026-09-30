@@ -96,6 +96,8 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_mod_entry_guards.py")
         add_test(NAME mirror_pc_preserved_guards_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mirror_pc_preserved_guards.py")
+        add_test(NAME segment_miss_wiring_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_miss_wiring.py")
         add_test(NAME gpu_textured_dot_nw_shift_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gpu_textured_dot_nw_shift.py")
         add_test(NAME gl_readback_runner_test COMMAND "${Python3_EXECUTABLE}"
@@ -171,6 +173,16 @@ if(BUILD_TESTING)
         PSX_ENABLE_BLOCK_CYCLES=1)
     add_test(NAME psx_cyc_batch_test COMMAND psx_cyc_batch_test)
 
+    # Segment misses in static game code (docs/SEGMENT_AWARE_CODE.md §5.5):
+    # classification against the dispatch rows, the ring and the per-PC
+    # summary the TCP command and the exit report read.
+    add_executable(psx_segment_miss_test
+        tests/test_psx_segment_miss.c
+        src/psx_segment_miss.c
+    )
+    target_include_directories(psx_segment_miss_test PRIVATE include)
+    add_test(NAME psx_segment_miss_test COMMAND psx_segment_miss_test)
+
     add_executable(psx_icache_fastpath_test
         tests/test_psx_icache_fastpath.c
         src/psx_icache.c
@@ -227,6 +239,29 @@ if(BUILD_TESTING)
             -flto -Wl,--gc-sections -Wno-lto-type-mismatch)
         target_link_libraries(psx_ram_runtime_map_test PRIVATE ZLIB::ZLIB)
         add_test(NAME psx_ram_runtime_map_test COMMAND psx_ram_runtime_map_test)
+
+        # Cache-isolated (SR.IsC) CPU stores through the REAL memory.c store
+        # paths and the REAL psx_icache.c tag model, against Beetle's
+        # WriteMemory IsC branch: FlushCache invalidation, tag-test valid bits,
+        # the D-cache scratchpad write, the BIU and DMA exclusions. Same link
+        # doubles as psx_ram_runtime_map_test, minus the I-cache ones.
+        add_executable(isc_store_test
+            tests/test_isc_store.c
+            tests/psx_ram_runtime_map_stubs.c
+            src/memory.c
+            src/dma.c
+            src/boot_state.c
+            src/psx_icache.c
+            src/psx_ram_geometry.c)
+        target_include_directories(isc_store_test PRIVATE include src)
+        target_compile_definitions(isc_store_test PRIVATE
+            PSX_ENABLE_BLOCK_CYCLES=1 PSX_STUBS_REAL_ICACHE=1)
+        target_compile_options(isc_store_test PRIVATE
+            -O2 -flto -ffunction-sections -fdata-sections -Wno-lto-type-mismatch)
+        target_link_options(isc_store_test PRIVATE -flto -Wno-lto-type-mismatch
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+        target_link_libraries(isc_store_test PRIVATE ZLIB::ZLIB)
+        add_test(NAME isc_store_test COMMAND isc_store_test)
     endif()
 
     add_executable(host_keymap_test
@@ -342,8 +377,7 @@ if(BUILD_TESTING)
         target_compile_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
             -ffunction-sections -fdata-sections)
         target_link_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
-            -Wl,--gc-sections
-            -Wl,--error-limit=0)
+            -Wl,--gc-sections)
     endif()
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)

@@ -303,14 +303,19 @@ extern void psx_bail_record(uint32_t site_ra, uint32_t site_sp,
 /* Validate a direct call site after the callee's C return.
  * Returns 1 if the caller must `return;` immediately (bail in progress),
  * 0 if the continuation is valid.  site_ra = the call's return address,
- * site_sp = guest $sp recorded immediately before the call. */
+ * site_sp = guest $sp recorded immediately before the call.
+ *
+ * The return PC is compared in full, segment included
+ * (docs/SEGMENT_AWARE_CODE.md §5.5): site_ra is the link the call wrote, in
+ * the segment of the body that made it, and a guest returning to another
+ * segment's alias of the call site did not return to that body. The BIOS
+ * dispatch loop (full_function_emitter.cpp) applies the same rule. */
 static inline int psx_call_contract(CPUState* cpu, uint32_t site_ra,
                                     uint32_t site_sp) {
     if (g_psx_call_bail) {
         /* An inner frame began a bail unwind.  Resolve here iff the guest's
          * arrival state matches this site's contract. */
-        if (((cpu->pc ^ site_ra) & 0x1FFFFFFFu) == 0 &&
-            cpu->gpr[29] == site_sp) {
+        if (cpu->pc == site_ra && cpu->gpr[29] == site_sp) {
             g_psx_call_bail = 0;
             g_psx_bail_resolved++;
             cpu->pc = 0;
@@ -318,8 +323,7 @@ static inline int psx_call_contract(CPUState* cpu, uint32_t site_ra,
         }
         return 1;
     }
-    if (cpu->gpr[29] != site_sp ||
-        ((cpu->gpr[31] ^ site_ra) & 0x1FFFFFFFu) != 0) {
+    if (cpu->gpr[29] != site_sp || cpu->gpr[31] != site_ra) {
         /* First detection: the callee C-returned but the guest did not
          * return here.  $ra holds the wild jr's true destination (the
          * longjmp-return emission sets cpu->pc = $ra before returning,

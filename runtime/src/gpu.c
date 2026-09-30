@@ -1339,7 +1339,7 @@ static void bg2d_clear_column(int layer, int ringcol, int worldY) {
         uint32_t cell = ringbase
                       + (uint32_t)((ringcol & (int)(g_bg2d_ring_cols - 1u)) * 2)
                       + (uint32_t)((ringrow & 0x1f) * (int)(g_bg2d_ring_cols * 2u));
-        psx_write_half(cell, 0);
+        psx_host_write_half(cell, 0);
         ringrow = (ringrow + 1) & 0x1f;
     }
 }
@@ -1420,7 +1420,7 @@ static int bg2d_fill_column(int layer, int worldX, int worldY, int scrollX, int 
         uint16_t tile = psx_read_half(metaBase + (uint32_t)metaIdx * 0x200u
                                       + (uint32_t)(trowInMeta * 0x20) + (uint32_t)(tcolInMeta * 2));
         if (write) {
-            psx_write_half(cell, tile);
+            psx_host_write_half(cell, tile);
         } else if (cmp_total) {
             (*cmp_total)++;
             if (psx_read_half(cell) != tile && cmp_bad) (*cmp_bad)++;

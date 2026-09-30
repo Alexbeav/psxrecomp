@@ -26,12 +26,19 @@ void (*g_overlay_flush_pending_cycles)(void);
 uint32_t g_psx_cyc_batch;
 uint32_t g_psx_cyc_batch_limit;
 uint32_t *g_psx_cyc_local_acc;
+#ifndef PSX_STUBS_REAL_ICACHE
+/* The I-cache model (psx_icache.c). isc_store_test links the real one. */
 uint32_t g_psx_icache_tv[1024];
+void psx_icache_isc_store(uint32_t biu, uint32_t addr, uint32_t value) {
+    (void)biu; (void)addr; (void)value; __builtin_trap();   /* SR.IsC is never set here */
+}
+#endif
 uint64_t psx_cycle_count;
 uint64_t s_frame_count;
 uint64_t psx_next_service_cycle;
 int psx_in_device_service;
 uint32_t g_dirty_ram_dispatch_pc_bitmap[(0x00800000u / 4u + 31u) / 32u];
+uint32_t g_dirty_ram_dispatch_seg_bitmap[3][(0x00800000u / 4u + 31u) / 32u];
 uint32_t g_dirty_ram_exec_pc_bitmap[(0x00800000u / 4u + 31u) / 32u];
 uint32_t g_dirty_ram_exec_page_bitmap[((0x00800000u / 4096u) + 31u) / 32u];
 
@@ -48,6 +55,7 @@ void audio_trace_event(uint16_t k, uint32_t a, uint32_t b) { (void)k; (void)a; (
 void parity_trace_note_write(uint32_t a, uint32_t w, uint32_t pc) { (void)a; (void)w; (void)pc; }
 uint32_t ls_read_hook(uint32_t a, int s, uint32_t v) { (void)a; (void)s; return v; }
 void ls_write_hook(uint32_t a, int s, uint32_t v) { (void)a; (void)s; (void)v; }
+void ls_shadow_record_unreplayable(void) {}
 int  fntrace_is_game_started(void) { return 0; }
 void overlay_loader_note_code_write(void) {}
 void overlay_loader_resync_validation_after_restore(void) {}

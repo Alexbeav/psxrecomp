@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 INTERP = (ROOT / 'runtime/src/dirty_ram_interp.c').read_text(encoding='utf-8')
 MEMORY = (ROOT / 'runtime/src/memory.c').read_text(encoding='utf-8')
 EMITTER = (ROOT / 'recompiler/src/full_function_emitter.cpp').read_text(encoding='utf-8')
-GAME = (ROOT / 'recompiler/src/main_psx.cpp').read_text(encoding='utf-8')
+GAME = (ROOT / 'recompiler/src/game_dispatch_emitter.cpp').read_text(encoding='utf-8')
 
 
 def body(source, signature):

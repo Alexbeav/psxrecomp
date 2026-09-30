@@ -40,6 +40,21 @@ struct EmitStats {
     uint32_t continuation_entries = 0;
     std::vector<std::pair<uint32_t, std::string>> skipped;  // (addr, reason)
     std::vector<std::pair<uint32_t, std::string>> interpreted;  // (addr, reason)
+    uint32_t variant_functions = 0;  // segment-variant bodies (§5.4)
+    uint32_t variant_entries = 0;    // their exact-PC dispatch rows
+};
+
+// A segment-qualified BIOS seed (docs/SEGMENT_AWARE_CODE.md §5.4): a runtime
+// PC inside a relocated copy window, in another segment than the window runs
+// in. SCPH-1001 enters its kernel copy (runtime 0x00000500) through the
+// uncached alias 0xA0000500. The function at `rom` and its direct-edge closure
+// are emitted again with `pc`'s segment: every PC they bake is in it, a KSEG1
+// variant charges a fetch per instruction, and the dispatch runs the variant
+// for its exact PC (every other PC keeps the normalized key).
+struct BiosSegmentVariantSeed {
+    uint32_t    pc;     // requested runtime PC, e.g. 0xA0000500
+    uint32_t    rom;    // ROM VA of the same bytes, e.g. 0xBFC10000
+    std::string label;
 };
 
 // A continuation label: the return point inside a calling function after
@@ -81,7 +96,8 @@ public:
         const std::string&                out_dir,
         const std::string&                out_stem,
         const std::vector<BiosVectorTable>& bios_vectors = {},
-        const std::vector<BiosAlias>&       bios_aliases = {});
+        const std::vector<BiosAlias>&       bios_aliases = {},
+        const std::vector<BiosSegmentVariantSeed>& variant_seeds = {});
 
 private:
     // Emit a single function's C code to the output stream.
@@ -117,7 +133,8 @@ private:
         const std::vector<uint8_t>&         rom,
         uint32_t                            base_addr,
         const std::vector<BiosVectorTable>& bios_vectors,
-        const std::vector<BiosAlias>&       bios_aliases);
+        const std::vector<BiosAlias>&       bios_aliases,
+        const std::vector<std::pair<uint32_t, std::string>>& variant_rows);
 
     static uint32_t normalize_address(uint32_t addr);
     static uint32_t read_u32_le(const std::vector<uint8_t>& rom, uint32_t offset);

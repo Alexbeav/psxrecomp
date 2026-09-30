@@ -109,6 +109,8 @@ set(PSXRECOMP_GAME_SOURCES
     src/annotations.cpp
     src/config_loader.cpp
     src/recompiler_patch.cpp
+    src/game_dispatch_emitter.cpp
+    src/segment_variants.cpp
     src/main_psx.cpp
 )
 
@@ -587,6 +589,73 @@ if(BUILD_TESTING)
     add_test(NAME uncached_fetch_codegen_test
              COMMAND uncached_fetch_codegen_test)
 
+    # Every guest-visible PC the game/overlay emitter and the BIOS translator
+    # bake goes through runtime_pc() (docs/SEGMENT_AWARE_CODE.md §5.2): links,
+    # fetch tags, IRQ resume PCs, CPS exits/continuation keys, store-PC stamps,
+    # EPCs. KSEG0 output is unchanged; identity keys keep the compile address.
+    add_executable(emitter_runtime_pc_test
+        tests/emitter_runtime_pc_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/game_dispatch_emitter.cpp
+        src/strict_translator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(emitter_runtime_pc_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(emitter_runtime_pc_test PRIVATE fmt rabbitizer)
+    add_test(NAME emitter_runtime_pc_test
+             COMMAND emitter_runtime_pc_test)
+    # The BIOS translator latches PSX_CPS at start-up; this run covers its
+    # legacy (non-CPS) syscall form.
+    add_test(NAME emitter_runtime_pc_test_legacy
+             COMMAND emitter_runtime_pc_test)
+    set_tests_properties(emitter_runtime_pc_test_legacy PROPERTIES
+                         ENVIRONMENT "PSX_CPS=0")
+
+    # Segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): the planner's
+    # direct-edge closure per segment, the segment view and the variant's
+    # codegen config.
+    add_executable(segment_variants_test
+        tests/segment_variants_test.cpp
+        src/segment_variants.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(segment_variants_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(segment_variants_test PRIVATE fmt rabbitizer)
+    add_test(NAME segment_variants_test COMMAND segment_variants_test)
+
     add_executable(recompiler_patch_cxx17_header_test
         tests/recompiler_patch_cxx17_header_test.cpp
     )
@@ -790,6 +859,35 @@ if(BUILD_TESTING)
                     --recompiler $<TARGET_FILE:psxrecomp-game>
                     --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Gap ledger for docs/SEGMENT_AWARE_CODE.md: a synthetic KUSEG-linked
+        # EXE, checked against a Beetle fetch-model transcription.
+        add_test(
+            NAME segment_aware_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_aware_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Overlay shards keyed by segment (docs/SEGMENT_AWARE_CODE.md §5.7):
+        # capture views, per-segment cache directories and manifests, the real
+        # compile_overlays.py driver and the real overlay loader.
+        add_test(
+            NAME overlay_segment_keys
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_segment_keys.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # BIOS segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): OpenBIOS
+        # with segment-qualified seeds, and SCPH-1001's KSEG1 kernel entry.
+        add_test(
+            NAME bios_segment_variants
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_segment_variants.py
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME overlay_shim_compile_contract
             COMMAND ${Python3_EXECUTABLE}
@@ -848,6 +946,7 @@ if(BUILD_TESTING)
         foreach(_t IN ITEMS
                 aligned_lzss_banks
                 bundled_release_layout
+                collect_game_misses
                 cursor_writers
                 disc_companion
                 duckstation_oracle

@@ -440,9 +440,11 @@ bool FunctionAnalyzer::is_likely_data_section(uint32_t start_addr, uint32_t end_
 
         // Check for JAL with invalid target
         if (opcode == 3) {  // JAL opcode
-            // PS1 JAL target: upper 4 bits from PC region (0x80000000), low 28 bits from instr
-            uint32_t target = ((instr & 0x03FFFFFFu) << 2) | 0x80000000u;
-            if (target > 0x801FFFFFu) {
+            // PS1 JAL target: upper 4 bits from the delay slot's PC (the
+            // image's own segment), low 28 bits from instr. Valid targets lie
+            // in the first 2 MiB of RAM.
+            uint32_t target = ((addr + 4u) & 0xF0000000u) | ((instr & 0x03FFFFFFu) << 2);
+            if ((target & 0x0FFFFFFFu) > 0x001FFFFFu) {
                 invalid_jal_count++;
             }
         }
@@ -1866,8 +1868,9 @@ FunctionAnalysisResult FunctionAnalyzer::analyze() {
 
         uint32_t opcode = (instr >> 26) & 0x3F;
         if (opcode == 3) {  // JAL
-            // PS1 JAL target: upper 4 bits from KSEG0 region (0x80000000)
-            uint32_t target = ((instr & 0x03FFFFFFu) << 2) | 0x80000000u;
+            // PS1 JAL target: upper 4 bits from the delay slot's PC, so a
+            // KUSEG-linked image calls KUSEG targets (§5.3).
+            uint32_t target = ((addr + 4u) & 0xF0000000u) | ((instr & 0x03FFFFFFu) << 2);
 
             // Only add if target is within EXE range and word-aligned
             if (target >= exe_start && target < exe_end && (target & 3) == 0) {
@@ -2033,7 +2036,7 @@ FunctionAnalysisResult FunctionAnalyzer::analyze() {
         uint32_t opcode = (instr >> 26) & 0x3F;
         if (opcode != 3) continue;  // JAL
 
-        uint32_t target = ((instr & 0x03FFFFFFu) << 2) | 0x80000000u;
+        uint32_t target = ((addr + 4u) & 0xF0000000u) | ((instr & 0x03FFFFFFu) << 2);
         uint32_t cont = addr + 8;
         if (target < exe_start || target >= exe_end || (target & 3) != 0) continue;
         if (cont < exe_start || cont >= exe_end || (cont & 3) != 0) continue;

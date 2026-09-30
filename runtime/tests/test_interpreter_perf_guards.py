@@ -56,7 +56,7 @@ def main():
     commit = before_dma.find("preserve_snapshot_async(evidence_lo, evidence_hi)")
     clear_exec = before_dma.find("memset(&g_dirty_ram_exec_pc_bitmap", commit)
     clear_dispatch = before_dma.find(
-        "memset(&g_dirty_ram_dispatch_pc_bitmap", commit)
+        "dirty_ram_dispatch_evidence_clear(", commit)
     if min(commit, clear_exec, clear_dispatch) < 0 or not commit < clear_exec < clear_dispatch:
         raise AssertionError("outgoing variant is not queued before evidence reset")
     if "first_page = lo >> page_shift" not in before_dma:
@@ -120,10 +120,12 @@ def main():
         raise AssertionError(
             "interpreter does not take a pending rfe escape before local dirty flow")
 
-    dispatch = body(loader, "overlay_loader_dispatch")
-    cached = dispatch.find("lazy_miss_cached(phys)")
-    lookup = dispatch.find("idx_head(phys)")
-    record_miss = dispatch.rfind("lazy_miss_record(phys)")
+    # Keyed by the full PC and matched by segment since §5.7
+    # (docs/SEGMENT_AWARE_CODE.md); the body lives in the per-segment half.
+    dispatch = body(loader, "overlay_loader_dispatch_seg")
+    cached = dispatch.find("lazy_miss_cached(addr)")
+    lookup = dispatch.find("idx_head_seg(phys, seg)")
+    record_miss = dispatch.rfind("lazy_miss_record(addr)")
     if min(cached, lookup, record_miss) < 0 or not cached < lookup < record_miss:
         raise AssertionError("negative miss cache is not guarding lookup/recorded at final miss")
     if "lazy_miss_invalidate_loader();" not in body(loader, "overlay_loader_rescan"):
@@ -153,9 +155,9 @@ def main():
         if guard not in has_crc:
             raise AssertionError(f"cached-CRC query accepts unusable artifacts: {guard}")
     try_load = body(loader, "try_load_region")
-    if "lazy_is_loadable(li, region_start, phys, 0)" not in try_load:
+    if "lazy_is_loadable(li, region_start, seg, phys, 0)" not in try_load:
         raise AssertionError("exact manifest entries are still gated by dirty-run base")
-    if "lazy_is_loadable(li, region_start, phys, 1)" not in try_load:
+    if "lazy_is_loadable(li, region_start, seg, phys, 1)" not in try_load:
         raise AssertionError("non-exact range fallback lost region narrowing")
     if "lazy_candidate_preferred" not in try_load:
         raise AssertionError("lazy artifact selection is still directory-order dependent")

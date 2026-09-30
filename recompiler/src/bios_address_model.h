@@ -160,6 +160,15 @@ public:
     // The generated dispatch's `static uint32_t normalize(uint32_t)`.
     std::string emit_normalize_c() const;
 
+    // The generated dispatch's `static uint32_t psx_bios_key_home_pc(uint32_t)`:
+    // the runtime PC the home body of a dispatch key (a normalize() result)
+    // was compiled for, i.e. runtime_pc() of the key's ROM bytes. That is its
+    // copy window's runtime address, or the ROM run in place in `rom_va`'s
+    // segment; 0 for a key outside every window and the ROM.
+    // (docs/SEGMENT_AWARE_CODE.md §5.4: a PC in another segment than this one
+    // has no body of its own unless a segment variant was compiled.)
+    std::string emit_key_home_pc_c(uint32_t rom_va) const;
+
     const std::vector<BiosAddrCopy>& copies() const { return copies_; }
 
 private:
