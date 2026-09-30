@@ -2417,6 +2417,17 @@ static std::filesystem::path sidecar_cfg_path(const char* argv0, const char* fil
     return exe_dir_from_argv(argv0) / filename;
 }
 
+/* Relative paths in settings.toml and the bios.cfg / disc.cfg sidecars are
+ * relative to the game folder. Resolve them against the exe directory, never
+ * the working directory: a shortcut or frontend that starts the game from
+ * elsewhere must still find its own memory cards and BIOS. Absolute paths are
+ * returned unchanged; empty stays empty. */
+static std::filesystem::path anchor_on_exe_dir(const char* argv0,
+                                               const std::filesystem::path& p) {
+    if (p.empty()) return p;
+    return PSXRecompV4::host_resolve(exe_dir_from_argv(argv0), p);
+}
+
 static std::filesystem::path read_cached_path(const char* argv0, const char* filename) {
     std::ifstream f(sidecar_cfg_path(argv0, filename));
     if (!f.is_open()) return {};
@@ -2425,7 +2436,8 @@ static std::filesystem::path read_cached_path(const char* argv0, const char* fil
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
         line.pop_back();
     }
-    return line.empty() ? std::filesystem::path{} : std::filesystem::path(line);
+    return line.empty() ? std::filesystem::path{}
+                        : anchor_on_exe_dir(argv0, std::filesystem::path(line));
 }
 
 static void write_cached_path(const char* argv0, const char* filename,
@@ -2615,6 +2627,12 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
 static std::filesystem::path normalize_disc_path_for_launch(const std::filesystem::path& path) {
     // Keep the resolver's mount path so a usable CUE retains its track map.
     return PSXRecompV4::resolve_disc_path(path).mount;
+}
+
+static std::filesystem::path resolve_persisted_disc_path(
+    const std::filesystem::path& path, const std::filesystem::path& exe_dir) {
+    if (path.empty()) return {};
+    return normalize_disc_path_for_launch(PSXRecompV4::host_resolve(exe_dir, path));
 }
 
 /* Which image of a MULTI-DISC set to mount, given the roster this build was
@@ -2856,7 +2874,7 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
 
     std::filesystem::path cached = read_cached_path(argv0, "disc.cfg");
     if (!cached.empty()) {
-        cached = normalize_disc_path_for_launch(cached);
+        cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0));
     }
     if (!cached.empty() && std::filesystem::exists(cached) &&
         validate_disc_for_launch(cached, game_id)) {
@@ -13558,12 +13576,12 @@ int main(int argc, char** argv) {
             g_hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                 us.hotkey_pad_fast_forward_toggle, 0);
         if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
-            settings_bios_storage = us.bios_path.string();
+            settings_bios_storage = anchor_on_exe_dir(argv[0], us.bios_path).string();
             bios_path = settings_bios_storage.c_str();
             bios_explicit = true;
         }
         if (us.has_disc_path && !disc_override_path)
-            resolved_disc = normalize_disc_path_for_launch(us.disc_path);
+            resolved_disc = resolve_persisted_disc_path(us.disc_path, exe_dir_from_argv(argv[0]));
         /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
          * PRESENT; absent it, [disc] path decides and the index is derived
          * from it.
@@ -13596,9 +13614,11 @@ int main(int argc, char** argv) {
                 if (idx >= 0) selected_disc_index = idx + 1;
             }
         }
-        if (us.has_memcard_dir)                      memcard_dir   = us.memcard_dir;
-        if (us.has_memcard1_path)    memcard1_path    = us.memcard1_path;
-        if (us.has_memcard2_path)    memcard2_path    = us.memcard2_path;
+        /* Relative [memcard] values anchor on the exe directory; the
+         * per-game options file also lives in memcard_dir. */
+        if (us.has_memcard_dir)   memcard_dir   = anchor_on_exe_dir(argv[0], us.memcard_dir);
+        if (us.has_memcard1_path) memcard1_path = anchor_on_exe_dir(argv[0], us.memcard1_path);
+        if (us.has_memcard2_path) memcard2_path = anchor_on_exe_dir(argv[0], us.memcard2_path);
         if (us.has_memcard1_enabled) memcard1_enabled = us.memcard1_enabled;
         if (us.has_memcard2_enabled) memcard2_enabled = us.memcard2_enabled;
         if (us.has_multitap_enabled) multitap_enabled = us.multitap_enabled;
@@ -14889,8 +14909,8 @@ int main(int argc, char** argv) {
                 }
                 memcard1_enabled = seed.memcard1_enabled;
                 memcard2_enabled = seed.memcard2_enabled;
-                if (seed.has_memcard1_path) memcard1_path = seed.memcard1_path;
-                if (seed.has_memcard2_path) memcard2_path = seed.memcard2_path;
+                if (seed.has_memcard1_path) memcard1_path = anchor_on_exe_dir(argv[0], seed.memcard1_path);
+                if (seed.has_memcard2_path) memcard2_path = anchor_on_exe_dir(argv[0], seed.memcard2_path);
                 if (seed.has_language) resolved_language = seed.language;
                 {
                     const int n = std::min(PSX_MAX_PLAYERS,
