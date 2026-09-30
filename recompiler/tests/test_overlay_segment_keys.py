@@ -332,7 +332,7 @@ def run_compile(recompiler, compiler, captures, out_dir, extra=(), toml=GAME_TOM
     runtime build this test does not need: the recompiler/stamp match and the
     config hash are not under test here, so they are pinned."""
     cap_path = os.path.join(out_dir, "captures.json")
-    with open(cap_path, "w") as f:
+    with open(cap_path, "w", encoding="utf-8") as f:
         json.dump(captures, f)
     argv = ["compile_overlays.py", "--captures", cap_path,
             "--game-toml", str(toml), "--recompiler", recompiler,
@@ -365,7 +365,7 @@ def manifest_entries(directory):
     out = set()
     for name in os.listdir(directory):
         if name.endswith(".ranges"):
-            with open(os.path.join(directory, name)) as f:
+            with open(os.path.join(directory, name), encoding="utf-8") as f:
                 out |= {int(ln.split()[1], 16) for ln in f if ln.startswith("F ")}
     return out
 
@@ -392,13 +392,13 @@ def check_compile(recompiler, compiler, data, labels, tmp):
     for seg, sub in ((KUSEG, "seg-kuseg"), (KSEG1, "seg-kseg1")):
         d = os.path.join(leaf, sub)
         check(os.path.isfile(os.path.join(d, stem + ext)), f"{sub}/{stem}{ext} exists")
-        with open(os.path.join(d, stem + ".ranges")) as f:
+        with open(os.path.join(d, stem + ".ranges"), encoding="utf-8") as f:
             manifest = f.read()
         check(f"S {seg:08X}\n" in manifest and
               f"F {seg | labels['ov_run']:08X} " in manifest and
               f"F {seg | labels['ov_getpc']:08X} " in manifest,
               f"{sub}: manifest names its segment and full-VA entries")
-        with open(os.path.join(d, f"{crc:08X}_patched.c")) as f:
+        with open(os.path.join(d, f"{crc:08X}_patched.c"), encoding="latin-1") as f:
             c_text = f.read()
         bodies = functions(c_text)
         check(set(bodies) == {f"func_{seg | labels['ov_run']:08X}",
@@ -437,9 +437,9 @@ def check_compile(recompiler, compiler, data, labels, tmp):
         os.makedirs(out)
         code, _log = run_compile(recompiler, compiler, [cap], out)
         d = leaf_dir(out)
-        with open(os.path.join(d, stem + ".ranges")) as f:
+        with open(os.path.join(d, stem + ".ranges"), encoding="utf-8") as f:
             manifest = f.read()
-        with open(os.path.join(d, f"{crc:08X}_patched.c")) as f:
+        with open(os.path.join(d, f"{crc:08X}_patched.c"), encoding="latin-1") as f:
             outs[name] = (code, manifest, f.read())
     check(outs["v2"] == outs["v3"] and outs["v2"][0] == 0 and
           "\nS " not in outs["v2"][1],
@@ -451,7 +451,7 @@ def check_compile(recompiler, compiler, data, labels, tmp):
     code, log = run_compile(recompiler, compiler,
                             [capture(data, labels, {KUSEG, KSEG0, KSEG1})],
                             static_dir, ("--static", "--static-single-file"))
-    with open(os.path.join(static_dir, "overlays_static.c")) as f:
+    with open(os.path.join(static_dir, "overlays_static.c"), encoding="latin-1") as f:
         static_c = f.read()
     rows = {int(a, 16) for a in re.findall(
         r"^    \{ 0x([0-9A-F]{8})u, \d+u, \d+u \},$", static_c, re.M)}
@@ -515,7 +515,7 @@ def check_static_fragments(recompiler, compiler, tmp):
     os.makedirs(out)
     code, log = run_compile(recompiler, compiler, [cap], out,
                             ("--static", "--static-single-file"))
-    with open(os.path.join(out, "overlays_static.c")) as f:
+    with open(os.path.join(out, "overlays_static.c"), encoding="latin-1") as f:
         static_c = f.read()
     rows = {int(a, 16) for a in re.findall(
         r"^    \{ 0x([0-9A-F]{8})u, \d+u, \d+u \},$", static_c, re.M)}
@@ -542,7 +542,7 @@ def check_segment_isolation(recompiler, compiler, data, labels, tmp):
     # capture saw. The prior-manifest reclassification merges only a view's
     # own segment's manifest.
     extra = KSEG0 | labels["ov_after"]
-    with open(os.path.join(leaf, stem + ".ranges"), "w") as f:
+    with open(os.path.join(leaf, stem + ".ranges"), "w", encoding="utf-8") as f:
         f.write(co.overlay_ranges_text(
             [(KSEG0 | labels["ov_run"], 1, [(KSEG0 | labels["ov_run"], 4)]),
              (extra, 1, [(extra, 4)])]))
@@ -579,12 +579,12 @@ def check_config_sites(recompiler, compiler, data, labels, tmp):
     proj = os.path.join(tmp, "hookproj")
     os.makedirs(proj)
     toml = os.path.join(proj, "game.toml")
-    with open(GAME_TOML) as f:
+    with open(GAME_TOML, encoding="utf-8") as f:
         text = f.read()
     text = text.replace("[recompiler]\n", "[recompiler]\nmod_function_entry_funcs = "
                         f'["0x{KSEG0 | labels["ov_run"]:08X}", '
                         f'"0x{KSEG1 | labels["ov_getpc"]:08X}"]\n', 1)
-    with open(toml, "w") as f:
+    with open(toml, "w", encoding="utf-8") as f:
         f.write(text)
     out = os.path.join(tmp, "hooks")
     os.makedirs(out)
@@ -595,7 +595,7 @@ def check_config_sites(recompiler, compiler, data, labels, tmp):
     leaf = leaf_dir(out)
     check(code == 0, "the three views build with the hook config")
     for seg, sub in ((KUSEG, "seg-kuseg"), (KSEG0, ""), (KSEG1, "seg-kseg1")):
-        with open(os.path.join(leaf, sub, f"{crc:08X}_patched.c")) as f:
+        with open(os.path.join(leaf, sub, f"{crc:08X}_patched.c"), encoding="latin-1") as f:
             hooks = {int(a, 16) for a in re.findall(
                 r"psx_mod_function_entry\(cpu, 0x([0-9A-F]{8})u\)", f.read())}
         check(hooks == {seg | labels["ov_run"], seg | labels["ov_getpc"]},
