@@ -182,9 +182,10 @@ int main(int argc,char **argv) {
             }
         }
     }
-    /* The default model is the event-driven DMA2 walker (dma_gpu_ll.c): the kick
-     * sends nothing synchronously, so the walk itself is live checkpoint state.
-     * Restoring it into a cleared controller must resume the same walk. */
+    /* The default model is the event-driven DMA2 walker (dma_gpu_ll.c). The kick
+     * holds the CPU only while the device service moves the walk, and this
+     * fixture services only the source machines, so the walk stays live
+     * checkpoint state. Restoring it into a cleared controller must resume it. */
     set_option("PSX_GPU_DMA_MODEL","");setup(6,1);try_execute(2);
     assert(!upload_count&&!irqs&&gpu_linked_list.active);
     {

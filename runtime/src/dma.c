@@ -785,15 +785,18 @@ static void start_async_gpu_linked_list(void) {
  * returns only when the list walk needs GPU FIFO space or ends. Guest code that
  * rewrites a packet right after DrawOTag (the SCPH1001 intro's shared text
  * packets) cannot reach it before the walk does. A cyclic walk releases the
- * CPU and keeps running as before. */
+ * CPU and keeps running as before, and so does a walk the device service did
+ * not move. */
 static void hold_cpu_for_gpu_linked_list(void) {
     if (psx_in_device_service || g_ls_replay_active) return;
     while (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
            channel_enabled(2) &&
            gpu_linked_list.nodes_processed < GPU_LL_HOLD_MAX_NODES &&
            !(gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD && !gpu_queue_has_space())) {
+        uint32_t moved = gpu_linked_list.total_words;
         psx_advance_cycles(dma_gpu_ll_cycles_to_event(&gpu_linked_list));
         psx_devices_service_to_now();
+        if (gpu_linked_list.active && gpu_linked_list.total_words == moved) break;
     }
 }
 
