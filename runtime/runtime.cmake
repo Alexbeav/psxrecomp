@@ -19,6 +19,7 @@ include("${PSXRECOMP_ROOT}/cmake/psx_runtime_ipo.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_dependency_archive.cmake")
 include("${PSXRECOMP_ROOT}/runtime/chd_dependency.cmake")
 include("${PSXRECOMP_ROOT}/runtime/overlay_static_sources.cmake")
+include("${PSXRECOMP_ROOT}/runtime/netplay_dependency.cmake")
 
 # Default to an optimized build. The recompiled game is a huge (~270 MB) block of
 # generated C; with no CMAKE_BUILD_TYPE the compiler emits it at -O0 and the game
@@ -473,6 +474,7 @@ if(PSX_NETPLAY AND RECOMP_NET_ROOT AND EXISTS "${RECOMP_NET_ROOT}/CMakeLists.txt
         # clone (AppImage LD_LIBRARY_PATH breaks system git-remote-https).
         set(RNET_ENABLE_ICE ON CACHE BOOL
             "Build libjuice ICE transport (default ON with PSX_NETPLAY)")
+        psxrecomp_netplay_libjuice("${RECOMP_NET_ROOT}")
         add_subdirectory("${RECOMP_NET_ROOT}" "${CMAKE_BINARY_DIR}/recomp-net")
     endif()
     set(PSXRECOMP_HAS_RECOMP_NET TRUE)
