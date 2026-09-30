@@ -6,10 +6,28 @@ allowed to redistribute — so a player can be handed a build and a disc image a
 just play. A player who prefers their own dumped retail BIOS can use that
 instead.
 
-Both recompiled BIOS backends are linked into every normal build. The OpenBIOS
+In a developer build both recompiled BIOS backends are linked. The OpenBIOS
 image itself and its MIT notice are staged in `bios/` beside the executable;
 the retail image is never shipped and comes from the player. Which backend runs
 is decided when the game launches, not when it is built.
+
+**Bundled releases link OpenBIOS only.** The retail backend's C is a
+translation of the Sony ROM's code, so it is never committed or built in CI
+(`tools/ci/check_generated.sh` refuses it; see `docs/ci/BUNDLED_RELEASES.md`).
+Requiring the player's dump at runtime would not change what the zip
+distributes. In such a build the launcher hides the BIOS row, an explicit
+`--bios` or stale `bios.cfg` is ignored, and a verify of a retail image
+reports "runs its bundled OpenBIOS only" rather than offering
+Generate & rebuild, which has no CLI, sources or toolchain to run there.
+
+Planned, not built (2026-09-30): a **player-side backend build**. The bundle
+already ships `overlay_toolchain/` and compiles game code from the player's
+own disc at runtime; the same mechanism can validate a retail dump, run
+`psxrecomp-bios` on it, compile the resulting C into a loadable module and
+register it, so "bring your own BIOS" works without any Sony-derived code in
+the release. It needs the backend registry to accept a dynamically loaded
+`PsxBiosBackend`, `psxrecomp-bios` in the toolchain, and a compiler on Linux
+and macOS where the toolchain relies on the system one.
 
 ## The rule
 
