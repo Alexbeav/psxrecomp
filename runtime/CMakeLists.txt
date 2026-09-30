@@ -265,6 +265,13 @@ if(BUILD_TESTING)
     add_test(NAME input_dualshock_delivery_test COMMAND input_dualshock_delivery_test)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    # PS1B-306: each generated BIOS profile's kernel-bless table fits the
+    # runtime, or is a declared overflow (bless off for that profile).
+    add_test(NAME kbless_table_capacity_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kbless_table_capacity.py"
+        --generated "${PSXRECOMP_ROOT}/generated"
+        --memory-c "${CMAKE_CURRENT_SOURCE_DIR}/src/memory.c")
+    set_tests_properties(kbless_table_capacity_test PROPERTIES SKIP_RETURN_CODE 77)
     # PSXRTI3 routes (T101): wire format, then record on a diagnostic build and
     # replay on a release build (PSX_NO_DEBUG_TOOLS) of the session module.
     add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)

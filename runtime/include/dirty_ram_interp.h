@@ -150,6 +150,10 @@ int      dirty_ram_is_dirty(uint32_t phys);
  * on writes into the body. Runtime-patched bodies (pad/SIO install stubs)
  * never verify and keep interpreting — faithful either way. */
 int      psx_kernel_bless_dispatchable(uint32_t phys);
+/* PS1B-306: nonzero when the active image's bless table fits the runtime's
+ * verify-state array. When it does not, bless is off for the whole run.
+ * Report-only; sets *entries and *capacity when non-NULL. */
+int      psx_kernel_bless_table_fits(uint32_t *entries, uint32_t *capacity);
 /* True when a declared kernel patch range ENDS at this RAM address. The
  * emitter registered that PC as a continuation key, so the interpreter hands
  * straight-line flow back to static dispatch there and only the guest's
