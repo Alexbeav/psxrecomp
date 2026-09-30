@@ -59,6 +59,10 @@ presentation bug (present before today's work), not MDEC — its own axis-5 item
 - [ ] **Native↔Beetle cycle/first-divergence comparator** (replaces stale
   DuckStation-era find_divergence.py port 4371). Needs additive guest-cycle
   exposure in beetle_debug_server.c. The backbone measure for axes 2/3.
+- [x] **`PSX_FORCE_INTERP=1` restored (2026-09-29).** It marks pages dirty, and the
+  native-safety checks decide flagged pages by their bytes, so clean game text kept
+  running compiled. Both checks now refuse game text while it is set. Found taking
+  the segment probe's interpreter column (SEGMENT_AWARE_CODE.md §7.2).
 - [ ] **State-surface diffs**: VRAM byte diff (GPU), SPU sample-stream diff
   (audio), CD sector/response diff. Per-axis oracle comparators.
 - [ ] **Hardware-test-ROM harness**: run Amidog/GTE/CPU test ROMs on native and
@@ -173,6 +177,12 @@ Status: PARTIAL.
   precise-slicing (PRECISE_IRQ_SLICE.md). Validate vs Beetle exc_ring.
 - [ ] Exception entry record (EPC/Cause.ExcCode/BD/Status-stack) — currently uses
   a sentinel EPC; cross-ref psx-spx "Exceptions"; Beetle. Validate exc_ring match.
+  - Compiled game `syscall` (confirmed 2026-09-29): the game emitter sets no
+    `cpu->pc`, and under CPS it is 0 inside a body, so a syscall that reaches
+    the BIOS handler records EPC 0. The emitter also ignores
+    `psx_syscall`'s transfer result. Only Enter/ExitCriticalSection, handled
+    directly, occur in R4. The fix changes every title's codegen, so it is
+    its own change; see SEGMENT_AWARE_CODE.md §9.
 
 ## Axis 4 — Memory map / MMIO
 
@@ -196,6 +206,18 @@ Status: MODERATE-STRONG (regions games use).
   memory.c stores it, psx_icache.c and the interp ignore it. Beetle charges +4 per
   fetch while the cache is disabled (CPU_SetBIU). This matters only for RAM code run
   with the cache off; `psx_fetch_uncached` is an address test and does not cover it.
+- [ ] **RAM 0x0-0xF boot scratch diverges from Beetle** (found 2026-09-29 while
+  reviewing segment-aware PR B). At the segment probe's spin on SCPH-1001 (disc boot,
+  LLE), Beetle's RAM `0x0`-`0xB` is `00000003 275A0C80 03400008`: the delay-loop
+  scratch word and words 2-3 of the exception-vector stub the boot copies there.
+  Native (before and after PR B) has zeros: game start runs
+  `memory_clear_low_boot_scratch()`, and memory.c's RAM-0 store filters drop later
+  stores (Beetle's write log shows the in-place ROM store `0xBFC0D634` writing word 0
+  after game start). memory.c's comment says the stub copy is not visible on
+  hardware; Beetle contradicts it. The filters were added for Tomba 2's card write
+  with buffer 0. Decide them with oracle evidence from that title, then keep or drop
+  them. PR B only re-keyed the filters and gated them to SCPH-1001's own
+  instructions (SEGMENT_AWARE_CODE.md §9); it did not change what they do.
 - [ ] I/O register semantics: read-to-clear, write-1-ack (I_STAT), masking,
   unmapped/garbage reads — psx-spx "I/O Map"; Beetle memory.cpp.
 
@@ -258,6 +280,14 @@ Status: STRONG (most project effort lives here).
 - [ ] Function discovery / dispatch completeness (no missed indirect/jump-table
   targets) — resolve all dispatch misses each run (Tomba2Recomp CLAUDE.md).
 - [ ] Call/return contract + stack fidelity — the blue-screen/wedge class.
+- [x] **Compiled BIOS hands the runtime its runtime PCs (2026-09-29, segment-aware
+  PR B).** Relocated kernel and shell code stamped stores, and set syscall EPCs and
+  fallthrough PCs, at their ROM addresses; the interpreter uses the executing PC.
+  Both now agree (`runtime_pc()`, SEGMENT_AWARE_CODE.md §5.2). memory.c's seven
+  SCPH-1001 store-PC keys moved to runtime PCs in the same change, gated so each
+  matches only SCPH-1001's own instruction (not other BIOSes or game code at the
+  same RAM address); the GP0 source key matches the same 5,596 boot commands as
+  before. Guards: ledger `bios-runtime-pc`, `store-pc-keys-runtime`.
 - [ ] Backend equivalence (compiled == interp) — necessary, not sufficient.
   Measured with `tools/fp_identity.py` (2026-09-29): seeded warm vs cold
   overlay-cache runs, judged on the `frame_fingerprint` guest-fact columns. R4,

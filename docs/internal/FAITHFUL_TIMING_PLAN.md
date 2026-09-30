@@ -213,6 +213,45 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-29 (segment-aware code, rollout PR B: every baked PC through `runtime_pc()`):**
+  `refactor/emitter-runtime-pc`, stacked on #419 (docs/SEGMENT_AWARE_CODE.md §5.2).
+  - Game/overlay emitter: `CodeGenerator` has a code segment and
+    `runtime_pc()`. Links (including a `jalr` in a delay slot), fetch tags
+    (including `emit_pre_icache`'s uncached test), IRQ resume PCs, the RI
+    EPC, CPS exits and continuation keys, dispatch targets, store-PC stamps,
+    the VSync-query hook's base PC and the dispatch rows go through it. The
+    default is the image's own segment, so the output is unchanged. The
+    VSync-query hook is not emitted for uncached code: its hand-timed body
+    charges cached fetches only.
+  - BIOS emitter: `StrictTranslator::translate(d, runtime_pc)`. Store-PC
+    stamps, syscall EPCs, break/unaligned PCs and fallthrough PCs of relocated
+    code are runtime PCs, as the interpreter's are.
+  - memory.c re-keys its seven SCPH-1001 ROM-address keys to runtime PCs in
+    the same commit, gated (`scph1001_relocated_store`) to SCPH-1001's own
+    instruction: other BIOSes and game code at those RAM addresses never
+    match, as they never matched the ROM keys.
+  - Review pass: a single-site mutation sweep over every route found gaps in
+    `emitter_runtime_pc_test`; it now reaches every emission path, and the
+    sweep kills 77 of 80 routes. The survivors are the two dispatch-row
+    routes (PR C's ledger covers them) and a mid-block continuation key the
+    CFG analyzer does not produce. The RAM 0x0-0xF store filters diverge
+    from Beetle (recorded in ACCURACY_BURNDOWN axis 4); B keeps them as they
+    were.
+  - Timing: none. LLE boot against live psx-beetle matches the previous build
+    at every anchor (shell entry −126 OpenBIOS, −454 SCPH-1001). The segment
+    probe's cycles to its spin are unchanged on both BIOSes. R4 regenerates
+    byte-identically (game and overlay shards). R4's fingerprints agree on
+    every guest-state column; only the store-PC-hashing `mmio`/`pc` columns
+    move.
+  - Interpreter column of the probe: equal to Beetle on both BIOSes (links,
+    segment probes, T2 56/56/82). It needed `PSX_FORCE_INTERP`, which had
+    stopped routing clean game text to the interpreter since the
+    native-safety checks started deciding by bytes; fixed on the same
+    branch.
+  - The ledger closes no id (10 gaps). It gains two regression guards,
+    `bios-runtime-pc` and `store-pc-keys-runtime`. New test:
+    `emitter_runtime_pc_test`.
+
 - **2026-09-29 (segment-aware code — rebased after #429, #431 and #433 merged):**
   PR A (#429) is on master, so the ledger no longer lists `bios-kseg1-fetch-charge`
   and `segment_aware_codegen` passes with 10 known gaps. Its OpenBIOS check stays as a

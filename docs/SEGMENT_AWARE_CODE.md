@@ -6,7 +6,8 @@ Based on master. It was first stacked on RetroPortingToolKit/psxrecomp#417
 (`fix/overlay-segment-alias`), which merged on 2026-09-29 together with #418
 (mult/div deadlines) and #420 (store-PC forwarding, ABI v24). Rollout PR A
 merged as #429 on 2026-09-29 (§8). This change adds only this document and an
-acceptance test; it does not change behaviour.
+acceptance test; it does not change behaviour. Rollout PR B
+(`refactor/emitter-runtime-pc`, stacked on this design) implements §5.2.
 
 Acceptance test: `recompiler/tests/test_segment_aware_codegen.py` (ctest
 `segment_aware_codegen`). Synthetic EXE: `tools/segment_testrom/gen_segment_exe.py`.
@@ -106,18 +107,21 @@ hardware difference is recorded under ACCURACY_BURNDOWN axis 4
 
 ### 3.1 Baked PCs in the game and overlay emitter (`code_generator.cpp`)
 
-Every one of these sites writes the compile address, which is always KSEG0.
+Before PR B, every one of these sites wrote the compile address, which is
+always KSEG0. The emitter functions are named instead of line numbers, which
+move with every change.
 
-| Site | Lines | R4 static count |
+| Site | Emitter | R4 static count |
 |---|---|---|
-| `cpu->gpr[31] = 0x…u` (jal, jalr, bgezal, bltzal links) | 2180, 2186, 2195 | 5,373 |
-| `psx_icache_fetch(cpu, 0x…u)` (fetch tags) | 1902-1909 | 61,181 |
-| `psx_check_interrupts_at(cpu, 0x…u)` (resume PC → EPC) | 170-175, ~20 callers | 30,596 |
-| `cpu->pc = 0x…u; return;` (CPS exits, stale-static guard) | 115, 2285-2633, 2981, 3234 | 6,927 |
-| `g_debug_last_store_pc = 0x…u` (before every `sb`/`sh`/`sw`/`swl`/`swr`/`swc2`) | 1384, 1523, 1692-1696, 1743 | 22,936 |
-| CPS continuation keys `case 0x…u: goto block_…` | 2833-2859, 3151-3196 | — |
-| Reserved-instruction EPC `cpu->cop0[14] = 0x…u` | 2145 | — |
-| `psx_slice_block(cpu, 0x…u, …)` (the interpreter resumes here) | 1866 | — |
+| `cpu->gpr[31] = 0x…u` (jal, jalr, bgezal, bltzal links) and a `jalr` link in a branch delay slot | `translate_basic_block`, `translate_instruction` | 5,373 |
+| `psx_icache_fetch(cpu, 0x…u)` (fetch tags) | `translate_basic_block` (`emit_pre_icache`) | 61,181 |
+| `psx_check_interrupts_at(cpu, 0x…u)` (resume PC → EPC) | `emit_interrupt_check`, ~20 callers | 30,596 |
+| `cpu->pc = 0x…u; return;` (CPS exits, stale-static guard, image-edge tail transfer) | `translate_basic_block`, `generate_function`, `generate_alias_group`, `emit_stale_static_guard` | 6,927 |
+| `g_debug_last_store_pc = 0x…u` (before every `sb`/`sh`/`sw`/`swl`/`swr`/`swc2`) | `translate_instruction` | 22,936 |
+| CPS continuation keys `case 0x…u: goto block_…` | `generate_function`, `generate_alias_group` | — |
+| Reserved-instruction EPC `cpu->cop0[14] = 0x…u` | `translate_basic_block` | — |
+| `psx_slice_block(cpu, 0x…u, …)` (the interpreter resumes here) | `translate_basic_block` | — |
+| `psx_vsync_query_hle_enter(cpu, 0x…u, …)`: `load_accel.c` bases fetch tags, store-PC stamps and resume PCs on it | `generate_function` | — (R4 configures none) |
 
 The R4 figures come from all 50 generated shards: 2,994 functions and
 141,335 emitted instruction sites.
@@ -126,18 +130,18 @@ The R4 figures come from all 50 generated shards: 2,994 functions and
 emitted `extern` comment describe debug attribution, but the runtime reads it
 in every build:
 - `memory.c` `psx_write_word_raw` drops a word store to RAM `0x0`-`0xF` when
-  the stamp equals one of a list of exact PCs (1779-1802). An opt-in Tomba
-  card filter (`PSX_TOMB_CARD_EVCB_PROTECT`, 1826) keys on it the same way.
-- `memory.c`'s GP0 write path (1294) compares it with `0xBFC38B1C`, a
-  BIOS store to GP0. On a match it hands `gpu_set_gp0_source()` a RAM source
+  the stamp equals one of a list of exact PCs. An opt-in Tomba card filter
+  (`PSX_TOMB_CARD_EVCB_PROTECT`) keys on it the same way.
+- `memory.c`'s GP0 write path compared it with `0xBFC38B1C` before PR B
+  (§9 has the re-key), a BIOS store to GP0. On a match it hands `gpu_set_gp0_source()` a RAM source
   key taken from `$a0`. No preprocessor gate covers this, and `main.cpp`
   binds `debug_cpu_ptr` at startup (`debug_server_set_cpu`), so it also runs
   in every build. The resulting `gp0_cmd_source_addr` feeds the opt-in
-  presentation paths (widescreen prim matching `ws_*` in `gpu.c` 2029-2452,
+  presentation paths (widescreen prim matching, the `ws_*` code in `gpu.c`,
   geometry/texture correction, mod texture keys) and prim-ring diagnostics.
   The faithful rendering path does not branch on it.
-- The interpreter stamps the full executing PC (`dirty_ram_interp.c`
-  2333-2393). A compiled body that stamps a different segment than the one it
+- The interpreter stamps the full executing PC (`dirty_ram_interp.c`). A
+  compiled body that stamps a different segment than the one it
   runs in can make a filter or key match in one execution path and miss in
   the other.
 - #420 (`fix/fingerprint-guest-facts`, ABI v24, merged 2026-09-29) makes
@@ -149,11 +153,17 @@ So the stamp is a baked PC like the others in the table, and §5.2 routes it
 through `runtime_pc()`.
 
 Two other groups carry PCs but are identity keys, not architectural state:
-- debug and identity hooks: `cosim_*`, `debug_server_*`,
-  `psx_mod_function_entry`;
+- debug and identity hooks: `debug_server_*` (the runtime masks
+  `debug_server_cyc_observe`'s argument to physical),
+  `psx_mod_function_entry`, `psx_datashard_enter` and `psx_native_bad_entry`'s
+  owner;
 - `.ranges` manifests.
 
-The dispatch file (`main_psx.cpp` 1499-1763):
+The `cosim_*` hooks (the `PSX_COSIM` build only) record the executing PC at
+their checkpoints, as the interpreter does, so PR B routes them like the
+table.
+
+The dispatch file (`main_psx.cpp`, `psxrecomp_game_main`):
 - keys its table by KSEG0 address and looks it up with the physical address
   (`psx_game_find_entry`, `want = addr & 0x1FFFFFFF`);
 - then sets `cpu->pc = entry->resume_pc`, which is a KSEG0 constant.
@@ -307,13 +317,82 @@ A compiled body is identified by `seg | phys`:
   emitter's rows (`addr`, `resume_pc`).
 - Identity keys (block labels, `.ranges`) may keep the compile address. The
   store-PC stamp is not an identity key (§3.1).
-- `code_seg` defaults to KSEG0.
+- `code_seg` defaults to the segment of the image's load address. The EXE
+  parser folds KUSEG headers to KSEG0 until §5.3, so that is KSEG0 for every
+  title today, and `runtime_pc(addr) == addr` for every address in the image.
 - **Acceptance:** regenerating any KSEG0 title is byte-identical. That proves
   the refactor has zero fast-path cost. Closes nothing in the ledger on its
   own; enables §5.3-5.6.
 
+**Implemented in PR B.** `CodeGenerator::set_code_segment()` and
+`runtime_pc()`. Routed through it:
+- links (`jal`, `jalr`, `bgezal`/`bltzal`, and a `jalr` in a branch delay
+  slot, which `translate_instruction` emits) and the call contract's return
+  PC;
+- fetch tags and `emit_pre_icache`'s uncached test (§5.6);
+- interrupt resume PCs and the reserved-instruction EPC;
+- CPS exit PCs, continuation `case` keys (function and alias bodies) and the
+  alias `entry` keys;
+- `call_by_address` and stale-static-guard targets, the slice resume PC and
+  the `cosim_*` PCs;
+- store-PC stamps, including the widescreen-backdrop and persisted-option
+  store sites;
+- the VSync-query hook's first argument. `load_accel.c` derives fetch tags,
+  store-PC stamps and resume PCs from it, so it is a PC, not an id. Its
+  hand-timed body charges cached line-leader fetches only, so the hook is not
+  emitted for an uncached code segment: a KSEG1 body runs its own
+  instructions, each charged (§5.6). The dispatch-side
+  `psx_vsync_query_hle_try` compares the full PC exactly, so another segment
+  never takes it (nothing calls `psx_vsync_query_hle_configure` today);
+- the PC `psx_unknown_dispatch` reports from a data stub;
+- dispatch rows (`addr`, and `resume_pc` when it is a PC).
+
+`func_`/`block_` names, `.ranges`, `debug_server_log_call_entry`, the mod and
+data-shard hook ids and `psx_native_bad_entry`'s owner keep the compile
+address. So does `debug_server_cyc_observe`: the game emitter passes the
+compile address and the runtime masks it to physical.
+
+Jump-table `case` values are data words, the PCs the `jr` reaches, and are
+emitted as read. Each case continues in the current body. That is exact
+while every table value is in the body's own segment, which holds for every
+title before PR D. A variant (§5.4) must tail-transfer a case whose segment
+differs from its own; D adds that.
+
+The BIOS side is `StrictTranslator::translate(d, runtime_pc)`: the store-PC
+stamp, the syscall EPC and the break and unaligned-access PCs use the runtime
+PC, while the `psx_ldd_` temporaries and `terminator_target` keep the ROM
+address. The full-function emitter passes `relocate_ra()` to every
+`translate()` call, including orphaned delay slots and the two calls that
+read only terminator metadata, and publishes the runtime PC on a
+fallthrough. The seven `memory.c` keys are re-keyed in the same commit, and
+gated so that each still matches only its own SCPH-1001 instruction (§9).
+
+Tests:
+- `emitter_runtime_pc_test` compiles a small program in CPS, CPS-overlay and
+  legacy mode, through `generate_all_functions`. With the code segment left
+  at its default, set to KSEG0, set to KUSEG and set to KSEG1, it checks each
+  game-emitter PC class above except the dispatch rows, the identity keys,
+  and that KUSEG output differs from KSEG0 only in constant segments. The
+  program reaches every emission path listed above (the test fails if one
+  stops being emitted), including split conditional branches, alias groups,
+  data stubs, the image edge, the backdrop and persisted-option store sites
+  and a `jalr` in a delay slot. It also checks that a KSEG1 code segment
+  charges exactly what a KSEG1 image charges. For the translator it checks
+  every PC-bearing form, the deferred loads and both syscall forms (ctest runs
+  it a second time with `PSX_CPS=0`).
+- The dispatch rows (`main_psx.cpp`) are routed but not tested here: until
+  PR C they equal the compile address for every real executable. C's ledger
+  checks query them.
+- A single-site mutation sweep (revert one route, rebuild, run the unit test
+  in both `PSX_CPS` modes and the ledger) kills 77 of the 80 routes. The
+  three survivors are the two dispatch-row routes and the continuation key
+  for a call return in the middle of a block, which the CFG analyzer does not
+  produce (it starts a block at every call return; R4's 2,994 functions have
+  none).
+- The ledger gains two regression guards (§7.1).
+
 The BIOS emitter's precedent has holes to close in the same pass:
-- the fallthrough `cpu->pc = next_addr` (`full_function_emitter.cpp:1662`);
+- the fallthrough `cpu->pc = next_addr` (`full_function_emitter.cpp`);
 - the `strict_translator` syscall, break and unaligned-access PCs, which use
   the ROM address;
 - the `strict_translator` store-PC stamp, which also uses the ROM address.
@@ -354,6 +433,8 @@ Closes `link-segment`, `fetch-tag-segment`, `irq-resume-segment`,
   without dispatch.
 - Bodies are emitted once per `(segment, entry)`. Cached variants use the
   leader rule; KSEG1 variants use §5.6.
+- A jump-table case whose value lies in another segment tail-transfers to
+  dispatch instead of continuing in the variant (§5.2).
 
 Closes `segment-variants`.
 
@@ -401,14 +482,15 @@ PC** is uncached is charged a fetch of its own.
 Where it applies:
 - **BIOS emitter:** `relocate_ra(rom)` is uncached for the ROM run in place.
   Done in #429, which closed `bios-kseg1-fetch-charge`.
-- **Game and overlay emitter:** the predicate is already there, but
-  `emit_pre_icache` (`code_generator.cpp:1902-1909`) tests the compile
-  address, which is always KSEG0 today. §5.2 must route two things through
-  `runtime_pc()`: the `psx_fetch_uncached(insn_addr)` argument (1903) and the
-  fetch tag. Routing only the tag would charge a KSEG1 variant at line
-  leaders alone. With both routed, a KSEG1 variant (§5.4) is charged per
-  instruction with no further emitter change. `kseg1-fetch-charge` stays open
-  until PR D adds those variants.
+- **Game and overlay emitter:** the predicate was already there, but
+  `emit_pre_icache` tested the compile address, which is always KSEG0. §5.2
+  routes two things through `runtime_pc()`: the `psx_fetch_uncached()`
+  argument and the fetch tag (done in PR B). Routing only the tag would
+  charge a KSEG1 variant at line leaders alone. With both routed, a KSEG1
+  variant (§5.4) is charged per instruction with no further emitter change;
+  `emitter_runtime_pc_test` checks that a KSEG1 code segment charges exactly
+  what a KSEG1 image does. `kseg1-fetch-charge` stays open until PR D adds
+  those variants.
 - **Interpreter:** unchanged; it already charges every fetch.
 
 BIU bit 11 (cache disable) makes every fetch uncached in Beetle. It is a run-time
@@ -570,8 +652,28 @@ Each implementation PR removes the ids it closes. PR A (#429, §8) was the
 exception: it landed on master before this test did. This PR dropped its id,
 `bios-kseg1-fetch-charge`, when it was rebased onto it. The BIOS check stays
 as a regression guard: an OpenBIOS KSEG1 instruction without its own fetch
-reports that id again, as a new gap. The overlay half (§5.7)
-gets its own acceptance case in `runtime/tests/test_overlay_segment_gate.py`:
+reports that id again, as a new gap.
+
+PR B closes no id. It adds two more regression guards, which are
+`REGRESSION_GUARDS` in the test:
+- `bios-runtime-pc` (§5.2): no store-PC stamp, syscall EPC, break or
+  unaligned-access PC, or fallthrough PC in the OpenBIOS output names a ROM
+  address inside a relocated window. Before B, 2,295 distinct PCs did (3,328
+  PC and site-class pairs, since a `sh`/`sw` carries both a stamp and an
+  unaligned-access PC), all in the Kernel ramtext and Shell windows. The
+  output only shows the translations OpenBIOS exercises, and most
+  orphaned-delay-slot paths never inline a PC-bearing instruction there, so
+  the guard also requires every `StrictTranslator::translate()` call in
+  `full_function_emitter.cpp` to pass `relocate_ra()`.
+- `store-pc-keys-runtime` (§9): no `memory.c` store-PC key lies inside one of
+  SCPH1001.toml's relocated ROM windows. A key for relocated code must be the
+  runtime PC of its ROM store, computed from the profile's windows as
+  `BiosAddressModel::runtime_pc()` does, and must go through the gated
+  `scph1001_relocated_store()`; a bare RAM key would also match other BIOSes
+  and game code.
+
+The overlay half (§5.7) gets its own acceptance case in
+`runtime/tests/test_overlay_segment_gate.py`:
 - a KUSEG-compiled fixture shard runs natively for its KUSEG PC;
 - the same shard is interpreted for the KSEG0 and KSEG1 aliases.
 
@@ -610,8 +712,32 @@ It then spins. Procedure:
 - A cycle watch on the first layout, before these fixes, timed the pieces
   directly: 10 / 10 / 15 cycles from `probe_run` entry to `getpc`, and 8 / 8 /
   10 from `getpc` back.
-- The interpreter and compiled-build columns have not been run yet. Until
-  PR C, the compiled build is expected to show the §3.2 gaps (KSEG0 links).
+
+**Interpreter and compiled columns (PR B, 2026-09-29).** Both come from a probe
+runtime built like `tools/cycle_testrom`'s: disc boot, LLE, with `seeded`
+seeded as `0x800100E4`. The interpreter column needed a tooling fix:
+`PSX_FORCE_INTERP=1` had stopped affecting clean game text. It only marks
+pages dirty, and the native-safety checks now decide by the bytes, so B
+restores it.
+
+| | links | segment probes | T2 KUSEG / KSEG0 / KSEG1 |
+|---|---|---|---|
+| Beetle | `0x00010018/24/38` | `0x000100FC`, `0x800100FC`, `0xA00100FC` | 56 / 56 / 82 |
+| interpreter | same | same | 56 / 56 / 82 |
+| compiled (B = base) | `0x80010018/24/38` | `0x800100FC` × 3 | 56 / 20 / 20 |
+
+- These results are the same on OpenBIOS and SCPH-1001.
+- A cycle watch shows the same split. From one `probe_run` entry to the next,
+  Beetle and the interpreter take 90 and 90 cycles, and compiled code takes
+  90 and 54. From `probe_run` to `getpc`, Beetle and the interpreter take
+  10 / 10 / 15 and compiled code takes 10 / 1 / 1.
+- The compiled column is the expected set of gaps:
+  - links in KSEG0 (§3.2, closed by C);
+  - fetch tags in KSEG0, so the two alias runs hit the lines the home run
+    filled, where Beetle refills or runs uncached (`fetch-tag-segment`,
+    `alias-fetch-coherence`, C);
+  - no KSEG1 body (D).
+- The compiled probe output is byte-identical before and after B.
 
 **Other runs**
 - **§5.6 BIOS fix (PR A, #429): done, passed.** LLE boot (`bios_hle = false`)
@@ -646,7 +772,23 @@ log.
   code, including the store-PC stamps; proven by byte-identical regeneration
   of KSEG0 titles. The BIOS-emitter holes in §5.2 do change BIOS output. The
   store-PC one ships with the re-key of the seven `memory.c` keys: six
-  store-filter keys and the GP0 source key (§9).
+  store-filter keys and the GP0 source key (§9). Implemented 2026-09-29:
+  - R4 regenerates byte-identically: 53 files, including the dispatch table,
+    and all 26 overlay shard sources compiled from a race capture.
+  - Every changed BIOS line is a `runtime_pc()` move: 2,334 lines in OpenBIOS
+    and 12,501 in SCPH-1001. The dispatch tables are unchanged.
+  - LLE boot against Beetle matches the previous build at every anchor:
+    shell entry −126 on OpenBIOS and −454 on SCPH-1001, as in A's gate.
+  - The probe's total cycles to its spin are unchanged on both BIOSes.
+  - R4 fingerprints (12000 frames, cold and warm) agree on every column
+    that does not hash store PCs. `mmio` (a judge column whose ordered hash
+    includes the store PC) and the `pc` locator first differ at fingerprint
+    frame 4 and stay different, as rolling hashes do. An ordered recording
+    of `PSX_RECORD_FRAME=3` (12,238 entries) holds the whole difference: 102
+    store PCs moved from ROM to runtime in OpenBIOS's Kernel ramtext window.
+    `PSX_RECORD_FRAME=4` (14,474 entries) is identical.
+  - In an SCPH-1001 LLE boot, the GP0 source key fires for the same 5,596
+    commands in both builds.
 - **C: `feat/kuseg-linked-exe`** (§5.3, §5.5). Also rewrites the alias
   assertions in `test_kuseg_dispatch_lookup.py`: an alias with no body now
   misses. Closes eight ids: §5.3's seven and `segment-miss` (§5.5).
@@ -684,7 +826,7 @@ log.
   - Shell, which runs at `0x80030000`: the RAM filter keys `0xBFC3EEB4`
     (`0x80056EB4`), `0xBFC405E4` (`0x800585E4`), `0xBFC40788`
     (`0x80058788`) and `0xBFC41C50` (`0x80059C50`), and the GP0 source key
-    `0xBFC38B1C` (`0x80050B1C`, `memory.c:1294`).
+    `0xBFC38B1C` (`0x80050B1C`, `memory.c`'s GP0 write path).
 
   For these keys a filter fires, or the GP0 write gets a RAM source key,
   only while that code runs compiled. If the same code runs interpreted, the
@@ -692,10 +834,52 @@ log.
   BIOS stamp through `runtime_pc()` (§5.2) without re-keying would silently
   disable all seven. Re-keying them to runtime PCs in the same change also
   makes the interpreted path agree.
-- **Syscall EPC in compiled code** comes from `cpu->pc` (`traps.c:1040`), but
-  the emitted `syscall` site does not set it. Confirm what `cpu->pc` holds
-  there; §5.2's pass is the place to make it the syscall's own
-  `runtime_pc`.
+
+  **Re-keyed in PR B.** The SCPH-1001 output stamps each of the seven runtime
+  PCs exactly once, where it stamped the ROM key before; the four in-place ROM
+  keys (`0xBFC04E90`, `0xBFC04EF0`, `0xBFC05164`, `0xBFC0D634`) do not move.
+  The GP0 key is live during boot: frames 1-600 of an SCPH-1001 LLE boot send
+  46,850 GP0 commands, 5,596 of them keyed, identically before and after.
+
+  A RAM PC alone is ambiguous: another BIOS, or game code once the region is
+  reused, can run a store at the same address, where the old ROM key could
+  only match the compiled SCPH-1001 store. So each of the seven keys goes
+  through `scph1001_relocated_store(pc, rom)`, which matches only while the
+  active image is SCPH-1001 (by CRC) and the RAM word at `pc` is still the
+  ROM word it was copied from. That keeps each key to the one instruction it
+  named before:
+  - OpenBIOS, SCPH-101 and SCPH-5552 never match. SCPH-101 and SCPH-5552
+    have no address model, so their kernel (byte-identical to SCPH-1001's)
+    and their shells run interpreted and stamp runtime PCs; an ungated RAM
+    key would have started firing on them.
+  - Game code at those addresses never matches, on any BIOS.
+  - The one widening left is intended: SCPH-1001's own instruction now also
+    matches when it runs interpreted, as it already did compiled.
+
+  The filters themselves diverge from Beetle; PR B keeps them as they were.
+  At the segment probe's spin on SCPH-1001 (disc boot, LLE), Beetle's RAM
+  `0x0`-`0xB` holds `00000003 275A0C80 03400008`: the delay-loop scratch word
+  and the second and third words of the exception-vector stub. Native holds
+  zeros, because game start clears the low scratch
+  (`memory_clear_low_boot_scratch`) and the filters drop the later stores:
+  Beetle's write log shows the in-place ROM store `0xBFC0D634` writing word 0
+  after game start. That is ACCURACY_BURNDOWN axis 4 ("RAM 0x0-0xF boot
+  scratch"), to be decided with oracle evidence on its own.
+- **Syscall EPC in compiled code** comes from `cpu->pc` (`traps.c:1040`).
+  The BIOS emitter sets it; since PR B it sets the runtime PC. The game
+  emitter does not set it.
+  - Confirmed in PR B: under CPS a compiled game body runs with `cpu->pc ==
+    0`, because the entry switch consumes it.
+  - The game emitter also ignores `psx_syscall`'s transfer result. The BIOS
+    emitter returns on it.
+  - A game syscall that reaches the BIOS exception handler (anything but
+    Enter/ExitCriticalSection, which `psx_syscall` handles directly) would
+    therefore record EPC 0 and continue inline.
+  - R4 has two syscall sites, both Enter/ExitCriticalSection.
+  - The fix is to emit `cpu->pc = <runtime_pc>; if (psx_syscall(...))
+    return;`, as the BIOS emitter does. That changes the generated code of
+    every title with a syscall site, so it is its own oracle-backed change,
+    not part of B's byte-identical refactor.
 
 ## 10. Decisions (2026-09-29)
 
