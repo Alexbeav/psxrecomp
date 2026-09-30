@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+"""Acceptance ledger for segment-aware code (docs/SEGMENT_AWARE_CODE.md).
+
+A MIPS PC carries a segment: KUSEG 0x0xxxxxxx, KSEG0 0x8xxxxxxx or KSEG1
+0xAxxxxxxx. Beetle (the oracle) keeps it in the link value a jal/jalr/bgezal
+writes, in EPC, and in the I-cache tag. KSEG1 fetches are uncached and cost +4
+each. Compiled code bakes a single segment into all of these.
+
+This test synthesizes a KUSEG-linked PS-X EXE (tools/segment_testrom/
+gen_segment_exe.py) and runs the real recompilers on it. It then checks what
+they emit against a transcription of Beetle's fetch model. It uses:
+  - the emitted PC constants;
+  - the real emitted dispatch lookup, compiled and queried;
+  - the runtime's own I-cache model (runtime/src/psx_icache.c), fed the
+    emitted fetch sequence and compared with the per-instruction sequence
+    Beetle would execute.
+
+Each property the design must deliver is a check with a stable id. A failed
+check is a gap. KNOWN_GAPS lists the gaps that master has today. The test
+passes only when the set of observed gaps equals KNOWN_GAPS exactly:
+  - a new gap is a regression;
+  - a closed gap must be removed from the ledger in the same change.
+The implementation PRs shrink KNOWN_GAPS to empty. The MODEL checks (Beetle
+model == psx_icache.c, and the elision rule for cached code) must always pass.
+
+Usage: python test_segment_aware_codegen.py --recompiler <psxrecomp-game>
+           --bios-recompiler <psxrecomp-bios> [--compiler cc]
+Exit 0 = the observed gaps equal the ledger and every model check passes.
+"""
+import argparse
+import importlib.util
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
+RUNTIME = os.path.join(ROOT, "runtime")
+
+KUSEG, KSEG0, KSEG1 = 0x00000000, 0x80000000, 0xA0000000
+SEG_MASK, PHYS_MASK = 0xE0000000, 0x1FFFFFFF
+
+# id -> (design section, what is missing). Remove an entry in the change
+# that closes it; the test fails until the ledger matches.
+KNOWN_GAPS = {
+    "link-segment": ("5.3", "jal/jalr/bgezal links carry KSEG0, not the EXE's link segment"),
+    "fetch-tag-segment": ("5.3", "I-cache fetch tags carry KSEG0, not the link segment"),
+    "irq-resume-segment": ("5.3", "psx_check_interrupts_at resume PCs (future EPCs) carry KSEG0"),
+    "resume-pc-segment": ("5.3", "CPS exit PCs and continuation keys carry KSEG0"),
+    "store-pc-segment": ("5.3", "store-PC stamps (memory.c store filters read them) carry KSEG0"),
+    "home-seed-accepted": ("5.3", "a seed written in the EXE's own KUSEG segment is dropped"),
+    "alias-fetch-coherence": ("5.3", "a compiled body misses I-cache lines the interpreter filled at the real PC"),
+    "segment-variants": ("5.4", "a seeded KSEG1 entry gets no body of its own"),
+    "segment-miss": ("5.5", "an alias PC with no body of its own resolves to another segment's body"),
+    "kseg1-fetch-charge": ("5.6", "compiled KSEG1 code does not charge +4 per fetch"),
+}
+
+
+def load_generator():
+    path = os.path.join(ROOT, "tools", "segment_testrom", "gen_segment_exe.py")
+    spec = importlib.util.spec_from_file_location("gen_segment_exe", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# ---------------------------------------------------------------------------
+# Beetle fetch model, transcribed from libretro/beetle-psx-libretro
+# mednafen/psx/cpu.c @ a7f0811 (2026-09-27): ReadInstruction (lines 738-835)
+# and CPU_SetBIU (484-505). The tag compares the FULL virtual address (Beetle's
+# own comment at 719-730 notes that hardware strips bit 31 first). KSEG1, or a
+# cache disabled in BIU, costs +4 per fetch and fills nothing. A cached miss
+# costs 3, plus 1 for each word refilled from the missed word to the end of
+# the line. The BIOS enables the I-cache during boot (BIU bit 11), so that is
+# the state modeled here.
+# ---------------------------------------------------------------------------
+class BeetleICache:
+    def __init__(self):
+        self.tv = [0x2] * 1024   # CPU_Power with BIU enabled: TV = 0x2
+
+    def fetch(self, addr):
+        if self.tv[(addr & 0xFFC) >> 2] == addr:
+            return 0
+        if addr >= 0xA0000000:
+            return 4
+        line, base = addr & 0xFFFFFFF0, (addr & 0xFF0) >> 2
+        for i in range(4):
+            self.tv[base + i] = line | (i << 2) | 0x2
+        cost = 3
+        for i in range((addr & 0xC) >> 2, 4):
+            self.tv[base + i] &= ~0x2
+            cost += 1
+        return cost
+
+
+def beetle_cycles(seq):
+    model = BeetleICache()
+    return sum(model.fetch(a) for a in seq)
+
+
+ICACHE_HARNESS = r"""
+#include "cpu_state.h"
+#include "psx_icache.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int g_ls_replay_active = 0;
+static unsigned long long cycles;
+void psx_advance_cycles(uint32_t c) { cycles += c; }
+int main(void) {
+    CPUState cpu; char line[64];
+    memset(&cpu, 0, sizeof cpu);
+    while (fgets(line, sizeof line, stdin)) {
+        if (line[0] == 'R') { psx_icache_reset(); g_psx_icache_active = 1; cycles = 0; }
+        else if (line[0] == 'Q') { printf("%llu\n", cycles); }
+        else psx_icache_fetch(&cpu, (uint32_t)strtoul(line, 0, 16));
+    }
+    return 0;
+}
+"""
+
+DISPATCH_HARNESS_HEAD = r"""
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "psx_memory.h"
+typedef struct { uint32_t pc; } CPUState;
+static void dummy(CPUState* cpu) { (void)cpu; }
+static int dirty_ram_text_native_ok_ranges_from(const uint32_t* r, uint32_t n, uint32_t a) {
+    (void)r; (void)n; (void)a; return 1;
+}
+static int dirty_ram_text_native_ok_ranges(const uint32_t* r, uint32_t n) {
+    return dirty_ram_text_native_ok_ranges_from(r, n, 0);
+}
+static void psx_check_interrupts_dispatch_entry(CPUState* cpu, uint32_t a) { (void)cpu; (void)a; }
+int psx_vsync_query_hle_try(CPUState* cpu, uint32_t a) { (void)cpu; (void)a; return 0; }
+"""
+
+DISPATCH_HARNESS_MAIN = r"""
+int main(int argc, char** argv) {
+    psx_ram_reset_size_request();
+    psx_ram_apply_size_request();
+    for (int i = 1; i < argc; ++i) {
+        const PsxGameDispatchEntry* e = psx_game_find_entry((uint32_t)strtoul(argv[i], 0, 16));
+        printf("%ld\n", e ? (long)(e - k_psx_game_dispatch) : -1L);
+    }
+    return 0;
+}
+"""
+
+
+def cc(compiler, sources, include, out, defines=()):
+    name = os.path.basename(compiler).lower()
+    if name in ("cl", "cl.exe", "clang-cl", "clang-cl.exe"):
+        cmd = [compiler, "/nologo", "/Od", "/I" + include] + ["/D" + d for d in defines]
+        cmd += sources + ["/Fe:" + out]
+    else:
+        cmd = [compiler, "-std=c11", "-O2", "-I", include] + ["-D" + d for d in defines]
+        cmd += sources + ["-o", out]
+    subprocess.run(cmd, check=True, cwd=os.path.dirname(out))
+
+
+class ICacheModel:
+    """runtime/src/psx_icache.c, compiled once and fed batches of sequences."""
+
+    def __init__(self, compiler, tmp):
+        src = os.path.join(tmp, "icache_harness.c")
+        with open(src, "w") as f:
+            f.write(ICACHE_HARNESS)
+        self.exe = os.path.join(tmp, "icache_harness" + (".exe" if os.name == "nt" else ""))
+        cc(compiler, [src, os.path.join(RUNTIME, "src", "psx_icache.c")],
+           os.path.join(RUNTIME, "include"), self.exe,
+           ("PSX_ENABLE_BLOCK_CYCLES=1", "PSX_OVERLAY_DLL_BUILD=1"))
+
+    def cycles(self, seqs):
+        script = "".join("R\n" + "".join("%08X\n" % a for a in s) + "Q\n" for s in seqs)
+        out = subprocess.run([self.exe], input=script, capture_output=True, text=True,
+                             check=True).stdout.split()
+        return [int(x) for x in out]
+
+
+def run_recompiler(binary, args):
+    r = subprocess.run([binary] + args, cwd=ROOT, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("%s failed:\n%s" % (os.path.basename(binary), r.stderr or r.stdout))
+    return r.stdout + r.stderr
+
+
+def parse_functions(out_dir, pattern):
+    bodies = {}
+    for name in sorted(os.listdir(out_dir)):
+        if not re.match(pattern, name):
+            continue
+        with open(os.path.join(out_dir, name)) as f:
+            text = f.read()
+        for m in re.finditer(r"^(?:static )?void (func_[0-9A-F]{8})\(CPUState\* cpu\)\s*\{(.*?)^\}",
+                             text, re.M | re.S):
+            bodies[m.group(1)] = m.group(2)
+    return bodies
+
+
+PC_SITES = {
+    "link-segment": r"cpu->gpr\[31\] = 0x([0-9A-F]{8})u;\s*/\* (?:jal|jalr|branch-and-link) ",
+    "fetch-tag-segment": r"psx_icache_fetch\(cpu, 0x([0-9A-F]{8})u\)",
+    "irq-resume-segment": r"psx_check_interrupts_at\(cpu, 0x([0-9A-F]{8})u\)",
+    "resume-pc-segment": r"cpu->pc = 0x([0-9A-F]{8})u;|case 0x([0-9A-F]{8})u: goto",
+    # Not a debug-only breadcrumb: memory.c's RAM 0x0-0xF store filters compare
+    # it with exact PCs in every build, and the interpreter stamps the full PC.
+    "store-pc-segment": r"g_debug_last_store_pc = 0x([0-9A-F]{8})u;",
+}
+
+
+def pc_constants(body, pattern):
+    for m in re.finditer(pattern, body):
+        yield int(next(g for g in m.groups() if g), 16)
+
+
+def block_fetches(body, block_va):
+    """Emitted fetch tags from block_<va> up to the next block label."""
+    m = re.search(r"^block_%08X:(.*?)(?=^block_[0-9A-F]{8}:|\Z)" % block_va, body, re.M | re.S)
+    if not m:
+        return None
+    return [int(x, 16) for x in re.findall(r"psx_icache_fetch\(cpu, 0x([0-9A-F]{8})u\)", m.group(1))]
+
+
+def bios_uncharged_kseg1(bios_c):
+    """Emitted instructions that run at a KSEG1 PC without a fetch of their own.
+
+    A fetch call names the runtime PC of the next emitted instruction. Its
+    followers run at that PC plus their compile-address distance.
+    """
+    fetch = re.compile(r"psx_icache_fetch\(cpu, 0x([0-9A-F]{8})u\)")
+    insn = re.compile(r"/\* 0x([0-9A-F]{8}): [0-9A-F]{8} ")
+    func = re.compile(r"^(?:static )?void \w+\(CPUState")
+    total = uncharged = 0
+    pending = base = None
+    for line in bios_c.splitlines():
+        if func.match(line):
+            pending = base = None
+            continue
+        m = fetch.search(line)
+        if m:
+            pending = int(m.group(1), 16)
+            continue
+        m = insn.search(line)
+        if not m:
+            continue
+        rom = int(m.group(1), 16)
+        if pending is not None:
+            base, runtime, charged, pending = (rom, pending), pending, True, None
+        elif base:
+            runtime, charged = base[1] + (rom - base[0]), False
+        else:
+            continue
+        if runtime >= KSEG1:
+            total += 1
+            uncharged += not charged
+    return total, uncharged
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--recompiler",
+                    default=os.path.join(ROOT, "recompiler", "build", "psxrecomp-game"))
+    ap.add_argument("--bios-recompiler",
+                    default=os.path.join(ROOT, "recompiler", "build", "psxrecomp-bios"))
+    ap.add_argument("--compiler",
+                    default=os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc"))
+    args = ap.parse_args()
+    for b in (args.recompiler, args.bios_recompiler):
+        if not os.path.isfile(b):
+            raise SystemExit("recompiler not found: %s (build it first)" % b)
+    if not args.compiler:
+        raise SystemExit("a C compiler is required")
+
+    gen = load_generator()
+    info = gen.probes()
+    L = info["labels"]
+    link = info["link_segment"]
+    gaps, notes, model_fail = set(), {}, []
+
+    def at(seg, label):
+        return seg | (L[label] & PHYS_MASK)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = os.path.join(tmp, "segment_testrom.exe")
+        with open(exe, "wb") as f:
+            f.write(gen.build())
+        seeds_home = os.path.join(tmp, "seeds_home.txt")
+        seeds_all = os.path.join(tmp, "seeds_all.txt")
+        with open(seeds_home, "w") as f:
+            f.write("".join("0x%08X\n" % a for a in info["seeds"]["home"]))
+        with open(seeds_all, "w") as f:
+            f.write("".join("0x%08X\n" % a
+                            for a in info["seeds"]["home"] + info["seeds"]["variants"]))
+
+        # -- 3.2: a seed in the link segment is an entry of this EXE ----------
+        log = run_recompiler(args.recompiler,
+                             [exe, "--seeds", seeds_home, "--out-dir", os.path.join(tmp, "home")])
+        m = re.search(r"Loaded (\d+) extra function addresses", log)
+        loaded = int(m.group(1)) if m else -1
+        if loaded != len(info["seeds"]["home"]):
+            gaps.add("home-seed-accepted")
+            notes["home-seed-accepted"] = "loaded %d of %d" % (loaded, len(info["seeds"]["home"]))
+
+        out = os.path.join(tmp, "all")
+        run_recompiler(args.recompiler, [exe, "--seeds", seeds_all, "--out-dir", out])
+        bodies = parse_functions(out, r".*_full(_\d+)?\.c$")
+        disp_name = next(n for n in os.listdir(out) if n.endswith("_dispatch.c"))
+        with open(os.path.join(out, disp_name)) as f:
+            dsrc = f.read()
+
+        # -- the real emitted lookup, compiled and queried --------------------
+        rows = [(int(a, 16), int(r, 16), fn) for a, r, fn in re.findall(
+            r"\{0x([0-9A-F]{8})u, 0x([0-9A-F]{8})u, \d+u, \d+u, (func_[0-9A-F]{8})\}", dsrc)]
+        begin = dsrc.index("int psx_game_address_in_text(uint32_t addr) {")
+        end = dsrc.index("/* 1 iff addr is a re-enterable", begin)
+        fragment = dsrc[begin:end]
+        harness = DISPATCH_HARNESS_HEAD
+        harness += "".join("#define %s dummy\n" % fn
+                           for fn in sorted(set(re.findall(r"func_[0-9A-F]{8}", fragment))))
+        harness += fragment + DISPATCH_HARNESS_MAIN
+        hsrc = os.path.join(tmp, "dispatch_harness.c")
+        with open(hsrc, "w") as f:
+            f.write(harness)
+        hexe = os.path.join(tmp, "dispatch_harness" + (".exe" if os.name == "nt" else ""))
+        cc(args.compiler, [hsrc, os.path.join(RUNTIME, "src", "psx_ram_geometry.c")],
+           os.path.join(RUNTIME, "include"), hexe)
+
+        home_q = [at(link, n) for n in ("main", "leaf", "seeded", "probe_run", "getpc")]
+        variant_q = [at(s, n) for s in (KSEG0, KSEG1) for n in ("probe_run", "getpc")]
+        miss_q = [at(s, n) for s in (KSEG0, KSEG1) for n in ("leaf", "main")
+                  if at(s, n) not in variant_q]
+        queries = home_q + variant_q + miss_q
+        res = subprocess.run([hexe] + ["%08X" % q for q in queries], capture_output=True,
+                             text=True, check=True).stdout.split()
+        found = {q: (rows[int(i)] if int(i) >= 0 else None) for q, i in zip(queries, res)}
+
+        # -- 3.3: every compiled (segment, entry) has its own body, others miss
+        bad = [q for q in variant_q if not found[q] or found[q][0] != q]
+        if bad:
+            gaps.add("segment-variants")
+            notes["segment-variants"] = ", ".join(
+                "0x%08X->%s" % (q, "0x%08X" % found[q][0] if found[q] else "miss") for q in bad)
+        wrong_home = [q for q in home_q if not found[q] or found[q][0] != q]
+        stray = [q for q in miss_q if found[q]]
+        if stray or wrong_home:
+            gaps.add("segment-miss")
+            notes["segment-miss"] = ", ".join(
+                "0x%08X->0x%08X" % (q, found[q][0]) for q in stray + wrong_home if found[q])
+
+        # -- 3.1: every PC a home body bakes is in the link segment ----------
+        home_bodies = sorted({found[q][2] for q in home_q if found[q]}) or sorted(bodies)
+        for gid, pattern in PC_SITES.items():
+            off = sorted({pc for fn in home_bodies for pc in pc_constants(bodies[fn], pattern)
+                          if (pc & SEG_MASK) != link})
+            if off:
+                gaps.add(gid)
+                notes[gid] = "%d constants, e.g. 0x%08X" % (len(off), off[0])
+
+        icache = ICacheModel(args.compiler, tmp)
+        straight = [pc & PHYS_MASK for pc in info["straight"]]
+        leaf = [L["leaf"] & PHYS_MASK, (L["leaf"] & PHYS_MASK) + 4]
+
+        # -- MODEL: psx_icache.c agrees with the Beetle transcription --------
+        model_seqs = [
+            [link | a for a in straight] * 2,                      # cold then warm, cached
+            [KSEG0 | a for a in straight] + [KUSEG | a for a in straight],  # alias refill
+            [KSEG1 | a for a in straight] * 2,                     # uncached both times
+            [KSEG0 | (straight[0] + 8), KSEG0 | straight[0]],      # partial refill
+        ]
+        for seq, got in zip(model_seqs, icache.cycles(model_seqs)):
+            if got != beetle_cycles(seq):
+                model_fail.append("psx_icache.c %d != Beetle %d on %s" % (
+                    got, beetle_cycles(seq), " ".join("%08X" % a for a in seq[:4])))
+
+        # -- MODEL: leader-only fetch emission is exact for cached code ------
+        home_run = found[at(link, "probe_run")]
+        if home_run:
+            tags = block_fetches(bodies[home_run[2]], home_run[0] - L["probe_run"] + L["probe_run_straight"])
+            want = beetle_cycles([link | a for a in straight])
+            got = icache.cycles([tags])[0] if tags else -1
+            if got != want:
+                model_fail.append("cached leader elision: emitted %d != Beetle %d" % (got, want))
+
+        # -- 5: KSEG1 code charges +4 for every fetch -------------------------
+        k1 = found[at(KSEG1, "probe_run")]
+        tags = (block_fetches(bodies[k1[2]], at(KSEG1, "probe_run_straight"))
+                if k1 and k1[0] == at(KSEG1, "probe_run") else None)
+        want = beetle_cycles([KSEG1 | a for a in straight])
+        got = icache.cycles([tags])[0] if tags else None
+        if got != want:
+            gaps.add("kseg1-fetch-charge")
+            notes["kseg1-fetch-charge"] = ("no KSEG1 body" if got is None else
+                                           "emitted %d, Beetle %d" % (got, want))
+
+        # -- 3.1: interpreter and compiled body share I-cache lines ----------
+        # The PR #417 shape: the interpreter (or other code) ran `leaf` at its
+        # real PC, then the compiled body runs it. Beetle hits the second time.
+        lf = found[at(link, "leaf")]
+        tags = block_fetches(bodies[lf[2]], lf[0]) if lf else None
+        interp = [link | a for a in leaf]
+        want = beetle_cycles(interp + interp)
+        got = icache.cycles([interp + tags])[0] if tags else None
+        if got != want:
+            gaps.add("alias-fetch-coherence")
+            notes["alias-fetch-coherence"] = "emitted %s, Beetle %d" % (got, want)
+
+    # -- 5: the BIOS emitter charges every KSEG1 (ROM) fetch ------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        run_recompiler(args.bios_recompiler,
+                       ["--config", os.path.join(ROOT, "bios", "OpenBIOS.toml"), "--out-dir", tmp])
+        with open(os.path.join(tmp, "OpenBIOS_full.c")) as f:
+            total, uncharged = bios_uncharged_kseg1(f.read())
+    if total == 0:
+        model_fail.append("OpenBIOS: no KSEG1 instructions found (parser drift?)")
+    elif uncharged:
+        gaps.add("bios-kseg1-fetch-charge")
+        notes["bios-kseg1-fetch-charge"] = "%d of %d KSEG1 instructions uncharged" % (uncharged, total)
+
+    known = set(KNOWN_GAPS)
+    print("segment-aware codegen ledger (docs/SEGMENT_AWARE_CODE.md):")
+    for gid in sorted(known | gaps):
+        state = ("gap" if gid in gaps else "closed")
+        sec = KNOWN_GAPS.get(gid, ("?", ""))[0]
+        print("  %-24s %-6s section %-4s %s" % (gid, state, sec, notes.get(gid, "")))
+    for msg in model_fail:
+        print("  MODEL FAIL: " + msg)
+
+    new, closed = gaps - known, known - gaps
+    if new:
+        print("FAIL: new gap(s), a regression: " + ", ".join(sorted(new)))
+    if closed:
+        print("FAIL: gap(s) closed; remove them from KNOWN_GAPS: " + ", ".join(sorted(closed)))
+    if new or closed or model_fail:
+        return 1
+    print("PASS: %d known gap(s), model checks exact" % len(gaps))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

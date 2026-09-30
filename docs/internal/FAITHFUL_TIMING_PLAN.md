@@ -213,6 +213,30 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-29 (segment-aware code — rebased after #429, #431 and #433 merged):**
+  PR A (#429) is on master, so the ledger no longer lists `bios-kseg1-fetch-charge`
+  and `segment_aware_codegen` passes with 10 known gaps. Its OpenBIOS check stays as a
+  regression guard. docs/SEGMENT_AWARE_CODE.md §5.6, §7.1 and §8 record A as landed;
+  PR D now needs only the KSEG1 variants (`kseg1-fetch-charge` stays open until D).
+  §5.6 notes that PR B must route `emit_pre_icache`'s `psx_fetch_uncached()` argument,
+  not just the fetch tag, through `runtime_pc()`. The macOS oracle recipe is
+  docs/beetle-macos.md (#431). Emitter line citations refreshed for #429's shift.
+  No behaviour change.
+
+- **2026-09-29 (segment-aware code — rebased on master, first Beetle run of the probe):**
+  #417, #418 and #420 merged; the design branch (#419) is rebased onto master and
+  docs/SEGMENT_AWARE_CODE.md now records PR A (#429) and its passed LLE land gate
+  (shell entry −126 OpenBIOS / −454 SCPH-1001; residue = the IsC gap and SCPH-1001's
+  KSEG1 kernel entry `0xA0000500`, −9, which PR D closes). The synthetic EXE ran in
+  psx-beetle on macOS (recipe #431). Disc boot works on OpenBIOS and SCPH-1001;
+  sideloading does not, because Beetle's loader forces a KSEG0 start. Links
+  `0x00010018/24/38` and the three segment probes came back as designed. The T2 deltas
+  were garbage: the subtraction sat in the load delay slot, unmasked. Fixed (`nop`,
+  `andi 0xFFFF`), and the call sites and `probe_run` are line-aligned. Beetle now
+  reads 56/56/82 cycles for KUSEG/KSEG0/KSEG1 on both BIOSes, a 26-cycle KSEG1
+  surcharge equal to the fetch model's. Ledger unchanged (11 ids); cited source lines
+  refreshed for current master. No behaviour change.
+
 - **2026-09-29 (cache-isolated stores reach the caches, as in Beetle):**
   memory.c dropped every store made while SR.IsC was set, so the I-cache model
   never saw FlushCache (A 44h) or the boot cache init. Beetle's
@@ -422,6 +446,35 @@ on a fixed region -> next.
   497 one-write straddles, the same count #420 reported. With FMV-quiet on,
   warm/cold is IDENTICAL over 8076 frames, with 497 carried shifts. Self-test:
   ctest `fp_identity`.
+
+- **2026-09-29 (segment-aware code — owner decisions, store-PC correction, no behaviour change):**
+  docs/SEGMENT_AWARE_CODE.md §10 records the owner's four decisions, all as recommended:
+  I-cache tags follow Beetle (hardware bit-31 difference recorded, ACCURACY_BURNDOWN
+  axis 4); static-code segment misses interpret loudly until regenerated; extra
+  segments come from segment-qualified seeds; the overlay cache uses per-segment
+  subdirectories. Correction: `g_debug_last_store_pc` is not debug-only. memory.c's
+  store filters (RAM 0x0-0xF, opt-in Tomba EvCB) compare it with exact PCs, and its
+  GP0 write path (1292) keys the widescreen GP0 source on `0xBFC38B1C`; both run in
+  every build. #420 (ABI v24) forwards overlay stamps to the host. It is now a baked PC that goes through
+  `runtime_pc()`. Option A's re-measured cost with the 1,261 store-PC stamps is
+  +3.8 % / +27.6 % (it was +3.2 % / +27.2 %). New ledger id `store-pc-segment` (11 known gaps).
+  Seven memory.c keys in SCPH1001's relocated windows name ROM addresses (six
+  store-filter keys and the GP0 key `0xBFC38B1C`, runtime `0x80050B1C`) and must be
+  re-keyed with the BIOS stamp (§9). Rollout PR A (`fix/uncached-fetch-per-insn`,
+  on master) is in preparation; the ledger drops `bios-kseg1-fetch-charge` when
+  this branch is rebased after A lands.
+
+- **2026-09-28 (segment-aware code — design + acceptance ledger, no behaviour change):**
+  docs/SEGMENT_AWARE_CODE.md. Compiled code bakes KSEG0 into links, CPS/IRQ resume PCs
+  and I-cache tags; KUSEG-linked EXEs (Kula World, Alien Resurrection) run KUSEG PCs
+  through those bodies, and KUSEG seeds are silently dropped. New finding: both
+  emitters charge the uncached KSEG1 fetch (+4, Beetle ReadInstruction) only at line
+  leaders, so compiled BIOS ROM code is 4 cycles short on 5,477 of 9,592 OpenBIOS KSEG1
+  sites vs the interp and Beetle. Recommends per-segment compiled variants (0 cost for
+  KSEG0 titles) over segment-relative emission (measured +3.2 % / +27.2 % .text on R4).
+  Ledger `recompiler/tests/test_segment_aware_codegen.py` (synthetic KUSEG EXE,
+  Beetle fetch transcription vs psx_icache.c): 10 known gaps, model checks exact.
+  Not a live Beetle run (no oracle binary on the Mac); §7.2 lists the oracle runs.
 
 - **2026-09-13 (SIO card hack removal — branch-only review checkpoint):**
   Reproduced fixed-Ape-RAM IRQ7/mask injection after an absent-card probe,
