@@ -73,6 +73,15 @@ if(BUILD_TESTING)
         set_tests_properties(sio_card_irq_integrity_${scenario} PROPERTIES
             ENVIRONMENT "PSX_APE_CARD_UNSTICK=1")
     endforeach()
+    # Pad and memory card bus bytes, hashed against recorded goldens: 2 ports,
+    # and 5 players for the multitap seats.
+    foreach(_players IN ITEMS 2 5)
+        set(_target sio_pad_bus_identity_p${_players}_test)
+        add_executable(${_target} tests/test_sio_pad_bus_identity.c)
+        target_include_directories(${_target} PRIVATE include)
+        target_compile_definitions(${_target} PRIVATE PSX_MAX_PLAYERS=${_players})
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
     # Optional real-hardware regression. Configure its dependencies explicitly;
     # absence must remain visible, never counted as a passing GPU test.
     set(PSX_GL_READBACK_SDL_ROOT "" CACHE PATH "SDL3 static build root for GL readback test")
