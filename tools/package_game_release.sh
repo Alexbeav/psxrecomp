@@ -243,19 +243,13 @@ if [[ ! -d "${EXE_DIR}/assets/fonts" || ! -d "${EXE_DIR}/assets/img" ]]; then
   echo "error: ${EXE_DIR}/assets/{fonts,img} missing -- rebuild ${RUNTIME_TARGET}" >&2
   exit 1
 fi
+# Everything runtime.cmake staged under <exe>/assets ships as a unit: fonts,
+# img, and the window icon it places at assets/psxrecomp.png (APP_ICON).
 mkdir -p "${STAGE}/assets"
-cp -a "${EXE_DIR}/assets/fonts" "${STAGE}/assets/"
-cp -a "${EXE_DIR}/assets/img" "${STAGE}/assets/"
+cp -a "${EXE_DIR}/assets/." "${STAGE}/assets/"
 if [[ ! -f "${STAGE}/assets/img/boxart.tga" && -f "${ROOT}/launcher_assets/img/boxart.tga" ]]; then
   cp -a "${ROOT}/launcher_assets/img/boxart.tga" "${STAGE}/assets/img/boxart.tga"
 fi
-# Window icon staged by runtime.cmake beside the exe (see APP_ICON).
-shopt -s nullglob
-for icon in "${EXE_DIR}"/psxrecomp.png "${EXE_DIR}"/*.png; do
-  cp -a "${icon}" "${STAGE}/"
-  break
-done
-shopt -u nullglob
 
 # Bundled OpenBIOS: runtime.cmake stages the exact image the compiled backend
 # consumed plus its MIT notice at <exe>/bios/. The runtime resolves
@@ -423,7 +417,9 @@ if [[ "${#forbidden[@]}" -gt 0 ]]; then
   printf '  %s\n' "${forbidden[@]}" >&2
   exit 1
 fi
-bad_bios="$(find "${STAGE}" -type f \( -iname 'SCPH*' -o -iname '*.BIN' -o -iname '*.bin' \) \
+# BIOS *profiles* (SCPH1001.toml inside overlay_toolchain/bios) are text the
+# toolchain needs; only image files are forbidden.
+bad_bios="$(find "${STAGE}" -type f \( \( -iname 'SCPH*' -a ! -iname '*.toml' \) -o -iname '*.bin' \) \
     ! -path "${STAGE}/bios/openbios.bin" 2>/dev/null || true)"
 if [[ -n "${bad_bios}" ]]; then
   echo "error: BIOS image(s) other than the bundled OpenBIOS in the stage:" >&2
