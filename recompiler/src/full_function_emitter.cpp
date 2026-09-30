@@ -2235,10 +2235,13 @@ void FullFunctionEmitter::emit_dispatch(
     out += "extern uint64_t g_dispatch_static_hits;\n";
     out += "\n";
     out += "extern int g_psx_dispatch_depth;  /* runtime-owned: shared dispatch state, not per-image */\n\n";
+    // Return PCs are compared in full, segment included, as psx_call_contract
+    // does (docs/SEGMENT_AWARE_CODE.md §5.5): stop_addr is the link the call
+    // wrote, in its body's segment.
     out += "static void psx_dispatch_check_return_boundary(CPUState* cpu, uint32_t stop_addr) {\n";
     out += "    if (stop_addr != 0u) {\n";
     out += "        psx_check_interrupts_at(cpu, stop_addr);\n";
-    out += "        if (((cpu->pc ^ stop_addr) & 0x1FFFFFFFu) == 0) cpu->pc = 0;\n";
+    out += "        if (cpu->pc == stop_addr) cpu->pc = 0;\n";
     out += "    } else {\n";
     out += "        psx_check_interrupts(cpu);\n";
     out += "    }\n";
@@ -2400,7 +2403,7 @@ void FullFunctionEmitter::emit_dispatch(
     out += "             * holds the guest's true target.  Resolve here iff the\n";
     out += "             * wild flow arrived exactly at this call's contract. */\n";
     out += "            if (stop_addr != 0 &&\n";
-    out += "                ((cpu->pc ^ stop_addr) & 0x1FFFFFFFu) == 0 &&\n";
+    out += "                cpu->pc == stop_addr &&\n";
     out += "                cpu->gpr[29] == sp_at_call) {\n";
     out += "                g_psx_call_bail = 0;\n";
     out += "                g_psx_bail_resolved++;\n";
@@ -2425,7 +2428,7 @@ void FullFunctionEmitter::emit_dispatch(
     out += "        if (cpu->pc == 0) {\n";
     out += "            if (stop_addr != 0 &&\n";
     out += "                (cpu->gpr[29] != sp_at_call ||\n";
-    out += "                 ((cpu->gpr[31] ^ stop_addr) & 0x1FFFFFFFu) != 0)) {\n";
+    out += "                 cpu->gpr[31] != stop_addr)) {\n";
     out += "                /* Callee C-returned but the guest did not return to\n";
     out += "                 * this call site ($ra holds the wild jr's target):\n";
     out += "                 * begin the bail unwind instead of resuming the\n";
@@ -2465,7 +2468,7 @@ void FullFunctionEmitter::emit_dispatch(
     out += "            int sp0_exc_ = ((uint32_t)(sp0_ - 0x1F800000u) < 0x400u);\n";
     out += "            int sp1_exc_ = ((uint32_t)(sp1_ - 0x1F800000u) < 0x400u);\n";
     out += "            int exc_sp_straddle_ =\n";
-    out += "                (((cpu->gpr[31] ^ stop_addr) & 0x1FFFFFFFu) == 0) &&\n";
+    out += "                (cpu->gpr[31] == stop_addr) &&\n";
     out += "                (sp0_exc_ != sp1_exc_);\n";
     out += "            if (cpu->gpr[29] != sp_at_call && !exc_sp_straddle_) {\n";
     out += "                /* Same address, different frame (recursion or a wild\n";
