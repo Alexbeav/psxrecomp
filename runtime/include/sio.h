@@ -197,6 +197,19 @@ int sio_get_pad_connected(int slot);
 int sio_get_pad_analog(int slot);
 void sio_get_pad_sticks(int slot, uint8_t out[4]);
 
+/* ---- Port device kind ----
+ * Which device answers on a logical pad slot. SIO_DEVICE_PAD (the default) is
+ * the digital pad / DualShock above. The kind is a host preference (which plug
+ * is in the port), like the multitap: it survives sio_init and is not part of
+ * the snapshot wire. Setting a slot to a different kind clears the slot's
+ * DualShock config latch, analog-mode lock, pending type request and rumble
+ * map, so nothing of the old device carries over; setting the kind it already
+ * has changes nothing. A kind this build does not know selects the pad.
+ * Connection is still sio_set_pad_connected. */
+#define SIO_DEVICE_PAD 0
+void sio_set_port_device(int slot, int kind);
+int  sio_get_port_device(int slot);
+
 /* ---- SIO byte-level trace ring buffer ----
  * 1M entries × ~28 B ≈ 32 MB.  At ~600 byte/sec that's ~30 min of history. */
 #define SIO_TRACE_CAP (1 << 20)

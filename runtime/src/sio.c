@@ -152,6 +152,12 @@ static int8_t pad_type_req[PSX_MAX_PLAYERS] = {
     PSX_PAD_INIT(-1)
 };
 
+/* Device kind per logical slot (SIO_DEVICE_*; SIO_DEVICE_PAD = 0 is the
+ * default). A host preference, like the multitap: sio_init keeps it and the
+ * snapshot wire does not carry it, so a slot that stays a pad answers exactly
+ * as it did before kinds existed. */
+static PSX_BSS uint8_t pad_device_kind[PSX_MAX_PLAYERS];
+
 /* ---- Logical pad ↔ physical SIO port mapping ----
  *
  * Multitap off (default / PSX_MAX_PLAYERS==2):
@@ -956,6 +962,8 @@ void sio_netplay_canonicalize_session_pads(int slot_count)
         active_device = DEV_NONE;
 
     for (i = 0; i < PSX_MAX_PLAYERS; i++) {
+        /* Netplay carries pad blobs only; every seat is a pad on every peer. */
+        sio_set_port_device(i, SIO_DEVICE_PAD);
         if (i < slot_count) {
             sio_connect_pad(i);
             /* Immediate digital — sio_request_pad_type is deferred and left
@@ -1085,6 +1093,38 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]) {
     }
     out[0] = pad_stick[slot][0]; out[1] = pad_stick[slot][1];
     out[2] = pad_stick[slot][2]; out[3] = pad_stick[slot][3];
+}
+
+/* Device kinds this build can present on a slot. */
+static int port_device_known(int kind) {
+    switch (kind) {
+    case SIO_DEVICE_PAD:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+void sio_set_port_device(int slot, int kind) {
+    if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
+    const uint8_t k = port_device_known(kind) ? (uint8_t)kind
+                                              : (uint8_t)SIO_DEVICE_PAD;
+    /* Re-asserting the same kind (hotplug, a settings refresh) must not
+     * disturb a DualShock's config latch or rumble map. */
+    if (pad_device_kind[slot] == k) return;
+    pad_device_kind[slot] = k;
+    /* A different plug: nothing of the old device's state carries over. */
+    pad_in_config[slot] = 0;
+    pad_type_req[slot] = -1;
+    analog_mode_locked[slot] = 0;
+    memset(pad_rumble_map[slot], 0xFF, sizeof(pad_rumble_map[slot]));
+    pad_rumble_small[slot] = 0;
+    pad_rumble_large[slot] = 0;
+}
+
+int sio_get_port_device(int slot) {
+    return (slot >= 0 && slot < PSX_MAX_PLAYERS) ? pad_device_kind[slot]
+                                                 : SIO_DEVICE_PAD;
 }
 
 /* ── LEGACY pad-config compatibility (Tomba "Hybrid" controller) ─────────────

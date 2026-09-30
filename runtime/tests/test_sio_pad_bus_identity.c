@@ -12,7 +12,12 @@
  * of pad or card traffic fails here; a change that means to move one must
  * record new goldens and say why.
  *
- * usage: <exe> [--print] [--trace]
+ * With --touch-kinds, every slot is first switched to each other device kind
+ * the build knows (sio_set_port_device) and back to the pad. That run must
+ * give the same hash: a port that was another device and became a pad again
+ * answers like a pad that never left.
+ *
+ * usage: <exe> [--touch-kinds] [--print] [--trace]
  *   --print  print the hash instead of checking it
  *   --trace  also print every transaction's reply bytes
  * One run per process: sio_init deliberately keeps its diagnostic sequence
@@ -168,17 +173,42 @@ static void script(void) {
 #define GOLDEN2 0x8C04005D77A6E414ull
 #define GOLDEN5 0x81169F9AABC77675ull
 
+/* Plug every other known device kind into every slot, then the pad again.
+ * sio_set_port_device selects the pad for a kind it does not know, so only
+ * the kinds this build has are really visited. Returns how many were. */
+static int touch_other_kinds(void) {
+    int visited = 0;
+    for (int k = SIO_DEVICE_PAD + 1; k < 16; ++k) {
+        for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
+            sio_set_port_device(s, k);
+            if (sio_get_port_device(s) == k && s == 0) visited++;
+            sio_set_port_device(s, SIO_DEVICE_PAD);
+            if (sio_get_port_device(s) != SIO_DEVICE_PAD) {
+                fprintf(stderr, "FAIL: slot %d did not return to the pad\n", s);
+                exit(1);
+            }
+        }
+    }
+    return visited;
+}
+
 int main(int argc, char **argv) {
-    int print = 0;
+    int print = 0, touch = 0, visited = 0;
     for (int a = 1; a < argc; ++a) {
         if (!strcmp(argv[a], "--print")) print = 1;
         else if (!strcmp(argv[a], "--trace")) trace = 1;
-        else { fprintf(stderr, "usage: %s [--print] [--trace]\n", argv[0]); return 2; }
+        else if (!strcmp(argv[a], "--touch-kinds")) touch = 1;
+        else {
+            fprintf(stderr, "usage: %s [--touch-kinds] [--print] [--trace]\n", argv[0]);
+            return 2;
+        }
     }
     const uint64_t golden = PSX_MAX_PLAYERS >= 5 ? GOLDEN5 : GOLDEN2;
     hash = 0xCBF29CE484222325ull;
     sio_init();
+    if (touch) visited = touch_other_kinds();
     script();
+    if (touch) printf("other device kinds visited: %d\n", visited);
     if (print) {
         printf("players=%d bytes=%u hash=0x%016llXull\n",
                PSX_MAX_PLAYERS, bytes, (unsigned long long)hash);
