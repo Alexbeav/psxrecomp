@@ -1627,7 +1627,12 @@ function(psxrecomp_add_runtime_target target)
                 string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
                 set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
                 file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
-                target_sources(${target} PRIVATE "${_psxrt_rc}")
+                # The icon has no dependency on runtime macros or headers.
+                # Compile it separately: windres launches a preprocessor through
+                # a shell, which cannot round-trip the executable's quoted
+                # string definitions (notably the pipe-separated BIOS stems).
+                add_library(${target}_app_icon OBJECT "${_psxrt_rc}")
+                target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_app_icon>)
                 message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (RC=${CMAKE_RC_COMPILER})")
             else()
                 message(WARNING
