@@ -31,9 +31,13 @@ def main() -> int:
 
     resume = body("static int savestate_resume_inputs_held", "static int savestate_input_guard_active")
     rewind = body("static void rewind_poll_nav", "static void rewind_pause_present")
+    # GunCon keyboard controls (PS1B-305): read only while `live`, which
+    # requires focus. The definition, not the forward declaration.
+    guncon = body("static void sample_guncon_ports(void) {", "static void runtime_settings_menu_handle_key")
 
     for name, guarded in (("pad_from_keyboard", keyboard), ("pad_sticks_for", sticks),
-                          ("controller_policy_dpad_active", dpad), ("capture_pad_slot", capture)):
+                          ("controller_policy_dpad_active", dpad), ("capture_pad_slot", capture),
+                          ("sample_guncon_ports", guncon)):
         assert "host_hotkey_input_focused()" in guarded, name
         # The guard must come before the key array is read.
         assert guarded.index("host_hotkey_input_focused()") < guarded.index("SDL_GetKeyboardState"), name
@@ -42,6 +46,8 @@ def main() -> int:
     assert "out[0] = out[1] = out[2] = out[3] = 0x80" in sticks
     assert "if (src.keybinds && host_hotkey_input_focused())" in dpad
     assert "if (src.keybinds && host_hotkey_input_focused())" in capture
+    assert "const bool live = host_hotkey_input_focused() &&" in guncon
+    assert guncon.index("if (live) {") < guncon.index("SDL_GetKeyboardState"), "sample_guncon_ports"
     # Host UI readers: the guard gates every direct key read.
     assert "if (keys && host_hotkey_input_focused())" in resume
     assert "const int kb = host_hotkey_input_focused() ? 1 : 0;" in rewind
@@ -54,7 +60,7 @@ def main() -> int:
 
     # Every SDL_GetKeyboardState reader in main.cpp is one of the guarded sites.
     readers = SOURCE.count("SDL_GetKeyboardState(NULL)")
-    assert readers == 7, readers
+    assert readers == 8, readers
     print("host input focus guards: PASS")
     return 0
 

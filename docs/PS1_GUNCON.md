@@ -28,13 +28,35 @@ aimed.
 
 ## Controls
 
-| GunCon | Host |
-|---|---|
-| Aim | the mouse pointer over the game image (a crosshair cursor shows) |
-| Trigger | left mouse button |
-| A (left side button) | right mouse button |
-| B (right side button) | middle mouse button |
-| Shoot off-screen (reload) | hold mouse button 4 (the first side button) while firing, or aim outside the game image |
+| GunCon | Host (default) | keybinds.ini `[guncon]` |
+|---|---|---|
+| Aim | the mouse pointer over the game image (a crosshair cursor shows) | |
+| Trigger | left mouse button | `trigger` |
+| A (left side button) | right mouse button, or A | `a` |
+| B (right side button) | middle mouse button, or D | `b` |
+| No light (aim off-screen, e.g. reload) | hold mouse button 4 (the first side button), or aim outside the game image | `no_light` |
+| Off-screen shot (no light + trigger) | hold W | `offscreen_shot` |
+
+Resident Evil Survivor walks on an off-screen shot and turns with A and B, so
+the defaults give W to walk and A / D to turn. If A turns right in a game,
+swap the `a` and `b` keys.
+
+The controls are rebindable in `keybinds.ini` next to the executable, section
+`[guncon]`. Each takes a key or `Mouse1`..`Mouse5` (1 left, 2 middle, 3 right,
+4/5 side), plus an optional second binding after a comma:
+
+```ini
+[guncon]
+trigger        = Mouse1
+a              = Mouse3, A
+b              = Mouse2, D
+no_light       = Mouse4
+offscreen_shot = W
+```
+
+A `keybinds.ini` without the section uses these defaults; a new file is
+written with it. The keys share the keyboard with any keyboard player's pad
+binds, so rebind one of them if both use the same key.
 
 The pointer is never captured. Outside the game image (the black bars), with
 the window unfocused or with a host menu open, the gun sees no light.
@@ -53,6 +75,9 @@ the window unfocused or with a host menu open, the gun sees no light.
   only.
 - A launcher without the GunCon entry (recomp-ui before the PS1B-305 change)
   shows a GunCon seat as None; leaving it at None keeps the GunCon.
+- The launcher's Controls page does not show the `[guncon]` controls yet;
+  edit `keybinds.ini`. A launcher before the PS1B-305 keybinds change drops
+  the `[guncon]` section when it saves a pad rebind.
 
 ## Tests
 
@@ -61,5 +86,9 @@ the window unfocused or with a host menu open, the gun sees no light.
 - `sio_port_device_identity_p{2,5}_test_{0,1,2}_guncon_roundtrip`: pad and
   memory-card traffic stays byte-identical to pin F after a port was a GunCon
   and went back to a pad.
-- `guncon_map_test`: pointer to X/Y, from the spec's host-mapping vectors.
+- `guncon_map_test`: pointer to X/Y, from the spec's host-mapping vectors,
+  and the host controls to the gun's buttons and "no light".
+- `guncon_keybinds_test`: the `[guncon]` defaults, loading, saving, and a file
+  without the section.
+- recomp-ui `recomp-ui-psx-binds-sections`: a launcher rebind keeps `[guncon]`.
 - `launcher_device_roundtrip_test`: the GunCon source at the launcher seam.

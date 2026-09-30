@@ -27,7 +27,29 @@ static void expect_box(int w, int h, int num, int den, int x, int y, int bw, int
     ++fails;
 }
 
+static void expect_buttons(int trigger, int a, int b, int no_light, int offscreen,
+                           unsigned want_word, int want_no_light, const char *what) {
+    int nl = -1;
+    const uint16_t w = guncon_host_buttons(trigger, a, b, no_light, offscreen, &nl);
+    if (w == want_word && nl == want_no_light) { printf("ok: %s\n", what); return; }
+    fprintf(stderr, "FAIL: %s: got %04X no_light=%d, want %04X no_light=%d\n",
+            what, w, nl, want_word, want_no_light);
+    ++fails;
+}
+
 int main(void) {
+    /* Host controls to the gun's buttons (active low: trigger bit 13 = DFFFh,
+     * A bit 3 = FFF7h, B bit 14 = BFFFh). */
+    expect_buttons(0, 0, 0, 0, 0, 0xFFFF, 0, "nothing held");
+    expect_buttons(1, 0, 0, 0, 0, 0xDFFF, 0, "trigger");
+    expect_buttons(0, 1, 0, 0, 0, 0xFFF7, 0, "A");
+    expect_buttons(0, 0, 1, 0, 0, 0xBFFF, 0, "B");
+    expect_buttons(1, 1, 1, 0, 0, 0x9FF7, 0, "trigger, A and B together");
+    expect_buttons(0, 0, 0, 1, 0, 0xFFFF, 1, "no light alone presses nothing");
+    expect_buttons(1, 0, 0, 1, 0, 0xDFFF, 1, "trigger with no light: an off-screen shot");
+    expect_buttons(0, 0, 0, 0, 1, 0xDFFF, 1, "off-screen shot = trigger + no light");
+    expect_buttons(0, 1, 0, 0, 1, 0xDFF7, 1, "off-screen shot while turning with A");
+
     /* Spec host-mapping vectors: NTSC, X1=600 X2=3160, Y1=16 Y2=256. */
     expect_xy(0.0, 0.0, 600, 3160, 16, 256, 0, 1, 0x004E, 0x0010, "NTSC left edge, top");
     expect_xy(0.5, 0.5, 600, 3160, 16, 256, 0, 1, 0x010D, 0x0088, "NTSC centre");

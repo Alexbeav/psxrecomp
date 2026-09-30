@@ -6869,10 +6869,12 @@ static void guncon_cursor_sync(bool on) {
 
 /* Aim every GunCon seat at the host pointer. The pointer's place over the
  * letterboxed game image becomes X/Y through the game's GP1(06h)/(07h)
- * display range (guncon_map.h). Outside the image, with the side button held
- * (off-screen reload), without focus, in a host menu or while a PS1 Mouse
- * holds the pointer captured, the gun sees no light and its buttons read
- * released. Left button = trigger, right = A, middle = B. */
+ * display range (guncon_map.h). Outside the image, or with the no-light or
+ * off-screen-shot control held, the gun sees no light. Without focus, in a
+ * host menu or while a PS1 Mouse holds the pointer captured, it also sees no
+ * light and its buttons read released. The buttons come from keybinds.ini
+ * [guncon] (defaults: left button = trigger, right or A = A, middle or D = B,
+ * side button 4 = no light, W = off-screen shot). */
 static void sample_guncon_ports(void) {
     if (g_headless || !guncon_seat_configured() || !sdl_window) return;
     const bool menu = savestate_menu_open || runtime_settings_menu_open ||
@@ -6884,17 +6886,22 @@ static void sample_guncon_ports(void) {
     if (live) {
 #if defined(PSX_SDL3)
         float mx = 0.0f, my = 0.0f;
-        const SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mx, &my);
 #else
         int mx = 0, my = 0;
-        const Uint32 buttons = SDL_GetMouseState(&mx, &my);
 #endif
+        (void)SDL_GetMouseState(&mx, &my);
+        const Uint8* keys = SDL_GetKeyboardState(NULL);
+        auto held = [&](int c) { return psx_keybinds_guncon_held(keys, c); };
+        int no_light = 0;
+        btn = guncon_host_buttons(held(PSX_GC_TRIGGER), held(PSX_GC_A), held(PSX_GC_B),
+                                  held(PSX_GC_NO_LIGHT), held(PSX_GC_OFFSCREEN_SHOT),
+                                  &no_light);
         int ww = 0, wh = 0;
         SDL_GetWindowSize(sdl_window, &ww, &wh);
         int rx = 0, ry = 0, rw = 0, rh = 0;
         guncon_letterbox(ww, wh, g_video_aspect_num, g_video_aspect_den,
                          &rx, &ry, &rw, &rh);
-        if (rw > 0 && rh > 0 && !(buttons & SDL_BUTTON_X1MASK)) {
+        if (rw > 0 && rh > 0 && !no_light) {
             uint32_t x1 = 0, x2 = 0, y1 = 0, y2 = 0, hr1 = 0, hr2 = 0;
             gpu_get_crtc_debug(&x1, &x2, &y1, &y2, &hr1, &hr2);
             guncon_map_pointer(((double)mx - rx) / (double)rw,
@@ -6902,9 +6909,6 @@ static void sample_guncon_ports(void) {
                                x1, x2, y1, y2, gpu_video_standard_is_pal(),
                                &gx, &gy);
         }
-        if (buttons & SDL_BUTTON_LMASK) btn &= (uint16_t)~0x2000u;  /* trigger */
-        if (buttons & SDL_BUTTON_RMASK) btn &= (uint16_t)~0x0008u;  /* A */
-        if (buttons & SDL_BUTTON_MMASK) btn &= (uint16_t)~0x4000u;  /* B */
     }
     for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
         if (g_players[host_player_for_sio_slot(s)].kind != 4) continue;

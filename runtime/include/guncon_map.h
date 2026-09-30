@@ -70,3 +70,18 @@ static inline void guncon_letterbox(int w, int h, int num, int den,
     *rw = dw;
     *rh = dh;
 }
+
+/* The gun's button halfword (active low: trigger bit 13, A bit 3, B bit 14;
+ * PSX-SPX) from the host controls, each 1 while held (keybinds.ini [guncon]).
+ * Sets *no_light when the gun must see no light: no_light held, or an
+ * off-screen shot, which is the trigger with no light, held together. */
+static inline uint16_t guncon_host_buttons(int trigger, int a, int b,
+                                           int no_light, int offscreen_shot,
+                                           int *out_no_light) {
+    uint16_t w = 0xFFFFu;
+    if (trigger || offscreen_shot) w &= (uint16_t)~0x2000u;
+    if (a) w &= (uint16_t)~0x0008u;
+    if (b) w &= (uint16_t)~0x4000u;
+    *out_no_light = (no_light || offscreen_shot) ? 1 : 0;
+    return w;
+}
