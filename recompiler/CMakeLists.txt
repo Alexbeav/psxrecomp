@@ -869,6 +869,15 @@ if(BUILD_TESTING)
                     --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
                     --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # BIOS segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): OpenBIOS
+        # with segment-qualified seeds, and SCPH-1001's KSEG1 kernel entry.
+        add_test(
+            NAME bios_segment_variants
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_segment_variants.py
+                    --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME overlay_shim_compile_contract
             COMMAND ${Python3_EXECUTABLE}

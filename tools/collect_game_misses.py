@@ -10,7 +10,9 @@ Resurrection). The recompiler takes a seed in any other segment as a variant
 request, not an entry: it compiles the home body's direct-edge closure again
 in that segment (§5.4). Segment misses (TCP `segment_misses`: static text
 entered in a segment with no body of its own) are written with their full PC,
-so the next regeneration compiles a variant for each.
+so the next regeneration compiles a variant for each. A `bios` segment miss
+(a compiled BIOS window entered in another segment) is listed, not written:
+its seed belongs in the BIOS profile's seeds.
 
 The link segment comes from --segment, from --game-toml ([game].load_address,
 or the header of its [game].exe), or from game_text_lo when that is written as
@@ -153,6 +155,12 @@ def main(argv=None):
     if sm.get("ok"):
         for row in sm.get("summary", []):
             vaddr = int(row["pc"], 16)
+            if row.get("kind", "game") == "bios":
+                # The compiled BIOS ran a window's home body for this PC: its
+                # seed belongs in the BIOS seeds file, not the game's.
+                print("note: BIOS segment miss 0x%08X (home %s, %s hits): seed it in the "
+                      "BIOS profile's seeds, not here" % (vaddr, row["home"], row["count"]))
+                continue
             if not maps_physical(vaddr):
                 print("warning: segment miss 0x%08X is in a segment that does not map "
                       "physical memory; not a seed (the recompiler refuses it)" % vaddr)

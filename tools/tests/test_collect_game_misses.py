@@ -10,7 +10,8 @@ takes the segment from --segment, --game-toml or a segmented game_text_lo,
 refuses to guess from a physical one, and writes `segment_misses` rows with
 their full PC. A row in a segment that does not map physical memory
 (0x20000000-0x7FFFFFFF, KSEG2) is reported and not written: the recompiler
-refuses such a seed.
+refuses such a seed. A `bios` row (the compiled BIOS ran a window's home
+body for an alias PC) is listed for the BIOS seeds and not written.
 
 A fake debug server answers the two commands the tool sends. Its
 `segment_misses` rows use the format string of the runtime's handler, read
@@ -29,16 +30,19 @@ import threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 TOOL = os.path.join(ROOT, "tools", "collect_game_misses.py")
-ROW_FMT = '{\\"pc\\":\\"0x%08X\\",\\"home\\":\\"0x%08X\\",\\"count\\":%llu}'
+ROW_FMT = ('{\\"pc\\":\\"0x%08X\\",\\"home\\":\\"0x%08X\\",\\"count\\":%llu,"\n'
+           '                            "\\"kind\\":\\"%s\\"}"')
 
 PER_PC = [  # physical, as dirty_ram_stats keys them
     {"pc": "0x000100E4", "hits": 9, "insns": 40},
     {"pc": "0x00010200", "hits": 3, "insns": 12},
     {"pc": "0x000C0000", "hits": 5, "insns": 7},   # outside the text range
 ]
-SEGMENT_MISSES = [(0x800100F0, 0x000100F0, 4), (0xA0010124, 0x00010124, 1),
+SEGMENT_MISSES = [(0x800100F0, 0x000100F0, 4, "game"), (0xA0010124, 0x00010124, 1, "game"),
                   # 0x20000000-0x7FFFFFFF does not map physical memory: no seed.
-                  (0x200100F0, 0x000100F0, 1)]
+                  (0x200100F0, 0x000100F0, 1, "game"),
+                  # A BIOS shell alias inside the text range: a BIOS seed, not a game one.
+                  (0x00030000, 0x80030000, 2, "bios")]
 
 
 class FakeDebugServer(threading.Thread):
@@ -56,7 +60,8 @@ class FakeDebugServer(threading.Thread):
             return json.dumps({"id": 1, "ok": True, "per_pc": PER_PC})
         if cmd == "segment_misses" and self.with_segment_misses:
             # The runtime's own row format (C printf -> Python %).
-            rows = ",".join(ROW_FMT.replace('\\"', '"').replace("%llu", "%d") % r
+            fmt = "".join(p.strip().strip('"') for p in ROW_FMT.split("\n"))
+            rows = ",".join(fmt.replace('\\"', '"').replace("%llu", "%d") % r
                             for r in SEGMENT_MISSES)
             return '{"id":1,"ok":true,"total":5,"unique":2,"summary":[%s]}' % rows
         return json.dumps({"id": 1, "ok": False, "error": "unknown command"})
@@ -122,6 +127,9 @@ def main():
             check("segment miss 0x200100F0 is in a segment that does not map" in r.stdout,
                   "a segment miss outside the physical segments is reported, not "
                   "written: %r" % r.stdout)
+            check("BIOS segment miss 0x00030000 (home 0x80030000, 2 hits)" in r.stdout,
+                  "a BIOS segment miss is listed for the BIOS seeds, not written: %r"
+                  % r.stdout)
             # A second run appends nothing: known seeds are exact PCs.
             r = run_tool(server.port, out, "--segment", "kuseg")
             check(r.returncode == 0 and "No new addresses" in r.stdout and

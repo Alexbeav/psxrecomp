@@ -13,6 +13,7 @@
 #include "psx_segment_miss.h"
 
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 
 static int failures = 0;
@@ -69,17 +70,38 @@ int main(void)
     {
         PsxSegmentMissEntry e = psx_segment_miss_get(3);
         CHECK(e.seq == 3 && e.addr == 0x800100E4u && e.home == 0x000100E4u &&
-              e.ra == 0x00010018u && e.frame == 20u, "the ring keeps the full PC in order");
+              e.ra == 0x00010018u && e.frame == 20u && e.kind == PSX_SEGMENT_MISS_GAME,
+              "the ring keeps the full PC in order, kind game");
     }
     {
-        uint32_t addrs[4], homes[4];
+        uint32_t addrs[4], homes[4], kinds[4];
         uint64_t counts[4];
-        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, 4);
+        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kinds, 4);
         CHECK(n == 2, "summary has one row per PC");
-        CHECK(addrs[0] == 0xA00100F0u && homes[0] == 0x000100F0u && counts[0] == 3,
+        CHECK(addrs[0] == 0xA00100F0u && homes[0] == 0x000100F0u && counts[0] == 3 &&
+              kinds[0] == PSX_SEGMENT_MISS_GAME,
               "summary is highest count first");
         CHECK(addrs[1] == 0x800100E4u && counts[1] == 1, "summary second row");
-        CHECK(psx_segment_miss_summary(addrs, homes, counts, 1) == 1, "summary honours max");
+        CHECK(psx_segment_miss_summary(addrs, homes, counts, NULL, 1) == 1,
+              "summary honours max");
+    }
+    /* A BIOS segment miss (the compiled BIOS ran a window's home body for an
+     * alias PC, §5.4) keeps its kind in the ring and in the summary. */
+    psx_segment_miss_record_kind(0x80000500u, 0x00000500u, 0xBFC06F0Cu, 0x801FFF00u, 3u,
+                                 PSX_SEGMENT_MISS_BIOS);
+    {
+        PsxSegmentMissEntry e = psx_segment_miss_get(4);
+        uint32_t addrs[4], kinds[4];
+        uint32_t n = psx_segment_miss_summary(addrs, NULL, NULL, kinds, 4);
+        CHECK(e.addr == 0x80000500u && e.home == 0x00000500u && e.frame == 3u &&
+              e.kind == PSX_SEGMENT_MISS_BIOS, "a BIOS segment miss is recorded as kind bios");
+        /* Counts 3, 1, 1; the tie orders by PC. */
+        CHECK(n == 3 && addrs[1] == 0x80000500u && kinds[1] == PSX_SEGMENT_MISS_BIOS &&
+              kinds[0] == PSX_SEGMENT_MISS_GAME && kinds[2] == PSX_SEGMENT_MISS_GAME,
+              "the summary carries each PC's kind");
+        CHECK(strcmp(psx_segment_miss_kind_name(PSX_SEGMENT_MISS_BIOS), "bios") == 0 &&
+              strcmp(psx_segment_miss_kind_name(PSX_SEGMENT_MISS_GAME), "game") == 0,
+              "kind names");
     }
     /* Equal counts order by PC, and the summary visits each PC once. */
     psx_segment_miss_reset();
@@ -87,7 +109,7 @@ int main(void)
     psx_segment_miss_record(0x80010300u, 0x00010300u, 0, 0, 0);
     {
         uint32_t addrs[4];
-        uint32_t n = psx_segment_miss_summary(addrs, NULL, NULL, 4);
+        uint32_t n = psx_segment_miss_summary(addrs, NULL, NULL, NULL, 4);
         CHECK(n == 2 && addrs[0] == 0x80010300u && addrs[1] == 0xA0010300u,
               "ties order by PC");
     }

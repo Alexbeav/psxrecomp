@@ -11701,10 +11701,13 @@ static void handle_dispatch_stats(int id, const char *json)
 }
 
 /* segment_misses: static game text entered at a PC whose physical word has a
- * compiled row only in another segment (docs/SEGMENT_AWARE_CODE.md §5.5).
- * Each ran interpreted; the fix is a segment-qualified seed (§5.4) and a
- * regeneration. {"tail":N} returns the last N ring entries in order;
- * otherwise a per-PC summary, highest count first (at most 200 rows). */
+ * compiled row only in another segment (docs/SEGMENT_AWARE_CODE.md §5.5),
+ * kind "game": each ran interpreted. Kind "bios": a compiled BIOS window
+ * entered in another segment than its body's, with no segment variant; the
+ * home body ran (§5.4). The fix is a segment-qualified seed (§5.4) and a
+ * regeneration, in the game's or the BIOS's seeds by kind. {"tail":N}
+ * returns the last N ring entries in order; otherwise a per-PC summary,
+ * highest count first (at most 200 rows). */
 static void handle_segment_misses(int id, const char *json)
 {
     int tail = json_get_int(json, "tail", 0);
@@ -11724,20 +11727,23 @@ static void handle_segment_misses(int id, const char *json)
             PsxSegmentMissEntry e = psx_segment_miss_get(total - (uint64_t)tail + (uint64_t)i);
             pos += snprintf(out + pos, BUF_SZ - pos,
                             "%s{\"seq\":%llu,\"pc\":\"0x%08X\",\"home\":\"0x%08X\","
-                            "\"ra\":\"0x%08X\",\"sp\":\"0x%08X\",\"frame\":%u}",
+                            "\"ra\":\"0x%08X\",\"sp\":\"0x%08X\",\"frame\":%u,"
+                            "\"kind\":\"%s\"}",
                             i ? "," : "", (unsigned long long)e.seq, e.addr, e.home,
-                            e.ra, e.sp, e.frame);
+                            e.ra, e.sp, e.frame, psx_segment_miss_kind_name(e.kind));
         }
     } else {
         enum { kRows = 200 };
-        uint32_t addrs[kRows], homes[kRows];
+        uint32_t addrs[kRows], homes[kRows], kinds[kRows];
         uint64_t counts[kRows];
-        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kRows);
+        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kinds, kRows);
         pos += snprintf(out + pos, BUF_SZ - pos, "\"summary\":[");
-        for (uint32_t i = 0; i < n && pos < BUF_SZ - 96; i++) {
+        for (uint32_t i = 0; i < n && pos < BUF_SZ - 112; i++) {
             pos += snprintf(out + pos, BUF_SZ - pos,
-                            "%s{\"pc\":\"0x%08X\",\"home\":\"0x%08X\",\"count\":%llu}",
-                            i ? "," : "", addrs[i], homes[i], (unsigned long long)counts[i]);
+                            "%s{\"pc\":\"0x%08X\",\"home\":\"0x%08X\",\"count\":%llu,"
+                            "\"kind\":\"%s\"}",
+                            i ? "," : "", addrs[i], homes[i], (unsigned long long)counts[i],
+                            psx_segment_miss_kind_name(kinds[i]));
         }
     }
     pos += snprintf(out + pos, BUF_SZ - pos, "]}\n");
