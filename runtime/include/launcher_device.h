@@ -23,25 +23,32 @@ inline std::string normalize_launcher_device(const std::string& device) {
     return normalized;
 }
 
-// "mouse" puts a PS1 Mouse in the seat (PS1B-279). recomp-ui has no source
-// for it, so the launcher shows the seat as None; a seat the player leaves at
+// "mouse" puts a PS1 Mouse in the seat (PS1B-279). A recomp-ui that defines
+// RECOMP_LAUNCHER_HAS_MOUSE_SOURCE lists it as source 3 ("PS1 Mouse"); the
+// caller passes mouse_source = true for that launcher. An older launcher has
+// no such source: it shows the seat as None, and a seat the player leaves at
 // None keeps the mouse on the way out. Picking Keyboard or a pad replaces it.
+constexpr int kLauncherSourceMouse = 3;
+
 inline bool launcher_device_is_mouse(const std::string& device) {
     return normalize_launcher_device(device) == "mouse";
 }
 
-inline int launcher_source_from_device(const std::string& device) {
+inline int launcher_source_from_device(const std::string& device,
+                                       bool mouse_source = false) {
     const std::string normalized = normalize_launcher_device(device);
     if (normalized.empty() || normalized == "none") return 0;
-    if (normalized == "mouse") return 0;
+    if (normalized == "mouse") return mouse_source ? kLauncherSourceMouse : 0;
     if (normalized == "keyboard") return 1;
     return 2;
 }
 
 inline std::string launcher_device_from_source(
-    int source, const std::string& previous_device) {
-    if (source <= 0)
-        return launcher_device_is_mouse(previous_device) ? "mouse" : "none";
+    int source, const std::string& previous_device, bool mouse_source = false) {
+    if (source == kLauncherSourceMouse && mouse_source) return "mouse";
+    if (source <= 0 || source == kLauncherSourceMouse)
+        return (!mouse_source && launcher_device_is_mouse(previous_device))
+                   ? "mouse" : "none";
     if (source == 1) return "keyboard";
 
     // recomp-ui's C ABI currently returns a source category, not the selected
