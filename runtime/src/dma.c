@@ -763,6 +763,25 @@ static void start_async_gpu_linked_list(void) {
     gpu_ot_polls_this_walk = 0;
 }
 
+/* PSX-SPX "CPU Operation during DMA": DMA outruns CPU memory access, and a CPU
+ * read of RAM or I/O waits while DMA moves data. So the kicking store of a GPU
+ * linked-list transfer returns only when the walk ends: guest code that
+ * rewrites a packet right after DrawOTag (the retail SCPH1001 intro re-copies
+ * its text packets from a template, clearing the link) cannot reach it before
+ * the walk does. A cyclic list still ends at the walker's node limit. The hold
+ * also ends if an advance moves no list word. */
+static void hold_cpu_for_gpu_linked_list(void) {
+    if (psx_in_device_service || g_ls_replay_active || g_psx_render_pass_active)
+        return;
+    while (gpu_linked_list.active && ((channels[2].chcr >> 24) & 1u) &&
+           channel_enabled(2)) {
+        const uint32_t moved = gpu_linked_list.total_words;
+        psx_advance_cycles(dma_gpu_ll_cycles_to_event(&gpu_linked_list));
+        psx_devices_service_to_now();
+        if (gpu_linked_list.active && gpu_linked_list.total_words == moved) break;
+    }
+}
+
 static uint32_t execute_ch2_gpu(void) {
     uint32_t chcr = channels[2].chcr;
     uint32_t direction = chcr & 1;           /* 0=to RAM, 1=from RAM (to device) */
@@ -978,6 +997,7 @@ static void try_execute(int ch) {
                 while (g_psx_render_pass_active && gpu_linked_list.active)
                     dma_gpu_ll_advance(&gpu_linked_list, UINT32_MAX,
                                        &gpu_ll_ops, NULL);
+                hold_cpu_for_gpu_linked_list();
             } else {
                 schedule_delayed_complete(2, execute_ch2_gpu(),
                                           DMA_GPU_CYCLES_PER_WORD);
