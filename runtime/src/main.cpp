@@ -366,6 +366,7 @@ extern "C" uint16_t psx_read_half(uint32_t addr);
 extern "C" void     psx_write_half(uint32_t addr, uint16_t val);
 extern "C" uint8_t  psx_read_byte(uint32_t addr);
 extern "C" void     psx_write_byte(uint32_t addr, uint8_t val);
+extern "C" void     psx_host_write_half(uint32_t addr, uint16_t val);
 /* Guest-side data-read wrappers: same as psx_read_* but charge PS1 main-RAM
  * read wait states (R3000A has no D-cache). Wired to cpu->read_* below so the
  * timing applies to recompiled + interpreted guest loads, not debug/device reads. */
@@ -7210,8 +7211,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             if (g_fmv_skip_total_table) {
                 /* End the active movie via its own frame-count teardown. */
                 uint8_t mid = psx_read_byte(g_fmv_skip_movie_id);
-                psx_write_half(g_fmv_skip_total_table + (uint32_t)mid * 2u,
-                               (uint16_t)g_fmv_skip_end_total);
+                psx_host_write_half(g_fmv_skip_total_table + (uint32_t)mid * 2u,
+                                    (uint16_t)g_fmv_skip_end_total);
             } else {
                 /* Generic fallback: hold START (PSX pad word is active-low; START
                  * is bit 3) so the game's FMV handler aborts the movie itself. */

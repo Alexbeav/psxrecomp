@@ -42,6 +42,7 @@ uint64_t g_render_pass_dropped_writes[RENDER_PASS_DROP_CLASSES];
 void   (*g_overlay_flush_pending_cycles)(void) = NULL;
 int      g_call_unit_depth = 0;
 int      g_dma_exec_depth = 0;
+int      g_host_store_depth = 0;
 int      g_dma_cur_ch = -1;
 uint32_t g_dma_cur_madr = 0, g_dma_cur_bcr = 0, g_dma_initiator_pc = 0;
 int      g_dirty_interp_active = 0;
@@ -201,6 +202,7 @@ static void guest_frame(CPUState *cpu, const Frames *f, int level) {
     g_overlay_flush_pending_cycles = shard_flush;
     g_exec_phase = 2;
     g_dma_exec_depth++;                          /* dma.c kick */
+    g_host_store_depth++;                        /* psx_host_write_* */
     g_dma_cur_ch = 2;
     g_dirty_interp_active = 1;                   /* dirty_ram_dispatch */
     g_precise_mode = 1;                          /* psx_run_precise */
@@ -224,6 +226,7 @@ static void guest_frame(CPUState *cpu, const Frames *f, int level) {
     g_precise_mode = prev_precise;
     g_dirty_interp_active = prev_active;
     g_dma_exec_depth--;
+    g_host_store_depth--;
     g_dma_cur_ch = -1;
     g_exec_phase = prev_phase;
     shard_flush();
@@ -246,7 +249,7 @@ static int leaky_pass_fn(struct CPUState *cpu, void *user, uint32_t alpha_q16) {
 }
 
 typedef struct Live {
-    int bb_defer, unit, dma, dma_ch, active, phase, precise, dispatch;
+    int bb_defer, unit, dma, host, dma_ch, active, phase, precise, dispatch;
     int ov_depth;
     uint32_t ov_ip, batch, resume;
     void (*flush)(void);
@@ -259,6 +262,7 @@ static void snap(Live *l) {
     l->bb_defer = g_psx_cyc_bb_defer;
     l->unit = g_call_unit_depth;
     l->dma = g_dma_exec_depth;
+    l->host = g_host_store_depth;
     l->dma_ch = g_dma_cur_ch;
     l->active = g_dirty_interp_active;
     l->phase = g_exec_phase;
@@ -285,6 +289,7 @@ static void check_live(const Live *a, const char *when) {
     SAME(bb_defer, "g_psx_cyc_bb_defer");
     SAME(unit, "g_call_unit_depth");
     SAME(dma, "g_dma_exec_depth");
+    SAME(host, "g_host_store_depth");
     SAME(dma_ch, "g_dma_cur_ch");
     SAME(active, "g_dirty_interp_active");
     SAME(phase, "g_exec_phase");

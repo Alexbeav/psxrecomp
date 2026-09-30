@@ -227,6 +227,29 @@ if(BUILD_TESTING)
             -flto -Wl,--gc-sections -Wno-lto-type-mismatch)
         target_link_libraries(psx_ram_runtime_map_test PRIVATE ZLIB::ZLIB)
         add_test(NAME psx_ram_runtime_map_test COMMAND psx_ram_runtime_map_test)
+
+        # Cache-isolated (SR.IsC) CPU stores through the REAL memory.c store
+        # paths and the REAL psx_icache.c tag model, against Beetle's
+        # WriteMemory IsC branch: FlushCache invalidation, tag-test valid bits,
+        # the D-cache scratchpad write, the BIU and DMA exclusions. Same link
+        # doubles as psx_ram_runtime_map_test, minus the I-cache ones.
+        add_executable(isc_store_test
+            tests/test_isc_store.c
+            tests/psx_ram_runtime_map_stubs.c
+            src/memory.c
+            src/dma.c
+            src/boot_state.c
+            src/psx_icache.c
+            src/psx_ram_geometry.c)
+        target_include_directories(isc_store_test PRIVATE include src)
+        target_compile_definitions(isc_store_test PRIVATE
+            PSX_ENABLE_BLOCK_CYCLES=1 PSX_STUBS_REAL_ICACHE=1)
+        target_compile_options(isc_store_test PRIVATE
+            -O2 -flto -ffunction-sections -fdata-sections -Wno-lto-type-mismatch)
+        target_link_options(isc_store_test PRIVATE -flto -Wno-lto-type-mismatch
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+        target_link_libraries(isc_store_test PRIVATE ZLIB::ZLIB)
+        add_test(NAME isc_store_test COMMAND isc_store_test)
     endif()
 
     add_executable(host_keymap_test
