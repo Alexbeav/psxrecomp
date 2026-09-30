@@ -84,6 +84,14 @@ if(BUILD_TESTING)
         add_test(NAME ${_target} COMMAND ${_target})
         add_test(NAME ${_target}_kinds COMMAND ${_target} --touch-kinds)
     endforeach()
+    # neGcon byte protocol: 2 ports, and 5 players for a multitap seat.
+    foreach(_players IN ITEMS 2 5)
+        set(_target sio_negcon_p${_players}_test)
+        add_executable(${_target} tests/test_sio_negcon.c)
+        target_include_directories(${_target} PRIVATE include)
+        target_compile_definitions(${_target} PRIVATE PSX_MAX_PLAYERS=${_players})
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
     # Optional real-hardware regression. Configure its dependencies explicitly;
     # absence must remain visible, never counted as a passing GPU test.
     set(PSX_GL_READBACK_SDL_ROOT "" CACHE PATH "SDL3 static build root for GL readback test")

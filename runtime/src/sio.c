@@ -157,6 +157,10 @@ static int8_t pad_type_req[PSX_MAX_PLAYERS] = {
  * snapshot wire does not carry it, so a slot that stays a pad answers exactly
  * as it did before kinds existed. */
 static PSX_BSS uint8_t pad_device_kind[PSX_MAX_PLAYERS];
+/* neGcon (PSX-SPX "Controllers - Racing Controllers"): the six data bytes
+ * after its 23h 5Ah ID, as sent: buttons low, buttons high, twist, I, II, L.
+ * Only meaningful while the slot is a neGcon; negcon_reset() sets idle. */
+static PSX_BSS uint8_t negcon_data[PSX_MAX_PLAYERS][6];
 
 /* ---- Logical pad ↔ physical SIO port mapping ----
  *
@@ -250,13 +254,41 @@ static void mtap_finish_42(void) {
     }
 }
 
+static int slot_is_negcon(int logical) {
+    return logical >= 0 && logical < PSX_MAX_PLAYERS &&
+           pad_device_kind[logical] == SIO_DEVICE_NEGCON;
+}
+
+/* Bits the neGcon halfword never drives (the Select, L3, R3, L2, R2, L1,
+ * Cross and Square positions on other pads): always 1 (PSX-SPX). */
+#define NEGCON_UNUSED_BITS 0xC707u
+
+/* Idle neGcon: nothing pressed, twist centred, I/II/L released. PSX-SPX
+ * leaves open whether I/II/L read 00h or FFh when released; 00h is the
+ * runtime's choice. */
+static void negcon_reset(int logical) {
+    negcon_data[logical][0] = 0xFF;
+    negcon_data[logical][1] = 0xFF;
+    negcon_data[logical][2] = 0x80;
+    negcon_data[logical][3] = 0x00;
+    negcon_data[logical][4] = 0x00;
+    negcon_data[logical][5] = 0x00;
+}
+
 /* Fill 8-byte per-pad status block used in multitap bulk 0x42 responses.
  * Disconnected → all 0xFF. Digital → 0x41 0x5A btnL btnH + 0xFF pad.
- * Analog/config → 0x73/0xF3 0x5A btn + stick bytes. */
+ * Analog/config → 0x73/0xF3 0x5A btn + stick bytes. neGcon → 0x23 0x5A and
+ * its six data bytes, which fill the seat exactly (PSX-SPX multitap). */
 static void pad_fill_status8(int logical, uint8_t out[8]) {
     if (logical < 0 || logical >= PSX_MAX_PLAYERS ||
         !(pad_connected & (1u << logical))) {
         memset(out, 0xFF, 8);
+        return;
+    }
+    if (slot_is_negcon(logical)) {
+        out[0] = 0x23;
+        out[1] = 0x5A;
+        memcpy(&out[2], negcon_data[logical], 6);
         return;
     }
     const uint8_t id = pad_in_config[logical] ? 0xF3
@@ -803,6 +835,9 @@ void sio_init(void) {
         pad_type_req[i] = -1;
         analog_mode_locked[i] = 0;
         pad_supports_config[i] = 1;
+        /* The device kind is a host preference and stays; the neGcon's
+         * inputs are power-on state. */
+        negcon_reset(i);
     }
     pad_connected = 0;
     /* Multitap enable/port are host preferences — leave them alone across
@@ -1099,6 +1134,7 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]) {
 static int port_device_known(int kind) {
     switch (kind) {
     case SIO_DEVICE_PAD:
+    case SIO_DEVICE_NEGCON:
         return 1;
     default:
         return 0;
@@ -1114,6 +1150,7 @@ void sio_set_port_device(int slot, int kind) {
     if (pad_device_kind[slot] == k) return;
     pad_device_kind[slot] = k;
     /* A different plug: nothing of the old device's state carries over. */
+    negcon_reset(slot);
     pad_in_config[slot] = 0;
     pad_type_req[slot] = -1;
     analog_mode_locked[slot] = 0;
@@ -1125,6 +1162,18 @@ void sio_set_port_device(int slot, int kind) {
 int sio_get_port_device(int slot) {
     return (slot >= 0 && slot < PSX_MAX_PLAYERS) ? pad_device_kind[slot]
                                                  : SIO_DEVICE_PAD;
+}
+
+void sio_set_negcon_state(int slot, uint16_t buttons, uint8_t twist,
+                          uint8_t i, uint8_t ii, uint8_t l) {
+    if (!slot_is_negcon(slot)) return;
+    buttons |= NEGCON_UNUSED_BITS;
+    negcon_data[slot][0] = (uint8_t)(buttons & 0xFF);
+    negcon_data[slot][1] = (uint8_t)(buttons >> 8);
+    negcon_data[slot][2] = twist;
+    negcon_data[slot][3] = i;
+    negcon_data[slot][4] = ii;
+    negcon_data[slot][5] = l;
 }
 
 /* ── LEGACY pad-config compatibility (Tomba "Hybrid" controller) ─────────────
@@ -1255,6 +1304,7 @@ static void pad_process_byte(uint8_t tx_byte) {
             /* HiZ,80h,5Ah,LSB(Slot A id) then abort (psx-spx). */
             const int a = mtap_slot_a_logical();
             const uint8_t id = (!(pad_connected & (1u << a))) ? 0xFFu
+                               : slot_is_negcon(a) ? 0x23u
                                : (pad_in_config[a] ? 0xF3u
                                   : (pad_analog[a] ? 0x73u : 0x41u));
             pad_response[0] = 0x80;
@@ -1280,6 +1330,28 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_response_idx = 0;
             pad_current_cmd = 0;
             sio_rx_data = 0xFF;
+            break;
+        }
+        if (slot_is_negcon(lp)) {
+            /* neGcon: it answers only the 42h read, with 23h 5Ah and six data
+             * bytes. It has no config mode. PSX-SPX documents no reply to any
+             * other command; the runtime gives hi-z and no /ACK, like a plain
+             * digital pad. */
+            if (tx_byte == 0x42) {
+                pad_response[0] = 0x23;
+                pad_response[1] = 0x5A;
+                memcpy(&pad_response[2], negcon_data[lp], 6);
+                pad_response_len = 8;
+                pad_state = PAD_SEND_RESPONSE;
+                sio_rx_data = pad_response[0];
+                sio_stat |= SIO_STAT_ACK;
+            } else {
+                pad_state = PAD_IDLE;
+                pad_response_len = 0;
+                pad_response_idx = 0;
+                pad_current_cmd = 0;
+                sio_rx_data = 0xFF;
+            }
             break;
         }
         /* Controller ID reported as the first response byte. Real hardware

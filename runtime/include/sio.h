@@ -207,8 +207,20 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]);
  * has changes nothing. A kind this build does not know selects the pad.
  * Connection is still sio_set_pad_connected. */
 #define SIO_DEVICE_PAD 0
+/* SIO_DEVICE_NEGCON is the Namco neGcon twist controller (PSX-SPX
+ * "Controllers - Racing Controllers"): ID 5A23h, it answers only the 42h read
+ * with 8 bytes (23h 5Ah, two button bytes, twist, I, II, L) and ignores every
+ * other command. Switching a slot to or from it resets its neGcon state to
+ * idle (no button, twist centred, I/II/L 00h). */
+#define SIO_DEVICE_NEGCON 2
 void sio_set_port_device(int slot, int kind);
 int  sio_get_port_device(int slot);
+/* neGcon state for the next reads. buttons is the neGcon halfword as sent
+ * (active low: bit 3 Start, 4-7 D-pad, 11 R, 12 B, 13 A); the bits the neGcon
+ * does not have are forced to 1. twist 80h = centre; i, ii, l 00h = released.
+ * No effect unless the slot is a neGcon. */
+void sio_set_negcon_state(int slot, uint16_t buttons, uint8_t twist,
+                          uint8_t i, uint8_t ii, uint8_t l);
 
 /* ---- SIO byte-level trace ring buffer ----
  * 1M entries × ~28 B ≈ 32 MB.  At ~600 byte/sec that's ~30 min of history. */
