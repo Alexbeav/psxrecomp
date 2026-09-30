@@ -49,7 +49,8 @@ void usage(const char* program) {
         "--output <directory> [--name <title>]\n\n"
         "The output contains generated game/BIOS C, game.toml, CMakeLists.txt,\n"
         "and build scripts. No compiler toolchain is bundled.\n"
-        "Supported BIOS: OpenBIOS, SCPH1001, SCPH101, SCPH5552 (any 512 KiB PS1 BIOS dump).\n",
+        "Supported BIOS: OpenBIOS, SCPH1001, SCPH101, SCPH5500, SCPH5501, SCPH5552\n"
+        "(any 512 KiB PS1 BIOS dump).\n",
         program);
 }
 
@@ -155,6 +156,8 @@ const BiosProfile& select_bios_profile(const fs::path& bios_path) {
         {"OPENBIOS", {"OpenBIOS.toml", "OpenBIOS"}},
         {"SCPH1001", {"SCPH1001.toml", "SCPH1001"}},
         {"SCPH101",  {"SCPH101.toml",  "SCPH101"}},
+        {"SCPH5500", {"SCPH5500.toml", "SCPH5500"}},
+        {"SCPH5501", {"SCPH5501.toml", "SCPH5501"}},
         {"SCPH5552", {"SCPH5552.toml", "SCPH5552"}},
     };
     const std::string token = PSXRecompV4::bios_model_token(bios_path);
@@ -163,7 +166,8 @@ const BiosProfile& select_bios_profile(const fs::path& bios_path) {
     }
     throw std::runtime_error(
         "unsupported BIOS filename '" + bios_path.filename().string() +
-        "' (expected openbios.bin, SCPH1001.BIN, SCPH101.BIN, or SCPH5552.BIN)");
+        "' (expected openbios.bin, SCPH1001.BIN, SCPH101.BIN, SCPH5500.BIN, "
+        "SCPH5501.BIN, or SCPH5552.BIN)");
 }
 
 fs::path find_bios_profile(const fs::path& framework,
