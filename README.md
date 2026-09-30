@@ -717,7 +717,9 @@ generated C is optimized. Game projects generate their own
 
 Keyboard and Xbox-style controller input work out of the box; the default
 fullscreen toggle is Alt+Enter / Ctrl+F (Cmd+F on macOS), and F11 starts and
-stops a player replay (F7, then Tab, lists the replays). **Full button maps, controller
+stops a player replay (F7, then Tab, lists the replays). The launcher's Record
+replay checkbox records a whole session from power-on for automated testing
+([docs/PLAYER_REPLAYS.md](docs/PLAYER_REPLAYS.md)). **Full button maps, controller
 configuration, and rebinding live in each game's repo and in-app launcher** —
 they're game-facing, not part of the framework. The standalone framework runtime
 accepts keyboard input for navigating the selected OpenBIOS or retail BIOS shell
