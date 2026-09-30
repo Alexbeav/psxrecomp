@@ -397,6 +397,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(offline_seats_test PRIVATE include)
     add_test(NAME offline_seats_test COMMAND offline_seats_test)
 
+    # PS1B-305: host pointer to GunCon X/Y (spec host-mapping vectors).
+    add_executable(guncon_map_test tests/test_guncon_map.c)
+    target_include_directories(guncon_map_test PRIVATE include)
+    if(NOT WIN32)
+        target_link_libraries(guncon_map_test PRIVATE m)
+    endif()
+    add_test(NAME guncon_map_test COMMAND guncon_map_test)
+
     # Pad-mode resolution at the launcher exit seam: a lock_mode title must
     # boot the pad type its game.toml declared whatever the launcher hands
     # back, an active mod controller-mode override must outrank the lock, and
