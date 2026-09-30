@@ -360,6 +360,11 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME launcher_device_roundtrip_test
              COMMAND launcher_device_roundtrip_test)
 
+    # PS1B-279: a pad next to a PS1 Mouse is read in a one-player title.
+    add_executable(offline_seats_test tests/test_offline_seats.c)
+    target_include_directories(offline_seats_test PRIVATE include)
+    add_test(NAME offline_seats_test COMMAND offline_seats_test)
+
     # Pad-mode resolution at the launcher exit seam: a lock_mode title must
     # boot the pad type its game.toml declared whatever the launcher hands
     # back, an active mod controller-mode override must outrank the lock, and
