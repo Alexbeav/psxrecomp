@@ -113,6 +113,13 @@ extern "C" void psx_event_step_conservative_env_init(void);
 extern "C" void psx_game_codegen_setup_apply(RecompLauncherCGameInfo* gi);
 extern "C" void psx_game_codegen_relaunch_or_exit(const char* disc_path);
 #endif
+/* The launcher lists "PS1 Mouse" as an input source (PS1B-279); older
+ * recomp-ui shows a mouse seat as None instead (launcher_device.h). */
+#if defined(RECOMP_LAUNCHER_HAS_MOUSE_SOURCE)
+static constexpr bool kLauncherMouseSource = true;
+#else
+static constexpr bool kLauncherMouseSource = false;
+#endif
 #endif
 /* Setup-host relaunch hook: only exists when a codegen_setup.c-style host was
  * actually linked (PSX_HAS_CODEGEN_SETUP_HOST) — that file depends on
@@ -15361,7 +15368,7 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < n; ++i) {
                     const std::string& d = player_device[i];
                     ls.player_src[i] =
-                        PSXRecompV4::launcher_source_from_device(d);
+                        PSXRecompV4::launcher_source_from_device(d, kLauncherMouseSource);
                     /* Round to the nearest launcher percent. Truncation turned a
                      * saved 20% value (6553/32767) into 19%, which the launcher's
                      * 5% normalization then silently reduced to 15%. */
@@ -15661,12 +15668,14 @@ int main(int argc, char** argv) {
                     for (int i = 0; i < n; ++i) {
                         if (ls.player_src[i] == 1) {
                             player_device[i] = "keyboard";
-                        } else if (ls.player_src[i] == 0) {
-                            /* A PS1 Mouse seat shows as None; left there, it
-                             * stays a mouse (launcher_device.h). */
-                            player_device[i] =
-                                PSXRecompV4::launcher_device_is_mouse(player_device[i])
-                                    ? "mouse" : "none";
+                        } else if (ls.player_src[i] == 0 ||
+                                   ls.player_src[i] == PSXRecompV4::kLauncherSourceMouse) {
+                            /* PS1 Mouse (source 3) or None. An older launcher
+                             * has no mouse source and shows a mouse seat as
+                             * None; left there, it stays a mouse
+                             * (launcher_device.h). */
+                            player_device[i] = PSXRecompV4::launcher_device_from_source(
+                                ls.player_src[i], player_device[i], kLauncherMouseSource);
                         } else if (ls.player_gamepad_guid[i][0]) {
                             player_device[i] = ls.player_gamepad_guid[i];
                         } else if (PSXRecompV4::launcher_source_from_device(
@@ -17799,7 +17808,7 @@ soft_return_lobby:
             for (int i = 0; i < n; ++i) {
                 const std::string& d = player_device[i];
                 ls.player_src[i] =
-                    PSXRecompV4::launcher_source_from_device(d);
+                    PSXRecompV4::launcher_source_from_device(d, kLauncherMouseSource);
                 ls.deadzone[i] =
                     (player_deadzone[i] * 100 + 32767 / 2) / 32767;
                 /* Verbatim, as in the first launcher entry above. */
@@ -17957,10 +17966,10 @@ soft_return_lobby:
                 for (int i = 0; i < n; ++i) {
                     if (ls.player_src[i] == 1) {
                         player_device[i] = "keyboard";
-                    } else if (ls.player_src[i] == 0) {
-                        player_device[i] =
-                            PSXRecompV4::launcher_device_is_mouse(player_device[i])
-                                ? "mouse" : "none";
+                    } else if (ls.player_src[i] == 0 ||
+                               ls.player_src[i] == PSXRecompV4::kLauncherSourceMouse) {
+                        player_device[i] = PSXRecompV4::launcher_device_from_source(
+                            ls.player_src[i], player_device[i], kLauncherMouseSource);
                     } else if (ls.player_gamepad_guid[i][0]) {
                         player_device[i] = ls.player_gamepad_guid[i];
                     } else if (PSXRecompV4::launcher_source_from_device(

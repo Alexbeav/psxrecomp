@@ -28,5 +28,15 @@ int main() {
     assert(launcher_device_from_source(0, "mouse") == "mouse");
     assert(launcher_device_from_source(1, "mouse") == "keyboard");
     assert(launcher_device_from_source(2, "mouse") == "gamepad");
+
+    /* A launcher with the "PS1 Mouse" source (RECOMP_LAUNCHER_HAS_MOUSE_SOURCE):
+     * the seat is source 3 both ways, and None now really means none. */
+    using PSXRecompV4::kLauncherSourceMouse;
+    assert(launcher_source_from_device("mouse", true) == kLauncherSourceMouse);
+    assert(launcher_source_from_device("keyboard", true) == 1);
+    assert(launcher_device_from_source(kLauncherSourceMouse, "keyboard", true) == "mouse");
+    assert(launcher_device_from_source(kLauncherSourceMouse, "none", true) == "mouse");
+    assert(launcher_device_from_source(0, "mouse", true) == "none");
+    assert(launcher_device_from_source(1, "mouse", true) == "keyboard");
     return 0;
 }
