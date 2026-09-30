@@ -439,6 +439,11 @@ Retro / the wizard download `cmake-clang-v1` from
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
 
+The player's Generate stages their retail dump where the pinned profile loads it
+and emits that profile's backend. The setup host forwards the stem CMake linked
+(`PSXRECOMP_BIOS_STEMS`) as `--bios-stem`; a standalone `psxrecomp_cli.py generate`
+resolves it from `[recompiler] bios_config`, then falls back to `SCPH1001`.
+
 ### Player updates (after first Generate)
 
 | Action | Meaning |

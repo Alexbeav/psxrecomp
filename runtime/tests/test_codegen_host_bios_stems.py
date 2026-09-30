@@ -71,6 +71,12 @@ def make_project(root: Path, bios_files: list[str], framework: str, descriptor: 
 
 
 def main() -> int:
+    # The CLI half regenerates whatever stem it is told; the host must tell it
+    # the stem CMake linked, on both process-launch routes, or a title pinned
+    # to SCPH5552 still gets an SCPH1001 pair and loops.
+    host_text = HOST_C.read_text(encoding="utf-8")
+    for needle in ("setup_retail_bios_stem", '--bios-stem \\"%s\\"', '"--bios-stem"'):
+        assert needle in host_text, f"host does not forward the linked BIOS stem: {needle}"
     ui = find_recomp_ui()
     if ui is None:
         print("SKIP: recomp-ui not found (set RECOMP_UI_ROOT)")
