@@ -68,6 +68,8 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_mod_entry_guards.py")
         add_test(NAME mirror_pc_preserved_guards_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mirror_pc_preserved_guards.py")
+        add_test(NAME segment_miss_wiring_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_miss_wiring.py")
         add_test(NAME gpu_textured_dot_nw_shift_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gpu_textured_dot_nw_shift.py")
         add_test(NAME gl_readback_runner_test COMMAND "${Python3_EXECUTABLE}"
@@ -142,6 +144,16 @@ if(BUILD_TESTING)
     target_compile_definitions(psx_cyc_batch_test PRIVATE
         PSX_ENABLE_BLOCK_CYCLES=1)
     add_test(NAME psx_cyc_batch_test COMMAND psx_cyc_batch_test)
+
+    # Segment misses in static game code (docs/SEGMENT_AWARE_CODE.md §5.5):
+    # classification against the dispatch rows, the ring and the per-PC
+    # summary the TCP command and the exit report read.
+    add_executable(psx_segment_miss_test
+        tests/test_psx_segment_miss.c
+        src/psx_segment_miss.c
+    )
+    target_include_directories(psx_segment_miss_test PRIVATE include)
+    add_test(NAME psx_segment_miss_test COMMAND psx_segment_miss_test)
 
     add_executable(psx_icache_fastpath_test
         tests/test_psx_icache_fastpath.c
