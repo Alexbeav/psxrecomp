@@ -1659,6 +1659,17 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 
     *next_pc_out = pc + 4;
 
+    /* MFC0/CFC0 observe COP0 as it stood when the instruction began. The cycle
+     * charge below can reach a device deadline and run its event, which may
+     * raise CAUSE.IP2. The reference processes an event that falls due inside
+     * an instruction only after that instruction, and the IRQ becomes visible
+     * at the next boundary. Compiled code already behaves this way, because it
+     * batches its charges until the next boundary. PS1B-248: the kernel's
+     * `mfc0 a1,Cause` at 0xD4C read 0x420 instead of 0x20 when a CD IRQ fell
+     * due on its own cycle. */
+    const uint32_t cop0_read = (opc == 0x10u && (rs == 0u || rs == 2u))
+        ? cpu->cop0[rd] : 0u;
+
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     /* Instruction FETCH cost (I-cache) — charged FIRST, before the §1 base (the order
      * fitted to the oracle ruler loops, accuracy/load_readfudge_ldabsorb.md). HIT=+0,
@@ -2263,7 +2274,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->ld_absorb = 0u;
             cpu->ld_which_t = (uint8_t)rt;
 #endif
-            cpu->gpr[rt] = cpu->cop0[rd];
+            cpu->gpr[rt] = cop0_read;
             cpu->gpr[0] = 0;
             return 0;
         }
@@ -2272,7 +2283,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->ld_absorb = 0u;
             cpu->ld_which_t = (uint8_t)rt;
 #endif
-            cpu->gpr[rt] = cpu->cop0[rd];
+            cpu->gpr[rt] = cop0_read;
             cpu->gpr[0] = 0;
             return 0;
         }

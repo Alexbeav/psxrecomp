@@ -57,6 +57,7 @@ set(_PSXRECOMP_TESTREG_DIR "${CMAKE_CURRENT_LIST_DIR}")
 # extra steps, which is the thing this file exists to prevent.
 set(PSXRECOMP_TESTS_NOT_REGISTERED
     "test_load_delay_l1.c|Driven by registered test_load_delay_l1.py with production decoder"
+    "test_mfc0_event_sample.c|Driven by registered test_mfc0_event_sample.py with the production decoder and cycle charging on"
     "test_irq_cache_block.c|Private TAS handoff work/check_irq_cache58.py links retained runtime objects and drives the unchanged original-core timer/branch controls; kernel76 and ROM85 variants share this driver"
     "test_irq_recognition.c|Authored copied-BIOS timer IRQ fixture driven by shared tas-replay-research/verify_irq_recognition.py; source-qualified bounded emitted/load/return cases, not general precise continuation coverage"
     "test_dma_completion_deadline.c|Authored actual-scheduler delayed-completion fixture driven by tas-replay-research/verify_dma_completion_deadline.py; O0/O2 deadline/cache/IRQ/timer controls"

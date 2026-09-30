@@ -1320,6 +1320,9 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_load_delay_l1.py
         --cc ${CMAKE_C_COMPILER} --recompiler $<TARGET_FILE:psxrecomp-game>
         --bios-emitter $<TARGET_FILE:full_function_emitter_test>)
+    add_test(NAME mfc0_event_sample COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_mfc0_event_sample.py
+        --cc ${CMAKE_C_COMPILER})
 endif()
 
 if(Python3_EXECUTABLE)
