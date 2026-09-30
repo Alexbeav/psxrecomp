@@ -778,13 +778,15 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
     }
 
     /* segment misses (docs/SEGMENT_AWARE_CODE.md §5.5): static game text
-     * entered at a PC whose compiled row is in another segment; each ran
-     * interpreted. Top 50 PCs by count. */
+     * entered at a PC whose compiled row is in another segment, each run
+     * interpreted (kind "game"), and compiled BIOS windows entered in another
+     * segment than their body's, each run through the home body (kind
+     * "bios", §5.4). Top 50 PCs by count. */
     {
         enum { kRows = 50 };
-        uint32_t addrs[kRows], homes[kRows];
+        uint32_t addrs[kRows], homes[kRows], kinds[kRows];
         uint64_t counts[kRows];
-        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kRows);
+        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kinds, kRows);
         append_fmt(buf, sizeof(buf), &pos,
             "  \"segment_misses\": {\n"
             "    \"total\": %llu,\n"
@@ -793,8 +795,10 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             (unsigned long long)psx_segment_miss_total(), psx_segment_miss_unique());
         for (uint32_t i = 0; i < n; i++) {
             append_fmt(buf, sizeof(buf), &pos,
-                "%s{\"pc\":\"0x%08X\",\"home\":\"0x%08X\",\"count\":%llu}",
-                i == 0 ? "" : ",", addrs[i], homes[i], (unsigned long long)counts[i]);
+                "%s{\"pc\":\"0x%08X\",\"home\":\"0x%08X\",\"count\":%llu,"
+                "\"kind\":\"%s\"}",
+                i == 0 ? "" : ",", addrs[i], homes[i], (unsigned long long)counts[i],
+                psx_segment_miss_kind_name(kinds[i]));
         }
         append_str(buf, sizeof(buf), &pos, "]\n  },\n");
     }

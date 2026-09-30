@@ -1,5 +1,6 @@
 /* psx_segment_miss.c — segment misses in static game code
- * (docs/SEGMENT_AWARE_CODE.md §5.5). See psx_segment_miss.h.
+ * (docs/SEGMENT_AWARE_CODE.md §5.5) and in the compiled BIOS (§5.4). See
+ * psx_segment_miss.h.
  *
  * Always on, in every build: a segment miss runs interpreted, so it is the
  * slow path already, and the record is what makes it loud (§10 decision 2).
@@ -18,6 +19,7 @@ static uint64_t s_seq = 0;
 typedef struct {
     uint32_t addr;   /* 0 = empty slot (a segment miss is never at PC 0) */
     uint32_t home;
+    uint32_t kind;
     uint64_t count;
 } UniqueSlot;
 static PSX_BSS UniqueSlot s_unique[PSX_SEGMENT_MISS_UNIQUE_CAP];
@@ -38,6 +40,12 @@ uint32_t psx_segment_miss_home(uint32_t addr, int (*is_entry)(uint32_t))
 void psx_segment_miss_record(uint32_t addr, uint32_t home, uint32_t ra,
                              uint32_t sp, uint32_t frame)
 {
+    psx_segment_miss_record_kind(addr, home, ra, sp, frame, PSX_SEGMENT_MISS_GAME);
+}
+
+void psx_segment_miss_record_kind(uint32_t addr, uint32_t home, uint32_t ra,
+                                  uint32_t sp, uint32_t frame, uint32_t kind)
+{
     const uint64_t seq = s_seq++;
     PsxSegmentMissEntry *e = &s_ring[seq & (PSX_SEGMENT_MISS_RING_CAP - 1u)];
     e->seq = seq;
@@ -46,7 +54,7 @@ void psx_segment_miss_record(uint32_t addr, uint32_t home, uint32_t ra,
     e->ra = ra;
     e->sp = sp;
     e->frame = frame;
-    e->pad = 0;
+    e->kind = kind;
     if (addr == 0) return;
     {
         const uint32_t start = (addr >> 2) % PSX_SEGMENT_MISS_UNIQUE_CAP;
@@ -59,6 +67,7 @@ void psx_segment_miss_record(uint32_t addr, uint32_t home, uint32_t ra,
             if (slot->addr == 0) {
                 slot->addr = addr;
                 slot->home = home;
+                slot->kind = kind;
                 slot->count = 1;
                 s_unique_count++;
                 return;
@@ -85,8 +94,13 @@ PsxSegmentMissEntry psx_segment_miss_get(uint64_t seq)
     return s_ring[seq & (PSX_SEGMENT_MISS_RING_CAP - 1u)];
 }
 
+const char *psx_segment_miss_kind_name(uint32_t kind)
+{
+    return kind == PSX_SEGMENT_MISS_BIOS ? "bios" : "game";
+}
+
 uint32_t psx_segment_miss_summary(uint32_t *addrs, uint32_t *homes,
-                                  uint64_t *counts, uint32_t max)
+                                  uint64_t *counts, uint32_t *kinds, uint32_t max)
 {
     /* Selection by count, highest first, then by PC; the table is small. */
     uint32_t written = 0;
@@ -109,6 +123,7 @@ uint32_t psx_segment_miss_summary(uint32_t *addrs, uint32_t *homes,
         if (addrs) addrs[written] = s_unique[best].addr;
         if (homes) homes[written] = s_unique[best].home;
         if (counts) counts[written] = s_unique[best].count;
+        if (kinds) kinds[written] = s_unique[best].kind;
         prev_count = s_unique[best].count;
         prev_addr = s_unique[best].addr;
         written++;

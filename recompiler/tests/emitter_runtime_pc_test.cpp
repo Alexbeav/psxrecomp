@@ -39,6 +39,9 @@
 // compiles in its own link segment, where runtime_pc() is the identity, so
 // only this test (code segment != compile segment) sees the routes; the
 // ledger and test_kuseg_dispatch_lookup.py check the emitted lookup end to end.
+// Two rows on one physical word are an error within one compile; a segment
+// variant's compile (PR D, §5.4) adds rows on its home rows' words, and the
+// lookup then searches the word's rows for the exact PC.
 
 #include "code_generator.h"
 #include "control_flow.h"
@@ -497,9 +500,11 @@ void check_dispatch_rows(Mode mode) {
     }
 }
 
-// One compile has one code segment, so two rows on one physical word (a
-// variant of another segment, §5.4) are a build error until PR D's variants
-// share the table: never a row that silently shadows the other.
+// One compile has one code segment, so two rows on one physical word within
+// it are the same PC: a build error, never a row that silently shadows the
+// other. Segment variants (§5.4) are separate compiles, and their rows share
+// the home rows' words: adjacent, in PC order, looked up by exact PC. Two
+// compiles in one segment would name the same PCs, which is an error again.
 void check_dispatch_duplicate_word() {
     const uint32_t base = KSEG0 | kPhys;
     PSXRecomp::PS1Executable exe{};
@@ -522,6 +527,37 @@ void check_dispatch_duplicate_word() {
         check(error.find("share a physical word") != std::string::npos,
               "dispatch: the duplicate-word error must say why, got: " + error);
     }
+
+    PSXRecomp::PS1Executable kseg1 = exe;
+    kseg1.header.load_address = KSEG1 | kPhys;
+    kseg1.header.initial_pc = KSEG1 | kPhys;
+    PSXRecomp::CodeGenerator variant(kseg1, config);
+    const std::vector<PSXRecomp::GameDispatchUnit> units{
+        {&generator, {base, base + 0x20u}}, {&variant, {KSEG1 | kPhys}}};
+    out.clear();
+    error.clear();
+    check(PSXRecomp::emit_game_dispatch(units, exe, "", out, error) && error.empty(),
+          "dispatch: a variant compile's row may share its home row's word: " + error);
+    const auto home_row = out.find("{0x" + hex(base) + "u, 0x00000000u");
+    const auto variant_row = out.find("{0x" + hex(KSEG1 | kPhys) + "u, 0x00000000u");
+    const auto variant_line =
+        variant_row == std::string::npos
+            ? std::string()
+            : out.substr(variant_row, out.find('\n', variant_row) - variant_row);
+    check(home_row != std::string::npos && variant_row != std::string::npos &&
+              home_row < variant_row &&
+              variant_line.find("func_" + hex(KSEG1 | kPhys) + "}") != std::string::npos,
+          "dispatch: the variant row follows the home row on their word and names its "
+          "body: " + variant_line);
+    check(out.find("k_psx_game_dispatch[row].addr == addr") != std::string::npos,
+          "dispatch: a shared word is searched for the exact PC");
+    const std::vector<PSXRecomp::GameDispatchUnit> twice{
+        {&generator, {base}}, {&variant, {KSEG1 | kPhys}}, {&variant, {KSEG1 | kPhys}}};
+    out.clear();
+    error.clear();
+    check(!PSXRecomp::emit_game_dispatch(twice, exe, "", out, error) &&
+              error.find("are the same PC 0x" + hex(KSEG1 | kPhys)) != std::string::npos,
+          "dispatch: two compiles in one segment name the same PC, an error: " + error);
 }
 
 void check_strict_translator(bool strict_cps) {

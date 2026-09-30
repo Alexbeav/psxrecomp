@@ -2,7 +2,8 @@
 #define PSX_SEGMENT_MISS_H
 
 /* Segment misses in static game code (docs/SEGMENT_AWARE_CODE.md §5.5; §10
- * decision 2: interpret loudly until the title is regenerated).
+ * decision 2: interpret loudly until the title is regenerated), and in the
+ * compiled BIOS (§5.4).
  *
  * A PC carries a segment (KUSEG 0x0..., KSEG0 0x8..., KSEG1 0xA...), and the
  * game dispatch table is keyed by the full PC: each compiled body bakes the
@@ -27,7 +28,7 @@ typedef struct {
     uint32_t ra;
     uint32_t sp;
     uint32_t frame;
-    uint32_t pad;
+    uint32_t kind;   /* PSX_SEGMENT_MISS_GAME or PSX_SEGMENT_MISS_BIOS */
 } PsxSegmentMissEntry;
 
 #define PSX_SEGMENT_MISS_RING_CAP   4096u  /* power of two */
@@ -39,9 +40,24 @@ typedef struct {
  * psx_game_is_function_entry. */
 uint32_t psx_segment_miss_home(uint32_t addr, int (*is_entry)(uint32_t));
 
-/* Record one segment miss. */
+/* What a segment miss ran. GAME: static game text, interpreted at its own
+ * PC (§5.5). BIOS: a relocated BIOS window (kernel, shell) or the ROM entered
+ * in another segment than the one its body was compiled for, with no segment
+ * variant of its own. The BIOS dispatch is keyed by the normalized address,
+ * so the window's home body ran, with its own segment's links, EPCs, fetch
+ * tags and store PCs; the fix is a segment-qualified seed in the BIOS seeds
+ * file (§5.4), not in the game's. */
+#define PSX_SEGMENT_MISS_GAME 0u
+#define PSX_SEGMENT_MISS_BIOS 1u
+
+/* Record one segment miss of static game code (kind GAME). */
 void psx_segment_miss_record(uint32_t addr, uint32_t home, uint32_t ra,
                              uint32_t sp, uint32_t frame);
+
+/* Record one segment miss of either kind. A PC keeps the kind it was first
+ * recorded with in the per-PC counts. */
+void psx_segment_miss_record_kind(uint32_t addr, uint32_t home, uint32_t ra,
+                                  uint32_t sp, uint32_t frame, uint32_t kind);
 
 /* The dispatch hook: dirty_ram_dispatch_inner calls this for every clean
  * game-text miss (a PC in the EXE's text that no compiled body ran). It
@@ -60,9 +76,12 @@ PsxSegmentMissEntry psx_segment_miss_get(uint64_t seq);
 
 /* Per-PC counts, highest first: up to max rows, returns the number written.
  * Counts are exact for the first UNIQUE_CAP distinct PCs; later new PCs are
- * counted in the total and the ring only. */
+ * counted in the total and the ring only. Any output array may be NULL. */
 uint32_t psx_segment_miss_summary(uint32_t *addrs, uint32_t *homes,
-                                  uint64_t *counts, uint32_t max);
+                                  uint64_t *counts, uint32_t *kinds, uint32_t max);
+
+/* "game" or "bios", for reports. */
+const char *psx_segment_miss_kind_name(uint32_t kind);
 
 void psx_segment_miss_reset(void);
 

@@ -106,8 +106,18 @@ static uint32_t ram_alias_to_rom(uint32_t addr) {
  * BIOS copies kernel/shell code into RAM. Literal interrupt resume PCs must use
  * this runtime address; otherwise psx_check_interrupts rejects ROM-shell EPCs
  * and falls back to the legacy sentinel path. */
+/* The segment of the variant being emitted (docs/SEGMENT_AWARE_CODE.md §5.4),
+ * or kNoVariant while emitting the home bodies. A variant is the same ROM
+ * bytes run at another segment's alias of their runtime window: every PC it
+ * computes from its own PCs (links, fetch tags and the uncached-fetch test,
+ * IRQ resume PCs, branch and fallthrough targets, EPCs, store PCs) is in that
+ * segment, and a J target keeps the segment's top bits. */
+static constexpr uint32_t kNoVariant = 0xFFFFFFFFu;
+static uint32_t g_variant_seg = kNoVariant;
+
 static uint32_t bios_runtime_pc(uint32_t rom_pc) {
-    return addr_model().runtime_pc(rom_pc);
+    const uint32_t pc = addr_model().runtime_pc(rom_pc);
+    return g_variant_seg == kNoVariant ? pc : (g_variant_seg | (pc & 0x1FFFFFFFu));
 }
 
 uint32_t FullFunctionEmitter::read_u32_le(const std::vector<uint8_t>& rom, uint32_t offset) {
@@ -154,8 +164,17 @@ bool FullFunctionEmitter::emit_function(
     std::vector<ContinuationLabel>& out_cross_targets,
     std::string*                out_interpreter_reason)
 {
-    const uint32_t norm = func.normalized_addr;
+    // A home body is keyed (and named) by its normalized address; a segment
+    // variant by its exact runtime PC, which the dispatch compares in full.
+    const bool variant = g_variant_seg != kNoVariant;
+    const uint32_t norm = variant ? bios_runtime_pc(func.entry_addr) : func.normalized_addr;
     if (out_interpreter_reason) out_interpreter_reason->clear();
+    // Dispatch key of a continuation label inside this body: its normalized
+    // address at home, its exact runtime PC in a variant. (Membership tests
+    // against the function-entry set stay normalized.)
+    auto cont_key = [&](uint32_t rom, uint32_t home_norm) -> uint32_t {
+        return variant ? bios_runtime_pc(rom) : home_norm;
+    };
 
     // RECURSION_BUG.md §25 — continuation-passing call/return (the universal fix
     // for the idle-freeze host-stack leak). When PSX_CPS is set at gen time,
@@ -241,7 +260,7 @@ bool FullFunctionEmitter::emit_function(
         uint32_t cross_norm = normalize_address(cross);
         if (all_function_entries_norm.count(cross_norm)) continue;
         block_leaders.insert(cross);
-        local_continuations.push_back({cross, cross_norm, norm});
+        local_continuations.push_back({cross, cont_key(cross, cross_norm), norm});
     }
 
     // FAITHFUL_TIMING_PLAN P5 / game code_generator.cpp parity: every basic-block
@@ -266,7 +285,7 @@ bool FullFunctionEmitter::emit_function(
         if (!addr_to_raw.count(leader)) continue;
         uint32_t leader_norm = normalize_address(leader);
         if (all_function_entries_norm.count(leader_norm)) continue;
-        local_continuations.push_back({leader, leader_norm, norm});
+        local_continuations.push_back({leader, cont_key(leader, leader_norm), norm});
     }
 
     // Helper: find which function (in all_function_entries_norm) contains a
@@ -333,7 +352,10 @@ bool FullFunctionEmitter::emit_function(
     // on the upper 4 bits of the PC. The code runs at RAM addresses, not ROM
     // addresses, so we must fix J/JAL targets in the branch resolution.
     auto relocate_j_target = [](uint32_t rom_addr, uint32_t target) -> uint32_t {
-        return addr_model().relocate_j_target(rom_addr, target);
+        const uint32_t t = addr_model().relocate_j_target(rom_addr, target);
+        // A variant's J target keeps the variant PC's top bits (§2).
+        return g_variant_seg == kNoVariant
+            ? t : ((bios_runtime_pc(rom_addr) & 0xF0000000u) | (t & 0x0FFFFFFFu));
     };
 
     /* Relocate a return address ($ra) from ROM PC to the runtime address.
@@ -843,7 +865,7 @@ bool FullFunctionEmitter::emit_function(
                     block_leaders.insert(resume_rom);
                     uint32_t resume_norm = normalize_address(resume_rom);
                     if (!all_function_entries_norm.count(resume_norm)) {
-                        local_continuations.push_back({resume_rom, resume_norm, norm});
+                        local_continuations.push_back({resume_rom, cont_key(resume_rom, resume_norm), norm});
                     }
                 }
             }
@@ -1253,7 +1275,7 @@ bool FullFunctionEmitter::emit_function(
                         if (addr_to_raw.count(addr + 8)) {
                             uint32_t cn = normalize_address(addr + 8);
                             if (!all_function_entries_norm.count(cn))
-                                local_continuations.push_back({addr + 8, cn, norm});
+                                local_continuations.push_back({addr + 8, cont_key(addr + 8, cn), norm});
                         } else {
                             register_cross_function_target(addr + 8);
                         }
@@ -1309,7 +1331,7 @@ bool FullFunctionEmitter::emit_function(
                         if (addr_to_raw.count(addr + 8)) {
                             uint32_t cn = normalize_address(addr + 8);
                             if (!all_function_entries_norm.count(cn))
-                                local_continuations.push_back({addr + 8, cn, norm});
+                                local_continuations.push_back({addr + 8, cont_key(addr + 8, cn), norm});
                         } else {
                             register_cross_function_target(addr + 8);
                         }
@@ -1431,7 +1453,7 @@ bool FullFunctionEmitter::emit_function(
                     uint32_t cont_rom = pb.terminator_addr + 8;
                     uint32_t cont_norm = normalize_address(cont_rom);
                     if (!all_function_entries_norm.count(cont_norm)) {
-                        local_continuations.push_back({cont_rom, cont_norm, norm});
+                        local_continuations.push_back({cont_rom, cont_key(cont_rom, cont_norm), norm});
                     }
                 } else if (cps) {
                     register_cross_function_target(pb.terminator_addr + 8);
@@ -1477,7 +1499,7 @@ bool FullFunctionEmitter::emit_function(
                     uint32_t cont_rom = pb.terminator_addr + 8;
                     uint32_t cont_norm = normalize_address(cont_rom);
                     if (!all_function_entries_norm.count(cont_norm)) {
-                        local_continuations.push_back({cont_rom, cont_norm, norm});
+                        local_continuations.push_back({cont_rom, cont_key(cont_rom, cont_norm), norm});
                     }
                 } else if (cps) {
                     register_cross_function_target(pb.terminator_addr + 8);
@@ -1603,7 +1625,11 @@ bool FullFunctionEmitter::emit_function(
                                 if (!seen_runtime.insert(rv).second) continue;
                                 uint32_t rom_target = ram_alias_to_rom(rv);
                                 register_cross_function_target(rom_target);
-                                if (addr_to_raw.count(rom_target) && block_leaders.count(rom_target))
+                                // A variant continues locally only for a case
+                                // value in its own segment; another segment's
+                                // value is dispatched with its full PC (§5.4).
+                                if (addr_to_raw.count(rom_target) && block_leaders.count(rom_target) &&
+                                    (!variant || rv == bios_runtime_pc(rom_target)))
                                     targets.push_back({rv, rom_target});
                             }
                             if (!targets.empty()) {
@@ -1748,7 +1774,8 @@ void FullFunctionEmitter::emit_dispatch(
     const std::vector<uint8_t>&         rom,
     uint32_t                            base_addr,
     const std::vector<BiosVectorTable>& bios_vectors,
-    const std::vector<BiosAlias>&       bios_aliases)
+    const std::vector<BiosAlias>&       bios_aliases,
+    const std::vector<std::pair<uint32_t, std::string>>& variant_rows)
 {
     // RECURSION_BUG.md §25 — continuation-passing. Under CPS the BIOS A0/B0/C0
     // vector dispatch must TAIL-TRANSFER to the handler (set cpu->pc, return)
@@ -1786,6 +1813,7 @@ void FullFunctionEmitter::emit_dispatch(
     // backend ABI come from the runtime headers rather than being
     // re-declared here, so they cannot drift from what the runtime reads.
     out += "#include \"psx_bios_backend.h\"\n";
+    out += "#include \"psx_segment_miss.h\"\n";
     out += "#include <stdint.h>\n";
     out += "#include <stdio.h>\n";
     out += "#include <stdlib.h>\n\n";
@@ -1823,6 +1851,10 @@ void FullFunctionEmitter::emit_dispatch(
         } else {
             out += fmt::format("extern void {}(CPUState* cpu);\n", fn_sym(norm));
         }
+    }
+    for (const auto& [pc, sym] : variant_rows) {
+        (void)pc;
+        out += fmt::format("extern void {}(CPUState* cpu);\n", sym);
     }
     out += "\n";
 
@@ -1953,6 +1985,18 @@ void FullFunctionEmitter::emit_dispatch(
         }
     }
     out += "};\n\n";
+
+    // Segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): bodies compiled for
+    // one exact runtime PC in another segment than their window's. Keyed by
+    // the full PC; the normalized table above still finds the word (and its
+    // kernel-bless guard applies), then an exact match runs the variant.
+    if (!variant_rows.empty()) {
+        out += fmt::format("static const DispatchEntry segment_variant_table[{}] = {{\n",
+                           variant_rows.size());
+        for (const auto& [pc, sym] : variant_rows)
+            out += fmt::format("    {{ 0x{:08X}u, {} }},\n", pc, sym);
+        out += "};\n\n";
+    }
 
     // --- Kernel body-extent table (runtime kernel-image bless) ---
     // The BIOS copies Kernel Part 2 from ROM [0x1FC10000,0x1FC18000) to RAM
@@ -2152,6 +2196,38 @@ void FullFunctionEmitter::emit_dispatch(
     // C can never drift from the analysis that produced it.
     out += addr_model().emit_normalize_c();
 
+    // The body a normalized hit runs (docs/SEGMENT_AWARE_CODE.md §5.4). The
+    // table is keyed by the normalized address, so it finds a word in any
+    // segment. A segment variant compiled for the exact PC runs instead of the
+    // word's home body. Any other PC in another segment than the home body's
+    // still runs the home body, which bakes its own segment's links, EPCs,
+    // fetch tags and store PCs: that is a BIOS segment miss, recorded in the
+    // segment-miss ring (kind BIOS) so the entry is loud and can be seeded.
+    out += addr_model().emit_key_home_pc_c(base_addr);
+    out += "extern uint64_t s_frame_count;\n";
+    out += "static PsxRecompFunc psx_bios_hit_body(CPUState* cpu, uint32_t addr, uint32_t key,\n";
+    out += "                                       PsxRecompFunc home) {\n";
+    if (!variant_rows.empty()) {
+        out += "    /* A segment variant compiled for this exact PC. */\n";
+        out += fmt::format("    for (int lo_ = 0, hi_ = {} - 1; lo_ <= hi_;) {{\n",
+                           variant_rows.size());
+        out += "        const int mid_ = (lo_ + hi_) / 2;\n";
+        out += "        if (segment_variant_table[mid_].addr == addr)\n";
+        out += "            return segment_variant_table[mid_].func;\n";
+        out += "        if (segment_variant_table[mid_].addr < addr) lo_ = mid_ + 1;\n";
+        out += "        else hi_ = mid_ - 1;\n";
+        out += "    }\n";
+    }
+    out += "    {\n";
+    out += "        const uint32_t home_pc = psx_bios_key_home_pc(key);\n";
+    out += "        if (home_pc != 0u && ((addr ^ home_pc) & 0xE0000000u) != 0u)\n";
+    out += "            psx_segment_miss_record_kind(addr, home_pc, cpu->gpr[31], cpu->gpr[29],\n";
+    out += "                                         (uint32_t)s_frame_count,\n";
+    out += "                                         PSX_SEGMENT_MISS_BIOS);\n";
+    out += "    }\n";
+    out += "    return home;\n";
+    out += "}\n\n";
+
     out += "extern int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr);\n";
     out += "extern int dirty_ram_is_dirty(uint32_t phys);\n";
     out += "extern int psx_kernel_bless_dispatchable(uint32_t phys);\n";
@@ -2159,10 +2235,13 @@ void FullFunctionEmitter::emit_dispatch(
     out += "extern uint64_t g_dispatch_static_hits;\n";
     out += "\n";
     out += "extern int g_psx_dispatch_depth;  /* runtime-owned: shared dispatch state, not per-image */\n\n";
+    // Return PCs are compared in full, segment included, as psx_call_contract
+    // does (docs/SEGMENT_AWARE_CODE.md §5.5): stop_addr is the link the call
+    // wrote, in its body's segment.
     out += "static void psx_dispatch_check_return_boundary(CPUState* cpu, uint32_t stop_addr) {\n";
     out += "    if (stop_addr != 0u) {\n";
     out += "        psx_check_interrupts_at(cpu, stop_addr);\n";
-    out += "        if (((cpu->pc ^ stop_addr) & 0x1FFFFFFFu) == 0) cpu->pc = 0;\n";
+    out += "        if (cpu->pc == stop_addr) cpu->pc = 0;\n";
     out += "    } else {\n";
     out += "        psx_check_interrupts(cpu);\n";
     out += "    }\n";
@@ -2288,7 +2367,9 @@ void FullFunctionEmitter::emit_dispatch(
     }
     out += "                g_debug_current_func_addr = phys;\n";
     out += "                debug_server_trace_dispatch(phys);\n";
-    out += "                dispatch_table[mid].func(cpu);\n";
+    // The exact PC picks the body: a segment variant, or the home body
+    // (recorded when the PC is in another segment than it, §5.4).
+    out += "                psx_bios_hit_body(cpu, addr, phys, dispatch_table[mid].func)(cpu);\n";
     out += "                g_dispatch_static_hits++;\n";
     out += "                found = 1;\n";
     out += "                break;\n";
@@ -2322,7 +2403,7 @@ void FullFunctionEmitter::emit_dispatch(
     out += "             * holds the guest's true target.  Resolve here iff the\n";
     out += "             * wild flow arrived exactly at this call's contract. */\n";
     out += "            if (stop_addr != 0 &&\n";
-    out += "                ((cpu->pc ^ stop_addr) & 0x1FFFFFFFu) == 0 &&\n";
+    out += "                cpu->pc == stop_addr &&\n";
     out += "                cpu->gpr[29] == sp_at_call) {\n";
     out += "                g_psx_call_bail = 0;\n";
     out += "                g_psx_bail_resolved++;\n";
@@ -2347,7 +2428,7 @@ void FullFunctionEmitter::emit_dispatch(
     out += "        if (cpu->pc == 0) {\n";
     out += "            if (stop_addr != 0 &&\n";
     out += "                (cpu->gpr[29] != sp_at_call ||\n";
-    out += "                 ((cpu->gpr[31] ^ stop_addr) & 0x1FFFFFFFu) != 0)) {\n";
+    out += "                 cpu->gpr[31] != stop_addr)) {\n";
     out += "                /* Callee C-returned but the guest did not return to\n";
     out += "                 * this call site ($ra holds the wild jr's target):\n";
     out += "                 * begin the bail unwind instead of resuming the\n";
@@ -2387,7 +2468,7 @@ void FullFunctionEmitter::emit_dispatch(
     out += "            int sp0_exc_ = ((uint32_t)(sp0_ - 0x1F800000u) < 0x400u);\n";
     out += "            int sp1_exc_ = ((uint32_t)(sp1_ - 0x1F800000u) < 0x400u);\n";
     out += "            int exc_sp_straddle_ =\n";
-    out += "                (((cpu->gpr[31] ^ stop_addr) & 0x1FFFFFFFu) == 0) &&\n";
+    out += "                (cpu->gpr[31] == stop_addr) &&\n";
     out += "                (sp0_exc_ != sp1_exc_);\n";
     out += "            if (cpu->gpr[29] != sp_at_call && !exc_sp_straddle_) {\n";
     out += "                /* Same address, different frame (recursion or a wild\n";
@@ -2463,9 +2544,11 @@ EmitStats FullFunctionEmitter::emit(
     const std::string&                out_dir,
     const std::string&                out_stem,
     const std::vector<BiosVectorTable>& bios_vectors,
-    const std::vector<BiosAlias>&       bios_aliases)
+    const std::vector<BiosAlias>&       bios_aliases,
+    const std::vector<BiosSegmentVariantSeed>& variant_seeds)
 {
     EmitStats stats;
+    g_variant_seg = kNoVariant;
 
     // Setup / Retro zips omit generated/; create it before ofstream.
     if (!out_dir.empty()) {
@@ -2566,19 +2649,20 @@ EmitStats FullFunctionEmitter::emit(
 
     // ---- PASS 1: dry run to collect cross-function tail-call targets ----
     std::map<uint32_t, std::set<uint32_t>> cross_targets_by_parent;
+    /* Instruction-address -> owning function (normalized). Hard caps
+     * partition the address space, so each walked instruction has exactly
+     * one owner. Used below to route cross-function targets to the
+     * function that actually CONTAINS them: the range-based parent guess
+     * (largest entry <= target) is wrong when seeds split a function into
+     * fragments and the preceding fragment ends before the target —
+     * emit_function's injection then silently dropped the continuation
+     * and the runtime FAIL-FASTed on dispatch (OpenBIOS exceptionHandler
+     * priority_loop 0xBFC208E8, split by the patch-slot code_ptr seeds).
+     * The segment-variant closure below uses it too. */
+    std::map<uint32_t, uint32_t> insn_owner;
     {
         std::vector<ContinuationLabel> dry_run_continuations;
         std::vector<ContinuationLabel> dry_run_cross;
-        /* Instruction-address -> owning function (normalized). Hard caps
-         * partition the address space, so each walked instruction has exactly
-         * one owner. Used below to route cross-function targets to the
-         * function that actually CONTAINS them: the range-based parent guess
-         * (largest entry <= target) is wrong when seeds split a function into
-         * fragments and the preceding fragment ends before the target —
-         * emit_function's injection then silently dropped the continuation
-         * and the runtime FAIL-FASTed on dispatch (OpenBIOS exceptionHandler
-         * priority_loop 0xBFC208E8, split by the patch-slot code_ptr seeds). */
-        std::map<uint32_t, uint32_t> insn_owner;
         for (const auto& fn : dr.functions) {
             std::string lineage = fn.discovered_by;
             uint32_t cap = hard_caps.count(fn.entry_addr)
@@ -2660,6 +2744,105 @@ EmitStats FullFunctionEmitter::emit(
 
     stats.dispatch_entries = static_cast<uint32_t>(emitted_normalized.size());
 
+    // ---- Segment variants (docs/SEGMENT_AWARE_CODE.md §5.4) ----
+    // Each segment-qualified seed names a runtime PC in another segment than
+    // its copy window's. The function at its ROM bytes and that function's
+    // direct-edge closure (branch and J/JAL targets that leave it, the call
+    // return and fall-through past its end) are emitted again with the seed's
+    // segment. Dispatch runs a variant only for its exact PC.
+    std::vector<std::pair<uint32_t, std::string>> variant_rows;  // runtime PC -> symbol
+    std::vector<ContinuationLabel> variant_continuations;
+    if (!variant_seeds.empty()) {
+        std::map<uint32_t, uint32_t> norm_to_entry;
+        for (const auto& fn : dr.functions) norm_to_entry[fn.normalized_addr] = fn.entry_addr;
+        auto owner_entry = [&](uint32_t rom) -> uint32_t {
+            if (entry_to_idx.count(rom)) return rom;
+            auto ow = insn_owner.find(rom);
+            if (ow == insn_owner.end()) return 0;
+            auto e = norm_to_entry.find(ow->second);
+            return e == norm_to_entry.end() ? 0 : e->second;
+        };
+        std::map<uint32_t, std::set<uint32_t>> closure;  // segment -> ROM entries
+        for (const auto& vs : variant_seeds) {
+            if (!entry_to_idx.count(vs.rom) || !emitted_normalized.count(normalize_address(vs.rom))) {
+                throw std::runtime_error(fmt::format(
+                    "segment-variant seed 0x{:08X} ({}) names ROM 0x{:08X}, which is no "
+                    "emitted function entry (docs/SEGMENT_AWARE_CODE.md §5.4)",
+                    vs.pc, vs.label, vs.rom));
+            }
+            const uint32_t seg = vs.pc & 0xE0000000u;
+            std::vector<uint32_t> work{vs.rom};
+            while (!work.empty()) {
+                const uint32_t entry = work.back();
+                work.pop_back();
+                if (!closure[seg].insert(entry).second) continue;
+                const auto& fn = dr.functions[entry_to_idx.at(entry)];
+                uint32_t cap = hard_caps.count(fn.entry_addr) ? hard_caps[fn.entry_addr] : rom_end + 1;
+                auto sfr = FunctionDiscovery::walk_function(rom, base_addr, rom_end, fn.entry_addr,
+                                                            cap, fn.discovered_by);
+                std::set<uint32_t> own;
+                for (const auto& [a, w] : sfr.instructions) own.insert(a);
+                auto reach = [&](uint32_t target_rom) {
+                    if (own.count(target_rom)) return;
+                    const uint32_t e = owner_entry(target_rom);
+                    if (e && emitted_normalized.count(normalize_address(e))) work.push_back(e);
+                };
+                uint32_t last = 0, prev_raw = 0, last_raw = 0;
+                for (const auto& [a, w] : sfr.instructions) {
+                    const uint32_t op = w >> 26;
+                    if (op == 0x02 || op == 0x03) {  // j / jal: the runtime PC's top bits
+                        const uint32_t rt_src = addr_model().runtime_pc(a);
+                        const uint32_t t = ((rt_src + 4u) & 0xF0000000u) | ((w & 0x03FFFFFFu) << 2);
+                        const uint32_t t_phys = t & 0x1FFFFFFFu;
+                        reach(t_phys >= (base_addr & 0x1FFFFFFFu) &&
+                                      t_phys <= (rom_end & 0x1FFFFFFFu)
+                                  ? (base_addr & 0xE0000000u) | t_phys
+                                  : addr_model().ram_alias_to_rom(t));
+                    } else if (op == 0x01 || (op >= 0x04 && op <= 0x07)) {  // branches
+                        reach(a + 4u + (static_cast<uint32_t>(static_cast<int32_t>(
+                                            static_cast<int16_t>(w & 0xFFFFu))) << 2));
+                    }
+                    prev_raw = last_raw;
+                    last_raw = w;
+                    last = a;
+                }
+                // Past the end: a fall-through, or the return of a final call.
+                // Only an unconditional j / jr in the last pair ends the path.
+                auto ends = [](uint32_t w) {
+                    return (w >> 26) == 0x02 || ((w >> 26) == 0 && (w & 0x3F) == 0x08);
+                };
+                if (last && !ends(prev_raw) && !ends(last_raw)) reach(last + 4u);
+            }
+        }
+        for (const auto& [seg, entries] : closure) {
+            for (uint32_t entry : entries) {
+                const auto& fn = dr.functions[entry_to_idx.at(entry)];
+                uint32_t cap = hard_caps.count(fn.entry_addr) ? hard_caps[fn.entry_addr] : rom_end + 1;
+                auto sfr = FunctionDiscovery::walk_function(rom, base_addr, rom_end, fn.entry_addr,
+                                                            cap, fn.discovered_by);
+                if (!sfr.unsupported.empty()) continue;
+                std::set<uint32_t> injected;
+                if (cross_targets_by_parent.count(fn.normalized_addr))
+                    injected = cross_targets_by_parent[fn.normalized_addr];
+                std::vector<ContinuationLabel> discard_cross;
+                std::string interpreter_reason;
+                g_variant_seg = seg;
+                const uint32_t key = bios_runtime_pc(fn.entry_addr);
+                const bool ok = emit_function(full_c, fn, sfr, all_function_entries_norm, rom,
+                                              base_addr, rom_end, variant_continuations, injected,
+                                              discard_cross, &interpreter_reason);
+                g_variant_seg = kNoVariant;
+                if (!ok) {
+                    throw std::runtime_error(fmt::format(
+                        "segment variant 0x{:08X} of ROM 0x{:08X} could not be emitted "
+                        "though its home body was: {}", key, fn.entry_addr, interpreter_reason));
+                }
+                variant_rows.emplace_back(key, fn_sym(key));
+                stats.variant_functions++;
+            }
+        }
+    }
+
     // Emit fatal stubs for skipped functions (e.g. FPU) so calls to them
     // link but abort at runtime with a diagnostic.
     for (const auto& [skip_addr, reason] : stats.skipped) {
@@ -2717,6 +2900,28 @@ EmitStats FullFunctionEmitter::emit(
         }
     }
 
+    // A variant's continuations are keyed by their exact runtime PC and
+    // re-enter the variant body.
+    {
+        std::map<uint32_t, ContinuationLabel> unique_variant;
+        std::set<uint32_t> variant_keys;
+        for (const auto& [pc, sym] : variant_rows) variant_keys.insert(pc);
+        for (const auto& cl : variant_continuations) {
+            if (addr_model().in_install_slot_range(normalize_address(cl.rom_addr))) continue;
+            if (!variant_keys.count(cl.norm_addr)) unique_variant[cl.norm_addr] = cl;
+        }
+        for (const auto& [key, cl] : unique_variant) {
+            full_c += fmt::format("void {}(CPUState* cpu) {{\n",
+                                  cont_sym(cl.parent_func_norm, cl.rom_addr));
+            full_c += fmt::format("    cpu->pc = 0x{:08X}u;\n", cl.rom_addr);
+            full_c += fmt::format("    {}(cpu);\n", fn_sym(cl.parent_func_norm));
+            full_c += "}\n\n";
+            variant_rows.emplace_back(key, cont_sym(cl.parent_func_norm, cl.rom_addr));
+        }
+        std::sort(variant_rows.begin(), variant_rows.end());
+        stats.variant_entries = static_cast<uint32_t>(variant_rows.size());
+    }
+
     if (!unique_continuations.empty()) {
         full_c += fmt::format("\n/* --- {} continuation wrappers for jal/jalr return routing --- */\n\n",
                               unique_continuations.size());
@@ -2744,7 +2949,8 @@ EmitStats FullFunctionEmitter::emit(
     {
         std::string dispatch_c;
         emit_dispatch(dispatch_c, dr, emitted_normalized, unique_continuations,
-                      bios_sha256, rom, base_addr, bios_vectors, bios_aliases);
+                      bios_sha256, rom, base_addr, bios_vectors, bios_aliases,
+                      variant_rows);
         std::string path = out_dir + "/" + out_stem + "_dispatch.c";
         write_file_if_changed(path, dispatch_c);
     }

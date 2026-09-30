@@ -198,8 +198,36 @@ Status: MODERATE-STRONG (regions games use).
     the full PC, so an alias of static text runs interpreted with its own segment
     instead of through another segment's body. On the synthetic probe, compiled code
     now equals Beetle and the interpreter in every result word and cycle-watch
-    interval on both BIOSes. Open: compiled variants for other segments (PR D),
-    overlay segments (PR E).
+    interval on both BIOSes. Open: overlay segments (PR E).
+  - 2026-09-29, segment-aware PR D: segment-qualified seeds compile per-segment
+    variants of static code (the direct-edge closure, with its own names, rows and
+    PCs; KSEG1 variants charge a fetch per instruction), and dispatch finds the
+    exact PC among a word's rows. The probe's KSEG0 and KSEG1 `probe_run` runs are
+    native now and still equal Beetle, with an empty segment-miss ring. BIOS
+    variants too: SCPH-1001's KSEG1 kernel entry `0xA0000500` (below). Still
+    normalized in the BIOS dispatch: every PC without a variant row runs the body
+    of its window's segment, as before.
+  - 2026-09-30, PR D review fixes: such a BIOS alias entry is no longer silent.
+    It is recorded in the segment-miss ring as kind `bios` with the home PC. LLE
+    boots of OpenBIOS and SCPH-1001 through the probe's disc boot record none, so
+    `0xA0000500` is the only alias entry either BIOS makes there. Without its seed
+    the ring names exactly `0xA0000500`. Open: whether an alias entry should run
+    interpreted instead of through the home body; that changes behaviour and needs
+    a measured case, and none is known. Also: the runtime still treats a PC in
+    `0x20000000`-`0x7FFFFFFF` as game text by its physical address
+    (`psx_game_address_in_text` masks), where Beetle's `addr_mask` does not fold
+    it onto RAM. The recompiler now refuses such seeds; the runtime side is
+    unmeasured.
+  2026-09-29: with segment-aware PR D (which closes the −9) and #435 merged
+  locally, both LLE boots are at 0 at every hit of every anchor through the shell
+  entry.
+- [x] **SCPH-1001's KSEG1 kernel entry (2026-09-29, segment-aware PR D).** The
+  reset code enters the relocated kernel through `0xA0000500`; Beetle charges the
+  four trampoline instructions as uncached fetches (20 cycles), and the BIOS
+  dispatch ran the body compiled for runtime `0x00000500` (11). A seed in
+  SCPH-1001's profile now compiles a KSEG1 variant of it. LLE boot against Beetle:
+  the first hit of every SCPH-1001 anchor is 0 (was −9); the shell entry is −445,
+  the IsC gap alone. Guard: `bios_segment_variants` (static check of the seed).
 - [x] **IsC stores reach the caches, as in Beetle (2026-09-29).** memory.c dropped
   every store made while SR.IsC was set. Beetle's WriteMemory
   (mednafen/psx/cpu.cpp:482-512) handles them before any address decode. With the
@@ -322,13 +350,17 @@ Status: STRONG (most project effort lives here).
   sites in KUSEG (`tools/collect_game_misses.py --game-toml` now writes KUSEG
   seeds). Until PR E their overlay code runs interpreted: static code enters it at
   KUSEG PCs, which #417's gate keeps off the KSEG0-compiled shards.
-- [ ] **Call-contract return checks mask the segment.** `psx_call_contract`
-  (`cpu_state.h`) and the four return checks of the generated BIOS dispatch loop
-  compare `$ra`/`pc` with the call site's return PC physically. A callee that
-  returns to an alias of its call site would continue in the caller's compiled
-  body, where hardware runs the alias's segment. No title is known to do it;
-  PR D, which adds compiled variants, makes the five checks exact together
-  (SEGMENT_AWARE_CODE.md §5.5).
+- [x] **Call-contract return checks mask the segment (fixed 2026-09-29,
+  segment-aware PR D).** `psx_call_contract` (`cpu_state.h`) and the four return
+  checks of the generated BIOS dispatch loop compared `$ra`/`pc` with the call
+  site's return PC physically, so a callee returning to an alias of its call site
+  would continue in the caller's compiled body, where hardware runs the alias's
+  segment. All five compare the full PC now (SEGMENT_AWARE_CODE.md §5.5). LLE
+  boots and R4 fingerprints (12000 frames, cold and warm) are unchanged by it.
+  Guard: ledger `exact-return-contract`. Masked PC compares left elsewhere are not
+  return checks against a call's link: the overlay shadow run's return test
+  (`overlay_loader.c`, PR E's scope) and the interrupt/pump "did the PC move"
+  tests (`dirty_ram_same_pc`, `same_guest_pc`, savestate's resume match).
 - [ ] Backend equivalence (compiled == interp) — necessary, not sufficient.
   Measured with `tools/fp_identity.py` (2026-09-29): seeded warm vs cold
   overlay-cache runs, judged on the `frame_fingerprint` guest-fact columns. R4,

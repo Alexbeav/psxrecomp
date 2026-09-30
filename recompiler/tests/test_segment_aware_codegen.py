@@ -45,10 +45,7 @@ SEG_MASK, PHYS_MASK = 0xE0000000, 0x1FFFFFFF
 
 # id -> (design section, what is missing). Remove an entry in the change
 # that closes it; the test fails until the ledger matches.
-KNOWN_GAPS = {
-    "segment-variants": ("5.4", "a seeded KSEG1 entry gets no body of its own"),
-    "kseg1-fetch-charge": ("5.6", "compiled KSEG1 code does not charge +4 per fetch"),
-}
+KNOWN_GAPS = {}
 
 # Closed ids that stay as regression guards: each reports a new gap if the
 # property breaks again. id -> design section.
@@ -66,6 +63,13 @@ REGRESSION_GUARDS = {
     "home-seed-accepted": "5.3",
     "alias-fetch-coherence": "5.3",
     "segment-miss": "5.5",
+    # PR D: segment-qualified seeds compile per-segment variants, and KSEG1
+    # variants charge a fetch per instruction.
+    "segment-variants": "5.4",
+    "kseg1-fetch-charge": "5.6",
+    # PR D: the call contract compares return PCs in full, in
+    # psx_call_contract and in the BIOS dispatch loop alike.
+    "exact-return-contract": "5.5",
 }
 
 
@@ -131,6 +135,49 @@ int main(void) {
     return 0;
 }
 """
+
+# psx_call_contract (runtime/include/cpu_state.h), compiled as the game C and
+# the interpreter use it. A return to another segment's alias of the call site
+# is not a return to this site: it starts a bail, and a bail resolves only at
+# the exact PC.
+CONTRACT_HARNESS = r"""
+#include "cpu_state.h"
+#include <stdio.h>
+#include <string.h>
+int g_psx_call_bail;
+uint64_t g_psx_bail_first, g_psx_bail_resolved, g_psx_bail_flattened, g_psx_bail_anomaly;
+void psx_bail_record(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
+    (void)a; (void)b; (void)c; (void)d;
+}
+int main(void) {
+    const uint32_t ra = 0x00010018u, sp = 0x801FFF00u;
+    const uint32_t alias[] = {0x80010018u, 0xA0010018u};
+    int bad = 0;
+    CPUState cpu;
+    memset(&cpu, 0, sizeof cpu);
+    cpu.gpr[29] = sp; cpu.gpr[31] = ra;
+    bad |= psx_call_contract(&cpu, ra, sp) != 0 || g_psx_call_bail;
+    for (int i = 0; i < 2; ++i) {
+        g_psx_call_bail = 0; cpu.pc = 0; cpu.gpr[31] = alias[i];
+        bad |= (psx_call_contract(&cpu, ra, sp) != 1 || !g_psx_call_bail) << 1;
+        cpu.pc = alias[i];
+        bad |= (psx_call_contract(&cpu, ra, sp) != 1 || !g_psx_call_bail) << 2;
+        cpu.pc = ra;
+        bad |= (psx_call_contract(&cpu, ra, sp) != 0 || g_psx_call_bail) << 3;
+    }
+    printf("%d\n", bad);
+    return 0;
+}
+"""
+
+# The BIOS dispatch loop's return checks (return boundary, bail resolve, the
+# wild-return test and the exception-stack straddle), as emitted.
+BIOS_RETURN_CHECKS = (
+    "if (cpu->pc == stop_addr) cpu->pc = 0;",
+    "cpu->pc == stop_addr &&",
+    "cpu->gpr[31] != stop_addr)) {",
+    "(cpu->gpr[31] == stop_addr) &&",
+)
 
 DISPATCH_HARNESS_HEAD = r"""
 #include <stdint.h>
@@ -431,6 +478,19 @@ def main():
             gaps.add("segment-variants")
             notes["segment-variants"] = ", ".join(
                 "0x%08X->%s" % (q, "0x%08X" % found[q][0] if found[q] else "miss") for q in bad)
+        else:
+            # A variant body is its segment's code identity: every PC it bakes
+            # (links, fetch tags, IRQ resume PCs, exits and continuation keys,
+            # store PCs) is in that segment, and so is its name.
+            foreign = sorted({pc for q in variant_q for gid, pattern in PC_SITES.items()
+                              for pc in pc_constants(bodies[found[q][2]], pattern)
+                              if (pc & SEG_MASK) != (q & SEG_MASK)} |
+                             {int(found[q][2][5:], 16) for q in variant_q
+                              if (int(found[q][2][5:], 16) & SEG_MASK) != (q & SEG_MASK)})
+            if foreign:
+                gaps.add("segment-variants")
+                notes["segment-variants"] = "%d PCs baked in another segment, e.g. 0x%08X" % (
+                    len(foreign), foreign[0])
         wrong_home = [q for q in home_q if not found[q] or found[q][0] != q]
         stray = [q for q in miss_q if found[q]]
         if stray or wrong_home:
@@ -445,9 +505,11 @@ def main():
                           if (pc & SEG_MASK) != link})
             if gid == "resume-pc-segment":
                 # The dispatch rows' keys and resume PCs are PCs too (§5.2):
-                # dispatch sets cpu->pc = resume_pc before entering a body.
-                off = sorted(set(off) | {pc for a, r, _ in rows for pc in (a, r)
-                                         if pc and (pc & SEG_MASK) != link})
+                # dispatch sets cpu->pc = resume_pc before entering a body, so
+                # each row's key and resume PC are in the segment of the body
+                # it enters (the home body's, or a variant's, §5.4).
+                off = sorted(set(off) | {pc for a, r, fn in rows for pc in (a, r)
+                                         if pc and (pc & SEG_MASK) != (int(fn[5:], 16) & SEG_MASK)})
             if off:
                 gaps.add(gid)
                 notes[gid] = "%d constants, e.g. 0x%08X" % (len(off), off[0])
@@ -506,6 +568,32 @@ def main():
         run_recompiler(args.bios_recompiler, ["--config", openbios_toml, "--out-dir", tmp])
         with open(os.path.join(tmp, "OpenBIOS_full.c")) as f:
             bios_c = f.read()
+        with open(os.path.join(tmp, "OpenBIOS_dispatch.c")) as f:
+            bios_dispatch = f.read()
+
+        # -- 5.5: return PCs are compared in full (PR D) ----------------------
+        # Closed by PR D, kept as a regression guard: psx_call_contract and
+        # the emitted BIOS dispatch loop require the exact return PC.
+        src = os.path.join(tmp, "contract.c")
+        with open(src, "w") as f:
+            f.write(CONTRACT_HARNESS)
+        exe = os.path.join(tmp, "contract" + (".exe" if os.name == "nt" else ""))
+        cc(args.compiler, [src], os.path.join(RUNTIME, "include"), exe)
+        contract = int(subprocess.run([exe], capture_output=True, text=True,
+                                      check=True).stdout.strip() or -1)
+        masked = re.findall(r"\((?:cpu->pc|cpu->gpr\[31\]) \^ stop_addr\) & 0x1FFFFFFFu",
+                            bios_dispatch)
+        missing = [c for c in BIOS_RETURN_CHECKS if c not in bios_dispatch]
+        if contract != 0 or masked or missing:
+            gaps.add("exact-return-contract")
+            parts = []
+            if contract != 0:
+                parts.append("psx_call_contract accepts another segment's alias "
+                             "(check mask 0x%X)" % contract)
+            if masked or missing:
+                parts.append("%d masked, %d missing exact BIOS dispatch return checks"
+                             % (len(masked), len(missing)))
+            notes["exact-return-contract"] = "; ".join(parts)
     total, uncharged = bios_uncharged_kseg1(bios_c)
     if total == 0:
         model_fail.append("OpenBIOS: no KSEG1 instructions found (parser drift?)")

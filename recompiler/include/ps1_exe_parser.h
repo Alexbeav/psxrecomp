@@ -18,6 +18,16 @@ inline constexpr uint32_t kSegKUSEG    = 0x00000000u;
 inline constexpr uint32_t kSegKSEG0    = 0x80000000u;
 inline constexpr uint32_t kSegKSEG1    = 0xA0000000u;
 
+// True when `pc` lies in one of the three windows that map the physical
+// address space: KUSEG below 0x20000000, KSEG0 and KSEG1. The rest of KUSEG
+// (0x20000000-0x7FFFFFFF) and KSEG2 are not mirrors of it: Beetle's addr_mask
+// leaves them unmasked, so they address no RAM or BIOS ROM, and a PC there
+// never names the bytes at `pc & kPhysMask`.
+inline constexpr bool maps_physical(uint32_t pc) {
+    return pc < 0x20000000u || (pc & kSegmentMask) == kSegKSEG0 ||
+           (pc & kSegmentMask) == kSegKSEG1;
+}
+
 // PS-X EXE header structure (2048 bytes)
 #pragma pack(push, 1)
 struct PS1ExeHeader {

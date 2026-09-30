@@ -296,4 +296,28 @@ std::string BiosAddressModel::emit_normalize_c() const {
     return out;
 }
 
+std::string BiosAddressModel::emit_key_home_pc_c(uint32_t rom_va) const {
+    std::string out;
+    out += "/* The runtime PC each dispatch key's home body was compiled for\n";
+    out += " * (docs/SEGMENT_AWARE_CODE.md §5.4): its copy window's runtime address,\n";
+    out += " * or the ROM run in place. 0 = in no window. */\n";
+    out += "static uint32_t psx_bios_key_home_pc(uint32_t key) {\n";
+    for (const BiosAddrCopy& c : copies_) {
+        const uint32_t lo = c.key_is_ram ? c.ram_lo : c.rom_lo;
+        out += fmt::format("    /* {}: {} key 0x{:X}+ runs at 0x{:08X}+ */\n", c.name,
+                           c.key_is_ram ? "RAM" : "ROM", lo, c.runtime_base);
+        out += fmt::format("    if (key >= 0x{:08X}u && key <= 0x{:08X}u)\n", lo,
+                           lo + c.len() - 1u);
+        out += fmt::format("        return key - 0x{:08X}u + 0x{:08X}u;\n", lo,
+                           c.runtime_base);
+    }
+    out += "    /* The ROM, run in place. */\n";
+    out += fmt::format("    if (key >= 0x{:08X}u && key <= 0x{:08X}u)\n", rom_base_phys_,
+                       rom_base_phys_ + rom_size_ - 1u);
+    out += fmt::format("        return 0x{:08X}u | key;\n", rom_va & 0xE0000000u);
+    out += "    return 0u;\n";
+    out += "}\n\n";
+    return out;
+}
+
 } // namespace PSXRecompV4

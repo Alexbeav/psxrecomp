@@ -5,6 +5,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <algorithm>
@@ -17,6 +18,7 @@
 #include "control_flow.h"
 #include "code_generator.h"
 #include "game_dispatch_emitter.h"
+#include "segment_variants.h"
 #include "annotations.hpp"
 #include "config_loader.h"
 #include "rabbitizer.hpp"
@@ -773,10 +775,10 @@ static int psxrecomp_game_main(int argc, char** argv) {
      * §5.3, §5.4). The bounds are checked by physical address: a seed in the
      * image's link segment (0x000100E4 for a KUSEG-linked EXE, 0x800100E4
      * for a KSEG0 one) is an entry of the image. A seed for the same bytes in
-     * another segment asks for a segment variant (§5.4), which is not
-     * compiled yet: it is listed below and never folded into the home body,
-     * so that PC stays a loud segment miss at run time. Seeds outside the
-     * image are counted. */
+     * another segment asks for a segment variant (§5.4): it is never folded
+     * into the home body; after the home compile, the home functions it
+     * reaches through direct edges are compiled again in its segment (see
+     * plan_segment_variants below). Seeds outside the image are counted. */
     std::vector<uint32_t> file_seeds;
     std::vector<std::pair<uint32_t, std::string>> variant_seeds;  // PC, line kind
     size_t outside_seeds = 0;
@@ -942,6 +944,20 @@ static int psxrecomp_game_main(int argc, char** argv) {
                 if (phys < (seed_lo & PSXRecomp::kPhysMask) ||
                     phys >= (seed_lo & PSXRecomp::kPhysMask) + (seed_hi - seed_lo)) {
                     ++outside_seeds;
+                } else if (!PSXRecomp::maps_physical(addr)) {
+                    // Only KUSEG below 0x20000000, KSEG0 and KSEG1 alias the
+                    // image's bytes; a variant in any other segment would
+                    // give dispatch rows to PCs hardware cannot fetch as RAM.
+                    fmt::print(stderr,
+                        "ERROR: seed 0x{:08X} is in segment 0x{:08X}, which does not "
+                        "map physical memory (only KUSEG below 0x20000000, KSEG0 and "
+                        "KSEG1 do), so it names no code of this image and cannot ask "
+                        "for a segment variant "
+                        "(docs/SEGMENT_AWARE_CODE.md §5.4). The image's bytes at that "
+                        "physical address are 0x{:08X} in its link segment.\n",
+                        addr, addr & PSXRecomp::kSegmentMask,
+                        exe->link_segment() | phys);
+                    return 1;
                 } else if ((addr & PSXRecomp::kSegmentMask) != exe->link_segment()) {
                     variant_seeds.emplace_back(
                         addr, interior ? "interior" : trusted_root ? "dispatch_root"
@@ -998,13 +1014,20 @@ static int psxrecomp_game_main(int argc, char** argv) {
                          : seg == PSXRecomp::kSegKSEG0 ? "KSEG0"
                          : seg == PSXRecomp::kSegKSEG1 ? "KSEG1" : "an unmapped segment";
                 };
-                fmt::print("WARNING: {} seed(s) name this image's bytes in another segment "
-                           "than its link segment {}. Each asks for a segment variant "
-                           "(docs/SEGMENT_AWARE_CODE.md §5.4), which is not compiled "
-                           "yet: that PC runs interpreted and is recorded as a segment "
-                           "miss. A seed for the image's own code is written in {}.\n",
-                           variant_seeds.size(), seg_name(exe->link_segment()),
-                           seg_name(exe->link_segment()));
+                if (overlay_mode) {
+                    fmt::print("WARNING: {} seed(s) name this image's bytes in another "
+                               "segment than its link segment {}. Overlay compiles have "
+                               "no segment variants yet (docs/SEGMENT_AWARE_CODE.md §5.7): "
+                               "nothing is compiled for them.\n",
+                               variant_seeds.size(), seg_name(exe->link_segment()));
+                } else {
+                    fmt::print("{} seed(s) name this image's bytes in another segment than "
+                               "its link segment {}. Each asks for a segment variant "
+                               "(docs/SEGMENT_AWARE_CODE.md §5.4), compiled after the home "
+                               "compile. A seed for the image's own code is written in {}.\n",
+                               variant_seeds.size(), seg_name(exe->link_segment()),
+                               seg_name(exe->link_segment()));
+                }
                 for (const auto& [addr, kind] : variant_seeds) {
                     fmt::print("  variant seed 0x{:08X} ({}, {}): home PC would be 0x{:08X}\n",
                                addr, kind, seg_name(addr & PSXRecomp::kSegmentMask),
@@ -1563,6 +1586,70 @@ static int psxrecomp_game_main(int argc, char** argv) {
         }
     }
 
+    // Segment variants (docs/SEGMENT_AWARE_CODE.md §5.4). Each segment named
+    // by a variant seed gets the direct-edge closure of the home functions
+    // its seeds reach, compiled again through a view of the image in that
+    // segment: its names, rows and every PC it bakes are that segment's, and
+    // a KSEG1 variant charges a fetch per instruction (§5.6). The bodies join
+    // the home shards, and their rows join the home dispatch table. Overlay
+    // compiles have none yet (§5.7).
+    std::vector<PSXRecomp::GeneratedFunction> all_gen_funcs = codegen.last_gen_funcs();
+    std::vector<std::string> variant_alias_decls;
+    std::string all_ranges_manifest = codegen.last_ranges_manifest().empty()
+        ? codegen.generate_ranges_manifest(analysis_result.functions, all_cfgs)
+        : codegen.last_ranges_manifest();
+    std::vector<PSXRecomp::GameDispatchUnit> dispatch_units{{&codegen, dispatch_addrs}};
+    std::vector<std::unique_ptr<PSXRecomp::PS1Executable>> variant_views;
+    std::vector<std::unique_ptr<PSXRecomp::CodeGenerator>> variant_codegens;
+    if (!overlay_mode && !variant_seeds.empty()) {
+        std::vector<uint32_t> requested;
+        for (const auto& [addr, kind] : variant_seeds) {
+            (void)kind;
+            requested.push_back(addr);
+        }
+        const auto plans = PSXRecomp::plan_segment_variants(
+            *exe, codegen.last_functions(), codegen.last_cfgs(),
+            codegen.cps_continuations(), requested);
+        for (const auto& plan : plans) {
+            fmt::print("\n=== Segment variant 0x{:08X} (docs/SEGMENT_AWARE_CODE.md §5.4) ===\n",
+                       plan.segment);
+            for (const auto& [pc, why] : plan.unplaced) {
+                fmt::print(stderr,
+                    "ERROR: variant seed 0x{:08X} cannot be compiled: {}. Seed the home "
+                    "PC first, or drop the variant seed.\n", pc, why);
+            }
+            if (!plan.unplaced.empty()) return 1;
+            fmt::print("  {} seed(s), direct-edge closure of {} function(s)\n",
+                       plan.seeds.size(), plan.functions.size());
+            variant_views.push_back(std::make_unique<PSXRecomp::PS1Executable>(
+                PSXRecomp::segment_view(*exe, plan.segment)));
+            const PSXRecomp::PS1Executable& view = *variant_views.back();
+            PSXRecomp::ControlFlowAnalyzer view_cfg(view);
+            const auto variant_cfgs = view_cfg.analyze_all_functions(plan.functions);
+            variant_codegens.push_back(std::make_unique<PSXRecomp::CodeGenerator>(
+                view, PSXRecomp::rebase_codegen_config(codegen_config, *exe, plan.segment)));
+            PSXRecomp::CodeGenerator& vgen = *variant_codegens.back();
+            (void)vgen.generate_file(plan.functions, variant_cfgs);
+            std::set<uint32_t> variant_addrs;
+            for (const auto& gf : vgen.last_gen_funcs()) {
+                all_gen_funcs.push_back(gf);
+                if (gf.dispatchable && gf.function_name.rfind("func_", 0) == 0 &&
+                    gf.function_name.size() == 13)
+                    variant_addrs.insert(static_cast<uint32_t>(
+                        std::strtoul(gf.function_name.c_str() + 5, nullptr, 16)));
+            }
+            for (const auto& decl : vgen.alias_body_decls()) variant_alias_decls.push_back(decl);
+            // The variant's F/R records, without the manifest's header comment.
+            std::istringstream vr(vgen.last_ranges_manifest());
+            for (std::string line; std::getline(vr, line);) {
+                if (!line.empty() && line[0] != '#') all_ranges_manifest += line + "\n";
+            }
+            dispatch_units.push_back({&vgen, variant_addrs});
+            fmt::print("  {} bodies, {} dispatch entries\n",
+                       vgen.last_gen_funcs().size(), variant_addrs.size());
+        }
+    }
+
     // Split-TU output: instead of one monolithic <exe_stem>_full.c, write a
     // shared declarations header plus N shards bucketed by cumulative line
     // count, so the game build can compile the shards in parallel. The
@@ -1587,7 +1674,7 @@ static int psxrecomp_game_main(int argc, char** argv) {
         std::filesystem::path decls_filename = out_dir / (exe_stem + "_decls.h");
         {
             const std::string decls =
-                codegen.build_shared_decls_header(codegen.last_gen_funcs());
+                codegen.build_shared_decls_header(all_gen_funcs, variant_alias_decls);
             if (write_file_if_changed(decls_filename, decls)) {
                 fmt::print("✓ Saved shared decls header to {}\n", decls_filename.string());
             } else {
@@ -1597,7 +1684,7 @@ static int psxrecomp_game_main(int argc, char** argv) {
 
         // 2. Bucket generated functions into shards by cumulative line count.
         const int SHARD_LINE_BUDGET = 40000;
-        const std::vector<PSXRecomp::GeneratedFunction>& gen_funcs_for_shards = codegen.last_gen_funcs();
+        const std::vector<PSXRecomp::GeneratedFunction>& gen_funcs_for_shards = all_gen_funcs;
         std::string decls_basename = exe_stem + "_decls.h";
 
         int shard_index = 0;
@@ -1654,9 +1741,7 @@ static int psxrecomp_game_main(int argc, char** argv) {
     // Per-function code-range manifest (design §8): consumed by the overlay
     // loader's per-entry validity hash. Emitted alongside _full.c for every
     // build; only the overlay path actually loads it.
-    const std::string ranges_manifest = codegen.last_ranges_manifest().empty()
-        ? codegen.generate_ranges_manifest(analysis_result.functions, all_cfgs)
-        : codegen.last_ranges_manifest();
+    const std::string& ranges_manifest = all_ranges_manifest;
     {
         std::filesystem::path ranges_filename = out_dir / (exe_stem + "_full.ranges");
         if (write_file_if_changed(ranges_filename, ranges_manifest)) {
@@ -1676,18 +1761,24 @@ static int psxrecomp_game_main(int argc, char** argv) {
         fmt::print("Generating dispatch table: {}\n", dispatch_filename.string());
 
         std::string dispatch_source, dispatch_error;
-        if (!PSXRecomp::emit_game_dispatch(codegen, *exe, dispatch_addrs,
+        if (!PSXRecomp::emit_game_dispatch(dispatch_units, *exe,
                                            ranges_manifest, dispatch_source,
                                            dispatch_error)) {
             fmt::print(stderr, "ERROR: {}\n", dispatch_error);
             return 1;
         }
+        // Entries of the home compile, plus those of its segment variants.
+        size_t variant_entries = 0;
+        for (size_t u = 1; u < dispatch_units.size(); ++u)
+            variant_entries += dispatch_units[u].dispatch_addrs.size();
+        const std::string variant_note = variant_entries
+            ? fmt::format(", plus {} in segment variants", variant_entries) : std::string();
         if (write_file_if_changed(dispatch_filename, dispatch_source)) {
-            fmt::print("✓ Dispatch table written ({} entries)\n\n",
-                       dispatch_addrs.size());
+            fmt::print("✓ Dispatch table written ({} entries{})\n\n",
+                       dispatch_addrs.size(), variant_note);
         } else {
-            fmt::print("✓ Dispatch table unchanged ({} entries)\n\n",
-                       dispatch_addrs.size());
+            fmt::print("✓ Dispatch table unchanged ({} entries{})\n\n",
+                       dispatch_addrs.size(), variant_note);
         }
     }
 
