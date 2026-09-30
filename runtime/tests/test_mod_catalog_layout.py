@@ -124,6 +124,7 @@ def run_select(
 
     driver = tmp / "select_driver.cmake"
     driver.write_text(
+        'cmake_minimum_required(VERSION 3.20)\n'
         f'include("{SELECT.as_posix()}")\n'
         "psx_select_builtin_mod_ids(_out LABEL psx-runtime"
         + cm_list("AVAILABLE", available)

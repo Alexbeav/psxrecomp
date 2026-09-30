@@ -328,9 +328,16 @@ def _find_recompiler_tool(project_root: Path, basename: str, env_name: str) -> P
         # tool would be rebuilt correctly and then never used.
         project_root / "psxrecomp" / "recompiler" / "build-analyze",
         ROOT / "recompiler" / "build-analyze",
+        # The project's own emitter tree comes before the framework's. It is
+        # what tools/ci/build_emitters.sh (CI and the scaffold) builds from the
+        # pinned submodule, while psxrecomp/recompiler/build is whatever a
+        # developer last built there and can predate the pin by months. A
+        # stale one shadowed a fresh build-recompiler on 2026-09-30 and
+        # emitted a dispatch that called a helper the pinned runtime had
+        # removed; the release failed at link on every platform.
+        project_root / "build-recompiler",
         project_root / "psxrecomp" / "recompiler" / "build",
         project_root / "psxrecomp" / "recompiler" / "build" / "Release",
-        project_root / "build-recompiler",
         ROOT / "recompiler" / "build",
         ROOT / "recompiler" / "build" / "Release",
     ]
@@ -393,7 +400,7 @@ def ensure_emitters(
     if not force:
         try:
             game, bios = find_emitters(project_root)
-            progress.log(f"Emitters ready: {game.name}, {bios.name}")
+            progress.log(f"Emitters ready: {game}, {bios}")
             return game, bios
         except FileNotFoundError:
             pass

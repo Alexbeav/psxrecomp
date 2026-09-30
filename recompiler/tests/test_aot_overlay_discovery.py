@@ -11,6 +11,18 @@ import sys
 import tempfile
 import time
 
+if os.name == 'nt':
+    import ctypes
+    # Several publication checks deliberately probe non-PE synthetic DLLs.
+    # CTest's Windows child error mode can display a loader error dialog and
+    # block LoadLibrary indefinitely. Keep the real loader/export validation,
+    # but make its expected failures noninteractive in this test process.
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.GetErrorMode.restype = ctypes.c_uint
+    kernel32.SetErrorMode.argtypes = [ctypes.c_uint]
+    kernel32.SetErrorMode.restype = ctypes.c_uint
+    kernel32.SetErrorMode(kernel32.GetErrorMode() | 0x0001 | 0x8000)
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(

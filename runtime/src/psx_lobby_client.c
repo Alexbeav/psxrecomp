@@ -1,4 +1,5 @@
 #include "psx_lobby_client.h"
+#include "netplay_bios_settle.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -151,13 +152,17 @@ void psx_lobby_seat_swap_clear(void) {}
 int  psx_lobby_chat_count(void) { return 0; }
 int  psx_lobby_chat_get(int index, PsxLobbyChatMsg *out) { (void)index; (void)out; return 0; }
 void psx_lobby_chat_clear(void) {}
-int  psx_lobby_settle_session_bios(char *out, size_t out_cap)
+int  psx_lobby_settle_session_bios(char *out, size_t out_cap, uint32_t *out_crc,
+                                   char *why, size_t why_cap)
 {
     if (!out || out_cap < 9) return -1;
     strncpy(out, "openbios", out_cap - 1);
     out[out_cap - 1] = '\0';
+    if (out_crc) *out_crc = 0;
+    if (why && why_cap) why[0] = '\0';
     return 0;
 }
+void psx_lobby_set_last_error(const char *text) { (void)text; }
 int  psx_lobby_request_start(const PsxLobbyMatchCaps *c) { (void)c; return -1; }
 int  psx_lobby_launch_pending(void) { return 0; }
 void psx_lobby_clear_launch_pending(void) {}
@@ -1479,6 +1484,15 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
         strcmp(out->session_bios, "openbios") != 0 &&
         strcmp(out->session_bios, "scph1001") != 0)
         out->session_bios[0] = '\0';
+    /* Retail image every peer boots. Absent from an older host:
+     * 0, and peers accept any retail dump as they used to. */
+    {
+        char crc[16];
+        crc[0] = '\0';
+        json_get_str(obj, "session_bios_crc", crc, sizeof(crc));
+        out->session_bios_crc = strcmp(out->session_bios, "scph1001") == 0
+                                    ? netplay_bios_parse_crc(crc) : 0;
+    }
     out->valid = 1;
 }
 
@@ -1505,8 +1519,11 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
     if (!lang[0]) strncpy(lang, "en", sizeof(lang) - 1);
     {
         const char *sb = caps->session_bios;
+        char crc[16];
         if (!sb[0] || (strcmp(sb, "openbios") != 0 && strcmp(sb, "scph1001") != 0))
             sb = "";
+        netplay_bios_format_crc(strcmp(sb, "scph1001") == 0 ? caps->session_bios_crc : 0,
+                                crc, sizeof(crc));
         return snprintf(dst, dst_cap,
                         ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
                         "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
@@ -1514,7 +1531,8 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
                         "\"force_input_relay\":%s,\"force_turn\":%s,\"rollback\":%s,"
                         "\"multitap_analog\":%s,\"guest_memcard\":%s,"
                         "\"guest_memcard_active\":%s,"
-                        "\"language\":\"%s\",\"session_bios\":\"%s\"}",
+                        "\"language\":\"%s\",\"session_bios\":\"%s\","
+                        "\"session_bios_crc\":\"%s\"}",
                         caps->aspect_num, caps->aspect_den,
                         caps->turbo_loads ? "true" : "false",
                         caps->bios_hle ? "true" : "false",
@@ -1528,7 +1546,7 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
                         caps->multitap_analog ? "true" : "false",
                         caps->guest_memcard ? "true" : "false",
                         caps->guest_memcard_active ? "true" : "false",
-                        lang, sb);
+                        lang, sb, crc);
     }
 }
 
@@ -1699,9 +1717,14 @@ static int parse_seat_array(const char *json, const char *key, int is_spectator,
                              sizeof(g_lc.members[n].display_name));
                 g_lc.members[n].ready = json_get_bool(chunk, "ready", 0);
                 g_lc.members[n].is_spectator = is_spectator;
+                g_lc.members[n].bios_retail_crc = 0;
                 if (json_extract_object(chunk, "bios_offer", offer, sizeof(offer))) {
                     char prefer[24];
+                    char crc[16];
                     prefer[0] = '\0';
+                    crc[0] = '\0';
+                    json_get_str(offer, "retail_crc", crc, sizeof(crc));
+                    g_lc.members[n].bios_retail_crc = netplay_bios_parse_crc(crc);
                     g_lc.members[n].bios_offer_valid = 1;
                     g_lc.members[n].bios_can_openbios =
                         json_get_bool(offer, "can_openbios", 1);
@@ -4566,58 +4589,63 @@ int psx_lobby_chat_get(int index, PsxLobbyChatMsg *out)
     return 1;
 }
 
-int psx_lobby_settle_session_bios(char *out, size_t out_cap)
+int psx_lobby_settle_session_bios(char *out, size_t out_cap, uint32_t *out_crc,
+                                   char *why, size_t why_cap)
 {
+    NetplayBiosSeat seats[PSX_LOBBY_MAX_MEMBERS + 1];
+    NetplayBiosSettle settle;
+    const char *me = psx_lobby_player_id();
+    int n = 0;
     int i;
-    int any_prefer_open = 0;
-    int any_cannot_scph = 0;
-    int host_prefer_scph = 0;
-    int saw_peer = 0;
     if (!out || out_cap < 9) return -1;
     out[0] = '\0';
+    if (out_crc) *out_crc = 0;
+    if (why && why_cap) why[0] = '\0';
 
-    for (i = 0; i < g_lc.member_count; ++i) {
+    memset(seats, 0, sizeof(seats));
+    for (i = 0; i < g_lc.member_count && n < PSX_LOBBY_MAX_MEMBERS; ++i) {
         const PsxLobbyMember *m = &g_lc.members[i];
         if (!m->player_id[0] && !m->display_name[0]) continue;
-        saw_peer = 1;
-        if (!m->bios_offer_valid) {
-            /* Legacy client / not ready yet — cannot assume SCPH. */
-            any_cannot_scph = 1;
+        /* This client's own row: the local offer below is newer than the
+         * server's echo of it (the player may have just changed BIOS). */
+        if (g_lc.bios_offer.valid && me && me[0] && strcmp(m->player_id, me) == 0)
             continue;
-        }
-        if (m->bios_prefer_openbios) any_prefer_open = 1;
-        if (!m->bios_can_scph1001) any_cannot_scph = 1;
-        if (!m->bios_can_openbios && !m->bios_can_scph1001)
-            any_cannot_scph = 1;
-        if (psx_lobby_member_is_host(m) && !m->bios_prefer_openbios &&
-            m->bios_can_scph1001)
-            host_prefer_scph = 1;
+        seats[n].offered = m->bios_offer_valid;
+        seats[n].can_openbios = m->bios_can_openbios;
+        seats[n].can_retail = m->bios_can_scph1001;
+        seats[n].prefer_openbios = m->bios_prefer_openbios;
+        seats[n].retail_crc = m->bios_retail_crc;
+        seats[n].is_host = psx_lobby_member_is_host(m);
+        ++n;
     }
-
-    /* Include local offer even before lobby_update echoes it. */
+    /* Include the local offer even before lobby_update echoes it. */
     if (g_lc.bios_offer.valid) {
-        saw_peer = 1;
-        if (g_lc.bios_offer.prefer_openbios) any_prefer_open = 1;
-        if (!g_lc.bios_offer.can_scph1001) any_cannot_scph = 1;
-        if (g_lc.is_host && !g_lc.bios_offer.prefer_openbios &&
-            g_lc.bios_offer.can_scph1001)
-            host_prefer_scph = 1;
-    } else if (!saw_peer) {
-        any_cannot_scph = 1;
+        seats[n].offered = 1;
+        seats[n].can_openbios = g_lc.bios_offer.can_openbios;
+        seats[n].can_retail = g_lc.bios_offer.can_scph1001;
+        seats[n].prefer_openbios = g_lc.bios_offer.prefer_openbios;
+        seats[n].retail_crc = g_lc.bios_offer.retail_crc;
+        seats[n].is_host = g_lc.is_host;
+        ++n;
     }
 
-    /* Capability first: without universal SCPH support, OpenBIOS is required.
-     * Otherwise the host's retail pick wins over guest OpenBIOS preferences. */
-    if (any_cannot_scph || !saw_peer)
-        strncpy(out, "openbios", out_cap - 1);
-    else if (host_prefer_scph)
-        strncpy(out, "scph1001", out_cap - 1);
-    else if (any_prefer_open)
-        strncpy(out, "openbios", out_cap - 1);
-    else
-        strncpy(out, "scph1001", out_cap - 1);
+    settle = netplay_bios_settle(seats, n);
+    if (settle.kind == NETPLAY_BIOS_NONE) {
+        if (why && why_cap)
+            netplay_bios_describe_refusal(&settle, seats, n, why, why_cap);
+        return 1;
+    }
+    strncpy(out, netplay_bios_token(settle.kind), out_cap - 1);
     out[out_cap - 1] = '\0';
+    if (out_crc) *out_crc = settle.retail_crc;
     return 0;
+}
+
+void psx_lobby_set_last_error(const char *text)
+{
+    if (!text) text = "";
+    strncpy(g_lc.join.last_error, text, sizeof(g_lc.join.last_error) - 1);
+    g_lc.join.last_error[sizeof(g_lc.join.last_error) - 1] = '\0';
 }
 
 int psx_lobby_set_ready(int ready)
@@ -4636,15 +4664,21 @@ int psx_lobby_set_ready(int ready)
                  g_lc.memcard_offer.share ? "true" : "false");
     }
     if (g_lc.bios_offer.valid) {
+        /* retail_crc names the image this peer would boot. Older
+         * peers ignore the field; the server relays bios_offer as is. */
+        char crc[16];
+        netplay_bios_format_crc(g_lc.bios_offer.can_scph1001 ? g_lc.bios_offer.retail_crc : 0,
+                                crc, sizeof(crc));
         n = snprintf(msg, sizeof(msg),
                      "{\"op\":\"set_ready\",\"ready\":%s,"
                      "\"bios_offer\":{\"v\":1,\"prefer\":\"%s\","
-                     "\"can_openbios\":%s,\"can_scph1001\":%s}%s}",
+                     "\"can_openbios\":%s,\"can_scph1001\":%s,"
+                     "\"retail_crc\":\"%s\"}%s}",
                      ready ? "true" : "false",
                      g_lc.bios_offer.prefer_openbios ? "openbios" : "scph1001",
                      g_lc.bios_offer.can_openbios ? "true" : "false",
                      g_lc.bios_offer.can_scph1001 ? "true" : "false",
-                     memcard);
+                     crc, memcard);
     } else {
         n = snprintf(msg, sizeof(msg), "{\"op\":\"set_ready\",\"ready\":%s%s}",
                      ready ? "true" : "false", memcard);
@@ -4667,9 +4701,16 @@ int psx_lobby_request_start(const PsxLobbyMatchCaps *match_caps)
     caps_json[0] = '\0';
     if (match_caps && match_caps->valid) {
         caps_local = *match_caps;
-        if (!caps_local.session_bios[0])
-            (void)psx_lobby_settle_session_bios(caps_local.session_bios,
-                                                sizeof(caps_local.session_bios));
+        if (!caps_local.session_bios[0]) {
+            char why[192];
+            if (psx_lobby_settle_session_bios(caps_local.session_bios,
+                                              sizeof(caps_local.session_bios),
+                                              &caps_local.session_bios_crc,
+                                              why, sizeof(why)) == 1) {
+                psx_lobby_set_last_error(why);
+                return -1;
+            }
+        }
         g_lc.match_caps = caps_local;
         append_match_caps_json(caps_json, sizeof(caps_json), &caps_local);
     }

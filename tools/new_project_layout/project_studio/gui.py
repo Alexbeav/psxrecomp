@@ -523,7 +523,7 @@ class ProjectStudioApp:
         ).pack(side="left")
         ctk.CTkLabel(
             header,
-            text="Migrate, audit, and GitHub ops for setup-host game repos",
+            text="Migrate, audit, and GitHub ops for PSXRecomp game repos",
             text_color=("gray40", "gray65"),
             font=ctk.CTkFont(size=13),
         ).pack(side="left", padx=(12, 0), pady=(6, 0))
@@ -657,7 +657,7 @@ class ProjectStudioApp:
         opts.pack(fill="x", padx=4, pady=4)
         ctk.CTkLabel(
             opts,
-            text="Options  ·  setup-host only",
+            text="Options  ·  bundled releases",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=12, pady=(10, 4))
 
@@ -707,7 +707,7 @@ class ProjectStudioApp:
 
         ctk.CTkLabel(
             opts,
-            text="Wizard + recomp-ui are always enabled. Releases are setup-host only (no prebuilt game C).",
+            text="Wizard + recomp-ui are always enabled. Releases build the committed generated/ C and ship the compiled game.",
             text_color=("gray40", "gray60"),
             font=ctk.CTkFont(size=12),
             wraplength=900,
@@ -1935,7 +1935,7 @@ class ProjectStudioApp:
         ).pack(side="left")
         ctk.CTkLabel(
             rel,
-            text="Install & push CI writes psxrecomp setup-release.yml → "
+            text="Install & push CI writes psxrecomp game-release.yml → "
             ".github/workflows/release.yml, commits, pushes, and registers Actions.",
             text_color=("gray30", "gray70"),
             anchor="w",
@@ -5000,7 +5000,7 @@ class ProjectStudioApp:
         elif not self._git_dry():
             if not messagebox.askyesno(
                 "Project Studio",
-                "Install psxrecomp setup-release.yml as .github/workflows/release.yml,\n"
+                "Install psxrecomp game-release.yml as .github/workflows/release.yml,\n"
                 "commit, push to origin, and register Actions?\n\n"
                 f"{root}",
                 parent=self.root,

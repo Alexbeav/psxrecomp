@@ -1,4 +1,4 @@
-"""Audit an existing title repo against the New Project Layout (setup-host)."""
+"""Audit an existing title repo against the New Project Layout (bundled releases)."""
 
 from __future__ import annotations
 
@@ -144,6 +144,26 @@ def _cmake_source_refs(cmake: str) -> tuple[set[str], set[str]]:
     return refs, guarded
 
 
+# The bundled-release wrapper and the retired setup-host one. Audits accept
+# either as "a packager is present" but only the first as current.
+PACKAGER_WRAPPER = "package_release.sh"
+LEGACY_PACKAGER_WRAPPER = "package_setup_release.sh"
+
+
+def packager_wrapper(root: Path) -> Path | None:
+    """The title's packager wrapper: the bundled one, else the retired one."""
+    for name in (PACKAGER_WRAPPER, LEGACY_PACKAGER_WRAPPER):
+        p = root / "scripts" / name
+        if p.is_file():
+            return p
+    return None
+
+
+def packager_is_bundled(packager: Path) -> bool:
+    """True when the wrapper calls the shared bundled packager (no source allowlist)."""
+    return "package_game_release.sh" in _read(packager)
+
+
 def packager_staged_paths(packager_text: str) -> set[str]:
     """Top-level paths the packager passes as --project-file / --project-dir."""
     out: set[str] = set()
@@ -165,8 +185,8 @@ def packager_missing_paths(root: Path) -> list[str]:
     own pre-zip gate applies, so the two cannot disagree.
     """
     cmake_path = root / "CMakeLists.txt"
-    packager = root / "scripts" / "package_setup_release.sh"
-    if not cmake_path.is_file() or not packager.is_file():
+    packager = packager_wrapper(root)
+    if not cmake_path.is_file() or packager is None or packager_is_bundled(packager):
         return []
     refs, guarded = _cmake_source_refs(_read(cmake_path))
     staged = packager_staged_paths(_read(packager))
@@ -190,8 +210,8 @@ def packager_missing_optional_paths(root: Path) -> list[str]:
     select, so the mod builds and never enables.
     """
     cmake_path = root / "CMakeLists.txt"
-    packager = root / "scripts" / "package_setup_release.sh"
-    if not cmake_path.is_file() or not packager.is_file():
+    packager = packager_wrapper(root)
+    if not cmake_path.is_file() or packager is None or packager_is_bundled(packager):
         return []
     refs, guarded = _cmake_source_refs(_read(cmake_path))
     staged = packager_staged_paths(_read(packager))
@@ -457,15 +477,29 @@ def audit_project(root: Path) -> AuditReport:
         )
 
     # Packager
-    packager = root / "scripts" / "package_setup_release.sh"
-    if packager.is_file():
+    packager = packager_wrapper(root)
+    if packager is not None and packager_is_bundled(packager):
         checks.append(
             CheckResult(
                 id="setup_host_packager",
-                title="scripts/package_setup_release.sh",
+                title=f"scripts/{PACKAGER_WRAPPER}",
                 status=CheckStatus.PASS,
                 severity=Severity.REQUIRED,
-                detail="Setup-host packager wrapper present.",
+                detail="Bundled-release packager wrapper present (ships the compiled game).",
+            )
+        )
+    elif packager is not None:
+        checks.append(
+            CheckResult(
+                id="setup_host_packager",
+                title=f"scripts/{PACKAGER_WRAPPER}",
+                status=CheckStatus.FAIL,
+                severity=Severity.REQUIRED,
+                detail=(
+                    f"Only the retired setup-host wrapper scripts/{packager.name} is present; "
+                    "releases now ship the compiled game. Re-emit the packager (force)."
+                ),
+                fix_op="emit_packager",
             )
         )
         # Present is not the same as current: the allowlist inside it has to
@@ -521,10 +555,10 @@ def audit_project(root: Path) -> AuditReport:
         checks.append(
             CheckResult(
                 id="setup_host_packager",
-                title="scripts/package_setup_release.sh",
+                title=f"scripts/{PACKAGER_WRAPPER}",
                 status=CheckStatus.FAIL,
                 severity=Severity.REQUIRED,
-                detail="Missing setup-host packager (required; prebuilt releases are not used).",
+                detail="Missing bundled-release packager wrapper (required).",
                 fix_op="emit_packager",
             )
         )
@@ -537,10 +571,24 @@ def audit_project(root: Path) -> AuditReport:
             checks.append(
                 CheckResult(
                     id="ci_release",
-                    title="Setup-host release CI",
+                    title="Bundled release CI",
                     status=CheckStatus.WARN,
                     severity=Severity.REQUIRED,
                     detail="release.yml still has YOUR_* placeholders.",
+                    fix_op="emit_ci_workflow",
+                )
+            )
+        elif "clear_generated.sh" in wtext or "FORCE_SETUP_HOST=ON" in wtext:
+            checks.append(
+                CheckResult(
+                    id="ci_release",
+                    title="Bundled release CI",
+                    status=CheckStatus.FAIL,
+                    severity=Severity.REQUIRED,
+                    detail=(
+                        "release.yml is the retired setup-host workflow (wipes generated/ and "
+                        "ships an uncompiled kit). Re-emit it (force) to ship the compiled game."
+                    ),
                     fix_op="emit_ci_workflow",
                 )
             )
@@ -548,7 +596,7 @@ def audit_project(root: Path) -> AuditReport:
             checks.append(
                 CheckResult(
                     id="ci_release",
-                    title="Setup-host release CI",
+                    title="Bundled release CI",
                     status=CheckStatus.PASS,
                     severity=Severity.REQUIRED,
                     detail=".github/workflows/release.yml present.",
@@ -558,28 +606,31 @@ def audit_project(root: Path) -> AuditReport:
         checks.append(
             CheckResult(
                 id="ci_release",
-                title="Setup-host release CI",
+                title="Bundled release CI",
                 status=CheckStatus.FAIL,
                 severity=Severity.REQUIRED,
-                detail="Missing setup-host release.yml workflow.",
+                detail="Missing release.yml workflow.",
                 fix_op="emit_ci_workflow",
             )
         )
 
-    # Legacy prebuilt packaging — warn only (setup-host exclusive policy)
+    # Hand-forked per-title packagers — warn only. The shared bundled packager
+    # (scripts/package_release.sh -> psxrecomp/tools/package_game_release.sh)
+    # supersedes them; forks are where the cache-tag drift lived.
     legacy_pack = False
-    if (root / "packaging").is_dir() or (root / "tools" / "package_release.ps1").is_file():
+    if (root / "packaging").is_dir() or (root / "tools" / "package_release.ps1").is_file() \
+            or (root / "tools" / "package_appimage.sh").is_file():
         legacy_pack = True
         checks.append(
             CheckResult(
                 id="legacy_prebuilt",
-                title="Legacy prebuilt packaging",
+                title="Hand-forked packaging scripts",
                 status=CheckStatus.WARN,
                 severity=Severity.RECOMMENDED,
                 detail=(
-                    "Found packaging/ or tools/package_release.ps1. "
-                    "This studio only ships setup-host zips — leave prebuilt scripts unused "
-                    "or remove them after CI is green."
+                    "Found packaging/, tools/package_release.ps1 or tools/package_appimage.sh. "
+                    "Releases go through scripts/package_release.sh + release.yml; "
+                    "remove the forks once CI is green."
                 ),
                 fix_op="annotate_legacy_packaging",
             )
@@ -588,10 +639,10 @@ def audit_project(root: Path) -> AuditReport:
         checks.append(
             CheckResult(
                 id="legacy_prebuilt",
-                title="Legacy prebuilt packaging",
+                title="Hand-forked packaging scripts",
                 status=CheckStatus.PASS,
                 severity=Severity.INFO,
-                detail="No legacy prebuilt packager detected.",
+                detail="No hand-forked packager detected.",
             )
         )
 
@@ -813,17 +864,34 @@ def audit_project(root: Path) -> AuditReport:
     gi = _read(root / ".gitignore")
     missing_gi = [
         pat
-        for pat in ("/generated/", "/disc/", "/bios/", "/dist/", "/analysis/")
+        for pat in ("/disc/", "/bios/", "/dist/", "/analysis/")
         if pat not in gi and pat.rstrip("/") not in gi
     ]
+    ignores_generated = any(
+        re.match(r"^\s*/?generated/?\s*$", line) for line in gi.splitlines()
+    )
     if not (root / ".gitignore").is_file():
         checks.append(
             CheckResult(
                 id="gitignore",
-                title=".gitignore setup-host rules",
+                title=".gitignore rules",
                 status=CheckStatus.FAIL,
                 severity=Severity.RECOMMENDED,
                 detail="Missing .gitignore.",
+                fix_op="merge_gitignore",
+            )
+        )
+    elif ignores_generated:
+        checks.append(
+            CheckResult(
+                id="gitignore",
+                title=".gitignore rules",
+                status=CheckStatus.FAIL,
+                severity=Severity.REQUIRED,
+                detail=(
+                    ".gitignore ignores generated/ (the retired setup-host rule). Releases "
+                    "build the committed game C, so CI would find nothing to compile."
+                ),
                 fix_op="merge_gitignore",
             )
         )
@@ -831,7 +899,7 @@ def audit_project(root: Path) -> AuditReport:
         checks.append(
             CheckResult(
                 id="gitignore",
-                title=".gitignore setup-host rules",
+                title=".gitignore rules",
                 status=CheckStatus.WARN,
                 severity=Severity.RECOMMENDED,
                 detail="Missing patterns: " + ", ".join(missing_gi),
@@ -842,10 +910,82 @@ def audit_project(root: Path) -> AuditReport:
         checks.append(
             CheckResult(
                 id="gitignore",
-                title=".gitignore setup-host rules",
+                title=".gitignore rules",
                 status=CheckStatus.PASS,
                 severity=Severity.RECOMMENDED,
-                detail="Essential setup-host ignore rules present.",
+                detail="Disc / BIOS / dist / analysis ignored; generated/ tracked.",
+            )
+        )
+
+    # Committed game C: the release's input. Present and tracked, or the
+    # workflow has nothing to build.
+    if boot:
+        marker = root / "generated" / f"{boot}_dispatch.c"
+        tracked = False
+        if marker.is_file():
+            try:
+                r = subprocess.run(
+                    ["git", "-C", str(root), "ls-files", "--error-unmatch",
+                     f"generated/{boot}_dispatch.c"],
+                    capture_output=True, text=True, check=False,
+                )
+                tracked = r.returncode == 0
+            except OSError:
+                tracked = False
+        if not marker.is_file():
+            checks.append(
+                CheckResult(
+                    id="generated_committed",
+                    title="Committed game C",
+                    status=CheckStatus.FAIL,
+                    severity=Severity.REQUIRED,
+                    detail=(
+                        f"generated/{boot}_dispatch.c is missing. Generate once from a legal "
+                        "disc (psxrecomp_cli.py generate) and commit generated/."
+                    ),
+                )
+            )
+        elif not tracked:
+            checks.append(
+                CheckResult(
+                    id="generated_committed",
+                    title="Committed game C",
+                    status=CheckStatus.FAIL,
+                    severity=Severity.REQUIRED,
+                    detail=(
+                        f"generated/{boot}_dispatch.c exists but is not tracked by git; "
+                        "release CI checks out the repo and would find nothing to build. "
+                        "git add generated."
+                    ),
+                )
+            )
+        else:
+            checks.append(
+                CheckResult(
+                    id="generated_committed",
+                    title="Committed game C",
+                    status=CheckStatus.PASS,
+                    severity=Severity.REQUIRED,
+                    detail=f"generated/{boot}_dispatch.c tracked.",
+                )
+            )
+    retail_c = sorted(
+        p.relative_to(root).as_posix()
+        for d in (root / "generated", root / "psxrecomp" / "generated")
+        if d.is_dir()
+        for p in d.glob("SCPH*_*.c")
+    )
+    if retail_c:
+        checks.append(
+            CheckResult(
+                id="retail_bios_c",
+                title="Retail BIOS C absent",
+                status=CheckStatus.FAIL,
+                severity=Severity.REQUIRED,
+                detail=(
+                    "Retail-BIOS-derived C present: " + ", ".join(retail_c[:4])
+                    + ". It must never be committed or shipped; only OpenBIOS links in a release."
+                ),
             )
         )
 
@@ -946,7 +1086,7 @@ def audit_project(root: Path) -> AuditReport:
     if legacy_pack or "psxrecomp_add_runtime_target" in cmake or has_v4:
         layout = LayoutClass.LEGACY_PACKAGING
     elif fails:
-        if packager.is_file() or wizard_ok or (root / "codegen_setup.c").is_file():
+        if packager is not None or wizard_ok or (root / "codegen_setup.c").is_file():
             layout = LayoutClass.SETUP_HOST_PARTIAL
         else:
             layout = LayoutClass.UNKNOWN
@@ -958,7 +1098,7 @@ def audit_project(root: Path) -> AuditReport:
     if boot is None:
         notes.append("Could not parse [game].exe from game.toml — set --boot-exe when applying.")
     notes.append(
-        "Policy: setup-host releases only (no prebuilt generated-C zips)."
+        "Policy: bundled releases -- generated/ is committed and CI ships the compiled game."
     )
 
     return AuditReport(
