@@ -152,7 +152,7 @@ static const Profile profiles[] = {
     { "nymashock-1.29.0-dualshock","nymashock-1.29.0-dualshock", "nymashock-1.29.0", 0x11B28ADCB1A3E907ull, 0x94190B1DA4039FA2ull },
 };
 
-static uint64_t run(const Profile *p, int touch_mouse) {
+static uint64_t run(const Profile *p, int touch_mouse, int touch_negcon) {
     set_profile(p->pad,p->card);
     hash = 0xCBF29CE484222325ull; bytes = 0; clock_now = 0; i_stat = 0;
     sio_init();
@@ -169,30 +169,48 @@ static uint64_t run(const Profile *p, int touch_mouse) {
 #else
     (void)touch_mouse;
 #endif
+#ifdef SIO_DEVICE_NEGCON
+    if (touch_negcon) {
+        /* A neGcon was plugged in, twisted and pressed, then replaced by the pad. */
+        for (int s=0;s<PSX_MAX_PLAYERS;++s) {
+            sio_set_port_device(s,SIO_DEVICE_NEGCON);
+            sio_set_negcon_state(s,0x0000,0x13,0xFF,0x7F,0xFF);
+            sio_set_port_device(s,SIO_DEVICE_PAD);
+        }
+    }
+#else
+    (void)touch_negcon;
+#endif
     script();
     return hash;
 }
 
-/* usage: <profile index> [--touch-mouse] [--print]
+/* usage: <profile index> [--touch-mouse] [--touch-negcon] [--print]
  * One profile per process: sio_init deliberately keeps the trace and IRQ
  * sequence counters, and the snapshot carries sio_irq_seq, so a second run in
  * the same process would not start from power-on. */
 int main(int argc, char **argv) {
     const unsigned nprof = (unsigned)(sizeof profiles/sizeof profiles[0]);
-    int touch = 0, print = 0;
-    if (argc < 2) { fprintf(stderr,"usage: %s <0..%u> [--touch-mouse] [--print]\n",argv[0],nprof-1); return 2; }
+    int touch = 0, touch_negcon = 0, print = 0;
+    if (argc < 2) { fprintf(stderr,"usage: %s <0..%u> [--touch-mouse] [--touch-negcon] [--print]\n",argv[0],nprof-1); return 2; }
     const unsigned idx = (unsigned)atoi(argv[1]);
     for (int a=2;a<argc;++a) {
         if (!strcmp(argv[a],"--touch-mouse")) touch = 1;
+        else if (!strcmp(argv[a],"--touch-negcon")) touch_negcon = 1;
         else if (!strcmp(argv[a],"--print")) print = 1;
     }
     if (idx >= nprof) { fprintf(stderr,"profile index out of range\n"); return 2; }
 #ifndef SIO_DEVICE_MOUSE
     if (touch) { fprintf(stderr,"--touch-mouse needs the mouse API\n"); return 2; }
 #endif
+#ifndef SIO_DEVICE_NEGCON
+    if (touch_negcon) { fprintf(stderr,"--touch-negcon needs the neGcon API\n"); return 2; }
+#endif
     const Profile *p = &profiles[idx];
     const uint64_t golden = PSX_MAX_PLAYERS >= 5 ? p->golden5 : p->golden2;
-    const uint64_t h = run(p,touch);
+    const uint64_t h = run(p,touch,touch_negcon);
+    const char *trip = touch ? " after a mouse round-trip"
+                     : touch_negcon ? " after a neGcon round-trip" : "";
     if (print) {
         printf("players=%d profile=%s bytes=%u hash=0x%016llXull\n",
                PSX_MAX_PLAYERS,p->name,bytes,(unsigned long long)h);
@@ -200,11 +218,11 @@ int main(int argc, char **argv) {
     }
     if (h != golden) {
         fprintf(stderr,"FAIL: players=%d profile=%s%s hash %016llX, pin F golden %016llX\n",
-                PSX_MAX_PLAYERS,p->name,touch ? " after a mouse round-trip" : "",
+                PSX_MAX_PLAYERS,p->name,trip,
                 (unsigned long long)h,(unsigned long long)golden);
         return 1;
     }
     printf("sio_port_device_identity: players=%d profile=%s%s: %u bytes match pin F\n",
-           PSX_MAX_PLAYERS,p->name,touch ? " (mouse round-trip)" : "",bytes);
+           PSX_MAX_PLAYERS,p->name,trip,bytes);
     return 0;
 }

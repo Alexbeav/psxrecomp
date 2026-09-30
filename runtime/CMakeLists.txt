@@ -315,7 +315,14 @@ add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
             add_test(NAME ${_target}_${_profile} COMMAND ${_target} ${_profile})
             add_test(NAME ${_target}_${_profile}_mouse_roundtrip
                 COMMAND ${_target} ${_profile} --touch-mouse)
+            add_test(NAME ${_target}_${_profile}_negcon_roundtrip
+                COMMAND ${_target} ${_profile} --touch-negcon)
         endforeach()
+        # neGcon (PS1B-304): the byte protocol, same two builds.
+        add_executable(sio_negcon_p${_players}_test tests/test_sio_negcon.c)
+        target_include_directories(sio_negcon_p${_players}_test PRIVATE include)
+        target_compile_definitions(sio_negcon_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
+        add_test(NAME sio_negcon_p${_players}_test COMMAND sio_negcon_p${_players}_test)
     endforeach()
 add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
     target_include_directories(sio_nymashock_dualshock_test PRIVATE include)

@@ -173,6 +173,10 @@ static PSX_BSS uint8_t pad_device_kind[PSX_MAX_PLAYERS];
  * right; 1 = pressed). */
 static PSX_BSS int16_t mouse_motion[PSX_MAX_PLAYERS][2];
 static PSX_BSS uint8_t mouse_buttons[PSX_MAX_PLAYERS];
+/* neGcon (PS1B-304, PSX-SPX "Racing Controllers"): the six data bytes after
+ * its 23h 5Ah ID, as sent: buttons low, buttons high, twist, I, II, L. Only
+ * meaningful while the slot is a neGcon; negcon_reset() sets idle. */
+static PSX_BSS uint8_t negcon_data[PSX_MAX_PLAYERS][6];
 
 /* ---- Logical pad ↔ physical SIO port mapping ----
  *
@@ -293,10 +297,31 @@ static void mouse_fill_data(int logical, uint8_t out[4]) {
     out[3] = mouse_take_axis(&mouse_motion[logical][1]);
 }
 
+static int slot_is_negcon(int logical) {
+    return logical >= 0 && logical < PSX_MAX_PLAYERS &&
+           pad_device_kind[logical] == SIO_DEVICE_NEGCON;
+}
+
+/* Bits the neGcon halfword never drives (Select, L3, R3, L2, R2, L1, Cross,
+ * Square positions on other pads): always 1 (PSX-SPX). */
+#define NEGCON_UNUSED_BITS 0xC707u
+
+/* Idle neGcon: nothing pressed, twist centred, I/II/L released (00h is the
+ * released value: a runtime choice, open in PERIPHERAL-NEGCON-SPEC.md). */
+static void negcon_reset(int logical) {
+    negcon_data[logical][0] = 0xFF;
+    negcon_data[logical][1] = 0xFF;
+    negcon_data[logical][2] = 0x80;
+    negcon_data[logical][3] = 0x00;
+    negcon_data[logical][4] = 0x00;
+    negcon_data[logical][5] = 0x00;
+}
+
 /* Fill 8-byte per-pad status block used in multitap bulk 0x42 responses.
  * Disconnected → all 0xFF. Digital → 0x41 0x5A btnL btnH + 0xFF pad.
  * Analog/config → 0x73/0xF3 0x5A btn + stick bytes. Mouse → 0x12 0x5A and
- * its four data bytes, then 0xFF pad (PSX-SPX multitap method 1). */
+ * its four data bytes, then 0xFF pad (PSX-SPX multitap method 1). neGcon →
+ * 0x23 0x5A and its six data bytes, which fill the seat exactly. */
 static void pad_fill_status8(int logical, uint8_t out[8]) {
     if (logical < 0 || logical >= PSX_MAX_PLAYERS ||
         !(pad_connected & (1u << logical))) {
@@ -308,6 +333,12 @@ static void pad_fill_status8(int logical, uint8_t out[8]) {
         out[1] = 0x5A;
         mouse_fill_data(logical, &out[2]);
         out[6] = out[7] = 0xFF;
+        return;
+    }
+    if (slot_is_negcon(logical)) {
+        out[0] = 0x23;
+        out[1] = 0x5A;
+        memcpy(&out[2], negcon_data[logical], 6);
         return;
     }
     const uint8_t id = pad_in_config[logical] ? 0xF3
@@ -903,10 +934,11 @@ void sio_init(void) {
         pad_type_req[i] = -1;
         analog_mode_locked[i] = 0;
         pad_supports_config[i] = 1;
-        /* The device kind is a host preference and stays; its motion and
-         * buttons are power-on state. */
+        /* The device kind is a host preference and stays; its motion,
+         * buttons and neGcon inputs are power-on state. */
         mouse_motion[i][0] = mouse_motion[i][1] = 0;
         mouse_buttons[i] = 0;
+        negcon_reset(i);
     }
     pad_connected = 0;
     /* Multitap enable/port are host preferences — leave them alone across
@@ -1207,7 +1239,8 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]) {
 
 void sio_set_port_device(int slot, int kind) {
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-    const uint8_t k = (kind == SIO_DEVICE_MOUSE) ? SIO_DEVICE_MOUSE : SIO_DEVICE_PAD;
+    const uint8_t k = (kind == SIO_DEVICE_MOUSE || kind == SIO_DEVICE_NEGCON)
+                          ? (uint8_t)kind : SIO_DEVICE_PAD;
     /* Re-asserting the same kind (hotplug, route refresh) must not disturb a
      * DualShock's config latch or rumble map. */
     if (pad_device_kind[slot] == k) return;
@@ -1215,6 +1248,7 @@ void sio_set_port_device(int slot, int kind) {
     /* A different plug: nothing of the old device's state carries over. */
     mouse_motion[slot][0] = mouse_motion[slot][1] = 0;
     mouse_buttons[slot] = 0;
+    negcon_reset(slot);
     pad_in_config[slot] = 0;
     pad_type_req[slot] = -1;
     analog_mode_locked[slot] = 0;
@@ -1248,6 +1282,18 @@ void sio_set_mouse_buttons(int slot, int left, int right) {
 void sio_mouse_clear_motion(int slot) {
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
     mouse_motion[slot][0] = mouse_motion[slot][1] = 0;
+}
+
+void sio_set_negcon_state(int slot, uint16_t buttons, uint8_t twist,
+                          uint8_t i, uint8_t ii, uint8_t l) {
+    if (!slot_is_negcon(slot)) return;
+    buttons |= NEGCON_UNUSED_BITS;
+    negcon_data[slot][0] = (uint8_t)(buttons & 0xFF);
+    negcon_data[slot][1] = (uint8_t)(buttons >> 8);
+    negcon_data[slot][2] = twist;
+    negcon_data[slot][3] = i;
+    negcon_data[slot][4] = ii;
+    negcon_data[slot][5] = l;
 }
 
 /* ── LEGACY pad-config compatibility (Tomba "Hybrid" controller) ─────────────
@@ -1384,6 +1430,7 @@ static void pad_process_byte(uint8_t tx_byte) {
             const int a = mtap_slot_a_logical();
             const uint8_t id = (!(pad_connected & (1u << a))) ? 0xFFu
                                : slot_is_mouse(a) ? 0x12u
+                               : slot_is_negcon(a) ? 0x23u
                                : (pad_in_config[a] ? 0xF3u
                                   : (pad_analog[a] ? 0x73u : 0x41u));
             pad_response[0] = 0x80;
@@ -1421,6 +1468,27 @@ static void pad_process_byte(uint8_t tx_byte) {
                 pad_response[1] = 0x5A;
                 mouse_fill_data(lp, &pad_response[2]);
                 pad_response_len = 6;
+                pad_state = PAD_SEND_RESPONSE;
+                sio_rx_data = pad_response[0];
+                sio_stat |= SIO_STAT_ACK;
+            } else {
+                pad_state = PAD_IDLE;
+                pad_response_len = 0;
+                pad_response_idx = 0;
+                pad_current_cmd = 0;
+                sio_rx_data = 0xFF;
+            }
+            break;
+        }
+        if (slot_is_negcon(lp)) {
+            /* neGcon: it answers only the 42h read, with 23h 5Ah and six data
+             * bytes. No config mode: any other command gets hi-z and no /ACK
+             * (runtime choice, open in PERIPHERAL-NEGCON-SPEC.md). */
+            if (tx_byte == 0x42) {
+                pad_response[0] = 0x23;
+                pad_response[1] = 0x5A;
+                memcpy(&pad_response[2], negcon_data[lp], 6);
+                pad_response_len = 8;
                 pad_state = PAD_SEND_RESPONSE;
                 sio_rx_data = pad_response[0];
                 sio_stat |= SIO_STAT_ACK;
