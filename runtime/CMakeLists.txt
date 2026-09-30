@@ -324,6 +324,13 @@ add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
         target_compile_definitions(sio_negcon_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
         add_test(NAME sio_negcon_p${_players}_test COMMAND sio_negcon_p${_players}_test)
     endforeach()
+    # neGcon twist (PS1B-304): the one-axis stick transform.
+    add_executable(psx_stick_axis_test tests/test_psx_stick_axis.c)
+    target_include_directories(psx_stick_axis_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(psx_stick_axis_test PRIVATE m)
+    endif()
+    add_test(NAME psx_stick_axis_test COMMAND psx_stick_axis_test)
 add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
     target_include_directories(sio_nymashock_dualshock_test PRIVATE include)
     add_test(NAME sio_nymashock_dualshock_test COMMAND ${Python3_EXECUTABLE}
