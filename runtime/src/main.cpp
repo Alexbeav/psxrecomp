@@ -62,6 +62,8 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "psx_selfcheck.h"
 #include "psx_lobby_client.h"
 #include "netplay_bios_settle.h"
+#include "netplay_exit_reason.h"
+#include "host_time.h"
 #if defined(PSX_HAS_RECOMP_NET)
 #include "recomp_net/auth.h"
 #include "recomp_net/chat_filter.h" /* chat profanity mask, LAN rooms too */
@@ -3323,7 +3325,18 @@ static void netplay_host_present_restore(void) {
     apply_present_cadence();
 }
 
+/* Why the last match ended, for the launcher's status line once the lobby is
+ * back. Set by netplay_soft_exit; NULL when the player ended it. */
+static const char *g_netplay_exit_reason_text = nullptr;
+
 static void netplay_soft_exit(const char *origin) {
+    /* A peer that gave up on a boot-digest mismatch sends BYE, which reaches
+     * this side as a disconnect. This side saw the same mismatch: say that,
+     * not "the other player left". Read it before shutdown clears the latch. */
+    if (origin && std::strcmp(origin, "netplay_peer_disconnect") == 0 &&
+        psx_netplay_rb_boot_dig0_mismatch_since_ms() != 0u)
+        origin = "netplay_boot_mismatch";
+    g_netplay_exit_reason_text = netplay_exit_reason_text(origin);
     psx_crash_trace_set_exit_origin(origin);
     netplay_host_present_restore();
     psx_netplay_shutdown(); /* sends BYE so the peer soft-exits too */
@@ -3334,6 +3347,8 @@ static void netplay_soft_exit(const char *origin) {
         psx_request_return_to_lobby();
         return;
     }
+    if (g_netplay_exit_reason_text)
+        std::fprintf(stderr, "psxrecomp: %s\n", g_netplay_exit_reason_text);
     shutdown_runtime();
     std::exit(0);
 }
@@ -5725,6 +5740,20 @@ static void netplay_barrier_admit(int override) {
                     ? 0u
                     : psx_netplay_running_liveness_timeout_ms())) {
             netplay_soft_exit("netplay_peer_disconnect");
+            if (psx_return_to_lobby_requested()) goto done;
+        }
+        /* Both boot digests known and different: the peers booted differently
+         * (BIOS image, boot settings) and the dig0 gate would hold until the
+         * 20 s admit-stall watchdog. End it after a short grace, with its own
+         * reason. */
+        if (netplay_boot_mismatch_final(psx_netplay_rb_boot_dig0_mismatch_since_ms(),
+                                        (uint32_t)psx_host_mono_ms(),
+                                        NETPLAY_BOOT_MISMATCH_GRACE_MS)) {
+            std::fprintf(stderr,
+                         "psxrecomp: netplay boot digest mismatch held %u ms — "
+                         "returning to lobby\n",
+                         (unsigned)NETPLAY_BOOT_MISMATCH_GRACE_MS);
+            netplay_soft_exit("netplay_boot_mismatch");
             if (psx_return_to_lobby_requested()) goto done;
         }
         /* Staged .pst rejected (stale codegen / BIOS / missing) — do not wait
@@ -16477,6 +16506,11 @@ soft_return_lobby:
     teardown_game_session_keep_lobby();
 #if defined(RECOMP_LAUNCHER) && defined(PSX_HAS_LOBBY_CLIENT)
     ae_np_prepare_lobby_rematch();
+    /* Say why the match ended on the launcher's status line; the
+     * room and browser views both show last_error. Cleared when the player
+     * ended the match themselves. */
+    psx_lobby_set_last_error(g_netplay_exit_reason_text);
+    g_netplay_exit_reason_text = nullptr;
     {
         std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
         std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)

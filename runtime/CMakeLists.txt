@@ -29,6 +29,12 @@ if(BUILD_TESTING)
         src/netplay_bios_settle.c)
     target_include_directories(netplay_bios_settle_test PRIVATE include)
     add_test(NAME netplay_bios_settle_test COMMAND netplay_bios_settle_test)
+    # Netplay: why a match ended, and when a boot-digest mismatch is final.
+    add_executable(netplay_exit_reason_test
+        tests/test_netplay_exit_reason.c
+        src/netplay_exit_reason.c)
+    target_include_directories(netplay_exit_reason_test PRIVATE include)
+    add_test(NAME netplay_exit_reason_test COMMAND netplay_exit_reason_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
