@@ -283,11 +283,75 @@ class StaticDispatchApiTests(unittest.TestCase):
                             '-o', exe], check=True)
             subprocess.run([exe], check=True)
 
-    def test_non_kseg0_entry_is_rejected(self):
-        with self.assertRaises(ValueError):
-            compile_overlays.generate_overlay_dispatch(
-                [{'addr': 0x0000281C, 'symbol': 'ov_func_k', 'crc': 1,
-                  'ranges': ((0x0000281C, 16),)}])
+    def test_segment_rows_dispatch_their_own_pc(self):
+        # docs/SEGMENT_AWARE_CODE.md §5.7: a KUSEG body of the same bytes is
+        # its own row, dispatched for its exact PC; KSEG1, with no body,
+        # stays in the interpreter.
+        cc = shutil.which('gcc') or shutil.which('clang')
+        if cc is None:
+            self.skipTest('no C compiler available')
+        variants = [
+            {'addr': 0x8000281C, 'symbol': 'ov_func_k0', 'crc': 0x11111111,
+             'ranges': ((0x0000281C, 16),)},
+            {'addr': 0x0000281C, 'symbol': 'ov_func_ku', 'crc': 0x11111111,
+             'ranges': ((0x0000281C, 16),)},
+        ]
+        dispatch = compile_overlays.generate_overlay_dispatch(variants)
+        self.assertIn('(addr & 0xE0000000u) != 0x00000000u', dispatch)
+        self.assertIn('(addr & 0xE0000000u) != 0x80000000u', dispatch)
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'psx_runtime.h').write_text(
+                '#include <stdint.h>\n'
+                'typedef struct CPUState { uint32_t pc; } CPUState;\n',
+                encoding='utf-8')
+            exe = os.path.join(tmp, 'rows.exe' if os.name == 'nt' else 'rows')
+            src = os.path.join(tmp, 'rows.c')
+            Path(src).write_text(textwrap.dedent(f'''
+                #include "psx_runtime.h"
+
+                void ov_func_k0(CPUState *cpu);
+                void ov_func_ku(CPUState *cpu);
+
+                {dispatch}
+
+                static int k0, ku;
+
+                int psx_overlay_static_code_matches(
+                    const uint32_t *lo_len_pairs, uint32_t count,
+                    uint32_t expected_crc)
+                {{
+                    (void)lo_len_pairs;
+                    (void)count;
+                    return expected_crc == 0x11111111u;
+                }}
+
+                void ov_func_k0(CPUState *cpu) {{ (void)cpu; k0++; }}
+                void ov_func_ku(CPUState *cpu) {{ (void)cpu; ku++; }}
+
+                int main(void)
+                {{
+                    CPUState cpu = {{0}};
+                    if (!psx_overlay_dispatch(&cpu, 0x0000281Cu)) return 1;
+                    if (ku != 1 || k0 != 0) return 2;
+                    if (!psx_overlay_dispatch(&cpu, 0x8000281Cu)) return 3;
+                    if (ku != 1 || k0 != 1) return 4;
+                    if (psx_overlay_dispatch(&cpu, 0xA000281Cu)) return 5;
+                    if (psx_overlay_static_can_dispatch(0x2000281Cu)) return 6;
+                    return 0;
+                }}
+            '''), encoding='utf-8')
+            subprocess.run([cc, src, '-I', tmp, '-std=c99', '-Wall', '-Werror',
+                            '-o', exe], check=True)
+            subprocess.run([exe], check=True)
+
+    def test_unmapped_segment_entry_is_rejected(self):
+        # 0x20000000-0x7FFFFFFF and KSEG2 map no RAM; PC 0 is the hash
+        # table's empty marker.
+        for addr in (0x2000281C, 0xC000281C, 0x00000000):
+            with self.assertRaises(ValueError):
+                compile_overlays.generate_overlay_dispatch(
+                    [{'addr': addr, 'symbol': 'ov_func_k', 'crc': 1,
+                      'ranges': ((0x0000281C, 16),)}])
 
 
 class StaticWorkerContractTests(unittest.TestCase):

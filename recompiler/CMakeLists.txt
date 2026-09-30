@@ -869,6 +869,16 @@ if(BUILD_TESTING)
                     --bios-recompiler $<TARGET_FILE:psxrecomp-bios>
                     --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Overlay shards keyed by segment (docs/SEGMENT_AWARE_CODE.md §5.7):
+        # capture views, per-segment cache directories and manifests, the real
+        # compile_overlays.py driver and the real overlay loader.
+        add_test(
+            NAME overlay_segment_keys
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_segment_keys.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+                    --compiler ${CMAKE_C_COMPILER}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # BIOS segment variants (docs/SEGMENT_AWARE_CODE.md §5.4): OpenBIOS
         # with segment-qualified seeds, and SCPH-1001's KSEG1 kernel entry.
         add_test(
