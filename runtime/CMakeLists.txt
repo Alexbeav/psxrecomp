@@ -23,6 +23,12 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    # Netplay: which BIOS a match boots, and its wire helpers.
+    add_executable(netplay_bios_settle_test
+        tests/test_netplay_bios_settle.c
+        src/netplay_bios_settle.c)
+    target_include_directories(netplay_bios_settle_test PRIVATE include)
+    add_test(NAME netplay_bios_settle_test COMMAND netplay_bios_settle_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
@@ -746,7 +752,8 @@ if(BUILD_TESTING)
             # is needed and none can drift from what the runtime links.
             target_sources(lobby_chat_ring_test PRIVATE
                 "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_ws.c"
-                "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_sha1.c")
+                "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_sha1.c"
+                "${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c")
             target_link_libraries(lobby_chat_ring_test PRIVATE recomp_net)
             add_test(NAME lobby_chat_ring_test COMMAND lobby_chat_ring_test)
         endif()

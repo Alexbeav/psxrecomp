@@ -61,6 +61,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "psx_netplay_rb.h"
 #include "psx_selfcheck.h"
 #include "psx_lobby_client.h"
+#include "netplay_bios_settle.h"
 #if defined(PSX_HAS_RECOMP_NET)
 #include "recomp_net/auth.h"
 #include "recomp_net/chat_filter.h" /* chat profanity mask, LAN rooms too */
@@ -2981,13 +2982,19 @@ static std::filesystem::path discover_retail_bios_near(const char* argv0) {
 
 /* Match-only BIOS from lobby `session_bios`. Never writes bios.cfg / settings.
  * Returns true when session_bios is a known settle token.
- * *out_path empty ⇒ OpenBIOS for this match; otherwise a validated retail dump. */
+ * *out_path empty ⇒ OpenBIOS for this match; otherwise a validated retail dump.
+ * A retail match boots only the image named by retail_crc, so every
+ * peer runs the same BIOS; retail_crc 0 (an older host) accepts any retail
+ * dump, as before. *out_image_id, when given, names the image found. */
 static bool resolve_match_session_bios_path(
     const char* session_bios,
+    uint32_t retail_crc,
     const std::filesystem::path& preferred_hint,
     const char* launcher_bios_path,
     const char* argv0,
-    std::filesystem::path* out_path) {
+    std::filesystem::path* out_path,
+    const char** out_image_id = nullptr) {
+    if (out_image_id) *out_image_id = nullptr;
     if (!out_path || !session_bios || !session_bios[0])
         return false;
     if (std::strcmp(session_bios, "openbios") == 0) {
@@ -3003,8 +3010,11 @@ static bool resolve_match_session_bios_path(
         if (p.empty() || !std::filesystem::exists(p, ec))
             return;
         const PsxBiosBackend* b = bios_backend_for_file(p, nullptr, nullptr);
-        if (b && b->image && !b->image->image_bundled)
+        if (b && b->image && !b->image->image_bundled &&
+            (!retail_crc || b->image->image_crc32 == retail_crc)) {
             retail = p;
+            if (out_image_id) *out_image_id = b->image->image_id;
+        }
     };
     try_retail(preferred_hint);
     if (retail.empty() && launcher_bios_path && launcher_bios_path[0])
@@ -8361,10 +8371,14 @@ namespace {
         int prefer_openbios = 1;
         int can_openbios = 1;
         int can_scph1001 = 0;
+        uint32_t retail_crc = 0; /* image this seat would boot; 0 = not sent */
     };
     AeLanSlotBios g_lnch_lan_slot_bios[kAeLanMaxSlots]{};
     /* Match-only BIOS token from lobby settle or LAN START ("openbios"|"scph1001"). */
     char g_lnch_session_bios[16]{};
+    /* With "scph1001": CRC-32 of the retail image every peer boots (0 = any,
+     * from an older host). See netplay_bios_settle.h. */
+    uint32_t g_lnch_session_bios_crc = 0;
 
     /* Bring-your-own memory card (seat 1 / P2). Per-seat offers for LAN
      * (mirrors online memcard_offer); the local offer as last published by
@@ -8455,13 +8469,14 @@ namespace {
     static int ae_np_lan_occupied(const AeLanLobbyState& state);
     static int ae_np_lan_endpoint_port(const std::string& endpoint);
     static bool ae_np_read_lan_file_state(AeLanLobbyState* state);
-    static void ae_np_set_session_bios_token(const char* token);
+    static void ae_np_set_session_bios_token(const char* token, uint32_t retail_crc = 0);
     static void ae_np_clear_session_bios_token(void);
     static void ae_np_lan_clear_slot_bios(int slot);
     static void ae_np_lan_store_slot_bios(int slot, int prefer_open, int can_open,
-                                         int can_scph);
+                                         int can_scph, uint32_t retail_crc = 0);
     static void ae_np_lan_sync_local_slot_bios(void);
-    static int ae_np_lan_settle_session_bios(char* out, size_t out_cap);
+    static int ae_np_lan_settle_session_bios(char* out, size_t out_cap, uint32_t* out_crc,
+                                             char* why, size_t why_cap);
     static void ae_np_append_lan_bios_join(char* msg, size_t msg_cap, int* io_off);
     static int ae_np_parse_lan_bios_tail(char* p, int* prefer_open, int* can_open,
                                         int* can_scph);
@@ -9745,21 +9760,27 @@ namespace {
         offer.can_openbios =
             (s_openbios_allowed && psx_bios_bundled() != nullptr) ? 1 : 0;
         const char* argv0 = g_lnch_argv0 ? g_lnch_argv0 : "";
-        auto path_is_retail = [&](const std::filesystem::path& p) -> bool {
+        /* CRC-32 of the linked retail image a file matches, 0 if none. */
+        auto retail_crc_of = [&](const std::filesystem::path& p) -> uint32_t {
             std::error_code ec;
-            if (p.empty() || !std::filesystem::exists(p, ec)) return false;
+            if (p.empty() || !std::filesystem::exists(p, ec)) return 0;
             const PsxBiosBackend* b = bios_backend_for_file(p, nullptr, nullptr);
-            return b && b->image && !b->image->image_bundled;
+            return (b && b->image && !b->image->image_bundled) ? b->image->image_crc32 : 0;
         };
-        bool has_dump = false;
-        if (launcher_bios_path && launcher_bios_path[0]) {
-            const auto p = resolve_bios_path(launcher_bios_path, argv0);
-            has_dump = path_is_retail(p);
-        }
-        if (!has_dump) has_dump = path_is_retail(read_cached_path(argv0, "bios.cfg"));
-        if (!has_dump) has_dump = path_is_retail(discover_retail_bios_near(argv0));
+        auto path_is_retail = [&](const std::filesystem::path& p) -> bool {
+            return retail_crc_of(p) != 0;
+        };
+        /* The first dump in the order resolve_match_session_bios_path tries
+         * them: that is the image this peer boots for a retail match, so its
+         * CRC is what the settle must compare. */
+        uint32_t dump_crc = 0;
+        if (launcher_bios_path && launcher_bios_path[0])
+            dump_crc = retail_crc_of(resolve_bios_path(launcher_bios_path, argv0));
+        if (!dump_crc) dump_crc = retail_crc_of(read_cached_path(argv0, "bios.cfg"));
+        if (!dump_crc) dump_crc = retail_crc_of(discover_retail_bios_near(argv0));
         offer.can_scph1001 =
-            (psx_bios_has_selectable() && has_dump) ? 1 : 0;
+            (psx_bios_has_selectable() && dump_crc) ? 1 : 0;
+        offer.retail_crc = offer.can_scph1001 ? dump_crc : 0;
 
         /* Empty / bundled path = explicit OpenBIOS preference. */
         offer.prefer_openbios = 1;
@@ -9780,18 +9801,35 @@ namespace {
         ae_np_refresh_bios_offer(nullptr);
     }
 
-    static void ae_np_set_session_bios_token(const char* token) {
+    static void ae_np_set_session_bios_token(const char* token, uint32_t retail_crc) {
         g_lnch_session_bios[0] = '\0';
+        g_lnch_session_bios_crc = 0;
         if (!token || !token[0]) return;
         if (std::strcmp(token, "openbios") != 0 &&
             std::strcmp(token, "scph1001") != 0)
             return;
         std::snprintf(g_lnch_session_bios, sizeof(g_lnch_session_bios), "%s",
                       token);
+        if (std::strcmp(token, "scph1001") == 0)
+            g_lnch_session_bios_crc = retail_crc;
     }
 
     static void ae_np_clear_session_bios_token(void) {
         g_lnch_session_bios[0] = '\0';
+        g_lnch_session_bios_crc = 0;
+    }
+
+    static void ae_np_log_settled_bios(const char* where) {
+        const char* token = g_lnch_session_bios[0] ? g_lnch_session_bios : "openbios";
+        if (std::strcmp(token, "scph1001") == 0 && g_lnch_session_bios_crc) {
+            char name[32];
+            netplay_bios_describe_crc(g_lnch_session_bios_crc, name, sizeof(name));
+            std::fprintf(stdout,
+                         "psxrecomp: %s settled session BIOS = %s (retail %s, crc %08x)\n",
+                         where, token, name, (unsigned)g_lnch_session_bios_crc);
+        } else {
+            std::fprintf(stdout, "psxrecomp: %s settled session BIOS = %s\n", where, token);
+        }
     }
 
     static void ae_np_lan_clear_slot_bios(int slot) {
@@ -9802,13 +9840,14 @@ namespace {
     }
 
     static void ae_np_lan_store_slot_bios(int slot, int prefer_open, int can_open,
-                                         int can_scph) {
+                                         int can_scph, uint32_t retail_crc) {
         if (slot < 0 || slot >= kAeLanMaxSlots) return;
         AeLanSlotBios& b = g_lnch_lan_slot_bios[slot];
         b.valid = 1;
         b.prefer_openbios = prefer_open ? 1 : 0;
         b.can_openbios = can_open ? 1 : 0;
         b.can_scph1001 = can_scph ? 1 : 0;
+        b.retail_crc = can_scph ? retail_crc : 0;
         if (!b.can_openbios && !b.can_scph1001) b.can_openbios = 1;
     }
 
@@ -9824,7 +9863,7 @@ namespace {
         }
         if (slot < 0 || !offer || !offer->valid) return;
         ae_np_lan_store_slot_bios(slot, offer->prefer_openbios, offer->can_openbios,
-                                  offer->can_scph1001);
+                                  offer->can_scph1001, offer->retail_crc);
     }
 
     static void ae_np_lan_send_chat_to_peers(const char* player_id, const char* from,
@@ -9985,10 +10024,15 @@ namespace {
         return (mc.valid && mc.has_card && mc.share) ? 1 : 0;
     }
 
-    /* Same settle rule as psx_lobby_settle_session_bios, over LAN seat offers. */
-    static int ae_np_lan_settle_session_bios(char* out, size_t out_cap) {
+    /* Same settle rule as psx_lobby_settle_session_bios (netplay_bios_settle),
+     * over LAN seat offers. Returns 0 with the token in out and the retail CRC
+     * in *out_crc; 1 when no BIOS suits every seat (why says which). */
+    static int ae_np_lan_settle_session_bios(char* out, size_t out_cap, uint32_t* out_crc,
+                                             char* why, size_t why_cap) {
         if (!out || out_cap < 9) return -1;
         out[0] = '\0';
+        if (out_crc) *out_crc = 0;
+        if (why && why_cap) why[0] = '\0';
         AeLanLobbyState st;
         if (!ae_np_read_lan_state(&st)) {
             std::strncpy(out, "openbios", out_cap - 1);
@@ -9996,35 +10040,30 @@ namespace {
             return 0;
         }
         ae_np_lan_sync_local_slot_bios();
-        int any_prefer_open = 0;
-        int any_cannot_scph = 0;
-        int host_prefer_scph = 0;
-        int saw_peer = 0;
+        NetplayBiosSeat seats[kAeLanMaxSlots] = {};
+        int n = 0;
         const int host_slot =
             (st.host_slot >= 0 && st.host_slot < kAeLanMaxSlots) ? st.host_slot : 0;
         for (int i = 0; i < st.max_slots && i < kAeLanMaxSlots; ++i) {
             if (st.slot_name[i].empty()) continue;
-            saw_peer = 1;
             const AeLanSlotBios& b = g_lnch_lan_slot_bios[i];
-            if (!b.valid) {
-                any_cannot_scph = 1;
-                continue;
-            }
-            if (b.prefer_openbios) any_prefer_open = 1;
-            if (!b.can_scph1001) any_cannot_scph = 1;
-            if (i == host_slot && !b.prefer_openbios && b.can_scph1001)
-                host_prefer_scph = 1;
+            NetplayBiosSeat& s = seats[n++];
+            s.offered = b.valid;
+            s.can_openbios = b.can_openbios;
+            s.can_retail = b.can_scph1001;
+            s.prefer_openbios = b.prefer_openbios;
+            s.retail_crc = b.retail_crc;
+            s.is_host = (i == host_slot) ? 1 : 0;
         }
-        if (!saw_peer) any_cannot_scph = 1;
-        if (any_cannot_scph)
-            std::strncpy(out, "openbios", out_cap - 1);
-        else if (host_prefer_scph)
-            std::strncpy(out, "scph1001", out_cap - 1);
-        else if (any_prefer_open)
-            std::strncpy(out, "openbios", out_cap - 1);
-        else
-            std::strncpy(out, "scph1001", out_cap - 1);
+        const NetplayBiosSettle settle = netplay_bios_settle(seats, n);
+        if (settle.kind == NETPLAY_BIOS_NONE) {
+            if (why && why_cap)
+                netplay_bios_describe_refusal(&settle, seats, n, why, why_cap);
+            return 1;
+        }
+        std::strncpy(out, netplay_bios_token(settle.kind), out_cap - 1);
         out[out_cap - 1] = '\0';
+        if (out_crc) *out_crc = settle.retail_crc;
         return 0;
     }
 
@@ -10052,6 +10091,36 @@ namespace {
                                         g_lnch_memcard_offer.share ? 1 : 0);
             if (m > 0) *io_off += m;
         }
+        /* Line 6: CRC-32 of the retail image this peer boots; ""
+         * when it has none. Older hosts stop after the memcard lines. */
+        if (*io_off > 0 && (size_t)*io_off < msg_cap) {
+            char crc[16];
+            netplay_bios_format_crc((offer && offer->valid && offer->can_scph1001)
+                                        ? offer->retail_crc : 0,
+                                    crc, sizeof(crc));
+            const int c = std::snprintf(msg + *io_off, msg_cap - (size_t)*io_off,
+                                        "%s\n", crc);
+            if (c > 0) *io_off += c;
+        }
+    }
+
+    /* Optional JOIN retail CRC: line 6 of the tail, after the three bios and
+     * two memcard lines. 0 when absent (an older guest). Does not modify tail. */
+    static uint32_t ae_np_parse_lan_bios_crc_tail(const char* tail) {
+        if (!tail) return 0;
+        const char* p = tail;
+        for (int i = 0; i < 5; ++i) {
+            const char* nl = std::strchr(p, '\n');
+            if (!nl) return 0;
+            p = nl + 1;
+        }
+        char line[16] = {};
+        size_t n = 0;
+        while (p[n] && p[n] != '\n' && n + 1 < sizeof(line)) {
+            line[n] = p[n];
+            ++n;
+        }
+        return netplay_bios_parse_crc(line);
     }
 
     /* Optional JOIN memcard tail after the 3 bios lines: has_card\nshare\n.
@@ -10857,10 +10926,13 @@ namespace {
                 int prefer_open = 1, can_open = 1, can_scph = 0;
                 AeLanSlotMemcard mc_offer{};
                 (void)ae_np_parse_lan_memcard_tail(bios_tail, &mc_offer);
+                /* Read before ae_np_parse_lan_bios_tail, which cuts the tail. */
+                const uint32_t retail_crc = ae_np_parse_lan_bios_crc_tail(bios_tail);
                 if (bios_tail &&
                     ae_np_parse_lan_bios_tail(bios_tail, &prefer_open, &can_open,
                                               &can_scph) == 0) {
-                    ae_np_lan_store_slot_bios(slot, prefer_open, can_open, can_scph);
+                    ae_np_lan_store_slot_bios(slot, prefer_open, can_open, can_scph,
+                                              retail_crc);
                 } else {
                     /* Legacy JOIN without bios_offer — cannot assume SCPH. */
                     ae_np_lan_clear_slot_bios(slot);
@@ -11226,7 +11298,7 @@ namespace {
             if (std::strncmp(buf, "MOTK1 START\n", 12) == 0) {
                 g_lnch_remote_lan_state.started = true;
                 /* MOTK1 START\n<session>\n[<delay>\n<prediction>\n<rollback>\n
-                 * [<session_bios>\n]]
+                 * [<session_bios>\n[<guest_memcard>\n[<session_bios_crc>\n]]]]
                  * Trailing caps are host-authoritative (incl. settled BIOS). */
                 char* p = buf + 12;
                 char* nl = std::strchr(p, '\n');
@@ -11243,8 +11315,8 @@ namespace {
                 g_lnch_lan_guest_memcard_active = 0;
                 if (nl) {
                     p = nl + 1;
-                    char* lines[5] = {};
-                    for (int i = 0; i < 5; ++i) {
+                    char* lines[6] = {};
+                    for (int i = 0; i < 6; ++i) {
                         if (!p || !*p) break;
                         lines[i] = p;
                         char* n2 = std::strchr(p, '\n');
@@ -11273,7 +11345,10 @@ namespace {
                     if (lines[2] && lines[2][0])
                         g_lnch_rollback = (std::atoi(lines[2]) != 0) ? 1 : 0;
                     if (lines[3] && lines[3][0])
-                        ae_np_set_session_bios_token(lines[3]);
+                        /* Line 6 names the retail image; an
+                         * older host sends none, which accepts any dump. */
+                        ae_np_set_session_bios_token(
+                            lines[3], lines[5] ? netplay_bios_parse_crc(lines[5]) : 0u);
                     else
                         /* Legacy host: force OpenBIOS so mixed local prefs
                          * cannot silently desync. */
@@ -12138,12 +12213,21 @@ namespace {
             else
                 ae_np_refresh_bios_offer_from_disk();
             char session_bios[16] = {};
-            (void)ae_np_lan_settle_session_bios(session_bios, sizeof(session_bios));
+            uint32_t session_crc = 0;
+            char why[192] = {};
+            if (ae_np_lan_settle_session_bios(session_bios, sizeof(session_bios),
+                                              &session_crc, why, sizeof(why)) == 1) {
+                /* No BIOS every seat can boot: starting would only end in a
+                 * boot-digest stall. Say why instead. */
+                std::fprintf(stdout, "psxrecomp: LAN start refused: %s\n", why);
+                psx_lobby_set_last_error(why);
+                ae_np_clear_session_bios_token();
+                return -1;
+            }
             ae_np_set_session_bios_token(session_bios[0] ? session_bios
-                                                        : "openbios");
-            std::fprintf(stdout, "psxrecomp: LAN settled session BIOS = %s\n",
-                         g_lnch_session_bios[0] ? g_lnch_session_bios
-                                               : "openbios");
+                                                        : "openbios",
+                                         session_crc);
+            ae_np_log_settled_bios("LAN");
             state.started = true;
             state.session_id += 1u;
             if (state.session_id == 0) state.session_id = 1;
@@ -12161,13 +12245,17 @@ namespace {
             g_lnch_lan_guest_memcard_active = ae_np_lan_guest_memcard_effective(state);
             std::fprintf(stdout, "psxrecomp: LAN guest memcard (P2 card as slot 2) = %s\n",
                          g_lnch_lan_guest_memcard_active ? "on" : "off");
+            char session_crc_text[16];
+            netplay_bios_format_crc(g_lnch_session_bios_crc, session_crc_text,
+                                    sizeof(session_crc_text));
             std::snprintf(start_msg, sizeof(start_msg),
-                          "MOTK1 START\n%u\n%d\n%d\n%d\n%s\n%d\n",
+                          "MOTK1 START\n%u\n%d\n%d\n%d\n%s\n%d\n%s\n",
                           (unsigned)state.session_id, delay, pred,
                           g_lnch_rollback ? 1 : 0,
                           g_lnch_session_bios[0] ? g_lnch_session_bios
                                                 : "openbios",
-                          g_lnch_lan_guest_memcard_active ? 1 : 0);
+                          g_lnch_lan_guest_memcard_active ? 1 : 0,
+                          session_crc_text);
             for (int i = 0; i < kAeLanMaxSlots; ++i) {
                 if (g_lnch_lan_peer_ok[i])
                     ae_np_lan_udp_sendto(g_lnch_lan_peers[i], start_msg);
@@ -12185,12 +12273,19 @@ namespace {
         caps.guest_memcard_active = ae_np_ws_guest_memcard_effective();
         std::fprintf(stdout, "psxrecomp: lobby guest memcard (P2 card as slot 2) = %s\n",
                      caps.guest_memcard_active ? "on" : "off");
-        (void)psx_lobby_settle_session_bios(caps.session_bios,
-                                            sizeof(caps.session_bios));
+        char why[192] = {};
+        if (psx_lobby_settle_session_bios(caps.session_bios, sizeof(caps.session_bios),
+                                          &caps.session_bios_crc, why, sizeof(why)) == 1) {
+            /* No BIOS every seat can boot: refuse, and say why. */
+            std::fprintf(stdout, "psxrecomp: lobby start refused: %s\n", why);
+            psx_lobby_set_last_error(why);
+            ae_np_clear_session_bios_token();
+            return -1;
+        }
         ae_np_set_session_bios_token(caps.session_bios[0] ? caps.session_bios
-                                                         : "openbios");
-        std::fprintf(stdout, "psxrecomp: lobby settled session BIOS = %s\n",
-                     caps.session_bios[0] ? caps.session_bios : "openbios");
+                                                         : "openbios",
+                                     caps.session_bios_crc);
+        ae_np_log_settled_bios("lobby");
         return psx_lobby_request_start(&caps);
     }
 
@@ -12427,7 +12522,8 @@ namespace {
          * it once, so a toggle racing the start cannot split the room. */
         out->guest_memcard = caps->guest_memcard_active ? 1 : 0;
         if (caps->session_bios[0])
-            ae_np_set_session_bios_token(caps->session_bios);
+            ae_np_set_session_bios_token(caps->session_bios,
+                                         caps->session_bios_crc);
         return 1;
     }
 
@@ -14687,24 +14783,27 @@ int main(int argc, char** argv) {
                          * Ephemeral for this boot only — seed / bios.cfg keep
                          * the player's offline preference. */
                         if (caps->session_bios[0])
-                            ae_np_set_session_bios_token(caps->session_bios);
+                            ae_np_set_session_bios_token(caps->session_bios,
+                                                         caps->session_bios_crc);
                     }
                 }
                 /* LAN START / lobby token — apply even when match_caps absent. */
+                const char* match_bios_id = nullptr;
                 if (ls.netplay_launch.enabled && g_lnch_session_bios[0] &&
                     resolve_match_session_bios_path(
-                        g_lnch_session_bios,
+                        g_lnch_session_bios, g_lnch_session_bios_crc,
                         seed.has_bios_path ? seed.bios_path
                                            : std::filesystem::path{},
                         ls.bios_path, argv[0],
-                        &match_session_bios_path)) {
+                        &match_session_bios_path, &match_bios_id)) {
                     match_session_bios_set = true;
                     if (std::strcmp(g_lnch_session_bios, "scph1001") == 0 &&
                         match_session_bios_path.empty()) {
                         std::fprintf(stderr,
-                            "psxrecomp: session BIOS scph1001 required but no "
-                            "validated dump found — aborting launch (mixed "
-                            "OpenBIOS/SCPH would desync)\n");
+                            "psxrecomp: session BIOS scph1001 (crc %08x) required "
+                            "but no validated dump found — aborting launch (mixed "
+                            "BIOS images would desync)\n",
+                            (unsigned)g_lnch_session_bios_crc);
                         match_session_bios_set = false;
                         ls.netplay_launch.enabled = 0;
                         g_lnch_pending_direct_launch = {};
@@ -14719,8 +14818,9 @@ int main(int argc, char** argv) {
                             "(match only; preference unchanged)\n");
                     } else {
                         std::fprintf(stdout,
-                            "psxrecomp: netplay session BIOS = SCPH-1001 "
+                            "psxrecomp: netplay session BIOS = %s "
                             "(%s; match only; preference unchanged)\n",
+                            match_bios_id ? match_bios_id : "retail",
                             match_session_bios_path.string().c_str());
                     }
                 }
@@ -16923,19 +17023,22 @@ soft_return_lobby:
             if (net_cfg.enabled) {
                 const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
                 if (caps && caps->valid && caps->session_bios[0])
-                    ae_np_set_session_bios_token(caps->session_bios);
+                    ae_np_set_session_bios_token(caps->session_bios,
+                                                 caps->session_bios_crc);
                 std::filesystem::path session_path;
+                const char* session_bios_id = nullptr;
                 if (g_lnch_session_bios[0] &&
                     resolve_match_session_bios_path(
-                        g_lnch_session_bios,
+                        g_lnch_session_bios, g_lnch_session_bios_crc,
                         ls.bios_path[0] ? std::filesystem::path(ls.bios_path)
                                         : std::filesystem::path{},
-                        ls.bios_path, argv[0], &session_path)) {
+                        ls.bios_path, argv[0], &session_path, &session_bios_id)) {
                     if (std::strcmp(g_lnch_session_bios, "scph1001") == 0 &&
                         session_path.empty()) {
                         std::fprintf(stderr,
-                            "psxrecomp: rematch session BIOS scph1001 required "
-                            "but no validated dump — aborting\n");
+                            "psxrecomp: rematch session BIOS scph1001 (crc %08x) "
+                            "required but no validated dump — aborting\n",
+                            (unsigned)g_lnch_session_bios_crc);
                         SDL_Quit();
                         return 1;
                     }
@@ -16950,8 +17053,9 @@ soft_return_lobby:
                     } else {
                         bios_path_str = session_path.string();
                         std::fprintf(stdout,
-                            "psxrecomp: rematch session BIOS = SCPH-1001 (%s; "
+                            "psxrecomp: rematch session BIOS = %s (%s; "
                             "preference unchanged)\n",
+                            session_bios_id ? session_bios_id : "retail",
                             bios_path_str.c_str());
                     }
                 }
