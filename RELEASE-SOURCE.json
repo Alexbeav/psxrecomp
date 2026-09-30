@@ -13,5 +13,11 @@
   "portable_build_corrections": [
     "C11 label before declaration",
     "BIOS assets follow explicit title policy"
-  ]
+  ],
+  "setup_fix_merge": {
+    "commit": "a839474e2941cdc44488ace4d53584e6a485ea41",
+    "source": "Alexbeav/psxrecomp PR #27",
+    "scope": "setup host and CLI only; no emulation change",
+    "tracked_in": "PS1G-61"
+  }
 }
