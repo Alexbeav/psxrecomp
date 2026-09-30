@@ -193,6 +193,13 @@ Status: MODERATE-STRONG (regions games use).
   note: Beetle tags the I-cache by full virtual address; hardware clears bit 31 of
   KSEG0 fetches first (cpu.c 719-730). psx_icache.c follows Beetle (owner decision,
   2026-09-29; SEGMENT_AWARE_CODE.md §10).
+  - 2026-09-29, segment-aware PR C: a KUSEG-linked EXE compiles at its KUSEG link
+    addresses (links, EPCs, fetch tags, store PCs), and static dispatch is keyed by
+    the full PC, so an alias of static text runs interpreted with its own segment
+    instead of through another segment's body. On the synthetic probe, compiled code
+    now equals Beetle and the interpreter in every result word and cycle-watch
+    interval on both BIOSes. Open: compiled variants for other segments (PR D),
+    overlay segments (PR E).
 - [ ] IsC stores do not reach the I-cache model. memory.c drops every store made while
   SR.IsC is set. Beetle's WriteMemory rewrites the tag and valid bits of the addressed
   line when the I-cache is enabled and BIU has a tag-test, invalidate or lock mode bit
@@ -288,6 +295,27 @@ Status: STRONG (most project effort lives here).
   matches only SCPH-1001's own instruction (not other BIOSes or game code at the
   same RAM address); the GP0 source key matches the same 5,596 boot commands as
   before. Guards: ledger `bios-runtime-pc`, `store-pc-keys-runtime`.
+- [x] **KUSEG-linked EXEs compile for their link segment; dispatch is exact
+  (2026-09-29, segment-aware PR C).** The EXE parser folded a KUSEG header
+  (Alien Resurrection, Kula World) to KSEG0, so the game compiled for a segment it
+  never runs in, a seed in its own segment was silently dropped, and the lookup
+  ran a body for any segment's alias. Now the image compiles at its link segment,
+  seeds and config sites are checked by physical address and segment (another
+  segment's seed is a reported variant request), and a PC with no row of its own
+  is a segment miss: interpreted through the clean-text-miss path and recorded
+  (TCP `segment_misses`, `dispatch_stats`, exit report; SEGMENT_AWARE_CODE.md
+  §5.3, §5.5). Kula World and Alien Resurrection were not run (no discs here);
+  they need a regeneration with seeds, seeds directives and exact-match config
+  sites in KUSEG (`tools/collect_game_misses.py --game-toml` now writes KUSEG
+  seeds). Until PR E their overlay code runs interpreted: static code enters it at
+  KUSEG PCs, which #417's gate keeps off the KSEG0-compiled shards.
+- [ ] **Call-contract return checks mask the segment.** `psx_call_contract`
+  (`cpu_state.h`) and the four return checks of the generated BIOS dispatch loop
+  compare `$ra`/`pc` with the call site's return PC physically. A callee that
+  returns to an alias of its call site would continue in the caller's compiled
+  body, where hardware runs the alias's segment. No title is known to do it;
+  PR D, which adds compiled variants, makes the five checks exact together
+  (SEGMENT_AWARE_CODE.md §5.5).
 - [ ] Backend equivalence (compiled == interp) — necessary, not sufficient.
   Measured with `tools/fp_identity.py` (2026-09-29): seeded warm vs cold
   overlay-cache runs, judged on the `frame_fingerprint` guest-fact columns. R4,

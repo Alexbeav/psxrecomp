@@ -213,6 +213,49 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-29 (segment-aware code, rollout PR C: KUSEG-linked EXEs, exact dispatch):**
+  `feat/kuseg-linked-exe`, stacked on PR B (docs/SEGMENT_AWARE_CODE.md §5.3, §5.5).
+  - The EXE parser keeps the header's segment (`link_segment()`); the image is
+    analysed and compiled at its link virtual addresses, so a KUSEG-linked EXE's
+    links, fetch tags, IRQ resume PCs, CPS exits, store-PC stamps and dispatch rows
+    are KUSEG. A KSEG1-linked image compiles uncached (a fetch per instruction).
+    The three KSEG0-only JAL scans in function_analysis take the PC's segment.
+  - Seeds and config code sites are checked by physical address and segment: a
+    link-segment seed is an entry (it was dropped before), another segment's seed
+    is a reported variant request (compiled by PR D), and a foreign-segment config
+    site is refused instead of silently matching nothing.
+  - Dispatch (`game_dispatch_emitter.cpp`) indexes the physical word and requires
+    the exact PC. A segment miss is interpreted and recorded in an always-on ring
+    (`segment_misses`, `dispatch_stats`, psx_last_run_report.json).
+  - Timing: on the synthetic probe, compiled code now equals the interpreter and
+    Beetle: T2 56/56/82, cycle-watch 90/90 and 10/10/15 on OpenBIOS and SCPH-1001,
+    and compiled and interpreted runs reach the spin on the same cycle (198,522,602 /
+    398,724,722; B's compiled build was 98 cycles short). LLE boot anchors against
+    Beetle are unchanged at every hit (shell entry −126 / −454). R4 game C is
+    byte-identical except the lookup's exact compare; fingerprints (cold and warm,
+    12000 frames) are identical to B on every column; smoke reaches a race with 0
+    dispatch misses and 0 segment misses.
+  - The ledger closes eight ids (two open: `segment-variants`,
+    `kseg1-fetch-charge`). B's two surviving dispatch-row mutants are now killed by
+    `emitter_runtime_pc_test` (76 and 12 failing checks). New tests:
+    `psx_segment_miss_test`, `segment_miss_wiring_test`, `collect_game_misses`.
+  - Review fixes (same day): the lookup's binary-search form (tables spanning
+    2 MiB or more) and the duplicate-word build error are now tested; the dispatch
+    hook is a tested helper (`psx_segment_miss_note`) whose call site, TCP command,
+    stats fields and exit-report section a guard pins. `[load_accel.vsync_query]`
+    event-horizon return PCs join the refused foreign-segment config sites; the
+    physically matched kinds (byte patches, full-word-guarded cull keep, angle,
+    aspect-cone and signed-X-bound sites, dome call sites) are not refused. Seeds
+    directives in a foreign segment are refused with their link-segment spelling.
+    `tools/collect_game_misses.py` writes seeds in the link segment and segment
+    misses at their full PC (it wrote every seed as KSEG0). No codegen change: the
+    probe, BIOS and R4 generated C are byte-identical to the pre-review build.
+  - Cross-title: the codegen hash changes, so every title's overlay cache
+    recompiles once and pre-C savestates, rewind buffers and boot-state caches are
+    refused. Until PR E a KUSEG title's overlay code runs interpreted (its static
+    code enters overlays at KUSEG); a KSEG0 title that runs its static text through
+    an alias runs that path interpreted after regeneration (segment misses).
+
 - **2026-09-29 (segment-aware code, rollout PR B: every baked PC through `runtime_pc()`):**
   `refactor/emitter-runtime-pc`, stacked on #419 (docs/SEGMENT_AWARE_CODE.md §5.2).
   - Game/overlay emitter: `CodeGenerator` has a code segment and

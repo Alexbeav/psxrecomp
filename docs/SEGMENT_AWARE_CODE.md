@@ -7,7 +7,8 @@ Based on master. It was first stacked on RetroPortingToolKit/psxrecomp#417
 (mult/div deadlines) and #420 (store-PC forwarding, ABI v24). Rollout PR A
 merged as #429 on 2026-09-29 (§8). This change adds only this document and an
 acceptance test; it does not change behaviour. Rollout PR B
-(`refactor/emitter-runtime-pc`, stacked on this design) implements §5.2.
+(`refactor/emitter-runtime-pc`, stacked on this design) implements §5.2, and
+rollout PR C (`feat/kuseg-linked-exe`, stacked on B) implements §5.3 and §5.5.
 
 Acceptance test: `recompiler/tests/test_segment_aware_codegen.py` (ctest
 `segment_aware_codegen`). Synthetic EXE: `tools/segment_testrom/gen_segment_exe.py`.
@@ -163,37 +164,39 @@ The `cosim_*` hooks (the `PSX_COSIM` build only) record the executing PC at
 their checkpoints, as the interpreter does, so PR B routes them like the
 table.
 
-The dispatch file (`main_psx.cpp`, `psxrecomp_game_main`):
-- keys its table by KSEG0 address and looks it up with the physical address
-  (`psx_game_find_entry`, `want = addr & 0x1FFFFFFF`);
-- then sets `cpu->pc = entry->resume_pc`, which is a KSEG0 constant.
+Before PR C, the dispatch file (`main_psx.cpp`, `psxrecomp_game_main`):
+- keyed its table by KSEG0 address and looked it up with the physical
+  address (`psx_game_find_entry`, `want = addr & 0x1FFFFFFF`);
+- then set `cpu->pc = entry->resume_pc`, which is a KSEG0 constant.
 
-A KUSEG or KSEG1 PC therefore enters the KSEG0 body and continues in KSEG0.
-`test_kuseg_dispatch_lookup.py` currently asserts exactly this alias
-behaviour; PR C in §8 changes it.
+A KUSEG or KSEG1 PC therefore entered the KSEG0 body and continued in KSEG0,
+and `test_kuseg_dispatch_lookup.py` asserted exactly that alias behaviour.
+PR C (§5.5) moved the emitter to `game_dispatch_emitter.cpp`, made the lookup
+exact and rewrote the test: an alias with no body of its own misses.
 
 ### 3.2 KUSEG-linked EXEs
 
-`ps1_exe_parser.cpp:286-301` rewrites the header's KUSEG addresses to KSEG0 in
-place and records no original segment. It also rejects a KSEG1 entry (158).
-Three things follow:
-- The whole game compiles for KSEG0 while hardware runs it at KUSEG. Every
-  link it saves on the stack and every EPC is `0x8…` instead of `0x0…`. Every
-  fetch tag differs from the one the BIOS, the interpreter and Beetle use.
-- **Seeds in the game's own segment are silently dropped.**
-  `main_psx.cpp:799` range-checks seeds against the normalized
-  `load_address`, so a seed written as `0x000100E4` is ignored. It must be
-  written `0x800100E4`.
+Before PR C (§5.3), `ps1_exe_parser.cpp` rewrote the header's KUSEG addresses
+to KSEG0 in place and recorded no original segment. It also rejected a KSEG1
+entry. Three things followed:
+- The whole game compiled for KSEG0 while hardware runs it at KUSEG. Every
+  link it saves on the stack and every EPC was `0x8…` instead of `0x0…`.
+  Every fetch tag differed from the one the BIOS, the interpreter and Beetle
+  use.
+- **Seeds in the game's own segment were silently dropped.** `main_psx.cpp`
+  range-checked seeds against the normalized `load_address`, so a seed
+  written as `0x000100E4` was ignored. It had to be written `0x800100E4`.
 - R4 is linked at KSEG0 and is unaffected.
 
 ### 3.3 Aliases
 
-A KSEG1 or KSEG0 alias of static text resolves to the same body (§3.1). The
-uncached cases are rare but real: code that ORs `0xA0000000` into a function
-address to run it uncached, and cache-maintenance trampolines. Those run with
-the wrong fetch cost and the wrong links. There is no way to request a body
-for a second segment: a segment-qualified seed is folded into the KSEG0 body
-or dropped.
+Before PR C, a KSEG1 or KSEG0 alias of static text resolved to the same body
+(§3.1). The uncached cases are rare but real: code that ORs `0xA0000000` into
+a function address to run it uncached, and cache-maintenance trampolines.
+Those ran with the wrong fetch cost and the wrong links. Since C they miss and
+run interpreted (§5.5). There is still no way to request a body for a second
+segment: since C a segment-qualified seed is reported and not compiled; D
+compiles it (§5.4).
 
 **Measured in the BIOS (2026-09-29).** SCPH-1001 enters its relocated kernel
 through the uncached alias `0xA0000500`. In #429's Beetle gate (§7.2) Beetle
@@ -317,9 +320,10 @@ A compiled body is identified by `seg | phys`:
   emitter's rows (`addr`, `resume_pc`).
 - Identity keys (block labels, `.ranges`) may keep the compile address. The
   store-PC stamp is not an identity key (§3.1).
-- `code_seg` defaults to the segment of the image's load address. The EXE
-  parser folds KUSEG headers to KSEG0 until §5.3, so that is KSEG0 for every
-  title today, and `runtime_pc(addr) == addr` for every address in the image.
+- `code_seg` defaults to the segment of the image's load address. Until
+  §5.3 the EXE parser folded KUSEG headers to KSEG0, so that was KSEG0 for
+  every title; since PR C it is the link segment. Either way
+  `runtime_pc(addr) == addr` for every address in the image.
 - **Acceptance:** regenerating any KSEG0 title is byte-identical. That proves
   the refactor has zero fast-path cost. Closes nothing in the ledger on its
   own; enables §5.3-5.6.
@@ -380,15 +384,18 @@ Tests:
   charges exactly what a KSEG1 image charges. For the translator it checks
   every PC-bearing form, the deferred loads and both syscall forms (ctest runs
   it a second time with `PSX_CPS=0`).
-- The dispatch rows (`main_psx.cpp`) are routed but not tested here: until
-  PR C they equal the compile address for every real executable. C's ledger
-  checks query them.
+- The dispatch rows are routed too. In B they were not tested: a real
+  executable compiles in its own segment, where `runtime_pc()` is the
+  identity. PR C moved the dispatch source to `game_dispatch_emitter.cpp`,
+  and `emitter_runtime_pc_test` now emits it with a KUSEG and a KSEG1 code
+  segment: row keys and resume PCs carry the segment, `func_` names keep the
+  compile identity.
 - A single-site mutation sweep (revert one route, rebuild, run the unit test
-  in both `PSX_CPS` modes and the ledger) kills 77 of the 80 routes. The
-  three survivors are the two dispatch-row routes and the continuation key
-  for a call return in the middle of a block, which the CFG analyzer does not
-  produce (it starts a block at every call return; R4's 2,994 functions have
-  none).
+  in both `PSX_CPS` modes and the ledger) killed 77 of the 80 routes in B.
+  The three survivors were the two dispatch-row routes, which PR C's test
+  kills, and the continuation key for a call return in the middle of a
+  block, which the CFG analyzer does not produce (it starts a block at every
+  call return; R4's 2,994 functions have none).
 - The ledger gains two regression guards (§7.1).
 
 The BIOS emitter's precedent has holes to close in the same pass:
@@ -418,6 +425,57 @@ Closes `link-segment`, `fetch-tag-segment`, `irq-resume-segment`,
 `resume-pc-segment`, `store-pc-segment`, `home-seed-accepted` and
 `alias-fetch-coherence`.
 
+**Implemented in PR C.** The image is analysed and compiled at its link
+virtual addresses, so code identity is the VA (§5.1) and `runtime_pc()` is
+the identity for every home body: a KUSEG-linked EXE gets `func_00010000`,
+KUSEG rows, links, fetch tags, resume PCs and store-PC stamps with no other
+emitter change.
+- `PS1Executable::link_segment()` is the load address's segment. The header
+  is kept as written; `phys_load_address()` and `contains_phys()` do byte
+  addressing, and the BSS overlap check and the `text_size` bound are
+  physical. The load address and entry must lie in the 8 MiB RAM window of
+  KUSEG, KSEG0 or KSEG1 and share the segment; anything else is rejected
+  with a message that names both.
+- `function_analysis.cpp`'s three JAL scans took their targets' top bits
+  from KSEG0. They now take them from the delay slot's PC, as every other
+  jump decoder does; for a KSEG0 image nothing changes.
+- Seeds are range-checked by physical address. A seed in the link segment is
+  an entry. A seed for the same bytes in another segment is a variant
+  request (§5.4): until PR D it is listed in a `WARNING` with its home
+  spelling and not compiled, and never folded into the home body. Seeds
+  outside the image are counted. The seeds file's directive lines
+  (`producer_range`, `cross_call_allow`, `hosted_interior`) have no variant
+  form: one that names the image's bytes in another segment is refused with
+  its link-segment spelling.
+- `tools/collect_game_misses.py` writes each dirty-RAM miss in the link
+  segment (from `--segment`, `--game-toml` or a segmented text range; it
+  refuses to guess from a physical one) and each `segment_misses` row at its
+  full PC, a variant request. Before C it wrote every seed as KSEG0.
+- Config code sites that the emitter or the runtime match exactly, and that
+  name the image's bytes in another segment, are refused with the matching
+  spelling: `[widescreen]` and `[widescreen.cull]` sites, mod entry hooks,
+  hot and data-shard functions, the VSync-query function and its
+  event-horizon return PCs (compared with `$ra`), and persisted option
+  stores. After C such a site would match nothing, with no message. Kinds
+  matched by physical address reach the same bytes in any spelling and are
+  not refused: `[[recompiler.patches]]` (byte patches), the full-word-guarded
+  `[widescreen.cull]` keep, angle and aspect-cone sites,
+  `[[widescreen.signed_x_bound]]`, and `[widescreen.dome]` call sites (the
+  runtime masks them). Overlay compiles are exempt; their segment keys are
+  §5.7.
+- A KSEG1-linked image compiles as an uncached home segment: every
+  instruction is charged its own fetch (#429's rule).
+- Until PR E, a KUSEG-linked title's overlay code runs interpreted. Its static
+  code now enters overlay RAM at KUSEG PCs (direct `jal`/`j` keep the
+  caller's segment, and `call_by_address` takes `runtime_pc()`), and #417's
+  gate keeps every non-KSEG0 PC off the KSEG0-compiled shards
+  (`segment_alias_interp` counts them). Before C the folded KSEG0 static code
+  entered them at KSEG0 and ran the shards natively, with KSEG0 links.
+- A KSEG0 title that enters its own static text through a KUSEG or KSEG1
+  alias (§3.3) runs that path interpreted after it is regenerated, recorded
+  as segment misses, until PR D compiles a variant. Before C the alias ran the
+  KSEG0 body. Of the in-tree titles only R4 was checked (0 segment misses).
+
 ### 5.4 Variant requests and closure
 
 - A seed whose segment differs from the link segment requests a variant, for
@@ -438,6 +496,9 @@ Closes `link-segment`, `fetch-tag-segment`, `irq-resume-segment`,
 
 Closes `segment-variants`.
 
+Until D, PR C reports such a seed and compiles nothing for it (§5.3), so the
+PC stays a recorded segment miss (§5.5).
+
 ### 5.5 Dispatch is exact; a segment miss is a dispatch miss
 
 - The table is keyed by the full VA. `psx_game_find_entry` keeps its
@@ -457,8 +518,40 @@ Closes `segment-variants`.
 - Decided 2026-09-29 (§10): a segment miss in static game code interprets
   loudly until the title is regenerated. It does not fail fast.
 
-Closes `segment-miss`. `psx_call_contract`'s segment-masked return check
-(`cpu_state.h:312`) can become exact in the same PR.
+Closes `segment-miss`. The plan was to make `psx_call_contract`'s
+segment-masked return check (`cpu_state.h:307`, compares at 312 and 322)
+exact in the same PR; C defers it to PR D, below.
+
+**Implemented in PR C.**
+- `game_dispatch_emitter.cpp` (moved out of `main_psx.cpp`) sorts rows by
+  physical address, indexes the physical word and then requires
+  `row.addr == addr`, in both the indexed and the binary-search lookup. One
+  compile has one code segment, so a second row for one word is a build
+  error until D's variants share the table.
+- `psx_game_address_in_text` stays physical (byte identity). A segment miss
+  therefore takes `dirty_ram_dispatch_inner`'s clean-text-miss path and is
+  interpreted.
+- The runtime records it (`psx_segment_miss.c`): when a clean-text miss has
+  no row but another segment's alias does, the full PC, that row, `$ra`,
+  `$sp` and the frame go into an always-on ring and a per-PC count. TCP
+  `segment_misses` returns the summary or `{"tail":N}`; `dispatch_stats`
+  carries `segment_miss_total`/`_unique`; `psx_last_run_report.json` has a
+  `segment_misses` section.
+- `psx_call_contract` stays segment-masked for now. The BIOS dispatch
+  loop the full-function emitter generates (`psx_dispatch_impl` and its
+  return-boundary helper) makes the same masked return check in four
+  places, and one call contract must not have two rules. Before D the
+  masked compare can only let a body continue for another segment when a
+  callee returns to an alias of its own call site, which no title is known
+  to do. D makes the five checks exact together.
+- Tests: `kuseg_dispatch_lookup` compiles the emitted lookup in its indexed
+  form and, for a table spanning 2 MiB or more, its binary-search form, and
+  queries every segment's alias of every row; `emitter_runtime_pc_test`
+  checks that two rows on one physical word are a build error;
+  `psx_segment_miss_test` covers the dispatch hook's helper
+  (`psx_segment_miss_note`), and `segment_miss_wiring_test` pins its call in
+  `dirty_ram_dispatch_inner`, the TCP command, the `dispatch_stats` and
+  `ping` fields and the exit-report section.
 
 ### 5.6 Per-instruction fetch charging for uncached code
 
@@ -632,21 +725,21 @@ the real `psxrecomp-game` and `psxrecomp-bios` on it (OpenBIOS for the latter,
   fails.
 
 **Gap ledger.** `KNOWN_GAPS` in the test lists each id with the section that
-closes it. The test passes only when the observed gaps equal the ledger. Today
-ten are open:
+closes it. The test passes only when the observed gaps equal the ledger. Ten
+were open when the ledger landed; PR C closed eight, and two are open:
 
-| id | observed today | closed by |
-|---|---|---|
-| `link-segment` | 7 link constants, e.g. `0x80010018` | §5.3 |
-| `fetch-tag-segment` | 30 fetch tags in KSEG0 | §5.3 |
-| `irq-resume-segment` | 4 resume PCs in KSEG0 | §5.3 |
-| `resume-pc-segment` | 10 exit PCs / continuation keys in KSEG0 | §5.3 |
-| `store-pc-segment` | 10 store-PC stamps in KSEG0, e.g. `0x8001000C` | §5.3 |
-| `home-seed-accepted` | KUSEG seed loaded 0 of 1 | §5.3 |
-| `alias-fetch-coherence` | interp-then-compiled `leaf`: 22 cycles vs Beetle 11 (the #417 shape) | §5.3 |
-| `segment-variants` | `0xA00100F0` resolves to the `0x800100F0` body | §5.4 |
-| `segment-miss` | unrequested KSEG0/KSEG1 aliases resolve; KUSEG PCs resolve to KSEG0 rows | §5.5 |
-| `kseg1-fetch-charge` | no KSEG1 body (Beetle: 40 cycles for the 10-instruction run) | §5.4 + §5.6 |
+| id | observed before PR C | closed by | state |
+|---|---|---|---|
+| `link-segment` | 7 link constants, e.g. `0x80010018` | §5.3 | closed (C) |
+| `fetch-tag-segment` | 30 fetch tags in KSEG0 | §5.3 | closed (C) |
+| `irq-resume-segment` | 4 resume PCs in KSEG0 | §5.3 | closed (C) |
+| `resume-pc-segment` | 10 exit PCs / continuation keys in KSEG0 | §5.3 | closed (C) |
+| `store-pc-segment` | 10 store-PC stamps in KSEG0, e.g. `0x8001000C` | §5.3 | closed (C) |
+| `home-seed-accepted` | KUSEG seed loaded 0 of 1 | §5.3 | closed (C) |
+| `alias-fetch-coherence` | interp-then-compiled `leaf`: 22 cycles vs Beetle 11 (the #417 shape) | §5.3 | closed (C) |
+| `segment-variants` | `0xA00100F0` resolves to the `0x800100F0` body; after C it misses | §5.4 | open |
+| `segment-miss` | unrequested KSEG0/KSEG1 aliases resolve; KUSEG PCs resolve to KSEG0 rows | §5.5 | closed (C) |
+| `kseg1-fetch-charge` | no KSEG1 body (Beetle: 40 cycles for the 10-instruction run) | §5.4 + §5.6 | open |
 
 Each implementation PR removes the ids it closes. PR A (#429, §8) was the
 exception: it landed on master before this test did. This PR dropped its id,
@@ -671,6 +764,10 @@ PR B closes no id. It adds two more regression guards, which are
   `BiosAddressModel::runtime_pc()` does, and must go through the gated
   `scph1001_relocated_store()`; a bare RAM key would also match other BIOSes
   and game code.
+
+PR C removes its eight ids from `KNOWN_GAPS` and lists them in
+`REGRESSION_GUARDS`, so each reports a new gap if it breaks again.
+`resume-pc-segment` now also checks every dispatch row's key and resume PC.
 
 The overlay half (§5.7) gets its own acceptance case in
 `runtime/tests/test_overlay_segment_gate.py`:
@@ -739,6 +836,33 @@ restores it.
   - no KSEG1 body (D).
 - The compiled probe output is byte-identical before and after B.
 
+**Compiled column after PR C (2026-09-29).** The probe runtime is rebuilt
+with the EXE compiled at KUSEG (`game.toml` load and entry `0x00010000`, and
+`seeded` seeded as `0x000100E4`, the spelling B could not use). The KSEG0 and
+KSEG1 runs of `probe_run` have no body of their own, so they are segment
+misses and run interpreted.
+
+| | links | segment probes | T2 KUSEG / KSEG0 / KSEG1 |
+|---|---|---|---|
+| Beetle | `0x00010018/24/38` | `0x000100FC`, `0x800100FC`, `0xA00100FC` | 56 / 56 / 82 |
+| interpreter | same | same | 56 / 56 / 82 |
+| compiled (C) | same | same | 56 / 56 / 82 |
+
+- The same on OpenBIOS and SCPH-1001.
+- Cycle watch: from one `probe_run` entry to the next, all three take 90 and
+  90 cycles (compiled took 90 and 54 before C); from `probe_run` to `getpc`,
+  all three take 10 / 10 / 15 (compiled took 10 / 1 / 1).
+- The compiled build and the interpreter now agree to the cycle for the
+  whole run: the spin is reached at 198,522,602 cycles on OpenBIOS and
+  398,724,722 on SCPH-1001 in both (B's compiled build: 198,522,504 and
+  398,724,624, 98 fewer).
+- The segment-miss ring at the spin holds six entries on both BIOSes, each
+  once: `probe_run` (`0x800100F0`, `0xA00100F0`), its `getpc` callee
+  (`0x80010124`, `0xA0010124`) and the continuation after that call
+  (`0x800100FC`, `0xA00100FC`), each with its KUSEG row as `home`.
+- Apart from segments, the compiled probe C equals B's. The dispatch file
+  differs only in the lookup (§5.5).
+
 **Other runs**
 - **§5.6 BIOS fix (PR A, #429): done, passed.** LLE boot (`bios_hle = false`)
   cycle parity against live Beetle to the shell, OpenBIOS and the owner's
@@ -792,14 +916,40 @@ log.
 - **C: `feat/kuseg-linked-exe`** (§5.3, §5.5). Also rewrites the alias
   assertions in `test_kuseg_dispatch_lookup.py`: an alias with no body now
   misses. Closes eight ids: §5.3's seven and `segment-miss` (§5.5).
+  Implemented 2026-09-29:
+  - The EXE parser keeps the header's segment and the image compiles there;
+    dispatch is exact; segment misses are interpreted and recorded (ring,
+    TCP `segment_misses`, `dispatch_stats`, exit report). Seeds and config
+    sites are checked by physical address and segment (§5.3).
+  - The ledger is at two gaps (`segment-variants`, `kseg1-fetch-charge`).
+  - Probe: compiled equals Beetle and the interpreter in every result word
+    and every cycle-watch interval, on both BIOSes (§7.2).
+  - LLE boot against Beetle is identical to B at every hit of every anchor
+    (shell entry −126 OpenBIOS, −454 SCPH-1001). BIOS C is byte-identical.
+  - R4 (KSEG0): the 50 game shards, the declarations header and the
+    `.ranges` manifest are byte-identical; `SLUS_007.97_dispatch.c` changes
+    only in `psx_game_find_entry` (the exact-PC compare and its comment).
+    All 26 overlay shard sources compiled from B's race captures are
+    byte-identical. Fingerprints (12000 frames, cold and warm) are identical
+    to B on every column, `mmio` and the `pc`/`wr` locators included. A smoke
+    run reaches a live race with 0 dispatch misses and 0 segment misses.
+  - The codegen hash changes, so every title's overlay cache recompiles once
+    and the runtime refuses every savestate, rewind buffer and boot-state
+    cache made before C (the hash is in the state header). A KUSEG title
+    whose `game.toml` omits `entry_pc` now gets the header's KUSEG entry,
+    which also keys its save slots.
 - **D: `feat/segment-variants`** (§5.4). Closes `segment-variants` and
   `kseg1-fetch-charge`. Since #429, D only needs the KSEG1 variants: with B's
   `runtime_pc()`, #429's per-instruction rule charges them (§5.6), and
   `kseg1-fetch-charge` stays open until D lands. Also gives the BIOS emitter a
   KSEG1 variant of SCPH-1001's kernel entry `0xA0000500`, which closes the
-  −9 cycles left at that entry in #429's gate (§3.3).
+  −9 cycles left at that entry in #429's gate (§3.3), and makes the five
+  segment-masked return checks exact together: `psx_call_contract` and the
+  four in the generated BIOS dispatch loop (§5.5).
 - **E: `feat/overlay-segment-keys`** (§5.7). Includes the runtime acceptance
   case, and the R4 warm-cache check that `segment_alias_interp` reaches 0.
+  It also returns a KUSEG-linked title's overlay code to native shards, which
+  C sends to the interpreter (§5.3).
 
 ## 9. Adjacent gaps (not in scope, recorded)
 
