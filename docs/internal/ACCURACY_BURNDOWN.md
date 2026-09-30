@@ -178,15 +178,26 @@ Status: PARTIAL.
 
 Status: MODERATE-STRONG (regions games use).
 - [ ] KUSEG/KSEG0/KSEG1 mirroring, scratchpad, cache-isolation (IsC) — psx-spx.
-- [ ] IsC stores do not reach the I-cache model. memory.c drops every store made while
-  SR.IsC is set. Beetle's WriteMemory rewrites the tag and valid bits of the addressed
-  line when the I-cache is enabled and BIU has a tag-test, invalidate or lock mode bit
-  set; that is how FlushCache (A 44h) invalidates the cache. Natively the cached
-  kernel handlers keep hitting after a flush where Beetle refills them. Measured in the
-  axis-2 land gate: −42 cycles after each of three OpenBIOS flushes and −445 after four
-  SCPH-1001 flushes, all before the shell. A local prototype of Beetle's write (a few lines in the three
-  `psx_write_*_raw` IsC branches) makes both LLE boots match Beetle at every anchor to
-  the shell, apart from SCPH-1001's −9 KSEG1 kernel entry.
+- [x] **IsC stores reach the caches, as in Beetle (2026-09-29).** memory.c dropped
+  every store made while SR.IsC was set. Beetle's WriteMemory
+  (mednafen/psx/cpu.cpp:482-512) handles them before any address decode. With the
+  I-cache on and a tag-test, invalidate or lock mode bit in BIU, the store rewrites
+  its line's tag and valid bits; FlushCache (A 44h) invalidates the cache this way.
+  With the D-cache on and lock mode off, the store lands in the scratchpad at
+  addr & 0x3FF. Nothing reaches the bus, not even the BIU register. Now
+  `psx_icache_isc_store` plus memory.c's `isc_store`, at the top of the three
+  `psx_write_*_raw` chokepoints that every backend stores through. DMA is not isolated.
+  Beetle land gate (LLE boot to the shell, both BIOS images): OpenBIOS 0 at every
+  anchor (was −126 from the first flushes on); SCPH-1001 −9 at every anchor from the
+  kernel entry on (was −454), which is the KSEG1 entry of SEGMENT_AWARE_CODE.md §3.3.
+  Rulers #1 and #2 are unchanged. Covered by ctest `isc_store_test`. Details:
+  FAITHFUL_TIMING_PLAN §5, 2026-09-29.
+- [ ] IsC SWL/SWR: the emitters and both interpreters run SWL/SWR as a
+  read-modify-write, so an isolated one reaches `isc_store` as one aligned word.
+  Beetle's WriteMemory gets the partial width at the unaligned address. The results
+  differ in two cases. In tag-test mode, an SWR at addr & 3 ≠ 0 sets no valid bits in
+  Beetle; natively it takes lane 0 of the RAM word. With the D-cache on, native
+  also rewrites the scratchpad bytes the store leaves alone. No known code does either.
 - [ ] BIU bit 11 (I-cache disable, 0xFFFE0130) does not reach the fetch model:
   memory.c stores it, psx_icache.c and the interp ignore it. Beetle charges +4 per
   fetch while the cache is disabled (CPU_SetBIU). This matters only for RAM code run
@@ -302,7 +313,9 @@ overlap the cycle axis or each other (different files), so they parallelize.
 - **`accuracy/axis4_memory_mmio.md`.** GOOD: I_STAT/I_MASK/DICR ack semantics CORRECT.
   P1: RAM mirror wrong (we gate `<2MB`; HW aliases 2MB DRAM across an 8MB window 4× —
   mirror accesses silently read 0 / drop writes). P2: `IsC` over-broadly drops scratchpad
-  writes (scratchpad is the D-cache, must stay addressable). P3: level-IRQ relatch; P4:
+  writes (scratchpad is the D-cache, must stay addressable). (P2 resolved 2026-09-29 to
+  Beetle's rule: an isolated store reaches the scratchpad only while BIU has the
+  D-cache on and lock mode off, at addr & 0x3FF; see axis 4.) P3: level-IRQ relatch; P4:
   per-segment addr masking; P5: open-bus high bits on I_STAT readback. Validate: MMIO
   trace diff + RAM-mirror sentinel probe.
 
