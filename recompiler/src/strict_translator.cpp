@@ -1309,8 +1309,8 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
 
         if (rs == 0x00) { // MFC0 rt, rd  -- gpr[rt] = cop0[rd]
             r.supported = true;
-            // MFC0 is a delayed load (Beetle: LDAbsorb=0, LDWhich=rt): no give-back
-            // cycles, but sets ReadFudge=rt so a load in the next slot gets no fudge.
+            // MFC0 is a delayed load (ld_absorb=0, ld_which_t=rt): no give-back
+            // cycles, but sets read_fudge=rt so a load in the next slot gets no fudge.
             r.c_code = emit_gpr_write(rt, fmt::format("cpu->cop0[{}]", static_cast<int>(rd)))
                 + fmt::format("\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    cpu->ld_absorb = 0u; cpu->ld_which_t = {}u;\n#endif",
                               static_cast<int>(rt));
@@ -1343,8 +1343,8 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
         const std::string gte_stall =
             "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_stall(cpu);\n#endif\n    ";
         // MFC2/CFC2 (GPR-dest reads): stall to the GTE deadline AND hand the stall
-        // amount to the next instruction(s) as a load-delay give-back (Beetle
-        // MFC2/CFC2: LDAbsorb=gte_ts_done-ts, LDWhich=rt). §1+DO_LDS ran in the
+        // amount to the next instruction(s) as a load-delay give-back
+        // (ld_absorb=gte_ts_done-now, ld_which_t=rt). §1+DO_LDS ran in the
         // function's per-instruction psx_cyc_step (COP2 is non-load).
         const std::string gte_read = fmt::format(
             "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_read(cpu, {});\n#endif\n    ", static_cast<int>(rt));
