@@ -7,7 +7,10 @@ source trees it refuses, and that a valid set gets past them. The staging rules
 that follow are checked in the script's text. A single-program package must
 not change: the lines it depends on are asserted too.
 """
+from __future__ import annotations
+
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,8 +20,44 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = ROOT / "tools" / "package_setup_host.sh"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_package_setup_bios_hint import find_bash, shell_env, to_shell_path  # noqa: E402
 from test_program_set import SET_TOML, make_set  # noqa: E402
+
+
+# The three shell helpers are the ones of test_package_setup_bios_hint.py. They
+# are repeated here because that module does not import on Python 3.9 (the
+# setup tools' floor), and this test must run there.
+def find_bash():
+    candidates = []
+    found = shutil.which("bash")
+    if found:
+        candidates.append(found)
+    if os.name == "nt":
+        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), r"C:\Program Files"):
+            candidates += [os.path.join(base, "Git", "usr", "bin", "bash.exe"),
+                           os.path.join(base, "Git", "bin", "bash.exe")]
+    for c in candidates:
+        # System32\bash.exe is the WSL launcher, not a shell for this repo's scripts.
+        if os.path.isfile(c) and "system32" not in c.lower():
+            return c
+    return None
+
+
+def shell_env(bash):
+    """PATH that reaches the coreutils shipped beside `bash`."""
+    env = dict(os.environ)
+    here = os.path.dirname(bash)
+    extra = [here, os.path.join(os.path.dirname(here), "bin"),
+             os.path.join(os.path.dirname(here), "usr", "bin")]
+    env["PATH"] = os.pathsep.join([p for p in extra if os.path.isdir(p)] + [env.get("PATH", "")])
+    return env
+
+
+def to_shell_path(path, bash):
+    if os.name != "nt":
+        return str(path)
+    out = subprocess.run([bash, "-c", 'cygpath -u "$1"', "_", str(path)],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", env=shell_env(bash))
+    return out.stdout.strip() or str(path)
 
 
 def run(bash, root, *args):
