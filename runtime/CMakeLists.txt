@@ -357,6 +357,17 @@ if(BUILD_TESTING)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
     add_test(NAME replay_session_test COMMAND replay_session_test
         ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
+    # PS1B-316: a replay names the disc in the drive, not the launch disc. The
+    # real product identity behind the replay session, two files as the discs.
+    add_executable(replay_disc_identity_test tests/test_replay_disc_identity.c
+        src/replay_session.c src/input_route_session.c src/disc_digest_cache.c
+        src/psx_sha256.c)
+    target_include_directories(replay_disc_identity_test PRIVATE include)
+    target_compile_definitions(replay_disc_identity_test PRIVATE
+        "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\"")
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_disc_identity_scratch)
+    add_test(NAME replay_disc_identity_test COMMAND replay_disc_identity_test
+        ${CMAKE_CURRENT_BINARY_DIR}/replay_disc_identity_scratch)
     # PS1B-316 power-on replays: playback swaps in the recorded memory cards
     # without touching the player's card files; the launcher's "Record
     # replay" choice reaches the runtime without being persisted.

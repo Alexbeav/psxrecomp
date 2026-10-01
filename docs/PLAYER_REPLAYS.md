@@ -137,6 +137,23 @@ with the cards they normally play with; blank cards are not needed.
 The card images are save data. The replay holds no BIOS or disc data: the disc
 and BIOS are named by hash only, and main RAM appears only as hashes.
 
+### Multi-disc games
+
+A replay names the disc that is in the drive when the recording starts, by its
+serial and the SHA-256 of its image. It plays only while that disc is in the
+drive.
+
+- A power-on replay always names the disc the game was launched on.
+- An F11 replay started after a disc change names the new disc. The same holds
+  after a save state mounted its own disc. To play that replay in a later
+  session, launch the game on that disc, or change to it first. On any other
+  disc it is refused as "a different game or disc image".
+- An F11 replay recorded after a disc change by a build older than this rule
+  names the launch disc instead. Record it again.
+
+A power-on recording does not start when a save state is loaded at boot
+(`PSX_LOAD_SLOT`), because that state can mount another disc.
+
 ## What the replay does not contain
 
 - **Player 2.** Port 2 gets no input while a replay records or plays, so its
@@ -146,7 +163,8 @@ and BIOS are named by hash only, and main RAM appears only as hashes.
   peripherals in replays.
 - **Disc changes.** Changing the disc from the in-game menu ends the recording
   there, and the replay is saved up to the change. A multi-disc game can be
-  recorded up to its first disc swap.
+  recorded up to its first disc swap. A save state that needs another disc
+  does not load while a replay records or plays.
 - **Pad type changes.** A pad keeps the type it had at boot for the whole
   recording; a Hybrid pad does not switch between digital and analog.
   Controller hotplug does not change the ports during a recording.

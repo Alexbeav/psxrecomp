@@ -2517,6 +2517,10 @@ static std::string uppercase_ascii(std::string s) {
 static std::unordered_map<int, std::filesystem::path> g_session_disc_images;
 /* The image a state load has mounted and not yet kept or put back. */
 static std::filesystem::path g_restore_mount_image;
+static std::string g_restore_mount_serial;
+/* Defined with the replay host hooks, below. */
+static void replay_identity_follow_disc(const std::string& serial,
+                                        const std::string& mount);
 
 /* True when `image` is the disc of the set with this serial. The serial read
  * from the image decides when there is one; an image without a readable boot
@@ -2553,6 +2557,12 @@ extern "C" int psx_frontend_savestate_mount_disc(int disc_number, char *why,
         std::snprintf(why, why_cap, "the disc cannot change during netplay");
         return 0;
     }
+    /* A replay names one disc and carries no disc changes (PS1B-316). */
+    if (replay_session_state() != REPLAY_IDLE) {
+        std::snprintf(why, why_cap,
+                      "the disc cannot change while a replay records or plays");
+        return 0;
+    }
     const std::string serial = (size_t)(disc_number - 1) < g_disc_serials.size()
         ? g_disc_serials[disc_number - 1] : std::string();
     std::vector<std::filesystem::path> candidates;
@@ -2574,6 +2584,7 @@ extern "C" int psx_frontend_savestate_mount_disc(int disc_number, char *why,
         if (cdrom_restore_mount_begin(resolved.mount.string().c_str(),
                                       disc_scex_for_region(id.region))) {
             g_restore_mount_image = resolved.mount;
+            g_restore_mount_serial = id.detected_serial;
             return 1;
         }
     }
@@ -2593,6 +2604,8 @@ extern "C" void psx_frontend_savestate_mount_result(int disc_number, int kept) {
     if (!kept) return;
     g_session_disc_images[disc_number] = g_restore_mount_image;
     g_savestate_load_mounted_disc = disc_number;
+    replay_identity_follow_disc(g_restore_mount_serial,
+                                g_restore_mount_image.string());
     std::fprintf(stdout, "psxrecomp: disc %d mounted for a save state (%s)\n",
                  disc_number, g_restore_mount_image.string().c_str());
     psx_savestate_menu_note_slots_changed();
@@ -6846,6 +6859,7 @@ static int runtime_ui_change_disc(PsxRuntimeUiContext *context) {
      * rewind history from before the change is dropped. */
     if (set_position) g_session_disc_images[set_position] = resolved.mount;
     savestate_note_disc_mounted(set_position);
+    replay_identity_follow_disc(identity.detected_serial, mount);
     psx_savestate_menu_note_slots_changed();
 
     const std::string leaf = resolved.mount.filename().string();
@@ -8292,6 +8306,47 @@ static void replay_product_hash_locked(void) {
         s_replay_bios_crc32 = crc ^ 0xFFFFFFFFu;
         s_replay_bios_crc_ok = bios.eof();
     }
+}
+
+/* Hash the disc image (and, the first time, the exe and the BIOS) on a host
+ * thread. Joined at exit, after cancelling the hash, so shutdown never races
+ * it; a new start waits for the previous one first. */
+static void replay_digest_prefetch_start(void) {
+    static bool join_registered = false;
+    if (s_replay_digest_thread.joinable())
+        s_replay_digest_thread.join();
+    s_replay_digest_thread = std::thread([] {
+        std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
+        input_route_session_prefetch_disc_digest();
+        replay_product_hash_locked();
+    });
+    if (!join_registered) {
+        std::atexit(replay_digest_thread_join);
+        join_registered = true;
+    }
+}
+
+/* The replay identity names the disc in the drive (PS1B-316). Both mounts
+ * that happen under a running game come here: the in-game disc change and a
+ * save state that mounted its own disc. Without it a replay recorded after
+ * the mount names the launch disc, so a later launch on that disc plays it
+ * against the wrong image and a launch on the right disc is refused.
+ * `serial` and `mount` are what a launch on this disc would pass to
+ * input_route_session_set_product. */
+static void replay_identity_follow_disc(const std::string& serial,
+                                        const std::string& mount) {
+    /* A hash of the previous disc still running is of no use: stop it, so the
+     * frame does not wait for a whole image to be read. */
+    disc_digest_cache_cancel(1);
+    if (s_replay_digest_thread.joinable())
+        s_replay_digest_thread.join();
+    disc_digest_cache_cancel(0);
+    {
+        std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
+        input_route_session_set_disc(serial.c_str(), mount.c_str());
+    }
+    s_replay_disc_serial = serial;
+    replay_digest_prefetch_start();
 }
 
 extern "C" void replay_host_product(char *out, size_t cap) {
@@ -17317,22 +17372,8 @@ session_reboot:
     s_replay_disc_serial = route_disc_serial;
     /* Hash the disc for replays in the background (see replay_host_identity).
      * Skipped when an input route is armed: that path uses the digest at boot. */
-    if (!std::getenv("PSX_INPUT_ROUTE_FILE") && !std::getenv("PSX_INPUT_ROUTE_RECORD")) {
-        /* Joined at exit (after cancelling the hash) so shutdown never races
-         * it; a session reboot waits for the previous one first. */
-        static bool join_registered = false;
-        if (s_replay_digest_thread.joinable())
-            s_replay_digest_thread.join();
-        s_replay_digest_thread = std::thread([] {
-            std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
-            input_route_session_prefetch_disc_digest();
-            replay_product_hash_locked();
-        });
-        if (!join_registered) {
-            std::atexit(replay_digest_thread_join);
-            join_registered = true;
-        }
-    }
+    if (!std::getenv("PSX_INPUT_ROUTE_FILE") && !std::getenv("PSX_INPUT_ROUTE_RECORD"))
+        replay_digest_prefetch_start();
     /* A recording in progress is written from its last boundary at exit.
      * Registered once: this path runs again on every session reboot. */
     static bool replay_atexit_registered = false;

@@ -33,8 +33,8 @@ extern uint64_t psx_cycle_count;
 static char s_product_serial[INPUT_ROUTE_V3_TEXT];
 static char s_product_disc[PATH_BYTES];
 static char s_product_bios_stem[INPUT_ROUTE_V3_TEXT];
-/* The disc does not change under a running product (a disc swap calls
- * set_product again), so its digest is hashed once. */
+/* The digest is hashed once per disc: a disc change calls set_disc, which
+ * drops it. */
 static int s_digest_cached;
 static uint32_t s_digest_kind;
 static uint8_t s_digest[32];
@@ -109,6 +109,14 @@ void input_route_session_set_product(const char *disc_serial,
     if (n >= sizeof(s_product_bios_stem)) n = sizeof(s_product_bios_stem) - 1;
     memcpy(s_product_bios_stem, base, n);
     s_product_bios_stem[n] = 0;
+}
+
+void input_route_session_set_disc(const char *disc_serial, const char *disc_path)
+{
+    copy_text(s_product_serial, sizeof(s_product_serial), disc_serial);
+    copy_text(s_product_disc, sizeof(s_product_disc), disc_path);
+    s_digest_cached = 0;
+    s_replay_digest_cached = 0;
 }
 
 /* ---- Disc digest (run_native.checkpoint_asset_digest) ---- */
