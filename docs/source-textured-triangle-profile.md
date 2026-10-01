@@ -7,9 +7,10 @@ flat-textured triangle variants. Seven-word packet, one-word readiness,
 84+180 setup work, doubled pixel-span cost, tpage latch and retained texture
 cache feedback are unchanged and covered by the production-header fixture.
 
-CLAIM / DERIVED-FROM: original Octoshock2.3 `gpu.cpp` ProcessFIFO,
-`gpu_polygon.cpp` Commands_20_3F and DrawSpan at upstream
-`a15b31a46bdac27d843d3ebbc5a860012d8452fb`. This is source compatibility.
+ORACLE CORE: Octoshock 2.3 (BizHawk tag 2.3, commit
+`a15b31a46bdac27d843d3ebbc5a860012d8452fb`). This is oracle compatibility. The
+texture helpers were rewritten from authored experiments in T172
+(`runtime/tests/gpu_texture_provenance.json`).
 
 ORACLE: 384 authored cases exercise opcodes24–27, all three texture depths,
 four blend modes, four destination mask combinations, raw/modulated color,

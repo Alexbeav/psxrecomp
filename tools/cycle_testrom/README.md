@@ -41,7 +41,7 @@ Same EXE, both backends, compare per-iteration Δ:
 - **Beetle** (HW oracle): mednafen sideloads the raw PS-EXE (it auto-detects the
   "PS-X EXE" header). cyc_watch the same anchors.
 
-Each component is then transcribed/calibrated into `psx_instr_base_cycles`
+Each component is then calibrated into `psx_instr_base_cycles`
 (execute latencies: mult/div, GTE) or the memory-path wait-state (`memory.c`),
 Δ-gated against Beetle on these loops + FMV-no-regression, one at a time.
 
@@ -118,7 +118,7 @@ other loop is small enough to be all-hits after warm-up — fetch cost 0.)
 
 The faithful R3000A I-cache fetch model lives in `runtime/src/psx_icache.c` (HIT +0,
 KSEG1/uncached +4, cached miss +3 + refill from the missing word to the line end —
-transcribed from Beetle ReadInstruction). It is **opt-in via `PSX_ICACHE=1`** (default
+rewritten from authored cache observations in T172, `runtime/tests/icache_provenance.json`). It is **opt-in via `PSX_ICACHE=1`** (default
 OFF) until BOTH backends charge it: charging it only in the interp while the compiled
 path does not would make the two backends disagree on fetch cost in mixed execution.
 Measure the interp path with both envs:

@@ -423,7 +423,7 @@ typedef enum {
     MC_GETID_2,
     MC_GETID_3,
     MC_GETID_4,
-    MC_SOURCE_DONE, /* Nymashock stays silent until DTR drops. */
+    MC_SOURCE_DONE, /* Source card profile: silent until DTR drops (nymashock_card_transactions.jsonl, the two "unsupported" cases). */
 } McState;
 
 /* Explicit source compatibility; defaults retain the existing card model. */
@@ -473,8 +473,10 @@ typedef enum {
 
 static ActiveDevice active_device = DEV_NONE;
 
-/* Source pads (the digital pad and DualShock of the source profiles: Octoshock 2.2.2/2.3,
- * Nymashock 1.29.0, Octoshock 2.7/2.10):
+/* Source-profile pads (the digital pad and DualShock of the octoshock-2.2.2/2.3,
+ * nymashock-1.29.0 and octoshock-2.7/2.10 profiles). The lag frame this rule causes was
+ * observed on the oracle (Abe's Oddysee 5620M, return 949); the rule is pinned by
+ * test_sio_dualshock_dtr_session.c:
  * every device on a port sees every byte while that port's DTR is asserted, and the pad's
  * command phase restarts only when its DTR rises. A session whose first byte is not 0x01
  * (a memory-card 0x81, say) leaves the pad silent until DTR falls and rises again, so a
@@ -642,7 +644,8 @@ volatile int g_sio_timing_active = 0;
 #define SIO_ACK_CYCLES_DEFAULT  170
 /* Explicit source compatibility, not a hardware/default profile.
  * 1: Octoshock2.2.2 digital; 2: Nymashock1.29.0 DualShock, both modes.
- * The respective source devices request delay64; FrontIO exposes32 clocks. */
+ * The source-profile devices request a delay of 64; the acknowledge pulse
+ * lasts 32 clocks (pinned by test_sio_ack_timing.c). */
 static int sio_source_pad_ack;
 static int sio_ack_pulse_remaining;
 static int sio_pending_ack_timed;
@@ -1946,11 +1949,15 @@ static void mc_process_byte(uint8_t tx_byte) {
         } else {
             mc_data_idx = 0;
             mc_state = MC_WRITE_LSB_ECHO;
-            /* Hardware/Beetle echo the high address byte on the address-LSB
-             * transfer (zero for all 1Mbit card sectors), then echo the low
-             * address byte while receiving the first payload byte.  Some BIOS
-             * card-write paths validate this handshake before they schedule the
-             * follow-up directory reads. */
+            /* PSX-SPX "Writing Data to Memory Card": the reply to each
+             * address, data and checksum byte is the byte the host sent in
+             * the previous transfer. So the address-LSB transfer returns the
+             * address MSB (zero for every sector of a 1 Mbit card) and the
+             * first data transfer returns the address LSB. Some BIOS
+             * card-write paths check this before they schedule the follow-up
+             * directory reads. Pinned by sio_card_protocol_test and by the
+             * write cases of runtime/tests/nymashock_card_transactions.jsonl
+             * (address MSB 04h is returned on the LSB transfer). */
             sio_rx_data = mc_sector_msb;
         }
         sio_stat |= SIO_STAT_ACK;
@@ -2543,7 +2550,7 @@ void sio_write(uint32_t addr, uint32_t value) {
         sr_record(SR_EVT_CTRL_WRITE, (uint8_t)(value & 0xFF), (uint8_t)((value >> 8) & 0xFF));
 #if SIO_MODEL_CYCLE_PACED
         if (sio_source_pad_ack) {
-            /* Per-port DTR as FrontIO drives it: DTR bit and the port-select bit. */
+            /* Per-port DTR: the DTR bit together with the port-select bit. */
             uint16_t new_ctrl = (value & SIO_CTRL_RESET) ? 0 : (uint16_t)value;
             for (int port = 0; port < 2; port++) {
                 int was = (old_ctrl & SIO_CTRL_SELECT) && (((old_ctrl & SIO_CTRL_SLOT) != 0) == port);

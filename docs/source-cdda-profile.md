@@ -10,14 +10,17 @@ SubQ belongs to the physical read head. Reports replace one pending asynchronous
 response and wait for IRQ acknowledgement plus the 2000-clock receive interval.
 Pause acknowledges the old status, rewinds up to four physical reads, stops the
 producer immediately and preserves already queued audio. Stop and MotorOn use
-the source phase-one state and second-response delays. This is emulator-source
+the source phase-one state and second-response delays. This is oracle
 compatibility, not measured hardware timing.
 
-DERIVED-FROM: original BizHawk tag 2.3, commit
-`a15b31a46bdac27d843d3ebbc5a860012d8452fb`,
-[cdc.cpp](https://github.com/TASEmulators/BizHawk/blob/2.3/psx/octoshock/psx/cdc.cpp).
-The source controller remains in a separate external GPL oracle; it is never
-linked into the native runtime or used as a movie replay core.
+ORACLE CORE: BizHawk tag 2.3 (Octoshock), commit
+`a15b31a46bdac27d843d3ebbc5a860012d8452fb`.
+The oracle controller remains in a separate external GPL oracle; it is never
+linked into the native runtime or used as a movie replay core. The runtime's
+CD-DA start, service, notification and peek code was rewritten from black-box
+observations in T172 (`runtime/tests/cdda_*_provenance*.json`). The Pause
+move-back is specified in
+`recomp-corpus/references/ps1/CDROM-SOURCE-PROFILE-SPEC.md`, row P3.
 
 ORACLE: `runtime/tests/cdrom_source_cdda_fixtures.json` binds four complete
 synthetic-disc transcripts for modes 0/2/4/6: explicit track play, seek boundary,

@@ -9,28 +9,30 @@ ping/screenshot served over the TCP debug protocol).
 `runtime/src/beetle_libretro.cpp` targets the C++ beetle-psx tree. Upstream
 master has since been converted to plain C (`libretro.cpp` -> `libretro.c`,
 `PS_CPU` class dropped), which no longer compiles against our integration.
-Pin the checkout to the last compatible commit — the same base
-`docs/beetle_wtrace_hook.patch` was generated from:
+Pin the checkout to the last compatible commit — the same base the
+trace-hook patches were generated from. The patches are not in this repository:
+their diff context is the oracle core's source. They are kept on the share at
+`Z:/Share/psxrecomp/tools/beetle-oracle-patches/` (`$PATCHES` below):
 
 ```bash
 git clone https://github.com/libretro/beetle-psx-libretro.git beetle-psx
 cd beetle-psx
 git checkout 5759277b          # "audit pass" — last C++-tree base we target
-patch -p1 < ../docs/beetle_wtrace_hook.patch
-patch -p1 < ../docs/beetle_sio_trace_hook.patch
-patch -p1 < ../docs/beetle_cdcmd_trace_hook.patch
+patch -p1 < "$PATCHES/beetle_wtrace_hook.patch"
+patch -p1 < "$PATCHES/beetle_sio_trace_hook.patch"
+patch -p1 < "$PATCHES/beetle_cdcmd_trace_hook.patch"
 # cdcmd re-inserts the wtrace globals + typedefs — drop the duplicate block
 # in libretro.cpp / mednafen/psx/psx.h if the build errors on redefinition.
-# Also needed (not yet in docs/*.patch): rtrace/irq callbacks, guest-cycle
+# Also needed (not yet in the patches): rtrace/irq callbacks, guest-cycle
 # accumulator, PS_CDC::PSXRecomp_GetDecodeVolume, cdc/dma irq peeks. Apply
 # from a prior local beetle-psx tree or re-land those hooks by hand.
 ```
 
 `beetle_cdcmd_trace_hook.patch` adds a CD-command trace callback (fires per
-command dispatch in cdc.cpp) exposed as the `cdrom_cmd_dump` / `cdrom_cmd_reset`
+command dispatch) exposed as the `cdrom_cmd_dump` / `cdrom_cmd_reset`
 debug commands — used to oracle-diff the Kula World CD read sequence.
 
-`beetle_sio_trace_hook.patch` adds `FrontIO::SetSIOTraceCallback` (fires per
+`beetle_sio_trace_hook.patch` adds an SIO trace callback (fires per
 completed SIO byte exchange) — an integration hook beetle_libretro.cpp needs
 that predated the committed wtrace patch.
 

@@ -96,7 +96,7 @@ qualify full Biohazard continuation; cold-versus-resumed evidence is required.
 On historical replay revision `7a0d0ff4`, the measured Bio Hazard RAM-page/clock prefix advanced from return 463
 to 233,567, with the first state/clock difference at 233,568 in the neutral
 ending tail. That difference is closed by timing an explicit seek from the
-physical read head: an established read keeps the source's CurSector two
+physical read head: an established read keeps the drive head two
 sectors ahead of the sector handed to the guest, so a mid-read SeekL timed
 from the delivery cursor travelled two sectors too far and completed 209
 cycles late, pushing the driver's following ReadS past the return boundary.
@@ -137,17 +137,17 @@ using the existing raw texture and blend implementation. Like 0x66, this is a
 four-word packet with three-word FIFO feedback; raw colour bypasses modulation
 and leaves sprite timing unchanged. The sprite fixture checks both opcodes at
 O0/O2. The stock Octoshock2.3 pixel oracle compares 192 full VRAM images across
-texture depths, blend modes, mask modes and command colours. Nymashock
-`gpu_sprite.cpp` and `SPR_HELPER_SUB` select the same raw/blend semantics.
+texture depths, blend modes, mask modes and command colours.
 The 150,000-return replay passes the former 0x67 stop at return 122,977.
 The launcher and RAM probe accept up to 64 selected raw snapshots, enough
 for the full Biohazard route at 5,000-return intervals plus terminal diagnostics.
 The observer tests cover the 64-snapshot boundary and reject a 65th entry.
 
-Source basis: BizHawk 2.9.1's Mednafen 1.29.0 `psx/cdc.cpp` (`HandlePlayRead`,
-`CalcSeekTime`, `Command_SeekL`, `Command_Pause`, `Command_Reset`,
-`Command_ReadTOC`), `psx/mdec.cpp` (`WriteImageData`, `MDEC_Run`), and guest
-CPU exception entry. Passive observers reading the exact stock Waterbox
+Oracle: BizHawk 2.9.1's Nymashock core (Mednafen 1.29.0). The CD drive profile
+is specified as observed behaviour in the clean-room spec
+`recomp-corpus/references/ps1/CDROM-SOURCE-PROFILE-SPEC.md` (PS1B-311) and is
+written from that spec; the MDEC model is pinned by the fixtures under
+`runtime/tests/data/mdec_clean`. Passive observers reading the exact stock Waterbox
 image reproduced all 6,000 reference return RAM hashes, clocks and lag counts
 before their CD/CPU state was used to diagnose divergences. Raw CPU register
 snapshots are diagnostic data, not a claim of CPU-register equality.

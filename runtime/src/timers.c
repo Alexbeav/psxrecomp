@@ -112,7 +112,7 @@ void timers_init(void) {
            !field || strcmp(field,"octoshock-2.2.2-ntsc-raster")) {
             fprintf(stderr,"[timer1-source-clock] requires named model, file route and NTSC raster clock\n");exit(4);
         }
-        fprintf(stderr,"[timer1-source-clock] experimental original source timer1; IRQ-enabled modes and restore unsupported; timer2 has a separate option\n");
+        fprintf(stderr,"[timer1-source-clock] experimental source-profile timer1; IRQ-enabled modes and restore unsupported; timer2 has a separate option\n");
     }
     timer1_source_reset(&source_timer1);source_timer1_cycle=0;
     model=getenv("PSX_TIMER2_MODEL");source_timer2_enabled=model && *model;
@@ -123,7 +123,7 @@ void timers_init(void) {
         if(strcmp(model,"octoshock-2.2.2") || !source_timer1_enabled) {
             fprintf(stderr,"[timer2-source-clock] requires named model and source timer1 profile\n");exit(4);
         }
-        fprintf(stderr,"[timer2-source-clock] experimental original source timer2; timer0 IRQ modes and restore unsupported\n");
+        fprintf(stderr,"[timer2-source-clock] experimental source-profile timer2; timer0 IRQ modes and restore unsupported\n");
     }
     timer2_source_reset(&source_timer2);source_timer2_elapsed=0;source_timer2_deadline=1024;
     memset(timers, 0, sizeof(timers));

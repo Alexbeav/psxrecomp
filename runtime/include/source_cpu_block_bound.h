@@ -7,7 +7,7 @@
  * The caller restricts this to ordinary compiled RAM blocks without MMIO
  * visibility side effects. Their bytes have already passed native-text checks. */
 /* access_cost: worst case for one data access. 240 = region36 (SPU word) +
- * ReadFudge2 + completion2 + DMA steal200. The 200-cycle steal can only occur
+ * fudge2 + completion2 + DMA steal200. The 200-cycle steal can only occur
  * while a source DMA transfer is live; callers that know no transfer is live
  * (dma_source_dma_live all zero, not halted) may pass 40. */
 static uint32_t source_cpu_block_bound_ex(CPUState *cpu,uint32_t pc,uint32_t count,uint32_t deadline,uint32_t access_cost) {

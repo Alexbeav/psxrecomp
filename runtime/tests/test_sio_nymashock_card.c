@@ -67,7 +67,7 @@ static void check_source_clock(void) {
     advance(31); assert(sio_read(0x1F801044)&ack);
     advance(1); assert(!(sio_read(0x1F801044)&ack)); assert(i_stat==(spu|ack));
     assert(!sio_pending_ack && !g_sio_timing_active);
-    /* FrontIO Update consumes the supplied interval across both deadlines. */
+    /* One update consumes the supplied interval across both deadlines. */
     start_card(0x1003); clock_now+=1375; sio_advance(1375);
     assert(sio_ack_pulse_remaining==1 && (i_stat&ack));
     advance(1); assert(!sio_ack_pulse_remaining && !sio_pending_ack);

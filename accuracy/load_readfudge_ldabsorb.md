@@ -3,7 +3,7 @@
 Status: **IMPLEMENTED + VALIDATED (2026-06-27).** Shipped as the shared per-instruction
 R3000A load-delay interlock in `runtime/include/psx_cyc.h` (§1 base + GPR_DEPRES + DO_LDS,
 + `psx_cyc_load_*`/`psx_cyc_lwc2_read` in `memory.c`), driven by `psx_cyc_dep_res_mask`
-(`runtime/include/psx_instr_cost.h`, transcribed from Beetle's per-opcode GPR_DEP/RES).
+(`runtime/include/psx_instr_cost.h`; rewritten independently in T172, `runtime/tests/instr_cost_provenance.json`).
 Wired into the dirty interp (`dirty_ram_interp.c`) and BOTH static emitters
 (`code_generator.cpp` game path; `full_function_emitter.cpp`+`strict_translator.cpp` BIOS
 path). Loads route value reads through the UNCHARGED `psx_read_*` (cpu->read_* rewired in

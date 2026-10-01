@@ -226,7 +226,7 @@ std::string CodeGenerator::translate_lw(uint32_t instr) {
     int16_t offset = get_imm16(instr);
     std::string addr = (offset == 0) ? reg_name(rs)
                                      : fmt::format("{} + {}", reg_name(rs), offset);
-    uint32_t mask = 1u << rs;   /* GPR_DEP rs (load: dest rt armed via LDWhich) */
+    uint32_t mask = 1u << rs;   /* GPR_DEP rs (load: dest rt armed via ld_which_t) */
 
     if (config_.optimize_zero_reg && rt == 0) {
         /* load to $zero: no GPR write, but the data access + R3000A interlock still run */
@@ -453,7 +453,7 @@ std::string CodeGenerator::translate_lwl(uint32_t instr) {
 
     // LWL: Load Word Left - merges high bytes from the aligned word into rt.
     // psx_lwl runs the full R3000A load interlock on the aligned address (GPR_DEP rs,
-    // arm LDWhich=rt) and returns the merged value.
+    // arm ld_which_t=rt) and returns the merged value.
     std::string addr = (offset == 0) ? reg_name(rs)
                                      : fmt::format("{} + {}", reg_name(rs), (int32_t)offset);
     uint32_t mask = 1u << rs;
@@ -1530,8 +1530,8 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                     uint32_t rt = get_rt(instr);
                     uint32_t rd = get_rd(instr);
                     if (cop_op == 0x00) { // MFC0 - move from COP0
-                        // MFC0 is a delayed load (Beetle: LDAbsorb=0, LDWhich=rt) — no
-                        // give-back cycles, but it sets ReadFudge=rt so a load in the next
+                        // MFC0 is a delayed load (ld_absorb=0, ld_which_t=rt) — no
+                        // give-back cycles, but it sets read_fudge=rt so a load in the next
                         // slot gets no fudge. §1+DO_LDS ran in the block's psx_cyc_step.
                         code = fmt::format(
                             "{} = cpu->cop0[{}];"
@@ -1564,7 +1564,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                         "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_stall(cpu);\n#endif\n    ";
                     // MFC2/CFC2 (GPR-dest reads): stall to the GTE deadline AND hand the
                     // stall amount to the next instruction(s) as a load-delay give-back
-                    // (Beetle MFC2/CFC2: LDAbsorb=gte_ts_done-ts, LDWhich=rt). §1+DO_LDS
+                    // (ld_absorb=gte_ts_done-now, ld_which_t=rt). §1+DO_LDS
                     // ran in the block's psx_cyc_step (COP2 is non-load).
                     const std::string gte_read = fmt::format(
                         "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_read(cpu, {});\n#endif\n    ", rt);
@@ -1636,7 +1636,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                     // LWC2 load timing: §1+DO_LDS via the block's psx_cyc_step(cpu,0)
                     // (op 0x32 is non-load), the GTE deadline stall via psx_gte_stall,
                     // then psx_cyc_lwc2_read does the ReadMemory timing (completion +1,
-                    // no LDWhich arm — the dest is a GTE register).
+                    // no ld_which_t arm — the dest is a GTE register).
                     std::string addr = (offset == 0)
                         ? reg_name(rs)
                         : fmt::format("{} + {}", reg_name(rs), offset);
@@ -1799,9 +1799,10 @@ std::string CodeGenerator::translate_basic_block(
     const bool cycle_per_insn = codegen_cycle_per_insn();
     // Per-instruction R3000A load-delay interlock (cycle_per_insn mode): §1 base +
     // GPR_DEPRES + DO_LDS, emitted BEFORE the instruction body so §1 precedes any
-    // muldiv/GTE deadline stall the body applies (Beetle order). CPU loads (op
-    // 0x20-0x26) are SKIPPED here — psx_cyc_load_* runs their full interlock inside
-    // the body (and arms LDWhich=rt). The dep/res mask is a gen-time literal. This
+    // muldiv/GTE deadline stall the body applies (the order fitted to the oracle
+    // ruler loops). CPU loads (op 0x20-0x26) are SKIPPED here — psx_cyc_load_* runs
+    // their full interlock inside the body (and arms ld_which_t=rt). The dep/res
+    // mask is a gen-time literal. This
     // replaces the old flat per-instruction psx_advance_cycles(1u).
     auto emit_pre_timing = [&](uint32_t in, const std::string& indent) {
         uint32_t op = in >> 26;
@@ -2088,7 +2089,8 @@ std::string CodeGenerator::translate_basic_block(
                     break;  /* block ends at the raise; nothing after is reachable */
                 }
 
-                // Per-instruction interlock ORDER (Beetle): the branch's §1+deps+DO_LDS
+                // Per-instruction interlock ORDER (fitted to the oracle ruler loops):
+                // the branch's §1+deps+DO_LDS
                 // runs at the branch PC, THEN the delay slot's at PC+4. Emit the branch
                 // step FIRST (it is pure timing — does not touch GPR values, so it is
                 // safe before the branch-condition capture below).

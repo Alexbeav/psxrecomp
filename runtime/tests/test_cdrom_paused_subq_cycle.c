@@ -1,18 +1,12 @@
-/* Controller-level regression: GetlocP on a stopped Nymashock drive.
+/* Controller-level regression: GetlocP on an idle drive in the drive profile.
  *
- * GetlocP returns SubQBuf_Safe, the sub-Q of the last sector the drive
- * decoded -- not the last sector handed to the guest. The source keeps
- * decoding while the drive is stopped: its Update() calls HandlePlayRead for
- * DS_PAUSED and DS_STANDBY as well as DS_READING, and the tail of
- * HandlePlayRead cycles the cursor
- *
- *     CurSector++;
- *     if(DriveStatus == DS_PAUSED || DriveStatus == DS_STANDBY)
- *       if(CurSector >= (SeekTarget + 2)) CurSector = max(-150, CurSector - 9);
- *
- * so a paused drive walks a nine-sector window ending two above the position
- * Pause stopped at, decoding one sub-Q per sector period, forever. Reporting
- * the last delivered sector is correct only for the first tick after a Pause.
+ * GetlocP names the sector whose sub-Q the drive decoded last, not the last
+ * sector handed to the guest. The drive keeps decoding while it is paused or
+ * in standby: one sector per sector period, through a nine-sector window that
+ * ends one sector above the position Pause stopped at. Reporting the last
+ * delivered sector is correct only for the first tick after a Pause.
+ * Behaviour spec: recomp-corpus references/ps1/CDROM-SOURCE-PROFILE-SPEC.md,
+ * rows H1, H2 and G3.
  *
  * Pinned to measured evidence. Mega Man X5 (USA) Training X #6377M snapshots
  * a GetlocP reply into 0x800ECDC0; at return 7311, five frames after the

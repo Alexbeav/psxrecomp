@@ -17,7 +17,8 @@ the instruction's pending base cycle. psx_advance_cycles then published that
 pending cycle and added the stale stall, counting the cycle twice. The same
 omission could arm a GTE command deadline too early or give an MFC2/CFC2 read
 the wrong load-overlap credit. The command latency itself is unchanged:
-original Octoshock 2.3 GTE_Instruction returns DPCS cost 8 minus 1.
+DPCS costs 8 cycles (PSX-SPX GTE command table), armed as 8 minus 1 because the
+instruction's own base cycle is charged separately.
 
 psx_gte_set, psx_gte_stall and psx_gte_read now publish pending batch and local
 charges before reading the clock. This is the same ownership rule already
