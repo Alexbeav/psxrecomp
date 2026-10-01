@@ -310,6 +310,11 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_read_starts_motor_test PRIVATE include)
     add_test(NAME cdrom_read_starts_motor_test COMMAND cdrom_read_starts_motor_test
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
+    # PS1B-317 fleet check: read streams that ended before their first sector,
+    # counted for the run report (docs/RUN_REPORT_CDROM.md).
+    add_executable(cdrom_silent_read_counter_test tests/test_cdrom_silent_read_counter.c src/psx_sha256.c)
+    target_include_directories(cdrom_silent_read_counter_test PRIVATE include)
+    add_test(NAME cdrom_silent_read_counter_test COMMAND cdrom_silent_read_counter_test)
     # PS1B-311: rows of the drive-profile behaviour spec that the older tests
     # do not pin. The four named modes must stop fail-closed with a [CDROM] line.
     add_executable(cdrom_drive_profile_rows_test tests/test_cdrom_drive_profile_rows.c src/psx_sha256.c)
