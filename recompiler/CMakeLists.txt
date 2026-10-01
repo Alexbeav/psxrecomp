@@ -824,6 +824,14 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_generate_aot_static.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # psxrecomp_cli.py rebuild: the pre-build mtime clamp works without
+        # lutimes (Windows), and --cmake-extra wins over the shipping
+        # PSX_DEBUG_TOOLS=OFF default.
+        add_test(
+            NAME cli_rebuild_host
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_rebuild_host.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # runtime/overlay_static_sources.cmake: a declared-but-absent shard is
         # reported at configure, a profile/CMake disagreement is an error, and
         # hash_codegen.cmake's source-list mode matches psxrecomp-game's hash.
