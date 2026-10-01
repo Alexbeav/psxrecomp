@@ -125,6 +125,8 @@ void overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidations,
                                  uint32_t *last_write_addr,
                                  uint32_t *last_write_size,
                                  int *regions, uint32_t *revalidations);
+/* Kernel-window share (phys < 0x10000) of disp_native / disp_interp. */
+void overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp);
 void overlay_loader_get_load_timing(uint64_t *total_us, uint64_t *max_us,
                                     uint64_t *last_us);
 /* Opt-in PSX_RUNTIME_PERF_DIAG sampler: returns and clears the hottest native

@@ -464,6 +464,13 @@ static uint64_t s_load_last_us   = 0;
 static int      s_valid_count    = 0;   /* candidates currently VALID         */
 static uint64_t s_disp_native    = 0;
 static uint64_t s_disp_interp    = 0;
+/* The same two counts for the kernel window alone (phys below
+ * DIRTY_RAM_KERNEL_WINDOW_END). The loader compiles and dispatches kernel RAM
+ * as well as game code, so the totals mix BIOS kernel routines with the
+ * game's overlays. A check that asks whether game overlay code ran native
+ * needs them apart (PS1B-323). */
+static uint64_t s_disp_native_kernel = 0;
+static uint64_t s_disp_interp_kernel = 0;
 /* Small diagnostic-only native-owner sampler. A logical softlock can continue
  * presenting at 60 Hz while executing a tiny bad native loop, so FPS alone is
  * not correctness evidence. This is enabled only with the existing runtime
@@ -3701,6 +3708,13 @@ static int overlay_find_by_range(uint32_t phys) {
     return best;
 }
 
+/* Count one dispatch outcome in the total and, for a kernel-window target,
+ * in the kernel count. `phys` is overlay_loader_dispatch's target. */
+#define DISP_KERNEL()      (phys < DIRTY_RAM_KERNEL_WINDOW_END)
+#define DISP_NATIVE()      do { s_disp_native++; if (DISP_KERNEL()) s_disp_native_kernel++; } while (0)
+#define DISP_NATIVE_UNDO() do { s_disp_native--; if (DISP_KERNEL()) s_disp_native_kernel--; } while (0)
+#define DISP_INTERP()      do { s_disp_interp++; if (DISP_KERNEL()) s_disp_interp_kernel++; } while (0)
+
 int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
     uint32_t phys = addr & 0x1FFFFFFFu;
     /* Overlay dispatch is a no-op when the overlay loader is inactive
@@ -3717,7 +3731,7 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
      * (found via Ape Escape, the only overlay-off title). Fail closed here. */
     if (!s_active) return 0;
     if (overlay_cache_window_contains(phys) && lazy_miss_cached(phys)) {
-        s_disp_interp++;
+        DISP_INTERP();
         return 0;
     }
     int lazy_loaded = 0;
@@ -3790,7 +3804,7 @@ retry_candidates:
             if (_probe) s_cps_probe_matched = matched;
             if (matched) {
                 if (c->state != ENTRY_VALID) { c->state = ENTRY_VALID; s_valid_count++; }
-                if (c->device_touch)   { if (_probe) s_cps_probe_outcome = 3; s_disp_interp++; return 0; }
+                if (c->device_touch)   { if (_probe) s_cps_probe_outcome = 3; DISP_INTERP(); return 0; }
                 /* Diff instrument — same contract as the entry chain's want_diff
                  * gate below. A continuation re-entry must NOT run native blind
                  * while its candidate is still inside the verify budget: CPS
@@ -3812,14 +3826,14 @@ retry_candidates:
                     if (want_diff && (s_diff_addr || c->diff_passes < OVERLAY_DIFF_BUDGET)) {
                         if (_probe) s_cps_probe_outcome = 5;
                         s_diffgate_interp++;
-                        s_disp_interp++;
+                        DISP_INTERP();
                         return 0;
                     }
                     if (!s_native_exec || overlay_native_blocked(c->addr) || overlay_native_blocked(addr))
-                                           { if (_probe) s_cps_probe_outcome = 4; s_would_run_native++; s_disp_interp++; return 0; }
+                                           { if (_probe) s_cps_probe_outcome = 4; s_would_run_native++; DISP_INTERP(); return 0; }
 #ifndef PSX_NO_DEBUG_TOOLS
                     if (!native_rank_allows(c, addr))
-                                           { if (_probe) s_cps_probe_outcome = 7; s_would_run_native++; s_disp_interp++; return 0; }
+                                           { if (_probe) s_cps_probe_outcome = 7; s_would_run_native++; DISP_INTERP(); return 0; }
 #endif
                 }
                 if (_probe) s_cps_probe_outcome = 2;
@@ -3839,7 +3853,7 @@ retry_candidates:
                 native_hot_note(c->addr);
                 if (s_active_depth < (int)(sizeof(s_active_stack) / sizeof(s_active_stack[0])))
                     s_active_stack[s_active_depth++] = ci;
-                s_disp_native++;
+                DISP_NATIVE();
                 cpu->pc = addr;          /* route the func's entry-switch to the block */
                 {
                     int prev_phase = g_exec_phase;
@@ -3855,7 +3869,7 @@ retry_candidates:
                 s_native_inprogress = prev_inprogress;
                 if (g_native_bad_entry) {  /* foreign interior entry: fail closed to interp */
                     g_native_bad_entry = 0;
-                    s_disp_native--; s_disp_interp++;
+                    DISP_NATIVE_UNDO(); DISP_INTERP();
                     return 0;            /* cpu->pc was restored to the requested PC */
                 }
                 return 1;
@@ -3908,7 +3922,7 @@ retry_candidates:
             /* Device-touching functions never run their shard: the shadow diff
              * can't safely double-execute MMIO/SIO/DMA to validate them, so they
              * always fall to the interpreter (the authoritative single path). */
-            if (c->device_touch) { s_disp_interp++; return 0; }
+            if (c->device_touch) { DISP_INTERP(); return 0; }
             /* Same-state differential: run native+interp from identical state,
              * compare, keep the interp result. Takes precedence over the A/B
              * toggle. Verify-budget: once a candidate has passed cleanly enough
@@ -3945,7 +3959,7 @@ retry_candidates:
                 extern int psx_get_in_exception(void);
                 if (psx_get_in_exception()) {
                     s_diffgate_interp++;
-                    s_disp_interp++;
+                    DISP_INTERP();
                     return 0;
                 }
                 run_shadow_diff(cpu, c, addr);
@@ -3957,10 +3971,10 @@ retry_candidates:
              * handles it. The per-function blocklist forces the same interp
              * routing for one function only (bisection localization). */
             if (!s_native_exec || overlay_native_blocked(c->addr))
-                { s_would_run_native++; s_disp_interp++; return 0; }
+                { s_would_run_native++; DISP_INTERP(); return 0; }
 #ifndef PSX_NO_DEBUG_TOOLS
             if (!native_rank_allows(c, addr))
-                { s_would_run_native++; s_disp_interp++; return 0; }
+                { s_would_run_native++; DISP_INTERP(); return 0; }
 #endif
 
             /* Record into the always-on ring BEFORE the call; mark in-progress
@@ -3979,7 +3993,7 @@ retry_candidates:
 
             if (s_active_depth < (int)(sizeof(s_active_stack) / sizeof(s_active_stack[0])))
                 s_active_stack[s_active_depth++] = i;
-            s_disp_native++;
+            DISP_NATIVE();
             /* Delimit this native execution in the interp insn ring (native code
              * emits no per-insn entries; markers keep the timeline alignable). */
 #ifndef PSX_NO_DEBUG_TOOLS
@@ -4005,7 +4019,7 @@ retry_candidates:
             s_native_inprogress = prev_inprogress;   /* restore (nested calls) */
             if (g_native_bad_entry) {  /* foreign interior entry: fail closed to interp */
                 g_native_bad_entry = 0;
-                s_disp_native--; s_disp_interp++;
+                DISP_NATIVE_UNDO(); DISP_INTERP();
                 return 0;            /* cpu->pc was restored to the requested PC */
             }
             return 1;
@@ -4032,9 +4046,13 @@ retry_candidates:
     }
 
     if (overlay_cache_window_contains(phys)) lazy_miss_record(phys);
-    s_disp_interp++;
+    DISP_INTERP();
     return 0;
 }
+#undef DISP_KERNEL
+#undef DISP_NATIVE
+#undef DISP_NATIVE_UNDO
+#undef DISP_INTERP
 
 /* ---- Self-modification of an actively-executing entry (§8.5) ------------ */
 /* Lazy re-hash on the NEXT dispatch is too late if a native function modifies
@@ -4068,6 +4086,13 @@ void overlay_loader_active_write_check(uint32_t phys, uint32_t size) {
 }
 
 /* ---- Status getters (signatures preserved for debug_server.c) ---------- */
+
+/* Kernel-window share of disp_native / disp_interp (PS1B-323). The
+ * overlay-region share is the total minus this. */
+void overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp) {
+    if (native) *native = s_disp_native_kernel;
+    if (interp) *interp = s_disp_interp_kernel;
+}
 
 void overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidations,
                                  uint32_t *unregistered,

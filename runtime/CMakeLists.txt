@@ -130,6 +130,8 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rfe_irq_context.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME rfe_syscall_depth_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rfe_syscall_depth.py --cc ${CMAKE_C_COMPILER})
+        add_test(NAME overlay_dispatch_region_counters_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_dispatch_region_counters.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME tas_resume_interval_test COMMAND ${Python3_EXECUTABLE}
             ${PSXRECOMP_ROOT}/tools/tasreplays/test_resume_interval.py)
         foreach(_opt IN ITEMS 0 2)
