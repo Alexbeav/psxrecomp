@@ -14,10 +14,8 @@ already express the operation. Original movie and device settings are retained.
 
 ORACLE: unmodified BizHawk 2.3 `octoshock.dll`, SHA256
 `749d6dd58430d010e46ae97c628e113adad5f420c05c2ada0ad35e58191781c0`.
-Primary source at tag 2.3:
-[gpu_sprite.cpp](https://github.com/TASEmulators/BizHawk/blob/2.3/psx/octoshock/psx/gpu_sprite.cpp)
-and [gpu_common.inc](https://github.com/TASEmulators/BizHawk/blob/2.3/psx/octoshock/psx/gpu_common.inc).
-The sprite table specifies four packet words and three feedback words. Its
+On this oracle a sprite command takes four packet words and gives three
+feedback words. Its
 dispatch and rectangle work retain setup, clipping, aligned blend/mask costs,
 CLUT loads and texture-cache misses. The corpus's C11 GPU coverage notes already
 classify this model as limited source compatibility.

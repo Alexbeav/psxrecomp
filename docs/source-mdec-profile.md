@@ -18,11 +18,12 @@ request readiness is sampled at block starts, with 64 startup clocks and one
 clock per word. Enabled completion flags latch independently of master IRQ
 output. No CPU halt or new per-word bus timing is introduced for these channels.
 
-DERIVED-FROM: upstream BizHawk tag 2.3, commit
-`a15b31a46bdac27d843d3ebbc5a860012d8452fb`, specifically
-[mdec.cpp](https://github.com/TASEmulators/BizHawk/blob/2.3/psx/octoshock/psx/mdec.cpp)
-and [dma.cpp](https://github.com/TASEmulators/BizHawk/blob/2.3/psx/octoshock/psx/dma.cpp).
-This is source compatibility, not measured PlayStation hardware timing.
+ORACLE CORE: BizHawk tag 2.3 (Octoshock), commit
+`a15b31a46bdac27d843d3ebbc5a860012d8452fb`. This is oracle compatibility, not
+measured PlayStation hardware timing. The runtime's MDEC decode was rewritten
+from PSX-SPX and the authored M-series fixtures (PS1B-188,
+`runtime/tests/data/mdec_clean`), and the DMA source model from the D-series
+oracle fixtures (PS1B-186).
 
 ORACLE: `runtime/tests/mdec_source_pipeline_fixtures.json` binds 48 isolated
 source MDEC transcripts (zero and cosine matrices, DC/AC input, 15/24-bit,

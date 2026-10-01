@@ -8,9 +8,10 @@ feeds both geometry work and the source software renderer. Texture-cache tags
 and texture reads overlapping the draw destination observe traversal order.
 No command, coordinate, reset, input or comparison guard is relaxed.
 
-CLAIM / DERIVED-FROM: original Octoshock2.3 gpu_polygon.cpp DrawTriangle,
-tripart[vo] / tripart[vo^1], upstreama15b31a46bdac27d843d3ebbc5a860012d8452fb.
-This is compatibility with that source, not a new hardware timing claim.
+ORACLE CORE: Octoshock 2.3 (BizHawk tag 2.3, commit
+a15b31a46bdac27d843d3ebbc5a860012d8452fb). This is compatibility with that
+oracle, not a new hardware timing claim. The polygon span helper was rewritten
+from measured behaviour in T172 (`runtime/tests/gpu_polygon_provenance.json`).
 
 The authored fixture covers three core positions and three texture depths,
 with separate texture data and texture data overlapping the draw destination.

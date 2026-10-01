@@ -70,8 +70,8 @@ thing being diffed.
 ### Audio — SPU canon stream
 
 - `spu.c` is a compact but real hardware SPU model: 24 ADPCM voices, 512 KB SPU
-  RAM, ADSR envelope (Beetle-faithful `CalcVCDelta`/`RunEnvelope`,
-  `spu.c:109`/`:145`), KEYON/KEYOFF, ENDX latch, CD/XA input bus.
+  RAM, ADSR envelope (`spu_envelope.h`, from PSX-SPX and the S-series oracle
+  fixtures), KEYON/KEYOFF, ENDX latch, CD/XA input bus.
 - Per-voice render: `decode_block()` (`spu.c:297`, BRR-style ADPCM 4-bit blocks
   → 28 samples, two-tap predictor) and `voice_next_sample()` (`spu.c`, applies
   envelope, advances a 12-bit-fraction phase accumulator with **nearest-sample**
