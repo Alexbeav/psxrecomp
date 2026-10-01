@@ -1114,6 +1114,7 @@ if(BUILD_TESTING)
                 bios_selection_guards
                 capture_history
                 cli_retail_bios_profile
+                codegen_hash_line_endings
                 codegen_host_bios_stems
                 default_renderer_guards
                 deferred_switch_interp_poll
