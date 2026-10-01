@@ -17,8 +17,11 @@ void netplay_lan_join_version(const char *tail, char *out, size_t out_cap)
         if (!nl) return;
         p = nl + 1;
     }
+    /* The line comes from the network and is logged: keep printable ASCII
+     * only. A version never holds anything else, so '?' cannot match one. */
     while (p[n] && p[n] != '\n' && p[n] != '\r' && n + 1 < out_cap) {
-        out[n] = p[n];
+        const unsigned char c = (unsigned char)p[n];
+        out[n] = (c >= 0x20 && c <= 0x7e) ? (char)c : '?';
         ++n;
     }
     out[n] = '\0';

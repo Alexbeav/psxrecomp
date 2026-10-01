@@ -42,6 +42,11 @@ int main(void)
     CHECK(strcmp(small, "01234") == 0);
     netplay_lan_join_version("a\nb\nc\nd\ne\nf\n0123456789\n", small, 0);
     netplay_lan_join_version("a\nb\nc\nd\ne\nf\n0123456789\n", NULL, 8);
+    /* The line is peer data and gets logged: control and non-ASCII bytes
+     * become '?', so they reach neither the log nor a match. */
+    CHECK(strcmp(version_of("a\nb\nc\nd\ne\nf\n0.1\x1b[2J\x07-\xff" "x\n"), "0.1?[2J?-?x") == 0);
+    CHECK(!netplay_lan_version_ok("0.1\x1b[2J\x07-\xff" "x",
+                                  version_of("a\nb\nc\nd\ne\nf\n0.1\x1b[2J\x07-\xff" "x\n")));
 
     /* Builds of one release meet. */
     CHECK(netplay_lan_version_ok("0.1.2-6ef86cae", "0.1.2-6ef86cae"));
