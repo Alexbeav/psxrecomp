@@ -46,6 +46,12 @@ if(BUILD_TESTING)
         src/netplay_exit_reason.c)
     target_include_directories(netplay_exit_reason_test PRIVATE include)
     add_test(NAME netplay_exit_reason_test COMMAND netplay_exit_reason_test)
+    # PS1B-295: a LAN / Direct IP host refuses a guest on another build.
+    add_executable(netplay_lan_version_test
+        tests/test_netplay_lan_version.c
+        src/netplay_lan_version.c)
+    target_include_directories(netplay_lan_version_test PRIVATE include)
+    add_test(NAME netplay_lan_version_test COMMAND netplay_lan_version_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)

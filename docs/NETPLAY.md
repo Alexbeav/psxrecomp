@@ -273,7 +273,12 @@ Generate & rebuild / prepare flows should point at the **`.cue`**, not a lone
   `tools/stage_framework_tree.sh`, so a source package built on the player's
   machine keeps it), then `git rev-parse HEAD`
   (`runtime/framework_identity.cmake`). The same value is the replay and route
-  build identity. LAN / Direct IP rooms do not check it yet.
+  build identity. A LAN / Direct IP room has no server, so its host makes
+  the same check: the guest's JOIN ends with its lobby version, and a
+  different one is refused with `MOTK1 ERR version_mismatch`
+  (`runtime/src/netplay_lan_version.c`). Both players then see the reason
+  on the launcher's status line. A guest from before the check sends no
+  version; that counts as `dev`, so only a `dev` host still takes it.
 - **Mods:** disabled for all netplay sessions (lobby / LAN / direct / rematch).
   Launcher `commit_netplay` and the runtime clear the in-session plan without
   touching the user's offline mod selection. Synced mod plans are deferred.

@@ -70,6 +70,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "psx_lobby_client.h"
 #include "netplay_bios_settle.h"
 #include "netplay_exit_reason.h"
+#include "netplay_lan_version.h"
 #include "host_time.h"
 #if defined(PSX_HAS_RECOMP_NET)
 #include "recomp_net/auth.h"
@@ -10888,6 +10889,9 @@ namespace {
             if (std::strncmp(buf, "MOTK1 ERR\n", 10) == 0) {
                 const char* code = buf + 10;
                 if (std::strncmp(code, "bad_password", 12) == 0) return -2;
+                /* The launcher shows last_error on its status line. */
+                if (std::strncmp(code, "version_mismatch", 16) == 0)
+                    psx_lobby_set_last_error(NETPLAY_LAN_VERSION_GUEST_TEXT);
                 return -1;
             }
             if (std::strncmp(buf, "MOTK3 UPDATE\n", 13) == 0) {
@@ -11356,6 +11360,29 @@ namespace {
                                         "%s\n", crc);
             if (c > 0) *io_off += c;
         }
+        /* Line 7: this build's lobby version (PS1B-295). A LAN room has no
+         * server to compare versions, so the host does. Older hosts stop
+         * after the CRC. */
+        if (*io_off > 0 && (size_t)*io_off < msg_cap) {
+            const int v = std::snprintf(msg + *io_off, msg_cap - (size_t)*io_off,
+                                        "%s\n", psx_lobby_game_version());
+            if (v > 0 && (size_t)v < msg_cap - (size_t)*io_off) *io_off += v;
+        }
+    }
+
+    /* The host's build check for a LAN / Direct IP JOIN (PS1B-295): the
+     * online server's rule, applied to the version on line 7 of the tail. A
+     * refused guest gets MOTK1 ERR version_mismatch; the host's status line
+     * says why nobody arrived. Returns true when the guest may be seated. */
+    static bool ae_np_lan_join_version_ok(const char* tail, const sockaddr_in& from) {
+        char guest[PSX_LOBBY_VERSION_LEN];
+        netplay_lan_join_version(tail, guest, sizeof(guest));
+        if (netplay_lan_version_ok(psx_lobby_game_version(), guest)) return true;
+        std::fprintf(stderr, "netplay: LAN join refused: guest build \"%s\", this build \"%s\"\n",
+                     guest[0] ? guest : "(none)", psx_lobby_game_version());
+        ae_np_lan_udp_sendto(from, "MOTK1 ERR\nversion_mismatch\n");
+        psx_lobby_set_last_error(NETPLAY_LAN_VERSION_HOST_TEXT);
+        return false;
     }
 
     /* Optional JOIN retail CRC: line 6 of the tail, after the three bios and
@@ -12172,6 +12199,7 @@ namespace {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nbad_password\n");
                     continue;
                 }
+                if (!ae_np_lan_join_version_ok(bios_tail, from)) continue;
                 const int slot = ae_np_lan_seat_guest(st, player_id, name);
                 if (slot < 0) {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nfull\n");
@@ -12218,6 +12246,8 @@ namespace {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nbad_password\n");
                     continue;
                 }
+                /* A legacy JOIN carries no version, so it counts as "dev". */
+                if (!ae_np_lan_join_version_ok(nullptr, from)) continue;
                 /* Legacy JOIN: synthesize an id from peer addr so same-name
                  * clients still get distinct seats + (2)/(3) labels. */
                 char synth_id[48];
@@ -12612,6 +12642,8 @@ namespace {
             }
             if (std::strncmp(buf, "MOTK1 KICK\n", 11) == 0 ||
                 std::strncmp(buf, "MOTK1 ERR\n", 10) == 0) {
+                if (std::strncmp(buf, "MOTK1 ERR\nversion_mismatch", 26) == 0)
+                    psx_lobby_set_last_error(NETPLAY_LAN_VERSION_GUEST_TEXT);
                 g_lnch_joined_lan = false;
                 g_lnch_remote_lan = false;
                 g_lnch_lan_endpoint.clear();
