@@ -273,7 +273,9 @@ is zero-init.
   C already carries the hook sites, so `generated/` does not change. PGXP stays
   off at runtime until `psx.enhancement.pgxp` or the `[video]` keys arm it; with
   it off the guest runs exactly as in the base flavor. Savestates of the two
-  flavors are not interchangeable. See `ENHANCEMENTS.md` G1.11.
+  flavors are not interchangeable. A title that ships PGXP on by default does so
+  through a default-on override of `psx.enhancement.pgxp` plus
+  `[video] pgxp_mod_only = true`. See `ENHANCEMENTS.md` G1.11/G1.12.
 
 Minimal opt-in example:
 

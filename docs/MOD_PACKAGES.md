@@ -568,12 +568,18 @@ a rematch because `memory_init()` latches the requested geometry again at every
 boot, including the rematch's.
 
 The PGXP request is how the builtin `psx.enhancement.pgxp` package arms
-geometry and texture correction. Its activation records the request, and the
-renderer setup, which runs after activation, arms PGXP from the request and the
-`[video]` keys together (`runtime/include/pgxp_session.h`). Arming the
-corrections from activation directly does not work: the renderer setup applies
-the `[video]` baseline afterwards and would switch them back off. A netplay
-session clears the plan, so it gets the `[video]` keys alone.
+geometry and texture correction, and its CPU-mode and precise-culling options.
+Its activation records the request. The renderer setup runs after activation,
+and its session arming (`psx_pgxp_session_arm`,
+`runtime/include/pgxp_session.h`) takes the request: it reads it, clears it,
+and arms PGXP from it and the `[video]` keys together. Arming the corrections
+from activation directly does not work: the renderer setup applies the
+`[video]` baseline afterwards and would switch them back off. A netplay session
+clears the plan, default-on packages included, so it gets the `[video]` keys
+alone, and nothing at all with `[video] pgxp_mod_only`. A title that ships
+PGXP on by default overrides the builtin at the same id and version, with
+`default_enabled = true` and, if it wants it, the `culling` option's default set
+to `"true"` (ENHANCEMENTS.md G1.11/G1.12).
 
 Bezel artwork has two parts. The reset clears the artwork path, so the next
 session start loads nothing unless its own activation selects artwork again.

@@ -869,6 +869,293 @@ PNG at 768x480 scale-2 windowed (row-pitch bug in the hires readback) —
 the census + the player's own captures carried the session; fix it before
 the formal Crash/Tomba2 A/B.
 
+### G1.11 — PGXP as a title's default: hook build, mod at session start, dataflow only, exact projection (2026-10-01)
+
+Ridge Racer Type 4 turns PGXP on by default. Getting there took framework
+changes that are all opt-in. With PGXP off, nothing changes for any title.
+With PGXP on, two changes apply without a new option: the
+`psx.enhancement.pgxp` mod now actually arms PGXP (item 2), and fully precise
+axis-aligned quads take the triangle path (item 4).
+
+**What R4 got from G1.10 as shipped: nothing.** Base flavor, PGXP mod on:
+0% dataflow hits, 3.6% position-cache hits, 0 of 282k textured triangles with
+perspective UVs. R4's course renderer copies SXY out of the GTE with
+`mfc2`/`sw`/`lw`/`sw`, and only `swc2` is shadowed in the base flavor. The
+hook flavor already tracks all of it, with no R4-specific hooks: R4's near
+polygon subdivision interpolates in 3D on the GTE and projects every
+sub-vertex with RTPT.
+
+1. **`psxrecomp_add_game_runtime(... PGXP)`** builds the title's one runtime
+   as the hook flavor (`-DPSX_PGXP=1`, overlay flavor 2, no `_pgxp` suffix, no
+   clone). Generated C already carries the `PGXP_*()` sites, so a committed
+   `generated/` does not change. The option is parsed, so it can no longer be
+   swallowed by an earlier multi-value argument. Test:
+   `game_runtime_pgxp_test` (the real function body under `cmake -P`).
+2. **The PGXP mod arms at session start.** `psx.enhancement.pgxp`'s
+   activation used to arm the corrections, and main.cpp's renderer setup,
+   which runs after activation, then re-applied the `[video]` baseline and
+   switched them off. The activation now records a request
+   (`pgxp_mod_request`), and the renderer setup's session arming
+   (`psx_pgxp_session_arm`, `runtime/src/pgxp_session.cpp`) takes it, reads
+   and clears it, and arms `[video]` OR the request. The
+   `PSX_GEOMETRY_CORRECTION` / `PSX_PERSPECTIVE_TEXTURING` /
+   `PSX_PGXP_CPU_MODE` / `PSX_PGXP_CULLING` env overrides still win. Because
+   the arming takes the request, a later session whose plan is empty (netplay
+   clears every mod, default-on ones included) cannot inherit it.
+   `reset_mod_owned_presentation()` also clears it. A title that wants PGXP
+   on by default overrides the builtin manifest at the same id and version
+   with `default_enabled = true` (MOD_PACKAGES.md). It must not use
+   `[video] geometry_correction` for that, because netplay does not clear it
+   (see `pgxp_mod_only`, G1.12). Tests: `pgxp_session_test` runs the real
+   arming against the real mod runtime, the builtin plugin and the builtin's
+   own manifest (default-on override, netplay clear with and without the
+   reset, the off switch, options, env overrides). R4's `r4_pgxp_boot`
+   boots the built runtime and fails if main.cpp stops calling the arming.
+3. **Two `[video]` keys** (game.toml; live over the TCP `pgxp` verb):
+
+   ```toml
+   [video]
+   pgxp_tolerance = -1.0            # existing key: no clamp
+   pgxp_position_fallback = false   # default true
+   pgxp_preserve_projection = true  # default false
+   ```
+
+   - `pgxp_position_fallback = false` ("dataflow only", the reference
+     implementations' default) skips the G1.4 position cache and stops
+     `geom_note` filling it. At hook-build coverage the cache only hands
+     unrelated 3D fractions to CPU-built 2D polygons: on R4 (tolerance off,
+     cache on), 30% of the HUD tachometer needle's vertices (rms 0.86 px).
+   - `pgxp_preserve_projection = true` shadows the exact projection of each
+     vertex, from the unshifted MACs and a true divide
+     (`pgxp_project_precise`), instead of the GTE's integer IR1/IR2/SZ3 path.
+     Only sf=1 vertices with no IR, SZ3 or divide saturation qualify; the rest
+     keep the IR path. Guest SXY, MAC0 and FLAG are untouched (the GTE oracle
+     test runs RTPS/RTPT with it on). The exact position can sit below the
+     guest integer or more than a pixel above it, so truncation agreement
+     becomes the window -4 < precise - native < 5 px. A packet half at or
+     beyond the GTE saturation limit (-1024 / 1023) must still agree exactly.
+     RTPS applies the same window: an exact projection outside it is not
+     shadowed, and the vertex keeps the IR path's shadow, which always
+     agrees, so it still draws precise instead of being rejected to native
+     (`ppp_window_fallback` counts these; `pgxp_ppp_accept`). The exact math
+     is skipped while the hooks record nothing (speculative passes). The
+     tolerance clamp now measures the offset both ways. One non-visual
+     consumer: `[widescreen] precise_nclip` takes its branch sign from the
+     shadows, so in a title that sets both, that sign follows the exact
+     projection too.
+   - Keep `pgxp_tolerance` at its 0.5 default only for low-coverage titles
+     (the G1.10 Ape result). At hook-build coverage the clamp is harmful: on
+     R4 it keeps 26% of vertices, leaves 52% of drawn triangles mixed (a
+     4K capture shows a hairline across the road) and shakes more than stock
+     (tables below). The default stays 0.5 because changing it would change
+     every title that already arms PGXP through `[video]`.
+4. **Fully precise axis-aligned textured quads skip the 2D rectangle
+   shortcut.** `gp0_exec_textured_quad` draws a quad whose integer vertices
+   and UVs form an axis-aligned rectangle with `gr_draw_textured_rect`, at the
+   native position. A world quad seen straight on (R4's building facades)
+   lands there too, and against its precise neighbours that opened an
+   L-shaped background seam at 4K. When PGXP is correcting and all four
+   vertices are dataflow-precise (`pgxp_probe_precise_vertex`), the quad is
+   drawn as its two triangles (`rect_bypass`). A rectangle with only some
+   corners precise, such as a CPU-built sprite with one corner copied from
+   SXY, keeps the shortcut and counts as `rect_partial`. Drawing it as
+   triangles would mix precise and native vertices. R4 has none: 0 in every
+   run below.
+
+Observability: `geom_correction`'s `pgxp` object reports the switches,
+`ppp_produced` / `ppp_window_fallback`, geometry-corrected triangles as
+`tri_precise` / `tri_mixed` / `tri_native` (the G1.1 crack exposure),
+`rect_bypass` / `rect_partial`, and the NCLIP counters of G1.12.
+
+**What `tri_mixed` can and cannot see.** It counts drawn triangles with one
+or two precise vertices: a shared edge whose vertex is precise in one
+triangle and native in its neighbour. Under preserve-projection that
+disagreement is up to the window, several pixels, not a fraction. A vertex
+is decided per packet word, so two triangles that share a projected vertex
+make the same decision. `tri_mixed` is blind to the other crack classes: an
+all-precise triangle beside a game-built 2D one, and a gap where the game
+culled a face (G1.12). Zero mixed triangles is a statement about those runs,
+not a proof of no seams.
+
+**R4 measurements.** Helter Skelter Grand Prix from a grid savestate, Cross
+held, 60-frame lead, 360-frame window, native internal resolution, macOS
+arm64, every run 0 dispatch and 0 segment misses. "Dataflow" is the share of
+GPU vertex lookups that took a validated shadow.
+
+| build / settings | dataflow | position cache | drawn triangles mixed | perspective UVs |
+|---|---|---|---|---|
+| base flavor, mod on, framework defaults (R4 before) | 0% | 3.6% | 8.9% | 0 / 282k |
+| hook flavor, framework defaults (tol 0.5, cache, IR path) | 25.7% | 0.002% | 51.6% (152k / 295k) | 100% |
+| hook flavor, tol off, dataflow only, exact projection | 99.88% | 0 | 0 / 312k | 100% |
+| **R4 shipped** (the above plus precise culling, G1.12) | **99.91%** | 0 | **0 / 389k** | **100%** |
+
+The vertices left native are the HUD needle (CPU-built from a sin/cos table)
+and vertices at the GTE saturation limit far off-screen, which draw where the
+hardware puts them. Other content with R4's shipped settings:
+
+| run | dataflow | drawn triangles mixed | truncation rejects |
+|---|---|---|---|
+| boot through the menus, Grand Prix setup and car select | 96.6% (rest 2D UI) | 0 / 1.83M | 0 |
+| attract demo, 3000 frames | 95.2% (rest 2D UI) | 8 / 1.49M | 12 |
+| 2P VS, pad 1 driving, 360 frames | 100% | 0 / 467k | 0 |
+| 2P VS, widescreen Fit, both pads driving, 600 frames | 99.992% | 149 / 730k (0.02%) | 174 |
+
+Every truncation-rejected vertex in the per-vertex dump of the last run
+(208 census vertices) has a packet half at the saturation limit. Of those, 94
+come from the effect emitter (store PC `0x800173F0`). The rest come from the
+course and near-subdivision stores (`0x80064284..90`, `0x80065B00..08`). No
+in-range vertex was rejected, so the 149 mixed triangles each have a corner
+clamped far off-screen. The exact-minus-native offsets of shadowed 1P
+vertices measured -1.87 .. +2.60 px (R4: H = 290).
+
+Frame-to-frame vertex wobble (`dE`: rms change of drawn-minus-exact between
+consecutive frames along tracked vertices, native px; x9 = 4K output px; the
+reference is the exact projection; slow start from the grid, 152 frames,
+43k tracked steps; near = SZ3 < 1000):
+
+| mode | err | dE | dE near | dE at 4K |
+|---|---|---|---|---|
+| native (PGXP off) | 0.834 | 0.321 | 0.460 | 2.89 |
+| hook flavor, tol 0.5, IR path | 0.807 | 0.374 | 0.545 | 3.36 |
+| tol off, IR path | 0.075 | 0.025 | 0.052 | 0.23 |
+
+At speed (360-frame lead): native 0.417, tol 0.5 0.504, IR path 0.032. With
+preserve-projection the drawn position is the reference itself, so its row
+would read 0 by construction, not by measurement. It only shows that no drawn
+vertex fell back to the IR path or native in that window. What is
+established independently is that the exact projection is right: the
+`pgxp_test` and `gte_register_access_test` oracles check it against the GTE
+inputs.
+
+**Visible changes.** Polygons stop wobbling and road, wall and sign textures
+stop bending (visible at every scale for textures, above native for
+geometry). Far thin features draw at their true size: distant lane dashes and
+the start line appear in the mirror, and the START!! board at the far end of
+the straight looks smaller. The first frame or two after a savestate load
+draw without PGXP (shadows are dropped on load, R4 builds packets a frame
+ahead). Before G1.12, the far road beyond the start gantry and over crests
+drew as strips with sky and backdrop between them, at 4K and in 2P. That was
+a culling gap, not texture minification.
+
+**Not covered.** Semi-transparent mono quads still take their own rectangle
+path (UI boxes; none seen in R4's 3D); a PGXP depth buffer; savestates of the
+hook and base flavors are not interchangeable; above native resolution the GL
+native pack comes from the corrected high-resolution surface, so a title that
+reads VRAM back to the CPU would see it (R4 issued no GP0 C0 read from boot
+through a 2P race).
+
+### G1.12 — Precise culling, the mod as a title's one switch (2026-10-01)
+
+**The crack G1.11 did not see.** With every drawn vertex precise, R4's far
+road still broke into a ladder of strips with sky between them, beyond the
+start gantry and over crests, at 4K and in 2P. Same frame, PGXP off: solid
+road. R4's road emitter (`0x80066268`) projects a row with RTPT, runs NCLIP
+on both triangles (`0x8006630C`, `0x8006636C`) and skips the row when
+neither is front-facing (`slt`/`xor`/`beqz` at `0x800663AC`). Far rows whose
+native height rounds to 0 have MAC0 = 0 and are skipped. Natively their
+neighbours meet at the same integer y, so nothing is missing. With PGXP the
+neighbours sit at their exact y, 0.7 px apart at Helter Skelter's crest, and
+the skipped row is now a visible gap. `tri_mixed` could not see it: every
+drawn vertex was precise, and the missing face draws no triangle at all.
+
+**The fix: NCLIP takes the sign PGXP draws.** A third PGXP option,
+`culling`, belongs to the `psx.enhancement.pgxp` package and is off in the
+builtin. A title's override turns it on, and the player can switch it off on
+the Mods page. While geometry correction is armed, `gte_nclip` computes the
+exact determinant of the three SXY register shadows
+(`pgxp_gte_nclip_precise`). It uses them only when all three are live,
+describe the current register words, and pass the same truncation agreement
+and tolerance the GPU applies to them. When that sign is nonzero and differs
+from the integer MAC0's, NCLIP returns the exact sign, with magnitude equal
+to the rounded exact doubled area, at least 1. FLAG keeps the integer
+result's overflow bits; matching signs leave MAC0 untouched. This is
+DuckStation's "PGXP culling" with a minimal footprint.
+
+This changes guest-visible MAC0, and so the game's control flow, which is
+why it is opt-in at three levels:
+- only the mod arms it, so netplay, which clears every mod, never runs it,
+  and there is deliberately no `[video]` key for it;
+- it needs geometry correction (`psx_pgxp_session_resolve`);
+- it is held off in every pass that is compared against another execution:
+  the speculative and replay passes, which record no shadows, and the whole
+  overlay shadow diff (`psx_overlay_shadow_diff_active`), including its
+  interpreter pass, so both passes see the integer MAC0.
+
+`[widescreen] precise_nclip` (`gte_nclip_precise_bltz`) compares against the
+MAC0 the guest read, so it stays consistent. Live toggle: TCP
+`pgxp {"culling":0|1}`; validation override: `PSX_PGXP_CULLING`.
+
+Counters, kept whenever geometry correction is armed, culling on or off:
+- `nclip_precise`: NCLIPs with an exact determinant;
+- `nclip_disagree`: of those, the exact sign is nonzero and differs from the
+  integer one. Each is a face the game culls or keeps on a winding the drawn
+  face does not have, the crack class `tri_mixed` misses;
+- `nclip_corrected`: of those, MAC0 replaced.
+
+On R4 (1P window above), 178,896 of 623,784 NCLIPs disagree (28.7%). With
+culling the game emits 24.5% more triangles (389k against 312k); in 2P the
+figure is 21.6%.
+
+**Measured on R4** (same-frame 4K A/B from the research frame gate, Helter
+Skelter start straight frame 200, crest frame 420, 2P VS start frame 150): the
+ladder and the backdrop blocks are gone, and the far road is continuous with
+its lane dashes. In places it reads better than PGXP off, whose integer rows
+smear. Thin lateral features that the integer test dropped now draw at their
+true size: start-grid lines across the road, the namco plate under the
+START!! board.
+
+- **Packet headroom.** R4 builds packets bottom-up in two buffers of 141,176
+  bytes (`0x800ADD10` / `0x800D0488`, set at `0x80021064`, no overflow
+  check). Sampling every second frame over 40 s drives, the high-water mark
+  was 62.6 → 74.3 KB in 1P and 63.8 → 83.4 KB at the 2P VS start (PGXP
+  without → with culling), against 137.9 KB usable below the buffer's top-down
+  region (60% at peak). A title with longer draw distance must re-measure.
+- **Guest identity.** `fp_identity`, 12000 frames with no input (boot,
+  menus, attract race), cold overlay cache, fresh memory cards. The stock
+  build (framework before this work, base flavor), the hook build with the
+  mod disabled, and the
+  hook build with PGXP on but culling off are IDENTICAL pairwise, with no
+  tolerance. With culling on, the run diverges at frame 10319, the first
+  frame of the attract race, in RAM and scratchpad writes only (`sp`, `sc`,
+  `wc`, `ws`): the packets differ. `cyc`, `mmio` and `mc` agree through frame
+  12000, so the game's register traffic, including its flips and DMA kicks,
+  is unchanged. 2P VS from the start, both pads driving: one flip every 2.0
+  VBlanks with culling and without.
+- **Cost.** CPU ms per emulated frame (headless, turbo, 1P, native, 600-frame
+  samples, three interleaved rounds, load average about 7):
+
+  | build | median | vs stock |
+  |---|---|---|
+  | stock (base flavor) | 4.37 | |
+  | hook flavor, PGXP off | 4.66 | +7% |
+  | hook flavor, PGXP on, culling off | 5.02 | +15% |
+  | hook flavor, R4 shipped | 5.07 | +16% |
+
+  In real time under R4's default stack (internal resolution Match display:
+  10x, 4800 lines; widescreen Fit; frame rate at the 120 Hz display,
+  interpolated; three interleaved 8 s samples, load average 6 to 12), guest
+  VBlank/s and frame time:
+
+  | | PGXP off | PGXP, no culling | R4 shipped |
+  |---|---|---|---|
+  | 2P VS, both pads driving | 59.3 (16.84 ms) | 58.8 (17.12 ms) | 56.6 (18.42 ms) |
+  | 1P race | 59.3 (17.00 ms) | 56.1 (18.64 ms) | 57.0 (18.14 ms) |
+
+  Most of the 2P cost is the extra triangles, about 1 ms of GL scene time at
+  that scale: the GL renderer's cost is per primitive. In 1P the two PGXP
+  arms are within noise. On this branch 2P draws no interpolated frames, so
+  it was not measured with them.
+
+**`[video] pgxp_mod_only` (game.toml, default false).** For a title that
+ships PGXP through the mod (R4): the mod becomes the one switch. The
+`[video] geometry_correction` / `perspective_texturing` / `pgxp_cpu_mode`
+values, game.toml's and the player's `settings.toml`, are not applied, and
+the launcher hides its Perspective textures row
+(`has_geometry_precision = 0`). Without it, that row showed "off" while the
+default-on mod corrected textures, unticking it did nothing, and ticking it
+kept texture correction on after the player switched the mod off. Netplay
+then runs with PGXP fully off.
+
 ## IR1 — Internal resolution presets (Native … 8K) and the GL scale ceiling (2026-09-26)
 
 **What the player gets.** Settings → Display → **Internal resolution**: Native,
