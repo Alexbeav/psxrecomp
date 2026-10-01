@@ -108,6 +108,39 @@ inline bool disc_roster_program_foreign(
     return idx >= 0 && !disc_roster_program_owns(program_discs, idx + 1);
 }
 
+// --- Changing disc while the game runs ---------------------------------------
+//
+// A game that declares a set of discs accepts only those discs: a state and a
+// replay are named for the disc in the drive, and a disc from outside the set
+// has no name. A title that declares no set keeps accepting any disc.
+
+// The 1-based set position the picked image may be mounted as, or 0 to refuse.
+// `image_carries(serial)` says whether the picked image is the disc with that
+// serial. A roster entry that names a serial is matched by the serial alone,
+// wherever the file sits; an entry without one is matched by its path. A disc
+// that another program of the set boots is refused. When several entries name
+// the serial the image carries, the entry at the picked path wins, then the
+// first.
+template <class ImageCarries>
+inline int disc_roster_change_position(
+    const std::vector<std::filesystem::path>& set_roster,
+    const std::vector<std::string>& set_serials,
+    const std::vector<int>& program_discs,
+    const std::filesystem::path& picked, ImageCarries&& image_carries) {
+    const int idx = disc_roster_index(set_roster, picked);
+    int by_serial = 0;
+    for (size_t i = 0; i < set_roster.size(); ++i) {
+        if (i >= set_serials.size() || set_serials[i].empty()) continue;
+        if (!image_carries(set_serials[i])) continue;
+        if (!by_serial || (int)i == idx) by_serial = (int)i + 1;
+    }
+    if (by_serial)
+        return disc_roster_program_owns(program_discs, by_serial) ? by_serial : 0;
+    if (idx < 0) return 0;
+    if ((size_t)idx < set_serials.size() && !set_serials[idx].empty()) return 0;
+    return disc_roster_program_owns(program_discs, idx + 1) ? idx + 1 : 0;
+}
+
 inline std::string disc_roster_value(
     const std::vector<std::filesystem::path>& roster,
     const std::vector<std::string>& values, const std::filesystem::path& disc,

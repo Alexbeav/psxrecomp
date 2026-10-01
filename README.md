@@ -263,6 +263,11 @@ Two things worth knowing:
 - **Save files work either way.** Memory cards are shared. *Savestates* are not:
   one made with OpenBIOS won't load under the retail BIOS, or the other way
   round, so the game won't let you mix them.
+- **Games on several discs.** A savestate belongs to the disc that was in the
+  drive, and loading it mounts that disc for you. A savestate made after an
+  in-game disc change by a build older than this one is filed under the disc
+  the game was started on; rename the file with the right disc number
+  (`_disc2`) before you load it.
 
 Titles with a verified OpenBIOS incompatibility require the compatible retail
 BIOS instead and say so up front.

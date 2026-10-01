@@ -202,6 +202,34 @@ not have to be byte-identical:
   pages differ. Star Wars: Rebel Assault II needs this: each disc loads the
   disc number with a different immediate.
 
+### Save states and the disc in the drive
+
+A save state holds the drive's registers and buffers. It does not hold the
+image the drive reads. The disc is recorded in the file name instead:
+`state_<entry>_disc<N>_slot<NN>.pst`, where N is the disc's position in
+`discs`. The `.pst` layout does not change. A title with one disc keeps the
+name without a disc token.
+
+- **The name follows the drive.** After "Change disc..." a state is saved
+  under the new disc's number. Replay slots sit beside the states and follow
+  the same number.
+- **"Change disc..." takes only the set's discs.** A game that declares two or
+  more `discs` refuses an image that is not one of them, by `disc_serials`
+  when the entry has a serial, else by path. A program of a set takes only its
+  own discs. A game that declares no set takes any disc.
+- **A load mounts the state's disc.** A slot shows the mounted disc's state.
+  When the mounted disc has none, the slot shows the newest state another disc
+  of the set left there. Loading it mounts that disc from the set, without a
+  lid event, after its serial is checked. When the disc is not found or is
+  not that disc, the load is refused with a message that names the disc, and
+  the running game keeps its disc. Netplay never changes disc.
+- **Rewind is cleared** when the disc changes, by either route.
+
+A state saved after an in-game disc change by a build before pin H is filed
+under the disc the game was started on. Nothing in the file says otherwise, so
+it cannot be found or repaired. Rename the file with the right disc number to
+use it; a load would otherwise mount the disc its name gives.
+
 ## Recompiler block
 
 ```toml

@@ -111,6 +111,7 @@ void psx_rewind_configure(uint32_t bios_checksum, uint32_t entry_pc)
     (void)entry_pc;
 }
 void psx_rewind_shutdown(void) {}
+void psx_rewind_clear(void) {}
 int  psx_rewind_enabled(void) { return 0; }
 int  psx_rewind_is_open(void) { return 0; }
 int  psx_rewind_needs_present(void) { return 0; }
@@ -450,6 +451,32 @@ void psx_rewind_shutdown(void)
     s_anim_dir = 0;
     s_load_pending = 0;
     s_capture_due = 0;
+}
+
+void psx_rewind_clear(void)
+{
+    if (!s_configured || !s_ring)
+        return;
+    /* A fresh ring: the same calls configure and shutdown already use. */
+    rbe_snap_ring_destroy(s_ring);
+    s_ring = rbe_snap_ring_create(s_depth);
+    if (!s_ring) {
+        psx_rewind_shutdown();
+        fprintf(stderr, "psxrecomp: rewind alloc failed — disabled\n");
+        s_enabled = 0;
+        return;
+    }
+    s_count = 0;
+    s_sel = 0;
+    s_last_capture_frame = 0xffffffffu;
+    s_capture_due = 0;
+    s_load_pending = 0;
+    if (s_open) {
+        s_open = 0;
+        s_anim_dir = -1;
+        s_anim_t0 = 0u;
+    }
+    s_panel_dirty = 1;
 }
 
 int psx_rewind_enabled(void)

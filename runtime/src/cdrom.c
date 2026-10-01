@@ -3587,6 +3587,52 @@ int cdrom_replace_disc(const char* cue_path, const char scex[4]) {
     return 1;
 }
 
+/* The image and license region in the drive before a restore mount. */
+static void* restore_mount_previous;
+static char  restore_mount_previous_scex[4];
+static int   restore_mount_open;
+
+int cdrom_restore_mount_begin(const char* cue_path, const char scex[4]) {
+    void* replacement;
+
+    if (!cue_path || !cue_path[0] || psx_netplay_active() || restore_mount_open)
+        return 0;
+    replacement = iso_open(cue_path);
+    if (!replacement)
+        return 0;
+
+    restore_mount_previous = iso_handle;
+    memcpy(restore_mount_previous_scex, disc_scex,
+           sizeof(restore_mount_previous_scex));
+    restore_mount_open = 1;
+
+    iso_handle = replacement;
+    if (scex)
+        memcpy(disc_scex, scex, sizeof(disc_scex));
+    subq_replacements_active = iso_has_subq_replacements(iso_handle);
+    return 1;
+}
+
+void cdrom_restore_mount_end(int keep) {
+    if (!restore_mount_open)
+        return;
+    restore_mount_open = 0;
+    if (keep) {
+        if (restore_mount_previous)
+            iso_close(restore_mount_previous);
+        trace_cdrom('W', 1, iso_sector_count(iso_handle),
+                    (uint32_t)iso_track_count(iso_handle));
+    } else {
+        void* refused = iso_handle;
+        iso_handle = restore_mount_previous;
+        memcpy(disc_scex, restore_mount_previous_scex, sizeof(disc_scex));
+        subq_replacements_active =
+            iso_handle ? iso_has_subq_replacements(iso_handle) : 0;
+        iso_close(refused);
+    }
+    restore_mount_previous = NULL;
+}
+
 uint32_t cdrom_read(uint32_t addr) {
     uint32_t ret = 0;
     switch (addr) {
