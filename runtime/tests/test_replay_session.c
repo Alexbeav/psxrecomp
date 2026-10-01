@@ -33,15 +33,18 @@ static int can_record = 1;
 int replay_host_can_record(char *why, size_t cap) { if (!can_record) snprintf(why, cap, "netplay"); return can_record; }
 static char product_pin[41] = "0123456789abcdef0123456789abcdef01234567";
 static char product_serial[16] = "SLUS-00001";
+static char product_bios_stem[32] = "SCPH1001";
+static char product_boot_mode[16] = "hle";
+static uint8_t product_disc_byte = 0xAB;
 int replay_host_identity(InputRouteV3 *m, char *why, size_t cap) {
     (void)why; (void)cap;
     m->has_identity = 1;
     snprintf(m->pin, sizeof m->pin, "%s", product_pin);
     snprintf(m->disc_serial, sizeof m->disc_serial, "%s", product_serial);
-    snprintf(m->bios_stem, sizeof m->bios_stem, "SCPH1001");
-    snprintf(m->boot_mode, sizeof m->boot_mode, "hle");
+    snprintf(m->bios_stem, sizeof m->bios_stem, "%s", product_bios_stem);
+    snprintf(m->boot_mode, sizeof m->boot_mode, "%s", product_boot_mode);
     m->disc_digest_kind = INPUT_ROUTE_DISC_DIGEST_FILE;
-    memset(m->disc_digest, 0xAB, 32);
+    memset(m->disc_digest, product_disc_byte, 32);
     return 1;
 }
 /* The anchor blob is the whole stand-in machine: RAM then cycle. */
@@ -583,6 +586,133 @@ static void test_power_on_record_and_play(void) {
     free(rp);
 }
 
+/* What playback refuses, what it only reports, and the cross-platform case
+ * (PS1B-316): a replay recorded on the Windows build must keep playing on the
+ * Linux and macOS builds of the same pin when the disc file and the BIOS are
+ * the same (a thin build reading both from one share). */
+static void test_identity_rules(void) {
+    char path[700], saved_product[256], saved_pin[41];
+    const unsigned frames = 90u;
+    InputRouteV3 meta;
+    InputRouteV3Replay *rp = malloc(sizeof *rp);
+    snprintf(path, sizeof path, "%s/identity-rules.psxrpl", dir);
+    remove(path);
+    snprintf(saved_product, sizeof saved_product, "%s", product_lines);
+    snprintf(saved_pin, sizeof saved_pin, "%s", product_pin);
+    snprintf(settings_now, sizeof settings_now, "cd_speed=1\n");
+
+    /* Recorded "on Windows". */
+    snprintf(product_lines, sizeof product_lines,
+             "exe_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+             "codegen=6a0b6aaa\nbios_crc32=1234abcd\nrenderer=opengl\nplatform=windows-x64\n");
+    cold_boot();
+    power_on_now = 1;
+    CHECK(replay_session_record_power_on(path), "identity: recording starts");
+    for (unsigned i = 0; i < frames; ++i) { vblank(script(i / 3u), neutral); power_on_now = 0; }
+    replay_session_shutdown();
+    const char *err = read_replay(path, &meta, rp);
+    CHECK(!err && strstr(rp->product, "platform=windows-x64\n") && strstr(rp->product, "codegen=6a0b6aaa\n") &&
+          strstr(rp->product, "bios_crc32=1234abcd\n") && strstr(rp->product, "renderer=opengl\n") &&
+          strstr(rp->product, "exe_sha256=aaaa"), "product lines round-trip: %s", err ? err : rp->product);
+    CHECK(!err && !strcmp(meta.pin, saved_pin) && !strcmp(meta.disc_serial, "SLUS-00001") &&
+          !strcmp(meta.bios_stem, "SCPH1001") && !strcmp(meta.boot_mode, "hle") &&
+          meta.disc_digest_kind == INPUT_ROUTE_DISC_DIGEST_FILE && meta.disc_digest[0] == 0xAB &&
+          meta.disc_digest[31] == 0xAB, "identity fields round-trip");
+
+    /* The same build: plain start, nothing reported. */
+    CHECK(play_from_boot(path, frames + 10u, 0) == REPLAY_RESULT_IN_SYNC, "same build in sync (%s)", osd_last);
+    CHECK(read_verdict() && strstr(verdict, "\"cross_platform\": false") &&
+          strstr(verdict, "\"recorded_platform\": \"windows-x64\"") &&
+          strstr(verdict, "\"player_platform\": \"windows-x64\"") &&
+          strstr(verdict, "\"recorded_codegen\": \"6a0b6aaa\""), "same-build verdict: %s", verdict);
+
+    /* The regression case: the Linux build of the same pin. Another exe,
+     * another platform and the software renderer; the same codegen hash, disc
+     * file and BIOS. */
+    snprintf(product_lines, sizeof product_lines,
+             "exe_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+             "codegen=6a0b6aaa\nbios_crc32=1234abcd\nrenderer=software\nplatform=linux-x64\n");
+    cold_boot();
+    power_on_now = 1;
+    osd_last[0] = 0;
+    CHECK(replay_session_play_file(path), "another platform's build of the same pin plays (%s)", osd_last);
+    CHECK(strstr(osd_last, "same build on another platform (windows-x64)") && !strstr(osd_last, "different build"),
+          "it is named as the same build: %s", osd_last);
+    replay_session_shutdown();
+    read_verdict();
+    CHECK(play_from_boot(path, frames + 10u, 1) == REPLAY_RESULT_IN_SYNC, "cross-platform replay in sync (%s)", osd_last);
+    CHECK(read_verdict() && strstr(verdict, "\"result\": \"in_sync\"") && strstr(verdict, "\"cross_platform\": true") &&
+          strstr(verdict, "\"recorded_platform\": \"windows-x64\"") && strstr(verdict, "\"player_platform\": \"linux-x64\"") &&
+          strstr(verdict, "\"player_codegen\": \"6a0b6aaa\"") && strstr(verdict, "\"player_exe_sha256\": \"bbbb"),
+          "cross-platform verdict: %s", verdict);
+
+    /* The same BIOS dump under another file name: the CRC decides. */
+    snprintf(product_bios_stem, sizeof product_bios_stem, "[US] scph1001 copy");
+    CHECK(play_from_boot(path, frames + 10u, 0) == REPLAY_RESULT_IN_SYNC, "another BIOS file name, same CRC: plays (%s)", osd_last);
+    read_verdict();
+    /* No CRC on the player's side: the name is all there is, so it refuses. */
+    snprintf(product_lines, sizeof product_lines,
+             "exe_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+             "codegen=6a0b6aaa\nrenderer=software\nplatform=linux-x64\n");
+    cold_boot();
+    power_on_now = 1;
+    CHECK(!replay_session_play_file(path) && strstr(osd_last, "different BIOS"),
+          "another BIOS name and no CRC: refused (%s)", osd_last);
+    read_verdict();
+    snprintf(product_bios_stem, sizeof product_bios_stem, "scph1001");
+    CHECK(replay_session_play_file(path), "no CRC, same name (case ignored): plays (%s)", osd_last);
+    replay_session_shutdown();
+    read_verdict();
+    /* The same name with another image: refused. */
+    snprintf(product_bios_stem, sizeof product_bios_stem, "SCPH1001");
+    snprintf(product_lines, sizeof product_lines,
+             "exe_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+             "codegen=6a0b6aaa\nbios_crc32=99999999\nrenderer=software\nplatform=linux-x64\n");
+    cold_boot();
+    power_on_now = 1;
+    CHECK(!replay_session_play_file(path) && strstr(osd_last, "different BIOS"),
+          "same BIOS name, another CRC: refused (%s)", osd_last);
+    read_verdict();
+
+    /* Another disc image and another boot mode are refused, as before. */
+    snprintf(product_lines, sizeof product_lines,
+             "exe_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+             "codegen=6a0b6aaa\nbios_crc32=1234abcd\nrenderer=software\nplatform=linux-x64\n");
+    product_disc_byte = 0xCD;
+    CHECK(!replay_session_play_file(path) && strstr(osd_last, "different game or disc image"),
+          "another disc image: refused (%s)", osd_last);
+    read_verdict();
+    product_disc_byte = 0xAB;
+    snprintf(product_boot_mode, sizeof product_boot_mode, "lle");
+    CHECK(!replay_session_play_file(path) && strstr(osd_last, "different boot mode"),
+          "another boot mode: refused (%s)", osd_last);
+    read_verdict();
+    snprintf(product_boot_mode, sizeof product_boot_mode, "hle");
+
+    /* Another pin is a different build on any platform. */
+    product_pin[0] = product_pin[0] == 'f' ? 'e' : 'f';
+    CHECK(replay_session_play_file(path) && strstr(osd_last, "different build"),
+          "another pin on another platform: a different build (%s)", osd_last);
+    replay_session_shutdown();
+    CHECK(read_verdict() && strstr(verdict, "\"cross_platform\": false"), "another pin is not cross-platform: %s", verdict);
+    snprintf(product_pin, sizeof product_pin, "%s", saved_pin);
+    /* The same pin and platform with another exe is still a different build. */
+    snprintf(product_lines, sizeof product_lines,
+             "exe_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n"
+             "codegen=6a0b6aaa\nbios_crc32=1234abcd\nrenderer=opengl\nplatform=windows-x64\n");
+    CHECK(replay_session_play_file(path) && strstr(osd_last, "different build"),
+          "same platform, another exe: a different build (%s)", osd_last);
+    replay_session_shutdown();
+    read_verdict();
+
+    CHECK(strstr(replay_platform_name(), "-") != NULL && !strstr(replay_platform_name(), "unknown-unknown"),
+          "this build names its platform: %s", replay_platform_name());
+    snprintf(product_lines, sizeof product_lines, "%s", saved_product);
+    power_on_now = 0;
+    remove(path);
+    free(rp);
+}
+
 static void test_boot_names(void) {
     char p[700], expect[700], partial[700], rdir[600];
     snprintf(rdir, sizeof rdir, "%s/names", dir);
@@ -625,6 +755,7 @@ int main(int argc, char **argv) {
     test_shutdown_while_recording();
     test_rec_blink();
     test_power_on_record_and_play();
+    test_identity_rules();
     test_boot_names();
     clear_slots();
     if (failures) { fprintf(stderr, "%d of %d checks failed\n", failures, checks); return 1; }

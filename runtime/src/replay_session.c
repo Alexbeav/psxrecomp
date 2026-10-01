@@ -74,6 +74,12 @@ static char s_verdict_path[PATH_BYTES];
 static char s_play_path[PATH_BYTES];
 static char s_rec_pin[INPUT_ROUTE_V3_TEXT], s_player_pin[INPUT_ROUTE_V3_TEXT];
 static char s_rec_exe[65], s_player_exe[65];
+/* Product lines of the recording and of this player: "platform" (for example
+ * windows-x64) and "codegen". s_cross_platform is 1 when the same pin plays on
+ * another platform's build. */
+static char s_rec_platform[24], s_player_platform[24];
+static char s_rec_codegen[16], s_player_codegen[16];
+static int s_cross_platform;
 static uint64_t s_end_cycle, s_end_recorded_cycle;
 static unsigned s_end_pages;
 static int s_end_reached;
@@ -116,6 +122,11 @@ static void write_verdict(ReplayResult result, const char *reason)
     fputs(",\n  \"player_build\": ", f); json_string(f, s_player_pin);
     fputs(",\n  \"recorded_exe_sha256\": ", f); json_string(f, s_rec_exe);
     fputs(",\n  \"player_exe_sha256\": ", f); json_string(f, s_player_exe);
+    fputs(",\n  \"recorded_platform\": ", f); json_string(f, s_rec_platform);
+    fputs(",\n  \"player_platform\": ", f); json_string(f, s_player_platform);
+    fputs(",\n  \"recorded_codegen\": ", f); json_string(f, s_rec_codegen);
+    fputs(",\n  \"player_codegen\": ", f); json_string(f, s_player_codegen);
+    fprintf(f, ",\n  \"cross_platform\": %s", s_cross_platform ? "true" : "false");
     fprintf(f, ",\n  \"power_on\": %s", s_play_power_on ? "true" : "false");
     fputs(",\n  \"replay\": ", f); json_string(f, s_play_path);
     fputs(",\n  \"reason\": ", f); json_string(f, reason ? reason : "");
@@ -817,6 +828,9 @@ int replay_session_play_file(const char *path)
     snprintf(s_play_path, sizeof s_play_path, "%s", path ? path : "");
     s_rec_pin[0] = s_player_pin[0] = 0;
     s_rec_exe[0] = s_player_exe[0] = 0;
+    s_rec_platform[0] = s_player_platform[0] = 0;
+    s_rec_codegen[0] = s_player_codegen[0] = 0;
+    s_cross_platform = 0;
     s_play_power_on = 0;
     s_play_frame = s_play_frames = 0;
     s_diverged = 0;
@@ -880,9 +894,16 @@ int replay_session_play_file(const char *path)
         line_value(player, "exe_sha256", s_player_exe, sizeof s_player_exe);
         line_value(rp->product, "bios_crc32", rec_crc, sizeof rec_crc);
         line_value(player, "bios_crc32", player_crc, sizeof player_crc);
+        line_value(rp->product, "platform", s_rec_platform, sizeof s_rec_platform);
+        line_value(player, "platform", s_player_platform, sizeof s_player_platform);
+        line_value(rp->product, "codegen", s_rec_codegen, sizeof s_rec_codegen);
+        line_value(player, "codegen", s_player_codegen, sizeof s_player_codegen);
     }
-    if (!error && (!same_text_ci(meta.bios_stem, product.bios_stem) ||
-                   (rec_crc[0] && player_crc[0] && !same_text_ci(rec_crc, player_crc))))
+    /* The BIOS image decides, not its file name: with a CRC on both sides the
+     * CRC is the test, so the same dump under another name (another machine's
+     * naming) plays. Without both CRCs the file-name stem is all there is. */
+    if (!error && (rec_crc[0] && player_crc[0] ? !same_text_ci(rec_crc, player_crc)
+                                               : !same_text_ci(meta.bios_stem, product.bios_stem)))
         error = "it was recorded with a different BIOS";
     if (!error && strcmp(meta.boot_mode, product.boot_mode))
         error = "it was recorded with a different boot mode";
@@ -892,8 +913,13 @@ int replay_session_play_file(const char *path)
         free(rp); free(markers); free(cps); free(steps); free(anchor); free(cards); free(digests);
         return refuse_play(e);
     }
-    int other_build = strcmp(meta.pin, product.pin) != 0 ||
+    const int other_pin = strcmp(meta.pin, product.pin) != 0;
+    int other_build = other_pin ||
                       (s_rec_exe[0] && s_player_exe[0] && strcmp(s_rec_exe, s_player_exe));
+    /* The same pin built for another platform has another exe by construction;
+     * it is the same build, not a different one. */
+    s_cross_platform = !other_pin && s_rec_platform[0] && s_player_platform[0] &&
+                       strcmp(s_rec_platform, s_player_platform) != 0;
     snprintf(s_rec_pin, sizeof s_rec_pin, "%s", meta.pin);
     snprintf(s_player_pin, sizeof s_player_pin, "%s", product.pin);
     char differs[512] = "";
@@ -930,7 +956,14 @@ int replay_session_play_file(const char *path)
     s_result = REPLAY_RESULT_NONE;
     /* A power-on replay feeds record 0 at this boundary, as it was recorded. */
     s_state = s_play_power_on ? REPLAY_PLAYING : REPLAY_LOADING;
-    if (other_build) {
+    if (s_cross_platform) {
+        char msg[160];
+        snprintf(msg, sizeof msg, "Replay from the same build on another platform (%s)", s_rec_platform);
+        replay_host_osd(msg, 2600);
+        fprintf(stderr, "replay: recorded on build %s for %s (exe %s), this is the %s build (exe %s)\n",
+                meta.pin, s_rec_platform, s_rec_exe[0] ? s_rec_exe : "?", s_player_platform,
+                s_player_exe[0] ? s_player_exe : "?");
+    } else if (other_build) {
         replay_host_osd("Replay from a different build: it may go out of sync", 2600);
         fprintf(stderr, "replay: recorded on build %s (exe %s), this is %s (exe %s)\n", meta.pin,
                 s_rec_exe[0] ? s_rec_exe : "?", product.pin, s_player_exe[0] ? s_player_exe : "?");
@@ -938,15 +971,13 @@ int replay_session_play_file(const char *path)
         char msg[640];
         /* Only settings playback cannot switch are listed (the others are
          * switched for playback and restored after, so they are not news). */
-        /* Only settings playback cannot switch are listed (the others are
-         * switched for playback and restored after, so they are not news). */
         snprintf(msg, sizeof msg, "Replay may go out of sync: different %s", differs);
         replay_host_osd(msg, 2600);
     } else {
         replay_host_osd("Replay playing", 1200);
     }
-    fprintf(stdout, "replay_playing: path=%s frames=%u other_build=%d power_on=%d\n", path,
-            (unsigned)meta.frames, other_build, s_play_power_on);
+    fprintf(stdout, "replay_playing: path=%s frames=%u other_build=%d power_on=%d cross_platform=%d\n", path,
+            (unsigned)meta.frames, other_build, s_play_power_on, s_cross_platform);
     fflush(stdout);
     free(rp); free(markers); free(cps); free(anchor);
     return 1;

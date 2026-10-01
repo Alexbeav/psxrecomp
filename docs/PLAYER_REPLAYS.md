@@ -50,8 +50,9 @@ update. A clean exit writes the full replay and deletes the partial copy.
 ## Play it headless
 
 A power-on replay starts at vblank 0, so it plays only when the process starts
-with it. Use the same build (the exe, not only the version string) and the same
-disc and BIOS files.
+with it. Use the same pin and the same disc image file and BIOS image. The exe
+may be the same pin's build for another platform (see "Another platform"
+below).
 
 ```powershell
 $env:PSX_REPLAY_EXIT_AT_END = '1'
@@ -60,8 +61,12 @@ $env:PSX_REPLAY_EXIT_AT_END = '1'
 
 The exit code is 0 in sync, 3 out of sync, and 4 when the replay did not play.
 The verdict JSON gives the result, frames played, the first frame where the
-state digests differed, and both exe SHA-256 values (`recorded_exe_sha256`,
-`player_exe_sha256`). `power_on` is `true` for a power-on replay.
+state digests differed, and for the recording and the player: the exe SHA-256
+(`recorded_exe_sha256`, `player_exe_sha256`), the platform
+(`recorded_platform`, `player_platform`) and the codegen hash
+(`recorded_codegen`, `player_codegen`). `cross_platform` is `true` when the
+same pin played on another platform's build. `power_on` is `true` for a
+power-on replay.
 
 `--memcard-dir` keeps the run's own files (settings, disc hash cache, new
 replays) out of the install. The replay brings its own memory cards, so the
@@ -80,6 +85,26 @@ compare the two verdicts. Two recordings of the same scripted input on one
 build are byte-identical apart from the name entry
 (`run.py` `same_replay`), which is the A/B "no behaviour change" check.
 
+### Another platform
+
+A replay recorded on the Windows build plays on the Linux and macOS builds of
+the same pin, and the other way round. The exe differs, so the player says
+"Replay from the same build on another platform (windows-x64)" and the verdict
+has `cross_platform: true`; the result still comes from the state digests.
+
+What has to match:
+
+- The **disc image file**. The replay holds a SHA-256 of the file, so every
+  machine must use the same file (the same CHD from one share, for example). A
+  bin/cue of the same disc, or a re-compressed CHD, is refused.
+- The **BIOS image**, by CRC-32. The file name may differ between machines.
+  Only a replay or a build without a BIOS CRC falls back to the file name.
+- The **boot mode** and the pin.
+
+The codegen hash is recorded and shown in the verdict but not compared. It is
+the same on every platform for one pin (Windows and Linux builds both carry
+the same value), so a difference there means another build.
+
 ## What the replay contains
 
 - Player 1's input for every frame: buttons and both sticks as the pad
@@ -87,8 +112,10 @@ build are byte-identical apart from the name entry
 - The identity the player checks before it starts: the framework pin, the disc
   serial and a SHA-256 of the disc image, the BIOS file name, the BIOS boot
   mode, and the product lines: the exe's SHA-256, the overlay codegen hash, the
-  BIOS image's CRC-32, and the renderer. A different disc, BIOS image or boot
-  mode refuses to play. A different exe plays with a warning.
+  BIOS image's CRC-32, the renderer and the platform. A different disc, BIOS
+  image or boot mode refuses to play. The BIOS is matched by CRC-32; its file
+  name counts only when a CRC is missing. A different exe plays with a warning,
+  unless it is the same pin's build for another platform.
 - The settings that change guest timing and are not in the machine state:
   CD speed (the BIOS speed and the game's speed after boot), turbo loads,
   enabled mods, auto-skip FMV, idle skip, and both ports' connection, analog

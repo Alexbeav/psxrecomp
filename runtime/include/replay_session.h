@@ -193,8 +193,32 @@ int replay_host_cards_install(const uint8_t *images, uint32_t mask);
 /* After playback: the player's own cards again. */
 void replay_host_cards_restore(void);
 /* "key=value\n" lines naming this product (INPUT_ROUTE_TAG_REPLAY_PRODUCT):
- * exe_sha256, codegen, bios_crc32, renderer, input_seed. */
+ * exe_sha256, codegen, bios_crc32, renderer, platform, input_seed. */
 void replay_host_product(char *out, size_t cap);
+
+/* The "platform" product line: what this exe was built for, "<os>-<arch>"
+ * (windows-x64, linux-x64, macos-x64, ...). A replay from the same pin and
+ * another platform is the same build with another exe; playback says so
+ * instead of warning about a different build. */
+static inline const char *replay_platform_name(void) {
+#if defined(_WIN32)
+#  define REPLAY_PLATFORM_OS "windows"
+#elif defined(__APPLE__)
+#  define REPLAY_PLATFORM_OS "macos"
+#elif defined(__linux__)
+#  define REPLAY_PLATFORM_OS "linux"
+#else
+#  define REPLAY_PLATFORM_OS "unknown"
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+#  define REPLAY_PLATFORM_ARCH "x64"
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#  define REPLAY_PLATFORM_ARCH "arm64"
+#else
+#  define REPLAY_PLATFORM_ARCH "unknown"
+#endif
+    return REPLAY_PLATFORM_OS "-" REPLAY_PLATFORM_ARCH;
+}
 
 #ifdef __cplusplus
 }
