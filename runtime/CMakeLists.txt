@@ -167,6 +167,15 @@ if(BUILD_TESTING)
             COMMAND kernel_bless_state_test paranoid)
         set_tests_properties(kernel_bless_paranoid_test PROPERTIES
             PASS_REGULAR_EXPRESSION "kernel_bless_state: PASS paranoid")
+        # PS1B-348: source (TAS) mode never blesses; release does.
+        add_test(NAME kernel_bless_source_mode_test
+            COMMAND kernel_bless_state_test source)
+        set_tests_properties(kernel_bless_source_mode_test PROPERTIES
+            PASS_REGULAR_EXPRESSION "kernel_bless_state: PASS source-mode")
+        add_test(NAME kernel_bless_source_override_refused_test
+            COMMAND kernel_bless_state_test source-override)
+        set_tests_properties(kernel_bless_source_override_refused_test PROPERTIES
+            PASS_REGULAR_EXPRESSION "kernel_bless_state: PASS source-override")
         add_executable(sio_ack_timing_test tests/test_sio_ack_timing.c)
         target_include_directories(sio_ack_timing_test PRIVATE include)
         target_compile_options(sio_ack_timing_test PRIVATE -O2 -flto -fwhole-program)

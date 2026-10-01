@@ -448,6 +448,7 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             "    \"capacity\": %u,\n"
             "    \"disabled_by_overflow\": %d,\n"
             "    \"state\": %d,\n"
+            "    \"off_reason\": \"%s\",\n"
             "    \"clean\": %llu,\n"
             "    \"mismatch\": %llu,\n"
             "    \"native_hits\": %llu,\n"
@@ -461,6 +462,7 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             "  },\n",
             kb_entries, kb_capacity, kb_fits ? 0 : 1,
             psx_kernel_bless_state(),
+            psx_kernel_bless_off_reason(),
             (unsigned long long)kb[1], (unsigned long long)kb[2],
             (unsigned long long)kb[3], (unsigned long long)kb[4],
             (unsigned long long)kb[5],
