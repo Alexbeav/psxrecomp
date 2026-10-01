@@ -401,6 +401,58 @@ class Join(unittest.TestCase):
             self.assertFalse((out / "Resident_Evil_2_Leon.exe").exists())   # what setup forwards to
             self.assertFalse((out / "Resident_Evil_2_Claire.exe").exists())
 
+    def test_every_disagreement_is_reported_in_one_stop(self):
+        """Rival Schools' first set build stopped on one file after 18 minutes
+        of builds; whether a second file disagreed was unknown (PS1B-333)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, spec, discs, products = self.products(tmp)
+            write(products["claire"] / "game_options.toml", "other options\n")
+            write(products["leon"] / "licenses" / "kit" / "THIRD_PARTY_NOTICES.md", "United by Fate\n")
+            write(products["claire"] / "licenses" / "kit" / "THIRD_PARTY_NOTICES.md", "Evolution Disc\n")
+            write(products["claire"] / "assets" / "fonts" / "a.ttf", "another font")
+            # a file only one program carries, the known per-build files and the
+            # line-union file are not disagreements
+            write(products["claire"] / "assets" / "img" / "only-claire.tga", "x")
+            out = root / "build-release"
+            with self.assertRaises(ps.Disagreement) as caught:
+                ps.join_products(spec, products, out, discs=discs)
+            self.assertEqual([row["path"] for row in caught.exception.files],
+                             ["assets/fonts/a.ttf", "game_options.toml", "licenses/kit/THIRD_PARTY_NOTICES.md"])
+            for row in caught.exception.files:
+                self.assertEqual(list(row["sha256"]), ["leon", "claire"])
+                self.assertNotEqual(row["sha256"]["leon"], row["sha256"]["claire"])
+            message = str(caught.exception)
+            self.assertIn("disagree about 3 files: assets/fonts/a.ttf (leon and claire); game_options.toml "
+                          "(leon and claire); licenses/kit/THIRD_PARTY_NOTICES.md (leon and claire).", message)
+            self.assertNotIn("\n", message)
+            self.assertFalse(out.exists())          # found before anything is written
+            self.assertIsInstance(caught.exception, ps.SetError)
+
+            record = Path(tmp) / "record.json"
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                code = ps.main(["join", "--set", str(root / "set.toml"),
+                                "--program", f"leon={products['leon']}", "--program", f"claire={products['claire']}",
+                                "--out", str(out), "--record", str(record)])
+            self.assertEqual(code, 1)
+            self.assertEqual(len(err.getvalue().strip().splitlines()), 1)
+            self.assertEqual([row["path"] for row in json.loads(record.read_text())["disagreements"]],
+                             ["assets/fonts/a.ttf", "game_options.toml", "licenses/kit/THIRD_PARTY_NOTICES.md"])
+            self.assertFalse(out.exists())
+
+    def test_three_programs_name_every_carrier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folders = {}
+            for name, text in (("a", "one"), ("b", "one"), ("c", "two")):
+                folders[name] = Path(tmp) / name
+                write(folders[name] / "game_options.toml", text)
+                write(folders[name] / "bios.cfg", "same")
+            spec = {"programs": [{"program": name} for name in ("a", "b", "c")]}
+            found = ps.disagreements(spec, folders)
+            self.assertEqual([row["path"] for row in found], ["game_options.toml"])
+            self.assertEqual(list(found[0]["sha256"]), ["a", "b", "c"])
+            self.assertIn("game_options.toml (a and b and c)", str(ps.Disagreement(found)))
+
     def test_installing_again_keeps_the_players_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, spec, discs, products = self.products(tmp)
@@ -446,6 +498,67 @@ class Join(unittest.TestCase):
                                 "--out", str(Path(tmp) / "out2")])
             self.assertEqual(code, 1)
             self.assertEqual(len(err.getvalue().strip().splitlines()), 1)    # one line, non-zero exit
+
+
+class KitCheck(unittest.TestCase):
+    """The join's rule applied to the kits of a set, before any build."""
+
+    def kits(self, tmp):
+        kits = {}
+        for name, title in (("arcade", "United by Fate"), ("evolution", "Evolution Disc")):
+            kit = Path(tmp) / name
+            write(kit / "game.toml", f'[game]\nname = "{title}"\n')            # each program's own
+            write(kit / "seeds" / "funcs.txt", title)
+            write(kit / "README.md", title)
+            write(kit / "game_options.toml", "options\n")
+            write(kit / "VERSION", "0.4.0\n")
+            write(kit / "LICENSE", "GPL\n")
+            write(kit / "THIRD_PARTY_NOTICES.md", f"covers the {title} project\n")
+            write(kit / "mods" / "preloaded" / "packages" / "x.fix" / "1.0" / "manifest.toml", "id = \"x.fix\"\n")
+            write(kit / "build-release" / "game_options.toml", "left by a build of " + title)
+            write(kit / "psxrecomp" / "LICENSE", "the framework's, in " + title)
+            kits[name] = kit
+        return kits
+
+    def test_names_the_files_that_would_stop_the_join(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            kits = self.kits(tmp)
+            result = ps.compare_kits(kits)
+            self.assertEqual([row["path"] for row in result["shared"]], ["THIRD_PARTY_NOTICES.md"])
+            self.assertIn("licenses/kit", result["shared"][0]["why"])
+            self.assertEqual(list(result["shared"][0]["sha256"]), ["arcade", "evolution"])
+            self.assertEqual(result["own"], ["README.md", "game.toml", "seeds/funcs.txt"])
+            # every kind of kit file that reaches the shared folder
+            write(kits["evolution"] / "game_options.toml", "other\n")
+            write(kits["evolution"] / "VERSION", "0.5.0\n")
+            write(kits["evolution"] / "mods" / "preloaded" / "packages" / "x.fix" / "1.0" / "manifest.toml", "other")
+            write(kits["arcade"] / "launcher_assets" / "img" / "boxart.tga", "arcade art")
+            write(kits["evolution"] / "launcher_assets" / "img" / "boxart.tga", "evolution art")
+            self.assertEqual([row["path"] for row in ps.compare_kits(kits)["shared"]],
+                             ["THIRD_PARTY_NOTICES.md", "VERSION", "game_options.toml",
+                              "launcher_assets/img/boxart.tga", "mods/preloaded/packages/x.fix/1.0/manifest.toml"])
+
+    def test_command_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            kits = self.kits(tmp)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = ps.main(["kit-check", f"arcade={kits['arcade']}", str(kits["evolution"])])
+            self.assertEqual(code, 1)
+            self.assertIn("differs: THIRD_PARTY_NOTICES.md (arcade and evolution)", out.getvalue())
+            self.assertIn("1 file(s) the programs would disagree about", out.getvalue())
+            write(kits["evolution"] / "THIRD_PARTY_NOTICES.md", "covers the United by Fate project\n")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = ps.main(["kit-check", "--json", str(kits["arcade"]), str(kits["evolution"])])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out.getvalue())["shared"], [])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(ps.main(["kit-check", str(kits["arcade"])]), 1)
+                self.assertEqual(ps.main(["kit-check", str(kits["arcade"]), str(Path(tmp) / "absent")]), 1)
+            self.assertIn("two or more", err.getvalue())
+            self.assertIn("not a kit folder", err.getvalue())
 
 
 class StartScripts(unittest.TestCase):

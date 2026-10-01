@@ -31,6 +31,7 @@ Runs on Python 3.9 (the CLI's floor): no tomllib, no match statements.
     python program_set.py join      --set set.toml --program leon=<folder>
                                     --program claire=<folder> --out <folder>
                                     [--set-disc N=<path>]... [--record <file>]
+    python program_set.py kit-check <kit folder> <kit folder> [--json]
 """
 
 from __future__ import annotations
@@ -567,6 +568,35 @@ def shared_settings(text: str) -> str:
     return "\n".join(out) + "\n"
 
 
+class Disagreement(SetError):
+    """The programs carry one path with different bytes. `files` lists every
+    such path: {"path", "sha256": {program: digest}}."""
+
+    def __init__(self, files: List[Dict[str, Any]]) -> None:
+        self.files = files
+        named = "; ".join(f"{row['path']} ({' and '.join(row['sha256'])})" for row in files)
+        what = named if len(files) == 1 else f"{len(files)} files: {named}"
+        super().__init__(f"The programs of this set disagree about {what}. One folder can hold one copy. "
+                         "Make the kits agree, or add the file to the known per-build list if the difference "
+                         "is harmless.")
+
+
+def disagreements(spec: Dict[str, Any], folders: Dict[str, Path]) -> List[Dict[str, Any]]:
+    """Every path two or more programs carry with different bytes, except the
+    known per-build files and the line-union files. Sorted by path; each row
+    names every program that carries the path and its hash."""
+    carriers: Dict[str, Dict[str, str]] = {}
+    for program in spec["programs"]:
+        name = program["program"]
+        folder = Path(folders[name])
+        for relative in payload_files(folder):
+            if relative in LINE_UNIONS or relative in KNOWN_VARIANTS:
+                continue
+            carriers.setdefault(relative, {})[name] = sha256(folder / relative)
+    return [{"path": relative, "sha256": hashes} for relative, hashes in sorted(carriers.items())
+            if len(set(hashes.values())) > 1]
+
+
 def join_products(spec: Dict[str, Any], products: Dict[str, Path], out: Path, *,
                   discs: Optional[List[Any]] = None,
                   log: Callable[[str], None] = lambda message: None) -> Dict[str, Any]:
@@ -602,6 +632,13 @@ def join_products(spec: Dict[str, Any], products: Dict[str, Path], out: Path, *,
     if any(path is None for path in set_discs):
         unnamed = [s for s, p in zip(spec["serials"], set_discs) if p is None]
         raise SetError("no disc path is known for: " + ", ".join(unnamed))
+
+    # Every disagreement is found before anything is written, and all of them
+    # are reported in one stop: a kit author who has to rebuild both programs
+    # to see the next file pays one build per file.
+    differing = disagreements(spec, folders)
+    if differing:
+        raise Disagreement(differing)
 
     out.mkdir(parents=True, exist_ok=True)
     first = spec["programs"][0]["program"]
@@ -643,9 +680,9 @@ def join_products(spec: Dict[str, Any], products: Dict[str, Path], out: Path, *,
                     relative, {"kept": first, "sha256": {first: written[relative]}})
                 entry["sha256"][name] = digest
                 continue
-            raise SetError(f"The programs of this set disagree about {relative} ({first} and {name}). One folder "
-                           "can hold one copy. Make the kits agree, or add the file to the known per-build list "
-                           "if the difference is harmless.")
+            # Not reachable while the check above runs first; kept so a file
+            # that changes during the join still stops it.
+            raise Disagreement([{"path": relative, "sha256": {first: written[relative], name: digest}}])
 
     per_program = []
     for program in spec["programs"]:
@@ -684,6 +721,77 @@ def join_products(spec: Dict[str, Any], products: Dict[str, Path], out: Path, *,
                   serials=list(spec["serials"]), set_discs=[str(p) for p in set_discs],
                   per_program=per_program)
     return record
+
+
+# ---- the kits of a set, before any build ------------------------------------
+
+# What a kit itself puts into the folder its program is built in, and so into
+# the set's folder. Everything else there comes from the framework, which the
+# programs of a set share.
+KIT_SHARED_FILES = {
+    "game_options.toml": "the build copies it beside the executable",
+    "VERSION": "it becomes psx_game_version.txt",
+}
+KIT_SHARED_FOLDERS = {
+    "mods/preloaded/packages": "a mod package of this name is staged under mods/bundled by each program",
+    "launcher_assets": "the launcher's artwork is staged under assets",
+}
+KIT_NOTICE_PREFIXES = ("LICENSE", "COPYING", "NOTICE", "THIRD_PARTY")
+KIT_NOTICE_REASON = "a licence or notice file: a release folder carries it under licenses/kit"
+KIT_SKIPPED_FOLDERS = (".git", "psxrecomp", "recomp-ui", "generated", "disc", "prepared_disc", "dist",
+                       "saves", "cache", ".cache")
+
+
+def kit_shared_reason(relative: str) -> str:
+    """Why a kit file lands at one path for every program of a set; "" for a
+    file each program keeps to itself (its recipe, seeds, sources)."""
+    if relative in KIT_SHARED_FILES:
+        return KIT_SHARED_FILES[relative]
+    for folder, reason in KIT_SHARED_FOLDERS.items():
+        if relative.startswith(folder + "/"):
+            return reason
+    if relative.rsplit("/", 1)[-1].upper().startswith(KIT_NOTICE_PREFIXES):
+        return KIT_NOTICE_REASON
+    return ""
+
+
+def kit_files(kit: Path) -> List[str]:
+    found = []
+    for path in Path(kit).rglob("*"):
+        parts = path.relative_to(kit).parts
+        if any(part in KIT_SKIPPED_FOLDERS or part.startswith("build") for part in parts[:-1]):
+            continue
+        if path.is_file():
+            found.append("/".join(parts))
+    return sorted(found)
+
+
+def compare_kits(kits: Dict[str, Path]) -> Dict[str, Any]:
+    """The join's rule applied to the kits of a set, without a build.
+
+    `shared` lists the files that reach the set's folder from the kits and
+    differ between them: each one stops the join after both programs are built.
+    `own` lists the other files that differ; each program keeps its own.
+
+    This sees what the kits contribute. It cannot see a difference a build
+    creates; the join's own check covers that.
+    """
+    carriers: Dict[str, Dict[str, str]] = {}
+    for name, kit in kits.items():
+        if not Path(kit).is_dir():
+            raise SetError(f"not a kit folder: {kit}")
+        for relative in kit_files(Path(kit)):
+            carriers.setdefault(relative, {})[name] = sha256(Path(kit) / relative)
+    shared, own = [], []
+    for relative, hashes in sorted(carriers.items()):
+        if len(set(hashes.values())) < 2:
+            continue
+        reason = kit_shared_reason(relative)
+        if reason:
+            shared.append({"path": relative, "why": reason, "sha256": hashes})
+        else:
+            own.append(relative)
+    return {"kits": {name: str(kit) for name, kit in kits.items()}, "shared": shared, "own": own}
 
 
 # ---- starting each program --------------------------------------------------
@@ -1036,9 +1144,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     join.add_argument("--program", action="append", default=[], metavar="NAME=FOLDER")
     join.add_argument("--set-disc", action="append", default=[], metavar="N=PATH")
     join.add_argument("--out", required=True)
-    join.add_argument("--record", default="", help="write the join's record here as JSON (default: stdout)")
+    join.add_argument("--record", default="", help="write the join's record here as JSON (default: stdout); "
+                                                   "after a disagreement it holds the list of files")
+    kits = commands.add_parser(
+        "kit-check", help="before any build: list the files the kits of a set would disagree about in one folder")
+    kits.add_argument("kit", nargs="+", metavar="[NAME=]FOLDER", help="each program's kit, two or more")
+    kits.add_argument("--json", action="store_true", help="print the whole comparison as JSON")
     args = parser.parse_args(argv)
     try:
+        if args.command == "kit-check":
+            named: Dict[str, Path] = {}
+            for value in args.kit:
+                name, sep, folder = value.partition("=")
+                # NAME=FOLDER, or a bare folder (a Windows drive letter is not a name)
+                if not sep or len(name) < 2 or "/" in name or "\\" in name:
+                    name, folder = Path(value).name, value
+                if name in named:
+                    raise SetError(f"two kits are named {name}; give NAME=FOLDER")
+                named[name] = Path(folder)
+            if len(named) < 2:
+                raise SetError("kit-check takes the kits of a set: two or more folders")
+            result = compare_kits(named)
+            if args.json:
+                print(json.dumps(result, indent=2, sort_keys=True))
+            else:
+                for row in result["shared"]:
+                    print(f"differs: {row['path']} ({' and '.join(row['sha256'])}): {row['why']}")
+                print(f"{len(result['shared'])} file(s) the programs would disagree about in one folder; "
+                      f"{len(result['own'])} other differing file(s) stay with each program")
+            return 1 if result["shared"] else 0
         if args.command == "check":
             print(json.dumps(_public(load_set(Path(args.set_file))), indent=2, sort_keys=True))
             return 0
@@ -1059,8 +1193,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             products[name.strip()] = Path(folder.strip())
         given = parse_set_disc_args(args.set_disc)
         discs = [given.get(n) for n in range(1, len(spec["serials"]) + 1)] if given else None
-        record = join_products(spec, products, Path(args.out), discs=discs,
-                               log=lambda message: print(message, file=sys.stderr))
+        try:
+            record = join_products(spec, products, Path(args.out), discs=discs,
+                                   log=lambda message: print(message, file=sys.stderr))
+        except Disagreement as stop:
+            if args.record:      # nothing was joined; the record says why, file by file
+                Path(args.record).write_bytes(
+                    (json.dumps({"disagreements": stop.files}, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+            raise
         text = json.dumps(record, indent=2, sort_keys=True) + "\n"
         if args.record:
             Path(args.record).write_bytes(text.encode("utf-8"))
