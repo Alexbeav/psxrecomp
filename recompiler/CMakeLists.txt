@@ -1084,11 +1084,19 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cli_prune_keeps_product.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # A product that setup builds ends with the licenses/ folder a build
-        # host's product has (PS1B-333).
+        # host's product has, and the step that writes it never reads its own
+        # output, wherever the product folder is (PS1B-333).
         add_test(
             NAME setup_product_notices
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_product_notices.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The tool behind source_tree_snapshot and source_tree_unchanged (see
+        # runtime/source_tree_check.cmake) must itself fail on a dirty tree.
+        add_test(
+            NAME source_tree_clean_tool
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_source_tree_clean.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME cli_diagnostic_only
@@ -1457,4 +1465,13 @@ endif()
 if(BUILD_TESTING)
     add_test(NAME cpu_return_load_view COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cpu_return_load_view.py --cc ${CMAKE_C_COMPILER})
+endif()
+
+# ---- source tree unchanged by the suite (after the last add_test) -----------
+# Adds source_tree_snapshot and source_tree_unchanged around every test above.
+# See the module header for the stray folder this exists to catch. OPTIONAL:
+# a tree staged without the module still configures.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/source_tree_check.cmake OPTIONAL)
+if(COMMAND psxrecomp_add_source_tree_check)
+    psxrecomp_add_source_tree_check()
 endif()
