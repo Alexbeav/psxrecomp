@@ -552,8 +552,8 @@ uint32_t source_gpu_runtime_cycles_to_event(void) {
     return next>psx_cycle_count?(uint32_t)(next-psx_cycle_count):1u;
 }
 /* Slice deadline for the precise-slice guard (step 2 of the TAS speed task).
- * The service clock's own 128-cycle re-arm is the source emulator's update
- * quantum, not a guest-visible instant: the OWN ticks only progress GPU
+ * The service clock's own 128-cycle re-arm is the oracle's service
+ * interval, not a guest-visible instant: the OWN ticks only progress GPU
  * command work and the draw raster, which every MMIO access re-syncs before
  * observing, and the service loop replays the same tick sequence at the next
  * service point. What a compiled block must NOT run across: the raster phase

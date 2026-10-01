@@ -3215,8 +3215,8 @@ void gpu_vblank_tick(void) {
      * First consumer
      * is OpenBIOS's shell waitVSync, which polls for the alternating
      * (bit31,bit13) = (1,0)/(0,1) pattern on real hardware — under
-     * PCSX-Redux it never runs this path (pcsx_present() short-circuits to
-     * the vblank-IRQ wait, and Redux holds bit13 constant at 1), so this
+     * PCSX-Redux it never runs this path (that host takes a shortcut to
+     * the vblank-IRQ wait and holds bit13 constant at 1), so this
      * poll first became reachable in this runtime. */
     if (vertical_interlace)
         interlace_field = (lcf ^ 1) & 1;

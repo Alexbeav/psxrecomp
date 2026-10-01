@@ -2,11 +2,10 @@
 
 No retail media required. Pass C compiler and a private output directory.
 
-Oracle for the expectations (beetle-psx mednafen/psx/cdc.cpp): PS_CDC::ReadBase answers
-MakeStatus(true) + ERRCODE_BAD_COMMAND (0x40) on CDCIRQ_DISC_ERROR whenever !IsPSXDisc,
-before any mode-dependent path, and IsPSXDisc is false for media that SetDisc got no
-SYSTEM.CNF disc id for (an audio CD).  So the rejection must hold for EVERY Setmode byte,
-the CDDA bit included.
+Expectation: a data read on a disc with no SYSTEM.CNF disc id (an audio CD) answers INT5
+with status|error and error byte 40h, before any mode-dependent path. So the rejection must
+hold for EVERY Setmode byte, the CDDA bit included. [NOT OBSERVED: no C fixture covers an
+audio-only disc; see the comment on reject_audio_disc_data_read in cdrom.c.]
 """
 from pathlib import Path
 import subprocess, sys

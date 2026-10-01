@@ -104,46 +104,51 @@ Per ChatGPT (validated) + standard practice:
   reach FMV/title); calibrate the shared model against Beetle/psx-spx. Pin bump is
   user-gated.
 
-## 3b. Cycle-cost model SOURCE (no clean-room needed — transcribe + verify)
+## 3b. Cycle-cost model source
 
-The HW-intended cycle model is documented AND available as reference source we
-already have in-tree (our oracle's own code). Stage-2 = transcribe the NUMBERS
-(facts, not GPL-protected expression; also in psx-spx) into OUR shared cost
-function, then VERIFY each against Beetle at runtime. Do NOT paste Beetle code
-(architecture differs + GPLv2 hygiene); write our own informed by the facts.
+The cycle model takes its numbers from PSX-SPX and from oracle observation. No
+emulator source is read, copied or transcribed (A1 rule, 2026-09-26; two-team
+clean-room method, 2026-09-27).
 
-Extraction map — `psxrecomp/beetle-psx/mednafen/psx/` (main checkout):
-- **CPU base / instruction fetch:** cpu.cpp `ReadInstruction()` (~L534) — icache
-  model: `timestamp += 4` cache-disabled (0xA000_0000+), `+3` on cache miss/fill,
-  `+1` per fill word, near-0 on hit. For a static recompiler this becomes a
-  per-block fetch-cost constant (assume cache-enabled steady state; calibrate).
-- **Memory wait-states:** cpu.cpp `ReadMemory()` (~L365) / `WriteMemory()` (~L454)
-  — `timestamp += (ReadFudge>>4)&2`, the `lts` delta from `PSX_MemRead*` is the
-  region wait-state; `LDAbsorb = lts - timestamp` is the load-delay absorb. Charge
-  in OUR psx_read/write path by region (RAM fast, BIOS ROM slow, scratchpad fast,
-  MMIO per-device). Split clean from CPU base (don't double-count).
-- **Mult/Div latency:** cpu.cpp `MULT_Tab24` (~L101), `muldiv_ts_done` (~L154) —
-  mult/div set a completion timestamp; a later MFHI/MFLO stalls until then. Model
-  as a documented latency (mult ~6-13 by operand magnitude via MULT_Tab; div/divu
-  ~36). Encode as instruction cost + optional stall-on-read.
-- **GTE/COP2 per-command cycles:** gte.cpp `GTE_Instruction()` (L1713) returns the
-  count via each op fn (DPCS/MVMVA/NCDS/…). Well-known table (also psx-spx):
-  RTPS=15 RTPT=23 MVMVA=8 SQR=5 OP=6 AVSZ3=5 AVSZ4=6 NCLIP=8 NCDS=19 NCDT=44
-  NCCS=17 NCCT=39 NCS=14 NCT=30 CC=11 CCS? CDP=13 DPCS=8 DPCT=17 DCPL=8 INTPL=8
-  GPF=5 GPL=5 (verify each against gte.cpp op-fn returns + psx-spx before use).
-- **Timers (already partly faithful):** timer.cpp — divider ratios already used
-  (T1 hblank ÷2146 etc.); move to on-demand counter = f(global cycles) at read.
+The first version of the model (2026-06) took its numbers from the oracle core's
+source. T172 replaced that code with independent implementations. Each has a
+provenance record under `runtime/tests`:
+- per-instruction base, dependencies and the load interlock: `psx_cyc.h`
+  (`cpu_timing_provenance.json`) and `psx_instr_cost.h`
+  (`instr_cost_provenance.json`);
+- instruction fetch and I-cache: `psx_icache.c` (`icache_provenance.json`);
+- memory wait-states: `memory_timing_provenance.json`;
+- multiply/divide and GTE command latencies: `psx_cycles.c`, cited to PSX-SPX and
+  the PS1B-185 oracle fixtures.
+The load-timing interlock is accepted as an oracle-fitted model (PS1B-217); its
+receipts are in `accuracy/load_readfudge_ldabsorb.md`.
+
+Where each part comes from:
+- **CPU base / instruction fetch:** an I-cache model measured on the ruler loops:
+  no charge on a hit, a fixed charge for uncached (KSEG1) fetches, a fill charge
+  on a miss. For a static recompiler this becomes a per-block fetch-cost constant
+  (assume cache-enabled steady state; calibrate).
+- **Memory wait-states:** by region (RAM fast, BIOS ROM slow, scratchpad fast,
+  MMIO per-device), measured on ruler #2 and the memory-timing fixtures. Split
+  clean from CPU base (don't double-count).
+- **Mult/Div latency:** mult/div set a completion deadline; a later MFHI/MFLO
+  stalls until then. The latencies are oracle-fixture values (`psx_cycles.c`).
+  Encode as instruction cost + optional stall-on-read.
+- **GTE/COP2 per-command cycles:** the PSX-SPX GTE command table, each value
+  checked against an oracle fixture before use (`psx_cycles.c` holds the values
+  in use).
+- **Timers (already partly faithful):** PSX-SPX "Timers"; divider ratios already
+  used (T1 hblank ÷2146 etc.); move to on-demand counter = f(global cycles) at read.
 
 Build order for the model (P3 → Stage-2):
 1. Shared header (single source of truth) consumed by interp (runtime) AND
    recompiler (it already includes ../../runtime/include/*.h): identity first
    (cost=1) → regen → prove byte-identical generated cycle charges (zero behaviour
    change) → seam established.
-2. Fill real costs from the extraction map, ONE component at a time, each verified
-   against Beetle at runtime (native cumulative cycles == Beetle at convergence).
+2. Fill real costs ONE component at a time, each verified against the oracle at
+   runtime (native cumulative cycles == oracle at convergence).
 3. Memory wait-states in the psx_read/write path (region table).
-DO each transcription with the Beetle source open + a runtime cross-check; a wrong
-cycle number CREATES divergence, so verify, don't rush.
+A wrong cycle number CREATES divergence, so verify, don't rush.
 
 ## 3c. STAGE 2 — full hardware cycle accuracy (the goal; -8 is DONE/past)
 
@@ -180,21 +185,22 @@ First concrete target: make the 0x80017FC4 inter-hit Δ 46 -> 91 (== Beetle).
   That gives rigorous per-component attribution instead of an opaque multi-fn window.
   Only then resume adding components (fetch / mult-div-stall / GTE / load-absorb).
 
-### Components to transcribe (from in-tree Beetle + psx-spx; verify each by Δ)
+### Components to model (numbers from psx-spx and oracle observation; verify each by Δ)
 The ~2x gap is dominated by what 1/insn ignores. Implement one at a time, re-measure Δ:
 1. **Memory access wait-states (biggest lever).** Real loads/stores cost >1 cycle by
-   region (RAM/BIOS-ROM/scratchpad/MMIO). Beetle: cpu.cpp ReadMemory `lts` delta +
-   LDAbsorb (load-delay). Charge in the load/store path: interp exec_one's mem ops AND
-   the recompiler-emitted cpu->read/write (or a per-load/store charge). Region table.
-2. **Instruction fetch / I-cache timing.** Beetle ReadInstruction (+1 hit / +fill on
-   miss). For the recompiler, fold a per-block fetch-cost constant.
-3. **Mult/Div latency.** Beetle MULT_Tab/muldiv_ts_done: mult ~6-13, div ~36, stall on
-   HI/LO read. Encode in psx_instr_base_cycles (+ optional stall-on-read).
-4. **GTE/COP2 per-command.** Beetle gte.cpp GTE_Instruction table (RTPS=15, NCDS=19,
+   region (RAM/BIOS-ROM/scratchpad/MMIO), and a load's cost overlaps the
+   instructions that follow (the load-delay give-back). Charge in the load/store
+   path: interp exec_one's mem ops AND the recompiler-emitted cpu->read/write (or
+   a per-load/store charge). Region table.
+2. **Instruction fetch / I-cache timing.** No charge on a hit, a fill charge on a
+   miss. For the recompiler, fold a per-block fetch-cost constant.
+3. **Mult/Div latency.** mult ~6-13, div ~36, stall on HI/LO read. Encode in
+   psx_instr_base_cycles (+ optional stall-on-read).
+4. **GTE/COP2 per-command.** The psx-spx GTE command table (RTPS=15, NCDS=19,
    NCDT=44, ...). Encode in psx_instr_base_cycles for COP2 ops.
 All land in the single-source psx_instr_base_cycles (opcode costs) + a memory-path
 wait-state charger (address-dependent). Both backends consume the same model (seam
-already in place). Each component: transcribe -> regen/build -> Δ-compare vs Beetle
+already in place). Each component: model -> regen/build -> Δ-compare vs the oracle
 on a fixed region -> next.
 
 ### Caveats
@@ -960,7 +966,7 @@ on a fixed region -> next.
 
 - **2026-06-27 (I-cache fetch — MODEL built + interp-validated EXACT; Stage 1 of 2):**
   New runtime/src/psx_icache.c: faithful direct-mapped (4 KB / 256-line) instruction-cache
-  fetch cost, transcribed from Beetle PS_CPU::ReadInstruction — HIT +0 (no give-back clear),
+  fetch cost (first version; rewritten in T172, icache_provenance.json) — HIT +0 (no give-back clear),
   KSEG1/uncached +4, cached miss +3 + refill from the missing word to the line end (earlier
   words stay invalid), miss clears the load give-back. Mirrors only the per-word TV tag array.
   Wired into the dirty-RAM interp (exec_one) per instruction, charged BEFORE §1 (Beetle order).
@@ -1003,7 +1009,7 @@ on a fixed region -> next.
   ld_which_t=rt give-back; MTC2/CTC2 keep stall-only `psx_gte_stall`); MFC0 arms
   ld_absorb=0/ld_which_t=rt (suppresses a following load's fudge); `psx_muldiv_stall` now
   CONSUMES read_absorb during the MFLO/MFHI stall + the muldiv_ts_done-1 off-by-one — all
-  transcribed from Beetle cpu.cpp:1332-1341/1723-1736, in both emitters + the interp.
+  in both emitters + the interp (first version; psx_cyc.h was rewritten in T172).
   **All 12 ruler #2 loops == Beetle at steady state** (gte_rtps 18→14, gte_nclip 11→7,
   gte_read_use 19→14, ld_div 45→49 fixed; the 8 CPU-load/alu/div/mult loops held); ruler #1
   delta 0; Tomba 2 FMV plays (no regression). The R3000A load-delay + GTE/muldiv interlock
@@ -1017,7 +1023,7 @@ on a fixed region -> next.
   `psx_cyc_load_word/half/byte` + `psx_cyc_lwc2_read` in memory.c do the Beetle ReadMemory
   timing (clear give-back, +2 fudge iff predecessor committed no load, region RAM +3 +
   completion +2/+1 as the LDAbsorb give-back, scratchpad +0). The pure dep/res classifier
-  `psx_cyc_dep_res_mask` (transcribed from Beetle per-opcode GPR_DEP/RES) lives in
+  `psx_cyc_dep_res_mask` (first version; rewritten in T172, instr_cost_provenance.json) lives in
   psx_instr_cost.h. Wired into the dirty interp + BOTH static emitters (code_generator game,
   full_function_emitter+strict_translator BIOS); loads now route value reads through the
   UNCHARGED psx_read_* (cpu->read_* rewired in main.cpp; the flat +4 charge_main_ram_read is
@@ -1058,7 +1064,7 @@ on a fixed region -> next.
   GTE (COP2) command latency + stall-on-COP2-access. New CPUState.gte_ts_done;
   a GTE command arms it (now + cost-1, serializing back-to-back ops); any COP2
   reg access (MFC2/CFC2/MTC2/CTC2/LWC2/SWC2) stalls to it. Cost table
-  (psx_cycles.c) transcribed+verified from beetle gte.cpp op returns (note
+  (psx_cycles.c; now cited to PSX-SPX and the PS1B-185 oracle fixtures) (note
   AVSZ4=5 not the psx-spx-doc's 6). Set armed in the shared gte_execute (both
   backends); stall emitted at every COP2 reg-access site in both emitters + the
   interp (offset cancels like muldiv). Added gte_rtps/gte_nclip loops to ruler
@@ -1151,8 +1157,9 @@ on a fixed region -> next.
 - **2026-06-26 (RULER #1 BUILT + load double-count bug found & fixed):** Built the
   game-independent BIOS-kernel cycle ruler the §3c "TOOLING NEXT" called for, and
   it immediately paid off. Details:
-  - **New oracle-model doc `CYCLE_MODEL_BEETLE.md`** — transcribed the full R3000A
-    cycle model verbatim from in-tree Beetle cpu.cpp (base +1/insn minus load-delay
+  - **New oracle-model doc `CYCLE_MODEL_BEETLE.md`** (removed from the tree on
+    2026-10-01, PS1B-216) — the full R3000A
+    cycle model (base +1/insn minus load-delay
     absorb; I-cache fetch +0 hit / +4 KSEG1 / +3+refill miss; ReadMemory loads
     scratchpad=0/region-wait+2, posted stores; mult 6-13 / div 36 stall-on-MFHI/LO;
     GTE per-command table). This is the calibration ground truth.
@@ -1208,7 +1215,7 @@ on a fixed region -> next.
   so same-PC cycle comparison needs a "capture guest_cycles when guest reaches PC X"
   hook on BOTH servers (native has run_to_frame/step; Beetle needs a PC-watch). Then
   diff cycles@PC native vs Beetle to see the residual drift, and Stage-2 cost
-  transcription verified against it.
+  costs verified against it.
 - **2026-06-26 (P3 step 1 DONE — single-source cost seam, identity):** Created
   runtime/include/psx_instr_cost.h `psx_instr_base_cycles(insn)` (identity, 1/insn).
   Routed BOTH backends through it: interp (exec_delay_slot, dirty-dispatch loop,
@@ -1228,7 +1235,7 @@ on a fixed region -> next.
   a `guest_cycles` debug command; (3) rebuild Beetle static lib + psx-beetle
   (slow: `cd beetle-psx && make platform=mingw_x86_64 STATIC_LINKING=1
   HAVE_LIGHTREC=0 -j8`); (4) comparator: native psx_cycle_count (already in
-  freeze_check) vs Beetle guest_cycles at same-PC convergence. THEN transcribe
+  freeze_check) vs Beetle guest_cycles at same-PC convergence. THEN add
   Stage-2 costs (mult/div, GTE table, mem wait-states) one at a time, each verified
   by this comparator. Native cycle side already exists; Beetle side is the gap.
 - **2026-06-26 (holistic cycle-model audit, post-P2):** Audited ALL cycle-charging

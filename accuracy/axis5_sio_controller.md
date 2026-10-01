@@ -255,7 +255,7 @@ every title — which is exactly what the LEGACY comment predicted, letting the
 >
 > **Prior status 2026-06-27 (branch wt/tomba2-axis5-controller):** Fixes 1, 2, 3 IMPLEMENTED
 > in sio.c (0x43 live frame; 0x45 live analog byte; 0x44 analog-mode-lock + hybrid-flip
-> lock gate), transcribed from dualshock.cpp. Validated no-regression on Tomba 2
+> lock gate). These rules are now cited to oracle fixtures P1-P4 (PS1B-215). Validated no-regression on Tomba 2
 > (digital pad, pad 0xFFFF at rest, boots). These are gated to the MODERN SM and leave
 > Tomba 1's legacy path untouched, so they're safe to ship; MMX6 (modern SM) gains the
 > phantom-dash fix. **Fix 4 (retire `g_pad_legacy_cfg`) is GATED on a behavioral

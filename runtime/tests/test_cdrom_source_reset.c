@@ -1,5 +1,7 @@
-/* Source-profile 0A reset contract. Expected deadlines/state come from the
- * original 2.2.2 Command_Reset/update path and passive 699..708 state capture.
+/* Source-profile 0A reset contract for the octoshock-2.2.2 sub-models. The
+ * 1,136,000-cycle deadline is consistent with the Init second response measured
+ * on the Octoshock 2.3 oracle (C1-C9 row 9: about 1,135,976 cycles after INT3).
+ * The retained state at frames 699..708 comes from a passive state capture.
  * Only synthetic controller data. No title, BIOS or restored game state. */
 #define main source_explicit_baseline_main
 #include "test_cdrom_source_explicit_timing.c"

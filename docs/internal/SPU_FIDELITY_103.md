@@ -166,9 +166,10 @@ always-on ring query, not an arm-then-capture.
 
 Separate from this work, and worth a decision:
 
-- `runtime/src/spu.c` `calc_vc_delta()` is commented *"Ported verbatim from
-  Beetle's CalcVCDelta"*. This is the ADSR rate decoder, and it is in every
-  released binary. Same category as PR #16, already shipped.
+- `runtime/src/spu.c` carried an ADSR rate decoder whose comment said it was
+  ported from the reference core, and it was in every released binary. Resolved
+  by PS1B-192: the envelope was rewritten from PSX-SPX and the S-series oracle
+  fixtures and now lives in `spu_envelope.h`.
 - `runtime/include/spu_gauss.h` cites *"No$PSX docs / DuckStation
   core/spu.cpp"*.
 

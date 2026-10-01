@@ -518,7 +518,8 @@ bool FullFunctionEmitter::emit_function(
     // T110 — exact-EPC resume points.
     //
     // An interrupt that becomes deliverable at a ROM instruction must take
-    // COP0.EPC = that exact instruction (hardware, BizHawk). The runtime used
+    // COP0.EPC = that exact instruction (hardware; also observed on the
+    // BizHawk oracle). The runtime used
     // to defer such a delivery to the next re-enterable boundary because the
     // static dispatch could only re-enter at a block leader, which MOVED the
     // architectural EPC: Abe's Oddysee took an IRQ at BFC041F8 (`bne` closing
@@ -570,7 +571,8 @@ bool FullFunctionEmitter::emit_function(
 
     // Per-instruction R3000A load-delay interlock (cycle_per_insn mode): §1 base +
     // GPR_DEPRES + DO_LDS for one instruction, emitted BEFORE its body so §1 precedes
-    // any muldiv/GTE deadline stall (Beetle order). CPU loads (op 0x20-0x26) are
+    // any muldiv/GTE deadline stall (the order fitted to the oracle ruler loops).
+    // CPU loads (op 0x20-0x26) are
     // SKIPPED — psx_cyc_load_* runs their full interlock inside the body. The dep/res
     // mask is a gen-time literal. Replaces the old flat per-instruction +1.
     auto emit_insn_interlock = [&](uint32_t w) {

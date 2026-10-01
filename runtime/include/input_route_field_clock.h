@@ -4,11 +4,16 @@
 #include <stdint.h>
 
 /* Cold-boot comparison clock, independent of guest memory and input contents.
- * Behavioral constants: original Octoshock 2.2.2 GPU, NTSC hardware clock
- * ratio 103896/65536; alternating 3412/3413 GPU clocks per scanline;
- * 263 progressive lines, 263/262 interlaced lines. This is a field-duration
- * profile, not its complete scanline/IRQ/CPU timing implementation.
- * Independently written arithmetic; no reference implementation copied.
+ * NTSC field-duration profile. PSX-SPX "Nominal Video Clock" and "Vertical
+ * Video Timings" give the NTSC video clock (53.693175 MHz against the
+ * 33.8688 MHz CPU clock) and 263 lines per progressive field, 262.5 per
+ * interlaced field. The ratio 103896/65536 GPU clocks per CPU cycle and the
+ * alternating 3412 / 3413 GPU clocks per line are fitted to oracle
+ * observation, not taken from PSX-SPX (which says 3413, "or 3413.6 or so").
+ * They are the same constants as the measured raster clock
+ * (runtime/tests/raster_clock_provenance.json). No current route selects this
+ * profile; input_route_field_clock_test pins the arithmetic. This is a
+ * field-duration profile, not a complete scanline, IRQ or CPU timing model.
  */
 typedef struct InputRouteFieldClock {
     uint32_t remainder;

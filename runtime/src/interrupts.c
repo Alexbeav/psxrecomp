@@ -1881,9 +1881,11 @@ irq_deliver_eval:
             extern int psx_scheduler_top_level_resume_active(void);
             if (psx_scheduler_top_level_resume_active()) fetch_pc = cpu->pc;
         }
-        /* Source IPCache selects COP2 itself even with an IRQ pending. Do not
-         * fetch/charge a synthetic interrupt operation at that opcode; the
-         * normal executor owns its effects and the next recognition point. */
+        /* Source profile: a pending interrupt does not pre-empt a COP2
+         * instruction; the instruction runs first. Do not fetch/charge a
+         * synthetic interrupt operation at that opcode; the normal executor
+         * owns its effects and the next recognition point. [Held in place by
+         * the TAS route replays; no isolated fixture.] */
         if(fetch_pc && !psx_irq_opcode_eligible(fetch_pc))
             PSX_CHECK_INTERRUPTS_RETURN();
         uint32_t fetch_phys = fetch_pc & 0x1FFFFFFFu;

@@ -84,7 +84,7 @@ Status: STRONG (recompiler core; proven byte-identical to interp on many funcs).
 ## Axis 2 — Cycle/timing  ← ACTIVE (see FAITHFUL_TIMING_PLAN.md)
 
 Status: Stage-1 (1 cycle/insn, single-source seam in place); Stage-2 in progress.
-Oracle model fully transcribed in `CYCLE_MODEL_BEETLE.md`. Game-independent
+The cycle model is described in `FAITHFUL_TIMING_PLAN.md` §3b. Game-independent
 BIOS-kernel ruler BUILT (region [0x80001C5C→0x80001CA4]); per-block-leader cycle
 observe added to the recompiler so ANY block leader is anchorable on both backends.
 - [x] Single-source `psx_instr_base_cycles` seam (identity), both backends.
@@ -177,7 +177,7 @@ bug**, not timing.
     tool LABELS these deltas, it does not silence real ones.
     - **CD controller version (Test `19h`,`20h`)**: we return `94 09 19 C0` (real
       SCPH-1001 sub-CPU, 1994-09-19, per psx-spx "CDROM Test Commands"). Beetle
-      hardcodes `97 01 10 C2` (`cdc.cpp:2253`, a later PSone board) regardless of
+      reports `97 01 10 C2` (a later PSone board) regardless of
       BIOS. Version byte `< 95h` keeps shell CD-init flag `[0xA000DFFC]` clear;
       `>= 95h` sets it and forces a spurious boot ReadTOC. So native (94h) issues
       NO ReadTOC where Beetle (97h) does → expect a CDROM event delta at CD-init,

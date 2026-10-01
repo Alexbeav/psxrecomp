@@ -1560,8 +1560,9 @@ static void mmio_write16(uint32_t addr, uint16_t val) {
 
 static uint8_t mmio_read8_impl(uint32_t addr) {
     SHADOW_NOTE_MMIO();
-    /* The source Timer1 read decodes the register before selecting its lane.
-     * Reading an upper mode lane still performs the mode read-to-clear. */
+    /* Source profile: a Timer1 read decodes the register before it selects
+     * its byte lane. Reading an upper mode lane still performs the mode
+     * read-to-clear. [Held in place by the TAS route replays.] */
     if(source_gpu_runtime_active() && timers_source_raster_enabled() &&
        addr>=0x1f801110u && addr<=0x1f80111fu)
         return (uint8_t)(timers_read(addr&~3u) >> (8u*(addr&3u)));
@@ -2163,7 +2164,7 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
  * ruler loops (tools/cycle_testrom ruler #2 and the BIOS-kernel ruler #1; receipts
  * in accuracy/load_readfudge_ldabsorb.md), charges: a +2 "fudge" iff the predecessor committed no
  * load, the region wait (main RAM = +3), and a completion cost (+2 CPU /
- * +1 LWC2); the (region+completion) becomes a per-register LDAbsorb "give-back" that
+ * +1 LWC2); the (region+completion) becomes a per-register ld_absorb "give-back" that
  * following instructions consume instead of their own +1 base (pipeline write-back
  * overlap). The §1 base + GPR_DEPRES + DO_LDS that bracket this run in psx_cyc.h.
  *

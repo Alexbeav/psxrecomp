@@ -13,8 +13,10 @@ traversal order, oversize/degenerate rejection, other command admission,
 clipping-area bound and lifecycle guards remain in place. Values outside the
 possible vertex-plus-offset range remain rejected.
 
-CLAIM / DERIVED-FROM: original Octoshock 2.3 DrawTriangle / DrawSpan,
-upstream a15b31a46bdac27d843d3ebbc5a860012d8452fb. This is source compatibility.
+ORACLE CORE: Octoshock 2.3 (BizHawk tag 2.3, commit
+a15b31a46bdac27d843d3ebbc5a860012d8452fb). This is oracle compatibility. The
+polygon span helper was rewritten from measured behaviour in T172
+(`runtime/tests/gpu_polygon_provenance.json`).
 
 The authored CPU/MMIO fixture covers 12 ordinary, offscreen, wrapping and sign
 boundary geometries, all 3 texture depths, separate/overlapping texture data,

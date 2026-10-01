@@ -17884,8 +17884,11 @@ session_reboot:
     /* Initialize CPU state. */
     CPUState cpu;
     std::memset(&cpu, 0, sizeof(cpu));
-    /* R3000A load-delay interlock init (Beetle: BACKED_LDWhich=0x20 = no pending
-     * load; ReadFudge=0 so the first load gets no fudge). Rest is correctly 0. */
+    /* Load-timing interlock at reset (our oracle-fitted model; receipts in
+     * accuracy/load_readfudge_ldabsorb.md): no load is pending (20h is the
+     * "no register" slot). The last-load record stays 0, so the first load
+     * after reset is not charged the two extra cycles of a load that follows
+     * no load. The rest is correctly 0. */
     cpu.ld_which_t = 0x20;
     psx_icache_reset();   /* all I-cache lines cold at reset */
 

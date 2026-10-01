@@ -3,8 +3,8 @@
 The movie was recorded on BizHawk 2.7, whose Octoshock is Mednafen 1.27.1. Mednafen 1.27.1 and
 1.29.0 emulate the PS1 identically (src/psx and src/cdrom differ only in messages, VFS and
 host I/O), so the device models are the Nymashock 1.29.0 profile Mega Man X5 qualified. The one
-compiler-visible difference is the order of CDC Reset's two random draws, which octoshock.dll
-(MSVC) takes seek-first: --cd-drive-model octoshock-2.7. The two
+difference found by divergence is the order of CD Init's two random draws, which this oracle
+takes seek-jitter first (return 709): --cd-drive-model octoshock-2.7. The two
 places Octoshock's wrapper differs from Nymashock are covered without new models: the CD shell
 bit clears only on GetStat, which is --cd-cold-status-model octoshock-2.2.2; and the DualShock
 takes stick bytes unscaled and checks MODE only when DTR drops, which cannot show because this

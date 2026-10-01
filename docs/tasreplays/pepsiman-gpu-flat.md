@@ -12,10 +12,10 @@ operation, not a preceding guest RAM divergence or a hardware defect claim.
 
 ORACLE: the exact unmodified stock BizHawk2.3 DLL used for the original route;
 SHA256 `749d6dd58430d010e46ae97c628e113adad5f420c05c2ada0ad35e58191781c0`.
-The original [polygon implementation](https://github.com/TASEmulators/BizHawk/blob/2.3/psx/octoshock/psx/gpu_polygon.cpp)
-and [command/pixel contracts](https://github.com/TASEmulators/BizHawk/blob/2.3/psx/octoshock/psx/gpu_common.inc)
-define triangle/quad and blend flags and ignore the raw-texture bit for flat
-untextured polygons. The corpus C11 limited GPU scope remains applicable.
+The oracle accepts flat blended triangles and quads, with or without the
+raw-texture bit, and draws them as flat polygons; the bit applies to textured
+polygons only (PSX-SPX GP0 polygon commands). The corpus C11 limited GPU scope
+remains applicable.
 
 The correction admits the complete flat untextured family: `20–23` and
 `28–2B`. It changes no rasterization, clipping, work formula, mask behavior,
