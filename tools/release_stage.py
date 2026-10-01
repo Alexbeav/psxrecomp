@@ -56,6 +56,7 @@ Usage (see each subcommand's --help):
     python3 tools/release_stage.py cg-tag          ...
     python3 tools/release_stage.py stage-cache     ...
     python3 tools/release_stage.py stage-toolchain ...
+    python3 tools/release_stage.py check-bundled-notices ...
     python3 tools/release_stage.py stage-mods      ...
 """
 
@@ -665,6 +666,9 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
         inner = os.path.join(tcc_tmp, 'tcc')
         shutil.copytree(inner if os.path.isdir(inner) else tcc_tmp,
                         os.path.join(toolchain, 'tcc'), dirs_exist_ok=True)
+        for name in TCC_LEFT_OUT:
+            shutil.rmtree(os.path.join(toolchain, 'tcc', name), ignore_errors=True)
+        stage_tcc_notices(stage, pins, log=log)
 
     recompiler = TOOLCHAIN_RECOMPILER[platform_tag]
     src_recompiler = os.path.join(recomp_dir, recompiler)
@@ -741,7 +745,141 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
         '~%d MB in %d file(s) + %d symlink(s)'
         % (' + tcc' if pins['tcc_url'] else '', total // (1 << 20),
            sum(len(f) for _r, _d, f in os.walk(toolchain)) - links, links))
+    warn_bundled_notices(stage, log=log)
     return toolchain
+
+
+# ---------------------------------------------------------------------------
+# licences of the programs the toolchain bundles
+# ---------------------------------------------------------------------------
+# stage_toolchain unpacks whole programs beside the game: TinyCC (LGPL-2.1) and
+# a Python interpreter. The pinned tcc archive says "See COPYING file" and holds
+# none, so every staged toolchain carried tcc with a statement of its licence
+# and no licence text (PS1B-345). This is the one function every path goes
+# through -- a build host staging a product, a release packager, and the
+# player's machine during setup -- so the licence files are written here.
+#
+# The LGPL text travels in the framework tree (tools/licenses/), which a setup
+# package ships, so the player's machine needs no further download for it.
+# Workbench Studio writes the same two files, byte for byte, for a private
+# product; the notice text and both hashes are pinned by a test in each tree.
+LGPL_21_TEXT = os.path.join(_TOOLS_DIR, 'licenses', 'LGPL-2.1.txt')
+LGPL_21_SHA256 = '20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95'
+TCC_LICENCE_REL = os.path.join('licenses', 'toolchain', 'tcc-COPYING.txt')
+TCC_NOTICE_REL = os.path.join('licenses', 'toolchain', 'tcc-NOTICE.txt')
+# The archive's own example programs: five .c files nothing reads. Left out so
+# that "no source file in a product" is a rule a script can check.
+TCC_LEFT_OUT = ('examples',)
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def tcc_notice(pins):
+    """What a staged product says about the tcc it holds: which release, where its source is.
+
+    One wording for both cases: the archive is unpacked on the build host for a
+    playable product, and on the player's machine, after a download, for a setup
+    package. Our setup package does not contain the tcc binaries.
+    """
+    url = pins.get('tcc_url') or ''
+    archive = url.rsplit('/', 1)[-1]
+    releases = url[:len(url) - len(archive)]
+    version = pins.get('tcc_version') or 'unknown version'
+    return ('TinyCC (tcc) %s\n\n'
+            'This product holds the TinyCC compiler in overlay_toolchain/tcc. The game starts it as a\n'
+            'separate program to compile code on this machine; the game does not link it.\n\n'
+            'Binaries: unmodified, unpacked from %s\n'
+            '  (SHA-256 %s),\n'
+            '  %s\n'
+            '  The archive was unpacked when this product was built, or by its setup on this machine,\n'
+            "  which downloads it from that address. The archive's examples folder is not kept.\n"
+            'Source:   tcc-%s.tar.bz2, at the same address.\n'
+            'Licence:  GNU Lesser General Public License, version 2.1. The text is tcc-COPYING.txt in this folder.\n'
+            % (version, archive, pins.get('tcc_sha256'), releases, version))
+
+
+def stage_tcc_notices(stage, pins, log=print):
+    """Write the LGPL-2.1 text and the notice for a staged tcc. Never raises.
+
+    The text is carried in the tree, so it is missing only when the tree is
+    damaged. That is said in plain words and staging goes on: the toolchain is
+    still usable, and bundled_notice_gaps() reports the missing file.
+    """
+    try:
+        ok = os.path.isfile(LGPL_21_TEXT) and _sha256(LGPL_21_TEXT) == LGPL_21_SHA256
+    except OSError:
+        ok = False
+    if not ok:
+        log('WARNING: this package is damaged: %s is missing or changed, so the licence text of the '
+            'bundled tcc was not written beside the product. Restore the file from the release and '
+            'stage again.' % LGPL_21_TEXT)
+        return False
+    folder = _mkdirs(os.path.join(stage, os.path.dirname(TCC_LICENCE_REL)))
+    shutil.copyfile(LGPL_21_TEXT, os.path.join(stage, TCC_LICENCE_REL))
+    with open(os.path.join(stage, TCC_NOTICE_REL), 'w', encoding='utf-8', newline='\n') as f:
+        f.write(tcc_notice(pins))
+    log('tcc licence staged: %s and %s in %s'
+        % (os.path.basename(TCC_LICENCE_REL), os.path.basename(TCC_NOTICE_REL), folder))
+    return True
+
+
+def _python_licence(python_dir):
+    """The interpreter's own licence file, wherever its distribution keeps it, or None.
+
+    python.org's embeddable zip has LICENSE.txt at its root; a relocatable
+    CPython keeps it below lib/. Found by name rather than by a fixed path.
+    """
+    base = python_dir.rstrip(os.sep).count(os.sep)
+    for dirpath, dirs, files in os.walk(python_dir):
+        if dirpath.count(os.sep) - base >= 3:
+            dirs[:] = []
+        for name in files:
+            if name.lower() in ('license.txt', 'license'):
+                return os.path.join(dirpath, name)
+    return None
+
+
+def bundled_notice_gaps(stage):
+    """Bundled programs under `stage` whose licence file is absent or wrong, as text lines."""
+    toolchain = os.path.join(stage, 'overlay_toolchain')
+    gaps = []
+    if any(os.path.isfile(os.path.join(toolchain, 'tcc', name)) for name in ('tcc.exe', 'tcc')):
+        licence = os.path.join(stage, TCC_LICENCE_REL)
+        rel = TCC_LICENCE_REL.replace(os.sep, '/')
+        if not os.path.isfile(licence) or os.path.getsize(licence) == 0:
+            gaps.append('TinyCC (overlay_toolchain/tcc) needs %s (LGPL-2.1)' % rel)
+        elif _sha256(licence) != LGPL_21_SHA256:
+            gaps.append('TinyCC: %s is not the LGPL-2.1 text' % rel)
+    python_dir = os.path.join(toolchain, 'python')
+    if os.path.isdir(python_dir) and _python_licence(python_dir) is None:
+        gaps.append('the bundled Python (overlay_toolchain/python) has no LICENSE file of its own')
+    return gaps
+
+
+def warn_bundled_notices(stage, log=print):
+    """Say, for each bundled program without its licence file, which file is missing. A warning.
+
+    Not a stop (PS1B-345, 2026-10-01): the same step that stages a program
+    writes its licence file, so a miss means a damaged tree, and a release that
+    wants to enforce it runs `check-bundled-notices --strict`.
+    """
+    gaps = bundled_notice_gaps(stage)
+    for gap in gaps:
+        log('WARNING: bundled program without its licence file: %s' % gap)
+    return gaps
+
+
+def cmd_check_bundled_notices(args):
+    gaps = warn_bundled_notices(args.stage)
+    if not gaps:
+        print('bundled programs: every one under %s has its licence file' % args.stage)
+    return 1 if (gaps and args.strict) else 0
 
 
 def cmd_fetch_pinned(args):
@@ -941,6 +1079,14 @@ def main(argv=None):
     p.add_argument('--platform', choices=sorted(TOOLCHAIN_PINS), default=None)
     p.add_argument('--mingw-bin', default=None, help='Windows only')
     p.set_defaults(func=cmd_stage_toolchain)
+
+    p = sub.add_parser('check-bundled-notices',
+                       help='warn about a bundled program (tcc, Python) under a '
+                            'stage that has no licence file')
+    p.add_argument('--stage', required=True, help='payload staging directory')
+    p.add_argument('--strict', action='store_true',
+                   help='exit 1 when a licence file is missing (default: warn, exit 0)')
+    p.set_defaults(func=cmd_check_bundled_notices)
 
     p = sub.add_parser('stage-mods', help='stage and verify the mod catalog')
     p.add_argument('--build-path', required=True,

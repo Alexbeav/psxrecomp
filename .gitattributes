@@ -11,6 +11,10 @@ tools/tasreplays/spyro2_admission.py text eol=lf
 
 *.sh text eol=lf
 
+# Staging checks this licence text's exact bytes before it copies it beside a
+# product (PS1B-345); a line-ending conversion would fail that check.
+tools/licenses/LGPL-2.1.txt text eol=lf
+
 # git archive writes the commit here, so a snapshot with no .git still knows
 # its framework pin (runtime/framework_identity.cmake).
 runtime/FRAMEWORK_PIN export-subst text eol=lf
