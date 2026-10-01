@@ -27,6 +27,7 @@ import json
 import re
 import struct
 import sys
+import zlib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -34,6 +35,7 @@ DST_SEC = 2352
 USER = 2048
 USER_OFF = 24
 EXE_HDR = 0x800
+EXE_PAGE = 4096
 SYNC = bytes([0x00] + [0xFF] * 10 + [0x00])
 
 
@@ -72,6 +74,12 @@ class DiscProbe:
     # Final Fantasy VII ships one byte-identical executable on three discs
     # under three serials (SCUS-94163/64/65).
     boot_exe_sha256: str = ""
+    # The same program can still hash differently per disc: a set may patch a
+    # disc number or a file name into each disc's copy (Metal Gear Solid Europe
+    # differs by one byte of a path string). The size and the per-page CRCs of
+    # the loaded image let verify_disc_set tell such a copy from another program.
+    boot_exe_size: int = 0
+    boot_exe_page_crc32: list[str] = field(default_factory=list)
     seed_count: int = 0
     seed_addrs: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -213,6 +221,30 @@ def compute_disc_fp(cue_path: Path, tracks: list[CueTrack], files_order: list[st
         )
     canonical = "".join(lines)
     return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def boot_exe_page_crc32(exe: bytes) -> list[str]:
+    """CRC-32 of each 4 KiB RAM page of the image a PS-X EXE loads.
+
+    The image is the `t_size` bytes after the 2048-byte header, which the
+    console copies to `t_addr`. Pages follow RAM page boundaries, so the first
+    and last entries cover a partial page when the load address or the end is
+    not page-aligned. The header's padding is not loaded and is left out; it
+    can hold mastering leftovers that differ between otherwise equal discs.
+    """
+    if len(exe) <= EXE_HDR or exe[:8] != b"PS-X EXE":
+        return []
+    load = struct.unpack_from("<I", exe, 0x18)[0]
+    size = struct.unpack_from("<I", exe, 0x1C)[0]
+    image = exe[EXE_HDR : EXE_HDR + size] if size else exe[EXE_HDR:]
+    out: list[str] = []
+    pos, addr = 0, load
+    while pos < len(image):
+        take = min(EXE_PAGE - (addr % EXE_PAGE), len(image) - pos)
+        out.append(f"{zlib.crc32(image[pos : pos + take]) & 0xFFFFFFFF:08x}")
+        pos += take
+        addr += take
+    return out
 
 
 def scan_jal_seeds(exe: bytes) -> list[int]:
@@ -599,6 +631,8 @@ def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
         notes=notes,
         boot_exe_bytes=exe,
         boot_exe_sha256=hashlib.sha256(exe).hexdigest() if exe else "",
+        boot_exe_size=len(exe),
+        boot_exe_page_crc32=boot_exe_page_crc32(exe),
     )
 
 

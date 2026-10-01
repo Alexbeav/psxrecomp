@@ -1120,6 +1120,13 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  WORKING_DIRECTORY ${PSXRECOMP_ROOT}/tools/new_project_layout)
         set_tests_properties(probe_disc_test PROPERTIES
                  ENVIRONMENT "PYTHONPATH=${PSXRECOMP_ROOT}/tools")
+        # One program patched per disc is one set (Metal Gear Solid Europe's
+        # 2-disc set was refused on a whole-file hash).
+        add_test(NAME verify_disc_set_test
+                 COMMAND ${Python3_EXECUTABLE} -m unittest test_verify_disc_set
+                 WORKING_DIRECTORY ${PSXRECOMP_ROOT}/tools/new_project_layout)
+        set_tests_properties(verify_disc_set_test PROPERTIES
+                 ENVIRONMENT "PYTHONPATH=${PSXRECOMP_ROOT}/tools")
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
             add_test(NAME persisted_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_persisted_disc_path.py --compiler ${CMAKE_CXX_COMPILER})

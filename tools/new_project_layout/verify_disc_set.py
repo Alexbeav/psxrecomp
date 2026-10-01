@@ -8,7 +8,11 @@ and answers one question: can this framework build the set today?
 Two kinds of multi-disc title (see docs/MULTI_DISC.md "Two axes, not one"):
 
   data-only   every disc boots the same program; the later discs are just more
-              data. One recompiled program covers the set.
+              data. One recompiled program covers the set. This includes a
+              program patched per disc: equal header fields and size, with a
+              few pages of the loaded image differing (a disc number, a file
+              name). The whole-file hash differs for such a set; the per-page
+              comparison below is what identifies it.
   N-programs  each disc carries its own boot executable, so the set needs N
               statically recompiled programs selected by mounted serial.
 
@@ -32,22 +36,40 @@ import json
 import sys
 from pathlib import Path
 
-# Fields that together identify the *program* a disc boots. If these agree
-# across every disc, one recompiled program covers the whole set.
+# Fields that give the *shape* of the program a disc boots. If any of these
+# differs between discs, the discs boot different programs.
 #
 # `serial` and `boot_exe` are deliberately NOT here. They name the DISC, not
 # the program: Final Fantasy VII ships ONE byte-identical executable on three
 # discs as SCUS_941.63/.64/.65 under serials SCUS-94163/64/65, so comparing
 # those strings reported three programs where there is one, and refused a set
-# the framework can already build. `boot_exe_sha256` is the program's own
-# identity and answers the question the refusal is actually asking.
-PROGRAM_FIELDS = (
-    "boot_exe_sha256",
+# the framework can already build.
+PROGRAM_SHAPE_FIELDS = (
     "entry_pc",
     "load_address",
     "text_size",
     "stack_base",
+    "boot_exe_size",
 )
+
+# Equal shape is necessary, not sufficient. The content decides:
+#
+#   * equal `boot_exe_sha256`: the same file, one program;
+#   * different hash, and the loaded images differ in a few 4 KiB pages only:
+#     one program patched per disc. Measured: Metal Gear Solid (Europe) differs
+#     in one byte of a path string, Star Wars: Rebel Assault II in one
+#     instruction's immediate (the disc number), Dragon Warrior VII in two
+#     blocks of padding. The whole-file hash alone called each of those sets
+#     "N programs" and refused it;
+#   * different hash, and many pages differ: another program that happens to
+#     share the header fields.
+#
+# The bound is deliberately small. A per-disc patch touches a constant or a
+# name; a different program differs across most of its image. A set above the
+# bound is refused as before.
+PATCHED_PAGE_LIMIT = 8
+PATCHED_PAGE_DIVISOR = 16
+PAGE_BYTES = 4096
 
 # Per-disc identity. Recorded in disc_set.json and shown in the summary, but
 # never used to decide how many programs a set needs.
@@ -92,6 +114,30 @@ def serial_prefix(serial: str) -> str:
     """SCUS-94163 -> SCUS. The publisher/region family of the release."""
     s = str(serial or "").strip().upper()
     return s[:4] if len(s) >= 4 else s
+
+
+def patched_page_limit(page_count: int) -> int:
+    """How many differing pages one per-disc patched program may have."""
+    return min(PATCHED_PAGE_LIMIT, max(1, page_count // PATCHED_PAGE_DIVISOR))
+
+
+def page_crcs(p: dict) -> list[str] | None:
+    """The probe's per-page CRC list, or None when the probe has none."""
+    crcs = p.get("boot_exe_page_crc32")
+    if isinstance(crcs, list) and crcs and all(isinstance(c, str) and c for c in crcs):
+        return crcs
+    return None
+
+
+def page_address(p: dict, index: int) -> str:
+    """RAM address of loaded-image page `index`; page 0 starts at the load address."""
+    try:
+        load = int(str(p.get("load_address") or ""), 16)
+    except ValueError:
+        return f"page {index}"
+    if index == 0:
+        return f"0x{load:08X}"
+    return f"0x{(load - load % PAGE_BYTES) + index * PAGE_BYTES:08X}"
 
 
 def describe(index: int, p: dict) -> str:
@@ -210,10 +256,49 @@ def main() -> int:
         return EXIT_INCOHERENT
 
     differing: list[str] = []
-    for field in PROGRAM_FIELDS:
+    for field in PROGRAM_SHAPE_FIELDS:
         values = {str(p.get(field) or "") for p in probes}
+        # A probe written before `boot_exe_size` existed has no value for it.
+        # An absent value is not evidence either way: compare the sizes only
+        # when every probe carries one. The header fields are always present.
+        if field == "boot_exe_size" and "" in values:
+            continue
         if len(values) > 1:
             differing.append(field)
+
+    # Content, once the shape agrees. `patched` lists, for each later disc
+    # whose executable is not disc 1's file, the loaded-image pages that differ.
+    patched: list[dict] = []
+    if not differing:
+        base = page_crcs(first)
+        for i, p in enumerate(probes[1:], start=2):
+            if str(p.get("boot_exe_sha256")) == str(first.get("boot_exe_sha256")):
+                continue
+            crcs = page_crcs(p)
+            if base is None or crcs is None or len(base) != len(crcs):
+                # Nothing to tell a patched copy from another program. Refuse,
+                # as the whole-file comparison always did.
+                differing.append(
+                    f"boot_exe_sha256 (disc {i}: no page fingerprints to "
+                    "compare; re-probe with a current probe_disc.py)"
+                )
+                continue
+            pages = [n for n, (a, b) in enumerate(zip(base, crcs)) if a != b]
+            limit = patched_page_limit(len(base))
+            if len(pages) > limit:
+                differing.append(
+                    f"boot_exe_sha256 (disc {i}: {len(pages)} of {len(base)} "
+                    f"pages differ; one program may differ in at most {limit})"
+                )
+                continue
+            patched.append({
+                "index": i,
+                "pages_differing": len(pages),
+                "pages_total": len(base),
+                "page_addresses": [page_address(first, n) for n in pages],
+            })
+    if differing:
+        patched = []
 
     track_counts = {p.get("track_count") for p in probes}
     if len(track_counts) > 1:
@@ -228,6 +313,14 @@ def main() -> int:
         "disc_count": count,
         "verdict": verdict,
         "differing_program_fields": differing,
+        # "identical": one file on every disc. "patched-per-disc": one program,
+        # a few pages differ per disc (listed in patched_discs).
+        "program_identity": (
+            "distinct" if differing
+            else "patched-per-disc" if patched
+            else "identical"
+        ),
+        "patched_discs": patched,
         "warnings": warnings,
         "discs": [
             {
@@ -284,18 +377,32 @@ def main() -> int:
     if verdict == "data-only":
         print()
         serials = [str(p.get("serial") or "?") for p in probes]
-        if len(set(serials)) > 1:
+        if patched:
+            for d in patched:
+                where = ", ".join(d["page_addresses"]) or "none of the loaded image"
+                print(
+                    f"  note: disc {d['index']} carries disc 1's program with a "
+                    f"per-disc difference: {d['pages_differing']} of "
+                    f"{d['pages_total']} loaded pages differ ({where}). The "
+                    "header fields and the size agree."
+                )
             print(
-                f"  note: {len(set(serials))} serials in this set "
-                f"({', '.join(serials)}) carrying one identical executable — "
-                "normal for a multi-disc title, and why the program hash and "
-                "not the serial decides this."
+                f"  all {count} discs boot one program, patched per disc — "
+                "one program covers the set. The build is generated from disc 1."
             )
-        print(
-            f"  all {count} discs boot the same program "
-            f"(sha256 {str(first.get('boot_exe_sha256') or '')[:12]}…) — one "
-            f"program covers the set."
-        )
+        else:
+            if len(set(serials)) > 1:
+                print(
+                    f"  note: {len(set(serials))} serials in this set "
+                    f"({', '.join(serials)}) carrying one identical executable — "
+                    "normal for a multi-disc title, and why the program hash and "
+                    "not the serial decides this."
+                )
+            print(
+                f"  all {count} discs boot the same program "
+                f"(sha256 {str(first.get('boot_exe_sha256') or '')[:12]}…) — one "
+                f"program covers the set."
+            )
         print(
             "  Scaffolding that program now. P1 has since landed: `discs` is a "
             "first-class config entry, the runtime builds a roster from it, "
