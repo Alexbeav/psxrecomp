@@ -16,22 +16,6 @@ uint32_t g_debug_last_store_pc;
 CPUState *debug_cpu_ptr;
 int g_psx_vram_dirty_tracking;
 
-/* This fixture exercises stock GPU packets without a GL context or mod bank.
- * Keep the gpu.c dependencies explicit, including on linkers that retain
- * additional exported command handlers despite --gc-sections. */
-GrBackend gr_backend(void) { return GR_BACKEND_SOFTWARE; }
-int gl_renderer_texture_banks_supported(void) { return 0; }
-int gl_renderer_select_texture_bank(uint16_t id) { (void)id; return 0; }
-uint16_t mod_texture_packet_bank(uint32_t source, const uint32_t *words,
-                                 uint32_t count) {
-    (void)source; (void)words; (void)count;
-    return 0;
-}
-int mod_texture_packet_precision(uint32_t source, float q[3], float xy[6]) {
-    (void)source; (void)q; (void)xy;
-    return 0;
-}
-
 static uint32_t test_ram[0x00200000u / 4u];
 
 static struct {
