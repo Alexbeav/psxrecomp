@@ -53,6 +53,10 @@ void ds_init(const char *cache_dir, const char *game_id) {
 }
 uint32_t dirty_ram_get_bitmap_word(uint32_t word) { (void)word; return 0; }
 int dirty_ram_is_dirty(uint32_t phys) { (void)phys; return 0; }
+/* The loader's shadow-diff rewinds report their raw RAM writes (PS1B-306). */
+void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
+    (void)phys; (void)len;
+}
 int dirty_ram_dispatch(CPUState *cpu, uint32_t addr, uint32_t stop) {
     (void)cpu; (void)addr; (void)stop; return 0;
 }
