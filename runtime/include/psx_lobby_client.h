@@ -106,6 +106,11 @@ typedef struct PsxLobbyMember {
     /* Account key behind this seat; "" for a guest. See
      * PsxLobbyOnlinePlayer.account. */
     char account[PSX_LOBBY_ID_LEN];
+    /* Host-relay room: this guest's latest path_report ("direct" | "fail" |
+     * "relay"), "" when none, and whether the server still trusts it at start
+     * (recomp-net-server WS_LOBBY.md "Host relay"). */
+    char path[8];
+    int  path_fresh;
 } PsxLobbyMember;
 
 /*
@@ -174,6 +179,11 @@ typedef struct PsxLobbyMatchCaps {
     int  input_delay;      /* recomp-net delay frames (D) */
     int  input_prediction; /* invent runway frames (P); rollback only */
     int  force_input_relay; /* 0/1 — server input relay (vs P2P) */
+    /* 0/1 -- host: ask for the HOST RELAY (match_caps.relay = "host"): the
+     * host carries the match on its own UDP port and guests dial it; the
+     * server falls back to its relay unless every guest proved the path
+     * (recomp_net/host_relay.h). Guests read it to know the room asks. */
+    int  relay_host;
     int  force_turn;       /* 0/1 — ICE relay-only (Force TURN for UDP) */
     int  rollback;         /* 0/1 — invent/rollback netplay (default on) */
     /* DualShock-on-multitap-tap hack (0/1). Host-authoritative for the match. */
@@ -223,6 +233,11 @@ typedef struct PsxLobbyJoinInfo {
     /* Launch: the host watches from the gallery but runs the match from
      * session slot 0 (pad muted); player seats sit at lobby seat + 1. */
     int      host_spectates;
+    /* Launch: transport "host" -- no relay_endpoint; the host carries the
+     * match on host_endpoint (its advertised public port); guests dial it.
+     * force_input_relay is 0. The host binds bind_hostport and accepts the
+     * guest (2 seats) or hubs (3+). */
+    int      transport_host;
     /* A server code (need_password | bad_password | …) or, from
      * psx_lobby_set_last_error, one sentence the launcher shows as is. */
     char     last_error[192];
@@ -347,6 +362,17 @@ const PsxLobbyMatchCaps *psx_lobby_match_caps(void);
 
 /* Host: push updated caps while in lobby (clears ready via lobby_update). */
 int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *caps);
+
+/* Host relay (recomp_net/host_relay.h), driven from psx_lobby_pump while
+ * seated online in a room whose caps ask for it: the host holds the game port
+ * (UPnP / NAT-PMP / STUN), advertises it with set_host_endpoint and answers
+ * probes; guests probe it and send path_report. The pref is the HOST's
+ * default for rooms it creates (recomp-ui owns the setting; default on). */
+void psx_lobby_set_relay_host_pref(int on);
+int  psx_lobby_relay_host_pref(void);
+struct RNetHostRelayStatus;
+int  psx_lobby_host_relay_status(struct RNetHostRelayStatus *out);
+void psx_lobby_host_relay_release_port(void);
 
 /* Live member table from lobby_update (and create/join). */
 int  psx_lobby_member_count(void);

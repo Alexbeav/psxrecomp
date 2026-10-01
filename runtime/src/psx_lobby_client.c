@@ -44,6 +44,10 @@ int  psx_lobby_create(const char *a, const char *b, const char *c, const char *d
 int  psx_lobby_join(const char *a, const char *b, const char *c)
 { (void)a; (void)b; (void)c; return -1; }
 int  psx_lobby_leave(void) { return -1; }
+void psx_lobby_set_relay_host_pref(int on) { (void)on; }
+int  psx_lobby_relay_host_pref(void) { return 0; }
+int  psx_lobby_host_relay_status(struct RNetHostRelayStatus *out) { (void)out; return 0; }
+void psx_lobby_host_relay_release_port(void) {}
 int  psx_lobby_kick(int slot) { (void)slot; return -1; }
 void psx_lobby_set_allow_spectators(int allow) { (void)allow; }
 int  psx_lobby_allow_spectators_pref(void) { return 0; }
@@ -183,6 +187,7 @@ void psx_lobby_clear_launch_pending(void) {}
 #include "rnet_ws.h"
 #include "rnet_sha1.h"
 #include "recomp_net/address.h"
+#include "recomp_net/host_relay.h"
 #include "recomp_net/ice.h"
 #include "recomp_net/ice_rtt.h"
 #include "recomp_net/lan_beacon.h"
@@ -1098,6 +1103,74 @@ static void match_caps_clear(PsxLobbyMatchCaps *c)
     c->guest_memcard = 1;
 }
 
+/* ---- host relay (recomp_net/host_relay.h) -------------------------------
+ * The same wiring as recomp-net's own lobby client (rnet_lobby_client.c):
+ * this file is psxrecomp's copy of that client, so the orchestration object
+ * is recomp-net's and only the glue lives here. */
+static RNetHostRelay *g_host_relay;
+static int g_relay_host_pref = 1;
+
+void psx_lobby_set_relay_host_pref(int on) { g_relay_host_pref = on ? 1 : 0; }
+int  psx_lobby_relay_host_pref(void) { return g_relay_host_pref; }
+
+static int host_relay_send(const char *json, void *ctx)
+{
+    (void)ctx;
+    if (!psx_lobby_connected() || !g_lc.in_lobby) return -1;
+    queue_send(json);
+    flush_pending();
+    return 0;
+}
+
+static int lobby_bind_port(void)
+{
+    const char *colon = strrchr(g_lc.my_bind, ':');
+    const int port = colon ? atoi(colon + 1) : 0;
+    return port > 0 && port < 65536 ? port : 0;
+}
+
+/* Every pump: active only while seated in an online room whose published
+ * caps ask for the host relay (the host's caps are echoed back to it, so one
+ * rule serves both roles) and before the launch, which releases the port for
+ * the game. A spectator is not on the relay's path and reports nothing. */
+static void host_relay_step(void)
+{
+    RNetHostRelayView v;
+    if (!g_host_relay) {
+        g_host_relay = rnet_host_relay_create();
+        if (!g_host_relay) return;
+    }
+    memset(&v, 0, sizeof(v));
+    v.is_host = g_lc.is_host ? 1 : 0;
+    v.active = psx_lobby_connected() && g_lc.in_lobby && !g_lc.launch_pending &&
+               !g_lc.join.local_is_spectator &&
+               g_lc.match_caps.valid && g_lc.match_caps.relay_host;
+    v.bind_port = (unsigned short)lobby_bind_port();
+    if (v.is_host && !v.bind_port) v.active = 0;
+    v.host_endpoint = g_lc.join.host_endpoint;
+    v.send_json = host_relay_send;
+    rnet_host_relay_update(g_host_relay, &v);
+}
+
+int psx_lobby_host_relay_status(struct RNetHostRelayStatus *out)
+{
+    RNetHostRelayStatus st;
+    if (!out) return 0;
+    rnet_host_relay_status(g_host_relay, &st);
+    *out = st;
+    return st.role != 0;
+}
+
+void psx_lobby_host_relay_release_port(void)
+{
+    rnet_host_relay_release_port(g_host_relay);
+}
+
+static void host_relay_leave(void)
+{
+    rnet_host_relay_leave(g_host_relay);
+}
+
 static int json_extract_object(const char *json, const char *key, char *out, size_t out_cap);
 static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out);
 static void ingest_match_caps_from_json(const char *json);
@@ -1481,6 +1554,12 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
     if (out->input_prediction < 2) out->input_prediction = 2;
     if (out->input_prediction > 16) out->input_prediction = 16;
     out->force_input_relay = json_get_bool(obj, "force_input_relay", 0);
+    {
+        char relay[12];
+        relay[0] = '\0';
+        json_get_str(obj, "relay", relay, sizeof(relay));
+        out->relay_host = strcmp(relay, "host") == 0 ? 1 : 0;
+    }
     out->force_turn = json_get_bool(obj, "force_turn", 0);
     /* Absent field → delay-sync (older hosts). New hosts always publish explicit. */
     out->rollback = json_get_bool(obj, "rollback", 0);
@@ -1538,7 +1617,7 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
         return snprintf(dst, dst_cap,
                         ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
                         "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
-                        "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"input_prediction\":%d,"
+                        "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"input_prediction\":%d,%s"
                         "\"force_input_relay\":%s,\"force_turn\":%s,\"rollback\":%s,"
                         "\"multitap_analog\":%s,\"guest_memcard\":%s,"
                         "\"guest_memcard_active\":%s,"
@@ -1551,6 +1630,8 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
                         caps->auto_skip_fmv ? "true" : "false",
                         caps->input_delay,
                         caps->input_prediction,
+                        /* only when asked: absent reads as "the SFU, as always" */
+                        caps->relay_host ? "\"relay\":\"host\"," : "",
                         caps->force_input_relay ? "true" : "false",
                         caps->force_turn ? "true" : "false",
                         caps->rollback ? "true" : "false",
@@ -1629,7 +1710,7 @@ static int using_server_input_relay(const PsxLobbyJoinInfo *j)
 static void fill_peer_bind_from_join(void)
 {
     PsxLobbyJoinInfo *j = &g_lc.join;
-    const int force_relay = using_server_input_relay(j);
+    const int force_relay = !j->transport_host && using_server_input_relay(j);
     const int seats = j->player_count >= 2 ? j->player_count : j->max_slots;
     const int host_hub = (g_lc.is_host && seats >= 3 && !force_relay) ? 1 : 0;
     memset(j->bind_hostport, 0, sizeof(j->bind_hostport));
@@ -1642,9 +1723,12 @@ static void fill_peer_bind_from_join(void)
                                    j->host_endpoint, j->guest_endpoint, NULL);
     } else if (g_lc.is_host) {
         strncpy(j->bind_hostport, g_lc.my_bind, sizeof(j->bind_hostport) - 1);
-        if (!host_hub) {
+        if (!host_hub && !j->transport_host) {
             /* 2P P2P: dial guest when they advertised a fixed port. Online
-             * guests often join with :0 — leave peer empty (accept-first). */
+             * guests often join with :0 — leave peer empty (accept-first).
+             * Host relay: the guest's advertised address is its LAN bind,
+             * which this host cannot dial across the guest's NAT; the guest
+             * dials us (it proved it can), so accept-first always. */
             if (j->guest_endpoint[0] && !endpoint_port_is_zero(j->guest_endpoint))
                 strncpy(j->peer_hostport, j->guest_endpoint, sizeof(j->peer_hostport) - 1);
         }
@@ -1724,6 +1808,10 @@ static int parse_seat_array(const char *json, const char *key, int is_spectator,
                 g_lc.members[n].slot = json_get_int(chunk, "slot", n);
                 json_get_str(chunk, "player_id", g_lc.members[n].player_id,
                              sizeof(g_lc.members[n].player_id));
+                g_lc.members[n].path[0] = '\0';
+                json_get_str(chunk, "path", g_lc.members[n].path,
+                             sizeof(g_lc.members[n].path));
+                g_lc.members[n].path_fresh = json_get_bool(chunk, "path_fresh", 0) ? 1 : 0;
                 json_get_str(chunk, "display_name", g_lc.members[n].display_name,
                              sizeof(g_lc.members[n].display_name));
                 g_lc.members[n].ready = json_get_bool(chunk, "ready", 0);
@@ -2960,10 +3048,19 @@ static void handle_server_json(const char *json)
     }
     if (strcmp(op, "launch") == 0) {
         char relay_endpoint[PSX_LOBBY_ENDPOINT_LEN];
+        char transport_kind[16];
         json_get_str(json, "host_endpoint", g_lc.join.host_endpoint, sizeof(g_lc.join.host_endpoint));
         json_get_str(json, "guest_endpoint", g_lc.join.guest_endpoint, sizeof(g_lc.join.guest_endpoint));
         relay_endpoint[0] = '\0';
         json_get_str(json, "relay_endpoint", relay_endpoint, sizeof(relay_endpoint));
+        /* "host": the host carries the match (WS_LOBBY.md "Host relay"): no
+         * relay_endpoint, host_endpoint is the host's advertised port. The
+         * waiting-room socket on that port goes now so the game can bind it;
+         * the router mapping stays for the game. */
+        transport_kind[0] = '\0';
+        json_get_str(json, "transport", transport_kind, sizeof(transport_kind));
+        g_lc.join.transport_host = strcmp(transport_kind, "host") == 0 ? 1 : 0;
+        rnet_host_relay_release_port(g_host_relay);
         g_lc.join.player_count = json_get_int(json, "player_count", g_lc.join.player_count);
         g_lc.join.max_slots = json_get_int(json, "max_slots", g_lc.join.max_slots);
         g_lc.join.session_id = (uint32_t)json_get_int(json, "session_id", (int)g_lc.join.session_id);
@@ -3000,7 +3097,8 @@ static void handle_server_json(const char *json)
          * Legacy ice_p2p from an old server is refused (need SFU). */
         {
             char transport[24];
-            const int force_relay = using_server_input_relay(&g_lc.join);
+            const int force_relay =
+                !g_lc.join.transport_host && using_server_input_relay(&g_lc.join);
             const int seats = g_lc.join.player_count >= 2 ? g_lc.join.player_count
                                                          : g_lc.join.max_slots;
             const int host_hub =
@@ -3582,6 +3680,7 @@ int psx_lobby_connect(const char *ws_url)
 
 void psx_lobby_disconnect(void)
 {
+    host_relay_leave();
     /* Never block the UI on DNS/connect — cancel and let pump reap. */
     lobby_cancel_connect_async();
     automatch_on_connection_reset();
@@ -3934,6 +4033,9 @@ void psx_lobby_pump(void)
 {
     char buf[4096];
     automatch_probe_poll();
+    /* Host relay: hold / probe / report to match the room. Before the
+     * connected() check so a dropped WS releases the port the same pump. */
+    host_relay_step();
 #if defined(_WIN32)
     int n;
 #else
@@ -4198,6 +4300,7 @@ int psx_lobby_join(const char *lobby_id, const char *password, const char *guest
 
 int psx_lobby_leave(void)
 {
+    host_relay_leave(); /* unmap the router, close the port, forget reports */
     queue_send("{\"op\":\"leave\"}");
     flush_pending();
     g_lc.ice_rtt_suspended = 0;

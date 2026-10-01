@@ -62,6 +62,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "psx_netplay_rb.h"
 #include "psx_selfcheck.h"
 #include "psx_lobby_client.h"
+#include "recomp_net/host_relay.h" /* RNetHostRelayStatus for the launcher relay line */
 #include "netplay_bios_settle.h"
 #include "netplay_exit_reason.h"
 #include "host_time.h"
@@ -8497,6 +8498,11 @@ namespace {
      * relay_endpoint. force_turn is a rollback delay-floor hint only. */
     int g_lnch_force_input_relay = 0;
     int g_lnch_force_turn = 0;
+    /* Host relay (2026-10-01): online rooms this build hosts ask the server
+     * for transport "host" (match_caps.relay). recomp-ui owns the setting
+     * (Network Settings / Lobby Settings, persisted there) and pushes it
+     * through relay_host_set; default on. */
+    int g_lnch_relay_host = 1;
     /* Lobby default on; host “Disable Rollback” clears this → delay_sync. */
     int g_lnch_rollback = 1;
     int g_lnch_multitap_analog = 1;
@@ -10419,6 +10425,7 @@ namespace {
         if (caps.input_prediction < 2) caps.input_prediction = 2;
         if (caps.input_prediction > 16) caps.input_prediction = 16;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
+        caps.relay_host = g_lnch_relay_host != 0;
         caps.force_turn = g_lnch_force_turn != 0;
         caps.rollback = g_lnch_rollback != 0;
         caps.multitap_analog = g_lnch_multitap_analog != 0;
@@ -10461,6 +10468,7 @@ namespace {
         if (caps.input_prediction < 2) caps.input_prediction = 2;
         if (caps.input_prediction > 16) caps.input_prediction = 16;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
+        caps.relay_host = g_lnch_relay_host != 0;
         caps.force_turn = g_lnch_force_turn != 0;
         caps.rollback = g_lnch_rollback != 0;
         caps.multitap_analog = g_lnch_multitap_analog != 0;
@@ -10913,6 +10921,69 @@ namespace {
                 return caps->force_turn ? 1 : 0;
         }
         return g_lnch_force_turn;
+    }
+    /* Host relay preference and live state (recomp_launcher.h relay_host_*). */
+    int ae_np_relay_host_get(void*) {
+        if (g_lnch_hosting_lan || g_lnch_joined_lan) return 0;
+        if (psx_lobby_in_lobby()) {
+            const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+            if (caps && caps->valid) return caps->relay_host ? 1 : 0;
+        }
+        return g_lnch_relay_host;
+    }
+    int ae_np_relay_host_set(void*, int on) {
+        g_lnch_relay_host = on ? 1 : 0;
+        psx_lobby_set_relay_host_pref(g_lnch_relay_host);
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan)
+            ae_np_push_match_caps(nullptr); /* no-op unless hosting online */
+        return 0;
+    }
+    int ae_np_relay_status(void*, char* out, size_t out_cap) {
+        if (!out || !out_cap) return 0;
+        out[0] = '\0';
+        if (g_lnch_hosting_lan || g_lnch_joined_lan || !psx_lobby_in_lobby()) return 0;
+        RNetHostRelayStatus st;
+        if (!psx_lobby_host_relay_status(&st)) return 0;
+        if (st.role == 1) {
+            int guests = 0, proven = 0;
+            const int n = psx_lobby_member_count();
+            for (int i = 0; i < n; ++i) {
+                PsxLobbyMember mem;
+                if (!psx_lobby_member_get(i, &mem) || mem.is_spectator) continue;
+                if (std::strcmp(mem.player_id, psx_lobby_host_player_id()) == 0) continue;
+                guests++;
+                if (std::strcmp(mem.path, "direct") == 0 && mem.path_fresh) proven++;
+            }
+            if (!st.port.done)
+                std::snprintf(out, out_cap, "You carry the match. Opening UDP port %u (%s)...",
+                              (unsigned)st.port.local_port,
+                              st.port.stage[0] ? st.port.stage : "starting");
+            else if (!st.port.endpoint[0])
+                std::snprintf(out, out_cap, "%s", st.port.detail);
+            else
+                std::snprintf(out, out_cap,
+                              "You carry the match at %s (%s). Guests who can reach you: %d of %d%s",
+                              st.port.endpoint, st.port.how, proven, guests,
+                              guests && proven < guests
+                                  ? ". Any guest who cannot sends the match through the lobby "
+                                    "server's relay."
+                                  : ".");
+            return 1;
+        }
+        if (st.role == 2) {
+            if (st.probing || !st.last_report[0])
+                std::snprintf(out, out_cap, "The host carries the match. Checking you can reach %s...",
+                              st.probed[0] ? st.probed : "the host");
+            else if (std::strcmp(st.last_report, "direct") == 0)
+                std::snprintf(out, out_cap, "The host carries the match; you reach it directly (%s).",
+                              st.probed);
+            else
+                std::snprintf(out, out_cap,
+                              "The host's port did not answer (%s): the lobby server will relay "
+                              "this match. Retrying.", st.probed);
+            return 1;
+        }
+        return 0;
     }
     int ae_np_force_turn_set(void*, int force) {
         if (g_lnch_hosting_lan || g_lnch_joined_lan)
@@ -12830,13 +12901,18 @@ namespace {
             for (int i = 0; i < RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS + 1; ++i)
                 out->slot_port[i] = plan.port[i];
         }
-        /* §108: online launch always SFU. Prefer caps.force_input_relay from
+        /* Online launch: the server's relay (SFU) unless the launch said
+         * transport "host" (the host carries the match; 2026-10-01 amends
+         * §108's "always SFU"). Prefer caps.force_input_relay from the
          * relay_endpoint rewrite; also infer when host==guest advertise. */
         out->force_input_relay =
-            (g_lnch_hosting_lan || g_lnch_joined_lan)
+            (g_lnch_hosting_lan || g_lnch_joined_lan || ji->transport_host)
                 ? 0
                 : (caps->force_input_relay ? 1 : 0);
-        if (!out->force_input_relay && !g_lnch_hosting_lan &&
+#if defined(RECOMP_LAUNCHER_HAS_HOST_RELAY)
+        out->transport_host = ji->transport_host ? 1 : 0;
+#endif
+        if (!out->force_input_relay && !ji->transport_host && !g_lnch_hosting_lan &&
             !g_lnch_joined_lan && ji->host_endpoint[0] &&
             ji->guest_endpoint[0] &&
             std::strcmp(ji->host_endpoint, ji->guest_endpoint) == 0) {
@@ -13047,6 +13123,11 @@ namespace {
         /* Append-only members past the positional initializer. */
 #if defined(RECOMP_LAUNCHER_HAS_NETPLAY_HANDOFF)
         g_lnch_netplay_callbacks.ingest_launch = ae_np_ingest_launch;
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_HOST_RELAY)
+        g_lnch_netplay_callbacks.relay_host_get = ae_np_relay_host_get;
+        g_lnch_netplay_callbacks.relay_host_set = ae_np_relay_host_set;
+        g_lnch_netplay_callbacks.relay_status = ae_np_relay_status;
 #endif
         g_lnch_netplay_callbacks.memcard_offer_set = ae_np_memcard_offer_set;
         g_lnch_netplay_callbacks.guest_memcard_get = ae_np_guest_memcard_get;
@@ -15248,6 +15329,9 @@ int main(int argc, char** argv) {
                     net_cfg.input_delay = ls.netplay_launch.input_delay;
                     net_cfg.input_prediction = ls.netplay_launch.input_prediction;
                     net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
+#if defined(RECOMP_LAUNCHER_HAS_HOST_RELAY)
+                    net_cfg.transport_host = ls.netplay_launch.transport_host ? 1 : 0;
+#endif
                     net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
                     net_cfg.rollback = ls.netplay_launch.rollback ? 1 : 0;
                     net_cfg.guest_memcard = ls.netplay_launch.guest_memcard ? 1 : 0;
@@ -17140,6 +17224,9 @@ soft_return_lobby:
                 net_cfg.input_delay = ls.netplay_launch.input_delay;
                 net_cfg.input_prediction = ls.netplay_launch.input_prediction;
                 net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
+#if defined(RECOMP_LAUNCHER_HAS_HOST_RELAY)
+                net_cfg.transport_host = ls.netplay_launch.transport_host ? 1 : 0;
+#endif
                 net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
                 net_cfg.rollback = ls.netplay_launch.rollback ? 1 : 0;
                 /* Same fold as the first-boot path: rematch must not lose
