@@ -1,4 +1,5 @@
-/* netplay_lan_version.h — the build check for LAN / Direct IP rooms (PS1B-295).
+/* netplay_lan_version.h — the build and game checks for LAN / Direct IP rooms
+ * (PS1B-295).
  *
  * The online lobby server refuses a join whose game_version differs from the
  * room's. A LAN / Direct IP room has no server, and its JOIN carried no
@@ -35,6 +36,32 @@ int netplay_lan_version_ok(const char *host_version, const char *guest_version);
 /* What the host is told. */
 #define NETPLAY_LAN_VERSION_HOST_TEXT \
     "A player with another build of the game tried to join. Both players need the same release."
+
+/* The game check. The online server also refuses a join whose game_name is
+ * not the room's; a LAN JOIN carried no name, so any two titles on the same
+ * BIOS and framework commit could be seated together. The tail's next line
+ * (line 8) is the guest's lobby game name, the title's [game] name. */
+#define NETPLAY_LAN_GAME_LINE 7
+
+/* Copy the game-name line of a JOIN tail into out; "" when the tail is NULL or
+ * ends before it. Control characters become '?'; other bytes are kept, so a
+ * UTF-8 name survives. Does not modify tail. */
+void netplay_lan_join_game(const char *tail, char *out, size_t out_cap);
+
+/* 1 when the two game names are the same, ignoring surrounding blanks. A
+ * missing or blank name never matches: a guest that sends no game line is
+ * refused, as a guest that sends another version is. The same test decides
+ * whether the same-machine room file belongs to this title. */
+int netplay_lan_game_ok(const char *host_game, const char *guest_game);
+
+/* A guest that sends no game line at all is a build from before this check,
+ * so both sentences name that case too. */
+#define NETPLAY_LAN_GAME_GUEST_TEXT \
+    "That room is for a different game, or the host runs a newer build. " \
+    "Both players need the same game and release."
+#define NETPLAY_LAN_GAME_HOST_TEXT \
+    "A player with a different game, or an older build, tried to join. " \
+    "Both players need the same game and release."
 
 #ifdef __cplusplus
 }

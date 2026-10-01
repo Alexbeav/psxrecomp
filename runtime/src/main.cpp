@@ -10290,6 +10290,7 @@ namespace {
     static int ae_np_lan_settle_session_bios(char* out, size_t out_cap, uint32_t* out_crc,
                                              char* why, size_t why_cap);
     static void ae_np_append_lan_bios_join(char* msg, size_t msg_cap, int* io_off);
+    static std::string ae_np_lan_game_name(void);
     static int ae_np_parse_lan_bios_tail(char* p, int* prefer_open, int* can_open,
                                         int* can_scph);
 
@@ -11056,7 +11057,7 @@ namespace {
         g_lnch_lan_my_slot = 0;
         AeLanLobbyState state;
         state.name = name && name[0] ? name : "LAN Lobby";
-        state.game = g_lnch_netplay_game_name.empty() ? "PSX" : g_lnch_netplay_game_name;
+        state.game = ae_np_lan_game_name();
         state.endpoint = endpoint && endpoint[0] ? endpoint : "127.0.0.1:7777";
         state.host_name = psx_lobby_display_name();
         if (state.host_name.empty()) state.host_name = "Host";
@@ -11125,12 +11126,28 @@ namespace {
         return false;
     }
 
+    /* This title's lobby game name ([game] name; "PSX" when the config has
+     * none) as one line of a JOIN or of the room file: a control character
+     * would end the line early, and the host reads at most a lobby name. */
+    static std::string ae_np_lan_game_name(void) {
+        std::string name = g_lnch_netplay_game_name.empty() ? "PSX" : g_lnch_netplay_game_name;
+        for (char& c : name)
+            if ((unsigned char)c < 0x20 || c == 0x7f) c = ' ';
+        if (name.size() >= PSX_LOBBY_NAME_LEN) name.resize(PSX_LOBBY_NAME_LEN - 1);
+        return name;
+    }
+
+    /* The same-machine room file, as something to offer or join. The file
+     * sits beside the exe, and the programs of a multi-program set share that
+     * folder: a room another title wrote there is not this title's room. */
     static bool ae_np_read_lan_file_state(AeLanLobbyState* state) {
         if (!state) return false;
         const bool prior = g_lnch_remote_lan;
         g_lnch_remote_lan = false;
         const bool ok = ae_np_read_lan_state(state);
         g_lnch_remote_lan = prior;
+        if (ok && !netplay_lan_game_ok(ae_np_lan_game_name().c_str(), state->game.c_str()))
+            return false;
         return ok;
     }
 
@@ -11419,7 +11436,7 @@ namespace {
         std::string me = psx_lobby_display_name();
         if (me.empty()) me = "Player";
         const char* my_id = ae_np_lan_local_player_id();
-        char msg[448];
+        char msg[640]; /* id, name, password, the BIOS tail, version, game name */
         int off = std::snprintf(msg, sizeof(msg), "MOTK3 JOIN\n%s\n%s\n%s\n", my_id,
                                 me.c_str(), password ? password : "");
         ae_np_append_lan_bios_join(msg, sizeof(msg), &off);
@@ -11449,6 +11466,8 @@ namespace {
                 /* The launcher shows last_error on its status line. */
                 if (std::strncmp(code, "version_mismatch", 16) == 0)
                     psx_lobby_set_last_error(NETPLAY_LAN_VERSION_GUEST_TEXT);
+                else if (std::strncmp(code, "game_mismatch", 13) == 0)
+                    psx_lobby_set_last_error(NETPLAY_LAN_GAME_GUEST_TEXT);
                 return -1;
             }
             if (std::strncmp(buf, "MOTK3 UPDATE\n", 13) == 0) {
@@ -11925,21 +11944,44 @@ namespace {
                                         "%s\n", psx_lobby_game_version());
             if (v > 0 && (size_t)v < msg_cap - (size_t)*io_off) *io_off += v;
         }
+        /* Line 8: this title's lobby game name. The version is the same for
+         * every title on one framework commit, so the host compares this
+         * too. Older hosts stop before it. */
+        if (*io_off > 0 && (size_t)*io_off < msg_cap) {
+            const int g = std::snprintf(msg + *io_off, msg_cap - (size_t)*io_off,
+                                        "%s\n", ae_np_lan_game_name().c_str());
+            if (g > 0 && (size_t)g < msg_cap - (size_t)*io_off) *io_off += g;
+        }
     }
 
-    /* The host's build check for a LAN / Direct IP JOIN (PS1B-295): the
-     * online server's rule, applied to the version on line 7 of the tail. A
-     * refused guest gets MOTK1 ERR version_mismatch; the host's status line
-     * says why nobody arrived. Returns true when the guest may be seated. */
-    static bool ae_np_lan_join_version_ok(const char* tail, const sockaddr_in& from) {
+    /* The host's checks for a LAN / Direct IP JOIN (PS1B-295), which the
+     * online server makes for an online room: the guest's build (line 7 of
+     * the tail) and its game (line 8) must be the host's. A refused guest
+     * gets MOTK1 ERR version_mismatch or game_mismatch; the host's status
+     * line says why nobody arrived. A guest that sends no game line is
+     * refused, not taken on trust. Returns true when the guest may be
+     * seated. */
+    static bool ae_np_lan_join_identity_ok(const char* tail, const sockaddr_in& from) {
         char guest[PSX_LOBBY_VERSION_LEN];
         netplay_lan_join_version(tail, guest, sizeof(guest));
-        if (netplay_lan_version_ok(psx_lobby_game_version(), guest)) return true;
-        std::fprintf(stderr, "netplay: LAN join refused: guest build \"%s\", this build \"%s\"\n",
-                     guest[0] ? guest : "(none)", psx_lobby_game_version());
-        ae_np_lan_udp_sendto(from, "MOTK1 ERR\nversion_mismatch\n");
-        psx_lobby_set_last_error(NETPLAY_LAN_VERSION_HOST_TEXT);
-        return false;
+        if (!netplay_lan_version_ok(psx_lobby_game_version(), guest)) {
+            std::fprintf(stderr, "netplay: LAN join refused: guest build \"%s\", this build \"%s\"\n",
+                         guest[0] ? guest : "(none)", psx_lobby_game_version());
+            ae_np_lan_udp_sendto(from, "MOTK1 ERR\nversion_mismatch\n");
+            psx_lobby_set_last_error(NETPLAY_LAN_VERSION_HOST_TEXT);
+            return false;
+        }
+        char game[PSX_LOBBY_NAME_LEN];
+        netplay_lan_join_game(tail, game, sizeof(game));
+        const std::string mine = ae_np_lan_game_name();
+        if (!netplay_lan_game_ok(mine.c_str(), game)) {
+            std::fprintf(stderr, "netplay: LAN join refused: guest game \"%s\", this game \"%s\"\n",
+                         game[0] ? game : "(none)", mine.c_str());
+            ae_np_lan_udp_sendto(from, "MOTK1 ERR\ngame_mismatch\n");
+            psx_lobby_set_last_error(NETPLAY_LAN_GAME_HOST_TEXT);
+            return false;
+        }
+        return true;
     }
 
     /* Optional JOIN retail CRC: line 6 of the tail, after the three bios and
@@ -12683,7 +12725,7 @@ namespace {
                     if (inet_pton(AF_INET, host, &to.sin_addr) == 1) {
                         std::string me = psx_lobby_display_name();
                         if (me.empty()) me = "Player";
-                        char msg[448];
+                        char msg[640];
                         int off = std::snprintf(
                             msg, sizeof(msg), "MOTK3 JOIN\n%s\n%s\n%s\n",
                             ae_np_lan_local_player_id(), me.c_str(),
@@ -12756,7 +12798,7 @@ namespace {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nbad_password\n");
                     continue;
                 }
-                if (!ae_np_lan_join_version_ok(bios_tail, from)) continue;
+                if (!ae_np_lan_join_identity_ok(bios_tail, from)) continue;
                 const int slot = ae_np_lan_seat_guest(st, player_id, name);
                 if (slot < 0) {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nfull\n");
@@ -12803,8 +12845,9 @@ namespace {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nbad_password\n");
                     continue;
                 }
-                /* A legacy JOIN carries no version, so it counts as "dev". */
-                if (!ae_np_lan_join_version_ok(nullptr, from)) continue;
+                /* A legacy JOIN carries no version and no game name, so it
+                 * is refused: by build on a release host, by game on any. */
+                if (!ae_np_lan_join_identity_ok(nullptr, from)) continue;
                 /* Legacy JOIN: synthesize an id from peer addr so same-name
                  * clients still get distinct seats + (2)/(3) labels. */
                 char synth_id[48];
@@ -13201,6 +13244,8 @@ namespace {
                 std::strncmp(buf, "MOTK1 ERR\n", 10) == 0) {
                 if (std::strncmp(buf, "MOTK1 ERR\nversion_mismatch", 26) == 0)
                     psx_lobby_set_last_error(NETPLAY_LAN_VERSION_GUEST_TEXT);
+                else if (std::strncmp(buf, "MOTK1 ERR\ngame_mismatch", 23) == 0)
+                    psx_lobby_set_last_error(NETPLAY_LAN_GAME_GUEST_TEXT);
                 g_lnch_joined_lan = false;
                 g_lnch_remote_lan = false;
                 g_lnch_lan_endpoint.clear();

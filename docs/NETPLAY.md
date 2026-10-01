@@ -278,7 +278,16 @@ Generate & rebuild / prepare flows should point at the **`.cue`**, not a lone
   different one is refused with `MOTK1 ERR version_mismatch`
   (`runtime/src/netplay_lan_version.c`). Both players then see the reason
   on the launcher's status line. A guest from before the check sends no
-  version; that counts as `dev`, so only a `dev` host still takes it.
+  version; that counts as `dev`.
+- **Game match on LAN / Direct IP:** the version is the same for every title
+  built on one framework commit, so the JOIN's next line is the guest's lobby
+  game name (`[game] name`, the name online rooms are listed under). The host
+  refuses another name with `MOTK1 ERR game_mismatch`, and both players see
+  the reason. A guest that sends no game line is refused too, on any host, so
+  two different titles are never seated together. The same-machine room file
+  `netplay_lan_lobby.txt` sits beside the exe; it is offered and joined only
+  when the game name it records is this title's, because the programs of a
+  multi-program set share that folder.
 - **Mods:** disabled for all netplay sessions (lobby / LAN / direct / rematch).
   Launcher `commit_netplay` and the runtime clear the in-session plan without
   touching the user's offline mod selection. Synced mod plans are deferred.
