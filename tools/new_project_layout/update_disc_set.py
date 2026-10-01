@@ -198,6 +198,54 @@ def run_verify(probe_jsons: list[Path], out_json: Path) -> tuple[bool, str]:
     return r.returncode == 0, (r.stdout or "") + (r.stderr or "")
 
 
+def program_set_tool(config: Path):
+    """tools/program_set.py when *config* is a set of programs (set.toml)."""
+    tools = str(HERE.parent)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import program_set  # noqa: E402
+    return program_set if program_set.is_set_config(config) else None
+
+
+def update_program_set(program_set, set_toml: Path, cues: list[Path], *, check: bool) -> int:
+    """A set of programs (set.toml): record where the player's discs are.
+
+    The discs of such a set boot different programs (Resident Evil 2), so the
+    one-program rule of verify_disc_set.py does not apply. What must hold
+    instead is that every disc of the set is given and that each image is the
+    disc its position names. Only [game] discs is written: the serials are the
+    set's declaration, not something the player's images decide.
+    """
+    try:
+        spec = program_set.load_set(set_toml)
+        if len(cues) != len(spec["serials"]):
+            raise program_set.SetError(
+                f"{spec['title']} has {len(spec['serials'])} discs and {len(cues)} were given. "
+                "Setup builds every program of this game, so it needs every disc.")
+        program_set.check_discs(spec, list(cues))
+    except program_set.SetError as error:
+        print(f"error: {error} -- nothing written", file=sys.stderr)
+        return 1
+    for number, (cue, serial) in enumerate(zip(cues, spec["serials"]), start=1):
+        print(f"  disc {number}: {serial}  {cue.name}")
+    before = set_toml.read_text(encoding="utf-8")
+    surgeon = TomlSurgeon(before)
+    paths = [str(c) for c in cues]
+    if surgeon.current_values("game", "discs") != paths:
+        surgeon.replace("game", "discs", render_array("discs", paths))
+    new_text = surgeon.text()
+    if check:
+        if new_text != before:
+            print(f"out of date: {set_toml}", file=sys.stderr)
+            return 1
+        print(f"ok: {set_toml}")
+        return 0
+    if new_text != before:
+        set_toml.write_text(new_text, encoding="utf-8")
+    print(f"updated {set_toml} for the {len(paths)} discs of the set")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -237,6 +285,12 @@ def main() -> int:
         print("error: cannot read .chd: the CHD reader (libchdr) is not built "
               "and could not be built -- nothing written", file=sys.stderr)
         return 1
+
+    set_tool = program_set_tool(game_toml)
+    if set_tool is not None:
+        if tmp is not None:
+            tmp.cleanup()
+        return update_program_set(set_tool, game_toml, cues, check=args.check)
 
     # Probe each disc, writing the same per-disc artifacts the Retro path
     # leaves behind (disc_probe.json, disc_probe.2.json, ...).

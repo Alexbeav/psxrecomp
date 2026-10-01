@@ -184,6 +184,86 @@ folder, one `settings.toml`, one set of key binds and one `saves` folder:
 - **One at a time.** The programs share the memory cards, so a second program
   started from the same folder is refused while the first runs.
 
+#### One setup package for the set (`set.toml`)
+
+A set of programs is packaged as one setup package. Its root holds `set.toml`,
+one unchanged single-program project per program, one `psxrecomp/` and one
+`recomp-ui/`:
+
+```toml
+[set]
+name      = "resident-evil-2-usa-dual-shock"
+title     = "Resident Evil 2"
+exe_name  = "Resident_Evil_2"        # the setup program
+bios_stem = "SCPH1001"               # optional: the retail BIOS the programs are bound to
+serials   = ["SLUS-00748", "SLUS-00756"]
+programs  = ["leon", "claire"]
+
+[game]                               # the wizard's disc slots, in set order
+discs        = ["disc/disc-1.cue", "disc/disc-2.cue"]
+disc_serials = ["SLUS-00748", "SLUS-00756"]
+
+[program.leon]
+folder    = "programs/leon"          # a single-program project, as exported
+exe_name  = "Resident_Evil_2_Leon"
+shortcut  = "Resident Evil 2 - Leon" # the name of the program's start script
+serials   = ["SLUS-00748"]
+positions = [1]                      # the program's discs, 1-based in the set
+
+[program.claire]
+folder    = "programs/claire"
+exe_name  = "Resident_Evil_2_Claire"
+shortcut  = "Resident Evil 2 - Claire"
+serials   = ["SLUS-00756"]
+positions = [2]
+```
+
+- **The host project.** `python psxrecomp/tools/program_set.py init-host --root
+  <root>` writes `CMakeLists.txt`, `codegen_setup.c` and `codegen_setup.h` at
+  the root. They build the setup program and never link game code.
+  `tools/package_setup_host.sh --set set.toml` makes the zip.
+- **Setup.** `psxrecomp_cli.py generate` and `rebuild` take `--config
+  set.toml`. A config with a `[set]` table runs the ordinary step once per
+  program, in the program's folder, and then joins the programs into the
+  build folder. A config without the table is not affected.
+
+  ```
+  psxrecomp_cli.py generate --project-root <root> --config <root>/set.toml \
+      --set-disc 1=<disc 1> --set-disc 2=<disc 2> --bios <bios> --bios-stem SCPH1001 \
+      --gen-marker program_set.generated
+  psxrecomp_cli.py rebuild  --project-root <root> --config <root>/set.toml \
+      --build-dir build-release --exe-basename Resident_Evil_2_Leon --no-pgo
+  ```
+
+  The wizard passes `--disc` instead of `--set-disc`; the discs then come from
+  `set.toml` (`update_disc_set.py` writes the located paths there) or from the
+  wizard's `disc.cfg`.
+- **Every disc is required.** One build per program needs each program's disc.
+  `generate` stops before any work unless every disc of the set is located and
+  carries the serial of its position. The message names the position, the
+  serial and the program. A set whose discs continue one program is not
+  affected: it still sets up from the boot disc.
+- **The result.** `<root>/build-release/` holds one executable and one
+  `<exe name>.game.toml` per program, one `saves` folder and one
+  `settings.toml`, in the layout above. `tools/program_set.py join` is the one
+  implementation of the join; a release tool that builds the programs itself
+  calls it too. A file two programs carry must be byte-identical, except a
+  short list of files that differ per build.
+- **No half-made folder.** The setup program starts the set only when the
+  first program's executable exists in the build folder. That file is removed
+  before the first program is built and is written last, so a stop anywhere
+  leaves the setup program as what starts.
+- **Starting a program.** Setup writes one start script per program next to
+  the setup program, named by `shortcut` (`.cmd` on Windows, `.sh` on Linux,
+  `.command` on macOS). The scripts use relative paths, so the folder can be
+  moved. The executables in the build folder can be started directly too.
+  `<root>/program-set-install.json` records what was installed.
+- **Not available for a set.** Diagnostic mode and the optimised (PGO) rebuild.
+  `rebuild` refuses both with a message and leaves the installed set as it is.
+- **An older install.** Folders made from the single-program packages stay as
+  they are. The set's folder starts with empty `saves`. Nothing is migrated;
+  a memory card file can be copied by hand.
+
 ### One program on several discs
 
 One build covers a set when every disc boots the same program. The discs do
