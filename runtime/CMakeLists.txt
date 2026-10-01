@@ -561,6 +561,16 @@ if(BUILD_TESTING)
     add_executable(window_size_test tests/test_window_size.cpp)
     target_include_directories(window_size_test PRIVATE include)
     add_test(NAME window_size_test COMMAND window_size_test)
+    option(PSX_WINDOW_FULLSCREEN_TEST "Run fullscreen transitions on a real desktop" OFF)
+    if(PSX_WINDOW_FULLSCREEN_TEST)
+        add_executable(window_fullscreen_test tests/test_window_fullscreen.cpp)
+        target_include_directories(window_fullscreen_test PRIVATE include)
+        target_compile_definitions(window_fullscreen_test PRIVATE
+            SDL_MAIN_HANDLED=1 $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+        target_link_libraries(window_fullscreen_test PRIVATE ${PSX_SDL_LIBRARIES})
+        add_test(NAME window_fullscreen_test COMMAND window_fullscreen_test)
+        set_tests_properties(window_fullscreen_test PROPERTIES LABELS "window;hardware" TIMEOUT 30)
+    endif()
 
     # Multi-file cue TOC mapping (data track + CD-DA in separate bins).
     add_executable(iso_reader_cdda_test

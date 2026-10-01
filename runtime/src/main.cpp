@@ -125,6 +125,7 @@ extern "C" void psx_game_codegen_relaunch_or_exit(const char* disc_path);
 extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #include "psx_sdl.h"
+#include "window_fullscreen.h"
 #if defined(PSX_SDL3)
 /*
  * SDL_main.h is a single-header implementation in SDL3. Keep it in the one
@@ -379,6 +380,7 @@ extern "C" uint8_t  psx_guest_read_byte(uint32_t addr);
 extern "C" {
 SDL_Window* sdl_window = nullptr;
 }
+static PsxWindowFullscreen s_window_fullscreen;
 static SDL_Renderer* sdl_renderer;
 static SDL_Texture*  sdl_texture;
 /* Per-player input device routing (PSX ports 1 & 2). Seeded from the
@@ -1382,14 +1384,6 @@ static int present_should_wall_pace(void);
 static void apply_present_cadence(void);
 static void refresh_host_display_cadence(int force_log, int force_probe);
 
-/* Map the configured tri-state fullscreen mode (g_fullscreen) to the SDL
- * window-fullscreen flag: used both to open the window in that mode and to
- * pick the hotkey's fullscreen target. */
-static Uint32 psx_fullscreen_flag_for_mode(int mode) {
-    if (mode == 2) return SDL_WINDOW_FULLSCREEN;         /* exclusive */
-    if (mode == 1) return SDL_WINDOW_FULLSCREEN_DESKTOP; /* borderless */
-    return 0;                                            /* windowed */
-}
 
 /* FMV auto-skip detection hooks (cdrom.c / mdec.c). */
 extern "C" int      cdrom_xa_stream_active(void);
@@ -7120,28 +7114,18 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * windowed and the CONFIGURED tri-state mode (g_fullscreen: 1
                  * borderless desktop fullscreen keeping the desktop resolution
                  * and letterboxing the image, or 2 exclusive fullscreen — a
-                 * real display-mode change). SDL_WINDOW_FULLSCREEN's bit is
-                 * set in both SDL_WINDOW_FULLSCREEN and
-                 * SDL_WINDOW_FULLSCREEN_DESKTOP, so testing just that bit
-                 * detects "currently fullscreen, either mode". */
+                 * real display-mode change). Track the selected live mode:
+                 * borderless deliberately leaves SDL's fullscreen bit clear. */
                 else if (!key_repeat &&
                          host_keymap_match_event(HOST_KEYMAP_FULLSCREEN,
                                                  (int)key, (int)scancode,
                                                  (int)mod)) {
-                    Uint32 is_fs = SDL_GetWindowFlags(sdl_window) &
-                                   SDL_WINDOW_FULLSCREEN;
-                    if (is_fs) {
-                        SDL_SetWindowFullscreen(sdl_window, 0);
-                        host_osd_push("Windowed", 1500);
-                    } else {
-                        /* If the configured mode is "off", the hotkey still
-                         * needs a mode to switch INTO — default to borderless,
-                         * matching the historical (pre-tri-state) behaviour. */
-                        Uint32 target = psx_fullscreen_flag_for_mode(g_fullscreen);
-                        if (target == 0) target = SDL_WINDOW_FULLSCREEN_DESKTOP;
-                        SDL_SetWindowFullscreen(sdl_window, target);
-                        host_osd_push("Fullscreen", 1500);
-                    }
+                    const int target = s_window_fullscreen.mode ? 0 :
+                                       (g_fullscreen ? g_fullscreen : 1);
+                    if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0)
+                        host_osd_push(target ? "Fullscreen" : "Windowed", 1500);
+                    else
+                        host_osd_push("Fullscreen change failed", 1500);
                 }
             }
         }
@@ -15964,7 +15948,6 @@ session_reboot:
      * borderless desktop fullscreen (keeps the desktop resolution, letterboxes
      * the image), 2 = exclusive fullscreen (real display-mode change), 0 =
      * windowed. Matches the in-game Alt+Enter / Cmd+Ctrl+F hotkey behaviour. */
-    win_flags |= psx_fullscreen_flag_for_mode(g_fullscreen);
     /* Open at the user-chosen window size (default: see window_size.h)
      * instead of the old hardcoded 640x480. The
      * height follows the configured display aspect (4:3 native, wider for the
@@ -15983,6 +15966,9 @@ session_reboot:
         return 1;
     }
     psx_apply_window_icon(sdl_window, argv[0]);
+    s_window_fullscreen = {};
+    if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, g_fullscreen) != 0)
+        std::fprintf(stderr, "Fullscreen setup failed: %s\n", SDL_GetError());
 
     /* No maximise: the default size (window_size.h) leaves a third of the
      * usable height free, so the client plus title bar and borders fits on
@@ -16740,7 +16726,7 @@ soft_return_lobby:
         ls.output_method = 2;
         ls.window_scale = std::max(1, std::min(4, g_video_win_w / 320));
         ls.disc_index = selected_disc_index;
-        ls.fullscreen = g_fullscreen ? 1 : 0;
+        ls.fullscreen = g_fullscreen;
         ls.ignore_aspect = 0;
         ls.linear_filter = (g_video_texfilter != 0) ? 1 : 0;
         ls.widescreen =
@@ -17185,7 +17171,7 @@ soft_return_lobby:
                 us.has_auto_skip_fmv = skip_fmv_offered;
                 us.turbo_loads = ls.turbo_loads != 0;
                 us.has_turbo_loads = turbo_loads_offered;
-                us.fullscreen = ls.fullscreen != 0;
+                us.fullscreen = ls.fullscreen;
                 us.has_fullscreen = true;
                 us.window_width = ls.window_width > 0 ? ls.window_width : g_video_win_w;
                 us.has_window_width = true;
@@ -17233,7 +17219,7 @@ soft_return_lobby:
              * both. */
             if (skip_fmv_offered)     g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
             if (turbo_loads_offered)  g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
-            g_fullscreen = ls.fullscreen != 0;
+            g_fullscreen = ls.fullscreen;
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
             g_audio_freq = ls.audio_freq;
