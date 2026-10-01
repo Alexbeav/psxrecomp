@@ -172,6 +172,13 @@ void psx_bios_module_fill_callbacks(PsxBiosModuleCallbacks *out);
 /* Last build/load diagnostic line, for logs and the launcher. */
 const char *psx_bios_module_last_message(void);
 
+/* Progress sink for a build in flight (launcher progress modal). pct is 0..1
+ * when a stage boundary is known, negative otherwise; msg is the builder's
+ * current line. Called on the thread running psx_bios_module_acquire. NULL
+ * clears it. */
+typedef void (*PsxBiosModuleProgressFn)(void *ctx, float pct, const char *msg);
+void psx_bios_module_set_progress(PsxBiosModuleProgressFn fn, void *ctx);
+
 #endif /* !PSX_BIOS_MODULE_BUILD */
 
 #ifdef __cplusplus

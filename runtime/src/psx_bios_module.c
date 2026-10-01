@@ -50,6 +50,41 @@
 #endif
 
 static char s_last_msg[512];
+static PsxBiosModuleProgressFn s_progress_fn;
+static void *s_progress_ctx;
+
+void psx_bios_module_set_progress(PsxBiosModuleProgressFn fn, void *ctx) {
+    s_progress_fn = fn;
+    s_progress_ctx = ctx;
+}
+
+/* Builder output -> progress. Stage boundaries come from the lines
+ * bios_module_build.py prints at each step; everything else is indeterminate. */
+static void report_line(const char *line) {
+    float pct = -1.0f;
+    const char *msg = line;
+    while (*msg == ' ') msg++;
+    if (!*msg || strstr(msg, "opcode 0x2F")) return;   /* emitter noise */
+    if (!strncmp(msg, "dump:", 5))             pct = 0.05f;
+    else if (!strncmp(msg, "emit:", 5))        pct = 0.15f;
+    else if (!strncmp(msg, "compile:", 8))     pct = 0.30f;
+    else if (!strncmp(msg, "self-check:", 11)) pct = 0.90f;
+    else if (!strncmp(msg, "PSX_BIOS_MODULE_PUBLISHED", 25)) pct = 1.0f;
+    if (s_progress_fn) {
+        char trimmed[200];
+        size_t n = strlen(msg);
+        while (n && (msg[n - 1] == '\n' || msg[n - 1] == '\r')) n--;
+        if (n >= sizeof(trimmed)) n = sizeof(trimmed) - 1;
+        memcpy(trimmed, msg, n);
+        trimmed[n] = '\0';
+        /* The compile line is a 500-character command; say what it means. */
+        if (!strncmp(trimmed, "compile:", 8)) strcpy(trimmed, "Compiling the BIOS backend (this is the long step)…");
+        else if (!strncmp(trimmed, "emit:", 5)) strcpy(trimmed, "Recompiling your BIOS image…");
+        else if (!strncmp(trimmed, "self-check:", 11)) strcpy(trimmed, "Checking the built backend…");
+        else if (!strncmp(trimmed, "PSX_BIOS_MODULE_PUBLISHED", 25)) strcpy(trimmed, "BIOS backend ready.");
+        s_progress_fn(s_progress_ctx, pct, trimmed);
+    }
+}
 
 static void note(const char *fmt, ...) {
     va_list ap;
@@ -349,11 +384,24 @@ static int run_command(const char *cmd) {
     CloseHandle(wr);
     {
         char buf[512];
+        char line[1024];
+        size_t ln = 0;
         DWORD got;
         while (ReadFile(rd, buf, sizeof(buf) - 1, &got, NULL) && got) {
+            DWORD i;
             buf[got] = '\0';
             fputs(buf, stdout);
+            for (i = 0; i < got; i++) {
+                if (buf[i] == '\n' || ln + 1 >= sizeof(line)) {
+                    line[ln] = '\0';
+                    report_line(line);
+                    ln = 0;
+                } else {
+                    line[ln++] = buf[i];
+                }
+            }
         }
+        if (ln) { line[ln] = '\0'; report_line(line); }
         fflush(stdout);
     }
     WaitForSingleObject(pi.hProcess, INFINITE);
@@ -364,10 +412,13 @@ static int run_command(const char *cmd) {
     return (int)code;
 #else
     FILE *p = popen(cmd, "r");
-    char buf[512];
+    char buf[1024];
     int status;
     if (!p) return -1;
-    while (fgets(buf, sizeof(buf), p)) fputs(buf, stdout);
+    while (fgets(buf, sizeof(buf), p)) {
+        fputs(buf, stdout);
+        report_line(buf);
+    }
     fflush(stdout);
     status = pclose(p);
     if (status == -1) return -1;
@@ -425,6 +476,7 @@ static int build_module(const BmToolchain *tk, const char *dump_path,
     }
     note("building %s backend from %s with %s (one-time; this can take a while)",
          stem, dump_path, compiler);
+    if (s_progress_fn) s_progress_fn(s_progress_ctx, 0.02f, "Starting the BIOS build…");
     fprintf(stdout, "psx_bios_module: %s\n", cmd);
     fflush(stdout);
     rc = run_command(cmd);

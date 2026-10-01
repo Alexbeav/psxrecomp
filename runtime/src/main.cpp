@@ -8200,14 +8200,23 @@ namespace {
                     exe_dir_from_argv(g_lnch_argv0 ? g_lnch_argv0 : "").string();
                 const bool cached =
                     psx_bios_module_is_cached(open_path.c_str(), exe_dir.c_str()) != 0;
-                out->ok = 1;
                 out->warn = 0;
-                out->needs_regen = 0;
-                std::snprintf(out->detail, sizeof(out->detail),
-                              cached ? "%s (CRC OK, ready)."
-                                     : "%s (CRC OK). Compiled from your image on first "
-                                       "launch — one-time, about a minute.",
-                              psx_bios_module_known_id(crc, (uint32_t)size));
+                if (cached) {
+                    out->ok = 1;
+                    out->needs_regen = 0;
+                    std::snprintf(out->detail, sizeof(out->detail), "%s (CRC OK, ready).",
+                                  psx_bios_module_known_id(crc, (uint32_t)size));
+                } else {
+                    /* needs_regen + gi.bios_prepare_with_progress: the launcher
+                     * runs the build as a progress job (wizard or Play prompt)
+                     * and re-verifies; it never offers Generate & rebuild. */
+                    out->ok = 0;
+                    out->needs_regen = 1;
+                    std::snprintf(out->detail, sizeof(out->detail),
+                                  "%s (CRC OK). Prepare it once for this build "
+                                  "(about a minute); then it is ready every launch.",
+                                  psx_bios_module_known_id(crc, (uint32_t)size));
+                }
             } else if (g_lnch_can_regen) {
                 out->needs_regen = 1;
                 std::snprintf(out->detail, sizeof(out->detail),
@@ -8230,6 +8239,41 @@ namespace {
                           "BIOS check failed.");
             return 1;
         }
+    }
+
+    /* Launcher BIOS prepare job (recomp-ui bios_prepare_with_progress): build
+     * the module for the staged dump with progress, on the worker thread. The
+     * launcher re-verifies afterwards; validate_bios_for_launch then finds the
+     * cached module at Play. */
+    struct AeBiosPrepareCtx { RecompLauncherCPrepareProgressFn fn; void* ctx; };
+    void ae_bios_prepare_progress(void* ctx, float pct, const char* msg) {
+        AeBiosPrepareCtx* c = (AeBiosPrepareCtx*)ctx;
+        if (c && c->fn) c->fn(c->ctx, pct, msg);
+    }
+    int ae_bios_prepare(const char* bios_path, char* err_msg, size_t err_cap,
+                        RecompLauncherCPrepareProgressFn on_progress, void* progress_ctx) {
+        if (err_msg && err_cap) err_msg[0] = '\0';
+        if (!bios_path || !bios_path[0]) {
+            if (err_msg && err_cap) std::snprintf(err_msg, err_cap, "No BIOS selected.");
+            return 0;
+        }
+        const std::string exe_dir =
+            exe_dir_from_argv(g_lnch_argv0 ? g_lnch_argv0 : "").string();
+        std::filesystem::path resolved =
+            resolve_bios_path(bios_path, g_lnch_argv0 ? g_lnch_argv0 : "");
+        const std::string dump = (!resolved.empty() ? resolved : std::filesystem::path(bios_path)).string();
+        AeBiosPrepareCtx c{on_progress, progress_ctx};
+        psx_bios_module_set_progress(ae_bios_prepare_progress, &c);
+        char err[256] = {0};
+        const PsxBiosBackend* m = psx_bios_module_acquire(
+            dump.c_str(), exe_dir.c_str(), /*allow_build=*/1, err, sizeof(err));
+        psx_bios_module_set_progress(nullptr, nullptr);
+        if (!m) {
+            if (err_msg && err_cap) std::snprintf(err_msg, err_cap, "%s", err);
+            return 0;
+        }
+        if (on_progress) on_progress(progress_ctx, 1.0f, "BIOS ready.");
+        return 1;
     }
 
     int ae_prepare_disc(const char* source_path, char* out_disc_path, size_t out_cap,
@@ -14694,9 +14738,24 @@ int main(int argc, char** argv) {
              * offered "Generate & rebuild" with no CLI or toolchain to run it. */
             g_lnch_can_regen = gi.prepare_with_progress != nullptr ||
                                psx_bios_registry_count == 0;
-            gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen ||
-                           psx_bios_module_supported(
-                               exe_dir_from_argv(argv[0]).string().c_str())) ? 1 : 0;
+            {
+                const bool module_ok = psx_bios_module_supported(
+                    exe_dir_from_argv(argv[0]).string().c_str()) != 0;
+                gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen || module_ok) ? 1 : 0;
+                /* The launcher resolves a buildable dump with this job instead
+                 * of Generate & rebuild (which a bundled build does not have). */
+                if (module_ok && !gi.prepare_with_progress) {
+                    gi.bios_prepare_with_progress = ae_bios_prepare;
+                    gi.bios_prepare_title = "Prepare this BIOS";
+                    gi.bios_prepare_note =
+                        "This BIOS is not part of the build yet. Preparing it compiles "
+                        "a backend from your own image on this machine, once (about a "
+                        "minute); no disc or rebuild is needed. Or use OpenBIOS to play now.";
+                    gi.bios_prepare_button = "Prepare BIOS";
+                    gi.bios_prepare_busy_status = "Compiling your BIOS for this build…";
+                    gi.bios_prepare_success_status = "BIOS ready — continue to the launcher.";
+                }
+            }
 #endif
 #endif /* PSX_HAS_SETUP_WIZARD */
             launcher_boot_timing_mark("host:setup_checks_done");
@@ -16822,9 +16881,22 @@ soft_return_lobby:
         psx_game_codegen_setup_apply(&gi);
         g_lnch_can_regen = gi.prepare_with_progress != nullptr ||
                            psx_bios_registry_count == 0;
-        gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen ||
-                       psx_bios_module_supported(
-                           exe_dir_from_argv(argv[0]).string().c_str())) ? 1 : 0;
+        {
+            const bool module_ok = psx_bios_module_supported(
+                exe_dir_from_argv(argv[0]).string().c_str()) != 0;
+            gi.has_bios = (psx_bios_has_selectable() || g_lnch_can_regen || module_ok) ? 1 : 0;
+            if (module_ok && !gi.prepare_with_progress) {
+                gi.bios_prepare_with_progress = ae_bios_prepare;
+                gi.bios_prepare_title = "Prepare this BIOS";
+                gi.bios_prepare_note =
+                    "This BIOS is not part of the build yet. Preparing it compiles "
+                    "a backend from your own image on this machine, once (about a "
+                    "minute); no disc or rebuild is needed. Or use OpenBIOS to play now.";
+                gi.bios_prepare_button = "Prepare BIOS";
+                gi.bios_prepare_busy_status = "Compiling your BIOS for this build…";
+                gi.bios_prepare_success_status = "BIOS ready — continue to the launcher.";
+            }
+        }
 #endif
 
         char rui_out_disc[1024] = {0};
