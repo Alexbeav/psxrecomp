@@ -4950,7 +4950,10 @@ def _bom_free_incdir(d: str) -> str:
         return _TCC_BOMFREE_INC[d]
     out = tempfile.mkdtemp(prefix='tcc_inc_')
     for name in os.listdir(d):
-        if not name.endswith('.h'):
+        # Headers, and the .c.inc fragments a BIOS module's glue.c includes by
+        # name (overlay_dispatch_preamble.c.inc, psx_bios_module_glue.c.inc).
+        # tcc sees only this copy, so a file left out here is "not found".
+        if not name.endswith(('.h', '.inc')):
             continue
         with open(os.path.join(d, name), 'rb') as f:
             data = f.read()
