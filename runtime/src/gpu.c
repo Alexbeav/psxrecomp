@@ -124,11 +124,16 @@ typedef struct {
     int32_t  y;
     int32_t  h;
     uint8_t  op;
+    uint8_t  full_draw_area;
+    uint8_t  shared_split_ui;
     WsPrepassPacketGuard packet_guard;
 } WsUiPrepassItem;
 static WsUiPrepassItem ws_ui_prepass[WS_UI_PREPASS_MAX];
 static uint32_t ws_ui_prepass_count;
 static uint16_t ws_ui_prepass_rank = 0xFFFFu;
+/* Shared HUD packets execute once in each half. Keep the original packet
+ * intact for provenance guards, textures, diagnostics and guest RAM. */
+static int ws_shared_ui_copy = -1;
 
 #define WS_UI_PREPASS_NODE_MAX 8192u
 typedef struct {
@@ -2531,6 +2536,29 @@ static int ws_auto_ui_anchor(int32_t *out_anchor) {
     return 0;
 }
 
+static int ws_shared_ui_packet(void) {
+    uint32_t op = gp0_cmd_buf[0] >> 24;
+    if (!((op >= 0x28u && op <= 0x3Fu && (op & 8u)) ||
+          (op >= 0x60u && op <= 0x7Fu))) return 0;
+    if (!ws_local_viewport_cfg || ws_mode == 2 || !ws_vertical_split_active() ||
+        psx_ws_prim_is_tagged()) return 0;
+    int32_t anchor;
+    if (!ws_auto_ui_anchor(&anchor)) return 0;
+    uint32_t src = GPU_RAM_KEY(gp0_cmd_source_addr);
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
+        if (ws_ui_prepass[i].src_addr == src)
+            return ws_ui_prepass[i].shared_split_ui;
+    return 0;
+}
+
+static int32_t ws_shared_ui_delta(void) {
+    if (ws_shared_ui_copy < 0) return 0;
+    /* Projection mode still renders the complete native framebuffer. Both
+     * peers draw both copies identically, then present their selected half. */
+    int32_t W = ws_disp_w();
+    return (ws_shared_ui_copy ? 3 * W / 4 : W / 4) - W / 2;
+}
+
 static uint32_t ws_auto_ui_group_key_words(const uint32_t *words,
                                            uint32_t op,
                                            int32_t y, int32_t h) {
@@ -2587,7 +2615,8 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], const int32_t vy[4]) {
 
     int32_t anchor;
     if (!ws_auto_ui_anchor(&anchor)) return 0;
-    for (int i = 0; i < 4; i++) vx[i] = ws_scale_about(vx[i], anchor);
+    for (int i = 0; i < 4; i++)
+        vx[i] = ws_scale_about(vx[i], anchor) + ws_shared_ui_delta();
     ws_auto_ui_transform_count++;
     return 1;
 }
@@ -2601,7 +2630,7 @@ static int ws_auto_ui_transform_rect(int32_t *x, int32_t y, int *w, int h) {
         return 0;
     int32_t anchor;
     if (!ws_auto_ui_anchor(&anchor)) return 0;
-    *x = ws_scale_about(*x, anchor);
+    *x = ws_scale_about(*x, anchor) + ws_shared_ui_delta();
     *w = (int)ws_scale_len(*w);
     ws_auto_ui_transform_count++;
     return 1;
@@ -5305,7 +5334,8 @@ static int gp0_command_word_count(uint8_t opcode) {
 }
 
 static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,
-                              uint32_t source_addr, uint16_t rank) {
+                              uint32_t source_addr, uint16_t rank,
+                              int full_draw_area) {
     if (rank == 0xFFFFu) return;
     if (ws_ui_prepass_count >= WS_UI_PREPASS_MAX) { ws_ui_reject.cap++; return; }
     uint32_t op = words[0] >> 24;
@@ -5402,6 +5432,8 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,
     item->y  = min_y;
     item->h  = height;
     item->op = (uint8_t)op;
+    item->full_draw_area = full_draw_area ? 1 : 0;
+    item->shared_split_ui = 0;
     item->packet_guard = ws_prepass_packet_guard(words, word_count);
 }
 
@@ -5444,6 +5476,9 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     uint32_t safety = 0;
     uint16_t rank = 0xFFFFu;
     const uint32_t max_nodes = 0x40000u;
+    int area_left = (int)draw_area_left, area_right = (int)draw_area_right;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
 
     for (;;) {
         if (safety++ > max_nodes) {
@@ -5473,7 +5508,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
             ws_prepass_packet_guard(payload, num_words);
         if (num_words == 0) {
             rank = rank == 0xFFFFu ? 0u : (uint16_t)(rank + 1u);
-        } else if (rank != 0xFFFFu) {
+        } else {
             uint32_t word_addr =
                 psx_mod_gpu_dma_resolve_address(addr + 4u);
             uint32_t offset = 0;
@@ -5496,7 +5531,10 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                 }
                 ws_ui_prepass_add(words, (uint32_t)count,
                     psx_mod_gpu_dma_resolve_address(
-                        word_addr + offset * 4u), rank);
+                        word_addr + offset * 4u), rank,
+                    area_right - area_left + 1 >= (int)di.width);
+                if (op == 0xE3u) area_left = (int)(words[0] & 0x3FFu);
+                if (op == 0xE4u) area_right = (int)(words[0] & 0x3FFu);
                 offset += (uint32_t)count;
             }
         }
@@ -5600,8 +5638,36 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
         groups[i] = ws_ui_prepass[i].group;
     ws_ui_group_assign(groups, ws_ui_prepass_count, ws_disp_w(),
                        ws_auto_ui_dense, ws_auto_ui_in_place);
-    for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
         ws_ui_prepass[i].group.anchor = group_origin + groups[i].anchor;
+        ws_ui_prepass[i].group.root = groups[i].root;
+    }
+
+    /* A shared counter can comprise many glyphs and shadow packets, none of
+     * which individually crosses the split. Classify the complete admitted
+     * front-layer run, and require full-screen draw provenance. Per-player
+     * HUD, world geometry, divider strips and pause menus cannot qualify. */
+    if (ws_local_viewport_cfg && ws_mode != 2 && ws_vertical_split_active()) {
+        const int32_t W = ws_disp_w(), H = ws_disp_h(), seam = W / 2;
+        for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
+            int32_t x0 = W, x1 = 0, y0 = H, y1 = 0;
+            int full = 1;
+            for (uint32_t j = 0; j < ws_ui_prepass_count; j++) {
+                if (groups[j].root != groups[i].root) continue;
+                const WsUiGroupItem *g = &groups[j];
+                if (g->x < x0) x0 = g->x;
+                if (g->x + g->width > x1) x1 = g->x + g->width;
+                if (g->y < y0) y0 = g->y;
+                if (g->y + g->height > y1) y1 = g->y + g->height;
+                full &= ws_ui_prepass[j].full_draw_area;
+            }
+            if (full && x0 < seam && x1 > seam &&
+                x1 - x0 <= W / 2 && y1 - y0 <= H / 4) {
+                ws_ui_prepass[i].shared_split_ui = 1;
+                ws_ui_prepass[i].group.anchor = group_origin + seam;
+            }
+        }
+    }
 }
 
 void gpu_ws_validate_linked_list_header(uint32_t addr, uint32_t header) {
@@ -5918,6 +5984,8 @@ void gpu_ws_census_set(int on) { ws_census_on = on ? 1 : 0; }
 uint64_t gpu_ws_census_seq(void) { return ws_census_seq; }
 
 /* Execute a fully-collected GP0 command */
+static void gp0_dispatch_command(uint8_t opcode);
+
 static void gp0_execute_command(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
     gp0_opcode_count[opcode]++;
@@ -5968,6 +6036,16 @@ static void gp0_execute_command(void) {
     else if (opcode >= 0x80 && opcode <= 0xDF) gp0_copy_count++;
     else if (opcode >= 0xE1 && opcode <= 0xE6) gp0_env_count++;
 
+    if (opcode >= 0x20 && opcode <= 0x7F && ws_shared_ui_packet()) {
+        for (ws_shared_ui_copy = 0; ws_shared_ui_copy < 2; ws_shared_ui_copy++)
+            gp0_dispatch_command(opcode);
+        ws_shared_ui_copy = -1;
+    } else {
+        gp0_dispatch_command(opcode);
+    }
+}
+
+static void gp0_dispatch_command(uint8_t opcode) {
     switch (opcode) {
         case 0x00:
         case 0x01:
