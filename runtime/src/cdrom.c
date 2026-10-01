@@ -350,6 +350,12 @@ void cdrom_set_game_speed(int divisor) {
     g_game_divisor = divisor;
 }
 
+/* The speed the game will switch to. A power-on replay records it: at boot
+ * cdrom_get_speed() is still the BIOS's 1x (PS1B-316). */
+int cdrom_get_game_speed(void) {
+    return g_game_divisor;
+}
+
 /* Called by fntrace_record on first game-range dispatch. */
 void cdrom_notify_game_started(void) {
     g_disc_speed_divisor = g_game_divisor;

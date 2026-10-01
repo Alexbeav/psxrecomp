@@ -47,6 +47,12 @@ static time_t s_rec_started;
 #define DIGEST_CAP (INPUT_ROUTE_MAX_FRAMES / REPLAY_DIGEST_INTERVAL + 2u)
 static uint32_t (*s_digests)[5];
 static uint32_t s_digest_count;
+/* Power-on recording (PS1B-316): no anchor; the cards the guest booted with
+ * (both slots, 2 x INPUT_ROUTE_REPLAY_CARD_BYTES) and the product identity. */
+static int s_power_on;
+static uint8_t *s_cards;
+static uint32_t s_cards_mask;
+static char s_product[INPUT_ROUTE_REPLAY_PRODUCT_MAX + 1];
 
 /* Playback. */
 static InputDualShockRouteStep *s_steps_play;
@@ -59,6 +65,7 @@ static uint32_t s_play_digest_count, s_play_digest_next;
 static unsigned s_digests_checked, s_div_parts;
 static uint32_t s_div_frame;
 static int s_diverged;
+static int s_play_power_on, s_cards_installed;
 
 static const char *digest_parts_text(unsigned parts, char *out, size_t cap);
 
@@ -66,6 +73,13 @@ static const char *digest_parts_text(unsigned parts, char *out, size_t cap);
 static char s_verdict_path[PATH_BYTES];
 static char s_play_path[PATH_BYTES];
 static char s_rec_pin[INPUT_ROUTE_V3_TEXT], s_player_pin[INPUT_ROUTE_V3_TEXT];
+static char s_rec_exe[65], s_player_exe[65];
+/* Product lines of the recording and of this player: "platform" (for example
+ * windows-x64) and "codegen". s_cross_platform is 1 when the same pin plays on
+ * another platform's build. */
+static char s_rec_platform[24], s_player_platform[24];
+static char s_rec_codegen[16], s_player_codegen[16];
+static int s_cross_platform;
 static uint64_t s_end_cycle, s_end_recorded_cycle;
 static unsigned s_end_pages;
 static int s_end_reached;
@@ -106,6 +120,14 @@ static void write_verdict(ReplayResult result, const char *reason)
                 (unsigned long long)s_end_cycle, (unsigned long long)s_end_recorded_cycle, s_end_pages);
     fputs("  \"recorded_build\": ", f); json_string(f, s_rec_pin);
     fputs(",\n  \"player_build\": ", f); json_string(f, s_player_pin);
+    fputs(",\n  \"recorded_exe_sha256\": ", f); json_string(f, s_rec_exe);
+    fputs(",\n  \"player_exe_sha256\": ", f); json_string(f, s_player_exe);
+    fputs(",\n  \"recorded_platform\": ", f); json_string(f, s_rec_platform);
+    fputs(",\n  \"player_platform\": ", f); json_string(f, s_player_platform);
+    fputs(",\n  \"recorded_codegen\": ", f); json_string(f, s_rec_codegen);
+    fputs(",\n  \"player_codegen\": ", f); json_string(f, s_player_codegen);
+    fprintf(f, ",\n  \"cross_platform\": %s", s_cross_platform ? "true" : "false");
+    fprintf(f, ",\n  \"power_on\": %s", s_play_power_on ? "true" : "false");
     fputs(",\n  \"replay\": ", f); json_string(f, s_play_path);
     fputs(",\n  \"reason\": ", f); json_string(f, reason ? reason : "");
     fputs("\n}\n", f);
@@ -183,6 +205,59 @@ static void sanitize_name(const char *in, char *out, size_t cap)
     }
     while (n && (out[n - 1] == ' ' || out[n - 1] == '.')) --n;
     out[n] = 0;
+}
+
+static int file_exists(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (f) fclose(f);
+    return f != NULL;
+}
+
+int replay_session_partial_path(const char *path, char *out, size_t cap)
+{
+    static const char ext[] = ".psxrpl";
+    size_t n = path ? strlen(path) : 0;
+    if (!n) return 0;
+    if (n >= sizeof ext - 1 && !strcmp(path + n - (sizeof ext - 1), ext)) n -= sizeof ext - 1;
+    return snprintf(out, cap, "%.*s.partial.psxrpl", (int)n, path) < (int)cap;
+}
+
+int replay_session_boot_path(const char *dir, const char *title, int64_t utc_seconds,
+                             char *out, size_t cap)
+{
+    char base[49], stamp[32], partial[PATH_BYTES];
+    const time_t t = (time_t)utc_seconds;
+    struct tm tm_utc;
+    size_t n = 0;
+    /* Keep [A-Za-z0-9.-]; any other run becomes one '_'; no leading or
+     * trailing '_' or '.', so the name is safe in a shell and on every host. */
+    for (const unsigned char *p = (const unsigned char *)(title ? title : ""); *p && n + 1 < sizeof base; ++p) {
+        const int keep = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                         (*p >= '0' && *p <= '9') || (*p == '.' && n) || *p == '-';
+        if (keep) base[n++] = (char)*p;
+        else if (n && base[n - 1] != '_') base[n++] = '_';
+    }
+    while (n && (base[n - 1] == '_' || base[n - 1] == '.')) --n;
+    base[n] = 0;
+    if (!base[0]) snprintf(base, sizeof base, "replay");
+    if (!dir || !dir[0]) return 0;
+#ifdef _WIN32
+    if (gmtime_s(&tm_utc, &t)) return 0;
+#else
+    if (!gmtime_r(&t, &tm_utc)) return 0;
+#endif
+    strftime(stamp, sizeof stamp, "%Y%m%dT%H%M%SZ", &tm_utc);
+    for (int k = 1; k < 100; ++k) {
+        char suffix[8] = "";
+        if (k > 1) snprintf(suffix, sizeof suffix, "-%d", k);
+        if (snprintf(out, cap, "%s/%s-boot-%s%s.psxrpl", dir, base, stamp, suffix) >= (int)cap)
+            return 0;
+        if (!file_exists(out) && replay_session_partial_path(out, partial, sizeof partial) &&
+            !file_exists(partial))
+            return 1;
+    }
+    return 0;
 }
 
 static int read_slot_replay(int slot, InputRouteV3Replay *rp, char *path, size_t path_cap);
@@ -401,52 +476,81 @@ static void free_recording(void)
     free(s_words); s_words = NULL;
     free(s_anchor); s_anchor = NULL; s_anchor_size = 0;
     free(s_last_ram); s_last_ram = NULL;
+    free(s_cards); s_cards = NULL; s_cards_mask = 0;
+    s_power_on = 0;
+    s_product[0] = 0;
     s_frames = s_steps = 0;
     s_stop_requested = 0;
 }
 
-static int begin_recording(const char *path, int slot)
+static int refuse_record(const char *why)
+{
+    char msg[320];
+    snprintf(msg, sizeof msg, "Replay not recorded: %s", why);
+    replay_host_osd(msg, 2200);
+    return 0;
+}
+
+/* An anchored recording arms here and starts at the boundary after its anchor
+ * settles; a power-on recording starts at this boundary. */
+static int begin_recording(const char *path, int slot, int power_on)
 {
     char why[256] = "";
     if (s_state != REPLAY_IDLE) return 0;
-    if (!replay_host_can_record(why, sizeof why)) {
-        char msg[320];
-        snprintf(msg, sizeof msg, "Replay not recorded: %s", why);
-        replay_host_osd(msg, 2200);
-        return 0;
-    }
+    if (power_on && !replay_host_at_power_on())
+        return refuse_record("a replay from power-on must start at boot");
+    if (!replay_host_can_record(why, sizeof why)) return refuse_record(why);
     memset(&s_meta, 0, sizeof s_meta);
-    if (!replay_host_identity(&s_meta, why, sizeof why)) {
-        char msg[320];
-        snprintf(msg, sizeof msg, "Replay not recorded: %s", why);
-        replay_host_osd(msg, 2200);
-        return 0;
-    }
+    if (!replay_host_identity(&s_meta, why, sizeof why)) return refuse_record(why);
     s_words = (InputRouteDualShockWord *)malloc(INPUT_ROUTE_MAX_FRAMES * sizeof *s_words);
     s_last_ram = (uint8_t *)malloc(RAM_BYTES);
     s_digests = (uint32_t (*)[5])malloc(DIGEST_CAP * sizeof *s_digests);
     s_digest_count = 0;
     s_thumb = (uint32_t *)malloc(REPLAY_THUMB_W * REPLAY_THUMB_H * sizeof *s_thumb);
     s_have_thumb = 0;
-    if (!s_words || !s_last_ram || !s_digests || !s_thumb || !replay_host_request_anchor()) {
+    if (power_on) s_cards = (uint8_t *)calloc(2, INPUT_ROUTE_REPLAY_CARD_BYTES);
+    if (!s_words || !s_last_ram || !s_digests || !s_thumb || (power_on && !s_cards)) {
         free_recording();
-        replay_host_osd("Replay not recorded: out of memory", 2200);
-        return 0;
+        return refuse_record("out of memory");
+    }
+    if (power_on && !replay_host_cards_capture(s_cards, &s_cards_mask)) {
+        free_recording();
+        return refuse_record("the memory cards cannot be read");
+    }
+    if (!power_on && !replay_host_request_anchor()) {
+        free_recording();
+        return refuse_record("out of memory");
     }
     replay_host_settings_capture(s_settings, sizeof s_settings);
     snprintf(s_rec_path, sizeof s_rec_path, "%s", path);
     s_rec_slot = slot;
     s_result = REPLAY_RESULT_NONE;
-    s_state = REPLAY_ARMING;
+    if (!power_on) {
+        s_state = REPLAY_ARMING;
+        return 1;
+    }
+    replay_host_product(s_product, sizeof s_product);
+    replay_host_power_on_begin();
+    s_power_on = 1;
+    s_state = REPLAY_RECORDING;
+    s_frames = s_steps = 0;
+    s_rec_started = time(NULL);
+    replay_host_osd("Recording replay from power-on", 1600);
+    fprintf(stdout, "replay_recording: path=%s power_on=1 cards=%u\n", s_rec_path, (unsigned)s_cards_mask);
+    fflush(stdout);
     return 1;
 }
 
 int replay_session_record_to(const char *path)
 {
-    FILE *probe;
-    if (!path || !path[0] || strlen(path) >= PATH_BYTES) return 0;
-    if ((probe = fopen(path, "rb"))) { fclose(probe); return 0; }
-    return begin_recording(path, -1);
+    if (!path || !path[0] || strlen(path) >= PATH_BYTES || file_exists(path)) return 0;
+    return begin_recording(path, -1, 0);
+}
+
+int replay_session_record_power_on(const char *path)
+{
+    if (!path || !path[0] || strlen(path) >= PATH_BYTES || file_exists(path)) return 0;
+    return begin_recording(path, -1, 1);
 }
 
 /* "<game> · m:ss · YYYY-MM-DD HH:MM", cut to fit on a UTF-8 boundary. */
@@ -475,31 +579,26 @@ static void default_name(char *out, size_t cap)
     snprintf(out, cap, "%.*s%s", (int)n, title, tail);
 }
 
-/* Writes the recording that ended on boundary s_last_frame. */
-static void finish_recording(void)
+/* Writes the recording that ends on boundary s_last_frame to the new file
+ * `path` and reads it back with the reader playback uses. Returns NULL, or
+ * the reason; a file this call created is removed on failure. */
+static const char *write_recording(const char *path)
 {
-    char msg[PATH_BYTES + 64];
     const char *error = NULL;
+    InputRouteV3 meta = s_meta;
     InputRouteMarker end_marker;
-    InputRouteCheckpoint *end = NULL;
+    InputRouteCheckpoint *end = (InputRouteCheckpoint *)malloc(sizeof *end);
     unsigned char *digests = NULL;
     uint32_t digests_length = 0;
     FILE *f = NULL;
-    s_state = REPLAY_IDLE;
-    if (!s_frames) {
-        replay_host_osd("Replay not saved: nothing was recorded", 2000);
-        free_recording();
-        return;
-    }
-    end = (InputRouteCheckpoint *)malloc(sizeof *end);
     if (!end) error = "out of memory";
     if (!error) {
         checkpoint_of(s_last_frame, s_last_ram, s_last_cycle, end);
         end_marker.frame = s_last_frame;
         end_marker.kind = INPUT_ROUTE_MARKER_END;
-        s_meta.frames = s_last_frame;
-        s_meta.record_size = INPUT_DUALSHOCK_ROUTE_RECORD_BYTES;
-        s_meta.marker_count = s_meta.checkpoint_count = 1;
+        meta.frames = s_last_frame;
+        meta.record_size = INPUT_DUALSHOCK_ROUTE_RECORD_BYTES;
+        meta.marker_count = meta.checkpoint_count = 1;
         if (s_digest_count) {
             digests_length = 4u + s_digest_count * INPUT_ROUTE_REPLAY_DIGEST_BYTES;
             if (!(digests = (unsigned char *)malloc(digests_length))) error = "out of memory";
@@ -510,7 +609,7 @@ static void finish_recording(void)
                         input_route_put32(digests + 4 + i * INPUT_ROUTE_REPLAY_DIGEST_BYTES + 4 * k, s_digests[i][k]);
             }
         }
-        if (!error && !create_exclusive(s_rec_path, &f)) error = "the file already exists or cannot be created";
+        if (!error && !create_exclusive(path, &f)) error = "the file already exists or cannot be created";
     }
     if (!error) {
         InputRouteV3ReplayOut rx;
@@ -524,33 +623,77 @@ static void finish_recording(void)
         rx.digests_length = digests_length;
         if (s_have_thumb) { rx.thumb = s_thumb; rx.thumb_w = REPLAY_THUMB_W; rx.thumb_h = REPLAY_THUMB_H; }
         rx.name = name;
-        error = input_route_v3_write_ex(f, &s_meta, NULL, s_words, s_last_frame, &end_marker, end, &rx);
+        if (s_power_on) {
+            /* Only the inserted cards' images, in slot order. */
+            rx.power_on = 1;
+            rx.cards_mask = s_cards_mask;
+            rx.cards = s_cards_mask == 2u ? s_cards + INPUT_ROUTE_REPLAY_CARD_BYTES : s_cards;
+            rx.product = s_product[0] ? s_product : NULL;
+        }
+        error = input_route_v3_write_ex(f, &meta, NULL, s_words, s_last_frame, &end_marker, end, &rx);
         if (fclose(f) && !error) error = "close error";
-        if (error) remove(s_rec_path);
+        if (error) remove(path);
     }
     if (!error) {
-        /* The written file must pass the reader playback uses. */
-        InputRouteV3 meta;
-        InputRouteV3Replay rp;
+        InputRouteV3 back;
+        InputRouteV3Replay *rp = (InputRouteV3Replay *)malloc(sizeof *rp);
         InputDualShockRouteStep *steps = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof *steps);
         InputRouteMarker *markers = (InputRouteMarker *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *markers);
         InputRouteCheckpoint *cps = (InputRouteCheckpoint *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *cps);
-        FILE *r = fopen(s_rec_path, "rb");
-        error = !steps || !markers || !cps || !r ? "cannot reopen the replay"
-              : input_route_v3_read_ex(r, &meta, NULL, steps, markers, cps, &rp);
+        FILE *r = fopen(path, "rb");
+        error = !rp || !steps || !markers || !cps || !r ? "cannot reopen the replay"
+              : input_route_v3_read_ex(r, &back, NULL, steps, markers, cps, rp);
         if (r) fclose(r);
-        if (!error && (meta.frames != s_last_frame || rp.anchor_length != s_anchor_size ||
-                       rp.digest_count != s_digest_count))
+        if (!error && (back.frames != s_last_frame || rp->anchor_length != s_anchor_size ||
+                       rp->digest_count != s_digest_count || rp->power_on != s_power_on ||
+                       rp->cards_mask != s_cards_mask))
             error = "the replay does not read back identically";
-        free(steps); free(markers); free(cps);
-        if (error) remove(s_rec_path);
+        free(rp); free(steps); free(markers); free(cps);
+        if (error) remove(path);
     }
     free(end);
     free(digests);
+    return error;
+}
+
+/* Power-on recording: replace the crash-recovery copy with one that ends on
+ * this boundary. The old copy is kept until the new one reads back. */
+static void write_partial(void)
+{
+    char partial[PATH_BYTES], tmp[PATH_BYTES + 8];
+    const char *error;
+    if (!replay_session_partial_path(s_rec_path, partial, sizeof partial)) return;
+    snprintf(tmp, sizeof tmp, "%s.tmp", partial);
+    remove(tmp);
+    error = write_recording(tmp);
+    if (!error) {
+        remove(partial);
+        if (rename(tmp, partial)) { remove(tmp); error = "rename failed"; }
+    }
+    if (error) fprintf(stderr, "replay: partial copy not written: %s (%s)\n", error, partial);
+    else fprintf(stdout, "replay_partial: path=%s frames=%u\n", partial, (unsigned)s_last_frame);
+    fflush(stdout);
+}
+
+/* Writes the recording that ended on boundary s_last_frame. */
+static void finish_recording(void)
+{
+    char msg[PATH_BYTES + 64], partial[PATH_BYTES];
+    const char *error;
+    s_state = REPLAY_IDLE;
+    if (!s_frames) {
+        replay_host_osd("Replay not saved: nothing was recorded", 2000);
+        free_recording();
+        return;
+    }
+    error = write_recording(s_rec_path);
     if (error) {
         snprintf(msg, sizeof msg, "Replay not saved: %s", error);
         fprintf(stderr, "replay: %s (%s)\n", msg, s_rec_path);
     } else {
+        /* The finished replay supersedes the crash-recovery copy. */
+        if (s_power_on && replay_session_partial_path(s_rec_path, partial, sizeof partial))
+            remove(partial);
         if (s_rec_slot >= 0) snprintf(msg, sizeof msg, "Replay saved: slot %d", s_rec_slot + 1);
         else snprintf(msg, sizeof msg, "Replay saved: %s", s_rec_path);
         fprintf(stdout, "replay_recorded: path=%s frames=%u steps=%u\n", s_rec_path,
@@ -581,7 +724,7 @@ int replay_session_toggle_record(void)
         replay_host_osd("Replay not recorded: save states are not available", 2200);
         return 0;
     }
-    return begin_recording(path, slot);
+    return begin_recording(path, slot, 0);
 }
 
 static void record_boundary(uint16_t b, const uint8_t sticks[4])
@@ -599,6 +742,7 @@ static void record_boundary(uint16_t b, const uint8_t sticks[4])
         }
     }
     if (s_stop_requested) { finish_recording(); return; }
+    if (s_power_on && s_frames && s_frames % REPLAY_PARTIAL_INTERVAL == 0) write_partial();
     InputRouteDualShockWord w;
     w.buttons = b;
     /* File order LY,LX,RY,RX; host order LX,LY,RX,RY. */
@@ -622,6 +766,8 @@ static void end_playback(ReplayResult result, const char *osd)
     write_verdict(result, osd);
     if (s_settings_switched) replay_host_settings_restore();
     s_settings_switched = 0;
+    if (s_cards_installed) replay_host_cards_restore();
+    s_cards_installed = 0;
     free(s_steps_play); s_steps_play = NULL;
     free(s_play_digests); s_play_digests = NULL;
     s_play_digest_count = s_play_digest_next = 0;
@@ -648,6 +794,22 @@ static int refuse_play(const char *why)
     return 0;
 }
 
+/* The value of `key` in "key=value" lines, or "" when absent. */
+static void line_value(const char *lines, const char *key, char *out, size_t cap)
+{
+    const size_t k = strlen(key);
+    out[0] = 0;
+    for (const char *p = lines; p && *p; ) {
+        const char *end = strchr(p, '\n');
+        const size_t n = end ? (size_t)(end - p) : strlen(p);
+        if (n > k && !strncmp(p, key, k) && p[k] == '=') {
+            snprintf(out, cap, "%.*s", (int)(n - k - 1), p + k + 1);
+            return;
+        }
+        p = end ? end + 1 : p + n;
+    }
+}
+
 int replay_session_play_file(const char *path)
 {
     InputRouteV3 meta, product;
@@ -655,15 +817,21 @@ int replay_session_play_file(const char *path)
     InputRouteMarker *markers = NULL;
     InputRouteCheckpoint *cps = NULL;
     InputDualShockRouteStep *steps = NULL;
-    uint8_t *anchor = NULL;
+    uint8_t *anchor = NULL, *cards = NULL;
     unsigned char *dig = NULL;
     uint32_t (*digests)[5] = NULL;
     const char *error = NULL;
-    char why[256] = "";
+    char why[256] = "", player[INPUT_ROUTE_REPLAY_PRODUCT_MAX + 1] = "";
+    char rec_crc[16], player_crc[16];
     FILE *f;
     if (s_state != REPLAY_IDLE) return refuse_play("a replay is already recording or playing");
     snprintf(s_play_path, sizeof s_play_path, "%s", path ? path : "");
     s_rec_pin[0] = s_player_pin[0] = 0;
+    s_rec_exe[0] = s_player_exe[0] = 0;
+    s_rec_platform[0] = s_player_platform[0] = 0;
+    s_rec_codegen[0] = s_player_codegen[0] = 0;
+    s_cross_platform = 0;
+    s_play_power_on = 0;
     s_play_frame = s_play_frames = 0;
     s_diverged = 0;
     s_digests_checked = 0;
@@ -675,10 +843,26 @@ int replay_session_play_file(const char *path)
     steps = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof *steps);
     error = !rp || !markers || !cps || !steps ? "out of memory"
           : input_route_v3_read_ex(f, &meta, NULL, steps, markers, cps, rp);
-    if (!error && !(anchor = (uint8_t *)malloc(rp->anchor_length))) error = "out of memory";
-    if (!error && (fseek(f, rp->anchor_offset, SEEK_SET) ||
-                   fread(anchor, 1, rp->anchor_length, f) != rp->anchor_length))
-        error = "cannot read the anchor";
+    if (!error && rp->power_on) {
+        /* The inserted cards' images, back into their slots. */
+        s_play_power_on = 1;
+        if (!replay_host_at_power_on())
+            error = "it starts at power-on: play it from startup (--replay FILE)";
+        else if (!(cards = (uint8_t *)calloc(2, INPUT_ROUTE_REPLAY_CARD_BYTES)))
+            error = "out of memory";
+        else if (fseek(f, rp->cards_offset, SEEK_SET))
+            error = "cannot read the memory cards";
+        for (uint32_t c = 0; !error && c < 2; ++c)
+            if ((rp->cards_mask >> c & 1u) &&
+                fread(cards + c * INPUT_ROUTE_REPLAY_CARD_BYTES, 1, INPUT_ROUTE_REPLAY_CARD_BYTES, f) !=
+                    INPUT_ROUTE_REPLAY_CARD_BYTES)
+                error = "cannot read the memory cards";
+    } else if (!error) {
+        if (!(anchor = (uint8_t *)malloc(rp->anchor_length))) error = "out of memory";
+        else if (fseek(f, rp->anchor_offset, SEEK_SET) ||
+                 fread(anchor, 1, rp->anchor_length, f) != rp->anchor_length)
+            error = "cannot read the anchor";
+    }
     if (!error && rp->digest_count) {
         const uint32_t n = rp->digest_length - 4u;
         dig = (unsigned char *)malloc(n);
@@ -701,23 +885,56 @@ int replay_session_play_file(const char *path)
                    meta.disc_digest_kind != product.disc_digest_kind ||
                    memcmp(meta.disc_digest, product.disc_digest, 32)))
         error = "it was recorded on a different game or disc image";
-    if (!error && !same_text_ci(meta.bios_stem, product.bios_stem))
+    /* The product lines name the exe and the BIOS image by hash: a stem match
+     * with another BIOS dump, or a Workbench build with no pin (PS1B-287),
+     * still shows up here. */
+    if (!error) {
+        replay_host_product(player, sizeof player);
+        line_value(rp->product, "exe_sha256", s_rec_exe, sizeof s_rec_exe);
+        line_value(player, "exe_sha256", s_player_exe, sizeof s_player_exe);
+        line_value(rp->product, "bios_crc32", rec_crc, sizeof rec_crc);
+        line_value(player, "bios_crc32", player_crc, sizeof player_crc);
+        line_value(rp->product, "platform", s_rec_platform, sizeof s_rec_platform);
+        line_value(player, "platform", s_player_platform, sizeof s_player_platform);
+        line_value(rp->product, "codegen", s_rec_codegen, sizeof s_rec_codegen);
+        line_value(player, "codegen", s_player_codegen, sizeof s_player_codegen);
+    }
+    /* The BIOS image decides, not its file name: with a CRC on both sides the
+     * CRC is the test, so the same dump under another name (another machine's
+     * naming) plays. Without both CRCs the file-name stem is all there is. */
+    if (!error && (rec_crc[0] && player_crc[0] ? !same_text_ci(rec_crc, player_crc)
+                                               : !same_text_ci(meta.bios_stem, product.bios_stem)))
         error = "it was recorded with a different BIOS";
     if (!error && strcmp(meta.boot_mode, product.boot_mode))
         error = "it was recorded with a different boot mode";
     if (error) {
         char e[256];
         snprintf(e, sizeof e, "%s", error);
-        free(rp); free(markers); free(cps); free(steps); free(anchor); free(digests);
+        free(rp); free(markers); free(cps); free(steps); free(anchor); free(cards); free(digests);
         return refuse_play(e);
     }
-    int other_build = strcmp(meta.pin, product.pin) != 0;
+    const int other_pin = strcmp(meta.pin, product.pin) != 0;
+    int other_build = other_pin ||
+                      (s_rec_exe[0] && s_player_exe[0] && strcmp(s_rec_exe, s_player_exe));
+    /* The same pin built for another platform has another exe by construction;
+     * it is the same build, not a different one. */
+    s_cross_platform = !other_pin && s_rec_platform[0] && s_player_platform[0] &&
+                       strcmp(s_rec_platform, s_player_platform) != 0;
     snprintf(s_rec_pin, sizeof s_rec_pin, "%s", meta.pin);
     snprintf(s_player_pin, sizeof s_player_pin, "%s", product.pin);
     char differs[512] = "";
     replay_host_settings_apply(rp->settings, differs, sizeof differs);
     s_settings_switched = 1;
-    if (!replay_host_load_anchor(anchor, rp->anchor_length)) {
+    if (s_play_power_on) {
+        s_cards_installed = replay_host_cards_install(cards, rp->cards_mask);
+        free(cards);
+        if (!s_cards_installed) {
+            free(rp); free(markers); free(cps); free(steps); free(digests);
+            end_playback(REPLAY_RESULT_FAILED, "Replay not played: its memory cards cannot be inserted");
+            return 0;
+        }
+        replay_host_power_on_begin();
+    } else if (!replay_host_load_anchor(anchor, rp->anchor_length)) {
         free(rp); free(markers); free(cps); free(steps); free(anchor); free(digests);
         end_playback(REPLAY_RESULT_FAILED, "Replay not played: the anchor state cannot be loaded");
         return 0;
@@ -737,14 +954,21 @@ int replay_session_play_file(const char *path)
     s_div_frame = 0;
     s_diverged = 0;
     s_result = REPLAY_RESULT_NONE;
-    s_state = REPLAY_LOADING;
-    if (other_build) {
+    /* A power-on replay feeds record 0 at this boundary, as it was recorded. */
+    s_state = s_play_power_on ? REPLAY_PLAYING : REPLAY_LOADING;
+    if (s_cross_platform) {
+        char msg[160];
+        snprintf(msg, sizeof msg, "Replay from the same build on another platform (%s)", s_rec_platform);
+        replay_host_osd(msg, 2600);
+        fprintf(stderr, "replay: recorded on build %s for %s (exe %s), this is the %s build (exe %s)\n",
+                meta.pin, s_rec_platform, s_rec_exe[0] ? s_rec_exe : "?", s_player_platform,
+                s_player_exe[0] ? s_player_exe : "?");
+    } else if (other_build) {
         replay_host_osd("Replay from a different build: it may go out of sync", 2600);
-        fprintf(stderr, "replay: recorded on build %s, this is %s\n", meta.pin, product.pin);
+        fprintf(stderr, "replay: recorded on build %s (exe %s), this is %s (exe %s)\n", meta.pin,
+                s_rec_exe[0] ? s_rec_exe : "?", product.pin, s_player_exe[0] ? s_player_exe : "?");
     } else if (differs[0]) {
         char msg[640];
-        /* Only settings playback cannot switch are listed (the others are
-         * switched for playback and restored after, so they are not news). */
         /* Only settings playback cannot switch are listed (the others are
          * switched for playback and restored after, so they are not news). */
         snprintf(msg, sizeof msg, "Replay may go out of sync: different %s", differs);
@@ -752,7 +976,8 @@ int replay_session_play_file(const char *path)
     } else {
         replay_host_osd("Replay playing", 1200);
     }
-    fprintf(stdout, "replay_playing: path=%s frames=%u other_build=%d\n", path, (unsigned)meta.frames, other_build);
+    fprintf(stdout, "replay_playing: path=%s frames=%u other_build=%d power_on=%d cross_platform=%d\n", path,
+            (unsigned)meta.frames, other_build, s_play_power_on, s_cross_platform);
     fflush(stdout);
     free(rp); free(markers); free(cps); free(anchor);
     return 1;

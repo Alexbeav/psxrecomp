@@ -109,6 +109,18 @@ records  frame_count records of record_size, then end of file
 | `0x80000110` | T101 | marker: u32 frame, u8 kind (1 MENU, 2 GAMEPLAY), u8[3] 0 |
 | `0x80000111` | T101 | checkpoint: u32 frame, u32 0, u64 guest cycle, u8[32] RAM SHA-256, u64[512] FNV-1a 64 page hashes |
 | `0x000002xx` | T98 | port layout, console events, disc set (mandatory; not read yet) |
+| `0x00000301` | PS1B-191 | player replay anchor: the save state the replay starts from |
+| `0x00000302` | PS1B-191 | player replay settings: ASCII `key=value` lines |
+| `0x00000303` | PS1B-191 | player replay state digests: u32 count, then u32 frame and four u32 digests each |
+| `0x80000304` | PS1B-191 | player replay thumbnail: u16 width, u16 height, ARGB pixels |
+| `0x80000305` | PS1B-191 | player replay name, UTF-8 |
+| `0x00000306` | PS1B-316 | power-on start: u32 vblank, always 0 (a replay has this or an anchor, never both) |
+| `0x00000307` | PS1B-316 | memory cards at power-on: u32 mask (bit 0 card 1, bit 1 card 2), then 128 KiB per inserted card |
+| `0x80000308` | PS1B-316 | product lines: `exe_sha256`, `codegen`, `bios_crc32`, `renderer`, `input_seed` |
+
+Only the player replay reader (`input_route_v3_read_ex` with a replay
+argument) admits the `0x3xx` tags. A route reader refuses a replay, so a replay
+is never played as a route from power-on. See [PLAYER_REPLAYS.md](PLAYER_REPLAYS.md).
 
 Identity tags are all-or-nothing and unique. Marker and checkpoint frames are
 boundaries: frame N is after record N was supplied and before record N+1, and

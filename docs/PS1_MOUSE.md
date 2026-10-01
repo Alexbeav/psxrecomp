@@ -59,7 +59,9 @@ buttons released.
   starts with the same defaults as `[player1]`; rebind it from Configure.
 - Netplay carries pads only. Every netplay seat is a pad.
 - Replays, input routes, TAS runs and debug-server input drive pads only. They
-  never sample the mouse.
+  never sample the mouse. A player replay (F11, or the launcher's Record
+  replay) refuses to start while either port holds a mouse (PS1B-313 tracks
+  peripherals in replays).
 - `keybinds.ini` mouse binds (`Mouse1`, `LMB` and so on) stay live for pad
   seats. If you bind a mouse button to a pad button, a click on a mouse port
   also presses that pad button. The default keybinds bind no mouse buttons.

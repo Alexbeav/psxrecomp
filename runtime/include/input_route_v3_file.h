@@ -67,6 +67,21 @@
 #define INPUT_ROUTE_REPLAY_NAME_MAX     96u
 #define INPUT_ROUTE_REPLAY_THUMB_MAX    (4u + 4u * 256u * 256u)
 #define INPUT_ROUTE_REPLAY_SETTINGS_MAX 4096u
+/* PS1B-316 power-on replay: no ANCHOR, the replay starts at a cold boot.
+ * Mandatory tags; a replay holds exactly one of ANCHOR and POWER_ON.
+ *   POWER_ON  u32 vblank (always 0): record 0 is delivered at the first
+ *             vblank after power-on, so playback must start the same way
+ *   CARDS     u32 mask (bit 0 card 1, bit 1 card 2 inserted), then one
+ *             INPUT_ROUTE_REPLAY_CARD_BYTES image per inserted card, in slot
+ *             order: the cards as the guest found them at power-on
+ * Optional (skippable):
+ *   PRODUCT   ASCII "key=value" lines naming the product that recorded it:
+ *             exe_sha256, codegen, bios_crc32, renderer, input_seed */
+#define INPUT_ROUTE_TAG_REPLAY_POWER_ON 0x00000306u
+#define INPUT_ROUTE_TAG_REPLAY_CARDS    0x00000307u
+#define INPUT_ROUTE_TAG_REPLAY_PRODUCT  0x80000308u
+#define INPUT_ROUTE_REPLAY_CARD_BYTES   (128u * 1024u)
+#define INPUT_ROUTE_REPLAY_PRODUCT_MAX  1024u
 
 /* Disc digest kinds. CUE: SHA-256 over the ASCII hex digests of the cue file
  * and then each FILE track in cue order, joined by '\n', no trailing newline
@@ -123,6 +138,11 @@ typedef struct {
     uint32_t thumb_w, thumb_h; /* 0 when absent; pixels at thumb_offset */
     long thumb_offset;
     char name[INPUT_ROUTE_REPLAY_NAME_MAX + 1];
+    int power_on;              /* POWER_ON present (then has_anchor is 0) */
+    int has_cards;
+    uint32_t cards_mask;       /* card images located at cards_offset */
+    long cards_offset;
+    char product[INPUT_ROUTE_REPLAY_PRODUCT_MAX + 1];
 } InputRouteV3Replay;
 
 /* Replay entries for input_route_v3_write_ex; NULL members are left out. */
@@ -135,7 +155,16 @@ typedef struct {
     const uint32_t *thumb;   /* thumb_w * thumb_h ARGB */
     uint16_t thumb_w, thumb_h;
     const char *name;
+    int power_on;            /* write POWER_ON (with no anchor) */
+    const unsigned char *cards;   /* 128 KiB per bit set in cards_mask */
+    uint32_t cards_mask;          /* written when power_on */
+    const char *product;
 } InputRouteV3ReplayOut;
+
+static inline uint32_t input_route_replay_card_count(uint32_t mask)
+{
+    return (mask & 1u) + ((mask >> 1) & 1u);
+}
 
 static inline int input_route_v3_name_ok(const char *s, size_t n)
 {
@@ -333,6 +362,37 @@ static inline const char *input_route_v3_read_ex(
             rp.name[length] = 0;
             if (!input_route_v3_name_ok(rp.name, length)) { rp.name[0] = 0; error = "replay name byte"; }
             break;
+        case INPUT_ROUTE_TAG_REPLAY_POWER_ON:
+            if (!replay) { error = "unsupported mandatory extension tag"; break; }
+            if (rp.power_on) { error = "duplicate replay power-on"; break; }
+            if (length != 4 || fread(small, 1, 4, f) != 4) { error = "replay power-on length"; break; }
+            if (input_route_le32(small)) { error = "replay power-on vblank"; break; }
+            rp.power_on = 1;
+            break;
+        case INPUT_ROUTE_TAG_REPLAY_CARDS:
+            if (!replay) { error = "unsupported mandatory extension tag"; break; }
+            if (rp.has_cards) { error = "duplicate replay cards"; break; }
+            if (length < 4 || fread(small, 1, 4, f) != 4) { error = "replay cards length"; break; }
+            rp.cards_mask = input_route_le32(small);
+            if (rp.cards_mask > 3u ||
+                length != 4u + input_route_replay_card_count(rp.cards_mask) * INPUT_ROUTE_REPLAY_CARD_BYTES)
+                { error = "replay cards length"; break; }
+            rp.has_cards = 1;
+            rp.cards_offset = ftell(f) - start;
+            if (fseek(f, (long)(length - 4u), SEEK_CUR)) error = "short replay cards";
+            break;
+        case INPUT_ROUTE_TAG_REPLAY_PRODUCT:
+            if (!replay) { if (fseek(f, (long)length, SEEK_CUR)) error = "short extension payload"; break; }
+            if (rp.product[0]) { error = "duplicate replay product"; break; }
+            if (!length || length > INPUT_ROUTE_REPLAY_PRODUCT_MAX ||
+                fread(rp.product, 1, length, f) != length) { rp.product[0] = 0; error = "replay product length"; break; }
+            rp.product[length] = 0;
+            for (uint32_t i = 0; !error && i < length; ++i)
+                if ((unsigned char)rp.product[i] != '\n' &&
+                    ((unsigned char)rp.product[i] < 0x20 || (unsigned char)rp.product[i] > 0x7e))
+                    error = "replay product byte";
+            if (error) rp.product[0] = 0;
+            break;
         default:
             if (!(tag & INPUT_ROUTE_TAG_SKIPPABLE)) { error = "unsupported mandatory extension tag"; break; }
             if ((tag & 0x7fffff00u) == 0x100u) { error = "unsupported identity/marker tag"; break; }
@@ -362,9 +422,12 @@ static inline const char *input_route_v3_read_ex(
     if (error) return error;
     if (fgetc(f) != EOF || ferror(f)) return "trailing bytes/read error";
     if (replay) {
-        /* A replay needs its anchor, its identity and an END checkpoint on
-         * the last boundary. */
-        if (!rp.has_anchor) return "replay anchor missing";
+        /* A replay needs its anchor or a power-on start (not both), its
+         * identity and an END checkpoint on the last boundary. A power-on
+         * replay also carries the memory cards it booted with. */
+        if (rp.has_anchor && rp.power_on) return "replay has an anchor and a power-on start";
+        if (!rp.has_anchor && !rp.power_on) return "replay anchor missing";
+        if (rp.power_on && !rp.has_cards) return "replay cards missing";
         if (!s.has_identity) return "replay identity missing";
         if (!s.marker_count || markers[s.marker_count - 1].kind != INPUT_ROUTE_MARKER_END ||
             markers[s.marker_count - 1].frame != s.frames)
@@ -432,6 +495,11 @@ static inline const char *input_route_v3_write_ex(
     const uint32_t digests_length = rx ? rx->digests_length : 0;
     const uint32_t thumb_bytes = rx && rx->thumb ? 4u + 4u * rx->thumb_w * rx->thumb_h : 0;
     const size_t name_len = rx && rx->name ? strlen(rx->name) : 0;
+    const int power_on = rx && rx->power_on;
+    const uint32_t cards_mask = power_on ? rx->cards_mask : 0;
+    const uint32_t cards_length =
+        4u + input_route_replay_card_count(cards_mask) * INPUT_ROUTE_REPLAY_CARD_BYTES;
+    const size_t product_len = rx && rx->product ? strlen(rx->product) : 0;
     unsigned char h[INPUT_ROUTE_V3_HEADER_BYTES], small[36], r[8];
     unsigned char cp[INPUT_ROUTE_CHECKPOINT_BYTES];
     uint64_t ext = 0;
@@ -447,7 +515,20 @@ static inline const char *input_route_v3_write_ex(
         ext += input_route_v3_entry_bytes(36);
     }
     if (!words == !dual) return "record layout";
+    if (anchor && power_on) return "replay anchor and power-on";
     if (anchor) ext += input_route_v3_entry_bytes(anchor_length);
+    if (power_on) {
+        if (cards_mask > 3u || (cards_mask && !rx->cards)) return "replay cards";
+        ext += input_route_v3_entry_bytes(4) + input_route_v3_entry_bytes(cards_length);
+    }
+    if (product_len) {
+        if (product_len > INPUT_ROUTE_REPLAY_PRODUCT_MAX) return "replay product length";
+        for (size_t i = 0; i < product_len; ++i)
+            if ((unsigned char)rx->product[i] != '\n' &&
+                ((unsigned char)rx->product[i] < 0x20 || (unsigned char)rx->product[i] > 0x7e))
+                return "replay product byte";
+        ext += input_route_v3_entry_bytes((uint32_t)product_len);
+    }
     if (settings && settings[0]) {
         if (strlen(settings) > INPUT_ROUTE_REPLAY_SETTINGS_MAX) return "replay settings length";
         ext += input_route_v3_entry_bytes((uint32_t)strlen(settings));
@@ -485,6 +566,23 @@ static inline const char *input_route_v3_write_ex(
     if (anchor && !input_route_v3_put_entry(f, INPUT_ROUTE_TAG_REPLAY_ANCHOR,
                                             (const unsigned char *)anchor, anchor_length))
         return "write replay anchor";
+    if (power_on) {
+        unsigned char e8[8];
+        const uint32_t image_bytes = cards_length - 4u;
+        memset(small, 0, 4);
+        if (!input_route_v3_put_entry(f, INPUT_ROUTE_TAG_REPLAY_POWER_ON, small, 4))
+            return "write replay power-on";
+        input_route_put32(e8, INPUT_ROUTE_TAG_REPLAY_CARDS);
+        input_route_put32(e8 + 4, cards_length);
+        input_route_put32(small, cards_mask);
+        if (fwrite(e8, 1, 8, f) != 8 || fwrite(small, 1, 4, f) != 4 ||
+            (image_bytes && fwrite(rx->cards, 1, image_bytes, f) != image_bytes))
+            return "write replay cards";
+    }
+    if (product_len && !input_route_v3_put_entry(f, INPUT_ROUTE_TAG_REPLAY_PRODUCT,
+                                                 (const unsigned char *)rx->product,
+                                                 (uint32_t)product_len))
+        return "write replay product";
     if (settings && settings[0] &&
         !input_route_v3_put_entry(f, INPUT_ROUTE_TAG_REPLAY_SETTINGS,
                                   (const unsigned char *)settings, (uint32_t)strlen(settings)))

@@ -12,6 +12,10 @@
  * recording saves the state and loads it straight back, so the recorded run
  * and every later playback take the same post-load path.
  *
+ * A power-on replay (PS1B-316) has no anchor instead: it starts at the first
+ * vblank of a cold boot and carries the memory cards the guest booted with,
+ * so it holds no RAM image and survives save-state format changes.
+ *
  * The module owns no guest or host state directly; main.cpp supplies the
  * replay_host_* hooks below (the unit test supplies stubs). */
 #include <stddef.h>
@@ -50,6 +54,27 @@ int replay_session_toggle_record(void);
 /* Start recording into an explicit new file (headless tests). The file must
  * not exist. */
 int replay_session_record_to(const char *path);
+
+/* Power-on replay (PS1B-316, the launcher's "Record replay"): record from the
+ * first vblank of a cold boot into `path` (which must not exist) until F11,
+ * the length limit or process exit. There is no anchor state: the file holds
+ * the P1 input, the memory cards the guest booted with, the timing settings
+ * and the product identity, and playback cold-boots the same way. Refused
+ * unless replay_host_at_power_on(). */
+int replay_session_record_power_on(const char *path);
+/* While a power-on replay records, a complete replay ending on the latest
+ * boundary is rewritten every REPLAY_PARTIAL_INTERVAL frames to
+ * "<path without .psxrpl>.partial.psxrpl", so a crash leaves a playable
+ * prefix. A clean finish writes `path` and removes the partial copy. */
+#define REPLAY_PARTIAL_INTERVAL 1800u
+int replay_session_partial_path(const char *path, char *out, size_t cap);
+/* A free name for a new power-on replay in `dir`:
+ * "<title>-boot-<YYYYMMDDTHHMMSSZ>.psxrpl" in UTC, the title reduced to
+ * [A-Za-z0-9.-] with other runs turned into one '_', and "-2" .. "-99"
+ * before the extension when the name (or its partial copy) is taken.
+ * Returns 1 when a free name was found. */
+int replay_session_boot_path(const char *dir, const char *title, int64_t utc_seconds,
+                             char *out, size_t cap);
 
 int replay_session_play_slot(int slot);
 int replay_session_play_file(const char *path);
@@ -94,7 +119,8 @@ unsigned replay_session_digests_checked(void);
 
 /* Machine-readable verdict: when set, every playback that starts writes this
  * JSON file when it ends (result in_sync | diverged | stopped_by_input |
- * failed, frames, first divergence, recorded and player builds). NULL clears. */
+ * failed, frames, first divergence, recorded and player builds and exe
+ * SHA-256s, power_on). NULL clears. */
 void replay_session_set_verdict_path(const char *path);
 
 /* Thumbnail (taken at the anchor) and name stored in the replay. The default
@@ -114,8 +140,8 @@ void replay_session_shutdown(void);
 
 /* ---- Host hooks (main.cpp; stubs in the unit test) ---- */
 void replay_host_osd(const char *text, int ms);
-/* 0 and a reason when recording is not possible now (netplay, a second
- * controller, an armed route). */
+/* 0 and a reason when recording is not possible now (netplay, a multitap, an
+ * armed route, a mouse or other non-pad device in either port). */
 int replay_host_can_record(char *why, size_t cap);
 /* Fill the identity fields of *meta (pin, disc, BIOS, boot mode). */
 int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap);
@@ -149,6 +175,50 @@ uint64_t replay_host_cycle(void);
 int replay_host_slot_base(char *dir, size_t dir_cap, char *prefix, size_t prefix_cap);
 const char *replay_host_export_dir(void);
 const char *replay_host_disc_serial(void);
+
+/* Power-on replays (PS1B-316). */
+/* 1 only at the first vblank boundary of a cold boot, before any save state
+ * was loaded: the one place a power-on replay can start recording or play. */
+int replay_host_at_power_on(void);
+/* A power-on recording or playback starts: pin what an anchor load pins
+ * (overlays run interpreted until the replay ends). */
+void replay_host_power_on_begin(void);
+/* Both memory cards: `images` receives 2 x INPUT_ROUTE_REPLAY_CARD_BYTES
+ * (slot order), `mask` bit n is set when card n+1 is inserted. 0 on failure. */
+int replay_host_cards_capture(uint8_t *images, uint32_t *mask);
+/* Playback: the guest sees these cards (same layout as capture; only the
+ * inserted ones' images are read). Its writes stay in memory; the player's
+ * card files are not touched. 0 on failure. */
+int replay_host_cards_install(const uint8_t *images, uint32_t mask);
+/* After playback: the player's own cards again. */
+void replay_host_cards_restore(void);
+/* "key=value\n" lines naming this product (INPUT_ROUTE_TAG_REPLAY_PRODUCT):
+ * exe_sha256, codegen, bios_crc32, renderer, platform, input_seed. */
+void replay_host_product(char *out, size_t cap);
+
+/* The "platform" product line: what this exe was built for, "<os>-<arch>"
+ * (windows-x64, linux-x64, macos-x64, ...). A replay from the same pin and
+ * another platform is the same build with another exe; playback says so
+ * instead of warning about a different build. */
+static inline const char *replay_platform_name(void) {
+#if defined(_WIN32)
+#  define REPLAY_PLATFORM_OS "windows"
+#elif defined(__APPLE__)
+#  define REPLAY_PLATFORM_OS "macos"
+#elif defined(__linux__)
+#  define REPLAY_PLATFORM_OS "linux"
+#else
+#  define REPLAY_PLATFORM_OS "unknown"
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+#  define REPLAY_PLATFORM_ARCH "x64"
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#  define REPLAY_PLATFORM_ARCH "arm64"
+#else
+#  define REPLAY_PLATFORM_ARCH "unknown"
+#endif
+    return REPLAY_PLATFORM_OS "-" REPLAY_PLATFORM_ARCH;
+}
 
 #ifdef __cplusplus
 }

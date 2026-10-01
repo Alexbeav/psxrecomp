@@ -98,6 +98,9 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "mod_plugins.h"
 #include "mod_runtime.h"
 #include "crc32.h"
+#include "psx_sha256.h"
+#include "overlay_api.h"     /* PSX_OVERLAY_CODEGEN_HASH for the replay product lines */
+#include "launcher_record_replay.h"
 #include "disc_identity.h"
 #include "sbi_setup.h"
 #include "disc_roster.h"
@@ -2190,36 +2193,42 @@ static std::filesystem::path find_upward(std::filesystem::path start,
 // authoritative source (independent of argv[0], which can be relative/bare and
 // would otherwise get resolved against cwd by fs::absolute). $APPIMAGE and
 // argv[0] are non-Windows / fallback sources only.
-static std::filesystem::path exe_dir_from_argv(const char* argv0) {
+// exe_file_from_argv is the executable itself (empty when nothing names it).
+static std::filesystem::path exe_file_from_argv(const char* argv0) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    fs::path exe_dir;
+    fs::path exe;
 #ifdef _WIN32
     // Authoritative: the real image path, regardless of how we were invoked.
     {
         wchar_t buf[MAX_PATH * 4];
         DWORD n = GetModuleFileNameW(NULL, buf, (DWORD)(sizeof(buf) / sizeof(buf[0])));
         if (n > 0 && n < (DWORD)(sizeof(buf) / sizeof(buf[0]))) {
-            exe_dir = fs::path(std::wstring(buf, buf + n)).parent_path();
+            exe = fs::path(std::wstring(buf, buf + n));
         }
     }
 #endif
     // Inside an AppImage the binary lives in a read-only mount and argv[0] can
     // be a bare name or symlink (launched via PATH / a .desktop file). $APPIMAGE
     // is the .AppImage's own path, so settings.toml anchors next to it.
-    if (exe_dir.empty()) {
+    if (exe.empty()) {
         if (const char* appimg = std::getenv("APPIMAGE"); appimg && appimg[0]) {
-            exe_dir = PSXRecompV4::host_absolute(appimg, ec).parent_path();
-            if (ec) exe_dir.clear();
+            exe = PSXRecompV4::host_absolute(appimg, ec);
+            if (ec) exe.clear();
         }
     }
-    if (exe_dir.empty() && argv0 && argv0[0]) {
-        exe_dir = PSXRecompV4::host_absolute(argv0, ec).parent_path();
-        if (ec) exe_dir.clear();
+    if (exe.empty() && argv0 && argv0[0]) {
+        exe = PSXRecompV4::host_absolute(argv0, ec);
+        if (ec) exe.clear();
     }
+    return exe;
+}
+
+static std::filesystem::path exe_dir_from_argv(const char* argv0) {
+    std::filesystem::path exe_dir = exe_file_from_argv(argv0).parent_path();
     // Last-ditch only (should be unreachable on a normal launch); a bare "." so
     // we never silently resolve against an unrelated cwd deeper in the tree.
-    if (exe_dir.empty()) exe_dir = fs::path(".");
+    if (exe_dir.empty()) exe_dir = std::filesystem::path(".");
     return exe_dir;
 }
 
@@ -4595,7 +4604,9 @@ static int controller_port_swap_available(void) {
  * routing change. The host device array is never reordered: every consumer
  * maps through the same permutation, including rumble and dev-any input. */
 static void refresh_sio_port_routes(void) {
-    if (psx_netplay_active() || input_route_session_owns_ports())
+    /* A replay recording or playing keeps the ports it started with: a
+     * hotplug would change them in the recording and never in playback. */
+    if (psx_netplay_active() || input_route_session_owns_ports() || replay_session_owns_p1())
         return;
     for (int sio_slot = 0; sio_slot < PSX_MAX_PLAYERS; sio_slot++) {
         const int host = host_player_for_sio_slot(sio_slot);
@@ -6531,6 +6542,12 @@ static int runtime_ui_change_disc(PsxRuntimeUiContext *context) {
         std::memcpy(scex, "SCEA", sizeof(scex)); scex_ptr = scex;
     }
 
+    /* A replay does not record disc swaps: a recording ends on the boundary
+     * before the swap and a playback stops (replay_session_shutdown). The
+     * next vblank returns the overlay tier. */
+    if (replay_session_state() != REPLAY_IDLE)
+        replay_session_shutdown();
+
     const std::string mount = resolved.mount.string();
     if (!cdrom_replace_disc(mount.c_str(), scex_ptr)) {
         host_osd_push("Disc change failed; current disc is still mounted",
@@ -7646,13 +7663,29 @@ static int route_record_live_p1_word(void) {
  *   --replay-verdict FILE / PSX_REPLAY_VERDICT=FILE  write the playback's
  *       verdict JSON to FILE when it ends (replay_session_set_verdict_path)
  *   --replay-fast / PSX_REPLAY_FAST=1  play with fast-forward latched, as if
- *       F9 were held; the previous fast-forward state returns afterwards */
+ *       F9 were held; the previous fast-forward state returns afterwards
+ *   PSX_REPLAY_RECORD_BOOT=1  what the launcher's "Record replay" does
+ *       (PS1B-316): record a power-on replay from vblank 0 into
+ *       <save root>/replays/<title>-boot-<UTC stamp>.psxrpl until exit, or
+ *       for PSX_REPLAY_RECORD_FRAMES frames. A power-on replay plays with
+ *       --replay FILE, which starts it at vblank 0 of the new process. */
 static const char *g_replay_cli_path = nullptr;
 static const char *g_replay_cli_verdict = nullptr;
 static bool g_replay_cli_fast = false;
 static std::string s_replay_disc_serial;
 static std::string s_replay_saved_settings;
 static char s_replay_export_dir[1024];
+/* The launcher's "Record replay" for this process (launcher_record_replay.h). */
+static bool g_launcher_record_replay = false;
+/* The vblank replay_frame_boundary is running for (power-on replays start at 0). */
+static uint64_t s_replay_vblank = UINT64_MAX;
+/* Product identity for replays: the exe's SHA-256 and the loaded BIOS image's
+ * CRC-32, hashed once (the digest thread or the first replay). */
+static std::filesystem::path s_replay_exe_file, s_replay_bios_file;
+static std::string s_replay_exe_sha256;
+static uint32_t s_replay_bios_crc32 = 0;
+static bool s_replay_bios_crc_ok = false;
+static bool s_replay_product_hashed = false;
 
 extern "C" void replay_host_osd(const char *text, int ms) {
     std::fprintf(stdout, "replay_osd: %s\n", text);
@@ -7674,6 +7707,15 @@ extern "C" int replay_host_can_record(char *why, size_t cap) {
         std::snprintf(why, cap, "save states are not available for this game"); return 0;
     }
     if (psx_rewind_is_open()) { std::snprintf(why, cap, "rewind is open"); return 0; }
+    /* Replays carry pad input only (PS1B-313): a mouse, neGcon or GunCon
+     * would be neither recorded nor fed during playback. */
+    for (int slot = 0; slot < 2; ++slot) {
+        if (sio_get_port_device(slot) != SIO_DEVICE_PAD) {
+            std::snprintf(why, cap, "port %d has a mouse or another non-pad device (replays record pads only)",
+                          slot + 1);
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -7746,13 +7788,22 @@ static std::string replay_mods_fingerprint(void) {
     return out.empty() ? std::string("none") : out;
 }
 
+/* PS1B-316 added what a power-on replay needs at vblank 0, where no anchor
+ * restores it: the game's pending post-BIOS CD speed, the two options that
+ * change guest behaviour (auto-skip FMV pokes RAM or holds Start; idle skip
+ * advances the clock), and port 2 and both pad types as startup set them. */
 extern "C" void replay_host_settings_capture(char *out, size_t cap) {
     std::snprintf(out, cap,
                   "cd_speed=%d\ncd_instant_rate=%d\nturbo_loads=%d\nturbo_load_wall=%d\n"
-                  "p1_connected=%d\np1_config_capable=%d\nmods=%s\n",
+                  "p1_connected=%d\np1_config_capable=%d\nmods=%s\n"
+                  "cd_game_speed=%d\nauto_skip_fmv=%d\nidle_skip=%d\n"
+                  "p1_analog=%d\np2_connected=%d\np2_config_capable=%d\np2_analog=%d\n",
                   cdrom_get_speed(), cdrom_get_instant_rate(), g_turbo_loads_enabled,
                   g_turbo_load_wall_multiplier, sio_get_pad_connected(0),
-                  sio_get_pad_config_capable(0), replay_mods_fingerprint().c_str());
+                  sio_get_pad_config_capable(0), replay_mods_fingerprint().c_str(),
+                  cdrom_get_game_speed(), g_auto_skip_fmv, psx_idle_skip_is_enabled(),
+                  sio_get_pad_analog(0), sio_get_pad_connected(1),
+                  sio_get_pad_config_capable(1), sio_get_pad_analog(1));
 }
 
 static void replay_settings_apply_text(const char *text, char *differs, size_t cap) {
@@ -7774,6 +7825,18 @@ static void replay_settings_apply_text(const char *text, char *differs, size_t c
         else if (key == "p1_connected") sio_set_pad_connected(0, v ? 1 : 0);
         else if (key == "p1_config_capable") sio_set_pad_config_capable(0, v ? 1 : 0);
         else if (key == "mods") ok = value == replay_mods_fingerprint();
+        else if (key == "cd_game_speed") cdrom_set_game_speed(v);
+        else if (key == "auto_skip_fmv") g_auto_skip_fmv = v ? 1 : 0;
+        else if (key == "idle_skip") g_idle_skip_enabled = v ? 1 : 0;
+        else if (key == "p2_connected") sio_set_pad_connected(1, v ? 1 : 0);
+        else if (key == "p2_config_capable") sio_set_pad_config_capable(1, v ? 1 : 0);
+        else if (key == "p1_analog" || key == "p2_analog") {
+            /* A type switch resets the pad's config latch, so only a real
+             * change is applied (normally none after an anchor load). */
+            const int slot = key[1] - '1';
+            if (sio_get_pad_analog(slot) != (v ? 1 : 0))
+                sio_set_pad_analog(slot, v ? 1 : 0, 0x80, 0x80, 0x80, 0x80);
+        }
         else ok = false;
         if (!ok && differs && cap) {
             const size_t n = std::strlen(differs);
@@ -7881,6 +7944,88 @@ extern "C" const char *replay_host_disc_serial(void) {
     return s_replay_disc_serial.empty() ? "replay" : s_replay_disc_serial.c_str();
 }
 
+/* ---- Power-on replays (PS1B-316) ---- */
+
+/* Vblank 0 of this process, unless a save state was staged for boot. */
+extern "C" int replay_host_at_power_on(void) {
+    static const bool load_slot = std::getenv("PSX_LOAD_SLOT") != nullptr;
+    return s_replay_vblank == 0 && !load_slot;
+}
+extern "C" void replay_host_power_on_begin(void) {
+    replay_overlay_pin();
+}
+
+static_assert(MEMCARD_SIZE == INPUT_ROUTE_REPLAY_CARD_BYTES, "replay card images are whole cards");
+extern "C" int replay_host_cards_capture(uint8_t *images, uint32_t *mask) {
+    *mask = 0;
+    for (int card = 0; card < 2; ++card)
+        if (memcard_export_raw(card, images + (size_t)card * MEMCARD_SIZE) == 0)
+            *mask |= 1u << card;
+    return 1;
+}
+extern "C" int replay_host_cards_install(const uint8_t *images, uint32_t mask) {
+    return memcard_replay_begin(images, mask) == 0;
+}
+extern "C" void replay_host_cards_restore(void) {
+    memcard_replay_end();
+}
+
+/* SHA-256 of the exe and CRC-32 of the BIOS image, once per process. Hashing
+ * a large exe takes a moment, so the startup digest thread normally does it;
+ * the caller holds s_replay_identity_mutex. */
+static void replay_product_hash_locked(void) {
+    if (s_replay_product_hashed) return;
+    s_replay_product_hashed = true;
+    std::vector<uint8_t> buf(1u << 20);
+    std::ifstream exe(s_replay_exe_file, std::ios::binary);
+    if (!s_replay_exe_file.empty() && exe) {
+        psx_sha256_ctx ctx;
+        uint8_t digest[32];
+        char hex[65];
+        psx_sha256_init(&ctx);
+        while (exe.read(reinterpret_cast<char *>(buf.data()), (std::streamsize)buf.size()) || exe.gcount() > 0)
+            psx_sha256_update(&ctx, buf.data(), (size_t)exe.gcount());
+        if (exe.eof()) {
+            psx_sha256_final(&ctx, digest);
+            for (int i = 0; i < 32; ++i) std::snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+            s_replay_exe_sha256 = hex;
+        }
+    }
+    std::ifstream bios(s_replay_bios_file, std::ios::binary);
+    if (!s_replay_bios_file.empty() && bios) {
+        uint32_t crc = 0xFFFFFFFFu;
+        while (bios.read(reinterpret_cast<char *>(buf.data()), (std::streamsize)buf.size()) || bios.gcount() > 0)
+            crc = crc32_update(crc, buf.data(), (size_t)bios.gcount());
+        s_replay_bios_crc32 = crc ^ 0xFFFFFFFFu;
+        s_replay_bios_crc_ok = bios.eof();
+    }
+}
+
+extern "C" void replay_host_product(char *out, size_t cap) {
+    std::string lines;
+    char line[96];
+    {
+        std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
+        replay_product_hash_locked();
+        if (!s_replay_exe_sha256.empty()) lines += "exe_sha256=" + s_replay_exe_sha256 + "\n";
+        std::snprintf(line, sizeof(line), "codegen=%08x\n", (unsigned)PSX_OVERLAY_CODEGEN_HASH);
+        lines += line;
+        if (s_replay_bios_crc_ok) {
+            std::snprintf(line, sizeof(line), "bios_crc32=%08x\n", (unsigned)s_replay_bios_crc32);
+            lines += line;
+        }
+    }
+    lines += std::string("renderer=") +
+             (g_vk_active ? "vulkan" : g_gl_active ? "opengl" : "software") + "\n";
+    lines += std::string("platform=") + replay_platform_name() + "\n";
+    if (const char *seed = std::getenv("PSX_REPLAY_TEST_INPUT_SEED");
+        seed && seed[0] && g_replay_scripted_record) {
+        std::snprintf(line, sizeof(line), "input_seed=%lu\n", std::strtoul(seed, nullptr, 10));
+        lines += line;
+    }
+    std::snprintf(out, cap, "%s", lines.c_str());
+}
+
 /* P1 as the host would deliver it this frame: the armed route or debug
  * override when there is one, else the device. */
 static void replay_live_p1(int override, uint16_t *buttons, uint8_t sticks[4]) {
@@ -7964,6 +8109,8 @@ static void replay_frame_boundary(int *override) {
     static int env_read = 0, exit_at_end = 0, fast_play = 0, fast_saved = -1;
     static const char *play_path = nullptr, *record_file = nullptr;
     static long long record_at = -1, record_frames = 0, recorded = 0;
+    static bool record_boot = false;
+    static std::string boot_file;   /* the power-on replay this process records */
     static uint64_t vblanks = 0;
     static ReplayState previous = REPLAY_IDLE;
     if (!env_read) {
@@ -7980,9 +8127,15 @@ static void replay_frame_boundary(int *override) {
         if (verdict && verdict[0]) replay_session_set_verdict_path(verdict);
         const char *fast = std::getenv("PSX_REPLAY_FAST");
         fast_play = g_replay_cli_fast || (fast && std::strcmp(fast, "1") == 0);
-        g_replay_scripted_record = record_file != nullptr;
+        /* Scripted: the environment asked (PSX_REPLAY_TEST_INPUT_SEED may then
+         * drive P1); the launcher's checkbox records the player. */
+        const char *boot_env = std::getenv("PSX_REPLAY_RECORD_BOOT");
+        record_boot = PSXRecompV4::record_boot_replay_requested(g_launcher_record_replay, boot_env);
+        g_replay_scripted_record =
+            record_file != nullptr || PSXRecompV4::record_boot_replay_requested(false, boot_env);
     }
     const uint64_t vb = vblanks++;
+    s_replay_vblank = vb;
     if (play_path) {
         const char *path = play_path;
         play_path = nullptr;
@@ -7999,6 +8152,25 @@ static void replay_frame_boundary(int *override) {
             std::exit(5);
         }
     }
+    if (record_boot && vb == 0) {
+        /* <save root>/replays/<title>-boot-<UTC>.psxrpl: the save root is
+         * anchored on the exe folder (PS1B-310), never the working directory. */
+        char path[1024];
+        const char *dir = replay_host_export_dir();
+        const char *title = replay_host_game_title();
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(dir), ec);
+        const bool named = replay_session_boot_path(dir, title && title[0] ? title : replay_host_disc_serial(),
+                                                    (int64_t)std::time(nullptr), path, sizeof(path));
+        if (!named) replay_host_osd("Replay not recorded: no free file name in the replays folder", 2600);
+        if (named && replay_session_record_power_on(path)) {
+            boot_file = path;
+        } else if (exit_at_end) {
+            std::fflush(stdout);
+            psx_crash_trace_set_exit_origin("replay_not_recorded");
+            std::exit(5);
+        }
+    }
     const ReplayState state = replay_session_state();
     replay_overlay_unpin_if_idle();
     if (state == REPLAY_IDLE && previous == REPLAY_IDLE) return;
@@ -8009,7 +8181,7 @@ static void replay_frame_boundary(int *override) {
         g_replay_p1_buttons = b;
         std::memcpy(g_replay_p1_sticks, s, 4);
         *override = b;
-        if (record_file && replay_session_state() == REPLAY_RECORDING &&
+        if ((record_file || !boot_file.empty()) && replay_session_state() == REPLAY_RECORDING &&
             record_frames > 0 && ++recorded == record_frames)
             replay_session_toggle_record();   /* ends on the next boundary */
     }
@@ -8028,7 +8200,8 @@ static void replay_frame_boundary(int *override) {
     if (exit_at_end && previous != REPLAY_IDLE && now == REPLAY_IDLE) {
         int status = 0;
         if (previous == REPLAY_RECORDING || previous == REPLAY_ARMING) {
-            FILE *written = record_file ? std::fopen(record_file, "rb") : nullptr;
+            const char *want = record_file ? record_file : boot_file.empty() ? nullptr : boot_file.c_str();
+            FILE *written = want ? std::fopen(want, "rb") : nullptr;
             status = written ? 0 : 5;
             if (written) std::fclose(written);
         } else {
@@ -15635,6 +15808,10 @@ int main(int argc, char** argv) {
             ls.multitap_analog = seed.multitap_analog ? 1 : 0;
             g_lnch_multitap_analog = seed.multitap_analog ? 1 : 0;
 #endif
+#if defined(RECOMP_LAUNCHER_HAS_RECORD_REPLAY)
+            /* Not a settings.toml row (launcher_record_replay.h). */
+            ls.record_replay = PSXRecompV4::launcher_record_replay_seed(g_launcher_record_replay);
+#endif
 
             /* Region badge: game.toml [game] region wins verbatim; otherwise derive
              * from the game_id serial prefix (SCUS/SLUS/LSP -> USA, SCES/SLES ->
@@ -15698,6 +15875,11 @@ int main(int argc, char** argv) {
                 /*resume_netplay_room=*/0);
             gi.discs = rui_discs.empty() ? nullptr : rui_discs.data();
             gi.num_discs = (int)rui_discs.size();
+#if defined(RECOMP_LAUNCHER_HAS_RECORD_REPLAY)
+            /* First-boot launcher only: the rematch launcher is netplay, which
+             * never records. */
+            gi.has_record_replay = 1;
+#endif
 #if defined(PSX_HAS_SETUP_WIZARD)
             /* MotK ships tools/prepare_disc.py (2448→2352). Offer it in the
              * first-run wizard so players need not run the script by hand. */
@@ -15775,6 +15957,10 @@ int main(int argc, char** argv) {
             launcher_boot_timing_mark("host:after_run_window");
 
             lr = rui_rc;
+#if defined(RECOMP_LAUNCHER_HAS_RECORD_REPLAY)
+            g_launcher_record_replay = PSXRecompV4::launcher_record_replay_readback(
+                ls.record_replay, lr, g_launcher_record_replay);
+#endif
 
             /* The launcher hands back the player's edits on Quit as well as on
              * Play (recomp_launcher.h: "*io still holds the edits"), so both
@@ -16678,6 +16864,14 @@ session_reboot:
          * and mtime, so an unchanged image (often on a NAS) is not re-read. */
         disc_digest_cache_set_path(memcard_dir.empty() ? ""
             : (memcard_dir / "disc_digests.tsv").string().c_str());
+        /* Replay product lines (replay_host_product): hashed once, below. */
+        const std::filesystem::path bios_file(bios_path_str);
+        if (s_replay_exe_file.empty()) s_replay_exe_file = exe_file_from_argv(argv[0]);
+        if (s_replay_bios_file != bios_file) {
+            s_replay_bios_file = bios_file;
+            s_replay_product_hashed = false;
+            s_replay_bios_crc_ok = false;
+        }
     }
     s_replay_disc_serial = route_disc_serial;
     /* Hash the disc for replays in the background (see replay_host_identity).
@@ -16691,6 +16885,7 @@ session_reboot:
         s_replay_digest_thread = std::thread([] {
             std::lock_guard<std::mutex> lock(s_replay_identity_mutex);
             input_route_session_prefetch_disc_digest();
+            replay_product_hash_locked();
         });
         if (!join_registered) {
             std::atexit(replay_digest_thread_join);
