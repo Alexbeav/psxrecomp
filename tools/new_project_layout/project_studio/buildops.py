@@ -848,7 +848,7 @@ def launch_status() -> str:
 # a broken package (an empty Mods page) survived so long -- nobody produced one
 # locally to look inside.
 #
-# This runs the SAME wrapper CI runs (scripts/package_setup_release.sh), so a
+# This runs the SAME wrapper CI runs (scripts/package_release.sh), so a
 # local export and a CI release are the same artifact by construction rather
 # than by convention.
 # ---------------------------------------------------------------------------
@@ -891,11 +891,13 @@ def export_release(
     packages dropped. A local export keeps them by default, because the point
     of exporting locally is to test the work in progress.
     """
-    wrapper = root / "scripts" / "package_setup_release.sh"
-    if not wrapper.is_file():
+    from .detect import packager_wrapper
+
+    wrapper = packager_wrapper(root)
+    if wrapper is None:
         return CmdResult(
             False,
-            "No scripts/package_setup_release.sh",
+            "No scripts/package_release.sh",
             "Emit it first (Migrate -> packager), or install release CI.",
         )
     build_path = root / build_dir

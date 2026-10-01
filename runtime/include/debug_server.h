@@ -255,6 +255,9 @@ void debug_server_freeze_dump_dirty_block_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_dirty_insn_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_evcb_json(FILE *f, uint32_t max_count);
 
+/* frame_fingerprint reset_on_load: called when a savestate load completes. */
+void debug_server_note_savestate_loaded(void);
+
 #ifdef __cplusplus
 }
 #endif

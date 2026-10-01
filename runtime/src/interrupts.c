@@ -26,6 +26,7 @@
  */
 
 #include "interrupts.h"
+#include "psx_memory.h"
 #include "sio.h"
 #include "timers.h"
 #include "gpu.h"
@@ -36,7 +37,9 @@
 #include "event_ring.h"
 #include "lockstep.h"
 #include "psx_cycles.h"
+#include "psx_cycle_freeze.h"
 #include "psx_scheduler.h"
+#include "psx_video_timing.h"
 #include "spu.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -178,8 +181,9 @@ void psx_irq_raise(uint32_t bit, uint32_t detail)
 
 /* Dispatch counter for vblank scheduling. */
 #define VBLANK_INTERVAL 50000        /* legacy: dispatch-count fallback (unused for VBlank gating now) */
-#define VBLANK_DEFER_STALE_CYCLES (vblank_cycles * 10ull)
-uint32_t vblank_cycles = 564480u;    /* 33.8688 MHz / 60 Hz — real PSX NTSC VBlank period */
+#define VBLANK_DEFER_STALE_CYCLES (g_psx_vblank_cycles * 10ull)
+/* The VBlank period follows the GPU's live video standard (GP1(08h) bit 3):
+ * NTSC 564480 cycles (60 Hz), PAL 677376 (50 Hz). See psx_video_timing.h. */
 static uint32_t dispatch_count;
 static uint64_t total_checks;
 static uint32_t cycles_since_vblank;  /* incremented by interrupts_advance_cycles */
@@ -472,13 +476,13 @@ static void fire_vblank_edge(void) {
     /* Subtract one VBlank period rather than reset to 0 so cycle overshoot
      * carries forward. Prevents long-running blocks from rounding multiple
      * VBlanks together. */
-    cycles_since_vblank -= vblank_cycles;
+    psx_vblank_consume_edge(&cycles_since_vblank);
     dispatch_count = 0;
     /* DEQUEUE: this VBlank fired. ENQUEUE: next VBlank scheduled one period out. */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_VBLANK,
                           (uint32_t)psx_get_cycle_count());
     event_ring_record_aux(EV_ENQ, (uint8_t)SRC_VBLANK,
-                          (uint32_t)(psx_get_cycle_count() + vblank_cycles));
+                          (uint32_t)(psx_get_cycle_count() + g_psx_vblank_cycles));
     psx_irq_raise(IRQ_VBLANK, 0);
     g_vblank_raise_count++;
     event_ring_record(EV_ISTAT_RAISE, IRQ_VBLANK);
@@ -494,15 +498,14 @@ static void fire_vblank_edge(void) {
 void interrupts_service_scheduled_events(void) {
     note_sio_progress_cycle();
     if (in_exception) return;
-    while (cycles_since_vblank >= vblank_cycles) {
+    while (psx_vblank_edge_due(cycles_since_vblank)) {
         if (should_defer_vblank_for_sio()) return;
         fire_vblank_edge();
     }
 }
 
 uint32_t interrupts_cycles_to_vblank(void) {
-    if (cycles_since_vblank >= vblank_cycles) return 0;
-    return vblank_cycles - cycles_since_vblank;
+    return psx_vblank_cycles_to_edge(cycles_since_vblank);
 }
 
 uint32_t interrupts_get_cycles_since_vblank(void) {
@@ -1023,8 +1026,7 @@ uint32_t cycles_to_next_event(void) {
      * card-SIO case only pushes VBlank LATER, so this estimate stays a safe
      * under-estimate. */
     if (i_mask & (1u << IRQ_VBLANK)) {
-        uint32_t d = (cycles_since_vblank >= vblank_cycles)
-                       ? 0u : (vblank_cycles - cycles_since_vblank);
+        uint32_t d = psx_vblank_cycles_to_edge(cycles_since_vblank);
         if (d < best) best = d;
     }
     uint32_t t = timers_cycles_to_irq(i_mask); if (t < best) best = t;
@@ -1066,6 +1068,8 @@ void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
 }
 
 int psx_interrupt_delivery_needed(const CPUState* cpu) {
+    /* Render passes run in frozen guest time: nothing is delivered. */
+    if (g_psx_render_pass_active) return 0;
     if (s_defer_switch_pending) { s_need_defer++; return 1; }
     if ((i_stat & i_mask) == 0) { s_skip_none++; return 0; }
 
@@ -1090,6 +1094,9 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
 }
 
 void psx_check_interrupts(CPUState* cpu) {
+    /* Render passes run in frozen guest time (psx_cycles.h): no delivery, and
+     * no check-boundary bookkeeping that the stock timeline would not do. */
+    if (g_psx_render_pass_active) return;
     psx_cyc_batch_flush();
     extern int g_ls_suppress_record;
     extern int psx_netplay_active(void);
@@ -1294,12 +1301,6 @@ void psx_check_interrupts(CPUState* cpu) {
      * waiting for it to re-appear.  If we tick here, the IRQ fires
      * during the delay loop BEFORE the clear, and the BIOS never
      * sees it. */
-    /* Ape LOAD: libcard may poll nest/busy in RAM with no SIO MMIO, so
-     * sio_tick never runs. Throttled nest-repair pump only. */
-    if ((total_checks & 0xFFu) == 0) {
-        extern void sio_ape_card_unstick_pump(void);
-        sio_ape_card_unstick_pump();
-    }
 
     interrupts_service_scheduled_events();
 
@@ -1603,12 +1604,12 @@ irq_deliver_eval:
             if (psx_scheduler_top_level_resume_active() &&
                 cpu->pc != 0u && (cpu->pc & 3u) == 0u) {
                 uint32_t phys = cpu->pc & 0x1FFFFFFFu;
-                if (phys < 0x00200000u ||
+                if (phys < psx_ram_live_bytes() ||
                     (phys >= 0x1FC00000u && phys < 0x1FC80000u))
                     real_pc = cpu->pc;
             }
         }
-        /* Accept the real resume PC from guest RAM (<2MB) OR the BIOS ROM
+        /* Accept the real resume PC from live guest RAM OR the BIOS ROM
          * window. The old RAM-only guard rejected ROM-space block leaders
          * (e.g. OpenBIOS mcWaitForStatus spinning at 0xBFC076xx during a
          * card op), forcing EVERY such delivery onto the legacy sentinel.
@@ -1623,7 +1624,7 @@ irq_deliver_eval:
          * ROM pc still falls back to the sentinel (pre-fix behavior);
          * RAM acceptance is unchanged byte-for-byte. */
         uint32_t real_phys = real_pc & 0x1FFFFFFFu;
-        int resume_in_ram  = real_phys < 0x00200000u;
+        int resume_in_ram  = real_phys < psx_ram_live_bytes();
         int resume_in_rom  = real_phys >= 0x1FC00000u && real_phys < 0x1FC80000u &&
                              psx_is_dispatchable(real_pc);
         if (real_pc != 0u && (real_pc & 0x3u) == 0u &&
@@ -1633,7 +1634,7 @@ irq_deliver_eval:
             g_exc_escape_reason  = PSX_EXC_ESCAPE_NONE; /* set at the actual RFE/SYSCALL return */
         } else {
             uint32_t sentinel = PSX_EXC_SENTINEL_PC;
-            cpu->write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
+            psx_host_write_word(sentinel, 0x00000000u); /* NOP, read by the handler's BD check */
             cpu->cop0[COP0_EPC]  = sentinel;
             g_exception_real_epc = sentinel;
             g_exc_escape_reason  = PSX_EXC_ESCAPE_LEGACY_SENTINEL;

@@ -33,15 +33,28 @@ runtime/build-*/
 runtime/build-*.exe
 test_msvc/
 
-# Recompiler output (derivative of copyrighted Sony BIOS, regenerate locally)
-generated/
+# Recompiler output. The two BIOS backends every release links are COMMITTED
+# (decision 2026-09-30: the recompiled BIOS carries the same risk as the
+# recompiled game, which titles already commit); CI builds them and the
+# runtime.cmake fingerprint check fails a release whose stamp predates the
+# emitter. Everything else under generated/ (scratch stems, skipped-function
+# reports, per-dump work) stays local. Regenerate with:
+#   tools/regen_bios.sh --config bios/OpenBIOS.toml
+#   tools/regen_bios.sh --config bios/SCPH1001.toml   (needs your own dump)
+generated/*
+!generated/OpenBIOS_full.c
+!generated/OpenBIOS_dispatch.c
+!generated/OpenBIOS.emitter.sha
+!generated/SCPH1001_full.c
+!generated/SCPH1001_dispatch.c
+!generated/SCPH1001.emitter.sha
 
 # Release packaging artifacts
 release-stage/
 *.zip
 
 # Vendored upstream sources (cloned locally, not checked in)
-beetle-psx/
+beetle-psx
 
 # Explicit-fallback SDL2 / dep zips (large, regenerable)
 sdl2-dev.zip

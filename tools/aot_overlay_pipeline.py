@@ -9,7 +9,8 @@ import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import struct
 import subprocess
@@ -20,8 +21,36 @@ import zlib
 import compile_overlays as compiler
 from aot_overlay_spike import extract_generic as extractor
 from packed_sector_table import extract_members as extract_sector_members
+from sector_extent_archive import extract_members as extract_extent_members
+from aligned_lzss_banks import banks as extract_lzss_banks
+from indexed_lzss_pack import members as extract_pack_members
+from mips_tagged_relocations import parse as parse_tagged_relocations, relocate as relocate_tagged_image
+from mod_package_images import ModPackageView
 
 FRAMEWORK = Path(__file__).resolve().parents[1]
+# KSEG0 main-RAM decode window. Retail 2 MiB DRAM mirrors across all of it and
+# expanded 8 MiB targets map it uniquely; both accept an image placed anywhere
+# inside it (a mod engine at 0x80780000 is the retail 4th mirror).
+RAM_WINDOW = (0x80000000, 0x80800000)
+# Live main-RAM sizes the runtime can run with (runtime/include/psx_memory.h):
+# retail 2 MiB unless the opt-in psx.enhancement.8mb-ram package is active.
+RETAIL_RAM_BYTES, EXPANDED_RAM_BYTES = 0x00200000, 0x00800000
+# Where a title keeps its profile, relative to the project root (the directory
+# holding game.toml). psxrecomp_cli.py generate and runtime.cmake both look here.
+PROFILE_RELPATH = PurePosixPath('aot/overlays.json')
+# compile_overlays.py --static writes this dispatcher (and its _NNNN.c units).
+STATIC_OUTPUT_NAME = 'overlays_static.c'
+GENERATION_INPUTS_SCHEMA = 'psxrecomp AOT static generation inputs v1'
+# Exit status of `static`/`release` when the profile describes another disc.
+EXIT_NOT_APPLICABLE = 3
+
+
+class ProfileError(ValueError):
+    """A profile, disc, or inventory fact failed verification."""
+
+
+class DiscNotApplicable(ProfileError):
+    """The profile describes a different disc, so none of its images apply."""
 
 
 def number(value):
@@ -30,7 +59,106 @@ def number(value):
 
 def require(condition, message):
     if not condition:
-        raise ValueError(message)
+        raise ProfileError(message)
+
+
+def load_profile(profile_path, config):
+    """The AOT profile, checked against the game config it is used with."""
+    profile = json.loads(Path(profile_path).read_text(encoding='utf-8-sig'))
+    require(profile.get('schema') == 'psxrecomp AOT methods v1', 'Unsupported AOT profile')
+    require(config['game']['id'] == profile['game_id'], 'AOT profile/game mismatch')
+    return profile
+
+
+def static_output(profile, project_root):
+    """The overlays_static.c this title's build links, or None.
+
+    A profile opts into build-time static overlays by declaring
+    ``static_output``: a project-relative path whose file name is
+    overlays_static.c. The title's CMake names the same file as
+    GAME_OVERLAY_STATIC_C (runtime.cmake refuses a disagreement), and
+    ``psxrecomp_cli.py generate`` produces it. Titles that stage audited DLL
+    caches with ``release`` do not declare it."""
+    value = profile.get('static_output')
+    if value is None:
+        return None
+    require(isinstance(value, str) and value.strip(),
+            'static_output must be a project-relative path string')
+    posix = PurePosixPath(value.replace('\\', '/'))
+    require(not posix.is_absolute() and not PureWindowsPath(value).anchor,
+            f'static_output must be relative to the project root: {value}')
+    require('..' not in posix.parts, f'static_output must stay inside the project: {value}')
+    require(posix.name == STATIC_OUTPUT_NAME,
+            f'static_output must name {STATIC_OUTPUT_NAME} (the file compile_overlays '
+            f'--static writes): {value}')
+    return Path(project_root).joinpath(*posix.parts)
+
+
+def in_ram(base, size):
+    return RAM_WINDOW[0] <= base and size > 0 and base + size <= RAM_WINDOW[1]
+
+
+def main_ram_bytes(profile):
+    """Main-RAM size every image of this profile must resolve under.
+
+    Retail 2 MiB is the default. A profile whose images need the opt-in 8 MB
+    map declares ``main_ram_bytes = 0x800000``; nothing else changes it."""
+    value = number(profile.get('main_ram_bytes', RETAIL_RAM_BYTES))
+    require(value in (RETAIL_RAM_BYTES, EXPANDED_RAM_BYTES),
+            f'main_ram_bytes must be 0x200000 or 0x800000, not {value:#x}')
+    return value
+
+
+def ram_resolvable(base, size, ram_bytes):
+    """Mirror of the runtime's psx_ram_resolve for a whole image.
+
+    Retail RAM folds each 2 MiB mirror onto the same DRAM, so an image must fit
+    inside one mirror: one straddling a mirror boundary (or the 2 MiB end) has no
+    contiguous backing and its static variant could never pass the runtime gate."""
+    return in_ram(base, size) and ((base & 0x1FFFFFFF) & (ram_bytes - 1)) + size <= ram_bytes
+
+
+def source_view(disc, spec, views):
+    """Original disc, or the named mod-package view of it."""
+    name = spec.get('mod_package')
+    if name is None:
+        return disc
+    require(views and name in views, f'Unknown mod package view: {name}')
+    return views[name]
+
+
+def transfer_entries(source, view):
+    """J/JAL targets inside the image, from words a mod package wrote.
+
+    A detour farm is entered only through the package's patched transfers, so
+    those instructions establish its entry points statically. Unpatched text is
+    excluded: stock data words that happen to decode as a jump are not evidence.
+    Neither are package-written DATA words (for example a pack linked into the
+    EXE that the package replaced): `exclude_writes` names such intervals of
+    the loaded image, each with a reason, and their words are not transfers.
+    """
+    spec = source['spec']['transfer_entries']
+    require(spec.get('from') == 'mod_package_writes' and hasattr(view, 'written_words'),
+            'transfer_entries requires a mod package view')
+    excluded = []
+    for item in spec.get('exclude_writes', []):
+        start, end = number(item['start']), number(item['end'])
+        require(start < end and start % 4 == end % 4 == 0,
+                'Invalid excluded write interval')
+        require(item.get('reason', '').strip(), 'Excluded write interval needs a reason')
+        excluded.append((start, end))
+    lo, hi = source['base'], source['base'] + len(source['body'])
+    found = set()
+    for address, word in view.written_words():
+        if any(start <= address < end for start, end in excluded):
+            continue
+        if word >> 26 in (2, 3):
+            target = ((address + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2)
+            if lo <= target < hi:
+                found.add(target)
+    require(len(found) == number(spec['count']),
+            f"Transfer entry inventory changed: {source['name']} has {len(found)}")
+    return found
 
 
 def write_json(path, value):
@@ -59,9 +187,11 @@ class Disc:
         return self.cache[name]
 
 
-def verify_evidence(disc, checks):
+def verify_evidence(disc, checks, views=None):
     """Reusable binary-word, pointer-string, and BCD extent table identifiers."""
+    original = disc
     for check in checks:
+        disc = source_view(original, check, views)
         if check['method'] == 'adjacent_files':
             files = [disc.files[name.upper()] for name in check['files']]
             require(all(size % 2048 == 0 and lba + size // 2048 == next_lba
@@ -72,7 +202,11 @@ def verify_evidence(disc, checks):
         origin = number(check.get('file_offset', 0))
         base = number(check.get('base', 0))
         method = check['method']
-        if method == 'words':
+        if method == 'tagged_relocations':
+            image, relocations = parse_tagged_relocations(data)
+            require(len(image) == number(check['image_size']), 'Relocated image inventory changed')
+            require(len(relocations) == number(check['relocation_count']), 'Relocation inventory changed')
+        elif method == 'words':
             for address, expected in check['values'].items():
                 offset = origin + number(address) - base
                 require(0 <= offset <= len(data) - 4, 'Evidence word outside source')
@@ -132,7 +266,7 @@ def sector_sources(disc, spec):
         if item is None:
             continue
         base = number(item['load_addr'])
-        require(0x80000000 <= base < base + len(member['body']) <= 0x80200000,
+        require(in_ram(base, len(member['body'])),
                 'Sector image outside RAM')
         name = f"{spec['table_file'].upper()}:ENTRY_{member['index']:04X}"
         sources.append(dict(name=name, base=base, body=member['body'],
@@ -141,36 +275,197 @@ def sector_sources(disc, spec):
     return sources
 
 
-def positioned_sources(disc, specifications):
+def extent_sources(disc, spec):
+    """Declared byte extents of original (or mod-package) files at load addresses."""
+    sources = []
+    for item in spec['extents']:
+        data = disc.read(item['file'])
+        address, size = number(item['address']), number(item['size'])
+        offset = number(item.get('file_offset', 0)) + address - number(item.get('base', 0))
+        require(size > 0 and 0 <= offset and offset + size <= len(data),
+                f"Extent outside source file: {item['file']}")
+        body = data[offset:offset + size]
+        require(hashlib.sha256(body).hexdigest() == item['sha256'],
+                f"Extent bytes changed: {item['file']} {address:#x}")
+        base = number(item['load_addr'])
+        require(in_ram(base, size) and base % 4 == 0, 'Extent image outside RAM')
+        name = f"{item['file'].upper()}@{address:08X}+{size:X}"
+        sources.append(dict(name=name, base=base, body=body, spec={**spec, **item},
+                            source_file=item['file'].upper(), source_offset=offset, aliases=[]))
+    return sources
+
+
+def pack_sources(disc, spec):
+    """Every member of an offset-indexed LZSS pack decoded and classified."""
+    file = spec['file'].upper()
+    data = disc.read(file)
+    # Other places the loader can take the same pack from (for example a copy
+    # linked into the boot EXE). Each must hold these exact bytes.
+    aliases = []
+    for copy in spec.get('identical_copies', []):
+        offset = number(copy.get('file_offset', 0))
+        size = number(copy.get('size', len(data)))
+        require(copy.get('reason', '').strip(), 'Identical pack copy needs a reason')
+        require(disc.read(copy['file'])[offset:offset + size] == data,
+                f"Pack copy differs: {copy['file']} {offset:#x}")
+        aliases.append(f"{copy['file'].upper()}@{offset:X}+{size:X}")
+    lzss = spec['lzss']
+    require(set(lzss) <= {'position_bits', 'length_bits', 'min_match', 'initial_position',
+                          'window_fill'} and
+            {'position_bits', 'length_bits', 'min_match', 'initial_position'} <= set(lzss),
+            'LZSS parameters must be declared explicitly')
+    members = extract_pack_members(data, count_offset=number(spec['count_offset']),
+        table_offset=number(spec['table_offset']), alignment=number(spec['alignment']),
+        lzss={key: None if value is None else number(value) for key, value in lzss.items()},
+        count=number(spec['count']))
+    configured = {number(item['index']): item for item in spec['members']}
+    excluded = {number(item['index']): item for item in spec.get('excluded_members', [])}
+    require(len(configured) == len(spec['members']) and
+            len(excluded) == len(spec.get('excluded_members', [])), 'Duplicate member inventory')
+    require(not configured.keys() & excluded.keys() and
+            configured.keys() | excluded.keys() == set(range(len(members))),
+            'Pack inventory has missing or conflicting classifications')
+    require(all(item.get('reason', '').strip() for item in excluded.values()),
+            'Excluded pack member needs a reason')
+    sources = []
+    for member in members:
+        item = configured.get(member['index'])
+        if item is None:
+            continue
+        body, base = member['body'], number(item['load_addr'])
+        require(hashlib.sha256(body).hexdigest() == item['decoded_sha256'],
+                f"Decoded pack member changed: {file} {member['index']}")
+        require(in_ram(base, len(body)) and base % 4 == 0, 'Pack member image outside RAM')
+        sources.append(dict(name=f"{file}:ENTRY_{member['index']:04X}", base=base, body=body,
+            spec={**spec, **item, 'allow_missing': True}, source_offset=member['source_offset'],
+            source_file=file, aliases=[f"{alias}:ENTRY_{member['index']:04X}" for alias in aliases]))
+    return sources
+
+
+def positioned_sources(disc, specifications, views=None, ram_bytes=RETAIL_RAM_BYTES):
     sources = []
     for spec in specifications:
-        method = spec['method']
-        if method == 'packed_sector_members':
-            sources.extend(sector_sources(disc, spec))
-            continue
-        for name in spec['files']:
-            body = disc.read(name)
-            offset = 0
-            if method == 'psx_exe':
-                require(body[:8] == b'PS-X EXE', f'{name}: missing PS-X EXE header')
-                base = struct.unpack_from('<I', body, 0x18)[0]
-                offset = 0x800
-                body = body[offset:]
-            elif method == 'fixed_address_files':
-                base = number(spec['load_addr'])
-            else:
-                raise ValueError(f'Unknown image method: {method}')
-            require(0x80000000 <= base < base + len(body) <= 0x80200000, f'{name}: image outside RAM')
-            aliases = []
-            if spec.get('verify_duplicate_names'):
-                leaf = name.rsplit('/', 1)[-1].upper()
-                for other in disc.files:
-                    if other.rsplit('/', 1)[-1] == leaf:
-                        require(disc.read(other) == body, f'Conflicting original duplicate: {other}')
-                        aliases.append(other)
-            sources.append(dict(name=name.upper(), base=base, body=body, spec=spec,
-                                source_offset=offset, aliases=aliases))
+        view = source_view(disc, spec, views)
+        produced = spec_sources(view, spec)
+        for source in produced:
+            base, size = source['base'], len(source['body'])
+            require(ram_resolvable(base, size, ram_bytes),
+                    f"{source['name']}: image {base:#010x}+{size:#x} crosses a "
+                    f"{ram_bytes >> 20} MiB RAM mirror boundary, so the runtime cannot "
+                    'resolve its bytes; declare main_ram_bytes = 0x800000 only if '
+                    'the image needs the 8 MB map')
+        if 'mod_package' in spec:
+            # A mod image is a different producer than the stock file.
+            for source in produced:
+                source['name'] = f"{spec['mod_package']}:{source['name']}"
+                source['aliases'] = [f"{spec['mod_package']}:{a}" for a in source['aliases']]
+        for source in produced:
+            source['view'] = view
+        sources.extend(produced)
     require(len({s['name'] for s in sources}) == len(sources), 'Duplicate configured source')
+    return sources
+
+
+def spec_sources(disc, spec):
+    sources = []
+    method = spec['method']
+    if method == 'fixed_address_extents':
+        return extent_sources(disc, spec)
+    if method == 'aligned_lzss_banks':
+        grouped = {}
+        containers = spec['containers']
+        require(len({item['file'].upper() for item in containers}) == len(containers),
+                'Duplicate compressed container')
+        for item in containers:
+            file = item['file'].upper()
+            inventory, banks = extract_lzss_banks(disc.read(file),
+                alignment=number(spec.get('alignment', 2048)),
+                version=number(spec.get('version', 1)),
+                bank_tag=number(spec.get('bank_tag', 0x4B)),
+                terminal_tag=number(spec.get('terminal_tag', 0x31)),
+                data_tags=tuple(number(x) for x in spec.get('data_tags', [0x30])))
+            require(len(inventory) == item['member_count'] and
+                    [bank['bank'] for bank in banks] == item['bank_indices'],
+                    f'Compressed bank inventory changed: {file}')
+            for bank in banks:
+                placement = item['placements'][str(bank['bank'])]
+                base = number(placement['load_addr'])
+                body = bank['body']
+                require(hashlib.sha256(body).hexdigest() == placement['decoded_sha256'],
+                        f'Decoded bank changed: {file}')
+                require(in_ram(base, len(body)),
+                        'Decoded bank outside RAM')
+                name = f"{file}:BANK_{bank['bank']:04X}"
+                key = (base, body)
+                if key in grouped:
+                    grouped[key]['aliases'].append(name)
+                    require(grouped[key]['spec']['entries'] == placement.get('entries', []),
+                            'Duplicate bank has conflicting declared entries')
+                    continue
+                source = dict(name=name, base=base, body=body,
+                    spec={**spec, **placement, 'entries': placement.get('entries', []),
+                          'allow_missing': True},
+                    source_file=file, source_offset=bank['source_offset'], aliases=[])
+                grouped[key] = source
+                sources.append(source)
+        return sources
+    if method == 'packed_sector_members':
+        sources.extend(sector_sources(disc, spec))
+        return sources
+    if method == 'indexed_lzss_members':
+        return pack_sources(disc, spec)
+    if method == 'sector_extent_members':
+        members = extract_extent_members(disc.read(spec['file']),
+            sector_size=number(spec.get('sector_size', 2048)),
+            table_offset=number(spec.get('table_offset', 0)), count=number(spec['count']))
+        configured = {number(item['index']): item for item in spec['members']}
+        excluded = {number(item['index']): item for item in spec.get('excluded_members', [])}
+        require(len(configured) == len(spec['members']) and
+                len(excluded) == len(spec.get('excluded_members', [])), 'Duplicate member inventory')
+        require(not configured.keys() & excluded.keys() and
+                configured.keys() | excluded.keys() == set(range(len(members))),
+                'Archive inventory has missing or conflicting classifications')
+        require(all(item.get('reason', '').strip() for item in excluded.values()),
+                'Excluded archive member needs a reason')
+        for member in members:
+            item = configured.get(member['index'])
+            if item is None:
+                continue
+            base = number(item['load_addr'])
+            require(in_ram(base, len(member['body'])),
+                    'Archive image outside RAM')
+            name = f"{spec['file'].upper()}:ENTRY_{member['index']:04X}"
+            sources.append(dict(name=name, base=base, body=member['body'],
+                spec={**spec, **item}, source_offset=member['source_offset'],
+                source_file=spec['file'].upper(), aliases=[]))
+        return sources
+    for name in spec['files']:
+        body = disc.read(name)
+        offset = 0
+        if method == 'psx_exe':
+            require(body[:8] == b'PS-X EXE', f'{name}: missing PS-X EXE header')
+            base = struct.unpack_from('<I', body, 0x18)[0]
+            offset = 0x800
+            body = body[offset:]
+        elif method == 'fixed_address_files':
+            base = number(spec['load_addr'])
+        elif method == 'tagged_relocated_files':
+            base = number(spec['load_addr'])
+            require(not spec.get('verify_duplicate_names'),
+                    'Relocated sources need individual source identities')
+            body, _ = relocate_tagged_image(body, base)
+        else:
+            raise ValueError(f'Unknown image method: {method}')
+        require(in_ram(base, len(body)), f'{name}: image outside RAM')
+        aliases = []
+        if spec.get('verify_duplicate_names'):
+            leaf = name.rsplit('/', 1)[-1].upper()
+            for other in disc.files:
+                if other.rsplit('/', 1)[-1] == leaf:
+                    require(disc.read(other) == body, f'Conflicting original duplicate: {other}')
+                    aliases.append(other)
+        sources.append(dict(name=name.upper(), base=base, body=body, spec=spec,
+                            source_offset=offset, aliases=aliases))
     return sources
 
 
@@ -193,12 +488,15 @@ def match_sources(record, sources):
 
 def declared_entries(source, disc):
     body, base, spec = source['body'], source['base'], source['spec']
+    view = source.get('view', disc)
     entries = set()
     if 'entry_word' in spec:
         item = spec['entry_word']
         offset = number(item.get('file_offset', 0)) + number(item['address']) - number(item.get('base', 0))
-        entries.add(struct.unpack_from('<I', disc.read(item['file']), offset)[0])
+        entries.add(struct.unpack_from('<I', view.read(item['file']), offset)[0])
     entries.update(number(x) for x in spec.get('entries', []))
+    if 'transfer_entries' in spec:
+        entries |= transfer_entries(source, view)
     require(all(base <= entry < base + len(body) and entry % 4 == 0 for entry in entries),
             f"Entry outside image: {source['name']}")
     return entries
@@ -212,6 +510,7 @@ def make_fixed_record(source, disc):
     if spec.get('supplemental_entries', True):
         seeds |= extractor.supplemental_callable_seeds(body, base)
     entries = declared_entries(source, disc)
+    seeds = {entry for entry in seeds if extractor.optional_entry_delay_valid(body, base, entry)}
     seeds |= entries
     require(seeds, f"No static entries: {source['name']}")
     page, data = extractor.page_aligned_region(base, body)
@@ -234,9 +533,46 @@ def compose_records(left, right, left_record, right_record, max_gap):
     return extractor.rec(page, bytes(data), seeds, dispatch_extra=dispatch, producer_ranges=bounds)
 
 
-def prepare(profile, disc, records, output):
-    verify_evidence(disc, profile.get('checks', []))
-    sources = positioned_sources(disc, profile['images'])
+def eligible_ranges(source, lo, hi):
+    """Explicit, byte-verified fallback intervals cannot be native producers."""
+    excluded = []
+    for item in source['spec'].get('excluded_ranges', []):
+        start, end = number(item['start']), number(item['end'])
+        base, body = source['base'], source['body']
+        require(base <= start < end <= base + len(body) and start % 4 == end % 4 == 0,
+                'Invalid excluded native interval')
+        require(item.get('reason', '').strip(), 'Excluded native interval needs a reason')
+        require(hashlib.sha256(body[start-base:end-base]).hexdigest() == item['sha256'],
+                'Excluded native interval bytes changed')
+        excluded.append((start, end))
+    excluded.sort()
+    require(all(a[1] <= b[0] for a, b in zip(excluded, excluded[1:])),
+            'Overlapping excluded native intervals')
+    ranges = [(lo, hi)]
+    for start, end in excluded:
+        ranges = [(a, b) for left, right in ranges
+                  for a, b in [(left, min(right, start)), (max(left, end), right)] if a < b]
+    return ranges
+
+
+def mod_package_views(profile, disc, project_root):
+    """One verified view per declared mod package selection."""
+    views = {}
+    for spec in profile.get('mod_packages', []):
+        name = spec['name']
+        require(name not in views, f'Duplicate mod package view: {name}')
+        view = ModPackageView(disc, project_root, spec, profile['game_id'])
+        require(view.plugins == sorted(spec.get('plugins', [])),
+                f'Selected mod plugins changed: {name} {view.plugins}')
+        require(view.requirements == sorted(spec.get('requirements', [])),
+                f'Selected mod requirements changed: {name} {view.requirements}')
+        views[name] = view
+    return views
+
+
+def prepare(profile, disc, records, output, views=None):
+    verify_evidence(disc, profile.get('checks', []), views)
+    sources = positioned_sources(disc, profile['images'], views, main_ram_bytes(profile))
     bios = extractor.bios_resident_records() if profile.get('bios_resident') else []
     for record in records:
         if record.get('producer') == 'bios_resident_manifest':
@@ -251,7 +587,7 @@ def prepare(profile, disc, records, output):
             if (lo, hi) == (source['base'], source['base'] + len(source['body'])):
                 singles[source['name']] = record
     for source in sources:
-        if source['spec']['method'] in ('fixed_address_files', 'packed_sector_members') and source['name'] not in singles:
+        if source['spec']['method'] in ('fixed_address_files', 'fixed_address_extents', 'packed_sector_members', 'sector_extent_members', 'aligned_lzss_banks', 'indexed_lzss_members', 'tagged_relocated_files') and source['name'] not in singles:
             record = make_fixed_record(source, disc)
             singles[source['name']] = record
             records.append(record)
@@ -284,7 +620,19 @@ def prepare(profile, disc, records, output):
     for index, record in enumerate(records):
         matches = match_sources(record, sources)
         names = [source['name'] for source, _, _ in matches]
-        bounds = [(lo, hi) for _, lo, hi in matches]
+        bounds = [span for source, lo, hi in matches for span in eligible_ranges(source, lo, hi)]
+        if any(source['spec'].get('excluded_ranges') for source, _, _ in matches):
+            require(profile.get('strict_bounds'), 'Excluded intervals require strict producer bounds')
+            eligible = lambda pc: any(lo <= number(pc) < hi for lo, hi in bounds)
+            for key in ('function_entry_pcs', 'dispatch_entry_pcs', 'static_dispatch_entry_pcs',
+                        'static_discovery_entry_pcs', 'seeds'):
+                if key in record:
+                    record[key] = [pc for pc in record[key] if eligible(pc)]
+            record['static_alias_ranges'] = [alias for alias in record.get('static_alias_ranges', [])
+                if any(lo <= number(alias['start']) <= number(alias['entry']) < number(alias['end']) <= hi
+                       for lo, hi in bounds)]
+            require(all(eligible(entry) for source, _, _ in matches
+                        for entry in declared_entries(source, disc)), 'Excluded required loader entry')
         if record.get('producer') == 'bios_resident_manifest':
             names = ['BIOS resident manifest']
             bounds = [(number(r['start']), number(r['end'])) for r in record['producer_ranges']]
@@ -310,43 +658,75 @@ def prepare(profile, disc, records, output):
                      profile_sha256=hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest(),
                      original_disc_sha256=digest(disc.binary), required_images=sorted(by_name),
                      recipe_count=len(jobs), full_static_coverage_proven=False, jobs=jobs)
+    inventory['mod_packages'] = [view.receipt() for view in (views or {}).values()]
+    inventory['source_images'] = [dict(name=s['name'], aliases=s['aliases'],
+        method=s['spec']['method'], load_addr=hex(s['base']), size=len(s['body']),
+        sha256=hashlib.sha256(s['body']).hexdigest(),
+        excluded_ranges=s['spec'].get('excluded_ranges', [])) for s in sources]
     write_json(output / 'runtime-input-inventory.json', inventory)
     return inventory
 
 
-def extract(profile_path, game_toml, recompiler, output, cue=None):
-    profile = json.loads(profile_path.read_text(encoding='utf-8-sig'))
-    require(profile['schema'] == 'psxrecomp AOT methods v1', 'Unsupported AOT profile')
+def check_disc(profile, disc, cue):
+    """Digests of the disc's data track, or DiscNotApplicable naming both sides.
+
+    A profile is facts about one exact disc. Any other dump (another region,
+    revision, or a modified image) shares none of its verified images."""
+    digests = {}
+    for algorithm, expected in sorted(profile['disc_hashes'].items()):
+        actual = digest(disc.binary, algorithm)
+        digests[algorithm] = actual
+        if actual != expected:
+            raise DiscNotApplicable(
+                f"the AOT profile for {profile['game_id']} describes the disc whose data "
+                f"track has {algorithm} {expected}, but {Path(cue).name} has {actual}. None "
+                'of its images apply to this disc (another region or revision?), so no '
+                'native overlay code can be built for it')
+    return digests
+
+
+def game_disc(game_toml, config, cue=None):
+    """The cue to read: an explicit one, else the game config's [game].disc."""
+    return Path(cue).resolve() if cue else (Path(game_toml).parent / config['game']['disc']).resolve()
+
+
+def extract(profile_path, game_toml, recompiler, output, cue=None, disc=None, profile=None):
     import tomllib
     config = tomllib.loads(game_toml.read_text(encoding='utf-8-sig'))
-    require(config['game']['id'] == profile['game_id'], 'AOT profile/game mismatch')
-    cue = cue or game_toml.parent / config['game']['disc']
-    disc = Disc(cue)
-    for algorithm, expected in profile['disc_hashes'].items():
-        require(digest(disc.binary, algorithm) == expected, f'Unsupported disc {algorithm}')
+    profile = profile or load_profile(profile_path, config)
+    cue = game_disc(game_toml, config, cue)
+    if disc is None:
+        disc = Disc(cue)
+        check_disc(profile, disc, cue)
     output.mkdir(parents=True, exist_ok=True)
-    # Override only the input disc in a temporary config beside the original,
-    # retaining its relative paths and code-generation settings.
+    # The config supplies relative paths and code-generation settings; the disc
+    # is passed explicitly so the verified dump is the one that is read.
     command = [sys.executable, str(FRAMEWORK / 'tools/aot_overlay_spike/extract_generic.py'),
                '--game-toml', str(game_toml), '--recompiler', str(recompiler),
-               '--out', str(output / 'generic.json'), '--tmp', str(output / 'extract-tmp')]
-    require(cue.resolve() == (game_toml.parent / config['game']['disc']).resolve(),
-            'Use a local game config with the desired disc path')
+               '--disc', str(cue),
+               '--out', str(output / 'generic.json'), '--tmp', str(output / 'extract-tmp'),
+               '--project-root', str(FRAMEWORK)]
     command += ['--require-bios-resident'] if profile.get('bios_resident') else ['--no-bios-resident']
     with (output / 'extract.log').open('w') as log:
-        subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
-    return prepare(profile, disc, json.loads((output / 'generic.json').read_text(encoding='utf-8-sig')), output)
+        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+    if result.returncode:
+        print(f"Original-disc extraction failed; see {output / 'extract.log'}", file=sys.stderr, flush=True)
+        raise subprocess.CalledProcessError(result.returncode, command)
+    views = mod_package_views(profile, disc, game_toml.parent)
+    return prepare(profile, disc, json.loads((output / 'generic.json').read_text(encoding='utf-8-sig')),
+                   output, views)
 
 
-def audit(game_toml, recompiler, cache, inventory, output):
+def audit(game_toml, recompiler, cache, inventory, output, static_dispatch=None):
+    target = ['--static-dispatch', str(static_dispatch)] if static_dispatch else ['--cache-root', str(cache)]
     subprocess.run([sys.executable, str(FRAMEWORK / 'tools/audit_aot_cache.py'),
                     '--framework-root', str(FRAMEWORK), '--recompiler', str(recompiler),
-                    '--game-toml', str(game_toml), '--cache-root', str(cache),
+                    '--game-toml', str(game_toml), *target,
                     '--inventory', str(inventory), '--output', str(output)], check=True)
     return json.loads(output.read_text())
 
 
-def build(inventory, game_toml, recompiler, work, gcc, workers, project_root=None):
+def build(inventory, game_toml, recompiler, work, gcc, workers, project_root=None, cps=False):
     """Independent recipe builds cannot nominate entries in sibling images."""
     cache = work / 'cache'
     cache.mkdir(parents=True)
@@ -359,7 +739,7 @@ def build(inventory, game_toml, recompiler, work, gcc, workers, project_root=Non
                    '--project-root', str(project_root or game_toml.parent), '--recompiler', str(recompiler),
                    '--runtime-include', str(FRAMEWORK / 'runtime/include'),
                    '--out-dir', str(target / 'cache'), '--compiler', 'gcc', '--gcc', gcc,
-                   '--flavor', '0', '--jobs', '1']
+                   '--flavor', '0', '--jobs', '1'] + (['--cps'] if cps else [])
         with (target / 'compile.log').open('w') as log:
             subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
         return index, job, target
@@ -383,10 +763,60 @@ def build(inventory, game_toml, recompiler, work, gcc, workers, project_root=Non
                 if destination.exists():
                     require(library.with_suffix('.ranges').read_bytes() == destination.with_suffix('.ranges').read_bytes(),
                             f'Conflicting native pair identity: {library.name}')
-                    continue
-                shutil.copy2(library, destination)
-                shutil.copy2(library.with_suffix('.ranges'), destination.with_suffix('.ranges'))
+                else:
+                    shutil.copy2(library, destination)
+                    shutil.copy2(library.with_suffix('.ranges'), destination.with_suffix('.ranges'))
+                marker = library.with_suffix('.resident')
+                if marker.exists():
+                    target_marker = destination.with_suffix('.resident')
+                    require(not target_marker.exists() or marker.read_bytes() == target_marker.read_bytes(),
+                            f'Conflicting resident metadata: {library.name}')
+                    shutil.copy2(marker, target_marker)
     return cache
+
+
+def build_static(inventory, game_toml, recompiler, work, out_dir, gcc, workers, project_root=None,
+                 cps=False):
+    """Link every verified recipe into the runtime binary instead of DLL pairs.
+
+    One compiler invocation sees every recipe, as the DLL build's per-recipe
+    isolation does not apply: each variant is still keyed by its entry and gated
+    by the CRC of the original bytes it was compiled from. Fresh output only.
+    """
+    records = [json.loads(Path(job['input']).read_text(encoding='utf-8'))[0]
+               for job in inventory['jobs']]
+    captures = work / 'static-inputs.json'
+    write_json(captures, records)
+    build_dir = work / 'static'
+    command = [sys.executable, str(FRAMEWORK / 'tools/compile_overlays.py'), '--static',
+               '--captures', str(captures), '--game-toml', str(game_toml),
+               '--project-root', str(project_root or game_toml.parent), '--recompiler', str(recompiler),
+               '--runtime-include', str(FRAMEWORK / 'runtime/include'),
+               '--out-dir', str(build_dir), '--gcc', gcc, '--jobs', str(workers)] +               (['--cps'] if cps else [])
+    with (work / 'static-compile.log').open('w') as log:
+        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+    if result.returncode:
+        print(f'Static AOT compilation failed; see {work / "static-compile.log"}', file=sys.stderr, flush=True)
+        raise subprocess.CalledProcessError(result.returncode, command)
+    return build_dir
+
+
+def publish_static(build_dir, out_dir, receipt):
+    """Replace the destination's static overlay units with exactly the audited set."""
+    import compile_overlays as emitter
+    produced = [build_dir / 'overlays_static.c'] + [Path(p) for p in
+                emitter.static_part_paths(str(build_dir / 'overlays_static.c'))]
+    expected = {path.name: digest(path) for path in produced}
+    require(expected == receipt['files'], 'Audited static output changed')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for stale in [out_dir / 'overlays_static.c'] + [Path(p) for p in
+                  emitter.static_part_paths(str(out_dir / 'overlays_static.c'))]:
+        if stale.exists():
+            stale.unlink()
+    for path in produced:
+        shutil.copy2(path, out_dir / path.name)
+        require(digest(out_dir / path.name) == expected[path.name], f'Published file changed: {path.name}')
+    write_json(out_dir / 'AOT_STATIC_AUDIT.json', receipt)
 
 
 def stage(cache, destination, receipt):
@@ -396,8 +826,11 @@ def stage(cache, destination, receipt):
     target.mkdir(parents=True, exist_ok=True)
     expected = set()
     for pair in receipt['pairs']:
-        for name, key in [(pair['dll'], 'dll_sha256'),
-                          (Path(pair['dll']).with_suffix('.ranges').name, 'manifest_sha256')]:
+        artifacts = [(pair['dll'], 'dll_sha256'),
+                     (Path(pair['dll']).with_suffix('.ranges').name, 'manifest_sha256')]
+        if 'resident_sha256' in pair:
+            artifacts.append((Path(pair['dll']).with_suffix('.resident').name, 'resident_sha256'))
+        for name, key in artifacts:
             expected.add(name)
             require(digest(source / name) == pair[key], f'Audited artifact changed: {name}')
             shutil.copy2(source / name, target / name)
@@ -407,11 +840,132 @@ def stage(cache, destination, receipt):
     write_json(destination / 'AOT_CACHE_AUDIT.json', receipt)
 
 
+def require_runtime_cache(config):
+    require(config.get('runtime', {}).get('overlay_cache') is True,
+            'AOT release requires runtime.overlay_cache = true in the packaged config')
+
+
+def write_codegen_hash_header(cmake='cmake', header=None):
+    """Write runtime/include/overlay_codegen_hash.h from the codegen sources.
+
+    compile_overlays refuses a recompiler whose baked --codegen-hash differs
+    from this header, and the header is otherwise produced only by the runtime
+    BUILD. A static shard is generated BEFORE that build (a fresh player tree
+    runs Generate first), so without this the guard reads 0 and fails. The
+    same script and source list the runtime build uses compute it, so the
+    value is identical and the later build leaves the file untouched."""
+    header = Path(header) if header else FRAMEWORK / 'runtime/include/overlay_codegen_hash.h'
+    result = subprocess.run([str(cmake), f'-DPSXRECOMP_CODEGEN_HASH_ROOT={FRAMEWORK.as_posix()}',
+                             f'-DOUT={header.as_posix()}', '-P',
+                             str(FRAMEWORK / 'runtime/hash_codegen.cmake')],
+                            capture_output=True, text=True, errors='replace')
+    require(result.returncode == 0,
+            f'cannot compute the overlay codegen hash with {cmake}: '
+            f'{(result.stderr or result.stdout).strip()}')
+    require(compiler.codegen_hash(str(header.parent)) != 0, f'{header} was not written')
+    return header
+
+
+def tree_digest(root):
+    """One digest over every file below root, by relative path and content."""
+    h = hashlib.sha256()
+    for path in sorted(p for p in Path(root).rglob('*') if p.is_file()):
+        h.update(path.relative_to(root).as_posix().encode() + b'\0')
+        h.update(digest(path).encode() + b'\0')
+    return h.hexdigest()
+
+
+def generation_inputs(profile_path, profile, game_toml, recompiler, disc_digests, gcc, cps):
+    """Everything a static shard is a function of, for reuse across Generates.
+
+    Conservative on purpose: the whole game config and profile, the recompiler
+    binary and its cache tag (codegen version, emitter-source hash, overlay
+    config hash), every framework tool module this process runs or spawns, the
+    selected mod packages' files, and the BIOS resident inputs when used."""
+    tools_dir = FRAMEWORK / 'tools'
+    modules = {Path(m.__file__).resolve() for m in list(sys.modules.values())
+               if getattr(m, '__file__', None)}
+    modules = {p for p in modules if tools_dir in p.parents and p.suffix == '.py'}
+    modules |= {tools_dir / 'audit_aot_cache.py', tools_dir / 'compile_overlays.py',
+                tools_dir / 'aot_overlay_spike/extract_generic.py', Path(__file__).resolve()}
+    include = str(FRAMEWORK / 'runtime/include')
+    inputs = dict(
+        schema=GENERATION_INPUTS_SCHEMA,
+        profile_sha256=digest(profile_path),
+        game_toml_sha256=digest(game_toml),
+        disc=disc_digests,
+        recompiler_sha256=digest(recompiler),
+        cache_tag=compiler.cache_tag(include, str(recompiler), str(game_toml), 0),
+        cps=bool(cps),
+        gcc=str(gcc),
+        tools={p.relative_to(FRAMEWORK).as_posix(): digest(p) for p in sorted(modules)},
+        mod_packages={spec['name']: tree_digest((Path(game_toml).parent / spec['manifest']).parent)
+                      for spec in profile.get('mod_packages', [])})
+    if profile.get('bios_resident'):
+        manifest = tools_dir / 'aot_overlay_spike/bios_resident_code.json'
+        rom = Path(os.environ.get('PSXRECOMP_BIOS_ROM') or FRAMEWORK / 'bios/SCPH1001.BIN')
+        inputs['bios_resident'] = dict(manifest=digest(manifest) if manifest.is_file() else None,
+                                       rom=digest(rom) if rom.is_file() else None)
+    return inputs, hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
+def static_outputs(out_dir):
+    """The static overlay units currently in out_dir (dispatcher first)."""
+    main = Path(out_dir) / STATIC_OUTPUT_NAME
+    parts = [Path(p) for p in compiler.static_part_paths(str(main))]
+    return ([main] if main.exists() else []) + parts
+
+
+def clear_static(out_dir):
+    """Remove the published static units and their receipt; returns their names."""
+    removed = []
+    for path in static_outputs(out_dir) + [Path(out_dir) / 'AOT_STATIC_AUDIT.json']:
+        if path.exists():
+            path.unlink()
+            removed.append(path.name)
+    return removed
+
+
+def reusable_static(out_dir, inputs_sha256):
+    """(True, receipt) when out_dir holds exactly the audited output of these inputs."""
+    path = Path(out_dir) / 'AOT_STATIC_AUDIT.json'
+    if not path.is_file():
+        return False, 'no audited static output yet'
+    try:
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False, 'previous audit receipt is unreadable'
+    if receipt.get('generation_inputs_sha256') != inputs_sha256:
+        return False, 'inputs changed since the audited output was built'
+    files = receipt.get('files') or {}
+    present = {p.name: p for p in static_outputs(out_dir)}
+    if not files or set(present) != set(files):
+        return False, 'published units differ from the audit receipt'
+    for name, expected in files.items():
+        if digest(present[name]) != expected:
+            return False, f'{name} changed since it was audited'
+    return True, receipt
+
+
 def main():
+    """Command line. ProfileErrors print one line; other failures keep a traceback."""
+    try:
+        return run()
+    except DiscNotApplicable as exc:
+        print(f'aot_overlay_pipeline: not applicable: {exc}', file=sys.stderr, flush=True)
+        return EXIT_NOT_APPLICABLE
+    except ProfileError as exc:
+        print(f'aot_overlay_pipeline: error: {exc}', file=sys.stderr, flush=True)
+        return 1
+
+
+def run():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['extract', 'release'])
+    parser.add_argument('action', choices=['extract', 'release', 'static'])
     parser.add_argument('--profile', type=Path, required=True)
     parser.add_argument('--game-toml', type=Path, required=True)
+    parser.add_argument('--disc', type=Path,
+                        help="Cue to read (default: the game config's [game].disc)")
     parser.add_argument('--runtime-config', type=Path,
                         help='Packaged config controlling native cache namespace/code generation')
     parser.add_argument('--runtime-build-dir', type=Path,
@@ -422,18 +976,70 @@ def main():
     parser.add_argument('--stage', type=Path)
     parser.add_argument('--gcc', default='gcc')
     parser.add_argument('--workers', type=int, default=3)
+    parser.add_argument('--out-dir', type=Path,
+                        help='static: directory receiving overlays_static.c and its units '
+                             "(default: the directory of the profile's static_output)")
+    parser.add_argument('--cps', action='store_true',
+                        help='Emit continuation-passing overlays; must match the runtime build')
+    parser.add_argument('--cmake', default='cmake',
+                        help='static: cmake used to compute the overlay codegen hash header')
+    parser.add_argument('--reuse', action='store_true',
+                        help='static: keep the published output when every generation input '
+                             'matches its audit receipt')
+    parser.add_argument('--clear-if-not-applicable', action='store_true',
+                        help='static: when the profile describes another disc, remove the '
+                             'published static units and receipt before exiting 3')
     args = parser.parse_args()
     require(args.workers > 0, 'Workers must be positive')
+    if args.action == 'release':
+        import tomllib
+        require_runtime_cache(tomllib.loads((args.runtime_config or args.game_toml)
+                                           .read_text(encoding='utf-8-sig')))
     if args.runtime_build_dir:
         from release_stage import _flavor_from_build
         require(_flavor_from_build(str(args.runtime_build_dir), args.runtime_target) == 0,
                 'This AOT pipeline currently requires a flavor-0 runtime')
+    import tomllib
+    config, recompiler = args.game_toml.resolve(), args.recompiler.resolve()
+    profile_path = args.profile.resolve()
+    game_config = tomllib.loads(config.read_text(encoding='utf-8-sig'))
+    profile = load_profile(profile_path, game_config)
+    cue = game_disc(config, game_config, args.disc)
+    out_dir = None
+    if args.action == 'static':
+        declared = static_output(profile, config.parent)
+        require(args.out_dir is not None or declared is not None,
+                'static requires --out-dir or a profile static_output')
+        out_dir = args.out_dir.resolve() if args.out_dir is not None else declared.parent
+    require(cue.is_file(), f'Disc not found: {cue}')
+    disc = Disc(cue)
+    try:
+        disc_digests = check_disc(profile, disc, cue)
+    except DiscNotApplicable:
+        if out_dir is not None and args.clear_if_not_applicable:
+            removed = clear_static(out_dir)
+            if removed:
+                print(f"Removed {len(removed)} static overlay file(s) from {out_dir}: they "
+                      'cannot describe this disc', flush=True)
+        raise
+    if args.action == 'static':
+        write_codegen_hash_header(args.cmake)
+        inputs, inputs_sha256 = generation_inputs(profile_path, profile, config, recompiler,
+                                                  disc_digests, args.gcc, args.cps)
+        if args.reuse:
+            reused, detail = reusable_static(out_dir, inputs_sha256)
+            if reused:
+                print(f"Reused {detail['published_variants']} audited static variants in "
+                      f"{len(detail['files'])} files: every generation input is unchanged "
+                      f"({inputs_sha256[:16]})", flush=True)
+                print(f'RESULT_STATIC=reused {out_dir}', flush=True)
+                return 0
+            print(f'Building static overlays: {detail}', flush=True)
     args.work_dir.mkdir(parents=True, exist_ok=True)
     # Every release extracts again from the supported original disc. A private
     # new work directory excludes runtime caches and incomplete prior attempts.
     work = Path(tempfile.mkdtemp(prefix='disc-aot-', dir=args.work_dir.resolve()))
-    config, recompiler = args.game_toml.resolve(), args.recompiler.resolve()
-    inventory = extract(args.profile.resolve(), config, recompiler, work)
+    inventory = extract(profile_path, config, recompiler, work, cue=cue, disc=disc, profile=profile)
     print(f"Verified {len(inventory['required_images'])} images / {len(inventory['jobs'])} recipes", flush=True)
     if args.action == 'release':
         require(args.stage is not None, 'release requires --stage')
@@ -441,15 +1047,30 @@ def main():
         import tomllib
         require(tomllib.loads(runtime_config.read_text(encoding='utf-8-sig'))['game']['id'] == inventory['game_id'],
                 'Runtime config/game mismatch')
-        cache = build(inventory, runtime_config, recompiler, work, args.gcc, args.workers, config.parent)
+        cache = build(inventory, runtime_config, recompiler, work, args.gcc, args.workers, config.parent,
+                      args.cps)
         receipt = audit(runtime_config, recompiler, cache, work / 'runtime-input-inventory.json', work / 'audit.json')
         receipt['profile_sha256'] = inventory['profile_sha256']
         receipt['original_disc_sha256'] = inventory['original_disc_sha256']
         receipt['required_images'] = inventory['required_images']
         stage(cache, args.stage.resolve(), receipt)
         print(f"Staged {receipt['published_pairs']} audited native pairs", flush=True)
+    if args.action == 'static':
+        build_dir = build_static(inventory, config, recompiler, work, out_dir, args.gcc,
+                                 args.workers, config.parent, args.cps)
+        receipt = audit(config, recompiler, None, work / 'runtime-input-inventory.json',
+                        work / 'audit.json', build_dir / STATIC_OUTPUT_NAME)
+        for key in ('profile_sha256', 'original_disc_sha256', 'required_images', 'mod_packages'):
+            receipt[key] = inventory[key]
+        receipt['generation_inputs'] = inputs
+        receipt['generation_inputs_sha256'] = inputs_sha256
+        publish_static(build_dir, out_dir, receipt)
+        print(f"Published {receipt['published_variants']} audited static variants "
+              f"in {len(receipt['files'])} files", flush=True)
+        print(f'RESULT_STATIC=built {out_dir}', flush=True)
     print(f'Original-disc evidence: {work}', flush=True)
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

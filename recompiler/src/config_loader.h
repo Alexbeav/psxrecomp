@@ -253,6 +253,14 @@ struct RuntimeConfig {
     bool                  bios_hle = true;
     bool                  bios_hle_keep_intro = false;
 
+    // hide_hidden_mod_features: the launcher never presents a mod feature its
+    // package marks `hidden` -- not even while enabled -- nor a package whose
+    // every feature is hidden, and Enable/Disable all leave such features alone
+    // (recomp-ui RecompLauncherCModProvider::hide_hidden_features). The feature
+    // still runs as its package default and mods/state.toml say. Default false:
+    // a hidden feature is listed while enabled so it can be turned off.
+    bool                  hide_hidden_mod_features = false;
+
     // hle_scheduler: the HLE tier's standing SUBSYSTEM REPLACEMENT for guest
     // thread switching (deterministic TCB scheduler vs the legacy
     // non-deterministic host-fiber bridge). Default ON under BOTH BIOS
@@ -370,10 +378,30 @@ struct RuntimeConfig {
 
     // ---- [video] block — visual enhancement options ----
     // supersampling: internal-resolution SSAA factor (per axis). 1 = native
-    // (default, behaves exactly as before). 2..4 render geometry/shading into
+    // (default, behaves exactly as before). 2..32 render geometry/shading into
     // an N*-scaled mirror of VRAM and downsample on present — true ordered-grid
-    // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate.
+    // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate. The
+    // runtime clamps per backend: software and Vulkan at 4, OpenGL at the
+    // driver's texture limits and a memory budget (gl_scale_limits.h).
     int                   video_supersampling = 1;
+
+    // depth24_trailing_margin: columns blanked at the right edge of every
+    // 24-bit (FMV) frame, working around MDEC leaving stale pixels there.
+    // 8 is the historical default; a title whose MDEC uploads the full width
+    // can set 0 and keep those columns.
+    int                   video_depth24_trailing_margin = 8;
+
+    // internal_resolution: the "Internal resolution" preset (Settings ->
+    // Display), which supersedes supersampling when set. Encoding as in
+    // runtime/include/internal_resolution.h: 0 = unset (supersampling stands),
+    // 1 = native, -1 = match the display, N >= 2 = target output lines. In
+    // game.toml it is the shipped default ("native", "720p", "1080p",
+    // "1440p", "4k", "5k", "8k", "display", or a number of lines).
+    int                   video_internal_resolution = 0;
+    // resolution_reference_lines: the title's usual display height, which a
+    // preset divides into (S = ceil(target / reference)). 240 for NTSC
+    // 320x240 games; 120..1024.
+    int                   video_resolution_reference_lines = 240;
 
     // Optional initial window width declared by the title profile. Zero keeps
     // the historical fit-to-display behavior; player settings may override it.
@@ -695,9 +723,11 @@ struct BiosConfig {
     // copies, semantic validation and consumption in BiosAddressModel
     // (bios_address_model.h). Empty = the BIOS runs entirely from ROM.
     std::vector<BiosAddrCopy> address_copies;
-    // [[recompiler.install_slots]]: kernel-RAM PCs the BIOS overwrites with
-    // dispatch stubs at runtime (see docs/dynamic_handler_install.md).
-    std::vector<uint32_t>     install_slots;
+    // [[recompiler.install_slots]]: kernel-RAM RANGES the BIOS (or the game's
+    // Psy-Q libapi patchers) overwrite at runtime. Layout, defaults and the
+    // resume shapes are in BiosInstallSlot (bios_address_model.h); see
+    // docs/dynamic_handler_install.md for how to find new ones.
+    std::vector<BiosInstallSlot> install_slots;
 
     // [recompiler.runtime_exports]: per-image anchors the emitter couriers
     // into the generated C (psx_bios_image, runtime/include/psx_bios_image.h)
@@ -1168,7 +1198,30 @@ struct GameConfig {
     //   reveal pixels once before the new stage background is submitted.
     uint32_t ws_bg2d_init_func    = 0;
     uint32_t ws_bg2d_packet_cap       = 1000;
+
+    // [widescreen.cull] bgez_sites -- `bgez SX, keep` sites of a signed
+    // per-vertex left-edge chain (`bgez x0,keep; ...; bltz xN,reject`). Keeps
+    // while SX >= -margin (psx_ws_cull_bgez), the exact partner of bltz_sites:
+    // bltz_sites alone still rejects a primitive whose earlier vertices sit in
+    // the revealed band. Must be REGIMM bgez (main EXE: hard error otherwise).
+    // Empty by default; identity at 4:3; regen required.
+    std::vector<uint32_t> ws_cull_bgez_sites;
+    // [widescreen.cull] clip_edge_x_load_sites -- lh/lhu/lw loads of a screen-X
+    // clip bound (e.g. a scratchpad clip rectangle compared with slt). While
+    // revealed, a loaded 0 becomes -margin and a loaded clip_edge_width becomes
+    // width+margin; interior bounds (mirrors, split-screen halves) stay
+    // vanilla. Empty by default; identity at 4:3; regen required.
+    std::vector<uint32_t> ws_cull_clip_edge_x_load_sites;
+    // [widescreen.cull] clip_edge_width -- the screen width a right-edge clip
+    // bound equals. 0 = the first screen_w_imms entry (0x140 by default).
+    uint32_t ws_cull_clip_edge_width = 0;
 };
+
+// Effective clip_edge_width: explicit value, else screen_w_imms[0], else 320.
+inline uint32_t ws_cull_clip_edge_width(const GameConfig& c) {
+    if (c.ws_cull_clip_edge_width) return c.ws_cull_clip_edge_width;
+    return c.ws_cull_w_imms.empty() ? 0x140u : c.ws_cull_w_imms.front();
+}
 
 // UserSettings — the launcher-written, user-editable override layer.
 //
@@ -1189,7 +1242,12 @@ struct UserSettings {
 
     // [video]
     bool has_renderer       = false; int  renderer       = DEFAULT_VIDEO_RENDERER; // 0=software,1=opengl,2=vulkan
-    bool has_supersampling  = false; int  supersampling  = 1; // 1..4
+    bool has_supersampling  = false; int  supersampling  = 1; // 1..32 (runtime clamps per backend)
+    // Internal resolution preset (RuntimeConfig::video_internal_resolution
+    // encoding). Written as a stable id ("4k") or a line count; when present
+    // it wins over supersampling, which is still written (capped at 4) so an
+    // older runtime reading the same file degrades gracefully.
+    bool has_internal_resolution = false; int internal_resolution = 0;
     // Window size: width in px; height is always width*3/4 (PSX 4:3). Applies to
     // both the launcher and the emulator window so they boot at the same size.
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960

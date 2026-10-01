@@ -24,6 +24,7 @@ import argparse
 import itertools
 import io
 import contextlib
+import contextvars
 import base64
 import binascii
 from bisect import bisect_left
@@ -257,6 +258,207 @@ def cache_arch_abi() -> str:
     else:
         arch = 'unknown'
     return f'{os_tag}-{arch}'
+
+
+# ---------------------------------------------------------------------------
+# Code segments (docs/SEGMENT_AWARE_CODE.md §5.7)
+# ---------------------------------------------------------------------------
+# The bytes of an overlay are segment-free; execution is not. A PC's segment
+# (KUSEG 0x0xxxxxxx, KSEG0 0x8xxxxxxx, KSEG1 0xAxxxxxxx) is part of every link,
+# EPC, I-cache tag and store-PC stamp a compiled body bakes, so a shard serves
+# only the segment it was compiled for. Capture schema v3 records the segments
+# each dispatch entry entered through (`dispatch_entry_segments`); a capture
+# without it is KSEG0 only. This tool compiles one shard per (region, segment
+# with entries): the image is compiled at `segment | phys`, so its functions,
+# manifest F entries and exports are named by that VA (§5.1). KSEG0 shards keep
+# their place and names in the cache tag directory, so no existing cache is
+# invalidated; KUSEG and KSEG1 shards go in its seg-kuseg/ and seg-kseg1/
+# subdirectories (decision 4), under the same {phys}_{crc} filename grammar,
+# and their manifests carry `S <segment>`. R records stay KSEG0-spelled byte
+# extents: they validate bytes, not execution.
+KUSEG, KSEG0, KSEG1 = 0x00000000, 0x80000000, 0xA0000000
+SEGMENT_MASK, PHYS_MASK = 0xE0000000, 0x1FFFFFFF
+SEGMENT_NAMES = {KUSEG: 'kuseg', KSEG0: 'kseg0', KSEG1: 'kseg1'}
+SEGMENT_BY_NAME = {name: seg for seg, name in SEGMENT_NAMES.items()}
+SEGMENT_CACHE_SUBDIRS = {KUSEG: 'seg-kuseg', KSEG1: 'seg-kseg1'}
+
+# The segment of the image being compiled. Helpers that name PCs without an
+# image address at hand spell them in it (_canonical_guest_addr); every
+# per-image entry point below sets it for its duration (image_segment). The
+# default is KSEG0, the only segment before §5.7, so a KSEG0 compile is
+# unchanged. A context variable, not a global: captures compile on threads.
+_IMAGE_SEGMENT = contextvars.ContextVar('psx_overlay_image_segment',
+                                        default=KSEG0)
+
+
+def segment_of(addr: int) -> int:
+    return addr & SEGMENT_MASK
+
+
+@contextmanager
+def image_segment(seg: int):
+    if seg not in SEGMENT_NAMES:
+        raise ValueError(f'0x{seg:08X} is not a segment that maps RAM')
+    token = _IMAGE_SEGMENT.set(seg)
+    try:
+        yield seg
+    finally:
+        _IMAGE_SEGMENT.reset(token)
+
+
+def _canonical_guest_addr(addr: int) -> int:
+    """``addr``'s bytes, spelled in the segment of the image being compiled."""
+    return (addr & PHYS_MASK) | _IMAGE_SEGMENT.get()
+
+
+def segment_cache_dir(cache_dir: str, seg: int) -> str:
+    """The directory a shard compiled for ``seg`` lives in (decision 4)."""
+    sub = SEGMENT_CACHE_SUBDIRS.get(seg)
+    return os.path.join(cache_dir, sub) if sub else cache_dir
+
+
+def cache_dir_segment(directory: str) -> int:
+    """The segment of the shards in ``directory`` (overlay_loader.c's
+    cache_seg_from_path): a seg-kuseg/ or seg-kseg1/ directory, else KSEG0."""
+    name = os.path.basename(os.path.normpath(directory)).lower()
+    for seg, sub in SEGMENT_CACHE_SUBDIRS.items():
+        if name == sub:
+            return seg
+    return KSEG0
+
+
+def _respell(addr: int, seg: int) -> int:
+    return (addr & PHYS_MASK) | seg
+
+
+def capture_segment_views(cap: dict,
+                          required_segments=frozenset()) -> list[dict]:
+    """Split one capture record into one per segment with entries (§5.7).
+
+    A v2 capture (no ``dispatch_entry_segments``) is KSEG0 only and is
+    returned unchanged, so every existing capture compiles exactly as before.
+    For v3, ``dispatch_entry_pcs`` keeps its v2 meaning (dispatched in any
+    segment, spelled at KSEG0) and ``dispatch_entry_segments`` names the
+    segments: {"kuseg": [...], "kseg0": [...], "kseg1": [...]}, each PC in its
+    own segment. A dispatch entry that no segment list names is KSEG0.
+
+    A view is the capture seen from one segment: ``load_addr`` and every PC in
+    it are spelled in that segment, and its dispatch entries are that
+    segment's alone. The execution evidence (executed_pcs) has no segment --
+    direct edges keep the entry's segment -- so each view carries all of it.
+    The bytes, size and guard words are shared.
+
+    ``required_segments`` also gets a view where the record has no dispatch
+    entry: the segments an operator or config demand names inside it
+    (declared_view_segments). A record with no view at all -- execution
+    evidence only, which the runtime writes -- is read as a v2 reader reads
+    it: one KSEG0 view, so its classification, forced interiors, declared
+    entries and prior manifests apply exactly as before.
+    """
+    segments = cap.get('dispatch_entry_segments')
+    if segments is None:
+        return [cap]
+    load = _parse_addr(cap['load_addr'])
+    all_entries = {a & PHYS_MASK
+                   for a in _parse_addr_list(cap.get('dispatch_entry_pcs', []))}
+    by_seg = {seg: set() for seg in SEGMENT_NAMES}
+    labelled = set()
+    if not isinstance(segments, dict):
+        raise RuntimeError('dispatch_entry_segments must be an object')
+    for name, pcs in segments.items():
+        seg = SEGMENT_BY_NAME.get(name)
+        if seg is None:
+            raise RuntimeError(f'dispatch_entry_segments: unknown segment {name!r}')
+        for pc in _parse_addr_list(pcs):
+            if segment_of(pc) != seg:
+                raise RuntimeError(
+                    f'dispatch_entry_segments.{name}: 0x{pc:08X} is not in {name}')
+            by_seg[seg].add(pc & PHYS_MASK)
+            labelled.add(pc & PHYS_MASK)
+    # Entries with no segment record are KSEG0, as in a v2 capture.
+    by_seg[KSEG0] |= all_entries - labelled
+
+    def respell_list(values, seg, keep=None):
+        out = []
+        for value in _parse_addr_list(values or []):
+            if keep is not None and (value & PHYS_MASK) not in keep:
+                continue
+            out.append(f'0x{_respell(value, seg):08X}')
+        return sorted(out)
+
+    wanted = {seg for seg, entries in by_seg.items() if entries}
+    wanted |= {seg for seg in required_segments if seg in by_seg}
+    if not wanted:
+        wanted = {KSEG0}
+    views = []
+    for seg in (KSEG0, KUSEG, KSEG1):
+        if seg not in wanted:
+            continue
+        entries = by_seg[seg]
+        view = {k: v for k, v in cap.items() if k != 'dispatch_entry_segments'}
+        view['load_addr'] = f'0x{_respell(load, seg):08X}'
+        view['dispatch_entry_pcs'] = [f'0x{_respell(a, seg):08X}'
+                                      for a in sorted(entries)]
+        view['seeds'] = list(view['dispatch_entry_pcs'])
+        if 'static_dispatch_entry_pcs' in cap:
+            view['static_dispatch_entry_pcs'] = respell_list(
+                cap['static_dispatch_entry_pcs'], seg, entries)
+        for field in ('executed_pcs', 'observed_pcs', 'function_entry_pcs',
+                      'static_discovery_entry_pcs',
+                      'static_call_continuation_pcs'):
+            if field in cap:
+                view[field] = respell_list(cap[field], seg)
+        if cap.get('producer_ranges'):
+            view['producer_ranges'] = [
+                dict(r, start=f'0x{_respell(_parse_addr(r["start"]), seg):08X}',
+                     end=f'0x{_respell(_parse_addr(r["end"]), seg):08X}')
+                for r in cap['producer_ranges']]
+        if cap.get('static_alias_ranges'):
+            view['static_alias_ranges'] = [
+                dict(r, entry=f'0x{_respell(_parse_addr(r["entry"]), seg):08X}',
+                     start=f'0x{_respell(_parse_addr(r["start"]), seg):08X}',
+                     end=f'0x{_respell(_parse_addr(r["end"]), seg):08X}')
+                for r in cap['static_alias_ranges']]
+        views.append(view)
+    return views
+
+
+def declared_view_segments(cap: dict, toml_doc: dict,
+                           forced_interiors=frozenset()) -> set[int]:
+    """Segments a demand from outside the capture names inside ``cap`` (§5.7).
+
+    A ``--force-interior`` PC is KSEG0 (a physical and a KUSEG PC are the same
+    number), so one inside the record asks for its KSEG0 view. A game.toml
+    ``[[overlays]]`` table matches the load address it spells, and one without
+    a load address applies its entries by their own spelling, so each names
+    the segment it is written in. capture_segment_views() gives every such
+    segment a view even where the capture saw no dispatch entry, so these
+    demands compile as they did before captures carried segments. Byte-CRC
+    checks stay with the compile (_collect_toml_overlay_entries): a detached
+    table's view compiles nothing."""
+    load = _parse_addr(cap['load_addr'])
+    lo = load & PHYS_MASK
+    hi = lo + int(cap['size'])
+    inside = lambda pc: lo <= (pc & PHYS_MASK) < hi
+    segs = {KSEG0} if any(inside(pc) for pc in forced_interiors) else set()
+    for ov in (toml_doc or {}).get('overlays', []) or []:
+        if not isinstance(ov, dict):
+            continue
+        entries = set()
+        for key in ('entry', 'entries', 'function_entry_pcs', 'function_entries'):
+            val = ov.get(key)
+            if isinstance(val, list):
+                entries.update(_parse_addr_list(val))
+            elif val is not None:
+                entries.add(_parse_addr(val))
+        ov_load = ov.get('load_addr') or ov.get('load_address')
+        if ov_load is not None:
+            ov_load = _parse_addr(ov_load)
+            if entries and (ov_load & PHYS_MASK) == lo:
+                segs.add(segment_of(ov_load))
+        else:
+            segs.update(segment_of(pc) for pc in entries if inside(pc))
+    return {seg for seg in segs if seg in SEGMENT_NAMES}
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +747,7 @@ NON_AUTHORITY_MANIFEST_PROVENANCES = {
 HOSTED_MANIFEST_MARKER = (
     f'# psxrecomp overlay provenance {HOSTED_MANIFEST_PROVENANCE}')
 HOSTED_UNIQUE_GUARDED_BYTE_CAP = 1024 * 1024
-# Full 8 MiB host capacity (PSX_RAM_CAPACITY): 8 MB-mod captures carry
+# Full 8 MiB host capacity (PSX_MAIN_RAM_BACKING_BYTES): 8 MB-mod captures carry
 # high-bank enhancement code and their ranges must validate.
 PSX_RAM_SIZE = 8 * 1024 * 1024
 
@@ -1269,6 +1471,35 @@ def plausible_callable_target(data: bytes, load_addr: int, size: int,
     return saw_return and not bad and not work and len(visited) < 2048
 
 
+def _frameless_dispatch_root_proven(data: bytes, load_addr: int, size: int,
+                                    addr: int, producer_hi: int) -> bool:
+    """CFG proof for a dispatch entry admitted only by the word before it.
+
+    `_callable_legacy_seed` accepts an address on three different grades of
+    evidence: it is the image entry, it opens a stack frame, or the word two
+    slots back is `jr $ra`. The third is the weak one, and it is weak exactly
+    where it fires most: the first word *after* a function's return is also
+    the first word of whatever the linker laid down next, which in these
+    images is routinely a pointer table, a packed record array or zero fill.
+    A dispatch PC there is real -- a sibling occupant of the shared band has
+    code at that address -- but for *this* image it is data, and promoting it
+    to a walk root sends the linear walk through the table to the image end.
+
+    So require the same bounded CFG probe the discovery roots already use
+    when the classic prologue is absent. Failing it does not discard the
+    entry: the caller demotes it to DISPATCH_INTERIOR, which keeps the
+    dispatch evidence and the isolated-fragment demand and only declines to
+    start a walk there.
+    """
+    word = _word_at(data, load_addr, addr)
+    prev = _word_at(data, load_addr, addr - 4)
+    if addr == load_addr:
+        return True
+    if _is_addiu_sp_neg(word) and not _is_control_flow(prev):
+        return True
+    return plausible_callable_target(data, load_addr, size, addr, producer_hi)
+
+
 def _walk_overlay_function(data: bytes, load_addr: int, size: int,
                            entry: int, hard_cap: int,
                            producer_ranges=(),
@@ -1585,6 +1816,11 @@ def classify_overlay_seeds(cap: dict, data: bytes, load_addr: int, size: int,
 
     included: dict[int, str] = {}
     excluded: dict[int, str] = {}
+    # Shared CFG ownership may later reject a hostless interior. Preserve its
+    # validated dispatch evidence separately so executed entries can still use
+    # the isolated, audited fragment path without truncating a shared host.
+    dispatch_fragment_demands = set()
+    fragment_hi = hi - capture_guard_bytes(cap, size)
     game_text = _game_text_range(toml_doc)
 
     # A dispatch into dirty RAM can land on a jump-table case label. That
@@ -1637,12 +1873,22 @@ def classify_overlay_seeds(cap: dict, data: bytes, load_addr: int, size: int,
         # Invalid words stay excluded. Call-edge-proven reasons
         # (DIRECT_JAL_TARGET, FUNCTION_POINTER_TARGET, TOML_DECLARED_ENTRY) are
         # exempt — they carry their own proof.
+        # A dispatch entry that has no prologue and is callable only because a
+        # `jr $ra` precedes it is the head of whatever follows the last
+        # function, data included, so it needs the bounded CFG probe before it
+        # may be a walk root (_frameless_dispatch_root_proven).
         if reason in ('DISPATCH_ENTRY', 'STATIC_DISPATCH_ENTRY'):
             if impossible_entry_start(addr):
                 excluded[addr] = 'UNKNOWN'
                 return
+            if addr + 4 <= fragment_hi:
+                dispatch_fragment_demands.add(addr)
+            producer = capture_producer_for(addr)
             if (addr in jump_table_targets or
-                    not _callable_legacy_seed(data, load_addr, addr)):
+                    not _callable_legacy_seed(data, load_addr, addr) or
+                    not _frameless_dispatch_root_proven(
+                        data, load_addr, size, addr,
+                        producer[1] if producer else hi)):
                 included.setdefault(addr, 'DISPATCH_INTERIOR')
                 return
         elif (reason not in ('DIRECT_JAL_TARGET', 'STATIC_INDIRECT_TARGET',
@@ -1923,6 +2169,7 @@ def classify_overlay_seeds(cap: dict, data: bytes, load_addr: int, size: int,
         'executed_pcs': executed_pcs,
         'dispatch_entry_pcs': dispatch_entry_pcs,
         'static_dispatch_entry_pcs': static_dispatch_entries,
+        'dispatch_fragment_demands': dispatch_fragment_demands,
         'function_entry_pcs': set(included),
         'included_reasons': included,
         'excluded_reasons': excluded,
@@ -1990,6 +2237,9 @@ def print_seed_audit(audit: dict) -> None:
     print(f'toml_entries_included: {audit["counts"].get("TOML_DECLARED_ENTRY", 0)}')
     print(f'dispatch_interior_included: {audit["counts"].get("DISPATCH_INTERIOR", 0)}')
     print(f'dispatch_roots_promoted: {audit["counts"].get("DISPATCH_ROOT", 0)}')
+    unhosted_dispatch = (audit.get('dispatch_fragment_demands', set()) &
+                         audit['executed_pcs']) - set(audit['included_reasons'])
+    print(f'unhosted_executed_dispatch_fragment_demands: {len(unhosted_dispatch)}')
     print(f'cross_producer_calls_rejected: '
           f'{len(audit["rejected_cross_producer_calls"])}')
     print(f'cross_producer_calls_accepted: '
@@ -2002,7 +2252,9 @@ def print_seed_audit(audit: dict) -> None:
     for addr in sorted(audit['excluded_reasons']):
         reason = audit['excluded_reasons'][addr]
         if reason in ('BRANCH_TARGET_ONLY', 'OBSERVED_PC_ONLY', 'UNKNOWN'):
-            print(f'  {addr:08X}  excluded: {reason}')
+            recovery = ('; isolated fragment demand retained'
+                        if addr in unhosted_dispatch else '')
+            print(f'  {addr:08X}  excluded: {reason}{recovery}')
 
 
 def walk_root_seed_entries(seeds: list[str]) -> set[int]:
@@ -2016,7 +2268,7 @@ def walk_root_seed_entries(seeds: list[str]) -> set[int]:
                 not parts[0].startswith('0x')):
             continue
         try:
-            entries.add((int(parts[-1], 16) & 0x1FFFFFFF) | 0x80000000)
+            entries.add(_canonical_guest_addr(int(parts[-1], 16)))
         except ValueError:
             pass
     return entries
@@ -2280,12 +2532,14 @@ def patch_generated_c_static(src: str, load_addr: int, size: int) -> tuple:
         return f'call_by_address(cpu, 0x{addr:08X}u)'
     src = re.sub(r'\bfunc_([0-9A-Fa-f]{8})\(cpu\)', fix_call, src)
 
-    # 4. Collect in-overlay function definition addresses (no export annotation needed)
+    # 4. Collect in-overlay function definition addresses (no export annotation
+    #    needed), spelled in the image's segment (§5.7).
     func_virt_addrs = []
+    image_seg = segment_of(load_addr)
     def collect_fn(m):
         addr = int(m.group(1), 16)
         if in_overlay(addr):
-            func_virt_addrs.append(0x80000000 | (addr & 0x1FFFFFFF))
+            func_virt_addrs.append(image_seg | (addr & PHYS_MASK))
         return m.group(0)
     src = re.sub(r'^void func_([0-9A-Fa-f]{8})\(CPUState\* cpu\)$',
                  collect_fn, src, flags=re.MULTILINE)
@@ -2310,7 +2564,7 @@ def namespace_generated_static(src: str, namespace: str,
         src = re.sub(rf'\b{helper}\b', f'{namespace}_{helper}', src)
 
     def rename_func(m):
-        addr = (int(m.group(1), 16) & 0x1FFFFFFF) | 0x80000000
+        addr = _canonical_guest_addr(int(m.group(1), 16))
         if addr not in func_set:
             return m.group(0)
         return f'{namespace}_func_{addr:08X}'
@@ -2318,7 +2572,7 @@ def namespace_generated_static(src: str, namespace: str,
     src = re.sub(r'\bfunc_([0-9A-Fa-f]{8})\b', rename_func, src)
 
     def rename_alias(m):
-        addr = (int(m.group(1), 16) & 0x1FFFFFFF) | 0x80000000
+        addr = _canonical_guest_addr(int(m.group(1), 16))
         if addr not in func_set:
             return m.group(0)
         return f'{namespace}_alias_body_{addr:08X}'
@@ -2342,12 +2596,12 @@ def parse_cps_continuation_owners(src: str) -> dict:
     definitions = list(definition_re.finditer(src))
     owners = {}
     for index, match in enumerate(definitions):
-        host = (int(match.group(1), 16) & 0x1FFFFFFF) | 0x80000000
+        host = _canonical_guest_addr(int(match.group(1), 16))
         end = definitions[index + 1].start() if index + 1 < len(definitions) else len(src)
         body = src[match.end():end]
         for block in re.finditer(r'^block_([0-9A-Fa-f]{8}):', body,
                                  re.MULTILINE):
-            entry = (int(block.group(1), 16) & 0x1FFFFFFF) | 0x80000000
+            entry = _canonical_guest_addr(int(block.group(1), 16))
             owners.setdefault(entry, host)
     return owners
 
@@ -2482,6 +2736,13 @@ def generate_overlay_dispatch(variants: list) -> str:
     unique = []
     seen = set()
     for variant in variants:
+        # The lookup keys on the exact PC, and each body is compiled for the
+        # segment of its PC (§5.7): a KUSEG, KSEG0 or KSEG1 entry of the same
+        # bytes is its own row. PC 0 is the hash table's empty marker.
+        if (segment_of(variant['addr']) not in SEGMENT_NAMES or
+                variant['addr'] == 0):
+            raise ValueError(f"static overlay entry 0x{variant['addr']:08X} "
+                             "is not a KUSEG, KSEG0 or KSEG1 code PC")
         ranges = tuple((lo & 0x1FFFFFFF, length)
                        for lo, length in variant['ranges'])
         key = (variant['addr'], variant['crc'], ranges)
@@ -2630,8 +2891,29 @@ def generate_overlay_dispatch(variants: list) -> str:
         # that swapped occupants fails the memo and falls into the full walk.
         # The memo is a hint, never an authority.
         lines.append(f'static uint16_t psx_ov_last_hit[{n_entries}];')
+        # Per-entry hit counters answer "did THIS image's variant run?" (for
+        # example a mod engine in a RAM mirror versus a menu overlay) through
+        # overlay_static_entries, where the global psx_ov_static_hits cannot.
+        lines.append(f'static uint64_t psx_ov_entry_hits[{n_entries}];')
         lines.append('')
 
+    present = sorted({segment_of(v['addr']) for v in unique} or {KSEG0})
+    if present == [KSEG0]:
+        segment_gate = [
+            '    /* Entries are the KSEG0 PCs their bodies were compiled for',
+            '     * (PSX_OVERLAY_CODE_SEGMENT, overlay_loader.h). A KUSEG or KSEG1',
+            '     * alias of the same bytes is a different architectural PC and',
+            '     * stays in the interpreter. */',
+            '    if ((addr & 0xE0000000u) != 0x80000000u) {',
+        ]
+    else:
+        segment_gate = [
+            '    /* Entries are the exact PCs their bodies were compiled for, in',
+            '     * their own segment (docs/SEGMENT_AWARE_CODE.md §5.7). A PC in a',
+            '     * segment no body was compiled for stays in the interpreter. */',
+            '    if (' + ' &&\n        '.join(
+                f'(addr & 0xE0000000u) != 0x{seg:08X}u' for seg in present) + ') {',
+        ]
     lines += [
         f'/* {n_entries} dispatch addresses, {len(flat_variants)} variants, '
         f'{size}-slot table (load {n_entries / size:.2f}), '
@@ -2654,13 +2936,21 @@ def generate_overlay_dispatch(variants: list) -> str:
         '    if (address_misses) *address_misses = psx_ov_static_address_misses;',
         '}',
         '',
+        '/* Entry index of the last successful find (single-threaded dispatch). */',
+        'static uint32_t psx_ov_found_entry = 0;',
+        '',
         'static const PsxOvVariant *psx_overlay_static_find_variant(uint32_t addr) {',
-        '    const uint32_t key = (addr & 0x1FFFFFFFu) | 0x80000000u;',
+    ] + segment_gate + [
+        '        psx_ov_static_address_misses++;',
+        '        return 0;',
+        '    }',
+        '    const uint32_t key = addr;',
     ]
 
     if not flat_variants:
         lines += [
             '    (void)key;',
+            '    (void)psx_ov_found_entry;',
             '    psx_ov_static_address_misses++;',
             '    return 0;',
             '}',
@@ -2672,6 +2962,14 @@ def generate_overlay_dispatch(variants: list) -> str:
             'int psx_overlay_dispatch(CPUState *cpu, uint32_t addr) {',
             '    (void)cpu;',
             '    if (psx_overlay_static_find_variant(addr) == 0) return 0;',
+            '    return 0;',
+            '}',
+            '',
+            'uint32_t psx_overlay_static_entry_count(void) { return 0u; }',
+            '',
+            'int psx_overlay_static_entry_stats(uint32_t index, uint32_t *addr,',
+            '                                   uint32_t *variants, uint64_t *hits) {',
+            '    (void)index; (void)addr; (void)variants; (void)hits;',
             '    return 0;',
             '}',
             '',
@@ -2708,6 +3006,7 @@ def generate_overlay_dispatch(variants: list) -> str:
         '            psx_ov_static_checks++;',
         '            if (psx_overlay_static_code_matches(v->ranges, v->count,',
         '                                               v->crc)) {',
+        '                psx_ov_found_entry = ei;',
         '                return v;',
         '            }',
         '            psx_ov_static_variant_misses++;',
@@ -2719,6 +3018,7 @@ def generate_overlay_dispatch(variants: list) -> str:
         '            if (psx_overlay_static_code_matches(v->ranges, v->count,',
         '                                               v->crc)) {',
         '                psx_ov_last_hit[ei] = (uint16_t)i;',
+        '                psx_ov_found_entry = ei;',
         '                return v;',
         '            }',
         '            psx_ov_static_variant_misses++;',
@@ -2736,7 +3036,21 @@ def generate_overlay_dispatch(variants: list) -> str:
         '    const PsxOvVariant *v = psx_overlay_static_find_variant(addr);',
         '    if (!v) return 0;',
         '    psx_ov_static_hits++;',
+        '    psx_ov_entry_hits[psx_ov_found_entry]++;',
         '    v->fn(cpu);',
+        '    return 1;',
+        '}',
+        '',
+        f'uint32_t psx_overlay_static_entry_count(void) {{ return {n_entries}u; }}',
+        '',
+        '/* Entry `index` (sorted by address): its address, occupant count and',
+        ' * dispatches served. 0 past the last entry. */',
+        'int psx_overlay_static_entry_stats(uint32_t index, uint32_t *addr,',
+        '                                   uint32_t *variants, uint64_t *hits) {',
+        f'    if (index >= {n_entries}u) return 0;',
+        '    if (addr) *addr = psx_ov_entries[index].addr;',
+        '    if (variants) *variants = psx_ov_entries[index].n;',
+        '    if (hits) *hits = psx_ov_entry_hits[index];',
         '    return 1;',
         '}',
         '',
@@ -2809,7 +3123,8 @@ def parse_overlay_func_ids(src_path: str, data: bytes, load_addr: int,
             crc = binascii.crc32(data[off:off + length], crc)
         if not ok:
             continue
-        ev = (entry & 0x1FFFFFFF) | 0x80000000
+        # The entry VA in the image's segment (§5.1, §5.7).
+        ev = (entry & PHYS_MASK) | segment_of(load_addr)
         out.append((ev, crc & 0xFFFFFFFF, ranges))
 
     return out
@@ -2836,6 +3151,7 @@ def audit_func_id_delay_slots(func_ids: list, data: bytes,
     """Return unsafe emitted dependency errors for exact function identities."""
     errors = []
     base = load_addr & 0x1FFFFFFF
+    seg = segment_of(load_addr)
     for entry, _crc, ranges in func_ids:
         if len(ranges) > 16:
             errors.append((entry, None,
@@ -2848,7 +3164,7 @@ def audit_func_id_delay_slots(func_ids: list, data: bytes,
             off = phys - base
             if (phys & 3) or (length & 3) or length < 4 or \
                     off < 0 or off + length > len(data):
-                errors.append((entry, phys | 0x80000000,
+                errors.append((entry, phys | seg,
                                'malformed/out-of-capture code range'))
                 malformed = True
                 break
@@ -2867,18 +3183,18 @@ def audit_func_id_delay_slots(func_ids: list, data: bytes,
                 instr = int.from_bytes(data[off:off + 4], 'little')
                 kind = _mips_control_kind(instr)
                 if kind < 0:
-                    errors.append((entry, pc | 0x80000000,
+                    errors.append((entry, pc | seg,
                                    'reserved/unsupported branch encoding'))
                 elif kind > 0:
                     controls.add(pc)
                     if not contains_word(pc + 4):
-                        errors.append((entry, pc | 0x80000000,
-                                       f'delay slot 0x{(pc + 4) | 0x80000000:08X} '
+                        errors.append((entry, pc | seg,
+                                       f'delay slot 0x{(pc + 4) | seg:08X} '
                                        'is not identity-hashed'))
         delay_pcs = {pc + 4 for pc in controls}
         nested = sorted(controls & delay_pcs)
         for pc in nested:
-            errors.append((entry, pc | 0x80000000,
+            errors.append((entry, pc | seg,
                            'control transfer in a delay slot'))
     return errors
 
@@ -2897,13 +3213,27 @@ def overlay_ranges_text(func_ids: list, pair_id: int | None = None,
     out_lines = ['# psxrecomp overlay code-range manifest v2 (entry+code_crc)\n']
     if provenance is not None:
         out_lines.append(f'# psxrecomp overlay provenance {provenance}\n')
+    # F entries are full VAs in the shard's segment (§5.7). A KUSEG or KSEG1
+    # shard says so with S before its first F; a KSEG0 manifest keeps the
+    # pre-§5.7 text exactly (no S means KSEG0).
+    segments = {segment_of(ev) for ev, _crc, _ranges in func_ids}
+    if len(segments) > 1:
+        raise ValueError('one manifest names entries in several segments: ' +
+                         ', '.join(f'0x{seg:08X}' for seg in sorted(segments)))
+    seg = segments.pop() if segments else KSEG0
+    if seg not in SEGMENT_NAMES:
+        raise ValueError(f'manifest entries in segment 0x{seg:08X}, '
+                         'which maps no RAM')
+    if seg != KSEG0:
+        out_lines.append(f'S {seg:08X}\n')
     if pair_id is not None:
         out_lines.append(f'P {pair_id & 0xFFFFFFFFFFFFFFFF:016X}\n')
     for ev, crc, ranges in func_ids:
         out_lines.append(f'F {ev:08X} {crc & 0xFFFFFFFF:08X}\n')
         for lo, length in ranges:
+            # Byte extents, KSEG0-spelled in every segment's manifest.
             out_lines.append(
-                f'R {(lo & 0x1FFFFFFF) | 0x80000000:08X} {length:X}\n')
+                f'R {(lo & PHYS_MASK) | KSEG0:08X} {length:X}\n')
     return ''.join(out_lines)
 
 
@@ -3005,9 +3335,15 @@ def load_region_entry_set(cache_dir: str, phys_addr: int,
 
 
 def parse_runtime_shard_manifest(manifest: str,
-                                 require_pair: bool = True
+                                 require_pair: bool = True,
+                                 expected_segment: int | None = None
                                  ) -> tuple[int | None, list]:
-    """Parse only identities representable by the runtime manifest contract."""
+    """Parse only identities representable by the runtime manifest contract.
+
+    F entries are full VAs in the manifest's segment: ``S <segment>`` before
+    the first F, KSEG0 when absent (§5.7). ``expected_segment`` is the segment
+    of the directory the shard lives in; the runtime refuses a manifest that
+    names another, and so does this."""
     def hex_field(token: str, max_digits: int) -> int:
         if not re.fullmatch(rf'[0-9A-Fa-f]{{1,{max_digits}}}', token):
             raise ValueError(f'invalid manifest hex field: {token!r}')
@@ -3016,6 +3352,7 @@ def parse_runtime_shard_manifest(manifest: str,
     pair_ids = []
     funcs = []
     current = None
+    segment = None
     if '\0' in manifest:
         return None, []
     # Runtime reads physical records with fgets(), so only LF terminates a
@@ -3033,7 +3370,16 @@ def parse_runtime_shard_manifest(manifest: str,
                  if stripped else [])
         if not parts:
             continue
-        if parts[0] == 'P':
+        if parts[0] == 'S':
+            if len(parts) != 2 or segment is not None or funcs:
+                return None, []
+            try:
+                segment = hex_field(parts[1], 8)
+            except ValueError:
+                return None, []
+            if segment not in SEGMENT_NAMES:
+                return None, []
+        elif parts[0] == 'P':
             if len(parts) != 2:
                 return None, []
             try:
@@ -3044,10 +3390,10 @@ def parse_runtime_shard_manifest(manifest: str,
             if len(parts) != 3:
                 return None, []
             try:
-                current = [((hex_field(parts[1], 8) & 0x1FFFFFFF) |
-                            0x80000000),
-                           hex_field(parts[2], 8), []]
+                current = [hex_field(parts[1], 8), hex_field(parts[2], 8), []]
             except ValueError:
+                return None, []
+            if segment_of(current[0]) != (KSEG0 if segment is None else segment):
                 return None, []
             funcs.append(current)
         elif parts[0] == 'R' and current is not None:
@@ -3059,6 +3405,9 @@ def parse_runtime_shard_manifest(manifest: str,
             except ValueError:
                 return None, []
     if len(pair_ids) > 1 or (require_pair and len(pair_ids) != 1) or not funcs:
+        return None, []
+    if (expected_segment is not None and
+            (KSEG0 if segment is None else segment) != expected_segment):
         return None, []
     entries = [entry & 0x1FFFFFFF for entry, _crc, _ranges in funcs]
     if len(set(entries)) != len(entries):
@@ -3103,7 +3452,8 @@ def load_shard_func_ids(dll_path: str,
                     manifest_declares_supplemental_provenance(manifest)):
                 return []
             pair_id, valid_funcs = parse_runtime_shard_manifest(
-                manifest, require_pair=False)
+                manifest, require_pair=False,
+                expected_segment=cache_dir_segment(os.path.dirname(dll_path)))
             if (not valid_funcs or not _dll_runtime_exports_match(
                     dll_path, expected_abi, pair_id,
                     {entry for entry, _crc, _ranges in valid_funcs})):
@@ -3242,6 +3592,15 @@ def current_variant_func_id_coverage(func_ids: list, data: bytes,
 #     contract/header change (which bumps the hash -> fresh dir -> fresh memo)
 #     re-attempts everything (e.g. the psx_rfe_mark_escape contract fix).
 # So a memoized skip only ever elides a build that is deterministically doomed.
+# Printed when a capture contributes no walk-root seed. The wording is
+# deliberate: the region is NOT declared data-only -- its executed dispatch
+# demands are still served by the isolated-fragment pass, which runs
+# separately. Named so the two emit sites and the test cannot drift apart.
+# They did: 4683e923 reworded both prints and left
+# test_compile_overlays_static_split asserting the old string.
+NO_SHARED_WALK_ROOT_SEEDS_SKIP = (
+    'SKIP: no shared walk-root seeds; checking fragments separately')
+
 INTERIOR_FAIL_MEMO = 'interior_fail_memo.txt'
 
 
@@ -3291,12 +3650,15 @@ def unsupported_guest_branch_rejection(reason: str) -> bool:
 
 
 def reconcile_empty_primary_scans(pending, cache_dir, expected_abi, stats):
-    """Accept an empty primary only if guarded fragments serve every root."""
+    """Accept an empty primary only if guarded fragments serve every root.
+
+    Each capture view is checked against its own segment's shards (§5.7)."""
     for label, physical, load, size, data, roots in pending:
+        seg = segment_of(load)
         current, _ = load_region_current_variant_coverage(
-            cache_dir, physical, data, load, size,
+            segment_cache_dir(cache_dir, seg), physical, data, load, size,
             expected_abi)
-        served = {(entry & 0x1FFFFFFF) | 0x80000000 for entry in current}
+        served = {(entry & PHYS_MASK) | seg for entry in current}
         if roots and roots <= served:
             print(f'  primary scan recovered by guarded fragments: {label}')
             stats.add_skip()
@@ -3403,9 +3765,10 @@ def static_fragment_job(entry: int, image_key, args):
     Returns (part or None, reason)."""
     data, load_addr, size, phys_addr, guard_bytes = \
         _STATIC_IMAGE_SOURCES[image_key]
-    return generate_interior_fragment_static(
-        entry, data, load_addr, size, phys_addr, args,
-        guard_bytes=guard_bytes)
+    with image_segment(segment_of(load_addr)):
+        return generate_interior_fragment_static(
+            entry, data, load_addr, size, phys_addr, args,
+            guard_bytes=guard_bytes)
 
 
 def generate_interior_fragment_static(interior: int, data: bytes,
@@ -3478,7 +3841,7 @@ def generate_interior_fragment_static(interior: int, data: bytes,
         if set(func_addrs) - set(ids_by_addr):
             return None, 'static-ranges: dispatchable function(s) lack exact ranges'
 
-        entry = (interior & 0x1FFFFFFF) | 0x80000000
+        entry = (interior & PHYS_MASK) | segment_of(load_addr)
         if entry not in ids_by_addr or entry not in set(func_addrs):
             return None, 'requested-entry-audit: fragment omitted its own entry'
         namespace = (f'ov_frag_{phys_addr:08X}_{image_crc:08X}_'
@@ -3534,7 +3897,7 @@ def validate_fragment_requested_ids(requested: set[int], frag_ids: list,
     representable identity whose guarded bytes include the entry itself.
     """
     for requested_entry in sorted(requested):
-        entry = (requested_entry & 0x1FFFFFFF) | 0x80000000
+        entry = _canonical_guest_addr(requested_entry)
         if entry not in generated_defs:
             return f'requested entry 0x{entry:08X} missing from generated C'
         matches = [
@@ -3547,7 +3910,7 @@ def validate_fragment_requested_ids(requested: set[int], frag_ids: list,
     if contract_error:
         return contract_error
     for requested_entry in sorted(requested):
-        entry = (requested_entry & 0x1FFFFFFF) | 0x80000000
+        entry = _canonical_guest_addr(requested_entry)
         matches = [
             (ev, crc, ranges) for ev, crc, ranges in frag_ids if ev == entry
         ]
@@ -3669,6 +4032,12 @@ def make_interior_fragment_job(phys_addr: int, load_addr: int, size: int,
                       'DISPATCH_ROOT')
     }
     executed = set(seed_audit.get('executed_pcs', set()))
+    # A final DISPATCH_INTERIOR needs a discovered host, but a guarded isolated
+    # fragment does not. Do not rebuild live demand solely from surviving
+    # shared seeds. Retain the existing execution gate: arbitrary seeds,
+    # static-only interiors, and merely observed instructions are not enough.
+    observed_dispatch = (set(seed_audit.get('dispatch_fragment_demands', set())) &
+                         executed)
     static_exact_demands = set(
         seed_audit.get('static_exact_fragment_demands', set()))
     hosted_donor_demands = set(
@@ -3677,11 +4046,13 @@ def make_interior_fragment_job(phys_addr: int, load_addr: int, size: int,
         seed_audit.get('static_interval_fragment_demands', set()))
     static_demands = static_exact_demands | static_interval_demands
     region_hi = phys_addr + size
+    # --force-interior names a PC, so it forces the view of its own segment.
     forced = {
         a for a in forced_interiors
-        if phys_addr <= (a & 0x1FFFFFFF) < region_hi
+        if phys_addr <= (a & 0x1FFFFFFF) < region_hi and
+        segment_of(a) == segment_of(load_addr)
     }
-    if not (((interiors or dispatch_roots) and executed) or
+    if not (((interiors or dispatch_roots) and executed) or observed_dispatch or
             static_demands or forced):
         return None
     return {
@@ -3694,7 +4065,8 @@ def make_interior_fragment_job(phys_addr: int, load_addr: int, size: int,
         # reconstructed from the page-run format otherwise.
         'guard_bytes': capture_guard_bytes(
             capture, size, f'region 0x{load_addr:08X}'),
-        'candidates': interiors | dispatch_roots | static_demands | forced,
+        'candidates': (interiors | dispatch_roots | observed_dispatch |
+                       static_demands | forced),
         'executed': executed,
         'static_demands': static_demands,
         'static_exact_demands': static_exact_demands,
@@ -3760,10 +4132,6 @@ def merge_fragment_jobs_by_recipe(jobs: list[dict],
         if merged.get('resident_cap') is None and job.get('resident_cap'):
             merged['resident_cap'] = job['resident_cap']
     return [grouped[key] for key in sorted(grouped)]
-
-
-def _canonical_guest_addr(addr: int) -> int:
-    return (addr & 0x1FFFFFFF) | 0x80000000
 
 
 def _normalized_func_identity(func_id) -> tuple:
@@ -4266,7 +4634,7 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
     (None, reason) on failure/skip so the caller can tally WHY a fragment
     dropped instead of the old silent None."""
     requested = sorted({
-        (entry & 0x1FFFFFFF) | 0x80000000
+        (entry & PHYS_MASK) | segment_of(load_addr)
         for entry in requested_entries
     })
     if not requested:
@@ -4905,8 +5273,15 @@ def _candidate_capacity_namespace(dll_path: str) -> tuple[str, list[str]]:
     may still use ``cgN_hash``). The runtime candidate table is process-global,
     so serialize/count every compiler tier with the same GAME/arch/cg leaf.
     Tests and hand-built paths fall back to their containing directory.
+
+    The KUSEG and KSEG1 shards of a leaf live in its seg-kuseg/ and seg-kseg1/
+    subdirectories (§5.7) and take slots from the same process-global table,
+    so a shard there belongs to its leaf's namespace, and every namespace
+    lists each leaf's segment directories after the leaf.
     """
     leaf = os.path.dirname(os.path.abspath(dll_path))
+    if cache_dir_segment(leaf) != KSEG0:
+        leaf = os.path.dirname(leaf)
     cg_name = os.path.basename(leaf)
     arch_dir = os.path.dirname(leaf)
     compiler_dir = os.path.dirname(arch_dir)
@@ -4916,12 +5291,36 @@ def _candidate_capacity_namespace(dll_path: str) -> tuple[str, list[str]]:
             compiler_name in ('gcc', 'tcc')):
         arch_name = os.path.basename(arch_dir)
         tier_dirs = [
-            os.path.join(game_dir, tier, arch_name, cg_name)
+            directory
             for tier in ('gcc', 'tcc')
+            for directory in _with_segment_dirs(
+                os.path.join(game_dir, tier, arch_name, cg_name))
         ]
         return (os.path.join(game_dir, '.overlay-candidate-capacity.lock'),
                 tier_dirs)
-    return (os.path.join(leaf, '.overlay-candidate-capacity.lock'), [leaf])
+    return (os.path.join(leaf, '.overlay-candidate-capacity.lock'),
+            _with_segment_dirs(leaf))
+
+
+def _with_segment_dirs(leaf: str) -> list[str]:
+    """A cache leaf, then its per-segment subdirectories (§5.7)."""
+    return [leaf] + [os.path.join(leaf, SEGMENT_CACHE_SUBDIRS[seg])
+                     for seg in (KUSEG, KSEG1)]
+
+
+def _segment_leaf(directory: str) -> str:
+    """The cache leaf a (possibly per-segment) shard directory belongs to."""
+    directory = os.path.abspath(directory)
+    if cache_dir_segment(directory) != KSEG0:
+        return os.path.dirname(directory)
+    return directory
+
+
+def _segment_basename(path: str) -> tuple[int, str]:
+    """A shard's identity within one compiler tier: its segment and name.
+    The same {phys}_{crc} name is a different shard in each segment."""
+    return (cache_dir_segment(os.path.dirname(os.path.abspath(path))),
+            os.path.normcase(os.path.basename(path)))
 
 
 def cache_candidate_capacity_snapshot(
@@ -4950,7 +5349,7 @@ def candidate_capacity_saturated_in_tier(total: int, counts: dict,
                                          candidate_cap: int,
                                          cache_dir: str) -> bool:
     """Whether one active tier has reached any physical/runtime capacity."""
-    active = os.path.normcase(os.path.abspath(cache_dir))
+    active = os.path.normcase(_segment_leaf(cache_dir))
     saturated = (total >= candidate_cap or
                  getattr(counts, 'raw_total', sum(counts.values())) >=
                  2 * candidate_cap or
@@ -4959,7 +5358,7 @@ def candidate_capacity_saturated_in_tier(total: int, counts: dict,
                  getattr(counts, 'file_total', len(counts)) >=
                  RUNTIME_CACHE_FILE_CAP)
     return (saturated and bool(counts) and all(
-        os.path.normcase(os.path.abspath(os.path.dirname(path))) == active
+        os.path.normcase(_segment_leaf(os.path.dirname(path))) == active
         for path in counts
     ))
 
@@ -5113,7 +5512,8 @@ def _load_candidate_inventory_record(dll: str,
             with open(ranges_path, encoding='ascii', newline='') as source:
                 manifest = source.read()
             pair_id, funcs = parse_runtime_shard_manifest(
-                manifest, require_pair=False)
+                manifest, require_pair=False,
+                expected_segment=cache_dir_segment(os.path.dirname(dll)))
             raw_count = len(funcs)
             range_link_count = _runtime_manifest_range_link_count(funcs)
             if (not funcs or not _dll_runtime_exports_match(
@@ -5172,7 +5572,7 @@ def cache_candidate_inventory(cache_dirs: list[str],
                 # before scanning the next compiler tier, so it cannot shadow
                 # a valid lower-tier basename.
                 continue
-            basename = os.path.normcase(name)
+            basename = _segment_basename(dll)
             if basename in seen_basenames:
                 continue
             # Runtime scans gcc before tcc and suppresses a lower-tier path by
@@ -5231,10 +5631,10 @@ def _projected_cache_capacity_usage(total: int, counts: dict,
         for index, path in enumerate(cache_dirs)
     }
     final_rank = ranks.get(final_dir, 0)
-    basename = os.path.normcase(os.path.basename(final_dll))
+    basename = _segment_basename(final_dll)
     selected_path = next((
         path for path in counts
-        if os.path.normcase(os.path.basename(path)) == basename
+        if _segment_basename(path) == basename
     ), None)
     records = [(path, count,
                 getattr(counts, 'identities', {}).get(path),
@@ -5453,7 +5853,8 @@ def _runtime_valid_shard_pair_locked(dll: str, ranges: str,
         with open(ranges, encoding='ascii', newline='') as f:
             manifest = f.read()
         pair_id, funcs = parse_runtime_shard_manifest(
-            manifest, require_pair=False)
+            manifest, require_pair=False,
+            expected_segment=cache_dir_segment(os.path.dirname(dll)))
     except (OSError, UnicodeError):
         return False
     return (bool(funcs) and _dll_runtime_exports_match(
@@ -5629,8 +6030,8 @@ def _dll_runtime_exports_match(dll_path: str, expected_abi: int | None,
         getattr(library, 'overlay_init')
         getattr(library, 'overlay_flush_cycles')
         for entry in entries:
-            virt = (entry & 0x1FFFFFFF) | 0x80000000
-            getattr(library, f'func_{virt:08X}')
+            # Exports are named by the entry's full VA (§5.1, §5.7).
+            getattr(library, f'func_{entry:08X}')
         return True
     except (OSError, AttributeError):
         return False
@@ -5748,6 +6149,14 @@ def static_capture_job(cap: dict, args, toml: dict, forced_interiors: set,
 
 
 def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
+    # Runs in a worker process too, so it sets its image segment itself.
+    with image_segment(segment_of(int(cap['load_addr'], 16))):
+        _static_capture_job_in_segment(cap, args, toml, forced_interiors,
+                                       static_out, result)
+
+
+def _static_capture_job_in_segment(cap, args, toml, forced_interiors,
+                                   static_out, result):
     load_addr = int(cap['load_addr'], 16)
     size      = int(cap['size'])
     data      = base64.b64decode(cap['bytes_b64'])
@@ -5765,7 +6174,7 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
         result['fail'] = (cls, detail)
 
     for captured_entry in _parse_addr_list(cap.get('dispatch_entry_pcs', [])):
-        entry = ((captured_entry & 0x1FFFFFFF) | 0x80000000)
+        entry = _canonical_guest_addr(captured_entry)
         key = (entry, crc32)
         result['requested_entries'].add(key)
         result['entry_sources'][key] = (
@@ -5777,8 +6186,9 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
     region_hi = phys_addr + size
     for forced_entry in forced_interiors:
         forced_phys = forced_entry & 0x1FFFFFFF
-        if phys_addr <= forced_phys < region_hi:
-            entry = forced_phys | 0x80000000
+        if (phys_addr <= forced_phys < region_hi and
+                segment_of(forced_entry) == segment_of(load_addr)):
+            entry = forced_entry
             key = (entry, crc32)
             result['requested_entries'].add(key)
             result['entry_sources'][key] = (
@@ -5798,7 +6208,7 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
             seed.split()[0].startswith('0x'))
     ]
     if not root_seeds:
-        print('  SKIP: no walk-root seeds (data-only region)\n')
+        print(f'  {NO_SHARED_WALK_ROOT_SEEDS_SKIP}\n')
         result['outcome'] = 'skip'
         return
 
@@ -5886,7 +6296,11 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
         # identical bytes to coexist without symbol clashes.
         cov_blob = ','.join(f'{a:08X}' for a in sorted(func_addrs)).encode()
         cov_crc = binascii.crc32(cov_blob) & 0xFFFFFFFF
-        namespace = f'ov_{phys_addr:08X}_{crc32:08X}_{cov_crc:08X}'
+        # A KUSEG or KSEG1 image of the same bytes links beside the KSEG0 one
+        # (§5.7): ov_s0_… and ov_s5_…; KSEG0 keeps its name.
+        seg_tag = ('' if segment_of(load_addr) == KSEG0
+                   else f's{segment_of(load_addr) >> 29}_')
+        namespace = f'ov_{seg_tag}{phys_addr:08X}_{crc32:08X}_{cov_crc:08X}'
         src, symbols = namespace_generated_static(src, namespace, func_addrs)
         variants = []
         for ev in sorted(func_addrs):
@@ -6105,8 +6519,10 @@ def main():
         else:
             target_os = None
     set_target_os(target_os)
+    # Canonicalized to KSEG0 as before (a physical and a KUSEG PC are the
+    # same number); a forced interior therefore forces KSEG0 views.
     forced_interiors = {
-        (int(v, 0) & 0x1FFFFFFF) | 0x80000000
+        (int(v, 0) & 0x1FFFFFFF) | KSEG0
         for v in args.force_interior
     }
 
@@ -6215,6 +6631,25 @@ def main():
         if not captures:
             ap.error('--only-region did not match any capture')
 
+    # One view per (capture, segment with entries), §5.7. A capture whose
+    # segment record is malformed is reported and not compiled.
+    segment_view_errors = []
+    views = []
+    for cap in captures:
+        try:
+            views.extend(capture_segment_views(
+                cap, declared_view_segments(cap, toml, forced_interiors)))
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            segment_view_errors.append(
+                (f'overlay {cap.get("load_addr", "?")}', str(exc)))
+    if len(views) != len(captures) or segment_view_errors:
+        by_seg = Counter(SEGMENT_NAMES[segment_of(int(v['load_addr'], 16))]
+                         for v in views)
+        print(f'Segment views: {len(captures)} capture(s) -> {len(views)} '
+              'view(s) (' + ', '.join(f'{n} {name}' for name, n in
+                                      sorted(by_seg.items())) + ')')
+    captures = views
+
     print(f'Captures: {len(captures)} overlay(s) to process\n')
 
     # B-2 static mode: accumulate privately-namespaced generated C plus exact
@@ -6258,6 +6693,15 @@ def main():
     # or passed per-region (region_coverage_cache / interior_frag_jobs), so a
     # worker owning a region owns every mutable it touches.
     def _do_capture(cap, region_coverage_cache, interior_frag_jobs, stats):
+        # A capture view compiles in its own segment (§5.7): helpers that name
+        # PCs spell them in it, and its shard lives in that segment's cache
+        # directory.
+        with image_segment(segment_of(int(cap['load_addr'], 16))):
+            _do_capture_in_segment(cap, region_coverage_cache,
+                                   interior_frag_jobs, stats)
+
+    def _do_capture_in_segment(cap, region_coverage_cache, interior_frag_jobs,
+                               stats):
         load_addr = int(cap['load_addr'], 16)
         size      = int(cap['size'])
         data      = base64.b64decode(cap['bytes_b64'])
@@ -6274,6 +6718,9 @@ def main():
             _merge_static_result(static_capture_job(
                 cap, args, toml, forced_interiors, static_out))
             return
+        seg_cache_dir = segment_cache_dir(cache_dir, segment_of(load_addr))
+        # Coverage is per segment: each segment's shards are their own.
+        coverage_key = (segment_of(load_addr), phys_addr)
 
         # Reclassify prior F entry addresses from an identical image. Callable
         # entries may become current roots; other entries re-enter as dispatch
@@ -6281,7 +6728,7 @@ def main():
         # ranges: later roots can repartition the same bytes incompatibly.
         if not args.static:
             ranges_name = f'{phys_addr:08X}_{crc32:08X}.ranges'
-            prior_ranges_path = os.path.join(cache_dir, ranges_name)
+            prior_ranges_path = os.path.join(seg_cache_dir, ranges_name)
             if os.path.exists(prior_ranges_path):
                 prior_entries = []
                 with open(prior_ranges_path) as pf:
@@ -6331,7 +6778,8 @@ def main():
                 interior_frag_jobs.append(fragment_job)
 
         if not args.static:
-            dll_path = os.path.join(cache_dir, f'{phys_addr:08X}_{crc32:08X}{overlay_ext()}')
+            dll_path = os.path.join(seg_cache_dir,
+                                    f'{phys_addr:08X}_{crc32:08X}{overlay_ext()}')
 
         print(f'Overlay  load=0x{load_addr:08X}  size={size}  crc32=0x{crc32:08X}'
               + (f'  guard={guard_bytes}B (delay-slot only, not analysed)'
@@ -6346,7 +6794,7 @@ def main():
                 seed.split()[0].startswith('0x'))
         ]
         if not root_seeds:
-            print('  SKIP: no walk-root seeds (data-only region)\n')
+            print(f'  {NO_SHARED_WALK_ROOT_SEEDS_SKIP}\n')
             stats.add_skip()
             return
 
@@ -6369,10 +6817,10 @@ def main():
             else:
                 current_entries, _current_ranges = (
                     load_region_current_variant_coverage(
-                        cache_dir, phys_addr, data, load_addr, size,
+                        seg_cache_dir, phys_addr, data, load_addr, size,
                         expected_abi))
             if demanded_root_entries <= {
-                    (entry & 0x1FFFFFFF) | 0x80000000
+                    _canonical_guest_addr(entry)
                     for entry in current_entries}:
                 reconcile_bios_resident_marker(dll_path, cap, False)
                 print(f'  SKIP: runtime-valid current-byte cache serves all '
@@ -6498,12 +6946,12 @@ def main():
             this_set = {(ev, crc) for ev, crc, _ in this_ids}
 
             with cov_lock:
-                covered = region_coverage_cache.get(phys_addr)
+                covered = region_coverage_cache.get(coverage_key)
                 if covered is None:
                     covered = load_region_coverage(
-                        cache_dir, phys_addr,
+                        seg_cache_dir, phys_addr,
                         overlay_abi_tag(args.runtime_include, args.flavor))
-                    region_coverage_cache[phys_addr] = covered
+                    region_coverage_cache[coverage_key] = covered
                 fully_covered = (bool(this_set) and this_set <= covered
                                  and not args.force
                                  and cap.get('producer') !=
@@ -6598,7 +7046,7 @@ def main():
                     # DLLs at a region.)
                     with cov_lock:
                         covered |= load_region_coverage(
-                            cache_dir, phys_addr,
+                            seg_cache_dir, phys_addr,
                             overlay_abi_tag(
                                 args.runtime_include, args.flavor))
                     if published:
@@ -6637,13 +7085,26 @@ def main():
     # Run as a SEPARATE pass AFTER all region compiles, so it is DECOUPLED from
     # region success — an executed orphan interior gets its isolated island shard
     # even if its region's trusted compile failed/audit-failed (that is the whole
-    # point of the separate failure domain). For each region, find DISPATCH_INTERIOR
-    # PCs that ACTUALLY EXECUTED this session but that NO built DLL covers (orphan
+    # point of the separate failure domain). For each region, retain validated
+    # dispatch PCs even when shared CFG ownership dropped their interior seeds.
+    # Select those that ACTUALLY EXECUTED but that NO current DLL serves (orphan
     # interiors — host never discovered, so the region can't alias them), and
     # compile each as its OWN isolated <region>_<key>.dll that ENTERS at the
     # interior PC (recovers no host). Isolated => a bad fragment fails alone and
     # never poisons a region's trusted DLL.
     def _do_frags(interior_frag_jobs, stats):
+        # Fragments compile per segment, like region shards (§5.7): a job's
+        # PCs, its shards and their directory are its capture view's segment.
+        # KSEG0 always runs (as before); the others only when they have jobs.
+        by_seg = {}
+        for job in interior_frag_jobs:
+            by_seg.setdefault(segment_of(job['load_addr']), []).append(job)
+        for seg in [KSEG0] + [s for s in (KUSEG, KSEG1) if s in by_seg]:
+            with image_segment(seg):
+                _do_frags_in_segment(by_seg.get(seg, []), stats,
+                                     segment_cache_dir(cache_dir, seg))
+
+    def _do_frags_in_segment(interior_frag_jobs, stats, cache_dir):
         frag_env = dict(os.environ)
         if args.cps:
             frag_env['PSX_CPS'] = '1'
@@ -7287,6 +7748,9 @@ def main():
     # combined-C mode has no runtime cache publication and keeps its historical
     # capture order.
     stats = ShardStats()
+    for label, detail in segment_view_errors:
+        print(f'  SEGMENT RECORD REJECTED: {label}: {detail}')
+        stats.add_fail(label, 'segments', detail)
     if args.static:
         if args.jobs > 1 and len(captures) > 1:
             # Each capture is an independent recompiler subprocess plus a
@@ -7500,7 +7964,11 @@ def main():
                     (entry & 0x1FFFFFFF) not in forced_phys):
                 fragment_memo_skipped += 1
                 continue
-            image_key = (image_crc, phys_addr, size)
+            # One image per segment view (§5.7): every view of a capture has
+            # the same bytes, phys and size, but a demand compiles against its
+            # own view's load address, which fixes the segment it is spelled,
+            # named and baked in.
+            image_key = (image_crc, phys_addr, size, segment_of(load_addr))
             image_sources.setdefault(image_key, source)
             fragment_jobs.append((key, memo_key, image_key))
 
@@ -7598,9 +8066,23 @@ def main():
     # that pass, using ABI-valid, current-byte guarded native coverage. Missing
     # even one primary root remains a failure; toolchain/audit failures above
     # are never cleared by this reconciliation.
-    reconcile_empty_primary_scans(
-        pending_empty_primary, cache_dir,
-        overlay_abi_tag(args.runtime_include, args.flavor), stats)
+    #
+    # DLL mode only. The reconciliation reads the per-game DLL cache, and
+    # cache_dir is bound only on the non-static path; --static emits one
+    # self-contained overlays_static.c and _do_capture returns into
+    # static_capture_job before anything is queued. Calling it unconditionally
+    # raised UnboundLocalError at the very end of every --static run, after
+    # the output was already written, and turned a clean compile into exit 1.
+    if args.static:
+        if pending_empty_primary:
+            raise SystemExit(
+                'internal error: --static queued %d empty-primary '
+                'reconciliation(s), but static mode has no DLL cache to '
+                'reconcile against' % len(pending_empty_primary))
+    else:
+        reconcile_empty_primary_scans(
+            pending_empty_primary, cache_dir,
+            overlay_abi_tag(args.runtime_include, args.flavor), stats)
 
     # LOUD summary + machine-readable result line, then a non-zero exit when any
     # shard that should have built failed. The runtime's autocompile watcher and

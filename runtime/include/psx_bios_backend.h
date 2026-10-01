@@ -49,7 +49,17 @@ typedef struct PsxBiosBackend {
      * the generated dispatch itself, so it stays static there. */
     const PsxKernelBody *kernel_bodies;
     uint32_t             kernel_body_count;
+
+    /* Kernel-RAM ranges the guest legitimately patches at runtime, from this
+     * image's [[recompiler.install_slots]] (psx_bios_image.h). The bless
+     * verifier skips them and the dirty-RAM interpreter resumes native at
+     * each range's hi. Null/0 for an image that declares no slots. */
+    const PsxKernelPatchRange *kernel_patch_ranges;
+    uint32_t                   kernel_patch_range_count;
 } PsxBiosBackend;
+
+/* Dispatch nesting depth, shared by every backend (psx_bios_backend.c). */
+extern int g_psx_dispatch_depth;
 
 /* The backend in use. Null before psx_bios_select() runs; every forwarder and
  * every consumer of psx_bios_image depends on it being set first. */
@@ -57,8 +67,20 @@ extern const PsxBiosBackend *psx_bios_active;
 
 /* Backends compiled into this binary, in preference order (bundled OpenBIOS
  * first). Emitted by the build as psx_bios_registry.c. */
-extern const PsxBiosBackend *const psx_bios_registry[];
-extern const uint32_t              psx_bios_registry_count;
+extern const PsxBiosBackend *const psx_bios_builtin_registry[];
+extern const uint32_t              psx_bios_builtin_registry_count;
+
+/* The live registry: the builtins plus any backend registered at run time
+ * (a BIOS module built from the player's dump, psx_bios_module.h). Walk it
+ * only after psx_bios_registry_seeded_count() or any lookup below has run;
+ * the count is 0 until then in a process that never looked. */
+extern const PsxBiosBackend *psx_bios_registry[];
+extern uint32_t              psx_bios_registry_count;
+uint32_t psx_bios_registry_seeded_count(void);
+
+/* Add a backend loaded at run time. Idempotent for a pointer already present;
+ * 0 when the table is full or the descriptor has no image. */
+int psx_bios_register(const PsxBiosBackend *backend);
 
 /* Look up a compiled-in backend by its profile id ("SCPH-1001", "OPENBIOS").
  * Null if this build does not carry it. */

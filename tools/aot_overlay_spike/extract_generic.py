@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import extract_overlays as eo
 import compile_overlays as co
 from packed_sector_table import extract_members as extract_sector_members
+from sector_extent_archive import extract_members as extract_extent_members
 try:
     import tomllib
 except ImportError:
@@ -359,14 +360,18 @@ def raw_base_votes(data, base_lo, base_hi=0x80200000):
     return hist
 
 def split_indexed_archive(data, alignment=0x800):
-    """Recognize a strict ``{id,size}[]`` + aligned-payload archive.
+    """Prefer explicit sector extents over the older opaque-ID heuristic.
 
-    Mega Man X6's ROCK_X6.BIN uses one monotonically increasing table in the
-    first sector.  Payload members follow in table order, each rounded up to a
-    0x800-byte boundary.  Require the complete layout to account for the file
-    (apart from at most one format trailer sector) so ordinary data cannot
-    be mistaken for this container merely because its first words look small.
+    A multi-sector header cannot be inferred from the table's byte length.
+    When descriptors account for the complete file, their sector offsets take
+    precedence. The legacy fallback handles genuinely opaque increasing IDs.
     """
+    try:
+        extents = extract_extent_members(data, sector_size=alignment)
+    except ValueError:
+        extents = []
+    if len(extents) >= 4:
+        return [(m['sector'], m['source_offset'], m['body']) for m in extents]
     if len(data) < alignment*2 or len(data) % alignment:
         return None
     entries=[]
@@ -654,20 +659,52 @@ def parse_full_discovery_ranges(lines):
             pending=None
     return sorted(seeds),sorted(set(aliases))
 
-def full_discovery_seeds(data, recompiler, tmp):
-    """Run NORMAL mode; return discovered entries plus exact alias recipes."""
+class DiscoveryError(RuntimeError):
+    """Normal-mode discovery could not run; the extraction must not continue."""
+
+
+# The framework this tool belongs to (tools/aot_overlay_spike/ -> root). Normal
+# mode resolves its BIOS profile against --project-root; without it the
+# recompiler probes the process cwd, so the same release run found every entry
+# from a framework checkout and none from a directory without bios/ (it exits
+# "no BIOS profile found"), shipping fewer native pairs with no error.
+FRAMEWORK_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+_project_root = None   # set by main() from --project-root
+
+
+def discovery_project_root(explicit=None):
+    """The --project-root every normal-mode run uses: explicit, else the
+    framework root. It must hold bios/SCPH1001.toml, or nothing can resolve."""
+    root = os.path.abspath(explicit or _project_root or FRAMEWORK_ROOT)
+    if not os.path.isfile(os.path.join(root, 'bios', 'SCPH1001.toml')):
+        raise DiscoveryError(f"no BIOS profile at {os.path.join(root, 'bios', 'SCPH1001.toml')}; "
+                             "pass --project-root <framework or game-project root>")
+    return root
+
+
+def full_discovery_seeds(data, recompiler, tmp, project_root=None):
+    """Run NORMAL mode; return discovered entries plus exact alias recipes.
+
+    A run that does not complete raises DiscoveryError with the recompiler's
+    own message. Falling back here would silently drop every normal-mode entry
+    and alias the producer has. (None, []) means the run completed and found
+    no entry, which the callers' prologue fallback covers."""
     exe_path = os.path.join(tmp, 'producer.exe')
     open(exe_path,'wb').write(data)
     out = os.path.join(tmp, f'disc_out_{binascii.crc32(data)&0xFFFFFFFF:08X}')
     os.makedirs(out, exist_ok=True)
+    cmd = [recompiler, exe_path, '--out-dir', out,
+           '--project-root', discovery_project_root(project_root)]
     try:
         # errors='replace': the recompiler prints non-ASCII (✓) that would raise
         # a decode error under text=True and lose the (already-written) ranges.
-        subprocess.run([recompiler, exe_path, '--out-dir', out],
-                       capture_output=True, text=True, errors='replace', timeout=300)
-    except Exception as e:
-        print(f"    full-discovery failed ({e}); falling back to prologue scan")
-        return None,[]
+        r = subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=300)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise DiscoveryError(f"normal-mode discovery did not run: {' '.join(cmd)}: {e}") from e
+    if r.returncode != 0:
+        tail = '\n'.join(((r.stdout or '') + (r.stderr or '')).strip().splitlines()[-12:])
+        raise DiscoveryError(f"normal-mode discovery failed (exit {r.returncode}): "
+                             f"{' '.join(cmd)}\n{tail}")
     lines=[]
     for rf in [f for f in os.listdir(out) if f.endswith('.ranges')]:
         lines.extend(open(os.path.join(out,rf), errors='ignore'))
@@ -690,19 +727,36 @@ def full_discovery_output_audit_clean(data, tmp):
     return True
 
 def filter_full_discovery_seeds(body, base, candidates, declared_entry):
-    """Quarantine normal mode's unproven image-body fallback entry.
+    """Remove unproven body-start and invalid-delay normal-mode candidates.
 
-    Normal mode derives interior entries from return/prologue/call/control-flow
-    evidence and classifies their reachable extents.  Its one provenance-free
-    fallback is the image load address: a backward return scan that reaches the
-    beginning promotes that first body word.  Ape MINI2 begins with a pointer
-    table there, while its PS-X header declares the real entry later.  Quarantine
-    only that unproven body-start fallback; preserving the additive interior set
-    is essential because removing selected roots can split otherwise broad
-    functions and create native code-range holes.
+    Return scans can promote a leading pointer table or data after a return.
+    Keep the remaining additive interior set: removing arbitrary roots can
+    split otherwise broad functions and create native code-range holes.
     """
-    return sorted({addr for addr in candidates
-                   if addr != base or addr == declared_entry})
+    # Return scans can also nominate adjacent data whose words resemble JALs.
+    # A control transfer in the first transfer's delay slot cannot substantiate
+    # an optional native root. Keep declared entries so their audit still fails
+    # visibly if authoritative loader evidence actually names unsupported code.
+    return sorted({addr for addr in candidates if addr == declared_entry or
+                   (addr != base and optional_entry_delay_valid(body, base, addr))})
+
+
+def optional_entry_delay_valid(body, base, entry):
+    """Reject structurally invalid delay slots in an optional entry prefix."""
+    offset = entry - base
+    if offset < 0 or offset % 4 or offset + 4 > len(body):
+        return False
+    for at in range(offset, min(offset + 48, len(body) - 3), 4):
+        word = _word(body, at)
+        # BLEZ/BGTZ require rt=zero. Library identification data following a
+        # return can resemble these opcodes with a nonzero reserved field.
+        # Such a prefix cannot establish an optional callable entry.
+        if word >> 26 in (6, 7) and (word >> 16) & 31:
+            return False
+        if _is_control_flow_word(word):
+            delay = _word(body, at + 4)
+            return delay is not None and not _is_control_flow_word(delay)
+    return True
 
 def enrich_positioned_member(member, recompiler, tmp):
     """Add normal-mode entries/aliases to a consensus-positioned member.
@@ -731,6 +785,7 @@ def enrich_positioned_member(member, recompiler, tmp):
              if base <= alias[0] < hi and
              base <= alias[1] < alias[2] <= hi and
              alias[0] != base and
+             optional_entry_delay_valid(body, base, alias[0]) and
              not any(alias[1] < root < alias[2] for root in roots)]
     out=dict(member)
     out['seeds']=sorted(set(discovered)|set(roots))
@@ -894,8 +949,13 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--game-toml')
     ap.add_argument('--recompiler')
+    ap.add_argument('--disc', default=None,
+                    help="cue to read (default: the game config's [game].disc)")
     ap.add_argument('--out', required=True)
     ap.add_argument('--tmp', default=None)
+    ap.add_argument('--project-root', default=None,
+                    help='root holding bios/SCPH1001.toml for normal-mode discovery '
+                         '(default: this framework)')
     ap.add_argument('--bios', default=None,
                     help='BIOS ROM for exact-hash resident-code recipes (default: '
                          'PSXRECOMP_BIOS_ROM or framework bios/SCPH1001.BIN)')
@@ -908,6 +968,8 @@ def main():
     ap.add_argument('--only-bios-resident', action='store_true',
                     help='emit only exact-hash BIOS-installed RAM code captures')
     a=ap.parse_args()
+    global _project_root
+    _project_root=a.project_root
     if a.require_bios_resident and a.no_bios_resident:
         ap.error('--require-bios-resident conflicts with --no-bios-resident')
     if a.only_bios_resident and a.no_bios_resident:
@@ -940,7 +1002,7 @@ def main():
     text_size=int(str(game.get('text_size','0x00080000')),16)
     floor = (load_addr + text_size) & 0x1FFFFFFF
     floor_page = (floor // 0x1000) * 0x1000        # page-align down
-    disc=os.path.join(root, disc_rel)
+    disc=os.path.abspath(a.disc) if a.disc else os.path.join(root, disc_rel)
     print(f"game={game.get('id')} disc={os.path.basename(disc)} load=0x{load_addr:08X} floor=0x{floor_page:08X}")
     bp,raw=parse_cue_datatrack(disc)   # multi-bin safe: pick track-1 data bin
     dr=eo.DiscReader(bp,raw=raw)
@@ -995,6 +1057,8 @@ def main():
                 aliases=[alias for alias in aliases_all
                          if va <= alias[0] < span_hi and
                          va <= alias[1] < alias[2] <= span_hi and
+                         (alias[0] == entry_pc or
+                          optional_entry_delay_valid(body, t_addr, alias[0])) and
                          (alias[0] != t_addr or alias[0] == entry_pc)]
                 records.append(rec(
                     va,seg,sd,static_alias_ranges=aliases))
@@ -1213,4 +1277,9 @@ def main():
           f"{nc} adjacent composites, {nb} BIOS resident; "
           f"{len(records)} regions -> {a.out}")
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    try:
+        main()
+    except DiscoveryError as e:
+        print(f"extract_generic: FATAL: {e}", file=sys.stderr)
+        sys.exit(2)

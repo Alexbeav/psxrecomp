@@ -1,4 +1,5 @@
 #include "psx_netplay_rb.h"
+#include "psx_memory.h"
 #include "cpu_state.h" /* full CPUState — stub path assigns *out = *in */
 
 #if !defined(PSX_HAS_RECOMP_NET)
@@ -60,6 +61,7 @@ int psx_netplay_rb_take_promote_sweep(void) { return 0; }
 int psx_netplay_rb_fmv_unlock_grace_active(void) { return 0; }
 void psx_netplay_rb_pump(void) {}
 int psx_netplay_rb_boot_dig0_gate(void) { return 0; }
+uint32_t psx_netplay_rb_boot_dig0_mismatch_since_ms(void) { return 0; }
 void psx_netplay_rb_boot_dig0_note_local(uint32_t core) { (void)core; }
 void psx_netplay_rb_boot_dig0_note_peer(uint32_t core) { (void)core; }
 int psx_netplay_rb_active(void) { return 0; }
@@ -339,6 +341,13 @@ static uint32_t g_boot_dig0_peer_core;
 static uint8_t g_boot_dig0_peer_valid;
 static uint32_t g_boot_dig0_last_rexmit_ms;
 static int g_boot_dig0_wait_kind_logged;
+/* psx_host_mono_ms() since when the same pair of dig0s (below) has been known
+ * and different; 0 = no mismatch. A peer FC can replace the peer latch, so a
+ * new pair restarts the clock; a pair that holds for the watchdog's grace is
+ * final and ends the match with its own reason. */
+static uint32_t g_boot_dig0_mismatch_since_ms;
+static uint32_t g_boot_dig0_mismatch_local;
+static uint32_t g_boot_dig0_mismatch_peer;
 static int g_follow_nack_pending;
 static uint32_t g_follow_nack_epoch;
 static uint32_t g_follow_nack_mismatch;
@@ -1579,8 +1588,8 @@ static int rb_resume_pc_ok(uint32_t pc)
     if ((pc & 0xfff00000u) == 0xbfc00000u)
         return 1; /* BIOS ROM */
     phys = pc & 0x1fffffffu;
-    /* 2MB main RAM; skip the low scratch page (catches 0xB0 / 0x800000B0). */
-    if (phys >= 0x1000u && phys < 0x200000u)
+    /* Live main RAM; skip the low scratch page (catches 0xB0 / 0x800000B0). */
+    if (phys >= 0x1000u && phys < psx_ram_live_bytes())
         return 1;
     return 0;
 }
@@ -6276,6 +6285,7 @@ void psx_netplay_rb_cold_reset(void)
     g_boot_dig0_peer_valid = 0;
     g_boot_dig0_last_rexmit_ms = 0;
     g_boot_dig0_wait_kind_logged = 0;
+    g_boot_dig0_mismatch_since_ms = 0;
     g_follow_nack_pending = 0;
     g_follow_nack_epoch = 0;
     g_follow_nack_mismatch = 0;
@@ -9409,6 +9419,13 @@ int psx_netplay_rb_boot_dig0_gate(void)
     }
     if (ld != pd) {
         boot_dig0_rexmit_local();
+        if (!g_boot_dig0_mismatch_since_ms ||
+            g_boot_dig0_mismatch_local != ld || g_boot_dig0_mismatch_peer != pd) {
+            const uint32_t now = (uint32_t)psx_host_mono_ms();
+            g_boot_dig0_mismatch_since_ms = now ? now : 1u;
+            g_boot_dig0_mismatch_local = ld;
+            g_boot_dig0_mismatch_peer = pd;
+        }
         if (!g_boot_dig0_mismatch_logged) {
             g_boot_dig0_mismatch_logged = 1;
             fprintf(stderr,
@@ -9421,6 +9438,7 @@ int psx_netplay_rb_boot_dig0_gate(void)
     }
     g_boot_dig0_mismatch_logged = 0;
     g_boot_dig0_wait_kind_logged = 0;
+    g_boot_dig0_mismatch_since_ms = 0;
     /* One more send after we saw peer dig0 — the slower peer may still be
      * waiting (guest often syncs first; host then needs this rexmit). */
     g_boot_dig0_last_rexmit_ms = 0;
@@ -9430,6 +9448,11 @@ int psx_netplay_rb_boot_dig0_gate(void)
             "psxrecomp: rb boot dig0 synced core=%08x\n", (unsigned)ld);
     fflush(stderr);
     return 0;
+}
+
+uint32_t psx_netplay_rb_boot_dig0_mismatch_since_ms(void)
+{
+    return g_boot_dig0_synced ? 0u : g_boot_dig0_mismatch_since_ms;
 }
 
 int psx_netplay_rb_active(void)

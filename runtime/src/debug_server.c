@@ -17,6 +17,7 @@
 #endif
 #include <time.h>
 #include "debug_server.h"
+#include "psx_video_timing.h"
 #include "psx_bss.h"
 #include "nd_intro_ot.h"
 #include "latency_ring.h"
@@ -41,11 +42,17 @@
 #include "psx_cycles.h"
 #include "timers.h"
 #include "dirty_ram_interp.h"
+#include "psx_memory.h"
 #include "card_read_summary.h"
 #include "card_data_writes.h"
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
+#include "render_pass.h"
+#include "mod_plugins.h"   /* psx_mod_render_pass_status */
 #include "lockstep.h"
+#include "guest_tty.h"
+#include "frame_fingerprint.h"
+#include "psx_segment_miss.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,58 +157,26 @@ int debug_server_fmv_quiet(void)
 uint64_t s_frame_count = 0;
 
 /* ---- Layer-1 first-divergence per-frame fingerprint ----------------------
- * Cumulative, ORDER-DEPENDENT rolling hashes over MAIN-RAM guest writes.
- * The point: native and dirty-interp are the SAME deterministic program run
- * two ways; they must produce an identical sequence of (addr,val,store_pc)
- * guest-RAM writes until a codegen/timing bug forks them. A guest RAM write
- * (and the PC issuing it) is pure guest semantics — granularity-invariant
- * across native vs interp (unlike host block/dispatch counts). We accumulate
- * two rolling hashes and snapshot them once per guest frame. Diff two runs'
- * per-frame columns: the FIRST frame whose hash differs is the first-divergence
- * frame, found in O(1) instead of O(n) function guesses. wr_hash vs pc_hash
- * classifies the fork: pc differs but wr matches => same writes via a different
- * control path; wr differs => actual state divergence. Reusable for any title.
- * Hashed over main RAM (phys < 0x200000) only — game state lives there; MMIO/
- * scratchpad churn (device polling) would add benign cross-backend noise. */
-uint64_t g_fp_wr_hash    = 1469598103934665603ULL;  /* FNV-1a-style seed (main RAM) */
-uint64_t g_fp_pc_hash    = 1469598103934665603ULL;  /* store-PC path sig (main RAM)  */
-uint64_t g_fp_write_count = 0;
-uint64_t g_fp_mmio_hash  = 1469598103934665603ULL;  /* SEPARATE: device-register writes */
-uint64_t g_fp_mmio_count = 0;
-uint64_t g_fp_sp_hash    = 1469598103934665603ULL;  /* SEPARATE: scratchpad (0x1F8000xx) writes */
-uint64_t g_fp_sp_count   = 0;
+ * Cumulative hashes over guest writes, snapshotted once per guest frame.
+ * Native and dirty-interp are the SAME deterministic program run two ways;
+ * diff two runs' per-frame columns and the FIRST frame that differs is the
+ * first-divergence frame, found in O(1) instead of O(n) function guesses.
+ * Column semantics (which ones judge guest state, which only locate a fork)
+ * live in frame_fingerprint.h and docs/TCP_COMMANDS.md. Reusable for any
+ * title. */
+static PsxFrameFingerprint s_fp = PSX_FRAME_FINGERPRINT_INIT;
 #define FP_RING_CAP 32768
-typedef struct { uint32_t frame; uint64_t wr_hash; uint64_t pc_hash; uint64_t wcount;
-                 uint64_t mmio_hash; uint64_t mmio_count;
-                 uint64_t sp_hash; uint64_t sp_count; uint64_t cyc; } FpEntry;
+typedef struct { uint32_t frame; PsxFrameFingerprint fp; uint64_t cyc; } FpEntry;
 static PSX_BSS FpEntry  s_fp_ring[FP_RING_CAP];
 static uint32_t s_fp_head  = 0;
 static uint64_t s_fp_total = 0;
 
-/* Record a guest WRITE into the per-frame fingerprint. Main RAM (phys<0x200000)
- * feeds the proven wr/pc hashes. Scratchpad (0x1F800000..0x1F8003FF) feeds a
- * SEPARATE sp_hash — it was previously dropped entirely (the blind spot that
- * hid a possible pre-1823 scratchpad-state fork), but folding it into wr_hash
- * would pollute the main-RAM signal with benign device-poll churn, so it gets
- * its own classified column instead. */
+/* Record a guest WRITE into the per-frame fingerprint. Live main RAM feeds
+ * the wr/pc/wc/ws columns; scratchpad (0x1F800000..0x1F8003FF) feeds its own
+ * sp column so device-poll churn there cannot pollute the main-RAM signal. */
 static inline void fp_record_write(uint32_t phys, uint32_t val, uint32_t pc)
 {
-    if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {   /* scratchpad — separate hash */
-        uint64_t s = g_fp_sp_hash;
-        s = (s ^ (uint64_t)phys) * 1099511628211ULL;
-        s = (s ^ (uint64_t)val)  * 1099511628211ULL;
-        s = (s ^ (uint64_t)pc)   * 1099511628211ULL;
-        g_fp_sp_hash = s;
-        g_fp_sp_count++;
-        return;
-    }
-    if (phys >= 0x200000u) return;                  /* main RAM only */
-    uint64_t h = g_fp_wr_hash;
-    h = (h ^ (uint64_t)phys) * 1099511628211ULL;
-    h = (h ^ (uint64_t)val)  * 1099511628211ULL;
-    g_fp_wr_hash = h;
-    g_fp_pc_hash = (g_fp_pc_hash ^ (uint64_t)pc) * 1099511628211ULL;
-    g_fp_write_count++;
+    psx_fp_record_write(&s_fp, phys, val, pc, psx_ram_live_bytes());
 }
 
 /* MMIO/device-register write signature — separate hash so the diff can tell a
@@ -210,25 +185,14 @@ static inline void fp_record_write(uint32_t phys, uint32_t val, uint32_t pc)
  * only sees the RAM AFTERMATH of a CD/IRQ-register divergence. */
 static inline void fp_record_mmio(uint32_t addr, uint32_t val, uint32_t pc)
 {
-    uint64_t h = g_fp_mmio_hash;
-    h = (h ^ (uint64_t)addr) * 1099511628211ULL;
-    h = (h ^ (uint64_t)val)  * 1099511628211ULL;
-    h = (h ^ (uint64_t)pc)   * 1099511628211ULL;
-    g_fp_mmio_hash = h;
-    g_fp_mmio_count++;
+    psx_fp_record_mmio(&s_fp, addr, val, pc);
 }
 
 static void fp_snapshot(uint32_t frame)
 {
     FpEntry *e = &s_fp_ring[s_fp_head];
-    e->frame      = frame;
-    e->wr_hash    = g_fp_wr_hash;
-    e->pc_hash    = g_fp_pc_hash;
-    e->wcount     = g_fp_write_count;
-    e->mmio_hash  = g_fp_mmio_hash;
-    e->mmio_count = g_fp_mmio_count;
-    e->sp_hash    = g_fp_sp_hash;
-    e->sp_count   = g_fp_sp_count;
+    e->frame = frame;
+    e->fp    = s_fp;
     { extern uint64_t psx_get_cycle_count(void); e->cyc = psx_get_cycle_count(); }
     s_fp_head  = (s_fp_head + 1) % FP_RING_CAP;
     s_fp_total++;
@@ -407,9 +371,18 @@ static uint32_t s_wtrace_head = 0;
 static WriteTraceEntry *s_wtrace_boot = NULL;
 static uint64_t s_wtrace_boot_total = 0;  /* matching writes ever seen */
 static uint32_t s_wtrace_boot_count = 0;  /* entries retained */
-#define WTRACE_BOOT_MAX_RANGES 12
+/* Launch-time PSX_WTRACE_BOOT_RANGES entries get their OWN slots in both the
+ * boot and transition rings, on top of the built-in defaults (boot uses up to
+ * 12, transition up to 10), so a default set can never crowd them out. */
+#define WTRACE_ENV_MAX_RANGES 8
+#define WTRACE_BOOT_DEFAULT_MAX_RANGES 12
+#define WTRACE_BOOT_MAX_RANGES (WTRACE_BOOT_DEFAULT_MAX_RANGES + WTRACE_ENV_MAX_RANGES)
 static struct { uint32_t lo, hi; } s_wtrace_boot_ranges[WTRACE_BOOT_MAX_RANGES];
 static int s_wtrace_boot_range_count = 0;
+/* Outcome of PSX_WTRACE_BOOT_RANGES, reported by wtrace_boot_stats and
+ * wtrace_trans_stats: ranges applied, and why a spec was refused (empty = ok). */
+static int  s_wtrace_env_ranges = 0;
+static char s_wtrace_env_error[96] = "";
 
 /* Multi-range filter: up to 64 [lo, hi) address ranges. Boot defaults
  * occupy ~15; investigative arms must always have headroom. */
@@ -445,7 +418,8 @@ static uint32_t s_wtrace_all_head = 0;
  * long-lived timeseries for high-value scheduler/render state by recording only
  * writes whose value changed. */
 #define WRITE_TRACE_TRANS_CAP (1 << 20)
-#define WTRACE_TRANS_MAX_RANGES 16
+#define WTRACE_TRANS_DEFAULT_MAX_RANGES 16
+#define WTRACE_TRANS_MAX_RANGES (WTRACE_TRANS_DEFAULT_MAX_RANGES + WTRACE_ENV_MAX_RANGES)
 typedef struct {
     uint64_t seq;
     uint32_t addr;
@@ -746,7 +720,7 @@ static uint32_t trace_read_word(CPUState *cpu, uint32_t addr)
 {
     (void)cpu;
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys > 0x001FFFFCu &&
+    if (phys > psx_ram_live_bytes() - 4u &&
         (phys < 0x1F800000u || phys > 0x1F8003FCu)) {
         return 0;
     }
@@ -763,7 +737,7 @@ static uint32_t trace_read_half(CPUState *cpu, uint32_t addr)
 {
     (void)cpu;
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys > 0x001FFFFEu &&
+    if (phys > psx_ram_live_bytes() - 2u &&
         (phys < 0x1F800000u || phys > 0x1F8003FEu)) {
         return 0;
     }
@@ -1366,7 +1340,7 @@ static void evcb_snapshot_capture(EvCBTag tag, uint64_t fn_entry_seq) {
 
     /* Convert RAM base ptr to RAM offset (kernel uses cached + uncached
      * mirrors; mask off region bits). */
-    uint32_t base_ram = base_ptr & 0x001FFFFFu;
+    uint32_t base_ram = psx_ram_canonical_offset(base_ptr);
 
     EvCBSnapshot *e = &s_evcb_ring[s_evcb_ring_seq % EVCB_RING_CAP];
     e->seq              = s_evcb_ring_seq;
@@ -1390,7 +1364,7 @@ static void evcb_snapshot_capture(EvCBTag tag, uint64_t fn_entry_seq) {
 
     for (uint32_t i = 0; i < n_entries; i++) {
         uint32_t off = base_ram + i * EVCB_ENTRY_SIZE;
-        if (off + EVCB_ENTRY_SIZE > 0x00200000u) break;
+        if (off + EVCB_ENTRY_SIZE > psx_ram_live_bytes()) break;
         e->entries[i].cls      = evcb_read_u32_ram(off + 0);
         e->entries[i].status   = evcb_read_u32_ram(off + 4);
         e->entries[i].spec     = evcb_read_u32_ram(off + 8);
@@ -1701,7 +1675,7 @@ static void call_focus_record(uint32_t func_addr)
         e->obj_18    = psx_read_word(phys + 0x18u);
         e->obj_30    = psx_read_word(phys + 0x30u);
         uint32_t out_phys = e->obj_30 & 0x1FFFFFFFu;
-        if (out_phys < 0x00200000u - 1u) {
+        if (out_phys < psx_ram_live_bytes() - 1u) {
             e->obj_30_0 = psx_read_byte(out_phys);
             e->obj_30_1 = psx_read_byte(out_phys + 1u);
         }
@@ -2693,7 +2667,7 @@ void debug_server_cyc_observe(uint32_t block_leader_phys) {
             if (a2) {
                 uint32_t fl = psx_read_word(a2 + 184u);
                 if (fl & 0x80u)
-                    psx_write_word(a2 + 184u, fl & ~0x80u);
+                    psx_host_write_word(a2 + 184u, fl & ~0x80u);
             }
         }
     }
@@ -2924,10 +2898,27 @@ static void handle_dirty_ram_stats(int id, const char *json)
              (unsigned long long)g_dirty_ram_native_handoffs,
              (unsigned)dirty_ram_get_bitmap());
 
+    /* Optional {"lo":"0x..","hi":"0x.."} keeps rows whose PC (compared with
+     * the KSEG bits masked off, as rows are keyed) lies in [lo, hi), and
+     * {"skip":N} pages past the first N matching rows. The row list is capped
+     * by the response buffer, so per_pc_matching / per_pc_emitted say whether
+     * this page is complete instead of truncating silently. */
+    char lo_s[32] = {0}, hi_s[32] = {0};
+    uint32_t lo = 0, hi = 0xFFFFFFFFu;
+    if (json_get_str(json, "lo", lo_s, sizeof(lo_s))) lo = hex_to_u32(lo_s) & 0x1FFFFFFFu;
+    if (json_get_str(json, "hi", hi_s, sizeof(hi_s))) hi = hex_to_u32(hi_s) & 0x1FFFFFFFu;
+    int skip = json_get_int(json, "skip", 0);
+    int matching = 0, emitted = 0;
     int first = 1;
     for (int i = 0; i < DIRTY_RAM_PC_TABLE_SIZE; i++) {
         DirtyRamPcEntry *e = &g_dirty_ram_pc_table[i];
         if (e->pc == 0 || e->hits == 0) continue;
+        uint32_t key = (uint32_t)e->pc & 0x1FFFFFFFu;
+        if (key < lo || key >= hi) continue;
+        if (matching++ < skip) continue;
+        /* Reserve enough tail room for all bitmap/guard diagnostics below. */
+        if (n >= (int)sizeof(buf) - 2048) continue;
+        emitted++;
         n += snprintf(buf + n, sizeof(buf) - n,
                       "%s{\"pc\":\"0x%08X\",\"hits\":%llu,\"insns\":%llu,"
                       "\"entries\":%llu,\"occ_crc\":\"0x%08X\","
@@ -2941,10 +2932,11 @@ static void handle_dirty_ram_stats(int id, const char *json)
                       (unsigned)e->occ_ok,
                       (unsigned)e->last_ext_ra);
         first = 0;
-        /* Reserve enough tail room for all bitmap/guard diagnostics below. */
-        if (n >= (int)sizeof(buf) - 2048) break;
     }
-    n += snprintf(buf + n, sizeof(buf) - n, "],\"dirty_bitmap_words\":[");
+    n += snprintf(buf + n, sizeof(buf) - n,
+                  "],\"per_pc_matching\":%d,\"per_pc_skipped\":%d,"
+                  "\"per_pc_emitted\":%d,\"dirty_bitmap_words\":[",
+                  matching, matching < skip ? matching : skip, emitted);
     uint32_t word_count = dirty_ram_get_bitmap_word_count();
     for (uint32_t i = 0; i < word_count; i++) {
         n += snprintf(buf + n, sizeof(buf) - n,
@@ -3568,6 +3560,40 @@ static void handle_bioscall_dump(int id, const char *json)
     }
     pos += snprintf(out + pos, BUF_SZ - pos, "]}\n");
     debug_server_send_line(out); free(out);
+}
+
+/* guest_tty_dump — bounded, structured capture of bytes emitted through the
+ * guest console. Hex avoids JSON escaping ambiguity and preserves arbitrary
+ * byte values. The command is observational and never consumes the ring. */
+static void handle_guest_tty_dump(int id, const char *json)
+{
+    int requested = json_get_int(json, "tail", 4096);
+    if (requested < 0) requested = 0;
+    if (requested > 65536) requested = 65536;
+
+    size_t cap = (size_t)requested;
+    uint8_t *bytes = cap ? (uint8_t *)malloc(cap) : NULL;
+    if (cap && !bytes) { send_err(id, "oom"); return; }
+
+    uint64_t total = 0;
+    size_t count = psx_guest_tty_snapshot(bytes, cap, &total);
+    size_t out_cap = 160u + count * 2u;
+    char *out = (char *)malloc(out_cap);
+    if (!out) { free(bytes); send_err(id, "oom"); return; }
+
+    size_t pos = (size_t)snprintf(
+        out, out_cap,
+        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"tail\":%llu,\"hex\":\"",
+        id, (unsigned long long)total, (unsigned long long)count);
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < count; ++i) {
+        out[pos++] = digits[bytes[i] >> 4];
+        out[pos++] = digits[bytes[i] & 0x0Fu];
+    }
+    out[pos++] = '"'; out[pos++] = '}'; out[pos++] = '\n'; out[pos] = '\0';
+    debug_server_send_line(out);
+    free(out);
+    free(bytes);
 }
 
 /* bios_info — which recompiled BIOS this build links, and whether the
@@ -4940,13 +4966,17 @@ static void handle_ping(int id, const char *json)
     (void)json;
     /* Surface accumulated dispatch misses on every ping so they can't go
      * unnoticed across sessions (NES recomp template PRINCIPLES.md §13a:
-     * "A dispatch miss is a SILENT GAME-BREAKING BUG"). 0 = healthy. */
+     * "A dispatch miss is a SILENT GAME-BREAKING BUG"). 0 = healthy. Segment
+     * misses (docs/SEGMENT_AWARE_CODE.md §5.5) run interpreted rather than
+     * fail, and are surfaced the same way. */
     send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%llu,"
              "\"dispatch_miss_total\":%llu,"
-             "\"dispatch_miss_unique\":%d}",
+             "\"dispatch_miss_unique\":%d,"
+             "\"segment_miss_total\":%llu}",
              id, (unsigned long long)s_frame_count,
              (unsigned long long)s_unknown_seq,
-             s_unknown_unique_count);
+             s_unknown_unique_count,
+             (unsigned long long)psx_segment_miss_total());
 }
 
 static void handle_frame(int id, const char *json)
@@ -4958,12 +4988,34 @@ static void handle_frame(int id, const char *json)
 
 /* Layer-1 first-divergence: dump the per-frame write fingerprint ring.
  * Params: count (default 1024), frame_lo / frame_hi (optional inclusive
- * filter). Entries are oldest-first within the window. Diff the wr/pc columns
- * of two runs (native vs interp/oracle): the first frame whose wr or pc differs
- * is the first-divergence frame. Small integer fields only — no large/ragged
+ * filter). Entries are oldest-first within the window. Judge two runs
+ * (native vs interp/oracle) on cyc/wc/ws/mmio/mc/sp/sc/qc; wr/pc are ordered
+ * locators (frame_fingerprint.h). Small integer fields only — no large/ragged
  * payload, so it never trips the trace-dump JSON/eviction problems. */
+/* Longest entry the format below can produce: every hash at 16 hex digits and
+ * every counter at 20 decimal digits comes to 284 bytes with the separator. */
+#define FP_JSON_ENTRY_MAX 320
+/* frame_fingerprint reset_on_load=1: restart the rolling hashes and the ring
+ * when the next savestate load completes, so two runs that load the same state
+ * (for example with and without a presentation mod) compare frame by frame
+ * from that guest point on, independent of what happened before the load. */
+static int s_fp_reset_on_load = 0;
+void debug_server_note_savestate_loaded(void)
+{
+    if (!s_fp_reset_on_load) return;
+    s_fp_reset_on_load = 0;
+    s_fp = (PsxFrameFingerprint)PSX_FRAME_FINGERPRINT_INIT;
+    s_fp_head = 0;
+    s_fp_total = 0;
+}
+
 static void handle_frame_fingerprint(int id, const char *json)
 {
+    if (json_get_int(json, "reset_on_load", 0)) {
+        s_fp_reset_on_load = 1;
+        send_fmt("{\"id\":%d,\"ok\":true,\"armed\":1}", id);
+        return;
+    }
     int count = json_get_int(json, "count", 1024);
     if (count < 1) count = 1;
     if (count > FP_RING_CAP) count = FP_RING_CAP;
@@ -4973,7 +5025,7 @@ static void handle_frame_fingerprint(int id, const char *json)
     uint32_t avail = (s_fp_total < FP_RING_CAP) ? (uint32_t)s_fp_total : FP_RING_CAP;
     uint32_t start = (s_fp_total < FP_RING_CAP) ? 0 : s_fp_head;
 
-    size_t BUF = 512 + (size_t)count * 224;
+    size_t BUF = 512 + (size_t)count * FP_JSON_ENTRY_MAX;
     char *out = (char *)malloc(BUF);
     if (!out) { send_err(id, "oom"); return; }
     size_t pos = 0;
@@ -4987,16 +5039,19 @@ static void handle_frame_fingerprint(int id, const char *json)
         if (fhi >= 0 && (int)e->frame > fhi) continue;
         pos += snprintf(out + pos, BUF - pos,
                         "%s{\"frame\":%u,\"wr\":\"0x%016llx\",\"pc\":\"0x%016llx\",\"wc\":%llu,"
+                        "\"ws\":\"0x%016llx\","
                         "\"mmio\":\"0x%016llx\",\"mc\":%llu,"
-                        "\"sp\":\"0x%016llx\",\"sc\":%llu,\"cyc\":%llu}",
+                        "\"sp\":\"0x%016llx\",\"sc\":%llu,\"qc\":%llu,\"cyc\":%llu}",
                         emitted ? "," : "", e->frame,
-                        (unsigned long long)e->wr_hash,
-                        (unsigned long long)e->pc_hash,
-                        (unsigned long long)e->wcount,
-                        (unsigned long long)e->mmio_hash,
-                        (unsigned long long)e->mmio_count,
-                        (unsigned long long)e->sp_hash,
-                        (unsigned long long)e->sp_count,
+                        (unsigned long long)e->fp.wr_hash,
+                        (unsigned long long)e->fp.pc_hash,
+                        (unsigned long long)e->fp.wcount,
+                        (unsigned long long)e->fp.wsum,
+                        (unsigned long long)e->fp.mmio_hash,
+                        (unsigned long long)e->fp.mmio_count,
+                        (unsigned long long)e->fp.sp_hash,
+                        (unsigned long long)e->fp.sp_count,
+                        (unsigned long long)e->fp.quiet_count,
                         (unsigned long long)e->cyc);
         emitted++;
     }
@@ -5136,9 +5191,9 @@ static void handle_read_ram(int id, const char *json)
     uint32_t addr = hex_to_u32(addr_str);
     int len = json_get_int(json, "len", 1);
     if (len < 1) len = 1;
-    /* Effectively the entire 2 MB RAM in one shot.  Response uses a heap-
-     * sized envelope so we don't truncate. */
-    if (len > 0x200000) len = 0x200000;
+    /* Effectively the entire live RAM (2 MB, or 8 MB with the opt-in map) in
+     * one shot.  Response uses a heap-sized envelope so we don't truncate. */
+    if (len > (int)psx_ram_live_bytes()) len = (int)psx_ram_live_bytes();
 
     /* Heap buffer for hex chars + JSON envelope.  Each byte = 2 hex chars. */
     size_t env = 256;
@@ -5181,7 +5236,7 @@ static void handle_write_ram(int id, const char *json)
     }
     uint32_t addr = hex_to_u32(addr_str);
     uint8_t val = (uint8_t)hex_to_u32(val_str);
-    psx_write_byte(addr, val);
+    psx_host_write_byte(addr, val);
     send_ok(id);
 }
 
@@ -5489,12 +5544,19 @@ static void handle_vblank_rate(int id, const char *json)
              "\"cycle_paced_raise\":%llu,"
              "\"delivered\":%llu,"
              "\"pollhack_raise\":%llu,"
-             "\"doff_min\":%d,\"doff_max\":%d,\"doff_cnt\":%u}",
+             "\"doff_min\":%d,\"doff_max\":%d,\"doff_cnt\":%u,"
+             "\"video_standard\":\"%s\",\"vblank_cycles\":%u,"
+             "\"hblank_cycles\":%u,\"lines_per_frame\":%u,"
+             "\"video_standard_changes\":%u}",
              id,
              (unsigned long long)g_vblank_raise_count,
              (unsigned long long)g_vblank_deliver_count,
              (unsigned long long)g_pollhack_vblank_count,
-             g_doff_min_last, g_doff_max_last, g_doff_cnt_last);
+             g_doff_min_last, g_doff_max_last, g_doff_cnt_last,
+             psx_video_timing_is_pal() ? "PAL" : "NTSC",
+             (unsigned)g_psx_vblank_cycles, (unsigned)g_psx_hblank_cycles,
+             (unsigned)g_psx_lines_per_frame,
+             (unsigned)psx_video_timing_generation());
 }
 
 static void handle_timers_state(int id, const char *json)
@@ -5733,7 +5795,7 @@ static void handle_cdrom_command_history(int id, const char *json)
     uint64_t oldest = (total > CDROM_COMMAND_HISTORY_CAP)
         ? total - CDROM_COMMAND_HISTORY_CAP : 0;
 
-    size_t bufsz = 256u + (size_t)count * 640u;
+    size_t bufsz = 256u + (size_t)count * 800u;
     char *buf = (char *)malloc(bufsz);
     if (!buf) { send_err(id, "oom"); return; }
 
@@ -5746,7 +5808,7 @@ static void handle_cdrom_command_history(int id, const char *json)
                     (unsigned long long)oldest);
 
     uint64_t seq = total;
-    while (seq > oldest && emitted < count && pos < bufsz - 640) {
+    while (seq > oldest && emitted < count && pos < bufsz - 800) {
         seq--;
         const CDROMCommandHistoryEntry *e =
             &entries[seq % CDROM_COMMAND_HISTORY_CAP];
@@ -5774,13 +5836,18 @@ static void handle_cdrom_command_history(int id, const char *json)
                         "\"reading\":%u,\"pending_cmd\":\"0x%02X\","
                         "\"pending\":%u,\"queued_cmd\":\"0x%02X\","
                         "\"queued\":%u,\"func\":\"0x%08X\",\"pc\":\"0x%08X\","
-                        "\"i_stat\":\"0x%08X\"}",
+                        "\"i_stat\":\"0x%08X\",\"response\":[",
                         e->stat, e->request, e->irq_enable, e->irq_flag,
                         e->mode, e->seek_min, e->seek_sec, e->seek_sect,
                         e->read_min, e->read_sec, e->read_sect, e->read_cmd,
                         e->reading, e->pending_cmd, e->pending_pending,
                         e->queued_cmd, e->queued_pending, e->func, e->pc,
                         e->i_stat);
+        for (uint8_t i = 0; i < e->response_count && i < 16 && pos < bufsz - 16; i++) {
+            pos += snprintf(buf + pos, bufsz - pos,
+                            "%s\"0x%02X\"", i ? "," : "", e->response[i]);
+        }
+        pos += snprintf(buf + pos, bufsz - pos, "]}");
         emitted++;
     }
 
@@ -7010,7 +7077,7 @@ static void handle_imask_trace(int id, const char *json)
     send_fmt("]}\n");
 }
 
-/* Post-probe bit7 → TX 0x57 handoff (Ape Escape LOAD). */
+/* Post-probe SIO/INTC handoff; records hardware state, not game RAM. */
 static void handle_card_handoff(int id, const char *json)
 {
     int count = json_get_int(json, "count", 64);
@@ -7023,8 +7090,7 @@ static void handle_card_handoff(int id, const char *json)
 
     int start = count ? (idx - count + cap) % cap : 0;
     static const char *kinds[] = {
-        "?", "probe_abort", "b7_set", "b7_clear", "tx", "card_ack", "unstick",
-        "select_flush_ack", "ack_deferred_istat7", "nest_irq_pulse", "b7_hold"
+        "?", "probe_abort", "b7_set", "b7_clear", "tx", "card_ack"
     };
     send_fmt("{\"id\":%d,\"ok\":true,\"armed\":%d,\"total\":%d,\"count\":%d,\"entries\":[",
              id, sio_card_handoff_armed(), total, count);
@@ -7035,11 +7101,11 @@ static void handle_card_handoff(int id, const char *json)
         if (i) send_fmt(",");
         send_fmt("{\"kind\":\"%s\",\"byte\":\"0x%02X\",\"imask\":\"0x%03X\","
                  "\"pc\":\"0x%08X\",\"func\":\"0x%08X\","
-                 "\"a6c10\":\"0x%08X\",\"b4e30\":\"0x%08X\",\"b4e38\":\"0x%08X\","
+                 "\"ctrl\":\"0x%04X\",\"stat\":\"0x%04X\",\"card_state\":%u,"
                  "\"cyc\":%llu}",
                  k, e->byte, e->imask,
                  (unsigned)e->pc, (unsigned)e->func,
-                 (unsigned)e->a6c10, (unsigned)e->b4e30, (unsigned)e->b4e38,
+                 (unsigned)e->ctrl, (unsigned)e->stat, (unsigned)e->card_state,
                  (unsigned long long)e->cyc);
     }
     send_fmt("]}\n");
@@ -7239,13 +7305,13 @@ static void handle_evcb_snapshot(int id, const char *json)
     snap.flag_755A       = (uint32_t)psx_read_byte(0x0000755A);
     snap.flag_75C0       = evcb_read_u32_ram(0x000075C0);
     snap.frame           = (uint32_t)s_frame_count;
-    uint32_t base_ram    = base_ptr & 0x001FFFFFu;
+    uint32_t base_ram    = psx_ram_canonical_offset(base_ptr);
     uint32_t n_entries   = (total_bytes / EVCB_ENTRY_SIZE);
     if (n_entries > EVCB_MAX_ENTRIES) n_entries = EVCB_MAX_ENTRIES;
     snap.entry_count     = n_entries;
     for (uint32_t i = 0; i < n_entries; i++) {
         uint32_t off = base_ram + i * EVCB_ENTRY_SIZE;
-        if (off + EVCB_ENTRY_SIZE > 0x00200000u) break;
+        if (off + EVCB_ENTRY_SIZE > psx_ram_live_bytes()) break;
         snap.entries[i].cls      = evcb_read_u32_ram(off + 0);
         snap.entries[i].status   = evcb_read_u32_ram(off + 4);
         snap.entries[i].spec     = evcb_read_u32_ram(off + 8);
@@ -7735,20 +7801,24 @@ static void handle_ws_hud_mode(int id, const char *json)
 }
 
 /* Kernel-image bless state: {"cmd":"kernel_bless"} ->
- * entries/clean/mismatch/native_hits/verifies/invalidations.
+ * entries/clean/mismatch/native_hits/verifies/invalidations, plus the
+ * declared kernel patch ranges and the segments they made the verifier
+ * skip (psx_bios_kernel_patch_ranges).
  * (memory.c psx_kernel_bless_*; PSX_KERNEL_BLESS=0 disables the mechanism.) */
 static void handle_kernel_bless(int id, const char *json)
 {
-    extern void psx_kernel_bless_stats(uint64_t out[6]);
+    extern void psx_kernel_bless_stats(uint64_t out[8]);
     (void)json;
-    uint64_t s[6];
+    uint64_t s[8];
     psx_kernel_bless_stats(s);
     send_fmt("{\"id\":%d,\"ok\":true,\"entries\":%llu,\"clean\":%llu,"
              "\"mismatch\":%llu,\"native_hits\":%llu,\"verifies\":%llu,"
-             "\"invalidations\":%llu}",
+             "\"invalidations\":%llu,\"patch_ranges\":%llu,"
+             "\"patch_skips\":%llu}",
              id, (unsigned long long)s[0], (unsigned long long)s[1],
              (unsigned long long)s[2], (unsigned long long)s[3],
-             (unsigned long long)s[4], (unsigned long long)s[5]);
+             (unsigned long long)s[4], (unsigned long long)s[5],
+             (unsigned long long)s[6], (unsigned long long)s[7]);
 }
 
 static void handle_ws_margin(int id, const char *json)
@@ -7854,12 +7924,102 @@ static void handle_gl_interp(int id, const char *json)
     int enabled = 0, suspended = 0, history = 0;
     double host_hz = 0.0, target_hz = 0.0;
     uint64_t swaps = 0;
+    int source = 0;
+    uint32_t flip_period = 0;
+    uint64_t captures = 0, duplicates = 0;
     gl_renderer_interpolation_diag(&enabled, &suspended, &history,
                                    &host_hz, &target_hz, &swaps);
+    gl_renderer_interpolation_source_diag(&source, &flip_period, &captures,
+                                          &duplicates);
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"suspended\":%d,\"history\":%d,"
-             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu}",
+             "\"host_hz\":%.3f,\"target_hz\":%.3f,\"swaps\":%llu,"
+             "\"source\":\"%s\",\"flip_period\":%u,\"captures\":%llu,"
+             "\"duplicates\":%llu}",
              id, enabled, suspended, history, host_hz, target_hz,
-             (unsigned long long)swaps);
+             (unsigned long long)swaps, source ? "flip" : "vblank",
+             (unsigned)flip_period, (unsigned long long)captures,
+             (unsigned long long)duplicates);
+}
+
+/* render_pass_stats: host-timed render passes (docs/RENDER_PASSES.md).
+ * Counters are per mod session; `dropped` counts device stores a pass tried
+ * to make (SPU key-ons, CD, timers, ...), which never reach the device. */
+static void handle_render_pass_stats(int id, const char *json)
+{
+    (void)json;
+    RenderPassStats st;
+    uint64_t gd[10], image_bytes = 0;
+    uint32_t image_textures;
+    render_pass_get_stats(&st);
+    gl_renderer_pass_diag(gd);
+    image_textures = gl_renderer_pass_image_textures(&image_bytes);
+    send_fmt("{\"id\":%d,\"ok\":true,\"plans\":%llu,\"planned\":%llu,"
+             "\"wanted\":%llu,\"refused\":%llu,\"passes\":%llu,"
+             "\"aborted\":%llu,\"discarded\":%llu,\"watchdog\":%llu,\"vram_leaks\":%llu,"
+             "\"nesting_repairs\":%llu,"
+             "\"verify_checks\":%llu,\"verify_mismatch\":%llu,"
+             "\"dropped\":{\"spu\":%llu,\"cd\":%llu,\"timer\":%llu,"
+             "\"dma\":%llu,\"gpu\":%llu,\"other\":%llu},"
+             "\"last_pass_ms\":%.3f,\"avg_pass_ms\":%.3f,"
+             "\"avg_begin_ms\":%.3f,\"avg_guest_ms\":%.3f,"
+             "\"avg_end_ms\":%.3f,\"avg_restore_ms\":%.3f,"
+             "\"guest_cycles_last\":%llu,\"disabled\":%d,"
+             "\"promotions\":%llu,\"pass_presents\":%llu,"
+             "\"blended_presents\":%llu,\"expired\":%llu,\"late_presents\":%llu,"
+             "\"unmatched_flips\":%llu,\"early_presents\":%llu,"
+             "\"cost_us\":%llu,\"cost_rewarms\":%llu,\"frame_images\":%llu,"
+             "\"journaled\":%llu,"
+             "\"image_textures\":%u,\"image_bytes\":%llu,\"status\":%u,"
+             "\"backups_reused\":%llu}",
+             id, (unsigned long long)st.plans, (unsigned long long)st.planned,
+             (unsigned long long)st.wanted, (unsigned long long)st.refused,
+             (unsigned long long)st.passes, (unsigned long long)st.aborted,
+             (unsigned long long)st.discarded, (unsigned long long)st.watchdog, (unsigned long long)st.vram_leaks,
+             (unsigned long long)st.nesting_repairs,
+             (unsigned long long)st.verify_checks,
+             (unsigned long long)st.verify_mismatch,
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_SPU],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_CD],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_TIMER],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_DMA],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_GPU],
+             (unsigned long long)st.dropped[RENDER_PASS_DROP_OTHER],
+             st.last_pass_ms, st.avg_pass_ms,
+             st.avg_begin_ms, st.avg_guest_ms, st.avg_end_ms, st.avg_restore_ms,
+             (unsigned long long)st.guest_cycles_last, st.disabled,
+             (unsigned long long)gd[0], (unsigned long long)gd[1],
+             (unsigned long long)gd[2], (unsigned long long)gd[3],
+             (unsigned long long)gd[8],
+             (unsigned long long)gd[4], (unsigned long long)gd[5],
+             (unsigned long long)gd[6], (unsigned long long)gd[9],
+             (unsigned long long)gd[7],
+             (unsigned long long)gl_renderer_pass_journaled(),
+             (unsigned)image_textures, (unsigned long long)image_bytes,
+             (unsigned)psx_mod_render_pass_status(),
+             (unsigned long long)gl_renderer_pass_backups_reused());
+}
+
+/* render_pass_refuse on=<0|1>: make the OpenGL backend decline render passes
+ * (status BACKEND), as a renderer mode without them would; for testing a
+ * plugin's fallback. Same as PSX_RENDER_PASS_REFUSE=1 at start. */
+static void handle_render_pass_refuse(int id, const char *json)
+{
+    int on = json_get_int(json, "on", 1);
+    gl_renderer_pass_force_refuse(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"status\":%u}", id, on ? 1 : 0,
+             (unsigned)psx_mod_render_pass_status());
+}
+
+/* render_pass_dump path=<dir> count=<n>: write the images (the game's own
+ * frame, then each render pass in phase order) of the next n frames that get
+ * render passes, as <dir>/g<frame>_<index>_a<phase q16>.png. */
+static void handle_render_pass_dump(int id, const char *json)
+{
+    char dir[400];
+    int count = json_get_int(json, "count", 1);
+    if (!json_get_str(json, "path", dir, sizeof dir)) { send_err(id, "missing path"); return; }
+    gl_renderer_pass_dump_arm(dir, count);
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d}", id, count);
 }
 
 /* gl_wide_fast on=<0|1>: native-wide centre-blit fast path. 1 (default) = skip
@@ -7886,6 +8046,16 @@ static void handle_ws_aspect(int id, const char *json)
     if (num <= 0 || den <= 0) { send_err(id, "need num>0 den>0 (4 3 = squash off)"); return; }
     gte_set_display_aspect(num, den);
     send_fmt("{\"id\":%d,\"ok\":true,\"num\":%d,\"den\":%d}", id, num, den);
+}
+
+extern int psx_debug_display_aspect(int num, int den, int adaptive);
+static void handle_display_aspect(int id, const char *json) {
+    int num=json_get_int(json,"num",-1), den=json_get_int(json,"den",-1);
+    int adaptive=json_get_int(json,"adaptive",0);
+    if (!psx_debug_display_aspect(num,den,adaptive)) {
+        send_err(id,"invalid display aspect (4:3 through 32:9)");return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"num\":%d,\"den\":%d,\"adaptive\":%d}",id,num,den,adaptive!=0);
 }
 
 /* Live native-wide vs squash toggle (A/B): ws_nw on=<0|1> re-engages the wide
@@ -7971,6 +8141,7 @@ static void handle_ws_backdrop_margin(int id, const char *json)
     if (m != -123456789) g_ws_bd_margin = m;
     send_fmt("{\"id\":%d,\"ok\":true,\"margin\":%d,\"mode\":\"%s\"}",
              id, g_ws_bd_margin,
+             g_ws_bd_margin == -2 ? "adaptive" :
              g_ws_bd_margin < 0 ? "whole-row" : (g_ws_bd_margin == 0 ? "off" : "widen-cols"));
 }
 
@@ -8819,6 +8990,16 @@ static void handle_screenshot_hires(int id, const char *json)
      * deterministic black, never whatever the allocator handed back. */
     uint32_t *argb = (uint32_t *)calloc((size_t)ow * oh, sizeof(uint32_t));
     if (!argb) { send_err(id, "alloc failed"); return; }
+    /* OpenGL keeps the internal resolution in its FBO only (the CPU-side
+     * mirror is native), so read it from there. This is the capture that
+     * proves what an internal-resolution preset really renders. */
+    if (gr_backend() == GR_BACKEND_OPENGL && scale > 1) {
+        int gw = 0, gh = 0;
+        int n = gl_renderer_read_display_hires((int)di.display_x, (int)di.display_y,
+                                               (int)w, (int)h, argb,
+                                               (int)((size_t)ow * oh), &gw, &gh);
+        if (n > 0 && (uint32_t)gw == ow && (uint32_t)gh == oh) goto encode;
+    }
     /* Renderer pitches are byte strides (the live SDL presentation path uses
      * the same contract). Passing `ow` here advanced each row by only one
      * quarter of its ARGB width, overlapping four rows and producing a PNG
@@ -8848,6 +9029,7 @@ static void handle_screenshot_hires(int id, const char *json)
         }
     }
 
+encode:;
     uint8_t *rgb = (uint8_t *)malloc((size_t)ow * oh * 3);
     if (!rgb) { free(argb); send_err(id, "alloc failed"); return; }
     for (size_t i = 0; i < (size_t)ow * oh; i++) {
@@ -8867,6 +9049,97 @@ static void handle_screenshot_hires(int id, const char *json)
 
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,"
              "\"height\":%u,\"scale\":%d}", id, path, ow, oh, scale);
+}
+
+/* video_info — the Internal resolution state end to end: the preset and its
+ * reference height, the scale requested of the backend, the scale the GL hr
+ * surface was actually allocated at (after the driver/memory clamp), the
+ * driver limit, the hr surface size, and the window's point and pixel sizes
+ * (the HiDPI drawable). Everything a preset needs to be verified against. */
+static void handle_video_info(int id, const char *json)
+{
+    (void)json;
+    extern void psx_video_resolution_info(int *preset, int *ref_lines, int *requested,
+                                          int *hidpi, int *win_w, int *win_h,
+                                          int *px_w, int *px_h);
+    int preset = 0, ref = 0, req = 0, hidpi = 0, ww = 0, wh = 0, pw = 0, ph = 0;
+    psx_video_resolution_info(&preset, &ref, &req, &hidpi, &ww, &wh, &pw, &ph);
+    GlScaleInfo si;
+    int gl = gl_renderer_scale_info(&si);
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    int eff = gr_scale();
+    send_fmt("{\"id\":%d,\"ok\":true,\"backend\":\"%s\",\"preset\":%d,"
+             "\"reference_lines\":%d,\"requested_scale\":%d,\"effective_scale\":%d,"
+             "\"internal_lines\":%u,\"gl\":%d,\"gl_max_dim\":%d,\"gl_max_scale\":%d,"
+             "\"gl_clamp_reason\":%d,\"gl_alloc_retries\":%d,\"gl_budget_mib\":%d,"
+             "\"fbo_w\":%d,\"fbo_h\":%d,\"hidpi_window\":%d,\"window_w\":%d,"
+             "\"window_h\":%d,\"drawable_w\":%d,\"drawable_h\":%d,"
+             "\"display_x\":%u,\"display_y\":%u,"
+             "\"display_w\":%u,\"display_h\":%u,\"hr_scale\":%d,\"windowed\":%d,"
+             "\"hires_window_x\":%d,\"hires_window_w\":%d,\"hires_fbo_w\":%d,"
+             "\"hires_fbo_h\":%d,\"hires_window_grows\":%d,\"hires_window_tiles\":%d,"
+             "\"hires_window_mib\":%d}",
+             id, gr_backend() == GR_BACKEND_OPENGL ? "opengl"
+                 : gr_backend() == GR_BACKEND_VULKAN ? "vulkan" : "software",
+             preset, ref, req, eff, di.height * (unsigned)(eff > 0 ? eff : 1), gl,
+             si.max_dim, si.max_scale, si.clamp_reason, si.alloc_retries, si.budget_mib,
+             si.fbo_w, si.fbo_h, hidpi, ww, wh, pw, ph, di.display_x, di.display_y,
+             di.width, di.height,
+             si.hr_scale, si.windowed, si.window_x, si.window_w, si.window_fbo_w,
+             si.window_fbo_h, si.window_grows, si.window_tiles, si.window_mib);
+}
+
+/* screenshot_wide_hires — the displayed band of the native-wide surface at
+ * internal resolution (GL): wide_w*S x h*S. present_shot is capped at the
+ * window, so this is how a widescreen + internal-resolution combination is
+ * checked without an 8K monitor. */
+static void handle_screenshot_wide_hires(int id, const char *json)
+{
+    extern int gr_wide_dump_full(uint32_t *out, int cap_pixels, int *ow, int *oh, int base_x);
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.height == 0) { send_err(id, "display disabled"); return; }
+    int S = gr_scale();
+    if (S < 1) S = 1;
+    int base_x = json_get_int(json, "base_x", (int)di.display_x);
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_screenshot_wide_hires.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+    /* The dump reads rows from the top of the surface: size it to reach the
+     * end of the displayed band (at 8K the lower double-buffer band ends at
+     * row 8640, past a fixed 8192x8192 budget for a 21:9 or wider surface). */
+    long long need = (long long)ws_nw_present_width() * S *
+                     (((long long)di.display_y + di.height) * S);
+    int cap = need > 8192LL * 8192 && need < (1LL << 28) ? (int)need : 8192 * 8192;
+    uint32_t *buf = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+    if (!buf) { send_err(id, "alloc failed"); return; }
+    int W = 0, H = 0;
+    int n = gr_wide_dump_full(buf, cap, &W, &H, base_x);
+    if (n <= 0) { free(buf); send_err(id, "no wide surface (native-wide not engaged?)"); return; }
+    int y0 = (int)di.display_y * S, oh = (int)di.height * S;
+    if (y0 < 0) y0 = 0;
+    if (y0 + oh > H) oh = H - y0;
+    if (oh <= 0) { free(buf); send_err(id, "display band outside the surface"); return; }
+    uint8_t *rgb = (uint8_t *)malloc((size_t)W * oh * 3);
+    if (!rgb) { free(buf); send_err(id, "alloc failed"); return; }
+    for (int y = 0; y < oh; y++)
+        for (int x = 0; x < W; x++) {
+            uint32_t px = buf[(size_t)(y0 + y) * W + x];
+            uint8_t *p = rgb + ((size_t)y * W + x) * 3;
+            p[0] = (uint8_t)((px >> 16) & 0xFF);
+            p[1] = (uint8_t)((px >> 8) & 0xFF);
+            p[2] = (uint8_t)(px & 0xFF);
+        }
+    free(buf);
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(rgb); send_err(id, "cannot open file"); return; }
+    int ok = png_write_rgb(f, rgb, (uint32_t)W, (uint32_t)oh);
+    free(rgb); fclose(f);
+    if (!ok) { send_err(id, "png encode failed"); return; }
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%d,\"height\":%d,"
+             "\"scale\":%d}", id, path, W, oh, S);
 }
 
 /* present_shot — PNG of the COMPOSED renderer output: the frame after SDL fits
@@ -9530,12 +9803,18 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
     (void)phys; (void)old_val; (void)new_val; (void)width;
     return;
 #endif
-    if (s_fmv_quiet) return;
+    /* Render passes are rolled back; keep them out of the live timeline's
+     * fingerprints and write traces (docs/RENDER_PASSES.md). */
+    if (g_psx_render_pass_active) return;
+    if (s_fmv_quiet) {
+        if (psx_fp_write_eligible(phys, psx_ram_live_bytes())) psx_fp_note_quiet(&s_fp);
+        return;
+    }
     if (is_card_critical_addr(phys)) card_trace_record(phys, old_val, new_val, width);
     fp_record_write(phys, new_val, g_debug_last_store_pc);
     {
         uint32_t ra = debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0;
-        if (phys < 0x200000u)
+        if (phys < psx_ram_live_bytes())
             rec_event(REC_KIND_RAM_W, phys, new_val, g_debug_last_store_pc, ra);
         else if (phys >= 0x1F800000u && phys <= 0x1F8003FFu)
             rec_event(REC_KIND_SP_W, phys, new_val, g_debug_last_store_pc, ra);
@@ -9555,11 +9834,12 @@ void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
 /* MMIO write trace — called from memory.c mmio_write32/16/8. */
 void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width)
 {
+    if (g_psx_render_pass_active) return;   /* rolled back: not live */
 #ifdef PSX_NO_DEBUG_TOOLS
     (void)addr; (void)val; (void)width;
     return;
 #endif
-    if (s_fmv_quiet) return;
+    if (s_fmv_quiet) { psx_fp_note_quiet(&s_fp); return; }
     /* First-divergence fingerprint + frame recorder also see device writes. */
     fp_record_mmio(addr, val, g_debug_last_store_pc);
     rec_event(REC_KIND_MMIO_W, addr, val, g_debug_last_store_pc,
@@ -9716,24 +9996,12 @@ static void handle_wtrace_ranges(int id, const char *json)
 
 /* ---- cyc_watch command handlers (see cyc_watch_observe above) ---- */
 
-/* cyc_watch — arm an anchor PC. {"pc":"0x...","n":16}. Clears the ring,
- * masks the anchor to physical, and starts recording. The Beetle side
- * (psx-beetle, added parent-side) implements the SAME command/spec. */
-static void handle_cyc_watch(int id, const char *json)
+/* Arm cyc_watch: clear the ring, mask the anchor(s) to physical, start
+ * recording. end_raw != 0 selects REGION mode (each entry = Δcycles A->B). */
+static void cyc_watch_arm(uint32_t raw, uint32_t end_raw, int n)
 {
-    char pcbuf[64];
-    if (!json_get_str(json, "pc", pcbuf, sizeof(pcbuf))) {
-        send_err(id, "cyc_watch requires pc");
-        return;
-    }
-    uint32_t raw = hex_to_u32(pcbuf);
-    int n = json_get_int(json, "n", 16);
     if (n < 1) n = 1;
     if (n > CYC_WATCH_RING_CAP) n = CYC_WATCH_RING_CAP;
-    /* Optional second anchor -> REGION mode: each entry = Δcycles of one A->B pass. */
-    char endbuf[64];
-    uint32_t end_raw = json_get_str(json, "end", endbuf, sizeof(endbuf)) ? hex_to_u32(endbuf) : 0u;
-
     /* Disarm first so the hot path can't sample mid-reset. */
     s_cyc_watch_armed = 0;
     s_cyc_watch_anchor_raw  = raw;
@@ -9748,6 +10016,22 @@ static void handle_cyc_watch(int id, const char *json)
     s_cyc_watch_last_cycle  = 0xFFFFFFFFFFFFFFFFull;
     memset(s_cyc_watch_ring, 0, sizeof(s_cyc_watch_ring));
     s_cyc_watch_armed = 1;
+}
+
+/* cyc_watch — arm an anchor PC. {"pc":"0x...","n":16}. Clears the ring,
+ * masks the anchor to physical, and starts recording. The Beetle side
+ * (psx-beetle, added parent-side) implements the SAME command/spec. */
+static void handle_cyc_watch(int id, const char *json)
+{
+    char pcbuf[64];
+    if (!json_get_str(json, "pc", pcbuf, sizeof(pcbuf))) {
+        send_err(id, "cyc_watch requires pc");
+        return;
+    }
+    /* Optional second anchor -> REGION mode: each entry = Δcycles of one A->B pass. */
+    char endbuf[64];
+    uint32_t end_raw = json_get_str(json, "end", endbuf, sizeof(endbuf)) ? hex_to_u32(endbuf) : 0u;
+    cyc_watch_arm(hex_to_u32(pcbuf), end_raw, json_get_int(json, "n", 16));
 
     send_fmt("{\"id\":%d,\"ok\":true,\"anchor\":\"0x%08X\","
              "\"anchor_phys\":\"0x%08X\",\"end\":\"0x%08X\",\"end_phys\":\"0x%08X\","
@@ -10315,11 +10599,12 @@ static void handle_wtrace_boot_stats(int id, const char *json)
     uint64_t newest = (s_wtrace_boot_total > 0) ? s_wtrace_boot_total - 1 : 0;
     send_fmt("{\"id\":%d,\"ok\":true,\"total\":%llu,\"stored\":%u,"
              "\"capacity\":%d,\"newest_seq\":%llu,\"ranges\":%d,"
-             "\"full\":%s}",
+             "\"full\":%s,\"env_ranges\":%d,\"env_error\":\"%s\"}",
              id, (unsigned long long)s_wtrace_boot_total,
              s_wtrace_boot_count, WRITE_TRACE_BOOT_CAP,
              (unsigned long long)newest, s_wtrace_boot_range_count,
-             (s_wtrace_boot_count >= WRITE_TRACE_BOOT_CAP) ? "true" : "false");
+             (s_wtrace_boot_count >= WRITE_TRACE_BOOT_CAP) ? "true" : "false",
+             s_wtrace_env_ranges, s_wtrace_env_error);
 }
 
 static void handle_wtrace_boot_clear(int id, const char *json)
@@ -10661,10 +10946,12 @@ static void handle_wtrace_trans_stats(int id, const char *json)
     uint64_t oldest = (total <= WRITE_TRACE_TRANS_CAP) ? 0 : total - WRITE_TRACE_TRANS_CAP;
     uint64_t newest = (total > 0) ? total - 1 : 0;
     send_fmt("{\"id\":%d,\"ok\":true,\"total\":%llu,\"capacity\":%d,"
-             "\"oldest_seq\":%llu,\"newest_seq\":%llu,\"ranges\":%d}",
+             "\"oldest_seq\":%llu,\"newest_seq\":%llu,\"ranges\":%d,"
+             "\"env_ranges\":%d,\"env_error\":\"%s\"}",
              id, (unsigned long long)total, WRITE_TRACE_TRANS_CAP,
              (unsigned long long)oldest, (unsigned long long)newest,
-             s_wtrace_trans_range_count);
+             s_wtrace_trans_range_count, s_wtrace_env_ranges,
+             s_wtrace_env_error);
 }
 
 static void handle_wtrace_trans_reset(int id, const char *json)
@@ -11393,18 +11680,75 @@ static void handle_quit(int id, const char *json)
 
 /* ---- Command dispatch table ---- */
 
-/* dispatch_stats: static hit vs. miss coverage summary */
+/* dispatch_stats: static hit vs. miss coverage summary. segment_miss_* are
+ * the static-game-text PCs that had a compiled row only in another segment
+ * and ran interpreted (docs/SEGMENT_AWARE_CODE.md §5.5; `segment_misses`). */
 static void handle_dispatch_stats(int id, const char *json)
 {
     (void)json;
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"static_hits\":%llu,"
              "\"miss_total\":%llu,"
-             "\"miss_unique\":%d}",
+             "\"miss_unique\":%d,"
+             "\"segment_miss_total\":%llu,"
+             "\"segment_miss_unique\":%u}",
              id,
              (unsigned long long)g_dispatch_static_hits,
              (unsigned long long)s_unknown_seq,
-             s_unknown_unique_count);
+             s_unknown_unique_count,
+             (unsigned long long)psx_segment_miss_total(),
+             psx_segment_miss_unique());
+}
+
+/* segment_misses: static game text entered at a PC whose physical word has a
+ * compiled row only in another segment (docs/SEGMENT_AWARE_CODE.md §5.5),
+ * kind "game": each ran interpreted. Kind "bios": a compiled BIOS window
+ * entered in another segment than its body's, with no segment variant; the
+ * home body ran (§5.4). The fix is a segment-qualified seed (§5.4) and a
+ * regeneration, in the game's or the BIOS's seeds by kind. {"tail":N}
+ * returns the last N ring entries in order; otherwise a per-PC summary,
+ * highest count first (at most 200 rows). */
+static void handle_segment_misses(int id, const char *json)
+{
+    int tail = json_get_int(json, "tail", 0);
+    const uint64_t total = psx_segment_miss_total();
+    const size_t BUF_SZ = 512 * 1024;
+    char *out = (char *)malloc(BUF_SZ);
+    if (!out) { send_err(id, "oom"); return; }
+    size_t pos = 0;
+    pos += snprintf(out + pos, BUF_SZ - pos,
+                    "{\"id\":%d,\"ok\":true,\"total\":%llu,\"unique\":%u,",
+                    id, (unsigned long long)total, psx_segment_miss_unique());
+    if (tail > 0) {
+        uint64_t avail = total < PSX_SEGMENT_MISS_RING_CAP ? total : PSX_SEGMENT_MISS_RING_CAP;
+        if ((uint64_t)tail > avail) tail = (int)avail;
+        pos += snprintf(out + pos, BUF_SZ - pos, "\"tail\":%d,\"entries\":[", tail);
+        for (int i = 0; i < tail && pos < BUF_SZ - 160; i++) {
+            PsxSegmentMissEntry e = psx_segment_miss_get(total - (uint64_t)tail + (uint64_t)i);
+            pos += snprintf(out + pos, BUF_SZ - pos,
+                            "%s{\"seq\":%llu,\"pc\":\"0x%08X\",\"home\":\"0x%08X\","
+                            "\"ra\":\"0x%08X\",\"sp\":\"0x%08X\",\"frame\":%u,"
+                            "\"kind\":\"%s\"}",
+                            i ? "," : "", (unsigned long long)e.seq, e.addr, e.home,
+                            e.ra, e.sp, e.frame, psx_segment_miss_kind_name(e.kind));
+        }
+    } else {
+        enum { kRows = 200 };
+        uint32_t addrs[kRows], homes[kRows], kinds[kRows];
+        uint64_t counts[kRows];
+        uint32_t n = psx_segment_miss_summary(addrs, homes, counts, kinds, kRows);
+        pos += snprintf(out + pos, BUF_SZ - pos, "\"summary\":[");
+        for (uint32_t i = 0; i < n && pos < BUF_SZ - 112; i++) {
+            pos += snprintf(out + pos, BUF_SZ - pos,
+                            "%s{\"pc\":\"0x%08X\",\"home\":\"0x%08X\",\"count\":%llu,"
+                            "\"kind\":\"%s\"}",
+                            i ? "," : "", addrs[i], homes[i], (unsigned long long)counts[i],
+                            psx_segment_miss_kind_name(kinds[i]));
+        }
+    }
+    pos += snprintf(out + pos, BUF_SZ - pos, "]}\n");
+    debug_server_send_line(out);
+    free(out);
 }
 
 /* dispatch_check: check if a specific address was ever dispatched */
@@ -11775,6 +12119,67 @@ static void handle_cd_read_log(int id, const char *json)
     send_fmt("]}\n");
 }
 
+/* disc_select: report the multi-disc roster, and optionally mount a different
+ * entry of it while the game runs.
+ *
+ * Without this the only disc-change mechanism is the CD-reinsert hotkey, which
+ * remounts the SAME image and so cannot answer a game asking for its other
+ * disc. It also makes multi-disc paths scriptable, which matters because the
+ * request usually sits behind menu navigation.
+ *
+ * Parameter "n" (optional int, 1-based): roster entry to mount. Omit it for a
+ * pure query. Selecting the already-mounted disc still cycles the tray, which
+ * is what a player pressing eject would get.
+ */
+static void handle_disc_select(int id, const char *json)
+{
+    int n = json_get_int(json, "n", 0);
+    int count = cdrom_disc_roster_count();
+    int ok = 1;
+
+    if (count == 0) {
+        send_fmt("{\"id\":%d,\"ok\":false,"
+                 "\"error\":\"no multi-disc roster registered\"}", id);
+        return;
+    }
+    /* Any supplied "n" is a select attempt, including an out-of-range one.
+     * Only an absent key (0) is a pure query, so a bad index reports the
+     * failure instead of passing as a successful read-back. */
+    if (n != 0) ok = cdrom_disc_select(n);
+
+    /* One buffer, one send: send_fmt terminates a line per call, so emitting
+     * the roster incrementally would split the response across lines. */
+    char buf[32 * 1024];
+    int w = snprintf(buf, sizeof(buf),
+                     "{\"id\":%d,\"ok\":%s,\"count\":%d,\"selected\":%d,"
+                     "\"discs\":[",
+                     id, ok ? "true" : "false", count, cdrom_disc_selected());
+    for (int i = 1; i <= count && w < (int)sizeof(buf); i++) {
+        char path_json[2048];
+        json_escape_string(path_json, sizeof(path_json),
+                           cdrom_disc_roster_path(i));
+        w += snprintf(buf + w, sizeof(buf) - (size_t)w, "%s\"%s\"",
+                      i > 1 ? "," : "", path_json);
+    }
+    if (w > (int)sizeof(buf) - 64) w = (int)sizeof(buf) - 64;
+    snprintf(buf + w, sizeof(buf) - (size_t)w,
+             "],\"has_disc\":%s,\"sectors\":%u,\"tracks\":%d}",
+             cdrom_has_disc() ? "true" : "false",
+             cdrom_mounted_sector_count(), cdrom_mounted_track_count());
+    send_fmt("%s", buf);
+}
+
+/* cd_reinsert: run the tray open/close cycle on the SAME image, which is what
+ * the reinsert hotkey does. Scripted access matters because the hotkey needs a
+ * focused window, so nothing could previously exercise the lid from a test. */
+static void handle_cd_reinsert(int id, const char *json)
+{
+    (void)json;
+    debug_force_cd_reinsert();
+    send_fmt("{\"id\":%d,\"ok\":true,\"has_disc\":%s}",
+             id, cdrom_has_disc() ? "true" : "false");
+}
+
 /* cdrom_instant_rate: get/set the 'instant' per-frame sector-IRQ budget
  * (step 3 tunable). Param "n" (optional int): new budget, clamped by
  * cdrom_set_instant_rate. Always returns the current value, so a no-arg
@@ -12107,7 +12512,8 @@ static void handle_overlay_loader_status(int id, const char *json)
             "\"reval_attempts\":%u,\"reval_crc_miss\":%u,\"last_reval_crc\":\"0x%08X\","
             "\"gen_fastpath\":%llu,\"range_links\":%d,\"range_index_overflow\":%d,"
             "\"lazy_manifests\":%d,\"lazy_manifest_overflow\":%d,"
-            "\"candidate_overflow\":%llu,\"pair_aliases\":%llu",
+            "\"candidate_overflow\":%llu,\"pair_aliases\":%llu,"
+            "\"segment_alias_interp\":%llu,\"segment_native\":%llu",
             r0v, r0w, r0lo, r0hi, r0crc, ratt, rmiss, rlast,
             (unsigned long long)overlay_loader_gen_fastpath(),
             overlay_loader_range_link_count(),
@@ -12115,7 +12521,9 @@ static void handle_overlay_loader_status(int id, const char *json)
             overlay_loader_lazy_manifest_count(),
             overlay_loader_lazy_manifest_overflow(),
             (unsigned long long)overlay_loader_candidate_overflow(),
-            (unsigned long long)overlay_loader_pair_aliases());
+            (unsigned long long)overlay_loader_pair_aliases(),
+            (unsigned long long)overlay_loader_segment_alias_interp(),
+            (unsigned long long)overlay_loader_segment_native());
         uint64_t nd=0, ni=0, sn=0, ss=0, sc=0, sx=0;
         psx_interrupt_delivery_diag(&nd, &ni, &sn, &ss, &sc, &sx);
         n += snprintf(buf + n, sizeof(buf) - n,
@@ -12178,6 +12586,79 @@ static void handle_overlay_candidates(int id, const char *json)
         : overlay_loader_dump_candidates(cbuf, (int)sizeof(cbuf));
     if (len < 0) len = 0;
     send_fmt("{\"id\":%d,\"ok\":true,\"candidates\":%s}\n", id, cbuf);
+}
+
+/* overlay_static_entries: always-on per-entry dispatch counts of the
+ * build-time static overlay dispatcher (generated overlays_static.c). The
+ * global static_hits in overlay_loader_status cannot say WHICH image ran; this
+ * can (a mod engine linked at 0x80780000 versus a menu overlay at 0x800BF800).
+ * Optional addr_lo/addr_hi restrict the sums and the list to [lo, hi) code
+ * addresses (segment bits ignored); `limit` (default 64, max 1024) lists the
+ * busiest entries in the range, most hits first. */
+static void handle_overlay_static_entries(int id, const char *json)
+{
+#ifdef PSX_HAS_OVERLAY_DISPATCH
+    extern uint32_t psx_overlay_static_entry_count(void);
+    extern int psx_overlay_static_entry_stats(uint32_t index, uint32_t *addr,
+                                              uint32_t *variants, uint64_t *hits);
+    typedef struct { uint32_t addr, variants; uint64_t hits; } TopEntry;
+    char lo_str[32], hi_str[32];
+    uint32_t lo = 0u, hi = 0x20000000u;
+    if (json_get_str(json, "addr_lo", lo_str, sizeof(lo_str)))
+        lo = hex_to_u32(lo_str) & 0x1FFFFFFFu;
+    if (json_get_str(json, "addr_hi", hi_str, sizeof(hi_str)))
+        hi = hex_to_u32(hi_str) & 0x1FFFFFFFu;
+    int limit = json_get_int(json, "limit", 64);
+    if (limit < 0) limit = 0;
+    if (limit > 1024) limit = 1024;
+    TopEntry *top = (TopEntry *)calloc((size_t)(limit ? limit : 1), sizeof(TopEntry));
+    char *out = (char *)malloc((size_t)limit * 96u + 512u);
+    if (!top || !out) { free(top); free(out); send_err(id, "oom"); return; }
+    const uint32_t n = psx_overlay_static_entry_count();
+    uint64_t total_hits = 0, range_hits = 0;
+    uint32_t range_entries = 0, range_variants = 0, range_hit_entries = 0;
+    int kept = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t addr = 0, variants = 0;
+        uint64_t hits = 0;
+        if (!psx_overlay_static_entry_stats(i, &addr, &variants, &hits)) break;
+        total_hits += hits;
+        const uint32_t phys = addr & 0x1FFFFFFFu;
+        if (phys < lo || phys >= hi) continue;
+        range_entries++;
+        range_variants += variants;
+        range_hits += hits;
+        if (!hits) continue;
+        range_hit_entries++;
+        /* Insertion into the busiest-first list. */
+        int pos = kept < limit ? kept : limit;
+        while (pos > 0 && top[pos - 1].hits < hits) {
+            if (pos < limit) top[pos] = top[pos - 1];
+            pos--;
+        }
+        if (pos < limit) {
+            top[pos].addr = addr; top[pos].variants = variants; top[pos].hits = hits;
+            if (kept < limit) kept++;
+        }
+    }
+    int w = snprintf(out, 512u,
+        "{\"id\":%d,\"ok\":true,\"entries\":%u,\"total_hits\":%llu,"
+        "\"range_lo\":\"0x%08X\",\"range_hi\":\"0x%08X\",\"range_entries\":%u,"
+        "\"range_variants\":%u,\"range_hits\":%llu,\"range_hit_entries\":%u,\"top\":[",
+        id, n, (unsigned long long)total_hits, lo, hi, range_entries,
+        range_variants, (unsigned long long)range_hits, range_hit_entries);
+    for (int i = 0; i < kept; i++)
+        w += snprintf(out + w, 96u, "%s{\"addr\":\"0x%08X\",\"variants\":%u,\"hits\":%llu}",
+                      i ? "," : "", top[i].addr, top[i].variants,
+                      (unsigned long long)top[i].hits);
+    snprintf(out + w, 8u, "]}");
+    debug_server_send_line(out);
+    free(out);
+    free(top);
+#else
+    (void)json;
+    send_err(id, "no static overlay dispatcher linked (GAME_OVERLAY_STATIC_C unset)");
+#endif
 }
 
 /* overlay_native_ring: dump the always-on ring of native overlay calls + the
@@ -13605,6 +14086,7 @@ static const CmdEntry s_commands[] = {
     { "ws_hud_mode",       handle_ws_hud_mode },
     { "kernel_bless",      handle_kernel_bless },
     { "ws_aspect",         handle_ws_aspect },
+    { "display_aspect",    handle_display_aspect },
     { "ws_nw",             handle_ws_nw },
     { "scanline",          handle_scanline },
     { "ws_backdrop_ring",  handle_ws_backdrop_ring },
@@ -13625,6 +14107,9 @@ static const CmdEntry s_commands[] = {
     { "frame_perf",        handle_frame_perf },
     { "gl_ws_ablate",      handle_gl_ws_ablate },
     { "gl_interp",         handle_gl_interp },
+    { "render_pass_stats", handle_render_pass_stats },
+    { "render_pass_dump",  handle_render_pass_dump },
+    { "render_pass_refuse", handle_render_pass_refuse },
     { "gl_wide_fast",      handle_gl_wide_fast },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },
@@ -13693,6 +14178,7 @@ static const CmdEntry s_commands[] = {
     { "fntrace_dump",      handle_fntrace_dump },
     { "unknown_dispatch_log", handle_unknown_dispatch_log },
     { "bioscall_dump",     handle_bioscall_dump },
+    { "guest_tty_dump",    handle_guest_tty_dump },
     { "bios_info",         handle_bios_info },
     { "hle_dump",          handle_hle_dump },
     { "card_trace_dump",   handle_card_trace_dump },
@@ -13804,6 +14290,8 @@ static const CmdEntry s_commands[] = {
     { "display_ring_stats", handle_display_ring_stats },
     { "dump_buffer",       handle_dump_buffer },
     { "wide_full",         handle_wide_full },
+    { "video_info",        handle_video_info },
+    { "screenshot_wide_hires", handle_screenshot_wide_hires },
     { "wide_shot",         handle_wide_shot },
     { "gpu_opcodes",       handle_gpu_opcodes },
     { "gpu_ring_stats",    handle_gpu_ring_stats },
@@ -13819,6 +14307,7 @@ static const CmdEntry s_commands[] = {
     { "gte_latch_dump",    handle_gte_latch_dump },
     { "quit",              handle_quit },
     { "dispatch_stats",    handle_dispatch_stats },
+    { "segment_misses",    handle_segment_misses },
     { "dispatch_check",    handle_dispatch_check },
     { "dispatch_tail",     handle_dispatch_tail },
     { "card_mgr_trace",    handle_card_mgr_trace },
@@ -13832,8 +14321,11 @@ static const CmdEntry s_commands[] = {
     { "fn_exit_dump",      handle_fn_exit_dump },
     { "overlay_dump",      handle_overlay_dump },
     { "cd_read_log",       handle_cd_read_log },
+    { "disc_select",       handle_disc_select },
+    { "cd_reinsert",       handle_cd_reinsert },
     { "overlay_loader_status", handle_overlay_loader_status },
     { "overlay_candidates",   handle_overlay_candidates },
+    { "overlay_static_entries", handle_overlay_static_entries },
     { "overlay_native_ring",  handle_overlay_native_ring },
     { "overlay_irq_suppress_on",  handle_overlay_irq_suppress_on },
     { "overlay_irq_suppress_off", handle_overlay_irq_suppress_off },
@@ -13926,6 +14418,70 @@ void debug_server_set_cpu(CPUState *cpu)
     debug_cpu_ptr = cpu;
 }
 
+/* Parse PSX_WTRACE_BOOT_RANGES (see debug_server_init). Returns the number of
+ * ranges applied; on refusal applies none and records the reason. */
+static int wtrace_apply_env_ranges(const char *spec) {
+    uint32_t lo[WTRACE_ENV_MAX_RANGES], hi[WTRACE_ENV_MAX_RANGES];
+    int n = 0;
+    s_wtrace_env_ranges = 0;
+    s_wtrace_env_error[0] = '\0';
+    if (!spec || !*spec) return 0;
+    for (const char *p = spec;;) {
+        char *end = NULL;
+        unsigned long a, b;
+        while (*p == ' ' || *p == '\t') p++;
+        if (n == WTRACE_ENV_MAX_RANGES) {
+            snprintf(s_wtrace_env_error, sizeof(s_wtrace_env_error),
+                     "more than %d ranges", WTRACE_ENV_MAX_RANGES);
+            break;
+        }
+        a = strtoul(p, &end, 16);
+        if (end == p) goto malformed;
+        p = end;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '-') goto malformed;
+        p++;
+        while (*p == ' ' || *p == '\t') p++;
+        b = strtoul(p, &end, 16);
+        if (end == p) goto malformed;
+        p = end;
+        lo[n] = (uint32_t)a & 0x1FFFFFFFu;
+        hi[n] = (uint32_t)b & 0x1FFFFFFFu;
+        if (hi[n] <= lo[n]) {
+            snprintf(s_wtrace_env_error, sizeof(s_wtrace_env_error),
+                     "range %d: hi must exceed lo (physical)", n + 1);
+            break;
+        }
+        n++;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') break;
+        if (*p != ',') goto malformed;
+        p++;
+        continue;
+malformed:
+        snprintf(s_wtrace_env_error, sizeof(s_wtrace_env_error),
+                 "range %d: expected hex lo-hi", n + 1);
+        break;
+    }
+    if (s_wtrace_env_error[0]) {
+        fprintf(stdout, "psxrecomp: PSX_WTRACE_BOOT_RANGES refused (%s); "
+                        "no extra write-ring ranges armed\n", s_wtrace_env_error);
+        fflush(stdout);
+        return 0;
+    }
+    /* The reserved slots hold every accepted spec by construction. */
+    for (int i = 0; i < n; i++) {
+        s_wtrace_boot_ranges[s_wtrace_boot_range_count].lo = lo[i];
+        s_wtrace_boot_ranges[s_wtrace_boot_range_count].hi = hi[i];
+        s_wtrace_boot_range_count++;
+        s_wtrace_trans_ranges[s_wtrace_trans_range_count].lo = lo[i];
+        s_wtrace_trans_ranges[s_wtrace_trans_range_count].hi = hi[i];
+        s_wtrace_trans_range_count++;
+    }
+    s_wtrace_env_ranges = n;
+    return n;
+}
+
 void debug_server_init(int port)
 {
     if (port > 0) s_port = port;
@@ -13978,6 +14534,24 @@ void debug_server_init(int port)
                 }
             }
         }
+        /* PSX_CYC_WATCH="<pc>" or "<pc>-<end>" (region mode) arms cyc_watch
+         * before the first guest instruction, with PSX_CYC_WATCH_N hits
+         * (default 16). Boot anchors (reset, the kernel copy, the first
+         * syscalls, the shell) pass before any TCP arm can land. psx-beetle
+         * reads the same variables, so one boot of each backend gives the
+         * same anchor from cycle 0 (tools/cycle_compare.py --no-arm). */
+        {
+            const char *cw = getenv("PSX_CYC_WATCH");
+            if (cw && *cw) {
+                char *e = NULL;
+                uint32_t pc = (uint32_t)strtoul(cw, &e, 0);
+                uint32_t end = (e && *e == '-') ? (uint32_t)strtoul(e + 1, NULL, 0) : 0u;
+                const char *ns = getenv("PSX_CYC_WATCH_N");
+                cyc_watch_arm(pc, end, (ns && *ns) ? (int)strtol(ns, NULL, 0) : 16);
+                fprintf(stdout, "psxrecomp: cyc_watch armed from boot pc=0x%08X end=0x%08X n=%u\n",
+                        pc, end, s_cyc_watch_max_hits);
+            }
+        }
     }
 
 #ifdef _WIN32
@@ -13991,6 +14565,12 @@ void debug_server_init(int port)
         fprintf(stdout, "psxrecomp: debug server socket() FAILED\n");
         return;
     }
+#ifdef _WIN32
+    /* Winsock sockets are inheritable by default: child processes (e.g. the
+     * overlay autocompile's cmd.exe/python) inherit this listener and keep the
+     * debug port bound after the game exits, so the next launch cannot bind. */
+    SetHandleInformation((HANDLE)s_listen, HANDLE_FLAG_INHERIT, 0);
+#endif
 
     int yes = 1;
     setsockopt(s_listen, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
@@ -14322,6 +14902,16 @@ void debug_server_init(int port)
     s_wtrace_trans_ranges[9].hi = 0x00097430u;
     s_wtrace_trans_range_count = 10;
 #endif
+
+    /* Launch-time extra ranges for the boot + transition write rings, so any
+     * title can have a physical window recorded from the first guest write
+     * without a per-title rebuild (the always-on catch-all ring can wrap before
+     * a late probe reads it). Format: "lo-hi[,lo-hi...]", hex (0x optional),
+     * masked to physical, hi > lo, at most WTRACE_ENV_MAX_RANGES. Appended after
+     * the built-in defaults into slots reserved for them. The spec is applied
+     * whole or not at all: a malformed item or too many items refuses it, and
+     * wtrace_boot_stats / wtrace_trans_stats report env_ranges and env_error. */
+    wtrace_apply_env_ranges(getenv("PSX_WTRACE_BOOT_RANGES"));
 
     /* Tier 1: heap-allocate MMIO trace ring buffer (2 MB). */
     if (!s_mmio_trace) {

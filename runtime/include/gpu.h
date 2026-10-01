@@ -27,6 +27,9 @@ void     gpu_set_gp0_source(uint32_t addr); /* diagnostic source for next GP0 wo
  * depth-sorted world packets without guessing from primitive shape. */
 void     gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count);
 void     gpu_vblank_tick(void);        /* Toggle LCF, called at each simulated vblank */
+/* Video standard before the first GP1(08h) (disc region: 1 = PAL). Applies
+ * now and on every later gpu_init(); GP1(00h) still resets to NTSC. */
+void     gpu_set_power_on_video_mode(int pal);
 
 /* Display presentation accessors (Phase 3). */
 const uint16_t* gpu_get_vram(void);    /* Pointer to 1024x512 16-bit VRAM */
@@ -43,6 +46,10 @@ typedef struct {
 } GpuDisplayInfo;
 
 void gpu_get_display_info(GpuDisplayInfo* out);
+/* Render-pass GPU register checkpoint (render_pass.c). One at a time. */
+int gpu_pass_checkpoint_save(void);
+void gpu_pass_checkpoint_restore(void);
+uint64_t gpu_pass_state_hash(void);
 
 /* Perspective-correct UV arming rate, per condition. armed/attempts is the
  * real perspective coverage: attempts counts only textured triangles, so it is
@@ -224,6 +231,8 @@ void psx_ws_sprite_tag(struct CPUState* cpu);
 int  ws_native_wide_active(void);
 int  ws_nw_extra(void);
 int  ws_nw_present_width(void);
+/* Display width (native px) the native-wide margins are derived from. */
+int  gpu_ws_display_width(void);
 void gpu_ws_set_netplay_local_viewport(int enabled, int slot);
 int  gpu_ws_netplay_local_viewport_base_x(void);
 int  gpu_ws_netplay_local_viewport_width(void);
@@ -248,6 +257,14 @@ void gpu_ws_set_vxrange_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_depth_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_plane_nx_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_xclip_load_sites(const uint32_t *sites, int nsites);
+/* Interpreter copies of the explicit branch kinds ([widescreen.cull]
+ * bltz_sites, bgez_sites, branch_keep_sites) and of clip_edge_x_load_sites
+ * with its screen width (clip_edge_width). Native code compiles them in. */
+void gpu_ws_set_branch_cull_sites(const uint32_t *bltz, int nbltz,
+                                  const uint32_t *bgez, int nbgez,
+                                  const uint32_t *keep, int nkeep);
+void gpu_ws_set_clip_edge_x_load_sites(const uint32_t *sites, int nsites,
+                                       uint32_t width);
 void gpu_ws_set_cull_keep_sites(const uint32_t *addresses,
                                 const uint32_t *expected,
                                 const uint32_t *results, int nsites);
@@ -281,6 +298,11 @@ int  psx_ws_is_cull_plane_nx_site(uint32_t pc);
 int32_t  psx_ws_plane_nx(int32_t nx);
 int  psx_ws_is_cull_xclip_load_site(uint32_t pc);
 uint32_t psx_ws_xclip_bound(uint32_t vanilla);
+int  psx_ws_is_cull_bltz_site(uint32_t pc);
+int  psx_ws_is_cull_bgez_site(uint32_t pc);
+int  psx_ws_is_cull_branch_keep_site(uint32_t pc);
+int  psx_ws_is_cull_clip_edge_x_load_site(uint32_t pc);
+uint32_t psx_ws_clip_edge_width(void);
 uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced);
 int psx_ws_cull_keep_site(uint32_t pc, uint32_t instr, uint32_t vanilla,
                           uint32_t *out);
@@ -311,6 +333,13 @@ int  psx_ws_cull_sltiu(uint32_t sx, uint32_t imm);
 int  psx_ws_cull_slti(uint32_t sx, uint32_t imm);
 int  psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm);
 int  psx_ws_cull_bltz(uint32_t v);
+/* [widescreen.cull] bgez_sites: `bgez SX, keep` keeps while SX >= -margin
+ * (the exact partner of bltz_sites; see ws_cull_edge.h). Identity at 4:3. */
+int  psx_ws_cull_bgez(uint32_t v);
+/* [widescreen.cull] clip_edge_x_load_sites: a loaded screen-X clip bound of 0
+ * becomes -margin and one of `w` becomes w+margin; interior bounds and 4:3
+ * are unchanged (see ws_cull_edge.h). */
+uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w);
 int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm);
 /* True if a run of instruction words carries the screen-extent reject signature
  * (a width compare AND a height compare from the configured immediate sets).
@@ -349,6 +378,9 @@ void gpu_ws_set_gameplay_state_gate(uint32_t addr,
  * outer-third screen-space HUD primitives out to the true wide-frame corners
  * (they otherwise sit inset by the reveal). Runtime-only. Off by default. */
 void gpu_ws_set_nw_hud_corners(int on);
+void gpu_ws_tag_hud_primitive(uint32_t primitive, int edge);
+void gpu_ws_tag_world_primitive(uint32_t primitive, int is_world);
+void gpu_ws_set_adaptive_backdrop_preload(int enabled);
 /* Explicit native-wide HUD packet anchor from a trusted title plugin.
  * `prim` is the address of the PsyQ P_TAG word; the drawn command starts at
  * prim+4. anchor: -1 = left, 0 = center, +1 = right. */

@@ -71,6 +71,11 @@ typedef struct PsxLobbyOnlinePlayer {
     /* The title that player is browsing for; rows of other titles are
      * dropped at parse time when this client has a game identity. */
     char game_name[PSX_LOBBY_NAME_LEN];
+    /* Opaque, stable id for the ACCOUNT behind this connection; "" for a
+     * guest. The server's own row key, published so a client-side block
+     * list can survive the other player reconnecting or renaming. A key,
+     * never a label: nothing renders it. */
+    char account[PSX_LOBBY_ID_LEN];
 } PsxLobbyOnlinePlayer;
 #define PSX_LOBBY_MAX_ONLINE 64
 
@@ -89,12 +94,18 @@ typedef struct PsxLobbyMember {
     int  bios_can_openbios;   /* linked OpenBIOS backend */
     int  bios_can_scph1001;   /* linked retail + validated dump available */
     int  bios_prefer_openbios; /* explicit OpenBIOS pick (not retail) */
+    /* CRC-32 of the retail image this seat would boot (bios_offer.retail_crc);
+     * 0 = not sent (older client). See netplay_bios_settle.h. */
+    uint32_t bios_retail_crc;
     /* Peer memory-card offer from set_ready memcard_offer (0 if legacy). */
     int  memcard_offer_valid;
     int  memcard_has_card;    /* a slot-1 card is enabled locally */
     int  memcard_share;       /* peer opted in to bring it to the match */
     /* Country (alpha-2) from the server's GeoIP; "" unknown. */
     char country[4];
+    /* Account key behind this seat; "" for a guest. See
+     * PsxLobbyOnlinePlayer.account. */
+    char account[PSX_LOBBY_ID_LEN];
 } PsxLobbyMember;
 
 /*
@@ -106,6 +117,9 @@ typedef struct PsxLobbyBiosOffer {
     int  can_openbios;
     int  can_scph1001;
     int  prefer_openbios; /* 1 = OpenBIOS selected; 0 = retail / willing SCPH */
+    /* CRC-32 of the retail file this peer would boot for a retail match;
+     * 0 when can_scph1001 is 0. The settle compares these, not the token. */
+    uint32_t retail_crc;
 } PsxLobbyBiosOffer;
 
 /*
@@ -128,6 +142,18 @@ typedef struct PsxLobbyChatMsg {
     char     player_id[PSX_LOBBY_ID_LEN];
     char     from[PSX_LOBBY_NAME_LEN];
     char     text[PSX_LOBBY_CHAT_TEXT_LEN];
+    /* The SERVER's id for this line, and what psx_lobby_report_chat names.
+     * Empty for a system line, a locally generated one, and anything from a
+     * server too old to assign one -- none of which can be reported, because
+     * there is no referent both sides agree on.
+     *
+     * A report carries this and NOT the text: the server writes down what it
+     * relayed under this id. Sending the words would let a client fabricate a
+     * message and have somebody sanctioned for it. */
+    char     mid[40];
+    /* Account key of the sender; "" for a guest or a system line. What an
+     * ignore/block keys on, so it outlives a rename. */
+    char     account[PSX_LOBBY_ID_LEN];
     int      is_local;
     int      is_system;
     uint32_t seq;
@@ -161,8 +187,12 @@ typedef struct PsxLobbyMatchCaps {
      * so a toggle racing the start cannot split the room. */
     int  guest_memcard_active;
     char language[PSX_LOBBY_LANG_LEN];
-    /* Settled match BIOS: "openbios" | "scph1001" | "" (unset / legacy). */
+    /* Settled match BIOS: "openbios" | "scph1001" | "" (unset / legacy).
+     * "scph1001" means "the retail image named by session_bios_crc". */
     char session_bios[16];
+    /* Retail match: CRC-32 of the image every peer boots. 0 = not sent (an
+     * older host); peers then accept any retail dump, as before. */
+    uint32_t session_bios_crc;
 } PsxLobbyMatchCaps;
 
 typedef struct PsxLobbyJoinInfo {
@@ -193,7 +223,9 @@ typedef struct PsxLobbyJoinInfo {
     /* Launch: the host watches from the gallery but runs the match from
      * session slot 0 (pad muted); player seats sit at lobby seat + 1. */
     int      host_spectates;
-    char     last_error[64]; /* need_password | bad_password | … */
+    /* A server code (need_password | bad_password | …) or, from
+     * psx_lobby_set_last_error, one sentence the launcher shows as is. */
+    char     last_error[192];
 } PsxLobbyJoinInfo;
 
 /* Default URL when PSX_NET_LOBBY_URL unset. Order:
@@ -400,6 +432,20 @@ void psx_lobby_seat_swap_clear(void);
 
 /* Lobby chat. send: 0 when queued (the line appears via the server echo).
  * count/get read the ring, oldest first; cleared on create/join/leave. */
+/* Report chat lines for moderation. Same contract on every console -- the
+ * frame is built by recomp-net (recomp_net/chat_report.h), which is also where
+ * the RNET_REPORT_* categories live; this only says where we are and sends it.
+ *
+ * `mids` are PsxLobbyChatMsg.mid values, several at once because harassment is
+ * usually a burst rather than a line. Entries with an empty id are skipped.
+ * The text is never sent: see PsxLobbyChatMsg.mid.
+ *
+ * 0 when handed to the server, which is not the same as accepted -- it refuses
+ * an expired line, a guest's line, your own, and anything over the rate
+ * limit. */
+int  psx_lobby_report_chat(const char *const *mids, int mid_count,
+                           const char *reason, const char *note);
+
 int  psx_lobby_send_chat(const char *text);
 
 /* Server chat: per-game, outside any room (op server_chat). Its own ring,
@@ -412,14 +458,22 @@ int  psx_lobby_chat_get(int index, PsxLobbyChatMsg *out);
 void psx_lobby_chat_clear(void);
 
 /*
- * Settle session BIOS from seated peers' bios_offer (+ local offer):
- *   OpenBIOS if anyone cannot run SCPH-1001 (missing offer ⇒ cannot);
- *   else SCPH-1001 when the host prefers retail and every peer can;
- *   else OpenBIOS if anyone prefers OpenBIOS; else SCPH-1001.
- * Host preference wins over guest OpenBIOS picks when all can SCPH.
- * Writes "openbios" or "scph1001" into out. Returns 0 on success.
+ * Settle session BIOS from seated peers' bios_offer (+ local offer), by the
+ * rule in netplay_bios_settle.h: retail only when every seat offers the same
+ * retail image CRC; else OpenBIOS when every seat links it.
+ * Returns 0 and writes "openbios" or "scph1001" into out (and the retail CRC
+ * into *out_crc, 0 for OpenBIOS). Returns 1 when no BIOS suits every seat:
+ * out is "", and why (when non-NULL) says which images differ; the host must
+ * not start. Returns -1 on bad arguments.
  */
-int  psx_lobby_settle_session_bios(char *out, size_t out_cap);
+int  psx_lobby_settle_session_bios(char *out, size_t out_cap, uint32_t *out_crc,
+                                   char *why, size_t why_cap);
+
+/*
+ * Put one sentence on the launcher's status line (through last_error, which
+ * the launcher shows as "Lobby error: <text>"). NULL or "" clears it.
+ */
+void psx_lobby_set_last_error(const char *text);
 
 /*
  * Host: ask server to broadcast launch. When match_caps is non-NULL and valid,
@@ -437,6 +491,130 @@ void psx_lobby_clear_launch_pending(void);
 /* After soft-return / rematch: allow waiting-room ICE/UDP RTT probes again.
  * Launch suspends them so they cannot steal match ICE signaling. */
 void psx_lobby_resume_waiting_room_rtt(void);
+
+/*
+ * Tell the server which accounts this player has blocked.
+ *
+ * ';'-separated opaque account ids, replacing the whole set -- the client's
+ * own file (recomp-ui moderation.ini) is the authority, so an unblock needs
+ * no separate op. NULL/"" clears.
+ *
+ * Sent to the SERVER rather than applied only here, because two of the three
+ * things a block has to do cannot be done from this side: the matchmaker must
+ * not pair the two, and the blocked player must not see or be able to join
+ * the blocker's room. A client can hide what it was sent; it cannot know it
+ * was blocked by somebody else, and that is the direction that matters.
+ *
+ * The server holds the list for the life of a connection and never persists
+ * it; recomp-ui re-sends it on every reconnect.
+ */
+int  psx_lobby_set_blocks(const char *accounts);
+
+/* -- Automatch --------------------------------------------------------------
+ *
+ * Server-run pairing: the player asks for a match and the SERVER creates the
+ * room, is its host, and owns its match_caps from a named ruleset. Protocol:
+ * recomp-net-server docs/AUTOMATCH.md. Everything downstream of the pairing
+ * is the ordinary `joined` / `lobby_update` / `launch` path already in this
+ * file, so this adds a queue and an accept gate and nothing else.
+ *
+ * Requires a signed-in account: the accept gate charges a dodge cooldown, and
+ * a cost that reconnecting erases is not a cost.
+ *
+ * Same shape as the SNES client (snes_lobby_client.h), on purpose: the host
+ * adapter in main.cpp is then a one-line translation per entry point.
+ */
+#define PSX_LOBBY_MAX_RULESETS 8
+#define PSX_LOBBY_RULESET_ID_LEN 48
+#define PSX_LOBBY_RULESET_LABEL_LEN 64
+#define PSX_LOBBY_CAPS_SUMMARY_LEN 128
+
+/* One queue type this server offers for this title. */
+typedef struct PsxLobbyRuleset {
+    char id[PSX_LOBBY_RULESET_ID_LEN];
+    char label[PSX_LOBBY_RULESET_LABEL_LEN];
+    /* Server-derived one-liner ("Delay 2 - Rollback on"). Derived from the
+     * caps rather than authored, so it cannot drift from what the match
+     * runs. The caps themselves arrive with `joined` like any host's. */
+    char caps_summary[PSX_LOBBY_CAPS_SUMMARY_LEN];
+    /* Empty = any release may queue (still only pooling with its own). */
+    char game_version[PSX_LOBBY_VERSION_LEN];
+    int  max_slots;
+} PsxLobbyRuleset;
+
+/* Matches RECOMP_LAUNCHER_AUTOMATCH_* so the host layer can hand these
+ * straight to the launcher without a translation table that could drift. */
+enum {
+    PSX_LOBBY_AUTOMATCH_IDLE = 0,
+    PSX_LOBBY_AUTOMATCH_QUEUED = 1,
+    PSX_LOBBY_AUTOMATCH_FOUND = 2,
+    PSX_LOBBY_AUTOMATCH_ACCEPTED = 3,
+    PSX_LOBBY_AUTOMATCH_FAILED = 4
+};
+
+/* The offer on the table while state is FOUND. */
+typedef struct PsxLobbyAutomatchFound {
+    char opponent[PSX_LOBBY_NAME_LEN];
+    /* Discord @username: display names are not unique, so this is the
+     * disambiguator. "" when the server did not say. */
+    char opponent_username[PSX_LOBBY_NAME_LEN];
+    char opponent_country[4];
+    char ruleset_id[PSX_LOBBY_RULESET_ID_LEN];
+    char ruleset_label[PSX_LOBBY_RULESET_LABEL_LEN];
+    int  est_rtt_ms;      /* the pair's estimate: rtt_a + rtt_b; <0 unknown */
+    int  accept_secs;     /* seconds left to answer, recomputed per read */
+} PsxLobbyAutomatchFound;
+
+/* Ask the server what queues it offers for this title. Answered into
+ * psx_lobby_automatch_ruleset_count/get; 0 of them means automatch is off
+ * here. Refuses to re-send while one is outstanding. */
+int  psx_lobby_automatch_request_rulesets(void);
+/* 1 once the server has answered with at least one ruleset. Not having
+ * asked yet is "no": the button must not be offered on an assumption. */
+int  psx_lobby_automatch_available(void);
+int  psx_lobby_automatch_ruleset_count(void);
+int  psx_lobby_automatch_ruleset_get(int index, PsxLobbyRuleset *out);
+
+/*
+ * Join the queue. `ruleset_id` NULL/"" takes the first one.
+ *
+ * `mods_enabled` is the caller's assertion that a SIM-AFFECTING mod feature is
+ * on locally, beyond whatever the ruleset itself imposes. The server refuses a
+ * true with mods_not_pooled and cannot check it -- the assertion exists so a
+ * modified client makes a deliberate false statement rather than exploiting
+ * an omission (AUTOMATCH.md 5). The host layer decides it; this file only
+ * carries it. `mod_exempt` is ';'-separated evidence for cosmetic exemptions
+ * (NULL or "" = none), sent as a JSON array for the server to check.
+ *
+ * 0 = sent. <0 = refused locally (not connected, no fingerprint, already
+ * queued). A server refusal arrives asynchronously as state FAILED with a
+ * reason in psx_lobby_automatch_error().
+ */
+int  psx_lobby_automatch_queue(const char *ruleset_id, int mods_enabled,
+                               const char *mod_exempt);
+int  psx_lobby_automatch_cancel(void);
+int  psx_lobby_automatch_state(void);
+int  psx_lobby_automatch_queued_secs(void);
+int  psx_lobby_automatch_pool(void);
+int  psx_lobby_automatch_found_get(PsxLobbyAutomatchFound *out);
+/* accept != 0 accepts; 0 declines and takes the dodge strike. */
+int  psx_lobby_automatch_accept(int accept);
+/*
+ * Non-zero while the room this client is seated in was created by AUTOMATCH.
+ *
+ * A human-hosted room is somebody's room: it survives the match, and staying
+ * seated is how a rematch happens. An automatch room is the server's, it is
+ * created at both-accept and is not joinable by anyone, and there is no host
+ * to rematch with -- so staying in it leaves the player parked in a room that
+ * can never fill, and the server refuses their next ticket with
+ * `already_in_lobby`. Cleared by leaving, and by anything else that ends the
+ * seating.
+ */
+int  psx_lobby_automatch_room(void);
+/* Refuse a queue locally, with the reason the player sees. For when the HOST
+ * already knows the server would bounce the ticket. */
+void psx_lobby_automatch_refuse_local(const char *why);
+const char *psx_lobby_automatch_error(void);
 
 #ifdef __cplusplus
 }

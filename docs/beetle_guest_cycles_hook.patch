@@ -1,0 +1,84 @@
+diff --git a/libretro.cpp b/libretro.cpp
+index 0924113d..5258d66e 100644
+--- a/libretro.cpp
++++ b/libretro.cpp
+@@ -514,6 +514,13 @@ psxrecomp_fntrace_cb_t g_psxrecomp_fntrace_cb = NULL;
+ psxrecomp_cdcmd_cb_t   g_psxrecomp_cdcmd_cb   = NULL;
+ psxrecomp_rtrace_cb_t  g_psxrecomp_rtrace_cb  = NULL;
+ psxrecomp_irq_cb_t     g_psxrecomp_irq_cb     = NULL;
++psxrecomp_pc_cb_t      g_psxrecomp_pc_cb      = NULL;
++uint64_t               psxrecomp_guest_cycle_base = 0;
++
++extern "C" unsigned long long beetle_core_get_guest_cycles(void)
++{
++   return (unsigned long long)psxrecomp_guest_cycle_base;
++}
+ 
+ MultiAccessSizeMem<512 * 1024, uint32, false> *BIOSROM = NULL;
+ MultiAccessSizeMem<65536, uint32, false> *PIOMem = NULL;
+@@ -1277,6 +1284,9 @@ static void PSX_Power(void)
+    PSX_PRNG.c = 6543217;
+    PSX_PRNG.lcgo = 0xDEADBEEFCAFEBABEULL;
+ 
++   /* PSXRecomp oracle: the guest clock restarts at power-on. */
++   psxrecomp_guest_cycle_base = 0;
++
+    cd_warned_slow = false;
+ 
+    memset(MainRAM->data32, 0, 2048 * 1024);
+@@ -4825,6 +4835,10 @@ void retro_run(void)
+ 
+    assert(timestamp);
+ 
++   /* PSXRecomp oracle: fold this frame's CPU timestamp into the absolute
++    * guest clock before the per-frame timestamp rebase below. */
++   psxrecomp_guest_cycle_base += (uint32_t)timestamp;
++
+    ForceEventUpdates(timestamp);
+ 
+    espec->SoundBufSize = IntermediateBufferPos;
+diff --git a/mednafen/psx/cpu.cpp b/mednafen/psx/cpu.cpp
+index cbfd20dc..d1789712 100644
+--- a/mednafen/psx/cpu.cpp
++++ b/mednafen/psx/cpu.cpp
+@@ -709,6 +709,11 @@ pscpu_timestamp_t PS_CPU::RunReal(pscpu_timestamp_t timestamp_in)
+    }
+ #endif
+ 
++   /* PSXRecomp oracle hook: per-instruction PC + absolute guest cycle,
++    * sampled before this instruction's fetch is charged. */
++   if(MDFN_UNLIKELY(g_psxrecomp_pc_cb))
++    g_psxrecomp_pc_cb(PC, psxrecomp_guest_cycle_base + (uint32_t)timestamp);
++
+    //
+    // Instruction fetch
+    //
+diff --git a/mednafen/psx/psx.h b/mednafen/psx/psx.h
+index 05122c8c..0e61795d 100644
+--- a/mednafen/psx/psx.h
++++ b/mednafen/psx/psx.h
+@@ -198,4 +198,24 @@ extern psxrecomp_rtrace_cb_t g_psxrecomp_rtrace_cb;
+ typedef void (*psxrecomp_irq_cb_t)(int which);
+ extern psxrecomp_irq_cb_t g_psxrecomp_irq_cb;
+ 
++/* PSXRecomp oracle: absolute guest CPU clock. psxrecomp_guest_cycle_base is
++ * the sum of the CPU timestamps of every completed retro_run() frame since
++ * the last power-on (timestamps restart at 0 each frame), so inside a frame
++ * the absolute guest cycle of an instruction is base + the CPU's running
++ * timestamp. beetle_core_get_guest_cycles() returns the base, i.e. the exact
++ * clock between frames, where the debug server samples it. */
++extern uint64_t psxrecomp_guest_cycle_base;
++extern "C" unsigned long long beetle_core_get_guest_cycles(void);
++
++/* PSXRecomp oracle: per-instruction PC hook (drives the cyc_watch
++ * comparator). Fired by PS_CPU::RunReal before EVERY instruction fetch,
++ * i.e. before any cycle of that instruction (fetch, execute, stalls) is
++ * charged.
++ *   pc           = guest PC about to be fetched
++ *   guest_cycles = absolute guest cycles charged for all prior instructions
++ * NULL (the default) costs one predicted-not-taken branch per instruction;
++ * the listener should install it only while a watch is armed. */
++typedef void (*psxrecomp_pc_cb_t)(uint32_t pc, uint64_t guest_cycles);
++extern psxrecomp_pc_cb_t g_psxrecomp_pc_cb;
++
+ #endif

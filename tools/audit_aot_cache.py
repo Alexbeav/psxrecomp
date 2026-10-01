@@ -8,7 +8,50 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
+
+_RANGES = re.compile(r'static const uint32_t (psx_ov_static_ranges_\d+)\[\] = \{([^}]*)\};')
+_VARIANT = re.compile(r'\{ (psx_ov_static_ranges_\d+), (\d+)u, 0x([0-9A-Fa-f]{8})u, (\w+) \},')
+_ENTRY = re.compile(r'\{ 0x([0-9A-Fa-f]{8})u, (\d+)u, (\d+)u \},')
+
+
+def static_dispatch_identities(path):
+    """(entry, crc, ranges) of every variant in a generated static dispatcher."""
+    text = Path(path).read_text(encoding='utf-8')
+    ranges = {}
+    for symbol, body in _RANGES.findall(text):
+        words = [int(word.strip().rstrip('u'), 0) for word in body.split(',') if word.strip()]
+        assert len(words) % 2 == 0 and words, f'Malformed static range table: {symbol}'
+        ranges[symbol] = [(words[i], words[i + 1]) for i in range(0, len(words), 2)]
+    table = text.split('psx_ov_variants[', 1)
+    variants = [] if len(table) == 1 else _VARIANT.findall(table[1].split('};', 1)[0])
+    entries = [] if 'psx_ov_entries[' not in text else         _ENTRY.findall(text.split('psx_ov_entries[', 1)[1].split('};', 1)[0])
+    ids = []
+    for address, first, count in entries:
+        for symbol, n, crc, _ in variants[int(first):int(first) + int(count)]:
+            assert len(ranges[symbol]) == int(n), f'Static range count mismatch: {symbol}'
+            ids.append((int(address, 16), int(crc, 16), ranges[symbol]))
+    assert sum(int(count) for _, _, count in entries) == len(variants), 'Static entry table mismatch'
+    return ids
+
+
+def resident_metadata(dll, record):
+    """The compiler's preload opt-in must agree with the verified recipe."""
+    marker = dll.with_suffix('.resident')
+    resident = record.get('producer') == 'bios_resident_manifest'
+    assert marker.exists() == resident, f'Resident preload marker/recipe mismatch: {dll.name}'
+    if not resident:
+        return {}
+    body = marker.read_bytes()
+    document = json.loads(body)
+    assert document.get('schema') == 'psxrecomp bios resident shard v1', f'Invalid resident marker: {dll.name}'
+    bios_hash = record.get('bios_sha256', '')
+    assert len(bios_hash) == 64 and all(c in '0123456789abcdef' for c in bios_hash), 'Invalid resident BIOS hash'
+    assert document.get('bios_sha256') == bios_hash, f'Resident BIOS provenance mismatch: {dll.name}'
+    assert document.get('producer_name') == str(record.get('producer_name', 'BIOS resident code')), \
+        f'Resident producer mismatch: {dll.name}'
+    return dict(resident_sha256=hashlib.sha256(body).hexdigest())
 
 
 def main():
@@ -17,7 +60,10 @@ def main():
                         default=Path(__file__).resolve().parents[1])
     parser.add_argument('--recompiler', type=Path, required=True)
     parser.add_argument('--game-toml', type=Path, required=True)
-    parser.add_argument('--cache-root', type=Path, required=True)
+    outputs = parser.add_mutually_exclusive_group(required=True)
+    outputs.add_argument('--cache-root', type=Path)
+    outputs.add_argument('--static-dispatch', type=Path,
+                         help='generated overlays_static.c; its units are audited beside it')
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--records', type=Path)
     inputs.add_argument('--inventory', type=Path)
@@ -37,7 +83,7 @@ def main():
     include = framework / 'runtime/include'
     tag = compiler.cache_tag(str(include), str(args.recompiler),
                              str(args.game_toml), args.flavor)
-    cache = args.cache_root / game_id / 'gcc' / compiler.cache_arch_abi() / tag
+    cache = None if args.static_dispatch else         args.cache_root / game_id / 'gcc' / compiler.cache_arch_abi() / tag
     abi = compiler.overlay_abi_tag(str(include), args.flavor)
     source = args.inventory or args.records
     source_bytes = source.read_bytes()
@@ -46,6 +92,7 @@ def main():
         dict(name=f'record-{index:03d}', record=record)
         for index, record in enumerate(document)]
     recipes = []
+    records_by_name = {}
     for job in jobs:
         if args.inventory:
             record = json.loads(Path(job['input']).read_text(encoding='utf-8-sig'))[0]
@@ -65,11 +112,28 @@ def main():
         bounds = [(lo & 0x1fffffff, hi & 0x1fffffff) for lo, hi in known]
         assert all(lo < hi for lo, hi in bounds)
         recipes.append((job['name'], load, data, bounds))
+        records_by_name[job['name']] = record
 
     pairs = []
     native_ids = []
-    dlls = sorted(cache.glob('*' + compiler.overlay_ext()))
-    assert dlls, f'No native pairs in expected cache namespace: {cache}'
+    def within_bounds(ranges, bounds):
+        return all(any(lo <= (start & 0x1fffffff) and (start & 0x1fffffff) + length <= hi
+                       for lo, hi in bounds) for start, length in ranges)
+    variants = []
+    if args.static_dispatch:
+        # Linked-in variants carry no DLL stem, so each must be proven by the
+        # recipe whose original bytes its guard was computed from.
+        ids = static_dispatch_identities(args.static_dispatch)
+        assert ids, f'No static variants in {args.static_dispatch}'
+        for item in ids:
+            matched = next((name for name, load, data, bounds in recipes
+                            if within_bounds(item[2], bounds) and
+                            compiler.current_variant_func_ids([item], data, load, len(data))), None)
+            assert matched, f'No original-input guard proof for static entry 0x{item[0]:08X}'
+            variants.append(dict(entry=f'0x{item[0]:08X}', crc=f'0x{item[1]:08X}', matched_recipe=matched))
+            native_ids.append((None, [item]))
+    dlls = [] if args.static_dispatch else sorted(cache.glob('*' + compiler.overlay_ext()))
+    assert dlls or args.static_dispatch, f'No native pairs in expected cache namespace: {cache}'
     for dll in dlls:
         ids = compiler.load_shard_func_ids(str(dll), abi)
         assert ids, f'Invalid ABI/exports/pair/manifest: {dll}'
@@ -89,7 +153,8 @@ def main():
         assert matched, f'No original-input guard proof for {dll.name}'
         pairs.append(dict(dll=dll.name, functions=len(ids), matched_recipe=matched,
                           dll_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
-                          manifest_sha256=hashlib.sha256(dll.with_suffix('.ranges').read_bytes()).hexdigest()))
+                          manifest_sha256=hashlib.sha256(dll.with_suffix('.ranges').read_bytes()).hexdigest(),
+                          **resident_metadata(dll, records_by_name[matched])))
     if args.expected_pairs is not None:
         assert len(pairs) == args.expected_pairs, (len(pairs), args.expected_pairs)
     image_coverage = []
@@ -98,7 +163,7 @@ def main():
     for name, load, data, bounds in recipes:
         compatible = set()
         for physical, ids in native_ids:
-            if physical != (load & 0x1fffffff):
+            if physical is not None and physical != (load & 0x1fffffff):
                 continue
             bounded = [item for item in ids if all(
                 any(lo <= (start & 0x1fffffff) and (start & 0x1fffffff) + length <= hi
@@ -113,6 +178,11 @@ def main():
                                    required_entries_verified=len(required[name]),
                                    native_entries=len({item[0] for item in compatible}),
                                    guarded_variants=len(compatible)))
+    files = {}
+    if args.static_dispatch:
+        stem = args.static_dispatch.stem
+        for path in [args.static_dispatch] + sorted(args.static_dispatch.parent.glob(stem + '_[0-9]*.c')):
+            files[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
     receipt = dict(game_id=game_id, cache_tag=tag, flavor=args.flavor,
                    recipe_input_sha256=hashlib.sha256(source_bytes).hexdigest(),
                    recipe_count=len(recipes), published_pairs=len(pairs),
@@ -120,9 +190,15 @@ def main():
                    all_pairs_valid=True, all_guards_match_known_input_bytes=True,
                    full_static_coverage_proven=False,
                    image_coverage=image_coverage, pairs=pairs)
+    if args.static_dispatch:
+        # Linked into the runtime: no DLL cache namespace, flavor tag or pairs.
+        for key in ('cache_tag', 'flavor', 'published_pairs', 'manifest_rows', 'pairs'):
+            receipt.pop(key)
+        receipt.update(static=True, published_variants=len(variants), files=files, variants=variants)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(receipt, indent=2), encoding='utf-8', newline='\n')
-    print(json.dumps({k: v for k, v in receipt.items() if k not in ('pairs', 'image_coverage')}))
+    print(json.dumps({k: v for k, v in receipt.items()
+                      if k not in ('pairs', 'image_coverage', 'variants', 'files')}))
 
 
 if __name__ == '__main__':

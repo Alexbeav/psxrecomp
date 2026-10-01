@@ -6,10 +6,59 @@ allowed to redistribute — so a player can be handed a build and a disc image a
 just play. A player who prefers their own dumped retail BIOS can use that
 instead.
 
-Both recompiled BIOS backends are linked into every normal build. The OpenBIOS
+In a developer build both recompiled BIOS backends are linked. The OpenBIOS
 image itself and its MIT notice are staged in `bios/` beside the executable;
 the retail image is never shipped and comes from the player. Which backend runs
 is decided when the game launches, not when it is built.
+
+**Bundled releases link both backends.** Decision 2026-09-30: the recompiled
+BIOS carries the same risk as the recompiled game, which titles already
+commit, so the framework commits `generated/OpenBIOS_*.c` and
+`generated/SCPH1001_*.c` (with their `.emitter.sha` stamps) and release CI
+links both. The retail image itself is still never shipped: the runtime needs
+its data at run time and only accepts the exact image the backend was built
+from (size and CRC), so the player supplies their own dump as before. CI
+configures with `PSXRECOMP_BIOS_STALE_FATAL=ON`, so a committed backend whose
+stamp predates the emitter fails the release instead of linking (the
+fingerprint excludes the ROM for this reason; the profile's SHA-256 pin stands
+for it). Regenerate with `tools/regen_bios.sh --config bios/<stem>.toml` and
+commit the output whenever the emitter, seeds or profile change.
+
+**Other known images: the backend is built on the player's machine.** For a
+retail image a build does not link (today SCPH-5552), the release ships
+`overlay_toolchain/` and compiles game code from the player's own disc at
+runtime; the same mechanism builds a BIOS backend from the player's own dump
+(`runtime/include/psx_bios_module.h`, `runtime/src/psx_bios_module.c`,
+`tools/bios_module_build.py`). When the player selects a dump whose size and
+CRC match a shipped profile (`psx_bios_known_images.h`) but no linked backend,
+the runtime:
+
+1. looks for `<exe>/cache/bios/<os-arch>/bm<abi>_<codegen hash>_f<flavor>/<STEM>_<crc>.{so,dll}`
+   and loads it if present (ABI tag and codegen hash gated, like an overlay shard);
+2. otherwise announces a one-time build, runs `bios_module_build.py` from the
+   toolchain (the bundled `psxrecomp-bios` recompiles the dump — the profile's
+   SHA-256 pin refuses any other image — and tcc or the system compiler turns
+   the C plus the module glue into a self-contained shared library), then
+   loads it;
+3. registers the descriptor with `psx_bios_register()` and activates it. Every
+   existing selection path then sees it as one more linked backend: `bios.cfg`
+   remembers it, netplay settle sees it, and it is hot-swapped like OpenBIOS.
+
+The module imports nothing from the executable. Everything it calls goes
+through `OverlayCallbacks` plus a BIOS-specific `PsxBiosModuleCallbacks`
+table, and the runtime globals the generated dispatcher reads are aliased by
+pointer (the `#define`s in `psx_bios_module.h` rewrite the emitter's own
+`extern` lines). The generated C is untouched apart from the emitter no longer
+writing its CPS-marker constructor in a module build. A build takes about a
+minute with gcc for the 32 MB SCPH-1001 output, seconds with tcc; it happens
+once per dump and per framework codegen hash.
+
+What the launcher shows in a bundled build: the BIOS row is present (a
+linked retail backend makes a player choice meaningful). A SCPH-1001 dump
+verifies as linked and hot-swaps; a dump of another known image verifies as
+"prepare once" and the wizard's Prepare BIOS job builds its module with a
+progress meter, then resumes; an image no profile covers is refused with the
+accepted list. No build ever offers Generate & rebuild for a BIOS.
 
 ## The rule
 
@@ -135,25 +184,37 @@ netplay guest sandbox remains `<memcard_dir>/netplay/` (unscoped).
 ## Netplay lobby settle
 
 Online and LAN lobbies advertise a per-peer BIOS offer and freeze a single
-session BIOS at host Start (`openbios` or `scph1001`):
+session BIOS at host Start (`openbios` or `scph1001`). The token `scph1001`
+means "retail", not SCPH-1001: each offer also names the retail image the peer
+would boot by its CRC-32 (`retail_crc`), and a retail session carries the CRC
+every peer must boot (`session_bios_crc`). The rule lives in
+`runtime/src/netplay_bios_settle.c`.
 
-- **Online:** `bios_offer` on `set_ready` → host publishes
-  `match_caps.session_bios`.
-- **LAN:** peers append offer fields on `MOTK3 JOIN`; host broadcasts them on
-  `MOTK4 UPDATE` and includes the settled token on `MOTK1 START`.
+- **Online:** `bios_offer` (with `retail_crc`) on `set_ready` → host publishes
+  `match_caps.session_bios` and `match_caps.session_bios_crc`.
+- **LAN:** peers append offer fields on `MOTK3 JOIN` (the CRC is line 6 of the
+  tail); host broadcasts the flags on `MOTK4 UPDATE` and puts the settled
+  token and CRC on `MOTK1 START` (lines 5 and 7).
 
 Settle rule (same for both):
 
-- **OpenBIOS** if any seated peer prefers OpenBIOS, or any peer cannot run
-  SCPH-1001 (no linked retail backend and/or no validated dump), or a peer
-  sends no offer (legacy client).
-- **SCPH-1001** only when every seated peer can run it and nobody selected
-  OpenBIOS.
+- **Retail** only when every seated peer offers a retail image and all the
+  CRCs are equal, and either the host prefers retail or nobody selected
+  OpenBIOS. A peer with no offer, no dump or no CRC (an older client) rules
+  retail out.
+- Otherwise **OpenBIOS**, when every peer that sent an offer links it.
+- Otherwise retail, if it is possible.
+- Otherwise the host **refuses to start** and the launcher says which images
+  differ ("Players use different BIOS images (SCPH-5552 and SCPH-1001) …").
 
-Every peer applies that session BIOS before boot. Mixed BIOSes are invalid for
-rollback (kernel RAM layout differs). If the session settles to SCPH-1001 but a
-peer has no validated dump, that peer **aborts the launch** rather than silently
-falling back to OpenBIOS (which would desync immediately).
+Every peer applies that session BIOS before boot, and for retail it boots only
+a dump whose CRC is the settled one. Mixed BIOSes are invalid for rollback
+(kernel RAM layout differs): before this rule an SCPH-5552 peer and an SCPH-1001
+peer both offered `scph1001`, each booted its own image, and the boot digest
+never matched. If the session settles to retail but a peer has no matching
+dump, that peer **aborts the launch** rather than silently falling back
+(which would desync immediately). A session from an older host carries no CRC;
+peers then accept any retail dump, as before.
 
 Session BIOS is **ephemeral**: it affects only that match’s runtime boot. It
 does **not** rewrite `bios.cfg`, `settings.toml`, or the launcher Settings BIOS

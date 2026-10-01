@@ -5,6 +5,7 @@
 #include "mod_packages.h"
 #include "mod_plugins.h"
 #include "gpu.h"
+#include "psx_memory.h"
 #include "psx_sha256.h"
 
 #if defined(RECOMP_LAUNCHER)
@@ -44,8 +45,14 @@ extern "C" uint32_t psx_mod_memory_alloc(uint32_t size, uint32_t alignment);
 extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t size,
                                                   uint32_t alignment);
 extern "C" int psx_ws_x_margin(void);
+extern "C" void gpu_ws_tag_hud_primitive(uint32_t primitive, int edge);
+extern "C" void gpu_ws_tag_world_primitive(uint32_t primitive, int is_world);
+extern "C" void gpu_ws_set_adaptive_backdrop_preload(int enabled);
 extern "C" void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 extern "C" int fntrace_is_game_started(void);
+
+/* Declared in mod_plugins.h; see active_function_entry_hooks() below. */
+uint32_t g_psx_mod_function_entry_hooks = 0;
 
 namespace PSXRecompV4 {
 namespace {
@@ -77,15 +84,45 @@ RuntimeMods& state() {
     return value;
 }
 
-struct FunctionEntryPlugin {
-    std::string id;
-    uint32_t address = 0;
+/* Function-entry hooks of the ACTIVE plan, flattened at plugin activation into
+ * one table sorted by code key (address with the segment bits stripped, so a
+ * KUSEG or KSEG1 PC reaches the same hook as KSEG0). The interpreter consults
+ * this on every entry it dispatches, so the lookup is a binary search over
+ * integers, never a per-plugin string map, and an empty table short-circuits
+ * in the caller via g_psx_mod_function_entry_hooks. Plugin pointers refer into
+ * RuntimeMods::plan; every plan replacement clears the table first. */
+struct ActiveFunctionEntryHook {
+    uint32_t key = 0;
     PSXModFunctionEntryCallback callback = nullptr;
+    const ModResolution::Plugin* plugin = nullptr;
 };
 
-std::vector<FunctionEntryPlugin>& function_entry_plugins() {
-    static std::vector<FunctionEntryPlugin> value;
+std::vector<ActiveFunctionEntryHook>& active_function_entry_hooks() {
+    static std::vector<ActiveFunctionEntryHook> value;
     return value;
+}
+
+inline uint32_t function_entry_key(uint32_t address) {
+    return address & 0x1FFFFFFFu;
+}
+
+void clear_function_entry_hooks() {
+    active_function_entry_hooks().clear();
+    g_psx_mod_function_entry_hooks = 0;
+}
+
+void build_function_entry_hooks(const RuntimeMods& s) {
+    clear_function_entry_hooks();
+    if (!s.initialized || !s.plan.ok) return;
+    auto& table = active_function_entry_hooks();
+    for (const ModResolution::Plugin& plugin : s.plan.plugins)
+        for (const ModFunctionEntryHook& hook : mod_function_entry_hooks(plugin.id))
+            table.push_back({function_entry_key(hook.address), hook.callback, &plugin});
+    /* Stable: hooks sharing an address keep plan (plugin order) order. */
+    std::stable_sort(table.begin(), table.end(),
+                     [](const ActiveFunctionEntryHook& a,
+                        const ActiveFunctionEntryHook& b) { return a.key < b.key; });
+    g_psx_mod_function_entry_hooks = (uint32_t)table.size();
 }
 
 const ModPackage* selected_package(const std::string& id) {
@@ -97,6 +134,19 @@ bool package_has_enabled_feature(const ModPackage& package) {
         package.features.begin(), package.features.end(),
         [&](const ModFeature& feature) {
             return state().manager.feature_enabled(package.id, feature.id);
+        });
+}
+
+/* In use = enabled by the player OR activated by another feature's
+ * [[requirement]]. Removal must respect both; the enabled checkbox shows only
+ * the player's own choice. */
+bool package_in_use(const ModPackage& package) {
+    return std::any_of(
+        package.features.begin(), package.features.end(),
+        [&](const ModFeature& feature) {
+            return state().manager.feature_enabled(package.id, feature.id) ||
+                   state().manager.feature_implicitly_enabled(package.id,
+                                                              feature.id);
         });
 }
 
@@ -158,8 +208,8 @@ void set_error(const std::string& error) {
 void apply_main_write(const ModResolution::Write& write) {
     if (write.fields.empty()) {
         for (size_t i = 0; i < write.replacement.size(); ++i)
-            psx_write_byte((uint32_t)write.location + (uint32_t)i,
-                           write.replacement[i]);
+            psx_host_write_byte((uint32_t)write.location + (uint32_t)i,
+                                write.replacement[i]);
         dirty_ram_mark_executable_range(
             (uint32_t)write.location & 0x1FFFFFFFu,
             (uint32_t)write.replacement.size());
@@ -167,7 +217,7 @@ void apply_main_write(const ModResolution::Write& write) {
     }
     for (const ModResolution::Write::Field& field : write.fields) {
         for (size_t i = 0; i < field.replacement.size(); ++i)
-            psx_write_byte(
+            psx_host_write_byte(
                 (uint32_t)write.location +
                     (uint32_t)field.offset + (uint32_t)i,
                 field.replacement[i]);
@@ -628,7 +678,7 @@ int provider_package_get(void*, int index, RecompLauncherCModPackage* out) {
     out->option_count = (int)package->options.size();
     /* A bundled package is build output. Offering to remove it would succeed
      * and then be silently undone by the next build. */
-    out->removable = !out->enabled &&
+    out->removable = !package_in_use(*package) &&
                      package->origin == ModPackageOrigin::Installed;
     return 1;
 }
@@ -974,7 +1024,7 @@ int provider_version_get(void*, const char* package_id, int index,
     const ModPackage* selected = selected_package(package_id);
     out->selected = selected && selected->version == version->first;
     out->removable = (!out->selected || !selected ||
-                      !package_has_enabled_feature(*selected)) &&
+                      !package_in_use(*selected)) &&
                      version->second.origin == ModPackageOrigin::Installed;
     return 1;
 }
@@ -1100,6 +1150,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
                             std::string* error) {
     RuntimeMods& s = state();
     s.manager.set_root({});
+    clear_function_entry_hooks();
     s.plan = {};
     s.validation = {};
     s.raw_disc_index.clear();
@@ -1129,6 +1180,14 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     for (const std::string& scan_error : s.manager.scan_errors())
         std::fprintf(stderr, "psxrecomp: mod manifest ignored: %s\n",
                      scan_error.c_str());
+    /* state.toml may name a package this catalog does not hold (removed,
+     * stripped from a release, or a builtin the title excludes). resolve()
+     * never visits it and save_state() keeps it; say so once. */
+    for (const std::string& dormant : s.manager.dormant_selections())
+        std::fprintf(stdout,
+                     "psxrecomp: mod selection kept but inactive: %s is not "
+                     "in this build's mod catalog\n",
+                     dormant.c_str());
     if (!sha256_file(exe_path, s.exe_sha256, &s.error)) {
         /* Release installs commonly do not carry a loose PS-X EXE; game-id and
          * expected-byte guards remain available in that case. */
@@ -1145,6 +1204,7 @@ bool mod_runtime_clear_for_netplay(std::string* error) {
         if (error) error->clear();
         return true;
     }
+    clear_function_entry_hooks();
     s.plan = {};
     s.validation = {};
     s.raw_disc_index.clear();
@@ -1174,6 +1234,15 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
     ModResolution plan =
         s.manager.resolve(s.game_id, s.exe_sha256, s.disc_sha256);
     s.validation = plan;
+    /* A derived activation is not in state.toml, so name it: a player (or a
+     * test) reading the log can see why a hidden feature is running. */
+    for (const ModResolution::ImplicitFeature& item : plan.implicit_features)
+        std::fprintf(stdout,
+                     "psxrecomp: mod feature %s/%s activated implicitly "
+                     "(required by %s/%s)\n",
+                     item.package_id.c_str(), item.feature_id.c_str(),
+                     item.required_by_package_id.c_str(),
+                     item.required_by_feature_id.c_str());
     if (!plan.ok) {
         s.error.clear();
         for (const std::string& item : plan.errors) {
@@ -1206,6 +1275,9 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
         if (error) *error = s.error;
         return false;
     }
+    /* Hooks follow activation, never a bare commit: a new plan runs none of
+     * its function-entry hooks until mod_runtime_activate_plugins(). */
+    clear_function_entry_hooks();
     s.plan = std::move(plan);
     build_disc_index(s);
     s.effective_disc_path = std::move(effective_disc);
@@ -1225,6 +1297,10 @@ const std::filesystem::path& mod_runtime_effective_disc_path() {
 #if defined(RECOMP_LAUNCHER)
 const RecompLauncherCModProvider* mod_runtime_launcher_provider() {
     return &provider;
+}
+
+void mod_runtime_set_hide_hidden_features(bool hide) {
+    provider.hide_hidden_features = hide ? 1 : 0;
 }
 #endif
 
@@ -1294,15 +1370,54 @@ extern "C" void mod_runtime_enable_disc_patches(void) {
     PSXRecompV4::state().disc_enabled = true;
 }
 
+extern "C" int psx_mod_read_disc_file(const char* path, void* buffer,
+                                      uint32_t capacity, uint32_t* size) {
+    using namespace PSXRecompV4;
+    if (size) *size = 0;
+    if (!path || !*path || !size || (!buffer && capacity)) return 0;
+    try {
+        const auto& s = state();
+        const auto& mount = s.effective_disc_path.empty() ? s.disc_path : s.effective_disc_path;
+        if (mount.empty()) return 0;
+        PS1::ISOReader reader;
+        PS1::ISOFileEntry entry;
+        if (!reader.Open(mount.string()) || !reader.FindFile(path, entry) ||
+            entry.is_directory || !entry.size || entry.size > 64u * 1024u * 1024u)
+            return 0;
+        if (!buffer) { *size = entry.size; return 1; }
+        if (capacity < entry.size) return 0;
+        uint8_t sector[2048], raw[2352];
+        for (uint32_t offset = 0; offset < entry.size; offset += 2048u) {
+            const uint32_t lba = entry.lba + offset / 2048u;
+            if (reader.ReadRawSector(lba, raw)) {
+                if (raw[15] != 1 && (raw[15] != 2 || (raw[18] & 0x20u))) return 0;
+                mod_runtime_patch_disc_sector(lba, 1, raw, sizeof raw);
+                std::memcpy(sector, raw + (raw[15] == 1 ? 16 : 24), sizeof sector);
+                if (raw[15] == 1) mod_runtime_patch_disc_sector(lba, 0, sector, sizeof sector);
+            } else {
+                if (!reader.ReadSector(lba, sector)) return 0;
+                mod_runtime_patch_disc_sector(lba, 0, sector, sizeof sector);
+            }
+            if (state().disc_guard_failed) return 0;
+            const uint32_t count = std::min(2048u, entry.size - offset);
+            std::memcpy(static_cast<uint8_t*>(buffer) + offset, sector, count);
+        }
+        *size = entry.size;
+        return 1;
+    } catch (...) { return 0; }
+}
+
 extern "C" void mod_runtime_activate_plugins(void) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();
+    psx_ram_reset_size_request();
     if (!s.initialized || !s.plan.ok) return;
     for (const ModResolution::Plugin& plugin : s.plan.plugins) {
         s.current_plugin = &plugin;
         mod_invoke_activation_plugin(plugin.id);
         s.current_plugin = nullptr;
     }
+    build_function_entry_hooks(s);
 }
 
 extern "C" void mod_runtime_on_vblank(void) {
@@ -1334,8 +1449,10 @@ extern "C" int psx_mod_option_value(const char* package_id,
      * to read and the caller must fall back to its own default rather than
      * treat an empty string as a value. */
     if (!s.initialized || !s.plan.ok) return 0;
+    /* Read the committed plan's selection, which includes features its
+     * [[requirement]]s activated, not live launcher state. */
     const std::string value = s.manager.feature_option_value(
-        package_id, feature_id, option_id);
+        s.plan, package_id, feature_id, option_id);
     if (value.empty()) return 0;
     if (value.size() + 1 > (size_t)out_size) return 0;
     std::memcpy(out, value.c_str(), value.size() + 1);
@@ -1368,7 +1485,7 @@ extern "C" uint8_t psx_mod_read_byte(uint32_t address) {
 }
 
 extern "C" void psx_mod_write_byte(uint32_t address, uint8_t value) {
-    psx_write_byte(address, value);
+    psx_host_write_byte(address, value);
 }
 
 extern "C" uint16_t psx_mod_read_half(uint32_t address) {
@@ -1376,7 +1493,7 @@ extern "C" uint16_t psx_mod_read_half(uint32_t address) {
 }
 
 extern "C" void psx_mod_write_half(uint32_t address, uint16_t value) {
-    psx_write_half(address, value);
+    psx_host_write_half(address, value);
 }
 
 extern "C" uint32_t psx_mod_read_word(uint32_t address) {
@@ -1384,11 +1501,11 @@ extern "C" uint32_t psx_mod_read_word(uint32_t address) {
 }
 
 extern "C" void psx_mod_write_word(uint32_t address, uint32_t value) {
-    psx_write_word(address, value);
+    psx_host_write_word(address, value);
 }
 
 extern "C" void psx_mod_write_code_word(uint32_t address, uint32_t value) {
-    psx_write_word(address, value);
+    psx_host_write_word(address, value);
     dirty_ram_mark_executable_range(address & 0x1FFFFFFFu, 4u);
 }
 
@@ -1404,6 +1521,18 @@ extern "C" uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size,
 
 extern "C" int32_t psx_mod_widescreen_x_margin(void) {
     return (int32_t)psx_ws_x_margin();
+}
+
+extern "C" void psx_mod_tag_hud_primitive(uint32_t primitive, int edge) {
+    gpu_ws_tag_hud_primitive(primitive, edge);
+}
+
+extern "C" void psx_mod_tag_world_primitive(uint32_t primitive, int is_world) {
+    gpu_ws_tag_world_primitive(primitive, is_world);
+}
+
+extern "C" void psx_mod_set_adaptive_backdrop_preload(int enabled) {
+    gpu_ws_set_adaptive_backdrop_preload(enabled);
 }
 
 /*
@@ -1430,22 +1559,24 @@ extern "C" uint32_t psx_mod_display_height(void) {
 extern "C" int psx_mod_register_function_entry_plugin(
     const char* id, uint32_t address, PSXModFunctionEntryCallback callback) {
     using namespace PSXRecompV4;
-    if (!id || !*id || !address || !callback) return 0;
-    auto& plugins = function_entry_plugins();
-    const auto duplicate = std::find_if(
-        plugins.begin(), plugins.end(), [&](const FunctionEntryPlugin& item) {
-            return item.id == id && item.address == address;
-        });
-    if (duplicate != plugins.end()) return 0;
-    plugins.push_back(FunctionEntryPlugin{id, address, callback});
-    return 1;
+    if (!id || !address || !callback) return 0;
+    return mod_register_function_entry_plugin(id, address, callback) ? 1 : 0;
 }
 
 extern "C" void psx_mod_function_entry(CPUState* cpu, uint32_t address) {
     using namespace PSXRecompV4;
-    if (!cpu) return;
-    for (const FunctionEntryPlugin& plugin : function_entry_plugins()) {
-        if (plugin.address == address) plugin.callback(cpu, address);
+    if (!g_psx_mod_function_entry_hooks || !cpu) return;
+    RuntimeMods& s = state();
+    const auto& table = active_function_entry_hooks();
+    const uint32_t key = function_entry_key(address);
+    auto it = std::lower_bound(
+        table.begin(), table.end(), key,
+        [](const ActiveFunctionEntryHook& hook, uint32_t k) { return hook.key < k; });
+    for (; it != table.end() && it->key == key; ++it) {
+        const ModResolution::Plugin* previous = s.current_plugin;
+        s.current_plugin = it->plugin;
+        it->callback(cpu, address);
+        s.current_plugin = previous;
     }
 }
 

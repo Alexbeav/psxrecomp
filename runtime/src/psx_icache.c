@@ -8,6 +8,7 @@
 #include "psx_icache.h"
 #include "cpu_state.h"
 #include "psx_cycles.h"
+#include "psx_instr_cost.h"   /* psx_fetch_uncached: shared with both emitters */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,7 +84,7 @@ void psx_icache_fetch_miss(CPUState* cpu, uint32_t addr) {
     cpu->read_absorb[cpu->read_absorb_which] = 0u;
     cpu->read_absorb_which = 0u;
 
-    if (addr >= 0xA0000000u) { /* KSEG1 / uncached (BIOS ROM) */
+    if (psx_fetch_uncached(addr)) { /* KSEG1 / uncached (BIOS ROM): every fetch */
         psx_advance_cycles(4u);
         return;
     }
@@ -104,6 +105,46 @@ void psx_icache_fetch_miss(CPUState* cpu, uint32_t addr) {
 #else
     (void)cpu;
     (void)addr;
+#endif
+}
+
+/* IsC store -> I-cache, transcribed from Beetle PS_CPU::WriteMemory
+ * (mednafen/psx/cpu.cpp:484-501):
+ *
+ *   if(BIU & BIU_ENABLE_ICACHE_S1) {
+ *     if(BIU & (BIU_TAG_TEST_MODE | BIU_INVALIDATE_MODE | BIU_LOCK_MODE)) {
+ *       valid_bits = (BIU & BIU_TAG_TEST_MODE) ? ((value << ((address & 0x3) * 8)) & 0x0F) : 0x00;
+ *       ICI = &ICache[(address & 0xFF0) >> 2];
+ *       for(i = 0; i < 4; i++)
+ *         ICI[i].TV = ((valid_bits & (1U << i)) ? 0x00 : 0x02) | (address & 0xFFFFFFF0) | (i << 2);
+ *     } else
+ *       ICache[(address & 0xFFC) >> 2].Data = value << ((address & 0x3) * 8);
+ *   }
+ *
+ * The else arm writes an instruction word and leaves TV alone. This model keeps
+ * no instruction words (compiled code supplies them), so it has nothing to do.
+ * Beetle does not model SR.SwC (swapped caches), so neither does this. The
+ * store keeps the full virtual address as the tag, as Beetle's refill does. */
+void psx_icache_isc_store(uint32_t biu, uint32_t addr, uint32_t value) {
+#ifdef PSX_ENABLE_BLOCK_CYCLES
+    /* Same gate as a refill: lockstep replay must not move the shared tags;
+     * the whole-call shadow evolves its private view. */
+    if (g_ls_replay_active && s_icache_shadow_state != 2) return;
+    if (g_psx_icache_active < 0) g_psx_icache_active = psx_icache_enabled();
+    if (!g_psx_icache_active) return;
+    if (!(biu & PSX_BIU_ICACHE_ENABLE)) return;
+    if (!(biu & (PSX_BIU_TAG_TEST | PSX_BIU_INVALIDATE | PSX_BIU_LOCK))) return;
+    uint32_t valid = (biu & PSX_BIU_TAG_TEST)
+        ? ((value << ((addr & 0x3u) * 8u)) & 0xFu) : 0u;
+    uint32_t line = addr & 0xFFFFFFF0u;
+    uint32_t bidx = (addr & 0xFF0u) >> 2;
+    for (uint32_t i = 0; i < 4u; i++)
+        g_psx_icache_tv[bidx + i] =
+            ((valid & (1u << i)) ? 0x0u : 0x2u) | line | (i << 2);
+#else
+    (void)biu;
+    (void)addr;
+    (void)value;
 #endif
 }
 

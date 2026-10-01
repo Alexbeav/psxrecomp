@@ -50,9 +50,15 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `read_scratch` |   | ✓ | `addr`, `len` | Read PS1 scratchpad (0x1F800000 region) |
 | `read_vram` / `vram_peek` | ✓¹ | ✓ | `x`, `y`, `w`, `h` | Read 16-bit VRAM pixels (max 128×128) |
 | `gpu_state` | ✓ | ✓ | — | Display area, display depth, `screen_offset_y`, draw offset, GPUSTAT, clip rect, xfer state. A positive screen offset moves 24-bit scanout down from the PAL or NTSC broadcast centre |
-| `screenshot_hires` | ✓ | ✓ | `path` | PNG of the **supersampled** surface (the present path the window uses), at `display × gr_scale()`. ⚠ `screenshot`/`screenshot_file` capture native 15-bit VRAM and are **blind to anything that only exists in the hi-res mirror** — geometry correction, SSAA edges, perspective UVs — so they show a clean frame while the player sees a broken one. Use this one to verify those. Falls back to the native resolve (and reports `scale: 1`) when no hi-res surface exists |
+| `screenshot_hires` | ✓ | ✓ | `path` | PNG of the **supersampled** surface (the present path the window uses), at `display × gr_scale()`. ⚠ `screenshot`/`screenshot_file` capture native 15-bit VRAM and are **blind to anything that only exists in the hi-res mirror** — geometry correction, SSAA edges, perspective UVs — so they show a clean frame while the player sees a broken one. Use this one to verify those. Under OpenGL it reads the hr FBO directly (the CPU-side mirror is native there), or the high-resolution window when that mode is on, so it is the capture that proves an internal-resolution preset: 4K is 2880×2160 and 8K 5760×4320 for a 320×240 display. Falls back to the native resolve (and reports `scale: 1`) when no hi-res surface exists |
+| `video_info` | ✓ |   | — | Internal resolution end to end: `preset` (0 unset, 1 native, -1 match display, else target lines), `reference_lines`, `requested_scale` (what the preset asked for), `effective_scale` (what the backend allocated), `internal_lines`, the GL limit (`gl_max_dim`, `gl_max_scale`, `gl_clamp_reason`: 1 texture, 2 budget, 4 ceiling; `gl_alloc_retries`, `gl_budget_mib`), the hr surface (`fbo_w`/`fbo_h`, `hr_scale`), the window in points (`window_w`/`window_h`) and pixels (`drawable_w`/`drawable_h`, `hidpi_window`), the display area (`display_x`/`display_y` VRAM start, `display_w`/`display_h`), and the windowed high-resolution surface when a scale is past the full-VRAM limit (`windowed`; `hires_window_x`/`hires_window_w` in native columns and `hires_fbo_w`/`hires_fbo_h` for the tile holding the last presented display; `hires_window_tiles`, more than one when side-by-side buffers are too wide for one surface; `hires_window_mib` for all tiles; `hires_window_grows`, tile allocations so far) |
+| `screenshot_wide_hires` | ✓ |   | `path`, `base_x` | The displayed band of the native-wide surface at internal resolution (`wide_w×S` by `height×S`). `present_shot` is capped at the window; this checks a widescreen + internal-resolution combination at full size |
 | `present_shot` | ✓ |   | `path` | PNG of the **composed present surface** — the frame after the backend fits the display buffer to the window, so it carries the presented aspect. ⚠ every other capture resolves the display buffer *before* that fit: on a 508×256 display in a 4:3 window they answer 508×256 while the player sees 640×480. Use this one for anything aspect-shaped (widescreen, letterbox), where a pre-fit buffer would hide the very stage the change touches. Staged and fulfilled on the next present, so the ack means *queued* — poll `present_shot_seq`. Unavailable headless and on the Vulkan backend (its swapchain has no readback hook) |
 | `present_shot_seq` | ✓ |   | — | Completion counter for `present_shot`, plus `wrote` (1 = that completion produced a PNG). Sample before staging, poll until `seq` moves. Advances on success *and* failure, so the poll always terminates |
+| `gl_interp` | ✓ |   | — | OpenGL frame-rate presenter ([FRAME_RATE.md](FRAME_RATE.md)): enabled/suspended, host and target Hz, swaps, `source` (`vblank`/`flip`), `flip_period`, `captures` (new source frames) and `duplicates` (VBlanks that re-presented the same frame) |
+| `render_pass_stats` | ✓ |   | — | Render passes ([RENDER_PASSES.md](RENDER_PASSES.md)): plans, phases wanted/planned (shedding), passes, rollbacks (`nesting_repairs`: watchdog aborts whose skipped frame exits the restore undid), dropped device stores by class, `verify_mismatch` under `PSX_RENDER_PASS_VERIFY=1`, host-time split per pass, smoothed pass cost (`cost_us`; `cost_rewarms`: estimates no pass had run on for a while, measured again), presents made from pass images (`late_presents`: held past the frame's planned end because the next flip was late; `expired`: frames whose images stopped showing after several frame lengths without a flip), pass image textures allocated (`image_textures`, `image_bytes`), `status` (`psx_mod_render_pass_status`: 0 ready, 1 no presenter, 2 backend, 3 disabled, 4 session, 5 fast-forward, 6 busy), `backups_reused` (passes that reused the previous pass's VRAM backup) |
+| `render_pass_dump` | ✓ |   | `path`, `count` | Write the images (the game's own frame, then each pass in phase order) of the next `count` frames that get passes as `<path>/g<frame>_<index>_a<phase q16>.png` |
+| `render_pass_refuse` | ✓ |   | `on` | Make the OpenGL backend decline render passes (`status` 2, BACKEND), as a renderer mode without them would; tests a plugin's fallback. `PSX_RENDER_PASS_REFUSE=1` does the same from start |
 | `geom_correction` |   | ✓ | — | `[video] geometry_correction` / `perspective_texturing` engagement: enable flag plus free-running `geometry_vertex_hits` and `perspective_triangles` totals. Both enhancements silently fall back to the faithful path on anything they cannot prove is projected geometry, so a zero counter with the flag on means the title never qualifies — sample twice and diff for a rate |
 | `sio_state` | ✓ | ✓ | — | SIO registers + (native only) pad/memcard protocol + TX/RX history |
 | `irq_state` | ✓ | ✓ | — | `I_STAT`, `I_MASK` (both), plus chain state on native |
@@ -100,21 +106,29 @@ Columns: **N** = native, **D** = DuckStation oracle.
 
 ### Boot-time write ranges
 
-Set `PSX_WTRACE_BOOT=lo,hi[;lo,hi...]` before launching a debug-tools build to
-retain the first writes to one or more half-open RAM ranges from guest
-instruction zero. Addresses may be hexadecimal or decimal; KSEG addresses are
-normalized to physical addresses. For example, the Crash Bash investigation
-that motivated this option can be reproduced without title-specific code:
+Set `PSX_WTRACE_BOOT_RANGES=lo-hi[,lo-hi...]` before launching a debug-tools
+build to retain the first writes to up to 8 half-open RAM ranges from guest
+instruction zero, in both the boot and the transition (value-change) rings.
+Addresses are hexadecimal (`0x` optional); KSEG addresses are normalized to
+physical addresses. The ranges get their own slots after the built-in defaults,
+so a default set never crowds them out. For example, the Crash Bash
+investigation that motivated this option can be reproduced without
+title-specific code:
 
 ```powershell
-$env:PSX_WTRACE_BOOT='0x000B3A80,0x000B3B00'
+$env:PSX_WTRACE_BOOT_RANGES='0x000B3A80-0x000B3B00'
 .\CrashBashRecomp.exe
 ```
 
 Connect at any later point and query `wtrace_boot_stats`,
 `wtrace_boot_summary`, or `wtrace_boot_dump`. Each retained entry includes the
 write address/value/width, guest PC and return address, register context, frame,
-and DMA channel. The option is ignored in builds made with debug tools disabled.
+and DMA channel. A malformed spec, a range whose `hi` does not exceed `lo`, or
+more than 8 ranges refuses the whole spec: nothing is armed, a
+`PSX_WTRACE_BOOT_RANGES refused` line is printed at launch, and
+`wtrace_boot_stats` / `wtrace_trans_stats` report `env_ranges` (ranges applied)
+and `env_error` (the reason, empty when accepted). The option is ignored in
+builds made with debug tools disabled.
 
 ---
 
@@ -172,6 +186,93 @@ re-dispatches the guest's true target. Counters in
   anything else is a runtime bug).
 
 ---
+
+## `frame_fingerprint` — per-frame guest-write fingerprint (native only)
+
+Cumulative write hashes, snapshotted at every VBlank into a 32768-frame ring
+(`runtime/include/frame_fingerprint.h`). Diff two runs of the same seeded
+input, such as native overlay shards against the interpreter or two builds, to
+find the first frame where guest behaviour forks. Then arm
+`record_frame` on that frame in both runs and compare the two ordered logs.
+
+- `{"cmd":"frame_fingerprint","count":1024,"frame_lo":N,"frame_hi":M}`: all
+  parameters are optional. Entries come back oldest first.
+
+| Column | Role | Covers |
+|---|---|---|
+| `cyc` | judge | guest cycle counter at the snapshot |
+| `wc`, `ws` | judge | main-RAM write count, and an order-independent sum over `(addr, value)` |
+| `mmio`, `mc` | judge | device-register writes: ordered hash over `(addr, value, store PC)`, and a count |
+| `sp`, `sc` | judge | scratchpad writes: ordered hash over `(addr, value, store PC)`, and a count |
+| `qc` | judge | writes that FMV-quiet kept out of every other column |
+| `wr`, `pc` | locator | main-RAM writes: ordered hash over `(addr, value)`, and an ordered hash over store PCs |
+
+**Judge on the judge columns.** Two runs that behaved the same agree on all of
+them at every frame. `wr` and `pc` can differ even when guest state is
+identical. DMA and device writes to RAM (MDEC-out, CD, SPU, GPU→RAM) are
+recorded in the order the host services the device. A native shard flushes
+cycles at every store barrier, but batched interpreted and static code
+services the device after the block. As a result, the same writes can
+interleave differently with CPU stores. A device write also takes whatever
+CPU store PC came last. Use `wr` and `pc` only to narrow down a fork once a
+judge column has found it.
+
+**Store PCs are exact on every backend.** Static code and the interpreter set
+`g_debug_last_store_pc` themselves. Native overlay shards write the runtime's
+copy through the ABI v24 `last_store_pc` pointer. Before v24, shards kept a
+private copy, so `pc`, `mmio` and `sp` named an older store for every overlay
+store.
+
+**One-frame straddles are not divergences.** Batched code services devices up
+to a basic block late. So a device write due at, for example, VBlank + 1 cycle
+can land on the other side of the snapshot in one run. `ws` and `wc` then
+differ for that single frame, with `wc` off by the number of straddled writes,
+and agree again at the next one. In a 12000-frame R4 A/B of native shards
+against the interpreter, 497 frames straddled by exactly one write, and every
+one re-converged on the next frame.
+
+**Turn FMV-quiet off for identity runs.** `PSX_DEBUG_FMV_QUIET` is on unless it
+is set to `0`. While the MDEC has decoded recently, it stops write recording,
+and those frames' writes add only to `qc`. If a straddled write falls into a
+quiet frame in one run and not the other, `ws`, `wc` and `qc` never agree
+again. `wc + qc` still agrees, which tells this case apart from a real fork.
+For A/B identity, set `PSX_DEBUG_FMV_QUIET=0` in both runs.
+
+`ws` is a multiset sum. It cannot see two writes to one address arriving in
+the opposite order, even though the final RAM differs. Such a fork shows up in
+later writes, `cyc`, or `read_ram`.
+
+### A/B identity with `tools/fp_identity.py`
+
+`tools/fp_identity.py` applies these rules to two seeded runs of any title.
+`run` starts the runtime from a command template or from `--runtime`,
+`--game` and `--disc`. It turbos with no input to frame N and saves this ring
+and the dispatch-miss count. It sets `PSX_DEBUG_FMV_QUIET=0` and
+`PSX_OVERLAY_AUTOCOMPILE_OFF=1` unless told otherwise. `--seed` installs a
+saved overlay state first, so a run can start from a warm or a cold cache.
+`compare` judges the two runs on the judge columns and reports `wr` and `pc`
+only as the frame where the runs part. It tolerates the one-write straddle
+above, and the `wc + qc` shift when FMV-quiet was on. Every tolerated frame is
+counted and listed, and `--strict` disables both tolerances. It exits
+`0` IDENTICAL, `1` MISMATCH, `3` INCOMPLETE (frame window, wrapped ring,
+missing columns from an older runtime, an unconfirmable last-frame
+straddle, or different FMV-quiet settings once a quiet frame occurred,
+which leaves the runs not comparable), `4` MISSES (dispatch misses), or `2`
+on a usage error. `run` exits `3` when it writes no dump. On Windows, a
+`--launch` backslash is a path separator, not an escape.
+
+```sh
+L='tools/run_game.sh {build} --debug-port {port} {headless}'
+python3 psxrecomp/tools/fp_identity.py snapshot build /tmp/seed-warm
+mkdir -p /tmp/seed-cold
+python3 psxrecomp/tools/fp_identity.py run warm.json --launch "$L" --port 4781 --frames 12000 --seed /tmp/seed-warm
+python3 psxrecomp/tools/fp_identity.py run cold.json --launch "$L" --port 4781 --frames 12000 --seed /tmp/seed-cold
+python3 psxrecomp/tools/fp_identity.py compare warm.json cold.json
+```
+
+Run an A/A pair first to show that the run is deterministic. The tool's
+docstring (`--help`) lists every option. The self-test is
+`tools/tests/test_fp_identity.py` (ctest `fp_identity`).
 
 ## `bios_info` — linked recompiled-BIOS identity (native only)
 
@@ -243,6 +344,27 @@ vector observation there.
 
 ---
 
+## `overlay_static_entries` — which static overlay images ran (native only)
+
+`overlay_loader_status` reports one `static_hits` total for the build-time
+static overlay dispatcher (`GAME_OVERLAY_STATIC_C`); this command splits it per
+compiled entry address, so a run can prove WHICH image's variants executed (a
+mod engine linked at `0x80780000` versus a menu overlay at `0x800BF800`).
+Counters are always on and count real dispatches only, never
+`psx_overlay_static_can_dispatch` probes.
+
+`{"cmd":"overlay_static_entries","addr_lo":"0x80780000","addr_hi":"0x80800000","limit":16}`
+
+- `entries`, `total_hits` — whole dispatcher.
+- `range_lo`/`range_hi` (physical; segment bits ignored), `range_entries`,
+  `range_variants`, `range_hits`, `range_hit_entries` — the requested range.
+- `top` — up to `limit` (default 64, max 1024) entries of the range with hits,
+  busiest first: `{addr, variants, hits}`.
+
+A build without a static dispatcher answers `ok:false`.
+
+---
+
 ## `dirty_ram_stats` `per_pc` — interpreted-PC table
 
 Snapshot of the open-addressed per-entry-PC table
@@ -274,9 +396,13 @@ entry PC. Read-only; safe to poll while the game runs.
   entry was a `jr ra` *return* from native code into an interpreted
   continuation, not a call.
 
-The array is emitted inline and truncates before the trailing bitmap
-diagnostics when the response buffer fills; a partial list is still valid JSON
-(the cut lands between rows). Poll periodically to accumulate coverage.
+The array is emitted inline and stops before the trailing bitmap diagnostics
+when the response buffer fills; a partial list is still valid JSON (the cut
+lands between rows). `per_pc_matching` counts every matching row and
+`per_pc_emitted` the rows in this response, so a page is complete exactly when
+`per_pc_skipped + per_pc_emitted == per_pc_matching`. Narrow the table with
+`{"lo":"0x800BF800","hi":"0x800E0C24"}` (half-open, compared with the KSEG
+bits masked off) and page with `{"skip":N}` to read all of it.
 
 ---
 
@@ -303,9 +429,9 @@ The TCP server is the canonical instrumentation surface. Rule 3 in `CLAUDE.md` i
 
 ## Complete command index (generated)
 
-**311 commands registered** — 298 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**322 commands registered** — 309 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-52 of 311 have prose above; **259 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+61 of 322 have prose above; **261 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -338,6 +464,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `card_txn_dump` | ✓ |  |  |
 | `cd_overwrite` | ✓ |  |  |
 | `cd_read_log` | ✓ |  |  |
+| `cd_reinsert` | ✓ |  |  |
 | `cdc_volume` |  | ✓ |  |
 | `cdrom_bursts` | ✓ |  |  |
 | `cdrom_cmd_dump` |  | ✓ |  |
@@ -374,12 +501,14 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `dirty_insn_dump_file` | ✓ |  |  |
 | `dirty_insn_gate` | ✓ |  |  |
 | `dirty_insn_log` | ✓ |  |  |
-| `dirty_ram_stats` | ✓ |  |  |
+| `dirty_ram_stats` | ✓ |  | ✓ |
 | `dirty_ram_unsupported` | ✓ |  |  |
+| `disc_select` | ✓ |  |  |
 | `disp_ring` | ✓ |  |  |
 | `dispatch_check` | ✓ |  |  |
 | `dispatch_stats` | ✓ |  |  |
 | `dispatch_tail` | ✓ |  |  |
+| `display_aspect` | ✓ |  |  |
 | `display_ring_aux` | ✓ |  |  |
 | `display_ring_get` | ✓ |  |  |
 | `display_ring_stats` | ✓ |  |  |
@@ -415,7 +544,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `fntrace_reset` |  | ✓ |  |
 | `fntrace_unfiltered` |  | ✓ |  |
 | `frame` | ✓ |  | ✓ |
-| `frame_fingerprint` | ✓ |  |  |
+| `frame_fingerprint` | ✓ |  | ✓ |
 | `frame_perf` | ✓ |  |  |
 | `frame_range` | ✓ | ✓ | ✓ |
 | `frame_timeseries` | ✓ | ✓ | ✓ |
@@ -428,7 +557,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `get_snapshots` | ✓ | ✓ | ✓ |
 | `gl_coh_ring` | ✓ |  |  |
 | `gl_fbo_peek` | ✓ |  |  |
-| `gl_interp` | ✓ |  |  |
+| `gl_interp` | ✓ |  | ✓ |
 | `gl_present_ring` | ✓ |  |  |
 | `gl_vram_diff` | ✓ |  |  |
 | `gl_wide_fast` | ✓ |  |  |
@@ -443,6 +572,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `gte_latch_dump` | ✓ |  |  |
 | `gte_ring_dump` | ✓ |  |  |
 | `gte_state` | ✓ |  |  |
+| `guest_tty_dump` | ✓ |  |  |
 | `history` | ✓ | ✓ | ✓ |
 | `hle_dump` | ✓ |  | ✓ |
 | `idle_skip` | ✓ |  |  |
@@ -490,6 +620,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `overlay_rescan` | ✓ |  |  |
 | `overlay_shadow_detail` | ✓ |  |  |
 | `overlay_shadow_dump` | ✓ |  |  |
+| `overlay_static_entries` | ✓ |  | ✓ |
 | `pace_state` | ✓ |  |  |
 | `pad_status` | ✓ | ✓ |  |
 | `parity_ctl` | ✓ | ✓ |  |
@@ -515,6 +646,9 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `record_frame` | ✓ |  |  |
 | `record_frame_dump` | ✓ |  |  |
 | `record_reads_dump` | ✓ |  |  |
+| `render_pass_dump` | ✓ |  | ✓ |
+| `render_pass_refuse` | ✓ |  | ✓ |
+| `render_pass_stats` | ✓ |  | ✓ |
 | `restore_trace` | ✓ |  |  |
 | `restore_trace_clear` | ✓ |  |  |
 | `restore_trace_window` | ✓ |  |  |
@@ -534,6 +668,8 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `screenshot` | ✓ | ✓ | ✓ |
 | `screenshot_file` | ✓ | ✓ | ✓ |
 | `screenshot_hires` | ✓ |  | ✓ |
+| `screenshot_wide_hires` | ✓ |  | ✓ |
+| `segment_misses` | ✓ |  |  |
 | `set_input` | ✓ | ✓ | ✓ |
 | `set_snapshot` | ✓ | ✓ | ✓ |
 | `sio_arm_audit` | ✓ |  |  |
@@ -575,6 +711,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `unknown_dispatch_log` | ✓ |  |  |
 | `unwatch` | ✓ |  | ✓ |
 | `vblank_rate` | ✓ |  |  |
+| `video_info` | ✓ |  | ✓ |
 | `vk_perf` | ✓ |  |  |
 | `vram_peek` | ✓ | ✓ | ✓ |
 | `vsync_query_hle` | ✓ |  |  |

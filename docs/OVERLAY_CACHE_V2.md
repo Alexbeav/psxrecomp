@@ -45,7 +45,10 @@ provider for every function identity present right now?"
 - **Logical identity = FuncKey** (per function): `{game_id, guest_entry_vaddr,
   extent_start, extent_len, code_hash, recompiler_version, codegen_abi_version}`.
   Guest address is PART of the key (PC-relative branches / delay-slot lowering
-  mean same bytes at a different address are NOT equivalent). code_hash stays
+  mean same bytes at a different address are NOT equivalent). The VA includes
+  the segment: a KUSEG or KSEG1 entry of the same bytes bakes different links,
+  EPCs, fetch tags and store PCs, so it is its own function identity and its
+  own shard (docs/SEGMENT_AWARE_CODE.md §5.7). code_hash stays
   CRC32 for now (matches runtime `crc32_compute`; revisit to xxHash128 later — a
   separate change since the runtime hash must match).
 - **Build/package unit = bundle** of many FuncKeys → one DLL.

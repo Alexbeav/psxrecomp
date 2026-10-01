@@ -58,7 +58,7 @@ see [Release Package](#release-package) below.
 
 Bringing up a title of your own? Start with
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) (submodules,
-setup-host CI template, release checklist), then
+bundled-release CI template, release checklist), then
 [`CONTRIBUTING.md`](CONTRIBUTING.md). Community projects are listed here
 alongside the rest.
 
@@ -230,7 +230,7 @@ These are the 3 most important folders to be aware of:
 | Build the framework | [`docs/BUILDING.md`](docs/BUILDING.md) |
 | **Ship a game repo** (submodules + CI + release checklist) | [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) |
 | **Netplay** (rollback, SFU/ICE, dual-raster, disc gates) | [`docs/NETPLAY.md`](docs/NETPLAY.md) |
-| Setup-host CI template | [`docs/ci/templates/setup-release.yml`](docs/ci/templates/setup-release.yml) |
+| Bundled-release CI template | [`docs/ci/templates/game-release.yml`](docs/ci/templates/game-release.yml) |
 | Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
 | Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
 | Widescreen / native-wide | [`docs/WIDESCREEN.md`](docs/WIDESCREEN.md) |
@@ -813,7 +813,7 @@ regenerate), and a change proves itself against the Beetle oracle / on screen
 rather than by assertion. Game-specific work lives in the game repos, which pin
 exact framework and UI commits as root-level submodules.
 
-- New title / setup-host release:
+- New title / bundled release:
   [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md)
 - Framework PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md) (rules, verification,
   regression checklist, how a fix reaches a game through its pin)

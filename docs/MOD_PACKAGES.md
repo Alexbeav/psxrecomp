@@ -18,9 +18,10 @@ Two catalog roots sit beside the executable, split by who owns the files:
 
 ```text
 <exe>/mods/
-  bundled/     build output — the framework's mods/builtin/packages plus the
-               title's mods/preloaded/packages. Every build WIPES and re-stages
-               this tree, so nothing a player owns may live here.
+  bundled/     build output — the framework's mods/builtin/packages (minus any
+               the title declines with EXCLUDE_BUILTIN_MODS) plus the title's
+               mods/preloaded/packages. Every build WIPES and re-stages this
+               tree, so nothing a player owns may live here.
   installed/   launcher-owned — .psxmod archives installed through the Mods
                manager. No build ever touches this tree.
   state.toml   user selection state (enabled features, option values).
@@ -81,6 +82,52 @@ Pass `PRELOADED_MODS_DIR NONE` to declare that a target intentionally ships no
 game catalog. A target built with `COSIM` stages nothing: it has no launcher,
 and it shares an output directory with the real runtime.
 
+### Declining a framework builtin (`EXCLUDE_BUILTIN_MODS`)
+
+Every package under the framework's `mods/builtin/packages` targets
+`game_id = "*"`, so by default every title ships all of them. A title that does
+not want one — because it ships its own replacement, or because the feature is
+wrong for it — names it:
+
+```cmake
+psxrecomp_add_game_runtime(psx-runtime
+    ...
+    PRELOADED_MODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded"
+    # WipEout 3's own team-mark bezel replaces the generic file-picker one,
+    # and host-paced fast loading is not offered for it.
+    EXCLUDE_BUILTIN_MODS
+        psx.enhancement.fast-loading
+        psx.presentation.bezel
+)
+```
+
+`EXCLUDE_BUILTIN_MODS` is accepted by both `psxrecomp_add_game_runtime()` and
+`psxrecomp_add_runtime_target()` (the PGXP clone inherits it). An excluded
+package is **absent, not hidden**, the same rule as the developer channel:
+
+- it is never copied into `<exe-dir>/mods/bundled`, so the launcher cannot list
+  it and every release packager — which all ship the build's staged tree —
+  cannot ship it either;
+- the build publishes the exclusions beside the catalog manifest as
+  `psx_mod_catalog_<target>.excluded.txt`. The build-time guard fails if an
+  excluded id turns up in `mods/bundled` anyway, and `tools/release_stage.py
+  stage-mods` both refuses such a catalog and stops counting an excluded
+  builtin as *missing* when a caller passes the framework's `mods/builtin` as a
+  `--mod-source`;
+- the framework itself is unchanged: the package, its plugin and its C API stay
+  available to every other title.
+
+Configure fails loudly when an excluded id is not a framework builtin (a typo
+would otherwise leave the package shipping while the CMakeLists reads as if it
+did not), and when the title's own catalog provides the same id — that is an
+override, and excluding and overriding one id at once contradicts itself. The
+selection lives in `runtime/psx_mod_catalog_select.cmake`; both it and the guard
+are exercised by `runtime/tests/test_mod_catalog_layout.py`.
+
+A player's `mods/state.toml` written by an earlier build may still name an
+excluded package. That selection is dormant, not an error: see
+[State and migration](#state-and-migration).
+
 **Do NOT write your own `copy_directory` into `<exe-dir>/mods`.** Five titles
 did, and the reason it is now a build error is worth stating: a hand-written
 copy names the destination as a *string*, so when framework commit `4cc04be3`
@@ -111,12 +158,12 @@ stale the moment either side gains a mod.
 
 ## Feature manifest
 
-Write new manifests at the current format version, which is **6**. Older
+Write new manifests at the current format version, which is **7**. Older
 versions stay readable so installed packages survive an update, and each
 section below notes the version a field first required.
 
 ```toml
-format_version = 6
+format_version = 7
 id = "example.localization"
 version = "1.2.0"
 name = "Example Localization Pack"
@@ -183,6 +230,15 @@ Option types are `boolean`, `choice`, and bounded `integer`. Conditions are
 feature-local: `when = { option = "value", ... }` requires every listed option
 to match. The legacy `when_option`/`when_value` pair remains accepted for a
 single condition.
+
+A feature with `hidden = true` is left out of the launcher's lists while it is
+disabled; while enabled it is listed so the player can turn it off. A title that
+sets `[runtime] hide_hidden_mod_features = true` in `game.toml` never shows it:
+the launcher does not list it (enabled or not), does not name it in the lobby
+summary, "Enable all" / "Disable all" leave it alone, and a package whose every
+feature is hidden is not listed under "Installed packages". Either way it runs
+exactly as `default_enabled` and `mods/state.toml` say, so a hidden default-on
+feature is simply active. (recomp-ui `launcher_mod_visibility.h`.)
 
 ## Bounded integer patches
 
@@ -402,8 +458,8 @@ catalog root:
 
 - **`bundled/` is filtered when it is staged.** `tools/mod_channel_filter.py`
   emits a manifest without the developer features and without the `[[option]]`,
-  `[[patch]]`, `[[overlay]]`, `[[plugin]]`, `[[resource]]` and `[[constraint]]`
-  entries that only served them; a package whose every feature is developer has
+  `[[patch]]`, `[[overlay]]`, `[[plugin]]`, `[[resource]]`, `[[constraint]]` and
+  `[[requirement]]` entries that only served them; a package whose every feature is developer has
   its directory removed. This is generation, not rewriting: the staged catalog
   is build output and the author's manifest in the repo is never touched.
 - **`installed/` is refused at load.** A third-party archive is never modified,
@@ -444,7 +500,17 @@ the same plugin id. Active plugin identities and owners participate in the
 canonical plan fingerprint.
 
 An implementation may register an activation callback, a deterministic
-guest-VBlank callback, or both under the same id. Activation runs after the
+guest-VBlank callback, function-entry hooks, or any combination under the same
+id. A function-entry hook (`psx_mod_register_function_entry_plugin`) runs at the
+top of a generated function the game config lists in
+`[recompiler] mod_function_entry_funcs`, and at every interpreted entry to the
+same address (segment bits ignored), so the backend running the page does not
+matter. Overlay shards compiled for any segment get the hook at the listed
+function's bytes, however the config spells its segment
+(docs/SEGMENT_AWARE_CODE.md §5.7). Like the other kinds it satisfies a manifest `[[plugin]]` and runs only
+while the resolved plan activates its id: the active hooks are flattened into an
+address table at plugin activation, and a plan change drops them until the next
+activation. Activation runs after the
 launcher's final mod-plan commit and before renderer/window initialization; it
 is appropriate for a game-owned mod that selects a fixed display aspect or
 another pre-boot host feature. VBlank callbacks run from the emulated GPU
@@ -452,6 +518,100 @@ VBlank event, independent of host presentation, pacing, turbo, or skipped
 frames. Trusted callbacks receive only the narrow C services exposed by
 `runtime/include/mod_plugins.h`. Games should continue to use declarative
 patches and overlays when those operations are sufficient.
+
+### Session starts and mod-owned state
+
+What a plugin sets up should last only for a session whose resolved plan
+activates it. Function-entry hooks follow that rule by construction: the commit
+and the netplay clear empty the hook table, and only activation rebuilds it, so
+a hook never runs in a session that did not activate its id (including a
+netplay session, which clears the plan). The host state a plugin changes
+through the `psx_mod_*` setters is process-wide, so the runtime resets it at
+every session start instead.
+
+An offline session ends the process when the player closes the game. The one
+in-process second session is the lobby rematch: a netplay match launched from
+the lobby returns to the lobby launcher when it ends, and the next launch from
+there, netplay or offline, re-enters the emulator in the same process. The
+session before a rematch is therefore always a netplay match, which ran with
+the plan cleared, so no plugin activated in it.
+
+The reset is one step of the session start that every session runs,
+immediately before activation (see *A rematch is a full session start* below).
+What it fixes today is the netplay local viewport's Fit and fixed aspect
+carrying from a match into an offline rematch. The rest of the table is
+defensive, for the state listed here.
+
+| State | Setter | Reset to | When |
+|---|---|---|---|
+| Fit / capped adaptive aspect | `psx_mod_set_adaptive_display_aspect` | off, cap 16:9 | every session |
+| World-scene predicate | `psx_mod_set_world_scene_predicate` | NULL | every session |
+| Retained-scene predicate | `psx_mod_set_retained_scene_predicate` | NULL | every session |
+| Adaptive backdrop preload | `psx_mod_set_adaptive_backdrop_preload` | 0 | every session |
+| Bezel artwork | `psx_mod_set_bezel_artwork` | none (see below) | every session |
+| Frame-interpolation blend mode | `psx_mod_set_frame_interpolation_blend` | default | every session |
+| Native VBlank pacing and its rate | `psx_mod_set_native_vblank_rate` | off, 0 | every session |
+| Frame period, if native VBlank pacing was on | `psx_mod_set_native_vblank_rate` | first-session value | later sessions |
+| Frame interpolation and its rate | `psx_mod_set_frame_interpolation` | first-session value | later sessions |
+| Vsync forced off | `psx_mod_set_frame_interpolation`, `psx_mod_set_native_vblank_rate` | first-session value | later sessions |
+| Automatic FMV skipping | `psx_mod_set_auto_skip_fmv` | first-session value | later sessions |
+| 8 MiB main RAM request | `psx_mod_set_main_ram_8mb` | retail 2 MiB | later sessions |
+| Texture-bank resolver and batching | `psx_mod_set_texture_bank_resolver`, `psx_mod_set_texture_bank_batching` | NULL, off | later sessions |
+
+"First-session value" is what settings, environment overrides (such as
+`PSX_VSYNC`) and the launcher resolved before the process's first activation.
+The first call records those values and changes nothing that is not already at
+its initial value, so the first session, and every run that never
+soft-returns, behaves exactly as without the reset. The RAM request matters on
+a rematch because `memory_init()` latches the requested geometry again at every
+boot, including the rematch's.
+
+Bezel artwork has two parts. The reset clears the artwork path, so the next
+session start loads nothing unless its own activation selects artwork again.
+The OpenGL renderer drops the loaded texture itself when it shuts down, which
+happens when a session ends by returning to the lobby (and at process exit),
+so a rematch never draws the previous session's artwork in its new context.
+
+Not reset, and why:
+
+- The **fixed display aspect** (`psx_mod_set_fixed_display_aspect`) and the
+  **renderer** (OpenGL, which `psx_mod_set_frame_interpolation` and
+  `psx_mod_set_bezel_artwork` force) are launcher controls. A rematch takes
+  both from the lobby launcher, which is seeded from the live values. For the
+  aspect, the rematch path then re-applies the Settings clamp (4:3, since
+  widescreen is mod-owned) before its session start, where a plugin's
+  activation or the netplay local viewport can still replace it, so a match's
+  16:9 or 21:9 does not carry into an offline rematch. A renderer forced by a
+  plugin would be carried the same way, but no plugin activates in the session
+  before a rematch.
+- **Guest memory, GPU-DMA memory, texture-packet arenas and defined texture
+  banks** (`psx_mod_alloc_guest_memory`, `psx_mod_alloc_gpu_dma_memory`,
+  `psx_mod_alloc_texture_packet_memory`, `psx_mod_define_texture_bank`) live
+  for the process. A bank ID is read only from packets in a plugin's own arena,
+  which stock game code does not use.
+
+**A rematch is a full session start.** It re-enters below the first session's
+setup block, so after its commit or netplay clear it runs the same sequence as
+the first session:
+
+1. Clear controller-mode overrides and presentation policies, load
+   acceleration and disc speed.
+2. Reset the mod-owned state in the table above.
+3. Run `mod_runtime_activate_plugins()`: the plan's activation callbacks, then
+   its function-entry hook table.
+4. Apply what activation chose: the netplay local viewport, controller-mode
+   overrides and load acceleration. Disc speed is read when the session boots.
+5. Mount the plan's derived disc image if it built one, else the stock disc.
+
+An offline rematch with mods enabled therefore runs like a first launch with
+those mods: activation callbacks, function-entry hooks, VBlank callbacks and
+the main-EXE and disc patches. A netplay rematch clears the plan, so none of
+them run and the match stays vanilla. Either way activation still precedes
+renderer and window creation, which every session reaches only when it boots.
+
+A plugin should establish what it needs in its activation callback and not rely
+on state from an earlier session; its own static variables are its
+responsibility.
 
 `psx_mod_set_load_acceleration(multiplier, release_frames)` is the narrow
 pre-boot service for a game-owned fast-loading feature. It changes host
@@ -519,6 +679,19 @@ State format 1 and package-only manifests remain readable as a migration aid.
 They appear through one synthetic legacy feature. New packages should use
 explicit features.
 
+**Selections for packages the catalog does not hold are dormant.** State can
+outlive the package it names: the player deleted an installed archive, a
+release build stripped a developer-only package, or the title now declines a
+framework builtin with `EXCLUDE_BUILTIN_MODS`. Resolution only visits packages
+that are present, so such a selection contributes nothing to the plan (and
+does not change its fingerprint), and it is not a launch error — the Mods page
+no longer lists the package, so the player would have no way to clear one.
+`save_state()` keeps the entry verbatim, so the choice applies again if the
+package ever returns, and the runtime names each one at startup
+(`mod selection kept but inactive: <id> is not in this build's mod catalog`).
+A selection pinned to a *version* that is missing while other versions of the
+package are present remains an error, because the Mods page can fix that one.
+
 The old `derived_disc` VCDIFF mechanism is legacy conversion scaffolding only.
 Feature-style manifests reject it. It is not a product mod primitive, fallback,
 or image-selection workflow; patched discs may be used offline as parity
@@ -529,7 +702,9 @@ oracles while converting known mods to native operations.
 Before boot, the manager:
 
 1. verifies the selected stock game and revision;
-2. expands only enabled features and their selected options;
+2. expands only enabled features and their selected options, plus every
+   feature an active `[[requirement]]` activates (see
+   [Implicit requirements](#implicit-requirements-across-packages));
 3. orders active packages deterministically by dependencies;
 4. verifies enabled payloads and operation bounds;
 5. collision-checks the complete owned byte-range plan and guard
@@ -553,7 +728,91 @@ that exact location. Exact duplicate operations may be coalesced.
 
 Package-level dependencies and conflicts are reserved for actual implementation
 relationships. Mutually exclusive choices such as US versus Japanese artwork
-belong inside one feature as option values.
+belong inside one feature as option values. A relationship that holds only for
+some selections of one feature is a `[[requirement]]`, not a dependency.
+
+## Implicit requirements across packages
+
+Package format 7 lets a feature, while a condition on its own options holds,
+need a feature of **another** package:
+
+```toml
+format_version = 7
+id = "wipeout3.enhancement.framerate"
+
+[[requirement]]
+feature = "framerate"                 # the requiring feature (owner)
+package = "psx.enhancement.8mb-ram"   # the package that provides it
+requires_feature = "8mb-ram"          # its feature to activate
+when = { extras = "enhanced" }        # same condition syntax as [[plugin]]
+
+[[requirement]]
+feature = "framerate"
+package = "psx.enhancement.8mb-ram"
+requires_feature = "8mb-ram"
+when = { extras = "full" }
+```
+
+`when` (or `when_option`/`when_value`) is the same feature-local condition
+plugins and overlays use; every listed option must match, so a requirement that
+holds for several values is written once per value. Omit it for a requirement
+that holds whenever the feature is enabled. `version` optionally restricts the
+provider with the `[[dependency]]` range syntax (`"*"` by default). Unknown
+fields are rejected, and so is a requirement naming its own package: a feature of
+the same package is a `requires_feature` `[[constraint]]`.
+
+The two existing mechanisms could not express this. `[[dependency]]` is
+package-level and unconditional, so WipEout 3's "NTSC / PAL Mode" would need
+8 MB RAM even with Extras = None; a `requires_feature` constraint cannot name
+another package.
+
+**Resolution.** While the requiring feature is enabled and its condition holds,
+`resolve()` activates the required feature for the session:
+
+- even when it is `hidden`, default-off, or explicitly disabled in
+  `mods/state.toml` -- the player chose the requiring option, and the requiring
+  option cannot run without it;
+- recursively: a derived feature's own `[[requirement]]`s and in-package
+  `requires_feature` constraints are derived too, to a fixed point;
+- **without writing it to `state.toml`**. A derived activation is not a player
+  choice, so `save_state()` persists only what the player selected, and turning
+  the requiring option back off leaves nothing behind. `feature_enabled()` keeps
+  reporting the player's choice (the launcher's checkbox, so a hidden required
+  feature stays hidden); `feature_implicitly_enabled()` reports the derived one.
+
+The plan lists each derived feature in `ModResolution::implicit_features` with
+what required it, plans with and without the derivation have different
+fingerprints, and a committed plan's plugins read option values from
+`ModResolution::selections` -- the selection the plan was actually built from.
+The runtime names every derived feature at launch:
+
+```text
+psxrecomp: mod feature psx.enhancement.8mb-ram/8mb-ram activated implicitly (required by wipeout3.enhancement.framerate/framerate)
+```
+
+**An unmet requirement fails loudly.** When the provider is absent from the
+catalog (removed, stripped from a release, or declined with
+`EXCLUDE_BUILTIN_MODS`), the selected version is missing, the version is out of
+range, or the provider has no such feature, the plan is rejected before launch:
+
+```text
+wipeout3.enhancement.framerate/framerate requires psx.enhancement.8mb-ram/8mb-ram, but package psx.enhancement.8mb-ram is not in this build's mod catalog
+```
+
+It is also a diagnostic on the requiring feature, so the launcher marks that
+row. The requiring selection never runs without what it requires -- an 8 MB
+build on 2 MB RAM is exactly the failure this prevents. A package an active
+requirement uses cannot be removed from the Mods manager.
+
+AOT profiles pin active requirements the way they pin plugins:
+`tools/mod_package_images.py` reports each active one as `"<package>/<feature>"`
+and a `mod_packages` entry must list the exact set under `requirements`.
+
+The launcher needs no change for a hidden required feature: it lists a hidden
+feature only when the player enabled it, and the player did not. A *visible*
+required feature still shows the player's own checkbox state while it is
+derived; showing "on, required by X" needs a launcher field that does not exist
+yet.
 
 ## Trusted adapters and archive safety
 
@@ -602,3 +861,36 @@ off, so the default presentation is unchanged: letterbox and pillarbox margins
 remain black. Enabling the feature without choosing artwork is also a no-op.
 The package supplies only the declaration and trusted plugin selection; archives
 still cannot load native code.
+
+A title's own trusted plugin can call `psx_mod_set_bezel_artwork(path)` directly
+to ship its artwork. An absolute path (such as the built-in package's selected
+resource) is used as-is; a relative path like `"bezels/qirex.png"` is resolved
+against the executable's directory when the artwork loads, never the current
+working directory, so artwork the title stages beside its binary is found
+however the game was launched.
+
+### Retained-scene loading presentation (native-wide opt-in)
+
+A trusted game plugin can register
+`psx_mod_set_retained_scene_predicate(predicate)` from `mod_plugins.h` when the
+game keeps displaying its previous framebuffer while loading. The cheap, pure
+emulation-thread callback returns `PSX_MOD_SCENE_HOLD` while that same scene is
+retained. It must not call presentation APIs recursively. Passing NULL removes
+the opt-in. Without registration, existing presentation behavior is unchanged.
+
+In native-wide mode this holds the previous wide/4:3 classification even if a
+game-state flag or absent GTE activity would normally classify loading as 2D.
+It does not force menus wide, stretch artwork, change guest rendering or memory,
+or override the FMV veto. Return `PSX_MOD_SCENE_RELEASE` when a new scene replaces
+the retained image, so ordinary classification resumes. For double-buffered
+games whose draw-ready signal precedes the actual display flip, return
+`PSX_MOD_SCENE_UNTIL_FLIP`: the prior hold ends only when the displayed VRAM
+origin changes. Without a prior HOLD it behaves like RELEASE. Do not use
+UNTIL_FLIP for in-place image replacement. Crash's experimental
+adaptive feature uses its pending level transition and draw-skip globals for
+this; these game-specific addresses do not belong in the framework.
+
+GPU reset and savestate restore discard this host-only history. A save loaded
+directly into a frozen loading frame cannot recreate wide reveal strips absent
+from the canonical saved framebuffer. `ws_scene_hold_test` covers long holds,
+menu release, delayed buffer flips, retained 4:3 scenes, FMV and timeline reset.

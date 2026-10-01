@@ -33,6 +33,12 @@ set(PSXRECOMP_CODEGEN_HASH_SRCS
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/function_discovery.cpp
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/function_discovery.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/include/gte_register_classification.h
+    # Shared instruction detector changes alter emitted overlay substitutions.
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/ws_backdrop_detect.h
+    # The shared cycle-cost header decides emitted code too: both emitters fold
+    # psx_cyc_dep_res_mask into literals and gate fetch-charge emission on
+    # psx_fetch_uncached.
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_instr_cost.h
 
     # --- image view + walker headers ------------------------------------------
     # Same gap as the .cpp/.h note above, one level down. The image VIEW decides
@@ -61,10 +67,12 @@ set(PSXRECOMP_CODEGEN_HASH_SRCS
     # runtime (the recurring "header change broke the shards" class). Folding the
     # compile surface in makes such a change reshard SAME-TREE instead of breaking
     # silently. overlay_api.h pulls cpu_state.h and its cycle-helper headers; the
-    # .inc is the shim every shard links against.
+    # .inc is the shim every shard links against; ws_cull_edge.h is the edge-cull
+    # math the .inc includes.
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/overlay_api.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/cpu_state.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/pgxp_hooks.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_cyc.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_cycles.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/ws_cull_edge.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/overlay_dispatch_preamble.c.inc)

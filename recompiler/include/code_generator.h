@@ -120,6 +120,15 @@ struct CodeGenConfig {
     // LEFT-edge counterpart to ws_cull_slti_sites ([widescreen.cull]
     // bltz_sites), for X-only funnels the auto-detector cannot qualify.
     std::set<uint32_t> ws_cull_bltz_sites;
+    // `bgez rs, keep` emitted through psx_ws_cull_bgez ([widescreen.cull]
+    // bgez_sites): keep while rs >= -margin. Pairs with bltz_sites to make a
+    // signed per-vertex left-edge chain exact. Identity at 4:3.
+    std::set<uint32_t> ws_cull_bgez_sites;
+    // lh/lhu/lw screen-X clip-bound loads emitted through psx_ws_clip_edge_x
+    // ([widescreen.cull] clip_edge_x_load_sites): 0 -> -margin and
+    // ws_cull_clip_edge_width -> width+margin while revealed; identity at 4:3.
+    std::set<uint32_t> ws_cull_clip_edge_x_load_sites;
+    uint32_t ws_cull_clip_edge_width = 0x140;
 
     // Explicit horizontal low-edge widen sites ([widescreen.cull]
     // negsub_sites): `subu rd, zero, rs` becomes `-rs - x_margin`.
@@ -299,7 +308,14 @@ public:
     // and forward declarations for every recompiled function plus every
     // overlapping-alias shared body. Byte-for-byte the same declaration set
     // the monolith emits inline, just hoisted into a header.
-    std::string build_shared_decls_header(const std::vector<GeneratedFunction>& gen_funcs) const;
+    // `extra_decls` adds the alias-body prototypes of other generators whose
+    // functions share these shards (segment variants, §5.4).
+    std::string build_shared_decls_header(const std::vector<GeneratedFunction>& gen_funcs,
+                                          const std::vector<std::string>& extra_decls = {}) const;
+
+    // Prototypes of the psx_alias_body_XXXXXXXX() bodies the most recent
+    // generate_all_functions() emitted.
+    const std::vector<std::string>& alias_body_decls() const { return alias_body_decls_; }
 
     // Generate the per-function code-range manifest consumed by the overlay
     // loader's per-entry validity hash (design §8). For each function, emits its
@@ -316,6 +332,12 @@ public:
     // generate_file() call, including functions synthesized by its split pass.
     const std::string& last_ranges_manifest() const { return last_ranges_manifest_; }
 
+    // The final function set and CFGs the most recent generate_file() call
+    // emitted, after its split pass: what a segment variant's direct-edge
+    // closure is planned over (docs/SEGMENT_AWARE_CODE.md §5.4).
+    const std::vector<Function>& last_functions() const { return last_functions_; }
+    const std::map<uint32_t, ControlFlowGraph>& last_cfgs() const { return last_cfgs_; }
+
     // Set known functions for this compilation unit (for linking)
     void set_known_functions(const std::set<uint32_t>& functions) {
         known_functions_ = functions;
@@ -324,11 +346,43 @@ public:
     // Set annotation table (optional — no-op if not called)
     void set_annotations(const AnnotationTable* at) { annotations_ = at; }
 
+    // The segment this compile's code executes in (docs/SEGMENT_AWARE_CODE.md
+    // §5.2): KUSEG 0x00000000, KSEG0 0x80000000 or KSEG1 0xA0000000. Every
+    // program counter the emitter bakes into guest-visible state goes through
+    // runtime_pc(): link values, fetch tags (and the uncached-fetch test),
+    // interrupt resume PCs (future EPCs), CPS exit PCs and continuation keys,
+    // store-PC stamps, the reserved-instruction EPC, the slice resume PC and
+    // dispatch rows. Identity keys (func_/block_ names, .ranges, entry-hook
+    // ids) keep the compile address. The default is the segment of the
+    // image's load address, which is the EXE's link segment (§5.3: the parser
+    // keeps a KUSEG header's segment), so runtime_pc(addr) == addr for every
+    // address in the image. Only a compile of the same bytes for another
+    // segment (a variant, §5.4) sets a different code segment.
+    static constexpr uint32_t kSegmentMask = 0xE0000000u;
+    static constexpr uint32_t kPhysMask = 0x1FFFFFFFu;
+    void set_code_segment(uint32_t seg) { code_seg_ = seg & kSegmentMask; }
+    uint32_t code_segment() const { return code_seg_; }
+    uint32_t runtime_pc(uint32_t compile_addr) const {
+        return code_seg_ | (compile_addr & kPhysMask);
+    }
+    // A jump-table case whose value (the PC the jr reaches) names the same
+    // bytes as `image_addr` in another segment than this body's. Such a case
+    // is not a local edge: the body bakes its own segment's PCs, so the value
+    // is dispatched with its full PC instead (§5.4). Never true when the table
+    // holds this body's own segment, which is every title's home compile.
+    bool foreign_segment_case(uint32_t case_value, uint32_t image_addr) const {
+        return (case_value & kPhysMask) == (image_addr & kPhysMask) &&
+               case_value != runtime_pc(image_addr);
+    }
+
 private:
     const PS1Executable& exe_;
     CodeGenConfig config_;
+    uint32_t code_seg_;  // set from the image in the constructor; see set_code_segment()
     std::set<uint32_t> known_functions_;  // Addresses of functions in this compilation unit
     std::string last_ranges_manifest_;
+    std::vector<Function> last_functions_;
+    std::map<uint32_t, ControlFlowGraph> last_cfgs_;
     std::set<uint32_t> extra_labels_;    // Mid-block addresses that need inline labels (jump table targets)
     const AnnotationTable* annotations_ = nullptr;
 
@@ -442,6 +496,9 @@ private:
         std::map<uint32_t, std::vector<uint32_t>>& out_edges);
 
     // Control flow translation
+    // Main-EXE opcode guard for bltz_sites, bgez_sites and branch_keep_sites
+    // (exits 1 on a mismatch; overlay mode keeps vanilla code).
+    void check_explicit_branch_site(uint32_t addr, uint32_t instr) const;
     std::string generate_branch_condition(uint32_t instr, uint32_t addr);
     std::string translate_branch(const ControlFlowInstr& cf, uint32_t fall_through);
     std::string translate_jump(const ControlFlowInstr& cf);

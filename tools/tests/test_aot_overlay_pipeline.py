@@ -1,5 +1,8 @@
 """Method contracts use invented bytes; no game assets or historical captures."""
 import base64
+import contextlib
+import hashlib
+import io
 import json
 from pathlib import Path
 import struct
@@ -10,6 +13,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import aot_overlay_pipeline as pipeline
+import audit_aot_cache as auditor
+import indexed_lzss_pack as lzss_pack
 
 
 class FakeDisc:
@@ -21,7 +26,491 @@ class FakeDisc:
         return self.data[name.upper()]
 
 
+class SectorDisc:
+    """Logical 2048-byte user data with an ISO-like file table."""
+
+    def __init__(self, directory, files):
+        self.files, data = {}, bytearray()
+        for name, body in files.items():
+            self.files[name] = (len(data) // 2048, len(body))
+            data += body + bytes(-len(body) % 2048)
+        self.data = bytes(data)
+        self.binary = Path(directory) / 'track.bin'
+        self.binary.write_bytes(self.data)
+        self.reader = self
+
+    def read(self, name):
+        lba, size = self.files[name.upper()]
+        return self.data[lba * 2048:lba * 2048 + size]
+
+    def read_sector_data(self, lba):
+        return self.data[lba * 2048:(lba + 1) * 2048]
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+class ModPackageImageTest(unittest.TestCase):
+    """Invented package: an entry detour into an engine the EXE copies high."""
+    ENGINE = 0x80780000
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        text = bytearray(0x1000)
+        header = bytearray(0x800)
+        header[:8] = b'PS-X EXE'
+        struct.pack_into('<III', header, 0x10, 0x80010000, 0, 0x80010000)
+        struct.pack_into('<I', header, 0x1C, len(text))
+        self.exe = bytes(header + text)
+        self.data = bytes(range(256)) * 16
+        self.disc = SectorDisc(self.root, {'SYSTEM.CNF': b'BOOT = cdrom:\\GAME.EXE;1\r\n',
+                                           'GAME.EXE': self.exe, 'DATA.BIN': self.data})
+        # The engine: two stubs that return into the EXE, staged inside its text.
+        self.engine = struct.pack('<8I', 0x03E00008, 0, 0x03E00008, 0,
+                                  0x08004000, 0, 0x08004001, 0)
+        detour = struct.pack('<II', 0x08000000 | ((self.ENGINE + 0x10) >> 2 & 0x3FFFFFF), 0)
+        call = struct.pack('<II', 0x0C000000 | (self.ENGINE >> 2 & 0x3FFFFFF), 0)
+        package = self.root / 'mods/example/1.0.0'
+        (package / 'assets').mkdir(parents=True)
+        self.overlay = b'Z' * 2048
+        (package / 'assets/data.overlay').write_bytes(self.overlay)
+        def patch(address, old, new, build):
+            return ('[[patch]]\nfeature = "engine"\ntarget = "main_exe"\n'
+                    f'address = 0x{address:08X}\nexpected = "{old.hex()}"\n'
+                    f'replace = "{new.hex()}"\nwhen = {{ build = "{build}" }}\n\n')
+        disc_sha = sha(self.disc.data)
+        self.manifest = (
+            'format_version = 5\nid = "example.engine"\nversion = "1.0.0"\nname = "Engine"\n'
+            'resolver = "declarative"\n\n[[target]]\ngame_id = "TEST"\n'
+            f'disc_sha256 = "{disc_sha}"\nexe_sha256 = "{sha(self.exe)}"\n\n'
+            '[[feature]]\nid = "engine"\nname = "Engine"\n\n'
+            '[[option]]\nfeature = "engine"\nid = "build"\ntype = "choice"\ndefault = "small"\n'
+            '[[option.choice]]\nvalue = "small"\n[[option.choice]]\nvalue = "large"\n\n'
+            '[[plugin]]\nfeature = "engine"\nid = "example.hook"\nwhen = { build = "large" }\n\n'
+            + patch(0x80010100, bytes(len(self.engine)), self.engine, 'large')
+            + patch(0x80010040, bytes(8), detour, 'large')
+            + patch(0x80010048, bytes(8), call, 'large')
+            + patch(0x80010080, bytes(4), b'\xff' * 4, 'small')
+            + '[[overlay]]\nfeature = "engine"\ntarget = "disc_user"\n'
+            f'offset = {self.disc.files["DATA.BIN"][0] * 2048}\nfile = "assets/data.overlay"\n'
+            f'sha256 = "{sha(self.overlay)}"\nexpected_sha256 = "{sha(self.data[:2048])}"\n'
+            'when = { build = "large" }\n')
+        self.write_manifest(self.manifest)
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def write_manifest(self, text):
+        path = self.root / 'mods/example/1.0.0/manifest.toml'
+        path.write_text(text, encoding='utf-8', newline='\r\n')
+        self.spec = dict(name='large', manifest='mods/example/1.0.0/manifest.toml',
+                         manifest_sha256=sha(text.encode()), id='example.engine', version='1.0.0',
+                         features=dict(engine=dict(build='large')), plugins=['example.hook'])
+
+    def view(self, **changes):
+        return pipeline.ModPackageView(self.disc, self.root, {**self.spec, **changes}, 'TEST')
+
+    def profile(self, **extent_changes):
+        extent = dict(file='GAME.EXE', file_offset='0x800', base='0x80010000',
+                      address='0x80010100', size=hex(len(self.engine)), load_addr=hex(self.ENGINE),
+                      sha256=sha(self.engine),
+                      transfer_entries=dict(**{'from': 'mod_package_writes'}, count=2))
+        extent.update(extent_changes)
+        return dict(game_id='TEST', mod_packages=[self.spec], strict_bounds=True, expected_records=1,
+                    checks=[dict(method='words', mod_package='large', file='GAME.EXE',
+                                 file_offset='0x800', base='0x80010000',
+                                 values={'0x80010100': '0x03E00008'})],
+                    images=[dict(method='fixed_address_extents', mod_package='large',
+                                 allow_missing=True, extents=[extent])])
+
+    def prepare(self, profile):
+        views = pipeline.mod_package_views(profile, self.disc, self.root)
+        return pipeline.prepare(profile, self.disc, [], self.root / 'out', views)
+
+    def test_selected_operations_apply_to_boot_image_and_disc_files(self):
+        view = self.view()
+        exe = view.read('GAME.EXE')
+        self.assertEqual(exe[0x900:0x900 + len(self.engine)], self.engine)
+        self.assertEqual(exe[0x880:0x884], bytes(4), 'inactive option branch applied')
+        self.assertEqual(view.read('DATA.BIN')[:2048], self.overlay)
+        self.assertEqual(view.read('DATA.BIN')[2048:], self.data[2048:])
+        self.assertEqual(self.disc.read('GAME.EXE'), self.exe, 'original disc mutated')
+        self.assertEqual(view.plugins, ['example.hook'])
+        small = self.view(features=dict(engine=dict(build='small')))
+        self.assertEqual(small.read('GAME.EXE')[0x880:0x884], b'\xff' * 4)
+        self.assertEqual(small.plugins, [])
+
+    def test_identity_selection_and_unsupported_constructs_fail_closed(self):
+        for changes, error in [(dict(manifest_sha256='0' * 64), 'manifest changed'),
+                               (dict(version='2.0.0'), 'id/version'),
+                               (dict(features=dict(engine=dict(build='huge'))), 'Invalid choice'),
+                               (dict(features=dict(engine=dict(size='1'))), 'Unknown option'),
+                               (dict(features=dict(other={})), 'must be declared')]:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                self.view(**changes)
+        with self.assertRaisesRegex(ValueError, 'does not target'):
+            pipeline.ModPackageView(self.disc, self.root, self.spec, 'OTHER')
+        for old, new, error in [('expected = "0000000000000000"\nreplace', 'expected = "0100000000000000"\nreplace',
+                                 'expected bytes changed'),
+                                ('replace = "ffffffff"', 'replace_from = { option = "build" }', 'Unsupported'),
+                                ('target = "disc_user"', 'target = "disc_raw"', 'Unsupported mod overlay'),
+                                ('\n[[target]]', '\n[[constraint]]\nfeature = "engine"\n[[target]]', 'sections')]:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                self.write_manifest(self.manifest.replace(old, new, 1))
+                self.view()
+        self.write_manifest(self.manifest)
+        # The BIOS loads the boot EXE through CD reads, so a disc overlay over
+        # its header sector is part of the loaded image. Clobbering the header
+        # changes load geometry the view does not model: fail closed.
+        exe_offset = self.disc.files['GAME.EXE'][0] * 2048
+        clobber = self.manifest + (
+            '\n[[overlay]]\nfeature = "engine"\ntarget = "disc_user"\n'
+            f'offset = {exe_offset}\nfile = "assets/data.overlay"\nsha256 = "{sha(self.overlay)}"\n')
+        self.write_manifest(clobber)
+        with self.assertRaisesRegex(ValueError, 'PS-X EXE header'):
+            self.view()
+
+    def boot_overlay_manifest(self, *, also_patch):
+        """The engine delivered as a disc overlay over the boot EXE's first text
+        sector, optionally ALSO as the stock-guarded main_exe patches (bead
+        beads-btt8.6: every WipEout 3 framerate build shipped both)."""
+        text = bytearray(self.exe[0x800:0x1000])
+        text[0x100:0x100 + len(self.engine)] = self.engine
+        text[0x40:0x48] = struct.pack('<II', 0x08000000 | ((self.ENGINE + 0x10) >> 2 & 0x3FFFFFF), 0)
+        text[0x48:0x50] = struct.pack('<II', 0x0C000000 | (self.ENGINE >> 2 & 0x3FFFFFF), 0)
+        payload = bytes(text)
+        (self.root / 'mods/example/1.0.0/assets/exe.overlay').write_bytes(payload)
+        lba = self.disc.files['GAME.EXE'][0]
+        body = self.manifest.split('[[patch]]', 1)[0]
+        if also_patch:
+            body = self.manifest.split('[[overlay]]', 1)[0]
+        return body + (
+            '[[overlay]]\nfeature = "engine"\ntarget = "disc_user"\n'
+            f'offset = {(lba + 1) * 2048}\nfile = "assets/exe.overlay"\n'
+            f'sha256 = "{sha(payload)}"\nexpected_sha256 = "{sha(self.exe[0x800:0x1000])}"\n'
+            'when = { build = "large" }\n')
+
+    def test_boot_exe_edits_encoded_once_as_disc_overlay(self):
+        # The runtime loads the boot EXE through the overlaid CD path; the
+        # view must see the engine there, and its transfers, with no main_exe
+        # patch at all.
+        self.write_manifest(self.boot_overlay_manifest(also_patch=False))
+        view = self.view()
+        exe = view.read('GAME.EXE')
+        self.assertEqual(exe[0x900:0x900 + len(self.engine)], self.engine)
+        self.assertEqual(view.receipt()['main_exe_writes'], 0)
+        written = dict(view.written_words())
+        self.assertIn(0x80010040, written, 'changed detour word must count as written')
+        self.assertNotIn(0x80010000, written,
+                         'an unchanged stock word inside the replaced sector is not evidence')
+        inventory = self.prepare(self.profile())
+        self.assertEqual(inventory['jobs'][0]['required_entries'],
+                         [self.ENGINE, self.ENGINE + 0x10])
+
+    def test_boot_exe_edit_encoded_twice_is_the_plan_the_runtime_rejects(self):
+        # Overlay AND stock-guarded main_exe patch for the same bytes: after
+        # the BIOS loads the overlaid EXE every guard fails, and the runtime
+        # logs "mod plan ... rejected" and boots with no main_exe writes.
+        self.write_manifest(self.boot_overlay_manifest(also_patch=True))
+        with self.assertRaisesRegex(ValueError, 'encoded twice'):
+            self.view()
+
+    def test_presentation_keys_do_not_change_the_image(self):
+        # hidden / author / channel are launcher and release metadata the
+        # runtime accepts; a hidden default-on feature must still build.
+        base = self.view()
+        text = self.manifest.replace(
+            'format_version = 5\n', 'format_version = 6\nchannel = "stable"\n', 1)
+        text = text.replace(
+            '[[feature]]\nid = "engine"\nname = "Engine"\n',
+            '[[feature]]\nid = "engine"\nname = "Engine"\nauthor = "someone"\n'
+            'hidden = true\ndefault_enabled = true\nchannel = "stable"\n', 1)
+        self.assertNotEqual(text, self.manifest)
+        self.write_manifest(text)
+        view = self.view()
+        self.assertEqual(view.read('GAME.EXE'), base.read('GAME.EXE'))
+        self.assertEqual(view.read('DATA.BIN'), base.read('DATA.BIN'))
+        self.assertEqual(view.plugins, base.plugins)
+
+    def test_extent_in_ram_mirror_uses_patched_transfers_as_entries(self):
+        inventory = self.prepare(self.profile())
+        job, = inventory['jobs']
+        self.assertEqual(job['required_entries'], [self.ENGINE, self.ENGINE + 0x10])
+        self.assertEqual(job['load_addr'], hex(self.ENGINE))
+        self.assertEqual(inventory['required_images'], ['large:GAME.EXE@80010100+20'])
+        self.assertEqual(inventory['mod_packages'][0]['plugins'], ['example.hook'])
+        record = json.loads(Path(job['input']).read_text())[0]
+        self.assertTrue(record['strict_producer_ranges'])
+        self.assertEqual(record['producer_ranges'], [dict(start='0x80780000', end='0x80780020')])
+
+    def test_excluded_package_writes_are_not_transfer_entries(self):
+        # The detour at 0x80010040 lies in an interval the profile declares as
+        # package-written data; only the call at 0x80010048 still counts.
+        exclude = [dict(start='0x80010040', end='0x80010048', reason='written data')]
+        inventory = self.prepare(self.profile(transfer_entries={
+            'from': 'mod_package_writes', 'count': 1, 'exclude_writes': exclude}))
+        self.assertEqual(inventory['jobs'][0]['required_entries'], [self.ENGINE])
+        for item, error in [(dict(start='0x80010040', end='0x80010048'), 'needs a reason'),
+                            (dict(start='0x80010042', end='0x80010048', reason='x'),
+                             'Invalid excluded write'),
+                            (dict(start='0x80010048', end='0x80010040', reason='x'),
+                             'Invalid excluded write')]:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                self.prepare(self.profile(transfer_entries={
+                    'from': 'mod_package_writes', 'count': 1, 'exclude_writes': [item]}))
+
+    def test_extent_evidence_and_inventory_drift_fail_closed(self):
+        for changes, error in [(dict(sha256='0' * 64), 'Extent bytes changed'),
+                               (dict(transfer_entries={'from': 'mod_package_writes', 'count': 3}),
+                                'Transfer entry inventory changed'),
+                               (dict(load_addr='0x807FFFF0'), 'outside RAM'),
+                               (dict(size='0x2000'), 'outside source file')]:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                self.prepare(self.profile(**changes))
+        profile = self.profile()
+        profile['checks'][0]['values'] = {'0x80010100': '0x00000000'}
+        with self.assertRaisesRegex(ValueError, 'Loader evidence changed'):
+            self.prepare(profile)
+        profile = self.profile()
+        profile['mod_packages'] = [{**self.spec, 'plugins': []}]
+        with self.assertRaisesRegex(ValueError, 'plugins changed'):
+            self.prepare(profile)
+
+    def test_active_requirements_are_reported_and_pinned_by_the_profile(self):
+        # A [[requirement]] activates a feature of ANOTHER package (here the
+        # 8 MB RAM builtin) while its `when` holds. The view cannot model that
+        # package, so it reports the active set and the profile pins it
+        # exactly, like plugins: a manifest edit that changes what an image's
+        # selection pulls in must not pass unnoticed.
+        text = self.manifest.replace('format_version = 5', 'format_version = 7', 1) + (
+            '\n[[requirement]]\nfeature = "engine"\npackage = "psx.enhancement.8mb-ram"\n'
+            'requires_feature = "8mb-ram"\nwhen = { build = "large" }\n')
+        self.write_manifest(text)
+        self.assertEqual(self.view().requirements, ['psx.enhancement.8mb-ram/8mb-ram'])
+        self.assertEqual(self.view(features=dict(engine=dict(build='small'))).requirements, [])
+        with self.assertRaisesRegex(ValueError, 'requirements changed'):
+            self.prepare(self.profile())
+        self.spec['requirements'] = ['psx.enhancement.8mb-ram/8mb-ram']
+        self.prepare(self.profile())
+        self.write_manifest(text.replace('requires_feature = "8mb-ram"',
+                                         'requires_feature = "8mb-ram"\nenabled = true', 1))
+        with self.assertRaisesRegex(ValueError, r'\[\[requirement\]\] keys'):
+            self.view()
+
+    def test_image_straddling_a_retail_mirror_needs_a_declared_8mb_profile(self):
+        # 0x801FFFF0 crosses the retail 2 MiB end; 0x803FFFF0 crosses the
+        # second/third mirror boundary. psx_ram_resolve rejects both on a 2 MiB
+        # runtime, so a retail profile must refuse them instead of emitting a
+        # variant that can never pass the gate.
+        for load in ('0x801FFFF0', '0x803FFFF0'):
+            with self.subTest(load=load):
+                # The package's detours target the 4th-mirror engine, so a moved
+                # copy has no package-written transfers into it.
+                moved = dict(load_addr=load, entries=[load],
+                             transfer_entries={'from': 'mod_package_writes', 'count': 0})
+                with self.assertRaisesRegex(ValueError, 'crosses a 2 MiB RAM mirror boundary'):
+                    self.prepare(self.profile(**moved))
+                profile = self.profile(**moved)
+                profile['main_ram_bytes'] = '0x800000'
+                inventory = self.prepare(profile)
+                self.assertEqual(len(inventory['jobs']), 1)
+                self.assertEqual(inventory['source_images'][0]['load_addr'], hex(int(load, 16)))
+        # Inside one mirror stays valid on retail RAM (the 4th-mirror engine).
+        self.assertEqual(self.prepare(self.profile())['jobs'][0]['load_addr'], hex(self.ENGINE))
+        profile = self.profile()
+        profile['main_ram_bytes'] = '0x400000'
+        with self.assertRaisesRegex(ValueError, 'main_ram_bytes must be'):
+            self.prepare(profile)
+
+    def test_static_dispatch_identities_and_publication_receipt(self):
+        text = ('static const uint32_t psx_ov_static_ranges_00000[] = { 0x00780000u, 0x8u, 0x00780010u, 0x8u };\n'
+                'static const PsxOvVariant psx_ov_variants[1] = {\n'
+                '    { psx_ov_static_ranges_00000, 2u, 0x1234ABCDu, ov_fn_80780000 },\n};\n'
+                'static const PsxOvEntry psx_ov_entries[1] = {\n    { 0x80780000u, 0u, 1u },\n};\n')
+        build = self.root / 'static'
+        build.mkdir()
+        (build / 'overlays_static.c').write_text(text)
+        (build / 'overlays_static_0000.c').write_text('/* unit */\n')
+        self.assertEqual(auditor.static_dispatch_identities(build / 'overlays_static.c'),
+                         [(0x80780000, 0x1234ABCD, [(0x780000, 8), (0x780010, 8)])])
+        files = {p.name: pipeline.digest(p) for p in build.iterdir()}
+        out = self.root / 'generated'
+        out.mkdir()
+        (out / 'overlays_static_0007.c').write_text('/* stale unit */\n')
+        pipeline.publish_static(build, out, dict(files=files))
+        self.assertEqual(sorted(p.name for p in out.iterdir()),
+                         ['AOT_STATIC_AUDIT.json', 'overlays_static.c', 'overlays_static_0000.c'])
+        (build / 'overlays_static_0000.c').write_text('/* changed after audit */\n')
+        with self.assertRaisesRegex(ValueError, 'Audited static output changed'):
+            pipeline.publish_static(build, out, dict(files=files))
+
+
 class AotMethodsTest(unittest.TestCase):
+    def test_tagged_relocated_original_file_and_inventory_check(self):
+        original = struct.pack('<8I', 16, 8, 0x03e00008, 0, 4, 0xFFFFFFFF, 0, 0)[:24]
+        disc = FakeDisc({'MODULE.DLL': original})
+        spec = dict(method='tagged_relocated_files', files=['MODULE.DLL'],
+                    load_addr='0x80100000', allow_missing=True, entries=['0x80100008'])
+        source, = pipeline.positioned_sources(disc, [spec])
+        self.assertEqual(source['body'], struct.pack('<4I', 16, 0x80100008, 0x03e00008, 0))
+        self.assertEqual(disc.read('MODULE.DLL'), original)
+        check = dict(method='tagged_relocations', file='MODULE.DLL', image_size=16, relocation_count=1)
+        pipeline.verify_evidence(disc, [check])
+        with self.assertRaisesRegex(ValueError, 'inventory changed'):
+            pipeline.verify_evidence(disc, [{**check, 'relocation_count': 2}])
+        with tempfile.TemporaryDirectory() as directory:
+            disc.binary = Path(directory) / 'source.bin'
+            disc.binary.write_bytes(original)
+            inventory = pipeline.prepare(dict(game_id='TEST', images=[spec], checks=[check],
+                expected_records=1, strict_bounds=True), disc, [], Path(directory))
+        self.assertEqual(inventory['required_images'], ['MODULE.DLL'])
+        self.assertEqual(inventory['jobs'][0]['required_entries'], [0x80100008])
+
+    def test_resident_preload_metadata_survives_build_audit_and_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = dict(producer='bios_resident_manifest', bios_sha256='a' * 64,
+                          producer_name='Synthetic exact-BIOS helper')
+            filename = '00001000_12345678' + pipeline.compiler.overlay_ext()
+            def compile_fixture(command, **kwargs):
+                cache = Path(command[command.index('--out-dir') + 1])
+                leaf = cache / 'TEST/gcc' / pipeline.compiler.cache_arch_abi() / 'cg'
+                leaf.mkdir(parents=True)
+                dll = leaf / filename
+                dll.write_bytes(b'Synthetic library')
+                dll.with_suffix('.ranges').write_bytes(b'Synthetic ranges')
+                pipeline.compiler.update_bios_resident_marker(str(dll), record)
+            with mock.patch.object(pipeline.subprocess, 'run', side_effect=compile_fixture):
+                cache = pipeline.build(dict(jobs=[dict(input='input.json', name='resident')]),
+                    root / 'game.toml', root / 'emitter', root, 'gcc', 1)
+            library = next(cache.rglob('*' + pipeline.compiler.overlay_ext()))
+            pair = dict(dll=filename, dll_sha256=pipeline.digest(library),
+                        manifest_sha256=pipeline.digest(library.with_suffix('.ranges')),
+                        **auditor.resident_metadata(library, record))
+            receipt = dict(game_id='TEST', cache_tag='cg', pairs=[pair])
+            pipeline.stage(cache, root / 'stage', receipt)
+            staged = next((root / 'stage').rglob('*.resident'))
+            self.assertEqual(staged.read_bytes(), library.with_suffix('.resident').read_bytes())
+            library.with_suffix('.resident').write_bytes(b'changed after audit')
+            with self.assertRaisesRegex(ValueError, 'Audited artifact changed'):
+                pipeline.stage(cache, root / 'stage', receipt)
+
+    def test_resident_audit_rejects_missing_unproven_and_changed_markers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dll = Path(directory) / ('helper' + pipeline.compiler.overlay_ext())
+            record = dict(producer='bios_resident_manifest', bios_sha256='a' * 64)
+            with self.assertRaisesRegex(AssertionError, 'marker/recipe mismatch'):
+                auditor.resident_metadata(dll, record)
+            pipeline.compiler.update_bios_resident_marker(str(dll), record)
+            self.assertIn('resident_sha256', auditor.resident_metadata(dll, record))
+            with self.assertRaisesRegex(AssertionError, 'marker/recipe mismatch'):
+                auditor.resident_metadata(dll, {})
+            with self.assertRaisesRegex(AssertionError, 'BIOS provenance'):
+                auditor.resident_metadata(dll, {**record, 'bios_sha256': 'b' * 64})
+            marker = dll.with_suffix('.resident')
+            document = json.loads(marker.read_bytes())
+            marker.write_text(json.dumps({**document, 'schema': 'unknown'}), encoding='utf-8')
+            with self.assertRaisesRegex(AssertionError, 'Invalid resident marker'):
+                auditor.resident_metadata(dll, record)
+
+    def test_release_refuses_config_that_would_ignore_bundled_native_modules(self):
+        for config in ({}, {'runtime': {}}, {'runtime': {'overlay_cache': False}}):
+            with self.subTest(config=config), self.assertRaisesRegex(ValueError, 'overlay_cache = true'):
+                pipeline.require_runtime_cache(config)
+        pipeline.require_runtime_cache({'runtime': {'overlay_cache': True}})
+
+    def test_verified_fallback_intervals_split_native_ownership(self):
+        body = bytes(range(32))
+        item = dict(start=0x1008, end=0x1010, reason='Unsupported original instruction',
+                    sha256=hashlib.sha256(body[8:16]).hexdigest())
+        source = dict(base=0x1000, body=body, spec=dict(excluded_ranges=[item]))
+        self.assertEqual(pipeline.eligible_ranges(source, 0x1000, 0x1020),
+                         [(0x1000, 0x1008), (0x1010, 0x1020)])
+        self.assertEqual(pipeline.eligible_ranges(source, 0x1014, 0x1020),
+                         [(0x1014, 0x1020)])
+        self.assertEqual(pipeline.eligible_ranges(source, 0x1008, 0x100c), [])
+        for change, error in [({'start': 0xffc}, 'Invalid'),
+                              ({'end': 0x100f}, 'Invalid'),
+                              ({'reason': ''}, 'reason'),
+                              ({'sha256': '0' * 64}, 'bytes changed')]:
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, error):
+                pipeline.eligible_ranges({**source, 'spec': dict(excluded_ranges=[{**item, **change}])},
+                                         0x1000, 0x1020)
+        with self.assertRaisesRegex(ValueError, 'Overlapping'):
+            pipeline.eligible_ranges({**source, 'spec': dict(excluded_ranges=[item, item])},
+                                     0x1000, 0x1020)
+
+    def test_fallback_cannot_hide_required_loader_entry(self):
+        base, body = 0x80100000, struct.pack('<4I', 0x03e00008, 0, 0x03e00008, 0)
+        spec = dict(method='fixed_address_files', files=['CODE'], load_addr=hex(base),
+                    entries=[hex(base)], excluded_ranges=[dict(start=base, end=base+8,
+                    reason='Synthetic fallback', sha256=hashlib.sha256(body[:8]).hexdigest())])
+        record = pipeline.extractor.rec(base, body, [base, base+8])
+        with tempfile.TemporaryDirectory() as directory:
+            for strict, error in [(False, 'strict producer'), (True, 'required loader entry')]:
+                with self.subTest(strict=strict), self.assertRaisesRegex(ValueError, error):
+                    pipeline.prepare(dict(images=[spec], expected_records=1, strict_bounds=strict),
+                                     FakeDisc({'CODE': body}), [dict(record)], Path(directory))
+
+    def test_optional_normal_roots_reject_control_transfer_in_delay_slot(self):
+        base = 0x80100000
+        body = struct.pack('<8I', 0, 0, 0x0C004000, 0x0C004001,
+                           0x0C004000, 0, 0x03E00008, 0)
+        roots = [base + 8, base + 16, base + 24]
+        self.assertEqual(pipeline.extractor.filter_full_discovery_seeds(
+            body, base, roots, base + 16), [base + 16, base + 24])
+        # A loader-established entry is never silently discarded.
+        self.assertIn(base + 8, pipeline.extractor.filter_full_discovery_seeds(
+            body, base, roots, base + 8))
+        source = dict(name='SYNTHETIC', base=base, body=body, spec=dict(allow_missing=True))
+        with mock.patch.object(pipeline.extractor, 'prologues', return_value=roots), \
+             mock.patch.object(pipeline.extractor, 'frameless_leaf_entries', return_value=set()), \
+             mock.patch.object(pipeline.extractor, 'supplemental_callable_seeds', return_value=set()):
+            record = pipeline.make_fixed_record(source, FakeDisc({}))
+        self.assertNotIn('0x80100008', record['function_entry_pcs'])
+
+    @staticmethod
+    def extent_archive():
+        data = bytearray(7 * 2048)
+        for i, (sector, size) in enumerate([(2, 2052), (4, 2048), (5, 13), (6, 2048)]):
+            struct.pack_into('<II', data, i * 8, sector, size)
+            data[sector * 2048:sector * 2048 + size] = bytes([65 + i]) * size
+        return data
+
+    def test_explicit_sector_offsets_win_over_one_sector_header_heuristic(self):
+        data = self.extent_archive()
+        members = pipeline.extractor.split_indexed_archive(data)
+        self.assertEqual([offset for _, offset, _ in members], [4096, 8192, 10240, 12288])
+        self.assertEqual(members[0][2], b'A' * 2052)
+        self.assertEqual(members[-1][2], b'D' * 2048)
+        self.assertEqual(members[2][2], b'C' * 13)
+
+    def test_extent_archive_rejects_gaps_overlaps_truncation_and_count_drift(self):
+        data = self.extent_archive()
+        for offset, value in [(8, 2), (8, 5), (28, 4096), (32, 7)]:
+            changed = bytearray(data)
+            struct.pack_into('<I', changed, offset, value)
+            with self.subTest(offset=offset, value=value), self.assertRaises(ValueError):
+                pipeline.extract_extent_members(changed, count=4)
+        for changed in [data[:-1], data + bytes(2048)]:
+            with self.assertRaises(ValueError):
+                pipeline.extract_extent_members(changed, count=4)
+        with self.assertRaisesRegex(ValueError, 'count'):
+            pipeline.extract_extent_members(data, count=3)
+
+    def test_extent_inventory_accounts_for_every_member(self):
+        disc = FakeDisc({'ARCHIVE': self.extent_archive()})
+        spec = dict(method='sector_extent_members', file='ARCHIVE', count=4,
+                    members=[dict(index=i, load_addr='0x80100000') for i in range(3)],
+                    excluded_members=[dict(index=3, reason='Data table')])
+        sources = pipeline.positioned_sources(disc, [spec])
+        self.assertEqual(sources[0]['source_offset'], 4096)
+        self.assertEqual(sources[0]['body'], b'A' * 2052)
+        with self.assertRaisesRegex(ValueError, 'classifications'):
+            pipeline.positioned_sources(disc, [{**spec, 'excluded_members': []}])
+
     def test_sector_inventory_covers_payload_and_accounts_for_exclusions(self):
         disc = FakeDisc({'INDEX': struct.pack('<III', 0x100000, 0x100001, 0x100002),
                          'DATA': b'A' * 2048, 'CODE': b'B' * 2048 + b'C' * 2048})
@@ -176,6 +665,338 @@ class AotMethodsTest(unittest.TestCase):
             (source / receipt['pairs'][0]['dll']).write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError, 'Audited artifact changed'):
                 pipeline.stage(root / 'cache', root / 'stage', receipt)
+
+
+def bit_lzss(tokens, position_bits, length_bits):
+    """Invented bit-stream LZSS: ints are literals, (position, count) references."""
+    bits = []
+    field = lambda value, width: [(value >> (width - 1 - i)) & 1 for i in range(width)]
+    for token in tokens:
+        if isinstance(token, int):
+            bits += [1] + field(token, 8)
+        else:
+            bits += [0] + field(token[0], position_bits) + field(token[1], length_bits)
+    bits += [0] + field(0, position_bits)
+    bits += [0] * (-len(bits) % 8)
+    return bytes(int(''.join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8))
+
+
+def indexed_pack(members, count_offset=0x10, table_offset=0x18, alignment=4):
+    """members: (decoded size, stored bytes); equal lengths mean stored verbatim."""
+    data = bytearray(table_offset + 12 * len(members))
+    struct.pack_into('<I', data, count_offset, len(members))
+    for index, (size, stored) in enumerate(members):
+        data += bytes(-len(data) % alignment)
+        struct.pack_into('<III', data, table_offset + 12 * index, len(data), size, len(stored))
+        data += stored
+    return bytes(data + bytes(-len(data) % alignment))
+
+
+class IndexedLzssPackTest(unittest.TestCase):
+    """Invented bytes and parameters exercising the declared decoder contract."""
+    LZSS = dict(position_bits=10, length_bits=3, min_match=2, initial_position=5)
+    CODE = struct.pack('<5I', 0x27BDFFF8, 0xAFBF0000, 0x8FBF0000, 0x03E00008, 0x27BD0008)
+
+    def decode(self, tokens, **overrides):
+        options = {**self.LZSS, **overrides}
+        stream = bit_lzss(tokens, options['position_bits'], options['length_bits'])
+        return lzss_pack.decode(stream, 0, **options), stream
+
+    def test_overlapping_copy_reads_bytes_written_by_the_same_reference(self):
+        # Literals land at window 5 and 6; copying 3 + 2 bytes from 5 re-reads
+        # positions 7..9 that the copy itself wrote.
+        (body, consumed), stream = self.decode([65, 66, (5, 3)])
+        self.assertEqual((body, consumed), (b'ABABABA', len(stream)))
+
+    def test_window_wraps_and_position_zero_terminates(self):
+        # Sixteen literals fill a 16-byte window from position 1; the last one
+        # wraps to position 0, which only a copy crossing the end can reach.
+        (body, _), _ = self.decode(list(range(16)) + [(15, 0)], position_bits=4,
+                                   initial_position=1)
+        self.assertEqual(body, bytes(range(16)) + bytes([14, 15]))
+
+    def test_unwritten_window_slot_depends_on_external_ram(self):
+        with self.assertRaisesRegex(ValueError, 'external RAM'):
+            self.decode([65, (9, 0)])
+        (body, _), _ = self.decode([65, (9, 0)], window_fill=0x20)
+        self.assertEqual(body, b'A  ')
+
+    def test_truncation_output_limit_and_parameters_fail_closed(self):
+        _, stream = self.decode([65, 66, (5, 3)])
+        decode = lzss_pack.decode
+        with self.assertRaisesRegex(ValueError, 'Truncated'):
+            decode(stream[:-1], 0, **self.LZSS)
+        with self.assertRaisesRegex(ValueError, 'exceeds limit'):
+            decode(stream, 0, **self.LZSS, max_output=6)
+        for change in (dict(initial_position=0), dict(initial_position=1024), dict(length_bits=0)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                decode(stream, 0, **{**self.LZSS, **change})
+
+    def pack(self):
+        code = bit_lzss(list(self.CODE), 10, 3)
+        return indexed_pack([(7, bit_lzss([65, 66, (5, 3)], 10, 3)), (len(self.CODE), code),
+                             (5, b'TEXT!')])
+
+    def members(self, data, **overrides):
+        options = dict(count_offset=0x10, table_offset=0x18, alignment=4, lzss=self.LZSS, count=3)
+        return pipeline.extract_pack_members(data, **{**options, **overrides})
+
+    def test_every_member_decodes_to_declared_sizes_and_covers_the_file(self):
+        members = self.members(self.pack())
+        self.assertEqual([(m['index'], m['compressed'], m['body']) for m in members],
+                         [(0, True, b'ABABABA'), (1, True, self.CODE), (2, False, b'TEXT!')])
+        self.assertEqual(members[0]['source_offset'], 0x18 + 36)
+
+    def test_container_drift_fails_closed(self):
+        data = self.pack()
+        table = 0x18
+        offset, size, stored = struct.unpack_from('<III', data, table + 12)
+        next_offset = struct.unpack_from('<I', data, table + 24)[0]
+        padding = offset - 1 if data[offset - 1] == 0 else next_offset - 1
+        cases = [((0, 1), 'header'), ((table + 16, size + 1), 'declared sizes'),
+                 ((table + 16, size - 1), 'exceeds limit'), ((table + 20, stored + 1), 'declared sizes'),
+                 ((table + 24, next_offset + 4), 'gap'), ((table + 12, offset - 4), 'gap')]
+        for (position, value), error in cases:
+            changed = bytearray(data)
+            if position == 0:
+                changed[position] = value
+            else:
+                struct.pack_into('<I', changed, position, value)
+            with self.subTest(error=error, position=position), self.assertRaisesRegex(ValueError, error):
+                self.members(bytes(changed))
+        self.assertEqual(data[padding], 0)
+        changed = bytearray(data)
+        changed[padding] = 1
+        with self.assertRaisesRegex(ValueError, 'padding|outside'):
+            self.members(bytes(changed))
+        # A zero tail (sector fill) is padding; any other byte is unaccounted.
+        self.assertEqual(self.members(data + bytes(2048)), self.members(data))
+        for changed, error in ((data + b'\1', 'outside'), (data[:-4], 'exceeds file')):
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                self.members(changed)
+        with self.assertRaisesRegex(ValueError, 'count changed'):
+            self.members(data, count=2)
+        with self.assertRaisesRegex(ValueError, 'overlaps'):
+            self.members(data, table_offset=0x0C)
+
+    def spec(self, **overrides):
+        spec = dict(method='indexed_lzss_members', file='PACK.PB', count_offset='0x10',
+                    table_offset='0x18', alignment=4, lzss=self.LZSS, count=3,
+                    members=[dict(index=1, load_addr='0x80100000', entries=['0x80100000'],
+                                  decoded_sha256=sha(self.CODE))],
+                    excluded_members=[dict(index=0, reason='Synthetic text'),
+                                      dict(index=2, reason='Synthetic stored data')])
+        return {**spec, **overrides}
+
+    def test_pipeline_places_classified_executable_member(self):
+        disc = FakeDisc({'PACK.PB': self.pack()})
+        source, = pipeline.positioned_sources(disc, [self.spec()])
+        self.assertEqual((source['name'], source['base'], source['body']),
+                         ('PACK.PB:ENTRY_0001', 0x80100000, self.CODE))
+        with tempfile.TemporaryDirectory() as directory:
+            disc.binary = Path(directory) / 'source.bin'
+            disc.binary.write_bytes(b'synthetic disc')
+            inventory = pipeline.prepare(dict(game_id='TEST', images=[self.spec()],
+                expected_records=1, strict_bounds=True), disc, [], Path(directory))
+        self.assertEqual(inventory['required_images'], ['PACK.PB:ENTRY_0001'])
+        self.assertEqual(inventory['jobs'][0]['required_entries'], [0x80100000])
+        self.assertEqual(inventory['source_images'][0]['method'], 'indexed_lzss_members')
+
+    def test_identical_pack_copy_elsewhere_is_verified_and_recorded(self):
+        pack = self.pack()
+        disc = FakeDisc({'PACK.PB': pack, 'BOOT.EXE': b'EXE' + pack + b'tail'})
+        copy = dict(file='BOOT.EXE', file_offset=3, size=len(pack), reason='Linked-in copy')
+        source, = pipeline.positioned_sources(disc, [self.spec(identical_copies=[copy])])
+        self.assertEqual(source['aliases'], [f'BOOT.EXE@3+{len(pack):X}:ENTRY_0001'])
+        for change, error in [(dict(file_offset=4), 'Pack copy differs'), (dict(reason=''), 'reason')]:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                pipeline.positioned_sources(disc, [self.spec(identical_copies=[{**copy, **change}])])
+
+    def test_pipeline_inventory_hash_and_parameters_fail_closed(self):
+        disc = FakeDisc({'PACK.PB': self.pack()})
+        member = self.spec()['members'][0]
+        cases = [(dict(excluded_members=[dict(index=0, reason='Synthetic text')]), 'classifications'),
+                 (dict(excluded_members=[dict(index=0, reason=''), dict(index=2, reason='x')]), 'reason'),
+                 (dict(members=[{**member, 'decoded_sha256': '0' * 64}]), 'Decoded pack member changed'),
+                 (dict(members=[{**member, 'load_addr': '0x807FFFF0'}]), 'outside RAM'),
+                 (dict(lzss={k: v for k, v in self.LZSS.items() if k != 'min_match'}), 'explicitly'),
+                 (dict(lzss={**self.LZSS, 'bit_order': 'lsb'}), 'explicitly'),
+                 (dict(count=4), 'count changed')]
+        for change, error in cases:
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                pipeline.positioned_sources(disc, [self.spec(**change)])
+
+
+class StaticGenerationTest(unittest.TestCase):
+    """The `static` action as `psxrecomp_cli.py generate` drives it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.track = self.root / 'disc' / 'game.bin'
+        self.track.parent.mkdir()
+        self.track.write_bytes(b'data track' * 100)
+        (self.root / 'disc' / 'game.cue').write_text('FILE "game.bin" BINARY\n')
+        (self.root / 'game.toml').write_text(
+            '[game]\nid = "TEST-00001"\ndisc = "disc/game.cue"\n', encoding='utf-8')
+        self.profile = dict(schema='psxrecomp AOT methods v1', game_id='TEST-00001',
+                            static_output='generated/overlays_static.c',
+                            disc_hashes=dict(sha256=sha(self.track.read_bytes())))
+        self.write_profile()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_profile(self):
+        (self.root / 'aot').mkdir(exist_ok=True)
+        (self.root / 'aot/overlays.json').write_text(json.dumps(self.profile))
+
+    def publish(self, inputs_sha256, parts=('overlays_static_0000.c',)):
+        out = self.root / 'generated'
+        out.mkdir(exist_ok=True)
+        files = {}
+        for name in ('overlays_static.c',) + tuple(parts):
+            (out / name).write_text(f'/* {name} */\n')
+            files[name] = sha((out / name).read_bytes())
+        (out / 'AOT_STATIC_AUDIT.json').write_text(json.dumps(dict(
+            files=files, published_variants=7, generation_inputs_sha256=inputs_sha256)))
+        return out
+
+    def run_cli(self, *extra):
+        argv = ['aot_overlay_pipeline.py', 'static', '--profile', str(self.root / 'aot/overlays.json'),
+                '--game-toml', str(self.root / 'game.toml'), '--recompiler', str(self.track),
+                '--work-dir', str(self.root / 'work'), *extra]
+        out, err = io.StringIO(), io.StringIO()
+        disc = lambda cue: mock.Mock(binary=self.track)
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(pipeline, 'Disc', disc), \
+             mock.patch.object(pipeline, 'write_codegen_hash_header') as header, \
+             mock.patch.object(pipeline, 'generation_inputs', return_value=({}, 'inputs-a')), \
+             mock.patch.object(pipeline, 'extract',
+                               side_effect=pipeline.ProfileError('extract reached')) as extract, \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = pipeline.main()
+        return code, out.getvalue(), err.getvalue(), header, extract
+
+    def test_static_output_declaration(self):
+        root = Path('project')
+        self.assertIsNone(pipeline.static_output({}, root))
+        self.assertEqual(pipeline.static_output(dict(static_output='generated/overlays_static.c'), root),
+                         root / 'generated' / 'overlays_static.c')
+        self.assertEqual(pipeline.static_output(dict(static_output='a\\b\\overlays_static.c'), root),
+                         root / 'a' / 'b' / 'overlays_static.c')
+        for value, error in [('/abs/overlays_static.c', 'relative'), ('C:/x/overlays_static.c', 'relative'),
+                             ('../generated/overlays_static.c', 'inside'),
+                             ('generated/other.c', 'overlays_static.c'), ('', 'path'), (3, 'path')]:
+            with self.subTest(value=value), self.assertRaisesRegex(pipeline.ProfileError, error):
+                pipeline.static_output(dict(static_output=value), root)
+
+    def test_disc_mismatch_is_not_applicable_and_names_both_digests(self):
+        disc = mock.Mock(binary=self.track)
+        self.assertEqual(pipeline.check_disc(self.profile, disc, 'game.cue'),
+                         dict(sha256=self.profile['disc_hashes']['sha256']))
+        wrong = {**self.profile, 'disc_hashes': dict(sha256='ab' * 32)}
+        with self.assertRaises(pipeline.DiscNotApplicable) as caught:
+            pipeline.check_disc(wrong, disc, 'other.cue')
+        message = str(caught.exception)
+        self.assertIn('ab' * 32, message)
+        self.assertIn(self.profile['disc_hashes']['sha256'], message)
+        self.assertIn('other.cue', message)
+        self.assertIsInstance(caught.exception, ValueError)
+
+    def test_command_line_exit_codes(self):
+        for raised, code, text in [(pipeline.DiscNotApplicable('other disc'), 3, 'not applicable: other disc'),
+                                   (pipeline.ProfileError('drift'), 1, 'error: drift')]:
+            err = io.StringIO()
+            with self.subTest(code=code), mock.patch.object(pipeline, 'run', side_effect=raised), \
+                 contextlib.redirect_stderr(err):
+                self.assertEqual(pipeline.main(), code)
+                self.assertIn(text, err.getvalue())
+        with mock.patch.object(pipeline, 'run', side_effect=KeyError('bug')), \
+             self.assertRaises(KeyError):
+            pipeline.main()
+
+    def test_reuse_requires_matching_inputs_and_exact_published_units(self):
+        out = self.publish('inputs-a')
+        self.assertTrue(pipeline.reusable_static(out, 'inputs-a')[0])
+        self.assertFalse(pipeline.reusable_static(out, 'inputs-b')[0])
+        (out / 'overlays_static_0000.c').write_text('edited\n')
+        self.assertFalse(pipeline.reusable_static(out, 'inputs-a')[0])
+        out = self.publish('inputs-a')
+        (out / 'overlays_static_0001.c').write_text('stray unit\n')
+        self.assertFalse(pipeline.reusable_static(out, 'inputs-a')[0])
+        (out / 'overlays_static_0001.c').unlink()
+        (out / 'AOT_STATIC_AUDIT.json').unlink()
+        self.assertFalse(pipeline.reusable_static(out, 'inputs-a')[0])
+
+    def test_clear_static_removes_only_static_units_and_receipt(self):
+        out = self.publish('inputs-a')
+        (out / 'SCES_000.00_dispatch.c').write_text('game C\n')
+        self.assertEqual(sorted(pipeline.clear_static(out)),
+                         ['AOT_STATIC_AUDIT.json', 'overlays_static.c', 'overlays_static_0000.c'])
+        self.assertEqual([p.name for p in out.iterdir()], ['SCES_000.00_dispatch.c'])
+
+    def test_generation_inputs_track_config_profile_and_mod_packages(self):
+        package = self.root / 'mods/pkg/1.0'
+        package.mkdir(parents=True)
+        (package / 'manifest.toml').write_text('id = "pkg"\n')
+        (package / 'patch.bin').write_bytes(b'one')
+        profile = {**self.profile, 'mod_packages': [dict(name='pkg', manifest='mods/pkg/1.0/manifest.toml')]}
+        path, toml = self.root / 'aot/overlays.json', self.root / 'game.toml'
+        def inputs(cps=True):
+            with mock.patch.object(pipeline.compiler, 'cache_tag', return_value='cg1_tag'):
+                return pipeline.generation_inputs(path, profile, toml, self.track,
+                                                  dict(sha256='d'), 'gcc', cps)
+        values, first = inputs()
+        self.assertEqual(values['cache_tag'], 'cg1_tag')
+        self.assertIn('tools/aot_overlay_pipeline.py', values['tools'])
+        self.assertIn('tools/compile_overlays.py', values['tools'])
+        self.assertIn('tools/aot_overlay_spike/extract_generic.py', values['tools'])
+        self.assertEqual(first, inputs()[1], 'fingerprint must be deterministic')
+        self.assertNotEqual(first, inputs(cps=False)[1])
+        (package / 'patch.bin').write_bytes(b'two')
+        second = inputs()[1]
+        self.assertNotEqual(first, second)
+        toml.write_text(toml.read_text() + '[runtime]\nlanguage = "en"\n')
+        self.assertNotEqual(second, inputs()[1])
+
+    def test_static_reuses_unchanged_output_without_extracting(self):
+        self.publish('inputs-a')
+        code, out, _, header, extract = self.run_cli('--reuse')
+        self.assertEqual(code, 0)
+        self.assertIn('RESULT_STATIC=reused', out)
+        self.assertIn('Reused 7 audited static variants', out)
+        header.assert_called_once()
+        extract.assert_not_called()
+        # Without --reuse (or with changed inputs) it rebuilds.
+        code, _, err, _, extract = self.run_cli()
+        self.assertEqual((code, extract.call_count), (1, 1))
+        self.assertIn('extract reached', err)
+        self.publish('inputs-old')
+        code, out, _, _, extract = self.run_cli('--reuse')
+        self.assertIn('Building static overlays: inputs changed', out)
+        self.assertEqual((code, extract.call_count), (1, 1))
+
+    def test_static_on_another_disc_exits_3_and_clears_only_when_asked(self):
+        out = self.publish('inputs-a')
+        self.profile['disc_hashes'] = dict(sha256='cd' * 32)
+        self.write_profile()
+        code, _, err, header, extract = self.run_cli('--reuse')
+        self.assertEqual(code, pipeline.EXIT_NOT_APPLICABLE)
+        self.assertIn('not applicable', err)
+        self.assertTrue((out / 'overlays_static.c').exists())
+        header.assert_not_called()
+        extract.assert_not_called()
+        code, stdout, _, _, _ = self.run_cli('--reuse', '--clear-if-not-applicable')
+        self.assertEqual(code, pipeline.EXIT_NOT_APPLICABLE)
+        self.assertIn('Removed 3 static overlay file(s)', stdout)
+        self.assertEqual(list(out.iterdir()), [])
+
+    def test_static_needs_a_destination(self):
+        del self.profile['static_output']
+        self.write_profile()
+        code, _, err, _, _ = self.run_cli()
+        self.assertEqual(code, 1)
+        self.assertIn('static requires --out-dir or a profile static_output', err)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mod_plugins.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -105,6 +107,25 @@ struct ModConstraint {
 struct ModRequirement {
     std::string id;
     std::string version;
+};
+
+/* A feature of this package that needs a feature of ANOTHER package while a
+ * condition on its own options holds (manifest [[requirement]], format 7).
+ *
+ * Package-level [[dependency]] is unconditional, and an in-package
+ * requires_feature constraint cannot name another package. This is the
+ * missing shape: "Extras = Full needs psx.enhancement.8mb-ram/8mb-ram". The
+ * required feature is DERIVED for the session -- resolve() activates it even
+ * when it is hidden or disabled in state.toml -- and is never written to
+ * state.toml, because the player did not choose it. A requirement that cannot
+ * be met (package absent, excluded, wrong version, feature missing) fails the
+ * plan loudly; it never runs the requiring selection without it. */
+struct ModFeatureRequirement {
+    std::string feature_id;           /* the requiring feature (owner) */
+    std::string package_id;           /* the package that provides it */
+    std::string version = "*";        /* same range syntax as [[dependency]] */
+    std::string required_feature_id;  /* feature of package_id to activate */
+    std::map<std::string, std::string> when;  /* owner's option conditions */
 };
 
 struct ModTarget {
@@ -260,6 +281,7 @@ struct ModPackage {
     std::vector<ModFeature> features;
     std::vector<ModOption> options;
     std::vector<ModConstraint> constraints;
+    std::vector<ModFeatureRequirement> requirements;
     std::vector<ModPatch> patches;
     std::vector<ModOverlay> overlays;
     std::vector<ModPlugin> plugins;
@@ -341,6 +363,20 @@ struct ModResolution {
         std::string other_feature_id;
     };
     std::vector<Diagnostic> diagnostics;
+    /* Features the plan activates because an active [[requirement]] needs
+     * them, not because state.toml enables them. One entry per derived
+     * feature (the first requirement that activated it). */
+    struct ImplicitFeature {
+        std::string package_id;
+        std::string feature_id;
+        std::string required_by_package_id;
+        std::string required_by_feature_id;
+    };
+    std::vector<ImplicitFeature> implicit_features;
+    /* The selection the plan was built from: state.toml's selection plus the
+     * implicit activations above. Plugins read option values from this, so a
+     * committed plan and the values its plugins observe cannot disagree. */
+    std::map<std::string, ModSelection> selections;
     std::vector<std::string> errors;
 };
 
@@ -421,6 +457,18 @@ public:
         const std::string& package_id,
         const std::string& feature_id,
         const std::string& resource_id) const;
+    /* True when an active [[requirement]] activates this feature for the
+     * session although state.toml does not enable it. feature_enabled() keeps
+     * answering for the player's own choice, which is what the launcher shows
+     * and what save_state() persists. */
+    bool feature_implicitly_enabled(const std::string& package_id,
+                                    const std::string& feature_id) const;
+    /* An option value as a resolved plan sees it (plan.selections), for
+     * plugins running under that plan. */
+    std::string feature_option_value(const ModResolution& plan,
+                                     const std::string& package_id,
+                                     const std::string& feature_id,
+                                     const std::string& option_id) const;
 
     ModResolution resolve(const std::string& game_id,
                           const std::string& exe_sha256 = {},
@@ -435,6 +483,15 @@ public:
      * package is absent from the list. */
     const std::vector<std::string>& scan_errors() const { return scan_errors_; }
 
+    /* Package ids that mods/state.toml carries a selection for but that no
+     * catalog root holds -- a package the player removed, a developer-only
+     * package a release build stripped, or a framework builtin the title
+     * excludes (EXCLUDE_BUILTIN_MODS). Such a selection is DORMANT: resolve()
+     * never visits it, so it contributes nothing to the plan, and save_state()
+     * keeps it verbatim so the choice returns if the package ever does. The
+     * runtime names these once at startup instead of dropping them silently. */
+    std::vector<std::string> dormant_selections() const;
+
 private:
     /* One-time move of a pre-split <exe>/mods/packages tree into the two
      * owned roots. Anything the build also staged into bundled/ is dropped;
@@ -442,6 +499,14 @@ private:
     void migrate_legacy_root();
     bool scan_root(const std::filesystem::path& packages_root,
                    ModPackageOrigin origin, std::string* error);
+    /* selections_ plus every feature an active [[requirement]] derives,
+     * iterated to a fixed point (a derived feature may carry requirements of
+     * its own). Unmet requirements are reported through errors/diagnostics.
+     * Never touches selections_: derived activations are not player choices. */
+    std::map<std::string, ModSelection> effective_selections(
+        std::vector<ModResolution::ImplicitFeature>* implicit,
+        std::vector<ModResolution::Diagnostic>* diagnostics,
+        std::vector<std::string>* errors) const;
 
     std::filesystem::path root_;
     bool developer_channel_ = kDeveloperChannelDefault;
@@ -454,9 +519,20 @@ bool mod_register_builtin_resolver(const std::string& id, ModBuiltinResolver res
 void mod_clear_builtin_resolvers_for_tests();
 bool mod_register_activation_plugin(const std::string& id, void (*callback)(void));
 bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void));
+/* A function-entry hook is a trusted implementation like the others: manifests
+ * select it by id, and it runs only while a resolved plan activates that id. */
+bool mod_register_function_entry_plugin(const std::string& id, uint32_t address,
+                                        PSXModFunctionEntryCallback callback);
 bool mod_plugin_registered(const std::string& id);
 void mod_invoke_activation_plugin(const std::string& id);
 void mod_invoke_vblank_plugin(const std::string& id);
+struct ModFunctionEntryHook {
+    uint32_t address = 0;
+    PSXModFunctionEntryCallback callback = nullptr;
+};
+/* Hooks one implementation registered, in registration order. mod_runtime
+ * flattens these into an address table when the plan's plugins activate. */
+std::vector<ModFunctionEntryHook> mod_function_entry_hooks(const std::string& id);
 void mod_clear_plugins_for_tests();
 
 } // namespace PSXRecompV4

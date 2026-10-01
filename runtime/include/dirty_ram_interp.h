@@ -16,6 +16,8 @@
 #define PSXRECOMP_DIRTY_RAM_INTERP_H
 
 #include <stdint.h>
+#include <string.h>
+#include "psx_memory.h"
 #include "cpu_state.h"
 
 #ifdef __cplusplus
@@ -52,6 +54,18 @@ void dirty_ram_ld_delay_flush(CPUState* cpu);
  * on the next interp step (selfcheck MotK v0=countdown vs v0=1 forks). */
 void dirty_ram_ld_delay_discard(void);
 
+/* Save / put back the deferred load-delay writeback exactly. For a landing
+ * that longjmps out of interpreted code and then resumes the interrupted
+ * code (the render-pass watchdog abort, render_pass.c): the pass's pending
+ * load must not reach the resumed timeline, and the interrupted one's must
+ * survive. */
+typedef struct DirtyRamLoadDelay {
+    uint32_t rt, val, age;
+    int      armed;
+} DirtyRamLoadDelay;
+void dirty_ram_ld_delay_save(DirtyRamLoadDelay *out);
+void dirty_ram_ld_delay_restore(const DirtyRamLoadDelay *in);
+
 /* Re-anchor host-only dirty IRQ pump ambient (entry-poll stride + 4096-insn
  * gap) after snap restore. Not in boot_state — peers that drifted through FMV
  * otherwise entered the post-FMV dirty wait on opposite poll phases. */
@@ -64,7 +78,7 @@ void dirty_ram_irq_ambient_resync_after_restore(void);
  *   Kernel RAM   [0x00000, 0x10000): the BIOS part-2 image relocated to RAM
  *     plus install-at-runtime stubs (e.g. the SIO data-byte stub at 0xCF0).
  *     Dirty-tracked per CPU store (dirty_ram_mark_kernel_write).
- *   Overlay region [OVERLAY_REGION_FLOOR, RAM_SIZE): game overlays loaded by
+ *   Overlay region [OVERLAY_REGION_FLOOR, live RAM end): game overlays loaded by
  *     CD DMA (dirty_ram_mark_executable_range).
  *
  * Main-EXE text [0x10000, OVERLAY_REGION_FLOOR): CLEAN pages are statically
@@ -139,8 +153,13 @@ int      dirty_ram_is_dirty(uint32_t phys);
  * on writes into the body. Runtime-patched bodies (pad/SIO install stubs)
  * never verify and keep interpreting — faithful either way. */
 int      psx_kernel_bless_dispatchable(uint32_t phys);
+/* True when a declared kernel patch range ENDS at this RAM address. The
+ * emitter registered that PC as a continuation key, so the interpreter hands
+ * straight-line flow back to static dispatch there and only the guest's
+ * patched words interpret (memory.c psx_bios_kernel_patch_ranges). */
+int      psx_kernel_patch_range_ends_at(uint32_t phys);
 void     psx_kernel_bless_note_range(uint32_t phys, uint32_t len);
-void     psx_kernel_bless_stats(uint64_t out[6]);
+void     psx_kernel_bless_stats(uint64_t out[8]);
 void     psx_kernel_bless_resync_after_restore(void);
 /* Soft-return rematch / BIOS switch: drop latched SCPH↔OpenBIOS window +
  * CLEAN/MISMATCH so the next kbless_on() re-reads psx_bios_image. */
@@ -253,20 +272,67 @@ extern DirtyRamPcEntry g_dirty_ram_pc_table[DIRTY_RAM_PC_TABLE_SIZE];
 /* Every aligned main-RAM word is a possible instruction PC.  Execution
  * coverage only needs presence, not a hit count, so record it in a direct
  * bitmap instead of probing a large hash table for every retired instruction.
- * This covers all 524,288 RAM words (the old 262K-entry hash could saturate)
- * and is also the execution-verified seed source used by overlay_capture. */
-#define DIRTY_RAM_EXEC_WORD_COUNT   ((2u * 1024u * 1024u) / 4u)
+ * This covers every word of the host RAM backing (the old 262K-entry hash
+ * could saturate) -- retail 2 MiB and the opt-in 8 MiB map alike -- and is
+ * also the execution-verified seed source used by overlay_capture. */
+#define DIRTY_RAM_EXEC_WORD_COUNT   (PSX_MAIN_RAM_BACKING_BYTES / 4u)
 #define DIRTY_RAM_EXEC_BITMAP_WORDS ((DIRTY_RAM_EXEC_WORD_COUNT + 31u) / 32u)
 extern uint32_t g_dirty_ram_exec_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS];
 /* One bit per 4 KiB page. RAM writes use this as a one-test stale-evidence
  * guard; they clear that page's capture bits rather than serializing from the
  * universal store hot path. */
-#define DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS 16u
+#define DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS \
+    (((PSX_MAIN_RAM_BACKING_BYTES / 4096u) + 31u) / 32u)
 extern uint32_t g_dirty_ram_exec_page_bitmap[DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS];
 /* Presence-only companion for interpreted block/dispatch entries. The richer
  * counter table remains for telemetry, while capture can snapshot/reset this
  * compact evidence independently at overlay-generation boundaries. */
 extern uint32_t g_dirty_ram_dispatch_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS];
+
+/* The segment each interpreted dispatch entered through
+ * (docs/SEGMENT_AWARE_CODE.md §5.7). The bytes are segment-free, but a PC is
+ * not: a KUSEG, KSEG0 or KSEG1 entry of the same word links, traps and fetches
+ * in its own segment, so each needs its own compiled shard. The bitmap above
+ * keeps its meaning (dispatched in any segment); these siblings record which
+ * segments, one bit per word per segment, set at the same interpreted
+ * dispatch. The execution bitmap needs no segment: direct edges keep the
+ * entry's segment. Only the three segments that map physical memory have a
+ * sibling; a PC elsewhere (0x20000000-0x7FFFFFFF, KSEG2) addresses no RAM in
+ * Beetle and is never recorded. */
+#define PSX_CODE_SEGMENT_COUNT 3
+static inline int psx_code_segment_index(uint32_t pc) {
+    switch (pc & 0xE0000000u) {
+    case 0x00000000u: return 0;   /* KUSEG */
+    case 0x80000000u: return 1;   /* KSEG0 */
+    case 0xA0000000u: return 2;   /* KSEG1 */
+    default:          return -1;
+    }
+}
+static inline uint32_t psx_code_segment_base(int index) {
+    return index == 0 ? 0x00000000u : index == 1 ? 0x80000000u : 0xA0000000u;
+}
+/* The names the capture JSON and the per-segment cache directories use. */
+static inline const char *psx_code_segment_name(int index) {
+    return index == 0 ? "kuseg" : index == 1 ? "kseg0" : "kseg1";
+}
+extern uint32_t g_dirty_ram_dispatch_seg_bitmap[PSX_CODE_SEGMENT_COUNT]
+                                               [DIRTY_RAM_EXEC_BITMAP_WORDS];
+
+/* Clear dispatch evidence (the any-segment bitmap and its segment siblings)
+ * for `nwords` bitmap words from `first_word`. Every site that drops dispatch
+ * evidence goes through this, so a stale segment bit can never outlive its
+ * any-segment bit. */
+static inline void dirty_ram_dispatch_evidence_clear(uint32_t first_word,
+                                                     uint32_t nwords) {
+    if (first_word >= DIRTY_RAM_EXEC_BITMAP_WORDS) return;
+    if (nwords > DIRTY_RAM_EXEC_BITMAP_WORDS - first_word)
+        nwords = DIRTY_RAM_EXEC_BITMAP_WORDS - first_word;
+    memset(&g_dirty_ram_dispatch_pc_bitmap[first_word], 0,
+           (size_t)nwords * sizeof(uint32_t));
+    for (int s = 0; s < PSX_CODE_SEGMENT_COUNT; s++)
+        memset(&g_dirty_ram_dispatch_seg_bitmap[s][first_word], 0,
+               (size_t)nwords * sizeof(uint32_t));
+}
 
 /* Block-entry ring buffer. Records every dispatch into dirty RAM with the
  * caller's RA at entry, plus argument context — answers

@@ -93,7 +93,10 @@ online Create/Join require `netplay_ok` (and online also a clean verify +
 non-empty `disc_fp`). Mirror `required_tracks` in the Retro catalog as
 `rom_identity.track_counts` so the hub library scan rejects Track-01-only dumps.
 Wizard / Retro / catalog submission accept Redump `.cue` + sibling `.bin`
-tracks only — not `.iso`/`.chd` (cannot reliably expand to multi-track).
+tracks, or a MAME-compatible `.chd` of the same dump: `tools/psx_chd.py` reads
+it through the libchdr the emitters build (CMake target `chdr`) and writes the
+Redump-shaped track files back, so `[prepare_disc]` digests, SBI companions and
+`required_tracks` apply unchanged. A bare `.iso` cannot expand to multi-track.
 
 ## Program / game block
 
@@ -320,6 +323,28 @@ expected = "0x2402FF00" # addiu v0,zero,-256
 - Site identity is the normalized physical address plus the complete
   instruction word. The helper is identity at 4:3.
 
+Signed per-vertex screen-X culls can be listed site by site
+(`slti_sites`, `slti_lower_sites`, `bltz_sites`, `bgez_sites`,
+`clip_edge_x_load_sites` with `clip_edge_width`, `branch_keep_sites`). All are
+identity at 4:3, empty by default, and need a regen; `docs/WIDESCREEN.md`
+("Explicit screen-X cull sites") has the semantics of each kind:
+
+```toml
+[widescreen.cull]
+bgez_sites = ["0x80013F40"]              # bgez SX,keep: keep while SX >= -margin
+bltz_sites = ["0x80013F58"]              # bltz SX,reject: reject while SX < -margin
+clip_edge_x_load_sites = ["0x8005F5F4"]  # lh of a clip bound: 0 -> -m, W -> W+m
+clip_edge_width = 320                    # 1..1024; default screen_w_imms[0]
+```
+
+- Main-EXE generation fails (exit 1) when a listed address does not hold the
+  expected instruction: `slti` for both slti kinds, exactly `bltz` / `bgez`,
+  `lh`/`lhu`/`lw` to a nonzero register for clip-edge loads, and a
+  conditional branch (`beq`, `bne`, `blez`, `bgtz` or REGIMM) for
+  `branch_keep_sites`.
+- `bgez_sites` and `clip_edge_x_load_sites` (with the width) contribute to the
+  overlay-cache identity only when non-empty.
+
 Explicit `bias_sites` / `range_sites` may opt into an additional resident
 object lead without widening terrain or render queues:
 
@@ -447,6 +472,85 @@ a build compiled with Vulkan support. `offer_vulkan` controls launcher
 visibility only; it defaults to false so game projects must explicitly expose
 Vulkan after validating their visuals and stability.
 
+### Internal resolution (`internal_resolution`, `supersampling`)
+
+The player picks a preset in Settings → Display → **Internal resolution**:
+Native, 720p, 1080p, 1440p, 4K, 5K, 8K or Match display. It is stored in the
+player's `settings.toml`, and a game may ship a default the same way:
+
+```toml
+[video]
+internal_resolution = "4k"          # native | 720p | 1080p | 1440p | 4k | 5k | 8k | display, or a number of lines
+resolution_reference_lines = 240    # game.toml only: the title's usual display height (120..1024)
+```
+
+A preset is a target height. The runtime renders at the integer scale
+`S = ceil(target / resolution_reference_lines)`: at the default 240 lines,
+720p is 3x, 1080p is 5x (1200 lines, area-resolved to 1080), 1440p 6x, 4K 9x,
+5K 12x and 8K 18x. A 480-line interlaced screen renders at twice the target
+and is resolved down. **Match display** takes the monitor's pixel height,
+measured from the game window's display when it opens. The backend clamps S
+to what it can allocate (below); `video_info` over TCP reports both numbers.
+
+Precedence: the game's `internal_resolution` is the default; a player's legacy
+`supersampling` in `settings.toml` outranks it; the player's own
+`internal_resolution` outranks both. The launcher writes the preset as a stable
+id (`"4k"`) beside `supersampling = min(S, 4)`, so an older runtime reading the
+same file still gets the nearest factor it supports. A legacy factor with no
+matching preset appears in the launcher as its own entry, for example
+"2x (480 lines)". `settings.toml` `window_width` accepts 640 to 7680.
+
+A host built against a recomp-ui without the Internal resolution row keeps
+the legacy Supersampling row (1x to 4x) and that row stays in charge: with no
+preset configured the launcher round trip is exactly the historical one, and
+no `internal_resolution` key is written. A preset from `game.toml` or a
+hand-edited `settings.toml` starts the row on the nearest factor it can show
+and survives if the row is left alone; picking a different factor there
+drops the preset.
+
+`PSX_INTERNAL_RESOLUTION=<preset or lines>` overrides every layer for one
+run (validation, and two local netplay peers that share one `settings.toml`).
+It is never written to `settings.toml`: the launcher shows and saves the
+configured preset.
+
+On OpenGL, any choice above native opens the game window with a
+high-pixel-density drawable (macOS Retina, Wayland scaling), so the window has
+the pixels to show it. Native keeps the window exactly as before.
+
+`supersampling = N` renders at N times the native resolution per axis and
+downsamples to the window. It accepts 1 to 32 in both `game.toml` and the
+player's `settings.toml`; 1 (the default) is native and unchanged.
+
+The runtime clamps N per backend:
+
+- Software and Vulkan stop at 4.
+- OpenGL keeps VRAM as one `1024*N x 512*N` surface and clamps N at context
+  init to the driver's `GL_MAX_TEXTURE_SIZE`, `GL_MAX_RENDERBUFFER_SIZE` and
+  `GL_MAX_VIEWPORT_DIMS`, and to a memory budget of 2 GiB for that surface
+  (`PSX_GL_VRAM_BUDGET_MB` overrides it; `0` removes it). Apple's OpenGL
+  reports 16384, so 16 is the largest full-VRAM scale there. A surface that
+  still fails to allocate is retried one scale lower; the backend never drops
+  to software because of the scale. The log line
+  `GL internal scale Nx clamped to Mx (...)` names the limit that applied.
+
+**Past the full-VRAM limit** (8K is 18x, over Apple's 16384), OpenGL keeps
+the whole VRAM at 1x — the native renderer, so everything the game reads back
+is exactly native — and renders only the columns it displays at the full
+scale, in a separate high-resolution window (`5760x9216` for a 320-wide
+game at 18x, about 405 MiB). The window grows to cover each displayed
+rectangle the first time it is shown; when the displayed rectangles are too
+far apart for one surface (side-by-side 512-wide buffers), it splits into up
+to four tiles so every buffer still presents at the full scale. A copy whose
+source lies outside it is taken from the 1x surface. `PSX_GL_HIRES_WINDOW=0`
+turns the mode off (the scale is then clamped as above) and `=1` forces it at
+any scale above 1. `PSX_GL_MAX_DIM=N` lowers the GPU limit the backend plans
+with, to check a layout on a smaller GPU.
+
+Above 1x the OpenGL present averages the whole footprint of each output pixel
+when the internal image is more than 1.25 times larger than the window (for
+example 1200 internal lines into a 1080-line window), and lines are drawn one
+native pixel thick at any scale.
+
 `offer_skip_fmv` defaults to true for compatibility with the shared PSX
 Settings surface. A game migrating Skip FMVs into its built-in mod catalog sets
 it to false. The runtime then hides the Settings row, ignores stale persisted
@@ -554,16 +658,45 @@ dispatch_key = "ram"             # "ram": functions keyed by RAM address;
                                  # "rom": RAM alias folds back to ROM
 kernel_bless = true              # runtime may byte-verify + run native
 
-[[recompiler.install_slots]] # kernel-RAM PCs the BIOS patches at runtime
-ram_addr = "0x00000CF0"
+[[recompiler.install_slots]] # kernel-RAM RANGES patched at runtime
+ram_addr = "0x00000CF0"          # legacy form: len 0x10, resume "jalr"
+[[recompiler.install_slots]]
+ram_addr = "0x00000C88"
+len      = "0x30"                # bytes; the patched range is [addr, addr+len)
+resume   = "fallthrough"         # "jalr" (default) | "fallthrough" | "none"
 
 [recompiler.runtime_exports] # per-image HLE anchors (omit = unavailable)
 shell_entry_phys  = "0x00030000"
 deliver_event_ret = "0x80001720"
 ```
 
+An `install_slots` entry declares kernel-RAM words the guest is EXPECTED to
+overwrite at runtime — the BIOS's own install stubs and, far more often, the
+Psy-Q libapi patchers every SDK title runs (`_patch_gte`, `_patch_card`,
+`_patch_card2`, `_patch_pad`). The emitter plants a compare-against-ROM hook
+at the range start, so a live patch dispatches into the interpreter and the
+guest's own instructions execute; the runtime excludes the range from the
+kernel-bless memcmp and resumes native at the range end. Without the
+declaration the patched body fails verification forever and interprets for
+the life of the process.
+
+`resume` says how the compiled body picks up again:
+
+| `resume` | Continuation PC | Use for |
+|---|---|---|
+| `"jalr"` (default) | `ram_addr + 0x10` | the classic 4-word `lui/addiu/jalr/nop` stub, whose call returns there |
+| `"fallthrough"` | `ram_addr + len` | the patched words ARE the function (a prologue rewrite, a NOP'd routine) |
+| `"none"` | — | the patch jumps out and never returns to this body (a `jr` into game text) |
+
+`ram_addr` and `len` must be 4-aligned, `len` non-zero, ranges must not
+overlap, and every range must lie inside the `kernel_bless` window; the
+loader refuses the profile otherwise and sorts the list for the runtime.
+Finding the ranges for a new image is described in
+[`dynamic_handler_install.md`](dynamic_handler_install.md).
+
 Every `copy` entry is a claim that the boot copy is byte-verbatim; the
-runtime kernel-bless memcmp enforces it. A BIOS with no copies (runs
+runtime kernel-bless memcmp enforces it, minus the declared install-slot
+ranges. A BIOS with no copies (runs
 entirely from ROM) is valid: normalization degenerates to the KSEG mask.
 Semantic invariants (disjoint windows, no fold-output/input intersection,
 single bless window) are enforced at load; violations refuse to build.

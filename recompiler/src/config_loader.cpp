@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "bios_rom_alias.h"
+#include "../../runtime/include/internal_resolution.h"
+#include "host_path.h"
 #include "fmt/format.h"
 #include "ps1_exe_parser.h"
 
@@ -80,6 +82,14 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.words("cull_h_imms", c.ws_cull_h_imms);
     h.words("backdrop_x", c.ws_backdrop_x_sites);
     h.words("backdrop_unsquash", c.ws_backdrop_unsquash_funcs);
+    // Kinds added after the v1 hash layout enter the identity only when a
+    // title uses them, so every existing overlay cache stays valid.
+    if (!c.ws_cull_bgez_sites.empty())
+        h.words("cull_bgez", c.ws_cull_bgez_sites);
+    if (!c.ws_cull_clip_edge_x_load_sites.empty()) {
+        h.words("cull_clip_edge_x_load", c.ws_cull_clip_edge_x_load_sites);
+        h.u32(ws_cull_clip_edge_width(c));
+    }
 
     h.tag("flags");
     h.u32(c.ws_auto_screen_x_cull ? 1u : 0u);
@@ -361,7 +371,7 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     }
     if (runtime.contains("memcard_dir")) {
         const auto rel = toml::find<std::string>(runtime, "memcard_dir");
-        rt.memcard_dir = fs::absolute(root / rel);
+        rt.memcard_dir = PSXRecompV4::host_resolve(root, rel);
         rt.has_memcard_dir = true;
     }
     if (runtime.contains("disc_speed")) {
@@ -457,6 +467,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("bios_hle_keep_intro")) {
         rt.bios_hle_keep_intro = toml::find<bool>(runtime, "bios_hle_keep_intro");
     }
+    if (runtime.contains("hide_hidden_mod_features")) {
+        rt.hide_hidden_mod_features = toml::find<bool>(runtime, "hide_hidden_mod_features");
+    }
     if (runtime.contains("hle_scheduler")) {
         rt.hle_scheduler = toml::find<bool>(runtime, "hle_scheduler");
     }
@@ -516,18 +529,20 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             if (raw < 0 || raw > 0xFFFFFFFFll) {
                 throw std::runtime_error(fmt::format(
                     "[runtime] overlay_region_floor out of range "
-                    "(0x10000..0x1FFFFF physical, KSEG0/KSEG1 prefix allowed): {}",
+                    "(0x10000..0x7FFFFF physical, KSEG0/KSEG1 prefix allowed): {}",
                     raw));
             }
             floor = static_cast<uint32_t>(raw);
         }
-        // The floor names a main-RAM physical address above the kernel window;
-        // fail loud here instead of relying on the runtime clamp/mask.
+        // The floor names a main-RAM physical address above the kernel window,
+        // inside the 8 MiB decode window (the opt-in 8 MB map's text may end
+        // above 2 MiB; on retail RAM the runtime clamps it to the live end).
+        // Fail loud here instead of relying on the runtime clamp/mask.
         const uint32_t phys = floor & 0x1FFFFFFFu;
-        if (phys < 0x00010000u || phys >= 0x00200000u) {
+        if (phys < 0x00010000u || phys >= 0x00800000u) {
             throw std::runtime_error(fmt::format(
                 "[runtime] overlay_region_floor out of range "
-                "(0x10000..0x1FFFFF physical, KSEG0/KSEG1 prefix allowed): 0x{:08X}",
+                "(0x10000..0x7FFFFF physical, KSEG0/KSEG1 prefix allowed): 0x{:08X}",
                 floor));
         }
         rt.overlay_region_floor = floor;
@@ -568,11 +583,47 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         const toml::value& video = toml::find(cfg, "video");
         if (video.contains("supersampling")) {
             const auto n = toml::find<int64_t>(video, "supersampling");
-            if (n < 1 || n > 4) {
+            // 1..32: the runtime clamps per backend (software/Vulkan 4, OpenGL
+            // to the driver's texture limits and a memory budget).
+            if (n < 1 || n > 32) {
                 throw std::runtime_error(fmt::format(
-                    "[video] supersampling out of range (1..4): {}", n));
+                    "[video] supersampling out of range (1..32): {}", n));
             }
             rt.video_supersampling = static_cast<int>(n);
+        }
+        if (video.contains("depth24_trailing_margin")) {
+            const auto n = toml::find<int64_t>(video, "depth24_trailing_margin");
+            if (n < 0 || n > 64) {
+                throw std::runtime_error(fmt::format(
+                    "[video] depth24_trailing_margin out of range (0..64): {}", n));
+            }
+            rt.video_depth24_trailing_margin = static_cast<int>(n);
+        }
+        if (video.contains("internal_resolution")) {
+            const toml::value& ir = toml::find(video, "internal_resolution");
+            int value = 0;
+            bool ok = false;
+            if (ir.is_string()) {
+                ok = psx_ir_parse(ir.as_string().str.c_str(), &value) != 0;
+            } else if (ir.is_integer()) {
+                const auto n = ir.as_integer();
+                ok = n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES;
+                value = static_cast<int>(n);
+            }
+            if (!ok) {
+                throw std::runtime_error(
+                    "[video] internal_resolution must be native, 720p, 1080p, "
+                    "1440p, 4k, 5k, 8k, display, or a number of lines");
+            }
+            rt.video_internal_resolution = value;
+        }
+        if (video.contains("resolution_reference_lines")) {
+            const auto n = toml::find<int64_t>(video, "resolution_reference_lines");
+            if (n < 120 || n > 1024) {
+                throw std::runtime_error(fmt::format(
+                    "[video] resolution_reference_lines out of range (120..1024): {}", n));
+            }
+            rt.video_resolution_reference_lines = static_cast<int>(n);
         }
         if (video.contains("window_width")) {
             const auto n = toml::find<int64_t>(video, "window_width");
@@ -819,7 +870,7 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
 }
 
 fs::path find_project_root(const fs::path& config_path) {
-    fs::path cur = fs::absolute(config_path).parent_path();
+    fs::path cur = PSXRecompV4::host_absolute(config_path).parent_path();
     const fs::path fallback = cur;
     for (int i = 0; i < 8; ++i) {
         for (const char* marker : { ".gitignore", ".git", "CMakeLists.txt" }) {
@@ -855,7 +906,7 @@ static std::string derive_out_stem(const std::string& rom_basename) {
 }
 
 BiosConfig load_bios_config(const fs::path& config_path_in) {
-    const fs::path config_path = fs::absolute(config_path_in);
+    const fs::path config_path = PSXRecompV4::host_absolute(config_path_in);
     if (!fs::exists(config_path)) {
         throw std::runtime_error(
             fmt::format("config file not found: {}", config_path.string()));
@@ -920,7 +971,7 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
     // Tolerate either BIOS filename convention (bare "SCPH1001.BIN" vs
     // region-qualified "US-PSX-SCPH1001.BIN") — see bios_rom_alias.h. A no-op
     // for game [program].exe fields, which never match a BIOS model token.
-    const fs::path rom_path = resolve_bios_rom(fs::absolute(root / rom_field));
+    const fs::path rom_path = resolve_bios_rom(PSXRecompV4::host_resolve(root, rom_field));
 
     const uint32_t load_address =
         parse_hex(toml::find<std::string>(prog, "load_address"), "program.load_address");
@@ -954,13 +1005,13 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
             fmt::format("{}: [recompiler] missing 'seeds' field", config_path.string()));
     }
     const std::string seeds_field = toml::find<std::string>(recomp, "seeds");
-    const fs::path seeds_path = fs::absolute(root / seeds_field);
+    const fs::path seeds_path = PSXRecompV4::host_resolve(root, seeds_field);
 
     const std::string out_dir_field =
         recomp.contains("out_dir")
             ? toml::find<std::string>(recomp, "out_dir")
             : std::string{"generated"};
-    const fs::path out_dir = fs::absolute(root / out_dir_field);
+    const fs::path out_dir = PSXRecompV4::host_resolve(root, out_dir_field);
 
     const bool strict = recomp.contains("strict")
                             ? toml::find<bool>(recomp, "strict")
@@ -1060,14 +1111,31 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
         }
     }
 
-    // [[recompiler.install_slots]] — kernel-RAM PCs the BIOS overwrites with
-    // dispatch stubs at runtime.
-    std::vector<uint32_t> install_slots;
+    // [[recompiler.install_slots]] — kernel-RAM ranges the BIOS or the game's
+    // Psy-Q libapi patchers overwrite at runtime. `ram_addr` alone keeps the
+    // original meaning (a 4-word jalr stub); `len` and `resume` describe the
+    // other patch shapes (BiosInstallSlot, bios_address_model.h).
+    std::vector<BiosInstallSlot> install_slots;
     if (recomp.contains("install_slots")) {
         for (const auto& v : recomp.at("install_slots").as_array()) {
-            install_slots.push_back(parse_hex(
+            BiosInstallSlot slot;
+            slot.ram_addr = parse_hex(
                 toml::find<std::string>(v, "ram_addr"),
-                "install_slots.ram_addr"));
+                "install_slots.ram_addr");
+            if (v.contains("len"))
+                slot.len = parse_hex(toml::find<std::string>(v, "len"),
+                                     "install_slots.len");
+            if (v.contains("resume")) {
+                const std::string r = toml::find<std::string>(v, "resume");
+                if      (r == "jalr")        slot.resume = BiosInstallSlot::Resume::Jalr;
+                else if (r == "fallthrough") slot.resume = BiosInstallSlot::Resume::Fallthrough;
+                else if (r == "none")        slot.resume = BiosInstallSlot::Resume::None;
+                else throw std::runtime_error(fmt::format(
+                    "{}: install_slots 0x{:08X}: resume must be \"jalr\", "
+                    "\"fallthrough\" or \"none\", got '{}'",
+                    config_path.string(), slot.ram_addr, r));
+            }
+            install_slots.push_back(slot);
         }
     }
 
@@ -1111,7 +1179,7 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
 }
 
 GameConfig load_game_config(const fs::path& config_path_in) {
-    const fs::path config_path = fs::absolute(config_path_in);
+    const fs::path config_path = PSXRecompV4::host_absolute(config_path_in);
     if (!fs::exists(config_path)) {
         throw std::runtime_error(
             fmt::format("game config not found: {}", config_path.string()));
@@ -1159,7 +1227,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         throw std::runtime_error(
             fmt::format("{}: [game] missing 'exe' or 'rom' field", config_path.string()));
     }
-    const fs::path exe_path = fs::absolute(root / exe_field);
+    const fs::path exe_path = PSXRecompV4::host_resolve(root, exe_field);
 
     // Auto-detect EXE header values for any field not explicitly set in TOML.
     // Parses the PS-X EXE header once and fills in load_address, entry_pc,
@@ -1227,10 +1295,10 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<fs::path> discs;
     if (game.contains("discs")) {
         const auto& arr = toml::find<std::vector<std::string>>(game, "discs");
-        for (const auto& d : arr) discs.push_back(fs::absolute(root / d));
+        for (const auto& d : arr) discs.push_back(PSXRecompV4::host_resolve(root, d));
     } else if (game.contains("disc")) {
         const auto& d = toml::find<std::string>(game, "disc");
-        discs.push_back(fs::absolute(root / d));
+        discs.push_back(PSXRecompV4::host_resolve(root, d));
     }
     /* Per-disc serials, parallel to `discs`. Absent => no per-disc gate. */
     std::vector<std::string> disc_serials;
@@ -1329,12 +1397,12 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             fmt::format("{}: [recompiler] missing 'seeds' field", config_path.string()));
     }
     const fs::path seeds_path =
-        fs::absolute(root / toml::find<std::string>(recomp, "seeds"));
+        PSXRecompV4::host_resolve(root, toml::find<std::string>(recomp, "seeds"));
 
     fs::path bios_thunks_path;
     if (recomp.contains("bios_thunks")) {
         bios_thunks_path =
-            fs::absolute(root / toml::find<std::string>(recomp, "bios_thunks"));
+            PSXRecompV4::host_resolve(root, toml::find<std::string>(recomp, "bios_thunks"));
     }
 
     // [recompiler] bios_config — the BIOS profile this game is built
@@ -1343,14 +1411,14 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     fs::path bios_config_path;
     if (recomp.contains("bios_config")) {
         bios_config_path =
-            fs::absolute(root / toml::find<std::string>(recomp, "bios_config"));
+            PSXRecompV4::host_resolve(root, toml::find<std::string>(recomp, "bios_config"));
     }
 
     const std::string out_dir_field =
         recomp.contains("out_dir")
             ? toml::find<std::string>(recomp, "out_dir")
             : std::string{"generated"};
-    const fs::path out_dir = fs::absolute(root / out_dir_field);
+    const fs::path out_dir = PSXRecompV4::host_resolve(root, out_dir_field);
 
     const bool strict = recomp.contains("strict")
                             ? toml::find<bool>(recomp, "strict")
@@ -1699,6 +1767,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_nclip_keep_sites;
     std::vector<uint32_t> ws_cull_nclip_exact_sites;
     std::vector<uint32_t> ws_cull_branch_keep_sites;
+    std::vector<uint32_t> ws_cull_bgez_sites;
+    std::vector<uint32_t> ws_cull_clip_edge_x_load_sites;
+    uint32_t ws_cull_clip_edge_width = 0;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
@@ -1735,6 +1806,16 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("nclip_keep_sites", ws_cull_nclip_keep_sites);
             load_sites("nclip_exact_sites", ws_cull_nclip_exact_sites);
             load_sites("branch_keep_sites", ws_cull_branch_keep_sites);
+            load_sites("bgez_sites", ws_cull_bgez_sites);
+            load_sites("clip_edge_x_load_sites", ws_cull_clip_edge_x_load_sites);
+            if (cull.contains("clip_edge_width")) {
+                const int64_t width = toml::find<int64_t>(cull, "clip_edge_width");
+                if (width <= 0 || width > 1024)
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull] clip_edge_width must be 1..1024",
+                        config_path.string()));
+                ws_cull_clip_edge_width = (uint32_t)width;
+            }
             if (cull.contains("keep")) {
                 std::set<uint32_t> seen;
                 for (const auto& item : toml::find<toml::array>(cull, "keep")) {
@@ -2100,7 +2181,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         }
     }
 
-    return GameConfig{
+    GameConfig loaded{
         /*config_path*/      config_path,
         /*project_root*/     root,
         /*name*/             name,
@@ -2216,6 +2297,11 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_bg2d_init_func*/     ws_bg2d_init_func,
         /*ws_bg2d_packet_cap*/    ws_bg2d_packet_cap,
     };
+    loaded.ws_cull_bgez_sites = std::move(ws_cull_bgez_sites);
+    loaded.ws_cull_clip_edge_x_load_sites =
+        std::move(ws_cull_clip_edge_x_load_sites);
+    loaded.ws_cull_clip_edge_width = ws_cull_clip_edge_width;
+    return loaded;
 }
 
 // ---- GameOptions (game_options.toml) — the game's own native settings ----
@@ -2290,11 +2376,25 @@ UserSettings load_user_settings(const fs::path& path) {
         });
         if (v.contains("supersampling")) try_get([&]{
             const auto n = toml::find<int64_t>(v, "supersampling");
-            if (n >= 1 && n <= 4) { s.supersampling = (int)n; s.has_supersampling = true; }
+            if (n >= 1 && n <= 32) { s.supersampling = (int)n; s.has_supersampling = true; }
+        });
+        if (v.contains("internal_resolution")) try_get([&]{
+            const toml::value& ir = toml::find(v, "internal_resolution");
+            int value = 0;
+            if (ir.is_string()) {
+                if (psx_ir_parse(ir.as_string().str.c_str(), &value)) {
+                    s.internal_resolution = value; s.has_internal_resolution = true;
+                }
+            } else if (ir.is_integer()) {
+                const auto n = ir.as_integer();
+                if (n >= PSX_IR_MIN_LINES && n <= PSX_IR_MAX_LINES) {
+                    s.internal_resolution = (int)n; s.has_internal_resolution = true;
+                }
+            }
         });
         if (v.contains("window_width")) try_get([&]{
             const auto n = toml::find<int64_t>(v, "window_width");
-            if (n >= 640 && n <= 3840) { s.window_width = (int)n; s.has_window_width = true; }
+            if (n >= 640 && n <= 7680) { s.window_width = (int)n; s.has_window_width = true; }
         });
         if (v.contains("antialiasing")) try_get([&]{
             s.antialiasing = toml::find<bool>(v, "antialiasing"); s.has_antialiasing = true;
@@ -2645,6 +2745,13 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
           << "\"\n";
     if (s.has_supersampling)
         f << "supersampling     = " << s.supersampling << "\n";
+    if (s.has_internal_resolution && psx_ir_value_valid(s.internal_resolution)) {
+        const char* id = psx_ir_id_for(s.internal_resolution);
+        if (id)
+            f << "internal_resolution = \"" << id << "\"\n";
+        else
+            f << "internal_resolution = " << s.internal_resolution << "\n";
+    }
     if (s.has_window_width)
         f << "window_width      = " << s.window_width << "\n";
     if (s.has_antialiasing)

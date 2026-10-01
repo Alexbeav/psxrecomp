@@ -30,11 +30,13 @@
 #include "psx_cycles.h"
 #include "psx_icache.h"
 #include "psx_instr_cost.h"  /* psx_instr_base_cycles — single-source cycle cost */
+#include "psx_memory.h"
 #include "gpu.h"   /* psx_ws_is_backdrop_site / psx_ws_backdrop_x (interp hook) */
 #include "ws_backdrop_detect.h"  /* shared backdrop-window detector (auto_backdrop) */
 #include "lockstep.h"
 #include "starvation_ring.h"
 #include "fntrace.h"  /* fntrace_is_game_started / fntrace_mark_game_started */
+#include "psx_segment_miss.h"  /* segment misses in static game code (§5.5) */
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -217,6 +219,8 @@ DirtyRamPcEntry g_dirty_ram_pc_table[DIRTY_RAM_PC_TABLE_SIZE] = {0};
 uint32_t g_dirty_ram_exec_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_exec_page_bitmap[DIRTY_RAM_EXEC_PAGE_BITMAP_WORDS] = {0};
 uint32_t g_dirty_ram_dispatch_pc_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS] = {0};
+uint32_t g_dirty_ram_dispatch_seg_bitmap[PSX_CODE_SEGMENT_COUNT]
+                                        [DIRTY_RAM_EXEC_BITMAP_WORDS] = {{0}};
 
 DirtyRamBlockLogEntry g_dirty_ram_block_log[DIRTY_RAM_BLOCK_LOG_CAP] = {0};
 uint64_t              g_dirty_ram_block_log_seq = 0;
@@ -256,7 +260,7 @@ static DirtyRamPcEntry *pc_table_get_or_insert(uint32_t pc) {
  * cache-unfriendly open-addressed lookup on every guest instruction. */
 static inline void exec_pc_table_record(uint32_t pc) {
     uint32_t phys = pc & 0x1FFFFFFFu;
-    if (phys < 2u * 1024u * 1024u && (phys & 3u) == 0u) {
+    if (phys < psx_ram_live_bytes() && (phys & 3u) == 0u) {
         uint32_t word = phys >> 2;
         uint32_t mask = 1u << (word & 31u);
         uint32_t *slot = &g_dirty_ram_exec_pc_bitmap[word >> 5];
@@ -346,6 +350,22 @@ void dirty_ram_ld_delay_discard(void) {
     s_ld_pend_age   = 0;
     s_ld_pend_rt    = 0;
     s_ld_pend_val   = 0;
+}
+
+void dirty_ram_ld_delay_save(DirtyRamLoadDelay *out) {
+    if (!out) return;
+    out->rt = s_ld_pend_rt;
+    out->val = s_ld_pend_val;
+    out->age = s_ld_pend_age;
+    out->armed = s_ld_pend_armed;
+}
+
+void dirty_ram_ld_delay_restore(const DirtyRamLoadDelay *in) {
+    if (!in) return;
+    s_ld_pend_rt = in->rt;
+    s_ld_pend_val = in->val;
+    s_ld_pend_age = in->age;
+    s_ld_pend_armed = in->armed;
 }
 
 void dirty_ram_irq_ambient_resync_after_restore(void) {
@@ -507,13 +527,16 @@ static inline uint32_t imm16_field (uint32_t i) { return  i        & 0xFFFFu; }
 static inline int32_t  simm16_field(uint32_t i) { return (int32_t)(int16_t)imm16_field(i); }
 static inline uint32_t target26    (uint32_t i) { return  i        & 0x03FFFFFFu; }
 
-/* Read a 32-bit instruction word from kernel RAM at the given physical addr.
- * Caller has already verified the address is in dirty kernel RAM. */
+/* Read a 32-bit instruction word from main RAM at the given physical addr.
+ * Caller has already verified the address is RAM. The fetch decodes through
+ * the live geometry exactly like a CPU load: a retail PC in the 2nd-4th mirror
+ * fetches the folded 2 MiB bytes, an opt-in 8 MB PC its unique high page. */
 static inline uint32_t fetch_word(uint32_t phys) {
     /* Main RAM is a process-lifetime static allocation. Cache its address so
      * instruction fetch does not cross translation units for every guest op. */
     static const uint8_t *ram;
     if (!ram) ram = memory_get_ram_ptr();
+    phys = psx_ram_map_read(phys);
     return  (uint32_t)ram[phys]
          | ((uint32_t)ram[phys + 1] <<  8)
          | ((uint32_t)ram[phys + 2] << 16)
@@ -551,7 +574,7 @@ static int ws_cull_site(uint32_t pc) {
         return cache[slot].flag;
     uint32_t lo = (phys > (uint32_t)(WIN * 4)) ? phys - (uint32_t)(WIN * 4) : 0u;
     uint32_t hi = phys + (uint32_t)(WIN * 4);
-    if (hi > 0x200000u) hi = 0x200000u;       /* 2 MB main RAM */
+    if (hi > psx_ram_live_bytes()) hi = psx_ram_live_bytes();
     static uint32_t words[2 * WIN + 1];
     int n = 0;
     for (uint32_t a = lo; a + 4u <= hi && n < (int)(2 * WIN + 1); a += 4u)
@@ -577,7 +600,7 @@ static int ws_cull_bltz_site(uint32_t pc) {
         return cache[slot].flag;
     uint32_t lo = (phys > (uint32_t)(WIN * 4)) ? phys - (uint32_t)(WIN * 4) : 0u;
     uint32_t hi = phys + (uint32_t)(WIN * 4);
-    if (hi > 0x200000u) hi = 0x200000u;       /* 2 MB main RAM */
+    if (hi > psx_ram_live_bytes()) hi = psx_ram_live_bytes();
     static uint32_t words[2 * WIN + 1];
     int n = 0;
     for (uint32_t a = lo; a + 4u <= hi && n < (int)(2 * WIN + 1); a += 4u)
@@ -588,6 +611,23 @@ static int ws_cull_bltz_site(uint32_t pc) {
     cache[slot].pc = pc; cache[slot].gen = g_dirty_ram_code_gen;
     cache[slot].word = fetch_word(phys); cache[slot].flag = (int8_t)flag;
     return flag;
+}
+
+/* Explicit [widescreen.cull] branch_keep_sites: the reject branch is forced
+ * not-taken only while a widened view is configured, exactly like the
+ * native emit (code_generator.cpp keep_branch_if_wide). Empty list or 4:3:
+ * the vanilla verdict. */
+static inline int ws_branch_keep(uint32_t pc, int taken) {
+    return (taken && psx_ws_is_cull_branch_keep_site(pc) &&
+            psx_ws_x_margin() > 0) ? 0 : taken;
+}
+
+/* Explicit [widescreen.cull] clip_edge_x_load_sites (lh/lhu/lw): the loaded
+ * screen-X clip bound moves out by the live margin when it equals a screen
+ * edge (gpu.c psx_ws_clip_edge_x). Identity for unlisted PCs and at 4:3. */
+static inline uint32_t ws_clip_edge_load(uint32_t pc, uint32_t value) {
+    if (!psx_ws_is_cull_clip_edge_x_load_site(pc)) return value;
+    return psx_ws_clip_edge_x(value, psx_ws_clip_edge_width());
 }
 
 /* Widescreen far-backdrop column-PRELOAD site classification for the interpreter
@@ -614,7 +654,7 @@ static int ws_backdrop_site_kind(uint32_t pc, int *out_cols) {
     }
     uint32_t lo = (phys > (uint32_t)(WIN * 4)) ? phys - (uint32_t)(WIN * 4) : 0u;
     uint32_t hi = phys + (uint32_t)(WIN * 4 + 4);
-    if (hi > 0x200000u) hi = 0x200000u;          /* 2 MB main RAM */
+    if (hi > psx_ram_live_bytes()) hi = psx_ram_live_bytes();
     static uint32_t words[2 * WIN + 2];
     int n = 0;
     for (uint32_t a = lo; a + 4u <= hi && n < (int)(2 * WIN + 2); a += 4u)
@@ -805,8 +845,10 @@ static inline int phys_is_overlay_flow_region(uint32_t phys) {
 }
 
 static int is_local_dirty_target(uint32_t target) {
-    uint32_t phys = target & 0x1FFFFFFFu;
-    return phys_is_overlay_flow_region(phys) && dirty_ram_is_dirty(phys);
+    /* Region and dirtiness are properties of the BYTES (a retail mirror PC is
+     * classified by the RAM it folds to); the PC itself stays unfolded. */
+    uint32_t ram = psx_ram_map_read(target);
+    return phys_is_overlay_flow_region(ram) && dirty_ram_is_dirty(ram);
 }
 
 /* Target the last interp run handed back to the dispatch loop (chained
@@ -1648,7 +1690,16 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             uint32_t target = cpu->gpr[rs];
             if (target & 3) return interp_exception(cpu, 4, target, pc);  /* LoadAddressError */
             uint32_t return_pc = pc + 8;
-            cpu->gpr[rd ? rd : 31] = return_pc;
+            /* JALR writes the encoded rd exactly.  The one-operand assembler
+             * form encodes rd=$ra; rd=0 is a real discard, not an implicit
+             * $ra.  More importantly, only rd=$ra gives the call-unit code a
+             * return contract it can validate.  Games also use other link
+             * registers for data-bearing transfer stubs (for example
+             * `jalr $a1,$t0`, where the target consumes $a1 and later returns
+             * through the pre-existing $ra).  Treating pc+8 as that transfer's
+             * mandatory return address fabricates a nested continuation and
+             * leaks psx_dispatch_call frames. */
+            if (rd != 0) cpu->gpr[rd] = return_pc;
             cpu->gpr[0] = 0;
             exec_delay_slot(cpu, pc + 4);
             cosim_exec_one_transfer_hook(pc + 4);
@@ -1660,6 +1711,13 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             uint32_t _cr = callret_begin(cpu, pc, target);   /* call-resolution ring */
 #define CRET(code, rv) do { callret_end(_cr, cpu, (code)); return (rv); } while (0)
             if (g_precise_mode || g_ls_replay_active) { cpu->pc = target; CRET(CRES_PLAIN, 1); }  /* slice / lockstep-replay: plain transfer, never execute the callee */
+            if (rd != 31) {
+                /* No architectural $ra contract: preserve the transfer as a
+                 * pc-chain and let the callee's eventual JR choose the real
+                 * continuation.  This is both faithful and host-stack-flat. */
+                cpu->pc = target;
+                CRET(CRES_PCCHAIN, 1);
+            }
 #ifdef PSX_HAS_GAME_DISPATCH
             cpu->pc = 0;
             if (interp_enter_compiled(cpu, target)) {
@@ -1912,28 +1970,28 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #undef XRES
     }
     case 0x04: { /* BEQ rs, rt, simm */
-        int taken = (cpu->gpr[rs] == cpu->gpr[rt]);
+        int taken = ws_branch_keep(pc, cpu->gpr[rs] == cpu->gpr[rt]);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x05: { /* BNE */
-        int taken = (cpu->gpr[rs] != cpu->gpr[rt]);
+        int taken = ws_branch_keep(pc, cpu->gpr[rs] != cpu->gpr[rt]);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x06: { /* BLEZ */
-        int taken = ((int32_t)cpu->gpr[rs] <= 0);
+        int taken = ws_branch_keep(pc, (int32_t)cpu->gpr[rs] <= 0);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x07: { /* BGTZ */
-        int taken = ((int32_t)cpu->gpr[rs] > 0);
+        int taken = ws_branch_keep(pc, (int32_t)cpu->gpr[rs] > 0);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
@@ -1946,18 +2004,27 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             /* Widescreen render-funnel LEFT-edge widen (auto_screen_x): a
              * classified funnel bltz rejects only past the revealed margin.
              * Identity at 4:3 (margin 0). Gated per-game, cheap cached scan. */
-            if (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc))
+            if (psx_ws_is_cull_bltz_site(pc) ||
+                (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc)))
                 taken = psx_ws_cull_bltz(cpu->gpr[rs]);
             else
                 taken = ((int32_t)cpu->gpr[rs] <  0);
             break;
-        case 0x01: /* BGEZ */    taken = ((int32_t)cpu->gpr[rs] >= 0); break;
+        case 0x01: /* BGEZ */
+            /* Explicit [widescreen.cull] bgez_sites: the exact left-edge
+             * keep that pairs with bltz_sites. Identity at 4:3. */
+            if (psx_ws_is_cull_bgez_site(pc))
+                taken = psx_ws_cull_bgez(cpu->gpr[rs]);
+            else
+                taken = ((int32_t)cpu->gpr[rs] >= 0);
+            break;
         case 0x10: /* BLTZAL */  taken = ((int32_t)cpu->gpr[rs] <  0);
                                   cpu->gpr[31] = pc + 8; break;
         case 0x11: /* BGEZAL */  taken = ((int32_t)cpu->gpr[rs] >= 0);
                                   cpu->gpr[31] = pc + 8; break;
         default: return abort_unsupported(pc, insn, "REGIMM rt");
         }
+        taken = ws_branch_keep(pc, taken);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
@@ -2209,7 +2276,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x21: { /* LH */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
         if (addr & 1) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
-        cpu->gpr[rt] = (uint32_t)(int32_t)(int16_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs);
+        cpu->gpr[rt] = ws_clip_edge_load(pc,
+            (uint32_t)(int32_t)(int16_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs));
         psx_pgxp_load(cpu, insn, addr, cpu->gpr[rt]);
         cpu->gpr[0] = 0;
         return 0;
@@ -2233,7 +2301,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             /* Per-prim X-reject bound: INT32_MAX while revealed (gpu.c). */
             cpu->gpr[rt] = psx_ws_xclip_bound(psx_cyc_load_word(cpu, addr, rt, 1u << rs));
         else
-            cpu->gpr[rt] = psx_cyc_load_word(cpu, addr, rt, 1u << rs);
+            cpu->gpr[rt] = ws_clip_edge_load(pc,
+                psx_cyc_load_word(cpu, addr, rt, 1u << rs));
         psx_pgxp_load(cpu, insn, addr, cpu->gpr[rt]);
         cpu->gpr[0] = 0;
         return 0;
@@ -2248,7 +2317,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x25: { /* LHU */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
         if (addr & 1) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
-        cpu->gpr[rt] = (uint32_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs);
+        cpu->gpr[rt] = ws_clip_edge_load(pc,
+            (uint32_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs));
         psx_pgxp_load(cpu, insn, addr, cpu->gpr[rt]);
         cpu->gpr[0] = 0;
         return 0;
@@ -2366,6 +2436,10 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
 int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
     extern int g_psx_dispatch_depth;
     extern void psx_fatal_halt(const char *reason);
+    /* `addr` is architectural: the interpreter runs at exactly this PC, so a
+     * retail RAM-mirror PC (0x807xxxxx) keeps its own $ra/EPC while fetch_word
+     * and the dirty/overlay page checks fold it to the bytes it executes
+     * (psx_memory.h: CODE vs BYTES identity). Never canonicalize it here. */
 #ifndef PSX_NO_DEBUG_TOOLS
     /* A0/B0/C0 kernel-vector stubs are runtime-written, so calls to them
      * land HERE, not in the static dispatcher — which meant the bioscall
@@ -2736,7 +2810,12 @@ int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int 
 }
 
 static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
+    /* phys = CODE identity (segment-stripped PC: compiled-body and overlay
+     * lookups, per-PC telemetry). ram_phys = BYTE identity (the live-geometry
+     * RAM offset the PC's instruction bytes live at: page classification).
+     * They differ only for a PC in a retail RAM mirror. */
     uint32_t phys = addr & 0x1FFFFFFFu;
+    const uint32_t ram_phys = psx_ram_map_read(phys);
     int clean_game_text_miss = 0;
 
     if (addr == 0x80000048u) {
@@ -2791,6 +2870,15 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
          * dirty interpreter execute the real RAM bytes. */
         clean_game_text_miss = 1;
     }
+    /* Segment miss (docs/SEGMENT_AWARE_CODE.md §5.5): the table is keyed by
+     * the full PC, so a PC whose physical word has a compiled row only in
+     * another segment misses above and is interpreted here like any clean
+     * text miss, never run through the other segment's body. Record it with
+     * the full PC; the fix is a segment-qualified seed and regeneration. */
+    if (clean_game_text_miss)
+        (void)psx_segment_miss_note(addr, psx_game_is_function_entry,
+                                    cpu->gpr[31], cpu->gpr[29],
+                                    (uint32_t)s_frame_count);
 #endif
 
     /* B-2: statically-compiled overlay functions (generated/overlays_static.c).
@@ -2854,10 +2942,10 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
          * a JALR into a CD-DMA'd overlay page then fell through to
          * psx_unknown_dispatch and fail-fast exit(1). Data and invalid targets
          * still fail closed via the decodability check. */
-        if (phys < (2u * 1024u * 1024u) &&
-            phys_is_overlay_region(phys) &&
+        if (ram_phys < psx_ram_live_bytes() &&
+            phys_is_overlay_region(ram_phys) &&
             dirty_ram_word_looks_decodable(fetch_word(phys))) {
-            dirty_ram_mark_executable_range(phys, 4u);
+            dirty_ram_mark_executable_range(ram_phys, 4u);
         } else {
             return 0;
         }
@@ -2874,16 +2962,18 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     /* Overlay flow above the kernel window — kernel window stays per-block (see
      * is_local_dirty_target / phys_is_overlay_flow_region). Includes boot-text
      * pages overwritten by a runtime overlay (Tomba 2), not just [FLOOR, RAM). */
-    int allow_local_dirty_flow = phys_is_overlay_flow_region(phys);
+    int allow_local_dirty_flow = phys_is_overlay_flow_region(ram_phys);
 
     /* Backend-invariant mod_function_entry hooks: generated code fires
      * psx_mod_function_entry at listed function entries, but a mod-patched
      * page runs here instead and would silently skip them. Fire the same hook
      * on interp dispatch so the contract does not depend on which backend
-     * executes the page. */
+     * executes the page. The active-hook count keeps a plan without hooks
+     * to one load per interpreted entry. */
     {
+        extern uint32_t g_psx_mod_function_entry_hooks;
         extern void psx_mod_function_entry(CPUState *cpu, uint32_t address);
-        psx_mod_function_entry(cpu, addr);
+        if (g_psx_mod_function_entry_hooks) psx_mod_function_entry(cpu, addr);
     }
 
     /* Per-PC entry counter (visible via dirty_ram_stats). */
@@ -2892,6 +2982,13 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     {
         uint32_t word = phys >> 2;
         g_dirty_ram_dispatch_pc_bitmap[word >> 5] |= 1u << (word & 31u);
+        /* ...and the segment it entered through, from the full PC
+         * (docs/SEGMENT_AWARE_CODE.md §5.7): capture records it so the next
+         * compile builds a shard for that segment. One bit per interpreted
+         * dispatch, not per instruction. */
+        int seg = psx_code_segment_index(addr);
+        if (seg >= 0)
+            g_dirty_ram_dispatch_seg_bitmap[seg][word >> 5] |= 1u << (word & 31u);
     }
 
     /* External-entry attribution: when the previous interp run exited by
@@ -3204,8 +3301,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             uint32_t target_phys = target & 0x1FFFFFFFu;
             if (allow_local_dirty_flow && target != 0 &&
                 target != stop_addr &&
-                phys_is_overlay_flow_region(target_phys) &&
-                dirty_ram_is_dirty(target_phys)) {
+                is_local_dirty_target(target)) {
 #ifdef PSX_HAS_OVERLAY_DISPATCH
                 /* A save restore or an uncompiled continuation can enter the
                  * interpreter in an otherwise static overlay. Surface an exact
@@ -3272,8 +3368,10 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 /* Local transfers bypass dispatch, but must retain the same
                  * function-entry hooks as a surfaced interpreter entry. */
                 {
+                    extern uint32_t g_psx_mod_function_entry_hooks;
                     extern void psx_mod_function_entry(CPUState *, uint32_t);
-                    psx_mod_function_entry(cpu, target);
+                    if (g_psx_mod_function_entry_hooks)
+                        psx_mod_function_entry(cpu, target);
                 }
                 pc = target;
                 current_page = target_phys >> 12;
@@ -3322,9 +3420,27 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             g_dirty_interp_chain_target = pc;
             OV_FPLOG_RET1();
         }
+        uint32_t next_phys = pc & 0x1FFFFFFFu;
+        /* A declared kernel patch range ends here (Rule 18 + the profile's
+         * [[recompiler.install_slots]]). The emitted body dispatched us in at
+         * the range's lo to run the guest's patched words; the emitter
+         * registered this PC as a continuation key and the bless verifier
+         * skips the patched words, so the rest of the body runs native.
+         * Without this hand-back the kernel page stays dirty and straight-
+         * line flow would interpret the whole function — which is why
+         * declaring the slot alone never paid off. */
+        if (!s_ld_pend_armed && next_phys < DIRTY_RAM_KERNEL_WINDOW_END &&
+            psx_kernel_patch_range_ends_at(next_phys) &&
+            psx_kernel_bless_dispatchable(next_phys)) {
+            cpu->pc = pc;
+            g_dirty_ram_native_handoffs++;
+            g_dirty_ram_blocks_run++;
+            if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+            g_dirty_interp_chain_target = pc;
+            OV_FPLOG_RET1();
+        }
         /* Straight-line code that left the dirty page — hand back to
          * static dispatch by setting cpu->pc and returning. */
-        uint32_t next_phys = pc & 0x1FFFFFFFu;
         uint32_t next_page = next_phys >> 12;
         if ((!current_page_dirty || next_page != current_page) &&
             !dirty_ram_is_dirty(next_phys)) {
@@ -3392,6 +3508,7 @@ enum { LS_TRACE_CAP = 65536 };
 static ls_op_t  s_ls_trace[LS_TRACE_CAP];
 static int      s_ls_trace_n = 0, s_ls_trace_idx = 0;
 static int      s_ls_overflow = 0, s_ls_mismatch = 0;
+static int      s_ls_unreplayable = 0;   /* whole-call record saw a non-replayable effect */
 static int      s_ls_replay_done = 0;   /* trace exhausted: stop replay (benign count mismatch) */
 static uint32_t s_ls_cur_pc = 0;          /* pc of the instruction being replayed */
 static int      s_ls_shadow_owner = 0;     /* 0 none, 1 record, 2 replay */
@@ -3460,6 +3577,7 @@ int ls_shadow_record_begin(void) {
     s_ls_trace_n = 0;
     s_ls_trace_idx = 0;
     s_ls_overflow = 0;
+    s_ls_unreplayable = 0;
     s_ls_mismatch = 0;
     s_ls_m_kind = 0;
     s_ls_replay_done = 0;
@@ -3475,12 +3593,16 @@ int ls_shadow_record_end(uint32_t *ops, int *saw_exception) {
     s_ls_shadow_owner = 0;
     if (ops) *ops = (uint32_t)s_ls_trace_n;
     if (saw_exception) *saw_exception = s_ls_shadow_saw_exception;
-    return !s_ls_overflow;
+    return !s_ls_overflow && !s_ls_unreplayable;
+}
+
+void ls_shadow_record_unreplayable(void) {
+    if (s_ls_shadow_owner == 1) s_ls_unreplayable = 1;
 }
 
 int ls_shadow_replay_begin(void) {
     if (s_ls_shadow_owner || g_ls_mode != 0 || g_ls_replay_active ||
-        s_ls_overflow)
+        s_ls_overflow || s_ls_unreplayable)
         return 0;
     s_ls_trace_idx = 0;
     s_ls_mismatch = 0;
@@ -3793,7 +3915,7 @@ void ls_func_enter(uint32_t entry_pc, CPUState *cpu) {
         return;
     }
     uint32_t phys = entry_pc & 0x1FFFFFFFu;
-    if (phys < 0x00010000u || phys >= 0x00200000u) return;
+    if (phys < 0x00010000u || phys >= psx_ram_live_bytes()) return;
 
     s_lsf_dispatch_entry = entry_pc;
     s_lsf_entry = entry_pc;
@@ -3875,9 +3997,10 @@ void ls_at_leader(uint32_t leader_phys, CPUState *cpu) {
      *    (per-instruction, for the cycle ruler); skip those — they're already
      *    interpreted (clean game text dispatched FROM the dirty path still runs
      *    compiled, so we can't use g_dirty_interp_active here).
-     *  - [0x10000, 0x200000): game EXE text in main RAM (above the low-RAM
+     *  - [0x10000, live RAM end): game EXE/overlay text in main RAM (above the low-RAM
      *    kernel/relocated-BIOS area, which isn't the regression locus). */
-    if (!g_ls_dirty_observe && leader_phys >= 0x00010000u && leader_phys < 0x00200000u) {
+    if (!g_ls_dirty_observe && leader_phys >= 0x00010000u &&
+        leader_phys < psx_ram_live_bytes()) {
         s_ls_R0 = *cpu;
         s_ls_block = leader_phys;
         s_ls_trace_n = 0; s_ls_trace_idx = 0; s_ls_overflow = 0; s_ls_mismatch = 0;

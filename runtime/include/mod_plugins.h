@@ -23,11 +23,46 @@ int psx_mod_register_vblank_plugin(const char* id,
                                    PSXModVBlankCallback callback);
 int psx_mod_register_function_entry_plugin(
     const char* id, uint32_t address, PSXModFunctionEntryCallback callback);
-/* Called only from generated functions explicitly listed by the game config. */
+/* Called from generated functions listed by the game config and from every
+ * interpreted entry, so the hook contract does not depend on the backend.
+ * Hooks match by code address (segment bits ignored) and run only for plugins
+ * the active plan resolved; the table is rebuilt at plugin activation. */
 void psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
+/* Active function-entry hook count (0 = none). Hot callers test it before the
+ * call, so a run without an active hook pays one load per interpreted entry. */
+extern uint32_t g_psx_mod_function_entry_hooks;
 
 /* Narrow guest services available to trusted plugin callbacks. */
 int psx_mod_game_started(void);
+/* Read an original mounted-disc file without changing guest CD state/timing.
+ * Emulation-thread callbacks only. NULL buffer + zero capacity queries size;
+ * otherwise capacity must hold the entire file. Active sector mods apply. */
+int psx_mod_read_disc_file(const char* path, void* buffer, uint32_t capacity,
+                           uint32_t* size);
+/* Experimental retained-texture service (currently OpenGL only). IDs are
+ * nonzero, stable game-owned identities, NOT GL names. Banks are immutable
+ * 16-bit PS1 texels/indices with a caller-selected row pitch (width).
+ * A missing bank may be reconstructed from original assets by the resolver,
+ * including when a restored DMA queue refers to a previously unseen level. */
+typedef int (*PSXModTextureBankResolver)(uint16_t id);
+int psx_mod_texture_banks_supported(void);
+int psx_mod_define_texture_bank(uint16_t id, uint32_t width, uint32_t height,
+                                const uint16_t* pixels);
+void psx_mod_set_texture_bank_resolver(PSXModTextureBankResolver resolver);
+/* Default-off GL optimization: batch immutable-bank semi triangles in painter
+ * order on the single-pass dual-source path only. Ordinary VRAM, subtractive
+ * blending and destination-mask checks retain per-primitive isolation. Call
+ * from activation or an emulation-thread render boundary. */
+void psx_mod_set_texture_bank_batching(int enabled);
+/* A dedicated GPU-DMA packet arena. Only GT3 commands sourced from this
+ * allocation interpret C1/C2's otherwise-unused high bytes as a bank ID:
+ * id = (C1 >> 24) | ((C2 >> 24) << 8). ID zero uses ordinary VRAM. The rest
+ * of the packet is standard GP0, retaining OT order, palettes and STP blend.
+ * Optional 40-byte suffix after the 40-byte tagged GT3: u32 magic 0x48545031,
+ * three IEEE float 1/z weights, six IEEE float x/y coordinates. This enables
+ * precise perspective rendering without transient host-pointer side tables.
+ * Allocate during activation; do not mix stock game packets into this arena. */
+uint32_t psx_mod_alloc_texture_packet_memory(uint32_t size, uint32_t alignment);
 uint8_t psx_mod_read_byte(uint32_t address);
 void psx_mod_write_byte(uint32_t address, uint8_t value);
 uint16_t psx_mod_read_half(uint32_t address);
@@ -55,8 +90,27 @@ uint32_t psx_mod_alloc_guest_memory(uint32_t size, uint32_t alignment);
  */
 uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size, uint32_t alignment);
 
+/*
+ * Opt into expanded 8 MiB main RAM for this launch. Default runtime behavior
+ * remains stock 2 MiB mirroring unless a trusted activation plugin requests
+ * this before memory_init().
+ */
+int psx_mod_set_main_ram_8mb(int enabled);
+
 /* Current per-side widescreen reveal in native game pixels (zero at 4:3). */
 int32_t psx_mod_widescreen_x_margin(void);
+
+/* Mark a guest GPU packet (P_TAG address) as persistent screen-space HUD.
+ * edge = -1 left, +1 right, 0 clears a reused packet's tag. The native-wide
+ * compositor translates it by the live reveal, excluding culling guards.
+ * Guest coordinates, world sprites, and native 4:3 remain unchanged. */
+void psx_mod_tag_hud_primitive(uint32_t primitive, int edge);
+/* Exclude a known world packet from screen-space backdrop stretching, even
+ * if it sorts before the first shaded polygon. Zero clears a recycled tag. */
+void psx_mod_tag_world_primitive(uint32_t primitive, int is_world);
+/* Enable aspect-derived column selection for a title that opted into the
+ * auto_backdrop detector. No effect on titles that did not opt in. */
+void psx_mod_set_adaptive_backdrop_preload(int enabled);
 
 /*
  * Width, in native game pixels, of the picture the guest is currently
@@ -79,6 +133,36 @@ uint32_t psx_mod_display_width(void);
 
 /* Height companion to psx_mod_display_width(); same conventions. */
 uint32_t psx_mod_display_height(void);
+
+/* Opt-in presentation hold for a game that retains its previous framebuffer
+ * while loading. The pure, cheap emulation-thread predicate returns HOLD
+ * only while that SAME scene remains displayed; no GPU/API recursion allowed.
+ * RELEASE resumes normal classification immediately. UNTIL_FLIP releases a
+ * prior HOLD only once the displayed VRAM origin changes: useful when drawing
+ * the next backbuffer finishes before it becomes visible. UNTIL_FLIP without
+ * a prior HOLD does nothing. Do not use it for in-place scene replacements.
+ * Native-wide retains its prior wide/4:3 classification, never stretches art
+ * and never overrides FMV. NULL removes the opt-in. Host history is discarded
+ * on GPU reset/savestate restore, so loading a frozen scene cannot recreate
+ * missing widescreen strips. This does not change guest rendering or memory. */
+typedef int (*PSXModRetainedScenePredicate)(void);
+enum {
+    PSX_MOD_SCENE_RELEASE = 0,
+    PSX_MOD_SCENE_HOLD = 1,
+    PSX_MOD_SCENE_UNTIL_FLIP = 2
+};
+void psx_mod_set_retained_scene_predicate(PSXModRetainedScenePredicate predicate);
+
+/* Opt-in supplemental native-wide world classifier. A nonzero result marks a
+ * known, rendered 3D scene (for example a real-time intro) as world content even
+ * when a game's gameplay-state allowlist excludes it. Zero defers to the normal
+ * classifier; NULL removes the callback. Only native-wide mode consults it.
+ * FMV and retained-frame presentation rules still apply. The pure, cheap callback
+ * runs on the emulation thread: no GPU calls, allocation or guest-state writes.
+ * Registration is host configuration, not savestate data. No default behavior
+ * changes and no extra geometry is generated by this service. */
+typedef int (*PSXModWorldScenePredicate)(void);
+void psx_mod_set_world_scene_predicate(PSXModWorldScenePredicate predicate);
 
 /*
  * Read the committed value of one of this package's declared options, as the
@@ -120,6 +204,8 @@ int psx_mod_set_fixed_display_aspect(uint32_t numerator,
                                      uint32_t denominator);
 /*
  * Request resize-driven widescreen, capped at the supplied maximum aspect.
+ * Pass (0, 0) for Fit to window with no upper aspect limit. Both modes retain
+ * the native 4:3 minimum; a single zero is invalid.
  * The current fixed aspect continues to shape the initial game window, so a
  * plugin may select that first with psx_mod_set_fixed_display_aspect().
  */
@@ -150,14 +236,118 @@ int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
  */
 enum {
     PSX_MOD_FRAME_INTERPOLATION_LINEAR = 0,
-    PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE = 1
+    PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE = 1,
+    /* No crossfade: every output frame repeats the newest game frame. For a
+     * plugin that supplies its own in-between images with render passes
+     * (below); wherever it has none, the output matches stock timing and
+     * nothing is shown later than the game shows it. */
+    PSX_MOD_FRAME_INTERPOLATION_HOLD = 2
 };
+/* Usually called from activation. It may also be called later from the
+ * emulation thread (a function-entry hook or VBlank callback), e.g. to swap
+ * HOLD for a crossfade while render passes are unavailable; the OpenGL
+ * presenter then uses the new mode from its next present. */
 int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
+/*
+ * Choose what the OpenGL presenter treats as a new source frame. VBLANK (the
+ * default, reset at every session start) treats every guest VBlank as one,
+ * which suits games that flip every VBlank. FLIP rotates the blend history
+ * only when the guest really flips (the displayed VRAM origin moves, or the
+ * displayed rect is redrawn) and spreads each crossfade over the measured
+ * flip period (1..4 VBlanks). A 30 Hz game then blends across its whole frame
+ * instead of blending for one VBlank and holding for the next. Guest timing
+ * is unchanged either way.
+ */
+enum {
+    PSX_MOD_FRAME_SOURCE_VBLANK = 0,
+    PSX_MOD_FRAME_SOURCE_FLIP = 1
+};
+int psx_mod_set_frame_interpolation_source(uint32_t source);
+
+/*
+ * Host-timed render passes: true in-between frames for a game whose logic
+ * runs slower than the presentation rate. Default off: nothing happens unless
+ * a trusted plugin calls these. OpenGL, frame interpolation enabled with the
+ * FLIP source, never in netplay, rollback, rewind, fast-forward (manual,
+ * turbo-through-loads, FMV auto-skip) or while the presenter is suspended
+ * (FMV); psx_mod_render_pass_plan() returns 0 then, and
+ * psx_mod_render_pass_status() says why.
+ *
+ * Call both from an emulation-thread function-entry hook placed where the
+ * game has finished its logic for game frame N+1 but the display still has to
+ * flip to frame N (for a PsyQ double-buffered loop: the VSync(0) that precedes
+ * PutDispEnv). Each pass runs `fn`, which may call guest functions with
+ * psx_dispatch_call() to draw an intermediate image of the scene. While it
+ * runs, guest time is frozen: cycles are counted but no device advances, no
+ * interrupt is delivered and GPU DMA completes synchronously; SPU, CD, timer
+ * and other device stores are dropped (counted). Afterwards CPU state
+ * (including the GTE), RAM, scratchpad, I-cache tags, interrupt, timer, DMA
+ * and GPU registers, and the VRAM rect are exactly as before: the pass's only
+ * product is the image of the rect, which the presenter shows at `alpha_q16`
+ * of the way through frame N's time on screen (Q16, 0 = frame N's own image).
+ * The display rect is the one the next flip shows (its DISPENV); the pass may
+ * draw only inside it.
+ */
+/* Returns nonzero to keep the image, 0 to discard it (state is restored
+ * either way). */
+typedef int (*PSXModRenderPassFn)(struct CPUState* cpu, void* user,
+                                  uint32_t alpha_q16);
+typedef struct PSXModRenderPass {
+    uint32_t struct_size;        /* sizeof(PSXModRenderPass) */
+    uint32_t alpha_q16;          /* a phase returned by the plan */
+    uint16_t x, y, w, h;         /* VRAM display rect the pass draws */
+} PSXModRenderPass;
+/*
+ * Phases (Q16, ascending, excluding 0) at which the presenter will actually
+ * show frame N: its output deadlines during the `period_vblanks` guest VBlanks
+ * the frame stays on screen, starting after `shown_after_vblanks` more
+ * VBlank presents (R4 at its VSync(0) entry: 1 -- the next VBlank still shows
+ * the previous frame). When the host cannot afford them all, an evenly spread
+ * subset is returned and the presenter crossfades the gaps. The first
+ * psx_mod_render_pass() after a plan captures frame N's own image. Returns 0
+ * when passes are unavailable or unaffordable.
+ */
+uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
+                                  uint32_t shown_after_vblanks,
+                                  uint32_t* alpha_q16, uint32_t max);
+/* Returns 1 when the pass ran and its image was queued, 0 when it was refused
+ * or rolled back (state is restored either way). */
+int psx_mod_render_pass(struct CPUState* cpu, const PSXModRenderPass* pass,
+                        PSXModRenderPassFn fn, void* user);
+/*
+ * Why passes cannot run right now, the host-time budget aside (a plan that
+ * returns 0 while this says READY was shed for time). A plugin that relies on
+ * passes uses it to fall back, e.g. to a crossfade with
+ * psx_mod_set_frame_interpolation_blend(), while the reason lasts.
+ * NO_PRESENTER, BACKEND and DISABLED persist; the others are transient.
+ */
+enum {
+    PSX_MOD_RENDER_PASS_READY = 0,
+    /* Not OpenGL, interpolation off or suspended (FMV), or not the FLIP
+     * source. */
+    PSX_MOD_RENDER_PASS_NO_PRESENTER = 1,
+    /* The renderer declines passes in its current mode. */
+    PSX_MOD_RENDER_PASS_BACKEND = 2,
+    /* Switched off for this session after repeated faults. */
+    PSX_MOD_RENDER_PASS_DISABLED = 3,
+    /* Netplay, rollback, rewind, load/save replay or self-check resim. */
+    PSX_MOD_RENDER_PASS_SESSION = 4,
+    /* Fast-forward, turbo-through-loads or FMV auto-skip is running. */
+    PSX_MOD_RENDER_PASS_FAST_FORWARD = 5,
+    /* Inside an exception, a pass or a GPU DMA walk, or the presenter has not
+     * captured a frame since its history restarted (display mode change). */
+    PSX_MOD_RENDER_PASS_BUSY = 6
+};
+uint32_t psx_mod_render_pass_status(void);
 int psx_mod_set_auto_skip_fmv(int enabled);
 /*
  * Draw still artwork behind the game image in OpenGL letterbox/pillarbox
  * margins. The image path is an owner-selected mod resource; with no enabled
  * mod/resource path, the margins remain the historical black clear.
+ * An absolute path is used unchanged. A relative path (e.g. "bezels/x.png"
+ * for artwork a title stages beside its binary) is resolved against the
+ * executable's directory, never the current working directory, when the
+ * artwork is loaded.
  */
 int psx_mod_set_bezel_artwork(const char* path);
 

@@ -10,6 +10,7 @@
 #include "psx_cycles.h"
 #include "lockstep.h"
 #include "overlay_posix.h"
+#include "psx_memory.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,6 +70,9 @@ enum { ENTRY_VALID = 0, ENTRY_INVALID = 1, ENTRY_BLACKLIST = 2 };
 
 typedef struct {
     uint32_t  addr;                      /* phys entry address                 */
+    uint32_t  seg;                       /* segment the shard was compiled for
+                                          * (docs/SEGMENT_AWARE_CODE.md §5.7):
+                                          * it runs only for PCs in it        */
     OverlayFn fn;
     uint32_t  range_lo[MAX_CODE_RANGES]; /* phys code-range starts             */
     uint32_t  range_len[MAX_CODE_RANGES];
@@ -116,7 +120,7 @@ static int       s_cand_n = 0;
  * scales catastrophically once a warmed cache contains hundreds of variant
  * DLLs. Index candidates by the 4 KiB RAM pages touched by their code ranges;
  * a continuation then examines only candidates that could contain its PC. */
-#define RANGE_PAGE_COUNT (2u * 1024u * 1024u / 4096u)
+#define RANGE_PAGE_COUNT (PSX_MAIN_RAM_BACKING_BYTES / 4096u)
 #define RANGE_LINK_CAP   (CAND_CAP * 8)
 typedef struct { int cand, next; } RangeLink;
 static int       s_range_page_head[RANGE_PAGE_COUNT];
@@ -130,7 +134,7 @@ static int       s_range_index_overflow = 0;
  * hundreds of historical, currently-invalid owners in a reused region. */
 #define RANGE_PC_CACHE_CAP 16384u
 #define RANGE_PC_CACHE_MASK (RANGE_PC_CACHE_CAP - 1u)
-typedef struct { uint32_t phys, generation; int cand; } RangePcCache;
+typedef struct { uint32_t phys, generation; int cand; } RangePcCache; /* phys = full PC */
 static RangePcCache s_range_pc_cache[RANGE_PC_CACHE_CAP];
 static uint32_t s_range_candidate_generation = 1u;
 
@@ -182,7 +186,7 @@ static uint32_t s_exact_entry_bitmap[DIRTY_RAM_EXEC_BITMAP_WORDS];
 
 static void exact_entry_set(uint32_t phys) {
     phys &= 0x1FFFFFFFu;
-    if (phys < 2u * 1024u * 1024u && (phys & 3u) == 0u) {
+    if (phys < PSX_MAIN_RAM_BACKING_BYTES && (phys & 3u) == 0u) {
         uint32_t word = phys >> 2;
         s_exact_entry_bitmap[word >> 5] |= 1u << (word & 31u);
     }
@@ -190,7 +194,7 @@ static void exact_entry_set(uint32_t phys) {
 
 static int exact_entry_has(uint32_t phys) {
     phys &= 0x1FFFFFFFu;
-    if (phys >= 2u * 1024u * 1024u || (phys & 3u) != 0u) return 0;
+    if (phys >= PSX_MAIN_RAM_BACKING_BYTES || (phys & 3u) != 0u) return 0;
     uint32_t word = phys >> 2;
     return (s_exact_entry_bitmap[word >> 5] >> (word & 31u)) & 1u;
 }
@@ -215,6 +219,10 @@ static void idx_set_head(uint32_t phys, int head) {
         }
     }
 }
+/* The chain keeps every segment's candidates for one physical entry (the
+ * bytes are one identity); a PC may run only its own segment's (§5.7). First
+ * candidate of the chain compiled for `seg`, or -1. */
+static int idx_head_seg(uint32_t phys, uint32_t seg);
 
 /* Active native-entry stack (self-modification detection, §8.5). */
 static int s_active_stack[64];
@@ -500,6 +508,8 @@ static uint32_t s_rehash_miss    = 0;   /* hashes that didn't match crc_code  */
 static uint64_t s_gen_fastpath   = 0;   /* dispatches that skipped the crc32   */
                                         /* via the unchanged page-generation   */
                                         /* fast path (overlay-cache v2 P2)      */
+static uint64_t s_segment_alias_interp = 0; /* KUSEG/KSEG1 PCs interpreted     */
+static uint64_t s_segment_native = 0;       /* KUSEG/KSEG1 PCs run by own shard */
 static uint64_t s_diffgate_interp = 0;  /* CPS interior re-entries sent to the  */
                                         /* interp because their candidate is    */
                                         /* still inside the diff verify budget  */
@@ -542,19 +552,53 @@ extern uint32_t overlay_watch_pagegen_sum(uint32_t phys, uint32_t len);
 
 /* ---- Per-candidate hash / generation over its code ranges -------------- */
 
-static uint32_t cand_crc(const Candidate *c) {
+/* Manifest and candidate code ranges are keyed by the address their code was
+ * compiled for (segment stripped, never mirror-folded: the compiled body bakes
+ * those PCs). Their BYTES live at the live-geometry RAM offset psx_ram_resolve
+ * returns -- the fold the CPU applies (psx_memory.h). Every byte-level use of a
+ * range (CRC, page generations, watch arming, delay-slot scan) goes through
+ * these helpers, so a range compiled at 0x80780000 is validated on RAM offset
+ * 0x180000 in retail and 0x780000 in the 8 MB map, and a range with no
+ * contiguous live bytes (past the live RAM end) can never validate. */
+static int ov_ranges_crc(const uint32_t *lo, const uint32_t *len, int n,
+                         uint32_t *crc_out) {
     const uint8_t *ram = memory_get_ram_ptr();
     uint32_t crc = 0xFFFFFFFFu;
-    for (int i = 0; i < c->nranges; i++)
-        crc = crc32_update(crc, ram + c->range_lo[i], c->range_len[i]);
-    return crc ^ 0xFFFFFFFFu;
+    for (int i = 0; i < n; i++) {
+        uint32_t off = 0;
+        if (!psx_ram_resolve(lo[i], len[i], &off)) return 0;
+        crc = crc32_update(crc, ram + off, len[i]);
+    }
+    *crc_out = crc ^ 0xFFFFFFFFu;
+    return 1;
+}
+
+static uint32_t ov_ranges_gensum(const uint32_t *lo, const uint32_t *len, int n) {
+    uint32_t s = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t off = 0;
+        if (psx_ram_resolve(lo[i], len[i], &off))
+            s += overlay_watch_pagegen_sum(off, len[i]);
+    }
+    return s;
+}
+
+static void ov_ranges_watch(const uint32_t *lo, const uint32_t *len, int n) {
+    extern void overlay_watch_set_range(uint32_t phys, uint32_t len);
+    for (int i = 0; i < n; i++) {
+        uint32_t off = 0;
+        if (psx_ram_resolve(lo[i], len[i], &off))
+            overlay_watch_set_range(off, len[i]);
+    }
+}
+
+/* 1 and *live = CRC of the live bytes, or 0 when a range has no live bytes. */
+static int cand_live_crc(const Candidate *c, uint32_t *live) {
+    return ov_ranges_crc(c->range_lo, c->range_len, c->nranges, live);
 }
 
 static uint32_t cand_gensum(const Candidate *c) {
-    uint32_t s = 0;
-    for (int i = 0; i < c->nranges; i++)
-        s += overlay_watch_pagegen_sum(c->range_lo[i], c->range_len[i]);
-    return s;
+    return ov_ranges_gensum(c->range_lo, c->range_len, c->nranges);
 }
 
 #ifdef PSX_HAS_OVERLAY_DISPATCH
@@ -574,6 +618,15 @@ typedef struct {
 } StaticMatchCache;
 
 static StaticMatchCache s_static_match_cache[STATIC_MATCH_CACHE_CAP];
+
+/* Main-RAM offset of a variant code range, through the one geometry contract
+ * (psx_memory.h). Retail targets fold the 2nd-4th mirrors of the 8 MiB KSEG
+ * decode window and expanded targets decode it uniquely -- the same fold the
+ * CPU applies, so an image a game places in a mirror (a mod engine copied to
+ * 0x80780000 on 2 MiB hardware) is gated on exactly the bytes that execute. */
+static int static_range_offset(uint32_t lo, uint32_t len, uint32_t *off) {
+    return len != 0u && psx_ram_resolve(lo, len, off);
+}
 static uint64_t s_static_match_rehashes = 0;
 static uint64_t s_static_match_crc_misses = 0;
 static uint64_t s_static_match_gen_fastpath = 0;
@@ -589,14 +642,13 @@ int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
 
     uint32_t gen_sum = 0;
     for (uint32_t i = 0; i < count; i++) {
-        uint32_t lo = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
+        uint32_t off = 0;
         uint32_t len = lo_len_pairs[i * 2u + 1u];
-        if (len == 0u || lo >= 2u * 1024u * 1024u ||
-            len > 2u * 1024u * 1024u - lo) {
+        if (!static_range_offset(lo_len_pairs[i * 2u], len, &off)) {
             s_static_match_crc_misses++;
             return 0;
         }
-        gen_sum += overlay_watch_pagegen_sum(lo, len);
+        gen_sum += overlay_watch_pagegen_sum(off, len);
     }
 
     uintptr_t raw = (uintptr_t)lo_len_pairs;
@@ -632,15 +684,16 @@ int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
      * a band that swapped occupants would keep dispatching the stale variant.
      * Arming only sets bitmap bits -- it does not advance any generation, so
      * the gen_sum computed above stays valid for the cache write below. */
-    for (uint32_t i = 0; i < count; i++)
-        overlay_watch_set_range(lo_len_pairs[i * 2u] & 0x1FFFFFFFu,
-                                lo_len_pairs[i * 2u + 1u]);
-
     uint32_t crc = 0xFFFFFFFFu;
+    uint32_t lo_min = 0xFFFFFFFFu, hi_max = 0;
     for (uint32_t i = 0; i < count; i++) {
-        uint32_t lo = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
+        uint32_t off = 0;
         uint32_t len = lo_len_pairs[i * 2u + 1u];
-        crc = crc32_update(crc, ram + lo, len);
+        (void)static_range_offset(lo_len_pairs[i * 2u], len, &off); /* checked above */
+        overlay_watch_set_range(off, len);
+        crc = crc32_update(crc, ram + off, len);
+        if (off < lo_min) lo_min = off;
+        if (off + len > hi_max) hi_max = off + len;
     }
     crc ^= 0xFFFFFFFFu;
     int matches = (crc == expected_crc) ? 1 : 0;
@@ -653,13 +706,6 @@ int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
         entry->expected_crc = expected_crc;
         entry->gen_sum = gen_sum;
         entry->matches = matches;
-        uint32_t lo_min = 0xFFFFFFFFu, hi_max = 0;
-        for (uint32_t i = 0; i < count; i++) {
-            uint32_t lo = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
-            uint32_t hi = lo + lo_len_pairs[i * 2u + 1u];
-            if (lo < lo_min) lo_min = lo;
-            if (hi > hi_max) hi_max = hi;
-        }
         entry->lo_min = lo_min;
         entry->hi_max = hi_max;
     }
@@ -687,17 +733,22 @@ int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
  * to a capture / .EMI section offline. Called only on EXTERNAL interp
  * entries, so a 4096-slot scan is fine. */
 uint32_t psx_overlay_resident_crc_at(uint32_t phys, int *valid) {
-    phys &= 0x1FFFFFFFu;
     uint32_t stale = 0;
+    if (!psx_ram_resolve(phys, 1u, &phys)) {
+        if (valid) *valid = 0;
+        return s_last_crc;
+    }
     for (uint32_t i = 0; i < STATIC_MATCH_CACHE_CAP; i++) {
         const StaticMatchCache *e = &s_static_match_cache[i];
         if (!e->ranges || phys < e->lo_min || phys >= e->hi_max)
             continue;
         if (e->matches) {
             uint32_t gen_sum = 0;
-            for (uint32_t k = 0; k < e->count; k++)
-                gen_sum += overlay_watch_pagegen_sum(e->ranges[k * 2u] & 0x1FFFFFFFu,
-                                                    e->ranges[k * 2u + 1u]);
+            for (uint32_t k = 0; k < e->count; k++) {
+                uint32_t off = 0;
+                (void)static_range_offset(e->ranges[k * 2u], e->ranges[k * 2u + 1u], &off);
+                gen_sum += overlay_watch_pagegen_sum(off, e->ranges[k * 2u + 1u]);
+            }
             if (gen_sum == e->gen_sum) {
                 if (valid) *valid = 1;
                 return e->expected_crc;
@@ -737,7 +788,11 @@ typedef struct {
     int      n;
 } ManFn;
 
-#define OVERLAY_RAM_SIZE (2u * 1024u * 1024u)
+/* Manifests are parsed at loader init, before memory_init() latches the live
+ * geometry, so structural validity is the whole KSEG0 decode window. Whether
+ * the bytes there are live code is decided per dispatch by the range CRC. */
+#define OVERLAY_RAM_SIZE PSX_MAIN_RAM_WINDOW_BYTES
+#define OVERLAY_KSEG0_WINDOW_MASK (~(PSX_MAIN_RAM_WINDOW_BYTES - 1u))
 #define MANIFEST_LINE_MAX 128u
 #define MANIFEST_PHYSICAL_LINE_MAX 159u
 #define MANIFEST_PROVENANCE_PREFIX "# psxrecomp overlay provenance "
@@ -751,12 +806,18 @@ enum {
 static int man_structurally_valid(const ManFn *m) {
     if (!m || !m->has_crc || m->n < 1 || m->n > MAX_CODE_RANGES)
         return 0;
-    if ((m->entry & 0xFFE00000u) != 0x80000000u) return 0;
+    /* F entries carry the full VA of the segment the shard was compiled for
+     * (docs/SEGMENT_AWARE_CODE.md §5.7): KUSEG, KSEG0 or KSEG1, inside that
+     * segment's RAM decode window. R ranges stay byte extents, written at
+     * KSEG0 whatever the shard's segment. */
+    if (psx_code_segment_index(m->entry) < 0 ||
+        (m->entry & OVERLAY_KSEG0_WINDOW_MASK) != (m->entry & 0xE0000000u))
+        return 0;
     uint32_t entry = m->entry & 0x1FFFFFFFu;
     if ((entry & 3u) != 0u || entry >= OVERLAY_RAM_SIZE) return 0;
     int entry_covered = 0;
     for (int r = 0; r < m->n; r++) {
-        if ((m->lo[r] & 0xFFE00000u) != 0x80000000u) return 0;
+        if ((m->lo[r] & OVERLAY_KSEG0_WINDOW_MASK) != 0x80000000u) return 0;
         uint32_t lo = m->lo[r] & 0x1FFFFFFFu;
         uint32_t len = m->len[r];
         if ((lo & 3u) != 0u || (len & 3u) != 0u || len < 4u ||
@@ -806,18 +867,25 @@ static int manifest_record_end(const char *cursor) {
     return *manifest_skip_space(cursor) == '\0';
 }
 
+/* `S <seg>` (§5.7) names the segment the shard was compiled for: 00000000
+ * (KUSEG), 80000000 (KSEG0) or A0000000 (KSEG1). It is optional and absent
+ * means KSEG0, so every manifest written before it stays valid. Every F entry
+ * must lie in that segment; *out_seg receives it. */
 static ManFn *parse_manifest(const char *path, int *out_n,
                              uint64_t *out_pair_id,
                              int *out_has_pair_id,
-                             int *out_provenance) {
+                             int *out_provenance,
+                             uint32_t *out_seg) {
     *out_n = 0;
+    if (out_seg) *out_seg = PSX_OVERLAY_CODE_SEGMENT;
     if (out_pair_id) *out_pair_id = 0;
     if (out_has_pair_id) *out_has_pair_id = 0;
     if (out_provenance) *out_provenance = MANIFEST_PROVENANCE_AUTHORITY;
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
     int cap = 1024, n = 0;
-    int invalid = 0, pair_seen = 0, provenance_seen = 0;
+    int invalid = 0, pair_seen = 0, provenance_seen = 0, seg_seen = 0;
+    uint32_t seg = PSX_OVERLAY_CODE_SEGMENT;
     int provenance = MANIFEST_PROVENANCE_AUTHORITY;
     ManFn *arr = (ManFn *)malloc(sizeof(ManFn) * cap);
     if (!arr) { fclose(f); return NULL; }
@@ -853,7 +921,8 @@ static ManFn *parse_manifest(const char *path, int *out_n,
                 ? parsed_provenance : MANIFEST_PROVENANCE_AMBIGUOUS;
         }
         const char *record = manifest_skip_space(line);
-        int recognized = ((*record == 'P' || *record == 'F' || *record == 'R') &&
+        int recognized = ((*record == 'P' || *record == 'F' || *record == 'R' ||
+                           *record == 'S') &&
                           (record[1] == '\0' ||
                            manifest_is_space((unsigned char)record[1])));
         int embedded_nul = memchr(line, '\0', line_len) != NULL;
@@ -869,7 +938,18 @@ static ManFn *parse_manifest(const char *path, int *out_n,
             continue;
         }
         if (!recognized) continue;
-        if (*record == 'P') {
+        if (*record == 'S') {
+            const char *cursor = record + 1;
+            uint64_t parsed = 0;
+            if (!seg_seen && n == 0 &&
+                manifest_hex_field(&cursor, 8, &parsed) &&
+                manifest_record_end(cursor) &&
+                psx_code_segment_index((uint32_t)parsed) >= 0 &&
+                ((uint32_t)parsed & 0x1FFFFFFFu) == 0u) {
+                seg = (uint32_t)parsed;
+                seg_seen = 1;
+            } else invalid = 1;   /* twice, after an F, or not a RAM segment */
+        } else if (*record == 'P') {
             const char *cursor = record + 1;
             uint64_t parsed = 0;
             if (manifest_hex_field(&cursor, 16, &parsed) &&
@@ -892,7 +972,8 @@ static ManFn *parse_manifest(const char *path, int *out_n,
                     arr = na;
                 }
                 cur = &arr[n++];
-                cur->entry   = ((uint32_t)parsed_e & 0x1FFFFFFFu) | 0x80000000u;
+                cur->entry   = (uint32_t)parsed_e;
+                if ((cur->entry & 0xE0000000u) != seg) invalid = 1;
                 cur->crc     = (uint32_t)parsed_crc;
                 cur->has_crc = 1;
                 cur->n = 0;
@@ -934,6 +1015,7 @@ static ManFn *parse_manifest(const char *path, int *out_n,
         return NULL;
     }
     if (out_provenance) *out_provenance = provenance;
+    if (out_seg) *out_seg = seg;
     *out_n = n;
     return arr;
 }
@@ -970,7 +1052,7 @@ static int mips_control_kind(uint32_t instr) {
 static int ranges_contain_word(const uint32_t *lo_list,
                                const uint32_t *len_list, int n,
                                uint32_t phys) {
-    if ((phys & 3u) != 0u || phys > (2u * 1024u * 1024u) - 4u) return 0;
+    if ((phys & 3u) != 0u || phys > OVERLAY_RAM_SIZE - 4u) return 0;
     for (int r = 0; r < n; r++) {
         uint32_t lo = lo_list[r] & 0x1FFFFFFFu;
         uint32_t len = len_list[r];
@@ -986,28 +1068,45 @@ static int ranges_contain_word(const uint32_t *lo_list,
 static int ranges_delay_slots_hashed(const uint32_t *lo_list,
                                      const uint32_t *len_list, int n) {
     const uint8_t *ram = memory_get_ram_ptr();
-    const uint32_t ram_size = 2u * 1024u * 1024u;
     if (!ram || n < 1 || n > MAX_CODE_RANGES) return 0;
     for (int r = 0; r < n; r++) {
-        uint32_t lo = lo_list[r] & 0x1FFFFFFFu;
+        uint32_t lo = lo_list[r] & 0x1FFFFFFFu;   /* code address */
         uint32_t len = len_list[r];
+        uint32_t off = 0;                          /* its live bytes */
         if ((lo & 3u) != 0u || (len & 3u) != 0u || len < 4u ||
-            lo >= ram_size || len > ram_size - lo)
+            !psx_ram_resolve(lo, len, &off))
             return 0;
         for (uint32_t pc = lo; pc < lo + len; pc += 4u) {
-            uint32_t instr = (uint32_t)ram[pc] |
-                             ((uint32_t)ram[pc + 1u] << 8) |
-                             ((uint32_t)ram[pc + 2u] << 16) |
-                             ((uint32_t)ram[pc + 3u] << 24);
+            const uint8_t *word = ram + off + (pc - lo);
+            uint32_t instr = (uint32_t)word[0] |
+                             ((uint32_t)word[1] << 8) |
+                             ((uint32_t)word[2] << 16) |
+                             ((uint32_t)word[3] << 24);
             int kind = mips_control_kind(instr);
             if (kind < 0) return 0;
             if (kind > 0) {
                 uint32_t slot = pc + 4u;
                 if (!ranges_contain_word(lo_list, len_list, n, slot)) return 0;
-                uint32_t slot_instr = (uint32_t)ram[slot] |
-                                      ((uint32_t)ram[slot + 1u] << 8) |
-                                      ((uint32_t)ram[slot + 2u] << 16) |
-                                      ((uint32_t)ram[slot + 3u] << 24);
+                /* The slot word lies in some hashed range; fetch it from that
+                 * range's own live bytes (ranges need not be contiguous). */
+                uint32_t slot_off = 0;
+                int slot_found = 0;
+                for (int s = 0; s < n && !slot_found; s++) {
+                    uint32_t slo = lo_list[s] & 0x1FFFFFFFu;
+                    if (len_list[s] >= 4u && slot >= slo &&
+                        slot - slo <= len_list[s] - 4u) {
+                        if (!psx_ram_resolve(slo, len_list[s], &slot_off))
+                            return 0;
+                        slot_off += slot - slo;
+                        slot_found = 1;
+                    }
+                }
+                if (!slot_found) return 0;
+                const uint8_t *sw = ram + slot_off;
+                uint32_t slot_instr = (uint32_t)sw[0] |
+                                      ((uint32_t)sw[1] << 8) |
+                                      ((uint32_t)sw[2] << 16) |
+                                      ((uint32_t)sw[3] << 24);
                 if (mips_control_kind(slot_instr) != 0) return 0;
             }
         }
@@ -1105,6 +1204,7 @@ static int cand_register(uint32_t phys, OverlayFn fn, const ManFn *m, int dll,
     int idx = s_cand_n++;
     Candidate *c = &s_cand[idx];
     c->addr    = phys;
+    c->seg     = m->entry & 0xE0000000u;
     c->fn      = fn;
     c->dll     = dll;
     c->tier    = (uint8_t)tier;
@@ -1115,10 +1215,8 @@ static int cand_register(uint32_t phys, OverlayFn fn, const ManFn *m, int dll,
         c->range_len[c->nranges] = m->len[i];
         c->nranges++;
     }
-    /* Watch the code pages so future writes bump their generation. */
-    extern void overlay_watch_set_range(uint32_t phys, uint32_t len);
-    for (int i = 0; i < c->nranges; i++)
-        overlay_watch_set_range(c->range_lo[i], c->range_len[i]);
+    /* Watch the code pages (their live bytes) so writes bump their generation. */
+    ov_ranges_watch(c->range_lo, c->range_len, c->nranges);
 
     /* crc_code is the AUTHORITATIVE hash of the bytes the recompiler compiled
      * from (supplied by the manifest) — NOT a sample of live RAM at this instant
@@ -1128,8 +1226,12 @@ static int cand_register(uint32_t phys, OverlayFn fn, const ManFn *m, int dll,
      * which makes validity timing-independent and reload-on-return work. */
     c->crc_code = m->crc;
     c->val_gen = cand_gensum(c);
-    c->state   = (cand_crc(c) == c->crc_code && cand_delay_slots_hashed(c))
-               ? ENTRY_VALID : ENTRY_INVALID;
+    {
+        uint32_t live = 0;
+        c->state = (cand_live_crc(c, &live) && live == c->crc_code &&
+                    cand_delay_slots_hashed(c))
+                 ? ENTRY_VALID : ENTRY_INVALID;
+    }
     /* Keep higher-priority compiler tiers first without discarding additive
      * artifacts. New same-tier repairs precede older ones; lower-tier TCC
      * remains available if every GCC candidate fails live-byte validation. */
@@ -1154,6 +1256,12 @@ static int cand_register(uint32_t phys, OverlayFn fn, const ManFn *m, int dll,
      * lived here. With no sljit shards ever registered (dll == -1), there is
      * nothing to obsolete; the normal content-keyed chain dispatch stands.) */
     return 1;
+}
+
+static int idx_head_seg(uint32_t phys, uint32_t seg) {
+    for (int i = idx_head(phys); i >= 0; i = s_cand[i].next)
+        if (s_cand[i].seg == seg) return i;
+    return -1;
 }
 
 /* (sljit removed 2026-07-15: register_sljit_candidate, the JIT-on-miss memo,
@@ -1199,6 +1307,7 @@ enum { CACHE_TIER_UNKNOWN = 0, CACHE_TIER_TCC = 1, CACHE_TIER_GCC = 2 };
 typedef struct {
     uint32_t region_start;
     uint32_t logical_crc;
+    uint32_t seg;          /* shard segment, from its directory (§5.7)       */
     uint64_t mtime;
     int func_count;
     int indexed_func_count;
@@ -1281,6 +1390,33 @@ static int cache_tier_from_path(const char *path) {
     if (path_component_eq(path, "gcc")) return CACHE_TIER_GCC;
     if (path_component_eq(path, "tcc")) return CACHE_TIER_TCC;
     return CACHE_TIER_UNKNOWN;
+}
+
+/* Per-segment cache layout (docs/SEGMENT_AWARE_CODE.md §5.7, decision 4):
+ * KSEG0 shards stay directly in the cache tag directory, under their old
+ * names, so no existing cache is invalidated; KUSEG and KSEG1 shards live in
+ * the seg-kuseg/ and seg-kseg1/ subdirectories of the same tag, under the
+ * same {phys}_{crc} grammar. A shard's segment is its directory's, and its
+ * manifest's S record must agree. */
+#define OVERLAY_SEG_DIR_KUSEG "seg-kuseg"
+#define OVERLAY_SEG_DIR_KSEG1 "seg-kseg1"
+static int cache_dir_name_eq(const char *start, size_t len, const char *want) {
+    if (len != strlen(want)) return 0;
+    for (size_t i = 0; i < len; i++)
+        if (tolower((unsigned char)start[i]) != want[i]) return 0;
+    return 1;
+}
+static uint32_t cache_seg_from_path(const char *path) {
+    const char *end = NULL;
+    for (const char *p = path; *p; p++)
+        if (*p == '/' || *p == '\\') end = p;
+    if (!end) return PSX_OVERLAY_CODE_SEGMENT;
+    const char *start = end;
+    while (start > path && start[-1] != '/' && start[-1] != '\\') start--;
+    size_t len = (size_t)(end - start);
+    if (cache_dir_name_eq(start, len, OVERLAY_SEG_DIR_KUSEG)) return 0x00000000u;
+    if (cache_dir_name_eq(start, len, OVERLAY_SEG_DIR_KSEG1)) return 0xA0000000u;
+    return PSX_OVERLAY_CODE_SEGMENT;
 }
 
 static int cache_name_is_immutable(const char *name) {
@@ -1498,7 +1634,7 @@ static int       s_lazy_range_link_n = 0;
 #define LAZY_MISS_CACHE_CAP 16384u
 #define LAZY_MISS_CACHE_MASK (LAZY_MISS_CACHE_CAP - 1u)
 typedef struct {
-    uint32_t phys;
+    uint32_t phys;           /* the full PC (segment | phys)                  */
     uint32_t code_gen;
     uint32_t watched_code_gen;
     uint32_t loader_gen;
@@ -1515,16 +1651,18 @@ static void lazy_miss_invalidate_loader(void) {
     }
 }
 
-static int lazy_miss_cached(uint32_t phys) {
-    LazyMissEntry *e = &s_lazy_miss_cache[(phys >> 2) & LAZY_MISS_CACHE_MASK];
-    return e->phys == phys && e->code_gen == g_dirty_ram_code_gen &&
+/* Keyed by the full PC: a miss for one segment says nothing about another
+ * segment's shard of the same bytes (§5.7). */
+static int lazy_miss_cached(uint32_t pc) {
+    LazyMissEntry *e = &s_lazy_miss_cache[(pc >> 2) & LAZY_MISS_CACHE_MASK];
+    return e->phys == pc && e->code_gen == g_dirty_ram_code_gen &&
            e->watched_code_gen == s_lazy_watched_code_gen &&
            e->loader_gen == s_lazy_loader_gen;
 }
 
-static void lazy_miss_record(uint32_t phys) {
-    LazyMissEntry *e = &s_lazy_miss_cache[(phys >> 2) & LAZY_MISS_CACHE_MASK];
-    e->phys = phys;
+static void lazy_miss_record(uint32_t pc) {
+    LazyMissEntry *e = &s_lazy_miss_cache[(pc >> 2) & LAZY_MISS_CACHE_MASK];
+    e->phys = pc;
     e->code_gen = g_dirty_ram_code_gen;
     e->watched_code_gen = s_lazy_watched_code_gen;
     e->loader_gen = s_lazy_loader_gen;
@@ -1564,8 +1702,18 @@ static void rebuild_lazy_manifest_index(void) {
         snprintf(path + n - OVERLAY_SHARED_EXT_LEN,
                  sizeof(path) - (n - OVERLAY_SHARED_EXT_LEN), ".ranges");
         int man_n = 0;
-        ManFn *man = parse_manifest(path, &man_n, NULL, NULL, NULL);
+        uint32_t man_seg = 0;
+        ManFn *man = parse_manifest(path, &man_n, NULL, NULL, NULL, &man_seg);
         if (!man) continue;
+        if (man_seg != s_cache_idx[ci].seg) {
+            /* A shard runs only in the segment it was compiled for, and its
+             * directory says which one; a disagreeing manifest is not used. */
+            loader_log("manifest %s names segment 0x%08X, its directory 0x%08X "
+                       "-- left to the interpreter", path, man_seg,
+                       s_cache_idx[ci].seg);
+            free(man);
+            continue;
+        }
         s_cache_idx[ci].manifest_ok = 1;
         s_cache_idx[ci].func_count = man_n;
         for (int mi = 0; mi < man_n; mi++) {
@@ -1602,7 +1750,7 @@ static void rebuild_lazy_manifest_index(void) {
                  * generations as registered DLL candidates. Otherwise a CPU
                  * copy can turn INVALID bytes into a match while both the
                  * LazyMan state and final-miss cache remain stale forever. */
-                overlay_watch_set_range(lo, lm->fn.len[r]);
+                ov_ranges_watch(&lm->fn.lo[r], &lm->fn.len[r], 1);
                 uint32_t p0 = lo >> 12, p1 = hi >> 12;
                 if (p0 >= RANGE_PAGE_COUNT) continue;
                 if (p1 >= RANGE_PAGE_COUNT) p1 = RANGE_PAGE_COUNT - 1u;
@@ -1708,6 +1856,7 @@ const char *overlay_loader_arch_abi(void) { return PSX_OVERLAY_ARCH_ABI; }
 #ifndef _WIN32
 static int add_posix_cache_file(const PsxOverlayCacheFile *file, void *opaque) {
     int tier = opaque ? *(const int *)opaque : CACHE_TIER_UNKNOWN;
+    const uint32_t seg = cache_seg_from_path(file->path);
     /* Legacy 8_8 pairs were published by a replace protocol that could leave a
      * new manifest beside an old DLL. Keep them on disk for Python seed
      * migration, but never let them suppress or execute instead of a bound
@@ -1723,6 +1872,7 @@ static int add_posix_cache_file(const PsxOverlayCacheFile *file, void *opaque) {
     CacheEntry *e = &s_cache_idx[s_cache_idx_count++];
     e->region_start = file->region_start;
     e->logical_crc = file->content_crc;
+    e->seg = seg;
     e->mtime = file->mtime;
     e->func_count = 0;
     e->indexed_func_count = 0;
@@ -1766,6 +1916,7 @@ static void scan_one_cache_dir(const char *dir, int tier) {
         CacheEntry *e = &s_cache_idx[s_cache_idx_count++];
         e->region_start = addr;
         e->logical_crc = crc;
+        e->seg = cache_seg_from_path(full);
         e->mtime = ((uint64_t)fd.ftLastWriteTime.dwHighDateTime << 32) |
                    (uint64_t)fd.ftLastWriteTime.dwLowDateTime;
         e->func_count = 0;
@@ -1976,23 +2127,31 @@ static void abi_preflight_sweep(const char *dir) {
 #endif
 }
 
-static void scan_cache_dir(void) {
+static void scan_tier_cache_dirs(const char *tier_name, int tier) {
     char dir[768];
+    snprintf(dir, sizeof(dir), "%s/%s/%s/%s/cg%d_%08x_gc%08x_f%u",
+             s_cache_dir, s_game_id, tier_name, PSX_OVERLAY_ARCH_ABI,
+             PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH,
+             (unsigned)s_config_hash, (unsigned)PSX_OVERLAY_FLAVOR);
+    scan_one_cache_dir(dir, tier);
+    abi_preflight_sweep(dir);
+    /* KUSEG and KSEG1 shards: per-segment subdirectories of the same tag. */
+    static const char *const seg_dirs[] = {
+        OVERLAY_SEG_DIR_KUSEG, OVERLAY_SEG_DIR_KSEG1 };
+    for (size_t i = 0; i < sizeof(seg_dirs) / sizeof(seg_dirs[0]); i++) {
+        char seg_dir[800];
+        snprintf(seg_dir, sizeof(seg_dir), "%s/%s", dir, seg_dirs[i]);
+        scan_one_cache_dir(seg_dir, tier);
+        abi_preflight_sweep(seg_dir);
+    }
+}
+
+static void scan_cache_dir(void) {
     /* Index both tiers and every immutable artifact. Runtime selection prefers
      * usable GCC over TCC; an invalid GCC artifact cannot suppress a valid TCC
      * fallback merely because its filename was enumerated first. */
-    snprintf(dir, sizeof(dir), "%s/%s/gcc/%s/cg%d_%08x_gc%08x_f%u",
-             s_cache_dir, s_game_id, PSX_OVERLAY_ARCH_ABI, PSX_OVERLAY_CODEGEN_VER,
-             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash,
-             (unsigned)PSX_OVERLAY_FLAVOR);
-    scan_one_cache_dir(dir, CACHE_TIER_GCC);
-    abi_preflight_sweep(dir);
-    snprintf(dir, sizeof(dir), "%s/%s/tcc/%s/cg%d_%08x_gc%08x_f%u",
-             s_cache_dir, s_game_id, PSX_OVERLAY_ARCH_ABI, PSX_OVERLAY_CODEGEN_VER,
-             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash,
-             (unsigned)PSX_OVERLAY_FLAVOR);
-    scan_one_cache_dir(dir, CACHE_TIER_TCC);
-    abi_preflight_sweep(dir);
+    scan_tier_cache_dirs("gcc", CACHE_TIER_GCC);
+    scan_tier_cache_dirs("tcc", CACHE_TIER_TCC);
 
     refresh_bios_resident_flags();
     rebuild_lazy_manifest_index();
@@ -2026,7 +2185,7 @@ static void scan_cache_dir(void) {
  * persist/publish writers, on-disk reload scan, and their debug accessors —
  * lived here. No shards are produced or reloaded anymore.) */
 
-static uint32_t lazy_man_crc(const ManFn *m); /* defined with lazy matching */
+static int lazy_man_crc(const ManFn *m, uint32_t *crc); /* defined with lazy matching */
 
 /* True if the cache holds a usable DLL for this region/logical image CRC.
  * Filename identity alone is insufficient: a structurally valid but stale or
@@ -2042,8 +2201,10 @@ int overlay_loader_has_cached_crc(uint32_t region_start, uint32_t crc) {
             int seen = 0, usable = 1;
             for (int li = s_lazy_bundle_head[i]; li >= 0;
                  li = s_lazy_man[li].next_bundle) {
+                uint32_t live_crc = 0;
                 seen++;
-                if (lazy_man_crc(&s_lazy_man[li].fn) != s_lazy_man[li].fn.crc ||
+                if (!lazy_man_crc(&s_lazy_man[li].fn, &live_crc) ||
+                    live_crc != s_lazy_man[li].fn.crc ||
                     !man_delay_slots_hashed(&s_lazy_man[li].fn)) {
                     usable = 0;
                     break;
@@ -2166,6 +2327,21 @@ void overlay_loader_get_ci_skip_diag(uint64_t *unit, uint64_t *supp,
 }
 int overlay_loader_call_unit_depth(void) { return g_call_unit_depth; }
 
+/* Native-shard nesting for a landing that longjmps out of a shard and then
+ * resumes the interrupted code (the render-pass watchdog abort, render_pass.c):
+ * the active-candidate stack depth and the in-progress entry are put back by
+ * the dispatch frames the longjmp skips. */
+void overlay_loader_native_nesting(int *active_depth, uint32_t *inprogress) {
+    if (active_depth) *active_depth = s_active_depth;
+    if (inprogress) *inprogress = s_native_inprogress;
+}
+void overlay_loader_set_native_nesting(int active_depth, uint32_t inprogress) {
+    if (active_depth >= 0 &&
+        active_depth <= (int)(sizeof(s_active_stack) / sizeof(s_active_stack[0])))
+        s_active_depth = active_depth;
+    s_native_inprogress = inprogress;
+}
+
 static int overlay_irq_suppressed_now(void) {
     /* Differential replay (and its authoritative interpreter pass) is atomic.
      * Never let a previously armed rate-limit punch a real IRQ into a shadow. */
@@ -2219,12 +2395,16 @@ static void overlay_ci_wrapper(CPUState *cpu) {
     psx_check_interrupts(cpu);
 }
 
+/* Full-VA compares (§5.7): the resume PC a shard bakes is in its own segment,
+ * so it is the caller's return point only when it equals $ra exactly, and it
+ * is internal only to a running shard of the same segment. */
 static int overlay_idle_note_is_internal_or_return(const CPUState *cpu,
                                                    uint32_t resume_pc) {
     uint32_t phys = resume_pc & 0x1FFFFFFFu;
-    if ((resume_pc & 0x1FFFFFFFu) == (cpu->gpr[31] & 0x1FFFFFFFu)) return 1;
+    if (resume_pc == cpu->gpr[31]) return 1;
     if (s_active_depth <= 0) return 0;
     Candidate *c = &s_cand[s_active_stack[s_active_depth - 1]];
+    if ((resume_pc & 0xE0000000u) != c->seg) return 0;
     for (int r = 0; r < c->nranges; r++) {
         uint32_t lo = c->range_lo[r];
         if (phys >= lo && phys < lo + c->range_len[r]) return 1;
@@ -2331,6 +2511,13 @@ static void init_callbacks(void) {
     s_callbacks.call_bail_flag = &g_psx_call_bail;
     s_callbacks.bail_first     = &g_psx_bail_first;
     s_callbacks.bail_resolved  = &g_psx_bail_resolved;
+    /* Store-PC breadcrumb (ABI v24): overlay stores update the same value
+     * static and interpreted stores do, in every build, because memory.c's
+     * store filters read it as well as the debug tooling. */
+    {
+        extern uint32_t g_debug_last_store_pc;
+        s_callbacks.last_store_pc = &g_debug_last_store_pc;
+    }
     /* Widescreen hooks (ABI v3): overlay-emitted psx_ws_* calls forward to
      * the runtime's live widescreen state (gpu.c). */
     {
@@ -2401,6 +2588,12 @@ static void init_callbacks(void) {
         {
             extern int32_t psx_ws_player_x_bound(int32_t vanilla);
             s_callbacks.ws_player_x_bound = psx_ws_player_x_bound;
+        }
+        {
+            extern int32_t psx_ws_screen_x_bound(int32_t vanilla);
+            extern void psx_mod_function_entry(CPUState *cpu, uint32_t address);
+            s_callbacks.ws_screen_x_bound = psx_ws_screen_x_bound;
+            s_callbacks.mod_function_entry = psx_mod_function_entry;
         }
         /* ABI v14: GTE precision-store tracker — the emitter emits a direct
          * gte_precision_store_word() call for every swc2 (GTE store-word),
@@ -2758,6 +2951,16 @@ static int load_bios_resident_shards(void) {
     return functions;
 }
 
+/* The host callback table, for a consumer that loads overlay-style modules
+ * before (or without) overlay_loader_init: the BIOS module host activates a
+ * player's retail backend during BIOS selection, ahead of the deferred
+ * overlay init thread. init_callbacks() is pure assignment, so filling it
+ * here and again in overlay_loader_init is harmless. */
+const OverlayCallbacks *overlay_loader_callbacks(void) {
+    init_callbacks();
+    return &s_callbacks;
+}
+
 void overlay_loader_init(const char *cache_dir, const char *game_id,
                          uint32_t config_hash) {
     {
@@ -3043,12 +3246,22 @@ static int load_one_dll(const char *dll_path,
     uint64_t manifest_pair_id = 0;
     int manifest_has_pair_id = 0;
     int manifest_provenance = MANIFEST_PROVENANCE_AUTHORITY;
+    uint32_t manifest_seg = 0;
     ManFn *man = parse_manifest(ranges_path, &man_n,
                                 &manifest_pair_id,
                                 &manifest_has_pair_id,
-                                &manifest_provenance);
+                                &manifest_provenance,
+                                &manifest_seg);
     if (!man || man_n == 0) {
         loader_log("no/empty manifest %s — DLL left to interpreter", ranges_path);
+        free(man);
+        overlay_library_close(prepared);
+        return 0;
+    }
+    if (manifest_seg != cache_seg_from_path(dll_path)) {
+        loader_log("manifest %s names segment 0x%08X, not its directory's "
+                   "0x%08X -- DLL left to interpreter", ranges_path,
+                   manifest_seg, cache_seg_from_path(dll_path));
         free(man);
         overlay_library_close(prepared);
         return 0;
@@ -3212,7 +3425,8 @@ void overlay_loader_discard_prepared(OverlayPreparedImage *image) {
     free(image);
 }
 
-static int lazy_man_contains(const ManFn *m, uint32_t phys) {
+static int lazy_man_contains(const ManFn *m, uint32_t seg, uint32_t phys) {
+    if ((m->entry & 0xE0000000u) != seg) return 0;   /* another segment's shard */
     if ((m->entry & 0x1FFFFFFFu) == phys) return 1;
     for (int r = 0; r < m->n; r++) {
         uint32_t lo = m->lo[r] & 0x1FFFFFFFu;
@@ -3221,19 +3435,13 @@ static int lazy_man_contains(const ManFn *m, uint32_t phys) {
     return 0;
 }
 
-static uint32_t lazy_man_crc(const ManFn *m) {
-    const uint8_t *ram = memory_get_ram_ptr();
-    uint32_t crc = 0xFFFFFFFFu;
-    for (int r = 0; r < m->n; r++)
-        crc = crc32_update(crc, ram + (m->lo[r] & 0x1FFFFFFFu), m->len[r]);
-    return crc ^ 0xFFFFFFFFu;
+/* 1 and *crc = CRC of the manifest's live bytes, 0 when it has none. */
+static int lazy_man_crc(const ManFn *m, uint32_t *crc) {
+    return ov_ranges_crc(m->lo, m->len, m->n, crc);
 }
 
 static uint32_t lazy_man_gensum(const ManFn *m) {
-    uint32_t sum = 0;
-    for (int r = 0; r < m->n; r++)
-        sum += overlay_watch_pagegen_sum(m->lo[r] & 0x1FFFFFFFu, m->len[r]);
-    return sum;
+    return ov_ranges_gensum(m->lo, m->len, m->n);
 }
 
 static int lazy_man_matches(LazyMan *lm) {
@@ -3244,10 +3452,11 @@ static int lazy_man_matches(LazyMan *lm) {
     uint32_t gen = lazy_man_gensum(&lm->fn);
     if (lm->state == ENTRY_VALID && lm->val_gen == gen) return 1;
     if (lm->state == ENTRY_INVALID && lm->val_gen == gen) return 0;
-    uint32_t live = lazy_man_crc(&lm->fn);
+    uint32_t live = 0;
+    const int live_ok = lazy_man_crc(&lm->fn, &live);
     lm->val_gen = gen;
     s_last_crc = live;
-    lm->state = (live == lm->fn.crc && man_delay_slots_hashed(&lm->fn))
+    lm->state = (live_ok && live == lm->fn.crc && man_delay_slots_hashed(&lm->fn))
               ? ENTRY_VALID : ENTRY_INVALID;
     return lm->state == ENTRY_VALID;
 }
@@ -3311,18 +3520,21 @@ static void overlay_image_warm_seed_boot_text(void) {
     overlay_image_warm_queue(indices, count);
 }
 
-static int lazy_is_loadable(int li, uint32_t region_start, uint32_t phys,
-                            int require_region_start) {
+static int lazy_is_loadable(int li, uint32_t region_start, uint32_t seg,
+                            uint32_t phys, int require_region_start) {
     if (li < 0 || li >= s_lazy_man_n) return 0;
     LazyMan *lm = &s_lazy_man[li];
     int ci = lm->cache_idx;
     if (ci < 0 || ci >= s_cache_idx_count) return 0;
+    /* A manifest's entries are in its directory's segment (checked when the
+     * index is built), so lazy_man_contains()'s segment test selects the
+     * shards of `seg`. */
     return (!require_region_start ||
             s_cache_idx[ci].region_start == region_start) &&
         !s_cache_idx[ci].load_failed &&
         !s_cache_idx[ci].capacity_suppressed &&
         !dll_already_loaded(s_cache_idx[ci].path) &&
-        lazy_man_contains(&lm->fn, phys) && lazy_man_matches(lm);
+        lazy_man_contains(&lm->fn, seg, phys) && lazy_man_matches(lm);
 }
 
 static int lazy_better_bundle(int li, int best) {
@@ -3354,7 +3566,10 @@ static int lazy_load_selected(int li) {
     return loaded;
 }
 
-static int try_load_region(uint32_t phys) {
+/* Load the cached shard of `seg` (§5.7) that serves phys. The region walkback
+ * and the manifest indexes are physical: the bytes, and so the region, are the
+ * same in every segment. lazy_is_loadable() admits only `seg`'s manifests. */
+static int try_load_region(uint32_t seg, uint32_t phys) {
     extern uint32_t dirty_ram_get_bitmap_word(uint32_t word_index);
 
     if (!overlay_loads_allowed())
@@ -3408,7 +3623,7 @@ retry_artifact:
          * variants, so walkback can recover an older adjacent run's base
          * (e.g. 0x106000 instead of an exact live 0x108000 shard). Rejecting
          * the exact entry on that heuristic strands valid DLLs forever. */
-        if (!lazy_is_loadable(li, region_start, phys, 0)) continue;
+        if (!lazy_is_loadable(li, region_start, seg, phys, 0)) continue;
         int ci = s_lazy_man[li].cache_idx;
         /* Cross-region recovery is safe only for a fully coherent CPS bundle.
          * A partial exact-function match can have snapshot-specific internal
@@ -3434,7 +3649,7 @@ retry_artifact:
             /* Non-exact range ownership remains region-narrowed: unlike an
              * exact manifested entry, an interior PC alone is not a unique
              * identity for a reused-address CPS bundle. */
-            if (!lazy_is_loadable(li, region_start, phys, 1)) continue;
+            if (!lazy_is_loadable(li, region_start, seg, phys, 1)) continue;
             if (lazy_candidate_preferred(li, fallback)) fallback = li;
             int ci = s_lazy_man[li].cache_idx;
             if (lazy_bundle_matches(ci) && lazy_candidate_preferred(li, best))
@@ -3455,7 +3670,7 @@ retry_artifact:
  * interior CPS continuation. The latter must use its already-loaded range owner
  * first (the Whoopee 0x107624 fix); the former must be allowed to publish its
  * exact DLL even when a broader conservative owner contains the same PC. */
-static int lazy_has_exact_entry(uint32_t phys) {
+static int lazy_has_exact_entry(uint32_t seg, uint32_t phys) {
     /* Same overlay-off hazard as overlay_find_by_range: the lazy entry index
      * (s_lazy_entry_head) is -1-initialized only when overlay_cache is enabled;
      * with overlay off it is zero-initialized and the link traversal below
@@ -3464,7 +3679,7 @@ static int lazy_has_exact_entry(uint32_t phys) {
     uint32_t bucket = (phys * 2654435761u) & LAZY_ENTRY_MASK;
     for (int li = s_lazy_entry_head[bucket]; li >= 0;
          li = s_lazy_man[li].next_entry) {
-        if ((s_lazy_man[li].fn.entry & 0x1FFFFFFFu) == phys)
+        if (s_lazy_man[li].fn.entry == (seg | phys))
             return 1;
     }
     return 0;
@@ -3479,9 +3694,10 @@ static int lazy_has_exact_entry(uint32_t phys) {
  * idx_head() (entry-keyed) misses; we re-enter the owning function with
  * cpu->pc = that address so its entry-switch routes to the right block. Returns
  * the candidate index, or -1. */
-static int range_candidate_matches(int i, uint32_t phys) {
+static int range_candidate_matches(int i, uint32_t seg, uint32_t phys) {
     Candidate *c = &s_cand[i];
     if (c->state == ENTRY_BLACKLIST) return 0;
+    if (c->seg != seg) return 0;   /* another segment's shard (§5.7) */
     int contains = 0;
     uint32_t first_range_lo = UINT32_MAX;
     for (int r = 0; r < c->nranges; r++) {
@@ -3507,11 +3723,12 @@ static int range_candidate_matches(int i, uint32_t phys) {
     }
     if (c->state == ENTRY_INVALID && gen == c->val_gen)
         return 0;                    /* known mismatch, no watched write */
-    uint32_t live = cand_crc(c);
+    uint32_t live = 0;
+    const int live_ok = cand_live_crc(c, &live);
     s_rehashes++;
     s_last_crc = live;
     c->val_gen = gen;
-    if (live == c->crc_code && cand_delay_slots_hashed(c)) {
+    if (live_ok && live == c->crc_code && cand_delay_slots_hashed(c)) {
         if (c->state != ENTRY_VALID) {
             c->state = ENTRY_VALID;
             s_valid_count++;
@@ -3537,7 +3754,7 @@ static int range_candidate_preferred(int candidate, int current) {
     return candidate > current; /* newest same-tier repair */
 }
 
-static int overlay_find_by_range(uint32_t phys) {
+static int overlay_find_by_range(uint32_t seg, uint32_t phys) {
     /* Definitive guard for the overlay-off case: the range page index
      * (s_range_page_head) is only initialized to -1 by overlay_loader_init,
      * which runs solely when overlay_cache is enabled. With overlay off it is
@@ -3548,36 +3765,39 @@ static int overlay_find_by_range(uint32_t phys) {
     uint32_t page = phys >> 12;
     if (page >= RANGE_PAGE_COUNT) return -1;
 
+    /* Cached by the full PC: each segment has its own owner (§5.7). */
+    const uint32_t key = seg | phys;
     RangePcCache *pc = &s_range_pc_cache[
-        (phys * 2654435761u) & RANGE_PC_CACHE_MASK];
+        (key * 2654435761u) & RANGE_PC_CACHE_MASK];
     if (pc->generation == s_range_candidate_generation &&
-        pc->cand >= 0 && pc->phys == phys &&
-        range_candidate_matches(pc->cand, phys))
+        pc->cand >= 0 && pc->phys == key &&
+        range_candidate_matches(pc->cand, seg, phys))
         return pc->cand;
 
     int best = -1;
     if (s_range_index_overflow) {
         for (int i = 0; i < s_cand_n; i++)
-            if (range_candidate_matches(i, phys) &&
+            if (range_candidate_matches(i, seg, phys) &&
                 range_candidate_preferred(i, best))
                 best = i;
     } else {
         for (int li = s_range_page_head[page]; li >= 0;
              li = s_range_links[li].next) {
             int i = s_range_links[li].cand;
-            if (range_candidate_matches(i, phys) &&
+            if (range_candidate_matches(i, seg, phys) &&
                 range_candidate_preferred(i, best))
                 best = i;
         }
     }
-    pc->phys = phys;
+    pc->phys = key;
     pc->generation = s_range_candidate_generation;
     pc->cand = best;
     return best;
 }
 
+static int overlay_loader_dispatch_seg(CPUState *cpu, uint32_t addr);
+
 int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
-    uint32_t phys = addr & 0x1FFFFFFFu;
     /* Overlay dispatch is a no-op when the overlay loader is inactive
      * (overlay_cache=false): there are no candidates to match, so this must
      * return 0 (dispatch to interp). This guard is also a HARD SAFETY:
@@ -3591,19 +3811,46 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
      * overlay-off + CPS game hit this and wedged at boot before any game code ran
      * (found via Ape Escape, the only overlay-off title). Fail closed here. */
     if (!s_active) return 0;
-    if (overlay_cache_window_contains(phys) && lazy_miss_cached(phys)) {
+    int ran = overlay_loader_dispatch_seg(cpu, addr);
+    /* KUSEG/KSEG1 dispatches, split by outcome (docs/SEGMENT_AWARE_CODE.md
+     * §5.7): run by a shard compiled for their segment, or left to the
+     * interpreter (none is cached or valid yet). The interpreted ones are
+     * what capture records for the next compile, so on a warm cache the
+     * second count falls to 0. */
+    if (!psx_overlay_code_segment_pc(addr)) {
+        if (ran) s_segment_native++;
+        else     s_segment_alias_interp++;
+    }
+    return ran;
+}
+
+/* A shard's body bakes the PCs of the segment it was compiled for: the $ra a
+ * jal/jalr writes, its jump and exception-resume PCs, its I-cache fetch tags
+ * and store-PC stamps (docs/SEGMENT_AWARE_CODE.md §5.7). A PC therefore runs
+ * only a shard of its own segment; another segment's shard of the same bytes
+ * is not a candidate for it. Candidates, manifests and the negative caches
+ * are indexed physically (the bytes are one identity) and matched by segment;
+ * a PC outside the three segments that map RAM never runs a shard. */
+static int overlay_loader_dispatch_seg(CPUState *cpu, uint32_t addr) {
+    const uint32_t phys = addr & 0x1FFFFFFFu;
+    const uint32_t seg = addr & 0xE0000000u;
+    if (psx_code_segment_index(addr) < 0) {
+        s_disp_interp++;
+        return 0;
+    }
+    if (overlay_cache_window_contains(phys) && lazy_miss_cached(addr)) {
         s_disp_interp++;
         return 0;
     }
     int lazy_loaded = 0;
 retry_candidates:
     ; /* C11 labels must precede a statement. */
-    int head = idx_head(phys);
+    int head = idx_head_seg(phys, seg);
     int loaded_range_ci = -1;
     int lazy_exact = 0;
     int exact_needs_load = 0;
     if (head < 0 && s_active && overlay_cache_window_contains(phys)) {
-        lazy_exact = head < 0 && lazy_has_exact_entry(phys);
+        lazy_exact = head < 0 && lazy_has_exact_entry(seg, phys);
         /* A CPS continuation is normally not a registered function ENTRY. Its
          * already-loaded range owner must be checked before lazy discovery:
          * try_load_region otherwise scans the 12K+ manifest index and may load
@@ -3612,11 +3859,11 @@ retry_candidates:
          * manifested entries are different: a broader range owner must not mask
          * their valid cached DLL (Tomba FMV's 0x80106424/0x80106688 case). */
         if (head < 0 && g_psx_cps_mode)
-            loaded_range_ci = overlay_find_by_range(phys);
+            loaded_range_ci = overlay_find_by_range(seg, phys);
         exact_needs_load = lazy_exact &&
             (loaded_range_ci < 0 || s_cand[loaded_range_ci].device_touch);
         if (head < 0 && (loaded_range_ci < 0 || exact_needs_load) &&
-            !lazy_loaded && try_load_region(phys)) {
+            !lazy_loaded && try_load_region(seg, phys)) {
             lazy_loaded = 1;
             goto retry_candidates;
         }
@@ -3634,7 +3881,7 @@ retry_candidates:
      * so they run native directly here; device-touch funcs still go to interp. */
     if (head < 0 && g_psx_cps_mode) {
         int ci = loaded_range_ci >= 0 ? loaded_range_ci
-                                      : overlay_find_by_range(phys);
+                                      : overlay_find_by_range(seg, phys);
         int _probe = (s_cps_probe_pc && phys == s_cps_probe_pc);
         if (_probe) {
             s_cps_probe_count++;
@@ -3656,11 +3903,12 @@ retry_candidates:
                 matched = 1;
                 s_gen_fastpath++;
             } else {
-                uint32_t live = cand_crc(c);
+                uint32_t live = 0;
+                const int live_ok = cand_live_crc(c, &live);
                 s_rehashes++;
                 s_last_crc = live;
                 c->val_gen = gen;
-                matched = (live == c->crc_code && cand_delay_slots_hashed(c));
+                matched = (live_ok && live == c->crc_code && cand_delay_slots_hashed(c));
             }
             if (_probe) s_cps_probe_matched = matched;
             if (matched) {
@@ -3683,7 +3931,7 @@ retry_candidates:
                 int in_own_shadow = (s_in_shadow && (const void *)c == s_shadow_cand);
                 if (!in_own_shadow) {
                     int want_diff = s_diff_mode && cand_selected_for_diff(c);
-                    if (want_diff && addr < 0x10000u) want_diff = 0;
+                    if (want_diff && phys < 0x10000u) want_diff = 0;
                     if (want_diff && (s_diff_addr || c->diff_passes < OVERLAY_DIFF_BUDGET)) {
                         if (_probe) s_cps_probe_outcome = 5;
                         s_diffgate_interp++;
@@ -3742,6 +3990,7 @@ retry_candidates:
 
     for (int i = head; i >= 0; i = s_cand[i].next) {
         Candidate *c = &s_cand[i];
+        if (c->seg != seg) continue;   /* another segment's shard */
         if (c->state == ENTRY_BLACKLIST) continue;
 
         /* Generation-gated validation (overlay-cache v2 P2). The ONLY way this
@@ -3768,11 +4017,12 @@ retry_candidates:
              * variant chains scale with cache history instead of live code. */
             continue;
         } else {
-            uint32_t live = cand_crc(c);
+            uint32_t live = 0;
+            const int live_ok = cand_live_crc(c, &live);
             s_rehashes++;
             s_last_crc = live;
             c->val_gen = gen;
-            matched = (live == c->crc_code && cand_delay_slots_hashed(c));
+            matched = (live_ok && live == c->crc_code && cand_delay_slots_hashed(c));
         }
         if (matched) {
             if (c->state != ENTRY_VALID) {
@@ -3802,7 +4052,7 @@ retry_candidates:
              * "diverges" (observed: 2016/2017 calls, all 0xB0, flooding the
              * ring). The diff harness validates OVERLAY shard codegen against
              * the interp oracle; kernel gates stay on their normal route. */
-            if (want_diff && addr < 0x10000u) want_diff = 0;
+            if (want_diff && phys < 0x10000u) want_diff = 0;
             if (want_diff && !s_in_shadow &&
                 (s_diff_addr || c->diff_passes < OVERLAY_DIFF_BUDGET)) {
                 /* NEVER start a shadow inside an exception dispatch: the guest's
@@ -3901,12 +4151,12 @@ retry_candidates:
      * preserves additive variant coverage without turning one guest transition
      * into an unbounded synchronous LoadLibrary loop. */
     if (!lazy_loaded && s_active && overlay_cache_window_contains(phys) &&
-        try_load_region(phys)) {
+        try_load_region(seg, phys)) {
         lazy_loaded = 1;
         goto retry_candidates;
     }
 
-    if (overlay_cache_window_contains(phys)) lazy_miss_record(phys);
+    if (overlay_cache_window_contains(phys)) lazy_miss_record(addr);
     s_disp_interp++;
     return 0;
 }
@@ -4025,6 +4275,8 @@ int overlay_loader_lazy_manifest_count(void) { return s_lazy_man_n; }
 int overlay_loader_lazy_manifest_overflow(void) { return s_lazy_man_overflow; }
 uint64_t overlay_loader_candidate_overflow(void) { return s_cand_overflow; }
 uint64_t overlay_loader_pair_aliases(void) { return s_pair_aliases; }
+uint64_t overlay_loader_segment_alias_interp(void) { return s_segment_alias_interp; }
+uint64_t overlay_loader_segment_native(void) { return s_segment_native; }
 
 /* (sljit removed 2026-07-15: overlay_loader_sljit_obsoleted and the
  * overlay_loader_sljit_probe one-shot JIT helper lived here.) */
@@ -4072,9 +4324,11 @@ int overlay_fp_enabled(void) {
  * so the comparison isolates COMPUTATION (and is longjmp-safe). A divergence
  * here = a real codegen bug (function + exact register/RAM). Zero divergence =
  * computation is correct and the fault is timing/interrupt-ordering. */
-#define SHADOW_RAM_SIZE  (2u * 1024u * 1024u)
+/* Snapshots cover the live RAM (retail 2 MiB unless the 8 MB mod is on). */
+#define SHADOW_RAM_SIZE  psx_ram_live_bytes()
 #define SHADOW_SPAD_SIZE 1024u
-static uint8_t  s_ram0[SHADOW_RAM_SIZE], s_ramN[SHADOW_RAM_SIZE], s_ramI[SHADOW_RAM_SIZE];
+static uint8_t  s_ram0[PSX_MAIN_RAM_BACKING_BYTES], s_ramN[PSX_MAIN_RAM_BACKING_BYTES],
+                s_ramI[PSX_MAIN_RAM_BACKING_BYTES];
 static uint8_t  s_spad0[SHADOW_SPAD_SIZE], s_spadI[SHADOW_SPAD_SIZE];
 static uint64_t s_shadow_skipped_dev = 0;  /* unsafe/incomplete traces skipped */
 /* s_diff_mode / s_in_shadow declared above (before dispatch). */
@@ -4215,7 +4469,7 @@ static void run_shadow_diff_legacy(CPUState *cpu, Candidate *c, uint32_t addr) {
         int guard = 0;
         while (cpu->pc != 0 && !g_psx_call_bail && guard++ < 8192) {
             uint32_t tv = cpu->pc;
-            if ((tv & 0x1FFFFFFFu) == (stop_ra & 0x1FFFFFFFu)) break;  /* returned */
+            if (tv == stop_ra) break;  /* returned (the exact PC, §5.7) */
             cpu->pc = 0;
             int prev_phase = g_exec_phase;
             g_exec_phase = 3;   /* compiled route; dirty/native callees re-tag inside */
@@ -4434,7 +4688,7 @@ static void run_shadow_diff(CPUState *cpu, Candidate *c, uint32_t addr) {
             int guard = 0;
             while (cpuN.pc != 0 && !g_psx_call_bail && guard++ < 8192) {
                 uint32_t tv = cpuN.pc;
-                if ((tv & 0x1FFFFFFFu) == (stop_ra & 0x1FFFFFFFu)) break;
+                if (tv == stop_ra) break;
                 cpuN.pc = 0;
                 int prev_phase = g_exec_phase;
                 g_exec_phase = 3;
@@ -4705,7 +4959,9 @@ int overlay_loader_call_native(CPUState *cpu, uint32_t addr) {
     if (!s_active || !s_native_exec)
         return 0;  /* inactive/interp mode: keep the legacy inline path */
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (idx_head(phys) < 0 && !lazy_has_exact_entry(phys))
+    uint32_t seg = addr & 0xE0000000u;
+    if (psx_code_segment_index(addr) < 0 ||
+        (idx_head_seg(phys, seg) < 0 && !lazy_has_exact_entry(seg, phys)))
         return 0; /* neither a registered nor an exact cached entry */
     uint32_t in_regs[34];
     int fp = overlay_fp_enabled();
@@ -4793,14 +5049,15 @@ int overlay_loader_dump_candidates(char *out, int cap) {
     n += snprintf(out + n, cap - n, "[");
     for (int i = 0; i < s_cand_n && n < cap - 160; i++) {
         Candidate *c = &s_cand[i];
-        uint32_t live = cand_crc(c);
+        uint32_t live = 0;
+        const int live_ok = cand_live_crc(c, &live);
         uint32_t sum  = cand_gensum(c);
         n += snprintf(out + n, cap - n,
             "%s{\"addr\":\"0x%08X\",\"state\":%d,\"nranges\":%d,"
             "\"crc\":\"0x%08X\",\"live\":\"0x%08X\",\"match\":%d,"
             "\"val_gen\":%u,\"gen\":%u,\"dll\":%d,\"diff_passes\":%u}",
             i ? "," : "", c->addr, c->state, c->nranges,
-            c->crc_code, live, (live == c->crc_code) ? 1 : 0,
+            c->crc_code, live, (live_ok && live == c->crc_code) ? 1 : 0,
             c->val_gen, sum, c->dll, c->diff_passes);
     }
     n += snprintf(out + n, cap - n, "]");
@@ -4818,15 +5075,17 @@ int overlay_loader_dump_candidates_at(uint32_t addr, char *out, int cap) {
     for (int i = 0; i < s_cand_n && n < cap - 180; i++) {
         Candidate *c = &s_cand[i];
         if (c->addr != phys) continue;
-        uint32_t live = cand_crc(c);
+        uint32_t live = 0;
+        const int live_ok = cand_live_crc(c, &live);
         uint32_t sum  = cand_gensum(c);
         n += snprintf(out + n, cap - n,
-            "%s{\"index\":%d,\"addr\":\"0x%08X\",\"state\":%d,\"nranges\":%d,"
+            "%s{\"index\":%d,\"addr\":\"0x%08X\",\"seg\":\"0x%08X\","
+            "\"state\":%d,\"nranges\":%d,"
             "\"crc\":\"0x%08X\",\"live\":\"0x%08X\",\"match\":%d,"
             "\"val_gen\":%u,\"gen\":%u,\"dll\":%d,\"diff_passes\":%u,"
             "\"device_touch\":%d}",
-            first ? "" : ",", i, c->addr, c->state, c->nranges,
-            c->crc_code, live, (live == c->crc_code) ? 1 : 0,
+            first ? "" : ",", i, c->addr, c->seg, c->state, c->nranges,
+            c->crc_code, live, (live_ok && live == c->crc_code) ? 1 : 0,
             c->val_gen, sum, c->dll, c->diff_passes, c->device_touch);
         first = 0;
     }
@@ -4859,16 +5118,19 @@ int overlay_loader_dump_lazy_at(uint32_t addr, char *out, int cap) {
         int ci = lm->cache_idx;
         const char *base = strrchr(s_cache_idx[ci].path, '/');
         base = base ? base + 1 : s_cache_idx[ci].path;
-        uint32_t live = lazy_man_crc(&lm->fn);
+        uint32_t live = 0;
+        const int live_ok = lazy_man_crc(&lm->fn, &live);
         n += snprintf(out + n, cap - n,
             "%s{\"li\":%d,\"ci\":%d,\"region\":\"0x%08X\","
-            "\"file\":\"%s\",\"funcs\":%d,\"indexed\":%d,"
+            "\"entry\":\"0x%08X\",\"file\":\"%s\",\"funcs\":%d,\"indexed\":%d,"
             "\"loaded\":%d,\"crc\":\"0x%08X\",\"live\":\"0x%08X\","
             "\"match\":%d,\"contains\":%d}",
             first ? "" : ",", li, ci, s_cache_idx[ci].region_start,
-            base, s_cache_idx[ci].func_count, s_cache_idx[ci].indexed_func_count,
+            lm->fn.entry, base, s_cache_idx[ci].func_count,
+            s_cache_idx[ci].indexed_func_count,
             dll_already_loaded(s_cache_idx[ci].path), lm->fn.crc, live,
-            live == lm->fn.crc, lazy_man_contains(&lm->fn, phys));
+            live_ok && live == lm->fn.crc,
+            lazy_man_contains(&lm->fn, lm->fn.entry & 0xE0000000u, phys));
         first = 0;
     }
     n += snprintf(out + n, cap - n, "]}");

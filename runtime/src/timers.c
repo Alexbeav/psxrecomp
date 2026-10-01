@@ -16,6 +16,7 @@
 
 #include "timers.h"
 #include "event_ring.h"
+#include "psx_video_timing.h"
 #include <string.h>
 
 /* Mode register bit definitions */
@@ -209,8 +210,9 @@ void timers_advance(uint32_t cycles) {
         } else if (timer_uses_sysclk(t)) {
             timer_advance_counts(t, cycles);
         } else if (t == 1) {
-            /* Timer 1 HBlank clock. NTSC has about 263 HBlanks per frame. */
-            timer_advance_divided(t, cycles, 2146);
+            /* Timer 1 HBlank clock: one scanline of the live video
+             * standard (NTSC 263 / PAL 314 lines per frame). */
+            timer_advance_divided(t, cycles, g_psx_hblank_cycles);
         } else if (t == 0) {
             /* Timer 0 dotclock approximation; exact divider depends on GPU mode. */
             timer_advance_divided(t, cycles, 5);
@@ -223,7 +225,7 @@ static uint32_t timer_divisor(int t) {
     int src = (timers[t].mode >> 8) & 3;
     if (t == 2 && (src == 2 || src == 3)) return 8;   /* sysclk/8 */
     if (timer_uses_sysclk(t))             return 1;   /* 1 cycle = 1 tick */
-    if (t == 1)                           return 2146; /* HBlank approximation */
+    if (t == 1)                           return g_psx_hblank_cycles; /* HBlank */
     if (t == 0)                           return 5;    /* dotclock approximation */
     return 1;
 }
@@ -334,9 +336,9 @@ void timers_write(uint32_t addr, uint32_t value) {
 }
 
 void timers_tick(int cycles) {
-    /* Timer 1 in HBlank mode: ~263 HBlanks per NTSC frame */
+    /* Timer 1 in HBlank mode: one frame of the live standard's scanlines */
     if (!timer_uses_sysclk(1)) {
-        for (int h = 0; h < 263; h++)
+        for (uint32_t h = 0; h < g_psx_lines_per_frame; h++)
             timer_tick_one(1);
     }
 

@@ -468,7 +468,45 @@ TOOLCHAIN_PINS = {
         'tcc_url': None,
         'tcc_sha256': None,
     },
+    # macOS had no pin at all, so stage_toolchain died with "no toolchain pins"
+    # (or, before that check, staged the Linux interpreter) and no Mac player
+    # ever got a bundled toolchain; the stock /usr/bin/python3 on macOS 13/14
+    # is 3.9, which cannot run compile_overlays.py (tomllib, PEP 604 unions).
+    # Same python-build-standalone release and version as the Linux pin, one
+    # asset per architecture. SHA256 measured 2026-09-16 by downloading both and
+    # matched against the publisher's .sha256 sidecar assets. No prebuilt tcc:
+    # the bundled interpreter drives the system clang (Xcode command-line tools).
+    'macos-x64': {
+        'python_version': '3.13.1',
+        'python_url': ('https://github.com/astral-sh/python-build-standalone/releases/'
+                       'download/20250115/cpython-3.13.1%2B20250115-x86_64-apple-'
+                       'darwin-install_only_stripped.tar.gz'),
+        'python_sha256': '26e0d5320bff7d141531e09849f0735c634bba31003ed6b089b9bf434312a773',
+        'tcc_version': None,
+        'tcc_url': None,
+        'tcc_sha256': None,
+    },
+    'macos-arm64': {
+        'python_version': '3.13.1',
+        'python_url': ('https://github.com/astral-sh/python-build-standalone/releases/'
+                       'download/20250115/cpython-3.13.1%2B20250115-aarch64-apple-'
+                       'darwin-install_only_stripped.tar.gz'),
+        'python_sha256': '650f1d3242667c64959391105525469e0fe1502a6aab9f5db3b0bfefe7dcbabd',
+        'tcc_version': None,
+        'tcc_url': None,
+        'tcc_sha256': None,
+    },
 }
+
+
+def host_platform_tag():
+    """The toolchain pin key for the machine this runs on."""
+    if co.is_windows():
+        return 'win'
+    if sys.platform == 'darwin':
+        import platform
+        return 'macos-arm64' if platform.machine() in ('arm64', 'aarch64') else 'macos-x64'
+    return 'linux'
 
 
 def get_pinned_archive(url, sha256, destination, retries=4, log=print):
@@ -576,8 +614,13 @@ def _extract_tar_top_level(archive, parent, expect_top):
 # this exact path (runtime/src/main.cpp, `tk_py`). The name differs per
 # platform; the layout does not.
 TOOLCHAIN_PY_REL = {'win': os.path.join('python', 'python.exe'),
-                    'linux': os.path.join('python', 'bin', 'python3')}
-TOOLCHAIN_RECOMPILER = {'win': 'psxrecomp-game.exe', 'linux': 'psxrecomp-game'}
+                    'linux': os.path.join('python', 'bin', 'python3'),
+                    'macos-x64': os.path.join('python', 'bin', 'python3'),
+                    'macos-arm64': os.path.join('python', 'bin', 'python3')}
+TOOLCHAIN_RECOMPILER = {'win': 'psxrecomp-game.exe', 'linux': 'psxrecomp-game',
+                        'macos-x64': 'psxrecomp-game', 'macos-arm64': 'psxrecomp-game'}
+TOOLCHAIN_BIOS_EMITTER = {'win': 'psxrecomp-bios.exe', 'linux': 'psxrecomp-bios',
+                          'macos-x64': 'psxrecomp-bios', 'macos-arm64': 'psxrecomp-bios'}
 
 
 def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
@@ -593,7 +636,7 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
     so on Linux neither the AOT cache nor the capture-and-compile fail-safe
     could extend itself.
     """
-    platform_tag = platform_tag or ('win' if co.is_windows() else 'linux')
+    platform_tag = platform_tag or host_platform_tag()
     if platform_tag not in TOOLCHAIN_PINS:
         _die('no toolchain pins for platform %r' % platform_tag)
     pins = TOOLCHAIN_PINS[platform_tag]
@@ -636,12 +679,32 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
     # Windows needs the mingw runtime beside the recompiler; a Linux build links
     # against the system libstdc++ that is already present.
     if platform_tag == 'win':
-        if not mingw_bin:
-            _die('--mingw-bin is required when staging a Windows toolchain')
+        # A recompiler built against a static CRT (the cmake-clang-v1 emitters) needs no
+        # runtime DLLs; a gcc-built one does. Copy whatever the named bin dir (or the
+        # emitter's own directory) holds, and say which case this is.
+        dll_src = mingw_bin or recomp_dir
+        copied = 0
         for d in ('libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll'):
-            shutil.copy2(os.path.join(mingw_bin, d), os.path.join(toolchain, d))
+            p = os.path.join(dll_src, d)
+            if os.path.isfile(p):
+                shutil.copy2(p, os.path.join(toolchain, d))
+                copied += 1
+        log('mingw runtime DLLs staged beside the recompiler: %d (from %s)%s'
+            % (copied, dll_src, '' if copied else ' -- assuming a static recompiler'))
 
     shutil.copy2(os.path.join(recomp_tools, 'compile_overlays.py'), toolchain)
+    # The BIOS module builder (docs/BIOS_SELECTION.md, "player-side backend
+    # build"): turns the player's own retail dump into a loadable backend with
+    # the same interpreter and compiler the overlay path uses. It needs the
+    # BIOS emitter, every shipped profile, and the seeds the profiles name.
+    shutil.copy2(os.path.join(recomp_tools, 'bios_module_build.py'), toolchain)
+    bios_emitter = TOOLCHAIN_BIOS_EMITTER[platform_tag]
+    src_bios_emitter = os.path.join(recomp_dir, bios_emitter)
+    if not os.path.isfile(src_bios_emitter):
+        _die('overlay toolchain needs the BIOS emitter at %s; build the '
+             'psxrecomp-bios target first' % src_bios_emitter)
+    shutil.copy2(src_bios_emitter, os.path.join(toolchain, bios_emitter))
+    os.chmod(os.path.join(toolchain, bios_emitter), 0o755)
     tool_inc = _mkdirs(os.path.join(toolchain, 'include'))
     for h in os.listdir(recomp_include):
         if h.endswith(('.h', '.c.inc')):
@@ -649,10 +712,16 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
     recomp_root = os.path.abspath(os.path.join(recomp_include, '..', '..'))
     bios_src = os.path.join(recomp_root, 'bios')
     bios_dest = _mkdirs(os.path.join(toolchain, 'bios'))
-    for profile in ('SCPH1001.toml', 'OpenBIOS.toml'):
-        src = os.path.join(bios_src, profile)
-        if os.path.isfile(src):
-            shutil.copy2(src, bios_dest)
+    # Profiles only (TOML): never an image. A retail .BIN beside them in a
+    # developer's bios/ must not ride along, so the copy is by extension.
+    for profile in sorted(os.listdir(bios_src)):
+        if profile.endswith('.toml'):
+            shutil.copy2(os.path.join(bios_src, profile), bios_dest)
+    seeds_src = os.path.join(recomp_root, 'recompiler', 'seeds')
+    seeds_dest = _mkdirs(os.path.join(toolchain, 'recompiler', 'seeds'))
+    for seed in sorted(os.listdir(seeds_src)):
+        if seed.endswith('.json'):
+            shutil.copy2(os.path.join(seeds_src, seed), seeds_dest)
 
     # The runtime gates autocompile on this exact file. If the layout ever
     # changes, fail here rather than shipping a toolchain the runtime ignores.
@@ -664,7 +733,11 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
              % os.path.relpath(probe, toolchain))
     os.chmod(probe, 0o755)
     for required in (os.path.join('include', 'overlay_dispatch_preamble.c.inc'),
-                     os.path.join('bios', 'SCPH1001.toml')):
+                     os.path.join('include', 'psx_bios_module_glue.c.inc'),
+                     os.path.join('include', 'psx_bios_module.h'),
+                     'bios_module_build.py',
+                     os.path.join('bios', 'SCPH1001.toml'),
+                     os.path.join('recompiler', 'seeds', 'phase2_ghidra_seeds.json')):
         path = os.path.join(toolchain, required)
         if not os.path.isfile(path):
             _die('staged overlay_toolchain is missing %s; bundled shard '
@@ -688,7 +761,7 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
                 links += 1
                 continue
             total += st.st_size
-    log('Bundled overlay toolchain (pinned python%s + recompiler + headers): '
+    log('Bundled overlay toolchain (pinned python%s + recompiler + BIOS emitter + headers): '
         '~%d MB in %d file(s) + %d symlink(s)'
         % (' + tcc' if pins['tcc_url'] else '', total // (1 << 20),
            sum(len(f) for _r, _d, f in os.walk(toolchain)) - links, links))
@@ -747,6 +820,28 @@ def _find_catalog_manifest(build_path, runtime_target):
     return None
 
 
+def _excluded_manifest_for(manifest):
+    """psx_mod_catalog_<target>.txt -> psx_mod_catalog_<target>.excluded.txt.
+
+    runtime.cmake writes the pair side by side: the ids the target staged, and
+    the framework builtins it declined with EXCLUDE_BUILTIN_MODS.
+    """
+    if not manifest:
+        return None
+    root, ext = os.path.splitext(manifest)
+    return root + '.excluded' + (ext or '.txt')
+
+
+def _read_id_list(path):
+    ids = set()
+    with open(path) as f:
+        for ln in f:
+            ln = ln.strip()
+            if ln and not ln.startswith('#'):
+                ids.add(ln)
+    return ids
+
+
 def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
                extra_sources=(), log=print):
     mods_src = os.path.join(build_path, 'mods')
@@ -785,16 +880,23 @@ def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
         manifest = _find_catalog_manifest(build_path, runtime_target)
     want = set()
     origin = None
+    excluded = set()
     if manifest and os.path.isfile(manifest):
-        with open(manifest) as f:
-            want = {ln.strip() for ln in f if ln.strip()}
+        want = _read_id_list(manifest)
         origin = manifest
+        excluded_manifest = _excluded_manifest_for(manifest)
+        if excluded_manifest and os.path.isfile(excluded_manifest):
+            excluded = _read_id_list(excluded_manifest)
     for src in extra_sources:
         pkgs = os.path.join(src, 'packages')
         if os.path.isdir(pkgs):
             want |= {d for d in os.listdir(pkgs)
                      if os.path.isdir(os.path.join(pkgs, d))}
             origin = origin or 'source trees'
+    # A --mod-source tree (the framework's mods/builtin, typically) lists every
+    # builtin; the ones this title declined with EXCLUDE_BUILTIN_MODS are
+    # meant to be absent, not missing.
+    want -= excluded
     if not want:
         _die('cannot verify the mod catalog: neither the build-published '
              'manifest (psx_mod_catalog_<target>.txt in %s) nor any --mod-source '
@@ -809,11 +911,23 @@ def stage_mods(build_path, stage, runtime_target=None, catalog_manifest=None,
              'Mods page the dev build does not have.'
              % (', '.join(missing), origin, staged_pkg_dir))
 
+    shipped_excluded = sorted(excluded & set(staged_ids))
+    if shipped_excluded:
+        _die('mod catalog contains package(s) the title EXCLUDES '
+             '(EXCLUDE_BUILTIN_MODS, per %s): %s. The build never stages an '
+             'excluded builtin, so something else put it into %s; the release '
+             'would ship a package the title declined.'
+             % (_excluded_manifest_for(manifest), ', '.join(shipped_excluded),
+                staged_pkg_dir))
+
     fw = [i for i in staged_ids if i.startswith('psx.')]
     game = [i for i in staged_ids if not i.startswith('psx.')]
     log('Bundled mod catalog: %d package(s) = %d game-owned + %d '
         'framework-owned (verified against %s)'
         % (len(staged_ids), len(game), len(fw), origin))
+    if excluded:
+        log('Excluded framework builtin(s), verified absent: %s'
+            % ', '.join(sorted(excluded)))
     return len(staged_ids)
 
 

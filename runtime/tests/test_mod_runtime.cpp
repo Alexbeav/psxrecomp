@@ -4,12 +4,15 @@
 #include "psx_sha256.h"
 
 #include "gpu.h"
+#include "cpu_state.h"
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -55,10 +58,24 @@ extern "C" void psx_write_word(uint32_t address, uint32_t value) {
     ram[offset + 3] = (uint8_t)(value >> 24);
 }
 
+/* Mod writes are host stores (memory.c psx_host_write_*). */
+extern "C" void psx_host_write_byte(uint32_t address, uint8_t value) {
+    psx_write_byte(address, value);
+}
+
+extern "C" void psx_host_write_half(uint32_t address, uint16_t value) {
+    psx_write_half(address, value);
+}
+
+extern "C" void psx_host_write_word(uint32_t address, uint32_t value) {
+    psx_write_word(address, value);
+}
+
 extern "C" uint32_t psx_mod_memory_alloc(uint32_t, uint32_t) { return 0; }
 extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t, uint32_t) {
     return 0;
 }
+extern "C" void psx_ram_reset_size_request(void) {}
 extern "C" int psx_ws_x_margin(void) { return 0; }
 
 /* Stand-in for the GPU's display geometry. psx_mod_display_width/height must
@@ -72,13 +89,35 @@ extern "C" void gpu_get_display_info(GpuDisplayInfo* out) {
 
 extern "C" void dirty_ram_mark_executable_range(uint32_t, uint32_t) {}
 extern "C" int fntrace_is_game_started(void) { return 1; }
+/* Widescreen tag passthroughs mod_runtime forwards to the GPU; unused here. */
+extern "C" void gpu_ws_tag_hud_primitive(uint32_t, int) {}
+extern "C" void gpu_ws_tag_world_primitive(uint32_t, int) {}
+extern "C" void gpu_ws_set_adaptive_backdrop_preload(int) {}
 
 static void test_vblank_plugin(void) {
     plugin_calls++;
 }
 
+/* Function-entry hooks: one owned by the plan's active plugin, one by a
+ * plugin whose feature is disabled, one by an id no package selects. */
+static int active_entry_hits;
+static int disabled_entry_hits;
+static int unselected_entry_hits;
+static uint32_t active_entry_last;
+static void test_active_entry(CPUState*, uint32_t address) {
+    active_entry_hits++;
+    active_entry_last = address;
+}
+static void test_disabled_entry(CPUState*, uint32_t) { disabled_entry_hits++; }
+static void test_unselected_entry(CPUState*, uint32_t) { unselected_entry_hits++; }
+
 static void test_activation_plugin(void) {
     activation_calls++;
+}
+
+static int big_ram_activations;
+static void test_big_ram_activation(void) {
+    big_ram_activations++;
 }
 
 static void check(bool value, const char* message) {
@@ -252,7 +291,13 @@ int main() {
             sha256_hex(std::vector<uint8_t>(overlay.size(), 0)) + "\"\n"
         "[[plugin]]\n"
         "feature = \"vblank-plugin\"\n"
-        "id = \"runtime.test-vblank\"\n");
+        "id = \"runtime.test-vblank\"\n"
+        "[[feature]]\n"
+        "id = \"entry-disabled\"\n"
+        "name = \"Disabled Entry\"\n"
+        "[[plugin]]\n"
+        "feature = \"entry-disabled\"\n"
+        "id = \"runtime.test-disabled-entry\"\n");
     write_text(root / "state.toml",
         "format_version = 2\n"
         "[[package]]\n"
@@ -307,17 +352,81 @@ int main() {
     check(PSXRecompV4::mod_register_vblank_plugin(
               "runtime.test-vblank", test_vblank_plugin),
           "runtime test plugin must register");
+    check(psx_mod_register_function_entry_plugin(
+              "runtime.test-vblank", 0x80003000u, test_active_entry) == 1,
+          "active plugin's function-entry hook must register");
+    check(psx_mod_register_function_entry_plugin(
+              "runtime.test-disabled-entry", 0x80003000u, test_disabled_entry) == 1,
+          "disabled feature's function-entry hook must register");
+    check(psx_mod_register_function_entry_plugin(
+              "runtime.unselected-entry", 0x80003000u, test_unselected_entry) == 1,
+          "unselected function-entry hook must register");
+    CPUState entry_cpu{};
     check(PSXRecompV4::mod_runtime_initialize(
               root, "SLUS-RUNTIME", 0x80002000, {}, &error),
           error.c_str());
     check(PSXRecompV4::mod_runtime_commit(cue_path, &error),
           "CUE and its data-track BIN must have the same mod target identity");
+    /* Committed but not yet activated: no hook may run. */
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(g_psx_mod_function_entry_hooks == 0 && active_entry_hits == 0,
+          "function-entry hooks must not run before plugin activation");
     mod_runtime_activate_plugins();
     check(activation_calls == 1,
           "resolved trusted plugin must activate before runtime startup");
     mod_runtime_on_vblank();
     check(plugin_calls == 1,
           "resolved trusted plugin must run on guest VBlank");
+    check(g_psx_mod_function_entry_hooks == 1,
+          "activation must flatten exactly the active plan's entry hooks");
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(active_entry_hits == 1 && active_entry_last == 0x80003000u,
+          "active plan's function-entry hook must run at its address");
+    psx_mod_function_entry(&entry_cpu, 0x00003000u);
+    psx_mod_function_entry(&entry_cpu, 0xA0003000u);
+    check(active_entry_hits == 3 && active_entry_last == 0xA0003000u,
+          "function-entry hooks must match every segment alias of the code address");
+    psx_mod_function_entry(&entry_cpu, 0x80003004u);
+    psx_mod_function_entry(&entry_cpu, 0x80203000u);
+    check(active_entry_hits == 3,
+          "function-entry hooks must not run for other addresses or RAM mirrors");
+    check(disabled_entry_hits == 0 && unselected_entry_hits == 0,
+          "hooks of plugins the plan does not activate must never run");
+    /* A replaced plan drops every hook until its own activation. */
+    check(PSXRecompV4::mod_runtime_clear_for_netplay(&error), error.c_str());
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(g_psx_mod_function_entry_hooks == 0 && active_entry_hits == 3,
+          "clearing the plan must drop its function-entry hooks");
+    check(PSXRecompV4::mod_runtime_commit(cue_path, &error), error.c_str());
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(active_entry_hits == 3,
+          "a re-committed plan must not run hooks before activation");
+    mod_runtime_activate_plugins();
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(active_entry_hits == 4 && disabled_entry_hits == 0 &&
+              unselected_entry_hits == 0,
+          "re-activation restores exactly the active plan's hooks");
+    /* The lobby rematch, in the order main.cpp's start_mod_session() drives
+     * it: a netplay match (plan cleared, then activated) and an offline
+     * rematch that commits and activates exactly like a first boot. */
+    check(PSXRecompV4::mod_runtime_clear_for_netplay(&error), error.c_str());
+    mod_runtime_activate_plugins();
+    mod_runtime_on_vblank();
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(activation_calls == 2 && plugin_calls == 1 &&
+              g_psx_mod_function_entry_hooks == 0 && active_entry_hits == 4,
+          "a netplay session must stay vanilla: no activation, VBlank or hook");
+    check(PSXRecompV4::mod_runtime_commit(cue_path, &error), error.c_str());
+    mod_runtime_activate_plugins();
+    check(activation_calls == 3,
+          "an offline rematch after netplay must run activation callbacks");
+    mod_runtime_on_vblank();
+    check(plugin_calls == 2,
+          "an offline rematch after netplay must run VBlank plugins");
+    psx_mod_function_entry(&entry_cpu, 0x80003000u);
+    check(g_psx_mod_function_entry_hooks == 1 && active_entry_hits == 5 &&
+              disabled_entry_hits == 0 && unselected_entry_hits == 0,
+          "an offline rematch after netplay must arm exactly its plan's hooks");
 
     ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
     ram[0x1100] = 0; ram[0x1101] = 0;
@@ -472,6 +581,122 @@ int main() {
           "a failed sparse disc guard must leave every write in the sector "
           "untouched");
 
+    /* Implicit requirement through the real commit/activation path: the
+     * hidden required feature's activation plugin runs, the state.toml commit
+     * writes never gains the derived activation (it is not a choice),
+     * and a requirement on an absent package makes the launch commit fail
+     * rather than boot the requiring build without it. */
+    {
+        const fs::path req_root = root / "requirement-runtime";
+        write_text(req_root / "bundled/runtime.ram/1.0.0/manifest.toml",
+            "format_version = 5\n"
+            "id = \"runtime.ram\"\n"
+            "version = \"1.0.0\"\n"
+            "name = \"Runtime RAM\"\n"
+            "[[target]]\n"
+            "game_id = \"*\"\n"
+            "[[feature]]\n"
+            "id = \"big-ram\"\n"
+            "name = \"Big RAM\"\n"
+            "hidden = true\n"
+            "[[option]]\n"
+            "feature = \"big-ram\"\n"
+            "id = \"size\"\n"
+            "label = \"Size\"\n"
+            "type = \"choice\"\n"
+            "default = \"eight\"\n"
+            "[[option.choice]]\nvalue = \"eight\"\nlabel = \"8 MB\"\n"
+            "[[plugin]]\n"
+            "feature = \"big-ram\"\n"
+            "id = \"runtime.big-ram\"\n");
+        write_text(req_root / "bundled/runtime.mode/1.0.0/manifest.toml",
+            "format_version = 7\n"
+            "id = \"runtime.mode\"\n"
+            "version = \"1.0.0\"\n"
+            "name = \"Runtime Mode\"\n"
+            "[[target]]\n"
+            "game_id = \"SLUS-REQ\"\n"
+            "[[feature]]\n"
+            "id = \"mode\"\n"
+            "name = \"Mode\"\n"
+            "[[option]]\n"
+            "feature = \"mode\"\n"
+            "id = \"extras\"\n"
+            "label = \"Extras\"\n"
+            "type = \"choice\"\n"
+            "default = \"none\"\n"
+            "[[option.choice]]\nvalue = \"none\"\nlabel = \"None\"\n"
+            "[[option.choice]]\nvalue = \"full\"\nlabel = \"Full\"\n"
+            "[[requirement]]\n"
+            "feature = \"mode\"\n"
+            "package = \"runtime.ram\"\n"
+            "requires_feature = \"big-ram\"\n"
+            "when = { extras = \"full\" }\n");
+        const std::string state_text =
+            "format_version = 2\n"
+            "\n[[feature]]\npackage_id = \"runtime.mode\"\nid = \"mode\"\n"
+            "enabled = true\n"
+            "[feature.values]\nextras = \"full\"\n";
+        write_text(req_root / "state.toml", state_text);
+        const auto read_state = [&]() {
+            std::ifstream in(req_root / "state.toml", std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        };
+
+        big_ram_activations = 0;
+        check(PSXRecompV4::mod_register_activation_plugin(
+                  "runtime.big-ram", test_big_ram_activation),
+              "big-ram activation hook must register");
+        check(PSXRecompV4::mod_runtime_initialize(
+                  req_root, "SLUS-REQ", 0x80002000, {}, &error),
+              error.c_str());
+        check(PSXRecompV4::mod_runtime_commit(stock_path, &error),
+              "a satisfied implicit requirement must commit");
+        mod_runtime_activate_plugins();
+        check(big_ram_activations == 1,
+              "the implicitly required feature's plugin must activate");
+        char value[32];
+        check(psx_mod_option_value("runtime.ram", "big-ram", "size", value,
+                                   sizeof(value)) == 1 &&
+                  std::string(value) == "eight",
+              "an implicit feature's plugin must read its option values");
+        /* commit rewrites state.toml in canonical form; what matters is that
+         * the player's choice survives and the derived one is never added. */
+        const std::string after = read_state();
+        check(after.find("runtime.ram") == std::string::npos &&
+                  after.find("extras = \"full\"") != std::string::npos,
+              "committing must not write the derived activation to state.toml");
+
+        /* Condition false: the required plugin stays off. */
+        write_text(req_root / "state.toml",
+            "format_version = 2\n"
+            "\n[[feature]]\npackage_id = \"runtime.mode\"\nid = \"mode\"\n"
+            "enabled = true\n"
+            "[feature.values]\nextras = \"none\"\n");
+        big_ram_activations = 0;
+        check(PSXRecompV4::mod_runtime_initialize(
+                  req_root, "SLUS-REQ", 0x80002000, {}, &error),
+              error.c_str());
+        check(PSXRecompV4::mod_runtime_commit(stock_path, &error),
+              error.c_str());
+        mod_runtime_activate_plugins();
+        check(big_ram_activations == 0,
+              "a requirement whose condition is false must not activate");
+
+        /* Required package absent (e.g. the title excluded the builtin). */
+        write_text(req_root / "state.toml", state_text);
+        fs::remove_all(req_root / "bundled/runtime.ram", ec);
+        check(PSXRecompV4::mod_runtime_initialize(
+                  req_root, "SLUS-REQ", 0x80002000, {}, &error),
+              error.c_str());
+        std::string commit_error;
+        check(!PSXRecompV4::mod_runtime_commit(stock_path, &commit_error) &&
+                  commit_error.find("runtime.mode/mode requires "
+                                    "runtime.ram/big-ram") != std::string::npos,
+              "an unmet requirement must fail the launch commit loudly");
+    }
+
     /*
      * Display geometry passthrough. Ape Escape scans out 384 while its mode
      * width is 368, which is precisely why a plugin cannot derive this from
@@ -491,6 +716,44 @@ int main() {
           "unestablished display geometry must report zero so callers skip "
           "drawing instead of guessing");
 
+    /* Source-owned ISO: nested file spanning two sectors, without a derived
+     * disc. Host reads must choose the original mount and leave sizes honest. */
+    std::vector<uint8_t> iso(24*2048);
+    auto le32 = [&](size_t at,uint32_t n) { for(unsigned i=0;i<4;++i) iso[at+i]=(uint8_t)(n>>(i*8)); };
+    auto record = [&](size_t at,uint32_t lba,uint32_t bytes,bool directory,const std::string& name) {
+        iso[at]=(uint8_t)((33+name.size()+1)&~size_t(1));
+        le32(at+2,lba); le32(at+10,bytes); iso[at+25]=directory?2:0;
+        iso[at+28]=1;iso[at+31]=1;iso[at+32]=(uint8_t)name.size();
+        std::copy(name.begin(),name.end(),iso.begin()+at+33);
+    };
+    iso[16*2048]=1;std::copy_n("CD001",5,iso.begin()+16*2048+1);iso[16*2048+6]=1;
+    record(16*2048+156,20,2048,true,std::string(1,'\0'));
+    record(20*2048,21,2048,true,"S0");
+    record(21*2048,22,3000,false,"LEVEL.NSF;1");
+    for(unsigned i=0;i<3000;++i)iso[22*2048+i]=(uint8_t)(i*7);
+    const auto disc_root=root/"host-reader";
+    const auto iso_path=disc_root/"original.iso";
+    write_bytes(iso_path,iso);
+    check(PSXRecompV4::mod_runtime_initialize(disc_root,"READER",0,{},&error),"reader initialize");
+    check(PSXRecompV4::mod_runtime_commit(iso_path,&error),"reader mount original ISO");
+    uint32_t bytes=0;
+    check(psx_mod_read_disc_file("S0/LEVEL.NSF",nullptr,0,&bytes) && bytes==3000,"query original nested file size");
+    std::vector<uint8_t> result(3000);
+    check(!psx_mod_read_disc_file("S0/LEVEL.NSF",result.data(),2999,&bytes) && bytes==0,"undersized destination rejected");
+    check(psx_mod_read_disc_file("S0/LEVEL.NSF",result.data(),(uint32_t)result.size(),&bytes) &&
+          bytes==3000 && std::equal(result.begin(),result.end(),iso.begin()+22*2048),"complete original file bytes");
+    check(!psx_mod_read_disc_file("S0/MISSING.NSF",nullptr,0,&bytes) && bytes==0,"missing file explicit");
+    check(!psx_mod_read_disc_file("S0",nullptr,0,&bytes),"directory rejected");
+    std::vector<uint8_t> raw_iso(24*2352);
+    for(unsigned i=0;i<24;++i) {
+        raw_iso[i*2352+15]=2;
+        std::copy_n(iso.begin()+i*2048,2048,raw_iso.begin()+i*2352+24);
+    }
+    const auto raw_path=disc_root/"original.bin";
+    write_bytes(raw_path,raw_iso);
+    check(PSXRecompV4::mod_runtime_commit(raw_path,&error),"reader mount raw disc");
+    check(psx_mod_read_disc_file("S0/LEVEL.NSF",result.data(),(uint32_t)result.size(),&bytes) &&
+          std::equal(result.begin(),result.end(),iso.begin()+22*2048),"raw and ISO reads identical");
     fs::remove_all(root, ec);
     if (failures) return 1;
     std::cout << "mod runtime tests passed\n";

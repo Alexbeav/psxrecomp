@@ -2,6 +2,8 @@
 
 #include "psxrecomp_codegen_host.h"
 
+#include "psx_bios_known_images.h"
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +21,9 @@
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
+#  if defined(__APPLE__)
+#    include <mach-o/dyld.h>
+#  endif
 extern char** environ;
 #endif
 
@@ -944,9 +949,32 @@ static int walk_up_for_project_root(const char* start, char* out, size_t cap) {
     return 0;
 }
 
+#if !defined(_WIN32)
+/* Canonical path of the running executable on POSIX hosts. /proc/self/exe is
+ * Linux-only; macOS has no procfs, so there the path comes from dyld. */
+static int host_posix_exe_path(char* out, size_t cap) {
+    char* rp = NULL;
+#  if defined(__APPLE__)
+    char raw[1100];
+    uint32_t n = (uint32_t)sizeof(raw);
+    if (_NSGetExecutablePath(raw, &n) != 0)
+        return 0;
+    rp = realpath(raw, NULL);
+#  else
+    rp = realpath("/proc/self/exe", NULL);
+#  endif
+    if (!rp)
+        return 0;
+    snprintf(out, cap, "%s", rp);
+    free(rp);
+    return out[0] != '\0';
+}
+#endif
+
 /* Directory containing this process's executable (not cwd). Dolphin / .desktop
- * launches leave cwd as $HOME — VIDEO/PGO/setup must still find the zip tree.
- * Linux: $APPIMAGE parent, else /proc/self/exe. Windows: GetModuleFileName. */
+ * and Finder launches leave cwd as $HOME — VIDEO/PGO/setup must still find the
+ * zip tree. Linux: $APPIMAGE parent, else /proc/self/exe. macOS: dyld's
+ * executable path. Windows: GetModuleFileName. */
 static int resolve_host_exe_dir(char* out, size_t cap) {
     char exe[1100];
     if (!out || cap < 2)
@@ -965,12 +993,8 @@ static int resolve_host_exe_dir(char* out, size_t cap) {
         const char* appimg = getenv("APPIMAGE");
         if (appimg && appimg[0] && path_is_file(appimg)) {
             snprintf(exe, sizeof(exe), "%s", appimg);
-        } else {
-            char* rp = realpath("/proc/self/exe", NULL);
-            if (!rp)
-                return 0;
-            snprintf(exe, sizeof(exe), "%s", rp);
-            free(rp);
+        } else if (!host_posix_exe_path(exe, sizeof(exe))) {
+            return 0;
         }
     }
 #endif
@@ -1135,15 +1159,68 @@ static int resolve_build_paths(void) {
     return join_path(g_exe_path, sizeof(g_exe_path), g_build_dir, exe_name);
 }
 
+#ifndef PSX_SETUP_BIOS_STEMS
+#define PSX_SETUP_BIOS_STEMS "OpenBIOS|SCPH1001"
+#endif
+#ifndef PSX_SETUP_FRAMEWORK_REL
+#define PSX_SETUP_FRAMEWORK_REL "psxrecomp"
+#endif
+
+/* Match runtime.cmake: a requested pair with its backend descriptor. A stale
+ * pre-descriptor pair or unrelated game dispatch cannot complete BIOS setup. */
+static int generated_bios_backend_linkable(const char* dir, const char* stem) {
+    char full[600], path[1200], descriptor[600], line[4096];
+    FILE* f;
+    int found = 0;
+    if ((size_t)snprintf(full, sizeof(full), "%s_full.c", stem) >= sizeof(full))
+        return 0;
+    if (!join_path(path, sizeof(path), dir, full) || !path_is_file(path))
+        return 0;
+    snprintf(full, sizeof(full), "%s_dispatch.c", stem);
+    if (!join_path(path, sizeof(path), dir, full))
+        return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    snprintf(descriptor, sizeof(descriptor), "%s_psx_bios_backend", stem);
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, descriptor)) { found = 1; break; }
+    }
+    fclose(f);
+    return found;
+}
+
+/* Does the configured framework hold a linkable requested BIOS backend?
+ *
+ * This used to probe two hardcoded names, OpenBIOS_dispatch.c and
+ * SCPH1001_dispatch.c. A port that pins a different image — via
+ * PSXRECOMP_BIOS_STEMS / game.toml recompiler.bios_config, as every wave-3
+ * kit does with SCPH5552 — emits its backend under that other stem, so the
+ * probe was permanently unsatisfied: Generate kept succeeding, the wizard
+ * kept reopening, and first-run setup could never complete. CMake supplies
+ * the requested stems; accept any linkable member, not an unrelated pair. */
+static int generated_has_bios_backend(const char* dir) {
+    const char* next = PSX_SETUP_BIOS_STEMS;
+    while (*next) {
+        char stem[512];
+        const char* end = strchr(next, '|');
+        size_t len = end ? (size_t)(end - next) : strlen(next);
+        if (len && len < sizeof(stem)) {
+            memcpy(stem, next, len);
+            stem[len] = 0;
+            if (generated_bios_backend_linkable(dir, stem)) return 1;
+        }
+        if (!end) break;
+        next = end + 1;
+    }
+    return 0;
+}
+
 static int bios_backends_missing(void) {
-    char openbios[1100], scph[1100];
-    if (!join_path(openbios, sizeof(openbios), g_project_root,
-                   "psxrecomp/generated/OpenBIOS_dispatch.c"))
+    char framework[1100], gen[1200];
+    if (!join_path(framework, sizeof(framework), g_project_root, PSX_SETUP_FRAMEWORK_REL) ||
+        !join_path(gen, sizeof(gen), framework, "generated"))
         return 1;
-    if (!join_path(scph, sizeof(scph), g_project_root,
-                   "psxrecomp/generated/SCPH1001_dispatch.c"))
-        return 1;
-    return !(path_is_file(openbios) || path_is_file(scph));
+    return !generated_has_bios_backend(gen);
 }
 
 int psxrecomp_codegen_host_sources_missing(
@@ -1209,7 +1286,7 @@ static void write_sidecar_near_exe(const char* near_exe, const char* name,
     write_line_file(path, value ? value : "");
 }
 
-/* IEEE CRC-32 (zlib / Ethernet) — SCPH-1001 identity for setup discovery. */
+/* IEEE CRC-32 (zlib / Ethernet) — retail BIOS identity for setup discovery. */
 static uint32_t host_crc32(const unsigned char* data, size_t len) {
     uint32_t crc = 0xFFFFFFFFu;
     size_t i, j;
@@ -1221,17 +1298,23 @@ static uint32_t host_crc32(const unsigned char* data, size_t len) {
     return ~crc;
 }
 
+/* Does this file match the retail image THIS build pins? A setup host has no
+ * linked backend to ask, so it consults psx_bios_known_images.h rather than
+ * assuming SCPH-1001 — which made every non-SCPH1001 kit reject a perfectly
+ * good dump. An unknown pinned stem adopts nothing and the player is asked. */
 static int retail_bios_file_ok_c(const char* path) {
+    const PsxKnownBiosImage* want = psx_expected_bios();
     FILE* f;
     long size;
     unsigned char* buf;
     uint32_t crc;
+    if (!want) return 0;
     if (!path || !path[0] || !path_is_file(path)) return 0;
     f = fopen(path, "rb");
     if (!f) return 0;
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
     size = ftell(f);
-    if (size != 512 * 1024) { fclose(f); return 0; }
+    if (size != (long)want->size) { fclose(f); return 0; }
     if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return 0; }
     buf = (unsigned char*)malloc((size_t)size);
     if (!buf) { fclose(f); return 0; }
@@ -1243,22 +1326,22 @@ static int retail_bios_file_ok_c(const char* path) {
     fclose(f);
     crc = host_crc32(buf, (size_t)size);
     free(buf);
-    return crc == 0x37157331u; /* SCPH-1001 */
+    return crc == want->crc32;
 }
 
-/* Prefer a player-supplied SCPH1001 next to the project/exe for Generate.
- * Missing → leave empty (OpenBIOS). Does not override an explicit OpenBIOS. */
+/* Prefer a player-supplied dump of the pinned retail image next to the
+ * project/exe for Generate. Missing → leave empty (OpenBIOS). Does not
+ * override an explicit OpenBIOS. */
 static int discover_retail_bios_c(char* out, size_t cap) {
-    static const char* names[] = {
-        "SCPH1001.BIN", "scph1001.bin", "SCPH-1001.BIN", "scph-1001.bin",
-        "SCPH1001.bin", "scph1001.BIN",
-    };
+    char names[8][32];
+    int nnames = psx_known_bios_filenames(psx_expected_bios(), names, 8);
     static const char* subs[] = {
         "bios", "", "system", "firmware", "psxrecomp/bios", "psxrecomp-v4/bios",
     };
     char roots[3][1100];
     int nroots = 0;
     int r, s, n;
+    if (nnames <= 0) { out[0] = 0; return 0; }
     if (g_project_root[0]) {
         snprintf(roots[nroots], sizeof(roots[0]), "%s", g_project_root);
         ++nroots;
@@ -1282,7 +1365,7 @@ static int discover_retail_bios_c(char* out, size_t cap) {
                 } else {
                     snprintf(dir, sizeof(dir), "%s", walk);
                 }
-                for (n = 0; n < (int)(sizeof(names) / sizeof(names[0])); ++n) {
+                for (n = 0; n < nnames; ++n) {
                     char cand[1300];
                     if (!join_path(cand, sizeof(cand), dir, names[n])) continue;
                     if (!retail_bios_file_ok_c(cand)) continue;
@@ -1755,7 +1838,14 @@ static void cli_fail_msg(char* err_msg, size_t err_cap, const char* fail_label,
                          long code, const CliTail* t) {
     const char* why = t->last_err[0] ? t->last_err : t->last;
     if (code == 3) {
-        snprintf(err_msg, err_cap, "Disc verification failed (wrong dump).");
+        /* The CLI names the failing check (a digest mismatch, or a .chd it
+         * cannot read) and cli_tail_note has captured that line. A flat
+         * "wrong dump" contradicts it and sends players hunting a bad rip
+         * when the dump is fine. Keep the reason when there is one. */
+        if (why[0])
+            snprintf(err_msg, err_cap, "Disc verification failed: %s", why);
+        else
+            snprintf(err_msg, err_cap, "Disc verification failed (wrong dump).");
         return;
     }
     if (why[0])
@@ -2991,8 +3081,17 @@ static int toolchain_bin_compiler_works(const char* bin) {
             return 0;
     }
 #else
-    if (!join_path(clang, sizeof(clang), bin, "clang") || !path_is_file(clang))
+    if (!join_path(clang, sizeof(clang), bin, "clang") || !path_is_file(clang)) {
+#  if defined(__APPLE__)
+        /* The macOS pack (cmake-clang-v1-macos-universal) ships CMake, Ninja,
+         * ccache and Python only; compiling uses the system toolchain from
+         * Apple's Command Line Tools, checked by macos_system_compiler_works.
+         * A pack without clang is the normal macOS layout, not a broken one. */
+        return 1;
+#  else
         return 0;
+#  endif
+    }
     if (!join_path(lld, sizeof(lld), bin, "ld.lld") || !path_is_file(lld))
         return 0;
 #endif
@@ -3044,6 +3143,50 @@ static int toolchain_bin_compiler_works(const char* bin) {
     unlink(exe);
 #endif
     return ok;
+}
+
+#if defined(__APPLE__)
+/* True when Apple's Command Line Tools are installed and /usr/bin/clang can
+ * compile and link a tiny program. xcode-select runs first so a machine
+ * without the CLT gets a repair note instead of the xcrun install prompt on
+ * every wizard refresh. */
+static int macos_system_compiler_works(void) {
+    char src[256], exe[256], cmd[1024];
+    FILE* f;
+    int ok;
+    if (!run_cmd_exit_zero("xcode-select -p >/dev/null 2>&1"))
+        return 0;
+    snprintf(src, sizeof(src), "/tmp/psxrecomp-cc-probe-%d.c", (int)getpid());
+    snprintf(exe, sizeof(exe), "/tmp/psxrecomp-cc-probe-%d", (int)getpid());
+    f = fopen(src, "wb");
+    if (!f)
+        return 0;
+    fputs("int main(void){return 0;}\n", f);
+    fclose(f);
+    snprintf(cmd, sizeof(cmd), "/usr/bin/clang \"%s\" -o \"%s\" >/dev/null 2>&1",
+             src, exe);
+    ok = run_cmd_exit_zero(cmd);
+    unlink(src);
+    unlink(exe);
+    return ok;
+}
+#endif
+
+/* Pack health says nothing about the macOS system compiler (see above), so
+ * readiness checks it separately and explains how to fix it. The pack itself
+ * is left alone: a missing compiler must never delete a good download. */
+static int host_system_compiler_ready(void) {
+#if defined(__APPLE__)
+    if (macos_system_compiler_works())
+        return 1;
+    snprintf(g_tc_repair_note, sizeof(g_tc_repair_note),
+             "Apple's Command Line Tools are required to build the game. "
+             "Open Terminal, run: xcode-select --install  then reopen this "
+             "app.");
+    return 0;
+#else
+    return 1;
+#endif
 }
 
 static int toolchain_bin_is_healthy(const char* bin) {
@@ -3230,7 +3373,7 @@ static int host_toolchain_is_ready(void) {
     for (attempt = 0; attempt < 3; ++attempt) {
         activate_toolchain_path();
         if (host_portable_cmake_ready())
-            return 1;
+            return host_system_compiler_ready();
         if (!g_toolchain_bin[0])
             break;
         discard_unhealthy_active_toolchain();
@@ -3667,6 +3810,7 @@ static const char* host_loop_breaker_note(void) {
     char sidecar[1200], line[64], found[512], marker_abs[1200];
     long long then, now;
     const char* marker_rel;
+    const char* cause;
     int game_missing, bios_missing;
     if (!join_path(sidecar, sizeof(sidecar), g_project_root,
                    HOST_LAST_GENERATE_SIDECAR))
@@ -3687,16 +3831,30 @@ static const char* host_loop_breaker_note(void) {
     if (!game_missing && !bios_missing)
         return NULL;
     list_generated_dispatch(found, sizeof(found));
+    /* Each branch has its own cause, so do not assert a single one. A missing
+     * game dispatch really does point at disagreeing boot-EXE names. Missing
+     * BIOS backends do not: they mean Generate never emitted them, normally
+     * because no retail BIOS was available to emit them from. Blaming
+     * boot-EXE names for that sent players after the wrong thing. */
+    if (game_missing)
+        cause = "please report this to the port maintainer: the project's "
+                "boot-EXE names disagree";
+    else
+        cause = "Generate produced the game code but no BIOS backend, which "
+                "normally means it had no retail BIOS to work from. Select "
+                "the PlayStation BIOS dump this port requires (named in the "
+                "README; it must be exactly 512 KB) in the launcher, then "
+                "run Generate again";
     snprintf(g_loop_breaker_note, sizeof(g_loop_breaker_note),
              "A Generate completed here recently, yet the launcher still "
              "cannot find %s%s%s. generated/ contains: %s. Running Generate "
-             "again will very likely loop — please report this to the port "
-             "maintainer: the project's boot-EXE names disagree.",
+             "again will very likely loop — %s.",
              game_missing ? marker_rel : "",
              (game_missing && bios_missing) ? " and " : "",
              bios_missing ? "the BIOS backends under psxrecomp/generated/"
                           : "",
-             found[0] ? found : "no *_dispatch.c at all");
+             found[0] ? found : "no *_dispatch.c at all",
+             cause);
     fprintf(stderr, "psxrecomp-codegen: %s\n", g_loop_breaker_note);
     return g_loop_breaker_note;
 }
@@ -3987,26 +4145,30 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
             "set /p PUBLISHED=<\"%%BUILD_DIR%%\\psxrecomp_exe_name-%%TARGET%%.txt\"\r\n"
             "if defined PUBLISHED if exist \"%%BUILD_DIR%%\\%%PUBLISHED%%.exe\" "
             "set \"EXE_FINAL=%%BUILD_DIR%%\\%%PUBLISHED%%.exe\"\r\n"
-            "if defined GEN_MARKER if not exist \"%%GEN_MARKER%%\" (\r\n"
-            "  echo.\r\n"
-            "  echo Build finished but the generated game code is missing:\r\n"
-            "  echo   %%GEN_MARKER%%\r\n"
-            "  echo Launching now would reopen setup in a loop. Please report\r\n"
-            "  echo this to the port maintainer: the boot-EXE name in\r\n"
-            "  echo game.toml disagrees with GEN_MARKER in CMakeLists.txt.\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
-            "if not exist \"%%EXE_FINAL%%\" (\r\n"
-            "  echo.\r\n"
-            "  echo Build finished but the game executable is missing:\r\n"
-            "  echo   %%EXE_FINAL%%\r\n"
-            "  pause\r\n"
-            "  exit /b 1\r\n"
-            ")\r\n"
+            /* Path-bearing messages sit outside ( ) blocks: cmd expands
+             * %VAR% when it parses a block, so a ")" in an install folder
+             * such as "... (1)" would close the block early. */
+            "if defined GEN_MARKER if not exist \"%%GEN_MARKER%%\" goto no_gen\r\n"
+            "if not exist \"%%EXE_FINAL%%\" goto no_exe\r\n"
             "echo Starting %%DISPLAY%%...\r\n"
             "start \"\" /D \"%%ROOT%%\" \"%%EXE_FINAL%%\" --launcher\r\n"
-            "endlocal\r\n");
+            "endlocal\r\n"
+            "exit /b 0\r\n"
+            ":no_gen\r\n"
+            "echo.\r\n"
+            "echo Build finished but the generated game code is missing:\r\n"
+            "echo   %%GEN_MARKER%%\r\n"
+            "echo Launching now would reopen setup in a loop. Please report\r\n"
+            "echo this to the port maintainer: the boot-EXE name in\r\n"
+            "echo game.toml disagrees with GEN_MARKER in CMakeLists.txt.\r\n"
+            "pause\r\n"
+            "exit /b 1\r\n"
+            ":no_exe\r\n"
+            "echo.\r\n"
+            "echo Build finished but the game executable is missing:\r\n"
+            "echo   %%EXE_FINAL%%\r\n"
+            "pause\r\n"
+            "exit /b 1\r\n");
     fclose(f);
     return 1;
 }
@@ -4165,12 +4327,7 @@ static int host_self_exe_path(char* out, size_t cap) {
             snprintf(out, cap, "%s", appimg);
             return 1;
         }
-        char* rp = realpath("/proc/self/exe", NULL);
-        if (!rp)
-            return 0;
-        snprintf(out, cap, "%s", rp);
-        free(rp);
-        return out[0] != '\0';
+        return host_posix_exe_path(out, cap);
     }
 #endif
 }
@@ -4200,9 +4357,132 @@ static int host_paths_same_file(const char* a, const char* b) {
 #endif
 }
 
+/* --setup-selfcheck: report what the setup host believes about this tree, as
+ * JSON on stdout, then exit. 0 = generated sources complete, 2 = the wizard
+ * would reopen, 1 = could not tell (no project root).
+ *
+ * This exists because the decision layer -- "are the generated sources
+ * present?" -- had no headless entry point. Disc selection, BIOS selection and
+ * generation were already scriptable via psxrecomp_cli.py; the verdict on
+ * whether setup is DONE was reachable only by clicking through the wizard, so
+ * nothing in CI could assert it. A stem mismatch there shipped a first-run
+ * loop on 26 titles before anyone noticed.
+ *
+ * Deliberately ahead of the PSX_HAS_GAME_DISPATCH early return below, so a
+ * product build answers too. Every title already calls this function with
+ * argc/argv, so no per-title change is needed to gain the flag. */
+static void host_json_str(const char* s) {
+    putchar('"');
+    for (; s && *s; ++s) {
+        if (*s == '\\' || *s == '"')
+            putchar('\\');
+        putchar(*s);
+    }
+    putchar('"');
+}
+
+static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
+                                     int argc, char** argv) {
+    const PsxKnownBiosImage* want;
+    const char* marker_rel;
+    char marker_abs[1200];
+    int i, missing, game_ok, bios_ok;
+
+    for (i = 1; i < argc; ++i)
+        if (argv[i] && strcmp(argv[i], "--setup-selfcheck") == 0)
+            break;
+    if (i >= argc)
+        return;
+
+    if (!cfg || !cfg->cmake_target || !cfg->exe_basename) {
+        printf("{\"error\": \"no codegen host config linked\"}\n");
+        exit(1);
+    }
+    /* Sets g_cfg and g_project_root as a side effect. */
+    missing = psxrecomp_codegen_host_sources_missing(cfg);
+    if (!g_project_root[0]) {
+        printf("{\"error\": \"project root not found\"}\n");
+        exit(1);
+    }
+
+    marker_rel = cfg_or(cfg->gen_marker_relpath,
+                        "generated/SLUS_011.89_dispatch.c");
+    game_ok = join_path(marker_abs, sizeof(marker_abs), g_project_root,
+                        marker_rel) && path_is_file(marker_abs);
+    bios_ok = !bios_backends_missing();
+    want = psx_expected_bios();
+
+    printf("{\n");
+    printf("  \"display_name\": ");
+    host_json_str(cfg_or(cfg->display_name, "Game"));
+    printf(",\n  \"project_root\": ");
+    host_json_str(g_project_root);
+    printf(",\n  \"expected_bios_stem\": ");
+    host_json_str(PSX_EXPECTED_BIOS_STEM);
+    printf(",\n  \"expected_bios_id\": ");
+    host_json_str(want ? want->id : "");
+    printf(",\n  \"expected_bios_crc32\": ");
+    if (want) {
+        char crcbuf[16];
+        snprintf(crcbuf, sizeof(crcbuf), "0x%08X", want->crc32);
+        host_json_str(crcbuf);
+    } else {
+        printf("null");
+    }
+    printf(",\n  \"game_dispatch\": ");
+    host_json_str(marker_rel);
+    printf(",\n  \"game_dispatch_present\": %s", game_ok ? "true" : "false");
+    printf(",\n  \"bios_backends_present\": %s", bios_ok ? "true" : "false");
+    printf(",\n  \"sources_missing\": %s", missing ? "true" : "false");
+    /* Wave-5 F4: overlay_cache is the switch that makes the runtime initialise the
+     * overlay loader at all; without it every streamed overlay is interpreted. CI
+     * asserts this field so a title cannot ship silently without it again. */
+    {
+        char toml_abs[1200];
+        int overlay_cache = 0;
+        if (join_path(toml_abs, sizeof(toml_abs), g_project_root, "game.toml")) {
+            FILE* tf = fopen(toml_abs, "rb");
+            if (tf) {
+                char line[512];
+                while (fgets(line, sizeof(line), tf)) {
+                    const char* p = line;
+                    while (*p == ' ' || *p == '\t') ++p;
+                    if (strncmp(p, "overlay_cache", 13) == 0) {
+                        p += 13;
+                        while (*p == ' ' || *p == '\t') ++p;
+                        if (*p == '=') {
+                            ++p;
+                            while (*p == ' ' || *p == '\t') ++p;
+                            overlay_cache = strncmp(p, "true", 4) == 0;
+                        }
+                    }
+                }
+                fclose(tf);
+            }
+        }
+        printf(",\n  \"overlay_cache_configured\": %s", overlay_cache ? "true" : "false");
+    }
+    /* Build-tools readiness as wizard page 0 judges it, minus its cache
+     * healing: nothing is deleted or renamed here. toolchain_note carries the
+     * repair hint the wizard would show (e.g. missing Command Line Tools). */
+    {
+        int tc_ready;
+        g_tc_repair_note[0] = '\0';
+        activate_toolchain_path();
+        tc_ready = host_portable_cmake_ready() && host_system_compiler_ready();
+        printf(",\n  \"toolchain_ready\": %s", tc_ready ? "true" : "false");
+        printf(",\n  \"toolchain_note\": ");
+        host_json_str(g_tc_repair_note);
+    }
+    printf("\n}\n");
+    fflush(stdout);
+    exit(missing ? 2 : 0);
+}
+
 /* Setup-host zip-root exe → build-release product (bios/mods/assets/settings). */
 void psxrecomp_codegen_host_forward_if_built(
     const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
+    host_selfcheck_or_return(cfg, argc, argv); /* exits when requested */
 #if defined(PSX_HAS_GAME_DISPATCH)
     /* Full game binary — already the product tree. */
     (void)cfg;
@@ -4348,7 +4628,11 @@ void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
         if (g_relaunch_is_helper) {
             fprintf(stderr,
                     "psxrecomp-codegen: starting deferred rebuild helper\n");
-            snprintf(cmd, sizeof(cmd), "cmd.exe /C \"%s\"", exe);
+            /* cmd /C strips the first and last quote of the command line
+             * when it holds special characters such as the parentheses in
+             * "r4-1.0-windows-x64 (1)"; the doubled outer pair keeps the
+             * path's own quotes intact. */
+            snprintf(cmd, sizeof(cmd), "cmd.exe /C \"\"%s\"\"", exe);
             flags = CREATE_NEW_CONSOLE;
         } else {
             fprintf(stderr, "psxrecomp-codegen: relaunching %s\n", exe);
@@ -4418,10 +4702,12 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
 
     /* Master switch for recomp-ui: first-run wizard + Generate & rebuild. */
     gi->setup_wizard_supported = 1;
-    /* Setup SDKs often link OpenBIOS only (retail C comes from Generate).
-     * psx_bios_has_selectable() is then 0 and would hide the BIOS row — keep
-     * the optional SCPH1001 picker so prepare can ingest a dump first. */
-    gi->has_bios = 1;
+    /* has_bios is NOT forced here. A setup SDK links OpenBIOS only and needs
+     * the retail picker so prepare can ingest a dump, but a shipped bundled
+     * build has no CLI, sources or toolchain to compile one in, and forcing
+     * the row there offered "Generate & rebuild" that could never run.
+     * main.cpp decides after this returns, from whether prepare_with_progress
+     * was actually wired below (or nothing is linked yet). */
 
     if (!discover_project_root(g_project_root, sizeof(g_project_root))) {
         /* Still force the wizard when generated/ is missing — discover may

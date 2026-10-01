@@ -15,6 +15,24 @@ uint32_t g_debug_current_func_addr;
 uint32_t g_debug_last_store_pc;
 CPUState *debug_cpu_ptr;
 int g_psx_vram_dirty_tracking;
+uint32_t g_psx_ram_size = 0x00200000u;
+uint32_t g_psx_ram_mask = 0x001FFFFFu;
+
+/* This fixture exercises stock GPU packets without a GL context or mod bank.
+ * Keep the gpu.c dependencies explicit, including on linkers that retain
+ * additional exported command handlers despite --gc-sections. */
+GrBackend gr_backend(void) { return GR_BACKEND_SOFTWARE; }
+int gl_renderer_texture_banks_supported(void) { return 0; }
+int gl_renderer_select_texture_bank(uint16_t id) { (void)id; return 0; }
+uint16_t mod_texture_packet_bank(uint32_t source, const uint32_t *words,
+                                 uint32_t count) {
+    (void)source; (void)words; (void)count;
+    return 0;
+}
+int mod_texture_packet_precision(uint32_t source, float q[3], float xy[6]) {
+    (void)source; (void)q; (void)xy;
+    return 0;
+}
 
 static uint32_t test_ram[0x00200000u / 4u];
 
@@ -146,6 +164,10 @@ void psx_write_half(uint32_t addr, uint16_t val) {
     (void)val;
 }
 
+void psx_host_write_half(uint32_t addr, uint16_t val) {
+    psx_write_half(addr, val);
+}
+
 int mdec_recently_active(uint32_t within_frames) {
     (void)within_frames;
     return 0;
@@ -208,7 +230,6 @@ uint32_t psx_compiled_irq_resume_pc(void) { return 0; }
 uint32_t psx_last_irq_check_pc(void) { return 0; }
 uint32_t psx_netplay_rb_sticky_bb_pc(void) { return 0; }
 void mod_runtime_on_vblank(void) {}
-void sio_ape_card_unstick_pump(void) {}
 bool screen_kind_from_name(const char *name, ScreenKind *out) {
     (void)name;
     if (out) *out = SCREEN_RAW;

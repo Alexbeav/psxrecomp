@@ -868,3 +868,114 @@ tooling defect found on the way: `screenshot_hires` produces a tiled/black
 PNG at 768x480 scale-2 windowed (row-pitch bug in the hires readback) —
 the census + the player's own captures carried the session; fix it before
 the formal Crash/Tomba2 A/B.
+
+## IR1 — Internal resolution presets (Native … 8K) and the GL scale ceiling (2026-09-26)
+
+**What the player gets.** Settings → Display → **Internal resolution**: Native,
+720p, 1080p, 1440p, 4K, 5K, 8K, Match display. A preset is a target height and
+resolves to an integer scale over the title's reference height
+(`[video] resolution_reference_lines`, 240 by default): 3x, 5x (1200 lines,
+area-resolved to 1080), 6x, 9x, 12x, 18x. It is a Settings row, not a mod,
+because it needs no game hooks; it is presentation-only, so it also applies in
+netplay (each peer its own). Keys and precedence: `docs/config_schema.md`.
+
+**Why the old ceiling was 4.** The software renderer keeps a CPU mirror of
+1 MiB·S², so it caps at 4, and every backend inherited that cap. OpenGL keeps
+the hr surface on the GPU; its real limits are the driver's texture,
+renderbuffer and viewport sizes (the surface is `1024·S × 512·S`) and memory.
+The GL backend now clamps at context init to those limits and a 2 GiB budget,
+logs the clamp, and steps down instead of failing (a failure used to drop the
+whole backend to software). Measured on an Apple M4 (`4.1 Metal - 91.7`): all
+three limits are 16384, so the full-VRAM surface stops at 16x.
+
+**Fixes that only bite above 1x** (all gated on S > 1, so native is
+byte-identical):
+
+- Lines: `glLineWidth(S)` is capped at 1 on core profiles (macOS reports
+  `GL_ALIASED_LINE_WIDTH_RANGE` 1..1), so every line was one hr pixel thick.
+  Lines are now quads one native pixel thick that include both endpoints, like
+  the software rasterizer.
+- Present: a supersampled source more than 1.25x the output is area-resolved
+  (bilinear taps over the pixel's footprint) instead of one tap, and the UV
+  inset is half a texel, not half a native pixel (which cropped (S-1)/2 texels
+  per edge).
+- The copy scratch is sized to the largest copy and the mask stencil is
+  rebuilt in tiles over the primitive bbox union, so a large S does not cost
+  another full-size surface.
+- The CPU present path under GL presents at 1x (its readout is native) and its
+  staging buffer no longer grows with S².
+- The macOS game window gets a high-pixel-density drawable when the player
+  picks anything above native; without it the drawable is in points and the
+  compositor stretches it, throwing half the resolution away.
+
+**Verification.** `gl_scale_invariance_test` renders one GP0 scene on a hidden
+real GL context at 1, 2, 3, 5 and 9x and requires identical guest-visible VRAM
+(the pack of the hr surface) at every scale, one-native-pixel lines at
+internal resolution, and a 32x request that stays on GL at the driver clamp.
+In a running game, `video_info` reports the requested and effective scale and
+the drawable; `screenshot_hires` reads the hr FBO at full size.
+
+### IR2 — True 8K past a 16384 texture limit: the high-resolution window (2026-09-26)
+
+8K is 18x at the usual 240-line reference, and a full-VRAM surface at 18x is
+18432 px wide: over the 16384 limit of Apple's GL (and Intel, MoltenVK). The
+M4 returns `GL_INVALID_VALUE` for it. A title only needs the displayed frame at
+18x, so past that limit the GL backend splits the job:
+
+- The **authoritative** VRAM stays the ordinary hr surface at **1x**. It is the
+  native renderer unchanged, so pack, CPU readback, render-to-texture sampling
+  and VRAM copies are exactly the native results.
+- A **presentation-only** surface at S covers the displayed columns,
+  W = [x0, x1) × all 512 rows (R4: x 0..319, 5760×9216 at 18x, 405 MiB). Every
+  GPU write that touches W is mirrored into it: textured and flat batches,
+  lines (as quads), fills, uploads and the depth24 clear, and VRAM copies
+  (hi→hi when the source lies in W, otherwise the 1x source upscaled). It has
+  its own stencil, rebuilt from alpha like the hr surface.
+- W starts empty and grows, rounded to 64 columns, the first time a display
+  rectangle outside it is presented, seeded by upscaling the 1x content. The
+  present, hold-last, interpolation capture, `screenshot_hires` and the
+  native-wide centre read W.
+- When the union of the displayed rectangles no longer fits one surface
+  (side-by-side 512-wide buffers at x 0 and 512 need 18432 px at 18x), W
+  becomes up to four **tiles**, each its own surface over a column range
+  (there: one per buffer, 9216×9216 and 648 MiB each). Every mirrored write
+  goes to each tile it touches, so a game flipping between horizontally
+  adjacent buffers presents every frame at S instead of alternating with 1x.
+  A display that no tile can hold within the GPU limit, the memory budget
+  (all tiles together) or the four-tile cap presents at 1x, with a log line.
+  Everything drawn inside a tile, and axis-aligned rects, fills, copies and
+  uploads across a tile edge, match the single surface byte for byte; a
+  sloped primitive that crosses a tile edge is clipped there by GL, which
+  can move its interpolated colour by one step or its coverage by a subpixel
+  along it.
+- A VRAM copy into W stages its S-scaled source in a scratch of its own, in
+  column chunks that fit the GPU limit (910 columns at 18x on a 16384 GPU),
+  walked in memmove order so an overlapping copy still reads pre-copy
+  pixels. Staging textures record a new size only after the driver accepted
+  it; a request past the limit is refused with a log line.
+- The window's copies of textured, flat and line draws are **queued** and
+  replayed into it in one pass at the next sync point: anything that changes
+  what they sample (a pack of the raw mirror, an upload, the depth24 clear),
+  any other write to the window (fill, copy, upload, stencil rebuild), and
+  every read of it (present, capture, growth). Mirroring each batch as it was
+  flushed switched framebuffers twice per batch; on Apple's GL (Metal
+  underneath) each switch ends a render pass, which measured ~80 us, 10 ms
+  per R4 frame (8K ran at 21 fps). Queued, the flush CPU cost is 0.6 ms per
+  frame and 8K holds R4's 60 Hz present cadence on an M4.
+
+It engages only when the full-VRAM surface cannot hold the requested scale;
+below that (up to 16x on the M4) nothing changes. `PSX_GL_HIRES_WINDOW=0/1`
+disables or forces it. `PSX_GL_MAX_DIM=N` lowers the GPU limit the backend
+plans with (never raises it), to check a layout on a smaller GPU.
+
+**Evidence.** `gl_scale_invariance_test` forces the window at 2, 3, 5 and 9x
+and requires the frame at internal resolution to be byte-identical to the
+full-VRAM surface at the same scale (copies inside, into and across the
+window edge, fills and uploads across it, mask set/check, all four blend
+modes), and the guest-visible VRAM to be identical to 1x; it also runs the
+window at 18x. Its side-by-side runs flip two 512-wide buffers: one surface at
+5x and two tiles at 9x under `PSX_GL_MAX_DIM=8192` must equal the full-VRAM
+surface, including copies between the buffers and 1000-column copies staged
+in chunks; at 18x both buffers must read back at S with two tiles. In R4 on an M4, the 8K preset reports
+`effective_scale 18, internal_lines 4320, hr_scale 1, hires_fbo 5760x9216`, and
+`screenshot_hires` in a race is 5760×4320 with the rear-view mirror present.

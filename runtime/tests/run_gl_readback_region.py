@@ -26,6 +26,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compiler-bin", required=True)
     parser.add_argument("--sdl-root", required=True)
+    parser.add_argument("--sdl-library", help="Explicit SDL3 library (e.g. a system DLL import library)")
     parser.add_argument("--output", required=True)
     parser.add_argument("--gl-source")
     parser.add_argument("--fixture", type=pathlib.Path)
@@ -39,8 +40,9 @@ def main():
     sdl = pathlib.Path(args.sdl_root).resolve()
     if not (sdl / "sdl3-src/include").is_dir():
         parser.error(f"--sdl-root must contain the sdl3-src/include directory: {sdl}")
-    if not (sdl / "sdl3-build/libSDL3.a").is_file():
-        parser.error(f"--sdl-root must contain sdl3-build/libSDL3.a: {sdl}")
+    sdl_library = pathlib.Path(args.sdl_library).resolve() if args.sdl_library else sdl / "sdl3-build/libSDL3.a"
+    if not sdl_library.is_file():
+        parser.error(f"SDL3 library does not exist: {sdl_library}")
     output = pathlib.Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     dest = pathlib.Path(tempfile.mkdtemp(prefix="readback-", dir=output))
@@ -64,7 +66,11 @@ def main():
         return result
 
     fixture = args.fixture or framework / "runtime/tests/test_gl_readback_region.c"
-    for name, source in [("probe", fixture), ("sw", framework / "runtime/src/gpu_sw_renderer.c")]:
+    # The renderer's render-pass paths call the journal and VRAM policy in
+    # render_pass_plan.c (self-contained: no other runtime symbols).
+    sources = [("probe", fixture), ("sw", framework / "runtime/src/gpu_sw_renderer.c"),
+               ("rp", framework / "runtime/src/render_pass_plan.c")]
+    for name, source in sources:
         if run([compiler / "gcc.exe", "-std=c11", "-O2", "-flto", "-DPSX_SDL3=1",
                 "-DPSX_NO_DEBUG_TOOLS=1", *includes, "-c", source,
                 "-o", dest / (name + ".o")]).returncode:
@@ -72,8 +78,8 @@ def main():
     libraries = ["m", "kernel32", "user32", "gdi32", "winmm", "imm32", "ole32",
                  "oleaut32", "version", "uuid", "advapi32", "setupapi", "shell32",
                  "dinput8", "opengl32"]
-    if run([compiler / "g++.exe", "-O2", "-flto", dest / "probe.o", dest / "sw.o",
-            sdl / "sdl3-build/libSDL3.a", *["-l" + name for name in libraries],
+    if run([compiler / "g++.exe", "-O2", "-flto", *[dest / (name + ".o") for name, _ in sources],
+            sdl_library, *["-l" + name for name in libraries],
             "-o", dest / "probe.exe"]).returncode:
         return 2
     for scale in (1, 4):

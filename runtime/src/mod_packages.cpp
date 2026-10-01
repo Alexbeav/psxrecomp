@@ -15,6 +15,7 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <tuple>
 
 namespace fs = std::filesystem;
 
@@ -22,7 +23,7 @@ namespace PSXRecompV4 {
 namespace {
 
 constexpr uint32_t kMinFormatVersion = 1;
-constexpr uint32_t kMaxFormatVersion = 6;
+constexpr uint32_t kMaxFormatVersion = 7;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
@@ -34,6 +35,9 @@ std::map<std::string, ModBuiltinResolver>& builtin_resolvers() {
 struct RegisteredPlugin {
     PSXModActivationCallback activation = nullptr;
     PSXModVBlankCallback vblank = nullptr;
+    /* Generated-function entry hooks, keyed by guest address. One id may
+     * observe several functions. */
+    std::vector<std::pair<uint32_t, PSXModFunctionEntryCallback>> function_entries;
 };
 
 std::map<std::string, RegisteredPlugin>& registered_plugins() {
@@ -1449,10 +1453,22 @@ bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void)) {
     return true;
 }
 
+bool mod_register_function_entry_plugin(const std::string& id, uint32_t address,
+                                        PSXModFunctionEntryCallback callback) {
+    if (!valid_id(id) || !address || !callback) return false;
+    RegisteredPlugin& plugin = registered_plugins()[id];
+    /* Code addresses alias across KUSEG/KSEG0/KSEG1; one function is one hook. */
+    for (const auto& hook : plugin.function_entries)
+        if (((hook.first ^ address) & 0x1FFFFFFFu) == 0u) return false;
+    plugin.function_entries.emplace_back(address, callback);
+    return true;
+}
+
 bool mod_plugin_registered(const std::string& id) {
     const auto found = registered_plugins().find(id);
     return found != registered_plugins().end() &&
-        (found->second.activation || found->second.vblank);
+        (found->second.activation || found->second.vblank ||
+         !found->second.function_entries.empty());
 }
 
 void mod_invoke_activation_plugin(const std::string& id) {
@@ -1465,6 +1481,15 @@ void mod_invoke_vblank_plugin(const std::string& id) {
     const auto found = registered_plugins().find(id);
     if (found != registered_plugins().end() && found->second.vblank)
         found->second.vblank();
+}
+
+std::vector<ModFunctionEntryHook> mod_function_entry_hooks(const std::string& id) {
+    std::vector<ModFunctionEntryHook> hooks;
+    const auto found = registered_plugins().find(id);
+    if (found == registered_plugins().end()) return hooks;
+    for (const auto& hook : found->second.function_entries)
+        hooks.push_back(ModFunctionEntryHook{hook.first, hook.second});
+    return hooks;
 }
 
 void mod_clear_plugins_for_tests() {
@@ -1521,6 +1546,7 @@ bool strip_developer_features(ModPackage& package) {
         package.features.end());
     prune(package.options);
     prune(package.constraints);
+    prune(package.requirements);
     prune(package.patches);
     prune(package.overlays);
     prune(package.plugins);
@@ -1878,6 +1904,55 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     throw std::runtime_error("unknown constraint kind");
                 }
                 out.constraints.push_back(std::move(constraint));
+            }
+        }
+        if (cfg.contains("requirement")) {
+            if (!feature_style)
+                throw std::runtime_error(
+                    "requirements require explicit [[feature]] ownership");
+            if (out.format_version < 7)
+                throw std::runtime_error(
+                    "requirements require format_version 7");
+            for (const toml::value& v :
+                 toml::find(cfg, "requirement").as_array()) {
+                for (const auto& [key, unused] : v.as_table()) {
+                    (void)unused;
+                    if (key != "feature" && key != "package" &&
+                        key != "version" && key != "requires_feature" &&
+                        key != "when" && key != "when_option" &&
+                        key != "when_value")
+                        throw std::runtime_error(
+                            "requirement has unknown field: " + key);
+                }
+                ModFeatureRequirement requirement;
+                requirement.feature_id =
+                    toml::find<std::string>(v, "feature");
+                if (!find_feature(out, requirement.feature_id))
+                    throw std::runtime_error(
+                        "requirement references unknown feature");
+                requirement.package_id =
+                    toml::find<std::string>(v, "package");
+                requirement.required_feature_id =
+                    toml::find<std::string>(v, "requires_feature");
+                requirement.version =
+                    toml::find_or<std::string>(v, "version", "*");
+                if (!valid_id(requirement.package_id) ||
+                    !valid_id(requirement.required_feature_id))
+                    throw std::runtime_error(
+                        "requirement references an invalid id");
+                /* One mechanism per relationship: a feature of the same
+                 * package is a requires_feature [[constraint]], which the
+                 * launcher enables explicitly and persists. */
+                if (requirement.package_id == out.id)
+                    throw std::runtime_error(
+                        "requirement names its own package; use a "
+                        "requires_feature [[constraint]] instead");
+                if (requirement.version.empty())
+                    throw std::runtime_error(
+                        "requirement version is empty");
+                read_conditions(v, out.options, requirement.feature_id,
+                                requirement.when, "requirement");
+                out.requirements.push_back(std::move(requirement));
             }
         }
         if (cfg.contains("patch")) {
@@ -2744,22 +2819,35 @@ bool ModPackageManager::install_archive(const fs::path& archive,
 
 bool ModPackageManager::remove_version(const std::string& id, const std::string& version,
                                        std::string* error) {
-    const auto sit = selections_.find(id);
+    /* Active means active in the effective selection: a version another
+     * feature's [[requirement]] activates is in use although state.toml does
+     * not enable it. */
+    std::vector<ModResolution::ImplicitFeature> implicit;
+    const std::map<std::string, ModSelection> effective =
+        effective_selections(&implicit, nullptr, nullptr);
+    const auto sit = effective.find(id);
     const ModSelection blank;
     const ModSelection& current =
-        sit == selections_.end() ? blank : sit->second;
+        sit == effective.end() ? blank : sit->second;
     const ModPackage* selected = find_selected(packages_, id, current);
     if (selected && selected->version == version &&
         has_enabled_feature(*selected, current)) {
+        for (const ModResolution::ImplicitFeature& item : implicit) {
+            if (item.package_id != id) continue;
+            set_error(error, "cannot remove a version required by " +
+                                 item.required_by_package_id + "/" +
+                                 item.required_by_feature_id);
+            return false;
+        }
         set_error(error, "cannot remove an active package version");
         return false;
     }
     for (const auto& [other_id, versions] : packages_) {
         (void)versions;
-        const auto other_selection = selections_.find(other_id);
+        const auto other_selection = effective.find(other_id);
         const ModSelection& selection =
-            other_selection == selections_.end() ? blank :
-                                                   other_selection->second;
+            other_selection == effective.end() ? blank :
+                                                 other_selection->second;
         const ModPackage* package =
             find_selected(packages_, other_id, selection);
         if (!package || other_id == id ||
@@ -2963,6 +3051,17 @@ bool ModPackageManager::set_feature_resource_path(
     return true;
 }
 
+std::vector<std::string> ModPackageManager::dormant_selections() const {
+    std::vector<std::string> dormant;
+    for (const auto& [id, selection] : selections_) {
+        (void)selection;
+        const auto found = packages_.find(id);
+        if (found == packages_.end() || found->second.empty())
+            dormant.push_back(id);
+    }
+    return dormant;
+}
+
 const ModPackage* ModPackageManager::selected_package(const std::string& id) const {
     const auto selection = selections_.find(id);
     const ModSelection blank;
@@ -3013,20 +3112,162 @@ fs::path ModPackageManager::feature_resource_path(
         feature_id, resource_id);
 }
 
+std::map<std::string, ModSelection> ModPackageManager::effective_selections(
+    std::vector<ModResolution::ImplicitFeature>* implicit,
+    std::vector<ModResolution::Diagnostic>* diagnostics,
+    std::vector<std::string>* errors) const {
+    std::map<std::string, ModSelection> effective = selections_;
+    const ModSelection blank;
+    const auto selection_of = [&](const std::string& id) -> const ModSelection& {
+        const auto found = effective.find(id);
+        return found == effective.end() ? blank : found->second;
+    };
+    /* Each requirement is evaluated once it is active; an unmet one is
+     * reported once. Activation only ever turns features ON, so the loop
+     * reaches a fixed point after at most one pass per derivable feature. */
+    std::set<std::tuple<std::string, std::string, std::string, std::string>>
+        settled;
+    const auto fail = [&](const std::string& package_id,
+                          const ModFeatureRequirement& requirement,
+                          const std::string& why) {
+        ModResolution::Diagnostic diagnostic;
+        diagnostic.resource = "requirement:" + requirement.package_id + "/" +
+                              requirement.required_feature_id;
+        diagnostic.package_id = package_id;
+        diagnostic.feature_id = requirement.feature_id;
+        diagnostic.other_package_id = requirement.package_id;
+        diagnostic.other_feature_id = requirement.required_feature_id;
+        diagnostic.message = package_id + "/" + requirement.feature_id +
+                             " requires " + requirement.package_id + "/" +
+                             requirement.required_feature_id + ", but " + why;
+        if (errors) errors->push_back(diagnostic.message);
+        if (diagnostics) diagnostics->push_back(std::move(diagnostic));
+    };
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto& [id, versions] : packages_) {
+            (void)versions;
+            const ModPackage* package =
+                find_selected(packages_, id, selection_of(id));
+            if (!package) continue;
+            for (const ModFeatureRequirement& requirement :
+                 package->requirements) {
+                const ModSelection& owner_selection = selection_of(id);
+                const ModFeature* owner =
+                    find_feature(*package, requirement.feature_id);
+                if (!owner ||
+                    !is_feature_enabled(*package, owner_selection, *owner) ||
+                    !conditions_match(*package, owner_selection,
+                                      requirement.feature_id,
+                                      requirement.when))
+                    continue;
+                if (!settled.emplace(id, requirement.feature_id,
+                                     requirement.package_id,
+                                     requirement.required_feature_id)
+                         .second)
+                    continue;
+                const auto provider = packages_.find(requirement.package_id);
+                if (provider == packages_.end() || provider->second.empty()) {
+                    fail(id, requirement,
+                         "package " + requirement.package_id +
+                             " is not in this build's mod catalog");
+                    continue;
+                }
+                const ModPackage* target = find_selected(
+                    packages_, requirement.package_id,
+                    selection_of(requirement.package_id));
+                if (!target) {
+                    fail(id, requirement,
+                         "the selected version of " + requirement.package_id +
+                             " is not installed");
+                    continue;
+                }
+                if (!version_satisfies(target->version, requirement.version)) {
+                    fail(id, requirement,
+                         requirement.package_id + " " + target->version +
+                             " does not satisfy " + requirement.version);
+                    continue;
+                }
+                const ModFeature* required =
+                    find_feature(*target, requirement.required_feature_id);
+                if (!required || required->legacy) {
+                    fail(id, requirement,
+                         requirement.package_id + " " + target->version +
+                             " has no feature " +
+                             requirement.required_feature_id);
+                    continue;
+                }
+                /* The player's own choice already covers it. */
+                if (is_feature_enabled(*target,
+                                       selection_of(requirement.package_id),
+                                       *required))
+                    continue;
+                ModSelection derived = selection_of(requirement.package_id);
+                set_feature_selected(derived, required->id, true);
+                std::set<std::string> visiting;
+                std::string requirement_error;
+                if (!apply_feature_requirements(*target, derived, required->id,
+                                                visiting, &requirement_error)) {
+                    fail(id, requirement, requirement_error);
+                    continue;
+                }
+                effective[requirement.package_id] = std::move(derived);
+                if (implicit) {
+                    implicit->push_back({requirement.package_id, required->id,
+                                         id, requirement.feature_id});
+                }
+                changed = true;
+            }
+        }
+    }
+    return effective;
+}
+
+bool ModPackageManager::feature_implicitly_enabled(
+    const std::string& package_id, const std::string& feature_id) const {
+    if (feature_enabled(package_id, feature_id)) return false;
+    std::vector<ModResolution::ImplicitFeature> implicit;
+    effective_selections(&implicit, nullptr, nullptr);
+    return std::any_of(implicit.begin(), implicit.end(),
+                       [&](const ModResolution::ImplicitFeature& item) {
+                           return item.package_id == package_id &&
+                                  item.feature_id == feature_id;
+                       });
+}
+
+std::string ModPackageManager::feature_option_value(
+    const ModResolution& plan, const std::string& package_id,
+    const std::string& feature_id, const std::string& option_id) const {
+    const ModPackage* package = selected_package(package_id);
+    if (!package) return {};
+    const auto found = plan.selections.find(package_id);
+    const ModSelection blank;
+    return effective_option_value(
+        *package, found == plan.selections.end() ? blank : found->second,
+        feature_id, option_id);
+}
+
 ModResolution ModPackageManager::resolve(const std::string& game_id,
                                          const std::string& exe_sha256,
                                          const std::string& disc_sha256) const {
     ModResolution result;
+    /* Everything below reads the EFFECTIVE selection: the player's state plus
+     * the features active [[requirement]]s derive. selections itself is never
+     * modified, so save_state() persists only what the player chose. */
+    const std::map<std::string, ModSelection> selections =
+        effective_selections(&result.implicit_features, &result.diagnostics,
+                             &result.errors);
     std::map<std::string, const ModPackage*> active;
     for (const auto& [id, versions] : packages_) {
         (void)versions;
-        const auto selected = selections_.find(id);
+        const auto selected = selections.find(id);
         const ModSelection blank;
         const ModSelection& selection =
-            selected == selections_.end() ? blank : selected->second;
+            selected == selections.end() ? blank : selected->second;
         const ModPackage* package = find_selected(packages_, id, selection);
         if (!package) {
-            if (selected != selections_.end())
+            if (selected != selections.end())
                 result.errors.push_back(
                     "selected package/version is not installed: " + id);
             continue;
@@ -3051,10 +3292,10 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             if (active.find(conflict) != active.end())
                 result.errors.push_back(id + " conflicts with " + conflict);
 
-        const auto selection = selections_.find(id);
+        const auto selection = selections.find(id);
         const ModSelection blank_selection;
         const ModSelection& effective_selection =
-            selection == selections_.end()
+            selection == selections.end()
                 ? blank_selection
                 : selection->second;
         std::string failing_feature;
@@ -3065,7 +3306,7 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             result.errors.push_back(
                 id + "/" + failing_feature + ": " + reason);
         }
-        if (selection != selections_.end()) {
+        if (selection != selections.end()) {
             for (const ModOption& option : package->options) {
                 const ModFeature* feature =
                     find_feature(*package, option.feature_id);
@@ -3125,12 +3366,12 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
 
     ModBuiltinResolverContext resolver_context;
     resolver_context.active_packages = &active;
-    resolver_context.selections = &selections_;
+    resolver_context.selections = &selections;
     for (const ModPackage* package : result.ordered) {
-        const auto selected_it = selections_.find(package->id);
+        const auto selected_it = selections.find(package->id);
         const ModSelection blank;
         const ModSelection& selected =
-            selected_it == selections_.end() ? blank : selected_it->second;
+            selected_it == selections.end() ? blank : selected_it->second;
         if (package->resolver == "declarative") {
             for (const ModDerivedDisc& derived : package->derived_discs) {
                 const ModFeature& legacy = package->features.front();
@@ -3363,7 +3604,7 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 !conditions_match(*package, selected,
                                   overlay.feature_id, overlay.when) ||
                 !feature_predicate_matches(
-                    overlay.when_feature, active, selections_))
+                    overlay.when_feature, active, selections))
                 continue;
             overlays.push_back(&overlay);
         }
@@ -3643,9 +3884,10 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
     }
     result.fingerprint = fingerprint_text(
         canonical_resolution(
-            result.ordered, selections_, result.writes, result.overlays,
+            result.ordered, selections, result.writes, result.overlays,
             result.derived_discs, result.plugins, result.resources,
             disc_sha256));
+    result.selections = selections;
     result.ok = true;
     return result;
 }
