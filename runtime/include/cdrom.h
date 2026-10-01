@@ -83,6 +83,11 @@ void cdrom_warm_route_stats_json(char* out, int cap);
  * Diagnostics only: recording never changes CD scheduling or delivery. */
 void cdrom_timing_reset(void);
 void cdrom_timing_stats_json(char* out, int cap);
+/* Read streams of this process: how many started, how many ended before
+ * their first sector, and the longest run of those in a row. The run report
+ * carries them (psx_last_run_report.json "cdrom"), so a title whose reads
+ * never deliver can be found without a debug build (PS1B-317). */
+void cdrom_silent_read_stats(uint32_t *starts, uint32_t *silent, uint32_t *longest_run);
 int cdrom_get_delivered_lba(void);
 
 /* Per-record view of the same ring, for localising a single lost/skipped

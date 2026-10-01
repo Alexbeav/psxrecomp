@@ -264,6 +264,14 @@ static uint64_t s_cd_probe_pause_count, s_cd_probe_pause_cycles;
 static uint64_t s_cd_probe_seek_count, s_cd_probe_seek_cycles;
 static uint64_t s_cd_probe_motor_count, s_cd_probe_motor_cycles;
 static uint64_t s_cd_probe_stop_count, s_cd_probe_stop_cycles;
+/* Read streams that ended before their first sector (PS1B-317). A game
+ * library that restarts a silent read shows up here as a long run of them;
+ * Time Crisis sat at 191 in a row before spec rule 6.11. Diagnostics only:
+ * nothing reads these to decide anything. s_cd_stream_open_seq is the sector
+ * record count when the open stream started, or UINT64_MAX with none open. */
+static uint64_t s_cd_stream_open_seq = UINT64_MAX;
+static uint32_t s_cd_stream_starts, s_cd_silent_reads, s_cd_silent_run, s_cd_silent_run_max;
+static void cd_stream_account_end(void);
 
 static void cd_timing_note_intc(void);
 static uint8_t filter_file;
@@ -1850,6 +1858,9 @@ static void start_read_stream(uint8_t cmd) {
     s_cd_probe_read_start_cycles += (uint64_t)read_delay;
     s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
     s_cd_timing_stream_starts++;
+    cd_stream_account_end();               /* a read started over an open one */
+    s_cd_stream_open_seq = s_cd_timing_total;
+    s_cd_stream_starts++;
     reading = 1;
     s_source_seek_paused = 0;
     stat_reg &= (uint8_t)~(CDSTAT_SEEK | CDSTAT_READ | CDSTAT_PLAY);
@@ -1890,7 +1901,27 @@ static void start_read_stream(uint8_t cmd) {
     }
 }
 
+/* The open read stream, if any, has ended: by a Pause, a Stop, a seek, the
+ * end of an XA file, or the next read start. */
+static void cd_stream_account_end(void) {
+    if (s_cd_stream_open_seq == UINT64_MAX) return;
+    if (s_cd_timing_total == s_cd_stream_open_seq) {
+        s_cd_silent_reads++;
+        if (++s_cd_silent_run > s_cd_silent_run_max) s_cd_silent_run_max = s_cd_silent_run;
+    } else {
+        s_cd_silent_run = 0;
+    }
+    s_cd_stream_open_seq = UINT64_MAX;
+}
+
+void cdrom_silent_read_stats(uint32_t *starts, uint32_t *silent, uint32_t *longest_run) {
+    if (starts) *starts = s_cd_stream_starts;
+    if (silent) *silent = s_cd_silent_reads;
+    if (longest_run) *longest_run = s_cd_silent_run_max;
+}
+
 static void stop_read_stream(void) {
+    cd_stream_account_end();
     reading = 0;
     read_cmd = 0;
     read_delay = 0;
