@@ -177,7 +177,7 @@ bug**, not timing.
     tool LABELS these deltas, it does not silence real ones.
     - **CD controller version (Test `19h`,`20h`)**: we return `94 09 19 C0` (real
       SCPH-1001 sub-CPU, 1994-09-19, per psx-spx "CDROM Test Commands"). Beetle
-      hardcodes `97 01 10 C2` (`cdc.cpp:2253`, a later PSone board) regardless of
+      reports `97 01 10 C2` (a later PSone board) regardless of
       BIOS. Version byte `< 95h` keeps shell CD-init flag `[0xA000DFFC]` clear;
       `>= 95h` sets it and forces a spurious boot ReadTOC. So native (94h) issues
       NO ReadTOC where Beetle (97h) does → expect a CDROM event delta at CD-init,
