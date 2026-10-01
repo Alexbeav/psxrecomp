@@ -15,6 +15,9 @@ def main() -> None:
     text = PACKAGER.read_text(encoding="utf-8")
     for suffix in ("*.cue*", "*.iso*", "*.chd*", "*.mcd*", "*.mcr*"):
         assert suffix in text
+    # A player's netplay identity and LAN room file never ship (PS1B-278).
+    for player_state in ("-iname 'netplay_secret*'", "-iname 'netplay_lan_lobby.txt'"):
+        assert player_state in text
     assert "-iname '*.bin*'" in text
     assert "! -iname 'openbios.bin' -delete" in text
     assert "forbidden owned-input or player-state payload" in text
