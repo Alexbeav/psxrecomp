@@ -108,6 +108,23 @@ struct WidescreenAngleSite {
     uint32_t expected = 0; // guarded ADDI/ADDIU with rs == zero
 };
 
+// [[draw_distance.clamp]]: an ordering-table range guard that a trusted mod
+// may turn from "drop the far primitive" into "keep it in the last slot".
+// While the runtime switch is on (psx_mod_set_draw_distance_clamp), `reg` is
+// clamped to `max` (signed) immediately before the instruction at `address`
+// runs. Main EXE only; the complete instruction word is the guard.
+struct DrawDistanceClampSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // the instruction; `reg` must be one of its sources
+    uint32_t reg = 0;      // 1..31
+    int32_t  max = 0;
+};
+
+// True when `instr` is an ALU instruction (I-type or SPECIAL R-type, not a
+// load, store, branch or jump) that reads GPR `reg`. These are the only
+// instructions a draw-distance clamp may precede.
+bool draw_distance_clamp_reads(uint32_t instr, uint32_t reg);
+
 // Aspect-aware horizontal participation cone. The exact compare sites are
 // full-word guarded because overlay variants can reuse a virtual address for
 // unrelated code. Registers are MIPS GPR indices captured at each comparison.
@@ -1217,6 +1234,9 @@ struct GameConfig {
     // [widescreen.cull] clip_edge_width -- the screen width a right-edge clip
     // bound equals. 0 = the first screen_w_imms entry (0x140 by default).
     uint32_t ws_cull_clip_edge_width = 0;
+    // [[draw_distance.clamp]] -- opt-in "keep far geometry" clamps. Empty by
+    // default; inert until a mod switches them on; regen required.
+    std::vector<DrawDistanceClampSite> draw_distance_clamp_sites;
 };
 
 // Effective clip_edge_width: explicit value, else screen_w_imms[0], else 320.

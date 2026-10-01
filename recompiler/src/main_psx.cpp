@@ -242,6 +242,7 @@ static int psxrecomp_game_main(int argc, char** argv) {
     uint32_t              ws_cull_clip_edge_width = 0; // [widescreen.cull] clip_edge_width
     std::vector<PSXRecompV4::WidescreenCullKeepSite> ws_cull_keep;
     std::vector<PSXRecompV4::WidescreenAngleSite> ws_cull_angle;
+    std::vector<PSXRecompV4::DrawDistanceClampSite> draw_distance_clamps; // [[draw_distance.clamp]]
     PSXRecompV4::WidescreenAspectConeConfig ws_aspect_cone;
     int                   ws_cull_activation_guard_pixels = 0;
     std::vector<uint32_t> ws_cull_w_imms = { 0x140, 0x141 }; // [widescreen.cull] screen_w_imms
@@ -316,6 +317,7 @@ static int psxrecomp_game_main(int argc, char** argv) {
             ws_cull_clip_edge_width = PSXRecompV4::ws_cull_clip_edge_width(cfg);
         ws_cull_keep = cfg.ws_cull_keep_sites;
         ws_cull_angle = cfg.ws_cull_angle_sites;
+        draw_distance_clamps = cfg.draw_distance_clamp_sites;
         ws_aspect_cone = cfg.ws_aspect_cone;
         ws_cull_activation_guard_pixels =
             cfg.ws_cull_activation_guard_pixels;
@@ -635,6 +637,8 @@ static int psxrecomp_game_main(int argc, char** argv) {
         check_set("widescreen.backdrop.x_sites", ws_backdrop_x);
         check_set("widescreen.backdrop.unsquash_funcs", ws_backdrop_unsquash);
         check_set("persist_options.init_store_pc", persist_init_sites);
+        for (const auto& site : draw_distance_clamps)
+            check("draw_distance.clamp.address", site.address);
         check("widescreen.bg2d.count_site", ws_bg2d_count_site);
         check("widescreen.bg2d.startcol_site", ws_bg2d_startcol_site);
         check("widescreen.bg2d.startx_site", ws_bg2d_startx_site);
@@ -1486,6 +1490,7 @@ static int psxrecomp_game_main(int argc, char** argv) {
         codegen_config.ws_cull_clip_edge_width = ws_cull_w_imms.front();
     codegen_config.ws_cull_keep_sites = ws_cull_keep;
     codegen_config.ws_cull_angle_sites = ws_cull_angle;
+    codegen_config.draw_distance_clamp_sites = draw_distance_clamps;
     codegen_config.ws_aspect_cone = ws_aspect_cone;
     codegen_config.ws_cull_w_imms      = ws_cull_w_imms;
     codegen_config.ws_cull_h_imms      = ws_cull_h_imms;

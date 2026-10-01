@@ -531,6 +531,34 @@ if(BUILD_TESTING)
     add_test(NAME ws_cull_edge_codegen_test
              COMMAND ws_cull_edge_codegen_test)
 
+    # [[draw_distance.clamp]]: config rules, the emitted main-EXE clamp and
+    # its guards, the shared declaration and the unchanged overlay identity.
+    add_executable(draw_distance_codegen_test
+        tests/draw_distance_codegen_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/control_flow.cpp
+        src/function_analysis.cpp
+        src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
+        src/annotations.cpp
+        src/bios_address_model.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(draw_distance_codegen_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+        lib/ELFIO
+    )
+    target_link_libraries(draw_distance_codegen_test PRIVATE fmt rabbitizer)
+    add_test(NAME draw_distance_codegen_test
+             COMMAND draw_distance_codegen_test)
+
     # The same explicit cull kinds in the dirty-RAM interpreter: gpu.c's
     # sorted, capped site store and real interpreted bgez/bltz/branch-keep/
     # clip-edge instructions at margin 0 and at a forced margin. The test
@@ -558,6 +586,33 @@ if(BUILD_TESTING)
         add_test(NAME ws_cull_edge_interp_test
                  COMMAND ws_cull_edge_interp_test
                          ${CMAKE_CURRENT_BINARY_DIR}/ws_cull_edge_interp_stderr.txt)
+    endif()
+
+    # [[draw_distance.clamp]] in the dirty-RAM interpreter: draw_distance.c's
+    # store and switch and real interpreted guard instructions. The test
+    # #includes draw_distance.c and dirty_ram_interp.c (as above).
+    if(NOT MSVC)
+        add_executable(draw_distance_interp_test
+            ../runtime/tests/test_draw_distance_interp.c
+            ../runtime/src/ws_aspect_cone_math.c)
+        target_include_directories(draw_distance_interp_test PRIVATE
+            ../runtime/include
+            ../runtime/src)
+        target_compile_options(draw_distance_interp_test PRIVATE
+            -O2 -flto -ffunction-sections -fdata-sections)
+        if(APPLE)
+            target_link_options(draw_distance_interp_test PRIVATE
+                -flto -Wl,-dead_strip)
+        else()
+            target_link_options(draw_distance_interp_test PRIVATE
+                -flto -Wl,--gc-sections)
+        endif()
+        if(NOT WIN32)
+            target_link_libraries(draw_distance_interp_test PRIVATE m)
+        endif()
+        add_test(NAME draw_distance_interp_test
+                 COMMAND draw_distance_interp_test
+                         ${CMAKE_CURRENT_BINARY_DIR}/draw_distance_interp_stderr.txt)
     endif()
 
     # Uncached (KSEG1) code charges a fetch before every instruction; cached

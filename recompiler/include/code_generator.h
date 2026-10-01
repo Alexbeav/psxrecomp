@@ -177,6 +177,11 @@ struct CodeGenConfig {
     // scales tan(angle) by the current horizontal reveal factor.
     std::vector<PSXRecompV4::WidescreenAngleSite> ws_cull_angle_sites;
 
+    // [[draw_distance.clamp]]: main-EXE ordering-table range guards. While
+    // g_psx_draw_distance_clamp is set the site's register is clamped to its
+    // max before the instruction runs; overlay code keeps its own code.
+    std::vector<PSXRecompV4::DrawDistanceClampSite> draw_distance_clamp_sites;
+
     // Exact model-participation cosine compares that gain a camera-horizontal
     // aspect envelope while preserving the vanilla vertical cone.
     PSXRecompV4::WidescreenAspectConeConfig ws_aspect_cone;
@@ -481,6 +486,9 @@ private:
 
     // Instruction translation
     std::string translate_instruction(uint32_t addr, uint32_t instr);
+    std::string translate_instruction_core(uint32_t addr, uint32_t instr);
+    // The [[draw_distance.clamp]] statement for (addr, instr), or "".
+    std::string draw_distance_clamp_prefix(uint32_t addr, uint32_t instr) const;
 
     // Register name mapping
     static std::string reg_name(int reg_num);

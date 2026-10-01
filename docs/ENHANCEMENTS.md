@@ -979,3 +979,17 @@ surface, including copies between the buffers and 1000-column copies staged
 in chunks; at 18x both buffers must read back at S with two tiles. In R4 on an M4, the 8K preset reports
 `effective_scale 18, internal_lines 4320, hr_scale 1, hires_fbo 5760x9216`, and
 `screenshot_hires` in a race is 5760×4320 with the rear-view mirror present.
+
+## DD1 — Opt-in draw-distance clamps (2026-10-01)
+
+`[[draw_distance.clamp]]` (docs/config_schema.md) lists a title's
+ordering-table range guards. While a trusted mod has called
+`psx_mod_set_draw_distance_clamp(1)`, the guard's depth index is clamped to
+the last safe slot before the guard runs, so far geometry the game would drop
+stays in the farthest bucket (drawn first, under everything nearer) instead
+of popping in later. Raising the limit instead can push a biased primitive
+past the end of the table. Off by default and at every session start;
+identity when off; main executable only (overlay code keeps its own code);
+native code and the dirty-RAM interpreter agree
+(`draw_distance_codegen_test`, `draw_distance_interp_test`). First user: R4's
+course renderers (RidgeRacerType4Recomp, Max Detail).

@@ -56,6 +56,7 @@ How the two configs relate:
 [prepare_disc]  # optional; data-track digests for prepare/verify
 [netplay]       # optional; TOC / cue policy for online
 [recompiler]
+[draw_distance] # optional; opt-in far-geometry clamps (below)
 [runtime]
 [audit]
 ```
@@ -371,6 +372,53 @@ For strip-based enemy spawning, expand the outer strip edge, initial and
 vertical scan X bounds, and any associated respawn-reset interval together.
 Keep authored placement flags and vertical bounds intact. Empty is inert;
 configured sites require regeneration.
+
+## Draw-distance clamps (`[[draw_distance.clamp]]`)
+
+Many PS1 renderers drop a primitive whose depth index falls past the end of
+their ordering table (`sltiu t, z, N; beqz t, reject`). The limit protects the
+OT, so raising it can write past the table. A title can list such guards and
+let a trusted mod keep the far primitive in the farthest slot instead:
+
+```toml
+[[draw_distance.clamp]]
+address  = "0x80061230"
+expected = "0x2C4A01C0"  # sltiu t2, v0, 0x1C0
+reg      = 2             # v0: the depth index the guard tests
+max      = 0x1BF         # last safe index
+
+[[draw_distance.clamp]]
+address  = "0x80066FF8"
+expected = "0x2441FFFF"  # addiu at, v0, -1 (then sltiu at, at, 0x1BF)
+reg      = 2
+max      = 0x1BF
+```
+
+- While a mod has called `psx_mod_set_draw_distance_clamp(1)`, `reg` is
+  clamped to `max` (signed: `if ((int32_t)reg > max) reg = max`) immediately
+  before the instruction at `address` runs. The original guard then keeps
+  the primitive and the code that follows indexes the table with the clamped
+  value. A negative (wrapped) value is left alone, so a guard that also
+  rejects too-near primitives keeps doing so.
+- Off, the default and the state at every session start, the sites run the
+  original code. Netplay never activates a mod, so it stays vanilla.
+- `expected` is the complete instruction word and must be an ALU
+  instruction (`ADDI`/`ADDIU`/`SLTI`/`SLTIU`/`ANDI`/`ORI`/`XORI`, or a
+  SPECIAL shift/arithmetic/logic/`SLT`/`SLTU`) that reads `reg`. `reg` is
+  1..31; `max` is a signed 32-bit integer. Addresses are unique by physical
+  address.
+- Main executable only. Generation fails when the listed word is not
+  `expected`, or when the previous instruction loads `reg` (its value would
+  still be in the load-delay slot). Captured overlay code at a listed address
+  keeps its own code, so the sites do not enter the overlay-cache identity.
+  The dirty-RAM interpreter applies a clamp where the game's text image holds
+  the listed word.
+- Pick `max` so the clamped index reaches no further than the farthest index
+  the unclamped code can already produce. Choose the register the following
+  code really indexes with: in the `addiu` form above, the guard tests `at`
+  but the slot is computed from `v0`.
+- Regenerate after changing the list. With no sites the generated code is
+  unchanged.
 
 ## Runtime block
 
