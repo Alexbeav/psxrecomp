@@ -66,6 +66,11 @@ for f in "${FILES[@]}"; do [ -f "$f" ] && present+=("$f"); done
 # records with a relative path while runtime.cmake recomputes with an absolute
 # one, and every configure read as STALE with a byte-identical tree. The array
 # order is defined by this script alone, so it is stable across spellings.
+# CR-stripped: Git for Windows checks text files out with CRLF (core.autocrlf
+# defaults to true on the windows-* runners), and the same source hashed
+# differently there than on the developer's LF checkout -- every Windows CI
+# configure read a byte-identical tree as STALE. Stripping CR is a no-op for an
+# LF file, so stamps written before this line stay valid.
 for f in "${present[@]}"; do
-    sha256sum < "$f"
+    tr -d '\r' < "$f" | sha256sum
 done | sha256sum | awk '{print $1}'
