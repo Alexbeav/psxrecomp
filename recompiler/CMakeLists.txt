@@ -1152,6 +1152,7 @@ if(BUILD_TESTING)
                 launcher_pad_mode_wiring
                 negcon_twist_wiring
                 replay_disc_identity_wiring
+                netplay_lan_identity_wiring
                 jalr_link_register_guards
                 launcher_vulkan_option
                 mod_controller_override
