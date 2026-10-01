@@ -317,6 +317,88 @@ class PackagerScriptContract(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
 
 
+class MigrateBundledHelpers(unittest.TestCase):
+    """tools/migrate_bundled_release.py decides from the title's files; pin each decision."""
+
+    def test_disc_resolution_order(self):
+        from project_studio.migrate_bundled import find_disc
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "disc").mkdir()
+            self.assertIsNone(find_disc(root, None), "no disc -> None, never a guess")
+            a = root / "disc" / "A.cue"
+            a.write_text("", encoding="utf-8")
+            self.assertEqual(find_disc(root, None), a)
+            (root / "disc" / "B.cue").write_text("", encoding="utf-8")
+            self.assertIsNone(find_disc(root, None), "two cues is ambiguous")
+            (root / "disc.cfg").write_text("disc/B.cue\n", encoding="utf-8")
+            self.assertEqual(find_disc(root, None), root / "disc" / "B.cue")
+            self.assertEqual(find_disc(root, "disc/A.cue"), a, "--disc wins")
+            self.assertIsNone(find_disc(root, "disc/missing.cue"))
+
+    def test_overlay_cache_key_is_added_once_and_never_flips_false(self):
+        from project_studio.migrate_bundled import ensure_overlay_cache_key
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gt = root / "game.toml"
+            gt.write_text("[game]\nexe = \"X\"\n\n[runtime]\nbios_hle = true\n", encoding="utf-8")
+            changed, _ = ensure_overlay_cache_key(root, dry_run=True)
+            self.assertTrue(changed)
+            self.assertNotIn("overlay_cache", gt.read_text(encoding="utf-8"), "dry-run writes nothing")
+            changed, _ = ensure_overlay_cache_key(root, dry_run=False)
+            self.assertTrue(changed)
+            text = gt.read_text(encoding="utf-8")
+            self.assertRegex(text, r"\[runtime\]\n(#[^\n]*\n)*overlay_cache = true\n")
+            self.assertIn("bios_hle = true", text)
+            changed, _ = ensure_overlay_cache_key(root, dry_run=False)
+            self.assertFalse(changed, "idempotent")
+            gt.write_text("[runtime]\noverlay_cache = false\n", encoding="utf-8")
+            changed, note = ensure_overlay_cache_key(root, dry_run=False)
+            self.assertFalse(changed, "an explicit false is the title's decision")
+            self.assertIn("false", note)
+            gt.write_text("[game]\nexe = \"X\"\n", encoding="utf-8")
+            ensure_overlay_cache_key(root, dry_run=False)
+            self.assertIn("[runtime]\n", gt.read_text(encoding="utf-8"), "section created when absent")
+
+    def test_zip_prefix_is_kept_from_either_wrapper(self):
+        from project_studio.migrate_bundled import zip_prefix_from_wrapper
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "scripts").mkdir()
+            self.assertEqual(zip_prefix_from_wrapper(root), "")
+            (root / "scripts" / "package_setup_release.sh").write_text(
+                "exec bash x.sh \\\n  --zip-prefix bpe \\\n  \"$@\"\n", encoding="utf-8")
+            self.assertEqual(zip_prefix_from_wrapper(root), "bpe")
+            (root / "scripts" / "package_release.sh").write_text(
+                "--zip-prefix newer\n", encoding="utf-8")
+            self.assertEqual(zip_prefix_from_wrapper(root), "newer", "the live wrapper wins")
+
+    def test_refuses_without_preconditions(self):
+        from project_studio.migrate_bundled import BundledMigrateOptions, migrate_to_bundled_release
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            r = migrate_to_bundled_release(root, BundledMigrateOptions(dry_run=True))
+            self.assertFalse(r.ok)
+            self.assertIn("not a git repository", r.message)
+            subprocess.run([GIT, "init", "-q", str(root)], check=True)
+            (root / "CMakeLists.txt").write_text("project(x)\n", encoding="utf-8")
+            r = migrate_to_bundled_release(root, BundledMigrateOptions(dry_run=True))
+            self.assertFalse(r.ok)
+            self.assertIn("psxrecomp_add_game_runtime", r.message)
+
+    def test_wrapper_parses_and_documents_itself(self):
+        p = FW / "tools" / "migrate_bundled_release.py"
+        self.assertTrue(os.access(p, os.X_OK))
+        r = subprocess.run([sys.executable, str(p), "--help"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for flag in ("--psxrecomp-ref", "--skip-generate", "--push", "--dry-run", "--disc"):
+            self.assertIn(flag, r.stdout)
+
+
 if __name__ == "__main__":
     if GIT is None or BASH is None:
         print("git and bash are required", file=sys.stderr)

@@ -92,6 +92,33 @@ link-only rebuild of the tens of MB of generated C.
 | Update | Extract the new zip over the old one (raw zip extract: this is a prebuilt Play binary). Saves and settings live beside the exe and are preserved. |
 | Retail BIOS | The SCPH-1001 backend is compiled in; a player who owns that dump picks it in the launcher and it hot-swaps (the image is validated, never shipped). Another known image is built into a backend on their machine, once (`docs/BIOS_SELECTION.md`). |
 
+## Migrating a title that predates this
+
+A title still on the setup-host shape (a `release.yml` that wipes `generated/`,
+`scripts/package_setup_release.sh`, `generated/` ignored, a psxrecomp pin
+without the BIOS backends) is moved in one pass by
+`tools/migrate_bundled_release.py`, run from the framework checkout the title
+should pin:
+
+```sh
+python3 psxrecomp/tools/migrate_bundled_release.py . --dry-run   # report only
+python3 psxrecomp/tools/migrate_bundled_release.py .             # commit locally
+python3 psxrecomp/tools/migrate_bundled_release.py . --push      # and push
+```
+
+In order: bump `psxrecomp` and `recomp-ui` to `--psxrecomp-ref` /
+`--recomp-ui-ref` (default `origin/master`, refused if that ref lacks the
+template or the committed BIOS backends), un-ignore `generated/`, ensure
+`[runtime] overlay_cache = true`, write `scripts/package_release.sh` (retiring
+the setup-host wrapper) and `release.yml` from the pinned template, rebuild the
+emitters and regenerate the game C from the disc (`--disc`, else `disc.cfg`,
+else the single `disc/*.cue`; `--skip-generate` defers it and the release gate
+refuses until done), refresh `framework_pins.txt`, run `check_boot_exe.sh` and
+`check_generated.sh`, commit. The working tree must be clean and the
+submodules free of local changes. The same operation is Project Studio's
+`git migrate-bundled` / `git bulk-migrate-bundled` and Retro Studio's
+**Bulk Migrate** tab, which runs it on every ticked title.
+
 ## Title checklist (short)
 
 - `generated/` committed and regenerated whenever seeds, `game.toml` codegen

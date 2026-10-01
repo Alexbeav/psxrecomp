@@ -205,6 +205,39 @@ def bulk_status(
     return map_repos(repos, one, jobs=jobs, on_repo=on_repo)
 
 
+def bulk_migrate_bundled(
+    repos: list[tuple[str, Path]],
+    *,
+    psxrecomp_ref: str = "origin/master",
+    recomp_ui_ref: str = "origin/master",
+    regenerate: bool = True,
+    push_remote: bool = False,
+    dry_run: bool = False,
+    jobs: int = 1,
+    on_repo: OnRepoResults | None = None,
+) -> list[CmdResult]:
+    """Move each selected game repo onto bundled releases (committed generated/
+    C, compiled-in BIOS backends, bundled release.yml) -- see migrate_bundled.
+
+    Regeneration builds the emitters per repo, so keep ``jobs`` small."""
+    from .migrate_bundled import BundledMigrateOptions, migrate_to_bundled_release
+
+    def one(label: str, root: Path) -> list[CmdResult]:
+        r = migrate_to_bundled_release(
+            root,
+            BundledMigrateOptions(
+                psxrecomp_ref=psxrecomp_ref,
+                recomp_ui_ref=recomp_ui_ref,
+                regenerate=regenerate,
+                push_remote=push_remote,
+                dry_run=dry_run,
+            ),
+        )
+        return [CmdResult(r.ok, f"{label}: {r.message}", r.detail)]
+
+    return map_repos(repos, one, jobs=jobs, on_repo=on_repo)
+
+
 def bulk_pull(
     repos: list[tuple[str, Path]],
     *,

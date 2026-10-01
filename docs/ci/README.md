@@ -21,6 +21,9 @@ and only logs SHAs with `record_pins.sh` (no `verify_pins` gate).
 workflow; Project Studio (`tools/new_project_layout/migrate_project.py apply` /
 `gui`) emits the same packager wrapper + `release.yml` and un-ignores
 `generated/`.
+A title still on the retired setup-host shape is moved whole by
+`tools/migrate_bundled_release.py` (pins, workflow, packager, regenerate,
+commit) -- see `BUNDLED_RELEASES.md`, "Migrating a title that predates this".
 
 Manual:
 
