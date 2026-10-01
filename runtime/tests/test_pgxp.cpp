@@ -388,6 +388,22 @@ int main(void) {
                                    &x, &y) == 1);
     }
 
+    /* --- probe: the same decision, not counted --- */
+    {
+        produce_at(ADDR_A);
+        PGXPStats a, b;
+        pgxp_get_stats(&a);
+        CHECK(pgxp_probe_precise_vertex(ADDR_A, PACKED, 160, 80) ==
+              PGXP_SRC_DATAFLOW);
+        CHECK(pgxp_probe_precise_vertex(ADDR_A, PACKED, 161, 80) ==
+              PGXP_SRC_NATIVE);
+        pgxp_get_stats(&b);
+        CHECK(std::memcmp(&a, &b, sizeof a) == 0);
+        pgxp_note_rect_bypass();
+        pgxp_get_stats(&b);
+        CHECK(b.rect_bypass == a.rect_bypass + 1);
+    }
+
     /* --- triangle census (G1.1 crack exposure) --- */
     {
         PGXPStats a, b;

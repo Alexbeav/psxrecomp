@@ -175,6 +175,8 @@ extern "C" void pgxp_get_stats(PGXPStats *out) {
     if (out) *out = s_stats;
 }
 
+extern "C" void pgxp_note_rect_bypass(void) { s_stats.rect_bypass++; }
+
 extern "C" void pgxp_note_triangle(int precise) {
     if (precise >= 3)     s_stats.tri_precise++;
     else if (precise > 0) s_stats.tri_mixed++;
@@ -832,6 +834,17 @@ extern "C" int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
     *y16 = py;
     *sz = pz;
     return have;
+}
+
+extern "C" int pgxp_probe_precise_vertex(uint32_t addr, uint32_t packet_word,
+                                         int32_t int_x, int32_t int_y) {
+    const PGXPStats saved = s_stats;
+    int32_t x16, y16;
+    uint16_t sz;
+    const int src = pgxp_get_precise_vertex(addr, packet_word, int_x, int_y,
+                                            &x16, &y16, &sz);
+    s_stats = saved;
+    return src;
 }
 
 /* ------------------------------------------------------------------------- */

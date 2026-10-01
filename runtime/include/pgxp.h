@@ -161,6 +161,11 @@ int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
                             int32_t int_x, int32_t int_y,
                             int32_t *x16, int32_t *y16, uint16_t *sz);
 
+/* Same decision as pgxp_get_precise_vertex, without counting it in the stats
+ * (the caller looks the vertex up again when it draws). */
+int pgxp_probe_precise_vertex(uint32_t addr, uint32_t packet_word,
+                              int32_t int_x, int32_t int_y);
+
 /* --- observability -------------------------------------------------------- */
 
 typedef struct PGXPStats {
@@ -182,12 +187,17 @@ typedef struct PGXPStats {
     uint64_t tri_precise;        /* all three precise                         */
     uint64_t tri_mixed;          /* one or two precise                        */
     uint64_t tri_native;         /* none precise                              */
+    /* Textured quads that are axis-aligned rectangles in integer screen space
+     * (and in UV) but carry a dataflow-precise vertex, so they were drawn as
+     * two precise triangles instead of the native 2D rectangle shortcut. */
+    uint64_t rect_bypass;
 } PGXPStats;
 
 void pgxp_get_stats(PGXPStats *out);
 /* Count one geometry-corrected triangle with `precise` (0..3) precise
  * vertices. */
 void pgxp_note_triangle(int precise);
+void pgxp_note_rect_bypass(void);
 
 /* --- gte.cpp forwarding surface (v14 ABI compat) -------------------------- */
 

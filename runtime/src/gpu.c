@@ -3902,6 +3902,30 @@ static void prepare_precise_triangle(int i0, int i1, int i2,
     gr_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
 }
 
+/* A textured quad whose four packet vertices form an axis-aligned rectangle
+ * (in integer screen space and in UV) is drawn by the 2D rectangle shortcut,
+ * at the native integer position and without perspective. That is right for a
+ * CPU-built sprite, but a GTE-projected world quad can land on such a
+ * rectangle too (a facade seen straight on), and its neighbours are drawn
+ * precise, so the shortcut would open a sub-pixel seam along every shared
+ * edge (docs/ENHANCEMENTS.md G1.11). Returns nonzero when PGXP is correcting
+ * and any vertex carries a dataflow-precise position; the caller then draws
+ * the quad as its two triangles, like any other world quad. */
+static int textured_quad_carries_precision(const int idx[4]) {
+    if (!gte_geometry_correction_enabled() && !s_texture_correction_enabled)
+        return 0;
+    if (gp0_cmd_source_addr == 0xFFFFFFFFu) return 0;
+    for (int i = 0; i < 4; i++) {
+        uint32_t word = gp0_cmd_buf[idx[i]];
+        int32_t raw_x, raw_y;
+        parse_vertex(word, &raw_x, &raw_y);
+        if (pgxp_probe_precise_vertex(gp0_cmd_source_addr + (uint32_t)idx[i] * 4u,
+                                      word, raw_x, raw_y) == PGXP_SRC_DATAFLOW)
+            return 1;
+    }
+    return 0;
+}
+
 /* Arming rate for perspective-correct UVs, per condition.
  *
  * perspective_triangles alone cannot answer "how much texture warp is left",
@@ -4435,10 +4459,16 @@ static void gp0_exec_textured_quad(void) {
 
     setup_textured_draw(color24, semi_trans, raw_texture);
 
-    if (vy[0] == vy[1] && vy[2] == vy[3] &&
-        vx[0] == vx[2] && vx[1] == vx[3] &&
-        u[0] == u[2] && u[1] == u[3] &&
-        v[0] == v[1] && v[2] == v[3]) {
+    int as_rect = vy[0] == vy[1] && vy[2] == vy[3] &&
+                  vx[0] == vx[2] && vx[1] == vx[3] &&
+                  u[0] == u[2] && u[1] == u[3] &&
+                  v[0] == v[1] && v[2] == v[3];
+    static const int k_quad_words[4] = { 1, 3, 5, 7 };
+    if (as_rect && textured_quad_carries_precision(k_quad_words)) {
+        pgxp_note_rect_bypass();
+        as_rect = 0;
+    }
+    if (as_rect) {
         int x = vx[0] < vx[1] ? vx[0] : vx[1];
         int y = vy[0] < vy[2] ? vy[0] : vy[2];
         int w = vx[0] < vx[1] ? vx[1] - vx[0] : vx[0] - vx[1];
