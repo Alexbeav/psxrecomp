@@ -957,10 +957,17 @@ warn_bundled_notices
 
 find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {} +
 
+# zip gets a path relative to the stage, never ${DIST}: the stage is
+# ${DIST}/stage-setup-<artifact>, so ../ is ${DIST}. On Windows the zip on PATH
+# can belong to another shell family than the bash that runs this script (Git
+# Bash with MSYS2's zip). The two map /tmp to different folders, so an absolute
+# path under the user's Temp folder named a place the zip could not create:
+# "zip error: Could not create output file (/tmp/...)". A relative path has no
+# mount in it.
 (
   cd "${STAGE}"
   if command -v zip >/dev/null 2>&1; then
-    zip -r -q "${DIST}/${ZIP_NAME}" .
+    zip -r -q "../${ZIP_NAME}" .
   else
     echo "error: zip not found" >&2
     exit 1

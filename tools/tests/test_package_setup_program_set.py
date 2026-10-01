@@ -87,6 +87,9 @@ def check_text() -> None:
     # Developer-channel mods are pruned in each program's source catalog too.
     assert 'prune_dev_mods "${STAGE}/${_folder}/mods/preloaded/packages"' in text
     assert "Diagnostic mode and the optimised (PGO) rebuild are not available" in text
+    # zip is handed a path relative to the stage, never one that begins at a mount.
+    assert '    zip -r -q "../${ZIP_NAME}" .' in text
+    assert 'zip -r -q "${DIST}' not in text
 
 
 RECIPE = '''[game]
@@ -259,7 +262,69 @@ def whole_packager(bash, tmp: Path) -> str:
     recipe.write_bytes(recipe.read_bytes().replace(b"SCPH1001.toml", b"SCPH5552.toml"))
     code, out = package(bash, profile, emitters)
     assert code == 1 and "missing staged BIOS asset" in out and "SCPH5552.toml" in out, (code, out[-2000:])
+    zip_gets_a_relative_path(bash, tmp)
     return "to the zip" if zipped else "to the zip step (no zip tool on this machine)"
+
+
+def zip_gets_a_relative_path(bash, tmp: Path) -> None:
+    """The packager must hand zip a path relative to the stage. On Windows the
+    zip on PATH can come from another shell family than the bash that runs the
+    packager (Git Bash with MSYS2's zip); the two map /tmp to different
+    folders, so an absolute path under the user's Temp folder failed with
+    "zip error: Could not create output file (/tmp/...)" (PS1B-333). A stand-in
+    zip, first on PATH, records what it is given."""
+    root = tmp / "zip-arg"
+    emitters = make_package_source(root)
+    tools = tmp / "zip-arg-tools"
+    seen = tmp / "zip-arg-seen.txt"
+    put(tools / "zip", '#!/bin/sh\nprintf \'%s\\n\' "$PWD" "$@" > "$ZIP_ARGS_FILE"\nprintf zip > "$3"\n')
+    os.chmod(str(tools / "zip"), 0o755)
+    shell = shell_env(bash)
+    code, out = package(bash, root, emitters, env={
+        "PATH": to_shell_path(tools, bash) + ":" + subprocess.run(
+            [bash, "-c", 'printf %s "$PATH"'], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env=shell).stdout,
+        "ZIP_ARGS_FILE": to_shell_path(seen, bash)})
+    assert code == 0 and "Wrote " in out, (code, out[-2000:])
+    cwd, flags, quiet, target, what = seen.read_text(encoding="utf-8").split("\n")[:5]
+    assert (flags, quiet, what) == ("-r", "-q", "."), (flags, quiet, what)
+    assert target == "../workbench-0.4.0-linux-x64.zip", target             # no folder of any mount in it
+    assert cwd.replace("\\", "/").endswith("/dist/stage-setup-linux-x64"), cwd
+    assert (root / "dist" / "workbench-0.4.0-linux-x64.zip").read_bytes() == b"zip"
+
+
+def working_folder(bash):
+    """Where the stand-in trees go: None for the default temporary folder.
+
+    On Windows the default is under the user's Temp folder, which Git Bash
+    mounts as /tmp and MSYS2 does not. A tool from the other family, called by
+    the packager with such a path, looks in another folder. So the trees go to
+    a folder whose path under this bash starts with a drive (/c/...): every
+    shell family resolves that the same way.
+    """
+    if os.name != "nt":
+        return None
+    default = Path(tempfile.gettempdir())
+    for base in (default, Path.home(), default.parent):
+        shell_path = to_shell_path(base, bash)
+        if not (len(shell_path) > 3 and shell_path[0] == "/" and shell_path[1].isalpha() and shell_path[2] == "/"
+                and os.access(str(base), os.W_OK)):
+            continue
+        # The Python the packager finds must see the folder too. A Python
+        # installed as a Windows app reads its own private copy of
+        # AppData\Local, where a file this test wrote does not exist.
+        with tempfile.TemporaryDirectory(prefix="psxrecomp-set-packager-probe-", dir=str(base)) as probe:
+            put(Path(probe) / "probe.txt")
+            seen = subprocess.run(
+                [bash, "-c", 'for c in python3 python; do command -v "$c" >/dev/null 2>&1 && exec "$c" -c '
+                             '"import sys; open(sys.argv[1]).read()" "$1"; done; exit 1',
+                 "_", to_shell_path(Path(probe) / "probe.txt", bash)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", env=shell_env(bash))
+        if seen.returncode == 0:
+            return str(base)
+    raise SystemExit("package setup program set test: cannot run. No writable folder was found that this bash ("
+                     + bash + ") names by a drive path and that its python can read. The Temp folder is a mount "
+                     "there (/tmp), which a zip or rsync from another shell family resolves elsewhere.")
 
 
 def main() -> int:
@@ -271,7 +336,7 @@ def main() -> int:
     syntax = subprocess.run([bash, "-n", to_shell_path(PACKAGER, bash)], capture_output=True, text=True,
                             env=shell_env(bash))
     assert syntax.returncode == 0, syntax.stderr
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(prefix="psxrecomp-set-packager-test-", dir=working_folder(bash)) as tmp:
         root = Path(tmp) / "source"
         make_set(root)
         (root / "build-setup").mkdir()
