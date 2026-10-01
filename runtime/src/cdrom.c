@@ -1854,6 +1854,16 @@ static void start_read_stream(uint8_t cmd) {
     s_source_seek_paused = 0;
     stat_reg &= (uint8_t)~(CDSTAT_SEEK | CDSTAT_READ | CDSTAT_PLAY);
     stat_reg |= seek_cycles ? CDSTAT_SEEK : CDSTAT_READ;
+    /* Spec 6.11: a read start spins the motor up (PSX-SPX: Read starts the
+     * motor by itself). The seek above was charged with the motor state the
+     * command found, so the first read after a Stop pays the spin-up once.
+     * A Pause leaves the motor on, so a read re-issued before the first
+     * sector does not pay it again. Without this a game library that
+     * restarts a read after 60 silent vblanks (one second) never gets a
+     * sector after a Stop: every attempt is charged a new full second
+     * (PS1B-317, Time Crisis). Default path only; a source profile keeps
+     * its own status. */
+    if (!s_source_clock) stat_reg |= CDSTAT_MOTOR;
     /* ENQUEUE: sector-read stream scheduled (due in read_delay cycles). A
      * content load that happens in OFF but not ON shows up as a missing
      * SRC_CD_READ enqueue here. */
