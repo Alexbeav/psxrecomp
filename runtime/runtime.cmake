@@ -20,6 +20,7 @@ include("${PSXRECOMP_ROOT}/cmake/psx_runtime_ipo.cmake")
 include("${PSXRECOMP_ROOT}/cmake/psx_dependency_archive.cmake")
 include("${PSXRECOMP_ROOT}/runtime/chd_dependency.cmake")
 include("${PSXRECOMP_ROOT}/runtime/netplay_dependency.cmake")
+include("${PSXRECOMP_ROOT}/runtime/framework_identity.cmake")
 
 # Default to an optimized build. The recompiled game is a huge (~270 MB) block of
 # generated C; with no CMAKE_BUILD_TYPE the compiler emits it at -O0 and the game
@@ -1755,20 +1756,16 @@ function(psxrecomp_add_runtime_target target)
 
     # Build identity: stamp the psxrecomp commit into the binary so a crash report
     # can be correlated to an exact build (issue #1 user reports had no version).
-    # Computed at configure time from the psxrecomp repo (this file's dir); empty
-    # on failure (no git / not a repo) -> crash_trace.c falls back to "unknown".
-    execute_process(
-        COMMAND git -C "${CMAKE_CURRENT_FUNCTION_LIST_DIR}" describe --always --dirty --tags
-        OUTPUT_VARIABLE PSX_GIT_REV OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if(NOT PSX_GIT_REV)
-        set(PSX_GIT_REV "unknown")
-    endif()
-    # Route identity pin (input_route_session.c): the full psxrecomp commit.
-    # Empty when not a git checkout; recording then refuses and an identity
-    # route refuses to replay.
-    execute_process(
-        COMMAND git -C "${CMAKE_CURRENT_FUNCTION_LIST_DIR}" rev-parse HEAD
-        OUTPUT_VARIABLE PSX_FRAMEWORK_PIN OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    # PSX_GIT_REV is the short id crash_trace.c prints ("unknown" when nothing
+    # names a commit). PSX_FRAMEWORK_PIN is the full commit, the route and
+    # replay identity (input_route_session.c): when it is empty, recording
+    # refuses and an identity route refuses to replay.
+    # Resolved at configure time: a caller's -D value, then the commit a
+    # `git archive` snapshot carries, then git (framework_identity.cmake).
+    psxrecomp_framework_identity("${PSXRECOMP_ROOT}"
+        PSX_FRAMEWORK_PIN PSX_GIT_REV _psxrt_pin_source)
+    message(STATUS "psxrecomp ${target}: framework pin "
+        "${PSX_FRAMEWORK_PIN} (${_psxrt_pin_source}), build rev ${PSX_GIT_REV}")
 
     # Release pin for lobby matching (create/join/list). Override via
     # GAME_VERSION arg or -DPSX_GAME_VERSION=...; default "dev".
@@ -1779,6 +1776,11 @@ function(psxrecomp_add_runtime_target target)
             set(PSXRT_GAME_VERSION "dev")
         endif()
     endif()
+    # The lobby matches on the version plus the framework commit, so only
+    # builds of the same emulation code share a room (PS1B-295).
+    psxrecomp_lobby_version("${PSXRT_GAME_VERSION}" "${PSX_FRAMEWORK_PIN}"
+        PSXRT_LOBBY_VERSION)
+    message(STATUS "psxrecomp ${target}: lobby version ${PSXRT_LOBBY_VERSION}")
 
     # Compiled controller capacity includes both physical console ports.
     # A one-player game can route its controller to port 2 at runtime.
@@ -1823,7 +1825,7 @@ function(psxrecomp_add_runtime_target target)
     # target-wide compile line so Ninja does not rebuild every runtime + shard TU.
     set_source_files_properties(
         "${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c"
-        PROPERTIES COMPILE_DEFINITIONS "PSX_GAME_VERSION=\"${PSXRT_GAME_VERSION}\""
+        PROPERTIES COMPILE_DEFINITIONS "PSX_GAME_VERSION=\"${PSXRT_LOBBY_VERSION}\""
     )
     set_source_files_properties(
         "${PSXRECOMP_ROOT}/runtime/src/crash_trace.c"

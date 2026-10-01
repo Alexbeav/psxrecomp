@@ -95,6 +95,17 @@ rm -rf \
   "${DEST}/tools/audio_capture_ab.py" \
   "${DEST}/tools/launch_tomba2_interp_perf.ps1"
 
+# A checkout's runtime/FRAMEWORK_PIN holds a placeholder that only `git archive`
+# fills in. The staged tree has no .git, so write the commit here: a build of
+# this tree on the player's machine then carries the same framework pin, and
+# the same netplay lobby version, as ours.
+pin_file="${DEST}/runtime/FRAMEWORK_PIN"
+if [[ -f "${pin_file}" ]] && ! grep -Eqx '[0-9a-f]{40}' "${pin_file}"; then
+  if pin="$(git -C "${SRC}" rev-parse HEAD 2>/dev/null)" && [[ "${pin}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "${pin}" > "${pin_file}"
+  fi
+fi
+
 # The emitters are built from this copy, so a header the build includes must
 # not depend on the filter list being right. Check the vendored generated
 # headers directly: they are the ones an unanchored exclude eats, and their

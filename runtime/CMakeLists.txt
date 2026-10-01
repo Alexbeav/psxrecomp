@@ -68,6 +68,12 @@ if(BUILD_TESTING)
     endforeach()
     set_tests_properties(netplay_libjuice_offline_other PROPERTIES
         PASS_REGULAR_EXPRESSION "recomp-net pins libjuice SHA256")
+    # PS1B-287 / PS1B-295: a snapshot with no .git still knows its framework
+    # commit, and the lobby version carries it.
+    add_test(NAME framework_identity_test
+        COMMAND ${CMAKE_COMMAND}
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/framework_identity_test"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/framework_identity/check.cmake")
     if(NOT MSVC)
         add_executable(ws_world_scene_test tests/test_ws_world_scene.c)
         target_include_directories(ws_world_scene_test PRIVATE include src)

@@ -260,8 +260,20 @@ Generate & rebuild / prepare flows should point at the **`.cue`**, not a lone
 - **Lobby UI** (recomp-ui): host/join, room settings, rollback toggles, FORCE
   TURN, player names — only when `PSX_NETPLAY` is on and the title advertises
   netplay.
-- **VERSION / lobby match pin:** peers should run the same release pin so
-  generated code and protocol stay compatible.
+- **VERSION / lobby match pin:** peers must run the same emulation code. The
+  online lobby matches rooms on `game_version`, and a join with another value
+  is refused (`version_mismatch`). A Release build sends
+  `<VERSION>-<first 8 hex of the psxrecomp commit>`, for example
+  `0.1.2-6ef86cae`, so two builds of one kit on different framework commits do
+  not share a room. A non-release build sends `dev` and lists every room of
+  its title. `-DPSX_NET_BUILD_KEY=<text>` replaces the commit part and `=off`
+  drops it. `VERSION` and `psx_game_version.txt` do not change.
+  The commit comes from, in order: `-DPSX_FRAMEWORK_PIN=<commit>`,
+  `runtime/FRAMEWORK_PIN` (written by `git archive` and by
+  `tools/stage_framework_tree.sh`, so a source package built on the player's
+  machine keeps it), then `git rev-parse HEAD`
+  (`runtime/framework_identity.cmake`). The same value is the replay and route
+  build identity. LAN / Direct IP rooms do not check it yet.
 - **Mods:** disabled for all netplay sessions (lobby / LAN / direct / rematch).
   Launcher `commit_netplay` and the runtime clear the in-session plan without
   touching the user's offline mod selection. Synced mod plans are deferred.
