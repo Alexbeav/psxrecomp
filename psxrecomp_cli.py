@@ -133,6 +133,12 @@ def ensure_toolchain_for_rebuild(
     return True
 
 
+# Folders of a build directory that are the product, not the build: what the
+# build and the overlay-toolchain staging put beside the binary for the player.
+# Pruning build intermediates leaves them whole.
+PRUNE_KEEPS = ("overlay_toolchain", "assets", "mods", "licenses", "cache", "inputs", "saves")
+
+
 def prune_after_rebuild(
     project_root: Path,
     build_dir: Path,
@@ -160,8 +166,14 @@ def prune_after_rebuild(
                     except OSError:
                         pass
             # Drop object/lib digests but keep the launch binary + assets/.
+            # Never inside what was staged beside the binary for the player:
+            # the overlay toolchain's tcc needs its own tcc/lib/libtcc1-*.a to
+            # link an overlay, and this sweep used to delete them, so the tcc
+            # tier of every set-up install could not link (PS1B-333).
             for p in build_dir.rglob("*"):
                 if not p.is_file():
+                    continue
+                if p.relative_to(build_dir).parts[0] in PRUNE_KEEPS:
                     continue
                 if p.suffix in {".o", ".obj", ".a", ".lib", ".pdb", ".ilk", ".exp"}:
                     try:
