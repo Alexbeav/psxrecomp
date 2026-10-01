@@ -1435,6 +1435,9 @@ static int g_netplay_local_viewport = 0; /* 0 off, 1 vertical split */
 /* Optional aspect for netplay local-view extraction. Mirrors trusted mod aspect
  * activation, but remains game.toml opt-in so normal netplay stays vanilla. */
 static int g_netplay_local_viewport_aspect = 0; /* 0 off, 1 16:9, 2 21:9, 3 adaptive */
+/* [netplay] local_viewport_renderer = "projection": widen the projection into
+ * the local half instead of rendering native-wide columns beside it. */
+static int g_netplay_local_viewport_projection = 0;
 
 extern "C" int psx_mod_set_fixed_display_aspect(
     uint32_t numerator, uint32_t denominator) {
@@ -1847,14 +1850,16 @@ static void netplay_local_viewport_projection_aspect(
         return;
 
     /* The normal widescreen squash assumes a 4:3 source. A split-screen peer
-     * source is only half the display width, so derive the equivalent aspect
-     * that produces source_aspect / target_aspect as the X squash factor:
+     * source is half the display, which spans 4:3 at whatever pixel aspect
+     * its mode has, so the half is a 2:3 view and the equivalent aspect that
+     * produces source_aspect / target_aspect as the X squash factor is
      *
-     *   source = (display_w / 2) / display_h
-     *   effective = (4:3) * target / source
-     */
-    int64_t n = (int64_t)present_num * 8 * (int64_t)di.height;
-    int64_t d = (int64_t)present_den * 3 * (int64_t)di.width;
+     *   effective = (4:3) * target / (2:3) = 2 * target
+     *
+     * (The earlier (display_w/2)/display_h source assumed square pixels and
+     * under-widened 512-wide splits.) */
+    int64_t n = (int64_t)present_num * 2;
+    int64_t d = (int64_t)present_den;
     if (n <= 0 || d <= 0) return;
     int64_t gcd = aspect_gcd64(n, d);
     n /= gcd;
@@ -1874,8 +1879,8 @@ static void refresh_widescreen_projection() {
 
     const bool wide = g_video_aspect_num * 3 != g_video_aspect_den * 4;
     const bool local_native_wide =
-        g_netplay_local_viewport == 1 && psx_netplay_active() &&
-        gpu_last_frame_vertical_split_screen();
+        g_netplay_local_viewport == 1 && !g_netplay_local_viewport_projection &&
+        psx_netplay_active() && gpu_last_frame_vertical_split_screen();
     const bool native_wide = (g_netplay_local_viewport == 1)
         ? local_native_wide
         : (g_ws_native_wide != 0);
@@ -7674,6 +7679,20 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * do NOT flush_cpu_uploads (MDEC already wrote the CPU mirror; forcing
          * FBO uploads every frame cut MotK intro from ~50 to ~30 FPS). */
 #ifndef PSX_SDL_NO_RENDER
+        /* Netplay local viewport without native-wide columns (squash or 4:3):
+         * present this peer's half straight from the high-resolution FBO.
+         * The CPU crop below reads the 1x canonical frame, which throws away
+         * internal resolution and smears the proportion-corrected HUD. */
+        if (g_gl_active && g_gl_fbo_present && !di.depth24 &&
+            local_viewport_crop && !local_viewport_wide) {
+            const int half = (int)w / 2;
+            const int half_x = (int)di.display_x +
+                (local_viewport_slot == 1 ? (int)w - half : 0);
+            gl_renderer_present_vram(half_x, (int)di.display_y, half, (int)h,
+                                     g_video_aa ? 1 : 0, 0);
+            netplay_note_present();
+            return ep;
+        }
         if (g_gl_active && g_gl_fbo_present && !di.depth24 &&
             !local_viewport_crop) {
             if (wide_present) {
@@ -13309,6 +13328,12 @@ int main(int argc, char** argv) {
                 (gc.netplay_local_viewport_aspect == "16:9") ? 1 :
                 (gc.netplay_local_viewport_aspect == "21:9") ? 2 :
                 (gc.netplay_local_viewport_aspect == "adaptive") ? 3 : 0;
+            g_netplay_local_viewport_projection =
+                (gc.netplay_local_viewport_renderer == "projection") ? 1 : 0;
+            gpu_ws_set_local_viewport_state_gate(
+                gc.netplay_local_viewport_state_addr,
+                gc.netplay_local_viewport_state_values.data(),
+                (int)gc.netplay_local_viewport_state_values.size());
             game_discs = gc.discs;
             /* Per-disc serial gate, shared by the launch-time disc check and
              * the launcher's disc verdict. Keyed by the image's uppercased

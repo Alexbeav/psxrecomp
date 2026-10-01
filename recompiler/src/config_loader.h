@@ -824,6 +824,20 @@ struct GameConfig {
     // "16:9", "21:9", or "adaptive" (initial 16:9, live-window capped 21:9).
     // Unset keeps netplay at the title's normal mod-cleared aspect.
     std::string           netplay_local_viewport_aspect;
+    // local_viewport_renderer = "native_wide" (default) | "projection".
+    // native_wide renders extra columns beside the local half; it needs the
+    // game to submit geometry outside its own split viewport. "projection"
+    // instead widens the GTE projection into the half (squash around OFX) and
+    // stretches the half on present -- for titles whose per-viewport culling
+    // rejects everything outside the half (THPS2), as their single-player
+    // [widescreen] native_wide = false path does.
+    std::string           netplay_local_viewport_renderer;
+    // local_viewport_state_addr / _values: optional guest word gating the
+    // local viewport. Split frames crop to this peer's half only while the
+    // word holds one of the values (e.g. a level running); otherwise, as on a
+    // pause menu drawn across both halves, every peer sees the whole frame.
+    uint32_t              netplay_local_viewport_state_addr = 0;
+    std::vector<uint32_t> netplay_local_viewport_state_values;
 
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)

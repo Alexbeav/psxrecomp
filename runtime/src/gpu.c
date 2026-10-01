@@ -505,8 +505,15 @@ static int ws_local_viewport_layout(int *base_x, int *source_w,
     if ((di.width & 1u) != 0)
         return 0;
 
+    /* The full display spans 4:3 at whatever pixel aspect its mode has, so
+     * the target keeps that pixel aspect: a 512-wide split (THPS2 2P) has
+     * pixels 0.625 wide and needs 683 columns for 16:9, not the 427 a
+     * square-pixel height*aspect gives (which stretched each half 1.6x).
+     * For 4:3 modes (320x240, 640x480) both forms are identical. */
     int src_w = (int)di.width / 2;
-    int target_w = ((int)di.height * ws_cfg_num + ws_cfg_den / 2) / ws_cfg_den;
+    int64_t tw_num = (int64_t)di.width * 3 * ws_cfg_num;
+    int64_t tw_den = (int64_t)4 * ws_cfg_den;
+    int target_w = (int)((tw_num + tw_den / 2) / tw_den);
     if (target_w < src_w)
         target_w = src_w;
     int off = (target_w - src_w) / 2;
@@ -760,8 +767,16 @@ int psx_ws_is_cull_plane_nx_site(uint32_t pc) {
  * at 4:3 (margin 0). */
 int32_t psx_ws_plane_nx(int32_t nx) {
     if (psx_ws_x_margin() <= 0) return nx;
+    /* Scale by source/final width. A full 4:3 view widens by 4:3 -> target;
+     * a split-screen local viewport widens its own half (2:3 of the display)
+     * to the target, so the frustum must open by final_w / src_w. */
     int64_t numerator = (int64_t)nx * 4 * ws_cfg_den;
     int64_t denominator = 3 * ws_cfg_num;
+    int local_src = 0, local_final = 0;
+    if (ws_local_viewport_layout(NULL, &local_src, &local_final, NULL)) {
+        numerator = (int64_t)nx * local_src;
+        denominator = local_final;
+    }
     if (denominator <= 0) return nx;
     int64_t result = numerator >= 0
         ? (numerator + denominator / 2) / denominator
@@ -3002,8 +3017,33 @@ static void split_trace_note_draw_area(void) {
     }
 }
 
+#define WS_LOCAL_VIEWPORT_STATE_VALUES_MAX 16
+static uint32_t ws_local_viewport_state_addr = 0;
+static uint32_t ws_local_viewport_state_values[WS_LOCAL_VIEWPORT_STATE_VALUES_MAX];
+static int ws_local_viewport_state_value_count = 0;
+void gpu_ws_set_local_viewport_state_gate(uint32_t addr,
+                                          const uint32_t *values, int nvalues) {
+    if (nvalues < 0) nvalues = 0;
+    if (nvalues > WS_LOCAL_VIEWPORT_STATE_VALUES_MAX)
+        nvalues = WS_LOCAL_VIEWPORT_STATE_VALUES_MAX;
+    ws_local_viewport_state_addr = values && nvalues ? addr : 0;
+    ws_local_viewport_state_value_count = values ? nvalues : 0;
+    for (int i = 0; i < ws_local_viewport_state_value_count; i++)
+        ws_local_viewport_state_values[i] = values[i];
+}
+
+static int ws_local_viewport_state_ok(void) {
+    if (!ws_local_viewport_state_addr || ws_local_viewport_state_value_count == 0)
+        return 1;
+    const uint32_t state = psx_read_word(ws_local_viewport_state_addr);
+    for (int i = 0; i < ws_local_viewport_state_value_count; i++)
+        if (state == ws_local_viewport_state_values[i]) return 1;
+    return 0;
+}
+
 static int ws_vertical_split_active(void) {
-    return split_recent_left_age <= 8 && split_recent_right_age <= 8;
+    return split_recent_left_age <= 8 && split_recent_right_age <= 8 &&
+           ws_local_viewport_state_ok();
 }
 
 int gpu_last_frame_vertical_split_screen(void) {
