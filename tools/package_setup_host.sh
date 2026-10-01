@@ -775,6 +775,26 @@ if [[ "${EXE_BASENAME}" == *.exe ]]; then
   fi
 fi
 
+# A stage that carries a bundled program (tcc, a Python interpreter) must carry
+# its licence file. A setup package normally carries neither: the player's
+# machine stages them during setup, and release_stage.py writes the licence
+# files there. This runs the same check on this stage, so a package that does
+# embed a toolchain is told when a file is missing. A warning, not a stop
+# (PS1B-345); a release step that wants to enforce it adds --strict.
+warn_bundled_notices() {
+  local python=""
+  for candidate in python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then python="${candidate}"; break; fi
+  done
+  if [[ -z "${python}" ]]; then
+    echo "warning: no python3 on PATH; the bundled-program licence check was skipped" >&2
+    return 0
+  fi
+  "${python}" "${SCRIPT_DIR}/release_stage.py" check-bundled-notices --stage "${STAGE}" >&2 \
+    || echo "warning: the bundled-program licence check could not run" >&2
+}
+warn_bundled_notices
+
 find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {} +
 
 (

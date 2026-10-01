@@ -1432,6 +1432,13 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME release_stage_cache_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_stage_cache.py)
+        # The same staging step unpacks whole programs beside the game (TinyCC,
+        # LGPL-2.1, and a Python interpreter). It must write tcc's licence text
+        # and notice, leave tcc's example sources out, and warn -- never fail --
+        # when a bundled program has no licence file. Hermetic. PS1B-345.
+        add_test(NAME release_stage_notices_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_stage_notices.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
