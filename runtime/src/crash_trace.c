@@ -83,6 +83,7 @@ extern void     overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidat
                                             uint32_t *last_write_addr,
                                             uint32_t *last_write_size,
                                             int *regions, uint32_t *revalidations);
+extern void     overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp);
 extern int      psx_netplay_is_resimulating(void);
 
 /* Frame counter from debug_server.c (non-static). */
@@ -613,6 +614,10 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         overlay_loader_get_counters(&loads, &invalidations, NULL,
                                     &disp_native, &disp_interp, &stale_blocked,
                                     NULL, NULL, NULL, NULL, &revalidations);
+        /* PS1B-323: the totals above include kernel-window dispatches. A
+         * check on game overlay code reads the *_overlay pair. */
+        uint64_t kernel_native = 0, kernel_interp = 0;
+        overlay_loader_get_kernel_window_dispatch(&kernel_native, &kernel_interp);
         int frozen = overlay_loader_load_frozen();
         int resim = psx_netplay_is_resimulating();
         /* Stale-cache record (overlay_loader.h): shards refused for their ABI
@@ -650,7 +655,11 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             "    \"revalidations\": %u,\n"
             "    \"stale_blocked\": %llu,\n"
             "    \"disp_native\": %llu,\n"
-            "    \"disp_interp\": %llu\n"
+            "    \"disp_interp\": %llu,\n"
+            "    \"disp_native_kernel\": %llu,\n"
+            "    \"disp_interp_kernel\": %llu,\n"
+            "    \"disp_native_overlay\": %llu,\n"
+            "    \"disp_interp_overlay\": %llu\n"
             "  },\n",
             overlay_loader_get_inprogress(),
             frozen, resim,
@@ -660,7 +669,11 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             loads, invalidations, revalidations,
             (unsigned long long)stale_blocked,
             (unsigned long long)disp_native,
-            (unsigned long long)disp_interp);
+            (unsigned long long)disp_interp,
+            (unsigned long long)kernel_native,
+            (unsigned long long)kernel_interp,
+            (unsigned long long)(disp_native - kernel_native),
+            (unsigned long long)(disp_interp - kernel_interp));
     }
 
     /* Recursion fingerprint (build-independent GUEST addresses): the func entered
