@@ -149,13 +149,14 @@ static uint32_t ws_ui_prepass_node_count;
  * from a capture instead of it being guessed at. Diagnostic only; nothing in
  * the transform path reads them. */
 static struct {
-    uint32_t opcode;      /* not in the textured quad / rect families      */
-    uint32_t not_axis;    /* textured quad, but not axis-aligned           */
+    uint32_t opcode;      /* not a 4-vertex polygon or rectangle           */
+    uint32_t not_axis;    /* quad, but not axis-aligned                    */
     uint32_t degenerate;  /* zero or negative extent                       */
     uint32_t too_big;     /* full-screen or large-primitive reject         */
     uint32_t cap;         /* WS_UI_PREPASS_MAX reached                     */
     uint32_t rank;        /* admitted, then dropped by the max_rank filter */
     uint32_t stale;       /* live packet no longer matches cached bytes    */
+    uint32_t backing;     /* NOT a reject: lower-rank backing panels kept  */
 } ws_ui_reject;
 
 /* Geometry of the primitives the max_rank filter discarded. A count alone
@@ -1976,13 +1977,13 @@ int psx_ws_ui_groups_json(char *buf, int cap) {
         "\"disp_x\":%d,\"disp_w\":%d,\"join_gap\":%d,"
         "\"rejected\":{\"opcode\":%u,\"not_axis\":%u,\"degenerate\":%u,"
         "\"too_big\":%u,\"cap\":%u,\"rank\":%u,\"stale\":%u},"
-        "\"n\":%u,",
+        "\"backing_panels\":%u,\"n\":%u,",
         ws_active(), ws_auto_ui_squash, ws_auto_ui_dense,
         ws_ui_prepass_rank != 0xFFFFu ? (int)ws_ui_prepass_rank : -1,
         ws_disp_x(), ws_disp_w(), WS_UI_GROUP_JOIN_GAP,
         ws_ui_reject.opcode, ws_ui_reject.not_axis, ws_ui_reject.degenerate,
         ws_ui_reject.too_big, ws_ui_reject.cap, ws_ui_reject.rank,
-        ws_ui_reject.stale,
+        ws_ui_reject.stale, ws_ui_reject.backing,
         ws_ui_prepass_count);
     off += snprintf(buf + off, (size_t)(cap - off), "\"rank_dropped\":[");
     for (uint32_t i = 0; i < ws_ui_rankdrop_count && off < cap - 120; i++) {
@@ -5364,6 +5365,19 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,
     item->packet_guard = ws_prepass_packet_guard(words, word_count);
 }
 
+static int ws_ui_untextured_op(uint8_t op) {
+    return (op >= 0x28u && op <= 0x2Bu) || (op >= 0x38u && op <= 0x3Bu) ||
+           (op >= 0x60u && op <= 0x63u);
+}
+
+static int ws_ui_encloses(const WsUiPrepassItem *panel,
+                          const WsUiPrepassItem *ui) {
+    return panel->group.x <= ui->group.x &&
+           ui->group.x + ui->group.width <=
+               panel->group.x + panel->group.width &&
+           panel->y <= ui->y && ui->y + ui->h <= panel->y + panel->h;
+}
+
 void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_ui_prepass_count = 0;
     ws_ui_prepass_node_count = 0;
@@ -5371,7 +5385,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_auto_ui_dense = 0;
     ws_ui_reject.opcode = ws_ui_reject.not_axis = ws_ui_reject.degenerate =
         ws_ui_reject.too_big = ws_ui_reject.cap = ws_ui_reject.rank =
-        ws_ui_reject.stale = 0;
+        ws_ui_reject.stale = ws_ui_reject.backing = 0;
     ws_ui_rankdrop_count = 0;
     if (!ws_auto_ui_squash || !ws_active()) return;
 
@@ -5456,9 +5470,39 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     }
     ws_ui_prepass_rank = max_rank;
 
+    /* Backing panels. A HUD often draws a flat box one ordering-table rank
+     * behind the glyphs it frames (Spider-Man's "FOLLOW THE SPIDEY COMPASS"
+     * banner: a 0x28 quad at rank 365 under rank-366 text). Left out, the box
+     * stretches while its text squashes. That rank also carries world
+     * geometry, so admitting it wholesale is unsafe; admit only untextured,
+     * axis-aligned primitives from the next populated rank that fully enclose
+     * at least one front-rank UI primitive. They then join that run. */
+    uint16_t backing_rank = 0xFFFFu;
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
+        uint16_t r = ws_ui_prepass[i].ot_rank;
+        if (r < max_rank && (backing_rank == 0xFFFFu || r > backing_rank))
+            backing_rank = r;
+    }
+    static uint8_t keep[WS_UI_PREPASS_MAX];
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
+        const WsUiPrepassItem *it = &ws_ui_prepass[i];
+        keep[i] = it->ot_rank == max_rank;
+        if (keep[i] || it->ot_rank != backing_rank ||
+            !ws_ui_untextured_op(it->op))
+            continue;
+        for (uint32_t j = 0; j < ws_ui_prepass_count; j++) {
+            if (ws_ui_prepass[j].ot_rank == max_rank &&
+                ws_ui_encloses(it, &ws_ui_prepass[j])) {
+                keep[i] = 1;
+                ws_ui_reject.backing++;
+                break;
+            }
+        }
+    }
+
     uint32_t out = 0;
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
-        if (ws_ui_prepass[i].ot_rank == max_rank) {
+        if (keep[i]) {
             ws_ui_prepass[out++] = ws_ui_prepass[i];
         } else if (ws_ui_rankdrop_count < WS_UI_RANKDROP_MAX) {
             const WsUiPrepassItem *it = &ws_ui_prepass[i];

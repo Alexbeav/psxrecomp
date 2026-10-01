@@ -25,6 +25,8 @@
 #define NODE_RING 0x00010100u
 #define NODE_FILL 0x00010200u
 #define NODE_FLAT 0x00010300u
+#define NODE_PANEL 0x00010400u
+#define NODE_GAP   0x00010500u
 
 static uint32_t pack_vertex(int16_t x, int16_t y) {
     return (uint16_t)x | ((uint32_t)(uint16_t)y << 16);
@@ -60,6 +62,18 @@ static void build_hud(int16_t x0, int16_t x1, int16_t fx0, int16_t fx1) {
     put_node(NODE_RING, NODE_FILL, frame, 9);
     put_node(NODE_FILL, NODE_FLAT, gouraud, 8);
     put_node(NODE_FLAT, 0xFFFFFFu, flat, 5);
+}
+
+/* A flat backing panel one OT rank behind the HUD: OT_HEAD (empty, rank 0)
+ * -> panel -> NODE_GAP (empty, rank 1) -> frame -> fills. */
+static void add_backing_panel(int16_t x0, int16_t x1, int16_t y0, int16_t y1) {
+    const uint32_t panel[5] = {
+        0x28780000u, pack_vertex(x0, y0), pack_vertex(x1, y0),
+        pack_vertex(x0, y1), pack_vertex(x1, y1),
+    };
+    test_ram[OT_HEAD / 4u] = NODE_PANEL;
+    put_node(NODE_PANEL, NODE_GAP, panel, 5);
+    test_ram[NODE_GAP / 4u] = NODE_RING;
 }
 
 static void load_packet(uint32_t node, uint32_t count) {
@@ -138,6 +152,29 @@ int main(void) {
     test_ram[NODE_FILL / 4u + 1u + 3u] = pack_vertex(121, 25);  /* skew v1 */
     gpu_ws_prepass_linked_list(OT_HEAD);
     assert(ws_ui_prepass_count == 2);
+
+    /* Backing panel enclosing the frame: admitted from the rank behind the
+     * HUD and squashed with it about the shared run's centre. */
+    reset_state(1);
+    build_hud(60, 128, 64, 120);
+    add_backing_panel(40, 300, 16, 40);
+    gpu_ws_prepass_linked_list(OT_HEAD);
+    assert(ws_ui_prepass_count == 4);
+    assert(ws_ui_reject.backing == 1);
+    gpu_exec_reset_triangles();
+    load_packet(NODE_PANEL, 5);
+    gp0_exec_mono_quad();
+    const int32_t run_centre = 40 + (300 - 40) / 2;
+    assert(gpu_exec_triangles.min_x == ws_scale_about(40, run_centre));
+    assert(gpu_exec_triangles.max_x == ws_scale_about(300, run_centre));
+
+    /* The same quad not enclosing any HUD primitive is world geometry. */
+    reset_state(1);
+    build_hud(60, 128, 64, 120);
+    add_backing_panel(200, 300, 16, 40);
+    gpu_ws_prepass_linked_list(OT_HEAD);
+    assert(ws_ui_prepass_count == 3);
+    assert(ws_ui_reject.backing == 0);
 
     puts("ws_auto_ui_untextured_exec_test: PASS");
     return 0;
