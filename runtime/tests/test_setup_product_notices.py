@@ -177,6 +177,112 @@ class ProductNotices(unittest.TestCase):
             self.assertEqual(rs.stage_product_notices(str(root / "other"), "", log=lines.append)["framework"], 0)
 
 
+def tree_bytes(folder):
+    folder = Path(folder)
+    return {p.relative_to(folder).as_posix(): p.read_bytes() for p in sorted(folder.rglob("*")) if p.is_file()}
+
+
+class OwnOutput(unittest.TestCase):
+    """The step never reads what it writes, wherever the product folder is.
+
+    Found on the final Windows run of the candidate (PS1B-333): one test had the
+    product folder at the framework's own root. The framework scan then read the
+    kit folder the same run had just written, and the next run read the whole
+    licenses/ folder of the one before: 39 files, three folders deep, in the
+    source tree. Each case here runs the step more than once and compares.
+    """
+
+    def test_exclude_leaves_a_folder_out_of_the_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "tree"
+            for name in ("LICENSE", "sub/NOTICE", "sub/deeper/COPYING", "other/LICENSE"):
+                put(root / name)
+            put(Path(tmp) / "outside" / "LICENSE")
+            everything = ["LICENSE", "other/LICENSE", "sub/NOTICE", "sub/deeper/COPYING"]
+            self.assertEqual(sorted(rs.notice_files(str(root))), everything)
+            self.assertEqual(sorted(rs.notice_files(str(root), exclude=[str(root / "sub")])),
+                             ["LICENSE", "other/LICENSE"])
+            self.assertEqual(sorted(rs.notice_files(str(root), exclude=[str(root / "sub" / "deeper")])),
+                             ["LICENSE", "other/LICENSE", "sub/NOTICE"])
+            # a folder that is not there yet, the root itself, a folder outside, an empty name
+            self.assertEqual(sorted(rs.notice_files(str(root), exclude=[str(root / "licenses"), str(root),
+                                                                        str(Path(tmp) / "outside"), ""])),
+                             everything)
+
+    def test_a_second_run_writes_the_same_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "package"
+            fw, ui = make_package(root)
+            stage = root / "build-release"
+            first = rs.stage_product_notices(str(stage), str(fw), ui=str(ui), project=str(root),
+                                             log=lambda line: None)
+            after_first = tree_bytes(root)
+            second = rs.stage_product_notices(str(stage), str(fw), ui=str(ui), project=str(root),
+                                              log=lambda line: None)
+            self.assertEqual(second, first)
+            self.assertEqual(tree_bytes(root), after_first)
+            self.assertEqual(files_under(stage / "licenses"), sorted(EXPECTED))
+
+    def test_a_product_folder_at_the_root_of_the_framework(self):
+        # The shape of recompiler/tests/test_pgo_rebuild_flow.py before it replaced the step:
+        # the framework checkout is the project, and the executable sits at its root.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "checkout"
+            put(root / "LICENSE", "framework")
+            put(root / "bios" / "OpenBIOS.toml", "profile")
+            put(root / "recompiler" / "lib" / "fmt" / "LICENSE.rst", "fmt")
+            put(root / "runtime" / "licenses" / "libchdr-NOTICES.txt", "libchdr")
+            expected = ["framework/LICENSE", "framework/recompiler/lib/fmt/LICENSE.rst",
+                        "framework/runtime/licenses/libchdr-NOTICES.txt",
+                        "kit/LICENSE", "kit/recompiler/lib/fmt/LICENSE.rst"]
+            seen = []
+            for _ in range(3):
+                lines = []
+                counts = rs.stage_product_notices(str(root), str(root), project=str(root), log=lines.append)
+                self.assertEqual(counts, {"kit": 2, "framework": 3, "ui": 0, "toolchain": 0})
+                self.assertEqual(files_under(root / "licenses"), expected)
+                self.assertFalse(any("WARNING" in line for line in lines), lines)
+                seen.append(tree_bytes(root))
+            self.assertEqual(seen[1], seen[0])
+            self.assertEqual(seen[2], seen[0])
+
+    def test_a_product_folder_inside_a_scanned_tree_under_any_name(self):
+        # --build-dir is the caller's to name. What a build leaves in the product
+        # folder (a bundled program's licence, an earlier licenses/ folder) is never
+        # the kit's or the framework's own text.
+        for where in ("project", "framework"):
+            with self.subTest(where=where), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "package"
+                fw, ui = make_package(root)
+                stage = (root if where == "project" else fw) / "my-product"
+                put(stage / "overlay_toolchain" / "python" / "LICENSE.txt", "a bundled program's")
+                put(stage / "_deps" / "x" / "LICENSE", "what a build fetched")
+                seen = []
+                for _ in range(2):
+                    counts = rs.stage_product_notices(str(stage), str(fw), ui=str(ui), project=str(root),
+                                                      log=lambda line: None)
+                    self.assertEqual(files_under(stage / "licenses"), sorted(EXPECTED))
+                    self.assertEqual(counts, {"kit": 3, "framework": 6, "ui": 3, "toolchain": 3})
+                    seen.append(tree_bytes(root))
+                self.assertEqual(seen[1], seen[0])
+
+    def test_a_product_folder_that_is_the_package_root(self):
+        # The package's own licenses/toolchain folder is then where the texts go:
+        # nothing to copy, and no file copied onto itself.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "package"
+            fw, ui = make_package(root)
+            for _ in range(2):
+                lines = []
+                counts = rs.stage_product_notices(str(root), str(fw), ui=str(ui), project=str(root),
+                                                  log=lines.append)
+                self.assertEqual(counts, {"kit": 3, "framework": 6, "ui": 3, "toolchain": 3})
+                self.assertEqual(files_under(root / "licenses"), sorted(EXPECTED))
+                self.assertFalse(any("WARNING" in line for line in lines), lines)
+                self.assertEqual((root / "licenses" / "toolchain" / "SDL3-LICENSE.txt").read_text(encoding="utf-8"),
+                                 "SDL3")
+
+
 class Rebuild(unittest.TestCase):
     def test_the_cli_stages_them_from_the_project(self):
         with tempfile.TemporaryDirectory() as tmp:

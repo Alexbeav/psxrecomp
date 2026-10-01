@@ -295,6 +295,11 @@ whoever makes the package puts them in the package source, and
 A package without that folder still builds; the packager and `rebuild` both
 say that the texts are missing.
 
+The step never reads what it writes. The `licenses/` folder it writes, and the
+product folder when that lies inside the project or the framework tree, are
+left out of every scan, whatever the product folder is named. A second
+`rebuild` writes the same files.
+
 ### One program on several discs
 
 One build covers a set when every disc boots the same program. The discs do

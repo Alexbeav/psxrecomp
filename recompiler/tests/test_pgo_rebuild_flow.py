@@ -20,6 +20,7 @@ def check_flow(fail_training=False):
         train_secs=100, train_runs=1)
     progress = mock.Mock()
     events = []
+    staged = []
     def configure(*a, **kw):
         flags = [e for e in kw["extra"] if e.startswith(("-DPSX_DEBUG_TOOLS=", "-DPSX_RUNTIME_IPO="))]
         events.append(("configure", kw["pgo"], *flags))
@@ -35,6 +36,10 @@ def check_flow(fail_training=False):
             pgo_merge_tool_available=lambda *a: "llvm-profdata",
             _assert_configured=lambda *a, **kw: None,
             stage_overlay_toolchain_for_product=lambda *a: None,
+            # The product folder here is the repository's own root (the fake
+            # executable below). The real step wrote licenses/ there: 39 files
+            # after the two runs, in the source tree (PS1B-333).
+            stage_notices_for_product=lambda *a, **kw: staged.append(Path(a[1])) or {},
             _cmake_configure=configure,
             _cmake_build=lambda *a: events.append(("build",)),
             run_pgo_train=train,
@@ -55,6 +60,8 @@ def check_flow(fail_training=False):
         assert kw["pgo"] is False and "synthetic training failure" in kw["pgo_skipped"]
         progress.error.assert_not_called()
     assert events == expected, events
+    # once per rebuild, for the folder of the final product
+    assert staged == [root], staged
     print("PGO flow", "failure" if fail_training else "success", events)
 
 check_flow()

@@ -1595,3 +1595,12 @@ if(NOT MSVC AND EXISTS "${BEETLE_LIB}")
 elseif(NOT MSVC)
     message(STATUS "psx-beetle: libmednafen_psx.a not found - skipping psx-beetle")
 endif()
+
+# ---- source tree unchanged by the suite (after the last add_test) -----------
+# Adds source_tree_snapshot and source_tree_unchanged around every test above.
+# See the module header for the stray folder this exists to catch. OPTIONAL:
+# a tree staged without the module still configures.
+include(${CMAKE_CURRENT_SOURCE_DIR}/source_tree_check.cmake OPTIONAL)
+if(COMMAND psxrecomp_add_source_tree_check)
+    psxrecomp_add_source_tree_check()
+endif()
