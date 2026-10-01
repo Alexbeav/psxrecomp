@@ -399,9 +399,37 @@ int main(void) {
               PGXP_SRC_NATIVE);
         pgxp_get_stats(&b);
         CHECK(std::memcmp(&a, &b, sizeof a) == 0);
-        pgxp_note_rect_bypass();
+        pgxp_note_rect_bypass(1);
+        pgxp_note_rect_bypass(0);
+        pgxp_note_rect_bypass(0);
         pgxp_get_stats(&b);
         CHECK(b.rect_bypass == a.rect_bypass + 1);
+        CHECK(b.rect_partial == a.rect_partial + 2);
+    }
+
+    /* --- preserve projection: the RTPS-side window check (G1.11) ---------- */
+    {
+        pgxp_set_preserve_projection(1);
+        PGXPStats a, b;
+        pgxp_get_stats(&a);
+        const int32_t half = 1 << 15;
+        /* inside the window: the exact projection is the shadow */
+        CHECK(pgxp_ppp_accept((160 << 16) - half, Y16, PACKED) == 1);
+        CHECK(pgxp_ppp_accept(((160 + PGXP_PPP_AGREE_ABOVE) << 16) - 1, Y16,
+                              PACKED) == 1);
+        /* outside it (either axis): RTPS keeps the IR path's shadow */
+        CHECK(pgxp_ppp_accept((160 + PGXP_PPP_AGREE_ABOVE) << 16, Y16,
+                              PACKED) == 0);
+        CHECK(pgxp_ppp_accept(X16, (80 - PGXP_PPP_AGREE_BELOW) << 16,
+                              PACKED) == 0);
+        /* at the saturation limit agreement is exact */
+        const uint32_t sat = (80u << 16) | 0x3FFu;
+        CHECK(pgxp_ppp_accept((1023 << 16) + half, Y16, sat) == 1);
+        CHECK(pgxp_ppp_accept((1024 << 16) + half, Y16, sat) == 0);
+        pgxp_get_stats(&b);
+        CHECK(b.ppp_produced == a.ppp_produced + 3);
+        CHECK(b.ppp_window_fallback == a.ppp_window_fallback + 3);
+        pgxp_set_preserve_projection(0);
     }
 
     /* --- triangle census (G1.1 crack exposure) --- */

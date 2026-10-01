@@ -27,6 +27,9 @@ extern "C" {
  * if the allocation fails. Idempotent. */
 void pgxp_set_enabled(int enabled);
 int  pgxp_enabled(void);
+/* Armed and not inside a suppression bracket (speculative/replay pass):
+ * whether the hooks record anything right now. */
+int  pgxp_active(void);
 
 /* Tier-2 propagation through CPU arithmetic (default off, like the reference
  * implementations' default). Off is SAFE — value validation already stops
@@ -92,6 +95,14 @@ int pgxp_project_precise(int64_t mac1, int64_t mac2, int64_t mac3, int shift,
                          int32_t ir1, int32_t ir2, uint32_t sz3, uint32_t h,
                          int32_t ofx, int32_t ofy, int64_t x_num, int64_t x_den,
                          int32_t *x16, int32_t *y16);
+
+/* Whether an exact projection may be the shadow of the SXY word `packed`:
+ * the consumer's truncation agreement (the PGXP_PPP_AGREE_* window, exact at
+ * the saturation limits) on both halves. When it fails, RTPS keeps the IR
+ * path's shadow, which always agrees, so the vertex still draws precise
+ * instead of being rejected at the GPU. Counts ppp_produced on accept and
+ * ppp_window_fallback on reject. */
+int pgxp_ppp_accept(int32_t x16, int32_t y16, uint32_t packed);
 
 /* Mod-owned request (the framework's psx.enhancement.pgxp package).
  *
@@ -180,6 +191,8 @@ typedef struct PGXPStats {
     uint64_t produced;           /* RTPS/RTPT projections pushed into shadows */
     uint64_t swc2_stores;        /* GTE reg shadows copied to RAM shadows     */
     uint64_t ppp_produced;       /* of those, shadowed with the exact projection */
+    uint64_t ppp_window_fallback;/* exact projection outside the agreement
+                                  * window: shadowed with the IR path instead */
     /* Geometry-corrected triangles by how many of their 3 vertices came out
      * precise (gpu.c prepare_precise_triangle). `mixed` is the mesh-cracking
      * exposure of docs/ENHANCEMENTS.md G1.1: an edge between a precise and a
@@ -188,16 +201,21 @@ typedef struct PGXPStats {
     uint64_t tri_mixed;          /* one or two precise                        */
     uint64_t tri_native;         /* none precise                              */
     /* Textured quads that are axis-aligned rectangles in integer screen space
-     * (and in UV) but carry a dataflow-precise vertex, so they were drawn as
-     * two precise triangles instead of the native 2D rectangle shortcut. */
+     * (and in UV) whose four vertices are all dataflow-precise, so they were
+     * drawn as two precise triangles instead of the native 2D rectangle
+     * shortcut; rect_partial: such rectangles with 1..3 precise vertices,
+     * which keep the shortcut (drawing them as triangles would mix). */
     uint64_t rect_bypass;
+    uint64_t rect_partial;
 } PGXPStats;
 
 void pgxp_get_stats(PGXPStats *out);
 /* Count one geometry-corrected triangle with `precise` (0..3) precise
  * vertices. */
 void pgxp_note_triangle(int precise);
-void pgxp_note_rect_bypass(void);
+/* One rectangle-shortcut quad sent down the triangle path (all_precise) or
+ * kept on the shortcut with only some precise vertices. */
+void pgxp_note_rect_bypass(int all_precise);
 
 /* --- gte.cpp forwarding surface (v14 ABI compat) -------------------------- */
 

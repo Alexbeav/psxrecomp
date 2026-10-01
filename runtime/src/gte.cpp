@@ -913,13 +913,18 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
         int64_t cy16 = sy16 < -kLim ? -kLim : (sy16 > kLim - 1 ? kLim - 1 : sy16);
         int32_t px16 = (int32_t)cx16, py16 = (int32_t)cy16;
         /* Preserve projection precision (G1.11): shadow the exact projection
-         * instead when the vertex qualifies. Shadow only; the guest SXY, MAC
-         * and FLAG above are already final. */
-        if (pgxp_preserve_projection() && pgxp_enabled()) {
+         * instead when the vertex qualifies and it lies inside the GPU's
+         * truncation-agreement window; outside it the IR path's shadow is
+         * kept, so the vertex still draws precise rather than being rejected
+         * to native. Shadow only; the guest SXY, MAC and FLAG above are
+         * already final. Skipped while the hooks record nothing (speculative
+         * passes), where the shadow would be dropped anyway. */
+        if (pgxp_preserve_projection() && pgxp_active()) {
             int32_t ex16, ey16;
             if (pgxp_project_precise(mac1, mac2, mac3, shift, gte->IR1, gte->IR2,
                                      gte->SZ[3], gte->H, gte->OFX, gte->OFY,
-                                     x_num, x_den, &ex16, &ey16)) {
+                                     x_num, x_den, &ex16, &ey16) &&
+                pgxp_ppp_accept(ex16, ey16, (uint32_t)gte->SXY[2])) {
                 px16 = ex16;
                 py16 = ey16;
             }

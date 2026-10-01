@@ -126,6 +126,7 @@ extern "C" void pgxp_set_enabled(int enabled) {
 }
 
 extern "C" int pgxp_enabled(void) { return s_enabled; }
+extern "C" int pgxp_active(void) { return g_pgxp_active; }
 
 extern "C" void pgxp_set_cpu_mode(int enabled) { s_cpu_mode = enabled ? 1 : 0; }
 extern "C" int  pgxp_cpu_mode(void) { return s_cpu_mode; }
@@ -175,7 +176,10 @@ extern "C" void pgxp_get_stats(PGXPStats *out) {
     if (out) *out = s_stats;
 }
 
-extern "C" void pgxp_note_rect_bypass(void) { s_stats.rect_bypass++; }
+extern "C" void pgxp_note_rect_bypass(int all_precise) {
+    if (all_precise) s_stats.rect_bypass++;
+    else             s_stats.rect_partial++;
+}
 
 extern "C" void pgxp_note_triangle(int precise) {
     if (precise >= 3)     s_stats.tri_precise++;
@@ -703,8 +707,21 @@ extern "C" int pgxp_project_precise(int64_t mac1, int64_t mac2, int64_t mac3,
     if (fy > lim - 1.0) fy = lim - 1.0;
     *x16 = (int32_t)std::floor(fx);
     *y16 = (int32_t)std::floor(fy);
-    s_stats.ppp_produced++;
     return 1;
+}
+
+/* Defined below with the GPU consumer. */
+static inline int pgxp_agrees(int32_t p16, int32_t native, int16_t half);
+
+extern "C" int pgxp_ppp_accept(int32_t x16, int32_t y16, uint32_t packed) {
+    const int16_t hx = (int16_t)(packed & 0xFFFFu);
+    const int16_t hy = (int16_t)(packed >> 16);
+    if (pgxp_agrees(x16, hx, hx) && pgxp_agrees(y16, hy, hy)) {
+        s_stats.ppp_produced++;
+        return 1;
+    }
+    s_stats.ppp_window_fallback++;
+    return 0;
 }
 
 extern "C" void pgxp_gte_push_sxy(int32_t x16, int32_t y16, uint16_t sz3,

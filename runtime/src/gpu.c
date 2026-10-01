@@ -3862,11 +3862,14 @@ uint32_t gpu_texture_correction_hits(void) {
  * packet words is resolved independently: the address-keyed dataflow shadow
  * first (validated against the actual word — exact provenance, survives
  * ordering-table reordering), the ambiguity-gated position cache second, the
- * parsed integers last. Mixing precise and native vertices in one triangle
- * is correct — a native vertex is exactly where the uncorrected pipeline put
- * it, so shared edges between neighbouring triangles cannot disagree by more
- * than the sub-pixel fraction. The integer delta folds in draw offsets and
- * any widescreen adjustment already applied by the caller. */
+ * parsed integers last. A vertex left native is exactly where the
+ * uncorrected pipeline put it. Where it meets a neighbour's precise copy of
+ * the same vertex, their shared edge disagrees by that vertex's precise-minus-
+ * native offset: under a fraction of a pixel on the IR path, but up to the
+ * PGXP_PPP_AGREE_* window (several pixels) under preserve-projection — that
+ * is the G1.1 crack the tri_mixed counter measures. The integer delta folds
+ * in draw offsets and any widescreen adjustment already applied by the
+ * caller. */
 static void prepare_precise_triangle(int i0, int i1, int i2,
                                      const int32_t vx[3], const int32_t vy[3]) {
     gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
@@ -3908,22 +3911,26 @@ static void prepare_precise_triangle(int i0, int i1, int i2,
  * CPU-built sprite, but a GTE-projected world quad can land on such a
  * rectangle too (a facade seen straight on), and its neighbours are drawn
  * precise, so the shortcut would open a sub-pixel seam along every shared
- * edge (docs/ENHANCEMENTS.md G1.11). Returns nonzero when PGXP is correcting
- * and any vertex carries a dataflow-precise position; the caller then draws
- * the quad as its two triangles, like any other world quad. */
-static int textured_quad_carries_precision(const int idx[4]) {
+ * edge (docs/ENHANCEMENTS.md G1.11). Returns how many of the four vertices
+ * carry a dataflow-precise position (0 while PGXP is not correcting). Only a
+ * quad with all four precise leaves the shortcut and is drawn as its two
+ * triangles, like any other world quad: one with some corners precise (say a
+ * CPU-built sprite with one corner copied from SXY) would otherwise become
+ * mixed triangles, so it keeps the shortcut and counts as rect_partial. */
+static int textured_quad_precise_vertices(const int idx[4]) {
     if (!gte_geometry_correction_enabled() && !s_texture_correction_enabled)
         return 0;
     if (gp0_cmd_source_addr == 0xFFFFFFFFu) return 0;
+    int n = 0;
     for (int i = 0; i < 4; i++) {
         uint32_t word = gp0_cmd_buf[idx[i]];
         int32_t raw_x, raw_y;
         parse_vertex(word, &raw_x, &raw_y);
         if (pgxp_probe_precise_vertex(gp0_cmd_source_addr + (uint32_t)idx[i] * 4u,
                                       word, raw_x, raw_y) == PGXP_SRC_DATAFLOW)
-            return 1;
+            n++;
     }
-    return 0;
+    return n;
 }
 
 /* Arming rate for perspective-correct UVs, per condition.
@@ -4464,9 +4471,14 @@ static void gp0_exec_textured_quad(void) {
                   u[0] == u[2] && u[1] == u[3] &&
                   v[0] == v[1] && v[2] == v[3];
     static const int k_quad_words[4] = { 1, 3, 5, 7 };
-    if (as_rect && textured_quad_carries_precision(k_quad_words)) {
-        pgxp_note_rect_bypass();
-        as_rect = 0;
+    if (as_rect) {
+        const int n_precise = textured_quad_precise_vertices(k_quad_words);
+        if (n_precise == 4) {
+            pgxp_note_rect_bypass(1);
+            as_rect = 0;
+        } else if (n_precise > 0) {
+            pgxp_note_rect_bypass(0);
+        }
     }
     if (as_rect) {
         int x = vx[0] < vx[1] ? vx[0] : vx[1];

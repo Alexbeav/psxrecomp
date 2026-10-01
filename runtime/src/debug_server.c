@@ -5288,8 +5288,9 @@ static void handle_geom_correction(int id, const char *json)
              "\"native\":%llu,\"value_mismatch\":%llu,\"trunc_reject\":%llu,"
              "\"tolerance_reject\":%llu,\"w_valid\":%llu,"
              "\"produced\":%llu,\"swc2_stores\":%llu,\"ppp_produced\":%llu,"
+             "\"ppp_window_fallback\":%llu,"
              "\"tri_precise\":%llu,\"tri_mixed\":%llu,\"tri_native\":%llu,"
-             "\"rect_bypass\":%llu}}",
+             "\"rect_bypass\":%llu,\"rect_partial\":%llu}}",
              id,
              gte_geometry_correction_enabled(),
              (unsigned)hits,
@@ -5311,10 +5312,12 @@ static void handle_geom_correction(int id, const char *json)
              (unsigned long long)ps.produced,
              (unsigned long long)ps.swc2_stores,
              (unsigned long long)ps.ppp_produced,
+             (unsigned long long)ps.ppp_window_fallback,
              (unsigned long long)ps.tri_precise,
              (unsigned long long)ps.tri_mixed,
              (unsigned long long)ps.tri_native,
-             (unsigned long long)ps.rect_bypass);
+             (unsigned long long)ps.rect_bypass,
+             (unsigned long long)ps.rect_partial);
 }
 
 /* pgxp — live-tune the value-propagation engine for one-toggle isolation runs

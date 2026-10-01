@@ -421,8 +421,10 @@ if(BUILD_TESTING)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
             -ffunction-sections -fdata-sections)
+        # Apple ld has no --gc-sections; -dead_strip is its equivalent (as
+        # for isc_store_test above), so the test links and runs on macOS.
         target_link_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
-            -Wl,--gc-sections)
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
     endif()
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
