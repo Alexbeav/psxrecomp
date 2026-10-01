@@ -38,6 +38,10 @@ void psx_rewind_set_enabled(int enabled);
 
 void psx_rewind_configure(uint32_t bios_checksum, uint32_t entry_pc);
 void psx_rewind_shutdown(void);
+/* Drop every snapshot and keep rewind on. For a disc change: a snapshot holds
+ * the drive's state but not the image in the drive, so one taken before the
+ * change would resume on the wrong disc. */
+void psx_rewind_clear(void);
 
 int  psx_rewind_enabled(void);
 int  psx_rewind_is_open(void);
