@@ -71,6 +71,10 @@ for f in "${FILES[@]}"; do [ -f "$f" ] && present+=("$f"); done
 # differently there than on the developer's LF checkout -- every Windows CI
 # configure read a byte-identical tree as STALE. Stripping CR is a no-op for an
 # LF file, so stamps written before this line stay valid.
+# PSXRECOMP_FP_DEBUG=1 prints "<per-file digest> <path>" lines to stderr, so a
+# runner that disagrees with a developer's stamp can be diffed input by input.
 for f in "${present[@]}"; do
-    tr -d '\r' < "$f" | sha256sum
+    d="$(tr -d '\r' < "$f" | sha256sum | awk '{print $1}')"
+    if [ -n "${PSXRECOMP_FP_DEBUG:-}" ]; then echo "$d  $f" >&2; fi
+    echo "$d  -"
 done | sha256sum | awk '{print $1}'
