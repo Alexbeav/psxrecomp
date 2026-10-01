@@ -172,7 +172,12 @@ def migrate_to_bundled_release(root: Path, opts: BundledMigrateOptions) -> CmdRe
         return fail("CMakeLists.txt does not use psxrecomp_add_game_runtime (migrate the layout first: migrate_project.py apply)")
     if not (root / "game.toml").is_file():
         return fail("game.toml missing")
-    code, dirty = _run(["git", "status", "--porcelain", "--untracked-files=no"], root)
+    # Submodule gitlinks are exempt: a caller (Retro Studio's bulk tab) may
+    # have moved the psxrecomp pin already so this script exists in-title, and
+    # the pins are re-resolved below anyway. Content changes INSIDE a
+    # submodule are caught by _bump_submodule.
+    code, dirty = _run(["git", "status", "--porcelain", "--untracked-files=no",
+                        "--ignore-submodules=all"], root)
     if dirty.strip() and not opts.dry_run:
         return fail("working tree has uncommitted changes; commit or stash them first:\n" + dirty.strip()[:600])
 
