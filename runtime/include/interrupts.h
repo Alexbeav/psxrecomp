@@ -135,7 +135,7 @@ uint32_t cycles_to_next_event(void);
 /* Query whether we are currently inside an exception handler dispatch. */
 int psx_get_in_exception(void);
 
-/* The source CPU's pending-interrupt opcode table still executes COP2.
+/* Source profile: a pending interrupt does not pre-empt a COP2 instruction.
  * Unknown instruction addresses and the default profile remain eligible. */
 int psx_irq_opcode_eligible(uint32_t pc);
 

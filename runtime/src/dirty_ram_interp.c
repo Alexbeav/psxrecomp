@@ -774,7 +774,7 @@ void dirty_ram_log_marker(uint32_t addr, uint32_t tag, int kind) {
 }
 
 /* LWL/LWR are merge-only here; the timed aligned-word read is done by the caller via
- * psx_cyc_load_word (Beetle reads the aligned word; GPR_DEP rs only, arms LDWhich=rt). */
+ * psx_cyc_load_word (the aligned word is read; GPR_DEP rs only, arms ld_which_t=rt). */
 static inline uint32_t lwl_merge(uint32_t addr, uint32_t word, uint32_t rt_value) {
     switch (addr & 3u) {
         case 0: return (rt_value & 0x00FFFFFFu) | (word << 24);
@@ -1693,8 +1693,9 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     /* Per-instruction R3000A load-delay interlock (single-source: psx_cyc.h, shared
      * with both static emitters). §1 base + GPR_DEPRES + DO_LDS run HERE, before the
      * instruction body, so §1 precedes any muldiv/GTE deadline stall the body applies
-     * (Beetle order). CPU loads (op 0x20-0x26) are skipped here — psx_cyc_load_* runs
-     * their full interlock inside the body (and arms LDWhich=rt). This replaces the
+     * (the order fitted to the oracle ruler loops). CPU loads (op 0x20-0x26) are
+     * skipped here — psx_cyc_load_* runs their full interlock inside the body
+     * (and arms ld_which_t=rt). This replaces the
      * old flat per-instruction psx_advance_cycles(psx_instr_base_cycles). */
     if (source_gpu_runtime_active() && opc == 0x12u &&
         (rs == 0u || rs == 2u) && (cpu->cop0[12] & 0x40000000u)) {
@@ -2282,7 +2283,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         return 0;
     case 0x10: { /* COP0 */
         uint32_t cop_op = rs;
-        if (cop_op == 0x00) { /* MFC0 — delayed load (Beetle: LDAbsorb=0, LDWhich=rt) */
+        if (cop_op == 0x00) { /* MFC0 — delayed load (ld_absorb=0, ld_which_t=rt) */
 #ifdef PSX_ENABLE_BLOCK_CYCLES
             cpu->ld_absorb = 0u;
             cpu->ld_which_t = (uint8_t)rt;
@@ -2305,15 +2306,16 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             if (rd == 13) {
                 /* Cause register: only the software-interrupt pending bits
                  * [9:8] are writable; hardware IP [15:10], ExcCode [6:2] and
-                 * BD [31] are read-only from software (psx-spx, matches
-                 * PCSX-Redux/Beetle MTC0). */
+                 * BD [31] are read-only from software (PSX-SPX "cop0r13 -
+                 * CAUSE": only bits 8-9 are writable). */
                 cpu->cop0[13] = (cpu->cop0[13] & ~0x0300u) | (val & 0x0300u);
             } else {
                 cpu->cop0[rd] = val;
             }
-            /* psxTestSWInts: after writing Status or Cause, check if a
-             * software interrupt is now deliverable (Cause & Status & 0x0300
-             * with Status.IEc set).  Matches PCSX-Redux's MTC0 path. */
+            /* After writing Status or Cause, check if a software interrupt
+             * is now deliverable (Cause & Status & 0x0300 with Status.IEc
+             * set). PSX-SPX "cop0r13 - CAUSE": bits 8-9 are the software
+             * interrupt requests. */
             if ((rd == 12 /* Status */ || rd == 13 /* Cause */) &&
                 (cpu->cop0[13] & cpu->cop0[12] & 0x0300u) &&
                 (cpu->cop0[12] & 0x1u)) {
@@ -2367,7 +2369,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         uint32_t cop_op = rs;
         /* Faithful GTE: any COP2 register access stalls to the pending command
          * completion deadline (gte_execute armed it via psx_gte_set). */
-        if (cop_op == 0x00) { /* MFC2 — read: stall + give-back (Beetle) */
+        if (cop_op == 0x00) { /* MFC2 — read: stall + give-back */
 #ifdef PSX_ENABLE_BLOCK_CYCLES
             psx_gte_read(cpu, rt);
 #endif
@@ -2376,7 +2378,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->gpr[0] = 0;
             return 0;
         }
-        if (cop_op == 0x02) { /* CFC2 — read: stall + give-back (Beetle) */
+        if (cop_op == 0x02) { /* CFC2 — read: stall + give-back */
 #ifdef PSX_ENABLE_BLOCK_CYCLES
             psx_gte_read(cpu, rt);
 #endif
@@ -2407,7 +2409,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         return abort_unsupported(pc, insn, "COP2 op");
     }
     /* CPU loads: the full per-instruction R3000A interlock (§1 + GPR_DEPRES(rs) +
-     * DO_LDS + ReadMemory timing + arm LDWhich=rt) lives in psx_cyc_load_*; exec_one's
+     * DO_LDS + data-access timing + arm ld_which_t=rt) lives in psx_cyc_load_*; exec_one's
      * top-of-function step is skipped for op 0x20-0x26 so it is not double-charged.
      * #ifndef PSX_ENABLE_BLOCK_CYCLES these still read the value via the uncharged
      * accessor (psx_cyc_load_* falls back to a plain read when cycles are off). */

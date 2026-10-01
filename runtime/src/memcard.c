@@ -40,8 +40,13 @@ static uint8_t frame_checksum(const uint8_t *frame) {
     return xor_val;
 }
 
-/* Format a 128KB card image to match a real PS1 blank card.
- * Layout verified against DuckStation's MemoryCardImage::Format(). */
+/* Format a blank 128 KB card image. Layout per PSX-SPX "Memory Card Data
+ * Format": frame 0 is the header ("MC", XOR checksum in byte 7Fh); frames
+ * 1-15 are directory entries marked free (A0h) with next-block pointer FFFFh;
+ * frames 16-35 are the broken-sector list with sector number FFFFFFFFh
+ * (none); frame 63 is the write-test frame, a copy of frame 0. Frames 36-62
+ * are zero-filled here; PSX-SPX says they are usually FFh-filled on real
+ * cards. [NOT OBSERVED: no fixture reads frames 36-62 of a blank card.] */
 static void memcard_format(uint8_t *data) {
     memset(data, 0xFF, MEMCARD_SIZE);
 

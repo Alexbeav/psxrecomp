@@ -52,19 +52,19 @@ typedef struct CPUState {
      * Appended at END so prior field offsets are unchanged. */
     uint64_t gte_ts_done;
 
-    /* ---- R3000A load-delay pipeline interlock (Beetle ReadAbsorb/ReadFudge/
-     * LDAbsorb/LDWhich) — TIMING ONLY; the load VALUE delay is handled by the
-     * existing load-delay correctness path. See psx_cyc.h + accuracy/
-     * load_readfudge_ldabsorb.md. Models: a load's data-access cost becomes a
+    /* ---- R3000A load-delay pipeline interlock (our oracle-fitted model;
+     * receipts in accuracy/load_readfudge_ldabsorb.md) — TIMING ONLY; the
+     * load VALUE delay is handled by the existing load-delay correctness path.
+     * See psx_cyc.h. Models: a load's data-access cost becomes a
      * per-register "give-back" (read_absorb) that following instructions consume
      * instead of charging their own +1 base; plus the +2 "fudge" charged on a
      * load whose predecessor committed no load. Appended at END so prior field
      * offsets are unchanged (precompiled overlay DLLs bake offsets). */
-    uint8_t  read_absorb[33];   /* ReadAbsorb[0..31] + [32]=0x20 DO_LDS dummy slot */
-    uint8_t  read_absorb_which; /* ReadAbsorbWhich: GPR the last committed load wrote */
-    uint8_t  read_fudge;        /* ReadFudge: last committed load's dest reg, or 0x20 = none */
-    uint8_t  ld_which_t;        /* LDWhich (timing): pending load dest reg, 0x20 = none */
-    uint32_t ld_absorb;         /* LDAbsorb: pending load's give-back (region+completion) */
+    uint8_t  read_absorb[33];   /* give-back per GPR [0..31]; [32] = 0x20, the "no register" slot */
+    uint8_t  read_absorb_which; /* GPR the last committed load wrote */
+    uint8_t  read_fudge;        /* last committed load's dest reg, or 0x20 = none */
+    uint8_t  ld_which_t;        /* timing: pending load dest reg, 0x20 = none */
+    uint32_t ld_absorb;         /* pending load's give-back (region+completion) */
     /* Value pipeline, independent of the timing credit above. rt=0 is empty.
      * age=0: successor still reads old GPR; age=1: successor has executed. */
     uint32_t load_value_rt, load_value, load_value_age;

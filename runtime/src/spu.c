@@ -842,8 +842,9 @@ static int16_t voice_next_sample(int idx) {
         decode_block(v);
     }
 
-    /* Original source key-on is sample-applied, followed by four samples
-     * without envelope or pitch advancement. Keep ordinary decoder work. */
+    /* Source profile: key-on is applied at a sample boundary, followed by
+     * four samples without envelope or pitch advancement. Keep ordinary
+     * decoder work. [Held in place by the TAS route replays.] */
     if (source_key_timing && source_play_delay[idx]) {
         source_play_delay[idx]--;
         return 0;
@@ -939,7 +940,7 @@ static void key_on(uint32_t mask) {
             d->read_pos = d->write_pos = d->available = 0;
             d->ignore_loop = 0;
             v->repeat_addr = (uint32_t)voice_reg(i, 7) << 3;
-            /* The source retains decoded sample contents across KEYON. */
+            /* Source profile: decoded sample contents are kept across KEYON. */
         }
         key_on_count++;
         endx_latch &= ~(1u << i);  /* KEYON clears ENDX bit on real hw */
