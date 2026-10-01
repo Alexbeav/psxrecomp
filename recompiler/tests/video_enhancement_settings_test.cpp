@@ -278,6 +278,24 @@ static void test_internal_resolution_settings() {
     }
 }
 
+/* [video] texture_window_batching: a game.toml-only OpenGL batching opt-in
+ * (the image is unchanged; see gpu_gl_renderer.c s_twin_batching). Off unless
+ * the game asks for it. */
+static void test_texture_window_batching() {
+    fs::path p = write_game_toml("psxrecomp_twin_default.toml", "");
+    auto gc = PSXRecompV4::load_game_config(p);
+    check(!gc.runtime.video_texture_window_batching,
+          "texture_window_batching defaults OFF");
+    fs::remove(p);
+    fs::path q = write_game_toml("psxrecomp_twin_on.toml",
+        "[video]\n"
+        "texture_window_batching = true\n");
+    auto gq = PSXRecompV4::load_game_config(q);
+    check(gq.runtime.video_texture_window_batching,
+          "[video] texture_window_batching = true is honoured");
+    fs::remove(q);
+}
+
 int main() {
     test_internal_resolution_game_toml();
     test_internal_resolution_settings();
@@ -288,6 +306,7 @@ int main() {
     test_user_settings_read();
     test_user_settings_absent_key();
     test_user_settings_round_trip();
+    test_texture_window_batching();
 
     if (failures) {
         std::fprintf(stderr, "video_enhancement_settings_test: %d failure(s)\n",

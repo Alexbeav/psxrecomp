@@ -8041,6 +8041,20 @@ static void handle_gl_wide_fast(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d}", id, gl_renderer_get_wide_fast());
 }
 
+/* gl_texwin_batch on=<0|1>: [video] texture_window_batching, live. 1 = textured
+ * prims with different GP0(E2h) texture windows share a batch; 0 = a window
+ * change ends the batch. The image is the same; for A/B of batch counts
+ * (frame_perf batch_diag[6] = window flushes) and frame time. */
+extern void gl_renderer_set_texture_window_batching(int on);
+extern int  gl_renderer_get_texture_window_batching(void);
+static void handle_gl_texwin_batch(int id, const char *json)
+{
+    int on = json_get_int(json, "on", -1);
+    if (on >= 0) gl_renderer_set_texture_window_batching(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d}", id,
+             gl_renderer_get_texture_window_batching());
+}
+
 /* Live GTE widescreen-squash toggle (diagnostic for 8C far-backdrop void):
  * ws_aspect num=<n> den=<d> calls gte_set_display_aspect at runtime so we can
  * compare squash ON (e.g. 16/9) vs OFF (1/1) in-place without a relaunch. */
@@ -14117,6 +14131,7 @@ static const CmdEntry s_commands[] = {
     { "render_pass_dump",  handle_render_pass_dump },
     { "render_pass_refuse", handle_render_pass_refuse },
     { "gl_wide_fast",      handle_gl_wide_fast },
+    { "gl_texwin_batch",   handle_gl_texwin_batch },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },
     { "gl_vram_diff",      handle_gl_vram_diff },

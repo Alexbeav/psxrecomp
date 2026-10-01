@@ -44,6 +44,17 @@
  *     check on (then off) or off (then on) before their batch is drawn: with
  *     the check on the rect's pixels stay, with it off they are overwritten,
  *     in the native VRAM and in the frame at S.
+ *   - mode "twin" (with or without the window), argv[3] 0/1: [video]
+ *     texture_window_batching off/on. Textured prims alternating GP0(E2h)
+ *     texture windows (opaque, semi-transparent, set-mask, mask check,
+ *     bilinear; inside the frame and into native-wide margins). The runner
+ *     checks the native VRAM, the frame at S and the wide surface are the same
+ *     with it off and on; this run checks that on never flushes for a window
+ *     change except under mask check, and off flushes at every one. An oracle
+ *     independent of the renderer then draws raw rects through each window
+ *     into both page depths: every pixel must be the texel the PS1 window rule
+ *     picks from the VRAM as read back, in the native VRAM and at S, so a
+ *     window decode error both settings share still fails.
  *   - mode "passes" (built only where the renderer has render passes, the
  *     frame-rate stack; the runner defines PSX_TEST_RENDER_PASSES): with the
  *     flip-aware frame blend ready, the full-VRAM surface offers render passes
@@ -381,6 +392,197 @@ static int mask_main(int scale, int window) {
     return failures ? 1 : 0;
 }
 
+/* ---- mode "twin": texture-window batching --------------------------------
+ * argv[3] "0"/"1" = [video] texture_window_batching off/on. Textured prims that
+ * alternate GP0(E2h) windows: opaque polys and rects inside the frame and into
+ * the native-wide margins, semi-transparent ones, a run under set-mask, a run
+ * under mask check (which must still split at every window change) and a
+ * bilinear run. The runner compares the native VRAM, the frame at S and the
+ * wide surface of the two runs; this run checks the window flushes and the
+ * window oracle (twin_oracle). */
+#define TWIN_TPAGE4  0x0008   /* 4-bit page at (512, 0), CLUT at (512, 256) */
+#define TWIN_TPAGE15 0x0109   /* 15-bit page at (576, 0) */
+static const uint32_t twin_windows[4] = {
+    0,                                          /* no window */
+    0x1Cu,                                      /* u repeats every 32 */
+    0x18u | (0x1Eu << 5) | (0x08u << 10) | (0x02u << 15),
+    0x1Fu | (0x1Fu << 5) | (0x05u << 10) | (0x0Au << 15),   /* one 8x8 tile */
+};
+static void twin_quad(int i, int x, int y, int w, int h, uint16_t tp) {
+    glb_set_texture_window(twin_windows[i & 3]);
+    if (i % 3 == 2) {
+        glb_draw_textured_rect(x, y, w, h, 3 + i, 5 + 2 * i, 512, 256, tp);
+        return;
+    }
+    int u0 = 2 * i, v0 = i, u1 = u0 + 90 + i, v1 = v0 + 70;
+    glb_draw_shaded_textured_triangle(x, y, u0, v0, 0x808080, x + w, y + 3, u1, v0, 0x6090b0,
+                                      x, y + h, u0, v1, 0xb09060, 512, 256, tp, 0);
+    glb_draw_shaded_textured_triangle(x + w, y + 3, u1, v0, 0x6090b0, x, y + h, u0, v1, 0xb09060,
+                                      x + w - 7, y + h + 2, u1, v1, 0x80a080, 512, 256, tp, 0);
+}
+/* The window oracle: what the GP0(E2h) window must sample, from the PS1 rule
+ * and the VRAM as read back, so the off/on comparison cannot hide a decode
+ * error both modes share. Raw opaque rects (no dither, one texel per native
+ * pixel), one per window and page, drawn back to back so they share batches
+ * when the key is on. Every pixel is checked in the native VRAM and, at its
+ * centre, in the frame at S. Counts the pixels each window drew. */
+#define TWIN_OR_W 70
+#define TWIN_OR_H 20
+static uint16_t twin_texel(const uint16_t *v, uint16_t tp, int u, int t) {
+    int px = (tp & 15) * 64, py = ((tp >> 4) & 1) * 256;
+    if (((tp >> 7) & 3) == 2) return v[((py + t) & 511) * 1024 + ((px + u) & 1023)];
+    int idx = (v[((py + t) & 511) * 1024 + ((px + (u >> 2)) & 1023)] >> ((u & 3) * 4)) & 15;
+    return v[256 * 1024 + 512 + idx];                 /* CLUT at (512, 256) */
+}
+static void twin_oracle(int scale, int drawn[4]) {
+    /* Texels for the windows that reach past the scene's 64x64 pages. */
+    static uint16_t more[64 * 128];
+    for (int i = 0; i < 64 * 128; i++)
+        more[i] = (uint16_t)(((i * 0x1d0bu) ^ (i >> 4)) | ((i & 7) == 5 ? 0x8000u : 0));
+    glb_vram_transfer_in(512, 64, 64, 64, more);              /* 4-bit rows 64.. */
+    glb_vram_transfer_in(576, 64, 64, 64, more + 64 * 64);    /* 15-bit rows 64.. */
+    glb_vram_transfer_in(640, 0, 64, 128, more);              /* 15-bit u 64..127 */
+    glb_set_draw_area(0, 0, FRAME_W - 1, FRAME_H - 1);
+    glb_set_mask_bits(0, 0);
+    glb_set_semi_transparency(0, 0);
+    glb_set_texture_filter(0);
+    glb_set_color_modulation(128, 128, 128, 1);           /* raw: the texel as is */
+    gl_renderer_sync_cpu();
+    check(gl_renderer_fbo_peek(0, 0, 1024, 512, vram), "oracle: VRAM before");
+    int fw = FRAME_W * scale, fh = FRAME_H * scale, ow = 0, oh = 0;
+    uint32_t *before = (uint32_t *)malloc((size_t)fw * fh * 4);
+    uint32_t *after = (uint32_t *)malloc((size_t)fw * fh * 4);
+    int nb = before ? gl_renderer_read_display_hires(0, 0, FRAME_W, FRAME_H, before, fw * fh, &ow, &oh) : 0;
+    check(nb == fw * fh, "oracle: frame at S before");
+    for (int i = 0; i < 8; i++) {
+        glb_set_texture_window(twin_windows[i & 3]);
+        glb_draw_textured_rect(4 + (i & 3) * 78, 2 + (i >> 2) * 22, TWIN_OR_W, TWIN_OR_H,
+                               9 * i + 3, 5 * i + 1, 512, 256, i < 4 ? TWIN_TPAGE4 : TWIN_TPAGE15);
+    }
+    glb_set_texture_window(0);
+    glb_set_color_modulation(128, 128, 128, 0);
+    gl_renderer_sync_cpu();
+    check(gl_renderer_fbo_peek(0, 0, 1024, 512, peek), "oracle: native peek");
+    int na = after ? gl_renderer_read_display_hires(0, 0, FRAME_W, FRAME_H, after, fw * fh, &ow, &oh) : 0;
+    check(na == fw * fh, "oracle: frame at S after");
+    long bad = 0, bad_hi = 0;
+    for (int i = 0; i < 8; i++) {
+        uint32_t w = twin_windows[i & 3];
+        int mx = w & 31, my = (w >> 5) & 31, ox = (w >> 10) & 31, oy = (w >> 15) & 31;
+        int x0 = 4 + (i & 3) * 78, y0 = 2 + (i >> 2) * 22;
+        for (int dy = 0; dy < TWIN_OR_H; dy++)
+            for (int dx = 0; dx < TWIN_OR_W; dx++) {
+                int u = (9 * i + 3 + dx) & 255, t = (5 * i + 1 + dy) & 255;
+                u = (u & ~(mx * 8)) | ((ox & mx) * 8);
+                t = (t & ~(my * 8)) | ((oy & my) * 8);
+                uint16_t texel = twin_texel(vram, i < 4 ? TWIN_TPAGE4 : TWIN_TPAGE15, u, t);
+                int x = x0 + dx, y = y0 + dy;
+                uint16_t want = texel ? texel : vram[y * 1024 + x];
+                if (texel) drawn[i & 3]++;
+                if (peek[y * 1024 + x] != want) {
+                    if (!bad) fprintf(stderr, "oracle: window %d page %d px (%d,%d) native %04x want %04x\n",
+                                      i & 3, i >> 2, x, y, peek[y * 1024 + x], want);
+                    bad++;
+                }
+                if (nb == fw * fh && na == fw * fh) {
+                    size_t c = (size_t)(y * scale + scale / 2) * fw + (size_t)(x * scale + scale / 2);
+                    uint32_t got = after[c] & 0xFFFFFFu;     /* BGRA: R bits 16.., B bits 0.. */
+                    int ok = texel ? (((got >> 19) & 31) == (texel & 31) &&
+                                      ((got >> 11) & 31) == ((texel >> 5) & 31) &&
+                                      ((got >> 3) & 31) == ((texel >> 10) & 31))
+                                   : got == (before[c] & 0xFFFFFFu);
+                    bad_hi += !ok;
+                }
+            }
+    }
+    free(before);
+    free(after);
+    printf("twin_oracle drawn=%d,%d,%d,%d native_bad=%ld hires_bad=%ld\n",
+           drawn[0], drawn[1], drawn[2], drawn[3], bad, bad_hi);
+    check(bad == 0, "oracle: native VRAM is what the texture window samples");
+    check(bad_hi == 0, "oracle: frame at S is what the texture window samples");
+    for (int k = 0; k < 4; k++) check(drawn[k] > TWIN_OR_W * TWIN_OR_H / 2, "oracle: every window draws");
+}
+static int twin_main(int scale, int window, int on) {
+    static uint16_t page[64 * 64], page15[64 * 64], clut[16];
+    for (int i = 0; i < 64 * 64; i++) page[i] = (uint16_t)((i * 0x2469u) ^ (i >> 2) ^ 0x1111u);
+    for (int i = 0; i < 64 * 64; i++)
+        page15[i] = (uint16_t)(((i * 0x0843u) & 0x7fffu) | (((i >> 5) & 3) == 1 ? 0x8000u : 0));
+    for (int i = 0; i < 16; i++) clut[i] = (uint16_t)(i ? (0x0421u * (uint16_t)i) | ((i & 3) == 3 ? 0x8000u : 0) : 0);
+    glb_vram_transfer_in(512, 0, 64, 64, page);
+    glb_vram_transfer_in(576, 0, 64, 64, page15);
+    glb_vram_transfer_in(512, 256, 16, 1, clut);
+    gl_renderer_set_texture_window_batching(on);
+    check(gl_renderer_get_texture_window_batching() == on, "texture-window batching set");
+    glb_set_draw_area(0, 0, 1023, 511);
+    glb_set_draw_offset(0, 0);
+    glb_set_mask_bits(0, 0);
+    glb_set_semi_transparency(0, 0);
+    glb_set_color_modulation(128, 128, 128, 0);
+    if (window) check(hiw_ensure(0, FRAME_W) != NULL, "window covers the frame");
+    glb_fill_rect(0, 0, FRAME_W, FRAME_H, 0x0c63);
+    glb_wide_configure(426, 53);
+    glb_wide_set_target(0);
+    glb_set_draw_area(0, 0, FRAME_W - 1, FRAME_H - 1);
+    uint64_t r5 = s_batch_reason[5], total = s_batch_total;
+    /* A: 24 opaque prims, a new window each (23 changes); 4-bit and 15-bit,
+     * some reaching the margins. */
+    for (int i = 0; i < 24; i++)
+        twin_quad(i, -40 + (i % 6) * 66, 8 + (i / 6) * 40, 70 + (i & 1) * 20, 44,
+                  (i & 4) ? TWIN_TPAGE15 : TWIN_TPAGE4);
+    /* B: semi-transparent, every mode (drawn one per batch either way). */
+    for (int i = 0; i < 4; i++) {
+        glb_set_semi_transparency(1, i);
+        twin_quad(i + 1, 20 + i * 70, 150, 80, 40, TWIN_TPAGE15);
+    }
+    glb_set_semi_transparency(0, 0);
+    /* C1: set-mask, 4 prims (3 changes). */
+    glb_set_mask_bits(1, 0);
+    for (int i = 0; i < 4; i++) twin_quad(i, 30 + i * 60, 180, 50, 30, TWIN_TPAGE4);
+    /* C2: mask check, 6 overlapping prims (5 changes; split in both modes). */
+    glb_set_mask_bits(0, 1);
+    for (int i = 0; i < 6; i++) twin_quad(i + 2, 10 + i * 40, 170, 90, 50, TWIN_TPAGE15);
+    glb_set_mask_bits(0, 0);
+    /* D: bilinear, 4 prims (3 changes). */
+    glb_set_texture_filter(1);
+    for (int i = 0; i < 4; i++) twin_quad(i + 3, -20 + i * 95, 205, 90, 30, TWIN_TPAGE4);
+    flush_tex_batch();
+    glb_set_texture_filter(0);
+    glb_set_texture_window(0);
+    uint64_t flushes = s_batch_reason[5] - r5, batches = s_batch_total - total;
+    printf("twin_flushes=%llu batches=%llu\n", (unsigned long long)flushes,
+           (unsigned long long)batches);
+    check(flushes == (on ? 5u : 34u), on ? "batching on: window flushes only under mask check"
+                                         : "batching off: every window change flushes");
+    int drawn[4] = {0, 0, 0, 0};
+    twin_oracle(scale, drawn);
+    glb_set_draw_area(0, 0, 1023, 511);
+    gl_renderer_sync_cpu();
+    check(gl_renderer_fbo_peek(0, 0, 1024, 512, peek), "native peek");
+    uint64_t digest = fnv(peek, sizeof peek, 0xcbf29ce484222325ull);
+    int fw = FRAME_W * scale, fh = FRAME_H * scale, ow = 0, oh = 0;
+    uint32_t *img = (uint32_t *)malloc((size_t)fw * fh * 4);
+    int n = img ? gl_renderer_read_display_hires(0, 0, FRAME_W, FRAME_H, img, fw * fh, &ow, &oh) : 0;
+    check(n == fw * fh && ow == fw && oh == fh, "hires readback size");
+    uint64_t hires = n ? fnv(img, (size_t)fw * fh * 4, 0xcbf29ce484222325ull) : 0;
+    free(img);
+    uint64_t wide = 0;
+    {
+        int ww = 426 * scale, wh = 512 * scale, gw = 0, gh = 0;
+        uint32_t *wb = (uint32_t *)malloc((size_t)ww * wh * 4);
+        int got = wb ? glb_wide_dump_full(wb, ww * wh, &gw, &gh, 0) : 0;
+        check(got == ww * wh && gw == ww && gh == wh, "wide surface dump size");
+        if (got) wide = fnv(wb, (size_t)ww * wh * 4, 0xcbf29ce484222325ull);
+        free(wb);
+    }
+    check(glGetError() == GL_NO_ERROR, "GL error");
+    printf("digest=%016llx\n", (unsigned long long)digest);
+    printf("hires=%016llx\n", (unsigned long long)hires);
+    printf("wide=%016llx\n", (unsigned long long)wide);
+    printf("checks=%d failures=%d\n", checks, failures);
+    return failures ? 1 : 0;
+}
+
 #if defined(PSX_TEST_RENDER_PASSES)
 /* Mode "passes": see the header. */
 static int passes_main(int scale, int window) {
@@ -642,6 +844,12 @@ int main(int argc, char **argv) {
         return rc;
     }
 #endif
+    if (!strcmp(mode, "twin")) {
+        if (si.windowed) check(si.hr_scale == 1, "window mode engaged");
+        int rc = twin_main(scale, si.windowed, argc > 3 && argv[3][0] == '1');
+        gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
+        return rc;
+    }
     if (!strcmp(mode, "mask")) {
         if (si.windowed) check(si.hr_scale == 1, "window mode engaged");
         int rc = mask_main(scale, si.windowed);
