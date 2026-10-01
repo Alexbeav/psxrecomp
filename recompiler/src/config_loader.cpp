@@ -1330,6 +1330,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<std::string> netplay_required_disc_fps;
     std::string netplay_local_viewport;
     std::string netplay_local_viewport_aspect;
+    std::string netplay_local_viewport_renderer;
+    uint32_t netplay_local_viewport_state_addr = 0;
+    std::vector<uint32_t> netplay_local_viewport_state_values;
     if (cfg.contains("netplay")) {
         const toml::value& np = toml::find(cfg, "netplay");
         if (np.contains("require_cue"))
@@ -1383,6 +1386,46 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                 netplay_local_viewport.empty()) {
                 throw std::runtime_error(
                     "[netplay] local_viewport_aspect requires local_viewport");
+            }
+        }
+        if (np.contains("local_viewport_renderer")) {
+            netplay_local_viewport_renderer =
+                toml::find<std::string>(np, "local_viewport_renderer");
+            for (char& c : netplay_local_viewport_renderer)
+                c = (char)std::tolower((unsigned char)c);
+            if (netplay_local_viewport_renderer != "native_wide" &&
+                netplay_local_viewport_renderer != "projection") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport_renderer must be \"native_wide\" "
+                    "or \"projection\", got '{}'",
+                    netplay_local_viewport_renderer));
+            }
+            if (netplay_local_viewport.empty()) {
+                throw std::runtime_error(
+                    "[netplay] local_viewport_renderer requires local_viewport");
+            }
+        }
+        {
+            const bool has_addr = np.contains("local_viewport_state_addr");
+            const bool has_values = np.contains("local_viewport_state_values");
+            if (has_addr != has_values)
+                throw std::runtime_error(
+                    "[netplay] local_viewport_state_addr and "
+                    "local_viewport_state_values must be set together");
+            if (has_addr) {
+                if (netplay_local_viewport.empty())
+                    throw std::runtime_error(
+                        "[netplay] local_viewport_state_addr requires local_viewport");
+                netplay_local_viewport_state_addr = parse_hex(
+                    toml::find<std::string>(np, "local_viewport_state_addr"),
+                    "netplay.local_viewport_state_addr");
+                for (const auto& value : toml::find<std::vector<std::string>>(
+                         np, "local_viewport_state_values"))
+                    netplay_local_viewport_state_values.push_back(parse_hex(
+                        value, "netplay.local_viewport_state_values"));
+                if (netplay_local_viewport_state_values.empty())
+                    throw std::runtime_error(
+                        "[netplay] local_viewport_state_values must not be empty");
             }
         }
     }
@@ -2220,6 +2263,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*netplay_required_disc_fps*/ netplay_required_disc_fps,
         /*netplay_local_viewport*/ netplay_local_viewport,
         /*netplay_local_viewport_aspect*/ netplay_local_viewport_aspect,
+        /*netplay_local_viewport_renderer*/ netplay_local_viewport_renderer,
+        /*netplay_local_viewport_state_addr*/ netplay_local_viewport_state_addr,
+        /*netplay_local_viewport_state_values*/ netplay_local_viewport_state_values,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
         /*bios_config_path*/ bios_config_path,

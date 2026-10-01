@@ -407,6 +407,10 @@ void psx_ws_note_gte_project(int nverts);
  * heuristic gameplay classification for native-wide presentation. */
 void gpu_ws_set_gameplay_state_gate(uint32_t addr,
                                     const uint32_t *values, int nvalues);
+/* [netplay] local_viewport_state_*: a split frame counts as a vertical split
+ * (netplay local viewport) only while this word holds one of the values. */
+void gpu_ws_set_local_viewport_state_gate(uint32_t addr,
+                                          const uint32_t *values, int nvalues);
 /* Native-wide HUD corner re-anchoring ([widescreen] nw_hud_corners): push
  * outer-third screen-space HUD primitives out to the true wide-frame corners
  * (they otherwise sit inset by the reveal). Runtime-only. Off by default. */

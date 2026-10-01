@@ -3017,8 +3017,33 @@ static void split_trace_note_draw_area(void) {
     }
 }
 
+#define WS_LOCAL_VIEWPORT_STATE_VALUES_MAX 16
+static uint32_t ws_local_viewport_state_addr = 0;
+static uint32_t ws_local_viewport_state_values[WS_LOCAL_VIEWPORT_STATE_VALUES_MAX];
+static int ws_local_viewport_state_value_count = 0;
+void gpu_ws_set_local_viewport_state_gate(uint32_t addr,
+                                          const uint32_t *values, int nvalues) {
+    if (nvalues < 0) nvalues = 0;
+    if (nvalues > WS_LOCAL_VIEWPORT_STATE_VALUES_MAX)
+        nvalues = WS_LOCAL_VIEWPORT_STATE_VALUES_MAX;
+    ws_local_viewport_state_addr = values && nvalues ? addr : 0;
+    ws_local_viewport_state_value_count = values ? nvalues : 0;
+    for (int i = 0; i < ws_local_viewport_state_value_count; i++)
+        ws_local_viewport_state_values[i] = values[i];
+}
+
+static int ws_local_viewport_state_ok(void) {
+    if (!ws_local_viewport_state_addr || ws_local_viewport_state_value_count == 0)
+        return 1;
+    const uint32_t state = psx_read_word(ws_local_viewport_state_addr);
+    for (int i = 0; i < ws_local_viewport_state_value_count; i++)
+        if (state == ws_local_viewport_state_values[i]) return 1;
+    return 0;
+}
+
 static int ws_vertical_split_active(void) {
-    return split_recent_left_age <= 8 && split_recent_right_age <= 8;
+    return split_recent_left_age <= 8 && split_recent_right_age <= 8 &&
+           ws_local_viewport_state_ok();
 }
 
 int gpu_last_frame_vertical_split_screen(void) {
