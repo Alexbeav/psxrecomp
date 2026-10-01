@@ -11,8 +11,8 @@ master has since been converted to plain C (`libretro.cpp` -> `libretro.c`,
 `PS_CPU` class dropped), which no longer compiles against our integration.
 Pin the checkout to the last compatible commit — the same base the
 trace-hook patches were generated from. The patches are not in this repository:
-their diff context is the oracle core's source. They are kept on the share at
-`Z:/Share/psxrecomp/tools/beetle-oracle-patches/` (`$PATCHES` below):
+their diff context is the oracle core's source. They are kept outside the
+repository. Set `$PATCHES` to the folder that holds them:
 
 ```bash
 git clone https://github.com/libretro/beetle-psx-libretro.git beetle-psx
