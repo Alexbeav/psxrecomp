@@ -221,6 +221,7 @@ int pad_mode_from_settings_string(const std::string& s, int fallback) {
     if (l == "hybrid")  return PAD_MODE_ANALOG;
     if (l == "analog")  return PAD_MODE_ANALOG;
     if (l == "digital") return PAD_MODE_DIGITAL;
+    if (l == "negcon")  return PAD_MODE_NEGCON;
     return fallback;
 }
 
@@ -229,6 +230,7 @@ const char* pad_mode_to_string(int mode) {
      * persisted as a user preference. */
     switch (mode) {
         case PAD_MODE_DIGITAL: return "digital";
+        case PAD_MODE_NEGCON:  return "negcon";
         default:               return "analog";
     }
 }

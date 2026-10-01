@@ -328,8 +328,29 @@ add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
             add_test(NAME ${_target}_${_profile} COMMAND ${_target} ${_profile})
             add_test(NAME ${_target}_${_profile}_mouse_roundtrip
                 COMMAND ${_target} ${_profile} --touch-mouse)
+            add_test(NAME ${_target}_${_profile}_negcon_roundtrip
+                COMMAND ${_target} ${_profile} --touch-negcon)
+            add_test(NAME ${_target}_${_profile}_guncon_roundtrip
+                COMMAND ${_target} ${_profile} --touch-guncon)
         endforeach()
+        # neGcon (PS1B-304): the byte protocol, same two builds.
+        add_executable(sio_negcon_p${_players}_test tests/test_sio_negcon.c)
+        target_include_directories(sio_negcon_p${_players}_test PRIVATE include)
+        target_compile_definitions(sio_negcon_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
+        add_test(NAME sio_negcon_p${_players}_test COMMAND sio_negcon_p${_players}_test)
+        # GunCon (PS1B-305): the byte protocol, same two builds.
+        add_executable(sio_guncon_p${_players}_test tests/test_sio_guncon.c)
+        target_include_directories(sio_guncon_p${_players}_test PRIVATE include)
+        target_compile_definitions(sio_guncon_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
+        add_test(NAME sio_guncon_p${_players}_test COMMAND sio_guncon_p${_players}_test)
     endforeach()
+    # neGcon twist (PS1B-304): the one-axis stick transform.
+    add_executable(psx_stick_axis_test tests/test_psx_stick_axis.c)
+    target_include_directories(psx_stick_axis_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(psx_stick_axis_test PRIVATE m)
+    endif()
+    add_test(NAME psx_stick_axis_test COMMAND psx_stick_axis_test)
 add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
     target_include_directories(sio_nymashock_dualshock_test PRIVATE include)
     add_test(NAME sio_nymashock_dualshock_test COMMAND ${Python3_EXECUTABLE}
@@ -379,6 +400,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(offline_seats_test tests/test_offline_seats.c)
     target_include_directories(offline_seats_test PRIVATE include)
     add_test(NAME offline_seats_test COMMAND offline_seats_test)
+
+    # PS1B-305: host pointer to GunCon X/Y (spec host-mapping vectors).
+    add_executable(guncon_map_test tests/test_guncon_map.c)
+    target_include_directories(guncon_map_test PRIVATE include)
+    if(NOT WIN32)
+        target_link_libraries(guncon_map_test PRIVATE m)
+    endif()
+    add_test(NAME guncon_map_test COMMAND guncon_map_test)
 
     # Pad-mode resolution at the launcher exit seam: a lock_mode title must
     # boot the pad type its game.toml declared whatever the launcher hands
@@ -490,6 +519,20 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
     target_link_libraries(keyboard_pad_chord_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME keyboard_pad_chord_test COMMAND keyboard_pad_chord_test)
+
+    # GunCon controls in keybinds.ini [guncon] (PS1B-305).
+    add_executable(guncon_keybinds_test
+        tests/test_guncon_keybinds.c
+        src/psx_keybinds.c)
+    target_include_directories(guncon_keybinds_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(guncon_keybinds_test PRIVATE
+        SDL_MAIN_HANDLED
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(guncon_keybinds_test PRIVATE ${PSX_SDL_LIBRARIES})
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/guncon_keybinds)
+    add_test(NAME guncon_keybinds_test
+        COMMAND guncon_keybinds_test ${CMAKE_CURRENT_BINARY_DIR}/guncon_keybinds)
 
     # Generic external replacement-pack core. The renderer integration is a
     # separate consumer; this target pins pack discovery, deterministic keying,
