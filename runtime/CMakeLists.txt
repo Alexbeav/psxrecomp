@@ -696,6 +696,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(text_source_guard_test PRIVATE include)
     add_test(NAME text_source_guard_test COMMAND text_source_guard_test)
 
+    # Two programs of one multi-program set share the memory cards, so the
+    # second one to start is refused while the first runs.
+    add_executable(program_set_lock_test
+        tests/test_program_set_lock.c
+        src/program_set_lock.c)
+    target_include_directories(program_set_lock_test PRIVATE include)
+    add_test(NAME program_set_lock_test COMMAND program_set_lock_test)
+
     # The player-facing "skip the BIOS" flag must resolve to the same boot
     # behaviour on retail SCPH-1001 and on the bundled OpenBIOS, whose
     # kernel-call HLE is (correctly) refused for want of a DeliverEvent anchor.
