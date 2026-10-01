@@ -240,6 +240,18 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_source_clock_test PRIVATE include)
     add_executable(cdrom_source_reset_test tests/test_cdrom_source_reset.c src/psx_sha256.c)
     target_include_directories(cdrom_source_reset_test PRIVATE include)
+    # PS1B-311: rows of the drive-profile behaviour spec that the older tests
+    # do not pin. The four named modes must stop fail-closed with a [CDROM] line.
+    add_executable(cdrom_drive_profile_rows_test tests/test_cdrom_drive_profile_rows.c src/psx_sha256.c)
+    target_include_directories(cdrom_drive_profile_rows_test PRIVATE include)
+    add_test(NAME cdrom_drive_profile_rows_test COMMAND cdrom_drive_profile_rows_test
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
+    foreach(_case bad-model no-tape init-cdda init-read-seek)
+        add_test(NAME cdrom_drive_profile_rows_${_case}_test COMMAND cdrom_drive_profile_rows_test
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng ${_case})
+        set_tests_properties(cdrom_drive_profile_rows_${_case}_test PROPERTIES
+            PASS_REGULAR_EXPRESSION "\\[CDROM\\]")
+    endforeach()
     # C1-C9/C2b-C3b/C8b replay (PS1B-212). The source sub-model profiles must
     # match the proxy rows (C3/C3b seeks, C4/C9 read start). The tape is the
     # first 256 words of the octoshock-2.2.2 cold random tape the TAS routes

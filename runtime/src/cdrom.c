@@ -965,14 +965,6 @@ static int s_nymashock_drive;
  * Observed on the Octoshock 2.7 and 2.10 oracles (Crash Bandicoot 7798S,
  * return 709). The nymashock-1.29.0 selector takes the floor draw first. */
 static int s_cd_reset_seek_draw_first;
-/* H3 clean-room stubs (PS1B-311). Each call marks drive-profile behaviour that
- * was removed and is to be written from the behaviour spec: recomp-corpus
- * references/ps1/CDROM-SOURCE-PROFILE-SPEC.md. The argument names the spec
- * rows. Remove this helper when no call is left. */
-static void cdrom_h3_stub(const char *rows) {
-    fprintf(stderr, "[CDROM] H3 stub reached: spec rows %s are not implemented\n", rows);
-    exit(2);
-}
 /* Source timing profile only: PAUSED and STANDBY have the same public status
  * bits but different restart costs. Kept separate from visible READ/SEEK. */
 static uint8_t s_source_seek_paused;
@@ -1708,6 +1700,28 @@ static void source_drive_head_update(void)
 }
 /* T172 end CD head. */
 
+/* Drive profile. Behaviour spec: recomp-corpus
+ * references/ps1/CDROM-SOURCE-PROFILE-SPEC.md; the row IDs below are its. */
+
+/* One sector at the current speed: 33,868,800 / 75 cycles, halved when
+ * Setmode bit 7 is set (PSX-SPX "Setmode"; spec section 2). */
+static uint64_t source_drive_sector_period(void)
+{
+    uint64_t single = CDROM_SINGLE_SPEED_SECTOR_CYCLES;
+    return (mode_reg & 0x80) ? single / 2 : single;
+}
+
+/* Start the idle head model (spec 6.1): the head is at `position`, its window
+ * is anchored to `anchor`, and it decodes its first sector at `first_advance`.
+ * The hold flag and the last decoded position are the caller's business. */
+static void source_drive_head_start(int position, int anchor, uint64_t first_advance)
+{
+    source_drive_head_valid = 1;
+    source_drive_head_lba = position;
+    source_drive_head_target = anchor;
+    source_drive_head_due = first_advance;
+}
+
 /* T172 authored CD implicit seek. */
 static int implicit_read_seek_cycles(void)
 {
@@ -1814,8 +1828,9 @@ static void start_read_stream(uint8_t cmd) {
         lba_to_msf(source_target, 150, &read_min, &read_sec, &read_sect);
         s_source_read_start_lba = source_target;
     }
-    /* H3-STUB [spec 6.2 R1]: drive-profile state at a read start. */
-    if (s_nymashock_drive) cdrom_h3_stub("6.2 R1");
+    /* Spec 6.2 R1: a read start leaves the drive holding a data position. A
+     * read that only continues the stream never gets here. */
+    if (s_nymashock_drive) source_drive_hold_logical = 1;
     read_cmd = cmd;
     read_delay = seek_cycles + initial_read_delay_cycles();
     s_cd_probe_read_start_count++;
@@ -2433,12 +2448,179 @@ static void queue_or_exec_command(uint8_t cmd) {
  * disc-speed divisors / 'instant' mode must never compress this latency back
  * into the race window. Call BEFORE stop_read_stream()/CDSTAT_READ clear. */
 static int pause_complete_delay_cycles(void) {
-    /* H3-STUB [spec 6.3 P1, P3-P7]: the whole body. It returns the Pause
-     * completion latency and, on the long path, sets the paused position, the
-     * delivery cursor and the drive-profile head. All paths, the default one
-     * included. */
-    cdrom_h3_stub("6.3 P1, P3-P7");
-    return 0;
+    int source_audio = source_cdda.enabled && cdda_playing;
+
+    /* Spec 6.3 P1: nothing is reading or playing, so there is nothing to
+     * settle. PSX-SPX "Response Timings" gives 1D25h..1F22h for "Pause (when
+     * paused)"; 5,000 is the C2-pause-from-paused fixture. No drive value
+     * changes and no draw is taken. */
+    if (!reading && !source_audio && !(stat_reg & (CDSTAT_READ | CDSTAT_PLAY)))
+        return 5000;
+
+    /* Spec 6.3 P3, step (a): where the drive stops. An active read stops at
+     * the next sector it would deliver, anything else at the last sector it
+     * did deliver (-1 when there is none). */
+    int paused_lba = reading ? msf_to_lba(read_min, read_sec, read_sect)
+                             : last_sector_lba;
+
+    /* Step (b): the source CD-DA model gives back the sectors it read ahead
+     * in this play, four at most, and the delivery cursor follows. Observed
+     * behaviour: cdrom_source_cdda_fixtures.json (Octoshock 2.3 oracle). */
+    if (source_audio) {
+        uint32_t read_ahead = source_cdda.sectors_read;
+        if (read_ahead > 4) read_ahead = 4;
+        cdda_lba -= read_ahead;
+        paused_lba = (int)cdda_lba;
+        lba_to_msf(paused_lba, 150, &read_min, &read_sec, &read_sect);
+    }
+
+    /* Step (c), source profile: Pause moves the drive back to two sectors
+     * before the next delivery, but not before the start of the stream. A
+     * later seek or resumed read starts from there (PSX-SPX "Setloc, Read,
+     * Pause"; Mega Man X5 6377M, return 7306). */
+    if (s_source_clock && reading) {
+        paused_lba -= 2;
+        if (paused_lba < s_source_read_start_lba)
+            paused_lba = s_source_read_start_lba;
+        lba_to_msf(paused_lba, 150, &read_min, &read_sec, &read_sect);
+    }
+
+    /* Spec 6.3 P4, drive profile: the idle head starts at the paused position
+     * and decodes its first sector one sector period after the command. The
+     * hold flag and the last decoded position stay as they are. */
+    if (s_nymashock_drive)
+        source_drive_head_start(paused_lba, paused_lba,
+                                psx_cycle_count + source_drive_sector_period());
+
+    /* Spec 6.3 P5: a base plus a per-sector slope at double speed, the whole
+     * value doubled at single speed. PSX-SPX "Response Timings" gives
+     * 10477Ah..11B302h (2x) and 20EAEFh..216E3Ch (1x), "about 5 sectors"; base
+     * and slope are fitted to oracle observation (held by
+     * cdrom_source_explicit_timing_test: 1,124,621 at sector 4, 2x; fixture
+     * N4 is owed). A position below sector 0 counts as 0. */
+    int64_t settle = 1124584 + (int64_t)(paused_lba > 0 ? paused_lba : 0) * 42596 / 4500;
+    if (!(mode_reg & 0x80)) settle *= 2;
+
+    /* Spec 6.3 P6, drive profile (which always has the source clock): one
+     * draw on top, after the doubling. The range 0..100,000 is fitted to
+     * oracle observation (Bio Hazard route; fixture N4 is owed). */
+    if (s_nymashock_drive && s_source_clock) settle += source_clock_random(100000);
+
+    return settle > INT32_MAX ? INT32_MAX : (int)settle;
+}
+
+/* Init (0Ah) in the drive profile, spec 6.5. PSX-SPX "Init" states the
+ * outline only: mode 20h, motor on, standby, abort all commands. The head
+ * travels to sector 0 as its own drive operation (s_source_reset_due); the
+ * second response has a separate deadline. */
+
+/* Spec 6.5 I6: travel time is the larger of a floor draw and the seek delay
+ * plus jitter. The two oracles take the two draws in opposite order (Crash
+ * Bandicoot 7798S, return 709; Bio Hazard). The ranges 0..3,250,000 and
+ * 0..25,000 are fitted to oracle observation (those routes; fixtures N1 and
+ * N9 are owed). Exactly two draws. */
+static uint64_t source_drive_init_travel(int origin, int motor_on, int paused)
+{
+    uint32_t floor_cycles, jitter;
+    if (s_cd_reset_seek_draw_first) {
+        jitter = source_clock_random(25000);
+        floor_cycles = source_clock_random(3250000);
+    } else {
+        floor_cycles = source_clock_random(3250000);
+        jitter = source_clock_random(25000);
+    }
+    uint64_t seek = (uint64_t)source_seek_lower_bound(origin, 0, motor_on, paused,
+                                                      mode_reg) + jitter;
+    return seek > floor_cycles ? seek : floor_cycles;
+}
+
+/* Spec 6.7 G3: on an idle drive in the drive profile GetlocP names the last
+ * decoded position, which keeps cycling through a nine-sector window (Mega
+ * Man X5 6377M, return 7311). This brings the head model up to date and
+ * returns that position. A value below 0 means nothing to report: -1 before
+ * the first decode, and the sectors below 0 that the head walks after an Init
+ * (no oracle observation yet; fixture N1). Only the head model sets the value
+ * (G5), so one left by an earlier idle period is returned as it stands. */
+static int source_drive_last_decoded(void)
+{
+    source_drive_head_update();
+    return source_drive_subq_lba;
+}
+
+static void source_drive_init_command(void)
+{
+    /* Spec section 4, S6: the drive profile is not qualified here. */
+    if (cdda_playing || (reading && (stat_reg & CDSTAT_SEEK))) {
+        fprintf(stderr, "[CDROM] Init during CD-DA or an unfinished read seek is outside the qualified drive profile\n");
+        exit(2);
+    }
+
+    /* I1: the first response carries the status from before the command
+     * (PSX-SPX "Init"). */
+    response_push(stat_reg);
+    set_irq(CDIRQ_ACK);
+
+    /* I6 times the travel with the motor bit and the paused state from
+     * before the command, and with the new mode. */
+    int motor_was_on = (stat_reg & CDSTAT_MOTOR) != 0;
+    int was_paused = s_source_seek_paused;
+
+    /* I2: demute, mode 20h (PSX-SPX "Init"), and a waiting Setloc is
+     * cancelled: its flag is cleared and its stored sector becomes 0. All of
+     * it at the command, not at the second response. */
+    cd_muted = 0;
+    mode_reg = 0x20;
+    setloc_pending = 0;
+    s_setloc_lba = 0;
+
+    /* I9: the head is already travelling. The command is answered, the
+     * second response is asked for again shortly, and the travel goes on with
+     * no new draw. PSX-SPX "Init" says such a command is dropped; the oracle
+     * answers it (cdrom_source_explicit_timing_test; fixture N2 is owed).
+     * This test comes before the disc test. */
+    if (source_reset_phase == 1) {
+        pending_arm(0x0A, 256, 1);
+        return;
+    }
+
+    /* I3: without a disc only the second response follows. 70,000 cycles has
+     * no oracle observation yet (fixture N1, no-disc row). */
+    if (!has_disc()) {
+        pending_arm(0x0A, 70000, 1);
+        return;
+    }
+
+    /* I5: an established read keeps the head two sectors ahead of the next
+     * delivery. Init travels from there; otherwise from the idle head, or
+     * from the delivery cursor when no head model runs. */
+    int origin = msf_to_lba(read_min, read_sec, read_sect);
+    if (reading) origin += 2;
+    else if (source_drive_head_valid) origin = source_drive_head_lba;
+
+    /* I4: abort everything (PSX-SPX "Init"): streams, buffers, the pended
+     * data-ready notice, queued CD audio and the XA decoder. The drive seeks
+     * with the motor on and is no longer in the paused timing state. */
+    stop_read_stream();
+    stop_cdda_playback();
+    clear_sector_buffer();
+    cdrom_clear_pending_dataready();
+    spu_cd_audio_reset();
+    xa_reset_decode();
+    stat_reg = (uint8_t)((stat_reg & ~(CDSTAT_READ | CDSTAT_PLAY)) |
+                         CDSTAT_MOTOR | CDSTAT_SEEK);
+    s_source_seek_paused = 0;
+
+    /* I6, I7: stage 1. The head counts as being at sector 0 with its window
+     * there, and stands still until the reset ends. The hold flag and the
+     * last decoded position are kept. */
+    s_source_reset_due = psx_cycle_count +
+        source_drive_init_travel(origin, motor_was_on, was_paused);
+    source_reset_phase = 1;
+    source_drive_head_start(0, 0, UINT64_MAX);
+
+    /* I8: the second response has its own deadline, fitted to oracle
+     * observation (Crash Bandicoot 7798S; fixture N1 is owed). */
+    pending_arm(0x0A, 4100000, 1);
 }
 
 /* Audio-only media cannot satisfy a normal data read, and the drive says so
@@ -2466,9 +2648,9 @@ static int reject_audio_disc_data_read(void) {
 }
 
 static void exec_command(uint8_t cmd) {
-    /* H3-STUB [spec 6.1 H5]: bring the drive-profile head up to the current
-     * guest time before a command executes. */
-    if (s_nymashock_drive) cdrom_h3_stub("6.1 H5");
+    /* Spec 6.1 H5: every command sees the idle head at the current guest
+     * time. The update does nothing without a drive profile. */
+    source_drive_head_update();
 #if !defined(PSX_NO_DEBUG_TOOLS) && !defined(_WIN32)
     /* Self-stop trap: PSX_CD_TRAP_CMD=<byte> makes the process SIGSTOP
      * itself the moment that CD command dispatches, so a debugger can
@@ -2651,8 +2833,10 @@ static void exec_command(uint8_t cmd) {
     }
 
     case 0x0A: /* Init */
-        /* H3-STUB [spec 6.5 I1-I12, section 4 S6]: Init in the drive profile. */
-        if (s_nymashock_drive) cdrom_h3_stub("6.5 I1-I12, S6");
+        if (s_nymashock_drive) {
+            source_drive_init_command();
+            break;
+        }
         if(s_source_clock) {
             if(reading || cdda_playing || pending_dataready) {
                 fprintf(stderr,"[CDROM] Source reset from an active stream is not qualified\n");exit(2);
@@ -2777,14 +2961,16 @@ static void exec_command(uint8_t cmd) {
             /* GetlocP reports the drive/sub-Q position. During a read the
              * sector stream has already advanced past the data-ready sector. */
             lba = msf_to_lba(read_min, read_sec, read_sect);
-            /* H3-STUB [spec 6.7 G2b, G2c]: drive-profile position during a read. */
-            if (s_nymashock_drive) cdrom_h3_stub("6.7 G2b-G2c");
-        } else if (s_nymashock_drive) {
-            /* H3-STUB [spec 6.7 G3-G5]: drive-profile position on an idle
-             * drive, including when it falls through to the two branches
-             * below. */
-            cdrom_h3_stub("6.7 G3-G5");
-            lba = 0;
+            /* Spec 6.7 G2b: in the drive profile an established read names
+             * the sector after the next delivery (Bio Hazard route;
+             * cdrom_source_explicit_timing_test). G2c: while the read is still
+             * seeking, GetlocP names the seek target, which is the delivery
+             * cursor (PSX-SPX "GetlocP": it works during a seek). */
+            if (s_nymashock_drive && !(stat_reg & CDSTAT_SEEK)) lba += 1;
+        } else if (s_nymashock_drive && source_drive_last_decoded() >= 0) {
+            /* Spec 6.7 G3: idle drive, drive profile. Without a decoded
+             * position the two branches below answer (G4). */
+            lba = source_drive_subq_lba;
         } else if (last_sector_lba >= 0) {
             lba = last_sector_lba;
         } else {
@@ -2964,8 +3150,17 @@ static void exec_command(uint8_t cmd) {
             int seek=s_source_toc_seek_model?source_toc_seek_cycles():0;
             int delay=seek>INT32_MAX-30000000?INT32_MAX:30000000+seek;
             pending_arm(0x1E, delay, 1);
-            /* H3-STUB [spec 6.6 T2]: drive-profile state at ReadTOC. */
-            if (s_nymashock_drive) cdrom_h3_stub("6.6 T2");
+            /* Spec 6.6 T2, drive profile: the idle window is anchored to
+             * sector 0, the drive no longer holds a data position, and a
+             * pended data-ready notice is dropped. The head keeps its
+             * position and its valid flag, and walks down from there (rule
+             * H3; Bio Hazard route; no isolating observation yet, fixture
+             * N6). */
+            if (s_nymashock_drive) {
+                source_drive_hold_logical = 0;
+                source_drive_head_target = 0;
+                cdrom_clear_pending_dataready();
+            }
             s_source_seek_paused = 1;
         }
         break;
@@ -3061,16 +3256,32 @@ static void process_pending(uint32_t cycles) {
      * due_cyc forward while the response FIFO is busy (old relative freeze
      * under/over-counted mid-slice acks and forked Pause→Seek→ReadN). */
     if (psx_cycle_count < pending.due_cyc) return;
-    /* H3-STUB [spec 6.5 I11]: the drive-profile Init second response waits
-     * for the reset to finish. */
-    if (s_nymashock_drive && pending.cmd == 0x0A) cdrom_h3_stub("6.5 I11");
+    /* Spec 6.5 I11: the Init second response is not presented while the head
+     * is still travelling or settling. It is put off to the reset's next
+     * deadline, and at least 256 cycles (cdrom_source_explicit_timing_test;
+     * fixture N1 is owed). This comes before the acknowledge test below. */
+    if (s_nymashock_drive && pending.cmd == 0x0A && s_source_reset_due) {
+        uint64_t soonest = psx_cycle_count + 256;
+        pending.due_cyc = s_source_reset_due > soonest ? s_source_reset_due : soonest;
+        return;
+    }
     if (irq_flag != 0) return;
     if (!source_clock_receive_ready()) return;
 
     done_cmd = pending.cmd;
-    /* H3-STUB [spec 6.4 K2]: drive-profile head when the SeekL second
-     * response is presented. */
-    if (s_nymashock_drive && done_cmd == 0x15) cdrom_h3_stub("6.4 K2");
+    /* Spec 6.4 K2: when the SeekL second response is presented the drive is
+     * idle at the target and holds a data position. The head rests six
+     * sectors below the target and decodes its first sector one sector period
+     * after the scheduled completion, not after the acknowledge (Bio Hazard
+     * route; cdrom_source_explicit_timing_test; fixture N5 is owed). SeekP
+     * does not start the head model (K3). */
+    if (s_nymashock_drive && done_cmd == 0x15) {
+        int seek_target = msf_to_lba(seek_min, seek_sec, seek_sect);
+        source_drive_hold_logical = 1;
+        source_drive_head_start(seek_target - 6, seek_target,
+                                pending.due_cyc + source_drive_sector_period());
+        source_drive_head_update();
+    }
     pending.pending = 0;
     pending.due_cyc = 0;
     response_clear();
@@ -3360,16 +3571,37 @@ void cdrom_init(const char* cue_path) {
         }
         s_source_clock=1;
     }
-    /* H3-STUB [spec section 4, S1-S5]: read PSX_CD_DRIVE_MODEL, set the two
-     * profile flags, fail closed on a bad value or a missing clock tape, and
-     * set the seven drive values to their start state. Until then no drive
-     * profile can be selected. */
+    /* Spec section 4, S1-S4. Unset or empty selects no drive profile.
+     * octoshock-2.7 selects the same drive profile as nymashock-1.29.0 with
+     * the other Init draw order. Anything else stops, and so does a drive
+     * profile without the source clock tape, which supplies its draws. */
     s_nymashock_drive = 0;
     s_cd_reset_seek_draw_first = 0;
     {
         const char *drive_model = getenv("PSX_CD_DRIVE_MODEL");
-        if (drive_model && *drive_model) cdrom_h3_stub("4 S1-S5");
+        if (drive_model && *drive_model) {
+            if (strcmp(drive_model, "octoshock-2.7") == 0) {
+                s_cd_reset_seek_draw_first = 1;
+            } else if (strcmp(drive_model, "nymashock-1.29.0") != 0) {
+                fprintf(stderr, "[CDROM] Unsupported PSX_CD_DRIVE_MODEL=%s\n", drive_model);
+                exit(2);
+            }
+            if (!s_source_clock) {
+                fprintf(stderr, "[CDROM] PSX_CD_DRIVE_MODEL needs the source clock tape\n");
+                exit(2);
+            }
+            s_nymashock_drive = 1;
+        }
     }
+    /* Spec section 4, S5: the drive starts with no idle head, no reset in
+     * progress and nothing decoded. */
+    source_drive_head_valid = 0;
+    source_drive_head_lba = 0;
+    source_drive_head_target = 0;
+    source_drive_head_due = 0;
+    source_drive_hold_logical = 0;
+    source_reset_phase = 0;
+    source_drive_subq_lba = -1;
     memset(&source_cdda,0,sizeof(source_cdda));
     const char *cdda_model=getenv("PSX_CD_CDDA_MODEL");
     if(cdda_model && *cdda_model) {
