@@ -23,6 +23,22 @@ void cdrom_init(const char* cue_path);
  * runtime overlay deliberately treats selected paths as session-only. */
 int cdrom_replace_disc(const char* cue_path, const char scex[4]);
 
+/* Put another image in the drive for a save-state load, without a lid event.
+ *
+ * A state restores the drive's registers, FIFOs and sector buffers, but not
+ * the image the drive reads. A state taken on another disc of a set therefore
+ * needs that disc mounted before it is loaded. Unlike cdrom_replace_disc this
+ * changes no guest-visible drive state: the load that follows restores it, and
+ * a refused load must leave the running game exactly as it was.
+ *
+ * cdrom_restore_mount_begin opens the image and makes it the mounted disc; the
+ * previous image stays open. cdrom_restore_mount_end(1) releases the previous
+ * image; cdrom_restore_mount_end(0) puts it back and closes the new one.
+ * begin returns 0, and changes nothing, when the image cannot be opened, when
+ * netplay is active or when a begin is already open. */
+int  cdrom_restore_mount_begin(const char* cue_path, const char scex[4]);
+void cdrom_restore_mount_end(int keep);
+
 /* Did cdrom_init() actually mount an image? 0 = the drive is empty.
  *
  * cdrom_init() is deliberately non-fatal when iso_open() fails (a BIOS-only

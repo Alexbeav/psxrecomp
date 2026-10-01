@@ -56,6 +56,30 @@ void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry
  * so their existing paths are untouched. */
 void savestate_set_disc_scope(int disc_number);
 
+/* The disc number in the current file names; 0 when scoping is off. */
+int savestate_disc_scope(void);
+
+/* The disc numbers a load may re-mount: the discs of the set this build
+ * boots, as they appear in the file names. With none set, a slot shows only
+ * the mounted disc's state. */
+#define SAVESTATE_MAX_DISCS 8
+void savestate_set_disc_roster(const int* disc_numbers, int count);
+
+/* The disc whose state the slot shows: the mounted disc's when it has one,
+ * else the newest state another disc of the roster left in that slot. 0 when
+ * the slot is empty or scoping is off. Loading a state of another disc mounts
+ * that disc first (psx_frontend_savestate_mount_disc); saving always writes
+ * the mounted disc's file. */
+int savestate_slot_disc(int slot);
+
+/* The mounted disc changed during the session: the player's "Change disc",
+ * or a load that mounted the state's disc. States saved from here on carry
+ * disc_number in their names, so a state is always named for the disc that
+ * was in the drive. Rewind history is dropped: every snapshot in it was taken
+ * with the previous disc mounted. disc_number is ignored for a title without
+ * per-disc naming; rewind is cleared either way. */
+void savestate_note_disc_mounted(int disc_number);
+
 /* Current slot directory (empty if not configured). */
 const char* savestate_dir(void);
 
@@ -152,6 +176,24 @@ void psx_frontend_on_rb_snap_loaded(void);
 /* Frontend hook (main.cpp): host OSD toast after a user save/load settles.
  * is_load: 0 = save, 1 = load. slot is 0-based. ok: 1 on success. */
 void psx_frontend_on_savestate_notify(int is_load, int slot, int ok);
+
+/* Frontend hooks (main.cpp) for a state taken on another disc of the set.
+ *
+ * psx_frontend_savestate_mount_disc puts disc_number in the drive without a
+ * lid event: the load that follows restores the drive's own state. It returns
+ * 1 when the disc's image was found, verified and mounted. It returns 0, and
+ * a short reason for the player in `why`, when the disc cannot be mounted;
+ * the disc already in the drive is then untouched.
+ *
+ * psx_frontend_savestate_mount_result follows every successful mount, once
+ * the load has finished: kept = 1 keeps the new disc, kept = 0 (the load was
+ * refused) puts the previous disc back.
+ *
+ * psx_frontend_on_savestate_refused shows `text`, a plain sentence that names
+ * the disc the slot needs, in place of the generic load-failed toast. */
+int  psx_frontend_savestate_mount_disc(int disc_number, char* why, size_t why_cap);
+void psx_frontend_savestate_mount_result(int disc_number, int kept);
+void psx_frontend_on_savestate_refused(int slot, const char* text);
 
 /* Called every block from psx_check_interrupts (in_exception == 0). If a save is
  * pending, serialize with cpu->pc = resume_pc; if a load is pending, restore and

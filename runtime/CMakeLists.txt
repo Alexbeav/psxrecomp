@@ -704,6 +704,16 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(program_set_lock_test PRIVATE include)
     add_test(NAME program_set_lock_test COMMAND program_set_lock_test)
 
+    # A save state restores the drive's state, not the image in the drive. Its
+    # file name carries the disc it was taken on: a disc change renames what is
+    # saved next, and a load mounts the state's disc or is refused.
+    add_executable(savestate_disc_scope_test
+        tests/test_savestate_disc_scope.c
+        src/savestate.c)
+    target_include_directories(savestate_disc_scope_test PRIVATE include)
+    add_test(NAME savestate_disc_scope_test
+             COMMAND savestate_disc_scope_test ${CMAKE_CURRENT_BINARY_DIR})
+
     # The player-facing "skip the BIOS" flag must resolve to the same boot
     # behaviour on retail SCPH-1001 and on the bundled OpenBIOS, whose
     # kernel-call HLE is (correctly) refused for want of a DeliverEvent anchor.

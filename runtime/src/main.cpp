@@ -1086,15 +1086,22 @@ static void post_load_probe_on_vblank(int turbo_active, int present_reached) {
  * longjmp). Clears present latches and forces the next vblank to show the
  * restored VRAM — including a blank if display was disabled in the snapshot. */
 static void savestate_input_guard_arm(void);
+/* The disc a load just mounted for its state (0 = none), for the load toast. */
+static int g_savestate_load_mounted_disc = 0;
 extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) {
     char buf[64];
     const int disp = slot + 1;
+    const int mounted_disc = is_load ? g_savestate_load_mounted_disc : 0;
+    if (is_load) g_savestate_load_mounted_disc = 0;
     if (!is_load && ok)
         psx_savestate_menu_note_slots_changed();
     if (is_load && ok)
         savestate_input_guard_arm();
     if (is_load) {
-        if (ok)
+        if (ok && mounted_disc)
+            snprintf(buf, sizeof(buf), "Loaded slot %d - disc %d mounted", disp,
+                     mounted_disc);
+        else if (ok)
             snprintf(buf, sizeof(buf), "Loaded slot %d", disp);
         else
             snprintf(buf, sizeof(buf), "Load failed slot %d", disp);
@@ -2483,6 +2490,105 @@ static std::string uppercase_ascii(std::string s) {
         c = (char)std::toupper((unsigned char)c);
     }
     return s;
+}
+
+/* --- The disc in the drive of a game that declares a set (PS1B-333) --------
+ *
+ * Save states and replays are named for the mounted disc (savestate.h). After
+ * launch the disc changes in two ways: the player's "Change disc...", and the
+ * load of a state that was taken on another disc of the set. */
+
+/* The image each disc of the set was last mounted from in this session, by
+ * set position. A disc the player picked from another folder is found again
+ * when a state needs it. */
+static std::unordered_map<int, std::filesystem::path> g_session_disc_images;
+/* The image a state load has mounted and not yet kept or put back. */
+static std::filesystem::path g_restore_mount_image;
+
+/* True when `image` is the disc of the set with this serial. The serial read
+ * from the image decides when there is one; an image without a readable boot
+ * serial is judged the way the launch check judges it. */
+static bool disc_image_carries_serial(const std::filesystem::path& image,
+                                      const std::string& detected,
+                                      const std::string& serial) {
+    if (!detected.empty())
+        return uppercase_ascii(detected) == uppercase_ascii(serial);
+    const PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
+        image, serial, /*expected_crc*/0, /*has_expected_crc*/false,
+        /*compute_crc*/false);
+    return id.opened && id.has_header && id.serial_matches;
+}
+
+/* The license string the drive answers for a disc of this region, or nullptr
+ * to keep the current one. */
+static const char *disc_scex_for_region(const std::string& region) {
+    if (region == "PAL") return "SCEE";
+    if (region == "NTSC-J") return "SCEI";
+    if (region == "NTSC-U") return "SCEA";
+    return nullptr;
+}
+
+extern "C" int psx_frontend_savestate_mount_disc(int disc_number, char *why,
+                                                 size_t why_cap) {
+    if (why && why_cap) why[0] = '\0';
+    if (disc_number < 1 || disc_number > (int)g_disc_metadata_roster.size() ||
+        !PSXRecompV4::disc_roster_program_owns(g_program_discs, disc_number)) {
+        std::snprintf(why, why_cap, "it is not a disc of this game");
+        return 0;
+    }
+    if (psx_netplay_active()) {
+        std::snprintf(why, why_cap, "the disc cannot change during netplay");
+        return 0;
+    }
+    const std::string serial = (size_t)(disc_number - 1) < g_disc_serials.size()
+        ? g_disc_serials[disc_number - 1] : std::string();
+    std::vector<std::filesystem::path> candidates;
+    const auto seen = g_session_disc_images.find(disc_number);
+    if (seen != g_session_disc_images.end()) candidates.push_back(seen->second);
+    candidates.push_back(g_disc_metadata_roster[disc_number - 1]);
+    bool image_found = false;
+    for (const auto& candidate : candidates) {
+        const auto resolved = PSXRecompV4::resolve_disc_path(candidate);
+        const PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
+            candidate, serial, /*expected_crc*/0, /*has_expected_crc*/false,
+            /*compute_crc*/false);
+        if (!id.toc_opened || resolved.mount.empty()) continue;
+        image_found = true;
+        /* Verified: the image carries the serial the set declares for it. */
+        if (!serial.empty() &&
+            !(id.opened && id.has_header && id.serial_matches))
+            continue;
+        if (cdrom_restore_mount_begin(resolved.mount.string().c_str(),
+                                      disc_scex_for_region(id.region))) {
+            g_restore_mount_image = resolved.mount;
+            return 1;
+        }
+    }
+    if (image_found)
+        std::snprintf(why, why_cap, "the image at its path is not that disc%s%s%s",
+                      serial.empty() ? "" : " (", serial.c_str(),
+                      serial.empty() ? "" : ")");
+    else
+        std::snprintf(why, why_cap, "its image%s%s%s was not found",
+                      serial.empty() ? "" : " (", serial.c_str(),
+                      serial.empty() ? "" : ")");
+    return 0;
+}
+
+extern "C" void psx_frontend_savestate_mount_result(int disc_number, int kept) {
+    cdrom_restore_mount_end(kept);
+    if (!kept) return;
+    g_session_disc_images[disc_number] = g_restore_mount_image;
+    g_savestate_load_mounted_disc = disc_number;
+    std::fprintf(stdout, "psxrecomp: disc %d mounted for a save state (%s)\n",
+                 disc_number, g_restore_mount_image.string().c_str());
+    psx_savestate_menu_note_slots_changed();
+}
+
+extern "C" void psx_frontend_on_savestate_refused(int slot, const char *text) {
+    (void)slot;
+    g_savestate_load_mounted_disc = 0;
+    host_osd_push(text, 4000);
 }
 
 // Region display label for the launcher, derived from the game-id serial
@@ -6576,6 +6682,27 @@ static int runtime_ui_change_disc(PsxRuntimeUiContext *context) {
         return 0;
     }
 
+    /* A game that declares a set changes only between its own discs: a state
+     * or a replay made afterwards is named for the disc in the drive, and a
+     * disc from outside the set has no name. A game that declares no set
+     * still takes any disc. */
+    int set_position = 0;
+    if (g_disc_metadata_roster.size() > 1) {
+        const std::filesystem::path picked_path(picked);
+        set_position = PSXRecompV4::disc_roster_change_position(
+            g_disc_metadata_roster, g_disc_serials, g_program_discs,
+            picked_path, [&](const std::string& serial) {
+                return disc_image_carries_serial(
+                    picked_path, identity.detected_serial, serial);
+            });
+        if (set_position == 0) {
+            host_osd_push(
+                "Disc not changed: that image is not a disc of this game",
+                3200);
+            return 0;
+        }
+    }
+
     char scex[4];
     const char *scex_ptr = nullptr;
     if (identity.region == "PAL") {
@@ -6592,6 +6719,12 @@ static int runtime_ui_change_disc(PsxRuntimeUiContext *context) {
                       2600);
         return 0;
     }
+
+    /* States and replays made from here on are named for this disc, and the
+     * rewind history from before the change is dropped. */
+    if (set_position) g_session_disc_images[set_position] = resolved.mount;
+    savestate_note_disc_mounted(set_position);
+    psx_savestate_menu_note_slots_changed();
 
     const std::string leaf = resolved.mount.filename().string();
     char message[320];
@@ -17399,11 +17532,24 @@ session_reboot:
          * set's other programs, and two of them can share an entry_pc (Rival
          * Schools). Its states take the disc's position in the SET, so they
          * never collide with another program's. */
-        savestate_set_disc_scope(
+        const int state_disc =
             !g_program_discs.empty()
                 ? PSXRecompV4::disc_roster_program_set_position(
                       g_program_discs, selected_disc_index)
-                : (game_discs.size() > 1 ? selected_disc_index : 0));
+                : (game_discs.size() > 1 ? selected_disc_index : 0);
+        savestate_set_disc_scope(state_disc);
+        /* A slot also shows a state taken on another disc this build boots;
+         * loading it mounts that disc (psx_frontend_savestate_mount_disc). */
+        {
+            std::vector<int> state_discs = g_program_discs;
+            if (state_discs.empty() && game_discs.size() > 1)
+                for (size_t i = 0; i < game_discs.size(); ++i)
+                    state_discs.push_back((int)i + 1);
+            savestate_set_disc_roster(state_discs.data(), (int)state_discs.size());
+            g_session_disc_images.clear();
+            if (state_disc >= 1 && !disc_path_str.empty())
+                g_session_disc_images[state_disc] = disc_path_str;
+        }
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
