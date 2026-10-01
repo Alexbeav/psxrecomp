@@ -163,7 +163,8 @@ A power-on recording does not start when a save state is loaded at boot
   peripherals in replays.
 - **Disc changes.** Changing the disc from the in-game menu ends the recording
   there, and the replay is saved up to the change. A multi-disc game can be
-  recorded up to its first disc swap.
+  recorded up to its first disc swap. A save state that needs another disc
+  does not load while a replay records or plays.
 - **Pad type changes.** A pad keeps the type it had at boot for the whole
   recording; a Hybrid pad does not switch between digital and analog.
   Controller hotplug does not change the ports during a recording.

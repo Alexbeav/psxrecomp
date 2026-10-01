@@ -2557,6 +2557,12 @@ extern "C" int psx_frontend_savestate_mount_disc(int disc_number, char *why,
         std::snprintf(why, why_cap, "the disc cannot change during netplay");
         return 0;
     }
+    /* A replay names one disc and carries no disc changes (PS1B-316). */
+    if (replay_session_state() != REPLAY_IDLE) {
+        std::snprintf(why, why_cap,
+                      "the disc cannot change while a replay records or plays");
+        return 0;
+    }
     const std::string serial = (size_t)(disc_number - 1) < g_disc_serials.size()
         ? g_disc_serials[disc_number - 1] : std::string();
     std::vector<std::filesystem::path> candidates;
