@@ -204,6 +204,9 @@ void gpu_ws_bg2d_set_host_arena(uint32_t base, uint32_t size);
 struct WsViewAnchor;
 int gpu_ws_bg2d_get_view(unsigned layer, struct WsViewAnchor *view);
 void gpu_ws_set_auto_ui_squash(int on);
+/* [widescreen] auto_ui_anchor = "in_place": each UI run squashes about its own
+ * centre rather than an edge/centre third (default "edges"). */
+void gpu_ws_set_auto_ui_in_place(int on);
 /* [widescreen.bg2d] Capcom 2D background tile-loop widen — hooked at the renderer's
  * column-count / start-tile-col / start-screen-x instructions. Identity at 4:3
  * and in the engine's 512 hi-res mode. */
@@ -535,6 +538,7 @@ typedef struct {
     uint32_t last_ovh_frame;    /* newest SUSTAINED polygon-overhang frame (the
                                    2D-only-scene classifier's world signal) */
     int      auto_ui_squash;     /* final-OT grouped UI correction configured */
+    int      auto_ui_in_place;   /* runs anchor at their own centre, not thirds */
     int      auto_ui_dense;      /* current list classified as a dense menu */
     uint32_t auto_ui_ot_rank;    /* highest populated UI rank in current list */
     uint64_t auto_ui_candidates;

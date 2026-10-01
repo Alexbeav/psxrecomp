@@ -208,8 +208,9 @@ int psx_ws_aspect_cone_contains(int32_t x, int32_t z, int32_t y,
     return 0;
 }
 void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
-                        int32_t display_width, int dense_menu) {
+                        int32_t display_width, int dense_menu, int in_place) {
     (void)items; (void)count; (void)display_width; (void)dense_menu;
+    (void)in_place;
 }
 int32_t ws_ui_anchor_for_bounds(int32_t x, int32_t width,
                                 int32_t display_width) {

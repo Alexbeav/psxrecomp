@@ -13416,6 +13416,7 @@ int main(int argc, char** argv) {
             g_ws_anchor_addr   = gc.ws_sprite_anchor_addr;
             g_ws_hud_sprt      = gc.ws_hud_sprt_squash;
             gpu_ws_set_auto_ui_squash(gc.ws_auto_ui_squash ? 1 : 0);
+            gpu_ws_set_auto_ui_in_place(gc.ws_auto_ui_in_place ? 1 : 0);
             /* [widescreen] full_2d — opt a pure-2D sprite game (MMX6) into the
              * widescreen present path. Applied to the GPU layer up front so the
              * ws engage at game entry classifies every frame as gameplay. */

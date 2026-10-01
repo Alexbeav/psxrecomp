@@ -106,6 +106,7 @@ static int32_t  ws_xnum = 1, ws_xden = 1;   /* X squash factor; 1/1 = off */
 static uint32_t ws_anchor_addr = 0;          /* scratchpad addr of anchor SXY */
 static int      ws_hud_sprt = 0;             /* edge-anchor untagged HUD SPRTs */
 static int      ws_auto_ui_squash;
+static int      ws_auto_ui_in_place;
 static int      ws_auto_ui_dense;
 static int      ws_active(void);
 static int      gp0_command_word_count(uint8_t opcode);
@@ -215,6 +216,10 @@ static void ws_clear_all_reveal_margins(void);
  * engage (gpu_ws_set_full_2d); PSX_WS_FORCE_2D=1 forces it on for testing. */
 static int ws_full_2d = 0;
 void gpu_ws_set_full_2d(int on) { ws_full_2d = on ? 1 : 0; }
+void gpu_ws_set_auto_ui_in_place(int on) {
+    ws_auto_ui_in_place = on ? 1 : 0;
+}
+
 void gpu_ws_set_auto_ui_squash(int on) {
     ws_auto_ui_squash = on ? 1 : 0;
     ws_ui_prepass_count = 0;
@@ -2061,6 +2066,7 @@ void gpu_ws_get_debug(GpuWsDebug* out) {
     out->ovh_prims         = ws_ovh_prev;
     out->last_ovh_frame    = ws_sust_ovh_stamp;
     out->auto_ui_squash    = ws_auto_ui_squash;
+    out->auto_ui_in_place  = ws_auto_ui_in_place;
     out->auto_ui_dense     = ws_auto_ui_dense;
     out->auto_ui_ot_rank   =
         ws_ui_prepass_rank != 0xFFFFu ? ws_ui_prepass_rank : UINT32_MAX;
@@ -5471,7 +5477,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
         groups[i] = ws_ui_prepass[i].group;
     ws_ui_group_assign(groups, ws_ui_prepass_count, ws_disp_w(),
-                       ws_auto_ui_dense);
+                       ws_auto_ui_dense, ws_auto_ui_in_place);
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
         ws_ui_prepass[i].group.anchor = group_origin + groups[i].anchor;
 }

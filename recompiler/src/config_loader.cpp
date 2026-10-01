@@ -1494,6 +1494,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     uint32_t ws_sprite_anchor_addr = 0;
     bool ws_hud_sprt_squash = false;
     bool ws_auto_ui_squash = false;
+    bool ws_auto_ui_in_place = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
     bool ws_precise_nclip = false;
@@ -1640,6 +1641,15 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_hud_sprt_squash = toml::find<bool>(ws, "hud_sprt_squash");
         if (ws.contains("auto_ui_squash"))
             ws_auto_ui_squash = toml::find<bool>(ws, "auto_ui_squash");
+        if (ws.contains("auto_ui_anchor")) {
+            const auto anchor = toml::find<std::string>(ws, "auto_ui_anchor");
+            if (anchor == "in_place")
+                ws_auto_ui_in_place = true;
+            else if (anchor != "edges")
+                throw std::runtime_error(fmt::format(
+                    "{}: [widescreen] auto_ui_anchor must be \"edges\" or "
+                    "\"in_place\", got \"{}\"", config_path.string(), anchor));
+        }
         if (ws.contains("full_2d"))
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
@@ -2223,6 +2233,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_sprite_anchor_addr*/ ws_sprite_anchor_addr,
         /*ws_hud_sprt_squash*/    ws_hud_sprt_squash,
         /*ws_auto_ui_squash*/      ws_auto_ui_squash,
+        /*ws_auto_ui_in_place*/    ws_auto_ui_in_place,
         /*data_shard_funcs*/      data_shard_funcs,
         /*mod_function_entry_funcs*/ mod_function_entry_funcs,
         /*hot_funcs*/             hot_funcs,

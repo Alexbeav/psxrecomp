@@ -95,6 +95,10 @@ auto_ui_squash     = true              # pre-scan the current GPU linked list,
                                        # select its highest populated UI rank,
                                        # and share one anchor across each
                                        # complete glyph/icon run.
+auto_ui_anchor     = "edges"           # "edges" (default): each run pins to
+                                       # its left/centre/right third.
+                                       # "in_place": each run squashes about
+                                       # its own centre.
 clear_reveal       = true              # clear synthetic native-wide side margins
                                        # at opted-in scene/map boundaries (default false).
 nw_left_hud_packet_lo = "0x000E3400"  # optional targeted left-HUD packet range
@@ -140,6 +144,15 @@ axis-aligned textured quads/rectangles in the front populated ordering-table
 layer are grouped by texture and screen row before any command is transformed.
 Depth-sorted world packets, full-frame backdrops, and true 4:3 frames remain
 untouched.
+
+By default each run is pinned to the nearest screen edge or centre third, so
+corner HUD moves to the wide-frame corners. Some HUD widgets mix those flat
+quads with GTE-projected parts the correction cannot move: Spider-Man's compass
+is two ring quads around a 3D arrow. Edge-anchoring the ring pulled it ~70 px
+off its arrow at 32:9. `auto_ui_anchor = "in_place"` squashes each run about
+its own centre instead, which corrects its proportions and leaves it where the
+stretched 4:3 layout places it. `gpu_state` reports the mode as
+`ws.auto_ui.in_place`.
 
 **Changing `sprite_tag_funcs` requires a game regen** (the tag callback is
 emitted into the generated C). `widescreen.cull.keep` is consumed by both the
