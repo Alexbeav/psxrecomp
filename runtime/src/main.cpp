@@ -5919,7 +5919,11 @@ static void netplay_barrier_admit(int override) {
             (tip_hold && !psx_start_bisect_no_tiphold_capture());
         if (need_sample) {
             PsxNetPad local{};
-            if (override >= 0 && !g_headless) {
+            /* An explicit debug-server override is the local player's input
+             * windowed or headless: headless LAN peers are how netplay is
+             * exercised without windows. With no override, headless has no
+             * human device and plays a neutral pad. */
+            if (override >= 0) {
                 capture_override_pad(override, &local);
             } else if (g_headless) {
                 local.buttons = 0xFFFFu;
