@@ -684,6 +684,18 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(kernel_patch_ranges_test PRIVATE include)
     add_test(NAME kernel_patch_ranges_test COMMAND kernel_patch_ranges_test)
 
+    # A disc of a multi-disc set can carry the program with a per-disc code
+    # byte (Rebel Assault II loads the disc number with a different immediate).
+    # The page where the loaded executable differs from the generated-from
+    # image must be found, so its code runs from RAM and not from the other
+    # disc's compiled function.
+    add_executable(text_source_guard_test
+        tests/test_text_source_guard.c
+        src/text_source_guard.c
+        src/crc32.c)
+    target_include_directories(text_source_guard_test PRIVATE include)
+    add_test(NAME text_source_guard_test COMMAND text_source_guard_test)
+
     # The player-facing "skip the BIOS" flag must resolve to the same boot
     # behaviour on retail SCPH-1001 and on the bundled OpenBIOS, whose
     # kernel-call HLE is (correctly) refused for want of a DeliverEvent anchor.

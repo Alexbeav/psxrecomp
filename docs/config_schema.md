@@ -155,6 +155,24 @@ or by hand — switches discs even though `path` still points at the previous
 one. That is what makes disc choice manageable like any other setting. Both
 keys are written only for multi-disc titles.
 
+### One program on several discs
+
+One build covers a set when every disc boots the same program. The discs do
+not have to be byte-identical:
+
+- **Setup** (`tools/new_project_layout/verify_disc_set.py`) accepts a set whose
+  boot executables have the same entry point, load address, size and stack base
+  and differ in only a few 4 KiB pages of the loaded image. Metal Gear Solid
+  (Europe) differs in one byte of a path string. A set that differs in a header
+  field, in size or in many pages is refused as separate programs.
+- **Runtime.** The generated dispatch file carries a CRC-32 per page of the
+  executable it was generated from. When the player boots a disc whose
+  executable differs on a page, native code is refused on that page and the
+  interpreter runs the loaded bytes
+  (`runtime/include/text_source_guard.h`). The start-up log then says how many
+  pages differ. Star Wars: Rebel Assault II needs this: each disc loads the
+  disc number with a different immediate.
+
 ## Recompiler block
 
 ```toml
