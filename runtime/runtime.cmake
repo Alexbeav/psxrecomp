@@ -673,6 +673,17 @@ set(_psxrt_registry_externs "")
 set(_psxrt_registry_entries "")
 set(_psxrt_bios_linked "")
 set(_psxrt_bios_skipped "")
+# PS1B-306: the runtime's kernel-bless state array holds PSX_KBLESS_MAX_ENTRIES
+# rows. A generated BIOS whose table is larger cannot be blessed, and the
+# runtime refuses to start on it, so stop the configure here instead.
+file(STRINGS "${PSXRECOMP_ROOT}/runtime/include/psx_bios_image.h" _psxrt_kbless_cap_line
+     REGEX "define PSX_KBLESS_MAX_ENTRIES [0-9]+" LIMIT_COUNT 1)
+if(NOT _psxrt_kbless_cap_line MATCHES "PSX_KBLESS_MAX_ENTRIES ([0-9]+)")
+    message(FATAL_ERROR
+        "PSX_KBLESS_MAX_ENTRIES not found in runtime/include/psx_bios_image.h; "
+        "the kernel-bless capacity check cannot run.")
+endif()
+set(_psxrt_kbless_cap "${CMAKE_MATCH_1}")
 foreach(_stem IN LISTS PSXRECOMP_BIOS_STEMS)
     # Presence is not enough: a generated/ tree left over from before the
     # backend-descriptor mechanism has both files but defines no descriptor,
@@ -686,6 +697,18 @@ foreach(_stem IN LISTS PSXRECOMP_BIOS_STEMS)
              REGEX "${_stem}_psx_bios_backend" LIMIT_COUNT 1)
     endif()
     if(EXISTS "${PSXRECOMP_ROOT}/generated/${_stem}_full.c" AND _psxrt_desc)
+        file(STRINGS "${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c" _psxrt_kb
+             REGEX "${_stem}_psx_bios_kernel_body_count = [0-9]+" LIMIT_COUNT 1)
+        if(_psxrt_kb MATCHES "kernel_body_count = ([0-9]+)")
+            set(_psxrt_kb_rows "${CMAKE_MATCH_1}")
+            if(_psxrt_kb_rows GREATER _psxrt_kbless_cap)
+                message(FATAL_ERROR
+                    "generated/${_stem}_dispatch.c has a kernel-bless table of "
+                    "${_psxrt_kb_rows} rows; the runtime holds ${_psxrt_kbless_cap} "
+                    "(PSX_KBLESS_MAX_ENTRIES in runtime/include/psx_bios_image.h). "
+                    "Raise the capacity or reduce the table; see PS1B-306.")
+            endif()
+        endif()
         list(APPEND PSXRECOMP_BIOS_GENERATED
             ${PSXRECOMP_ROOT}/generated/${_stem}_full.c
             ${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c)

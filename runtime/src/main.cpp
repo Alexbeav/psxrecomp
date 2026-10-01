@@ -17175,14 +17175,18 @@ session_reboot:
                      psx_bios_hle_boot_skip_enabled()
                          ? "HLE (shell skipped)" : "LLE (real intro)",
                      psx_bios_image.image_id ? psx_bios_image.image_id : "?");
-        /* PS1B-306: an oversized bless table turns kernel bless off for the
-         * whole run, silently. Say so; the decision itself is unchanged. */
+        /* PS1B-306: a bless table larger than the runtime's verify-state
+         * array is a build defect. Stop here; running on would interpret
+         * every relocated kernel routine with nothing to show for it. */
         uint32_t kb_entries = 0, kb_capacity = 0;
-        if (!psx_kernel_bless_table_fits(&kb_entries, &kb_capacity))
-            std::fprintf(stdout,
-                         "psxrecomp: kbless: disabled (%u > %u); relocated kernel "
-                         "code runs in the interpreter (PS1B-306)\n",
+        if (!psx_kernel_bless_table_fits(&kb_entries, &kb_capacity)) {
+            std::fprintf(stderr,
+                         "psxrecomp: FATAL: kernel-bless table of %s has %u rows; "
+                         "the runtime holds %u (PSX_KBLESS_MAX_ENTRIES, PS1B-306)\n",
+                         psx_bios_image.image_id ? psx_bios_image.image_id : "?",
                          (unsigned)kb_entries, (unsigned)kb_capacity);
+            return 1;
+        }
     }
     /* Route identity needs the final boot mode, and must be settled before
      * the first guest instruction. */

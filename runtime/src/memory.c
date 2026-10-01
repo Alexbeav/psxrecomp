@@ -274,7 +274,7 @@ static uint64_t kbless_patch_skips = 0;   /* segments skipped, TCP counter */
 #define KBLESS_UNKNOWN  0u
 #define KBLESS_CLEAN    1u
 #define KBLESS_MISMATCH 2u
-#define KBLESS_MAX_ENTRIES 4096u
+#define KBLESS_MAX_ENTRIES PSX_KBLESS_MAX_ENTRIES   /* psx_bios_image.h */
 static uint8_t  kbless_state[KBLESS_MAX_ENTRIES];   /* parallel to bodies[] */
 static int      kbless_enabled = -1;   /* env PSX_KERNEL_BLESS=0 disables */
 /* Always-on counters (TCP kernel_bless). */
@@ -287,7 +287,17 @@ static int kbless_on(void) {
     if (kbless_enabled < 0) {
         const char* e = getenv("PSX_KERNEL_BLESS");
         kbless_enabled = (e && e[0] == '0') ? 0 : 1;
-        if (psx_bios_kernel_body_count > KBLESS_MAX_ENTRIES) kbless_enabled = 0;
+        /* A table that does not fit is a build defect. Refuse it; turning
+         * bless off instead ran every kernel routine interpreted, unseen
+         * (PS1B-306). main.cpp stops on the same condition at start-up; this
+         * also covers a backend switched in later. */
+        if (psx_bios_kernel_body_count > KBLESS_MAX_ENTRIES) {
+            fprintf(stderr, "FATAL: kernel-bless table has %u rows; the runtime "
+                    "holds %u (PSX_KBLESS_MAX_ENTRIES)\n",
+                    (unsigned)psx_bios_kernel_body_count,
+                    (unsigned)KBLESS_MAX_ENTRIES);
+            exit(1);
+        }
         s_kb_lo      = psx_bios_image.kbless_ram_lo;
         s_kb_span    = psx_bios_image.kbless_ram_hi - psx_bios_image.kbless_ram_lo;
         s_kb_rom_off = psx_bios_image.kbless_rom_off;
@@ -441,14 +451,21 @@ void psx_kernel_bless_stats(uint64_t out[8]) {
     out[7] = kbless_patch_skips;
 }
 
-/* PS1B-306: does the active image's bless table fit kbless_state? kbless_on()
- * turns bless off when it does not, and nothing else says so. This only
- * reports that decision for the start-up line and the run report; it reads
- * the selected backend's constants and changes no state. */
+/* PS1B-306: does the active image's bless table fit kbless_state? A table
+ * that does not is refused: main.cpp stops at start-up and kbless_on() stops
+ * at its latch. This reads the selected backend's constants for those checks
+ * and for the run report; it changes no state. */
 int psx_kernel_bless_table_fits(uint32_t *entries, uint32_t *capacity) {
     if (entries) *entries = psx_bios_kernel_body_count;
     if (capacity) *capacity = KBLESS_MAX_ENTRIES;
     return psx_bios_kernel_body_count <= KBLESS_MAX_ENTRIES;
+}
+
+/* Bless latch for the run report: -1 not decided yet (no kernel-window
+ * dispatch so far), 0 off (PSX_KERNEL_BLESS=0 or an image with no bless
+ * window), 1 on. Reads only. */
+int psx_kernel_bless_state(void) {
+    return kbless_enabled;
 }
 
 void psx_kernel_bless_resync_after_restore(void) {
