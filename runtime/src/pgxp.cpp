@@ -130,6 +130,19 @@ extern "C" int  pgxp_cpu_mode(void) { return s_cpu_mode; }
 extern "C" void  pgxp_set_tolerance(float pixels) { s_tolerance = pixels; }
 extern "C" float pgxp_tolerance(void) { return s_tolerance; }
 
+static int s_mod_request = 0;
+static int s_mod_request_cpu = 0;
+
+extern "C" void pgxp_mod_request(int enabled, int cpu_mode) {
+    s_mod_request = enabled ? 1 : 0;
+    s_mod_request_cpu = (enabled && cpu_mode) ? 1 : 0;
+}
+
+extern "C" int pgxp_mod_requested(int *cpu_mode) {
+    if (cpu_mode) *cpu_mode = s_mod_request_cpu;
+    return s_mod_request;
+}
+
 extern "C" void pgxp_suppress_begin(void) {
     ++s_suppress;
     recompute_active();

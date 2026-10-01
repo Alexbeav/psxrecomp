@@ -39,6 +39,21 @@ int  pgxp_cpu_mode(void);
 void  pgxp_set_tolerance(float pixels);
 float pgxp_tolerance(void);
 
+/* Mod-owned request (the framework's psx.enhancement.pgxp package).
+ *
+ * The mod's activation runs at session start, before main.cpp's renderer
+ * setup, and that setup applies the [video] baseline (geometry_correction,
+ * perspective_texturing, pgxp_cpu_mode). An activation that armed the
+ * corrections directly was switched straight back off there. So the
+ * activation only records a request, and the renderer setup combines it with
+ * the baseline (pgxp_session.h). reset_mod_owned_presentation() clears it at
+ * every session start, so a session with an empty plan (netplay, or the mod
+ * disabled) gets exactly the [video] values. */
+void pgxp_mod_request(int enabled, int cpu_mode);
+/* Returns nonzero when this session's plan asked for PGXP; *cpu_mode (may be
+ * NULL) receives the mod's CPU-mode option. */
+int  pgxp_mod_requested(int *cpu_mode);
+
 /* Drop all shadows (savestate load, raw RAM restore, timeline breaks).
  * O(1) via generation bump. Deferred while suppressed. */
 void pgxp_invalidate_all(void);

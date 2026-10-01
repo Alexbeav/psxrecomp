@@ -373,6 +373,16 @@ if(BUILD_TESTING)
     target_include_directories(pgxp_test PRIVATE include)
     add_test(NAME pgxp_test COMMAND pgxp_test)
 
+    # psx.enhancement.pgxp at session start (docs/ENHANCEMENTS.md G1.11): the
+    # real builtin activation (mod API stubbed) and the pgxp_session.h
+    # resolver main.cpp's renderer setup uses, in main.cpp's order. Pins that
+    # the [video] baseline no longer undoes the mod, that a cleared (netplay)
+    # plan keeps the baseline, and that the env overrides win.
+    add_executable(pgxp_session_test tests/test_pgxp_session.cpp
+        src/mod_builtin_pgxp.c src/pgxp.cpp src/psx_ram_geometry.c)
+    target_include_directories(pgxp_session_test PRIVATE include)
+    add_test(NAME pgxp_session_test COMMAND pgxp_session_test)
+
     add_executable(psx_instr_cost_test tests/test_psx_instr_cost.cpp)
     target_include_directories(psx_instr_cost_test PRIVATE include)
     add_test(NAME psx_instr_cost_test COMMAND psx_instr_cost_test)
