@@ -69,6 +69,18 @@ int main(void) {
     assert(!ws_hud_anchor_lookup(tags, WS_HUD_ANCHOR_TABLE_SIZE,
                                  0x80010004u, packet, 4u, 20u, &anchor));
 
+    /* Two pending 1000-piece composites, with MMX6's 40-byte packet stride.
+     * Losing early arm pieces splits Ilumina when world origin shifts. */
+    for (uint32_t i = 0; i < 2000u; ++i)
+        ws_hud_anchor_insert(tags, WS_HUD_ANCHOR_TABLE_SIZE,
+                             0x10004u + i * 40u, 0, &guard, 30u + i / 1000u);
+    for (uint32_t i = 0; i < 2000u; ++i) {
+        anchor = 99;
+        assert(ws_hud_anchor_lookup(tags, WS_HUD_ANCHOR_TABLE_SIZE,
+                                    0x10004u + i * 40u, packet, 4u, 31u, &anchor));
+        assert(anchor == 0);
+    }
+
     puts("ws_hud_anchor_test: PASS");
     return 0;
 }
