@@ -961,13 +961,24 @@ static int s_source_cold_status_model;
 static int s_source_toc_seek_model;
 static int s_source_explicit_seek_model;
 static int s_nymashock_drive;
-static int s_cd_reset_seek_draw_first;   /* octoshock-2.7: MSVC order of Reset's two draws */
+/* octoshock-2.7: Init takes its seek-jitter draw before its floor draw.
+ * Observed on the Octoshock 2.7 and 2.10 oracles (Crash Bandicoot 7798S,
+ * return 709). The nymashock-1.29.0 selector takes the floor draw first. */
+static int s_cd_reset_seek_draw_first;
+/* H3 clean-room stubs (PS1B-311). Each call marks drive-profile behaviour that
+ * was removed and is to be written from the behaviour spec: recomp-corpus
+ * references/ps1/CDROM-SOURCE-PROFILE-SPEC.md. The argument names the spec
+ * rows. Remove this helper when no call is left. */
+static void cdrom_h3_stub(const char *rows) {
+    fprintf(stderr, "[CDROM] H3 stub reached: spec rows %s are not implemented\n", rows);
+    exit(2);
+}
 /* Source timing profile only: PAUSED and STANDBY have the same public status
  * bits but different restart costs. Kept separate from visible READ/SEEK. */
 static uint8_t s_source_seek_paused;
-/* Native MSF names the next delivered sector. The source drive has two
- * additional sectors in its pipeline. Remember the stream origin so Pause
- * can rewind up to four physical reads even before that pipeline is full. */
+/* The delivery cursor names the next sector handed to the guest. In the
+ * source profile the drive head is two sectors ahead of it. Remember where the
+ * stream started so that Pause does not move back past it. */
 static int s_source_read_start_lba;
 static uint32_t source_clock_random(uint32_t maximum) {
     uint32_t value;
@@ -1517,11 +1528,11 @@ static int read_sector_at(int min, int sec, int sect) {
         delivery.data_delivered = 0;
         delivery.skip_reason = CDROM_SKIP_XA_AUDIO_REALTIME;
     }
-    /* The Nymashock 1.29.0 drive profile was qualified without an XA end-of-file
-     * event: on Bio Hazard (SLPS-00998) the source core raises no CD interrupt at
-     * the EOF sector of the intro stream, and delivering DATA_END here (cd55e8a4)
-     * diverged the 239,202-return reference route at return 5149. Keep the
-     * DATA_END delivery for the default drive model only. */
+    /* Drive profile: an XA audio sector with the end-of-file bit raises no CD
+     * interrupt. Observed on the Nymashock 1.29.0 oracle (Bio Hazard,
+     * SLPS-00998, intro stream): with the interrupt, the replay departs from
+     * the oracle at return 5149. The default path keeps the data-end
+     * interrupt. */
     if (!s_nymashock_drive &&
         (delivery.xa_submode & (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) ==
         (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) {
@@ -1670,20 +1681,16 @@ static int source_seek_lower_bound(int origin, int target, int motor_on, int pau
 {
     return psx_cd_seek_delay(origin, target, motor_on, paused, mode, s_nymashock_drive);
 }
-/* Nymashock 1.29.0 HandlePlayRead: after two pipeline fills and the
- * verified target header, standby advances to target+3 then retreats nine.
- * Keep this physical cursor separate from the guest's next-delivery cursor. */
+/* Idle head of the drive profile. After a SeekL the drive rests just below
+ * the target and then walks a nine-sector window. This is the mechanism's
+ * position, separate from the delivery cursor. */
 static int source_drive_head_valid, source_drive_head_lba, source_drive_head_target;
 static uint64_t source_drive_head_due;
 static int source_drive_hold_logical, source_reset_phase;
-/* Source SubQBuf_Safe latch — the sector whose sub-Q the drive last decoded.
- * HandlePlayRead reads the sector AT CurSector and decodes its Q before
- * advancing the cursor, so the decoded position is the pre-increment value,
- * one behind the physical head tracked above. The source keeps calling
- * HandlePlayRead while the drive is paused or in standby, so this latch goes
- * on cycling after a Pause; it only freezes when the drive seeks or stops,
- * which is exactly when source_drive_head_valid is cleared. -1 = never
- * decoded. */
+/* Position of the sector whose sub-Q the drive decoded last; GetlocP reports
+ * it. It is taken before the head moves, so it trails the head by one
+ * advance. It keeps cycling while the drive is paused or in standby
+ * (Mega Man X5 6377M, return 7311). -1 means nothing decoded yet. */
 static int source_drive_subq_lba = -1;
 /* T172 authored CD head. */
 static void source_drive_head_update(void)
@@ -1807,7 +1814,8 @@ static void start_read_stream(uint8_t cmd) {
         lba_to_msf(source_target, 150, &read_min, &read_sec, &read_sect);
         s_source_read_start_lba = source_target;
     }
-    if(s_nymashock_drive)source_drive_hold_logical=1;
+    /* H3-STUB [spec 6.2 R1]: drive-profile state at a read start. */
+    if (s_nymashock_drive) cdrom_h3_stub("6.2 R1");
     read_cmd = cmd;
     read_delay = seek_cycles + initial_read_delay_cycles();
     s_cd_probe_read_start_count++;
@@ -2425,35 +2433,12 @@ static void queue_or_exec_command(uint8_t cmd) {
  * disc-speed divisors / 'instant' mode must never compress this latency back
  * into the race window. Call BEFORE stop_read_stream()/CDSTAT_READ clear. */
 static int pause_complete_delay_cycles(void) {
-    if (!reading && !(stat_reg & (CDSTAT_READ | CDSTAT_PLAY)) && !(source_cdda.enabled && cdda_playing))
-        return 5000;
-    int lba = reading ? msf_to_lba(read_min, read_sec, read_sect)
-                      : last_sector_lba;
-    if(source_cdda.enabled && cdda_playing) {
-        uint32_t rewind=source_cdda.sectors_read<4?source_cdda.sectors_read:4;
-        cdda_lba-=rewind;lba=(int)cdda_lba;
-        lba_to_msf(lba,150,&read_min,&read_sec,&read_sect);
-    }
-    if (s_source_clock && reading) {
-        /* Source Command_Pause rewinds min(4, physical reads). With its
-         * two-sector pipe this is max(stream origin, next delivery - 2).
-         * Before any delivery, all physical reads are rewound to the origin.
-         * Preserve that stopped head for a subsequent seek or resumed read. */
-        lba -= 2;
-        if (lba < s_source_read_start_lba) lba = s_source_read_start_lba;
-        lba_to_msf(lba, 150, &read_min, &read_sec, &read_sect);
-    }
-    if(s_nymashock_drive) {
-        source_drive_head_valid=1;
-        source_drive_head_lba=source_drive_head_target=lba;
-        source_drive_head_due=psx_cycle_count+CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode_reg&0x80)?2:1);
-    }
-    if (lba < 0) lba = 0;
-    int64_t cycles = 1124584 + (int64_t)lba * 42596 / (75 * 60);
-    if (!(mode_reg & 0x80))
-        cycles *= 2;
-    if(s_nymashock_drive && s_source_clock)cycles+=source_clock_random(100000);
-    return (int)cycles;
+    /* H3-STUB [spec 6.3 P1, P3-P7]: the whole body. It returns the Pause
+     * completion latency and, on the long path, sets the paused position, the
+     * delivery cursor and the drive-profile head. All paths, the default one
+     * included. */
+    cdrom_h3_stub("6.3 P1, P3-P7");
+    return 0;
 }
 
 /* Audio-only media cannot satisfy a normal data read, and the drive says so
@@ -2481,7 +2466,9 @@ static int reject_audio_disc_data_read(void) {
 }
 
 static void exec_command(uint8_t cmd) {
-    source_drive_head_update();
+    /* H3-STUB [spec 6.1 H5]: bring the drive-profile head up to the current
+     * guest time before a command executes. */
+    if (s_nymashock_drive) cdrom_h3_stub("6.1 H5");
 #if !defined(PSX_NO_DEBUG_TOOLS) && !defined(_WIN32)
     /* Self-stop trap: PSX_CD_TRAP_CMD=<byte> makes the process SIGSTOP
      * itself the moment that CD command dispatches, so a debugger can
@@ -2645,9 +2632,9 @@ static void exec_command(uint8_t cmd) {
     }
 
     case 0x09: { /* Pause */
-        /* Source Command_Pause queues MakeStatus before changing the drive
-         * state. Its ACK describes the active stream; completion describes
-         * the paused drive. Preserve the default response image. */
+        /* The first response reports the status from before the Pause (read
+         * bit still set); the second reports the paused drive (PSX-SPX
+         * "Pause"). The default path keeps its own response. */
         uint8_t source_ack_status = stat_reg;
         int preserve_source_audio=source_cdda.enabled && cdda_playing;
         int complete_delay = pause_complete_delay_cycles();
@@ -2664,42 +2651,8 @@ static void exec_command(uint8_t cmd) {
     }
 
     case 0x0A: /* Init */
-        if(s_nymashock_drive) {
-            if(cdda_playing || (reading && (stat_reg&CDSTAT_SEEK))) {
-                fprintf(stderr,"[CDROM] Nymashock reset during audio/read seek is not qualified\n");exit(2);
-            }
-            /* An established read keeps two physical sectors ahead of the
-             * next sector delivered to the guest. Reset does not rewind it. */
-            int origin=reading?msf_to_lba(read_min,read_sec,read_sect)+2:
-                source_drive_head_valid?source_drive_head_lba:msf_to_lba(read_min,read_sec,read_sect);
-            response_push(stat_reg);set_irq(CDIRQ_ACK);
-            cd_muted=0;mode_reg=0x20;setloc_pending=0;s_setloc_lba=0;
-            if(source_reset_phase==1) {
-                pending_arm(0x0A,256,1);
-            } else if(has_disc()) {
-                /* std::max(PSX_GetRandU32(0, 3250000), CalcSeekTime(...)) leaves the
-                 * order of the two draws to the compiler. Stock clang (Nymashock) takes
-                 * the broad Reset draw first; MSVC (octoshock.dll in BizHawk 2.7 and
-                 * 2.10) calls CalcSeekTime, and its 25000 draw, first. */
-                int seek=source_seek_lower_bound(origin,0,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);
-                int delay;
-                if(s_cd_reset_seek_draw_first) {
-                    seek+=(int)source_clock_random(25000);delay=(int)source_clock_random(3250000);
-                } else {
-                    delay=(int)source_clock_random(3250000);seek+=(int)source_clock_random(25000);
-                }
-                if(delay<seek)delay=seek;
-                stop_read_stream();stop_cdda_playback();
-                s_source_reset_due=psx_cycle_count+(uint64_t)delay;source_reset_phase=1;
-                source_drive_head_valid=1;source_drive_head_lba=source_drive_head_target=0;
-                source_drive_head_due=UINT64_MAX;
-                clear_sector_buffer();cdrom_clear_pending_dataready();spu_cd_audio_reset();xa_reset_decode();
-                stat_reg=(stat_reg&~(CDSTAT_READ|CDSTAT_PLAY))|CDSTAT_MOTOR|CDSTAT_SEEK;
-                s_source_seek_paused=0;
-                pending_arm(0x0A,4100000,1);
-            } else pending_arm(0x0A,70000,1);
-            break;
-        }
+        /* H3-STUB [spec 6.5 I1-I12, section 4 S6]: Init in the drive profile. */
+        if (s_nymashock_drive) cdrom_h3_stub("6.5 I1-I12, S6");
         if(s_source_clock) {
             if(reading || cdda_playing || pending_dataready) {
                 fprintf(stderr,"[CDROM] Source reset from an active stream is not qualified\n");exit(2);
@@ -2824,19 +2777,14 @@ static void exec_command(uint8_t cmd) {
             /* GetlocP reports the drive/sub-Q position. During a read the
              * sector stream has already advanced past the data-ready sector. */
             lba = msf_to_lba(read_min, read_sec, read_sect);
-            /* Nymashock decodes sub-Q before its two-sector data pipeline.
-             * The last physical sector read is one ahead of next delivery. */
-            if(s_nymashock_drive && !(stat_reg&CDSTAT_SEEK))lba++;
-        } else if (s_nymashock_drive && source_drive_subq_lba >= 0) {
-            /* Stopped Nymashock drive. GetlocP returns SubQBuf_Safe, and the
-             * source keeps decoding sub-Q while paused: HandlePlayRead runs
-             * for DS_PAUSED and DS_STANDBY too, and its tail cycles the head
-             *     if(CurSector >= SeekTarget + 2) CurSector -= 9;
-             * so a paused drive walks a nine-sector window below the position
-             * Pause stopped at. Reporting the last sector handed to the guest
-             * instead is right only for the first tick after the Pause. */
-            source_drive_head_update();
-            lba = source_drive_subq_lba;
+            /* H3-STUB [spec 6.7 G2b, G2c]: drive-profile position during a read. */
+            if (s_nymashock_drive) cdrom_h3_stub("6.7 G2b-G2c");
+        } else if (s_nymashock_drive) {
+            /* H3-STUB [spec 6.7 G3-G5]: drive-profile position on an idle
+             * drive, including when it falls through to the two branches
+             * below. */
+            cdrom_h3_stub("6.7 G3-G5");
+            lba = 0;
         } else if (last_sector_lba >= 0) {
             lba = last_sector_lba;
         } else {
@@ -3016,10 +2964,8 @@ static void exec_command(uint8_t cmd) {
             int seek=s_source_toc_seek_model?source_toc_seek_cycles():0;
             int delay=seek>INT32_MAX-30000000?INT32_MAX:30000000+seek;
             pending_arm(0x1E, delay, 1);
-            if(s_nymashock_drive) {
-                source_drive_head_target=0;source_drive_hold_logical=0;
-                cdrom_clear_pending_dataready();
-            }
+            /* H3-STUB [spec 6.6 T2]: drive-profile state at ReadTOC. */
+            if (s_nymashock_drive) cdrom_h3_stub("6.6 T2");
             s_source_seek_paused = 1;
         }
         break;
@@ -3115,21 +3061,16 @@ static void process_pending(uint32_t cycles) {
      * due_cyc forward while the response FIFO is busy (old relative freeze
      * under/over-counted mid-slice acks and forked Pause→Seek→ReadN). */
     if (psx_cycle_count < pending.due_cyc) return;
-    if(s_nymashock_drive && pending.cmd==0x0A && s_source_reset_due) {
-        pending.due_cyc=s_source_reset_due>psx_cycle_count+256?s_source_reset_due:psx_cycle_count+256;
-        return;
-    }
+    /* H3-STUB [spec 6.5 I11]: the drive-profile Init second response waits
+     * for the reset to finish. */
+    if (s_nymashock_drive && pending.cmd == 0x0A) cdrom_h3_stub("6.5 I11");
     if (irq_flag != 0) return;
     if (!source_clock_receive_ready()) return;
 
     done_cmd = pending.cmd;
-    if(s_nymashock_drive && done_cmd==0x15) {
-        source_drive_hold_logical=1;
-        source_drive_head_valid=1;source_drive_head_target=msf_to_lba(seek_min,seek_sec,seek_sect);
-        source_drive_head_lba=source_drive_head_target-6;
-        source_drive_head_due=pending.due_cyc+CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode_reg&0x80)?2:1);
-        source_drive_head_update();
-    }
+    /* H3-STUB [spec 6.4 K2]: drive-profile head when the SeekL second
+     * response is presented. */
+    if (s_nymashock_drive && done_cmd == 0x15) cdrom_h3_stub("6.4 K2");
     pending.pending = 0;
     pending.due_cyc = 0;
     response_clear();
@@ -3419,16 +3360,16 @@ void cdrom_init(const char* cue_path) {
         }
         s_source_clock=1;
     }
-    const char *drive_model=getenv("PSX_CD_DRIVE_MODEL");
-    /* octoshock-2.7 is the same Mednafen drive (1.27.1 == 1.29.0 here) built with MSVC. */
-    s_cd_reset_seek_draw_first=drive_model && !strcmp(drive_model,"octoshock-2.7");
-    s_nymashock_drive=drive_model && (!strcmp(drive_model,"nymashock-1.29.0") || s_cd_reset_seek_draw_first);
-    if(drive_model && *drive_model && (!s_nymashock_drive || !s_source_clock)) {
-        fprintf(stderr,"[CDROM] Invalid source drive model or missing clock\n");exit(2);
+    /* H3-STUB [spec section 4, S1-S5]: read PSX_CD_DRIVE_MODEL, set the two
+     * profile flags, fail closed on a bad value or a missing clock tape, and
+     * set the seven drive values to their start state. Until then no drive
+     * profile can be selected. */
+    s_nymashock_drive = 0;
+    s_cd_reset_seek_draw_first = 0;
+    {
+        const char *drive_model = getenv("PSX_CD_DRIVE_MODEL");
+        if (drive_model && *drive_model) cdrom_h3_stub("4 S1-S5");
     }
-    source_drive_head_valid=source_drive_head_lba=source_drive_head_target=0;
-    source_drive_head_due=0;source_drive_hold_logical=source_reset_phase=0;
-    source_drive_subq_lba=-1;
     memset(&source_cdda,0,sizeof(source_cdda));
     const char *cdda_model=getenv("PSX_CD_CDDA_MODEL");
     if(cdda_model && *cdda_model) {
