@@ -1035,6 +1035,19 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_bios_hint.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # A set whose discs boot different programs, set up as one folder
+        # (PS1B-333): the set file, the disc check, the join, the start
+        # scripts, the host project, and the unchanged single-program path.
+        add_test(
+            NAME program_set
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_program_set.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME package_setup_program_set
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_program_set.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME setup_package_payload_filter
             COMMAND ${Python3_EXECUTABLE}
