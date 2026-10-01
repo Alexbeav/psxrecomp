@@ -620,7 +620,13 @@ def join_products(spec: Dict[str, Any], products: Dict[str, Path], out: Path, *,
                 if extra or not target.is_file():
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(("\n".join(lines + extra) + "\n").encode("utf-8"))
-                if relative not in record["line_unions"]:
+                # Counted as the private set build counts it: the first program's
+                # copy is one shared file; a union is recorded once a second
+                # program carries the file too.
+                if relative not in written:
+                    written[relative] = ""
+                    record["shared_files"] += 1
+                elif relative not in record["line_unions"]:
                     record["line_unions"].append(relative)
                 continue
             digest = sha256(source)

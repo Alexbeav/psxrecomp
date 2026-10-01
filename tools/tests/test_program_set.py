@@ -439,7 +439,7 @@ class Join(unittest.TestCase):
                                 "--set-disc", f"1={discs[0]}", "--set-disc", f"2={discs[1]}",
                                 "--out", str(Path(tmp) / "out"), "--record", str(record)])
             self.assertEqual(code, 0)
-            self.assertEqual(json.loads(record.read_text())["shared_files"], 10)
+            self.assertEqual(json.loads(record.read_text())["shared_files"], 11)
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 code = ps.main(["join", "--set", str(root / "set.toml"), "--program", "leon",
