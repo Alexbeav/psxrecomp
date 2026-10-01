@@ -1551,10 +1551,11 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     /* MFC0/CFC0 observe COP0 as it stood when the instruction began. The fetch
      * and cycle charges below can reach a device deadline and run its event,
      * which may raise CAUSE.IP2 in the middle of this instruction. An IRQ
-     * becomes visible at the next instruction boundary, and compiled code
-     * already behaves that way because it batches its charges to the
-     * boundary. Example: the kernel's syscall handler (`mfc0 a1,Cause`)
-     * saved 0x420 instead of 0x20 when a CD IRQ fell due on its own cycle. */
+     * becomes visible at the next instruction boundary. Compiled code defers
+     * its base charge to the block boundary (GCC/Clang builds), so it does
+     * not show this for the base charge. Example: the kernel's syscall
+     * handler (`mfc0 a1,Cause`) saved 0x420 instead of 0x20 when a CD IRQ
+     * fell due on its own cycle. */
     const uint32_t cop0_read = (opc == 0x10u && (rs == 0u || rs == 2u))
         ? cpu->cop0[rd] : 0u;
 
