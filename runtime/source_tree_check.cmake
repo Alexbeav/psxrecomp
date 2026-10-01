@@ -20,25 +20,48 @@
 # suite is fine: only a change during the suite fails.
 #
 # The order comes from the DEPENDS property, which orders tests and nothing
-# else: the snapshot runs before every test of the calling directory, the
-# comparison after all of them, also under `ctest -j`. A selection that leaves
-# the two out (`ctest -R name`) runs as before.
+# else. The comparison runs after every test of the calling directory and of
+# the directories below it (add_subdirectory), also under `ctest -j`. The
+# snapshot runs before every test of the calling directory; before those of
+# the directories below it too when CMake is 3.28 or newer, which is the first
+# version that can set a property on another directory's test. A selection
+# that leaves the two out (`ctest -R name`) runs as before.
 #
 # LIMITS
 # ------
-#   * Tests that a subdirectory registers (add_subdirectory) are not ordered,
-#     so a file one of them writes is seen only if it runs between the two.
+#   * With CMake older than 3.28, a test of a subdirectory can start beside the
+#     snapshot. A file it writes in that first moment is in the snapshot and so
+#     is not reported.
+#   * Tests of a directory ABOVE the calling one are not ordered at all.
 #   * Outside a git checkout (a source package), or without git, the
 #     comparison prints NOT CHECKED with the reason and passes. Read its line:
 #     a pass that checked says "source tree unchanged by the suite: N entries
 #     ... before, N after".
 #   * `ctest -R source_tree_unchanged` alone has no snapshot and says so.
 #
-# Usage: call at the END of a CMakeLists.txt, after its last add_test().
+# Usage: call at the END of a CMakeLists.txt, after its last add_test() and
+# its last add_subdirectory().
 #   include(${CMAKE_CURRENT_SOURCE_DIR}/source_tree_check.cmake)
 #   psxrecomp_add_source_tree_check()
 
 set(_PSXRECOMP_SRCTREE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
+# The tests of every directory below `dir`, in `out`. Where CMake can, each is
+# also made to wait for the snapshot.
+function(_psxrecomp_source_tree_tests_below dir out)
+    set(_found "")
+    get_property(_subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+    foreach(_subdir IN LISTS _subdirs)
+        get_property(_tests DIRECTORY "${_subdir}" PROPERTY TESTS)
+        if(_tests AND NOT CMAKE_VERSION VERSION_LESS 3.28)
+            set_property(TEST ${_tests} DIRECTORY "${_subdir}"
+                         APPEND PROPERTY DEPENDS source_tree_snapshot)
+        endif()
+        _psxrecomp_source_tree_tests_below("${_subdir}" _deeper)
+        list(APPEND _found ${_tests} ${_deeper})
+    endforeach()
+    set(${out} "${_found}" PARENT_SCOPE)
+endfunction()
 
 function(psxrecomp_add_source_tree_check)
     if(NOT BUILD_TESTING OR NOT Python3_EXECUTABLE)
@@ -65,5 +88,11 @@ function(psxrecomp_add_source_tree_check)
     foreach(_test IN LISTS _suite)
         set_property(TEST ${_test} APPEND PROPERTY DEPENDS source_tree_snapshot)
     endforeach()
-    set_property(TEST source_tree_unchanged APPEND PROPERTY DEPENDS source_tree_snapshot ${_suite})
+    _psxrecomp_source_tree_tests_below("${CMAKE_CURRENT_SOURCE_DIR}" _below)
+    set_property(TEST source_tree_unchanged APPEND PROPERTY
+                 DEPENDS source_tree_snapshot ${_suite} ${_below})
+    list(LENGTH _suite _n_suite)
+    list(LENGTH _below _n_below)
+    message(STATUS "source tree check: source_tree_unchanged runs after ${_n_suite} tests of this "
+                   "directory and ${_n_below} of the directories below it")
 endfunction()
