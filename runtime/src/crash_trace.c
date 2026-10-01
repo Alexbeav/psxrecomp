@@ -429,19 +429,34 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         g_dirty_ram_last_unsupported_entry_sp,
         g_dirty_ram_last_unsupported_insns);
 
-    /* PS1B-306: kernel bless is off for the whole run when the active image's
-     * table overflows the runtime's verify-state array. That moves every
-     * relocated kernel function into the interpreter, so say it here. */
+    /* PS1B-306: kernel bless decides whether relocated kernel routines run
+     * their compiled bodies or the interpreter, so the report states it.
+     * `state` is -1 before the first kernel-window dispatch, 0 off, 1 on.
+     * `native_hits` counts kernel dispatches served by a blessed body; those
+     * never reach the overlay loader, so they are not in its disp_native.
+     * An oversized table (disabled_by_overflow) is refused at start-up. */
     {
         uint32_t kb_entries = 0, kb_capacity = 0;
         int kb_fits = psx_kernel_bless_table_fits(&kb_entries, &kb_capacity);
+        uint64_t kb[8] = {0};
+        psx_kernel_bless_stats(kb);
         append_fmt(buf, sizeof(buf), &pos,
             "  \"kbless\": {\n"
             "    \"table_entries\": %u,\n"
             "    \"capacity\": %u,\n"
-            "    \"disabled_by_overflow\": %d\n"
+            "    \"disabled_by_overflow\": %d,\n"
+            "    \"state\": %d,\n"
+            "    \"clean\": %llu,\n"
+            "    \"mismatch\": %llu,\n"
+            "    \"native_hits\": %llu,\n"
+            "    \"verifies\": %llu,\n"
+            "    \"invalidations\": %llu\n"
             "  },\n",
-            kb_entries, kb_capacity, kb_fits ? 0 : 1);
+            kb_entries, kb_capacity, kb_fits ? 0 : 1,
+            psx_kernel_bless_state(),
+            (unsigned long long)kb[1], (unsigned long long)kb[2],
+            (unsigned long long)kb[3], (unsigned long long)kb[4],
+            (unsigned long long)kb[5]);
     }
 
 #ifdef _WIN32

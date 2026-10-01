@@ -153,6 +153,20 @@ if(BUILD_TESTING)
         add_test(NAME critical_exception_vector_test COMMAND critical_exception_test exception)
         add_test(NAME critical_exception_nested_reject_test COMMAND critical_exception_test exception nested)
         set_tests_properties(critical_exception_nested_reject_test PROPERTIES WILL_FAIL TRUE)
+        # PS1B-306: the real memory.c bless code on a 5,054-row table, and the
+        # refusal of a table larger than PSX_KBLESS_MAX_ENTRIES.
+        add_executable(kernel_bless_state_test tests/test_kernel_bless_state.c
+            src/kernel_patch_ranges.c)
+        target_include_directories(kernel_bless_state_test PRIVATE include)
+        target_compile_options(kernel_bless_state_test PRIVATE
+            -O2 -UNDEBUG -flto -fwhole-program -ffunction-sections -fdata-sections)
+        target_link_options(kernel_bless_state_test PRIVATE -flto -Wl,--gc-sections)
+        add_test(NAME kernel_bless_state_test COMMAND kernel_bless_state_test)
+        add_test(NAME kernel_bless_overflow_refused_test
+            COMMAND kernel_bless_state_test overflow)
+        set_tests_properties(kernel_bless_overflow_refused_test PROPERTIES
+            PASS_REGULAR_EXPRESSION "FATAL: kernel-bless table has [0-9]+ rows"
+            FAIL_REGULAR_EXPRESSION "was not refused")
         add_executable(sio_ack_timing_test tests/test_sio_ack_timing.c)
         target_include_directories(sio_ack_timing_test PRIVATE include)
         target_compile_options(sio_ack_timing_test PRIVATE -O2 -flto -fwhole-program)
@@ -272,11 +286,11 @@ if(BUILD_TESTING)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     # PS1B-306: each generated BIOS profile's kernel-bless table fits the
-    # runtime, or is a declared overflow (bless off for that profile).
+    # runtime's verify-state array (PSX_KBLESS_MAX_ENTRIES).
     add_test(NAME kbless_table_capacity_test COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kbless_table_capacity.py"
         --generated "${PSXRECOMP_ROOT}/generated"
-        --memory-c "${CMAKE_CURRENT_SOURCE_DIR}/src/memory.c")
+        --capacity-header "${CMAKE_CURRENT_SOURCE_DIR}/include/psx_bios_image.h")
     set_tests_properties(kbless_table_capacity_test PROPERTIES SKIP_RETURN_CODE 77)
     # PSXRTI3 routes (T101): wire format, then record on a diagnostic build and
     # replay on a release build (PSX_NO_DEBUG_TOOLS) of the session module.
