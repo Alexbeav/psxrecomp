@@ -788,6 +788,24 @@ if(BUILD_TESTING)
     add_test(NAME video_enhancement_settings_test
              COMMAND video_enhancement_settings_test)
 
+    # The setup program of a set reads set.toml with load_game_config(). The
+    # documented set file must load; a single program is held to the old rules
+    # (PS1B-365: the set's setup program exited before its window).
+    add_executable(set_config_loader_test
+        tests/set_config_loader_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(set_config_loader_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(set_config_loader_test PRIVATE fmt)
+    add_test(NAME set_config_loader_test
+             COMMAND set_config_loader_test)
+
     # [video] rewind opt-in plumbing (default off + settings round trip).
     add_executable(rewind_settings_test
         tests/rewind_settings_test.cpp
