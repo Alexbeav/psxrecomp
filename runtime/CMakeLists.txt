@@ -163,6 +163,10 @@ if(BUILD_TESTING)
         set_tests_properties(kernel_bless_overflow_refused_test PROPERTIES
             PASS_REGULAR_EXPRESSION "FATAL: kernel-bless table has [0-9]+ rows"
             FAIL_REGULAR_EXPRESSION "was not refused")
+        add_test(NAME kernel_bless_paranoid_test
+            COMMAND kernel_bless_state_test paranoid)
+        set_tests_properties(kernel_bless_paranoid_test PROPERTIES
+            PASS_REGULAR_EXPRESSION "kernel_bless_state: PASS paranoid")
         add_executable(sio_ack_timing_test tests/test_sio_ack_timing.c)
         target_include_directories(sio_ack_timing_test PRIVATE include)
         target_compile_options(sio_ack_timing_test PRIVATE -O2 -flto -fwhole-program)
@@ -288,6 +292,12 @@ if(BUILD_TESTING)
         --generated "${PSXRECOMP_ROOT}/generated"
         --capacity-header "${CMAKE_CURRENT_SOURCE_DIR}/include/psx_bios_image.h")
     set_tests_properties(kbless_table_capacity_test PROPERTIES SKIP_RETURN_CODE 77)
+    # PS1B-306: every writer of guest RAM that bypasses psx_write_* tells the
+    # kernel-bless table (psx_kernel_bless_note_range) next to the write.
+    add_test(NAME raw_ram_writers_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_raw_ram_writers.py"
+        --src "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        --include "${CMAKE_CURRENT_SOURCE_DIR}/include")
     # PSXRTI3 routes (T101): wire format, then record on a diagnostic build and
     # replay on a release build (PSX_NO_DEBUG_TOOLS) of the session module.
     add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)
@@ -765,6 +775,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         include
         ../recompiler/lib/toml11)
     add_test(NAME text_xlate_fix_only_test COMMAND text_xlate_fix_only_test)
+    # PS1B-306: translation patches write RAM directly; they must report it.
+    add_executable(text_xlate_kernel_bless_test
+        tests/test_text_xlate_kernel_bless.cpp
+        src/text_xlate.cpp)
+    target_include_directories(text_xlate_kernel_bless_test PRIVATE
+        include
+        ../recompiler/lib/toml11)
+    add_test(NAME text_xlate_kernel_bless_test COMMAND text_xlate_kernel_bless_test)
 
     add_executable(mod_runtime_test
         tests/test_mod_runtime.cpp
