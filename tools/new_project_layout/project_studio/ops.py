@@ -1034,16 +1034,33 @@ def _ci_step_names(text: str) -> list[str]:
     return names
 
 
+# Steps earlier templates defined that the current one deliberately dropped. An
+# installed workflow still running one is stale even though it lacks nothing
+# the template has: the setup-host wipe and the CI-side OpenBIOS emission both
+# call scripts that no longer exist in the pinned framework, so the job dies
+# at that step. A step-name comparison that only looked for MISSING steps
+# called such a file current (TM4 v0.3.34, first attempt).
+RETIRED_CI_STEPS = (
+    "Setup host mode (no game C / BIOS backends in CI)",
+    "Generate OpenBIOS backend C",
+)
+
+
 def _ci_steps_missing_from(installed: Path, template: Path) -> list[str]:
-    """Template step names absent from the installed workflow."""
+    """Template step names absent from the installed workflow, plus retired
+    step names the installed workflow still carries (reported as
+    'retired: <name>')."""
     try:
-        have = set(_ci_step_names(installed.read_text(encoding="utf-8", errors="replace")))
+        have_list = _ci_step_names(installed.read_text(encoding="utf-8", errors="replace"))
+        have = set(have_list)
         want = _ci_step_names(template.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return []
     # Names carrying a token cannot be compared literally -- the installed copy
     # has them substituted -- so they are not evidence either way.
-    return [n for n in want if n not in have and "@" not in n]
+    missing = [n for n in want if n not in have and "@" not in n]
+    retired = [f"retired: {n}" for n in RETIRED_CI_STEPS if n in have]
+    return missing + retired
 
 
 def op_emit_ci_workflow(root: Path, options: MigrateOptions) -> ApplyResult:

@@ -282,6 +282,19 @@ class ProjectStudioContract(unittest.TestCase):
                                 str(root), "--check"], capture_output=True, text=True,
                                check=False)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            # ...and calls it stale once it carries a retired step, even though
+            # it lacks nothing the template has.
+            wf_path = root / ".github" / "workflows" / "release.yml"
+            wf_path.write_text(wf.replace("      - name: Verify committed game C\n",
+                                          "      - name: Generate OpenBIOS backend C\n"
+                                          "        run: true\n"
+                                          "      - name: Verify committed game C\n"),
+                               encoding="utf-8")
+            r = subprocess.run([sys.executable, str(FW / "tools" / "generate_ci.py"),
+                                str(root), "--check"], capture_output=True, text=True,
+                               check=False)
+            self.assertNotEqual(r.returncode, 0, "a retired step must read as stale")
+            self.assertIn("retired: Generate OpenBIOS backend C", r.stdout + r.stderr)
 
 
 class PackagerScriptContract(unittest.TestCase):
