@@ -6358,8 +6358,7 @@ static int runtime_ui_set_value(void*, const RecompRuntimeUiItem *item,
         if (value < 0 || value > 2) return 0;
         g_fullscreen = value;
         if (sdl_window)
-            SDL_SetWindowFullscreen(sdl_window,
-                                    psx_fullscreen_flag_for_mode(value));
+            psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, value);
     } else if (std::strcmp(item->key,
                            RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0) {
         if (value < 1 || value > 4) return 0;
