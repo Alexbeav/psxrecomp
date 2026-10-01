@@ -42,7 +42,27 @@ int main(void) {
     CHECK(host_osd_needs_present(), "one present clears the hidden badge");
     host_osd_present_done();
     CHECK(!host_osd_needs_present(), "then nothing is left to present");
+    /* PS1B-316: a long toast breaks into lines and stays inside the
+     * 640-pixel window (8 pixels of margin on its left). */
+    host_osd_push("Replay playing", 60000);
+    CHECK(host_osd_image(&px, &w, &h) && px && h == (OSD_PAD_Y * 2 + OSD_GLYPH_H) * OSD_SCALE &&
+          w == (OSD_PAD_X * 2 + 14 * OSD_GLYPH_W) * OSD_SCALE, "a short toast is one line high");
+    host_osd_push("Replay not recorded: port 1 needs a pad or the keyboard", 60000);
+    CHECK(host_osd_image(&px, &w, &h) && px &&
+          h == (OSD_PAD_Y * 2 + 2 * OSD_GLYPH_H + OSD_LINE_GAP) * OSD_SCALE, "a long toast is two lines high");
+    CHECK(w == (OSD_PAD_X * 2 + 34 * OSD_GLYPH_W) * OSD_SCALE && 8 + w <= 640,
+          "its width is its longest line, inside the window");
+    int lit[2] = { 0, 0 };
+    for (int y = 0; px && y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            if (px[y * w + x] == 0xFFFFFFFFu) lit[y >= (OSD_PAD_Y + OSD_GLYPH_H + OSD_LINE_GAP) * OSD_SCALE]++;
+    CHECK(lit[0] > 100 && lit[1] > 100, "both lines are drawn");
+    char longest[300];
+    memset(longest, 'W', sizeof longest - 1); longest[sizeof longest - 1] = 0;
+    host_osd_push(longest, 60000);
+    CHECK(host_osd_image(&px, &w, &h) && w == OSD_IMG_W && h == OSD_IMG_H && 8 + w <= 640,
+          "the largest toast is three full lines and still inside the window");
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    puts("PASS: REC badge");
+    puts("PASS: REC badge and toast lines");
     return 0;
 }

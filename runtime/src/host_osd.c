@@ -4,6 +4,7 @@
  * remains available for headless / launcher-less builds. */
 
 #include "host_osd.h"
+#include "host_osd_wrap.h"
 #include "psx_rewind.h"
 #include "psx_savestate_menu.h"
 #include "psx_sdl.h"
@@ -17,7 +18,12 @@
 #define HOST_OSD_VISUAL 0
 #endif
 
-#define OSD_MAX_CHARS  64
+/* A toast is at most HOST_OSD_LINES lines of HOST_OSD_COLS characters
+ * (host_osd_wrap.h): the widest line is 632 pixels with its margin at the
+ * smallest scale, inside the 640-pixel window. The stored text may be longer;
+ * what does not fit is cut with "...". */
+#define OSD_MSG_BYTES  256
+#define OSD_LINE_GAP   2
 #define OSD_PAD_X      2
 #define OSD_PAD_Y      2
 #define OSD_SCALE      2
@@ -125,12 +131,12 @@ static const uint8_t FONT8X8[95][8] = {
     {0x6E,0x3B,0x00,0x00,0x00,0x00,0x00,0x00}, /* ~ */
 };
 
-static char     s_msg[OSD_MAX_CHARS];
+static char     s_msg[OSD_MSG_BYTES];
 static Uint32   s_expire_ms;
 static int      s_active;
 static int      s_img_dirty = 1;
 
-static char     s_status_msg[OSD_MAX_CHARS];
+static char     s_status_msg[OSD_MSG_BYTES];
 static int      s_status_active;
 static int      s_status_dirty = 1;
 
@@ -152,8 +158,9 @@ static uint32_t s_rec_img[REC_IMG_W * REC_IMG_H];
 static int      s_rec_visible;
 static int      s_rec_ready;
 
-#define OSD_IMG_W  ((OSD_PAD_X * 2 + OSD_MAX_CHARS * OSD_GLYPH_W) * OSD_SCALE)
-#define OSD_IMG_H  ((OSD_PAD_Y * 2 + OSD_GLYPH_H) * OSD_SCALE)
+#define OSD_IMG_W  ((OSD_PAD_X * 2 + HOST_OSD_COLS * OSD_GLYPH_W) * OSD_SCALE)
+#define OSD_IMG_H  ((OSD_PAD_Y * 2 + HOST_OSD_LINES * OSD_GLYPH_H + \
+                     (HOST_OSD_LINES - 1) * OSD_LINE_GAP) * OSD_SCALE)
 static uint32_t s_img[OSD_IMG_W * OSD_IMG_H];
 static int      s_img_w;
 static int      s_img_h;
@@ -215,10 +222,16 @@ static int vol_visible(void) {
 }
 
 static void rasterize_text(const char *msg) {
-    int n = (int)strlen(msg);
-    if (n > OSD_MAX_CHARS) n = OSD_MAX_CHARS;
+    char lines[HOST_OSD_LINES][HOST_OSD_COLS + 1];
+    const int count = host_osd_wrap(msg, lines, NULL);
+    int n = 0;                              /* the widest line */
+    for (int li = 0; li < count; li++) {
+        const int len = (int)strlen(lines[li]);
+        if (len > n) n = len;
+    }
     s_img_w = (OSD_PAD_X * 2 + n * OSD_GLYPH_W) * OSD_SCALE;
-    s_img_h = (OSD_PAD_Y * 2 + OSD_GLYPH_H) * OSD_SCALE;
+    s_img_h = (OSD_PAD_Y * 2 + (count > 0 ? count : 1) * OSD_GLYPH_H +
+               (count > 1 ? count - 1 : 0) * OSD_LINE_GAP) * OSD_SCALE;
     if (s_img_w < 1) s_img_w = 1;
     if (s_img_h < 1) s_img_h = 1;
     if (s_img_w > OSD_IMG_W) s_img_w = OSD_IMG_W;
@@ -227,22 +240,25 @@ static void rasterize_text(const char *msg) {
     for (int i = 0; i < s_img_w * s_img_h; i++)
         s_img[i] = 0xFF202020u;
 
-    for (int ci = 0; ci < n; ci++) {
-        unsigned char ch = (unsigned char)msg[ci];
-        if (ch < 32 || ch > 126) ch = '?';
-        const uint8_t *g = FONT8X8[ch - 32];
-        for (int row = 0; row < OSD_GLYPH_H; row++) {
-            uint8_t bits = g[row];
-            for (int col = 0; col < OSD_GLYPH_W; col++) {
-                if (!(bits & (1u << col))) continue;
-                int x0 = (OSD_PAD_X + ci * OSD_GLYPH_W + col) * OSD_SCALE;
-                int y0 = (OSD_PAD_Y + row) * OSD_SCALE;
-                for (int dy = 0; dy < OSD_SCALE; dy++) {
-                    for (int dx = 0; dx < OSD_SCALE; dx++) {
-                        int x = x0 + dx, y = y0 + dy;
-                        if ((unsigned)x < (unsigned)s_img_w &&
-                            (unsigned)y < (unsigned)s_img_h)
-                            s_img[y * s_img_w + x] = 0xFFFFFFFFu;
+    for (int li = 0; li < count; li++) {
+        const int line_y = OSD_PAD_Y + li * (OSD_GLYPH_H + OSD_LINE_GAP);
+        for (int ci = 0; lines[li][ci]; ci++) {
+            unsigned char ch = (unsigned char)lines[li][ci];
+            if (ch < 32 || ch > 126) ch = '?';
+            const uint8_t *g = FONT8X8[ch - 32];
+            for (int row = 0; row < OSD_GLYPH_H; row++) {
+                uint8_t bits = g[row];
+                for (int col = 0; col < OSD_GLYPH_W; col++) {
+                    if (!(bits & (1u << col))) continue;
+                    int x0 = (OSD_PAD_X + ci * OSD_GLYPH_W + col) * OSD_SCALE;
+                    int y0 = (line_y + row) * OSD_SCALE;
+                    for (int dy = 0; dy < OSD_SCALE; dy++) {
+                        for (int dx = 0; dx < OSD_SCALE; dx++) {
+                            int x = x0 + dx, y = y0 + dy;
+                            if ((unsigned)x < (unsigned)s_img_w &&
+                                (unsigned)y < (unsigned)s_img_h)
+                                s_img[y * s_img_w + x] = 0xFFFFFFFFu;
+                        }
                     }
                 }
             }

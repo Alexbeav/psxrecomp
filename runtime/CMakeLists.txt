@@ -384,6 +384,16 @@ if(BUILD_TESTING)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_disc_identity_scratch)
     add_test(NAME replay_disc_identity_test COMMAND replay_disc_identity_test
         ${CMAKE_CURRENT_BINARY_DIR}/replay_disc_identity_scratch)
+    # PS1B-316: the host toast breaks into at most three lines of 38
+    # characters, which fits the 640-pixel window. The second test reads
+    # every replay message out of the sources and measures it with the same
+    # line breaker.
+    add_executable(host_osd_wrap_test tests/test_host_osd_wrap.c)
+    target_include_directories(host_osd_wrap_test PRIVATE include)
+    add_test(NAME host_osd_wrap_test COMMAND host_osd_wrap_test)
+    add_test(NAME replay_osd_text COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_osd_text.py
+        $<TARGET_FILE:host_osd_wrap_test>)
     # PS1B-316 power-on replays: playback swaps in the recorded memory cards
     # without touching the player's card files; the launcher's "Record
     # replay" choice reaches the runtime without being persisted.
