@@ -112,7 +112,9 @@
  *      DLLs used to keep a private copy, so an overlay store left the host's
  *      value naming an older store. The DLL now writes through this pointer
  *      (cpu_state.h maps the name in PSX_OVERLAY_DLL_BUILD). */
-#define PSX_OVERLAY_ABI_VERSION 24
+/* v25: function-entry callbacks may return an opt-in filter result while
+ *      retaining the v24 last_store_pc pointer. */
+#define PSX_OVERLAY_ABI_VERSION 25
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -350,7 +352,7 @@ typedef struct OverlayCallbacks {
      * emitter change (Phase 2 of docs/ENHANCEMENTS.md G1 value propagation). */
     const PGXPHooks *pgxp;
     int32_t (*ws_screen_x_bound)(int32_t vanilla);
-    void (*mod_function_entry)(CPUState *cpu, uint32_t address);
+    int (*mod_function_entry)(CPUState *cpu, uint32_t address);
     /* The host's g_debug_last_store_pc (ABI v24; see the version-history note
      * above). Overlay stores write it exactly as static and interpreted stores
      * do. NULL leaves the DLL writing a private copy nothing reads. */

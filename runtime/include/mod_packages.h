@@ -523,12 +523,15 @@ bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void));
  * select it by id, and it runs only while a resolved plan activates that id. */
 bool mod_register_function_entry_plugin(const std::string& id, uint32_t address,
                                         PSXModFunctionEntryCallback callback);
+bool mod_register_function_filter_plugin(const std::string& id, uint32_t address,
+                                         PSXModFunctionFilterCallback callback);
 bool mod_plugin_registered(const std::string& id);
 void mod_invoke_activation_plugin(const std::string& id);
 void mod_invoke_vblank_plugin(const std::string& id);
 struct ModFunctionEntryHook {
     uint32_t address = 0;
     PSXModFunctionEntryCallback callback = nullptr;
+    PSXModFunctionFilterCallback filter = nullptr;
 };
 /* Hooks one implementation registered, in registration order. mod_runtime
  * flattens these into an address table when the plan's plugins activate. */

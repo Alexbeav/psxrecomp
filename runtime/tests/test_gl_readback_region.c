@@ -72,6 +72,15 @@ int main(int argc,char **argv){
  printf("driver=%s renderer=%s scale=%d\n",glGetString(GL_VERSION),glGetString(GL_RENDERER),scale);
  glb_set_draw_area(0,0,1023,511);glb_set_mask_bits(0,0);glb_set_semi_transparency(0,0);glb_set_color_modulation(128,128,128,1);
  verify("initial upload");
+ /* Adaptive backdrop reflection must retain every edge texel at both native
+  * and supersampled scales; the ordinary rect stays forward-facing. */
+ for(int x=0;x<16;++x) glb_vram_write(512+x,0,(uint16_t)(0x400+x+1));
+ glb_draw_textured_rect(700,200,16,1,0,0,0,0,0x108);
+ glb_draw_textured_rect_scaled(720,200,16,1,15,0,-1,1,0,0,0x108);
+ for(int x=0;x<16;++x) {
+  check(glb_vram_read(700+x,200)==0x401+x,"forward panorama texel");
+  check(glb_vram_read(720+x,200)==0x410-x,"reflected panorama texel");
+ }
  glb_draw_flat_rect(1020,511,1,1,0x7fff);
  check(glb_vram_read(1020,511)==0x7fff,"test pixel value");
  GlCohEvent event;int found=0;
@@ -109,8 +118,8 @@ int main(int argc,char **argv){
  check(glb_vram_read(40,40)==0,"depth24 cleared band immediate CPU read");
  check(glb_vram_read(33,33)==0x3210,"newer overlapping texture survives clear");
  verify("depth24 leave coherence without subsequent primitive");
- /* Retained banks use their own texels AND CLUT, and bank/VRAM transitions
-  * must split batches without changing painter order. No retail assets. */
+ /* Run retained-bank tests with the normal draw area before the wide-view
+  * regression narrows it to the gameplay rectangle. */
  static uint16_t bank[256*128];
  bank[0]=0x001f; bank[1]=0x03e0; bank[2]=0x7c00;
  bank[16]=0x1111; /* 4-bit indices, CLUT at (0,0) */
@@ -127,7 +136,47 @@ int main(int argc,char **argv){
  check(gl_renderer_select_texture_bank(0),"reset bank after direct texture");
  check(glb_vram_read(302,252)==0x001f,"retained 16-bit texel");
  verify("retained banks and original VRAM ordered together");
+ /* A streamed scene can retain indices while CLUT uploads/fades continue.
+  * Alternate both modes of the SAME bank with pending draws: palette source
+  * must participate in the batch key, and stock packets must reset it. */
+ glb_vram_write(1,0,0x7c00);
+ check(gl_renderer_select_texture_bank_live_clut(7),"select bank with live CLUT");
+ glb_draw_shaded_textured_triangle(400,250,64,0,0x808080,432,250,64,0,0x808080,400,282,64,0,0x808080,0,0,0,1);
+ check(gl_renderer_select_texture_bank(7),"same bank with retained CLUT");
+ glb_draw_shaded_textured_triangle(440,250,64,0,0x808080,472,250,64,0,0x808080,440,282,64,0,0x808080,0,0,0,1);
+ check(glb_vram_read(402,252)==0x7c00,"live guest palette used");
+ check(glb_vram_read(442,252)==0x03e0,"same-bank palette source is a batch key");
+ glb_vram_write(1,0,0x001f);
+ check(gl_renderer_select_texture_bank_live_clut(7),"live CLUT after update");
+ glb_draw_shaded_textured_triangle(480,250,64,0,0x808080,512,250,64,0,0x808080,480,282,64,0,0x808080,0,0,0,1);
+ check(gl_renderer_select_texture_bank(0),"reset live-CLUT bank");
+ check(glb_vram_read(482,252)==0x001f,"palette update visible without replacing indices");
+ verify("retained indices with animated guest CLUT");
  verify_bank_batching();
+ /* World and UI use different origins in an anchored wide frame. Keep the
+  * canonical-center optimization enabled to catch an erroneous blit over the
+  * completed mirror, and change origins with a pending flat batch. */
+ glb_set_draw_area(0,0,319,239);glb_set_precise_triangle(0,0,0,0,0,0,0);
+ glb_wide_configure(426,53);glb_wide_set_target(0);
+ s_wide_fast=1;
+ uint32_t *wide_pixels=calloc((size_t)426*240*scale*scale,sizeof(uint32_t));
+ if(!wide_pixels)return 2;
+ for(int shift=-53;shift<=53;shift+=53){
+  glb_wide_clear(0,0,240,0);
+  glb_wide_set_view(1,shift,0,0);
+  glb_draw_flat_rect(-106,0,532,240,0x7c00);
+  glb_draw_flat_rect(160,40,3,3,0x03e0);
+  glb_wide_set_view(1,0,0,0);
+  glb_draw_flat_rect(160,20,3,3,0x001f);
+  check(glb_render_wide_display(wide_pixels,426*scale*4,0,0,240)>0,"anchored wide readback");
+  check(wide_pixels[(40*scale)*(426*scale)+(213+shift)*scale]==0xff00f800u,"anchored world marker");
+  check(wide_pixels[(20*scale)*(426*scale)+213*scale]==0xfff80000u,"centered dialogue marker");
+  check(wide_pixels[(60*scale)*(426*scale)]==0xff0000f8u,"anchored left edge");
+  check(wide_pixels[(60*scale)*(426*scale)+425*scale]==0xff0000f8u,"anchored right edge");
+ }
+ glb_wide_set_view(0,0,0,0);
+ check(wide_dx()==53,"disabled view preserves original origin");
+ free(wide_pixels);
  printf("checks=%d failures=%d\n",checks,failures);
  gl_renderer_shutdown();SDL_DestroyWindow(win);SDL_Quit();return failures?1:0;
 }

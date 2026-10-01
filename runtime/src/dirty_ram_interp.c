@@ -2038,7 +2038,9 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->gpr[rt] = widened;
         else
             cpu->gpr[rt] = a + (uint32_t)simm
-                         + (psx_ws_is_cull_bias_site(pc)
+                         + (psx_ws_is_cull_bias_lower_site(pc)
+                                ? 0u - (uint32_t)psx_ws_activation_margin()
+                            : psx_ws_is_cull_bias_site(pc)
                                 ? (uint32_t)psx_ws_activation_margin() : 0u);
         psx_pgxp_alu(cpu, insn, cpu->gpr[rt], a, (uint32_t)simm);
         cpu->gpr[0] = 0;
@@ -2054,7 +2056,9 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->gpr[rt] = (uint32_t)psx_ws_screen_x_bound(simm);
         else
             cpu->gpr[rt] = a + (uint32_t)simm
-                         + (psx_ws_is_cull_bias_site(pc)
+                         + (psx_ws_is_cull_bias_lower_site(pc)
+                                ? 0u - (uint32_t)psx_ws_activation_margin()
+                            : psx_ws_is_cull_bias_site(pc)
                                 ? (uint32_t)psx_ws_activation_margin() : 0u);
         psx_pgxp_alu(cpu, insn, cpu->gpr[rt], a, (uint32_t)simm);
         cpu->gpr[0] = 0;
@@ -2972,8 +2976,8 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
      * to one load per interpreted entry. */
     {
         extern uint32_t g_psx_mod_function_entry_hooks;
-        extern void psx_mod_function_entry(CPUState *cpu, uint32_t address);
-        if (g_psx_mod_function_entry_hooks) psx_mod_function_entry(cpu, addr);
+        extern int psx_mod_function_entry(CPUState *cpu, uint32_t address);
+        if (g_psx_mod_function_entry_hooks && psx_mod_function_entry(cpu, addr)) return 1;
     }
 
     /* Per-PC entry counter (visible via dirty_ram_stats). */
@@ -3369,9 +3373,14 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                  * function-entry hooks as a surfaced interpreter entry. */
                 {
                     extern uint32_t g_psx_mod_function_entry_hooks;
-                    extern void psx_mod_function_entry(CPUState *, uint32_t);
-                    if (g_psx_mod_function_entry_hooks)
-                        psx_mod_function_entry(cpu, target);
+                    extern int psx_mod_function_entry(CPUState *, uint32_t);
+                    if (g_psx_mod_function_entry_hooks &&
+                        psx_mod_function_entry(cpu, target)) {
+                        g_dirty_ram_blocks_run++;
+                        if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                        g_dirty_interp_chain_target = cpu->pc;
+                        OV_FPLOG_RET1();
+                    }
                 }
                 pc = target;
                 current_page = target_phys >> 12;

@@ -23,7 +23,8 @@ uint32_t g_psx_ram_mask = 0x001FFFFFu;
  * additional exported command handlers despite --gc-sections. */
 GrBackend gr_backend(void) { return GR_BACKEND_SOFTWARE; }
 int gl_renderer_texture_banks_supported(void) { return 0; }
-int gl_renderer_select_texture_bank(uint16_t id) { (void)id; return 0; }
+int gl_renderer_select_texture_bank(uint16_t id) { return id == 0; }
+int gl_renderer_select_texture_bank_live_clut(uint16_t id) { return id == 0; }
 uint16_t mod_texture_packet_bank(uint32_t source, const uint32_t *words,
                                  uint32_t count) {
     (void)source; (void)words; (void)count;
@@ -42,6 +43,7 @@ static struct {
     int u, v;
     uint16_t clut_x, clut_y, texpage;
 } last_textured_rect;
+static struct { int calls, x, y, w, h, u0, v0, u1, v1; } last_scaled_rect;
 
 static uint32_t pack_vertex(int16_t x, int16_t y) {
     return (uint16_t)x | ((uint32_t)(uint16_t)y << 16);
@@ -335,7 +337,11 @@ void gr_draw_textured_rect_scaled(int x, int y, int w, int h,
                                   int u0, int v0, int u1, int v1,
                                   uint16_t clut_x, uint16_t clut_y,
                                   uint16_t texpage) {
-    (void)x; (void)y; (void)w; (void)h; (void)u0; (void)v0; (void)u1;
+    last_scaled_rect.calls++;
+    last_scaled_rect.x=x; last_scaled_rect.y=y;
+    last_scaled_rect.w=w; last_scaled_rect.h=h;
+    last_scaled_rect.u0=u0; last_scaled_rect.v0=v0;
+    last_scaled_rect.u1=u1; last_scaled_rect.v1=v1;
     (void)v1; (void)clut_x; (void)clut_y; (void)texpage;
 }
 void gr_draw_line(int x0, int y0, int x1, int y1, uint16_t color) {
@@ -373,6 +379,9 @@ void gr_get_draw_area(int *x1, int *y1, int *x2, int *y2) {
 void gr_set_draw_offset(int x, int y) { (void)x; (void)y; }
 int gr_wide_supported(void) { return 1; }
 void gr_wide_configure(int wide_w, int offset) { (void)wide_w; (void)offset; }
+void gr_wide_set_view(int enabled, int shift, int left, int right) {
+    (void)enabled; (void)shift; (void)left; (void)right;
+}
 void gr_wide_set_target(int base_x) { (void)base_x; }
 void gr_wide_disable_target(void) {}
 void gr_wide_clear(int base_x, int y, int h, uint16_t color) {

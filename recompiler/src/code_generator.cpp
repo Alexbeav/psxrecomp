@@ -1087,7 +1087,8 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
     // same address holds different code across scene variants, so a mismatch is
     // expected — apply the transform only where the bytes match, else fall
     // through to the vanilla translation (see CodeGenConfig::overlay_mode).
-    if (config_.ws_cull_bias_sites.count(addr)) {
+    if (config_.ws_cull_bias_sites.count(addr) ||
+        config_.ws_cull_bias_lower_sites.count(addr)) {
         if (opcode == 0x08 || opcode == 0x09) {  // addi / addiu
             uint32_t rs = get_rs(instr), rt = get_rt(instr);
             int16_t imm = get_imm16(instr);
@@ -1097,9 +1098,13 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                           "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + {} : 0)",
                           config_.ws_cull_activation_guard_pixels)
                     : "psx_ws_x_margin()";
-            return fmt::format("{} = {} + ((int32_t){} + {});{}",
-                               reg_name(rt), reg_name(rs), imm, margin,
-                               comment);
+            std::string code = fmt::format("{} = {} + ((int32_t){} {} {});",
+                               reg_name(rt), reg_name(rs), imm,
+                               config_.ws_cull_bias_lower_sites.count(addr) ? "-" : "+", margin);
+            // Preserve the ordinary ALU shadow update, including source capture
+            // before an in-place add. Margin zero must also be a PGXP identity.
+            PSXRecomp::append_pgxp_hooks(instr, code);
+            return config_.indent + code + comment;
         } else if (!config_.overlay_mode) {
             fmt::print(stderr, "ERROR: [widescreen.cull] bias site 0x{:08X} is not "
                        "addi/addiu (opcode 0x{:02X})\n", addr, opcode);
@@ -2920,7 +2925,7 @@ GeneratedFunction CodeGenerator::generate_function(
     if (config_.mod_function_entry_funcs.count(func.start_addr)) {
         body_ss << config_.indent
                 << fmt::format(
-                       "psx_mod_function_entry(cpu, 0x{:08X}u);"
+                       "if (psx_mod_function_entry(cpu, 0x{:08X}u)) return;"
                        "  /* trusted opt-in game-mod hook */\n",
                        func.start_addr);
     }
@@ -3433,7 +3438,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "#endif\n";
     ss << "extern int  psx_game_text_native_ok(uint32_t addr);  /* stale-static guard (dispatch shard) */\n";
     ss << "extern int  psx_datashard_enter(CPUState* cpu, uint32_t key);  /* data-shard replay/capture (data_shards.c) */\n";
-    ss << "extern void psx_mod_function_entry(CPUState* cpu, uint32_t address);  /* trusted opt-in game-mod hook */\n";
+    ss << "extern int psx_mod_function_entry(CPUState* cpu, uint32_t address);  /* trusted opt-in game-mod hook */\n";
     ss << "extern void psx_datashard_ret(CPUState* cpu);                  /* data-shard capture finalize */\n";
     ss << "extern int  psx_vsync_query_hle_enter(CPUState* cpu, uint32_t func, uint32_t counter_addr, uint32_t gpustat_ptr_addr, uint32_t timer1_ptr_addr, uint32_t timer1_cache_addr);  /* load_accel.c */\n";
     ss << "extern void psx_ws_sprite_tag(CPUState* cpu);  /* widescreen prim tag (gpu.c) */\n";
