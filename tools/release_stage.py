@@ -875,6 +875,100 @@ def warn_bundled_notices(stage, log=print):
     return gaps
 
 
+# ---------------------------------------------------------------------------
+# The licence texts of a product built on the player's machine (PS1B-333)
+# ---------------------------------------------------------------------------
+# A product that a build host makes carries licenses/ beside the executable:
+# the kit's, the framework's and the launcher's licence files, the notices of
+# the linked libraries, and the texts of the toolchain libraries (SDL3, zlib,
+# the llvm-mingw runtime). A product that setup builds on the player's machine
+# carried only the tcc notices: the other texts sat in the package's own trees,
+# and the three toolchain texts were in no package at all. This writes the same
+# folder, from the texts the package carries.
+#
+# The name rule and the folder layout are Workbench Studio's
+# (workbench_output.stage_payload, stage_linked_notices), so the two kinds of
+# product end with the same licence files.
+NOTICE_NAME_PREFIXES = ('LICENSE', 'COPYING', 'NOTICE', 'THIRD_PARTY')
+NOTICE_SKIPPED_FOLDERS = ('.git', 'build', 'build-release')
+# Top-level folders of a project root that are not the project's own sources:
+# the shared trees (handled under their own labels), the package's licence
+# folder, a set's programs, and what setup and builds put there.
+PROJECT_FOREIGN_FOLDERS = ('psxrecomp', 'recomp-ui', 'licenses', 'programs', 'generated', 'disc',
+                           'prepared_disc', 'dist', 'toolchain', 'saves', 'cache', '.cache',
+                           'build-setup', 'build-diagnostic')
+PACKAGE_TOOLCHAIN_NOTICES = os.path.join('licenses', 'toolchain')
+
+
+def notice_files(root, skip_top=()):
+    """The licence and notice files below `root`: relative paths, '/' separated, folder by folder.
+
+    A file counts when its name starts with LICENSE, COPYING, NOTICE or
+    THIRD_PARTY, in any case. Nothing under a .git, build or build-release
+    folder counts, nor under a top-level folder named in `skip_top`.
+    """
+    found = []
+    for dirpath, dirs, files in os.walk(root):
+        relative = os.path.relpath(dirpath, root)
+        parts = [] if relative == '.' else relative.split(os.sep)
+        dirs[:] = sorted(d for d in dirs
+                         if d not in NOTICE_SKIPPED_FOLDERS and not (not parts and d in skip_top))
+        for name in sorted(files):
+            if name.upper().startswith(NOTICE_NAME_PREFIXES):
+                found.append('/'.join(parts + [name]))
+    return found
+
+
+def _copy_notices(names, source, dest):
+    for name in names:
+        target = os.path.join(dest, *name.split('/'))
+        _mkdirs(os.path.dirname(target))
+        shutil.copyfile(os.path.join(source, *name.split('/')), target)
+    return len(names)
+
+
+def stage_product_notices(stage, framework, ui=None, project=None, package=None, log=print):
+    """Write a product's licence texts into <stage>/licenses. Never raises.
+
+      licenses/kit/        the project's own licence files (`project`: the folder with game.toml)
+      licenses/framework/  the framework's, plus every file of its runtime/licenses folder
+      licenses/ui/         the launcher's
+      licenses/toolchain/  the texts the package carries in its licenses/toolchain folder
+                           (`package`: the package's root; the project itself when not given)
+
+    The tcc texts in licenses/toolchain are stage_tcc_notices' and are left alone.
+    Returns the number of files written per folder. A package without a
+    licenses/toolchain folder is said in plain words: the product then has no
+    text for SDL3, zlib or the compiler's runtime, which it links.
+    """
+    licenses = os.path.join(stage, 'licenses')
+    counts = {'kit': 0, 'framework': 0, 'ui': 0, 'toolchain': 0}
+    try:
+        for label, root, skip in (('kit', project, PROJECT_FOREIGN_FOLDERS),
+                                  ('framework', framework, ()), ('ui', ui, ())):
+            if root and os.path.isdir(root):
+                counts[label] = _copy_notices(notice_files(root, skip), root, os.path.join(licenses, label))
+        linked = os.path.join(framework, 'runtime', 'licenses') if framework else ''
+        if linked and os.path.isdir(linked):
+            names = sorted(n for n in os.listdir(linked) if os.path.isfile(os.path.join(linked, n)))
+            counts['framework'] += _copy_notices(
+                names, linked, os.path.join(licenses, 'framework', 'runtime', 'licenses'))
+        carried = os.path.join(package or project or '', PACKAGE_TOOLCHAIN_NOTICES)
+        if (package or project) and os.path.isdir(carried):
+            names = sorted(n for n in os.listdir(carried) if os.path.isfile(os.path.join(carried, n)))
+            counts['toolchain'] = _copy_notices(names, carried, os.path.join(licenses, 'toolchain'))
+    except OSError as exc:
+        log('WARNING: the licence texts were not all written beside the product (%s). The game is '
+            'unaffected; the texts are in the package folder.' % exc)
+        return counts
+    if not counts['toolchain']:
+        log('note: this package carries no licence texts for its toolchain libraries '
+            '(licenses/toolchain), so none were written beside the product')
+    log('licence texts staged in %s: kit %d, framework %d, ui %d, toolchain %d'
+        % (licenses, counts['kit'], counts['framework'], counts['ui'], counts['toolchain']))
+    return counts
+
+
 def cmd_check_bundled_notices(args):
     gaps = warn_bundled_notices(args.stage)
     if not gaps:

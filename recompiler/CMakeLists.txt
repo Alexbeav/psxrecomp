@@ -1076,6 +1076,20 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cli_diagnostics.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # Pruning build intermediates after setup deleted tcc's own library from
+        # the staged overlay toolchain (PS1B-333).
+        add_test(
+            NAME cli_prune_keeps_product
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cli_prune_keeps_product.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # A product that setup builds ends with the licenses/ folder a build
+        # host's product has (PS1B-333).
+        add_test(
+            NAME setup_product_notices
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_product_notices.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME cli_diagnostic_only
             COMMAND ${Python3_EXECUTABLE}

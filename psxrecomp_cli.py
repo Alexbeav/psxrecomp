@@ -133,6 +133,12 @@ def ensure_toolchain_for_rebuild(
     return True
 
 
+# Folders of a build directory that are the product, not the build: what the
+# build and the overlay-toolchain staging put beside the binary for the player.
+# Pruning build intermediates leaves them whole.
+PRUNE_KEEPS = ("overlay_toolchain", "assets", "mods", "licenses", "cache", "inputs", "saves")
+
+
 def prune_after_rebuild(
     project_root: Path,
     build_dir: Path,
@@ -160,8 +166,14 @@ def prune_after_rebuild(
                     except OSError:
                         pass
             # Drop object/lib digests but keep the launch binary + assets/.
+            # Never inside what was staged beside the binary for the player:
+            # the overlay toolchain's tcc needs its own tcc/lib/libtcc1-*.a to
+            # link an overlay, and this sweep used to delete them, so the tcc
+            # tier of every set-up install could not link (PS1B-333).
             for p in build_dir.rglob("*"):
                 if not p.is_file():
+                    continue
+                if p.relative_to(build_dir).parts[0] in PRUNE_KEEPS:
                     continue
                 if p.suffix in {".o", ".obj", ".a", ".lib", ".pdb", ".ilk", ".exp"}:
                     try:
@@ -2199,6 +2211,10 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         return EXIT_ERROR
     progress.phase("overlays", pct=0.93, message="Staging overlay toolchain beside the product...")
     stage_overlay_toolchain_for_product(project_root, exe.parent, progress)
+    # A program of a set is built in its own folder; the package's root, which
+    # carries the toolchain's licence texts, is the set's (program_set.rebuild_set).
+    stage_notices_for_product(project_root, exe.parent, progress,
+                              package_root=(getattr(args, "package_root", "") or ""))
 
     prune_raw = (getattr(args, "prune_after", None) or "").strip()
     if prune_raw:
@@ -2224,6 +2240,25 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         diagnostic_error=diagnostic_error or None,
     )
     return EXIT_OK
+
+
+def stage_notices_for_product(project_root: Path, exe_dir: Path, progress,
+                              package_root: str = "") -> dict[str, int]:
+    """Write licenses/ beside a built product: the kit's, the framework's and the launcher's
+    licence files, and the toolchain texts the package carries (release_stage.
+    stage_product_notices). A product a build host makes has that folder; one built by setup
+    had only the tcc notices (PS1B-333). Best effort: a failure is said and the build goes on."""
+    try:
+        import release_stage  # noqa: E402  (tools/ is on sys.path)
+
+        fw = framework_root(project_root)
+        ui = project_root / "recomp-ui"
+        return release_stage.stage_product_notices(
+            str(exe_dir), str(fw), ui=str(ui) if ui.is_dir() else None, project=str(project_root),
+            package=package_root or None, log=progress.log)
+    except Exception as exc:  # noqa: BLE001
+        progress.log(f"WARNING: the licence texts were not written beside the product: {exc}")
+        return {}
 
 
 def stage_overlay_toolchain_for_product(project_root: Path, exe_dir: Path, progress) -> Optional[Path]:
@@ -2403,6 +2438,7 @@ def build_diagnostic_product(
         if exe is None:
             raise RuntimeError(err)
         stage_overlay_toolchain_for_product(project_root, exe.parent, progress)
+        stage_notices_for_product(project_root, exe.parent, progress)
         progress.log(f"diagnostic product ready: {exe}")
         return exe, ""
     except Exception as exc:  # noqa: BLE001

@@ -1039,7 +1039,9 @@ def rebuild_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
                                  0.02 + 0.92 * index / count, 0.02 + 0.92 * (index + 1) / count)
         code = cli.cmd_rebuild(_program_args(
             args, folder, build_dir=str(folder / "build-release"), exe_basename=program["exe_name"], disc="",
-            no_pgo=True, force_pgo=False, diagnostic_dir="", diagnostic_only=False, prune_after=prune), child)
+            no_pgo=True, force_pgo=False, diagnostic_dir="", diagnostic_only=False, prune_after=prune,
+            # the package's root: where its licenses/toolchain texts are
+            package_root=str(root)), child)
         if code != cli.EXIT_OK:
             return code
         built = child.last_result.get("exe")
