@@ -991,6 +991,23 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME overlay_store_cycle_barrier_test
              COMMAND overlay_store_cycle_barrier_test)
 
+    # Overlay ABI v26: upstream's v25 OverlayCallbacks layout, then the fork's
+    # slots. Every slot offset is pinned against a byte-for-byte copy of
+    # upstream's header (tests/fixtures/overlay_api_upstream_v25.h).
+    add_executable(overlay_abi_layout_test tests/test_overlay_abi_layout.c)
+    target_include_directories(overlay_abi_layout_test PRIVATE include)
+    add_test(NAME overlay_abi_layout_test COMMAND overlay_abi_layout_test)
+
+    # Overlay shards write the runtime's store-PC breadcrumb (ABI v24). Built
+    # with the defines compile_overlays.py gives every shard.
+    add_executable(overlay_store_pc_forwarding_test
+        tests/test_overlay_store_pc_forwarding.c)
+    target_include_directories(overlay_store_pc_forwarding_test PRIVATE include)
+    target_compile_definitions(overlay_store_pc_forwarding_test PRIVATE
+        PSX_OVERLAY_DLL_BUILD PSX_NO_DEBUG_TOOLS PSX_ENABLE_BLOCK_CYCLES=1)
+    add_test(NAME overlay_store_pc_forwarding_test
+             COMMAND overlay_store_pc_forwarding_test)
+
     add_executable(psx_cycle_event_boundaries_test
         tests/test_psx_cycle_event_boundaries.c
         src/psx_cycles.c)

@@ -311,6 +311,10 @@ extern uint64_t *g_psx_bail_resolved_p;
 #define g_psx_call_bail     (*g_psx_call_bail_p)
 #define g_psx_bail_first    (*g_psx_bail_first_p)
 #define g_psx_bail_resolved (*g_psx_bail_resolved_p)
+/* The store-PC breadcrumb the emitter writes before every guest store is the
+ * runtime's, not the DLL's (ABI v24, overlay_api.h last_store_pc). */
+extern uint32_t *g_psx_last_store_pc_p;
+#define g_debug_last_store_pc (*g_psx_last_store_pc_p)
 #else
 extern int      g_psx_call_bail;
 extern uint64_t g_psx_bail_first;      /* contract violations detected      */

@@ -24,7 +24,11 @@ static uint8_t s_ram[RAM_SIZE];
 static uint8_t s_scratch[1024];
 
 uint32_t g_debug_current_func_addr;
-uint32_t g_debug_last_store_pc;
+/* The loader is built with PSX_OVERLAY_DLL_BUILD here, where cpu_state.h maps
+ * g_debug_last_store_pc onto *g_psx_last_store_pc_p (ABI v24). Give the
+ * pointer real storage: it is the word the loader hands to every shard. */
+static uint32_t s_host_store_pc;
+uint32_t *g_psx_last_store_pc_p = &s_host_store_pc;
 uint32_t g_overlay_region_floor;
 uint32_t i_stat, i_mask;
 int g_exec_phase;
@@ -175,8 +179,19 @@ uint32_t psx_ws_backdrop_value(uint32_t orig, int end, int cols) {
 int32_t psx_ws_depth_bound(int32_t imm) { return imm; }
 int32_t psx_ws_player_x_bound(int32_t vanilla) { return vanilla; }
 int32_t psx_ws_screen_x_bound(int32_t vanilla) { return vanilla; }
-void psx_mod_function_entry(CPUState *cpu, uint32_t address) {
-    (void)cpu; (void)address;
+int psx_mod_function_entry(CPUState *cpu, uint32_t address) {
+    (void)cpu; (void)address; return 0;
+}
+/* Step-boundary observer (ABI v26 slots). Off by default, as in a run with no
+ * observer installed; the abi-gate scenario turns it on and counts the calls
+ * a shard makes through the table the loader hands it. */
+static int s_boundary_on, s_boundary_calls;
+static uint32_t s_boundary_last_address;
+int psx_cpu_step_boundary_enabled(int include_replay) {
+    (void)include_replay; return s_boundary_on;
+}
+void psx_cpu_step_boundary_fn(CPUState *cpu, uint32_t address) {
+    (void)cpu; s_boundary_calls++; s_boundary_last_address = address;
 }
 int psx_netplay_is_resimulating(void) { return 0; }
 int psx_game_text_native_ok(uint32_t address) { (void)address; return 1; }
@@ -302,6 +317,90 @@ static int reveal_second_pair(const char *second) {
     return 1;
 }
 
+/* ---- ABI gate (test_overlay_abi_gate_runtime.py) ------------------------
+ * `shard` is the one published pair in the cache. Modes:
+ *   accept        a shard of this build's ABI: it loads, runs natively, and
+ *                 reaches the host through the v24, v25 and v26 slots;
+ *   reject        a shard with another ABI tag in this build's cache folder:
+ *                 the loader never calls it, counts it, keeps a line saying
+ *                 so, and the PC stays with the interpreter;
+ *   sibling       the cache holds only another codegen version's folder:
+ *                 nothing loads and the loader says whose cache it is;
+ *   replace:<lib> as reject, then the compiler's replacement (<lib>) takes the
+ *                 shard's place and a rescan loads it.
+ * One summary line goes to stdout for the Python side to judge. */
+#define ABI_GATE_STORE_PC 0x800657FCu
+#define ABI_GATE_HOST_PC  0xBFC04E90u
+
+static int abi_gate_dispatch(int expect_native) {
+    CPUState cpu;
+    int ok = 1;
+    memset(&cpu, 0, sizeof(cpu));
+    s_host_store_pc = ABI_GATE_HOST_PC;
+    s_boundary_calls = 0;
+    s_boundary_last_address = 0;
+    ok &= expect_int("dispatch", overlay_loader_dispatch(&cpu, 0x80010000u),
+                     expect_native);
+    ok &= expect_int("marker", cpu.gpr[2], expect_native ? TEST_MARKER : 0u);
+    /* v24: the shard's store PC lands in the host's word. */
+    ok &= expect_int("host store pc", s_host_store_pc,
+                     expect_native ? ABI_GATE_STORE_PC : ABI_GATE_HOST_PC);
+    /* v25: the host's int result (0 here) comes back through the slot. */
+    ok &= expect_int("mod entry result", cpu.gpr[3],
+                     expect_native ? 0x100u : 0u);
+    /* v26: the step boundary is reached through the fork's slots. */
+    ok &= expect_int("boundary calls", s_boundary_calls, expect_native);
+    ok &= expect_int("boundary address", s_boundary_last_address,
+                     expect_native ? 0x80010000u : 0u);
+    return ok;
+}
+
+static int abi_gate(const char *shard, const char *mode) {
+    int accept = strcmp(mode, "accept") == 0;
+    int sibling = strcmp(mode, "sibling") == 0;
+    const char *replacement =
+        strncmp(mode, "replace:", 8) == 0 ? mode + 8 : NULL;
+    int ok = 1;
+    s_boundary_on = 1;
+
+    ok &= expect_int("registered", overlay_loader_registered_count(),
+                     accept ? 2 : 0);
+    ok &= expect_int("owners", loader_owner_count(), accept ? 1 : 0);
+    ok &= expect_int("abi rejected", overlay_loader_abi_rejected() != 0,
+                     !(accept || sibling));
+    ok &= expect_int("stale line kept",
+                     overlay_loader_stale_cache_msg()[0] != '\0', !accept);
+    ok &= abi_gate_dispatch(accept);
+    if (!sibling)
+        ok &= expect_int("shard retained", module_is_loaded(shard), accept);
+    printf("first: registered=%d abi_rejected=%llu stale=[%s]\n",
+           overlay_loader_registered_count(),
+           (unsigned long long)overlay_loader_abi_rejected(),
+           overlay_loader_stale_cache_msg());
+
+    if (replacement) {
+        /* The compiler owns on-disk replacement; the loader left the stale
+         * file in place and holds no handle to it. */
+        if (remove(shard) != 0 || rename(replacement, shard) != 0) {
+            perror("replace stale shard");
+            return 3;
+        }
+        overlay_loader_rescan();
+        ok &= expect_int("replaced registered",
+                         overlay_loader_registered_count(), 2);
+        ok &= expect_int("replaced owners", loader_owner_count(), 1);
+        ok &= abi_gate_dispatch(1);
+        printf("after replace: registered=%d last=[%s]\n",
+               overlay_loader_registered_count(), overlay_loader_last_msg());
+    }
+    if (!ok) {
+        fprintf(stderr, "loader: %s\n", overlay_loader_last_msg());
+        return 1;
+    }
+    printf("PASS abi-gate %s\n", replacement ? "replace" : mode);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 5) {
         fprintf(stderr, "usage: %s <cache-root> <scenario> <first> <second>\n",
@@ -313,6 +412,7 @@ int main(int argc, char **argv) {
     const char *second = argv[4];
     memset(s_ram, 0, sizeof(s_ram));
     overlay_loader_init(argv[1], "PAIR-TEST", 0);
+    if (strcmp(scenario, "abi-gate") == 0) return abi_gate(first, second);
 
     int alias = strcmp(scenario, "alias-at-cap") == 0;
     int partial = strcmp(scenario, "partial-first") == 0;

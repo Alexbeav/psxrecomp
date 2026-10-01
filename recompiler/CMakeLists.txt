@@ -1114,6 +1114,7 @@ if(BUILD_TESTING)
                 bios_selection_guards
                 capture_history
                 cli_retail_bios_profile
+                codegen_hash_line_endings
                 codegen_host_bios_stems
                 default_renderer_guards
                 deferred_switch_interp_poll
@@ -1129,11 +1130,14 @@ if(BUILD_TESTING)
                 launcher_vulkan_option
                 mod_controller_override
                 mod_load_acceleration
+                overlay_abi_gate_runtime
+                overlay_abi_v26_guards
                 overlay_call_unit_irq_guards
                 overlay_candidate_capacity
                 release_zip
                 overlay_decodable_fallback
                 overlay_init_guard
+                overlay_pair_dedup_runtime
                 recomp_ui_root_override
                 pal_cadence_host_refresh
                 savestate_load_preflight
@@ -1156,7 +1160,11 @@ if(BUILD_TESTING)
         endforeach()
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
-        # These three were previously left out of the list above with a comment
+        # (overlay_pair_dedup_runtime was the third of these. It failed to link:
+        # its harness had no psx_cpu_step_boundary_* definitions after the
+        # loader began to hand them to shards. The harness has them now, the
+        # overlay ABI gate test shares it, and the test is in the list above.)
+        # These were previously left out of the list above with a comment
         # explaining that they FAIL and that wiring a red check would recreate
         # the problem that took CI off PRs. That reasoning is right; the remedy
         # was not. De-registering is precisely how a test stops being counted,
@@ -1173,12 +1181,9 @@ if(BUILD_TESTING)
         #                              s_next_service_cycle
         #   runtime_perf_diag_guards   asserts a substring no longer present in
         #                              the runtime source
-        #   overlay_pair_dedup_runtime needs its companion harness built; not a
-        #                              source-only guard
         foreach(_t IN ITEMS
                 interpreter_perf_guards
-                runtime_perf_diag_guards
-                overlay_pair_dedup_runtime)
+                runtime_perf_diag_guards)
             add_test(
                 NAME ${_t}
                 COMMAND ${Python3_EXECUTABLE}

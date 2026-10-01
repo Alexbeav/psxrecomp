@@ -23,6 +23,12 @@ static uint64_t s_ctr_dummy0, s_ctr_dummy1;
 int      *g_psx_call_bail_p    = &s_bail_dummy;
 uint64_t *g_psx_bail_first_p   = &s_ctr_dummy0;
 uint64_t *g_psx_bail_resolved_p = &s_ctr_dummy1;
+/* g_debug_last_store_pc (ABI v24): cpu_state.h maps the emitter's writes to
+ * *g_psx_last_store_pc_p. The runtime reads the value in every build (memory.c
+ * store filters, write attribution), so overlay_init points this at the host's
+ * copy; the local one only catches a store made before init or on a NULL host. */
+static uint32_t s_last_store_pc_local;
+uint32_t *g_psx_last_store_pc_p = &s_last_store_pc_local;
 
 PSX_OVERLAY_EXPORT int overlay_abi(void) {
     return PSX_OVERLAY_ABI_VERSION | (PSX_OVERLAY_FLAVOR << 16);
@@ -33,6 +39,8 @@ PSX_OVERLAY_EXPORT void overlay_init(const OverlayCallbacks *cbs) {
     if (g_cbs.call_bail_flag) g_psx_call_bail_p    = g_cbs.call_bail_flag;
     if (g_cbs.bail_first)     g_psx_bail_first_p   = g_cbs.bail_first;
     if (g_cbs.bail_resolved)  g_psx_bail_resolved_p = g_cbs.bail_resolved;
+    g_psx_last_store_pc_p = g_cbs.last_store_pc ? g_cbs.last_store_pc
+                                                : &s_last_store_pc_local;
 }
 
 void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t ra) {
@@ -179,11 +187,6 @@ void gte_write_ctrl(CPUState *cpu, uint8_t reg, uint32_t value) {
     overlay_flush_cycles();
     g_cbs.gte_write_ctrl(cpu, reg, value);
 }
-/* g_debug_last_store_pc: a provenance breadcrumb the emitter writes before stores.
- * Overlays are built PSX_NO_DEBUG_TOOLS (the runtime's only consumer is debug tooling),
- * so a local definition satisfies the link; overlay-store provenance is simply not
- * tracked in a no-debug-tools build (by design). */
-uint32_t g_debug_last_store_pc;
 /* Widescreen hooks (ABI v3): forward to the runtime's live widescreen state.
  * Identity fallback if the host predates the callbacks (NULL) — so a v3 DLL
  * stays correct (4:3) on an older host. */
@@ -245,9 +248,9 @@ int32_t psx_ws_player_x_bound(int32_t vanilla) {
 int32_t psx_ws_screen_x_bound(int32_t vanilla) {
     return g_cbs.ws_screen_x_bound ? g_cbs.ws_screen_x_bound(vanilla) : vanilla;
 }
-void psx_mod_function_entry(CPUState *cpu, uint32_t address) {
+int psx_mod_function_entry(CPUState *cpu, uint32_t address) {
     overlay_flush_cycles();
-    if (g_cbs.mod_function_entry) g_cbs.mod_function_entry(cpu, address);
+    return g_cbs.mod_function_entry ? g_cbs.mod_function_entry(cpu, address) : 0;
 }
 int32_t psx_ws_depth_bound(int32_t imm) {
     return g_cbs.ws_depth_bound ? g_cbs.ws_depth_bound(imm) : imm;

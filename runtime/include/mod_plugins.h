@@ -23,8 +23,13 @@ int psx_mod_register_vblank_plugin(const char* id,
                                    PSXModVBlankCallback callback);
 int psx_mod_register_function_entry_plugin(
     const char* id, uint32_t address, PSXModFunctionEntryCallback callback);
-/* Called only from generated functions explicitly listed by the game config. */
-void psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
+/* Called only from generated functions explicitly listed by the game config.
+ * The return value follows upstream's overlay ABI v25: non-zero means a
+ * function filter finished the guest function with the callback's return
+ * registers and the runtime set pc=$ra, so the caller must return without
+ * running the body; zero runs the original body. This tree has no filter
+ * plugins, so it always returns zero. */
+int psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
 
 /* Narrow guest services available to trusted plugin callbacks. */
 int psx_mod_game_started(void);

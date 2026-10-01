@@ -35,7 +35,7 @@ int overlay_fp_enabled(void) { return 0; }
 int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) { (void)cpu; (void)addr; return 0; }
 int overlay_loader_is_candidate(uint32_t phys) { (void)phys; return 0; }
 int psx_overlay_dispatch(CPUState *cpu, uint32_t addr) { (void)cpu; (void)addr; return 0; }
-void psx_mod_function_entry(CPUState *cpu, uint32_t address) { (void)cpu; (void)address; }
+int psx_mod_function_entry(CPUState *cpu, uint32_t address) { (void)cpu; (void)address; return 0; }
 void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len) { (void)phys; (void)len; }
 uint32_t psx_overlay_resident_crc_at(uint32_t phys, int *valid) { (void)phys; *valid = 0; return 0; }
 int psx_get_in_exception(void) { return 0; }

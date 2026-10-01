@@ -1188,6 +1188,24 @@ static void loader_log(const char *fmt, ...) {
 
 const char *overlay_loader_last_msg(void) { return s_last_msg; }
 
+/* A cache this build cannot use (another ABI tag, or another codegen folder)
+ * is not a routine event: every overlay runs interpreted until its shard is
+ * rebuilt. s_last_msg holds only the newest line and the next load overwrites
+ * it, so the first stale-cache line is kept here, with a count of the shards
+ * refused for their overlay_abi() tag. Both are in overlay_loader_status. */
+static char     s_stale_cache_msg[256] = {0};
+static uint64_t s_abi_rejected = 0;
+
+static void note_stale_cache(void) {
+    if (!s_stale_cache_msg[0])
+        snprintf(s_stale_cache_msg, sizeof(s_stale_cache_msg), "%s", s_last_msg);
+}
+
+const char *overlay_loader_stale_cache_msg(void) { return s_stale_cache_msg; }
+uint64_t overlay_loader_abi_rejected(void) { return s_abi_rejected; }
+int overlay_loader_abi_tag(void) { return PSX_OVERLAY_ABI_TAG; }
+int overlay_loader_codegen_ver(void) { return PSX_OVERLAY_CODEGEN_VER; }
+
 /* ---- Cache index: region_start -> dll path ----------------------------- */
 
 /* 256 -> 4096 (2026-07-03): Tomba2's cache crossed 256 DLLs and the index
@@ -1813,7 +1831,33 @@ static void scan_one_cache_dir(const char *dir, int tier) {
  * ("why is it slow"). This is USUALLY a mismatched overlay_autocompile_cmd
  * --recompiler / --runtime-include (e.g. a cross-build: runtime from one framework
  * checkout, autocompile pointed at another). Shout it once, loudly, with both tags,
- * so it can never again be diagnosed as generic slowness. */
+ * so it can never again be diagnosed as generic slowness.
+ * A sibling whose cg<N> number differs is not that fault: it is the cache an
+ * older (or newer) build left behind, and it gets a plain line saying so. */
+static void log_other_cgtag(const char *tier, const char *expect,
+                            const char *found) {
+    int found_ver = -1;
+    if (sscanf(found, "cg%d_", &found_ver) == 1 &&
+        found_ver != PSX_OVERLAY_CODEGEN_VER) {
+        /* Another codegen VERSION wrote that folder: a cache from an older
+         * (or newer) build, which is what an upgrade leaves behind. */
+        loader_log("overlay cache %s/%s is from codegen version %d; this build "
+                   "reads %s/%s (codegen version %d). Those shards are not "
+                   "loaded. Overlays run interpreted until they are rebuilt "
+                   "into the new folder.",
+                   tier, found, found_ver, tier, expect,
+                   PSX_OVERLAY_CODEGEN_VER);
+    } else {
+        loader_log("*** OVERLAY CACHE HASH MISMATCH: this build reads %s/%s but "
+                   "shards exist under %s/%s. The autocompile is writing to a "
+                   "DIFFERENT codegen/config hash than this runtime reads -> ALL overlays "
+                   "run INTERPRETED (slow). Fix overlay_autocompile_cmd's "
+                   "--recompiler/--runtime-include to match THIS build's framework.",
+                   tier, expect, tier, found);
+    }
+    note_stale_cache();
+}
+
 static void warn_on_cgtag_mismatch(const char *tier) {
 #ifdef _WIN32
     char base[768], pattern[900];
@@ -1835,12 +1879,7 @@ static void warn_on_cgtag_mismatch(const char *tier) {
         HANDLE h2 = FindFirstFileA(dllpat, &fd2);
         if (h2 != INVALID_HANDLE_VALUE) {          /* sibling tag HAS shards */
             FindClose(h2);
-            loader_log("*** OVERLAY CACHE HASH MISMATCH: this build reads %s/%s but "
-                       "shards exist under %s/%s. The autocompile is writing to a "
-                       "DIFFERENT codegen/config hash than this runtime reads -> ALL overlays "
-                       "run INTERPRETED (slow). Fix overlay_autocompile_cmd's "
-                       "--recompiler/--runtime-include to match THIS build's framework.",
-                       tier, expect, tier, fd.cFileName);
+            log_other_cgtag(tier, expect, fd.cFileName);
         }
     } while (FindNextFileA(h, &fd));
     FindClose(h);
@@ -1852,14 +1891,8 @@ static void warn_on_cgtag_mismatch(const char *tier) {
              PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH,
              (unsigned)s_config_hash, (unsigned)PSX_OVERLAY_FLAVOR);
     if (psx_overlay_posix_find_other_cache_tag(base, expect, found,
-                                               sizeof(found))) {
-        loader_log("*** OVERLAY CACHE HASH MISMATCH: this build reads %s/%s but "
-                   "shards exist under %s/%s. The autocompile is writing to a "
-                   "DIFFERENT codegen/config hash than this runtime reads -> ALL overlays "
-                   "run INTERPRETED (slow). Fix overlay_autocompile_cmd's "
-                   "--recompiler/--runtime-include to match THIS build's framework.",
-                   tier, expect, tier, found);
-    }
+                                               sizeof(found)))
+        log_other_cgtag(tier, expect, found);
 #endif
 }
 
@@ -1895,10 +1928,11 @@ static int posix_abi_sweep_file(const PsxOverlayCacheFile *file, void *opaque) {
         return 0;
     }
 
-    if (handle)
+    if (handle) {
         loader_log("ABI preflight rejecting %s: dll=0x%X runtime=0x%X",
                    file->path, abi, PSX_OVERLAY_ABI_TAG);
-    else
+        s_abi_rejected++;
+    } else
         loader_log("ABI preflight rejecting unloadable %s: %s",
                    file->path, error);
     /* Do not delete by canonical pathname after inspecting a loaded handle:
@@ -1925,6 +1959,15 @@ static int posix_abi_sweep_file(const PsxOverlayCacheFile *file, void *opaque) {
  * stat per dir. Autocompile only ever writes current-ABI DLLs, so the marker
  * stays truthful; the per-load ABI gate in load_overlay_dll remains as
  * defense in depth. */
+static void log_abi_preflight(int purged, int kept, const char *dir) {
+    /* The folder goes last: the message buffer is short and paths are long. */
+    loader_log("abi preflight: rejected %d stale DLL(s), kept %d; this build "
+               "loads ABI tag 0x%X only, rejected shards stay interpreted "
+               "until rebuilt. In %s",
+               purged, kept, (unsigned)PSX_OVERLAY_ABI_TAG, dir);
+    note_stale_cache();
+}
+
 static void abi_preflight_sweep(const char *dir) {
 #ifdef _WIN32
     char marker[900];
@@ -1952,6 +1995,7 @@ static void abi_preflight_sweep(const char *dir) {
                 int abi = abi_fn ? abi_fn() : 0;
                 FreeLibrary(h);
                 if (abi == PSX_OVERLAY_ABI_TAG) { kept++; continue; }
+                s_abi_rejected++;
             }
             /* Drop only the index entry. Deleting `full` here can delete a new
              * shard atomically swapped in after LoadLibrary returned the old
@@ -1966,9 +2010,7 @@ static void abi_preflight_sweep(const char *dir) {
         } while (FindNextFileA(hf, &fd));
         FindClose(hf);
     }
-    if (purged)
-        loader_log("abi preflight: rejected %d stale DLL(s), kept %d in %s",
-                   purged, kept, dir);
+    if (purged) log_abi_preflight(purged, kept, dir);
     /* Rejected files remain until the compiler replaces them, so do not create
      * a marker that would skip their in-memory rejection next boot. */
     if (!purged) {
@@ -1984,9 +2026,7 @@ static void abi_preflight_sweep(const char *dir) {
 
     PosixAbiSweep sweep = {0};
     psx_overlay_posix_scan_cache_dir(dir, posix_abi_sweep_file, &sweep);
-    if (sweep.purged)
-        loader_log("abi preflight: rejected %d stale DLL(s), kept %d in %s",
-                   sweep.purged, sweep.kept, dir);
+    if (sweep.purged) log_abi_preflight(sweep.purged, sweep.kept, dir);
     if (!sweep.purged) {
         FILE *m = fopen(marker, "wb");
         if (m) fclose(m);
@@ -2347,6 +2387,13 @@ static void init_callbacks(void) {
     s_callbacks.call_bail_flag = &g_psx_call_bail;
     s_callbacks.bail_first     = &g_psx_bail_first;
     s_callbacks.bail_resolved  = &g_psx_bail_resolved;
+    /* Store-PC breadcrumb (ABI v24): overlay stores update the same value
+     * static and interpreted stores do, in every build, because memory.c's
+     * store filters read it as well as the debug tooling. */
+    {
+        extern uint32_t g_debug_last_store_pc;
+        s_callbacks.last_store_pc = &g_debug_last_store_pc;
+    }
     /* Widescreen hooks (ABI v3): overlay-emitted psx_ws_* calls forward to
      * the runtime's live widescreen state (gpu.c). */
     {
@@ -2424,7 +2471,7 @@ static void init_callbacks(void) {
         }
         {
             extern int32_t psx_ws_screen_x_bound(int32_t vanilla);
-            extern void psx_mod_function_entry(CPUState *cpu, uint32_t address);
+            extern int psx_mod_function_entry(CPUState *cpu, uint32_t address);
             s_callbacks.ws_screen_x_bound = psx_ws_screen_x_bound;
             s_callbacks.mod_function_entry = psx_mod_function_entry;
         }
@@ -2519,6 +2566,8 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
         loader_log("ABI/flavor mismatch in %s: dll=0x%X runtime=0x%X — rejecting "
                    "without pathname deletion", dll_path, abi,
                    PSX_OVERLAY_ABI_TAG);
+        s_abi_rejected++;
+        note_stale_cache();
         FreeLibrary(h);
         return 0;
     }
@@ -2666,6 +2715,8 @@ static int load_overlay_dll(const char *dll_path, ManFn *man, int man_n, int dll
         loader_log("ABI/flavor mismatch in %s: dll=0x%X runtime=0x%X — rejecting "
                    "without pathname deletion", dll_path, abi,
                    PSX_OVERLAY_ABI_TAG);
+        s_abi_rejected++;
+        note_stale_cache();
         psx_overlay_posix_library_close(h);
         return 0;
     }

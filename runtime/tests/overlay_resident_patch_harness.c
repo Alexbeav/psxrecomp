@@ -142,7 +142,11 @@ int timers_source_raster_enabled(void) { return 0; }
 
 /* ---- overlay_loader.c environment (as overlay_pair_dedup_harness.c) ----- */
 uint32_t g_debug_current_func_addr;
-uint32_t g_debug_last_store_pc;
+/* This unit and the runtime sources linked into it are built with
+ * PSX_OVERLAY_DLL_BUILD, where cpu_state.h maps g_debug_last_store_pc onto
+ * *g_psx_last_store_pc_p (ABI v24). Give the pointer real storage. */
+static uint32_t s_host_store_pc;
+uint32_t *g_psx_last_store_pc_p = &s_host_store_pc;
 int g_exec_phase;
 int g_idle_note_suppress;
 int g_psx_call_bail;
@@ -259,8 +263,8 @@ uint32_t psx_ws_backdrop_value(uint32_t orig, int end, int cols) {
 int32_t psx_ws_depth_bound(int32_t imm) { return imm; }
 int32_t psx_ws_player_x_bound(int32_t vanilla) { return vanilla; }
 int32_t psx_ws_screen_x_bound(int32_t vanilla) { return vanilla; }
-void psx_mod_function_entry(CPUState *cpu, uint32_t address) {
-    (void)cpu; (void)address;
+int psx_mod_function_entry(CPUState *cpu, uint32_t address) {
+    (void)cpu; (void)address; return 0;
 }
 int psx_netplay_is_resimulating(void) { return 0; }
 uint32_t psx_ws_angle_widen(uint32_t vanilla) { return vanilla; }
