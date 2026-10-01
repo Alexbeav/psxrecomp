@@ -483,6 +483,15 @@ static void free_recording(void)
     s_stop_requested = 0;
 }
 
+/* The file name of a path, for the toast. */
+static const char *path_leaf(const char *path)
+{
+    const char *leaf = path;
+    for (const char *p = path; *p; ++p)
+        if (*p == '/' || *p == '\\') leaf = p + 1;
+    return leaf;
+}
+
 static int refuse_record(const char *why)
 {
     char msg[320];
@@ -695,7 +704,14 @@ static void finish_recording(void)
         if (s_power_on && replay_session_partial_path(s_rec_path, partial, sizeof partial))
             remove(partial);
         if (s_rec_slot >= 0) snprintf(msg, sizeof msg, "Replay saved: slot %d", s_rec_slot + 1);
-        else snprintf(msg, sizeof msg, "Replay saved: %s", s_rec_path);
+        else {
+            /* The file's name without folder or extension: the longest boot
+             * name then fits the toast. The full path is in the log line. */
+            const char *leaf = path_leaf(s_rec_path);
+            size_t n = strlen(leaf);
+            if (n > 7 && !strcmp(leaf + n - 7, ".psxrpl")) n -= 7;
+            snprintf(msg, sizeof msg, "Replay saved: %.*s", (int)n, leaf);
+        }
         fprintf(stdout, "replay_recorded: path=%s frames=%u steps=%u\n", s_rec_path,
                 (unsigned)s_last_frame, (unsigned)s_steps);
         fflush(stdout);

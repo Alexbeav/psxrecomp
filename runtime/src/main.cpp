@@ -8018,8 +8018,7 @@ extern "C" int replay_host_can_record(char *why, size_t cap) {
      * would be neither recorded nor fed during playback. */
     for (int slot = 0; slot < 2; ++slot) {
         if (sio_get_port_device(slot) != SIO_DEVICE_PAD) {
-            std::snprintf(why, cap, "port %d has a mouse or another non-pad device (replays record pads only)",
-                          slot + 1);
+            std::snprintf(why, cap, "port %d needs a pad or the keyboard", slot + 1);
             return 0;
         }
     }

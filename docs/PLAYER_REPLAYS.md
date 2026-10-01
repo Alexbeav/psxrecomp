@@ -159,7 +159,9 @@ A power-on recording does not start when a save state is loaded at boot
 - **Player 2.** Port 2 gets no input while a replay records or plays, so its
   pad is idle for the whole session. Its connection state is recorded.
 - **Mouse, neGcon and GunCon.** Replays carry pad input only. Recording refuses
-  to start while either port holds one of these devices. PS1B-313 tracks
+  to start while either port holds one of these devices, and the game shows
+  "Replay not recorded: port 1 needs a pad or the keyboard" (or port 2). Pick
+  a pad or the keyboard for that port in the launcher first. PS1B-313 tracks
   peripherals in replays.
 - **Disc changes.** Changing the disc from the in-game menu ends the recording
   there, and the replay is saved up to the change. A multi-disc game can be
