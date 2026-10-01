@@ -836,6 +836,17 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
     bios = (getattr(args, "bios", "") or "").strip()
     if bios and not Path(bios).expanduser().is_absolute():
         bios = str((root / bios).resolve())   # a program's step would resolve it under the program
+    # The emitters are built once, from the set's root. A program reaches the
+    # same build folder through its folder link; a second configure of that
+    # folder under the link's path would be a different path to CMake.
+    try:
+        cli.ensure_framework(root, progress=progress)
+        cli.ensure_emitters(root, progress,
+                            download_toolchain=not bool(getattr(args, "no_toolchain_download", False)),
+                            force=bool(getattr(args, "force_emitters", False)))
+    except Exception as error:  # noqa: BLE001 - as the single-program generate reports it
+        progress.error(str(error), code=cli.EXIT_ERROR)
+        return cli.EXIT_ERROR
     count = len(spec["programs"])
     done = []
     for index, program in enumerate(spec["programs"]):
@@ -848,7 +859,7 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
         child = _ProgramProgress(progress, f"{program['program']} ({index + 1} of {count})",
                                  0.05 + 0.9 * index / count, 0.05 + 0.9 * (index + 1) / count)
         code = cli.cmd_generate(_program_args(args, folder, disc=str(discs[program["positions"][0] - 1]),
-                                              bios=bios, gen_marker=""), child)
+                                              bios=bios, gen_marker="", force_emitters=False), child)
         if code != cli.EXIT_OK:
             return code
         done.append({"program": program["program"], "marker": child.last_result.get("marker"),

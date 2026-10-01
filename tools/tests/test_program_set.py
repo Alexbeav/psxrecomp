@@ -591,10 +591,16 @@ def fake_cli(root: Path, *, fail_rebuild_of: str = "", calls=None):
         progress.result(ok=True, exe=str(Path(args.build_dir) / (args.exe_basename + ".exe")), lto=True)
         return 0
 
+    def ensure_emitters(project_root, progress, *, download_toolchain=True, force=False):
+        calls.append(("emitters", {"project_root": str(project_root), "download_toolchain": download_toolchain,
+                                   "force": force}))
+
     return types.SimpleNamespace(
         EXIT_OK=0, EXIT_ERROR=1, EXIT_USAGE=2, EXIT_VERIFY=3, calls=calls,
         activate_embedded_toolchain=lambda root, progress: True,
         ensure_chd_reader=lambda root, progress: None,
+        ensure_framework=lambda root, progress=None: Path(root) / "psxrecomp",
+        ensure_emitters=ensure_emitters,
         cmd_generate=cmd_generate, cmd_rebuild=cmd_rebuild,
         _resolve_under=lambda base, raw: (Path(raw) if Path(raw).is_absolute() else Path(base) / raw).resolve())
 
@@ -657,10 +663,16 @@ class SetSteps(unittest.TestCase):
             make_set(root)
             d1, d2 = make_discs(Path(tmp) / "discs")
             cli, progress = fake_cli(root), Progress()
-            code = ps.generate_set(cli, generate_args(root, set_disc=[f"1={d1}", f"2={d2}"]), progress)
+            code = ps.generate_set(cli, generate_args(root, set_disc=[f"1={d1}", f"2={d2}"], force_emitters=True),
+                                   progress)
             self.assertEqual(code, 0, progress.events)
-            self.assertEqual([c[0] for c in cli.calls], ["generate", "generate"])
-            leon, claire = cli.calls[0][1], cli.calls[1][1]
+            # the emitters once, from the set's root, before any program; never per program
+            self.assertEqual([c[0] for c in cli.calls], ["emitters", "generate", "generate"])
+            self.assertEqual(cli.calls[0][1], {"project_root": str(root.resolve()), "download_toolchain": False,
+                                               "force": True})
+            leon, claire = cli.calls[1][1], cli.calls[2][1]
+            self.assertFalse(leon["force_emitters"])
+            self.assertFalse(claire["force_emitters"])
             self.assertEqual(Path(leon["project_root"]), root / "programs" / "leon")
             self.assertEqual(Path(leon["config"]), root / "programs" / "leon" / "game.toml")
             self.assertEqual(Path(leon["disc"]), d1.resolve())
