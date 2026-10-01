@@ -401,8 +401,11 @@ static void apply_offline_pad_count(int game_players, bool multitap_enabled)
     g_offline_pad_count = n;
 }
 /* ARGB8888 staging buffer. The 576-row maximum preserves the full interlaced
- * PAL active canvas. Allocated once the supersampling scale is known. */
+ * PAL active canvas; wide frames can require more than the canonical width. */
 static uint32_t*     sdl_pixel_buf = nullptr;
+static size_t        sdl_pixel_buf_capacity = 0;
+static int           sdl_texture_width = 0;
+static int           sdl_texture_height = 0;
 
 typedef void (*ModFrameHook)(void);
 
@@ -1343,6 +1346,17 @@ static int           g_video_aspect_den = 3;
 static bool          g_ws_adaptive_view = false;
 static int           g_ws_adaptive_max_num = 16;
 static int           g_ws_adaptive_max_den = 9;
+static bool ensure_sdl_pixel_buf_capacity(size_t pixels) {
+    if (pixels <= sdl_pixel_buf_capacity) return true;
+    void* next = std::realloc(sdl_pixel_buf, pixels * sizeof(uint32_t));
+    if (!next) {
+        std::fprintf(stderr, "psxrecomp: failed to allocate %zu present pixels\n", pixels);
+        return false;
+    }
+    sdl_pixel_buf = (uint32_t*)next;
+    sdl_pixel_buf_capacity = pixels;
+    return true;
+}
 /* game.toml [netplay] local_viewport = "vertical_split": during real netplay,
  * present only this peer's native split-screen half and stretch it to the
  * window. Presentation-only; the guest still renders the original framebuffer. */
@@ -1903,6 +1917,27 @@ static int netplay_gl_dual_quality(void) {
 }
 
 #ifndef PSX_SDL_NO_RENDER
+static int ensure_sdl_present_texture(int min_width, int min_height) {
+    if (sdl_texture && min_width <= sdl_texture_width &&
+        min_height <= sdl_texture_height) return 0;
+    const int width = std::max(min_width, sdl_texture_width);
+    const int height = std::max(min_height, sdl_texture_height);
+    SDL_Texture* next = SDL_CreateTexture(sdl_renderer,
+        SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+    if (!next) {
+        std::fprintf(stderr, "psxrecomp: SDL_CreateTexture %dx%d failed: %s\n",
+                     width, height, SDL_GetError());
+        return -1;
+    }
+    SDL_SetTextureScaleMode(next,
+                            g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+    if (sdl_texture) SDL_DestroyTexture(sdl_texture);
+    sdl_texture = next;
+    sdl_texture_width = width;
+    sdl_texture_height = height;
+    return 0;
+}
+
 /* Create SDL_Renderer + streaming texture for software present. Used when
  * netplay runs without a live GL context (software renderer selected, or GL
  * init failed). CPU-auth + OpenGL present does not need this. */
@@ -1934,27 +1969,20 @@ static int ensure_sw_sdl_present(void) {
     }
     if (!sdl_texture) {
         const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
-        sdl_texture = SDL_CreateTexture(
-            sdl_renderer,
-            SDL_PIXELFORMAT_ARGB8888,
-            SDL_TEXTUREACCESS_STREAMING,
-            640 * tex_scale,
-            (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale);
-        if (!sdl_texture) {
+        if (ensure_sdl_present_texture(
+                640 * tex_scale,
+                (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale) != 0) {
             std::fprintf(stderr,
                          "psxrecomp: netplay SW present: SDL_CreateTexture failed: %s\n",
                          SDL_GetError());
             return -1;
         }
-        SDL_SetTextureScaleMode(sdl_texture,
-                                g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
     }
     if (!sdl_pixel_buf) {
         const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
-        sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
-            tex_scale * sizeof(uint32_t));
-        if (!sdl_pixel_buf) {
+        if (!ensure_sdl_pixel_buf_capacity(
+                (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
+                tex_scale)) {
             std::fprintf(stderr, "psxrecomp: netplay SW present: staging alloc failed\n");
             return -1;
         }
@@ -3135,9 +3163,11 @@ static void teardown_game_session_keep_lobby(void) {
         g_gl_active = false;
     }
     if (sdl_texture) { SDL_DestroyTexture(sdl_texture); sdl_texture = nullptr; }
+    sdl_texture_width = sdl_texture_height = 0;
     if (sdl_renderer) { SDL_DestroyRenderer(sdl_renderer); sdl_renderer = nullptr; }
     if (sdl_window) { SDL_DestroyWindow(sdl_window); sdl_window = nullptr; }
     if (sdl_pixel_buf) { std::free(sdl_pixel_buf); sdl_pixel_buf = nullptr; }
+    sdl_pixel_buf_capacity = 0;
     /* Rematch must re-run force_sw (and prefer CPU-auth GL present again). */
     s_netplay_sw_gpu_locked = 0;
     s_netplay_gl_present = 0;
@@ -7285,6 +7315,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 : (w + (uint32_t)ws_nw_extra());
         }
 
+        /* The software wide readback can exceed the canonical 640px staging
+         * width, especially on high-resolution and resized adaptive frames. */
+        const int staging_scale = std::max(1, std::max(g_video_scale, gr_scale()));
+        const size_t staging_pixels = (size_t)present_w * std::max(h, present_h) *
+                                      (size_t)staging_scale * staging_scale;
+        if (!ensure_sdl_pixel_buf_capacity(staging_pixels)) return ep;
+
         /* Native-wide invariant: canonical (320-wide) content is NEVER
          * stretched across the wide window — a game frame that cannot present
          * wide (compositor unsupported, or the surface fallback below)
@@ -7514,6 +7551,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         return ep;
     if (!sdl_renderer || !sdl_texture)
         return ep;
+    if (ensure_sdl_present_texture(std::max(1, src_w), std::max(1, src_h)) != 0)
+        return ep;
     SDL_Rect src = { 0, 0, src_w, src_h };
     SDL_UpdateTexture(sdl_texture, &src, sdl_pixel_buf,
                       (int)(src_w * sizeof(uint32_t)));
@@ -7524,14 +7563,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
     const int tex_h = (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale;
     if (src_w > 0 && src_h > 0 && src_h < tex_h) {
-        static uint32_t s_black_pad[640 * 4]; /* covers g_video_scale <= 4 */
-        const int pad_cap = (int)(sizeof(s_black_pad) / sizeof(s_black_pad[0]));
-        const int pad_w = (src_w <= pad_cap) ? src_w : pad_cap;
-        for (int i = 0; i < pad_w; i++)
-            s_black_pad[i] = 0xFF000000u;
-        SDL_Rect pad = { 0, src_h, pad_w, 1 };
-        SDL_UpdateTexture(sdl_texture, &pad, s_black_pad,
-                          (int)(pad_w * sizeof(uint32_t)));
+        static std::vector<uint32_t> black_pad;
+        black_pad.assign((size_t)src_w, 0xFF000000u);
+        SDL_Rect pad = { 0, src_h, src_w, 1 };
+        SDL_UpdateTexture(sdl_texture, &pad, black_pad.data(),
+                          (int)(src_w * sizeof(uint32_t)));
     }
 
     /* FMV (24-bit) frames are authored 4:3 with no GTE squash to compensate
@@ -15385,10 +15421,9 @@ session_reboot:
      * canvas, times the supersampling factor. Netplay: 1×. */
     {
         const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
-        sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
-            tex_scale * sizeof(uint32_t));
-        if (!sdl_pixel_buf) {
+        if (!ensure_sdl_pixel_buf_capacity(
+                (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
+                tex_scale)) {
             std::fprintf(stderr, "failed to allocate %dx staging buffer\n", tex_scale);
             return 1;
         }
@@ -15396,19 +15431,12 @@ session_reboot:
 
   if (!g_gl_active && !g_vk_active) {
     const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
-    sdl_texture = SDL_CreateTexture(
-        sdl_renderer,
-        SDL_PIXELFORMAT_ARGB8888,
-        SDL_TEXTUREACCESS_STREAMING,
-        640 * tex_scale,
-        (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale
-    );
-    if (!sdl_texture) {
+    if (ensure_sdl_present_texture(
+            640 * tex_scale,
+            (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale) != 0) {
         std::fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
         return 1;
     }
-    SDL_SetTextureScaleMode(sdl_texture,
-                            g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
   }
     log_present_cadence();
   }
