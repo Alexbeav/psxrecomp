@@ -27,6 +27,7 @@
 #define NODE_FLAT 0x00010300u
 #define NODE_PANEL 0x00010400u
 #define NODE_GAP   0x00010500u
+#define NODE_REAR  0x00010600u   /* + 0x40 per rear piece */
 
 static uint32_t pack_vertex(int16_t x, int16_t y) {
     return (uint16_t)x | ((uint32_t)(uint16_t)y << 16);
@@ -73,6 +74,35 @@ static void add_backing_panel(int16_t x0, int16_t x1, int16_t y0, int16_t y1) {
     };
     test_ram[OT_HEAD / 4u] = NODE_PANEL;
     put_node(NODE_PANEL, NODE_GAP, panel, 5);
+    test_ram[NODE_GAP / 4u] = NODE_RING;
+}
+
+/* Pieces one OT rank behind the HUD: OT_HEAD (empty, rank 0) -> pieces ->
+ * NODE_GAP (empty, rank 1) -> frame -> fills. Each piece is a 4-vertex quad
+ * (0x2C textured or 0x28 flat) over [x0,x1) x [y0,y1). */
+typedef struct { uint32_t op; int16_t x0, x1, y0, y1; } RearPiece;
+static uint32_t rear_node(int i) { return NODE_REAR + (uint32_t)i * 0x40u; }
+static void add_rear_pieces(const RearPiece *pieces, int count) {
+    for (int i = 0; i < count; i++) {
+        const RearPiece *r = &pieces[i];
+        uint32_t next = i + 1 < count ? rear_node(i + 1) : NODE_GAP;
+        if (r->op == 0x2Cu) {
+            const uint32_t q[9] = {
+                0x2C808080u, pack_vertex(r->x0, r->y0), 0x00000000u,
+                pack_vertex(r->x1, r->y0), 0x00080000u,
+                pack_vertex(r->x0, r->y1), 0x00001000u,
+                pack_vertex(r->x1, r->y1), 0x00001010u,
+            };
+            put_node(rear_node(i), next, q, 9);
+        } else {
+            const uint32_t q[5] = {
+                0x28202020u, pack_vertex(r->x0, r->y0), pack_vertex(r->x1, r->y0),
+                pack_vertex(r->x0, r->y1), pack_vertex(r->x1, r->y1),
+            };
+            put_node(rear_node(i), next, q, 5);
+        }
+    }
+    test_ram[OT_HEAD / 4u] = rear_node(0);
     test_ram[NODE_GAP / 4u] = NODE_RING;
 }
 
@@ -172,6 +202,42 @@ int main(void) {
     reset_state(1);
     build_hud(60, 128, 64, 120);
     add_backing_panel(200, 300, 16, 40);
+    gpu_ws_prepass_linked_list(OT_HEAD);
+    assert(ws_ui_prepass_count == 3);
+    assert(ws_ui_reject.backing == 0);
+
+    /* Attached pieces (Spider-Man 2's webbing gauge): a textured segment
+     * stacked one row under the frame, and a flat fill stacked under that
+     * segment but not touching the frame, join through the fixed point. A
+     * small piece with a gap wider than WS_UI_GROUP_STACK_GAP does not. */
+    reset_state(1);
+    build_hud(60, 128, 64, 120);
+    {
+        const RearPiece pieces[] = {
+            {0x2Cu, 70, 100, 37, 52},   /* stacked on the frame (gap 1)   */
+            {0x28u, 75,  90, 53, 60},   /* stacked on the segment only    */
+            {0x2Cu, 70, 100, 70, 80},   /* 10 rows clear: stays out       */
+        };
+        add_rear_pieces(pieces, 3);
+    }
+    gpu_ws_prepass_linked_list(OT_HEAD);
+    assert(ws_ui_prepass_count == 5);
+    assert(ws_ui_reject.backing == 2);
+    gpu_exec_reset_triangles();
+    load_packet(rear_node(1), 5);
+    gp0_exec_mono_quad();
+    /* The fill squashes about the whole widget's centre, not its own. */
+    const int32_t gauge_centre = 60 + (128 - 60) / 2;
+    assert(gpu_exec_triangles.min_x == ws_scale_about(75, gauge_centre));
+    assert(gpu_exec_triangles.max_x == ws_scale_about(90, gauge_centre));
+
+    /* A large textured quad overlapping the HUD is world geometry. */
+    reset_state(1);
+    build_hud(60, 128, 64, 120);
+    {
+        const RearPiece pieces[] = {{0x2Cu, 0, 200, 0, 120}};
+        add_rear_pieces(pieces, 1);
+    }
     gpu_ws_prepass_linked_list(OT_HEAD);
     assert(ws_ui_prepass_count == 3);
     assert(ws_ui_reject.backing == 0);

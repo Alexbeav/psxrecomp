@@ -5378,6 +5378,17 @@ static int ws_ui_encloses(const WsUiPrepassItem *panel,
            panel->y <= ui->y && ui->y + ui->h <= panel->y + panel->h;
 }
 
+/* Part of the same widget: sharing screen columns and overlapping or stacked
+ * within WS_UI_GROUP_STACK_GAP rows (ws_ui_group.c same_element()). */
+static int ws_ui_attached(const WsUiPrepassItem *a, const WsUiPrepassItem *b) {
+    int32_t ax0 = a->group.x, ax1 = a->group.x + a->group.width;
+    int32_t bx0 = b->group.x, bx1 = b->group.x + b->group.width;
+    if (ax0 >= bx1 || bx0 >= ax1) return 0;
+    int32_t gap = a->y + a->h < b->y ? b->y - (a->y + a->h)
+                : b->y + b->h < a->y ? a->y - (b->y + b->h) : 0;
+    return gap <= WS_UI_GROUP_STACK_GAP;
+}
+
 void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_ui_prepass_count = 0;
     ws_ui_prepass_node_count = 0;
@@ -5470,13 +5481,20 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     }
     ws_ui_prepass_rank = max_rank;
 
-    /* Backing panels. A HUD often draws a flat box one ordering-table rank
-     * behind the glyphs it frames (Spider-Man's "FOLLOW THE SPIDEY COMPASS"
-     * banner: a 0x28 quad at rank 365 under rank-366 text). Left out, the box
-     * stretches while its text squashes. That rank also carries world
-     * geometry, so admitting it wholesale is unsafe; admit only untextured,
-     * axis-aligned primitives from the next populated rank that fully enclose
-     * at least one front-rank UI primitive. They then join that run. */
+    /* HUD pieces one rank back. A HUD often draws parts of a widget one
+     * ordering-table rank behind the rest: Spider-Man's banner box (a 0x28
+     * quad at rank 365 under rank-366 text), Spider-Man 2's webbing gauge (a
+     * textured frame segment and its 0x28 fill at rank 272, stacked on the
+     * rank-273 gauge end). Left out, those pieces stretch while the rest of
+     * the widget squashes, and the widget comes apart. That rank also carries
+     * world geometry, so it is never admitted wholesale. From the next
+     * populated rank only, admit an axis-aligned primitive when it
+     *   - is untextured and fully encloses an admitted piece (a backing
+     *     panel; any size), or
+     *   - is small (at most a quarter of the display each way) and overlaps or
+     *     stacks directly on an admitted piece (ws_ui_attached).
+     * Repeat until nothing changes, so a piece attached to an admitted piece
+     * also joins. Admitted pieces then group with their widget's run. */
     uint16_t backing_rank = 0xFFFFu;
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
         uint16_t r = ws_ui_prepass[i].ot_rank;
@@ -5484,18 +5502,25 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
             backing_rank = r;
     }
     static uint8_t keep[WS_UI_PREPASS_MAX];
-    for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
-        const WsUiPrepassItem *it = &ws_ui_prepass[i];
-        keep[i] = it->ot_rank == max_rank;
-        if (keep[i] || it->ot_rank != backing_rank ||
-            !ws_ui_untextured_op(it->op))
-            continue;
-        for (uint32_t j = 0; j < ws_ui_prepass_count; j++) {
-            if (ws_ui_prepass[j].ot_rank == max_rank &&
-                ws_ui_encloses(it, &ws_ui_prepass[j])) {
-                keep[i] = 1;
-                ws_ui_reject.backing++;
-                break;
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
+        keep[i] = ws_ui_prepass[i].ot_rank == max_rank;
+    const int32_t small_w = ws_disp_w() / 4, small_h = ws_disp_h() / 4;
+    for (int changed = 1; changed && backing_rank != 0xFFFFu;) {
+        changed = 0;
+        for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
+            const WsUiPrepassItem *it = &ws_ui_prepass[i];
+            if (keep[i] || it->ot_rank != backing_rank) continue;
+            const int small = it->group.width <= small_w && it->h <= small_h;
+            const int untextured = ws_ui_untextured_op(it->op);
+            for (uint32_t j = 0; j < ws_ui_prepass_count; j++) {
+                if (!keep[j]) continue;
+                if ((untextured && ws_ui_encloses(it, &ws_ui_prepass[j])) ||
+                    (small && ws_ui_attached(it, &ws_ui_prepass[j]))) {
+                    keep[i] = 1;
+                    changed = 1;
+                    ws_ui_reject.backing++;
+                    break;
+                }
             }
         }
     }

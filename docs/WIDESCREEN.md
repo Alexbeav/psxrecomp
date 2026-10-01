@@ -144,10 +144,13 @@ axis-aligned quads (textured, flat or gouraud) and rectangles in the front
 populated ordering-table layer are grouped by texture and screen row before any
 command is transformed. Untextured quads are included because HUD fills (health
 gradients, meter bars) sit inside textured frames and must squash with them.
-A backing panel one rank behind the HUD (a text box under its glyphs) is also
-admitted, but only when it is untextured, axis-aligned, from the next populated
-rank, and fully encloses at least one front-rank UI primitive; that rank also
-carries world geometry. `ws_ui_groups` counts these as `backing_panels`.
+Widget pieces drawn one rank behind the HUD are also admitted, from the next
+populated rank only (it also carries world geometry): an untextured,
+axis-aligned panel that fully encloses an admitted piece (a text box under its
+glyphs), or a small (at most a quarter of the display each way) axis-aligned
+piece that overlaps or stacks within `WS_UI_GROUP_STACK_GAP` rows on an
+admitted piece (a gauge segment and its fill). This repeats to a fixed point.
+`ws_ui_groups` counts these as `backing_panels`.
 Depth-sorted world packets, full-frame backdrops, and true 4:3 frames remain
 untouched.
 
