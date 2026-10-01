@@ -67,19 +67,21 @@ def prologues(data, base):
     the return boundary, LUI/load opcode pair, and matching address register are
     all required data-as-code gates.
     """
-    entries=[]
-    for off in prologue_offsets(data):
-        entry=off
-        if off >= 16 and _word(data, off-16) == 0x03E00008:
-            lui=_word(data, off-8)
-            load=_word(data, off-4)
-            lui_rt=(lui >> 16) & 0x1F
-            if (lui >> 26) == 0x0F and lui_rt != 0 and \
-                    0x20 <= (load >> 26) <= 0x26 and \
-                    ((load >> 21) & 0x1F) == lui_rt:
-                entry=off-8
-        entries.append(base+entry)
-    return entries
+    return [base + framed_entry_offset(data, off)
+            for off in prologue_offsets(data)]
+
+
+def framed_entry_offset(data, off):
+    """Recover the same return-proven scheduled prelude for every frame scan."""
+    if off >= 16 and _word(data, off-16) == 0x03E00008:
+        lui=_word(data, off-8)
+        load=_word(data, off-4)
+        lui_rt=(lui >> 16) & 0x1F
+        if (lui >> 26) == 0x0F and lui_rt != 0 and \
+                0x20 <= (load >> 26) <= 0x26 and \
+                ((load >> 21) & 0x1F) == lui_rt:
+            return off-8
+    return off
 
 def prologue_offsets(data):
     """File offsets whose word is an `addiu $sp,$sp,-N` stack-frame prologue."""
@@ -402,10 +404,16 @@ def return_adjacent_framed_entries(data, base):
     instruction alone is insufficient. Require a preceding ``jr ra`` and its
     arbitrary architectural delay slot, at most six alignment NOPs, plus an
     in-frame save of ``ra`` before the new function's first control transfer.
-    Every stack-relative word save observed in that prefix must fit the frame.
+    Recover a proven LUI/load prelude before the frame allocation. Scan the
+    first basic block, rather than a fixed number of instructions: register
+    scheduling can put the RA save after many other saves/address calculations.
+    Every instruction must decode, SP must stay unchanged, and every observed
+    stack-relative word save must fit the frame. A control transfer must end
+    the prefix; truncated bytes are not a complete proof.
     """
     entries=set()
     for off in prologue_offsets(data):
+        entry=framed_entry_offset(data,off)
         word=_word(data,off)
         frame_imm=word&0xFFFF
         frame_size=0x10000-frame_imm
@@ -413,22 +421,27 @@ def return_adjacent_framed_entries(data, base):
             continue
         boundary=False
         for padding in range(7):
-            jr_off=off-8-padding*4
+            jr_off=entry-8-padding*4
             if _word(data,jr_off)!=0x03E00008:
                 continue
-            if all(_word(data,p)==0 for p in range(jr_off+8,off,4)):
+            if all(_word(data,p)==0 for p in range(jr_off+8,entry,4)):
                 boundary=True
                 break
         if not boundary:
             continue
         saved_ra=False
         consistent=True
-        for pc in range(off+4,min(len(data),off+4+12*4),4):
+        ended=False
+        for pc in range(off+4,len(data)-3,4):
             candidate=_word(data,pc)
-            if candidate is None:
+            if not co._is_valid_mips_word(candidate):
                 consistent=False
                 break
             if _is_control_flow_word(candidate):
+                ended=True
+                break
+            if co._instruction_writes_gpr(candidate,29):
+                consistent=False
                 break
             op=(candidate>>26)&0x3F
             rs=(candidate>>21)&0x1F
@@ -442,8 +455,8 @@ def return_adjacent_framed_entries(data, base):
                     break
                 if rt==31:
                     saved_ra=True
-        if consistent and saved_ra:
-            entries.add(base+off)
+        if consistent and ended and saved_ra:
+            entries.add(base+entry)
     return sorted(entries)
 
 def _is_control_flow_word(word):

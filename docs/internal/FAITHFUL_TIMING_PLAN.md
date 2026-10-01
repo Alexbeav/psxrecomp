@@ -213,6 +213,16 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-30 — Original-disc overlay discovery (beads-eio.3.215).**
+  Ape Escape Primordial Ooze exposed return-adjacent functions omitted by the
+  archive scanner: a scheduled LUI/load before stack setup and an RA save beyond
+  its fixed twelve-instruction prefix. Reuse the proven prelude recognizer and
+  validate the first basic block through its control transfer, rejecting invalid
+  instructions, SP changes and out-of-frame saves. Synthetic positive/negative
+  regressions pass. This changes offline discovery; guest instructions and
+  timing semantics are unchanged. Release regeneration and gameplay validation
+  are tracked in beads-eio.6.9.
+
 - **2026-09-30 (segment-aware code, rollout PR E review fixes):** folded into
   `feat/overlay-segment-keys` (docs/SEGMENT_AWARE_CODE.md §5.7, §8 E).
   - Overlay views move every exact-match config site that names their bytes
