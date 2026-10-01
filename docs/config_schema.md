@@ -274,6 +274,27 @@ positions = [2]
   they are. The set's folder starts with empty `saves`. Nothing is migrated;
   a memory card file can be copied by hand.
 
+### Licence texts beside a game that setup builds
+
+`rebuild` writes a `licenses/` folder beside every product it builds, for a
+single program and for a set (`tools/release_stage.py`,
+`stage_product_notices`). It is the folder a build host's product has:
+
+- `licenses/kit/`: the project's own licence and notice files;
+- `licenses/framework/`: the framework's, and every file of
+  `psxrecomp/runtime/licenses/`;
+- `licenses/ui/`: the launcher's;
+- `licenses/toolchain/`: the tcc texts, and the texts of the libraries the
+  build links (SDL3, zlib, the compiler's runtime).
+
+A file counts when its name starts with `LICENSE`, `COPYING`, `NOTICE` or
+`THIRD_PARTY`. The texts are copied from the unpacked package. The three
+toolchain texts come from the package's own `licenses/toolchain/` folder:
+whoever makes the package puts them in the package source, and
+`tools/package_setup_host.sh` carries a root `licenses/` folder into the zip.
+A package without that folder still builds; the packager and `rebuild` both
+say that the texts are missing.
+
 ### One program on several discs
 
 One build covers a set when every disc boots the same program. The discs do

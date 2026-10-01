@@ -114,8 +114,9 @@ endif()
 '''
 PROGRAM_SETUP_C = '#include "codegen_setup.h"\n#include "psxrecomp_codegen_host.h"\n'
 ROOT_NAMES = {"Resident_Evil_2", "set.toml", "CMakeLists.txt", "codegen_setup.c", "codegen_setup.h",
-              "README-SETUP.txt", "VERSION", "psx_game_version.txt", "assets", "programs", "psxrecomp",
-              "recomp-ui"}
+              "README-SETUP.txt", "VERSION", "psx_game_version.txt", "assets", "licenses", "programs",
+              "psxrecomp", "recomp-ui"}
+TOOLCHAIN_TEXTS = ("SDL3-LICENSE.txt", "llvm-mingw-LICENSE.TXT", "zlib-LICENSE.txt")
 
 
 def put(path: Path, text: str = "stand-in\n") -> None:
@@ -151,6 +152,10 @@ def make_package_source(root: Path) -> Path:
         put(fw / name)
     put(root / "recomp-ui" / "src" / "recomp_launcher.h")
     put(root / "recomp-ui" / "LICENSE")
+    # The texts of the libraries the shipped binaries link: the release tool
+    # writes them into the source, the packager carries the folder (PS1B-333).
+    for name in TOOLCHAIN_TEXTS:
+        put(root / "licenses" / "toolchain" / name, "the text of " + name + "\n")
     assert program_set.init_host(root) == list(program_set.HOST_FILES)
     build = root / "build-setup"
     put(build / "Resident_Evil_2", "stand-in host\n")
@@ -219,6 +224,11 @@ def whole_packager(bash, tmp: Path) -> str:
     assert (stage / "psxrecomp" / "bios" / "SCPH1001.toml").is_file()
     assert not (stage / "psxrecomp" / "bios" / "OpenBIOS.toml").exists()      # --omit-openbios
     assert (stage / "assets" / "fonts" / "font.ttf").is_file()
+    # the package carries the toolchain libraries' licence texts at its root
+    assert sorted(p.name for p in (stage / "licenses" / "toolchain").iterdir()) == sorted(TOOLCHAIN_TEXTS)
+    assert (stage / "licenses" / "toolchain" / "SDL3-LICENSE.txt").read_text(encoding="utf-8") == \
+        "the text of SDL3-LICENSE.txt\n"
+    assert "staged licenses/ (3 file(s))" in out, out[-3000:]
     readme = (stage / "README-SETUP.txt").read_text(encoding="utf-8")
     assert "Resident Evil 2 0.4.0" in readme
     assert "This game's discs are separate programs" in readme
@@ -232,10 +242,14 @@ def whole_packager(bash, tmp: Path) -> str:
         assert top == ROOT_NAMES, sorted(top ^ ROOT_NAMES)
 
     # The developer filter reaches each program's source catalog.
+    # A source without a licenses/ folder is still packaged, and the packager says what is missing.
     filtered = tmp / "filtered"
     emitters = make_package_source(filtered)
+    shutil.rmtree(str(filtered / "licenses"))
     code, out = package(bash, filtered, emitters, env={"EXCLUDE_DEV_MODS": "1"})
     assert ("Wrote " in out) == zipped and "excluding developer-channel mods" in out, (code, out[-3000:])
+    assert "this source has no licenses/ folder" in out, out[-3000:]
+    assert not (filtered / "dist" / "stage-setup-linux-x64" / "licenses").exists()
     assert not (filtered / "dist" / "stage-setup-linux-x64" / "programs" / "leon" / "mods" / "preloaded"
                 / "packages" / "dev.tool" / "1.0").exists()
 

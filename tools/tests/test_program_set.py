@@ -842,6 +842,10 @@ class SetSteps(unittest.TestCase):
             self.assertEqual(leon["prune_after"], "build-intermediates")
             self.assertEqual(leon["cmake_extra"], ["-DPSX_DEPS_OFFLINE=ON"])
             self.assertTrue(leon["no_pgo"])
+            # each program's rebuild is told where the package's root is: its
+            # licenses/toolchain texts are there, not in the program's folder
+            self.assertEqual(Path(leon["package_root"]).resolve(), root.resolve())
+            self.assertEqual(Path(cli.calls[1][1]["package_root"]).resolve(), root.resolve())
             out = root / "build-release"
             self.assertEqual((out / "Resident_Evil_2_Leon.exe").read_text(), "exe of leon")
             self.assertTrue((out / "Resident_Evil_2_Claire.game.toml").is_file())

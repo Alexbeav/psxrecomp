@@ -484,6 +484,20 @@ for d in "${PROJECT_DIRS[@]}"; do
   copy_proj "${d}"
 done
 
+# The licence texts of the libraries the shipped binaries link (SDL3, zlib, the
+# compiler's runtime) travel in licenses/ at the package root, when the source
+# has that folder. No package carried them before (PS1B-333). Setup copies them
+# beside the game it builds (release_stage.stage_product_notices), so a set-up
+# install ends with the licenses/ folder a build host's product has.
+if [[ -d "${ROOT}/licenses" ]]; then
+  mkdir -p "${STAGE}/licenses"
+  cp -a "${ROOT}/licenses/." "${STAGE}/licenses/"
+  echo "staged licenses/ ($(find "${STAGE}/licenses" -type f | wc -l | tr -d ' ') file(s))"
+else
+  echo "note: this source has no licenses/ folder: the package carries no licence texts for the" \
+       "libraries its binaries link (SDL3, zlib, the compiler's runtime)" >&2
+fi
+
 # Developer-channel pruning runs AFTER every catalog is staged, and covers BOTH
 # copies: the runtime catalog under mods/bundled that the launcher lists, and
 # the source catalog under mods/preloaded that the setup-host rebuild re-stages
