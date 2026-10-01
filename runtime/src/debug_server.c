@@ -12351,13 +12351,23 @@ static void handle_overlay_loader_status(int id, const char *json)
         if (msg[si] == '\\' || msg[si] == '"') esc_msg[di++] = '\\';
         esc_msg[di++] = msg[si];
     }
+    const char *stale = overlay_loader_stale_cache_msg();
+    char esc_stale[512] = {0};
+    for (int si = 0, di = 0; stale[si] && di < (int)sizeof(esc_stale)-2; si++) {
+        if (stale[si] == '\\' || stale[si] == '"') esc_stale[di++] = '\\';
+        esc_stale[di++] = stale[si];
+    }
     char buf[4096];
     int n = snprintf(buf, sizeof(buf),
         "{\"id\":%d,\"ok\":true,\"active\":%d,\"registered\":%d,"
         "\"regions_checked\":%d,\"last_crc\":\"0x%08X\",\"file_found\":%d,"
-        "\"cache_dir\":\"%s\",\"game_id\":\"%s\",\"last_msg\":\"%s\"",
+        "\"cache_dir\":\"%s\",\"game_id\":\"%s\",\"last_msg\":\"%s\","
+        "\"abi_tag\":\"0x%08X\",\"codegen_ver\":%d,\"abi_rejected\":%llu,"
+        "\"stale_cache_msg\":\"%s\"",
         id, active, registered, nchecked, last_crc, file_found,
-        esc_dir, game_id, esc_msg);
+        esc_dir, game_id, esc_msg,
+        (unsigned)overlay_loader_abi_tag(), overlay_loader_codegen_ver(),
+        (unsigned long long)overlay_loader_abi_rejected(), esc_stale);
     if (nwritten > 0) {
         n += snprintf(buf + n, sizeof(buf) - n, ",\"checked\":[");
         for (int i = 0; i < nwritten; i++)

@@ -96,6 +96,16 @@ void overlay_loader_get_status(int *active, int *registered,
 /* Most recent loader event string (DLL load success/failure). Surfaced via
  * the overlay_loader_status TCP command — no stderr logging (Rule 3). */
 const char *overlay_loader_last_msg(void);
+/* First stale-cache line of this process (a shard refused for its ABI tag, or
+ * a cache folder written by another codegen version). Kept, because
+ * last_msg is overwritten by the next event; empty when nothing was stale. */
+const char *overlay_loader_stale_cache_msg(void);
+/* Rejections for an overlay_abi() tag that is not this build's. A file that
+ * stays on disk is counted again by each rescan that finds it. */
+uint64_t overlay_loader_abi_rejected(void);
+/* The overlay_abi() tag and codegen version this build loads (overlay_api.h). */
+int overlay_loader_abi_tag(void);
+int overlay_loader_codegen_ver(void);
 
 /* Inc3 §8.5: a write into the code range of a currently-executing native
  * overlay entry cannot be recovered lazily — that entry is permanently

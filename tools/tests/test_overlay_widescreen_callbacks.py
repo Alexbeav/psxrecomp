@@ -21,8 +21,10 @@ static CPUState *seen_cpu;
 static uint32_t seen_address, cycles;
 static int32_t bound(int32_t x) { return x * 2; }
 static void advance(uint32_t n) { cycles += n; }
-static void entry(CPUState *cpu, uint32_t address) {
+static int entry_result;
+static int entry(CPUState *cpu, uint32_t address) {
     assert(cycles == 17); seen_cpu = cpu; seen_address = address;
+    return entry_result;
 }
 int main(void) {
     CPUState cpu = {0};
@@ -35,13 +37,17 @@ int main(void) {
     assert(psx_ws_screen_x_bound(-256) == -512);
     assert(psx_ws_screen_x_bound(256) == 512);
     psx_advance_cycles(17);
-    psx_mod_function_entry(&cpu, 0x80045770);
+    assert(psx_mod_function_entry(&cpu, 0x80045770) == 0);
     assert(seen_cpu == &cpu && seen_address == 0x80045770);
+    /* ABI v25: the shim passes the host's filter result through. */
+    entry_result = 1;
+    assert(psx_mod_function_entry(&cpu, 0x80045774) == 1);
+    assert(seen_address == 0x80045774);
     callbacks.ws_screen_x_bound = 0; callbacks.mod_function_entry = 0;
     overlay_init(&callbacks);
     assert(psx_ws_screen_x_bound(-256) == -256);
-    psx_mod_function_entry(&cpu, 0);
-    assert(seen_address == 0x80045770);
+    assert(psx_mod_function_entry(&cpu, 0) == 0);
+    assert(seen_address == 0x80045774);
     return 0;
 }
 '''

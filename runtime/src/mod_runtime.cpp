@@ -1510,12 +1510,17 @@ extern "C" int psx_mod_register_function_entry_plugin(
     return 1;
 }
 
-extern "C" void psx_mod_function_entry(CPUState* cpu, uint32_t address) {
+/* Returns 0: run the original body. Upstream returns non-zero when a function
+ * filter plugin handled the call (it sets pc=$ra and the generated function
+ * returns at once). No filter can be registered here, so the entry callbacks
+ * run and the answer is always 0 (mod_plugins.h). */
+extern "C" int psx_mod_function_entry(CPUState* cpu, uint32_t address) {
     using namespace PSXRecompV4;
-    if (!cpu) return;
+    if (!cpu) return 0;
     for (const FunctionEntryPlugin& plugin : function_entry_plugins()) {
         if (plugin.address == address) plugin.callback(cpu, address);
     }
+    return 0;
 }
 
 extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,

@@ -25,7 +25,8 @@ scheduler precise-owner and pending GPU return corrections from `b1413e71`.
 
 Integration preserves upstream asynchronous GPU linked-list DMA, CFG metadata,
 UNC handling and widescreen/mod callbacks. Overlay ABI 24 appends TAS callbacks
-to upstream ABI 23. The generated-code identity checks remain enforced; old
+to upstream ABI 23. (From overlay ABI 26 the TAS callbacks follow upstream's
+ABI 25 slots; see `docs/OVERLAY_ABI.md`.) The generated-code identity checks remain enforced; old
 fingerprints do not qualify a freshly generated upstream build.
 
 The bounded GPU upload-history fix is independently submitted as

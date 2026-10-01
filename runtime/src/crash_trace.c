@@ -615,6 +615,24 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
                                     NULL, NULL, NULL, NULL, &revalidations);
         int frozen = overlay_loader_load_frozen();
         int resim = psx_netplay_is_resimulating();
+        /* Stale-cache record (overlay_loader.h): shards refused for their ABI
+         * tag, and the first line about a cache this build cannot use. The
+         * run report is the only loader output a product build has. */
+        extern const char *overlay_loader_stale_cache_msg(void);
+        extern uint64_t overlay_loader_abi_rejected(void);
+        extern int overlay_loader_abi_tag(void);
+        extern int overlay_loader_codegen_ver(void);
+        char stale_esc[600];
+        json_escape(overlay_loader_stale_cache_msg(), stale_esc, sizeof(stale_esc));
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"overlay_cache\": {\n"
+            "    \"abi_tag\": \"0x%08X\",\n"
+            "    \"codegen_ver\": %d,\n"
+            "    \"abi_rejected\": %llu,\n"
+            "    \"stale_cache_msg\": \"%s\"\n"
+            "  },\n",
+            (unsigned)overlay_loader_abi_tag(), overlay_loader_codegen_ver(),
+            (unsigned long long)overlay_loader_abi_rejected(), stale_esc);
         append_fmt(buf, sizeof(buf), &pos,
             "  \"overlay_loader\": {\n"
             "    \"inprogress\": \"0x%08X\",\n"
