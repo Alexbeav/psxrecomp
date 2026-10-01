@@ -876,6 +876,30 @@ void psx_request_return_to_lobby(void)
     longjmp(g_scheduler_jmpbuf, 1);
 }
 
+/* A ReturnFromException resumed the running thread at a PC that the host
+ * stack cannot continue (PS1B-324): the handler rewrote the saved EPC, or the
+ * return ran below nested host frames. The return has already loaded every
+ * register from the TCB (PSX-SPX, BIOS exception handling), so the whole guest
+ * context is in CPUState. Drop the host frames and dispatch the PC, as a
+ * thread resume does. interrupts.c calls psx_scheduler_can_resume_at first and
+ * keeps its old path when this returns 0. */
+int psx_scheduler_can_resume_at(uint32_t resume_pc)
+{
+    return g_in_scheduler_run && psx_hle_scheduler_enabled() &&
+           psx_is_dispatchable(resume_pc);
+}
+
+void psx_scheduler_rfe_resume(CPUState* cpu, uint32_t resume_pc, uint32_t origin_pc)
+{
+    psx_publish_note(PSX_PUB_RFE, resume_pc, origin_pc);
+    g_sched_escape.target_tcb = 0;
+    g_sched_escape.resume_pc  = resume_pc;
+    g_sched_escape.reason     = PSX_RUN_RESUME_CURRENT;
+    sched_escape_ring_log(cpu, PSX_RUN_RESUME_CURRENT, psx_current_tcb_ptr(cpu), 0,
+                          resume_pc);
+    longjmp(g_scheduler_jmpbuf, 1); /* unwind to psx_scheduler_run; never returns */
+}
+
 void psx_scheduler_run(CPUState* cpu)
 {
     extern int g_psx_dispatch_depth;
