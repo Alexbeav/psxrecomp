@@ -2518,7 +2518,8 @@ static int ws_auto_ui_anchor(int32_t *out_anchor) {
 static uint32_t ws_auto_ui_group_key_words(const uint32_t *words,
                                            uint32_t op,
                                            int32_t y, int32_t h) {
-    uint32_t clut = words[2] >> 16;
+    /* An untextured polygon's word 2 is a vertex or colour, not a CLUT. */
+    uint32_t clut = (op < 0x60u && !(op & 0x04u)) ? 0u : words[2] >> 16;
     uint32_t tpage = 0;
     if (op >= 0x20u && op <= 0x3Fu && (op & 0x04u)) {
         int tp_index = (op & 0x10u) ? 5 : 4;
@@ -4164,6 +4165,7 @@ static void gp0_exec_mono_quad(void) {
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
+    ws_auto_ui_transform_quad(vx, vy);
 
     /* Each added band is outside the original screen and executes in the
      * mask's own OT position/blend mode. Canonical VRAM clips it away. */
@@ -4286,6 +4288,7 @@ static void gp0_exec_shaded_quad(void) {
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
+    ws_auto_ui_transform_quad(vx, vy);
     ws_nw_backdrop_stretch_quad(vx, vy);   /* full-frame 2D backdrop stretch (sky gradient; no-op else) */
     ws_nw_hud_shift_vertices(vx, 4);
     for (int i = 0; i < 4; i++) {
@@ -5267,15 +5270,25 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,
     uint32_t op = words[0] >> 24;
     int32_t min_x, max_x, min_y, max_y;
 
-    if (op >= 0x20u && op <= 0x3Fu && (op & 0x04u) &&
-        (op & 0x08u)) {
+    if (op >= 0x20u && op <= 0x3Fu && (op & 0x08u)) {
+        /* Any 4-vertex polygon. Untextured HUD fills (health gradients,
+         * meter bars) sit in the same front layer as the textured frames
+         * around them; leaving them out kept their raw 4:3 X while the frame
+         * squashed, so the fill overhung it at wide aspects (Spider-Man's
+         * health and webbing meters). Same rank + axis-aligned gate as the
+         * textured quads. */
+        const int textured = (op & 0x04u) != 0;
+        const int shaded = (op & 0x10u) != 0;
         int indices[4];
-        if (op & 0x10u) {
+        if (textured && shaded) {
             indices[0] = 1; indices[1] = 4;
             indices[2] = 7; indices[3] = 10;
-        } else {
+        } else if (textured || shaded) {
             indices[0] = 1; indices[1] = 3;
             indices[2] = 5; indices[3] = 7;
+        } else {
+            indices[0] = 1; indices[1] = 2;
+            indices[2] = 3; indices[3] = 4;
         }
         int32_t vx[4], vy[4];
         for (int i = 0; i < 4; i++)

@@ -140,8 +140,10 @@ the RTPS preamble stores the anchor SXY to scratchpad `0x1F800070`.
 
 `auto_ui_squash` is a runtime-only opt-in and does not require regenerated game
 code. It applies only on the projection-and-stretch path: eligible
-axis-aligned textured quads/rectangles in the front populated ordering-table
-layer are grouped by texture and screen row before any command is transformed.
+axis-aligned quads (textured, flat or gouraud) and rectangles in the front
+populated ordering-table layer are grouped by texture and screen row before any
+command is transformed. Untextured quads are included because HUD fills (health
+gradients, meter bars) sit inside textured frames and must squash with them.
 Depth-sorted world packets, full-frame backdrops, and true 4:3 frames remain
 untouched.
 
