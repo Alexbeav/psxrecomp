@@ -260,6 +260,7 @@ int gte_precision_load_word(uint32_t addr, uint32_t packed,
 { (void)addr; (void)packed; (void)x16; (void)y16; (void)z; return 0; }
 void pgxp_invalidate_all(void) {}
 void pgxp_invalidate_word(uint32_t addr) { (void)addr; }
+void pgxp_note_triangle(int precise) { (void)precise; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)bit; (void)detail; }
 void event_ring_record_aux(uint16_t kind, uint8_t detail, uint32_t aux)
 { (void)kind; (void)detail; (void)aux; }

@@ -3876,7 +3876,7 @@ static void prepare_precise_triangle(int i0, int i1, int i2,
     }
     const int idx[3] = { i0, i1, i2 };
     int32_t fx[3], fy[3];
-    int any_precise = 0;
+    int any_precise = 0, n_precise = 0;
     for (int i = 0; i < 3; i++) {
         uint32_t word = gp0_cmd_buf[idx[i]];
         int32_t raw_x, raw_y;
@@ -3887,11 +3887,14 @@ static void prepare_precise_triangle(int i0, int i1, int i2,
         int32_t px, py;
         uint16_t sz;
         if (pgxp_get_precise_vertex(addr, word, raw_x, raw_y,
-                                    &px, &py, &sz) != PGXP_SRC_NATIVE)
+                                    &px, &py, &sz) != PGXP_SRC_NATIVE) {
             any_precise = 1;
+            n_precise++;
+        }
         fx[i] = (int32_t)((int64_t)px + (int64_t)(vx[i] - raw_x) * 65536);
         fy[i] = (int32_t)((int64_t)py + (int64_t)(vy[i] - raw_y) * 65536);
     }
+    pgxp_note_triangle(n_precise);   /* G1.1 crack exposure: mixed share */
     if (!any_precise) {
         gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
         return;

@@ -1,7 +1,9 @@
 #include "cpu_state.h"
 #include "gte.h"
+#include "pgxp.h"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -729,6 +731,117 @@ int test_precision_speculative_transaction() {
 
 } // namespace
 
+/* Preserve projection precision (docs/ENHANCEMENTS.md G1.11) changes the
+ * host-only SXY shadow and nothing the guest can see: RTPS/RTPT leave exactly
+ * the reference oracle's registers (SXY, MAC0, IR, FLAG, ...) with it on, and
+ * a qualifying vertex's shadow is the exact projection. */
+int test_preserve_projection_is_shadow_only() {
+    gte_precision_tracking_set(1);
+    for (uint32_t function : {0x01u, 0x30u}) {
+        for (unsigned iteration = 0; iteration < 256; ++iteration) {
+            CPUState seed;
+            randomize_gte(seed);
+            CPUState expected = seed;
+            CPUState actual = seed;
+            const uint32_t cmd = (random_u32() & ~0x3Fu) | function;
+            gte_test_execute_reference(&expected, cmd);
+            pgxp_set_preserve_projection(1);
+            gte_execute(&actual, cmd);
+            pgxp_set_preserve_projection(0);
+            if (!same_gte(expected, actual))
+                return fail_state("preserve projection guest state", iteration,
+                                  function, cmd, expected, actual);
+        }
+    }
+
+    /* One qualifying vertex with fractional MAC bits: RT not a pure scale,
+     * a translation, H = 300, OFX/OFY = (160.25, 119.5). */
+    CPUState cpu{};
+    auto pack = [](int32_t lo, int32_t hi) {
+        return (static_cast<uint32_t>(hi & 0xFFFF) << 16) |
+               static_cast<uint32_t>(lo & 0xFFFF);
+    };
+    const int32_t rt[9] = {4100, 3, 0, 0, 4090, 5, 0, 0, 4096};
+    cpu.gte_ctrl[0] = pack(rt[0], rt[1]);
+    cpu.gte_ctrl[1] = pack(rt[2], rt[3]);
+    cpu.gte_ctrl[2] = pack(rt[4], rt[5]);
+    cpu.gte_ctrl[3] = pack(rt[6], rt[7]);
+    cpu.gte_ctrl[4] = static_cast<uint32_t>(rt[8]);
+    const int32_t tr[3] = {7, -3, 40};
+    cpu.gte_ctrl[5] = static_cast<uint32_t>(tr[0]);
+    cpu.gte_ctrl[6] = static_cast<uint32_t>(tr[1]);
+    cpu.gte_ctrl[7] = static_cast<uint32_t>(tr[2]);
+    const int32_t ofx = (160 << 16) + 0x4000, ofy = (119 << 16) + 0x8000;
+    cpu.gte_ctrl[24] = static_cast<uint32_t>(ofx);
+    cpu.gte_ctrl[25] = static_cast<uint32_t>(ofy);
+    cpu.gte_ctrl[26] = 300u;
+    const int32_t v[3] = {101, -53, 937};
+    cpu.gte_data[0] = pack(v[0], v[1]);
+    cpu.gte_data[1] = static_cast<uint32_t>(v[2]);
+    const uint32_t rtps = 0x00080001u;   /* RTPS, sf=1, lm=0 */
+    const int64_t mac1 = (int64_t)tr[0] * 4096 + (int64_t)rt[0] * v[0] +
+                         (int64_t)rt[1] * v[1] + (int64_t)rt[2] * v[2];
+    const int64_t mac2 = (int64_t)tr[1] * 4096 + (int64_t)rt[3] * v[0] +
+                         (int64_t)rt[4] * v[1] + (int64_t)rt[5] * v[2];
+    const int64_t mac3 = (int64_t)tr[2] * 4096 + (int64_t)rt[6] * v[0] +
+                         (int64_t)rt[7] * v[1] + (int64_t)rt[8] * v[2];
+    const double ex = ofx / 65536.0 + (double)mac1 * 300.0 / (double)mac3;
+    const double ey = ofy / 65536.0 + (double)mac2 * 300.0 / (double)mac3;
+
+    CPUState ir_run = cpu;
+    gte_execute(&ir_run, rtps);
+    PreciseState ir{};
+    gte_test_get_precise_projection(2, &ir.packed, &ir.x16, &ir.y16, &ir.z,
+                                    &ir.valid);
+    pgxp_set_preserve_projection(1);
+    CPUState ppp_run = cpu;
+    gte_execute(&ppp_run, rtps);
+    pgxp_set_preserve_projection(0);
+    PreciseState ppp{};
+    gte_test_get_precise_projection(2, &ppp.packed, &ppp.x16, &ppp.y16, &ppp.z,
+                                    &ppp.valid);
+    if (!same_gte(ir_run, ppp_run))
+        return fail_state("preserve projection keeps the guest SXY", 0, 1, rtps,
+                          ir_run, ppp_run);
+    const uint32_t sxy2 = ppp_run.gte_data[14];
+    const int32_t native_x = static_cast<int16_t>(sxy2 & 0xFFFFu);
+    const int32_t native_y = static_cast<int16_t>(sxy2 >> 16);
+    if (!ir.valid || ir.packed != sxy2 || (ir.x16 >> 16) != native_x ||
+        (ir.y16 >> 16) != native_y)
+        return fail_value("IR-path shadow truncates to SXY2", 0, 14, sxy2,
+                          static_cast<uint32_t>(native_x),
+                          static_cast<uint32_t>(ir.x16 >> 16));
+    if (!ppp.valid || ppp.packed != sxy2 || ppp.z != ir.z)
+        return fail_value("exact-projection shadow keys the same word", 0, 14,
+                          sxy2, sxy2, ppp.packed);
+    if (ppp.x16 != (int32_t)std::floor(ex * 65536.0) ||
+        ppp.y16 != (int32_t)std::floor(ey * 65536.0))
+        return fail_value("exact-projection shadow", 0, 14, sxy2,
+                          static_cast<uint32_t>((int32_t)std::floor(ex * 65536.0)),
+                          static_cast<uint32_t>(ppp.x16));
+    if (ppp.x16 == ir.x16 && ppp.y16 == ir.y16)
+        return fail_value("exact projection differs from the IR path", 0, 14,
+                          sxy2, 0, 0);
+
+    /* Divide overflow (H >= 2*SZ3): the guest quotient saturates, so the
+     * shadow stays on the IR path even with the mode on. */
+    CPUState near_cpu = cpu;
+    near_cpu.gte_data[1] = 100u;   /* SZ3 = 140 < H/2 */
+    pgxp_set_preserve_projection(1);
+    gte_execute(&near_cpu, rtps);
+    pgxp_set_preserve_projection(0);
+    PreciseState sat{};
+    gte_test_get_precise_projection(2, &sat.packed, &sat.x16, &sat.y16, &sat.z,
+                                    &sat.valid);
+    const uint32_t near_sxy = near_cpu.gte_data[14];
+    if (!sat.valid ||
+        (sat.x16 >> 16) != static_cast<int16_t>(near_sxy & 0xFFFFu))
+        return fail_value("divide overflow keeps the IR shadow", 0, 14,
+                          near_sxy, near_sxy & 0xFFFFu,
+                          static_cast<uint32_t>(sat.x16 >> 16));
+    return 0;
+}
+
 int main() {
     if (int rc = test_hardware_register_semantics()) return rc;
     if (int rc = test_canonicalizer()) return rc;
@@ -740,6 +853,7 @@ int main() {
     if (int rc = test_precise_sxy_invalidation()) return rc;
     if (int rc = test_precise_nclip_is_title_scoped()) return rc;
     if (int rc = test_precision_speculative_transaction()) return rc;
+    if (int rc = test_preserve_projection_is_shadow_only()) return rc;
     std::puts("PASS: canonical GTE register helpers match GTEState transfer oracle");
     return 0;
 }

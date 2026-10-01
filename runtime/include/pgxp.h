@@ -39,6 +39,60 @@ int  pgxp_cpu_mode(void);
 void  pgxp_set_tolerance(float pixels);
 float pgxp_tolerance(void);
 
+/* Position-cache fallback tier (docs/ENHANCEMENTS.md G1.4/G1.11). On (the
+ * default, unchanged behaviour): a vertex with no validated dataflow shadow
+ * may take the sub-pixel fraction of the projection last cached at its integer
+ * screen position. Off ("dataflow only"): such a vertex draws native, and
+ * gte.cpp stops filling the cache. A title whose build carries the PGXP hooks
+ * reaches near-total dataflow coverage, so for it the cache only adds wrong
+ * fractions to CPU-built 2D polygons that happen to share a position with
+ * some unrelated 3D vertex. Live-tunable. */
+void pgxp_set_position_fallback(int enabled);
+int  pgxp_position_fallback(void);
+
+/* Preserve projection precision (docs/ENHANCEMENTS.md G1.11). Off (the
+ * default): RTPS/RTPT shadow the pre-truncation position the GTE itself
+ * computes from the integer IR1/IR2 and its UNR divide, so the shadow always
+ * truncates to the guest's SXY. On: they shadow the exact projection of the
+ * vertex, from the unshifted MACs (12 more fractional bits than IR/SZ3) and a
+ * true divide (pgxp_project_precise), which removes the residual wobble of
+ * near geometry. Guest-visible SXY, MAC0 and FLAG are unchanged either way.
+ * Because that position can then differ from the guest integer by more than
+ * the fraction, truncation agreement becomes a window (PGXP_PPP_AGREE_*) and
+ * a vertex at the GTE's saturation limit must still agree exactly. One
+ * consumer is not visual: [widescreen] precise_nclip takes its branch sign
+ * from these shadows, so in a title that sets both, that (already
+ * non-faithful) widescreen sign follows the exact projection too. */
+void pgxp_set_preserve_projection(int enabled);
+int  pgxp_preserve_projection(void);
+
+/* Truncation-agreement window under preserve-projection, in whole pixels:
+ * accept -BELOW < precise - native < ABOVE. For a value-validated shadow
+ * whose packet half is neither at the GTE saturation limit nor wrapped by the
+ * GPU's 11-bit parse (both of which need exact agreement), the guest
+ * integer is the IR path's floor of the same projection, so the difference is
+ * bounded by the IR path's own error: the dropped fraction (< 1 px), IR1/IR2
+ * truncation times H/SZ3 (< 2 px without divide overflow), and SZ3's
+ * truncation scaling the offset from the screen centre by up to
+ * |offset|/SZ3. The window is a sanity bound over that, not a filter of
+ * correct vertices: for R4 (H = 290) every on-screen vertex lies within it
+ * (measured range -1.9 .. 2.6 px), and what it rejects is an extreme near
+ * vertex far off-screen, which then draws where the hardware puts it. */
+#define PGXP_PPP_AGREE_BELOW 4
+#define PGXP_PPP_AGREE_ABOVE 5
+
+/* The exact projection for preserve-projection mode, in the 16.16 screen
+ * space of the IR path. Inputs are RTPS's unshifted 44-bit MAC1..3, the shift
+ * (12 for sf=1), the IR1/IR2 the GTE stored, the SZ3 it pushed, H, OFX/OFY
+ * and the horizontal widescreen factor x_num/x_den the IR path applied (1/1
+ * when none). Returns 1 with the position in x16/y16 when the vertex
+ * qualifies (sf=1, IR1/IR2 not saturated, SZ3 not saturated and nonzero, and
+ * no divide overflow: H < 2*SZ3), else 0 and the caller keeps the IR path. */
+int pgxp_project_precise(int64_t mac1, int64_t mac2, int64_t mac3, int shift,
+                         int32_t ir1, int32_t ir2, uint32_t sz3, uint32_t h,
+                         int32_t ofx, int32_t ofy, int64_t x_num, int64_t x_den,
+                         int32_t *x16, int32_t *y16);
+
 /* Mod-owned request (the framework's psx.enhancement.pgxp package).
  *
  * The mod's activation runs at session start, before main.cpp's renderer
@@ -100,7 +154,9 @@ enum {
  * On DATAFLOW/FALLBACK, *x16/*y16 hold the sub-pixel position (16.16, same
  * coordinate space as the packet halves); *sz is the projected depth or 0.
  * Safeguards applied here: the integer part must match the native parse
- * (truncation agreement) and the tolerance clamp. */
+ * (truncation agreement; a bounded window under preserve-projection) and the
+ * tolerance clamp. The fallback tier is skipped when position fallback is
+ * off. */
 int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
                             int32_t int_x, int32_t int_y,
                             int32_t *x16, int32_t *y16, uint16_t *sz);
@@ -118,9 +174,20 @@ typedef struct PGXPStats {
     uint64_t w_valid;            /* lookups that also carried a usable depth */
     uint64_t produced;           /* RTPS/RTPT projections pushed into shadows */
     uint64_t swc2_stores;        /* GTE reg shadows copied to RAM shadows     */
+    uint64_t ppp_produced;       /* of those, shadowed with the exact projection */
+    /* Geometry-corrected triangles by how many of their 3 vertices came out
+     * precise (gpu.c prepare_precise_triangle). `mixed` is the mesh-cracking
+     * exposure of docs/ENHANCEMENTS.md G1.1: an edge between a precise and a
+     * native vertex can disagree with its neighbour by the dropped fraction. */
+    uint64_t tri_precise;        /* all three precise                         */
+    uint64_t tri_mixed;          /* one or two precise                        */
+    uint64_t tri_native;         /* none precise                              */
 } PGXPStats;
 
 void pgxp_get_stats(PGXPStats *out);
+/* Count one geometry-corrected triangle with `precise` (0..3) precise
+ * vertices. */
+void pgxp_note_triangle(int precise);
 
 /* --- gte.cpp forwarding surface (v14 ABI compat) -------------------------- */
 

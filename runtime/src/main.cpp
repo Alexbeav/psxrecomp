@@ -1233,6 +1233,10 @@ static int           g_video_geometry_correction   = 0;
 static int           g_video_perspective_texturing = 0;
 static int           g_video_pgxp_cpu_mode         = 0;
 static float         g_video_pgxp_tolerance        = 0.5f;
+/* docs/ENHANCEMENTS.md G1.11: dataflow-only and exact-projection shadows.
+ * Defaults keep the historical behaviour. game.toml [video] only. */
+static int           g_video_pgxp_position_fallback   = 1;
+static int           g_video_pgxp_preserve_projection = 0;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 
 /* Settings -> Display -> Internal resolution (internal_resolution.h). The
@@ -13400,6 +13404,10 @@ int main(int argc, char** argv) {
                 gc.runtime.video_perspective_texturing ? 1 : 0;
             g_video_pgxp_cpu_mode = gc.runtime.video_pgxp_cpu_mode ? 1 : 0;
             g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
+            g_video_pgxp_position_fallback =
+                gc.runtime.video_pgxp_position_fallback ? 1 : 0;
+            g_video_pgxp_preserve_projection =
+                gc.runtime.video_pgxp_preserve_projection ? 1 : 0;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_scanlines  = gc.runtime.video_scanlines;
@@ -15576,6 +15584,8 @@ session_reboot:
     gpu_texture_correction_set(pgxp_arm.texture);
     pgxp_set_cpu_mode(pgxp_arm.cpu_mode);
     pgxp_set_tolerance(g_video_pgxp_tolerance);
+    pgxp_set_position_fallback(g_video_pgxp_position_fallback);
+    pgxp_set_preserve_projection(g_video_pgxp_preserve_projection);
     /* Scanlines: env override wins over config, same as the corrections above,
      * so a headless/free-run boot can be captured with the effect armed from the
      * first present. PSX_SCANLINES=0/1; PSX_SCANLINE_STRENGTH=0..1. Pushed to the

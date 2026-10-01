@@ -678,6 +678,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.video_pgxp_tolerance =
                 toml::find<double>(video, "pgxp_tolerance");
         }
+        if (video.contains("pgxp_position_fallback")) {
+            rt.video_pgxp_position_fallback =
+                toml::find<bool>(video, "pgxp_position_fallback");
+        }
+        if (video.contains("pgxp_preserve_projection")) {
+            rt.video_pgxp_preserve_projection =
+                toml::find<bool>(video, "pgxp_preserve_projection");
+        }
         if (video.contains("crt_filter")) {
             const auto mode = toml::find<std::string>(video, "crt_filter");
             if      (mode == "raw")       rt.video_screen_kind = 0;
