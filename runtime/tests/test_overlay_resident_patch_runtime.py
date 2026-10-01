@@ -161,6 +161,9 @@ def main() -> int:
             str(RUNTIME / "src" / "overlay_posix.c"),
             str(RUNTIME / "src" / "crc32.c"),
             str(RUNTIME / "src" / "memory.c"),
+            # memory.c's text guard compares the loaded image with the image
+            # the static code was generated from (text_source_guard.h).
+            str(RUNTIME / "src" / "text_source_guard.c"),
             str(TESTS / "overlay_resident_patch_harness.c"),
             "-o", str(harness),
         ]
