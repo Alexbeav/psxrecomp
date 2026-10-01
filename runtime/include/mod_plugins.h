@@ -11,6 +11,10 @@ typedef void (*PSXModActivationCallback)(void);
 struct CPUState;
 typedef void (*PSXModFunctionEntryCallback)(struct CPUState* cpu,
                                             uint32_t address);
+/* Return nonzero to finish this opt-in function with the callback's return
+ * registers. The runtime publishes pc=$ra; zero executes the original body. */
+typedef int (*PSXModFunctionFilterCallback)(struct CPUState* cpu,
+                                           uint32_t address);
 
 /*
  * Register a trusted, statically linked plugin implementation. Package
@@ -27,10 +31,15 @@ int psx_mod_register_function_entry_plugin(
  * interpreted entry, so the hook contract does not depend on the backend.
  * Hooks match by code address (segment bits ignored) and run only for plugins
  * the active plan resolved; the table is rebuilt at plugin activation. */
-void psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
+int psx_mod_register_function_filter_plugin(
+    const char* id, uint32_t address, PSXModFunctionFilterCallback callback);
+int psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
 /* Active function-entry hook count (0 = none). Hot callers test it before the
  * call, so a run without an active hook pays one load per interpreted entry. */
 extern uint32_t g_psx_mod_function_entry_hooks;
+/* Entry callbacks can make nested guest calls while retaining host registers.
+ * Save/load and rewind must wait until that host context has returned. */
+int psx_mod_function_entry_active(void);
 
 /* Narrow guest services available to trusted plugin callbacks. */
 int psx_mod_game_started(void);

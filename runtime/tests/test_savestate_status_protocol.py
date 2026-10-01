@@ -34,6 +34,8 @@ assert "psx_irq_resume_context_snapshot_safe(void)" in INTERRUPTS
 assert "psx_irq_resume_context_snapshot_safe_at(uint32_t resume_pc)" in INTERRUPTS
 assert "psx_irq_resume_context_snapshot_pc(void)" in INTERRUPTS
 assert "g_cosim_dirty_pump_site == 0" in INTERRUPTS
+assert INTERRUPTS.index('if (psx_mod_function_entry_active()) return 0;') < INTERRUPTS.index('if (g_cosim_dirty_pump_site == 0)')
+assert 'if (psx_mod_function_entry_active()) return;' in STATE
 assert "case 1: /* transfer surface: target PC is materialized in CPUState */" in INTERRUPTS
 assert "cands[n++] = psx_irq_resume_context_snapshot_pc();" in STATE
 assert "cands[n++] = psx_irq_resume_context_snapshot_pc();" in REWIND

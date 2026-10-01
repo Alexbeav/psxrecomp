@@ -373,10 +373,16 @@ class ToolchainStagingTest(unittest.TestCase):
         for d in (self.tools, self.include, self.bios, self.recomp, self.mingw):
             os.makedirs(d, exist_ok=True)
         touch(os.path.join(self.tools, 'compile_overlays.py'))
+        touch(os.path.join(self.tools, 'bios_module_build.py'))
         touch(os.path.join(self.include, 'overlay_api.h'))
         touch(os.path.join(self.include, 'overlay_dispatch_preamble.c.inc'))
+        touch(os.path.join(self.include, 'psx_bios_module_glue.c.inc'))
+        touch(os.path.join(self.include, 'psx_bios_module.h'))
         touch(os.path.join(self.bios, 'SCPH1001.toml'))
         touch(os.path.join(self.recomp, 'psxrecomp-game.exe'))
+        touch(os.path.join(self.recomp, 'psxrecomp-bios.exe'))
+        touch(os.path.join(self.framework, 'recompiler', 'seeds',
+                           'phase2_ghidra_seeds.json'))
         for d in ('libgcc_s_seh-1.dll', 'libstdc++-6.dll',
                   'libwinpthread-1.dll'):
             touch(os.path.join(self.mingw, d))

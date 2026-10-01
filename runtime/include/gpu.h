@@ -109,11 +109,12 @@ typedef struct {
 void gpu_arm_shaded_quad_capture(void);
 int  gpu_get_shaded_quad_capture(const GpuSqCapEntry** out);
 
-/* Per-frame GP0 command ring (always-on; query via debug server).
- * Each entry records the GP0 command header + up to 6 payload words
- * (longer commands like 0x3C shaded textured quad are truncated to 6).
+/* Per-frame GP0 command ring (always-on in debug-tool builds).
+ * Each entry records up to GPU_GP0_RING_MAX_WORDS command words, including
+ * the header; longer commands are truncated.
  * Stamped with the s_frame_count value at issue time so a debug
- * client can pull all commands for any frame in the ring window. */
+ * client can pull all commands for any frame in the ring window.
+ * PSX_NO_DEBUG_TOOLS builds report zero total/capacity and empty dumps/spans. */
 #define GPU_GP0_RING_MAX_WORDS 12
 typedef struct {
     uint32_t frame;
@@ -175,6 +176,33 @@ void gpu_ws_configure(int aspect_num, int aspect_den,
 /* [widescreen] full_2d: opt a pure-2D sprite game into the widescreen present
  * path (treat every in-game frame as gameplay, since it never tags 3D prims). */
 void gpu_ws_set_full_2d(int on);
+/* Signed 16-bit camera/min/max; active is a nonzero byte. Requires bg2d hooks.
+ * Zero addresses disable the feature. No guest memory is written. */
+void gpu_ws_set_view_anchor(uint32_t camera, uint32_t min, uint32_t max, uint32_t active);
+/* Optional authored scene bounds when native camera locks do not delimit
+ * visible geometry. Set before layer setup; disable when leaving the scene.
+ * Changes presentation only, and has no effect without view anchoring. */
+void gpu_ws_set_view_bounds_override(int enabled, int minimum, int maximum);
+/* Bracket each bg2d packet producer, with its guest packet pointer. The
+ * independent-layer mask identifies parallax backdrops that may anchor to
+ * their own map edges; linked/foreground layers retain the world origin. */
+void gpu_ws_bg2d_begin_view_layer(unsigned layer, uint32_t packet, unsigned independent_mask);
+void gpu_ws_bg2d_end_view_layer(unsigned layer, uint32_t packet);
+/* Opt-in host-produced SPRT_16 packets, 32-byte slots in enhancement DMA RAM.
+ * The 16-byte standard packet is followed by signed view shift, left/right
+ * padding and GPU_WS_BG2D_PACKET_MAGIC, optionally ORed with MIRROR_X.
+ * Coordinates use signed 16-bit X; ordinary
+ * packets retain PS1 signed 11-bit coordinates. The guest tile loop/ring stays
+ * native while this arena is registered. Allocate once during mod activation. */
+void gpu_ws_bg2d_set_host_arena(uint32_t base, uint32_t size);
+#define GPU_WS_BG2D_PACKET_MAGIC 0x58364247u
+#define GPU_WS_BG2D_BANK_PACKET_MAGIC 0x58364248u
+/* Bank packets pack signed shift in +16 low half and immutable bank ID in
+ * its high half. Their indices use the bank, but palettes remain live VRAM.
+ * Keep the original magic readable for pending packets in older snapshots. */
+#define GPU_WS_BG2D_MIRROR_X 0x80000000u
+struct WsViewAnchor;
+int gpu_ws_bg2d_get_view(unsigned layer, struct WsViewAnchor *view);
 void gpu_ws_set_auto_ui_squash(int on);
 /* [widescreen.bg2d] Capcom 2D background tile-loop widen — hooked at the renderer's
  * column-count / start-tile-col / start-screen-x instructions. Identity at 4:3
@@ -287,6 +315,8 @@ void gpu_ws_set_aspect_cone(const uint32_t *addresses,
                             const uint32_t queue_capacities[3],
                             const uint32_t queue_type_masks[3]);
 int  psx_ws_is_cull_bias_site(uint32_t pc);
+void gpu_ws_set_bias_lower_cull_sites(const uint32_t *sites, int nsites);
+int  psx_ws_is_cull_bias_lower_site(uint32_t pc);
 int  psx_ws_is_cull_slti_site(uint32_t pc);
 int  psx_ws_is_cull_slti_lower_site(uint32_t pc);
 int  psx_ws_is_cull_negsub_site(uint32_t pc);
@@ -392,6 +422,14 @@ void gpu_ws_tag_black_reveal_rect(uint32_t prim);
  * reveal margins only. The caller verifies the composite's source period.
  * Original UVs, texel density, and canonical VRAM writes are unchanged. */
 void gpu_ws_tag_repeat_rect(uint32_t prim, int32_t period);
+/* Title-identified flat screen mask: extend its off-screen vertical boundary
+ * to the adaptive edge, preserving the interior opening and canonical image.
+ * Packet guarded, cleared on reset/load, inert outside native-wide gameplay. */
+void gpu_ws_tag_screen_mask_quad(uint32_t prim);
+/* Pure emulation-thread predicate for a known native-only effect/scene.
+ * Nonzero forces native 4:3; zero defers. No GPU calls or guest writes inside.
+ * Host configuration survives reset/load; classification reads live state. */
+void gpu_ws_set_native_scene_predicate(int (*predicate)(void));
 /* Targeted alternative for sprite-heavy 2D games: corner-anchor only primitives
  * whose ordering-table packet lives in the configured half-open RAM range. */
 void gpu_ws_set_nw_left_hud_packet_range(uint32_t lo, uint32_t hi);
@@ -486,7 +524,9 @@ typedef struct {
     int      xnum, xden;        /* squash factor */
     int      mode;              /* 0 = off, 1 = squash, 2 = native-wide */
     int      nw_extra;          /* native-wide frame growth (display px), 0 if off */
+    int      view_anchor, view_left, view_right, view_shift, view_pad_left, view_pad_right;
     uint64_t cur_frame;
+    uint32_t bg2d_generations; /* Game background submissions, independent of vblank. */
     uint32_t last_tag_frame;    /* frame of newest tagged prim */
     uint32_t last_3d_frame;     /* frame of newest shaded prim (diagnostic) */
     uint32_t gte_verts;         /* RTPS/RTPT verts in the last completed frame */

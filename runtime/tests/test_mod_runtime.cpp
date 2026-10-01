@@ -111,6 +111,24 @@ static void test_active_entry(CPUState*, uint32_t address) {
 static void test_disabled_entry(CPUState*, uint32_t) { disabled_entry_hits++; }
 static void test_unselected_entry(CPUState*, uint32_t) { unselected_entry_hits++; }
 
+static bool filter_handles;
+static bool filter_context_active;
+static unsigned active_filter_hits;
+static unsigned inactive_filter_hits;
+static uint32_t active_filter_last;
+static int test_active_filter(CPUState* cpu, uint32_t address) {
+    ++active_filter_hits;
+    active_filter_last = address;
+    filter_context_active = psx_mod_function_entry_active() != 0;
+    if (!filter_handles) return 0;
+    cpu->gpr[2] = 42;
+    return 1;
+}
+static int test_inactive_filter(CPUState*, uint32_t) {
+    ++inactive_filter_hits;
+    return 1;
+}
+
 static void test_activation_plugin(void) {
     activation_calls++;
 }
@@ -427,6 +445,42 @@ int main() {
     check(g_psx_mod_function_entry_hooks == 1 && active_entry_hits == 5 &&
               disabled_entry_hits == 0 && unselected_entry_hits == 0,
           "an offline rematch after netplay must arm exactly its plan's hooks");
+
+    check(psx_mod_register_function_filter_plugin(
+              "runtime.test-vblank", 0x80003008u, test_active_filter) == 1,
+          "active plan's return filter must register");
+    check(psx_mod_register_function_filter_plugin(
+              "runtime.test-vblank", 0xA0003008u, test_active_filter) == 0,
+          "filter aliases must not register duplicate hooks");
+    check(psx_mod_register_function_filter_plugin(
+              "runtime.test-disabled-entry", 0x80003008u, test_inactive_filter) == 1 &&
+              psx_mod_register_function_filter_plugin(
+                  "runtime.unselected-entry", 0x80003008u, test_inactive_filter) == 1,
+          "inactive filter implementations must register without running");
+    entry_cpu.pc = 0x80003008u;
+    entry_cpu.gpr[31] = 0x80004000u;
+    entry_cpu.gpr[2] = 99;
+    check(!psx_mod_function_entry(&entry_cpu, entry_cpu.pc) && active_filter_hits == 0,
+          "new filters must wait for active-plan table rebuild");
+    mod_runtime_activate_plugins();
+    check(g_psx_mod_function_entry_hooks == 2 &&
+              !psx_mod_function_entry(&entry_cpu, entry_cpu.pc) &&
+              active_filter_hits == 1 && filter_context_active &&
+              entry_cpu.pc == 0x80003008u && entry_cpu.gpr[2] == 99,
+          "unhandled active filter must preserve native fallthrough");
+    filter_handles = true;
+    entry_cpu.pc = 0xA0003008u;
+    check(psx_mod_function_entry(&entry_cpu, entry_cpu.pc) == 1 &&
+              active_filter_hits == 2 && active_filter_last == 0xA0003008u &&
+              entry_cpu.pc == entry_cpu.gpr[31] && entry_cpu.gpr[2] == 42 &&
+              inactive_filter_hits == 0 && !psx_mod_function_entry_active(),
+          "handled alias filter must publish return registers and pc=$ra");
+    check(PSXRecompV4::mod_runtime_clear_for_netplay(&error), error.c_str());
+    check(!psx_mod_function_entry(&entry_cpu, 0x80003008u) &&
+              active_filter_hits == 2 && g_psx_mod_function_entry_hooks == 0,
+          "clearing the active plan must also disarm return filters");
+    check(PSXRecompV4::mod_runtime_commit(cue_path, &error), error.c_str());
+    mod_runtime_activate_plugins();
 
     ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
     ram[0x1100] = 0; ram[0x1101] = 0;

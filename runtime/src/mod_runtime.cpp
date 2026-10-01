@@ -1,4 +1,5 @@
 #include "mod_runtime.h"
+#include "cpu_state.h"
 
 #include "disc_path.h"
 #include "iso_reader.h"
@@ -94,6 +95,7 @@ RuntimeMods& state() {
 struct ActiveFunctionEntryHook {
     uint32_t key = 0;
     PSXModFunctionEntryCallback callback = nullptr;
+    PSXModFunctionFilterCallback filter = nullptr;
     const ModResolution::Plugin* plugin = nullptr;
 };
 
@@ -101,6 +103,7 @@ std::vector<ActiveFunctionEntryHook>& active_function_entry_hooks() {
     static std::vector<ActiveFunctionEntryHook> value;
     return value;
 }
+unsigned function_entry_depth;
 
 inline uint32_t function_entry_key(uint32_t address) {
     return address & 0x1FFFFFFFu;
@@ -117,7 +120,8 @@ void build_function_entry_hooks(const RuntimeMods& s) {
     auto& table = active_function_entry_hooks();
     for (const ModResolution::Plugin& plugin : s.plan.plugins)
         for (const ModFunctionEntryHook& hook : mod_function_entry_hooks(plugin.id))
-            table.push_back({function_entry_key(hook.address), hook.callback, &plugin});
+            table.push_back({function_entry_key(hook.address), hook.callback,
+                             hook.filter, &plugin});
     /* Stable: hooks sharing an address keep plan (plugin order) order. */
     std::stable_sort(table.begin(), table.end(),
                      [](const ActiveFunctionEntryHook& a,
@@ -1563,9 +1567,16 @@ extern "C" int psx_mod_register_function_entry_plugin(
     return mod_register_function_entry_plugin(id, address, callback) ? 1 : 0;
 }
 
-extern "C" void psx_mod_function_entry(CPUState* cpu, uint32_t address) {
+extern "C" int psx_mod_register_function_filter_plugin(
+    const char* id, uint32_t address, PSXModFunctionFilterCallback callback) {
     using namespace PSXRecompV4;
-    if (!g_psx_mod_function_entry_hooks || !cpu) return;
+    if (!id || !address || !callback) return 0;
+    return mod_register_function_filter_plugin(id, address, callback) ? 1 : 0;
+}
+
+extern "C" int psx_mod_function_entry(CPUState* cpu, uint32_t address) {
+    using namespace PSXRecompV4;
+    if (!g_psx_mod_function_entry_hooks || !cpu) return 0;
     RuntimeMods& s = state();
     const auto& table = active_function_entry_hooks();
     const uint32_t key = function_entry_key(address);
@@ -1575,9 +1586,21 @@ extern "C" void psx_mod_function_entry(CPUState* cpu, uint32_t address) {
     for (; it != table.end() && it->key == key; ++it) {
         const ModResolution::Plugin* previous = s.current_plugin;
         s.current_plugin = it->plugin;
-        it->callback(cpu, address);
+        ++function_entry_depth;
+        if (it->callback) it->callback(cpu, address);
+        const int handled = it->filter && it->filter(cpu, address);
+        --function_entry_depth;
         s.current_plugin = previous;
+        if (handled) {
+            cpu->pc = cpu->gpr[31];
+            return 1;
+        }
     }
+    return 0;
+}
+
+extern "C" int psx_mod_function_entry_active(void) {
+    return PSXRecompV4::function_entry_depth != 0;
 }
 
 extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,

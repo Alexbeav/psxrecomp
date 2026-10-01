@@ -512,6 +512,7 @@ static void present_bezel(int ww, int wh, int lx, int ly, int lw, int lh);
 static int           s_raster_ok = 0;      /* full GPU pipeline available */
 static GLuint s_bank_tex[65536];
 static GLuint s_selected_bank_tex;
+static int s_selected_bank_live_clut, s_tb_bank_live_clut;
 
 /* Authoritative VRAM: hr color texture + stencil (mask bit) FBO. */
 static GLuint        s_hr_tex = 0, s_hr_fbo = 0, s_hr_rb = 0;
@@ -555,6 +556,7 @@ static float   s_pq[3];
 
 /* TEX program uniforms. */
 static GLint s_uVram = -1, s_uTpage = -1, s_uClut = -1, s_uDepth = -1;
+static GLint s_uPalette = -1;
 static GLint s_uRaw = -1, s_uSemipass = -1, s_uSemimode = -1;
 static GLint s_uTwin = -1, s_uMaskset = -1, s_uFilter = -1;
 static GLint s_uLimits = -1;
@@ -693,7 +695,8 @@ static int    s_wide_suppress = 0;
 
 /* X-translation (native px) from canonical VRAM space into the active wide
  * surface: local_x = vram_x - base_x + OFFSET. Same as SW wide_dx(). */
-static inline int wide_dx(void) { return g_wide_off - g_wide_cur_base; }
+static int view_enabled, view_shift, view_pad_left, view_pad_right;
+static inline int wide_dx(void) { return g_wide_off + view_shift - g_wide_cur_base; }
 
 /* ---- dirty-rect helpers ------------------------------------------------- */
 static void rect_clear(DirtyRect *r) { r->set = 0; }
@@ -1315,6 +1318,7 @@ static const char *TEX_FS =
     "flat in ivec4 v_limits;  /* prim uv sampling bounds (inclusive, post-wrap) */\n"
     "flat in int v_semi;      /* GP0 command has semi-transparency enabled */\n"
     "uniform usampler2D u_vram;\n"
+    "uniform usampler2D u_palette;\n"
     "uniform int u_semipass;  /* 0=all texels, 1=STP=0 only, 2=STP=1 only */\n"
     "uniform int u_semimode;  /* PS1 blend mode; drives dual-source factors */\n"
     "uniform ivec4 u_twin;    /* texture window: mask_x, mask_y, off_x, off_y */\n"
@@ -1325,6 +1329,11 @@ static const char *TEX_FS =
     "  ivec2 p = ivec2(x & 1023, y & 511);\n"
     "  if (any(greaterThanEqual(p, textureSize(u_vram, 0)))) return 0;\n"
     "  return int(texelFetch(u_vram, p, 0).r);\n"
+    "}\n"
+    "int palette_at(int x, int y){\n"
+    "  ivec2 p = ivec2(x & 1023, y & 511);\n"
+    "  if (any(greaterThanEqual(p, textureSize(u_palette, 0)))) return 0;\n"
+    "  return int(texelFetch(u_palette, p, 0).r);\n"
     "}\n"
     "int fetch_texel(int u, int v){\n"
     "  u &= 255; v &= 255;\n"
@@ -1337,10 +1346,10 @@ static const char *TEX_FS =
     "  }\n"
     "  if (v_depth == 0) {\n"
     "    int px = vram_at(v_tpage.x + (u >> 2), v_tpage.y + v);\n"
-    "    return vram_at(v_clut.x + ((px >> ((u & 3) * 4)) & 0xF), v_clut.y);\n"
+    "    return palette_at(v_clut.x + ((px >> ((u & 3) * 4)) & 0xF), v_clut.y);\n"
     "  } else if (v_depth == 1) {\n"
     "    int px = vram_at(v_tpage.x + (u >> 1), v_tpage.y + v);\n"
-    "    return vram_at(v_clut.x + ((px >> ((u & 1) * 8)) & 0xFF), v_clut.y);\n"
+    "    return palette_at(v_clut.x + ((px >> ((u & 1) * 8)) & 0xFF), v_clut.y);\n"
     "  }\n"
     "  return vram_at(v_tpage.x + u, v_tpage.y + v);\n"
     "}\n"
@@ -2197,7 +2206,7 @@ static void flush_pack_if_sampling(int tpage_x, int tpage_y, int depth,
                                    int clut_x, int clut_y) {
     if (!s_pack_dirty.set) return;
     int page_w = depth == 0 ? 64 : depth == 1 ? 128 : 256;  /* VRAM columns */
-    if (rect_intersects(&s_pack_dirty, tpage_x, tpage_y,
+    if (tpage_x >= 0 && rect_intersects(&s_pack_dirty, tpage_x, tpage_y,
                         tpage_x + page_w - 1, tpage_y + 255)) {
         flush_flat_batch();
         flush_tex_batch();   /* queued draws are part of s_pack_dirty — realise them before packing */
@@ -2327,7 +2336,9 @@ static void wide_target_begin(int dx, GLint uXoff, GLint uXhalf) {
         if (sy < 0) { sh += sy; sy = 0; }
         if (sy + sh > VRAM_H) sh = VRAM_H - sy;
         if (sh < 0) sh = 0;
-        glScissor(0, sy * s_out_scale, g_wide_w * s_out_scale, sh * s_out_scale);
+        glScissor(view_pad_left * s_out_scale, sy * s_out_scale,
+                  (g_wide_w - view_pad_left - view_pad_right) * s_out_scale,
+                  sh * s_out_scale);
     }
     p_glUniform1f(uXoff, (float)dx);
     p_glUniform1f(uXhalf, (float)g_wide_w / 2.0f);
@@ -2389,13 +2400,13 @@ static void wide_blit_center(GLuint wide_fbo, int base_x, int disp_y, int disp_h
 /* True if [lo,hi] (canonical draw-x) lies strictly inside the 4:3 frame, so the
  * prim adds nothing to either reveal margin and its mirror can be skipped. */
 static int mirror_x_center_only(int lo, int hi) {
-    if (!s_wide_fast) return 0;
+    if (!s_wide_fast || view_enabled) return 0;
     int base = g_wide_cur_base, native_w = g_wide_w - 2 * g_wide_off;
     if (native_w <= 0) return 0;
     return (lo >= base) && (hi < base + native_w);
 }
 static int mirror_geo_center_only(const int *xs, int n) {
-    if (!s_wide_fast) return 0;
+    if (!s_wide_fast || view_enabled) return 0;
     int lo = xs[0], hi = xs[0];
     for (int i = 1; i < n; i++) { if (xs[i] < lo) lo = xs[i]; if (xs[i] > hi) hi = xs[i]; }
     return mirror_x_center_only(lo, hi);
@@ -2844,6 +2855,10 @@ static void flush_tex_batch(void) {
     p_glActiveTexture(PSXGL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, s_tb_bank_tex ? s_tb_bank_tex : s_raw_tex);
     p_glUniform1i(s_uVram, 0);
+    p_glActiveTexture(PSXGL_TEXTURE0 + 1);
+    glBindTexture(GL_TEXTURE_2D, s_tb_bank_tex && !s_tb_bank_live_clut ? s_tb_bank_tex : s_raw_tex);
+    p_glUniform1i(s_uPalette, 1);
+    p_glActiveTexture(PSXGL_TEXTURE0);
     p_glUniform4i(s_uTwin, s_tb_twin[0], s_tb_twin[1], s_tb_twin[2], s_tb_twin[3]);
     p_glUniform1i(s_uMaskset, s_tb_mask);
     p_glUniform1i(s_uFilter, s_tb_filter);
@@ -3239,6 +3254,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
     flush_cpu_upload();   /* if a CPU->VRAM upload is pending it flushes the batch first */
     if (!s_selected_bank_tex)
         flush_pack_if_sampling(base_x, base_y, depth, clut_x, clut_y);
+    else if (s_selected_bank_live_clut)
+        flush_pack_if_sampling(-1, 0, depth, clut_x, clut_y);
     mark_prim_dirty(xs, ys, 3, 1 /* textured */);
 
     /* Append to the textured batch. Flush first if this prim's blend/mask/twin/
@@ -3278,7 +3295,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             !mod_texture_bank_batchable(s_selected_bank_tex != 0, s_mask_check, semi);
         int reason = -1;
         if (s_tb_n > 0) {
-            if (s_tb_bank_tex != s_selected_bank_tex) reason = 0;
+            if (s_tb_bank_tex != s_selected_bank_tex || s_tb_bank_live_clut != s_selected_bank_live_clut) reason = 0;
             else if (isolate) reason = 0;
             else if (batch_semi != s_tb_semi) reason = 1;
             else if (s_mask_set != s_tb_mask) reason = 2;
@@ -3295,6 +3312,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         if (s_tb_n == 0) {            /* opening a batch: capture its keyed state */
             s_tb_semi = batch_semi; s_tb_mask = s_mask_set; s_tb_filter = s_tex_filter; s_tb_gate = gate;
             s_tb_bank_tex = s_selected_bank_tex;
+            s_tb_bank_live_clut = s_selected_bank_live_clut;
             s_tb_twin[0] = twx; s_tb_twin[1] = twy; s_tb_twin[2] = tox; s_tb_twin[3] = toy;
         }
         float *vp = &s_tb[s_tb_n * TEXV];
@@ -4199,6 +4217,7 @@ static int init_gpu_raster(void) {
     }
 
     s_uVram  = p_glGetUniformLocation(s_tex_prog, "u_vram");
+    s_uPalette = p_glGetUniformLocation(s_tex_prog, "u_palette");
     s_uTpage = p_glGetUniformLocation(s_tex_prog, "u_tpage");
     s_uClut  = p_glGetUniformLocation(s_tex_prog, "u_clut");
     s_uDepth = p_glGetUniformLocation(s_tex_prog, "u_depth");
@@ -4441,6 +4460,7 @@ int gl_renderer_select_texture_bank(uint16_t id) {
     uint32_t width, height;
     const uint16_t* pixels;
     GLint alignment, row_length;
+    s_selected_bank_live_clut = 0;
     if (!id) { s_selected_bank_tex = 0; return 1; }
     if (!gl_renderer_texture_banks_supported()) return 0;
     if (!s_bank_tex[id]) {
@@ -4467,6 +4487,12 @@ int gl_renderer_select_texture_bank(uint16_t id) {
         }
     }
     s_selected_bank_tex = s_bank_tex[id];
+    return 1;
+}
+
+int gl_renderer_select_texture_bank_live_clut(uint16_t id) {
+    if (!gl_renderer_select_texture_bank(id)) return 0;
+    s_selected_bank_live_clut = id != 0;
     return 1;
 }
 
@@ -4583,6 +4609,7 @@ void gl_renderer_shutdown(void) {
     }
     memset(s_bank_tex, 0, sizeof s_bank_tex);
     s_selected_bank_tex = s_tb_bank_tex = 0;
+    s_selected_bank_live_clut = s_tb_bank_live_clut = 0;
     if (s_ctx) {
         ensure_cpu();
         SDL_GL_DeleteContext(s_ctx); s_ctx = NULL;
@@ -4968,6 +4995,17 @@ static GLuint wide_fbo_for(int base_x) {
 /* Enable native-wide with a wide width + centering offset (native px), or
  * disable (wide_w <= 0). Re-allocates if the width changed. Mirrors
  * sw_wide_configure. */
+static void glb_wide_set_view(int enabled, int shift, int pad_left, int pad_right) {
+    if (!enabled) shift = pad_left = pad_right = 0;
+    if (view_enabled == enabled && view_shift == shift &&
+        view_pad_left == pad_left && view_pad_right == pad_right) return;
+    flush_flat_batch(); flush_tex_batch();
+    view_enabled = enabled;
+    view_shift = shift;
+    view_pad_left = pad_left;
+    view_pad_right = pad_right;
+}
+
 static void glb_wide_configure(int wide_w, int offset) {
     if (!s_raster_ok) return;
     double t0 = cw_ms(); s_cw_wide_cfgs++;
@@ -5099,6 +5137,7 @@ static int glb_render_wide_display(uint32_t *out, int pitch, int base_x,
     /* Fold any pending CPU->VRAM uploads into the canonical FBO first (uploads
      * are never mirrored to wide, but draws after them are; keep op order) and
      * make sure all wide-FBO draws have completed before the readback. */
+    flush_flat_batch();
     flush_tex_batch();
     flush_cpu_upload();
     hiw_flush_queue();   /* windowed: queued wide mirrors */
@@ -6864,7 +6903,7 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
  * x-translated by the reveal offset. No-op when s_wide_fast is off (then the
  * mirror drew the full surface, as before). Shared by both present paths. */
 static void wide_blit_center(GLuint wide_fbo, int base_x, int disp_y, int disp_h) {
-    if (!s_wide_fast || g_wide_w <= 0) return;
+    if (!s_wide_fast || view_enabled || g_wide_w <= 0) return;
     int native_w = g_wide_w - 2 * g_wide_off;
     if (native_w <= 0) return;
     int S = s_out_scale;
@@ -7016,6 +7055,7 @@ static const GpuRenderBackend GL_BACKEND = {
     .set_draw_area = glb_set_draw_area, .get_draw_area = glb_get_draw_area,
     .set_draw_offset = glb_set_draw_offset,
     .wide_configure = glb_wide_configure,
+    .wide_set_view = glb_wide_set_view,
     .wide_set_target = glb_wide_set_target,
     .wide_disable_target = glb_wide_disable_target,
     .wide_clear = glb_wide_clear,

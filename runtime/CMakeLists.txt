@@ -98,6 +98,10 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mirror_pc_preserved_guards.py")
         add_test(NAME segment_miss_wiring_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_segment_miss_wiring.py")
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME ws_activation_bias_exec_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ws_activation_bias_exec.py" "${CMAKE_C_COMPILER}")
+        endif()
         add_test(NAME gpu_textured_dot_nw_shift_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gpu_textured_dot_nw_shift.py")
         add_test(NAME gl_readback_runner_test COMMAND "${Python3_EXECUTABLE}"
@@ -413,9 +417,30 @@ if(BUILD_TESTING)
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
 
+    add_executable(ws_view_anchor_test tests/test_ws_view_anchor.c)
+    add_executable(ws_view_anchor_gpu_test tests/test_ws_view_anchor_gpu.c
+        src/psx_video_timing.c)
+    foreach(_anchor_test ws_view_anchor ws_view_anchor_gpu)
+        target_include_directories(${_anchor_test}_test PRIVATE include src)
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(${_anchor_test}_test PRIVATE -ffunction-sections -fdata-sections)
+            if(NOT APPLE)
+                target_link_options(${_anchor_test}_test PRIVATE -Wl,--gc-sections)
+            endif()
+        endif()
+        if(NOT WIN32)
+            target_link_libraries(${_anchor_test}_test PRIVATE m)
+        endif()
+    endforeach()
+    add_test(NAME ws_view_anchor_test COMMAND ws_view_anchor_test)
+    add_test(NAME ws_view_anchor_gpu_test COMMAND ws_view_anchor_gpu_test)
+
     add_executable(ws_repeat_rect_test tests/test_ws_repeat_rect.c)
     target_include_directories(ws_repeat_rect_test PRIVATE include)
     add_test(NAME ws_repeat_rect_test COMMAND ws_repeat_rect_test)
+    add_executable(ws_screen_mask_test tests/test_ws_screen_mask.c)
+    target_include_directories(ws_screen_mask_test PRIVATE include)
+    add_test(NAME ws_screen_mask_test COMMAND ws_screen_mask_test)
 
     add_executable(mod_gpu_dma_aperture_test
         tests/test_mod_gpu_dma_aperture.c
@@ -931,6 +956,21 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC
+           AND NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME audio_trace_pcm_guard_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audio_trace_pcm_guard.py
+                             --cc ${CMAKE_C_COMPILER})
+            add_test(NAME gpu_gp0_history_guard_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gpu_gp0_history_guard.py
+                             --cc ${CMAKE_C_COMPILER})
+            add_test(NAME memory_debug_trace_guard_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_memory_debug_trace_guard.py
+                             --cc ${CMAKE_C_COMPILER})
+        endif()
         add_test(NAME fntrace_c_linkage_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME overlay_retry_c11_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_retry_c11.py --compiler ${CMAKE_C_COMPILER})
@@ -943,6 +983,8 @@ if(BUILD_TESTING)
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
+        add_test(NAME perf_campaign_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_perf_campaign.py)
+        add_test(NAME perf_host_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_perf_host.py)
         add_test(NAME frame_interpolation_context_ownership_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)

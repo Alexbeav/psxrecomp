@@ -213,6 +213,15 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-01 — MMX6 adaptive framework integration.** The opt-in function
+  filters from the MMX6 branch are being reconciled with the active-plan
+  function-entry registry and master overlay store-PC forwarding. A handled
+  filter publishes return registers and `pc=$ra`; snapshot requests defer until
+  its host callback returns. The combined callback ABI is v25 so stale v24
+  overlays cannot mix the two incompatible callback layouts. The adaptive
+  view, host tile packets, retained texture banks and screen masks remain
+  presentation-only enhancements; faithful guest timing is unchanged.
+
 - **2026-09-30 — Original-disc overlay discovery (beads-eio.3.215).**
   Ape Escape Primordial Ooze exposed return-adjacent functions omitted by the
   archive scanner: a scheduled LUI/load before stack setup and an RA save beyond
