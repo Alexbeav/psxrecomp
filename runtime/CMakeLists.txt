@@ -801,6 +801,26 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(kernel_patch_ranges_test PRIVATE include)
     add_test(NAME kernel_patch_ranges_test COMMAND kernel_patch_ranges_test)
 
+    # A disc of a multi-disc set can carry the program with a per-disc code
+    # byte (Rebel Assault II loads the disc number with a different immediate).
+    # The page where the loaded executable differs from the generated-from
+    # image must be found, so its code runs from RAM and not from the other
+    # disc's compiled function.
+    add_executable(text_source_guard_test
+        tests/test_text_source_guard.c
+        src/text_source_guard.c
+        src/crc32.c)
+    target_include_directories(text_source_guard_test PRIVATE include)
+    add_test(NAME text_source_guard_test COMMAND text_source_guard_test)
+
+    # Two programs of one multi-program set share the memory cards, so the
+    # second one to start is refused while the first runs.
+    add_executable(program_set_lock_test
+        tests/test_program_set_lock.c
+        src/program_set_lock.c)
+    target_include_directories(program_set_lock_test PRIVATE include)
+    add_test(NAME program_set_lock_test COMMAND program_set_lock_test)
+
     # The player-facing "skip the BIOS" flag must resolve to the same boot
     # behaviour on retail SCPH-1001 and on the bundled OpenBIOS, whose
     # kernel-call HLE is (correctly) refused for want of a DeliverEvent anchor.
@@ -1269,6 +1289,13 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  COMMAND ${Python3_EXECUTABLE} -m unittest test_probe_disc
                  WORKING_DIRECTORY ${PSXRECOMP_ROOT}/tools/new_project_layout)
         set_tests_properties(probe_disc_test PROPERTIES
+                 ENVIRONMENT "PYTHONPATH=${PSXRECOMP_ROOT}/tools")
+        # One program patched per disc is one set (Metal Gear Solid Europe's
+        # 2-disc set was refused on a whole-file hash).
+        add_test(NAME verify_disc_set_test
+                 COMMAND ${Python3_EXECUTABLE} -m unittest test_verify_disc_set
+                 WORKING_DIRECTORY ${PSXRECOMP_ROOT}/tools/new_project_layout)
+        set_tests_properties(verify_disc_set_test PROPERTIES
                  ENVIRONMENT "PYTHONPATH=${PSXRECOMP_ROOT}/tools")
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})

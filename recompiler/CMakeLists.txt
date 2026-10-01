@@ -957,6 +957,15 @@ if(BUILD_TESTING)
                     --recompiler $<TARGET_FILE:psxrecomp-game>
                     --compiler ${CMAKE_C_COMPILER}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The dispatch file carries the page CRCs of the executable it was
+        # generated from, so the runtime can tell when the disc a player boots
+        # carries a different one (a multi-disc set with a per-disc code byte).
+        add_test(
+            NAME source_page_crc_table
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_page_crc_table.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # Every host edge into an independently registered split piece
         # (fallthrough, branch, jump, jal/jalr continuation, delay slot at the
         # cap) validates live text before native entry. Runs the emitted

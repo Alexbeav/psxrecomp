@@ -108,6 +108,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "disc_identity.h"
 #include "sbi_setup.h"
 #include "disc_roster.h"
+#include "program_set_lock.h"
 #include "disc_path.h"
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
 #include "psx_keybinds.h"    /* configurable keyboard->DualShock keybinds (keybinds.ini) */
@@ -273,42 +274,41 @@ extern "C" void     dirty_ram_register_text_image(uint32_t phys_lo,
                                                   const uint8_t *bytes,
                                                   uint32_t len);
 
-/* Arm the dirty-RAM text-image guard with the boot EXE bytes. The guard is
- * load-bearing: dispatch native-safety (dirty_ram_text_native_ok) and the
- * fntrace alternate game-start latch both key off the registered image, so
- * every install must arm it — not just repo checkouts that happen to carry a
- * loose EXE copy next to game.toml. Source order:
- *   1. The local EXE file from game.toml (dev checkouts; recompiler input).
- *   2. The boot EXE extracted from the mounted disc image (end-user installs
- *      — the disc is the same bytes the BIOS loads, i.e. the true reference).
- * Registration passes ownership of the malloc'd buffer to memory.c. */
-static void arm_text_image_guard(const std::string &exe_path,
-                                 uint32_t load_address,
-                                 const std::string &disc_path) {
-    const uint32_t phys_lo = load_address & 0x1FFFFFFFu;
-    /* 1. Local EXE file (skip the 2048-byte PS-X EXE header). */
-    if (!exe_path.empty()) {
-        std::ifstream ef(exe_path, std::ios::binary | std::ios::ate);
-        if (ef) {
-            std::streamsize sz = ef.tellg();
-            if (sz > 2048) {
-                uint32_t img_len = (uint32_t)(sz - 2048);
-                uint8_t *img = (uint8_t *)std::malloc(img_len);
-                if (img) {
-                    ef.seekg(2048, std::ios::beg);
-                    if (ef.read((char *)img, img_len)) {
-                        dirty_ram_register_text_image(phys_lo, img, img_len);
-                        std::fprintf(stdout,
-                            "psxrecomp: text image guard armed (0x%08X..0x%08X, local EXE)\n",
-                            load_address, load_address + img_len);
-                        return;
-                    }
-                    std::free(img);
-                }
-            }
-        }
-    }
-    /* 2. Extract the boot EXE from the disc image. */
+extern "C" uint32_t dirty_ram_text_note_source_image(
+    const uint8_t *loaded, uint32_t phys_lo, uint32_t len,
+    const uint32_t *source_crc32, uint32_t source_count,
+    uint32_t source_phys_lo, uint32_t source_len, uint32_t *first_phys);
+/* Generated dispatcher, or game_dispatch_compat.c when it has no table. */
+extern "C" const uint32_t *psx_game_source_page_crc32(uint32_t *count,
+                                                      uint32_t *phys_lo,
+                                                      uint32_t *len);
+
+/* Tell the guard which pages of the executable the console loads differ from
+ * the executable the static code was generated from (text_source_guard.h).
+ * A disc of a set that carries the program with a per-disc code byte is the
+ * case: its differing page must run from RAM, not from the other disc's
+ * compiled function. `loaded` is not kept. */
+static void note_text_source_image(const uint8_t *loaded, uint32_t phys_lo,
+                                   uint32_t len, const char *what) {
+    uint32_t count = 0, source_lo = 0, source_len = 0, first = 0;
+    const uint32_t *crcs = psx_game_source_page_crc32(&count, &source_lo, &source_len);
+    if (!crcs || count == 0) return;
+    const uint32_t pages = dirty_ram_text_note_source_image(
+        loaded, phys_lo, len, crcs, count, source_lo, source_len, &first);
+    if (pages)
+        std::fprintf(stdout,
+            "psxrecomp: text image guard: %u page(s) of the %s differ from the "
+            "executable this build was generated from (first 0x%08X); code on "
+            "those pages runs from RAM\n",
+            pages, what, first | 0x80000000u);
+}
+
+/* The boot EXE image (without its 2048-byte header) on the mounted disc, or
+ * nullptr. The caller owns the malloc'd buffer. */
+static uint8_t *read_disc_boot_image(const std::string &exe_path,
+                                     const std::string &disc_path,
+                                     uint32_t *out_len,
+                                     std::string *out_name) {
     if (!disc_path.empty()) {
         PS1::ISOReader iso;
         if (iso.Open(disc_path)) {
@@ -360,18 +360,76 @@ static void arm_text_image_guard(const std::string &exe_path,
                         if (img) {
                             memcpy(img, file + 2048, img_len);
                             std::free(file);
-                            dirty_ram_register_text_image(phys_lo, img, img_len);
-                            std::fprintf(stdout,
-                                "psxrecomp: text image guard armed (0x%08X..0x%08X, disc %s)\n",
-                                load_address, load_address + img_len,
-                                boot_name.c_str());
-                            return;
+                            *out_len = img_len;
+                            *out_name = boot_name;
+                            return img;
                         }
                     }
                     std::free(file);
                 }
             }
         }
+    }
+    return nullptr;
+}
+
+/* Arm the dirty-RAM text-image guard with the boot EXE bytes. The guard is
+ * load-bearing: dispatch native-safety (dirty_ram_text_native_ok) and the
+ * fntrace alternate game-start latch both key off the registered image, so
+ * every install must arm it — not just repo checkouts that happen to carry a
+ * loose EXE copy next to game.toml. Source order:
+ *   1. The local EXE file from game.toml (dev checkouts; recompiler input).
+ *   2. The boot EXE extracted from the mounted disc image (end-user installs
+ *      — the disc is the same bytes the BIOS loads, i.e. the true reference).
+ * Registration passes ownership of the malloc'd buffer to memory.c. */
+static void arm_text_image_guard(const std::string &exe_path,
+                                 uint32_t load_address,
+                                 const std::string &disc_path) {
+    const uint32_t phys_lo = load_address & 0x1FFFFFFFu;
+    /* The console loads the mounted disc's boot EXE, whichever image becomes
+     * the reference below. Read it first so the source-image check always
+     * judges the bytes that will be in RAM. */
+    uint32_t disc_len = 0;
+    std::string disc_name;
+    uint8_t *disc_img = read_disc_boot_image(exe_path, disc_path, &disc_len, &disc_name);
+    /* 1. Local EXE file (skip the 2048-byte PS-X EXE header). */
+    if (!exe_path.empty()) {
+        std::ifstream ef(exe_path, std::ios::binary | std::ios::ate);
+        if (ef) {
+            std::streamsize sz = ef.tellg();
+            if (sz > 2048) {
+                uint32_t img_len = (uint32_t)(sz - 2048);
+                uint8_t *img = (uint8_t *)std::malloc(img_len);
+                if (img) {
+                    ef.seekg(2048, std::ios::beg);
+                    if (ef.read((char *)img, img_len)) {
+                        dirty_ram_register_text_image(phys_lo, img, img_len);
+                        std::fprintf(stdout,
+                            "psxrecomp: text image guard armed (0x%08X..0x%08X, local EXE)\n",
+                            load_address, load_address + img_len);
+                        if (disc_img)
+                            note_text_source_image(disc_img, phys_lo, disc_len,
+                                                   "mounted disc's boot executable");
+                        else
+                            note_text_source_image(img, phys_lo, img_len,
+                                                   "local boot executable");
+                        std::free(disc_img);
+                        return;
+                    }
+                    std::free(img);
+                }
+            }
+        }
+    }
+    /* 2. The boot EXE from the disc image. */
+    if (disc_img) {
+        dirty_ram_register_text_image(phys_lo, disc_img, disc_len);
+        std::fprintf(stdout,
+            "psxrecomp: text image guard armed (0x%08X..0x%08X, disc %s)\n",
+            load_address, load_address + disc_len, disc_name.c_str());
+        note_text_source_image(disc_img, phys_lo, disc_len,
+                               "mounted disc's boot executable");
+        return;
     }
     std::fprintf(stdout,
         "psxrecomp: WARNING: text image guard NOT armed (no local EXE, no disc "
@@ -2236,6 +2294,33 @@ static std::filesystem::path exe_dir_from_argv(const char* argv0) {
     return exe_dir;
 }
 
+/* "<exe name>.game.toml" beside the executable, when that file exists; empty
+ * otherwise. A folder that holds several programs of one set (Resident Evil 2:
+ * a Leon exe and a Claire exe) gives each exe its own game config this way,
+ * while settings, key binds and saves stay shared. A folder with one program
+ * has no such file and uses the build's default config name as before. */
+static std::filesystem::path exe_specific_game_config(const char* argv0) {
+    namespace fs = std::filesystem;
+    std::string name;
+#ifdef _WIN32
+    {
+        wchar_t buf[MAX_PATH * 4];
+        DWORD n = GetModuleFileNameW(NULL, buf, (DWORD)(sizeof(buf) / sizeof(buf[0])));
+        if (n > 0 && n < (DWORD)(sizeof(buf) / sizeof(buf[0])))
+            name = fs::path(std::wstring(buf, buf + n)).stem().string();
+    }
+#endif
+    if (name.empty() && argv0 && argv0[0]) {
+        const fs::path p(argv0);
+        /* Only Windows executables carry an extension to drop. */
+        name = (p.extension() == ".exe" ? p.stem() : p.filename()).string();
+    }
+    if (name.empty()) return {};
+    std::error_code ec;
+    const fs::path candidate = exe_dir_from_argv(argv0) / (name + ".game.toml");
+    return fs::is_regular_file(candidate, ec) ? candidate : fs::path{};
+}
+
 static std::filesystem::path resolve_existing_runtime_path(const char* requested,
                                                            const char* argv0) {
     namespace fs = std::filesystem;
@@ -2360,18 +2445,50 @@ static bool pick_runtime_file(const char* title, const char* filter,
 static std::vector<std::filesystem::path> g_disc_metadata_roster;
 static std::vector<std::string> g_disc_serials;
 static std::vector<std::string> g_disc_netplay_fps;
+/* [game] program_discs: the 1-based positions of the set roster above that
+ * THIS build boots. Empty for every title except a program of a set whose
+ * discs boot different programs (see disc_roster.h). The three vectors above
+ * always describe the whole set. */
+static std::vector<int> g_program_discs;
 
 static std::string uppercase_ascii(std::string s);
 
 /* The serial THIS image is expected to carry: the set's per-disc value when
  * the game declared one, the game's own id otherwise. An image that belongs
  * to a declared set but has no serial listed is returned ungated (""), never
- * gated against another disc's number. */
+ * gated against another disc's number. A disc that another program of the set
+ * boots is gated against this program's own id, so it reads as the wrong disc
+ * here, which it is. */
 static std::string expected_serial_for_disc(const std::filesystem::path& disc,
                                             const std::string& fallback) {
     if (g_disc_serials.empty()) return fallback;
+    if (PSXRecompV4::disc_roster_program_foreign(g_disc_metadata_roster,
+                                                 g_program_discs, disc))
+        return fallback;
     return PSXRecompV4::disc_roster_value(
         g_disc_metadata_roster, g_disc_serials, disc, "");
+}
+
+/* True when `disc` is an image that another program of the set boots: a set
+ * roster entry this build does not own, or a relocated image whose serial is
+ * one of the other programs' serials. The programs of a set share
+ * settings.toml and disc.cfg, so the disc one program remembered reaches the
+ * other; it must not be mounted there. */
+static bool disc_belongs_to_other_program(const std::filesystem::path& disc) {
+    if (g_program_discs.empty() || disc.empty()) return false;
+    if (PSXRecompV4::disc_roster_index(g_disc_metadata_roster, disc) >= 0)
+        return PSXRecompV4::disc_roster_program_foreign(
+            g_disc_metadata_roster, g_program_discs, disc);
+    for (size_t i = 0; i < g_disc_serials.size(); ++i) {
+        if (g_disc_serials[i].empty() ||
+            PSXRecompV4::disc_roster_program_owns(g_program_discs, (int)i + 1))
+            continue;
+        const PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
+            disc, g_disc_serials[i], /*expected_crc*/0,
+            /*has_expected_crc*/false, /*compute_crc*/false);
+        if (id.opened && id.has_header && id.serial_matches) return true;
+    }
+    return false;
 }
 
 static std::string uppercase_ascii(std::string s) {
@@ -2771,7 +2888,10 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
     if (!cached.empty()) {
         cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0));
     }
+    /* disc.cfg is shared by the programs of a set; the other program's disc
+     * is not this build's. */
     if (!cached.empty() && std::filesystem::exists(cached) &&
+        !disc_belongs_to_other_program(cached) &&
         validate_disc_for_launch(cached, game_id)) {
         return cached;
     }
@@ -14522,8 +14642,11 @@ int main(int argc, char** argv) {
 
     std::string default_game_config_storage;
     if (!game_config_path) {
-        std::filesystem::path default_game_config =
-            resolve_existing_runtime_path(PSX_DEFAULT_GAME_CONFIG_PATH, argv[0]);
+        /* This exe's own config wins over the build's default name. */
+        std::filesystem::path default_game_config = exe_specific_game_config(argv[0]);
+        if (default_game_config.empty())
+            default_game_config =
+                resolve_existing_runtime_path(PSX_DEFAULT_GAME_CONFIG_PATH, argv[0]);
         if (!default_game_config.empty()) {
             default_game_config_storage = default_game_config.string();
             game_config_path = default_game_config_storage.c_str();
@@ -14662,11 +14785,21 @@ int main(int argc, char** argv) {
                 (gc.netplay_local_viewport_aspect == "16:9") ? 1 :
                 (gc.netplay_local_viewport_aspect == "21:9") ? 2 :
                 (gc.netplay_local_viewport_aspect == "adaptive") ? 3 : 0;
-            game_discs = gc.discs;
+            /* The metadata vectors always describe the whole set. game_discs
+             * is what this build may mount: every disc, or, for a program of
+             * a multi-program set, its own discs ([game] program_discs). */
             g_disc_metadata_roster = gc.discs;
             g_disc_serials = gc.disc_serials;
             g_disc_netplay_fps = gc.netplay_required_disc_fps;
-            if (!gc.discs.empty()) resolved_disc = gc.discs.front();
+            g_program_discs = gc.program_discs;
+            game_discs = PSXRecompV4::disc_roster_program_subset(
+                gc.discs, g_program_discs);
+            if (!g_program_discs.empty())
+                std::fprintf(stdout,
+                    "psxrecomp: program of a %zu-disc set; this build boots %zu "
+                    "of them (first: set disc %d)\n",
+                    gc.discs.size(), game_discs.size(), g_program_discs.front());
+            if (!game_discs.empty()) resolved_disc = game_discs.front();
             if (gc.runtime.has_memcard_dir)  memcard_dir   = gc.runtime.memcard_dir;
         g_fast_loading_optout = gc.runtime.fast_loading_optout;
             if (gc.runtime.has_window_title) window_title  = gc.runtime.window_title;
@@ -15214,6 +15347,20 @@ int main(int argc, char** argv) {
                 const int idx = roster_index_for_disc(game_discs, resolved_disc);
                 if (idx >= 0) selected_disc_index = idx + 1;
             }
+        }
+        /* The programs of a multi-program set share this settings file, so
+         * [disc] path can name the disc the OTHER program last mounted. This
+         * build boots only its own discs: fall back to its own selected (or
+         * first) disc instead of mounting another program's. */
+        if (!disc_override_path && !game_discs.empty() &&
+            disc_belongs_to_other_program(resolved_disc)) {
+            const int own = std::min(std::max(selected_disc_index, 1),
+                                     (int)game_discs.size());
+            std::fprintf(stdout,
+                "psxrecomp: the remembered disc belongs to another program of "
+                "this set; mounting this program's own disc instead\n");
+            selected_disc_index = own;
+            resolved_disc = normalize_disc_path_for_launch(game_discs[own - 1]);
         }
         /* Relative [memcard] values anchor on the exe directory (PS1B-310);
          * the save-state root and disc digest cache derive from memcard_dir. */
@@ -17087,6 +17234,22 @@ session_reboot:
                          "instant budget %d/frame)\n",
                          divisor, cdrom_get_instant_rate());
     }
+    /* The programs of a multi-program set share the memory cards. Each keeps
+     * them in memory and writes them back, so only one may run at a time
+     * (program_set_lock.h). A lock-file error other than "held" does not stop
+     * the player. Taken once; a session reboot finds it already held by us. */
+    if (!g_program_discs.empty()) {
+        std::error_code lock_dir_ec;   /* a first run has no saves folder yet */
+        std::filesystem::create_directories(memcard_dir, lock_dir_ec);
+    }
+    if (!g_program_discs.empty() &&
+        psx_program_set_lock_acquire(memcard_dir_str.c_str()) == 0) {
+        launcher_warning("Already running",
+            "Another program of this game is running from this folder. They "
+            "share the same memory cards, so only one can run at a time.\n\n"
+            "Close the other one, then start this one again.");
+        return 1;
+    }
     {
         std::string mc1 = memcard1_path.string();
         std::string mc2 = memcard2_path.string();
@@ -17718,8 +17881,17 @@ session_reboot:
          * believes it is still reading disc 2 -- and nothing in the slot list
          * would say so, because every disc of a set shares one entry_pc, which
          * is the key the slot files already use. Single-disc titles pass 0 and
-         * keep their existing filenames untouched. */
-        savestate_set_disc_scope(game_discs.size() > 1 ? selected_disc_index : 0);
+         * keep their existing filenames untouched.
+         *
+         * A program of a multi-program set shares the saves folder with the
+         * set's other programs, and two of them can share an entry_pc (Rival
+         * Schools). Its states take the disc's position in the SET, so they
+         * never collide with another program's. */
+        savestate_set_disc_scope(
+            !g_program_discs.empty()
+                ? PSXRecompV4::disc_roster_program_set_position(
+                      g_program_discs, selected_disc_index)
+                : (game_discs.size() > 1 ? selected_disc_index : 0));
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
