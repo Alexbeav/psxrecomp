@@ -212,7 +212,7 @@ the chain coordinator runs (✗ blocked today on upstream init issue).
 ## Resolution (2026-04-30, second pass): shell trampolines were the real gap
 
 The "upstream init issue" was finally identified by extending Beetle with an
-always-on JAL/JALR fn_trace ring (`docs/beetle_wtrace_hook.patch` — adds
+always-on JAL/JALR fn_trace ring (`beetle_wtrace_hook.patch`, kept on the share with the oracle patches — adds
 `g_psxrecomp_fntrace_cb`). Filtered-by-target arming captures every JAL/JALR
 to InitCARD / StartCARD / chain installer / chain coord, with caller PC and
 parent $ra. Beetle ran cleanly from boot through CROSS into memcard screen,
@@ -278,7 +278,7 @@ issue, distinct from the dispatch gap fixed here.
 
 ### Tooling delta this pass
 
-- `docs/beetle_wtrace_hook.patch` — adds JAL/JALR/J/JR retire hook
+- `beetle_wtrace_hook.patch` (share: `tools/beetle-oracle-patches/`) — adds JAL/JALR/J/JR retire hook
 - `runtime/src/beetle_psx_bridge.cpp` — fn_trace ring (filtered-by-target)
 - `runtime/src/psx_oracle_cmds.c` — `beetle_fntrace_*` TCP commands
 - `tools/beetle_fn_trace.py` — query client
