@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from fill_tokens import derive_zip_prefix
@@ -1139,6 +1140,103 @@ def op_annotate_legacy_packaging(root: Path, options: MigrateOptions) -> ApplyRe
     )
 
 
+# probe_disc.py renders a whole scaffold game.toml and seed list. On a project
+# that already has them (every migration), only the disc identity is the
+# probe's to write; titles carry hand-tuned runtime, widescreen and overlay
+# configuration and curated seeds. Overwriting them would have replaced
+# THPS2's cull config and 1,891-seed list during its migration (2026-10-01).
+_PROBE_OWNED_SECTIONS = ("prepare_disc", "netplay")
+_PROBE_GAME_KEYS = ("name", "id", "players", "exe", "disc", "load_address",
+                    "entry_pc", "text_size", "stack_base")
+_TOML_HEADER = re.compile(r"^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$")
+_TOML_KEY = re.compile(r"^\s*([A-Za-z0-9_-]+)\s*=")
+_SEED = re.compile(r"^\s*(0x[0-9A-Fa-f]+)\b")
+
+
+def _toml_chunks(text: str) -> list[tuple[str | None, list[str]]]:
+    """Split TOML text at table headers. Comment/blank lines directly above a
+    header travel with that header's chunk. Chunk 0 (name None) is preamble."""
+    chunks: list[tuple[str | None, list[str]]] = [(None, [])]
+    for line in text.splitlines():
+        m = _TOML_HEADER.match(line)
+        if m:
+            prev = chunks[-1][1]
+            lead: list[str] = []
+            while prev and (not prev[-1].strip() or prev[-1].lstrip().startswith("#")):
+                lead.insert(0, prev.pop())
+            chunks.append((m.group(1).strip(), lead + [line]))
+        else:
+            chunks[-1][1].append(line)
+    return chunks
+
+
+def _emit_section(out: list[str], lines: list[str]) -> None:
+    """Append a probe section separated from what precedes it by one blank."""
+    body = list(lines)
+    while body and not body[0].strip():
+        body.pop(0)
+    while out and not out[-1].strip():
+        out.pop()
+    if out:
+        out.append("")
+    out.extend(body)
+
+
+def merge_probe_game_toml(existing: str, probed: str) -> str:
+    """Existing config wins. Probe-owned identity sections are replaced (or
+    inserted after [game] / appended), and [game] gains only the identity keys
+    it lacks. Merging the same probe output twice is a no-op."""
+    probed_by_name = {name: lines for name, lines in _toml_chunks(probed) if name}
+    chunks = _toml_chunks(existing)
+    present = {name for name, _ in chunks}
+    out: list[str] = []
+    placed: set[str] = set()
+    for name, lines in chunks:
+        if name in _PROBE_OWNED_SECTIONS and name in probed_by_name:
+            _emit_section(out, probed_by_name[name])
+            placed.add(name)
+            continue
+        if name == "game" and "game" in probed_by_name:
+            have = {m.group(1) for m in map(_TOML_KEY.match, lines) if m}
+            body = list(lines)
+            for line in probed_by_name["game"]:
+                m = _TOML_KEY.match(line)
+                if m and m.group(1) in _PROBE_GAME_KEYS and m.group(1) not in have:
+                    body.append(line)
+            _emit_section(out, body)
+            if "prepare_disc" in probed_by_name and "prepare_disc" not in present:
+                _emit_section(out, probed_by_name["prepare_disc"])
+                placed.add("prepare_disc")
+            continue
+        if name is None:
+            out.extend(lines)
+        else:
+            _emit_section(out, lines)
+    for name in _PROBE_OWNED_SECTIONS:
+        if name in placed or name not in probed_by_name:
+            continue
+        _emit_section(out, probed_by_name[name])
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def merge_seed_files(existing: str, probed: str) -> tuple[str, int]:
+    """Keep the existing (curated) seed file verbatim and append any probed
+    address it lacks. Returns (text, number added)."""
+    have = {int(m.group(1), 16) for m in map(_SEED.match, existing.splitlines()) if m}
+    new: list[str] = []
+    for line in probed.splitlines():
+        m = _SEED.match(line)
+        if m and int(m.group(1), 16) not in have:
+            have.add(int(m.group(1), 16))
+            new.append(f"0x{int(m.group(1), 16):08X}")
+    if not new:
+        return existing, 0
+    text = existing.rstrip("\n") + "\n"
+    text += f"# Added by probe_disc refresh: {len(new)} boot-EXE JAL target(s)\n"
+    text += "\n".join(new) + "\n"
+    return text, len(new)
+
+
 def op_probe_disc_refresh(root: Path, options: MigrateOptions) -> ApplyResult:
     if not options.disc:
         return ApplyResult(
@@ -1157,43 +1255,59 @@ def op_probe_disc_refresh(root: Path, options: MigrateOptions) -> ApplyResult:
 
     name = options.project_name or infer_project_name(root)
     players = options.players
-    cmd = [
-        sys.executable,
-        str(probe),
-        str(disc),
-        "--write-game-toml",
-        str(root / "game.toml"),
-        "--write-catalog",
-        str(root / "catalog_identity.json"),
-        "--write-seeds",
-        str(root / "seeds" / "ghidra_funcs.txt"),
-        "--out-dir",
-        "disc",
-        "--disc-rel",
-        "disc/" + disc.name,
-        "--players",
-        str(players),
-        "--display-name",
-        name,
-    ]
-    if options.dry_run:
-        return ApplyResult(
-            "probe_disc_refresh",
-            True,
-            "dry-run: " + " ".join(cmd),
-            ["game.toml", "catalog_identity.json", "seeds/ghidra_funcs.txt"],
-        )
+    game_toml = root / "game.toml"
+    seeds = root / "seeds" / "ghidra_funcs.txt"
+    files = ["game.toml", "catalog_identity.json", "seeds/ghidra_funcs.txt"]
+    with tempfile.TemporaryDirectory(prefix="probe_refresh_") as tmp:
+        tmp_toml = Path(tmp) / "game.toml"
+        tmp_seeds = Path(tmp) / "ghidra_funcs.txt"
+        cmd = [
+            sys.executable,
+            str(probe),
+            str(disc),
+            "--write-game-toml",
+            str(tmp_toml),
+            "--write-catalog",
+            str(root / "catalog_identity.json"),
+            "--write-seeds",
+            str(tmp_seeds),
+            "--out-dir",
+            "disc",
+            "--disc-rel",
+            "disc/" + disc.name,
+            "--players",
+            str(players),
+            "--display-name",
+            name,
+        ]
+        if options.dry_run:
+            return ApplyResult(
+                "probe_disc_refresh",
+                True,
+                "dry-run: " + " ".join(cmd) + " (disc identity merged into any "
+                "existing game.toml / seeds; nothing else replaced)",
+                files,
+            )
 
-    (root / "seeds").mkdir(parents=True, exist_ok=True)
-    ok, out = _run(cmd, root, dry_run=False)
-    if not ok:
-        return ApplyResult("probe_disc_refresh", False, out, [])
-    return ApplyResult(
-        "probe_disc_refresh",
-        True,
-        out or "probe_disc completed",
-        ["game.toml", "catalog_identity.json", "seeds/ghidra_funcs.txt"],
-    )
+        ok, out = _run(cmd, root, dry_run=False)
+        if not ok:
+            return ApplyResult("probe_disc_refresh", False, out, [])
+        notes = [out or "probe_disc completed"]
+        probed_toml = tmp_toml.read_text(encoding="utf-8")
+        if game_toml.is_file():
+            _write(game_toml, merge_probe_game_toml(
+                game_toml.read_text(encoding="utf-8"), probed_toml), False)
+            notes.append("merged disc identity into existing game.toml")
+        else:
+            _write(game_toml, probed_toml, False)
+        probed_seeds = tmp_seeds.read_text(encoding="utf-8")
+        if seeds.is_file():
+            text, added = merge_seed_files(seeds.read_text(encoding="utf-8"), probed_seeds)
+            _write(seeds, text, False)
+            notes.append(f"kept existing seeds, added {added}")
+        else:
+            _write(seeds, probed_seeds, False)
+    return ApplyResult("probe_disc_refresh", True, "; ".join(notes), files)
 
 
 def _record_pins_via_git(root: Path, dst: Path, options: MigrateOptions) -> ApplyResult:

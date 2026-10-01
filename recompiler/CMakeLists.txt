@@ -964,6 +964,7 @@ if(BUILD_TESTING)
                 fp_identity
                 gpu_frame
                 menu_scan
+                migrate_probe_refresh
                 mips_tagged_relocations
                 overlay_widescreen_callbacks
                 pad_delivery
