@@ -2425,12 +2425,20 @@ endfunction()
 #     ENABLE_SETUP_WIZARD
 #     PRELOADED_MODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded"
 #     EXCLUDE_BUILTIN_MODS psx.presentation.bezel   # optional; builtins not shipped
+#     PGXP                     # optional; the runtime is the PGXP hook flavor
 #   )
 #
 # Remaining args are forwarded to psxrecomp_add_runtime_target.
 # ---------------------------------------------------------------------------
 function(psxrecomp_add_game_runtime target)
-    set(options ENABLE_NETPLAY_IF_PRESENT ENABLE_SETUP_WIZARD)
+    # PGXP: build the title's ONE runtime as the PGXP hook flavor (see the PGXP
+    # option of psxrecomp_add_runtime_target): -DPSX_PGXP=1, overlay flavor 2,
+    # no _pgxp suffix and no clone beside it. The generated C already carries
+    # the PGXP_*() hook sites, so committed generated/ does not change; only
+    # the compile define does. Parsed here rather than left to the unparsed
+    # tail so it cannot be swallowed by a multi-value argument written before
+    # it (CODEGEN_SETUP_SOURCES would take it as a source file).
+    set(options ENABLE_NETPLAY_IF_PRESENT ENABLE_SETUP_WIZARD PGXP)
     set(oneValueArgs
         GEN_MARKER
         GEN_FULL_FALLBACK
@@ -2623,6 +2631,9 @@ function(psxrecomp_add_game_runtime target)
     endif()
 
     set(_psxg_forwarded_args ${PSXG_UNPARSED_ARGUMENTS})
+    if(PSXG_PGXP)
+        list(APPEND _psxg_forwarded_args PGXP)
+    endif()
     if(NOT "${PSXG_PRELOADED_MODS_DIR}" STREQUAL "")
         list(APPEND _psxg_forwarded_args
             PRELOADED_MODS_DIR "${PSXG_PRELOADED_MODS_DIR}")

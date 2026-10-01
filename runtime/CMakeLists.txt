@@ -1049,6 +1049,13 @@ if(BUILD_TESTING)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_catalog_layout.py
                          --cmake ${CMAKE_COMMAND})
+        # psxrecomp_add_game_runtime(... PGXP): the real function body under
+        # cmake -P, forwarding the hook-flavor option for the title's one
+        # runtime (docs/ENHANCEMENTS.md G1.11).
+        add_test(NAME game_runtime_pgxp_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_game_runtime_pgxp.py
+                         --cmake ${CMAKE_COMMAND})
         # tools/mod_channel_filter.py strips developer features from a staged
         # catalog; every entry that served one ([[requirement]] included) must
         # leave with it.
