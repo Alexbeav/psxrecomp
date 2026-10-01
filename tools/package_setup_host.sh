@@ -969,6 +969,41 @@ warn_bundled_notices() {
 }
 warn_bundled_notices
 
+# The staged setup program must start. A setup program that cannot read its own
+# config prints one line to stderr and exits before any window: a double-click
+# shows nothing. The Resident Evil 2 set package shipped like that, because no
+# step had ever started the program without arguments (PS1B-365). This starts
+# it in the stage with SDL's dummy drivers and stops it when it reaches its
+# launcher, so no window opens and nothing is written into the stage. A stop,
+# not a warning. A package built for another system cannot be started here:
+# that is said, and the package is made.
+plain_start_gate() {
+  local python="" host=""
+  for candidate in python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then python="${candidate}"; break; fi
+  done
+  if [[ -z "${python}" ]]; then
+    echo "error: no python3 on PATH; the staged setup program could not be started" >&2
+    exit 1
+  fi
+  for candidate in "${STAGE}/${EXE_BASENAME}" "${STAGE}/${EXE_NAME}.exe" "${STAGE}/${EXE_NAME}"; do
+    if [[ -f "${candidate}" ]]; then host="${candidate}"; break; fi
+  done
+  if [[ -z "${host}" ]]; then
+    echo "error: the staged setup program '${EXE_NAME}' is not in ${STAGE}" >&2
+    exit 1
+  fi
+  local rc=0
+  "${python}" "${SCRIPT_DIR}/setup_host_plain_start.py" --exe "${host}" --root "${STAGE}" >&2 || rc=$?
+  if [[ "${rc}" -eq 3 ]]; then
+    echo "warning: the staged setup program cannot run on this build host; its plain start was NOT checked" >&2
+  elif [[ "${rc}" -ne 0 ]]; then
+    echo "error: the staged setup program does not reach its launcher on a plain start; no package was made" >&2
+    exit 1
+  fi
+}
+plain_start_gate
+
 find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {} +
 
 # zip gets a path relative to the stage, never ${DIST}: the stage is

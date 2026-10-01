@@ -1066,6 +1066,13 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_program_set.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The check the packager runs on a staged setup program: start it as a
+        # double-click does and require that it reaches its launcher (PS1B-365).
+        add_test(
+            NAME setup_host_plain_start
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_setup_host_plain_start.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME setup_package_payload_filter
             COMMAND ${Python3_EXECUTABLE}
