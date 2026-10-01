@@ -27,6 +27,12 @@ extern "C" {
 void input_route_session_set_product(const char *disc_serial,
                                      const char *disc_path,
                                      const char *bios_path);
+/* The disc in the drive changed under the running product (an in-game disc
+ * change, or a save state that mounted its own disc): the identity names
+ * this disc from here on. The BIOS stays. Cached digests of the previous
+ * disc are dropped. */
+void input_route_session_set_disc(const char *disc_serial,
+                                  const char *disc_path);
 
 /* Prestart admission of PSX_INPUT_ROUTE_FILE. Parses the whole file and arms
  * markers and the declared P1 device. Returns 0 and prints the reason when
