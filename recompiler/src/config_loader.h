@@ -864,6 +864,11 @@ struct GameConfig {
     // the final ordering-table layer. Repeated glyph/icon rows share an anchor
     // so centred text and edge counters cannot split at thirds boundaries.
     bool                  ws_auto_ui_squash = false;
+    // auto_ui_anchor = "in_place": squash each grouped UI run about its own
+    // centre instead of pinning it to the nearest screen edge/centre third.
+    // For HUD widgets that combine flat quads with GTE-projected parts the
+    // correction cannot move (Spider-Man's compass ring and 3D arrow).
+    bool                  ws_auto_ui_in_place = false;
 
     // [data_shards] funcs: functions that get the memoized pure-function
     // replay entry/return hooks (psx_datashard_enter/psx_datashard_ret).

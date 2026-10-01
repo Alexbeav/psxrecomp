@@ -417,6 +417,23 @@ if(BUILD_TESTING)
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
 
+    # auto_ui_squash corrects untextured HUD fills with their textured frames.
+    add_executable(ws_auto_ui_untextured_exec_test
+        tests/test_ws_auto_ui_untextured_exec.c
+        src/ws_ui_group.c
+        src/psx_video_timing.c)
+    target_include_directories(ws_auto_ui_untextured_exec_test PRIVATE
+        include
+        src)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ws_auto_ui_untextured_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(ws_auto_ui_untextured_exec_test PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    add_test(NAME ws_auto_ui_untextured_exec_test
+             COMMAND ws_auto_ui_untextured_exec_test)
+
     add_executable(ws_view_anchor_test tests/test_ws_view_anchor.c)
     add_executable(ws_view_anchor_gpu_test tests/test_ws_view_anchor_gpu.c
         src/psx_video_timing.c)
