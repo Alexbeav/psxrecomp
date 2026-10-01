@@ -34,12 +34,52 @@ if(BUILD_TESTING)
     add_executable(irq_register_image_test tests/test_irq_register_image.c)
     target_include_directories(irq_register_image_test PRIVATE include)
     add_test(NAME irq_register_image_test COMMAND irq_register_image_test)
+    # PS1B-289: which BIOS a netplay match boots, and its wire helpers.
+    add_executable(netplay_bios_settle_test
+        tests/test_netplay_bios_settle.c
+        src/netplay_bios_settle.c)
+    target_include_directories(netplay_bios_settle_test PRIVATE include)
+    add_test(NAME netplay_bios_settle_test COMMAND netplay_bios_settle_test)
+    # PS1B-290: why a match ended, and when a boot-digest mismatch is final.
+    add_executable(netplay_exit_reason_test
+        tests/test_netplay_exit_reason.c
+        src/netplay_exit_reason.c)
+    target_include_directories(netplay_exit_reason_test PRIVATE include)
+    add_test(NAME netplay_exit_reason_test COMMAND netplay_exit_reason_test)
+    # PS1B-295: a LAN / Direct IP host refuses a guest on another build.
+    add_executable(netplay_lan_version_test
+        tests/test_netplay_lan_version.c
+        src/netplay_lan_version.c)
+    target_include_directories(netplay_lan_version_test PRIVATE include)
+    add_test(NAME netplay_lan_version_test COMMAND netplay_lan_version_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
     add_executable(mod_texture_banks_test tests/test_mod_texture_banks.c src/mod_texture_banks.c)
     target_include_directories(mod_texture_banks_test PRIVATE include)
     add_test(NAME mod_texture_banks_test COMMAND mod_texture_banks_test)
+    # PS1B-286: libjuice resolves from third_party/ with the network sealed,
+    # and a recomp-net pinning another libjuice stops the configure.
+    foreach(_psx_juice_case same other)
+        add_test(NAME netplay_libjuice_offline_${_psx_juice_case}
+            COMMAND ${CMAKE_COMMAND}
+                -S "${CMAKE_CURRENT_SOURCE_DIR}/tests/netplay_libjuice_offline"
+                -B "${CMAKE_CURRENT_BINARY_DIR}/netplay_libjuice_offline_${_psx_juice_case}"
+                -G "${CMAKE_GENERATOR}"
+                "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+                -DPSX_DEPS_OFFLINE=ON
+                "-DFAKE_RECOMP_NET=${CMAKE_CURRENT_SOURCE_DIR}/tests/netplay_libjuice_offline/recomp-net-${_psx_juice_case}")
+        set_tests_properties(netplay_libjuice_offline_${_psx_juice_case} PROPERTIES
+            ENVIRONMENT "HTTP_PROXY=http://127.0.0.1:9;HTTPS_PROXY=http://127.0.0.1:9;ALL_PROXY=http://127.0.0.1:9;NO_PROXY=")
+    endforeach()
+    set_tests_properties(netplay_libjuice_offline_other PROPERTIES
+        PASS_REGULAR_EXPRESSION "recomp-net pins libjuice SHA256")
+    # PS1B-287 / PS1B-295: a snapshot with no .git still knows its framework
+    # commit, and the lobby version carries it.
+    add_test(NAME framework_identity_test
+        COMMAND ${CMAKE_COMMAND}
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/framework_identity_test"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/framework_identity/check.cmake")
     if(NOT MSVC)
         add_executable(ws_world_scene_test tests/test_ws_world_scene.c)
         target_include_directories(ws_world_scene_test PRIVATE include src)
@@ -1055,7 +1095,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             # is needed and none can drift from what the runtime links.
             target_sources(lobby_chat_ring_test PRIVATE
                 "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_ws.c"
-                "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_sha1.c")
+                "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_sha1.c"
+                "${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c")
             target_link_libraries(lobby_chat_ring_test PRIVATE recomp_net)
             add_test(NAME lobby_chat_ring_test COMMAND lobby_chat_ring_test)
         endif()

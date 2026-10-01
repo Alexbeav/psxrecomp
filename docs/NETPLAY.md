@@ -204,14 +204,27 @@ device.
 
 Rollback and delay-sync both carry multitap pad bytes.
 
-**BIOS settle:** each peer advertises a BIOS offer (can run OpenBIOS /
-SCPH-1001, and whether OpenBIOS is selected) — online on ready, LAN on JOIN.
-At Start the host freezes one session BIOS (`openbios` or `scph1001`) via
-`match_caps.session_bios` (online) or the `MOTK1 START` line (LAN). The session
-uses OpenBIOS unless every seated peer can run SCPH-1001 and nobody selected
-OpenBIOS. Peers that cannot apply a settled SCPH-1001 abort instead of falling
+**BIOS settle:** each peer advertises a BIOS offer (can run OpenBIOS, has a
+retail dump and that dump's CRC-32, and whether OpenBIOS is selected) — online
+on ready, LAN on JOIN. At Start the host freezes one session BIOS (`openbios`,
+or `scph1001` = retail with the image's CRC) via `match_caps.session_bios` /
+`session_bios_crc` (online) or the `MOTK1 START` lines (LAN). Retail is used
+only when every seated peer has the same retail image; otherwise OpenBIOS if
+everyone links it; otherwise the host refuses to start and says which images
+differ. Peers that cannot apply the settled BIOS abort instead of falling
 back. That choice boots the match only — it does not change each peer’s saved
 BIOS preference. See `docs/BIOS_SELECTION.md` (Netplay lobby settle).
+
+**Why a match ended:** a match that ends early returns every peer to the lobby
+(`netplay_soft_exit`), and the launcher's status line says why, from
+`runtime/src/netplay_exit_reason.c`: the other player left, the shared save
+state failed or timed out, the link timed out, the games stopped running in
+step, or the consoles started differently. The last one is the rollback boot
+digest: when both peers' tick-0 digests are known and differ, and the same pair
+holds for 3 s (`NETPLAY_BOOT_MISMATCH_GRACE_MS`), the match ends at once instead
+of waiting out the 20 s admit-stall watchdog. A peer that receives the other
+side's BYE while it sees the same mismatch reports the mismatch, not a
+disconnect. Window close and Escape end the match with no message.
 
 ---
 
@@ -247,8 +260,25 @@ Generate & rebuild / prepare flows should point at the **`.cue`**, not a lone
 - **Lobby UI** (recomp-ui): host/join, room settings, rollback toggles, FORCE
   TURN, player names — only when `PSX_NETPLAY` is on and the title advertises
   netplay.
-- **VERSION / lobby match pin:** peers should run the same release pin so
-  generated code and protocol stay compatible.
+- **VERSION / lobby match pin:** peers must run the same emulation code. The
+  online lobby matches rooms on `game_version`, and a join with another value
+  is refused (`version_mismatch`). A Release build sends
+  `<VERSION>-<first 8 hex of the psxrecomp commit>`, for example
+  `0.1.2-6ef86cae`, so two builds of one kit on different framework commits do
+  not share a room. A non-release build sends `dev` and lists every room of
+  its title. `-DPSX_NET_BUILD_KEY=<text>` replaces the commit part and `=off`
+  drops it. `VERSION` and `psx_game_version.txt` do not change.
+  The commit comes from, in order: `-DPSX_FRAMEWORK_PIN=<commit>`,
+  `runtime/FRAMEWORK_PIN` (written by `git archive` and by
+  `tools/stage_framework_tree.sh`, so a source package built on the player's
+  machine keeps it), then `git rev-parse HEAD`
+  (`runtime/framework_identity.cmake`). The same value is the replay and route
+  build identity. A LAN / Direct IP room has no server, so its host makes
+  the same check: the guest's JOIN ends with its lobby version, and a
+  different one is refused with `MOTK1 ERR version_mismatch`
+  (`runtime/src/netplay_lan_version.c`). Both players then see the reason
+  on the launcher's status line. A guest from before the check sends no
+  version; that counts as `dev`, so only a `dev` host still takes it.
 - **Mods:** disabled for all netplay sessions (lobby / LAN / direct / rematch).
   Launcher `commit_netplay` and the runtime clear the in-session plan without
   touching the user's offline mod selection. Synced mod plans are deferred.

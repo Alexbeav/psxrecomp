@@ -513,8 +513,11 @@ assert_no_private_payload() {
     -iname '*.cue*' -o -iname '*.iso*' -o -iname '*.chd*' -o \
     -iname '*.ccd*' -o -iname '*.sub*' -o -iname '*.img*' -o \
     -iname '*.mdf*' -o -iname '*.mds*' -o -iname '*.pbp*' -o \
-    -iname '*.mcd*' -o -iname '*.mcr*' \
+    -iname '*.mcd*' -o -iname '*.mcr*' -o \
+    -iname 'netplay_secret*' -o -iname 'netplay_lan_lobby.txt' \
   \) -print -quit)"
+  # netplay_secret is one player's lobby identity; the runtime writes it and
+  # the LAN room file beside the exe once netplay is used (PS1B-278).
   if [[ -n "${forbidden_payload}" ]]; then
     echo "error: forbidden owned-input or player-state payload: ${forbidden_payload}" >&2
     exit 1

@@ -15,6 +15,9 @@ def main() -> None:
     text = PACKAGER.read_text(encoding="utf-8")
     for suffix in ("*.cue*", "*.iso*", "*.chd*", "*.mcd*", "*.mcr*"):
         assert suffix in text
+    # A player's netplay identity and LAN room file never ship (PS1B-278).
+    for player_state in ("-iname 'netplay_secret*'", "-iname 'netplay_lan_lobby.txt'"):
+        assert player_state in text
     assert "-iname '*.bin*'" in text
     assert "! -iname 'openbios.bin' -delete" in text
     assert "forbidden owned-input or player-state payload" in text
@@ -47,6 +50,11 @@ def main() -> None:
     for token in ("Users", "Projects", "AgentData", "OneDrive", "Share", "/mnt/"):
         assert token in gate_text
     assert "*.sh text eol=lf" in ATTRIBUTES.read_text(encoding="utf-8")
+    # The staged tree has no .git; the stager and git archive write the
+    # framework commit into runtime/FRAMEWORK_PIN (PS1B-287).
+    assert "runtime/FRAMEWORK_PIN export-subst" in ATTRIBUTES.read_text(encoding="utf-8")
+    assert 'pin_file="${DEST}/runtime/FRAMEWORK_PIN"' in stager_text
+    assert (ROOT / "runtime" / "FRAMEWORK_PIN").is_file()
     assert "--omit-openbios) OMIT_OPENBIOS=1" in text
     assert '"${STAGE}/psxrecomp/bios/openbios.bin"' in text
     assert '"${STAGE}/psxrecomp/bios/OpenBIOS.toml"' in text
