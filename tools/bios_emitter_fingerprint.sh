@@ -39,16 +39,19 @@ FILES=(
     runtime/include/psx_instr_cost.h
 )
 
-# Per-profile inputs: the profile itself, its seeds file, its ROM.
+# Per-profile inputs: the profile itself and its seeds file. The ROM image is
+# deliberately NOT hashed: the profile pins its SHA-256 ([program.image]) and
+# psxrecomp-bios refuses any other image, so the profile already stands for
+# the ROM -- and the generated C for a retail stem is committed and built by
+# CI, which has no dump. Hashing the image here made every CI configure read
+# "stale" for a tree that was byte-identical to the developer's.
 if [ -f "$PROFILE" ]; then
     FILES+=("$PROFILE")
     toml_value() {
         sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$PROFILE" | head -1
     }
     SEEDS="$(toml_value seeds)"
-    ROM="$(toml_value rom)"
     [ -n "$SEEDS" ] && FILES+=("$SEEDS")
-    [ -n "$ROM" ]   && FILES+=("$ROM")
 else
     # Legacy fallback (pre-profile invocations): the historical seeds path.
     FILES+=(recompiler/seeds/phase2_ghidra_seeds.json)

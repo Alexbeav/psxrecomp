@@ -11,19 +11,27 @@ image itself and its MIT notice are staged in `bios/` beside the executable;
 the retail image is never shipped and comes from the player. Which backend runs
 is decided when the game launches, not when it is built.
 
-**Bundled releases link OpenBIOS only.** The retail backend's C is a
-translation of the Sony ROM's code, so it is never committed or built in CI
-(`tools/ci/check_generated.sh` refuses it; see `docs/ci/BUNDLED_RELEASES.md`).
-Requiring the player's dump at runtime would not change what the zip
-distributes.
+**Bundled releases link both backends.** Decision 2026-09-30: the recompiled
+BIOS carries the same risk as the recompiled game, which titles already
+commit, so the framework commits `generated/OpenBIOS_*.c` and
+`generated/SCPH1001_*.c` (with their `.emitter.sha` stamps) and release CI
+links both. The retail image itself is still never shipped: the runtime needs
+its data at run time and only accepts the exact image the backend was built
+from (size and CRC), so the player supplies their own dump as before. CI
+configures with `PSXRECOMP_BIOS_STALE_FATAL=ON`, so a committed backend whose
+stamp predates the emitter fails the release instead of linking (the
+fingerprint excludes the ROM for this reason; the profile's SHA-256 pin stands
+for it). Regenerate with `tools/regen_bios.sh --config bios/<stem>.toml` and
+commit the output whenever the emitter, seeds or profile change.
 
-**Bring your own BIOS: the backend is built on the player's machine.** The
-release already ships `overlay_toolchain/` and compiles game code from the
-player's own disc at runtime; the same mechanism builds a retail backend from
-the player's own dump (`runtime/include/psx_bios_module.h`,
-`runtime/src/psx_bios_module.c`, `tools/bios_module_build.py`). When the
-player selects a dump whose size and CRC match a shipped profile
-(`psx_bios_known_images.h`: SCPH-1001, SCPH-5552), the runtime:
+**Other known images: the backend is built on the player's machine.** For a
+retail image a build does not link (today SCPH-5552), the release ships
+`overlay_toolchain/` and compiles game code from the player's own disc at
+runtime; the same mechanism builds a BIOS backend from the player's own dump
+(`runtime/include/psx_bios_module.h`, `runtime/src/psx_bios_module.c`,
+`tools/bios_module_build.py`). When the player selects a dump whose size and
+CRC match a shipped profile (`psx_bios_known_images.h`) but no linked backend,
+the runtime:
 
 1. looks for `<exe>/cache/bios/<os-arch>/bm<abi>_<codegen hash>_f<flavor>/<STEM>_<crc>.{so,dll}`
    and loads it if present (ABI tag and codegen hash gated, like an overlay shard);
@@ -45,12 +53,12 @@ writing its CPS-marker constructor in a module build. A build takes about a
 minute with gcc for the 32 MB SCPH-1001 output, seconds with tcc; it happens
 once per dump and per framework codegen hash.
 
-What the launcher shows in a bundled build: the BIOS row is present when the
-toolchain is beside the executable (it is, in every release zip). A matching
-dump verifies as "ready" or "compiled on first launch"; an image no profile
-covers is refused with the accepted list. Without the toolchain the row is
-hidden and a stray `--bios` is ignored, and no build ever offers
-Generate & rebuild for a BIOS.
+What the launcher shows in a bundled build: the BIOS row is present (a
+linked retail backend makes a player choice meaningful). A SCPH-1001 dump
+verifies as linked and hot-swaps; a dump of another known image verifies as
+"prepare once" and the wizard's Prepare BIOS job builds its module with a
+progress meter, then resumes; an image no profile covers is refused with the
+accepted list. No build ever offers Generate & rebuild for a BIOS.
 
 ## The rule
 

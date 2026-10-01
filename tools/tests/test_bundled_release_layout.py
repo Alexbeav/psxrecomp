@@ -69,6 +69,8 @@ def _fixture_title(root: Path, *, ignore_generated=False, track=True,
     (gen / f"{BOOT}_dispatch.c").write_text("/* dispatch */\n", encoding="utf-8")
     (gen / f"{BOOT}_full_00.c").write_text("/* full */\n", encoding="utf-8")
     if retail:
+        # A stray SCPH stem in the TITLE's generated/ is harmless to the gate
+        # now (BIOS C is the framework's business, see test_fails_on_retail_bios_c).
         (gen / "SCPH1001_dispatch.c").write_text("/* retail */\n", encoding="utf-8")
         (gen / "SCPH1001_full.c").write_text("/* retail */\n", encoding="utf-8")
     (root / ".gitignore").write_text(
@@ -100,8 +102,10 @@ class TemplateContract(unittest.TestCase):
         self.assertLess(self.text.index("check_generated.sh"),
                         self.text.index("Configure & build the game"))
 
-    def test_emits_openbios_in_ci(self):
-        self.assertIn("tools/ci/generate_openbios.sh", self.text)
+    def test_links_committed_bios_backends(self):
+        self.assertNotIn("generate_openbios", self.text, "BIOS C is committed, not emitted in CI")
+        self.assertIn("-DPSXRECOMP_BIOS_STALE_FATAL=ON", self.text)
+        self.assertIn("BIOS backends linked: .*SCPH1001", self.text)
 
     def test_configures_a_full_build(self):
         self.assertIn("-DPSXRECOMP_REQUIRE_GAME_C=ON", self.text)
@@ -130,7 +134,6 @@ class TemplateContract(unittest.TestCase):
         self.assertEqual(set(doc["jobs"]), {"prepare", "build", "release"})
         names = [s.get("name", "") for s in doc["jobs"]["build"]["steps"]]
         self.assertIn("Verify committed game C", names)
-        self.assertIn("Generate OpenBIOS backend C", names)
         self.assertIn("Package game zip", names)
 
 
@@ -185,7 +188,7 @@ class CheckGeneratedScript(unittest.TestCase):
             root = _fixture_title(Path(td) / "t")
             r = self.run_check(root)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertIn("generated game C ok", r.stdout)
+            self.assertIn("generated C ok", r.stdout)
 
     def test_fails_when_marker_is_missing(self):
         with tempfile.TemporaryDirectory() as td:
@@ -210,11 +213,21 @@ class CheckGeneratedScript(unittest.TestCase):
             self.assertIn("NOT tracked", r.stderr)
 
     def test_fails_on_retail_bios_c(self):
+        # Retail BIOS C is committed by the FRAMEWORK and linked (decision
+        # 2026-09-30); a copy in the title's generated/ is not a failure.
         with tempfile.TemporaryDirectory() as td:
             root = _fixture_title(Path(td) / "t", retail=True)
             r = self.run_check(root)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_fails_when_framework_bios_backend_is_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _fixture_title(Path(td) / "t")
+            (root / "psxrecomp" / "generated").mkdir(parents=True)
+            (root / "psxrecomp" / "generated" / "OpenBIOS_full.c").write_text("x", encoding="utf-8")
+            r = self.run_check(root)
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("retail-BIOS-derived", r.stderr)
+            self.assertRegex(r.stderr, r"psxrecomp/generated/OpenBIOS_(dispatch\.c is missing|full\.c exists but is not tracked)")
 
 
 class ProjectStudioContract(unittest.TestCase):
@@ -284,8 +297,7 @@ class PackagerScriptContract(unittest.TestCase):
         self.assertNotIn("--project-dir", text)
 
     def test_scripts_are_executable_and_parse(self):
-        for rel in ("tools/package_game_release.sh", "tools/ci/check_generated.sh",
-                    "tools/ci/generate_openbios.sh"):
+        for rel in ("tools/package_game_release.sh", "tools/ci/check_generated.sh"):
             p = FW / rel
             self.assertTrue(os.access(p, os.X_OK), f"{rel} not executable")
             r = subprocess.run([BASH, "-n", p.as_posix()], capture_output=True, text=True)

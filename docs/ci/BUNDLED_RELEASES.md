@@ -18,9 +18,8 @@ on the player's machine.
 |------|--------|
 | `generated/<boot>_dispatch.c`, `generated/<boot>_full_*.c`, `generated/<boot>_decls.h`, `.ranges` | **Committed.** `psxrecomp_cli.py generate` writes them; commit after every regenerate. Shards are ~1.4 MB each, far under GitHub's blob limit. |
 | `generated/overlays_static*.c`, `AOT_STATIC_AUDIT.json` | **Committed** when the AOT profile declares `static_output` (`docs/AOT_SHARDING.md`). This is the overlay coverage a release links. |
-| `psxrecomp/generated/` (BIOS backends) | Not committable: it is inside the framework submodule. CI regenerates OpenBIOS from the bundled image. |
-| `generated/SCPH*`, `psxrecomp/generated/SCPH*` | **Never.** Retail-BIOS-derived C. `tools/ci/check_generated.sh` fails the release if it is present. |
-| Disc images, BIOS dumps | Never. |
+| `psxrecomp/generated/{OpenBIOS,SCPH1001}_{full,dispatch}.c` + `.emitter.sha` | **Committed in the framework** (decision 2026-09-30: the recompiled BIOS carries the same risk as the recompiled game). A title just pins a psxrecomp that carries them. CI's `PSXRECOMP_BIOS_STALE_FATAL=ON` refuses a stamp that predates the emitter. |
+| Disc images, BIOS dumps | Never. The zip carries only the OpenBIOS image; a retail backend still needs the player's own dump at run time. |
 
 `.gitignore` must not carry `/generated/`; the scaffold (`gitignore.in`,
 `docs/ci/templates/game.gitignore`) no longer writes it, and Project Studio's
@@ -35,20 +34,20 @@ Template: [`templates/game-release.yml`](templates/game-release.yml).
 2. `check_generated.sh` — `generated/<boot>_dispatch.c` and its shards exist
    **and are tracked**; no retail BIOS C; no tracked BIOS dump.
 3. Build `psxrecomp-game` / `psxrecomp-bios` (or restore them from the Actions
-   cache when the `psxrecomp` submodule SHA matches a prior run).
-4. `generate_openbios.sh` — `psxrecomp-bios --config bios/OpenBIOS.toml` into
-   `psxrecomp/generated/`, plus the emitter fingerprint runtime.cmake checks.
-5. Configure with `-DPSXRECOMP_REQUIRE_GAME_C=ON` (a checkout without game C
-   fails configure instead of quietly producing a setup host), assert the
+   cache when the `psxrecomp` submodule SHA matches a prior run); they ship
+   inside `overlay_toolchain/`.
+4. Configure with `-DPSXRECOMP_REQUIRE_GAME_C=ON -DPSXRECOMP_BIOS_STALE_FATAL=ON`
+   (a checkout without game C fails configure instead of quietly producing a
+   setup host; a BIOS stamp older than the emitter fails it too), assert the
    configure log says `linking generated game C (full runtime)` and
-   `BIOS backends linked: OpenBIOS`, build `psx-runtime`.
-6. `scripts/package_release.sh` → `tools/package_game_release.sh` — stage the
+   `BIOS backends linked: OpenBIOS;SCPH1001`, build `psx-runtime`.
+5. `scripts/package_release.sh` → `tools/package_game_release.sh` — stage the
    executable, `assets/`, `bios/openbios.bin` + notice, `game.toml`,
    `game_options.toml`, the mod catalog (verified against the manifest the
    build published, developer-channel packages pruned), `overlay_toolchain/`,
    third-party notices; refuse if anything kit-shaped is in the stage; sign on
    Windows; zip.
-7. Verify the zip: executable + OpenBIOS + catalog present; no `psxrecomp/`,
+6. Verify the zip: executable + OpenBIOS + catalog present; no `psxrecomp/`,
    `recomp-ui/`, CLI, emitters at the root, sources, generated C, dumps,
    per-machine mod state.
 
@@ -91,7 +90,7 @@ link-only rebuild of the tens of MB of generated C.
 |------|---------|
 | Install | Extract the zip. Run the game. Pick the disc on first run. |
 | Update | Extract the new zip over the old one (raw zip extract: this is a prebuilt Play binary). Saves and settings live beside the exe and are preserved. |
-| Retail BIOS | Not shipped. A player who owns a dump picks it in the launcher; the release builds that backend from the dump on their machine, once (`docs/BIOS_SELECTION.md`). |
+| Retail BIOS | The SCPH-1001 backend is compiled in; a player who owns that dump picks it in the launcher and it hot-swaps (the image is validated, never shipped). Another known image is built into a backend on their machine, once (`docs/BIOS_SELECTION.md`). |
 
 ## Title checklist (short)
 

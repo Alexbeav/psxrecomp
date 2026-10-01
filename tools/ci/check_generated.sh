@@ -14,12 +14,14 @@
 #   2. Those files are tracked by git. An untracked generated/ builds fine on
 #      the developer's machine and is absent from every CI checkout, which is
 #      the exact gap between "works for me" and a red release.
-#   3. No retail-BIOS-derived C is present anywhere it could be linked:
-#      generated/SCPH*_{dispatch,full}.c and psxrecomp/generated/SCPH*. Those
-#      are derivatives of a copyrighted Sony image and must not reach a public
-#      artifact. OpenBIOS is the only backend a release links, and CI emits it
-#      from the bundled MIT image (tools/ci/generate_openbios.sh).
-#   4. No BIOS dump is tracked (SCPH*.BIN / *.bin under bios/).
+#   3. The framework's BIOS backends are present and tracked in the submodule
+#      (psxrecomp/generated/{OpenBIOS,SCPH1001}_{full,dispatch}.c with their
+#      .emitter.sha stamps). Decision 2026-09-30: the recompiled BIOS is
+#      committed and linked like the recompiled game; the player still
+#      supplies the retail image at run time. runtime.cmake's fingerprint
+#      check (PSXRECOMP_BIOS_STALE_FATAL in CI) refuses a stale stamp.
+#   4. No BIOS dump is tracked (SCPH*.BIN / *.bin under bios/) in the title or
+#      the submodule.
 #
 # Usage: check_generated.sh [--root DIR]    (default: cwd)
 # Runs on bash 3.2+ (macOS runners).
@@ -101,31 +103,37 @@ if git -C "${ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fi
 fi
 
-# 3. No retail-BIOS-derived C anywhere it could link.
-retail=()
-for d in "${gen}" "${ROOT}/psxrecomp/generated"; do
-  [[ -d "${d}" ]] || continue
-  for f in "${d}"/SCPH*_dispatch.c "${d}"/SCPH*_full.c "${d}"/SCPH*_full_*.c; do
-    [[ -f "${f}" ]] && retail+=("${f#"${ROOT}"/}")
+# 3. The framework's committed BIOS backends.
+fw="${ROOT}/psxrecomp"
+if [[ -d "${fw}" ]]; then
+  for stem in OpenBIOS SCPH1001; do
+    for f in "generated/${stem}_full.c" "generated/${stem}_dispatch.c" "generated/${stem}.emitter.sha"; do
+      if [[ ! -f "${fw}/${f}" ]]; then
+        echo "error: psxrecomp/${f} is missing -- the framework commits its BIOS backends;" >&2
+        echo "  this submodule pin predates that, or the checkout is not --recurse-submodules." >&2
+        exit 1
+      fi
+      if git -C "${fw}" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+         ! git -C "${fw}" ls-files --error-unmatch -- "${f}" >/dev/null 2>&1; then
+        echo "error: psxrecomp/${f} exists but is not tracked in the framework submodule." >&2
+        exit 1
+      fi
+    done
   done
-done
-if [[ "${#retail[@]}" -gt 0 ]]; then
-  echo "error: retail-BIOS-derived C is present and would be linked into the release:" >&2
-  printf '  %s\n' "${retail[@]}" >&2
-  echo "  Only the OpenBIOS backend ships (CI emits it from the bundled MIT image)." >&2
-  echo "  Delete these from the checkout; they must never be committed." >&2
-  exit 1
 fi
 
-# 4. No BIOS dump tracked.
-if git -C "${ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  dumps="$(git -C "${ROOT}" ls-files -- 'bios/*' '*.BIN' 'SCPH*' 2>/dev/null \
-    | grep -Ei '\.(bin|rom)$' | grep -v -i 'openbios' || true)"
-  if [[ -n "${dumps}" ]]; then
-    echo "error: BIOS image(s) tracked in the repo:" >&2
-    printf '%s\n' "${dumps}" | sed 's/^/  /' >&2
-    exit 1
+# 4. No BIOS dump tracked, in the title or the submodule.
+for repo in "${ROOT}" "${fw}"; do
+  [[ -d "${repo}" ]] || continue
+  if git -C "${repo}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    dumps="$(git -C "${repo}" ls-files -- 'bios/*' '*.BIN' 'SCPH*' 2>/dev/null \
+      | grep -Ei '\.(bin|rom)$' | grep -v -i 'openbios' || true)"
+    if [[ -n "${dumps}" ]]; then
+      echo "error: BIOS image(s) tracked in ${repo#"${ROOT}"}:" >&2
+      printf '%s\n' "${dumps}" | sed 's/^/  /' >&2
+      exit 1
+    fi
   fi
-fi
+done
 
-echo "generated game C ok: generated/${boot}_dispatch.c + ${shards} full shard(s), tracked, no retail BIOS C"
+echo "generated C ok: generated/${boot}_dispatch.c + ${shards} full shard(s) tracked; framework BIOS backends present; no BIOS dump tracked"

@@ -758,35 +758,55 @@ list(APPEND PSXRECOMP_BIOS_GENERATED "${_psxrt_registry_c}")
 # the emitter (this caused a 4439-vs-4406 drift). regen_bios.sh records an emitter
 # fingerprint in generated/<stem>.emitter.sha; recompute it here (same profile
 # argument as regen_bios.sh passes) and WARN on a mismatch so the staleness is
-# impossible to miss. Non-fatal: a stale-but-consistent
-# BIOS still builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON.
+# impossible to miss. Non-fatal by default: a stale-but-consistent BIOS still
+# builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON. Release CI passes
+# -DPSXRECOMP_BIOS_STALE_FATAL=ON: the BIOS C is COMMITTED in generated/, so a
+# stamp that predates the emitter means a release would link C the current
+# emitter did not produce (the 2026-09-30 descriptor drift was exactly that,
+# caught only at compile). Every LINKED stem is checked, not just the primary.
+option(PSXRECOMP_BIOS_STALE_FATAL
+    "Fail configure when a linked BIOS stem's generated/ stamp predates the emitter"
+    OFF)
 if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
     find_program(_psxrt_bash NAMES bash)
-    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}.emitter.sha")
     if(_psxrt_bash AND EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh")
-        execute_process(
-            COMMAND "${_psxrt_bash}" "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh"
-                    "${PSXRECOMP_BIOS_PROFILE}"
-            WORKING_DIRECTORY "${PSXRECOMP_ROOT}"
-            OUTPUT_VARIABLE _psxrt_cur_fp OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE _psxrt_fp_rc ERROR_QUIET)
-        if(_psxrt_fp_rc EQUAL 0 AND _psxrt_cur_fp)
-            set(_psxrt_saved_fp "")
-            if(EXISTS "${_psxrt_stamp}")
-                file(READ "${_psxrt_stamp}" _psxrt_saved_fp)
-                string(STRIP "${_psxrt_saved_fp}" _psxrt_saved_fp)
+        foreach(_psxrt_chk_stem IN LISTS _psxrt_bios_linked)
+            set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${_psxrt_chk_stem}.emitter.sha")
+            set(_psxrt_chk_profile "${PSXRECOMP_ROOT}/bios/${_psxrt_chk_stem}.toml")
+            if(NOT EXISTS "${_psxrt_chk_profile}")
+                continue()
             endif()
-            if(NOT _psxrt_saved_fp STREQUAL _psxrt_cur_fp)
-                message(WARNING
-                    "BIOS generated/ is STALE vs the recompiler emitter "
-                    "(fingerprint mismatch).\n"
-                    "  Linking generated/${PSXRECOMP_BIOS_STEM}_*.c that may not "
-                    "match the current emitter source, seeds, ROM or profile.\n"
-                    "  Fix:  tools/regen_bios.sh --config <profile>   (rebuilds "
-                    "psxrecomp-bios + regenerates the BIOS)\n"
-                    "  (Suppress: -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON)")
+            execute_process(
+                COMMAND "${_psxrt_bash}" "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh"
+                        "${_psxrt_chk_profile}"
+                WORKING_DIRECTORY "${PSXRECOMP_ROOT}"
+                OUTPUT_VARIABLE _psxrt_cur_fp OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE _psxrt_fp_rc ERROR_QUIET)
+            if(_psxrt_fp_rc EQUAL 0 AND _psxrt_cur_fp)
+                set(_psxrt_saved_fp "")
+                if(EXISTS "${_psxrt_stamp}")
+                    file(READ "${_psxrt_stamp}" _psxrt_saved_fp)
+                    string(STRIP "${_psxrt_saved_fp}" _psxrt_saved_fp)
+                endif()
+                if(NOT _psxrt_saved_fp STREQUAL _psxrt_cur_fp)
+                    if(PSXRECOMP_BIOS_STALE_FATAL)
+                        set(_psxrt_stale_sev FATAL_ERROR)
+                    else()
+                        set(_psxrt_stale_sev WARNING)
+                    endif()
+                    message(${_psxrt_stale_sev}
+                        "BIOS generated/${_psxrt_chk_stem}_*.c is STALE vs the recompiler "
+                        "emitter (fingerprint mismatch).\n"
+                        "  stamp ${_psxrt_saved_fp}\n"
+                        "  now   ${_psxrt_cur_fp}\n"
+                        "  The committed C may not match the current emitter source, "
+                        "seeds or profile.\n"
+                        "  Fix:  tools/regen_bios.sh --config bios/${_psxrt_chk_stem}.toml "
+                        "and commit generated/${_psxrt_chk_stem}_*.c + .emitter.sha\n"
+                        "  (Suppress locally: -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON)")
+                endif()
             endif()
-        endif()
+        endforeach()
     endif()
 endif()
 

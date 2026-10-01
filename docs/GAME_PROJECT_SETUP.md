@@ -457,8 +457,7 @@ Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`
 | Tool                            | Role                                                     |
 | ------------------------------- | -------------------------------------------------------- |
 | `tools/ci/normalize_version.sh` | `vX.Y.Z` → `VERSION` / `TAG`                             |
-| `tools/ci/check_generated.sh`   | Committed game C present + tracked; no retail BIOS C     |
-| `tools/ci/generate_openbios.sh` | Emit the OpenBIOS backend in CI from the bundled image   |
+| `tools/ci/check_generated.sh`   | Committed game C + framework BIOS backends present       |
 | `tools/ci/record_pins.sh`       | Log submodule SHAs                                       |
 | `tools/ci/build_emitters.sh`    | Build `psxrecomp-game` + `psxrecomp-bios`                |
 | `tools/fetch_toolchain.sh`      | Windows emitter build on the CI machine (never shipped)  |
@@ -586,7 +585,8 @@ Use this before tagging a release.
 - [ ] `generated/<boot>_dispatch.c` + `_full_*.c` (+ `overlays_static*.c` when
   the AOT profile declares it) are committed and current for the pinned
   framework (`tools/ci/check_generated.sh` passes locally)
-- [ ] No `generated/SCPH*` anywhere (retail-BIOS-derived C never ships)
+- [ ] The pinned `psxrecomp` commits its BIOS backends (`psxrecomp/generated/
+  {OpenBIOS,SCPH1001}_*.c`) with stamps current for its emitter
 - [ ] Submodule gitlinks (`psxrecomp` / `recomp-ui` / nested `recomp-net`) are
   ```
   the SHAs you intend to ship (CI builds those; `record_pins.sh` only logs)
@@ -594,7 +594,7 @@ Use this before tagging a release.
 - [ ] Full build configures from the committed C: CI passes
   `-DPSXRECOMP_REQUIRE_GAME_C=ON -DPSX_SETUP_WIZARD=ON` and asserts the
   configure log says `linking generated game C (full runtime)` and
-  `BIOS backends linked: OpenBIOS`
+  `BIOS backends linked: OpenBIOS;SCPH1001`
 - [ ] `[runtime] overlay_cache = true` in `game.toml` (the packager refuses
   otherwise)
 - [ ] Thin `codegen_setup.c` + `psxrecomp_add_game_runtime` (codegen host is in

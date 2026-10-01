@@ -52,8 +52,7 @@ the ICD dynamically via SDL; CI only needs headers and the shader compiler.
 |--------|------|
 | `ci/normalize_version.sh` | Normalize / write `VERSION` + `TAG`; `--next` auto-bumps from latest tag |
 | `ci/check_boot_exe.sh` | The three copies of the boot-EXE name agree |
-| `ci/check_generated.sh` | Committed game C present + tracked; no retail BIOS C; no BIOS dump |
-| `ci/generate_openbios.sh` | Emit the OpenBIOS backend C in CI from the bundled MIT image |
+| `ci/check_generated.sh` | Committed game C present + tracked; framework BIOS backends present; no BIOS dump |
 | `ci/record_pins.sh` | Log `psxrecomp` / `recomp-ui` / `recomp-net` SHAs (CI + scaffold) |
 | `ci/verify_pins.sh` | Optional local check vs `framework_pins.txt` (not used by release CI) |
 | `ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
@@ -93,9 +92,10 @@ Keep only this in the game repo:
 - Zip prefix / display name / disc hint in that wrapper
 - Release notes / GitHub Release job naming
 
-Release CI configures with `-DPSXRECOMP_REQUIRE_GAME_C=ON` after
-`check_generated.sh` and `generate_openbios.sh`, and asserts from the configure
-log that the generated game C and the OpenBIOS backend were linked.
+Release CI configures with `-DPSXRECOMP_REQUIRE_GAME_C=ON
+-DPSXRECOMP_BIOS_STALE_FATAL=ON` after `check_generated.sh`, and asserts from
+the configure log that the generated game C and both committed BIOS backends
+(OpenBIOS, SCPH-1001) were linked.
 
 ## Windows code signing
 
