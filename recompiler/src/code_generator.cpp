@@ -226,7 +226,7 @@ std::string CodeGenerator::translate_lw(uint32_t instr) {
     int16_t offset = get_imm16(instr);
     std::string addr = (offset == 0) ? reg_name(rs)
                                      : fmt::format("{} + {}", reg_name(rs), offset);
-    uint32_t mask = 1u << rs;   /* GPR_DEP rs (load: dest rt armed via LDWhich) */
+    uint32_t mask = 1u << rs;   /* GPR_DEP rs (load: dest rt armed via ld_which_t) */
 
     if (config_.optimize_zero_reg && rt == 0) {
         /* load to $zero: no GPR write, but the data access + R3000A interlock still run */
@@ -453,7 +453,7 @@ std::string CodeGenerator::translate_lwl(uint32_t instr) {
 
     // LWL: Load Word Left - merges high bytes from the aligned word into rt.
     // psx_lwl runs the full R3000A load interlock on the aligned address (GPR_DEP rs,
-    // arm LDWhich=rt) and returns the merged value.
+    // arm ld_which_t=rt) and returns the merged value.
     std::string addr = (offset == 0) ? reg_name(rs)
                                      : fmt::format("{} + {}", reg_name(rs), (int32_t)offset);
     uint32_t mask = 1u << rs;
@@ -1636,7 +1636,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                     // LWC2 load timing: §1+DO_LDS via the block's psx_cyc_step(cpu,0)
                     // (op 0x32 is non-load), the GTE deadline stall via psx_gte_stall,
                     // then psx_cyc_lwc2_read does the ReadMemory timing (completion +1,
-                    // no LDWhich arm — the dest is a GTE register).
+                    // no ld_which_t arm — the dest is a GTE register).
                     std::string addr = (offset == 0)
                         ? reg_name(rs)
                         : fmt::format("{} + {}", reg_name(rs), offset);

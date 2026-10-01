@@ -899,7 +899,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
         const uint8_t rs = (d.raw >> 21) & 0x1F;
         const uint8_t rt = (d.raw >> 16) & 0x1F;
         const int32_t simm = static_cast<int32_t>(static_cast<int16_t>(d.raw & 0xFFFF));
-        const uint32_t mask = 1u << rs;   /* GPR_DEP rs; dest rt armed via LDWhich */
+        const uint32_t mask = 1u << rs;   /* GPR_DEP rs; dest rt armed via ld_which_t */
         r.supported = true;
         const std::string addr_expr = fmt::format(
             "(uint32_t)((int32_t)cpu->gpr[{}] + ({}))", static_cast<int>(rs), simm);
@@ -1430,7 +1430,7 @@ TranslateResult StrictTranslator::translate_impl(const PSXRecomp::DecodedInstruc
             "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_stall(cpu);\n#endif\n    ";
         // §1+DO_LDS charged by full_function_emitter's psx_cyc_step (op 0x32 is
         // non-load); the GTE deadline stall by psx_gte_stall; psx_cyc_lwc2_read does
-        // the ReadMemory timing (completion +1, no LDWhich arm — dest is a GTE reg).
+        // the ReadMemory timing (completion +1, no ld_which_t arm — dest is a GTE reg).
         std::string addr = offset == 0
             ? fmt::format("cpu->gpr[{}]", static_cast<int>(rs))
             : fmt::format("(uint32_t)((int32_t)cpu->gpr[{}] + ({}))", static_cast<int>(rs), static_cast<int>(offset));
