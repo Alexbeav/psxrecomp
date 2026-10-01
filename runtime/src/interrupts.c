@@ -975,6 +975,18 @@ static int same_guest_pc(uint32_t a, uint32_t b) {
     return (((a ^ b) & 0x1FFFFFFFu) == 0);
 }
 
+/* The kernel returns to EPC+4 when the interrupt hit a GTE command: hardware
+ * has already run the command, and returning to EPC would run it twice
+ * (PSX-SPX, "Interrupts vs GTE Commands"). The compiled block still runs it
+ * once from its leader, so this is the interrupted block continuing, not a
+ * handler that moved the return address. */
+static int rfe_steps_over_gte_command(uint32_t pc, uint32_t epc) {
+    uint32_t insn;
+    return same_guest_pc(pc, epc + 4u) &&
+           memory_peek_instruction_word(epc, &insn) &&
+           (insn & 0xFE000000u) == 0x4A000000u;
+}
+
 int psx_get_in_exception(void) { return in_exception; }
 
 /* Co-sim (COSIM_ORACLE.md): fold the GENUINE guest-timing interrupt statics into the
@@ -1010,11 +1022,17 @@ extern void psx_exception_longjmp(void);
  * are inside the SYNCHRONOUS exception-handler window (in_exception) AND the handler
  * is returning to a REAL EPC (not the legacy boundary-sentinel fallback), arm the
  * host escape so the trampoline unwinds back to psx_check_interrupts after the jr
- * commits cpu->pc = real EPC. On a fiber/thread resume (in_exception==0) this is a
- * no-op and the real EPC is dispatched directly — that is how a suspended thread
- * resumes at its own PC. */
+ * commits cpu->pc = real EPC. Outside that window (in_exception==0) the real EPC
+ * is dispatched directly — that is how a suspended thread resumes at its own PC —
+ * unless the return ran below nested host frames (rfe_outside_window_unwind). */
 void psx_rfe_mark_escape(void) {
-    if (!in_exception) return;
+    if (!in_exception) {
+        /* Outside the handler window (PS1B-324): the paired jump is checked
+         * once, in psx_rfe_escape_check, for host frames that the return must
+         * not leave behind. Exception entry clears the flag. */
+        g_rfe_escape_pending = 1;
+        return;
+    }
     /* Arm on EVERY handler-window RFE, including LEGACY_SENTINEL deliveries.
      * The old blanket decline assumed a sentinel delivery always resumes AT
      * the sentinel — but a handler that switches threads (the guest's own
@@ -1029,10 +1047,51 @@ void psx_rfe_mark_escape(void) {
         g_exc_escape_reason = PSX_EXC_ESCAPE_RFE_RETURN;
 }
 
+/* A ReturnFromException that ran outside the handler window, below nested
+ * host frames (PS1B-324).
+ *
+ * Wing Commander IV yields with `syscall`; its handler advances the saved EPC
+ * and calls B0(17h) itself. psx_syscall enters the vector through a nested
+ * dispatch and the kernel calls the handler through another, so the return's
+ * `jr k0` used to keep running the loop inside both, one pair per yield, until
+ * the dispatch recursion guard stopped the game.
+ *
+ * On hardware the return abandons the handler: every register comes from the
+ * TCB and execution continues at its saved EPC (PSX-SPX, BIOS exception
+ * handling). So the host frames hold nothing the guest still needs. Unwind
+ * to the scheduler and dispatch the PC.
+ *
+ * Only a return to the current TCB's saved EPC qualifies: that is what
+ * ReturnFromException does, and it keeps a bare `rfe` in other code on the
+ * old path. A flat host (the trampoline dispatches cpu->pc next anyway) and
+ * the fiber bridge are left alone too. */
+static void rfe_outside_window_unwind(CPUState* cpu) {
+    extern int g_call_unit_depth;
+    extern uint32_t psx_read_word(uint32_t addr);   /* memory.c (plain RAM read) */
+    extern int overlay_loader_shadow_native_thread_switch_bail(void);
+    if (g_psx_dispatch_depth <= 1 && g_call_unit_depth == 0) return;
+    uint32_t pcb = psx_read_word(0x108u);
+    uint32_t tcb = pcb ? psx_read_word(pcb & 0x1FFFFFFFu) : 0u;
+    if (tcb == 0u) return;
+    if (!same_guest_pc(cpu->pc, psx_read_word((tcb & 0x1FFFFFFFu) + 0x88u))) return;
+    if (!psx_scheduler_can_resume_at(cpu->pc)) return;
+    /* A native-only shadow pass must not escape past the authoritative restore. */
+    if (overlay_loader_shadow_native_thread_switch_bail()) return;
+    psx_cyc_batch_flush();   /* the unwind drops any unpublished cycle batch */
+    s_compiled_interrupt_resume_pc = 0;
+    g_dirty_interp_active = 0;
+    psx_scheduler_rfe_resume(cpu, cpu->pc, 0u);
+}
+
 /* Called in the dispatch trampoline after a function returns (cpu->pc holds the
  * real resume EPC). If an RFE armed the escape inside the synchronous handler,
  * longjmp back to psx_check_interrupts (cpu->pc preserved across the longjmp). */
 void psx_rfe_escape_check(CPUState* cpu) {
+    if (g_rfe_escape_pending && !in_exception) {
+        g_rfe_escape_pending = 0;
+        rfe_outside_window_unwind(cpu);
+        return;
+    }
     /* Escape ONLY when this RFE is the synchronous handler completing on the SAME
      * fiber that set up the exception (the owner of exception_jmpbuf). in_exception
      * is a single global, so a thread RESUMED on a different fiber (its own real EPC
@@ -2053,6 +2112,10 @@ irq_deliver_eval:
         }
     }
 
+    /* This delivery's EPC. g_exception_real_epc is one global and a nested
+     * delivery overwrites it, so the exit below compares against this copy. */
+    uint32_t delivered_epc = g_exception_real_epc;
+
     /* Save the interrupted code's full register state.
      *
      * On real hardware, the exception handler saves all GPRs to the
@@ -2353,6 +2416,36 @@ irq_deliver_eval:
             }
         }
     }
+    /* Same-thread return to a PC the handler chose (PS1B-324).
+     *
+     * Discworld II's VBlank handler copies the saved context out of the TCB,
+     * rewrites the TCB's EPC and sp to start a task, and calls
+     * ReturnFromException. Hardware resumes at the TCB's EPC with the TCB's
+     * registers (PSX-SPX, BIOS exception handling). A compiled block-leader
+     * poll never re-reads cpu->pc, so returning from here ran the interrupted
+     * block on the task's stack: VSync read a frame it never built, timed out
+     * and returned to PC 0.
+     *
+     * The interrupted block cannot continue, so keep the TCB's registers and
+     * resume at cpu->pc through the scheduler (below, after the epilogue).
+     * The test is exact: the return went to the TCB's saved EPC, and that is
+     * no longer the EPC this delivery installed. Not taken for:
+     *   - a sentinel delivery, whose post-return PC is only approximate;
+     *   - a dirty-interpreter pump, which re-reads cpu->pc on return;
+     *   - a nested delivery, whose outer handler frame is still live;
+     *   - the kernel's own step over an interrupted GTE command. */
+    int rfe_redirect =
+        prev_in_exception == 0 && saved_dirty_resume_pc == 0u &&
+        (g_exc_escape_reason == PSX_EXC_ESCAPE_RFE_RETURN ||
+         g_exc_escape_reason == PSX_EXC_ESCAPE_SYSCALL_RETURN) &&
+        delivered_epc != 0u && delivered_epc != (uint32_t)PSX_EXC_SENTINEL_PC &&
+        entry_tcb != 0u && entry_tcb == exit_tcb &&
+        cpu->pc != 0u && !same_guest_pc(cpu->pc, delivered_epc) &&
+        same_guest_pc(cpu->pc, psx_read_word((exit_tcb & 0x1FFFFFFFu) + 0x88u)) &&
+        !rfe_steps_over_gte_command(cpu->pc, delivered_epc) &&
+        psx_scheduler_can_resume_at(cpu->pc);
+    if (rfe_redirect)
+        same_thread_resume = 0;   /* the TCB's registers are the context */
     int do_restore =
         (g_exc_escape_reason == PSX_EXC_ESCAPE_LEGACY_SENTINEL || same_thread_resume);
     /* Ring exit-half: every delivery records which escape path it took and
@@ -2420,6 +2513,20 @@ irq_deliver_eval:
             : psx_get_cycle_count() + POST_EXC_CLAIMED_COOLDOWN_CYCLES;
     }
     if (g_ls_suppress_record > 0) g_ls_suppress_record--;
+
+    /* Same-thread return to a PC the handler chose (see rfe_redirect above).
+     * The escape skips psx_check_interrupts_at's restore of the compiled
+     * resume-PC latch and the interpreter's mode flag, as the thread switch
+     * below does. */
+    if (rfe_redirect) {
+        extern int overlay_loader_shadow_native_thread_switch_bail(void);
+        if (overlay_loader_shadow_native_thread_switch_bail())
+            PSX_CHECK_INTERRUPTS_RETURN();
+        psx_cyc_batch_flush();   /* the unwind drops any unpublished cycle batch */
+        s_compiled_interrupt_resume_pc = 0;
+        g_dirty_interp_active = 0;
+        psx_scheduler_rfe_resume(cpu, cpu->pc, delivered_epc); /* never returns */
+    }
 
     /* In-exception thread switch (Ape Escape NEW GAME memcard scene).
      *

@@ -1358,6 +1358,17 @@ if(BUILD_TESTING)
     add_test(NAME mfc0_event_sample COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_mfc0_event_sample.py
         --cc ${CMAKE_C_COMPILER})
+    # PS1B-324 exception-return fixtures. Also registered in runtime/, so the
+    # tree that TAS setup builds runs them too. GCC only, as there: the driver
+    # compiles with -Wall -Wextra -Werror.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME rfe_irq_context_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_rfe_irq_context.py
+            --cc ${CMAKE_C_COMPILER})
+        add_test(NAME rfe_syscall_depth_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_rfe_syscall_depth.py
+            --cc ${CMAKE_C_COMPILER})
+    endif()
 endif()
 
 if(Python3_EXECUTABLE)

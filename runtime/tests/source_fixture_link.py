@@ -22,6 +22,10 @@ ISO_C_FALLBACK = {
     "sscanf", "strcat", "strchr", "strcmp", "strcpy", "strlen", "strncat",
     "strncmp", "strncpy", "strstr", "strtol", "strtoll", "strtoul",
     "strtoull", "time", "vfprintf", "vsnprintf",
+    # glibc's setjmp() is a macro for _setjmp. Without a static libc.a to list
+    # (Rocky 9), a stub of that name aborted every fixture that links a
+    # setjmp user: traps.c, interrupts.c.
+    "_setjmp",
 }
 
 
