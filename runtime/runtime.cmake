@@ -767,9 +767,11 @@ list(APPEND PSXRECOMP_BIOS_GENERATED "${_psxrt_registry_c}")
 option(PSXRECOMP_BIOS_STALE_FATAL
     "Fail configure when a linked BIOS stem's generated/ stamp predates the emitter"
     OFF)
+# The fingerprint is a CMake script run with THIS cmake, never a bash found on
+# PATH: on the windows-2022 runner the bash CMake located hashed differently
+# from the step shell's, and a byte-identical tree read as STALE there only.
 if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
-    find_program(_psxrt_bash NAMES bash)
-    if(_psxrt_bash AND EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh")
+    if(EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.cmake")
         foreach(_psxrt_chk_stem IN LISTS _psxrt_bios_linked)
             set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${_psxrt_chk_stem}.emitter.sha")
             set(_psxrt_chk_profile "${PSXRECOMP_ROOT}/bios/${_psxrt_chk_stem}.toml")
@@ -777,8 +779,9 @@ if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
                 continue()
             endif()
             execute_process(
-                COMMAND "${_psxrt_bash}" "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh"
-                        "${_psxrt_chk_profile}"
+                COMMAND "${CMAKE_COMMAND}" "-DROOT=${PSXRECOMP_ROOT}"
+                        "-DPROFILE=${_psxrt_chk_profile}"
+                        -P "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.cmake"
                 WORKING_DIRECTORY "${PSXRECOMP_ROOT}"
                 OUTPUT_VARIABLE _psxrt_cur_fp OUTPUT_STRIP_TRAILING_WHITESPACE
                 RESULT_VARIABLE _psxrt_fp_rc ERROR_QUIET)
