@@ -1,6 +1,7 @@
-/* Source DualShock DTR session: a session whose first byte is not 0x01 silences the pad until
- * its port's DTR rises again. Authored bytes only; the source reference is Mednafen's
- * InputDevice_DualShock::SetDTR/Clock (command_phase restarts on the rising edge only). */
+/* Source-profile DualShock DTR session: a session whose first byte is not 0x01 silences the
+ * pad until its port's DTR rises again (the command phase restarts on the rising edge only).
+ * Authored bytes only. The lag frame this rule causes was observed on the oracle (Abe's
+ * Oddysee 5620M, return 949). */
 #include "../src/sio.c"
 #include "input_dualshock_delivery.h"
 #include <stdio.h>
@@ -75,7 +76,7 @@ static void source_profile(const char *profile) {
 }
 int main(void) {
     source_profile("nymashock-1.29.0-dualshock");
-    source_profile("octoshock-2.2.2-digital");   /* InputDevice_Gamepad has the same DTR rule */
+    source_profile("octoshock-2.2.2-digital");   /* the digital pad has the same DTR rule */
     /* Negative control: the default profile keeps its device routing. */
     boot("");
     sio_write(0x1F80104A, 0); sio_write(0x1F80104A, 0x1003);

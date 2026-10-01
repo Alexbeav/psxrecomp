@@ -1,8 +1,7 @@
 /* Device-level regression: guest RAM is not SIO hardware state.
  * Uses production SIO with a synthetic clock/card, no BIOS or retail data.
- * Independent references: Beetle frontio.cpp DoDSRIRQ/Write and irq.cpp
- * IRQ_Assert/IRQ_Write: SIO cannot modify the INTC mask, and deasserting
- * SELECT cancels the device's pending DSR pulse.
+ * Rule under test: SIO cannot modify the INTC mask, and deasserting SELECT
+ * cancels the device's pending DSR pulse.
  */
 #include "../src/sio.c"
 #include <stdio.h>

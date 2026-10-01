@@ -1,5 +1,5 @@
-/* The original Octoshock2.3 sprite table admits 0x66/0x67 as a four-word packet
- * with three-word FIFO feedback. DrawSprite charges 16 + clipped width +
+/* The octoshock-2.3 source profile admits 0x66/0x67 as a four-word packet
+ * with three-word FIFO feedback. A sprite draw charges 16 + clipped width +
  * aligned halfword blend/mask work, plus the renderer's texture-cache work.
  * These are source compatibility checks, not PS1 hardware timing claims. */
 #include "source_gpu_command_projection.h"
@@ -19,8 +19,11 @@ static void check(int okay,const char *message) {
     if(!okay){fprintf(stderr,"FAIL: %s\n",message);exit(1);}
 }
 
-/* Per-channel reference arithmetic derived from the source PlotPixel and
- * ModTexel contracts. Tested separately from the production pixel function. */
+/* Per-channel reference arithmetic for texture modulation, the four
+ * semi-transparency modes and the mask bits (PSX-SPX GPU "Semi-Transparency";
+ * the rounding is pinned by the Octoshock 2.3 pixel oracle, 192 VRAM images,
+ * tools/tasreplays/source_sprite_oracle.py). Tested separately from the
+ * production pixel function. */
 static uint16_t expected_pixel(uint16_t back,uint16_t texel,unsigned color,
                                unsigned blend,unsigned mask,unsigned raw) {
     if(!texel || ((mask&2) && (back&0x8000)))return back;

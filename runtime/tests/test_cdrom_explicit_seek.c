@@ -60,9 +60,10 @@ static void setup(int origin) {
     mode_reg=0x80; setloc_pending=0;
 }
 
-/* PSX-SPX plain seek stops future reads and finishes paused. Octoshock
- * Command_SeekL/P also preserves the already admitted DMA buffer. Do not
- * conflate that guest-owned payload with a queued, unannounced INT1. */
+/* PSX-SPX plain seek stops future reads and finishes paused. The
+ * octoshock-2.2.2 source profile also preserves the already admitted DMA
+ * buffer across SeekL/SeekP. Do not conflate that guest-owned payload with a
+ * queued, unannounced INT1. */
 static void exercise_explicit(uint8_t read, uint8_t seek, int delivered) {
     setup(100); target(100); command(read); ack();
     if(delivered) { advance(read_delay); ack(); }
