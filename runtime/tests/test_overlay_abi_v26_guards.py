@@ -99,10 +99,21 @@ def main() -> None:
     body = mods[start:mods.index("\n}\n", start)]
     returns = re.findall(r"\breturn\b([^;]*);", body)
     assert returns and all(value.strip() == "0" for value in returns), returns
-    for path in ROOT.glob("runtime/**/*.c*"):
+    # Tracked C and C++ sources only. An in-tree build (runtime/build*) puts a
+    # ".cmake" folder and generated sources under runtime/; neither is ours.
+    scanned = 0
+    for path in ROOT.glob("runtime/**/*"):
+        parts = path.relative_to(ROOT).parts
+        if (path.suffix not in (".c", ".cpp", ".cc", ".inc", ".in") or
+                any(part == "CMakeFiles" or part.startswith("build") or
+                    part.startswith(".") for part in parts[:-1]) or
+                not path.is_file()):
+            continue
+        scanned += 1
         text = path.read_text(encoding="utf-8", errors="replace")
         assert not re.search(r"\bvoid\s+psx_mod_function_entry\s*\(", text), (
             f"{path.relative_to(ROOT)} still declares the pre-v25 void form")
+    assert scanned > 100, f"only {scanned} runtime sources scanned"
 
     # 6. v26, the fork's slots are wired and used by the shim.
     assert "s_callbacks.cpu_step_boundary_enabled = psx_cpu_step_boundary_enabled;" in loader
