@@ -45,8 +45,10 @@ Template: [`templates/game-release.yml`](templates/game-release.yml).
    executable, `assets/`, `bios/openbios.bin` + notice, `game.toml`,
    `game_options.toml`, the mod catalog (verified against the manifest the
    build published, developer-channel packages pruned), `overlay_toolchain/`,
-   third-party notices; refuse if anything kit-shaped is in the stage; sign on
-   Windows; zip.
+   third-party notices (psxrecomp's in `licenses/`, plus recomp-ui's license
+   as `licenses/recomp-ui-LICENSE` and its font/image notices as
+   `assets/{fonts,img}/NOTICE.md`); refuse if anything kit-shaped is in the
+   stage; sign on Windows; zip.
 6. Verify the zip: executable + OpenBIOS + catalog present; no `psxrecomp/`,
    `recomp-ui/`, CLI, emitters at the root, sources, generated C, dumps,
    per-machine mod state.

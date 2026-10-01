@@ -309,6 +309,15 @@ class PackagerScriptContract(unittest.TestCase):
         self.assertNotIn("--project-file", text)
         self.assertNotIn("--project-dir", text)
 
+    def test_bundled_packager_ships_recomp_ui_notices(self):
+        # The executable links recomp-ui and assets/ carries its fonts and
+        # images; their license and notices must ship with them.
+        text = (FW / "tools" / "package_game_release.sh").read_text(encoding="utf-8")
+        self.assertIn('"${STAGE}/licenses/recomp-ui-LICENSE"', text)
+        self.assertIn('assets/common/${sub}/NOTICE.md', text)
+        self.assertIn('"${STAGE}/assets/${sub}/NOTICE.md"', text)
+        self.assertIn("RECOMP_UI_ROOT", text, "must follow the tree the build linked")
+
     def test_scripts_are_executable_and_parse(self):
         for rel in ("tools/package_game_release.sh", "tools/ci/check_generated.sh"):
             p = FW / rel
