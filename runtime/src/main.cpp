@@ -151,6 +151,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -12429,6 +12430,117 @@ namespace {
         return psx_lobby_set_ready(ready);
     }
 
+    static void ae_np_refresh_bios_offer_for(const RecompLauncherCSettings* settings) {
+        if (settings && settings->bios_path[0])
+            ae_np_refresh_bios_offer(settings->bios_path);
+        else
+            ae_np_refresh_bios_offer_from_disk();
+    }
+
+    /* The caps a lobby host starts the match with, settled from the seats it
+     * sees: the player's settings, the seat-1 memory card, and the one BIOS
+     * every seat can boot. The in-game PLAY and the Retro hub's (through
+     * --netplay-query) both come here, so they cannot settle differently.
+     * 0 = settled; else `why` says why no match can start. */
+    static int ae_np_settle_start_caps(const RecompLauncherCSettings* settings,
+                                       PsxLobbyMatchCaps* caps, char* why,
+                                       size_t why_cap) {
+        *caps = ae_netplay_caps_from_settings(settings);
+        caps->guest_memcard_active = ae_np_ws_guest_memcard_effective();
+        std::fprintf(stdout, "psxrecomp: lobby guest memcard (P2 card as slot 2) = %s\n",
+                     caps->guest_memcard_active ? "on" : "off");
+        return psx_lobby_settle_session_bios(caps->session_bios, sizeof(caps->session_bios),
+                                             &caps->session_bios_crc, why, why_cap) == 1
+                   ? -1 : 0;
+    }
+
+    /* ---- the Retro hub (retcomm-launcher docs/NETPLAY_HANDOFF.md) ----------- */
+
+    /* RECOMP_NETPLAY_LAUNCH: recomp-ui hands the hub's launch record here. */
+    int ae_np_ingest_launch(void*, const char* record, char* why, size_t why_cap) {
+        return psx_lobby_ingest_record(record, why, why_cap);
+    }
+
+    static void ae_np_json_escaped(std::string& out, const char* text) {
+        out += '"';
+        for (const char* c = text ? text : ""; *c; ++c) {
+            if (*c == '"' || *c == '\\') { out += '\\'; out += *c; }
+            else if ((unsigned char)*c < 0x20) out += ' ';
+            else out += *c;
+        }
+        out += '"';
+    }
+
+    /* --netplay-query <request>: what this build would send from its own
+     * lobby, so a seat the Retro hub holds is the same seat. The answer goes
+     * to "<request>.answer" (stdout carries the game's log). Request keys are
+     * handoff_-prefixed: the reader takes a key's first occurrence, and a
+     * replayed server message has its own "op".
+     *   handoff_query "identity" (+ handoff_disc):
+     *       join_fields (disc_fp, the server's join gate), the set_ready
+     *       message (the BIOS offer), and a start message with this player's
+     *       default caps (what a room it hosts publishes)
+     *   handoff_query "settle" (+ handoff_player_id, _seat, _room):
+     *       the start message the host sends, the BIOS settled from every
+     *       seat's offer -- or why no match can start */
+    static int ae_np_answer_query(const char* request_path,
+                                  const RecompLauncherCSettings* settings,
+                                  const std::string& initial_disc) {
+        std::string req;
+        {
+            std::ifstream in(request_path, std::ios::binary);
+            req.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        char op[32] = {};
+        char disc[1024] = {};
+        psx_lobby_json_str(req.c_str(), "handoff_query", op, sizeof(op));
+        psx_lobby_json_str(req.c_str(), "handoff_disc", disc, sizeof(disc));
+        std::string ans = "{\"v\":1,\"engine\":\"psxrecomp\",\"handoff\":1";
+        char msg[1024] = {};
+        ae_np_refresh_bios_offer_for(settings);
+        if (std::strcmp(op, "identity") == 0) {
+            const std::string d = disc[0] ? std::string(disc) : initial_disc;
+            RecompLauncherCDiscVerify dv{};
+            if (!d.empty()) ae_disc_verify(d.c_str(), &dv);
+            /* join_fields: what create and join carry beyond the hub's own
+             * fields. The server refuses a join whose disc_fp differs. */
+            ans += ",\"join_fields\":{\"disc_fp\":";
+            ae_np_json_escaped(ans, dv.disc_fp);
+            ans += "}";
+            ans += dv.netplay_ok ? ",\"disc_ok\":true" : ",\"disc_ok\":false";
+            ans += ",\"disc_detail\":";
+            ae_np_json_escaped(ans, dv.netplay_detail);
+            if (psx_lobby_ready_message(1, msg, sizeof(msg)) == 0) {
+                ans += ",\"ready\":";
+                ans += msg;
+            }
+            const PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
+            if (psx_lobby_start_message(&caps, msg, sizeof(msg)) == 0) {
+                ans += ",\"start\":";
+                ans += msg;
+            }
+        } else if (std::strcmp(op, "settle") == 0) {
+            char why[256] = {};
+            PsxLobbyMatchCaps caps{};
+            if (psx_lobby_replay_room(req.c_str(), why, sizeof(why)) != 0 ||
+                ae_np_settle_start_caps(settings, &caps, why, sizeof(why)) != 0) {
+                ans += ",\"error\":";
+                ae_np_json_escaped(ans, why[0] ? why : "the match cannot be settled");
+            } else if (psx_lobby_start_message(&caps, msg, sizeof(msg)) == 0) {
+                ans += ",\"start\":";
+                ans += msg;
+            }
+        } else {
+            ans += ",\"error\":";
+            ae_np_json_escaped(ans, "unknown query");
+        }
+        ans += "}\n";
+        const std::string out_path = std::string(request_path) + ".answer";
+        std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
+        out << ans;
+        return out.good() ? 0 : 1;
+    }
+
     int ae_np_request_start(void*, const RecompLauncherCSettings* settings) {
         if (g_lnch_hosting_lan) {
             AeLanLobbyState state;
@@ -12490,18 +12602,11 @@ namespace {
         }
         if (!psx_lobby_is_host()) return -1;
         /* Publish current BIOS offer, then ensure host seat is ready. */
-        if (settings && settings->bios_path[0])
-            ae_np_refresh_bios_offer(settings->bios_path);
-        else
-            ae_np_refresh_bios_offer_from_disk();
+        ae_np_refresh_bios_offer_for(settings);
         (void)psx_lobby_set_ready(1);
-        PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
-        caps.guest_memcard_active = ae_np_ws_guest_memcard_effective();
-        std::fprintf(stdout, "psxrecomp: lobby guest memcard (P2 card as slot 2) = %s\n",
-                     caps.guest_memcard_active ? "on" : "off");
+        PsxLobbyMatchCaps caps{};
         char why[192] = {};
-        if (psx_lobby_settle_session_bios(caps.session_bios, sizeof(caps.session_bios),
-                                          &caps.session_bios_crc, why, sizeof(why)) == 1) {
+        if (ae_np_settle_start_caps(settings, &caps, why, sizeof(why)) != 0) {
             /* No BIOS every seat can boot: refuse, and say why. */
             std::fprintf(stdout, "psxrecomp: lobby start refused: %s\n", why);
             psx_lobby_set_last_error(why);
@@ -12940,6 +13045,9 @@ namespace {
             game_players_n >= 2 && game_players_n <= PSX_MAX_PLAYERS;
         gi->netplay_supported = g_lnch_netplay_available ? 1 : 0;
         /* Append-only members past the positional initializer. */
+#if defined(RECOMP_LAUNCHER_HAS_NETPLAY_HANDOFF)
+        g_lnch_netplay_callbacks.ingest_launch = ae_np_ingest_launch;
+#endif
         g_lnch_netplay_callbacks.memcard_offer_set = ae_np_memcard_offer_set;
         g_lnch_netplay_callbacks.guest_memcard_get = ae_np_guest_memcard_get;
         g_lnch_netplay_callbacks.guest_memcard_set = ae_np_guest_memcard_set;
@@ -13063,6 +13171,7 @@ int main(int argc, char** argv) {
     int         cli_debug_port = -1;
     int         cli_renderer   = -1;   /* 0=software 1=opengl 2=vulkan */
     const char* cli_window_title = nullptr;  /* label windows in a fleet */
+    const char* cli_netplay_query = nullptr; /* --netplay-query <request> */
     const char* cli_memcard_dir = nullptr;   /* isolate writable state in a fleet */
     std::vector<std::string> cli_path_arg_storage;
     cli_path_arg_storage.reserve((size_t)argc);
@@ -13136,6 +13245,11 @@ int main(int argc, char** argv) {
             else if (std::strcmp(r, "vulkan")   == 0) cli_renderer = 2;
         } else if (std::strcmp(argv[i], "--window-title") == 0 && i + 1 < argc) {
             cli_window_title = argv[++i];
+        } else if (std::strcmp(argv[i], "--netplay-query") == 0 && i + 1 < argc) {
+            /* Answered where the launcher would open: everything it would be
+             * seeded with is resolved by then. */
+            cli_netplay_query = argv[++i];
+            force_launcher = true;
         } else if (std::strcmp(argv[i], "--launcher") == 0) {
             force_launcher = true;
         } else if (std::strcmp(argv[i], "--no-launcher") == 0) {
@@ -14825,6 +14939,15 @@ int main(int argc, char** argv) {
             psx_lobby_set_max_slots(game_players);
 #endif
 
+#if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
+            if (cli_netplay_query) {
+                const int qrc = ae_np_answer_query(cli_netplay_query, &ls, rui_initial_disc);
+                if (overlay_init_thread.joinable())
+                    overlay_init_thread.join();
+                SDL_Quit();
+                return qrc;
+            }
+#endif
             char rui_out_disc[1024] = {0};
             launcher_boot_timing_mark("host:before_run_window");
             int rui_rc = recomp_launcher_run_window(
@@ -15146,7 +15269,9 @@ int main(int argc, char** argv) {
                                   ls.netplay_launch.bind_hostport);
                     std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",
                                   ls.netplay_launch.peer_hostport);
-                    g_netplay_from_lobby = 1;
+                    /* A match the Retro hub started ends this process: the
+                     * hub holds the room, so there is no lobby to return to. */
+                    g_netplay_from_lobby = psx_lobby_handoff_active() ? 0 : 1;
                     std::fprintf(stdout,
                         "psxrecomp: launcher netplay slot=%d slots=%d mask=0x%x bind=%s peer=%s session=%u\n",
                         net_cfg.local_slot, net_cfg.slot_count,

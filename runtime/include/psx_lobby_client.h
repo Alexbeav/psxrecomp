@@ -406,6 +406,21 @@ int  psx_lobby_all_ready(void);
 
 /* Toggle ready in the current lobby (attaches current bios_offer). */
 int  psx_lobby_set_ready(int ready);
+/* The set_ready / start messages exactly as this client sends them (into msg,
+ * 0 = ok). The Retro hub forwards them verbatim for a seat it holds. */
+int  psx_lobby_ready_message(int ready, char *msg, size_t cap);
+int  psx_lobby_start_message(const PsxLobbyMatchCaps *caps, char *msg, size_t cap);
+/* A match the Retro hub negotiated (retcomm-launcher docs/NETPLAY_HANDOFF.md).
+ * replay_room adopts the record's identity, seat and room messages as if they
+ * had arrived on this client's socket; ingest_record also adopts its launch,
+ * after which launch_pending, join_info and match_caps answer as for an
+ * in-game match. 0 = adopted; else `why` says why. handoff_active: 1 once a
+ * record was ingested (the match ends the process, not back into a lobby). */
+int  psx_lobby_replay_room(const char *record, char *why, size_t why_cap);
+int  psx_lobby_ingest_record(const char *record, char *why, size_t why_cap);
+int  psx_lobby_handoff_active(void);
+/* A string field of a JSON object (the client's own reader); 1 = found. */
+int  psx_lobby_json_str(const char *json, const char *key, char *out, size_t cap);
 
 /* Local BIOS offer used on the next set_ready (and included in settle). */
 void psx_lobby_set_bios_offer(const PsxLobbyBiosOffer *offer);

@@ -164,6 +164,17 @@ int  psx_lobby_settle_session_bios(char *out, size_t out_cap, uint32_t *out_crc,
 }
 void psx_lobby_set_last_error(const char *text) { (void)text; }
 int  psx_lobby_request_start(const PsxLobbyMatchCaps *c) { (void)c; return -1; }
+int  psx_lobby_ready_message(int ready, char *msg, size_t cap)
+{ (void)ready; (void)msg; (void)cap; return -1; }
+int  psx_lobby_start_message(const PsxLobbyMatchCaps *c, char *msg, size_t cap)
+{ (void)c; (void)msg; (void)cap; return -1; }
+int  psx_lobby_replay_room(const char *r, char *why, size_t cap)
+{ (void)r; if (why && cap) snprintf(why, cap, "this build has no lobby client"); return -1; }
+int  psx_lobby_ingest_record(const char *r, char *why, size_t cap)
+{ (void)r; if (why && cap) snprintf(why, cap, "this build has no lobby client"); return -1; }
+int  psx_lobby_handoff_active(void) { return 0; }
+int  psx_lobby_json_str(const char *j, const char *k, char *out, size_t cap)
+{ (void)j; (void)k; if (out && cap) out[0] = '\0'; return 0; }
 int  psx_lobby_launch_pending(void) { return 0; }
 void psx_lobby_clear_launch_pending(void) {}
 
@@ -4648,14 +4659,14 @@ void psx_lobby_set_last_error(const char *text)
     g_lc.join.last_error[sizeof(g_lc.join.last_error) - 1] = '\0';
 }
 
-int psx_lobby_set_ready(int ready)
+/* The set_ready message exactly as this seat sends it: the BIOS and memory
+ * card offers ride along. Also what --netplay-query hands the Retro hub, so a
+ * seat the hub holds offers what this build would (NETPLAY_HANDOFF.md). */
+int psx_lobby_ready_message(int ready, char *msg, size_t cap)
 {
-    char msg[512];
     char memcard[96];
     int n;
-    if (!psx_lobby_connected() || !g_lc.in_lobby) {
-        return -1;
-    }
+    if (!msg || cap == 0) return -1;
     memcard[0] = '\0';
     if (g_lc.memcard_offer.valid) {
         snprintf(memcard, sizeof(memcard),
@@ -4669,7 +4680,7 @@ int psx_lobby_set_ready(int ready)
         char crc[16];
         netplay_bios_format_crc(g_lc.bios_offer.can_scph1001 ? g_lc.bios_offer.retail_crc : 0,
                                 crc, sizeof(crc));
-        n = snprintf(msg, sizeof(msg),
+        n = snprintf(msg, cap,
                      "{\"op\":\"set_ready\",\"ready\":%s,"
                      "\"bios_offer\":{\"v\":1,\"prefer\":\"%s\","
                      "\"can_openbios\":%s,\"can_scph1001\":%s,"
@@ -4680,25 +4691,47 @@ int psx_lobby_set_ready(int ready)
                      g_lc.bios_offer.can_scph1001 ? "true" : "false",
                      crc, memcard);
     } else {
-        n = snprintf(msg, sizeof(msg), "{\"op\":\"set_ready\",\"ready\":%s%s}",
+        n = snprintf(msg, cap, "{\"op\":\"set_ready\",\"ready\":%s%s}",
                      ready ? "true" : "false", memcard);
     }
-    if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+}
+
+int psx_lobby_set_ready(int ready)
+{
+    char msg[512];
+    if (!psx_lobby_connected() || !g_lc.in_lobby) {
+        return -1;
+    }
+    if (psx_lobby_ready_message(ready, msg, sizeof(msg)) != 0) return -1;
     queue_send(msg);
     flush_pending();
     return 0;
 }
 
+/* The start message for these caps, exactly as the host sends it (settled
+ * already: request_start settles the BIOS first). Also what --netplay-query
+ * hands a Retro hub that hosts the room. */
+int psx_lobby_start_message(const PsxLobbyMatchCaps *caps, char *msg, size_t cap)
+{
+    char caps_json[640];
+    int n;
+    if (!msg || cap == 0) return -1;
+    caps_json[0] = '\0';
+    if (caps && caps->valid)
+        append_match_caps_json(caps_json, sizeof(caps_json), caps);
+    n = snprintf(msg, cap, "{\"op\":\"start\"%s}", caps_json);
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+}
+
 int psx_lobby_request_start(const PsxLobbyMatchCaps *match_caps)
 {
     char msg[896];
-    char caps_json[640];
     PsxLobbyMatchCaps caps_local;
-    int n;
+    const PsxLobbyMatchCaps *send = NULL;
     if (!psx_lobby_connected() || !g_lc.in_lobby || !g_lc.is_host) {
         return -1;
     }
-    caps_json[0] = '\0';
     if (match_caps && match_caps->valid) {
         caps_local = *match_caps;
         if (!caps_local.session_bios[0]) {
@@ -4712,13 +4745,141 @@ int psx_lobby_request_start(const PsxLobbyMatchCaps *match_caps)
             }
         }
         g_lc.match_caps = caps_local;
-        append_match_caps_json(caps_json, sizeof(caps_json), &caps_local);
+        send = &caps_local;
     }
-    n = snprintf(msg, sizeof(msg), "{\"op\":\"start\"%s}", caps_json);
-    if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
+    if (psx_lobby_start_message(send, msg, sizeof(msg)) != 0) return -1;
     queue_send(msg);
     flush_pending();
     return 0;
+}
+
+/* ---- a match the Retro hub negotiated (retcomm-launcher NETPLAY_HANDOFF.md)
+ *
+ * The hub holds the seat with its own lobby client and writes the server
+ * messages that seated this player into a launch record. They are replayed
+ * here through handle_server_json, the same code that reads them off this
+ * client's own socket, so every settled value -- slots, endpoints, the relay,
+ * match caps, the session BIOS -- comes out exactly as the in-game lobby
+ * would have it. Nothing is sent: there is no socket. */
+static int g_handoff_active = 0;
+
+static char *handoff_object(const char *record, const char *key)
+{
+    /* Not json_extract_object: that one counts braces inside strings too,
+     * and a room or player name with a brace in it would cut the message
+     * short. A quoted key cannot occur inside a JSON string (its quotes would
+     * be escaped), so the search for it is exact. */
+    char pat[64];
+    const char *p;
+    char *buf;
+    size_t n = 0;
+    int depth = 0, in_str = 0, esc = 0;
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    p = strstr(record, pat);
+    if (!p) return NULL;
+    p = strchr(p + strlen(pat), ':');
+    if (!p) return NULL;
+    ++p;
+    while (*p && isspace((unsigned char)*p)) ++p;
+    if (*p != '{') return NULL;
+    buf = (char *)malloc(strlen(p) + 1);
+    if (!buf) return NULL;
+    do {
+        const char c = *p++;
+        buf[n++] = c;
+        if (in_str) {
+            if (esc) esc = 0;
+            else if (c == '\\') esc = 1;
+            else if (c == '"') in_str = 0;
+        } else if (c == '"') {
+            in_str = 1;
+        } else if (c == '{') {
+            ++depth;
+        } else if (c == '}') {
+            --depth;
+        }
+    } while (*p && depth > 0);
+    buf[n] = '\0';
+    if (depth != 0) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
+/* Who this seat is and which server it sat on: what the welcome and the
+ * socket would have told the client. */
+static int handoff_identity(const char *record, char *why, size_t why_cap)
+{
+    char url[256];
+    char path[128];
+    int port = 0;
+    json_get_str(record, "handoff_player_id", g_lc.player_id, sizeof(g_lc.player_id));
+    if (!g_lc.player_id[0]) {
+        if (why && why_cap) snprintf(why, why_cap, "the launch record names no player");
+        return -1;
+    }
+    url[0] = '\0';
+    json_get_str(record, "handoff_lobby_url", url, sizeof(url));
+    if (url[0] && parse_ws_url(url, g_lc.host, sizeof(g_lc.host), &port, path, sizeof(path)) == 0)
+        g_lc.port = port;
+    json_get_str(record, "handoff_server_ip", g_lc.connected_peer_ip,
+                 sizeof(g_lc.connected_peer_ip));
+    return 0;
+}
+
+int psx_lobby_replay_room(const char *record, char *why, size_t why_cap)
+{
+    char *seat, *room;
+    if (why && why_cap) why[0] = '\0';
+    if (!record || handoff_identity(record, why, why_cap) != 0) return -1;
+    seat = handoff_object(record, "handoff_seat");
+    room = handoff_object(record, "handoff_room");
+    if (!seat) {
+        free(room);
+        if (why && why_cap) snprintf(why, why_cap, "the launch record has no seat");
+        return -1;
+    }
+    handle_server_json(seat);
+    if (room) handle_server_json(room);
+    free(seat);
+    free(room);
+    return 0;
+}
+
+int psx_lobby_ingest_record(const char *record, char *why, size_t why_cap)
+{
+    char *launch;
+    if (psx_lobby_replay_room(record, why, why_cap) != 0) return -1;
+    launch = handoff_object(record, "handoff_launch");
+    if (!launch) {
+        if (why && why_cap) snprintf(why, why_cap, "the launch record has no launch");
+        return -1;
+    }
+    handle_server_json(launch);
+    free(launch);
+    if (!g_lc.launch_pending) {
+        if (why && why_cap)
+            snprintf(why, why_cap, "the match could not be joined: %s",
+                     g_lc.join.last_error[0] ? g_lc.join.last_error
+                                             : "the launch was refused");
+        return -1;
+    }
+    g_handoff_active = 1;
+    return 0;
+}
+
+int psx_lobby_handoff_active(void)
+{
+    return g_handoff_active;
+}
+
+int psx_lobby_json_str(const char *json, const char *key, char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!json || !key) return 0;
+    return json_get_str(json, key, out, cap) != NULL;
 }
 
 int psx_lobby_launch_pending(void)
