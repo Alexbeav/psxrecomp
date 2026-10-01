@@ -6,6 +6,7 @@
  */
 
 #include "cpu_state.h"
+#include "window_size.h"     /* default game-window size */
 #include "psx_scheduler.h"   /* psx_scheduler_run — deterministic TCB scheduler */
 #include "parity_trace.h"    /* general two-process control-flow parity ring */
 #include "device_trace.h"    /* general two-process device-event cycle ring */
@@ -131,6 +132,7 @@ static constexpr bool kLauncherMouseSource = false;
 extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #include "psx_sdl.h"
+#include "window_fullscreen.h"
 #if defined(PSX_SDL3)
 /*
  * SDL_main.h is a single-header implementation in SDL3. Keep it in the one
@@ -386,6 +388,7 @@ extern "C" uint8_t  psx_guest_read_byte(uint32_t addr);
 extern "C" {
 SDL_Window* sdl_window = nullptr;
 }
+static PsxWindowFullscreen s_window_fullscreen;
 static SDL_Renderer* sdl_renderer;
 static SDL_Texture*  sdl_texture;
 /* Per-player input device routing (PSX ports 1 & 2). Seeded from the
@@ -1250,7 +1253,6 @@ static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderle
                                               * fullscreen, 2 exclusive fullscreen */
 static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
 static int           g_video_win_w    = 0;    /* 0 = fit the display; see clamp_window_aspect */
-static bool          g_video_win_w_explicit = false; /* user chose a width */
 /* Resolved settings.toml for the live runtime UI.  The overlay only writes
  * standard settings it actually exposes and never persists a session disc or
  * the transient controller-port route. */
@@ -1344,14 +1346,6 @@ static int present_should_wall_pace(void);
 static void apply_present_cadence(void);
 static void refresh_host_display_cadence(int force_log, int force_probe);
 
-/* Map the configured tri-state fullscreen mode (g_fullscreen) to the SDL
- * window-fullscreen flag: used both to open the window in that mode and to
- * pick the hotkey's fullscreen target. */
-static Uint32 psx_fullscreen_flag_for_mode(int mode) {
-    if (mode == 2) return SDL_WINDOW_FULLSCREEN;         /* exclusive */
-    if (mode == 1) return SDL_WINDOW_FULLSCREEN_DESKTOP; /* borderless */
-    return 0;                                            /* windowed */
-}
 
 /* FMV auto-skip detection hooks (cdrom.c / mdec.c). */
 extern "C" int      cdrom_xa_stream_active(void);
@@ -1376,6 +1370,7 @@ extern "C" void debug_get_fmv_config(int *auto_skip, uint32_t *total_table,
 /* Display aspect W:H (default 4:3 = native). Wider aspects enable the
  * widescreen hack: GTE X-squash + stretched present (see [video] aspect_ratio
  * in config_loader.h). */
+static int           g_video_depth24_trailing_margin = 8;
 static int           g_video_aspect_num = 4;
 static int           g_video_aspect_den = 3;
 /* Resize-driven widescreen. The user's fixed aspect is still used to shape the
@@ -1646,28 +1641,18 @@ static int           g_ws_native_wide = 1;
  * creation alongside SDL_RenderSetLogicalSize. */
 static int           g_logical_w = 640;
 
-/* Clamp a requested window width to the primary display's usable area so an
- * oversized choice (e.g. 1920 on a 1080p panel) still fits on screen. Keeps
- * the given aspect: height = width*den/num. */
+/* Opening client size for the game window, from the primary display's usable
+ * area (see window_size.h). An explicit width is clamped to fit; no width
+ * opens a normal window at a whole multiple of 240 lines, about two thirds of
+ * the usable height. Sizing from the panel rather than a fixed 1280 keeps a
+ * 4K or 8K display from getting a small image far below the internal render
+ * resolution. Keeps the given aspect: height = width*den/num. */
 static void clamp_window_aspect(int* w, int* h, int num, int den) {
-    int width = *w;
     SDL_Rect bounds;
     const int have_bounds =
         (SDL_GetDisplayUsableBounds(0, &bounds) == 0 && bounds.w > 0 && bounds.h > 0);
-    /* 0 = "fit the display". The old default was a hardcoded 1280, which on a
-     * 4K or 8K panel opens a small window in the corner and, worse, makes the
-     * image far smaller than the internal render resolution the user chose --
-     * supersampling 16 rendering into a 1280-wide window throws almost all of
-     * it away. Fitting the usable bounds keeps the window proportional to the
-     * display it is actually on. An explicit width still wins. */
-    if (width <= 0) width = have_bounds ? bounds.w : 1280;
-    if (width < 640) width = 640;
-    if (have_bounds) {
-        if (width > bounds.w)             width = bounds.w;
-        if (width * den / num > bounds.h) width = bounds.h * num / den;
-    }
-    *w = width;
-    *h = width * den / num;
+    psx_window_size(w, h, num, den, have_bounds,
+                    have_bounds ? bounds.w : 0, have_bounds ? bounds.h : 0);
 }
 
 static int aspect_gcd(int a, int b) {
@@ -2763,16 +2748,11 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
         return cached;
     }
 
-    launcher_info((s_picker_game_name + " — game disc image needed").c_str(),
-        "Step 2 of 2 — game disc image\n\n"
-        "In the next window, select your " + s_picker_game_name +
-        (game_id.empty() ? std::string() : " (" + game_id + ")") +
-        " disc image ripped from your own disc.\n\n"
-        "Accepted formats: .cue (preferred, with its .bin next to it), "
-        ".bin, .img, .iso, .car (Steam), or .chd.\n\n"
-        "(This is NOT the BIOS — the BIOS was already chosen.)");
+    // Go straight to the native picker. A preliminary modal was redundant,
+    // visually inconsistent with the picker, and was easy to encounter on
+    // ordinary direct launches with no remembered disc path.
     std::string disc_title =
-        s_picker_game_name + " — Step 2 of 2: select " + s_picker_game_name +
+        "Select " + s_picker_game_name +
         " disc image (.cue / .bin / .img / .iso / .car / .chd)";
     for (;;) {
         std::filesystem::path picked;
@@ -6206,7 +6186,9 @@ static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
 
     /* Default: last 8 columns. If the upload span is known and ends earlier
      * inside that margin, start blanking from the span edge instead. */
-    uint32_t start = w - 8u;
+    const uint32_t margin = (uint32_t)g_video_depth24_trailing_margin;
+    if (margin == 0u || margin >= w) return;
+    uint32_t start = w - margin;
     uint32_t lim = gpu_depth24_rgb_limit(display_x, w);
     if (lim > 0u && lim < w && lim < start)
         start = lim;
@@ -6376,13 +6358,11 @@ static int runtime_ui_set_value(void*, const RecompRuntimeUiItem *item,
         if (value < 0 || value > 2) return 0;
         g_fullscreen = value;
         if (sdl_window)
-            SDL_SetWindowFullscreen(sdl_window,
-                                    psx_fullscreen_flag_for_mode(value));
+            psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, value);
     } else if (std::strcmp(item->key,
                            RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0) {
         if (value < 1 || value > 4) return 0;
         g_video_win_w = value * 640;
-        g_video_win_w_explicit = true;
         if (sdl_window) {
             int height = g_video_win_w * g_video_aspect_den /
                          std::max(1, g_video_aspect_num);
@@ -8208,28 +8188,18 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * windowed and the CONFIGURED tri-state mode (g_fullscreen: 1
                  * borderless desktop fullscreen keeping the desktop resolution
                  * and letterboxing the image, or 2 exclusive fullscreen — a
-                 * real display-mode change). SDL_WINDOW_FULLSCREEN's bit is
-                 * set in both SDL_WINDOW_FULLSCREEN and
-                 * SDL_WINDOW_FULLSCREEN_DESKTOP, so testing just that bit
-                 * detects "currently fullscreen, either mode". */
+                 * real display-mode change). Track the selected live mode:
+                 * borderless deliberately leaves SDL's fullscreen bit clear. */
                 else if (!key_repeat &&
                          host_keymap_match_event(HOST_KEYMAP_FULLSCREEN,
                                                  (int)key, (int)scancode,
                                                  (int)mod)) {
-                    Uint32 is_fs = SDL_GetWindowFlags(sdl_window) &
-                                   SDL_WINDOW_FULLSCREEN;
-                    if (is_fs) {
-                        SDL_SetWindowFullscreen(sdl_window, 0);
-                        host_osd_push("Windowed", 1500);
-                    } else {
-                        /* If the configured mode is "off", the hotkey still
-                         * needs a mode to switch INTO — default to borderless,
-                         * matching the historical (pre-tri-state) behaviour. */
-                        Uint32 target = psx_fullscreen_flag_for_mode(g_fullscreen);
-                        if (target == 0) target = SDL_WINDOW_FULLSCREEN_DESKTOP;
-                        SDL_SetWindowFullscreen(sdl_window, target);
-                        host_osd_push("Fullscreen", 1500);
-                    }
+                    const int target = s_window_fullscreen.mode ? 0 :
+                                       (g_fullscreen ? g_fullscreen : 1);
+                    if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, target) == 0)
+                        host_osd_push(target ? "Fullscreen" : "Windowed", 1500);
+                    else
+                        host_osd_push("Fullscreen change failed", 1500);
                 }
             }
         }
@@ -14261,9 +14231,10 @@ int main(int argc, char** argv) {
             for (uint32_t site : gc.vsync_event_horizon_extra_sites)
                 psx_vsync_query_hle_add_extra_event_horizon_site(site);
             g_video_scale      = gc.runtime.video_supersampling;
+            g_video_depth24_trailing_margin =
+                gc.runtime.video_depth24_trailing_margin;
             if (gc.runtime.video_window_width > 0) {
                 g_video_win_w = gc.runtime.video_window_width;
-                g_video_win_w_explicit = true;
             }
             g_video_aa         = gc.runtime.video_antialiasing;
             g_video_texfilter  = gc.runtime.video_texture_filter;
@@ -14660,7 +14631,6 @@ int main(int argc, char** argv) {
 #endif
         if (us.has_supersampling)  g_video_scale     = us.supersampling;
         if (us.has_window_width)   g_video_win_w     = us.window_width;
-        if (us.has_window_width && us.window_width > 0) g_video_win_w_explicit = true;
         if (us.has_antialiasing)   g_video_aa        = us.antialiasing;
         if (us.has_texture_filter) g_video_texfilter = us.texture_filter;
         if (us.has_fmv_filter)     g_video_fmv_filter = us.fmv_filter;
@@ -16786,9 +16756,8 @@ session_reboot:
      * borderless desktop fullscreen (keeps the desktop resolution, letterboxes
      * the image), 2 = exclusive fullscreen (real display-mode change), 0 =
      * windowed. Matches the in-game Alt+Enter / Cmd+Ctrl+F hotkey behaviour. */
-    win_flags |= psx_fullscreen_flag_for_mode(g_fullscreen);
-    /* Open at the user-chosen window size (default 1280 wide) instead of the
-     * old hardcoded 640x480, so the game doesn't boot into a tiny window. The
+    /* Open at the user-chosen window size (default: see window_size.h)
+     * instead of the old hardcoded 640x480. The
      * height follows the configured display aspect (4:3 native, wider for the
      * widescreen hack); the present path letterboxes to the same aspect, so
      * the image scales to fill the larger window with no further distortion. */
@@ -16805,22 +16774,13 @@ session_reboot:
         return 1;
     }
     psx_apply_window_icon(sdl_window, argv[0]);
+    s_window_fullscreen = {};
+    if (psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, g_fullscreen) != 0)
+        std::fprintf(stderr, "Fullscreen setup failed: %s\n", SDL_GetError());
 
-    /* Maximise instead of computing the frame size ourselves.
-     *
-     * clamp_window_aspect fits the CLIENT area to the usable bounds, but a
-     * window is client plus title bar and borders, so fitting the client to a
-     * full-height display produced a window taller than the screen that hung
-     * off the top. Deriving the decoration size first does not work either:
-     * SDL_GetWindowBordersSize reports nothing useful before the window is
-     * shown, so the correction silently did not apply.
-     *
-     * The window manager already solves this exactly. Maximise and let it fit
-     * the work area, decorations and taskbar included. Only when the request
-     * was "fit the display" (window_width unset) -- an explicit width is a
-     * deliberate choice and is left alone. */
-    if (!g_fullscreen && !g_video_win_w_explicit)
-        SDL_MaximizeWindow(sdl_window);
+    /* No maximise: the default size (window_size.h) leaves a third of the
+     * usable height free, so the client plus title bar and borders fits on
+     * screen without asking the window manager to fill the work area. */
 
     /* Host refresh: if the window's current panel matches the guest cadence,
      * record it so driver vsync can own cadence. Re-probed while running so
@@ -17722,7 +17682,7 @@ soft_return_lobby:
         ls.output_method = 2;
         ls.window_scale = std::max(1, std::min(4, g_video_win_w / 320));
         ls.disc_index = selected_disc_index;
-        ls.fullscreen = g_fullscreen ? 1 : 0;
+        ls.fullscreen = g_fullscreen;
         ls.ignore_aspect = 0;
         ls.linear_filter = (g_video_texfilter != 0) ? 1 : 0;
         ls.widescreen =
@@ -18136,7 +18096,7 @@ soft_return_lobby:
                 us.has_auto_skip_fmv = skip_fmv_offered;
                 us.turbo_loads = ls.turbo_loads != 0;
                 us.has_turbo_loads = turbo_loads_offered;
-                us.fullscreen = ls.fullscreen != 0;
+                us.fullscreen = ls.fullscreen;
                 us.has_fullscreen = true;
                 us.window_width = ls.window_width > 0 ? ls.window_width : g_video_win_w;
                 us.has_window_width = true;
@@ -18183,7 +18143,7 @@ soft_return_lobby:
              * offered flags are false for both, so leave both globals alone. */
             if (skip_fmv_offered)     g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
             if (turbo_loads_offered)  g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
-            g_fullscreen = ls.fullscreen != 0;
+            g_fullscreen = ls.fullscreen;
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
             g_audio_freq = ls.audio_freq;

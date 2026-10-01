@@ -577,6 +577,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             }
             rt.video_supersampling = static_cast<int>(n);
         }
+        if (video.contains("depth24_trailing_margin")) {
+            const auto n = toml::find<int64_t>(video, "depth24_trailing_margin");
+            if (n < 0 || n > 64) {
+                throw std::runtime_error(fmt::format(
+                    "[video] depth24_trailing_margin out of range (0..64): {}", n));
+            }
+            rt.video_depth24_trailing_margin = static_cast<int>(n);
+        }
         if (video.contains("window_width")) {
             const auto n = toml::find<int64_t>(video, "window_width");
             if (n < 640 || n > 7680) {

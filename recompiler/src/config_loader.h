@@ -380,6 +380,12 @@ struct RuntimeConfig {
     // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate.
     int                   video_supersampling = 1;
 
+    // depth24_trailing_margin: columns blanked at the right edge of every
+    // 24-bit (FMV) frame, working around MDEC leaving stale pixels there.
+    // 8 is the historical default; a title whose MDEC uploads the full width
+    // can set 0 and keep those columns.
+    int                   video_depth24_trailing_margin = 8;
+
     // Optional initial window width declared by the title profile. Zero keeps
     // the historical fit-to-display behavior; player settings may override it.
     int                   video_window_width = 0;

@@ -7,6 +7,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SDL_MAIN_HEADER = "<SDL3/SDL_main.h>"
+# Stand-alone test programs with their own main(). They are separate
+# executables built with SDL_MAIN_HANDLED, so they never share a link with
+# main.cpp's entry point.
+STANDALONE_TEST_PROGRAMS = {"runtime/tests/test_window_fullscreen.cpp"}
 
 
 def main() -> int:
@@ -21,7 +25,9 @@ def main() -> int:
                 continue
             source = path.read_text(encoding="utf-8")
             if SDL_MAIN_HEADER in source:
-                owners.append(path.relative_to(ROOT).as_posix())
+                rel = path.relative_to(ROOT).as_posix()
+                if rel not in STANDALONE_TEST_PROGRAMS:
+                    owners.append(rel)
 
     if owners != ["runtime/src/main.cpp"]:
         raise AssertionError(

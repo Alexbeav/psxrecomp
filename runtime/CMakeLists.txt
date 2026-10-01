@@ -719,6 +719,21 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         ${PSXRECOMP_ROOT}/recompiler/include)
     add_test(NAME bios_rom_alias_test COMMAND bios_rom_alias_test)
 
+    # The game window opens at a normal size, not maximised.
+    add_executable(window_size_test tests/test_window_size.cpp)
+    target_include_directories(window_size_test PRIVATE include)
+    add_test(NAME window_size_test COMMAND window_size_test)
+    option(PSX_WINDOW_FULLSCREEN_TEST "Run fullscreen transitions on a real desktop" OFF)
+    if(PSX_WINDOW_FULLSCREEN_TEST)
+        add_executable(window_fullscreen_test tests/test_window_fullscreen.cpp)
+        target_include_directories(window_fullscreen_test PRIVATE include)
+        target_compile_definitions(window_fullscreen_test PRIVATE
+            SDL_MAIN_HANDLED=1 $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+        target_link_libraries(window_fullscreen_test PRIVATE ${PSX_SDL_LIBRARIES})
+        add_test(NAME window_fullscreen_test COMMAND window_fullscreen_test)
+        set_tests_properties(window_fullscreen_test PROPERTIES LABELS "window;hardware" TIMEOUT 30)
+    endif()
+
     # Multi-file cue TOC mapping (data track + CD-DA in separate bins).
     add_executable(iso_reader_cdda_test
         tests/test_iso_reader_cdda.cpp
@@ -1149,6 +1164,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             endif()
             add_test(NAME overlay_compiler_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_compiler_path.py --compiler ${CMAKE_CXX_COMPILER})
         endif()
+        add_test(NAME disc_picker_ascii_test COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
         add_test(NAME cd_seek_trace_validation_test
