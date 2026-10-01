@@ -157,6 +157,10 @@ def prune_after_rebuild(
             progress.log(f"Pruned build tree to binary+assets under {build_dir}")
 
 
+# Windows Python has no lutimes; follow_symlinks=False raises NotImplementedError.
+_UTIME_NOFOLLOW = os.utime in os.supports_follow_symlinks
+
+
 def clamp_future_mtimes(
     root: Path,
     *,
@@ -213,7 +217,14 @@ def clamp_future_mtimes(
                 continue
             if mtime > stamp:
                 try:
-                    os.utime(p, (stamp, stamp), follow_symlinks=False)
+                    if _UTIME_NOFOLLOW:
+                        os.utime(p, (stamp, stamp), follow_symlinks=False)
+                    elif p.is_symlink():
+                        # Windows cannot retime a link itself; never retime
+                        # the target it points outside the tree at.
+                        continue
+                    else:
+                        os.utime(p, (stamp, stamp))
                     n += 1
                 except OSError:
                     pass
