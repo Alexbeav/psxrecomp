@@ -9,7 +9,9 @@
 extern "C" {
 #endif
 
-#define WS_HUD_ANCHOR_TABLE_SIZE 256u
+/* Large screen-space composites can exceed 256 packets (MMX6 Ilumina).
+ * Keep both pending display buffers' pieces anchored together. */
+#define WS_HUD_ANCHOR_TABLE_SIZE 4096u
 #define WS_HUD_ANCHOR_PROBES 8u
 #define WS_HUD_ANCHOR_FRESH_FRAMES 2u
 
