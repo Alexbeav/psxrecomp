@@ -155,8 +155,10 @@ int      psx_kernel_bless_dispatchable(uint32_t phys);
  * refused at start-up and in the bless latch. Reads only; sets *entries and
  * *capacity when non-NULL. */
 int      psx_kernel_bless_table_fits(uint32_t *entries, uint32_t *capacity);
-/* Bless latch: -1 not decided yet, 0 off, 1 on. Reads only. */
+/* Bless latch: -1 not decided yet, 0 off, 1 on. Reads only. Off always in
+ * source (TAS) mode; the reason string says why it is off. */
 int      psx_kernel_bless_state(void);
+const char* psx_kernel_bless_off_reason(void);
 /* True when a declared kernel patch range ENDS at this RAM address. The
  * emitter registered that PC as a continuation key, so the interpreter hands
  * straight-line flow back to static dispatch there and only the guest's

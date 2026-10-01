@@ -14,6 +14,9 @@
  *   overflow       a table of PSX_KBLESS_MAX_ENTRIES + 1 rows stops the run
  *   paranoid       PSX_KERNEL_BLESS_PARANOID=1 catches a RAM write that
  *                  told nobody, and counts nothing on a clean run
+ *   source         source (TAS) mode latches bless off; release latches on
+ *   source-override  PSX_KERNEL_BLESS=1 cannot turn it on in source mode;
+ *                  only the diagnostic PSX_KERNEL_BLESS_SOURCE_DIAG=1 can
  */
 #include <assert.h>
 #include <stdint.h>
@@ -28,6 +31,10 @@
 #define WIN_HI      0x00008500u
 #define ROM_OFF     0x00010000u    /* its ROM source: 0x1FC10000 */
 #define BODY_BYTES  0x100u         /* 64 four-byte keys share one body */
+
+/* The source (TAS) runtime normally answers this (source_gpu_runtime.c). */
+static int s_source_mode = 0;
+int source_gpu_runtime_active(void) { return s_source_mode; }
 
 /* The backend selection normally publishes these (psx_bios_backend.c). */
 static PsxKernelBody s_bodies[PSX_KBLESS_MAX_ENTRIES + 1u];
@@ -81,6 +88,66 @@ static void set_env(const char *name, const char *value) {
 #else
     setenv(name, value, 1);
 #endif
+}
+
+/* PS1B-348: the TAS routes are qualified with the relocated kernel in the
+ * interpreter. A blessed body takes an interrupt at a different instruction
+ * there, so source mode never blesses. */
+static int source_main(void) {
+    build_table(ROWS);
+    assert(psx_kernel_bless_dispatchable(row_key(100u)) == 1);   /* release */
+    assert(psx_kernel_bless_state() == 1);
+    assert(strcmp(psx_kernel_bless_off_reason(), "") == 0);
+
+    const uint64_t hits = stat(3), verifies = stat(4);
+    s_source_mode = 1;
+    psx_kernel_bless_reset_for_boot();
+    assert(psx_kernel_bless_state() == -1);
+    for (uint32_t i = 0; i < ROWS; ++i)
+        assert(psx_kernel_bless_dispatchable(row_key(i)) == 0);
+    assert(psx_kernel_bless_state() == 0);
+    assert(strcmp(psx_kernel_bless_off_reason(), "source mode") == 0);
+    assert(stat(1) == 0 && stat(3) == hits && stat(4) == verifies);   /* nothing verified or run */
+
+    /* Paranoid mode has nothing to check when bless is off. */
+    set_env("PSX_KERNEL_BLESS_PARANOID", "1");
+    psx_kernel_bless_reset_for_boot();
+    assert(psx_kernel_bless_dispatchable(row_key(100u)) == 0);
+    assert(pstat(0) == 0);
+    set_env("PSX_KERNEL_BLESS_PARANOID", "0");
+
+    s_source_mode = 0;                       /* release again: on */
+    psx_kernel_bless_reset_for_boot();
+    assert(psx_kernel_bless_dispatchable(row_key(100u)) == 1);
+    assert(psx_kernel_bless_state() == 1);
+    assert(strcmp(psx_kernel_bless_off_reason(), "") == 0);
+
+    puts("kernel_bless_state: PASS source-mode");
+    return 0;
+}
+
+static int source_override_main(void) {
+    s_source_mode = 1;
+    set_env("PSX_KERNEL_BLESS", "1");
+    build_table(ROWS);
+    assert(psx_kernel_bless_dispatchable(row_key(100u)) == 0);
+    assert(psx_kernel_bless_state() == 0);
+    assert(strcmp(psx_kernel_bless_off_reason(), "source mode") == 0);
+
+    /* The diagnostic switch, named for its purpose, is the only way in. */
+    set_env("PSX_KERNEL_BLESS_SOURCE_DIAG", "1");
+    psx_kernel_bless_reset_for_boot();
+    assert(psx_kernel_bless_dispatchable(row_key(100u)) == 1);
+    assert(psx_kernel_bless_state() == 1);
+
+    /* It does not outrank PSX_KERNEL_BLESS=0, and means nothing in release. */
+    set_env("PSX_KERNEL_BLESS", "0");
+    psx_kernel_bless_reset_for_boot();
+    assert(psx_kernel_bless_dispatchable(row_key(100u)) == 0);
+    assert(strcmp(psx_kernel_bless_off_reason(), "PSX_KERNEL_BLESS=0") == 0);
+
+    puts("kernel_bless_state: PASS source-override");
+    return 0;
 }
 
 static int paranoid_main(void) {
@@ -141,6 +208,8 @@ int main(int argc, char **argv) {
     }
 
     if (argc > 1 && strcmp(argv[1], "paranoid") == 0) return paranoid_main();
+    if (argc > 1 && strcmp(argv[1], "source") == 0) return source_main();
+    if (argc > 1 && strcmp(argv[1], "source-override") == 0) return source_override_main();
 
     assert(PSX_KBLESS_MAX_ENTRIES >= ROWS);
     build_table(ROWS);

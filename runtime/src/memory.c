@@ -279,6 +279,9 @@ static uint64_t kbless_patch_skips = 0;   /* segments skipped, TCP counter */
 #define KBLESS_MAX_ENTRIES PSX_KBLESS_MAX_ENTRIES   /* psx_bios_image.h */
 static uint8_t  kbless_state[KBLESS_MAX_ENTRIES];   /* parallel to bodies[] */
 static int      kbless_enabled = -1;   /* env PSX_KERNEL_BLESS=0 disables */
+/* Why the latch came out off: "" while on or undecided. Run report and the
+ * one stdout line at the latch. */
+static const char* kbless_off_reason = "";
 /* Always-on counters (TCP kernel_bless). */
 static uint64_t kbless_native_hits   = 0;
 static uint64_t kbless_verifies      = 0;
@@ -290,6 +293,7 @@ static uint64_t kbless_invalidations = 0;
  * table; that count must stay 0. It costs one body compare per kernel
  * dispatch, so it is never a default. */
 static int      kbless_paranoid = 0;
+static int      kbless_source_diag = 0;   /* PSX_KERNEL_BLESS_SOURCE_DIAG=1 took effect */
 static uint64_t kbless_paranoid_checks         = 0;
 static uint64_t kbless_paranoid_bytes          = 0;
 static uint64_t kbless_paranoid_stale_clean    = 0;
@@ -326,14 +330,37 @@ static int kbless_on(void) {
             const char* pe = getenv("PSX_KERNEL_PATCH_RANGES");
             if (pe && pe[0] == '0') s_kb_pr_n = 0;
         }
+        kbless_off_reason = kbless_enabled ? "" : "PSX_KERNEL_BLESS=0";
+        /* Source (TAS) mode runs the relocated kernel in the dirty-RAM
+         * interpreter, always. The routes are qualified on that path: a
+         * blessed body hands a block to the precise slice owner at its
+         * leader, and that owner takes an interrupt at a different
+         * instruction than the interpreter does (two instructions earlier
+         * in TestEvent, PS1B-348), so every route diverged in the BIOS
+         * boot. PSX_KERNEL_BLESS=1 does not override this. The one way to
+         * run blessed bodies in source mode is the diagnostic
+         * PSX_KERNEL_BLESS_SOURCE_DIAG=1, kept for finding that take-point
+         * difference; a run with it is not a qualified configuration. */
+        if (kbless_enabled && source_gpu_runtime_active()) {
+            const char* de = getenv("PSX_KERNEL_BLESS_SOURCE_DIAG");
+            if (de && de[0] == '1') {
+                kbless_source_diag = 1;
+            } else {
+                kbless_enabled = 0;
+                kbless_off_reason = "source mode";
+            }
+        }
+        if (s_kb_span == 0) {                     /* BIOS with no bless window */
+            kbless_enabled = 0;
+            kbless_off_reason = "image has no bless window";
+        }
         {
             const char* pe = getenv("PSX_KERNEL_BLESS_PARANOID");
-            kbless_paranoid = (pe && pe[0] == '1') ? 1 : 0;
+            kbless_paranoid = (kbless_enabled && pe && pe[0] == '1') ? 1 : 0;
             if (kbless_paranoid)
                 fprintf(stderr, "psxrecomp: kernel-bless paranoid mode ON "
                         "(diagnostic: every kernel dispatch re-compares its body)\n");
         }
-        if (s_kb_span == 0) kbless_enabled = 0;   /* BIOS with no bless window */
         /* The emitted constants must agree with each other and the ROM
          * array: a window whose ROM source exceeds the image is a build
          * defect, not a runtime condition. */
@@ -344,6 +371,14 @@ static int kbless_on(void) {
                     (unsigned)BIOS_ROM_SIZE);
             exit(1);
         }
+        /* One line where a run without a report (the TAS runner) shows it. */
+        if (kbless_enabled)
+            fprintf(stdout, "psxrecomp: kernel bless: on%s\n", kbless_source_diag
+                    ? " (source mode, PSX_KERNEL_BLESS_SOURCE_DIAG=1: diagnostic,"
+                      " not a qualified configuration)" : "");
+        else
+            fprintf(stdout, "psxrecomp: kernel bless: off (%s)\n", kbless_off_reason);
+        fflush(stdout);
     }
     return kbless_enabled;
 }
@@ -526,6 +561,12 @@ int psx_kernel_bless_state(void) {
     return kbless_enabled;
 }
 
+/* Why bless is off, for the run report: "" while on or not yet decided,
+ * else "PSX_KERNEL_BLESS=0", "source mode" or "image has no bless window". */
+const char* psx_kernel_bless_off_reason(void) {
+    return kbless_off_reason;
+}
+
 void psx_kernel_bless_resync_after_restore(void) {
     /* kbless_state is host-only. CLEAN/MISMATCH are sticky across guest
      * stores only via kbless_note_write; savestate RAM memcpy never hits
@@ -546,6 +587,8 @@ void psx_kernel_bless_reset_for_boot(void) {
     s_kb_pr = NULL;
     s_kb_pr_n = 0;
     kbless_paranoid = 0;
+    kbless_source_diag = 0;
+    kbless_off_reason = "";
     memset(kbless_state, KBLESS_UNKNOWN, sizeof(kbless_state));
 }
 
