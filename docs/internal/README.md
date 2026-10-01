@@ -21,7 +21,8 @@ behind a specific subsystem.
 
 ## Cycle accuracy & timing
 - [`PRECISE_IRQ_SLICE.md`](PRECISE_IRQ_SLICE.md) — exact-instruction IRQ delivery.
-- [`CYCLE_MODEL_BEETLE.md`](CYCLE_MODEL_BEETLE.md) — the Beetle-derived cycle model.
+- `CYCLE_MODEL_BEETLE.md` — **removed** (2026-10-01, PS1B-216). The cycle model is
+  described in [`FAITHFUL_TIMING_PLAN.md`](FAITHFUL_TIMING_PLAN.md) §3b.
 - [`ACCURACY_BURNDOWN.md`](ACCURACY_BURNDOWN.md) — full accuracy burn-down across
   all axes (semantics, cycle, IRQ, MMIO, peripherals, determinism).
 - [`COSIM_ORACLE.md`](COSIM_ORACLE.md) — the first-divergence co-sim oracle.
@@ -85,7 +86,6 @@ change, named `<contributor>-<pr>-<topic>.md`.
 ## Removed
 - `CYCLE_TIMING_ARCH.md` — **removed.** Its cycle-timing architecture sketch was
   superseded and nothing linked to it. For the current model see
-  [`FAITHFUL_TIMING_PLAN.md`](FAITHFUL_TIMING_PLAN.md) (the authoritative plan),
-  [`CYCLE_MODEL_BEETLE.md`](CYCLE_MODEL_BEETLE.md) (the Beetle-derived cycle
-  model), and [`PRECISE_IRQ_SLICE.md`](PRECISE_IRQ_SLICE.md) (exact-instruction
+  [`FAITHFUL_TIMING_PLAN.md`](FAITHFUL_TIMING_PLAN.md) (the authoritative plan)
+  and [`PRECISE_IRQ_SLICE.md`](PRECISE_IRQ_SLICE.md) (exact-instruction
   IRQ delivery).

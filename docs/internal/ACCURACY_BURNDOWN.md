@@ -84,7 +84,7 @@ Status: STRONG (recompiler core; proven byte-identical to interp on many funcs).
 ## Axis 2 — Cycle/timing  ← ACTIVE (see FAITHFUL_TIMING_PLAN.md)
 
 Status: Stage-1 (1 cycle/insn, single-source seam in place); Stage-2 in progress.
-Oracle model fully transcribed in `CYCLE_MODEL_BEETLE.md`. Game-independent
+The cycle model is described in `FAITHFUL_TIMING_PLAN.md` §3b. Game-independent
 BIOS-kernel ruler BUILT (region [0x80001C5C→0x80001CA4]); per-block-leader cycle
 observe added to the recompiler so ANY block leader is anchorable on both backends.
 - [x] Single-source `psx_instr_base_cycles` seam (identity), both backends.
