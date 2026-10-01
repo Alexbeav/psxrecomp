@@ -1045,6 +1045,14 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_private_path_gate.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The same gate over the framework tree the setup packager stages, so
+        # a private path in a shipped file fails here and not in a release
+        # build (PS1B-216).
+        add_test(
+            NAME setup_staged_tree_private_paths
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_staged_tree_private_paths.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME app_icon_rc_spaces
             COMMAND ${Python3_EXECUTABLE}
