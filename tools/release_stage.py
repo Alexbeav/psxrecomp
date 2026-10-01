@@ -900,19 +900,38 @@ PROJECT_FOREIGN_FOLDERS = ('psxrecomp', 'recomp-ui', 'licenses', 'programs', 'ge
 PACKAGE_TOOLCHAIN_NOTICES = os.path.join('licenses', 'toolchain')
 
 
-def notice_files(root, skip_top=()):
+def _below(folder, root):
+    """`folder` as a path relative to `root` when it lies strictly below it, else ''.
+
+    Links are resolved on both sides, so a root reached through a junction
+    (a project's psxrecomp folder) compares by where it really is.
+    """
+    try:
+        relative = os.path.relpath(os.path.realpath(folder), os.path.realpath(root))
+    except ValueError:                                  # another drive: not below
+        return ''
+    if relative in (os.curdir, os.pardir) or relative.startswith(os.pardir + os.sep):
+        return ''
+    return os.path.normcase(relative)
+
+
+def notice_files(root, skip_top=(), exclude=()):
     """The licence and notice files below `root`: relative paths, '/' separated, folder by folder.
 
     A file counts when its name starts with LICENSE, COPYING, NOTICE or
     THIRD_PARTY, in any case. Nothing under a .git, build or build-release
-    folder counts, nor under a top-level folder named in `skip_top`.
+    folder counts, nor under a top-level folder named in `skip_top`, nor under
+    a folder named in `exclude` (full paths; one that is not below `root`
+    changes nothing).
     """
+    barred = set(b for b in (_below(folder, root) for folder in exclude if folder) if b)
     found = []
     for dirpath, dirs, files in os.walk(root):
         relative = os.path.relpath(dirpath, root)
         parts = [] if relative == '.' else relative.split(os.sep)
         dirs[:] = sorted(d for d in dirs
-                         if d not in NOTICE_SKIPPED_FOLDERS and not (not parts and d in skip_top))
+                         if d not in NOTICE_SKIPPED_FOLDERS and not (not parts and d in skip_top)
+                         and os.path.normcase(os.path.join(*(parts + [d]))) not in barred)
         for name in sorted(files):
             if name.upper().startswith(NOTICE_NAME_PREFIXES):
                 found.append('/'.join(parts + [name]))
@@ -940,14 +959,22 @@ def stage_product_notices(stage, framework, ui=None, project=None, package=None,
     Returns the number of files written per folder. A package without a
     licenses/toolchain folder is said in plain words: the product then has no
     text for SDL3, zlib or the compiler's runtime, which it links.
+
+    The step never reads what it writes. The folder it writes, and the product
+    folder when that lies inside a tree it scans, are left out of every scan:
+    a product folder is not always named build-release, and one test had it at
+    the framework's own root, where each run copied the previous run's copies
+    one level deeper (PS1B-333). So a second run writes the same files.
     """
     licenses = os.path.join(stage, 'licenses')
+    own = (stage, licenses)
     counts = {'kit': 0, 'framework': 0, 'ui': 0, 'toolchain': 0}
     try:
         for label, root, skip in (('kit', project, PROJECT_FOREIGN_FOLDERS),
                                   ('framework', framework, ()), ('ui', ui, ())):
             if root and os.path.isdir(root):
-                counts[label] = _copy_notices(notice_files(root, skip), root, os.path.join(licenses, label))
+                counts[label] = _copy_notices(notice_files(root, skip, exclude=own), root,
+                                              os.path.join(licenses, label))
         linked = os.path.join(framework, 'runtime', 'licenses') if framework else ''
         if linked and os.path.isdir(linked):
             names = sorted(n for n in os.listdir(linked) if os.path.isfile(os.path.join(linked, n)))
@@ -956,7 +983,11 @@ def stage_product_notices(stage, framework, ui=None, project=None, package=None,
         carried = os.path.join(package or project or '', PACKAGE_TOOLCHAIN_NOTICES)
         if (package or project) and os.path.isdir(carried):
             names = sorted(n for n in os.listdir(carried) if os.path.isfile(os.path.join(carried, n)))
-            counts['toolchain'] = _copy_notices(names, carried, os.path.join(licenses, 'toolchain'))
+            target = os.path.join(licenses, 'toolchain')
+            if os.path.normcase(os.path.realpath(carried)) == os.path.normcase(os.path.realpath(target)):
+                counts['toolchain'] = len(names)        # the product folder is the package: already there
+            else:
+                counts['toolchain'] = _copy_notices(names, carried, target)
     except OSError as exc:
         log('WARNING: the licence texts were not all written beside the product (%s). The game is '
             'unaffected; the texts are in the package folder.' % exc)
