@@ -5276,7 +5276,7 @@ static void handle_geom_correction(int id, const char *json)
     uint64_t tc_att = 0, tc_arm = 0, tc_off = 0, tc_nosrc = 0, tc_noz = 0;
     gpu_texture_correction_stats(&tc_att, &tc_arm, &tc_off, &tc_nosrc, &tc_noz);
     send_fmt("{\"id\":%d,\"ok\":true,"
-             "\"geometry_correction\":%d,"
+             "\"geometry_correction\":%d,\"texture_correction\":%d,"
              "\"geometry_vertex_hits\":%u,"
              "\"perspective_triangles\":%u,"
              "\"texcorr\":{\"attempts\":%llu,\"armed\":%llu,"
@@ -5284,15 +5284,19 @@ static void handle_geom_correction(int id, const char *json)
              "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u,"
              "\"pgxp\":{\"enabled\":%d,\"cpu_mode\":%d,\"tolerance\":%.3f,"
              "\"position_fallback\":%d,\"preserve_projection\":%d,"
+             "\"culling\":%d,"
              "\"lookups\":%llu,\"dataflow_hit\":%llu,\"fallback_hit\":%llu,"
              "\"native\":%llu,\"value_mismatch\":%llu,\"trunc_reject\":%llu,"
              "\"tolerance_reject\":%llu,\"w_valid\":%llu,"
              "\"produced\":%llu,\"swc2_stores\":%llu,\"ppp_produced\":%llu,"
              "\"ppp_window_fallback\":%llu,"
              "\"tri_precise\":%llu,\"tri_mixed\":%llu,\"tri_native\":%llu,"
-             "\"rect_bypass\":%llu,\"rect_partial\":%llu}}",
+             "\"rect_bypass\":%llu,\"rect_partial\":%llu,"
+             "\"nclip_precise\":%llu,\"nclip_disagree\":%llu,"
+             "\"nclip_corrected\":%llu}}",
              id,
              gte_geometry_correction_enabled(),
+             gpu_texture_correction_enabled(),
              (unsigned)hits,
              (unsigned)gpu_texture_correction_hits(),
              (unsigned long long)tc_att, (unsigned long long)tc_arm,
@@ -5301,6 +5305,7 @@ static void handle_geom_correction(int id, const char *json)
              (unsigned)lookups, (unsigned)unrec, (unsigned)ambig,
              pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
              pgxp_position_fallback(), pgxp_preserve_projection(),
+             pgxp_culling(),
              (unsigned long long)ps.lookups,
              (unsigned long long)ps.dataflow_hit,
              (unsigned long long)ps.fallback_hit,
@@ -5317,14 +5322,17 @@ static void handle_geom_correction(int id, const char *json)
              (unsigned long long)ps.tri_mixed,
              (unsigned long long)ps.tri_native,
              (unsigned long long)ps.rect_bypass,
-             (unsigned long long)ps.rect_partial);
+             (unsigned long long)ps.rect_partial,
+             (unsigned long long)ps.nclip_precise,
+             (unsigned long long)ps.nclip_disagree,
+             (unsigned long long)ps.nclip_corrected);
 }
 
 /* pgxp — live-tune the value-propagation engine for one-toggle isolation runs
  * without a rebuild: {"cmd":"pgxp","cpu_mode":0|1,"tolerance":F,
- * "position_fallback":0|1,"preserve_projection":0|1}. Fields are optional; the
- * reply echoes the resulting state (same shape as geom_correction's "pgxp"
- * object, flattened). */
+ * "position_fallback":0|1,"preserve_projection":0|1,"culling":0|1}. Fields
+ * are optional; the reply echoes the resulting state (same shape as
+ * geom_correction's "pgxp" object, flattened). */
 static void handle_pgxp(int id, const char *json)
 {
     /* Live toggles for the one-toggle-at-a-time A/B protocol (docs/ENHANCEMENTS.md
@@ -5348,6 +5356,9 @@ static void handle_pgxp(int id, const char *json)
     int pp = json_get_int(json, "preserve_projection", -1);
     if (pp >= 0)
         pgxp_set_preserve_projection(pp != 0);
+    int cu = json_get_int(json, "culling", -1);
+    if (cu >= 0)
+        pgxp_set_culling(cu != 0);
     /* tolerance is fractional (sub-pixel), so scan it directly — json_get_int
      * would truncate 0.5 to 0. */
     const char *p = strstr(json, "\"tolerance\"");
@@ -5359,9 +5370,11 @@ static void handle_pgxp(int id, const char *json)
     }
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"cpu_mode\":%d,"
              "\"tolerance\":%.3f,\"position_fallback\":%d,"
-             "\"preserve_projection\":%d,\"suppress\":%u,\"active\":%d}",
+             "\"preserve_projection\":%d,\"culling\":%d,"
+             "\"suppress\":%u,\"active\":%d}",
              id, pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
              pgxp_position_fallback(), pgxp_preserve_projection(),
+             pgxp_culling(),
              (unsigned)pgxp_test_suppress_depth(), pgxp_test_active());
 }
 

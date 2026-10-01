@@ -362,6 +362,11 @@ static int  s_diff_mode = 0;
  * entry while every other validated candidate follows its normal live route. */
 static uint32_t s_diff_addr = 0;
 static int  s_in_shadow = 0;
+/* gte.cpp holds PGXP's precise culling off while a shadow diff runs: it reads
+ * host-only shadows, which the native (speculative) pass does not record, so
+ * the two passes would see different NCLIP results (docs/ENHANCEMENTS.md
+ * G1.12). */
+int psx_overlay_shadow_diff_active(void) { return s_in_shadow; }
 /* Candidate whose shadow NATIVE pass is currently executing (NULL outside it).
  * Set ONLY around run_shadow_diff's native pass — never during the interp pass,
  * which must stay pure interp. Lets the CPS continuation re-entry path below

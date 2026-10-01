@@ -51,6 +51,8 @@ extern "C" int gpu_ws_precise_nclip_enabled(void) {
     return g_test_precise_nclip_enabled;
 }
 extern "C" void gpu_pgxp_rederive_enable(void) {}
+static int g_test_shadow_diff = 0;
+extern "C" int psx_overlay_shadow_diff_active(void) { return g_test_shadow_diff; }
 extern "C" void psx_ws_note_gte_project(int) {}
 extern "C" {
 uint64_t s_frame_count = 0;
@@ -627,6 +629,144 @@ int test_precise_nclip_is_title_scoped() {
     return 0;
 }
 
+/* PGXP precise culling (docs/ENHANCEMENTS.md G1.12): NCLIP's MAC0 takes the
+ * exact sign only while geometry correction and culling are armed, only when
+ * the three SXY shadows are believed, and never in a compared pass. */
+int test_pgxp_culling() {
+    gte_precision_tracking_set(1);
+    gte_geometry_correction_set(1);
+    pgxp_set_preserve_projection(1);
+    pgxp_set_tolerance(-1.0f);
+
+    /* A far road row: the three vertices all round to y = 113 (MAC0 0, the
+     * game culls it); exact y 112.64 / 113.12 / 113.83 (positive area). */
+    const uint32_t packed[3] = {(113u << 16) | 100u, (113u << 16) | 220u,
+                                (113u << 16) | 160u};
+    const int32_t x16[3] = {100 << 16, 220 << 16, 160 << 16};
+    const int32_t y16[3] = {(112 << 16) + 41943, (113 << 16) + 7864,
+                            (113 << 16) + 54394};
+    const int64_t cross =
+        ((int64_t)x16[1] - x16[0]) * ((int64_t)y16[2] - y16[0]) -
+        ((int64_t)y16[1] - y16[0]) * ((int64_t)x16[2] - x16[0]);
+    const int32_t area = (int32_t)((uint64_t)(cross + (1ll << 31)) >> 32);
+    auto nclip = [&](const uint32_t (&w)[3], const int32_t (&xs)[3],
+                     const int32_t (&ys)[3], uint32_t *flag) {
+        CPUState cpu{};
+        for (uint32_t i = 0; i < 3; ++i) {
+            cpu.gte_data[12 + i] = w[i];
+            gte_test_seed_precise_projection(i, w[i], xs[i], ys[i], 100);
+        }
+        gte_execute(&cpu, 0x06u);
+        if (flag) *flag = cpu.gte_ctrl[31];
+        return static_cast<int32_t>(cpu.gte_data[24]);
+    };
+    PGXPStats a{}, b{};
+    pgxp_get_stats(&a);
+    uint32_t flag_off = 0, flag_on = 0;
+
+    /* Culling off: the guest sees the hardware's 0; the disagreement is
+     * counted (the crack exposure), not corrected. */
+    pgxp_set_culling(0);
+    if (int32_t m = nclip(packed, x16, y16, &flag_off); m != 0)
+        return fail_value("culling off keeps MAC0", 0, 0x06u, 0, 0u, (uint32_t)m);
+    pgxp_get_stats(&b);
+    if (b.nclip_disagree != a.nclip_disagree + 1 ||
+        b.nclip_corrected != a.nclip_corrected)
+        return fail_value("culling off counts the disagreement", 0, 0x06u, 0,
+                          1u, (uint32_t)(b.nclip_disagree - a.nclip_disagree));
+
+    /* Culling on: MAC0 is the exact doubled area, rounded (>= 1). */
+    pgxp_set_culling(1);
+    if (area < 1)
+        return fail_value("test area", 0, 0x06u, 0, 1u, (uint32_t)area);
+    if (int32_t m = nclip(packed, x16, y16, &flag_on); m != area)
+        return fail_value("culling on takes the exact sign", 0, 0x06u, 0,
+                          (uint32_t)area, (uint32_t)m);
+    if (flag_on != flag_off)
+        return fail_value("culling keeps FLAG", 0, 0x06u, 0, flag_off, flag_on);
+    pgxp_get_stats(&a);
+    if (a.nclip_corrected != b.nclip_corrected + 1)
+        return fail_value("culling on counts the correction", 0, 0x06u, 0, 1u,
+                          (uint32_t)(a.nclip_corrected - b.nclip_corrected));
+
+    /* Reversed winding: the exact sign is negative, magnitude at least 1. */
+    {
+        const uint32_t w[3] = {packed[0], packed[2], packed[1]};
+        const int32_t xs[3] = {x16[0], x16[2], x16[1]};
+        const int32_t ys[3] = {y16[0], y16[2], y16[1]};
+        if (int32_t m = nclip(w, xs, ys, nullptr); m != -area)
+            return fail_value("culling keeps the reversed sign", 0, 0x06u, 0,
+                              (uint32_t)-area, (uint32_t)m);
+    }
+    /* A native-positive sliver whose exact winding is reversed: the game
+     * now sees it back-facing. Native (0,0),(10,0),(5,1): MAC0 +10; exact
+     * y2 = -0.25 (inside the window). */
+    {
+        const uint32_t w[3] = {0u, 10u, (1u << 16) | 5u};
+        const int32_t xs[3] = {0, 10 << 16, 5 << 16};
+        const int32_t ys[3] = {0, 0, -(1 << 14)};
+        pgxp_set_culling(0);
+        if (int32_t m = nclip(w, xs, ys, nullptr); m != 10)
+            return fail_value("native sliver MAC0", 0, 0x06u, 0, 10u, (uint32_t)m);
+        pgxp_set_culling(1);
+        if (int32_t m = nclip(w, xs, ys, nullptr); m != -3)
+            return fail_value("reversed sliver MAC0", 0, 0x06u, 0,
+                              (uint32_t)-3, (uint32_t)m);
+    }
+    /* Signs that agree keep the integer MAC0 exactly. */
+    {
+        const uint32_t w[3] = {0u, 10u, (4u << 16) | 5u};
+        const int32_t xs[3] = {0, 10 << 16, 5 << 16};
+        const int32_t ys[3] = {1 << 15, 0, (4 << 16) + (1 << 15)};
+        if (int32_t m = nclip(w, xs, ys, nullptr); m != 40)
+            return fail_value("agreeing sign keeps MAC0", 0, 0x06u, 0, 40u,
+                              (uint32_t)m);
+    }
+    /* A stale shadow (the register word changed under it) fails closed. */
+    {
+        const uint32_t w[3] = {packed[0], packed[1], packed[2]};
+        CPUState cpu{};
+        for (uint32_t i = 0; i < 3; ++i) {
+            cpu.gte_data[12 + i] = w[i];
+            gte_test_seed_precise_projection(i, w[i] ^ (i == 2 ? 1u : 0u),
+                                             x16[i], y16[i], 100);
+        }
+        gte_execute(&cpu, 0x06u);
+        if (cpu.gte_data[24] != 0u)
+            return fail_value("stale shadow keeps MAC0", 0, 0x06u, 0, 0u,
+                              cpu.gte_data[24]);
+    }
+    /* Compared passes see the hardware result: the overlay shadow diff (its
+     * interpreter pass included) and a speculative pass. */
+    g_test_shadow_diff = 1;
+    if (int32_t m = nclip(packed, x16, y16, nullptr); m != 0)
+        return fail_value("shadow diff holds culling off", 0, 0x06u, 0, 0u,
+                          (uint32_t)m);
+    g_test_shadow_diff = 0;
+    gte_precision_speculative_begin();
+    {
+        CPUState cpu{};
+        for (uint32_t i = 0; i < 3; ++i) cpu.gte_data[12 + i] = packed[i];
+        gte_execute(&cpu, 0x06u);
+        gte_precision_speculative_end();
+        if (cpu.gte_data[24] != 0u)
+            return fail_value("speculative pass holds culling off", 0, 0x06u,
+                              0, 0u, cpu.gte_data[24]);
+    }
+    /* Geometry correction off: nothing is corrected or counted. */
+    gte_geometry_correction_set(0);
+    pgxp_get_stats(&a);
+    if (int32_t m = nclip(packed, x16, y16, nullptr); m != 0)
+        return fail_value("geometry off keeps MAC0", 0, 0x06u, 0, 0u, (uint32_t)m);
+    pgxp_get_stats(&b);
+    if (b.nclip_precise != a.nclip_precise || b.nclip_disagree != a.nclip_disagree)
+        return fail_value("geometry off counts nothing", 0, 0x06u, 0, 0u,
+                          (uint32_t)(b.nclip_precise - a.nclip_precise));
+    pgxp_set_culling(0);
+    pgxp_set_preserve_projection(0);
+    return 0;
+}
+
 int test_precision_speculative_transaction() {
     constexpr uint32_t address = 0x00123450u;
     constexpr uint32_t packed = 0x00420021u;
@@ -854,6 +994,7 @@ int main() {
     if (int rc = test_precise_nclip_is_title_scoped()) return rc;
     if (int rc = test_precision_speculative_transaction()) return rc;
     if (int rc = test_preserve_projection_is_shadow_only()) return rc;
+    if (int rc = test_pgxp_culling()) return rc;
     std::puts("PASS: canonical GTE register helpers match GTEState transfer oracle");
     return 0;
 }

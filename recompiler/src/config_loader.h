@@ -507,6 +507,17 @@ struct RuntimeConfig {
     // over TCP (pgxp verb). docs/ENHANCEMENTS.md G1.11.
     bool                  video_pgxp_preserve_projection = false;
 
+    // pgxp_mod_only: the title ships PGXP through the psx.enhancement.pgxp
+    // mod (typically a default-on override of it), which is then the one
+    // switch. The [video] geometry_correction / perspective_texturing /
+    // pgxp_cpu_mode values -- game.toml's and the player's settings.toml --
+    // are not applied, and the launcher hides its Perspective textures row,
+    // so the player is never shown a second control that does nothing or
+    // keeps half of PGXP on after they switch the mod off. Netplay, which
+    // clears the mod, then runs with PGXP fully off. Default false
+    // (unchanged behaviour). game.toml only. docs/ENHANCEMENTS.md G1.12.
+    bool                  video_pgxp_mod_only = false;
+
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
     // game once visuals are validated.

@@ -432,6 +432,75 @@ int main(void) {
         pgxp_set_preserve_projection(0);
     }
 
+    /* --- NCLIP's exact determinant (G1.12) -------------------------------- */
+    {
+        /* A far road row: native y 113, 113, 113 (zero area), exact y
+         * 112.64 / 113.12 / 113.83 -> positive area. */
+        const uint32_t w0 = (113u << 16) | 100u;
+        const uint32_t w1 = (113u << 16) | 220u;
+        const uint32_t w2 = (113u << 16) | 160u;
+        const int32_t y0 = (112 << 16) + (int32_t)(0.64 * 65536);
+        const int32_t y1 = (113 << 16) + (int32_t)(0.12 * 65536);
+        const int32_t y2 = (113 << 16) + (int32_t)(0.83 * 65536);
+        auto seed3 = [&](void) {
+            pgxp_test_seed_gte_sxy(0, w0, 100 << 16, y0, SZ3, 1);
+            pgxp_test_seed_gte_sxy(1, w1, 220 << 16, y1, SZ3, 1);
+            pgxp_test_seed_gte_sxy(2, w2, 160 << 16, y2, SZ3, 1);
+        };
+        const uint32_t words[3] = { w0, w1, w2 };
+        auto expect_cross = [&](void) {
+            return ((int64_t)(220 << 16) - (100 << 16)) * ((int64_t)y2 - y0) -
+                   ((int64_t)y1 - y0) * ((int64_t)(160 << 16) - (100 << 16));
+        };
+        PGXPStats a, b;
+        pgxp_get_stats(&a);
+        int64_t cross = 0;
+        /* IR path: y0 = 112.64 does not truncate to 113 -> not believed */
+        seed3();
+        CHECK(pgxp_gte_nclip_precise(words, &cross) == 0);
+        /* preserve-projection window: believed, exact determinant */
+        pgxp_set_preserve_projection(1);
+        seed3();
+        CHECK(pgxp_gte_nclip_precise(words, &cross) == 1);
+        CHECK(cross == expect_cross());
+        CHECK(cross > 0);
+        /* a stale shadow (word changed under it) fails closed */
+        const uint32_t stale[3] = { w0, w1, w2 ^ 1u };
+        CHECK(pgxp_gte_nclip_precise(stale, &cross) == 0);
+        /* the tolerance clamp applies as at the GPU */
+        pgxp_set_tolerance(0.25f);
+        CHECK(pgxp_gte_nclip_precise(words, &cross) == 0);
+        pgxp_set_tolerance(-1.0f);
+        /* nothing inside a suppression bracket */
+        pgxp_suppress_begin();
+        CHECK(pgxp_gte_nclip_precise(words, &cross) == 0);
+        pgxp_suppress_end();
+        pgxp_get_stats(&b);
+        CHECK(b.nclip_precise == a.nclip_precise + 1);
+        pgxp_note_nclip(1, 0);
+        pgxp_note_nclip(1, 1);
+        pgxp_get_stats(&b);
+        CHECK(b.nclip_disagree == a.nclip_disagree + 2);
+        CHECK(b.nclip_corrected == a.nclip_corrected + 1);
+        pgxp_set_preserve_projection(0);
+    }
+
+    /* --- the mod request lives until the session's arming takes it -------- */
+    {
+        CHECK(pgxp_culling() == 0);                    /* default off         */
+        pgxp_set_culling(1);
+        CHECK(pgxp_culling() == 1);
+        pgxp_set_culling(0);
+        int cpu = -1, cull = -1;
+        pgxp_mod_request(1, 1, 1);
+        CHECK(pgxp_mod_requested(&cpu, &cull) == 1 && cpu == 1 && cull == 1);
+        CHECK(pgxp_mod_requested(nullptr, nullptr) == 1);   /* peek keeps it */
+        CHECK(pgxp_mod_request_take(&cpu, &cull) == 1 && cpu == 1 && cull == 1);
+        CHECK(pgxp_mod_request_take(&cpu, &cull) == 0 && cpu == 0 && cull == 0);
+        pgxp_mod_request(0, 1, 1);                     /* options need the mod */
+        CHECK(pgxp_mod_requested(&cpu, &cull) == 0 && cpu == 0 && cull == 0);
+    }
+
     /* --- triangle census (G1.1 crack exposure) --- */
     {
         PGXPStats a, b;

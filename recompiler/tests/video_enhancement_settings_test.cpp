@@ -290,14 +290,18 @@ static void test_pgxp_title_keys() {
           "pgxp_position_fallback defaults ON (unchanged behaviour)");
     check(!gc.runtime.video_pgxp_preserve_projection,
           "pgxp_preserve_projection defaults OFF (unchanged behaviour)");
+    check(!gc.runtime.video_pgxp_mod_only,
+          "pgxp_mod_only defaults OFF (unchanged behaviour)");
     fs::remove(p);
 
     p = write_game_toml("psxrecomp_pgxp_keys_dataflow.toml",
         "[video]\n"
         "pgxp_tolerance = -1.0\n"
         "pgxp_position_fallback = false\n"
-        "pgxp_preserve_projection = true\n");
+        "pgxp_preserve_projection = true\n"
+        "pgxp_mod_only = true\n");
     gc = PSXRecompV4::load_game_config(p);
+    check(gc.runtime.video_pgxp_mod_only, "pgxp_mod_only = true is honoured");
     check(gc.runtime.video_pgxp_tolerance < 0.0,
           "pgxp_tolerance = -1.0 disables the clamp");
     check(!gc.runtime.video_pgxp_position_fallback,
@@ -315,6 +319,14 @@ static void test_pgxp_title_keys() {
     bool rejected = false;
     try { (void)PSXRecompV4::load_game_config(p); } catch (const std::exception&) { rejected = true; }
     check(rejected, "pgxp_preserve_projection must be a boolean");
+    fs::remove(p);
+
+    p = write_game_toml("psxrecomp_pgxp_keys_bad_mod_only.toml",
+        "[video]\n"
+        "pgxp_mod_only = \"yes\"\n");
+    rejected = false;
+    try { (void)PSXRecompV4::load_game_config(p); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "pgxp_mod_only must be a boolean");
     fs::remove(p);
 }
 

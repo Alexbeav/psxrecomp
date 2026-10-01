@@ -686,6 +686,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.video_pgxp_preserve_projection =
                 toml::find<bool>(video, "pgxp_preserve_projection");
         }
+        if (video.contains("pgxp_mod_only")) {
+            rt.video_pgxp_mod_only = toml::find<bool>(video, "pgxp_mod_only");
+        }
         if (video.contains("crt_filter")) {
             const auto mode = toml::find<std::string>(video, "crt_filter");
             if      (mode == "raw")       rt.video_screen_kind = 0;

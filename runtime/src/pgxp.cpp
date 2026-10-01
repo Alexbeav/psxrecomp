@@ -81,6 +81,7 @@ static int      s_cpu_mode = 0;
 static float    s_tolerance = 0.5f;   /* user-validated seam clamp (G1.10) */
 static int      s_position_fallback = 1;   /* G1.4 cache tier (G1.11 switch) */
 static int      s_preserve_projection = 0; /* exact-projection shadows (G1.11) */
+static int      s_culling = 0;             /* precise NCLIP sign (G1.12)   */
 static uint32_t s_suppress = 0;
 static int      s_deferred_invalidate = 0;
 
@@ -144,17 +145,29 @@ extern "C" void pgxp_set_preserve_projection(int enabled) {
 }
 extern "C" int pgxp_preserve_projection(void) { return s_preserve_projection; }
 
+extern "C" void pgxp_set_culling(int enabled) { s_culling = enabled ? 1 : 0; }
+extern "C" int pgxp_culling(void) { return s_culling; }
+
 static int s_mod_request = 0;
 static int s_mod_request_cpu = 0;
+static int s_mod_request_cull = 0;
 
-extern "C" void pgxp_mod_request(int enabled, int cpu_mode) {
+extern "C" void pgxp_mod_request(int enabled, int cpu_mode, int culling) {
     s_mod_request = enabled ? 1 : 0;
     s_mod_request_cpu = (enabled && cpu_mode) ? 1 : 0;
+    s_mod_request_cull = (enabled && culling) ? 1 : 0;
 }
 
-extern "C" int pgxp_mod_requested(int *cpu_mode) {
+extern "C" int pgxp_mod_requested(int *cpu_mode, int *culling) {
     if (cpu_mode) *cpu_mode = s_mod_request_cpu;
+    if (culling) *culling = s_mod_request_cull;
     return s_mod_request;
+}
+
+extern "C" int pgxp_mod_request_take(int *cpu_mode, int *culling) {
+    const int requested = pgxp_mod_requested(cpu_mode, culling);
+    pgxp_mod_request(0, 0, 0);
+    return requested;
 }
 
 extern "C" void pgxp_suppress_begin(void) {
@@ -179,6 +192,11 @@ extern "C" void pgxp_get_stats(PGXPStats *out) {
 extern "C" void pgxp_note_rect_bypass(int all_precise) {
     if (all_precise) s_stats.rect_bypass++;
     else             s_stats.rect_partial++;
+}
+
+extern "C" void pgxp_note_nclip(int disagree, int corrected) {
+    if (disagree)  s_stats.nclip_disagree++;
+    if (corrected) s_stats.nclip_corrected++;
 }
 
 extern "C" void pgxp_note_triangle(int precise) {
@@ -757,6 +775,35 @@ extern "C" int pgxp_get_gte_sxy_checked(uint32_t index, uint32_t expect,
     return 1;
 }
 
+/* Defined below with the GPU consumer. */
+static inline int pgxp_accept(int32_t px, int32_t py, int32_t int_x,
+                              int32_t int_y, uint32_t word);
+
+extern "C" int pgxp_gte_nclip_precise(const uint32_t sxy[3], int64_t *cross) {
+    if (!g_pgxp_active) return 0;
+    int64_t x[3], y[3];
+    for (int i = 0; i < 3; i++) {
+        const PGXPValue *pv = &s_gte[12 + i];
+        if (!pv_live(pv) || (pv->flags & PGXP_F_VXY) != PGXP_F_VXY ||
+            pv->value != sxy[i])
+            return 0;
+        /* The GPU parses the packet half as the same signed integer for every
+         * value the GTE can produce (its saturation limits are -0x400 and
+         * 0x3FF), so the register half stands in for the native parse. */
+        if (pgxp_accept(pv->x16, pv->y16, (int16_t)(sxy[i] & 0xFFFFu),
+                        (int16_t)(sxy[i] >> 16), sxy[i]) != 0)
+            return 0;
+        x[i] = pv->x16;
+        y[i] = pv->y16;
+    }
+    /* NCLIP's determinant, sx0*(sy1-sy2) + sx1*(sy2-sy0) + sx2*(sy0-sy1),
+     * on 16.16 positions. Positions are bounded to +-2^28 (the transport
+     * clamp), so every product fits in 64 bits. */
+    *cross = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
+    s_stats.nclip_precise++;
+    return 1;
+}
+
 extern "C" void pgxp_gte_reg_written(int reg, uint32_t value) {
     /* Invalidation-class bookkeeping: runs even with the engine disarmed so
      * seeded/leftover shadows can never outlive a guest register write. Only
@@ -785,6 +832,25 @@ static inline int pgxp_agrees(int32_t p16, int32_t native, int16_t half) {
     const int64_t d = (int64_t)p16 - (int64_t)native * 65536;
     return d > -(int64_t)PGXP_PPP_AGREE_BELOW * 65536 &&
            d < (int64_t)PGXP_PPP_AGREE_ABOVE * 65536;
+}
+
+/* The consumer-side safeguards on one candidate position: truncation
+ * agreement on both axes, then the tolerance clamp. Returns 0 when accepted,
+ * 1 for a truncation reject, 2 for a tolerance reject. Shared by the GPU
+ * lookup and the precise NCLIP so culling and drawing believe exactly the
+ * same vertices. */
+static inline int pgxp_accept(int32_t px, int32_t py, int32_t int_x,
+                              int32_t int_y, uint32_t word) {
+    if (!pgxp_agrees(px, int_x, (int16_t)(word & 0xFFFFu)) ||
+        !pgxp_agrees(py, int_y, (int16_t)(word >> 16)))
+        return 1;
+    if (s_tolerance >= 0.0f) {
+        float dx = (float)((int64_t)px - (int64_t)int_x * 65536) * (1.0f / 65536.0f);
+        float dy = (float)((int64_t)py - (int64_t)int_y * 65536) * (1.0f / 65536.0f);
+        if (std::fabs(dx) > s_tolerance || std::fabs(dy) > s_tolerance)
+            return 2;
+    }
+    return 0;
 }
 
 extern "C" int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
@@ -821,18 +887,15 @@ extern "C" int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
     if (have) {
         /* Truncation agreement: the GPU parsed 11-bit integers out of the
          * packet; a precise position whose integer part disagrees (a
-         * wrapped/CPU-modified coordinate) must not be believed. */
-        if (!pgxp_agrees(px, int_x, (int16_t)(packet_word & 0xFFFFu)) ||
-            !pgxp_agrees(py, int_y, (int16_t)(packet_word >> 16))) {
+         * wrapped/CPU-modified coordinate) must not be believed. Then the
+         * tolerance clamp. */
+        const int why = pgxp_accept(px, py, int_x, int_y, packet_word);
+        if (why == 1) {
             s_stats.trunc_reject++;
             have = 0;
-        } else if (s_tolerance >= 0.0f) {
-            float dx = (float)((int64_t)px - (int64_t)int_x * 65536) * (1.0f / 65536.0f);
-            float dy = (float)((int64_t)py - (int64_t)int_y * 65536) * (1.0f / 65536.0f);
-            if (std::fabs(dx) > s_tolerance || std::fabs(dy) > s_tolerance) {
-                s_stats.tolerance_reject++;
-                have = 0;
-            }
+        } else if (why == 2) {
+            s_stats.tolerance_reject++;
+            have = 0;
         }
     }
 

@@ -104,20 +104,47 @@ int pgxp_project_precise(int64_t mac1, int64_t mac2, int64_t mac3, int shift,
  * ppp_window_fallback on reject. */
 int pgxp_ppp_accept(int32_t x16, int32_t y16, uint32_t packed);
 
+/* Precise culling (docs/ENHANCEMENTS.md G1.12). Off (the default): NCLIP is
+ * exactly the hardware's. On, while geometry correction is armed: when the
+ * three SXY FIFO shadows are live, describe the current register words and
+ * pass the same acceptance the GPU applies when it draws them, and the sign
+ * of their exact determinant differs from the integer one, NCLIP's MAC0
+ * takes the exact sign (magnitude: the exact doubled area rounded, at least
+ * 1). A game that culls on that sign then keeps the sub-pixel faces PGXP
+ * draws with positive area -- the far road rows a native zero-area test
+ * drops, which open gaps between their precisely placed neighbours -- and
+ * drops the slivers whose drawn winding is reversed. This CHANGES
+ * guest-visible MAC0 and so guest control flow: only the mod arms it
+ * (netplay clears the mod), and gte.cpp holds it off in every pass that is
+ * compared against another execution (overlay shadow diff, speculative and
+ * replay passes). Live-tunable over TCP. */
+void pgxp_set_culling(int enabled);
+int  pgxp_culling(void);
+
+/* NCLIP's exact determinant from the SXY0..2 register shadows, in 2^-32
+ * px^2 units (16.16 times 16.16). Returns 1 when all three shadows are live,
+ * carry the register words in sxy[] and pass the GPU consumer's truncation
+ * agreement and tolerance clamp; else 0. Counts nclip_precise. */
+int pgxp_gte_nclip_precise(const uint32_t sxy[3], int64_t *cross);
+
 /* Mod-owned request (the framework's psx.enhancement.pgxp package).
  *
  * The mod's activation runs at session start, before main.cpp's renderer
  * setup, and that setup applies the [video] baseline (geometry_correction,
  * perspective_texturing, pgxp_cpu_mode). An activation that armed the
  * corrections directly was switched straight back off there. So the
- * activation only records a request, and the renderer setup combines it with
- * the baseline (pgxp_session.h). reset_mod_owned_presentation() clears it at
- * every session start, so a session with an empty plan (netplay, or the mod
- * disabled) gets exactly the [video] values. */
-void pgxp_mod_request(int enabled, int cpu_mode);
-/* Returns nonzero when this session's plan asked for PGXP; *cpu_mode (may be
- * NULL) receives the mod's CPU-mode option. */
-int  pgxp_mod_requested(int *cpu_mode);
+ * activation only records a request, and the session arming
+ * (psx_pgxp_session_arm, pgxp_session.h) takes it -- reads and clears it --
+ * and combines it with the baseline. A request therefore lives only from one
+ * session's activation to that session's arming: a later session whose plan
+ * is empty (netplay, or the mod disabled) cannot inherit it.
+ * reset_mod_owned_presentation() also clears it at every session start. */
+void pgxp_mod_request(int enabled, int cpu_mode, int culling);
+/* Returns nonzero when this session's plan asked for PGXP; *cpu_mode and
+ * *culling (either may be NULL) receive the mod's options. */
+int  pgxp_mod_requested(int *cpu_mode, int *culling);
+/* pgxp_mod_requested, then clears the request. */
+int  pgxp_mod_request_take(int *cpu_mode, int *culling);
 
 /* Drop all shadows (savestate load, raw RAM restore, timeline breaks).
  * O(1) via generation bump. Deferred while suppressed. */
@@ -207,6 +234,15 @@ typedef struct PGXPStats {
      * which keep the shortcut (drawing them as triangles would mix). */
     uint64_t rect_bypass;
     uint64_t rect_partial;
+    /* NCLIPs while geometry correction is armed (docs/ENHANCEMENTS.md G1.12):
+     * nclip_precise had an exact determinant; nclip_disagree: its sign (non-
+     * zero) differs from the integer MAC0's, so the game's cull decision on
+     * that face disagrees with the face PGXP draws -- the crack exposure that
+     * tri_* cannot see, because a culled face draws no triangle at all;
+     * nclip_corrected: of those, MAC0 replaced by precise culling. */
+    uint64_t nclip_precise;
+    uint64_t nclip_disagree;
+    uint64_t nclip_corrected;
 } PGXPStats;
 
 void pgxp_get_stats(PGXPStats *out);
@@ -216,6 +252,9 @@ void pgxp_note_triangle(int precise);
 /* One rectangle-shortcut quad sent down the triangle path (all_precise) or
  * kept on the shortcut with only some precise vertices. */
 void pgxp_note_rect_bypass(int all_precise);
+/* One NCLIP whose exact sign disagreed with MAC0, and whether MAC0 was
+ * corrected. */
+void pgxp_note_nclip(int disagree, int corrected);
 
 /* --- gte.cpp forwarding surface (v14 ABI compat) -------------------------- */
 

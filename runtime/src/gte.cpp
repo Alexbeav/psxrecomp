@@ -9,6 +9,9 @@
 
 extern "C" uint32_t psx_read_word(uint32_t addr);
 extern "C" int gpu_ws_precise_nclip_enabled(void);
+/* overlay_loader.c: nonzero while an overlay shadow diff (interpreter record
+ * plus native replay of one candidate) is running. */
+extern "C" int psx_overlay_shadow_diff_active(void);
 
 namespace PSXRecomp {
 namespace GTE {
@@ -992,6 +995,37 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
                    (int64_t)sx2 * (sy0 - sy1);
     gte->check_mac0_overflow(mac0);
     int32_t out = static_cast<int32_t>(mac0);
+    /* PGXP's NCLIP (docs/ENHANCEMENTS.md G1.12). While geometry correction is
+     * armed, compare the sign of the exact determinant of the three vertices
+     * PGXP will draw with the integer one; a disagreement is a face the game
+     * culls (or keeps) on a winding the drawn face does not have. Counted
+     * always; with precise culling on, MAC0 takes the exact sign. Never in a
+     * pass that is compared against another execution of the same code: the
+     * speculative and replay passes record no shadows, so the overlay shadow
+     * diff holds it off for its interpreter pass too and both passes see the
+     * integer MAC0. FLAG keeps the integer result's overflow bits. */
+    if (s_geom_enabled && !s_gte_replay_sandbox && s_speculative_depth == 0 &&
+        !psx_overlay_shadow_diff_active()) {
+        const uint32_t words[3] = { (uint32_t)gte->SXY[0], (uint32_t)gte->SXY[1],
+                                    (uint32_t)gte->SXY[2] };
+        int64_t cross = 0;
+        if (pgxp_gte_nclip_precise(words, &cross)) {
+            const int sp = (cross > 0) - (cross < 0);
+            const int sn = (out > 0) - (out < 0);
+            if (sp != 0 && sp != sn) {
+                const int corrected = pgxp_culling();
+                if (corrected) {
+                    const uint64_t mag = cross < 0 ? (uint64_t)(-cross)
+                                                   : (uint64_t)cross;
+                    uint64_t area = (mag + (1ull << 31)) >> 32;
+                    if (area < 1) area = 1;
+                    if (area > 0x7FFFFFFFull) area = 0x7FFFFFFFull;
+                    out = sp > 0 ? (int32_t)area : -(int32_t)area;
+                }
+                pgxp_note_nclip(1, corrected);
+            }
+        }
+    }
     s_nclip_last_native = out;
     s_nclip_last_precise_valid = false;
     /* Compute an exact 16.16 determinant for configured branch consumers, but

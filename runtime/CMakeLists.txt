@@ -378,9 +378,34 @@ if(BUILD_TESTING)
     # resolver main.cpp's renderer setup uses, in main.cpp's order. Pins that
     # the [video] baseline no longer undoes the mod, that a cleared (netplay)
     # plan keeps the baseline, and that the env overrides win.
+    # The session arming main.cpp runs (src/pgxp_session.cpp) against the
+    # real mod runtime, the real builtin plugin and the builtin's own
+    # manifest: default-on, netplay clear, the off switch, options, env
+    # overrides and [video] pgxp_mod_only.
     add_executable(pgxp_session_test tests/test_pgxp_session.cpp
-        src/mod_builtin_pgxp.c src/pgxp.cpp src/psx_ram_geometry.c)
-    target_include_directories(pgxp_session_test PRIVATE include)
+        src/pgxp_session.cpp src/mod_builtin_pgxp.c src/pgxp.cpp
+        src/psx_ram_geometry.c
+        src/mod_runtime.cpp
+        src/mod_packages.cpp
+        src/disc_path.cpp
+        src/cue_sheet.cpp
+        src/iso_reader.cpp
+        src/crc32.c
+        src/psx_sha256.c)
+    target_include_directories(pgxp_session_test PRIVATE
+        include
+        ../recompiler/include
+        ../recompiler/lib/toml11)
+    target_compile_definitions(pgxp_session_test PRIVATE
+        PSX_BUILTIN_PGXP_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/../mods/builtin/packages/psx.enhancement.pgxp/1.0.0/manifest.toml")
+    target_link_libraries(pgxp_session_test PRIVATE chdr-static)
+    if(WIN32)
+        if(MSVC)
+            target_link_options(pgxp_session_test PRIVATE /STACK:16777216)
+        else()
+            target_link_options(pgxp_session_test PRIVATE -Wl,--stack,16777216)
+        endif()
+    endif()
     add_test(NAME pgxp_session_test COMMAND pgxp_session_test)
 
     add_executable(psx_instr_cost_test tests/test_psx_instr_cost.cpp)
