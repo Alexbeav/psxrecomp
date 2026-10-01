@@ -248,7 +248,17 @@ positions = [2]
   `settings.toml`, in the layout above. `tools/program_set.py join` is the one
   implementation of the join; a release tool that builds the programs itself
   calls it too. A file two programs carry must be byte-identical, except a
-  short list of files that differ per build.
+  short list of files that differ per build. The join looks for every such
+  file before it writes anything and names them all in one stop; with
+  `--record` the list is also written as JSON.
+- **Check the kits before building.** `python psxrecomp/tools/program_set.py
+  kit-check <kit folder> <kit folder>` applies that rule to the kits
+  themselves. It lists the files a kit puts into the shared folder that differ
+  between the kits: `game_options.toml`, `VERSION`, packages under
+  `mods/preloaded/packages`, `launcher_assets`, and licence or notice files.
+  It exits 1 when there is one. It compares bytes, so compare kits that were
+  checked out the same way. It cannot see a difference that a build creates;
+  the join finds those.
 - **No half-made folder.** The setup program starts the set only when the
   first program's executable exists in the build folder. That file is removed
   before the first program is built and is written last, so a stop anywhere
