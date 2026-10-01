@@ -21,6 +21,16 @@
 #     [--omit-openbios]     # retail-BIOS-only titles; game.toml openbios=false
 #     [--version-env BPE_RELEASE_VERSION] \
 #     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
+#     [--set set.toml]      # a set whose discs boot different programs
+#
+# --set packages a set of programs as ONE setup package (Resident Evil 2). The
+# root is then the set's root: set.toml, the host project written by
+# `psxrecomp/tools/program_set.py init-host`, and one single-program project
+# per program under the folders set.toml names (programs/<program>/). Each
+# program is staged by the same rules as a single package's project; the
+# overlay_cache check and the BIOS wording read each program's game.toml. The
+# root carries no mods/: each program's own catalog travels in its folder.
+# --exe-name is the set's exe name ([set] exe_name).
 #
 # --runtime-dir stages a directory the runtime loads exe-relative (mods,
 # bezels, ...) from the built exe's directory into the stage root, so the
@@ -77,6 +87,10 @@ PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_DIRS=()
 RUNTIME_DIRS_OPTIONAL=()
+# --set: the set file of a set of programs, relative to the root. Empty for a
+# single-program package, and nothing below changes for one.
+SET_FILE=""
+SET_FOLDERS=()
 # mods/ ships by default; --no-mods opts a catalog-less title out.
 STAGE_MODS=1
 # Drop channel = "developer" packages from the shipped catalog.
@@ -128,12 +142,50 @@ while [[ $# -gt 0 ]]; do
     --no-embed-toolchain) EMBED_TOOLCHAIN=0; shift ;;
     --omit-openbios) OMIT_OPENBIOS=1; shift ;;
     --ship-without-overlay-cache-because) SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE="${2:?}"; shift 2 ;;
+    --set) SET_FILE="${2:?}"; shift 2 ;;
     *)
       echo "error: unknown arg: $1" >&2
       usage 2
       ;;
   esac
 done
+
+# A set of programs. The folders come from set.toml through the same reader
+# setup uses, so a set file setup would refuse is refused here, before any
+# staging. The set's root ships no mods catalog of its own.
+set_program_folders() {  # set_program_folders <root> <set file>: one program folder per line
+  local python=""
+  for candidate in python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then python="${candidate}"; break; fi
+  done
+  if [[ -z "${python}" ]]; then
+    echo "error: no python3 on PATH; cannot read ${2}" >&2
+    return 1
+  fi
+  "${python}" "${SCRIPT_DIR}/program_set.py" folders --set "${1}/${2}"
+}
+if [[ -n "${SET_FILE}" ]]; then
+  # set.toml at the root, given by name or by path: the set's setup host reads
+  # that name there, so no other file can be the set file.
+  _set_root="$(cd "${ROOT}" && pwd)"
+  _set_given="${SET_FILE//\\//}"
+  if [[ "${_set_given##*/}" != "set.toml" || ! -f "${_set_root}/set.toml" ]] || \
+     { [[ "${_set_given}" == */* ]] && ! [[ "${_set_given%/*}" -ef "${_set_root}" ]]; }; then
+    echo "error: --set must be set.toml at the root (the set's setup host reads that name)" >&2
+    exit 2
+  fi
+  SET_FILE="set.toml"
+  _set_folders="$(set_program_folders "${_set_root}" "${SET_FILE}")" || exit 1
+  while IFS= read -r _folder; do
+    _folder="${_folder%$'\r'}"
+    [[ -n "${_folder}" ]] && SET_FOLDERS+=("${_folder}")
+  done <<<"${_set_folders}"
+  if [[ ${#SET_FOLDERS[@]} -lt 2 ]]; then
+    echo "error: ${SET_FILE} names fewer than two programs" >&2
+    exit 1
+  fi
+  STAGE_MODS=0
+fi
 
 # Default the mods catalog into the required set unless the caller already
 # named it (in either list) or opted out. Appending rather than overriding
@@ -178,6 +230,36 @@ elif [[ -d "${BUILD_DIR}" ]]; then
 else
   echo "error: build dir not found: ${BUILD_DIR}" >&2
   exit 1
+fi
+
+# A set of programs: the set file, the host project init-host wrote, and each
+# program's folder. A program folder that already holds setup's own work must
+# not be packaged: psxrecomp/ and recomp-ui/ there are links to the root's
+# trees (a copy would ship the framework once per program), and generated/ is
+# game code.
+if [[ -n "${SET_FILE}" ]]; then
+  if [[ ${#PROJECT_FILES[@]} -eq 0 && ${#PROJECT_DIRS[@]} -eq 0 ]]; then
+    PROJECT_FILES=("${SET_FILE}" CMakeLists.txt codegen_setup.c codegen_setup.h VERSION)
+    for f in README.md; do
+      if [[ -e "${ROOT}/${f}" ]]; then
+        PROJECT_FILES+=("${f}")
+      fi
+    done
+    PROJECT_DIRS=("${SET_FOLDERS[@]}")
+  fi
+  for _folder in "${SET_FOLDERS[@]}"; do
+    if [[ ! -f "${ROOT}/${_folder}/game.toml" || ! -f "${ROOT}/${_folder}/CMakeLists.txt" ]]; then
+      echo "error: ${_folder} is not a program's project (game.toml and CMakeLists.txt)" >&2
+      exit 1
+    fi
+    for _made in psxrecomp recomp-ui generated build-release .cache; do
+      if [[ -e "${ROOT}/${_folder}/${_made}" || -L "${ROOT}/${_folder}/${_made}" ]]; then
+        echo "error: ${_folder}/${_made} exists: this source was set up or built." >&2
+        echo "  Package a set from a clean export; setup makes that folder on the player's machine." >&2
+        exit 1
+      fi
+    done
+  done
 fi
 
 # Defaults for a typical title if caller passed none.
@@ -413,6 +495,12 @@ if [[ "${EXCLUDE_DEV_MODS}" -eq 1 ]]; then
   prune_dev_mods "${STAGE}/mods/bundled" \
                  "${STAGE}/mods/preloaded/packages" \
                  "${STAGE}/mods/packages"
+  # A set carries each program's source catalog in the program's folder.
+  for _folder in "${SET_FOLDERS[@]:-}"; do
+    [[ -n "${_folder}" ]] || continue
+    prune_dev_mods "${STAGE}/${_folder}/mods/preloaded/packages" \
+                   "${STAGE}/${_folder}/mods/packages"
+  done
   _dev_left=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
       "${STAGE}" --include=manifest.toml 2>/dev/null || true; } | wc -l)
   if [[ "${_dev_left}" -ne 0 ]]; then
@@ -490,6 +578,22 @@ fi
 
 # Never ship game generated C or common disc working trees.
 rm -rf "${STAGE}/generated" "${STAGE}/bpe" "${STAGE}/motk" "${STAGE}/disc"
+for _folder in "${SET_FOLDERS[@]:-}"; do
+  [[ -n "${_folder}" ]] || continue
+  rm -rf "${STAGE}/${_folder}/generated" "${STAGE}/${_folder}/disc" \
+         "${STAGE}/${_folder}/prepared_disc" "${STAGE}/${_folder}/dist" \
+         "${STAGE}/${_folder}/saves" "${STAGE}/${_folder}/cache"
+done
+
+# The recipes this package builds from: the project's game.toml, or one per
+# program for a set.
+RECIPES=("${STAGE}/game.toml")
+if [[ -n "${SET_FILE}" ]]; then
+  RECIPES=()
+  for _folder in "${SET_FOLDERS[@]}"; do
+    RECIPES+=("${STAGE}/${_folder}/game.toml")
+  done
+fi
 
 recipe_bios_hint() {  # recipe_bios_hint <game.toml>: player-facing BIOS wording for README-SETUP.txt
   # A recipe may omit bios_config and rely on the host default stem; grep's
@@ -606,19 +710,29 @@ if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
   fi
 fi
 
-if ! grep -qE '^[[:space:]]*overlay_cache[[:space:]]*=[[:space:]]*true' "${STAGE}/game.toml"; then
-  if [[ -z "${SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE}" ]]; then
-    echo "error: REFUSING TO PACKAGE: ${STAGE}/game.toml has no '[runtime] overlay_cache = true'." >&2
-    echo "       The runtime never initialises the overlay loader without it, so every streamed" >&2
-    echo "       overlay runs on the dirty-RAM interpreter for every player. Add the key, or pass" >&2
-    echo "       --ship-without-overlay-cache-because '<reason>' to record why this title ships without it." >&2
-    exit 1
+for _recipe in "${RECIPES[@]}"; do
+  if ! grep -qE '^[[:space:]]*overlay_cache[[:space:]]*=[[:space:]]*true' "${_recipe}"; then
+    if [[ -z "${SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE}" ]]; then
+      echo "error: REFUSING TO PACKAGE: ${_recipe} has no '[runtime] overlay_cache = true'." >&2
+      echo "       The runtime never initialises the overlay loader without it, so every streamed" >&2
+      echo "       overlay runs on the dirty-RAM interpreter for every player. Add the key, or pass" >&2
+      echo "       --ship-without-overlay-cache-because '<reason>' to record why this title ships without it." >&2
+      exit 1
+    fi
+    echo "warning: packaging without overlay_cache = true (reason: ${SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE})" >&2
   fi
-  echo "warning: packaging without overlay_cache = true (reason: ${SHIP_WITHOUT_OVERLAY_CACHE_BECAUSE})" >&2
-fi
+done
 
 if [[ -z "${BIOS_HINT}" ]]; then
-  BIOS_HINT="$(recipe_bios_hint "${STAGE}/game.toml")"
+  if [[ -n "${SET_FILE}" ]]; then
+    # The programs of a set are bound to one BIOS; the first one's recipe says which.
+    BIOS_HINT="$(recipe_bios_hint "${RECIPES[0]}")"
+  else
+    BIOS_HINT="$(recipe_bios_hint "${STAGE}/game.toml")"
+  fi
+fi
+if [[ -n "${SET_FILE}" && "${DISC_HINT}" == "your legally owned game disc" ]]; then
+  DISC_HINT="every disc of your legally owned game"
 fi
 
 cat >"${STAGE}/README-SETUP.txt" <<EOF
@@ -668,6 +782,22 @@ EOF
     ;;
 esac
 
+if [[ -n "${SET_FILE}" ]]; then
+  # A set: what differs for the player, in place of the diagnostic-mode text
+  # (no diagnostic build for a set in this release; setup says so if asked).
+  cat >>"${STAGE}/README-SETUP.txt" <<EOF
+
+This game's discs are separate programs:
+- Setup needs every disc. It builds one program per disc set and puts them
+  all in build-release/, with one saves folder and one settings file.
+- Setup takes about as long as one single-program setup per program.
+- When setup is done, a start script per program appears next to
+  ${EXE_BASENAME}. Use them, or run the executables in build-release/.
+  ${EXE_BASENAME} itself starts the first program.
+- Diagnostic mode and the optimised (PGO) rebuild are not available for this
+  package.
+EOF
+else
 cat >>"${STAGE}/README-SETUP.txt" <<EOF
 
 Diagnostic mode (if the game crashes, freezes, or misbehaves):
@@ -683,6 +813,7 @@ Diagnostic mode (if the game crashes, freezes, or misbehaves):
   report files (never saves, BIOS, or disc images).
 See psxrecomp/docs/DIAGNOSTIC_MODE.md for details.
 EOF
+fi
 
 # --- Gate: the staged tree must be able to configure itself ----------------
 # The project file/dir list is an allowlist, so any path a project adds to
@@ -695,8 +826,11 @@ EOF
 # a cmake variable cannot be resolved here.
 if [[ -f "${STAGE}/CMakeLists.txt" ]]; then
   cml="${STAGE}/CMakeLists.txt"
+  # `|| true`: a CMakeLists.txt with no if(EXISTS ...) guard at all (the host
+  # project of a set) makes grep exit 1, which under `set -euo pipefail` ended
+  # the packager here without a word.
   guarded="$(grep -oE 'if\(EXISTS[[:space:]]+"\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+"' "${cml}" \
-               | sed -E 's|.*\$\{CMAKE_CURRENT_SOURCE_DIR\}/||; s|"$||' | sort -u)"
+               | sed -E 's|.*\$\{CMAKE_CURRENT_SOURCE_DIR\}/||; s|"$||' | sort -u || true)"
   missing_refs=()
   while IFS= read -r rel; do
     [[ -z "${rel}" ]] && continue
@@ -714,6 +848,32 @@ if [[ -f "${STAGE}/CMakeLists.txt" ]]; then
     exit 1
   fi
 fi
+# A set: the same check for each program's CMakeLists.txt. A program's psxrecomp/
+# and recomp-ui/ are the root's trees, linked into its folder at setup time.
+for _folder in "${SET_FOLDERS[@]:-}"; do
+  [[ -n "${_folder}" ]] || continue
+  cml="${STAGE}/${_folder}/CMakeLists.txt"
+  guarded="$(grep -oE 'if\(EXISTS[[:space:]]+"\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+"' "${cml}" \
+               | sed -E 's|.*\$\{CMAKE_CURRENT_SOURCE_DIR\}/||; s|"$||' | sort -u || true)"
+  missing_refs=()
+  while IFS= read -r rel; do
+    [[ -z "${rel}" ]] && continue
+    case "${rel}" in *"*"*|*"?"*|*'$'*) continue ;; esac
+    if [[ -n "${guarded}" ]] && grep -qxF -- "${rel}" <<<"${guarded}"; then
+      continue
+    fi
+    case "${rel}" in
+      psxrecomp|psxrecomp/*|recomp-ui|recomp-ui/*) [[ -e "${STAGE}/${rel}" ]] && continue ;;
+    esac
+    [[ -e "${STAGE}/${_folder}/${rel}" ]] || missing_refs+=("${_folder}/${rel}")
+  done < <(grep -oE '\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+' "${cml}" \
+             | sed 's|^\${CMAKE_CURRENT_SOURCE_DIR}/||' | sort -u || true)
+  if (( ${#missing_refs[@]} )); then
+    echo "error: a program's CMakeLists.txt references paths that are not staged in the zip:" >&2
+    for r in "${missing_refs[@]}"; do echo "  - ${r}" >&2; done
+    exit 1
+  fi
+done
 
 # Second gate: the project's own C must be able to include what it includes.
 # The CMakeLists check above cannot see this — src/<game>_mods.c pulls in

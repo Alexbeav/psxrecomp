@@ -1,0 +1,51 @@
+/* @HOST_STAMP@
+ *
+ * Setup program of a set whose discs boot different programs. The config is
+ * set.toml: the wizard reads the set's discs from its [game] table, and
+ * psxrecomp_cli.py runs generate and rebuild once per program when its config
+ * has a [set] table. After setup this program forwards to the first program;
+ * the start scripts beside it start each program. */
+
+#include "codegen_setup.h"
+
+#include "psxrecomp_codegen_host.h"
+
+static const PsxrecompCodegenHostConfig kCodegenConfig = {
+    .display_name = "@SET_TITLE@",
+    .project_root_env = "@ENV_PREFIX@_PROJECT_ROOT",
+    .build_dir_env = "@ENV_PREFIX@_BUILD_DIR",
+    .force_setup_env = "@ENV_PREFIX@_FORCE_SETUP",
+    .psxrecomp_cli_relpath = "psxrecomp/psxrecomp_cli.py",
+    .seed_cfg_relpath = "@SET_FILE@",
+    .game_toml_relpath = "@SET_FILE@",
+    .gen_marker_relpath = "generated/@SET_MARKER@",
+    .build_dir_name = "build-release",
+    .cmake_target = "psx-runtime",
+    .exe_basename = "@FIRST_EXE_NAME@",
+    .prepare_note =
+        "This game's discs are separate programs. Setup needs every disc: it "
+        "uses them with the local psxrecomp SDK to generate and build each "
+        "program, then puts them in build-release/ with one saves folder. "
+        "A start script per program appears next to this setup exe.",
+    .prepare_note_windows =
+        "This game's discs are separate programs. Setup needs every disc: it "
+        "generates each program, then quits and builds them via a helper. "
+        "Afterward build-release/ holds every program with one saves folder, "
+        "and a start script per program appears next to this setup exe.",
+    .prepare_note_no_cmake =
+        "This game's discs are separate programs. Setup needs every disc to "
+        "generate each program. Rebuild into build-release/, then use the "
+        "start scripts next to this setup exe.",
+};
+
+void psx_game_codegen_setup_apply(RecompLauncherCGameInfo* gi) {
+    psxrecomp_codegen_host_apply(gi, &kCodegenConfig);
+}
+
+void psx_game_codegen_relaunch_or_exit(const char* disc_path) {
+    psxrecomp_codegen_host_relaunch_or_exit(disc_path);
+}
+
+void psx_game_codegen_forward_if_built(int argc, char** argv) {
+    psxrecomp_codegen_host_forward_if_built(&kCodegenConfig, argc, argv);
+}

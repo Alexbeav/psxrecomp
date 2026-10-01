@@ -1233,11 +1233,27 @@ def run_prepare_disc(
     return cue.resolve()
 
 
+def program_set_tool(config: Path):
+    """tools/program_set.py when *config* declares a set of programs, else None.
+
+    A set is several discs that boot different programs (Resident Evil 2). Its
+    config is set.toml, with a [set] table; generate and rebuild then run once
+    per program and join the results. A game.toml has no [set] table, so every
+    single-program project, multi-disc or not, takes the code below unchanged.
+    """
+    import program_set  # noqa: E402  (tools/ is on sys.path)
+
+    return program_set if program_set.is_set_config(config) else None
+
+
 def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     config = Path(args.config).expanduser().resolve()
     if not config.is_file():
         progress.error(f"config not found: {config}", code=EXIT_USAGE)
         return EXIT_USAGE
+    set_tool = program_set_tool(config)
+    if set_tool is not None:
+        return set_tool.generate_set(sys.modules[__name__], args, progress)
     project_root = (
         Path(args.project_root).expanduser().resolve()
         if args.project_root
@@ -1961,6 +1977,9 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
     if not config.is_file():
         progress.error(f"config not found: {config}", code=EXIT_USAGE)
         return EXIT_USAGE
+    set_tool = program_set_tool(config)
+    if set_tool is not None:
+        return set_tool.rebuild_set(sys.modules[__name__], args, progress)
     project_root = (
         Path(args.project_root).expanduser().resolve()
         if args.project_root
@@ -2686,6 +2705,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(g)
     g.add_argument("--disc", default="", help="source dump or working cue/bin")
     g.add_argument(
+        "--set-disc",
+        action="append",
+        default=[],
+        metavar="N=PATH",
+        help="a set of programs (set.toml) only: disc N of the set, 1-based; once per disc. "
+        "Without it the discs come from set.toml [game] discs or the wizard's disc.cfg",
+    )
+    g.add_argument(
         "--bios",
         default="",
         help="optional retail BIOS dump (staged where bios/<stem>.toml loads it + regen)",
@@ -2722,6 +2749,13 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--target", default="psx-runtime")
     r.add_argument("--exe-basename", default="")
     r.add_argument("--disc", default="", help="disc for PGO train")
+    r.add_argument(
+        "--set-disc",
+        action="append",
+        default=[],
+        metavar="N=PATH",
+        help="a set of programs (set.toml) only: disc N of the set, when it is not where Generate found it",
+    )
     r.add_argument(
         "--no-pgo",
         action="store_true",
