@@ -147,6 +147,15 @@ and BIOS are named by hash only, and main RAM appears only as hashes.
 - **Disc changes.** Changing the disc from the in-game menu ends the recording
   there, and the replay is saved up to the change. A multi-disc game can be
   recorded up to its first disc swap.
+- **The disc in the drive after a change (F11 replays).** A replay names the
+  disc the game was launched on. An F11 replay started after an in-game disc
+  change therefore names the launch disc, not the disc it was recorded on.
+  It plays correctly only in the same session, while that disc is still in
+  the drive. On a later launch on the first disc it plays against the wrong
+  disc and goes out of sync; on a later launch on the right disc it is
+  refused as "a different game or disc image". Until this is fixed
+  (PS1B-316), record F11 replays before any disc change, or launch the game
+  on the disc you want to record. Power-on replays are not affected.
 - **Pad type changes.** A pad keeps the type it had at boot for the whole
   recording; a Hybrid pad does not switch between digital and analog.
   Controller hotplug does not change the ports during a recording.
