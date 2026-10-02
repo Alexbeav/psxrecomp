@@ -988,6 +988,8 @@ static int rfe_steps_over_gte_command(uint32_t pc, uint32_t epc) {
 }
 
 int psx_get_in_exception(void) { return in_exception; }
+/* 1 inside the outermost delivery, 2 and up inside a nested one (PS1B-417). */
+int psx_exception_nest_depth(void) { return exception_nest_depth; }
 
 /* Co-sim (COSIM_ORACLE.md): fold the GENUINE guest-timing interrupt statics into the
  * state hash. Deliberately EXCLUDES total_checks / dispatch_count / post_exception_
@@ -2472,6 +2474,11 @@ irq_deliver_eval:
     }
     g_rfe_escape_pending = 0;
     g_exc_escape_reason  = PSX_EXC_ESCAPE_NONE;
+    /* Set by psx_syscall case 3 when a handler's ChangeThread moved the
+     * current-thread pointer in this delivery; consumed here whatever follows. */
+    extern int g_changethread_in_handler_switch;
+    int changethread_at_call = g_changethread_in_handler_switch;
+    g_changethread_in_handler_switch = 0;
 
     if (!(cpu->cop0[COP0_SR] & 0x01)) {
         uint32_t sr2 = cpu->cop0[COP0_SR];
@@ -2595,7 +2602,15 @@ irq_deliver_eval:
              * starve a target thread by re-entering the same VBlank EPC forever.
              * (Card-guard overrides were tried for Ape LOAD and did not help —
              * tip already defers like master; the hang is post-probe arming.) */
-            int can_defer = defer_switch_enabled() && !low_kernel_epc && !at_outermost &&
+            /* A ChangeThread that the handler CALLED is taken at the call
+             * (PS1B-417): the kernel returns into the target there, and the
+             * game restores the interrupted thread from its own copy of the
+             * interrupt's context, so anything that thread ran before a
+             * deferred switch would run a second time. psx_syscall has saved
+             * the outgoing block as the kernel does; nothing here depends on
+             * the host frames below. */
+            int can_defer = defer_switch_enabled() && !changethread_at_call &&
+                            !low_kernel_epc && !at_outermost &&
                             g_exception_real_epc != 0u &&
                             (g_exception_real_epc & 0x3u) == 0u &&
                             g_exception_real_epc != (uint32_t)PSX_EXC_SENTINEL_PC &&

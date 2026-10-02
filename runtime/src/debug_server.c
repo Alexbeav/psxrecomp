@@ -4244,6 +4244,7 @@ static const char *thread_kind_name(uint32_t kind)
         case 31: return "inexc_switch_defer";
         case 32: return "deferred_switch_escape";
         case 33: return "deferred_switch_stale";
+        case 34: return "syscall3_in_exc_switch";     /* a handler's ChangeThread moved PCB[0] (PS1B-417) */
         default: return "unknown";
     }
 }

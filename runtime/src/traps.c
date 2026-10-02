@@ -1087,6 +1087,76 @@ static int enter_guest_syscall_exception(CPUState *cpu) {
     return 1;
 }
 
+/* A ChangeThread called inside an exception handler (PS1B-417).
+ *
+ * The kernel has one path for SYS(03h), in a handler or out of one (SCPH-1001,
+ * exception entry 0xC80, syscall handler 0x1A00, function 3 at 0x1AAC):
+ *   1. the syscall's own exception entry saves every register of that moment
+ *      into the control block the current-thread pointer names; inside a
+ *      handler that overwrites the context the interrupt saved there;
+ *   2. the saved EPC is advanced past the SYSCALL;
+ *   3. the old block's saved v0 becomes 1, and the pointer takes a1;
+ *   4. ReturnFromException loads the registers of the block the pointer names.
+ * A game that preempts a thread this way keeps its own copy of the interrupted
+ * context and writes it back before it resumes the thread (V-Rally 2, PS1G-76).
+ * Returning to the interrupted thread instead ran that thread on, and the
+ * game's later restore ran its work a second time.
+ *
+ * Steps 1 to 3 are done here; the caller's manual return below is step 4, and
+ * the end of the delivery (interrupts.c) unwinds to the scheduler at once: the
+ * interrupted thread must not run another instruction, because the game holds
+ * the context of the interrupt, not of a later boundary.
+ *
+ * Not taken, with the behaviour as it was: a target that is the current
+ * thread, an invalid or not runnable block, a delivery nested in another, and
+ * the fiber bridge. Returns 1 when the pointer moved, 0 when not taken, -1
+ * when a native shadow pass must bail before any guest state changes. */
+int g_changethread_in_handler_switch = 0;
+static uint32_t s_ct_handler_switches, s_ct_handler_same_thread;
+static uint32_t s_ct_handler_first_epc, s_ct_handler_first_target;
+
+/* out[0] calls that switched, out[1] calls that named the current thread,
+ * out[2] the interrupted PC of the first switch, out[3] its target block. */
+void psx_changethread_in_handler_stats(uint32_t out[4]) {
+    out[0] = s_ct_handler_switches;
+    out[1] = s_ct_handler_same_thread;
+    out[2] = s_ct_handler_first_epc;
+    out[3] = s_ct_handler_first_target;
+}
+
+static int psx_change_thread_in_handler(CPUState* cpu, uint32_t target_tcb) {
+    extern int psx_exception_nest_depth(void);
+    uint32_t current_tcb = psx_current_tcb_ptr(cpu);
+    if (!psx_is_valid_tcb(cpu, current_tcb) || !psx_is_valid_tcb(cpu, target_tcb))
+        return 0;
+    if (current_tcb == target_tcb) {
+        if (s_ct_handler_same_thread != 0xFFFFFFFFu) s_ct_handler_same_thread++;
+        return 0;
+    }
+    if (!psx_hle_scheduler_enabled() || psx_exception_nest_depth() != 1 ||
+        psx_tcb_state(cpu, target_tcb) != 0x4000u)
+        return 0;
+    {
+        extern int overlay_loader_shadow_native_thread_switch_bail(void);
+        if (overlay_loader_shadow_native_thread_switch_bail()) return -1;
+    }
+    if (s_ct_handler_switches == 0u) {
+        s_ct_handler_first_epc = cpu->cop0[14];   /* where the thread was interrupted */
+        s_ct_handler_first_target = target_tcb;
+    }
+    if (s_ct_handler_switches != 0xFFFFFFFFu) s_ct_handler_switches++;
+
+    uint32_t save = current_tcb + 8u;
+    uint32_t cause = cpu->cop0[13];
+    psx_save_context_to_tcb(cpu, current_tcb, cpu->pc + 4u);            /* 1, 2 */
+    cpu->write_word(save + 144u, (cause & ~0x7Cu) | (8u << 2));         /* Sys */
+    cpu->write_word(save + 2u * 4u, 1u);                                /* 3: v0 */
+    psx_set_current_tcb(cpu, target_tcb);                               /* 3 */
+    g_changethread_in_handler_switch = 1;
+    debug_server_log_thread_event(34, cpu, current_tcb, target_tcb, cpu->pc);
+    return 1;
+}
+
 int psx_syscall(CPUState* cpu, uint32_t code) {
     psx_load_value_commit(cpu);
     /*
@@ -1137,8 +1207,9 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
             /* Tomba2 loader-thread diagnosis (Patch 1, trace-only): record every
              * syscall-3 (ChangeThread/RFE) at its decision point. kind 20 = entered
              * with in_exception==0 (eligible for psx_change_thread); kind 24 = entered
-             * with in_exception==1 (will be forced down the manual-RFE path, NOT a
-             * thread switch). target_tcb is the requested switch target; its state
+             * with in_exception==1 (the manual-RFE path; a call that names another
+             * runnable thread first moves the current-thread pointer, kind 34, see
+             * psx_change_thread_in_handler). target_tcb is the requested target; its state
              * word is auto-captured as target_state. This tells us whether the loader
              * ChangeThread is ever requested (Case A) and, if so, whether in_exception
              * diverts it (Case B). */
@@ -1147,6 +1218,8 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
             int switch_result = 0;
             if (!psx_get_in_exception())
                 switch_result = psx_change_thread(cpu, target_tcb);
+            else if (psx_change_thread_in_handler(cpu, target_tcb) < 0)
+                switch_result = -1;
             if (switch_result < 0) {
                 /* Native shadow validation requested an impossible thread
                  * switch. Its bail flag unwinds the speculative call; return

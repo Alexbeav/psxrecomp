@@ -443,6 +443,26 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, ",\n");
     }
 
+    /* PS1B-417: a ChangeThread that a game calls inside an exception handler
+     * switches threads at the call. `switches` counts the calls that named
+     * another runnable thread, `same_thread` the calls that named the current
+     * one; `first_epc` is where the thread was interrupted at the first
+     * switch and `first_target` the control block it named. A release start
+     * shows here whether its title uses this form. */
+    {
+        extern void psx_changethread_in_handler_stats(uint32_t out[4]);
+        uint32_t ct[4] = {0};
+        psx_changethread_in_handler_stats(ct);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"changethread_in_handler\": {\n"
+            "    \"switches\": %u,\n"
+            "    \"same_thread\": %u,\n"
+            "    \"first_epc\": \"0x%08X\",\n"
+            "    \"first_target\": \"0x%08X\"\n"
+            "  },\n",
+            ct[0], ct[1], ct[2], ct[3]);
+    }
+
     /* PS1B-306: kernel bless decides whether relocated kernel routines run
      * their compiled bodies or the interpreter, so the report states it.
      * `state` is -1 before the first kernel-window dispatch, 0 off, 1 on.
