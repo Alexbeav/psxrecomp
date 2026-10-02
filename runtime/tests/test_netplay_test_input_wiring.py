@@ -31,7 +31,6 @@ body = MAIN[start:end]
 # Off unless the variable is set to a number above zero.
 assert MAIN.count('"PSX_NET_TEST_INPUT_SEED"') == 1, "the variable must be read in one place"
 assert 'std::getenv("PSX_NET_TEST_INPUT_SEED")' in body
-assert "static uint32_t seed = 0;" in body, "the default must be off"
 assert body.index("if (!seed) return false;") < body.index("out->buttons"), (
     "with no seed the pad must be left alone"
 )
@@ -39,7 +38,13 @@ assert body.index("if (!seed) return false;") < body.index("out->buttons"), (
 assert "TEST INPUT" in body and "Test tooling only" in body, "a scripted pad must be announced"
 
 # One word per sim tick: the tick and the seed are the only inputs.
-assert "psx_netplay_sim_tick() / 8u" in body, "the word must follow the session's sim tick"
+assert "const uint32_t tick = psx_netplay_sim_tick();" in body and "(tick / 8u)" in body, (
+    "the word must follow the session's sim tick"
+)
+# PSX_NET_TEST_INPUT_FROM only holds the pad idle before a tick; it cannot turn the script on.
+assert MAIN.count('"PSX_NET_TEST_INPUT_FROM"') == 1 and 'std::getenv("PSX_NET_TEST_INPUT_FROM")' in body
+assert "static uint32_t seed = 0, from = 0;" in body, "the default must be off, from the first tick"
+assert "tick >= from &&" in body, "before the start tick the pad must be idle"
 assert "static uint32_t frame" not in body and "++" not in body.split("if (!seed) return false;")[1], (
     "the word must not depend on how often it is sampled"
 )
@@ -48,7 +53,7 @@ assert "static uint32_t frame" not in body and "++" not in body.split("if (!seed
 held = re.search(r"held = \(uint16_t\)\(\(1u << \((\d+)u \+ \(x >> 28\) % 4u\)\) \|\s*\(1u << \((\d+)u \+ \(x >> 24\) % 4u\)\)\);", body)
 assert held, "the held-button expression changed; review which bits it can clear"
 assert (int(held.group(1)), int(held.group(2))) == (4, 12), "only the D-pad and the face buttons may be pressed"
-assert "(uint16_t)~held : 0xFFFFu" in body, "the pad word is active low: held bits cleared, the rest set"
+assert "? (uint16_t)~held : 0xFFFFu" in body, "the pad word is active low: held bits cleared, the rest set"
 
 # Consulted at the one place the local pad is staged, before the other sources.
 calls = [m.start() for m in re.finditer(r"netplay_test_input\(&local\)", MAIN)]
