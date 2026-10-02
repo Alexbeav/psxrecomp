@@ -1394,6 +1394,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(spu_capture_ring_test tests/test_spu_capture_ring.c)
     target_include_directories(spu_capture_ring_test PRIVATE include)
     add_test(NAME spu_capture_ring_test COMMAND spu_capture_ring_test)
+    # PS1B-372: rows of the source-profile voice spec that no older test pins.
+    add_executable(spu_source_voice_rows_test tests/test_spu_source_voice_rows.c)
+    target_include_directories(spu_source_voice_rows_test PRIVATE include)
+    add_test(NAME spu_source_voice_rows_test COMMAND spu_source_voice_rows_test)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
