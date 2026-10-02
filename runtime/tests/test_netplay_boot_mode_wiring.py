@@ -23,9 +23,13 @@ kept = MAIN[loaded : loaded + 400]
 for line in ("kit_fast_boot = fast_boot;", "kit_bios_hle  = bios_hle;",
              "kit_bios_hle_keep_intro = bios_hle_keep_intro;"):
     assert line in kept, f"the kit's value is not kept at config load: {line}"
-settings = MAIN.index("if (us.has_bios_hle)       bios_hle  = us.bios_hle;")
-launcher = MAIN.index("bios_hle  = seed.bios_hle;")
-assert loaded < settings < launcher, "settings.toml and the launcher no longer follow the config load"
+# settings.toml and the launcher come after it. The two places are found by what
+# they assign, not by their exact line: another change may add to those lines
+# (the settings line gained a flag in h/settings-keep-kit-bios-hle).
+applied = re.search(r"if \(us\.has_bios_hle\)\s*\{?\s*bios_hle\s*=\s*us\.bios_hle;", MAIN)
+chosen = re.search(r"(?m)^\s*bios_hle\s*=\s*seed\.bios_hle;", MAIN)
+assert applied and chosen, "settings.toml or the launcher no longer sets bios_hle where this test looks"
+assert loaded < applied.start() < chosen.start(), "settings.toml and the launcher no longer follow the config load"
 for name in ("kit_fast_boot", "kit_bios_hle", "kit_bios_hle_keep_intro"):
     assert re.search(rf"bool\s+{name}\s*=\s*false;", MAIN), f"{name} must default to the runtime's own default"
     assigned = re.findall(rf"(?m)^\s*{name}\s*=[^=]", MAIN)
