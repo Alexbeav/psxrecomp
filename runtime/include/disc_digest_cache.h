@@ -6,7 +6,9 @@
  * where <spot> hashes the first and last 64 KiB. A line is reused only when
  * path, size, mtime and spot all match, so a changed or replaced image (even a
  * same-size rewrite that kept its mtime, unless it only changed bytes in the
- * middle) is hashed again. Lines are appended; stale lines never match. */
+ * middle) is hashed again. Lines are appended; stale lines never match.
+ * On Windows the two path separators count as the same character in that
+ * match, so "Z:\a.chd" and "Z:/a.chd" share one line. */
 #ifndef DISC_DIGEST_CACHE_H
 #define DISC_DIGEST_CACHE_H
 

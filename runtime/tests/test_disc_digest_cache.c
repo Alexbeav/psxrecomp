@@ -56,6 +56,34 @@ int main(int argc, char **argv) {
     CHECK(!strcmp(h, "0000000000000000000000000000000000000000000000000000000000000000"),
           "a matching path, size and mtime reuse the cached digest");
 
+    /* The other spelling of the same path. On Windows both separators name
+     * the same file, so the cached line must be reused: the forged digest
+     * comes back, the image is not hashed again and no second line is
+     * written. Elsewhere a backslash is part of a file name and the two
+     * texts are two files, so there is nothing to test. */
+#ifdef _WIN32
+    {
+        char other_spelling[600];
+        size_t lines = 0;
+        snprintf(other_spelling, sizeof other_spelling, "%s", disc);
+        for (char *c = other_spelling; *c; ++c)
+            *c = *c == '/' ? '\\' : *c == '\\' ? '/' : *c;
+        CHECK(strcmp(other_spelling, disc) != 0, "the two spellings differ as text");
+        CHECK(disc_digest_cache_sha256(other_spelling, d), "hash by the other spelling");
+        hexs(d, h);
+        CHECK(!strcmp(h, "0000000000000000000000000000000000000000000000000000000000000000"),
+              "the same path with the other separator reuses the cached digest");
+        f = fopen(cache, "rb");
+        n = f ? fread(text, 1, sizeof text - 1, f) : 0;
+        if (f) fclose(f);
+        text[n] = 0;
+        for (char *c = text; *c; ++c) lines += *c == '\n';
+        CHECK(lines == 1, "the other spelling adds no cache line");
+    }
+#else
+    puts("note: the separator case is Windows only (a backslash is a file name character here)");
+#endif
+
     /* Same size, mtime put back: the head/tail spot check still sees the
      * rewrite and the file is hashed again. */
     {
