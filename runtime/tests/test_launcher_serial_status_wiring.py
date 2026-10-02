@@ -77,9 +77,36 @@ judgement = body[judged:guard]
 assert re.search(
     r"PSXRecompV4::disc_roster_outside_list\(\s*g_disc_metadata_roster, g_disc_serials,\s*"
     r"std::filesystem::path\(disc_path\), id\.expected_serial_given,\s*"
-    r"id\.opened && id\.has_header, id\.detected_serial\);",
+    r"id\.opened && id\.has_header, list_serial\);",
     judgement,
 ), "only an image outside the disc list, that opened, with no expected serial, is judged by the set"
+# The serial it is judged by: what was read, or, for a disc with no SYSTEM.CNF
+# (King's Field (Japan)), a listed serial whose text is on the disc. Without
+# this a copy of such a disc under another file name was "no serial found"
+# and refused (the A14 replay over the 164 kit discs found the one case).
+assert re.search(
+    r"const std::string list_serial =\s*serial_for_list_judgement\(std::filesystem::path\(disc_path\), id\);",
+    body[:judged],
+)
+helper = MAIN[MAIN.index("static std::string serial_for_list_judgement("):]
+helper = helper[: helper.index("\n}\n")]
+assert re.search(
+    r"if \(!id\.detected_serial\.empty\(\) \|\| id\.expected_serial_given \|\|\s*"
+    r"!id\.opened \|\| !id\.has_header \|\| g_disc_serials\.empty\(\) \|\|\s*"
+    r"PSXRecompV4::disc_roster_index\(g_disc_metadata_roster, disc\) >= 0\)\s*return id\.detected_serial;",
+    helper,
+), "a serial that was read, an image of the list, and a file that did not open are judged as before"
+assert re.search(
+    r"for \(const std::string& listed : g_disc_serials\) \{\s*if \(listed\.empty\(\)\) continue;\s*"
+    r"const PSXRecompV4::DiscIdentity probe = PSXRecompV4::identify_disc\(\s*disc, listed,.*?\);\s*"
+    r"if \(probe\.serial_matches\) return uppercase_ascii\(listed\);\s*\}\s*return std::string\(\);",
+    helper, re.S,
+), "each listed serial must be looked for on the disc as the slot's check looks for it"
+assert re.search(
+    r"if \(set_serial == PSXRecompV4::DiscSetSerial::Listed && id\.detected_serial\.empty\(\)\)\s*"
+    r"std::snprintf\(out->serial, sizeof\(out->serial\), \"%s\", list_serial\.c_str\(\)\);",
+    body,
+), "the row must show the listed serial that was found on such a disc"
 # Wrong disc (Alex, 2026-10-02): what was read is none of the list's serials
 # (A8), and that includes a disc on which no serial was found (A11).
 assert re.search(
@@ -156,7 +183,8 @@ check = MAIN[MAIN.index("static DiscValidation validate_disc_image("):]
 check = check[: check.index("\n}\n")]
 assert re.search(
     r"PSXRecompV4::disc_roster_outside_list\(\s*g_disc_metadata_roster, g_disc_serials, selected_path,\s*"
-    r"id\.expected_serial_given, id\.opened && id\.has_header, id\.detected_serial\);",
+    r"id\.expected_serial_given, id\.opened && id\.has_header,\s*"
+    r"serial_for_list_judgement\(selected_path, id\)\);",
     check,
 ), "the start check must judge an image outside the disc list as the panel does"
 assert "const bool outside_wrong = PSXRecompV4::disc_roster_wrong_disc(outside);" in check
