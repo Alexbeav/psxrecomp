@@ -24,6 +24,10 @@ sentence is compared:
   S3, by number    the host's sentence for 32, 5 and 13; the CLI's install with
                    a rename that fails with each number (the failure is put in
                    by the test).
+  what is printed  the CLI itself (psxrecomp_cli.py ensure-toolchain, with and
+                   without --json-progress) and the rebuild's toolchain step
+                   print the sentence alone: no exception name, no label in
+                   front, exit code 1. The setup window shows that line.
   S3, by the       Windows only: the installed folder held by a handle on the
   system           folder (error 32) and by an open file in it (error 5), for
                    the host and for the CLI. Linux and macOS have no way to make
@@ -138,6 +142,22 @@ def cli_child(case: str) -> int:
     calls: list[str] = []
     tp, sandbox = support.load_cli(calls)
     out: dict = {}
+    if case == "rebuild":
+        # The toolchain step of a rebuild, with the lines it gives the progress reporter.
+        sys.path.insert(0, str(support.ROOT))
+        import psxrecomp_cli as cli
+
+        class Lines:
+            def __init__(self):
+                self.lines = []
+
+            def log(self, message, **_kwargs):
+                self.lines.append(str(message))
+        lines = Lines()
+        ok = cli.ensure_toolchain_for_rebuild(sandbox / "project", lines, from_zip=str(sandbox / "pack.zip"),
+                                              download=False, min_version="0")
+        print(json.dumps({"ok": bool(ok), "lines": lines.lines}))
+        return 0
     if case == "steps":
         found = []
         for step in range(len(STEPS)):
@@ -162,7 +182,8 @@ def cli_child(case: str) -> int:
         try:
             tp.install_from_zip(sandbox / "pack.zip", min_version="0")
         except Exception as exc:    # noqa: BLE001: the text is what is checked
-            raised = "%s: %s" % (type(exc).__name__, exc)
+            raised = str(exc)
+            out["kind"] = type(exc).__name__
         out["raised"] = raised
     print(json.dumps(out))
     return 0
@@ -183,8 +204,40 @@ def cli_layer(tmp: Path, stubs: dict, check: support.Checks) -> None:
     make_pack(cache / "1.0.14", marker="old.txt", stub=stubs["ok"])
     make_zip(sandbox / "pack.zip", stub=stubs["ok"], tools=("cmake",))
     seen = support.run_cli_child(THIS, "s2", sandbox, False)
-    check(seen.get("raised") == "RuntimeError: " + s2(STEPS[1]), "CLI: the sentence for a new pack that fails its check",
-          seen)
+    check(seen.get("raised") == s2(STEPS[1]) and seen.get("kind") == "ToolchainRefused",
+          "CLI: the sentence for a new pack that fails its check, as the whole text of the refusal", seen)
+
+    # What is printed: the CLI as a program, and the toolchain step of a rebuild.
+    sandbox = tmp / "cli-printed"
+    env = support.closed_environment(sandbox)
+    (sandbox / "project").mkdir(exist_ok=True)
+    make_zip(sandbox / "pack.zip", stub=stubs["ok"], tools=("cmake",))
+    sentence = s2(STEPS[1])
+    for mode in (["--json-progress"], []):
+        run = subprocess.run([sys.executable, str(support.ROOT / "psxrecomp_cli.py"), "ensure-toolchain",
+                              "--project-root", str(sandbox / "project"), "--from-zip", str(sandbox / "pack.zip")] + mode,
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=str(sandbox))
+        printed = run.stdout + run.stderr
+        name = "CLI ensure-toolchain %s" % (mode[0] if mode else "(plain)")
+        if mode:
+            messages = []
+            for line in printed.splitlines():
+                if line.startswith("{"):
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if row.get("event") == "error":
+                        messages.append(row.get("message"))
+            alone = messages == [sentence]
+        else:
+            alone = sentence in [line.strip() for line in printed.splitlines()]
+        check(run.returncode == 1 and alone, "%s: the sentence alone, exit code 1" % name, (run.returncode, printed[-600:]))
+        check(not any(word in printed for word in ("RuntimeError", "ToolchainRefused", "Traceback")),
+              "%s: no exception name and no traceback in what is printed" % name, printed[-600:])
+    seen = support.run_cli_child(THIS, "rebuild", sandbox, False)
+    check(seen.get("ok") is False and seen.get("lines") and seen["lines"][-1] == sentence,
+          "CLI rebuild: the toolchain step gives the progress line the sentence alone", seen)
 
     for number in NUMBERS:
         sandbox = tmp / ("cli-rename-%d" % number)
@@ -192,7 +245,7 @@ def cli_layer(tmp: Path, stubs: dict, check: support.Checks) -> None:
         make_pack(cache / "1.0.14", marker="old.txt", stub=stubs["ok"])
         make_zip(sandbox / "pack.zip", stub=stubs["ok"])
         seen = support.run_cli_child(THIS, "rename-%d" % number, sandbox, False)
-        check(seen.get("raised") == "RuntimeError: " + s3(number),
+        check(seen.get("raised") == s3(number),
               "CLI: the sentence for a rename that fails with system error %d" % number, seen)
         check((cache / "1.0.14" / "old.txt").is_file(), "CLI: after that failure the installed pack is there")
 
@@ -207,7 +260,7 @@ def cli_layer(tmp: Path, stubs: dict, check: support.Checks) -> None:
                 seen = support.run_cli_child(THIS, "held", sandbox, False)
             finally:
                 held.close()
-            check(seen.get("raised") == "RuntimeError: " + s3(number),
+            check(seen.get("raised") == s3(number),
                   "CLI (Windows): the installed folder held by an open %s gives the sentence for error %d" % (kind, number),
                   seen)
 

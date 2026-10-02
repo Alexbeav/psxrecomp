@@ -337,6 +337,12 @@ def toolchain_bin_check(bin_dir: Path, log=None) -> str:
         shutil.rmtree(work, ignore_errors=True)
 
 
+class ToolchainRefused(RuntimeError):
+    """An install that stopped with one of the sentences a player reads. The
+    exception's text is the whole sentence: a caller prints it alone, with no
+    label in front and no exception name."""
+
+
 def _new_pack_failed_text(step: str) -> str:
     """What a player reads when a new pack fails its check. The same sentence
     in host/psxrecomp_codegen_host.c."""
@@ -1207,7 +1213,7 @@ def install_from_zip(
     step = toolchain_bin_check(root / "bin", log=log)
     if step:
         shutil.rmtree(staging, ignore_errors=True)
-        raise RuntimeError(_new_pack_failed_text(step))
+        raise ToolchainRefused(_new_pack_failed_text(step))
     dest_tag = _install_tag_for_root(root, tag)
     dest = cache_root / dest_tag
     aside = None
@@ -1220,7 +1226,7 @@ def install_from_zip(
             aside = _set_aside(dest)
             if aside is None:
                 shutil.rmtree(staging, ignore_errors=True)
-                raise RuntimeError(_rename_failed_text(_aside_error))
+                raise ToolchainRefused(_rename_failed_text(_aside_error))
         # 3. The new pack takes the name.
         try:
             shutil.move(str(root), str(dest))
@@ -1256,7 +1262,7 @@ def install_from_zip(
                         log(f"Could not put the installed toolchain back: {exc}")
             elif _is_link(cache_root / "latest") and not pack_root_looks_usable(unwrap_pack_root(cache_root / "latest")):
                 _remove_pointer(cache_root / "latest")
-        raise RuntimeError(_new_pack_failed_text(step))
+        raise ToolchainRefused(_new_pack_failed_text(step))
     # 5. Only now the folder that was set aside is removed, the user's login
     #    PATH is written (same as zip install.sh) and older tags are pruned.
     _remove_aside(aside, log)
