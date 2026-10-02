@@ -119,7 +119,7 @@ int main() {
             }
             CHECK(disc_roster_judge_serial(order, order.size(), "SLES-03398") == DiscSetSerial::NotListed);
             CHECK(disc_roster_judge_serial(order, order.size(), "SLUS-0054") == DiscSetSerial::NotListed);
-            // Nothing read: not listed for the row; the caller keeps the verdict.
+            // Nothing read: not listed, and so the wrong disc (A11).
             CHECK(disc_roster_judge_serial(order, order.size(), "") == DiscSetSerial::NotListed);
             order.push_back(order.front());
             order.erase(order.begin());
@@ -165,7 +165,7 @@ int main() {
                 d.expected = disc_roster_expected_serial(one_disc, one_serial_list, no_programs, file, id);
                 d.outside = disc_roster_outside_list(one_disc, one_serial_list, file,
                                                      !d.expected.empty(), readable, read);
-                d.wrong = disc_roster_wrong_disc(d.outside, read);
+                d.wrong = disc_roster_wrong_disc(d.outside);
                 return d;
             };
             // Another game's disc: nothing is expected of it by the list, so it
@@ -189,10 +189,18 @@ int main() {
                 CHECK(d.expected == "SLES-01156" && d.outside == DiscSetSerial::NotJudged);
             else   // then it is an image outside the list, and refused as one
                 CHECK(d.expected.empty() && d.wrong);
-            // No serial read (an audio CD, a data disc that is not a game):
-            // the row says not listed; the verdict stays what it was.
+            // No serial found (a data disc that is not a game): not listed,
+            // and refused, as a build with no list refuses it (Alex,
+            // 2026-10-02, A11). The sentence is the accepted second one.
             d = decide(kit.other, "", true);
-            CHECK(d.outside == DiscSetSerial::NotListed && !d.wrong);
+            CHECK(d.outside == DiscSetSerial::NotListed && d.wrong);
+            CHECK(disc_roster_wrong_disc_sentence("", disc_roster_serial_list(one_serial_list))
+                  == "No serial was found on this disc. This build needs SLES-01156.");
+            // The kit's own image on which no serial is found is judged by its
+            // entry (the disc check looks for that serial on the disc), never
+            // by this rule.
+            d = decide(kit.disc, "", true);
+            CHECK(d.expected == "SLES-01156" && d.outside == DiscSetSerial::NotJudged && !d.wrong);
             // A file that did not open says nothing more: its ISO header row
             // is the reason, and the verdict is already "bad".
             d = decide(kit.other, "", false);
@@ -238,14 +246,61 @@ int main() {
               == "SLUS_005.94");   // its own slot: the spelling the disc check searches the disc for
         const DiscSetSerial copy = disc_roster_outside_list(one_disc, exe_spelling, "/elsewhere/copy.chd",
                                                             false, true, "SLUS-00594");
-        CHECK(copy == DiscSetSerial::Listed && !disc_roster_wrong_disc(copy, "SLUS-00594"));
+        CHECK(copy == DiscSetSerial::Listed && !disc_roster_wrong_disc(copy));
         const DiscSetSerial other = disc_roster_outside_list(one_disc, exe_spelling, "/elsewhere/other.chd",
                                                              false, true, "SLES-02913");
-        CHECK(other == DiscSetSerial::NotListed && disc_roster_wrong_disc(other, "SLES-02913"));
+        CHECK(other == DiscSetSerial::NotListed && disc_roster_wrong_disc(other));
     }
     // The sentence shows the list in the form the disc's own serial is shown in.
     CHECK(disc_roster_serial_list({"SLUS_005.94", "slus-00626"}) == "SLUS-00594, SLUS-00626");
     CHECK(disc_roster_serial_list({"demo"}) == "demo");
+
+    // A11 for sets: an image outside the list on which no serial is found is
+    // the wrong disc when the list has a serial for every disc, whatever the
+    // list's length. A list with a gap judges nothing, so it refuses nothing.
+    for (const auto& complete : {std::vector<std::string>{"SLES-01156"}, two_discs, four_discs}) {
+        const DiscSetSerial none = disc_roster_judge_serial(complete, complete.size(), "");
+        CHECK(none == DiscSetSerial::NotListed && disc_roster_wrong_disc(none));
+        CHECK(disc_roster_wrong_disc(disc_roster_judge_serial(complete, complete.size(), "SLES-02913")));
+        CHECK(!disc_roster_wrong_disc(disc_roster_judge_serial(complete, complete.size(), complete.back())));
+    }
+    CHECK(!disc_roster_wrong_disc(disc_roster_judge_serial({"SLUS-00544", ""}, 2, "")));
+    CHECK(!disc_roster_wrong_disc(disc_roster_judge_serial({"SLUS-00544"}, 2, "")));
+    CHECK(!disc_roster_wrong_disc(DiscSetSerial::NotJudged));
+    CHECK(!disc_roster_wrong_disc(DiscSetSerial::Listed));
+    // A set's own discs in their slots are judged by their entries: the disc
+    // list knows them, so this rule is never asked.
+    {
+        const std::vector<std::filesystem::path> set_discs = {"d/Game (Disc 1).chd", "d/Game (Disc 2).chd"};
+        for (const auto& slot : set_discs)
+            for (const char* read : {"", "SLUS-00544", "SLES-02913"})
+                CHECK(disc_roster_outside_list(set_discs, two_discs, slot, true, true, read)
+                      == DiscSetSerial::NotJudged);
+        // The same file name in another folder is the list's image too.
+        CHECK(disc_roster_outside_list(set_discs, two_discs, "elsewhere/Game (Disc 2).cue",
+                                       true, true, "") == DiscSetSerial::NotJudged);
+        // Outside the list, with no serial: refused.
+        CHECK(disc_roster_wrong_disc(disc_roster_outside_list(set_discs, two_discs, "elsewhere/unknown.chd",
+                                                              false, true, "")));
+        // A file that did not open is not this rule's: its own message stands.
+        CHECK(!disc_roster_wrong_disc(disc_roster_outside_list(set_discs, two_discs, "elsewhere/unknown.chd",
+                                                               false, false, "")));
+    }
+
+    // The sentences of a refused disc, word for word as the launcher's panel
+    // has them (Alex accepted these three).
+    CHECK(disc_roster_wrong_disc_sentence("SLES-02913", "SLES-01156")
+          == "This disc is SLES-02913. This build needs SLES-01156.");
+    CHECK(disc_roster_wrong_disc_sentence("SLES-03398", disc_roster_serial_list(two_discs))
+          == "This disc is SLES-03398. This build needs SLUS-00544, SLUS-00556.");
+    CHECK(disc_roster_wrong_disc_sentence("", disc_roster_serial_list(two_discs))
+          == "No serial was found on this disc. This build needs SLUS-00544, SLUS-00556.");
+    CHECK(disc_roster_wrong_disc_sentence("SLES-03398", "")
+          == "This disc is SLES-03398. This build is made for another disc.");
+    CHECK(disc_roster_wrong_disc_sentence("", "").empty());   // nothing known: nothing to say
+    // A build with no list names its one serial in the same form.
+    CHECK(disc_roster_wrong_disc_sentence("SLES-02913", disc_roster_serial_list({"sles_011.56"}))
+          == "This disc is SLES-02913. This build needs SLES-01156.");
 
     // A set that does not list a serial for every disc cannot judge: a copy of
     // the unlisted disc would be called wrong. Nor can a build with no list at

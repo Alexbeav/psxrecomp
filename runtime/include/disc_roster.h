@@ -240,9 +240,26 @@ inline DiscSetSerial disc_roster_outside_list(
     return disc_roster_judge_serial(serials, roster.size(), read);
 }
 
-// Wrong disc: a serial was read and it is none the build lists. An image from
-// which no serial was read keeps the verdict it had.
-inline bool disc_roster_wrong_disc(DiscSetSerial judgement, const std::string& read) {
-    return judgement == DiscSetSerial::NotListed && !read.empty();
+// Wrong disc: the image is outside the disc list and what was read from it is
+// none of the serials the build lists. That holds for another game's serial,
+// and for an image on which no serial was found (Alex, 2026-10-02, A11): a
+// build with no list refuses such a disc too. NotListed already means that
+// the list has a serial for every disc, so a copy of a listed disc is never
+// called wrong for a serial the list does not carry.
+inline bool disc_roster_wrong_disc(DiscSetSerial judgement) {
+    return judgement == DiscSetSerial::NotListed;
+}
+
+// What a player is told about a disc that is refused for its serial. The
+// launcher's panel prints the same sentences (recomp-ui,
+// launcher_model_disc_note); they are Alex's, word for word. `needs` is the
+// serial the build expects of this image, or every serial of its list.
+inline std::string disc_roster_wrong_disc_sentence(const std::string& read,
+                                                   const std::string& needs) {
+    if (read.empty())
+        return needs.empty() ? std::string()
+                             : "No serial was found on this disc. This build needs " + needs + ".";
+    if (needs.empty()) return "This disc is " + read + ". This build is made for another disc.";
+    return "This disc is " + read + ". This build needs " + needs + ".";
 }
 } // namespace PSXRecompV4

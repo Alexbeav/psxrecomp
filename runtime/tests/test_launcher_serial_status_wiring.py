@@ -80,11 +80,10 @@ assert re.search(
     r"id\.opened && id\.has_header, id\.detected_serial\);",
     judgement,
 ), "only an image outside the disc list, that opened, with no expected serial, is judged by the set"
-# Wrong disc (Alex, 2026-10-02): a serial was read and it is none of the set's.
-# A disc from which no serial was read keeps the verdict it had.
+# Wrong disc (Alex, 2026-10-02): what was read is none of the list's serials
+# (A8), and that includes a disc on which no serial was found (A11).
 assert re.search(
-    r"const bool set_wrong_disc =\s*"
-    r"PSXRecompV4::disc_roster_wrong_disc\(set_serial, id\.detected_serial\);",
+    r"const bool set_wrong_disc = PSXRecompV4::disc_roster_wrong_disc\(set_serial\);",
     judgement,
 )
 # The expected serial comes from the same header, from the same three lists.
@@ -146,14 +145,13 @@ assert re.search(
 assert re.search(r"id\.detected_serial\.c_str\(\), expected_for_row\.c_str\(\),", row)
 assert "expect_serial.c_str()" not in row
 
-# The start check (a command-line start with --disc; no launcher). It only
-# warns: "Disc Image Warning ... The runtime will try to run it anyway." A
-# build with a list expected nothing of an image outside its disc list, so
-# another game's disc started with no warning at all, where a build with no
-# list warns. Every pin H kit has a list. The image is now judged by the same
-# functions as the panel, and the same warning is given, with the list's
-# serials where the single expected serial stood. It is not refused: that is
-# not decided (A14).
+# The start check (a start that skips the launcher: --disc on the command
+# line, a shortcut, a script). It used to warn only: "Disc Image Warning ...
+# The runtime will try to run it anyway.", and on a build with a list it did
+# not even warn for an image outside the disc list. Alex, 2026-10-02 (A14):
+# a disc the panel refuses for its serial is refused here too, with the
+# panel's title and sentence. It holds on a build with a list and on one
+# without, and for a disc on which no serial was found (A11).
 check = MAIN[MAIN.index("static DiscValidation validate_disc_image("):]
 check = check[: check.index("\n}\n")]
 assert re.search(
@@ -161,25 +159,59 @@ assert re.search(
     r"id\.expected_serial_given, id\.opened && id\.has_header, id\.detected_serial\);",
     check,
 ), "the start check must judge an image outside the disc list as the panel does"
-assert re.search(
-    r"const bool outside_wrong = PSXRecompV4::disc_roster_wrong_disc\(outside, id\.detected_serial\);",
-    check,
-)
+assert "const bool outside_wrong = PSXRecompV4::disc_roster_wrong_disc(outside);" in check
 assert "v.id_matches = expect.empty() ? !outside_wrong : id.serial_matches;" in check, (
     "an image with no expected serial matches only when it is not the wrong disc"
 )
 assert "expect.empty() ? true" not in check
+# The sentence is the panel's, made by the header's function: the serial read
+# (or none), and the one expected serial or every serial of the list. Only a
+# readable disc gets it: one that does not open, or has no header, has its own
+# message.
 assert re.search(
-    r"uppercase_ascii\(expect\.empty\(\)\s*\? PSXRecompV4::disc_roster_serial_list\(g_disc_serials\) : expect\)",
+    r"if \(id\.opened && id\.has_header && !v\.id_matches\)\s*"
+    r"v\.wrong_disc = PSXRecompV4::disc_roster_wrong_disc_sentence\(\s*id\.detected_serial,\s*"
+    r"expect\.empty\(\) \? PSXRecompV4::disc_roster_serial_list\(g_disc_serials\)\s*"
+    r": PSXRecompV4::disc_roster_serial_list\(\{uppercase_ascii\(expect\)\}\)\);",
     check,
-), "the warning names the list's serials when no single serial was expected"
+)
 launch = MAIN[MAIN.index("static bool validate_disc_for_launch("):]
 launch = launch[: launch.index("\n}\n")]
-warn = launch.index('launcher_warning("Disc Image Warning"')
-assert "if (!v.has_header || !v.id_matches) {" in launch[:warn]
-assert "The runtime will try to run it anyway." in launch
-assert "return false" not in launch[warn : launch.index("resolve_disc_path", warn)], (
-    "a serial that does not match warns and does not refuse the start"
+# Refused before the warning, and before the disc could be accepted.
+refuse = re.search(
+    r"if \(!v\.wrong_disc\.empty\(\)\) \{\s*s_wrong_disc_sentence = v\.wrong_disc;\s*"
+    r"wrong_disc_notice\(v\.wrong_disc\);\s*return false;\s*\}",
+    launch,
 )
+assert refuse, "a start with the wrong disc must be refused"
+assert launch.index("s_wrong_disc_sentence.clear();") < launch.index("validate_disc_image(path, game_id)"), (
+    "the sentence must be the last checked disc's, never an earlier one's"
+)
+warn = launch.index('launcher_warning("Disc Image Warning"')
+assert refuse.end() < warn
+# What the warning still covers: an image with no ISO header. It starts.
+assert "if (!v.has_header) {" in launch[refuse.end():warn]
+assert "The runtime will try to run it anyway." in launch
+assert "return false" not in launch[warn : launch.index("resolve_disc_path", warn)]
+# The box opens for a person only; a scripted start gets the line on stderr.
+notice = MAIN[MAIN.index("static void wrong_disc_notice("):]
+notice = notice[: notice.index("\n}\n")]
+assert '"Disc verification failed"' in notice
+assert re.search(r"if \(s_start_interactive && !g_headless\)\s*SDL_ShowSimpleMessageBox\(", notice)
+assert notice.count("SDL_ShowSimpleMessageBox(") == 1
+assert "++s_player_message_seq;" in notice and "s_player_message_text  = sentence;" in notice, (
+    "the notice must count as the start's message, so that the refusal opens no second box"
+)
+# The run report gets the kind, the title and the sentence.
+start = MAIN[MAIN.index("resolved_disc = resolve_disc_for_runtime("):]
+start = start[: start.index('return refuse_start("no_disc"')]
+assert re.search(
+    r"if \(resolved_disc\.empty\(\) && !s_wrong_disc_sentence\.empty\(\)\) \{.*?"
+    r"return refuse_start\(\"wrong_disc\", \"Disc verification failed\",\s*"
+    r"s_wrong_disc_sentence, disc_messages\);",
+    start, re.S,
+), "a start refused for the wrong disc must be reported as wrong_disc, before no_disc"
+DOC = (ROOT / "docs" / "RUN_REPORT_START.md").read_text(encoding="utf-8")
+assert "| `wrong_disc` |" in DOC
 
 print("launcher serial status wiring: ok")
