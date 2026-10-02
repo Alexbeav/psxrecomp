@@ -65,6 +65,31 @@ How the two configs relate:
 exact revision coverage, and preparation receipts. No SBI configuration key
 is required.
 
+### The track list of a multi-track disc (`[prepare_disc]`)
+
+A player can hold a multi-track disc as one file with every track in it. With
+a cue that lists the tracks, setup takes the list from the cue. With no cue
+(or a cue that calls the file one track) the list can come from the kit:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `track_sizes` | unset | The bytes of every track file of the disc, in track order, as the one-file-per-track (Redump) layout stores them: a later track's file begins with its pregap. Track 1 is the data track; every later track is CD audio. |
+| `track_pregaps` | `0` for track 1, `150` for every later track | Per track, the frames between INDEX 00 and INDEX 01 inside the file. A negative value is a pregap that is not in the file (the cue's `PREGAP` line). Needed only where a pregap is not 150 frames. |
+| `track_counts` | one image | How many tracks belong to each image, when `track_sizes` lists several one after the other (one disc in two layouts). Needed only then. |
+
+A list is used only for a file it fits: the sizes of one image add up to the
+file's length, its first track is a data track the kit lists, and no other
+list of the kit fits the same file with another table. Such a file is staged
+whole, with a cue written from the list. Without the keys, or when no list
+fits, setup behaves as before them: a file recognised by its data track is
+refused and setup asks for its `.cue`; a file that is a listed whole-disc
+image is staged as one track, without CD audio. A list that fits none of the
+kit's listed images is a fault of the kit: staging prints it, and the kit
+check should fail such a kit.
+
+Setup stages the boot disc only. A later disc of a set is mounted from where
+the player keeps it, so a list does nothing for it.
+
 ## Netplay disc mount (`[netplay]`)
 
 Optional. Online play needs the same CD geometry on every peer — data-track

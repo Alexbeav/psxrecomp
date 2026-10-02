@@ -739,6 +739,15 @@ def main() -> int:
         if kit_table is not None:
             print(f"  one file holds every track and no cue lists them: "
                   f"track list of {len(kit_table)} track(s) taken from the kit")
+        elif disc_forms.kit_list_misfit(cfg.prep, src_size) and disc_forms.track_in_single_bin(
+                src, src_size, [(k.size, k.md5.lower(), k.sha1.lower()) for k in cfg.known]) is not None:
+            # The file holds a listed data track and more, the kit has a track
+            # list, and no list describes this image. Not the player's fault
+            # and not a refusal: the kit's own values are wrong. Say it, so
+            # that a kit with a mistyped size does not look like a kit without
+            # the key.
+            print(f"  KIT FAULT: [prepare_disc] track_sizes describes no image of {src_size} bytes; "
+                  f"this listed image is staged as one track, without CD audio")
 
     # Bind the selected CUE basename, not its first track's basename.
     try:

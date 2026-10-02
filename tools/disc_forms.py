@@ -119,15 +119,24 @@ def kit_track_table(prep: dict[str, Any], image_size: int,
                     track1_size: Optional[int] = None) -> Optional[list[TrackEntry]]:
     """The track list of a one-file disc from the kit's own values, or None.
 
-    Only a list that fits the file counts: the tracks of one disc add up to
-    the file's length, and its first track is ``track1_size`` when the caller
-    recognised the file by that data track. Anything else is None, and the
-    caller does not guess where a track begins.
+    Only a list that fits the file counts: the tracks of one image add up to
+    the file's length, and its first track is a data track the kit lists
+    (``track1_size`` when the caller recognised the file by that track;
+    otherwise any listed image shorter than the file, when the kit lists one).
+    Two lists that fit the same file with different tables are no answer.
+    Anything else is None, and the caller does not guess where a track begins.
     """
+    listed_first = {size for size, _, _ in known_images(prep) if 0 < size < image_size}
+    found: list[list[TrackEntry]] = []
     for sizes, pregaps in _kit_track_lists(prep):
         if len(sizes) < 2 or any(s <= 0 or s % RAW_SECTOR for s in sizes):
             continue
-        if sum(sizes) != image_size or (track1_size is not None and sizes[0] != track1_size):
+        if sum(sizes) != image_size:
+            continue
+        if track1_size is not None:
+            if sizes[0] != track1_size:
+                continue
+        elif listed_first and sizes[0] not in listed_first:
             continue
         table: list[TrackEntry] = []
         frame = 0
@@ -139,9 +148,22 @@ def kit_track_table(prep: dict[str, Any], image_size: int,
                 break
             table.append((number, number > 1, frame, frame + stored, -gap if gap < 0 else 0))
             frame += frames
-        if table:
-            return table
-    return None
+        if table and table not in found:
+            found.append(table)
+    return found[0] if len(found) == 1 else None
+
+
+def kit_list_misfit(prep: dict[str, Any], image_size: int) -> bool:
+    """True when the kit carries a track list and none of it describes a file
+    of this length: a fault of the kit's values, worth a line in the log. A
+    file that is one listed data track on its own is not a misfit."""
+    lists = _kit_track_lists(prep)
+    raw_keys = prep.get("track_sizes") is not None
+    if raw_keys and not lists:
+        return True   # the keys are there and do not agree with each other
+    if not lists or kit_track_table(prep, image_size) is not None:
+        return False
+    return all(sizes[0] != image_size for sizes, _ in lists)
 
 
 def _msf(frames: int) -> str:

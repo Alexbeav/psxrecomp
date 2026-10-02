@@ -11,8 +11,11 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -334,6 +337,90 @@ class DiscFormsTests(unittest.TestCase):
                          "  TRACK 03 AUDIO\n    INDEX 01 00:17:25\n"
                          "  TRACK 04 AUDIO\n    PREGAP 00:02:00\n    INDEX 01 00:20:00\n")
 
+    def test_a_list_is_tied_to_its_image_by_more_than_the_total_length(self):
+        t1, total = 300 * SECTOR, 1000 * SECTOR
+        listed = {"known_sizes": [t1, total], "known_sha1": ["a", "b"]}
+        # Two lists of one length with other track borders: no answer, by
+        # either way into the list.
+        two = dict(listed, track_sizes=[t1, 700 * SECTOR, t1, 400 * SECTOR, 300 * SECTOR], track_counts=[2, 3])
+        self.assertIsNone(disc_forms.kit_track_table(two, total))
+        self.assertIsNone(disc_forms.kit_track_table(two, total, t1))
+        self.assertTrue(disc_forms.kit_list_misfit(two, total))
+        # The same table twice is one answer.
+        twice = dict(listed, track_sizes=[t1, 700 * SECTOR, t1, 700 * SECTOR], track_counts=[2, 2])
+        self.assertEqual(len(disc_forms.kit_track_table(twice, total)), 2)
+        # A whole image: the list's first track must be a data track the kit lists.
+        other = dict(listed, track_sizes=[t1 + SECTOR, 699 * SECTOR])
+        self.assertIsNone(disc_forms.kit_track_table(other, total))
+        self.assertTrue(disc_forms.kit_list_misfit(other, total))
+        # Keys that do not agree with each other are a misfit for every file.
+        self.assertTrue(disc_forms.kit_list_misfit(dict(listed, track_sizes=[t1, 700 * SECTOR], track_counts=[3]), total))
+        # No keys, a fitting list, and a lone data track are not.
+        self.assertFalse(disc_forms.kit_list_misfit(listed, total))
+        self.assertFalse(disc_forms.kit_list_misfit(dict(listed, track_sizes=[t1, 700 * SECTOR]), total))
+        self.assertFalse(disc_forms.kit_list_misfit(dict(listed, track_sizes=[t1, 700 * SECTOR]), t1))
+
+    def test_a_file_name_outside_ascii_reaches_the_setup_window_whole(self):
+        # PS1B-413. The refusal carries the player's file name. The CLI writes
+        # its rows as ASCII JSON, so a Greek letter is \uXXXX there; the setup
+        # host must turn that back into the letter, not into "u0394".
+        import argparse
+        name = "Δίσκος παιχνιδιού (Track 1).bin"
+        folder = self.root / "greek"
+        folder.mkdir()
+        (folder / name).write_bytes(prepare.iso_to_bin(cooked_disc(b"REV1")))
+        (folder / "disc.cue").write_text(
+            f'FILE "{name}" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n', encoding="utf-8")
+        self.config.write_text(self.config.read_text(encoding="utf-8")
+                               + 'cue_name = "Game (Europe).cue"\n', encoding="utf-8")
+        rows = io.StringIO()
+        args = argparse.Namespace(config=str(self.config), project_root="",
+                                  disc=str(folder / "disc.cue"), skip_hash_check=False)
+        code = cli.cmd_verify_disc(args, ProgressReporter(json_progress=True, stream=rows,
+                                                         log_stream=io.StringIO()))
+        self.assertEqual(code, 3)
+        line = rows.getvalue().splitlines()[-1]
+        message = json.loads(line)["message"]
+        self.assertIn(f"The selected file {name} is", message)
+        line.encode("ascii")                      # the row itself is ASCII
+        self.assertIn("\\u0394", line)
+
+        cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+        if cc is None:
+            self.skipTest("no C compiler on PATH: the host's reader was not run")
+        harness = self.root / "read_row.c"
+        harness.write_text(
+            '#include "psx_json_text.h"\n#include <stdlib.h>\n'
+            "int main(int argc, char** argv) {\n"
+            "    static char line[16384], out[4096];\n"
+            '    FILE* f = fopen(argv[1], "rb");\n'
+            "    size_t n = f ? fread(line, 1, sizeof(line) - 1, f) : 0;\n"
+            "    size_t cap = argc > 2 ? (size_t)atoi(argv[2]) : sizeof(out);\n"
+            "    line[n] = 0;\n"
+            '    if (!json_get_string(line, "message", out, cap)) return 3;\n'
+            "    fwrite(out, 1, strlen(out), stdout);\n"
+            "    return 0;\n}\n", encoding="ascii")
+        exe = self.root / ("read_row.exe" if os.name == "nt" else "read_row")
+        built = subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-o", str(exe), str(harness),
+                                "-I", str(ROOT / "host")], capture_output=True)
+        self.assertEqual(built.returncode, 0, built.stderr.decode("utf-8", "replace")[-1500:])
+        self.assertNotIn(b"psx_json_text.h", built.stderr)   # no warning in the reader
+        row = self.root / "row.json"
+        row.write_bytes(line.encode("ascii"))
+        shown = subprocess.run([str(exe), str(row)], capture_output=True).stdout.decode("utf-8")
+        self.assertEqual(shown, message)
+        self.assertNotIn("u0394", shown)
+        # Cut at the room, never inside a letter: every length decodes.
+        for cap in range(150, 200):
+            cut = subprocess.run([str(exe), str(row), str(cap)], capture_output=True).stdout
+            self.assertEqual(cut.decode("utf-8"), message[:len(cut.decode("utf-8"))], cap)
+            self.assertLess(len(cut), cap)
+        # The other escapes: a quote, a backslash, a line break (a space in the
+        # window), and a letter outside the first plane.
+        row.write_bytes(b'{"event":"error","message":"a \\"b\\" c\\\\d\\ne \\ud83c\\udfae f \\ud83c g"}')
+        self.assertEqual(subprocess.run([str(exe), str(row)], capture_output=True).stdout.decode("utf-8"),
+                         'a "b" c\\d e \U0001F3AE f ? g')
+
     def test_a_listed_whole_disc_image_with_no_cue_is_staged_with_the_kits_track_list(self):
         # A kit that lists the whole-disc image too: the one file is accepted
         # as it always was. With no cue it was staged as one track, without CD
@@ -364,6 +451,26 @@ class DiscFormsTests(unittest.TestCase):
                          self.single_cue.read_text(encoding="ascii"))
         self.assertEqual((out / "Game.bin").read_bytes(), whole)
         self.assertTrue((out / BOOT).is_file())
+        # A list that fits no image the kit lists is the kit's fault. The
+        # player is not refused: the file is staged as before, and the log
+        # says that the kit's values are wrong.
+        self.config.write_text(base + f"track_sizes = [{len(self.track1)}, {len(self.audio) - SECTOR}]\n"
+                               "track_pregaps = [0, 20]\n", encoding="utf-8")
+        picked = self.lone_bin(None, "whole-wrong-list")
+        out = self.root / "out-whole-wrong-list"
+        code, log = self.prepare(picked, out)
+        self.assertEqual(code, 0, log)
+        self.assertIn("KIT FAULT: [prepare_disc] track_sizes describes no image of", log)
+        self.assertEqual((out / "Staged.cue").read_text(encoding="utf-8").count("TRACK"), 1)
+        # A lone data track is not a misfit of the list.
+        out = self.root / "out-track-1-alone"
+        (self.root / "t1").mkdir()
+        (self.root / "t1" / "Game (Track 1).bin").write_bytes(self.track1)
+        code, log = self.prepare(self.root / "t1" / "Game (Track 1).bin", out)
+        self.assertEqual(code, 0, log)
+        self.assertNotIn("KIT FAULT", log)
+        self.config.write_text(base + f"track_sizes = [{len(self.track1)}, {len(self.audio)}]\n"
+                               "track_pregaps = [0, 20]\n", encoding="utf-8")
         # A cue that lists the tracks still wins over the kit's list.
         out = self.root / "out-whole-with-cue"
         code, log = self.prepare(self.single_cue, out)

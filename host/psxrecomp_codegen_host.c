@@ -1898,25 +1898,9 @@ static void persist_relaunch_sidecars(const char* near_exe,
     }
 }
 
-static int json_get_string(const char* line, const char* key, char* out,
-                           size_t out_cap) {
-    char pattern[96];
-    snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-    const char* p = strstr(line, pattern);
-    if (!p) return 0;
-    p += strlen(pattern);
-    size_t i = 0;
-    while (*p && *p != '"' && i + 1 < out_cap) {
-        if (*p == '\\' && p[1]) {
-            ++p;
-            out[i++] = *p++;
-            continue;
-        }
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return i > 0;
-}
+/* json_get_string: the string value of a key in one of the CLI's rows, with
+ * its escapes resolved to UTF-8 (a file name in Greek arrives as \uXXXX). */
+#include "psx_json_text.h"
 
 static int json_get_number(const char* line, const char* key, double* out) {
     char pattern[96];
