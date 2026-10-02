@@ -39,12 +39,13 @@ The PR's claim is that `CAUSE.IP2` is a live mirror of the interrupt line rather
 than a latched bit. **The claim is correct**, and it was checked against the
 in-tree Beetle oracle rather than accepted on the PR's reasoning:
 
-- `beetle-psx/mednafen/psx/irq.cpp` defines
-  `#define Recalc() PSX_CPU->AssertIRQ(0, (bool)(Status & Mask))`
-  and calls it from `IRQ_Assert` (raise), from **both** halves of `IRQ_Write`
-  (the Status ack and the Mask write), and from `IRQ_Power`.
-- `beetle-psx/mednafen/psx/cpu.cpp:289 AssertIRQ()` clears `CAUSE` bit `10+n`
-  unconditionally, then re-sets it only if the level is asserted.
+- The oracle recomputes the line from (status AND mask) on a raise, on both
+  register writes (the status acknowledge and the mask write) and at power-on.
+- It clears the CAUSE bit first and sets it again only while the level is
+  asserted.
+
+PSX-SPX says the same: "Interrupt Request / Execution" and "PSX specific COP0
+Notes" (bit 10 is not a latch).
 
 That is the definition of a combinational mirror, and it matches R3000A: the
 `Cause.IP` field is not storage, it reflects the interrupt pins. Our runtime
@@ -62,7 +63,9 @@ Extensions beyond the PR:
 2. **Single ownership.** The compiled delivery path no longer sets bit 10
    itself; `psx_irq_refresh_cause_ip2()` is the only writer. Two writers of one
    combinational bit is how the bug survived in the first place.
-3. **Power-on recompute**, mirroring Beetle's `IRQ_Power() -> Recalc()`.
+3. **Power-on recompute**: the line is recomputed when the CPU state is
+   attached. (This code was replaced on 2026-09-26, PS1B-187: the rule now lives
+   in `runtime/include/irq_cause_ip2.h`, written from PSX-SPX.)
 4. **A regression test**, `runtime/tests/test_cause_ip2_combinational.c`,
    covering rise, fall on ack, fall on mask, partial ack with another source
    still pending, partial-width register writes, preservation of ExcCode/BD/IP0/
@@ -137,9 +140,9 @@ well-tested reverb — so the obvious implementation route is closed, and two
 contributors independently walked into it:
 
 - **PR #16** (Martin Penkava) implemented all of this by porting Beetle. Parked
-  on license grounds after a line-by-line audit found it tracked
-  `beetle-psx/mednafen/psx/spu.cpp` lines 590–730 in register layout, resampling
-  coefficients, buffer layout, arithmetic and processing order. See
+  on license grounds after a line-by-line audit found it tracked the reference
+  core's reverb code in register layout, resampling coefficients, buffer layout,
+  arithmetic and processing order. See
   `docs/internal/upstream/martin-pr16-spu-reverb.md` on branch
   `audit/pr16-spu-reverb-gpl-lineage-mpenkava`.
 - **PR #13** (parked at `5fc8e15d`) shipped a reverb too, rejected for being
@@ -170,8 +173,10 @@ Separate from this work, and worth a decision:
   ported from the reference core, and it was in every released binary. Resolved
   by PS1B-192: the envelope was rewritten from PSX-SPX and the S-series oracle
   fixtures and now lives in `spu_envelope.h`.
-- `runtime/include/spu_gauss.h` cites *"No$PSX docs / DuckStation
-  core/spu.cpp"*.
+- `runtime/include/spu_gauss.h` cited the No$PSX documents and another
+  emulator's SPU file for its table. Resolved: the table is the PSX-SPX one,
+  checked 512 of 512 (PS1B-166), and the interpolation was regenerated from
+  PSX-SPX on 2026-09-25.
 
 Deliberately left alone here: rewriting the ADSR rate decoder clean-room changes
 every voice envelope in every title and needs its own revalidation campaign, not
