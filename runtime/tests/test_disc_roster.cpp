@@ -213,6 +213,40 @@ int main() {
         CHECK(disc_roster_expected_serial(re2_discs, re2, {}, re2_discs[1], "SLUS-00748") == "SLUS-00756");
     }
 
+    // A kit that lists a serial in the boot file's spelling. In its own slot
+    // the disc check finds that spelling on the disc and accepts it; a copy of
+    // the same disc under another name was compared letter by letter with the
+    // serial read ("SLUS-00594") and refused. Both sides now take one form.
+    CHECK(disc_roster_serial_key("SLUS_005.94") == "SLUS-00594");
+    CHECK(disc_roster_serial_key("slus-00594") == "SLUS-00594");
+    CHECK(disc_roster_serial_key("SLUS_005.94;1") == "SLUS-00594");
+    CHECK(disc_roster_serial_key("SLUS 00594") == "SLUS-00594");
+    CHECK(disc_roster_serial_key("SLUS-0059") == "SLUS-0059");     // not four letters and five digits: as written
+    CHECK(disc_roster_serial_key("12345-ABCD") == "12345-ABCD");
+    CHECK(disc_roster_serial_key("demo") == "DEMO");
+    CHECK(disc_roster_serial_key("").empty());
+    CHECK(disc_roster_judge_serial({"SLUS_005.94"}, 1, "SLUS-00594") == DiscSetSerial::Listed);
+    CHECK(disc_roster_judge_serial({"SLUS_005.94"}, 1, "SLUS-00595") == DiscSetSerial::NotListed);
+    CHECK(disc_roster_judge_serial({"slus_005.94", "SLUS_006.26"}, 2, "SLUS-00626") == DiscSetSerial::Listed);
+    CHECK(disc_roster_judge_serial({"SLUS_005.94", "SLUS_006.26"}, 2, "SLES-02913") == DiscSetSerial::NotListed);
+    CHECK(disc_roster_judge_serial({"SLUS_005.94"}, 1, "") == DiscSetSerial::NotListed);
+    {
+        // The whole decision for such a kit: the copy is listed, another game's disc is the wrong disc.
+        const std::vector<std::filesystem::path> one_disc = {"/games/ps1/Game (USA).chd"};
+        const std::vector<std::string> exe_spelling = {"SLUS_005.94"};
+        CHECK(disc_roster_expected_serial(one_disc, exe_spelling, {}, "/games/ps1/Game (USA).chd", "SLUS-00594")
+              == "SLUS_005.94");   // its own slot: the spelling the disc check searches the disc for
+        const DiscSetSerial copy = disc_roster_outside_list(one_disc, exe_spelling, "/elsewhere/copy.chd",
+                                                            false, true, "SLUS-00594");
+        CHECK(copy == DiscSetSerial::Listed && !disc_roster_wrong_disc(copy, "SLUS-00594"));
+        const DiscSetSerial other = disc_roster_outside_list(one_disc, exe_spelling, "/elsewhere/other.chd",
+                                                             false, true, "SLES-02913");
+        CHECK(other == DiscSetSerial::NotListed && disc_roster_wrong_disc(other, "SLES-02913"));
+    }
+    // The sentence shows the list in the form the disc's own serial is shown in.
+    CHECK(disc_roster_serial_list({"SLUS_005.94", "slus-00626"}) == "SLUS-00594, SLUS-00626");
+    CHECK(disc_roster_serial_list({"demo"}) == "demo");
+
     // A set that does not list a serial for every disc cannot judge: a copy of
     // the unlisted disc would be called wrong. Nor can a build with no list at
     // all: it expects its own serial and never comes here.

@@ -68,25 +68,46 @@ inline std::filesystem::path disc_roster_selected(
 // that means for the verdict.
 enum class DiscSetSerial { NotJudged, Listed, NotListed };
 
+// A serial in the one form that compares: "SLUS-00594" for "SLUS-00594",
+// "slus_005.94" and "SLUS_005.94;1" alike (four letters, five digits; the
+// rule of normalize_serial in disc_identity.cpp, which gives the serial read
+// from a disc its form). A kit may list the boot file's spelling: in its own
+// slot the disc check finds that spelling on the disc, so a copy of the disc
+// under another name must not be refused for it. Text that is not a serial of
+// that shape compares as it is written, letter case aside.
+inline std::string disc_roster_serial_key(const std::string& serial) {
+    std::string s;
+    for (char c : serial)
+        if (std::isalnum((unsigned char)c)) s += (char)std::toupper((unsigned char)c);
+    bool shaped = s.size() >= 9;
+    for (size_t i = 0; shaped && i < 9; ++i)
+        shaped = i < 4 ? std::isalpha((unsigned char)s[i]) != 0
+                       : std::isdigit((unsigned char)s[i]) != 0;
+    return shaped ? s.substr(0, 4) + "-" + s.substr(4, 5) : disc_roster_fold(serial);
+}
+
 inline DiscSetSerial disc_roster_judge_serial(const std::vector<std::string>& serials,
                                               size_t discs_in_set,
                                               const std::string& read) {
     if (serials.empty() || serials.size() < discs_in_set) return DiscSetSerial::NotJudged;
     for (const std::string& one : serials)
         if (one.empty()) return DiscSetSerial::NotJudged;
-    const std::string got = disc_roster_fold(read);
+    if (read.empty()) return DiscSetSerial::NotListed;
+    const std::string got = disc_roster_serial_key(read);
     for (const std::string& one : serials)
-        if (!got.empty() && disc_roster_fold(one) == got) return DiscSetSerial::Listed;
+        if (disc_roster_serial_key(one) == got) return DiscSetSerial::Listed;
     return DiscSetSerial::NotListed;
 }
 
-// Every serial of the set, for the sentence: "SLUS-00544, SLUS-00556".
+// Every serial of the set, for the sentence: "SLUS-00544, SLUS-00556". In the
+// form the disc's own serial is shown in, whatever spelling the kit lists.
 inline std::string disc_roster_serial_list(const std::vector<std::string>& serials) {
     std::string all;
     for (const std::string& one : serials) {
         if (one.empty()) continue;
         if (!all.empty()) all += ", ";
-        all += one;
+        const std::string key = disc_roster_serial_key(one);
+        all += (key.size() == 10 && key[4] == '-') ? key : one;
     }
     return all;
 }
