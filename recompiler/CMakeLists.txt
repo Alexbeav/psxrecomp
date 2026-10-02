@@ -852,6 +852,29 @@ if(BUILD_TESTING)
     target_link_libraries(boot_keys_settings_test PRIVATE fmt)
     add_test(NAME boot_keys_settings_test COMMAND boot_keys_settings_test)
 
+    # The TAS runner writes a settings.toml of its own; its two boot keys must
+    # survive the loader (PS1B-394). The TAS tooling is stripped from shipped
+    # setup packages, so the probe and the test exist only where it does.
+    if(Python3_Interpreter_FOUND AND EXISTS
+       "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_run_native_settings.py")
+        add_executable(settings_boot_keys_probe
+            tests/settings_boot_keys_probe.cpp
+            src/config_loader.cpp
+            src/ps1_exe_parser.cpp
+        )
+        target_include_directories(settings_boot_keys_probe PRIVATE
+            include
+            src
+            lib/fmt/include
+            lib/toml11
+        )
+        target_link_libraries(settings_boot_keys_probe PRIVATE fmt)
+        add_test(NAME tas_runner_settings_format
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_run_native_settings.py"
+                --probe $<TARGET_FILE:settings_boot_keys_probe>)
+    endif()
+
     # PS1 Mouse settings.toml keys (PS1B-279).
     add_executable(mouse_settings_test
         tests/mouse_settings_test.cpp
@@ -1082,6 +1105,18 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_program_set.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The packager's zip step as its own entry. The run above accepts a
+        # shell without zip, so a host without one passed with the zip never
+        # made. This one checks the zip (its name, its members against the
+        # staged files) where a zip tool exists, and is reported as skipped,
+        # by name, where none does (PS1B-397).
+        add_test(
+            NAME package_setup_program_set_zip
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_program_set.py
+                    --zip-part
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        set_tests_properties(package_setup_program_set_zip PROPERTIES SKIP_RETURN_CODE 77)
         # The check the packager runs on a staged setup program: start it as a
         # double-click does and require that it reaches its launcher (PS1B-365).
         add_test(
@@ -1243,6 +1278,7 @@ if(BUILD_TESTING)
                 frame_interpolation_display_rate
                 gl_swap_self_heal
                 netplay_test_input_wiring
+                netplay_start_failure_wiring
                 hybrid_dev_any_input
                 host_input_focus_guards
                 netplay_pad_seat_wiring
