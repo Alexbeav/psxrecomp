@@ -8,6 +8,7 @@
 #ifndef NETPLAY_EXIT_REASON_H
 #define NETPLAY_EXIT_REASON_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -29,6 +30,17 @@ int netplay_boot_mismatch_final(uint32_t mismatch_since_ms, uint32_t now_ms,
                                 uint32_t grace_ms);
 
 #define NETPLAY_BOOT_MISMATCH_GRACE_MS 3000u
+
+/* A netplay match carries pad input only (PS1B-313). A seat whose device is a
+ * PS1 Mouse or a GunCon would sit in the match with no input, and a neGcon
+ * would lose its twist; before this the match started and nothing told the
+ * player. `sio_device` is the device the seat presents (sio.h SIO_DEVICE_*),
+ * `port` the seat's number as the player sees it (1 = Player 1).
+ * Returns 0 for a pad and leaves `out` empty. Returns 1 for anything else and
+ * writes one sentence that names the device and the port; it fits the lobby
+ * client's last_error. */
+#define NETPLAY_SEAT_REFUSAL_CAP 160
+int netplay_seat_refusal(int sio_device, int port, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

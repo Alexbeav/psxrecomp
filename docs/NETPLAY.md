@@ -253,6 +253,15 @@ Generate & rebuild / prepare flows should point at the **`.cue`**, not a lone
 `.bin`. See [`config_schema.md`](config_schema.md) and the release checklist in
 [`GAME_PROJECT_SETUP.md`](GAME_PROJECT_SETUP.md).
 
+## Pads only
+
+A match carries pad input only. The seat that feeds a player's input must be a
+pad or the keyboard. A seat set to a PS1 Mouse, a neGcon or a GunCon does not
+start a match (PS1B-313): the player returns to the room and the status line
+names the device and the port, for example "Netplay needs a pad or the
+keyboard: port 1 is set to a PS1 Mouse." A CLI start prints the sentence and
+exits with code 1. The other player sees that the match ended.
+
 ---
 
 ## Related product pieces
