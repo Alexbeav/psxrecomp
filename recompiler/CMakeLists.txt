@@ -1195,6 +1195,7 @@ if(BUILD_TESTING)
                 launcher_pad_mode_wiring
                 negcon_twist_wiring
                 replay_disc_identity_wiring
+                netplay_chd_disc_rule_wiring
                 run_report_cdrom_counters
                 netplay_lan_identity_wiring
                 netplay_overlay_pin_wiring
