@@ -974,9 +974,11 @@ warn_bundled_notices
 # shows nothing. The Resident Evil 2 set package shipped like that, because no
 # step had ever started the program without arguments (PS1B-365). This starts
 # it in the stage with SDL's dummy drivers and stops it when it reaches its
-# launcher, so no window opens and nothing is written into the stage. A stop,
-# not a warning. A package built for another system cannot be started here:
-# that is said, and the package is made.
+# launcher, so no window opens and nothing is written into the stage. The
+# program gets toolchain and data folders of its own for that start, never the
+# build host's: a setup program can remove or replace the host's toolchain
+# pack (PS1B-406, PS1B-411). A stop, not a warning. A package built for another
+# system cannot be started here: that is said, and the package is made.
 plain_start_gate() {
   local python="" host=""
   for candidate in python3 python; do
