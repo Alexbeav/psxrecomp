@@ -2379,9 +2379,12 @@ def patch_generated_c(src: str, load_addr: int, size: int) -> str:
     src = re.sub(r'\bfunc_([0-9A-Fa-f]{8})\(cpu\)',
                  fix_call, src)
 
-    # 4. Add dllexport to every in-overlay func_XXXXXXXX definition.
+    # 4. Add dllexport to every in-overlay func_XXXXXXXX declaration and definition.
     #    psxrecomp-game emits "void func_XXXXXXXX(CPUState* cpu)" on one line
-    #    with "{" on the NEXT line — match the signature line alone (no ";" = definition).
+    #    with "{" on the NEXT line, and a forward declaration of the same form
+    #    ending in ";". Both get the attribute: Clang for Windows refuses a
+    #    definition that adds dllexport to a function already called through a
+    #    declaration without it (PS1B-124).
     def add_export(m):
         addr = int(m.group(1), 16)
         if not in_overlay(addr):
@@ -2391,7 +2394,7 @@ def patch_generated_c(src: str, load_addr: int, size: int) -> str:
             '__attribute__((visibility("default")))\n#endif\n'
             + m.group(0)
         )
-    src = re.sub(r'^void func_([0-9A-Fa-f]{8})\(CPUState\* cpu\)$',
+    src = re.sub(r'^void func_([0-9A-Fa-f]{8})\(CPUState\* cpu\);?$',
                  add_export, src, flags=re.MULTILINE)
 
     return src
