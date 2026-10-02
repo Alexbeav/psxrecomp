@@ -110,6 +110,8 @@ class PrepareConfig:
     serial: str = ""
     known: list[KnownImage] = field(default_factory=list)
     skip_hash_check: bool = False
+    # The [prepare_disc] table as read: disc_forms takes the kit's track list from it.
+    prep: dict = field(default_factory=dict)
 
 
 def file_hashes(path: Path) -> tuple[str, str, int]:
@@ -254,6 +256,7 @@ def load_config(project_root: Path, config_path: Path | None, out_dir_cli: str |
         serial=str(game.get("id") or ""),
         known=known,
         skip_hash_check=skip_hash,
+        prep=prep,
     )
 
 
@@ -281,32 +284,9 @@ def resolve_cue_bin(cue_path: Path) -> Path:
     return list_cue_bins(cue_path)[0]
 
 
-def cue_track_count(cue_path: Path) -> int:
-    """How many TRACK entries a cue declares."""
-    text = cue_path.read_text(encoding="utf-8", errors="replace")
-    return len(re.findall(r"^\s*TRACK\s+\d+\s+\S+", text, flags=re.I | re.M))
-
-
-def owning_cue(image: Path) -> Path | None:
-    """The cue beside a raw image that names it as a FILE, or None.
-
-    The runtime mounts that cue when a player picks the ``.bin``
-    (``disc_path.cpp``), so setup stages the same disc: without the cue the
-    track table is lost and CD audio with it. A cue that names a file that is
-    not there is left alone.
-    """
-    image = image.resolve()
-    same_stem = image.with_suffix(".cue")
-    cues = [same_stem] if same_stem.is_file() else []
-    cues += sorted(p for p in image.parent.iterdir()
-                   if p.suffix.lower() == ".cue" and p.is_file() and p not in cues)
-    for cue in cues:
-        text = cue.read_text(encoding="utf-8", errors="replace")
-        names = re.findall(r'FILE\s+"([^"]+)"\s+BINARY', text, flags=re.I)
-        files = [(cue.parent / n).resolve() for n in names]
-        if image in files and all(f.is_file() for f in files):
-            return cue
-    return None
+# Shared with the setup check (psxrecomp_cli.verify_disc_path).
+cue_track_count = disc_forms.cue_track_count
+owning_cue = disc_forms.owning_cue
 
 
 def stage_multitrack_cue(
@@ -729,16 +709,26 @@ def main() -> int:
     # One .bin that holds every track (what `chdman extractcd` writes): the
     # listed data track is the first bytes of the file (PS1G-63). The identity
     # of the disc is that track's, as it is for the one-file-per-track layout.
+    kit_table = None
     if cfg.known and not matches_known(cfg, src_size, src_md5, src_sha1):
         track = disc_forms.track_in_single_bin(
             src, src_size, [(k.size, k.md5.lower(), k.sha1.lower()) for k in cfg.known])
         if track is not None:
-            print(f"  one file holds every track; data track = first {track[0]} of {src_size} bytes")
+            image_size = src_size
+            print(f"  one file holds every track; data track = first {track[0]} of {image_size} bytes")
             src_size, src_md5, src_sha1 = track
             print(f"  data track md5   {src_md5}")
             print(f"  data track sha1  {src_sha1}")
-            if cue_src is None:
-                print("  no cue beside this file: its later tracks (CD audio) cannot be used")
+            # The track list comes from the cue. With no cue, or a cue that
+            # calls the whole file one track, it comes from the kit's own
+            # values, or the file is refused: staged as one track it would be
+            # a disc with a wrong table and no CD audio.
+            if cue_src is None or cue_track_count(cue_src) < 2:
+                kit_table = disc_forms.kit_track_table(cfg.prep, image_size, track[0])
+                if kit_table is None:
+                    print(disc_forms.no_track_list_sentence(src.name), file=sys.stderr)
+                    return 1
+                print(f"  no usable cue: track list of {len(kit_table)} track(s) taken from the kit")
 
     # Bind the selected CUE basename, not its first track's basename.
     try:
@@ -782,6 +772,27 @@ def main() -> int:
             json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         print(f"subchannel: {report['status']}")
         print(f"RESULT_CUE={cue_path.resolve()}")
+
+    # One file with every track and no usable cue: stage it whole, with the
+    # track list the kit gives.
+    if kit_table is not None and kind == "bin2352":
+        bin_data = src.read_bytes()
+        entries, files = extract_via(read_user_bin, bin_data, cfg.boot_exe)
+        print(f"  root entries: {sorted(entries)[:24]}")
+        for name, blob in files.items():
+            out_path = cfg.out_dir / name
+            out_path.write_bytes(blob)
+            print(f"wrote {out_path} ({len(blob)} bytes)")
+        dest = cfg.out_dir / src.name
+        if dest.resolve() != src.resolve():
+            print(f"copying {src.name} -> {dest}")
+            shutil.copy2(src, dest)
+        cue_path = cfg.out_dir / cfg.cue_name
+        with open(cue_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(disc_forms.rebuilt_cue(src.name, kit_table))
+        print(f"wrote {cue_path} ({len(kit_table)} tracks, from the kit's track list)")
+        finish(cue_path.resolve())
+        return 0
 
     # Multi-track disc: keep the cue + every track bin so CDDA works. A cue
     # with one FILE and several TRACKs is the same disc in one file; writing

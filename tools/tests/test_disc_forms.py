@@ -143,7 +143,11 @@ class DiscFormsTests(unittest.TestCase):
             self.assertIn("not the disc image this kit was made from", text)
             self.assertIn(f"Game (Europe) (data track {len(self.track1):,} bytes)", text)
             self.assertIn(f"The selected file {name} is {size:,} bytes", text)
-            self.assertIn("is a different disc", text)
+            # Setup cannot tell another pressing from a damaged copy or from
+            # the right disc in a form it does not read: the sentence names all.
+            self.assertIn("another pressing, revision or region of the game (a different disc)", text)
+            self.assertIn("a damaged copy", text)
+            self.assertIn("the right disc in a form setup cannot read", text)
             self.assertNotIn("wrong dump", text)
             # One line of it is shown in the setup window.
             self.assertLess(len(text), 400)
@@ -217,15 +221,89 @@ class DiscFormsTests(unittest.TestCase):
             self.assertEqual(receipt["source_data_track"]["sha1"], self.sha1)
             self.assertEqual(receipt["source_data_track"]["size"], len(self.track1))
 
-    def test_staging_one_file_without_a_cue_says_the_audio_is_lost(self):
-        lone = self.root / "lone"
+    # ---- one file with every track and no list of the tracks -------------
+
+    def lone_bin(self, cue_text=None, folder="lone"):
+        lone = self.root / folder
         lone.mkdir()
         (lone / "Game.bin").write_bytes(self.track1 + self.audio)
+        if cue_text is not None:
+            (lone / "Game.cue").write_text(cue_text, encoding="ascii")
+        return lone / "Game.bin"
+
+    ONE_TRACK_CUE = 'FILE "Game.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n'
+    ASK_FOR_CUE = "Select the .cue file that belongs to Game.bin"
+
+    def test_one_file_with_no_cue_is_refused_and_asks_for_the_cue(self):
+        picked = self.lone_bin()
+        with self.assertRaises(cli.DiscVerifyError) as raised:
+            self.verify(picked)
+        text = str(raised.exception)
+        self.assertIn(self.ASK_FOR_CUE, text)
+        self.assertEqual(text.count(". "), 0, "one sentence")
+        # Never staged as a one-track disc over the whole file.
         out = self.root / "out-lone"
-        code, log = self.prepare(lone / "Game.bin", out)
-        self.assertEqual(code, 0, log)
-        self.assertIn("no cue beside this file", log)
-        self.assertEqual((out / "Staged.cue").read_text(encoding="utf-8").count("TRACK"), 1)
+        code, log = self.prepare(picked, out)
+        self.assertEqual(code, 1, log)
+        self.assertIn(self.ASK_FOR_CUE, log)
+        self.assertFalse(out.exists())
+
+    def test_a_cue_that_calls_the_whole_file_one_track_is_no_track_list(self):
+        picked = self.lone_bin(self.ONE_TRACK_CUE)
+        for selected in (picked, picked.with_suffix(".cue")):
+            with self.assertRaises(cli.DiscVerifyError) as raised:
+                self.verify(selected)
+            self.assertIn(self.ASK_FOR_CUE, str(raised.exception))
+            out = self.root / f"out-{selected.suffix[1:]}"
+            code, log = self.prepare(selected, out)
+            self.assertEqual(code, 1, log)
+            self.assertFalse(out.exists())
+
+    def test_one_file_with_no_cue_is_staged_whole_from_the_kits_track_list(self):
+        sizes = f"[{len(self.track1)}, {len(self.audio)}]"
+        self.config.write_text(self.config.read_text(encoding="utf-8")
+                               + f"track_sizes = {sizes}\ntrack_pregaps = [0, 20]\n", encoding="utf-8")
+        prep = dict(self.prep, track_sizes=[len(self.track1), len(self.audio)], track_pregaps=[0, 20])
+        for folder, cue_text in (("bare", None), ("one-track-cue", self.ONE_TRACK_CUE)):
+            with self.subTest(folder=folder):
+                picked = self.lone_bin(cue_text, folder)
+                identity = cli.verify_disc_path(picked, prep, skip_hash=False, progress=quiet())
+                self.assertTrue(identity["verified"])
+                self.assertEqual(identity["sha1"], self.sha1)
+                out = self.root / f"out-{folder}"
+                code, log = self.prepare(picked, out)
+                self.assertEqual(code, 0, log)
+                self.assertIn("track list of 2 track(s) taken from the kit", log)
+                # The same table the disc's own cue gives.
+                self.assertEqual((out / "Staged.cue").read_text(encoding="utf-8"),
+                                 self.single_cue.read_text(encoding="ascii"))
+                self.assertEqual((out / "Game.bin").read_bytes(), self.track1 + self.audio)
+                self.assertTrue((out / BOOT).is_file())
+                receipt = json.loads((out / "Staged.disc-receipt.json").read_text(encoding="utf-8"))
+                self.assertEqual(receipt["source_data_track"]["size"], len(self.track1))
+
+    def test_the_kits_track_list_is_used_only_for_a_file_it_fits(self):
+        t1, total = 300 * SECTOR, 1000 * SECTOR
+        table = disc_forms.kit_track_table({"track_sizes": [t1, 400 * SECTOR, 300 * SECTOR]}, total, t1)
+        # Track 1 is data; later tracks are audio with the 150-frame pregap.
+        self.assertEqual(table, [(1, False, 0, 0), (2, True, 300, 450), (3, True, 700, 850)])
+        self.assertEqual(disc_forms.rebuilt_cue("Game.bin", table),
+                         'FILE "Game.bin" BINARY\n'
+                         "  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"
+                         "  TRACK 02 AUDIO\n    INDEX 00 00:04:00\n    INDEX 01 00:06:00\n"
+                         "  TRACK 03 AUDIO\n    INDEX 00 00:09:25\n    INDEX 01 00:11:25\n")
+        refused = [
+            {},                                                        # no list
+            {"track_sizes": [total]},                                  # one track is no list
+            {"track_sizes": [t1, 400 * SECTOR, 299 * SECTOR]},         # does not add up
+            {"track_sizes": [t1 + SECTOR, 400 * SECTOR, 299 * SECTOR]},  # another data track
+            {"track_sizes": [t1, 400 * SECTOR + 1, 300 * SECTOR - 1]},   # not whole sectors
+            {"track_sizes": [t1, 700 * SECTOR], "track_pregaps": [0]},   # lists of unequal length
+            {"track_sizes": [t1, 700 * SECTOR], "track_pregaps": [0, 700]},  # pregap fills the track
+            {"track_sizes": [t1, "700"]},                              # not numbers
+        ]
+        for prep in refused:
+            self.assertIsNone(disc_forms.kit_track_table(prep, total, t1), prep)
 
     def test_staging_one_file_per_track_is_unchanged(self):
         out = self.root / "out-multi"

@@ -1151,6 +1151,16 @@ def verify_disc_path(
                 f"{path.name} holds every track in one file; its data track is the "
                 f"first {size} of {image_size} bytes"
             )
+            # Where the later tracks begin is in the cue. With no cue, or a
+            # cue that calls the whole file one track, the kit's own track
+            # list is used; with neither the file is refused: staged as one
+            # track it would be a disc with a wrong table and no CD audio.
+            cue = disc.resolve() if disc.suffix.lower() == ".cue" else disc_forms.owning_cue(path)
+            if cue is None or disc_forms.cue_track_count(cue) < 2:
+                if disc_forms.kit_track_table(prep, image_size, size) is None:
+                    progress.log(f"{path.name}: no cue lists its tracks and the kit has no track list")
+                    raise DiscVerifyError(disc_forms.no_track_list_sentence(path.name))
+                progress.log(f"{path.name}: track list taken from the kit")
     try:
         subchannel, _ = inspect_companion(disc, size, sha1)
     except CompanionError as exc:
