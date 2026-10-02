@@ -35,7 +35,15 @@ assert resolved >= 0, "the input seat must be resolved before it is checked"
 assert "if (netplay_seat_refused) {" in question, "nothing acts on the refusal before the session start"
 acts = question[question.index("if (netplay_seat_refused) {") :]
 assert "std::fprintf(stderr" in acts and "netplay_seat_why" in acts, "the sentence is not printed"
-assert re.search(r"if \(!g_netplay_from_lobby\)\s*return 1;", acts), "a CLI start must stop with exit code 1"
+# The stop goes through refuse_start, which records the sentence for the run
+# report (PS1G-63) and returns 1 when no other code is given.
+assert re.search(
+    r'if \(!g_netplay_from_lobby\)\s*return refuse_start\("netplay_seat", "[^"]*",\s*netplay_seat_why\);',
+    acts,
+), "a CLI start must stop with exit code 1"
+assert re.search(r"const std::string& sentence, unsigned seq_before,\s*int code = 1\) \{", MAIN), (
+    "refuse_start must return 1 unless a code is given"
+)
 
 # A match from the lobby ends the session it opened and keeps the sentence for
 # the status line, which the soft return to the lobby shows.
