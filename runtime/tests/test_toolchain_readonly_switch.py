@@ -13,8 +13,8 @@ with the switch (everything must be byte-for-byte what it was, and the step is
 named on stderr) and without it (the control: the operation is real, so the
 first result means something).
 
-  the CLI's module:   remove a `latest` link that points at nothing, prune older
-      installs, install from a zip, move the `latest` pointer, remove and write
+  the CLI's module:   remove a `latest` link that points at nothing, put back a
+      pack an interrupted install left set aside, prune older installs, install from a zip, move the `latest` pointer, remove and write
       the project stamp, write the user's login PATH, promote the legacy cache;
   the setup host, by a probe that includes its source file:   the same without
       the login PATH and the legacy cache, and link the pack into the project
@@ -43,8 +43,8 @@ import toolchain_test_support as support  # noqa: E402
 from toolchain_test_support import make_link, make_pack, make_zip, snapshot  # noqa: E402
 
 THIS = Path(__file__).resolve()
-CLI_CASES = ("dangling", "prune", "install", "pointer", "stamp", "user_path", "migrate")
-HOST_CASES = ("dangling", "prune", "install", "pointer", "stamp", "link", "download")
+CLI_CASES = ("dangling", "put_back", "prune", "install", "pointer", "stamp", "user_path", "migrate")
+HOST_CASES = ("dangling", "put_back", "prune", "install", "pointer", "stamp", "link", "download")
 
 
 def cli_child(case: str) -> int:
@@ -65,6 +65,10 @@ def cli_child(case: str) -> int:
                 print(json.dumps({"skipped": "no directory link can be made here"}))
                 return 0
             (cache / "gone").rmdir()
+        before = snapshot(watch)
+        tp.heal_broken_toolchain_pointers()
+    elif case == "put_back":
+        make_pack(cache / (".old-%d-1.0.14" % support.DEAD_PID), marker="old.txt")     # an interrupted install
         before = snapshot(watch)
         tp.heal_broken_toolchain_pointers()
     elif case == "prune":
@@ -166,6 +170,9 @@ def run_host_case(probe: Path, case: str, switch: bool, tmp: Path, stub: Path | 
         if not make_link(cache / "latest", cache / "gone"):
             return {"skipped": "no directory link can be made here"}
         (cache / "gone").rmdir()
+        args = ["heal"]
+    elif case == "put_back":
+        make_pack(cache / (".old-%d-1.0.14" % support.DEAD_PID), marker="old.txt")     # an interrupted install
         args = ["heal"]
     elif case == "prune":
         make_pack(cache / "1.0.13", "1.0.13", marker="old.txt")

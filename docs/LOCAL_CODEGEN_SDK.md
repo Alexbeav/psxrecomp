@@ -229,21 +229,38 @@ The setup host (`host/psxrecomp_codegen_host.c`) and the CLI
 (`tools/toolchain_pack.py`) install a pack in the same order:
 
 1. The zip is unpacked into a staging folder beside the installed packs.
-2. The new pack is checked there. A pack that fails is dropped; nothing that
-   was installed has been touched.
+2. The new pack is checked there, by the same steps in both installers: cmake
+   runs, clang and the linker are in the pack, clang runs, a one-line program
+   compiles and links. A pack that fails is dropped; nothing that was installed
+   has been touched.
 3. The installed folder of that tag, if there is one, is renamed aside
-   (`.old-<tag>-<pid>`). On Windows a folder with an open file cannot be
-   renamed: a build is using the pack, so it stays whole, the new pack is
-   dropped, and the player is told to close the build.
-4. The new pack takes the tag's name, `latest` follows, the project stamp is
-   written.
-5. Only then the folder that was set aside and the older tags are removed.
-   What cannot be removed whole stays under its dot-name, which no lookup
-   reads, and is removed on a later pass.
+   (`.old-<pid>-<tag>`). When the rename fails the installed pack stays whole,
+   the new pack is dropped, and the message gives the system's error.
+4. The new pack takes the tag's name, `latest` follows, and the pack is checked
+   again in its place. A pack that fails there is taken out and the old one is
+   put back under its name.
+5. Only then the folder that was set aside is removed, the project stamp is
+   written (the CLI also writes the user's login PATH), and the older tags are
+   removed. What cannot be removed whole stays under its dot-name, which no
+   lookup reads, and is removed on a later pass.
+
+An install that is ended between step 3 and step 4 leaves the whole old pack
+under `.old-<pid>-<tag>` and no folder under the tag's name. Both installers
+put such a folder back before they check a pointer, install or prune. A prune
+removes a set-aside folder only when the program that made it has ended and
+the tag is there again; another running program's folder stays.
 
 Before this order (PS1B-410) an install over the installed tag removed that
 folder first. With builds running from it, the files they held open survived
 and the rest went.
+
+**The limit of "a pack in use" (PS1B-416).** What keeps an installer from
+taking a pack away from a build is one fact: a folder with an open file cannot
+be renamed. That is a Windows rule, and it holds only while a file is open.
+On Linux and macOS a rename always succeeds: an install over the installed
+tag, and the prune of an older tag, take the folder away from a running build
+there. On Windows a build between two compiler runs holds no file in the pack,
+and a prune can remove the older tag it uses.
 
 ### `PSXRECOMP_TOOLCHAIN_READONLY=1`
 

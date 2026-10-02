@@ -108,7 +108,11 @@ def pack_manifest(version: str) -> str:
     return json.dumps({"id": "cmake-clang-v1", "version": version, "os": PACK_OS})
 
 
-def make_pack(root: Path, version: str = "1.0.14", marker: str = "", stub: Path | None = None) -> Path:
+DEAD_PID = 99999999      # no process has this id: a set-aside folder of an owner that has ended
+
+
+def make_pack(root: Path, version: str = "1.0.14", marker: str = "", stub: Path | None = None,
+              tools: tuple = PACK_TOOLS) -> Path:
     """A pack. Without `stub` its cmake is a file that does not run: the pack is
     there and fails its check. With `stub` (a program that exits 0) cmake, clang
     and ld.lld run, so the pack passes."""
@@ -116,7 +120,7 @@ def make_pack(root: Path, version: str = "1.0.14", marker: str = "", stub: Path 
     if stub is None:
         (root / "bin" / CMAKE).write_text("not a program\n", encoding="utf-8")
     else:
-        for tool in PACK_TOOLS:
+        for tool in tools:
             shutil.copy2(stub, root / "bin" / (tool + EXE))
     (root / "retcomm-toolchain.json").write_text(pack_manifest(version), encoding="utf-8")
     if marker:
@@ -124,7 +128,8 @@ def make_pack(root: Path, version: str = "1.0.14", marker: str = "", stub: Path 
     return root
 
 
-def make_zip(path: Path, version: str = "1.0.14", marker: str = "new.txt", stub: Path | None = None) -> Path:
+def make_zip(path: Path, version: str = "1.0.14", marker: str = "new.txt", stub: Path | None = None,
+             tools: tuple = PACK_TOOLS) -> Path:
     """The zip of a pack, with the Unix modes a real pack's zip records."""
     with zipfile.ZipFile(path, "w") as archive:
         def put(name: str, data: bytes, mode: int) -> None:
@@ -135,7 +140,7 @@ def make_zip(path: Path, version: str = "1.0.14", marker: str = "new.txt", stub:
         if stub is None:
             put("bin/" + CMAKE, b"not a program\n", 0o644)
         else:
-            for tool in PACK_TOOLS:
+            for tool in tools:
                 put("bin/" + tool + EXE, stub.read_bytes(), 0o755)
         put("retcomm-toolchain.json", pack_manifest(version).encode("utf-8"), 0o644)
         put(marker, (marker + "\n").encode("utf-8"), 0o644)

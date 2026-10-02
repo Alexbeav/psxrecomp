@@ -16,6 +16,7 @@
 #  include <dirent.h>
 #  include <errno.h>
 #  include <fcntl.h>
+#  include <signal.h>
 #  include <spawn.h>
 #  include <strings.h>
 #  include <sys/stat.h>
@@ -36,6 +37,8 @@ static void heal_broken_toolchain_pointers(void);
 static void clear_project_toolchain_stamp(void);
 static int host_paths_same_file(const char* a, const char* b);
 static void prune_old_toolchain_tags(const char* keep_pack);
+static int restore_dir_aside(const char* aside, const char* path);
+static int pack_root_has_cmake_direct(const char* root);
 #if defined(_WIN32)
 static int junction_dir(const char* link_path, const char* target_path);
 static int run_cmdline_wait(const char* cmdline, DWORD* out_code);
@@ -62,6 +65,9 @@ static int g_relaunch_is_helper;
 static char g_wizard_bios[1100];
 /* Set when heal removes a broken latest/ / stamp at wizard open. */
 static char g_tc_repair_note[320];
+/* The system's error of the last rename aside that failed (GetLastError on
+ * Windows, errno elsewhere). */
+static long g_tc_aside_error;
 /* Set when host_persist_setup receives an explicit bios_path (including ""
  * for OpenBIOS). Distinguishes intentional OpenBIOS clear from "unset". */
 static int g_wizard_bios_explicit;
@@ -2543,10 +2549,12 @@ static int set_dir_aside(const char* path, char* aside, size_t cap) {
 #else
         unsigned long pid = (unsigned long)getpid();
 #endif
+        /* .old-<pid>[.<n>]-<name>: the owner's process id first, so that the
+         * name of the folder can be read back whatever characters it has. */
         if (n)
-            snprintf(name, sizeof(name), TOOLCHAIN_ASIDE_PREFIX "%s-%lu-%d", base, pid, n);
+            snprintf(name, sizeof(name), TOOLCHAIN_ASIDE_PREFIX "%lu.%d-%s", pid, n, base);
         else
-            snprintf(name, sizeof(name), TOOLCHAIN_ASIDE_PREFIX "%s-%lu", base, pid);
+            snprintf(name, sizeof(name), TOOLCHAIN_ASIDE_PREFIX "%lu-%s", pid, base);
         if (!join_path(aside, cap, parent, name))
             break;
         if (path_exists_any(aside))
@@ -2554,14 +2562,133 @@ static int set_dir_aside(const char* path, char* aside, size_t cap) {
 #if defined(_WIN32)
         if (MoveFileExA(path, aside, 0))
             return 1;
+        g_tc_aside_error = (long)GetLastError();
 #else
         if (rename(path, aside) == 0)
             return 1;
+        g_tc_aside_error = (long)errno;
 #endif
         break;
     }
     aside[0] = '\0';
     return 0;
+}
+
+/* Read ".old-<pid>[.<n>]-<name>". 1 and the two parts when the entry is one. */
+static int aside_entry_parse(const char* entry, unsigned long* pid, const char** name) {
+    const char* p = entry;
+    unsigned long v = 0;
+    size_t plen = sizeof(TOOLCHAIN_ASIDE_PREFIX) - 1;
+    if (strncmp(p, TOOLCHAIN_ASIDE_PREFIX, plen) != 0)
+        return 0;
+    p += plen;
+    if (*p < '0' || *p > '9')
+        return 0;
+    while (*p >= '0' && *p <= '9')
+        v = v * 10 + (unsigned long)(*p++ - '0');
+    if (*p == '.') {
+        ++p;
+        if (*p < '0' || *p > '9')
+            return 0;
+        while (*p >= '0' && *p <= '9')
+            ++p;
+    }
+    if (*p != '-' || !p[1])
+        return 0;
+    *pid = v;
+    *name = p + 1;
+    return 1;
+}
+
+/* Is the process that set a folder aside still running? This process counts
+ * as not running: what it set aside and did not put back is its own to handle. */
+static int aside_owner_is_running(unsigned long pid) {
+#if defined(_WIN32)
+    HANDLE h;
+    DWORD code = 0;
+    int running;
+    if (pid == (unsigned long)GetCurrentProcessId())
+        return 0;
+    h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!h)
+        return GetLastError() == ERROR_ACCESS_DENIED;   /* there, and not ours to read */
+    running = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
+    CloseHandle(h);
+    return running;
+#else
+    if (pid == (unsigned long)getpid())
+        return 0;
+    return kill((pid_t)pid, 0) == 0 || errno == EPERM;
+#endif
+}
+
+/* What to do with one set-aside folder of a cache base.
+ *   0  leave it: its owner is still running (it may be in the middle of an
+ *      install and need the folder to put back);
+ *   1  put it back: the folder it was taken from is missing, so an install
+ *      was interrupted between the rename aside and the arrival of the new
+ *      pack. The whole old pack is in it;
+ *   2  remove it: the replacement is in place and nobody needs it. */
+static int aside_entry_fate(const char* base, const char* entry, char* target, size_t cap) {
+    unsigned long pid = 0;
+    const char* name = NULL;
+    if (!aside_entry_parse(entry, &pid, &name))
+        return 0;
+    if (aside_owner_is_running(pid))
+        return 0;
+    if (!join_path(target, cap, base, name))
+        return 0;
+    return path_exists_any(target) ? 2 : 1;
+}
+
+/* Put back, in every cache base, the folders an interrupted install left set
+ * aside (their name is missing). Nothing reads a dot-name, so without this the
+ * pack would be lost to every lookup and removed by the next prune. Called
+ * before a check of the pointers and before a prune. */
+static void toolchain_put_back_set_aside(void) {
+    char bases[12][1400];
+    int n = collect_toolchain_cache_bases(bases, 12), i;
+    for (i = 0; i < n; ++i) {
+        char names[16][300];
+        int count = 0, k;
+#if defined(_WIN32)
+        WIN32_FIND_DATAA fd;
+        char pattern[1500];
+        HANDLE h;
+        snprintf(pattern, sizeof(pattern), "%s\\" TOOLCHAIN_ASIDE_PREFIX "*", bases[i]);
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE)
+            continue;
+        do {
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && count < 16)
+                snprintf(names[count++], sizeof(names[0]), "%s", fd.cFileName);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+#else
+        DIR* d = opendir(bases[i]);
+        struct dirent* ent;
+        if (!d)
+            continue;
+        while ((ent = readdir(d)) != NULL) {
+            if (strncmp(ent->d_name, TOOLCHAIN_ASIDE_PREFIX, sizeof(TOOLCHAIN_ASIDE_PREFIX) - 1) == 0 && count < 16)
+                snprintf(names[count++], sizeof(names[0]), "%s", ent->d_name);
+        }
+        closedir(d);
+#endif
+        for (k = 0; k < count; ++k) {
+            char aside[1800], target[1800];
+            if (aside_entry_fate(bases[i], names[k], target, sizeof(target)) != 1)
+                continue;
+            if (!join_path(aside, sizeof(aside), bases[i], names[k]) || !pack_root_has_cmake_direct(aside))
+                continue;   /* not a pack: nothing to put back */
+            if (toolchain_readonly_skip("put back a pack an interrupted install left set aside", aside))
+                continue;
+            if (restore_dir_aside(aside, target))
+                fprintf(stderr,
+                        "psxrecomp-codegen: an install was interrupted; the toolchain pack "
+                        "it had set aside is put back: %s\n", target);
+        }
+    }
 }
 
 /* Put a folder that was set aside back under its name. */
@@ -3240,6 +3367,7 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
         return;
     if (toolchain_readonly_skip("prune older toolchain installs", cache_root))
         return;
+    toolchain_put_back_set_aside();   /* a pack an interrupted install left aside is not pruned */
 
 #if defined(_WIN32)
     {
@@ -3256,7 +3384,11 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
                 continue;
             if (strncmp(fd.cFileName, TOOLCHAIN_ASIDE_PREFIX,
                         sizeof(TOOLCHAIN_ASIDE_PREFIX) - 1) == 0) {
-                if (join_path(child, sizeof(child), cache_root, fd.cFileName))
+                /* Only what nobody needs: its owner has ended and the folder
+                 * it was taken from is there again. */
+                char target[1800];
+                if (aside_entry_fate(cache_root, fd.cFileName, target, sizeof(target)) == 2 &&
+                    join_path(child, sizeof(child), cache_root, fd.cFileName))
                     remove_dir_aside(child);
                 continue;
             }
@@ -3286,7 +3418,9 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
             struct stat st;
             if (strncmp(ent->d_name, TOOLCHAIN_ASIDE_PREFIX,
                         sizeof(TOOLCHAIN_ASIDE_PREFIX) - 1) == 0) {
-                if (join_path(child, sizeof(child), cache_root, ent->d_name))
+                char target[1800];
+                if (aside_entry_fate(cache_root, ent->d_name, target, sizeof(target)) == 2 &&
+                    join_path(child, sizeof(child), cache_root, ent->d_name))
                     remove_dir_aside(child);
                 continue;
             }
@@ -3823,6 +3957,7 @@ static void heal_broken_toolchain_pointers(void) {
     char bases[12][1400];
     int n = collect_toolchain_cache_bases(bases, 12);
     int failed = 0;
+    toolchain_put_back_set_aside();   /* first: a pack an interrupted install left aside */
     for (int i = 0; i < n; ++i) {
         char latest[1400], root[1400], bin[1400];
         if (!join_path(latest, sizeof(latest), bases[i], "latest"))

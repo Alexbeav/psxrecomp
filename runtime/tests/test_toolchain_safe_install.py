@@ -23,8 +23,14 @@ its source file):
                                    one whole or the new one whole, never a mix,
                                    and it passes its check.
   pruning does the same            an older install with a file held open is
-                                   whole or gone, never half removed; what an
-                                   earlier pass set aside is removed.
+                                   whole or gone, never half removed. A folder
+                                   an earlier pass set aside is removed when its
+                                   owner has ended and its tag is there again;
+                                   another running program's folder stays.
+  an interrupted install           a pack left set aside with its tag missing
+                                   is put back before anything else.
+  both installers check alike      a new pack with cmake and no compiler is
+                                   refused by the CLI as by the host.
 
 Everything runs in the closed environment of toolchain_test_support.py.
 --dry-run prints it and starts nothing. --cli-only leaves the host layer out.
@@ -89,14 +95,21 @@ def prepare(case: str, cache: Path, sandbox: Path, stub: Path | None) -> Path | 
     if case == "prune_held":
         make_pack(cache / "1.0.13", "1.0.13", marker="old.txt")
         make_pack(cache / "1.0.14")
-        (cache / (ASIDE + "1.0.12-1")).mkdir()                      # left by an earlier pass
-        (cache / (ASIDE + "1.0.12-1") / "left.txt").write_text("left\n", encoding="utf-8")
+        make_pack(cache / (ASIDE + "%d-1.0.14" % support.DEAD_PID), marker="left.txt")     # an earlier pass, ended
+        make_pack(cache / (ASIDE + "%d-9.9.9" % os.getpid()), "9.9.9", marker="theirs.txt")  # a running program's
         return None
+    if case == "interrupted":
+        make_pack(cache / (ASIDE + "%d-1.0.14" % support.DEAD_PID), marker="old.txt")      # and no 1.0.14
+        return None
+    if case == "cmake_only":
+        make_pack(cache / "1.0.14", marker="old.txt", stub=stub)
+        return make_zip(sandbox / "pack.zip", stub=stub, tools=("cmake",))               # no clang, no linker
     raise ValueError(case)
 
 
-CASES = ("failed_check", "bad_new_pack", "clean_install", "same_tag", "held_open", "newer_tag", "prune_held")
-NEEDS_STUB = ("bad_new_pack", "clean_install", "same_tag", "held_open", "newer_tag")
+CASES = ("failed_check", "bad_new_pack", "clean_install", "same_tag", "held_open", "newer_tag", "prune_held",
+         "interrupted", "cmake_only")
+NEEDS_STUB = ("bad_new_pack", "clean_install", "same_tag", "held_open", "newer_tag", "cmake_only")
 HELD = {"held_open": Path("1.0.14") / "old.txt", "prune_held": Path("1.0.13") / "old.txt"}
 
 
@@ -108,7 +121,7 @@ def cli_child(case: str) -> int:
     cache = Path(os.environ["RETCOMM_TOOLCHAIN_CACHE"])
     raised = ""
     try:
-        if case == "failed_check":
+        if case in ("failed_check", "interrupted"):
             tp.heal_broken_toolchain_pointers()
         elif case == "prune_held":
             tp.prune_old_toolchain_tags(cache / "1.0.14")
@@ -154,6 +167,8 @@ def run_host_case(probe: Path, case: str, tmp: Path, stub: Path | None) -> dict:
                 seen["exit"] = seen["exit"] or more["exit"]
         elif case == "prune_held":
             seen = support.run_probe(probe, ["prune", str(cache / "1.0.14")], sandbox, False)
+        elif case == "interrupted":
+            seen = support.run_probe(probe, ["heal"], sandbox, False)
         else:
             seen = support.run_probe(probe, ["install", str(archive)], sandbox, False)
     finally:
@@ -228,14 +243,24 @@ def judge(layer: str, case: str, seen: dict, new_tag: dict | None, check: suppor
               "%s: a newer tag is installed beside the old one, which is removed afterwards" % name,
               (said, seen["names"]))
         check(not seen["asides"] and not seen["staging"], "%s: nothing is left beside the pack" % name, seen["names"])
+    elif case == "interrupted":
+        check("old.txt" in seen["tag"] and not seen["asides"],
+              "%s: a pack an interrupted install left set aside is put back under its name" % name, seen["names"])
+    elif case == "cmake_only":
+        check(not done and "did not pass its check" in said and unchanged,
+              "%s: a new pack with cmake and no compiler is refused, and the installed pack is byte-for-byte what it was"
+              % name, (said, seen["names"]))
     elif case == "prune_held":
         old = {k: v for k, v in seen["before"].items() if k.startswith("1.0.13")}
         now = {k: v for k, v in seen["after"].items() if k.startswith("1.0.13")}
         check(now == old or not now,
               "%s: an older install with a file held open is whole or gone, never half removed (here: %s)"
               % (name, "whole" if now == old else "gone" if not now else "HALF REMOVED"), sorted(now))
-        check(not [n for n in seen["names"] if n.startswith(ASIDE + "1.0.12")],
-              "%s: what an earlier pass set aside is removed" % name, seen["names"])
+        check(ASIDE + "%d-1.0.14" % support.DEAD_PID not in seen["names"],
+              "%s: a folder set aside by a program that has ended, whose tag is there again, is removed" % name,
+              seen["names"])
+        check(ASIDE + "%d-9.9.9" % os.getpid() in seen["names"],
+              "%s: a folder set aside by a program that is still running stays" % name, seen["names"])
         check("1.0.14" in seen["names"], "%s: the pack that is kept is there" % name, seen["names"])
         if WINDOWS:
             check(now == old, "%s (Windows): the older install in use stays whole" % name, sorted(now))
