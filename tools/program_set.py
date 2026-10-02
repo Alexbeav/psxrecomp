@@ -86,7 +86,15 @@ class SetError(Exception):
 
 
 class WrongDisc(SetError):
-    """A located disc is not the disc its position in the set calls for."""
+    """A located disc is not the disc its position in the set calls for.
+
+    `number` is that position, 1-based (0 when it is not known), so that the
+    caller can say which file was refused.
+    """
+
+    def __init__(self, message: str, number: int = 0) -> None:
+        super().__init__(message)
+        self.number = number
 
 
 # ---- set.toml ---------------------------------------------------------------
@@ -373,11 +381,11 @@ def check_discs(spec: Dict[str, Any], discs: List[Optional[Path]],
             found = probe(disc)
         except Exception as exc:  # noqa: BLE001 - whatever the reader raises, the disc is not usable
             raise WrongDisc(f"Disc {number} of {spec['title']} cannot be read: {Path(disc).name} ({exc}). "
-                            f"It must be {serial}, the disc of the {program} program.") from None
+                            f"It must be {serial}, the disc of the {program} program.", number) from None
         if found != serial:
             raise WrongDisc(f"Disc {number} of {spec['title']} must be {serial}, the disc of the {program} "
                             f"program, but {Path(disc).name} is "
-                            f"{found or 'not a disc this setup can identify'}.")
+                            f"{found or 'not a disc this setup can identify'}.", number)
 
 
 # ---- each program sees the shared framework ---------------------------------
@@ -876,8 +884,12 @@ class _ProgramProgress:
     """One program's step, reported inside the set's step: its messages carry
     the program's name and its percentage fills the program's share."""
 
-    def __init__(self, parent: Any, label: str, lo: float, hi: float) -> None:
+    def __init__(self, parent: Any, label: str, lo: float, hi: float, given_disc: bool = False) -> None:
         self.parent, self.label, self.lo, self.hi = parent, label, lo, hi
+        # True when this program's disc is the file the set's caller gave as
+        # `--disc`. The program's step sees its own disc as "the given one";
+        # for the set that is true of one program at most.
+        self.given_disc = given_disc
         self.json_progress = getattr(parent, "json_progress", False)
         self.last_result: Dict[str, Any] = {}
 
@@ -895,6 +907,8 @@ class _ProgramProgress:
         self.last_result = dict(fields)
 
     def error(self, message: str, *, code: int = 1, **fields: Any) -> None:
+        if "refused_given_disc" in fields:
+            fields["refused_given_disc"] = bool(fields["refused_given_disc"]) and self.given_disc
         self.parent.error(f"{self.label}: {message}", code=code, **fields)
 
     def event(self, event: str, **fields: Any) -> None:
@@ -920,14 +934,26 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
     of the set is located and is the right disc. The marker is removed first
     and written last, so setup counts as done only after every program is.
     """
+    # Whether disc 1 of the set is the file given as `--disc`. A refusal says so
+    # (`refused_given_disc`), because the setup window marks the selected file
+    # as refused only then: a refusal of another disc of the set must not put a
+    # cross on the disc the player is looking at (PS1B-415).
+    disc_1_is_given = False
     try:
         spec = load_set(Path(args.config).expanduser())
         root = Path(spec["root"])
         given = parse_set_disc_args(getattr(args, "set_disc", None))
-        if getattr(args, "disc", "") and 1 not in given:
+        from_disc_arg = bool(getattr(args, "disc", "")) and 1 not in given
+        if from_disc_arg:
             given[1] = str(args.disc)   # the wizard passes the boot disc as --disc
         cli.activate_embedded_toolchain(root, progress)
         discs = located_discs(spec, given)
+        if from_disc_arg and discs and discs[0] is not None:
+            # located_discs takes the next source when the given path is not a file.
+            as_given = Path(str(args.disc)).expanduser()
+            if not as_given.is_absolute():
+                as_given = root / as_given
+            disc_1_is_given = as_given.is_file() and as_given.resolve() == discs[0]
         if any(disc is not None and disc.suffix.lower() == ".chd" for disc in discs):
             reader = cli.ensure_chd_reader(root, progress)
             if reader:
@@ -936,7 +962,8 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
                        message=f"Checking the {len(spec['serials'])} discs of {spec['title']}")
         check_discs(spec, discs)
     except WrongDisc as error:
-        progress.error(str(error), code=cli.EXIT_VERIFY, verify_failed=True)
+        progress.error(str(error), code=cli.EXIT_VERIFY, verify_failed=True,
+                       refused_given_disc=disc_1_is_given and error.number == 1)
         return cli.EXIT_VERIFY
     except SetError as error:
         progress.error(str(error), code=cli.EXIT_USAGE)
@@ -971,7 +998,8 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
             progress.error(f"{program['program']}: {error}", code=cli.EXIT_ERROR)
             return cli.EXIT_ERROR
         child = _ProgramProgress(progress, f"{program['program']} ({index + 1} of {count})",
-                                 0.05 + 0.9 * index / count, 0.05 + 0.9 * (index + 1) / count)
+                                 0.05 + 0.9 * index / count, 0.05 + 0.9 * (index + 1) / count,
+                                 given_disc=disc_1_is_given and program["positions"][0] == 1)
         code = cli.cmd_generate(_program_args(args, folder, disc=str(discs[program["positions"][0] - 1]),
                                               bios=bios, gen_marker="", force_emitters=False), child)
         if code != cli.EXIT_OK:

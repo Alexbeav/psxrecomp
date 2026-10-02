@@ -1309,6 +1309,7 @@ if(BUILD_TESTING)
                 sdl3_main_single_include
                 settings_boot_keys_wiring
                 setup_install_card_path_wiring
+                setup_refusal_verdict
                 spu_sample_scheduler_default
                 overlay_step_boundary
                 vk_build_default
@@ -1325,6 +1326,13 @@ if(BUILD_TESTING)
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
+        # setup_refusal_verdict compiles its rules (host/psx_setup_refusal.h)
+        # itself. Give it this build's C compiler, so that it does not depend
+        # on one being on PATH.
+        if(CMAKE_C_COMPILER AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+            set_tests_properties(setup_refusal_verdict PROPERTIES
+                ENVIRONMENT "CC=${CMAKE_C_COMPILER}")
+        endif()
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # (overlay_pair_dedup_runtime was the third of these. It failed to link:

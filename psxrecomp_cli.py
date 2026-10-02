@@ -1303,7 +1303,11 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 chd_lib=chd_lib,
             )
     except DiscVerifyError as exc:
-        progress.error(str(exc), code=EXIT_VERIFY, verify_failed=True)
+        # `refused_given_disc`: the refused file is the one given as `--disc`
+        # (not the config's own `disc`). The setup window marks the selected
+        # file as refused only then (PS1B-415).
+        progress.error(str(exc), code=EXIT_VERIFY, verify_failed=True,
+                       refused_given_disc=bool(args.disc))
         return EXIT_VERIFY
 
     boot = str(prep.get("boot_exe") or Path(str(game.get("exe") or "")).name)
