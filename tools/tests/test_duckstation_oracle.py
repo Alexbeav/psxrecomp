@@ -348,6 +348,26 @@ class TestOraclePatch(unittest.TestCase):
             with self.assertRaises(self.OP.PatchError):
                 self.OP.apply(root, wrong)
 
+    def test_line_edit_writes_the_line_endings_git_would(self):
+        """Under core.autocrlf=true git rewrites a patched file with CRLF. The line
+        edit must do the same, or the patched tree differs from the one a patch gave."""
+        import shutil
+        if shutil.which("git") is None:
+            self.skipTest("git is not on PATH")
+        edit = {"path": "build.txt", "line": 2, "remove_text": "SOURCES ",
+                "sha256_before": self.OP.line_hash("call(A SOURCES B)"),
+                "sha256_after": self.OP.line_hash("call(A B)")}
+        for autocrlf, expected in (("true", b"one\r\ncall(A B)\r\nthree\r\n"), ("false", b"one\ncall(A B)\nthree\n")):
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                self.git(root, "init", "-q")
+                self.git(root, "config", "core.autocrlf", autocrlf)
+                (root / "build.txt").write_bytes(b"one\ncall(A SOURCES B)\nthree\n")
+                self.assertEqual(self.OP.edit_state(root, edit), "before")
+                self.OP.apply_edit(root, edit)
+                self.assertEqual((root / "build.txt").read_bytes(), expected)
+                self.assertEqual(self.OP.edit_state(root, edit), "after")
+
     def test_line_edits_carry_no_upstream_line(self):
         for edit in DSO.load_pin().get("line_edits", []):
             self.assertEqual(sorted(edit), ["line", "path", "remove_text", "sha256_after", "sha256_before",

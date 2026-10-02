@@ -225,6 +225,12 @@ def apply_edit(checkout: Path, edit: Dict[str, Any]) -> None:
     if line_hash(body) != edit["sha256_after"]:
         raise PatchError(f"{edit['path']} line {edit['line']}: the edited line is not the expected one")
     lines[index] = body + tail
+    # A file that git rewrites under core.autocrlf=true comes out with CRLF line
+    # endings, and that is what applying a patch to this file used to do. Write
+    # the same, so the patched tree is byte for byte what it was before.
+    _, autocrlf = git(checkout, "config", "--get", "core.autocrlf")
+    if autocrlf.strip().lower() == "true" and "\r\n" not in raw:
+        lines = [line + "\r" for line in lines[:-1]] + lines[-1:]
     target.write_bytes("\n".join(lines).encode("utf-8"))
 
 
