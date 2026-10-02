@@ -196,7 +196,10 @@ void apply_netplay_disc_expect(DiscIdentity& id, const NetplayDiscExpect& expect
         id.netplay_detail = "Disc TOC could not be opened for netplay.";
         return;
     }
-    if (expect.require_cue) {
+    // require_cue keeps a bare .bin of a multi-track disc out. A .chd holds
+    // every track in one file, so it meets the rule; its tracks and its TOC
+    // fingerprint are checked below like a cue's (PS1B-294).
+    if (expect.require_cue && !id.from_chd) {
         if (id.cue_fallback || !id.from_cue) {
             id.netplay_ok = false;
             id.netplay_detail =
@@ -247,12 +250,23 @@ DiscIdentity identify_disc(const fs::path& path,
     // the .cue and its .bin must produce the same verdict, serial and CRC32.
     const DiscPathResolution resolved = resolve_disc_path(path);
     fill_toc_from_mount(v, resolved);
+    v.from_chd = is_chd_path(resolved.mount);
 
     const fs::path data_path = resolved.data;
     PS1::ISOReader disc;
-    if (is_chd_path(resolved.mount)) {
+    if (v.from_chd) {
+        // The title's netplay rule applies to a .chd as it does to a cue, at
+        // every way out of this branch. It was skipped here before, so a wrong
+        // or damaged .chd started a match that then fell apart (PS1B-294).
+        const auto netplay_verdict = [&]() {
+            if (netplay_expect)
+                apply_netplay_disc_expect(v, *netplay_expect);
+            else if (!v.toc_opened)
+                v.netplay_ok = false;
+        };
         if (!disc.Open(resolved.mount.string())) {
             v.detail = "Could not open or decode the CHD disc image.";
+            netplay_verdict();
             return v;
         }
         v.opened = true;
@@ -265,6 +279,7 @@ DiscIdentity identify_disc(const fs::path& path,
             v.detail =
                 "No ISO9660 CD001 header was found in the CHD data track.";
             v.region = region_from_serial(expected_serial);
+            netplay_verdict();
             return v;
         }
 
@@ -314,6 +329,7 @@ DiscIdentity identify_disc(const fs::path& path,
                 v.crc_matches = v.crc == expected_crc;
             }
         }
+        netplay_verdict();
         return v;
     }
 

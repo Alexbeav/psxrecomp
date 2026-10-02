@@ -249,6 +249,12 @@ required_tracks = 17
 | Reject bare incomplete mounts when `require_cue` | Cue→bin fallback cannot invent missing tracks |
 | Optional **TOC fingerprint** (`required_disc_fp`) | Same track count still wrong dump |
 
+A **`.chd`** is held to the same rule (PS1B-294). It holds every track in one
+file, so it meets `require_cue`; its track count and its TOC fingerprint must
+match like a cue's. A `.chd` and a cue of the same dump give the same
+fingerprint. A `.chd` of another disc is refused before the match starts, with
+the sentence a wrong cue gets.
+
 Generate & rebuild / prepare flows should point at the **`.cue`**, not a lone
 `.bin`. See [`config_schema.md`](config_schema.md) and the release checklist in
 [`GAME_PROJECT_SETUP.md`](GAME_PROJECT_SETUP.md).
