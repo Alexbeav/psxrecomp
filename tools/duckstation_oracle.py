@@ -494,22 +494,23 @@ def fetch_deps(lay: Layout, force: bool = False) -> None:
         raise OracleError(f"extraction did not produce {dest_dir}")
 
 
+def oracle_patch_module():
+    """tools/duckstation/oracle_patch.py. The patch is stored with added lines
+    only; that module checks the base, makes the line edits and applies it."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("oracle_patch", PATCH_DIR / "oracle_patch.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def apply_patch(lay: Layout, pin: Dict[str, Any]) -> None:
-    patch = PATCH_DIR / pin["patch"]
-    if not patch.is_file():
-        raise OracleError(f"missing oracle patch: {patch}")
-    rc, _ = capture(["git", "apply", "--reverse", "--check", str(patch)], cwd=lay.src)
-    if rc == 0:
-        log("oracle patch already applied")
-        return
-    rc, out = capture(["git", "apply", "--check", str(patch)], cwd=lay.src)
-    if rc != 0:
-        raise OracleError(
-            "the oracle patch does not apply to this tree and is not already "
-            "applied. Either the pinned base moved, or the patch was regenerated "
-            f"against a different one.\n  patch: {patch}\n  git says: {out}")
-    log("applying oracle patch")
-    run(["git", "apply", str(patch)], cwd=lay.src)
+    oracle_patch = oracle_patch_module()
+    try:
+        log(f"oracle patch: {oracle_patch.apply(lay.src, pin)}")
+    except oracle_patch.PatchError as error:
+        raise OracleError(str(error))
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
@@ -539,9 +540,10 @@ def build_image(lay: Layout, pin: Dict[str, Any], engine: str, force: bool = Fal
     if ctx.exists():
         shutil.rmtree(ctx)
     ctx.mkdir(parents=True)
-    # The context carries upstream's own package list, copied verbatim out of
-    # the pinned checkout so the image can never install a different set from
-    # the one that tree expects.
+    # The context carries upstream's own package list. It is read from the
+    # user's pinned checkout when this runs, so the image can never install a
+    # different set from the one that tree expects. This repository holds no
+    # copy of it.
     shutil.copy2(pkgs, ctx / "install-packages.sh")
     shutil.copy2(PATCH_DIR / "Containerfile", ctx / "Containerfile")
     log(f"building {tag} (ubuntu:22.04 + upstream's package list) — first time is slow")
@@ -959,9 +961,8 @@ def state(lay: Layout) -> Dict[str, str]:
     except OracleError:
         out["deps"] = "unsupported platform"
     if out["source"] == "present":
-        patch = PATCH_DIR / pin["patch"]
-        rc, _ = capture(["git", "apply", "--reverse", "--check", str(patch)], cwd=lay.src)
-        out["patch"] = "applied" if rc == 0 else "not applied"
+        applied = oracle_patch_module().is_applied(lay.src, pin)
+        out["patch"] = "applied" if applied else "not applied"
     if port_open(port):
         rep = oracle_ping(port)
         out["running"] = (f"yes — answering on {port}" if rep and rep.get("ok")

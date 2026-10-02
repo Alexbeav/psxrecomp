@@ -260,6 +260,103 @@ class TestPin(unittest.TestCase):
         self.assertTrue(DSO.image_tag(pin).endswith(pin["upstream_base"][:12]))
 
 
+class TestOraclePatch(unittest.TestCase):
+    """The patch is stored with added lines only (PS1B-216). A context line or a
+    removed line is a line of upstream's source, and this repository must not
+    hold one."""
+
+    OP = DSO.oracle_patch_module()
+
+    def git(self, root, *args):
+        import subprocess
+        return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t",
+                               "-c", "core.autocrlf=false", *args],
+                              capture_output=True, text=True, check=True).stdout
+
+    def test_stored_patch_holds_no_upstream_line(self):
+        pin = DSO.load_pin()
+        text = (DSO.PATCH_DIR / pin["patch"]).read_text(encoding="utf-8")
+        self.assertEqual(self.OP.problems(text), [])
+        hunks = [line for line in text.split("\n") if line.startswith("@@")]
+        self.assertGreater(len(hunks), 0)
+        for line in hunks:
+            self.assertRegex(line, r"^@@ -\d+,0 \+\d+,\d+ @@$")
+        body = [line for line in text.split("\n")
+                if line and not line.startswith(("diff --git ", "index ", "new file mode ", "--- ", "+++ ", "@@", "+"))]
+        self.assertEqual(body, [])
+
+    def test_a_context_patch_is_reported(self):
+        diff = ("diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n"
+                "@@ -2,3 +2,4 @@ some function\n two\n+new\n three\n four\n")
+        self.assertEqual(len(self.OP.problems(diff)), 5)   # header text, old lines, 3 context lines
+
+    def test_zero_context_keeps_added_lines_and_reports_rewrites(self):
+        diff = ("diff --git a/f.txt b/f.txt\nindex 1111111..2222222 100644\n--- a/f.txt\n+++ b/f.txt\n"
+                "@@ -2,5 +2,6 @@ some function\n two\n+new\n three\n-four\n+FOUR\n five\n six\n"
+                "diff --git a/g.txt b/g.txt\nnew file mode 100644\nindex 0000000..3333333\n--- /dev/null\n+++ b/g.txt\n"
+                "@@ -0,0 +1,2 @@\n+a\n+b\n")
+        text, removed = self.OP.zero_context(diff)
+        self.assertEqual(removed, [{"path": "f.txt", "line": 4, "replaced": True}])
+        self.assertEqual(self.OP.problems(text), [])
+        self.assertIn("@@ -2,0 +3,1 @@\n+new\n", text)
+        self.assertIn("@@ -0,0 +1,2 @@\n+a\n+b\n", text)
+        self.assertNotIn("FOUR", text)
+        self.assertNotIn("some function", text)
+
+    def test_apply_on_a_stand_in_checkout(self):
+        """Line edit, base check, apply, repeat, and the refusal of a wrong base."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "checkout"
+            root.mkdir()
+            self.git(root, "init", "-q")
+            lines = [f"line {i}" for i in range(1, 11)]
+            lines[5] = "call(A SOURCES B)"
+            (root / "f.txt").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+            (root / "build.txt").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+            self.git(root, "add", "-A")
+            self.git(root, "commit", "-q", "-m", "base")
+            blob = self.git(root, "rev-parse", "HEAD:f.txt").strip()
+            patch = Path(td) / "p.patch"
+            patch.write_text("diff --git a/f.txt b/f.txt\nindex %s..%s 100644\n--- a/f.txt\n+++ b/f.txt\n"
+                             "@@ -3,0 +4,2 @@\n+ours 1\n+ours 2\n" % (blob[:7], "f" * 7),
+                             encoding="utf-8", newline="\n")
+            pin = {"patch": str(patch), "line_edits": [{
+                "path": "build.txt", "line": 6, "remove_text": "SOURCES ", "upstream_blob": blob[:7],
+                "sha256_before": self.OP.line_hash("call(A SOURCES B)"),
+                "sha256_after": self.OP.line_hash("call(A B)")}]}
+            self.assertFalse(self.OP.is_applied(root, pin))
+            self.assertEqual(self.OP.apply(root, pin), "applied")
+            self.assertEqual((root / "f.txt").read_text(encoding="utf-8").split("\n")[2:6],
+                             ["line 3", "ours 1", "ours 2", "line 4"])
+            self.assertEqual((root / "build.txt").read_text(encoding="utf-8").split("\n")[5], "call(A B)")
+            self.assertTrue(self.OP.is_applied(root, pin))
+            self.assertEqual(self.OP.apply(root, pin), "already applied")
+            # A changed file that is not the patched one is refused, not patched twice.
+            self.git(root, "checkout", "--", "f.txt")
+            (root / "f.txt").write_text("other\n" + (root / "f.txt").read_text(encoding="utf-8"),
+                                        encoding="utf-8", newline="\n")
+            with self.assertRaises(self.OP.PatchError):
+                self.OP.apply(root, pin)
+            # A base whose blob is another one is refused.
+            wrong = dict(pin, patch=str(Path(td) / "wrong.patch"))
+            Path(wrong["patch"]).write_text(patch.read_text(encoding="utf-8").replace(blob[:7], "0" * 7),
+                                            encoding="utf-8", newline="\n")
+            self.git(root, "checkout", "--", "f.txt")
+            with self.assertRaises(self.OP.PatchError):
+                self.OP.apply(root, wrong)
+
+    def test_line_edits_carry_no_upstream_line(self):
+        for edit in DSO.load_pin().get("line_edits", []):
+            self.assertEqual(sorted(edit), ["line", "path", "remove_text", "sha256_after", "sha256_before",
+                                            "upstream_blob"])
+            self.assertRegex(edit["sha256_before"], r"^[0-9a-f]{64}$")
+            self.assertLessEqual(len(edit["remove_text"]), 16)
+
+    def test_both_setup_paths_use_the_helper(self):
+        self.assertIn("oracle_patch.py", (DSO.PATCH_DIR / "setup.sh").read_text(encoding="utf-8"))
+        self.assertNotIn("git apply", (DSO.PATCH_DIR / "setup.sh").read_text(encoding="utf-8"))
+
+
 class TestBiosDiscovery(EnvGuard):
     def test_explicit_path_wins_and_missing_is_none(self):
         with tempfile.TemporaryDirectory() as td:

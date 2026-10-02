@@ -5,7 +5,8 @@ PSXRecomp v4 uses a patched build of [stenzek/duckstation](https://github.com/st
 ## Layout
 
 - **`duckstation/`** (git submodule) — pristine upstream DuckStation source tree, pinned to commit `ffb33c281d196eb8ee0f559085ca285de7cdd51b` (release-20260328 era). Never edited directly.
-- **`tools/duckstation/psxrecomp_oracle.patch`** — our changes as a unified diff against the pinned upstream base. Touches 7 files (~1200 lines). Adds `src/core/psxrecomp_debug_server.{cpp,h}`, wires `PSXRecompDebug::Initialize(4371)` into `System::Initialize`, exposes three GPU debug accessors, registers a log channel.
+- **`tools/duckstation/psxrecomp_oracle.patch`** — our changes against the pinned upstream base, stored with **added lines only**: no context line and no removed line, so the file holds none of upstream's source. Touches 6 files (~1100 lines). Adds `src/core/psxrecomp_debug_server.{cpp,h}`, wires `PSXRecompDebug::Initialize(4371)` into `System::Initialize`, exposes three GPU debug accessors, registers a log channel.
+- **`tools/duckstation/oracle_patch.py`** — checks that the checkout is the pinned base, makes the line edits listed in `pin.json` (one upstream line is rewritten in place, by line number and hash), and applies the patch. Both set-up paths call it.
 - **`tools/duckstation/setup.sh`** — idempotent. Initializes submodule, fetches + verifies + extracts prebuilt Windows deps (SDL3, Qt6, ffmpeg, …), normalizes the absolute paths baked into the prebuilt CMake metadata, applies the oracle patch.
 - **`tools/duckstation/build.sh`** — runs CMake (Visual Studio 17 2022, x64, Release) and MSBuild on `duckstation-qt`. Requires the Visual Studio 2022 "Desktop development with C++" workload (CMake + MSBuild come with it).
 - **`tools/fix_duckstation_deps_paths.py`** — helper used by `setup.sh` to rewrite stale `_IMPORT_PREFIX` values in the extracted prebuilt deps.
@@ -43,8 +44,8 @@ patches modifying its build system. Its build scripts are CC-BY-NC-ND-4.0.
 
 So the tool detects the refusal up front and builds in an environment upstream
 supports: `ubuntu:22.04` via podman/docker, installing packages with upstream's
-own `scripts/appimage/install-packages.sh`, copied verbatim out of the pinned
-checkout. On a distro upstream accepts, the build runs directly on the host.
+own `scripts/appimage/install-packages.sh`, read from your pinned checkout when
+the image is built. On a distro upstream accepts, the build runs directly on the host.
 Force either path with `build --container` / `build --no-container`.
 
 ### Notes that cost an afternoon to find
@@ -95,16 +96,18 @@ echo '{"cmd":"ping"}' | ncat -w2 localhost 4371
 If our oracle changes need to be updated, edit files in `duckstation/` directly, then regenerate the patch against the pinned upstream base:
 
 ```bash
-cd duckstation
-git diff ffb33c281d196eb8ee0f559085ca285de7cdd51b > ../tools/duckstation/psxrecomp_oracle.patch
+python3 tools/duckstation/oracle_patch.py regen duckstation
+python3 tools/duckstation/oracle_patch.py check
 ```
 
-The pinned base SHA lives in one place only: `UPSTREAM_BASE` at the top of `tools/duckstation/setup.sh`. Update it there if we ever rebase onto a newer upstream commit.
+`regen` writes the added lines only. It prints every upstream line that the change removes or rewrites; each of those needs a `line_edits` entry in `pin.json` (path, line number, the text to delete, the SHA-256 of the line before and after). Do not regenerate with a plain `git diff`: its context lines are upstream's source, and this repository must not hold them. `tools/tests/test_duckstation_oracle.py` fails on a context line.
+
+The pinned base SHA lives in one place only: `upstream_base` in `tools/duckstation/pin.json`. Update it there if we ever rebase onto a newer upstream commit.
 
 ## Why this layout (vs a hosted fork)
 
 - Keeps the upstream source untracked in v4's git history — no 2.1GB of upstream code in our blame.
-- Keeps *our* 1200-line patch reviewable as a single text diff in `tools/duckstation/` — in-tree, versioned, diffable across sessions.
+- Keeps *our* 1100 added lines reviewable as a single text file in `tools/duckstation/` — in-tree, versioned, diffable across sessions.
 - Matches the nestopia setup in sibling project `<nesrecomp>/runner\nestopia_cmake.cmake` + `runner/nestopia_oracle.patch`. Same mental model: submodule upstream, patch on top, auto-apply at setup time.
 - No private/public GitHub fork to maintain or keep in sync.
 
