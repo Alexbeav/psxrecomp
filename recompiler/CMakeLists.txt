@@ -1071,6 +1071,7 @@ if(BUILD_TESTING)
                 frame_interpolation_flip_source
                 hybrid_dev_any_input
                 launcher_pad_mode_wiring
+                netplay_start_failure_wiring
                 jalr_link_register_guards
                 gl_internal_scale_guards
                 launcher_vulkan_option
