@@ -15109,15 +15109,15 @@ int main(int argc, char** argv) {
     int        instant_rate  = 0;   /* 0 = cdrom.c built-in default */
     std::vector<PSXRecompV4::RuntimeConfig::WarmCdRoute> warm_cd_routes;
     uint32_t   game_entry_pc = 0;
-    bool       fast_boot     = false;  /* DEPRECATED alias: HLE boot-skip only */
-    bool       bios_hle      = false;  /* HLE kernel-service tier (bios_hle.c) */
-    bool       bios_hle_keep_intro = false;
-    /* The three above as the kit's game.toml states them, before settings.toml
+    /* The three below as the kit's game.toml states them, before settings.toml
      * and the launcher change them: a netplay session boots with these
      * (PS1B-382, netplay_boot_mode_settle). */
     bool       kit_fast_boot = false;
     bool       kit_bios_hle  = false;
     bool       kit_bios_hle_keep_intro = false;
+    bool       fast_boot     = false;  /* DEPRECATED alias: HLE boot-skip only */
+    bool       bios_hle      = false;  /* HLE kernel-service tier (bios_hle.c) */
+    bool       bios_hle_keep_intro = false;
     /* Text-image guard source, captured at config load; armed after the disc
      * path is resolved (arm_text_image_guard). */
     std::string text_guard_exe_path;
