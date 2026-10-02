@@ -60,29 +60,56 @@ assert block.index("out->expected_serials") > readable
 
 # A set, and an image its disc list does not know (a copy under another name,
 # or another game's disc): no serial is expected for it, so the branch above
-# says nothing, and the row kept its tick. The host compares what was read
-# with every serial of the set and names the whole list. An image that is in
-# the disc list with no serial listed stays unjudged.
-outside = re.search(
-    r"\} else if \(!g_disc_serials\.empty\(\) && id\.opened && id\.has_header &&\s*"
-    r"PSXRecompV4::disc_roster_index\(\s*g_disc_metadata_roster, std::filesystem::path\(disc_path\)\) < 0\) \{",
-    block,
-)
-assert outside, "a set must judge an image outside its disc list"
-set_block = block[outside.end():]
-assert "for (const std::string& one : g_disc_serials) {" in set_block
-assert "if (!got.empty() && uppercase_ascii(one) == got) listed = true;" in set_block
-assert re.search(r"out->serial_status = listed \? RECOMP_SERIAL_LISTED\s*: RECOMP_SERIAL_NOT_LISTED;", set_block)
+# says nothing. It is judged by its serial against every serial of the set
+# (disc_roster_judge_serial, run by test_disc_roster.cpp). An image that is in
+# the disc list is judged by its own entry, as before. The judgement is made
+# outside the launcher's #if: the verdict must not depend on which launcher is
+# compiled in.
+judged = body.index("const PSXRecompV4::DiscSetSerial set_serial =")
+assert judged < guard, "the set judgement must not sit inside the launcher's #if"
+judgement = body[judged:guard]
 assert re.search(
-    r'std::snprintf\(out->expected_serials, sizeof\(out->expected_serials\),\s*"%s", all\.c_str\(\)\);', set_block
-), "the sentence for a set names every serial of the set"
-assert "out->verdict" not in set_block, "the set branch decides the row and the sentence, never the verdict"
+    r"\(!id\.expected_serial_given && id\.opened && id\.has_header &&\s*"
+    r"PSXRecompV4::disc_roster_index\(g_disc_metadata_roster,\s*"
+    r"std::filesystem::path\(disc_path\)\) < 0\)",
+    judgement,
+), "only an image outside the disc list, that opened, with no expected serial, is judged by the set"
+assert re.search(
+    r"PSXRecompV4::disc_roster_judge_serial\(\s*g_disc_serials, g_disc_metadata_roster\.size\(\), id\.detected_serial\)",
+    judgement,
+)
+# Wrong disc (Alex, 2026-10-02): a serial was read and it is none of the set's.
+# A disc from which no serial was read keeps the verdict it had.
+assert re.search(
+    r"const bool set_wrong_disc =\s*set_serial == PSXRecompV4::DiscSetSerial::NotListed &&\s*"
+    r"!id\.detected_serial\.empty\(\);",
+    judgement,
+)
 
-# The status is set from the same identity the verdict is, and before it: the
-# wrong-disc verdict and the row cannot disagree.
-verdict = body.index("out->verdict = 3; // wrong disc")
-assert guard < verdict
-assert "else if (id.expected_serial_given && !id.serial_matches)     out->verdict = 3; // wrong disc" in body
+# The row and the sentence: the mark from the judgement, and every serial of
+# the set.
+set_block = block[block.index("} else if (set_serial != PSXRecompV4::DiscSetSerial::NotJudged) {"):]
+assert re.search(
+    r"out->serial_status = set_serial == PSXRecompV4::DiscSetSerial::Listed\s*"
+    r"\? RECOMP_SERIAL_LISTED : RECOMP_SERIAL_NOT_LISTED;",
+    set_block,
+)
+assert "PSXRecompV4::disc_roster_serial_list(g_disc_serials).c_str()" in set_block, (
+    "the sentence for a set names every serial of the set"
+)
+assert "out->verdict" not in block, "the launcher's #if decides the row and the sentence, never the verdict"
+
+# The verdict: wrong disc for a serial that does not match its entry, and for
+# an image outside the set whose serial is none of the set's. Headline "Disc
+# verification failed", PLAY greyed, as in a single-disc build. The status is
+# set from the same identity, before the verdict: the two cannot disagree.
+verdict = re.search(
+    r"else if \(\(id\.expected_serial_given && !id\.serial_matches\) \|\|\s*"
+    r"set_wrong_disc\)\s*out->verdict = 3; // wrong disc",
+    body,
+)
+assert verdict, "a set must refuse a disc whose serial is none of the set's"
+assert guard < verdict.start()
 assert body.count("PSXRecompV4::identify_disc(") == 1
 
 print("launcher serial status wiring: ok")

@@ -54,6 +54,43 @@ inline std::filesystem::path disc_roster_selected(
     return disc_roster_index(roster, persisted) == idx ? persisted : roster[idx];
 }
 
+// --- An image the set's disc list does not know ------------------------------
+//
+// A copy of one of the set's discs under another name or in another folder,
+// or another game's disc. No entry of the list matches it, so no serial is
+// expected for it, and nothing was checked: the launcher called it verified
+// and lit PLAY (PS1B-403). It is judged by the serial read from it against
+// every serial of the set.
+//
+// Only a set that lists a serial for every one of its discs can judge: with a
+// serial missing, a copy of that disc would be called wrong. A disc from which
+// no serial was read is "not listed" for the row, and the caller decides what
+// that means for the verdict.
+enum class DiscSetSerial { NotJudged, Listed, NotListed };
+
+inline DiscSetSerial disc_roster_judge_serial(const std::vector<std::string>& serials,
+                                              size_t discs_in_set,
+                                              const std::string& read) {
+    if (serials.empty() || serials.size() < discs_in_set) return DiscSetSerial::NotJudged;
+    for (const std::string& one : serials)
+        if (one.empty()) return DiscSetSerial::NotJudged;
+    const std::string got = disc_roster_fold(read);
+    for (const std::string& one : serials)
+        if (!got.empty() && disc_roster_fold(one) == got) return DiscSetSerial::Listed;
+    return DiscSetSerial::NotListed;
+}
+
+// Every serial of the set, for the sentence: "SLUS-00544, SLUS-00556".
+inline std::string disc_roster_serial_list(const std::vector<std::string>& serials) {
+    std::string all;
+    for (const std::string& one : serials) {
+        if (one.empty()) continue;
+        if (!all.empty()) all += ", ";
+        all += one;
+    }
+    return all;
+}
+
 // --- A set whose discs boot different programs ------------------------------
 //
 // Each program is its own build, and the builds share one folder, one

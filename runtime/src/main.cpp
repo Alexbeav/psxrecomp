@@ -10210,6 +10210,25 @@ namespace {
         std::snprintf(out->serial, sizeof(out->serial), "%s", serial.c_str());
         std::snprintf(out->region, sizeof(out->region), "%s", id.region.c_str());
         out->iso_ok = id.has_header ? 1 : 0;
+        /* A set, and an image its disc list does not know (another file name,
+         * another folder): no serial is expected for it, so nothing was
+         * checked. A copy of one of the set's discs must stay accepted;
+         * another game's disc was called verified and PLAY was lit. It is
+         * judged by its serial against every serial of the set. An image
+         * that IS in the disc list is judged by its own entry, as before. */
+        const PSXRecompV4::DiscSetSerial set_serial =
+            (!id.expected_serial_given && id.opened && id.has_header &&
+             PSXRecompV4::disc_roster_index(g_disc_metadata_roster,
+                                            std::filesystem::path(disc_path)) < 0)
+                ? PSXRecompV4::disc_roster_judge_serial(
+                      g_disc_serials, g_disc_metadata_roster.size(), id.detected_serial)
+                : PSXRecompV4::DiscSetSerial::NotJudged;
+        /* Wrong disc: a serial was read and it is none of the set's (Alex,
+         * 2026-10-02). A disc from which no serial was read keeps the verdict
+         * it had; the row and the sentence still say what is known. */
+        const bool set_wrong_disc =
+            set_serial == PSXRecompV4::DiscSetSerial::NotListed &&
+            !id.detected_serial.empty();
 #if defined(RECOMP_LAUNCHER_HAS_SERIAL_STATUS)
         /* Whether the serial is one this build lists (PS1B-403). The launcher
          * ticked the Serial row for any serial, so a disc of another release
@@ -10230,31 +10249,13 @@ namespace {
                 std::snprintf(out->expected_serials, sizeof(out->expected_serials),
                               "%s", expect_serial.c_str());
             }
-        } else if (!g_disc_serials.empty() && id.opened && id.has_header &&
-                   PSXRecompV4::disc_roster_index(
-                       g_disc_metadata_roster, std::filesystem::path(disc_path)) < 0) {
-            /* A set, and an image its disc list does not know (another file
-             * name, another folder): no serial was expected for it, so none
-             * was checked, and the row kept its tick for a disc of another
-             * game. Compare what was read with every serial of the set and
-             * name the whole list. An image that IS in the disc list with no
-             * serial listed for it stays unjudged, as before. The verdict is
-             * not touched here. */
-            const std::string got = uppercase_ascii(id.detected_serial);
-            std::string all;
-            bool listed = false;
-            for (const std::string& one : g_disc_serials) {
-                if (one.empty()) continue;
-                if (!all.empty()) all += ", ";
-                all += one;
-                if (!got.empty() && uppercase_ascii(one) == got) listed = true;
-            }
-            if (!all.empty()) {
-                out->serial_status = listed ? RECOMP_SERIAL_LISTED
-                                            : RECOMP_SERIAL_NOT_LISTED;
-                std::snprintf(out->expected_serials, sizeof(out->expected_serials),
-                              "%s", all.c_str());
-            }
+        } else if (set_serial != PSXRecompV4::DiscSetSerial::NotJudged) {
+            /* The image outside the set's disc list: the row's mark, and the
+             * whole list of the set for the sentence. */
+            out->serial_status = set_serial == PSXRecompV4::DiscSetSerial::Listed
+                                     ? RECOMP_SERIAL_LISTED : RECOMP_SERIAL_NOT_LISTED;
+            std::snprintf(out->expected_serials, sizeof(out->expected_serials), "%s",
+                          PSXRecompV4::disc_roster_serial_list(g_disc_serials).c_str());
         }
 #endif
         if (g_lnch_netplay_available) {
@@ -10276,7 +10277,8 @@ namespace {
         // netplay-capable titles; ordinary offline disc verification is
         // strictly serial/header/optional-CRC based.
         if (!id.opened || !id.has_header)                            out->verdict = 3; // bad
-        else if (id.expected_serial_given && !id.serial_matches)     out->verdict = 3; // wrong disc
+        else if ((id.expected_serial_given && !id.serial_matches) ||
+                 set_wrong_disc)                                     out->verdict = 3; // wrong disc
         else if (id.expected_crc_given && id.crc_computed && !id.crc_matches) out->verdict = 2; // warn
         else if (g_lnch_netplay_available && !id.netplay_ok)         out->verdict = 2; // TOC/cue
         else                                                          out->verdict = 1; // ok

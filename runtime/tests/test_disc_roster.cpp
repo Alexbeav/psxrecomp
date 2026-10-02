@@ -102,6 +102,41 @@ int main() {
     CHECK(disc_roster_change_position(set, one_serial, all, set[2], carries) == 3);
     CHECK(disc_roster_change_position(set, one_serial, all, "elsewhere/x.chd", carries) == 1);
 
+    // An image the set's disc list does not know (PS1B-403). A copy of one of
+    // the set's discs stays accepted, whatever it is called and whatever its
+    // place in the list; another game's disc is not listed.
+    const std::vector<std::string> two_discs = {"SLUS-00544", "SLUS-00556"};
+    const std::vector<std::string> four_discs = {"SLPS-00700", "SLPS-00701", "SLPS-00702", "SLPS-00703"};
+    for (const auto& set_serials : {two_discs, four_discs}) {
+        // Every order of the list: the judgement does not depend on a disc's place.
+        std::vector<std::string> order = set_serials;
+        for (size_t turn = 0; turn < order.size(); ++turn) {
+            for (const std::string& disc : set_serials) {
+                CHECK(disc_roster_judge_serial(order, order.size(), disc) == DiscSetSerial::Listed);
+                std::string lower = disc;
+                for (char& c : lower) c = (char)std::tolower((unsigned char)c);
+                CHECK(disc_roster_judge_serial(order, order.size(), lower) == DiscSetSerial::Listed);
+            }
+            CHECK(disc_roster_judge_serial(order, order.size(), "SLES-03398") == DiscSetSerial::NotListed);
+            CHECK(disc_roster_judge_serial(order, order.size(), "SLUS-0054") == DiscSetSerial::NotListed);
+            // Nothing read: not listed for the row; the caller keeps the verdict.
+            CHECK(disc_roster_judge_serial(order, order.size(), "") == DiscSetSerial::NotListed);
+            order.push_back(order.front());
+            order.erase(order.begin());
+        }
+    }
+    CHECK(disc_roster_serial_list(two_discs) == "SLUS-00544, SLUS-00556");
+    CHECK(disc_roster_serial_list(four_discs) == "SLPS-00700, SLPS-00701, SLPS-00702, SLPS-00703");
+    CHECK(disc_roster_serial_list({"SLUS-00544", ""}) == "SLUS-00544");
+    // A set that does not list a serial for every disc cannot judge: a copy of
+    // the unlisted disc would be called wrong. So can no single-disc build
+    // (no list at all): it expects its own serial and never comes here.
+    CHECK(disc_roster_judge_serial({"SLUS-00544", ""}, 2, "SLES-03398") == DiscSetSerial::NotJudged);
+    CHECK(disc_roster_judge_serial({"SLUS-00544"}, 2, "SLES-03398") == DiscSetSerial::NotJudged);
+    CHECK(disc_roster_judge_serial({"SLUS-00544"}, 2, "SLUS-00544") == DiscSetSerial::NotJudged);
+    CHECK(disc_roster_judge_serial({}, 0, "SLES-03398") == DiscSetSerial::NotJudged);
+    CHECK(disc_roster_judge_serial({}, 2, "") == DiscSetSerial::NotJudged);
+
     if (failures) return 1;
-    std::puts("PASS duplicate paths, serial/fingerprint identity, index selection, relocation controls, program sets and disc changes");
+    std::puts("PASS duplicate paths, serial/fingerprint identity, index selection, relocation controls, program sets, disc changes and images outside the set");
 }
