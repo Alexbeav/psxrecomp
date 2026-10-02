@@ -15112,6 +15112,10 @@ int main(int argc, char** argv) {
     bool       fast_boot     = false;  /* DEPRECATED alias: HLE boot-skip only */
     bool       bios_hle      = false;  /* HLE kernel-service tier (bios_hle.c) */
     bool       bios_hle_keep_intro = false;
+    /* Did the player's settings.toml set the two keys above? The launcher has
+     * no control for either, so it writes them back only then (PS1B-360). */
+    bool       settings_chose_fast_boot = false;
+    bool       settings_chose_bios_hle  = false;
     /* Text-image guard source, captured at config load; armed after the disc
      * path is resolved (arm_text_image_guard). */
     std::string text_guard_exe_path;
@@ -15665,8 +15669,21 @@ int main(int argc, char** argv) {
                 "DEPRECATED and ignored; enable the \"Fast Loading (host "
                 "pacing)\" mod instead. The stale key is dropped on the next "
                 "settings save.\n");
-        if (us.has_fast_boot)      fast_boot = us.fast_boot;
-        if (us.has_bios_hle)       bios_hle  = us.bios_hle;
+        /* settings.toml overrides game.toml for these two only when the player
+         * wrote them. A file from before settings_format 2 holds them because
+         * the launcher echoed whatever was in force at every save; that echo
+         * then outlived a kit's later change of bios_hle, and two netplay
+         * peers of one build could boot in different BIOS modes (PS1B-360).
+         * The loader has already dropped such lines: say so once. */
+        if (us.boot_keys_were_echoes)
+            std::fprintf(stdout,
+                "psxrecomp: settings.toml holds fast_boot/bios_hle lines that "
+                "an earlier launcher wrote by itself; they are ignored and the "
+                "game's own values are used. The lines are dropped on the next "
+                "settings save. To choose a value yourself, add the line again "
+                "after that save.\n");
+        if (us.has_fast_boot)      { fast_boot = us.fast_boot; settings_chose_fast_boot = true; }
+        if (us.has_bios_hle)       { bios_hle  = us.bios_hle;  settings_chose_bios_hle  = true; }
         if (us.has_fullscreen)     g_fullscreen      = us.fullscreen;
         if (us.has_aspect_ratio) {
             g_video_aspect_num = us.aspect_num;
@@ -16233,8 +16250,12 @@ int main(int argc, char** argv) {
             seed.has_auto_skip_fmv = skip_fmv_offered;
             seed.turbo_loads = (g_turbo_loads_enabled != 0);
             seed.has_turbo_loads = turbo_loads_offered;
-            seed.fast_boot = fast_boot;                   seed.has_fast_boot = true;
-            seed.bios_hle  = bios_hle;                    seed.has_bios_hle  = true;
+            /* No launcher control exists for these two: write them back only
+             * when the player's file set them. Marked present always, they
+             * were a write-only latch over game.toml (PS1B-360; the same fault
+             * as turbo_loads, MegaManX6Recomp#14). */
+            seed.fast_boot = fast_boot;  seed.has_fast_boot = settings_chose_fast_boot;
+            seed.bios_hle  = bios_hle;   seed.has_bios_hle  = settings_chose_bios_hle;
             seed.fullscreen = g_fullscreen;                seed.has_fullscreen = true;
             seed.frame_interpolation = (g_frame_interpolation != 0);
             seed.has_frame_interpolation = true;
