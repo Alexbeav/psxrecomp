@@ -983,8 +983,6 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(disc_boot_image_test PRIVATE chdr-static)
     add_test(NAME disc_boot_image_test COMMAND disc_boot_image_test
         ${CMAKE_CURRENT_BINARY_DIR})
-    # The lookup still reads the disc root only; the next commit corrects it.
-    set_tests_properties(disc_boot_image_test PROPERTIES WILL_FAIL TRUE)
 
     add_executable(mod_packages_test
         tests/test_mod_packages.cpp

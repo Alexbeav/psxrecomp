@@ -363,7 +363,8 @@ static void arm_text_image_guard(const std::string &exe_path,
     }
     std::fprintf(stdout,
         "psxrecomp: WARNING: text image guard NOT armed (no local EXE, no disc "
-        "boot EXE) — native text dispatch will be conservative\n");
+        "boot EXE) — no statically compiled game function will run; the game's "
+        "own code is interpreted\n");
 }
 
 /* dma.c */
