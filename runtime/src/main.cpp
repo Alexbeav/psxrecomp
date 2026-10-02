@@ -16646,19 +16646,26 @@ session_reboot:
         s_netplay_present_sim_watermark = 0; /* §74: sim restarts per session */
         const int nrc = psx_netplay_start(&net_cfg);
         if (nrc != 0) {
-            netplay_start_failure(nrc, net_cfg);
-            return 1;
+            const char* const why = netplay_start_failure(nrc, net_cfg);
+            if (!g_netplay_from_lobby)
+                return 1;
+            /* A match from the launcher returns to the room, where the
+             * status line shows the sentence. No session is open and the
+             * guest is not entered: see the scheduler. */
+            netplay_soft_exit("netplay_start_failed");
+            g_netplay_exit_reason_text = why;
+        } else {
+            apply_netplay_local_viewport_aspect(net_cfg.enabled);
+            std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
+                        "force_turn=%d bind=%s peer=%s session=%u\n",
+                        psx_netplay_transport_name(),
+                        net_cfg.local_slot, net_cfg.input_player, net_cfg.input_delay,
+                        net_cfg.force_turn ? 1 : 0,
+                        net_cfg.bind_hostport,
+                        (std::strcmp(psx_netplay_transport_name(), "ice") == 0)
+                            ? "(ice)" : net_cfg.peer_hostport,
+                        (unsigned)net_cfg.session_id);
         }
-        apply_netplay_local_viewport_aspect(net_cfg.enabled);
-        std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
-                    "force_turn=%d bind=%s peer=%s session=%u\n",
-                    psx_netplay_transport_name(),
-                    net_cfg.local_slot, net_cfg.input_player, net_cfg.input_delay,
-                    net_cfg.force_turn ? 1 : 0,
-                    net_cfg.bind_hostport,
-                    (std::strcmp(psx_netplay_transport_name(), "ice") == 0)
-                        ? "(ice)" : net_cfg.peer_hostport,
-                    (unsigned)net_cfg.session_id);
     }
 
     /* Initialize CPU state. */
@@ -17009,6 +17016,10 @@ session_reboot:
         }
     }
 
+    /* A match whose start failed has no session and must not run the guest.
+     * Go back to the room; do not boot the game offline. */
+    if (psx_return_to_lobby_requested() && g_netplay_from_lobby)
+        goto soft_return_lobby;
     psx_scheduler_run(&cpu);
     if (psx_return_to_lobby_requested() && g_netplay_from_lobby)
         goto soft_return_lobby;

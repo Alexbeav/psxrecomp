@@ -206,8 +206,9 @@ A listen address that is not `address:port` (the address may be left out:
 their own sentence. The peer address is named only when the listen address
 opened. An online start that fails says only that the online connection could
 not start. The build is named only when it has no netplay. The log line adds
-the system's own text in every case. The start
-exits with code 1.
+the system's own text in every case. A command-line start exits with code 1; a
+match started from the launcher returns to the room with the sentence on the
+status line.
 
 ---
 

@@ -3,10 +3,13 @@
 
 The start printed "built without recomp-net, or bind/peer invalid" for every
 failure. A player whose system held the UDP port read first that the build
-had no netplay. main.cpp now does the library's steps again and reports the
-system's answer. The sentences are tested in test_netplay_exit_reason.c; a
-refused bind needs a held port, so that main.cpp probes, prints and stops is
-checked in the source.
+had no netplay, and a match started from the launcher closed the program with
+no text. main.cpp now does the library's steps again, reports the system's
+answer, and takes a launcher match back to the room with the sentence. The
+sentences are tested in test_netplay_exit_reason.c; a refused bind needs a
+held port and the launcher path needs a room, so that main.cpp probes, prints,
+stops a command-line start and returns a launcher match is checked in the
+source.
 """
 
 from pathlib import Path
@@ -22,11 +25,28 @@ starts = [m.start() for m in re.finditer(r"psx_netplay_start\(&net_cfg\)", MAIN)
 assert len(starts) == 1, "main.cpp must start a netplay session in exactly one place"
 after = MAIN[starts[0] : starts[0] + 900]
 
-# A failed start asks for the sentence and stops with exit code 1.
+# A failed start asks for the sentence, stops a command-line start with code 1,
+# and takes a launcher match back to the room with the sentence kept for the
+# status line.
 failed = after.index("if (nrc != 0) {")
-block = after[failed : after.index("}", failed)]
-assert "netplay_start_failure(nrc, net_cfg);" in block, "the failure is not explained"
-assert "return 1;" in block, "a failed start must stop with exit code 1"
+block = after[failed : after.index("} else {", failed)]
+assert "netplay_start_failure(nrc, net_cfg)" in block, "the failure is not explained"
+assert re.search(r"if \(!g_netplay_from_lobby\)\s*return 1;", block), "a command-line start must stop with exit code 1"
+ends = block.index('netplay_soft_exit("netplay_start_failed");')
+assert block.index("return 1;") < ends, "a command-line start must stop before the return to the room"
+assert "g_netplay_exit_reason_text = why;" in block[ends:], (
+    "the sentence must be kept for the launcher's status line after the soft exit"
+)
+assert "psx_lobby_set_last_error(g_netplay_exit_reason_text);" in MAIN, "the soft return no longer shows the reason"
+
+# The guest is not entered after a failed launcher start: the return to the
+# lobby is taken before the scheduler runs.
+runs = [m.start() for m in re.finditer(r"(?m)^\s*psx_scheduler_run\(&cpu\);", MAIN)]
+assert len(runs) == 1, "expected one scheduler entry"
+assert re.search(
+    r"if \(psx_return_to_lobby_requested\(\) && g_netplay_from_lobby\)\s*goto soft_return_lobby;\s*$",
+    MAIN[runs[0] - 260 : runs[0]],
+), "a failed launcher start would boot the game offline: no return to the lobby before the scheduler"
 
 # The explanation: the bind is tried again for a LAN start only, the system's
 # answer goes into the sentence and the log line, and the build is named from
