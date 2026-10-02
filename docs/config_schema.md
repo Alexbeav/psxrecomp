@@ -116,7 +116,7 @@ respective files.
 | `name` | both | display name, e.g. `"SCPH1001 BIOS"` |
 | `id` | both | canonical id, e.g. `"SCPH-1001"` or `"SCUS-94236"` |
 | `rom` | bios | path to raw flat binary, relative to project root |
-| `exe` | game | path to PS-X EXE file, relative to project root |
+| `exe` | game | path to PS-X EXE file, relative to project root. An installed product has no such file; the runtime then reads the executable from the mounted disc for the text image guard. It tries, in this order: the field's file name at the disc root; the field's last folder and file name as a disc path; the SYSTEM.CNF BOOT path with its directory; that path's file name at the disc root. The first that is a file is the guard's image. So a field that names a disc file other than the BOOT file arms the guard with the named file, and the folder part of the field is tried as a disc directory. The disc reader lists one directory level. |
 | `load_address` | both | hex string, virtual address of first byte (`"0xBFC00000"` BIOS, `"0x80010000"` typical game) |
 | `entry_pc` | both | hex string, first PC to execute |
 | `text_size` | both | hex string, size in bytes of the static region. For games this also bounds main-EXE analysis and establishes the overlay floor. A smaller-than-header bound must be verified non-code and 4 KiB aligned. |
