@@ -1412,6 +1412,12 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME codegen_host_disc_cfg_handoff_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_disc_cfg_handoff.py)
+        # The hand-over to the product forces the launcher for a player and
+        # honours a headless start (a gate that starts a kit's own exe needs
+        # frames from the game it hands over to).
+        add_test(NAME codegen_host_handover_launcher_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_handover_launcher.py)
         # Setup-wizard disc probing (multi-disc roster). Never registered
         # before: a .chd set was rejected and nothing ran to notice.
         add_test(NAME probe_disc_test

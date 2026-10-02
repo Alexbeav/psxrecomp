@@ -4936,6 +4936,34 @@ static void host_collect_diagnostics_or_return(
     exit(status == 0 ? 0 : 1);
 }
 
+#if !defined(PSX_HAS_GAME_DISPATCH)
+/* Does the hand-over to the product add --launcher?
+ *
+ * It does for a player's start: the product's persisted skip_launcher setting
+ * must not hide the launcher on a hand-over. It does not when the caller asked
+ * for a start without the launcher, by one of the signals the product honours
+ * itself: --no-launcher or --headless, or PSX_NO_LAUNCHER or PSX_HEADLESS set
+ * to something other than empty or 0. In the product --launcher wins over all
+ * of them, so adding it made every scripted start of a kit's own exe wait in
+ * the launcher: a gate that starts the kit the way a player does could never
+ * see a frame. None of these is set by accident: the two variables carry the
+ * project's prefix and no installer or launcher writes them. A --launcher the
+ * caller passed is forwarded as it is and not doubled. */
+static int handover_adds_launcher(int argc, char** argv) {
+    const char* names[] = { "PSX_NO_LAUNCHER", "PSX_HEADLESS" };
+    size_t k;
+    if (argv_has(argc, argv, "--launcher") || argv_has(argc, argv, "--no-launcher") ||
+        argv_has(argc, argv, "--headless"))
+        return 0;
+    for (k = 0; k < sizeof(names) / sizeof(names[0]); ++k) {
+        const char* e = getenv(names[k]);
+        if (e && e[0] && e[0] != '0')
+            return 0;
+    }
+    return 1;
+}
+#endif
+
 void psxrecomp_codegen_host_forward_if_built(
     const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
     host_selfcheck_or_return(cfg, argc, argv); /* exits when requested */
@@ -5041,21 +5069,19 @@ void psxrecomp_codegen_host_forward_if_built(
         pos += (size_t)snprintf(cmd + pos, sizeof(cmd) - pos, "\"%s\"",
                                 g_exe_path);
         /* Preserve caller argv (skip argv[0]); ensure --launcher so skip_launcher
-         * in the product tree cannot hide the UI on first handoff. */
+         * in the product tree cannot hide the UI on first handoff, unless the
+         * caller asked for a start without a window (handover_adds_launcher). */
         {
-            int has_launcher = 0;
             for (i = 1; i < argc && argv && argv[i]; ++i) {
                 int n;
                 if (strcmp(argv[i], "--diagnostic") == 0)
                     continue; /* host-only switch; the runtime does not take it */
-                if (strcmp(argv[i], "--launcher") == 0)
-                    has_launcher = 1;
                 n = snprintf(cmd + pos, sizeof(cmd) - pos, " \"%s\"", argv[i]);
                 if (n <= 0 || (size_t)n >= sizeof(cmd) - pos)
                     break;
                 pos += (size_t)n;
             }
-            if (!has_launcher && pos + 12 < sizeof(cmd))
+            if (handover_adds_launcher(argc, argv) && pos + 12 < sizeof(cmd))
                 snprintf(cmd + pos, sizeof(cmd) - pos, " --launcher");
         }
         if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL,
@@ -5075,13 +5101,6 @@ void psxrecomp_codegen_host_forward_if_built(
         char** args;
         int i;
         int narg = (argc > 0) ? argc : 1;
-        int has_launcher = 0;
-        for (i = 1; i < argc && argv && argv[i]; ++i) {
-            if (strcmp(argv[i], "--launcher") == 0) {
-                has_launcher = 1;
-                break;
-            }
-        }
         args = (char**)calloc((size_t)narg + 2, sizeof(char*));
         if (!args)
             return;
@@ -5093,7 +5112,7 @@ void psxrecomp_codegen_host_forward_if_built(
                     continue; /* host-only switch; the runtime does not take it */
                 args[n++] = argv[i];
             }
-            if (!has_launcher)
+            if (handover_adds_launcher(argc, argv))
                 args[n++] = "--launcher";
             args[n] = NULL;
         }
