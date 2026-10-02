@@ -108,7 +108,26 @@ static int unhex(const char *s, uint8_t out[32])
     return 1;
 }
 
-/* The last line for this exact path, size, mtime and head/tail spot hash. */
+/* Two spellings of one path. On Windows a path arrives with either separator
+ * ("Z:\discs\a.chd" from a file dialog, "Z:/discs/a.chd" from settings.toml),
+ * and both name the same file. Compared as text they were two cache lines, so
+ * the whole image was hashed again for the second spelling. Elsewhere a
+ * backslash is an ordinary character of a file name, and the text decides. */
+static int same_path(const char *a, const char *b)
+{
+#ifdef _WIN32
+    for (;; ++a, ++b) {
+        const char ca = *a == '\\' ? '/' : *a;
+        const char cb = *b == '\\' ? '/' : *b;
+        if (ca != cb) return 0;
+        if (!ca) return 1;
+    }
+#else
+    return strcmp(a, b) == 0;
+#endif
+}
+
+/* The last line for this path, size, mtime and head/tail spot hash. */
 static int cache_lookup(const char *path, unsigned long long size, long long mtime,
                         const char *spot, uint8_t out[32])
 {
@@ -127,7 +146,7 @@ static int cache_lookup(const char *path, unsigned long long size, long long mti
                    &lsize, &lmtime, lspot, hex, &used) != 4 || !used)
             continue;
         if (lsize == size && lmtime == mtime && !strcmp(lspot, spot) && strlen(hex) == 64 &&
-            !strcmp(line + used, path) && unhex(hex, out))
+            same_path(line + used, path) && unhex(hex, out))
             found = 1;
     }
     fclose(f);
