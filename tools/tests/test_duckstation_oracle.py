@@ -305,6 +305,9 @@ class TestOraclePatch(unittest.TestCase):
 
     def test_apply_on_a_stand_in_checkout(self):
         """Line edit, base check, apply, repeat, and the refusal of a wrong base."""
+        import shutil
+        if shutil.which("git") is None:
+            self.skipTest("git is not on PATH; the stored-patch form is still checked above")
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "checkout"
             root.mkdir()
