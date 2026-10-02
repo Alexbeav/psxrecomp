@@ -301,6 +301,25 @@ names the device and the port, for example "Netplay needs a pad or the
 keyboard: port 1 is set to a PS1 Mouse." A CLI start prints the sentence and
 exits with code 1. The other player sees that the match ended.
 
+## BIOS boot mode
+
+The peers of a match must boot the BIOS the same way. Offline, the boot mode
+is the player's choice: `[runtime] bios_hle`, `bios_hle_keep_intro` and
+`fast_boot` come from the kit's `game.toml`, then the player's
+`settings.toml`, then the launcher. A match takes all three from the kit's
+`game.toml`, which both peers of one build share (PS1B-382). A player who had
+chosen otherwise sees "Netplay: this match uses the game's own BIOS setting."
+at the start of the match; the choice is not changed and applies again
+offline.
+
+Before this, two peers that differed started a match (the boot digest at tick
+0 is the same in both modes) and the cores forked for good at sim 22. A
+`settings.toml` written by an older build of the kit was enough.
+
+`PSX_BIOS_HLE` and `PSX_BIOS_HLE_KEEP_INTRO` stay test overrides on top of
+this rule. Set them on both peers. Two different builds of a kit can still
+differ; nothing compares the mode between the peers.
+
 ---
 
 ## Related product pieces
