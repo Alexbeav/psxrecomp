@@ -281,7 +281,83 @@ def whole_packager(bash, tmp: Path) -> str:
     assert code == 1 and "missing staged BIOS asset" in out and "SCPH5552.toml" in out, (code, out[-2000:])
     zip_gets_a_relative_path(bash, tmp)
     gate = plain_start_gate(bash, tmp, zipped)
-    return ("to the zip" if zipped else "to the zip step (no zip tool on this machine)") + "; " + gate
+    pick = exe_name_pick(tmp, zipped)
+    return ("to the zip" if zipped else "to the zip step (no zip tool on this machine)") + "; " + gate + "; " + pick
+
+
+def windows_shells():
+    """Every bash a Windows build host runs the packager in: Git Bash and MSYS2."""
+    found = []
+    for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), r"C:\Program Files"):
+        found.append(("Git Bash", os.path.join(base, "Git", "usr", "bin", "bash.exe")))
+    for root in (os.environ.get("MSYS2_ROOT", ""), r"C:\msys64", r"D:\msys64"):
+        if root:
+            found.append(("MSYS2", os.path.join(root, "usr", "bin", "bash.exe")))
+    shells, seen = [], set()
+    for name, path in found:
+        key = os.path.normcase(path)
+        if os.path.isfile(path) and key not in seen and name not in [n for n, _ in shells]:
+            seen.add(key)
+            shells.append((name, path))
+    return shells
+
+
+def exe_name_pick(tmp: Path, zipped: bool) -> str:
+    """The gate must hand its Python step a file that exists (PS1B-366).
+
+    A Windows build folder holds Resident_Evil_2.exe and nothing named
+    Resident_Evil_2. Under Git Bash and MSYS2, [[ -f X ]] is also true when
+    only X.exe exists, so the packager's lookups settle on the name without the
+    extension. The gate handed that path to python, which found no such file,
+    and every Windows setup package stopped with "no such file ... no package
+    was made". The earlier cases of this test could not see it: their stand-in
+    host has no extension, and the gate's own cases are shell scripts that only
+    a POSIX system starts.
+
+    Here the build folder holds only the .exe name, under each Windows shell
+    found. The stand-in is a text file, so it cannot be started: the right
+    result is "NOT CHECKED" for the path that ends in .exe, and a package.
+    Only a Windows shell has the rule, so off Windows the case is not run and
+    says so.
+    """
+    if os.name != "nt":
+        return ("exe name pick: NOT RUN here (only Git Bash and MSYS2 treat X as X.exe; "
+                "the Windows gate runs this case)")
+    shells = windows_shells()
+    assert shells, "no Git Bash or MSYS2 bash was found: the exe name pick cannot be tested on this Windows host"
+    ran = []
+    for name, shell in shells:
+        folder = working_folder(shell)
+        with tempfile.TemporaryDirectory(prefix="psxrecomp-exe-pick-", dir=folder) as scratch:
+            root = Path(scratch) / "exe-pick"
+            emitters = make_package_source(root)
+            build = root / "build-setup"
+            (build / "Resident_Evil_2").rename(build / "Resident_Evil_2.exe")
+            assert sorted(p.name for p in build.iterdir() if p.name.startswith("Resident_Evil_2")) == [
+                "Resident_Evil_2.exe"]
+            code, out = package(shell, root, emitters)
+            assert "no such file" not in out, (
+                name + ": the gate handed python a path that is not a file", out[-2500:])
+            checked = [line for line in out.split("\n") if "setup host plain start:" in line]
+            assert len(checked) == 1 and "NOT CHECKED" in checked[0], (name, checked, out[-2500:])
+            handed = checked[0].rsplit("; ", 1)[-1].strip()
+            if handed.startswith("/"):
+                # a python of the shell's own family prints its own kind of path
+                handed = subprocess.run([shell, "-c", 'cygpath -w "$1"', "_", handed], capture_output=True,
+                                        text=True, encoding="utf-8", errors="replace",
+                                        env=shell_env(shell)).stdout.strip() or handed
+            assert handed.lower().endswith("resident_evil_2.exe"), (name, checked[0])
+            assert os.path.isfile(handed), (name + ": the path handed to python is not a file", handed)
+            assert "its plain start was NOT checked" in out, (name, out[-2500:])
+            stage = root / "dist" / "stage-setup-linux-x64"
+            assert (stage / "Resident_Evil_2.exe").is_file(), sorted(p.name for p in stage.iterdir())
+            wrote = "Wrote " in out
+            if not wrote:
+                assert code == 1 and out.rstrip().endswith("error: zip not found"), (name, code, out[-2500:])
+            else:
+                assert code == 0, (name, code, out[-2500:])
+            ran.append(name)
+    return "exe name pick: the .exe file is handed to the gate under " + " and ".join(ran)
 
 
 def plain_start_gate(bash, tmp: Path, zipped: bool) -> str:
