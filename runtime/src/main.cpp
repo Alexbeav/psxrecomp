@@ -5853,28 +5853,35 @@ static void capture_local_human_pad(PsxNetPad* out) {
  * resimulation without a person at each machine.
  *
  * The word is a function of the seed and the session's sim tick only, so a
- * sample taken twice for one tick (tip hold) is the same word. */
+ * sample taken twice for one tick (tip hold) is the same word.
+ *
+ * PSX_NET_TEST_INPUT_FROM=<tick> keeps the scripted pad idle before that sim
+ * tick (default 0: it presses from the first tick), so a test can choose
+ * whether the first misprediction falls into the BIOS boot or after it. */
 static bool netplay_test_input(PsxNetPad* out) {
     static int seed_read = 0;
-    static uint32_t seed = 0;
+    static uint32_t seed = 0, from = 0;
     if (!seed_read) {
         seed_read = 1;
         if (const char* e = std::getenv("PSX_NET_TEST_INPUT_SEED"))
             seed = (uint32_t)std::strtoul(e, nullptr, 10);
+        if (const char* e = std::getenv("PSX_NET_TEST_INPUT_FROM"))
+            from = (uint32_t)std::strtoul(e, nullptr, 10);
         if (seed)
             std::fprintf(stderr,
-                "psxrecomp: netplay TEST INPUT on (PSX_NET_TEST_INPUT_SEED=%u): "
-                "this player's pad is scripted. Test tooling only.\n",
-                (unsigned)seed);
+                "psxrecomp: netplay TEST INPUT on (PSX_NET_TEST_INPUT_SEED=%u, from "
+                "sim tick %u): this player's pad is scripted. Test tooling only.\n",
+                (unsigned)seed, (unsigned)from);
     }
     if (!seed) return false;
-    uint32_t x = seed ^ ((psx_netplay_sim_tick() / 8u) * 2654435761u);
+    const uint32_t tick = psx_netplay_sim_tick();
+    uint32_t x = seed ^ ((tick / 8u) * 2654435761u);
     x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
     /* One D-pad direction (bits 4-7) and one face button (bits 12-15), held
      * or not; active low. Bits 0 (Select) and 3 (Start) are never cleared. */
     const uint16_t held = (uint16_t)((1u << (4u + (x >> 28) % 4u)) |
                                      (1u << (12u + (x >> 24) % 4u)));
-    out->buttons = (x >> 20) & 1u ? (uint16_t)~held : 0xFFFFu;
+    out->buttons = (tick >= from && ((x >> 20) & 1u)) ? (uint16_t)~held : 0xFFFFu;
     out->lx = out->ly = out->rx = out->ry = 0x80u;
     out->analog = 1;      /* as the headless idle pad below */
     out->connected = 1;

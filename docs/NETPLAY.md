@@ -246,6 +246,11 @@ mispredict at every change, which exercises rollback and resimulation with no
 person at either machine. It is off unless the variable is set. It is not a
 player feature.
 
+`PSX_NET_TEST_INPUT_FROM=<tick>` keeps the scripted pad idle before that sim
+tick (default 0). recomp-net's link simulator supplies the latency that makes
+inputs arrive late: `RNET_SIM_LATENCY_MS`, `RNET_SIM_JITTER_MS`,
+`RNET_SIM_LOSS_PCT`, per side.
+
 ---
 
 ## Disc identity for multi-track titles
