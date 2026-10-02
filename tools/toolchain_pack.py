@@ -35,6 +35,33 @@ _ASSET = {
 }
 
 
+# PSXRECOMP_TOOLCHAIN_READONLY=1: never delete, rename, prune or install a pack,
+# never move a pointer to one (latest, the project stamp) and never write the
+# user's login PATH. A pack that is there is still found and used. Tests and
+# gates that start a setup program or this CLI set it: on 2026-10-02 a setup
+# host started by a test installed a pack over a build host's own and emptied
+# it under running builds (PS1B-406, PS1B-410). host/psxrecomp_codegen_host.c
+# honours the same variable.
+READONLY_ENV = "PSXRECOMP_TOOLCHAIN_READONLY"
+
+
+def toolchain_readonly() -> bool:
+    value = os.environ.get(READONLY_ENV, "")
+    return bool(value) and not value.startswith("0")
+
+
+def _readonly_skip(what: str, path=None, log=None) -> bool:
+    """True under the switch, after saying what was left undone."""
+    if not toolchain_readonly():
+        return False
+    text = f"toolchain read-only ({READONLY_ENV}): not done: {what}" + (f": {path}" if path else "")
+    if log:
+        log(text)
+    else:
+        print(text, file=sys.stderr)
+    return True
+
+
 def sys_platform_is_windows() -> bool:
     return sys.platform == "win32"
 
@@ -105,6 +132,8 @@ def clear_project_toolchain_stamp(project_root: Optional[Path]) -> None:
     stamp = project_root / "toolchain" / STAMP_NAME
     try:
         if stamp.is_file():
+            if _readonly_skip("remove the project's toolchain stamp", stamp):
+                return
             stamp.unlink()
     except OSError:
         pass
@@ -125,6 +154,8 @@ def prune_old_toolchain_tags(keep_pack: Path, log=None) -> int:
     if not cache_root.is_dir():
         return 0
     if not (_paths_equal(keep, cache_root) or _is_under(keep, cache_root)):
+        return 0
+    if _readonly_skip("prune older toolchain installs", cache_root, log):
         return 0
     removed = 0
     try:
@@ -177,6 +208,8 @@ def heal_broken_toolchain_pointers(log=None) -> None:
             continue
         root = unwrap_pack_root(latest)
         if pack_root_looks_usable(root) and toolchain_bin_runs(root / "bin"):
+            continue
+        if _readonly_skip("remove an unusable latest", latest, log):
             continue
         if log:
             log(f"Removing broken toolchain pointer: {latest}")
@@ -426,6 +459,8 @@ def migrate_legacy_psxrecomp_cache(log=None) -> None:
     if src == unwrap_pack_root(legacy):
         tag = "latest"
     dest = retcomm / tag
+    if _readonly_skip("promote the legacy toolchain cache", dest, log):
+        return
     try:
         retcomm.mkdir(parents=True, exist_ok=True)
         if dest.exists():
@@ -455,6 +490,8 @@ def is_windows_store_python() -> bool:
 def write_toolchain_stamp(project_root: Path, bin_dir: Path) -> None:
     """Write project_root/toolchain/.psxrecomp-bin for the C host to read."""
     stamp_dir = project_root / "toolchain"
+    if _readonly_skip("write the project's toolchain stamp", stamp_dir):
+        return
     try:
         stamp_dir.mkdir(parents=True, exist_ok=True)
         (stamp_dir / STAMP_NAME).write_text(
@@ -686,6 +723,8 @@ def _set_latest_pointer(cache_root: Path, pack_root: Path) -> Path:
             unwrap_pack_root(latest)
         ) else root
 
+    if _readonly_skip("move the latest pointer", latest):
+        return unwrap_pack_root(latest) if pack_root_looks_usable(unwrap_pack_root(latest)) else root
     if latest.exists() or latest.is_symlink():
         if latest.is_dir() and not latest.is_symlink():
             shutil.rmtree(latest, ignore_errors=True)
@@ -801,6 +840,9 @@ def register_toolchain_user_env(pack_root: Path, log=None) -> Path:
     root = unwrap_pack_root(pack_root)
     if not pack_root_looks_usable(root):
         raise RuntimeError(f"toolchain pack unusable for PATH register: {pack_root}")
+    if _readonly_skip("refresh the latest pointer and the user's login PATH", root, log):
+        activate_toolchain_bin(root / "bin", log=None)     # this process only
+        return root
     cache_root = preferred_install_root()
     cache_root.mkdir(parents=True, exist_ok=True)
     try:
@@ -880,6 +922,10 @@ def install_from_zip(
     zip_path = zip_path.expanduser().resolve()
     if not zip_path.is_file():
         raise FileNotFoundError(f"toolchain zip not found: {zip_path}")
+    if _readonly_skip("install a toolchain pack", zip_path, log):
+        raise RuntimeError(
+            f"The toolchain is read-only for this start ({READONLY_ENV}). Nothing was installed."
+        )
     staging = preferred_install_root() / ".staging-offline"
     root = unpack_zip_to(zip_path, staging)
     if not pack_satisfies_min(root, min_version):
@@ -935,6 +981,10 @@ def download_latest_pack(
     asset = _ASSET.get(art)
     if not asset:
         raise RuntimeError(f"unknown toolchain artifact: {art}")
+    if _readonly_skip("download a toolchain pack", asset, log):
+        raise RuntimeError(
+            f"The toolchain is read-only for this start ({READONLY_ENV}). Nothing was downloaded."
+        )
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     url = f"https://github.com/{repo}/releases/latest/download/{asset}"
     if log:

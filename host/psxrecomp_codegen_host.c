@@ -2342,6 +2342,30 @@ static int rmtree_path(const char* path) {
     return system(cmd) == 0 || !path_is_dir(path);
 }
 
+/* PSXRECOMP_TOOLCHAIN_READONLY=1: this process never deletes, renames, prunes
+ * or installs a toolchain pack and never moves a pointer to one (the `latest`
+ * link, the project's toolchain link and stamp). It still finds and uses a
+ * pack that is there. Tests and gates that start a setup host set it: on
+ * 2026-10-02 a host started by a test installed a pack over the build host's
+ * own and emptied it under running builds (PS1B-406, PS1B-410). Every function
+ * below that changes a pack or a pointer asks toolchain_readonly_skip() first;
+ * tools/toolchain_pack.py honours the same variable. */
+static int toolchain_readonly(void) {
+    const char* e = getenv("PSXRECOMP_TOOLCHAIN_READONLY");
+    return e && e[0] && e[0] != '0';
+}
+
+/* True under the switch, after saying on stderr what was left undone. */
+static int toolchain_readonly_skip(const char* what, const char* path) {
+    if (!toolchain_readonly())
+        return 0;
+    fprintf(stderr,
+            "psxrecomp-codegen: toolchain read-only (PSXRECOMP_TOOLCHAIN_READONLY): "
+            "not done: %s%s%s\n",
+            what, (path && path[0]) ? ": " : "", (path && path[0]) ? path : "");
+    return 1;
+}
+
 #if defined(_WIN32)
 static int run_cmdline_wait(const char* cmdline, DWORD* out_code) {
     STARTUPINFOA si;
@@ -2497,6 +2521,8 @@ static int set_toolchain_latest_pointer(const char* cache_root,
         if (strcmp(latest, resolved_pack) == 0)
             return 1;
     }
+    if (toolchain_readonly_skip("move the latest pointer", latest))
+        return pack_root_has_cmake_direct(latest);
     rmtree_path(latest);
 #if defined(_WIN32)
     if (junction_dir(latest, resolved_pack))
@@ -2532,6 +2558,8 @@ static int write_project_toolchain_stamp(const char* bin_dir) {
     if (!g_project_root[0] || !bin_dir || !bin_dir[0])
         return 0;
     if (!join_path(tc_dir, sizeof(tc_dir), g_project_root, "toolchain"))
+        return 0;
+    if (toolchain_readonly_skip("write the project's toolchain stamp", tc_dir))
         return 0;
     mkdir_p(tc_dir);
     if (!join_path(stamp, sizeof(stamp), tc_dir, ".psxrecomp-bin"))
@@ -2581,8 +2609,12 @@ static int junction_dir(const char* link_path, const char* target_path) {
         /* Replace broken/empty dir; keep a usable pack. */
         if (pack_root_has_cmake(link_path))
             return 1;
+        if (toolchain_readonly_skip("replace a toolchain folder by a link", link_path))
+            return 0;
         rmtree_path(link_path);
     }
+    if (toolchain_readonly_skip("make a toolchain link", link_path))
+        return 0;
     if (!dirname_copy(parent, sizeof(parent), link_path))
         return 0;
     mkdir_p(parent);
@@ -2663,6 +2695,8 @@ static int harvest_store_python_toolchain(int allow_copy) {
     char cache_root[1400], real_latest[1400], proj_tc[1200];
     if (!find_store_localcache_pack_root(cache_root, sizeof(cache_root)))
         return 0;
+    if (allow_copy && toolchain_readonly_skip("copy or link a pack into the shared cache", cache_root))
+        allow_copy = 0;
     if (!allow_copy)
         return activate_installed_pack_root(cache_root);
     if (!shared_toolchain_latest_dir(real_latest, sizeof(real_latest)))
@@ -2851,6 +2885,8 @@ static int link_or_stamp_project_toolchain(const char* pack_root) {
         return 0;
     if (!join_path(bin, sizeof(bin), root, "bin"))
         return 0;
+    if (toolchain_readonly_skip("link the pack into the project", g_project_root))
+        return 0;
 #if defined(_WIN32)
     if (g_project_root[0] &&
         join_path(proj_tc, sizeof(proj_tc), g_project_root, "toolchain")) {
@@ -2929,6 +2965,8 @@ static void prune_old_toolchain_tags(const char* keep_pack) {
     if (!path_is_under_dir(keep_pack, cache_root) &&
         !host_paths_same_file(keep_pack, cache_root))
         return;
+    if (toolchain_readonly_skip("prune older toolchain installs", cache_root))
+        return;
 
 #if defined(_WIN32)
     {
@@ -3001,6 +3039,12 @@ static int host_install_toolchain_from_zip(
     char dest[1400], latest[1400];
     if (!preferred_toolchain_cache_root(cache_root, sizeof(cache_root))) {
         snprintf(err_msg, err_cap, "Cannot resolve shared toolchain directory.");
+        return 0;
+    }
+    if (toolchain_readonly_skip("install a toolchain pack", cache_root)) {
+        snprintf(err_msg, err_cap,
+                 "The toolchain is read-only for this start "
+                 "(PSXRECOMP_TOOLCHAIN_READONLY). Nothing was installed.");
         return 0;
     }
     mkdir_p(cache_root);
@@ -3112,6 +3156,12 @@ static int host_download_and_install_toolchain(
     char* err_msg, size_t err_cap) {
     char url[512], zip_path[1400], tmp_dir[1100];
     const char* asset = toolchain_zip_asset_name();
+    if (toolchain_readonly_skip("download a toolchain pack", asset)) {
+        snprintf(err_msg, err_cap,
+                 "The toolchain is read-only for this start "
+                 "(PSXRECOMP_TOOLCHAIN_READONLY). Nothing was downloaded.");
+        return 0;
+    }
     snprintf(url, sizeof(url),
              "https://github.com/%s/releases/latest/download/%s", k_tc_repo,
              asset);
@@ -3180,6 +3230,8 @@ static int migrate_legacy_psxrecomp_toolchain(void) {
         return 0;
     if (pack_root_has_cmake(dest))
         return 1;
+    if (toolchain_readonly_skip("promote the legacy toolchain cache", dest))
+        return 0;
     if (!dirname_copy(parent, sizeof(parent), dest))
         return 0;
     mkdir_p(parent);
@@ -3390,6 +3442,9 @@ static void clear_project_toolchain_stamp(void) {
     if (!join_path(stamp, sizeof(stamp), g_project_root,
                    "toolchain/.psxrecomp-bin"))
         return;
+    if (path_is_file(stamp) &&
+        toolchain_readonly_skip("remove the project's toolchain stamp", stamp))
+        return;
 #if defined(_WIN32)
     DeleteFileA(stamp);
 #else
@@ -3458,6 +3513,8 @@ static void heal_broken_toolchain_pointers(void) {
             join_path(bin, sizeof(bin), root, "bin") &&
             toolchain_bin_is_healthy(bin))
             continue;
+        if (toolchain_readonly_skip("remove an unusable latest", latest))
+            continue;
         rmtree_path(latest);
 #if !defined(_WIN32)
         unlink(latest); /* dangling symlink after rmtree no-op */
@@ -3483,7 +3540,8 @@ static void discard_unhealthy_active_toolchain(void) {
         return;
     if (toolchain_bin_is_healthy(g_toolchain_bin))
         return;
-    if (pack_root_from_bin(g_toolchain_bin, pack, sizeof(pack))) {
+    if (pack_root_from_bin(g_toolchain_bin, pack, sizeof(pack)) &&
+        !toolchain_readonly_skip("remove or set aside the pack in use", pack)) {
         if (path_is_toolchain_latest_leaf(pack) ||
             path_is_toolchain_latest_leaf(g_toolchain_bin)) {
             rmtree_path(pack);
