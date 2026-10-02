@@ -5811,16 +5811,21 @@ static void capture_local_human_pad(PsxNetPad* out) {
  *
  * PSX_NET_TEST_INPUT_FROM=<tick> keeps the scripted pad idle before that sim
  * tick (default 0: it presses from the first tick), so a test can choose
- * whether the first misprediction falls into the BIOS boot or after it. */
+ * whether the first misprediction falls into the BIOS boot or after it.
+ * PSX_NET_TEST_INPUT_HOLD=1 holds one button down from that tick instead of
+ * changing the pad every 8 ticks: a player who keeps a button pressed while
+ * the match starts. It gives exactly one input change. */
 static bool netplay_test_input(PsxNetPad* out) {
     static int seed_read = 0;
-    static uint32_t seed = 0, from = 0;
+    static uint32_t seed = 0, from = 0, hold = 0;
     if (!seed_read) {
         seed_read = 1;
         if (const char* e = std::getenv("PSX_NET_TEST_INPUT_SEED"))
             seed = (uint32_t)std::strtoul(e, nullptr, 10);
         if (const char* e = std::getenv("PSX_NET_TEST_INPUT_FROM"))
             from = (uint32_t)std::strtoul(e, nullptr, 10);
+        if (const char* e = std::getenv("PSX_NET_TEST_INPUT_HOLD"))
+            hold = (e[0] == '1') ? 1u : 0u;
         if (seed)
             std::fprintf(stderr,
                 "psxrecomp: netplay TEST INPUT on (PSX_NET_TEST_INPUT_SEED=%u, from "
@@ -5836,6 +5841,8 @@ static bool netplay_test_input(PsxNetPad* out) {
     const uint16_t held = (uint16_t)((1u << (4u + (x >> 28) % 4u)) |
                                      (1u << (12u + (x >> 24) % 4u)));
     out->buttons = (tick >= from && ((x >> 20) & 1u)) ? (uint16_t)~held : 0xFFFFu;
+    if (hold)   /* Cross (bit 14) held from the start tick, nothing else */
+        out->buttons = tick >= from ? (uint16_t)~(1u << 14) : 0xFFFFu;
     out->lx = out->ly = out->rx = out->ry = 0x80u;
     out->analog = 1;      /* as the headless idle pad below */
     out->connected = 1;

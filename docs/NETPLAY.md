@@ -237,7 +237,8 @@ person at either machine. It is off unless the variable is set. It is not a
 player feature.
 
 `PSX_NET_TEST_INPUT_FROM=<tick>` keeps the scripted pad idle before that sim
-tick (default 0). recomp-net's link simulator supplies the latency that makes
+tick (default 0). `PSX_NET_TEST_INPUT_HOLD=1` holds one button from that tick
+instead of changing the pad. recomp-net's link simulator supplies the latency that makes
 inputs arrive late: `RNET_SIM_LATENCY_MS`, `RNET_SIM_JITTER_MS`,
 `RNET_SIM_LOSS_PCT`, per side.
 
