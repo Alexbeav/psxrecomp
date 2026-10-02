@@ -1029,6 +1029,23 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  COMMAND autocompile_degraded_test)
     endif()
 
+    # PS1B-378: the compiler child must inherit its pipe and nothing else, or
+    # cmd.exe keeps every file the runtime had open at the spawn and the
+    # runtime's own rename of a snapshot temp file fails with error 32 for the
+    # length of a compile run. The fault is a Windows one (a held file does not
+    # block rename() on POSIX), so the test is registered everywhere and
+    # reports itself skipped, with the reason, off Windows.
+    add_executable(autocompile_handle_inherit_test
+        tests/test_autocompile_handle_inherit.c)
+    if(WIN32)
+        target_sources(autocompile_handle_inherit_test PRIVATE src/autocompile.c)
+        target_include_directories(autocompile_handle_inherit_test PRIVATE include)
+    endif()
+    add_test(NAME autocompile_handle_inherit_test
+             COMMAND autocompile_handle_inherit_test)
+    set_tests_properties(autocompile_handle_inherit_test PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 120)
+
     # ---- previously-unregistered standalone tests -------------------------
     # These 16 existed in runtime/tests/ with no add_test() entry. Their only
     # build instructions were a gcc command line in each file's header comment,
