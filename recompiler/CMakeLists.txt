@@ -1246,6 +1246,7 @@ if(BUILD_TESTING)
                 hybrid_dev_any_input
                 host_input_focus_guards
                 netplay_pad_seat_wiring
+                netplay_boot_mode_wiring
                 launcher_pad_mode_wiring
                 negcon_twist_wiring
                 replay_disc_identity_wiring
