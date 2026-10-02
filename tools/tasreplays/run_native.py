@@ -175,6 +175,52 @@ def source_clock_identity(path, toc_model, seek_model, read_model):
     return {'path': str(path), 'sha256': hashlib.sha256(data).hexdigest(), 'words': count}
 
 
+def settings_text(renderer, fast_boot, hle, bios, disc, card1):
+    """The settings.toml of one run.
+
+    settings_format = 2 says that this file's fast_boot and bios_hle lines were
+    written on purpose. Without that line the loader takes both for an old
+    launcher's echo and drops them (PS1B-360), and --fast-boot did nothing
+    (PS1B-394). The key is top-level, so it stands before the first table.
+    """
+    return f'''settings_format = 2
+[video]
+renderer = "{renderer}"
+supersampling = 1
+window_width = 960
+antialiasing = false
+texture_filtering = "nearest"
+crt_filter = "raw"
+auto_skip_fmv = false
+turbo_loads = false
+fast_boot = {str(bool(fast_boot)).lower()}
+bios_hle = {str(bool(hle)).lower()}
+fullscreen = 0
+frame_interpolation = false
+aspect_ratio = "4:3"
+adaptive_view = false
+[audio]
+spu_hq = false
+[launcher]
+skip_launcher = true
+[bios]
+path = "{Path(bios).as_posix()}"
+[disc]
+path = "{Path(disc).as_posix()}"
+[memcard]
+dir = "cards"
+card1 = "cards/card1.mcd"
+card2 = "cards/card2.mcd"
+enable1 = {str(bool(card1)).lower()}
+enable2 = false
+[controller]
+p1_device = "keyboard"
+p1_mode = "digital"
+p2_device = "none"
+p2_mode = "digital"
+'''
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_directory", type=Path)
@@ -443,41 +489,8 @@ def main():
         if digest(route_path) != identity['sha256']:
             raise ValueError('staged controller route differs')
     renderer = args.renderer
-    settings = f'''[video]
-renderer = "{renderer}"
-supersampling = 1
-window_width = 960
-antialiasing = false
-texture_filtering = "nearest"
-crt_filter = "raw"
-auto_skip_fmv = false
-turbo_loads = false
-fast_boot = {str(args.fast_boot).lower()}
-bios_hle = {str(args.hle).lower()}
-fullscreen = 0
-frame_interpolation = false
-aspect_ratio = "4:3"
-adaptive_view = false
-[audio]
-spu_hq = false
-[launcher]
-skip_launcher = true
-[bios]
-path = "{paths['bios'].as_posix()}"
-[disc]
-path = "{paths['disc'].as_posix()}"
-[memcard]
-dir = "cards"
-card1 = "cards/card1.mcd"
-card2 = "cards/card2.mcd"
-enable1 = {str(initial_card is not None).lower()}
-enable2 = false
-[controller]
-p1_device = "keyboard"
-p1_mode = "digital"
-p2_device = "none"
-p2_mode = "digital"
-'''
+    settings = settings_text(renderer, args.fast_boot, args.hle, paths['bios'], paths['disc'],
+                             initial_card is not None)
     (run / "settings.toml").write_text(settings, encoding="utf-8")
     command = [str(launch_exe), "--game", str(paths["game"]),
                "--disc", str(paths["disc"]), "--bios", str(paths["bios"]),
