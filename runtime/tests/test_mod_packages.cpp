@@ -1550,6 +1550,120 @@ int main() {
               "an unknown channel name must be rejected");
     }
 
+    /* PS1B-340: who needs the disc digest. The runtime decodes the whole image
+     * to compute it, so it asks first. The answer must be "yes" exactly when
+     * resolve() could give another result with the digest than without. */
+    {
+        const fs::path need_root = root / "digest-need";
+        const std::string disc_a(64, 'a');
+        const std::string head =
+            "format_version = 5\n"
+            "version = \"1.0.0\"\n"
+            "name = \"Digest Need\"\n";
+        const std::string feature =
+            "[[feature]]\n"
+            "id = \"f\"\n"
+            "name = \"F\"\n";
+        /* names its disc, and nothing else */
+        write_text(need_root / "bundled/bound.mod/1.0.0/manifest.toml",
+                   head + "id = \"bound.mod\"\n"
+                   "[[target]]\n"
+                   "game_id = \"SLUS-TEST\"\n"
+                   "disc_sha256 = \"" + disc_a + "\"\n" + feature);
+        /* any disc of the game */
+        write_text(need_root / "bundled/open.mod/1.0.0/manifest.toml",
+                   head + "id = \"open.mod\"\n"
+                   "[[target]]\n"
+                   "game_id = \"SLUS-TEST\"\n" + feature);
+        /* every game: the bundled loading-speed packages are of this kind */
+        write_text(need_root / "bundled/every.mod/1.0.0/manifest.toml",
+                   head + "id = \"every.mod\"\n"
+                   "[[target]]\n"
+                   "game_id = \"*\"\n" + feature);
+        /* names a disc of another game */
+        write_text(need_root / "bundled/elsewhere.mod/1.0.0/manifest.toml",
+                   head + "id = \"elsewhere.mod\"\n"
+                   "[[target]]\n"
+                   "game_id = \"SLUS-OTHER\"\n"
+                   "disc_sha256 = \"" + disc_a + "\"\n"
+                   "[[target]]\n"
+                   "game_id = \"SLUS-TEST\"\n" + feature);
+        /* one target names a disc, a second one takes any disc of the game */
+        write_text(need_root / "bundled/either.mod/1.0.0/manifest.toml",
+                   head + "id = \"either.mod\"\n"
+                   "[[target]]\n"
+                   "game_id = \"SLUS-TEST\"\n"
+                   "disc_sha256 = \"" + disc_a + "\"\n"
+                   "[[target]]\n"
+                   "game_id = \"SLUS-TEST\"\n" + feature);
+        /* a legacy package with a derived disc and no disc_sha256 */
+        write_text(need_root / "bundled/derived.mod/1.0.0/manifest.toml",
+                   manifest("derived.mod", "1.0.0",
+                       "\n[[derived_disc]]\n"
+                       "kind = \"vcdiff\"\n"
+                       "patch = \"assets/d.xdelta3\"\n"
+                       "patch_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n"
+                       "output_size = 1\n"
+                       "output_sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"));
+        write_text(need_root / "bundled/derived.mod/1.0.0/assets/d.xdelta3", "x");
+
+        ModPackageManager need(need_root);
+        check(need.scan(&error), error.c_str());
+        check(need.packages().size() == 6, "all six digest-need packages must load");
+        check(!need.needs_disc_digest("SLUS-TEST"),
+              "installed but disabled packages must not ask for the disc digest");
+
+        const auto only = [&](const std::string& id) {
+            for (const char* each : {"bound.mod", "open.mod", "every.mod",
+                                     "elsewhere.mod", "either.mod"})
+                check(need.set_feature_enabled(each, "f", id == each, &error),
+                      error.c_str());
+            check(need.set_enabled("derived.mod", id == "derived.mod", &error),
+                  error.c_str());
+        };
+
+        only("open.mod");
+        check(!need.needs_disc_digest("SLUS-TEST") &&
+                  need.resolve("SLUS-TEST").ok,
+              "a target without disc_sha256 must resolve without the digest");
+        only("every.mod");
+        check(!need.needs_disc_digest("SLUS-TEST") &&
+                  need.resolve("SLUS-TEST").ok,
+              "a \"*\" target must resolve without the digest");
+        only("elsewhere.mod");
+        check(!need.needs_disc_digest("SLUS-TEST") &&
+                  need.resolve("SLUS-TEST").ok,
+              "a disc_sha256 on another game's target must not ask for this "
+              "game's digest");
+        only("either.mod");
+        check(!need.needs_disc_digest("SLUS-TEST") &&
+                  need.resolve("SLUS-TEST").ok &&
+                  need.resolve("SLUS-TEST", {}, disc_a).ok,
+              "a digest-free target beside a disc-bound one makes the digest "
+              "irrelevant to the match");
+        only("bound.mod");
+        check(need.needs_disc_digest("SLUS-TEST"),
+              "a package whose only target names a disc must ask for the digest");
+        check(!need.resolve("SLUS-TEST").ok &&
+                  need.resolve("SLUS-TEST", {}, disc_a).ok &&
+                  !need.resolve("SLUS-TEST", {}, std::string(64, 'b')).ok,
+              "a disc-bound package must match its disc and refuse another, "
+              "or none");
+        check(!need.needs_disc_digest("SLUS-OTHER"),
+              "a package that cannot target the game must not ask for its digest");
+        only("derived.mod");
+        check(need.needs_disc_digest("SLUS-TEST"),
+              "a package with a derived disc must ask for the digest: its "
+              "cache file is named by the source disc");
+        const ModResolution with_a = need.resolve("SLUS-TEST", {}, disc_a);
+        const ModResolution with_b =
+            need.resolve("SLUS-TEST", {}, std::string(64, 'b'));
+        check(with_a.ok && with_b.ok && with_a.derived_discs.size() == 1 &&
+                  with_a.fingerprint != with_b.fingerprint,
+              "the plan fingerprint of a derived disc must follow the source "
+              "disc digest");
+    }
+
     fs::remove_all(root, ec);
     if (failures) {
         std::cerr << failures << " mod package test(s) failed\n";

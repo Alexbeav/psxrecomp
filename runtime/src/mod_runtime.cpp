@@ -61,7 +61,9 @@ struct RuntimeMods {
     std::string game_id;
     std::string error;
     std::string exe_sha256;
+    /* Empty until a package needs it: see disc_digest_for_plan(). */
     std::string disc_sha256;
+    bool disc_sha256_computed = false;
     std::filesystem::path disc_path;
     std::filesystem::path effective_disc_path;
     uint32_t entry_phys = 0;
@@ -495,6 +497,31 @@ bool run_xdelta_decode(const std::filesystem::path& executable,
     }
     return true;
 #endif
+}
+
+/* How many times the whole disc was fingerprinted for the mod plan. Tests read
+ * it: a start whose packages do not ask for the digest must leave it alone. */
+unsigned disc_digest_computations = 0;
+
+/* The disc digest for resolve(), computed only when an enabled package needs
+ * it (PS1B-340). sha256_file() decodes every sector of a .chd, and the result
+ * was computed at every start, in the frame of the launcher's Play click, for
+ * packages that never read it: about 20 s of one core for Final Fantasy VII,
+ * with the launcher standing still. Two things read it: a [[target]] that
+ * names a disc_sha256, and the cache file name of a derived disc. A plan with
+ * neither resolves with an empty digest, as a session without a disc always
+ * has. Once computed for a disc path it is kept for that path, as before. */
+const std::string& disc_digest_for_plan(RuntimeMods& s) {
+    if (s.disc_sha256_computed || s.disc_path.empty()) return s.disc_sha256;
+    if (!s.manager.needs_disc_digest(s.game_id, s.exe_sha256))
+        return s.disc_sha256;
+    std::string hash_error;
+    std::string digest;
+    if (!sha256_file(s.disc_path, digest, &hash_error)) digest.clear();
+    s.disc_sha256 = std::move(digest);
+    s.disc_sha256_computed = true;
+    ++disc_digest_computations;
+    return s.disc_sha256;
 }
 
 bool valid_cached_disc(const std::filesystem::path& path,
@@ -988,7 +1015,8 @@ int mutate(Callback callback) {
     }
     if (!state().disc_path.empty())
         state().validation = state().manager.resolve(
-            state().game_id, state().exe_sha256, state().disc_sha256);
+            state().game_id, state().exe_sha256,
+            disc_digest_for_plan(state()));
     else
         state().validation = {};
     state().error.clear();
@@ -1110,6 +1138,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     s.error.clear();
     s.exe_sha256.clear();
     s.disc_sha256.clear();
+    s.disc_sha256_computed = false;
     s.disc_path.clear();
     s.effective_disc_path.clear();
     s.entry_phys = 0;
@@ -1165,14 +1194,12 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
     RuntimeMods& s = state();
     if (!s.initialized) return true;
     if (disc_path != s.disc_path) {
-        std::string hash_error;
-        std::string digest;
-        if (!sha256_file(disc_path, digest, &hash_error)) digest.clear();
         s.disc_path = disc_path;
-        s.disc_sha256 = std::move(digest);
+        s.disc_sha256.clear();
+        s.disc_sha256_computed = false;
     }
-    ModResolution plan =
-        s.manager.resolve(s.game_id, s.exe_sha256, s.disc_sha256);
+    ModResolution plan = s.manager.resolve(
+        s.game_id, s.exe_sha256, disc_digest_for_plan(s));
     s.validation = plan;
     if (!plan.ok) {
         s.error.clear();
@@ -1216,6 +1243,10 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
 
 const std::string& mod_runtime_fingerprint() {
     return state().plan.fingerprint;
+}
+
+unsigned mod_runtime_disc_digest_computations_for_tests() {
+    return disc_digest_computations;
 }
 
 /* PS1B-191: the enabled mods that a replay must match. The two loading-speed
