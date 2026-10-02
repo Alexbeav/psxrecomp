@@ -78,7 +78,9 @@ the number of rows in use; `by_place` sums them per place. `hottest` lists the
 ## loader_miss
 
 `overlay_loader.disp_interp` by reason, above the kernel window and inside it.
-The reasons of one place add up to that place's share of `disp_interp`.
+The reasons of one place add up to that place's share of `disp_interp`: a miss is
+counted once, under its reason, and `disp_interp` and `disp_interp_kernel` are the
+sums of the reasons, taken when the report is written.
 
 | Reason | Meaning |
 | --- | --- |

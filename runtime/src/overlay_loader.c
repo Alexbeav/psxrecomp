@@ -464,16 +464,22 @@ static uint64_t s_load_max_us    = 0;
 static uint64_t s_load_last_us   = 0;
 static int      s_valid_count    = 0;   /* candidates currently VALID         */
 static uint64_t s_disp_native    = 0;
-static uint64_t s_disp_interp    = 0;
-/* The same two counts for the kernel window alone (phys below
+/* The native count for the kernel window alone (phys below
  * DIRTY_RAM_KERNEL_WINDOW_END). The loader compiles and dispatches kernel RAM
  * as well as game code, so the totals mix BIOS kernel routines with the
  * game's overlays. A check that asks whether game overlay code ran native
  * needs them apart (PS1B-323). */
 static uint64_t s_disp_native_kernel = 0;
-static uint64_t s_disp_interp_kernel = 0;
-/* PS1B-391: disp_interp by reason; [0] above the kernel window, [1] inside it. */
+/* PS1B-391: the interpreted dispatches by reason; [0] above the kernel window,
+ * [1] inside it. This is the only count a miss makes. disp_interp and its
+ * kernel part are sums of these rows, taken when a getter reads them, so the
+ * dispatch path does the work it did before the reasons existed. */
 static uint64_t s_disp_miss[2][PSX_INTERP_MISS_REASONS];
+static uint64_t disp_miss_sum(int side) {
+    uint64_t n = 0;
+    for (int r = 0; r < PSX_INTERP_MISS_REASONS; r++) n += s_disp_miss[side][r];
+    return n;
+}
 /* Small diagnostic-only native-owner sampler. A logical softlock can continue
  * presenting at 60 Hz while executing a tiny bad native loop, so FPS alone is
  * not correctness evidence. This is enabled only with the existing runtime
@@ -3716,11 +3722,9 @@ static int overlay_find_by_range(uint32_t phys) {
 #define DISP_KERNEL()      (phys < DIRTY_RAM_KERNEL_WINDOW_END)
 #define DISP_NATIVE()      do { s_disp_native++; if (DISP_KERNEL()) s_disp_native_kernel++; } while (0)
 #define DISP_NATIVE_UNDO() do { s_disp_native--; if (DISP_KERNEL()) s_disp_native_kernel--; } while (0)
-#define DISP_INTERP()      do { s_disp_interp++; if (DISP_KERNEL()) s_disp_interp_kernel++; } while (0)
-/* PS1B-391: a miss also counts under its reason (interp_report.h), above the
- * kernel window or inside it. One more increment on a path that already ends
- * in the interpreter; a native dispatch does not pass here. */
-#define DISP_MISS(reason)  do { s_disp_miss[DISP_KERNEL() ? 1 : 0][(reason)]++; DISP_INTERP(); } while (0)
+/* PS1B-391: a miss counts once, under its reason (interp_report.h), above the
+ * kernel window or inside it. The totals are read as sums (disp_miss_sum). */
+#define DISP_MISS(reason)  do { s_disp_miss[DISP_KERNEL() ? 1 : 0][(reason)]++; } while (0)
 
 int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
     uint32_t phys = addr & 0x1FFFFFFFu;
@@ -4065,7 +4069,6 @@ retry_candidates:
 #undef DISP_KERNEL
 #undef DISP_NATIVE
 #undef DISP_NATIVE_UNDO
-#undef DISP_INTERP
 
 /* ---- Self-modification of an actively-executing entry (§8.5) ------------ */
 /* Lazy re-hash on the NEXT dispatch is too late if a native function modifies
@@ -4104,7 +4107,7 @@ void overlay_loader_active_write_check(uint32_t phys, uint32_t size) {
  * overlay-region share is the total minus this. */
 void overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp) {
     if (native) *native = s_disp_native_kernel;
-    if (interp) *interp = s_disp_interp_kernel;
+    if (interp) *interp = disp_miss_sum(1);
 }
 
 /* disp_interp by reason (PS1B-391), for the run report. */
@@ -4126,7 +4129,7 @@ void overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidations,
     if (invalidations)   *invalidations   = s_invalidations;
     if (unregistered)    *unregistered    = s_no_manifest;
     if (disp_native)     *disp_native     = s_disp_native;
-    if (disp_interp)     *disp_interp     = s_disp_interp;
+    if (disp_interp)     *disp_interp     = disp_miss_sum(0) + disp_miss_sum(1);
     if (stale_blocked)   *stale_blocked   = s_stale_blocked;
     if (last_write_pc)   *last_write_pc   = s_last_write_pc;
     if (last_write_addr) *last_write_addr = s_last_write_addr;

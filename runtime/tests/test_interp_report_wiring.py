@@ -5,9 +5,10 @@ runtime/tests/test_interp_report.c proves the builder: given tables, it writes
 the 32 hottest interpreted addresses with their place, the text guard's fields
 and the loader's misses by reason. This proves the three places that feed it:
 
-  1. every miss exit of overlay_loader_dispatch counts under a reason. A bare
-     DISP_INTERP() there would raise the total without a reason, and the
-     reasons would no longer add up to disp_interp;
+  1. every miss exit of overlay_loader_dispatch counts under a reason, and
+     that is its only count: disp_interp and its kernel part are sums of the
+     reasons, so the dispatch path does one increment for a miss and the
+     reasons cannot drift from the totals;
   2. every reason of the enum has a name of its own;
   3. the report writer fills the builder's input from the live counters and
      writes the object, and the runtime's source list builds the unit.
@@ -30,8 +31,8 @@ SOURCES = (ROOT / "runtime" / "runtime.cmake").read_text(encoding="utf-8")
 start = LOADER.index("int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {")
 end = LOADER.index("#undef DISP_MISS", start)
 dispatch = LOADER[start:end]
-assert "DISP_INTERP();" not in dispatch, (
-    "overlay_loader_dispatch has a miss exit without a reason: use DISP_MISS(<reason>)"
+assert "DISP_INTERP" not in LOADER and "s_disp_interp" not in LOADER, (
+    "a second count of interpreted dispatches is back: a miss counts once, through DISP_MISS(<reason>)"
 )
 exits = re.findall(r"DISP_MISS\(([^;]*?)\);", dispatch, flags=re.S)
 assert len(exits) >= 12, f"expected the twelve miss exits of the dispatch, found {len(exits)}"
@@ -43,9 +44,12 @@ for text in exits:
     assert named and all(n in reasons for n in named), f"a miss exit names no known reason: {text!r}"
 used = set(re.findall(r"PSX_MISS_[A-Z_]+", " ".join(exits)))
 assert used == set(reasons), f"reasons never counted: {sorted(set(reasons) - used)}"
-macro = re.search(r"#define DISP_MISS\(reason\)\s+do \{ s_disp_miss\[DISP_KERNEL\(\) \? 1 : 0\]\[\(reason\)\]\+\+; DISP_INTERP\(\); \} while \(0\)",
+macro = re.search(r"#define DISP_MISS\(reason\)\s+do \{ s_disp_miss\[DISP_KERNEL\(\) \? 1 : 0\]\[\(reason\)\]\+\+; \} while \(0\)",
                   LOADER)
-assert macro, "DISP_MISS must count the reason and then the total, once each"
+assert macro, "DISP_MISS must count the reason, once, and nothing else"
+# The old totals are sums of the reasons, taken where they are read.
+assert "    if (interp) *interp = disp_miss_sum(1);" in LOADER, "the kernel share of disp_interp is the kernel row's sum"
+assert "*disp_interp     = disp_miss_sum(0) + disp_miss_sum(1);" in LOADER, "disp_interp is the sum of both rows"
 assert "static uint64_t s_disp_miss[2][PSX_INTERP_MISS_REASONS];" in LOADER
 assert re.search(r"void overlay_loader_get_miss_reasons\(uint64_t above_kernel\[PSX_INTERP_MISS_REASONS\],\s*"
                  r"uint64_t kernel\[PSX_INTERP_MISS_REASONS\]\)", LOADER), "the report reads the reasons through this getter"
