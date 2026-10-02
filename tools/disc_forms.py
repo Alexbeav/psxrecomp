@@ -18,17 +18,18 @@ the kit, or the file is refused. A kit gives it in optional keys::
     [prepare_disc]
     track_sizes   = [527385600, 34809600, 41395200]   # bytes of each track file
     track_pregaps = [0, 150, 150]                     # frames; this is the default
-    track_counts  = [3]                               # tracks per disc; only a set needs it
+    track_counts  = [3]                               # tracks per image; only several images need it
 
 ``track_sizes`` holds the size of every track as the one-file-per-track layout
 stores it (a later track's file begins with its pregap). Track 1 is the data
 track and every later track is CD audio. ``track_pregaps`` gives, per track,
 the frames between INDEX 00 and INDEX 01 inside the file; a negative value is
-a pregap that is NOT in the file (the cue's ``PREGAP`` line). A kit of several
-discs lists the tracks of all of them in disc order and says in
-``track_counts`` how many belong to each disc. A list is used only for a file
-it fits: the sizes of one disc add up to the file's length (and, where the file
-was recognised by its data track, that track is the list's first).
+a pregap that is NOT in the file (the cue's ``PREGAP`` line). A kit that
+accepts several images (the discs of a set, or one disc in two layouts) lists
+the tracks of all of them one after the other and says in ``track_counts`` how
+many belong to each. A list is used only for a file it fits: the sizes of one
+image add up to the file's length (and, where the file was recognised by its
+data track, that track is the list's first).
 """
 
 from __future__ import annotations
