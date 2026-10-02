@@ -485,6 +485,22 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             (unsigned long long)kp[4]);
     }
 
+    /* PS1B-408: a BREAK that entered the guest's own exception vector ran the
+     * game's handler where the run ended before. The count, and the PC and
+     * code of the first one, show that it happened. */
+    {
+        extern void psx_break_guest_vector_stats(uint32_t out[3]);
+        uint32_t bg[3] = {0};
+        psx_break_guest_vector_stats(bg);
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"break_guest_vector\": {\n"
+            "    \"count\": %u,\n"
+            "    \"first_pc\": \"0x%08X\",\n"
+            "    \"first_code\": \"0x%05X\"\n"
+            "  },\n",
+            bg[0], bg[1], bg[2]);
+    }
+
 #ifdef _WIN32
     if (seh_info) {
         EXCEPTION_POINTERS *info = (EXCEPTION_POINTERS *)seh_info;

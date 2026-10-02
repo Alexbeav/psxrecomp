@@ -116,8 +116,12 @@ would have produced."
 
 A `break` that the interpreter executes raises exception code 9 through the
 guest's exception vector when the guest has installed its own stub there
-(`runtime/include/psx_break_vector.h`); a `break` in statically compiled code,
-in a branch delay slot, or under the BIOS's own vector ends the run with a report.
+(`runtime/include/psx_break_vector.h`); an interpreted `break` in a branch delay
+slot or under the BIOS's own vector, and a `break` in compiled BIOS code, ends
+the run with a report. Compiled game code (a kit's static functions and native
+overlay units) does neither: the game generator emits nothing for a `break`, so
+it is skipped there (PS1B-412). The run report counts the vector entries
+(`break_guest_vector`).
 
 ## The guiding rule: precision over recall
 

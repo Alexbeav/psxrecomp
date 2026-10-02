@@ -17,9 +17,14 @@
  * vector, a plain `j handler` included, is not entered.
  *
  * Only the interpreter calls this, and not for a BREAK in a branch delay slot
- * (EPC and BD would need the branch). A BREAK in statically compiled code
- * keeps the fatal report: its handler would return to EPC+4 in the middle of
- * a compiled function, which is neither an entry nor a call return.
+ * (EPC and BD would need the branch). The other executors do not come here:
+ *   - compiled BIOS code calls psx_break (strict_translator.cpp) and keeps the
+ *     fatal report: a handler would return to EPC+4 in the middle of a
+ *     compiled function, which is neither an entry nor a call return;
+ *   - compiled game code, which is a kit's static functions and every native
+ *     overlay unit, executes nothing for a BREAK: the game generator emits a
+ *     comment (code_generator.cpp), so the BREAK is skipped, with no report
+ *     and no handler (PS1B-412).
  *
  * Returns 1 with the exception entered: EPC is the BREAK's own PC, Cause
  * holds code 9 with BD clear, the SR mode bits are pushed, and cpu->pc is the

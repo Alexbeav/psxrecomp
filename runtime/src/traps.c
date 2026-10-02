@@ -1255,11 +1255,32 @@ void psx_break(CPUState* cpu, uint32_t code, uint32_t pc) {
 
 /* The interpreter's BREAK asks here first (psx_break_vector.h, PS1G-74): 1
  * means the guest's own vector was entered and cpu->pc holds it. psx_break
- * above stays the only outcome of a BREAK in statically compiled code. */
+ * above stays the outcome of a BREAK in compiled BIOS code. Compiled game
+ * code does not come here: the game generator emits nothing for a BREAK
+ * (PS1B-412).
+ *
+ * The run report states how often the vector was entered and where first
+ * (crash_trace.c), so a title that later hangs in its handler leaves a trace. */
+static uint32_t s_break_guest_count, s_break_guest_first_pc, s_break_guest_first_code;
+
 int psx_break_enter_guest_vector(CPUState* cpu, uint32_t pc) {
     psx_load_value_commit(cpu);
-    return psx_break_vector_enter(cpu, pc, psx_get_in_exception(),
-                                  source_gpu_runtime_active());
+    if (!psx_break_vector_enter(cpu, pc, psx_get_in_exception(),
+                                source_gpu_runtime_active()))
+        return 0;
+    if (s_break_guest_count == 0u) {
+        s_break_guest_first_pc = pc;
+        s_break_guest_first_code = (cpu->read_word(pc) >> 6) & 0xFFFFFu;
+    }
+    if (s_break_guest_count != 0xFFFFFFFFu) s_break_guest_count++;
+    return 1;
+}
+
+/* out[0] entries, out[1] the first BREAK's PC, out[2] its 20-bit code. */
+void psx_break_guest_vector_stats(uint32_t out[3]) {
+    out[0] = s_break_guest_count;
+    out[1] = s_break_guest_first_pc;
+    out[2] = s_break_guest_first_code;
 }
 
 void psx_arith_overflow(CPUState* cpu) {
