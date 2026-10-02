@@ -165,7 +165,12 @@ if(BUILD_TESTING)
     add_executable(input_instruction_histogram_test tests/test_input_instruction_histogram.c)
     target_include_directories(input_instruction_histogram_test PRIVATE include)
     add_test(NAME input_instruction_histogram_test COMMAND input_instruction_histogram_test)
+    add_executable(break_vector_enter_test tests/test_break_vector_enter.c)
+    target_include_directories(break_vector_enter_test PRIVATE include)
+    add_test(NAME break_vector_enter_test COMMAND break_vector_enter_test)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME break_guest_vector_interp_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_break_guest_vector_interp.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME biohazard_checkpoint_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_biohazard_checkpoint.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME interp_refused_text_handoff_test COMMAND ${Python3_EXECUTABLE}
