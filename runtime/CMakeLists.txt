@@ -1059,6 +1059,19 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
              COMMAND autocompile_handle_inherit_test)
     set_tests_properties(autocompile_handle_inherit_test PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 120)
+    # PS1B-380: the compile results of a start reach the run report. A driver
+    # that prints compile_overlays.py's own lines runs through the real spawn,
+    # pipe and parser on every platform.
+    add_executable(autocompile_report_test
+        tests/test_autocompile_report.c
+        src/autocompile.c)
+    target_include_directories(autocompile_report_test PRIVATE include)
+    if(NOT WIN32)
+        find_package(Threads REQUIRED)
+        target_link_libraries(autocompile_report_test PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME autocompile_report_test COMMAND autocompile_report_test)
+    set_tests_properties(autocompile_report_test PROPERTIES TIMEOUT 120)
 
     # ---- previously-unregistered standalone tests -------------------------
     # These 16 existed in runtime/tests/ with no add_test() entry. Their only
