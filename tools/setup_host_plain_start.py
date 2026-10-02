@@ -119,7 +119,7 @@ def main(argv=None):
         print('setup host plain start: PASS (%s; %s)' % (text, exe))
         return 0
     if verdict == 'cannot-run':
-        print('setup host plain start: NOT CHECKED: %s' % text)
+        print('setup host plain start: NOT CHECKED: %s; %s' % (text, exe))
         return CANNOT_RUN
     print('setup host plain start: FAIL: %s (%s)' % (text, exe))
     for line in lines[-20:]:

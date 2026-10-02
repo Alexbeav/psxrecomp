@@ -986,7 +986,12 @@ plain_start_gate() {
     echo "error: no python3 on PATH; the staged setup program could not be started" >&2
     exit 1
   fi
-  for candidate in "${STAGE}/${EXE_BASENAME}" "${STAGE}/${EXE_NAME}.exe" "${STAGE}/${EXE_NAME}"; do
+  # The name with .exe comes FIRST. Under Git Bash and MSYS2, [[ -f X ]] is
+  # also true when only X.exe exists, and EXE_BASENAME is then the name without
+  # the extension (the host lookup above meets the same rule). A path without
+  # .exe names no file for a Windows program such as python: the gate reported
+  # "no such file" and stopped every Windows setup package (PS1B-366).
+  for candidate in "${STAGE}/${EXE_NAME}.exe" "${STAGE}/${EXE_BASENAME}" "${STAGE}/${EXE_NAME}"; do
     if [[ -f "${candidate}" ]]; then host="${candidate}"; break; fi
   done
   if [[ -z "${host}" ]]; then
