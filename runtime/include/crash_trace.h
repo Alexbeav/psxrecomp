@@ -36,6 +36,14 @@ void psx_fatal_halt(const char *reason);
  * external reader can tell a fatal halt from a wedge. NULL = healthy. */
 extern const char *g_psx_fatal_reason;
 
+/* What main() found in the player's settings.toml, for the run report
+ * (PS1B-400): the file's settings_format (0 when the file or the line is
+ * absent), the format this build writes, and whether fast_boot / bios_hle
+ * lines were dropped as an old launcher's echo (PS1B-360). The report then
+ * carries a "settings" object with a sentence for that case. */
+void psx_crash_trace_note_settings(int file_format, int current_format,
+                                   int boot_keys_ignored);
+
 #ifdef __cplusplus
 }
 #endif

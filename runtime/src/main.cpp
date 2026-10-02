@@ -15691,6 +15691,10 @@ int main(int argc, char** argv) {
                 "game's own values are used. The lines are dropped on the next "
                 "settings save. To choose a value yourself, add the line again "
                 "after that save.\n");
+        /* A product keeps no stdout: the run report says it too (PS1B-400). */
+        psx_crash_trace_note_settings(us.settings_format,
+                                      PSXRecompV4::UserSettings::kFormat,
+                                      us.boot_keys_were_echoes ? 1 : 0);
         if (us.has_fast_boot)      { fast_boot = us.fast_boot; settings_chose_fast_boot = true; }
         if (us.has_bios_hle)       { bios_hle  = us.bios_hle;  settings_chose_bios_hle  = true; }
         if (us.has_fullscreen)     g_fullscreen      = us.fullscreen;
