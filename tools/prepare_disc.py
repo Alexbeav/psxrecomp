@@ -729,6 +729,16 @@ def main() -> int:
                     print(disc_forms.no_track_list_sentence(src.name), file=sys.stderr)
                     return 1
                 print(f"  no usable cue: track list of {len(kit_table)} track(s) taken from the kit")
+    elif (cfg.known and kind == "bin2352" and len(cue_bins) < 2
+          and (cue_src is None or cue_track_count(cue_src) < 2)):
+        # The whole file is a listed image, and no cue lists its tracks. A kit
+        # that lists the whole-disc image of a multi-track disc reaches here
+        # with that one file: with the kit's track list it is staged whole,
+        # with its CD audio. Without one it is staged as one track, as before.
+        kit_table = disc_forms.kit_track_table(cfg.prep, src_size)
+        if kit_table is not None:
+            print(f"  one file holds every track and no cue lists them: "
+                  f"track list of {len(kit_table)} track(s) taken from the kit")
 
     # Bind the selected CUE basename, not its first track's basename.
     try:

@@ -13,16 +13,22 @@ such a file, and writes the sentence for a disc that really is another one.
 
 Such a file says nothing about where its tracks begin: the cue does. With no
 cue (or a cue that calls the whole file one track) the track list comes from
-the kit, or the file is refused. A kit gives it in two optional keys::
+the kit, or the file is refused. A kit gives it in optional keys::
 
     [prepare_disc]
     track_sizes   = [527385600, 34809600, 41395200]   # bytes of each track file
     track_pregaps = [0, 150, 150]                     # frames; this is the default
+    track_counts  = [3]                               # tracks per disc; only a set needs it
 
 ``track_sizes`` holds the size of every track as the one-file-per-track layout
 stores it (a later track's file begins with its pregap). Track 1 is the data
-track and every later track is CD audio. The list is used only for a file it
-fits: track 1 is a listed data track and the sizes add up to the file's length.
+track and every later track is CD audio. ``track_pregaps`` gives, per track,
+the frames between INDEX 00 and INDEX 01 inside the file; a negative value is
+a pregap that is NOT in the file (the cue's ``PREGAP`` line). A kit of several
+discs lists the tracks of all of them in disc order and says in
+``track_counts`` how many belong to each disc. A list is used only for a file
+it fits: the sizes of one disc add up to the file's length (and, where the file
+was recognised by its data track, that track is the list's first).
 """
 
 from __future__ import annotations
@@ -37,8 +43,9 @@ AUDIO_PREGAP_FRAMES = 150
 
 # (size, md5, sha1) of one listed image; "" or 0 where the kit lists none.
 Known = tuple[int, str, str]
-# (track number, is audio, frame of INDEX 00, frame of INDEX 01) in the one file.
-TrackEntry = tuple[int, bool, int, int]
+# (track number, is audio, frame of INDEX 00, frame of INDEX 01, frames of a
+# pregap that is not in the file) for one track in the one file.
+TrackEntry = tuple[int, bool, int, int, int]
 
 
 def cue_track_count(cue_path: Path) -> int:
@@ -78,36 +85,62 @@ def no_track_list_sentence(name: str) -> str:
     )
 
 
-def kit_track_table(prep: dict[str, Any], image_size: int, track1_size: int) -> Optional[list[TrackEntry]]:
-    """The track list of a one-file disc from the kit's own values, or None.
-
-    Only a list that fits the file counts: its first track is the listed data
-    track and its tracks add up to the file's length. Anything else is None,
-    and the caller refuses the file rather than guess where a track begins.
-    """
+def _kit_track_lists(prep: dict[str, Any]) -> list[tuple[list[int], list[int]]]:
+    """The kit's track lists, one (sizes, pregaps) per disc; [] when the keys
+    are absent or do not agree with each other."""
     sizes = prep.get("track_sizes")
     pregaps = prep.get("track_pregaps")
-    if not isinstance(sizes, list) or len(sizes) < 2:
-        return None
-    if pregaps is None:
-        pregaps = [0] + [AUDIO_PREGAP_FRAMES] * (len(sizes) - 1)
-    if not isinstance(pregaps, list) or len(pregaps) != len(sizes):
-        return None
-    if not all(type(v) is int for v in list(sizes) + list(pregaps)):
-        return None
-    if any(s <= 0 or s % RAW_SECTOR for s in sizes):
-        return None
-    if sizes[0] != track1_size or sum(sizes) != image_size:
-        return None
-    table: list[TrackEntry] = []
-    frame = 0
-    for number, (size, gap) in enumerate(zip(sizes, pregaps), start=1):
-        frames = size // RAW_SECTOR
-        if gap < 0 or gap >= frames:
-            return None
-        table.append((number, number > 1, frame, frame + gap))
-        frame += frames
-    return table
+    counts = prep.get("track_counts")
+    if not isinstance(sizes, list) or not sizes:
+        return []
+    if counts is None:
+        counts = [len(sizes)]
+    if not isinstance(counts, list) or not all(type(c) is int and c > 0 for c in counts):
+        return []
+    if sum(counts) != len(sizes):
+        return []
+    if pregaps is not None and (not isinstance(pregaps, list) or len(pregaps) != len(sizes)):
+        return []
+    if not all(type(v) is int for v in list(sizes) + list(pregaps or [])):
+        return []
+    out: list[tuple[list[int], list[int]]] = []
+    at = 0
+    for count in counts:
+        disc_sizes = sizes[at:at + count]
+        disc_gaps = (pregaps[at:at + count] if pregaps is not None
+                     else [0] + [AUDIO_PREGAP_FRAMES] * (count - 1))
+        out.append((disc_sizes, disc_gaps))
+        at += count
+    return out
+
+
+def kit_track_table(prep: dict[str, Any], image_size: int,
+                    track1_size: Optional[int] = None) -> Optional[list[TrackEntry]]:
+    """The track list of a one-file disc from the kit's own values, or None.
+
+    Only a list that fits the file counts: the tracks of one disc add up to
+    the file's length, and its first track is ``track1_size`` when the caller
+    recognised the file by that data track. Anything else is None, and the
+    caller does not guess where a track begins.
+    """
+    for sizes, pregaps in _kit_track_lists(prep):
+        if len(sizes) < 2 or any(s <= 0 or s % RAW_SECTOR for s in sizes):
+            continue
+        if sum(sizes) != image_size or (track1_size is not None and sizes[0] != track1_size):
+            continue
+        table: list[TrackEntry] = []
+        frame = 0
+        for number, (size, gap) in enumerate(zip(sizes, pregaps), start=1):
+            frames = size // RAW_SECTOR
+            stored = gap if gap > 0 else 0
+            if stored >= frames or (number == 1 and gap != 0):
+                table = []
+                break
+            table.append((number, number > 1, frame, frame + stored, -gap if gap < 0 else 0))
+            frame += frames
+        if table:
+            return table
+    return None
 
 
 def _msf(frames: int) -> str:
@@ -117,8 +150,10 @@ def _msf(frames: int) -> str:
 def rebuilt_cue(bin_name: str, table: Sequence[TrackEntry]) -> str:
     """Cue text for one file that holds the tracks of ``table``."""
     lines = [f'FILE "{bin_name}" BINARY']
-    for number, audio, index00, index01 in table:
+    for number, audio, index00, index01, not_in_file in table:
         lines.append(f"  TRACK {number:02d} {'AUDIO' if audio else 'MODE2/2352'}")
+        if not_in_file:
+            lines.append(f"    PREGAP {_msf(not_in_file)}")
         if index00 != index01:
             lines.append(f"    INDEX 00 {_msf(index00)}")
         lines.append(f"    INDEX 01 {_msf(index01)}")

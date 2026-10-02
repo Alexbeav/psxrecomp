@@ -286,7 +286,7 @@ class DiscFormsTests(unittest.TestCase):
         t1, total = 300 * SECTOR, 1000 * SECTOR
         table = disc_forms.kit_track_table({"track_sizes": [t1, 400 * SECTOR, 300 * SECTOR]}, total, t1)
         # Track 1 is data; later tracks are audio with the 150-frame pregap.
-        self.assertEqual(table, [(1, False, 0, 0), (2, True, 300, 450), (3, True, 700, 850)])
+        self.assertEqual(table, [(1, False, 0, 0, 0), (2, True, 300, 450, 0), (3, True, 700, 850, 0)])
         self.assertEqual(disc_forms.rebuilt_cue("Game.bin", table),
                          'FILE "Game.bin" BINARY\n'
                          "  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"
@@ -301,9 +301,75 @@ class DiscFormsTests(unittest.TestCase):
             {"track_sizes": [t1, 700 * SECTOR], "track_pregaps": [0]},   # lists of unequal length
             {"track_sizes": [t1, 700 * SECTOR], "track_pregaps": [0, 700]},  # pregap fills the track
             {"track_sizes": [t1, "700"]},                              # not numbers
+            {"track_sizes": [t1, 700 * SECTOR], "track_pregaps": [150, 150]},  # a pregap on the data track
+            {"track_sizes": [t1, 700 * SECTOR], "track_counts": [3]},    # counts that do not add up
+            {"track_sizes": [t1, 700 * SECTOR], "track_counts": [1, 1]},  # no disc of two tracks or more
         ]
         for prep in refused:
             self.assertIsNone(disc_forms.kit_track_table(prep, total, t1), prep)
+
+    def test_the_kits_track_list_of_a_set_and_of_unusual_pregaps(self):
+        # A set: the tracks of every disc in disc order, and how many belong to each.
+        a, b = [300 * SECTOR, 700 * SECTOR], [500 * SECTOR, 200 * SECTOR, 400 * SECTOR]
+        prep = {"track_sizes": a + b, "track_counts": [2, 3]}
+        self.assertEqual(disc_forms.kit_track_table(prep, sum(a), a[0]),
+                         [(1, False, 0, 0, 0), (2, True, 300, 450, 0)])
+        self.assertEqual(disc_forms.kit_track_table(prep, sum(b), b[0]),
+                         [(1, False, 0, 0, 0), (2, True, 500, 650, 0), (3, True, 700, 850, 0)])
+        # Recognised by the whole image, with no data track named: the sum decides.
+        self.assertEqual(len(disc_forms.kit_track_table(prep, sum(b))), 3)
+        self.assertIsNone(disc_forms.kit_track_table(prep, sum(a) + SECTOR))
+        self.assertIsNone(disc_forms.kit_track_table(prep, sum(a), b[0]))
+        # Pregaps per track, in frames: another length than 150, none, and one
+        # that is not in the file (negative: the cue's PREGAP line).
+        prep = {"track_sizes": [300 * SECTOR, 1000 * SECTOR, 200 * SECTOR, 200 * SECTOR],
+                "track_pregaps": [0, 833, 0, -150]}
+        table = disc_forms.kit_track_table(prep, 1700 * SECTOR, 300 * SECTOR)
+        self.assertEqual(table, [(1, False, 0, 0, 0), (2, True, 300, 1133, 0),
+                                 (3, True, 1300, 1300, 0), (4, True, 1500, 1500, 150)])
+        self.assertEqual(disc_forms.rebuilt_cue("Game.bin", table),
+                         'FILE "Game.bin" BINARY\n'
+                         "  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"
+                         "  TRACK 02 AUDIO\n    INDEX 00 00:04:00\n    INDEX 01 00:15:08\n"
+                         "  TRACK 03 AUDIO\n    INDEX 01 00:17:25\n"
+                         "  TRACK 04 AUDIO\n    PREGAP 00:02:00\n    INDEX 01 00:20:00\n")
+
+    def test_a_listed_whole_disc_image_with_no_cue_is_staged_with_the_kits_track_list(self):
+        # A kit that lists the whole-disc image too: the one file is accepted
+        # as it always was. With no cue it was staged as one track, without CD
+        # audio; with the kit's track list it is staged whole.
+        whole = self.track1 + self.audio
+        base = self.config.read_text(encoding="utf-8").replace(
+            f"known_sizes = [{len(self.track1)}]", f"known_sizes = [{len(self.track1)}, {len(whole)}]").replace(
+            f'known_sha1 = ["{self.sha1}"]', f'known_sha1 = ["{self.sha1}", "{hashlib.sha1(whole).hexdigest()}"]').replace(
+            f'known_md5 = ["{self.md5}"]', f'known_md5 = ["{self.md5}", "{hashlib.md5(whole).hexdigest()}"]')
+        self.assertIn(str(len(whole)), base)
+        # Until the kit carries the key, today's behaviour: one track.
+        self.config.write_text(base, encoding="utf-8")
+        picked = self.lone_bin(None, "whole-no-list")
+        out = self.root / "out-whole-no-list"
+        code, log = self.prepare(picked, out)
+        self.assertEqual(code, 0, log)
+        self.assertNotIn("taken from the kit", log)
+        self.assertEqual((out / "Staged.cue").read_text(encoding="utf-8").count("TRACK"), 1)
+        # With the kit's list: the same table the disc's own cue gives.
+        self.config.write_text(base + f"track_sizes = [{len(self.track1)}, {len(self.audio)}]\n"
+                               "track_pregaps = [0, 20]\n", encoding="utf-8")
+        picked = self.lone_bin(None, "whole-with-list")
+        out = self.root / "out-whole-with-list"
+        code, log = self.prepare(picked, out)
+        self.assertEqual(code, 0, log)
+        self.assertIn("track list of 2 track(s) taken from the kit", log)
+        self.assertEqual((out / "Staged.cue").read_text(encoding="utf-8"),
+                         self.single_cue.read_text(encoding="ascii"))
+        self.assertEqual((out / "Game.bin").read_bytes(), whole)
+        self.assertTrue((out / BOOT).is_file())
+        # A cue that lists the tracks still wins over the kit's list.
+        out = self.root / "out-whole-with-cue"
+        code, log = self.prepare(self.single_cue, out)
+        self.assertEqual(code, 0, log)
+        self.assertNotIn("taken from the kit", log)
+        self.assertEqual((out / "Staged.cue").read_text(encoding="utf-8").count("TRACK"), 2)
 
     def test_staging_one_file_per_track_is_unchanged(self):
         out = self.root / "out-multi"
