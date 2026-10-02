@@ -15,8 +15,8 @@ authored device transactions with:
 python tools/tasreplays/collect_nymashock_card.py PATH_TO_MEDNAFEN FRESH_OUTPUT --compiler g++
 ```
 
-The collector compiles the unmodified complete source `memcard.cpp`, its
-exact `InputDevice` base-method region from `frontio.cpp`, and the authored
+The collector compiles the unmodified memory-card unit of that revision, the
+base-device region that it needs from the front-end I/O unit, and the authored
 serial-input fixture at O0 and O2. State serializer calls abort. No BIOS,
 disc, retail input, save data or full emulator execution is involved. The
 collector verifies both repository revisions and clean trees and records
@@ -34,7 +34,7 @@ final complete 128 KiB buffer is checked with SHA-256.
 The source profile corrects these differences from the existing default:
 
 - ACK requests use 256 cycles; DSR stays active for 32 cycles independently
-  of status reads. The source `FrontIO::Update` supplies that pulse-width
+  of status reads. The source's front-end I/O update supplies that pulse-width
   contract. The native clock fixture checks boundaries, oversized advances,
   an already-pending INTC IRQ, IRQ-disabled pulses, and DTR cancellation.
 - Reads echo the high address byte. Invalid reads echo `FFFF`, then stop
@@ -55,6 +55,6 @@ use. The default model is compared to a frozen pre-correction baseline, and
 the earlier controller profiles retain their own tests.
 
 This is device-component qualification. The source fixture does not execute
-the complete FrontIO scheduler, all device combinations, full game timing,
+the complete front-end I/O scheduler, all device combinations, full game timing,
 or a Bio Hazard TAS/progression-save gate. Source/native full RAM and clock
 comparisons remain required before any title-level pass.

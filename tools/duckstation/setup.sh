@@ -87,22 +87,18 @@ log "normalizing absolute paths in prebuilt deps metadata..."
 python3 "$REPO_ROOT/tools/fix_duckstation_deps_paths.py" "$DEPS_DIR" >/dev/null
 
 # ---- Step 4: apply PSXRecomp oracle patch ----
+# The patch holds added lines only, so it applies by line number. oracle_patch.py
+# checks that each file is the pinned upstream file first, makes the line edits
+# listed in pin.json, and applies the patch. It reports "already applied" when
+# there is nothing to do.
 cd "$DUCK"
-if git apply --check "$PATCH" >/dev/null 2>&1; then
-    log "applying PSXRecomp oracle patch..."
-    git apply "$PATCH"
-else
-    # Either already applied, or conflicts. Distinguish:
-    if git apply --reverse --check "$PATCH" >/dev/null 2>&1; then
-        log "oracle patch already applied"
-    else
-        log "ERROR: oracle patch does not apply cleanly and is not already applied."
-        log "  - upstream commit may have moved past the pinned base"
-        log "  - or the patch itself was regenerated against a different base"
-        log "  patch: $PATCH"
-        log "  duck HEAD: $(git rev-parse HEAD)"
-        exit 1
-    fi
+if ! python3 "$REPO_ROOT/tools/duckstation/oracle_patch.py" apply "$DUCK"; then
+    log "ERROR: oracle patch does not apply and is not already applied."
+    log "  - upstream commit may have moved past the pinned base"
+    log "  - or the patch itself was regenerated against a different base"
+    log "  patch: $PATCH"
+    log "  duck HEAD: $(git rev-parse HEAD)"
+    exit 1
 fi
 
 log "setup complete — run tools/duckstation/build.sh to compile"

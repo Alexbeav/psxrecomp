@@ -30,9 +30,9 @@ typedef struct SpuDebugInfo {
 
 void spu_debug_info(SpuDebugInfo* out);
 
-/* ---- Per-voice register snapshot. Mirrors the fields the Beetle oracle
- * exposes via PS_SPU::GetRegister(GSREG_V0_*) so both backends produce a
- * structurally-identical spu_voices payload that diff tooling can compare. */
+/* ---- Per-voice register snapshot. Field-compatible with the spu_voices
+ * payload of the oracle debug server, so that diff tooling can compare the
+ * two processes. */
 typedef struct SpuVoiceState {
     int      active;        /* our internal "is voicing" flag (no ADSR yet) */
     uint16_t vol_ctrl_l;    /* raw voice reg 0 */

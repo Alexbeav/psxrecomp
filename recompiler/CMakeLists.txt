@@ -1066,6 +1066,16 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_staged_tree_private_paths.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The DuckStation oracle patch must hold added lines only: a context
+        # line or a removed line is a line of upstream's source (PS1B-216).
+        # This runs the patch-form tests of the oracle tool's test file; its
+        # other tests are run by hand and are not part of this gate.
+        add_test(
+            NAME duckstation_oracle_patch_form
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_duckstation_oracle.py
+                    TestOraclePatch
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME app_icon_rc_spaces
             COMMAND ${Python3_EXECUTABLE}

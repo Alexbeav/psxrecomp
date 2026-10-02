@@ -18,9 +18,9 @@ not a claim about guest-visible controller bytes or execution equivalence.
 Physical Analog is a button, not the guest-owned digital/analog mode.
 
 The exact source bridge needs separate delivery qualification. In BizHawk
-2.9.1 (`745efb1d`), Nymashock.AddAxis writes the log byte into the high byte
-of a16-bit field. The pinned Nyma Mednafen submodule (`ddf225cf`) then maps
-that16-bit value with `(value *255 +32767)/65535` in DualShock.UpdateInput.
+2.9.1 (`745efb1d`), the front end writes the log byte into the high byte
+of a16-bit field. The pinned Nyma Mednafen submodule (`ddf225cf`) then scales
+that16-bit value back to8 bits, with rounding.
 Consequently raw values129..255 deliver128..254;0..128 remain unchanged.
 The older Octoshock source tree is not evidence for this Nymashock bridge.
 Power starts the DualShock in digital mode with mode locking disabled.
@@ -62,8 +62,8 @@ in digital, analog and config modes. It is separate from the existing
 Octoshock digital profile; default behavior and card timing stay unchanged.
 
 The authored source fixture compiled the unmodified DualShock translation
-unit from Mednafen `ddf225cf63b7b355cb2ac7772450cf473f4b53ac`, with the exact
-InputDevice base-method region from FrontIO. It uses ordinary controller
+unit from Mednafen `ddf225cf63b7b355cb2ac7772450cf473f4b53ac`, with the
+base-device region that it needs from the front-end I/O unit. It uses ordinary controller
 input and serial configuration commands, with state serialization guarded
 by aborting link stubs. It does not execute a full core or a game.
 
@@ -75,8 +75,8 @@ With the explicit profile, every complete transaction and delay matches
 at O0/O2. The default170-cycle negative control remains covered. The
 registered deadline test also checks both source profiles' read-independent
 32-cycle pulse, IRQ enable behavior and preservation of unrelated IRQ bits.
-FrontIO's pinned source Update method supplies the32-cycle pulse contract;
-the extracted base-method fixture does not independently execute FrontIO's
+The pinned source's front-end I/O update supplies the32-cycle pulse contract;
+the extracted base-method fixture does not independently execute that
 scheduler. Full source/native guest timing remains a separate acceptance gate.
 
 The checked-in transaction golden is authored data. Its SHA256 after newline

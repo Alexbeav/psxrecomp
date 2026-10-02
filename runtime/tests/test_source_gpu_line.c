@@ -40,11 +40,11 @@ int main(void) {
     assert(source_gpu_command_write(&s,0x4000ff00));assert(source_gpu_command_write(&s,0x00a20054));
     assert(source_gpu_command_write(&s,0x00a20054));assert(s.count==3 && !s.dispatch.kind);
     assert(source_gpu_command_update(&s,1));assert(!s.count && s.budget==-17);
-    /* Poly-lines. LINE_HELPER gives every entry in 0x40-0x5F the same len, 3 + goraud, so an
-     * opening poly-line packet is its two-vertex counterpart's shape; INCMD_PLINE then takes
-     * 1 + goraud words per segment until a terminator word, tested before the segment length.
-     * The main FIFO tail's -2 is never reached from that branch, so only the opening packet
-     * pays it: the opening line here costs 2 + 16 + 2*16 = 50 and each segment 16 + 2*16 = 48. */
+    /* Poly-lines. Every command in 40h-5Fh has the length of its two-vertex line: 3 words,
+     * plus 1 when shaded. So an opening poly-line packet has a single line's shape. After it,
+     * each segment takes 1 word, plus 1 when shaded, until a terminator word; the terminator
+     * is tested before the segment length. Only the opening packet pays the per-command
+     * cost of 2: the opening line here costs 50 and each later segment 48. */
     source_gpu_command_cold(&s);
     s.budget=4096;s.clip_x1=1023;s.clip_y1=511;
     assert(source_gpu_command_length(0x48000000u)==3);
