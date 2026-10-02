@@ -49,7 +49,8 @@ Template: [`templates/game-release.yml`](templates/game-release.yml).
    as `licenses/recomp-ui-LICENSE` and its font/image notices as
    `assets/{fonts,img}/NOTICE.md`); refuse if anything kit-shaped is in the
    stage; sign on Windows; zip.
-6. Verify the zip: executable + OpenBIOS + catalog present; no `psxrecomp/`,
+6. Verify the zip: executable + OpenBIOS + catalog + recomp-ui license and
+   font/image notices present; no `psxrecomp/`,
    `recomp-ui/`, CLI, emitters at the root, sources, generated C, dumps,
    per-machine mod state.
 

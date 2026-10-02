@@ -384,16 +384,14 @@ fi
 if ! grep -qs '^PSX_RECOMP_UI:BOOL=OFF' "${BUILD_DIR}/CMakeCache.txt"; then
   UI_ROOT="$(sed -n 's/^RECOMP_UI_ROOT:[A-Z]*=//p' "${BUILD_DIR}/CMakeCache.txt" 2>/dev/null | head -n1 || true)"
   [[ -n "${UI_ROOT}" && -f "${UI_ROOT}/recomp_ui.cmake" ]] || UI_ROOT="${ROOT}/recomp-ui"
-  if [[ -f "${UI_ROOT}/recomp_ui.cmake" ]]; then
-    [[ -f "${UI_ROOT}/LICENSE" ]] || { echo "error: ${UI_ROOT}/LICENSE missing" >&2; exit 1; }
-    cp -a "${UI_ROOT}/LICENSE" "${STAGE}/licenses/recomp-ui-LICENSE"
-    for sub in fonts img; do
-      notice="${UI_ROOT}/assets/common/${sub}/NOTICE.md"
-      if [[ -f "${notice}" && -d "${STAGE}/assets/${sub}" ]]; then
-        cp -a "${notice}" "${STAGE}/assets/${sub}/NOTICE.md"
-      fi
-    done
-  fi
+  [[ -f "${UI_ROOT}/recomp_ui.cmake" ]] || { echo "error: recomp-ui assets are staged but no recomp-ui tree found (RECOMP_UI_ROOT / ${ROOT}/recomp-ui)" >&2; exit 1; }
+  [[ -f "${UI_ROOT}/LICENSE" ]] || { echo "error: ${UI_ROOT}/LICENSE missing" >&2; exit 1; }
+  cp -a "${UI_ROOT}/LICENSE" "${STAGE}/licenses/recomp-ui-LICENSE"
+  for sub in fonts img; do
+    notice="${UI_ROOT}/assets/common/${sub}/NOTICE.md"
+    [[ -f "${notice}" ]] || { echo "error: ${notice} missing" >&2; exit 1; }
+    cp -a "${notice}" "${STAGE}/assets/${sub}/NOTICE.md"
+  done
 fi
 if [[ -z "$(ls -A "${STAGE}/licenses" 2>/dev/null)" ]]; then
   echo "error: no third-party notices staged (${FRAMEWORK}/runtime/licenses empty?)" >&2
