@@ -186,4 +186,42 @@ inline std::string disc_roster_value(
     return idx >= 0 && (size_t)idx < values.size() && !values[idx].empty()
         ? values[idx] : fallback;
 }
+
+// The serial the launcher's disc check expects of the image at `disc`.
+//
+// A build with no serial list expects its own serial (`fallback`) of every
+// image. A build with a list expects, of an image that IS in its disc list,
+// that entry's serial; of an image the list does not know it expects nothing
+// ("") -- disc_roster_outside_list() then judges that image by what was read.
+//
+// A kit as Studio builds it for a single-disc game carries a list of ONE entry
+// (`discs` and `disc_serials` of one), so it takes the list path: any other
+// file the player selects is "an image the list does not know".
+inline std::string disc_roster_expected_serial(
+    const std::vector<std::filesystem::path>& roster,
+    const std::vector<std::string>& serials, const std::vector<int>& program_discs,
+    const std::filesystem::path& disc, const std::string& fallback) {
+    if (serials.empty()) return fallback;
+    if (disc_roster_program_foreign(roster, program_discs, disc)) return fallback;
+    return disc_roster_value(roster, serials, disc, "");
+}
+
+// The judgement of an image for which no serial was expected: a readable image
+// outside the disc list of a build that lists a serial for every disc. `read`
+// is the serial found on the image. NotJudged for every other image; those are
+// judged by the serial that was expected of them.
+inline DiscSetSerial disc_roster_outside_list(
+    const std::vector<std::filesystem::path>& roster,
+    const std::vector<std::string>& serials, const std::filesystem::path& disc,
+    bool serial_expected, bool readable, const std::string& read) {
+    if (serial_expected || !readable || disc_roster_index(roster, disc) >= 0)
+        return DiscSetSerial::NotJudged;
+    return disc_roster_judge_serial(serials, roster.size(), read);
+}
+
+// Wrong disc: a serial was read and it is none the build lists. An image from
+// which no serial was read keeps the verdict it had.
+inline bool disc_roster_wrong_disc(DiscSetSerial judgement, const std::string& read) {
+    return judgement == DiscSetSerial::NotListed && !read.empty();
+}
 } // namespace PSXRecompV4

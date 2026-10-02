@@ -2478,12 +2478,8 @@ static std::string uppercase_ascii(std::string s);
  * here, which it is. */
 static std::string expected_serial_for_disc(const std::filesystem::path& disc,
                                             const std::string& fallback) {
-    if (g_disc_serials.empty()) return fallback;
-    if (PSXRecompV4::disc_roster_program_foreign(g_disc_metadata_roster,
-                                                 g_program_discs, disc))
-        return fallback;
-    return PSXRecompV4::disc_roster_value(
-        g_disc_metadata_roster, g_disc_serials, disc, "");
+    return PSXRecompV4::disc_roster_expected_serial(
+        g_disc_metadata_roster, g_disc_serials, g_program_discs, disc, fallback);
 }
 
 /* True when `disc` is an image that another program of the set boots: a set
@@ -10217,18 +10213,15 @@ namespace {
          * judged by its serial against every serial of the set. An image
          * that IS in the disc list is judged by its own entry, as before. */
         const PSXRecompV4::DiscSetSerial set_serial =
-            (!id.expected_serial_given && id.opened && id.has_header &&
-             PSXRecompV4::disc_roster_index(g_disc_metadata_roster,
-                                            std::filesystem::path(disc_path)) < 0)
-                ? PSXRecompV4::disc_roster_judge_serial(
-                      g_disc_serials, g_disc_metadata_roster.size(), id.detected_serial)
-                : PSXRecompV4::DiscSetSerial::NotJudged;
+            PSXRecompV4::disc_roster_outside_list(
+                g_disc_metadata_roster, g_disc_serials,
+                std::filesystem::path(disc_path), id.expected_serial_given,
+                id.opened && id.has_header, id.detected_serial);
         /* Wrong disc: a serial was read and it is none of the set's (Alex,
          * 2026-10-02). A disc from which no serial was read keeps the verdict
          * it had; the row and the sentence still say what is known. */
         const bool set_wrong_disc =
-            set_serial == PSXRecompV4::DiscSetSerial::NotListed &&
-            !id.detected_serial.empty();
+            PSXRecompV4::disc_roster_wrong_disc(set_serial, id.detected_serial);
 #if defined(RECOMP_LAUNCHER_HAS_SERIAL_STATUS)
         /* Whether the serial is one this build lists (PS1B-403). The launcher
          * ticked the Serial row for any serial, so a disc of another release

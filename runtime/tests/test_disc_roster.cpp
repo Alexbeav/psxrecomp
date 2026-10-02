@@ -128,9 +128,94 @@ int main() {
     CHECK(disc_roster_serial_list(two_discs) == "SLUS-00544, SLUS-00556");
     CHECK(disc_roster_serial_list(four_discs) == "SLPS-00700, SLPS-00701, SLPS-00702, SLPS-00703");
     CHECK(disc_roster_serial_list({"SLUS-00544", ""}) == "SLUS-00544");
+    // A kit as Studio builds it for a single-disc game (PS1B-403, Alex's look
+    // of 2026-10-02): game.toml carries `discs` and `disc_serials` of ONE entry
+    // beside `id`. It takes the list path, so every other file the player
+    // selects is "an image the list does not know". Before that image was
+    // judged, nothing was expected of it: another game's disc got a tick and
+    // PLAY was lit. The lines below are the launcher's own decisions
+    // (ae_disc_verify), with that kit's lists and Alex's two files.
+    {
+        struct Kit { const char* disc; const char* other; const char* copy; const char* renamed; bool native; };
+        const Kit kits[] = {
+            // as game.toml has them on Windows
+            {"Z:\\Emulators\\PS1 Games\\Diablo (Europe) (En,Fr,De,Sv).chd",
+             "Z:\\Emulators\\PS1 Games\\Alien Resurrection (Europe) (En,Fr,De,Es,It).chd",
+             "D:\\My discs\\diablo-pal.chd",
+             "D:\\My discs\\Diablo (Europe) (En,Fr,De,Sv).cue",
+#if defined(_WIN32)
+             true},
+#else
+             false},   // a backslash is not a separator here: the folder is part of the name
+#endif
+            {"/games/ps1/Diablo (Europe) (En,Fr,De,Sv).chd",
+             "/games/ps1/Alien Resurrection (Europe) (En,Fr,De,Es,It).chd",
+             "/home/player/diablo-pal.chd",
+             "/home/player/Diablo (Europe) (En,Fr,De,Sv).cue", true},
+        };
+        const std::vector<std::string> one_serial_list = {"SLES-01156"};
+        const std::vector<int> no_programs;
+        const std::string id = "SLES-01156";
+        for (const Kit& kit : kits) {
+            const std::vector<std::filesystem::path> one_disc = {kit.disc};
+            // What the launcher decides for `file` when `read` is the serial on it.
+            struct Decision { std::string expected; DiscSetSerial outside; bool wrong; };
+            const auto decide = [&](const char* file, const std::string& read, bool readable) {
+                Decision d;
+                d.expected = disc_roster_expected_serial(one_disc, one_serial_list, no_programs, file, id);
+                d.outside = disc_roster_outside_list(one_disc, one_serial_list, file,
+                                                     !d.expected.empty(), readable, read);
+                d.wrong = disc_roster_wrong_disc(d.outside, read);
+                return d;
+            };
+            // Another game's disc: nothing is expected of it by the list, so it
+            // is judged by the serial read. Not listed, the wrong disc.
+            Decision d = decide(kit.other, "SLES-02913", true);
+            CHECK(d.expected.empty());
+            CHECK(d.outside == DiscSetSerial::NotListed);
+            CHECK(d.wrong);
+            CHECK(disc_roster_serial_list(one_serial_list) == "SLES-01156");   // the sentence's "needs"
+            // The kit's own image: its entry's serial is expected, as before.
+            d = decide(kit.disc, "SLES-01156", true);
+            CHECK(d.expected == "SLES-01156" && d.outside == DiscSetSerial::NotJudged && !d.wrong);
+            // A copy of the right disc under another name: listed, accepted.
+            d = decide(kit.copy, "SLES-01156", true);
+            CHECK(d.expected.empty() && d.outside == DiscSetSerial::Listed && !d.wrong);
+            // The same file name in another folder is the list's image: judged
+            // by its entry, so another game's disc under that name is refused
+            // by the expected serial (identify_disc compares it).
+            d = decide(kit.renamed, "SLES-02913", true);
+            if (kit.native)
+                CHECK(d.expected == "SLES-01156" && d.outside == DiscSetSerial::NotJudged);
+            else   // then it is an image outside the list, and refused as one
+                CHECK(d.expected.empty() && d.wrong);
+            // No serial read (an audio CD, a data disc that is not a game):
+            // the row says not listed; the verdict stays what it was.
+            d = decide(kit.other, "", true);
+            CHECK(d.outside == DiscSetSerial::NotListed && !d.wrong);
+            // A file that did not open says nothing more: its ISO header row
+            // is the reason, and the verdict is already "bad".
+            d = decide(kit.other, "", false);
+            CHECK(d.outside == DiscSetSerial::NotJudged && !d.wrong);
+        }
+        // A build with no list at all expects its own serial of every image.
+        const std::vector<std::filesystem::path> none;
+        const std::vector<std::string> no_list;
+        CHECK(disc_roster_expected_serial(none, no_list, no_programs, kits[0].other, id) == id);
+        CHECK(disc_roster_outside_list(none, no_list, kits[0].other, true, true, "SLES-02913")
+              == DiscSetSerial::NotJudged);
+        // A program of a set: the other program's disc is judged against this
+        // program's own serial, as before.
+        const std::vector<std::string> re2 = {"SLUS-00748", "SLUS-00756"};
+        const std::vector<std::filesystem::path> re2_discs = {"d/RE2 (Disc 1).chd", "d/RE2 (Disc 2).chd"};
+        CHECK(disc_roster_expected_serial(re2_discs, re2, {1}, re2_discs[1], "SLUS-00748") == "SLUS-00748");
+        CHECK(disc_roster_expected_serial(re2_discs, re2, {1}, re2_discs[0], "SLUS-00748") == "SLUS-00748");
+        CHECK(disc_roster_expected_serial(re2_discs, re2, {}, re2_discs[1], "SLUS-00748") == "SLUS-00756");
+    }
+
     // A set that does not list a serial for every disc cannot judge: a copy of
-    // the unlisted disc would be called wrong. So can no single-disc build
-    // (no list at all): it expects its own serial and never comes here.
+    // the unlisted disc would be called wrong. Nor can a build with no list at
+    // all: it expects its own serial and never comes here.
     CHECK(disc_roster_judge_serial({"SLUS-00544", ""}, 2, "SLES-03398") == DiscSetSerial::NotJudged);
     CHECK(disc_roster_judge_serial({"SLUS-00544"}, 2, "SLES-03398") == DiscSetSerial::NotJudged);
     CHECK(disc_roster_judge_serial({"SLUS-00544"}, 2, "SLUS-00544") == DiscSetSerial::NotJudged);

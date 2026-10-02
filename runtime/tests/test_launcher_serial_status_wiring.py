@@ -68,23 +68,37 @@ assert block.index("out->expected_serials") > readable
 judged = body.index("const PSXRecompV4::DiscSetSerial set_serial =")
 assert judged < guard, "the set judgement must not sit inside the launcher's #if"
 judgement = body[judged:guard]
+# The two decisions are functions of disc_roster.h, so that test_disc_roster.cpp
+# runs what the launcher runs, with the lists a real kit carries. A kit that
+# Studio builds for a single-disc game has a disc list of ONE entry: it takes
+# this path for every other file the player selects. The first look-build of
+# PS1B-403 was made before this judgement existed and ticked another game's
+# disc (Alex's look, 2026-10-02).
 assert re.search(
-    r"\(!id\.expected_serial_given && id\.opened && id\.has_header &&\s*"
-    r"PSXRecompV4::disc_roster_index\(g_disc_metadata_roster,\s*"
-    r"std::filesystem::path\(disc_path\)\) < 0\)",
+    r"PSXRecompV4::disc_roster_outside_list\(\s*g_disc_metadata_roster, g_disc_serials,\s*"
+    r"std::filesystem::path\(disc_path\), id\.expected_serial_given,\s*"
+    r"id\.opened && id\.has_header, id\.detected_serial\);",
     judgement,
 ), "only an image outside the disc list, that opened, with no expected serial, is judged by the set"
-assert re.search(
-    r"PSXRecompV4::disc_roster_judge_serial\(\s*g_disc_serials, g_disc_metadata_roster\.size\(\), id\.detected_serial\)",
-    judgement,
-)
 # Wrong disc (Alex, 2026-10-02): a serial was read and it is none of the set's.
 # A disc from which no serial was read keeps the verdict it had.
 assert re.search(
-    r"const bool set_wrong_disc =\s*set_serial == PSXRecompV4::DiscSetSerial::NotListed &&\s*"
-    r"!id\.detected_serial\.empty\(\);",
+    r"const bool set_wrong_disc =\s*"
+    r"PSXRecompV4::disc_roster_wrong_disc\(set_serial, id\.detected_serial\);",
     judgement,
 )
+# The expected serial comes from the same header, from the same three lists.
+expected = MAIN[MAIN.index("static std::string expected_serial_for_disc("):]
+expected = expected[: expected.index("\n}\n")]
+assert re.search(
+    r"return PSXRecompV4::disc_roster_expected_serial\(\s*"
+    r"g_disc_metadata_roster, g_disc_serials, g_program_discs, disc, fallback\);",
+    expected,
+)
+assert re.search(
+    r"expected_serial_for_disc\(std::filesystem::path\(disc_path\),\s*g_lnch_expected_serial\)",
+    body,
+), "the launcher's disc check must take its expected serial from expected_serial_for_disc"
 
 # The row and the sentence: the mark from the judgement, and every serial of
 # the set.
