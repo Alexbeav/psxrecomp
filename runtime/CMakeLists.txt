@@ -46,6 +46,12 @@ if(BUILD_TESTING)
         src/netplay_exit_reason.c)
     target_include_directories(netplay_exit_reason_test PRIVATE include)
     add_test(NAME netplay_exit_reason_test COMMAND netplay_exit_reason_test)
+    # PS1G-63: why a start ended before the first frame, for the run report.
+    add_executable(start_refusal_test
+        tests/test_start_refusal.c
+        src/start_refusal.c)
+    target_include_directories(start_refusal_test PRIVATE include)
+    add_test(NAME start_refusal_test COMMAND start_refusal_test)
     # PS1B-295: a LAN / Direct IP host refuses a guest on another build.
     add_executable(netplay_lan_version_test
         tests/test_netplay_lan_version.c

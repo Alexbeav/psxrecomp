@@ -71,6 +71,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "psx_lobby_client.h"
 #include "netplay_bios_settle.h"
 #include "netplay_exit_reason.h"
+#include "start_refusal.h"
 #include "netplay_lan_version.h"
 #include "host_time.h"
 #if defined(PSX_HAS_RECOMP_NET)
@@ -2394,7 +2395,16 @@ static void write_cached_path(const char* argv0, const char* filename,
         f << PSXRecompV4::relative_to_folder(path, exe_dir_from_argv(argv0)).generic_string() << "\n";
 }
 
+/* The last warning shown to the player, and how many there have been. A
+ * refused start reports the box its own check has just shown (PS1G-63). */
+static unsigned    s_player_message_seq = 0;
+static std::string s_player_message_title;
+static std::string s_player_message_text;
+
 static void launcher_warning(const char* title, const std::string& msg) {
+    ++s_player_message_seq;
+    s_player_message_title = title ? title : "";
+    s_player_message_text  = msg;
     std::fprintf(stderr, "%s: %s\n", title, msg.c_str());
     // Headless (--headless / PSX_HEADLESS): NEVER pop a blocking modal — it would
     // hang an unattended/CI/scripted run forever waiting for a click.
@@ -2406,6 +2416,71 @@ static void launcher_warning(const char* title, const std::string& msg) {
 static void launcher_info(const char* title, const std::string& msg) {
     std::fprintf(stderr, "%s: %s\n", title, msg.c_str());
     if (!g_headless) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, title, msg.c_str(), NULL);
+}
+
+/* True when a person started this program. A refusal that used to print only
+ * to stderr may then open a box: a Windows product has no console, so the
+ * program was simply gone. A scripted start keeps the line and gets no modal,
+ * which would wait for a click that never comes. Scripted means every way of
+ * skipping the launcher: --headless, PSX_HEADLESS, --no-launcher, a replay
+ * launch, PSX_NO_LAUNCHER, and `[launcher] skip_launcher = true` in
+ * settings.toml. Set when the command line is read, and again when the
+ * settings are (start_is_interactive). */
+static bool s_start_interactive = false;
+
+static bool start_is_interactive(bool force_launcher, bool force_no_launcher,
+                                 bool skip_launcher_setting) {
+    if (g_headless) return false;
+    if (force_launcher) return true;
+    return !force_no_launcher && !std::getenv("PSX_NO_LAUNCHER") &&
+           !skip_launcher_setting;
+}
+
+/* A start that is refused before the first frame (PS1G-63). The run report
+ * gets the kind and the sentence; until now every refusal, a closed launcher
+ * and a setup program's exit all read "atexit / unknown / frame 0".
+ *
+ * `seq_before` is s_player_message_seq read before the check ran. When the
+ * check has shown its own warning since, that warning is the reason and no
+ * second box opens. Otherwise `title` and `sentence` are the reason.
+ * Returns the exit code for main(). */
+static int refuse_start(const char* kind, const char* title,
+                        const std::string& sentence, unsigned seq_before,
+                        int code = 1) {
+    if (s_player_message_seq != seq_before) {
+        psx_start_refusal_set(kind, s_player_message_title.c_str(),
+                              s_player_message_text.c_str());
+    } else {
+        psx_start_refusal_set(kind, title, sentence.c_str());
+        if (s_start_interactive && !g_headless)
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, title,
+                                     sentence.c_str(), NULL);
+    }
+    std::fprintf(stderr, "psxrecomp: start refused (%s)\n", kind);
+    psx_crash_trace_set_exit_origin("start_refused");
+    return code;
+}
+
+/* The same for a refusal with no check before it that could have shown a box. */
+static int refuse_start(const char* kind, const char* title,
+                        const std::string& sentence) {
+    return refuse_start(kind, title, sentence, s_player_message_seq);
+}
+
+/* A refusal whose sentence holds something the run report must not: a network
+ * address. The box and the log get `sentence`; the report gets
+ * `report_sentence`. Players send the report to other people, and the other
+ * player's address is another person's (PS1G-63). */
+static int refuse_start_reported(const char* kind, const char* title,
+                                 const std::string& sentence,
+                                 const std::string& report_sentence) {
+    psx_start_refusal_set(kind, title, report_sentence.c_str());
+    if (s_start_interactive && !g_headless)
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, title,
+                                 sentence.c_str(), NULL);
+    std::fprintf(stderr, "psxrecomp: start refused (%s)\n", kind);
+    psx_crash_trace_set_exit_origin("start_refused");
+    return 1;
 }
 
 /* Game display name for picker dialogs ("Tomba!"); set after the game
@@ -3638,6 +3713,10 @@ static int netplay_bind_probe(const char* bind_hostport, const char* peer_hostpo
     return NETPLAY_BIND_OK;
 }
 
+/* The sentence of the last failed netplay start as the run report gets it:
+ * the same words with no address in them (netplay_start_failure fills it). */
+static char s_netplay_start_report[NETPLAY_START_FAILURE_CAP];
+
 /* A netplay start failed: print what failed and return the sentence for the
  * player (PS1B-386). The old line named the build first ("built without
  * recomp-net, or bind/peer invalid") for every failure; a player whose system
@@ -3663,6 +3742,13 @@ static const char* netplay_start_failure(int nrc, const PsxNetplayConfig& cfg) {
                                tried[0] ? tried : cfg.bind_hostport,
                                cfg.peer_hostport, bind_probe, sys_error, sys_text,
                                why, sizeof(why));
+    /* The run report holds no address (PS1G-63): the listen address and the
+     * other player's are each one fixed word there. */
+    netplay_start_failure_report_text(nrc, netplay_built,
+                                      tried[0] ? tried : cfg.bind_hostport,
+                                      cfg.peer_hostport, bind_probe, sys_error, sys_text,
+                                      s_netplay_start_report,
+                                      sizeof(s_netplay_start_report));
     std::fprintf(stderr,
         "psxrecomp: netplay start failed (%d) — %s%s%s%s (slot=%d bind=%s peer=%s)\n",
         nrc, why, sys_text[0] ? " [system: " : "", sys_text,
@@ -10150,6 +10236,12 @@ namespace {
     int ae_bios_verify(const char* bios_path, RecompLauncherCBiosVerify* out) {
         if (!out) return 0;
         std::memset(out, 0, sizeof(*out));
+        /* What this row says goes into the run report at every way out: a
+         * launcher that blocks Play ends as "launcher closed" (PS1G-63). */
+        struct RowNote {
+            const RecompLauncherCBiosVerify* row;
+            ~RowNote() { psx_start_note_launcher("bios", row->detail); }
+        } row_note{out};
         /* Empty path = use bundled OpenBIOS when this title allows it.
          * Never needs_regen: switching to OpenBIOS is always a hot-swap. */
         if (!bios_path || !bios_path[0]) {
@@ -10403,6 +10495,25 @@ namespace {
             }
         } else {
             last_companion_warning.clear();
+        }
+        {
+            /* The row's verdict and its reason, for the run report: a red
+             * row blocks Play, and the start then ends as "launcher closed"
+             * (PS1G-63). */
+            const char* why =
+                !companion.ready ? companion.message.c_str()
+                : !id.detail.empty() ? id.detail.c_str()
+                : (id.expected_serial_given && !id.serial_matches)
+                    ? "the disc does not carry the expected serial"
+                : id.netplay_detail.c_str();
+            char row[PSX_START_LAUNCHER_ROW_CAP];
+            std::snprintf(row, sizeof(row),
+                          "verdict=%s serial=%s expected=%s tracks=%d%s%s",
+                          out->verdict == 1 ? "ok"
+                              : out->verdict == 2 ? "warning" : "refused",
+                          id.detected_serial.c_str(), expect_serial.c_str(),
+                          id.track_count, why[0] ? "; " : "", why);
+            psx_start_note_launcher("disc", row);
         }
         return 1;
     }
@@ -15163,6 +15274,9 @@ int main(int argc, char** argv) {
             force_no_launcher = true;
         }
     }
+    /* The settings file is not read yet; its skip_launcher is added below. */
+    s_start_interactive =
+        start_is_interactive(force_launcher, force_no_launcher, false);
 
     std::string default_game_config_storage;
     if (!game_config_path) {
@@ -15737,6 +15851,11 @@ int main(int argc, char** argv) {
                     std::string("This program could not read its configuration file and cannot start.\n\n") +
                     game_config_path + "\n\n" + ex.what());
 #endif
+            psx_start_refusal_set("config_unreadable",
+                "Configuration could not be read",
+                (std::string("This program could not read its configuration file and cannot start.\n\n") +
+                 game_config_path + "\n\n" + ex.what()).c_str());
+            psx_crash_trace_set_exit_origin("start_refused");
             return 1;
         }
     }
@@ -15787,6 +15906,10 @@ int main(int argc, char** argv) {
                 "again from the launcher (a fresh settings.toml will be written).");
         }
         if (us.has_skip_launcher)  skip_launcher_setting = us.skip_launcher;
+        /* A start that skips the launcher by this setting alone is scripted
+         * too: a refusal must not open a box there (PS1G-63). */
+        s_start_interactive = start_is_interactive(
+            force_launcher, force_no_launcher, skip_launcher_setting);
         if (us.has_renderer) {
             if (us.renderer == 2 && !vulkan_offered) {
                 g_video_renderer = 1;
@@ -16079,7 +16202,9 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                 "psxrecomp: cannot create --memcard-dir %s: %s\n",
                 memcard_dir.string().c_str(), memcard_ec.message().c_str());
-            return 1;
+            return refuse_start("memcard_dir", "Save folder could not be created",
+                "The folder for memory cards could not be created, so the game cannot start.\n\n" +
+                memcard_dir.string() + "\n\n" + memcard_ec.message());
         }
         std::fprintf(stdout, "psxrecomp: CLI writable-state directory = %s\n",
                      memcard_dir.string().c_str());
@@ -17080,6 +17205,15 @@ int main(int argc, char** argv) {
                             "but no validated dump found — aborting launch (mixed "
                             "BIOS images would desync)\n",
                             (unsigned)g_lnch_session_bios_crc);
+                        char bios_why[240];
+                        std::snprintf(bios_why, sizeof(bios_why),
+                            "This match uses a retail PlayStation BIOS (CRC32 %08X), "
+                            "and no such BIOS file was found on this computer, so the "
+                            "match cannot start. Players on different BIOS images do "
+                            "not stay in step.",
+                            (unsigned)g_lnch_session_bios_crc);
+                        const int refused = refuse_start("netplay_session_bios",
+                            "Match could not start", bios_why);
                         match_session_bios_set = false;
                         ls.netplay_launch.enabled = 0;
                         g_lnch_pending_direct_launch = {};
@@ -17087,7 +17221,7 @@ int main(int argc, char** argv) {
                         if (overlay_init_thread.joinable())
                             overlay_init_thread.join();
                         SDL_Quit();
-                        return 1;
+                        return refused;
                     } else if (match_session_bios_path.empty()) {
                         std::fprintf(stdout,
                             "psxrecomp: netplay session BIOS = OpenBIOS "
@@ -17108,6 +17242,9 @@ int main(int argc, char** argv) {
                 PSXRecompV4::save_user_settings(
                     exe_dir_from_argv(argv[0]) / "settings.toml", seed);
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
+                /* Not a refusal, but it ends before the first frame like one;
+                 * the report's launcher_status says what the rows showed. */
+                psx_crash_trace_set_exit_origin("launcher_closed");
                 if (overlay_init_thread.joinable())
                     overlay_init_thread.join();
                 SDL_Quit();
@@ -17122,6 +17259,7 @@ int main(int argc, char** argv) {
                                            : rui_initial_disc.c_str());
                 std::fprintf(stdout,
                              "psxrecomp: relaunch after generate/rebuild\n");
+                psx_crash_trace_set_exit_origin("setup_relaunch");
                 if (overlay_init_thread.joinable())
                     overlay_init_thread.join();
                 psx_game_codegen_relaunch_or_exit(disc_for_relaunch);
@@ -17283,17 +17421,24 @@ int main(int argc, char** argv) {
             } catch (const std::exception& ex) {
                 std::fprintf(stderr, "psxrecomp: overlay cache init failed: %s\n",
                              ex.what());
-                return 1;
+                return refuse_start("overlay_cache", "Game could not start",
+                    std::string("The cache of compiled game code could not be prepared, "
+                                "so the game cannot start.\n\n") + ex.what());
             }
         }
     }
 
     if (game_config_path || disc_override_path || !resolved_disc.empty()) {
+        /* The disc check shows its own box for an image it cannot open or
+         * that lacks its .sbi; a cancelled picker shows none. */
+        const unsigned disc_messages = s_player_message_seq;
         resolved_disc = resolve_disc_for_runtime(
             resolved_disc, disc_override_path, game_id, argv[0]);
         if (game_config_path && resolved_disc.empty()) {
             std::fprintf(stderr, "psxrecomp: no disc image selected; exiting.\n");
-            return 1;
+            return refuse_start("no_disc", "No disc selected",
+                "No disc image was selected, so the game cannot start.",
+                disc_messages);
         }
     }
 
@@ -17307,12 +17452,15 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr,
                              "psxrecomp: cannot clear mods for netplay: %s\n",
                              mod_error.c_str());
-                return 1;
+                return refuse_start("mods", "Mods could not be switched off",
+                    "A netplay match runs without mods, and they could not be "
+                    "switched off, so the match cannot start.\n\n" + mod_error);
             }
         } else if (!PSXRecompV4::mod_runtime_commit(resolved_disc, &mod_error)) {
             std::fprintf(stderr, "psxrecomp: cannot launch with selected mods: %s\n",
                          mod_error.c_str());
-            return 1;
+            return refuse_start("mods", "Mods could not be applied",
+                "The game cannot start with the selected mods.\n\n" + mod_error);
         }
     }
     /* Activation callbacks are re-run after every launcher session. Clear
@@ -17382,11 +17530,19 @@ int main(int argc, char** argv) {
         memcard2_path.clear();
     }
 
+    /* The BIOS check shows its own box for an image this build was not
+     * compiled from and for a setup program; a cancelled picker shows none. */
+    const unsigned bios_messages = s_player_message_seq;
     std::filesystem::path resolved_bios =
         resolve_bios_for_runtime(bios_path, argv[0], bios_explicit);
     if (resolved_bios.empty()) {
         std::fprintf(stderr, "psxrecomp: no BIOS selected; exiting.\n");
-        return 1;
+        /* A setup program links no game and no BIOS code: it cannot start a
+         * game at all, whatever BIOS file is chosen. */
+        return refuse_start(psx_bios_registry_count == 0 ? "setup_program" : "no_bios",
+            "No PlayStation BIOS selected",
+            "No PlayStation BIOS was selected, so the game cannot start.",
+            bios_messages);
     }
     /* memcard_dir was resolved to its default before the launcher (above). */
 
@@ -17439,11 +17595,17 @@ session_reboot:
      * Rematch only rewrites bios_path_str — without re-activate, memory_init
      * loads new ROM bytes against the prior match's linked backend (e.g.
      * SCPH-1001 dump + sticky OPENBIOS) and dig0 never publishes cleanly. */
-    if (!validate_bios_for_launch(std::filesystem::path(bios_path_str))) {
-        std::fprintf(stderr, "psxrecomp: BIOS activate failed for %s%s\n",
-                     bios_path_str.c_str(),
-                     rematch_session ? " (rematch)" : "");
-        return 1;
+    {
+        const unsigned activate_messages = s_player_message_seq;
+        if (!validate_bios_for_launch(std::filesystem::path(bios_path_str))) {
+            std::fprintf(stderr, "psxrecomp: BIOS activate failed for %s%s\n",
+                         bios_path_str.c_str(),
+                         rematch_session ? " (rematch)" : "");
+            return refuse_start("bios_mismatch", "PlayStation BIOS could not be used",
+                "The PlayStation BIOS could not be made active, so the game "
+                "cannot start.\n\n" + bios_path_str,
+                activate_messages);
+        }
     }
     if (rematch_session) {
         std::fprintf(stdout,
@@ -17684,8 +17846,10 @@ session_reboot:
         if (!r.note.empty())     detail += "\n\n" + r.note;
         detail += "\n\nIf this is a .cue, check that every FILE line it names "
                   "exists next to it; selecting the .bin directly also works.";
+        const unsigned mount_messages = s_player_message_seq;
         launcher_warning("Disc Could Not Be Mounted", detail);
-        return 1;
+        return refuse_start("disc_not_mounted", "Disc Could Not Be Mounted",
+                            detail, mount_messages);
     }
     for (const auto& route : warm_cd_routes) {
         cdrom_register_warm_route(route.arm_lba, route.lbas.data(),
@@ -17799,11 +17963,13 @@ session_reboot:
     }
     if (!g_program_discs.empty() &&
         psx_program_set_lock_acquire(memcard_dir_str.c_str()) == 0) {
+        const unsigned lock_messages = s_player_message_seq;
         launcher_warning("Already running",
             "Another program of this game is running from this folder. They "
             "share the same memory cards, so only one can run at a time.\n\n"
             "Close the other one, then start this one again.");
-        return 1;
+        return refuse_start("already_running", "Already running", "",
+                            lock_messages);
     }
     {
         std::string mc1 = memcard1_path.string();
@@ -17932,7 +18098,9 @@ session_reboot:
 #endif
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
             std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-            return 1;
+            return refuse_start("video_init", "Game window could not be opened",
+                std::string("The video system could not be started, so the game "
+                            "cannot start.\n\nSDL_Init: ") + SDL_GetError());
         }
     }
     load_input_config(argv[0]);
@@ -18013,7 +18181,9 @@ session_reboot:
     );
     if (!sdl_window) {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
-        return 1;
+        return refuse_start("video_init", "Game window could not be opened",
+            std::string("The game window could not be created, so the game "
+                        "cannot start.\n\nSDL_CreateWindow: ") + SDL_GetError());
     }
     psx_apply_window_icon(sdl_window, argv[0]);
     s_window_fullscreen = {};
@@ -18150,7 +18320,9 @@ session_reboot:
         sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_ACCELERATED);
     if (!sdl_renderer) {
         std::fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError());
-        return 1;
+        return refuse_start("video_init", "Game window could not be opened",
+            std::string("The picture output could not be created, so the game "
+                        "cannot start.\n\nSDL_CreateRenderer: ") + SDL_GetError());
     }
 
     /* Present in a logical space of the configured aspect (640x480 at native
@@ -18175,7 +18347,10 @@ session_reboot:
             tex_scale * sizeof(uint32_t));
         if (!sdl_pixel_buf) {
             std::fprintf(stderr, "failed to allocate %dx staging buffer\n", tex_scale);
-            return 1;
+            return refuse_start("video_init", "Game window could not be opened",
+                "There was not enough memory for the picture at " +
+                std::to_string(tex_scale) + "x internal resolution, so the game "
+                "cannot start. Choose a lower resolution.");
         }
     }
 
@@ -18190,7 +18365,9 @@ session_reboot:
     );
     if (!sdl_texture) {
         std::fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
-        return 1;
+        return refuse_start("video_init", "Game window could not be opened",
+            std::string("The picture surface could not be created, so the game "
+                        "cannot start.\n\nSDL_CreateTexture: ") + SDL_GetError());
     }
     SDL_SetTextureScaleMode(sdl_texture,
                             g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
@@ -18237,13 +18414,22 @@ session_reboot:
                         nid.netplay_detail.empty()
                             ? "TOC fingerprint missing or policy failed"
                             : nid.netplay_detail.c_str());
-                    return 1;
+                    return refuse_start("netplay_disc", "Disc not valid for online play",
+                        "This disc image cannot be used for online play, so the "
+                        "match cannot start.\n\n" +
+                        (nid.netplay_detail.empty()
+                             ? std::string("Its track list could not be read or does "
+                                           "not match the disc this build needs.")
+                             : nid.netplay_detail));
                 }
             } else if (!g_session_netplay_disc_ok || g_session_disc_fp.empty()) {
                 std::fprintf(stderr,
                     "psxrecomp: netplay refused — no verified disc TOC "
                     "fingerprint (mount the supported .cue dump)\n");
-                return 1;
+                return refuse_start("netplay_disc", "Disc not valid for online play",
+                    "Online play needs a verified disc image and none is selected, "
+                    "so the match cannot start. Select the disc image this build "
+                    "needs: its .cue file, or a .chd.");
             }
         }
         /* Transport role and gameplay slot are independent. An empty peer
@@ -18255,7 +18441,9 @@ session_reboot:
                 "(bind='%s' peer='%s' session=%u)\n",
                 net_cfg.bind_hostport, net_cfg.peer_hostport,
                 (unsigned)net_cfg.session_id);
-            return 1;
+            return refuse_start("netplay_address", "Match could not start",
+                "No address to listen on was given for this match, so it "
+                "cannot start.");
         }
         /* Resolve which host PlayerInput feeds this peer's net sample.
          * Auto (-1): always prefer dashboard P1 ("PLAYER N / NETPLAY") — that
@@ -18292,7 +18480,8 @@ session_reboot:
         if (netplay_seat_refused) {
             std::fprintf(stderr, "psxrecomp: netplay refused — %s\n", netplay_seat_why);
             if (!g_netplay_from_lobby)
-                return 1;
+                return refuse_start("netplay_seat", "Match could not start",
+                                    netplay_seat_why);
         }
         if (net_cfg.slot_count < 2)
             net_cfg.slot_count = game_players >= 2 ? game_players : 2;
@@ -18303,7 +18492,8 @@ session_reboot:
         if (nrc != 0) {
             const char* const why = netplay_start_failure(nrc, net_cfg);
             if (!g_netplay_from_lobby)
-                return 1;
+                return refuse_start_reported("netplay_start", "Match could not start",
+                                             why, s_netplay_start_report);
             /* A match from the launcher returns to the room with the
              * sentence, as the seat refusal below does (PS1B-386). */
             netplay_soft_exit("netplay_start_failed");
@@ -18440,7 +18630,11 @@ session_reboot:
                          "the runtime holds %u (PSX_KBLESS_MAX_ENTRIES, PS1B-306)\n",
                          psx_bios_image.image_id ? psx_bios_image.image_id : "?",
                          (unsigned)kb_entries, (unsigned)kb_capacity);
-            return 1;
+            return refuse_start("build_defect", "This build cannot start",
+                "This build is faulty and cannot start: its table of BIOS "
+                "routines has " + std::to_string(kb_entries) + " rows and the "
+                "program holds " + std::to_string(kb_capacity) + ". Report it "
+                "to the people who made the build.");
         }
     }
     /* Route identity needs the final boot mode, and must be settled before
@@ -18708,6 +18902,10 @@ session_reboot:
     s_replay_cpu = &cpu;
     /* Solo rollback resim self-check (PSX_RB_SELFCHECK=1, offline only). */
     psx_selfcheck_init(&cpu, memory_get_bios_checksum(), game_entry_pc);
+
+    /* The game runs from here: nothing refused this start, and what the
+     * launcher's rows said is no longer why anything ended (PS1G-63). */
+    psx_start_refusal_reset();
 
     /* Execute. */
     std::fprintf(stdout, "psxrecomp runtime: executing from PC=0x%08X\n", cpu.pc);

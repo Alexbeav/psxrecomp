@@ -65,6 +65,19 @@ void netplay_start_failure_text(int start_rc, int has_netplay,
                                 int sys_error, const char *sys_text,
                                 char *out, size_t cap);
 
+/* The same sentence for psx_last_run_report.json, with no address in it
+ * (PS1G-63). Players send that file to other people, and the other player's
+ * address is another person's. Each address, and a listen text that is not
+ * an address, is the word NETPLAY_REPORT_ADDRESS; the listen port stays when
+ * it is a plain number. The box, the log and the lobby's status line keep the
+ * sentence above. Same arguments as netplay_start_failure_text. */
+#define NETPLAY_REPORT_ADDRESS "(address)"
+void netplay_start_failure_report_text(int start_rc, int has_netplay,
+                                       const char *bind_hostport,
+                                       const char *peer_hostport, int bind_probe,
+                                       int sys_error, const char *sys_text,
+                                       char *out, size_t cap);
+
 /* A netplay match carries pad input only (PS1B-313). A seat whose device is a
  * PS1 Mouse or a GunCon would sit in the match with no input, and a neGcon
  * would lose its twist; before this the match started and nothing told the

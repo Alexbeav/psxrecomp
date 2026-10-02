@@ -30,9 +30,17 @@ after = MAIN[starts[0] : starts[0] + 700]
 failed = after.index("if (nrc != 0) {")
 block = after[failed : after.index("} else {", failed)]
 assert "netplay_start_failure(nrc, net_cfg)" in block, "the failure is not explained"
-assert re.search(r"if \(!g_netplay_from_lobby\)\s*return 1;", block), "a CLI start must stop with exit code 1"
+# The stop goes through refuse_start, which records the sentence for the run
+# report (PS1G-63) and returns 1 when no other code is given.
+stop = re.search(
+    r'if \(!g_netplay_from_lobby\)\s*return refuse_start_reported\("netplay_start", "[^"]*",\s*why, s_netplay_start_report\);', block
+)
+assert stop, "a CLI start must stop with exit code 1, with the sentence"
+reported = MAIN[MAIN.index("static int refuse_start_reported(const char* kind, const char* title,"):]
+reported = reported[: reported.index("\n}\n") + 3]
+assert "return 1;" in reported, "the helper for a start with an address in its sentence must return 1"
 ends = block.index('netplay_soft_exit("netplay_start_failed");')
-assert block.index("return 1;") < ends, "a CLI start must stop before the return to the room"
+assert stop.start() < ends, "a CLI start must stop before the return to the room"
 assert "g_netplay_exit_reason_text = why;" in block[ends:], (
     "the sentence must be kept for the launcher's status line after the soft exit"
 )
