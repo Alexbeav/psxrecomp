@@ -233,7 +233,8 @@ with tempfile.TemporaryDirectory() as temp:
 
     # Neither variable, or the interval alone: the replay runs on and writes nothing.
     code, out, err = pictures(seven, 20)
-    check(code == 8 and 'still here' in out and 'input_route_capture' not in out,
+    check(code == 8 and 'still here' in out and 'input_route_capture' not in out and
+          'exit_origin' not in out,
           'release replay without a capture directory is unchanged', out + err)
     code, out, err = pictures(seven, 20, {'PSX_INPUT_ROUTE_CAPTURE_EVERY': '3'})
     check(code == 8 and 'still here' in out and 'input_route_capture' not in out,
@@ -245,7 +246,7 @@ with tempfile.TemporaryDirectory() as temp:
     check(code == 0 and 'input_route_capture: product=release frames=7' in out and
           'input_route_complete: frames=7' in out and 'still here' not in out,
           'release replay with a capture directory ends at the end of the route', out + err)
-    check('exit_origin=input_route_capture_complete' in out,
+    check(out.count('exit_origin=') == 1 and 'exit_origin=input_route_capture_complete' in out,
           'the exit at the end of the route is named for the run report', out)
     check(sorted(p.name for p in folder.glob('frame-*.png')) ==
           [f'frame-{n:06d}.png' for n in (0, 3, 6, 7)],
@@ -276,6 +277,18 @@ with tempfile.TemporaryDirectory() as temp:
         check(code == 3 and 'SIO delivery differs from digital route' in err and
               not (folder / 'complete.json').exists(),
               f'a {fault} delivery to SIO stops the capture', out + err)
+        check(out.count('exit_origin=') == 1 and 'exit_origin=input_route_capture_failed' in out,
+              f'a capture stopped by a {fault} delivery is reported as failed', out)
+    # A run that fails at its last boundary is not reported as a finished
+    # capture: the last picture cannot be created, so no completion record.
+    folder, capture = shots('pictures-last-boundary')
+    capture['PSX_INPUT_ROUTE_CAPTURE_EVERY'] = '3'
+    (folder / 'frame-000007.png').write_bytes(b'held')
+    code, out, err = pictures(seven, 20, capture)
+    check(code == 3 and (folder / 'frame-000006.png').is_file() and
+          not (folder / 'complete.json').exists() and
+          out.count('exit_origin=') == 1 and 'exit_origin=input_route_capture_failed' in out,
+          'a capture that fails at its last boundary is reported as failed', out + err)
 
     # The other formats: PSXRTI3 without identity, and a DualShock route,
     # which declares its memory cards (none here).
@@ -283,6 +296,13 @@ with tempfile.TemporaryDirectory() as temp:
     code, out, err = pictures(bare, 20, capture)
     check(code == 0 and sorted(p.name for p in folder.glob('frame-*.png')) ==
           ['frame-000000.png', 'frame-000003.png'], 'a PSXRTI3 route is captured', out + err)
+    # A PSXRTI3 digital route has the same need as PSXRTI1: a pad that is not
+    # in analog mode.
+    folder, capture = shots('pictures-v3-analog')
+    code, out, err = pictures(bare, 20, capture, 'analog')
+    check(code == 3 and 'SIO delivery differs from digital route' in err and
+          'exit_origin=input_route_capture_failed' in out,
+          'a PSXRTI3 route delivered to an analog pad stops the capture', out + err)
     folder, capture = shots('pictures-dual')
     code, out, err = pictures(dual, 20, capture)
     done = json.loads((folder / 'complete.json').read_text()) if code == 0 else {}
@@ -293,7 +313,8 @@ with tempfile.TemporaryDirectory() as temp:
     folder, capture = shots('pictures-dual-card')
     code, out, err = pictures(dual, 20, capture, PSX_TEST_CARD='1')
     check(code == 3 and 'initial card presence differs' in err and
-          not list(folder.glob('frame-*.png')),
+          not list(folder.glob('frame-*.png')) and
+          'exit_origin=input_route_capture_failed' in out,
           'a DualShock route with an undeclared card is not captured', out + err)
 
     # Only the directory and the interval are honoured. An evidence option of
@@ -304,6 +325,7 @@ with tempfile.TemporaryDirectory() as temp:
         folder, capture = shots(f'pictures-{name}')
         code, out, err = pictures(seven, 20, capture, **{name: value})
         check(code == 30 and name in err and 'needs the diagnostic product' in err and
+              'PSX_INPUT_ROUTE_CAPTURE_EVERY only' in err and 'exit_origin' not in out and
               not list(folder.iterdir()), f'{name} is refused on a release product', out + err)
         code, out, err = pictures(seven, 20, None, **{name: value})
         check(code == 8, f'{name} without a capture directory changes nothing', out + err)
@@ -321,8 +343,18 @@ with tempfile.TemporaryDirectory() as temp:
     folder, capture = shots('pictures-collision')
     (folder / 'checkpoints.jsonl').write_bytes(b'preserve')
     code, out, err = pictures(seven, 20, capture)
-    check(code == 3 and (folder / 'checkpoints.jsonl').read_bytes() == b'preserve',
+    check(code == 3 and (folder / 'checkpoints.jsonl').read_bytes() == b'preserve' and
+          'exit_origin=input_route_capture_failed' in out,
           'a capture directory that holds a capture is not overwritten', out + err)
+    # The completion record of an earlier run refuses the route: at exit it is
+    # what tells a finished capture from a failed one.
+    folder, capture = shots('pictures-finished')
+    (folder / 'complete.json').write_bytes(b'earlier')
+    code, out, err = pictures(seven, 20, capture)
+    check(code == 30 and 'already holds a finished capture' in err and
+          (folder / 'complete.json').read_bytes() == b'earlier' and
+          sorted(p.name for p in folder.iterdir()) == ['complete.json'],
+          'a capture directory with a completion record refuses the route', out + err)
 
     # Release gate: nothing armed means every entry point is inert, and the
     # release product cannot record.

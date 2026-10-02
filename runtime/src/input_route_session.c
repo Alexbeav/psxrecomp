@@ -72,8 +72,9 @@ static uint8_t s_dual_axes[4] = {128, 128, 128, 128};
  * debug server, so the release replay drives it, and only when
  * PSX_INPUT_ROUTE_CAPTURE_DIR is set. */
 static int s_release_capture;
-static uint32_t s_release_frames;    /* inputs the route holds */
 static uint32_t s_release_consumed;  /* inputs supplied so far */
+static int s_release_in_observer;    /* an observer call is on the stack */
+static char s_release_complete_path[4096];
 extern uint64_t s_frame_count;
 #endif
 
@@ -361,6 +362,20 @@ static int refuse(const char *path, const char *why)
  * debug server keeps, or belong to evidence runs; with the capture directory
  * set, one of them refuses the route by name, so that an evidence file that
  * was asked for is never silently missing. Returns 0 when refused. */
+/* The observer ends the process itself: status 0 after it wrote the completion
+ * record at the route's end, status 3 when a delivery or a file fails. The
+ * exit is named for the run report here, after the files are written, so a
+ * run that fails at its last boundary is not reported as a finished capture.
+ * Registered after the crash trace's own handler, so it runs before it. */
+static void release_capture_at_exit(void)
+{
+    if (!s_release_in_observer) return;
+    FILE *done = fopen(s_release_complete_path, "rb");
+    if (done) fclose(done);
+    psx_crash_trace_set_exit_origin(done ? "input_route_capture_complete"
+                                         : "input_route_capture_failed");
+}
+
 static int release_capture_begin(const char *path, uint32_t frames, int dualshock)
 {
     /* A watch list and a card identity have no "off" value: refused when set.
@@ -370,21 +385,37 @@ static int release_capture_begin(const char *path, uint32_t frames, int dualshoc
         {"PSX_INPUT_ROUTE_NEUTRAL_TAIL", 1}, {"PSX_INPUT_ROUTE_CPU_STATE", 1},
         {"PSX_INPUT_ROUTE_VIDEO_STATE", 1}, {"PSX_INPUT_ROUTE_TRACE", 1},
     };
-    if (!getenv("PSX_INPUT_ROUTE_CAPTURE_DIR")) return 1;
+    const char *dir = getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
+    if (!dir) return 1;
     for (size_t i = 0; i < sizeof(diagnostic_only) / sizeof(diagnostic_only[0]); ++i) {
         const char *value = getenv(diagnostic_only[i].name);
         if (!value) continue;
         if (diagnostic_only[i].off_value && !strcmp(value, "0")) continue;
-        fprintf(stderr, "input route rejected: %s needs the diagnostic product; "
-                        "a release product writes pictures only (%s)\n",
+        fprintf(stderr, "input route rejected: %s needs the diagnostic product; a release "
+                        "product honours PSX_INPUT_ROUTE_CAPTURE_DIR and "
+                        "PSX_INPUT_ROUTE_CAPTURE_EVERY only (%s)\n",
                 diagnostic_only[i].name, path);
         return 0;
     }
-    if (!(dualshock ? input_route_observer_dualshock_init(frames)
-                    : input_route_observer_init(frames)))
+    /* The completion record tells a finished capture from a failed one at
+     * exit, so it must not be there before this run writes it. */
+    int n = snprintf(s_release_complete_path, sizeof(s_release_complete_path),
+                     "%s/complete.json", dir);
+    if (n < 0 || (size_t)n >= sizeof(s_release_complete_path))
+        return refuse(path, "the capture directory name is too long");
+    FILE *held = dir[0] ? fopen(s_release_complete_path, "rb") : NULL;
+    if (held) {
+        fclose(held);
+        return refuse(path, "the capture directory already holds a finished capture");
+    }
+    atexit(release_capture_at_exit);
+    s_release_in_observer = 1;
+    const int ready = dualshock ? input_route_observer_dualshock_init(frames)
+                                : input_route_observer_init(frames);
+    s_release_in_observer = 0;
+    if (!ready)
         return refuse(path, "the capture directory or interval is not valid");
     s_release_capture = 1;
-    s_release_frames = frames;
     s_release_consumed = 0;
     fprintf(stdout, "input_route_capture: product=release frames=%u\n", (unsigned)frames);
     return 1;
@@ -736,13 +767,13 @@ int input_route_session_release_override(void)
         /* The observer's order, as in the diagnostic product: the delivery of
          * the last input, the boundary (which writes the picture and, at the
          * route's end, exits the process with status 0), then the next input. */
+        s_release_in_observer = 1;
         release_capture_delivered();
-        if (s_release_consumed == s_release_frames)
-            psx_crash_trace_set_exit_origin("input_route_capture_complete");
         input_route_observer_boundary(s_release_consumed, s_frame_count);
         const int word = release_next_word();
         if (s_release_dual) input_route_observer_dualshock_input((uint16_t)word, s_dual_axes);
         else input_route_observer_input((uint16_t)word);
+        s_release_in_observer = 0;
         ++s_release_consumed;
         return word;
     }
