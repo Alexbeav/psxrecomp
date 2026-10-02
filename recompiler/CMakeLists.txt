@@ -1248,6 +1248,7 @@ if(BUILD_TESTING)
                 netplay_pad_seat_wiring
                 netplay_boot_mode_wiring
                 launcher_pad_mode_wiring
+                launcher_serial_status_wiring
                 negcon_twist_wiring
                 replay_disc_identity_wiring
                 netplay_chd_disc_rule_wiring

@@ -10210,6 +10210,23 @@ namespace {
         std::snprintf(out->serial, sizeof(out->serial), "%s", serial.c_str());
         std::snprintf(out->region, sizeof(out->region), "%s", id.region.c_str());
         out->iso_ok = id.has_header ? 1 : 0;
+#if defined(RECOMP_LAUNCHER_HAS_SERIAL_STATUS)
+        /* Whether the serial is one this build lists (PS1B-403). The launcher
+         * ticked the Serial row for any serial, so a disc of another release
+         * looked right and the only sentence on the panel was the online-play
+         * note. A disc that did not open says nothing here: its ISO header
+         * row is the reason. For a serial that is not listed, the row shows
+         * what was read from the disc, never the serial that was expected. */
+        if (id.opened && id.has_header && id.expected_serial_given) {
+            out->serial_status = id.serial_matches ? RECOMP_SERIAL_LISTED
+                                                   : RECOMP_SERIAL_NOT_LISTED;
+            std::snprintf(out->expected_serials, sizeof(out->expected_serials),
+                          "%s", expect_serial.c_str());
+            if (!id.serial_matches)
+                std::snprintf(out->serial, sizeof(out->serial), "%s",
+                              id.detected_serial.c_str());
+        }
+#endif
         if (g_lnch_netplay_available) {
             out->track_count = id.track_count;
             out->netplay_ok = id.netplay_ok ? 1 : 0;
