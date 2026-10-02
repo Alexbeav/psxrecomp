@@ -44,6 +44,7 @@ struct DiscIdentity {
 
     // Mount / TOC (ISOReader on resolve_disc_path().mount).
     bool        from_cue       = false;  // mount path is a .cue
+    bool        from_chd       = false;  // mount path is a .chd: one file that holds every track
     bool        cue_fallback   = false;  // resolver fell back from a broken cue to a bin
     bool        upgraded_to_cue = false; // caller picked bin; mounted owning cue
     bool        toc_opened     = false;  // ISOReader::Open succeeded on mount
@@ -60,7 +61,7 @@ struct DiscIdentity {
 
 // Optional title policy from game.toml [netplay] (0 / empty = do not check).
 struct NetplayDiscExpect {
-    bool        require_cue = false;
+    bool        require_cue = false;           // a .chd satisfies it: it cannot be a bare track
     int         required_tracks = 0;           // exact iso_track_count; 0 = skip
     bool        has_required_leadout = false;
     uint32_t    required_leadout_lba = 0;
