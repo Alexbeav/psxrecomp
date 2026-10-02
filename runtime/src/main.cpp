@@ -2665,14 +2665,27 @@ static DiscValidation validate_disc_image(const std::filesystem::path& selected_
     const PSXRecompV4::DiscIdentity id =
         PSXRecompV4::identify_disc(selected_path, expect, /*expected_crc*/0,
                                    /*has_expected_crc*/false, /*compute_crc*/false);
+    /* A build with a serial list expects nothing of an image its disc list
+     * does not know, so `expect` is empty for it and nothing was compared:
+     * another game's disc started with no warning, where a build with no
+     * list warns (PS1B-403). Every pin H kit has a list. Such an image is
+     * judged as the launcher's panel judges it, by the serial read against
+     * every serial of the list, and gets the same warning. Whether the start
+     * should be refused is not decided here: it is not. */
+    const PSXRecompV4::DiscSetSerial outside = PSXRecompV4::disc_roster_outside_list(
+        g_disc_metadata_roster, g_disc_serials, selected_path,
+        id.expected_serial_given, id.opened && id.has_header, id.detected_serial);
+    const bool outside_wrong = PSXRecompV4::disc_roster_wrong_disc(outside, id.detected_serial);
     DiscValidation v;
     v.opened     = id.opened;
     v.has_header = id.has_header;
-    v.id_matches = expect.empty() ? true : id.serial_matches;
+    v.id_matches = expect.empty() ? !outside_wrong : id.serial_matches;
     v.detail     = id.detail;
     if (id.opened && id.has_header && !v.id_matches && v.detail.empty()) {
         v.detail = "The disc header is readable, but it does not contain the expected game ID " +
-                   uppercase_ascii(expect) + " in the early disc metadata.";
+                   uppercase_ascii(expect.empty()
+                       ? PSXRecompV4::disc_roster_serial_list(g_disc_serials) : expect) +
+                   " in the early disc metadata.";
     }
     return v;
 }

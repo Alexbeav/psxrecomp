@@ -126,4 +126,40 @@ assert verdict, "a set must refuse a disc whose serial is none of the set's"
 assert guard < verdict.start()
 assert body.count("PSXRecompV4::identify_disc(") == 1
 
+# The start check (a command-line start with --disc; no launcher). It only
+# warns: "Disc Image Warning ... The runtime will try to run it anyway." A
+# build with a list expected nothing of an image outside its disc list, so
+# another game's disc started with no warning at all, where a build with no
+# list warns. Every pin H kit has a list. The image is now judged by the same
+# functions as the panel, and the same warning is given, with the list's
+# serials where the single expected serial stood. It is not refused: that is
+# not decided (A14).
+check = MAIN[MAIN.index("static DiscValidation validate_disc_image("):]
+check = check[: check.index("\n}\n")]
+assert re.search(
+    r"PSXRecompV4::disc_roster_outside_list\(\s*g_disc_metadata_roster, g_disc_serials, selected_path,\s*"
+    r"id\.expected_serial_given, id\.opened && id\.has_header, id\.detected_serial\);",
+    check,
+), "the start check must judge an image outside the disc list as the panel does"
+assert re.search(
+    r"const bool outside_wrong = PSXRecompV4::disc_roster_wrong_disc\(outside, id\.detected_serial\);",
+    check,
+)
+assert "v.id_matches = expect.empty() ? !outside_wrong : id.serial_matches;" in check, (
+    "an image with no expected serial matches only when it is not the wrong disc"
+)
+assert "expect.empty() ? true" not in check
+assert re.search(
+    r"uppercase_ascii\(expect\.empty\(\)\s*\? PSXRecompV4::disc_roster_serial_list\(g_disc_serials\) : expect\)",
+    check,
+), "the warning names the list's serials when no single serial was expected"
+launch = MAIN[MAIN.index("static bool validate_disc_for_launch("):]
+launch = launch[: launch.index("\n}\n")]
+warn = launch.index('launcher_warning("Disc Image Warning"')
+assert "if (!v.has_header || !v.id_matches) {" in launch[:warn]
+assert "The runtime will try to run it anyway." in launch
+assert "return false" not in launch[warn : launch.index("resolve_disc_path", warn)], (
+    "a serial that does not match warns and does not refuse the start"
+)
+
 print("launcher serial status wiring: ok")
