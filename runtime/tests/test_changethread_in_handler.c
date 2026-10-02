@@ -40,6 +40,17 @@
  *     The switch is made all the same.
  *
  * CHANGETHREAD_CONTROL is for sources from before the fix (no counters). */
+#include <stdio.h>
+#include <stdlib.h>
+
+/* A failed check reports on stdout and leaves at once. On glibc the test
+ * helper's link makes a write to stderr crash (rc -11, PS1B-322), and a
+ * control that fails must still print which check failed. */
+#define FX_FAIL(...) do { \
+    printf("FAIL line %d: ", __LINE__); \
+    printf(__VA_ARGS__); puts(""); \
+    fflush(stdout); _Exit(1); \
+} while (0)
 #include "rfe_guest_fixture.h"
 
 #define WORK_ENTRY   0x80010000u /* the worker thread's function */
