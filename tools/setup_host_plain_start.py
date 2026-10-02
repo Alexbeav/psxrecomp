@@ -31,11 +31,16 @@ toolchain). So every folder the program derives a toolchain or data root from
 (LOCALAPPDATA, APPDATA, USERPROFILE, HOME, XDG_DATA_HOME, RETCOMM_DATA_HOME,
 RETCOMM_TOOLCHAIN_CACHE, TEMP, TMP) is a folder made for this start and removed
 after it, the variables that name a toolchain are taken out, the proxy
-variables point at a closed port, and PSXRECOMP_TOOLCHAIN_READONLY=1 is set
-for a host that knows it. The start fails when the program left a pack or a
-pointer in those folders, when it made a toolchain folder in the package, and
-it is not made at all when the package's toolchain stamp points outside the
-package.
+variables point at a closed port, and PSXRECOMP_TOOLCHAIN_READONLY=1 is set.
+The start fails when the program left a pack or a pointer in those folders,
+when it made a toolchain folder in the package, and it is not made at all when
+the package's toolchain stamp points outside the package.
+
+What protects the machine here is the folders, not the variable. A setup
+program reads PSXRECOMP_TOOLCHAIN_READONLY only from the change of PS1B-410
+(the host's read-only switch) on; a program built before it ignores the
+variable. Setting it costs nothing for those and closes the last way (a pack
+the program finds by another route) for the ones that know it.
 
   setup_host_plain_start.py --exe <setup program> [--root <its folder>] [--timeout seconds]
 
