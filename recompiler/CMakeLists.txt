@@ -1082,6 +1082,18 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_program_set.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The packager's zip step as its own entry. The run above accepts a
+        # shell without zip, so a host without one passed with the zip never
+        # made. This one checks the zip (its name, its members against the
+        # staged files) where a zip tool exists, and is reported as skipped,
+        # by name, where none does (PS1B-397).
+        add_test(
+            NAME package_setup_program_set_zip
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_program_set.py
+                    --zip-part
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        set_tests_properties(package_setup_program_set_zip PROPERTIES SKIP_RETURN_CODE 77)
         # The check the packager runs on a staged setup program: start it as a
         # double-click does and require that it reaches its launcher (PS1B-365).
         add_test(
