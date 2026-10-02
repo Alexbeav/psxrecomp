@@ -15685,13 +15685,9 @@ int main(int argc, char** argv) {
          * peers of one build could boot in different BIOS modes (PS1B-360).
          * The loader has already dropped such lines: say so once. */
         if (us.boot_keys_were_echoes)
-            std::fprintf(stdout,
-                "psxrecomp: settings.toml holds fast_boot/bios_hle lines that "
-                "an earlier launcher wrote by itself; they are ignored and the "
-                "game's own values are used. The lines are dropped on the next "
-                "settings save. To choose a value yourself, add the line again "
-                "after that save.\n");
-        /* A product keeps no stdout: the run report says it too (PS1B-400). */
+            std::fprintf(stdout, "psxrecomp: " PSX_SETTINGS_BOOT_KEYS_NOTICE "\n");
+        /* A product keeps no stdout: the run report says it too, in the same
+         * words (PS1B-400). */
         psx_crash_trace_note_settings(us.settings_format,
                                       PSXRecompV4::UserSettings::kFormat,
                                       us.boot_keys_were_echoes ? 1 : 0);

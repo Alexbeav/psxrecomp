@@ -230,12 +230,8 @@ void psx_crash_trace_set_exit_origin(const char *origin) {
     if (origin) s_exit_origin = origin;
 }
 
-/* PS1B-400: the player's settings.toml as main() found it. The sentence goes
- * into a JSON string as it is: no quote, no backslash, no control character. */
-#define PSX_SETTINGS_BOOT_KEYS_NOTICE \
-    "settings.toml has fast_boot or bios_hle lines but no settings_format = 2 line. " \
-    "The two lines are ignored and the game's own values are used. " \
-    "To choose a value yourself, save the settings once in the launcher and add the line again."
+/* PS1B-400: the player's settings.toml as main() found it. The sentence is
+ * PSX_SETTINGS_BOOT_KEYS_NOTICE (crash_trace.h). */
 static int s_settings_file_format = 0;
 static int s_settings_current_format = 0;
 static int s_settings_boot_keys_ignored = 0;
