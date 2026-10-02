@@ -31,6 +31,28 @@ int netplay_boot_mismatch_final(uint32_t mismatch_since_ms, uint32_t now_ms,
 
 #define NETPLAY_BOOT_MISMATCH_GRACE_MS 3000u
 
+/* Why a netplay start failed, in one sentence (PS1B-386). The start reported
+ * every failure as "built without recomp-net, or bind/peer invalid": a player
+ * whose system held the port read first that the build had no netplay.
+ * `start_rc` is psx_netplay_start's result, `has_netplay` whether the build
+ * has the netplay library. For a LAN start (-3) the caller tries the bind
+ * itself and passes what the system answered: `bind_probe` and, for a refused
+ * bind, the system's error number. The sentence names the port and the
+ * address, says that another program or the system holds the port and that
+ * another port can be chosen, and names the build only when the build has no
+ * netplay. It fits the lobby client's last_error. */
+enum {
+    NETPLAY_BIND_NOT_TRIED   = -1, /* not a LAN start, or a host name to resolve */
+    NETPLAY_BIND_OK          = 0,  /* the port could be bound when tried again */
+    NETPLAY_BIND_FAILED      = 1,  /* the system refused the bind */
+    NETPLAY_BIND_BAD_ADDRESS = 2   /* the listen address is not "address:port" */
+};
+#define NETPLAY_START_FAILURE_CAP 192
+void netplay_start_failure_text(int start_rc, int has_netplay,
+                                const char *bind_hostport,
+                                const char *peer_hostport, int bind_probe,
+                                int sys_error, char *out, size_t cap);
+
 /* A netplay match carries pad input only (PS1B-313). A seat whose device is a
  * PS1 Mouse or a GunCon would sit in the match with no input, and a neGcon
  * would lose its twist; before this the match started and nothing told the

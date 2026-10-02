@@ -1243,6 +1243,7 @@ if(BUILD_TESTING)
                 frame_interpolation_display_rate
                 gl_swap_self_heal
                 netplay_test_input_wiring
+                netplay_start_failure_wiring
                 hybrid_dev_any_input
                 host_input_focus_guards
                 netplay_pad_seat_wiring
