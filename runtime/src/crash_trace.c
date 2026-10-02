@@ -435,12 +435,14 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
      * frame 0, so a player's report could not say why the game did not start.
      * `start_refused` is the kind and the sentence the player was shown;
      * `launcher_status` is what the launcher's BIOS and disc rows said last.
-     * Both are `null` on a start that ran. */
+     * Both are `null` once the game runs: main() forgets them at the first
+     * guest instruction. Neither holds a folder name, only base names
+     * (docs/RUN_REPORT_START.md). */
     {
-        /* Room for every character escaped. */
-        static char refusal[2 * (PSX_START_REFUSAL_KIND_CAP + PSX_START_REFUSAL_TITLE_CAP +
+        /* Room for every byte written as a six-character escape. */
+        static char refusal[6 * (PSX_START_REFUSAL_KIND_CAP + PSX_START_REFUSAL_TITLE_CAP +
                                  PSX_START_REFUSAL_TEXT_CAP) + 64];
-        static char rows[4 * PSX_START_LAUNCHER_ROW_CAP + 64];
+        static char rows[2 * 6 * PSX_START_LAUNCHER_ROW_CAP + 64];
         if (psx_start_refusal_json(refusal, sizeof(refusal)) <= 0)
             snprintf(refusal, sizeof(refusal), "null");
         if (psx_start_launcher_status_json(rows, sizeof(rows)) <= 0)

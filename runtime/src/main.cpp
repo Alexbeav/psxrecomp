@@ -2419,10 +2419,21 @@ static void launcher_info(const char* title, const std::string& msg) {
 
 /* True when a person started this program. A refusal that used to print only
  * to stderr may then open a box: a Windows product has no console, so the
- * program was simply gone. A scripted start (--headless, --no-launcher, a
- * replay launch, PSX_NO_LAUNCHER) keeps the line and gets no modal, which
- * would wait for a click that never comes. Set once the command line is read. */
+ * program was simply gone. A scripted start keeps the line and gets no modal,
+ * which would wait for a click that never comes. Scripted means every way of
+ * skipping the launcher: --headless, PSX_HEADLESS, --no-launcher, a replay
+ * launch, PSX_NO_LAUNCHER, and `[launcher] skip_launcher = true` in
+ * settings.toml. Set when the command line is read, and again when the
+ * settings are (start_is_interactive). */
 static bool s_start_interactive = false;
+
+static bool start_is_interactive(bool force_launcher, bool force_no_launcher,
+                                 bool skip_launcher_setting) {
+    if (g_headless) return false;
+    if (force_launcher) return true;
+    return !force_no_launcher && !std::getenv("PSX_NO_LAUNCHER") &&
+           !skip_launcher_setting;
+}
 
 /* A start that is refused before the first frame (PS1G-63). The run report
  * gets the kind and the sentence; until now every refusal, a closed launcher
@@ -15081,8 +15092,9 @@ int main(int argc, char** argv) {
             force_no_launcher = true;
         }
     }
+    /* The settings file is not read yet; its skip_launcher is added below. */
     s_start_interactive =
-        !g_headless && !force_no_launcher && !std::getenv("PSX_NO_LAUNCHER");
+        start_is_interactive(force_launcher, force_no_launcher, false);
 
     std::string default_game_config_storage;
     if (!game_config_path) {
@@ -15712,6 +15724,10 @@ int main(int argc, char** argv) {
                 "again from the launcher (a fresh settings.toml will be written).");
         }
         if (us.has_skip_launcher)  skip_launcher_setting = us.skip_launcher;
+        /* A start that skips the launcher by this setting alone is scripted
+         * too: a refusal must not open a box there (PS1G-63). */
+        s_start_interactive = start_is_interactive(
+            force_launcher, force_no_launcher, skip_launcher_setting);
         if (us.has_renderer) {
             if (us.renderer == 2 && !vulkan_offered) {
                 g_video_renderer = 1;
@@ -17007,6 +17023,15 @@ int main(int argc, char** argv) {
                             "but no validated dump found — aborting launch (mixed "
                             "BIOS images would desync)\n",
                             (unsigned)g_lnch_session_bios_crc);
+                        char bios_why[240];
+                        std::snprintf(bios_why, sizeof(bios_why),
+                            "This match uses a retail PlayStation BIOS (CRC32 %08X), "
+                            "and no such BIOS file was found on this computer, so the "
+                            "match cannot start. Players on different BIOS images do "
+                            "not stay in step.",
+                            (unsigned)g_lnch_session_bios_crc);
+                        const int refused = refuse_start("netplay_session_bios",
+                            "Match could not start", bios_why);
                         match_session_bios_set = false;
                         ls.netplay_launch.enabled = 0;
                         g_lnch_pending_direct_launch = {};
@@ -17014,7 +17039,7 @@ int main(int argc, char** argv) {
                         if (overlay_init_thread.joinable())
                             overlay_init_thread.join();
                         SDL_Quit();
-                        return 1;
+                        return refused;
                     } else if (match_session_bios_path.empty()) {
                         std::fprintf(stdout,
                             "psxrecomp: netplay session BIOS = OpenBIOS "
@@ -18207,13 +18232,22 @@ session_reboot:
                         nid.netplay_detail.empty()
                             ? "TOC fingerprint missing or policy failed"
                             : nid.netplay_detail.c_str());
-                    return 1;
+                    return refuse_start("netplay_disc", "Disc not valid for online play",
+                        "This disc image cannot be used for online play, so the "
+                        "match cannot start.\n\n" +
+                        (nid.netplay_detail.empty()
+                             ? std::string("Its track list could not be read or does "
+                                           "not match the disc this build needs.")
+                             : nid.netplay_detail));
                 }
             } else if (!g_session_netplay_disc_ok || g_session_disc_fp.empty()) {
                 std::fprintf(stderr,
                     "psxrecomp: netplay refused — no verified disc TOC "
                     "fingerprint (mount the supported .cue dump)\n");
-                return 1;
+                return refuse_start("netplay_disc", "Disc not valid for online play",
+                    "Online play needs a verified disc image and none is selected, "
+                    "so the match cannot start. Select the disc image this build "
+                    "needs, with its .cue file.");
             }
         }
         /* Transport role and gameplay slot are independent. An empty peer
@@ -18225,7 +18259,9 @@ session_reboot:
                 "(bind='%s' peer='%s' session=%u)\n",
                 net_cfg.bind_hostport, net_cfg.peer_hostport,
                 (unsigned)net_cfg.session_id);
-            return 1;
+            return refuse_start("netplay_address", "Match could not start",
+                "No address to listen on was given for this match, so it "
+                "cannot start.");
         }
         /* Resolve which host PlayerInput feeds this peer's net sample.
          * Auto (-1): always prefer dashboard P1 ("PLAYER N / NETPLAY") — that
@@ -18262,7 +18298,8 @@ session_reboot:
         if (netplay_seat_refused) {
             std::fprintf(stderr, "psxrecomp: netplay refused — %s\n", netplay_seat_why);
             if (!g_netplay_from_lobby)
-                return 1;
+                return refuse_start("netplay_seat", "Match could not start",
+                                    netplay_seat_why);
         }
         if (net_cfg.slot_count < 2)
             net_cfg.slot_count = game_players >= 2 ? game_players : 2;
@@ -18679,6 +18716,10 @@ session_reboot:
     s_replay_cpu = &cpu;
     /* Solo rollback resim self-check (PSX_RB_SELFCHECK=1, offline only). */
     psx_selfcheck_init(&cpu, memory_get_bios_checksum(), game_entry_pc);
+
+    /* The game runs from here: nothing refused this start, and what the
+     * launcher's rows said is no longer why anything ended (PS1G-63). */
+    psx_start_refusal_reset();
 
     /* Execute. */
     std::fprintf(stdout, "psxrecomp runtime: executing from PC=0x%08X\n", cpu.pc);
