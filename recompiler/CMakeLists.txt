@@ -741,6 +741,16 @@ if(BUILD_TESTING)
                     --emitter $<TARGET_FILE:psxrecomp-bios>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+        # The tcc build of a BIOS module sees a BOM-stripped copy of the
+        # include directory. That copy must hold the .c.inc fragments the
+        # module's glue.c includes, or the tcc build stops at "not found".
+        # Pure unit test: no compiler, no built target.
+        add_test(
+            NAME tcc_module_include_dir
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_tcc_module_include_dir.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
         # tools/coverage_vault.py's history compaction and streaming JSON
         # reader. Pure unit test — loads the module by path, needs no built
         # target and no generated BIOS. It sat in tools/ with no add_test()
