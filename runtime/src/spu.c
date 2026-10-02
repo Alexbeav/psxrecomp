@@ -191,15 +191,6 @@ static void spu_event_record(uint8_t kind, int voice, uint32_t addr) {
     s_event_idx++;
 }
 
-/* PS1B-372: the source-profile voice path is being written from the behaviour
- * spec. Until then each of its parts is a stub that stops the process and
- * names the spec rows it stands for. */
-static void spu_ps1b372_stub(const char *rows)
-{
-    fprintf(stderr, "[SPU] PS1B-372 stub reached: spec rows %s\n", rows);
-    exit(2);
-}
-
 /* ADSR tick: spu_envelope.h, from PSX-SPX and oracle fixture set S-spu
  * (runtime/tests/spu_envelope_fixture.txt). */
 static void adsr_run(int idx, SpuVoice *v)
@@ -706,14 +697,173 @@ typedef char spu_shadow_voice_count_check[
 const void* spu_shadow_tap_buffer(void) { return s_shadow_tap; }
 int         spu_shadow_tap_count(void)  { return s_shadow_tap_frame; }
 
-/* PS1B-372-STUB [spec 6.1 T2; 6.2 D1-D6; 6.3 O1-O3; 6.4 P1-P4]
- * One tick of one voice in the source profile: refill the decode queue, give
- * the voice output, then count the start delay or step the envelope and the
- * pitch counter. Returns the voice output. */
+/* ---- Source profile: one voice tick ---------------------------------------
+ * Written from the behaviour spec (recomp-corpus
+ * references/ps1/SPU-SOURCE-PROFILE-VOICE-SPEC.md), PSX-SPX and the oracle
+ * fixtures that the spec names. "Spec" below is that note; the row IDs are
+ * its own. A row tagged [KEPT] has no oracle observation yet and is done as
+ * the row says. */
+
+/* Spec 6.4 P4: this tick's output of the voice visited before this one.
+ * Voices run in ascending order inside a tick (spec 6.1 T1), so voice N reads
+ * what voice N-1 stored in the same tick, and voice 0 reads nothing. It is
+ * always stored before it is read, so it carries nothing from one tick to the
+ * next and is not part of the state contract (spec section 5). */
+static int16_t source_prev_out;
+
+/* The bit of voice `idx` in a 24-bit voice flag register pair: PMON at
+ * 1F801D90h, NON at 1F801D94h (PSX-SPX "SPU Voice Flags"). */
+static inline unsigned source_voice_flag(uint32_t reg_addr, int idx)
+{
+    uint32_t mask = (uint32_t)RREG(reg_addr) | ((uint32_t)RREG(reg_addr + 2u) << 16);
+    return (mask >> idx) & 1u;
+}
+
+/* Spec 6.2 D5 [KEPT]: a decoder fetch at `addr` counts as an access to the
+ * IRQ address (1F801DA4h times 8) when that address is the fetched one, or
+ * the start of the block that holds it. spu_irq_check then tests SPUCNT bit 6
+ * and the IRQ flag (PSX-SPX "Voice Interrupt"). */
+static void source_fetch_irq(uint32_t addr)
+{
+    uint32_t irq_addr = (uint32_t)RREG(0x1F801DA4u) << 3;
+    if (irq_addr == addr || irq_addr == (addr & ~15u))
+        spu_irq_check(irq_addr, 2u);
+}
+
+/* Spec 6.2 D1-D6: refill the decode queue of one voice. With fewer than 11
+ * samples queued the voice fetches one word, which is four samples, and never
+ * more than one word in a tick [ORACLE FIXTURE S1: at pitch 1000h the header
+ * of block 1 is fetched at tick 23 and ENDX sets at tick 51; at pitch 4000h,
+ * at ticks 10 and 17]. */
+static void source_refill(int idx)
+{
+    SpuVoice *v = &voices[idx];
+    SourceSpuDecode *d = &source_decode[idx];
+    uint32_t addr = v->cur_addr & (SPU_RAM_SIZE - 1u);
+
+    if (d->available >= 11u) return;                               /* D1 */
+
+    /* D2 (a): at a block start, an End flag on the block just finished sets
+     * ENDX and sends the voice to the repeat address (PSX-SPX "Flag Bits":
+     * codes 1 and 3 both jump to the loop address). Without Repeat the level
+     * goes to 0 and the envelope to Release in this same tick, the envelope
+     * counter left alone [ORACLE FIXTURE S1: ENVX is 0000h in the tick that
+     * sets ENDX]; a voice in noise mode keeps its envelope [KEPT]. D6: the
+     * event carries the address the voice continues at, in noise mode too. */
+    if (!(addr & 15u) && (v->flags & 0x01u)) {
+        endx_latch |= 1u << idx;
+        addr = v->repeat_addr & (SPU_RAM_SIZE - 1u);
+        if (v->flags & 0x02u) {
+            spu_event_record(SPU_EV_END_LOOP, idx, addr);
+        } else {
+            if (!source_voice_flag(0x1F801D94u, idx)) {
+                v->env_level = 0;
+                v->adsr_phase = ADSR_RELEASE;
+            }
+            spu_event_record(SPU_EV_END_STOP, idx, addr);
+        }
+    }
+
+    /* D2 (b)-(e): the header of the block that starts here. D4: a block start
+     * is an address that is a multiple of 16. The repeat address is used as
+     * it is held, so one that Key On took from an odd register value (spec
+     * 6.5 K3) lands in the middle of a block, where no header is read [KEPT].
+     * (d): a Loop Start flag copies the block's address to the repeat address
+     * and to the repeat register when the header is fetched [ORACLE FIXTURE
+     * S1], unless a register write disarmed the copy (spec 6.6 W1) [ORACLE
+     * FIXTURE S2] (PSX-SPX "Voice 0..23 ADPCM Repeat Address"). */
+    if (!(addr & 15u)) {
+        source_fetch_irq(addr);
+        d->shift  = spu_ram[addr] & 0x0Fu;
+        d->filter = spu_ram[addr] >> 4;
+        v->flags  = spu_ram[addr + 1u];
+        if ((v->flags & 0x04u) && !d->ignore_loop) {
+            v->repeat_addr = addr;
+            spu_regs[(uint32_t)idx * 8u + 7u] = (uint16_t)(addr >> 3);
+        }
+        addr = (addr + 2u) & (SPU_RAM_SIZE - 1u);
+    }
+
+    /* D3: one word of block data is four samples, lowest nibble first
+     * (PSX-SPX "Sample Data (SPU-ADPCM)"). */
+    source_fetch_irq(addr);
+    uint32_t word = (uint32_t)spu_ram[addr]
+                  | ((uint32_t)spu_ram[(addr + 1u) & (SPU_RAM_SIZE - 1u)] << 8);
+    for (int n = 0; n < 4; n++) {
+        d->samples[d->write_pos] =
+            spu_adpcm_sample((word >> (4 * n)) & 15u, d->shift, d->filter,
+                             &v->hist1, &v->hist2);
+        d->write_pos = (uint8_t)((d->write_pos + 1u) & 31u);
+        d->available++;
+    }
+    v->cur_addr = (addr + 2u) & (SPU_RAM_SIZE - 1u);
+}
+
+/* Spec 6.4 P2: the pitch step of one tick. `prev_out` is this tick's output
+ * of the voice before this one (P4). PSX-SPX "Pitch Counter" gives the same
+ * step but for two points, both [KEPT]: the sum is not masked to 16 bits, so
+ * a pitch register of 8000h or more with a previous output of -8000h gives
+ * 10000h before the limit (PSX-SPX: 0); and the limit is 3FFFh (PSX-SPX:
+ * 4000h). */
+static uint32_t source_pitch_step(uint16_t pitch, int modulated, int16_t prev_out)
+{
+    int32_t step = pitch;
+    if (modulated) step += ((int32_t)(int16_t)pitch * prev_out) >> 15;
+    if (step > 0x3FFF) step = 0x3FFF;
+    return (uint32_t)step;
+}
+
+/* Spec 6.1 T2: one tick of one voice in the source profile. In order: refill
+ * the decode queue, give the voice output, then either count the start delay
+ * or step the envelope and the pitch counter. Returns the voice output. */
 static int16_t source_voice_sample(int idx) {
-    (void)idx;
-    spu_ps1b372_stub("6.1 T2; 6.2 D1-D6; 6.3 O1-O3; 6.4 P1-P4");
-    return 0;
+    SpuVoice *v = &voices[idx];
+    SourceSpuDecode *d = &source_decode[idx];
+
+    source_refill(idx);
+
+    /* O1: the noise register in noise mode (PSX-SPX "SPU Noise Generator"),
+     * else the 4-point Gaussian interpolation over the four oldest queued
+     * samples, the oldest on the outer tap (PSX-SPX "4-Point Gaussian
+     * Interpolation"). The products are summed, then shifted once [ORACLE
+     * FIXTURE G1-G4]. */
+    int16_t raw;
+    if (source_voice_flag(0x1F801D94u, idx)) {
+        raw = (int16_t)noise_lfsr;
+    } else {
+        unsigned i = (v->phase >> 4) & 0xFFu;
+        unsigned at = d->read_pos;
+        int32_t sum = spu_gauss_table[0x0FFu - i] * d->samples[at & 31u]
+                    + spu_gauss_table[0x1FFu - i] * d->samples[(at + 1u) & 31u]
+                    + spu_gauss_table[0x100u + i] * d->samples[(at + 2u) & 31u]
+                    + spu_gauss_table[0x000u + i] * d->samples[(at + 3u) & 31u];
+        raw = (int16_t)(sum >> 15);
+    }
+    /* O2: the level is the one from before this tick's envelope step [ORACLE
+     * FIXTURE E8b: the capture holds the level from before the step]. */
+    int16_t out = (int16_t)(((int32_t)raw * (int16_t)v->env_level) >> 15);
+
+    if (source_play_delay[idx]) {
+        /* P1: Key On is followed by four ticks in which neither the envelope
+         * nor the pitch counter moves [ORACLE FIXTURE E4, S1]. */
+        source_play_delay[idx]--;
+    } else {
+        adsr_run(idx, v);
+        /* P2, P4: voice 0 is never modulated (PSX-SPX: PMON bit 0). */
+        uint16_t pitch = voice_reg(idx, 2);
+        int modulated = idx > 0 && source_voice_flag(0x1F801D90u, idx);
+        /* P3: bits 12 and up of the pitch counter are the samples consumed
+         * (PSX-SPX "Pitch Counter"). */
+        v->phase += source_pitch_step(pitch, modulated, source_prev_out);
+        uint32_t used = v->phase >> 12;
+        v->phase &= 0xFFFu;
+        d->read_pos = (uint8_t)((d->read_pos + used) & 31u);
+        d->available = (uint8_t)(d->available - used);
+    }
+
+    v->sample_idx = d->read_pos;                                   /* O3 */
+    source_prev_out = out;                                         /* P4 */
+    return out;
 }
 
 static int16_t voice_next_sample(int idx) {
@@ -845,9 +995,20 @@ static void key_on(uint32_t mask) {
         v->env_level = 0;
         v->adsr_divider = 0;
         v->adsr_phase = ADSR_ATTACK;
-        /* PS1B-372-STUB [spec 6.5 K3]: what Key On does to a voice in the
-         * source profile, beyond the lines above. */
-        if (source_key_timing) spu_ps1b372_stub("6.5 K3");
+        if (source_key_timing) {
+            /* Spec 6.5 K3: Key On takes the repeat register times 8 with bit
+             * 0 kept (spec 6.2 D4) [ORACLE FIXTURE S1: Key On keeps a preset
+             * repeat address]. It empties the decode queue; the stored
+             * samples, the shift and the filter stay. It arms the Loop Start
+             * copy again (spec 6.6 W1). The voice then waits four ticks
+             * before its envelope and pitch counter move (spec 6.4 P1)
+             * [ORACLE FIXTURE E4, S1]. */
+            SourceSpuDecode *d = &source_decode[i];
+            v->repeat_addr = ((uint32_t)voice_reg(i, 7) << 3) & (SPU_RAM_SIZE - 1u);
+            d->read_pos = d->write_pos = d->available = 0;
+            d->ignore_loop = 0;
+            source_play_delay[i] = 4;
+        }
         key_on_count++;
         endx_latch &= ~(1u << i);  /* KEYON clears ENDX bit on real hw */
         spu_event_record(SPU_EV_KEYON, i, v->cur_addr);
@@ -861,10 +1022,13 @@ static void key_on(uint32_t mask) {
 static void key_off(uint32_t mask) {
     for (int i = 0; i < SPU_VOICE_COUNT; i++) {
         if (!(mask & (1u << i))) continue;
-        /* PS1B-372-STUB [spec 6.5 K2]: which voices a Key Off reaches in the
-         * source profile. The default path skips a voice that is not active. */
-        if (source_key_timing) spu_ps1b372_stub("6.5 K2");
-        if (!voices[i].active) continue;
+        /* Spec 6.5 K2: in the source profile a Key Off reaches every voice
+         * that is not already in Release, also one in its start delay (K6);
+         * a voice in Release is left alone and records nothing (PSX-SPX
+         * "Key OFF") [ORACLE FIXTURE E5]. The default path skips a voice
+         * that is not active. */
+        if (source_key_timing ? voices[i].adsr_phase == ADSR_RELEASE
+                              : !voices[i].active) continue;
         spu_event_record(SPU_EV_KEYOFF, i, voices[i].cur_addr);
         voices[i].adsr_phase = ADSR_RELEASE;
         voices[i].adsr_divider = 0;
@@ -872,12 +1036,34 @@ static void key_off(uint32_t mask) {
     }
 }
 
-/* PS1B-372-STUB [spec 6.5 K2-K5; 6.7 M1]
- * End of a tick in the source profile: apply the pending Key Off and Key On
- * bits, then the rule for a disabled SPU. `enabled` is SPUCNT bit 15. */
+/* Spec 6.5 K1: a write to a key register half replaces that half of the
+ * pending mask, bits 0 to 15 or bits 16 to 23; nothing reaches the voices
+ * before the end of the tick [ORACLE FIXTURE E4, E5]. A second write to the
+ * same half in one tick replaces the first [KEPT]. */
+static uint32_t source_pending_half(uint32_t pending, int high, uint32_t value)
+{
+    return high ? (pending & 0x0000FFFFu) | ((value & 0xFFu) << 16)
+                : (pending & 0xFFFF0000u) | (value & 0xFFFFu);
+}
+
+/* Spec 6.1 T1 (c), (d): the end of a tick in the source profile. `enabled`
+ * is SPUCNT bit 15. */
 static void source_apply_keys(int enabled) {
-    (void)enabled;
-    spu_ps1b372_stub("6.5 K2-K5; 6.7 M1");
+    /* Spec 6.5 K2, K3: Key Off first, then Key On, so a voice with both
+     * pending ends in Attack (K4) [KEPT]. K5: nothing stays pending. */
+    key_off(source_key_off_pending);
+    key_on(source_key_on_pending);
+    source_key_on_pending = source_key_off_pending = 0;
+
+    /* Spec 6.7 M1 [KEPT]: with the SPU disabled every voice is put in Release
+     * at level 0 at the end of each tick. The envelope counter, the start
+     * delay, the decode queue and the pitch counter are left running. */
+    if (!enabled) {
+        for (int i = 0; i < SPU_VOICE_COUNT; i++) {
+            voices[i].adsr_phase = ADSR_RELEASE;
+            voices[i].env_level = 0;
+        }
+    }
 }
 
 void spu_init(void) {
@@ -955,11 +1141,11 @@ void spu_render(int16_t* out_stereo, int frames) {
         }
     }
 
-    /* PS1B-372-STUB [spec 4 S3]: in the source profile every voice runs on
-     * every tick. Two conditions of the default path stand in the way and are
-     * yours to change: `any_voice` here, and `if (enabled)` at the start of
-     * the per-tick block below. */
-    if (source_key_timing) spu_ps1b372_stub("4 S3");
+    /* Spec 4 S3: in the source profile every voice runs its tick on every
+     * tick, keyed on or not [ORACLE FIXTURE S1: envelopes run with no active
+     * voice], and with the SPU disabled too [KEPT]. So the voice walk is
+     * always taken, and the per-tick block below also runs while disabled. */
+    if (source_key_timing) any_voice = 1;
 
     /* Shadow tap: arm recording for this block if the float SPU shadow is on.
      * Off by default => s_shadow_tap_on stays 0 and the mix loop is unchanged
@@ -1093,7 +1279,7 @@ void spu_render(int16_t* out_stereo, int frames) {
         int16_t main_l = chan_volume(spu_regs[reg_index(0x1F801D80u)], &sweep_main_env[0]);
         int16_t main_r = chan_volume(spu_regs[reg_index(0x1F801D82u)], &sweep_main_env[1]);
 
-        if (enabled) {
+        if (enabled || source_key_timing) {   /* spec 4 S3 */
             int32_t voice_l = 0;
             int32_t voice_r = 0;
             int32_t rev_send_l = 0;
@@ -1140,10 +1326,13 @@ void spu_render(int16_t* out_stereo, int frames) {
                     }
                 }
             }
-            /* PS1B-372-STUB [spec 6.7 M2]: the mute bit in the source profile.
-             * `ctrl` is SPUCNT; voice_l, voice_r, rev_send_l and rev_send_r
-             * are this tick's voice sum and the voices' reverb send. */
-            if (source_key_timing) spu_ps1b372_stub("6.7 M2");
+            /* Spec 6.7 M2: with SPUCNT bit 14 clear the source profile mutes
+             * the sum of the voices and the voices' reverb send for this
+             * tick (PSX-SPX SPUCNT bit 14 "Mute SPU"; where it applies is
+             * [KEPT]). The voice ticks above, the capture of voices 1 and 3
+             * and the CD input below are not touched. */
+            if (source_key_timing && !(ctrl & 0x4000u))
+                voice_l = voice_r = rev_send_l = rev_send_r = 0;
             mix_l = voice_l;
             mix_r = voice_r;
             if (voice_sum_pos < voice_sum_cap) {
@@ -1444,9 +1633,10 @@ void spu_write(uint32_t addr, uint32_t value) {
                  * disarm [NOT OBSERVED: release policy; S2]. */
                 voices[v].repeat_addr =
                     ((uint32_t)((uint16_t)value & ~1u) << 3) & (SPU_RAM_SIZE - 1u);
-                /* PS1B-372-STUB [spec 6.6 W1]: what else a repeat-register
-                 * write does in the source profile. */
-                if (source_key_timing) spu_ps1b372_stub("6.6 W1");
+                /* Spec 6.6 W1: in the source profile the write also disarms
+                 * the Loop Start copy (spec 6.2 D2 (d)) until the next Key On
+                 * [ORACLE FIXTURE S2]. */
+                if (source_key_timing) source_decode[v].ignore_loop = 1;
             }
 
             /* Volume registers feed the sweep envelopes: a direct write
@@ -1483,26 +1673,34 @@ void spu_write(uint32_t addr, uint32_t value) {
              * the source profile applies KON at the sample boundary. */
             if (addr == 0x1F801D88u) {
                 kon_latch = (kon_latch & 0xFFFF0000u) | (uint32_t)(uint16_t)value;
-                /* PS1B-372-STUB [spec 6.5 K1], Key On, low half */
-                if (source_key_timing) spu_ps1b372_stub("6.5 K1");
+                /* Spec 6.5 K1: Key On, low half */
+                if (source_key_timing)
+                    source_key_on_pending =
+                        source_pending_half(source_key_on_pending, 0, value);
                 else key_on((uint32_t)(uint16_t)value);
             }
             if (addr == 0x1F801D8Au) {
                 kon_latch = (kon_latch & 0x0000FFFFu) | ((uint32_t)(uint16_t)value << 16);
-                /* PS1B-372-STUB [spec 6.5 K1], Key On, high half */
-                if (source_key_timing) spu_ps1b372_stub("6.5 K1");
+                /* Spec 6.5 K1: Key On, high half */
+                if (source_key_timing)
+                    source_key_on_pending =
+                        source_pending_half(source_key_on_pending, 1, value);
                 else key_on((uint32_t)(uint16_t)value << 16);
             }
             if (addr == 0x1F801D8Cu) {
                 koff_latch = (koff_latch & 0xFFFF0000u) | (uint32_t)(uint16_t)value;
-                /* PS1B-372-STUB [spec 6.5 K1], Key Off, low half */
-                if (source_key_timing) spu_ps1b372_stub("6.5 K1");
+                /* Spec 6.5 K1: Key Off, low half */
+                if (source_key_timing)
+                    source_key_off_pending =
+                        source_pending_half(source_key_off_pending, 0, value);
                 else key_off((uint32_t)(uint16_t)value);
             }
             if (addr == 0x1F801D8Eu) {
                 koff_latch = (koff_latch & 0x0000FFFFu) | ((uint32_t)(uint16_t)value << 16);
-                /* PS1B-372-STUB [spec 6.5 K1], Key Off, high half */
-                if (source_key_timing) spu_ps1b372_stub("6.5 K1");
+                /* Spec 6.5 K1: Key Off, high half */
+                if (source_key_timing)
+                    source_key_off_pending =
+                        source_pending_half(source_key_off_pending, 1, value);
                 else key_off((uint32_t)(uint16_t)value << 16);
             }
 
