@@ -1107,35 +1107,42 @@ static int enter_guest_syscall_exception(CPUState *cpu) {
  * interrupted thread must not run another instruction, because the game holds
  * the context of the interrupt, not of a later boundary.
  *
- * Not taken, with the behaviour as it was: a target that is the current
- * thread, an invalid or not runnable block, a delivery nested in another, and
+ * The kernel does not look at the target's state word: function 3 stores a1
+ * and returns from whatever block it names. A block of the thread table is
+ * therefore taken whatever its state. Not taken, with the behaviour as it
+ * was (a return to the interrupted code): a target that is the current
+ * thread; an address outside the thread table, where the kernel would load
+ * registers from memory that is not a block; a delivery nested in another;
  * the fiber bridge. Returns 1 when the pointer moved, 0 when not taken, -1
  * when a native shadow pass must bail before any guest state changes. */
 int g_changethread_in_handler_switch = 0;
-static uint32_t s_ct_handler_switches, s_ct_handler_same_thread;
-static uint32_t s_ct_handler_first_epc, s_ct_handler_first_target;
+static uint32_t s_ct_handler_switches, s_ct_handler_same_thread, s_ct_handler_not_taken;
+static uint32_t s_ct_handler_first_epc, s_ct_handler_first_target, s_ct_handler_first_frame;
 
 /* out[0] calls that switched, out[1] calls that named the current thread,
- * out[2] the interrupted PC of the first switch, out[3] its target block. */
-void psx_changethread_in_handler_stats(uint32_t out[4]) {
+ * out[2] calls that named another thread and were not taken; of the first
+ * switch: out[3] the interrupted PC, out[4] the target block, out[5] the frame. */
+void psx_changethread_in_handler_stats(uint32_t out[6]) {
     out[0] = s_ct_handler_switches;
     out[1] = s_ct_handler_same_thread;
-    out[2] = s_ct_handler_first_epc;
-    out[3] = s_ct_handler_first_target;
+    out[2] = s_ct_handler_not_taken;
+    out[3] = s_ct_handler_first_epc;
+    out[4] = s_ct_handler_first_target;
+    out[5] = s_ct_handler_first_frame;
 }
 
 static int psx_change_thread_in_handler(CPUState* cpu, uint32_t target_tcb) {
     extern int psx_exception_nest_depth(void);
     uint32_t current_tcb = psx_current_tcb_ptr(cpu);
-    if (!psx_is_valid_tcb(cpu, current_tcb) || !psx_is_valid_tcb(cpu, target_tcb))
-        return 0;
     if (current_tcb == target_tcb) {
         if (s_ct_handler_same_thread != 0xFFFFFFFFu) s_ct_handler_same_thread++;
         return 0;
     }
-    if (!psx_hle_scheduler_enabled() || psx_exception_nest_depth() != 1 ||
-        psx_tcb_state(cpu, target_tcb) != 0x4000u)
+    if (!psx_is_valid_tcb(cpu, current_tcb) || !psx_is_valid_tcb(cpu, target_tcb) ||
+        !psx_hle_scheduler_enabled() || psx_exception_nest_depth() != 1) {
+        if (s_ct_handler_not_taken != 0xFFFFFFFFu) s_ct_handler_not_taken++;
         return 0;
+    }
     {
         extern int overlay_loader_shadow_native_thread_switch_bail(void);
         if (overlay_loader_shadow_native_thread_switch_bail()) return -1;
@@ -1143,6 +1150,7 @@ static int psx_change_thread_in_handler(CPUState* cpu, uint32_t target_tcb) {
     if (s_ct_handler_switches == 0u) {
         s_ct_handler_first_epc = cpu->cop0[14];   /* where the thread was interrupted */
         s_ct_handler_first_target = target_tcb;
+        s_ct_handler_first_frame = (uint32_t)s_frame_count;
     }
     if (s_ct_handler_switches != 0xFFFFFFFFu) s_ct_handler_switches++;
 

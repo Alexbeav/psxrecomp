@@ -1,14 +1,21 @@
 """A ChangeThread called inside an interrupt handler switches at the call (PS1B-417).
 
---src-root and --control exist for the control run: they build the same guest
-against the runtime sources of another tree (one from before the fix), where it
-must fail on what the guest sees.
+The guest file is built three times: as it is, with CHANGETHREAD_NO_RESTORE and
+with CHANGETHREAD_NOT_RUNNABLE (see its header). The helper passes no define
+to the guest file, so each variant is a copy that starts with its define.
+
+--src-root and --control exist for the control run: they build the first
+variant against the runtime sources of another tree (one from before the fix),
+where it must fail on what the guest sees.
 """
 import argparse
 from pathlib import Path
 import re
 import tempfile
 from source_fixture_link import build_and_run
+
+GUEST = 'test_changethread_in_handler.c'
+MODULES = ['interrupts.c', 'traps.c', 'psx_bios_backend.c']
 
 
 def report_side(root):
@@ -20,12 +27,25 @@ def report_side(root):
         r'"  \\"changethread_in_handler\\": \{\\n"\s*'
         r'"    \\"switches\\": %u,\\n"\s*'
         r'"    \\"same_thread\\": %u,\\n"\s*'
+        r'"    \\"not_taken\\": %u,\\n"\s*'
         r'"    \\"first_epc\\": \\"0x%08X\\",\\n"\s*'
+        r'"    \\"first_frame\\": %u,\\n"\s*'
         r'"    \\"first_target\\": \\"0x%08X\\"\\n"\s*'
-        r'"  \},\\n",\s*ct\[0\], ct\[1\], ct\[2\], ct\[3\]\);',
+        r'"  \},\\n",\s*ct\[0\], ct\[1\], ct\[2\], ct\[3\], ct\[5\], ct\[4\]\);',
         report[call:])
-    assert fmt, ('the report must write "changethread_in_handler": {"switches", '
-                 '"same_thread", "first_epc", "first_target"} from the counters')
+    assert fmt, ('the report must write "changethread_in_handler": {"switches", "same_thread", '
+                 '"not_taken", "first_epc", "first_frame", "first_target"} from the counters')
+
+
+def variant(here, work, name, define):
+    """A copy of the guest that starts with `define` (None: the file as it is)."""
+    if define is None:
+        return here
+    guest = work / name
+    guest.mkdir()
+    (guest / 'rfe_guest_fixture.h').write_bytes((here / 'rfe_guest_fixture.h').read_bytes())
+    (guest / GUEST).write_bytes(b'#define ' + define.encode() + b' 1\n' + (here / GUEST).read_bytes())
+    return guest
 
 
 if __name__ == '__main__':
@@ -38,21 +58,18 @@ if __name__ == '__main__':
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
     src_root = Path(args.src_root).resolve() if args.src_root else here.parent
-    if not args.control:
+    if args.control:
+        variants = [('control', 'CHANGETHREAD_CONTROL')]
+    else:
         report_side(src_root.parent)
+        variants = [('plain', None), ('no_restore', 'CHANGETHREAD_NO_RESTORE'),
+                    ('not_runnable', 'CHANGETHREAD_NOT_RUNNABLE')]
     with tempfile.TemporaryDirectory() as root:
-        guest = here
-        if args.control:
-            # The helper passes no define to the guest file, so the control
-            # builds a copy that starts with it.
-            guest = Path(root) / 'guest'
-            guest.mkdir()
-            (guest / 'rfe_guest_fixture.h').write_bytes((here / 'rfe_guest_fixture.h').read_bytes())
-            (guest / 'test_changethread_in_handler.c').write_bytes(
-                b'#define CHANGETHREAD_CONTROL 1\n'
-                + (here / 'test_changethread_in_handler.c').read_bytes())
-        for opt in ('-O0', '-O2'):
-            build_and_run(args.cc, guest, src_root, opt, Path(root),
-                          ['interrupts.c', 'traps.c', 'psx_bios_backend.c'],
-                          'test_changethread_in_handler.c')
-    print('PASS: a ChangeThread called inside a handler switches at the call (O0/O2)')
+        for name, define in variants:
+            guest = variant(here, Path(root), name, define)
+            for opt in ('-O0', '-O2'):
+                work = Path(root) / (name + opt)
+                work.mkdir()
+                build_and_run(args.cc, guest, src_root, opt, work, MODULES, GUEST)
+    print('PASS: a ChangeThread called inside a handler switches at the call '
+          '(three guests, O0/O2)')

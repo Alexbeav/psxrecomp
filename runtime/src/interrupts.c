@@ -2569,7 +2569,11 @@ irq_deliver_eval:
         entry_tcb != 0u && exit_tcb != 0u && entry_tcb != exit_tcb) {
         extern uint32_t psx_read_word(uint32_t addr);   /* memory.c (plain RAM read) */
         uint32_t new_state = psx_read_word(exit_tcb & 0x1FFFFFFFu);
-        if (new_state == 0x4000u) {   /* the new current thread must be runnable */
+        /* The new current thread must be runnable, when the handler moved the
+         * pointer itself. A ChangeThread that the handler called is taken for
+         * any block of the thread table: the kernel returns from the block a1
+         * names without a look at its state (PS1B-417). */
+        if (new_state == 0x4000u || changethread_at_call) {
             /* A native-only shadow pass must never commit the handler's TCB/RAM
              * changes or escape past the authoritative restore. Bail before
              * configuring either immediate or deferred scheduler state. */
