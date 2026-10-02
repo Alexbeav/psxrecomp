@@ -72,6 +72,9 @@ uint32_t psx_overlay_resident_crc_at(uint32_t phys, int *valid) {
     (void)phys; *valid = 0; return 0;
 }
 int psx_mod_function_entry(CPUState *cpu, uint32_t addr) { (void)cpu; (void)addr; return 0; }
+/* [[draw_distance.clamp]] is off: fixture_link would stub this data symbol as a
+ * function, whose code bytes read as non-zero and run the clamp lookup. */
+int g_psx_draw_distance_clamp_live = 0;
 /* The segment-miss recorder sees every clean game-text miss; nothing to record. */
 int psx_game_is_function_entry(uint32_t addr) { (void)addr; return 0; }
 uint32_t psx_segment_miss_note(uint32_t addr, int (*is_entry)(uint32_t),
