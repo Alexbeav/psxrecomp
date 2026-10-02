@@ -191,6 +191,19 @@ Without a lobby start (LAN or Direct IP):
 Sim authority: pad **slot 0** is the session host (`START`, state transfer).
 Guests rearrange among seats **1..N−1**.
 
+**When the start fails (PS1B-386).** A LAN host listens on the room's UDP
+port (7777 by default; the browser scans 7777 to 7808), a guest on a port the
+system picks, and a command-line start on the `--net-bind` address. When the
+system refuses that port, the runtime tries the bind itself and says so:
+"Netplay could not open UDP port 7777 on 0.0.0.0 (system error 10048).
+Another program or the operating system holds that port. Choose another port
+and start again." The log line adds the system's own text. Windows can hold a
+whole range of ports for Hyper-V and WSL without listing a program for it. A
+listen address that is not `address:port` and a peer address that cannot be
+used get their own sentence, and the build is named only when it has no
+netplay. A command-line start exits with code 1; a match started from the
+launcher returns to the room with the sentence on the status line.
+
 ---
 
 ## Multitap + seat ceiling

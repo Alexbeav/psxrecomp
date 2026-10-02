@@ -36,6 +36,55 @@ int main(void)
     CHECK(netplay_exit_reason_text("") == NULL);
     CHECK(netplay_exit_reason_text(NULL) == NULL);
 
+    /* A start that failed says what failed (PS1B-386). */
+    {
+        char why[NETPLAY_START_FAILURE_CAP];
+        /* The system refused the port: the port, the address and the system's
+         * error are named, the player is told what to do, and the build is
+         * not blamed. */
+        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "127.0.0.1:47811",
+                                   NETPLAY_BIND_FAILED, 10048, why, sizeof(why));
+        CHECK(strstr(why, "UDP port 47810 on 127.0.0.1") != NULL);
+        CHECK(strstr(why, "system error 10048") != NULL);
+        CHECK(strstr(why, "Another program or the operating system holds that port") != NULL);
+        CHECK(strstr(why, "Choose another port") != NULL);
+        CHECK(strstr(why, "built without") == NULL && strstr(why, "recomp-net") == NULL);
+        CHECK(strlen(why) < 192);
+        /* The longest port, address and error number still fit last_error. */
+        netplay_start_failure_text(-3, 1, "255.255.255.255:65535", "", NETPLAY_BIND_FAILED,
+                                   -2147483647, why, sizeof(why));
+        CHECK(strlen(why) < 192 && strstr(why, "start again.") != NULL);
+        /* A LAN host's own port, any address. */
+        netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_FAILED, 98, why, sizeof(why));
+        CHECK(strstr(why, "UDP port 7777 on 0.0.0.0 (system error 98)") != NULL);
+        /* The build is named only when the build has no netplay. */
+        netplay_start_failure_text(-1, 0, "127.0.0.1:47810", "", NETPLAY_BIND_NOT_TRIED, 0, why, sizeof(why));
+        CHECK(strstr(why, "This build has no netplay") != NULL);
+        CHECK(strstr(why, "port") == NULL);
+        /* The port was free when tried again: the other address is the cause. */
+        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "not an address", NETPLAY_BIND_OK, 0, why, sizeof(why));
+        CHECK(strstr(why, "the other player's address \"not an address\"") != NULL);
+        CHECK(strstr(why, "holds that port") == NULL);
+        /* A listen address that is not address:port. */
+        netplay_start_failure_text(-3, 1, "47810", "", NETPLAY_BIND_BAD_ADDRESS, 0, why, sizeof(why));
+        CHECK(strstr(why, "\"47810\" is not an address and a port") != NULL);
+        /* A host waiting for the first peer (no peer address), port free. */
+        netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_OK, 0, why, sizeof(why));
+        CHECK(strstr(why, "its connection on 0.0.0.0:7777") != NULL);
+        /* Online (relay) settings, and any other code. */
+        netplay_start_failure_text(-4, 1, "0.0.0.0:0", "", NETPLAY_BIND_NOT_TRIED, 0, why, sizeof(why));
+        CHECK(strstr(why, "online connection") != NULL && strstr(why, "built without") == NULL);
+        netplay_start_failure_text(-2, 1, "", "", NETPLAY_BIND_NOT_TRIED, 0, why, sizeof(why));
+        CHECK(strstr(why, "(code -2)") != NULL);
+        /* Missing strings and a short buffer are safe. */
+        netplay_start_failure_text(-3, 1, NULL, NULL, NETPLAY_BIND_FAILED, 5, why, sizeof(why));
+        CHECK(strlen(why) > 20 && strlen(why) < 192);
+        memset(why, 'x', sizeof(why));
+        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "", NETPLAY_BIND_FAILED, 10048, why, 8);
+        CHECK(strlen(why) == 7 && why[8] == 'x');
+        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "", NETPLAY_BIND_FAILED, 10048, NULL, 0);
+    }
+
     /* No mismatch seen: never final. */
     CHECK(!netplay_boot_mismatch_final(0u, 100000u, NETPLAY_BOOT_MISMATCH_GRACE_MS));
     /* Seen, grace not yet over, then over. */
