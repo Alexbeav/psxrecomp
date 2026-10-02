@@ -117,6 +117,7 @@ extern uint64_t crash_trace_unknown_seq_get(void);
 
 /* Dirty-RAM block log (defined in dirty_ram_interp.c). */
 #include "dirty_ram_interp.h"
+#include "interp_report.h"
 
 /* JSON helpers. Hand-rolled to avoid allocations on the SEH path. */
 
@@ -440,6 +441,42 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             snprintf(ac_report, sizeof(ac_report), "{}");
         append_str(buf, sizeof(buf), &pos, "  \"overlay_compile\": ");
         append_str(buf, sizeof(buf), &pos, ac_report);
+        append_str(buf, sizeof(buf), &pos, ",\n");
+    }
+
+    /* PS1B-391: which addresses ran interpreted, whether the text guard is
+     * armed and what it refused, and why the overlay loader had no native
+     * unit. The loader's disp_interp is one number; a product has no debug
+     * server to ask for more. Everything here is read from counters the
+     * runtime keeps anyway (interp_report.h). */
+    {
+        extern uint64_t g_dirty_ram_native_handoffs;
+        extern void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
+        extern void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                                    uint64_t kernel[PSX_INTERP_MISS_REASONS]);
+        static char id_report[16 * 1024];
+        PsxInterpReportInput in;
+        memset(&in, 0, sizeof(in));
+        in.guard_armed      = dirty_ram_text_image_range(&in.guard_lo, &in.guard_hi);
+        in.foreign_pages    = dirty_ram_text_foreign_pages();
+        in.native_blocked   = dirty_ram_text_native_blocked();
+        in.diverged_pages   = dirty_ram_text_diverged_pages();
+        dirty_ram_text_exact_mismatch_stats(&in.exact_mismatches, in.exact_last);
+        in.kernel_end       = DIRTY_RAM_KERNEL_WINDOW_END;
+        in.text_lo          = g_text_image_lo;
+        in.text_hi          = g_overlay_region_floor;
+        in.blocks_run       = g_dirty_ram_blocks_run;
+        in.insns_run        = g_dirty_ram_insns_run;
+        in.aborts           = g_dirty_ram_aborts;
+        in.guard_yields     = g_dirty_ram_guard_yields;
+        in.native_handoffs  = g_dirty_ram_native_handoffs;
+        in.table            = g_dirty_ram_pc_table;
+        in.table_size       = DIRTY_RAM_PC_TABLE_SIZE;
+        overlay_loader_get_miss_reasons(in.miss[0], in.miss[1]);
+        if (psx_interp_report_json(id_report, (int)sizeof(id_report), &in) <= 0)
+            snprintf(id_report, sizeof(id_report), "{}");
+        append_str(buf, sizeof(buf), &pos, "  \"interp_detail\": ");
+        append_str(buf, sizeof(buf), &pos, id_report);
         append_str(buf, sizeof(buf), &pos, ",\n");
     }
 

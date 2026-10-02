@@ -5,6 +5,7 @@
 #include "overlay_backend.h"
 #include "crc32.h"
 #include "dirty_ram_interp.h"
+#include "interp_report.h"
 #include "interrupts.h"
 #include "debug_server.h"
 #include "psx_cycles.h"
@@ -471,6 +472,8 @@ static uint64_t s_disp_interp    = 0;
  * needs them apart (PS1B-323). */
 static uint64_t s_disp_native_kernel = 0;
 static uint64_t s_disp_interp_kernel = 0;
+/* PS1B-391: disp_interp by reason; [0] above the kernel window, [1] inside it. */
+static uint64_t s_disp_miss[2][PSX_INTERP_MISS_REASONS];
 /* Small diagnostic-only native-owner sampler. A logical softlock can continue
  * presenting at 60 Hz while executing a tiny bad native loop, so FPS alone is
  * not correctness evidence. This is enabled only with the existing runtime
@@ -3714,6 +3717,10 @@ static int overlay_find_by_range(uint32_t phys) {
 #define DISP_NATIVE()      do { s_disp_native++; if (DISP_KERNEL()) s_disp_native_kernel++; } while (0)
 #define DISP_NATIVE_UNDO() do { s_disp_native--; if (DISP_KERNEL()) s_disp_native_kernel--; } while (0)
 #define DISP_INTERP()      do { s_disp_interp++; if (DISP_KERNEL()) s_disp_interp_kernel++; } while (0)
+/* PS1B-391: a miss also counts under its reason (interp_report.h), above the
+ * kernel window or inside it. One more increment on a path that already ends
+ * in the interpreter; a native dispatch does not pass here. */
+#define DISP_MISS(reason)  do { s_disp_miss[DISP_KERNEL() ? 1 : 0][(reason)]++; DISP_INTERP(); } while (0)
 
 int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
     uint32_t phys = addr & 0x1FFFFFFFu;
@@ -3731,7 +3738,7 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
      * (found via Ape Escape, the only overlay-off title). Fail closed here. */
     if (!s_active) return 0;
     if (overlay_cache_window_contains(phys) && lazy_miss_cached(phys)) {
-        DISP_INTERP();
+        DISP_MISS(PSX_MISS_CACHED);
         return 0;
     }
     int lazy_loaded = 0;
@@ -3741,6 +3748,7 @@ retry_candidates:
     int loaded_range_ci = -1;
     int lazy_exact = 0;
     int exact_needs_load = 0;
+    int stale_range_unit = 0;   /* a continuation owner whose bytes are not the live bytes */
     if (head < 0 && s_active && overlay_cache_window_contains(phys)) {
         lazy_exact = head < 0 && lazy_has_exact_entry(phys);
         /* A CPS continuation is normally not a registered function ENTRY. Its
@@ -3804,7 +3812,7 @@ retry_candidates:
             if (_probe) s_cps_probe_matched = matched;
             if (matched) {
                 if (c->state != ENTRY_VALID) { c->state = ENTRY_VALID; s_valid_count++; }
-                if (c->device_touch)   { if (_probe) s_cps_probe_outcome = 3; DISP_INTERP(); return 0; }
+                if (c->device_touch)   { if (_probe) s_cps_probe_outcome = 3; DISP_MISS(PSX_MISS_DEVICE_TOUCH); return 0; }
                 /* Diff instrument — same contract as the entry chain's want_diff
                  * gate below. A continuation re-entry must NOT run native blind
                  * while its candidate is still inside the verify budget: CPS
@@ -3826,14 +3834,14 @@ retry_candidates:
                     if (want_diff && (s_diff_addr || c->diff_passes < OVERLAY_DIFF_BUDGET)) {
                         if (_probe) s_cps_probe_outcome = 5;
                         s_diffgate_interp++;
-                        DISP_INTERP();
+                        DISP_MISS(PSX_MISS_DIFF_GATE);
                         return 0;
                     }
                     if (!s_native_exec || overlay_native_blocked(c->addr) || overlay_native_blocked(addr))
-                                           { if (_probe) s_cps_probe_outcome = 4; s_would_run_native++; DISP_INTERP(); return 0; }
+                                           { if (_probe) s_cps_probe_outcome = 4; s_would_run_native++; DISP_MISS(PSX_MISS_NATIVE_OFF); return 0; }
 #ifndef PSX_NO_DEBUG_TOOLS
                     if (!native_rank_allows(c, addr))
-                                           { if (_probe) s_cps_probe_outcome = 7; s_would_run_native++; DISP_INTERP(); return 0; }
+                                           { if (_probe) s_cps_probe_outcome = 7; s_would_run_native++; DISP_MISS(PSX_MISS_RANK); return 0; }
 #endif
                 }
                 if (_probe) s_cps_probe_outcome = 2;
@@ -3869,13 +3877,14 @@ retry_candidates:
                 s_native_inprogress = prev_inprogress;
                 if (g_native_bad_entry) {  /* foreign interior entry: fail closed to interp */
                     g_native_bad_entry = 0;
-                    DISP_NATIVE_UNDO(); DISP_INTERP();
+                    DISP_NATIVE_UNDO(); DISP_MISS(PSX_MISS_BAD_ENTRY);
                     return 0;            /* cpu->pc was restored to the requested PC */
                 }
                 return 1;
             }
             if (_probe) s_cps_probe_outcome = 1;
             /* stale code bytes: fall through to the interpreter */
+            stale_range_unit = 1;
         }
     }
 
@@ -3922,7 +3931,7 @@ retry_candidates:
             /* Device-touching functions never run their shard: the shadow diff
              * can't safely double-execute MMIO/SIO/DMA to validate them, so they
              * always fall to the interpreter (the authoritative single path). */
-            if (c->device_touch) { DISP_INTERP(); return 0; }
+            if (c->device_touch) { DISP_MISS(PSX_MISS_DEVICE_TOUCH); return 0; }
             /* Same-state differential: run native+interp from identical state,
              * compare, keep the interp result. Takes precedence over the A/B
              * toggle. Verify-budget: once a candidate has passed cleanly enough
@@ -3959,7 +3968,7 @@ retry_candidates:
                 extern int psx_get_in_exception(void);
                 if (psx_get_in_exception()) {
                     s_diffgate_interp++;
-                    DISP_INTERP();
+                    DISP_MISS(PSX_MISS_DIFF_GATE);
                     return 0;
                 }
                 run_shadow_diff(cpu, c, addr);
@@ -3971,10 +3980,10 @@ retry_candidates:
              * handles it. The per-function blocklist forces the same interp
              * routing for one function only (bisection localization). */
             if (!s_native_exec || overlay_native_blocked(c->addr))
-                { s_would_run_native++; DISP_INTERP(); return 0; }
+                { s_would_run_native++; DISP_MISS(PSX_MISS_NATIVE_OFF); return 0; }
 #ifndef PSX_NO_DEBUG_TOOLS
             if (!native_rank_allows(c, addr))
-                { s_would_run_native++; DISP_INTERP(); return 0; }
+                { s_would_run_native++; DISP_MISS(PSX_MISS_RANK); return 0; }
 #endif
 
             /* Record into the always-on ring BEFORE the call; mark in-progress
@@ -4019,7 +4028,7 @@ retry_candidates:
             s_native_inprogress = prev_inprogress;   /* restore (nested calls) */
             if (g_native_bad_entry) {  /* foreign interior entry: fail closed to interp */
                 g_native_bad_entry = 0;
-                DISP_NATIVE_UNDO(); DISP_INTERP();
+                DISP_NATIVE_UNDO(); DISP_MISS(PSX_MISS_BAD_ENTRY);
                 return 0;            /* cpu->pc was restored to the requested PC */
             }
             return 1;
@@ -4045,10 +4054,14 @@ retry_candidates:
         goto retry_candidates;
     }
 
-    if (overlay_cache_window_contains(phys)) lazy_miss_record(phys);
-    DISP_INTERP();
+    int in_window = overlay_cache_window_contains(phys);
+    if (in_window) lazy_miss_record(phys);
+    DISP_MISS(!in_window ? PSX_MISS_OUTSIDE_WINDOW
+              : (head >= 0 || stale_range_unit) ? PSX_MISS_STALE_BYTES
+              : PSX_MISS_NO_UNIT);
     return 0;
 }
+#undef DISP_MISS
 #undef DISP_KERNEL
 #undef DISP_NATIVE
 #undef DISP_NATIVE_UNDO
@@ -4092,6 +4105,13 @@ void overlay_loader_active_write_check(uint32_t phys, uint32_t size) {
 void overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp) {
     if (native) *native = s_disp_native_kernel;
     if (interp) *interp = s_disp_interp_kernel;
+}
+
+/* disp_interp by reason (PS1B-391), for the run report. */
+void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                     uint64_t kernel[PSX_INTERP_MISS_REASONS]) {
+    if (above_kernel) memcpy(above_kernel, s_disp_miss[0], sizeof(s_disp_miss[0]));
+    if (kernel)       memcpy(kernel, s_disp_miss[1], sizeof(s_disp_miss[1]));
 }
 
 void overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidations,

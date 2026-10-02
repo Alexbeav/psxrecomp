@@ -1073,6 +1073,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME autocompile_report_test COMMAND autocompile_report_test)
     set_tests_properties(autocompile_report_test PROPERTIES TIMEOUT 120)
 
+    # PS1B-391: the run report names the hottest interpreted addresses, the
+    # text guard's state and the loader's misses by reason. The builder is a
+    # pure function over tables.
+    add_executable(interp_report_test
+        tests/test_interp_report.c
+        src/interp_report.c)
+    target_include_directories(interp_report_test PRIVATE include)
+    add_test(NAME interp_report_test COMMAND interp_report_test)
+
     # ---- previously-unregistered standalone tests -------------------------
     # These 16 existed in runtime/tests/ with no add_test() entry. Their only
     # build instructions were a gcc command line in each file's header comment,
