@@ -172,11 +172,6 @@ target_include_directories(tas_guest_syscall_exception PRIVATE "${_tas_runtime}/
 target_compile_options(tas_guest_syscall_exception PRIVATE -O3 -flto -fwhole-program -UNDEBUG)
 target_link_options(tas_guest_syscall_exception PRIVATE -flto)
 add_test(NAME tas_guest_syscall_exception COMMAND tas_guest_syscall_exception)
-add_executable(tas_guest_break_exception "${_tas_runtime}/tests/test_guest_break_exception.c")
-target_include_directories(tas_guest_break_exception PRIVATE "${_tas_runtime}/include")
-target_compile_options(tas_guest_break_exception PRIVATE -O3 -flto -fwhole-program -UNDEBUG)
-target_link_options(tas_guest_break_exception PRIVATE -flto)
-add_test(NAME tas_guest_break_exception COMMAND tas_guest_break_exception)
 add_test(NAME tas_cd_read_sample_order COMMAND ${Python3_EXECUTABLE}
     "${_tas_runtime}/tests/test_cd_read_sample_order.py" --cc ${CMAKE_C_COMPILER})
 # Disabled (PS1B-167): text scrape of psx_mmio_read_wait( removed by 8b8555c4; needs a

@@ -20,6 +20,7 @@
 #include "source_gpu_runtime.h"
 #include "psx_bios_backend.h" /* psx_bios_is_entry, psx_bios_image (psx_is_dispatchable) */
 #include "dispatch_publish.h"
+#include "psx_break_vector.h"
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
@@ -1243,59 +1244,22 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
     return 1;
 }
 
-/* A BREAK that the guest handles itself (PS1G-74, F1 2000).
- *
- * PSX-SPX "COP0 - Exception Handling": `break` raises exception code 09h (Bp)
- * through the general vector. F1 2000's STUB.EXE writes its own stub to
- * 0x80000080, executes `break 0xFB42`, and checks the value its handler left
- * in t0 after the handler returned to EPC+4 with `rfe`.
- *
- * Only a vector that the guest has pointed at its own code is entered. The
- * BIOS's handler has no route for code 09h but SystemErrorUnresolvedException,
- * so under it a BREAK keeps the fatal report in psx_break: the report names
- * the PC, and a console stops there too. The vector stub is `lui rN,hi`,
- * `ori|addiu rN,rN,lo`, `jr rN`. A target in RAM at or above 0x10000 is guest
- * code; the BIOS's own target is in the kernel below that.
- *
- * Returns 1 with the exception entered. The vector goes back to the flat
- * dispatcher in cpu->pc, as in enter_guest_syscall_exception. EPC is the
- * BREAK's own PC and BD stays clear: a BREAK in a branch delay slot is not
- * told apart here. Returns 0, with nothing changed, inside the synchronous
- * handler window, with SR.BEV set, and for any other vector. */
-static int enter_guest_break_exception(CPUState *cpu, uint32_t pc) {
-    uint32_t sr = cpu->cop0[12];
-    if ((sr & 0x00400000u) || psx_get_in_exception()) return 0;
-    uint32_t w0 = cpu->read_word(0x80000080u);
-    uint32_t w1 = cpu->read_word(0x80000084u);
-    uint32_t w2 = cpu->read_word(0x80000088u);
-    uint32_t reg = (w0 >> 16) & 0x1Fu;
-    uint32_t target = (w0 & 0xFFFFu) << 16;
-    if ((w0 >> 26) != 0x0Fu) return 0;                       /* lui rN, hi */
-    if (((w1 >> 21) & 0x1Fu) != reg || ((w1 >> 16) & 0x1Fu) != reg) return 0;
-    if ((w1 >> 26) == 0x0Du) target |= w1 & 0xFFFFu;         /* ori */
-    else if ((w1 >> 26) == 0x09u)                            /* addiu */
-        target += (uint32_t)(int32_t)(int16_t)(w1 & 0xFFFFu);
-    else return 0;
-    if ((w2 & 0xFC1FFFFFu) != 0x00000008u || ((w2 >> 21) & 0x1Fu) != reg)
-        return 0;                                            /* jr rN */
-    target &= 0x1FFFFFFFu;
-    if (target < 0x00010000u || target >= 0x00200000u) return 0;
-    cpu->cop0[14] = pc;
-    cpu->cop0[13] = (cpu->cop0[13] & (source_gpu_runtime_active()
-        ? 0x0000FF00u : ~(0x80000000u | 0x7Cu))) | (9u << 2);
-    cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);
-    cpu->pc = 0x80000080u;
-    return 1;
-}
-
 void psx_break(CPUState* cpu, uint32_t code, uint32_t pc) {
     psx_load_value_commit(cpu);
-    if (enter_guest_break_exception(cpu, pc)) return;
     char buf[128];
     snprintf(buf, sizeof(buf), "BREAK @ PC=0x%08X, code=0x%05X", pc, code);
     trap_crash(buf);
     fprintf(stderr, "%s\n", buf); fflush(stderr);
     exit(1);
+}
+
+/* The interpreter's BREAK asks here first (psx_break_vector.h, PS1G-74): 1
+ * means the guest's own vector was entered and cpu->pc holds it. psx_break
+ * above stays the only outcome of a BREAK in statically compiled code. */
+int psx_break_enter_guest_vector(CPUState* cpu, uint32_t pc) {
+    psx_load_value_commit(cpu);
+    return psx_break_vector_enter(cpu, pc, psx_get_in_exception(),
+                                  source_gpu_runtime_active());
 }
 
 void psx_arith_overflow(CPUState* cpu) {

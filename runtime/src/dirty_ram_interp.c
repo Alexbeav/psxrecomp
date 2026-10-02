@@ -1903,6 +1903,15 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             psx_syscall(cpu, (insn >> 6) & 0xFFFFFu);
             return (cpu->pc != 0);
         case 0x0D: /* BREAK */
+            /* A guest that owns the exception vector handles its own BREAK
+             * (psx_break_vector.h, PS1G-74). In a branch delay slot EPC and
+             * BD would need the branch, so that case keeps the fatal exit. */
+            {
+                extern int psx_break_enter_guest_vector(CPUState* cpu, uint32_t pc);
+                if (!(cop0_slot.active && cop0_slot.pc == pc) &&
+                    psx_break_enter_guest_vector(cpu, pc))
+                    return 1;
+            }
             psx_break(cpu, (insn >> 6) & 0xFFFFFu, pc);
             return 1;
         case 0x0F: /* SYNC */
