@@ -28,7 +28,7 @@ start says that the compiler rejected a unit.
 | `configured` | 1 when the product has an overlay compile command. |
 | `consistent` | 0 when the report was written while the output reader held its lock (a crash at that moment). The texts can then be half updated; the numbers are still bounded. |
 | `state` | `idle`, `running` or `done`: a run that was still going when the start ended shows `running`. |
-| `runs`, `runs_failed` | Compile driver runs started in this start, and how many ended badly (a failed unit, a bad exit code, no result line). |
+| `runs`, `runs_failed` | Compile driver runs started in this start; and failures: a run that ended badly (a failed unit, a bad exit code, no result line) or a driver that could not be started. `runs_failed` can therefore be larger than `runs`. |
 | `runs_with_result` | Runs that printed their `PSX_SHARD_RESULT` line. |
 | `units_compiled`, `units_failed`, `units_skipped` | The numbers of those result lines, summed over the start. Skipped units were already in the cache or hold no code. |
 | `units_attempted` | `units_compiled` + `units_failed`. |

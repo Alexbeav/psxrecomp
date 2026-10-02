@@ -62,7 +62,9 @@ int  autocompile_status_json(char *out, int cap);
  *
  *   configured, state            is a compile command set; idle/running/done
  *   consistent                   0 when the copy was taken without the lock
- *   runs, runs_failed            driver runs started; runs that ended badly
+ *   runs, runs_failed            driver runs started; failures: a run that ended
+ *                                badly or a driver that could not be started,
+ *                                so runs_failed can be larger than runs
  *   runs_with_result             runs that printed their PSX_SHARD_RESULT line
  *   units_compiled, units_failed, units_skipped
  *                                those result lines, summed over the start
