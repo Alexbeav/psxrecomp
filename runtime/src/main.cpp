@@ -5842,6 +5842,45 @@ static void capture_local_human_pad(PsxNetPad* out) {
     bisect_cap(idx, 1);
 }
 
+/* TEST TOOLING, not a feature. PSX_NET_TEST_INPUT_SEED=<n> (n > 0) replaces
+ * this peer's netplay pad with a scripted one: pseudo-random D-pad and
+ * face-button presses that change every 8 sim ticks, never Start or Select.
+ * Unset or 0 (the default) it does nothing and this function returns false.
+ *
+ * Why it exists: a headless peer has no input device, so a headless pair never
+ * mispredicts an input and never rolls back for one. Two peers with two seeds
+ * mispredict at every change, which is the only way to exercise rollback and
+ * resimulation without a person at each machine.
+ *
+ * The word is a function of the seed and the session's sim tick only, so a
+ * sample taken twice for one tick (tip hold) is the same word. */
+static bool netplay_test_input(PsxNetPad* out) {
+    static int seed_read = 0;
+    static uint32_t seed = 0;
+    if (!seed_read) {
+        seed_read = 1;
+        if (const char* e = std::getenv("PSX_NET_TEST_INPUT_SEED"))
+            seed = (uint32_t)std::strtoul(e, nullptr, 10);
+        if (seed)
+            std::fprintf(stderr,
+                "psxrecomp: netplay TEST INPUT on (PSX_NET_TEST_INPUT_SEED=%u): "
+                "this player's pad is scripted. Test tooling only.\n",
+                (unsigned)seed);
+    }
+    if (!seed) return false;
+    uint32_t x = seed ^ ((psx_netplay_sim_tick() / 8u) * 2654435761u);
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    /* One D-pad direction (bits 4-7) and one face button (bits 12-15), held
+     * or not; active low. Bits 0 (Select) and 3 (Start) are never cleared. */
+    const uint16_t held = (uint16_t)((1u << (4u + (x >> 28) % 4u)) |
+                                     (1u << (12u + (x >> 24) % 4u)));
+    out->buttons = (x >> 20) & 1u ? (uint16_t)~held : 0xFFFFu;
+    out->lx = out->ly = out->rx = out->ry = 0x80u;
+    out->analog = 1;      /* as the headless idle pad below */
+    out->connected = 1;
+    return true;
+}
+
 /* Build a netplay pad blob from a debug-server override without writing SIO. */
 static void capture_override_pad(int override_word, PsxNetPad* out) {
     PlayerInput& p = g_players[0];
@@ -6119,7 +6158,9 @@ static void netplay_barrier_admit(int override) {
             (tip_hold && !psx_start_bisect_no_tiphold_capture());
         if (need_sample) {
             PsxNetPad local{};
-            if (override >= 0 && !g_headless) {
+            if (netplay_test_input(&local)) {
+                /* PSX_NET_TEST_INPUT_SEED: scripted pad, test tooling only. */
+            } else if (override >= 0 && !g_headless) {
                 capture_override_pad(override, &local);
             } else if (g_headless) {
                 local.buttons = 0xFFFFu;

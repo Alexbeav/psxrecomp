@@ -1190,6 +1190,7 @@ if(BUILD_TESTING)
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
                 gl_swap_self_heal
+                netplay_test_input_wiring
                 hybrid_dev_any_input
                 host_input_focus_guards
                 launcher_pad_mode_wiring

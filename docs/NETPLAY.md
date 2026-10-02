@@ -236,6 +236,16 @@ of waiting out the 20 s admit-stall watchdog. A peer that receives the other
 side's BYE while it sees the same mismatch reports the mismatch, not a
 disconnect. Window close and Escape end the match with no message.
 
+### Test input (test tooling)
+
+`PSX_NET_TEST_INPUT_SEED=<n>` (n > 0) replaces that peer's pad with a scripted
+one: pseudo-random D-pad and face-button presses that change every 8 sim
+ticks, never Start or Select. A headless peer has no input device, so a
+headless pair never mispredicts an input. Two peers with two different seeds
+mispredict at every change, which exercises rollback and resimulation with no
+person at either machine. It is off unless the variable is set. It is not a
+player feature.
+
 ---
 
 ## Disc identity for multi-track titles
