@@ -721,6 +721,10 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_optional_netplay_auth.py
                 --cxx ${CMAKE_CXX_COMPILER})
+        add_test(NAME bios_emitter_stamps
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_emitter_stamps.py
+                --cmake ${CMAKE_COMMAND})
         add_test(NAME pgo_rebuild_flow
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pgo_rebuild_flow.py)
