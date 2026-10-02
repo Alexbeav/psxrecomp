@@ -664,8 +664,10 @@ in one stdout line and in the run report (`psx_last_run_report.json`):
              "notice": "settings.toml has fast_boot or bios_hle lines but no settings_format = 2 line. ..."}
 ```
 
-`file_format` is 0 when the file or the line is absent. Every other key of
-`settings.toml` is read the same way in both formats.
+`file_format` is 0 when the file or the line is absent. A start that ends
+before the settings are read (a game config that cannot be read, for example)
+reports 0 for both formats. Every other key of `settings.toml` is read the
+same way in both formats.
 
 `turbo_audio_sink` is meaningful only while load acceleration is active. It keeps
 the guest SPU timeline advancing but discards accelerated samples before host
