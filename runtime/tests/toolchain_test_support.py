@@ -271,6 +271,19 @@ int main(int argc, char** argv) {
         ret = write_project_toolchain_stamp(a);
     } else if (strcmp(op, "link") == 0) {
         ret = link_or_stamp_project_toolchain(a);
+    } else if (strcmp(op, "healthy") == 0) {
+        ret = toolchain_bin_is_healthy(a);
+    } else if (strcmp(op, "activate") == 0) {
+        /* activate_toolchain_path <n> times; PATH's length after each, and PATH itself when it is short. */
+        int n = atoi(a), i;
+        for (i = 0; i < n; ++i) {
+            activate_toolchain_path();
+            printf("len%%d=%%u\n", i + 1, (unsigned)strlen(getenv("PATH") ? getenv("PATH") : ""));
+        }
+        if (getenv("PATH") && strlen(getenv("PATH")) < 3000)
+            printf("path=%%s\n", getenv("PATH"));
+        printf("bin=%%s\n", g_toolchain_bin);
+        ret = g_toolchain_bin[0] ? 1 : 0;
     } else if (strcmp(op, "resolve") == 0) {
         /* What the lookup finds, before and after the pack in use failed its check. */
         char first[1400], second[1400];

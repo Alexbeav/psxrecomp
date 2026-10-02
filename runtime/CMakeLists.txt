@@ -1425,6 +1425,13 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_safe_install.py
                          --compiler ${CMAKE_C_COMPILER})
+        # PS1B-410: the toolchain check does not depend on the length of PATH
+        # (it failed past about 7,600 characters), and activating a pack does
+        # not grow PATH.
+        add_test(NAME toolchain_path_length_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_path_length.py
+                         --compiler ${CMAKE_C_COMPILER})
         # Setup-wizard disc probing (multi-disc roster). Never registered
         # before: a .chd set was rejected and nothing ran to notice.
         add_test(NAME probe_disc_test

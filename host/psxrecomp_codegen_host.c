@@ -864,6 +864,99 @@ static int pack_is_for_this_host(const char* pack_root) {
 }
 #endif
 
+/* Two PATH entries name the same folder: case and the two slashes do not
+ * matter on Windows, a trailing slash does not matter anywhere. */
+static int path_entry_is(const char* entry, size_t len, const char* folder) {
+    size_t flen = strlen(folder), i;
+    while (len > 1 && (entry[len - 1] == '/' || entry[len - 1] == '\\'))
+        --len;
+    while (flen > 1 && (folder[flen - 1] == '/' || folder[flen - 1] == '\\'))
+        --flen;
+    if (len != flen)
+        return 0;
+    for (i = 0; i < len; ++i) {
+        char a = entry[i], b = folder[i];
+#if defined(_WIN32)
+        if (a == '/') a = '\\';
+        if (b == '/') b = '\\';
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+#endif
+        if (a != b)
+            return 0;
+    }
+    return 1;
+}
+
+/* Put `first` and `second` (either may be empty) once at the head of PATH and
+ * take their other copies out. Calling it again changes nothing.
+ *
+ * It used to prepend both at every call into a buffer of 8,192 characters. A
+ * host that relaunched itself grew PATH by three folders a generation (two
+ * activations and the rebuild helper), and a PATH longer than the buffer was
+ * cut off in the middle of an entry. On 2026-10-02 that growth took PATH past
+ * what the readiness check could take, a whole pack was judged unusable and a
+ * new one was installed over it (PS1B-406, PS1B-410). */
+static void path_put_in_front(const char* first, const char* second) {
+#if defined(_WIN32)
+    const char sep = ';';
+#else
+    const char sep = ':';
+#endif
+    const char* old = getenv("PATH");
+    const char* front[2];
+    size_t cap, pos = 0;
+    char* neu;
+    int k;
+    front[0] = (first && first[0]) ? first : NULL;
+    front[1] = (second && second[0] && !(front[0] && path_entry_is(second, strlen(second), front[0])))
+                   ? second : NULL;
+    if (!front[0] && !front[1])
+        return;
+    cap = (old ? strlen(old) : 0) + (front[0] ? strlen(front[0]) : 0) +
+          (front[1] ? strlen(front[1]) : 0) + 4;
+    neu = (char*)malloc(cap);
+    if (!neu)
+        return;
+    for (k = 0; k < 2; ++k) {
+        if (!front[k])
+            continue;
+        if (pos)
+            neu[pos++] = sep;
+        memcpy(neu + pos, front[k], strlen(front[k]));
+        pos += strlen(front[k]);
+    }
+    if (old) {
+        const char* p = old;
+        while (*p) {
+            const char* end = strchr(p, sep);
+            size_t len = end ? (size_t)(end - p) : strlen(p);
+            if (!(front[0] && path_entry_is(p, len, front[0])) &&
+                !(front[1] && path_entry_is(p, len, front[1]))) {
+                neu[pos++] = sep;
+                memcpy(neu + pos, p, len);
+                pos += len;
+            }
+            if (!end)
+                break;
+            p = end + 1;
+        }
+    }
+    neu[pos] = '\0';
+    if (!old || strcmp(old, neu) != 0) {
+#if defined(_WIN32)
+        if (_putenv_s("PATH", neu) != 0)
+#else
+        if (setenv("PATH", neu, 1) != 0)
+#endif
+            fprintf(stderr,
+                    "psxrecomp-codegen: PATH could not be set with the toolchain "
+                    "folders in front (%u characters); it stays as it is\n",
+                    (unsigned)pos);
+    }
+    free(neu);
+}
+
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
@@ -910,27 +1003,11 @@ static void activate_toolchain_path(void) {
         }
     }
 
-    const char* old = getenv("PATH");
+    path_put_in_front(py_path_dir, g_toolchain_bin);
 #if defined(_WIN32)
-    char neu[8192];
-    if (py_path_dir[0])
-        snprintf(neu, sizeof(neu), "%s;%s%s%s", py_path_dir, g_toolchain_bin,
-                 old ? ";" : "", old ? old : "");
-    else
-        snprintf(neu, sizeof(neu), "%s%s%s", g_toolchain_bin, old ? ";" : "",
-                 old ? old : "");
-    _putenv_s("PATH", neu);
     if (py_exe[0])
         _putenv_s("RETCOMM_PYTHON", py_exe);
 #else
-    char neu[8192];
-    if (py_path_dir[0])
-        snprintf(neu, sizeof(neu), "%s:%s%s%s", py_path_dir, g_toolchain_bin,
-                 old ? ":" : "", old ? old : "");
-    else
-        snprintf(neu, sizeof(neu), "%s%s%s", g_toolchain_bin, old ? ":" : "",
-                 old ? old : "");
-    setenv("PATH", neu, 1);
     if (py_exe[0])
         setenv("RETCOMM_PYTHON", py_exe, 1);
 #endif
@@ -3604,11 +3681,40 @@ static int toolchain_bin_compiler_works(const char* bin) {
     fclose(f);
 
 #if defined(_WIN32)
-    /* Prepend pack bin so clang picks this tree's lld, not a system linker. */
-    snprintf(cmd, sizeof(cmd),
-             "cmd.exe /C \"set \"PATH=%s;%%PATH%%\" && \"%s\" \"%s\" -o \"%s\" "
-             ">NUL 2>&1\"",
-             bin, clang, src, exe);
+    /* Pack bin in front of PATH so clang picks this tree's lld, not a system
+     * linker. The child gets that PATH from this process's environment, for
+     * the time of the check. It used to be written into the command
+     * (set "PATH=<bin>;%PATH%" && ...): cmd expands %PATH% inside the line and
+     * a cmd line holds 8,191 characters, so with a PATH over about 7,600
+     * characters the line was refused ("The input line is too long."), the
+     * compile "failed" and a whole pack was judged unusable (PS1B-410). */
+    {
+        const char* old = getenv("PATH");
+        char* saved = old ? _strdup(old) : NULL;
+        size_t need = strlen(bin) + 1 + (old ? strlen(old) : 0) + 1;
+        char* with_bin = (char*)malloc(need);
+        int in_front = 0;
+        if (with_bin) {
+            snprintf(with_bin, need, "%s%s%s", bin, (old && old[0]) ? ";" : "",
+                     old ? old : "");
+            in_front = (_putenv_s("PATH", with_bin) == 0);
+        }
+        if (!in_front)
+            /* One variable holds 32,767 characters at most. clang still finds
+             * its own linker beside itself; the check runs with PATH as it is. */
+            fprintf(stderr,
+                    "psxrecomp-codegen: PATH is too long to put the pack's bin "
+                    "folder in front for the toolchain check; the check runs "
+                    "with PATH as it is\n");
+        snprintf(cmd, sizeof(cmd),
+                 "cmd.exe /C \"\"%s\" \"%s\" -o \"%s\" >NUL 2>&1\"",
+                 clang, src, exe);
+        ok = run_cmd_exit_zero(cmd);
+        if (in_front)
+            _putenv_s("PATH", saved ? saved : "");
+        free(with_bin);
+        free(saved);
+    }
 #else
     /* Prefer the pack linker explicitly so PATH cannot hide a broken lld. */
     (void)lld; /* used via -fuse-ld when present; path already validated */
@@ -3616,8 +3722,8 @@ static int toolchain_bin_compiler_works(const char* bin) {
              "env PATH=\"%s:$PATH\" \"%s\" -fuse-ld=lld \"%s\" -o \"%s\" "
              ">/dev/null 2>&1",
              bin, clang, src, exe);
-#endif
     ok = run_cmd_exit_zero(cmd);
+#endif
 #if defined(_WIN32)
     DeleteFileA(src);
     DeleteFileA(exe);
@@ -4643,8 +4749,6 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
     }
     if (force_pgo && disc_path && disc_path[0])
         bat_write_set(f, "DISC", disc_path);
-    if (g_toolchain_bin[0])
-        bat_write_set(f, "TC_BIN", g_toolchain_bin);
     fprintf(f,
             "echo Waiting for %%DISPLAY%% to exit...\r\n"
             ":waitloop\r\n"
@@ -4656,7 +4760,11 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
             ")\r\n"
             "echo Ensuring toolchain...\r\n"
             "cd /d \"%%ROOT%%\"\r\n"
-            "if defined TC_BIN set \"PATH=%%TC_BIN%%;%%PATH%%\"\r\n"
+            /* No set "PATH=%TC_BIN%;%PATH%" here. This helper inherits PATH
+             * from the host, which has just put the pack's folders at its head
+             * (activate_toolchain_path). The line added the folder a second
+             * time at every relaunch, and cmd refuses a line that passes 8,191
+             * characters once %PATH% is expanded in it (PS1B-410). */
             "\"%%PYTHON%%\" \"%%CLI%%\" ensure-toolchain --project-root \"%%ROOT%%\"\r\n"
             "if errorlevel 1 (\r\n"
             "  echo.\r\n"

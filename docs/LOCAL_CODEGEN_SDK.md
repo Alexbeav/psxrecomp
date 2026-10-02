@@ -214,6 +214,15 @@ proof that a pack is broken (the check can fail for a reason outside the pack),
 and the pack may be in use by a build that is running. Only a `latest` link that
 points at nothing is removed, and only the link.
 
+The check does not depend on the length of `PATH`. Until PS1B-410 the compile
+step expanded `%PATH%` inside a `cmd` line, which holds 8,191 characters: with a
+`PATH` over about 7,600 characters a whole pack was judged unusable. The child
+now gets its `PATH` through the process environment. Activating a pack puts its
+folders at the head of `PATH` once and takes their other copies out, so a host
+that starts itself again does not grow `PATH`. At the limit of one variable
+(32,767 characters) Windows cannot start a child at all: the pack is then
+reported not ready, and nothing is removed.
+
 ### The order of an install (setup host and `ensure-toolchain`)
 
 The setup host (`host/psxrecomp_codegen_host.c`) and the CLI
