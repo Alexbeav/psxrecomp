@@ -3517,41 +3517,89 @@ static void netplay_soft_exit(const char *origin) {
     std::exit(0);
 }
 
-/* Why a LAN netplay start failed (PS1B-386). The netplay library answers a
- * refused bind, a listen address it cannot read and a peer address it cannot
- * use with the same -1 and no error code, so try the bind here and keep the
- * system's answer: the error number and its text. No SO_REUSEADDR, so a port
- * another program holds is reported; the library's own socket is closed by
- * now. A host name is left to the library (NETPLAY_BIND_NOT_TRIED). */
-static int netplay_bind_probe(const char* hostport, int* sys_error,
-                              char* sys_text, size_t sys_cap) {
-    if (sys_error) *sys_error = 0;
-    if (sys_text && sys_cap) sys_text[0] = '\0';
+/* "address:port" as the netplay library reads it (PS1B-386): the port follows
+ * the last colon and must be a number up to 65535, an empty address means
+ * every address of this computer, and a name is looked up (IPv4). Returns 0
+ * and the address, or -1 for a text the library refuses too. */
+static int netplay_hostport_addr(const char* hostport, sockaddr_in* out) {
     const char* colon = hostport ? std::strrchr(hostport, ':') : nullptr;
-    char host[64];
-    if (!colon || colon == hostport || (size_t)(colon - hostport) >= sizeof(host))
-        return NETPLAY_BIND_BAD_ADDRESS;
+    char host[128];
+    if (!colon || (size_t)(colon - hostport) >= sizeof(host) || colon[1] == '\0')
+        return -1;
     std::memcpy(host, hostport, (size_t)(colon - hostport));
     host[colon - hostport] = '\0';
     char* end = nullptr;
-    const long port = std::strtol(colon + 1, &end, 10);
-    if (end == colon + 1 || *end != '\0' || port < 0 || port > 65535)
-        return NETPLAY_BIND_BAD_ADDRESS;
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
-    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1)
-        return NETPLAY_BIND_NOT_TRIED;
-    int err = 0;
+    const unsigned long port = std::strtoul(colon + 1, &end, 10);
+    if (*end != '\0' || port > 65535ul)
+        return -1;
+    *out = sockaddr_in{};
+    out->sin_family = AF_INET;
+    out->sin_port = htons((uint16_t)port);
+    if (!host[0] || std::strcmp(host, "0.0.0.0") == 0) {
+        out->sin_addr.s_addr = htonl(INADDR_ANY);
+        return 0;
+    }
+    if (inet_pton(AF_INET, host, &out->sin_addr) == 1)
+        return 0;
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    addrinfo* found = nullptr;
+    if (getaddrinfo(host, nullptr, &hints, &found) != 0)
+        return -1;
+    int rc = -1;
+    for (const addrinfo* r = found; r; r = r->ai_next) {
+        if (r->ai_family == AF_INET && r->ai_addr &&
+            (size_t)r->ai_addrlen >= sizeof(*out)) {
+            out->sin_addr = ((const sockaddr_in*)r->ai_addr)->sin_addr;
+            rc = 0;
+            break;
+        }
+    }
+    if (found) freeaddrinfo(found);
+    return rc;
+}
+
+/* Why a LAN netplay start failed (PS1B-386). The netplay library answers a
+ * refused bind, a listen address it cannot read and a peer address it cannot
+ * use with the same -1 and no error code, so do its steps again here and keep
+ * the system's answer: the error number and its text. The listen address is
+ * read and a name looked up as the library does, then bound. No SO_REUSEADDR,
+ * so a port another program holds is reported; the library's own socket is
+ * closed by now. Only when the listen address could be opened is the peer
+ * address read, so the peer is named as the cause only when it is one.
+ * `tried` receives the address that was bound, as numbers. */
+static int netplay_bind_probe(const char* bind_hostport, const char* peer_hostport,
+                              char* tried, size_t tried_cap, int* sys_error,
+                              char* sys_text, size_t sys_cap) {
+    if (sys_error) *sys_error = 0;
+    if (sys_text && sys_cap) sys_text[0] = '\0';
+    if (tried && tried_cap) tried[0] = '\0';
 #ifdef _WIN32
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+    sockaddr_in addr{};
+    if (netplay_hostport_addr(bind_hostport, &addr) != 0)
+        return NETPLAY_BIND_BAD_ADDRESS;
+    if (tried && tried_cap) {
+        char ip[INET_ADDRSTRLEN] = "";
+        inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
+        std::snprintf(tried, tried_cap, "%s:%u", ip, (unsigned)ntohs(addr.sin_port));
+    }
+    int err = 0;
+    int result = NETPLAY_BIND_OK;
+#ifdef _WIN32
     const SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) {
         err = WSAGetLastError();
+        result = NETPLAY_BIND_NO_SOCKET;
     } else {
-        if (bind(s, (const sockaddr*)&addr, sizeof(addr)) != 0)
+        if (bind(s, (const sockaddr*)&addr, sizeof(addr)) != 0) {
             err = WSAGetLastError();
+            result = NETPLAY_BIND_FAILED;
+        }
         closesocket(s);
     }
     if (err && sys_text && sys_cap) {
@@ -3566,23 +3614,35 @@ static int netplay_bind_probe(const char* hostport, int* sys_error,
     const int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s < 0) {
         err = errno;
+        result = NETPLAY_BIND_NO_SOCKET;
     } else {
-        if (bind(s, (const sockaddr*)&addr, sizeof(addr)) != 0)
+        if (bind(s, (const sockaddr*)&addr, sizeof(addr)) != 0) {
             err = errno;
+            result = NETPLAY_BIND_FAILED;
+        }
         close(s);
     }
     if (err && sys_text && sys_cap)
         std::snprintf(sys_text, sys_cap, "%s", std::strerror(err));
 #endif
     if (sys_error) *sys_error = err;
-    return err ? NETPLAY_BIND_FAILED : NETPLAY_BIND_OK;
+    if (result != NETPLAY_BIND_OK)
+        return result;
+    /* The library refuses a peer address it cannot read, one with port 0 and
+     * a name it cannot look up. */
+    if (peer_hostport && peer_hostport[0]) {
+        sockaddr_in peer{};
+        if (netplay_hostport_addr(peer_hostport, &peer) != 0 || peer.sin_port == 0)
+            return NETPLAY_BIND_PEER_BAD;
+    }
+    return NETPLAY_BIND_OK;
 }
 
 /* A netplay start failed: print what failed and return the sentence for the
  * player (PS1B-386). The old line named the build first ("built without
  * recomp-net, or bind/peer invalid") for every failure; a player whose system
- * held the port read that the build had no netplay. For a LAN start the bind
- * is tried again here and the system's answer is reported. */
+ * held the port read that the build had no netplay. For a LAN start the
+ * library's steps are done again here and the system's answer is reported. */
 static const char* netplay_start_failure(int nrc, const PsxNetplayConfig& cfg) {
 #if defined(PSX_HAS_RECOMP_NET)
     const int netplay_built = 1;
@@ -3591,12 +3651,17 @@ static const char* netplay_start_failure(int nrc, const PsxNetplayConfig& cfg) {
 #endif
     static char why[NETPLAY_START_FAILURE_CAP];
     char sys_text[160] = "";
+    char tried[32] = "";
     int sys_error = 0;
     const int bind_probe = (netplay_built && nrc == -3)
-        ? netplay_bind_probe(cfg.bind_hostport, &sys_error, sys_text, sizeof(sys_text))
+        ? netplay_bind_probe(cfg.bind_hostport, cfg.peer_hostport, tried, sizeof(tried),
+                             &sys_error, sys_text, sizeof(sys_text))
         : NETPLAY_BIND_NOT_TRIED;
-    netplay_start_failure_text(nrc, netplay_built, cfg.bind_hostport,
-                               cfg.peer_hostport, bind_probe, sys_error,
+    /* The sentence names the address that was bound: a name is shown as the
+     * address it stands for. */
+    netplay_start_failure_text(nrc, netplay_built,
+                               tried[0] ? tried : cfg.bind_hostport,
+                               cfg.peer_hostport, bind_probe, sys_error, sys_text,
                                why, sizeof(why));
     std::fprintf(stderr,
         "psxrecomp: netplay start failed (%d) — %s%s%s%s (slot=%d bind=%s peer=%s)\n",

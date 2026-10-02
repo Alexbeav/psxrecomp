@@ -39,34 +39,47 @@ int main(void)
     /* A start that failed says what failed (PS1B-386). */
     {
         char why[NETPLAY_START_FAILURE_CAP];
-        /* The system refused the port: the port, the address and the system's
-         * error are named, the player is told what to do, and the build is
-         * not blamed. */
+        static const char long_text[] =
+            "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234";
+        /* The port is in use: the port, the address and the system's error
+         * are named, the player is told what to do, and the build is not
+         * blamed. */
         netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "127.0.0.1:47811",
-                                   NETPLAY_BIND_FAILED, 10048, why, sizeof(why));
+                                   NETPLAY_BIND_FAILED, 10048, "in use", why, sizeof(why));
         CHECK(strstr(why, "UDP port 47810 on 127.0.0.1") != NULL);
         CHECK(strstr(why, "system error 10048") != NULL);
         CHECK(strstr(why, "Another program or the operating system holds that port") != NULL);
         CHECK(strstr(why, "Choose another port") != NULL);
         CHECK(strstr(why, "built without") == NULL && strstr(why, "recomp-net") == NULL);
         CHECK(strlen(why) < 192);
-        /* The longest port, address and error number still fit last_error. */
-        netplay_start_failure_text(-3, 1, "255.255.255.255:65535", "", NETPLAY_BIND_FAILED,
-                                   -2147483647, why, sizeof(why));
-        CHECK(strlen(why) < 192 && strstr(why, "start again.") != NULL);
-        /* A LAN host's own port, any address. */
-        netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_FAILED, 98, why, sizeof(why));
+        /* The same cause has another number on Linux (98) and on macOS (48).
+         * The longest port and address still fit last_error. */
+        {
+            static const int in_use[] = { 10048, 98, 48 };
+            size_t k;
+            for (k = 0; k < sizeof(in_use) / sizeof(in_use[0]); ++k) {
+                netplay_start_failure_text(-3, 1, "255.255.255.255:65535", "", NETPLAY_BIND_FAILED,
+                                           in_use[k], "", why, sizeof(why));
+                CHECK(strstr(why, "UDP port 65535 on 255.255.255.255 (system error ") != NULL);
+                CHECK(strstr(why, "holds that port. Choose another port and start again.") != NULL);
+                CHECK(strlen(why) < 192);
+            }
+        }
+        /* A LAN host's own port, any address; no address means any address. */
+        netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_FAILED, 98, NULL, why, sizeof(why));
         CHECK(strstr(why, "UDP port 7777 on 0.0.0.0 (system error 98)") != NULL);
         CHECK(strstr(why, "holds that port") != NULL);
+        netplay_start_failure_text(-3, 1, ":7777", "", NETPLAY_BIND_FAILED, 98, NULL, why, sizeof(why));
+        CHECK(strstr(why, "UDP port 7777 on 0.0.0.0 (system error 98)") != NULL);
         /* A port the system does not hand out (a range Windows keeps for
-         * Hyper-V or WSL: 10013; a port below 1024 elsewhere: 13). Nothing
-         * holds it, so the player is not sent looking for another program. */
+         * Hyper-V or WSL: 10013; a port below 1024 elsewhere: 13). The player
+         * is not sent looking for another program. */
         {
             static const int denied[] = { 10013, 13 };
             size_t k;
             for (k = 0; k < sizeof(denied) / sizeof(denied[0]); ++k) {
                 netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "127.0.0.1:47811",
-                                           NETPLAY_BIND_FAILED, denied[k], why, sizeof(why));
+                                           NETPLAY_BIND_FAILED, denied[k], "denied", why, sizeof(why));
                 CHECK(strstr(why, "UDP port 47810 on 127.0.0.1 (system error ") != NULL);
                 CHECK(strstr(why, "The operating system does not allow this port.") != NULL);
                 CHECK(strstr(why, "Choose another port and start again.") != NULL);
@@ -75,39 +88,93 @@ int main(void)
                 CHECK(strlen(why) < 192);
             }
             CHECK(strstr(why, "(system error 13)") != NULL);
-            /* In use (Windows 10048) keeps the other sentence. */
-            netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "", NETPLAY_BIND_FAILED, 10048, why, sizeof(why));
-            CHECK(strstr(why, "holds that port") != NULL && strstr(why, "does not allow") == NULL);
             /* The number alone does not decide: a port that could be bound is not "not allowed". */
-            netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "x", NETPLAY_BIND_OK, 10013, why, sizeof(why));
+            netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "x", NETPLAY_BIND_OK, 10013, "", why, sizeof(why));
             CHECK(strstr(why, "does not allow") == NULL);
         }
+        /* The listen address is not one of this computer's (Windows 10049,
+         * Linux 99, macOS 49). No port is held and another port does not
+         * help, so neither is said. */
+        {
+            static const int no_address[] = { 10049, 99, 49 };
+            size_t k;
+            for (k = 0; k < sizeof(no_address) / sizeof(no_address[0]); ++k) {
+                netplay_start_failure_text(-3, 1, "192.168.1.50:7777", "", NETPLAY_BIND_FAILED,
+                                           no_address[k], "not available", why, sizeof(why));
+                CHECK(strstr(why, "Netplay could not listen on 192.168.1.50 (system error ") != NULL);
+                CHECK(strstr(why, "That address is not one of this computer's addresses.") != NULL);
+                CHECK(strstr(why, "Check the listen address and start again.") != NULL);
+                CHECK(strstr(why, "holds") == NULL && strstr(why, "another port") == NULL);
+                CHECK(strstr(why, "does not allow") == NULL);
+            }
+            CHECK(strstr(why, "(system error 49)") != NULL);
+            netplay_start_failure_text(-3, 1, "255.255.255.255:65535", "", NETPLAY_BIND_FAILED,
+                                       10049, "", why, sizeof(why));
+            CHECK(strlen(why) < 192 && strstr(why, "start again.") != NULL);
+        }
+        /* Any other answer of the system: the number and the system's text,
+         * and no cause and no advice the code cannot know. */
+        netplay_start_failure_text(-3, 1, "10.0.0.1:7777", "", NETPLAY_BIND_FAILED, 101,
+                                   "Network is unreachable", why, sizeof(why));
+        CHECK(strcmp(why, "Netplay could not open UDP port 7777 on 10.0.0.1 "
+                          "(system error 101: Network is unreachable).") == 0);
+        CHECK(strstr(why, "holds") == NULL && strstr(why, "Choose") == NULL && strstr(why, "does not allow") == NULL);
+        /* Without a text, a text in another alphabet or a long text: the number alone. */
+        netplay_start_failure_text(-3, 1, "10.0.0.1:7777", "", NETPLAY_BIND_FAILED, 101, NULL, why, sizeof(why));
+        CHECK(strcmp(why, "Netplay could not open UDP port 7777 on 10.0.0.1 (system error 101).") == 0);
+        netplay_start_failure_text(-3, 1, "10.0.0.1:7777", "", NETPLAY_BIND_FAILED, 10055,
+                                   "\xcc\xe7 \xe4\xe9\xe1\xe8\xdd\xf3\xe9\xec\xef", why, sizeof(why));
+        CHECK(strcmp(why, "Netplay could not open UDP port 7777 on 10.0.0.1 (system error 10055).") == 0);
+        netplay_start_failure_text(-3, 1, "10.0.0.1:7777", "", NETPLAY_BIND_FAILED, 10055, long_text, why, sizeof(why));
+        CHECK(strcmp(why, "Netplay could not open UDP port 7777 on 10.0.0.1 (system error 10055).") == 0);
+        /* The longest values with the longest text that is shown (80 letters) fit. */
+        netplay_start_failure_text(-3, 1, "255.255.255.255:65535", "", NETPLAY_BIND_FAILED, -2147483647,
+                                   long_text + 5, why, sizeof(why));
+        CHECK(strlen(why) < 192 && strstr(why, "01234).") != NULL);
+        /* The system made no socket: no port and no address is blamed. */
+        netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_NO_SOCKET, 24,
+                                   "Too many open files", why, sizeof(why));
+        CHECK(strcmp(why, "Netplay could not open a network socket (system error 24: Too many open files).") == 0);
         /* The build is named only when the build has no netplay. */
-        netplay_start_failure_text(-1, 0, "127.0.0.1:47810", "", NETPLAY_BIND_NOT_TRIED, 0, why, sizeof(why));
+        netplay_start_failure_text(-1, 0, "127.0.0.1:47810", "", NETPLAY_BIND_NOT_TRIED, 0, "", why, sizeof(why));
         CHECK(strstr(why, "This build has no netplay") != NULL);
         CHECK(strstr(why, "port") == NULL);
-        /* The port was free when tried again: the other address is the cause. */
-        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "not an address", NETPLAY_BIND_OK, 0, why, sizeof(why));
+        /* The listen address opened and the peer address cannot be read: the
+         * peer address is the cause. */
+        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "not an address", NETPLAY_BIND_PEER_BAD, 0, "",
+                                   why, sizeof(why));
         CHECK(strstr(why, "the other player's address \"not an address\"") != NULL);
         CHECK(strstr(why, "holds that port") == NULL);
+        /* The peer address is not blamed when nothing was tried, or when the
+         * listen address opened and the peer address reads well: no cause is
+         * known then. */
+        netplay_start_failure_text(-3, 1, "localhost:40010", "127.0.0.1:40011", NETPLAY_BIND_NOT_TRIED, 0, "",
+                                   why, sizeof(why));
+        CHECK(strcmp(why, "Netplay could not start its connection on localhost:40010.") == 0);
+        netplay_start_failure_text(-3, 1, "127.0.0.1:40010", "127.0.0.1:40011", NETPLAY_BIND_OK, 0, "",
+                                   why, sizeof(why));
+        CHECK(strcmp(why, "Netplay could not start its connection on 127.0.0.1:40010.") == 0);
+        CHECK(strstr(why, "other player") == NULL);
         /* A listen address that is not address:port. */
-        netplay_start_failure_text(-3, 1, "47810", "", NETPLAY_BIND_BAD_ADDRESS, 0, why, sizeof(why));
+        netplay_start_failure_text(-3, 1, "47810", "", NETPLAY_BIND_BAD_ADDRESS, 0, "", why, sizeof(why));
         CHECK(strstr(why, "\"47810\" is not an address and a port") != NULL);
         /* A host waiting for the first peer (no peer address), port free. */
-        netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_OK, 0, why, sizeof(why));
+        netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_OK, 0, "", why, sizeof(why));
         CHECK(strstr(why, "its connection on 0.0.0.0:7777") != NULL);
-        /* Online (relay) settings, and any other code. */
-        netplay_start_failure_text(-4, 1, "0.0.0.0:0", "", NETPLAY_BIND_NOT_TRIED, 0, why, sizeof(why));
-        CHECK(strstr(why, "online connection") != NULL && strstr(why, "built without") == NULL);
-        netplay_start_failure_text(-2, 1, "", "", NETPLAY_BIND_NOT_TRIED, 0, why, sizeof(why));
+        /* Online (relay): five causes share the code, so none is named and
+         * the player is not sent to a log a released game does not show. */
+        netplay_start_failure_text(-4, 1, "0.0.0.0:0", "", NETPLAY_BIND_NOT_TRIED, 0, "", why, sizeof(why));
+        CHECK(strcmp(why, "Netplay could not start the online connection.") == 0);
+        /* Any other code. */
+        netplay_start_failure_text(-2, 1, "", "", NETPLAY_BIND_NOT_TRIED, 0, "", why, sizeof(why));
         CHECK(strstr(why, "(code -2)") != NULL);
         /* Missing strings and a short buffer are safe. */
-        netplay_start_failure_text(-3, 1, NULL, NULL, NETPLAY_BIND_FAILED, 5, why, sizeof(why));
+        netplay_start_failure_text(-3, 1, NULL, NULL, NETPLAY_BIND_FAILED, 5, NULL, why, sizeof(why));
         CHECK(strlen(why) > 20 && strlen(why) < 192);
         memset(why, 'x', sizeof(why));
-        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "", NETPLAY_BIND_FAILED, 10048, why, 8);
+        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "", NETPLAY_BIND_FAILED, 10048, "", why, 8);
         CHECK(strlen(why) == 7 && why[8] == 'x');
-        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "", NETPLAY_BIND_FAILED, 10048, NULL, 0);
+        netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "", NETPLAY_BIND_FAILED, 10048, "", NULL, 0);
     }
 
     /* No mismatch seen: never final. */
