@@ -49,6 +49,9 @@ int main(void) {
     assert(psx_ws_cull_bgez(0u) == 1 && psx_ws_cull_bgez((uint32_t)-1) == 0);
     assert(psx_ws_clip_edge_x(0u, 0x140u) == 0u);
     assert(psx_ws_clip_edge_x(0x140u, 0x140u) == 0x140u);
+    /* screen_x_sites on lui / bltz: a screen X in the high half. */
+    assert(psx_ws_cull_lui_hi(0x0200u) == (0x0200u << 16));
+    assert(psx_ws_cull_bltz_hi((uint32_t)-1 << 16) == 1 && psx_ws_cull_bltz_hi(0u) == 0);
     callbacks.ws_x_margin = margin120;
     overlay_init(&callbacks);
     assert(psx_ws_cull_bgez((uint32_t)-120) == 1);
@@ -57,6 +60,9 @@ int main(void) {
     assert(psx_ws_clip_edge_x(0x140u, 0x140u) == 0x140u + 120u);
     assert(psx_ws_clip_edge_x(98u, 0x140u) == 98u);     /* interior viewport edge */
     assert(psx_ws_clip_edge_x(222u, 0x140u) == 222u);
+    assert(psx_ws_cull_lui_hi(0x0200u) == ((0x0200u + 120u) << 16));
+    assert(psx_ws_cull_bltz_hi((uint32_t)-120 << 16) == 0);
+    assert(psx_ws_cull_bltz_hi((uint32_t)-121 << 16) == 1);
     return 0;
 }
 '''

@@ -824,6 +824,14 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
                 (ws_cull_bltz_pcs_.count(addr) || config_.ws_cull_bltz_sites.count(addr)))
                 return fmt::format("psx_ws_cull_bltz({}) /* ws cull (left edge) */",
                                    reg_name(rs));
+            // [widescreen.cull] screen_x_sites on a bltz: the tested register
+            // holds a screen X in its high half (`SX << 16`). bltz_sites
+            // compares the whole register with -margin and so never widens
+            // this form; take the branch only while SX < -margin. Identity at
+            // 4:3.
+            if (regimm_op == 0x00 && config_.ws_cull_screen_x_sites.count(addr))
+                return fmt::format("psx_ws_cull_bltz_hi({}) /* ws cull (left edge, X in the high half) */",
+                                   reg_name(rs));
             if (regimm_op == 0x00 && config_.ws_cull_nclip_keep_sites.count(addr))
                 return fmt::format("psx_ws_x_margin() > 0 ? 0 : ((int32_t){} < 0) /* ws nclip keep */",
                                    reg_name(rs));
@@ -1292,12 +1300,22 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
             return fmt::format("{} = psx_ws_cull_sltiu({}, {});"
                                " /* ws explicit screen-x cull */{}",
                                reg_name(rt), reg_name(rs), imm, comment);
+        } else if (opcode == 0x0F && get_rt(instr) != 0) {
+            // lui rt,W: a screen edge kept in the high half of a register
+            // (compared with `SX << 16`). Move it out by the live margin.
+            uint32_t rt = get_rt(instr);
+            uint16_t imm = get_imm16_u(instr);
+            return fmt::format("{} = psx_ws_cull_lui_hi(0x{:04X}u);"
+                               " /* ws explicit screen-x edge (high half) */{}",
+                               reg_name(rt), imm, comment);
         } else if (!config_.overlay_mode) {
             fmt::print(stderr, "ERROR: [widescreen.cull] screen_x site 0x{:08X} "
-                       "is not sltiu (opcode 0x{:02X})\n", addr, opcode);
+                       "is not sltiu, lui or bltz (0x{:08X})\n", addr, instr);
             std::exit(1);
         }
         // Overlay variant: the configured main-EXE PC holds different code.
+        // (A `bltz` at a listed address is a branch and never comes here; it
+        // is widened in generate_branch_condition.)
     }
     // Widescreen automatic horizontal-FOV cull widening ([widescreen.cull]
     // auto_screen_x). ws_auto_cull_func_ is set when this function carries the
@@ -3452,6 +3470,12 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int  psx_ws_cull_bltz(uint32_t v);                  /* ws cull signed left edge (gpu.c) */\n";
     ss << "extern int  psx_ws_cull_bgez(uint32_t v);                  /* ws cull signed left keep (gpu.c) */\n";
     ss << "extern uint32_t psx_ws_clip_edge_x(uint32_t v, uint32_t w); /* ws cull clip-edge bound load (gpu.c) */\n";
+    // Only for a config that lists screen_x_sites, so the declarations of
+    // every other title stay byte-identical.
+    if (!config_.ws_cull_screen_x_sites.empty()) {
+        ss << "extern uint32_t psx_ws_cull_lui_hi(uint32_t imm);          /* ws screen-x edge in the high half (gpu.c) */\n";
+        ss << "extern int  psx_ws_cull_bltz_hi(uint32_t v);               /* ws cull left edge, X in the high half (gpu.c) */\n";
+    }
     ss << "extern int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm); /* ws masked-u16 X window */\n";
     ss << "extern int32_t psx_ws_depth_bound(int32_t imm);            /* ws aspect-scaled far bound */\n";
     ss << "extern int32_t psx_ws_plane_nx(int32_t nx);                /* ws side-plane normal-X scale (gpu.c) */\n";

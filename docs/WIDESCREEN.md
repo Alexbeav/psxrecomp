@@ -219,6 +219,39 @@ per key; a longer list is logged rather than silently truncated. `bgez_sites`
 and `clip_edge_x_load_sites` enter the overlay-cache identity only when they
 are non-empty, so titles that do not use them keep their caches.
 
+`screen_x_sites` is the explicit form of the `auto_screen_x` compare, for a
+title whose width is not in `screen_w_imms` or whose function has no paired
+height compare. It takes three instructions:
+
+| Instruction at the site | While widened |
+|---|---|
+| `sltiu rt, SX, W` | `rt = -m <= SX < W + m` |
+| `lui rt, W` (a screen edge kept as `W << 16`) | `rt = (W + m) << 16`; a negative `W` moves left instead |
+| `bltz x, outside` where `x` is `SX << 16` | taken while `SX < -m` |
+
+The last two cover a renderer that keeps a screen X in the high half of a
+register (`sll x, sx, 16`), tests the sign of differences against a `lui`-held
+edge and masks whole points at once; polygon splitters do this. `bltz_sites`
+does not fit that `bltz`: it compares the whole register with `-m`, and every
+negative `SX << 16` is far below that. Widen such tests rather than keeping
+the branch: a splitter that takes its pieces from a fixed list runs out of
+entries when every off-screen half is kept, and then drops polygons inside
+the 4:3 area.
+
+```toml
+[widescreen.cull]
+screen_x_sites = [
+  "0x80010100",   # sltiu s0,v1,0x200   midpoint inside the screen?
+  "0x80010200",   # lui   s6,0x200      right edge as 512 << 16
+  "0x80010210",   # bltz  t0,outside    t0 = SX << 16
+]
+```
+
+`screen_x_sites` is applied when code is generated: native code and overlay
+shards. The dirty-RAM interpreter does not consult this list. In the main EXE
+a listed address holding another non-branch instruction is a hard build error;
+a branch other than `bltz` at a listed address is left as it is.
+
 ---
 
 ## Strategic direction: native-wide rendering (explored 2026-06-13, shelved)

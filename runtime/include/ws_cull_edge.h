@@ -1,14 +1,14 @@
 #ifndef PSX_WS_CULL_EDGE_H
 #define PSX_WS_CULL_EDGE_H
 /* ============================================================================
- * Exact screen-X edge widening for two explicit [widescreen.cull] site kinds
+ * Exact screen-X edge widening for explicit [widescreen.cull] site kinds
  *
  * Self-contained (depends only on <stdint.h>) so one implementation is shared
  * by the runtime helpers in gpu.c (native code and the dirty-RAM interpreter
  * both call those) and by the recompiler's unit test.
  *
- * `m` is the live per-side reveal, psx_ws_x_margin(): zero at 4:3, so both
- * functions are the identity there and faithful builds are unchanged.
+ * `m` is the live per-side reveal, psx_ws_x_margin(): zero at 4:3, so every
+ * function is the identity there and faithful builds are unchanged.
  *
  * bgez_sites -- `bgez SX, keep` in a signed per-vertex left-edge chain:
  *
@@ -33,6 +33,20 @@
  * edge (a rear-view mirror, one half of a split screen) and stays unchanged,
  * so interior viewports keep their vanilla culls while full-width viewports
  * widen on each side that touches the display edge.
+ *
+ * screen_x_sites on `lui` and `bltz` -- a screen X kept in the high half of
+ * a register (`SX << 16`), as a renderer does when it tests the sign of
+ * differences and masks whole points at once:
+ *
+ *     lui   edge, W       ; right screen edge as W << 16
+ *     sll   x, sx, 16
+ *     sub   t, x, edge    ; t >= 0: the point is right of the screen
+ *     ...
+ *     bltz  x, outside    ; the point is left of the screen
+ *
+ * The `lui` moves to (W + m) << 16 and the `bltz` is taken only while
+ * SX < -m. bltz_sites does not fit this `bltz`: it compares the whole
+ * register with -m, and every negative `SX << 16` is far below that.
  * ========================================================================== */
 #include <stdint.h>
 
@@ -56,6 +70,26 @@ static inline uint32_t psx_ws_clip_edge_x_value(uint32_t v, uint32_t w,
     if (v == 0u) return (uint32_t)(-m);
     if (v == w) return (uint32_t)((int32_t)w + m);
     return v;
+}
+
+/* Widened value of `lui rt, imm` when imm is a screen-X edge in pixels: a
+ * right edge (imm > 0) moves right by m, a left edge (imm < 0) moves left by
+ * m. `imm` is the 16-bit immediate as encoded. */
+static inline uint32_t psx_ws_cull_lui_hi_value(uint32_t imm, int32_t m)
+{
+    int32_t edge = (int32_t)(int16_t)(uint16_t)imm;
+    if (m > 0) {
+        if (edge > 0) edge += m;
+        else if (edge < 0) edge -= m;
+    }
+    return (uint32_t)edge << 16;
+}
+
+/* bltz predicate (1 = branch taken = outside) for a screen X in the high
+ * half of `v`: taken while SX < -m. */
+static inline int psx_ws_cull_bltz_hi_value(uint32_t v, int32_t m)
+{
+    return (int32_t)v < -((m > 0 ? m : 0) * 65536);
 }
 
 #ifdef __cplusplus

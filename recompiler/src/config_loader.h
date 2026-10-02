@@ -942,7 +942,9 @@ struct GameConfig {
     std::vector<uint32_t> ws_cull_range_sites;
     std::vector<uint32_t> ws_cull_a1_sites;
     // Explicit `sltiu rt,sx,W` render rejects for cases where codegen function
-    // splitting separates the paired vertical test from auto_screen_x.
+    // splitting separates the paired vertical test from auto_screen_x. Also
+    // the two forms of a screen X kept in the high half of a register:
+    // `lui rt,W` (the edge as W << 16) and `bltz` on `sx << 16`.
     std::vector<uint32_t> ws_cull_screen_x_sites;
 
     // [widescreen.cull] slti_sites — explicit signed right-edge widen sites
