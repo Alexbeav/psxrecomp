@@ -4942,24 +4942,31 @@ static void host_collect_diagnostics_or_return(
  * It does for a player's start: the product's persisted skip_launcher setting
  * must not hide the launcher on a hand-over. It does not when the caller asked
  * for a start without the launcher, by one of the signals the product honours
- * itself: --no-launcher or --headless, or PSX_NO_LAUNCHER or PSX_HEADLESS set
- * to something other than empty or 0. In the product --launcher wins over all
- * of them, so adding it made every scripted start of a kit's own exe wait in
- * the launcher: a gate that starts the kit the way a player does could never
- * see a frame. None of these is set by accident: the two variables carry the
- * project's prefix and no installer or launcher writes them. A --launcher the
- * caller passed is forwarded as it is and not doubled. */
+ * itself, read by the product's own rules (runtime/src/main.cpp):
+ *   --no-launcher, --headless, --replay <file>;
+ *   PSX_NO_LAUNCHER present, whatever its value;
+ *   PSX_HEADLESS set to something other than empty or a value that starts
+ *   with 0.
+ * In the product --launcher wins over all of them, so adding it made every
+ * scripted start of a kit's own exe wait in the launcher: a gate that starts
+ * the kit the way a player does could never see a frame. None of these is set
+ * by accident: the two variables carry the project's prefix and no installer
+ * or launcher writes them. A --launcher the caller passed is forwarded as it
+ * is and not doubled. */
 static int handover_adds_launcher(int argc, char** argv) {
-    const char* names[] = { "PSX_NO_LAUNCHER", "PSX_HEADLESS" };
-    size_t k;
+    const char* headless = getenv("PSX_HEADLESS");
+    int i;
     if (argv_has(argc, argv, "--launcher") || argv_has(argc, argv, "--no-launcher") ||
         argv_has(argc, argv, "--headless"))
         return 0;
-    for (k = 0; k < sizeof(names) / sizeof(names[0]); ++k) {
-        const char* e = getenv(names[k]);
-        if (e && e[0] && e[0] != '0')
-            return 0;
+    for (i = 1; i + 1 < argc && argv && argv[i]; ++i) {
+        if (strcmp(argv[i], "--replay") == 0)
+            return 0;   /* the product takes --replay only with its file */
     }
+    if (getenv("PSX_NO_LAUNCHER"))
+        return 0;
+    if (headless && headless[0] && headless[0] != '0')
+        return 0;
     return 1;
 }
 #endif

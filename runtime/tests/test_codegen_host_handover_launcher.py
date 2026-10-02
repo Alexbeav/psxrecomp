@@ -15,11 +15,16 @@ a stand-in product where the host looks for it, and reads the arguments the
 product was started with:
 
   a player's start      --launcher is added, once, after the caller's arguments;
-  a headless start      --no-launcher or --headless on the command line, or
-                        PSX_NO_LAUNCHER or PSX_HEADLESS set to something other
-                        than empty or 0: the arguments are forwarded as they
-                        are, with no --launcher;
-  a variable set to 0   is not a headless start.
+  a headless start      one of the signals the product honours itself, read by
+                        the product's own rules: --no-launcher, --headless,
+                        --replay <file>; PSX_NO_LAUNCHER present, whatever its
+                        value; PSX_HEADLESS set to something other than empty
+                        or a value that starts with 0. The arguments are
+                        forwarded as they are, with no --launcher;
+  not a headless start  PSX_HEADLESS=0, and --replay without its file.
+
+Without recomp-ui or a C compiler the test cannot run: it says SKIP and exits
+77, which ctest reports as "Skipped", not as "Passed" (SKIP_RETURN_CODE).
 
 The setup host is a real program with a toolchain installer in it. A start with
 --diagnostic (or PSXRECOMP_DIAGNOSTIC, or a diagnostic-mode.txt beside it) and
@@ -55,6 +60,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 HOST_C = ROOT / "host" / "psxrecomp_codegen_host.c"
+SKIPPED = 77     # runtime/CMakeLists.txt: SKIP_RETURN_CODE of this test
 
 SETUP_HOST = """
 #include <string.h>
@@ -210,11 +216,11 @@ def main() -> int:
     ui = find_recomp_ui()
     if ui is None:
         print("SKIP: recomp-ui not found (set RECOMP_UI_ROOT)")
-        return 0
+        return SKIPPED
     cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if cc is None:
         print("SKIP: no C compiler on PATH")
-        return 0
+        return SKIPPED
     suffix = ".exe" if os.name == "nt" else ""
     framework = "psxrecomp"
 
@@ -245,8 +251,14 @@ def main() -> int:
              "a player's start with arguments: they are forwarded and --launcher follows"),
             (["--launcher"], {}, launcher,
              "--launcher given by the caller is not doubled"),
-            ([], {"PSX_HEADLESS": "0", "PSX_NO_LAUNCHER": "0"}, launcher,
-             "a variable set to 0 is not a headless start"),
+            ([], {"PSX_HEADLESS": "0"}, launcher,
+             "PSX_HEADLESS=0 is not a headless start (the product's rule)"),
+            ([], {"PSX_NO_LAUNCHER": "0"}, [],
+             "PSX_NO_LAUNCHER present, whatever its value: no --launcher (the product's rule)"),
+            (["--replay", "run.psxreplay"], {}, ["--replay", "run.psxreplay"],
+             "--replay with its file is forwarded as it is"),
+            (["--replay"], {}, ["--replay"] + launcher,
+             "--replay without its file is not a replay start: the launcher is forced"),
             ([], {"PSX_HEADLESS": "1"}, [],
              "PSX_HEADLESS=1: no --launcher"),
             ([], {"PSX_NO_LAUNCHER": "1"}, [],
