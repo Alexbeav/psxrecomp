@@ -201,14 +201,13 @@ def read_movie_octoshock_dualshock(movie, emu_versions=('Version 2.3.0', 'Versio
     of its own: every stick at 128 and MODE never pressed. The Spyro movies are not like that, so
     this reader keeps what they carry and records what a runtime must therefore model:
 
-    - Octoshock hands the stick bytes to the pad unscaled (psx/octoshock/psx/input/dualshock.cpp
-      sets axes[0][0]=d8[3] ... axes[1][1]=d8[6], replacing Mednafen's u16 conversion), so a log
-      byte IS the byte the guest reads and passes into PSXRTI2 unchanged. The log order is
-      LX, LY, RX, RY; PSXRTI2 stores LY, LX, RY, RX.
+    - Octoshock hands the four stick bytes to the pad unscaled (Mednafen converts them from
+      16-bit values), so a log byte IS the byte the guest reads and passes into PSXRTI2
+      unchanged. The log order is LX, LY, RX, RY; PSXRTI2 stores LY, LX, RY, RX.
     - The physical Analog (MODE) button is retained in its own field, never interpreted here.
-      In the source, CheckManualAnaModeChange runs only inside if(!dtr) and toggles the pad's
-      analog mode on a rising edge of that button, updating its previous state only in that same
-      block. A route carrying a press is therefore refused downstream (run_native.route_identity)
+      The oracle looks at that button only while the pad is deselected: a rising edge then
+      toggles the pad's analog mode, and the button's previous state is updated only then.
+      A route carrying a press is therefore refused downstream (run_native.route_identity)
       until a runtime models exactly that rule; the refusal is deliberate, not an oversight.
 
     emu_versions are the accepted declared header versions. allow_resaved additionally accepts a
