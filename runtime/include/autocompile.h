@@ -66,6 +66,8 @@ int  autocompile_status_json(char *out, int cap);
  *                                badly or a driver that could not be started,
  *                                so runs_failed can be larger than runs
  *   runs_with_result             runs that printed their PSX_SHARD_RESULT line
+ *   runs_stopped_at_quit         runs that a normal quit stopped; a result line
+ *                                such a run had printed is counted (PS1B-395)
  *   units_compiled, units_failed, units_skipped
  *                                those result lines, summed over the start
  *   units_attempted              units_compiled + units_failed

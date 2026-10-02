@@ -10,7 +10,7 @@ start says that the compiler rejected a unit.
   "configured": 1, "consistent": 1, "state": "idle",
   "runs": 3, "runs_failed": 1, "runs_with_result": 3,
   "units_attempted": 41, "units_compiled": 38, "units_failed": 3,
-  "units_skipped": 112, "fail_lines": 3,
+  "units_skipped": 112, "fail_lines": 3, "runs_stopped_at_quit": 0,
   "failure_classes_max": 8, "failure_text_max": 239,
   "fail_lines_in_unnamed_classes": 0,
   "failure_classes": [
@@ -27,11 +27,12 @@ start says that the compiler rejected a unit.
 | --- | --- |
 | `configured` | 1 when the product has an overlay compile command. |
 | `consistent` | 0 when the report was written while the output reader held its lock (a crash at that moment). The texts can then be half updated; the numbers are still bounded. |
-| `state` | `idle`, `running` or `done`: a run that was still going when the start ended shows `running`. |
+| `state` | `idle`, `running` or `done`. A run that was still going when the start ended on its exit timer or in a crash shows `running`. A normal quit stops the run first, so the state is `idle` and `runs_stopped_at_quit` counts it. |
 | `runs`, `runs_failed` | Compile driver runs started in this start; and failures: a run that ended badly (a failed unit, a bad exit code, no result line) or a driver that could not be started. `runs_failed` can therefore be larger than `runs`. |
 | `runs_with_result` | Runs that printed their `PSX_SHARD_RESULT` line. |
 | `units_compiled`, `units_failed`, `units_skipped` | The numbers of those result lines, summed over the start. Skipped units were already in the cache or hold no code. |
 | `units_attempted` | `units_compiled` + `units_failed`. |
+| `runs_stopped_at_quit` | Runs that a normal quit stopped. A result line such a run had already printed is in the unit counts and in `runs_with_result`. |
 | `fail_lines` | `SHARD FAIL` lines seen, counted as they arrive. It includes a run that the end of the start cut short, which has no result line. |
 | `failure_classes` | One entry per failure class, at most `failure_classes_max`: the class, how many failures, the first `SHARD FAIL` line, and for a compile failure the compiler's first error line. |
 | `fail_lines_in_unnamed_classes` | Failures in classes past that bound. They are counted, not named. |
