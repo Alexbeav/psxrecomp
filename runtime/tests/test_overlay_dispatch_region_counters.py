@@ -38,12 +38,16 @@ for raw in ("s_disp_native++", "s_disp_native--", "s_disp_interp++"):
     assert raw not in dispatch, f"overlay_loader_dispatch bumps {raw} outside the region macros"
 uses = {name: len(re.findall(rf"\b{name}\(\);", dispatch))
         for name in ("DISP_NATIVE", "DISP_NATIVE_UNDO", "DISP_INTERP")}
+# PS1B-391: a miss exit counts through DISP_MISS(reason), which bumps the
+# reason's counter and then DISP_INTERP(). Both spellings are interp sites.
+uses["DISP_INTERP"] += len(re.findall(r"\bDISP_MISS\(", dispatch))
 assert uses["DISP_NATIVE"] >= 1 and uses["DISP_INTERP"] >= 1, uses
 assert uses["DISP_NATIVE_UNDO"] <= uses["DISP_NATIVE"], uses
 
 # 2. Compile the real macro definitions and exercise them.
-macros = re.findall(r"^#define DISP_(?:KERNEL|NATIVE|NATIVE_UNDO|INTERP)\(\).*$", LOADER, re.M)
-assert len(macros) == 4, macros
+macros = re.findall(r"^#define DISP_(?:KERNEL|NATIVE|NATIVE_UNDO|INTERP)\(\).*$"
+                    r"|^#define DISP_MISS\(reason\).*$", LOADER, re.M)
+assert len(macros) == 5, macros
 window = re.search(r"^#define DIRTY_RAM_KERNEL_WINDOW_END\s+\S+", HEADER, re.M)
 assert window, "DIRTY_RAM_KERNEL_WINDOW_END not found"
 program = "\n".join([
@@ -51,18 +55,20 @@ program = "\n".join([
     "#include <stdio.h>",
     window.group(0),
     "static uint64_t s_disp_native, s_disp_interp, s_disp_native_kernel, s_disp_interp_kernel;",
+    "static uint64_t s_disp_miss[2][4];",
     *macros,
     "static void run(uint32_t phys) {",
-    "    DISP_NATIVE(); DISP_NATIVE(); DISP_NATIVE_UNDO(); DISP_INTERP();",
+    "    DISP_NATIVE(); DISP_NATIVE(); DISP_NATIVE_UNDO(); DISP_MISS(2);",
     "}",
     "int main(void) {",
     "    run(0x00000650u);                      /* kernel window */",
     "    run(DIRTY_RAM_KERNEL_WINDOW_END - 4u); /* its last word */",
     "    run(DIRTY_RAM_KERNEL_WINDOW_END);      /* first game word */",
     "    run(0x00165000u);                      /* overlay region */",
-    '    printf("%llu %llu %llu %llu\\n", (unsigned long long)s_disp_native,',
+    '    printf("%llu %llu %llu %llu %llu %llu %llu\\n", (unsigned long long)s_disp_native,',
     "           (unsigned long long)s_disp_interp, (unsigned long long)s_disp_native_kernel,",
-    "           (unsigned long long)s_disp_interp_kernel);",
+    "           (unsigned long long)s_disp_interp_kernel, (unsigned long long)s_disp_miss[0][2],",
+    "           (unsigned long long)s_disp_miss[1][2], (unsigned long long)s_disp_miss[0][1]);",
     "    return 0;",
     "}",
     "",
@@ -76,7 +82,8 @@ with tempfile.TemporaryDirectory() as tmp:
     out = subprocess.run([str(exe)], capture_output=True, text=True,
                          encoding="utf-8", errors="replace", check=True).stdout.split()
 # Each run() nets one native and one interp; two of the four targets are kernel.
-assert out == ["4", "4", "2", "2"], out
+# The miss counts under its reason on the side of its target, and nowhere else.
+assert out == ["4", "4", "2", "2", "2", "2", "0"], out
 
 # 3. The run report carries both pairs; overlay = total - kernel.
 for field in ("disp_native_kernel", "disp_interp_kernel", "disp_native_overlay", "disp_interp_overlay"):
