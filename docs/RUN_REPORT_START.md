@@ -27,6 +27,24 @@ which only the player sees, may show the full path. Text that is not UTF-8 (a
 Windows file name in the system code page) is written as `\u00XX`, so the
 report always loads as UTF-8 JSON.
 
+## Network addresses
+
+The report holds **no network address**: players send this file to other
+people, and the other player's address is another person's. A failed netplay
+start (`netplay_start`) is the one refusal whose sentence names an address.
+The report gets the same sentence with each address as the fixed word
+`(address)`: the listen address, the other player's address, and a listen
+text that is not an address at all. The listen port stays when it is a plain
+number ("UDP port 47810 on (address)"). The box and the log line keep the full
+sentence.
+
+## What a player typed that can still reach the report
+
+A file's base name (a disc image called after its owner keeps that name), a
+mod's name, and a line of `game.toml` that the TOML reader quotes in its
+error (a full path in that line is cut to its base name like any other). No
+host name, no address and no folder.
+
 ## Kinds
 
 | `kind` | When |
@@ -47,7 +65,7 @@ report always loads as UTF-8 JSON.
 | `netplay_disc` | The disc image is not valid for online play, or none is verified. |
 | `netplay_address` | A match was started with no address to listen on. |
 | `netplay_seat` | A command-line match was started from a seat that is not a pad. |
-| `netplay_start` | A command-line match could not be started: the address is in use or not valid, or the build has no netplay. The message is the sentence the start itself gives (PS1B-386). |
+| `netplay_start` | A command-line match could not be started: the port is in use or not allowed, the address is not valid, or the build has no netplay. The message is the sentence the start itself gives (PS1B-386), with each address as `(address)`. |
 
 A match started from the lobby that fails in one of the last two ways is not a
 refused start: the player returns to the room, where the status line shows the

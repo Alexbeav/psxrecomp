@@ -161,6 +161,58 @@ int main(void)
         /* A host waiting for the first peer (no peer address), port free. */
         netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_OK, 0, "", why, sizeof(why));
         CHECK(strstr(why, "its connection on 0.0.0.0:7777") != NULL);
+        /* The run report holds no address (PS1G-63): players send that file
+         * to other people, and the other player's address is another
+         * person's. The report's sentence is the same words with each address
+         * as one fixed word. Checked for every cause and every way the system
+         * answers, with a numeric address, a host name and a typed text that
+         * is no address. */
+        {
+            static const char *const listen[] = {
+                "203.0.113.77:47810", "listen-host.example:47810", "my lan pc", "203.0.113.77:port" };
+            static const char *const peer[] = { "198.51.100.23:47811", "peer-host.example:47811", "friend's pc", "" };
+            static const int probes[] = { NETPLAY_BIND_NOT_TRIED, NETPLAY_BIND_OK, NETPLAY_BIND_FAILED,
+                                          NETPLAY_BIND_BAD_ADDRESS, NETPLAY_BIND_NO_SOCKET, NETPLAY_BIND_PEER_BAD };
+            static const int errors[] = { 0, 10048, 98, 10013, 13, 10049, 99, 101 };
+            static const int codes[] = { -3, -4, -1 };
+            static const char *const never[] = {
+                "203.0.113", "198.51.100", "listen-host", "peer-host", "example", "my lan pc", "friend", ":port" };
+            char report[NETPLAY_START_FAILURE_CAP];
+            size_t a, b, c, d, e, n;
+            for (a = 0; a < 4; ++a) for (b = 0; b < 4; ++b) for (c = 0; c < 6; ++c)
+            for (d = 0; d < 8; ++d) for (e = 0; e < 3; ++e) {
+                netplay_start_failure_report_text(codes[e], 1, listen[a], peer[b], probes[c], errors[d],
+                                                  "in use", report, sizeof(report));
+                for (n = 0; n < sizeof(never) / sizeof(never[0]); ++n)
+                    if (strstr(report, never[n])) {
+                        fprintf(stderr, "address in the report: [%s] holds [%s]\n", report, never[n]);
+                        ++failures;
+                    }
+                CHECK(report[0] != '\0' && strlen(report) < NETPLAY_START_FAILURE_CAP);
+            }
+            /* The words stay, and the port stays when it is a plain number. */
+            netplay_start_failure_report_text(-3, 1, "203.0.113.77:47810", "198.51.100.23:47811",
+                                              NETPLAY_BIND_FAILED, 10048, "in use", report, sizeof(report));
+            CHECK(strcmp(report, "Netplay could not open UDP port 47810 on (address) (system error 10048). "
+                                 "Another program or the operating system holds that port. "
+                                 "Choose another port and start again.") == 0);
+            netplay_start_failure_report_text(-3, 1, "203.0.113.77:47810", "", NETPLAY_BIND_FAILED, 10049,
+                                              "", report, sizeof(report));
+            CHECK(strstr(report, "Netplay could not listen on (address) (system error 10049).") != NULL);
+            netplay_start_failure_report_text(-3, 1, "listen-host.example:40010", "198.51.100.23:40011",
+                                              NETPLAY_BIND_OK, 0, "", report, sizeof(report));
+            CHECK(strcmp(report, "Netplay could not start its connection on (address):40010.") == 0);
+            netplay_start_failure_report_text(-3, 1, "127.0.0.1:47810", "friend's pc", NETPLAY_BIND_PEER_BAD,
+                                              0, "", report, sizeof(report));
+            CHECK(strstr(report, "the other player's address \"(address)\" could not be used.") != NULL);
+            netplay_start_failure_report_text(-3, 1, "my lan pc", "", NETPLAY_BIND_BAD_ADDRESS, 0, "",
+                                              report, sizeof(report));
+            CHECK(strstr(report, "\"(address)\" is not an address and a port to listen on.") != NULL);
+            /* The sentence for the box and the log is not changed by this. */
+            netplay_start_failure_text(-3, 1, "203.0.113.77:47810", "", NETPLAY_BIND_FAILED, 10048, "in use",
+                                       why, sizeof(why));
+            CHECK(strstr(why, "UDP port 47810 on 203.0.113.77") != NULL);
+        }
         /* Online (relay): five causes share the code, so none is named and
          * the player is not sent to a log a released game does not show. */
         netplay_start_failure_text(-4, 1, "0.0.0.0:0", "", NETPLAY_BIND_NOT_TRIED, 0, "", why, sizeof(why));

@@ -2467,6 +2467,22 @@ static int refuse_start(const char* kind, const char* title,
     return refuse_start(kind, title, sentence, s_player_message_seq);
 }
 
+/* A refusal whose sentence holds something the run report must not: a network
+ * address. The box and the log get `sentence`; the report gets
+ * `report_sentence`. Players send the report to other people, and the other
+ * player's address is another person's (PS1G-63). */
+static int refuse_start_reported(const char* kind, const char* title,
+                                 const std::string& sentence,
+                                 const std::string& report_sentence) {
+    psx_start_refusal_set(kind, title, report_sentence.c_str());
+    if (s_start_interactive && !g_headless)
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, title,
+                                 sentence.c_str(), NULL);
+    std::fprintf(stderr, "psxrecomp: start refused (%s)\n", kind);
+    psx_crash_trace_set_exit_origin("start_refused");
+    return 1;
+}
+
 /* Game display name for picker dialogs ("Tomba!"); set after the game
  * config loads, before any interactive file resolution. */
 static std::string s_picker_game_name = "PSXRecomp";
@@ -3697,6 +3713,10 @@ static int netplay_bind_probe(const char* bind_hostport, const char* peer_hostpo
     return NETPLAY_BIND_OK;
 }
 
+/* The sentence of the last failed netplay start as the run report gets it:
+ * the same words with no address in them (netplay_start_failure fills it). */
+static char s_netplay_start_report[NETPLAY_START_FAILURE_CAP];
+
 /* A netplay start failed: print what failed and return the sentence for the
  * player (PS1B-386). The old line named the build first ("built without
  * recomp-net, or bind/peer invalid") for every failure; a player whose system
@@ -3722,6 +3742,13 @@ static const char* netplay_start_failure(int nrc, const PsxNetplayConfig& cfg) {
                                tried[0] ? tried : cfg.bind_hostport,
                                cfg.peer_hostport, bind_probe, sys_error, sys_text,
                                why, sizeof(why));
+    /* The run report holds no address (PS1G-63): the listen address and the
+     * other player's are each one fixed word there. */
+    netplay_start_failure_report_text(nrc, netplay_built,
+                                      tried[0] ? tried : cfg.bind_hostport,
+                                      cfg.peer_hostport, bind_probe, sys_error, sys_text,
+                                      s_netplay_start_report,
+                                      sizeof(s_netplay_start_report));
     std::fprintf(stderr,
         "psxrecomp: netplay start failed (%d) — %s%s%s%s (slot=%d bind=%s peer=%s)\n",
         nrc, why, sys_text[0] ? " [system: " : "", sys_text,
@@ -18402,7 +18429,7 @@ session_reboot:
                 return refuse_start("netplay_disc", "Disc not valid for online play",
                     "Online play needs a verified disc image and none is selected, "
                     "so the match cannot start. Select the disc image this build "
-                    "needs, with its .cue file.");
+                    "needs: its .cue file, or a .chd.");
             }
         }
         /* Transport role and gameplay slot are independent. An empty peer
@@ -18465,7 +18492,8 @@ session_reboot:
         if (nrc != 0) {
             const char* const why = netplay_start_failure(nrc, net_cfg);
             if (!g_netplay_from_lobby)
-                return refuse_start("netplay_start", "Match could not start", why);
+                return refuse_start_reported("netplay_start", "Match could not start",
+                                             why, s_netplay_start_report);
             /* A match from the launcher returns to the room with the
              * sentence, as the seat refusal below does (PS1B-386). */
             netplay_soft_exit("netplay_start_failed");

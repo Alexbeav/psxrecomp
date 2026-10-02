@@ -108,7 +108,7 @@ for line, kind in SITES:
     tail = before_frame[at : at + 1400]
     stop = re.search(r"\breturn\b[^;]*;", tail)
     assert stop, f"no return after {line}"
-    through_helper = re.match(r"return refuse_start\(", stop.group(0))
+    through_helper = re.match(r"return refuse_start(_reported)?\(", stop.group(0))
     # One site closes SDL between the refusal and the return.
     held = re.search(r'const int refused = refuse_start\("' + kind + '"', tail[: stop.start()])
     assert through_helper or (held and stop.group(0) == "return refused;"), (
@@ -126,7 +126,40 @@ assert re.search(r"if \(!g_netplay_from_lobby\)\s*return refuse_start\(\"netplay
 # A failed netplay start is the same: a command-line match stops with the
 # sentence PS1B-386 wrote; a match from the lobby returns to the room with it.
 failed = before_frame[before_frame.index("const char* const why = netplay_start_failure(nrc, net_cfg);"):][:500]
-assert re.search(r'if \(!g_netplay_from_lobby\)\s*return refuse_start\("netplay_start", "Match could not start", why\);', failed)
+assert re.search(
+    r'if \(!g_netplay_from_lobby\)\s*return refuse_start_reported\("netplay_start", "Match could not start",\s*why, s_netplay_start_report\);',
+    failed,
+)
+# The run report holds no address: players send that file to other people, and
+# the other player's address is another person's. The box and the log get the
+# sentence; the report gets the same words with each address as one fixed word
+# (netplay_start_failure_report_text, run by test_netplay_exit_reason.c).
+reported = MAIN[MAIN.index("static int refuse_start_reported(const char* kind, const char* title,"):]
+reported = reported[: reported.index("\n}\n") + 3]
+assert "psx_start_refusal_set(kind, title, report_sentence.c_str());" in reported
+assert "psx_start_refusal_set(kind, title, sentence.c_str());" not in reported, (
+    "the sentence with the address must not be what the report stores"
+)
+assert re.search(r"if \(s_start_interactive && !g_headless\)\s*SDL_ShowSimpleMessageBox\(SDL_MESSAGEBOX_WARNING, title,\s*sentence\.c_str\(\), NULL\);", reported)
+assert 'psx_crash_trace_set_exit_origin("start_refused");' in reported
+failure = MAIN[MAIN.index("static const char* netplay_start_failure(int nrc, const PsxNetplayConfig& cfg) {"):]
+failure = failure[: failure.index("\n}\n")]
+assert re.search(
+    r"netplay_start_failure_report_text\(nrc, netplay_built,\s*tried\[0\] \? tried : cfg\.bind_hostport,\s*"
+    r"cfg\.peer_hostport, bind_probe, sys_error, sys_text,\s*s_netplay_start_report,",
+    failure,
+), "the report's sentence must be built from the same failure as the box's"
+# No other refusal takes its sentence from an address: the listen and peer
+# texts appear in main() only on stderr lines and in this one call.
+assert before_frame.count("refuse_start_reported(") == 1
+
+# The second netplay_disc sentence names both forms a verified disc can have:
+# a .chd of the right disc passes the online rule too.
+assert re.search(
+    r'"so the match cannot start\. Select the disc image this build "\s*"needs: its \.cue file, or a \.chd\."',
+    before_frame,
+)
+assert "with its .cue file" not in MAIN
 assert 'netplay_soft_exit("netplay_start_failed");' in failed
 
 # A setup program links no game and no BIOS code. Its refusal has its own

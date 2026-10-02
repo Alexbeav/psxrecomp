@@ -161,6 +161,29 @@ void netplay_start_failure_text(int start_rc, int has_netplay,
     }
 }
 
+void netplay_start_failure_report_text(int start_rc, int has_netplay,
+                                       const char *bind_hostport,
+                                       const char *peer_hostport, int bind_probe,
+                                       int sys_error, const char *sys_text,
+                                       char *out, size_t cap)
+{
+    /* The listen address becomes the fixed word. Its port is kept only when
+     * it is one to five digits after the last colon: a listen text that is
+     * not "address:port" is something the player typed, and none of it goes
+     * into the report. */
+    char bind[32];
+    const char *colon = bind_hostport ? strrchr(bind_hostport, ':') : NULL;
+    size_t digits = 0;
+    if (colon) {
+        while (colon[1 + digits] >= '0' && colon[1 + digits] <= '9') ++digits;
+        if (digits == 0 || digits > 5 || colon[1 + digits] != '\0') colon = NULL;
+    }
+    snprintf(bind, sizeof(bind), "%s%s", NETPLAY_REPORT_ADDRESS, colon ? colon : "");
+    netplay_start_failure_text(start_rc, has_netplay, bind,
+                               (peer_hostport && peer_hostport[0]) ? NETPLAY_REPORT_ADDRESS : "",
+                               bind_probe, sys_error, sys_text, out, cap);
+}
+
 int netplay_seat_refusal(int sio_device, int port, char *out, size_t cap)
 {
     const char *device;
