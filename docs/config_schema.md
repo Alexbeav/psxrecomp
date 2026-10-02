@@ -222,6 +222,23 @@ positions = [2]
   <root>` writes `CMakeLists.txt`, `codegen_setup.c` and `codegen_setup.h` at
   the root. They build the setup program and never link game code.
   `tools/package_setup_host.sh --set set.toml` makes the zip.
+- **The setup program reads `set.toml` as its config**, as a single-program
+  setup program reads its `game.toml`. The config loader accepts a file with a
+  `[set]` table without a game's keys: the name is `[set] title`, and there is
+  no `exe`, no load address and no `[recompiler]` table, because the setup
+  program of a set runs no game. Up to pin H the loader refused that form, and
+  the setup program printed `key "name" not found` and exited before its window
+  opened (PS1B-365). A set file made for those versions carries `[game] name`,
+  `exe`, `load_address`, `entry_pc`, `text_size`, `stack_base` and a
+  `[recompiler]` table with the first program's values. They are still read.
+  Nothing uses them as a program's values: every program is generated and
+  built from its own `game.toml`.
+- **A setup package is proven by starting its setup program.**
+  `--setup-selfcheck` answers before the config is read, so it cannot show
+  this failure. `tools/setup_host_plain_start.py --exe <setup program>` starts
+  the program as a double-click does, with SDL's dummy drivers, and passes
+  when it reaches its launcher. No window opens. The packager runs it on the
+  staged package and makes no zip when it fails.
 - **Setup.** `psxrecomp_cli.py generate` and `rebuild` take `--config
   set.toml`. A config with a `[set]` table runs the ordinary step once per
   program, in the program's folder, and then joins the programs into the

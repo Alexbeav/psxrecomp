@@ -1169,7 +1169,21 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     }
     const toml::value& game = *prog_ptr;
 
-    const std::string name = toml::find<std::string>(game, "name");
+    // A set of programs (tools/program_set.py; docs/config_schema.md, "One
+    // setup package for the set"). set.toml is the config of the set's setup
+    // program: it names the set and its discs, and each program has its own
+    // game.toml. It has no name of a game, no exe, no addresses and no
+    // [recompiler] table, and the setup program runs no game, so it needs
+    // none. Without this the setup program was refused its own set file and
+    // exited before its window opened (PS1B-365). The keys are still read
+    // when a set file has them. An emitter given a set file stops as before:
+    // it has no exe to read.
+    const bool program_set = cfg.contains("set");
+
+    const std::string name =
+        (!game.contains("name") && program_set && toml::find(cfg, "set").contains("title"))
+            ? toml::find<std::string>(toml::find(cfg, "set"), "title")
+            : toml::find<std::string>(game, "name");
     const std::string id   = game.contains("id")
                                 ? toml::find<std::string>(game, "id")
                                 : std::string{};
@@ -1185,11 +1199,12 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         exe_field = toml::find<std::string>(game, "exe");
     } else if (game.contains("rom")) {
         exe_field = toml::find<std::string>(game, "rom");
-    } else {
+    } else if (!program_set) {
         throw std::runtime_error(
             fmt::format("{}: [game] missing 'exe' or 'rom' field", config_path.string()));
     }
-    const fs::path exe_path = PSXRecompV4::host_resolve(root, exe_field);
+    const fs::path exe_path =
+        exe_field.empty() ? fs::path{} : PSXRecompV4::host_resolve(root, exe_field);
 
     // Auto-detect EXE header values for any field not explicitly set in TOML.
     // Parses the PS-X EXE header once and fills in load_address, entry_pc,
@@ -1208,7 +1223,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     const bool need_auto =
     !game.contains("load_address") || !game.contains("entry_pc") ||
     !game.contains("text_size") || !game.contains("stack_base");
-    if (need_auto) {
+    if (need_auto && !exe_field.empty()) {
         std::string err;
         if (auto exe = PSXRecomp::PS1ExeParser::parse_file(exe_path, err)) {
             auto_hdr.ok = true;
@@ -1229,7 +1244,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     const uint32_t load_address =
         game.contains("load_address")
             ? parse_hex(toml::find<std::string>(game, "load_address"), "game.load_address")
-            : (auto_hdr.ok ? auto_hdr.load_address : []() -> uint32_t {
+            : (auto_hdr.ok ? auto_hdr.load_address
+               : program_set ? 0x80010000u   /* no game runs from a set file */
+               : []() -> uint32_t {
                 throw std::runtime_error(
                     "game.toml: missing 'load_address' in [game] and could not "
                     "auto-detect from EXE header");
@@ -1241,7 +1258,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     const uint32_t text_size =
         game.contains("text_size")
             ? parse_hex(toml::find<std::string>(game, "text_size"), "game.text_size")
-            : (auto_hdr.ok ? auto_hdr.text_size : []() -> uint32_t {
+            : (auto_hdr.ok ? auto_hdr.text_size
+               : program_set ? 0u
+               : []() -> uint32_t {
                 throw std::runtime_error(
                     "game.toml: missing 'text_size' in [game] and could not "
                     "auto-detect from EXE header");
@@ -1365,19 +1384,25 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         }
     }
 
-    // [recompiler]
-    if (!cfg.contains("recompiler")) {
+    // [recompiler]. A set file has none: its programs are generated from their
+    // own configs.
+    if (!cfg.contains("recompiler") && !program_set) {
         throw std::runtime_error(
             fmt::format("{}: missing [recompiler] block", config_path.string()));
     }
-    const toml::value& recomp = toml::find(cfg, "recompiler");
+    /* Parentheses: braces would make an array that holds a table. */
+    static const toml::value no_recompiler_table(toml::table{});
+    const toml::value& recomp =
+        cfg.contains("recompiler") ? toml::find(cfg, "recompiler") : no_recompiler_table;
 
-    if (!recomp.contains("seeds")) {
+    if (!recomp.contains("seeds") && !program_set) {
         throw std::runtime_error(
             fmt::format("{}: [recompiler] missing 'seeds' field", config_path.string()));
     }
     const fs::path seeds_path =
-        PSXRecompV4::host_resolve(root, toml::find<std::string>(recomp, "seeds"));
+        recomp.contains("seeds")
+            ? PSXRecompV4::host_resolve(root, toml::find<std::string>(recomp, "seeds"))
+            : fs::path{};
 
     fs::path bios_thunks_path;
     if (recomp.contains("bios_thunks")) {

@@ -15544,6 +15544,17 @@ int main(int argc, char** argv) {
         } catch (const std::exception& ex) {
             std::fprintf(stderr, "psxrecomp: failed to load --game %s: %s\n",
                          game_config_path, ex.what());
+#if defined(RECOMP_LAUNCHER)
+            /* A double-click has no console. Without a message the program
+             * was simply not there: a set's setup program exited like this
+             * and showed nothing (PS1B-365). Only where the launcher window
+             * would have opened; a scripted or headless start gets the line
+             * above and no modal. */
+            if (!force_no_launcher && !std::getenv("PSX_NO_LAUNCHER"))
+                launcher_warning("Configuration could not be read",
+                    std::string("This program could not read its configuration file and cannot start.\n\n") +
+                    game_config_path + "\n\n" + ex.what());
+#endif
             return 1;
         }
     }

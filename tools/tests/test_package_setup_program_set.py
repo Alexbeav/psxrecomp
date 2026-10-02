@@ -206,6 +206,9 @@ def whole_packager(bash, tmp: Path) -> str:
         assert code == 1 and out.rstrip().endswith("error: zip not found"), (code, out[-3000:])
     else:
         assert code == 0, (code, out[-3000:])
+    # The plain-start gate ran on the staged host. The stand-in is a text file,
+    # which no system can start, so the gate must say that it checked nothing.
+    assert "its plain start was NOT checked" in out, out[-3000:]
     # the BIOS policy step: each program's recipe, the profile from the stage root
     assert "staged BIOS policy: psxrecomp/bios/SCPH1001.toml" in out.replace("\\", "/"), out[-3000:]
     assert "stage_setup_sdk: ready" in out
@@ -277,7 +280,44 @@ def whole_packager(bash, tmp: Path) -> str:
     code, out = package(bash, profile, emitters)
     assert code == 1 and "missing staged BIOS asset" in out and "SCPH5552.toml" in out, (code, out[-2000:])
     zip_gets_a_relative_path(bash, tmp)
-    return "to the zip" if zipped else "to the zip step (no zip tool on this machine)"
+    gate = plain_start_gate(bash, tmp, zipped)
+    return ("to the zip" if zipped else "to the zip step (no zip tool on this machine)") + "; " + gate
+
+
+def plain_start_gate(bash, tmp: Path, zipped: bool) -> str:
+    """A setup program that refuses its own config must stop the packager, and
+    one that reaches its launcher must not (PS1B-365: the set package shipped
+    with a setup program that exited before its window). The stand-in hosts are
+    shell scripts, which only a POSIX system starts as programs."""
+    if os.name == "nt":
+        return "plain-start gate: stand-in programs not run (a Windows host must be a real executable)"
+    refused = tmp / "refused"
+    emitters = make_package_source(refused)
+    host = refused / "build-setup" / "Resident_Evil_2"
+    put(host, "#!/bin/sh\necho 'psxrecomp: failed to load --game set.toml: [error] key \"name\" not found' >&2\nexit 1\n")
+    os.chmod(str(host), 0o755)
+    code, out = package(bash, refused, emitters)
+    assert code == 1 and "does not reach its launcher on a plain start; no package was made" in out, (code, out[-2000:])
+    assert 'key "name" not found' in out, out[-2000:]
+    assert not list((refused / "dist").glob("*.zip")), "a refused setup program must not be packaged"
+
+    silent = tmp / "silent"
+    emitters = make_package_source(silent)
+    host = silent / "build-setup" / "Resident_Evil_2"
+    put(host, "#!/bin/sh\nexit 0\n")
+    os.chmod(str(host), 0o755)
+    code, out = package(bash, silent, emitters)
+    assert code == 1 and "exited with code 0 before host:before_run_window" in out, (code, out[-2000:])
+
+    starts = tmp / "starts"
+    emitters = make_package_source(starts)
+    host = starts / "build-setup" / "Resident_Evil_2"
+    put(host, "#!/bin/sh\necho '[boot-timing] +    0.0 ms  total     1.0 ms  host:before_run_window' >&2\nexec sleep 30\n")
+    os.chmod(str(host), 0o755)
+    code, out = package(bash, starts, emitters)
+    assert "setup host plain start: PASS" in out and ("Wrote " in out) == zipped, (code, out[-2000:])
+    assert sorted(p.name for p in (starts / "dist" / "stage-setup-linux-x64").iterdir()) == sorted(ROOT_NAMES)
+    return "plain-start gate: refused, silent and starting stand-ins"
 
 
 def zip_gets_a_relative_path(bash, tmp: Path) -> None:
