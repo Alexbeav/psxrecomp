@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <errno.h>
 #include <time.h>
 #include "psx_sdl.h"
 #ifdef _WIN32
@@ -82,6 +83,10 @@ static uint64_t capture_next_sequence(void)
 
 static int preserve_snapshot_async(uint32_t scope_lo, uint32_t scope_hi);
 static int preserve_writer_start(void);
+static int preserve_queue_has_room(void);
+/* Outgoing snapshots committed on the emulation thread because the queue was
+ * at its cap. Emulation thread only. */
+static unsigned s_preserve_sync_commits;
 
 static int capture_process_id(void)
 {
@@ -495,6 +500,40 @@ static int write_json_snapshot(const char *path, uint32_t bw,
     }
 }
 
+/* Which call of a commit failed, and with what code, for the commit's error
+ * line. "additive capture history write failed" and "latest capture write
+ * failed" named a file and nothing else, so a run could not say whether the
+ * copy or the rename failed, or why (PS1G-75). Written and read by
+ * capture_commit_temp under s_commit_mutex. Diagnostic text only: nothing
+ * branches on it, and the retry of a failed commit is unchanged. */
+static char s_commit_failure[200];
+
+/* A C library call failed: errno and, on Windows, the system's own code for
+ * the same failure (5 access denied, 32 sharing violation, ...). */
+static void capture_note_crt_failure(const char *call)
+{
+#ifdef _WIN32
+    snprintf(s_commit_failure, sizeof(s_commit_failure),
+             "%s: errno %d (%s), Windows error %lu", call, errno, strerror(errno),
+             (unsigned long)_doserrno);
+#else
+    snprintf(s_commit_failure, sizeof(s_commit_failure),
+             "%s: errno %d (%s)", call, errno, strerror(errno));
+#endif
+}
+
+/* atomic_replace_file failed: MoveFileExA on Windows, rename elsewhere. */
+static void capture_note_replace_failure(const char *call)
+{
+#ifdef _WIN32
+    snprintf(s_commit_failure, sizeof(s_commit_failure),
+             "%s: Windows error %lu", call, (unsigned long)GetLastError());
+#else
+    snprintf(s_commit_failure, sizeof(s_commit_failure),
+             "%s: errno %d (%s)", call, errno, strerror(errno));
+#endif
+}
+
 static int capture_copy_file(const char *src, const char *dst)
 {
     FILE *in = fopen(src, "rb");
@@ -502,15 +541,32 @@ static int capture_copy_file(const char *src, const char *dst)
     unsigned char buf[65536];
     size_t n;
     int ok = 1;
-    if (!in) return 0;
+    if (!in) { capture_note_crt_failure("open the snapshot to copy it"); return 0; }
     out = fopen(dst, "wb");
-    if (!out) { fclose(in); return 0; }
-    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
-        if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+    if (!out) {
+        capture_note_crt_failure("create the history temp file");
+        fclose(in);
+        return 0;
     }
-    if (ferror(in)) ok = 0;
-    if (ok && (fflush(out) != 0 || CAPTURE_FSYNC(out) != 0)) ok = 0;
-    if (fclose(out) != 0) ok = 0;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            capture_note_crt_failure("write the history temp file");
+            ok = 0;
+            break;
+        }
+    }
+    if (ferror(in)) {
+        if (ok) capture_note_crt_failure("read the snapshot to copy it");
+        ok = 0;
+    }
+    if (ok && (fflush(out) != 0 || CAPTURE_FSYNC(out) != 0)) {
+        capture_note_crt_failure("flush the history temp file");
+        ok = 0;
+    }
+    if (fclose(out) != 0) {
+        if (ok) capture_note_crt_failure("close the history temp file");
+        ok = 0;
+    }
     fclose(in);
     if (!ok) remove(dst);
     return ok;
@@ -744,14 +800,18 @@ static uint64_t capture_commit_temp(const char *temp_path, const char *reason,
     } else {
         snprintf(contribution_tmp, sizeof(contribution_tmp), "%s.%lu.%llu.tmp",
                  contribution, CAPTURE_PID(), (unsigned long long)sequence);
-        if (capture_copy_file(temp_path, contribution_tmp) &&
-            atomic_replace_file(contribution_tmp, contribution)) {
-            history_ok = 1;
-        } else {
+        s_commit_failure[0] = '\0';
+        if (capture_copy_file(temp_path, contribution_tmp)) {
+            if (atomic_replace_file(contribution_tmp, contribution))
+                history_ok = 1;
+            else
+                capture_note_replace_failure("rename the history temp file into place");
+        }
+        if (!history_ok) {
             remove(contribution_tmp);
             fprintf(stderr,
-                "psxrecomp: ERROR: additive capture history write failed: %s\n",
-                contribution);
+                "psxrecomp: ERROR: additive capture history write failed: %s [%s]\n",
+                contribution, s_commit_failure);
         }
     }
     /* Snapshots may be formatted concurrently, so only the newest snapshot is
@@ -761,9 +821,10 @@ static uint64_t capture_commit_temp(const char *temp_path, const char *reason,
         base_ok = atomic_replace_file(temp_path, s_capture_path);
         if (base_ok) s_latest_commit_seq = sequence;
         else {
+            capture_note_replace_failure("replace the latest file");
             remove(temp_path);
-            fprintf(stderr, "psxrecomp: ERROR: latest capture write failed: %s\n",
-                    s_capture_path);
+            fprintf(stderr, "psxrecomp: ERROR: latest capture write failed: %s [%s]\n",
+                    s_capture_path, s_commit_failure);
         }
     } else {
         remove(temp_path);
@@ -889,13 +950,25 @@ void overlay_capture_before_dma(uint32_t load_addr, uint32_t size)
         }
     }
     if (!observed) return;
-    if (!preserve_snapshot_async(evidence_lo, evidence_hi)) {
+    /* Each queued snapshot is a copy of the whole guest RAM. With the queue at
+     * its cap (PRESERVE_QUEUE_CAP) the copy is not made: the same pages are
+     * committed here, from live RAM, before the DMA changes them. The store
+     * gets the same content either way, since history is kept by content hash
+     * and not by order. */
+    int at_cap = !preserve_queue_has_room();
+    if (at_cap || !preserve_snapshot_async(evidence_lo, evidence_hi)) {
         /* Allocation/thread startup failure is rare and already exceptional.
          * Fall back to a synchronous durable commit rather than let the RAM
          * overwrite bind old evidence to new bytes. If storage itself fails,
          * report the unavoidable loss but still clear the stale association. */
-        if (!overlay_capture_write_current("preserve-sync-fallback",
-                                           evidence_lo, evidence_hi, 1))
+        int kept = overlay_capture_write_current("preserve-sync-fallback",
+                                                 evidence_lo, evidence_hi, 1) != 0;
+        if (kept && at_cap) s_preserve_sync_commits++;
+        /* A write that fails at the cap must not lose what the queue would
+         * have retried: queue it after all, past the cap. */
+        if (!kept && at_cap)
+            kept = preserve_snapshot_async(evidence_lo, evidence_hi);
+        if (!kept)
             fprintf(stderr,
                 "psxrecomp: ERROR: could not preserve outgoing overlay evidence; discarding stale epoch\n");
     }
@@ -1025,6 +1098,49 @@ static PreserveWriteJob *s_preserve_head;
 static PreserveWriteJob *s_preserve_tail;
 static int s_preserve_stop;
 
+/* The queue of outgoing snapshots had no limit. Each entry holds a copy of
+ * the whole 2 MiB of guest RAM and two 64 KiB PC bitmaps, about 2.2 MB, and
+ * one low-priority thread writes them out. A title that reads disc sectors
+ * into pages where interpreted code runs makes one entry per sector read; in
+ * a cold start, where every dispatch is interpreted, that outran the writer:
+ * Colony Wars: Vengeance grew from 996 MB to 7,050 MB in five seconds, another
+ * title to 25 GB (PS1G-75, PS1G-39). The second start, with the code native,
+ * stayed at 998 MB.
+ *
+ * 64 entries are about 143 MB. That takes an overlay swap of 64 code pages
+ * without the emulation thread writing anything, and keeps the worst case
+ * near a seventh of what a start uses anyway. Past the cap
+ * overlay_capture_before_dma commits on the emulation thread instead.
+ *
+ * Counts entries that are queued or being written: an entry holds its memory
+ * until the writer has committed it. Guarded by s_preserve_mutex. */
+#define PRESERVE_QUEUE_CAP 64u
+static unsigned s_preserve_cap = PRESERVE_QUEUE_CAP;
+static unsigned s_preserve_held;
+static unsigned s_preserve_held_peak;
+static unsigned s_preserve_enqueued;
+#ifdef PSX_OVERLAY_CAPTURE_TEST
+static int s_preserve_test_hold;    /* the writer takes no entry while set */
+#endif
+
+static int preserve_queue_has_room(void)
+{
+    int room;
+    if (!s_preserve_mutex) return 1;    /* the writer was never started: empty */
+    SDL_LockMutex(s_preserve_mutex);
+    room = s_preserve_held < s_preserve_cap;
+    SDL_UnlockMutex(s_preserve_mutex);
+    return room;
+}
+
+/* The writer is done with an entry: committed, or given up at shutdown. */
+static void preserve_entry_released(void)
+{
+    SDL_LockMutex(s_preserve_mutex);
+    if (s_preserve_held) s_preserve_held--;
+    SDL_UnlockMutex(s_preserve_mutex);
+}
+
 void overlay_autocapture_set_enabled(int on) {
     s_autocap_enabled = on ? 1 : 0;
 }
@@ -1095,6 +1211,39 @@ unsigned overlay_capture_test_write_attempts(void) {
 }
 int overlay_capture_test_provider_pending(void) {
     return s_autocap_provider_sig_pending != 0;
+}
+/* The queue of outgoing snapshots: a cap of 0 restores the built-in one. */
+void overlay_capture_test_set_preserve_cap(unsigned cap) {
+    if (!s_preserve_mutex) s_preserve_mutex = SDL_CreateMutex();
+    SDL_LockMutex(s_preserve_mutex);
+    s_preserve_cap = cap ? cap : PRESERVE_QUEUE_CAP;
+    SDL_UnlockMutex(s_preserve_mutex);
+}
+unsigned overlay_capture_test_preserve_cap(void) { return s_preserve_cap; }
+/* While held the writer takes no entry, so a test fills the queue exactly. */
+void overlay_capture_test_hold_preserve_writer(int hold) {
+    if (!s_preserve_mutex) s_preserve_mutex = SDL_CreateMutex();
+    if (!s_preserve_cond) s_preserve_cond = SDL_CreateCond();
+    SDL_LockMutex(s_preserve_mutex);
+    s_preserve_test_hold = hold ? 1 : 0;
+    SDL_CondSignal(s_preserve_cond);
+    SDL_UnlockMutex(s_preserve_mutex);
+}
+/* Entries queued or being written now; the most there ever were; entries ever
+ * queued; snapshots committed on the emulation thread at the cap. The call
+ * also starts the three "ever" counts again. */
+void overlay_capture_test_preserve_counts(unsigned *held, unsigned *peak,
+                                          unsigned *enqueued, unsigned *sync_commits) {
+    if (!s_preserve_mutex) s_preserve_mutex = SDL_CreateMutex();
+    SDL_LockMutex(s_preserve_mutex);
+    if (held) *held = s_preserve_held;
+    if (peak) *peak = s_preserve_held_peak;
+    if (enqueued) *enqueued = s_preserve_enqueued;
+    if (sync_commits) *sync_commits = s_preserve_sync_commits;
+    s_preserve_held_peak = s_preserve_held;
+    s_preserve_enqueued = 0;
+    s_preserve_sync_commits = 0;
+    SDL_UnlockMutex(s_preserve_mutex);
 }
 #endif
 
@@ -1245,8 +1394,13 @@ static int preserve_write_thread_main(void *opaque)
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     for (;;) {
         SDL_LockMutex(s_preserve_mutex);
+#ifdef PSX_OVERLAY_CAPTURE_TEST
+        while ((!s_preserve_head || s_preserve_test_hold) && !s_preserve_stop)
+            SDL_CondWait(s_preserve_cond, s_preserve_mutex);
+#else
         while (!s_preserve_head && !s_preserve_stop)
             SDL_CondWait(s_preserve_cond, s_preserve_mutex);
+#endif
         if (!s_preserve_head && s_preserve_stop) {
             SDL_UnlockMutex(s_preserve_mutex);
             break;
@@ -1275,12 +1429,14 @@ static int preserve_write_thread_main(void *opaque)
                 fprintf(stderr,
                     "psxrecomp: ERROR: outgoing overlay snapshot could not be retained after shutdown retries\n");
                 autocap_write_job_free(&job->snapshot);
+                preserve_entry_released();
             } else {
                 SDL_Delay(job->attempts < 4u ? job->attempts * 100u : 1000u);
             }
             continue;
         }
         autocap_write_job_free(&job->snapshot);
+        preserve_entry_released();
     }
     return 0;
 }
@@ -1318,6 +1474,9 @@ static int preserve_snapshot_enqueue_owned(AutocapWriteJob *snapshot)
     if (s_preserve_tail) s_preserve_tail->next = job;
     else s_preserve_head = job;
     s_preserve_tail = job;
+    s_preserve_enqueued++;
+    if (++s_preserve_held > s_preserve_held_peak)
+        s_preserve_held_peak = s_preserve_held;
     SDL_CondSignal(s_preserve_cond);
     SDL_UnlockMutex(s_preserve_mutex);
     return 1;
@@ -1473,6 +1632,12 @@ void overlay_capture_wait_pending(void)
         SDL_WaitThread(s_preserve_thread, NULL);
         s_preserve_thread = NULL;
     }
+    if (s_preserve_enqueued || s_preserve_sync_commits)
+        fprintf(stdout,
+            "psxrecomp: overlay capture: %u outgoing snapshots queued (most at once %u, cap %u), "
+            "%u committed on the emulation thread at the cap\n",
+            s_preserve_enqueued, s_preserve_held_peak, s_preserve_cap,
+            s_preserve_sync_commits);
 }
 
 void overlay_autocapture_shutdown(void)

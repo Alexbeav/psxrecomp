@@ -847,6 +847,20 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(overlay_capture_retry_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME overlay_capture_retry_test COMMAND overlay_capture_retry_test)
 
+    # The queue of outgoing snapshots (a 2 MiB RAM copy each) stops at its cap,
+    # and the store holds the same files with the cap as without it. A cold
+    # start had grown from 1 GB to 7 GB, and one title to 25 GB (PS1G-75).
+    add_executable(overlay_capture_queue_bound_test
+        tests/test_overlay_capture_queue_bound.cpp
+        src/overlay_capture.c)
+    target_include_directories(overlay_capture_queue_bound_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(overlay_capture_queue_bound_test PRIVATE
+        SDL_MAIN_HANDLED PSX_OVERLAY_CAPTURE_TEST=1
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(overlay_capture_queue_bound_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME overlay_capture_queue_bound_test COMMAND overlay_capture_queue_bound_test)
+
     add_executable(overlay_path_canon_test
         tests/test_overlay_path_canon.c
         src/overlay_path_canon.c)
