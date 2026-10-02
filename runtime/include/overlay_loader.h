@@ -83,6 +83,12 @@ int overlay_loader_has_cached_crc(uint32_t region_start, uint32_t crc);
 
 /* Returns number of functions currently registered in the dynamic table. */
 int overlay_loader_registered_count(void);
+/* Units for game text the game rewrote with CPU stores (PS1B-421): how many
+ * were loaded through the lazy load's wider window, how many of them were
+ * taken out again, how many pages were left to the interpreter after `limit`
+ * take-outs. Any pointer may be NULL. */
+void overlay_loader_get_modified_text(uint64_t *loads, uint64_t *taken_out,
+                                      uint32_t *backed_off_pages, uint32_t *limit);
 
 /* Returns full loader state for TCP diagnostics. */
 void overlay_loader_get_status(int *active, int *registered,

@@ -13,8 +13,14 @@ shows why the framework does not need it, end to end:
    guard (overlay_resident_patch_harness.c) then decide ownership:
    - pristine text: the static resident function owns it; the shard cannot run;
    - guest CPU store JALR->NOP: the exact-range guard blocks the static entry
-     and its post-call continuation; the page is outside the overlay window,
-     so the shard does not load and the interpreter owns the live bytes;
+     and its post-call continuation; the page is outside the capture window
+     (text_modified, not dirty), and the loader's lazy load admits the exact
+     entry, so the shard runs natively on exact bytes only (PS1B-421; before
+     that the shard never loaded there and the interpreter owned the bytes).
+     The old call-return PC stays with the interpreter and fails closed under
+     CPS. A third value stored after the shard ran takes it out, and the patch
+     bytes stored again revalidate it. A page that keeps changing is left to
+     the interpreter after its limit of take-outs, patch bytes or not;
    - the same bytes marked executable by a load path: the shard runs natively
      only on exact bytes, and the old call-return PC is a foreign interior
      entry that fails closed;

@@ -177,7 +177,10 @@ void     psx_kernel_bless_reset_for_boot(void);
  * when the page is dirty — i.e. a gameplay overlay overwrote the boot text
  * after the game-start baseline, so the bytes there are runtime overlay code
  * (see the window model note above). Clean boot text never enters the window
- * (it runs compiled; capturing it would violate the static-first design). */
+ * (it runs compiled; capturing it would violate the static-first design).
+ * A text page the game rewrote with CPU stores is text_modified, not dirty,
+ * and stays outside this window. The loader's lazy load has a wider window
+ * for it (overlay_loader.c, lazy_load_window_contains; PS1B-421). */
 static inline int overlay_cache_window_contains(uint32_t phys) {
     return phys < DIRTY_RAM_KERNEL_WINDOW_END
         || phys >= OVERLAY_REGION_FLOOR

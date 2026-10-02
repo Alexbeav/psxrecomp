@@ -41,6 +41,7 @@
 
 #define JALR_T1_T0 0x01204009u
 #define NOP 0x00000000u
+#define THIRD_WORD 0x24030007u   /* addiu v1, zero, 7: neither the resident word nor the patch */
 #define RA_SENTINEL 0x80020000u
 
 static void unreachable(const char *what) {
@@ -363,6 +364,16 @@ static void step(const char *name, uint32_t pc, Ownership want) {
     if (!ok) s_failures++;
 }
 
+/* One dispatch without a line of its own: the shard must run native exactly when
+ * `want_native` says so. */
+static void expect_native(const char *what, uint32_t pc, int want_native) {
+    Ownership got = observe(pc);
+    if (got.native != want_native) {
+        printf("%-34s pc=%08X shard_native=%d, expected %d UNEXPECTED\n", what, pc, got.native, want_native);
+        s_failures++;
+    }
+}
+
 static void load_resident_image(void) {
     static const uint32_t words[] = {
         0x27BDFFF0u, 0x11111111u, JALR_T1_T0, 0x24020001u, 0x03E00008u, NOP,
@@ -395,13 +406,65 @@ int main(int argc, char **argv) {
     /* 1. Pristine resident text: static code owns; the patched shard cannot. */
     step("pristine", 0x80010008u, (Ownership){1, 0, 0, 0});
 
-    /* 2. Guest CPU store JALR->NOP (the game patching its own text). */
+    /* 2. Guest CPU store JALR->NOP (the game patching its own text). The page is
+     *    text_modified and not dirty, so it stays outside the capture window. The
+     *    loader's lazy load admits the exact entry and the shard runs native on
+     *    exact bytes, as for the load-path patch of step 3 (PS1B-421). The old
+     *    call-return PC is not an entry: the interpreter owns it, and under CPS it
+     *    fails closed as a foreign interior entry. */
     psx_write_word(0x80010008u, NOP);
-    step("cpu-store patch: entry", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("cpu-store patch: entry", 0x80010008u, (Ownership){0, 0, 1, 0});
     step("cpu-store patch: old call return", 0x80010010u, (Ownership){0, 0, 0, 0});
+    g_psx_cps_mode = 1;
+    step("cpu-store patch: old return, cps", 0x80010010u, (Ownership){0, 0, 0, 1});
+    g_psx_cps_mode = 0;
+
+    /* 2a. A third value stored after the shard ran native: the shard is taken out
+     *     at the next dispatch and stays out; the patch bytes stored again
+     *     revalidate it. */
+    psx_write_word(0x80010008u, THIRD_WORD);
+    step("third value: entry", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("third value: entry again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    psx_write_word(0x80010008u, NOP);
+    step("cpu-store patch again: entry", 0x80010008u, (Ownership){0, 0, 1, 0});
+
+    /* 2b. A page that keeps changing. Each round stores the third value (the
+     *     shard is taken out) and the patch again (it revalidates), until the
+     *     page has had its limit of take-outs. From then on the patch bytes do
+     *     not bring the shard back: the page stays with the interpreter. */
+    {
+        uint64_t loads = 0, taken = 0;
+        uint32_t backed = 0, limit = 0;
+        int rounds = 0;
+        overlay_loader_get_modified_text(&loads, &taken, &backed, &limit);
+        printf("modified text before the rounds: loads=%llu taken_out=%llu backed_off_pages=%u limit=%u\n",
+               (unsigned long long)loads, (unsigned long long)taken, backed, limit);
+        if (loads != 1 || taken != 1 || backed != 0 || limit < 2) {
+            printf("modified text counters before the rounds UNEXPECTED\n");
+            s_failures++;
+        }
+        while (taken < limit && rounds < 1000) {
+            rounds++;
+            psx_write_word(0x80010008u, THIRD_WORD);
+            expect_native("round: third value", 0x80010008u, 0);
+            psx_write_word(0x80010008u, NOP);
+            overlay_loader_get_modified_text(&loads, &taken, &backed, &limit);
+            expect_native("round: patch again", 0x80010008u, taken < limit ? 1 : 0);
+        }
+        printf("modified text after %d rounds: loads=%llu taken_out=%llu backed_off_pages=%u limit=%u\n",
+               rounds, (unsigned long long)loads, (unsigned long long)taken, backed, limit);
+        if (taken != limit || backed != 1 || rounds != (int)limit - 1) {
+            printf("modified text counters after the rounds UNEXPECTED\n");
+            s_failures++;
+        }
+    }
+    step("backed off: patch bytes", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("backed off: patch bytes again", 0x80010008u, (Ownership){0, 0, 0, 0});
 
     /* 3. The same bytes delivered through a load path that marks the page
-     *    executable (CD DMA / data-shard publication). */
+     *    executable (CD DMA / data-shard publication). The page is dirty from
+     *    here on, so it is in the capture window and the back-off of 2b, which
+     *    is for pages outside it, no longer applies. */
     dirty_ram_mark_executable_range(0x10000u, 0x18u);
     step("loaded patch: entry", 0x80010008u, (Ownership){0, 1, 1, 0});
     g_psx_cps_mode = 1;

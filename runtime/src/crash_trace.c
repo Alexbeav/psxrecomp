@@ -85,6 +85,8 @@ extern void     overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidat
                                             uint32_t *last_write_size,
                                             int *regions, uint32_t *revalidations);
 extern void     overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp);
+extern void     overlay_loader_get_modified_text(uint64_t *loads, uint64_t *taken_out,
+                                                 uint32_t *backed_off_pages, uint32_t *limit);
 extern int      psx_netplay_is_resimulating(void);
 
 /* Frame counter from debug_server.c (non-static). */
@@ -769,6 +771,21 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             (unsigned long long)kernel_interp,
             (unsigned long long)(disp_native - kernel_native),
             (unsigned long long)(disp_interp - kernel_interp));
+        /* PS1B-421: units for game text the game rewrote with CPU stores. */
+        {
+            uint64_t mt_loads = 0, mt_taken_out = 0;
+            uint32_t mt_backed_off = 0, mt_limit = 0;
+            overlay_loader_get_modified_text(&mt_loads, &mt_taken_out, &mt_backed_off, &mt_limit);
+            append_fmt(buf, sizeof(buf), &pos,
+                "  \"overlay_modified_text\": {\n"
+                "    \"loads\": %llu,\n"
+                "    \"taken_out\": %llu,\n"
+                "    \"backed_off_pages\": %u,\n"
+                "    \"backoff_limit\": %u\n"
+                "  },\n",
+                (unsigned long long)mt_loads, (unsigned long long)mt_taken_out,
+                (unsigned)mt_backed_off, (unsigned)mt_limit);
+        }
     }
 
     /* Recursion fingerprint (build-independent GUEST addresses): the func entered
