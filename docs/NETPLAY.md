@@ -38,6 +38,13 @@ prediction + resimulation), with **delay-sync** still available as an opt-out
 Rollback is the product default for titles that ship it (e.g. MotK). Delay-sync
 remains useful for debugging and for hosts that prefer fixed lag.
 
+**No pad input in the first 64 ticks (PS1B-374).** Each peer feeds an idle pad
+into the session for the first 64 sim ticks, about one second, while the BIOS
+boots and nothing reads a pad. A misprediction that early made the engine load
+a tip snapshot the other peer had already dropped; the peers then reloaded
+different snapshots and never agreed again. With idle pads nothing is
+mispredicted before interval snapshots exist.
+
 ---
 
 ## Seats vs session slots
@@ -247,7 +254,8 @@ person at either machine. It is off unless the variable is set. It is not a
 player feature.
 
 `PSX_NET_TEST_INPUT_FROM=<tick>` keeps the scripted pad idle before that sim
-tick (default 0). recomp-net's link simulator supplies the latency that makes
+tick (default 0). `PSX_NET_TEST_INPUT_HOLD=1` holds one button from that tick
+instead of changing the pad. recomp-net's link simulator supplies the latency that makes
 inputs arrive late: `RNET_SIM_LATENCY_MS`, `RNET_SIM_JITTER_MS`,
 `RNET_SIM_LOSS_PCT`, per side.
 

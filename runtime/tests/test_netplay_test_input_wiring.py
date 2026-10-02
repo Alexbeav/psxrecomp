@@ -43,7 +43,10 @@ assert "const uint32_t tick = psx_netplay_sim_tick();" in body and "(tick / 8u)"
 )
 # PSX_NET_TEST_INPUT_FROM only holds the pad idle before a tick; it cannot turn the script on.
 assert MAIN.count('"PSX_NET_TEST_INPUT_FROM"') == 1 and 'std::getenv("PSX_NET_TEST_INPUT_FROM")' in body
-assert "static uint32_t seed = 0, from = 0;" in body, "the default must be off, from the first tick"
+assert "static uint32_t seed = 0, from = 0, hold = 0;" in body, "the default must be off, from the first tick"
+# PSX_NET_TEST_INPUT_HOLD=1 holds Cross only; it cannot press Start or Select either.
+assert MAIN.count('"PSX_NET_TEST_INPUT_HOLD"') == 1 and 'std::getenv("PSX_NET_TEST_INPUT_HOLD")' in body
+assert "out->buttons = tick >= from ? (uint16_t)~(1u << 14) : 0xFFFFu;" in body, "the held button must be Cross alone"
 assert "tick >= from &&" in body, "before the start tick the pad must be idle"
 assert "static uint32_t frame" not in body and "++" not in body.split("if (!seed) return false;")[1], (
     "the word must not depend on how often it is sampled"

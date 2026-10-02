@@ -1187,6 +1187,7 @@ if(BUILD_TESTING)
                 deferred_switch_interp_poll
                 mod_owned_display_controls
                 fmv_quiet_guards
+                netplay_early_input_idle_wiring
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
                 gl_swap_self_heal

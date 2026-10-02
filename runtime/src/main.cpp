@@ -5756,6 +5756,29 @@ static void apply_pad_slot_to_sio(int s, const PsxNetPad& pad) {
                            pad.analog);
 }
 
+/* PS1B-374: no pad input in the first ticks of a netplay session.
+ *
+ * A rollback episode is safe only when both peers load the same snapshot: a
+ * peer that reloads a snapshot does not land on the state of a peer that ran
+ * straight through. In the first ticks of a session no interval snapshot is
+ * hash-confirmed yet, so an input misprediction there makes the rollback
+ * engine load a tip snapshot the other peer has already dropped. That peer
+ * refuses, each peer then reloads a snapshot of its own, and the two never
+ * agree again (a fork at sim 22, in four of five runs at 60 ms one-way delay).
+ *
+ * The guest does not read a pad that early; the BIOS is still booting. So the
+ * pad this peer feeds into the session is idle for the first
+ * NETPLAY_EARLY_IDLE_TICKS sim ticks. Idle is what the other peer predicts,
+ * so nothing is mispredicted and no episode opens before interval snapshots
+ * exist. Every source passes through here: a controller, the keyboard, a
+ * debug override. The blob's pad type and connection are kept. */
+#define NETPLAY_EARLY_IDLE_TICKS 64u
+static void netplay_early_input_idle(PsxNetPad* pad) {
+    if (psx_netplay_sim_tick() >= NETPLAY_EARLY_IDLE_TICKS) return;
+    pad->buttons = 0xFFFFu;
+    pad->lx = pad->ly = pad->rx = pad->ry = 0x80u;
+}
+
 /* Raw SDL Start face-button (ignores remaps) — pad-trace only. */
 static int netplay_sdl_start_held(int card) {
     if (card < 0 || card >= PSX_MAX_PLAYERS) return 0;
@@ -5857,16 +5880,21 @@ static void capture_local_human_pad(PsxNetPad* out) {
  *
  * PSX_NET_TEST_INPUT_FROM=<tick> keeps the scripted pad idle before that sim
  * tick (default 0: it presses from the first tick), so a test can choose
- * whether the first misprediction falls into the BIOS boot or after it. */
+ * whether the first misprediction falls into the BIOS boot or after it.
+ * PSX_NET_TEST_INPUT_HOLD=1 holds one button down from that tick instead of
+ * changing the pad every 8 ticks: a player who keeps a button pressed while
+ * the match starts. It gives exactly one input change. */
 static bool netplay_test_input(PsxNetPad* out) {
     static int seed_read = 0;
-    static uint32_t seed = 0, from = 0;
+    static uint32_t seed = 0, from = 0, hold = 0;
     if (!seed_read) {
         seed_read = 1;
         if (const char* e = std::getenv("PSX_NET_TEST_INPUT_SEED"))
             seed = (uint32_t)std::strtoul(e, nullptr, 10);
         if (const char* e = std::getenv("PSX_NET_TEST_INPUT_FROM"))
             from = (uint32_t)std::strtoul(e, nullptr, 10);
+        if (const char* e = std::getenv("PSX_NET_TEST_INPUT_HOLD"))
+            hold = (e[0] == '1') ? 1u : 0u;
         if (seed)
             std::fprintf(stderr,
                 "psxrecomp: netplay TEST INPUT on (PSX_NET_TEST_INPUT_SEED=%u, from "
@@ -5882,6 +5910,8 @@ static bool netplay_test_input(PsxNetPad* out) {
     const uint16_t held = (uint16_t)((1u << (4u + (x >> 28) % 4u)) |
                                      (1u << (12u + (x >> 24) % 4u)));
     out->buttons = (tick >= from && ((x >> 20) & 1u)) ? (uint16_t)~held : 0xFFFFu;
+    if (hold)   /* Cross (bit 14) held from the start tick, nothing else */
+        out->buttons = tick >= from ? (uint16_t)~(1u << 14) : 0xFFFFu;
     out->lx = out->ly = out->rx = out->ry = 0x80u;
     out->analog = 1;      /* as the headless idle pad below */
     out->connected = 1;
@@ -6177,6 +6207,7 @@ static void netplay_barrier_admit(int override) {
             } else {
                 capture_local_human_pad(&local);
             }
+            netplay_early_input_idle(&local);   /* PS1B-374 */
             psx_netplay_stage_local(&local);
         } else if (psx_start_bisect_spin_log() && !g_headless) {
             /* Dense SDL-only samples while admit waits without capture. */
