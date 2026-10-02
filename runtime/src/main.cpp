@@ -18030,6 +18030,22 @@ session_reboot:
             else
                 net_cfg.input_player = 0;
         }
+        /* A match carries pad input only (PS1B-313). The seat that feeds this
+         * player's input must be a pad or the keyboard: a Mouse or GunCon seat
+         * sat in the match with no input, a neGcon lost its twist, and nothing
+         * said so. A CLI start stops here. A match started from the lobby goes
+         * on to open the session, so that ending it tells the other player,
+         * and returns to the room with the sentence (below). */
+        static char netplay_seat_why[NETPLAY_SEAT_REFUSAL_CAP];
+        const bool netplay_seat_refused = netplay_seat_refusal(
+            sio_device_for_player(g_players[net_cfg.input_player]),
+            net_cfg.input_player + 1, netplay_seat_why,
+            sizeof(netplay_seat_why)) != 0;
+        if (netplay_seat_refused) {
+            std::fprintf(stderr, "psxrecomp: netplay refused — %s\n", netplay_seat_why);
+            if (!g_netplay_from_lobby)
+                return 1;
+        }
         if (net_cfg.slot_count < 2)
             net_cfg.slot_count = game_players >= 2 ? game_players : 2;
         if (net_cfg.slot_count > PSX_MAX_PLAYERS)
@@ -18054,6 +18070,13 @@ session_reboot:
                     (std::strcmp(psx_netplay_transport_name(), "ice") == 0)
                         ? "(ice)" : net_cfg.peer_hostport,
                     (unsigned)net_cfg.session_id);
+        if (netplay_seat_refused) {
+            /* End the session just opened: the other player is told at once,
+             * and this one returns to the room, where the status line shows
+             * the sentence. The guest is not entered: see the scheduler. */
+            netplay_soft_exit("netplay_seat_not_pad");
+            g_netplay_exit_reason_text = netplay_seat_why;
+        }
     }
 
     /* Initialize CPU state. */
@@ -18603,6 +18626,10 @@ session_reboot:
         }
     }
 
+    /* A match refused at its start (PS1B-313) closed its session before the
+     * guest ran. Go back to the room; do not boot the game offline. */
+    if (psx_return_to_lobby_requested() && g_netplay_from_lobby)
+        goto soft_return_lobby;
     psx_scheduler_run(&cpu);
     if (psx_return_to_lobby_requested() && g_netplay_from_lobby)
         goto soft_return_lobby;

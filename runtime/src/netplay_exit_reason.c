@@ -1,7 +1,9 @@
 /* Why a netplay match ended, in words (PS1B-290). See netplay_exit_reason.h. */
 #include "netplay_exit_reason.h"
+#include "sio.h"
 
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct {
@@ -34,6 +36,25 @@ const char *netplay_exit_reason_text(const char *origin)
             return k_reasons[i].text;
     }
     return NULL;
+}
+
+int netplay_seat_refusal(int sio_device, int port, char *out, size_t cap)
+{
+    const char *device;
+    if (out && cap) out[0] = '\0';
+    switch (sio_device) {
+    case SIO_DEVICE_PAD:    return 0;
+    case SIO_DEVICE_MOUSE:  device = "PS1 Mouse"; break;
+    case SIO_DEVICE_NEGCON: device = "neGcon";    break;
+    case SIO_DEVICE_GUNCON: device = "GunCon";    break;
+    default:                device = "device that is not a pad"; break;
+    }
+    if (out && cap)
+        snprintf(out, cap,
+                 "Netplay needs a pad or the keyboard: port %d is set to a %s. "
+                 "Change the controller for that port and start again.",
+                 port, device);
+    return 1;
 }
 
 int netplay_boot_mismatch_final(uint32_t mismatch_since_ms, uint32_t now_ms,
