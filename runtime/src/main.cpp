@@ -177,6 +177,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cerrno>
 #include <exception>
 #include <array>
 #include <filesystem>
@@ -3514,6 +3515,95 @@ static void netplay_soft_exit(const char *origin) {
         std::fprintf(stderr, "psxrecomp: %s\n", g_netplay_exit_reason_text);
     shutdown_runtime();
     std::exit(0);
+}
+
+/* Why a LAN netplay start failed (PS1B-386). The netplay library answers a
+ * refused bind, a listen address it cannot read and a peer address it cannot
+ * use with the same -1 and no error code, so try the bind here and keep the
+ * system's answer: the error number and its text. No SO_REUSEADDR, so a port
+ * another program holds is reported; the library's own socket is closed by
+ * now. A host name is left to the library (NETPLAY_BIND_NOT_TRIED). */
+static int netplay_bind_probe(const char* hostport, int* sys_error,
+                              char* sys_text, size_t sys_cap) {
+    if (sys_error) *sys_error = 0;
+    if (sys_text && sys_cap) sys_text[0] = '\0';
+    const char* colon = hostport ? std::strrchr(hostport, ':') : nullptr;
+    char host[64];
+    if (!colon || colon == hostport || (size_t)(colon - hostport) >= sizeof(host))
+        return NETPLAY_BIND_BAD_ADDRESS;
+    std::memcpy(host, hostport, (size_t)(colon - hostport));
+    host[colon - hostport] = '\0';
+    char* end = nullptr;
+    const long port = std::strtol(colon + 1, &end, 10);
+    if (end == colon + 1 || *end != '\0' || port < 0 || port > 65535)
+        return NETPLAY_BIND_BAD_ADDRESS;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1)
+        return NETPLAY_BIND_NOT_TRIED;
+    int err = 0;
+#ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+    const SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET) {
+        err = WSAGetLastError();
+    } else {
+        if (bind(s, (const sockaddr*)&addr, sizeof(addr)) != 0)
+            err = WSAGetLastError();
+        closesocket(s);
+    }
+    if (err && sys_text && sys_cap) {
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                       nullptr, (DWORD)err, 0, sys_text, (DWORD)sys_cap, nullptr);
+        for (size_t n = std::strlen(sys_text);
+             n && (sys_text[n - 1] == '\n' || sys_text[n - 1] == '\r' ||
+                   sys_text[n - 1] == ' ' || sys_text[n - 1] == '.'); --n)
+            sys_text[n - 1] = '\0';
+    }
+#else
+    const int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0) {
+        err = errno;
+    } else {
+        if (bind(s, (const sockaddr*)&addr, sizeof(addr)) != 0)
+            err = errno;
+        close(s);
+    }
+    if (err && sys_text && sys_cap)
+        std::snprintf(sys_text, sys_cap, "%s", std::strerror(err));
+#endif
+    if (sys_error) *sys_error = err;
+    return err ? NETPLAY_BIND_FAILED : NETPLAY_BIND_OK;
+}
+
+/* A netplay start failed: print what failed and return the sentence for the
+ * player (PS1B-386). The old line named the build first ("built without
+ * recomp-net, or bind/peer invalid") for every failure; a player whose system
+ * held the port read that the build had no netplay. For a LAN start the bind
+ * is tried again here and the system's answer is reported. */
+static const char* netplay_start_failure(int nrc, const PsxNetplayConfig& cfg) {
+#if defined(PSX_HAS_RECOMP_NET)
+    const int netplay_built = 1;
+#else
+    const int netplay_built = 0;
+#endif
+    static char why[NETPLAY_START_FAILURE_CAP];
+    char sys_text[160] = "";
+    int sys_error = 0;
+    const int bind_probe = (netplay_built && nrc == -3)
+        ? netplay_bind_probe(cfg.bind_hostport, &sys_error, sys_text, sizeof(sys_text))
+        : NETPLAY_BIND_NOT_TRIED;
+    netplay_start_failure_text(nrc, netplay_built, cfg.bind_hostport,
+                               cfg.peer_hostport, bind_probe, sys_error,
+                               why, sizeof(why));
+    std::fprintf(stderr,
+        "psxrecomp: netplay start failed (%d) — %s%s%s%s (slot=%d bind=%s peer=%s)\n",
+        nrc, why, sys_text[0] ? " [system: " : "", sys_text,
+        sys_text[0] ? "]" : "", cfg.local_slot, cfg.bind_hostport,
+        cfg.peer_hostport);
+    return why;
 }
 
 static void shutdown_runtime(void) {
@@ -18146,29 +18236,32 @@ session_reboot:
         s_netplay_present_sim_watermark = 0; /* §74: sim restarts per session */
         const int nrc = psx_netplay_start(&net_cfg);
         if (nrc != 0) {
-            std::fprintf(stderr,
-                "psxrecomp: netplay start failed (%d) — built without recomp-net, "
-                "or bind/peer invalid (slot=%d bind=%s peer=%s)\n",
-                nrc, net_cfg.local_slot, net_cfg.bind_hostport, net_cfg.peer_hostport);
-            return 1;
-        }
-        netplay_overlay_pin();
-        apply_netplay_local_viewport_aspect(net_cfg.enabled);
-        std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
-                    "force_turn=%d bind=%s peer=%s session=%u\n",
-                    psx_netplay_transport_name(),
-                    net_cfg.local_slot, net_cfg.input_player, net_cfg.input_delay,
-                    net_cfg.force_turn ? 1 : 0,
-                    net_cfg.bind_hostport,
-                    (std::strcmp(psx_netplay_transport_name(), "ice") == 0)
-                        ? "(ice)" : net_cfg.peer_hostport,
-                    (unsigned)net_cfg.session_id);
-        if (netplay_seat_refused) {
-            /* End the session just opened: the other player is told at once,
-             * and this one returns to the room, where the status line shows
-             * the sentence. The guest is not entered: see the scheduler. */
-            netplay_soft_exit("netplay_seat_not_pad");
-            g_netplay_exit_reason_text = netplay_seat_why;
+            const char* const why = netplay_start_failure(nrc, net_cfg);
+            if (!g_netplay_from_lobby)
+                return 1;
+            /* A match from the launcher returns to the room with the
+             * sentence, as the seat refusal below does (PS1B-386). */
+            netplay_soft_exit("netplay_start_failed");
+            g_netplay_exit_reason_text = why;
+        } else {
+            netplay_overlay_pin();
+            apply_netplay_local_viewport_aspect(net_cfg.enabled);
+            std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
+                        "force_turn=%d bind=%s peer=%s session=%u\n",
+                        psx_netplay_transport_name(),
+                        net_cfg.local_slot, net_cfg.input_player, net_cfg.input_delay,
+                        net_cfg.force_turn ? 1 : 0,
+                        net_cfg.bind_hostport,
+                        (std::strcmp(psx_netplay_transport_name(), "ice") == 0)
+                            ? "(ice)" : net_cfg.peer_hostport,
+                        (unsigned)net_cfg.session_id);
+            if (netplay_seat_refused) {
+                /* End the session just opened: the other player is told at once,
+                 * and this one returns to the room, where the status line shows
+                 * the sentence. The guest is not entered: see the scheduler. */
+                netplay_soft_exit("netplay_seat_not_pad");
+                g_netplay_exit_reason_text = netplay_seat_why;
+            }
         }
     }
 

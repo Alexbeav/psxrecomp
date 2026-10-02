@@ -38,6 +38,55 @@ const char *netplay_exit_reason_text(const char *origin)
     return NULL;
 }
 
+void netplay_start_failure_text(int start_rc, int has_netplay,
+                                const char *bind_hostport,
+                                const char *peer_hostport, int bind_probe,
+                                int sys_error, char *out, size_t cap)
+{
+    char address[64] = "";
+    const char *port = "";
+    const char *colon;
+    if (!out || !cap) return;
+    out[0] = '\0';
+    if (!bind_hostport) bind_hostport = "";
+    if (!peer_hostport) peer_hostport = "";
+    /* "address:port": the port is what follows the last colon. */
+    colon = strrchr(bind_hostport, ':');
+    if (colon && (size_t)(colon - bind_hostport) < sizeof(address)) {
+        memcpy(address, bind_hostport, (size_t)(colon - bind_hostport));
+        address[colon - bind_hostport] = '\0';
+        port = colon + 1;
+    }
+    if (!has_netplay) {
+        snprintf(out, cap, "This build has no netplay: it was built without "
+                           "the netplay library.");
+    } else if (start_rc == -3 && bind_probe == NETPLAY_BIND_FAILED) {
+        snprintf(out, cap,
+                 "Netplay could not open UDP port %.5s on %.15s (system error "
+                 "%d). Another program or the operating system holds that "
+                 "port. Choose another port and start again.",
+                 port, address, sys_error);
+    } else if (start_rc == -3 && bind_probe == NETPLAY_BIND_BAD_ADDRESS) {
+        snprintf(out, cap,
+                 "Netplay could not start: \"%.60s\" is not an address and a "
+                 "port to listen on.", bind_hostport);
+    } else if (start_rc == -3 && peer_hostport[0]) {
+        snprintf(out, cap,
+                 "Netplay could not start: the other player's address "
+                 "\"%.60s\" could not be used.", peer_hostport);
+    } else if (start_rc == -3) {
+        snprintf(out, cap,
+                 "Netplay could not start its connection on %.60s.",
+                 bind_hostport);
+    } else if (start_rc == -4) {
+        snprintf(out, cap,
+                 "Netplay could not start the online connection. The log "
+                 "names the setting that is missing or wrong.");
+    } else {
+        snprintf(out, cap, "Netplay could not start (code %d).", start_rc);
+    }
+}
+
 int netplay_seat_refusal(int sio_device, int port, char *out, size_t cap)
 {
     const char *device;
