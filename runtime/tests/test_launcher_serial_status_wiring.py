@@ -126,6 +126,26 @@ assert verdict, "a set must refuse a disc whose serial is none of the set's"
 assert guard < verdict.start()
 assert body.count("PSXRecompV4::identify_disc(") == 1
 
+# The run report's line for the disc row (launcher_status, PS1G-63) says the
+# same as the panel. For an image outside the disc list there is no single
+# expected serial: the line names the list, and gives the serial as the reason
+# when that is why the disc is refused, not the online-play note.
+row = body[body.index("const std::string expected_for_row ="):]
+row = row[: row.index('psx_start_note_launcher("disc", row);')]
+assert re.search(
+    r"const std::string expected_for_row = id\.expected_serial_given\s*\? expect_serial\s*"
+    r": set_serial != PSXRecompV4::DiscSetSerial::NotJudged\s*"
+    r"\? PSXRecompV4::disc_roster_serial_list\(g_disc_serials\)\s*: std::string\(\);",
+    row,
+)
+assert re.search(
+    r": \(\(id\.expected_serial_given && !id\.serial_matches\) \|\| set_wrong_disc\)\s*"
+    r"\? \"the disc does not carry the expected serial\"\s*: id\.netplay_detail\.c_str\(\);",
+    row,
+), "a wrong disc outside the list must give the serial as the reason in the report"
+assert re.search(r"id\.detected_serial\.c_str\(\), expected_for_row\.c_str\(\),", row)
+assert "expect_serial.c_str()" not in row
+
 # The start check (a command-line start with --disc; no launcher). It only
 # warns: "Disc Image Warning ... The runtime will try to run it anyway." A
 # build with a list expected nothing of an image outside its disc list, so

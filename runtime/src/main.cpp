@@ -10554,11 +10554,22 @@ namespace {
         {
             /* The row's verdict and its reason, for the run report: a red
              * row blocks Play, and the start then ends as "launcher closed"
-             * (PS1G-63). */
+             * (PS1G-63).
+             *
+             * An image outside the disc list of a build with a serial list
+             * has no single expected serial: it is refused for carrying none
+             * of the list's (PS1B-403). The row then names the list, and
+             * gives that reason, not the online-play note, which is true of
+             * another game's disc too and is not why it is refused. */
+            const std::string expected_for_row = id.expected_serial_given
+                ? expect_serial
+                : set_serial != PSXRecompV4::DiscSetSerial::NotJudged
+                    ? PSXRecompV4::disc_roster_serial_list(g_disc_serials)
+                    : std::string();
             const char* why =
                 !companion.ready ? companion.message.c_str()
                 : !id.detail.empty() ? id.detail.c_str()
-                : (id.expected_serial_given && !id.serial_matches)
+                : ((id.expected_serial_given && !id.serial_matches) || set_wrong_disc)
                     ? "the disc does not carry the expected serial"
                 : id.netplay_detail.c_str();
             char row[PSX_START_LAUNCHER_ROW_CAP];
@@ -10566,7 +10577,7 @@ namespace {
                           "verdict=%s serial=%s expected=%s tracks=%d%s%s",
                           out->verdict == 1 ? "ok"
                               : out->verdict == 2 ? "warning" : "refused",
-                          id.detected_serial.c_str(), expect_serial.c_str(),
+                          id.detected_serial.c_str(), expected_for_row.c_str(),
                           id.track_count, why[0] ? "; " : "", why);
             psx_start_note_launcher("disc", row);
         }
