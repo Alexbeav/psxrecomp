@@ -41,6 +41,7 @@
 #include "psx_bss.h"
 #include "dispatch_publish.h"
 #include "crash_trace.h"
+#include "start_refusal.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */
 
@@ -428,6 +429,28 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         g_dirty_ram_last_unsupported_entry_ra,
         g_dirty_ram_last_unsupported_entry_sp,
         g_dirty_ram_last_unsupported_insns);
+
+    /* PS1G-63: a start that is refused before the first frame, a closed
+     * launcher and a setup program's exit all ended as "atexit", "unknown",
+     * frame 0, so a player's report could not say why the game did not start.
+     * `start_refused` is the kind and the sentence the player was shown;
+     * `launcher_status` is what the launcher's BIOS and disc rows said last.
+     * Both are `null` on a start that ran. */
+    {
+        /* Room for every character escaped. */
+        static char refusal[2 * (PSX_START_REFUSAL_KIND_CAP + PSX_START_REFUSAL_TITLE_CAP +
+                                 PSX_START_REFUSAL_TEXT_CAP) + 64];
+        static char rows[4 * PSX_START_LAUNCHER_ROW_CAP + 64];
+        if (psx_start_refusal_json(refusal, sizeof(refusal)) <= 0)
+            snprintf(refusal, sizeof(refusal), "null");
+        if (psx_start_launcher_status_json(rows, sizeof(rows)) <= 0)
+            snprintf(rows, sizeof(rows), "null");
+        append_str(buf, sizeof(buf), &pos, "  \"start_refused\": ");
+        append_str(buf, sizeof(buf), &pos, refusal);
+        append_str(buf, sizeof(buf), &pos, ",\n  \"launcher_status\": ");
+        append_str(buf, sizeof(buf), &pos, rows);
+        append_str(buf, sizeof(buf), &pos, ",\n");
+    }
 
     /* PS1B-380: what the overlay compile runs of this start did. A unit the
      * compiler rejects runs interpreted and is not "degraded"; until this

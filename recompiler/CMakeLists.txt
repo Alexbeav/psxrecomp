@@ -1252,6 +1252,7 @@ if(BUILD_TESTING)
                 replay_disc_identity_wiring
                 netplay_chd_disc_rule_wiring
                 run_report_cdrom_counters
+                start_refusal_wiring
                 netplay_lan_identity_wiring
                 netplay_overlay_pin_wiring
                 jalr_link_register_guards
