@@ -28,6 +28,9 @@ sentence is compared:
                    without --json-progress) and the rebuild's toolchain step
                    print the sentence alone: no exception name, no label in
                    front, exit code 1. The setup window shows that line.
+                   The rebuild's step is run on Windows only: elsewhere a
+                   rebuild takes the native tools first and does not call
+                   the installer.
   S3, by the       Windows only: the installed folder held by a handle on the
   system           folder (error 32) and by an open file in it (error 5), for
                    the host and for the CLI. Linux and macOS have no way to make
@@ -235,9 +238,15 @@ def cli_layer(tmp: Path, stubs: dict, check: support.Checks) -> None:
         check(run.returncode == 1 and alone, "%s: the sentence alone, exit code 1" % name, (run.returncode, printed[-600:]))
         check(not any(word in printed for word in ("RuntimeError", "ToolchainRefused", "Traceback")),
               "%s: no exception name and no traceback in what is printed" % name, printed[-600:])
-    seen = support.run_cli_child(THIS, "rebuild", sandbox, False)
-    check(seen.get("ok") is False and seen.get("lines") and seen["lines"][-1] == sentence,
-          "CLI rebuild: the toolchain step gives the progress line the sentence alone", seen)
+    if WINDOWS:
+        seen = support.run_cli_child(THIS, "rebuild", sandbox, False)
+        check(seen.get("ok") is False and seen.get("lines") and seen["lines"][-1] == sentence,
+              "CLI rebuild (Windows): the toolchain step gives the progress line the sentence alone", seen)
+    else:
+        # On Linux and macOS a rebuild takes the native cmake, ninja and compilers when they are on PATH
+        # and does not call the installer, so the sentence cannot arise from that step on such a host.
+        print("not run here: the rebuild's toolchain step reaches the installer on Windows only "
+              "(elsewhere it uses the native tools first)")
 
     for number in NUMBERS:
         sandbox = tmp / ("cli-rename-%d" % number)
