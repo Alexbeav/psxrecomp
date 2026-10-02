@@ -3434,6 +3434,49 @@ static void netplay_host_present_restore(void) {
     apply_present_cadence();
 }
 
+/* Interpreted-overlay pin (PS1B-191, PS1B-367): native and interpreted overlay
+ * code do not yet produce identical guest cycles, and background compiles
+ * switch tiers at wall-clock times. A replay and a netplay session both need
+ * every machine to count the same cycles, so each holds the native tier off
+ * for its length. The holders are counted; the tier returns when the last one
+ * lets go. */
+static int s_overlay_interp_holders = 0;
+static int s_overlay_native_saved = -1;
+static void overlay_interp_pin_acquire(void) {
+    if (s_overlay_interp_holders++ == 0) {
+        s_overlay_native_saved = overlay_loader_get_native_exec();
+        overlay_loader_set_native_exec(0);
+    }
+}
+static void overlay_interp_pin_release(void) {
+    if (s_overlay_interp_holders <= 0 || --s_overlay_interp_holders > 0)
+        return;
+    overlay_loader_set_native_exec(s_overlay_native_saved);
+    s_overlay_native_saved = -1;
+}
+
+/* A netplay session runs overlays interpreted (PS1B-367). Two players never
+ * hold the same overlay cache, and a pair leaves sync at the first overlay one
+ * peer runs native and the other interprets. Taken when the session starts,
+ * before the guest runs, and given back wherever the session is shut down. */
+static bool s_netplay_overlay_pinned = false;
+static void netplay_overlay_pin(void) {
+    static const bool no_pin = [] {   /* diagnostic: measure without the pin */
+        const char *e = std::getenv("PSX_NETPLAY_NO_OVERLAY_PIN");
+        return e && e[0] == '1';
+    }();
+    if (s_netplay_overlay_pinned || no_pin)
+        return;
+    s_netplay_overlay_pinned = true;
+    overlay_interp_pin_acquire();
+}
+static void netplay_overlay_unpin(void) {
+    if (!s_netplay_overlay_pinned)
+        return;
+    s_netplay_overlay_pinned = false;
+    overlay_interp_pin_release();
+}
+
 /* Why the last match ended, for the launcher's status line once the lobby is
  * back (PS1B-290). Set by netplay_soft_exit; NULL when the player ended it. */
 static const char *g_netplay_exit_reason_text = nullptr;
@@ -3449,6 +3492,7 @@ static void netplay_soft_exit(const char *origin) {
     psx_crash_trace_set_exit_origin(origin);
     netplay_host_present_restore();
     psx_netplay_shutdown(); /* sends BYE so the peer soft-exits too */
+    netplay_overlay_unpin();
     if (g_netplay_from_lobby) {
         std::printf("psxrecomp: netplay ended (%s) — returning to lobby\n",
                     origin ? origin : "?");
@@ -3466,6 +3510,7 @@ static void shutdown_runtime(void) {
     /* (sljit removed 2026-07-15: overlay_compile_worker_stop joined the
      * off-thread JIT worker here; the worker no longer exists.) */
     psx_netplay_shutdown();
+    netplay_overlay_unpin();
     psx_rewind_shutdown();
     memcard_flush_all();
     /* Stop and join the active external compiler before capture/debug teardown.
@@ -3491,6 +3536,7 @@ static void shutdown_runtime(void) {
 static void teardown_game_session_keep_lobby(void) {
     netplay_host_present_restore();
     psx_netplay_shutdown();
+    netplay_overlay_unpin();
     psx_rewind_shutdown();
     memcard_flush_all();
     if (sdl_audio_device) {
@@ -8046,23 +8092,25 @@ extern "C" int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap) {
  * identical guest cycles, and background compiles switch tiers at wall-clock
  * times, so a replay would depend on the overlay cache. Recording and playback
  * both run overlays interpreted from the anchor on; the tier returns when the
- * replay ends (replay_overlay_unpin_if_idle). */
-static int s_replay_native_saved = -1;
+ * replay ends (replay_overlay_unpin_if_idle). The pin is the counted one a
+ * netplay session also holds (overlay_interp_pin_acquire), so neither undoes
+ * the other. */
+static bool s_replay_overlay_pinned = false;
 static void replay_overlay_pin(void) {
     static const bool no_pin = [] {   /* diagnostic: measure without the pin */
         const char *e = std::getenv("PSX_REPLAY_NO_OVERLAY_PIN");
         return e && e[0] == '1';
     }();
-    if (s_replay_native_saved >= 0 || no_pin)
+    if (s_replay_overlay_pinned || no_pin)
         return;
-    s_replay_native_saved = overlay_loader_get_native_exec();
-    overlay_loader_set_native_exec(0);
+    s_replay_overlay_pinned = true;
+    overlay_interp_pin_acquire();
 }
 static void replay_overlay_unpin_if_idle(void) {
-    if (s_replay_native_saved < 0 || replay_session_state() != REPLAY_IDLE)
+    if (!s_replay_overlay_pinned || replay_session_state() != REPLAY_IDLE)
         return;
-    overlay_loader_set_native_exec(s_replay_native_saved);
-    s_replay_native_saved = -1;
+    s_replay_overlay_pinned = false;
+    overlay_interp_pin_release();
 }
 
 extern "C" int replay_host_request_anchor(void) {
@@ -17954,6 +18002,7 @@ session_reboot:
                 nrc, net_cfg.local_slot, net_cfg.bind_hostport, net_cfg.peer_hostport);
             return 1;
         }
+        netplay_overlay_pin();
         apply_netplay_local_viewport_aspect(net_cfg.enabled);
         std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
                     "force_turn=%d bind=%s peer=%s session=%u\n",
