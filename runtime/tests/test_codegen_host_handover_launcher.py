@@ -20,6 +20,23 @@ product was started with:
                         than empty or 0: the arguments are forwarded as they
                         are, with no --launcher;
   a variable set to 0   is not a headless start.
+
+The setup host is a real program with a toolchain installer in it. A start with
+--diagnostic (or PSXRECOMP_DIAGNOSTIC, or a diagnostic-mode.txt beside it) and
+no diagnostic product makes it "ensure" the build toolchain: it removes the
+installed pack's folder and installs a downloaded one. On 2026-10-02 a first
+version of this test had such a case and emptied the build host's toolchain.
+So the host here runs in a closed environment (host_environment):
+
+  - no case may pass a switch that asks for a build (FORBIDDEN_ARGS);
+  - the environment is built from nothing, not copied: every folder the host
+    derives a toolchain or data root from (LOCALAPPDATA, APPDATA, USERPROFILE,
+    HOME, XDG_DATA_HOME, RETCOMM_DATA_HOME, RETCOMM_TOOLCHAIN_CACHE, TEMP, TMP)
+    is a folder inside the test's own temporary folder, PATH holds the system
+    folders only, and no variable names a toolchain;
+  - the proxy variables point at a closed local port, so a download cannot work;
+  - after the cases the toolchain and data folders must still be empty. A file
+    there means the host tried to install something: the test fails.
 """
 
 from __future__ import annotations
@@ -69,9 +86,60 @@ int main(int argc, char** argv) {
 }
 """
 
-# Variables that change what the host does; the test sets the ones a case names.
-SIGNALS = ("PSX_NO_LAUNCHER", "PSX_HEADLESS", "PSXRECOMP_NO_FORWARD", "PSXRECOMP_FORCE_SETUP",
-           "PSXRECOMP_DIAGNOSTIC", "PSXRECOMP_BUILD_DIR", "PSXRECOMP_PROJECT_ROOT")
+# Switches and variables that make the host build or install. No case may use them.
+FORBIDDEN_ARGS = ("--diagnostic", "--diagnostic-only", "--collect-diagnostics")
+FORBIDDEN_VARS = ("PSXRECOMP_DIAGNOSTIC", "PSXRECOMP_FORCE_SETUP", "RETCOMM_TOOLCHAIN_DIR",
+                  "PSXRECOMP_TOOLCHAIN_DIR", "TOOLCHAIN_DIR", "BPE_TOOLCHAIN_DIR", "CMAKE", "PYTHON",
+                  "RETCOMM_PYTHON")
+
+# Folders the host derives a toolchain or data root from. Each becomes a folder
+# of the test; they must be empty when the cases are over.
+SANDBOX_ROOTS = {
+    "LOCALAPPDATA": "host-localappdata",
+    "APPDATA": "host-appdata",
+    "USERPROFILE": "host-home",
+    "HOME": "host-home",
+    "XDG_DATA_HOME": "host-xdg-data",
+    "RETCOMM_DATA_HOME": "host-retcomm-data",
+    "RETCOMM_TOOLCHAIN_CACHE": "host-retcomm-toolchain-cache",
+}
+DEAD_PROXY = "http://127.0.0.1:9"
+
+
+def host_environment(sandbox: Path) -> dict[str, str]:
+    """The only environment the setup host is started with. Nothing is copied
+    from the caller except the names the system needs to start a program."""
+    env: dict[str, str] = {}
+    if os.name == "nt":
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
+        env["SystemRoot"] = system_root
+        env["windir"] = system_root
+        env["SystemDrive"] = os.environ.get("SystemDrive", "C:")
+        env["ComSpec"] = str(Path(system_root) / "System32" / "cmd.exe")
+        env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+        env["PATH"] = os.pathsep.join([str(Path(system_root) / "System32"), system_root])
+    else:
+        env["PATH"] = "/usr/bin:/bin"
+    for name, folder in SANDBOX_ROOTS.items():
+        (sandbox / folder).mkdir(parents=True, exist_ok=True)
+        env[name] = str(sandbox / folder)
+    (sandbox / "host-temp").mkdir(parents=True, exist_ok=True)
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        env[name] = str(sandbox / "host-temp")
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        env[name] = DEAD_PROXY
+        if os.name != "nt":   # Windows names are case-blind; one spelling is enough
+            env[name.lower()] = DEAD_PROXY
+    return env
+
+
+def sandbox_leftovers(sandbox: Path) -> list[str]:
+    """Files the host left in its toolchain and data folders. There must be none."""
+    found = []
+    for folder in sorted(set(SANDBOX_ROOTS.values())):
+        for path in sorted((sandbox / folder).rglob("*")):
+            found.append(str(path.relative_to(sandbox)))
+    return found
 
 
 def find_recomp_ui() -> Path | None:
@@ -153,16 +221,30 @@ def main() -> int:
             (["--bios", "b.bin"], {"PSX_HEADLESS": "1", "PSX_NO_LAUNCHER": "1"}, ["--bios", "b.bin"],
              "the fleet's start (both variables): arguments only"),
         ]
+        for args, variables, _expected, why in cases:
+            asked = [a for a in args if a in FORBIDDEN_ARGS] + [v for v in variables if v in FORBIDDEN_VARS]
+            if asked:
+                print("FAIL: the case %r asks the host for a build or an install (%s); "
+                      "this test must never do that" % (why, ", ".join(asked)))
+                return 1
+
+        sandbox = tmp / "sandbox"
         failures = 0
         for index, (args, variables, expected, why) in enumerate(cases):
             project = tmp / f"case {index}"
             make_project(project, framework)
             shutil.copy2(product_exe, project / "build-release" / ("Probe" + suffix))
             out = project / "handover-args.txt"
-            env = {k: v for k, v in os.environ.items() if k not in SIGNALS}
+            env = host_environment(sandbox)
             env.update(variables)
             env["PSXRECOMP_PROJECT_ROOT"] = str(project)
             env["HANDOVER_ARGS_OUT"] = str(out)
+            outside = [name for name in list(SANDBOX_ROOTS) + ["TEMP", "TMP", "TMPDIR"]
+                       if sandbox.resolve() not in Path(env[name]).resolve().parents]
+            if outside:
+                print("FAIL: the host would be started with a folder outside the test's own: %s"
+                      % ", ".join(outside))
+                return 1
             run = subprocess.run([str(host_exe)] + args, capture_output=True, text=True,
                                  encoding="utf-8", errors="replace", env=env, cwd=str(tmp))
             # On Windows the host starts the product and exits without waiting for it.
@@ -183,6 +265,13 @@ def main() -> int:
                 failures += 1
             else:
                 print("ok: %s" % why)
+        leftovers = sandbox_leftovers(sandbox)
+        if leftovers:
+            print("FAIL: the host wrote into its toolchain or data folders; a hand-over must not:\n  %s"
+                  % "\n  ".join(leftovers[:20]))
+            failures += 1
+        else:
+            print("ok: the host left its toolchain and data folders empty")
         if failures:
             return 1
 
