@@ -60,6 +60,18 @@ void netplay_start_failure_text(int start_rc, int has_netplay,
     if (!has_netplay) {
         snprintf(out, cap, "This build has no netplay: it was built without "
                            "the netplay library.");
+    } else if (start_rc == -3 && bind_probe == NETPLAY_BIND_FAILED &&
+               (sys_error == 10013 || sys_error == 13)) {
+        /* Access denied (Windows WSAEACCES 10013, POSIX EACCES 13): nothing
+         * holds the port. The system does not hand it out: a port range that
+         * Windows keeps for Hyper-V or WSL, or a port below 1024 elsewhere.
+         * "Another program holds it" would send the player looking for a
+         * program that does not exist. */
+        snprintf(out, cap,
+                 "Netplay could not open UDP port %.5s on %.15s (system error "
+                 "%d). The operating system does not allow this port. Choose "
+                 "another port and start again.",
+                 port, address, sys_error);
     } else if (start_rc == -3 && bind_probe == NETPLAY_BIND_FAILED) {
         snprintf(out, cap,
                  "Netplay could not open UDP port %.5s on %.15s (system error "

@@ -197,8 +197,11 @@ system picks, and a command-line start on the `--net-bind` address. When the
 system refuses that port, the runtime tries the bind itself and says so:
 "Netplay could not open UDP port 7777 on 0.0.0.0 (system error 10048).
 Another program or the operating system holds that port. Choose another port
-and start again." The log line adds the system's own text. Windows can hold a
-whole range of ports for Hyper-V and WSL without listing a program for it. A
+and start again." The log line adds the system's own text. When the system
+does not hand the port out at all (Windows error 10013 for a range it keeps
+for Hyper-V or WSL, error 13 for a port below 1024 elsewhere), the sentence
+says "The operating system does not allow this port." instead, so the player
+does not look for a program that is not there. A
 listen address that is not `address:port` and a peer address that cannot be
 used get their own sentence, and the build is named only when it has no
 netplay. A command-line start exits with code 1; a match started from the

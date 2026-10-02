@@ -38,9 +38,11 @@ int netplay_boot_mismatch_final(uint32_t mismatch_since_ms, uint32_t now_ms,
  * has the netplay library. For a LAN start (-3) the caller tries the bind
  * itself and passes what the system answered: `bind_probe` and, for a refused
  * bind, the system's error number. The sentence names the port and the
- * address, says that another program or the system holds the port and that
- * another port can be chosen, and names the build only when the build has no
- * netplay. It fits the lobby client's last_error. */
+ * address, says that another program or the system holds the port (or, for
+ * access denied, Windows 10013 and POSIX 13, that the system does not allow
+ * the port: a range kept for Hyper-V or WSL has no program behind it) and
+ * that another port can be chosen, and names the build only when the build
+ * has no netplay. It fits the lobby client's last_error. */
 enum {
     NETPLAY_BIND_NOT_TRIED   = -1, /* not a LAN start, or a host name to resolve */
     NETPLAY_BIND_OK          = 0,  /* the port could be bound when tried again */

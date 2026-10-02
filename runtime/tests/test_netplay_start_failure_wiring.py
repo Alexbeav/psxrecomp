@@ -73,4 +73,11 @@ assert probe.count("bind(s, (const sockaddr*)&addr, sizeof(addr))") == 2, "the p
 assert "closesocket(s);" in probe and "close(s);" in probe, "the probe must close its socket"
 assert "return NETPLAY_BIND_NOT_TRIED;" in probe, "a host name must be left to the library"
 
+# A port the system refuses (Windows 10013 for a range kept for Hyper-V or WSL, POSIX 13) has its own
+# sentence, chosen before the "another program holds it" one.
+REASON = (ROOT / "runtime" / "src" / "netplay_exit_reason.c").read_text(encoding="utf-8")
+denied = REASON.index("(sys_error == 10013 || sys_error == 13)")
+assert "The operating system does not allow this port." in REASON[denied:], "a refused port has no sentence of its own"
+assert denied < REASON.index("holds that "), "the refused-port sentence must be chosen before the held-port one"
+
 print("netplay start failure wiring test: PASS")

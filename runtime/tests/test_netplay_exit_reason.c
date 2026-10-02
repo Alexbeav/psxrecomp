@@ -57,6 +57,31 @@ int main(void)
         /* A LAN host's own port, any address. */
         netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_FAILED, 98, why, sizeof(why));
         CHECK(strstr(why, "UDP port 7777 on 0.0.0.0 (system error 98)") != NULL);
+        CHECK(strstr(why, "holds that port") != NULL);
+        /* A port the system does not hand out (a range Windows keeps for
+         * Hyper-V or WSL: 10013; a port below 1024 elsewhere: 13). Nothing
+         * holds it, so the player is not sent looking for another program. */
+        {
+            static const int denied[] = { 10013, 13 };
+            size_t k;
+            for (k = 0; k < sizeof(denied) / sizeof(denied[0]); ++k) {
+                netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "127.0.0.1:47811",
+                                           NETPLAY_BIND_FAILED, denied[k], why, sizeof(why));
+                CHECK(strstr(why, "UDP port 47810 on 127.0.0.1 (system error ") != NULL);
+                CHECK(strstr(why, "The operating system does not allow this port.") != NULL);
+                CHECK(strstr(why, "Choose another port and start again.") != NULL);
+                CHECK(strstr(why, "Another program") == NULL && strstr(why, "holds") == NULL);
+                CHECK(strstr(why, "built without") == NULL);
+                CHECK(strlen(why) < 192);
+            }
+            CHECK(strstr(why, "(system error 13)") != NULL);
+            /* In use (Windows 10048) keeps the other sentence. */
+            netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "", NETPLAY_BIND_FAILED, 10048, why, sizeof(why));
+            CHECK(strstr(why, "holds that port") != NULL && strstr(why, "does not allow") == NULL);
+            /* The number alone does not decide: a port that could be bound is not "not allowed". */
+            netplay_start_failure_text(-3, 1, "127.0.0.1:47810", "x", NETPLAY_BIND_OK, 10013, why, sizeof(why));
+            CHECK(strstr(why, "does not allow") == NULL);
+        }
         /* The build is named only when the build has no netplay. */
         netplay_start_failure_text(-1, 0, "127.0.0.1:47810", "", NETPLAY_BIND_NOT_TRIED, 0, why, sizeof(why));
         CHECK(strstr(why, "This build has no netplay") != NULL);
