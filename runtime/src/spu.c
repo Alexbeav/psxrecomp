@@ -770,14 +770,16 @@ static void source_refill(int idx)
         }
 
         /* D2 (b)-(e): the header, at the fetch address or, after a jump, at
-         * the repeat address whatever its alignment. The repeat address is
-         * used as it is held, so one that Key On took from an odd register
-         * value (spec 6.5 K3) is 8 above a block start, and the two bytes
-         * there are a header like any other (D4) [KEPT]. (d): a Loop Start
-         * flag copies the header address to the repeat address and to the
-         * repeat register when the header is fetched [ORACLE FIXTURE S1],
-         * unless a register write disarmed the copy (spec 6.6 W1) [ORACLE
-         * FIXTURE S2] (PSX-SPX "Voice 0..23 ADPCM Repeat Address"). */
+         * the repeat address whatever its alignment. Key On, a register
+         * write and a Loop Start header all give a repeat address that is a
+         * block start (D4) [ORACLE FIXTURE S2b, V6d]. Only a checkpoint saved
+         * before row K3 changed (spec 14.2) can hold one 8 above a block
+         * start; the two bytes there are then a header like any other. (d):
+         * a Loop Start flag copies the header address to the repeat address
+         * and to the repeat register when the header is fetched [ORACLE
+         * FIXTURE S1], unless a register write disarmed the copy (spec 6.6
+         * W1) [ORACLE FIXTURE S2] (PSX-SPX "Voice 0..23 ADPCM Repeat
+         * Address"). */
         source_fetch_irq(addr);
         d->shift  = spu_ram[addr] & 0x0Fu;
         d->filter = spu_ram[addr] >> 4;
@@ -1004,15 +1006,16 @@ static void key_on(uint32_t mask) {
         v->adsr_divider = 0;
         v->adsr_phase = ADSR_ATTACK;
         if (source_key_timing) {
-            /* Spec 6.5 K3: Key On takes the repeat register times 8 with bit
-             * 0 kept (spec 6.2 D4) [ORACLE FIXTURE S1: Key On keeps a preset
-             * repeat address]. It empties the decode queue; the stored
-             * samples, the shift and the filter stay. It arms the Loop Start
-             * copy again (spec 6.6 W1). The voice then waits four ticks
-             * before its envelope and pitch counter move (spec 6.4 P1)
-             * [ORACLE FIXTURE E4, S1]. */
+            /* Spec 6.5 K3: the repeat address set above is the repeat
+             * register with bit 0 cleared, times 8, as at a register write
+             * (spec 6.6 W1, 6.2 D4); the register keeps its value [ORACLE
+             * FIXTURE S1: Key On keeps a preset repeat address; V6d: an odd
+             * value before Key On behaves as the even one]. Key On empties
+             * the decode queue; the stored samples, the shift and the filter
+             * stay. It arms the Loop Start copy again (spec 6.6 W1). The
+             * voice then waits four ticks before its envelope and pitch
+             * counter move (spec 6.4 P1) [ORACLE FIXTURE E4, S1]. */
             SourceSpuDecode *d = &source_decode[i];
-            v->repeat_addr = ((uint32_t)voice_reg(i, 7) << 3) & (SPU_RAM_SIZE - 1u);
             d->read_pos = d->write_pos = d->available = 0;
             d->ignore_loop = 0;
             source_play_delay[i] = 4;

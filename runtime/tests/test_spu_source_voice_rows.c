@@ -2,10 +2,11 @@
  * driven through the SPU register interface and the per-sample render step.
  *
  * Every expected value here comes from a row of the behaviour spec
- * (recomp-corpus references/ps1/SPU-SOURCE-PROFILE-VOICE-SPEC.md, with
- * ANSWERS-1), not from an oracle fixture. The rows are tagged [KEPT]: the
- * fixtures V1 to V6 that will observe them are not captured yet. Each check
- * names its row.
+ * (recomp-corpus references/ps1/SPU-SOURCE-PROFILE-VOICE-SPEC.md, with its
+ * section 14: the answers of round 1 and the change of rows K3 and D4). Most
+ * of these rows are tagged [KEPT]: no fixture has observed them yet. Rows K3
+ * and D4 for an odd repeat value follow fixture V6d as the rows give it.
+ * Each check names its row.
  *
  *   6.4 P2 (a modulating voice, the limit, the unmasked sum), P3, P4
  *   6.3 O2 with 6.4 P2 (a voice output of +8000h)
@@ -13,7 +14,8 @@
  *   6.5 K1 (replace, not merge), K2, K4, K5, K6
  *   6.7 M1, M2
  *   6.2 D2 (a) in noise mode, D6
- *   6.2 D4 (an odd repeat value before Key On)
+ *   6.5 K3 with 6.2 D4 (an odd repeat value before Key On; spec 14.2)
+ *   6.2 D2, D4 (a repeat address 8 above a block start, from a checkpoint)
  *   6.3 O3
  *
  * Two capture levels are fixture values: 2039 is the level that fixture S1
@@ -24,6 +26,8 @@
  * Where no accessor exists it uses the names of the state contract (spec
  * section 5): source_decode, source_play_delay, source_key_on_pending,
  * source_key_off_pending, and the envelope counter of the shared voice record.
+ * One part loads a checkpoint image (spu_snapshot_write, spu_snapshot_read)
+ * and uses the layout constants of the kept checkpoint code.
  * The one part that calls a function of the rewrite itself is left out when
  * SPU_ROWS_PUBLIC_ONLY is defined. */
 #include <stdbool.h>
@@ -591,18 +595,122 @@ static void test_end_noise(int noise)
               "D2 (a) level %04X phase %u", envx(1), vst(1).adsr_phase);
 }
 
-/* ---- 6.2 D4: the repeat register set to an odd value before Key On ---------
- * K3 keeps bit 0, so the repeat address is 1088h, 8 above the block start
- * 1080h. D4, D2: after the End jump the two bytes at 1088h and 1089h are a
- * header like any other; the words at 108Ah, 108Ch and 108Eh follow, one in
- * each refill; the next fetch address, 1090h, is a block start, and D2 runs
- * there with the flags that were read at 1089h.
+/* ---- 6.5 K3, 6.2 D4: the repeat register set to an odd value before Key On --
+ * K3: Key On takes the repeat register with bit 0 cleared, times 8, and the
+ * register keeps its value. D4's example: repeat register 0211h at Key On:
+ * the repeat address is 1080h and the register reads 0211h; after an End jump
+ * the header at 1080h is read, and if it has Loop Start and the copy is not
+ * disarmed, the register becomes 0210h. Fixture V6d, as rows K3 and D4 give
+ * it: the odd value behaves as the even one, and the register reads 0211h
+ * until the ENDX tick and 0210h from it.
+ * At pitch 1000h a refill comes every 4 ticks (D1): block 0's last word at
+ * tick 19, the End jump with the header at 1080h at tick 23, the word at
+ * 1088h at tick 35, the header at 1090h at tick 51. */
+#define ODD_TICKS 96
+typedef struct {
+    int16_t out[ODD_TICKS], capture[ODD_TICKS];
+    uint32_t addr[ODD_TICKS], repeat[ODD_TICKS], endx[ODD_TICKS];
+    uint16_t level[ODD_TICKS], reg[ODD_TICKS];
+    uint8_t shift[ODD_TICKS], flags[ODD_TICKS];
+    int first_irq_tick;
+} OddRun;
+static void odd_run(OddRun *r, uint16_t repeat_value, int loop_start, uint16_t irq_reg)
+{
+    power_on(0xC000u);
+    put_block(0x1000u, 0, 1, 0x03u);              /* End+Repeat, no Loop Start */
+    put_block(0x1080u, 2, 4, loop_start ? 0x04u : 0x00u);
+    put_block(0x1090u, 5, 2, 0x00u);
+    voice_setup(1, 0x1000u, 0x1000u, HOLD_LO, HOLD_HI);
+    spu_write(0x1F801C1Eu, repeat_value);
+    if (irq_reg) { spu_write(0x1F801DA4u, irq_reg); spu_write(0x1F801DAAu, 0xC040u); }
+    write_key_on(2u);
+    r->first_irq_tick = -1;
+    for (int t = 0; t < ODD_TICKS; ++t) {
+        uint32_t slot = gst().capture_pos;
+        unsigned n = irq_raises;
+        tick();
+        r->out[t] = out_l;
+        r->capture[t] = ram16(0x0800u + slot);
+        r->addr[t] = vst(1).cur_addr;
+        r->repeat[t] = vst(1).repeat_addr;
+        r->endx[t] = endx();
+        r->level[t] = (uint16_t)envx(1);
+        r->reg[t] = (uint16_t)repeat_reg(1);
+        r->shift[t] = source_decode[1].shift;
+        r->flags[t] = vst(1).last_flags;
+        if (irq_raises != n && r->first_irq_tick < 0) r->first_irq_tick = t;
+    }
+}
+static void test_odd_repeat_before_key_on(int loop_start)
+{
+    static OddRun odd, even;
+    odd_run(&odd, 0x0211u, loop_start, 0);
+    odd_run(&even, 0x0210u, loop_start, 0);
+    for (int t = 0; t < ODD_TICKS; ++t) {
+        /* K3, D4: the repeat address is always a block start. */
+        CHECK(odd.repeat[t] == 0x1080u, "K3 tick %d: repeat address %05X, want 01080", t, odd.repeat[t]);
+        /* D4: the register reads odd until a Loop Start header writes the
+         * aligned address back, at the ENDX tick. */
+        uint16_t want = t >= 23 && loop_start ? 0x0210u : 0x0211u;
+        CHECK(odd.reg[t] == want, "D4 tick %d: repeat register %04X, want %04X", t, odd.reg[t], want);
+        CHECK(even.reg[t] == 0x0210u, "D4 control, tick %d: repeat register %04X", t, even.reg[t]);
+        /* The odd value behaves as the even one. */
+        CHECK(odd.capture[t] == even.capture[t] && odd.out[t] == even.out[t] && odd.addr[t] == even.addr[t] &&
+              odd.level[t] == even.level[t] && odd.endx[t] == even.endx[t] && odd.shift[t] == even.shift[t] &&
+              odd.flags[t] == even.flags[t],
+              "D4 tick %d: odd and even differ (capture %d/%d address %05X/%05X)", t, odd.capture[t], even.capture[t],
+              odd.addr[t], even.addr[t]);
+    }
+    CHECK(!(odd.endx[22] & 2u) && (odd.endx[23] & 2u), "D2 (a) ENDX sets at tick 23");
+    CHECK(odd.addr[23] == 0x1084u && odd.shift[23] == 2 && odd.flags[23] == (loop_start ? 0x04u : 0x00u),
+          "D4 the header at 1080h is read: address %05X shift %u flags %02X", odd.addr[23], odd.shift[23], odd.flags[23]);
+    CHECK(odd.addr[35] == 0x108Au && odd.shift[35] == 2, "D4 the bytes at 1088h are a word: address %05X shift %u",
+          odd.addr[35], odd.shift[35]);
+    CHECK(odd.addr[51] == 0x1094u && odd.shift[51] == 5, "D4 the next header is at 1090h: address %05X shift %u",
+          odd.addr[51], odd.shift[51]);
+    /* Block 0 (nibble 1, shift 0) and the block at 1080h (nibble 4, shift 2)
+     * both decode to 1000h, the sample that gives 2039 at ENVX 3FFFh. */
+    CHECK(odd.capture[45] == 2039, "D4 the block at 1080h sounds: capture %d, want 2039", odd.capture[45]);
+    if (!loop_start) return;
+    /* D5 with the odd register value: an IRQ address of 1080h raises at the
+     * header fetch (tick 23); one of 1088h raises when the word at 1088h is
+     * fetched (tick 35), because 1088h is not a header. */
+    odd_run(&odd, 0x0211u, 1, 0x1080u >> 3);
+    CHECK(odd.first_irq_tick == 23, "D5 IRQ address 1080h: first raise at tick %d, want 23", odd.first_irq_tick);
+    odd_run(&odd, 0x0211u, 1, 0x1088u >> 3);
+    CHECK(odd.first_irq_tick == 35, "D5 IRQ address 1088h: first raise at tick %d, want 35", odd.first_irq_tick);
+}
+
+/* Row D4's exception: give a voice a repeat address the way a checkpoint saved
+ * before row K3 changed can hold it. The image is the SPU's own, with that one
+ * field replaced. Its layout: the register image, then for each voice the
+ * active flag, the current address and the repeat address, 4 bytes each,
+ * little-endian. */
+static int load_repeat_addr(int v, uint32_t addr)
+{
+    uint32_t n = spu_snapshot_bytes();
+    uint8_t *image = malloc(n);
+    if (!image) return 0;
+    spu_snapshot_write(image);
+    uint8_t *field = image + SPU_REG_COUNT * 2u + (uint32_t)v * SPU_VOICE_WIRE_BYTES + 8u;
+    for (int i = 0; i < 4; ++i) field[i] = (uint8_t)(addr >> (8 * i));
+    int ok = spu_snapshot_read(image, n);
+    free(image);
+    return ok;
+}
+
+/* ---- 6.2 D2, D4: a repeat address 8 above a block start, from a checkpoint --
+ * D4's exception: D2 reads the header at that address as it stands. With the
+ * repeat address 1088h: after the End jump the two bytes at 1088h and 1089h
+ * are a header like any other; the words at 108Ah, 108Ch and 108Eh follow, one
+ * in each refill; the next fetch address, 1090h, is a block start, and D2 runs
+ * there with the flags that were read at 1089h (ANSWERS-1 Q1).
  * At pitch 1000h a refill comes every 4 ticks (D1): block 0's last word at
  * tick 19, the End jump at tick 23, 108Ch at 27, 108Eh at 31, 1090h at 35.
  * `flags` is the byte at 1089h. `irq_reg`, when not 0, is the IRQ address
  * register for row D5: the header fetch at 1088h is in the block that starts
  * at 1080h. */
-static void test_odd_repeat_before_key_on(uint8_t flags, uint16_t irq_reg)
+static void test_unaligned_repeat_from_checkpoint(uint8_t flags, uint16_t irq_reg)
 {
     power_on(0xC000u);
     put_block(0x1000u, 0, 1, 0x03u);              /* End+Repeat, no Loop Start */
@@ -616,8 +724,10 @@ static void test_odd_repeat_before_key_on(uint8_t flags, uint16_t irq_reg)
     if (irq_reg) { spu_write(0x1F801DA4u, irq_reg); spu_write(0x1F801DAAu, 0xC040u); }
     write_key_on(2u);
     tick();                                       /* tick 0 applies the Key On */
-    CHECK(vst(1).repeat_addr == 0x1088u, "K3/D4 Key On keeps bit 0: repeat address %05X", vst(1).repeat_addr);
+    CHECK(vst(1).repeat_addr == 0x1080u, "K3 Key On aligns the repeat address: %05X", vst(1).repeat_addr);
     CHECK(repeat_reg(1) == 0x0211u, "K3 the repeat register keeps its value");
+    CHECK(load_repeat_addr(1, 0x1088u) && vst(1).repeat_addr == 0x1088u, "D4 checkpoint with the repeat address 1088h: %05X",
+          vst(1).repeat_addr);
     ticks(22);                                    /* ticks 1 to 22 */
     CHECK(vst(1).cur_addr == 0x1010u && !(endx() & 2u), "D4 before the End: address %05X ENDX %06X", vst(1).cur_addr, endx());
     CHECK(irq_raises == 0, "D5 no raise before the jump: %u", irq_raises);
@@ -695,11 +805,13 @@ int main(void)
     test_mute();
     test_end_noise(0);
     test_end_noise(1);
-    test_odd_repeat_before_key_on(0x04u, 0);      /* Loop Start only at 1089h */
-    test_odd_repeat_before_key_on(0x03u, 0);      /* End+Repeat at 1089h */
-    test_odd_repeat_before_key_on(0x01u, 0);      /* End without Repeat at 1089h */
-    test_odd_repeat_before_key_on(0x00u, 0x1080u >> 3);   /* D5: the start of the block that holds 1088h */
-    test_odd_repeat_before_key_on(0x00u, 0x1088u >> 3);   /* D5: the header address itself */
+    test_odd_repeat_before_key_on(1);             /* Loop Start on the block at 1080h */
+    test_odd_repeat_before_key_on(0);
+    test_unaligned_repeat_from_checkpoint(0x04u, 0);      /* Loop Start only at 1089h */
+    test_unaligned_repeat_from_checkpoint(0x03u, 0);      /* End+Repeat at 1089h */
+    test_unaligned_repeat_from_checkpoint(0x01u, 0);      /* End without Repeat at 1089h */
+    test_unaligned_repeat_from_checkpoint(0x00u, 0x1080u >> 3);   /* D5: the start of the block that holds 1088h */
+    test_unaligned_repeat_from_checkpoint(0x00u, 0x1088u >> 3);   /* D5: the header address itself */
     printf("SPU source-profile voice rows (spec D2, D4, D5, K1-K6, M1, M2, O2, O3, P2-P4): %u checks, %u failures\n",
            checks, failures);
     return failures != 0;
