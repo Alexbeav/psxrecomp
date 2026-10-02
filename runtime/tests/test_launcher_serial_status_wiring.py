@@ -28,9 +28,11 @@ body = MAIN[start : MAIN.index("int ae_memcard_inspect(", start)]
 guard = body.index("#if defined(RECOMP_LAUNCHER_HAS_SERIAL_STATUS)")
 block = body[guard : body.index("#endif", guard)]
 
-# The host speaks only for a disc it could read and a build that lists a
-# serial. A disc that did not open is the ISO header row's to explain.
-assert "if (id.opened && id.has_header && id.expected_serial_given) {" in block
+# The host speaks only for a build that lists a serial, and says listed or not
+# listed only for a disc it could read. A disc that did not open is the ISO
+# header row's to explain.
+listed = block.index("if (id.expected_serial_given) {")
+readable = block.index("if (id.opened && id.has_header) {", listed)
 assert re.search(
     r"out->serial_status = id\.serial_matches \? RECOMP_SERIAL_LISTED\s*: RECOMP_SERIAL_NOT_LISTED;",
     block,
@@ -43,13 +45,18 @@ assert re.search(
     block,
 ), "the sentence needs the serial the disc was checked against"
 
-# For a serial that is not listed the row shows what was read from the disc.
-# Before this the row fell back to the EXPECTED serial when nothing was read,
-# which would print "This disc is <the right serial>".
-assert re.search(
+# The row shows what was read from the disc. Before this it fell back to the
+# EXPECTED serial when nothing was read, so a disc with no readable serial and
+# a file that did not open both showed the right serial with a tick. This is
+# outside the "could read it" test: it holds for a file that did not open too.
+shown = re.search(
     r'if \(!id\.serial_matches\)\s*std::snprintf\(out->serial, sizeof\(out->serial\), "%s",\s*id\.detected_serial\.c_str\(\)\);',
     block,
-), "an unlisted disc must show the serial that was read, not the expected one"
+)
+assert shown, "a disc that does not match must show the serial that was read, not the expected one"
+assert listed < shown.start() < readable, "the row's serial must not depend on the disc having opened"
+assert block.index("out->serial_status = ") > readable
+assert block.index("out->expected_serials") > readable
 
 # The status is set from the same identity the verdict is, and before it: the
 # wrong-disc verdict and the row cannot disagree.
