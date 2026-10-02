@@ -37,6 +37,9 @@ So the host here runs in a closed environment (host_environment):
   - the proxy variables point at a closed local port, so a download cannot work;
   - after the cases the toolchain and data folders must still be empty. A file
     there means the host tried to install something: the test fails.
+
+--dry-run prints that environment and the cache bases the host derives from it,
+checks that every root is inside the temporary folder, and starts nothing.
 """
 
 from __future__ import annotations
@@ -133,6 +136,38 @@ def host_environment(sandbox: Path) -> dict[str, str]:
     return env
 
 
+def roots_outside(env: dict[str, str], sandbox: Path) -> list[str]:
+    """Names of the host's toolchain, data and temp roots that are not inside the
+    test's own folder. Must be empty before any program is started."""
+    inside = sandbox.resolve()
+    return [name for name in list(SANDBOX_ROOTS) + ["TEMP", "TMP", "TMPDIR"]
+            if name not in env or inside not in Path(env[name]).resolve().parents]
+
+
+def dry_run() -> int:
+    """Builds nothing and starts nothing: prints the environment a host would get."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sandbox = Path(tmp) / "sandbox"
+        env = host_environment(sandbox)
+        print("dry run: nothing is built and no program is started")
+        print("the test's temporary folder: %s" % tmp)
+        for name in sorted(env):
+            print("  %s=%s" % (name, env[name]))
+        print("the host's toolchain cache bases, from its own rules (collect_toolchain_cache_bases):")
+        for base in (env["RETCOMM_TOOLCHAIN_CACHE"],
+                     str(Path(env["RETCOMM_DATA_HOME"]) / "toolchains" / "cmake-clang-v1"),
+                     str(Path(env["LOCALAPPDATA"]) / "retcomm" / "toolchains" / "cmake-clang-v1"),
+                     str(Path(env["LOCALAPPDATA"]) / "psxrecomp" / "toolchains" / "cmake-clang-v1"),
+                     str(Path(env["XDG_DATA_HOME"]) / "retcomm" / "toolchains" / "cmake-clang-v1"),
+                     str(Path(env["HOME"]) / ".local" / "share" / "retcomm" / "toolchains" / "cmake-clang-v1")):
+            print("  %s" % base)
+        outside = roots_outside(env, sandbox)
+        print("roots outside the temporary folder: %s" % (", ".join(outside) if outside else "none"))
+        print("forbidden switches: %s" % ", ".join(FORBIDDEN_ARGS))
+        print("forbidden variables: %s" % ", ".join(FORBIDDEN_VARS))
+        return 1 if outside else 0
+
+
 def sandbox_leftovers(sandbox: Path) -> list[str]:
     """Files the host left in its toolchain and data folders. There must be none."""
     found = []
@@ -170,6 +205,8 @@ def make_project(root: Path, framework: str) -> None:
 
 
 def main() -> int:
+    if "--dry-run" in sys.argv[1:]:
+        return dry_run()
     ui = find_recomp_ui()
     if ui is None:
         print("SKIP: recomp-ui not found (set RECOMP_UI_ROOT)")
@@ -239,8 +276,7 @@ def main() -> int:
             env.update(variables)
             env["PSXRECOMP_PROJECT_ROOT"] = str(project)
             env["HANDOVER_ARGS_OUT"] = str(out)
-            outside = [name for name in list(SANDBOX_ROOTS) + ["TEMP", "TMP", "TMPDIR"]
-                       if sandbox.resolve() not in Path(env[name]).resolve().parents]
+            outside = roots_outside(env, sandbox)
             if outside:
                 print("FAIL: the host would be started with a folder outside the test's own: %s"
                       % ", ".join(outside))
