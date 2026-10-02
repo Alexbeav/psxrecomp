@@ -209,7 +209,7 @@ def judge(layer: str, case: str, seen: dict, new_tag: dict | None, check: suppor
         check(unchanged, "%s: a pack that fails its check is byte-for-byte what it was (no switch set)" % name,
               seen["names"])
     elif case == "bad_new_pack":
-        check(not done and "did not pass its check" in said and "not changed" in said,
+        check(not done and said.endswith(support.s2(support.STEPS[0])),
               "%s: a new pack that fails its check is refused, with the reason" % name, said)
         check(unchanged and not seen["staging"],
               "%s: the installed pack is byte-for-byte what it was, and no staging folder is left" % name,
@@ -234,8 +234,8 @@ def judge(layer: str, case: str, seen: dict, new_tag: dict | None, check: suppor
               sorted(seen["tag"]))
         check((cache_bin(seen) / CMAKE).is_file(), "%s: the pack that is there has its cmake" % name)
         if WINDOWS:
-            check(is_old and not done and "in use" in said and "not changed" in said,
-                  "%s (Windows): the pack in use stays and the reason is given" % name, said)
+            check(is_old and not done and said.endswith(support.s3(5)),
+                  "%s (Windows): the pack in use stays and the sentence for error 5 is given" % name, said)
             check(not seen["staging"] and not seen["asides"], "%s (Windows): the new pack was dropped" % name,
                   seen["names"])
     elif case == "newer_tag":
@@ -247,7 +247,7 @@ def judge(layer: str, case: str, seen: dict, new_tag: dict | None, check: suppor
         check("old.txt" in seen["tag"] and not seen["asides"],
               "%s: a pack an interrupted install left set aside is put back under its name" % name, seen["names"])
     elif case == "cmake_only":
-        check(not done and "did not pass its check" in said and unchanged,
+        check(not done and said.endswith(support.s2(support.STEPS[1])) and unchanged,
               "%s: a new pack with cmake and no compiler is refused, and the installed pack is byte-for-byte what it was"
               % name, (said, seen["names"]))
     elif case == "prune_held":

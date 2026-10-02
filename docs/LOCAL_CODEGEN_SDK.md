@@ -230,9 +230,9 @@ The setup host (`host/psxrecomp_codegen_host.c`) and the CLI
 
 1. The zip is unpacked into a staging folder beside the installed packs.
 2. The new pack is checked there, by the same steps in both installers: cmake
-   runs, clang and the linker are in the pack, clang runs, a one-line program
-   compiles and links. A pack that fails is dropped; nothing that was installed
-   has been touched.
+   runs, clang and the linker are in the pack, clang runs, a test file can be
+   written to the temporary folder, a one-line program compiles and links. A
+   pack that fails is dropped; nothing that was installed has been touched.
 3. The installed folder of that tag, if there is one, is renamed aside
    (`.old-<pid>-<tag>`). When the rename fails the installed pack stays whole,
    the new pack is dropped, and the message gives the system's error.
@@ -262,6 +262,37 @@ tag, and the prune of an older tag, take the folder away from a running build
 there. On Windows a build between two compiler runs holds no file in the pack,
 and a prune can remove the older tag it uses.
 
+### What the player reads
+
+Each sentence says only what the program knows.
+
+- A pack that is installed fails its check (setup host): "The portable
+  toolchain did not pass its check: `<step>`. It was not removed. Download the
+  latest pack to replace it."
+- A new pack fails its check, where it was unpacked or in its place (setup host
+  and CLI): "The new toolchain pack did not pass its check: `<step>`. The
+  installed toolchain was not changed."
+- The installed folder cannot be renamed aside (setup host and CLI), by the
+  system's error. Windows error 32: "A file of the installed toolchain is open
+  in another program (Windows error 32). The toolchain was not changed. Close
+  the programs that use it, for example a running build, and try again."
+  Windows error 5: "Windows refused to rename the installed toolchain folder
+  (error 5, access denied). The toolchain was not changed. A file in it may be
+  open in another program, or the folder may be protected." Any other error:
+  "The installed toolchain folder could not be renamed (system error
+  `<number>`). The toolchain was not changed."
+
+`<step>` is the step of the check that failed: "cmake does not run", "clang or
+the linker is missing from the pack", "clang does not run", "a test file could
+not be written to the temporary folder", "a one-line test program did not
+compile and link". The test file goes to the system's temporary folder: `TMP`
+or `TEMP` on Windows, `TMPDIR` on Linux and macOS when it is set, `/tmp`
+otherwise.
+
+On Windows a rename of the folder fails with error 5 when a file in it is open
+or a program has its working folder there, and with error 32 when a program
+holds the folder itself open.
+
 ### `PSXRECOMP_TOOLCHAIN_READONLY=1`
 
 With this variable set, the setup host and the CLI never delete, rename, prune
@@ -270,3 +301,11 @@ or install a pack, never move a pointer to one (`latest`, the project's
 A pack that is there is still found and used. Each step that was left undone is
 named on stderr. A test or a gate that starts a setup program or the CLI sets
 it, and gives the program its own toolchain and data folders as well.
+
+The switch covers what the setup host and the CLI do themselves. It does not
+stop a program that runs from the pack from writing into the pack's folder.
+Seen on Pegasus on 2026-10-02: a Generate press leaves two `.pyc` files in the
+toolchain folder it is given, written by the Python that the build runs. The
+switch does not prevent them; a start with the switch set was not looked at for
+this. A test that must find its toolchain folder unchanged compares it without
+`__pycache__` folders, or gives the build `PYTHONDONTWRITEBYTECODE=1`.

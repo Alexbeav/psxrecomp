@@ -108,6 +108,31 @@ def pack_manifest(version: str) -> str:
     return json.dumps({"id": "cmake-clang-v1", "version": version, "os": PACK_OS})
 
 
+# What a player reads (item A13). The tests compare whole sentences.
+STEPS = ("cmake does not run", "clang or the linker is missing from the pack", "clang does not run",
+         "a test file could not be written to the temporary folder",
+         "a one-line test program did not compile and link")
+
+
+def s1(step: str) -> str:
+    return ("The portable toolchain did not pass its check: %s. It was not removed. "
+            "Download the latest pack to replace it." % step)
+
+
+def s2(step: str) -> str:
+    return "The new toolchain pack did not pass its check: %s. The installed toolchain was not changed." % step
+
+
+def s3(error: int, windows: bool = WINDOWS) -> str:
+    if windows and error == 32:
+        return ("A file of the installed toolchain is open in another program (Windows error 32). The toolchain "
+                "was not changed. Close the programs that use it, for example a running build, and try again.")
+    if windows and error == 5:
+        return ("Windows refused to rename the installed toolchain folder (error 5, access denied). The toolchain "
+                "was not changed. A file in it may be open in another program, or the folder may be protected.")
+    return "The installed toolchain folder could not be renamed (system error %d). The toolchain was not changed." % error
+
+
 DEAD_PID = 99999999      # no process has this id: a set-aside folder of an owner that has ended
 
 
@@ -299,11 +324,15 @@ int main(int argc, char** argv) {
         resolve_toolchain_bin(second, sizeof(second));
         printf("first=%%s\nsecond=%%s\nnote=%%s\n", first, second, g_tc_repair_note);
         ret = 0;
+    } else if (strcmp(op, "rename-text") == 0) {
+        /* The sentence for a rename that failed with the system error <a>. */
+        toolchain_text_rename_failed(err, sizeof(err), atol(a));
+        ret = 0;
     } else {
         fprintf(stderr, "probe: unknown operation\n");
         return 2;
     }
-    printf("ret=%%d\nerr=%%s\n", ret, err);
+    printf("ret=%%d\nerr=%%s\nnote=%%s\n", ret, err, g_tc_repair_note);
     return 0;
 }
 """
@@ -343,11 +372,12 @@ def build_probe(tmp: Path, cc: str | None) -> tuple[Path | None, str]:
     return probe, ""
 
 
-def run_probe(probe: Path, args: list[str], sandbox: Path, switch: bool) -> dict:
+def run_probe(probe: Path, args: list[str], sandbox: Path, switch: bool, extra_env: dict | None = None) -> dict:
     """Runs the probe in the closed environment of `sandbox`. The project is <sandbox>/project."""
     env = closed_environment(sandbox)
     if switch:
         env[SWITCH] = "1"
+    env.update(extra_env or {})
     outside = roots_outside(env, sandbox)
     if outside:
         return {"refused": "roots outside the sandbox: %s" % ", ".join(outside)}

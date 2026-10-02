@@ -68,6 +68,14 @@ static char g_tc_repair_note[320];
 /* The system's error of the last rename aside that failed (GetLastError on
  * Windows, errno elsewhere). */
 static long g_tc_aside_error;
+/* The step of the toolchain check that failed last (toolchain_bin_is_healthy);
+ * "" after a check that passed. The player reads it in the sentences below. */
+static const char* g_tc_check_step = "";
+#define TC_STEP_CMAKE   "cmake does not run"
+#define TC_STEP_MISSING "clang or the linker is missing from the pack"
+#define TC_STEP_CLANG   "clang does not run"
+#define TC_STEP_TEMP    "a test file could not be written to the temporary folder"
+#define TC_STEP_LINK    "a one-line test program did not compile and link"
 /* Set when host_persist_setup receives an explicit bios_path (including ""
  * for OpenBIOS). Distinguishes intentional OpenBIOS clear from "unset". */
 static int g_wizard_bios_explicit;
@@ -540,6 +548,7 @@ static int find_python(char* out, size_t cap) {
  * is passed over for the rest of this process instead, so that the lookup can
  * find another pack. An install clears the list. */
 static char g_tc_rejected[8][1400];
+static const char* g_tc_rejected_step[8];   /* the step each one failed at */
 static int g_tc_rejected_n = 0;
 
 static int toolchain_bin_is_rejected(const char* bin) {
@@ -560,8 +569,64 @@ static int toolchain_bin_is_rejected(const char* bin) {
 static void toolchain_bin_reject(const char* bin) {
     if (!bin || !bin[0] || toolchain_bin_is_rejected(bin))
         return;
-    if (g_tc_rejected_n < (int)(sizeof(g_tc_rejected) / sizeof(g_tc_rejected[0])))
+    if (g_tc_rejected_n < (int)(sizeof(g_tc_rejected) / sizeof(g_tc_rejected[0]))) {
+        g_tc_rejected_step[g_tc_rejected_n] = g_tc_check_step;
         snprintf(g_tc_rejected[g_tc_rejected_n++], sizeof(g_tc_rejected[0]), "%s", bin);
+    }
+}
+
+/* The step a passed-over pack failed at, "" for a pack that is not on the list. */
+static const char* toolchain_bin_rejected_step(const char* bin) {
+    int i;
+    if (!bin || !bin[0])
+        return "";
+    for (i = 0; i < g_tc_rejected_n; ++i) {
+#if defined(_WIN32)
+        if (_stricmp(g_tc_rejected[i], bin) == 0)
+#else
+        if (strcmp(g_tc_rejected[i], bin) == 0)
+#endif
+            return g_tc_rejected_step[i] ? g_tc_rejected_step[i] : "";
+    }
+    return "";
+}
+
+/* What a player reads about the toolchain (Alex, 2026-10-02, item A13). Each
+ * says only what the program knows. tools/toolchain_pack.py holds the second
+ * and the third word for word. */
+static void toolchain_text_check_failed(char* out, size_t cap, const char* step) {
+    snprintf(out, cap,
+             "The portable toolchain did not pass its check: %s. It was not "
+             "removed. Download the latest pack to replace it.", step);
+}
+
+static void toolchain_text_new_pack_failed(char* out, size_t cap, const char* step) {
+    snprintf(out, cap,
+             "The new toolchain pack did not pass its check: %s. The installed "
+             "toolchain was not changed.", step);
+}
+
+/* `error` is GetLastError() on Windows and errno elsewhere, from the rename. */
+static void toolchain_text_rename_failed(char* out, size_t cap, long error) {
+#if defined(_WIN32)
+    if (error == 32) {
+        snprintf(out, cap,
+                 "A file of the installed toolchain is open in another program "
+                 "(Windows error 32). The toolchain was not changed. Close the "
+                 "programs that use it, for example a running build, and try again.");
+        return;
+    }
+    if (error == 5) {
+        snprintf(out, cap,
+                 "Windows refused to rename the installed toolchain folder (error "
+                 "5, access denied). The toolchain was not changed. A file in it "
+                 "may be open in another program, or the folder may be protected.");
+        return;
+    }
+#endif
+    snprintf(out, cap,
+             "The installed toolchain folder could not be renamed (system error "
+             "%ld). The toolchain was not changed.", error);
 }
 
 static void toolchain_rejects_clear(void) {
@@ -3485,11 +3550,10 @@ static int host_install_toolchain_from_zip(
      * is touched (PS1B-410). */
     {
         char staged_bin[1500];
+        g_tc_check_step = TC_STEP_CMAKE;   /* no bin folder to run cmake from */
         if (!join_path(staged_bin, sizeof(staged_bin), pack, "bin") ||
             !toolchain_bin_is_healthy(staged_bin)) {
-            snprintf(err_msg, err_cap,
-                     "The downloaded toolchain did not pass its check. "
-                     "The installed toolchain was not changed.");
+            toolchain_text_new_pack_failed(err_msg, err_cap, g_tc_check_step);
             rmtree_path(staging);
             return 0;
         }
@@ -3512,9 +3576,7 @@ static int host_install_toolchain_from_zip(
     if (path_is_link(dest)) {
         remove_pointer_only(dest);
     } else if (path_exists_any(dest) && !set_dir_aside(dest, aside, sizeof(aside))) {
-        snprintf(err_msg, err_cap,
-                 "The installed toolchain is in use by another program. It was "
-                 "not changed. Close the running build and try again.");
+        toolchain_text_rename_failed(err_msg, err_cap, g_tc_aside_error);
         rmtree_path(staging);
         return 0;
     }
@@ -3602,15 +3664,23 @@ static int host_install_toolchain_from_zip(
     }
     /* The new pack passed its check where it was unpacked and fails it in its
      * place. The pack that was installed goes back under its name. */
-    if (aside[0]) {
-        rmtree_path(dest);
-        if (restore_dir_aside(aside, dest) &&
-            unwrap_toolchain_pack_root(dest, pack, sizeof(pack)))
-            set_toolchain_latest_pointer(cache_root, pack);
+    {
+        int back = 1;   /* nothing was installed before, or it is back under its name */
+        if (aside[0]) {
+            rmtree_path(dest);
+            back = restore_dir_aside(aside, dest);
+            if (back && unwrap_toolchain_pack_root(dest, pack, sizeof(pack)))
+                set_toolchain_latest_pointer(cache_root, pack);
+        }
+        /* The check's own sentence when the check named a step and the installed
+         * pack is what it was; the older text otherwise. */
+        if (g_tc_check_step[0] && back)
+            toolchain_text_new_pack_failed(err_msg, err_cap, g_tc_check_step);
+        else
+            snprintf(err_msg, err_cap,
+                     "Extracted toolchain but cmake.exe is missing or will not run "
+                     "(bin\\cmake.exe --version failed).");
     }
-    snprintf(err_msg, err_cap,
-             "Extracted toolchain but cmake.exe is missing or will not run "
-             "(bin\\cmake.exe --version failed).");
     return 0;
 }
 
@@ -3767,12 +3837,16 @@ static int toolchain_bin_compiler_works(const char* bin) {
     if (!bin || !bin[0])
         return 0;
 #if defined(_WIN32)
-    if (!join_path(clang, sizeof(clang), bin, "clang.exe") || !path_is_file(clang))
+    if (!join_path(clang, sizeof(clang), bin, "clang.exe") || !path_is_file(clang)) {
+        g_tc_check_step = TC_STEP_MISSING;
         return 0;
+    }
     if (!join_path(lld, sizeof(lld), bin, "ld.lld.exe") || !path_is_file(lld)) {
         /* Some Windows packs only ship lld.exe — accept either. */
-        if (!join_path(lld, sizeof(lld), bin, "lld.exe") || !path_is_file(lld))
+        if (!join_path(lld, sizeof(lld), bin, "lld.exe") || !path_is_file(lld)) {
+            g_tc_check_step = TC_STEP_MISSING;
             return 0;
+        }
     }
 #else
     if (!join_path(clang, sizeof(clang), bin, "clang") || !path_is_file(clang)) {
@@ -3783,34 +3857,49 @@ static int toolchain_bin_compiler_works(const char* bin) {
          * A pack without clang is the normal macOS layout, not a broken one. */
         return 1;
 #  else
+        g_tc_check_step = TC_STEP_MISSING;
         return 0;
 #  endif
     }
-    if (!join_path(lld, sizeof(lld), bin, "ld.lld") || !path_is_file(lld))
+    if (!join_path(lld, sizeof(lld), bin, "ld.lld") || !path_is_file(lld)) {
+        g_tc_check_step = TC_STEP_MISSING;
         return 0;
+    }
 #endif
-    if (!cmake_path_runs(clang))
+    if (!cmake_path_runs(clang)) {
+        g_tc_check_step = TC_STEP_CLANG;
         return 0;
+    }
 
 #if defined(_WIN32)
     {
         char tdir[512];
         DWORD tn = GetTempPathA(sizeof(tdir), tdir);
-        if (tn == 0 || tn >= sizeof(tdir))
+        if (tn == 0 || tn >= sizeof(tdir)) {
+            g_tc_check_step = TC_STEP_TEMP;
             return 0;
+        }
         snprintf(src, sizeof(src), "%spsxrecomp-tc-probe-%lu.c", tdir,
                  (unsigned long)GetCurrentProcessId());
         snprintf(exe, sizeof(exe), "%spsxrecomp-tc-probe-%lu.exe", tdir,
                  (unsigned long)GetCurrentProcessId());
     }
 #else
-    snprintf(src, sizeof(src), "/tmp/psxrecomp-tc-probe-%d.c", (int)getpid());
-    snprintf(exe, sizeof(exe), "/tmp/psxrecomp-tc-probe-%d", (int)getpid());
+    {
+        /* TMPDIR when it is set, as other programs do; /tmp otherwise. */
+        const char* tdir = getenv("TMPDIR");
+        if (!tdir || !tdir[0])
+            tdir = "/tmp";
+        snprintf(src, sizeof(src), "%s/psxrecomp-tc-probe-%d.c", tdir, (int)getpid());
+        snprintf(exe, sizeof(exe), "%s/psxrecomp-tc-probe-%d", tdir, (int)getpid());
+    }
 #endif
 
     f = fopen(src, "wb");
-    if (!f)
+    if (!f) {
+        g_tc_check_step = TC_STEP_TEMP;
         return 0;
+    }
     fputs("int main(void){return 0;}\n", f);
     fclose(f);
 
@@ -3865,6 +3954,8 @@ static int toolchain_bin_compiler_works(const char* bin) {
     unlink(src);
     unlink(exe);
 #endif
+    if (!ok)
+        g_tc_check_step = TC_STEP_LINK;
     return ok;
 }
 
@@ -3914,6 +4005,7 @@ static int host_system_compiler_ready(void) {
 
 static int toolchain_bin_is_healthy(const char* bin) {
     char cmake[1200];
+    g_tc_check_step = TC_STEP_CMAKE;   /* until cmake has run */
     if (!bin || !bin[0])
         return 0;
 #if defined(_WIN32)
@@ -3924,6 +4016,7 @@ static int toolchain_bin_is_healthy(const char* bin) {
     if (!join_path(cmake, sizeof(cmake), bin, "cmake") || !cmake_path_runs(cmake))
         return 0;
 #endif
+    g_tc_check_step = "";
     return toolchain_bin_compiler_works(bin);
 }
 
@@ -3957,6 +4050,7 @@ static void heal_broken_toolchain_pointers(void) {
     char bases[12][1400];
     int n = collect_toolchain_cache_bases(bases, 12);
     int failed = 0;
+    const char* failed_step = "";
     toolchain_put_back_set_aside();   /* first: a pack an interrupted install left aside */
     for (int i = 0; i < n; ++i) {
         char latest[1400], root[1400], bin[1400];
@@ -3981,16 +4075,16 @@ static void heal_broken_toolchain_pointers(void) {
             toolchain_bin_reject(bin);
         }
         failed = 1;   /* said again at each check, as long as the pack is there */
+        failed_step = toolchain_bin_rejected_step(bin);
+        if (!failed_step[0])
+            failed_step = g_tc_check_step;   /* the list was full: this check's own step */
     }
     if (failed) {
         clear_project_toolchain_stamp();
         g_toolchain_bin[0] = '\0';
         g_cli_toolchain_bin[0] = '\0';
         g_cmake[0] = '\0';
-        snprintf(g_tc_repair_note, sizeof(g_tc_repair_note),
-                 "The portable toolchain did not pass its check (the compiler "
-                 "or the linker does not run). It was not removed. Download "
-                 "the latest pack to replace it.");
+        toolchain_text_check_failed(g_tc_repair_note, sizeof(g_tc_repair_note), failed_step);
     }
 }
 
@@ -4008,11 +4102,8 @@ static void discard_unhealthy_active_toolchain(void) {
     g_toolchain_bin[0] = '\0';
     g_cli_toolchain_bin[0] = '\0';
     g_cmake[0] = '\0';
-    if (!g_tc_repair_note[0]) {
-        snprintf(g_tc_repair_note, sizeof(g_tc_repair_note),
-                 "Portable toolchain is installed but cannot compile/link "
-                 "(path or library error). Redownload the latest pack.");
-    }
+    if (!g_tc_repair_note[0])
+        toolchain_text_check_failed(g_tc_repair_note, sizeof(g_tc_repair_note), g_tc_check_step);
 }
 
 #if !defined(_WIN32)

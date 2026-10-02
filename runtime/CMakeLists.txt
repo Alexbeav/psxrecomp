@@ -1432,6 +1432,13 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_path_length.py
                          --compiler ${CMAKE_C_COMPILER})
+        # PS1B-410: the sentences a player reads when the toolchain check or an
+        # install fails name the step that failed and the system's error.
+        add_test(NAME toolchain_sentences_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_sentences.py
+                         --compiler ${CMAKE_C_COMPILER})
+        set_tests_properties(toolchain_sentences_test PROPERTIES SKIP_RETURN_CODE 77)
         # Setup-wizard disc probing (multi-disc roster). Never registered
         # before: a .chd set was rejected and nothing ran to notice.
         add_test(NAME probe_disc_test

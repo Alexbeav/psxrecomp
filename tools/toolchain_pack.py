@@ -340,15 +340,23 @@ def toolchain_bin_check(bin_dir: Path, log=None) -> str:
 def _new_pack_failed_text(step: str) -> str:
     """What a player reads when a new pack fails its check. The same sentence
     in host/psxrecomp_codegen_host.c."""
-    return ("The downloaded toolchain did not pass its check. "
-            "The installed toolchain was not changed.")
+    return ("The new toolchain pack did not pass its check: %s. "
+            "The installed toolchain was not changed." % step)
 
 
 def _rename_failed_text(error: int) -> str:
     """What a player reads when the installed folder cannot be renamed aside.
     The same sentence in host/psxrecomp_codegen_host.c."""
-    return ("The installed toolchain is in use by another program. It was not "
-            "changed. Close the running build and try again.")
+    if sys_platform_is_windows() and error == 32:
+        return ("A file of the installed toolchain is open in another program "
+                "(Windows error 32). The toolchain was not changed. Close the "
+                "programs that use it, for example a running build, and try again.")
+    if sys_platform_is_windows() and error == 5:
+        return ("Windows refused to rename the installed toolchain folder (error "
+                "5, access denied). The toolchain was not changed. A file in it "
+                "may be open in another program, or the folder may be protected.")
+    return ("The installed toolchain folder could not be renamed (system error "
+            "%d). The toolchain was not changed." % error)
 
 
 def clear_project_toolchain_stamp(project_root: Optional[Path]) -> None:
