@@ -47,9 +47,14 @@ report always loads as UTF-8 JSON.
 | `netplay_disc` | The disc image is not valid for online play, or none is verified. |
 | `netplay_address` | A match was started with no address to listen on. |
 | `netplay_seat` | A command-line match was started from a seat that is not a pad. |
+| `netplay_start` | A command-line match could not be started: the address is in use or not valid, or the build has no netplay. The message is the sentence the start itself gives (PS1B-386). |
 
-Not recorded: a failed netplay start (PS1B-386 owns that sentence) and the
-developer gates that exit with code 2 (input routes, TAS state files).
+A match started from the lobby that fails in one of the last two ways is not a
+refused start: the player returns to the room, where the status line shows the
+sentence.
+
+Not recorded: the developer gates that exit with code 2 (input routes, TAS
+state files).
 
 ## Boxes
 

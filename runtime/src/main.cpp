@@ -18465,7 +18465,7 @@ session_reboot:
         if (nrc != 0) {
             const char* const why = netplay_start_failure(nrc, net_cfg);
             if (!g_netplay_from_lobby)
-                return 1;
+                return refuse_start("netplay_start", "Match could not start", why);
             /* A match from the launcher returns to the room with the
              * sentence, as the seat refusal below does (PS1B-386). */
             netplay_soft_exit("netplay_start_failed");

@@ -61,7 +61,8 @@ starts = [m.start() for m in re.finditer(r"psx_netplay_start\(&net_cfg\)", MAIN)
 assert len(starts) == 1, "main.cpp must start a netplay session in exactly one place"
 after_start = MAIN[starts[0] : starts[0] + 900]
 assert "netplay_overlay_pin();" in after_start, "the session start does not take the overlay pin"
-assert after_start.index("return 1;") < after_start.index("netplay_overlay_pin();") < after_start.index(
+# The failed-start return goes through refuse_start since PS1G-63.
+assert after_start.index('return refuse_start("netplay_start",') < after_start.index("netplay_overlay_pin();") < after_start.index(
     "apply_netplay_local_viewport_aspect("
 ), "the pin must follow the failed-start return and come before the session is set up"
 

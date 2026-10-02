@@ -11,11 +11,10 @@ left psx_last_run_report.json with reason "atexit", exit_origin "unknown" and
 frame 0: a player's report could not say why the game did not start.
 
 Scope. Covered: the refusals a player can meet before the first frame, listed
-in SITES below. Not covered, and still untagged:
-  * the failed netplay start ("netplay start failed"): PS1B-386 rewrites that
-    block and owns its sentence;
-  * the developer gates that exit with code 2 (input routes, TAS state files,
-    the GPU work model): no player starts those.
+in SITES below. The failed netplay start carries the sentence PS1B-386 wrote
+for it. Not covered, and still untagged: the developer gates that exit with
+code 2 (input routes, TAS state files, the GPU work model): no player starts
+those.
 """
 
 import re
@@ -101,6 +100,7 @@ SITES = [
     ('"psxrecomp: netplay refused — no verified disc TOC "', "netplay_disc"),
     ('"psxrecomp: netplay refused — empty bind "', "netplay_address"),
     ('"psxrecomp: netplay refused — %s\\n", netplay_seat_why);', "netplay_seat"),
+    ("const char* const why = netplay_start_failure(nrc, net_cfg);", "netplay_start"),
     ('"psxrecomp: FATAL: kernel-bless table of %s has %u rows; "', "build_defect"),
 ]
 for line, kind in SITES:
@@ -122,6 +122,12 @@ for line, kind in SITES:
 # lobby goes on and ends with the sentence in the room.
 seat = before_frame[before_frame.index('"psxrecomp: netplay refused — %s\\n", netplay_seat_why);'):][:300]
 assert re.search(r"if \(!g_netplay_from_lobby\)\s*return refuse_start\(\"netplay_seat\"", seat)
+
+# A failed netplay start is the same: a command-line match stops with the
+# sentence PS1B-386 wrote; a match from the lobby returns to the room with it.
+failed = before_frame[before_frame.index("const char* const why = netplay_start_failure(nrc, net_cfg);"):][:500]
+assert re.search(r'if \(!g_netplay_from_lobby\)\s*return refuse_start\("netplay_start", "Match could not start", why\);', failed)
+assert 'netplay_soft_exit("netplay_start_failed");' in failed
 
 # A setup program links no game and no BIOS code. Its refusal has its own
 # kind, so a report from the kit's own exe is told from a product's.
