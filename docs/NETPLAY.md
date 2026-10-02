@@ -134,6 +134,16 @@ Cost: extra CPU for the 1× SW pass. Benefit: peers can use different GL
 settings without desyncing the sim. SW-only netplay forces scale 1 for the
 whole path. Offline play keeps full supersampling with no dual-raster tax.
 
+## Overlays run interpreted during a session
+
+Native and interpreted overlay code do not yet count the same guest cycles, and
+no two players hold the same overlay cache. A pair therefore left sync at the
+first overlay one peer ran native and the other interpreted (PS1B-367). A
+netplay session now holds the overlay native tier off from its start to its
+shutdown, with the pin a replay uses; the tier returns for offline play. An
+overlay-heavy title can run slower in a match. `PSX_NETPLAY_NO_OVERLAY_PIN=1`
+removes the pin for measurement only.
+
 ---
 
 ## Connectivity: ICE, TURN, SFU, LAN

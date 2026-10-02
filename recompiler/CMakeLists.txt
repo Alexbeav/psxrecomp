@@ -1197,6 +1197,7 @@ if(BUILD_TESTING)
                 replay_disc_identity_wiring
                 run_report_cdrom_counters
                 netplay_lan_identity_wiring
+                netplay_overlay_pin_wiring
                 jalr_link_register_guards
                 launcher_vulkan_option
                 mod_controller_override
