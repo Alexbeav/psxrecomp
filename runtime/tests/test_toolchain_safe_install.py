@@ -55,9 +55,13 @@ def pack_state(cache: Path, tag: str = "1.0.14") -> dict:
     """What a test asks about a cache after an operation."""
     entries = snapshot(cache)
     names = sorted(p.name for p in cache.iterdir()) if cache.is_dir() else []
+    # On Linux and macOS the host links <project>/toolchain to the pack and writes the project's stamp
+    # through that link, so the stamp file lies in the pack folder. It names the pack's own bin folder and
+    # is not part of the pack.
     return {
         "names": names,
-        "tag": {k[len(tag) + 1:]: v for k, v in entries.items() if k.startswith(tag + os.sep)},
+        "tag": {k[len(tag) + 1:]: v for k, v in entries.items()
+                if k.startswith(tag + os.sep) and k != os.path.join(tag, ".psxrecomp-bin")},
         "asides": [n for n in names if n.startswith(ASIDE)],
         "staging": [n for n in names if n in STAGING],
         "latest_has_cmake": (cache / "latest" / "bin" / CMAKE).is_file(),
