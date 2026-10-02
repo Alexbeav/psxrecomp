@@ -109,6 +109,7 @@ set(PSXRECOMP_TESTREG_DEV_BUILD_FILES
 set(PSXRECOMP_TESTS_REGISTERED_IN_DEV_TREES
     "test_mdec_nymashock_timing.c|tools/tasreplays/tests/CMakeLists.txt|built at O0 and O2 as tas_mdec_nymashock_timing_<mode>, asserting MDEC timing vectors that come from the TAS replay corpus"
     "test_guest_syscall_exception.c|tools/tasreplays/tests/CMakeLists.txt|built LTO/whole-program as tas_guest_syscall_exception, covering the guest SYSCALL exception path the replay harness depends on"
+    "test_guest_break_exception.c|tools/tasreplays/tests/CMakeLists.txt|built LTO/whole-program as tas_guest_break_exception, covering the BREAK exception entry for a vector the guest owns (PS1G-74)"
     "test_cd_read_sample_order.py|tools/tasreplays/tests/CMakeLists.txt|registered as tas_cd_read_sample_order, compiling its own fixture with the configured C compiler passed via --cc"
     "test_sio_pad_query_model.c|tools/tasreplays/tests/CMakeLists.txt|built at O0 and O2 as tas_sio_pad_query_model_<mode>, covering the pad query and config model the DualShock routes replay against"
     "test_sio_checkpoint.c|tools/tasreplays/tests/CMakeLists.txt|built at O0 and O2 as tas_sio_checkpoint_<mode>, covering the SIO section round trip through a TAS checkpoint"
