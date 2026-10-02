@@ -480,6 +480,19 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, ",\n");
     }
 
+    /* PS1B-391: the queue of outgoing overlay snapshots. Its counts were one
+     * stdout line at a normal quit; a start that ends on a timer or a crash
+     * never printed it, so no stored start could show what the cap costs. */
+    {
+        extern int overlay_capture_queue_report_json(char *out, int cap);
+        char queue_report[512];
+        if (overlay_capture_queue_report_json(queue_report, (int)sizeof(queue_report)) <= 0)
+            snprintf(queue_report, sizeof(queue_report), "{}");
+        append_str(buf, sizeof(buf), &pos, "  \"overlay_capture_queue\": ");
+        append_str(buf, sizeof(buf), &pos, queue_report);
+        append_str(buf, sizeof(buf), &pos, ",\n");
+    }
+
     /* PS1B-306: kernel bless decides whether relocated kernel routines run
      * their compiled bodies or the interpreter, so the report states it.
      * `state` is -1 before the first kernel-window dispatch, 0 off, 1 on.

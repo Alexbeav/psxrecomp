@@ -96,6 +96,30 @@ The reasons of one place add up to that place's share of `disp_interp`.
 then may still decline the target, so `per_address` is the record of what was
 interpreted.
 
+## overlay_capture_queue
+
+A second object, next to `interp_detail`: the queue of outgoing overlay
+snapshots. Before a disc read overwrites a page where interpreted code ran,
+the runtime keeps the outgoing code. It queues a copy for a writer thread, up
+to a cap; at the cap it writes on the emulation thread instead.
+
+```json
+"overlay_capture_queue": {"cap": 64, "queued": 310, "held_now": 0, "most_at_once": 64,
+                          "committed_at_cap": 2390, "commit_at_cap_failed": 0, "queued_past_cap": 0,
+                          "writer_failed_attempts": 0, "evidence_lost": 0}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `cap` | The most snapshots the queue holds. |
+| `queued` | Snapshots queued in this start. |
+| `held_now`, `most_at_once` | Snapshots queued or being written when the report was made, and the most there ever were. Each holds a copy of guest RAM. |
+| `committed_at_cap` | Snapshots written on the emulation thread because the queue was at its cap. Each is a file write during play. |
+| `commit_at_cap_failed` | Of those writes, the ones that failed. |
+| `queued_past_cap` | Snapshots queued above the cap after such a failure. |
+| `writer_failed_attempts` | Failed write attempts of the writer thread. |
+| `evidence_lost` | Snapshots that could be neither written nor queued. |
+
 ## Cost
 
 The object is built when the report is written. During play the added work

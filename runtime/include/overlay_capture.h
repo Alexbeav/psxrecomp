@@ -57,6 +57,11 @@ void overlay_capture_before_dma(uint32_t load_addr, uint32_t size);
 void overlay_capture_write_json(void);
 /* Join any background snapshot writer before process shutdown. */
 void overlay_capture_wait_pending(void);
+/* The queue of outgoing snapshots as a JSON object, for the run report
+ * (PS1B-391): its cap, how many were queued, held now and at most, committed
+ * on the emulation thread at the cap, and what failed. Takes no lock. Returns
+ * the length, or -1 when `cap` is too small. */
+int overlay_capture_queue_report_json(char *out, int cap);
 
 /* Returns number of unique overlays captured so far. */
 int overlay_capture_count(void);

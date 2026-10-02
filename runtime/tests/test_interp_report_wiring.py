@@ -74,5 +74,12 @@ for needle in (
 ):
     assert needle in block, f"the report writer no longer has: {needle}"
 assert "runtime/src/interp_report.c" in SOURCES, "runtime.cmake must build interp_report.c"
+# The capture queue's counters are an object of their own, next to interp_detail
+# (runtime/tests/test_overlay_capture_queue_bound.cpp proves its content).
+for needle in (
+    "overlay_capture_queue_report_json(queue_report, (int)sizeof(queue_report))",
+    '"  \\"overlay_capture_queue\\": "',
+):
+    assert needle in WRITER, f"the report writer no longer has: {needle}"
 
 print("interp_report wiring: 12+ miss exits, 9 reasons, writer and source list OK")
