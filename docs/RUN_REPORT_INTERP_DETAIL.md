@@ -120,8 +120,14 @@ to a cap; at the cap it writes on the emulation thread instead.
 | `dropped` | Snapshots that could be neither written nor queued. The outgoing code of that moment is not kept. |
 | `given_up_at_quit` | Held snapshots the writer gave up at shutdown. After five failed writes in a row it takes the store as unwritable and gives each held snapshot up at its next failed write. |
 
-The queue never holds more than `cap` snapshots, also when the store cannot be
-written (a read-only folder, a full disk).
+During play the queue never holds more than `cap` snapshots, also when the
+store cannot be written (a read-only folder, a full disk). At shutdown the
+periodic snapshot can be queued on top of that, one entry.
+
+A write at the cap that fails is dropped even when the reason passes (a file
+that another program holds for a moment). It was queued and tried again
+before; that retry is what made the queue unbounded. The snapshots already in
+the queue are still tried again.
 
 ## Cost
 
