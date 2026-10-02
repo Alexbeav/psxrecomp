@@ -170,13 +170,24 @@ void netplay_start_failure_report_text(int start_rc, int has_netplay,
     /* The listen address becomes the fixed word. Its port is kept only when
      * it is one to five digits after the last colon: a listen text that is
      * not "address:port" is something the player typed, and none of it goes
-     * into the report. */
+     * into the report.
+     *
+     * An IPv6 address is made of groups between colons, so the last group of
+     * "fe80::1234" looks like a port and is a piece of the address. The last
+     * colon separates a port only when no other colon stands before it, or
+     * when what stands before it is an address in brackets ("[fe80::1]:47810").
+     * A text that is neither keeps nothing. */
     char bind[32];
     const char *colon = bind_hostport ? strrchr(bind_hostport, ':') : NULL;
     size_t digits = 0;
     if (colon) {
         while (colon[1 + digits] >= '0' && colon[1 + digits] <= '9') ++digits;
         if (digits == 0 || digits > 5 || colon[1 + digits] != '\0') colon = NULL;
+    }
+    if (colon && memchr(bind_hostport, ':', (size_t)(colon - bind_hostport)) != NULL) {
+        const int bracketed = colon - bind_hostport >= 2 && bind_hostport[0] == '[' &&
+                              colon[-1] == ']';
+        if (!bracketed) colon = NULL;
     }
     snprintf(bind, sizeof(bind), "%s%s", NETPLAY_REPORT_ADDRESS, colon ? colon : "");
     netplay_start_failure_text(start_rc, has_netplay, bind,
