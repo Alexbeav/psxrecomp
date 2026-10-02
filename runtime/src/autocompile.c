@@ -1113,12 +1113,49 @@ int autocompile_request(void) {
     char full[sizeof(s_cmd) + 32];   /* grows with s_cmd: the wrapper must never be the new truncation point */
     snprintf(full, sizeof(full), "cmd.exe /C \"%s\"", s_cmd);
 
-    STARTUPINFOA si;
-    memset(&si, 0, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = wr;
-    si.hStdError  = wr;
+    /* The child inherits the pipe's write end and NOTHING else (PS1B-378).
+     * bInheritHandles=TRUE without a handle list hands the child every
+     * inheritable handle this process has open at this instant, and every file
+     * opened with fopen() is inheritable. The snapshot writer thread is usually
+     * in the middle of a commit when the emulation thread gets here, so cmd.exe
+     * kept that commit's temp file open until the compile run ended. The file
+     * was opened without delete sharing: MoveFileEx of it failed with
+     * ERROR_SHARING_VIOLATION ("additive capture history write failed",
+     * "latest capture write failed"), remove() of it failed too, and each retry
+     * failed again for as long as the compiler lived. The same held for any
+     * other file of the runtime that was open at this instant and renamed or
+     * deleted later (save states, replay files, settings).
+     * Fail closed: without the list no child is started; the provider retries. */
+    STARTUPINFOEXA six;
+    memset(&six, 0, sizeof(six));
+    six.StartupInfo.cb = sizeof(six);
+    six.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    six.StartupInfo.hStdOutput = wr;
+    six.StartupInfo.hStdError  = wr;
+    HANDLE inherit_list[1] = { wr };   /* no duplicates: stdout and stderr share it */
+    SIZE_T attr_size = 0;
+    (void)InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
+    six.lpAttributeList = attr_size
+        ? (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, attr_size)
+        : NULL;
+    if (!six.lpAttributeList ||
+        !InitializeProcThreadAttributeList(six.lpAttributeList, 1, 0, &attr_size)) {
+        if (six.lpAttributeList) HeapFree(GetProcessHeap(), 0, six.lpAttributeList);
+        CloseHandle(wr);
+        CloseHandle(rd);
+        autocompile_note_failure();
+        return 0;
+    }
+    if (!UpdateProcThreadAttribute(six.lpAttributeList, 0,
+                                   PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                   inherit_list, sizeof(inherit_list), NULL, NULL)) {
+        DeleteProcThreadAttributeList(six.lpAttributeList);
+        HeapFree(GetProcessHeap(), 0, six.lpAttributeList);
+        CloseHandle(wr);
+        CloseHandle(rd);
+        autocompile_note_failure();
+        return 0;
+    }
     PROCESS_INFORMATION pi;
     memset(&pi, 0, sizeof(pi));
     /* Kill-on-close job for the whole compile tree. Created before the child
@@ -1144,8 +1181,11 @@ int autocompile_request(void) {
      * priority, while the live compile script also defaults to one worker. */
     BOOL ok = CreateProcessA(NULL, full, NULL, NULL, TRUE,
                              CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS |
-                                 CREATE_SUSPENDED,
-                             NULL, s_cwd[0] ? s_cwd : NULL, &si, &pi);
+                                 CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
+                             NULL, s_cwd[0] ? s_cwd : NULL,
+                             &six.StartupInfo, &pi);
+    DeleteProcThreadAttributeList(six.lpAttributeList);
+    HeapFree(GetProcessHeap(), 0, six.lpAttributeList);
     CloseHandle(wr);
     if (!ok) {
         if (job) CloseHandle(job);
