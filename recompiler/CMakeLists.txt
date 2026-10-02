@@ -427,6 +427,9 @@ if(BUILD_TESTING)
                 "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
                 $<$<STREQUAL:${_product},release>:PSX_NO_DEBUG_TOOLS=1>)
         endforeach()
+        # PS1B-404: the release replay drives the route observer for pictures.
+        target_sources(input_route_session_release PRIVATE
+            ../runtime/src/input_route_observer.c)
         add_test(NAME input_route_session_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_input_route_session.py
             $<TARGET_FILE:input_route_session_diagnostic>
