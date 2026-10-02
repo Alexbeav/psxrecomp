@@ -1,6 +1,8 @@
-/* Netplay exit reasons and the boot-mismatch deadline (PS1B-290).
+/* Netplay exit reasons and the boot-mismatch deadline (PS1B-290), and the
+ * refusal of a seat that is not a pad (PS1B-313).
  * Plain checks, not assert(): Release test builds define NDEBUG. */
 #include "netplay_exit_reason.h"
+#include "sio.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -45,6 +47,38 @@ int main(void)
     /* The old behaviour was a 20 s admit-stall watchdog; the grace is far
      * shorter than that. */
     CHECK(NETPLAY_BOOT_MISMATCH_GRACE_MS < 20000u);
+
+    /* A pad seat is unchanged: no refusal and no text, on any port. */
+    {
+        char why[NETPLAY_SEAT_REFUSAL_CAP];
+        static const struct { int device; const char *name; } other[] = {
+            { SIO_DEVICE_MOUSE, "PS1 Mouse" }, { SIO_DEVICE_NEGCON, "neGcon" },
+            { SIO_DEVICE_GUNCON, "GunCon" },
+        };
+        memset(why, 'x', sizeof(why));
+        CHECK(netplay_seat_refusal(SIO_DEVICE_PAD, 1, why, sizeof(why)) == 0);
+        CHECK(why[0] == '\0');
+        CHECK(netplay_seat_refusal(SIO_DEVICE_PAD, 2, why, sizeof(why)) == 0);
+        /* A Mouse, a neGcon and a GunCon are refused with one sentence that
+         * names the device and the port and fits last_error (192 bytes). */
+        for (i = 0; i < sizeof(other) / sizeof(other[0]); ++i) {
+            CHECK(netplay_seat_refusal(other[i].device, 2, why, sizeof(why)) == 1);
+            CHECK(strstr(why, other[i].name) != NULL);
+            CHECK(strstr(why, "port 2") != NULL);
+            CHECK(strstr(why, "pad or the keyboard") != NULL);
+            CHECK(strlen(why) > 20 && strlen(why) < 192);
+        }
+        CHECK(netplay_seat_refusal(SIO_DEVICE_MOUSE, 1, why, sizeof(why)) == 1);
+        CHECK(strstr(why, "port 1 is set to a PS1 Mouse") != NULL);
+        /* A device kind added later is refused until netplay can carry it. */
+        CHECK(netplay_seat_refusal(99, 1, why, sizeof(why)) == 1);
+        CHECK(strstr(why, "port 1") != NULL);
+        /* The verdict does not need a buffer, and a short one is not overrun. */
+        CHECK(netplay_seat_refusal(SIO_DEVICE_GUNCON, 1, NULL, 0) == 1);
+        memset(why, 'x', sizeof(why));
+        CHECK(netplay_seat_refusal(SIO_DEVICE_GUNCON, 1, why, 8) == 1);
+        CHECK(strlen(why) == 7 && why[8] == 'x');
+    }
 
     if (failures) {
         fprintf(stderr, "netplay_exit_reason: %d check(s) FAILED\n", failures);
