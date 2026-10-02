@@ -201,10 +201,46 @@ GitHub `/releases/latest` and, when newer, prompts **Update** or **Skip for now*
   latest (update path); `download == 1` fetches only if missing; `0` is cache-only.
 - Set `RETCOMM_TOOLCHAIN_SKIP_UPDATE=1` to disable the remote newer-than-local check.
 
-### Broken toolchain heal (wizard open)
+### A toolchain that fails its check (wizard open)
 
 `toolchain_is_ready` does not stop at `cmake --version`. It also smoke-tests
 `clang` + `ld.lld` (tiny link). If that fails (missing `libicuuc.so.*`, bad
-`latest/` pointer, etc.), the host removes the broken `latest/` cache entry,
-clears `toolchain/.psxrecomp-bin`, and re-opens wizard page 0 with a repair note
-so the player can redownload — without deleting the cache by hand.
+`latest/` pointer, etc.), the host passes that pack over for the rest of the
+process, clears `toolchain/.psxrecomp-bin`, and re-opens wizard page 0 with a
+repair note so the player can redownload.
+
+The pack that failed is **not removed and not renamed**. One failed check is not
+proof that a pack is broken (the check can fail for a reason outside the pack),
+and the pack may be in use by a build that is running. Only a `latest` link that
+points at nothing is removed, and only the link.
+
+### The order of an install (setup host and `ensure-toolchain`)
+
+The setup host (`host/psxrecomp_codegen_host.c`) and the CLI
+(`tools/toolchain_pack.py`) install a pack in the same order:
+
+1. The zip is unpacked into a staging folder beside the installed packs.
+2. The new pack is checked there. A pack that fails is dropped; nothing that
+   was installed has been touched.
+3. The installed folder of that tag, if there is one, is renamed aside
+   (`.old-<tag>-<pid>`). On Windows a folder with an open file cannot be
+   renamed: a build is using the pack, so it stays whole, the new pack is
+   dropped, and the player is told to close the build.
+4. The new pack takes the tag's name, `latest` follows, the project stamp is
+   written.
+5. Only then the folder that was set aside and the older tags are removed.
+   What cannot be removed whole stays under its dot-name, which no lookup
+   reads, and is removed on a later pass.
+
+Before this order (PS1B-410) an install over the installed tag removed that
+folder first. With builds running from it, the files they held open survived
+and the rest went.
+
+### `PSXRECOMP_TOOLCHAIN_READONLY=1`
+
+With this variable set, the setup host and the CLI never delete, rename, prune
+or install a pack, never move a pointer to one (`latest`, the project's
+`toolchain/` link and stamp), and the CLI does not write the user's login PATH.
+A pack that is there is still found and used. Each step that was left undone is
+named on stderr. A test or a gate that starts a setup program or the CLI sets
+it, and gives the program its own toolchain and data folders as well.
