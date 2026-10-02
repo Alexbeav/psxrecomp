@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from disc_companion import CompanionError, check_destination, inspect_companion, stage_companion
+import disc_forms
 import psx_chd
 
 DST_SEC = 2352
@@ -278,6 +279,34 @@ def list_cue_bins(cue_path: Path) -> list[Path]:
 def resolve_cue_bin(cue_path: Path) -> Path:
     """First BINARY file in the cue (data track for Redump multi-track sets)."""
     return list_cue_bins(cue_path)[0]
+
+
+def cue_track_count(cue_path: Path) -> int:
+    """How many TRACK entries a cue declares."""
+    text = cue_path.read_text(encoding="utf-8", errors="replace")
+    return len(re.findall(r"^\s*TRACK\s+\d+\s+\S+", text, flags=re.I | re.M))
+
+
+def owning_cue(image: Path) -> Path | None:
+    """The cue beside a raw image that names it as a FILE, or None.
+
+    The runtime mounts that cue when a player picks the ``.bin``
+    (``disc_path.cpp``), so setup stages the same disc: without the cue the
+    track table is lost and CD audio with it. A cue that names a file that is
+    not there is left alone.
+    """
+    image = image.resolve()
+    same_stem = image.with_suffix(".cue")
+    cues = [same_stem] if same_stem.is_file() else []
+    cues += sorted(p for p in image.parent.iterdir()
+                   if p.suffix.lower() == ".cue" and p.is_file() and p not in cues)
+    for cue in cues:
+        text = cue.read_text(encoding="utf-8", errors="replace")
+        names = re.findall(r'FILE\s+"([^"]+)"\s+BINARY', text, flags=re.I)
+        files = [(cue.parent / n).resolve() for n in names]
+        if image in files and all(f.is_file() for f in files):
+            return cue
+    return None
 
 
 def stage_multitrack_cue(
@@ -678,6 +707,14 @@ def main() -> int:
         print(f"source cue: {cue_src} ({len(cue_bins)} BINARY file(s))")
         src = cue_bins[0]
         print(f"data track: {src.name}")
+    elif src.suffix.lower() in (".bin", ".img"):
+        own = owning_cue(src)
+        if own is not None:
+            cue_src = own.resolve()
+            cue_bins = list_cue_bins(cue_src)
+            print(f"source image belongs to cue: {cue_src} ({len(cue_bins)} BINARY file(s))")
+            src = cue_bins[0]
+            print(f"data track: {src.name}")
 
     src_md5, src_sha1, src_size = file_hashes(src)
     print(f"source: {src}")
@@ -688,6 +725,20 @@ def main() -> int:
         print(f"  game  {cfg.serial} boot={cfg.boot_exe}")
 
     kind = detect_kind(src, src_size)
+
+    # One .bin that holds every track (what `chdman extractcd` writes): the
+    # listed data track is the first bytes of the file (PS1G-63). The identity
+    # of the disc is that track's, as it is for the one-file-per-track layout.
+    if cfg.known and not matches_known(cfg, src_size, src_md5, src_sha1):
+        track = disc_forms.track_in_single_bin(
+            src, src_size, [(k.size, k.md5.lower(), k.sha1.lower()) for k in cfg.known])
+        if track is not None:
+            print(f"  one file holds every track; data track = first {track[0]} of {src_size} bytes")
+            src_size, src_md5, src_sha1 = track
+            print(f"  data track md5   {src_md5}")
+            print(f"  data track sha1  {src_sha1}")
+            if cue_src is None:
+                print("  no cue beside this file: its later tracks (CD audio) cannot be used")
 
     # Bind the selected CUE basename, not its first track's basename.
     try:
@@ -732,9 +783,13 @@ def main() -> int:
         print(f"subchannel: {report['status']}")
         print(f"RESULT_CUE={cue_path.resolve()}")
 
-    # Multi-track Redump: keep the cue + every track bin so CDDA works.
-    if cue_src is not None and len(cue_bins) > 1 and kind == "bin2352":
-        print(f"  preserving multi-track Redump set ({len(cue_bins)} files)")
+    # Multi-track disc: keep the cue + every track bin so CDDA works. A cue
+    # with one FILE and several TRACKs is the same disc in one file; writing
+    # it out as a one-track cue would drop its audio tracks.
+    if (cue_src is not None and kind == "bin2352"
+            and (len(cue_bins) > 1 or cue_track_count(cue_src) > 1)):
+        print(f"  preserving multi-track set ({len(cue_bins)} file(s), "
+              f"{cue_track_count(cue_src)} track(s))")
         bin_data = src.read_bytes()
         entries, files = extract_via(read_user_bin, bin_data, cfg.boot_exe)
         print(f"  root entries: {sorted(entries)[:24]}")

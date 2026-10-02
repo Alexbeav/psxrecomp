@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "tools"))
 from sdk_progress import ProgressReporter  # noqa: E402
 from disc_companion import CompanionError, inspect_companion  # noqa: E402
+import disc_forms  # noqa: E402
 import psx_chd  # noqa: E402
 from toolchain_pack import (  # noqa: E402
     ensure_toolchain as _ensure_toolchain_pack,
@@ -1097,10 +1098,15 @@ def _verify_chd(
     if layout is None:
         first = chd_digests.first_track
         whole = chd_digests.disc
-        raise DiscVerifyError(
+        progress.log(
             f"CHD track digests not in prepare_disc.known_* "
             f"(track 1: size={first.size} md5={first.md5} sha1={first.sha1}; "
             f"whole disc: size={whole.size} md5={whole.md5} sha1={whole.sha1})"
+        )
+        raise DiscVerifyError(
+            disc_forms.refusal_sentence(
+                prep, f"image {disc.name} has a data track that", first.size, first.sha1
+            )
         )
     identity["verified"] = True
     return identity
@@ -1125,6 +1131,26 @@ def verify_disc_path(
             path, prep, skip_hash=skip_hash, progress=progress, chd_lib=chd_lib
         )
     md5, sha1, size = file_hashes(path)
+    sizes = [int(s) for s in (prep.get("known_sizes") or [])]
+    md5s = [str(x).lower() for x in (prep.get("known_md5") or [])]
+    sha1s = [str(x).lower() for x in (prep.get("known_sha1") or [])]
+    ok = (md5 in md5s) or (sha1 in sha1s)
+    if not ok and sizes and size in sizes and not md5s and not sha1s:
+        ok = True
+    # One .bin that holds every track of a multi-track disc (what `chdman
+    # extractcd` writes): the listed data track is the first bytes of it. The
+    # whole-file digest matches nothing, and a correct disc was refused.
+    image_size = size
+    track = None
+    if not ok and not skip_hash:
+        track = disc_forms.track_in_single_bin(path, size, disc_forms.known_images(prep))
+        if track is not None:
+            size, md5, sha1 = track
+            ok = True
+            progress.log(
+                f"{path.name} holds every track in one file; its data track is the "
+                f"first {size} of {image_size} bytes"
+            )
     try:
         subchannel, _ = inspect_companion(disc, size, sha1)
     except CompanionError as exc:
@@ -1137,22 +1163,21 @@ def verify_disc_path(
         "verified": False,
         "subchannel": subchannel,
     }
+    if track is not None:
+        identity["single_bin"] = {"image_size": image_size}
     progress.event("disc", **identity)
-    sizes = [int(s) for s in (prep.get("known_sizes") or [])]
-    md5s = [str(x).lower() for x in (prep.get("known_md5") or [])]
-    sha1s = [str(x).lower() for x in (prep.get("known_sha1") or [])]
     if not md5s and not sha1s and not sizes:
         identity["verified"] = True
         return identity
     if skip_hash:
         return identity
-    ok = (md5 in md5s) or (sha1 in sha1s)
-    if not ok and sizes and size in sizes and not md5s and not sha1s:
-        ok = True
     if not ok:
-        raise DiscVerifyError(
+        progress.log(
             f"disc digests not in prepare_disc.known_* "
             f"(size={size} md5={md5} sha1={sha1})"
+        )
+        raise DiscVerifyError(
+            disc_forms.refusal_sentence(prep, f"file {path.name}", size, sha1)
         )
     identity["verified"] = True
     return identity

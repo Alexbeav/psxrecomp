@@ -1064,6 +1064,14 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_prepare_disc_boot_case.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1G-63: one disc in its file forms at setup. One file per track and
+        # one file with every track are the same disc; another pressing is
+        # refused with a sentence that names what the kit needs.
+        add_test(
+            NAME disc_forms
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_disc_forms.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME package_setup_bios_hint
             COMMAND ${Python3_EXECUTABLE}
