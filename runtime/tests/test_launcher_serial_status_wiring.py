@@ -58,6 +58,26 @@ assert listed < shown.start() < readable, "the row's serial must not depend on t
 assert block.index("out->serial_status = ") > readable
 assert block.index("out->expected_serials") > readable
 
+# A set, and an image its disc list does not know (a copy under another name,
+# or another game's disc): no serial is expected for it, so the branch above
+# says nothing, and the row kept its tick. The host compares what was read
+# with every serial of the set and names the whole list. An image that is in
+# the disc list with no serial listed stays unjudged.
+outside = re.search(
+    r"\} else if \(!g_disc_serials\.empty\(\) && id\.opened && id\.has_header &&\s*"
+    r"PSXRecompV4::disc_roster_index\(\s*g_disc_metadata_roster, std::filesystem::path\(disc_path\)\) < 0\) \{",
+    block,
+)
+assert outside, "a set must judge an image outside its disc list"
+set_block = block[outside.end():]
+assert "for (const std::string& one : g_disc_serials) {" in set_block
+assert "if (!got.empty() && uppercase_ascii(one) == got) listed = true;" in set_block
+assert re.search(r"out->serial_status = listed \? RECOMP_SERIAL_LISTED\s*: RECOMP_SERIAL_NOT_LISTED;", set_block)
+assert re.search(
+    r'std::snprintf\(out->expected_serials, sizeof\(out->expected_serials\),\s*"%s", all\.c_str\(\)\);', set_block
+), "the sentence for a set names every serial of the set"
+assert "out->verdict" not in set_block, "the set branch decides the row and the sentence, never the verdict"
+
 # The status is set from the same identity the verdict is, and before it: the
 # wrong-disc verdict and the row cannot disagree.
 verdict = body.index("out->verdict = 3; // wrong disc")

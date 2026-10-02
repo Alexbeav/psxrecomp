@@ -10230,6 +10230,31 @@ namespace {
                 std::snprintf(out->expected_serials, sizeof(out->expected_serials),
                               "%s", expect_serial.c_str());
             }
+        } else if (!g_disc_serials.empty() && id.opened && id.has_header &&
+                   PSXRecompV4::disc_roster_index(
+                       g_disc_metadata_roster, std::filesystem::path(disc_path)) < 0) {
+            /* A set, and an image its disc list does not know (another file
+             * name, another folder): no serial was expected for it, so none
+             * was checked, and the row kept its tick for a disc of another
+             * game. Compare what was read with every serial of the set and
+             * name the whole list. An image that IS in the disc list with no
+             * serial listed for it stays unjudged, as before. The verdict is
+             * not touched here. */
+            const std::string got = uppercase_ascii(id.detected_serial);
+            std::string all;
+            bool listed = false;
+            for (const std::string& one : g_disc_serials) {
+                if (one.empty()) continue;
+                if (!all.empty()) all += ", ";
+                all += one;
+                if (!got.empty() && uppercase_ascii(one) == got) listed = true;
+            }
+            if (!all.empty()) {
+                out->serial_status = listed ? RECOMP_SERIAL_LISTED
+                                            : RECOMP_SERIAL_NOT_LISTED;
+                std::snprintf(out->expected_serials, sizeof(out->expected_serials),
+                              "%s", all.c_str());
+            }
         }
 #endif
         if (g_lnch_netplay_available) {
