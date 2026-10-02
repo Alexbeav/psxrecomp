@@ -106,6 +106,20 @@ int netplay_seat_refusal(int sio_device, int port, char *out, size_t cap)
     return 1;
 }
 
+int netplay_boot_mode_settle(const NetplayBootMode *kit, NetplayBootMode *mode)
+{
+    int changed;
+    if (!kit || !mode) return 0;
+    /* Compare as on/off: a caller may hand in any non-zero value for on. */
+    changed = (!kit->bios_hle != !mode->bios_hle) ||
+              (!kit->keep_intro != !mode->keep_intro) ||
+              (!kit->fast_boot != !mode->fast_boot);
+    mode->bios_hle   = kit->bios_hle ? 1 : 0;
+    mode->keep_intro = kit->keep_intro ? 1 : 0;
+    mode->fast_boot  = kit->fast_boot ? 1 : 0;
+    return changed;
+}
+
 int netplay_boot_mismatch_final(uint32_t mismatch_since_ms, uint32_t now_ms,
                                 uint32_t grace_ms)
 {

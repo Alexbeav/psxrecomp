@@ -836,6 +836,22 @@ if(BUILD_TESTING)
     target_link_libraries(portable_settings_paths_test PRIVATE fmt)
     add_test(NAME portable_settings_paths_test COMMAND portable_settings_paths_test)
 
+    # settings.toml holds bios_hle / fast_boot only when the player wrote them;
+    # an older launcher's echo of them is dropped (PS1B-360).
+    add_executable(boot_keys_settings_test
+        tests/boot_keys_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(boot_keys_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(boot_keys_settings_test PRIVATE fmt)
+    add_test(NAME boot_keys_settings_test COMMAND boot_keys_settings_test)
+
     # PS1 Mouse settings.toml keys (PS1B-279).
     add_executable(mouse_settings_test
         tests/mouse_settings_test.cpp
@@ -1231,6 +1247,7 @@ if(BUILD_TESTING)
                 hybrid_dev_any_input
                 host_input_focus_guards
                 netplay_pad_seat_wiring
+                netplay_boot_mode_wiring
                 launcher_pad_mode_wiring
                 negcon_twist_wiring
                 replay_disc_identity_wiring
@@ -1255,6 +1272,7 @@ if(BUILD_TESTING)
                 pal_cadence_host_refresh
                 savestate_load_preflight
                 sdl3_main_single_include
+                settings_boot_keys_wiring
                 setup_install_card_path_wiring
                 spu_sample_scheduler_default
                 overlay_step_boundary

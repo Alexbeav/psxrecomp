@@ -15199,9 +15199,19 @@ int main(int argc, char** argv) {
     int        instant_rate  = 0;   /* 0 = cdrom.c built-in default */
     std::vector<PSXRecompV4::RuntimeConfig::WarmCdRoute> warm_cd_routes;
     uint32_t   game_entry_pc = 0;
+    /* The three below as the kit's game.toml states them, before settings.toml
+     * and the launcher change them: a netplay session boots with these
+     * (PS1B-382, netplay_boot_mode_settle). */
+    bool       kit_fast_boot = false;
+    bool       kit_bios_hle  = false;
+    bool       kit_bios_hle_keep_intro = false;
     bool       fast_boot     = false;  /* DEPRECATED alias: HLE boot-skip only */
     bool       bios_hle      = false;  /* HLE kernel-service tier (bios_hle.c) */
     bool       bios_hle_keep_intro = false;
+    /* Did the player's settings.toml set the two keys above? The launcher has
+     * no control for either, so it writes them back only then (PS1B-360). */
+    bool       settings_chose_fast_boot = false;
+    bool       settings_chose_bios_hle  = false;
     /* Text-image guard source, captured at config load; armed after the disc
      * path is resolved (arm_text_image_guard). */
     std::string text_guard_exe_path;
@@ -15568,6 +15578,9 @@ int main(int argc, char** argv) {
             fast_boot     = gc.runtime.fast_boot;
             bios_hle      = gc.runtime.bios_hle;
             bios_hle_keep_intro = gc.runtime.bios_hle_keep_intro;
+            kit_fast_boot = fast_boot;
+            kit_bios_hle  = bios_hle;
+            kit_bios_hle_keep_intro = bios_hle_keep_intro;
             /* Developer compatibility finding, applied before BIOS selection.
              * Not exposed to settings.toml on purpose — see BIOS_SELECTION.md. */
             s_openbios_allowed  = gc.runtime.openbios;
@@ -15755,8 +15768,21 @@ int main(int argc, char** argv) {
                 "DEPRECATED and ignored; enable the \"Fast Loading (host "
                 "pacing)\" mod instead. The stale key is dropped on the next "
                 "settings save.\n");
-        if (us.has_fast_boot)      fast_boot = us.fast_boot;
-        if (us.has_bios_hle)       bios_hle  = us.bios_hle;
+        /* settings.toml overrides game.toml for these two only when the player
+         * wrote them. A file from before settings_format 2 holds them because
+         * the launcher echoed whatever was in force at every save; that echo
+         * then outlived a kit's later change of bios_hle, and two netplay
+         * peers of one build could boot in different BIOS modes (PS1B-360).
+         * The loader has already dropped such lines: say so once. */
+        if (us.boot_keys_were_echoes)
+            std::fprintf(stdout,
+                "psxrecomp: settings.toml holds fast_boot/bios_hle lines that "
+                "an earlier launcher wrote by itself; they are ignored and the "
+                "game's own values are used. The lines are dropped on the next "
+                "settings save. To choose a value yourself, add the line again "
+                "after that save.\n");
+        if (us.has_fast_boot)      { fast_boot = us.fast_boot; settings_chose_fast_boot = true; }
+        if (us.has_bios_hle)       { bios_hle  = us.bios_hle;  settings_chose_bios_hle  = true; }
         if (us.has_fullscreen)     g_fullscreen      = us.fullscreen;
         if (us.has_aspect_ratio) {
             g_video_aspect_num = us.aspect_num;
@@ -16323,8 +16349,12 @@ int main(int argc, char** argv) {
             seed.has_auto_skip_fmv = skip_fmv_offered;
             seed.turbo_loads = (g_turbo_loads_enabled != 0);
             seed.has_turbo_loads = turbo_loads_offered;
-            seed.fast_boot = fast_boot;                   seed.has_fast_boot = true;
-            seed.bios_hle  = bios_hle;                    seed.has_bios_hle  = true;
+            /* No launcher control exists for these two: write them back only
+             * when the player's file set them. Marked present always, they
+             * were a write-only latch over game.toml (PS1B-360; the same fault
+             * as turbo_loads, MegaManX6Recomp#14). */
+            seed.fast_boot = fast_boot;  seed.has_fast_boot = settings_chose_fast_boot;
+            seed.bios_hle  = bios_hle;   seed.has_bios_hle  = settings_chose_bios_hle;
             seed.fullscreen = g_fullscreen;                seed.has_fullscreen = true;
             seed.frame_interpolation = (g_frame_interpolation != 0);
             seed.has_frame_interpolation = true;
@@ -18270,10 +18300,33 @@ session_reboot:
      * aliases the boot-skip alone. Env overrides: PSX_BIOS_HLE /
      * PSX_BIOS_HLE_KEEP_INTRO ('0' = off, anything else = on). */
     {
+        /* How this session boots. Offline it is the player's choice (the kit's
+         * game.toml, then settings.toml, then the launcher). The peers of a
+         * netplay match must boot the same way, and nothing compares it: a
+         * peer whose settings.toml still held bios_hle = true from an older
+         * build met a fresh peer on false, the match started (the boot digest
+         * at tick 0 is the same in both modes) and the cores forked for good
+         * at sim 22 (PS1B-382). So a match takes all three values from the
+         * kit's game.toml, which both peers of one build share, and says so
+         * to a player who had chosen otherwise. The player's choice is not
+         * changed: it applies again offline, also in this process. The two
+         * environment variables stay test overrides on top (set them on both
+         * peers). */
+        NetplayBootMode boot = { bios_hle ? 1 : 0, bios_hle_keep_intro ? 1 : 0,
+                                 fast_boot ? 1 : 0 };
+        if (net_cfg.enabled) {
+            const NetplayBootMode kit = { kit_bios_hle ? 1 : 0,
+                                          kit_bios_hle_keep_intro ? 1 : 0,
+                                          kit_fast_boot ? 1 : 0 };
+            if (netplay_boot_mode_settle(&kit, &boot)) {
+                std::fprintf(stdout, "psxrecomp: %s\n", NETPLAY_BOOT_MODE_NOTICE);
+                host_osd_push(NETPLAY_BOOT_MODE_NOTICE, 8000);
+            }
+        }
         if (const char* e = std::getenv("PSX_BIOS_HLE"))
-            bios_hle = (e[0] && e[0] != '0');
+            boot.bios_hle = (e[0] && e[0] != '0');
         if (const char* e = std::getenv("PSX_BIOS_HLE_KEEP_INTRO"))
-            bios_hle_keep_intro = (e[0] && e[0] != '0');
+            boot.keep_intro = (e[0] && e[0] != '0');
         /* The two axes (kernel-call HLE, boot-skip) have DIFFERENT per-image
          * requirements, so they are decided in ONE pure place —
          * psx_bios_hle_plan(), runtime/src/bios_hle_plan.c. Conflating them
@@ -18281,9 +18334,9 @@ session_reboot:
          * boot-skip needs only shell_entry_phys, so refusing the former must
          * not silently cancel the latter. */
         PsxBiosHleRequest req;
-        req.bios_hle               = bios_hle ? 1 : 0;
-        req.keep_intro             = bios_hle_keep_intro ? 1 : 0;
-        req.fast_boot              = fast_boot ? 1 : 0;
+        req.bios_hle               = boot.bios_hle;
+        req.keep_intro             = boot.keep_intro;
+        req.fast_boot              = boot.fast_boot;
         req.have_deliver_event_ret = (psx_bios_image.deliver_event_ret != 0);
         req.have_shell_entry       = (psx_bios_image.shell_entry_phys != 0);
         req.have_game_entry        = (game_entry_pc != 0);
