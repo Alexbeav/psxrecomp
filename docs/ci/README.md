@@ -65,6 +65,7 @@ the ICD dynamically via SDL; CI only needs headers and the shader compiler.
 | `release_stage.py` | Shared staging surface (mod catalog, overlay toolchain incl. the BIOS emitter/profiles/seeds, overlay cache tag/shards) |
 | `bios_module_build.py` | Ships inside the toolchain; builds a retail BIOS backend from the player's dump at runtime |
 | `bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs |
+| `../cmake/toolchain-macos-osxcross.cmake` | Linux→macOS (x86_64 / arm64) osxcross cross toolchain |
 | `templates/game.gitignore` | Suggested gitignore for title repos (`generated/` tracked) |
 
 `package_setup_host.sh` / `stage_setup_sdk.sh` are the retired setup-host
