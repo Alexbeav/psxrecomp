@@ -491,6 +491,15 @@ direct indexed lookup rather than scanning every installed mod.
 Feature disc overlays require an exact `disc_sha256` on every target entry.
 `expected_sha256` can additionally guard the replaced stock range.
 
+`disc_sha256` is the SHA-256 of the image as the runtime reads it: every raw
+sector of a `.chd`, the data file of any other image. Computing it reads the
+whole disc, about 20 seconds for a compressed 700 MB image. The runtime
+therefore computes it only when an enabled package needs it: a package whose
+targets for the running game all name a `disc_sha256`, or a legacy package with
+a `[[derived_disc]]`. A start with no such package does not read the disc for
+the mod step at all. A package that names a disc costs its players that read at
+every start, so name one only where the bytes of the disc matter.
+
 ## State and migration
 
 `mods/state.toml` format 2 stores selected package versions separately from

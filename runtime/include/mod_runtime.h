@@ -23,6 +23,10 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path = {},
  * now (no synced mod plans). */
 bool mod_runtime_clear_for_netplay(std::string* error = nullptr);
 const std::string& mod_runtime_fingerprint();
+/* How many times this process decoded and hashed a whole disc image for the
+ * mod plan. It stays 0 unless an enabled package names a disc_sha256 or
+ * carries a derived disc (PS1B-340). */
+unsigned mod_runtime_disc_digest_computations_for_tests();
 /* The enabled mods a replay must match (PS1B-191); "none" when there are none. */
 std::string mod_runtime_replay_fingerprint();
 const std::filesystem::path& mod_runtime_effective_disc_path();

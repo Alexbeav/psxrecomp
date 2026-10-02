@@ -3013,6 +3013,36 @@ fs::path ModPackageManager::feature_resource_path(
         feature_id, resource_id);
 }
 
+bool ModPackageManager::needs_disc_digest(const std::string& game_id,
+                                          const std::string& exe_sha256) const {
+    for (const auto& [id, versions] : packages_) {
+        (void)versions;
+        const auto selected = selections_.find(id);
+        const ModSelection blank;
+        const ModSelection& selection =
+            selected == selections_.end() ? blank : selected->second;
+        const ModPackage* package = find_selected(packages_, id, selection);
+        /* The same two filters as resolve(): a package that is not selected or
+         * has no enabled feature takes no part in the plan. */
+        if (!package || !has_enabled_feature(*package, selection)) continue;
+        if (!package->derived_discs.empty()) return true;
+        /* target_matches() takes the first target that fits. A target without
+         * a disc_sha256 fits every disc, so the digest decides the match only
+         * when every target for this game and executable names one. */
+        bool any_disc = false;
+        bool named_disc = false;
+        for (const ModTarget& target : package->targets) {
+            if (target.game_id != "*" && target.game_id != game_id) continue;
+            if (!target.exe_sha256.empty() && target.exe_sha256 != exe_sha256)
+                continue;
+            if (target.disc_sha256.empty()) any_disc = true;
+            else named_disc = true;
+        }
+        if (named_disc && !any_disc) return true;
+    }
+    return false;
+}
+
 ModResolution ModPackageManager::resolve(const std::string& game_id,
                                          const std::string& exe_sha256,
                                          const std::string& disc_sha256) const {

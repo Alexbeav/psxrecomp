@@ -311,8 +311,16 @@ int main() {
     check(PSXRecompV4::mod_runtime_initialize(
               root, "SLUS-RUNTIME", 0x80002000, {}, &error),
           error.c_str());
+    check(PSXRecompV4::mod_runtime_disc_digest_computations_for_tests() == 0,
+          "initialising the mod step must not fingerprint a disc");
     check(PSXRecompV4::mod_runtime_commit(cue_path, &error),
           "CUE and its data-track BIN must have the same mod target identity");
+    check(PSXRecompV4::mod_runtime_disc_digest_computations_for_tests() == 1,
+          "a package whose target names a disc_sha256 must still get the "
+          "disc digest, once");
+    check(PSXRecompV4::mod_runtime_commit(cue_path, &error) &&
+              PSXRecompV4::mod_runtime_disc_digest_computations_for_tests() == 1,
+          "a second commit of the same disc path must reuse its digest");
     mod_runtime_activate_plugins();
     check(activation_calls == 1,
           "resolved trusted plugin must activate before runtime startup");
@@ -491,6 +499,95 @@ int main() {
     check(psx_mod_display_width() == 0u && psx_mod_display_height() == 0u,
           "unestablished display geometry must report zero so callers skip "
           "drawing instead of guessing");
+
+    /* PS1B-340: the disc digest costs a decode of the whole image, and it used
+     * to be computed at every start whether a package read it or not. It is
+     * now computed only when an enabled package needs it. The package above
+     * names a disc_sha256, so each start with it still fingerprints the disc
+     * and a wrong disc is still refused. */
+    {
+        using PSXRecompV4::mod_runtime_disc_digest_computations_for_tests;
+        std::vector<uint8_t> other_disc(8 * 2352, 0);
+        other_disc[100] = 1;
+        const fs::path other_path = root / "other.bin";
+        write_bytes(other_path, other_disc);
+        check(PSXRecompV4::mod_runtime_initialize(
+                  root, "SLUS-RUNTIME", 0x80002000, {}, &error),
+              error.c_str());
+        const unsigned before_wrong =
+            mod_runtime_disc_digest_computations_for_tests();
+        std::string refusal;
+        check(!PSXRecompV4::mod_runtime_commit(other_path, &refusal) &&
+                  refusal.find("package does not target this game/image: "
+                               "runtime.test") != std::string::npos,
+              "a disc with another digest must still be refused by a package "
+              "that names its disc");
+        check(mod_runtime_disc_digest_computations_for_tests() ==
+                  before_wrong + 1,
+              "refusing a wrong disc takes exactly one disc fingerprint");
+        check(PSXRecompV4::mod_runtime_commit(stock_path, &error),
+              "the right disc must be accepted after a refused one");
+        check(mod_runtime_disc_digest_computations_for_tests() ==
+                  before_wrong + 2,
+              "a changed disc path must be fingerprinted again");
+
+        /* A package that names no disc: any disc is its target, so nothing
+         * reads the digest and the image is not decoded. */
+        const fs::path open_root = root / "open-target";
+        write_text(open_root / "packages/open.test/1.0.0/manifest.toml",
+            "format_version = 5\n"
+            "id = \"open.test\"\n"
+            "version = \"1.0.0\"\n"
+            "name = \"Open Target\"\n"
+            "[[target]]\n"
+            "game_id = \"SLUS-RUNTIME\"\n"
+            "[[feature]]\n"
+            "id = \"main-code\"\n"
+            "name = \"Main Code\"\n"
+            "[[patch]]\n"
+            "feature = \"main-code\"\n"
+            "target = \"main_exe\"\n"
+            "address = 2147488768\n"
+            "expected = \"0a0b\"\n"
+            "replace = \"c1c2\"\n");
+        write_text(open_root / "state.toml",
+            "format_version = 2\n"
+            "[[package]]\n"
+            "id = \"open.test\"\n"
+            "version = \"1.0.0\"\n"
+            "[[feature]]\n"
+            "package_id = \"open.test\"\n"
+            "id = \"main-code\"\n"
+            "enabled = true\n");
+        check(PSXRecompV4::mod_runtime_initialize(
+                  open_root, "SLUS-RUNTIME", 0x80002000, {}, &error),
+              error.c_str());
+        const unsigned before_open =
+            mod_runtime_disc_digest_computations_for_tests();
+        check(PSXRecompV4::mod_runtime_commit(stock_path, &error),
+              error.c_str());
+        check(PSXRecompV4::mod_runtime_commit(other_path, &error),
+              "a package that names no disc must accept any disc");
+        check(mod_runtime_disc_digest_computations_for_tests() == before_open,
+              "a start whose enabled packages name no disc must not "
+              "fingerprint the disc");
+        ram[0x1400] = 0x0a; ram[0x1401] = 0x0b;
+        mod_runtime_on_dispatch(0x80002000);
+        check(ram[0x1400] == 0xc1 && ram[0x1401] == 0xc2,
+              "a plan resolved without the disc digest must still apply");
+
+        /* No package at all: the state of every product as shipped that has
+         * no enabled mod. */
+        const fs::path empty_root = root / "no-packages";
+        fs::create_directories(empty_root);
+        check(PSXRecompV4::mod_runtime_initialize(
+                  empty_root, "SLUS-RUNTIME", 0x80002000, {}, &error),
+              error.c_str());
+        check(PSXRecompV4::mod_runtime_commit(stock_path, &error),
+              error.c_str());
+        check(mod_runtime_disc_digest_computations_for_tests() == before_open,
+              "a start with no mod package must not fingerprint the disc");
+    }
 
     /* Source-owned ISO: nested file spanning two sectors, without a derived
      * disc. Host reads must choose the original mount and leave sizes honest. */

@@ -425,6 +425,15 @@ public:
     ModResolution resolve(const std::string& game_id,
                           const std::string& exe_sha256 = {},
                           const std::string& disc_sha256 = {}) const;
+    /* True when resolve() needs the disc digest to give the right answer for
+     * the packages enabled now. The digest costs a decode of the whole image
+     * (20 s and more for a compressed disc), so the runtime asks before it
+     * computes one (PS1B-340). Two things read it: a [[target]] that names a
+     * disc_sha256 and has no digest-free target beside it for this game and
+     * executable, and a package with a derived disc, whose cache file is named
+     * by the plan fingerprint and so by the source disc. */
+    bool needs_disc_digest(const std::string& game_id,
+                           const std::string& exe_sha256 = {}) const;
 
     static bool read_manifest(const std::filesystem::path& path, ModPackage& out,
                               std::string* error = nullptr);
