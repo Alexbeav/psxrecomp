@@ -106,6 +106,59 @@ int main(void) {
     draw_offset_x = 2;
     exec_dot_and_expect(54, 42);
 
+    /* PGXP (docs/ENHANCEMENTS.md G1.11): a textured quad that is an
+     * axis-aligned rectangle in integer screen space and UV takes the 2D
+     * rectangle shortcut -- unless PGXP is correcting and all four vertices
+     * carry a dataflow-precise position, in which case it is drawn as two
+     * precise triangles so it meets its precise neighbours without a seam.
+     * With only some corners precise it keeps the shortcut (two triangles
+     * would mix precise and native vertices) and counts as rect_partial. */
+    {
+        static const uint32_t quad[9] = {
+            0x2C808080u,                          /* FT4, opaque          */
+            (73u << 16) | 98u, 0x7F0ABF1Au,       /* v0 + uv0/clut        */
+            (73u << 16) | 73u, 0x0039BF0Cu,       /* v1 + uv1/tpage       */
+            (52u << 16) | 98u, 0x2C39B01Au,       /* v2 + uv2             */
+            (52u << 16) | 73u, 0x2C39B00Cu,       /* v3 + uv3             */
+        };
+        const uint32_t base = 0x20000u;
+        for (int pass = 0; pass < 4; pass++) {
+            reset_gpu_state_for_test();
+            memcpy(gp0_cmd_buf, quad, sizeof quad);
+            gp0_cmd_source_addr = base;
+            memcpy(&test_ram[base / 4u], quad, sizeof quad);
+            last_textured_rect.calls = 0;
+            last_scaled_rect.calls = 0;
+            g_test_textured_triangles = 0;
+            g_test_precise_triangles = 0;
+            g_test_rect_bypass = 0;
+            g_test_rect_partial = 0;
+            /* pass 0: PGXP off, all precise; pass 1: on, no precise vertex
+             * (a CPU-built sprite); pass 2: on, only vertex 2 (packet word 5)
+             * precise; pass 3: on, all four (words 1, 3, 5, 7) precise. */
+            static const uint32_t k_masks[4] = { 0xAAu, 0u, 1u << 5, 0xAAu };
+            g_test_geometry_correction = pass > 0;
+            g_test_quad_base = base;
+            g_test_precise_words = k_masks[pass];
+            gp0_exec_textured_quad();
+            if (pass < 3) {
+                assert(last_textured_rect.calls + last_scaled_rect.calls == 1);
+                assert(g_test_textured_triangles == 0);
+                assert(g_test_rect_bypass == 0);
+                assert(g_test_rect_partial == (pass == 2 ? 1 : 0));
+            } else {
+                assert(last_textured_rect.calls + last_scaled_rect.calls == 0);
+                assert(g_test_textured_triangles == 2);
+                assert(g_test_precise_triangles == 2);
+                assert(g_test_rect_bypass == 1);
+                assert(g_test_rect_partial == 0);
+            }
+        }
+        g_test_geometry_correction = 0;
+        g_test_quad_base = 0xFFFFFFFFu;
+        g_test_precise_words = 0;
+    }
+
     puts("gpu_textured_dot_nw_shift_exec_test: PASS");
     return 0;
 }

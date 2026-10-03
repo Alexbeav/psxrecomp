@@ -506,6 +506,35 @@ struct RuntimeConfig {
     // the clamp. Live-tunable over TCP (pgxp verb).
     double                video_pgxp_tolerance = 0.5;
 
+    // pgxp_position_fallback: let a vertex with no validated dataflow shadow
+    // take the fraction of the projection last cached at its integer screen
+    // position (the G1.4 exact table). Default true (unchanged behaviour).
+    // A title built with the PGXP hooks (psxrecomp_add_game_runtime PGXP)
+    // reaches near-total dataflow coverage, so for it the cache only hands
+    // unrelated fractions to CPU-built 2D polygons; such a title sets false
+    // ("dataflow only", the reference implementations' default).
+    // Live-tunable over TCP (pgxp verb). docs/ENHANCEMENTS.md G1.11.
+    bool                  video_pgxp_position_fallback = true;
+
+    // pgxp_preserve_projection: shadow the exact projection of each vertex
+    // (from the GTE's unshifted MACs and a true divide) instead of the GTE's
+    // own integer-IR one, which removes the residual wobble of near geometry.
+    // Guest-visible GTE results are unchanged. Truncation agreement becomes a
+    // bounded window (pgxp.h PGXP_PPP_AGREE_*). Default false. Live-tunable
+    // over TCP (pgxp verb). docs/ENHANCEMENTS.md G1.11.
+    bool                  video_pgxp_preserve_projection = false;
+
+    // pgxp_mod_only: the title ships PGXP through the psx.enhancement.pgxp
+    // mod (typically a default-on override of it), which is then the one
+    // switch. The [video] geometry_correction / perspective_texturing /
+    // pgxp_cpu_mode values -- game.toml's and the player's settings.toml --
+    // are not applied, and the launcher hides its Perspective textures row,
+    // so the player is never shown a second control that does nothing or
+    // keeps half of PGXP on after they switch the mod off. Netplay, which
+    // clears the mod, then runs with PGXP fully off. Default false
+    // (unchanged behaviour). game.toml only. docs/ENHANCEMENTS.md G1.12.
+    bool                  video_pgxp_mod_only = false;
+
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
     // game once visuals are validated.

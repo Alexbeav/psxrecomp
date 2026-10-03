@@ -260,6 +260,11 @@ int gte_precision_load_word(uint32_t addr, uint32_t packed,
 { (void)addr; (void)packed; (void)x16; (void)y16; (void)z; return 0; }
 void pgxp_invalidate_all(void) {}
 void pgxp_invalidate_word(uint32_t addr) { (void)addr; }
+void pgxp_note_triangle(int precise) { (void)precise; }
+void pgxp_note_rect_bypass(int all_precise) { (void)all_precise; }
+int pgxp_probe_precise_vertex(uint32_t addr, uint32_t packet_word,
+                              int32_t int_x, int32_t int_y)
+{ (void)addr; (void)packet_word; (void)int_x; (void)int_y; return 0; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)bit; (void)detail; }
 void event_ring_record_aux(uint16_t kind, uint8_t detail, uint32_t aux)
 { (void)kind; (void)detail; (void)aux; }

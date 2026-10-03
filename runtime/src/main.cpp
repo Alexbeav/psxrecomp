@@ -40,6 +40,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "draw_distance.h"
 #include "display_scanout.h"
 #include "pgxp.h"
+#include "pgxp_session.h"
 #include "interrupts.h"
 #include "psx_video_timing.h"
 #include "present_ring.h"
@@ -1235,6 +1236,15 @@ static int           g_video_geometry_correction   = 0;
 static int           g_video_perspective_texturing = 0;
 static int           g_video_pgxp_cpu_mode         = 0;
 static float         g_video_pgxp_tolerance        = 0.5f;
+/* docs/ENHANCEMENTS.md G1.11: dataflow-only and exact-projection shadows.
+ * Defaults keep the historical behaviour. game.toml [video] only. */
+static int           g_video_pgxp_position_fallback   = 1;
+static int           g_video_pgxp_preserve_projection = 0;
+/* [video] pgxp_mod_only (G1.12): the title ships PGXP through the
+ * psx.enhancement.pgxp mod, which is then the one switch -- the [video]
+ * geometry_correction / perspective_texturing / pgxp_cpu_mode values are not
+ * applied and the launcher hides its Perspective textures row. */
+static int           g_video_pgxp_mod_only            = 0;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 
 /* Settings -> Display -> Internal resolution (internal_resolution.h). The
@@ -1556,6 +1566,10 @@ static void reset_mod_owned_presentation(void) {
     g_bezel_path.clear();
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     g_frame_interpolation_source = PSX_MOD_FRAME_SOURCE_VBLANK;
+    /* The PGXP mod's request: only this session's activation may set it; the
+     * renderer setup takes it and combines it with the [video] baseline
+     * (pgxp_session.h). */
+    psx_pgxp_session_reset();
     /* Render-pass counters, the disabled-after-faults latch and any open
      * plan generation belong to the session that made them. */
     render_pass_reset_session();
@@ -13105,7 +13119,12 @@ namespace {
         gi->assist_binding_count = PSX_ASSIST_BIND_COUNT;
         gi->has_skip_fmv = skip_fmv_offered_b ? 1 : 0;
         gi->has_turbo_loads = turbo_loads_offered_b ? 1 : 0;
-        gi->has_geometry_precision = 1;
+        /* The Perspective textures row. Hidden for a title that ships PGXP
+         * through the psx.enhancement.pgxp mod ([video] pgxp_mod_only): the
+         * Mods page is then its one switch, and the row's value is not
+         * applied, so showing it would be a second control that does
+         * nothing. */
+        gi->has_geometry_precision = g_video_pgxp_mod_only ? 0 : 1;
         gi->has_rewind_depth = 1;
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
         /* The Supersampling row becomes an Internal resolution list. */
@@ -13643,6 +13662,11 @@ int main(int argc, char** argv) {
                 gc.runtime.video_perspective_texturing ? 1 : 0;
             g_video_pgxp_cpu_mode = gc.runtime.video_pgxp_cpu_mode ? 1 : 0;
             g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
+            g_video_pgxp_position_fallback =
+                gc.runtime.video_pgxp_position_fallback ? 1 : 0;
+            g_video_pgxp_preserve_projection =
+                gc.runtime.video_pgxp_preserve_projection ? 1 : 0;
+            g_video_pgxp_mod_only = gc.runtime.video_pgxp_mod_only ? 1 : 0;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_scanlines  = gc.runtime.video_scanlines;
@@ -15830,20 +15854,31 @@ session_reboot:
     /* Env overrides (debug/validation path, like PSX_BIOS_HLE): arm the
      * corrections from process start so free-running (headless) boots can be
      * measured from the first projected vertex — a TCP toggle always arrives
-     * after the interesting window. '0' = off, anything else = on. */
-    if (const char* e = std::getenv("PSX_GEOMETRY_CORRECTION"))
-        g_video_geometry_correction = (*e && *e != '0') ? 1 : 0;
-    if (const char* e = std::getenv("PSX_PERSPECTIVE_TEXTURING"))
-        g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
-    if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
-        g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
+     * after the interesting window. '0' = off, anything else = on. They win
+     * over the PGXP mod too, so an A/B run can switch it off. */
+    /* The [video] baseline plus the psx.enhancement.pgxp request this
+     * session's activation recorded (start_mod_session ran above, for the
+     * first boot and for a rematch); psx_pgxp_session_arm takes that request,
+     * so it cannot outlive this session. Applying the baseline alone here
+     * used to switch an enabled mod straight back off. The g_video_* values
+     * stay the player's settings: the mod never leaks into a launcher seed.
+     * With [video] pgxp_mod_only the mod is the one switch (pgxp_session.h). */
+    PSXPgxpSessionConfig pgxp_cfg{};
+    pgxp_cfg.video_geometry = g_video_geometry_correction;
+    pgxp_cfg.video_texture = g_video_perspective_texturing;
+    pgxp_cfg.video_cpu_mode = g_video_pgxp_cpu_mode;
+    pgxp_cfg.tolerance = g_video_pgxp_tolerance;
+    pgxp_cfg.position_fallback = g_video_pgxp_position_fallback;
+    pgxp_cfg.preserve_projection = g_video_pgxp_preserve_projection;
+    pgxp_cfg.mod_only = g_video_pgxp_mod_only;
+    PSXPgxpSessionInputs pgxp_in{};
+    const PSXPgxpSessionArm pgxp_arm = psx_pgxp_session_arm(&pgxp_cfg, &pgxp_in);
+    if (pgxp_in.env_geometry >= 0) g_video_geometry_correction = pgxp_in.env_geometry;
+    if (pgxp_in.env_texture >= 0) g_video_perspective_texturing = pgxp_in.env_texture;
+    if (pgxp_in.env_cpu_mode >= 0) g_video_pgxp_cpu_mode = pgxp_in.env_cpu_mode;
     /* [video] texture_window_batching A/B (same image, fewer GL draws). */
     if (const char* e = std::getenv("PSX_GL_TEXWIN_BATCH"))
         gl_renderer_set_texture_window_batching((*e && *e != '0') ? 1 : 0);
-    gte_geometry_correction_set(g_video_geometry_correction);
-    gpu_texture_correction_set(g_video_perspective_texturing);
-    pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
-    pgxp_set_tolerance(g_video_pgxp_tolerance);
     /* Scanlines: env override wins over config, same as the corrections above,
      * so a headless/free-run boot can be captured with the effect armed from the
      * first present. PSX_SCANLINES=0/1; PSX_SCANLINE_STRENGTH=0..1. Pushed to the
@@ -15856,12 +15891,14 @@ session_reboot:
     }
     gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
                               g_video_scanline_strength);
-    if (g_video_geometry_correction || g_video_perspective_texturing) {
+    if (pgxp_arm.geometry || pgxp_arm.texture) {
         std::fprintf(stdout,
-                     "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
-                     g_video_geometry_correction ? "on" : "off",
-                     g_video_perspective_texturing ? "on" : "off",
-                     (g_video_geometry_correction && requested_scale < 2)
+                     "psxrecomp: geometry correction %s, perspective texturing %s%s%s%s\n",
+                     pgxp_arm.geometry ? "on" : "off",
+                     pgxp_arm.texture ? "on" : "off",
+                     pgxp_arm.culling ? ", precise culling" : "",
+                     pgxp_in.mod_enabled ? " (PGXP mod)" : "",
+                     (pgxp_arm.geometry && requested_scale < 2)
                          ? " (needs [video] supersampling >= 2 to be visible)" : "");
     }
     /* Display aspect. Identity at the default 4:3. The present letterbox uses

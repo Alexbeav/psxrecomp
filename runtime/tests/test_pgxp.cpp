@@ -7,6 +7,7 @@
 #include "pgxp.h"
 #include "pgxp_hooks.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -237,6 +238,282 @@ int main(void) {
         CHECK(x == X16 && y == Y16 && z == 0);
     }
     g_fb_valid = 0;
+
+    /* --- dataflow only (G1.11): position fallback off skips the cache --- */
+    g_fb_valid = 1; g_fb_packed = PACKED; g_fb_x16 = X16; g_fb_y16 = Y16;
+    CHECK(pgxp_position_fallback() == 1);              /* default: unchanged */
+    pgxp_set_position_fallback(0);
+    {
+        int32_t x, y; uint16_t z;
+        CHECK(lookup(0xFFFFFFFFu, PACKED, 160, 80, &x, &y, &z) ==
+              PGXP_SRC_NATIVE);
+        CHECK(x == (160 << 16) && y == (80 << 16) && z == 0);
+        /* a validated dataflow shadow is unaffected */
+        produce_at(ADDR_A);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, &x, &y, &z) == PGXP_SRC_DATAFLOW);
+        /* a stale shadow no longer falls through to the cache */
+        uint32_t other = (81u << 16) | 161u;
+        g_fb_packed = other;
+        g_fb_x16 = (161 << 16) | 0x8000;
+        g_fb_y16 = (81 << 16) | 0x4000;
+        CHECK(lookup(ADDR_A, other, 161, 81, &x, &y, &z) == PGXP_SRC_NATIVE);
+        pgxp_set_position_fallback(1);
+        CHECK(lookup(ADDR_A, other, 161, 81, &x, &y, &z) == PGXP_SRC_FALLBACK);
+    }
+    g_fb_valid = 0;
+
+    /* --- preserve projection (G1.11): the agreement window ---------------- */
+    {
+        CHECK(pgxp_preserve_projection() == 0);        /* default: unchanged */
+        auto seed = [](int32_t x16, int32_t y16, uint32_t packed) {
+            pgxp_gte_push_sxy(x16, y16, SZ3, packed);
+            psx_pgxp_cop2(nullptr, SWC2(14), packed, ADDR_A);
+        };
+        const int32_t half = 1 << 15;
+        /* exact projection half a pixel BELOW the guest integer: the IR path
+         * can never produce that, so off rejects it and on accepts it */
+        seed((160 << 16) - half, Y16, PACKED);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        pgxp_set_preserve_projection(1);
+        {
+            int32_t x, y;
+            CHECK(lookup(ADDR_A, PACKED, 160, 80, &x, &y, nullptr) ==
+                  PGXP_SRC_DATAFLOW);
+            CHECK(x == (160 << 16) - half && y == Y16);
+        }
+        /* window edges: (-BELOW, +ABOVE) px exclusive */
+        const int32_t hi = PGXP_PPP_AGREE_ABOVE, lo = PGXP_PPP_AGREE_BELOW;
+        seed(((160 + hi) << 16) - 1, Y16, PACKED);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_DATAFLOW);
+        seed((160 + hi) << 16, Y16, PACKED);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        seed(((160 - lo) << 16) + 1, Y16, PACKED);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_DATAFLOW);
+        seed((160 - lo) << 16, Y16, PACKED);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        seed(X16, (80 + hi) << 16, PACKED);            /* Y axis too      */
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        /* a half beyond the GTE range, which the GPU's 11-bit parse wraps
+         * (a CPU-modified word), needs exact agreement: 0x0402 parses as
+         * -1022, a shadow at 1026.5 lies 2048 px away and one at -1021.5
+         * truncates to -1022 */
+        const uint32_t wrap = (80u << 16) | 0x0402u;
+        seed((1026 << 16) + half, Y16, wrap);
+        CHECK(lookup(ADDR_A, wrap, -1022, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        seed(-(1022 << 16) + half, Y16, wrap);
+        CHECK(lookup(ADDR_A, wrap, -1022, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_DATAFLOW);
+        seed(-(1022 << 16) - half, Y16, wrap);   /* in the window, not exact */
+        CHECK(lookup(ADDR_A, wrap, -1022, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        /* an 11-bit wrapped coordinate is far outside any window */
+        seed(X16 + (2048 << 16), Y16, PACKED);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        /* at the GTE saturation limit the guest integer is a clamp: the
+         * window does not apply, agreement must be exact */
+        const uint32_t sat = (80u << 16) | 0x3FFu;   /* SX saturated at 1023 */
+        seed((1023 << 16) + half, Y16, sat);
+        CHECK(lookup(ADDR_A, sat, 1023, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_DATAFLOW);                    /* exact agreement ok */
+        seed((1024 << 16) + half, Y16, sat);
+        CHECK(lookup(ADDR_A, sat, 1023, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        const uint32_t sat_lo = (0xFC00u << 16) | 160u;  /* SY at -1024 */
+        seed(X16, -(1024 << 16) - half, sat_lo);
+        CHECK(lookup(ADDR_A, sat_lo, 160, -1024, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        /* the tolerance clamp measures the offset both ways */
+        seed((160 << 16) - half, Y16, PACKED);
+        pgxp_set_tolerance(0.25f);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_NATIVE);
+        pgxp_set_tolerance(0.75f);
+        CHECK(lookup(ADDR_A, PACKED, 160, 80, nullptr, nullptr, nullptr) ==
+              PGXP_SRC_DATAFLOW);
+        pgxp_set_tolerance(-1.0f);
+        pgxp_set_preserve_projection(0);
+    }
+
+    /* --- pgxp_project_precise: the exact projection and its qualifiers --- */
+    {
+        /* V = (100, -50, 1000) through the identity: MAC = V * 4096 (sf=1),
+         * IR = V, SZ3 = 1000, H = 300, OFX/OFY = (160, 120) in 16.16. The
+         * exact screen position is (160 + 100 * 0.3, 120 - 50 * 0.3). */
+        const int64_t m1 = 100 * 4096 + 1234;   /* fractional MAC bits     */
+        const int64_t m2 = -50 * 4096 + 777;
+        const int64_t m3 = 1000 * 4096 + 2048;
+        const int32_t ofx = 160 << 16, ofy = 120 << 16;
+        int32_t x, y;
+        CHECK(pgxp_project_precise(m1, m2, m3, 12, (int32_t)(m1 >> 12),
+                                   (int32_t)(m2 >> 12), (uint32_t)(m3 >> 12),
+                                   300, ofx, ofy, 1, 1, &x, &y) == 1);
+        const double ex = 160.0 + (double)m1 * 300.0 / (double)m3;
+        const double ey = 120.0 + (double)m2 * 300.0 / (double)m3;
+        CHECK(x == (int32_t)std::floor(ex * 65536.0));
+        CHECK(y == (int32_t)std::floor(ey * 65536.0));
+        /* the horizontal widescreen factor is applied to X only */
+        int32_t xs, ys;
+        CHECK(pgxp_project_precise(m1, m2, m3, 12, (int32_t)(m1 >> 12),
+                                   (int32_t)(m2 >> 12), (uint32_t)(m3 >> 12),
+                                   300, ofx, ofy, 3, 4, &xs, &ys) == 1);
+        CHECK(ys == y);
+        CHECK(xs == (int32_t)std::floor((160.0 + (double)m1 * 300.0 /
+                                         (double)m3 * 0.75) * 65536.0));
+        /* disqualified: sf=0, a clamped IR, SZ3 0 or clamped, divide
+         * overflow (H >= 2*SZ3) -- the caller keeps the IR path */
+        CHECK(pgxp_project_precise(m1, m2, m3, 0, (int32_t)(m1 >> 12),
+                                   (int32_t)(m2 >> 12), 1000, 300, ofx, ofy,
+                                   1, 1, &x, &y) == 0);
+        CHECK(pgxp_project_precise(m1, m2, m3, 12, 0x7FFF, (int32_t)(m2 >> 12),
+                                   1000, 300, ofx, ofy, 1, 1, &x, &y) == 0);
+        CHECK(pgxp_project_precise(m1, m2, 2048, 12, (int32_t)(m1 >> 12),
+                                   (int32_t)(m2 >> 12), 0, 300, ofx, ofy, 1, 1,
+                                   &x, &y) == 0);
+        CHECK(pgxp_project_precise(m1, m2, (int64_t)0x12345 << 12, 12,
+                                   (int32_t)(m1 >> 12), (int32_t)(m2 >> 12),
+                                   0xFFFF, 300, ofx, ofy, 1, 1, &x, &y) == 0);
+        CHECK(pgxp_project_precise(m1, m2, 150 * 4096, 12, (int32_t)(m1 >> 12),
+                                   (int32_t)(m2 >> 12), 150, 300, ofx, ofy, 1, 1,
+                                   &x, &y) == 0);
+        CHECK(pgxp_project_precise(m1, m2, 151 * 4096, 12, (int32_t)(m1 >> 12),
+                                   (int32_t)(m2 >> 12), 151, 300, ofx, ofy, 1, 1,
+                                   &x, &y) == 1);
+    }
+
+    /* --- probe: the same decision, not counted --- */
+    {
+        produce_at(ADDR_A);
+        PGXPStats a, b;
+        pgxp_get_stats(&a);
+        CHECK(pgxp_probe_precise_vertex(ADDR_A, PACKED, 160, 80) ==
+              PGXP_SRC_DATAFLOW);
+        CHECK(pgxp_probe_precise_vertex(ADDR_A, PACKED, 161, 80) ==
+              PGXP_SRC_NATIVE);
+        pgxp_get_stats(&b);
+        CHECK(std::memcmp(&a, &b, sizeof a) == 0);
+        pgxp_note_rect_bypass(1);
+        pgxp_note_rect_bypass(0);
+        pgxp_note_rect_bypass(0);
+        pgxp_get_stats(&b);
+        CHECK(b.rect_bypass == a.rect_bypass + 1);
+        CHECK(b.rect_partial == a.rect_partial + 2);
+    }
+
+    /* --- preserve projection: the RTPS-side window check (G1.11) ---------- */
+    {
+        pgxp_set_preserve_projection(1);
+        PGXPStats a, b;
+        pgxp_get_stats(&a);
+        const int32_t half = 1 << 15;
+        /* inside the window: the exact projection is the shadow */
+        CHECK(pgxp_ppp_accept((160 << 16) - half, Y16, PACKED) == 1);
+        CHECK(pgxp_ppp_accept(((160 + PGXP_PPP_AGREE_ABOVE) << 16) - 1, Y16,
+                              PACKED) == 1);
+        /* outside it (either axis): RTPS keeps the IR path's shadow */
+        CHECK(pgxp_ppp_accept((160 + PGXP_PPP_AGREE_ABOVE) << 16, Y16,
+                              PACKED) == 0);
+        CHECK(pgxp_ppp_accept(X16, (80 - PGXP_PPP_AGREE_BELOW) << 16,
+                              PACKED) == 0);
+        /* at the saturation limit agreement is exact */
+        const uint32_t sat = (80u << 16) | 0x3FFu;
+        CHECK(pgxp_ppp_accept((1023 << 16) + half, Y16, sat) == 1);
+        CHECK(pgxp_ppp_accept((1024 << 16) + half, Y16, sat) == 0);
+        pgxp_get_stats(&b);
+        CHECK(b.ppp_produced == a.ppp_produced + 3);
+        CHECK(b.ppp_window_fallback == a.ppp_window_fallback + 3);
+        pgxp_set_preserve_projection(0);
+    }
+
+    /* --- NCLIP's exact determinant (G1.12) -------------------------------- */
+    {
+        /* A far road row: native y 113, 113, 113 (zero area), exact y
+         * 112.64 / 113.12 / 113.83 -> positive area. */
+        const uint32_t w0 = (113u << 16) | 100u;
+        const uint32_t w1 = (113u << 16) | 220u;
+        const uint32_t w2 = (113u << 16) | 160u;
+        const int32_t y0 = (112 << 16) + (int32_t)(0.64 * 65536);
+        const int32_t y1 = (113 << 16) + (int32_t)(0.12 * 65536);
+        const int32_t y2 = (113 << 16) + (int32_t)(0.83 * 65536);
+        auto seed3 = [&](void) {
+            pgxp_test_seed_gte_sxy(0, w0, 100 << 16, y0, SZ3, 1);
+            pgxp_test_seed_gte_sxy(1, w1, 220 << 16, y1, SZ3, 1);
+            pgxp_test_seed_gte_sxy(2, w2, 160 << 16, y2, SZ3, 1);
+        };
+        const uint32_t words[3] = { w0, w1, w2 };
+        auto expect_cross = [&](void) {
+            return ((int64_t)(220 << 16) - (100 << 16)) * ((int64_t)y2 - y0) -
+                   ((int64_t)y1 - y0) * ((int64_t)(160 << 16) - (100 << 16));
+        };
+        PGXPStats a, b;
+        pgxp_get_stats(&a);
+        int64_t cross = 0;
+        /* IR path: y0 = 112.64 does not truncate to 113 -> not believed */
+        seed3();
+        CHECK(pgxp_gte_nclip_precise(words, &cross) == 0);
+        /* preserve-projection window: believed, exact determinant */
+        pgxp_set_preserve_projection(1);
+        seed3();
+        CHECK(pgxp_gte_nclip_precise(words, &cross) == 1);
+        CHECK(cross == expect_cross());
+        CHECK(cross > 0);
+        /* a stale shadow (word changed under it) fails closed */
+        const uint32_t stale[3] = { w0, w1, w2 ^ 1u };
+        CHECK(pgxp_gte_nclip_precise(stale, &cross) == 0);
+        /* the tolerance clamp applies as at the GPU */
+        pgxp_set_tolerance(0.25f);
+        CHECK(pgxp_gte_nclip_precise(words, &cross) == 0);
+        pgxp_set_tolerance(-1.0f);
+        /* nothing inside a suppression bracket */
+        pgxp_suppress_begin();
+        CHECK(pgxp_gte_nclip_precise(words, &cross) == 0);
+        pgxp_suppress_end();
+        pgxp_get_stats(&b);
+        CHECK(b.nclip_precise == a.nclip_precise + 1);
+        pgxp_note_nclip(1, 0);
+        pgxp_note_nclip(1, 1);
+        pgxp_get_stats(&b);
+        CHECK(b.nclip_disagree == a.nclip_disagree + 2);
+        CHECK(b.nclip_corrected == a.nclip_corrected + 1);
+        pgxp_set_preserve_projection(0);
+    }
+
+    /* --- the mod request lives until the session's arming takes it -------- */
+    {
+        CHECK(pgxp_culling() == 0);                    /* default off         */
+        pgxp_set_culling(1);
+        CHECK(pgxp_culling() == 1);
+        pgxp_set_culling(0);
+        int cpu = -1, cull = -1;
+        pgxp_mod_request(1, 1, 1);
+        CHECK(pgxp_mod_requested(&cpu, &cull) == 1 && cpu == 1 && cull == 1);
+        CHECK(pgxp_mod_requested(nullptr, nullptr) == 1);   /* peek keeps it */
+        CHECK(pgxp_mod_request_take(&cpu, &cull) == 1 && cpu == 1 && cull == 1);
+        CHECK(pgxp_mod_request_take(&cpu, &cull) == 0 && cpu == 0 && cull == 0);
+        pgxp_mod_request(0, 1, 1);                     /* options need the mod */
+        CHECK(pgxp_mod_requested(&cpu, &cull) == 0 && cpu == 0 && cull == 0);
+    }
+
+    /* --- triangle census (G1.1 crack exposure) --- */
+    {
+        PGXPStats a, b;
+        pgxp_get_stats(&a);
+        pgxp_note_triangle(3);
+        pgxp_note_triangle(2);
+        pgxp_note_triangle(1);
+        pgxp_note_triangle(0);
+        pgxp_get_stats(&b);
+        CHECK(b.tri_precise == a.tri_precise + 1);
+        CHECK(b.tri_mixed == a.tri_mixed + 2);
+        CHECK(b.tri_native == a.tri_native + 1);
+    }
 
     /* --- suppression bracket: nothing records inside it --- */
     pgxp_invalidate_all();
