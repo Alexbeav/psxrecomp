@@ -354,7 +354,7 @@ def _rename_failed_text(error: int) -> str:
     """What a player reads when the installed folder cannot be renamed aside.
     The same sentence in host/psxrecomp_codegen_host.c."""
     if sys_platform_is_windows() and error == 32:
-        return ("A file of the installed toolchain is open in another program "
+        return ("Another program holds the installed toolchain folder open "
                 "(Windows error 32). The toolchain was not changed. Close the "
                 "programs that use it, for example a running build, and try again.")
     if sys_platform_is_windows() and error == 5:
