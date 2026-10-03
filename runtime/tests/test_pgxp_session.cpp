@@ -39,6 +39,22 @@
 #include <string>
 #include <vector>
 
+/* POSIX setenv/unsetenv are missing on MinGW; an empty _putenv_s value unsets. */
+static void test_setenv(const char *name, const char *value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+static void test_unsetenv(const char *name) {
+#ifdef _WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
 #ifndef PSX_BUILTIN_PGXP_MANIFEST
 #error "PSX_BUILTIN_PGXP_MANIFEST must name mods/builtin/.../manifest.toml"
 #endif
@@ -184,7 +200,7 @@ static void netplay_clear(void) {
 int main(void) {
     for (const char* v : {"PSX_GEOMETRY_CORRECTION", "PSX_PERSPECTIVE_TEXTURING",
                           "PSX_PGXP_CPU_MODE", "PSX_PGXP_CULLING"})
-        unsetenv(v);
+        test_unsetenv(v);
     g_cfg = PSXPgxpSessionConfig{};
     g_cfg.tolerance = -1.0f;
     g_cfg.position_fallback = 0;
@@ -285,25 +301,25 @@ int main(void) {
 
     /* Validation env overrides win over both. Culling needs geometry. */
     CHECK(commit(title_root));
-    setenv("PSX_GEOMETRY_CORRECTION", "0", 1);
-    setenv("PSX_PERSPECTIVE_TEXTURING", "0", 1);
+    test_setenv("PSX_GEOMETRY_CORRECTION", "0");
+    test_setenv("PSX_PERSPECTIVE_TEXTURING", "0");
     CHECK(armed(session(), 0, 0, 0, 0));
-    setenv("PSX_PERSPECTIVE_TEXTURING", "1", 1);
+    test_setenv("PSX_PERSPECTIVE_TEXTURING", "1");
     CHECK(armed(session(), 0, 1, 0, 0));
-    unsetenv("PSX_GEOMETRY_CORRECTION");
-    unsetenv("PSX_PERSPECTIVE_TEXTURING");
-    setenv("PSX_PGXP_CULLING", "0", 1);
+    test_unsetenv("PSX_GEOMETRY_CORRECTION");
+    test_unsetenv("PSX_PERSPECTIVE_TEXTURING");
+    test_setenv("PSX_PGXP_CULLING", "0");
     CHECK(armed(session(), 1, 1, 0, 0));
-    unsetenv("PSX_PGXP_CULLING");
+    test_unsetenv("PSX_PGXP_CULLING");
     CHECK(commit(stage("builtin2", builtin, "")));
-    setenv("PSX_GEOMETRY_CORRECTION", "1", 1);
-    setenv("PSX_PGXP_CULLING", "1", 1);
+    test_setenv("PSX_GEOMETRY_CORRECTION", "1");
+    test_setenv("PSX_PGXP_CULLING", "1");
     CHECK(armed(session(), 1, 0, 0, 1));
-    setenv("PSX_PERSPECTIVE_TEXTURING", "", 1);   /* set but empty = off */
+    test_setenv("PSX_PERSPECTIVE_TEXTURING", "");   /* set but empty = off (Windows: unset, same result) */
     CHECK(armed(session(), 1, 0, 0, 1));
-    unsetenv("PSX_GEOMETRY_CORRECTION");
-    unsetenv("PSX_PGXP_CULLING");
-    unsetenv("PSX_PERSPECTIVE_TEXTURING");
+    test_unsetenv("PSX_GEOMETRY_CORRECTION");
+    test_unsetenv("PSX_PGXP_CULLING");
+    test_unsetenv("PSX_PERSPECTIVE_TEXTURING");
 
     CHECK(psx_pgxp_session_env_flag(nullptr) == -1);
     CHECK(psx_pgxp_session_env_flag("0") == 0);
