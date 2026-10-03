@@ -1551,6 +1551,17 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 
     *next_pc_out = pc + 4;
 
+    /* MFC0/CFC0 observe COP0 as it stood when the instruction began. The fetch
+     * and cycle charges below can reach a device deadline and run its event,
+     * which may raise CAUSE.IP2 in the middle of this instruction. An IRQ
+     * becomes visible at the next instruction boundary. Compiled code defers
+     * its base charge to the block boundary (GCC/Clang builds), so it does
+     * not show this for the base charge. Example: the kernel's syscall
+     * handler (`mfc0 a1,Cause`) saved 0x420 instead of 0x20 when a CD IRQ
+     * fell due on its own cycle. */
+    const uint32_t cop0_read = (opc == 0x10u && (rs == 0u || rs == 2u))
+        ? cpu->cop0[rd] : 0u;
+
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     /* Instruction FETCH cost (I-cache) — charged FIRST, before the §1 base, exactly
      * like Beetle ReadInstruction precedes the per-instruction base (cpu.cpp). HIT=+0,
@@ -2150,7 +2161,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->ld_absorb = 0u;
             cpu->ld_which_t = (uint8_t)rt;
 #endif
-            cpu->gpr[rt] = cpu->cop0[rd];
+            cpu->gpr[rt] = cop0_read;
             cpu->gpr[0] = 0;
             return 0;
         }
@@ -2159,7 +2170,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->ld_absorb = 0u;
             cpu->ld_which_t = (uint8_t)rt;
 #endif
-            cpu->gpr[rt] = cpu->cop0[rd];
+            cpu->gpr[rt] = cop0_read;
             cpu->gpr[0] = 0;
             return 0;
         }
