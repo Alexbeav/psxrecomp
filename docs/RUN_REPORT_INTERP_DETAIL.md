@@ -107,8 +107,8 @@ to a cap; at the cap it writes on the emulation thread instead.
 
 ```json
 "overlay_capture_queue": {"cap": 64, "queued": 310, "held_now": 0, "most_at_once": 64,
-                          "committed_at_cap": 2390, "commit_at_cap_failed": 0, "queued_past_cap": 0,
-                          "writer_failed_attempts": 0, "evidence_lost": 0}
+                          "committed_at_cap": 2390, "commit_at_cap_failed": 0,
+                          "writer_failed_attempts": 0, "dropped": 0, "given_up_at_quit": 0}
 ```
 
 | Field | Meaning |
@@ -117,10 +117,19 @@ to a cap; at the cap it writes on the emulation thread instead.
 | `queued` | Snapshots queued in this start. |
 | `held_now`, `most_at_once` | Snapshots queued or being written when the report was made, and the most there ever were. Each holds a copy of guest RAM. |
 | `committed_at_cap` | Snapshots written on the emulation thread because the queue was at its cap. Each is a file write during play. |
-| `commit_at_cap_failed` | Of those writes, the ones that failed. |
-| `queued_past_cap` | Snapshots queued above the cap after such a failure. |
-| `writer_failed_attempts` | Failed write attempts of the writer thread. |
-| `evidence_lost` | Snapshots that could be neither written nor queued. |
+| `commit_at_cap_failed` | Writes on the emulation thread at the cap that failed. The store could not be written; the snapshot was dropped. |
+| `writer_failed_attempts` | Failed write attempts of the writer thread. It tries a held snapshot again. |
+| `dropped` | Snapshots that could be neither written nor queued. The outgoing code of that moment is not kept. |
+| `given_up_at_quit` | Held snapshots the writer gave up at shutdown. After five failed writes in a row it takes the store as unwritable and gives each held snapshot up at its next failed write. |
+
+During play the queue never holds more than `cap` snapshots, also when the
+store cannot be written (a read-only folder, a full disk). At shutdown the
+periodic snapshot can be queued on top of that, one entry.
+
+A write at the cap that fails is dropped even when the reason passes (a file
+that another program holds for a moment). It was queued and tried again
+before; that retry is what made the queue unbounded. The snapshots already in
+the queue are still tried again.
 
 ## Cost
 

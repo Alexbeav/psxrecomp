@@ -87,14 +87,15 @@ static int preserve_queue_has_room(void);
 /* Outgoing snapshots committed on the emulation thread because the queue was
  * at its cap. Emulation thread only. */
 static unsigned s_preserve_sync_commits;
-/* The same thread's other outcomes at the cap, for the run report (PS1B-391):
- * the commit failed; the snapshot was then queued past the cap; nothing could
- * keep the evidence. */
+/* The same thread's other outcomes, for the run report (PS1B-391): a commit at
+ * the cap failed; a snapshot could be neither written nor queued and was
+ * dropped (at the cap with a store that cannot be written, PS1B-393). */
 static unsigned s_preserve_sync_failed;
-static unsigned s_preserve_past_cap;
 static unsigned s_preserve_lost;
-/* Failed write attempts of the queue's writer thread. Under s_preserve_mutex. */
+/* The queue's writer thread: failed write attempts, and entries given up at
+ * shutdown. Under s_preserve_mutex. */
 static unsigned s_preserve_write_failures;
+static unsigned s_preserve_abandoned;
 
 static int capture_process_id(void)
 {
@@ -972,17 +973,20 @@ void overlay_capture_before_dma(uint32_t load_addr, uint32_t size)
         int kept = overlay_capture_write_current("preserve-sync-fallback",
                                                  evidence_lo, evidence_hi, 1) != 0;
         if (kept && at_cap) s_preserve_sync_commits++;
-        /* A write that fails at the cap must not lose what the queue would
-         * have retried: queue it after all, past the cap. */
-        if (!kept && at_cap) {
-            s_preserve_sync_failed++;
-            kept = preserve_snapshot_async(evidence_lo, evidence_hi);
-            if (kept) s_preserve_past_cap++;
-        }
+        /* PS1B-393: a write that fails at the cap is dropped and counted. It
+         * was queued past the cap so that the writer could retry it, but then
+         * the cap was no bound while the store cannot be written (a read-only
+         * folder, a full disk): every disc read added a copy of guest RAM, and
+         * the quit retried each one. The queue keeps what it holds; the
+         * writer still retries those. */
+        if (!kept && at_cap) s_preserve_sync_failed++;
         if (!kept) {
-            s_preserve_lost++;
-            fprintf(stderr,
-                "psxrecomp: ERROR: could not preserve outgoing overlay evidence; discarding stale epoch\n");
+            /* Once: in this state every disc read would print it. The count is
+             * in the run report and in the line at shutdown. */
+            if (s_preserve_lost++ == 0)
+                fprintf(stderr,
+                    "psxrecomp: ERROR: could not preserve outgoing overlay evidence; discarding stale epoch "
+                    "(further losses are counted, not printed)\n");
         }
     }
     uint32_t first_bitmap_word = first_word >> 5;
@@ -1257,9 +1261,9 @@ void overlay_capture_test_preserve_counts(unsigned *held, unsigned *peak,
     s_preserve_enqueued = 0;
     s_preserve_sync_commits = 0;
     s_preserve_sync_failed = 0;
-    s_preserve_past_cap = 0;
     s_preserve_lost = 0;
     s_preserve_write_failures = 0;
+    s_preserve_abandoned = 0;
     SDL_UnlockMutex(s_preserve_mutex);
 }
 #endif
@@ -1274,11 +1278,11 @@ int overlay_capture_queue_report_json(char *out, int cap)
     if (!out || cap <= 0) return -1;
     int n = snprintf(out, (size_t)cap,
         "{\"cap\": %u, \"queued\": %u, \"held_now\": %u, \"most_at_once\": %u, "
-        "\"committed_at_cap\": %u, \"commit_at_cap_failed\": %u, \"queued_past_cap\": %u, "
-        "\"writer_failed_attempts\": %u, \"evidence_lost\": %u}",
+        "\"committed_at_cap\": %u, \"commit_at_cap_failed\": %u, "
+        "\"writer_failed_attempts\": %u, \"dropped\": %u, \"given_up_at_quit\": %u}",
         s_preserve_cap, s_preserve_enqueued, s_preserve_held, s_preserve_held_peak,
-        s_preserve_sync_commits, s_preserve_sync_failed, s_preserve_past_cap,
-        s_preserve_write_failures, s_preserve_lost);
+        s_preserve_sync_commits, s_preserve_sync_failed,
+        s_preserve_write_failures, s_preserve_lost, s_preserve_abandoned);
     if (n < 0 || n >= cap) { out[0] = '\0'; return -1; }
     return n;
 }
@@ -1428,6 +1432,11 @@ static int preserve_write_thread_main(void *opaque)
 {
     (void)opaque;
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+    /* Failed writes in a row, over all entries. At shutdown five of them mean
+     * that the store cannot be written: each entry still held then gets one
+     * attempt and is given up, with no wait (PS1B-393). Before, every entry
+     * had five attempts with waits of its own, about 1.6 s each. */
+    unsigned fail_streak = 0;
     for (;;) {
         SDL_LockMutex(s_preserve_mutex);
 #ifdef PSX_OVERLAY_CAPTURE_TEST
@@ -1452,19 +1461,22 @@ static int preserve_write_thread_main(void *opaque)
             job->snapshot.ram, "preserve-outgoing", job->snapshot.sequence);
         if (!job->snapshot.manifest_sig) {
             job->attempts++;
+            fail_streak++;
             SDL_LockMutex(s_preserve_mutex);
             s_preserve_write_failures++;
-            int abandoning = s_preserve_stop && job->attempts >= 5u;
+            int abandoning = s_preserve_stop && (job->attempts >= 5u || fail_streak >= 5u);
             if (!abandoning) {
                 job->next = NULL;
                 if (s_preserve_tail) s_preserve_tail->next = job;
                 else s_preserve_head = job;
                 s_preserve_tail = job;
+            } else if (s_preserve_abandoned++ == 0) {
+                fprintf(stderr,
+                    "psxrecomp: ERROR: outgoing overlay snapshot could not be retained after shutdown retries "
+                    "(further ones are counted, not printed)\n");
             }
             SDL_UnlockMutex(s_preserve_mutex);
             if (abandoning) {
-                fprintf(stderr,
-                    "psxrecomp: ERROR: outgoing overlay snapshot could not be retained after shutdown retries\n");
                 autocap_write_job_free(&job->snapshot);
                 preserve_entry_released();
             } else {
@@ -1472,6 +1484,7 @@ static int preserve_write_thread_main(void *opaque)
             }
             continue;
         }
+        fail_streak = 0;
         autocap_write_job_free(&job->snapshot);
         preserve_entry_released();
     }
@@ -1669,12 +1682,13 @@ void overlay_capture_wait_pending(void)
         SDL_WaitThread(s_preserve_thread, NULL);
         s_preserve_thread = NULL;
     }
-    if (s_preserve_enqueued || s_preserve_sync_commits)
+    if (s_preserve_enqueued || s_preserve_sync_commits || s_preserve_lost)
         fprintf(stdout,
             "psxrecomp: overlay capture: %u outgoing snapshots queued (most at once %u, cap %u), "
-            "%u committed on the emulation thread at the cap\n",
+            "%u committed on the emulation thread at the cap, %u dropped and %u given up at quit "
+            "because the store could not be written\n",
             s_preserve_enqueued, s_preserve_held_peak, s_preserve_cap,
-            s_preserve_sync_commits);
+            s_preserve_sync_commits, s_preserve_lost, s_preserve_abandoned);
 }
 
 void overlay_autocapture_shutdown(void)
