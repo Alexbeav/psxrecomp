@@ -13649,6 +13649,8 @@ int main(int argc, char** argv) {
             g_video_aspect_num = gc.runtime.video_aspect_num;
             g_video_aspect_den = gc.runtime.video_aspect_den;
             g_low_latency_input = gc.runtime.video_low_latency_input ? 1 : 0;
+            gl_renderer_set_texture_window_batching(
+                gc.runtime.video_texture_window_batching ? 1 : 0);
             g_video_vsync       = gc.runtime.video_vsync;
             g_frame_interpolation = gc.runtime.video_frame_interpolation ? 1 : 0;
             g_frame_interpolation_fps = gc.runtime.video_frame_interpolation_fps;
@@ -15822,6 +15824,9 @@ session_reboot:
         g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
     if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
         g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
+    /* [video] texture_window_batching A/B (same image, fewer GL draws). */
+    if (const char* e = std::getenv("PSX_GL_TEXWIN_BATCH"))
+        gl_renderer_set_texture_window_batching((*e && *e != '0') ? 1 : 0);
     gte_geometry_correction_set(g_video_geometry_correction);
     gpu_texture_correction_set(g_video_perspective_texturing);
     pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);

@@ -728,6 +728,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("low_latency_input")) {
             rt.video_low_latency_input = toml::find<bool>(video, "low_latency_input");
         }
+        if (video.contains("texture_window_batching")) {
+            rt.video_texture_window_batching =
+                toml::find<bool>(video, "texture_window_batching");
+        }
         if (video.contains("vsync")) {
             const auto mode = toml::find<std::string>(video, "vsync");
             if      (mode == "on"  || mode == "vsync")     rt.video_vsync = 1;

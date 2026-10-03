@@ -494,6 +494,13 @@ struct RuntimeConfig {
     // game once visuals are validated.
     bool                  video_offer_vulkan = false;
 
+    // texture_window_batching: OpenGL only. Let textured primitives with
+    // different GP0(E2h) texture windows share one draw (the window rides in
+    // each vertex) instead of ending the batch at every window change. The
+    // image is identical; games that tile textures with per-primitive windows
+    // draw in far fewer batches. Off by default; a game opts in.
+    bool                  video_texture_window_batching = false;
+
     // low_latency_input: re-sample the pad after the wall-clock pacer (just
     // before present) so the next CPU frame reads near-fresh input instead of
     // input ~one frame stale. Default on. vsync: present/swap mode —

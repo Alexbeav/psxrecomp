@@ -332,6 +332,14 @@ uint64_t gl_renderer_perf_prim_split(double *out_tex_frac);
  * isolation, blend-mode, mask, filter, backdrop-gate, texture-window, capacity. */
 void gl_renderer_batch_diag(uint64_t out[8]);
 
+/* Texture-window batching ([video] texture_window_batching; default off).
+ * On: textured prims with different GP0(E2h) texture windows share a batch
+ * (each vertex carries its window), except while mask checking is on. The
+ * image is the same either way; only the number of draws changes. Safe to
+ * call before GL context creation. */
+void gl_renderer_set_texture_window_batching(int on);
+int  gl_renderer_get_texture_window_batching(void);
+
 #ifdef __cplusplus
 }
 #endif
