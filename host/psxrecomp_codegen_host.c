@@ -611,7 +611,7 @@ static void toolchain_text_rename_failed(char* out, size_t cap, long error) {
 #if defined(_WIN32)
     if (error == 32) {
         snprintf(out, cap,
-                 "A file of the installed toolchain is open in another program "
+                 "Another program holds the installed toolchain folder open "
                  "(Windows error 32). The toolchain was not changed. Close the "
                  "programs that use it, for example a running build, and try again.");
         return;

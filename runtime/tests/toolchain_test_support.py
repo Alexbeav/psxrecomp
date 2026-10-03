@@ -125,7 +125,7 @@ def s2(step: str) -> str:
 
 def s3(error: int, windows: bool = WINDOWS) -> str:
     if windows and error == 32:
-        return ("A file of the installed toolchain is open in another program (Windows error 32). The toolchain "
+        return ("Another program holds the installed toolchain folder open (Windows error 32). The toolchain "
                 "was not changed. Close the programs that use it, for example a running build, and try again.")
     if windows and error == 5:
         return ("Windows refused to rename the installed toolchain folder (error 5, access denied). The toolchain "

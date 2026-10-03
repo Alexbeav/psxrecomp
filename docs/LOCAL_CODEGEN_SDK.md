@@ -273,9 +273,9 @@ Each sentence says only what the program knows.
   and CLI): "The new toolchain pack did not pass its check: `<step>`. The
   installed toolchain was not changed."
 - The installed folder cannot be renamed aside (setup host and CLI), by the
-  system's error. Windows error 32: "A file of the installed toolchain is open
-  in another program (Windows error 32). The toolchain was not changed. Close
-  the programs that use it, for example a running build, and try again."
+  system's error. Windows error 32: "Another program holds the installed
+  toolchain folder open (Windows error 32). The toolchain was not changed.
+  Close the programs that use it, for example a running build, and try again."
   Windows error 5: "Windows refused to rename the installed toolchain folder
   (error 5, access denied). The toolchain was not changed. A file in it may be
   open in another program, or the folder may be protected." Any other error:
