@@ -629,6 +629,15 @@ if(BUILD_TESTING)
             add_test(NAME tas_gpu_line_${_mode} COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_line_contracts.py
                 $<TARGET_FILE:tas_gpu_line_${_mode}>)
+            # PS1B-423: the rows of the source-profile raster spec (triangle, line,
+            # copy, sprite) against a model in other terms; whole VRAM after every draw.
+            add_executable(tas_gpu_raster_rows_${_mode}
+                ../runtime/tests/test_source_gpu_raster_rows.c ../runtime/src/gpu_sw_renderer.c
+                ../runtime/tests/source_gpu_raster_stub.c ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_raster_rows_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_raster_rows_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_raster_rows_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_raster_rows_${_mode} COMMAND tas_gpu_raster_rows_${_mode})
         endforeach()
     endif()
 
