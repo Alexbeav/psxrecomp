@@ -1,5 +1,16 @@
 # Cold Octoshock 2.3 MDEC comparison profile
 
+This branch contains the B53 replacement of the nine source-profile controller
+bodies (PS1B-425), returned by the unexposed implementer without an exposed-side
+runtime repair. The behaviour contract is the corpus note
+`references/ps1/MDEC-SOURCE-PROFILE-FIFO-SPEC.md`; its block-termination and
+return clarifications are in
+[corpus PR 227](https://git.crosstalkis.com/alexbeav/recomp-corpus/pulls/227).
+The existing 72 controller transcripts remain component output. Independent
+stock observations and their limits are recorded in the corpus note
+`references/ps1/MDEC-FIFO-STOCK-CAPTURE-F1-F5-READING.md`. Independent review and
+integrator-owned pin gates remain separate from these controller checks.
+
 `PSX_MDEC_SOURCE_MODEL=octoshock-2.3` selects an explicit source-core
 compatibility model. The default runtime retains its existing MDEC scheduling.
 The Pepsiman adapter selects the new profile; the original movie is unchanged.

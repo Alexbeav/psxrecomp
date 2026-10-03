@@ -652,6 +652,10 @@ if(BUILD_TESTING)
             --cc ${CMAKE_C_COMPILER})
     endif()
 
+    add_executable(mdec_source_fifo_rows_test ../runtime/tests/test_mdec_source_fifo_rows.c)
+    target_include_directories(mdec_source_fifo_rows_test PRIVATE ../runtime/include)
+    add_test(NAME mdec_source_fifo_rows_test COMMAND mdec_source_fifo_rows_test)
+
     add_executable(source_cpu_block_bound_test
         ../runtime/tests/test_source_cpu_block_bound.c
         ../runtime/src/psx_icache.c)
