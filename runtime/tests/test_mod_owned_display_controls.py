@@ -124,6 +124,7 @@ for reset in (
     "psx_mod_set_world_scene_predicate(nullptr);",
     "psx_mod_set_retained_scene_predicate(nullptr);",
     "psx_mod_set_adaptive_backdrop_preload(0);",
+    "(void)psx_mod_set_draw_distance_clamp(0);",
     "g_bezel_path.clear();",
     "g_frame_interpolation_blend = g_frame_interpolation_blend_default;",
     "g_frame_interpolation_source = PSX_MOD_FRAME_SOURCE_VBLANK;",

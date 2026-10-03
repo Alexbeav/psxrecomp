@@ -891,6 +891,70 @@ fs::path find_project_root(const fs::path& config_path) {
     return fallback;
 }
 
+bool draw_distance_clamp_reads(uint32_t instr, uint32_t reg) {
+    if (reg == 0u || reg > 31u) return false;
+    const uint32_t op = instr >> 26;
+    const uint32_t rs = (instr >> 21) & 31u;
+    const uint32_t rt = (instr >> 16) & 31u;
+    // ADDI, ADDIU, SLTI, SLTIU, ANDI, ORI, XORI read rs (LUI reads nothing).
+    if (op >= 0x08u && op <= 0x0Eu) return rs == reg;
+    if (op != 0x00u) return false;
+    const uint32_t funct = instr & 0x3Fu;
+    // SLL, SRL, SRA: rt. SLLV, SRLV, SRAV: rt and rs.
+    if (funct == 0x00u || funct == 0x02u || funct == 0x03u) return rt == reg;
+    if (funct == 0x04u || funct == 0x06u || funct == 0x07u)
+        return rs == reg || rt == reg;
+    // ADD, ADDU, SUB, SUBU, AND, OR, XOR, NOR, SLT, SLTU.
+    if (funct >= 0x20u && funct <= 0x2Bu && funct != 0x28u && funct != 0x29u)
+        return rs == reg || rt == reg;
+    return false;
+}
+
+// [[draw_distance.clamp]] (docs/config_schema.md "Draw-distance clamps").
+static std::vector<DrawDistanceClampSite> parse_draw_distance_clamps(
+    const toml::value& cfg, const fs::path& config_path) {
+    std::vector<DrawDistanceClampSite> sites;
+    if (!cfg.contains("draw_distance")) return sites;
+    const toml::value& dd = toml::find(cfg, "draw_distance");
+    if (!dd.contains("clamp")) return sites;
+    const auto& items = toml::find<toml::array>(dd, "clamp");
+    std::set<uint32_t> seen;
+    for (const auto& item : items) {
+        DrawDistanceClampSite site;
+        site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                 "draw_distance.clamp.address");
+        site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                  "draw_distance.clamp.expected");
+        const int64_t reg = toml::find<int64_t>(item, "reg");
+        const int64_t max = toml::find<int64_t>(item, "max");
+        if ((site.address & 3u) != 0u)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp address 0x{:08X} is not "
+                "instruction-aligned", config_path.string(), site.address));
+        if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+            throw std::runtime_error(fmt::format(
+                "{}: duplicate draw-distance clamp address 0x{:08X}",
+                config_path.string(), site.address));
+        if (reg < 1 || reg > 31)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: reg must be 1..31",
+                config_path.string(), site.address));
+        if (max < INT32_MIN || max > INT32_MAX)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: max is not a signed "
+                "32-bit value", config_path.string(), site.address));
+        site.reg = (uint32_t)reg;
+        site.max = (int32_t)max;
+        if (!draw_distance_clamp_reads(site.expected, site.reg))
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: expected 0x{:08X} must "
+                "be an ALU instruction that reads reg {}",
+                config_path.string(), site.address, site.expected, site.reg));
+        sites.push_back(site);
+    }
+    return sites;
+}
+
 // Derive the output filename stem from a rom basename. Mirrors the Python
 // audit_config.py logic: strip a trailing .BIN/.EXE (case-insensitive) but
 // preserve dotted names like "SCUS_942.36" unchanged.
@@ -2367,6 +2431,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     loaded.ws_cull_clip_edge_x_load_sites =
         std::move(ws_cull_clip_edge_x_load_sites);
     loaded.ws_cull_clip_edge_width = ws_cull_clip_edge_width;
+    loaded.draw_distance_clamp_sites =
+        parse_draw_distance_clamps(cfg, config_path);
     return loaded;
 }
 

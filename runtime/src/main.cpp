@@ -37,6 +37,7 @@
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
+#include "draw_distance.h"
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "interrupts.h"
@@ -1551,6 +1552,7 @@ static void reset_mod_owned_presentation(void) {
     psx_mod_set_world_scene_predicate(nullptr);
     psx_mod_set_retained_scene_predicate(nullptr);
     psx_mod_set_adaptive_backdrop_preload(0);
+    (void)psx_mod_set_draw_distance_clamp(0);
     g_bezel_path.clear();
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     g_frame_interpolation_source = PSX_MOD_FRAME_SOURCE_VBLANK;
@@ -13774,6 +13776,17 @@ int main(int argc, char** argv) {
                 }
                 gpu_ws_set_angle_sites(
                     addresses.data(), expected.data(), (int)addresses.size());
+            }
+            {
+                /* [[draw_distance.clamp]]: stored for the interpreter; the
+                 * switch stays off until a mod's activation turns it on. */
+                std::vector<PSXDrawDistanceClampSite> sites;
+                sites.reserve(gc.draw_distance_clamp_sites.size());
+                for (const auto& site : gc.draw_distance_clamp_sites)
+                    sites.push_back({site.address, site.expected, site.reg,
+                                     site.max});
+                (void)psx_draw_distance_set_clamp_sites(sites.data(),
+                                                        (int)sites.size());
             }
             {
                 std::vector<uint32_t> addresses, expected, thresholds;

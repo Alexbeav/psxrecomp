@@ -37,6 +37,7 @@
 #include "starvation_ring.h"
 #include "fntrace.h"  /* fntrace_is_game_started / fntrace_mark_game_started */
 #include "psx_segment_miss.h"  /* segment misses in static game code (§5.5) */
+#include "draw_distance.h"    /* [[draw_distance.clamp]] sites */
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -1526,6 +1527,22 @@ static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,
                            (ld_op >= 0x20u && ld_op <= 0x26u) &&
                            (ld_rt != 0u);
     const uint32_t ld_before = is_ld ? cpu->gpr[ld_rt] : 0u;
+
+    /* [[draw_distance.clamp]] (draw_distance.h): while a mod has the clamps
+     * on, a listed main-EXE site clamps its register before it runs, exactly
+     * as the generated code does. Captured overlay code keeps its own code,
+     * so only the game's text image qualifies. One load when off. */
+#ifdef PSX_HAS_GAME_DISPATCH
+    if (g_psx_draw_distance_clamp_live) {
+        const PSXDrawDistanceClampSite *dd =
+            psx_draw_distance_clamp_find(pc, insn);
+        if (dd && psx_game_address_in_text(pc)) {
+            cpu->gpr[dd->reg] =
+                psx_draw_distance_clamp_value(cpu->gpr[dd->reg], dd->max);
+            cpu->gpr[0] = 0;
+        }
+    }
+#endif
 
     const int rv = exec_one_fetched_inner(cpu, pc, insn, next_pc_out);
 
