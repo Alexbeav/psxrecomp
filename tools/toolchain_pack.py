@@ -35,6 +35,191 @@ _ASSET = {
 }
 
 
+# PSXRECOMP_TOOLCHAIN_READONLY=1: never delete, rename, prune or install a pack,
+# never move a pointer to one (latest, the project stamp) and never write the
+# user's login PATH. A pack that is there is still found and used. Tests and
+# gates that start a setup program or this CLI set it: on 2026-10-02 a setup
+# host started by a test installed a pack over a build host's own and emptied
+# it under running builds (PS1B-406, PS1B-410). host/psxrecomp_codegen_host.c
+# honours the same variable.
+READONLY_ENV = "PSXRECOMP_TOOLCHAIN_READONLY"
+
+
+def toolchain_readonly() -> bool:
+    value = os.environ.get(READONLY_ENV, "")
+    return bool(value) and not value.startswith("0")
+
+
+def _readonly_skip(what: str, path=None, log=None) -> bool:
+    """True under the switch, after saying what was left undone."""
+    if not toolchain_readonly():
+        return False
+    text = f"toolchain read-only ({READONLY_ENV}): not done: {what}" + (f": {path}" if path else "")
+    if log:
+        log(text)
+    else:
+        print(text, file=sys.stderr)
+    return True
+
+
+# The order of every change to an installed pack (PS1B-410). A pack that is in
+# use is never removed first: on 2026-10-02 an install over the installed tag
+# removed that pack before the new one was in place, under running builds; the
+# files that were open survived and the rest went.
+#
+#   - a new pack is unpacked beside the installed one and checked there;
+#   - the installed folder is then renamed aside (_set_aside). A folder with an
+#     open file cannot be renamed on Windows: the installed pack then stays and
+#     the new one is dropped;
+#   - the new pack takes the name, the pointer follows, the pack is checked
+#     again in its place, and only then the folder that was set aside is
+#     removed. A pack that fails in its place is taken out and the old one is
+#     put back. What cannot be removed whole stays under its dot-name (no
+#     lookup reads dot-names) and goes on a later pass;
+#   - a pack that fails its check is reported, never removed or renamed;
+#   - a folder that an interrupted install left set aside (its name is missing)
+#     is put back before any check of the pointers and before any prune
+#     (put_back_set_aside). A set-aside folder is removed only when its owner
+#     has ended and the folder it was taken from is there again.
+# host/psxrecomp_codegen_host.c follows the same order with the same names.
+ASIDE_PREFIX = ".old-"
+
+
+def _is_link(path: Path) -> bool:
+    """True for a symlink and for a Windows junction: a pointer, not a pack."""
+    try:
+        if path.is_symlink():
+            return True
+        os.readlink(path)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _remove_pointer(path: Path) -> bool:
+    """Remove a link itself. Never what it points at."""
+    for remove in (os.unlink, os.rmdir):
+        try:
+            remove(path)
+            return True
+        except OSError:
+            continue
+    return not (path.exists() or _is_link(path))
+
+
+# The system's error of the last rename aside that failed: winerror on Windows
+# (32 a file is open in another program, 5 access denied), errno elsewhere.
+_aside_error = 0
+
+
+def _set_aside(path: Path) -> Optional[Path]:
+    """Rename a folder to .old-<pid>[.<n>]-<name> beside it. None when it
+    cannot be renamed: nothing has changed then, and _aside_error holds the
+    system's error number."""
+    global _aside_error
+    for n in range(100):
+        aside = path.with_name("%s%d%s-%s" % (ASIDE_PREFIX, os.getpid(), ".%d" % n if n else "", path.name))
+        if aside.exists() or _is_link(aside):
+            continue
+        try:
+            os.rename(path, aside)
+            return aside
+        except OSError as exc:
+            _aside_error = int(getattr(exc, "winerror", None) or exc.errno or 0)
+            return None
+    return None
+
+
+def _aside_parse(name: str) -> Optional[tuple]:
+    """(owner's process id, the folder's own name) of ".old-<pid>[.<n>]-<name>", else None."""
+    m = re.match(r"^\.old-(\d+)(?:\.\d+)?-(.+)$", name)
+    return (int(m.group(1)), m.group(2)) if m else None
+
+
+def _process_is_running(pid: int) -> bool:
+    """Is another process with this id running? This process counts as not
+    running: what it set aside and did not put back is its own to handle."""
+    if pid == os.getpid():
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.GetLastError() == 5                   # there, and not ours to read
+        code = ctypes.c_ulong(0)
+        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel32.CloseHandle(handle)
+        return bool(ok) and code.value == 259                   # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _aside_fate(aside: Path) -> str:
+    """"leave": its owner is running (it may be in the middle of an install).
+    "put back": the folder it was taken from is missing; an install was
+    interrupted and the whole old pack is in it. "remove": the replacement is
+    in place and nobody needs it."""
+    parsed = _aside_parse(aside.name)
+    if parsed is None or _process_is_running(parsed[0]):
+        return "leave"
+    target = aside.with_name(parsed[1])
+    return "remove" if (target.exists() or _is_link(target)) else "put back"
+
+
+def put_back_set_aside(log=None) -> None:
+    """Put back, in every cache base, the packs an interrupted install left set
+    aside. Nothing reads a dot-name, so without this the pack is lost to every
+    lookup and removed by the next prune."""
+    for base in shared_cache_roots():
+        try:
+            asides = [c for c in base.iterdir() if c.name.startswith(ASIDE_PREFIX)]
+        except OSError:
+            continue
+        for aside in asides:
+            if _aside_fate(aside) != "put back" or not pack_root_looks_usable(aside):
+                continue
+            if _readonly_skip("put back a pack an interrupted install left set aside", aside, log):
+                continue
+            target = aside.with_name(_aside_parse(aside.name)[1])
+            try:
+                os.rename(aside, target)
+                if log:
+                    log(f"An install was interrupted; the toolchain pack it had set aside is put back: {target}")
+            except OSError as exc:
+                if log:
+                    log(f"Could not put back the toolchain pack {aside}: {exc}")
+
+
+def _remove_aside(aside: Optional[Path], log=None) -> bool:
+    """Remove a folder that was set aside. True when it is gone whole."""
+    if aside is None:
+        return True
+    shutil.rmtree(aside, ignore_errors=True)
+    gone = not aside.exists()
+    if not gone and log:
+        log(f"Could not remove the old toolchain folder {aside}; it is out of use and goes on a later pass.")
+    return gone
+
+
+def _remove_old_asides(cache_root: Path, log=None) -> None:
+    """Set-aside folders nobody needs: the owner has ended and the folder it
+    was taken from is there again. Another program's folder stays."""
+    try:
+        children = [c for c in cache_root.iterdir() if c.name.startswith(ASIDE_PREFIX)]
+    except OSError:
+        return
+    for child in children:
+        if _aside_fate(child) == "remove":
+            _remove_aside(child, log)
+
+
 def sys_platform_is_windows() -> bool:
     return sys.platform == "win32"
 
@@ -99,12 +284,95 @@ def toolchain_bin_runs(bin_dir: Path, log=None) -> bool:
     return proc.returncode == 0
 
 
+def toolchain_bin_check(bin_dir: Path, log=None) -> str:
+    """The setup host's check of a pack (toolchain_bin_is_healthy), step by
+    step. "" when the pack passes, else the step that failed:
+
+      cmake does not run / clang or the linker is missing from the pack /
+      clang does not run / a test file could not be written to the temporary
+      folder / a one-line test program did not compile and link.
+
+    A new pack is checked with this before and after it is installed, so the
+    CLI and the setup host accept and refuse the same packs. (The lookup of a
+    pack that is already installed keeps toolchain_bin_runs: cmake --version.)
+    """
+    windows = sys_platform_is_windows()
+    exe = ".exe" if windows else ""
+    if not toolchain_bin_runs(bin_dir, log=log):
+        return "cmake does not run"
+    clang = bin_dir / ("clang" + exe)
+    linkers = [bin_dir / ("ld.lld" + exe)] + ([bin_dir / "lld.exe"] if windows else [])
+    if not clang.is_file():
+        # The macOS pack ships cmake, ninja, ccache and python only; compiling
+        # uses Apple's command line tools. No clang is its normal layout.
+        return "" if sys.platform == "darwin" else "clang or the linker is missing from the pack"
+    if not any(l.is_file() for l in linkers):
+        return "clang or the linker is missing from the pack"
+    env = dict(os.environ)
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    try:
+        ran = subprocess.run([str(clang), "--version"], capture_output=True, timeout=60, check=False, env=env)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return "clang does not run"
+    if ran.returncode != 0:
+        return "clang does not run"
+    try:
+        work = Path(tempfile.mkdtemp(prefix="psxrecomp-tc-probe-"))
+        (work / "probe.c").write_text("int main(void){return 0;}\n", encoding="utf-8")
+    except OSError:
+        return "a test file could not be written to the temporary folder"
+    try:
+        command = [str(clang)] + ([] if windows else ["-fuse-ld=lld"]) + [str(work / "probe.c"), "-o", str(work / ("probe" + exe))]
+        try:
+            built = subprocess.run(command, capture_output=True, timeout=180, check=False, env=env)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return "a one-line test program did not compile and link"
+        if built.returncode != 0:
+            if log:
+                tail = (built.stderr or built.stdout or b"").decode("utf-8", errors="replace").strip().splitlines()
+                log("Toolchain compile check failed: %s" % (tail[-1] if tail else "exit %d" % built.returncode))
+            return "a one-line test program did not compile and link"
+        return ""
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+class ToolchainRefused(RuntimeError):
+    """An install that stopped with one of the sentences a player reads. The
+    exception's text is the whole sentence: a caller prints it alone, with no
+    label in front and no exception name."""
+
+
+def _new_pack_failed_text(step: str) -> str:
+    """What a player reads when a new pack fails its check. The same sentence
+    in host/psxrecomp_codegen_host.c."""
+    return ("The new toolchain pack did not pass its check: %s. "
+            "The installed toolchain was not changed." % step)
+
+
+def _rename_failed_text(error: int) -> str:
+    """What a player reads when the installed folder cannot be renamed aside.
+    The same sentence in host/psxrecomp_codegen_host.c."""
+    if sys_platform_is_windows() and error == 32:
+        return ("A file of the installed toolchain is open in another program "
+                "(Windows error 32). The toolchain was not changed. Close the "
+                "programs that use it, for example a running build, and try again.")
+    if sys_platform_is_windows() and error == 5:
+        return ("Windows refused to rename the installed toolchain folder (error "
+                "5, access denied). The toolchain was not changed. A file in it "
+                "may be open in another program, or the folder may be protected.")
+    return ("The installed toolchain folder could not be renamed (system error "
+            "%d). The toolchain was not changed." % error)
+
+
 def clear_project_toolchain_stamp(project_root: Optional[Path]) -> None:
     if project_root is None:
         return
     stamp = project_root / "toolchain" / STAMP_NAME
     try:
         if stamp.is_file():
+            if _readonly_skip("remove the project's toolchain stamp", stamp):
+                return
             stamp.unlink()
     except OSError:
         pass
@@ -126,6 +394,9 @@ def prune_old_toolchain_tags(keep_pack: Path, log=None) -> int:
         return 0
     if not (_paths_equal(keep, cache_root) or _is_under(keep, cache_root)):
         return 0
+    if _readonly_skip("prune older toolchain installs", cache_root, log):
+        return 0
+    put_back_set_aside(log)     # a pack an interrupted install left aside is not pruned
     removed = 0
     try:
         children = list(cache_root.iterdir())
@@ -148,29 +419,38 @@ def prune_old_toolchain_tags(keep_pack: Path, log=None) -> int:
             continue
         if log:
             log(f"Removing old toolchain install: {child}")
-        try:
-            if child.is_symlink() or child.is_file():
-                child.unlink(missing_ok=True)
-            else:
-                shutil.rmtree(child, ignore_errors=True)
-            removed += 1
-        except OSError as exc:
+        if _is_link(child) or child.is_file():
+            if _remove_pointer(child):
+                removed += 1
+            continue
+        # Out of use first, then removed: a folder with an open file cannot be
+        # renamed on Windows, and is then left whole instead of half removed.
+        aside = _set_aside(child)
+        if aside is None:
             if log:
-                log(f"Could not remove old toolchain {child}: {exc}")
+                log(f"Old toolchain {child} is in use by another program; kept.")
+            continue
+        _remove_aside(aside, log)
+        removed += 1
+    _remove_old_asides(cache_root, log)
     return removed
 
 
 def heal_broken_toolchain_pointers(log=None) -> None:
-    """Remove unusable ``latest`` pointers so ensure can reinstall cleanly.
+    """Remove ``latest`` pointers that point at nothing.
 
-    Does not delete versioned ``<tag>/`` packs — only broken ``latest``
-    symlinks/directories that lack a runnable bin/cmake. Sibling tags are
-    pruned after a successful install via ``prune_old_toolchain_tags``.
+    Only a link whose target has no bin/cmake is removed, and only the link.
+    A ``latest`` that is a real folder is a pack: it is never removed here,
+    and neither is a pack whose cmake does not run. One failed check is not
+    proof that a pack is broken (the check can fail for reasons outside the
+    pack), and the pack may be in use by a running build. The install that
+    follows replaces it in the safe order.
     """
+    put_back_set_aside(log)     # first: a pack an interrupted install left aside
     for base in shared_cache_roots():
         latest = base / "latest"
         try:
-            present = latest.exists() or latest.is_symlink()
+            present = latest.exists() or _is_link(latest)
         except OSError:
             present = False
         if not present:
@@ -178,18 +458,16 @@ def heal_broken_toolchain_pointers(log=None) -> None:
         root = unwrap_pack_root(latest)
         if pack_root_looks_usable(root) and toolchain_bin_runs(root / "bin"):
             continue
-        if log:
-            log(f"Removing broken toolchain pointer: {latest}")
-        try:
-            if latest.is_symlink() or latest.is_file():
-                latest.unlink(missing_ok=True)
-            elif latest.is_dir():
-                shutil.rmtree(latest, ignore_errors=True)
-            else:
-                latest.unlink(missing_ok=True)
-        except OSError as exc:
+        if not _is_link(latest) or pack_root_looks_usable(root):
             if log:
-                log(f"Could not remove broken toolchain pointer: {exc}")
+                log(f"Toolchain at {latest} did not pass its check; it was not removed.")
+            continue
+        if _readonly_skip("remove a latest pointer that points at nothing", latest, log):
+            continue
+        if log:
+            log(f"Removing toolchain pointer that points at nothing: {latest}")
+        if not _remove_pointer(latest) and log:
+            log(f"Could not remove toolchain pointer: {latest}")
 
 
 def unwrap_pack_root(path: Path) -> Path:
@@ -426,14 +704,29 @@ def migrate_legacy_psxrecomp_cache(log=None) -> None:
     if src == unwrap_pack_root(legacy):
         tag = "latest"
     dest = retcomm / tag
+    if _readonly_skip("promote the legacy toolchain cache", dest, log):
+        return
+    aside = None
     try:
         retcomm.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
-            shutil.rmtree(dest, ignore_errors=True)
+        if _is_link(dest):
+            _remove_pointer(dest)
+        elif dest.exists():
+            aside = _set_aside(dest)
+            if aside is None:
+                if log:
+                    log(f"Could not migrate legacy toolchain cache: {dest} is in use.")
+                return
         shutil.copytree(src, dest)
+        _remove_aside(aside, log)
         if log:
             log(f"Migrated toolchain cache {src} -> {dest}")
     except OSError as exc:
+        if aside is not None and not dest.exists():
+            try:
+                os.rename(aside, dest)
+            except OSError:
+                pass
         if log:
             log(f"Could not migrate legacy toolchain cache: {exc}")
 
@@ -455,6 +748,8 @@ def is_windows_store_python() -> bool:
 def write_toolchain_stamp(project_root: Path, bin_dir: Path) -> None:
     """Write project_root/toolchain/.psxrecomp-bin for the C host to read."""
     stamp_dir = project_root / "toolchain"
+    if _readonly_skip("write the project's toolchain stamp", stamp_dir):
+        return
     try:
         stamp_dir.mkdir(parents=True, exist_ok=True)
         (stamp_dir / STAMP_NAME).write_text(
@@ -686,15 +981,30 @@ def _set_latest_pointer(cache_root: Path, pack_root: Path) -> Path:
             unwrap_pack_root(latest)
         ) else root
 
-    if latest.exists() or latest.is_symlink():
-        if latest.is_dir() and not latest.is_symlink():
-            shutil.rmtree(latest, ignore_errors=True)
-        else:
-            latest.unlink(missing_ok=True)
+    if _readonly_skip("move the latest pointer", latest):
+        return unwrap_pack_root(latest) if pack_root_looks_usable(unwrap_pack_root(latest)) else root
+    aside = None
+    if _is_link(latest):
+        _remove_pointer(latest)
+    elif latest.is_dir():
+        # A real folder: an older layout's pack, or the copy made below when a
+        # link could not be made. Out of use first, removed after the new
+        # pointer is there; a folder in use stays, and so does the pointer.
+        aside = _set_aside(latest)
+        if aside is None:
+            return unwrap_pack_root(latest) if pack_root_looks_usable(unwrap_pack_root(latest)) else root
+    elif latest.exists():
+        latest.unlink(missing_ok=True)
     try:
-        latest.symlink_to(root, target_is_directory=True)
+        try:
+            latest.symlink_to(root, target_is_directory=True)
+        except OSError:
+            shutil.copytree(root, latest)
     except OSError:
-        shutil.copytree(root, latest)
+        if aside is not None and not latest.exists():
+            os.rename(aside, latest)
+        raise
+    _remove_aside(aside)
     return latest
 
 
@@ -801,6 +1111,9 @@ def register_toolchain_user_env(pack_root: Path, log=None) -> Path:
     root = unwrap_pack_root(pack_root)
     if not pack_root_looks_usable(root):
         raise RuntimeError(f"toolchain pack unusable for PATH register: {pack_root}")
+    if _readonly_skip("refresh the latest pointer and the user's login PATH", root, log):
+        activate_toolchain_bin(root / "bin", log=None)     # this process only
+        return root
     cache_root = preferred_install_root()
     cache_root.mkdir(parents=True, exist_ok=True)
     try:
@@ -880,27 +1193,80 @@ def install_from_zip(
     zip_path = zip_path.expanduser().resolve()
     if not zip_path.is_file():
         raise FileNotFoundError(f"toolchain zip not found: {zip_path}")
-    staging = preferred_install_root() / ".staging-offline"
+    if _readonly_skip("install a toolchain pack", zip_path, log):
+        raise RuntimeError(
+            f"The toolchain is read-only for this start ({READONLY_ENV}). Nothing was installed."
+        )
+    put_back_set_aside(log)     # a pack an interrupted install left aside, before anything else
+    cache_root = preferred_install_root()
+    staging = cache_root / ".staging-offline"
     root = unpack_zip_to(zip_path, staging)
     if not pack_satisfies_min(root, min_version):
         need = min_version or default_min_version()
         have = read_pack_version(root) or "(unknown)"
+        shutil.rmtree(staging, ignore_errors=True)
         raise RuntimeError(
             f"Toolchain zip version {have} does not meet min_version {need}."
         )
+    # 1. The new pack is checked where it was unpacked, before the installed
+    #    one is touched. The same steps as the setup host's check.
+    step = toolchain_bin_check(root / "bin", log=log)
+    if step:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise ToolchainRefused(_new_pack_failed_text(step))
     dest_tag = _install_tag_for_root(root, tag)
-    dest = preferred_install_root() / dest_tag
-    if dest.resolve() != root.resolve():
-        if dest.exists():
+    dest = cache_root / dest_tag
+    aside = None
+    moved = dest.resolve() != root.resolve()
+    if moved:
+        # 2. The installed folder of this tag goes out of use by a rename.
+        if _is_link(dest):
+            _remove_pointer(dest)
+        elif dest.exists():
+            aside = _set_aside(dest)
+            if aside is None:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise ToolchainRefused(_rename_failed_text(_aside_error))
+        # 3. The new pack takes the name.
+        try:
+            shutil.move(str(root), str(dest))
+        except OSError:
+            # Put the installed pack back under its name.
             shutil.rmtree(dest, ignore_errors=True)
-        shutil.move(str(root), str(dest))
+            if aside is not None and not dest.exists():
+                os.rename(aside, dest)
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         root = unwrap_pack_root(dest)
         # Drop empty staging parent left behind by a nested unzip layout.
         if staging.exists() and staging != dest:
             shutil.rmtree(staging, ignore_errors=True)
-    # latest pointer + idempotent user login PATH (same as zip install.sh).
+    # 4. The pointer follows, and the pack is checked again in its place.
+    try:
+        _set_latest_pointer(cache_root, root)
+    except OSError as exc:
+        if log:
+            log(f"Could not refresh latest pointer: {exc}")
+    step = toolchain_bin_check(root / "bin", log=log)
+    if step:
+        # It passed where it was unpacked and fails in its place: the new pack
+        # is taken out and the pack that was installed goes back under its name.
+        if moved:
+            shutil.rmtree(dest, ignore_errors=True)
+            if aside is not None and not dest.exists():
+                try:
+                    os.rename(aside, dest)
+                    _set_latest_pointer(cache_root, unwrap_pack_root(dest))
+                except OSError as exc:
+                    if log:
+                        log(f"Could not put the installed toolchain back: {exc}")
+            elif _is_link(cache_root / "latest") and not pack_root_looks_usable(unwrap_pack_root(cache_root / "latest")):
+                _remove_pointer(cache_root / "latest")
+        raise ToolchainRefused(_new_pack_failed_text(step))
+    # 5. Only now the folder that was set aside is removed, the user's login
+    #    PATH is written (same as zip install.sh) and older tags are pruned.
+    _remove_aside(aside, log)
     register_toolchain_user_env(root, log=log)
-    # Drop prior versioned <tag>/ installs now that the new pack is active.
     prune_old_toolchain_tags(root, log=log)
     if project_root is not None:
         return materialize_into_project(project_root, root, log=log)
@@ -935,6 +1301,10 @@ def download_latest_pack(
     asset = _ASSET.get(art)
     if not asset:
         raise RuntimeError(f"unknown toolchain artifact: {art}")
+    if _readonly_skip("download a toolchain pack", asset, log):
+        raise RuntimeError(
+            f"The toolchain is read-only for this start ({READONLY_ENV}). Nothing was downloaded."
+        )
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     url = f"https://github.com/{repo}/releases/latest/download/{asset}"
     if log:

@@ -201,10 +201,111 @@ GitHub `/releases/latest` and, when newer, prompts **Update** or **Skip for now*
   latest (update path); `download == 1` fetches only if missing; `0` is cache-only.
 - Set `RETCOMM_TOOLCHAIN_SKIP_UPDATE=1` to disable the remote newer-than-local check.
 
-### Broken toolchain heal (wizard open)
+### A toolchain that fails its check (wizard open)
 
 `toolchain_is_ready` does not stop at `cmake --version`. It also smoke-tests
 `clang` + `ld.lld` (tiny link). If that fails (missing `libicuuc.so.*`, bad
-`latest/` pointer, etc.), the host removes the broken `latest/` cache entry,
-clears `toolchain/.psxrecomp-bin`, and re-opens wizard page 0 with a repair note
-so the player can redownload — without deleting the cache by hand.
+`latest/` pointer, etc.), the host passes that pack over for the rest of the
+process, clears `toolchain/.psxrecomp-bin`, and re-opens wizard page 0 with a
+repair note so the player can redownload.
+
+The pack that failed is **not removed and not renamed**. One failed check is not
+proof that a pack is broken (the check can fail for a reason outside the pack),
+and the pack may be in use by a build that is running. Only a `latest` link that
+points at nothing is removed, and only the link.
+
+The check does not depend on the length of `PATH`. Until PS1B-410 the compile
+step expanded `%PATH%` inside a `cmd` line, which holds 8,191 characters: with a
+`PATH` over about 7,600 characters a whole pack was judged unusable. The child
+now gets its `PATH` through the process environment. Activating a pack puts its
+folders at the head of `PATH` once and takes their other copies out, so a host
+that starts itself again does not grow `PATH`. At the limit of one variable
+(32,767 characters) Windows cannot start a child at all: the pack is then
+reported not ready, and nothing is removed.
+
+### The order of an install (setup host and `ensure-toolchain`)
+
+The setup host (`host/psxrecomp_codegen_host.c`) and the CLI
+(`tools/toolchain_pack.py`) install a pack in the same order:
+
+1. The zip is unpacked into a staging folder beside the installed packs.
+2. The new pack is checked there, by the same steps in both installers: cmake
+   runs, clang and the linker are in the pack, clang runs, a test file can be
+   written to the temporary folder, a one-line program compiles and links. A
+   pack that fails is dropped; nothing that was installed has been touched.
+3. The installed folder of that tag, if there is one, is renamed aside
+   (`.old-<pid>-<tag>`). When the rename fails the installed pack stays whole,
+   the new pack is dropped, and the message gives the system's error.
+4. The new pack takes the tag's name, `latest` follows, and the pack is checked
+   again in its place. A pack that fails there is taken out and the old one is
+   put back under its name.
+5. Only then the folder that was set aside is removed, the project stamp is
+   written (the CLI also writes the user's login PATH), and the older tags are
+   removed. What cannot be removed whole stays under its dot-name, which no
+   lookup reads, and is removed on a later pass.
+
+An install that is ended between step 3 and step 4 leaves the whole old pack
+under `.old-<pid>-<tag>` and no folder under the tag's name. Both installers
+put such a folder back before they check a pointer, install or prune. A prune
+removes a set-aside folder only when the program that made it has ended and
+the tag is there again; another running program's folder stays.
+
+Before this order (PS1B-410) an install over the installed tag removed that
+folder first. With builds running from it, the files they held open survived
+and the rest went.
+
+**The limit of "a pack in use" (PS1B-416).** What keeps an installer from
+taking a pack away from a build is one fact: a folder with an open file cannot
+be renamed. That is a Windows rule, and it holds only while a file is open.
+On Linux and macOS a rename always succeeds: an install over the installed
+tag, and the prune of an older tag, take the folder away from a running build
+there. On Windows a build between two compiler runs holds no file in the pack,
+and a prune can remove the older tag it uses.
+
+### What the player reads
+
+Each sentence says only what the program knows.
+
+- A pack that is installed fails its check (setup host): "The portable
+  toolchain did not pass its check: `<step>`. It was not removed. Download the
+  latest pack to replace it."
+- A new pack fails its check, where it was unpacked or in its place (setup host
+  and CLI): "The new toolchain pack did not pass its check: `<step>`. The
+  installed toolchain was not changed."
+- The installed folder cannot be renamed aside (setup host and CLI), by the
+  system's error. Windows error 32: "A file of the installed toolchain is open
+  in another program (Windows error 32). The toolchain was not changed. Close
+  the programs that use it, for example a running build, and try again."
+  Windows error 5: "Windows refused to rename the installed toolchain folder
+  (error 5, access denied). The toolchain was not changed. A file in it may be
+  open in another program, or the folder may be protected." Any other error:
+  "The installed toolchain folder could not be renamed (system error
+  `<number>`). The toolchain was not changed."
+
+`<step>` is the step of the check that failed: "cmake does not run", "clang or
+the linker is missing from the pack", "clang does not run", "a test file could
+not be written to the temporary folder", "a one-line test program did not
+compile and link". The test file goes to the system's temporary folder: `TMP`
+or `TEMP` on Windows, `TMPDIR` on Linux and macOS when it is set, `/tmp`
+otherwise.
+
+On Windows a rename of the folder fails with error 5 when a file in it is open
+or a program has its working folder there, and with error 32 when a program
+holds the folder itself open.
+
+### `PSXRECOMP_TOOLCHAIN_READONLY=1`
+
+With this variable set, the setup host and the CLI never delete, rename, prune
+or install a pack, never move a pointer to one (`latest`, the project's
+`toolchain/` link and stamp), and the CLI does not write the user's login PATH.
+A pack that is there is still found and used. Each step that was left undone is
+named on stderr. A test or a gate that starts a setup program or the CLI sets
+it, and gives the program its own toolchain and data folders as well.
+
+The switch covers what the setup host and the CLI do themselves. It does not
+stop a program that runs from the pack from writing into the pack's folder.
+Seen on Pegasus on 2026-10-02: a Generate press leaves two `.pyc` files in the
+toolchain folder it is given, written by the Python that the build runs. The
+switch does not prevent them; a start with the switch set was not looked at for
+this. A test that must find its toolchain folder unchanged compares it without
+`__pycache__` folders, or gives the build `PYTHONDONTWRITEBYTECODE=1`.

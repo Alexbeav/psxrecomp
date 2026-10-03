@@ -32,6 +32,7 @@ from sdk_progress import ProgressReporter  # noqa: E402
 from disc_companion import CompanionError, inspect_companion  # noqa: E402
 import psx_chd  # noqa: E402
 from toolchain_pack import (  # noqa: E402
+    ToolchainRefused,
     ensure_toolchain as _ensure_toolchain_pack,
     resolve_toolchain_bin,
     toolchain_bin_runs,
@@ -125,6 +126,11 @@ def ensure_toolchain_for_rebuild(
             min_version=min_version,
             log=progress.log,
         )
+    except ToolchainRefused as exc:
+        # One of the sentences a player reads (the setup window shows this
+        # line): the sentence alone.
+        progress.log(str(exc))
+        return False
     except Exception as exc:  # noqa: BLE001 — surface to progress UI
         progress.log(f"Toolchain ensure: {exc}")
         return False

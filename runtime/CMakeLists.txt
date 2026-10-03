@@ -1449,6 +1449,33 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         # not "Passed".
         set_tests_properties(codegen_host_handover_launcher_test PROPERTIES
                  SKIP_RETURN_CODE 77)
+        # PS1B-410: with PSXRECOMP_TOOLCHAIN_READONLY=1 neither the setup host
+        # nor the CLI changes a toolchain pack or a pointer to one. The test
+        # works on a made-up cache in its own closed environment.
+        add_test(NAME toolchain_readonly_switch_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_readonly_switch.py
+                         --compiler ${CMAKE_C_COMPILER})
+        # PS1B-410: an installed pack is never removed before its replacement
+        # is in place, and a failed check removes nothing.
+        add_test(NAME toolchain_safe_install_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_safe_install.py
+                         --compiler ${CMAKE_C_COMPILER})
+        # PS1B-410: the toolchain check does not depend on the length of PATH
+        # (it failed past about 7,600 characters), and activating a pack does
+        # not grow PATH.
+        add_test(NAME toolchain_path_length_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_path_length.py
+                         --compiler ${CMAKE_C_COMPILER})
+        # PS1B-410: the sentences a player reads when the toolchain check or an
+        # install fails name the step that failed and the system's error.
+        add_test(NAME toolchain_sentences_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_sentences.py
+                         --compiler ${CMAKE_C_COMPILER})
+        set_tests_properties(toolchain_sentences_test PROPERTIES SKIP_RETURN_CODE 77)
         # Setup-wizard disc probing (multi-disc roster). Never registered
         # before: a .chd set was rejected and nothing ran to notice.
         add_test(NAME probe_disc_test
