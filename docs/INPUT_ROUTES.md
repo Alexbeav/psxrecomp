@@ -91,8 +91,11 @@ PSX_INPUT_ROUTE_FILE=boot-to-menu.psxrti PSX_INPUT_ROUTE_CAPTURE_DIR=shots PSX_I
   with a run without the folder (its marker lines and exit status), and take
   the pictures in a second run. To write a picture the product copies the
   renderer's frame buffer into the CPU copy of video memory earlier than the
-  game would cause it. No run has yet shown that a route's marker hashes are
-  equal with and without the folder (PS1B-404).
+  game would cause it. One run shows equal marker lines with and without the
+  folder: Kula World (Europe), 3,600 frames, started plain, with pictures
+  and plain again on one Windows host (PS1B-404, evidence folder
+  `pegasus-marker-equality-kula-world-20261003`). The other renderer and a
+  24-bit movie are not shown, so the rule stays.
 - Status 0 means the pictures were written. It does not mean the markers
   matched: without `PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS=1` a marker mismatch
   is printed and the run still ends with 0.
