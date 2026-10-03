@@ -1002,13 +1002,14 @@ static uint32_t source_clock_random(uint32_t maximum) {
     s_source_clock_calls++;
     return value;
 }
-/* PS1B-424-STUB helper: remove it with the last stub. */
-static int cdrom_ps1b424_stub(const char *rows) {
-    fprintf(stderr,"[CDROM] PS1B-424 stub reached: spec %s\n",rows);abort();return 0;
-}
-/* PS1B-424-STUB [spec 14.4 Q6]: the whole body. */
+/* Spec 14.4 Q6: the port takes a new response when no interrupt flag is set
+ * and, with the source clock on, the wait after the last acknowledge is over
+ * (s_source_ready_due; 0 means no wait). Without the source clock only the
+ * flag counts. */
 static int source_clock_receive_ready(void) {
-    return cdrom_ps1b424_stub("14.4 Q6");
+    if (irq_flag != 0) return 0;
+    if (s_source_clock && psx_cycle_count < s_source_ready_due) return 0;
+    return 1;
 }
 static int source_boot_model(const char *name) {
     const char *value=getenv(name);
@@ -1058,8 +1059,8 @@ static void set_irq(int type) {
      */
     cdrom_irq_present_due = (type == CDIRQ_DATA_READY || s_source_clock) ? psx_cycle_count
         : psx_cycle_count + (uint64_t)CDROM_IRQ_PRESENT_DELAY;
-    /* PS1B-424-STUB [spec 14.4 Q7] */
-    if (s_source_clock) cdrom_ps1b424_stub("14.4 Q7");
+    /* Spec 14.4 Q7: a raised interrupt ends the wait of Q8. */
+    if (s_source_clock) s_source_ready_due = 0;
     trace_cdrom('I', 0, (uint32_t)type, 0);
     /* DEQUEUE: CD response/data event fired (aux = CD irq type). */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_CD_IRQ, (uint32_t)type);
@@ -2420,9 +2421,29 @@ static void cd_bisect_cmd_log(const char *kind, uint8_t cmd,
 
 static void try_execute_queued_command(void) {
     if (!queued_cmd.pending || irq_flag != 0) return;
-    /* PS1B-424-STUB [spec 14.3 Q3-Q5]: with the source clock on, the reception
-     * steps come here, before the kept execution below. */
-    if(s_source_clock) cdrom_ps1b424_stub("14.3 Q3-Q5");
+    if (s_source_clock) {
+        /* Spec 14.3 Q3: nothing happens before the step is due, nor while the
+         * port is not ready (14.4). The queued command and the interrupt flag
+         * are tested above. */
+        if (psx_cycle_count < s_source_command_due || !source_clock_receive_ready()) return;
+        /* Spec 14.3 Q4: one step for each call. An argument is taken, with
+         * the next step 1,815 cycles after this cycle; or, with none left,
+         * the command may execute 8,500 cycles after this cycle. Both times
+         * count from the current cycle, not from the time the step was due
+         * [UNIT: cdrom_c_fixture_replay_tekken_test, _pepsiman_test]. */
+        if (s_source_command_phase < 1) {
+            if (s_source_args_remaining > 0) {
+                s_source_args_remaining--;
+                s_source_command_phase = 0;
+                s_source_command_due = psx_cycle_count + 1815u;
+            } else {
+                s_source_command_phase = 1;
+                s_source_command_due = psx_cycle_count + 8500u;
+            }
+            return;
+        }
+        /* Spec 14.3 Q5: in phase 1 the command executes below. */
+    }
 
     uint8_t cmd = queued_cmd.cmd;
     int count = queued_cmd.param_count;
@@ -2453,8 +2474,13 @@ static void queue_or_exec_command(uint8_t cmd) {
         if(cmd==0x03 && !source_cdda.enabled) {
             fprintf(stderr,"[CDROM] Source clock CDDA Play seek is not qualified\n");exit(2);
         }
-        /* PS1B-424-STUB [spec 14.2 Q2]: the start of the reception. */
-        cdrom_ps1b424_stub("14.2 Q2");
+        /* Spec 14.2 Q2: the write starts the reception. The first step is
+         * due 12,315 cycles after this cycle plus one draw in [0, 3,000],
+         * taken here, one for each command write [UNIT:
+         * cdrom_c_fixture_replay_tekken_test, _pepsiman_test]. */
+        s_source_command_phase = -1;
+        s_source_args_remaining = param_count;
+        s_source_command_due = psx_cycle_count + 12315u + source_clock_random(3000);
         queued_cmd.cmd=cmd;queued_cmd.param_count=param_count;queued_cmd.pending=1;
         memcpy(queued_cmd.params,param_fifo,(size_t)param_count);
         pending.pending=0; /* Source reception replaces an outstanding second response. */
@@ -2894,8 +2920,23 @@ static void exec_command(uint8_t cmd) {
                 fprintf(stderr,"[CDROM] Source reset from an active stream is not qualified\n");exit(2);
             }
             /* Empty/paused stream is the qualified source scope.
-             * PS1B-424-STUB [spec 14.5 J2-J4] */
-            cdrom_ps1b424_stub("14.5 J2-J4");
+             * Spec 14.5 J2: the acknowledge (PSX-SPX "Init - Command 0Ah":
+             * INT3, then INT2) carries the status from before the command
+             * [UNIT: cdrom_c_fixture_replay_tekken_test, _pepsiman_test;
+             * C1-C9 row 9]. Every Init on this path gets it, also one that
+             * comes while a reset is running. */
+            response_push(stat_reg);
+            set_irq(CDIRQ_ACK);
+            /* Spec 14.5 J3: the reset completes 1,136,000 cycles after this
+             * cycle (the oracle's completion comes 1,135,976 cycles after its
+             * acknowledge, C1-C9 row 9), and the status becomes the motor bit
+             * alone with a disc, the shell-open bit alone without one.
+             * J4: an Init during a running reset changes neither. J5: the
+             * completion is process_source_reset. */
+            if (!s_source_reset_due) {
+                s_source_reset_due = psx_cycle_count + 1136000u;
+                stat_reg = has_disc() ? CDSTAT_MOTOR : CDSTAT_SHELL;
+            }
             break;
         }
         stop_read_stream();
@@ -3954,8 +3995,9 @@ void cdrom_write(uint32_t addr, uint32_t value) {
             if (had_active_irq && (irq_flag & 0x1F) == 0) {
                 cdrom_intc_request_latched = 0;
                 present_lid_open_irq_if_ready();
-                /* PS1B-424-STUB [spec 14.4 Q8] */
-                if(s_source_clock)cdrom_ps1b424_stub("14.4 Q8");
+                /* Spec 14.4 Q8: after the acknowledge that clears the last
+                 * flag bit, the port is ready again 2,000 cycles later. */
+                if(s_source_clock)s_source_ready_due=psx_cycle_count+2000u;
             }
             if (val & 0x40) {
                 param_count = 0;
