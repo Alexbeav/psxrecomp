@@ -1874,7 +1874,7 @@ irq_deliver_eval:
         /* The existing cache/cycle model fetches the interrupted opcode before
          * selecting the interrupt operation. Preserve that fetch's tags and
          * load-absorb effects, but never execute its register/store effects.
-         * Authored original-core IRQ/JR/RFE cases own this source-model order;
+         * Authored guest IRQ/JR/RFE cases run on the oracle pin this order;
          * it is not a claim of physical pipeline timing. Unknown legacy entry
          * sentinels have no guest fetch identity and retain their old behavior.
          * Keep this before SR/EPC mutation and before the delivery timestamp. */
@@ -2011,7 +2011,7 @@ irq_deliver_eval:
         source_irq_slot.pc=0; /* nested handler entries have their own context */
     } else {
         extern int source_gpu_runtime_active(void);
-        /* Original Exception derives CE from the fetched opcode for IRQ too.
+        /* In the source profile CAUSE.CE comes from the fetched opcode at an IRQ too.
          * This is source-model compatibility, not a physical-CPU CE claim. */
         if(source_gpu_runtime_active())
             cpu->cop0[COP0_CAUSE]=(cpu->cop0[COP0_CAUSE]&0x0000ff00u)|source_irq_cause_ce;
@@ -2499,7 +2499,7 @@ irq_deliver_eval:
      * hundreds of sub-dispatches per invocation. */
     extern int source_gpu_runtime_active(void);
     if (source_gpu_runtime_active()) {
-        /* The original instruction loop recognizes an eligible IRQ again after
+        /* In the source profile an eligible IRQ is taken again right after
          * guest RFE, including a newly armed or still-pending line. Legacy
          * dispatcher breathing room must not add guest clocks to this profile. */
         post_exception_cooldown_until = 0;
