@@ -6,6 +6,11 @@ as far as its own decisions about the set: which set file it accepts, which
 source trees it refuses, and that a valid set gets past them. The staging rules
 that follow are checked in the script's text. A single-program package must
 not change: the lines it depends on are asserted too.
+
+With --zip-part it runs only the packager's last step, the zip, under a shell
+that has a zip tool, and exits 77 with a SKIP line when no shell here has one.
+ctest registers that as package_setup_program_set_zip, so a host without zip
+shows the step as skipped, by name, instead of passing without it (PS1B-397).
 """
 from __future__ import annotations
 
@@ -194,15 +199,19 @@ def whole_packager(bash, tmp: Path) -> str:
     stage with its BIOS policy check, the overlay_cache gate, the BIOS wording,
     the readme, both configure gates, the include gate, the notice check and
     the zip."""
-    import zipfile
     root = tmp / "pkg"
     emitters = make_package_source(root)
     set_bytes = (root / "set.toml").read_bytes()
     code, out = package(bash, root, emitters)
     stage = root / "dist" / "stage-setup-linux-x64"
     zipped = "Wrote " in out
+    # Whether the packager wrote a zip is not this machine's choice to make
+    # quietly: it must match what the shell offers (PS1B-397).
+    assert zipped == bool(zip_tool(bash)), (zip_tool(bash), code, out[-3000:])
     if not zipped:
-        # A machine without Info-ZIP stops at the last step; everything before it ran.
+        # A shell without zip stops at the last step; everything before it ran.
+        # The zip itself is then checked by the --zip-part run (its own ctest
+        # entry), which reports SKIP when no shell here has a zip.
         assert code == 1 and out.rstrip().endswith("error: zip not found"), (code, out[-3000:])
     else:
         assert code == 0, (code, out[-3000:])
@@ -238,11 +247,7 @@ def whole_packager(bash, tmp: Path) -> str:
     assert "Provide every disc of your legally owned game and your own legally dumped SCPH1001 BIOS image" in readme
     assert "Diagnostic mode (if the game crashes" not in readme
     if zipped:
-        archives = list((root / "dist").glob("*.zip"))
-        assert [a.name for a in archives] == ["workbench-0.4.0-linux-x64.zip"], archives
-        with zipfile.ZipFile(archives[0]) as archive:
-            top = {name.split("/")[0] for name in archive.namelist()}
-        assert top == ROOT_NAMES, sorted(top ^ ROOT_NAMES)
+        check_zip(root, stage)
 
     # The developer filter reaches each program's source catalog.
     # A source without a licenses/ folder is still packaged, and the packager says what is missing.
@@ -282,7 +287,65 @@ def whole_packager(bash, tmp: Path) -> str:
     zip_gets_a_relative_path(bash, tmp)
     gate = plain_start_gate(bash, tmp, zipped)
     pick = exe_name_pick(tmp, zipped)
-    return ("to the zip" if zipped else "to the zip step (no zip tool on this machine)") + "; " + gate + "; " + pick
+    return ("to the zip" if zipped else
+            "to the zip step; the zip was NOT made here (no zip under this shell), see package_setup_program_set_zip"
+            ) + "; " + gate + "; " + pick
+
+
+def zip_tool(bash) -> str:
+    """The zip the packager would call under this bash (`command -v zip`), or ''."""
+    found = subprocess.run([bash, "-c", "command -v zip"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=shell_env(bash))
+    return found.stdout.strip() if found.returncode == 0 else ""
+
+
+def check_zip(root: Path, stage: Path) -> str:
+    """The zip the packager wrote: one file, its name, and exactly the staged files in it."""
+    import zipfile
+    archives = sorted((root / "dist").glob("*.zip"))
+    assert [a.name for a in archives] == ["workbench-0.4.0-linux-x64.zip"], archives
+    staged = sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file())
+    with zipfile.ZipFile(archives[0]) as archive:
+        assert archive.testzip() is None, "a member of the zip does not read back"
+        members = sorted(name[2:] if name.startswith("./") else name
+                         for name in archive.namelist() if not name.endswith("/"))
+    assert members == staged, ("the zip does not hold exactly the staged files",
+                               sorted(set(members) ^ set(staged))[:20])
+    top = {name.split("/")[0] for name in members}
+    assert top == ROOT_NAMES, sorted(top ^ ROOT_NAMES)
+    return "%s, %d files" % (archives[0].name, len(members))
+
+
+SKIP = 77      # ctest: SKIP_RETURN_CODE of package_setup_program_set_zip
+
+
+def zip_part() -> int:
+    """The packager's zip step, as its own ctest entry (PS1B-397).
+
+    The main run accepts a shell without zip: it stops at "error: zip not
+    found" and everything before that step is still checked. That made a host
+    without zip pass with its zip step never run, and ctest said Passed. This
+    run is only about the zip. It looks for a zip under every shell a build
+    host runs the packager in, and where none has one it reports SKIP by name
+    instead of PASS."""
+    shells = windows_shells() if os.name == "nt" else [("bash", find_bash())]
+    shells = [(name, bash) for name, bash in shells if bash]
+    with_zip = [(name, bash, zip_tool(bash)) for name, bash in shells]
+    with_zip = [entry for entry in with_zip if entry[2]]
+    if not with_zip:
+        looked = " and ".join(name for name, _ in shells) or "any shell (no bash was found)"
+        print("SKIP: package setup program set test, zip part: no zip (Info-ZIP) is on PATH under " + looked
+              + ". The packager's zip step was NOT RUN on this machine.")
+        return SKIP
+    name, bash, tool = with_zip[0]
+    with tempfile.TemporaryDirectory(prefix="psxrecomp-set-packager-zip-", dir=working_folder(bash)) as tmp:
+        root = Path(tmp) / "pkg"
+        emitters = make_package_source(root)
+        code, out = package(bash, root, emitters)
+        assert code == 0 and "Wrote " in out, (name, code, out[-3000:])
+        what = check_zip(root, root / "dist" / "stage-setup-linux-x64")
+    print("package setup program set test, zip part: PASS under %s with %s (%s)" % (name, tool, what))
+    return 0
 
 
 def windows_shells():
@@ -458,6 +521,8 @@ def working_folder(bash):
 
 
 def main() -> int:
+    if "--zip-part" in sys.argv[1:]:
+        return zip_part()
     check_text()
     bash = find_bash()
     if bash is None:

@@ -46,6 +46,12 @@ if(BUILD_TESTING)
         src/netplay_exit_reason.c)
     target_include_directories(netplay_exit_reason_test PRIVATE include)
     add_test(NAME netplay_exit_reason_test COMMAND netplay_exit_reason_test)
+    # PS1G-63: why a start ended before the first frame, for the run report.
+    add_executable(start_refusal_test
+        tests/test_start_refusal.c
+        src/start_refusal.c)
+    target_include_directories(start_refusal_test PRIVATE include)
+    add_test(NAME start_refusal_test COMMAND start_refusal_test)
     # PS1B-295: a LAN / Direct IP host refuses a guest on another build.
     add_executable(netplay_lan_version_test
         tests/test_netplay_lan_version.c
@@ -159,7 +165,12 @@ if(BUILD_TESTING)
     add_executable(input_instruction_histogram_test tests/test_input_instruction_histogram.c)
     target_include_directories(input_instruction_histogram_test PRIVATE include)
     add_test(NAME input_instruction_histogram_test COMMAND input_instruction_histogram_test)
+    add_executable(break_vector_enter_test tests/test_break_vector_enter.c)
+    target_include_directories(break_vector_enter_test PRIVATE include)
+    add_test(NAME break_vector_enter_test COMMAND break_vector_enter_test)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME break_guest_vector_interp_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_break_guest_vector_interp.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME biohazard_checkpoint_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_biohazard_checkpoint.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME interp_refused_text_handoff_test COMMAND ${Python3_EXECUTABLE}
@@ -170,6 +181,8 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rfe_irq_context.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME rfe_syscall_depth_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rfe_syscall_depth.py --cc ${CMAKE_C_COMPILER})
+        add_test(NAME changethread_in_handler_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_changethread_in_handler.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME overlay_dispatch_region_counters_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_dispatch_region_counters.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME tas_resume_interval_test COMMAND ${Python3_EXECUTABLE}
@@ -348,6 +361,12 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng
             --classes C3,C3b,C4,C9)
     endforeach()
+    # PS1B-424: the rows of section 14 of the CD spec (command reception and
+    # Init on the source clock), through the production cdrom.c.
+    add_executable(cdrom_source_clock_rows_test tests/test_cdrom_source_clock_rows.c src/psx_sha256.c)
+    target_include_directories(cdrom_source_clock_rows_test PRIVATE include)
+    add_test(NAME cdrom_source_clock_rows_test COMMAND cdrom_source_clock_rows_test
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
 
     add_executable(input_route_file_test tests/test_input_route_file.c)
     target_include_directories(input_route_file_test PRIVATE include)
@@ -431,6 +450,9 @@ if(BUILD_TESTING)
             "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
             $<$<STREQUAL:${_product},release>:PSX_NO_DEBUG_TOOLS=1>)
     endforeach()
+    # PS1B-404: a release product drives the route observer from its replay
+    # when PSX_INPUT_ROUTE_CAPTURE_DIR is set, so that it writes route pictures.
+    target_sources(input_route_session_release PRIVATE src/input_route_observer.c)
     add_test(NAME input_route_session_test COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_input_route_session.py
         $<TARGET_FILE:input_route_session_diagnostic> $<TARGET_FILE:input_route_session_release>)
@@ -971,6 +993,19 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(iso_reader_sbi_test PRIVATE chdr-static)
     add_test(NAME iso_reader_sbi_test COMMAND iso_reader_sbi_test)
 
+    # PS1B-390: the boot executable is read from where SYSTEM.CNF says it is,
+    # also in a subdirectory of the disc. The text image guard has no reference
+    # image without it, and then no statically compiled game function runs.
+    add_executable(disc_boot_image_test
+        tests/test_disc_boot_image.cpp
+        src/disc_boot_image.cpp
+        src/iso_reader.cpp
+        src/cue_sheet.cpp)
+    target_include_directories(disc_boot_image_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
+    target_link_libraries(disc_boot_image_test PRIVATE chdr-static)
+    add_test(NAME disc_boot_image_test COMMAND disc_boot_image_test
+        ${CMAKE_CURRENT_BINARY_DIR})
+
     add_executable(mod_packages_test
         tests/test_mod_packages.cpp
         src/mod_packages.cpp
@@ -1072,6 +1107,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     endif()
     add_test(NAME autocompile_report_test COMMAND autocompile_report_test)
     set_tests_properties(autocompile_report_test PROPERTIES TIMEOUT 120)
+
+    # PS1B-391: the run report names the hottest interpreted addresses, the
+    # text guard's state and the loader's misses by reason. The builder is a
+    # pure function over tables.
+    add_executable(interp_report_test
+        tests/test_interp_report.c
+        src/interp_report.c)
+    target_include_directories(interp_report_test PRIVATE include)
+    add_test(NAME interp_report_test COMMAND interp_report_test)
 
     # ---- previously-unregistered standalone tests -------------------------
     # These 16 existed in runtime/tests/ with no add_test() entry. Their only
@@ -1412,6 +1456,43 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME codegen_host_disc_cfg_handoff_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_disc_cfg_handoff.py)
+        # The hand-over to the product forces the launcher for a player and
+        # honours a headless start (a gate that starts a kit's own exe needs
+        # frames from the game it hands over to).
+        add_test(NAME codegen_host_handover_launcher_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_handover_launcher.py)
+        # Without recomp-ui or a C compiler it cannot run and exits 77: "Skipped",
+        # not "Passed".
+        set_tests_properties(codegen_host_handover_launcher_test PROPERTIES
+                 SKIP_RETURN_CODE 77)
+        # PS1B-410: with PSXRECOMP_TOOLCHAIN_READONLY=1 neither the setup host
+        # nor the CLI changes a toolchain pack or a pointer to one. The test
+        # works on a made-up cache in its own closed environment.
+        add_test(NAME toolchain_readonly_switch_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_readonly_switch.py
+                         --compiler ${CMAKE_C_COMPILER})
+        # PS1B-410: an installed pack is never removed before its replacement
+        # is in place, and a failed check removes nothing.
+        add_test(NAME toolchain_safe_install_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_safe_install.py
+                         --compiler ${CMAKE_C_COMPILER})
+        # PS1B-410: the toolchain check does not depend on the length of PATH
+        # (it failed past about 7,600 characters), and activating a pack does
+        # not grow PATH.
+        add_test(NAME toolchain_path_length_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_path_length.py
+                         --compiler ${CMAKE_C_COMPILER})
+        # PS1B-410: the sentences a player reads when the toolchain check or an
+        # install fails name the step that failed and the system's error.
+        add_test(NAME toolchain_sentences_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_toolchain_sentences.py
+                         --compiler ${CMAKE_C_COMPILER})
+        set_tests_properties(toolchain_sentences_test PROPERTIES SKIP_RETURN_CODE 77)
         # Setup-wizard disc probing (multi-disc roster). Never registered
         # before: a .chd set was rejected and nothing ran to notice.
         add_test(NAME probe_disc_test

@@ -191,6 +191,35 @@ Without a lobby start (LAN or Direct IP):
 Sim authority: pad **slot 0** is the session host (`START`, state transfer).
 Guests rearrange among seats **1..N−1**.
 
+**When the start fails (PS1B-386).** A LAN host listens on the room's UDP
+port (7777 by default; the browser scans 7777 to 7808), a guest on a port the
+system picks, and a command-line start on the `--net-bind` address. When the
+start fails, the runtime does the library's steps again (it reads the listen
+address, looks up a name, and binds) and says what the system answered:
+
+- The port is in use (Windows error 10048, Linux 98, macOS 48): "Netplay could
+  not open UDP port 7777 on 0.0.0.0 (system error 10048). Another program or
+  the operating system holds that port. Choose another port and start again."
+- The system does not hand the port out (Windows error 10013 for a range it
+  keeps for Hyper-V or WSL, error 13 for a port below 1024 elsewhere): "The
+  operating system does not allow this port. Choose another port and start
+  again."
+- The listen address is not an address of this computer (Windows error 10049,
+  Linux 99, macOS 49): "Netplay could not listen on 192.168.1.50 (system error
+  10049). That address is not one of this computer's addresses. Check the
+  listen address and start again."
+- Any other answer: the port, the address, the system's error number and, when
+  it is short plain text, the system's own words. No cause is named.
+
+A listen address that is not `address:port` (the address may be left out:
+`:7777` listens on every address) and a peer address that cannot be read get
+their own sentence. The peer address is named only when the listen address
+opened. An online start that fails says only that the online connection could
+not start. The build is named only when it has no netplay. The log line adds
+the system's own text in every case. A command-line start exits with code 1; a
+match started from the launcher returns to the room with the sentence on the
+status line.
+
 ---
 
 ## Multitap + seat ceiling

@@ -15,9 +15,14 @@
  *   A  no cap in reach, writer held: every snapshot is queued (the old way);
  *   B  cap 4, writer held: 4 are queued, the rest are committed at the cap;
  *   C  cap 2, writer running: the queue never holds more than 2;
- *   D  cap 2, writer held, and the history folder cannot be written: a commit
- *      that fails at the cap is queued after all, and is written once the
- *      folder can be. Nothing is lost.
+ *   D  cap 2, writer held, and the history folder cannot be written: the cap
+ *      still holds. A commit that fails at the cap is dropped and counted;
+ *      the two snapshots in the queue are written once the folder can be
+ *      (PS1B-393: such a commit was queued past the cap, so the queue grew
+ *      by a copy of guest RAM with every disc read);
+ *   E  cap 6, and the folder can never be written: the shutdown gives every
+ *      held snapshot up after five failed writes in a row, not after five
+ *      per snapshot.
  *
  * It also shows that queued snapshots are written when the store is shut down
  * (overlay_capture_wait_pending), which is what a normal quit does.
@@ -31,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -95,6 +101,13 @@ std::map<std::string, std::string> store_of(const fs::path &capture) {
         if (entry.is_regular_file())
             files[entry.path().filename().string()] = read_all(entry.path());
     return files;
+}
+
+/* What the run report says about the queue (PS1B-391). Read it before
+ * counts(), which starts the counters again. */
+std::string queue_report() {
+    char text[512];
+    return overlay_capture_queue_report_json(text, static_cast<int>(sizeof text)) > 0 ? text : "";
 }
 
 struct Counts { unsigned held = 0, peak = 0, enqueued = 0, sync = 0; };
@@ -221,6 +234,11 @@ int main() {
     /* B: the queue fills to its cap; everything after it is committed at once. */
     capture = begin_run(root, "b-cap-4-held", 4u, true);
     make_dmas();
+    std::string report = queue_report();
+    check(report == "{\"cap\": 4, \"queued\": 4, \"held_now\": 4, \"most_at_once\": 4, "
+                    "\"committed_at_cap\": " + std::to_string(kDmas - 4u) + ", \"commit_at_cap_failed\": 0, "
+                    "\"writer_failed_attempts\": 0, \"dropped\": 0, \"given_up_at_quit\": 0}",
+          "B: the run report's queue object is " + report);
     c = counts();
     check(c.enqueued == 4u && c.held == 4u && c.peak == 4u && c.sync == kDmas - 4u,
           "B: expected 4 queued and " + std::to_string(kDmas - 4u) + " at the cap, got queued " +
@@ -239,19 +257,70 @@ int main() {
     same_store(uncapped, end_run(capture), "C");
 
     /* D: the history folder cannot be written while the reads happen. A file
-     * stands where the folder belongs. A commit at the cap then fails, and the
-     * snapshot must be queued for the writer's retry, not dropped. */
+     * stands where the folder belongs. A commit at the cap then fails. The cap
+     * must still hold: the snapshot is dropped and counted, not queued. */
     capture = begin_run(root, "d-cap-2-history-blocked", 2u, true);
-    const fs::path history = capture.string() + ".d";
+    fs::path history = capture.string() + ".d";
     { std::ofstream blocker(history, std::ios::binary); blocker << "not a folder"; }
     make_dmas();
+    report = queue_report();
+    check(report == "{\"cap\": 2, \"queued\": 2, \"held_now\": 2, \"most_at_once\": 2, \"committed_at_cap\": 0, "
+                    "\"commit_at_cap_failed\": " + std::to_string(kDmas - 2u) + ", \"writer_failed_attempts\": 0, "
+                    "\"dropped\": " + std::to_string(kDmas - 2u) + ", \"given_up_at_quit\": 0}",
+          "D: the run report's queue object is " + report);
     c = counts();
-    check(c.held == kDmas && c.sync == 0u,
-          "D: a failed commit at the cap must be queued: held " + std::to_string(c.held) +
-              " of " + std::to_string(kDmas) + ", committed at the cap " + std::to_string(c.sync));
+    check(c.held == 2u && c.peak == 2u && c.sync == 0u,
+          "D: the cap must hold while the store cannot be written: held " + std::to_string(c.held) +
+              ", most at once " + std::to_string(c.peak) + " (cap 2), committed at the cap " +
+              std::to_string(c.sync));
     fs::remove(history, ignored);
     fs::remove(capture, ignored);           /* the failed commits still replaced the latest file */
-    same_store(uncapped, end_run(capture), "D");
+    {
+        /* The two queued snapshots are written now. Each history file is one
+         * the uncapped run made as well, with the same content. */
+        const auto kept = end_run(capture);
+        unsigned history_files = 0;
+        for (const auto &entry : kept) {
+            if (entry.first == "(latest)") continue;
+            ++history_files;
+            const auto found = uncapped.find(entry.first);
+            check(found != uncapped.end() && found->second == entry.second,
+                  "D: " + entry.first + " is not a file of the uncapped store");
+        }
+        check(history_files >= 1u && kept.size() < uncapped.size(),
+              "D: expected the queued snapshots' files only, got " + std::to_string(history_files) +
+                  " history files against " + std::to_string(uncapped.size() - 1u) + " without the cap");
+        check(queue_report().find("\"held_now\": 0,") != std::string::npos &&
+              queue_report().find("\"given_up_at_quit\": 0}") != std::string::npos,
+              "D: the queue is empty after the shutdown and nothing was given up: " + queue_report());
+    }
+
+    /* E: the folder can never be written. The shutdown must not try every held
+     * snapshot five times with waits of its own (about 1.6 s each): after five
+     * failed writes in a row the store is taken as unwritable, and each
+     * snapshot still held is given up at its next failed write. */
+    capture = begin_run(root, "e-cap-6-never-writable", 6u, true);
+    history = capture.string() + ".d";
+    { std::ofstream blocker(history, std::ios::binary); blocker << "not a folder"; }
+    make_dmas();
+    check(counts().held == 6u, "E: six snapshots are held before the shutdown");
+    (void)end_run(capture);
+    report = queue_report();
+    {
+        const std::string key = "\"writer_failed_attempts\": ";
+        const size_t at = report.find(key);
+        const unsigned attempts = at == std::string::npos ? 0u
+            : static_cast<unsigned>(std::strtoul(report.c_str() + at + key.size(), nullptr, 10));
+        /* Five in a row, then one more for each of the other five; before the
+         * bound it was five for each: 30. */
+        check(attempts >= 6u && attempts <= 12u,
+              "E: the shutdown made " + std::to_string(attempts) + " failed writes for 6 held snapshots; "
+              "the bound is 5 in a row plus one for each one still held: " + report);
+        check(report.find("\"held_now\": 0,") != std::string::npos &&
+              report.find("\"given_up_at_quit\": 6}") != std::string::npos,
+              "E: all six are given up and the queue is empty: " + report);
+    }
+    fs::remove(history, ignored);
 
     overlay_capture_test_set_preserve_cap(0u);
     check(overlay_capture_test_preserve_cap() == built_in, "the built-in cap was not restored");
@@ -261,6 +330,7 @@ int main() {
         std::fprintf(stderr, "overlay capture queue bound: %d failure(s)\n", g_failures);
         return 1;
     }
-    std::puts("PASS: the snapshot queue stops at its cap and the store holds the same files as without it");
+    std::puts("PASS: the snapshot queue stops at its cap, also with a store that cannot be written, "
+              "and the store holds the same files as without the cap");
     return 0;
 }

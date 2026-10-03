@@ -400,6 +400,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/cosim.c
     ${PSXRECOMP_ROOT}/runtime/src/traps.c
     ${PSXRECOMP_ROOT}/runtime/src/crash_trace.c
+    ${PSXRECOMP_ROOT}/runtime/src/interp_report.c
     ${PSXRECOMP_ROOT}/runtime/src/freeze_dump_policy.c
     ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c
     ${PSXRECOMP_ROOT}/runtime/src/gte.cpp
@@ -418,6 +419,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/color_lut.c
     ${PSXRECOMP_ROOT}/runtime/src/iso_reader.cpp
     ${PSXRECOMP_ROOT}/runtime/src/iso_reader_c.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/disc_boot_image.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_cycles.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_icache.c
     ${PSXRECOMP_ROOT}/runtime/src/starvation_ring.c
@@ -448,6 +450,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_bios_settle.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_exit_reason.c
+    ${PSXRECOMP_ROOT}/runtime/src/start_refusal.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_lan_version.c
     ${PSXRECOMP_ROOT}/recompiler/src/config_loader.cpp
     ${PSXRECOMP_ROOT}/recompiler/src/ps1_exe_parser.cpp

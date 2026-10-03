@@ -20,6 +20,7 @@
 #include "source_gpu_runtime.h"
 #include "psx_bios_backend.h" /* psx_bios_is_entry, psx_bios_image (psx_is_dispatchable) */
 #include "dispatch_publish.h"
+#include "psx_break_vector.h"
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
@@ -1087,6 +1088,84 @@ static int enter_guest_syscall_exception(CPUState *cpu) {
     return 1;
 }
 
+/* A ChangeThread called inside an exception handler (PS1B-417).
+ *
+ * The kernel has one path for SYS(03h), in a handler or out of one (SCPH-1001,
+ * exception entry 0xC80, syscall handler 0x1A00, function 3 at 0x1AAC):
+ *   1. the syscall's own exception entry saves every register of that moment
+ *      into the control block the current-thread pointer names; inside a
+ *      handler that overwrites the context the interrupt saved there;
+ *   2. the saved EPC is advanced past the SYSCALL;
+ *   3. the old block's saved v0 becomes 1, and the pointer takes a1;
+ *   4. ReturnFromException loads the registers of the block the pointer names.
+ * A game that preempts a thread this way keeps its own copy of the interrupted
+ * context and writes it back before it resumes the thread (V-Rally 2, PS1G-76).
+ * Returning to the interrupted thread instead ran that thread on, and the
+ * game's later restore ran its work a second time.
+ *
+ * Steps 1 to 3 are done here; the caller's manual return below is step 4, and
+ * the end of the delivery (interrupts.c) unwinds to the scheduler at once: the
+ * interrupted thread must not run another instruction, because the game holds
+ * the context of the interrupt, not of a later boundary.
+ *
+ * The kernel does not look at the target's state word: function 3 stores a1
+ * and returns from whatever block it names. A block of the thread table is
+ * therefore taken whatever its state. Not taken, with the behaviour as it
+ * was (a return to the interrupted code): a target that is the current
+ * thread; an address outside the thread table, where the kernel would load
+ * registers from memory that is not a block; a delivery nested in another;
+ * the fiber bridge. Returns 1 when the pointer moved, 0 when not taken, -1
+ * when a native shadow pass must bail before any guest state changes. */
+int g_changethread_in_handler_switch = 0;
+static uint32_t s_ct_handler_switches, s_ct_handler_same_thread, s_ct_handler_not_taken;
+static uint32_t s_ct_handler_first_epc, s_ct_handler_first_target, s_ct_handler_first_frame;
+
+/* out[0] calls that switched, out[1] calls that named the current thread,
+ * out[2] calls that named another thread and were not taken; of the first
+ * switch: out[3] the interrupted PC, out[4] the target block, out[5] the frame. */
+void psx_changethread_in_handler_stats(uint32_t out[6]) {
+    out[0] = s_ct_handler_switches;
+    out[1] = s_ct_handler_same_thread;
+    out[2] = s_ct_handler_not_taken;
+    out[3] = s_ct_handler_first_epc;
+    out[4] = s_ct_handler_first_target;
+    out[5] = s_ct_handler_first_frame;
+}
+
+static int psx_change_thread_in_handler(CPUState* cpu, uint32_t target_tcb) {
+    extern int psx_exception_nest_depth(void);
+    uint32_t current_tcb = psx_current_tcb_ptr(cpu);
+    if (current_tcb == target_tcb) {
+        if (s_ct_handler_same_thread != 0xFFFFFFFFu) s_ct_handler_same_thread++;
+        return 0;
+    }
+    if (!psx_is_valid_tcb(cpu, current_tcb) || !psx_is_valid_tcb(cpu, target_tcb) ||
+        !psx_hle_scheduler_enabled() || psx_exception_nest_depth() != 1) {
+        if (s_ct_handler_not_taken != 0xFFFFFFFFu) s_ct_handler_not_taken++;
+        return 0;
+    }
+    {
+        extern int overlay_loader_shadow_native_thread_switch_bail(void);
+        if (overlay_loader_shadow_native_thread_switch_bail()) return -1;
+    }
+    if (s_ct_handler_switches == 0u) {
+        s_ct_handler_first_epc = cpu->cop0[14];   /* where the thread was interrupted */
+        s_ct_handler_first_target = target_tcb;
+        s_ct_handler_first_frame = (uint32_t)s_frame_count;
+    }
+    if (s_ct_handler_switches != 0xFFFFFFFFu) s_ct_handler_switches++;
+
+    uint32_t save = current_tcb + 8u;
+    uint32_t cause = cpu->cop0[13];
+    psx_save_context_to_tcb(cpu, current_tcb, cpu->pc + 4u);            /* 1, 2 */
+    cpu->write_word(save + 144u, (cause & ~0x7Cu) | (8u << 2));         /* Sys */
+    cpu->write_word(save + 2u * 4u, 1u);                                /* 3: v0 */
+    psx_set_current_tcb(cpu, target_tcb);                               /* 3 */
+    g_changethread_in_handler_switch = 1;
+    debug_server_log_thread_event(34, cpu, current_tcb, target_tcb, cpu->pc);
+    return 1;
+}
+
 int psx_syscall(CPUState* cpu, uint32_t code) {
     psx_load_value_commit(cpu);
     /*
@@ -1137,8 +1216,9 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
             /* Tomba2 loader-thread diagnosis (Patch 1, trace-only): record every
              * syscall-3 (ChangeThread/RFE) at its decision point. kind 20 = entered
              * with in_exception==0 (eligible for psx_change_thread); kind 24 = entered
-             * with in_exception==1 (will be forced down the manual-RFE path, NOT a
-             * thread switch). target_tcb is the requested switch target; its state
+             * with in_exception==1 (the manual-RFE path; a call that names another
+             * runnable thread first moves the current-thread pointer, kind 34, see
+             * psx_change_thread_in_handler). target_tcb is the requested target; its state
              * word is auto-captured as target_state. This tells us whether the loader
              * ChangeThread is ever requested (Case A) and, if so, whether in_exception
              * diverts it (Case B). */
@@ -1147,6 +1227,8 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
             int switch_result = 0;
             if (!psx_get_in_exception())
                 switch_result = psx_change_thread(cpu, target_tcb);
+            else if (psx_change_thread_in_handler(cpu, target_tcb) < 0)
+                switch_result = -1;
             if (switch_result < 0) {
                 /* Native shadow validation requested an impossible thread
                  * switch. Its bail flag unwinds the speculative call; return
@@ -1250,6 +1332,36 @@ void psx_break(CPUState* cpu, uint32_t code, uint32_t pc) {
     trap_crash(buf);
     fprintf(stderr, "%s\n", buf); fflush(stderr);
     exit(1);
+}
+
+/* The interpreter's BREAK asks here first (psx_break_vector.h, PS1G-74): 1
+ * means the guest's own vector was entered and cpu->pc holds it. psx_break
+ * above stays the outcome of a BREAK in compiled BIOS code. Compiled game
+ * code does not come here: the game generator emits nothing for a BREAK
+ * (PS1B-412).
+ *
+ * The run report states how often the vector was entered and where first
+ * (crash_trace.c), so a title that later hangs in its handler leaves a trace. */
+static uint32_t s_break_guest_count, s_break_guest_first_pc, s_break_guest_first_code;
+
+int psx_break_enter_guest_vector(CPUState* cpu, uint32_t pc) {
+    psx_load_value_commit(cpu);
+    if (!psx_break_vector_enter(cpu, pc, psx_get_in_exception(),
+                                source_gpu_runtime_active()))
+        return 0;
+    if (s_break_guest_count == 0u) {
+        s_break_guest_first_pc = pc;
+        s_break_guest_first_code = (cpu->read_word(pc) >> 6) & 0xFFFFFu;
+    }
+    if (s_break_guest_count != 0xFFFFFFFFu) s_break_guest_count++;
+    return 1;
+}
+
+/* out[0] entries, out[1] the first BREAK's PC, out[2] its 20-bit code. */
+void psx_break_guest_vector_stats(uint32_t out[3]) {
+    out[0] = s_break_guest_count;
+    out[1] = s_break_guest_first_pc;
+    out[2] = s_break_guest_first_code;
 }
 
 void psx_arith_overflow(CPUState* cpu) {
