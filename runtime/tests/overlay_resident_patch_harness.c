@@ -27,6 +27,7 @@
 #include "parity_trace.h"
 #include "psx_cycles.h"
 #include "dirty_ram_interp.h"
+#include "interp_report.h"
 #include "psx_bios_image.h"
 #include "psx_icache.h"
 #include "sio.h"
@@ -460,6 +461,22 @@ int main(int argc, char **argv) {
     }
     step("backed off: patch bytes", 0x80010008u, (Ownership){0, 0, 0, 0});
     step("backed off: patch bytes again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    /* Every dispatch a backed-off page costs is counted under its own reason:
+     * the last round's dispatch of the patch bytes and the two above. */
+    {
+        extern void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                                    uint64_t kernel[PSX_INTERP_MISS_REASONS]);
+        uint64_t above[PSX_INTERP_MISS_REASONS], kernel[PSX_INTERP_MISS_REASONS];
+        overlay_loader_get_miss_reasons(above, kernel);
+        printf("backed off: %llu dispatches counted under modified_text_backoff
+",
+               (unsigned long long)above[PSX_MISS_MODIFIED_TEXT_BACKOFF]);
+        if (above[PSX_MISS_MODIFIED_TEXT_BACKOFF] != 3 || kernel[PSX_MISS_MODIFIED_TEXT_BACKOFF] != 0) {
+            printf("the back-off's miss reason UNEXPECTED
+");
+            s_failures++;
+        }
+    }
 
     /* 3. The same bytes delivered through a load path that marks the page
      *    executable (CD DMA / data-shard publication). The page is dirty from

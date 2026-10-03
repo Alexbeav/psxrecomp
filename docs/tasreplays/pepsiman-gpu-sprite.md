@@ -5,7 +5,7 @@ textured semi-transparent rectangle. This is missing source-model coverage,
 not evidence of a physical PS1 defect. The correction admits that packet to
 the existing sprite timing and software pixel kernels.
 
-DERIVED-FROM: two fresh native attempts at framework `ef6c888d` matched all
+EVIDENCE: two fresh native attempts at framework `ef6c888d` matched all
 512 RAM pages and master clocks for 1,420 completed source returns. Both then
 stopped before return 1,421 on word `66808080` at master clock `803618048`.
 The projection's packet and feedback predicates and the source software

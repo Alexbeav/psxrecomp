@@ -11,6 +11,13 @@
  * product replays through this module. Every entry point is inert when no
  * route or recording is armed.
  *
+ * Pictures (release product, PS1B-404): with PSX_INPUT_ROUTE_CAPTURE_DIR set
+ * and a route admitted, the release replay drives the route observer
+ * (input_route_observer.c) that the diagnostic product drives from its debug
+ * server. It writes a picture every PSX_INPUT_ROUTE_CAPTURE_EVERY boundaries
+ * and at the route's end, where the process exits with status 0. Without the
+ * directory, a loaded route costs one more branch per vblank.
+ *
  * Record (diagnostic product): PSX_INPUT_ROUTE_RECORD names a new PSXRTI3
  * file written at process exit. One digital P1 word is recorded per guest
  * vblank from boot, with identity, markers and checkpoints. */

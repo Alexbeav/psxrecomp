@@ -849,47 +849,6 @@
           ]
         },
         {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "        int ax=abs(dx),ay=abs(dy),length=ax>ay?ax:ay;",
-            "        if(ax>=1024 || ay>=512)return 1;",
-            "        int x=block->x,y=block->y;"
-          ]
-        },
-        {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "        /* Source line interpolation uses 32 fractional bits, rounds the step",
-            "         * away from zero, and biases half-pixel ties by 1024 fractional units. */",
-            "        int64_t sx=(int64_t)dx*4294967296LL,sy=(int64_t)dy*4294967296LL;",
-            "        if(length) {",
-            "            sx=(sx+(sx<0?1-length:sx>0?length-1:0))/length;",
-            "            sy=(sy+(sy<0?1-length:sy>0?length-1:0))/length;",
-            "        }",
-            "        uint64_t fx=((uint64_t)(int64_t)x<<32)+2147483648ULL-1024;",
-            "        uint64_t fy=((uint64_t)(int64_t)y<<32)+2147483648ULL-(sy<0?1024:0);",
-            "        SourceTriangleColors c={0};c.dither=!!(block->draw_mode&512u);"
-          ]
-        },
-        {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "        for(int i=0;i<=length;i++,fx+=(uint64_t)sx,fy+=(uint64_t)sy) {",
-            "            int px=(int)((fx>>32)&2047u),py=(int)((fy>>32)&2047u);",
-            "            if(px<block->clip_left || px>block->clip_right || py<block->clip_top || py>block->clip_bottom)continue;",
-            "            if(block->interlace && ((unsigned)py&1u)==block->skip_field)continue;"
-          ]
-        },
-        {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "            source_triangle_span(&c,py,px,1,px);",
-            "        }",
-            "        return 1;",
-            "    }"
-          ]
-        },
-        {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
             "/* GP0/GP1 command FIFO timing projection for the source GPU path.",
@@ -1550,6 +1509,48 @@
             "     * E1h and leaves the complete 7Dh queued until 950,195,200). Words",
             "     * written in the same cycle still start commands as they complete. */",
             "    if (cycle == s->last_update) return 1;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    int dx = source_vertex_coordinate(second, 0) - source_vertex_coordinate(first, 0);",
+            "    int dy = source_vertex_coordinate(second, 16) - source_vertex_coordinate(first, 16);",
+            "    int across = dx < 0 ? -dx : dx, down = dy < 0 ? -dy : dy;",
+            "    if (across >= 1024 || down >= 512) return 1;",
+            "    int count = across > down ? across : down;            /* L3: N; the line has N + 1 points */"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    unsigned start_x = (unsigned)block->x, start_y = (unsigned)block->y;",
+            "    if (count && dx <= 0) {",
+            "        /* L4 [FIXTURE: G1]: with dx below 0, or dx 0 and dy not 0, the line",
+            "         * is walked from the second vertex, and the colours change places. */",
+            "        start_x += (unsigned)dx;",
+            "        start_y += (unsigned)dy;",
+            "        dx = -dx;",
+            "        dy = -dy;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "        unsigned move_x = count ? (unsigned)((2 * i * dx + count - 1) / (2 * count)) : 0u;",
+            "        unsigned move_y = count ? (unsigned)((2 * i * down + count) / (2 * count)) : 0u;",
+            "        int px = (int)((start_x + move_x) & 2047u);",
+            "        int py = (int)((dy < 0 ? start_y - move_y : start_y + move_y) & 2047u);",
+            "        /* L6: the drawing area of the block, and the skipped field. */",
+            "        if (px < block->clip_left || px > block->clip_right) continue;",
+            "        if (py < block->clip_top || py > block->clip_bottom) continue;",
+            "        if (block->interlace && ((unsigned)py & 1u) == block->skip_field) continue;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    for (int i = 0; i <= count; ++i) {                    /* L8: in the order i = 0..N */"
           ]
         }
       ],
@@ -1617,6 +1618,24 @@
           "replacement_commits": [
             "7a61737d38c6"
           ]
+        },
+        {
+          "as_of": "b5acf336d21acb7b46a4ad1b502b405e06e6d40f",
+          "issue": "PS1B-423",
+          "dropped_lines": 21,
+          "from_blocks": 66,
+          "to_blocks": 66,
+          "replacement_blocks_added": 4,
+          "note": "Clean-room rewrite (PS1B-423): the source-profile raster lines (triangle set-up and pixel rule, line family, VRAM copy, sprites) were replaced by lines written from the behaviour spec by an unexposed implementer; a differential replay against the old code shows 0 differences. Requalification of the TAS routes on this tree is owed."
+        },
+        {
+          "as_of": "6b5f2ffe18106a76626973244a6bb6babdf5e34c",
+          "issue": "PS1B-423",
+          "dropped_lines": 2,
+          "from_blocks": 66,
+          "to_blocks": 66,
+          "replacement_blocks_added": 1,
+          "note": "Round 2 of the clean-room rewrite (PS1B-423): five comment tags changed from [KEPT] to the fixture class that now confirms the row on the stock core. Comments only; the object files are identical for GCC and clang."
         }
       ],
       "note": "superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun"
@@ -1635,39 +1654,6 @@
         "to_blocks": 8
       },
       "blocks": [
-        {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "        unsigned shaded=!!(opcode&0x10),last=2+shaded;",
-            "        int dx=(int)((words[last]&2047u)^1024u)-(int)((words[1]&2047u)^1024u);",
-            "        int dy=(int)(((words[last]>>16)&2047u)^1024u)-(int)(((words[1]>>16)&2047u)^1024u);"
-          ]
-        },
-        {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "        int reversed=dx<=0 && length;",
-            "        if(reversed){x+=dx;y+=dy;dx=-dx;dy=-dy;}"
-          ]
-        },
-        {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "        uint32_t start[3],step[3];",
-            "        for(unsigned channel=0;channel<3;channel++) {",
-            "            int first=(words[shaded && reversed?2:0]>>(8*channel))&255u;",
-            "            int end=(words[shaded && !reversed?2:0]>>(8*channel))&255u;",
-            "            start[channel]=(unsigned)first*4096u+(shaded?2048u:0);",
-            "            step[channel]=(uint32_t)(shaded && length?((end-first)*4096)/length:0);",
-            "        }"
-          ]
-        },
-        {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "            for(unsigned channel=0;channel<3;channel++)c.base[channel]=start[channel]+step[channel]*(unsigned)i;"
-          ]
-        },
         {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
@@ -2329,6 +2315,46 @@
             "     * E1h and leaves the complete 7Dh queued until 950,195,200). Words",
             "     * written in the same cycle still start commands as they complete. */",
             "    if (cycle == s->last_update) return 1;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    unsigned shaded = (words[0] >> 28) & 1u;              /* L1: bit 4 of the opcode */",
+            "    uint32_t first = words[1], second = words[shaded ? 3 : 2];",
+            "    uint32_t color[2];",
+            "    color[0] = words[0] & 0xFFFFFFu;",
+            "    color[1] = shaded ? words[2] & 0xFFFFFFu : color[0];"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "        uint32_t other = color[0];",
+            "        color[0] = color[1];",
+            "        color[1] = other;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    int from[3], step[3];",
+            "    for (unsigned c = 0; c < 3; ++c) {",
+            "        /* L7 [FIXTURE: G1]: the step of a channel is (last - first) * 4096 /",
+            "         * N, truncated; an unshaded line has both ends equal. */",
+            "        from[c] = (int)((color[0] >> (8u * c)) & 255u);",
+            "        step[c] = count ? ((int)((color[1] >> (8u * c)) & 255u) - from[c]) * 4096 / count : 0;",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "        if (source_put_pixel(&s, px, py, py,",
+            "                             (unsigned)((from[0] * 4096 + 2048 + i * step[0]) >> 12) & 255u,",
+            "                             (unsigned)((from[1] * 4096 + 2048 + i * step[1]) >> 12) & 255u,",
+            "                             (unsigned)((from[2] * 4096 + 2048 + i * step[2]) >> 12) & 255u, 0, 0))",
+            "            gpu_vram_dirty_mark_row((uint32_t)py & 511u);   /* spec 5 I9 */"
           ]
         }
       ],
@@ -2397,6 +2423,24 @@
           "replacement_commits": [
             "7a61737d38c6"
           ]
+        },
+        {
+          "as_of": "b5acf336d21acb7b46a4ad1b502b405e06e6d40f",
+          "issue": "PS1B-423",
+          "dropped_lines": 13,
+          "from_blocks": 63,
+          "to_blocks": 63,
+          "replacement_blocks_added": 4,
+          "note": "Clean-room rewrite (PS1B-423): the source-profile raster lines (triangle set-up and pixel rule, line family, VRAM copy, sprites) were replaced by lines written from the behaviour spec by an unexposed implementer; a differential replay against the old code shows 0 differences. Requalification of the TAS routes on this tree is owed."
+        },
+        {
+          "as_of": "6b5f2ffe18106a76626973244a6bb6babdf5e34c",
+          "issue": "PS1B-423",
+          "dropped_lines": 2,
+          "from_blocks": 63,
+          "to_blocks": 63,
+          "replacement_blocks_added": 1,
+          "note": "Round 2 of the clean-room rewrite (PS1B-423): five comment tags changed from [KEPT] to the fixture class that now confirms the row on the stock core. Comments only; the object files are identical for GCC and clang."
         }
       ]
     },
@@ -2412,16 +2456,36 @@
         {
           "file": "runtime/src/gpu_sw_renderer.c",
           "lines": [
-            "    if(!source_gpu_sprite_opcode(opcode))return 0;",
-            "    /* The extent is the size word for the variable class and the opcode's own",
-            "     * 1x1/8x8/16x16 for the fixed classes; everything below is size-agnostic. */",
-            "    int textured=!!(opcode&4);unsigned sprite_w,sprite_h;",
-            "    source_gpu_sprite_extent(opcode,words,&sprite_w,&sprite_h);",
-            "    int left=block->x,top=block->y,right=left+(int)sprite_w,bottom=top+(int)sprite_h;"
+            "        texture.page = (uint16_t)(block->draw_mode & 0x1FFu);",
+            "        texture.window = block->texture_window;",
+            "        texture.clut = (uint16_t)(words[2] >> 16);",
+            "        texture.raw = (int)(opcode & 1u);",
+            "        texture.load_clut = 1;",
+            "        s.texture = &texture;",
+            "        s.mode = source_texture_mode(texture.page);",
+            "        source_texture_palette(&s);"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    if(!source_gpu_sprite_opcode(opcode))return 0;                    /* spec 6.5 R7 */",
+            "    return source_draw_sprite(block,opcode,extra_work);               /* spec 6.5 */"
           ]
         }
       ],
-      "note": "Origin f5f5b16e admitted GP0 0x66/0x67 by enumerating opcodes in the projection and the renderer. Re-pinned 2026-09-15: the fixed-size sprite work (8eb45f93, 20b06ddb) replaced every enumeration with the whole-range source_gpu_sprite_opcode() test, which is a superset, so 0x66/0x67 remain admitted and drawn. The 1,572-check sprite fixture covers the behaviour. Pinned to the renderer admission span because that is where the drawing guarantee now lives."
+      "note": "Origin f5f5b16e admitted GP0 0x66/0x67 by enumerating opcodes in the projection and the renderer. Re-pinned 2026-09-15: the fixed-size sprite work (8eb45f93, 20b06ddb) replaced every enumeration with the whole-range source_gpu_sprite_opcode() test, which is a superset, so 0x66/0x67 remain admitted and drawn. The 1,572-check sprite fixture covers the behaviour. Pinned to the renderer admission span because that is where the drawing guarantee now lives.",
+      "repins": [
+        {
+          "as_of": "b5acf336d21acb7b46a4ad1b502b405e06e6d40f",
+          "issue": "PS1B-423",
+          "dropped_lines": 6,
+          "from_blocks": 1,
+          "to_blocks": 2,
+          "replacement_blocks_added": 2,
+          "note": "Clean-room rewrite (PS1B-423): the source-profile raster lines (triangle set-up and pixel rule, line family, VRAM copy, sprites) were replaced by lines written from the behaviour spec by an unexposed implementer; a differential replay against the old code shows 0 differences. Requalification of the TAS routes on this tree is owed."
+        }
+      ]
     },
     {
       "id": "1a73216a-gpu-upload-history-capture-stop",
@@ -3034,15 +3098,6 @@
           ]
         },
         {
-          "file": "runtime/src/gpu_sw_renderer.c",
-          "lines": [
-            "    /* The whole line family, 0x40-0x5F. A poly-line segment reaches here as the ordinary",
-            "     * two-vertex packet it draws as: DrawLine is templated on <goraud, BlendMode,",
-            "     * MaskEval_TA>, so the poly-line bit never reaches rasterisation. */",
-            "    if(opcode>=0x40 && opcode<=0x5f) {"
-          ]
-        },
-        {
           "file": "runtime/include/source_gpu_command_projection.h",
           "lines": [
             "/* GP0/GP1 command FIFO timing projection for the source GPU path.",
@@ -3704,6 +3759,23 @@
             "     * written in the same cycle still start commands as they complete. */",
             "    if (cycle == s->last_update) return 1;"
           ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "/* Spec 6.3 L1-L8: one segment of the line family (opcodes 40h to 5Fh). */",
+            "static int source_draw_line(const SourceGPUBlock *block)",
+            "{",
+            "    const uint32_t *words = block->words;",
+            "    unsigned shaded = (words[0] >> 28) & 1u;              /* L1: bit 4 of the opcode */",
+            "    uint32_t first = words[1], second = words[shaded ? 3 : 2];"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    if(opcode>=0x40 && opcode<=0x5f)return source_draw_line(block);   /* spec 6.3 */"
+          ]
         }
       ],
       "note": "Abe's Oddysee 5620M aborted at return 4,682 on GP0 5E030B0B; the projection admitted only two-vertex lines. Derived from Commands_40_5F/LINE_HELPER and ProcessFIFO's INCMD_PLINE branch. superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun",
@@ -3771,6 +3843,15 @@
           "replacement_commits": [
             "7a61737d38c6"
           ]
+        },
+        {
+          "as_of": "b5acf336d21acb7b46a4ad1b502b405e06e6d40f",
+          "issue": "PS1B-423",
+          "dropped_lines": 4,
+          "from_blocks": 61,
+          "to_blocks": 62,
+          "replacement_blocks_added": 2,
+          "note": "Clean-room rewrite (PS1B-423): the source-profile raster lines (triangle set-up and pixel rule, line family, VRAM copy, sprites) were replaced by lines written from the behaviour spec by an unexposed implementer; a differential replay against the old code shows 0 differences. Requalification of the TAS routes on this tree is owed."
         }
       ]
     },

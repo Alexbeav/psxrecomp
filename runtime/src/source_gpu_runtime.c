@@ -366,10 +366,10 @@ static void cpu_boundary_inner(CPUState *cpu,uint32_t pc,uint64_t cycle) {
         dma_cpu_read_wait_boundary();
         source_cpu_boundary_probe(cpu,pc,cycle);
         if(!dma_cpu_source_halted())return;
-        /* Original RunReal fetches before selecting its halt operation.
+        /* The replay profile fetches before it selects its halt step.
          * Cache fill therefore overlaps DMA, while only the base/absorb step
          * runs. No opcode effects or deferred-load writeback occur here.
-         * COP2 bypasses the original interrupt/halt dispatch table; allow the
+         * The halt does not hold COP2 in the replay profile; allow the
          * existing decoder to execute it, with the halt retained for its next
          * instruction. This is source compatibility, not PS1 bus arbitration. */
         uint32_t instruction=cpu->read_word(pc);

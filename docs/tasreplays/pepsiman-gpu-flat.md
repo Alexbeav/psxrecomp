@@ -5,7 +5,7 @@ coverage boundary: the flat semi-transparent quad command `0x2A`. The existing
 flat polygon renderer and work estimator support its behavior, but the command
 predicate omitted flat blended triangles/quads and their ignored raw-bit aliases.
 
-DERIVED-FROM: both fresh qualification05 attempts at `ef2281ba` matched all RAM
+EVIDENCE: both fresh qualification05 attempts at `ef2281ba` matched all RAM
 pages and master clocks through return 1,422. They then rejected `2AFFFFFF`
 at master clock `804779008`, before return 1,423. This is a missing source-model
 operation, not a preceding guest RAM divergence or a hardware defect claim.

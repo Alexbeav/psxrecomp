@@ -63,4 +63,37 @@ assert 'f << "settings_format = " << UserSettings::kFormat' in LOADER, (
     "save_user_settings no longer writes settings_format"
 )
 
+# ---- 4. the run report says it too (PS1B-400) ---------------------------------
+# A product keeps no stdout, so the stdout line above reaches no player.
+REPORT = (ROOT / "runtime" / "src" / "crash_trace.c").read_text(encoding="utf-8")
+SCHEMA = (ROOT / "docs" / "config_schema.md").read_text(encoding="utf-8")
+assert re.search(
+    r"psx_crash_trace_note_settings\(us\.settings_format,\s*"
+    r"PSXRecompV4::UserSettings::kFormat,\s*us\.boot_keys_were_echoes \? 1 : 0\);", MAIN
+), "main() must hand the settings file's format and the dropped-keys fact to the run report"
+assert (
+    '"  \\"settings\\": {\\"file_format\\": %d, \\"current_format\\": %d, "' in REPORT
+    and '"\\"boot_keys_ignored\\": %d, \\"notice\\": \\"%s\\"},\\n"' in REPORT
+), "the run report no longer writes the settings object"
+HEADER = (ROOT / "runtime" / "include" / "crash_trace.h").read_text(encoding="utf-8")
+notice = re.search(r"#define PSX_SETTINGS_BOOT_KEYS_NOTICE \\\n((?:\s*\"[^\n]*\"(?: \\)?\n)+)", HEADER)
+assert notice, "the notice sentence is gone"
+text = "".join(re.findall(r'"([^"\n]*)"', notice.group(1)))
+assert text and "\\" not in text and all(ord(c) >= 0x20 for c in text), (
+    "the notice goes into a JSON string as it is: no backslash, no control character"
+)
+# The sentence Alex accepted on 2026-10-02. Stdout and the run report share it.
+assert text == (
+    "settings.toml has fast_boot or bios_hle lines but no settings_format = 2 line. "
+    "The two lines are ignored and the game's own values are used. "
+    "To choose a value yourself, save the settings once in the launcher and add the line again."
+), text
+assert 'std::fprintf(stdout, "psxrecomp: " PSX_SETTINGS_BOOT_KEYS_NOTICE "\\n");' in MAIN, (
+    "the stdout line and the run report must say the same sentence"
+)
+assert "PSX_SETTINGS_BOOT_KEYS_NOTICE" in REPORT, "the run report no longer carries the sentence"
+assert "### `settings_format` in the player's `settings.toml`" in SCHEMA, (
+    "docs/config_schema.md must say what settings_format is for"
+)
+
 print("settings boot keys wiring: PASS")

@@ -427,6 +427,9 @@ if(BUILD_TESTING)
                 "PSX_FRAMEWORK_PIN=\"0123456789abcdef0123456789abcdef01234567\""
                 $<$<STREQUAL:${_product},release>:PSX_NO_DEBUG_TOOLS=1>)
         endforeach()
+        # PS1B-404: the release replay drives the route observer for pictures.
+        target_sources(input_route_session_release PRIVATE
+            ../runtime/src/input_route_observer.c)
         add_test(NAME input_route_session_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_input_route_session.py
             $<TARGET_FILE:input_route_session_diagnostic>
@@ -626,6 +629,15 @@ if(BUILD_TESTING)
             add_test(NAME tas_gpu_line_${_mode} COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_line_contracts.py
                 $<TARGET_FILE:tas_gpu_line_${_mode}>)
+            # PS1B-423: the rows of the source-profile raster spec (triangle, line,
+            # copy, sprite) against a model in other terms; whole VRAM after every draw.
+            add_executable(tas_gpu_raster_rows_${_mode}
+                ../runtime/tests/test_source_gpu_raster_rows.c ../runtime/src/gpu_sw_renderer.c
+                ../runtime/tests/source_gpu_raster_stub.c ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_raster_rows_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_raster_rows_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_raster_rows_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_raster_rows_${_mode} COMMAND tas_gpu_raster_rows_${_mode})
         endforeach()
     endif()
 
@@ -1302,6 +1314,7 @@ if(BUILD_TESTING)
                 release_zip
                 overlay_decodable_fallback
                 overlay_export_declarations
+                interp_report_wiring
                 overlay_init_guard
                 overlay_pair_dedup_runtime
                 recomp_ui_root_override
@@ -1535,6 +1548,10 @@ if(BUILD_TESTING)
             --cc ${CMAKE_C_COMPILER})
         add_test(NAME rfe_syscall_depth_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_rfe_syscall_depth.py
+            --cc ${CMAKE_C_COMPILER})
+        # PS1B-417: the same guest fixture with a handler that calls ChangeThread.
+        add_test(NAME changethread_in_handler_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_changethread_in_handler.py
             --cc ${CMAKE_C_COMPILER})
     endif()
 endif()

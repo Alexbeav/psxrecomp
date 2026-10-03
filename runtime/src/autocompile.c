@@ -167,6 +167,7 @@ static unsigned     s_fail_lines_unclassed = 0;  /* of them, in classes past the
 static uint32_t     s_units_ok_total = 0;        /* finished runs, summed */
 static uint32_t     s_units_skipped_total = 0;
 static uint32_t     s_runs_with_result = 0;      /* finished runs that printed a result line */
+static uint32_t     s_runs_stopped_at_quit = 0;  /* runs a normal quit stopped (PS1B-395) */
 /* The compiler's error line that belongs to the next SHARD FAIL line. */
 static char         s_pending_error[AC_FAIL_TEXT_MAX];
 static int          s_after_compile_error = 0;
@@ -1603,9 +1604,28 @@ void autocompile_poll_main(void) {
         autocompile_note_success();
 }
 
+/* PS1B-395: a normal quit stops a compile run that is going and stores the
+ * state idle, and the run report is written after that. Without this the
+ * report hid the stopped run, and a result line the run had already printed
+ * was never added. `state_at_quit` is the state before the kill: running is a
+ * run this quit stopped; done is a run that ended by itself and that the
+ * emulation thread had not accounted yet. Called with the workers joined. */
+static void account_run_at_quit(int state_at_quit) {
+    if (state_at_quit == AC_IDLE) return;
+    if (state_at_quit == AC_RUNNING) s_runs_stopped_at_quit++;
+    if (s_shard_result_seen) {
+        s_shard_fail_total += s_shard_fail;
+        s_units_ok_total += s_shard_ok;
+        s_units_skipped_total += s_shard_skipped;
+        s_runs_with_result++;
+        s_shard_result_seen = 0;
+    }
+}
+
 void autocompile_shutdown(void) {
 #ifdef _WIN32
     if (!s_out_lock_init) return;   /* never configured — nothing to stop */
+    const int state_at_quit = ac_state_load();
     /* Halt the pipeline first so the preparer can never START another
      * LoadLibrary; one already in flight is waited out below (terminating a
      * thread that holds the Windows loader lock can deadlock ExitProcess). */
@@ -1641,14 +1661,17 @@ void autocompile_shutdown(void) {
     /* Both workers are joined and this is the emulation thread, so nothing is
      * preparing or committing: the discard cannot be refused. */
     (void)publish_discard_all();
+    account_run_at_quit(state_at_quit);
     ac_state_store(AC_IDLE);
 #else
     if (!s_out_lock_init) return;   /* never configured — nothing to stop */
+    const int state_at_quit = ac_state_load();
     posix_kill_child_tree();
     if (s_watch_thread_live) {
         pthread_join(s_watch_thread, NULL);
         s_watch_thread_live = 0;
     }
+    account_run_at_quit(state_at_quit);
     ac_state_store(AC_IDLE);
 #endif
 }
@@ -1816,12 +1839,12 @@ int autocompile_report_json(char *out, int cap) {
         "{\"configured\":%d,\"consistent\":%d,\"state\":\"%s\","
         "\"runs\":%u,\"runs_failed\":%u,\"runs_with_result\":%u,"
         "\"units_attempted\":%u,\"units_compiled\":%u,\"units_failed\":%u,"
-        "\"units_skipped\":%u,\"fail_lines\":%u,"
+        "\"units_skipped\":%u,\"fail_lines\":%u,\"runs_stopped_at_quit\":%u,"
         "\"failure_classes_max\":%d,\"failure_text_max\":%d,"
         "\"fail_lines_in_unnamed_classes\":%u,\"failure_classes\":[",
         autocompile_configured(), (locked || !s_out_lock_init) ? 1 : 0,
         names[state & 3], s_runs, s_fails, results,
-        ok + failed, ok, failed, skipped, fail_lines,
+        ok + failed, ok, failed, skipped, fail_lines, s_runs_stopped_at_quit,
         AC_FAIL_CLASS_MAX, AC_FAIL_TEXT_MAX - 1, unclassed);
     for (unsigned i = 0; i < class_count && o > 0 && o < cap; i++) {
         AcFailClass *c = &classes[i];

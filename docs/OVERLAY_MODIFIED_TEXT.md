@@ -31,8 +31,11 @@ foreign interior entries.
 
 Each time a valid unit stops matching, every text_modified page its code
 ranges touch counts one take-out. After 32 take-outs a page is left to the
-interpreter for the rest of the start, loaded units included. The count does
-not decay. A game that re-patches code every frame is stopped in about half a
+interpreter, loaded units included. The count does not decay and is not reset:
+it holds for the rest of the process, across a rematch or a soft return to
+the launcher too. Each dispatch such a page costs is counted in the run
+report under the miss reason `modified_text_backoff`
+(`docs/RUN_REPORT_INTERP_DETAIL.md`). A game that re-patches code every frame is stopped in about half a
 second; a game that re-patches at a change of scene keeps its units for its
 first 32 changes on that page and then runs as it did before PS1B-421.
 

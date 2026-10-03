@@ -65,6 +65,70 @@ PSX_INPUT_ROUTE_FILE=pe-title-to-gameplay.psxrti3 PSX_INPUT_ROUTE_EXIT_AFTER_MAR
   check. The diagnostic product keeps its TAS replay path and evidence
   observers for those formats unchanged.
 
+## Pictures during a replay (any product)
+
+Set `PSX_INPUT_ROUTE_CAPTURE_DIR` to a new, empty folder next to
+`PSX_INPUT_ROUTE_FILE`. The product then writes into that folder:
+
+| File | Written | Content |
+| --- | --- | --- |
+| `frame-NNNNNN.png` | at each picture | the guest display at boundary N (before input N+1) |
+| `checkpoints.jsonl` | one line per picture | RAM SHA-256, hash of the delivered input, display size |
+| `input-end.json` | at the route's last input | the hash of every delivered input |
+| `complete.json` | at the route's last input, last of the capture's own files | frame count, input hash, stop reason |
+| `slice-diag.json` | after `complete.json` | counters of the precise-slice interpreter |
+| `initial-cards.json` | at admission, DualShock routes only | which memory cards were inserted |
+
+```bash
+PSX_INPUT_ROUTE_FILE=boot-to-menu.psxrti PSX_INPUT_ROUTE_CAPTURE_DIR=shots PSX_INPUT_ROUTE_CAPTURE_EVERY=300 PSX_HEADLESS=1 build-release/Parasite_Eve --disc "disc/Parasite Eve (USA) (Disc 1).cue" --bios SCPH1001.BIN
+```
+
+- A picture is written at boundary 0, every `PSX_INPUT_ROUTE_CAPTURE_EVERY`
+  boundaries (1 to 10000, default 300) and at the route's last input. There
+  the product prints `input_route_complete: frames=N ...` and exits with
+  status 0. Without the folder a replay runs on after the route, as before.
+- **A picture run is never the run that proves a route.** Prove the route
+  with a run without the folder (its marker lines and exit status), and take
+  the pictures in a second run. To write a picture the product copies the
+  renderer's frame buffer into the CPU copy of video memory earlier than the
+  game would cause it. One run shows equal marker lines with and without the
+  folder: Kula World (Europe), 3,600 frames, started plain, with pictures
+  and plain again on one Windows host (PS1B-404, evidence folder
+  `pegasus-marker-equality-kula-world-20261003`). The other renderer and a
+  24-bit movie are not shown, so the rule stays.
+- Status 0 means the pictures were written. It does not mean the markers
+  matched: without `PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS=1` a marker mismatch
+  is printed and the run still ends with 0.
+- `PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS=1` still exits at the last marker.
+  Pictures after that marker are not written.
+- The folder is never written twice. A file that already exists stops the
+  product with status 3, and a folder that holds a `complete.json` refuses
+  the route before the game starts.
+- Each input is checked against what the pad port received. A difference
+  stops the product with status 3 (`input route observation failed: ...`).
+  - A digital route (PSXRTI1, or PSXRTI3 with digital records) needs a
+    connected pad on port 1 that is not in analog mode. A product whose pad
+    is in analog mode stops with status 3 at the boundary after the first
+    input.
+  - A DualShock route (PSXRTI2) needs a DualShock on port 1 and no memory
+    card in either slot. A kit's product creates card 1 by default, so
+    switch both cards off for the picture run: `enable1 = false` and
+    `enable2 = false` under `[memcard]` in the product's `settings.toml`.
+- A release product names its exit in the run report
+  (`psx_last_run_report.json`, `exit_origin`): `input_route_capture_complete`
+  when `complete.json` was written, `input_route_capture_failed` for a stop
+  with status 3.
+- With the folder unset a release product does none of this: a loaded route
+  costs one more branch per frame, and no route costs nothing.
+- The release product honours these two variables only. The other observer
+  options (`PSX_INPUT_ROUTE_WATCH_U16`, `PSX_INPUT_ROUTE_CARD1_SHA256`,
+  `PSX_INPUT_ROUTE_NEUTRAL_TAIL`, `PSX_INPUT_ROUTE_CPU_STATE`,
+  `PSX_INPUT_ROUTE_VIDEO_STATE`, `PSX_INPUT_ROUTE_TRACE`) belong to the
+  diagnostic product. Set together with the folder, one of them refuses the
+  route before the game starts and names the variable.
+- The picture is the guest display area, not the window: no upscaling, no
+  widescreen surface, no on-screen messages.
+
 ## Route identity
 
 | Field | Value |

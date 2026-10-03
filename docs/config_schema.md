@@ -116,7 +116,7 @@ respective files.
 | `name` | both | display name, e.g. `"SCPH1001 BIOS"` |
 | `id` | both | canonical id, e.g. `"SCPH-1001"` or `"SCUS-94236"` |
 | `rom` | bios | path to raw flat binary, relative to project root |
-| `exe` | game | path to PS-X EXE file, relative to project root |
+| `exe` | game | path to PS-X EXE file, relative to project root. An installed product has no such file; the runtime then reads the executable from the mounted disc for the text image guard. It tries, in this order: the field's file name at the disc root; the field's last folder and file name as a disc path; the SYSTEM.CNF BOOT path with its directory; that path's file name at the disc root. The first that is a file is the guard's image. So a field that names a disc file other than the BOOT file arms the guard with the named file, and the folder part of the field is tried as a disc directory. The disc reader lists one directory level. |
 | `load_address` | both | hex string, virtual address of first byte (`"0xBFC00000"` BIOS, `"0x80010000"` typical game) |
 | `entry_pc` | both | hex string, first PC to execute |
 | `text_size` | both | hex string, size in bytes of the static region. For games this also bounds main-EXE analysis and establishes the overlay floor. A smaller-than-header bound must be verified non-code and 4 KiB aligned. |
@@ -632,6 +632,42 @@ restore this row without also restoring a UI control for it.
 
 For development, the `turbo_loads` TCP debug command still toggles acceleration
 at runtime.
+
+### `settings_format` in the player's `settings.toml`
+
+The launcher writes a top-level `settings_format = 2` line into `settings.toml`
+at every save. The line says that `[video] fast_boot` and `[video] bios_hle` in
+that file are the player's own lines.
+
+An older launcher had no control for the two keys and still wrote them at every
+save, with whatever value was in force. That echo then pinned the value: a kit
+that later changed `bios_hle` never reached a player who had started an older
+build once, and two netplay peers of one build could boot in different BIOS
+modes. So in a file without `settings_format = 2` the runtime ignores both
+keys, uses the game's own values, and drops the lines at the next save.
+
+For a person or a tool that writes `settings.toml`:
+
+```toml
+settings_format = 2
+
+[video]
+fast_boot = true     # honoured only with the line above
+bios_hle  = false
+```
+
+Without the first line the two keys have no effect. The runtime then says so
+in one stdout line and in the run report (`psx_last_run_report.json`):
+
+```json
+"settings": {"file_format": 0, "current_format": 2, "boot_keys_ignored": 1,
+             "notice": "settings.toml has fast_boot or bios_hle lines but no settings_format = 2 line. ..."}
+```
+
+`file_format` is 0 when the file or the line is absent. A start that ends
+before the settings are read (a game config that cannot be read, for example)
+reports 0 for both formats. Every other key of `settings.toml` is read the
+same way in both formats.
 
 `turbo_audio_sink` is meaningful only while load acceleration is active. It keeps
 the guest SPU timeline advancing but discards accelerated samples before host

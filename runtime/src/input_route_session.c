@@ -7,6 +7,10 @@
 #include "input_dualshock_delivery.h"
 #include "psx_sha256.h"
 #include "sio.h"
+#ifdef PSX_NO_DEBUG_TOOLS
+#include "crash_trace.h"
+#include "input_route_observer.h"
+#endif
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -62,6 +66,17 @@ static InputDualShockRouteStep *s_dual;
 static uint32_t s_step_count, s_step_index, s_step_remaining;
 static int s_release_loaded, s_release_dual;
 static uint8_t s_dual_axes[4] = {128, 128, 128, 128};
+#ifdef PSX_NO_DEBUG_TOOLS
+/* Route pictures in a release product (PS1B-404). The diagnostic product
+ * drives the route observer from its debug server; a release product has no
+ * debug server, so the release replay drives it, and only when
+ * PSX_INPUT_ROUTE_CAPTURE_DIR is set. */
+static int s_release_capture;
+static uint32_t s_release_consumed;  /* inputs supplied so far */
+static int s_release_in_observer;    /* an observer call is on the stack */
+static char s_release_complete_path[4096];
+extern uint64_t s_frame_count;
+#endif
 
 /* Recorder (diagnostic product only). */
 #ifndef PSX_NO_DEBUG_TOOLS
@@ -341,6 +356,94 @@ static int refuse(const char *path, const char *why)
     return 0;
 }
 
+#ifdef PSX_NO_DEBUG_TOOLS
+/* A release product honours the capture directory and the capture interval,
+ * nothing else of the observer. Its other options read state that only the
+ * debug server keeps, or belong to evidence runs; with the capture directory
+ * set, one of them refuses the route by name, so that an evidence file that
+ * was asked for is never silently missing. Returns 0 when refused. */
+/* The observer ends the process itself: status 0 after it wrote the completion
+ * record at the route's end, status 3 when a delivery or a file fails. The
+ * exit is named for the run report here, after the files are written, so a
+ * run that fails at its last boundary is not reported as a finished capture.
+ * Registered after the crash trace's own handler, so it runs before it. */
+static void release_capture_at_exit(void)
+{
+    if (!s_release_in_observer) return;
+    FILE *done = fopen(s_release_complete_path, "rb");
+    if (done) fclose(done);
+    psx_crash_trace_set_exit_origin(done ? "input_route_capture_complete"
+                                         : "input_route_capture_failed");
+}
+
+static int release_capture_begin(const char *path, uint32_t frames, int dualshock)
+{
+    /* A watch list and a card identity have no "off" value: refused when set.
+     * The others are refused unless "0". */
+    static const struct { const char *name; int off_value; } diagnostic_only[] = {
+        {"PSX_INPUT_ROUTE_WATCH_U16", 0}, {"PSX_INPUT_ROUTE_CARD1_SHA256", 0},
+        {"PSX_INPUT_ROUTE_NEUTRAL_TAIL", 1}, {"PSX_INPUT_ROUTE_CPU_STATE", 1},
+        {"PSX_INPUT_ROUTE_VIDEO_STATE", 1}, {"PSX_INPUT_ROUTE_TRACE", 1},
+    };
+    const char *dir = getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
+    if (!dir) return 1;
+    for (size_t i = 0; i < sizeof(diagnostic_only) / sizeof(diagnostic_only[0]); ++i) {
+        const char *value = getenv(diagnostic_only[i].name);
+        if (!value) continue;
+        if (diagnostic_only[i].off_value && !strcmp(value, "0")) continue;
+        fprintf(stderr, "input route rejected: %s needs the diagnostic product; a release "
+                        "product honours PSX_INPUT_ROUTE_CAPTURE_DIR and "
+                        "PSX_INPUT_ROUTE_CAPTURE_EVERY only (%s)\n",
+                diagnostic_only[i].name, path);
+        return 0;
+    }
+    /* The completion record tells a finished capture from a failed one at
+     * exit, so it must not be there before this run writes it. */
+    int n = snprintf(s_release_complete_path, sizeof(s_release_complete_path),
+                     "%s/complete.json", dir);
+    if (n < 0 || (size_t)n >= sizeof(s_release_complete_path))
+        return refuse(path, "the capture directory name is too long");
+    FILE *held = dir[0] ? fopen(s_release_complete_path, "rb") : NULL;
+    if (held) {
+        fclose(held);
+        return refuse(path, "the capture directory already holds a finished capture");
+    }
+    atexit(release_capture_at_exit);
+    s_release_in_observer = 1;
+    const int ready = dualshock ? input_route_observer_dualshock_init(frames)
+                                : input_route_observer_init(frames);
+    s_release_in_observer = 0;
+    if (!ready)
+        return refuse(path, "the capture directory or interval is not valid");
+    s_release_capture = 1;
+    s_release_consumed = 0;
+    fprintf(stdout, "input_route_capture: product=release frames=%u\n", (unsigned)frames);
+    return 1;
+}
+
+/* What SIO holds from the input supplied at the last boundary. The diagnostic
+ * product reports this right after it samples the pad; here it is read at the
+ * next boundary, so that main.cpp needs no call of its own. Nothing but the
+ * next input writes the buttons and sticks in between. A DualShock's analog
+ * mode belongs to the guest, so the mode reported is the one at that boundary. */
+static void release_capture_delivered(void)
+{
+    if (!s_release_consumed) return;
+    if (s_release_dual) {
+        uint8_t sticks[4];
+        int connected = sio_get_pad_connected(0) && !sio_get_multitap();
+        for (int slot = 1; slot < PSX_MAX_PLAYERS; ++slot)
+            if (sio_get_pad_connected(slot)) connected = 0;
+        sio_get_pad_sticks(0, sticks);
+        input_route_observer_dualshock_applied(sio_get_pad_buttons_slot(0), sticks,
+            connected, sio_get_pad_config_capable(0), sio_get_pad_analog(0));
+        return;
+    }
+    input_route_observer_applied(sio_get_pad_buttons_slot(0),
+                                 sio_get_pad_connected(0), sio_get_pad_analog(0));
+}
+#endif
+
 static int alloc_steps(InputRouteStep **digital, InputDualShockRouteStep **dual)
 {
     *digital = (InputRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(**digital));
@@ -401,6 +504,13 @@ int input_route_session_admit(const char *path)
         memset(s_markers, 0, sizeof(s_markers));
         return refuse(path, error);
     }
+#ifdef PSX_NO_DEBUG_TOOLS
+    if (!release_capture_begin(path, frames, dualshock)) {
+        free(digital); free(dual);
+        memset(s_markers, 0, sizeof(s_markers));
+        return 0;
+    }
+#endif
     s_route_armed = 1;
 #ifdef PSX_NO_DEBUG_TOOLS
     /* Release replay owns the steps. The diagnostic product reparses them in
@@ -628,9 +738,8 @@ int input_route_session_boundary(void)
 
 /* ---- Release replay ---- */
 
-int input_route_session_release_override(void)
+static int release_next_word(void)
 {
-    if (!s_release_loaded) return -1;
     if (s_release_dual) {
         uint16_t current = 0xFFFF;
         memset(s_dual_axes, 128, sizeof(s_dual_axes));
@@ -648,6 +757,28 @@ int input_route_session_release_override(void)
     if (--s_step_remaining == 0 && ++s_step_index < s_step_count)
         s_step_remaining = s_digital[s_step_index].frames;
     return current;
+}
+
+int input_route_session_release_override(void)
+{
+    if (!s_release_loaded) return -1;
+#ifdef PSX_NO_DEBUG_TOOLS
+    if (s_release_capture) {
+        /* The observer's order, as in the diagnostic product: the delivery of
+         * the last input, the boundary (which writes the picture and, at the
+         * route's end, exits the process with status 0), then the next input. */
+        s_release_in_observer = 1;
+        release_capture_delivered();
+        input_route_observer_boundary(s_release_consumed, s_frame_count);
+        const int word = release_next_word();
+        if (s_release_dual) input_route_observer_dualshock_input((uint16_t)word, s_dual_axes);
+        else input_route_observer_input((uint16_t)word);
+        s_release_in_observer = 0;
+        ++s_release_consumed;
+        return word;
+    }
+#endif
+    return release_next_word();
 }
 
 int input_route_session_release_dualshock(int buttons)
