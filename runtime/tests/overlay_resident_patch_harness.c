@@ -468,12 +468,10 @@ int main(int argc, char **argv) {
                                                     uint64_t kernel[PSX_INTERP_MISS_REASONS]);
         uint64_t above[PSX_INTERP_MISS_REASONS], kernel[PSX_INTERP_MISS_REASONS];
         overlay_loader_get_miss_reasons(above, kernel);
-        printf("backed off: %llu dispatches counted under modified_text_backoff
-",
+        printf("backed off: %llu dispatches counted under modified_text_backoff\n",
                (unsigned long long)above[PSX_MISS_MODIFIED_TEXT_BACKOFF]);
         if (above[PSX_MISS_MODIFIED_TEXT_BACKOFF] != 3 || kernel[PSX_MISS_MODIFIED_TEXT_BACKOFF] != 0) {
-            printf("the back-off's miss reason UNEXPECTED
-");
+            printf("the back-off's miss reason UNEXPECTED\n");
             s_failures++;
         }
     }
