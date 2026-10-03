@@ -361,6 +361,12 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng
             --classes C3,C3b,C4,C9)
     endforeach()
+    # PS1B-424: the rows of section 14 of the CD spec (command reception and
+    # Init on the source clock), through the production cdrom.c.
+    add_executable(cdrom_source_clock_rows_test tests/test_cdrom_source_clock_rows.c src/psx_sha256.c)
+    target_include_directories(cdrom_source_clock_rows_test PRIVATE include)
+    add_test(NAME cdrom_source_clock_rows_test COMMAND cdrom_source_clock_rows_test
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
 
     add_executable(input_route_file_test tests/test_input_route_file.c)
     target_include_directories(input_route_file_test PRIVATE include)
