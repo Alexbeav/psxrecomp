@@ -15,6 +15,8 @@ and data folders. The parts here check that from the inside: the folders they
 see are not the caller's, the toolchain variables are gone, and a part that
 writes a pack or a pointer makes the start fail.
 """
+import contextlib
+import io
 import os
 from pathlib import Path
 import sys
@@ -116,6 +118,34 @@ class PlainStart(unittest.TestCase):
         self.assertEqual(verdict, "pass", (text, lines))
         self.assertIn("reached host:before_run_window", text)
         self.assertLess(took, 20, "the program must be stopped at the stamp, not waited for")
+
+    def test_what_the_program_wrote_is_shown_on_a_pass_too_and_goes_to_the_log(self):
+        # A package with its config taken away passed on Pegasus and nothing said why: the tool
+        # printed the program's lines only on a fail (PS1B-411).
+        verdict, text, lines, _took = start("starts")
+        self.assertEqual(verdict, "pass", (text, lines))
+        printed = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "start.log"
+            with contextlib.redirect_stdout(printed):
+                code = tool.report(verdict, text, lines, "setup-program", str(log))
+            logged = log.read_text(encoding="utf-8")
+        self.assertEqual(code, 0)
+        shown = printed.getvalue()
+        self.assertIn("setup host plain start: PASS", shown.splitlines()[0])
+        self.assertIn("  | psxrecomp: main() entered", shown)
+        self.assertIn("host:before_run_window", shown.split("\n", 1)[1])
+        self.assertIn("psxrecomp: main() entered\n", logged)
+        self.assertIn(STAMP_LINE, logged)
+
+    def test_a_fail_shows_the_program_lines_and_returns_one(self):
+        verdict, text, lines, _took = start("refuses")
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = tool.report(verdict, text, lines, "setup-program")
+        self.assertEqual(code, 1)
+        self.assertIn("setup host plain start: FAIL", printed.getvalue().splitlines()[0])
+        self.assertIn('key "name" not found', printed.getvalue())
 
     def test_a_program_that_refuses_its_config_fails_and_its_words_are_kept(self):
         verdict, text, lines, took = start("refuses")

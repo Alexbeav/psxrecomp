@@ -42,7 +42,15 @@ program reads PSXRECOMP_TOOLCHAIN_READONLY only from the change of PS1B-410
 variable. Setting it costs nothing for those and closes the last way (a pack
 the program finds by another route) for the ones that know it.
 
-  setup_host_plain_start.py --exe <setup program> [--root <its folder>] [--timeout seconds]
+What a pass does not say. The verdict is read from the program's own lines,
+and only one thing is asked: does it get as far as its launcher. A program
+that finds no config file at all does not refuse anything: it goes on to its
+launcher and passes here. A config the program can load passes whatever it
+lacks for a later step. So that a verdict can be checked by a reader, the
+program's stderr lines are printed after the verdict, on a pass as on a fail,
+and --log writes all of them to a file.
+
+  setup_host_plain_start.py --exe <setup program> [--root <its folder>] [--timeout seconds] [--log <file>]
 
 Exit 0 pass, 1 fail, 3 the program cannot run on this machine (a package built
 for another system). tools/package_setup_host.sh runs it on the staged package.
@@ -219,11 +227,42 @@ def _start_and_watch(command, cwd, env, timeout, pass_stamp):
     return 'fail', 'no %s within %d s' % (pass_stamp, int(timeout)), lines
 
 
+SHOWN_LINES = 20
+
+
+def report(verdict, text, lines, exe, log_path=''):
+    """Prints the verdict and what the program wrote to stderr; returns the exit code.
+
+    The program's lines are shown on a pass too: a pass that nobody can read is
+    a pass nobody can check (a package with its config taken away passed, and
+    the reason was not visible). `log_path` gets every line."""
+    if log_path:
+        with open(log_path, 'w', encoding='utf-8', newline='\n') as out:
+            out.write('\n'.join(lines) + ('\n' if lines else ''))
+    if verdict == 'pass':
+        print('setup host plain start: PASS (%s; %s)' % (text, exe))
+        code = 0
+    elif verdict == 'cannot-run':
+        print('setup host plain start: NOT CHECKED: %s; %s' % (text, exe))
+        return CANNOT_RUN
+    else:
+        print('setup host plain start: FAIL: %s (%s)' % (text, exe))
+        code = 1
+    if lines:
+        print('  the program wrote %d line(s) to stderr; the last %d:' % (len(lines), min(len(lines), SHOWN_LINES)))
+        for line in lines[-SHOWN_LINES:]:
+            print('  | ' + line)
+    else:
+        print('  the program wrote nothing to stderr')
+    return code
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--exe', required=True, help='the setup program')
     parser.add_argument('--root', default='', help='its folder (default: the folder of --exe)')
     parser.add_argument('--timeout', type=float, default=60.0)
+    parser.add_argument('--log', default='', help='write every stderr line of the program to this file')
     args = parser.parse_args(argv)
     exe = os.path.abspath(args.exe)
     if not os.path.isfile(exe):
@@ -231,16 +270,7 @@ def main(argv=None):
         return 1
     root = os.path.abspath(args.root) if args.root else os.path.dirname(exe)
     verdict, text, lines = plain_start([exe], root, timeout=args.timeout)
-    if verdict == 'pass':
-        print('setup host plain start: PASS (%s; %s)' % (text, exe))
-        return 0
-    if verdict == 'cannot-run':
-        print('setup host plain start: NOT CHECKED: %s; %s' % (text, exe))
-        return CANNOT_RUN
-    print('setup host plain start: FAIL: %s (%s)' % (text, exe))
-    for line in lines[-20:]:
-        print('  ' + line)
-    return 1
+    return report(verdict, text, lines, exe, args.log)
 
 
 if __name__ == '__main__':
