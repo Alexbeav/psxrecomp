@@ -22,15 +22,45 @@ to open. `PSXRECOMP_NO_FORWARD=1` keeps a folder that is already set up from
 starting its game instead. The program is stopped, not asked to quit, so it
 writes no settings into its folder on a pass.
 
-  setup_host_plain_start.py --exe <setup program> [--root <its folder>] [--timeout seconds]
+The program gets its own toolchain and data folders. A setup program holds a
+toolchain installer: when its launcher opens it tests the machine's toolchain
+pack, and after one failed test it removes or renames that pack; a rebuild
+installs a downloaded pack over the installed one. A gate must never give it
+the machine's own folders (PS1B-406: a test that did emptied a build host's
+toolchain). So every folder the program derives a toolchain or data root from
+(LOCALAPPDATA, APPDATA, USERPROFILE, HOME, XDG_DATA_HOME, RETCOMM_DATA_HOME,
+RETCOMM_TOOLCHAIN_CACHE, TEMP, TMP) is a folder made for this start and removed
+after it, the variables that name a toolchain are taken out, the proxy
+variables point at a closed port, and PSXRECOMP_TOOLCHAIN_READONLY=1 is set.
+The start fails when the program left a pack or a pointer in those folders,
+when it made a toolchain folder in the package, and it is not made at all when
+the package's toolchain stamp points outside the package.
+
+What protects the machine here is the folders, not the variable. A setup
+program reads PSXRECOMP_TOOLCHAIN_READONLY only from the change of PS1B-410
+(the host's read-only switch) on; a program built before it ignores the
+variable. Setting it costs nothing for those and closes the last way (a pack
+the program finds by another route) for the ones that know it.
+
+What a pass does not say. The verdict is read from the program's own lines,
+and only one thing is asked: does it get as far as its launcher. A program
+that finds no config file at all does not refuse anything: it goes on to its
+launcher and passes here. A config the program can load passes whatever it
+lacks for a later step. So that a verdict can be checked by a reader, the
+program's stderr lines are printed after the verdict, on a pass as on a fail,
+and --log writes all of them to a file.
+
+  setup_host_plain_start.py --exe <setup program> [--root <its folder>] [--timeout seconds] [--log <file>]
 
 Exit 0 pass, 1 fail, 3 the program cannot run on this machine (a package built
 for another system). tools/package_setup_host.sh runs it on the staged package.
 """
 import argparse
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -38,14 +68,108 @@ PASS_STAMP = 'host:before_run_window'
 REFUSED = 'failed to load --game'
 CANNOT_RUN = 3
 
+# Each of these becomes a folder of the start. The program's toolchain cache
+# bases are derived from them (host/psxrecomp_codegen_host.c,
+# collect_toolchain_cache_bases).
+CLOSED_ROOTS = (
+    ('LOCALAPPDATA', 'localappdata'), ('APPDATA', 'appdata'), ('USERPROFILE', 'home'), ('HOME', 'home'),
+    ('XDG_DATA_HOME', 'xdg-data'), ('RETCOMM_DATA_HOME', 'retcomm-data'),
+    ('RETCOMM_TOOLCHAIN_CACHE', 'retcomm-toolchain-cache'),
+    ('TEMP', 'temp'), ('TMP', 'temp'), ('TMPDIR', 'temp'),
+)
+# Variables that name a toolchain or ask the program for a build.
+TOOLCHAIN_VARIABLES = ('RETCOMM_TOOLCHAIN_DIR', 'PSXRECOMP_TOOLCHAIN_DIR', 'TOOLCHAIN_DIR', 'BPE_TOOLCHAIN_DIR',
+                       'CMAKE', 'PYTHON', 'RETCOMM_PYTHON', 'PSXRECOMP_DIAGNOSTIC', 'PSXRECOMP_FORCE_SETUP')
+READONLY_SWITCH = 'PSXRECOMP_TOOLCHAIN_READONLY'
+DEAD_PROXY = 'http://127.0.0.1:9'
+# Where a pack or a pointer would land, below the folders of the start.
+TOOLCHAIN_PLACES = (
+    'retcomm-toolchain-cache', os.path.join('retcomm-data', 'toolchains'),
+    os.path.join('localappdata', 'retcomm'), os.path.join('localappdata', 'psxrecomp'),
+    os.path.join('localappdata', 'Packages'),
+    os.path.join('xdg-data', 'retcomm'), os.path.join('xdg-data', 'psxrecomp'),
+    os.path.join('home', '.local', 'share', 'retcomm'), os.path.join('home', '.local', 'share', 'psxrecomp'),
+)
 
-def plain_start(command, cwd, timeout=60.0, pass_stamp=PASS_STAMP):
-    """(verdict, text, stderr lines). verdict: 'pass', 'fail' or 'cannot-run'."""
+
+def closed_environment(sandbox):
+    """The caller's environment with the program's toolchain and data roots moved into `sandbox`."""
     env = dict(os.environ, PSX_LAUNCHER_BOOT_TIMING='1', PSXRECOMP_NO_FORWARD='1',
                SDL_VIDEO_DRIVER='dummy', SDL_VIDEODRIVER='dummy',
                SDL_AUDIO_DRIVER='dummy', SDL_AUDIODRIVER='dummy')
     env.pop('PSX_HEADLESS', None)           # a headless start is another route
     env.pop('PSX_NO_LAUNCHER', None)
+    for name in TOOLCHAIN_VARIABLES:
+        env.pop(name, None)
+    for name, folder in CLOSED_ROOTS:
+        os.makedirs(os.path.join(sandbox, folder), exist_ok=True)
+        env[name] = os.path.join(sandbox, folder)
+    for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'):
+        env.pop(name.lower(), None)
+        env[name] = DEAD_PROXY
+        if os.name != 'nt':                 # Windows names are case-blind
+            env[name.lower()] = DEAD_PROXY
+    env[READONLY_SWITCH] = '1'
+    return env
+
+
+def toolchain_leftovers(sandbox):
+    """What the program left where a toolchain pack or pointer lands. Must be empty."""
+    found = []
+    made_here = {folder for _name, folder in CLOSED_ROOTS}
+    for place in TOOLCHAIN_PLACES:
+        top = os.path.join(sandbox, place)
+        if not os.path.lexists(top):
+            continue
+        if place not in made_here:          # the start made the root folders itself, empty
+            found.append(place)
+        for folder, names, files in os.walk(top):
+            found.extend(os.path.relpath(os.path.join(folder, n), sandbox) for n in names + files)
+    return found
+
+
+def stamp_outside(cwd):
+    """The line of <cwd>/toolchain/.psxrecomp-bin when it names a folder outside cwd, else ''.
+    The program takes its toolchain from that line, so a start could change that folder."""
+    stamp = os.path.join(cwd, 'toolchain', '.psxrecomp-bin')
+    try:
+        with open(stamp, 'r', encoding='utf-8', errors='replace') as stream:
+            line = stream.readline().strip()
+    except OSError:
+        return ''
+    if not line:
+        return ''
+    target = os.path.realpath(line if os.path.isabs(line) else os.path.join(cwd, line))
+    inside = os.path.realpath(cwd)
+    try:
+        return '' if os.path.commonpath([inside, target]) == inside else line
+    except ValueError:                      # another drive
+        return line
+
+
+def plain_start(command, cwd, timeout=60.0, pass_stamp=PASS_STAMP, sandbox_parent=None):
+    """(verdict, text, stderr lines). verdict: 'pass', 'fail' or 'cannot-run'."""
+    outside = stamp_outside(cwd)
+    if outside:
+        return 'fail', ('the folder has a toolchain stamp that points outside it (%s); the setup program was not '
+                        'started, because a start could change that toolchain' % outside), []
+    had_toolchain = os.path.lexists(os.path.join(cwd, 'toolchain'))
+    sandbox = tempfile.mkdtemp(prefix='plain-start-', dir=sandbox_parent)
+    try:
+        verdict, text, lines = _start_and_watch(command, cwd, closed_environment(sandbox), timeout, pass_stamp)
+        if verdict != 'cannot-run':
+            left = toolchain_leftovers(sandbox)
+            if not had_toolchain and os.path.lexists(os.path.join(cwd, 'toolchain')):
+                left.append('a toolchain folder in the package')
+            if left:
+                return 'fail', ('the setup program wrote a toolchain pack or pointer during a plain start: %s'
+                                % ', '.join(left[:12])), lines
+        return verdict, text, lines
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def _start_and_watch(command, cwd, env, timeout, pass_stamp):
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
     started = time.monotonic()
     try:
@@ -103,11 +227,42 @@ def plain_start(command, cwd, timeout=60.0, pass_stamp=PASS_STAMP):
     return 'fail', 'no %s within %d s' % (pass_stamp, int(timeout)), lines
 
 
+SHOWN_LINES = 20
+
+
+def report(verdict, text, lines, exe, log_path=''):
+    """Prints the verdict and what the program wrote to stderr; returns the exit code.
+
+    The program's lines are shown on a pass too: a pass that nobody can read is
+    a pass nobody can check (a package with its config taken away passed, and
+    the reason was not visible). `log_path` gets every line."""
+    if log_path:
+        with open(log_path, 'w', encoding='utf-8', newline='\n') as out:
+            out.write('\n'.join(lines) + ('\n' if lines else ''))
+    if verdict == 'pass':
+        print('setup host plain start: PASS (%s; %s)' % (text, exe))
+        code = 0
+    elif verdict == 'cannot-run':
+        print('setup host plain start: NOT CHECKED: %s; %s' % (text, exe))
+        return CANNOT_RUN
+    else:
+        print('setup host plain start: FAIL: %s (%s)' % (text, exe))
+        code = 1
+    if lines:
+        print('  the program wrote %d line(s) to stderr; the last %d:' % (len(lines), min(len(lines), SHOWN_LINES)))
+        for line in lines[-SHOWN_LINES:]:
+            print('  | ' + line)
+    else:
+        print('  the program wrote nothing to stderr')
+    return code
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--exe', required=True, help='the setup program')
     parser.add_argument('--root', default='', help='its folder (default: the folder of --exe)')
     parser.add_argument('--timeout', type=float, default=60.0)
+    parser.add_argument('--log', default='', help='write every stderr line of the program to this file')
     args = parser.parse_args(argv)
     exe = os.path.abspath(args.exe)
     if not os.path.isfile(exe):
@@ -115,16 +270,7 @@ def main(argv=None):
         return 1
     root = os.path.abspath(args.root) if args.root else os.path.dirname(exe)
     verdict, text, lines = plain_start([exe], root, timeout=args.timeout)
-    if verdict == 'pass':
-        print('setup host plain start: PASS (%s; %s)' % (text, exe))
-        return 0
-    if verdict == 'cannot-run':
-        print('setup host plain start: NOT CHECKED: %s; %s' % (text, exe))
-        return CANNOT_RUN
-    print('setup host plain start: FAIL: %s (%s)' % (text, exe))
-    for line in lines[-20:]:
-        print('  ' + line)
-    return 1
+    return report(verdict, text, lines, exe, args.log)
 
 
 if __name__ == '__main__':
