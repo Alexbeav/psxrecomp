@@ -38,6 +38,9 @@ if(BUILD_TESTING)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
+    add_executable(mdec_snapshot_activity_test tests/test_mdec_snapshot_activity.c)
+    target_include_directories(mdec_snapshot_activity_test PRIVATE include src)
+    add_test(NAME mdec_snapshot_activity_test COMMAND mdec_snapshot_activity_test)
     add_executable(mod_texture_banks_test tests/test_mod_texture_banks.c src/mod_texture_banks.c)
     target_include_directories(mod_texture_banks_test PRIVATE include)
     add_test(NAME mod_texture_banks_test COMMAND mod_texture_banks_test)
@@ -416,6 +419,35 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
+
+    # auto_ui_squash corrects untextured HUD fills with their textured frames.
+    add_executable(ws_auto_ui_untextured_exec_test
+        tests/test_ws_auto_ui_untextured_exec.c
+        src/ws_ui_group.c
+        src/psx_video_timing.c)
+    target_include_directories(ws_auto_ui_untextured_exec_test PRIVATE
+        include
+        src)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ws_auto_ui_untextured_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(ws_auto_ui_untextured_exec_test PRIVATE
+            -Wl,--gc-sections)
+    endif()
+    add_test(NAME ws_auto_ui_untextured_exec_test
+             COMMAND ws_auto_ui_untextured_exec_test)
+
+    add_executable(ws_shared_split_ui_exec_test
+        tests/test_ws_shared_split_ui_exec.c
+        src/ws_ui_group.c
+        src/psx_video_timing.c)
+    target_include_directories(ws_shared_split_ui_exec_test PRIVATE include src)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ws_shared_split_ui_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(ws_shared_split_ui_exec_test PRIVATE -Wl,--gc-sections)
+    endif()
+    add_test(NAME ws_shared_split_ui_exec_test COMMAND ws_shared_split_ui_exec_test)
 
     add_executable(ws_view_anchor_test tests/test_ws_view_anchor.c)
     add_executable(ws_view_anchor_gpu_test tests/test_ws_view_anchor_gpu.c
@@ -988,6 +1020,7 @@ if(BUILD_TESTING)
         add_test(NAME setup_bios_assets_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_bios_assets.py)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
+            add_test(NAME persisted_settings_paths_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_persisted_settings_paths.py --compiler ${CMAKE_CXX_COMPILER})
         endif()
         add_test(NAME disc_picker_ascii_test COMMAND ${Python3_EXECUTABLE}
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)

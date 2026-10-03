@@ -20,13 +20,12 @@
 
 extern uint64_t s_frame_count;
 
-/* FMV-activity detector: host display-frame stamp of the newest colour
- * (15/24-bit) MDEC decode. Used only by mdec_recently_active() for local
- * frontend / rewind policy — never folded into netplay digests. */
-static uint64_t mdec_last_color_decode_frame = (uint64_t)0 - 1000u;
-/* Guest-cycle stamp of the same event — snap age is relative to this so
- * peers with identical FIFO/tables but different present rates hash equal. */
-static uint64_t mdec_last_color_decode_cycle = (uint64_t)0 - 1000u;
+/* FMV-activity detector: guest-cycle stamp of the newest colour (15/24-bit)
+ * MDEC decode, read by mdec_recently_active() / mdec_color_age_cycles(). The
+ * snapshot carries its age, so peers with identical FIFO/tables but different
+ * present rates hash equal. MDEC_NEVER_DECODED = no colour decode yet. */
+#define MDEC_NEVER_DECODED ((uint64_t)0 - 1000u)
+static uint64_t mdec_last_color_decode_cycle = MDEC_NEVER_DECODED;
 
 enum {
     MDEC_CMD_NOP = 0,
@@ -691,7 +690,6 @@ static void execute_decode(void) {
     mdec.decode_input_pos = pos;
     /* FMV detector: stamp colour (15/24-bit) decodes only — streamed video.
      * The 4/8-bit luma path above is texture decompression, not video. */
-    mdec_last_color_decode_frame = s_frame_count;
     mdec_last_color_decode_cycle = psx_cycle_count;
     trace_event(MDEC_EVT_DECODE_DONE, mdec.output_size);
 }
@@ -784,7 +782,7 @@ int mdec_recently_active(uint32_t within_frames) {
 }
 
 uint64_t mdec_color_age_cycles(void) {
-    if (mdec_last_color_decode_cycle == (uint64_t)0 - 1000u)
+    if (mdec_last_color_decode_cycle == MDEC_NEVER_DECODED)
         return (uint64_t)0 - 1u;
     if (psx_cycle_count < mdec_last_color_decode_cycle)
         return (uint64_t)0 - 1u;
@@ -796,10 +794,9 @@ void mdec_init(void) {
     memset(mdec_trace, 0, sizeof(mdec_trace));
     mdec_trace_seq = 0;
     mdec_trace_head = 0;
-    /* Rematch resets s_frame_count; a stale stamp makes mdec_recently_active
-     * wrap and lie for the whole next session. */
-    mdec_last_color_decode_frame = (uint64_t)0 - 1000u;
-    mdec_last_color_decode_cycle = (uint64_t)0 - 1000u;
+    /* A rematch resets the guest clock; a stale stamp would make
+     * mdec_recently_active lie for the whole next session. */
+    mdec_last_color_decode_cycle = MDEC_NEVER_DECODED;
     for (int i = 0; i < 64; i++) {
         mdec.y_quant[i] = 1;
         mdec.uv_quant[i] = 1;
@@ -1057,7 +1054,14 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words) {
 }
 
 /* ---- boot_state snapshot (variable-length input/output FIFOs) ------------ */
-#define MDEC_SNAP_VER 1u
+/* v2: the colour-decode age is MDEC_SNAP_AGE_NEVER when nothing was decoded.
+ * v1 wrote age 1000 for that case, which a load turned into "decoded 1000
+ * cycles ago" -- a false FMV for the next ~8 frames after every snapshot load
+ * made before the first video (issue #475). v1 payloads still load. */
+#define MDEC_SNAP_VER 2u
+#define MDEC_SNAP_VER_V1 1u
+#define MDEC_SNAP_AGE_NEVER UINT64_MAX
+#define MDEC_SNAP_V1_AGE_NEVER 1000ull
 #define MDEC_SNAP_INPUT_MAX  (4u * 1024u * 1024u) /* halfwords */
 #define MDEC_SNAP_OUTPUT_MAX (8u * 1024u * 1024u) /* bytes */
 
@@ -1116,10 +1120,11 @@ void mdec_snapshot_write(uint8_t *p) {
     (void)pst_w_u32(&w, mdec.input_count);
     (void)pst_w_u32(&w, mdec.output_size);
     /* Guest-cycle age (not host s_frame_count) — netplay aux digests this blob. */
-    if (psx_cycle_count >= mdec_last_color_decode_cycle)
-        age = psx_cycle_count - mdec_last_color_decode_cycle;
+    if (mdec_last_color_decode_cycle == MDEC_NEVER_DECODED ||
+        psx_cycle_count < mdec_last_color_decode_cycle)
+        age = MDEC_SNAP_AGE_NEVER;
     else
-        age = 1000ull;
+        age = psx_cycle_count - mdec_last_color_decode_cycle;
     (void)pst_w_u64(&w, age);
     for (uint32_t i = 0; i < mdec.input_count; i++)
         (void)pst_w_u16(&w, mdec.input ? mdec.input[i] : 0u);
@@ -1144,7 +1149,8 @@ static uint32_t mdec_wire_u32(const uint8_t *p, uint32_t off) {
 int mdec_snapshot_validate(const uint8_t *p, uint32_t len) {
     uint32_t input_count, output_size;
     if (!p || len < mdec_snap_fixed_bytes()) return 0;
-    if (mdec_wire_u32(p, 0u) != MDEC_SNAP_VER) return 0;
+    if (mdec_wire_u32(p, 0u) != MDEC_SNAP_VER &&
+        mdec_wire_u32(p, 0u) != MDEC_SNAP_VER_V1) return 0;
     input_count = mdec_wire_u32(p, MDEC_SNAP_OFF_COUNTS);
     output_size = mdec_wire_u32(p, MDEC_SNAP_OFF_COUNTS + 4u);
     if (input_count > MDEC_SNAP_INPUT_MAX || output_size > MDEC_SNAP_OUTPUT_MAX)
@@ -1157,11 +1163,12 @@ int mdec_snapshot_validate(const uint8_t *p, uint32_t len) {
 int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     uint32_t ver = 0, input_count = 0, output_size = 0, reserved;
-    uint64_t age = 1000ull;
+    uint64_t age = MDEC_SNAP_AGE_NEVER;
     int16_t s16;
     if (!mdec_snapshot_validate(p, len)) return 0;
     pst_r_init(&r, p, len);
-    if (!pst_r_u32(&r, &ver) || ver != MDEC_SNAP_VER) return 0;
+    if (!pst_r_u32(&r, &ver) ||
+        (ver != MDEC_SNAP_VER && ver != MDEC_SNAP_VER_V1)) return 0;
     if (!pst_r_u32(&r, &mdec.command) ||
         !pst_r_u32(&r, &mdec.expected_halfwords) ||
         !pst_r_u32(&r, &mdec.last_status) ||
@@ -1213,24 +1220,14 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     }
     if (output_size && !pst_r_bytes(&r, mdec.output, output_size))
         return 0;
-    /* Age is guest cycles since last colour decode (SNAP_VER=1 payload). */
-    if (age > (1ull << 40))
-        age = (1ull << 40);
-    if (age >= psx_cycle_count)
-        mdec_last_color_decode_cycle = 0;
+    /* Age is guest cycles since the last colour decode. "Never" stays never:
+     * restoring it as a recent decode reports FMV that is not playing. A decode
+     * older than the restored clock's origin cannot be recent either. */
+    if (ver == MDEC_SNAP_VER_V1 && age == MDEC_SNAP_V1_AGE_NEVER)
+        age = MDEC_SNAP_AGE_NEVER;
+    if (age == MDEC_SNAP_AGE_NEVER || age > psx_cycle_count)
+        mdec_last_color_decode_cycle = MDEC_NEVER_DECODED;
     else
         mdec_last_color_decode_cycle = psx_cycle_count - age;
-    /* Refresh host-frame hysteresis for local FMV policy only (~1 frame ≈
-     * 338688 cycles @ NTSC). Cap so recently_active stays meaningful. */
-    {
-        const uint64_t cycles_per_frame = 338688ull;
-        uint64_t frames_ago = age / cycles_per_frame;
-        if (frames_ago > 100000ull)
-            frames_ago = 100000ull;
-        if (frames_ago >= s_frame_count)
-            mdec_last_color_decode_frame = 0;
-        else
-            mdec_last_color_decode_frame = s_frame_count - frames_ago;
-    }
     return 1;
 }

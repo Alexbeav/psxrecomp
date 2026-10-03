@@ -63,6 +63,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "psx_netplay_rb.h"
 #include "psx_selfcheck.h"
 #include "psx_lobby_client.h"
+#include "recomp_net/host_relay.h" /* RNetHostRelayStatus for the launcher relay line */
 #include "netplay_bios_settle.h"
 #include "netplay_exit_reason.h"
 #include "host_time.h"
@@ -152,6 +153,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -1436,6 +1438,9 @@ static int g_netplay_local_viewport = 0; /* 0 off, 1 vertical split */
 /* Optional aspect for netplay local-view extraction. Mirrors trusted mod aspect
  * activation, but remains game.toml opt-in so normal netplay stays vanilla. */
 static int g_netplay_local_viewport_aspect = 0; /* 0 off, 1 16:9, 2 21:9, 3 adaptive */
+/* [netplay] local_viewport_renderer = "projection": widen the projection into
+ * the local half instead of rendering native-wide columns beside it. */
+static int g_netplay_local_viewport_projection = 0;
 
 extern "C" int psx_mod_set_fixed_display_aspect(
     uint32_t numerator, uint32_t denominator) {
@@ -1849,14 +1854,16 @@ static void netplay_local_viewport_projection_aspect(
         return;
 
     /* The normal widescreen squash assumes a 4:3 source. A split-screen peer
-     * source is only half the display width, so derive the equivalent aspect
-     * that produces source_aspect / target_aspect as the X squash factor:
+     * source is half the display, which spans 4:3 at whatever pixel aspect
+     * its mode has, so the half is a 2:3 view and the equivalent aspect that
+     * produces source_aspect / target_aspect as the X squash factor is
      *
-     *   source = (display_w / 2) / display_h
-     *   effective = (4:3) * target / source
-     */
-    int64_t n = (int64_t)present_num * 8 * (int64_t)di.height;
-    int64_t d = (int64_t)present_den * 3 * (int64_t)di.width;
+     *   effective = (4:3) * target / (2:3) = 2 * target
+     *
+     * (The earlier (display_w/2)/display_h source assumed square pixels and
+     * under-widened 512-wide splits.) */
+    int64_t n = (int64_t)present_num * 2;
+    int64_t d = (int64_t)present_den;
     if (n <= 0 || d <= 0) return;
     int64_t gcd = aspect_gcd64(n, d);
     n /= gcd;
@@ -1876,8 +1883,8 @@ static void refresh_widescreen_projection() {
 
     const bool wide = g_video_aspect_num * 3 != g_video_aspect_den * 4;
     const bool local_native_wide =
-        g_netplay_local_viewport == 1 && psx_netplay_active() &&
-        gpu_last_frame_vertical_split_screen();
+        g_netplay_local_viewport == 1 && !g_netplay_local_viewport_projection &&
+        psx_netplay_active() && gpu_last_frame_vertical_split_screen();
     const bool native_wide = (g_netplay_local_viewport == 1)
         ? local_native_wide
         : (g_ws_native_wide != 0);
@@ -2445,6 +2452,17 @@ static std::filesystem::path sidecar_cfg_path(const char* argv0, const char* fil
     return exe_dir_from_argv(argv0) / filename;
 }
 
+/* Relative paths in settings.toml and the bios.cfg / disc.cfg sidecars are
+ * relative to the game folder. Resolve them against the exe directory, never
+ * the working directory: a shortcut or frontend that starts the game from
+ * elsewhere must still find its own memory cards and BIOS. Absolute paths are
+ * returned unchanged; empty stays empty. */
+static std::filesystem::path anchor_on_exe_dir(const char* argv0,
+                                               const std::filesystem::path& p) {
+    if (p.empty()) return p;
+    return PSXRecompV4::host_resolve(exe_dir_from_argv(argv0), p);
+}
+
 static std::filesystem::path read_cached_path(const char* argv0, const char* filename) {
     std::ifstream f(sidecar_cfg_path(argv0, filename));
     if (!f.is_open()) return {};
@@ -2453,13 +2471,17 @@ static std::filesystem::path read_cached_path(const char* argv0, const char* fil
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
         line.pop_back();
     }
-    return line.empty() ? std::filesystem::path{} : std::filesystem::path(line);
+    return line.empty() ? std::filesystem::path{}
+                        : anchor_on_exe_dir(argv0, std::filesystem::path(line));
 }
 
 static void write_cached_path(const char* argv0, const char* filename,
                               const std::filesystem::path& path) {
     std::ofstream f(sidecar_cfg_path(argv0, filename), std::ios::trunc);
-    if (f.is_open()) f << path.string() << "\n";
+    // Relative inside the game folder so a moved portable folder still works;
+    // read_cached_path anchors relative paths on the exe directory.
+    if (f.is_open())
+        f << PSXRecompV4::relative_to_folder(path, exe_dir_from_argv(argv0)).generic_string() << "\n";
 }
 
 static void launcher_warning(const char* title, const std::string& msg) {
@@ -2643,6 +2665,12 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
 static std::filesystem::path normalize_disc_path_for_launch(const std::filesystem::path& path) {
     // Keep the resolver's mount path so a usable CUE retains its track map.
     return PSXRecompV4::resolve_disc_path(path).mount;
+}
+
+static std::filesystem::path resolve_persisted_disc_path(
+    const std::filesystem::path& path, const std::filesystem::path& exe_dir) {
+    if (path.empty()) return {};
+    return normalize_disc_path_for_launch(PSXRecompV4::host_resolve(exe_dir, path));
 }
 
 /* Which image of a MULTI-DISC set to mount, given the roster this build was
@@ -2932,7 +2960,7 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
 
     std::filesystem::path cached = read_cached_path(argv0, "disc.cfg");
     if (!cached.empty()) {
-        cached = normalize_disc_path_for_launch(cached);
+        cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0));
     }
     if (!cached.empty() && std::filesystem::exists(cached) &&
         validate_disc_for_launch(cached, game_id)) {
@@ -5921,7 +5949,11 @@ static void netplay_barrier_admit(int override) {
             (tip_hold && !psx_start_bisect_no_tiphold_capture());
         if (need_sample) {
             PsxNetPad local{};
-            if (override >= 0 && !g_headless) {
+            /* An explicit debug-server override is the local player's input
+             * windowed or headless: headless LAN peers are how netplay is
+             * exercised without windows. With no override, headless has no
+             * human device and plays a neutral pad. */
+            if (override >= 0) {
                 capture_override_pad(override, &local);
             } else if (g_headless) {
                 local.buttons = 0xFFFFu;
@@ -7672,6 +7704,20 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * do NOT flush_cpu_uploads (MDEC already wrote the CPU mirror; forcing
          * FBO uploads every frame cut MotK intro from ~50 to ~30 FPS). */
 #ifndef PSX_SDL_NO_RENDER
+        /* Netplay local viewport without native-wide columns (squash or 4:3):
+         * present this peer's half straight from the high-resolution FBO.
+         * The CPU crop below reads the 1x canonical frame, which throws away
+         * internal resolution and smears the proportion-corrected HUD. */
+        if (g_gl_active && g_gl_fbo_present && !di.depth24 &&
+            local_viewport_crop && !local_viewport_wide) {
+            const int half = (int)w / 2;
+            const int half_x = (int)di.display_x +
+                (local_viewport_slot == 1 ? (int)w - half : 0);
+            gl_renderer_present_vram(half_x, (int)di.display_y, half, (int)h,
+                                     g_video_aa ? 1 : 0, 0);
+            netplay_note_present();
+            return ep;
+        }
         if (g_gl_active && g_gl_fbo_present && !di.depth24 &&
             !local_viewport_crop) {
             if (wide_present) {
@@ -8475,6 +8521,11 @@ namespace {
      * relay_endpoint. force_turn is a rollback delay-floor hint only. */
     int g_lnch_force_input_relay = 0;
     int g_lnch_force_turn = 0;
+    /* Host relay (2026-10-01): online rooms this build hosts ask the server
+     * for transport "host" (match_caps.relay). recomp-ui owns the setting
+     * (Network Settings / Lobby Settings, persisted there) and pushes it
+     * through relay_host_set; default on. */
+    int g_lnch_relay_host = 1;
     /* Lobby default on; host “Disable Rollback” clears this → delay_sync. */
     int g_lnch_rollback = 1;
     int g_lnch_multitap_analog = 1;
@@ -10397,6 +10448,7 @@ namespace {
         if (caps.input_prediction < 2) caps.input_prediction = 2;
         if (caps.input_prediction > 16) caps.input_prediction = 16;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
+        caps.relay_host = g_lnch_relay_host != 0;
         caps.force_turn = g_lnch_force_turn != 0;
         caps.rollback = g_lnch_rollback != 0;
         caps.multitap_analog = g_lnch_multitap_analog != 0;
@@ -10439,6 +10491,7 @@ namespace {
         if (caps.input_prediction < 2) caps.input_prediction = 2;
         if (caps.input_prediction > 16) caps.input_prediction = 16;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
+        caps.relay_host = g_lnch_relay_host != 0;
         caps.force_turn = g_lnch_force_turn != 0;
         caps.rollback = g_lnch_rollback != 0;
         caps.multitap_analog = g_lnch_multitap_analog != 0;
@@ -10891,6 +10944,69 @@ namespace {
                 return caps->force_turn ? 1 : 0;
         }
         return g_lnch_force_turn;
+    }
+    /* Host relay preference and live state (recomp_launcher.h relay_host_*). */
+    int ae_np_relay_host_get(void*) {
+        if (g_lnch_hosting_lan || g_lnch_joined_lan) return 0;
+        if (psx_lobby_in_lobby()) {
+            const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+            if (caps && caps->valid) return caps->relay_host ? 1 : 0;
+        }
+        return g_lnch_relay_host;
+    }
+    int ae_np_relay_host_set(void*, int on) {
+        g_lnch_relay_host = on ? 1 : 0;
+        psx_lobby_set_relay_host_pref(g_lnch_relay_host);
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan)
+            ae_np_push_match_caps(nullptr); /* no-op unless hosting online */
+        return 0;
+    }
+    int ae_np_relay_status(void*, char* out, size_t out_cap) {
+        if (!out || !out_cap) return 0;
+        out[0] = '\0';
+        if (g_lnch_hosting_lan || g_lnch_joined_lan || !psx_lobby_in_lobby()) return 0;
+        RNetHostRelayStatus st;
+        if (!psx_lobby_host_relay_status(&st)) return 0;
+        if (st.role == 1) {
+            int guests = 0, proven = 0;
+            const int n = psx_lobby_member_count();
+            for (int i = 0; i < n; ++i) {
+                PsxLobbyMember mem;
+                if (!psx_lobby_member_get(i, &mem) || mem.is_spectator) continue;
+                if (std::strcmp(mem.player_id, psx_lobby_host_player_id()) == 0) continue;
+                guests++;
+                if (std::strcmp(mem.path, "direct") == 0 && mem.path_fresh) proven++;
+            }
+            if (!st.port.done)
+                std::snprintf(out, out_cap, "You carry the match. Opening UDP port %u (%s)...",
+                              (unsigned)st.port.local_port,
+                              st.port.stage[0] ? st.port.stage : "starting");
+            else if (!st.port.endpoint[0])
+                std::snprintf(out, out_cap, "%s", st.port.detail);
+            else
+                std::snprintf(out, out_cap,
+                              "You carry the match at %s (%s). Guests who can reach you: %d of %d%s",
+                              st.port.endpoint, st.port.how, proven, guests,
+                              guests && proven < guests
+                                  ? ". Any guest who cannot sends the match through the lobby "
+                                    "server's relay."
+                                  : ".");
+            return 1;
+        }
+        if (st.role == 2) {
+            if (st.probing || !st.last_report[0])
+                std::snprintf(out, out_cap, "The host carries the match. Checking you can reach %s...",
+                              st.probed[0] ? st.probed : "the host");
+            else if (std::strcmp(st.last_report, "direct") == 0)
+                std::snprintf(out, out_cap, "The host carries the match; you reach it directly (%s).",
+                              st.probed);
+            else
+                std::snprintf(out, out_cap,
+                              "The host's port did not answer (%s): the lobby server will relay "
+                              "this match. Retrying.", st.probed);
+            return 1;
+        }
+        return 0;
     }
     int ae_np_force_turn_set(void*, int force) {
         if (g_lnch_hosting_lan || g_lnch_joined_lan)
@@ -12408,6 +12524,117 @@ namespace {
         return psx_lobby_set_ready(ready);
     }
 
+    static void ae_np_refresh_bios_offer_for(const RecompLauncherCSettings* settings) {
+        if (settings && settings->bios_path[0])
+            ae_np_refresh_bios_offer(settings->bios_path);
+        else
+            ae_np_refresh_bios_offer_from_disk();
+    }
+
+    /* The caps a lobby host starts the match with, settled from the seats it
+     * sees: the player's settings, the seat-1 memory card, and the one BIOS
+     * every seat can boot. The in-game PLAY and the Retro hub's (through
+     * --netplay-query) both come here, so they cannot settle differently.
+     * 0 = settled; else `why` says why no match can start. */
+    static int ae_np_settle_start_caps(const RecompLauncherCSettings* settings,
+                                       PsxLobbyMatchCaps* caps, char* why,
+                                       size_t why_cap) {
+        *caps = ae_netplay_caps_from_settings(settings);
+        caps->guest_memcard_active = ae_np_ws_guest_memcard_effective();
+        std::fprintf(stdout, "psxrecomp: lobby guest memcard (P2 card as slot 2) = %s\n",
+                     caps->guest_memcard_active ? "on" : "off");
+        return psx_lobby_settle_session_bios(caps->session_bios, sizeof(caps->session_bios),
+                                             &caps->session_bios_crc, why, why_cap) == 1
+                   ? -1 : 0;
+    }
+
+    /* ---- the Retro hub (retcomm-launcher docs/NETPLAY_HANDOFF.md) ----------- */
+
+    /* RECOMP_NETPLAY_LAUNCH: recomp-ui hands the hub's launch record here. */
+    int ae_np_ingest_launch(void*, const char* record, char* why, size_t why_cap) {
+        return psx_lobby_ingest_record(record, why, why_cap);
+    }
+
+    static void ae_np_json_escaped(std::string& out, const char* text) {
+        out += '"';
+        for (const char* c = text ? text : ""; *c; ++c) {
+            if (*c == '"' || *c == '\\') { out += '\\'; out += *c; }
+            else if ((unsigned char)*c < 0x20) out += ' ';
+            else out += *c;
+        }
+        out += '"';
+    }
+
+    /* --netplay-query <request>: what this build would send from its own
+     * lobby, so a seat the Retro hub holds is the same seat. The answer goes
+     * to "<request>.answer" (stdout carries the game's log). Request keys are
+     * handoff_-prefixed: the reader takes a key's first occurrence, and a
+     * replayed server message has its own "op".
+     *   handoff_query "identity" (+ handoff_disc):
+     *       join_fields (disc_fp, the server's join gate), the set_ready
+     *       message (the BIOS offer), and a start message with this player's
+     *       default caps (what a room it hosts publishes)
+     *   handoff_query "settle" (+ handoff_player_id, _seat, _room):
+     *       the start message the host sends, the BIOS settled from every
+     *       seat's offer -- or why no match can start */
+    static int ae_np_answer_query(const char* request_path,
+                                  const RecompLauncherCSettings* settings,
+                                  const std::string& initial_disc) {
+        std::string req;
+        {
+            std::ifstream in(request_path, std::ios::binary);
+            req.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        char op[32] = {};
+        char disc[1024] = {};
+        psx_lobby_json_str(req.c_str(), "handoff_query", op, sizeof(op));
+        psx_lobby_json_str(req.c_str(), "handoff_disc", disc, sizeof(disc));
+        std::string ans = "{\"v\":1,\"engine\":\"psxrecomp\",\"handoff\":1";
+        char msg[1024] = {};
+        ae_np_refresh_bios_offer_for(settings);
+        if (std::strcmp(op, "identity") == 0) {
+            const std::string d = disc[0] ? std::string(disc) : initial_disc;
+            RecompLauncherCDiscVerify dv{};
+            if (!d.empty()) ae_disc_verify(d.c_str(), &dv);
+            /* join_fields: what create and join carry beyond the hub's own
+             * fields. The server refuses a join whose disc_fp differs. */
+            ans += ",\"join_fields\":{\"disc_fp\":";
+            ae_np_json_escaped(ans, dv.disc_fp);
+            ans += "}";
+            ans += dv.netplay_ok ? ",\"disc_ok\":true" : ",\"disc_ok\":false";
+            ans += ",\"disc_detail\":";
+            ae_np_json_escaped(ans, dv.netplay_detail);
+            if (psx_lobby_ready_message(1, msg, sizeof(msg)) == 0) {
+                ans += ",\"ready\":";
+                ans += msg;
+            }
+            const PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
+            if (psx_lobby_start_message(&caps, msg, sizeof(msg)) == 0) {
+                ans += ",\"start\":";
+                ans += msg;
+            }
+        } else if (std::strcmp(op, "settle") == 0) {
+            char why[256] = {};
+            PsxLobbyMatchCaps caps{};
+            if (psx_lobby_replay_room(req.c_str(), why, sizeof(why)) != 0 ||
+                ae_np_settle_start_caps(settings, &caps, why, sizeof(why)) != 0) {
+                ans += ",\"error\":";
+                ae_np_json_escaped(ans, why[0] ? why : "the match cannot be settled");
+            } else if (psx_lobby_start_message(&caps, msg, sizeof(msg)) == 0) {
+                ans += ",\"start\":";
+                ans += msg;
+            }
+        } else {
+            ans += ",\"error\":";
+            ae_np_json_escaped(ans, "unknown query");
+        }
+        ans += "}\n";
+        const std::string out_path = std::string(request_path) + ".answer";
+        std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
+        out << ans;
+        return out.good() ? 0 : 1;
+    }
+
     int ae_np_request_start(void*, const RecompLauncherCSettings* settings) {
         if (g_lnch_hosting_lan) {
             AeLanLobbyState state;
@@ -12469,18 +12696,11 @@ namespace {
         }
         if (!psx_lobby_is_host()) return -1;
         /* Publish current BIOS offer, then ensure host seat is ready. */
-        if (settings && settings->bios_path[0])
-            ae_np_refresh_bios_offer(settings->bios_path);
-        else
-            ae_np_refresh_bios_offer_from_disk();
+        ae_np_refresh_bios_offer_for(settings);
         (void)psx_lobby_set_ready(1);
-        PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
-        caps.guest_memcard_active = ae_np_ws_guest_memcard_effective();
-        std::fprintf(stdout, "psxrecomp: lobby guest memcard (P2 card as slot 2) = %s\n",
-                     caps.guest_memcard_active ? "on" : "off");
+        PsxLobbyMatchCaps caps{};
         char why[192] = {};
-        if (psx_lobby_settle_session_bios(caps.session_bios, sizeof(caps.session_bios),
-                                          &caps.session_bios_crc, why, sizeof(why)) == 1) {
+        if (ae_np_settle_start_caps(settings, &caps, why, sizeof(why)) != 0) {
             /* No BIOS every seat can boot: refuse, and say why. */
             std::fprintf(stdout, "psxrecomp: lobby start refused: %s\n", why);
             psx_lobby_set_last_error(why);
@@ -12704,13 +12924,18 @@ namespace {
             for (int i = 0; i < RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS + 1; ++i)
                 out->slot_port[i] = plan.port[i];
         }
-        /* §108: online launch always SFU. Prefer caps.force_input_relay from
+        /* Online launch: the server's relay (SFU) unless the launch said
+         * transport "host" (the host carries the match; 2026-10-01 amends
+         * §108's "always SFU"). Prefer caps.force_input_relay from the
          * relay_endpoint rewrite; also infer when host==guest advertise. */
         out->force_input_relay =
-            (g_lnch_hosting_lan || g_lnch_joined_lan)
+            (g_lnch_hosting_lan || g_lnch_joined_lan || ji->transport_host)
                 ? 0
                 : (caps->force_input_relay ? 1 : 0);
-        if (!out->force_input_relay && !g_lnch_hosting_lan &&
+#if defined(RECOMP_LAUNCHER_HAS_HOST_RELAY)
+        out->transport_host = ji->transport_host ? 1 : 0;
+#endif
+        if (!out->force_input_relay && !ji->transport_host && !g_lnch_hosting_lan &&
             !g_lnch_joined_lan && ji->host_endpoint[0] &&
             ji->guest_endpoint[0] &&
             std::strcmp(ji->host_endpoint, ji->guest_endpoint) == 0) {
@@ -12919,6 +13144,14 @@ namespace {
             game_players_n >= 2 && game_players_n <= PSX_MAX_PLAYERS;
         gi->netplay_supported = g_lnch_netplay_available ? 1 : 0;
         /* Append-only members past the positional initializer. */
+#if defined(RECOMP_LAUNCHER_HAS_NETPLAY_HANDOFF)
+        g_lnch_netplay_callbacks.ingest_launch = ae_np_ingest_launch;
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_HOST_RELAY)
+        g_lnch_netplay_callbacks.relay_host_get = ae_np_relay_host_get;
+        g_lnch_netplay_callbacks.relay_host_set = ae_np_relay_host_set;
+        g_lnch_netplay_callbacks.relay_status = ae_np_relay_status;
+#endif
         g_lnch_netplay_callbacks.memcard_offer_set = ae_np_memcard_offer_set;
         g_lnch_netplay_callbacks.guest_memcard_get = ae_np_guest_memcard_get;
         g_lnch_netplay_callbacks.guest_memcard_set = ae_np_guest_memcard_set;
@@ -13042,6 +13275,7 @@ int main(int argc, char** argv) {
     int         cli_debug_port = -1;
     int         cli_renderer   = -1;   /* 0=software 1=opengl 2=vulkan */
     const char* cli_window_title = nullptr;  /* label windows in a fleet */
+    const char* cli_netplay_query = nullptr; /* --netplay-query <request> */
     const char* cli_memcard_dir = nullptr;   /* isolate writable state in a fleet */
     std::vector<std::string> cli_path_arg_storage;
     cli_path_arg_storage.reserve((size_t)argc);
@@ -13115,6 +13349,11 @@ int main(int argc, char** argv) {
             else if (std::strcmp(r, "vulkan")   == 0) cli_renderer = 2;
         } else if (std::strcmp(argv[i], "--window-title") == 0 && i + 1 < argc) {
             cli_window_title = argv[++i];
+        } else if (std::strcmp(argv[i], "--netplay-query") == 0 && i + 1 < argc) {
+            /* Answered where the launcher would open: everything it would be
+             * seeded with is resolved by then. */
+            cli_netplay_query = argv[++i];
+            force_launcher = true;
         } else if (std::strcmp(argv[i], "--launcher") == 0) {
             force_launcher = true;
         } else if (std::strcmp(argv[i], "--no-launcher") == 0) {
@@ -13307,6 +13546,12 @@ int main(int argc, char** argv) {
                 (gc.netplay_local_viewport_aspect == "16:9") ? 1 :
                 (gc.netplay_local_viewport_aspect == "21:9") ? 2 :
                 (gc.netplay_local_viewport_aspect == "adaptive") ? 3 : 0;
+            g_netplay_local_viewport_projection =
+                (gc.netplay_local_viewport_renderer == "projection") ? 1 : 0;
+            gpu_ws_set_local_viewport_state_gate(
+                gc.netplay_local_viewport_state_addr,
+                gc.netplay_local_viewport_state_values.data(),
+                (int)gc.netplay_local_viewport_state_values.size());
             game_discs = gc.discs;
             /* Per-disc serial gate, shared by the launch-time disc check and
              * the launcher's disc verdict. Keyed by the image's uppercased
@@ -13406,6 +13651,8 @@ int main(int argc, char** argv) {
             g_video_aspect_num = gc.runtime.video_aspect_num;
             g_video_aspect_den = gc.runtime.video_aspect_den;
             g_low_latency_input = gc.runtime.video_low_latency_input ? 1 : 0;
+            gl_renderer_set_texture_window_batching(
+                gc.runtime.video_texture_window_batching ? 1 : 0);
             g_video_vsync       = gc.runtime.video_vsync;
             g_frame_interpolation = gc.runtime.video_frame_interpolation ? 1 : 0;
             g_frame_interpolation_fps = gc.runtime.video_frame_interpolation_fps;
@@ -13418,6 +13665,7 @@ int main(int argc, char** argv) {
             g_ws_anchor_addr   = gc.ws_sprite_anchor_addr;
             g_ws_hud_sprt      = gc.ws_hud_sprt_squash;
             gpu_ws_set_auto_ui_squash(gc.ws_auto_ui_squash ? 1 : 0);
+            gpu_ws_set_auto_ui_in_place(gc.ws_auto_ui_in_place ? 1 : 0);
             /* [widescreen] full_2d — opt a pure-2D sprite game (MMX6) into the
              * widescreen present path. Applied to the GPU layer up front so the
              * ws engage at game entry classifies every frame as gameplay. */
@@ -13870,12 +14118,12 @@ int main(int argc, char** argv) {
             g_hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                 us.hotkey_pad_fast_forward_toggle, 0);
         if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
-            settings_bios_storage = us.bios_path.string();
+            settings_bios_storage = anchor_on_exe_dir(argv[0], us.bios_path).string();
             bios_path = settings_bios_storage.c_str();
             bios_explicit = true;
         }
         if (us.has_disc_path && !disc_override_path)
-            resolved_disc = normalize_disc_path_for_launch(us.disc_path);
+            resolved_disc = resolve_persisted_disc_path(us.disc_path, exe_dir_from_argv(argv[0]));
         /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
          * PRESENT; absent it, [disc] path decides and the index is derived
          * from it.
@@ -13908,9 +14156,11 @@ int main(int argc, char** argv) {
                 if (idx >= 0) selected_disc_index = idx + 1;
             }
         }
-        if (us.has_memcard_dir)                      memcard_dir   = us.memcard_dir;
-        if (us.has_memcard1_path)    memcard1_path    = us.memcard1_path;
-        if (us.has_memcard2_path)    memcard2_path    = us.memcard2_path;
+        /* Relative [memcard] values anchor on the exe directory; the
+         * per-game options file also lives in memcard_dir. */
+        if (us.has_memcard_dir)   memcard_dir   = anchor_on_exe_dir(argv[0], us.memcard_dir);
+        if (us.has_memcard1_path) memcard1_path = anchor_on_exe_dir(argv[0], us.memcard1_path);
+        if (us.has_memcard2_path) memcard2_path = anchor_on_exe_dir(argv[0], us.memcard2_path);
         if (us.has_memcard1_enabled) memcard1_enabled = us.memcard1_enabled;
         if (us.has_memcard2_enabled) memcard2_enabled = us.memcard2_enabled;
         if (us.has_multitap_enabled) multitap_enabled = us.multitap_enabled;
@@ -14808,6 +15058,15 @@ int main(int argc, char** argv) {
             psx_lobby_set_max_slots(game_players);
 #endif
 
+#if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
+            if (cli_netplay_query) {
+                const int qrc = ae_np_answer_query(cli_netplay_query, &ls, rui_initial_disc);
+                if (overlay_init_thread.joinable())
+                    overlay_init_thread.join();
+                SDL_Quit();
+                return qrc;
+            }
+#endif
             char rui_out_disc[1024] = {0};
             launcher_boot_timing_mark("host:before_run_window");
             int rui_rc = recomp_launcher_run_window(
@@ -14817,10 +15076,14 @@ int main(int argc, char** argv) {
 
             lr = rui_rc;
 
-            if (lr == 0) {
+            /* The launcher hands back the player's edits on Quit as well as on
+             * Play (recomp_launcher.h: "*io still holds the edits"), so both
+             * fold them into seed. Disc choice stays Play-only: Quit launches
+             * nothing. */
+            if (lr == 0 || lr == 1) {
                 seed.netplay_player_name = ls.netplay_player_name;
                 seed.has_netplay_player_name = true;
-                if (rui_out_disc[0]) {
+                if (lr == 0 && rui_out_disc[0]) {
                     seed.disc_path = rui_out_disc;
                     seed.has_disc_path = true;
                 }
@@ -14829,7 +15092,7 @@ int main(int argc, char** argv) {
                  * launcher sees it as an ordinary settings row. Written for
                  * multi-disc titles only -- a single-disc game has nothing to
                  * select and should not grow a meaningless key. */
-                if (game_discs.size() > 1 && ls.disc_index > 0) {
+                if (lr == 0 && game_discs.size() > 1 && ls.disc_index > 0) {
                     selected_disc_index = ls.disc_index;
                     seed.disc_index = ls.disc_index;
                     seed.has_disc_index = true;
@@ -15073,6 +15336,9 @@ int main(int argc, char** argv) {
             }
 
             if (lr == 1) {
+                /* Keep settings changed and then dismissed with Quit. */
+                PSXRecompV4::save_user_settings(
+                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
                 if (overlay_init_thread.joinable())
                     overlay_init_thread.join();
@@ -15108,6 +15374,9 @@ int main(int argc, char** argv) {
                     net_cfg.input_delay = ls.netplay_launch.input_delay;
                     net_cfg.input_prediction = ls.netplay_launch.input_prediction;
                     net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
+#if defined(RECOMP_LAUNCHER_HAS_HOST_RELAY)
+                    net_cfg.transport_host = ls.netplay_launch.transport_host ? 1 : 0;
+#endif
                     net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
                     net_cfg.rollback = ls.netplay_launch.rollback ? 1 : 0;
                     net_cfg.guest_memcard = ls.netplay_launch.guest_memcard ? 1 : 0;
@@ -15129,7 +15398,9 @@ int main(int argc, char** argv) {
                                   ls.netplay_launch.bind_hostport);
                     std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",
                                   ls.netplay_launch.peer_hostport);
-                    g_netplay_from_lobby = 1;
+                    /* A match the Retro hub started ends this process: the
+                     * hub holds the room, so there is no lobby to return to. */
+                    g_netplay_from_lobby = psx_lobby_handoff_active() ? 0 : 1;
                     std::fprintf(stdout,
                         "psxrecomp: launcher netplay slot=%d slots=%d mask=0x%x bind=%s peer=%s session=%u\n",
                         net_cfg.local_slot, net_cfg.slot_count,
@@ -15229,8 +15500,8 @@ int main(int argc, char** argv) {
                 }
                 memcard1_enabled = seed.memcard1_enabled;
                 memcard2_enabled = seed.memcard2_enabled;
-                if (seed.has_memcard1_path) memcard1_path = seed.memcard1_path;
-                if (seed.has_memcard2_path) memcard2_path = seed.memcard2_path;
+                if (seed.has_memcard1_path) memcard1_path = anchor_on_exe_dir(argv[0], seed.memcard1_path);
+                if (seed.has_memcard2_path) memcard2_path = anchor_on_exe_dir(argv[0], seed.memcard2_path);
                 if (seed.has_language) resolved_language = seed.language;
                 {
                     const int n = std::min(PSX_MAX_PLAYERS,
@@ -15566,6 +15837,9 @@ session_reboot:
         g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
     if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
         g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
+    /* [video] texture_window_batching A/B (same image, fewer GL draws). */
+    if (const char* e = std::getenv("PSX_GL_TEXWIN_BATCH"))
+        gl_renderer_set_texture_window_batching((*e && *e != '0') ? 1 : 0);
     gte_geometry_correction_set(g_video_geometry_correction);
     gpu_texture_correction_set(g_video_perspective_texturing);
     pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
@@ -16998,6 +17272,9 @@ soft_return_lobby:
                 net_cfg.input_delay = ls.netplay_launch.input_delay;
                 net_cfg.input_prediction = ls.netplay_launch.input_prediction;
                 net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
+#if defined(RECOMP_LAUNCHER_HAS_HOST_RELAY)
+                net_cfg.transport_host = ls.netplay_launch.transport_host ? 1 : 0;
+#endif
                 net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
                 net_cfg.rollback = ls.netplay_launch.rollback ? 1 : 0;
                 /* Same fold as the first-boot path: rematch must not lose

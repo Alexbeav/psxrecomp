@@ -95,6 +95,10 @@ auto_ui_squash     = true              # pre-scan the current GPU linked list,
                                        # select its highest populated UI rank,
                                        # and share one anchor across each
                                        # complete glyph/icon run.
+auto_ui_anchor     = "edges"           # "edges" (default): each run pins to
+                                       # its left/centre/right third.
+                                       # "in_place": each run squashes about
+                                       # its own centre.
 clear_reveal       = true              # clear synthetic native-wide side margins
                                        # at opted-in scene/map boundaries (default false).
 nw_left_hud_packet_lo = "0x000E3400"  # optional targeted left-HUD packet range
@@ -136,10 +140,28 @@ the RTPS preamble stores the anchor SXY to scratchpad `0x1F800070`.
 
 `auto_ui_squash` is a runtime-only opt-in and does not require regenerated game
 code. It applies only on the projection-and-stretch path: eligible
-axis-aligned textured quads/rectangles in the front populated ordering-table
-layer are grouped by texture and screen row before any command is transformed.
+axis-aligned quads (textured, flat or gouraud) and rectangles in the front
+populated ordering-table layer are grouped by texture and screen row before any
+command is transformed. Untextured quads are included because HUD fills (health
+gradients, meter bars) sit inside textured frames and must squash with them.
+Widget pieces drawn one rank behind the HUD are also admitted, from the next
+populated rank only (it also carries world geometry): an untextured,
+axis-aligned panel that fully encloses an admitted piece (a text box under its
+glyphs), or a small (at most a quarter of the display each way) axis-aligned
+piece that overlaps or stacks within `WS_UI_GROUP_STACK_GAP` rows on an
+admitted piece (a gauge segment and its fill). This repeats to a fixed point.
+`ws_ui_groups` counts these as `backing_panels`.
 Depth-sorted world packets, full-frame backdrops, and true 4:3 frames remain
 untouched.
+
+By default each run is pinned to the nearest screen edge or centre third, so
+corner HUD moves to the wide-frame corners. Some HUD widgets mix those flat
+quads with GTE-projected parts the correction cannot move: Spider-Man's compass
+is two ring quads around a 3D arrow. Edge-anchoring the ring pulled it ~70 px
+off its arrow at 32:9. `auto_ui_anchor = "in_place"` squashes each run about
+its own centre instead, which corrects its proportions and leaves it where the
+stretched 4:3 layout places it. `gpu_state` reports the mode as
+`ws.auto_ui.in_place`.
 
 **Changing `sprite_tag_funcs` requires a game regen** (the tag callback is
 emitted into the generated C). `widescreen.cull.keep` is consumed by both the

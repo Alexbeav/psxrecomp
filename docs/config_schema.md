@@ -128,6 +128,12 @@ respective files.
 
 ### Multi-disc selection
 
+Relative paths in executable-side `settings.toml` (`[disc] path`, `[bios] path`,
+`[memcard] dir`, `card1`, `card2`) and in `disc.cfg` / `bios.cfg` resolve from the
+executable directory, including when launched from another working directory.
+Absolute paths and UNC paths keep their original location. A relative `--disc`
+command-line argument still resolves from the caller's working directory.
+
 A build whose `discs` array has more than one entry grows a **Disc Selection**
 dropdown in the launcher, above the Serial/Region/ISO-header checklist. The
 choice is persisted in `settings.toml`:
@@ -611,6 +617,30 @@ native pixel thick at any scale.
 Settings surface. A game migrating Skip FMVs into its built-in mod catalog sets
 it to false. The runtime then hides the Settings row, ignores stale persisted
 values, and leaves activation to the selected trusted plugin.
+
+### Texture-window batching (`texture_window_batching`, OpenGL)
+
+```toml
+[video]
+texture_window_batching = true   # game.toml only; default false
+```
+
+The OpenGL renderer draws consecutive textured primitives in one batch while
+their blend, mask and filter state match. By default a GP0(E2h) texture-window
+change also ends the batch, although each vertex carries its primitive's
+texture window. With this key on, primitives with different windows share a
+batch. The image is the same either way; only the number of draws changes.
+While mask checking (GP0(E6h) bit 1) is on, a window change still ends the
+batch, because an opaque batch updates the mask bits of its own texels only
+after its colour pass.
+
+It is for games that tile textures through per-primitive windows. Ridge Racer
+Type 4's split screen changes the window about 515 times a frame, which drew
+about 180 batches a frame instead of 17, and every batch that reaches the
+native-wide margins is drawn again into the wide surface. The software and
+Vulkan renderers ignore the key.
+`PSX_GL_TEXWIN_BATCH=0|1` overrides it for one run, and the TCP command
+`gl_texwin_batch on=<0|1>` switches it live.
 
 ### Local rewind (`settings.toml`)
 

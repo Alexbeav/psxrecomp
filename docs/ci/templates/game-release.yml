@@ -598,7 +598,7 @@ jobs:
           LIST="$(unzip -Z1 "${ZIP}")"
           # 1. It is a game: the executable, the bundled OpenBIOS, and the
           #    runtime data sit at the root.
-          for must in 'bios/openbios.bin' 'bios/OpenBIOS.LICENSE' 'game.toml' 'psx_game_version.txt' 'assets/fonts/' 'mods/bundled/'; do
+          for must in 'bios/openbios.bin' 'bios/OpenBIOS.LICENSE' 'game.toml' 'psx_game_version.txt' 'assets/fonts/' 'licenses/recomp-ui-LICENSE' 'assets/fonts/NOTICE.md' 'assets/img/NOTICE.md' 'mods/bundled/'; do
             if ! grep -q "^${must}" <<<"${LIST}"; then
               echo "::error::release zip lacks ${must}" >&2
               printf '%s\n' "${LIST}" | head -40 >&2
@@ -625,6 +625,16 @@ jobs:
             echo "::error::release zip contains C sources outside overlay_toolchain/" >&2
             grep -E '\.c$' <<<"${LIST}" | grep -v '^overlay_toolchain/' | head -20 >&2
             exit 1
+          fi
+          # 2b. A bundled TinyCC ships its LGPL-2.1 notice beside the binary and
+          #     in licenses/ (its win64 zip carries none of its own).
+          if grep -q '^overlay_toolchain/tcc/tcc\.exe$' <<<"${LIST}"; then
+            for must in 'overlay_toolchain/tcc/COPYING' 'licenses/TinyCC-LICENSE.txt'; do
+              if ! grep -qx "${must}" <<<"${LIST}"; then
+                echo "::error::release zip bundles TinyCC without ${must}" >&2
+                exit 1
+              fi
+            done
           fi
           # 3. No BIOS dump, disc, or memory card; the only image is OpenBIOS.
           if grep -iE '(^|/)SCPH|\.(cue|iso|img|chd|mcd|mcr)$' <<<"${LIST}" | grep -qv '\.toml$'; then

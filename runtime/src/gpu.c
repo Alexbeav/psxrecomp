@@ -106,6 +106,7 @@ static int32_t  ws_xnum = 1, ws_xden = 1;   /* X squash factor; 1/1 = off */
 static uint32_t ws_anchor_addr = 0;          /* scratchpad addr of anchor SXY */
 static int      ws_hud_sprt = 0;             /* edge-anchor untagged HUD SPRTs */
 static int      ws_auto_ui_squash;
+static int      ws_auto_ui_in_place;
 static int      ws_auto_ui_dense;
 static int      ws_active(void);
 static int      gp0_command_word_count(uint8_t opcode);
@@ -123,11 +124,16 @@ typedef struct {
     int32_t  y;
     int32_t  h;
     uint8_t  op;
+    uint8_t  full_draw_area;
+    uint8_t  shared_split_ui;
     WsPrepassPacketGuard packet_guard;
 } WsUiPrepassItem;
 static WsUiPrepassItem ws_ui_prepass[WS_UI_PREPASS_MAX];
 static uint32_t ws_ui_prepass_count;
 static uint16_t ws_ui_prepass_rank = 0xFFFFu;
+/* Shared HUD packets execute once in each half. Keep the original packet
+ * intact for provenance guards, textures, diagnostics and guest RAM. */
+static int ws_shared_ui_copy = -1;
 
 #define WS_UI_PREPASS_NODE_MAX 8192u
 typedef struct {
@@ -148,13 +154,14 @@ static uint32_t ws_ui_prepass_node_count;
  * from a capture instead of it being guessed at. Diagnostic only; nothing in
  * the transform path reads them. */
 static struct {
-    uint32_t opcode;      /* not in the textured quad / rect families      */
-    uint32_t not_axis;    /* textured quad, but not axis-aligned           */
+    uint32_t opcode;      /* not a 4-vertex polygon or rectangle           */
+    uint32_t not_axis;    /* quad, but not axis-aligned                    */
     uint32_t degenerate;  /* zero or negative extent                       */
     uint32_t too_big;     /* full-screen or large-primitive reject         */
     uint32_t cap;         /* WS_UI_PREPASS_MAX reached                     */
     uint32_t rank;        /* admitted, then dropped by the max_rank filter */
     uint32_t stale;       /* live packet no longer matches cached bytes    */
+    uint32_t backing;     /* NOT a reject: lower-rank backing panels kept  */
 } ws_ui_reject;
 
 /* Geometry of the primitives the max_rank filter discarded. A count alone
@@ -215,6 +222,10 @@ static void ws_clear_all_reveal_margins(void);
  * engage (gpu_ws_set_full_2d); PSX_WS_FORCE_2D=1 forces it on for testing. */
 static int ws_full_2d = 0;
 void gpu_ws_set_full_2d(int on) { ws_full_2d = on ? 1 : 0; }
+void gpu_ws_set_auto_ui_in_place(int on) {
+    ws_auto_ui_in_place = on ? 1 : 0;
+}
+
 void gpu_ws_set_auto_ui_squash(int on) {
     ws_auto_ui_squash = on ? 1 : 0;
     ws_ui_prepass_count = 0;
@@ -499,8 +510,15 @@ static int ws_local_viewport_layout(int *base_x, int *source_w,
     if ((di.width & 1u) != 0)
         return 0;
 
+    /* The full display spans 4:3 at whatever pixel aspect its mode has, so
+     * the target keeps that pixel aspect: a 512-wide split (THPS2 2P) has
+     * pixels 0.625 wide and needs 683 columns for 16:9, not the 427 a
+     * square-pixel height*aspect gives (which stretched each half 1.6x).
+     * For 4:3 modes (320x240, 640x480) both forms are identical. */
     int src_w = (int)di.width / 2;
-    int target_w = ((int)di.height * ws_cfg_num + ws_cfg_den / 2) / ws_cfg_den;
+    int64_t tw_num = (int64_t)di.width * 3 * ws_cfg_num;
+    int64_t tw_den = (int64_t)4 * ws_cfg_den;
+    int target_w = (int)((tw_num + tw_den / 2) / tw_den);
     if (target_w < src_w)
         target_w = src_w;
     int off = (target_w - src_w) / 2;
@@ -754,8 +772,16 @@ int psx_ws_is_cull_plane_nx_site(uint32_t pc) {
  * at 4:3 (margin 0). */
 int32_t psx_ws_plane_nx(int32_t nx) {
     if (psx_ws_x_margin() <= 0) return nx;
+    /* Scale by source/final width. A full 4:3 view widens by 4:3 -> target;
+     * a split-screen local viewport widens its own half (2:3 of the display)
+     * to the target, so the frustum must open by final_w / src_w. */
     int64_t numerator = (int64_t)nx * 4 * ws_cfg_den;
     int64_t denominator = 3 * ws_cfg_num;
+    int local_src = 0, local_final = 0;
+    if (ws_local_viewport_layout(NULL, &local_src, &local_final, NULL)) {
+        numerator = (int64_t)nx * local_src;
+        denominator = local_final;
+    }
     if (denominator <= 0) return nx;
     int64_t result = numerator >= 0
         ? (numerator + denominator / 2) / denominator
@@ -1971,13 +1997,13 @@ int psx_ws_ui_groups_json(char *buf, int cap) {
         "\"disp_x\":%d,\"disp_w\":%d,\"join_gap\":%d,"
         "\"rejected\":{\"opcode\":%u,\"not_axis\":%u,\"degenerate\":%u,"
         "\"too_big\":%u,\"cap\":%u,\"rank\":%u,\"stale\":%u},"
-        "\"n\":%u,",
+        "\"backing_panels\":%u,\"n\":%u,",
         ws_active(), ws_auto_ui_squash, ws_auto_ui_dense,
         ws_ui_prepass_rank != 0xFFFFu ? (int)ws_ui_prepass_rank : -1,
         ws_disp_x(), ws_disp_w(), WS_UI_GROUP_JOIN_GAP,
         ws_ui_reject.opcode, ws_ui_reject.not_axis, ws_ui_reject.degenerate,
         ws_ui_reject.too_big, ws_ui_reject.cap, ws_ui_reject.rank,
-        ws_ui_reject.stale,
+        ws_ui_reject.stale, ws_ui_reject.backing,
         ws_ui_prepass_count);
     off += snprintf(buf + off, (size_t)(cap - off), "\"rank_dropped\":[");
     for (uint32_t i = 0; i < ws_ui_rankdrop_count && off < cap - 120; i++) {
@@ -2061,6 +2087,7 @@ void gpu_ws_get_debug(GpuWsDebug* out) {
     out->ovh_prims         = ws_ovh_prev;
     out->last_ovh_frame    = ws_sust_ovh_stamp;
     out->auto_ui_squash    = ws_auto_ui_squash;
+    out->auto_ui_in_place  = ws_auto_ui_in_place;
     out->auto_ui_dense     = ws_auto_ui_dense;
     out->auto_ui_ot_rank   =
         ws_ui_prepass_rank != 0xFFFFu ? ws_ui_prepass_rank : UINT32_MAX;
@@ -2509,10 +2536,34 @@ static int ws_auto_ui_anchor(int32_t *out_anchor) {
     return 0;
 }
 
+static int ws_shared_ui_packet(void) {
+    uint32_t op = gp0_cmd_buf[0] >> 24;
+    if (!((op >= 0x28u && op <= 0x3Fu && (op & 8u)) ||
+          (op >= 0x60u && op <= 0x7Fu))) return 0;
+    if (!ws_local_viewport_cfg || ws_mode == 2 || !ws_vertical_split_active() ||
+        psx_ws_prim_is_tagged()) return 0;
+    int32_t anchor;
+    if (!ws_auto_ui_anchor(&anchor)) return 0;
+    uint32_t src = GPU_RAM_KEY(gp0_cmd_source_addr);
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
+        if (ws_ui_prepass[i].src_addr == src)
+            return ws_ui_prepass[i].shared_split_ui;
+    return 0;
+}
+
+static int32_t ws_shared_ui_delta(void) {
+    if (ws_shared_ui_copy < 0) return 0;
+    /* Projection mode still renders the complete native framebuffer. Both
+     * peers draw both copies identically, then present their selected half. */
+    int32_t W = ws_disp_w();
+    return (ws_shared_ui_copy ? 3 * W / 4 : W / 4) - W / 2;
+}
+
 static uint32_t ws_auto_ui_group_key_words(const uint32_t *words,
                                            uint32_t op,
                                            int32_t y, int32_t h) {
-    uint32_t clut = words[2] >> 16;
+    /* An untextured polygon's word 2 is a vertex or colour, not a CLUT. */
+    uint32_t clut = (op < 0x60u && !(op & 0x04u)) ? 0u : words[2] >> 16;
     uint32_t tpage = 0;
     if (op >= 0x20u && op <= 0x3Fu && (op & 0x04u)) {
         int tp_index = (op & 0x10u) ? 5 : 4;
@@ -2564,7 +2615,8 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], const int32_t vy[4]) {
 
     int32_t anchor;
     if (!ws_auto_ui_anchor(&anchor)) return 0;
-    for (int i = 0; i < 4; i++) vx[i] = ws_scale_about(vx[i], anchor);
+    for (int i = 0; i < 4; i++)
+        vx[i] = ws_scale_about(vx[i], anchor) + ws_shared_ui_delta();
     ws_auto_ui_transform_count++;
     return 1;
 }
@@ -2578,7 +2630,7 @@ static int ws_auto_ui_transform_rect(int32_t *x, int32_t y, int *w, int h) {
         return 0;
     int32_t anchor;
     if (!ws_auto_ui_anchor(&anchor)) return 0;
-    *x = ws_scale_about(*x, anchor);
+    *x = ws_scale_about(*x, anchor) + ws_shared_ui_delta();
     *w = (int)ws_scale_len(*w);
     ws_auto_ui_transform_count++;
     return 1;
@@ -2994,8 +3046,33 @@ static void split_trace_note_draw_area(void) {
     }
 }
 
+#define WS_LOCAL_VIEWPORT_STATE_VALUES_MAX 16
+static uint32_t ws_local_viewport_state_addr = 0;
+static uint32_t ws_local_viewport_state_values[WS_LOCAL_VIEWPORT_STATE_VALUES_MAX];
+static int ws_local_viewport_state_value_count = 0;
+void gpu_ws_set_local_viewport_state_gate(uint32_t addr,
+                                          const uint32_t *values, int nvalues) {
+    if (nvalues < 0) nvalues = 0;
+    if (nvalues > WS_LOCAL_VIEWPORT_STATE_VALUES_MAX)
+        nvalues = WS_LOCAL_VIEWPORT_STATE_VALUES_MAX;
+    ws_local_viewport_state_addr = values && nvalues ? addr : 0;
+    ws_local_viewport_state_value_count = values ? nvalues : 0;
+    for (int i = 0; i < ws_local_viewport_state_value_count; i++)
+        ws_local_viewport_state_values[i] = values[i];
+}
+
+static int ws_local_viewport_state_ok(void) {
+    if (!ws_local_viewport_state_addr || ws_local_viewport_state_value_count == 0)
+        return 1;
+    const uint32_t state = psx_read_word(ws_local_viewport_state_addr);
+    for (int i = 0; i < ws_local_viewport_state_value_count; i++)
+        if (state == ws_local_viewport_state_values[i]) return 1;
+    return 0;
+}
+
 static int ws_vertical_split_active(void) {
-    return split_recent_left_age <= 8 && split_recent_right_age <= 8;
+    return split_recent_left_age <= 8 && split_recent_right_age <= 8 &&
+           ws_local_viewport_state_ok();
 }
 
 int gpu_last_frame_vertical_split_screen(void) {
@@ -4158,6 +4235,7 @@ static void gp0_exec_mono_quad(void) {
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
+    ws_auto_ui_transform_quad(vx, vy);
 
     /* Each added band is outside the original screen and executes in the
      * mask's own OT position/blend mode. Canonical VRAM clips it away. */
@@ -4280,6 +4358,7 @@ static void gp0_exec_shaded_quad(void) {
     int rej_a = psx_gpu_triangle_oversize(vx, vy, 0, 1, 2);
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
+    ws_auto_ui_transform_quad(vx, vy);
     ws_nw_backdrop_stretch_quad(vx, vy);   /* full-frame 2D backdrop stretch (sky gradient; no-op else) */
     ws_nw_hud_shift_vertices(vx, 4);
     for (int i = 0; i < 4; i++) {
@@ -5255,21 +5334,32 @@ static int gp0_command_word_count(uint8_t opcode) {
 }
 
 static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,
-                              uint32_t source_addr, uint16_t rank) {
+                              uint32_t source_addr, uint16_t rank,
+                              int full_draw_area) {
     if (rank == 0xFFFFu) return;
     if (ws_ui_prepass_count >= WS_UI_PREPASS_MAX) { ws_ui_reject.cap++; return; }
     uint32_t op = words[0] >> 24;
     int32_t min_x, max_x, min_y, max_y;
 
-    if (op >= 0x20u && op <= 0x3Fu && (op & 0x04u) &&
-        (op & 0x08u)) {
+    if (op >= 0x20u && op <= 0x3Fu && (op & 0x08u)) {
+        /* Any 4-vertex polygon. Untextured HUD fills (health gradients,
+         * meter bars) sit in the same front layer as the textured frames
+         * around them; leaving them out kept their raw 4:3 X while the frame
+         * squashed, so the fill overhung it at wide aspects (Spider-Man's
+         * health and webbing meters). Same rank + axis-aligned gate as the
+         * textured quads. */
+        const int textured = (op & 0x04u) != 0;
+        const int shaded = (op & 0x10u) != 0;
         int indices[4];
-        if (op & 0x10u) {
+        if (textured && shaded) {
             indices[0] = 1; indices[1] = 4;
             indices[2] = 7; indices[3] = 10;
-        } else {
+        } else if (textured || shaded) {
             indices[0] = 1; indices[1] = 3;
             indices[2] = 5; indices[3] = 7;
+        } else {
+            indices[0] = 1; indices[1] = 2;
+            indices[2] = 3; indices[3] = 4;
         }
         int32_t vx[4], vy[4];
         for (int i = 0; i < 4; i++)
@@ -5342,7 +5432,33 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,
     item->y  = min_y;
     item->h  = height;
     item->op = (uint8_t)op;
+    item->full_draw_area = full_draw_area ? 1 : 0;
+    item->shared_split_ui = 0;
     item->packet_guard = ws_prepass_packet_guard(words, word_count);
+}
+
+static int ws_ui_untextured_op(uint8_t op) {
+    return (op >= 0x28u && op <= 0x2Bu) || (op >= 0x38u && op <= 0x3Bu) ||
+           (op >= 0x60u && op <= 0x63u);
+}
+
+static int ws_ui_encloses(const WsUiPrepassItem *panel,
+                          const WsUiPrepassItem *ui) {
+    return panel->group.x <= ui->group.x &&
+           ui->group.x + ui->group.width <=
+               panel->group.x + panel->group.width &&
+           panel->y <= ui->y && ui->y + ui->h <= panel->y + panel->h;
+}
+
+/* Part of the same widget: sharing screen columns and overlapping or stacked
+ * within WS_UI_GROUP_STACK_GAP rows (ws_ui_group.c same_element()). */
+static int ws_ui_attached(const WsUiPrepassItem *a, const WsUiPrepassItem *b) {
+    int32_t ax0 = a->group.x, ax1 = a->group.x + a->group.width;
+    int32_t bx0 = b->group.x, bx1 = b->group.x + b->group.width;
+    if (ax0 >= bx1 || bx0 >= ax1) return 0;
+    int32_t gap = a->y + a->h < b->y ? b->y - (a->y + a->h)
+                : b->y + b->h < a->y ? a->y - (b->y + b->h) : 0;
+    return gap <= WS_UI_GROUP_STACK_GAP;
 }
 
 void gpu_ws_prepass_linked_list(uint32_t start_addr) {
@@ -5352,7 +5468,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_auto_ui_dense = 0;
     ws_ui_reject.opcode = ws_ui_reject.not_axis = ws_ui_reject.degenerate =
         ws_ui_reject.too_big = ws_ui_reject.cap = ws_ui_reject.rank =
-        ws_ui_reject.stale = 0;
+        ws_ui_reject.stale = ws_ui_reject.backing = 0;
     ws_ui_rankdrop_count = 0;
     if (!ws_auto_ui_squash || !ws_active()) return;
 
@@ -5360,6 +5476,9 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     uint32_t safety = 0;
     uint16_t rank = 0xFFFFu;
     const uint32_t max_nodes = 0x40000u;
+    int area_left = (int)draw_area_left, area_right = (int)draw_area_right;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
 
     for (;;) {
         if (safety++ > max_nodes) {
@@ -5389,7 +5508,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
             ws_prepass_packet_guard(payload, num_words);
         if (num_words == 0) {
             rank = rank == 0xFFFFu ? 0u : (uint16_t)(rank + 1u);
-        } else if (rank != 0xFFFFu) {
+        } else {
             uint32_t word_addr =
                 psx_mod_gpu_dma_resolve_address(addr + 4u);
             uint32_t offset = 0;
@@ -5412,7 +5531,10 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                 }
                 ws_ui_prepass_add(words, (uint32_t)count,
                     psx_mod_gpu_dma_resolve_address(
-                        word_addr + offset * 4u), rank);
+                        word_addr + offset * 4u), rank,
+                    area_right - area_left + 1 >= (int)di.width);
+                if (op == 0xE3u) area_left = (int)(words[0] & 0x3FFu);
+                if (op == 0xE4u) area_right = (int)(words[0] & 0x3FFu);
                 offset += (uint32_t)count;
             }
         }
@@ -5437,9 +5559,53 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     }
     ws_ui_prepass_rank = max_rank;
 
+    /* HUD pieces one rank back. A HUD often draws parts of a widget one
+     * ordering-table rank behind the rest: Spider-Man's banner box (a 0x28
+     * quad at rank 365 under rank-366 text), Spider-Man 2's webbing gauge (a
+     * textured frame segment and its 0x28 fill at rank 272, stacked on the
+     * rank-273 gauge end). Left out, those pieces stretch while the rest of
+     * the widget squashes, and the widget comes apart. That rank also carries
+     * world geometry, so it is never admitted wholesale. From the next
+     * populated rank only, admit an axis-aligned primitive when it
+     *   - is untextured and fully encloses an admitted piece (a backing
+     *     panel; any size), or
+     *   - is small (at most a quarter of the display each way) and overlaps or
+     *     stacks directly on an admitted piece (ws_ui_attached).
+     * Repeat until nothing changes, so a piece attached to an admitted piece
+     * also joins. Admitted pieces then group with their widget's run. */
+    uint16_t backing_rank = 0xFFFFu;
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
+        uint16_t r = ws_ui_prepass[i].ot_rank;
+        if (r < max_rank && (backing_rank == 0xFFFFu || r > backing_rank))
+            backing_rank = r;
+    }
+    static uint8_t keep[WS_UI_PREPASS_MAX];
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
+        keep[i] = ws_ui_prepass[i].ot_rank == max_rank;
+    const int32_t small_w = ws_disp_w() / 4, small_h = ws_disp_h() / 4;
+    for (int changed = 1; changed && backing_rank != 0xFFFFu;) {
+        changed = 0;
+        for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
+            const WsUiPrepassItem *it = &ws_ui_prepass[i];
+            if (keep[i] || it->ot_rank != backing_rank) continue;
+            const int small = it->group.width <= small_w && it->h <= small_h;
+            const int untextured = ws_ui_untextured_op(it->op);
+            for (uint32_t j = 0; j < ws_ui_prepass_count; j++) {
+                if (!keep[j]) continue;
+                if ((untextured && ws_ui_encloses(it, &ws_ui_prepass[j])) ||
+                    (small && ws_ui_attached(it, &ws_ui_prepass[j]))) {
+                    keep[i] = 1;
+                    changed = 1;
+                    ws_ui_reject.backing++;
+                    break;
+                }
+            }
+        }
+    }
+
     uint32_t out = 0;
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
-        if (ws_ui_prepass[i].ot_rank == max_rank) {
+        if (keep[i]) {
             ws_ui_prepass[out++] = ws_ui_prepass[i];
         } else if (ws_ui_rankdrop_count < WS_UI_RANKDROP_MAX) {
             const WsUiPrepassItem *it = &ws_ui_prepass[i];
@@ -5471,9 +5637,37 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
         groups[i] = ws_ui_prepass[i].group;
     ws_ui_group_assign(groups, ws_ui_prepass_count, ws_disp_w(),
-                       ws_auto_ui_dense);
-    for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
+                       ws_auto_ui_dense, ws_auto_ui_in_place);
+    for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
         ws_ui_prepass[i].group.anchor = group_origin + groups[i].anchor;
+        ws_ui_prepass[i].group.root = groups[i].root;
+    }
+
+    /* A shared counter can comprise many glyphs and shadow packets, none of
+     * which individually crosses the split. Classify the complete admitted
+     * front-layer run, and require full-screen draw provenance. Per-player
+     * HUD, world geometry, divider strips and pause menus cannot qualify. */
+    if (ws_local_viewport_cfg && ws_mode != 2 && ws_vertical_split_active()) {
+        const int32_t W = ws_disp_w(), H = ws_disp_h(), seam = W / 2;
+        for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
+            int32_t x0 = W, x1 = 0, y0 = H, y1 = 0;
+            int full = 1;
+            for (uint32_t j = 0; j < ws_ui_prepass_count; j++) {
+                if (groups[j].root != groups[i].root) continue;
+                const WsUiGroupItem *g = &groups[j];
+                if (g->x < x0) x0 = g->x;
+                if (g->x + g->width > x1) x1 = g->x + g->width;
+                if (g->y < y0) y0 = g->y;
+                if (g->y + g->height > y1) y1 = g->y + g->height;
+                full &= ws_ui_prepass[j].full_draw_area;
+            }
+            if (full && x0 < seam && x1 > seam &&
+                x1 - x0 <= W / 2 && y1 - y0 <= H / 4) {
+                ws_ui_prepass[i].shared_split_ui = 1;
+                ws_ui_prepass[i].group.anchor = group_origin + seam;
+            }
+        }
+    }
 }
 
 void gpu_ws_validate_linked_list_header(uint32_t addr, uint32_t header) {
@@ -5790,6 +5984,8 @@ void gpu_ws_census_set(int on) { ws_census_on = on ? 1 : 0; }
 uint64_t gpu_ws_census_seq(void) { return ws_census_seq; }
 
 /* Execute a fully-collected GP0 command */
+static void gp0_dispatch_command(uint8_t opcode);
+
 static void gp0_execute_command(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
     gp0_opcode_count[opcode]++;
@@ -5840,6 +6036,16 @@ static void gp0_execute_command(void) {
     else if (opcode >= 0x80 && opcode <= 0xDF) gp0_copy_count++;
     else if (opcode >= 0xE1 && opcode <= 0xE6) gp0_env_count++;
 
+    if (opcode >= 0x20 && opcode <= 0x7F && ws_shared_ui_packet()) {
+        for (ws_shared_ui_copy = 0; ws_shared_ui_copy < 2; ws_shared_ui_copy++)
+            gp0_dispatch_command(opcode);
+        ws_shared_ui_copy = -1;
+    } else {
+        gp0_dispatch_command(opcode);
+    }
+}
+
+static void gp0_dispatch_command(uint8_t opcode) {
     switch (opcode) {
         case 0x00:
         case 0x01:

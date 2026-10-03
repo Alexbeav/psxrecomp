@@ -400,7 +400,10 @@ class ToolchainStagingTest(unittest.TestCase):
             'python_url': self.py_zip,
             'python_sha256': 'unused',
             'tcc_url': self.tcc_zip,
-            'tcc_sha256': 'unused',
+            # The fetch is stubbed; the version and hash are the real pin's
+            # because the staged TinyCC notice must name them.
+            'tcc_version': self.orig_pins['tcc_version'],
+            'tcc_sha256': self.orig_pins['tcc_sha256'],
         }
         rs.get_pinned_archive = lambda url, _sha, _dest, log=print: url
 
@@ -418,6 +421,44 @@ class ToolchainStagingTest(unittest.TestCase):
             'overlay_dispatch_preamble.c.inc')))
         self.assertTrue(os.path.isfile(os.path.join(
             self.stage, 'overlay_toolchain', 'bios', 'SCPH1001.toml')))
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.stage, 'overlay_toolchain', 'tcc', 'COPYING')))
+
+
+class TinyccNoticeTest(unittest.TestCase):
+    """The bundled TinyCC (LGPL-2.1) ships with its notice (issue #474)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='tcc_notice_')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_every_pinned_tcc_has_a_notice_naming_it(self):
+        pinned = [p for p in rs.TOOLCHAIN_PINS.values() if p['tcc_url']]
+        self.assertTrue(pinned, 'no platform pins a tcc')
+        with open(rs.TCC_NOTICE, encoding='utf-8') as f:
+            text = f.read()
+        for pins in pinned:
+            self.assertIn(pins['tcc_version'], text)
+            self.assertIn(pins['tcc_sha256'], text)
+        self.assertIn('GNU LESSER GENERAL PUBLIC LICENSE', text)
+        self.assertIn('Version 2.1', text)
+
+    def test_notice_is_staged_beside_the_binary(self):
+        pins = next(p for p in rs.TOOLCHAIN_PINS.values() if p['tcc_url'])
+        rs.stage_tcc_notice(self.tmp, pins)
+        with open(os.path.join(self.tmp, 'COPYING'), encoding='utf-8') as f:
+            staged = f.read()
+        with open(rs.TCC_NOTICE, encoding='utf-8') as f:
+            self.assertEqual(staged, f.read())
+
+    def test_a_notice_for_another_version_fails_loudly(self):
+        pins = dict(next(p for p in rs.TOOLCHAIN_PINS.values() if p['tcc_url']))
+        pins['tcc_version'] = '9.9.99'
+        with self.assertRaises(rs.StageError):
+            rs.stage_tcc_notice(self.tmp, pins)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, 'COPYING')))
 
 
 if __name__ == '__main__':

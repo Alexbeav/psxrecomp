@@ -659,8 +659,8 @@ static int psx_request_thread_switch(CPUState* cpu, uint32_t target_tcb)
     }
     if (current_tcb == target_tcb) {
         /* Same thread — not a switch. The syscall wrapper returns 0 and falls
-         * through to its own jr $ra (CPS); the thread simply continues. No
-         * cpu->pc=0 host signal (removed with the fiber bridge). */
+         * through to its own jr $ra (CPS); the thread simply continues.
+         * psx_syscall clears cpu->pc for the interpreter's caller. */
         debug_server_log_thread_event(5, cpu, current_tcb, target_tcb, cpu->gpr[31]);
         return 1;
     }
@@ -988,7 +988,12 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
                  * be a transfer — return 0 so the syscall wrapper falls through
                  * to its own jr $ra and this thread resumes at its caller via
                  * the flat trampoline. Legacy ignores the return value (it uses
-                 * cpu->pc == 0 + the nested-dispatch C-return to resume). */
+                 * cpu->pc == 0 + the nested-dispatch C-return to resume).
+                 * The HLE scheduler's same-thread ChangeThread also lands here
+                 * and leaves the SYSCALL's own PC in cpu->pc. The dirty-RAM
+                 * interpreter transfers whenever cpu->pc != 0, so it re-ran the
+                 * SYSCALL forever. Clear it, as the SYS01/02 continuations do. */
+                cpu->pc = 0;
                 return 0;
             }
 

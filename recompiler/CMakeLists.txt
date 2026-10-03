@@ -753,6 +753,21 @@ if(BUILD_TESTING)
     target_link_libraries(rewind_settings_test PRIVATE fmt)
     add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
 
+    # Launcher-saved paths stay relative inside a portable game folder.
+    add_executable(portable_settings_paths_test
+        tests/portable_settings_paths_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(portable_settings_paths_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(portable_settings_paths_test PRIVATE fmt)
+    add_test(NAME portable_settings_paths_test COMMAND portable_settings_paths_test)
+
     # Needs bios/SCPH1001.toml — run from the framework root.
     add_test(NAME bios_address_model_test
              COMMAND bios_address_model_test
@@ -771,11 +786,25 @@ if(BUILD_TESTING)
                 --cmake ${CMAKE_COMMAND} --cc ${CMAKE_C_COMPILER}
                 --cxx ${CMAKE_CXX_COMPILER} --ninja ${CMAKE_MAKE_PROGRAM})
     endif()
+    # MFC0/CFC0 read COP0 from before their own cycle charge: the production
+    # interpreter decoder with cycle charging on, a device event that raises
+    # CAUSE.IP2 on the read's own cycle, other seams stubbed to abort()
+    # (runtime/tests/fixture_link.py needs nm and GNU ld diagnostics).
+    if(Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_test(NAME interp_cop0_read_sample
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_interp_cop0_read_sample.py"
+                --cc ${CMAKE_C_COMPILER})
+    endif()
     if(Python3_Interpreter_FOUND)
         add_test(NAME optional_netplay_auth
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_optional_netplay_auth.py
                 --cxx ${CMAKE_CXX_COMPILER})
+        add_test(NAME bios_emitter_stamps
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_emitter_stamps.py
+                --cmake ${CMAKE_COMMAND})
         add_test(NAME pgo_rebuild_flow
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pgo_rebuild_flow.py)
@@ -794,6 +823,16 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_module_build.py
                     --emitter $<TARGET_FILE:psxrecomp-bios>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # The tcc build of a BIOS module sees a BOM-stripped copy of the
+        # include directory. That copy must hold the .c.inc fragments the
+        # module's glue.c includes, or the tcc build stops at "not found".
+        # Pure unit test: no compiler, no built target.
+        add_test(
+            NAME tcc_module_include_dir
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_tcc_module_include_dir.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # tools/coverage_vault.py's history compaction and streaming JSON
@@ -878,6 +917,14 @@ if(BUILD_TESTING)
             NAME cli_generate_aot_static
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_generate_aot_static.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # psxrecomp_cli.py rebuild: the pre-build mtime clamp works without
+        # lutimes (Windows), and --cmake-extra wins over the shipping
+        # PSX_DEBUG_TOOLS=OFF default.
+        add_test(
+            NAME cli_rebuild_host
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_rebuild_host.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # runtime/overlay_static_sources.cmake: a declared-but-absent shard is
         # reported at configure, a profile/CMake disagreement is an error, and
@@ -1019,6 +1066,7 @@ if(BUILD_TESTING)
                 fp_identity
                 gpu_frame
                 menu_scan
+                migrate_probe_refresh
                 mips_tagged_relocations
                 overlay_widescreen_callbacks
                 pad_delivery
@@ -1195,6 +1243,17 @@ target_include_directories(reachable_discovery_test PRIVATE
 )
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
 
+# Straight-line interpretation keeps going through game text that dispatch
+# refuses (live bytes differ from the boot EXE) instead of handing each
+# instruction back: the production interpreter linked into a fixture, other
+# seams stubbed to abort() (runtime/tests/fixture_link.py needs nm and GNU ld).
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_test(NAME interp_refused_game_text
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_interp_refused_game_text.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
 # GTE deadline ownership includes pending CPU charges from both host sinks.
 if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     foreach(_mode IN ITEMS O0 O2)
@@ -1210,6 +1269,16 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     endforeach()
 endif()
 
+# The store that kicks a GPU linked-list DMA holds the CPU until the walk
+# ends: the production dma.c and dma_gpu_ll.c linked into a fixture, other
+# seams stubbed to abort() (runtime/tests/fixture_link.py needs nm and GNU ld).
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_test(NAME dma_gpu_list_cpu_hold
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dma_gpu_list_cpu_hold.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
 # Mult/div deadline ownership: the same rule for MULT/DIV and MFLO/MFHI.
 if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     foreach(_mode IN ITEMS O0 O2)
@@ -1223,6 +1292,16 @@ if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_link_options(${_target} PRIVATE -Wl,--gc-sections)
         add_test(NAME ${_target} COMMAND ${_target})
     endforeach()
+endif()
+
+# ChangeThread to the running thread continues after the SYSCALL: the
+# production traps.c linked into a fixture, other seams stubbed to abort()
+# (runtime/tests/fixture_link.py needs nm and GNU ld diagnostics).
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_test(NAME syscall_change_thread_self
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_syscall_change_thread_self.py"
+            --cc ${CMAKE_C_COMPILER})
 endif()
 
 # ---- test-registration completeness guard -----------------------------------
