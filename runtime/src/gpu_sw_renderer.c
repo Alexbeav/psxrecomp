@@ -555,8 +555,8 @@ static int source_draw_line(const SourceGPUBlock *block)
      * arithmetic gives them for every value of block->x and block->y. */
     unsigned start_x = (unsigned)block->x, start_y = (unsigned)block->y;
     if (count && dx <= 0) {
-        /* L4 [KEPT]: with dx below 0, or dx 0 and dy not 0, the line is walked
-         * from the second vertex, and the colours change places. */
+        /* L4 [FIXTURE: G1]: with dx below 0, or dx 0 and dy not 0, the line
+         * is walked from the second vertex, and the colours change places. */
         start_x += (unsigned)dx;
         start_y += (unsigned)dy;
         dx = -dx;
@@ -571,15 +571,15 @@ static int source_draw_line(const SourceGPUBlock *block)
     s.dither = (int)((block->draw_mode >> 9) & 1u);
     int from[3], step[3];
     for (unsigned c = 0; c < 3; ++c) {
-        /* L7 [KEPT]: the step of a channel is (last - first) * 4096 / N,
-         * truncated; an unshaded line has both ends equal. */
+        /* L7 [FIXTURE: G1]: the step of a channel is (last - first) * 4096 /
+         * N, truncated; an unshaded line has both ends equal. */
         from[c] = (int)((color[0] >> (8u * c)) & 255u);
         step[c] = count ? ((int)((color[1] >> (8u * c)) & 255u) - from[c]) * 4096 / count : 0;
     }
     for (int i = 0; i <= count; ++i) {                    /* L8: in the order i = 0..N */
-        /* L5 [KEPT]: point i lies at start + i * delta / N, rounded to the
-         * nearest integer. dx is not negative here. A tie in x goes to the
-         * lower x; a tie in y goes away from the start row. */
+        /* L5 [FIXTURE: G1]: point i lies at start + i * delta / N, rounded
+         * to the nearest integer. dx is not negative here. A tie in x goes
+         * to the lower x; a tie in y goes away from the start row. */
         unsigned move_x = count ? (unsigned)((2 * i * dx + count - 1) / (2 * count)) : 0u;
         unsigned move_y = count ? (unsigned)((2 * i * down + count) / (2 * count)) : 0u;
         int px = (int)((start_x + move_x) & 2047u);
@@ -613,8 +613,8 @@ static int source_copy_vram(const uint32_t *words)
     for (unsigned row = 0; row < height; ++row) {
         const uint16_t *source = g_vram + ((from_y + row) & 511u) * 1024u;
         uint16_t *target = g_vram + ((to_y + row) & 511u) * 1024u;
-        /* C3 [KEPT]: a row moves in runs of 128 pixels. A run is read whole
-         * before any of it is written. */
+        /* C3 [FIXTURE: G2]: a row moves in runs of 128 pixels. A run is read
+         * whole before any of it is written. */
         for (unsigned done = 0; done < width; done += 128u) {
             uint16_t run[128];
             unsigned length = width - done < 128u ? width - done : 128u;
@@ -671,7 +671,7 @@ static int source_draw_sprite(const SourceGPUBlock *block, unsigned opcode, int 
         for (int64_t row = first_y; row <= last_y; ++row) {
             if (block->interlace && ((unsigned)row & 1u) == block->skip_field) continue;
             /* R4, R5: U and V count from the unclipped origin, modulo 256.
-             * A flipped U starts at (U0 or 1) [KEPT]. */
+             * A flipped U starts at (U0 or 1) [FIXTURE: G3]. */
             unsigned down = (unsigned)(row - top);
             unsigned v = (flip_y ? v0 - down : v0 + down) & 255u;
             int stored = 0;
