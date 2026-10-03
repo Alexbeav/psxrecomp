@@ -1020,6 +1020,7 @@ if(BUILD_TESTING)
         add_test(NAME setup_bios_assets_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_bios_assets.py)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
+            add_test(NAME persisted_settings_paths_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_persisted_settings_paths.py --compiler ${CMAKE_CXX_COMPILER})
         endif()
         add_test(NAME disc_picker_ascii_test COMMAND ${Python3_EXECUTABLE}
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)

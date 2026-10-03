@@ -127,6 +127,12 @@ respective files.
 
 ### Multi-disc selection
 
+Relative paths in executable-side `settings.toml` (`[disc] path`, `[bios] path`,
+`[memcard] dir`, `card1`, `card2`) and in `disc.cfg` / `bios.cfg` resolve from the
+executable directory, including when launched from another working directory.
+Absolute paths and UNC paths keep their original location. A relative `--disc`
+command-line argument still resolves from the caller's working directory.
+
 A build whose `discs` array has more than one entry grows a **Disc Selection**
 dropdown in the launcher, above the Serial/Region/ISO-header checklist. The
 choice is persisted in `settings.toml`:

@@ -2783,6 +2783,19 @@ UserSettings load_user_settings(const fs::path& path) {
     return s;
 }
 
+fs::path relative_to_folder(const fs::path& p, const fs::path& folder) {
+    if (p.empty() || folder.empty() || !p.is_absolute()) return p;
+    std::error_code ec;
+    const fs::path base = fs::weakly_canonical(folder, ec);
+    if (ec) return p;
+    const fs::path full = fs::weakly_canonical(p, ec);
+    if (ec) return p;
+    const fs::path r = full.lexically_relative(base);
+    // Outside the folder (other drive, or a "../" climb) stays absolute.
+    if (r.empty() || r.is_absolute() || *r.begin() == "..") return p;
+    return r;
+}
+
 bool save_user_settings(const fs::path& path, const UserSettings& s) {
     std::error_code ec;
     if (!path.parent_path().empty())
@@ -2796,6 +2809,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         std::string str = p.generic_string();
         return str;
     };
+    // Paths inside the game folder are stored relative to it, so a portable
+    // folder still finds its disc, BIOS and memory cards after it is moved or
+    // copied to another PC. Readers anchor relative paths on the exe
+    // directory, which is where settings.toml lives.
+    auto rel = [&](const fs::path& p) { return fwd(relative_to_folder(p, path.parent_path())); };
 
     f << "# psxrecomp user settings - written by the launcher. Safe to hand-edit.\n";
     f << "# Overrides the bundled game.toml; the command line overrides this file.\n\n";
@@ -2898,11 +2916,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "lobby_url = \"" << s.netplay_lobby_url << "\"\n";
     }
     if (s.has_bios_path)
-        f << "\n[bios]\npath = \"" << fwd(s.bios_path) << "\"\n";
+        f << "\n[bios]\npath = \"" << rel(s.bios_path) << "\"\n";
     if (s.has_disc_path || s.has_disc_index) {
         f << "\n[disc]\n";
         if (s.has_disc_path)
-            f << "path = \"" << fwd(s.disc_path) << "\"\n";
+            f << "path = \"" << rel(s.disc_path) << "\"\n";
         /* Only meaningful for a multi-disc title; harmless (and informative)
          * for a single-disc one, where it is always 1. */
         if (s.has_disc_index)
@@ -2912,11 +2930,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         s.has_memcard1_enabled || s.has_memcard2_enabled) {
         f << "\n[memcard]\n";
         if (s.has_memcard_dir)
-            f << "dir     = \"" << fwd(s.memcard_dir) << "\"\n";
+            f << "dir     = \"" << rel(s.memcard_dir) << "\"\n";
         if (s.has_memcard1_path)
-            f << "card1   = \"" << fwd(s.memcard1_path) << "\"\n";
+            f << "card1   = \"" << rel(s.memcard1_path) << "\"\n";
         if (s.has_memcard2_path)
-            f << "card2   = \"" << fwd(s.memcard2_path) << "\"\n";
+            f << "card2   = \"" << rel(s.memcard2_path) << "\"\n";
         if (s.has_memcard1_enabled)
             f << "enable1 = " << (s.memcard1_enabled ? "true" : "false") << "\n";
         if (s.has_memcard2_enabled)
