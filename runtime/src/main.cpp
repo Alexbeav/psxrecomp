@@ -37,8 +37,10 @@
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
+#include "draw_distance.h"
 #include "display_scanout.h"
 #include "pgxp.h"
+#include "pgxp_session.h"
 #include "interrupts.h"
 #include "psx_video_timing.h"
 #include "present_ring.h"
@@ -141,6 +143,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <mutex>
 #include <thread>
 #include <cctype>
@@ -1234,6 +1237,15 @@ static int           g_video_geometry_correction   = 0;
 static int           g_video_perspective_texturing = 0;
 static int           g_video_pgxp_cpu_mode         = 0;
 static float         g_video_pgxp_tolerance        = 0.5f;
+/* docs/ENHANCEMENTS.md G1.11: dataflow-only and exact-projection shadows.
+ * Defaults keep the historical behaviour. game.toml [video] only. */
+static int           g_video_pgxp_position_fallback   = 1;
+static int           g_video_pgxp_preserve_projection = 0;
+/* [video] pgxp_mod_only (G1.12): the title ships PGXP through the
+ * psx.enhancement.pgxp mod, which is then the one switch -- the [video]
+ * geometry_correction / perspective_texturing / pgxp_cpu_mode values are not
+ * applied and the launcher hides its Perspective textures row. */
+static int           g_video_pgxp_mod_only            = 0;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 
 /* Settings -> Display -> Internal resolution (internal_resolution.h). The
@@ -1551,9 +1563,14 @@ static void reset_mod_owned_presentation(void) {
     psx_mod_set_world_scene_predicate(nullptr);
     psx_mod_set_retained_scene_predicate(nullptr);
     psx_mod_set_adaptive_backdrop_preload(0);
+    (void)psx_mod_set_draw_distance_clamp(0);
     g_bezel_path.clear();
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     g_frame_interpolation_source = PSX_MOD_FRAME_SOURCE_VBLANK;
+    /* The PGXP mod's request: only this session's activation may set it; the
+     * renderer setup takes it and combines it with the [video] baseline
+     * (pgxp_session.h). */
+    psx_pgxp_session_reset();
     /* Render-pass counters, the disabled-after-faults latch and any open
      * plan generation belong to the session that made them. */
     render_pass_reset_session();
@@ -2450,6 +2467,17 @@ static std::filesystem::path sidecar_cfg_path(const char* argv0, const char* fil
     return exe_dir_from_argv(argv0) / filename;
 }
 
+/* Relative paths in settings.toml and the bios.cfg / disc.cfg sidecars are
+ * relative to the game folder. Resolve them against the exe directory, never
+ * the working directory: a shortcut or frontend that starts the game from
+ * elsewhere must still find its own memory cards and BIOS. Absolute paths are
+ * returned unchanged; empty stays empty. */
+static std::filesystem::path anchor_on_exe_dir(const char* argv0,
+                                               const std::filesystem::path& p) {
+    if (p.empty()) return p;
+    return PSXRecompV4::host_resolve(exe_dir_from_argv(argv0), p);
+}
+
 static std::filesystem::path read_cached_path(const char* argv0, const char* filename) {
     std::ifstream f(sidecar_cfg_path(argv0, filename));
     if (!f.is_open()) return {};
@@ -2458,13 +2486,17 @@ static std::filesystem::path read_cached_path(const char* argv0, const char* fil
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
         line.pop_back();
     }
-    return line.empty() ? std::filesystem::path{} : std::filesystem::path(line);
+    return line.empty() ? std::filesystem::path{}
+                        : anchor_on_exe_dir(argv0, std::filesystem::path(line));
 }
 
 static void write_cached_path(const char* argv0, const char* filename,
                               const std::filesystem::path& path) {
     std::ofstream f(sidecar_cfg_path(argv0, filename), std::ios::trunc);
-    if (f.is_open()) f << path.string() << "\n";
+    // Relative inside the game folder so a moved portable folder still works;
+    // read_cached_path anchors relative paths on the exe directory.
+    if (f.is_open())
+        f << PSXRecompV4::relative_to_folder(path, exe_dir_from_argv(argv0)).generic_string() << "\n";
 }
 
 static void launcher_warning(const char* title, const std::string& msg) {
@@ -2648,6 +2680,12 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
 static std::filesystem::path normalize_disc_path_for_launch(const std::filesystem::path& path) {
     // Keep the resolver's mount path so a usable CUE retains its track map.
     return PSXRecompV4::resolve_disc_path(path).mount;
+}
+
+static std::filesystem::path resolve_persisted_disc_path(
+    const std::filesystem::path& path, const std::filesystem::path& exe_dir) {
+    if (path.empty()) return {};
+    return normalize_disc_path_for_launch(PSXRecompV4::host_resolve(exe_dir, path));
 }
 
 /* Which image of a MULTI-DISC set to mount, given the roster this build was
@@ -2937,7 +2975,7 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
 
     std::filesystem::path cached = read_cached_path(argv0, "disc.cfg");
     if (!cached.empty()) {
-        cached = normalize_disc_path_for_launch(cached);
+        cached = resolve_persisted_disc_path(cached, exe_dir_from_argv(argv0));
     }
     if (!cached.empty() && std::filesystem::exists(cached) &&
         validate_disc_for_launch(cached, game_id)) {
@@ -3433,6 +3471,160 @@ static void netplay_soft_exit(const char *origin) {
         std::fprintf(stderr, "psxrecomp: %s\n", g_netplay_exit_reason_text);
     shutdown_runtime();
     std::exit(0);
+}
+
+/* "address:port" as the netplay library reads it: the port follows
+ * the last colon and must be a number up to 65535, an empty address means
+ * every address of this computer, and a name is looked up (IPv4). Returns 0
+ * and the address, or -1 for a text the library refuses too. */
+static int netplay_hostport_addr(const char* hostport, sockaddr_in* out) {
+    const char* colon = hostport ? std::strrchr(hostport, ':') : nullptr;
+    char host[128];
+    if (!colon || (size_t)(colon - hostport) >= sizeof(host) || colon[1] == '\0')
+        return -1;
+    std::memcpy(host, hostport, (size_t)(colon - hostport));
+    host[colon - hostport] = '\0';
+    char* end = nullptr;
+    const unsigned long port = std::strtoul(colon + 1, &end, 10);
+    if (*end != '\0' || port > 65535ul)
+        return -1;
+    *out = sockaddr_in{};
+    out->sin_family = AF_INET;
+    out->sin_port = htons((uint16_t)port);
+    if (!host[0] || std::strcmp(host, "0.0.0.0") == 0) {
+        out->sin_addr.s_addr = htonl(INADDR_ANY);
+        return 0;
+    }
+    if (inet_pton(AF_INET, host, &out->sin_addr) == 1)
+        return 0;
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    addrinfo* found = nullptr;
+    if (getaddrinfo(host, nullptr, &hints, &found) != 0)
+        return -1;
+    int rc = -1;
+    for (const addrinfo* r = found; r; r = r->ai_next) {
+        if (r->ai_family == AF_INET && r->ai_addr &&
+            (size_t)r->ai_addrlen >= sizeof(*out)) {
+            out->sin_addr = ((const sockaddr_in*)r->ai_addr)->sin_addr;
+            rc = 0;
+            break;
+        }
+    }
+    if (found) freeaddrinfo(found);
+    return rc;
+}
+
+/* Why a LAN netplay start failed. The netplay library answers a
+ * refused bind, a listen address it cannot read and a peer address it cannot
+ * use with the same -1 and no error code, so do its steps again here and keep
+ * the system's answer: the error number and its text. The listen address is
+ * read and a name looked up as the library does, then bound. No SO_REUSEADDR,
+ * so a port another program holds is reported; the library's own socket is
+ * closed by now. Only when the listen address could be opened is the peer
+ * address read, so the peer is named as the cause only when it is one.
+ * `tried` receives the address that was bound, as numbers. */
+static int netplay_bind_probe(const char* bind_hostport, const char* peer_hostport,
+                              char* tried, size_t tried_cap, int* sys_error,
+                              char* sys_text, size_t sys_cap) {
+    if (sys_error) *sys_error = 0;
+    if (sys_text && sys_cap) sys_text[0] = '\0';
+    if (tried && tried_cap) tried[0] = '\0';
+#ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+    sockaddr_in addr{};
+    if (netplay_hostport_addr(bind_hostport, &addr) != 0)
+        return NETPLAY_BIND_BAD_ADDRESS;
+    if (tried && tried_cap) {
+        char ip[INET_ADDRSTRLEN] = "";
+        inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
+        std::snprintf(tried, tried_cap, "%s:%u", ip, (unsigned)ntohs(addr.sin_port));
+    }
+    int err = 0;
+    int result = NETPLAY_BIND_OK;
+#ifdef _WIN32
+    const SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET) {
+        err = WSAGetLastError();
+        result = NETPLAY_BIND_NO_SOCKET;
+    } else {
+        if (bind(s, (const sockaddr*)&addr, sizeof(addr)) != 0) {
+            err = WSAGetLastError();
+            result = NETPLAY_BIND_FAILED;
+        }
+        closesocket(s);
+    }
+    if (err && sys_text && sys_cap) {
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                       nullptr, (DWORD)err, 0, sys_text, (DWORD)sys_cap, nullptr);
+        for (size_t n = std::strlen(sys_text);
+             n && (sys_text[n - 1] == '\n' || sys_text[n - 1] == '\r' ||
+                   sys_text[n - 1] == ' ' || sys_text[n - 1] == '.'); --n)
+            sys_text[n - 1] = '\0';
+    }
+#else
+    const int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0) {
+        err = errno;
+        result = NETPLAY_BIND_NO_SOCKET;
+    } else {
+        if (bind(s, (const sockaddr*)&addr, sizeof(addr)) != 0) {
+            err = errno;
+            result = NETPLAY_BIND_FAILED;
+        }
+        close(s);
+    }
+    if (err && sys_text && sys_cap)
+        std::snprintf(sys_text, sys_cap, "%s", std::strerror(err));
+#endif
+    if (sys_error) *sys_error = err;
+    if (result != NETPLAY_BIND_OK)
+        return result;
+    /* The library refuses a peer address it cannot read, one with port 0 and
+     * a name it cannot look up. */
+    if (peer_hostport && peer_hostport[0]) {
+        sockaddr_in peer{};
+        if (netplay_hostport_addr(peer_hostport, &peer) != 0 || peer.sin_port == 0)
+            return NETPLAY_BIND_PEER_BAD;
+    }
+    return NETPLAY_BIND_OK;
+}
+
+/* A netplay start failed: print what failed and return the sentence for the
+ * player. The old line named the build first ("built without
+ * recomp-net, or bind/peer invalid") for every failure; a player whose system
+ * held the port read that the build had no netplay. For a LAN start the
+ * library's steps are done again here and the system's answer is reported. */
+static const char* netplay_start_failure(int nrc, const PsxNetplayConfig& cfg) {
+#if defined(PSX_HAS_RECOMP_NET)
+    const int netplay_built = 1;
+#else
+    const int netplay_built = 0;
+#endif
+    static char why[NETPLAY_START_FAILURE_CAP];
+    char sys_text[160] = "";
+    char tried[32] = "";
+    int sys_error = 0;
+    const int bind_probe = (netplay_built && nrc == -3)
+        ? netplay_bind_probe(cfg.bind_hostport, cfg.peer_hostport, tried, sizeof(tried),
+                             &sys_error, sys_text, sizeof(sys_text))
+        : NETPLAY_BIND_NOT_TRIED;
+    /* The sentence names the address that was bound: a name is shown as the
+     * address it stands for. */
+    netplay_start_failure_text(nrc, netplay_built,
+                               tried[0] ? tried : cfg.bind_hostport,
+                               cfg.peer_hostport, bind_probe, sys_error, sys_text,
+                               why, sizeof(why));
+    std::fprintf(stderr,
+        "psxrecomp: netplay start failed (%d) — %s%s%s%s (slot=%d bind=%s peer=%s)\n",
+        nrc, why, sys_text[0] ? " [system: " : "", sys_text,
+        sys_text[0] ? "]" : "", cfg.local_slot, cfg.bind_hostport,
+        cfg.peer_hostport);
+    return why;
 }
 
 static void shutdown_runtime(void) {
@@ -13082,7 +13274,12 @@ namespace {
         gi->assist_binding_count = PSX_ASSIST_BIND_COUNT;
         gi->has_skip_fmv = skip_fmv_offered_b ? 1 : 0;
         gi->has_turbo_loads = turbo_loads_offered_b ? 1 : 0;
-        gi->has_geometry_precision = 1;
+        /* The Perspective textures row. Hidden for a title that ships PGXP
+         * through the psx.enhancement.pgxp mod ([video] pgxp_mod_only): the
+         * Mods page is then its one switch, and the row's value is not
+         * applied, so showing it would be a second control that does
+         * nothing. */
+        gi->has_geometry_precision = g_video_pgxp_mod_only ? 0 : 1;
         gi->has_rewind_depth = 1;
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
         /* The Supersampling row becomes an Internal resolution list. */
@@ -13620,6 +13817,11 @@ int main(int argc, char** argv) {
                 gc.runtime.video_perspective_texturing ? 1 : 0;
             g_video_pgxp_cpu_mode = gc.runtime.video_pgxp_cpu_mode ? 1 : 0;
             g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
+            g_video_pgxp_position_fallback =
+                gc.runtime.video_pgxp_position_fallback ? 1 : 0;
+            g_video_pgxp_preserve_projection =
+                gc.runtime.video_pgxp_preserve_projection ? 1 : 0;
+            g_video_pgxp_mod_only = gc.runtime.video_pgxp_mod_only ? 1 : 0;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_scanlines  = gc.runtime.video_scanlines;
@@ -13628,6 +13830,8 @@ int main(int argc, char** argv) {
             g_video_aspect_num = gc.runtime.video_aspect_num;
             g_video_aspect_den = gc.runtime.video_aspect_den;
             g_low_latency_input = gc.runtime.video_low_latency_input ? 1 : 0;
+            gl_renderer_set_texture_window_batching(
+                gc.runtime.video_texture_window_batching ? 1 : 0);
             g_video_vsync       = gc.runtime.video_vsync;
             g_frame_interpolation = gc.runtime.video_frame_interpolation ? 1 : 0;
             g_frame_interpolation_fps = gc.runtime.video_frame_interpolation_fps;
@@ -13751,6 +13955,17 @@ int main(int argc, char** argv) {
                 }
                 gpu_ws_set_angle_sites(
                     addresses.data(), expected.data(), (int)addresses.size());
+            }
+            {
+                /* [[draw_distance.clamp]]: stored for the interpreter; the
+                 * switch stays off until a mod's activation turns it on. */
+                std::vector<PSXDrawDistanceClampSite> sites;
+                sites.reserve(gc.draw_distance_clamp_sites.size());
+                for (const auto& site : gc.draw_distance_clamp_sites)
+                    sites.push_back({site.address, site.expected, site.reg,
+                                     site.max});
+                (void)psx_draw_distance_set_clamp_sites(sites.data(),
+                                                        (int)sites.size());
             }
             {
                 std::vector<uint32_t> addresses, expected, thresholds;
@@ -14082,12 +14297,12 @@ int main(int argc, char** argv) {
             g_hotkey_pad_fast_forward_toggle = normalize_hotkey_pad_binding(
                 us.hotkey_pad_fast_forward_toggle, 0);
         if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
-            settings_bios_storage = us.bios_path.string();
+            settings_bios_storage = anchor_on_exe_dir(argv[0], us.bios_path).string();
             bios_path = settings_bios_storage.c_str();
             bios_explicit = true;
         }
         if (us.has_disc_path && !disc_override_path)
-            resolved_disc = normalize_disc_path_for_launch(us.disc_path);
+            resolved_disc = resolve_persisted_disc_path(us.disc_path, exe_dir_from_argv(argv[0]));
         /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
          * PRESENT; absent it, [disc] path decides and the index is derived
          * from it.
@@ -14120,9 +14335,11 @@ int main(int argc, char** argv) {
                 if (idx >= 0) selected_disc_index = idx + 1;
             }
         }
-        if (us.has_memcard_dir)                      memcard_dir   = us.memcard_dir;
-        if (us.has_memcard1_path)    memcard1_path    = us.memcard1_path;
-        if (us.has_memcard2_path)    memcard2_path    = us.memcard2_path;
+        /* Relative [memcard] values anchor on the exe directory; the
+         * per-game options file also lives in memcard_dir. */
+        if (us.has_memcard_dir)   memcard_dir   = anchor_on_exe_dir(argv[0], us.memcard_dir);
+        if (us.has_memcard1_path) memcard1_path = anchor_on_exe_dir(argv[0], us.memcard1_path);
+        if (us.has_memcard2_path) memcard2_path = anchor_on_exe_dir(argv[0], us.memcard2_path);
         if (us.has_memcard1_enabled) memcard1_enabled = us.memcard1_enabled;
         if (us.has_memcard2_enabled) memcard2_enabled = us.memcard2_enabled;
         if (us.has_multitap_enabled) multitap_enabled = us.multitap_enabled;
@@ -15038,10 +15255,14 @@ int main(int argc, char** argv) {
 
             lr = rui_rc;
 
-            if (lr == 0) {
+            /* The launcher hands back the player's edits on Quit as well as on
+             * Play (recomp_launcher.h: "*io still holds the edits"), so both
+             * fold them into seed. Disc choice stays Play-only: Quit launches
+             * nothing. */
+            if (lr == 0 || lr == 1) {
                 seed.netplay_player_name = ls.netplay_player_name;
                 seed.has_netplay_player_name = true;
-                if (rui_out_disc[0]) {
+                if (lr == 0 && rui_out_disc[0]) {
                     seed.disc_path = rui_out_disc;
                     seed.has_disc_path = true;
                 }
@@ -15050,7 +15271,7 @@ int main(int argc, char** argv) {
                  * launcher sees it as an ordinary settings row. Written for
                  * multi-disc titles only -- a single-disc game has nothing to
                  * select and should not grow a meaningless key. */
-                if (game_discs.size() > 1 && ls.disc_index > 0) {
+                if (lr == 0 && game_discs.size() > 1 && ls.disc_index > 0) {
                     selected_disc_index = ls.disc_index;
                     seed.disc_index = ls.disc_index;
                     seed.has_disc_index = true;
@@ -15294,6 +15515,9 @@ int main(int argc, char** argv) {
             }
 
             if (lr == 1) {
+                /* Keep settings changed and then dismissed with Quit. */
+                PSXRecompV4::save_user_settings(
+                    exe_dir_from_argv(argv[0]) / "settings.toml", seed);
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
                 if (overlay_init_thread.joinable())
                     overlay_init_thread.join();
@@ -15455,8 +15679,8 @@ int main(int argc, char** argv) {
                 }
                 memcard1_enabled = seed.memcard1_enabled;
                 memcard2_enabled = seed.memcard2_enabled;
-                if (seed.has_memcard1_path) memcard1_path = seed.memcard1_path;
-                if (seed.has_memcard2_path) memcard2_path = seed.memcard2_path;
+                if (seed.has_memcard1_path) memcard1_path = anchor_on_exe_dir(argv[0], seed.memcard1_path);
+                if (seed.has_memcard2_path) memcard2_path = anchor_on_exe_dir(argv[0], seed.memcard2_path);
                 if (seed.has_language) resolved_language = seed.language;
                 {
                     const int n = std::min(PSX_MAX_PLAYERS,
@@ -15785,17 +16009,31 @@ session_reboot:
     /* Env overrides (debug/validation path, like PSX_BIOS_HLE): arm the
      * corrections from process start so free-running (headless) boots can be
      * measured from the first projected vertex — a TCP toggle always arrives
-     * after the interesting window. '0' = off, anything else = on. */
-    if (const char* e = std::getenv("PSX_GEOMETRY_CORRECTION"))
-        g_video_geometry_correction = (*e && *e != '0') ? 1 : 0;
-    if (const char* e = std::getenv("PSX_PERSPECTIVE_TEXTURING"))
-        g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
-    if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
-        g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
-    gte_geometry_correction_set(g_video_geometry_correction);
-    gpu_texture_correction_set(g_video_perspective_texturing);
-    pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
-    pgxp_set_tolerance(g_video_pgxp_tolerance);
+     * after the interesting window. '0' = off, anything else = on. They win
+     * over the PGXP mod too, so an A/B run can switch it off. */
+    /* The [video] baseline plus the psx.enhancement.pgxp request this
+     * session's activation recorded (start_mod_session ran above, for the
+     * first boot and for a rematch); psx_pgxp_session_arm takes that request,
+     * so it cannot outlive this session. Applying the baseline alone here
+     * used to switch an enabled mod straight back off. The g_video_* values
+     * stay the player's settings: the mod never leaks into a launcher seed.
+     * With [video] pgxp_mod_only the mod is the one switch (pgxp_session.h). */
+    PSXPgxpSessionConfig pgxp_cfg{};
+    pgxp_cfg.video_geometry = g_video_geometry_correction;
+    pgxp_cfg.video_texture = g_video_perspective_texturing;
+    pgxp_cfg.video_cpu_mode = g_video_pgxp_cpu_mode;
+    pgxp_cfg.tolerance = g_video_pgxp_tolerance;
+    pgxp_cfg.position_fallback = g_video_pgxp_position_fallback;
+    pgxp_cfg.preserve_projection = g_video_pgxp_preserve_projection;
+    pgxp_cfg.mod_only = g_video_pgxp_mod_only;
+    PSXPgxpSessionInputs pgxp_in{};
+    const PSXPgxpSessionArm pgxp_arm = psx_pgxp_session_arm(&pgxp_cfg, &pgxp_in);
+    if (pgxp_in.env_geometry >= 0) g_video_geometry_correction = pgxp_in.env_geometry;
+    if (pgxp_in.env_texture >= 0) g_video_perspective_texturing = pgxp_in.env_texture;
+    if (pgxp_in.env_cpu_mode >= 0) g_video_pgxp_cpu_mode = pgxp_in.env_cpu_mode;
+    /* [video] texture_window_batching A/B (same image, fewer GL draws). */
+    if (const char* e = std::getenv("PSX_GL_TEXWIN_BATCH"))
+        gl_renderer_set_texture_window_batching((*e && *e != '0') ? 1 : 0);
     /* Scanlines: env override wins over config, same as the corrections above,
      * so a headless/free-run boot can be captured with the effect armed from the
      * first present. PSX_SCANLINES=0/1; PSX_SCANLINE_STRENGTH=0..1. Pushed to the
@@ -15808,12 +16046,14 @@ session_reboot:
     }
     gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
                               g_video_scanline_strength);
-    if (g_video_geometry_correction || g_video_perspective_texturing) {
+    if (pgxp_arm.geometry || pgxp_arm.texture) {
         std::fprintf(stdout,
-                     "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
-                     g_video_geometry_correction ? "on" : "off",
-                     g_video_perspective_texturing ? "on" : "off",
-                     (g_video_geometry_correction && requested_scale < 2)
+                     "psxrecomp: geometry correction %s, perspective texturing %s%s%s%s\n",
+                     pgxp_arm.geometry ? "on" : "off",
+                     pgxp_arm.texture ? "on" : "off",
+                     pgxp_arm.culling ? ", precise culling" : "",
+                     pgxp_in.mod_enabled ? " (PGXP mod)" : "",
+                     (pgxp_arm.geometry && requested_scale < 2)
                          ? " (needs [video] supersampling >= 2 to be visible)" : "");
     }
     /* Display aspect. Identity at the default 4:3. The present letterbox uses
@@ -16491,22 +16731,26 @@ session_reboot:
         s_netplay_present_sim_watermark = 0; /* §74: sim restarts per session */
         const int nrc = psx_netplay_start(&net_cfg);
         if (nrc != 0) {
-            std::fprintf(stderr,
-                "psxrecomp: netplay start failed (%d) — built without recomp-net, "
-                "or bind/peer invalid (slot=%d bind=%s peer=%s)\n",
-                nrc, net_cfg.local_slot, net_cfg.bind_hostport, net_cfg.peer_hostport);
-            return 1;
+            const char* const why = netplay_start_failure(nrc, net_cfg);
+            if (!g_netplay_from_lobby)
+                return 1;
+            /* A match from the launcher returns to the room, where the
+             * status line shows the sentence. No session is open and the
+             * guest is not entered: see the scheduler. */
+            netplay_soft_exit("netplay_start_failed");
+            g_netplay_exit_reason_text = why;
+        } else {
+            apply_netplay_local_viewport_aspect(net_cfg.enabled);
+            std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
+                        "force_turn=%d bind=%s peer=%s session=%u\n",
+                        psx_netplay_transport_name(),
+                        net_cfg.local_slot, net_cfg.input_player, net_cfg.input_delay,
+                        net_cfg.force_turn ? 1 : 0,
+                        net_cfg.bind_hostport,
+                        (std::strcmp(psx_netplay_transport_name(), "ice") == 0)
+                            ? "(ice)" : net_cfg.peer_hostport,
+                        (unsigned)net_cfg.session_id);
         }
-        apply_netplay_local_viewport_aspect(net_cfg.enabled);
-        std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
-                    "force_turn=%d bind=%s peer=%s session=%u\n",
-                    psx_netplay_transport_name(),
-                    net_cfg.local_slot, net_cfg.input_player, net_cfg.input_delay,
-                    net_cfg.force_turn ? 1 : 0,
-                    net_cfg.bind_hostport,
-                    (std::strcmp(psx_netplay_transport_name(), "ice") == 0)
-                        ? "(ice)" : net_cfg.peer_hostport,
-                    (unsigned)net_cfg.session_id);
     }
 
     /* Initialize CPU state. */
@@ -16857,6 +17101,10 @@ session_reboot:
         }
     }
 
+    /* A match whose start failed has no session and must not run the guest.
+     * Go back to the room; do not boot the game offline. */
+    if (psx_return_to_lobby_requested() && g_netplay_from_lobby)
+        goto soft_return_lobby;
     psx_scheduler_run(&cpu);
     if (psx_return_to_lobby_requested() && g_netplay_from_lobby)
         goto soft_return_lobby;

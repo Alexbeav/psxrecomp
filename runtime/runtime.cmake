@@ -48,7 +48,16 @@ if(NOT DEFINED CMAKE_C_COMPILER_LAUNCHER)
     if(DEFINED ENV{RETCOMM_TOOLCHAIN_DIR} AND NOT "$ENV{RETCOMM_TOOLCHAIN_DIR}" STREQUAL "")
         list(APPEND _psx_ccache_hints "$ENV{RETCOMM_TOOLCHAIN_DIR}/bin")
     endif()
-    find_program(CCACHE_PROGRAM NAMES ccache ccache.exe HINTS ${_psx_ccache_hints})
+    # Only a Windows host can run ccache.exe. Under WSL the Windows PATH is
+    # appended to the Linux one, so a WinLibs ccache.exe would otherwise win
+    # and fail to exec a Linux (or osxcross) compiler.
+    if(CMAKE_HOST_WIN32)
+        set(_psx_ccache_names ccache ccache.exe)
+    else()
+        set(_psx_ccache_names ccache)
+    endif()
+    find_program(CCACHE_PROGRAM NAMES ${_psx_ccache_names} HINTS ${_psx_ccache_hints})
+    unset(_psx_ccache_names)
     unset(_psx_ccache_hints)
     if(CCACHE_PROGRAM)
         set(CMAKE_C_COMPILER_LAUNCHER   "${CCACHE_PROGRAM}" CACHE STRING "compiler launcher")
@@ -360,6 +369,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/debug_server.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_trace_ranges.c
     ${PSXRECOMP_ROOT}/runtime/src/dirty_ram_interp.c
+    ${PSXRECOMP_ROOT}/runtime/src/draw_distance.c
     ${PSXRECOMP_ROOT}/runtime/src/game_dispatch_compat.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_segment_miss.c
     ${PSXRECOMP_ROOT}/runtime/src/fntrace.c
@@ -388,6 +398,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c
     ${PSXRECOMP_ROOT}/runtime/src/gte.cpp
     ${PSXRECOMP_ROOT}/runtime/src/pgxp.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/pgxp_session.cpp
     ${PSXRECOMP_ROOT}/runtime/src/nd_intro_ot.c
     ${PSXRECOMP_ROOT}/runtime/src/crc32.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_sha256.c
@@ -2425,12 +2436,20 @@ endfunction()
 #     ENABLE_SETUP_WIZARD
 #     PRELOADED_MODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded"
 #     EXCLUDE_BUILTIN_MODS psx.presentation.bezel   # optional; builtins not shipped
+#     PGXP                     # optional; the runtime is the PGXP hook flavor
 #   )
 #
 # Remaining args are forwarded to psxrecomp_add_runtime_target.
 # ---------------------------------------------------------------------------
 function(psxrecomp_add_game_runtime target)
-    set(options ENABLE_NETPLAY_IF_PRESENT ENABLE_SETUP_WIZARD)
+    # PGXP: build the title's ONE runtime as the PGXP hook flavor (see the PGXP
+    # option of psxrecomp_add_runtime_target): -DPSX_PGXP=1, overlay flavor 2,
+    # no _pgxp suffix and no clone beside it. The generated C already carries
+    # the PGXP_*() hook sites, so committed generated/ does not change; only
+    # the compile define does. Parsed here rather than left to the unparsed
+    # tail so it cannot be swallowed by a multi-value argument written before
+    # it (CODEGEN_SETUP_SOURCES would take it as a source file).
+    set(options ENABLE_NETPLAY_IF_PRESENT ENABLE_SETUP_WIZARD PGXP)
     set(oneValueArgs
         GEN_MARKER
         GEN_FULL_FALLBACK
@@ -2623,6 +2642,9 @@ function(psxrecomp_add_game_runtime target)
     endif()
 
     set(_psxg_forwarded_args ${PSXG_UNPARSED_ARGUMENTS})
+    if(PSXG_PGXP)
+        list(APPEND _psxg_forwarded_args PGXP)
+    endif()
     if(NOT "${PSXG_PRELOADED_MODS_DIR}" STREQUAL "")
         list(APPEND _psxg_forwarded_args
             PRELOADED_MODS_DIR "${PSXG_PRELOADED_MODS_DIR}")

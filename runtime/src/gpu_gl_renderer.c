@@ -528,13 +528,14 @@ static int           s_scratch_w = 0, s_scratch_h = 0;
 static GLuint s_geo_prog = 0, s_geo_vao = 0, s_geo_vbo = 0;
 static GLuint s_tex_prog = 0, s_tex_vao = 0, s_tex_vbo = 0;
 /* Textured vertex: pos(2) uv(2) col(4) tpage(2) clut(2) depth(1) raw(1) limits(4)
- * semi(1) q(1)
+ * semi(1) q(1) twin(1)
  * — per-prim texture state in flat attributes so prims batch (see flush_tex_batch).
  * q is the perspective weight ([video] perspective_texturing): 0 = affine, the
  * PS1-faithful default, which makes the vertex shader's w exactly 1.0 and the
  * fragment shader read the noperspective varying — i.e. bit-identical to the
- * pre-feature pipeline. */
-#define TEXV 20
+ * pre-feature pipeline. twin is the prim's GP0(E2h) texture window, its low 20
+ * bits as a whole float (mask x, mask y, offset x, offset y; 5 bits each). */
+#define TEXV 21
 static GLuint s_blit_prog = 0, s_blit_vao = 0, s_blit_vbo = 0;
 static GLuint s_blit_hi_prog = 0;            /* windowed hi surface blit */
 static GLint  s_uBhSrc = -1, s_uBhPass = -1, s_uBhMaskset = -1, s_uBhSrcDiv = -1;
@@ -558,7 +559,7 @@ static float   s_pq[3];
 static GLint s_uVram = -1, s_uTpage = -1, s_uClut = -1, s_uDepth = -1;
 static GLint s_uPalette = -1;
 static GLint s_uRaw = -1, s_uSemipass = -1, s_uSemimode = -1;
-static GLint s_uTwin = -1, s_uMaskset = -1, s_uFilter = -1;
+static GLint s_uMaskset = -1, s_uFilter = -1;
 static GLint s_uLimits = -1;
 /* Native-wide x-projection uniforms (per program). u_xoff = x translation in
  * native px (0 canonical), u_xhalf = x clip half-extent in native px (512
@@ -1260,9 +1261,10 @@ static const char *GEO_FS =
 /* Textured program. Per-prim texture state (texpage, clut, depth, raw, uv
  * limits) is carried in FLAT vertex attributes — constant across a prim's
  * vertices — instead of uniforms, so consecutive textured prims with the same
- * blend/mask/texture-window state batch into one draw (see flush_tex_batch).
- * The remaining uniforms (u_twin/u_maskset/u_filter/u_semipass) are the batch
- * keys + per-pass state. */
+ * blend/mask state batch into one draw (see flush_tex_batch). The texture
+ * window rides in the vertex too (a_twin), so a GP0(E2h) change need not end
+ * a batch. The remaining uniforms (u_maskset/u_filter/u_semipass) are the
+ * batch keys + per-pass state. */
 static const char *TEX_VS =
     "#version 330\n"
     "layout(location=0) in vec2 a_pos;\n"
@@ -1275,6 +1277,7 @@ static const char *TEX_VS =
     "layout(location=7) in vec4 a_limits;\n"
     "layout(location=8) in float a_semi;\n"
     "layout(location=9) in float a_q;   /* persp weight; 0 = affine (default) */\n"
+    "layout(location=10) in float a_twin; /* GP0(E2h) bits 0..19 */\n"
     "uniform float u_shift;\n"
     "uniform float u_xoff;   /* native-wide x translation (px); 0 canonical */\n"
     "uniform float u_xhalf;  /* x clip half-extent (px); 512 canonical */\n"
@@ -1285,11 +1288,13 @@ static const char *TEX_VS =
     "flat out int v_persp;\n"
     "flat out ivec2 v_tpage; flat out ivec2 v_clut; flat out int v_depth;\n"
     "flat out int v_raw; flat out ivec4 v_limits; flat out int v_semi;\n"
+    "flat out int v_twin;\n"
     "void main(){ v_uv = a_uv; v_uv_p = a_uv; v_col = a_col;\n"
     "  v_persp = (a_q > 0.0) ? 1 : 0;\n"
     "  v_tpage = ivec2(a_tpage + 0.5); v_clut = ivec2(a_clut + 0.5);\n"
     "  v_depth = int(a_depth + 0.5); v_raw = int(a_raw + 0.5);\n"
     "  v_semi = int(a_semi + 0.5);\n"
+    "  v_twin = int(a_twin + 0.5);\n"
     "  v_limits = ivec4(floor(a_limits + 0.5));\n"
     "  /* u_shift: align GL's center-sample grid with the PS1 integer grid (see\n"
     "   * GEO_VS) so interpolated uv at a fragment equals the PS1 DDA value. */\n"
@@ -1317,11 +1322,11 @@ static const char *TEX_FS =
     "flat in int v_raw;       /* 1 = no color modulation */\n"
     "flat in ivec4 v_limits;  /* prim uv sampling bounds (inclusive, post-wrap) */\n"
     "flat in int v_semi;      /* GP0 command has semi-transparency enabled */\n"
+    "flat in int v_twin;      /* texture window, GP0(E2h) bits 0..19 */\n"
     "uniform usampler2D u_vram;\n"
     "uniform usampler2D u_palette;\n"
     "uniform int u_semipass;  /* 0=all texels, 1=STP=0 only, 2=STP=1 only */\n"
     "uniform int u_semimode;  /* PS1 blend mode; drives dual-source factors */\n"
-    "uniform ivec4 u_twin;    /* texture window: mask_x, mask_y, off_x, off_y */\n"
     "uniform int u_maskset;   /* GP0(E6h) set-mask: OR bit15 into output */\n"
     "uniform int u_filter;    /* 1 = bilinear */\n"
     "uniform float u_shift;\n"
@@ -1337,9 +1342,12 @@ static const char *TEX_FS =
     "}\n"
     "int fetch_texel(int u, int v){\n"
     "  u &= 255; v &= 255;\n"
-    "  if ((u_twin.x | u_twin.y) != 0) {\n"
-    "    u = (u & ~(u_twin.x * 8)) | ((u_twin.z & u_twin.x) * 8);\n"
-    "    v = (v & ~(u_twin.y * 8)) | ((u_twin.w & u_twin.y) * 8);\n"
+    "  /* texture window: mask_x, mask_y, off_x, off_y (8-px units) */\n"
+    "  ivec4 tw = ivec4(v_twin & 31, (v_twin >> 5) & 31,\n"
+    "                   (v_twin >> 10) & 31, (v_twin >> 15) & 31);\n"
+    "  if ((tw.x | tw.y) != 0) {\n"
+    "    u = (u & ~(tw.x * 8)) | ((tw.z & tw.x) * 8);\n"
+    "    v = (v & ~(tw.y * 8)) | ((tw.w & tw.y) * 8);\n"
     "  } else {\n"
     "    u = clamp(u, v_limits.x, v_limits.z);\n"
     "    v = clamp(v, v_limits.y, v_limits.w);\n"
@@ -2450,9 +2458,10 @@ static void wide_clear_bd_scale(GLint uScale, GLint uCenter) {
 
 /* ---- textured-prim batching -------------------------------------------- *
  * Consecutive textured prims sharing blend/mask/texwindow/filter coalesce into
- * one draw. Per-prim texture state (texpage/clut/depth/raw/uv-limits) rides in
- * the vertex (TEXV flat attributes), so only `semi` (blend) and the global
- * mask/twin/filter are batch keys. flush_tex_batch() draws the queued verts; it
+ * one draw. Per-prim texture state (texpage/clut/depth/raw/uv-limits/texture
+ * window) rides in the vertex (TEXV flat attributes), so only `semi` (blend)
+ * and the global mask/filter are batch keys, plus the texture window unless
+ * texture-window batching is on (below). flush_tex_batch() draws the queued verts; it
  * is called before any op that reads VRAM, writes it outside the batch, or
  * changes batch state (see callers: flush_cpu_upload, flush_pack_if_sampling,
  * every non-textured glb_ wrapper, and the present path). Drawing reads only the
@@ -2466,6 +2475,25 @@ static int   s_tb_mask = 0, s_tb_filter = 0;
 static GLuint s_tb_bank_tex;
 static int   s_tb_twin[4] = {0, 0, 0, 0};
 static uint64_t s_batch_total = 0, s_batch_reason[7];
+
+/* Texture-window batching ([video] texture_window_batching, OpenGL; off by
+ * default). Off: a GP0(E2h) texture-window change ends the open textured batch
+ * (batch reason 5), as before. On: prims with different windows share a batch,
+ * since each vertex carries its own window. Games that tile far textures with
+ * per-prim windows (R4's split screen: ~515 E2 changes and ~180 batches a game
+ * frame, ~17 with this on) then draw in a tenth of the batches, which matters
+ * most on the native-wide path, where a batch reaching the margins is drawn
+ * again into the wide surface.
+ * The result is pixel-identical: an opaque batch draws its colour in one
+ * painter-ordered pass and semi-transparent prims are still drawn one per
+ * batch. The one exception is mask checking (GP0(E6h) bit 1): an opaque batch
+ * fixes the stencil for its STP=1 texels after its colour pass, so a later
+ * prim in the same batch is not stopped by an earlier one's mask bit. The
+ * window therefore stays a batch key while the check is on, and this mode
+ * never makes a batch longer than the default mode would there. */
+static int s_twin_batching = 0;
+void gl_renderer_set_texture_window_batching(int on) { s_twin_batching = on ? 1 : 0; }
+int  gl_renderer_get_texture_window_batching(void) { return s_twin_batching; }
 
 void gl_renderer_batch_diag(uint64_t out[8]) {
     out[0] = s_batch_total;
@@ -2599,7 +2627,6 @@ typedef struct {
     uint8_t check;           /* mask-check state at draw time */
     uint8_t filter;
     GLuint  tex;             /* sampled texture (bank or raw mirror) */
-    int     twin[4];
     int     ax0, ay0, ax1, ay1;  /* draw area, inclusive */
     size_t  vfirst;          /* float offset into s_hq_v */
     int     vcount;          /* vertices */
@@ -2672,7 +2699,6 @@ static int hiw_enqueue_tex(int nverts, int semi, int mirror, int gate) {
     c->mask = (uint8_t)s_tb_mask;
     c->filter = (uint8_t)s_tb_filter;
     c->tex = s_tb_bank_tex ? s_tb_bank_tex : s_raw_tex;
-    memcpy(c->twin, s_tb_twin, sizeof c->twin);
     if (wq) hiw_wide_set(c, gate);
     return wq;
 }
@@ -2730,7 +2756,6 @@ static void hiw_replay_wide(void) {
             p_glUniform1f(s_tex_uXscale, c->wscale);
             p_glUniform1f(s_tex_uXcenter, c->wcenter);
             glBindTexture(GL_TEXTURE_2D, c->tex);
-            p_glUniform4i(s_uTwin, c->twin[0], c->twin[1], c->twin[2], c->twin[3]);
             p_glUniform1i(s_uMaskset, c->mask);
             p_glUniform1i(s_uFilter, c->filter);
             p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
@@ -2807,7 +2832,6 @@ static void hiw_flush_queue(void) {
                     cur = HQ_TEX;
                 }
                 glBindTexture(GL_TEXTURE_2D, c->tex);
-                p_glUniform4i(s_uTwin, c->twin[0], c->twin[1], c->twin[2], c->twin[3]);
                 p_glUniform1i(s_uMaskset, c->mask);
                 p_glUniform1i(s_uFilter, c->filter);
                 p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
@@ -2859,7 +2883,6 @@ static void flush_tex_batch(void) {
     glBindTexture(GL_TEXTURE_2D, s_tb_bank_tex && !s_tb_bank_live_clut ? s_tb_bank_tex : s_raw_tex);
     p_glUniform1i(s_uPalette, 1);
     p_glActiveTexture(PSXGL_TEXTURE0);
-    p_glUniform4i(s_uTwin, s_tb_twin[0], s_tb_twin[1], s_tb_twin[2], s_tb_twin[3]);
     p_glUniform1i(s_uMaskset, s_tb_mask);
     p_glUniform1i(s_uFilter, s_tb_filter);
     p_glBindVertexArray(s_tex_vao);
@@ -3260,7 +3283,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
 
     /* Append to the textured batch. Flush first if this prim's blend/mask/twin/
      * filter differ from the open batch, or the buffer is full. Per-prim texture
-     * state goes in the vertex; only these keys force a new draw. */
+     * state goes in the vertex; only these keys force a new draw (the window
+     * not at all under texture-window batching, see s_twin_batching). */
     {
         flush_flat_batch();   /* painter order: flat GEO before textured */
         int twx = s_tw_mask_x, twy = s_tw_mask_y, tox = s_tw_off_x, toy = s_tw_off_y;
@@ -3301,8 +3325,9 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             else if (s_mask_set != s_tb_mask) reason = 2;
             else if (s_tex_filter != s_tb_filter) reason = 3;
             else if (gate != s_tb_gate) reason = 4;
-            else if (twx != s_tb_twin[0] || twy != s_tb_twin[1] ||
-                     tox != s_tb_twin[2] || toy != s_tb_twin[3]) reason = 5;
+            else if ((!s_twin_batching || s_mask_check) &&
+                     (twx != s_tb_twin[0] || twy != s_tb_twin[1] ||
+                      tox != s_tb_twin[2] || toy != s_tb_twin[3])) reason = 5;
         }
         if (reason >= 0) {
             s_batch_reason[reason]++;
@@ -3315,6 +3340,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             s_tb_bank_live_clut = s_selected_bank_live_clut;
             s_tb_twin[0] = twx; s_tb_twin[1] = twy; s_tb_twin[2] = tox; s_tb_twin[3] = toy;
         }
+        /* The prim's window, exact as a float (20 bits). */
+        float twin = (float)(twx | (twy << 5) | (tox << 10) | (toy << 15));
         float *vp = &s_tb[s_tb_n * TEXV];
         for (int i = 0; i < 3; i++, vp += TEXV) {
             vp[0] = s_pc_valid ? s_pc_x[i] : (float)xs[i];
@@ -3328,6 +3355,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             vp[16] = (float)lim[2];  vp[17] = (float)lim[3];
             vp[18] = semi >= 0 ? (float)(semi + 1) : 0.0f;          /* a_semi code */
             vp[19] = s_pq_valid ? s_pq[i] : 0.0f;                   /* a_q; 0 = affine */
+            vp[20] = twin;                                          /* a_twin   */
         }
         s_tb_n += 3;
         if (isolate) flush_tex_batch();   /* draw this semi prim alone, in submission order */
@@ -4224,7 +4252,6 @@ static int init_gpu_raster(void) {
     s_uRaw   = p_glGetUniformLocation(s_tex_prog, "u_raw");
     s_uSemipass = p_glGetUniformLocation(s_tex_prog, "u_semipass");
     s_uSemimode = p_glGetUniformLocation(s_tex_prog, "u_semimode");
-    s_uTwin     = p_glGetUniformLocation(s_tex_prog, "u_twin");
     s_uMaskset  = p_glGetUniformLocation(s_tex_prog, "u_maskset");
     s_uFilter   = p_glGetUniformLocation(s_tex_prog, "u_filter");
     s_uLimits   = p_glGetUniformLocation(s_tex_prog, "u_limits");
@@ -4317,6 +4344,7 @@ static int init_gpu_raster(void) {
         p_glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, st, (void*)(14*sizeof(float))); p_glEnableVertexAttribArray(7); /* limits */
         p_glVertexAttribPointer(8, 1, GL_FLOAT, GL_FALSE, st, (void*)(18*sizeof(float))); p_glEnableVertexAttribArray(8); /* semi   */
         p_glVertexAttribPointer(9, 1, GL_FLOAT, GL_FALSE, st, (void*)(19*sizeof(float))); p_glEnableVertexAttribArray(9); /* q      */
+        p_glVertexAttribPointer(10, 1, GL_FLOAT, GL_FALSE, st, (void*)(20*sizeof(float))); p_glEnableVertexAttribArray(10); /* twin */
     }
 
     p_glGenVertexArrays(1, &s_blit_vao);

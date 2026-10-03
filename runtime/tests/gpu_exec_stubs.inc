@@ -40,6 +40,23 @@ static struct {
 } last_textured_rect;
 static struct { int calls, x, y, w, h, u0, v0, u1, v1; } last_scaled_rect;
 
+/* PGXP stub state: the quad case in main() switches geometry correction on
+ * and makes the packet words in a bitmask (bit n = word n at g_test_quad_base)
+ * report a dataflow-precise vertex. */
+static int g_test_geometry_correction = 0;
+static uint32_t g_test_quad_base = 0xFFFFFFFFu;
+static uint32_t g_test_precise_words = 0;
+static int g_test_rect_bypass = 0;
+static int g_test_rect_partial = 0;
+
+static int test_word_precise(uint32_t addr) {
+    if (g_test_quad_base == 0xFFFFFFFFu || addr < g_test_quad_base) return 0;
+    uint32_t word = (addr - g_test_quad_base) / 4u;
+    return word < 32u && ((g_test_precise_words >> word) & 1u);
+}
+static int g_test_precise_triangles = 0;
+static int g_test_textured_triangles = 0;
+
 /* Bounding box of every flat/gouraud triangle drawn since the last reset. */
 static struct { int calls, min_x, max_x; } gpu_exec_triangles;
 static inline void gpu_exec_reset_triangles(void) {
@@ -95,13 +112,29 @@ void psx_fatal_halt(const char *reason) {
 }
 
 void pgxp_set_enabled(int enabled) { (void)enabled; }
-int gte_geometry_correction_enabled(void) { return 0; }
+int gte_geometry_correction_enabled(void) { return g_test_geometry_correction; }
 int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
                             int32_t int_x, int32_t int_y,
                             int32_t *x16, int32_t *y16, uint16_t *sz) {
-    (void)addr; (void)packet_word; (void)int_x; (void)int_y;
-    (void)x16; (void)y16; (void)sz;
+    (void)packet_word;
+    *x16 = int_x * 65536;
+    *y16 = int_y * 65536;
+    *sz = 0;
+    if (test_word_precise(addr)) {
+        *x16 += 0x4000;
+        return PGXP_SRC_DATAFLOW;
+    }
     return PGXP_SRC_NATIVE;
+}
+int pgxp_probe_precise_vertex(uint32_t addr, uint32_t packet_word,
+                              int32_t int_x, int32_t int_y) {
+    (void)packet_word; (void)int_x; (void)int_y;
+    return test_word_precise(addr) ? PGXP_SRC_DATAFLOW : PGXP_SRC_NATIVE;
+}
+void pgxp_note_triangle(int precise) { (void)precise; }
+void pgxp_note_rect_bypass(int all_precise) {
+    if (all_precise) g_test_rect_bypass++;
+    else             g_test_rect_partial++;
 }
 int gte_precision_load_word(uint32_t addr, uint32_t packed,
                             int32_t *x16, int32_t *y16, uint16_t *z) {
@@ -191,7 +224,8 @@ void gr_set_color_modulation(int r, int g, int b, int raw_texture) {
 }
 void gr_set_precise_triangle(int enabled, int32_t x0, int32_t y0,
                              int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
-    (void)enabled; (void)x0; (void)y0; (void)x1; (void)y1; (void)x2; (void)y2;
+    (void)x0; (void)y0; (void)x1; (void)y1; (void)x2; (void)y2;
+    if (enabled) g_test_precise_triangles++;
 }
 void gr_set_perspective_triangle(int enabled, float q0, float q1, float q2) {
     (void)enabled; (void)q0; (void)q1; (void)q2;
@@ -218,6 +252,7 @@ void gr_draw_textured_triangle(int x0, int y0, int u0, int v0,
                                int x2, int y2, int u2, int v2,
                                uint16_t clut_x, uint16_t clut_y,
                                uint16_t texpage) {
+    g_test_textured_triangles++;
     (void)x0; (void)y0; (void)u0; (void)v0; (void)x1; (void)y1; (void)u1;
     (void)v1; (void)x2; (void)y2; (void)u2; (void)v2; (void)clut_x;
     (void)clut_y; (void)texpage;

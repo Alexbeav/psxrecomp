@@ -5276,19 +5276,27 @@ static void handle_geom_correction(int id, const char *json)
     uint64_t tc_att = 0, tc_arm = 0, tc_off = 0, tc_nosrc = 0, tc_noz = 0;
     gpu_texture_correction_stats(&tc_att, &tc_arm, &tc_off, &tc_nosrc, &tc_noz);
     send_fmt("{\"id\":%d,\"ok\":true,"
-             "\"geometry_correction\":%d,"
+             "\"geometry_correction\":%d,\"texture_correction\":%d,"
              "\"geometry_vertex_hits\":%u,"
              "\"perspective_triangles\":%u,"
              "\"texcorr\":{\"attempts\":%llu,\"armed\":%llu,"
              "\"no_correction\":%llu,\"no_source\":%llu,\"no_depth\":%llu},"
              "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u,"
              "\"pgxp\":{\"enabled\":%d,\"cpu_mode\":%d,\"tolerance\":%.3f,"
+             "\"position_fallback\":%d,\"preserve_projection\":%d,"
+             "\"culling\":%d,"
              "\"lookups\":%llu,\"dataflow_hit\":%llu,\"fallback_hit\":%llu,"
              "\"native\":%llu,\"value_mismatch\":%llu,\"trunc_reject\":%llu,"
              "\"tolerance_reject\":%llu,\"w_valid\":%llu,"
-             "\"produced\":%llu,\"swc2_stores\":%llu}}",
+             "\"produced\":%llu,\"swc2_stores\":%llu,\"ppp_produced\":%llu,"
+             "\"ppp_window_fallback\":%llu,"
+             "\"tri_precise\":%llu,\"tri_mixed\":%llu,\"tri_native\":%llu,"
+             "\"rect_bypass\":%llu,\"rect_partial\":%llu,"
+             "\"nclip_precise\":%llu,\"nclip_disagree\":%llu,"
+             "\"nclip_corrected\":%llu}}",
              id,
              gte_geometry_correction_enabled(),
+             gpu_texture_correction_enabled(),
              (unsigned)hits,
              (unsigned)gpu_texture_correction_hits(),
              (unsigned long long)tc_att, (unsigned long long)tc_arm,
@@ -5296,6 +5304,8 @@ static void handle_geom_correction(int id, const char *json)
              (unsigned long long)tc_noz,
              (unsigned)lookups, (unsigned)unrec, (unsigned)ambig,
              pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
+             pgxp_position_fallback(), pgxp_preserve_projection(),
+             pgxp_culling(),
              (unsigned long long)ps.lookups,
              (unsigned long long)ps.dataflow_hit,
              (unsigned long long)ps.fallback_hit,
@@ -5305,12 +5315,23 @@ static void handle_geom_correction(int id, const char *json)
              (unsigned long long)ps.tolerance_reject,
              (unsigned long long)ps.w_valid,
              (unsigned long long)ps.produced,
-             (unsigned long long)ps.swc2_stores);
+             (unsigned long long)ps.swc2_stores,
+             (unsigned long long)ps.ppp_produced,
+             (unsigned long long)ps.ppp_window_fallback,
+             (unsigned long long)ps.tri_precise,
+             (unsigned long long)ps.tri_mixed,
+             (unsigned long long)ps.tri_native,
+             (unsigned long long)ps.rect_bypass,
+             (unsigned long long)ps.rect_partial,
+             (unsigned long long)ps.nclip_precise,
+             (unsigned long long)ps.nclip_disagree,
+             (unsigned long long)ps.nclip_corrected);
 }
 
 /* pgxp — live-tune the value-propagation engine for one-toggle isolation runs
- * without a rebuild: {"cmd":"pgxp","cpu_mode":0|1,"tolerance":F}. Fields are
- * optional; the reply echoes the resulting state (same shape as
+ * without a rebuild: {"cmd":"pgxp","cpu_mode":0|1,"tolerance":F,
+ * "position_fallback":0|1,"preserve_projection":0|1,"culling":0|1}. Fields
+ * are optional; the reply echoes the resulting state (same shape as
  * geom_correction's "pgxp" object, flattened). */
 static void handle_pgxp(int id, const char *json)
 {
@@ -5329,6 +5350,15 @@ static void handle_pgxp(int id, const char *json)
     int cm = json_get_int(json, "cpu_mode", -1);
     if (cm >= 0)
         pgxp_set_cpu_mode(cm != 0);
+    int pf = json_get_int(json, "position_fallback", -1);
+    if (pf >= 0)
+        pgxp_set_position_fallback(pf != 0);
+    int pp = json_get_int(json, "preserve_projection", -1);
+    if (pp >= 0)
+        pgxp_set_preserve_projection(pp != 0);
+    int cu = json_get_int(json, "culling", -1);
+    if (cu >= 0)
+        pgxp_set_culling(cu != 0);
     /* tolerance is fractional (sub-pixel), so scan it directly — json_get_int
      * would truncate 0.5 to 0. */
     const char *p = strstr(json, "\"tolerance\"");
@@ -5339,8 +5369,12 @@ static void handle_pgxp(int id, const char *json)
             pgxp_set_tolerance((float)strtod(p, NULL));
     }
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"cpu_mode\":%d,"
-             "\"tolerance\":%.3f,\"suppress\":%u,\"active\":%d}",
+             "\"tolerance\":%.3f,\"position_fallback\":%d,"
+             "\"preserve_projection\":%d,\"culling\":%d,"
+             "\"suppress\":%u,\"active\":%d}",
              id, pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
+             pgxp_position_fallback(), pgxp_preserve_projection(),
+             pgxp_culling(),
              (unsigned)pgxp_test_suppress_depth(), pgxp_test_active());
 }
 
@@ -8040,6 +8074,20 @@ static void handle_gl_wide_fast(int id, const char *json)
     int on = json_get_int(json, "on", -1);
     if (on >= 0) gl_renderer_set_wide_fast(on);
     send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d}", id, gl_renderer_get_wide_fast());
+}
+
+/* gl_texwin_batch on=<0|1>: [video] texture_window_batching, live. 1 = textured
+ * prims with different GP0(E2h) texture windows share a batch; 0 = a window
+ * change ends the batch. The image is the same; for A/B of batch counts
+ * (frame_perf batch_diag[6] = window flushes) and frame time. */
+extern void gl_renderer_set_texture_window_batching(int on);
+extern int  gl_renderer_get_texture_window_batching(void);
+static void handle_gl_texwin_batch(int id, const char *json)
+{
+    int on = json_get_int(json, "on", -1);
+    if (on >= 0) gl_renderer_set_texture_window_batching(on);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d}", id,
+             gl_renderer_get_texture_window_batching());
 }
 
 /* Live GTE widescreen-squash toggle (diagnostic for 8C far-backdrop void):
@@ -14118,6 +14166,7 @@ static const CmdEntry s_commands[] = {
     { "render_pass_dump",  handle_render_pass_dump },
     { "render_pass_refuse", handle_render_pass_refuse },
     { "gl_wide_fast",      handle_gl_wide_fast },
+    { "gl_texwin_batch",   handle_gl_texwin_batch },
     { "synth_recurse",     handle_synth_recurse },
     { "gl_fbo_peek",       handle_gl_fbo_peek },
     { "gl_vram_diff",      handle_gl_vram_diff },

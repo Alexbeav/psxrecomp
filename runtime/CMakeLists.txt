@@ -38,6 +38,9 @@ if(BUILD_TESTING)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
+    add_executable(mdec_snapshot_activity_test tests/test_mdec_snapshot_activity.c)
+    target_include_directories(mdec_snapshot_activity_test PRIVATE include src)
+    add_test(NAME mdec_snapshot_activity_test COMMAND mdec_snapshot_activity_test)
     add_executable(mod_texture_banks_test tests/test_mod_texture_banks.c src/mod_texture_banks.c)
     target_include_directories(mod_texture_banks_test PRIVATE include)
     add_test(NAME mod_texture_banks_test COMMAND mod_texture_banks_test)
@@ -373,6 +376,41 @@ if(BUILD_TESTING)
     target_include_directories(pgxp_test PRIVATE include)
     add_test(NAME pgxp_test COMMAND pgxp_test)
 
+    # psx.enhancement.pgxp at session start (docs/ENHANCEMENTS.md G1.11): the
+    # real builtin activation (mod API stubbed) and the pgxp_session.h
+    # resolver main.cpp's renderer setup uses, in main.cpp's order. Pins that
+    # the [video] baseline no longer undoes the mod, that a cleared (netplay)
+    # plan keeps the baseline, and that the env overrides win.
+    # The session arming main.cpp runs (src/pgxp_session.cpp) against the
+    # real mod runtime, the real builtin plugin and the builtin's own
+    # manifest: default-on, netplay clear, the off switch, options, env
+    # overrides and [video] pgxp_mod_only.
+    add_executable(pgxp_session_test tests/test_pgxp_session.cpp
+        src/pgxp_session.cpp src/mod_builtin_pgxp.c src/pgxp.cpp
+        src/psx_ram_geometry.c
+        src/mod_runtime.cpp
+        src/mod_packages.cpp
+        src/disc_path.cpp
+        src/cue_sheet.cpp
+        src/iso_reader.cpp
+        src/crc32.c
+        src/psx_sha256.c)
+    target_include_directories(pgxp_session_test PRIVATE
+        include
+        ../recompiler/include
+        ../recompiler/lib/toml11)
+    target_compile_definitions(pgxp_session_test PRIVATE
+        PSX_BUILTIN_PGXP_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/../mods/builtin/packages/psx.enhancement.pgxp/1.0.0/manifest.toml")
+    target_link_libraries(pgxp_session_test PRIVATE chdr-static)
+    if(WIN32)
+        if(MSVC)
+            target_link_options(pgxp_session_test PRIVATE /STACK:16777216)
+        else()
+            target_link_options(pgxp_session_test PRIVATE -Wl,--stack,16777216)
+        endif()
+    endif()
+    add_test(NAME pgxp_session_test COMMAND pgxp_session_test)
+
     add_executable(psx_instr_cost_test tests/test_psx_instr_cost.cpp)
     target_include_directories(psx_instr_cost_test PRIVATE include)
     add_test(NAME psx_instr_cost_test COMMAND psx_instr_cost_test)
@@ -411,8 +449,10 @@ if(BUILD_TESTING)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
             -ffunction-sections -fdata-sections)
+        # Apple ld has no --gc-sections; -dead_strip is its equivalent (as
+        # for isc_store_test above), so the test links and runs on macOS.
         target_link_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
-            -Wl,--gc-sections)
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
     endif()
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
@@ -1017,6 +1057,7 @@ if(BUILD_TESTING)
         add_test(NAME setup_bios_assets_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_bios_assets.py)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
+            add_test(NAME persisted_settings_paths_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_persisted_settings_paths.py --compiler ${CMAKE_CXX_COMPILER})
         endif()
         add_test(NAME disc_picker_ascii_test COMMAND ${Python3_EXECUTABLE}
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
@@ -1067,6 +1108,13 @@ if(BUILD_TESTING)
         add_test(NAME mod_catalog_layout_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_catalog_layout.py
+                         --cmake ${CMAKE_COMMAND})
+        # psxrecomp_add_game_runtime(... PGXP): the real function body under
+        # cmake -P, forwarding the hook-flavor option for the title's one
+        # runtime (docs/ENHANCEMENTS.md G1.11).
+        add_test(NAME game_runtime_pgxp_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_game_runtime_pgxp.py
                          --cmake ${CMAKE_COMMAND})
         # tools/mod_channel_filter.py strips developer features from a staged
         # catalog; every entry that served one ([[requirement]] included) must

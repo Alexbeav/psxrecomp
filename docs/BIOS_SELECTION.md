@@ -25,7 +25,8 @@ for it). Regenerate with `tools/regen_bios.sh --config bios/<stem>.toml` and
 commit the output whenever the emitter, seeds or profile change.
 
 **Other known images: the backend is built on the player's machine.** For a
-retail image a build does not link (today SCPH-5552), the release ships
+retail image a build does not link (today SCPH-5500, SCPH-5501 and SCPH-5552),
+the release ships
 `overlay_toolchain/` and compiles game code from the player's own disc at
 runtime; the same mechanism builds a BIOS backend from the player's own dump
 (`runtime/include/psx_bios_module.h`, `runtime/src/psx_bios_module.c`,

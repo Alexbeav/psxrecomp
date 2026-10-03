@@ -623,6 +623,29 @@ TOOLCHAIN_BIOS_EMITTER = {'win': 'psxrecomp-bios.exe', 'linux': 'psxrecomp-bios'
                           'macos-x64': 'psxrecomp-bios', 'macos-arm64': 'psxrecomp-bios'}
 
 
+# TinyCC is LGPL-2.1 and its win64 binary zip carries no license file, so the
+# notice (license text, copyright, exact source URL) travels inside tcc/ too;
+# runtime/licenses/ ships the same file as licenses/TinyCC-LICENSE.txt.
+TCC_NOTICE = os.path.join(os.path.dirname(_TOOLS_DIR), 'runtime', 'licenses',
+                          'TinyCC-LICENSE.txt')
+
+
+def stage_tcc_notice(tcc_dir, pins):
+    """Write TinyCC's license notice as <tcc_dir>/COPYING; fail if the notice
+    is missing or does not name the pinned version and archive."""
+    if not os.path.isfile(TCC_NOTICE):
+        _die('TinyCC notice missing at %s; the bundled tcc cannot ship '
+             'without its LGPL-2.1 notice' % TCC_NOTICE)
+    with open(TCC_NOTICE, encoding='utf-8') as f:
+        text = f.read()
+    for needle in (pins['tcc_version'], pins['tcc_sha256'],
+                   'GNU LESSER GENERAL PUBLIC LICENSE'):
+        if needle not in text:
+            _die('%s does not name %s; update it with the tcc pin'
+                 % (TCC_NOTICE, needle))
+    shutil.copy2(TCC_NOTICE, os.path.join(tcc_dir, 'COPYING'))
+
+
 def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
                     platform_tag=None, mingw_bin=None, log=print):
     """Stage the self-contained overlay toolchain (interpreter + recompiler +
@@ -667,6 +690,7 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
         inner = os.path.join(tcc_tmp, 'tcc')
         shutil.copytree(inner if os.path.isdir(inner) else tcc_tmp,
                         os.path.join(toolchain, 'tcc'), dirs_exist_ok=True)
+        stage_tcc_notice(os.path.join(toolchain, 'tcc'), pins)
 
     recompiler = TOOLCHAIN_RECOMPILER[platform_tag]
     src_recompiler = os.path.join(recomp_dir, recompiler)

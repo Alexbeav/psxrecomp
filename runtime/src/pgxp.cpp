@@ -36,6 +36,7 @@
 #include "cpu_state.h"
 #include "psx_memory.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -78,6 +79,9 @@ static uint32_t s_gen = 1;
 static int      s_enabled = 0;
 static int      s_cpu_mode = 0;
 static float    s_tolerance = 0.5f;   /* user-validated seam clamp (G1.10) */
+static int      s_position_fallback = 1;   /* G1.4 cache tier (G1.11 switch) */
+static int      s_preserve_projection = 0; /* exact-projection shadows (G1.11) */
+static int      s_culling = 0;             /* precise NCLIP sign (G1.12)   */
 static uint32_t s_suppress = 0;
 static int      s_deferred_invalidate = 0;
 
@@ -123,12 +127,48 @@ extern "C" void pgxp_set_enabled(int enabled) {
 }
 
 extern "C" int pgxp_enabled(void) { return s_enabled; }
+extern "C" int pgxp_active(void) { return g_pgxp_active; }
 
 extern "C" void pgxp_set_cpu_mode(int enabled) { s_cpu_mode = enabled ? 1 : 0; }
 extern "C" int  pgxp_cpu_mode(void) { return s_cpu_mode; }
 
 extern "C" void  pgxp_set_tolerance(float pixels) { s_tolerance = pixels; }
 extern "C" float pgxp_tolerance(void) { return s_tolerance; }
+
+extern "C" void pgxp_set_position_fallback(int enabled) {
+    s_position_fallback = enabled ? 1 : 0;
+}
+extern "C" int pgxp_position_fallback(void) { return s_position_fallback; }
+
+extern "C" void pgxp_set_preserve_projection(int enabled) {
+    s_preserve_projection = enabled ? 1 : 0;
+}
+extern "C" int pgxp_preserve_projection(void) { return s_preserve_projection; }
+
+extern "C" void pgxp_set_culling(int enabled) { s_culling = enabled ? 1 : 0; }
+extern "C" int pgxp_culling(void) { return s_culling; }
+
+static int s_mod_request = 0;
+static int s_mod_request_cpu = 0;
+static int s_mod_request_cull = 0;
+
+extern "C" void pgxp_mod_request(int enabled, int cpu_mode, int culling) {
+    s_mod_request = enabled ? 1 : 0;
+    s_mod_request_cpu = (enabled && cpu_mode) ? 1 : 0;
+    s_mod_request_cull = (enabled && culling) ? 1 : 0;
+}
+
+extern "C" int pgxp_mod_requested(int *cpu_mode, int *culling) {
+    if (cpu_mode) *cpu_mode = s_mod_request_cpu;
+    if (culling) *culling = s_mod_request_cull;
+    return s_mod_request;
+}
+
+extern "C" int pgxp_mod_request_take(int *cpu_mode, int *culling) {
+    const int requested = pgxp_mod_requested(cpu_mode, culling);
+    pgxp_mod_request(0, 0, 0);
+    return requested;
+}
 
 extern "C" void pgxp_suppress_begin(void) {
     ++s_suppress;
@@ -147,6 +187,22 @@ extern "C" void pgxp_suppress_end(void) {
 
 extern "C" void pgxp_get_stats(PGXPStats *out) {
     if (out) *out = s_stats;
+}
+
+extern "C" void pgxp_note_rect_bypass(int all_precise) {
+    if (all_precise) s_stats.rect_bypass++;
+    else             s_stats.rect_partial++;
+}
+
+extern "C" void pgxp_note_nclip(int disagree, int corrected) {
+    if (disagree)  s_stats.nclip_disagree++;
+    if (corrected) s_stats.nclip_corrected++;
+}
+
+extern "C" void pgxp_note_triangle(int precise) {
+    if (precise >= 3)     s_stats.tri_precise++;
+    else if (precise > 0) s_stats.tri_mixed++;
+    else                  s_stats.tri_native++;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -638,6 +694,54 @@ extern "C" void psx_pgxp_muldiv(struct CPUState *cpu, uint32_t instr,
 /* GTE producer                                                               */
 /* ------------------------------------------------------------------------- */
 
+extern "C" int pgxp_project_precise(int64_t mac1, int64_t mac2, int64_t mac3,
+                                    int shift, int32_t ir1, int32_t ir2,
+                                    uint32_t sz3, uint32_t h,
+                                    int32_t ofx, int32_t ofy,
+                                    int64_t x_num, int64_t x_den,
+                                    int32_t *x16, int32_t *y16) {
+    /* Qualify exactly the vertices whose guest projection is the plain
+     * IR * (H / SZ3) of the continuous one: sf=1, no IR1/IR2 clamp (the
+     * stored IR equals MAC >> 12), SZ3 unclamped and nonzero, and no UNR
+     * divide overflow (the GTE saturates the quotient when H >= 2*SZ3). */
+    if (shift != 12 || x_den <= 0) return 0;
+    if ((mac1 >> 12) != (int64_t)ir1 || (mac2 >> 12) != (int64_t)ir2) return 0;
+    const int64_t z_int = mac3 >> 12;
+    if (z_int <= 0 || z_int > 0xFFFF || (uint32_t)z_int != sz3) return 0;
+    if ((int64_t)h >= 2 * z_int) return 0;
+    /* (MAC/4096) * H / (MAC3/4096): the 4096s cancel. Double keeps ~52 bits,
+     * far below the 1/65536 px the shadow carries. Host-only and visual-only,
+     * so cross-platform bit equality of this value is not required. */
+    const double k = (double)h * 65536.0 / (double)mac3;
+    double fx = (double)ofx +
+                (double)mac1 * k * (double)x_num / (double)x_den;
+    double fy = (double)ofy + (double)mac2 * k;
+    /* Same transport bound as the IR path (gte.cpp): an extreme value must
+     * not wrap an int32 and masquerade as an on-screen shadow. */
+    const double lim = 4096.0 * 65536.0;
+    if (fx < -lim) fx = -lim;
+    if (fx > lim - 1.0) fx = lim - 1.0;
+    if (fy < -lim) fy = -lim;
+    if (fy > lim - 1.0) fy = lim - 1.0;
+    *x16 = (int32_t)std::floor(fx);
+    *y16 = (int32_t)std::floor(fy);
+    return 1;
+}
+
+/* Defined below with the GPU consumer. */
+static inline int pgxp_agrees(int32_t p16, int32_t native, int16_t half);
+
+extern "C" int pgxp_ppp_accept(int32_t x16, int32_t y16, uint32_t packed) {
+    const int16_t hx = (int16_t)(packed & 0xFFFFu);
+    const int16_t hy = (int16_t)(packed >> 16);
+    if (pgxp_agrees(x16, hx, hx) && pgxp_agrees(y16, hy, hy)) {
+        s_stats.ppp_produced++;
+        return 1;
+    }
+    s_stats.ppp_window_fallback++;
+    return 0;
+}
+
 extern "C" void pgxp_gte_push_sxy(int32_t x16, int32_t y16, uint16_t sz3,
                                   uint32_t packed) {
     if (!g_pgxp_active) return;
@@ -671,6 +775,35 @@ extern "C" int pgxp_get_gte_sxy_checked(uint32_t index, uint32_t expect,
     return 1;
 }
 
+/* Defined below with the GPU consumer. */
+static inline int pgxp_accept(int32_t px, int32_t py, int32_t int_x,
+                              int32_t int_y, uint32_t word);
+
+extern "C" int pgxp_gte_nclip_precise(const uint32_t sxy[3], int64_t *cross) {
+    if (!g_pgxp_active) return 0;
+    int64_t x[3], y[3];
+    for (int i = 0; i < 3; i++) {
+        const PGXPValue *pv = &s_gte[12 + i];
+        if (!pv_live(pv) || (pv->flags & PGXP_F_VXY) != PGXP_F_VXY ||
+            pv->value != sxy[i])
+            return 0;
+        /* The GPU parses the packet half as the same signed integer for every
+         * value the GTE can produce (its saturation limits are -0x400 and
+         * 0x3FF), so the register half stands in for the native parse. */
+        if (pgxp_accept(pv->x16, pv->y16, (int16_t)(sxy[i] & 0xFFFFu),
+                        (int16_t)(sxy[i] >> 16), sxy[i]) != 0)
+            return 0;
+        x[i] = pv->x16;
+        y[i] = pv->y16;
+    }
+    /* NCLIP's determinant, sx0*(sy1-sy2) + sx1*(sy2-sy0) + sx2*(sy0-sy1),
+     * on 16.16 positions. Positions are bounded to +-2^28 (the transport
+     * clamp), so every product fits in 64 bits. */
+    *cross = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
+    s_stats.nclip_precise++;
+    return 1;
+}
+
 extern "C" void pgxp_gte_reg_written(int reg, uint32_t value) {
     /* Invalidation-class bookkeeping: runs even with the engine disarmed so
      * seeded/leftover shadows can never outlive a guest register write. Only
@@ -685,6 +818,40 @@ extern "C" void pgxp_gte_reg_written(int reg, uint32_t value) {
 /* ------------------------------------------------------------------------- */
 /* GPU consumer                                                               */
 /* ------------------------------------------------------------------------- */
+
+/* Truncation agreement for one axis. `native` is the GPU's parse of the
+ * packet half, `half` the raw 16-bit half in the word. Exact (integer part
+ * equals the native parse) unless preserve-projection is on; then the precise
+ * position may sit a bounded distance from it (PGXP_PPP_AGREE_*), except
+ * when the half is at or beyond the GTE saturation limits: there the guest
+ * integer is a clamp that says nothing about the vertex, or (beyond them) a
+ * CPU-modified word the GPU's 11-bit parse wraps. */
+static inline int pgxp_agrees(int32_t p16, int32_t native, int16_t half) {
+    if (!s_preserve_projection || half <= -0x400 || half >= 0x3FF)
+        return (p16 >> 16) == native;
+    const int64_t d = (int64_t)p16 - (int64_t)native * 65536;
+    return d > -(int64_t)PGXP_PPP_AGREE_BELOW * 65536 &&
+           d < (int64_t)PGXP_PPP_AGREE_ABOVE * 65536;
+}
+
+/* The consumer-side safeguards on one candidate position: truncation
+ * agreement on both axes, then the tolerance clamp. Returns 0 when accepted,
+ * 1 for a truncation reject, 2 for a tolerance reject. Shared by the GPU
+ * lookup and the precise NCLIP so culling and drawing believe exactly the
+ * same vertices. */
+static inline int pgxp_accept(int32_t px, int32_t py, int32_t int_x,
+                              int32_t int_y, uint32_t word) {
+    if (!pgxp_agrees(px, int_x, (int16_t)(word & 0xFFFFu)) ||
+        !pgxp_agrees(py, int_y, (int16_t)(word >> 16)))
+        return 1;
+    if (s_tolerance >= 0.0f) {
+        float dx = (float)((int64_t)px - (int64_t)int_x * 65536) * (1.0f / 65536.0f);
+        float dy = (float)((int64_t)py - (int64_t)int_y * 65536) * (1.0f / 65536.0f);
+        if (std::fabs(dx) > s_tolerance || std::fabs(dy) > s_tolerance)
+            return 2;
+    }
+    return 0;
+}
 
 extern "C" int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
                                        int32_t int_x, int32_t int_y,
@@ -711,7 +878,8 @@ extern "C" int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
         }
     }
 
-    if (!have && gte_geometry_correction_lookup(packet_word, &px, &py)) {
+    if (!have && s_position_fallback &&
+        gte_geometry_correction_lookup(packet_word, &px, &py)) {
         pz = 0;                                /* fallback never carries depth */
         have = PGXP_SRC_FALLBACK;
     }
@@ -719,17 +887,15 @@ extern "C" int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
     if (have) {
         /* Truncation agreement: the GPU parsed 11-bit integers out of the
          * packet; a precise position whose integer part disagrees (a
-         * wrapped/CPU-modified coordinate) must not be believed. */
-        if ((px >> 16) != int_x || (py >> 16) != int_y) {
+         * wrapped/CPU-modified coordinate) must not be believed. Then the
+         * tolerance clamp. */
+        const int why = pgxp_accept(px, py, int_x, int_y, packet_word);
+        if (why == 1) {
             s_stats.trunc_reject++;
             have = 0;
-        } else if (s_tolerance >= 0.0f) {
-            float dx = (float)(px - (int_x << 16)) * (1.0f / 65536.0f);
-            float dy = (float)(py - (int_y << 16)) * (1.0f / 65536.0f);
-            if (dx > s_tolerance || dy > s_tolerance) {
-                s_stats.tolerance_reject++;
-                have = 0;
-            }
+        } else if (why == 2) {
+            s_stats.tolerance_reject++;
+            have = 0;
         }
     }
 
@@ -748,6 +914,17 @@ extern "C" int pgxp_get_precise_vertex(uint32_t addr, uint32_t packet_word,
     *y16 = py;
     *sz = pz;
     return have;
+}
+
+extern "C" int pgxp_probe_precise_vertex(uint32_t addr, uint32_t packet_word,
+                                         int32_t int_x, int32_t int_y) {
+    const PGXPStats saved = s_stats;
+    int32_t x16, y16;
+    uint16_t sz;
+    const int src = pgxp_get_precise_vertex(addr, packet_word, int_x, int_y,
+                                            &x16, &y16, &sz);
+    s_stats = saved;
+    return src;
 }
 
 /* ------------------------------------------------------------------------- */

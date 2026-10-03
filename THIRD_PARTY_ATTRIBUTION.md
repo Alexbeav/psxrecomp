@@ -77,9 +77,15 @@ rather than LGPL linkage.
 
 The runtime expects an end-user bundle at
 `&lt;exe_dir&gt;/overlay_toolchain/{python/, tcc/tcc.exe, compile_overlays.py, …}`
-(`runtime/src/main.cpp`). **No script in this repository populates that
-directory**, so if release packaging supplies it, that step lives outside this
-repo and the TinyCC license notice must be shipped alongside it there.
+(`runtime/src/main.cpp`). `tools/release_stage.py` (`stage_toolchain`) populates
+it on Windows from the pinned, unmodified upstream TinyCC 0.9.27 win64 binary
+zip. That zip carries no license file, so the notice — LGPL-2.1 text, copyright
+and the exact source URL — lives at `runtime/licenses/TinyCC-LICENSE.txt`
+(shipped as `licenses/TinyCC-LICENSE.txt`) and is also staged beside the binary
+as `overlay_toolchain/tcc/COPYING`. Staging fails if the notice does not name the
+pinned version and archive hash, and the release zip verifier
+(`docs/ci/templates/game-release.yml`) rejects a zip that bundles `tcc.exe`
+without both copies.
 
 Developers with `gcc` on `PATH` use the gcc tier instead; the bundled tcc matters
 only for end-user release packages (`docs/BUILDING.md`).

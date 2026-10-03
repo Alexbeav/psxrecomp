@@ -9,6 +9,9 @@
 
 extern "C" uint32_t psx_read_word(uint32_t addr);
 extern "C" int gpu_ws_precise_nclip_enabled(void);
+/* overlay_loader.c: nonzero while an overlay shadow diff (interpreter record
+ * plus native replay of one candidate) is running. */
+extern "C" int psx_overlay_shadow_diff_active(void);
 
 namespace PSXRecomp {
 namespace GTE {
@@ -372,6 +375,8 @@ extern "C" int gte_geometry_correction_lookup(uint32_t packed,
 static inline void geom_note(uint32_t packed, int64_t x16, int64_t y16) {
     if (s_speculative_depth != 0 || s_gte_replay_sandbox || !s_geom_enabled ||
         !s_geom_cache) return;
+    /* Dataflow-only (G1.11): nothing will read the cache, so do not fill it. */
+    if (!pgxp_position_fallback()) return;
     /* Saturated off-screen projections are unsuitable for subpixel recovery. */
     int32_t x = (int16_t)(packed & 0xFFFFu);
     int32_t y = (int16_t)(packed >> 16);
@@ -849,6 +854,9 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
     // this frame is being stretched — never on a 4:3-presented frame (FMV /
     // full-2D screen), so content and present stay locked.
     int64_t xterm = (int64_t)gte->IR1 * h_div_sz;
+    /* Horizontal factor applied to xterm below, for the exact-projection
+     * shadow (pgxp_project_precise) to apply the same one. */
+    int64_t x_num = 1, x_den = 1;
     bool do_squash = (s_ws_xnum != s_ws_xden) && !gpu_ws_present_native_43();
     const bool dome_call = ws_dome_call_matches();
     // Curved backdrops are authored to cover the original 4:3 projection.
@@ -869,8 +877,11 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
             if (!s_gte_replay_sandbox) s_ws_sz_far++;
         }
     }
-    if (do_squash)
+    if (do_squash) {
         xterm = xterm * s_ws_xnum / s_ws_xden;
+        x_num = s_ws_xnum;
+        x_den = s_ws_xden;
+    }
     // Native-wide dome expansion remains a diagnostic-only depth probe.
     else if (s_ws_dome_on && s_ws_dome_num != s_ws_dome_den &&
              !gpu_ws_present_native_43()) {
@@ -882,6 +893,8 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
         }
         if (sz >= s_ws_far_threshold) {
             xterm = xterm * s_ws_dome_num / s_ws_dome_den;
+            x_num = s_ws_dome_num;
+            x_den = s_ws_dome_den;
             if (!s_gte_replay_sandbox) s_ws_sz_far++;
         }
     }
@@ -901,8 +914,25 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
         const int64_t kLim = (int64_t)4096 << 16;
         int64_t cx16 = sx16 < -kLim ? -kLim : (sx16 > kLim - 1 ? kLim - 1 : sx16);
         int64_t cy16 = sy16 < -kLim ? -kLim : (sy16 > kLim - 1 ? kLim - 1 : sy16);
-        pgxp_gte_push_sxy((int32_t)cx16, (int32_t)cy16, gte->SZ[3],
-                          (uint32_t)gte->SXY[2]);
+        int32_t px16 = (int32_t)cx16, py16 = (int32_t)cy16;
+        /* Preserve projection precision (G1.11): shadow the exact projection
+         * instead when the vertex qualifies and it lies inside the GPU's
+         * truncation-agreement window; outside it the IR path's shadow is
+         * kept, so the vertex still draws precise rather than being rejected
+         * to native. Shadow only; the guest SXY, MAC and FLAG above are
+         * already final. Skipped while the hooks record nothing (speculative
+         * passes), where the shadow would be dropped anyway. */
+        if (pgxp_preserve_projection() && pgxp_active()) {
+            int32_t ex16, ey16;
+            if (pgxp_project_precise(mac1, mac2, mac3, shift, gte->IR1, gte->IR2,
+                                     gte->SZ[3], gte->H, gte->OFX, gte->OFY,
+                                     x_num, x_den, &ex16, &ey16) &&
+                pgxp_ppp_accept(ex16, ey16, (uint32_t)gte->SXY[2])) {
+                px16 = ex16;
+                py16 = ey16;
+            }
+        }
+        pgxp_gte_push_sxy(px16, py16, gte->SZ[3], (uint32_t)gte->SXY[2]);
     }
     geom_note((uint32_t)gte->SXY[2], sx16, sy16);
 
@@ -965,6 +995,37 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
                    (int64_t)sx2 * (sy0 - sy1);
     gte->check_mac0_overflow(mac0);
     int32_t out = static_cast<int32_t>(mac0);
+    /* PGXP's NCLIP (docs/ENHANCEMENTS.md G1.12). While geometry correction is
+     * armed, compare the sign of the exact determinant of the three vertices
+     * PGXP will draw with the integer one; a disagreement is a face the game
+     * culls (or keeps) on a winding the drawn face does not have. Counted
+     * always; with precise culling on, MAC0 takes the exact sign. Never in a
+     * pass that is compared against another execution of the same code: the
+     * speculative and replay passes record no shadows, so the overlay shadow
+     * diff holds it off for its interpreter pass too and both passes see the
+     * integer MAC0. FLAG keeps the integer result's overflow bits. */
+    if (s_geom_enabled && !s_gte_replay_sandbox && s_speculative_depth == 0 &&
+        !psx_overlay_shadow_diff_active()) {
+        const uint32_t words[3] = { (uint32_t)gte->SXY[0], (uint32_t)gte->SXY[1],
+                                    (uint32_t)gte->SXY[2] };
+        int64_t cross = 0;
+        if (pgxp_gte_nclip_precise(words, &cross)) {
+            const int sp = (cross > 0) - (cross < 0);
+            const int sn = (out > 0) - (out < 0);
+            if (sp != 0 && sp != sn) {
+                const int corrected = pgxp_culling();
+                if (corrected) {
+                    const uint64_t mag = cross < 0 ? (uint64_t)(-cross)
+                                                   : (uint64_t)cross;
+                    uint64_t area = (mag + (1ull << 31)) >> 32;
+                    if (area < 1) area = 1;
+                    if (area > 0x7FFFFFFFull) area = 0x7FFFFFFFull;
+                    out = sp > 0 ? (int32_t)area : -(int32_t)area;
+                }
+                pgxp_note_nclip(1, corrected);
+            }
+        }
+    }
     s_nclip_last_native = out;
     s_nclip_last_precise_valid = false;
     /* Compute an exact 16.16 determinant for configured branch consumers, but
