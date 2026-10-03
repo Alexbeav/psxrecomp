@@ -38,7 +38,7 @@ exits = re.findall(r"DISP_MISS\(([^;]*?)\);", dispatch, flags=re.S)
 assert len(exits) >= 12, f"expected the twelve miss exits of the dispatch, found {len(exits)}"
 reasons = re.findall(r"^\s*(PSX_MISS_[A-Z_]+)\b", HEADER[HEADER.index("enum {"):HEADER.index("PSX_INTERP_MISS_REASONS")],
                      flags=re.M)
-assert len(reasons) == 10, reasons
+assert len(reasons) == 11, reasons
 for text in exits:
     named = re.findall(r"PSX_MISS_[A-Z_]+", text)
     assert named and all(n in reasons for n in named), f"a miss exit names no known reason: {text!r}"
@@ -86,4 +86,4 @@ for needle in (
 ):
     assert needle in WRITER, f"the report writer no longer has: {needle}"
 
-print("interp_report wiring: 12+ miss exits, 10 reasons, writer and source list OK")
+print("interp_report wiring: 12+ miss exits, 11 reasons, writer and source list OK")

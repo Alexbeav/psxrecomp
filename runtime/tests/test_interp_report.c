@@ -167,7 +167,7 @@ int main(void)
                          "\"native_handoffs\": 55}") != NULL, "guard and misses: the interpreter totals");
     check(strstr(s_json, "\"above_kernel\": {\"miss_cached\": 1000, \"no_unit\": 1001, \"stale_bytes\": 1002, "
                          "\"outside_window\": 1003, \"device_touch\": 1004, \"native_off\": 1005, \"diff_gate\": 1006, "
-                         "\"rank\": 1007, \"bad_entry\": 1008, \"modified_text_backoff\": 1009}") != NULL, "guard and misses: the misses above the kernel");
+                         "\"rank\": 1007, \"bad_entry\": 1008, \"modified_text_backoff\": 1009, \"modified_text_load_bound\": 1010}") != NULL, "guard and misses: the misses above the kernel");
     check(strstr(s_json, "\"kernel\": {\"miss_cached\": 2000, \"no_unit\": 2001,") != NULL, "guard and misses: the misses in the kernel window");
 
     /* --- a small buffer ------------------------------------------------------------ */

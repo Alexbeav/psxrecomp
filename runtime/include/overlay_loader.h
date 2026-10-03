@@ -89,6 +89,12 @@ int overlay_loader_registered_count(void);
  * take-outs. Any pointer may be NULL. */
 void overlay_loader_get_modified_text(uint64_t *loads, uint64_t *taken_out,
                                       uint32_t *backed_off_pages, uint32_t *limit);
+/* The loads through that window: the time they took (Windows; 0 elsewhere), the
+ * pages that reached the limit of loads, and that limit. */
+void overlay_loader_get_modified_text_loads(uint64_t *load_us, uint32_t *load_bound_pages,
+                                            uint32_t *load_limit);
+/* Code-range hashes computed at dispatch, and how many did not match. */
+void overlay_loader_get_rehash_counts(uint32_t *rehashes, uint32_t *misses);
 
 /* Returns full loader state for TCP diagnostics. */
 void overlay_loader_get_status(int *active, int *registered,

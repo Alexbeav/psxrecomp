@@ -43,6 +43,7 @@
 #define JALR_T1_T0 0x01204009u
 #define NOP 0x00000000u
 #define THIRD_WORD 0x24030007u   /* addiu v1, zero, 7: neither the resident word nor the patch */
+#define FOURTH_WORD 0x24030009u  /* addiu v1, zero, 9: the second cached unit's value */
 #define RA_SENTINEL 0x80020000u
 
 static void unreachable(const char *what) {
@@ -389,9 +390,87 @@ static void load_resident_image(void) {
     dirty_ram_register_text_image(0x10000u, s_ref, sizeof(s_ref));
 }
 
+/* ---- The bound on loads for rewritten text (PS1B-421) -------------------- */
+/* The cache holds two units for the entry 0x80010008: one built from the NOP
+ * patch and one from FOURTH_WORD. Both modes start from the resident image and
+ * patch it with CPU stores, so the page is modified text outside the capture
+ * window throughout. */
+static void print_load_counters(const char *when, uint64_t *loads_out,
+                                uint32_t *bound_pages_out, uint32_t *limit_out) {
+    uint64_t loads = 0, taken = 0, load_us = 0;
+    uint32_t backed = 0, backoff_limit = 0, bound_pages = 0, load_limit = 0;
+    overlay_loader_get_modified_text(&loads, &taken, &backed, &backoff_limit);
+    overlay_loader_get_modified_text_loads(&load_us, &bound_pages, &load_limit);
+    printf("%s: loads=%llu load_bound_pages=%u load_limit=%u taken_out=%llu\n",
+           when, (unsigned long long)loads, bound_pages, load_limit,
+           (unsigned long long)taken);
+    *loads_out = loads;
+    *bound_pages_out = bound_pages;
+    *limit_out = load_limit;
+}
+
+/* The limit leaves room: the second unit loads when its bytes arrive, and the
+ * first runs again when its bytes come back (Digimon World 2 loads two). */
+static void mode_two_units(void) {
+    uint64_t loads = 0;
+    uint32_t bound_pages = 0, limit = 0;
+    psx_write_word(0x80010008u, NOP);
+    step("two units: first value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    psx_write_word(0x80010008u, FOURTH_WORD);
+    step("two units: second value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    psx_write_word(0x80010008u, NOP);
+    step("two units: first value again", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("two units", &loads, &bound_pages, &limit);
+    if (loads != 2 || bound_pages != 0 || limit < 2) {
+        printf("two units: load counters UNEXPECTED\n");
+        s_failures++;
+    }
+}
+
+/* Run with PSX_OVERLAY_MODTEXT_LOAD_LIMIT=1. The first unit takes the page's
+ * one load. The second unit's bytes then stay with the interpreter, each such
+ * dispatch counts under the bound's reason, and the first unit still runs when
+ * its bytes come back. */
+static void mode_load_bound(void) {
+    extern void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                                uint64_t kernel[PSX_INTERP_MISS_REASONS]);
+    uint64_t above[PSX_INTERP_MISS_REASONS], kernel[PSX_INTERP_MISS_REASONS];
+    uint64_t loads = 0;
+    uint32_t bound_pages = 0, limit = 0;
+    psx_write_word(0x80010008u, NOP);
+    step("load bound: first value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    step("load bound: first value again", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("load bound, after the first unit", &loads, &bound_pages, &limit);
+    if (limit != 1 || loads != 1 || bound_pages != 1) {
+        printf("load bound: counters after the first unit UNEXPECTED\n");
+        s_failures++;
+    }
+    psx_write_word(0x80010008u, FOURTH_WORD);
+    step("load bound: second value", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("load bound: second value again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    overlay_loader_get_miss_reasons(above, kernel);
+    printf("load bound: %llu dispatches counted under modified_text_load_bound\n",
+           (unsigned long long)above[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND]);
+    if (above[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND] != 2 || kernel[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND] != 0) {
+        printf("the load bound's miss reason UNEXPECTED\n");
+        s_failures++;
+    }
+    psx_write_word(0x80010008u, NOP);
+    step("load bound: first value back", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("load bound, at the end", &loads, &bound_pages, &limit);
+    if (loads != 1 || bound_pages != 1) {
+        printf("load bound: counters at the end UNEXPECTED\n");
+        s_failures++;
+    }
+}
+
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s <cache-root> <game-id> <config-hash>\n", argv[0]);
+    if (argc != 4 && argc != 5) {
+        fprintf(stderr, "usage: %s <cache-root> <game-id> <config-hash> [two-units|load-bound]\n", argv[0]);
+        return 2;
+    }
+    if (argc == 5 && strcmp(argv[4], "two-units") != 0 && strcmp(argv[4], "load-bound") != 0) {
+        fprintf(stderr, "unknown mode: %s\n", argv[4]);
         return 2;
     }
     uint32_t config_hash = (uint32_t)strtoul(argv[3], NULL, 16);
@@ -402,6 +481,17 @@ int main(int argc, char **argv) {
     if (overlay_loader_lazy_manifest_count() < 1) {
         fprintf(stderr, "the patched shard was not indexed\n");
         return 1;
+    }
+    if (argc == 5) {
+        if (strcmp(argv[4], "two-units") == 0) mode_two_units();
+        else mode_load_bound();
+        if (s_failures) {
+            fprintf(stderr, "FAIL: %s: %d mismatch(es); loader: %s\n",
+                    argv[4], s_failures, overlay_loader_last_msg());
+            return 1;
+        }
+        printf("PASS: %s\n", argv[4]);
+        return 0;
     }
 
     /* 1. Pristine resident text: static code owns; the patched shard cannot. */

@@ -31,6 +31,7 @@ enum {
     PSX_MISS_RANK,            /* held back by the native rank filter (debug tools only) */
     PSX_MISS_BAD_ENTRY,       /* the unit ran and refused a foreign interior entry */
     PSX_MISS_MODIFIED_TEXT_BACKOFF, /* a rewritten text page left to the interpreter after its limit of take-outs (PS1B-421) */
+    PSX_MISS_MODIFIED_TEXT_LOAD_BOUND, /* a rewritten text page that has had its limit of lazy loads (PS1B-421) */
     PSX_INTERP_MISS_REASONS
 };
 

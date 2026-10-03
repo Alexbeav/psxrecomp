@@ -3638,6 +3638,51 @@ static uint64_t s_modtext_loads;          /* units loaded through this gate   */
 static uint64_t s_modtext_taken_out;      /* loaded units taken out again     */
 static uint32_t s_modtext_backed_off;     /* pages left to the interpreter    */
 
+/* The second bound: loads. A title whose capture keeps making new variants of
+ * the same code has nothing taken out, so the bound above never counts. Its
+ * cost comes with the loads: each lazy load is made on the emulation thread
+ * and waits for it. V-Rally 2 (USA) on Pegasus, 2026-10-03: several hundred
+ * units compiled over seven starts, every one valid, 11 to 291 loads through
+ * this window a start, and the frame rate fell below the unchanged build's as
+ * the loads rose.
+ * Each page gets OVERLAY_MODTEXT_LOAD_LIMIT lazy loads through this window in a
+ * process, counted at the page of the dispatch that asked for the load. After
+ * that no further unit is loaded for the page. Units already loaded keep
+ * running, and a miss that the bound causes counts under its own reason.
+ * 8: V-Rally 2 was level with the unchanged build at 11 and at 73 loads over
+ * its eight draw pages and behind it at 132; Digimon World 2 needs 2 over
+ * three pages. PSX_OVERLAY_MODTEXT_LOAD_LIMIT (1 to 255) sets another limit
+ * for a test or a measurement. */
+#define OVERLAY_MODTEXT_LOAD_LIMIT 8u
+static uint8_t  s_modtext_page_loads[RANGE_PAGE_COUNT];
+static uint32_t s_modtext_load_bound;     /* pages that reached the load limit */
+static uint64_t s_modtext_load_us;        /* time the loads through this window took */
+
+static uint32_t modtext_load_limit(void) {
+    static uint32_t limit = 0;
+    if (limit == 0) {
+        const char *e = getenv("PSX_OVERLAY_MODTEXT_LOAD_LIMIT");
+        long v = (e && e[0]) ? strtol(e, NULL, 10) : 0;
+        limit = (v >= 1 && v <= 255) ? (uint32_t)v : OVERLAY_MODTEXT_LOAD_LIMIT;
+    }
+    return limit;
+}
+
+static int modtext_load_bounded(uint32_t phys) {
+    uint32_t page = phys >> 12;
+    return page < RANGE_PAGE_COUNT && s_modtext_page_loads[page] >= modtext_load_limit();
+}
+
+/* One unit was loaded through this window for a dispatch at phys; the load took `us`. */
+static void modtext_note_load(uint32_t phys, uint64_t us) {
+    uint32_t page = phys >> 12;
+    s_modtext_loads++;
+    s_modtext_load_us += us;
+    if (page < RANGE_PAGE_COUNT && s_modtext_page_loads[page] < 255u &&
+        ++s_modtext_page_loads[page] == modtext_load_limit())
+        s_modtext_load_bound++;
+}
+
 /* A text-range page outside the capture window whose bytes the game changed. */
 static int modtext_page(uint32_t phys) {
     extern uint32_t dirty_ram_text_modified_bitmap_word(uint32_t word_index);
@@ -3680,8 +3725,15 @@ static void modtext_note_taken_out(const Candidate *c) {
  * exact entry of a cached unit. */
 static int lazy_load_window_contains(uint32_t phys) {
     if (overlay_cache_window_contains(phys)) return 1;
-    if (!modtext_page(phys) || modtext_backed_off(phys)) return 0;
+    if (!modtext_page(phys) || modtext_backed_off(phys) || modtext_load_bounded(phys)) return 0;
     return lazy_has_exact_entry(phys);
+}
+
+/* The address would be in the lazy load's window, and its page has had its
+ * limit of loads: the miss is the bound's. */
+static int modtext_load_bound_miss(uint32_t phys) {
+    return modtext_page(phys) && !modtext_backed_off(phys) && modtext_load_bounded(phys) &&
+           lazy_has_exact_entry(phys);
 }
 
 void overlay_loader_get_modified_text(uint64_t *loads, uint64_t *taken_out,
@@ -3690,6 +3742,18 @@ void overlay_loader_get_modified_text(uint64_t *loads, uint64_t *taken_out,
     if (taken_out)        *taken_out        = s_modtext_taken_out;
     if (backed_off_pages) *backed_off_pages = s_modtext_backed_off;
     if (limit)            *limit            = OVERLAY_MODTEXT_BACKOFF;
+}
+
+void overlay_loader_get_modified_text_loads(uint64_t *load_us, uint32_t *load_bound_pages,
+                                            uint32_t *load_limit) {
+    if (load_us)          *load_us          = s_modtext_load_us;
+    if (load_bound_pages) *load_bound_pages = s_modtext_load_bound;
+    if (load_limit)       *load_limit       = modtext_load_limit();
+}
+
+void overlay_loader_get_rehash_counts(uint32_t *rehashes, uint32_t *misses) {
+    if (rehashes) *rehashes = s_rehashes;
+    if (misses)   *misses   = s_rehash_miss;
 }
 
 /* ---- Dispatch ---------------------------------------------------------- */
@@ -3831,9 +3895,17 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
         DISP_MISS(PSX_MISS_MODIFIED_TEXT_BACKOFF);
         return 0;
     }
-    if (lazy_load_window_contains(phys) && lazy_miss_cached(phys)) {
-        DISP_MISS(PSX_MISS_CACHED);
-        return 0;
+    if (lazy_miss_cached(phys)) {
+        if (lazy_load_window_contains(phys)) {
+            DISP_MISS(PSX_MISS_CACHED);
+            return 0;
+        }
+        /* A page at its limit of loads keeps the miss cache: its entries that
+         * no loaded unit serves leave here, under the bound's reason. */
+        if (modtext_load_bound_miss(phys)) {
+            DISP_MISS(PSX_MISS_MODIFIED_TEXT_LOAD_BOUND);
+            return 0;
+        }
     }
     int lazy_loaded = 0;
 retry_candidates:
@@ -3859,7 +3931,7 @@ retry_candidates:
         if (head < 0 && (loaded_range_ci < 0 || exact_needs_load) &&
             !lazy_loaded && try_load_region(phys)) {
             lazy_loaded = 1;
-            if (!overlay_cache_window_contains(phys)) s_modtext_loads++;
+            if (!overlay_cache_window_contains(phys)) modtext_note_load(phys, s_load_last_us);
             goto retry_candidates;
         }
         /* (sljit removed 2026-07-15: the JIT-on-miss gap-fill — off-thread
@@ -4147,15 +4219,17 @@ retry_candidates:
     if (!lazy_loaded && s_active && lazy_load_window_contains(phys) &&
         try_load_region(phys)) {
         lazy_loaded = 1;
-        if (!overlay_cache_window_contains(phys)) s_modtext_loads++;
+        if (!overlay_cache_window_contains(phys)) modtext_note_load(phys, s_load_last_us);
         goto retry_candidates;
     }
 
     /* The lazy load's window (PS1B-421): an exact entry in a rewritten text
      * page is served, so its miss is "no unit" or "stale bytes", not "outside". */
     int in_window = lazy_load_window_contains(phys);
-    if (in_window) lazy_miss_record(phys);
-    DISP_MISS(!in_window ? PSX_MISS_OUTSIDE_WINDOW
+    int load_bound = !in_window && modtext_load_bound_miss(phys);
+    if (in_window || load_bound) lazy_miss_record(phys);
+    DISP_MISS(load_bound ? PSX_MISS_MODIFIED_TEXT_LOAD_BOUND
+              : !in_window ? PSX_MISS_OUTSIDE_WINDOW
               : (head >= 0 || stale_range_unit) ? PSX_MISS_STALE_BYTES
               : PSX_MISS_NO_UNIT);
     return 0;

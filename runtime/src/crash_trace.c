@@ -87,6 +87,11 @@ extern void     overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidat
 extern void     overlay_loader_get_kernel_window_dispatch(uint64_t *native, uint64_t *interp);
 extern void     overlay_loader_get_modified_text(uint64_t *loads, uint64_t *taken_out,
                                                  uint32_t *backed_off_pages, uint32_t *limit);
+extern void     overlay_loader_get_modified_text_loads(uint64_t *load_us, uint32_t *load_bound_pages,
+                                                       uint32_t *load_limit);
+extern void     overlay_loader_get_rehash_counts(uint32_t *rehashes, uint32_t *misses);
+extern void     overlay_loader_get_load_timing(uint64_t *total_us, uint64_t *max_us, uint64_t *last_us);
+extern uint64_t overlay_loader_gen_fastpath(void);
 extern int      psx_netplay_is_resimulating(void);
 
 /* Frame counter from debug_server.c (non-static). */
@@ -870,18 +875,41 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             (unsigned long long)(disp_interp - kernel_interp));
         /* PS1B-421: units for game text the game rewrote with CPU stores. */
         {
-            uint64_t mt_loads = 0, mt_taken_out = 0;
-            uint32_t mt_backed_off = 0, mt_limit = 0;
+            uint64_t mt_loads = 0, mt_taken_out = 0, mt_load_us = 0;
+            uint32_t mt_backed_off = 0, mt_limit = 0, mt_load_bound = 0, mt_load_limit = 0;
+            uint64_t all_load_us = 0, longest_load_us = 0;
+            uint32_t rehashes = 0, rehash_misses = 0;
             overlay_loader_get_modified_text(&mt_loads, &mt_taken_out, &mt_backed_off, &mt_limit);
+            overlay_loader_get_modified_text_loads(&mt_load_us, &mt_load_bound, &mt_load_limit);
+            overlay_loader_get_load_timing(&all_load_us, &longest_load_us, NULL);
+            overlay_loader_get_rehash_counts(&rehashes, &rehash_misses);
             append_fmt(buf, sizeof(buf), &pos,
                 "  \"overlay_modified_text\": {\n"
                 "    \"loads\": %llu,\n"
+                "    \"load_ms\": %llu,\n"
+                "    \"load_bound_pages\": %u,\n"
+                "    \"load_limit\": %u,\n"
                 "    \"taken_out\": %llu,\n"
                 "    \"backed_off_pages\": %u,\n"
                 "    \"backoff_limit\": %u\n"
                 "  },\n",
-                (unsigned long long)mt_loads, (unsigned long long)mt_taken_out,
-                (unsigned)mt_backed_off, (unsigned)mt_limit);
+                (unsigned long long)mt_loads, (unsigned long long)(mt_load_us / 1000u),
+                (unsigned)mt_load_bound, (unsigned)mt_load_limit,
+                (unsigned long long)mt_taken_out, (unsigned)mt_backed_off, (unsigned)mt_limit);
+            /* What the loader's own work cost in this start, every unit: the time
+             * of its loads (Windows; 0 elsewhere), the code-range hashes it had to
+             * compute at dispatch, and the dispatches that needed none. */
+            append_fmt(buf, sizeof(buf), &pos,
+                "  \"overlay_loader_cost\": {\n"
+                "    \"load_ms\": %llu,\n"
+                "    \"longest_load_ms\": %llu,\n"
+                "    \"rehashes\": %u,\n"
+                "    \"rehash_misses\": %u,\n"
+                "    \"dispatches_without_rehash\": %llu\n"
+                "  },\n",
+                (unsigned long long)(all_load_us / 1000u), (unsigned long long)(longest_load_us / 1000u),
+                (unsigned)rehashes, (unsigned)rehash_misses,
+                (unsigned long long)overlay_loader_gen_fastpath());
         }
     }
 
