@@ -1002,8 +1002,13 @@ static uint32_t source_clock_random(uint32_t maximum) {
     s_source_clock_calls++;
     return value;
 }
+/* PS1B-424-STUB helper: remove it with the last stub. */
+static int cdrom_ps1b424_stub(const char *rows) {
+    fprintf(stderr,"[CDROM] PS1B-424 stub reached: spec %s\n",rows);abort();return 0;
+}
+/* PS1B-424-STUB [spec 14.4 Q6]: the whole body. */
 static int source_clock_receive_ready(void) {
-    return irq_flag==0 && (!s_source_clock || psx_cycle_count>=s_source_ready_due);
+    return cdrom_ps1b424_stub("14.4 Q6");
 }
 static int source_boot_model(const char *name) {
     const char *value=getenv(name);
@@ -1053,7 +1058,8 @@ static void set_irq(int type) {
      */
     cdrom_irq_present_due = (type == CDIRQ_DATA_READY || s_source_clock) ? psx_cycle_count
         : psx_cycle_count + (uint64_t)CDROM_IRQ_PRESENT_DELAY;
-    if (s_source_clock) s_source_ready_due=0; /* 2000 clocks begin after IRQ acknowledgement. */
+    /* PS1B-424-STUB [spec 14.4 Q7] */
+    if (s_source_clock) cdrom_ps1b424_stub("14.4 Q7");
     trace_cdrom('I', 0, (uint32_t)type, 0);
     /* DEQUEUE: CD response/data event fired (aux = CD irq type). */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_CD_IRQ, (uint32_t)type);
@@ -2414,16 +2420,9 @@ static void cd_bisect_cmd_log(const char *kind, uint8_t cmd,
 
 static void try_execute_queued_command(void) {
     if (!queued_cmd.pending || irq_flag != 0) return;
-    if(s_source_clock && (psx_cycle_count<s_source_command_due || !source_clock_receive_ready())) return;
-    if(s_source_clock && s_source_command_phase<1) {
-        if(s_source_args_remaining>0) {
-            s_source_args_remaining--;s_source_command_phase=0;
-            s_source_command_due=psx_cycle_count+1815u;
-        } else {
-            s_source_command_phase=1;s_source_command_due=psx_cycle_count+8500u;
-        }
-        return;
-    }
+    /* PS1B-424-STUB [spec 14.3 Q3-Q5]: with the source clock on, the reception
+     * steps come here, before the kept execution below. */
+    if(s_source_clock) cdrom_ps1b424_stub("14.3 Q3-Q5");
 
     uint8_t cmd = queued_cmd.cmd;
     int count = queued_cmd.param_count;
@@ -2443,8 +2442,7 @@ static void try_execute_queued_command(void) {
 
 static void queue_or_exec_command(uint8_t cmd) {
     if(s_source_clock) {
-        /* Source reception: 12315+jitter, then 1815 per argument and 8500.
-         * Capture the already-written argument packet. Post-command argument
+        /* Capture the already-written argument packet. Post-command argument
          * writes are outside this first clock profile's qualification. */
         if(param_count<0 || param_count>PARAM_FIFO_SIZE) {
             fprintf(stderr,"[CDROM] Invalid source clock argument count\n");exit(2);
@@ -2455,8 +2453,8 @@ static void queue_or_exec_command(uint8_t cmd) {
         if(cmd==0x03 && !source_cdda.enabled) {
             fprintf(stderr,"[CDROM] Source clock CDDA Play seek is not qualified\n");exit(2);
         }
-        s_source_command_due=psx_cycle_count+12315u+source_clock_random(3000);
-        s_source_command_phase=-1;s_source_args_remaining=param_count;
+        /* PS1B-424-STUB [spec 14.2 Q2]: the start of the reception. */
+        cdrom_ps1b424_stub("14.2 Q2");
         queued_cmd.cmd=cmd;queued_cmd.param_count=param_count;queued_cmd.pending=1;
         memcpy(queued_cmd.params,param_fifo,(size_t)param_count);
         pending.pending=0; /* Source reception replaces an outstanding second response. */
@@ -2895,14 +2893,9 @@ static void exec_command(uint8_t cmd) {
             if(reading || cdda_playing || pending_dataready) {
                 fprintf(stderr,"[CDROM] Source reset from an active stream is not qualified\n");exit(2);
             }
-            /* ACK reports the old state. Repeated reset does not restart the
-             * drive timer. Empty/paused stream is the qualified source scope. */
-            response_push(stat_reg);
-            set_irq(CDIRQ_ACK);
-            if(!s_source_reset_due) {
-                s_source_reset_due=psx_cycle_count+1136000u;
-                stat_reg=has_disc()?CDSTAT_MOTOR:CDSTAT_SHELL;
-            }
+            /* Empty/paused stream is the qualified source scope.
+             * PS1B-424-STUB [spec 14.5 J2-J4] */
+            cdrom_ps1b424_stub("14.5 J2-J4");
             break;
         }
         stop_read_stream();
@@ -3961,7 +3954,8 @@ void cdrom_write(uint32_t addr, uint32_t value) {
             if (had_active_irq && (irq_flag & 0x1F) == 0) {
                 cdrom_intc_request_latched = 0;
                 present_lid_open_irq_if_ready();
-                if(s_source_clock)s_source_ready_due=psx_cycle_count+2000u;
+                /* PS1B-424-STUB [spec 14.4 Q8] */
+                if(s_source_clock)cdrom_ps1b424_stub("14.4 Q8");
             }
             if (val & 0x40) {
                 param_count = 0;
