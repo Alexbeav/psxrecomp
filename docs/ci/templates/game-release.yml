@@ -626,6 +626,16 @@ jobs:
             grep -E '\.c$' <<<"${LIST}" | grep -v '^overlay_toolchain/' | head -20 >&2
             exit 1
           fi
+          # 2b. A bundled TinyCC ships its LGPL-2.1 notice beside the binary and
+          #     in licenses/ (its win64 zip carries none of its own).
+          if grep -q '^overlay_toolchain/tcc/tcc\.exe$' <<<"${LIST}"; then
+            for must in 'overlay_toolchain/tcc/COPYING' 'licenses/TinyCC-LICENSE.txt'; do
+              if ! grep -qx "${must}" <<<"${LIST}"; then
+                echo "::error::release zip bundles TinyCC without ${must}" >&2
+                exit 1
+              fi
+            done
+          fi
           # 3. No BIOS dump, disc, or memory card; the only image is OpenBIOS.
           if grep -iE '(^|/)SCPH|\.(cue|iso|img|chd|mcd|mcr)$' <<<"${LIST}" | grep -qv '\.toml$'; then
             echo "::error::release zip contains a BIOS dump, disc, or memory card" >&2
