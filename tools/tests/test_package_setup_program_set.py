@@ -218,6 +218,8 @@ def whole_packager(bash, tmp: Path) -> str:
     # The plain-start gate ran on the staged host. The stand-in is a text file,
     # which no system can start, so the gate must say that it checked nothing.
     assert "its plain start was NOT checked" in out, out[-3000:]
+    assert (root / "dist" / "workbench-0.4.0-linux-x64.plain-start.stderr.txt").is_file(), \
+        "the packager must request a log even when the setup program cannot run"
     # the BIOS policy step: each program's recipe, the profile from the stage root
     assert "staged BIOS policy: psxrecomp/bios/SCPH1001.toml" in out.replace("\\", "/"), out[-3000:]
     assert "stage_setup_sdk: ready" in out
@@ -438,6 +440,8 @@ def plain_start_gate(bash, tmp: Path, zipped: bool) -> str:
     code, out = package(bash, refused, emitters)
     assert code == 1 and "does not reach its launcher on a plain start; no package was made" in out, (code, out[-2000:])
     assert 'key "name" not found' in out, out[-2000:]
+    refused_log = refused / "dist" / "workbench-0.4.0-linux-x64.plain-start.stderr.txt"
+    assert 'key "name" not found' in refused_log.read_text(encoding="utf-8")
     assert not list((refused / "dist").glob("*.zip")), "a refused setup program must not be packaged"
 
     silent = tmp / "silent"
@@ -451,10 +455,16 @@ def plain_start_gate(bash, tmp: Path, zipped: bool) -> str:
     starts = tmp / "starts"
     emitters = make_package_source(starts)
     host = starts / "build-setup" / "Resident_Evil_2"
-    put(host, "#!/bin/sh\necho '[boot-timing] +    0.0 ms  total     1.0 ms  host:before_run_window' >&2\nexec sleep 30\n")
+    put(host, "#!/bin/sh\n" + "".join("echo 'startup line %d' >&2\n" % i for i in range(25)) +
+        "echo '[boot-timing] +    0.0 ms  total     1.0 ms  host:before_run_window' >&2\nexec sleep 30\n")
     os.chmod(str(host), 0o755)
     code, out = package(bash, starts, emitters)
     assert "setup host plain start: PASS" in out and ("Wrote " in out) == zipped, (code, out[-2000:])
+    log = starts / "dist" / "workbench-0.4.0-linux-x64.plain-start.stderr.txt"
+    logged = log.read_text(encoding="utf-8")
+    assert logged.splitlines()[:25] == ["startup line %d" % i for i in range(25)], logged
+    assert "host:before_run_window" in logged, logged
+    assert "  | startup line 0\n" not in out, "the full log must not depend on the printed tail"
     assert sorted(p.name for p in (starts / "dist" / "stage-setup-linux-x64").iterdir()) == sorted(ROOT_NAMES)
     return "plain-start gate: refused, silent and starting stand-ins"
 
