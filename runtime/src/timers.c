@@ -415,7 +415,7 @@ uint32_t timers_read(uint32_t addr) {
     int reg   = (addr - TIMER_BASE) & 0x0F;
 
     if (timer < 0 || timer > 2) return 0;
-    source_timer2_flush(); /* Original TIMER_Read updates every timer first. */
+    source_timer2_flush(); /* In the source profile a timer read brings every timer up to date first. */
     if(timer==2 && source_timer2_enabled)return timer2_source_read(&source_timer2,(unsigned)reg);
     if(timer==1 && source_timer1_enabled) return timer1_source_read(&source_timer1,(unsigned)reg);
 
@@ -456,7 +456,7 @@ void timers_write(uint32_t addr, uint32_t value) {
     int reg   = (addr - TIMER_BASE) & 0x0F;
 
     if (timer < 0 || timer > 2) return;
-    source_timer2_flush(); /* Original TIMER_Write updates every timer first. */
+    source_timer2_flush(); /* In the source profile a timer write brings every timer up to date first. */
     if(source_timer2_enabled) {
         /* The MMIO wrapper synchronized against the OLD timer configuration.
          * Its cached absolute deadline cannot survive a guest reprogramming
