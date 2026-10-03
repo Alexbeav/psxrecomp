@@ -2701,12 +2701,14 @@ static void source_drive_init_command(void)
     pending_arm(0x0A, 4100000, 1);
 }
 
-/* Audio-only media cannot satisfy a normal data read, and the drive says so
- * before it looks at the transfer mode at all: a data read on an audio CD
- * (no SYSTEM.CNF disc id) answers INT5 with error 40h, ahead of every
- * mode-dependent path. [NOT OBSERVED: no C fixture covers an audio-only
- * disc.] Setmode bit 0 (CDDA) therefore
- * does NOT license a data read here; it only governs which sectors a read that
+/* Stock-core fixture C12 (CD-DA r3) observed ReadN and ReadS on audio-only
+ * media answer INT5 with bytes 03h 40h in modes 00h and 01h: Setmode bit 0
+ * (CDDA) off and on. Neither produced INT1 in the next six sector periods.
+ * PSX-SPX's ReadN description says CDDA mode permits audio-CD reads; this
+ * stock-core observation differs. Real hardware is not shown.
+ * This profile refuses an audio-only disc (no SYSTEM.CNF disc id) ahead of
+ * every mode-dependent path. Setmode bit 0 does not license a data read here;
+ * it only governs which sectors a read that
  * already started may deliver. Mixed-mode game discs have a data track, so
  * they keep their data path.
  *
