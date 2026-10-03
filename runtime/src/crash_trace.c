@@ -231,6 +231,19 @@ void psx_crash_trace_set_exit_origin(const char *origin) {
     if (origin) s_exit_origin = origin;
 }
 
+/* PS1B-400: the player's settings.toml as main() found it. The sentence is
+ * PSX_SETTINGS_BOOT_KEYS_NOTICE (crash_trace.h). */
+static int s_settings_file_format = 0;
+static int s_settings_current_format = 0;
+static int s_settings_boot_keys_ignored = 0;
+
+void psx_crash_trace_note_settings(int file_format, int current_format,
+                                   int boot_keys_ignored) {
+    s_settings_file_format = file_format;
+    s_settings_current_format = current_format;
+    s_settings_boot_keys_ignored = boot_keys_ignored ? 1 : 0;
+}
+
 /* ── Native call-stack snapshot ──────────────────────────────────────────
  *
  * The recent_fn ring is TIME-ORDERED (function entries over time), so for a
@@ -541,6 +554,16 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, queue_report);
         append_str(buf, sizeof(buf), &pos, ",\n");
     }
+
+    /* PS1B-400: what the start found in the player's settings.toml. When the
+     * loader dropped fast_boot / bios_hle lines (a file from before
+     * settings_format 2, PS1B-360), main() says so on stdout only, which a
+     * product does not keep. */
+    append_fmt(buf, sizeof(buf), &pos,
+        "  \"settings\": {\"file_format\": %d, \"current_format\": %d, "
+        "\"boot_keys_ignored\": %d, \"notice\": \"%s\"},\n",
+        s_settings_file_format, s_settings_current_format, s_settings_boot_keys_ignored,
+        s_settings_boot_keys_ignored ? PSX_SETTINGS_BOOT_KEYS_NOTICE : "");
 
     /* PS1B-306: kernel bless decides whether relocated kernel routines run
      * their compiled bodies or the interpreter, so the report states it.
