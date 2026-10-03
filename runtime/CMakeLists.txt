@@ -505,6 +505,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_test(NAME sio_nymashock_dualshock_test COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sio_nymashock_dualshock.py
         $<TARGET_FILE:sio_nymashock_dualshock_test>)
+    add_executable(mdec_source_fifo_rows_test tests/test_mdec_source_fifo_rows.c)
+    target_include_directories(mdec_source_fifo_rows_test PRIVATE include)
+    add_test(NAME mdec_source_fifo_rows_test COMMAND mdec_source_fifo_rows_test)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         add_executable(mdec_dma_write_invariance_test tests/test_mdec_dma_write_invariance.c)
         target_include_directories(mdec_dma_write_invariance_test PRIVATE src include ../recompiler/include)
