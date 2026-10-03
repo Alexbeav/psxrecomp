@@ -29,11 +29,15 @@
 #include "psx_bios_backend.h"
 #include "psx_scheduler.h"
 
+/* A guest file may define FX_FAIL before it includes this header; the kernel
+ * and dispatch code below then report through the guest's own macro. */
+#ifndef FX_FAIL
 #define FX_FAIL(...) do { \
     fprintf(stderr, "FAIL line %d: ", __LINE__); \
     fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); \
     exit(1); \
 } while (0)
+#endif
 #define FX_CHECK(cond) do { if (!(cond)) FX_FAIL("%s", #cond); } while (0)
 
 /* ---- guest memory: 2 MB of RAM, every mirror ---- */
