@@ -1,5 +1,15 @@
 # Cold Octoshock 2.3 MDEC comparison profile
 
+This clean-room stub branch intentionally stops when a source-profile controller
+body is reached (PS1B-425, pile B53). The default MDEC path is unchanged. The
+behaviour contract is the corpus note
+`references/ps1/MDEC-SOURCE-PROFILE-FIFO-SPEC.md`, merged in
+[corpus PR 216](https://git.crosstalkis.com/alexbeav/recomp-corpus/pulls/216).
+The controller replacement and its independent capture/review are still owed.
+The profile description below is the retained target contract, not a claim that
+this stub branch can run a source replay. The existing 72 controller transcripts
+remain component output, not independent stock-core observations.
+
 `PSX_MDEC_SOURCE_MODEL=octoshock-2.3` selects an explicit source-core
 compatibility model. The default runtime retains its existing MDEC scheduling.
 The Pepsiman adapter selects the new profile; the original movie is unchanged.
