@@ -1,4 +1,5 @@
 {
+  "evidence_class": "Not a stock-core capture. The expected values were recorded from a build of the oracle's source (see source_build) and include 13 values of the controller's inner state (see projection_fields). Only the response bytes and the decoded audio are things a guest can read. Regression data for the source CD-DA model; see PS1B-216, clean-room inspection, area 3.",
   "scope": "Authored single-speed CDDA source comparison after ordinary Reset/GetStat warm-up. Original source initial tray response is outside this isolated precondition. Every subsequent response read, 13 declared controller projections, and each fresh decoded 588-frame PCM sector are compared. Inactive internal timers and SPU mixing are not projected.",
   "source_build": {
     "source_head": "07a420f5999baf8463a37ede162ca2a176b8a63a",
