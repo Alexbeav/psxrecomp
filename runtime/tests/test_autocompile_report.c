@@ -19,6 +19,8 @@
  *                     line per failure class;
  *   the same again    counts add up; the stderr line is not printed again;
  *   too many classes  the bound holds and says how many failures it left out.
+ *   a quit mid-run    the report says that the quit stopped a run, and keeps the
+ *                     result line that run had printed (PS1B-395).
  *
  * Build/run: ctest -R autocompile_report_test
  */
@@ -89,6 +91,14 @@ static void expect(const char *needle, const char *what) {
                 what, needle, s_json);
         failures++;
     }
+}
+
+/* The number of one field of the report, or -1. */
+static long field(const char *name) {
+    char key[96];
+    snprintf(key, sizeof key, "\"%s\":", name);
+    const char *at = strstr(report(), key);
+    return at ? strtol(at + strlen(key), NULL, 10) : -1;
 }
 
 static void write_driver(const char *name, const char *text) {
@@ -258,7 +268,45 @@ int main(void) {
               "a buffer too small for the object gets {}");
     }
 
-    autocompile_shutdown();
+    /* --- a quit while a run is going (PS1B-395) ---------------------------
+     * The driver prints its result line and then stays alive. A normal quit
+     * stops it and stores the state idle; the report is written after that.
+     * It must say that a run was stopped, and it must keep the result line. */
+    {
+        const long results_before = field("runs_with_result");
+        const long compiled_before = field("units_compiled");
+        const long skipped_before = field("units_skipped");
+#ifdef _WIN32
+        write_driver("slow.cmd", "@type clean.txt\r\n@ping -n 60 127.0.0.1 >nul\r\n");
+        autocompile_configure(".\\slow.cmd", dir);   /* the runtime runs it through cmd.exe /C */
+#else
+        write_driver("slow.sh", "cat clean.txt\nsleep 60\n");
+        autocompile_configure("sh slow.sh", dir);
+#endif
+        int started = 0, seen = 0;
+        for (int i = 0; i < 800 && !started; i++) {
+            started = autocompile_request();
+            if (!started) nap_ms(25);
+        }
+        CHECK(started, "the slow driver starts");
+        /* Its result line is read while it still runs; the report counts it. */
+        for (int i = 0; i < 400 && !seen; i++) {
+            seen = field("runs_with_result") == results_before + 1;
+            if (!seen) nap_ms(25);
+        }
+        CHECK(seen, "the result line of the running driver is read");
+        expect("\"state\":\"running\"", "the slow run is still going");
+        expect("\"runs_stopped_at_quit\":0,", "no run was stopped before the quit");
+        autocompile_shutdown();
+        expect("\"state\":\"idle\"", "after the quit nothing runs");
+        expect("\"runs_stopped_at_quit\":1,", "the report says that the quit stopped a run");
+        CHECK(field("runs_with_result") == results_before + 1 &&
+              field("units_compiled") == compiled_before + 3 &&
+              field("units_skipped") == skipped_before + 2,
+              "the stopped run's result line is kept, and counted once");
+        autocompile_shutdown();
+        expect("\"runs_stopped_at_quit\":1,", "a second shutdown counts nothing");
+    }
     fflush(stderr);
     {
         /* One line per failure class per start: compile and no_ranges from the

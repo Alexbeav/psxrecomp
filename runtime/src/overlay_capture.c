@@ -87,6 +87,14 @@ static int preserve_queue_has_room(void);
 /* Outgoing snapshots committed on the emulation thread because the queue was
  * at its cap. Emulation thread only. */
 static unsigned s_preserve_sync_commits;
+/* The same thread's other outcomes at the cap, for the run report (PS1B-391):
+ * the commit failed; the snapshot was then queued past the cap; nothing could
+ * keep the evidence. */
+static unsigned s_preserve_sync_failed;
+static unsigned s_preserve_past_cap;
+static unsigned s_preserve_lost;
+/* Failed write attempts of the queue's writer thread. Under s_preserve_mutex. */
+static unsigned s_preserve_write_failures;
 
 static int capture_process_id(void)
 {
@@ -966,11 +974,16 @@ void overlay_capture_before_dma(uint32_t load_addr, uint32_t size)
         if (kept && at_cap) s_preserve_sync_commits++;
         /* A write that fails at the cap must not lose what the queue would
          * have retried: queue it after all, past the cap. */
-        if (!kept && at_cap)
+        if (!kept && at_cap) {
+            s_preserve_sync_failed++;
             kept = preserve_snapshot_async(evidence_lo, evidence_hi);
-        if (!kept)
+            if (kept) s_preserve_past_cap++;
+        }
+        if (!kept) {
+            s_preserve_lost++;
             fprintf(stderr,
                 "psxrecomp: ERROR: could not preserve outgoing overlay evidence; discarding stale epoch\n");
+        }
     }
     uint32_t first_bitmap_word = first_word >> 5;
     uint32_t bitmap_words = (last_word - first_word) >> 5;
@@ -1243,9 +1256,32 @@ void overlay_capture_test_preserve_counts(unsigned *held, unsigned *peak,
     s_preserve_held_peak = s_preserve_held;
     s_preserve_enqueued = 0;
     s_preserve_sync_commits = 0;
+    s_preserve_sync_failed = 0;
+    s_preserve_past_cap = 0;
+    s_preserve_lost = 0;
+    s_preserve_write_failures = 0;
     SDL_UnlockMutex(s_preserve_mutex);
 }
 #endif
+
+/* The queue of outgoing snapshots, for the run report (PS1B-391). Until this
+ * object existed the counts were one stdout line at a normal quit, which a
+ * product does not keep and a start that ends on a timer does not print.
+ * Reads without the queue's lock: the report is also written on the crash
+ * path, and a count that is one behind is still the right size. */
+int overlay_capture_queue_report_json(char *out, int cap)
+{
+    if (!out || cap <= 0) return -1;
+    int n = snprintf(out, (size_t)cap,
+        "{\"cap\": %u, \"queued\": %u, \"held_now\": %u, \"most_at_once\": %u, "
+        "\"committed_at_cap\": %u, \"commit_at_cap_failed\": %u, \"queued_past_cap\": %u, "
+        "\"writer_failed_attempts\": %u, \"evidence_lost\": %u}",
+        s_preserve_cap, s_preserve_enqueued, s_preserve_held, s_preserve_held_peak,
+        s_preserve_sync_commits, s_preserve_sync_failed, s_preserve_past_cap,
+        s_preserve_write_failures, s_preserve_lost);
+    if (n < 0 || n >= cap) { out[0] = '\0'; return -1; }
+    return n;
+}
 
 /* FNV-1a of the just-written capture manifest. The manifest is a pure
  * function of the capture inputs (live overlay bytes + observed seed-PC
@@ -1417,6 +1453,7 @@ static int preserve_write_thread_main(void *opaque)
         if (!job->snapshot.manifest_sig) {
             job->attempts++;
             SDL_LockMutex(s_preserve_mutex);
+            s_preserve_write_failures++;
             int abandoning = s_preserve_stop && job->attempts >= 5u;
             if (!abandoning) {
                 job->next = NULL;

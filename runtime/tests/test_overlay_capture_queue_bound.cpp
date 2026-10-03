@@ -97,6 +97,13 @@ std::map<std::string, std::string> store_of(const fs::path &capture) {
     return files;
 }
 
+/* What the run report says about the queue (PS1B-391). Read it before
+ * counts(), which starts the counters again. */
+std::string queue_report() {
+    char text[512];
+    return overlay_capture_queue_report_json(text, static_cast<int>(sizeof text)) > 0 ? text : "";
+}
+
 struct Counts { unsigned held = 0, peak = 0, enqueued = 0, sync = 0; };
 
 Counts counts() {
@@ -221,6 +228,11 @@ int main() {
     /* B: the queue fills to its cap; everything after it is committed at once. */
     capture = begin_run(root, "b-cap-4-held", 4u, true);
     make_dmas();
+    std::string report = queue_report();
+    check(report == "{\"cap\": 4, \"queued\": 4, \"held_now\": 4, \"most_at_once\": 4, "
+                    "\"committed_at_cap\": " + std::to_string(kDmas - 4u) + ", \"commit_at_cap_failed\": 0, "
+                    "\"queued_past_cap\": 0, \"writer_failed_attempts\": 0, \"evidence_lost\": 0}",
+          "B: the run report's queue object is " + report);
     c = counts();
     check(c.enqueued == 4u && c.held == 4u && c.peak == 4u && c.sync == kDmas - 4u,
           "B: expected 4 queued and " + std::to_string(kDmas - 4u) + " at the cap, got queued " +
@@ -245,6 +257,12 @@ int main() {
     const fs::path history = capture.string() + ".d";
     { std::ofstream blocker(history, std::ios::binary); blocker << "not a folder"; }
     make_dmas();
+    report = queue_report();
+    check(report == "{\"cap\": 2, \"queued\": " + std::to_string(kDmas) + ", \"held_now\": " + std::to_string(kDmas) +
+                    ", \"most_at_once\": " + std::to_string(kDmas) + ", \"committed_at_cap\": 0, "
+                    "\"commit_at_cap_failed\": " + std::to_string(kDmas - 2u) + ", \"queued_past_cap\": " +
+                    std::to_string(kDmas - 2u) + ", \"writer_failed_attempts\": 0, \"evidence_lost\": 0}",
+          "D: the run report's queue object is " + report);
     c = counts();
     check(c.held == kDmas && c.sync == 0u,
           "D: a failed commit at the cap must be queued: held " + std::to_string(c.held) +
