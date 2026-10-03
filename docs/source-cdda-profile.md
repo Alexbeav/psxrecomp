@@ -22,7 +22,8 @@ observations in T172 (`runtime/tests/cdda_*_provenance*.json`). The Pause
 move-back is specified in
 `recomp-corpus/references/ps1/CDROM-SOURCE-PROFILE-SPEC.md`, row P3.
 
-ORACLE: `runtime/tests/cdrom_source_cdda_fixtures.json` binds four complete
+REGRESSION DATA (not a stock-core capture; it was recorded from a build of the oracle's source and
+includes 13 values of the controller's inner state): `runtime/tests/cdrom_source_cdda_fixtures.json` binds four complete
 synthetic-disc transcripts for modes 0/2/4/6: explicit track play, seek boundary,
 position query, pause/resume, already-playing Play, report retention/replacement,
 track pregap autopause, leadout, clamped track argument, pause during seek,
