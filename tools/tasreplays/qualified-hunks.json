@@ -1526,8 +1526,8 @@
           "lines": [
             "    unsigned start_x = (unsigned)block->x, start_y = (unsigned)block->y;",
             "    if (count && dx <= 0) {",
-            "        /* L4 [KEPT]: with dx below 0, or dx 0 and dy not 0, the line is walked",
-            "         * from the second vertex, and the colours change places. */",
+            "        /* L4 [FIXTURE: G1]: with dx below 0, or dx 0 and dy not 0, the line",
+            "         * is walked from the second vertex, and the colours change places. */",
             "        start_x += (unsigned)dx;",
             "        start_y += (unsigned)dy;",
             "        dx = -dx;",
@@ -1627,6 +1627,15 @@
           "to_blocks": 66,
           "replacement_blocks_added": 4,
           "note": "Clean-room rewrite (PS1B-423): the source-profile raster lines (triangle set-up and pixel rule, line family, VRAM copy, sprites) were replaced by lines written from the behaviour spec by an unexposed implementer; a differential replay against the old code shows 0 differences. Requalification of the TAS routes on this tree is owed."
+        },
+        {
+          "as_of": "6b5f2ffe18106a76626973244a6bb6babdf5e34c",
+          "issue": "PS1B-423",
+          "dropped_lines": 2,
+          "from_blocks": 66,
+          "to_blocks": 66,
+          "replacement_blocks_added": 1,
+          "note": "Round 2 of the clean-room rewrite (PS1B-423): five comment tags changed from [KEPT] to the fixture class that now confirms the row on the stock core. Comments only; the object files are identical for GCC and clang."
         }
       ],
       "note": "superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun"
@@ -2331,8 +2340,8 @@
           "lines": [
             "    int from[3], step[3];",
             "    for (unsigned c = 0; c < 3; ++c) {",
-            "        /* L7 [KEPT]: the step of a channel is (last - first) * 4096 / N,",
-            "         * truncated; an unshaded line has both ends equal. */",
+            "        /* L7 [FIXTURE: G1]: the step of a channel is (last - first) * 4096 /",
+            "         * N, truncated; an unshaded line has both ends equal. */",
             "        from[c] = (int)((color[0] >> (8u * c)) & 255u);",
             "        step[c] = count ? ((int)((color[1] >> (8u * c)) & 255u) - from[c]) * 4096 / count : 0;",
             "    }"
@@ -2423,6 +2432,15 @@
           "to_blocks": 63,
           "replacement_blocks_added": 4,
           "note": "Clean-room rewrite (PS1B-423): the source-profile raster lines (triangle set-up and pixel rule, line family, VRAM copy, sprites) were replaced by lines written from the behaviour spec by an unexposed implementer; a differential replay against the old code shows 0 differences. Requalification of the TAS routes on this tree is owed."
+        },
+        {
+          "as_of": "6b5f2ffe18106a76626973244a6bb6babdf5e34c",
+          "issue": "PS1B-423",
+          "dropped_lines": 2,
+          "from_blocks": 63,
+          "to_blocks": 63,
+          "replacement_blocks_added": 1,
+          "note": "Round 2 of the clean-room rewrite (PS1B-423): five comment tags changed from [KEPT] to the fixture class that now confirms the row on the stock core. Comments only; the object files are identical for GCC and clang."
         }
       ]
     },
