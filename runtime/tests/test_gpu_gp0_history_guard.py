@@ -261,7 +261,7 @@ int gte_precision_load_word(uint32_t addr, uint32_t packed,
 void pgxp_invalidate_all(void) {}
 void pgxp_invalidate_word(uint32_t addr) { (void)addr; }
 void pgxp_note_triangle(int precise) { (void)precise; }
-void pgxp_note_rect_bypass(void) {}
+void pgxp_note_rect_bypass(int all_precise) { (void)all_precise; }
 int pgxp_probe_precise_vertex(uint32_t addr, uint32_t packet_word,
                               int32_t int_x, int32_t int_y)
 { (void)addr; (void)packet_word; (void)int_x; (void)int_y; return 0; }

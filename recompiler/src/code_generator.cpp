@@ -870,7 +870,52 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
     return keep_branch_if_wide("0 /* unknown branch condition: defaults to not-taken */");
 }
 
+// [[draw_distance.clamp]]: a main-EXE ordering-table range guard. While a
+// mod has the clamps on, the site's register is clamped to `max` before the
+// instruction runs, so the guard keeps a far primitive in the last OT slot
+// instead of dropping it. Identity while off. Captured overlays may hold
+// unrelated code at a listed address and keep their own code.
+std::string CodeGenerator::draw_distance_clamp_prefix(uint32_t addr,
+                                                      uint32_t instr) const {
+    if (config_.overlay_mode || config_.draw_distance_clamp_sites.empty())
+        return {};
+    for (const auto& site : config_.draw_distance_clamp_sites) {
+        if ((site.address & 0x1FFFFFFFu) != (addr & 0x1FFFFFFFu)) continue;
+        if (instr != site.expected) {
+            fmt::print(stderr,
+                       "ERROR: [[draw_distance.clamp]] expected 0x{:08X} at "
+                       "0x{:08X}, found 0x{:08X}\n",
+                       site.expected, addr, instr);
+            std::exit(1);
+        }
+        // A load into the register in the previous slot is still in flight
+        // (MIPS-I load delay): the clamp would act on the stale value.
+        if (const auto prev = exe_.read_word(addr - 4u)) {
+            const uint32_t pop = *prev >> 26;
+            if (pop >= 0x20u && pop <= 0x26u && get_rt(*prev) == site.reg) {
+                fmt::print(stderr,
+                           "ERROR: [[draw_distance.clamp]] site 0x{:08X} is "
+                           "the load-delay slot of a load into reg {}\n",
+                           addr, site.reg);
+                std::exit(1);
+            }
+        }
+        return fmt::format(
+            "if (g_psx_draw_distance_clamp && (int32_t){0} > {1}) {0} = "
+            "(uint32_t)({1});  /* draw-distance clamp: keep far geometry */",
+            reg_name((int)site.reg), site.max);
+    }
+    return {};
+}
+
 std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) {
+    std::string clamp = draw_distance_clamp_prefix(addr, instr);
+    if (clamp.empty()) return translate_instruction_core(addr, instr);
+    // The core translation carries its own indent; give the clamp the same.
+    return config_.indent + clamp + "\n" + translate_instruction_core(addr, instr);
+}
+
+std::string CodeGenerator::translate_instruction_core(uint32_t addr, uint32_t instr) {
     uint32_t opcode = (instr >> 26) & 0x3F;
     uint32_t funct = instr & 0x3F;
 
@@ -3471,6 +3516,8 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int  psx_game_option_store(uint32_t addr, int val);  /* persisted OPTION restore-at-init (game_options.c) */\n";
     ss << "extern uint32_t psx_ws_backdrop_value(uint32_t orig, int is_end, int window_cols);  /* ws backdrop preload (gpu.c) */\n";
     ss << "extern void gte_ws_set_suppress(int on);  /* widescreen far-backdrop un-squash (gte.cpp) */\n";
+    if (!config_.overlay_mode && !config_.draw_distance_clamp_sites.empty())
+        ss << "extern uint32_t g_psx_draw_distance_clamp;  /* [[draw_distance.clamp]] switch (draw_distance.c) */\n";
     ss << "extern uint32_t g_debug_last_store_pc;  /* exact PC of the executing SW/SH/SB — wtrace/readtrace producer attribution (debug_server.c) */\n\n";
 }
 

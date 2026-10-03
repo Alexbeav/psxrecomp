@@ -24,6 +24,12 @@ Mask runs (mode mask) change the GP0(E6) mask-check bit after a line, a flat
 triangle or an opaque textured rect and before its batch is drawn: the draw
 must keep the check bit it was submitted under, at 1x, above it and in the
 window mode.
+Texture-window runs (mode twin) draw prims that alternate GP0(E2h) windows
+with [video] texture_window_batching off and on: the native VRAM, the frame at
+S and the wide surface must be the same both ways, at 1x, above it and in the
+window mode, and on must draw in fewer batches. Each of those runs also checks
+raw rects drawn through every window against the PS1 window rule computed in C
+from the VRAM, so a decode error both ways share still fails.
 Pass runs (mode passes, where the renderer has the frame-rate stack's render
 passes) check that the window mode refuses them and the full-VRAM surface
 offers them.
@@ -254,6 +260,29 @@ def main():
         print(f"mask {label} {s}: exit={r.returncode}", r.stdout.strip().splitlines()[-1:],
               r.stderr.strip()[-600:])
         if r.returncode or not parsed or parsed[1]:
+            ok = False
+    # Texture-window batching off vs on: (label, scale, env).
+    for label, s, extra in (("full", 1, {}), ("full", 4, {}), ("full", 9, {}),
+                            ("window", 9, {"PSX_GL_HIRES_WINDOW": "1"}),
+                            ("window", 18, {"PSX_GL_HIRES_WINDOW": "1"})):
+        e = dict(env)
+        e.update(extra)
+        got = {}
+        for on in (0, 1):
+            r = run([dest / "probe", s, "twin", on], env=e)
+            parsed = parse_run(r.stdout)
+            m = re.search(r"^twin_flushes=(\d+) batches=(\d+)$", r.stdout, re.M)
+            print(f"twin {label} {s} batching={on}: exit={r.returncode}",
+                  r.stdout.strip().splitlines()[-5:], r.stderr.strip()[-600:])
+            if r.returncode or not parsed or parsed[1] or not m:
+                ok = False
+            got[on] = (parsed[2] if parsed else None, parse_hires(r.stdout),
+                       parse_hires(r.stdout, "wide"), int(m[2]) if m else None)
+        if None in got[0][:3] or got[0][:3] != got[1][:3]:
+            print(f"FAIL twin {label} {s}x: batching changes the image:", got)
+            ok = False
+        if got[0][3] is None or got[1][3] is None or got[1][3] >= got[0][3]:
+            print(f"FAIL twin {label} {s}x: batching on did not draw fewer batches:", got)
             ok = False
     # Render passes: offered on the full-VRAM surface, refused in the window mode.
     if not passes:

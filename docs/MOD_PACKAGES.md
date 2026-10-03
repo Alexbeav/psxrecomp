@@ -548,6 +548,7 @@ defensive, for the state listed here.
 | World-scene predicate | `psx_mod_set_world_scene_predicate` | NULL | every session |
 | Retained-scene predicate | `psx_mod_set_retained_scene_predicate` | NULL | every session |
 | Adaptive backdrop preload | `psx_mod_set_adaptive_backdrop_preload` | 0 | every session |
+| Draw-distance clamps | `psx_mod_set_draw_distance_clamp` | off | every session |
 | Bezel artwork | `psx_mod_set_bezel_artwork` | none (see below) | every session |
 | Frame-interpolation blend mode | `psx_mod_set_frame_interpolation_blend` | default | every session |
 | Native VBlank pacing and its rate | `psx_mod_set_native_vblank_rate` | off, 0 | every session |
@@ -635,6 +636,12 @@ game logic still execute. Multipliers 2 through 16 are bounded choices; zero
 selects uncapped host speed. A zero-frame release stops acceleration as soon as
 the sustained-load predicate clears, which is appropriate for timing-sensitive
 or speedrun-oriented packages.
+
+`psx_mod_set_draw_distance_clamp(enabled)` switches the title's
+`[[draw_distance.clamp]]` sites (docs/config_schema.md) on for the session: a
+far primitive the game would drop past the end of its ordering table is kept
+in the farthest slot. It returns 0 when the title lists no sites. More
+primitives mean more guest work, so it belongs to an opt-in feature.
 
 `psx_mod_set_disc_speed(divisor, instant_max_per_frame)` is the guest-visible
 alternative. Divisors 2 and 4 shorten emulated CD deadlines; zero selects the

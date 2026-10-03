@@ -739,6 +739,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("low_latency_input")) {
             rt.video_low_latency_input = toml::find<bool>(video, "low_latency_input");
         }
+        if (video.contains("texture_window_batching")) {
+            rt.video_texture_window_batching =
+                toml::find<bool>(video, "texture_window_batching");
+        }
         if (video.contains("vsync")) {
             const auto mode = toml::find<std::string>(video, "vsync");
             if      (mode == "on"  || mode == "vsync")     rt.video_vsync = 1;
@@ -896,6 +900,70 @@ fs::path find_project_root(const fs::path& config_path) {
         cur = parent;
     }
     return fallback;
+}
+
+bool draw_distance_clamp_reads(uint32_t instr, uint32_t reg) {
+    if (reg == 0u || reg > 31u) return false;
+    const uint32_t op = instr >> 26;
+    const uint32_t rs = (instr >> 21) & 31u;
+    const uint32_t rt = (instr >> 16) & 31u;
+    // ADDI, ADDIU, SLTI, SLTIU, ANDI, ORI, XORI read rs (LUI reads nothing).
+    if (op >= 0x08u && op <= 0x0Eu) return rs == reg;
+    if (op != 0x00u) return false;
+    const uint32_t funct = instr & 0x3Fu;
+    // SLL, SRL, SRA: rt. SLLV, SRLV, SRAV: rt and rs.
+    if (funct == 0x00u || funct == 0x02u || funct == 0x03u) return rt == reg;
+    if (funct == 0x04u || funct == 0x06u || funct == 0x07u)
+        return rs == reg || rt == reg;
+    // ADD, ADDU, SUB, SUBU, AND, OR, XOR, NOR, SLT, SLTU.
+    if (funct >= 0x20u && funct <= 0x2Bu && funct != 0x28u && funct != 0x29u)
+        return rs == reg || rt == reg;
+    return false;
+}
+
+// [[draw_distance.clamp]] (docs/config_schema.md "Draw-distance clamps").
+static std::vector<DrawDistanceClampSite> parse_draw_distance_clamps(
+    const toml::value& cfg, const fs::path& config_path) {
+    std::vector<DrawDistanceClampSite> sites;
+    if (!cfg.contains("draw_distance")) return sites;
+    const toml::value& dd = toml::find(cfg, "draw_distance");
+    if (!dd.contains("clamp")) return sites;
+    const auto& items = toml::find<toml::array>(dd, "clamp");
+    std::set<uint32_t> seen;
+    for (const auto& item : items) {
+        DrawDistanceClampSite site;
+        site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                 "draw_distance.clamp.address");
+        site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                  "draw_distance.clamp.expected");
+        const int64_t reg = toml::find<int64_t>(item, "reg");
+        const int64_t max = toml::find<int64_t>(item, "max");
+        if ((site.address & 3u) != 0u)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp address 0x{:08X} is not "
+                "instruction-aligned", config_path.string(), site.address));
+        if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+            throw std::runtime_error(fmt::format(
+                "{}: duplicate draw-distance clamp address 0x{:08X}",
+                config_path.string(), site.address));
+        if (reg < 1 || reg > 31)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: reg must be 1..31",
+                config_path.string(), site.address));
+        if (max < INT32_MIN || max > INT32_MAX)
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: max is not a signed "
+                "32-bit value", config_path.string(), site.address));
+        site.reg = (uint32_t)reg;
+        site.max = (int32_t)max;
+        if (!draw_distance_clamp_reads(site.expected, site.reg))
+            throw std::runtime_error(fmt::format(
+                "{}: draw-distance clamp at 0x{:08X}: expected 0x{:08X} must "
+                "be an ALU instruction that reads reg {}",
+                config_path.string(), site.address, site.expected, site.reg));
+        sites.push_back(site);
+    }
+    return sites;
 }
 
 // Derive the output filename stem from a rom basename. Mirrors the Python
@@ -1341,6 +1409,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<std::string> netplay_required_disc_fps;
     std::string netplay_local_viewport;
     std::string netplay_local_viewport_aspect;
+    std::string netplay_local_viewport_renderer;
+    uint32_t netplay_local_viewport_state_addr = 0;
+    std::vector<uint32_t> netplay_local_viewport_state_values;
     if (cfg.contains("netplay")) {
         const toml::value& np = toml::find(cfg, "netplay");
         if (np.contains("require_cue"))
@@ -1394,6 +1465,46 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                 netplay_local_viewport.empty()) {
                 throw std::runtime_error(
                     "[netplay] local_viewport_aspect requires local_viewport");
+            }
+        }
+        if (np.contains("local_viewport_renderer")) {
+            netplay_local_viewport_renderer =
+                toml::find<std::string>(np, "local_viewport_renderer");
+            for (char& c : netplay_local_viewport_renderer)
+                c = (char)std::tolower((unsigned char)c);
+            if (netplay_local_viewport_renderer != "native_wide" &&
+                netplay_local_viewport_renderer != "projection") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport_renderer must be \"native_wide\" "
+                    "or \"projection\", got '{}'",
+                    netplay_local_viewport_renderer));
+            }
+            if (netplay_local_viewport.empty()) {
+                throw std::runtime_error(
+                    "[netplay] local_viewport_renderer requires local_viewport");
+            }
+        }
+        {
+            const bool has_addr = np.contains("local_viewport_state_addr");
+            const bool has_values = np.contains("local_viewport_state_values");
+            if (has_addr != has_values)
+                throw std::runtime_error(
+                    "[netplay] local_viewport_state_addr and "
+                    "local_viewport_state_values must be set together");
+            if (has_addr) {
+                if (netplay_local_viewport.empty())
+                    throw std::runtime_error(
+                        "[netplay] local_viewport_state_addr requires local_viewport");
+                netplay_local_viewport_state_addr = parse_hex(
+                    toml::find<std::string>(np, "local_viewport_state_addr"),
+                    "netplay.local_viewport_state_addr");
+                for (const auto& value : toml::find<std::vector<std::string>>(
+                         np, "local_viewport_state_values"))
+                    netplay_local_viewport_state_values.push_back(parse_hex(
+                        value, "netplay.local_viewport_state_values"));
+                if (netplay_local_viewport_state_values.empty())
+                    throw std::runtime_error(
+                        "[netplay] local_viewport_state_values must not be empty");
             }
         }
     }
@@ -1505,6 +1616,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     uint32_t ws_sprite_anchor_addr = 0;
     bool ws_hud_sprt_squash = false;
     bool ws_auto_ui_squash = false;
+    bool ws_auto_ui_in_place = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
     bool ws_precise_nclip = false;
@@ -1651,6 +1763,15 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_hud_sprt_squash = toml::find<bool>(ws, "hud_sprt_squash");
         if (ws.contains("auto_ui_squash"))
             ws_auto_ui_squash = toml::find<bool>(ws, "auto_ui_squash");
+        if (ws.contains("auto_ui_anchor")) {
+            const auto anchor = toml::find<std::string>(ws, "auto_ui_anchor");
+            if (anchor == "in_place")
+                ws_auto_ui_in_place = true;
+            else if (anchor != "edges")
+                throw std::runtime_error(fmt::format(
+                    "{}: [widescreen] auto_ui_anchor must be \"edges\" or "
+                    "\"in_place\", got \"{}\"", config_path.string(), anchor));
+        }
         if (ws.contains("full_2d"))
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
@@ -2221,6 +2342,9 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*netplay_required_disc_fps*/ netplay_required_disc_fps,
         /*netplay_local_viewport*/ netplay_local_viewport,
         /*netplay_local_viewport_aspect*/ netplay_local_viewport_aspect,
+        /*netplay_local_viewport_renderer*/ netplay_local_viewport_renderer,
+        /*netplay_local_viewport_state_addr*/ netplay_local_viewport_state_addr,
+        /*netplay_local_viewport_state_values*/ netplay_local_viewport_state_values,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
         /*bios_config_path*/ bios_config_path,
@@ -2234,6 +2358,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_sprite_anchor_addr*/ ws_sprite_anchor_addr,
         /*ws_hud_sprt_squash*/    ws_hud_sprt_squash,
         /*ws_auto_ui_squash*/      ws_auto_ui_squash,
+        /*ws_auto_ui_in_place*/    ws_auto_ui_in_place,
         /*data_shard_funcs*/      data_shard_funcs,
         /*mod_function_entry_funcs*/ mod_function_entry_funcs,
         /*hot_funcs*/             hot_funcs,
@@ -2317,6 +2442,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     loaded.ws_cull_clip_edge_x_load_sites =
         std::move(ws_cull_clip_edge_x_load_sites);
     loaded.ws_cull_clip_edge_width = ws_cull_clip_edge_width;
+    loaded.draw_distance_clamp_sites =
+        parse_draw_distance_clamps(cfg, config_path);
     return loaded;
 }
 
@@ -2737,6 +2864,19 @@ UserSettings load_user_settings(const fs::path& path) {
     return s;
 }
 
+fs::path relative_to_folder(const fs::path& p, const fs::path& folder) {
+    if (p.empty() || folder.empty() || !p.is_absolute()) return p;
+    std::error_code ec;
+    const fs::path base = fs::weakly_canonical(folder, ec);
+    if (ec) return p;
+    const fs::path full = fs::weakly_canonical(p, ec);
+    if (ec) return p;
+    const fs::path r = full.lexically_relative(base);
+    // Outside the folder (other drive, or a "../" climb) stays absolute.
+    if (r.empty() || r.is_absolute() || *r.begin() == "..") return p;
+    return r;
+}
+
 bool save_user_settings(const fs::path& path, const UserSettings& s) {
     std::error_code ec;
     if (!path.parent_path().empty())
@@ -2750,6 +2890,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         std::string str = p.generic_string();
         return str;
     };
+    // Paths inside the game folder are stored relative to it, so a portable
+    // folder still finds its disc, BIOS and memory cards after it is moved or
+    // copied to another PC. Readers anchor relative paths on the exe
+    // directory, which is where settings.toml lives.
+    auto rel = [&](const fs::path& p) { return fwd(relative_to_folder(p, path.parent_path())); };
 
     f << "# psxrecomp user settings - written by the launcher. Safe to hand-edit.\n";
     f << "# Overrides the bundled game.toml; the command line overrides this file.\n\n";
@@ -2852,11 +2997,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "lobby_url = \"" << s.netplay_lobby_url << "\"\n";
     }
     if (s.has_bios_path)
-        f << "\n[bios]\npath = \"" << fwd(s.bios_path) << "\"\n";
+        f << "\n[bios]\npath = \"" << rel(s.bios_path) << "\"\n";
     if (s.has_disc_path || s.has_disc_index) {
         f << "\n[disc]\n";
         if (s.has_disc_path)
-            f << "path = \"" << fwd(s.disc_path) << "\"\n";
+            f << "path = \"" << rel(s.disc_path) << "\"\n";
         /* Only meaningful for a multi-disc title; harmless (and informative)
          * for a single-disc one, where it is always 1. */
         if (s.has_disc_index)
@@ -2866,11 +3011,11 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         s.has_memcard1_enabled || s.has_memcard2_enabled) {
         f << "\n[memcard]\n";
         if (s.has_memcard_dir)
-            f << "dir     = \"" << fwd(s.memcard_dir) << "\"\n";
+            f << "dir     = \"" << rel(s.memcard_dir) << "\"\n";
         if (s.has_memcard1_path)
-            f << "card1   = \"" << fwd(s.memcard1_path) << "\"\n";
+            f << "card1   = \"" << rel(s.memcard1_path) << "\"\n";
         if (s.has_memcard2_path)
-            f << "card2   = \"" << fwd(s.memcard2_path) << "\"\n";
+            f << "card2   = \"" << rel(s.memcard2_path) << "\"\n";
         if (s.has_memcard1_enabled)
             f << "enable1 = " << (s.memcard1_enabled ? "true" : "false") << "\n";
         if (s.has_memcard2_enabled)

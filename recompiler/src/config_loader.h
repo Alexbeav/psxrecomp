@@ -108,6 +108,23 @@ struct WidescreenAngleSite {
     uint32_t expected = 0; // guarded ADDI/ADDIU with rs == zero
 };
 
+// [[draw_distance.clamp]]: an ordering-table range guard that a trusted mod
+// may turn from "drop the far primitive" into "keep it in the last slot".
+// While the runtime switch is on (psx_mod_set_draw_distance_clamp), `reg` is
+// clamped to `max` (signed) immediately before the instruction at `address`
+// runs. Main EXE only; the complete instruction word is the guard.
+struct DrawDistanceClampSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // the instruction; `reg` must be one of its sources
+    uint32_t reg = 0;      // 1..31
+    int32_t  max = 0;
+};
+
+// True when `instr` is an ALU instruction (I-type or SPECIAL R-type, not a
+// load, store, branch or jump) that reads GPR `reg`. These are the only
+// instructions a draw-distance clamp may precede.
+bool draw_distance_clamp_reads(uint32_t instr, uint32_t reg);
+
 // Aspect-aware horizontal participation cone. The exact compare sites are
 // full-word guarded because overlay variants can reuse a virtual address for
 // unrelated code. Registers are MIPS GPR indices captured at each comparison.
@@ -523,6 +540,13 @@ struct RuntimeConfig {
     // game once visuals are validated.
     bool                  video_offer_vulkan = false;
 
+    // texture_window_batching: OpenGL only. Let textured primitives with
+    // different GP0(E2h) texture windows share one draw (the window rides in
+    // each vertex) instead of ending the batch at every window change. The
+    // image is identical; games that tile textures with per-primitive windows
+    // draw in far fewer batches. Off by default; a game opts in.
+    bool                  video_texture_window_batching = false;
+
     // low_latency_input: re-sample the pad after the wall-clock pacer (just
     // before present) so the next CPU frame reads near-fresh input instead of
     // input ~one frame stale. Default on. vsync: present/swap mode —
@@ -853,6 +877,20 @@ struct GameConfig {
     // "16:9", "21:9", or "adaptive" (initial 16:9, live-window capped 21:9).
     // Unset keeps netplay at the title's normal mod-cleared aspect.
     std::string           netplay_local_viewport_aspect;
+    // local_viewport_renderer = "native_wide" (default) | "projection".
+    // native_wide renders extra columns beside the local half; it needs the
+    // game to submit geometry outside its own split viewport. "projection"
+    // instead widens the GTE projection into the half (squash around OFX) and
+    // stretches the half on present -- for titles whose per-viewport culling
+    // rejects everything outside the half (THPS2), as their single-player
+    // [widescreen] native_wide = false path does.
+    std::string           netplay_local_viewport_renderer;
+    // local_viewport_state_addr / _values: optional guest word gating the
+    // local viewport. Split frames crop to this peer's half only while the
+    // word holds one of the values (e.g. a level running); otherwise, as on a
+    // pause menu drawn across both halves, every peer sees the whole frame.
+    uint32_t              netplay_local_viewport_state_addr = 0;
+    std::vector<uint32_t> netplay_local_viewport_state_values;
 
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)
@@ -893,6 +931,11 @@ struct GameConfig {
     // the final ordering-table layer. Repeated glyph/icon rows share an anchor
     // so centred text and edge counters cannot split at thirds boundaries.
     bool                  ws_auto_ui_squash = false;
+    // auto_ui_anchor = "in_place": squash each grouped UI run about its own
+    // centre instead of pinning it to the nearest screen edge/centre third.
+    // For HUD widgets that combine flat quads with GTE-projected parts the
+    // correction cannot move (Spider-Man's compass ring and 3D arrow).
+    bool                  ws_auto_ui_in_place = false;
 
     // [data_shards] funcs: functions that get the memoized pure-function
     // replay entry/return hooks (psx_datashard_enter/psx_datashard_ret).
@@ -1246,6 +1289,9 @@ struct GameConfig {
     // [widescreen.cull] clip_edge_width -- the screen width a right-edge clip
     // bound equals. 0 = the first screen_w_imms entry (0x140 by default).
     uint32_t ws_cull_clip_edge_width = 0;
+    // [[draw_distance.clamp]] -- opt-in "keep far geometry" clamps. Empty by
+    // default; inert until a mod switches them on; regen required.
+    std::vector<DrawDistanceClampSite> draw_distance_clamp_sites;
 };
 
 // Effective clip_edge_width: explicit value, else screen_w_imms[0], else 320.
@@ -1459,6 +1505,11 @@ UserSettings load_user_settings(const std::filesystem::path& path);
 
 // Write settings.toml deterministically. Returns false on I/O failure.
 bool save_user_settings(const std::filesystem::path& path, const UserSettings& s);
+
+// `p` relative to `folder` when it lies inside it; otherwise `p` unchanged.
+// Keeps portable game folders portable once the launcher saves a path.
+std::filesystem::path relative_to_folder(const std::filesystem::path& p,
+                                         const std::filesystem::path& folder);
 
 // Surgical upsert of `key = true|false` under [controller] in game.toml.
 // Preserves comments and unrelated keys. Creates [controller] if missing.

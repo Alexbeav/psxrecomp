@@ -278,6 +278,24 @@ static void test_internal_resolution_settings() {
     }
 }
 
+/* [video] texture_window_batching: a game.toml-only OpenGL batching opt-in
+ * (the image is unchanged; see gpu_gl_renderer.c s_twin_batching). Off unless
+ * the game asks for it. */
+static void test_texture_window_batching() {
+    fs::path p = write_game_toml("psxrecomp_twin_default.toml", "");
+    auto gc = PSXRecompV4::load_game_config(p);
+    check(!gc.runtime.video_texture_window_batching,
+          "texture_window_batching defaults OFF");
+    fs::remove(p);
+    fs::path q = write_game_toml("psxrecomp_twin_on.toml",
+        "[video]\n"
+        "texture_window_batching = true\n");
+    auto gq = PSXRecompV4::load_game_config(q);
+    check(gq.runtime.video_texture_window_batching,
+          "[video] texture_window_batching = true is honoured");
+    fs::remove(q);
+}
+
 /* docs/ENHANCEMENTS.md G1.11: the PGXP title keys. Defaults keep the
  * historical behaviour (tolerance 0.5, position cache consulted, IR-path
  * shadows); a title built with the hooks sets all three. */
@@ -340,6 +358,7 @@ int main() {
     test_user_settings_read();
     test_user_settings_absent_key();
     test_user_settings_round_trip();
+    test_texture_window_batching();
     test_pgxp_title_keys();
 
     if (failures) {

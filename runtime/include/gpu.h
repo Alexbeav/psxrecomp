@@ -204,6 +204,9 @@ void gpu_ws_bg2d_set_host_arena(uint32_t base, uint32_t size);
 struct WsViewAnchor;
 int gpu_ws_bg2d_get_view(unsigned layer, struct WsViewAnchor *view);
 void gpu_ws_set_auto_ui_squash(int on);
+/* [widescreen] auto_ui_anchor = "in_place": each UI run squashes about its own
+ * centre rather than an edge/centre third (default "edges"). */
+void gpu_ws_set_auto_ui_in_place(int on);
 /* [widescreen.bg2d] Capcom 2D background tile-loop widen — hooked at the renderer's
  * column-count / start-tile-col / start-screen-x instructions. Identity at 4:3
  * and in the engine's 512 hi-res mode. */
@@ -404,6 +407,10 @@ void psx_ws_note_gte_project(int nverts);
  * heuristic gameplay classification for native-wide presentation. */
 void gpu_ws_set_gameplay_state_gate(uint32_t addr,
                                     const uint32_t *values, int nvalues);
+/* [netplay] local_viewport_state_*: a split frame counts as a vertical split
+ * (netplay local viewport) only while this word holds one of the values. */
+void gpu_ws_set_local_viewport_state_gate(uint32_t addr,
+                                          const uint32_t *values, int nvalues);
 /* Native-wide HUD corner re-anchoring ([widescreen] nw_hud_corners): push
  * outer-third screen-space HUD primitives out to the true wide-frame corners
  * (they otherwise sit inset by the reveal). Runtime-only. Off by default. */
@@ -535,6 +542,7 @@ typedef struct {
     uint32_t last_ovh_frame;    /* newest SUSTAINED polygon-overhang frame (the
                                    2D-only-scene classifier's world signal) */
     int      auto_ui_squash;     /* final-OT grouped UI correction configured */
+    int      auto_ui_in_place;   /* runs anchor at their own centre, not thirds */
     int      auto_ui_dense;      /* current list classified as a dense menu */
     uint32_t auto_ui_ot_rank;    /* highest populated UI rank in current list */
     uint64_t auto_ui_candidates;

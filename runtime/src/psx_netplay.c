@@ -3594,6 +3594,17 @@ static int resolve_use_ice(const PsxNetplayConfig *cfg)
      * relay_endpoint (or equal host/guest advertise). Match ICE / ice_p2p
      * selection was removed; waiting-room ICE RTT may still run for delay
      * hints only. Direct IP / LAN file lobby (no MotK seat) stays LAN UDP. */
+    /* Host relay (2026-10-01): an online room whose host carries the match
+     * launches transport "host" -- no server relay. Host: bind the advertised
+     * port, peer empty (accept-first / hub); guest: dial host_endpoint. That
+     * is the LAN path below, so it is excluded from the SFU rule here. */
+    if (cfg->transport_host) {
+        fprintf(stderr,
+                "psx_netplay: host relay — LAN transport (%s)\n",
+                cfg->peer_hostport && cfg->peer_hostport[0] ? "dial host" : "host binds");
+        fflush(stderr);
+        return 0;
+    }
     if (cfg->force_input_relay || in_motk_room) {
         if (!cfg->peer_hostport || !cfg->peer_hostport[0]) {
             fprintf(stderr,

@@ -394,6 +394,17 @@ int psx_mod_set_load_acceleration(uint32_t wall_clock_multiplier,
 int psx_mod_set_disc_speed(uint32_t divisor,
                            uint32_t instant_max_per_frame);
 
+/*
+ * Turn the title's [[draw_distance.clamp]] sites on or off for this session
+ * (draw_distance.h): a far primitive the game would drop past the end of its
+ * ordering table is kept in the farthest slot instead. Returns 1 when the
+ * title configured sites, 0 when it has none (the call then changes nothing
+ * the guest sees). Off by default and reset to off at every session start;
+ * it adds guest work, so call it from activation, never in netplay.
+ */
+int psx_mod_set_draw_distance_clamp(int enabled);
+int psx_mod_draw_distance_clamp_enabled(void);
+
 /* Controller presentation values exposed to trusted game-owned plugins. */
 enum {
     PSX_MOD_CONTROLLER_ANALOG = 1,
