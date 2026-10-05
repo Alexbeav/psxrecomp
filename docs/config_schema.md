@@ -239,6 +239,12 @@ positions = [2]
   the program as a double-click does, with SDL's dummy drivers, and passes
   when it reaches its launcher. No window opens. The packager runs it on the
   staged package and makes no zip when it fails.
+  The tool prints the verdict before it writes `--log`. A log write error
+  fails the gate and preserves the printed verdict. The packager keeps every
+  setup stderr line in `dist/<archive-name>.plain-start.stderr.txt`, beside
+  the ZIP and outside its payload. A supervisor stops the setup program
+  when the tool is killed or interrupted. This stops the setup program itself,
+  not its children. A killed tool can leave its temporary folders behind.
 - **Setup.** `psxrecomp_cli.py generate` and `rebuild` take `--config
   set.toml`. A config with a `[set]` table runs the ordinary step once per
   program, in the program's folder, and then joins the programs into the

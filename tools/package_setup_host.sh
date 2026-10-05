@@ -1001,7 +1001,9 @@ plain_start_gate() {
     exit 1
   fi
   local rc=0
-  "${python}" "${SCRIPT_DIR}/setup_host_plain_start.py" --exe "${host}" --root "${STAGE}" >&2 || rc=$?
+  # Keep all setup stderr beside the archive, outside the staged payload.
+  local log="${DIST}/${ZIP_NAME%.zip}.plain-start.stderr.txt"
+  "${python}" "${SCRIPT_DIR}/setup_host_plain_start.py" --exe "${host}" --root "${STAGE}" --log "${log}" >&2 || rc=$?
   if [[ "${rc}" -eq 3 ]]; then
     echo "warning: the staged setup program cannot run on this build host; its plain start was NOT checked" >&2
   elif [[ "${rc}" -ne 0 ]]; then

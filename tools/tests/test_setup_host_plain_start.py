@@ -19,10 +19,13 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -98,6 +101,10 @@ def play(part):
     if part == "hangs":
         time.sleep(60)
         return 0
+    if part == "holds-pid":
+        Path("setup.pid").write_text(str(os.getpid()), encoding="utf-8")
+        time.sleep(60)
+        return 0
     return 2
 
 
@@ -108,7 +115,128 @@ def start(part, timeout=30.0, cwd=None, sandbox_parent=None):
     return verdict, text, lines, time.monotonic() - began
 
 
+def process_alive(pid):
+    if os.name == "nt":
+        import ctypes
+        api = ctypes.WinDLL("kernel32", use_last_error=True)
+        api.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        api.OpenProcess.restype = ctypes.c_void_p
+        api.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        api.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = api.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            if ctypes.get_last_error() == 87:           # no such PID
+                return False
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            result = api.WaitForSingleObject(handle, 0)
+            if result not in (0, 258):                  # signaled, WAIT_TIMEOUT
+                raise ctypes.WinError(ctypes.get_last_error())
+            return result == 258
+        finally:
+            api.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def setup_pid(folder):
+    marker = Path(folder, "setup.pid")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if marker.is_file():
+            value = marker.read_text(encoding="utf-8")
+            if value:
+                return int(value)
+        time.sleep(0.02)
+    raise AssertionError("the stand-in setup program did not start")
+
+
+def wait_for_stop(pid):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and process_alive(pid):
+        time.sleep(0.02)
+    return not process_alive(pid)
+
+
+def clean_stand_in(pid):
+    # Exact-parent negative controls also run this test. Reap only this test's
+    # recorded setup PID if the old tool leaves it running.
+    if process_alive(pid):
+        os.kill(pid, signal.SIGTERM)
+        if not wait_for_stop(pid) and os.name != "nt":
+            os.kill(pid, signal.SIGKILL)
+
+
 class PlainStart(unittest.TestCase):
+    def test_an_unwritable_log_keeps_the_verdict_and_fails_without_a_traceback(self):
+        for verdict, label in (("pass", "PASS"), ("fail", "FAIL"), ("cannot-run", "NOT CHECKED")):
+            with self.subTest(verdict=verdict), tempfile.TemporaryDirectory() as tmp:
+                printed = io.StringIO()
+                with mock.patch.object(tool, "plain_start", return_value=(verdict, "reason", ["program line"])), \
+                        contextlib.redirect_stdout(printed):
+                    code = tool.main(["--exe", str(ROOT / "LICENSE"), "--log", tmp])
+                self.assertEqual(code, 1)
+                shown = printed.getvalue()
+                self.assertIn(label, shown.splitlines()[0])
+                self.assertIn("  | program line", shown)
+                self.assertIn("ERROR: cannot write stderr log", shown)
+                self.assertNotIn("Traceback", shown)
+
+    def test_main_writes_all_stderr_to_the_requested_log(self):
+        lines = ["program line %d: \u03bb" % i for i in range(25)]
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp, "start.log")
+            printed = io.StringIO()
+            with mock.patch.object(tool, "plain_start", return_value=("pass", "reason", lines)), \
+                    contextlib.redirect_stdout(printed):
+                code = tool.main(["--exe", str(ROOT / "LICENSE"), "--log", str(log)])
+            self.assertEqual(code, 0)
+            self.assertEqual(log.read_bytes(), ("\n".join(lines) + "\n").encode("utf-8"))
+            self.assertNotIn("  | " + lines[0], printed.getvalue())
+            self.assertIn("  | " + lines[-1], printed.getvalue())
+
+    def test_a_killed_tool_stops_its_setup_program(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrapper = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--hold-tool", tmp],
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL,
+                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            pid = None
+            try:
+                pid = setup_pid(tmp)
+                self.assertTrue(process_alive(pid), "the stand-in must be alive before the tool is killed")
+                wrapper.kill()
+                wrapper.wait(timeout=10)
+                self.assertTrue(wait_for_stop(pid), "killing the tool left its setup program running")
+            finally:
+                if wrapper.poll() is None:
+                    wrapper.kill()
+                wrapper.wait(timeout=10)
+                if pid is not None:
+                    clean_stand_in(pid)
+
+    def test_an_interrupted_tool_stops_its_setup_program_and_cleans_its_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pids = []
+
+            def interrupt(*_args, **_kwargs):
+                pids.append(setup_pid(tmp))
+                raise KeyboardInterrupt
+
+            try:
+                with mock.patch.object(tool.threading.Event, "wait", side_effect=interrupt):
+                    with self.assertRaises(KeyboardInterrupt):
+                        start("holds-pid", cwd=tmp, sandbox_parent=tmp)
+                self.assertTrue(pids)
+                self.assertTrue(wait_for_stop(pids[0]), "interruption left the setup program running")
+                self.assertEqual(list(Path(tmp).glob("plain-start-*")), [])
+            finally:
+                for pid in pids:
+                    clean_stand_in(pid)
+
     def test_a_program_that_reaches_its_launcher_passes_and_is_stopped_at_once(self):
         os.environ["PSX_HEADLESS"] = "1"    # must not leak into the start
         try:
@@ -220,6 +348,10 @@ class PlainStart(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--hold-tool":
+        tool.plain_start([sys.executable, str(Path(__file__).resolve()), "--play", "holds-pid"],
+                         sys.argv[2], timeout=60, sandbox_parent=sys.argv[2])
+        sys.exit(0)
     if len(sys.argv) == 3 and sys.argv[1] == "--play":
         sys.exit(play(sys.argv[2]))
     unittest.main()

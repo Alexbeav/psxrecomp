@@ -50,6 +50,12 @@ lacks for a later step. So that a verdict can be checked by a reader, the
 program's stderr lines are printed after the verdict, on a pass as on a fail,
 and --log writes all of them to a file.
 
+The verdict is printed before the log is written. A log that cannot be written
+makes the gate fail with a separate error. A supervisor stops the setup program
+when the tool closes its pipe, including when the tool is killed. This stops
+the setup program itself, not its children. A killed tool can leave its temporary
+folders behind.
+
   setup_host_plain_start.py --exe <setup program> [--root <its folder>] [--timeout seconds] [--log <file>]
 
 Exit 0 pass, 1 fail, 3 the program cannot run on this machine (a package built
@@ -67,6 +73,7 @@ import time
 PASS_STAMP = 'host:before_run_window'
 REFUSED = 'failed to load --game'
 CANNOT_RUN = 3
+CANNOT_START_LINE = 'plain-start supervisor: cannot start: '
 
 # Each of these becomes a folder of the start. The program's toolchain cache
 # bases are derived from them (host/psxrecomp_codegen_host.c,
@@ -169,11 +176,38 @@ def plain_start(command, cwd, timeout=60.0, pass_stamp=PASS_STAMP, sandbox_paren
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def _supervise(command):
+    """Own the setup program. EOF from the tool stops it even after a hard kill."""
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                   creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except OSError as exc:
+        print(CANNOT_START_LINE + str(exc), file=sys.stderr, flush=True)
+        return CANNOT_RUN
+
+    def stop_on_eof():
+        try:
+            os.read(sys.stdin.fileno(), 1)
+        finally:
+            process.kill()
+
+    watcher = threading.Thread(target=stop_on_eof, daemon=True)
+    try:
+        watcher.start()
+        return process.wait()
+    finally:
+        process.kill()
+        process.wait()
+
+
 def _start_and_watch(command, cwd, env, timeout, pass_stamp):
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
     started = time.monotonic()
     try:
-        process = subprocess.Popen(list(command), cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        # Only this tool holds the write end. The setup program inherits the
+        # supervisor's closed environment, but never the lifetime pipe.
+        process = subprocess.Popen([sys.executable, os.path.abspath(__file__), '--supervise', *command],
+                                   cwd=cwd, env=env, stdin=subprocess.PIPE,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                    creationflags=flags)
     except OSError as exc:
@@ -186,6 +220,11 @@ def _start_and_watch(command, cwd, env, timeout, pass_stamp):
     def read():
         for raw in iter(process.stderr.readline, b''):
             line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
+            if line.startswith(CANNOT_START_LINE):
+                found['verdict'] = 'cannot-run'
+                found['error'] = line[len(CANNOT_START_LINE):]
+                seen.set()
+                continue
             lines.append(line)
             if 'verdict' not in found:
                 if REFUSED in line:
@@ -198,26 +237,29 @@ def _start_and_watch(command, cwd, env, timeout, pass_stamp):
         seen.set()
 
     reader = threading.Thread(target=read, daemon=True)
-    reader.start()
-    got_line = seen.wait(timeout)
-    verdict = found.get('verdict')
-    exited = process.poll()
-    if exited is None and got_line and verdict is None:
-        # stderr closed without a verdict: the program is on its way out
-        try:
-            exited = process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            exited = None
-    if exited is None:
-        process.kill()
     try:
+        reader.start()
+        got_line = seen.wait(timeout)
+        verdict = found.get('verdict')
+        exited = process.poll()
+        if exited is None and got_line and verdict is None:
+            # stderr closed without a verdict: the program is on its way out
+            try:
+                exited = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                exited = None
+    finally:
+        # Normal verdict, timeout or interruption: ask the supervisor to stop
+        # the setup program and reap it before checking the isolated folders.
+        process.stdin.close()
         process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        pass
-    reader.join(timeout=5)
-    if not reader.is_alive():
-        process.stderr.close()
+        if reader.ident is not None:
+            reader.join(timeout=5)
+        if not reader.is_alive():
+            process.stderr.close()
 
+    if verdict == 'cannot-run':
+        return 'cannot-run', 'the setup program cannot be started on this machine (%s)' % found['error'], lines
     if verdict == 'stamp':
         return 'pass', 'reached %s after %d ms' % (pass_stamp, found['ms']), lines
     if verdict == 'refused':
@@ -236,15 +278,12 @@ def report(verdict, text, lines, exe, log_path=''):
     The program's lines are shown on a pass too: a pass that nobody can read is
     a pass nobody can check (a package with its config taken away passed, and
     the reason was not visible). `log_path` gets every line."""
-    if log_path:
-        with open(log_path, 'w', encoding='utf-8', newline='\n') as out:
-            out.write('\n'.join(lines) + ('\n' if lines else ''))
     if verdict == 'pass':
         print('setup host plain start: PASS (%s; %s)' % (text, exe))
         code = 0
     elif verdict == 'cannot-run':
         print('setup host plain start: NOT CHECKED: %s; %s' % (text, exe))
-        return CANNOT_RUN
+        code = CANNOT_RUN
     else:
         print('setup host plain start: FAIL: %s (%s)' % (text, exe))
         code = 1
@@ -254,6 +293,14 @@ def report(verdict, text, lines, exe, log_path=''):
             print('  | ' + line)
     else:
         print('  the program wrote nothing to stderr')
+    if log_path:
+        sys.stdout.flush()
+        try:
+            with open(log_path, 'w', encoding='utf-8', newline='\n') as out:
+                out.write('\n'.join(lines) + ('\n' if lines else ''))
+        except OSError as exc:
+            print('setup host plain start: ERROR: cannot write stderr log %s: %s' % (log_path, exc), flush=True)
+            return 1
     return code
 
 
@@ -274,4 +321,6 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 2 and sys.argv[1] == '--supervise':
+        sys.exit(_supervise(sys.argv[2:]))
     sys.exit(main())
