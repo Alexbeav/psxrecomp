@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -181,6 +182,29 @@ void codegen_routes_bound_kinds() {
           "codegen preserves LUI signed-Q16 gameplay helper");
 }
 
+void ordinary_lui_uses_unsigned_operand() {
+    PSXRecomp::CodeGenConfig config{};
+    config.optimize_zero_reg = true;
+    const uint16_t immediates[] = {0x0000, 0x0001, 0x7FFF, 0x8000, 0x8001, 0xFFFF};
+    std::ofstream generated;
+    if (const char* output = std::getenv("PSX_TEST_LUI_OUTPUT_FILE"))
+        generated.open(output, std::ios::binary);
+    for (unsigned i = 0; i < 6; ++i) {
+        const auto result = generate_first_instruction(
+            0x3C000000u | ((8u + i) << 16) | immediates[i], config);
+        char statement[80];
+        std::snprintf(statement, sizeof statement,
+                      "cpu->gpr[%u] = 0x%04Xu << 16;", 8u + i,
+                      static_cast<unsigned>(immediates[i]));
+        check(result.full_code.find(statement) != std::string::npos,
+              "ordinary LUI has an unsigned C operand at immediate boundaries");
+        if (generated.is_open()) generated << result.full_code << '\n';
+    }
+    const auto zero = generate_first_instruction(0x3C00FFFFu, config);
+    check(zero.full_code.find("cpu->gpr[0] =") == std::string::npos,
+          "ordinary LUI keeps zero-register write suppression");
+}
+
 void shared_decls_include_screen_helper() {
     PSXRecomp::PS1Executable exe{};
     exe.header.load_address = kBase;
@@ -198,6 +222,7 @@ int main() {
     loader_rejects_bad_addiu_shapes();
     codegen_routes_bound_kinds();
     shared_decls_include_screen_helper();
+    ordinary_lui_uses_unsigned_operand();
 
     if (failures != 0) {
         std::fprintf(stderr, "signed_x_bound_codegen_test: %d failure(s)\n",

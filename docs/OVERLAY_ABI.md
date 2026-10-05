@@ -63,7 +63,7 @@ it: shards are KSEG0-keyed.
 | Value | Version 26 tree | Pin G2 |
 |---|---|---|
 | `PSX_OVERLAY_ABI_VERSION` | 26 | 25 |
-| `PSX_OVERLAY_CODEGEN_VER` | 14 | 12 |
+| `PSX_OVERLAY_CODEGEN_VER` | 15 | 12 |
 | `PSX_OVERLAY_CODEGEN_HASH` | changes with the sources | 0x6a0b6aaa |
 
 Codegen version 13 is upstream's. This tree does not use it.

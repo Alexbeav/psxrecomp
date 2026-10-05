@@ -55,6 +55,7 @@ def make_psxexe():
 
 
 def write_config(path, discovery="reachable", text_size="0x1000"):
+    (pathlib.Path(path).parent / ".gitignore").touch()
     discovery_line = (f'discovery = "{discovery}"\n'
                       if discovery is not None else "")
     with open(path, "w", encoding="utf-8") as f:

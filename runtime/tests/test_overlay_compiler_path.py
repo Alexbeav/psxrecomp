@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
         env = os.environ.copy()
         env['PATH'] = str(Path(compiler).parent) + os.pathsep + env.get('PATH', '')
         for src, dst in ((source, probe), (stub, bundled)):
-            subprocess.run([compiler, '-std=c++17', '-Werror=return-type', '-static',
+            subprocess.run([compiler, '-std=c++17', '-Werror=return-type', *(['-static'] if os.name == 'nt' else []),
                             '-I'+str(root/'include'), '-I'+str(root.parent/'recompiler/include'),
                             str(src), str(root/'src/psx_sha256.c'), '-o', str(dst)], check=True, env=env)
         relative = bundled.relative_to(toolkit).as_posix()

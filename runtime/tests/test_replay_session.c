@@ -54,7 +54,7 @@ int replay_host_request_anchor(void) { anchor_pending = 1; return 1; }
 int replay_host_take_anchor(uint8_t **data, size_t *size) {
     if (anchor_pending != 2) return 0;
     anchor_pending = 0;
-    if (anchor_fail) return -1;
+    if (anchor_fail) { free(anchor_blob); anchor_blob = NULL; anchor_size = 0; return -1; }
     *data = anchor_blob; *size = anchor_size; anchor_blob = NULL;
     return 1;
 }

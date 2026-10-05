@@ -201,6 +201,7 @@ GUARD_LINE = "/* stale-static guard */"
 
 def recompile(recompiler, root, exe, roots, cps):
     (root / "generated").mkdir(parents=True)
+    (root / ".gitignore").touch()
     (root / "test.exe").write_bytes(exe)
     (root / "seeds.txt").write_text(
         "0x%08X\n" % LOAD + "".join("%s 0x%08X\n" % (k, LOAD + o) for k, o in roots))
@@ -273,7 +274,7 @@ def run_harness(compiler, root, full_source, name, runtime_include):
                        capture_output=True, text=True)
     if r.returncode not in (0, 1):
         raise SystemExit("%s harness could not run (rc %d)" % (name, r.returncode))
-    return r.returncode == 0, r.stdout
+    return r.returncode == 0, r.stdout + r.stderr
 
 
 def main():
@@ -288,7 +289,7 @@ def main():
         recompiler += ".exe"
     if not os.path.isfile(recompiler):
         raise SystemExit("recompiler not found: %s (build it first)" % args.recompiler)
-    if not args.compiler or os.path.basename(args.compiler).lower().startswith(("cl", "clang-cl")):
+    if not args.compiler or pathlib.Path(args.compiler).stem.lower() in ("cl", "clang-cl"):
         raise SystemExit("a GNU-compatible C compiler is required (generated code uses GNU C)")
     runtime_include = here.parent.parent / "runtime" / "include"
     exe, roots = build_fixture()
