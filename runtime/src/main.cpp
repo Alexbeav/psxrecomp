@@ -15216,6 +15216,10 @@ int main(int argc, char** argv) {
         if (default_game_config.empty())
             default_game_config =
                 resolve_existing_runtime_path(PSX_DEFAULT_GAME_CONFIG_PATH, argv[0]);
+        /* A missing baked config is a load failure, not a config-free start
+         * (PS1B-427). Keep its path so the existing refusal names the file. */
+        if (default_game_config.empty())
+            default_game_config = anchor_on_exe_dir(argv[0], PSX_DEFAULT_GAME_CONFIG_PATH);
         if (!default_game_config.empty()) {
             default_game_config_storage = default_game_config.string();
             game_config_path = default_game_config_storage.c_str();

@@ -1511,6 +1511,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         set_tests_properties(verify_disc_set_test PROPERTIES
                  ENVIRONMENT "PYTHONPATH=${PSXRECOMP_ROOT}/tools")
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME default_game_config_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_default_game_config.py --compiler ${CMAKE_CXX_COMPILER})
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
             add_test(NAME persisted_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_persisted_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
             if(WIN32)
