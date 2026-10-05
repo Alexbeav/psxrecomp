@@ -4,7 +4,8 @@
     "tekken3-codegen-repin-split07": "Superseded by tekken3-codegen-repin-77fc84d1. These hashes pin the split/07 recompiler output; 30ca7064 (zero-run compaction) and 67af7172 (T110 dispatch keys) changed the emitted text, and SLUS_004.02_full_53.c is no longer generated at all, so the lines are intentionally unreachable at 77fc84d1 and later. The guard it protects is re-pinned. CORRECTION 2026-09-19: an earlier version of this reason also claimed \"Tekken 3 is re-qualified by route replay on the new base\". That was FALSE. Tekken 3 FAILS at this base (requal-tekken3-route-05, first divergence return 109) and is UNQUALIFIED here. Bisected to the T110 dispatchability work: 702d1cd8 -> return 490, 67af7172 -> return 109; position 102 (079f5f03) still passes the full 8,399-return route. T163 (0b0b6b13) and 30ca7064 are behaviourally inert for this title. See validation/tas/T168-TEKKEN3-ATTRIBUTION-20260919.md. Do not re-baseline tekken3-reference.tsv.gz: it is the only record that Tekken 3 is unqualified here.",
     "tekken3-codegen-repin-77fc84d1": "Superseded by t168-cached-resume-fetch-candidate-pin. Only the SCPH1001 full-body hash changes: cached interrupt resume entries check the instruction cache. Dispatch keys, game generated pins and gameplay reference remain unchanged. Source91086cc1 passed the full8399-return cold replay on2026-09-19; this does not qualify later source heads.",
     "t168-cached-resume-fetch-candidate-pin": "Superseded on test pins test-20260927-a-nodma / -b-dma by tekken3-codegen-repin-test-20260927. PS1B-220 (CPU load-value pipeline) changes recompiler emission: 55 of 56 pinned generated files change (only SLUS_004.02_dispatch.c is unchanged) and the SLUS shard set grows from full_00-52 to full_00-60 (8 added, none dropped). Hashes computed by Pegasus from the Pin A Tekken 3 setup (validation/tas/test-20260927-a-10k/tekken3-codegen-new.json). Tekken 3 is NOT qualified on these pins until its 10k/route-end replay passes; the 91086cc1 full-route pass does not carry over.",
-    "tekken3-codegen-repin-test-20260927": "Superseded on the pin H candidate by tekken3-codegen-repin-pin-h-20261001. 5dd2f3c59 (PS1B-333) makes the game emitter write a CRC-32 per 4 KiB page of the boot executable it generated from, and the accessor psx_game_source_page_crc32(), into the dispatch file. For Tekken 3 that is 48 added lines in SLUS_004.02_dispatch.c (289 pages, 0x121000 bytes) and nothing else: without them the file hashes to the old value. The other 63 guarded files are unchanged. Tekken 3 is NOT qualified on the candidate until its replay passes there."
+    "tekken3-codegen-repin-test-20260927": "Superseded on the pin H candidate by tekken3-codegen-repin-pin-h-20261001. 5dd2f3c59 (PS1B-333) makes the game emitter write a CRC-32 per 4 KiB page of the boot executable it generated from, and the accessor psx_game_source_page_crc32(), into the dispatch file. For Tekken 3 that is 48 added lines in SLUS_004.02_dispatch.c (289 pages, 0x121000 bytes) and nothing else: without them the file hashes to the old value. The other 63 guarded files are unchanged. Tekken 3 is NOT qualified on the candidate until its replay passes there.",
+    "tekken3-codegen-repin-pin-h-20261001": "Superseded by tekken3-codegen-repin-pin-h-20261005. B55 (PS1B-436) changes generated LUI expressions to defined unsigned arithmetic. Pegasus generated once from F a5efa533b5fac5a76614d674b8aa17e5bd2f3b6c on 2026-10-05; the existing setup guard failed at SLUS_004.02_full_00.c. The measured CRLF-to-LF SHA-256 table changes 58 files (SLUS_004.02_full_00.c through full_57.c); both SCPH1001 files, the SLUS dispatch file and full_58.c through full_60.c are unchanged. All 64 existing keys remain, with no added or omitted key. Evidence: Z:/Share/psxrecomp/evidence/PS1B-436/tekken3-repin-a5efa533b-r1/ (tekken3-codegen-new.json SHA-256 cc9000e9567beb83e98df4980207a0b4a8baa83db1d3acf84eb000e1f3bad2f2). Generated-text pins are re-established; Tekken 3 is NOT qualified on the successor until its route replay passes there. Repeated generation determinism remains unproved."
   },
   "entries": [
     {
@@ -9533,6 +9534,90 @@
         }
       ],
       "note": "Guard hashes only; only this JSON file qualifies. One hash differs from tekken3-codegen-repin-test-20260927: SLUS_004.02_dispatch.c, measured on Pegasus from the 80d5de34e set-up and regenerated on Eagle with the emitter built from ff805f9ef (same value). Not a qualification: Tekken 3 must pass its replay on the candidate before this entry means anything beyond the guard. See known_absent tekken3-codegen-repin-test-20260927."
+    },
+    {
+      "id": "tekken3-codegen-repin-pin-h-20261005",
+      "titles": [
+        "tekken3"
+      ],
+      "origin_commit": null,
+      "subject": "tools(tas): re-pin tekken 3 codegen for unsigned LUI arithmetic",
+      "qualified_tree": null,
+      "blocks": [
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "{",
+            "  \"generated/SCPH1001_dispatch.c\": \"eecd5f1e584a80a94644d3b14d06ef65cfccb1cfc0afc9a7d6be438bbaca062f\",",
+            "  \"generated/SCPH1001_full.c\": \"37c5917a788b4d7174c411ba0beb537c922bb9299449ad34795f781ef59d4b77\",",
+            "  \"build/tekken3/generated/SLUS_004.02_dispatch.c\": \"2d3b904450fbc743aa70f0ce560b5580681778c8a2f33478ef0c28d1e4090be1\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_00.c\": \"670a49888a3f186f467a0ab6bb3200b6d57ea9ba9ce7a1949ab97e3f037b9a09\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_01.c\": \"68e5e7b3123345c111146dec7d45dc27e732e6c63184fb1e7edb6e8d3b057a59\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_02.c\": \"e3c86422610698521a9b6567aa84cd3efe8d57765ca132557fddef3dc39c41be\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_03.c\": \"4f5eea03eb35789821fab47d7ffe5b15b5a1a117e2de70db6c4b6878031d7145\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_04.c\": \"d7b6088a19db22ae6c9791078cf6e624695eb8047ad97d1ce0f03cbc64217dec\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_05.c\": \"e94648fad9a670ea27dd6ae202152c34d61aef44fc72e3e98a3505036648710c\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_06.c\": \"afa6fb0ea82317bbcfb724d1930c5408a966f07566c35dc5069e3aef42bf3d1e\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_07.c\": \"59ddd926540d0b836d91ca8e3f8ca12f4f6311aadd53286eb7de900345c8edd8\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_08.c\": \"8243ac5e8fd0dd5e92d26092cc3d9cbd590878d6727d0cf8400cd5c06cb7fb68\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_09.c\": \"fe968483a0029e32f3ba25015421cddbfbe8ae6302691a92200def451a153b48\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_10.c\": \"5fd904bd03a72d611abdd8669c7e50346f7ba1e3777b7e47f3b50e5aa2b86b15\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_11.c\": \"ce00253935d8ae354d418042a7b6a1e8a4e89f55497edcb3a9ea7c466d1c88a9\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_12.c\": \"25d3821085ebcc890c429dbfd2a6dc55cbba3d8c73125b17f9dbbaf694f3e211\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_13.c\": \"795da4597e9ec842ee1298560310b268613431ea0b807bace02e9c9012a82074\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_14.c\": \"cd3145bbc71e34745646ae78525ffa6cb56c81a948656460cd566b477898a1cd\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_15.c\": \"ec62993d3cdc64818d26dfb569e85d39789b0197a8f33e4e81c4e5d7cb9e5509\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_16.c\": \"765e1c7824a63e5ba44c6af8fac3ff365ced1d7d3b0b16b4cbe57e70718c7625\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_17.c\": \"8c970f72498df3e73c5a5617a25db9d66f87d85c5c088c3e7c98f21cecf7a206\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_18.c\": \"934b4f4541a7a595bcaf7412f498675d8d8c3113287d408ba5a673ddf7a0fee1\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_19.c\": \"7315493e8bb4f787bba8655fe18a0e5e17b84a9d9e0598a6a523ad430a26aa92\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_20.c\": \"bcbd7fb0922b10801d2d03cc4eb48b7e4fa44467fbca1f9b2ffccb5d39862da9\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_21.c\": \"e31d684d85c7d2a0bd4036ebd543f1ed6bcf9608f6315d0ef7f580bd3520d6b6\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_22.c\": \"ddc2ef6a28d5a20f5566e0ee3969dfc31b9abd5800012b547626200f05e10ed8\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_23.c\": \"9187dd53917506b88634485543445c11497a9be4c713fd4104c7719b212960c5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_24.c\": \"3f37c36d57e5229f2a7d761e301ba074e7cfd936f62c3a8bc54183b1ec753ca4\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_25.c\": \"e658b55ba4920a64b47aaec8d85a4152ca3e580bba71a8f2e1b7af8fcdca3094\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_26.c\": \"29b674a8579b6936b67f997e45ca78800bef74bf6f332189fa5fa3bfc2f4f79c\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_27.c\": \"804635083f8376d8cad44cfd32fc52fd6d6a7225bdde35413c03eec1aa920be5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_28.c\": \"4bf02970b16c33c191d31a9bfbcba3a62af598ad3643e7e9c49119b76e74ac61\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_29.c\": \"e4b5a618481ba5f7890c4142e5d976d27ec753080ab4a45a52d16acd151c5bef\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_30.c\": \"a6653bd64164cfe1ee7986fe7ffcedaa978e957610282ef276091b8392c3e04b\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_31.c\": \"07bc1c8aebd87ad74b5705781ef0bedee849e1cc38becfbb2c82f6649c515707\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_32.c\": \"53459cec0fada579e05344356eadc45af51e24a352bd9fca4564e748949275cb\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_33.c\": \"4332b2bb9682e24f6645290287f7e230cbde6072b96fafe5d55a1befcfd81d1c\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_34.c\": \"d5cc63caffd9026c9d1f056571bf317eef95ecdb56553b461f73cda8fbda8dbd\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_35.c\": \"2c436bb018711582f3a64283ad29b2938de415d91cd2a7fdcae0ced21d125222\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_36.c\": \"893985cbe006690a6ea898f11cf837f238d13a4d5c737497e6a4f5be4edc9165\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_37.c\": \"29f61e44c8abfce92199d456e00295266083d9206552337b8adaf82330bc4e64\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_38.c\": \"614a96770bafc8602850c2ffe617dbc297603221986a36d98cbe79ec41926772\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_39.c\": \"b64da4050220087a19a4332cfdb56a95fc52b4a7f47e27ff8090ab30bdf07c53\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_40.c\": \"7db1348e05dc039b802bf65b2cf34d90f482f2c76f48a23d4e43063e0e8969fd\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_41.c\": \"68fad9d551a8fbed7d1cb4880187d59369c9ad1cb119e9aac00ef954c543ec75\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_42.c\": \"35bc44b24f0a3b48da626ad06ee3c955c1a9e44cb7bd089279b1dbe332553565\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_43.c\": \"e8fc6e17746fdaa0c868dd837be6000f3d478acc12efef43fab763b82077e666\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_44.c\": \"90de85a758d8f43b6203b32418a4073f0889a66836dc6110498642837c7c5c0a\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_45.c\": \"553e1ce12b5512baaedbf5c8207092dc75f99fdb2eb3262ccea8167df99223e8\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_46.c\": \"815ad0514200a3f5141c0bc36acb4fa9c036425be5f8efeae983403093495f16\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_47.c\": \"4264c4915e391c8d8a336e58aff69587ae0f4a60c4ded395c8992d368b425291\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_48.c\": \"81af3858b1a2dc663a7fed50d0f89e5e53af71bec960abe4032ff0a1ae0e32c0\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_49.c\": \"576ccfb71506f28ebfcf8cf2f73320bf0ded005943aa1f1c62e55a750d504683\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_50.c\": \"30f05495a00d48a9c2c13232fadc5cd4b4b89602d09e12a75db0b7a77d2bcd5d\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_51.c\": \"78b2f3d71ebc1896628689062cc0b51789a04f07d9cea8429b126c98d3eb2e68\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_52.c\": \"371dadb8477bdf502e7ad4a3c316f1378a3ec01d52dbbca98a10c6d4471744d7\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_53.c\": \"c6ca4c506cd651bc5c0c931adf6b895db154e04a7cc05eee3e2ee031e87f8f14\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_54.c\": \"d4afa55b8ee41ebc98333e272778b8c5bcdae72043b25c0df45c886b4a66afad\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_55.c\": \"c5b5f35eeb8d97bcf492bfc39eebaf57c1936f8910b195383e81f63cd2d7217e\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_56.c\": \"f8f6d7faee4bae36627914e543199fc6c98b3889f005810cd418d5565d5f0019\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_57.c\": \"06a7049d3bab69913c4e0fb64d50b200c14402a82e765f70d6bfd0410171dadf\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_58.c\": \"a372de7a576d967742ffecda806be5c449d323c60506130d695c4484671b647f\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_59.c\": \"ec16c16907d842bd5e69f66e27b0a2f0b7840c1049e42156823751c24aeaa907\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_60.c\": \"3bdc6441b5c035dc75b6c84ee4d50ebcb493186d3fd70438d4ad4a58a00de063\"",
+            "}",
+            ""
+          ]
+        }
+      ],
+      "note": "Measured by the Pegasus gate worker from clean F a5efa533b5fac5a76614d674b8aa17e5bd2f3b6c (tree 7c62c11a8b1fe11de0f1f44a145a1f316d130999), using the guard normalization in tekken3.py: CRLF to LF, then SHA-256. Supersedes tekken3-codegen-repin-pin-h-20261001: 58 changed and 6 unchanged files; all 64 keys and order preserved. Input Z:/Share/psxrecomp/evidence/PS1B-436/tekken3-repin-a5efa533b-r1/tekken3-codegen-new.json SHA-256 cc9000e9567beb83e98df4980207a0b4a8baa83db1d3acf84eb000e1f3bad2f2. One generation on one host, setup guard failed before native build/replay; determinism and successor route qualification are unproved. C9 non-author signature/integration and every final-head gate remain required."
     }
   ]
 }
