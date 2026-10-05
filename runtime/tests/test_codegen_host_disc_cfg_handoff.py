@@ -71,13 +71,13 @@ def main() -> int:
         probe_c.write_text(PROBE, encoding="utf-8")
         exe = tmp / ("probe.exe" if os.name == "nt" else "probe")
         build = subprocess.run(
-            [cc, "-std=gnu11", "-o", str(exe), str(probe_c),
+            [cc, "-std=gnu11", "-o", str(exe), str(probe_c), str(ROOT / "runtime/src/start_refusal.c"),
              '-DPSX_SETUP_BIOS_STEMS="SCPH1001"',
              '-DPSX_SETUP_FRAMEWORK_REL="psxrecomp"',
              "-I", str(ROOT / "host"),
              "-I", str(ROOT / "runtime" / "include"),
              "-I", str(ui / "src"), "-I", str(ui / "src" / "common")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         if build.returncode != 0:
             print("FAIL: could not build probe\n" + build.stderr[-2000:])
             return 1
@@ -104,7 +104,7 @@ def main() -> int:
             if product is not None:
                 (build_dir / "disc.cfg").write_bytes(product.encode("utf-8"))
             run = subprocess.run([str(exe), str(proj), str(build_dir / "Game.exe")],
-                                 capture_output=True, text=True)
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace")
             target = build_dir / "disc.cfg"
             got = target.read_text(encoding="utf-8") if target.is_file() else None
             if got is not None:

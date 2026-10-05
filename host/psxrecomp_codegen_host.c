@@ -4,6 +4,7 @@
 
 #include "psx_bios_known_images.h"
 #include "psx_setup_refusal.h"   /* the disc file setup refused last (PS1B-415) */
+#include "start_refusal.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -4867,8 +4868,20 @@ static int host_preflight_project_root(char* err_msg, size_t err_cap) {
 static int host_disc_verify(const char* disc_path, RecompLauncherCDiscVerify* out) {
     const int answered = g_inner_disc_verify ? g_inner_disc_verify(disc_path, out) : 0;
     if (answered && out && disc_path && disc_path[0] &&
-        psx_setup_refusal_at_check(g_refused_disc, disc_path))
+        psx_setup_refusal_at_check(g_refused_disc, disc_path)) {
         out->verdict = 3;
+        /* The inner check recorded its verdict before this override. Keep
+         * the run report consistent with the final panel (PS1B-415). */
+        char row[PSX_START_LAUNCHER_ROW_CAP];
+        const char* expected = "";
+#if defined(RECOMP_LAUNCHER_HAS_SERIAL_STATUS)
+        expected = out->expected_serials;
+#endif
+        snprintf(row, sizeof(row),
+                 "verdict=refused serial=%s expected=%s tracks=%d; setup refused the selected disc",
+                 out->serial, expected, out->track_count);
+        psx_start_note_launcher("disc", row);
+    }
     return answered;
 }
 

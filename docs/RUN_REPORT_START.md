@@ -27,6 +27,12 @@ mount refreshes it from the active reader; a refused change keeps the old value.
 A loaded SBI removes it; this field does not qualify the
 disc pressing, companion identity or protection/gameplay result.
 
+If setup refused the selected disc, the host updates `launcher_status.disc`
+after its final check. The row records `verdict=refused`, the serial, expected
+serials and track count, followed by `setup refused the selected disc`.
+This replaces the game check's earlier verdict for that file. Checking another
+file or successfully preparing it clears the remembered refusal.
+
 ## File names
 
 The report names a file by its **base name** only, never by its folder.

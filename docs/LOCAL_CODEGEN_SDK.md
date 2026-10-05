@@ -151,6 +151,11 @@ that wants to refuse it reads the field.
 Prefer `psxrecomp_add_game_runtime(...)` — it compiles
 `psxrecomp/host/psxrecomp_codegen_host.c` and sets `PSX_HAS_GAME_CODEGEN`.
 
+The host records its final disc refusal through `runtime/src/start_refusal.c`,
+which the runtime helper already includes. A standalone probe that compiles
+the host must also link that module. See the [run report contract](RUN_REPORT_START.md)
+for the recorded disc verdict.
+
 Titles keep a thin root `codegen_setup.c` that fills
 `PsxrecompCodegenHostConfig` and exposes apply/relaunch hooks:
 

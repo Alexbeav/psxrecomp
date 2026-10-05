@@ -240,10 +240,12 @@ wrapper = wrapper[: wrapper.index("\n}\n")]
 assert "g_inner_disc_verify ? g_inner_disc_verify(disc_path, out) : 0;" in wrapper
 assert re.search(
     r"if \(answered && out && disc_path && disc_path\[0\] &&\s*"
-    r"psx_setup_refusal_at_check\(g_refused_disc, disc_path\)\)\s*out->verdict = 3;",
+    r"psx_setup_refusal_at_check\(g_refused_disc, disc_path\)\)\s*\{\s*out->verdict = 3;",
     wrapper,
 )
-assert wrapper.count("out->") == 1, "the wrapper may change the verdict and nothing else"
+assert re.findall(r"out->\w+\s*=(?!=)", wrapper) == ["out->verdict ="], (
+    "the wrapper may change the verdict and nothing else in the answer"
+)
 assert HOST.count("psx_setup_refusal_at_check(") == 1
 
 # Installed over the game program's own check when the host is applied, once.

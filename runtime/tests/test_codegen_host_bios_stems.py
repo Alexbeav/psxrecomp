@@ -109,7 +109,7 @@ def main() -> int:
         framework = "framework checkout"
         # The host uses POSIX APIs whose declarations strict C11 hides on glibc.
         build = subprocess.run(
-            [cc, "-std=gnu11", "-o", str(exe), str(probe_c), str(HOST_C),
+            [cc, "-std=gnu11", "-o", str(exe), str(probe_c), str(HOST_C), str(ROOT / "runtime/src/start_refusal.c"),
              '-DPSX_SETUP_BIOS_STEMS="OpenBIOS|SCPH5552"',
              f'-DPSX_SETUP_FRAMEWORK_REL="{framework}"',
              "-I", str(ROOT / "host"),
