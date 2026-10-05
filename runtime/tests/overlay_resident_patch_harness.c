@@ -27,6 +27,7 @@
 #include "parity_trace.h"
 #include "psx_cycles.h"
 #include "dirty_ram_interp.h"
+#include "interp_report.h"
 #include "psx_bios_image.h"
 #include "psx_icache.h"
 #include "sio.h"
@@ -41,6 +42,8 @@
 
 #define JALR_T1_T0 0x01204009u
 #define NOP 0x00000000u
+#define THIRD_WORD 0x24030007u   /* addiu v1, zero, 7: neither the resident word nor the patch */
+#define FOURTH_WORD 0x24030009u  /* addiu v1, zero, 9: the second cached unit's value */
 #define RA_SENTINEL 0x80020000u
 
 static void unreachable(const char *what) {
@@ -363,6 +366,16 @@ static void step(const char *name, uint32_t pc, Ownership want) {
     if (!ok) s_failures++;
 }
 
+/* One dispatch without a line of its own: the shard must run native exactly when
+ * `want_native` says so. */
+static void expect_native(const char *what, uint32_t pc, int want_native) {
+    Ownership got = observe(pc);
+    if (got.native != want_native) {
+        printf("%-34s pc=%08X shard_native=%d, expected %d UNEXPECTED\n", what, pc, got.native, want_native);
+        s_failures++;
+    }
+}
+
 static void load_resident_image(void) {
     static const uint32_t words[] = {
         0x27BDFFF0u, 0x11111111u, JALR_T1_T0, 0x24020001u, 0x03E00008u, NOP,
@@ -377,9 +390,87 @@ static void load_resident_image(void) {
     dirty_ram_register_text_image(0x10000u, s_ref, sizeof(s_ref));
 }
 
+/* ---- The bound on loads for rewritten text (PS1B-421) -------------------- */
+/* The cache holds two units for the entry 0x80010008: one built from the NOP
+ * patch and one from FOURTH_WORD. Both modes start from the resident image and
+ * patch it with CPU stores, so the page is modified text outside the capture
+ * window throughout. */
+static void print_load_counters(const char *when, uint64_t *loads_out,
+                                uint32_t *bound_pages_out, uint32_t *limit_out) {
+    uint64_t loads = 0, taken = 0, load_us = 0;
+    uint32_t backed = 0, backoff_limit = 0, bound_pages = 0, load_limit = 0;
+    overlay_loader_get_modified_text(&loads, &taken, &backed, &backoff_limit);
+    overlay_loader_get_modified_text_loads(&load_us, &bound_pages, &load_limit);
+    printf("%s: loads=%llu load_bound_pages=%u load_limit=%u taken_out=%llu\n",
+           when, (unsigned long long)loads, bound_pages, load_limit,
+           (unsigned long long)taken);
+    *loads_out = loads;
+    *bound_pages_out = bound_pages;
+    *limit_out = load_limit;
+}
+
+/* The limit leaves room: the second unit loads when its bytes arrive, and the
+ * first runs again when its bytes come back (Digimon World 2 loads two). */
+static void mode_two_units(void) {
+    uint64_t loads = 0;
+    uint32_t bound_pages = 0, limit = 0;
+    psx_write_word(0x80010008u, NOP);
+    step("two units: first value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    psx_write_word(0x80010008u, FOURTH_WORD);
+    step("two units: second value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    psx_write_word(0x80010008u, NOP);
+    step("two units: first value again", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("two units", &loads, &bound_pages, &limit);
+    if (loads != 2 || bound_pages != 0 || limit < 2) {
+        printf("two units: load counters UNEXPECTED\n");
+        s_failures++;
+    }
+}
+
+/* Run with PSX_OVERLAY_MODTEXT_LOAD_LIMIT=1. The first unit takes the page's
+ * one load. The second unit's bytes then stay with the interpreter, each such
+ * dispatch counts under the bound's reason, and the first unit still runs when
+ * its bytes come back. */
+static void mode_load_bound(void) {
+    extern void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                                uint64_t kernel[PSX_INTERP_MISS_REASONS]);
+    uint64_t above[PSX_INTERP_MISS_REASONS], kernel[PSX_INTERP_MISS_REASONS];
+    uint64_t loads = 0;
+    uint32_t bound_pages = 0, limit = 0;
+    psx_write_word(0x80010008u, NOP);
+    step("load bound: first value", 0x80010008u, (Ownership){0, 0, 1, 0});
+    step("load bound: first value again", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("load bound, after the first unit", &loads, &bound_pages, &limit);
+    if (limit != 1 || loads != 1 || bound_pages != 1) {
+        printf("load bound: counters after the first unit UNEXPECTED\n");
+        s_failures++;
+    }
+    psx_write_word(0x80010008u, FOURTH_WORD);
+    step("load bound: second value", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("load bound: second value again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    overlay_loader_get_miss_reasons(above, kernel);
+    printf("load bound: %llu dispatches counted under modified_text_load_bound\n",
+           (unsigned long long)above[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND]);
+    if (above[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND] != 2 || kernel[PSX_MISS_MODIFIED_TEXT_LOAD_BOUND] != 0) {
+        printf("the load bound's miss reason UNEXPECTED\n");
+        s_failures++;
+    }
+    psx_write_word(0x80010008u, NOP);
+    step("load bound: first value back", 0x80010008u, (Ownership){0, 0, 1, 0});
+    print_load_counters("load bound, at the end", &loads, &bound_pages, &limit);
+    if (loads != 1 || bound_pages != 1) {
+        printf("load bound: counters at the end UNEXPECTED\n");
+        s_failures++;
+    }
+}
+
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s <cache-root> <game-id> <config-hash>\n", argv[0]);
+    if (argc != 4 && argc != 5) {
+        fprintf(stderr, "usage: %s <cache-root> <game-id> <config-hash> [two-units|load-bound]\n", argv[0]);
+        return 2;
+    }
+    if (argc == 5 && strcmp(argv[4], "two-units") != 0 && strcmp(argv[4], "load-bound") != 0) {
+        fprintf(stderr, "unknown mode: %s\n", argv[4]);
         return 2;
     }
     uint32_t config_hash = (uint32_t)strtoul(argv[3], NULL, 16);
@@ -391,17 +482,94 @@ int main(int argc, char **argv) {
         fprintf(stderr, "the patched shard was not indexed\n");
         return 1;
     }
+    if (argc == 5) {
+        if (strcmp(argv[4], "two-units") == 0) mode_two_units();
+        else mode_load_bound();
+        if (s_failures) {
+            fprintf(stderr, "FAIL: %s: %d mismatch(es); loader: %s\n",
+                    argv[4], s_failures, overlay_loader_last_msg());
+            return 1;
+        }
+        printf("PASS: %s\n", argv[4]);
+        return 0;
+    }
 
     /* 1. Pristine resident text: static code owns; the patched shard cannot. */
     step("pristine", 0x80010008u, (Ownership){1, 0, 0, 0});
 
-    /* 2. Guest CPU store JALR->NOP (the game patching its own text). */
+    /* 2. Guest CPU store JALR->NOP (the game patching its own text). The page is
+     *    text_modified and not dirty, so it stays outside the capture window. The
+     *    loader's lazy load admits the exact entry and the shard runs native on
+     *    exact bytes, as for the load-path patch of step 3 (PS1B-421). The old
+     *    call-return PC is not an entry: the interpreter owns it, and under CPS it
+     *    fails closed as a foreign interior entry. */
     psx_write_word(0x80010008u, NOP);
-    step("cpu-store patch: entry", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("cpu-store patch: entry", 0x80010008u, (Ownership){0, 0, 1, 0});
     step("cpu-store patch: old call return", 0x80010010u, (Ownership){0, 0, 0, 0});
+    g_psx_cps_mode = 1;
+    step("cpu-store patch: old return, cps", 0x80010010u, (Ownership){0, 0, 0, 1});
+    g_psx_cps_mode = 0;
+
+    /* 2a. A third value stored after the shard ran native: the shard is taken out
+     *     at the next dispatch and stays out; the patch bytes stored again
+     *     revalidate it. */
+    psx_write_word(0x80010008u, THIRD_WORD);
+    step("third value: entry", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("third value: entry again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    psx_write_word(0x80010008u, NOP);
+    step("cpu-store patch again: entry", 0x80010008u, (Ownership){0, 0, 1, 0});
+
+    /* 2b. A page that keeps changing. Each round stores the third value (the
+     *     shard is taken out) and the patch again (it revalidates), until the
+     *     page has had its limit of take-outs. From then on the patch bytes do
+     *     not bring the shard back: the page stays with the interpreter. */
+    {
+        uint64_t loads = 0, taken = 0;
+        uint32_t backed = 0, limit = 0;
+        int rounds = 0;
+        overlay_loader_get_modified_text(&loads, &taken, &backed, &limit);
+        printf("modified text before the rounds: loads=%llu taken_out=%llu backed_off_pages=%u limit=%u\n",
+               (unsigned long long)loads, (unsigned long long)taken, backed, limit);
+        if (loads != 1 || taken != 1 || backed != 0 || limit < 2) {
+            printf("modified text counters before the rounds UNEXPECTED\n");
+            s_failures++;
+        }
+        while (taken < limit && rounds < 1000) {
+            rounds++;
+            psx_write_word(0x80010008u, THIRD_WORD);
+            expect_native("round: third value", 0x80010008u, 0);
+            psx_write_word(0x80010008u, NOP);
+            overlay_loader_get_modified_text(&loads, &taken, &backed, &limit);
+            expect_native("round: patch again", 0x80010008u, taken < limit ? 1 : 0);
+        }
+        printf("modified text after %d rounds: loads=%llu taken_out=%llu backed_off_pages=%u limit=%u\n",
+               rounds, (unsigned long long)loads, (unsigned long long)taken, backed, limit);
+        if (taken != limit || backed != 1 || rounds != (int)limit - 1) {
+            printf("modified text counters after the rounds UNEXPECTED\n");
+            s_failures++;
+        }
+    }
+    step("backed off: patch bytes", 0x80010008u, (Ownership){0, 0, 0, 0});
+    step("backed off: patch bytes again", 0x80010008u, (Ownership){0, 0, 0, 0});
+    /* Every dispatch a backed-off page costs is counted under its own reason:
+     * the last round's dispatch of the patch bytes and the two above. */
+    {
+        extern void overlay_loader_get_miss_reasons(uint64_t above_kernel[PSX_INTERP_MISS_REASONS],
+                                                    uint64_t kernel[PSX_INTERP_MISS_REASONS]);
+        uint64_t above[PSX_INTERP_MISS_REASONS], kernel[PSX_INTERP_MISS_REASONS];
+        overlay_loader_get_miss_reasons(above, kernel);
+        printf("backed off: %llu dispatches counted under modified_text_backoff\n",
+               (unsigned long long)above[PSX_MISS_MODIFIED_TEXT_BACKOFF]);
+        if (above[PSX_MISS_MODIFIED_TEXT_BACKOFF] != 3 || kernel[PSX_MISS_MODIFIED_TEXT_BACKOFF] != 0) {
+            printf("the back-off's miss reason UNEXPECTED\n");
+            s_failures++;
+        }
+    }
 
     /* 3. The same bytes delivered through a load path that marks the page
-     *    executable (CD DMA / data-shard publication). */
+     *    executable (CD DMA / data-shard publication). The page is dirty from
+     *    here on, so it is in the capture window and the back-off of 2b, which
+     *    is for pages outside it, no longer applies. */
     dirty_ram_mark_executable_range(0x10000u, 0x18u);
     step("loaded patch: entry", 0x80010008u, (Ownership){0, 1, 1, 0});
     g_psx_cps_mode = 1;

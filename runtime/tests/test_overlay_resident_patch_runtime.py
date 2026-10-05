@@ -13,14 +13,26 @@ shows why the framework does not need it, end to end:
    guard (overlay_resident_patch_harness.c) then decide ownership:
    - pristine text: the static resident function owns it; the shard cannot run;
    - guest CPU store JALR->NOP: the exact-range guard blocks the static entry
-     and its post-call continuation; the page is outside the overlay window,
-     so the shard does not load and the interpreter owns the live bytes;
+     and its post-call continuation; the page is outside the capture window
+     (text_modified, not dirty), and the loader's lazy load admits the exact
+     entry, so the shard runs natively on exact bytes only (PS1B-421; before
+     that the shard never loaded there and the interpreter owned the bytes).
+     The old call-return PC stays with the interpreter and fails closed under
+     CPS. A third value stored after the shard ran takes it out, and the patch
+     bytes stored again revalidate it. A page that keeps changing is left to
+     the interpreter after its limit of take-outs, patch bytes or not;
    - the same bytes marked executable by a load path: the shard runs natively
      only on exact bytes, and the old call-return PC is a foreign interior
      entry that fails closed;
    - JALR restored: static owns again and the shard does not run.
 3. Negative control: with native overlay execution forced off the harness must
    report a mismatch, so a harness that cannot see native runs cannot pass.
+4. The bound on loads for rewritten text (PS1B-421). The cache holds a second
+   unit for the same entry, built from another value of the patched word.
+   Under the default limit it loads when its bytes arrive (two loads). Under a
+   limit of one it does not load, those dispatches count under
+   modified_text_load_bound, and the first unit still runs on its own bytes.
+   The same mode at the default limit must fail.
 """
 
 from __future__ import annotations
@@ -53,6 +65,10 @@ def words(*values: int) -> bytes:
 
 RESIDENT = words(0x27BDFFF0, 0x11111111, 0x01204009, 0x24020001, 0x03E00008)
 PATCHED = words(0x27BDFFF0, 0x11111111, 0x00000000, 0x24020001, 0x03E00008)
+# The same text with another value at the patched word (addiu v1, zero, 9): a
+# second cached unit for the same entry, as a capture makes when a game
+# rewrites the same code more than once.
+PATCHED_AGAIN = words(0x27BDFFF0, 0x11111111, 0x24030009, 0x24020001, 0x03E00008)
 GUARD = words(0x00000000)  # writer-appended delay slot for the final jr ra
 
 
@@ -86,14 +102,14 @@ def write_project(work: pathlib.Path) -> None:
         encoding="utf-8")
     (work / "overlay_captures.json").write_text(json.dumps([{
         "load_addr": "0x80010000",
-        "size": len(PATCHED) + len(GUARD),
+        "size": len(image) + len(GUARD),
         "guard_bytes": len(GUARD),
-        "bytes_b64": base64.b64encode(PATCHED + GUARD).decode("ascii"),
+        "bytes_b64": base64.b64encode(image + GUARD).decode("ascii"),
         "function_entry_pcs": ["0x80010008"],
         "dispatch_entry_pcs": ["0x80010008"],
         "executed_pcs": ["0x80010008", "0x8001000C",
                          "0x80010010", "0x80010014"],
-    }]), encoding="utf-8")
+    } for image in (PATCHED, PATCHED_AGAIN)]), encoding="utf-8")
 
 
 def main() -> int:
@@ -116,6 +132,7 @@ def main() -> int:
         env.pop("PSX_OVERLAY_CACHE_DIR", None)
         env.pop("PSX_OVERLAY_CAPTURES", None)
         env.pop("PSX_OVERLAY_NATIVE_OFF", None)
+        env.pop("PSX_OVERLAY_MODTEXT_LOAD_LIMIT", None)
         compiler_dir = os.path.dirname(os.path.abspath(args.compiler))
         env["PATH"] = compiler_dir + os.pathsep + env.get("PATH", "")
         output = run([
@@ -134,15 +151,19 @@ def main() -> int:
                 compile_overlays.cache_tag(include, recompiler, toml, 0))
         ext = ".dll" if platform.system() == "Windows" else ".so"
         shards = sorted(leaf.glob(f"00010000_*{ext}"))
-        if len(shards) != 1:
-            raise AssertionError(f"expected one published shard in {leaf}: "
-                                 f"{sorted(p.name for p in leaf.iterdir())}")
-        manifest = shards[0].with_suffix(".ranges").read_text(encoding="ascii")
-        if "F 80010008 " not in manifest:
-            raise AssertionError(f"shard does not own 0x80010008:\n{manifest}")
+        if len(shards) != 2:
+            raise AssertionError(f"expected two published shards in {leaf}: "
+                                 f"{sorted(p.name for p in leaf.iterdir())}\n"
+                                 f"{output}")
+        for shard in shards:
+            manifest = shard.with_suffix(".ranges").read_text(encoding="ascii")
+            if "F 80010008 " not in manifest:
+                raise AssertionError(
+                    f"shard {shard.name} does not own 0x80010008:\n{manifest}")
         if list(leaf.glob("*.unpromoted")):
             raise AssertionError("compile_overlays wrote an .unpromoted sidecar")
-        print(f"published {shards[0].name} without an .unpromoted sidecar")
+        print(f"published {', '.join(s.name for s in shards)} "
+              f"without an .unpromoted sidecar")
 
         exe = ".exe" if platform.system() == "Windows" else ""
         harness = work / f"resident-patch-harness{exe}"
@@ -183,6 +204,33 @@ def main() -> int:
                 f"negative control did not detect the missing native run:\n"
                 f"{control_output}")
         print("negative control: native-off run reports the mismatch")
+
+        # The bound on loads for rewritten text (PS1B-421). With the default
+        # limit the second unit loads when its bytes arrive. With a limit of
+        # one it does not: the page has had its load, those bytes stay with
+        # the interpreter, and the first unit still runs on its own bytes.
+        two_units = run(harness_args + ["two-units"], env=env)
+        print(two_units.strip())
+        if "two units: loads=2 load_bound_pages=0" not in two_units:
+            raise AssertionError(
+                f"the second unit did not load under the default limit:\n"
+                f"{two_units}")
+        bounded = dict(env)
+        bounded["PSX_OVERLAY_MODTEXT_LOAD_LIMIT"] = "1"
+        bound_output = run(harness_args + ["load-bound"], env=bounded)
+        print(bound_output.strip())
+        if "load bound, at the end: loads=1 load_bound_pages=1 load_limit=1" \
+                not in bound_output:
+            raise AssertionError(
+                f"the load bound did not hold:\n{bound_output}")
+        # The same mode without the limit of one must fail: the second unit
+        # loads, so a harness that cannot see the bound cannot pass.
+        unbounded = run(harness_args + ["load-bound"], env=env, expect_ok=False)
+        if "load bound: second value " not in unbounded or \
+                "UNEXPECTED" not in unbounded:
+            raise AssertionError(
+                f"the load-bound mode passed without the bound:\n{unbounded}")
+        print("negative control: the load-bound mode fails at the default limit")
     print("PASS: resident control-flow patches never run stale native code")
     return 0
 

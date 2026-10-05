@@ -25,10 +25,14 @@ debug server, so this is the only place where a start says it.
     ]},
     "loader_miss": {"above_kernel": {"miss_cached": 70100000, "no_unit": 12, "stale_bytes": 1028199,
                                      "outside_window": 0, "device_touch": 0, "native_off": 0,
-                                     "diff_gate": 0, "rank": 0, "bad_entry": 0},
+                                     "diff_gate": 0, "rank": 0, "bad_entry": 0,
+                                     "modified_text_backoff": 0,
+                                     "modified_text_load_bound": 0},
                     "kernel": {"miss_cached": 3800, "no_unit": 49, "stale_bytes": 0,
                                "outside_window": 0, "device_touch": 0, "native_off": 0,
-                               "diff_gate": 0, "rank": 0, "bad_entry": 0}}
+                               "diff_gate": 0, "rank": 0, "bad_entry": 0,
+                               "modified_text_backoff": 0,
+                               "modified_text_load_bound": 0}}
 }
 ```
 
@@ -93,6 +97,8 @@ sums of the reasons, taken when the report is written.
 | `diff_gate` | Held back by the native-against-interpreter comparison (development). |
 | `rank` | Held back by the native rank filter (debug tools only). |
 | `bad_entry` | The unit ran and refused a foreign interior entry. |
+| `modified_text_backoff` | The address is in a text page the game rewrote with CPU stores, and that page reached its limit of take-outs: it is left to the interpreter for the rest of the process (PS1B-421, `docs/OVERLAY_MODIFIED_TEXT.md`). |
+| `modified_text_load_bound` | The address is an exact entry of a cached unit in a text page the game rewrote with CPU stores, no loaded unit matches it, and that page has had its limit of loads: no further unit is loaded for the page (PS1B-421, the same document). |
 
 `disp_interp` counts loader lookups that found no native unit. The interpreter
 then may still decline the target, so `per_address` is the record of what was
