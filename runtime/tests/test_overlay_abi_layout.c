@@ -125,7 +125,7 @@ _Static_assert(UPSTREAM_CODEGEN_VER == 13, "fixture is not upstream cg13");
 _Static_assert(PSX_OVERLAY_ABI_VERSION == 26, "fork ABI version");
 _Static_assert(PSX_OVERLAY_ABI_VERSION == UPSTREAM_ABI_VERSION + 1,
                "fork ABI must be upstream's version plus one");
-_Static_assert(PSX_OVERLAY_CODEGEN_VER == 14, "fork codegen version");
+_Static_assert(PSX_OVERLAY_CODEGEN_VER == 15, "fork codegen version");
 _Static_assert(PSX_OVERLAY_CODEGEN_VER != UPSTREAM_CODEGEN_VER,
                "fork codegen version must not reuse upstream's number");
 
