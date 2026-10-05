@@ -25,7 +25,7 @@ ISO_C_FALLBACK = {
     # glibc's setjmp() is a macro for _setjmp. Without a static libc.a to list
     # (Rocky 9), a stub of that name aborted every fixture that links a
     # setjmp user: traps.c, interrupts.c.
-    "_setjmp",
+    "_setjmp", "stdin", "stdout", "stderr",
 }
 
 
@@ -72,7 +72,7 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
     objs = []
     for src in modules:
         obj = work / (Path(src).stem + tag + ".o")
-        subprocess.run([cc, "-std=c11", opt, "-w", "-I", include,
+        subprocess.run([cc, "-std=c++17" if Path(src).suffix == ".cpp" else "-std=c11", opt, "-w", "-I", include,
                         *["-D" + d for d in defines],
                         "-c", str(src_root / "src" / src), "-o", str(obj)],
                        check=True)

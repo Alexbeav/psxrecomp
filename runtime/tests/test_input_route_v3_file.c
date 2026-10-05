@@ -16,7 +16,7 @@ static unsigned char bytes[1 << 20];
 typedef struct { unsigned char *p; size_t n; } Buf;
 
 static void b32(Buf *b, uint32_t v) { input_route_put32(b->p + b->n, v); b->n += 4; }
-static void braw(Buf *b, const void *data, size_t n) { memcpy(b->p + b->n, data, n); b->n += n; }
+static void braw(Buf *b, const void *data, size_t n) { if (n) memcpy(b->p + b->n, data, n); b->n += n; }
 static void bentry(Buf *b, uint32_t tag, const void *payload, uint32_t n)
 {
     b32(b, tag); b32(b, n); braw(b, payload, n);

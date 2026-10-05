@@ -71,6 +71,7 @@ def run(command: list[str], *, cwd: pathlib.Path | None = None,
 
 
 def write_project(work: pathlib.Path) -> None:
+    (work / ".gitignore").touch()
     text = RESIDENT + GUARD + bytes(0x800 - len(RESIDENT) - len(GUARD))
     header = bytearray(0x800)
     header[0:8] = b"PS-X EXE"

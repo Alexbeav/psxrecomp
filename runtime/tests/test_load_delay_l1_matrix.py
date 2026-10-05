@@ -2,7 +2,7 @@
 This isolates CPU value semantics. It does not qualify timer IRQ recognition.
 """
 from pathlib import Path
-import json, tempfile, argparse, struct, subprocess
+import json, tempfile, argparse, struct, subprocess, os
 ap=argparse.ArgumentParser();ap.add_argument("--precise",action="store_true");ap.add_argument("--native",type=Path);ap.add_argument("--case");ap.add_argument("--keep",type=Path);args=ap.parse_args()
 import source_fixture_link as link
 here=Path(__file__).resolve().parent
@@ -42,7 +42,7 @@ def run_cases(selected,tmp,native=False):
    'assert(psx_slice_block_impl(&c,c.pc,1,1));')
  (tmp/'matrix.c').write_text(source)
  for opt in ['-O0','-O2']:
-  link.build_and_run('gcc',tmp,here.parent,opt,tmp,modules,'matrix.c')
+  link.build_and_run(os.environ.get('CC', 'gcc'),tmp,here.parent,opt,tmp,modules,'matrix.c')
 with tempfile.TemporaryDirectory() as td:
  root=args.keep.resolve() if args.keep else Path(td);root.mkdir(exist_ok=True,parents=True)
  if args.native:
