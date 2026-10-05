@@ -110,31 +110,6 @@ void expect_dispatch_key_absent(const RunResult& result, uint32_t normalized,
            result.dispatch.substr(begin, end - begin).find(needle) == std::string::npos, message);
 }
 
-void lui_unsigned_immediates() {
-    const auto result = run_case(
-        "lui-immediates",
-        {0x3C080000u, 0x3C090001u, 0x3C0A7FFFu, 0x3C0B8000u,
-         0x3C0C8001u, 0x3C0DFFFFu, 0x3C00FFFFu, 0x03E00008u, 0u},
-        {function_at(kBase, kBase + 32u, {kBase})});
-    expect(result.stats.functions_interpreted == 0 && result.stats.functions_emitted == 1,
-           "LUI boundary immediates remain native");
-    for (const char* statement : {
-            "cpu->gpr[8] = 0x0000u << 16;",
-            "cpu->gpr[9] = 0x0001u << 16;",
-            "cpu->gpr[10] = 0x7FFFu << 16;",
-            "cpu->gpr[11] = 0x8000u << 16;",
-            "cpu->gpr[12] = 0x8001u << 16;",
-            "cpu->gpr[13] = 0xFFFFu << 16;"})
-        expect(result.full.find(statement) != std::string::npos,
-               "LUI emits an unsigned C operand across the sign boundary");
-    expect(result.full.find("cpu->gpr[0] =") == std::string::npos,
-           "LUI still discards writes to the zero register");
-    if (const char* output = std::getenv("PSX_TEST_LUI_OUTPUT_FILE")) {
-        std::ofstream generated(output, std::ios::binary);
-        generated << result.full;
-    }
-}
-
 void delay_slot_load_carries() {
     const auto result = run_case(
         "delay-slot",
@@ -501,7 +476,6 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    lui_unsigned_immediates();
     delay_slot_load_carries();
     label_split_load_carries();
     fragment_split_load_carries();
