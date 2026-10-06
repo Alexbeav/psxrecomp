@@ -107,6 +107,44 @@ int main(void) {
     if (!expect(cpu.read_absorb_which == 1u && cpu.read_absorb[1] == 44u,
                 "disabled cache preserves load give-back")) return 1;
 
-    puts("PASS: interpreter I-cache hit path preserves miss/refill semantics");
+    /* A four-word trampoline is primed, then overwritten in RAM. A cached
+     * read must retain it until an actual conflicting fetch or invalidation. */
+    static uint32_t ram[0x200000u / 4u];
+    const uint32_t pc = 0x80023000u, index = (pc >> 2) & 1023u;
+    const uint32_t stub[4] = {0x8fa80018u, 0u, 0x01000008u, 0u};
+    psx_icache_bind_memory((const uint8_t *)ram, sizeof ram, NULL);
+    psx_icache_reset();
+    memcpy(ram + 0x23000u / 4u, stub, sizeof stub);
+    psx_icache_fetch(&cpu, pc);
+    for (unsigned i = 0; i < 4; ++i) ram[0x23000u / 4u + i] = 0xffffffffu;
+    for (unsigned i = 0; i < 4; ++i)
+        if (!expect(psx_icache_read_cached(pc + 4u*i, 0xffffffffu) == stub[i],
+                    "RAM stores preserve all four cached trampoline words")) return 1;
+    if (!expect(psx_icache_block_stale(pc, 4u),
+                "native block cannot execute the overwritten RAM image")) return 1;
+    if (!expect(!psx_icache_block_stale(0xa0023000u, 4u),
+                "uncached native block has no stale cache dependency")) return 1;
+    if (!expect(psx_icache_read_cached(0xa0023000u, 0xffffffffu) == 0xffffffffu,
+                "uncached alias observes changed RAM")) return 1;
+    if (!expect(psx_icache_shadow_record_begin(), "record cache contents")) return 1;
+    psx_icache_fetch(&cpu, pc + 0x1000u);
+    if (!expect(psx_icache_read_cached(pc, 0xffffffffu) == 0xffffffffu,
+                "native conflicting-line fetch evicts cached trampoline")) return 1;
+    if (!expect(psx_icache_shadow_replay_begin(), "restore recorded cache contents")) return 1;
+    if (!expect(psx_icache_read_cached(pc, 0xffffffffu) == stub[0],
+                "shadow replay restores bytes as well as tags")) return 1;
+    psx_icache_shadow_replay_end();
+    if (!expect(psx_icache_read_cached(pc, 0xffffffffu) == 0xffffffffu,
+                "shadow end restores suspended contents")) return 1;
+    memcpy(ram + 0x23000u / 4u, stub, sizeof stub);
+    psx_icache_fetch(&cpu, pc + 8u);
+    if (!expect(g_psx_icache_tv[index] != pc &&
+                psx_icache_read_cached(pc + 8u, 0xffffffffu) == stub[2],
+                "partial refill leaves earlier words invalid")) return 1;
+    psx_icache_isolated_store(pc, 0x804u);
+    if (!expect(psx_icache_read_cached(pc + 8u, 0xffffffffu) == 0xffffffffu,
+                "isolated invalidation discards cached instructions")) return 1;
+
+    puts("PASS: I-cache timing, contents, eviction, aliases, isolation and shadow restore");
     return 0;
 }

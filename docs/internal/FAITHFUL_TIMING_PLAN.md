@@ -1,5 +1,10 @@
 # Faithful Timing Core — Game Plan (psxrecomp)
 
+2026-10-06, PS1G-73 Assignment 7: instruction-cache contents candidate on
+`fix/ps1g-73-icache`, outside pin H. Cache-state unit proof passes; native
+block integration, Formula One 99 and full regression measurements are pending.
+See [execution model](../EXECUTION_MODEL.md#instruction-cache-contents).
+
 2026-09-12 local integration: restore inherited GTE arithmetic/register and MDEC
 output-completion behavior before PGXP consumers. Scope, controls and separate
 packing limit: [core retention](../CORE_CORRECTNESS_RETENTION.md). No timing-mode,

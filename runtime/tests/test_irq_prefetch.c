@@ -54,8 +54,8 @@ int main(int argc,char**argv){
  if(irq==3)c.cop0[12]=0x100; /* pending/enabled IP0, IEc clear */
  c.gpr[19]=0x1004;c.gpr[27]=alias|0x508;
  if(setup){c.cop0[12]=0x600000;c.cop0[13]=0;}
- psx_bios_activate(&backend);debug_cpu_ptr=&c;memory_set_sr_ptr(&c.cop0[12]);psx_icache_reset();g_psx_icache_active=1;
- if(warm && alias<0xa0000000u)for(unsigned i=0;i<4;i++)g_psx_icache_tv[0x500/4+i]=(alias|0x500)+4*i;
+ psx_bios_activate(&backend);debug_cpu_ptr=&c;memory_set_sr_ptr(&c.cop0[12]);psx_icache_bind_memory(memory_get_ram_ptr(),0x200000u,NULL);psx_icache_reset();g_psx_icache_active=1;
+ if(warm && alias<0xa0000000u)for(unsigned i=0;i<4;i++){g_psx_icache_tv[0x500/4+i]=(alias|0x500)+4*i;g_psx_icache_words[0x500/4+i]=psx_read_word(0x500+4*i);}
  g_input_instruction_histogram_active=1;g_input_instruction_histogram_callback=__wrap_input_instruction_histogram_sample;psx_next_service_cycle=1000000;
  dispatch_call(&c,setup?0x80000600u:alias|0x508,0xbfc00200);psx_cyc_batch_flush();
  printf("{\"cycles\":%llu,\"r8\":%u,\"memory\":%u,\"stores\":%u,\"epc\":%u,\"sr\":%u,\"cause\":%u,\"pc\":%u,\"events\":[",(unsigned long long)psx_cycle_count,c.gpr[8],psx_read_word(0x1000),stores,c.cop0[14],c.cop0[12],c.cop0[13],c.pc);

@@ -62,13 +62,15 @@ extern "C" {
  *       BS_SEC_DMA_SRC layout, but served_until is the last service point and
  *       link is the SyncMode 1 block start.
  * v15 = v14 plus the ordinary GPU FIFO and pending default GPU block DMA. */
-#define BOOT_STATE_VERSION 15u
+/* v16 includes instruction-cache bytes: stale words cannot be reconstructed
+ * from the saved RAM, so tag-only states are not executable snapshots. */
+#define BOOT_STATE_VERSION 16u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v15 therefore rejects every earlier state. */
-#define BOOT_STATE_VERSION_MIN_READ 15u
+ * runtime's blob to a new loader. v16 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 16u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
@@ -124,7 +126,7 @@ enum {
     BS_SEC_SIO    = 0x0D,  /* SIO regs + pad-config FSM + memcard FSM             */
     BS_SEC_DIRTY  = 0x0E,  /* dirty-RAM page bitmap (guest-written code pages)    */
     BS_SEC_MDEC   = 0x0F,  /* MDEC command/FIFOs/quant/scale (FMV decode resume)  */
-    BS_SEC_ICACHE = 0x10,  /* R3000A I-cache tag/valid words (1024 u32) — fetch
+    BS_SEC_ICACHE = 0x10,  /* R3000A I-cache tags and contents (2048 u32) — fetch
                               cost model. Host-persistent otherwise: a warm load
                               without it replays with the pre-load timeline's
                               cache, so fetch-miss cycles differ per peer/retry

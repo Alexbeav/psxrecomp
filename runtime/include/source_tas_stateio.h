@@ -51,8 +51,9 @@
  * v12-t172-test-a -> v13-t172-test-b (test pin B): boot state v13; source-DMA
  * wire rewritten (PS1B-186).
  * v13-t172-test-b -> v14-t172-test-b2: PS1B-186 spec v2 changes what the source-DMA
- * fields mean (served_until, link) with the layout unchanged. */
-#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v14-t172-test-b2"
+ * fields mean (served_until, link) with the layout unchanged.
+ * v16-icache-contents: cache instruction bytes are part of saved execution. */
+#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v16-icache-contents"
 
 /* Guest RAM accessor (memory.c). Declared here so the manifest/digest call
  * sites — including C++ — share one C-linkage declaration. */

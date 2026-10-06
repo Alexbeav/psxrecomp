@@ -44,7 +44,7 @@ INACTIVE_READER(source_gpu_raster_wire_read)
 INACTIVE_READER(timers_source_wire_read)
 INACTIVE_READER(source_gpu_service_wire_read)
 void timers_set_snapshot(const uint16_t a[3],const uint32_t b[3],const uint16_t c[3],const int32_t d[3],const uint32_t e[3]){(void)a;(void)b;(void)c;(void)d;(void)e;mutations++;}
-uint32_t g_psx_icache_tv[1024];
+uint32_t g_psx_icache_tv[1024], g_psx_icache_words[1024];
 int main(void) {
  reset_gpu_state_for_test(); dma_init();
  BsOut o={0}; o.no_zlib=1;
@@ -63,16 +63,18 @@ int main(void) {
   case BS_SEC_SPAD:n=SPAD_SIZE;break;case BS_SEC_IRQ:case BS_SEC_CLOCK:n=8;break;
   case BS_SEC_TIMER:n=48;break;case BS_SEC_GPU:n=gpu_snapshot_bytes();break;
   case BS_SEC_VRAM:n=VRAM_SIZE;break;case BS_SEC_SPURAM:n=sizeof spuram;break;
-  case BS_SEC_DMA:n=dma_snapshot_bytes();break;case BS_SEC_ICACHE:n=4096;break;case BS_SEC_IRQ_TIMING:n=64;break;
+  case BS_SEC_DMA:n=dma_snapshot_bytes();break;case BS_SEC_ICACHE:n=8192;break;case BS_SEC_IRQ_TIMING:n=64;break;
   }
   uint8_t *p=calloc(1,n);
   if(tag==BS_SEC_CPU) assert(cpu_state_wire_write(p,&saved));
   if(tag==BS_SEC_GPU){gpu_snapshot_write(p);gpu_at=o.len+16;}
   if(tag==BS_SEC_DMA)dma_snapshot_write(p);
+  if(tag==BS_SEC_ICACHE){PstW w;pst_w_init(&w,p+4096,4096);assert(pst_w_u32(&w,0x8fa80018u));}
   assert(write_section_raw(&o,tag,0,p,n));free(p);
  }
  /* A valid full stream first proves this fixture reaches and applies commit. */
  assert(boot_state_load_buffer(o.data,o.len,0,0,&live));assert(live.pc==saved.pc);
+ assert(g_psx_icache_words[0]==0x8fa80018u);
  CPUState before={0};before.pc=0x5678;live=before;
  test_ram[0]=0xaabbccdd;psx_cycle_count=123;mutations=0;
  uint8_t *ram_before=malloc(RAM_SIZE);memcpy(ram_before,test_ram,RAM_SIZE);

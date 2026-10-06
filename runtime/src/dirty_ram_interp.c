@@ -582,6 +582,16 @@ static inline uint32_t fetch_word(uint32_t phys) {
          | ((uint32_t)ram[phys + 3] << 24);
 }
 
+/* Execution observes cached instructions; scanners and data reads observe RAM.
+ * Refills and their cycle cost remain at the instruction's existing boundary. */
+static inline uint32_t fetch_instruction(uint32_t pc) {
+#if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
+    return psx_icache_read_cached(pc, fetch_word(pc & 0x1FFFFFFFu));
+#else
+    return fetch_word(pc & 0x1FFFFFFFu);
+#endif
+}
+
 /* Widescreen render-funnel cull detection for the interpreter ([widescreen.cull]
  * auto_screen_x). A `sltiu …,0x140/0x141` is widened ONLY when its enclosing
  * render function also carries a `sltiu …,0xE0/0xF1` (the GTE per-vertex trivial-
@@ -1513,15 +1523,14 @@ static int source_dirty_irq_before(CPUState *cpu,uint32_t pc) {
 }
 static int exec_one(CPUState *cpu, uint32_t pc, uint32_t *next_pc_out) {
     if(source_dirty_irq_before(cpu,pc))return 1;
-    return exec_one_fetched(cpu, pc, fetch_word(pc & 0x1FFFFFFFu), next_pc_out);
+    return exec_one_fetched(cpu, pc, fetch_instruction(pc), next_pc_out);
 }
 
 /* Forward: helper for delay-slot execution on jumps/branches. */
 static int exec_delay_slot(CPUState *cpu,uint32_t pc,uint32_t target,int taken) {
     /* Delay-slot instruction at pc must NOT be a control transfer.
      * Recursively interpret as a single non-branching instruction. */
-    uint32_t ds_phys = pc & 0x1FFFFFFFu;
-    uint32_t insn = fetch_word(ds_phys);
+    uint32_t insn = fetch_instruction(pc);
     if(source_gpu_runtime_active() && precise_irq_before(cpu,pc) &&
        irq_epc_resumable(pc-4u)) {
         if(psx_check_interrupts_delay_slot(cpu,pc,target,taken,insn)) {
@@ -2117,7 +2126,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             XRES(XRES_NONLOCAL);
             return dispatch_nonlocal_call(cpu, target, return_pc, next_pc_out);
         }
-        if (!dirty_ram_word_looks_decodable(fetch_word(target & 0x1FFFFFFFu))) {
+        if (!dirty_ram_word_looks_decodable(fetch_instruction(target))) {
             XRES(XRES_UNDECODABLE);
             return dispatch_nonlocal_call(cpu, target, return_pc, next_pc_out);
         }
@@ -2780,7 +2789,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     uint32_t pc = cpu->pc;
     g_slice_last_block    = pc;
     g_slice_last_first_pc = pc;
-    g_slice_last_first_insn = fetch_word(pc & 0x1FFFFFFFu);
+    g_slice_last_first_insn = fetch_instruction(pc);
     g_slice_exit_pc = pc;
     g_slice_exit_reason = 0;
     g_slice_exit_iter = 0;
@@ -2966,9 +2975,8 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     g_exec_phase = prev_phase;
 }
 
-/* Precise-slice gate (PARKED default OFF). Hot callers use the cpu_state.h
- * inline which returns 0 when this is 0 — no out-of-line call. Opt in with
- * PSX_PRECISE_SLICE=1 (same binary A/B). */
+/* Event-slicing policy. Cache-content safety is checked independently before
+ * this gate, including when precise event slicing is disabled. */
 int g_psx_precise_slice = 0;
 
 void dirty_ram_checkpoint_resume(CPUState *cpu) {
@@ -3093,6 +3101,16 @@ void psx_slice_diag_write(const char *dir) {
 }
 
 int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int side_effects) {
+    /* A native body describes the RAM image, not stale cache contents. Keep
+     * such a block in the shared interpreter until a dispatchable boundary. */
+#if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
+    if (psx_icache_block_stale(block_addr, bcyc)) {
+        psx_cyc_batch_flush();
+        cpu->pc = block_addr;
+        psx_run_precise(cpu, bcyc, 0);
+        return 1;
+    }
+#endif
     /* PARKED (PRECISE_IRQ_SLICE.md): precise take-point slicing is a later
      * correctness upgrade, NOT the current FMV blocker (that is the -8 cycle
      * drift / faithful per-instruction cycle model — see CLAUDE.md Rule -1). */
@@ -3399,7 +3417,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
          * still fail closed via the decodability check. */
         if (phys < (2u * 1024u * 1024u) &&
             phys_is_overlay_region(phys) &&
-            dirty_ram_word_looks_decodable(fetch_word(phys))) {
+            dirty_ram_word_looks_decodable(fetch_instruction(addr))) {
             dirty_ram_mark_executable_range(phys, 4u);
         } else {
             return 0;
@@ -3571,7 +3589,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
 #ifdef PSX_COSIM
         { extern void cosim_block(uint32_t); cosim_block(pc); }
 #endif
-        uint32_t insn = fetch_word(pc & 0x1FFFFFFFu);
+        uint32_t insn = fetch_instruction(pc);
 #ifndef PSX_NO_DEBUG_TOOLS
         uint32_t before_s0 = cpu->gpr[16];
         uint32_t before_ra = cpu->gpr[31];
@@ -3952,7 +3970,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
         current_page = next_page;
     }
     g_dirty_ram_last_unsupported_pc = pc;
-    g_dirty_ram_last_unsupported_insn = fetch_word(pc & 0x1FFFFFFFu);
+    g_dirty_ram_last_unsupported_insn = fetch_instruction(pc);
     g_dirty_ram_last_unsupported_reason = "instruction guard";
     g_dirty_ram_guard_yields++;
     g_dirty_ram_blocks_run++;

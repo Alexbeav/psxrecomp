@@ -10,6 +10,10 @@ extern "C" {
 #endif
 
 extern uint32_t g_psx_icache_tv[1024];
+extern uint32_t g_psx_icache_words[1024];
+void psx_icache_bind_memory(const uint8_t *ram, uint32_t ram_size, const uint8_t *rom);
+uint32_t psx_icache_read_cached(uint32_t address, uint32_t memory_word);
+int psx_icache_block_stale(uint32_t address, uint32_t words);
 extern int g_psx_icache_active;
 extern int g_ls_replay_active;
 extern void (*g_psx_cpu_step_boundary_callback)(CPUState *, uint32_t, uint64_t);

@@ -12,6 +12,23 @@ either compiled to native code the first time it appears, or run by a tiny
 built-in interpreter until it is — so the game is always **correct**, and gets
 **faster** the more it's played.
 
+## Instruction-cache contents
+
+Guest stores change RAM, but do not replace instructions already fetched into
+the CPU's instruction cache. The shared cache records 1,024 instruction words
+alongside its tags. Native and interpreted fetches fill and evict the same
+lines; partial refills, uncached aliases and isolated invalidation keep the
+existing timing rules. Interpreter execution uses the cached view; diagnostic
+memory scans still inspect RAM.
+
+At a native block boundary, cached words that differ from the guarded RAM image
+send execution through the interpreter to a dispatchable continuation. This
+also applies to native overlay callbacks. It does not add a per-title patch.
+
+Boot-state version 16 saves the words with the tags, and rejects older tag-only
+states because overwritten instructions cannot be reconstructed from saved RAM.
+Lockstep shadow state and the deterministic clock digest also include contents.
+
 ## Why a PS1 game can't just be "decompiled once"
 
 A PlayStation game is not one fixed blob of code sitting in memory. The main
