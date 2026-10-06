@@ -52,20 +52,16 @@ std::string region_from_serial(const std::string& serial) {
     return std::string();
 }
 
-// Normalize a scanned EXE-style id "SCUS_942.36" to the game-id form
-// "SCUS-94236". Pass-through for things already in game-id form. Returns ""
-// if the token doesn't look like a serial.
-std::string normalize_serial(const std::string& raw) {
-    std::string s;
-    for (char c : raw) {
-        if (std::isalnum((unsigned char)c)) s += (char)std::toupper((unsigned char)c);
-        // drop separators ('_', '.', '-')
-    }
-    // Expect 4 letters + 5 digits.
-    if (s.size() < 9) return std::string();
-    for (int i = 0; i < 4; i++) if (!std::isalpha((unsigned char)s[i])) return std::string();
-    for (int i = 4; i < 9; i++) if (!std::isdigit((unsigned char)s[i])) return std::string();
-    return s.substr(0, 4) + "-" + s.substr(4, 5);
+// A boot file name with a fifth letter where the underscore is: "SLUSP012.06"
+// is SLUS-01206 (Dragon Warrior VII; disc 2 is SLUSP013.46). Read only in
+// this exact shape and behind a known territory prefix. Returns "" otherwise.
+std::string five_letter_boot_serial(const std::string& raw) {
+    if (raw.size() != 11 || raw[8] != '.') return std::string();
+    for (int i = 0; i < 5; i++) if (!std::isalpha((unsigned char)raw[i])) return std::string();
+    for (int i : {5, 6, 7, 9, 10}) if (!std::isdigit((unsigned char)raw[i])) return std::string();
+    const std::string prefix = uppercase_ascii(raw.substr(0, 4));
+    if (region_from_serial(prefix).empty()) return std::string();
+    return prefix + "-" + raw.substr(5, 3) + raw.substr(9, 2);
 }
 
 // Scan the SYSTEM.CNF text region for the BOOT serial. PSX SYSTEM.CNF holds a
@@ -95,7 +91,7 @@ std::string scan_boot_serial(const std::vector<uint8_t>& buf) {
         }
         const size_t slash = token.find_last_of("\\/");
         if (slash != std::string::npos) token = token.substr(slash + 1);
-        const std::string norm = normalize_serial(token);
+        const std::string norm = disc_serial_from_boot_name(token);
         if (!norm.empty()) return norm;
     }
     return std::string();
@@ -186,6 +182,37 @@ bool crc32_chd(PS1::ISOReader& disc, uint32_t& result) {
 }
 
 }  // namespace
+
+// Normalize a scanned EXE-style id "SCUS_942.36" to the game-id form
+// "SCUS-94236". Pass-through for things already in game-id form. Returns ""
+// if the token doesn't look like a serial.
+std::string disc_serial_from_boot_name(const std::string& raw) {
+    std::string s;
+    for (char c : raw) {
+        if (std::isalnum((unsigned char)c)) s += (char)std::toupper((unsigned char)c);
+        // drop separators ('_', '.', '-')
+    }
+    // Expect 4 letters + 5 digits.
+    bool usual = s.size() >= 9;
+    for (int i = 0; usual && i < 4; i++) usual = std::isalpha((unsigned char)s[i]) != 0;
+    for (int i = 4; usual && i < 9; i++) usual = std::isdigit((unsigned char)s[i]) != 0;
+    if (usual) return s.substr(0, 4) + "-" + s.substr(4, 5);
+    return five_letter_boot_serial(raw);
+}
+
+bool disc_serial_is(const std::string& detected, const std::string& listed) {
+    if (detected.empty() || listed.empty()) return false;
+    const std::string read = uppercase_ascii(detected);
+    if (read == uppercase_ascii(listed)) return true;
+    // Another spelling of the same serial. The listed text must be a serial
+    // and nothing more: an id with a character too many stays a mismatch.
+    std::string s;
+    for (char c : listed)
+        if (std::isalnum((unsigned char)c)) s += c;
+    const bool whole = s.size() == 9 ||
+                       (s.size() == 10 && std::isalpha((unsigned char)s[4]));
+    return whole && read == disc_serial_from_boot_name(listed);
+}
 
 void apply_netplay_disc_expect(DiscIdentity& id, const NetplayDiscExpect& expect) {
     id.netplay_ok = true;
@@ -313,8 +340,7 @@ DiscIdentity identify_disc(const fs::path& path,
                         needle.begin(), needle.end()) != scan.end();
                 };
                 v.serial_matches = contains(serial_id) || contains(exe_id) ||
-                    (!v.detected_serial.empty() &&
-                     v.detected_serial == serial_id);
+                    disc_serial_is(v.detected_serial, serial_id);
             }
         } else {
             v.detail = "The CHD header is present, but its data track could not be scanned.";
@@ -393,8 +419,7 @@ DiscIdentity identify_disc(const fs::path& path,
                        scan.end();
             };
             v.serial_matches = contains(serial_id) || contains(exe_id);
-            if (!v.serial_matches && !v.detected_serial.empty() &&
-                v.detected_serial == serial_id)
+            if (!v.serial_matches && disc_serial_is(v.detected_serial, serial_id))
                 v.serial_matches = true;  // boot line agrees even if the literal bytes differ
         }
     } else {

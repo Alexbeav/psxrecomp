@@ -87,4 +87,22 @@ DiscIdentity identify_disc(const std::filesystem::path& path,
 // Apply / re-apply netplay mount policy onto an already-identified disc.
 void apply_netplay_disc_expect(DiscIdentity& id, const NetplayDiscExpect& expect);
 
+// The serial that a boot file name or a listed game id stands for, in the
+// "SCUS-94236" form, or "" when the text is not a serial.
+//   SCUS_942.36, SCUS-94236, scus94236   the usual spellings
+//   SLUSP012.06                          a fifth letter where the underscore
+//                                        is (Dragon Warrior VII): SLUS-01206
+// The fifth-letter spelling is read only in that exact shape (five letters,
+// three digits, a dot, two digits) and only behind a territory prefix that
+// region_from_serial knows, so that an unrelated file name does not become a
+// serial (PS1B-371).
+std::string disc_serial_from_boot_name(const std::string& name);
+
+// True when `detected` (a serial that identify_disc read from a disc) is the
+// serial that `listed` spells. `listed` is what a game.toml gives: the game-id
+// form, or a boot file name as it is on the disc (a set made by Workbench
+// Studio lists Dragon Warrior VII's discs as SLUSP012.06 and SLUSP013.46).
+// Empty text equals nothing.
+bool disc_serial_is(const std::string& detected, const std::string& listed);
+
 }  // namespace PSXRecompV4

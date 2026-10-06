@@ -2541,12 +2541,14 @@ static void replay_identity_follow_disc(const std::string& serial,
 
 /* True when `image` is the disc of the set with this serial. The serial read
  * from the image decides when there is one; an image without a readable boot
- * serial is judged the way the launch check judges it. */
+ * serial is judged the way the launch check judges it. The set may list a
+ * disc by its boot file name (SLUSP013.46), so the two are compared as
+ * serials, not as text (PS1B-371). */
 static bool disc_image_carries_serial(const std::filesystem::path& image,
                                       const std::string& detected,
                                       const std::string& serial) {
     if (!detected.empty())
-        return uppercase_ascii(detected) == uppercase_ascii(serial);
+        return PSXRecompV4::disc_serial_is(detected, serial);
     const PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
         image, serial, /*expected_crc*/0, /*has_expected_crc*/false,
         /*compute_crc*/false);
