@@ -14,7 +14,9 @@ changed output from the updated upstream emitter.
 ## Quick start: Windows x64
 
 Install **Git, Python 3.11 or newer, CMake 3.24 or newer, Ninja, and a UCRT
-MinGW GCC toolchain**. Put their executables on PATH. The validated compiler is
+MinGW GCC toolchain**. Put their executables on PATH, with the compiler's `bin`
+folder first, in PowerShell and in Git Bash alike: see the recipe in
+[Windows toolchain traps](../../docs/WINDOWS_TOOLCHAIN_TRAPS.md). The validated compiler is
 WinLibs GCC 16.1.0, x86_64 UCRT POSIX SEH. MSYS2 users should use the UCRT64
 environment, not MINGW64/MSVCRT. Python uses only its standard library.
 Allow several GB of disk space and a few minutes for the initial build.
@@ -31,7 +33,10 @@ The setup verifies all three original disc tracks and the BIOS before building.
 It binds the original CUE and tracks in place, caches the verified boot executable
 and BIOS, downloads the TAS, preserves every input, builds the tools, runs their
 tests, generates BIOS/game C, checks all 57 generated source fingerprints, and
-builds the player. BIOS emitter freshness checking stays enabled. No emulator, reference oracle,
+builds the player. When the build cache reuses the tools, setup runs no tool test: it prints
+`Tools test gate DID NOT RUN in this setup` with the test count of the cached run, and
+`Tools test gate ran in this setup` with the count when it ran them.
+BIOS emitter freshness checking stays enabled. No emulator, reference oracle,
 Ghidra, prebuilt game binary, generated game C, or files from the research
 workspace are required. No retail disc, firmware, or extracted game code is
 distributed in the branch.

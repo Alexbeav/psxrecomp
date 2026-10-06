@@ -109,11 +109,17 @@ Host quirks, each found the hard way:
 
 ## Build environment
 
-**Launch native builds from PowerShell, not Bash.** Git Bash puts Git's own `mingw64\bin`
-first on PATH, whose 2025 libstdc++ cannot load the WinLibs GCC 16 tool binaries. Under ctest
-that appears as processes parked at 0 CPU in an `LpcReply` wait with every test timing out at
-1500 s, which reads like a hang and is not one. The lane's `.ps1` drivers pin the WinLibs
-runtime first and drop Git's copy.
+**Put the WinLibs `mingw64\bin` first on PATH, in every shell.** The recipe is at the top of
+[`docs/WINDOWS_TOOLCHAIN_TRAPS.md`](../WINDOWS_TOOLCHAIN_TRAPS.md). Git Bash puts Git's own
+`mingw64\bin` first on PATH, whose 2025 libstdc++ cannot load the WinLibs GCC 16 tool binaries.
+Under ctest that appears as processes parked at 0 CPU in an `LpcReply` wait with every test
+timing out at 1500 s, which reads like a hang and is not one. A native shell fails the same
+way when any other toolchain's runtime comes first, so "use PowerShell, not Bash" is not the
+rule: the order of PATH is. The lane's `.ps1` drivers pin the WinLibs runtime first and drop
+Git's copy.
+
+A tools build-cache hit runs no test. Setup says so in one line (`Tools test gate DID NOT RUN
+in this setup`) with the count of the cached run; quote that count as cached, not as run.
 
 The runtime's starvation watchdog is wall-clock. With several replays and builds running, a host
 stall once killed two unrelated multi-hour routes in the same second, so `run_native.py` sets it

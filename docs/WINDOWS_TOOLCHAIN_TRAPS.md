@@ -8,6 +8,32 @@ time before it was recognised.
 
 If a failure here looks like a product defect, check this list before believing it.
 
+## Before you build, test or quote a count: the recipe
+
+Use it in every shell, PowerShell and Git Bash alike. The traps below explain each step.
+
+1. Put the `bin` folder of the toolchain that builds the tools first on `PATH`. Do it before
+   you configure, build or test, in the shell that runs them:
+
+       PowerShell   $env:PATH = "<toolchain>\mingw64\bin;$env:PATH"
+       Git Bash     export PATH="<toolchain>/mingw64/bin:$PATH"
+
+   `<toolchain>` is the WinLibs UCRT folder, or `ucrt64` of MSYS2.
+2. Build into a short directory, for example `C:\t\tools`. A long one makes CMake print
+   `CMAKE_OBJECT_PATH_MAX` warnings that bury the test-registration guard line.
+3. Run `psxrecomp-game --help` from the build directory. It must exit 0 and print usage.
+   Run ctest only after that.
+4. When a run is red, look for the symptom, a non-zero exit with both streams empty. Do not
+   look for one exit code.
+
+**The cause is the order of `PATH`, not the shell.** "Git Bash breaks the test programs, use
+PowerShell" is a shallower rule that was written down twice, and it is wrong on the next host.
+Git Bash fails because it puts Git's own `mingw64\bin` first. A native shell fails the same
+way (exit -1073741511, nothing on either stream) when another toolchain's `libstdc++-6.dll`
+comes first. On the host where the rule was first written, miniconda and Git sat at `PATH`
+positions 2 and 9 and the build toolchain at 66; PowerShell worked there only because it does
+not add Git's folder. With step 1 both shells work.
+
 ## A binary that cannot load reads as a stale binary
 
 `psxrecomp-game` links `libstdc++-6.dll` and `libgcc_s_seh-1.dll`. If a different toolchain's
@@ -97,6 +123,26 @@ died at image load. With the gate, the same tree measured 0 of 189.
 
 Three tests are `DISABLED` deliberately (`recompiler/CMakeLists.txt`) and report as
 `Not Run (Disabled)`. Those are expected and are not breakage.
+
+## A build-cache hit is not a test run
+
+The TAS setups reuse the tools stage, which is the three emitters and their ctest run, when
+its content key matches (`docs/tasreplays/build-cache.md`). A reused stage runs no test. The
+console used to say only `Build cache hit (tools)`, so a setup whose tests had never run on
+that tree read like a setup whose tests had passed.
+
+Setup now prints one of these lines, and writes the same numbers to
+`build_cache.tools.tests` in `setup.json`:
+
+    Tools test gate ran in this setup: 279 tests executed, 0 failed (...); tests taken from the build cache: 0
+    Tools test gate DID NOT RUN in this setup (build cache hit): 0 tests executed here; cached verdict of <time> at source_head <commit>: 279 tests executed, 0 failed (...)
+
+The count is the number of tests that ran and were judged. Skipped and disabled tests are
+named beside it and are not in it. A ctest run that examined no test stops the setup: ctest
+itself ends with exit 0 when it finds none.
+
+**Rule:** quote the number of tests executed, and say whether this run executed them or took
+them from the cache. `setup --no-build-cache` or `--tools-dir` makes the setup run them.
 
 ## A hand-rolled hash of CMake-read files is wrong on a CRLF checkout
 
