@@ -1093,6 +1093,19 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_backend_constant_codegen.py
                     --recompiler $<TARGET_FILE:psxrecomp-bios>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # tools/bios_emitter_fingerprint.sh takes its file list from the
+        # psxrecomp-bios target above. CMake hands the test its own list of
+        # that target's sources, so the script's reading of this file is held
+        # to the authority in both directions; the test also checks the
+        # verdicts of runtime/bios_stale_check.cmake (PS1B-131).
+        add_test(
+            NAME bios_emitter_fingerprint
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_emitter_fingerprint.py
+                    --target-sources "$<JOIN:$<TARGET_PROPERTY:psxrecomp-bios,SOURCES>,$<COMMA>>"
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        set_tests_properties(bios_emitter_fingerprint PROPERTIES SKIP_RETURN_CODE 77)
         add_test(
             NAME stall_report
             COMMAND ${Python3_EXECUTABLE}
