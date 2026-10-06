@@ -82,7 +82,7 @@ extern "C" {
 typedef struct {
     uint32_t magic;          /* BOOT_STATE_MAGIC                                  */
     uint32_t version;        /* BOOT_STATE_VERSION                                */
-    /* ---- integrity key (every field must match to accept) ---- */
+    /* ---- integrity key (exact match or documented version migration) ---- */
     uint32_t bios_checksum;  /* sum of all uint32 words in the BIOS ROM           */
     uint32_t entry_pc;       /* game PS-EXE entry PC                              */
     uint32_t codegen_hash;   /* PSX_OVERLAY_CODEGEN_HASH (auto-gen by cmake)      */

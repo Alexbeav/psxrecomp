@@ -92,8 +92,19 @@ int main(void) {
  legacy[4]=15;test_ram[0]=0xdeadbeefu;
  assert(boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
  assert(legacy_restores==1u && g_psx_icache_words[0]==0x2408002au);
+ {PstW w;pst_w_init(&w,legacy+16,4);assert(pst_w_u32(&w,0x25fd1f54u));}
+ assert(boot_state_load_buffer(legacy,o.len-4096u,0,0,&live)==
+        ((uint32_t)PSX_OVERLAY_CODEGEN_HASH==0x7074b438u));
+ unsigned restores_before_reject=legacy_restores;
+ const unsigned integrity_offsets[]={8,12,20,24,32};
+ for(unsigned k=0;k<sizeof(integrity_offsets)/sizeof(integrity_offsets[0]);k++){
+  unsigned at=integrity_offsets[k];legacy[at]^=1u;
+  assert(!boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));legacy[at]^=1u;
+ }
+ assert(legacy_restores==restores_before_reject);
+ legacy[16]^=1u;assert(!boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
  o.data[4]=15;assert(!boot_state_load_buffer(o.data,o.len,0,0,&live));
- assert(legacy_restores==1u);o.data[4]=BOOT_STATE_VERSION;free(legacy);
+ assert(legacy_restores==restores_before_reject);o.data[4]=BOOT_STATE_VERSION;free(legacy);
  CPUState before={0};before.pc=0x5678;live=before;
  test_ram[0]=0xaabbccdd;psx_cycle_count=123;mutations=0;
  uint8_t *ram_before=malloc(RAM_SIZE);memcpy(ram_before,test_ram,RAM_SIZE);

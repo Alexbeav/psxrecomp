@@ -907,7 +907,15 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
                  (unsigned)h.entry_pc, (unsigned)entry_pc);
         boot_state_append_reason(reason, reason_cap, part);
     }
-    if (h.codegen_hash != (uint32_t)PSX_OVERLAY_CODEGEN_HASH) {
+    /* Pin H's v15 guest-state layout is unchanged by the native cache guard.
+     * Only cpu_state.h's inline admission policy changed in the hash inputs;
+     * CPU layout, emitter and ABI are identical. Limit this import to that
+     * exact hash pair: later codegen changes must establish their own migration.
+     * Overlay DLL admission and TAS checkpoint identity stay strict. */
+    const int pin_h_import = h.version == 15u &&
+        h.codegen_hash == 0x25fd1f54u &&
+        (uint32_t)PSX_OVERLAY_CODEGEN_HASH == 0x7074b438u;
+    if (h.codegen_hash != (uint32_t)PSX_OVERLAY_CODEGEN_HASH && !pin_h_import) {
         snprintf(part, sizeof(part), "codegen_hash=%08X(want %08X)",
                  (unsigned)h.codegen_hash,
                  (unsigned)PSX_OVERLAY_CODEGEN_HASH);

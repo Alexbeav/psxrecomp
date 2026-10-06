@@ -28,7 +28,11 @@ also applies to native overlay callbacks. It does not add a per-title patch.
 Boot-state version 16 saves the words with the tags. Version 15 player saves
 remain readable: after restoring RAM, the loader fills every valid tag from
 restored memory, matching the old runtime at the load point. Older formats remain
-refused. TAS checkpoint compatibility is separate and requires new checkpoints.
+refused. Pin H codegen hash `25fd1f54` imports only into the cache-guard hash
+`7074b438`: the hashed change is the inline admission policy, with the emitter
+and guest-state layout unchanged. BIOS, entry, ABI, codegen version and section
+checks still apply. Overlay loading stays strict. TAS checkpoint compatibility
+is separate and requires new checkpoints.
 Lockstep shadow state and the deterministic clock digest also include contents.
 
 ## Why a PS1 game can't just be "decompiled once"
