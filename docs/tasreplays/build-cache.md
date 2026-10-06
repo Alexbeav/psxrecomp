@@ -61,6 +61,19 @@ the cache entry. Miss: configure, build and ctest run into the entry's `build/` 
 failed ctest leaves no entry). An explicit `--tools-dir` keeps today's behaviour (always reconfigure,
 rebuild and retest) and bypasses this stage of the cache.
 
+A hit runs no test, and the setup says so (PS1B-125). Each setup prints one line for the tools test
+gate, read from the ctest summary in `test-tools.log`:
+
+```
+Tools test gate ran in this setup: <n> tests executed, <f> failed (<s> skipped and <d> disabled are not in that count); tests taken from the build cache: 0
+Tools test gate DID NOT RUN in this setup (build cache hit): 0 tests executed here; cached verdict of <built_at> at source_head <sha>: <n> tests executed, <f> failed (...)
+```
+
+`<n>` is the number of tests that ran and were judged: ctest's "out of N" less the tests that
+returned their skip code. A run whose log shows no executed test (ctest ends with exit 0 when it
+finds none) stops the setup and stores no entry. The entry's receipt keeps the counts as
+`ctest_counts`.
+
 ### Stage 2 — generated set (BIOS C + game C)
 
 ```
@@ -156,6 +169,16 @@ today, then store.
   "native":    {"key": "<hex>", "hit": false, "entry": "<path>", "built_at": "<iso>", "source_head": "<sha>"}
 }
 ```
+
+The `tools` block also carries what the test gate examined:
+
+```
+"tests": {"ran_here": false, "executed_here": 0, "cached": 279, "failed": 0, "skipped": 4, "disabled": 7}
+```
+
+`executed_here` is the number of tests this setup ran itself, and `cached` the number behind a
+reused verdict. On a miss `ran_here` is true, `executed_here` holds the count and `cached` is 0.
+`failed`, `skipped` and `disabled` belong to the run the verdict comes from.
 
 `source_head` in each block is the commit whose setup produced the entry, so a reused stage always
 names the tree it came from even when the current setup runs on another commit with identical trees.

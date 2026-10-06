@@ -302,45 +302,120 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
 
     # ------------------------------------------------ stage flows with synthetic builders
     calls = []
+    # The end of a real ctest log: 290 registered, 7 disabled, 4 skipped, so 279 executed.
+    CTEST_END = ('290/290 Test #211: source_tree_unchanged ...................   Passed    0.20 sec\n\n'
+                 '100% tests passed, 0 tests failed out of 283\n\nTotal Test time (real) =  58.03 sec\n\n'
+                 'The following tests did not run:\n'
+                 + ''.join(f'\t{number:3d} - {name} ({reason})\n' for number, name, reason in [
+                     (19, 'tas_gpu_polygon_wrap_O0', 'Disabled'), (23, 'tas_gpu_oracle_replay_O0', 'Skipped'),
+                     (24, 'tas_gpu_oracle_timing_O0', 'Skipped'), (40, 'tas_gpu_polygon_wrap_O2', 'Disabled'),
+                     (44, 'tas_gpu_oracle_replay_O2', 'Skipped'), (45, 'tas_gpu_oracle_timing_O2', 'Skipped'),
+                     (181, 'interpreter_perf_guards', 'Disabled'), (182, 'runtime_perf_diag_guards', 'Disabled'),
+                     (283, 'tas_cdrom_source_cdda_O0', 'Disabled'), (285, 'tas_cdrom_source_cdda_O2', 'Disabled'),
+                     (290, 'tas_cd_read_sample_order', 'Disabled')]))
+    COUNTS = {'executed': 279, 'failed': 0, 'skipped': 4, 'disabled': 7}
 
-    def fake_tools(tools_dir):
-        calls.append(('tools', tools_dir))
-        for name in bc.TOOL_EXES:
-            write(tools_dir / name, b'built ' + name.encode())
-        for name in bc.TOOLS_LOGS:
-            write(P / name, name + ' output\n')
+    def fake_tools_for(project, test_log=CTEST_END):
+        def run(tools_dir):
+            calls.append(('tools', tools_dir))
+            for name in bc.TOOL_EXES:
+                write(tools_dir / name, b'built ' + name.encode())
+            for name in bc.TOOLS_LOGS:
+                write(project / name, (test_log if name == bc.TEST_LOG else '') + name + ' output\n')
+        return run
 
     def tools_doc():
         return {'trees': trees2, 'cmake_args': bc.cmake_key_args(tools_argv, bc.TOOLS_DROP), 'toolchain': TOOLCHAIN, 'source_date_epoch': bc.SOURCE_DATE_EPOCH}
 
     P = root / 'stage-p'; P.mkdir()
+    fake_tools = fake_tools_for(P)
+    RAN = {'ran_here': True, 'executed_here': 279, 'cached': 0, 'failed': 0, 'skipped': 4, 'disabled': 7}
     tools_dir, record = bc.stage_tools(None, repo, P, None, tools_doc, fake_tools, head)
     assert tools_dir == P / 'tools' and calls == [('tools', P / 'tools')] and record['key'] is None and record['hit'] is False
+    assert record['tests'] == RAN
     explicit = root / 'explicit-tools'
     tools_dir, record = bc.stage_tools(cache, repo, P, explicit, tools_doc, fake_tools, head)
     assert tools_dir == explicit and calls[-1] == ('tools', explicit) and record['key'] is None and record['entry'] is None
-    assert not (cache / 'tools').exists()
-    tools_dir, record = bc.stage_tools(cache, repo, P, None, tools_doc, fake_tools, head)
+    assert record['tests'] == RAN and not (cache / 'tools').exists()
+    said = io.StringIO()
+    with redirect_stdout(said):
+        tools_dir, record = bc.stage_tools(cache, repo, P, None, tools_doc, fake_tools, head)
     key = bc.key_of(tools_doc())
     assert tools_dir == cache / 'tools' / key / 'build'
     assert calls[-1][1] == cache / 'tools' / f'{key}.partial-{os.getpid()}' / 'build'  # built inside the partial entry
     assert '.partial-' in str(calls[-1][1]) and record == {'key': key, 'hit': False, 'entry': str(cache / 'tools' / key),
-                                                          'built_at': record['built_at'], 'source_head': head}
+                                                          'built_at': record['built_at'], 'source_head': head, 'tests': RAN}
+    # A miss runs the gate and says how many tests it executed; none came from the cache.
+    assert ('Tools test gate ran in this setup: 279 tests executed, 0 failed '
+            '(4 skipped and 7 disabled are not in that count); tests taken from the build cache: 0') in said.getvalue()
+    assert 'DID NOT RUN' not in said.getvalue()
     stored = bc.lookup(cache, 'tools', key)
     assert stored and set(stored.receipt['files']) == {f'build/{n}' for n in bc.TOOL_EXES} and set(stored.receipt['logs']) == set(bc.TOOLS_LOGS)
     assert stored.receipt['ctest_exit'] == 0 and stored.receipt['inputs'] == tools_doc() and stored.receipt['project'] == str(P)
+    assert stored.receipt['ctest_counts'] == COUNTS
     Q = root / 'stage-q'; Q.mkdir()
     count = len(calls)
-    tools_dir2, record2 = bc.stage_tools(cache, repo, Q, None, tools_doc, fake_tools, head)
+    said = io.StringIO()
+    with redirect_stdout(said):
+        tools_dir2, record2 = bc.stage_tools(cache, repo, Q, None, tools_doc, fake_tools_for(Q), head)
     assert tools_dir2 == tools_dir and len(calls) == count and record2['hit'] is True and record2['entry'] == str(cache / 'tools' / key)
     for name in bc.TOOLS_LOGS:
         assert (Q / name).read_text().splitlines()[0].startswith('# build-cache hit:') and (Q / name).read_text().endswith(name + ' output\n')
+    # A hit skips ctest. It must say that this setup executed no test, and give the count of
+    # the run whose verdict it reuses: a reused verdict with no count reads as a pass (PS1B-125).
+    assert record2['tests'] == {'ran_here': False, 'executed_here': 0, 'cached': 279, 'failed': 0, 'skipped': 4, 'disabled': 7}
+    assert ('Tools test gate DID NOT RUN in this setup (build cache hit): 0 tests executed here; '
+            f'cached verdict of {record["built_at"]} at source_head {head}: 279 tests executed, 0 failed '
+            '(4 skipped and 7 disabled are not in that count)') in said.getvalue()
+    assert 'Tools test gate ran in this setup' not in said.getvalue()
     # A failing build leaves neither an entry nor a partial.
     def failing(tools_dir):
         raise RuntimeError('ctest failed')
     other_doc = lambda: {**tools_doc(), 'toolchain': {**TOOLCHAIN, 'gcc': 'other'}}
     rejects(lambda: bc.stage_tools(cache, repo, Q, None, other_doc, failing, head), RuntimeError)
     assert bc.lookup(cache, 'tools', bc.key_of(other_doc())) is None and not list((cache / 'tools').glob('*.partial-*'))
+
+    # What a ctest log says was examined. Skipped tests are inside ctest's "out of N" and
+    # are taken out here; disabled tests are outside it.
+    assert bc.ctest_counts(P / bc.TEST_LOG) == COUNTS
+    assert bc.ctest_counts(root / 'absent.log') is None
+    assert bc.ctest_counts(write(root / 'none.log', 'No tests were found!!!\n')) is None
+    red = write(root / 'red.log', '99% tests passed, 1 tests failed out of 238\n\nThe following tests FAILED:\n'
+                                  '\t164 - load_delay_overlay_transport (Failed)\n')
+    assert bc.ctest_counts(red) == {'executed': 238, 'failed': 1, 'skipped': 0, 'disabled': 0}
+    crlf = write(root / 'crlf.log', CTEST_END.replace('\n', '\r\n'))
+    assert bc.ctest_counts(crlf) == COUNTS
+    # ctest spells a clean run in two ways; the build hosts and the CI runner differ. A
+    # reader of only one spelling finds no summary in every clean log of the other host.
+    short = write(root / 'short.log', CTEST_END.replace('100% tests passed, 0 tests failed out of 283',
+                                                         '100% tests passed out of 283'))
+    assert '0 tests failed' not in short.read_text() and bc.ctest_counts(short) == COUNTS
+    # A gate that examined nothing is not a pass: ctest ends with exit 0 when it finds no
+    # test. Such a run stops the setup and leaves no entry to serve later, cache or not.
+    empty_doc = lambda: {**tools_doc(), 'toolchain': {**TOOLCHAIN, 'gcc': 'empty'}}
+    for number, empty in enumerate(('No tests were found!!!\n', '100% tests passed, 0 tests failed out of 0\n',
+                                    '100% tests passed, 0 tests failed out of 2\n\nThe following tests did not run:\n'
+                                    '\t  1 - a (Skipped)\n\t  2 - b (Skipped)\n')):
+        E = root / f'stage-empty-{number}'; E.mkdir()
+        for cache_root in (cache, None):
+            rejects(lambda: bc.stage_tools(cache_root, repo, E, None, empty_doc, fake_tools_for(E, empty), head),
+                    RuntimeError, 'the tools test gate examined nothing')
+        assert bc.lookup(cache, 'tools', bc.key_of(empty_doc())) is None and not list((cache / 'tools').glob('*.partial-*'))
+    # An entry whose stored log holds no summary (none can be stored now): the hit still
+    # says that the gate did not run here, and says that the count is unknown.
+    old_doc = lambda: {**tools_doc(), 'toolchain': {**TOOLCHAIN, 'gcc': 'old'}}
+    O = root / 'stage-old'; O.mkdir()
+    fake_tools_for(O, '')(O / 'build')
+    bc.store(cache, 'tools', bc.key_of(old_doc()), {f'build/{name}': O / 'build' / name for name in bc.TOOL_EXES},
+             {name: O / name for name in bc.TOOLS_LOGS},
+             {'inputs': old_doc(), 'ctest_exit': 0, 'built_at': 'then', 'source_head': head, 'project': str(O)})
+    N = root / 'stage-new'; N.mkdir()
+    said = io.StringIO()
+    with redirect_stdout(said):
+        _, unknown = bc.stage_tools(cache, repo, N, None, old_doc, fake_tools_for(N), head)
+    assert unknown['hit'] is True
+    assert unknown['tests'] == {'ran_here': False, 'executed_here': 0, 'cached': None, 'failed': None, 'skipped': None, 'disabled': None}
+    assert 'DID NOT RUN in this setup' in said.getvalue() and 'test count UNKNOWN' in said.getvalue()
 
     # Generated stage: miss on P writes the set; hit on Q copies it (with census outputs).
     gen_root = root / 'gen-repo'
