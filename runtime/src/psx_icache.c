@@ -37,6 +37,16 @@ static uint32_t cache_memory_word(uint32_t address)
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
+/* Version 15 stored timing tags but executed RAM bytes. Reconstruct only
+ * after snapshot RAM is restored; retain tags and charge no guest cycles. */
+void psx_icache_restore_legacy_words(void)
+{
+    for (unsigned i = 0; i < 1024u; ++i) {
+        uint32_t pc = g_psx_icache_tv[i];
+        g_psx_icache_words[i] = (pc & 3u) ? 0u : cache_memory_word(pc);
+    }
+}
+
 static uint32_t recorded_tags[1024], suspended_tags[1024];
 static uint32_t recorded_words[1024], suspended_words[1024];
 

@@ -800,11 +800,13 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         return psx_mod_memory_snapshot_read(p, len);
     case BS_SEC_ICACHE: {
         PstR r;
-        if (len != 1024u * 8u) return 0;
+        if (len != 1024u * 4u && len != 1024u * 8u) return 0;
         pst_r_init(&r, p, len);
         for (uint32_t i = 0; i < 1024u; i++)
             if (!pst_r_u32(&r, &g_psx_icache_tv[i])) return 0;
-        for (uint32_t i = 0; i < 1024u; i++)
+        if (len == 1024u * 4u)
+            psx_icache_restore_legacy_words();
+        else for (uint32_t i = 0; i < 1024u; i++)
             if (!pst_r_u32(&r, &g_psx_icache_words[i])) return 0;
         return 1;
     }
@@ -932,7 +934,7 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
  * BEFORE any section is applied. Without this, a failure part-way through left a
  * HALF-APPLIED machine (live state changed, replay then runs on a mix), and the
  * first failing section masked every later one. */
-static int section_shape_ok(uint32_t tag, uint32_t len) {
+static int section_shape_ok(uint32_t tag, uint32_t len, uint32_t version) {
     switch (tag) {
     case BS_SEC_CPU:        return len == CPU_REGS_WIRE_BYTES;
     case BS_SEC_CPU_EXEC:   return len == DIRTY_RAM_CHECKPOINT_BYTES;
@@ -952,7 +954,7 @@ static int section_shape_ok(uint32_t tag, uint32_t len) {
     case BS_SEC_DMA:        return len == dma_snapshot_bytes();
     case BS_SEC_SIO:        return sio_snapshot_shape_ok(len);
     case BS_SEC_MDEC:       return 1; /* variable FIFO lengths: mdec_snapshot_prepare */
-    case BS_SEC_ICACHE:     return len == 1024u * 8u;
+    case BS_SEC_ICACHE:     return len == 1024u * (version == 15u ? 4u : 8u);
     case BS_SEC_DIRTY:      return (len % 4u) == 0u;
     case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;
     case BS_SEC_GPU_SERVICE:return len == SOURCE_GPU_SERVICE_WIRE_BYTES;
@@ -1177,7 +1179,7 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
             free(owned); /* unknown sections remain forward-compatible */
             continue;
         }
-        if ((seen & (1u << tag)) || !section_shape_ok(tag, raw_len)) {
+        if ((seen & (1u << tag)) || !section_shape_ok(tag, raw_len, h.version)) {
             free(owned);
             goto cleanup;
         }

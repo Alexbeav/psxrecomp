@@ -2,7 +2,7 @@
 
 2026-10-06, PS1G-73 Assignment 7: instruction-cache contents candidate on
 `fix/ps1g-73-icache`, outside pin H. Cache-state unit proof passes; native
-block integration, Formula One 99 and full regression measurements are pending.
+block integration passes the preliminary Formula One 99 timed boot. Version15 player-save conversion passes focused loader/cache tests; final-head game and full regression measurements are pending.
 See [execution model](../EXECUTION_MODEL.md#instruction-cache-contents).
 
 2026-09-12 local integration: restore inherited GTE arithmetic/register and MDEC

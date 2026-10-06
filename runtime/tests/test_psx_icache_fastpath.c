@@ -145,6 +145,14 @@ int main(void) {
     if (!expect(psx_icache_read_cached(pc + 8u, 0xffffffffu) == 0xffffffffu,
                 "isolated invalidation discards cached instructions")) return 1;
 
-    puts("PASS: I-cache timing, contents, eviction, aliases, isolation and shadow restore");
+    psx_icache_fetch(&cpu, pc);
+    ram[0x23000u / 4u] = 0x2408002au;
+    uint64_t before_restore = test_cycles;
+    psx_icache_restore_legacy_words();
+    if (!expect(psx_icache_read_cached(pc, 0u) == 0x2408002au &&
+                g_psx_icache_tv[index] == pc && test_cycles == before_restore,
+                "v15 import fills valid tags from RAM without a timing change")) return 1;
+
+    puts("PASS: I-cache timing, contents, eviction, aliases, isolation, shadow restore and v15 import");
     return 0;
 }

@@ -25,8 +25,10 @@ At a native block boundary, cached words that differ from the guarded RAM image
 send execution through the interpreter to a dispatchable continuation. This
 also applies to native overlay callbacks. It does not add a per-title patch.
 
-Boot-state version 16 saves the words with the tags, and rejects older tag-only
-states because overwritten instructions cannot be reconstructed from saved RAM.
+Boot-state version 16 saves the words with the tags. Version 15 player saves
+remain readable: after restoring RAM, the loader fills every valid tag from
+restored memory, matching the old runtime at the load point. Older formats remain
+refused. TAS checkpoint compatibility is separate and requires new checkpoints.
 Lockstep shadow state and the deterministic clock digest also include contents.
 
 ## Why a PS1 game can't just be "decompiled once"

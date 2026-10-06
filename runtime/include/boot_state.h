@@ -62,15 +62,15 @@ extern "C" {
  *       BS_SEC_DMA_SRC layout, but served_until is the last service point and
  *       link is the SyncMode 1 block start.
  * v15 = v14 plus the ordinary GPU FIFO and pending default GPU block DMA. */
-/* v16 includes instruction-cache bytes: stale words cannot be reconstructed
- * from the saved RAM, so tag-only states are not executable snapshots. */
+/* v16 includes instruction-cache bytes. Version 15 is imported by filling
+ * valid tags from restored memory, matching that runtime at the load point. */
 #define BOOT_STATE_VERSION 16u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v16 therefore rejects every earlier state. */
-#define BOOT_STATE_VERSION_MIN_READ 16u
+ * runtime's blob to a new loader. v16 accepts v15 through explicit conversion. */
+#define BOOT_STATE_VERSION_MIN_READ 15u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 

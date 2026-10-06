@@ -45,6 +45,13 @@ INACTIVE_READER(timers_source_wire_read)
 INACTIVE_READER(source_gpu_service_wire_read)
 void timers_set_snapshot(const uint16_t a[3],const uint32_t b[3],const uint16_t c[3],const int32_t d[3],const uint32_t e[3]){(void)a;(void)b;(void)c;(void)d;(void)e;mutations++;}
 uint32_t g_psx_icache_tv[1024], g_psx_icache_words[1024];
+static unsigned legacy_restores;
+void psx_icache_restore_legacy_words(void) {
+ /* Cache-owner conversion is tested in test_psx_icache_fastpath. Here prove
+  * the full loader calls it after RAM is committed, only for the v15 shape. */
+ assert(test_ram[0]==0x2408002au);legacy_restores++;
+ g_psx_icache_words[0]=test_ram[0];
+}
 int main(void) {
  reset_gpu_state_for_test(); dma_init();
  BsOut o={0}; o.no_zlib=1;
@@ -54,7 +61,7 @@ int main(void) {
  const unsigned tags[]={BS_SEC_CPU,BS_SEC_CPU_EXEC,BS_SEC_RAM,BS_SEC_SCHED,BS_SEC_BOOTFLOW,BS_SEC_SPAD,BS_SEC_IRQ,BS_SEC_TIMER,BS_SEC_CLOCK,BS_SEC_GPU,BS_SEC_VRAM,BS_SEC_SPU,BS_SEC_SPURAM,BS_SEC_CDROM,BS_SEC_DMA,BS_SEC_SIO,BS_SEC_MDEC,BS_SEC_ICACHE,BS_SEC_DIRTY,BS_SEC_IRQ_TIMING};
  h.section_count=sizeof(tags)/sizeof(tags[0]); assert(write_header_le(&o,&h));
  CPUState saved={0},live={0};saved.pc=0x1234;live.pc=0x5678;
- size_t gpu_at=0;
+ size_t gpu_at=0,icache_at=0;
  for(unsigned i=0;i<h.section_count;i++) {
   unsigned tag=tags[i],n=4;
   switch(tag){
@@ -67,14 +74,26 @@ int main(void) {
   }
   uint8_t *p=calloc(1,n);
   if(tag==BS_SEC_CPU) assert(cpu_state_wire_write(p,&saved));
+  if(tag==BS_SEC_RAM){PstW w;pst_w_init(&w,p,n);assert(pst_w_u32(&w,0x2408002au));}
   if(tag==BS_SEC_GPU){gpu_snapshot_write(p);gpu_at=o.len+16;}
   if(tag==BS_SEC_DMA)dma_snapshot_write(p);
-  if(tag==BS_SEC_ICACHE){PstW w;pst_w_init(&w,p+4096,4096);assert(pst_w_u32(&w,0x8fa80018u));}
+  if(tag==BS_SEC_ICACHE){PstW w;icache_at=o.len+16;pst_w_init(&w,p,n);assert(pst_w_u32(&w,0x80000000u));pst_w_init(&w,p+4096,4096);assert(pst_w_u32(&w,0x8fa80018u));}
   assert(write_section_raw(&o,tag,0,p,n));free(p);
  }
  /* A valid full stream first proves this fixture reaches and applies commit. */
  assert(boot_state_load_buffer(o.data,o.len,0,0,&live));assert(live.pc==saved.pc);
- assert(g_psx_icache_words[0]==0x8fa80018u);
+ assert(g_psx_icache_words[0]==0x8fa80018u && !legacy_restores);
+ /* A real v15 stream has tags only; v16 must not accept that short shape. */
+ uint8_t *legacy=malloc(o.len-4096u);
+ memcpy(legacy,o.data,icache_at+4096u);
+ memcpy(legacy+icache_at+4096u,o.data+icache_at+8192u,o.len-icache_at-8192u);
+ {PstW w;pst_w_init(&w,legacy+icache_at-8u,8u);assert(pst_w_u64(&w,4096u));}
+ assert(!boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
+ legacy[4]=15;test_ram[0]=0xdeadbeefu;
+ assert(boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
+ assert(legacy_restores==1u && g_psx_icache_words[0]==0x2408002au);
+ o.data[4]=15;assert(!boot_state_load_buffer(o.data,o.len,0,0,&live));
+ assert(legacy_restores==1u);o.data[4]=BOOT_STATE_VERSION;free(legacy);
  CPUState before={0};before.pc=0x5678;live=before;
  test_ram[0]=0xaabbccdd;psx_cycle_count=123;mutations=0;
  uint8_t *ram_before=malloc(RAM_SIZE);memcpy(ram_before,test_ram,RAM_SIZE);

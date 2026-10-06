@@ -18,6 +18,7 @@ extern int g_psx_icache_active;
 extern int g_ls_replay_active;
 extern void (*g_psx_cpu_step_boundary_callback)(CPUState *, uint32_t, uint64_t);
 void psx_icache_reset(void);
+void psx_icache_restore_legacy_words(void);
 int psx_icache_enabled(void);
 void psx_icache_fetch(CPUState *, uint32_t);
 void psx_icache_fetch_miss(CPUState *, uint32_t);
