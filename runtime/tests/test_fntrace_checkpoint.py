@@ -1,4 +1,4 @@
-"""A restored game-start latch must not repeat destructive boot-only actions."""
+"""Game entry preserves guest RAM; a restored latch skips host handoff actions."""
 import argparse
 from pathlib import Path
 import tempfile
@@ -11,4 +11,4 @@ if __name__ == '__main__':
         for opt in ('-O0','-O2'):
             build_and_run(a.cc,here,here.parent,opt,Path(folder),
                           ['fntrace.c'],'test_fntrace_checkpoint.c')
-    print('PASS: restored game-start latch skips boot-only clears (O0/O2)')
+    print('PASS: game entry preserves guest RAM and restored latch skips handoff (O0/O2)')

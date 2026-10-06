@@ -182,14 +182,6 @@ int memory_peek_instruction_word(uint32_t address, uint32_t *value) {
 }
 uint8_t *memory_get_scratchpad_ptr(void) { return scratchpad; }
 
-void memory_clear_low_boot_scratch(void) {
-    /* Game entry is a host bookkeeping event. The source profile preserves
-     * guest RAM across it, including BIOS scratch and trampoline words. */
-    if (source_gpu_runtime_active()) return;
-    memset(ram, 0, 0x10u);
-    psx_kernel_bless_note_range(0u, 0x10u);   /* raw write: see the rule there */
-}
-
 /* ---- Dirty-page tracking for install-at-runtime code (CLAUDE.md Rule 18) ----
  *
  * The PS1 BIOS writes 4-instruction dispatch stubs into kernel RAM at runtime
