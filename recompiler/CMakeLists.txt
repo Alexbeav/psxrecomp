@@ -1145,6 +1145,14 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_package_payload_filter.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The bash the two gate tests below run a script with must not be a
+        # WSL launcher. On a host whose PATH puts System32 before Git it was,
+        # and both failed with exit 127 for no fault of the tree (PS1B-271).
+        add_test(
+            NAME host_bash
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_host_bash.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME setup_private_path_gate
             COMMAND ${Python3_EXECUTABLE}
