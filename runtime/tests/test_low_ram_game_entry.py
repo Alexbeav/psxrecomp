@@ -10,10 +10,18 @@ import re
 import tempfile
 from pathlib import Path
 
+import source_fixture_link
 from source_fixture_link import build_and_run
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE.parent / "src"
+
+# The fixture and memory.c compare bytes with memcmp, and Clang calls bcmp for
+# a memcmp that is only tested for equality. A host without a static libc.a
+# (Rocky 9) gives the link helper no list of the C library's functions; its
+# fixed list lacks these two names, so it linked an aborting stub in their
+# place and the fixture's first check stopped there.
+source_fixture_link.ISO_C_FALLBACK |= {"memcmp", "bcmp"}
 
 
 def body(text, signature):
@@ -60,4 +68,5 @@ if __name__ == "__main__":
             build_and_run(args.cc, HERE, HERE.parent, opt, Path(root),
                           ["memory.c", "fntrace.c", "netplay_state_digest.c", "crc32.c"],
                           "test_low_ram_game_entry.c")
-    print("PASS: game entry keeps RAM 0..15; the older-recording view is exact (O0/O2)")
+    print("PASS: game entry keeps RAM 0..15; the older-recording view is exact; "
+          "its SWL/SWR limit is unchanged (O0/O2)")

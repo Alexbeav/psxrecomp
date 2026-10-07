@@ -168,6 +168,19 @@ if(BUILD_TESTING)
     add_executable(break_vector_enter_test tests/test_break_vector_enter.c)
     target_include_directories(break_vector_enter_test PRIVATE include)
     add_test(NAME break_vector_enter_test COMMAND break_vector_enter_test)
+    # PS1G-39: game entry leaves guest RAM 0..15 as the kernel left it, and a
+    # replay recorded by a build that zeroed those bytes still compares them
+    # as that build held them. Links the real memory.c, fntrace.c and
+    # netplay_state_digest.c. The driver's link helper reads nm's listing and
+    # GNU ld's messages, so the test is registered for GCC, and for Clang on
+    # Linux, where Clang links through GNU ld (the sanitizer gate).
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
+            OR (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        add_test(NAME low_ram_game_entry_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_low_ram_game_entry.py --cc ${CMAKE_C_COMPILER})
+    else()
+        message(STATUS "low_ram_game_entry_test: not registered (its link helper needs GCC, or Clang on Linux; this is ${CMAKE_C_COMPILER_ID} on ${CMAKE_SYSTEM_NAME})")
+    endif()
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         add_test(NAME break_guest_vector_interp_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_break_guest_vector_interp.py --cc ${CMAKE_C_COMPILER})
@@ -185,12 +198,6 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_changethread_in_handler.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME overlay_dispatch_region_counters_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_dispatch_region_counters.py --cc ${CMAKE_C_COMPILER})
-        # PS1G-39: game entry leaves guest RAM 0..15 as the kernel left it,
-        # and a replay recorded by a build that zeroed those bytes still
-        # compares them as that build held them. Links the real memory.c,
-        # fntrace.c and netplay_state_digest.c.
-        add_test(NAME low_ram_game_entry_test COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_low_ram_game_entry.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME tas_resume_interval_test COMMAND ${Python3_EXECUTABLE}
             ${PSXRECOMP_ROOT}/tools/tasreplays/test_resume_interval.py)
         foreach(_opt IN ITEMS 0 2)

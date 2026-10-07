@@ -146,10 +146,12 @@ the real bytes. So the recording stays in sync when the game behaves the same,
 and goes out of sync when the game reads those bytes and takes another path.
 That is a real difference between the two builds, and the replay reports it.
 
-The other direction has no such view. A recording with the line, played on an
-older build, goes out of sync when the game starts, because the older build
-still sets the bytes to zero. That build says "Replay from a different build:
-it may go out of sync" before it plays.
+The other direction has no such view. A power-on recording with the line,
+played on an older build, goes out of sync when the game starts, because the
+older build still sets the bytes to zero. That build says "Replay from a
+different build: it may go out of sync" before it plays. An F11 recording whose
+anchor was taken after the game started stays in sync on the older build: that
+build loads the anchor's RAM and does not set the bytes to zero again.
 
 ### Memory cards
 
