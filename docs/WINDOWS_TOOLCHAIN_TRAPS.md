@@ -18,7 +18,9 @@ Use it in every shell, PowerShell and Git Bash alike. The traps below explain ea
        PowerShell   $env:PATH = "<toolchain>\mingw64\bin;$env:PATH"
        Git Bash     export PATH="<toolchain>/mingw64/bin:$PATH"
 
-   `<toolchain>` is the WinLibs UCRT folder, or `ucrt64` of MSYS2.
+   `<toolchain>` is the WinLibs UCRT folder. The UCRT toolchain of MSYS2 has no `mingw64`
+   folder: the folder to put first there is `C:\msys64\ucrt64\bin` (`/c/msys64/ucrt64/bin`
+   in Git Bash).
 2. Build into a short directory, for example `C:\t\tools`. A long one makes CMake print
    `CMAKE_OBJECT_PATH_MAX` warnings that bury the test-registration guard line.
 3. Run `psxrecomp-game --help` from the build directory. It must exit 0 and print usage.
