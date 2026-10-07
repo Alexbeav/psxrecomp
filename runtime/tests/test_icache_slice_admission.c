@@ -6,10 +6,14 @@
 #include <string.h>
 
 static uint32_t ram[0x200000u / 4u];
-static int in_exception;
+static int in_exception, dirty = 1;
 extern int g_precise_mode;
 int psx_get_in_exception(void) { return in_exception; }
 uint8_t *memory_get_ram_ptr(void) { return (uint8_t *)ram; }
+uint8_t *g_psx_ram = (uint8_t *)ram;
+int g_ds_recording, g_dma_cpu_read_wait, g_ram_read_watch_active;
+/* Timing credits are disabled; the production guest value delay stays active. */
+int g_psx_load_delay;
 /* No device deadline, IRQ, enhancement or compiled body is involved. The
  * production precision loop must execute ADDIU/JR/NOP from authored cache. */
 uint64_t psx_cycle_count, psx_next_service_cycle = UINT64_MAX;
@@ -18,19 +22,24 @@ uint32_t i_stat, i_mask, g_psx_cyc_batch, g_psx_cyc_batch_limit;
 uint32_t *g_psx_cyc_local_acc;
 int psx_in_device_service, g_event_step_conservative, g_psx_call_bail;
 int source_gpu_runtime_active(void) { return 0; }
-int dirty_ram_is_dirty(uint32_t phys) { (void)phys; return 1; }
+int dirty_ram_is_dirty(uint32_t phys) { (void)phys; return dirty; }
 int psx_is_dispatchable(uint32_t pc) { return pc == 0x80002000u; }
 uint64_t psx_get_cycle_count(void) { return psx_cycle_count; }
 void psx_publish_note(uint32_t site, uint32_t target, uint32_t origin)
 { (void)site; (void)target; (void)origin; }
 int psx_ws_backdrop_preload(void) { return 0; }
 int psx_ws_is_cull_bias_site(uint32_t pc) { (void)pc; return 0; }
+int psx_ws_is_cull_plane_nx_site(uint32_t pc) { (void)pc; return 0; }
+int psx_ws_is_cull_xclip_load_site(uint32_t pc) { (void)pc; return 0; }
 int psx_ws_is_signed_x_bound_site(uint32_t pc, uint32_t insn)
 { (void)pc; (void)insn; return 0; }
 int psx_ws_angle_site(uint32_t pc, uint32_t insn, uint32_t *out)
 { (void)pc; (void)insn; (void)out; return 0; }
 void psx_pgxp_alu(CPUState *cpu, uint32_t insn, uint32_t result, uint32_t a, uint32_t b)
 { (void)cpu; (void)insn; (void)result; (void)a; (void)b; }
+void psx_pgxp_load(CPUState *cpu, uint32_t insn, uint32_t addr, uint32_t result)
+{ (void)cpu; (void)insn; (void)addr; (void)result; }
+extern uint32_t g_slice_exit_reason, g_slice_exit_iter, g_slice_exit_dispatchable, g_slice_exit_dirty;
 
 int main(void)
 {
@@ -75,5 +84,33 @@ int main(void)
     assert(g_icache_execution_stats.stale_fetches == 1u);
     assert(g_icache_execution_stats.first_fetch_pc == pc && g_icache_execution_stats.last_fetch_pc == pc);
     assert(!g_icache_execution_stats.stale_blocks_in_exception && !g_icache_execution_stats.nested_stale_blocks);
+    /* Three precision-loop iterations per lap exceed the old 200,000 guard.
+     * Every loop PC is clean text without a compiled dispatcher entry. */
+    enum { LAPS = 70001 };
+    const uint32_t loop[] = {0x25290001u, 0x256b0004u, 0x152afffdu,
+                             0x8d680000u, 0x250c0001u, 0x03e00008u, 0u};
+    memset(&cpu, 0, sizeof cpu);
+    memset(&g_icache_execution_stats, 0, sizeof g_icache_execution_stats);
+    for (unsigned k = 0; k < sizeof loop / sizeof loop[0]; ++k) {
+        ram[0x1000u / 4u + k] = loop[k];
+        g_psx_icache_tv[index + k] = pc + 4u * k;
+        g_psx_icache_words[index + k] = loop[k];
+    }
+    ram[0x1000u / 4u] = 0x25290002u; /* RAM increments t1 twice as fast. */
+    for (unsigned k = 0; k < LAPS; ++k) ram[0x4000u / 4u + k] = k + 1u;
+    cpu.gpr[10] = LAPS; cpu.gpr[11] = 0x80003ffcu; cpu.gpr[31] = 0x80002000u;
+    dirty = 0;
+    i_stat = 1u; i_mask = 0u; /* Pending IRQ is masked; source profile remains off. */
+    assert(psx_slice_block_impl(&cpu, pc, 7, 0));
+    assert(cpu.pc == cpu.gpr[31] && g_slice_exit_dispatchable);
+    assert(!g_slice_exit_dirty);
+    assert(g_slice_exit_reason == 1u && g_slice_exit_iter > 200000u);
+    assert(cpu.gpr[9] == LAPS && cpu.gpr[8] == LAPS);
+    /* The last LW's immediate consumer reads the preceding lap's value. */
+    assert(cpu.gpr[12] == LAPS && !cpu.load_value_rt && !cpu.load_value_age);
+    assert(cpu.gpr[11] == 0x80003ffcu + 4u * LAPS && !g_precise_mode);
+    assert(g_icache_execution_stats.stale_blocks == 1u);
+    assert(g_icache_execution_stats.stale_fetches == LAPS);
+    assert(g_icache_execution_stats.first_fetch_pc == pc && g_icache_execution_stats.last_fetch_pc == pc);
     puts("PASS: nested admission, BIOS range and actual cached instruction fallback");
 }

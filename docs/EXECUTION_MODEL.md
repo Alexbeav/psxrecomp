@@ -22,8 +22,11 @@ existing timing rules. Interpreter execution uses the cached view; diagnostic
 memory scans still inspect RAM.
 
 At a native block boundary outside an exception or an active precision slice,
-cached words that differ from RAM send execution through the interpreter to a dispatchable continuation. This
-also applies to native overlay callbacks. It does not add a per-title patch.
+cached words that differ from RAM send execution through the interpreter to a
+dispatchable continuation. This also applies to native overlay callbacks. The
+cache-owned slice retains the interpreter past its ordinary host instruction
+guard until that safe continuation, including any pending guest load value.
+It does not add a per-title patch.
 An exception handler keeps its compiled path. The run report's
 `icache_execution.exception_stale_blocks` counts stale blocks skipped by that rule.
 `stale_blocks`, `first_block` and `last_block` identify interpreter admissions.

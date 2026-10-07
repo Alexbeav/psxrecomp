@@ -2785,7 +2785,8 @@ static int precise_pc_dispatchable(CPUState *cpu, uint32_t pc) {
  * IRQ we keep interpreting to the next transfer before handing back to compiled.
  * `bcyc` = originating block's cycle budget; `deadline_entry` = entered because an
  * event is due within bcyc (vs a side-effect-only block, which runs one block). */
-static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
+static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
+                            int cache_owned_slice) {
     int prev_precise = g_precise_mode;
     int prev_active  = g_dirty_interp_active;
     int prev_phase   = g_exec_phase;
@@ -2821,13 +2822,13 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     }
     enum { MAX_PRECISE_INSNS = 200000 };
     /* A host instruction budget cannot retire a pending guest load or create a
-     * generated entry. In the source profile retain ownership until the safe
-     * exit below, even when a branch-slot load spans every lap of a long loop.
+     * generated entry. Source-profile and stale-cache slices retain ownership
+     * until the safe exit below, even when a branch-slot load spans every lap.
      * Each instruction still advances devices and the normal frontend hooks.
-     * Keep the legacy guard outside this explicit profile. Saturate the
+     * Keep the legacy guard for other ordinary event slices. Saturate the
      * diagnostic iteration count rather than overflowing on a guest spin. */
     const int source_owned_slice = source_gpu_runtime_active();
-    for (uint32_t i = 0; source_owned_slice || i < MAX_PRECISE_INSNS;
+    for (uint32_t i = 0; source_owned_slice || cache_owned_slice || i < MAX_PRECISE_INSNS;
          i += i != UINT32_MAX) {
         if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,pc)) {
             uint32_t committed = pc;
@@ -2987,7 +2988,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
 int g_psx_precise_slice = 0;
 
 void dirty_ram_checkpoint_resume(CPUState *cpu) {
-    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1);
+    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1,0);
 }
 
 void psx_precise_slice_init_from_env(void) {
@@ -3135,7 +3136,7 @@ static int slice_block_with_words(CPUState *cpu, uint32_t block_addr,
         if (in_exception) g_icache_execution_stats.stale_blocks_in_exception++;
         psx_cyc_batch_flush();
         cpu->pc = block_addr;
-        psx_run_precise(cpu, bcyc, 0);
+        psx_run_precise(cpu, bcyc, 0, 1);
         return 1;
     }
 #endif
@@ -3309,7 +3310,7 @@ static int slice_block_with_words(CPUState *cpu, uint32_t block_addr,
     {
         extern uint64_t g_dirty_ram_insns_run;
         uint64_t cyc0 = psx_get_cycle_count(), ins0 = g_dirty_ram_insns_run;
-        psx_run_precise(cpu, bcyc, has_deadline);
+        psx_run_precise(cpu, bcyc, has_deadline, 0);
         uint64_t dcyc = psx_get_cycle_count() - cyc0, dins = g_dirty_ram_insns_run - ins0;
         g_sd_sliced++; g_sd_slice_cycles += dcyc; g_sd_slice_insns += dins;
         g_sd_slice_insn_hist[sd_bucket(dins)]++;
