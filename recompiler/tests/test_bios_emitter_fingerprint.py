@@ -18,7 +18,14 @@ second reading of the same files written here in Python:
   4. The hand-kept list of pin H is still computed on request, to the value
      pin H gave. runtime/bios_stale_check.cmake uses it so that a stamp
      written before the list changed is not reported as a stale BIOS, while
-     a real change is.
+     a real change is. Its line for such a stamp names the three sources
+     that the stamp does not cover and calls their state unknown: it must
+     not say "not stale".
+  5. The check says so when it did not run: one line with the exit code
+     when the script fails.
+  6. On a Windows host the check never starts a WSL launcher. It finds a
+     real bash behind one, and with only a launcher it says that it was
+     skipped and why.
 
 Every part prints what it examined.
 """
@@ -308,8 +315,22 @@ def check_behaviour(copy: Tree) -> None:
     print(f"behaviour: {runs} script runs on the copy; added source hashed; unreadable target refused")
 
 
+EARLIER_LIST = "earlier list, the three sources unknown"
+SCRIPT_FAILED = "not checked, script exit 3"
+LAUNCHER = "not checked, wsl launcher"
+
+
+def without_git_folders(env: dict, path: list[str]) -> dict:
+    """`env` with `path` as its PATH and without the names that lead to a Git folder."""
+    hidden = {"PROGRAMFILES", "PROGRAMW6432", "PROGRAMFILES(X86)", "LOCALAPPDATA", "PATH"}
+    kept = {name: value for name, value in env.items() if name.upper() not in hidden}
+    kept["PATH"] = os.pathsep.join(path)
+    return kept
+
+
 def check_stale_verdicts(copy: Tree, cmake: str | None) -> None:
-    """The configure-time check, run alone: which stamps are STALE and which are not."""
+    """The configure-time check, run alone: which stamps are STALE and which are not,
+    and what it says when it could not check."""
     cmake = cmake or shutil.which("cmake")
     if not cmake:
         print("stale check verdicts: NOT RUN (no cmake on this host and no --cmake)")
@@ -317,31 +338,49 @@ def check_stale_verdicts(copy: Tree, cmake: str | None) -> None:
     profile = copy.root / "bios" / "T.toml"
     stamp = copy.root / "generated" / "T.emitter.sha"
     stamp.parent.mkdir(exist_ok=True)
+    said = [""]
 
-    def verdict() -> str:
+    def verdict(bash: str | None = copy.bash, env: dict | None = None) -> str:
+        """Run the check; `bash` is passed as -D_psxrt_bash, None leaves the lookup to it."""
+        given = [f"-D_psxrt_bash={Path(bash).as_posix()}"] if bash else []
         result = subprocess.run(
             [cmake, "-DPSXRECOMP_BIOS_STALE_CHECK_RUN=ON", f"-DPSXRECOMP_ROOT={copy.root.as_posix()}",
              "-DPSXRECOMP_BIOS_STEM=T", f"-DPSXRECOMP_BIOS_PROFILE={profile.as_posix()}",
-             f"-D_psxrt_bash={Path(copy.bash).as_posix()}", "-P", str(STALE_CHECK)],
-            cwd=copy.root, env=copy.env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+             *given, "-P", str(STALE_CHECK)],
+            cwd=copy.root, env=env or copy.env, capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
-        text = result.stdout + result.stderr
+        text = said[0] = " ".join((result.stdout + result.stderr).split())
+        assert text.count("-- psxrecomp:") <= 1, f"more than one line for one verdict: {text}"
         if "is STALE" in text:
             return "stale"
         if "earlier file list" in text:
-            return "earlier list, not stale"
+            return EARLIER_LIST
         if "carries no emitter" in text:
             return "no stamp"
+        if "staleness check skipped" in text and "WSL launcher" in text:
+            return LAUNCHER
+        if "staleness check skipped" in text and "gave no fingerprint (exit 3)" in text:
+            return SCRIPT_FAILED
+        if "staleness check skipped" in text:
+            return "not checked, for a reason this test does not know"
         return "fresh"
 
     current = copy.fingerprint(str(profile))
     hand = copy.fingerprint("--hand-list", str(profile))
     seen = []
 
-    def expect(case: str, wanted: str) -> None:
-        got = verdict()
+    def expect(case: str, wanted: str, **how) -> None:
+        got = verdict(**how)
         seen.append(f"{case}: {got}")
-        assert got == wanted, f"{case}: the check says '{got}', wanted '{wanted}'"
+        assert got == wanted, f"{case}: the check says '{got}', wanted '{wanted}' ({said[0]})"
+
+    def expect_earlier_list(case: str) -> None:
+        """The line for a stamp of the pin H list says what such a stamp can and cannot show."""
+        expect(case, EARLIER_LIST)
+        for name in WAS_BLIND:
+            assert os.path.basename(name) in said[0], f"{case}: the line does not name {name}: {said[0]}"
+        assert "does not cover" in said[0] and "unknown until tools/regen_bios.sh has run" in said[0], said[0]
+        assert "not stale" not in said[0], f"{case}: the line calls the BIOS not stale: {said[0]}"
 
     stamp.unlink(missing_ok=True)
     expect("no stamp", "no stamp")
@@ -349,7 +388,13 @@ def check_stale_verdicts(copy: Tree, cmake: str | None) -> None:
     expect("stamp of this tree", "fresh")
     # A tree stamped at pin H, nothing changed: only the list moved.
     stamp.write_text(hand + "\n", encoding="utf-8")
-    expect("stamp of the pin H list, tree unchanged", "earlier list, not stale")
+    expect_earlier_list("stamp of the pin H list, tree unchanged")
+    # The same stamp after a change to a source the pin H list did not hold. The
+    # stamp cannot show the change, so the check gives the same line. That line
+    # must not call this BIOS "not stale": here it is stale.
+    original = touch(copy.root / "recompiler/src/ps1_exe_parser.cpp")
+    expect_earlier_list("stamp of the pin H list, ps1_exe_parser.cpp changed")
+    (copy.root / "recompiler/src/ps1_exe_parser.cpp").write_bytes(original)
     # The same stamp after a change to a file the pin H list covered: really stale.
     original = touch(copy.root / "recompiler/src/full_function_emitter.cpp")
     expect("stamp of the pin H list, a covered file changed", "stale")
@@ -361,7 +406,59 @@ def check_stale_verdicts(copy: Tree, cmake: str | None) -> None:
     (copy.root / "recompiler/src/ps1_exe_parser.cpp").write_bytes(original)
     stamp.write_text("0" * 64 + "\n", encoding="utf-8")
     expect("a stamp of neither list", "stale")
+
+    # A script that fails is a check that did not run. It says so, with the exit
+    # code: here the script cannot read the target (exit 3). Without the line,
+    # every configure of such a tree would skip the check and print nothing.
+    cmake_lists = copy.root / CMAKE_LISTS
+    original_cmake = cmake_lists.read_text(encoding="utf-8")
+    opening = re.search(r"add_executable\s*\(\s*" + re.escape(TARGET) + r"[ \t]*\n", original_cmake)
+    assert opening, "the copy's CMake text has no psxrecomp-bios block to break"
+    cmake_lists.write_text(original_cmake[:opening.end()] + "    ${BIOS_SOURCES}\n"
+                           + original_cmake[opening.end():], encoding="utf-8", newline="\n")
+    expect("the script cannot read the target", SCRIPT_FAILED)
+    assert Path(copy.bash).as_posix() in said[0], said[0]
+    cmake_lists.write_text(original_cmake, encoding="utf-8", newline="\n")
+    stamp.write_text(current + "\n", encoding="utf-8")
+    expect("the target readable again", "fresh")
     print("stale check verdicts: " + "; ".join(seen))
+
+    # The bash of the check. On a Windows host a bash.exe below %SystemRoot% or
+    # in a Microsoft\WindowsApps folder starts WSL, which cannot run the script
+    # from a Windows path. The check must not start one. The launcher here is an
+    # empty file: if the check started it, the line would be the script-failed
+    # line, not the launcher line.
+    if os.name != "nt":
+        print("stale check bash: launcher cases NOT RUN (they are rules for a Windows host)")
+        return
+    seen.clear()
+    apps = copy.root / "Home" / "AppData" / "Local" / "Microsoft" / "WindowsApps"
+    apps.mkdir(parents=True)
+    alias = apps / "bash.exe"
+    alias.write_bytes(b"")
+    system32 = Path(os.environ.get("SystemRoot") or r"C:\Windows") / "System32" / "bash.exe"
+    only_launcher = without_git_folders(copy.env, [str(apps)])
+    # 1. No bash is named, and the only one on the host is a launcher.
+    expect("only a launcher on PATH", LAUNCHER, bash=None, env=only_launcher)
+    assert alias.as_posix().lower() in said[0].lower() and "-D_psxrt_bash=" in said[0], said[0]
+    # 2. The System32 launcher, named by the caller: not started either.
+    expect("the System32 launcher named with -D_psxrt_bash", LAUNCHER, bash=str(system32), env=only_launcher)
+    assert system32.as_posix().lower() in said[0].lower(), said[0]
+    # 3. A launcher first on PATH and a real bash after it: the real one runs
+    #    the script. find_program(bash) alone returns the launcher here.
+    behind_launcher = without_git_folders(copy.env, [str(apps), copy.env["PATH"]])
+    expect("a launcher first on PATH, a real bash after it", "fresh", bash=None, env=behind_launcher)
+    stamp.write_text("0" * 64 + "\n", encoding="utf-8")
+    expect("the same, with a stamp of neither list", "stale", bash=None, env=behind_launcher)
+    # 4. Git in a usual folder is found although PATH holds only the launcher.
+    usual = [os.environ.get(name) for name in ("ProgramFiles", "ProgramW6432")]
+    if any(base and os.path.isfile(os.path.join(base, "Git", "bin", "bash.exe")) for base in usual):
+        in_usual_folder = dict(copy.env)
+        in_usual_folder["PATH"] = str(apps)
+        expect("Git in Program Files, only a launcher on PATH", "stale", bash=None, env=in_usual_folder)
+    else:
+        seen.append("Git in Program Files: NOT RUN (this host keeps no Git there)")
+    print("stale check bash: " + "; ".join(seen))
 
 
 def main() -> int:
