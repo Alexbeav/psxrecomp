@@ -1292,3 +1292,12 @@ on a fixed region -> next.
   `PSX_PRECISE_SLICE` left in tree (inert). −8 mechanism located in
   code_generator.cpp (delay-slot-is-leader undercount). Tree builds + boots clean.
   NEXT: P1 (cycle-audit) → P2 (delay-slot ownership fix).
+
+- **2026-10-07 (PS1B-288):** The SIO router now passes multitap method-2
+  addresses to the existing pad state machine. Both physical ports pass the
+  seat B/C/D byte and ACK checks in `test_sio_mouse.c`; empty seats and
+  standalone ports stay silent. Source-profile DTR selection uses the same
+  address rule. The five-player identity fixture includes a method-2 poll,
+  so its five-player golden values were refreshed after the unchanged stage
+  passed the old values as a control. Two-player values remain frozen. Independent review,
+  fork CI and the seven Tier 1 trial routes remain separate acceptance work.

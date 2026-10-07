@@ -192,6 +192,79 @@ int main(void) {
     check(sio_get_port_device(1) == SIO_DEVICE_PAD,"netplay seats are pads");
 
 #if PSX_MAX_PLAYERS >= 5
+    /* Method 2 is a direct pad poll, selected by address 02h..04h. Exercise
+     * both tap placements and the card-idle routing path as well as DEV_NONE.
+     * Each seat has distinct buttons, so routing to Slot A cannot pass. */
+    for (int port=0;port<2;++port) {
+        setup_bus();
+        sio_set_multitap_port(port); sio_set_multitap(1);
+        const int base = port ? 1 : 0;
+        for (int s=0;s<PSX_MAX_PLAYERS;++s) {
+            sio_set_port_device(s,SIO_DEVICE_PAD);
+            sio_set_pad_connected(s,1); sio_set_pad_config_capable(s,0);
+            sio_set_pad_state_slot(s,(uint16_t)(0xFFFFu ^ (1u << s)));
+        }
+        for (int addr=2;addr<=4;++addr) {
+            uint8_t tx[5] = { (uint8_t)addr,0x42,0,0,0 }, rx[5],ack[5];
+            txn(port,tx,5,rx,ack);
+            printf("method2: port=%d address=%02X reply=%02X%02X%02X%02X%02X ack=%d%d%d%d%d\n",
+                   port+1,addr,rx[0],rx[1],rx[2],rx[3],rx[4],
+                   ack[0],ack[1],ack[2],ack[3],ack[4]);
+            const uint16_t buttons = (uint16_t)(0xFFFFu ^ (1u << (base+addr-1)));
+            check(rx[0]==0xFF && rx[1]==0x41 && rx[2]==0x5A &&
+                  rx[3]==(uint8_t)buttons && rx[4]==(uint8_t)(buttons>>8),
+                  "method-2 address selects the requested seat");
+            check(ack[0] && ack[1] && ack[2] && ack[3] && !ack[4],
+                  "method-2 poll acknowledges every byte except the last");
+            /* A finished absent-card probe leaves DEV_MEMCARD with MC_IDLE. */
+            sio_write(0x1F80104A,0x1003u|(port ? 0x2000u : 0u));
+            sio_write(0x1F801040,0x81); advance(1344);
+            (void)sio_read(0x1F801040);
+            sio_write(0x1F801040,(uint8_t)addr); advance(1344);
+            (void)sio_read(0x1F801040);
+            check(active_device==DEV_PAD && pad_active_logical==base+addr-1,
+                  "method-2 selection also reaches the pad after an idle card");
+            sio_write(0x1F80104A,0x10); advance(2000); i_stat &= ~0x80u;
+        }
+        {
+            uint8_t tx[5] = { 4,0x42,0,0,0 },rx[5],ack[5];
+            sio_set_pad_connected(base+3,0);
+            txn(port,tx,5,rx,ack);
+            for (int i=0;i<5;++i)
+                check(rx[i]==0xFF && !ack[i],"empty method-2 seat is silent");
+        }
+        for (int addr=2;addr<=5;++addr) {
+            uint8_t tx[5] = { (uint8_t)addr,0x42,0,0,0 },rx[5],ack[5];
+            txn(1-port,tx,5,rx,ack);
+            for (int i=0;i<5;++i)
+                check(rx[i]==0xFF && !ack[i],"standalone port rejects tap addresses");
+        }
+        sio_set_multitap(0);
+    }
+    /* The source pad profiles apply the same selection before their DTR mute. */
+    for (int profile=0;profile<2;++profile) {
+        const char *name = profile ? "nymashock-1.29.0-dualshock" : "octoshock-2.2.2-digital";
+#ifdef _WIN32
+        _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL",name);
+#else
+        setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL",name,1);
+#endif
+        setup_bus(); sio_set_multitap_port(0); sio_set_multitap(1);
+        sio_set_pad_connected(1,1); sio_set_pad_config_capable(1,0);
+        sio_set_pad_state_slot(1,0xFFFD);
+        uint8_t tx[5] = { 2,0x42,0,0,0 },rx[5],ack[5];
+        txn(0,tx,5,rx,ack);
+        check(rx[1]==0x41 && rx[2]==0x5A && rx[3]==0xFD && rx[4]==0xFF,
+              "source pad profile accepts a method-2 DTR session");
+        check(!pad_dtr_session_mute[0],"method-2 address does not mute the tap");
+        sio_set_multitap(0);
+    }
+#ifdef _WIN32
+    _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL","");
+#else
+    unsetenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
+#endif
+
     /* Multitap on port 1, mouse on seat B: its 8-byte block in a bulk read is
      * 12 5A FF <buttons> dX dY FF FF (PSX-SPX multitap method 1). */
     setup_bus();
