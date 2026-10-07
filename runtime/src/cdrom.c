@@ -208,6 +208,23 @@ static uint8_t last_sector_raw_mode;
  * marker cannot collide with a real value; it rides the existing snapshot
  * byte, so it survives a savestate round trip. */
 #define GETLOCL_NO_HEADER 0xFFu
+/* GETLOCL_SEEK_DONE is the same no-header state with one more fact: a SeekL or
+ * SeekP completed and nothing has moved the drive since. The drive cursor
+ * (read_min/sec/sect) is then the seek target and is newer than
+ * last_sector_lba, and GetlocP reports it (PS1G-95). It is set only on the
+ * path without a source clock, so a source-profile snapshot keeps its bytes.
+ * A Pause or a Stop keeps it. A new seek, a read start, Play, ReadTOC and
+ * Init turn it back into GETLOCL_NO_HEADER; a delivered sector replaces it. */
+#define GETLOCL_SEEK_DONE 0xFEu
+static int getlocl_no_header(void) {
+    return last_sector_have_raw == GETLOCL_NO_HEADER ||
+           last_sector_have_raw == GETLOCL_SEEK_DONE;
+}
+/* The drive leaves the completed seek's target. */
+static void getlocp_seek_done_clear(void) {
+    if (last_sector_have_raw == GETLOCL_SEEK_DONE)
+        last_sector_have_raw = GETLOCL_NO_HEADER;
+}
 static uint8_t last_sector_xa_file;
 static uint8_t last_sector_xa_channel;
 static uint8_t last_sector_xa_submode;
@@ -2945,6 +2962,7 @@ static void exec_command(uint8_t cmd) {
         stop_cdda_playback();
         spu_cd_audio_reset();
         xa_reset_decode();
+        getlocp_seek_done_clear();
         stat_reg = has_disc() ? CDSTAT_MOTOR : CDSTAT_SHELL;
         s_source_seek_paused = has_disc() ? 1 : 0;
         response_push(stat_reg);
@@ -3010,8 +3028,7 @@ static void exec_command(uint8_t cmd) {
          * standby case [ORACLE FIXTURE C6]. Whether Stop or Pause also clear
          * the header is [NOT OBSERVED]. Otherwise INT3 with the newest
          * sector's header and subheader. */
-        if ((stat_reg & CDSTAT_SEEK) || cdda_playing ||
-            last_sector_have_raw == GETLOCL_NO_HEADER) {
+        if ((stat_reg & CDSTAT_SEEK) || cdda_playing || getlocl_no_header()) {
             response_push(stat_reg | CDSTAT_ERROR);
             response_push(0x80);
             set_irq(CDIRQ_ERROR);
@@ -3061,12 +3078,21 @@ static void exec_command(uint8_t cmd) {
             /* Spec 6.7 G3: idle drive, drive profile. Without a decoded
              * position the two branches below answer (G4). */
             lba = source_drive_subq_lba;
+        } else if (last_sector_have_raw == GETLOCL_SEEK_DONE) {
+            /* [NOT OBSERVED: release policy] A completed SeekL/SeekP is the
+             * newest position: the drive stands at the seek target and no
+             * sector has been delivered since, so the last delivered sector
+             * is stale. Setloc alone only changes seek_* and does not get
+             * here. Mega Man Legends 2 repeats GetlocP after SeekL until the
+             * reply names the target (PS1G-95;
+             * cdrom_getlocp_after_seek_test). */
+            lba = msf_to_lba(read_min, read_sec, read_sect);
         } else if (last_sector_lba >= 0) {
+            /* Stopped after delivered sectors, which includes a Pause: the
+             * last delivered sector (cdrom_paused_subq_cycle_test). */
             lba = last_sector_lba;
         } else {
-            /* The drive cursor also moves on explicit seeks and survives
-             * Pause. Setloc only changes seek_*, while GetlocL owns the last
-             * data-sector header. Do not use that stale header for GetlocP. */
+            /* Nothing delivered yet: the drive cursor. */
             lba = msf_to_lba(read_min, read_sec, read_sect);
         }
         if (subq_replacements_active) update_last_valid_subq((uint32_t)lba);
@@ -3145,6 +3171,7 @@ static void exec_command(uint8_t cmd) {
                 response_push(stat_reg);set_irq(CDIRQ_ACK);
                 start_source_cdda(param_count?bcd_to_bin(param_fifo[0]):0);break;
             }
+            getlocp_seek_done_clear();
             int requested_track = 0;
             if (param_count >= 1 && param_fifo[0] != 0)
                 requested_track = bcd_to_bin(param_fifo[0]);
@@ -3193,6 +3220,7 @@ static void exec_command(uint8_t cmd) {
         xa_reset_decode();
         spu_cd_audio_reset();
         stop_cdda_playback();
+        getlocp_seek_done_clear();  /* set again when this seek completes */
         s_source_seek_paused = 0; /* source STANDBY after plain seek */
         read_min = seek_min;
         read_sec = seek_sec;
@@ -3233,6 +3261,7 @@ static void exec_command(uint8_t cmd) {
     case 0x1E: /* ReadTOC */
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
+        getlocp_seek_done_clear();
         /* [NOT OBSERVED: release policy] ReadTOC INT2 30,000,000 cycles after
          * the ACK. The oracle's is 30,138,120 from standby and 30,138,872 from
          * reading (C2b row 10). Unscaled. */
@@ -3426,7 +3455,10 @@ static void process_pending(uint32_t cycles) {
         stat_reg &= ~(CDSTAT_SEEK | CDSTAT_READ | CDSTAT_PLAY);
         setloc_seek_far = 0;
         setloc_pending = 0;
-        last_sector_have_raw = GETLOCL_NO_HEADER;
+        /* Without a source clock the completed seek also becomes the position
+         * GetlocP reports. The source profiles keep their own answer. */
+        last_sector_have_raw = s_source_clock ? GETLOCL_NO_HEADER
+                                              : GETLOCL_SEEK_DONE;
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
