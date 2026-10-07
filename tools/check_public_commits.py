@@ -50,8 +50,6 @@ def check_refs(refs, base=PIN_H):
     allowed = set(json.loads(POLICY.read_text(encoding='utf-8')))
     base = git('rev-parse', '--verify', '--end-of-options', base + '^{commit}').strip().decode('ascii')
     tips = [git('rev-parse', '--verify', '--end-of-options', ref + '^{commit}').strip().decode('ascii') for ref in refs]
-    for tip in tips:
-        git('merge-base', '--is-ancestor', base, tip)
     commits = git('rev-list', *tips, '--not', base).decode('ascii').splitlines()
     errors = []
     for commit in commits:

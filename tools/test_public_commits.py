@@ -119,11 +119,21 @@ class GuardTests(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 guard.pre_push('https://github.com/fixture/fixture', [line], self.base)
 
-    def test_missing_baseline_and_unrelated_tree_refused(self):
+    def test_missing_baseline_refused(self):
         with self.assertRaises(subprocess.CalledProcessError):
             guard.check_refs([self.base], 'f' * 40)
-        with self.assertRaises(subprocess.CalledProcessError):
-            self.check(self.commit('unrelated'))
+
+    def test_older_source_branch_preserves_historical_exemption(self):
+        historical = self.base
+        self.base = self.commit('accepted historical pin', parent=historical)
+        self.check(self.commit('maintain earlier source', parent=historical))
+
+    def test_older_source_branch_checks_its_new_commits(self):
+        historical = self.base
+        self.base = self.commit('accepted historical pin', parent=historical)
+        sibling = self.commit('maintain earlier source', parent=historical, author=BAD)
+        with self.assertRaisesRegex(ValueError, 'author'):
+            self.check(sibling)
 
     def test_remote_authority(self):
         for location in ('https://github.com/fixture/x', 'ssh://git@ssh.github.com:443/fixture/x', 'git@github.com:fixture/x'):
