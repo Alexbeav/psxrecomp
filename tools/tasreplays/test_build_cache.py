@@ -410,12 +410,67 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
              {name: O / name for name in bc.TOOLS_LOGS},
              {'inputs': old_doc(), 'ctest_exit': 0, 'built_at': 'then', 'source_head': head, 'project': str(O)})
     N = root / 'stage-new'; N.mkdir()
+    count = len(calls)
     said = io.StringIO()
     with redirect_stdout(said):
         _, unknown = bc.stage_tools(cache, repo, N, None, old_doc, fake_tools_for(N), head)
     assert unknown['hit'] is True
     assert unknown['tests'] == {'ran_here': False, 'executed_here': 0, 'cached': None, 'failed': None, 'skipped': None, 'disabled': None}
     assert 'DID NOT RUN in this setup' in said.getvalue() and 'test count UNKNOWN' in said.getvalue()
+    # Such an entry is served as before: nothing is built, and nothing is refused.
+    assert len(calls) == count and 'Build cache entry refused' not in said.getvalue()
+    assert bc.lookup(cache, 'tools', bc.key_of(old_doc())).receipt['built_at'] == 'then'
+    # An entry whose stored log shows a run that executed no test (none can be stored now,
+    # but a cache can hold one from before the count was read). A pass with no test behind
+    # it is not served: the hit is a miss, the tools are built and tested again in this
+    # setup, and that run replaces the entry (review of PS1B-125).
+    ZERO_END = ('100% tests passed, 0 tests failed out of 2\n\nThe following tests did not run:\n'
+                '\t  1 - a (Skipped)\n\t  2 - b (Skipped)\n')
+    def store_zero(doc, name):
+        Z = root / name; Z.mkdir()
+        fake_tools_for(Z, ZERO_END)(Z / 'build')
+        return bc.store(cache, 'tools', bc.key_of(doc()), {f'build/{exe}': Z / 'build' / exe for exe in bc.TOOL_EXES},
+                        {log: Z / log for log in bc.TOOLS_LOGS},
+                        {'inputs': doc(), 'ctest_exit': 0, 'built_at': 'then', 'source_head': head, 'project': str(Z)})
+    zero_doc = lambda: {**tools_doc(), 'toolchain': {**TOOLCHAIN, 'gcc': 'zero'}}
+    zero_key = bc.key_of(zero_doc())
+    zero = store_zero(zero_doc, 'stage-zero-stored')
+    assert bc.lookup(cache, 'tools', zero_key) is not None and not bc._tools_entry_usable(zero)
+    assert bc.ctest_counts(zero.path / 'logs' / bc.TEST_LOG) == {'executed': 0, 'failed': 0, 'skipped': 2, 'disabled': 0}
+    R = root / 'stage-zero-rerun'; R.mkdir()
+    count = len(calls)
+    said = io.StringIO()
+    with redirect_stdout(said):
+        rerun_dir, rerun = bc.stage_tools(cache, repo, R, None, zero_doc, fake_tools_for(R), head)
+    assert len(calls) == count + 1 and '.partial-' in str(calls[-1][1])  # the builder ran, as on a miss
+    assert rerun['hit'] is False and rerun['tests'] == RAN and rerun['entry'] == str(cache / 'tools' / zero_key)
+    assert (f'Build cache entry refused (tools): {cache / "tools" / zero_key} built then at source_head {head}: '
+            f'its {bc.TEST_LOG} shows 0 tests executed; this setup builds and tests the tools again') in said.getvalue()
+    assert f'Build cache miss (tools): key {zero_key}' in said.getvalue() and 'Build cache hit' not in said.getvalue()
+    assert 'Tools test gate ran in this setup: 279 tests executed' in said.getvalue() and 'DID NOT RUN' not in said.getvalue()
+    # The run with tests behind it is now the entry; the refused one is gone.
+    replaced = bc.lookup(cache, 'tools', zero_key)
+    assert replaced and replaced.receipt['built_at'] != 'then' and replaced.receipt['ctest_counts'] == COUNTS
+    assert rerun_dir == replaced.path / 'build' and bc._tools_entry_usable(replaced)
+    assert not list((cache / 'tools').glob('*.partial-*'))
+    # A later setup gets a hit on it, with the count of that run.
+    L = root / 'stage-zero-later'; L.mkdir()
+    count = len(calls)
+    said = io.StringIO()
+    with redirect_stdout(said):
+        _, later = bc.stage_tools(cache, repo, L, None, zero_doc, fake_tools_for(L), head)
+    assert len(calls) == count and later['hit'] is True and later['tests']['cached'] == 279
+    assert 'Build cache entry refused' not in said.getvalue() and 'DID NOT RUN in this setup' in said.getvalue()
+    # When the new run examines nothing either, the setup stops as on any miss. The refused
+    # entry stays where it is and stays refused.
+    stuck_doc = lambda: {**tools_doc(), 'toolchain': {**TOOLCHAIN, 'gcc': 'zero-again'}}
+    store_zero(stuck_doc, 'stage-stuck-stored')
+    S = root / 'stage-stuck-rerun'; S.mkdir()
+    rejects(lambda: bc.stage_tools(cache, repo, S, None, stuck_doc, fake_tools_for(S, ZERO_END), head),
+            RuntimeError, 'the tools test gate examined nothing')
+    stuck = bc.lookup(cache, 'tools', bc.key_of(stuck_doc()))
+    assert stuck and stuck.receipt['built_at'] == 'then' and not bc._tools_entry_usable(stuck)
+    assert not list((cache / 'tools').glob('*.partial-*'))
 
     # Generated stage: miss on P writes the set; hit on Q copies it (with census outputs).
     gen_root = root / 'gen-repo'

@@ -74,6 +74,11 @@ returned their skip code. A run whose log shows no executed test (ctest ends wit
 finds none) stops the setup and stores no entry. The entry's receipt keeps the counts as
 `ctest_counts`.
 
+An entry whose stored `test-tools.log` shows no executed test is not served. The setup prints
+`Build cache entry refused (tools): <entry> ...`, takes the key as a miss, and builds and tests
+the tools again; that run replaces the entry. An entry whose log holds no summary line (one
+stored before the counts were read) is served, and its line says `test count UNKNOWN`.
+
 ### Stage 2 — generated set (BIOS C + game C)
 
 ```
