@@ -1363,6 +1363,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_executable(gpu_command_queue_test tests/test_gpu_command_queue.c)
         add_executable(dma_gpu_command_queue_test tests/test_dma_gpu_command_queue.c src/dma_gpu_ll.c)
         add_executable(gpu_queue_boot_admission_test tests/test_gpu_queue_boot_admission.c src/dma_gpu_ll.c)
+        target_include_directories(gpu_queue_boot_admission_test BEFORE PRIVATE ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR})
+        add_dependencies(gpu_queue_boot_admission_test psxrecomp_codegen_hash)
         target_link_libraries(gpu_queue_boot_admission_test PRIVATE ZLIB::ZLIB)
         add_test(NAME gpu_queue_boot_admission COMMAND gpu_queue_boot_admission_test)
         foreach(_queue_test gpu_command_queue dma_gpu_command_queue gpu_queue_boot_admission)
