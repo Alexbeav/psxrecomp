@@ -12,6 +12,7 @@
 #include <string.h>
 
 extern uint8_t* memory_get_ram_ptr(void);
+extern const uint8_t* memory_low_ram_view(void);
 extern uint32_t i_stat;
 extern uint32_t i_mask;
 extern void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3],
@@ -56,6 +57,7 @@ static uint32_t digest_module(uint32_t (*bytes_fn)(void), void (*write_fn)(uint8
 }
 
 #define NP_RAM_SIZE (2u * 1024u * 1024u)
+#define NP_LOW_RAM_BYTES 16u
 
 uint32_t netplay_cdrom_digest(void)
 {
@@ -157,9 +159,15 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     crc_tim = crc32_update(crc_tim, (const uint8_t*)irq_line, sizeof(irq_line));
     crc_tim = crc32_update(crc_tim, (const uint8_t*)frac, sizeof(frac));
 
+    /* RAM 0..15 comes through memory_low_ram_view: ram itself, except while a
+     * replay plays that was recorded by a build which zeroed those bytes at
+     * game entry. Then it is the 16 bytes as that build held them. */
     ram = memory_get_ram_ptr();
-    if (ram)
-        crc_ram = crc32_update(crc_ram, ram, NP_RAM_SIZE);
+    if (ram) {
+        crc_ram = crc32_update(crc_ram, memory_low_ram_view(), NP_LOW_RAM_BYTES);
+        crc_ram = crc32_update(crc_ram, ram + NP_LOW_RAM_BYTES,
+                               NP_RAM_SIZE - NP_LOW_RAM_BYTES);
+    }
 
     wc = dirty_ram_get_bitmap_word_count();
     for (i = 0; i < wc; i++) {

@@ -185,6 +185,12 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_changethread_in_handler.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME overlay_dispatch_region_counters_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_dispatch_region_counters.py --cc ${CMAKE_C_COMPILER})
+        # PS1G-39: game entry leaves guest RAM 0..15 as the kernel left it,
+        # and a replay recorded by a build that zeroed those bytes still
+        # compares them as that build held them. Links the real memory.c,
+        # fntrace.c and netplay_state_digest.c.
+        add_test(NAME low_ram_game_entry_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_low_ram_game_entry.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME tas_resume_interval_test COMMAND ${Python3_EXECUTABLE}
             ${PSXRECOMP_ROOT}/tools/tasreplays/test_resume_interval.py)
         foreach(_opt IN ITEMS 0 2)
