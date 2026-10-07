@@ -128,6 +128,42 @@ def main() -> None:
             assert host_bash.find_bash(PURPOSE)
             cases += 1
 
+        # 10. An environment built by hand with neither SystemRoot nor windir.
+        #     The old rule knew System32 only through those two names, so it
+        #     returned the launcher here (review of PS1B-271). Windows is now
+        #     taken to be at host_bash.DEFAULT_SYSTEM_ROOT.
+        def bare(path: list) -> dict:
+            return {"PATH": os.pathsep.join(str(entry) for entry in path)}
+
+        default_root = host_bash.DEFAULT_SYSTEM_ROOT
+        host_bash.DEFAULT_SYSTEM_ROOT = str(system_root)
+        try:
+            assert host_bash.is_wsl_launcher(wsl_system, bare(launchers_first))
+            assert not host_bash.is_wsl_launcher(git_bash, bare(launchers_first))
+            message = refused(bare(launchers_first))
+            assert wsl_system in message and wsl_alias in message, message
+            picked = host_bash.find_bash(
+                PURPOSE, environ=bare(launchers_first + [git / "cmd"]), windows=True)
+            assert picked == git_bash, picked
+            picked = host_bash.find_bash(
+                PURPOSE, environ=bare(launchers_first + [msys_bin]), windows=True)
+            assert picked == msys_bash, picked
+            cases += 5
+        finally:
+            host_bash.DEFAULT_SYSTEM_ROOT = default_root
+
+        # 11. The folder that stands in is the usual one, and the rule is on
+        #     that folder only: a Git kept below a folder that is merely named
+        #     system32 is still a Git bash. A drive letter needs Windows.
+        assert default_root == "C:\\Windows", default_root
+        cases += 1
+        if os.name == "nt":
+            assert host_bash.is_wsl_launcher("C:\\Windows\\System32\\bash.exe", {})
+            assert host_bash.is_wsl_launcher("c:\\windows\\system32\\BASH.EXE", {"PATH": ""})
+            assert not host_bash.is_wsl_launcher("C:\\Program Files\\Git\\bin\\bash.exe", {})
+            assert not host_bash.is_wsl_launcher("D:\\tools\\system32\\Git\\bin\\bash.exe", {})
+            cases += 4
+
     # What this host itself gives a test. A host without Git Bash is reported
     # here and fails in the tests that need one, with the same sentence.
     try:

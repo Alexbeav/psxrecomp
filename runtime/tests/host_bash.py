@@ -24,6 +24,12 @@ import shutil
 GIT_BASH_ENV = "PSX_GIT_BASH"
 # Git for Windows ships its bash at both of these, relative to its root.
 _GIT_BASH_RELATIVE = (("bin", "bash.exe"), ("usr", "bin", "bash.exe"))
+# Where Windows is taken to be when the environment names neither SystemRoot
+# nor windir. A caller that builds a small environment by hand can drop both,
+# and the launcher in System32 is a launcher all the same. Only this one folder
+# is ruled out: a rule on the name "system32" anywhere in a path could refuse a
+# real Git bash.
+DEFAULT_SYSTEM_ROOT = "C:\\Windows"
 
 
 def _fold(path: str) -> str:
@@ -35,11 +41,9 @@ def is_wsl_launcher(path: str, environ=None) -> bool:
     app alias, which Windows keeps in a folder named Microsoft\\WindowsApps."""
     environ = os.environ if environ is None else environ
     folded = _fold(path)
-    system_root = environ.get("SystemRoot") or environ.get("windir")
-    if system_root:
-        root = _fold(system_root)
-        if folded == root or folded.startswith(root.rstrip(os.sep) + os.sep):
-            return True
+    root = _fold(environ.get("SystemRoot") or environ.get("windir") or DEFAULT_SYSTEM_ROOT)
+    if folded == root or folded.startswith(root.rstrip(os.sep) + os.sep):
+        return True
     parts = folded.split(os.sep)
     return (len(parts) >= 3
             and parts[-2] == os.path.normcase("WindowsApps")
