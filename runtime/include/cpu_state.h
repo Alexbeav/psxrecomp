@@ -206,6 +206,9 @@ extern void psx_dispatch_call(CPUState* cpu, uint32_t target_addr, uint32_t retu
  * slicing policy remains controlled by g_psx_precise_slice. */
 extern int g_psx_precise_slice;
 extern int psx_slice_block_impl(CPUState* cpu, uint32_t block_addr, uint32_t bcyc, int side_effects);
+/* BIOS blocks use a conservative eight-cycle budget per instruction. Keep
+ * that budget separate from the cache range, which is a count of words. */
+extern int psx_slice_bios_block(CPUState* cpu, uint32_t block_addr, uint32_t words, int side_effects);
 void psx_precise_slice_init_from_env(void);
 #ifdef PSX_OVERLAY_DLL_BUILD
 int psx_slice_block(CPUState* cpu, uint32_t block_addr, uint32_t bcyc, int side_effects);

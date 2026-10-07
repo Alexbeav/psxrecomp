@@ -746,6 +746,18 @@ int main(int argc, char **argv) {
     mkdir_p(dir);
     snprintf(verdict_path, sizeof verdict_path, "%s/verdict.json", dir);
     replay_session_set_verdict_path(verdict_path);
+    CHECK(replay_session_core_digest_version() == 2u, "idle uses the current core digest");
+    clear_slots();
+    record(20, "cd_speed=1\n");
+    CHECK(replay_session_play_slot(0), "legacy digest replay starts");
+    CHECK(replay_session_core_digest_version() == 1u, "absent version selects pin H digest");
+    replay_session_shutdown();
+    strcat(product_lines, "core_digest=2\n");
+    clear_slots();
+    record(20, "cd_speed=1\n");
+    CHECK(replay_session_play_slot(0), "current digest replay starts");
+    CHECK(replay_session_core_digest_version() == 2u, "new replay keeps cache-word digest");
+    replay_session_shutdown();
     test_record_and_play_in_sync();
     test_thumb_and_name();
     test_out_of_sync_is_reported();

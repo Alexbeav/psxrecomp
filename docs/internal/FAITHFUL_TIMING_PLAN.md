@@ -1,8 +1,13 @@
 # Faithful Timing Core — Game Plan (psxrecomp)
 
-2026-10-06, PS1G-73 Assignment 7: instruction-cache contents candidate on
-`fix/ps1g-73-icache`, outside pin H. Cache-state unit proof passes; native
-block integration passes the preliminary Formula One 99 timed boot. Version15 player-save conversion passes focused loader/cache tests; final-head game and full regression measurements are pending.
+2026-10-07, PS1G-73 Assignment 9: the candidate remains on
+`fix/ps1g-73-icache`, outside pin H. The review orders a guarded pin H import,
+execution counters, no nested stale slicing and a separate BIOS word count.
+The focused cache admission and digest fixtures pass at O0 and O2. Existing
+assignment 7 Windows and Tier 1 results describe the earlier head. The required
+three-title cost sample, four self-patching routes, replay comparisons and final
+qualification remain outstanding. A run is alive only when its last interrupt
+delivery falls within its final second. Frame count at exit proves no liveness.
 See [execution model](../EXECUTION_MODEL.md#instruction-cache-contents).
 
 2026-09-12 local integration: restore inherited GTE arithmetic/register and MDEC

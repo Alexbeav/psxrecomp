@@ -8500,7 +8500,9 @@ extern "C" int replay_host_state_digest(uint32_t out[4]) {
     if (!s_replay_cpu || no_digests)
         return 0;
     const auto t0 = std::chrono::steady_clock::now();
-    out[0] = netplay_core_digest(s_replay_cpu);
+    NetplayCoreParts p;
+    netplay_core_digest_parts_version(s_replay_cpu, &p, replay_session_core_digest_version());
+    out[0] = p.core;
     const auto t1 = std::chrono::steady_clock::now();
     static int log_parts = -1;
     if (log_parts < 0) {
@@ -8508,8 +8510,6 @@ extern "C" int replay_host_state_digest(uint32_t out[4]) {
         log_parts = e && e[0] == '1';
     }
     if (log_parts) {   /* diagnostic: which core partition a divergence is in */
-        NetplayCoreParts p;
-        netplay_core_digest_parts(s_replay_cpu, &p);
         std::fprintf(stdout, "replay_digest_parts: cpu=%08x clock_irq=%08x timers=%08x ram=%08x "
                      "dirty=%08x pc=%08x\n", p.cpu, p.clock_irq, p.timers, p.ram, p.dirty,
                      s_replay_cpu->pc);
@@ -8674,6 +8674,7 @@ extern "C" void replay_host_product(char *out, size_t cap) {
     lines += std::string("renderer=") +
              (g_vk_active ? "vulkan" : g_gl_active ? "opengl" : "software") + "\n";
     lines += std::string("platform=") + replay_platform_name() + "\n";
+    lines += "core_digest=2\n";
     if (const char *seed = std::getenv("PSX_REPLAY_TEST_INPUT_SEED");
         seed && seed[0] && g_replay_scripted_record) {
         std::snprintf(line, sizeof(line), "input_seed=%lu\n", std::strtoul(seed, nullptr, 10));

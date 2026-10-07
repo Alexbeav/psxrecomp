@@ -65,6 +65,7 @@ set(PSXRECOMP_CODEGEN_HASH_SRCS
     # .inc is the shim every shard links against.
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/overlay_api.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/cpu_state.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_icache.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/pgxp_hooks.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_cyc.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_cycles.h

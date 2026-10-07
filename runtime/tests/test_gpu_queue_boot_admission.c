@@ -53,6 +53,7 @@ void psx_icache_restore_legacy_words(void) {
  g_psx_icache_words[0]=test_ram[0];
 }
 int main(void) {
+ assert((uint32_t)PSX_OVERLAY_CODEGEN_HASH==BOOT_STATE_PIN_H_IMPORT_HASH);
  reset_gpu_state_for_test(); dma_init();
  BsOut o={0}; o.no_zlib=1;
  BootStateHeader h={0}; h.magic=BOOT_STATE_MAGIC;h.version=BOOT_STATE_VERSION;
@@ -93,8 +94,7 @@ int main(void) {
  assert(boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
  assert(legacy_restores==1u && g_psx_icache_words[0]==0x2408002au);
  {PstW w;pst_w_init(&w,legacy+16,4);assert(pst_w_u32(&w,0x25fd1f54u));}
- assert(boot_state_load_buffer(legacy,o.len-4096u,0,0,&live)==
-        ((uint32_t)PSX_OVERLAY_CODEGEN_HASH==0x7074b438u));
+ assert(boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
  unsigned restores_before_reject=legacy_restores;
  const unsigned integrity_offsets[]={8,12,20,24,32};
  for(unsigned k=0;k<sizeof(integrity_offsets)/sizeof(integrity_offsets[0]);k++){

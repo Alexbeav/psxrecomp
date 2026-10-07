@@ -19,7 +19,7 @@ for job in plan['jobs']:
             command=['python',plan['runner'],job['matrix'],str(trace),'--icache','--observe-cpu',
                      '--icache-env',job['environment'],'--executable',job[side]['executable'],
                      '--identity',job[side]['identity']]
-            run=subprocess.run(command,capture_output=True,text=True)
+            run=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace')
             if run.returncode:
                 raise RuntimeError(run.stderr)
     if args.validate:

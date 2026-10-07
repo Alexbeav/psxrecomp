@@ -23,6 +23,13 @@
 
 static ReplayState s_state = REPLAY_IDLE;
 static ReplayResult s_result = REPLAY_RESULT_NONE;
+static unsigned s_play_core_digest_version = 2u;
+
+unsigned replay_session_core_digest_version(void)
+{
+    return s_state == REPLAY_PLAYING || s_state == REPLAY_LOADING
+        ? s_play_core_digest_version : 2u;
+}
 
 /* Recording. */
 static char s_rec_path[PATH_BYTES];
@@ -534,11 +541,11 @@ static int begin_recording(const char *path, int slot, int power_on)
     snprintf(s_rec_path, sizeof s_rec_path, "%s", path);
     s_rec_slot = slot;
     s_result = REPLAY_RESULT_NONE;
+    replay_host_product(s_product, sizeof s_product);
     if (!power_on) {
         s_state = REPLAY_ARMING;
         return 1;
     }
-    replay_host_product(s_product, sizeof s_product);
     replay_host_power_on_begin();
     s_power_on = 1;
     s_state = REPLAY_RECORDING;
@@ -632,12 +639,12 @@ static const char *write_recording(const char *path)
         rx.digests_length = digests_length;
         if (s_have_thumb) { rx.thumb = s_thumb; rx.thumb_w = REPLAY_THUMB_W; rx.thumb_h = REPLAY_THUMB_H; }
         rx.name = name;
+        rx.product = s_product[0] ? s_product : NULL;
         if (s_power_on) {
             /* Only the inserted cards' images, in slot order. */
             rx.power_on = 1;
             rx.cards_mask = s_cards_mask;
             rx.cards = s_cards_mask == 2u ? s_cards + INPUT_ROUTE_REPLAY_CARD_BYTES : s_cards;
-            rx.product = s_product[0] ? s_product : NULL;
         }
         error = input_route_v3_write_ex(f, &meta, NULL, s_words, s_last_frame, &end_marker, end, &rx);
         if (fclose(f) && !error) error = "close error";
@@ -846,6 +853,7 @@ int replay_session_play_file(const char *path)
     s_rec_exe[0] = s_player_exe[0] = 0;
     s_rec_platform[0] = s_player_platform[0] = 0;
     s_rec_codegen[0] = s_player_codegen[0] = 0;
+    s_play_core_digest_version = 2u;
     s_cross_platform = 0;
     s_play_power_on = 0;
     s_play_frame = s_play_frames = 0;
@@ -914,6 +922,12 @@ int replay_session_play_file(const char *path)
         line_value(player, "platform", s_player_platform, sizeof s_player_platform);
         line_value(rp->product, "codegen", s_rec_codegen, sizeof s_rec_codegen);
         line_value(player, "codegen", s_player_codegen, sizeof s_player_codegen);
+        char digest_version[16];
+        line_value(rp->product, "core_digest", digest_version, sizeof digest_version);
+        if (!digest_version[0] || strcmp(digest_version, "1") == 0)
+            s_play_core_digest_version = 1u;
+        else if (strcmp(digest_version, "2") != 0)
+            error = "unsupported core digest version";
     }
     /* The BIOS image decides, not its file name: with a CRC on both sides the
      * CRC is the test, so the same dump under another name (another machine's

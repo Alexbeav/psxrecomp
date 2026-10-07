@@ -21,18 +21,32 @@ lines; partial refills, uncached aliases and isolated invalidation keep the
 existing timing rules. Interpreter execution uses the cached view; diagnostic
 memory scans still inspect RAM.
 
-At a native block boundary, cached words that differ from the guarded RAM image
-send execution through the interpreter to a dispatchable continuation. This
+At a native block boundary outside an exception or an active precision slice,
+cached words that differ from RAM send execution through the interpreter to a dispatchable continuation. This
 also applies to native overlay callbacks. It does not add a per-title patch.
+An exception handler keeps its compiled path. The run report's
+`icache_execution.exception_stale_blocks` counts stale blocks skipped by that rule.
+`stale_blocks`, `first_block` and `last_block` identify interpreter admissions.
+`stale_fetches`, `first_fetch_pc` and `last_fetch_pc` identify interpreted words
+that differ from RAM. These counters are diagnostics, not saved guest state.
+The BIOS emitter passes an instruction count to `psx_slice_bios_block`.
+Its timing budget remains eight cycles per instruction.
 
 Boot-state version 16 saves the words with the tags. Version 15 player saves
 remain readable: after restoring RAM, the loader fills every valid tag from
 restored memory, matching the old runtime at the load point. Older formats remain
 refused. Pin H codegen hash `25fd1f54` imports only into the cache-guard hash
-`7074b438`: the hashed change is the inline admission policy, with the emitter
-and guest-state layout unchanged. BIOS, entry, ABI, codegen version and section
+`3572b436`, named by `BOOT_STATE_PIN_H_IMPORT_HASH`. The unconditional assertion
+in `gpu_queue_boot_admission_test` fails if a later emitter or header change moves
+that hash without renewing the import decision. The BIOS guard separates the
+word count from its timing budget. The guest-state layout and overlay ABI stay
+unchanged. BIOS, entry, ABI, codegen version and section
 checks still apply. Overlay loading stays strict. TAS checkpoint compatibility
 is separate and requires new checkpoints.
+New replay product metadata declares `core_digest=2`. Earlier recordings omit
+that field and use version 1, which excludes cache words from the core digest.
+Version 2 and rollback digests include them. Both versions retain cache tags.
+This changes comparison only. Guest execution still uses cache contents.
 Lockstep shadow state and the deterministic clock digest also include contents.
 
 ## Why a PS1 game can't just be "decompiled once"

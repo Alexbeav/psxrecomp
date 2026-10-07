@@ -44,6 +44,7 @@
 #include "start_refusal.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */
+#include "dirty_ram_interp.h"
 
 /* Output path — overwritten per dump. */
 static const char *kReportPath = "psx_last_run_report.json";
@@ -1031,6 +1032,20 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             append_fmt(buf, sizeof(buf), &pos, "%s\"0x%08X\"", i == 0 ? "" : ",", a);
         }
         append_str(buf, sizeof(buf), &pos, "]\n  },\n");
+    }
+
+    {
+        const IcacheExecutionStats *s = &g_icache_execution_stats;
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"icache_execution\": {\"stale_blocks\":%llu,\"first_block\":\"0x%08X\","
+            "\"last_block\":\"0x%08X\",\"stale_blocks_in_exception\":%llu,"
+            "\"nested_stale_blocks\":%llu,\"exception_stale_blocks\":%llu,"
+            "\"stale_fetches\":%llu,\"first_fetch_pc\":\"0x%08X\",\"last_fetch_pc\":\"0x%08X\"},\n",
+            (unsigned long long)s->stale_blocks, s->first_block, s->last_block,
+            (unsigned long long)s->stale_blocks_in_exception,
+            (unsigned long long)s->nested_stale_blocks,
+            (unsigned long long)s->exception_stale_blocks,
+            (unsigned long long)s->stale_fetches, s->first_fetch_pc, s->last_fetch_pc);
     }
 
     /* publish tail (last 64): runtime sites that published a resume PC */

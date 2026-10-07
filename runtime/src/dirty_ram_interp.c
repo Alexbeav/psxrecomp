@@ -1669,6 +1669,13 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
 
 static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
                                   uint32_t *next_pc_out) {
+#if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
+    if (insn != fetch_word(pc & 0x1fffffffu)) {
+        if (!g_icache_execution_stats.stale_fetches++)
+            g_icache_execution_stats.first_fetch_pc = pc;
+        g_icache_execution_stats.last_fetch_pc = pc;
+    }
+#endif
     exec_pc_table_record(pc);
     uint32_t opc  = op_field(insn);
     uint32_t rs   = rs_field(insn);
@@ -3100,11 +3107,32 @@ void psx_slice_diag_write(const char *dir) {
             (unsigned long long)g_sd_compiled_cycles, (unsigned long long)g_sd_slice_cycles, (unsigned long long)g_sd_slice_insns);
 }
 
-int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int side_effects) {
+IcacheExecutionStats g_icache_execution_stats;
+
+static int slice_block_with_words(CPUState *cpu, uint32_t block_addr,
+                                 uint32_t bcyc, int side_effects, uint32_t words) {
+    g_sd_leaders++;
+    /* A stale block inside a handler cannot start a nested precision slice.
+     * Count the blocked cases so the qualification can expose that gap. */
+    int in_exception = psx_get_in_exception();
+    if (g_precise_mode || in_exception) {
+        g_sd_nested_skip++;
+#if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
+        if (psx_icache_block_stale(block_addr, words)) {
+            g_icache_execution_stats.nested_stale_blocks++;
+            if (in_exception) g_icache_execution_stats.exception_stale_blocks++;
+        }
+#endif
+        return 0;
+    }
     /* A native body describes the RAM image, not stale cache contents. Keep
      * such a block in the shared interpreter until a dispatchable boundary. */
 #if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
-    if (psx_icache_block_stale(block_addr, bcyc)) {
+    if (psx_icache_block_stale(block_addr, words)) {
+        if (!g_icache_execution_stats.stale_blocks++)
+            g_icache_execution_stats.first_block = block_addr;
+        g_icache_execution_stats.last_block = block_addr;
+        if (in_exception) g_icache_execution_stats.stale_blocks_in_exception++;
         psx_cyc_batch_flush();
         cpu->pc = block_addr;
         psx_run_precise(cpu, bcyc, 0);
@@ -3114,17 +3142,11 @@ int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int 
     /* PARKED (PRECISE_IRQ_SLICE.md): precise take-point slicing is a later
      * correctness upgrade, NOT the current FMV blocker (that is the -8 cycle
      * drift / faithful per-instruction cycle model — see CLAUDE.md Rule -1). */
-    g_sd_leaders++;
     if (!g_psx_precise_slice) { g_sd_gate_off++; return 0; }
 
     uint32_t block_phys = block_addr & 0x1FFFFFFFu;
     if (block_phys >= 0x1FC00000u && block_phys < 0x1FC80000u &&
         !source_gpu_runtime_active()) { g_sd_bios_skip++; return 0; }
-
-    /* No nested slicing: a handler dispatched from inside precise-mode, and any
-     * block executed while in_exception, run compiled (interrupts are gated during
-     * exception handling anyway). Keeps re-entrancy structurally impossible. */
-    if (g_precise_mode || psx_get_in_exception()) { g_sd_nested_skip++; return 0; }
 
     static int s_slice_always = -1;
     static int s_slice_margin = -1;
@@ -3294,6 +3316,14 @@ int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int 
         g_sd_exit_reason[g_slice_exit_reason < 5 ? g_slice_exit_reason : 0]++;
     }
     return 1;
+}
+
+int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int side_effects) {
+    return slice_block_with_words(cpu, block_addr, bcyc, side_effects, bcyc);
+}
+
+int psx_slice_bios_block(CPUState *cpu, uint32_t block_addr, uint32_t words, int side_effects) {
+    return slice_block_with_words(cpu, block_addr, words * 8u, side_effects, words);
 }
 
 static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {

@@ -36,6 +36,9 @@ extern "C" {
  */
 
 #define BOOT_STATE_MAGIC   0x50535842u  /* "PSXB" */
+/* Reviewed import target. A hash-changing row must renew this decision and
+ * the unconditional hash assertion in gpu_queue_boot_admission_test. */
+#define BOOT_STATE_PIN_H_IMPORT_HASH 0x3572b436u
 /* v1 = incomplete RAM-only; v2 = full machine but host-struct memcpy (padding);
  * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
  * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);

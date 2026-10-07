@@ -1920,8 +1920,8 @@ irq_deliver_eval:
          * What the guard actually requires is that fetch_pc be a plausible
          * instruction address: non-zero, aligned, and inside RAM or the BIOS
          * window. Those tests remain and are sufficient on their own —
-         * psx_icache_fetch reads no guest memory, it charges cycles and updates
-         * cache tags, so no address in range can harm it. */
+         * psx_icache_fetch reads bound RAM or BIOS bytes, charges cycles and
+         * updates cache tags and contents, so the backing range must be valid. */
         if (fetch_pc != 0u && (fetch_pc & 3u) == 0u &&
             (fetch_phys < 0x00200000u ||
              (fetch_phys >= 0x1FC00000u && fetch_phys < 0x1FC80000u))) {
