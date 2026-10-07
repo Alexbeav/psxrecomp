@@ -51,12 +51,16 @@ void fntrace_restore_game_started(int started) { s_game_started = !!started; }
 /* Centralised game-start transition.  Idempotent — safe to call from both
  * the dispatcher (fntrace_record) and the generated entry-point function.
  * Performs the complete handoff side effects: dirty-image baseline clear,
- * CD speed switch, and boot-state capture. Guest RAM survives this host event. */
+ * CD speed switch, and boot-state capture. Guest RAM survives this host event;
+ * memory_note_game_entry only reads it (the run report's low_ram_at_entry and
+ * the copy that replays of older recordings compare). */
 void fntrace_mark_game_started(CPUState* cpu) {
     if (s_game_started) return;
     s_game_started = 1;
     extern void dirty_ram_clear_image_baseline(void);
+    extern void memory_note_game_entry(void);
     dirty_ram_clear_image_baseline();
+    memory_note_game_entry();
     cdrom_notify_game_started();
     boot_state_trigger_capture(cpu);
 }
