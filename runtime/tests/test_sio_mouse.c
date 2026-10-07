@@ -27,7 +27,8 @@ void event_ring_record_aux(uint16_t a,uint8_t b,uint32_t c) { (void)a;(void)b;(v
 void starvation_ring_record(uint8_t a,uint8_t b,uint8_t c,uint16_t d,uint16_t e,int f,int g,int h,int i,int j,uint8_t k,uint32_t l,uint8_t m,uint8_t n,uint8_t o,uint8_t p,int q) { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;(void)h;(void)i;(void)j;(void)k;(void)l;(void)m;(void)n;(void)o;(void)p;(void)q; }
 void card_read_summary_record(uint8_t a,uint8_t b,uint16_t c,uint8_t d,uint8_t e,const uint8_t *f) { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f; }
 void card_data_writes_arm(uint8_t a,uint16_t b,uint8_t c,uint8_t d) { (void)a;(void)b;(void)c;(void)d; }
-int memcard_is_present(int slot) { (void)slot;return 0; }
+static unsigned cards_present;
+int memcard_is_present(int slot) { return (cards_present >> slot) & 1u; }
 int memcard_read_sector(int slot,int sector,uint8_t *buf) { (void)slot;(void)sector;memset(buf,0,128);return 0; }
 int memcard_write_sector(int slot,int sector,const uint8_t *buf) { (void)slot;(void)sector;(void)buf;return 0; }
 void memcard_flush(int slot) { (void)slot; }
@@ -39,11 +40,9 @@ static void check(int okay,const char *message) {
 }
 static void advance(unsigned n) { while(n--) { clock_now++;sio_advance(1); } }
 
-/* One transaction: rx[i] is the reply to tx[i]; ack[i] says IRQ7 followed. */
-static void txn(int port,const uint8_t *tx,unsigned count,uint8_t *rx,uint8_t *ack) {
+/* Continue the selected DTR session: rx[i] replies to tx[i], ack[i] is IRQ7. */
+static void stream(int port,const uint8_t *tx,unsigned count,uint8_t *rx,uint8_t *ack) {
     const uint32_t slot = port ? 0x2000u : 0u;
-    sio_write(0x1F80104A,0);
-    sio_write(0x1F80104A,0x1003u|slot);
     for (unsigned i=0;i<count;++i) {
         sio_write(0x1F801040,tx[i]); advance(1088);
         rx[i] = (uint8_t)sio_read(0x1F801040);
@@ -51,6 +50,12 @@ static void txn(int port,const uint8_t *tx,unsigned count,uint8_t *rx,uint8_t *a
         ack[i] = (uint8_t)((i_stat >> 7) & 1u);
         sio_write(0x1F80104A,0x1013u|slot); i_stat &= ~0x80u;
     }
+}
+
+static void txn(int port,const uint8_t *tx,unsigned count,uint8_t *rx,uint8_t *ack) {
+    sio_write(0x1F80104A,0);
+    sio_write(0x1F80104A,0x1003u|(port ? 0x2000u : 0u));
+    stream(port,tx,count,rx,ack);
     sio_write(0x1F80104A,0);
     advance(2000);
 }
@@ -82,6 +87,139 @@ static void setup_bus(void) {
     sio_init();
     sio_write(0x1F801048,0xD); sio_write(0x1F80104E,0x88);
 }
+
+#if PSX_MAX_PLAYERS >= 5
+static void expect_vector(const uint8_t *rx,const uint8_t *ack,const uint8_t *want,
+                          unsigned count,int last_ack,const char *what) {
+    for (unsigned i=0;i<count;++i) {
+        const int expected_ack = last_ack >= 0 && i <= (unsigned)last_ack;
+        if (rx[i] != want[i] || ack[i] != expected_ack) {
+            fprintf(stderr,"%s byte %u: got %02X/%u, want %02X/%d\n",
+                    what,i,rx[i],ack[i],want[i],expected_ack);
+            check(0,what);
+        }
+    }
+    check(1,what);
+}
+
+static void setup_tap(int port,const char *profile) {
+#ifdef _WIN32
+    _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL",profile);
+#else
+    setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL",profile,1);
+#endif
+    cards_present = 0;
+    setup_bus(); sio_set_multitap_port(port); sio_set_multitap(1);
+    for (int s=0;s<PSX_MAX_PLAYERS;++s) {
+        sio_set_port_device(s,SIO_DEVICE_PAD);
+        sio_set_pad_connected(s,1); sio_set_pad_config_capable(s,0);
+        sio_set_pad_state_slot(s,(uint16_t)(0xFFFFu ^ (1u << s)));
+    }
+}
+
+static void method2_controls(void) {
+    static const char *profiles[] = { "", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock" };
+    static const uint8_t silent[5] = { 0xFF,0xFF,0xFF,0xFF,0xFF };
+    static const uint8_t card_id_tx[8] = { 0x81,0x53,0,0,0,0,0,0 };
+    static const uint8_t card_id_rx[8] = { 0xFF,0x08,0x5A,0x5D,0x04,0,0,0x80 };
+    for (unsigned profile=0;profile<3;++profile) {
+        for (int port=0;port<2;++port) {
+            /* Builds with eight seats have two taps: port 2 starts at seat 4.
+             * Five through seven seats have one tap: port 2 starts at seat 1. */
+            const int base = PSX_MAX_PLAYERS >= 8 ? 4*port : port;
+            for (int addr=2;addr<=4;++addr) {
+                const uint16_t buttons = (uint16_t)(0xFFFFu ^ (1u << (base+addr-1)));
+                const uint8_t want[5] = { 0xFF,0x41,0x5A,(uint8_t)buttons,(uint8_t)(buttons>>8) };
+                const uint8_t tx[5] = { (uint8_t)addr,0x42,0,0,0 };
+                uint8_t rx[8],ack[8];
+                setup_tap(port,profiles[profile]);
+                txn(port,tx,5,rx,ack);
+                expect_vector(rx,ack,want,5,3,"direct method-2 reply/ACK");
+                printf("method2: players=%d profile=%s port=%d address=%02X reply=%02X%02X%02X%02X%02X ack=%d%d%d%d%d\n",
+                       PSX_MAX_PLAYERS,profile ? profiles[profile] : "default",port+1,addr,
+                       rx[0],rx[1],rx[2],rx[3],rx[4],ack[0],ack[1],ack[2],ack[3],ack[4]);
+
+                /* Complete or abort a card command, then poll without a DTR edge.
+                 * Default routing resumes; source profiles retain their mute. */
+                for (int completed=0;completed<2;++completed) {
+                    setup_tap(port,profiles[profile]); cards_present = 1u << port;
+                    sio_write(0x1F80104A,0x1003u|(port ? 0x2000u : 0u));
+                    if (completed) {
+                        stream(port,card_id_tx,8,rx,ack);
+                        expect_vector(rx,ack,card_id_rx,8,6,"completed card ID reply/ACK");
+                    } else {
+                        static const uint8_t abort_tx[2] = { 0x81,0xFF };
+                        static const uint8_t abort_rx[2] = { 0xFF,0xFF };
+                        stream(port,abort_tx,2,rx,ack);
+                        expect_vector(rx,ack,abort_rx,2,0,"aborted card command reply/ACK");
+                    }
+                    stream(port,tx,5,rx,ack);
+                    expect_vector(rx,ack,profile ? silent : want,5,profile ? -1 : 3,
+                                  "card-idle method-2 reply/ACK with retained DTR mute");
+                    txn(port,tx,5,rx,ack);
+                    expect_vector(rx,ack,want,5,3,"fresh DTR recovers after card probe");
+                }
+
+                /* Exercise the router's saved-card entry directly. A real DTR
+                 * drop clears volatile card state, so this constructed entry
+                 * does not claim that cards continue across a DTR drop. */
+                setup_tap(port,profiles[profile]); cards_present = 1u << port;
+                sio_write(0x1F80104A,0x1003u|(port ? 0x2000u : 0u));
+                stream(port,card_id_tx,3,rx,ack);
+                expect_vector(rx,ack,card_id_rx,3,2,"card prefix reply/ACK");
+                mc_save_slot(port);
+                const McSlotState saved = mc_slots[port];
+                active_device = DEV_NONE;
+                pad_dtr_session_first[port] = 1; pad_dtr_session_mute[port] = 0;
+                stream(port,tx,5,rx,ack);
+                expect_vector(rx,ack,want,5,3,"method-2 poll from saved-card router entry");
+                check(!memcmp(&saved,&mc_slots[port],sizeof saved),"pad poll preserves saved card state");
+                static const uint8_t continuation[5] = { 0,0,0,0,0 };
+                active_device = DEV_NONE;
+                stream(port,continuation,5,rx,ack);
+                expect_vector(rx,ack,card_id_rx+3,5,3,"saved card continuation reply/ACK");
+
+                /* No card responds, but the source-profile pad still sees 81h as
+                 * the first DTR byte and stays muted until the next session. */
+                setup_tap(port,profiles[profile]);
+                sio_write(0x1F80104A,0x1003u|(port ? 0x2000u : 0u));
+                const uint8_t absent = 0x81;
+                stream(port,&absent,1,rx,ack);
+                expect_vector(rx,ack,silent,1,-1,"absent card probe reply/ACK");
+                stream(port,tx,5,rx,ack);
+                expect_vector(rx,ack,profile ? silent : want,5,profile ? -1 : 3,
+                              "absent-card DTR mute reply/ACK");
+                txn(port,tx,5,rx,ack);
+                expect_vector(rx,ack,want,5,3,"fresh DTR recovers after absent card");
+
+                setup_tap(port,profiles[profile]);
+                sio_set_pad_connected(base+addr-1,0);
+                txn(port,tx,5,rx,ack);
+                expect_vector(rx,ack,silent,5,-1,"disconnected method-2 seat reply/ACK");
+            }
+            setup_tap(port,profiles[profile]);
+            static const uint8_t invalid[5] = { 5,0x42,0,0,0 };
+            uint8_t rx[5],ack[5];
+            txn(port,invalid,5,rx,ack);
+            expect_vector(rx,ack,silent,5,-1,"05h on an enabled tap is silent");
+#if PSX_MAX_PLAYERS < 8
+            for (int addr=2;addr<=5;++addr) {
+                const uint8_t tx[5] = { (uint8_t)addr,0x42,0,0,0 };
+                txn(1-port,tx,5,rx,ack);
+                expect_vector(rx,ack,silent,5,-1,"standalone port rejects tap addresses");
+            }
+#endif
+            sio_set_multitap(0);
+        }
+    }
+    cards_present = 0;
+#ifdef _WIN32
+    _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL","");
+#else
+    unsetenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
+#endif
+}
+#endif
 
 int main(void) {
     setup_bus();
@@ -192,78 +330,7 @@ int main(void) {
     check(sio_get_port_device(1) == SIO_DEVICE_PAD,"netplay seats are pads");
 
 #if PSX_MAX_PLAYERS >= 5
-    /* Method 2 is a direct pad poll, selected by address 02h..04h. Exercise
-     * both tap placements and the card-idle routing path as well as DEV_NONE.
-     * Each seat has distinct buttons, so routing to Slot A cannot pass. */
-    for (int port=0;port<2;++port) {
-        setup_bus();
-        sio_set_multitap_port(port); sio_set_multitap(1);
-        const int base = port ? 1 : 0;
-        for (int s=0;s<PSX_MAX_PLAYERS;++s) {
-            sio_set_port_device(s,SIO_DEVICE_PAD);
-            sio_set_pad_connected(s,1); sio_set_pad_config_capable(s,0);
-            sio_set_pad_state_slot(s,(uint16_t)(0xFFFFu ^ (1u << s)));
-        }
-        for (int addr=2;addr<=4;++addr) {
-            uint8_t tx[5] = { (uint8_t)addr,0x42,0,0,0 }, rx[5],ack[5];
-            txn(port,tx,5,rx,ack);
-            printf("method2: port=%d address=%02X reply=%02X%02X%02X%02X%02X ack=%d%d%d%d%d\n",
-                   port+1,addr,rx[0],rx[1],rx[2],rx[3],rx[4],
-                   ack[0],ack[1],ack[2],ack[3],ack[4]);
-            const uint16_t buttons = (uint16_t)(0xFFFFu ^ (1u << (base+addr-1)));
-            check(rx[0]==0xFF && rx[1]==0x41 && rx[2]==0x5A &&
-                  rx[3]==(uint8_t)buttons && rx[4]==(uint8_t)(buttons>>8),
-                  "method-2 address selects the requested seat");
-            check(ack[0] && ack[1] && ack[2] && ack[3] && !ack[4],
-                  "method-2 poll acknowledges every byte except the last");
-            /* A finished absent-card probe leaves DEV_MEMCARD with MC_IDLE. */
-            sio_write(0x1F80104A,0x1003u|(port ? 0x2000u : 0u));
-            sio_write(0x1F801040,0x81); advance(1344);
-            (void)sio_read(0x1F801040);
-            sio_write(0x1F801040,(uint8_t)addr); advance(1344);
-            (void)sio_read(0x1F801040);
-            check(active_device==DEV_PAD && pad_active_logical==base+addr-1,
-                  "method-2 selection also reaches the pad after an idle card");
-            sio_write(0x1F80104A,0x10); advance(2000); i_stat &= ~0x80u;
-        }
-        {
-            uint8_t tx[5] = { 4,0x42,0,0,0 },rx[5],ack[5];
-            sio_set_pad_connected(base+3,0);
-            txn(port,tx,5,rx,ack);
-            for (int i=0;i<5;++i)
-                check(rx[i]==0xFF && !ack[i],"empty method-2 seat is silent");
-        }
-        for (int addr=2;addr<=5;++addr) {
-            uint8_t tx[5] = { (uint8_t)addr,0x42,0,0,0 },rx[5],ack[5];
-            txn(1-port,tx,5,rx,ack);
-            for (int i=0;i<5;++i)
-                check(rx[i]==0xFF && !ack[i],"standalone port rejects tap addresses");
-        }
-        sio_set_multitap(0);
-    }
-    /* The source pad profiles apply the same selection before their DTR mute. */
-    for (int profile=0;profile<2;++profile) {
-        const char *name = profile ? "nymashock-1.29.0-dualshock" : "octoshock-2.2.2-digital";
-#ifdef _WIN32
-        _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL",name);
-#else
-        setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL",name,1);
-#endif
-        setup_bus(); sio_set_multitap_port(0); sio_set_multitap(1);
-        sio_set_pad_connected(1,1); sio_set_pad_config_capable(1,0);
-        sio_set_pad_state_slot(1,0xFFFD);
-        uint8_t tx[5] = { 2,0x42,0,0,0 },rx[5],ack[5];
-        txn(0,tx,5,rx,ack);
-        check(rx[1]==0x41 && rx[2]==0x5A && rx[3]==0xFD && rx[4]==0xFF,
-              "source pad profile accepts a method-2 DTR session");
-        check(!pad_dtr_session_mute[0],"method-2 address does not mute the tap");
-        sio_set_multitap(0);
-    }
-#ifdef _WIN32
-    _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL","");
-#else
-    unsetenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
-#endif
+    method2_controls();
 
     /* Multitap on port 1, mouse on seat B: its 8-byte block in a bulk read is
      * 12 5A FF <buttons> dX dY FF FF (PSX-SPX multitap method 1). */
