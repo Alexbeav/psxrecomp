@@ -23,7 +23,10 @@ ROOT = HERE.parent.parent
 SOURCE_SUFFIXES = {".c", ".h", ".cpp", ".hpp", ".cc", ".inc"}
 # Third-party code, build output and generated code are not ours to rule on.
 SKIP_FOLDERS = {"lib", "generated", ".git", "__pycache__"}
-OPEN_CALL = re.compile(r"\b(?:fopen|freopen|_wfopen|fopen_s|_wfopen_s)\s*\(")
+OPEN_CALL = re.compile(r"\b(fopen|freopen|_wfopen|fopen_s|_wfopen_s)\s*\(")
+# Where the mode stands in the argument list: fopen(path, mode),
+# freopen(path, mode, stream), fopen_s(&stream, path, mode).
+MODE_ARGUMENT = {"fopen": 1, "freopen": 1, "_wfopen": 1, "fopen_s": 2, "_wfopen_s": 2}
 STRING = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 MODE = re.compile(r"[rwab+xtcn]{1,5}(?:,\s*ccs=[A-Za-z0-9-]+)?")
 
@@ -44,16 +47,52 @@ def sources():
                     yield Path(folder) / name
 
 
+def call_arguments(text, start):
+    """The arguments of the call whose "(" ends just before `start`.
+
+    The text is split at the commas of the call's own level and ends at the
+    parenthesis that closes the call. A literal is passed over whole, so a comma
+    or a parenthesis inside one does not count.
+    """
+    arguments = []
+    depth = 0
+    begin = position = start
+    while position < len(text):
+        char = text[position]
+        if char in "\"'":
+            close = position + 1
+            while close < len(text) and text[close] not in (char, "\n"):
+                close += 2 if text[close] == "\\" else 1
+            if close < len(text) and text[close] == char:
+                position = close
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                return arguments + [text[begin:position]]
+            depth -= 1
+        elif char == "," and depth == 0:
+            arguments.append(text[begin:position])
+            begin = position + 1
+        position += 1
+    return arguments
+
+
 def exclusive_opens(text):
-    """Line numbers of stream opens whose mode literal holds the "x" flag."""
+    """Line numbers of stream opens whose mode literal holds the "x" flag.
+
+    Only the mode argument of the call is read. Text after the call, such as the
+    message of an error branch or a second open in the same statement, does not
+    hide the flag (review of PS1B-206).
+    """
     hits = []
     for call in OPEN_CALL.finditer(text):
-        end = text.find(";", call.end())
-        literals = STRING.findall(text[call.end():end if end >= 0 else call.end() + 400])
-        if not literals:
+        arguments = call_arguments(text, call.end())
+        index = MODE_ARGUMENT[call.group(1)]
+        if len(arguments) <= index:
             continue
-        mode = literals[-1]
-        if MODE.fullmatch(mode) and "x" in mode.split(",")[0]:
+        if any(MODE.fullmatch(mode) and "x" in mode.split(",")[0]
+               for mode in STRING.findall(arguments[index])):
             hits.append(text.count("\n", 0, call.start()) + 1)
     return hits
 
@@ -79,6 +118,20 @@ def main():
     assert exclusive_opens('f = fopen(path, "wbx");\n') == [1]
     assert exclusive_opens('f = fopen(path,\n          "wx");\n') == [1]
     assert exclusive_opens('f = fopen("x.txt", "w");\nf = fopen(name, mode);\n') == []
+    # Three forms that the first scan missed: it took the last literal before
+    # the next ";" as the mode (review of PS1B-206).
+    assert exclusive_opens('if (!(f = fopen(path, "wx"))) '
+                           '{ fprintf(stderr, "cannot create %s\\n", path); return 0; }\n') == [1]
+    assert exclusive_opens('if ((f = fopen(path, "wx")) == NULL) '
+                           '{ perror("create"); return 0; }\n') == [1]
+    assert exclusive_opens('f = fopen(a, "wx"), g = fopen("b.txt", "r");\n') == [1]
+    # The mode is read by its place in the call, not by its look.
+    assert exclusive_opens('f = fopen("x", "w");\n') == []
+    assert exclusive_opens('f = fopen(name(a, "x"), "w"), g = fopen("b(,x", "wx");\n') == [1]
+    assert exclusive_opens('f = freopen(path, "wx", stdout);\n') == [1]
+    assert exclusive_opens('fopen_s(&f, "wx", "w");\nfopen_s(&f, path,\n        "wbx");\n') == [2]
+    assert exclusive_opens('f = fopen(path, binary ? "wbx" : "wx");\n') == [1]
+    assert exclusive_opens('f = fopen(path, "w"); puts("wx");\n') == []
 
     found = []
     count = 0
