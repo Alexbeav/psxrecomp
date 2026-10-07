@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+
+import host_bash
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,17 +16,8 @@ GATE = ROOT / "tools" / "check_private_paths.sh"
 
 
 def find_bash() -> str:
-    candidates = []
-    program_files = os.environ.get("ProgramFiles")
-    if program_files:
-        candidates.append(Path(program_files) / "Git" / "bin" / "bash.exe")
-    path_bash = shutil.which("bash")
-    if path_bash:
-        candidates.append(Path(path_bash))
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    raise AssertionError("bash is required for the package-gate regression")
+    # Never a WSL launcher: see host_bash.py (PS1B-271).
+    return host_bash.find_bash("the package-gate regression")
 
 
 def run_fixture(bash: str, value: str) -> subprocess.CompletedProcess[str]:
