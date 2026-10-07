@@ -14,6 +14,9 @@
  *      off it is the digest of RAM itself;
  *   3. the 16 bytes at game entry are kept for the run report.
  *
+ * The end of main() keeps the known limit of point 2 as a negative case: an
+ * unaligned word store (SWL, SWR) into RAM 0..15.
+ *
  * test_low_ram_game_entry.py builds it; link seams that this path does not
  * reach are stubs that abort (source_fixture_link.py). */
 #include "cpu_state.h"
@@ -33,6 +36,7 @@
 
 /* ---- memory.c under test ------------------------------------------------ */
 uint8_t *memory_get_ram_ptr(void);
+uint32_t psx_read_word(uint32_t addr);
 void psx_write_word(uint32_t addr, uint32_t val);
 void psx_write_half(uint32_t addr, uint16_t val);
 void psx_write_byte(uint32_t addr, uint8_t val);
@@ -137,6 +141,7 @@ int main(void) {
     static CPUState cpu;
     uint8_t *ram = memory_get_ram_ptr();
     uint8_t expect[16], at_entry[16];
+    uint32_t word;
 
     /* Before game entry: the kernel's stores land, and both builds agree. */
     g_debug_last_store_pc = 0xBFC019ECu;
@@ -208,6 +213,42 @@ int main(void) {
     memcpy(old_low, ram, 16);
     check_views("source profile");
 
-    puts("low RAM at game entry: RAM kept, older-recording view exact");
+    /* The known limit, kept as a negative case. SWL and SWR store part of a
+     * word. The interpreter and the generated code read the aligned word,
+     * merge the register into it and store the whole word. The older build's
+     * bytes then take all four bytes from real RAM, also the bytes that the
+     * instruction did not change. A build with the clear holds zero in those.
+     * So after such a store the view is not that build's RAM, and the replay
+     * of an older recording reports a difference that is not real. It cannot
+     * hide one: the view's bytes of that word are the real ones. When the
+     * store path follows byte by byte, the two checks marked "limit" fail:
+     * put check_views() in their place. */
+    source_profile = 0;
+    fntrace_restore_game_started(0);
+    fntrace_mark_game_started(&cpu);
+    memset(old_low, 0, sizeof old_low);
+    check_views("at the third game entry");
+    g_debug_last_store_pc = 0x80012000u;
+    /* SWL at 0x80000001: the register's two high bytes go to bytes 0 and 1. */
+    word = psx_read_word(0x80000000u);
+    psx_write_word(0x80000000u, (word & 0xFFFF0000u) | (0x12345678u >> 16));
+    /* SWR at 0x80000006: the register's two low bytes go to bytes 6 and 7. */
+    word = psx_read_word(0x80000004u);
+    psx_write_word(0x80000004u, (word & 0x0000FFFFu) | (0x9ABCDEF0u << 16));
+    expect[0] = 0x34; expect[1] = 0x12; expect[6] = 0xF0; expect[7] = 0xDE;
+    check(!memcmp(ram, expect, 16), "SWL and SWR store the merged words in RAM");
+    /* The older build merged the same four bytes into its zeros. */
+    old_low[0] = 0x34; old_low[1] = 0x12; old_low[6] = 0xF0; old_low[7] = 0xDE;
+    memory_set_low_ram_view_old(1);
+    check(!memcmp(memory_low_ram_view(), ram, 8),
+          "limit: after SWL and SWR the view holds both whole words of real RAM");
+    check(memcmp(memory_low_ram_view(), old_low, 8) != 0 && digest_ram_part() != crc_of_model(),
+          "limit: after SWL and SWR the view is not the older build's RAM");
+    check(!memcmp(memory_low_ram_view() + 8, old_low + 8, 8),
+          "SWL and SWR leave the view's other two words");
+    memory_set_low_ram_view_old(0);
+    check(digest_ram_part() == crc_of_ram(), "after SWL and SWR: switch off, the digest is of RAM");
+
+    puts("low RAM at game entry: RAM kept, older-recording view exact, SWL/SWR limit unchanged");
     return 0;
 }

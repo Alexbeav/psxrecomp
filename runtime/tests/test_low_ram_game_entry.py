@@ -68,4 +68,5 @@ if __name__ == "__main__":
             build_and_run(args.cc, HERE, HERE.parent, opt, Path(root),
                           ["memory.c", "fntrace.c", "netplay_state_digest.c", "crc32.c"],
                           "test_low_ram_game_entry.c")
-    print("PASS: game entry keeps RAM 0..15; the older-recording view is exact (O0/O2)")
+    print("PASS: game entry keeps RAM 0..15; the older-recording view is exact; "
+          "its SWL/SWR limit is unchanged (O0/O2)")
