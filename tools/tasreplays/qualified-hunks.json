@@ -7371,6 +7371,7 @@
             "#include <stdio.h>",
             "#include <stdlib.h>",
             "#include <string.h>",
+            "#include \"psx_file_create_new.h\"",
             ""
           ]
         },
@@ -7530,7 +7531,7 @@
             "        else escaped[used++]=(char)*p;",
             "    }",
             "    escaped[used]=0;",
-            "    f = fopen(path, \"wbx\");",
+            "    f = psx_file_create_new(path, 1);",
             "    if (!f) return 0;",
             "    ok = fprintf(f,",
             "                 \"{\\n\"",
@@ -7912,6 +7913,14 @@
           "reason": "e5a020ac lp64 state_bytes parse through a uint64_t temporary (type fix)",
           "dropped_lines": 1,
           "from_blocks": 20,
+          "to_blocks": 22
+        },
+        {
+          "as_of": "worktree on a279b5e86a8d4f027ccdc4965d2aabc39bfbf04e",
+          "issue": "PS1B-206",
+          "reason": "the manifest is created through psx_file_create_new() (an exclusive open plus fdopen, binary) instead of the C11 exclusive-create flag of fopen, which msvcrt rejects; the include block gains that header. Two blocks hold the present lines. The file's content and the refusal of an existing file are unchanged; no route replay has run on this change",
+          "dropped_lines": 1,
+          "from_blocks": 22,
           "to_blocks": 22
         }
       ]
