@@ -11,7 +11,9 @@ extern int g_precise_mode;
 int psx_get_in_exception(void) { return in_exception; }
 uint8_t *memory_get_ram_ptr(void) { return (uint8_t *)ram; }
 uint8_t *g_psx_ram = (uint8_t *)ram;
-int g_ds_recording, g_dma_cpu_read_wait, g_ram_read_watch_active;
+volatile int g_ds_recording;
+uint32_t g_dma_cpu_read_wait;
+int g_ram_read_watch_active;
 /* Timing credits are disabled; the production guest value delay stays active. */
 int g_psx_load_delay;
 /* No device deadline, IRQ, enhancement or compiled body is involved. The
