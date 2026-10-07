@@ -61,8 +61,9 @@ def nm_symbols(objs):
 
 
 def write_stubs(path, symbols):
-    lines = ["#include <stdlib.h>", "/* Unrelated link seams must not execute. */"]
-    lines += ["void %s(void) { abort(); }" % s for s in sorted(symbols)]
+    lines = ["#include <stdlib.h>", "#include <stdio.h>", "/* Unrelated link seams must not execute. */"]
+    lines += ['void %s(void) { fputs("unexpected fixture seam: %s\\n", stderr); abort(); }' % (s, s)
+              for s in sorted(symbols)]
     path.write_text("\n".join(lines) + "\n")
 
 

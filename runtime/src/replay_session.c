@@ -817,20 +817,21 @@ static int refuse_play(const char *why)
     return 0;
 }
 
-/* The value of `key` in "key=value" lines, or "" when absent. */
-static void line_value(const char *lines, const char *key, char *out, size_t cap)
+/* The first value of `key`, or "" when absent; return its declaration count. */
+static unsigned line_value(const char *lines, const char *key, char *out, size_t cap)
 {
     const size_t k = strlen(key);
+    unsigned count = 0;
     out[0] = 0;
     for (const char *p = lines; p && *p; ) {
         const char *end = strchr(p, '\n');
         const size_t n = end ? (size_t)(end - p) : strlen(p);
         if (n > k && !strncmp(p, key, k) && p[k] == '=') {
-            snprintf(out, cap, "%.*s", (int)(n - k - 1), p + k + 1);
-            return;
+            if (!count++) snprintf(out, cap, "%.*s", (int)(n - k - 1), p + k + 1);
         }
         p = end ? end + 1 : p + n;
     }
+    return count;
 }
 
 int replay_session_play_file(const char *path)
@@ -923,8 +924,12 @@ int replay_session_play_file(const char *path)
         line_value(rp->product, "codegen", s_rec_codegen, sizeof s_rec_codegen);
         line_value(player, "codegen", s_player_codegen, sizeof s_player_codegen);
         char digest_version[16];
-        line_value(rp->product, "core_digest", digest_version, sizeof digest_version);
-        if (!digest_version[0] || strcmp(digest_version, "1") == 0)
+        unsigned digest_declarations = line_value(rp->product, "core_digest", digest_version, sizeof digest_version);
+        if (!digest_declarations)
+            s_play_core_digest_version = 1u;
+        else if (digest_declarations != 1u || !digest_version[0])
+            error = "empty or repeated core digest version";
+        else if (strcmp(digest_version, "1") == 0)
             s_play_core_digest_version = 1u;
         else if (strcmp(digest_version, "2") != 0)
             error = "unsupported core digest version";

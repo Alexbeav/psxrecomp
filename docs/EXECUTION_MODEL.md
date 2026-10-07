@@ -47,6 +47,9 @@ New replay product metadata declares `core_digest=2`. Earlier recordings omit
 that field and use version 1, which excludes cache words from the core digest.
 Version 2 and rollback digests include them. Both versions retain cache tags.
 This changes comparison only. Guest execution still uses cache contents.
+An explicit digest version must occur once with value `1` or `2`. Empty,
+repeated or unknown versions are refused before settings, cards or an anchor
+are applied. An absent product extension also selects the legacy comparison.
 Lockstep shadow state and the deterministic clock digest also include contents.
 
 ## Why a PS1 game can't just be "decompiled once"
