@@ -12,6 +12,12 @@ That is the whole thing. CTest reports the enabled and disabled tests for this s
 It needs **no BIOS dump, no disc image, and no generated code**. A plain
 recompiler build is enough. Run this check before you open a PR.
 
+On Windows, follow the recipe at the top of
+[`WINDOWS_TOOLCHAIN_TRAPS.md`](WINDOWS_TOOLCHAIN_TRAPS.md) first: the toolchain's
+`bin` folder first on `PATH` in every shell, a short build directory, and
+`psxrecomp-game --help` exiting 0 before you quote a count. Without it a suite
+can report dozens of failures that are a DLL load failure and not the code.
+
 The `psxrecomp-game` build writes both codegen-hash headers inside its build
 directory. A standalone runtime build writes its header inside the runtime
 build directory. Tests verify that neither build writes into the source tree.
