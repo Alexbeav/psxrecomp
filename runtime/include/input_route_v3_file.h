@@ -28,6 +28,7 @@
  * Parsing touches no guest state and no live input. */
 #include "input_route_file.h"
 #include "input_dualshock_route_file.h"
+#include "input_replay_devices.h"
 #include <stdlib.h>
 
 #define INPUT_ROUTE_V3_HEADER_BYTES 28u
@@ -82,6 +83,8 @@
 #define INPUT_ROUTE_TAG_REPLAY_PRODUCT  0x80000308u
 #define INPUT_ROUTE_REPLAY_CARD_BYTES   (128u * 1024u)
 #define INPUT_ROUTE_REPLAY_PRODUCT_MAX  1024u
+/* PS1B-344: PSXRTI4 only; final inputs for both standalone console ports. */
+#define INPUT_ROUTE_TAG_REPLAY_DEVICES  0x00000309u
 
 /* Disc digest kinds. CUE: SHA-256 over the ASCII hex digests of the cue file
  * and then each FILE track in cue order, joined by '\n', no trailing newline
@@ -143,6 +146,10 @@ typedef struct {
     uint32_t cards_mask;       /* card images located at cards_offset */
     long cards_offset;
     char product[INPUT_ROUTE_REPLAY_PRODUCT_MAX + 1];
+    long devices_offset;
+    uint32_t devices_length, devices_count;
+    uint8_t device_profile[2];
+    InputReplayDevicePort device_initial[2];
 } InputRouteV3Replay;
 
 /* Replay entries for input_route_v3_write_ex; NULL members are left out. */
@@ -159,6 +166,9 @@ typedef struct {
     const unsigned char *cards;   /* 128 KiB per bit set in cards_mask */
     uint32_t cards_mask;          /* written when power_on */
     const char *product;
+    const InputReplayDeviceRun *devices;
+    uint32_t devices_count;
+    const InputReplayDevicePort *device_initial;
 } InputRouteV3ReplayOut;
 
 static inline uint32_t input_route_replay_card_count(uint32_t mask)
@@ -191,7 +201,7 @@ static inline const char *input_route_v3_text(FILE *f, uint32_t length, char *ou
     return NULL;
 }
 
-/* Reads a complete PSXRTI3 file from the current position (the magic). Steps
+/* Reads PSXRTI3, or PSXRTI4 only with replay admission. Steps
  * go to `digital` for record_size 8 and `dualshock` for 12; a NULL array
  * refuses that record layout. `markers` and `checkpoints` hold up to
  * INPUT_ROUTE_V3_MAX_MARKERS entries each. `meta` is published only when the
@@ -216,13 +226,16 @@ static inline const char *input_route_v3_read_ex(
     memset(&s, 0, sizeof(s));
     if (!f || (start = ftell(f)) < 0) return "unseekable route";
     if (fread(h, 1, sizeof(h), f) != sizeof(h)) return "short header";
-    if (memcmp(h, "PSXRTI3\0", 8) || input_route_le32(h + 8) != 3)
+    const int v4 = !memcmp(h, "PSXRTI4\0", 8) && input_route_le32(h + 8) == 4;
+    if (!v4 && (memcmp(h, "PSXRTI3\0", 8) || input_route_le32(h + 8) != 3))
         return "header identity";
+    if (v4 && !replay) return "device replay not admitted";
     s.record_size = input_route_le32(h + 12);
     s.frames = input_route_le32(h + 16);
     ext = input_route_le32(h + 24);
     if (s.record_size != 8 && s.record_size != INPUT_DUALSHOCK_ROUTE_RECORD_BYTES)
         return "record size";
+    if (v4 && s.record_size != INPUT_DUALSHOCK_ROUTE_RECORD_BYTES) return "device replay record size";
     if (!s.frames || s.frames > INPUT_ROUTE_MAX_FRAMES) return "frame count";
     if (input_route_le32(h + 20)) return "flags";
     if (ext % 4 || ext > INPUT_ROUTE_V3_MAX_EXT) return "extension size";
@@ -381,6 +394,14 @@ static inline const char *input_route_v3_read_ex(
             rp.cards_offset = ftell(f) - start;
             if (fseek(f, (long)(length - 4u), SEEK_CUR)) error = "short replay cards";
             break;
+        case INPUT_ROUTE_TAG_REPLAY_DEVICES:
+            if (!v4 || !replay) { error = "device replay not admitted"; break; }
+            if (rp.devices_count) { error = "duplicate device stream"; break; }
+            rp.devices_offset = ftell(f) - start;
+            rp.devices_length = length;
+            error = input_replay_devices_read(f, length, s.frames, NULL,
+                                               rp.device_profile, rp.device_initial, &rp.devices_count);
+            break;
         case INPUT_ROUTE_TAG_REPLAY_PRODUCT:
             if (!replay) { if (fseek(f, (long)length, SEEK_CUR)) error = "short extension payload"; break; }
             if (rp.product[0]) { error = "duplicate replay product"; break; }
@@ -405,6 +426,7 @@ static inline const char *input_route_v3_read_ex(
     }
     free(cp);
     if (error) return error;
+    if (v4 && !rp.devices_count) return "missing device stream";
     if (identity && identity != 31u) return "partial identity";
     s.has_identity = identity == 31u;
     for (uint32_t i = 0, j = 0; i < s.checkpoint_count; ++i) {
@@ -477,7 +499,7 @@ typedef struct {
     uint8_t axes_ly_lx_ry_rx[4];
 } InputRouteDualShockWord;
 
-/* Writes a PSXRTI3 route: identity when meta->has_identity, then the replay
+/* Writes PSXRTI3, or PSXRTI4 with mandatory rx->devices: identity when meta->has_identity, then the replay
  * anchor and settings when given, then `meta->marker_count` markers and
  * `meta->checkpoint_count` checkpoints, then one record per frame: `words`
  * (record size 8) or `dual` (record size 12), exactly one of them non-NULL.
@@ -500,6 +522,10 @@ static inline const char *input_route_v3_write_ex(
     const uint32_t cards_length =
         4u + input_route_replay_card_count(cards_mask) * INPUT_ROUTE_REPLAY_CARD_BYTES;
     const size_t product_len = rx && rx->product ? strlen(rx->product) : 0;
+    const uint32_t device_count = rx && rx->devices
+        ? input_replay_devices_prefix(rx->devices, rx->devices_count, frames) : 0;
+    const uint32_t device_bytes = device_count
+        ? INPUT_REPLAY_DEVICE_HEADER_BYTES + device_count * INPUT_REPLAY_DEVICE_RUN_BYTES : 0;
     unsigned char h[INPUT_ROUTE_V3_HEADER_BYTES], small[36], r[8];
     unsigned char cp[INPUT_ROUTE_CHECKPOINT_BYTES];
     uint64_t ext = 0;
@@ -515,6 +541,9 @@ static inline const char *input_route_v3_write_ex(
         ext += input_route_v3_entry_bytes(36);
     }
     if (!words == !dual) return "record layout";
+    if (rx && rx->devices && (!device_count || (!anchor && !power_on)))
+        return "device replay frame coverage/start";
+    if (device_bytes) ext += input_route_v3_entry_bytes(device_bytes);
     if (anchor && power_on) return "replay anchor and power-on";
     if (anchor) ext += input_route_v3_entry_bytes(anchor_length);
     if (power_on) {
@@ -545,8 +574,8 @@ static inline const char *input_route_v3_write_ex(
     ext += (uint64_t)meta->marker_count * input_route_v3_entry_bytes(INPUT_ROUTE_MARKER_BYTES);
     ext += (uint64_t)meta->checkpoint_count * input_route_v3_entry_bytes(INPUT_ROUTE_CHECKPOINT_BYTES);
     if (ext > INPUT_ROUTE_V3_MAX_EXT) return "extension size";
-    memcpy(h, "PSXRTI3\0", 8);
-    input_route_put32(h + 8, 3);
+    memcpy(h, device_count ? "PSXRTI4\0" : "PSXRTI3\0", 8);
+    input_route_put32(h + 8, device_count ? 4 : 3);
     input_route_put32(h + 12, words ? 8u : INPUT_DUALSHOCK_ROUTE_RECORD_BYTES);
     input_route_put32(h + 16, frames);
     input_route_put32(h + 20, 0);
@@ -583,6 +612,15 @@ static inline const char *input_route_v3_write_ex(
                                                  (const unsigned char *)rx->product,
                                                  (uint32_t)product_len))
         return "write replay product";
+    if (device_bytes) {
+        unsigned char e8[8];
+        input_route_put32(e8, INPUT_ROUTE_TAG_REPLAY_DEVICES);
+        input_route_put32(e8 + 4, device_bytes);
+        if (fwrite(e8, 1, 8, f) != 8) return "write device entry";
+        const char *device_error = input_replay_devices_write(f, rx->devices,
+                                                              rx->devices_count, frames, rx->device_initial);
+        if (device_error) return device_error;
+    }
     if (settings && settings[0] &&
         !input_route_v3_put_entry(f, INPUT_ROUTE_TAG_REPLAY_SETTINGS,
                                   (const unsigned char *)settings, (uint32_t)strlen(settings)))

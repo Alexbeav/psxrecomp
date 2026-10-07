@@ -31,6 +31,38 @@ static int osd_count;
 void replay_host_osd(const char *text, int ms) { (void)ms; snprintf(osd_last, sizeof osd_last, "%s", text); osd_count++; }
 static int can_record = 1;
 int replay_host_can_record(char *why, size_t cap) { if (!can_record) snprintf(why, cap, "netplay"); return can_record; }
+static InputReplayDevicePort device_ports[2];
+static unsigned device_samples, device_applies, device_ends;
+static int device_guest;
+int replay_host_devices_capture(InputReplayDevicePort out[2], int sample) {
+    if (sample) {
+        const unsigned f = device_samples++;
+        for (unsigned p = 0; p < 2; ++p) {
+            InputReplayDevicePort *d = &device_ports[p];
+            if (d->kind == 0) {
+                d->buttons = (uint16_t)(0xffffu ^ (1u << (f % 16)));
+                for (unsigned a = 0; a < 4; ++a) d->axes[a] = (uint8_t)(f + a * 13);
+            } else if (d->kind == 1) {
+                d->buttons = f % 4; d->motion[0] = (int16_t)((int)(f % 600) - 300);
+                d->motion[1] = (int16_t)(300 - (int)(f % 600));
+            } else if (d->kind == 2) {
+                d->buttons = (uint16_t)((0xffffu ^ (1u << (f % 16))) | 0xc707u);
+                for (unsigned a = 0; a < 4; ++a) d->axes[a] = (uint8_t)(f + a * 17);
+            } else {
+                d->buttons = f % 2 ? 0xdff7u : 0xffffu;
+                d->xy[0] = f % 3 ? (uint16_t)(200 + f) : 1;
+                d->xy[1] = f % 3 ? (uint16_t)(100 + f) : 10;
+            }
+        }
+    }
+    memcpy(out, device_ports, sizeof device_ports); return 1;
+}
+int replay_host_devices_apply(const InputReplayDevicePort in[2]) {
+    for (unsigned p = 0; p < 2; ++p)
+        if (!input_replay_device_port_ok(&in[p]) || in[p].kind != device_ports[p].kind) return 0;
+    memcpy(device_ports, in, sizeof device_ports); ++device_applies; return 1;
+}
+void replay_host_devices_end(void) { ++device_ends; }
 static char product_pin[41] = "0123456789abcdef0123456789abcdef01234567";
 static char product_serial[16] = "SLUS-00001";
 static char product_bios_stem[32] = "SCPH1001";
@@ -142,6 +174,19 @@ static void run_frame(uint16_t buttons, const uint8_t st[4]) {
     safe_point();
     uint32_t h = (uint32_t)(cycle * 2654435761u) ^ buttons ^ ((uint32_t)st[0] << 16) ^ ((uint32_t)st[3] << 24);
     for (unsigned i = 0; i < 64; ++i) ram[(h + i * 4099u) % RAM_BYTES] ^= (uint8_t)(h >> (i % 24));
+    if (device_guest) {
+        unsigned char inputs[32];
+        for (unsigned p = 0; p < 2; ++p) {
+            input_replay_device_encode(inputs + 16*p, &device_ports[p]);
+            if (device_ports[p].kind == 1)
+                for (unsigned a = 0; a < 2; ++a) {
+                    const int v = device_ports[p].motion[a];
+                    device_ports[p].motion[a] -= (int16_t)(v < -128 ? -128 : v > 127 ? 127 : v);
+                }
+        }
+        for (unsigned i = 0; i < sizeof inputs; ++i)
+            ram[2000 + i] = (uint8_t)(ram[2000 + i] * 31u + inputs[i]);
+    }
     /* The guest reads its memory cards: the replay's while they are in. */
     for (unsigned c = 0; c < 2; ++c) {
         const uint32_t mask = replay_cards_in ? replay_cards_mask : host_cards_mask;
@@ -741,6 +786,69 @@ static void test_boot_names(void) {
     CHECK(!replay_session_boot_path("", "t", 0, p, sizeof p), "no folder, no name");
 }
 
+static void device_initial(unsigned kind, unsigned port) {
+    memset(device_ports, 0, sizeof device_ports);
+    for (unsigned p = 0; p < 2; ++p) {
+        device_ports[p].connected = 1; device_ports[p].buttons = 0xffff;
+        memset(device_ports[p].axes, 128, 4);
+    }
+    InputReplayDevicePort *d = &device_ports[port];
+    d->kind = (uint8_t)kind; memset(d->axes, 0, 4);
+    if (kind == 1) { d->buttons = 0; d->motion[0] = 300; d->motion[1] = -300; }
+    else if (kind == 2) d->axes[0] = 128;
+    else { d->xy[0] = 1; d->xy[1] = 10; }
+    device_samples = 0;
+}
+static void test_devices(void) {
+    for (unsigned kind = 1; kind <= 3; ++kind) for (unsigned port = 0; port < 2; ++port) {
+        char path[700];
+        clear_slots(); cold_boot(); device_initial(kind, port); device_guest = 1;
+        const InputReplayDevicePort seed[2] = {device_ports[0], device_ports[1]};
+        const int slot = record(80, "cd_speed=1\n");
+        CHECK(device_samples == 80, "kind%u port%u samples exactly once per recorded boundary", kind, port);
+        CHECK(replay_session_rename_slot(slot, "peripheral"), "v4 rename preserves stream");
+        slot_path(slot, path, sizeof path);
+        device_initial(kind, port); device_ports[port].buttons = kind == 1 ? 3 : 0xffff;
+        const InputReplayDevicePort saved[2] = {device_ports[0], device_ports[1]};
+        const unsigned applies = device_applies, ends = device_ends;
+        CHECK(replay_session_play_file(path), "kind%u port%u anchored playback: %s", kind, port, osd_last);
+        CHECK(replay_session_owns_devices(), "both ports owned while loading");
+        for (unsigned i = 0; i < 90 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xffff, neutral);
+        CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "kind%u port%u anchored in sync", kind, port);
+        CHECK(device_applies == applies + 82, "one seed,80 frames,one restore; no extra mouse refill");
+        CHECK(device_ends == ends + 1 && !replay_session_owns_devices(), "ownership released and live motion discarded");
+        CHECK(device_ports[port].kind == saved[port].kind, "profile retained after play");
+        CHECK(device_samples == 0, "playback never samples host device input");
+        device_initial(kind,port);
+        const InputReplayDevicePort stopped_saved[2] = {device_ports[0],device_ports[1]};
+        CHECK(replay_session_play_file(path),"start explicit stop control");
+        vblank(0xffff,neutral); vblank(0xffff,neutral);
+        CHECK(replay_session_state() == REPLAY_PLAYING && replay_session_toggle_record(),"F11 stops playing peripheral replay");
+        CHECK(replay_session_last_result() == REPLAY_RESULT_TAKEN_OVER &&
+              !memcmp(device_ports,stopped_saved,sizeof device_ports),"explicit stop restores exact prior pending inputs");
+        /* A mismatch must refuse before settings, cards or anchor installation. */
+        device_ports[port].kind = 0;
+        const int old_restores = restores, old_load = load_pending;
+        CHECK(!replay_session_play_file(path), "wrong profile refused");
+        CHECK(restores == old_restores && load_pending == old_load && !replay_cards_in,
+              "profile refusal has no host installation");
+        /* Power-on and anchored start use the same lossless device stream. */
+        snprintf(path, sizeof path, "%s/device-%u-port-%u.psxrpl", dir, kind, port); remove(path);
+        cold_boot(); device_initial(kind, port); power_on_now = 1;
+        CHECK(replay_session_record_power_on(path), "peripheral power-on record");
+        for (unsigned i = 0; i < 30; ++i) vblank(script(i), neutral);
+        CHECK(replay_session_toggle_record(), "peripheral power-on stop"); vblank(0xffff, neutral);
+        CHECK(replay_session_state() == REPLAY_IDLE && file_exists(path), "peripheral power-on saved");
+        cold_boot(); memcpy(device_ports, seed, sizeof seed);
+        CHECK(play_from_boot(path, 35, 0) == REPLAY_RESULT_IN_SYNC, "kind%u port%u power-on in sync", kind, port);
+        cold_boot(); memcpy(device_ports, seed, sizeof seed); power_on_now = 1;
+        device_ports[port].connected = 0;
+        CHECK(!replay_session_play_file(path) && !replay_cards_in, "boot input mismatch refused before card install");
+        power_on_now = 0; remove(path); device_guest = 0;
+        memset(device_ports, 0, sizeof device_ports);
+    }
+}
+
 int main(int argc, char **argv) {
     snprintf(dir, sizeof dir, "%s", argc > 1 ? argv[1] : "replay_session_test_dir");
     mkdir_p(dir);
@@ -757,6 +865,7 @@ int main(int argc, char **argv) {
     test_power_on_record_and_play();
     test_identity_rules();
     test_boot_names();
+    test_devices();
     clear_slots();
     if (failures) { fprintf(stderr, "%d of %d checks failed\n", failures, checks); return 1; }
     printf("PASS: replay session, %d checks\n", checks);

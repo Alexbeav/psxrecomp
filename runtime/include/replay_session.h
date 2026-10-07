@@ -2,7 +2,7 @@
 #define PSX_REPLAY_SESSION_H
 /* Player replay recorder and player (PS1B-191).
  *
- * A replay is a PSXRTI3 route (input_route_v3_file.h) that also carries its
+ * A replay uses PSXRTI3, or PSXRTI4 for peripherals (input_route_v3_file.h), and carries its
  * anchor: the machine state it starts from, and the host settings that change
  * guest timing. It records the P1 pad once per vblank as delivered to SIO
  * (buttons and protocol sticks), with an END checkpoint (cycle, RAM hash) on
@@ -49,7 +49,8 @@ ReplayState replay_session_state(void);
 ReplayResult replay_session_last_result(void);
 
 /* F11 (HOST_KEYMAP_REPLAY_RECORD): start recording into the next free slot,
- * or stop the recording in progress. Returns 1 when the request was taken. */
+ * stop the recording, or stop a playing peripheral replay to take control.
+ * Returns 1 when the request was taken. */
 int replay_session_toggle_record(void);
 /* Start recording into an explicit new file (headless tests). The file must
  * not exist. */
@@ -140,9 +141,19 @@ void replay_session_shutdown(void);
 
 /* ---- Host hooks (main.cpp; stubs in the unit test) ---- */
 void replay_host_osd(const char *text, int ms);
-/* 0 and a reason when recording is not possible now (netplay, a multitap, an
- * armed route, a mouse or other non-pad device in either port). */
+/* 0 and a reason when recording is not possible now (netplay, a multitap,
+ * an armed route, unavailable save slots or rewind). */
 int replay_host_can_record(char *why, size_t cap);
+/* Final inputs for both standalone ports. sample=1 samples the live host
+ * once, after the preceding frame's digest; sample=0 only reads SIO input.
+ * Apply never changes the device profile or transaction/config state. */
+int replay_host_devices_capture(InputReplayDevicePort out[2], int sample);
+int replay_host_devices_apply(const InputReplayDevicePort in[2]);
+/* Discard live host mouse motion accumulated while playback owned the ports. */
+void replay_host_devices_end(void);
+/* A non-pad replay owns both ports, including arming/loading. No live
+ * device-kind change is allowed; active frames sample/apply only at boundary. */
+int replay_session_owns_devices(void);
 /* Fill the identity fields of *meta (pin, disc, BIOS, boot mode). */
 int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap);
 /* Save the machine state and load it straight back at the next safe

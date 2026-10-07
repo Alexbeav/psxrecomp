@@ -30,6 +30,15 @@ static int s_rec_slot = -1;
 static int s_stop_requested;
 static InputRouteDualShockWord *s_words;
 static uint32_t s_frames, s_steps;
+static InputReplayDeviceRun *s_device_runs;
+static uint32_t s_device_count;
+static uint8_t s_device_profile[2];
+static InputReplayDevicePort s_initial_devices[2];
+static InputReplayDeviceRun *s_play_device_runs;
+static uint32_t s_play_device_count, s_play_device_step, s_play_device_left;
+static InputReplayDevicePort s_saved_devices[2];
+static int s_saved_devices_valid;
+static void end_playback(ReplayResult result, const char *osd);
 static InputRouteV3 s_meta;
 static char s_settings[INPUT_ROUTE_REPLAY_SETTINGS_MAX + 1];
 static uint8_t *s_anchor;
@@ -137,6 +146,9 @@ static void write_verdict(ReplayResult result, const char *reason)
 ReplayState replay_session_state(void) { return s_state; }
 ReplayResult replay_session_last_result(void) { return s_result; }
 int replay_session_owns_p1(void) { return s_state == REPLAY_RECORDING || s_state == REPLAY_PLAYING; }
+int replay_session_owns_devices(void) {
+    return s_state != REPLAY_IDLE && (s_device_runs || s_play_device_runs);
+}
 
 int replay_session_rec_visible(uint64_t now_ms)
 {
@@ -474,6 +486,8 @@ static void free_recording(void)
     free(s_thumb); s_thumb = NULL; s_have_thumb = 0;
     free(s_digests); s_digests = NULL; s_digest_count = 0;
     free(s_words); s_words = NULL;
+    free(s_device_runs); s_device_runs = NULL;
+    s_device_count = 0;
     free(s_anchor); s_anchor = NULL; s_anchor_size = 0;
     free(s_last_ram); s_last_ram = NULL;
     free(s_cards); s_cards = NULL; s_cards_mask = 0;
@@ -509,8 +523,14 @@ static int begin_recording(const char *path, int slot, int power_on)
     if (power_on && !replay_host_at_power_on())
         return refuse_record("a replay from power-on must start at boot");
     if (!replay_host_can_record(why, sizeof why)) return refuse_record(why);
+    InputReplayDevicePort initial[2];
+    if (!replay_host_devices_capture(initial, 0)) return refuse_record("cannot read the device profile");
+    s_device_profile[0] = initial[0].kind; s_device_profile[1] = initial[1].kind;
+    memcpy(s_initial_devices, initial, sizeof initial);
     memset(&s_meta, 0, sizeof s_meta);
     if (!replay_host_identity(&s_meta, why, sizeof why)) return refuse_record(why);
+    if (s_device_profile[0] || s_device_profile[1])
+        s_device_runs = (InputReplayDeviceRun *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof *s_device_runs);
     s_words = (InputRouteDualShockWord *)malloc(INPUT_ROUTE_MAX_FRAMES * sizeof *s_words);
     s_last_ram = (uint8_t *)malloc(RAM_BYTES);
     s_digests = (uint32_t (*)[5])malloc(DIGEST_CAP * sizeof *s_digests);
@@ -518,7 +538,8 @@ static int begin_recording(const char *path, int slot, int power_on)
     s_thumb = (uint32_t *)malloc(REPLAY_THUMB_W * REPLAY_THUMB_H * sizeof *s_thumb);
     s_have_thumb = 0;
     if (power_on) s_cards = (uint8_t *)calloc(2, INPUT_ROUTE_REPLAY_CARD_BYTES);
-    if (!s_words || !s_last_ram || !s_digests || !s_thumb || (power_on && !s_cards)) {
+    if (!s_words || !s_last_ram || !s_digests || !s_thumb || (power_on && !s_cards) ||
+        ((s_device_profile[0] || s_device_profile[1]) && !s_device_runs)) {
         free_recording();
         return refuse_record("out of memory");
     }
@@ -632,6 +653,9 @@ static const char *write_recording(const char *path)
         rx.digests_length = digests_length;
         if (s_have_thumb) { rx.thumb = s_thumb; rx.thumb_w = REPLAY_THUMB_W; rx.thumb_h = REPLAY_THUMB_H; }
         rx.name = name;
+        rx.devices = s_device_runs;
+        rx.devices_count = s_device_count;
+        rx.device_initial = s_initial_devices;
         if (s_power_on) {
             /* Only the inserted cards' images, in slot order. */
             rx.power_on = 1;
@@ -655,7 +679,9 @@ static const char *write_recording(const char *path)
         if (r) fclose(r);
         if (!error && (back.frames != s_last_frame || rp->anchor_length != s_anchor_size ||
                        rp->digest_count != s_digest_count || rp->power_on != s_power_on ||
-                       rp->cards_mask != s_cards_mask))
+                       rp->cards_mask != s_cards_mask ||
+                       rp->devices_count != (s_device_runs
+                           ? input_replay_devices_prefix(s_device_runs, s_device_count, s_last_frame) : 0)))
             error = "the replay does not read back identically";
         free(rp); free(steps); free(markers); free(cps);
         if (error) remove(path);
@@ -722,6 +748,12 @@ static void finish_recording(void)
 
 int replay_session_toggle_record(void)
 {
+    /* A peripheral pointer/button has no pad takeover word. The existing
+     * replay key gives it an explicit stop, before a second press records. */
+    if (s_state == REPLAY_PLAYING && s_play_device_runs) {
+        end_playback(REPLAY_RESULT_TAKEN_OVER, "Playback stopped: you have control");
+        return 1;
+    }
     if (s_state == REPLAY_ARMING || s_state == REPLAY_RECORDING) {
         s_stop_requested = 1;
         return 1;
@@ -771,6 +803,36 @@ static void record_boundary(uint16_t b, const uint8_t sticks[4])
         finish_recording();
         return;
     }
+    if (s_device_runs) {
+        InputReplayDevicePort ports[2];
+        if (!replay_host_devices_capture(ports, 1) ||
+            ports[0].kind != s_device_profile[0] || ports[1].kind != s_device_profile[1] ||
+            !input_replay_device_port_ok(&ports[0]) || !input_replay_device_port_ok(&ports[1])) {
+            finish_recording();
+            replay_host_osd("Recording stopped: the device profile/input changed", 2400);
+            return;
+        }
+        if (!ports[0].kind) {
+            ports[0].buttons = b;
+            memcpy(ports[0].axes, sticks, 4);
+        }
+        const int changed = !s_device_count ||
+            memcmp(s_device_runs[s_device_count - 1].ports, ports, sizeof ports);
+        if (changed && s_device_count == INPUT_ROUTE_MAX_STEPS) {
+            finish_recording();
+            return;
+        }
+        if (changed) {
+            memcpy(s_device_runs[s_device_count].ports, ports, sizeof ports);
+            s_device_runs[s_device_count++].frames = 0;
+        }
+        s_device_runs[s_device_count - 1].frames++;
+        if (!replay_host_devices_apply(ports)) {
+            finish_recording();
+            replay_host_osd("Recording stopped: device input cannot be applied", 2400);
+            return;
+        }
+    }
     s_steps += (uint32_t)new_step;
     s_words[s_frames++] = w;
 }
@@ -784,6 +846,13 @@ static void end_playback(ReplayResult result, const char *osd)
     s_settings_switched = 0;
     if (s_cards_installed) replay_host_cards_restore();
     s_cards_installed = 0;
+    if (s_saved_devices_valid) {
+        replay_host_devices_apply(s_saved_devices);
+        replay_host_devices_end();
+    }
+    s_saved_devices_valid = 0;
+    free(s_play_device_runs); s_play_device_runs = NULL;
+    s_play_device_count = s_play_device_step = s_play_device_left = 0;
     free(s_steps_play); s_steps_play = NULL;
     free(s_play_digests); s_play_digests = NULL;
     s_play_digest_count = s_play_digest_next = 0;
@@ -833,6 +902,7 @@ int replay_session_play_file(const char *path)
     InputRouteMarker *markers = NULL;
     InputRouteCheckpoint *cps = NULL;
     InputDualShockRouteStep *steps = NULL;
+    InputReplayDeviceRun *device_runs = NULL;
     uint8_t *anchor = NULL, *cards = NULL;
     unsigned char *dig = NULL;
     uint32_t (*digests)[5] = NULL;
@@ -859,6 +929,13 @@ int replay_session_play_file(const char *path)
     steps = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof *steps);
     error = !rp || !markers || !cps || !steps ? "out of memory"
           : input_route_v3_read_ex(f, &meta, NULL, steps, markers, cps, rp);
+    if (!error && rp->devices_count) {
+        device_runs = (InputReplayDeviceRun *)calloc(rp->devices_count, sizeof *device_runs);
+        if (!device_runs) error = "out of memory";
+        else if (fseek(f, rp->devices_offset, SEEK_SET)) error = "cannot read device stream";
+        else error = input_replay_devices_read(f, rp->devices_length, meta.frames,
+            device_runs, rp->device_profile, rp->device_initial, &rp->devices_count);
+    }
     if (!error && rp->power_on) {
         /* The inserted cards' images, back into their slots. */
         s_play_power_on = 1;
@@ -923,10 +1000,23 @@ int replay_session_play_file(const char *path)
         error = "it was recorded with a different BIOS";
     if (!error && strcmp(meta.boot_mode, product.boot_mode))
         error = "it was recorded with a different boot mode";
+    if (!error) {
+        if (!replay_host_devices_capture(s_saved_devices, 0)) error = "cannot read the device profile";
+        else for (unsigned p = 0; !error && p < 2; ++p) {
+            const uint8_t kind = device_runs ? rp->device_profile[p] : 0;
+            if (s_saved_devices[p].kind != kind)
+                error = p ? "port 2 device differs: select the recorded device before starting"
+                          : "port 1 device differs: select the recorded device before starting";
+            else if (device_runs && rp->power_on &&
+                     memcmp(&s_saved_devices[p], &rp->device_initial[p], sizeof s_saved_devices[p]))
+                error = p ? "port 2 initial input differs at boot"
+                          : "port 1 initial input differs at boot";
+        }
+    }
     if (error) {
         char e[256];
         snprintf(e, sizeof e, "%s", error);
-        free(rp); free(markers); free(cps); free(steps); free(anchor); free(cards); free(digests);
+        free(rp); free(markers); free(cps); free(steps); free(anchor); free(cards); free(digests); free(device_runs);
         return refuse_play(e);
     }
     const int other_pin = strcmp(meta.pin, product.pin) != 0;
@@ -939,8 +1029,17 @@ int replay_session_play_file(const char *path)
     snprintf(s_rec_pin, sizeof s_rec_pin, "%s", meta.pin);
     snprintf(s_player_pin, sizeof s_player_pin, "%s", product.pin);
     char differs[512] = "";
+    s_play_device_runs = device_runs;
+    s_saved_devices_valid = device_runs != NULL;
     replay_host_settings_apply(rp->settings, differs, sizeof differs);
     s_settings_switched = 1;
+    /* Snapshots omit peripheral pending input. Supply the captured seed before
+     * the anchor-load settling frame, then boundary0 supplies the first run. */
+    if (device_runs && !replay_host_devices_apply(rp->device_initial)) {
+        free(rp); free(markers); free(cps); free(steps); free(anchor); free(cards); free(digests);
+        end_playback(REPLAY_RESULT_FAILED, "Replay not played: initial device input cannot be applied");
+        return 0;
+    }
     if (s_play_power_on) {
         s_cards_installed = replay_host_cards_install(cards, rp->cards_mask);
         free(cards);
@@ -962,6 +1061,9 @@ int replay_session_play_file(const char *path)
     s_play_step = 0;
     s_play_left = s_play_steps ? steps[0].frames : 0;
     s_play_frame = 0;
+    s_play_device_count = rp->devices_count;
+    s_play_device_step = 0;
+    s_play_device_left = device_runs ? device_runs[0].frames : 0;
     s_takeover_armed = 0;
     s_play_digests = digests;
     s_play_digest_count = rp->digest_count;
@@ -1085,6 +1187,14 @@ static int play_boundary(uint16_t live, const uint8_t live_sticks[4],
         s_takeover_armed = 1;
     }
     const InputDualShockRouteStep *s = &s_steps_play[s_play_step];
+    if (s_play_device_runs) {
+        if (!replay_host_devices_apply(s_play_device_runs[s_play_device_step].ports)) {
+            end_playback(REPLAY_RESULT_FAILED, "Replay stopped: device profile/input cannot be applied");
+            return 0;
+        }
+        if (--s_play_device_left == 0 && ++s_play_device_step < s_play_device_count)
+            s_play_device_left = s_play_device_runs[s_play_device_step].frames;
+    }
     *out_buttons = s->buttons;
     out_sticks[0] = s->axes_ly_lx_ry_rx[1]; out_sticks[1] = s->axes_ly_lx_ry_rx[0];
     out_sticks[2] = s->axes_ly_lx_ry_rx[3]; out_sticks[3] = s->axes_ly_lx_ry_rx[2];

@@ -1,9 +1,9 @@
 # Player replays
 
-A player replay records Player 1's pad once per frame, so a later run can feed
-the same input and check that the game ends in the same state. There are two
-kinds. Both use the PSXRTI3 file format ([INPUT_ROUTES.md](INPUT_ROUTES.md))
-with the `.psxrpl` extension.
+A player replay records input once per frame, so a later run can feed the same
+input and check that the game ends in the same state. There are two start
+kinds. Pad-only recordings use PSXRTI3; recordings with a mouse, neGcon or
+GunCon use PSXRTI4. Both have the `.psxrpl` extension.
 
 | | F11 replay (PS1B-191) | Power-on replay (PS1B-316) |
 | --- | --- | --- |
@@ -154,15 +154,44 @@ drive.
 A power-on recording does not start when a save state is loaded at boot
 (`PSX_LOAD_SLOT`), because that state can mount another disc.
 
+## Mouse, neGcon and GunCon
+
+If either console port holds one of these devices, the replay records both
+ports. It includes the other port's pad buttons and sticks too. Choose the
+same device for each port before playback. A different device is refused
+before the replay changes settings, installs cards or loads its anchor.
+A power-on replay also requires the same initial connection and input state.
+
+Mouse input holds the buttons and all pending signed motion after host
+sensitivity is applied. Each guest poll still consumes at most -128..127
+counts and leaves the rest for later polls. Playback installs the pending
+amount once per frame; a second host sample cannot refill consumed motion.
+neGcon input holds its buttons and twist, I, II and L axes. GunCon input holds
+buttons and final X/Y coordinates, including trigger plus no-light X=1,Y=10
+for an offscreen shot.
+
+The GunCon mapping header names schema 1 and its fixed X offset of -11. The
+saved coordinates already include host pointer, letterbox, display-range
+and region conversion. Playback does not repeat that conversion or mouse
+sensitivity. The game owns its calibration: an anchor holds it in guest
+memory, or a power-on replay reproduces its calibration inputs.
+
+An anchored replay also saves the initial inputs needed while its anchor
+loads. It holds both ports while recording starts or playback loads. At the
+end, playback restores prior inputs and drops live mouse motion accumulated
+during playback. Press F11 to stop a playing peripheral replay;
+the existing pad/keyboard takeover still works. Moving the live pointer or
+pressing a peripheral button does not itself take over playback.
+
+Older products refuse PSXRTI4. This product still plays pad-only PSXRTI3
+replays with both ports set to pad or keyboard. PSXRTI1/2 input routes and
+ordinary PSXRTI3 routes keep their existing format and behavior.
+
 ## What the replay does not contain
 
-- **Player 2.** Port 2 gets no input while a replay records or plays, so its
-  pad is idle for the whole session. Its connection state is recorded.
-- **Mouse, neGcon and GunCon.** Replays carry pad input only. Recording refuses
-  to start while either port holds one of these devices, and the game shows
-  "Replay not recorded: port 1 needs a pad or the keyboard" (or port 2). Pick
-  a pad or the keyboard for that port in the launcher first. PS1B-313 tracks
-  peripherals in replays.
+- **Player 2 in a pad-only replay.** Port 2 gets no input while a PSXRTI3
+  replay records or plays, so its pad stays idle. Its connection is recorded.
+  PSXRTI4 peripheral replays include both ports.
 - **Disc changes.** Changing the disc from the in-game menu ends the recording
   there, and the replay is saved up to the change. A multi-disc game can be
   recorded up to its first disc swap. A save state that needs another disc
@@ -180,7 +209,8 @@ A power-on recording does not start when a save state is loaded at boot
 ## Limits
 
 - A replay holds at most 1,000,000 frames (about 4 hours 37 minutes at 60 Hz)
-  and 65,536 input changes. Constant analog stick movement can reach the input
+  and 65,536 input changes. A peripheral replay also holds at most 65,536
+  changes of its two-port device state. Constant analog stick movement can reach the input
   limit in about 18 minutes. At either limit the recording stops and is saved.
 - Overlays run interpreted while a replay records or plays (the PS1B-191
   stopgap), so an overlay-heavy game can run slower.

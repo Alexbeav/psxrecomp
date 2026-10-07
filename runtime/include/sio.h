@@ -251,6 +251,13 @@ void sio_set_negcon_state(int slot, uint16_t buttons, uint8_t twist,
  * slot is a GunCon. */
 void sio_set_guncon_state(int slot, uint16_t buttons, uint16_t x, uint16_t y);
 
+/* Player replay captures/applies final inputs for two standalone ports.
+ * Apply refuses an invalid state, a profile mismatch or an attached tap
+ * before changing any input. It never resets a transaction/config latch. */
+#include "input_replay_devices.h"
+int sio_capture_replay_devices(InputReplayDevicePort out[2]);
+int sio_apply_replay_devices(const InputReplayDevicePort in[2]);
+
 /* ---- SIO byte-level trace ring buffer ----
  * 1M entries × ~28 B ≈ 32 MB.  At ~600 byte/sec that's ~30 min of history. */
 #define SIO_TRACE_CAP (1 << 20)

@@ -46,6 +46,10 @@ that frame.
 
 ## Replay a route (any product)
 
+PSXRTI4 is a player replay with a mandatory mouse/neGcon/GunCon input stream
+for both console ports. Use `--replay` for it; an ordinary input route refuses
+that format. Pad-only player replays stay PSXRTI3. See [PLAYER_REPLAYS.md](PLAYER_REPLAYS.md).
+
 ```bash
 PSX_INPUT_ROUTE_FILE=pe-title-to-gameplay.psxrti3 PSX_INPUT_ROUTE_EXIT_AFTER_MARKERS=1 PSX_HEADLESS=1 build-release/Parasite_Eve --disc "disc/Parasite Eve (USA) (Disc 1).cue" --bios SCPH1001.BIN
 ```

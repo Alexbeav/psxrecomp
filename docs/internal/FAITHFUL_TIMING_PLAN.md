@@ -224,6 +224,15 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-08 (PS1B-344 candidate, qualification pending):** Add a bounded
+  PSXRTI4 device stream for both standalone ports. Capture final mouse pending
+  counts/buttons, neGcon axes and GunCon wire coordinates; preserve initial
+  input across the anchor-load settling frame. Apply once per vblank and keep
+  host latency sampling from refilling consumed mouse counts. Protocol byte
+  and ACK controls derive from the corpus peripheral specs/PSX-SPX; no SIO
+  timing, snapshot wire or pad-only v3 writer change. Independent reading,
+  executed fixtures, old replay canaries and title gates remain pending.
+
 - **2026-09-13 (SIO card hack removal — branch-only review checkpoint):**
   Reproduced fixed-Ape-RAM IRQ7/mask injection after an absent-card probe,
   plus SELECT-time ACK fabrication and INTC-pending ACK requeueing with the

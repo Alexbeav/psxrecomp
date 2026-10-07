@@ -398,6 +398,9 @@ if(BUILD_TESTING)
     add_executable(input_route_v3_file_test tests/test_input_route_v3_file.c)
     target_include_directories(input_route_v3_file_test PRIVATE include)
     add_test(NAME input_route_v3_file_test COMMAND input_route_v3_file_test)
+    add_executable(input_replay_devices_test tests/test_input_replay_devices.c)
+    target_include_directories(input_replay_devices_test PRIVATE include)
+    add_test(NAME input_replay_devices_test COMMAND input_replay_devices_test)
     # Player replays (PS1B-191): recorder/player state machine against a
     # deterministic stand-in machine behind the replay_host_* hooks.
     add_executable(replay_session_test tests/test_replay_session.c

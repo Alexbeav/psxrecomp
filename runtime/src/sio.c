@@ -1350,6 +1350,55 @@ void sio_set_guncon_state(int slot, uint16_t buttons, uint16_t x, uint16_t y) {
     guncon_data[slot][5] = (uint8_t)(y >> 8);
 }
 
+int sio_capture_replay_devices(InputReplayDevicePort out[2]) {
+    if (!out || PSX_MAX_PLAYERS < 2 || sio_get_multitap()) return 0;
+    memset(out, 0, 2 * sizeof *out);
+    for (int s = 0; s < 2; ++s) {
+        InputReplayDevicePort *p = &out[s];
+        p->kind = (uint8_t)sio_get_port_device(s);
+        p->connected = (uint8_t)sio_get_pad_connected(s);
+        if (p->kind == SIO_DEVICE_PAD) {
+            p->buttons = sio_get_pad_buttons_slot(s);
+            sio_get_pad_sticks(s, p->axes);
+        } else if (p->kind == SIO_DEVICE_MOUSE) {
+            p->buttons = mouse_buttons[s];
+            p->motion[0] = mouse_motion[s][0]; p->motion[1] = mouse_motion[s][1];
+        } else if (p->kind == SIO_DEVICE_NEGCON) {
+            p->buttons = (uint16_t)(negcon_data[s][0] | (negcon_data[s][1] << 8));
+            memcpy(p->axes, negcon_data[s] + 2, 4);
+        } else {
+            p->buttons = (uint16_t)(guncon_data[s][0] | (guncon_data[s][1] << 8));
+            p->xy[0] = (uint16_t)(guncon_data[s][2] | (guncon_data[s][3] << 8));
+            p->xy[1] = (uint16_t)(guncon_data[s][4] | (guncon_data[s][5] << 8));
+        }
+    }
+    return 1;
+}
+
+int sio_apply_replay_devices(const InputReplayDevicePort in[2]) {
+    if (!in || PSX_MAX_PLAYERS < 2 || sio_get_multitap()) return 0;
+    for (int s = 0; s < 2; ++s)
+        if (!input_replay_device_port_ok(&in[s]) || in[s].kind != sio_get_port_device(s))
+            return 0;
+    for (int s = 0; s < 2; ++s) {
+        const InputReplayDevicePort *p = &in[s];
+        sio_set_pad_connected(s, p->connected);
+        if (p->kind == SIO_DEVICE_PAD) {
+            sio_set_pad_state_slot(s, p->buttons);
+            sio_set_pad_sticks(s, p->axes[0], p->axes[1], p->axes[2], p->axes[3]);
+        } else if (p->kind == SIO_DEVICE_MOUSE) {
+            sio_mouse_clear_motion(s);
+            sio_mouse_add_motion(s, p->motion[0], p->motion[1]);
+            sio_set_mouse_buttons(s, p->buttons & 1u, p->buttons & 2u);
+        } else if (p->kind == SIO_DEVICE_NEGCON) {
+            sio_set_negcon_state(s, p->buttons, p->axes[0], p->axes[1], p->axes[2], p->axes[3]);
+        } else {
+            sio_set_guncon_state(s, p->buttons, p->xy[0], p->xy[1]);
+        }
+    }
+    return 1;
+}
+
 /* ── LEGACY pad-config compatibility (Tomba "Hybrid" controller) ─────────────
  *
  * Why this exists, and why it is explicitly LEGACY:

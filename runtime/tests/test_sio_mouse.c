@@ -83,6 +83,64 @@ static void setup_bus(void) {
     sio_write(0x1F801048,0xD); sio_write(0x1F80104E,0x88);
 }
 
+/* Replay's public input seam against the actual byte engine. Expectations
+ * are protocol vectors, including consumption/ACK, not codec round trips. */
+static void replay_device_vectors(void) {
+    InputReplayDevicePort ports[2], decoded[2], initial[2];
+    InputReplayDeviceRun run, back;
+    for (int port=0;port<2;++port) {
+        sio_set_multitap(0);
+        for (int s=0;s<2;++s) { sio_set_port_device(s,SIO_DEVICE_PAD); sio_set_pad_connected(s,1); }
+        setup_bus(); sio_set_port_device(port,SIO_DEVICE_MOUSE);
+        sio_mouse_add_motion(port,300,-300); sio_set_mouse_buttons(port,1,0);
+        check(sio_capture_replay_devices(ports),"capture pending mouse, both ports");
+        check(ports[port].motion[0] == 300 && ports[port].motion[1] == -300,"capture full pending amount, not one poll byte");
+        memset(&run,0,sizeof run); run.frames=1; memcpy(run.ports,ports,sizeof ports);
+        FILE *f=tmpfile(); check(f != NULL,"owned replay stream temp");
+        check(!input_replay_devices_write(f,&run,1,1,ports),"write SIO captured inputs"); rewind(f);
+        uint8_t profile[2]; uint32_t count;
+        check(!input_replay_devices_read(f,48+36,1,&back,profile,initial,&count),"read SIO inputs"); fclose(f);
+        memcpy(decoded,back.ports,sizeof decoded);
+        sio_mouse_clear_motion(port); sio_set_mouse_buttons(port,0,0);
+        check(sio_apply_replay_devices(decoded),"apply decoded pending motion once");
+        EXPECT(port,"replay mouse chunk 1",0xFF,0x12,0x5A,0xFF,0xF4,0x7F,0x80);
+        EXPECT(port,"replay mouse chunk 2",0xFF,0x12,0x5A,0xFF,0xF4,0x7F,0x80);
+        EXPECT(port,"replay mouse remainder",0xFF,0x12,0x5A,0xFF,0xF4,0x2E,0xD4);
+        EXPECT(port,"replay mouse drained",0xFF,0x12,0x5A,0xFF,0xF4,0x00,0x00);
+        check(sio_capture_replay_devices(ports) && !ports[port].motion[0] && !ports[port].motion[1],"guest drains recorded pending counts exactly");
+        memcpy(decoded,ports,sizeof decoded); decoded[port].motion[0]=1025;
+        decoded[1-port].connected=0;
+        check(!sio_apply_replay_devices(decoded),"bad mouse input refused atomically");
+        check(sio_capture_replay_devices(initial) && !memcmp(initial,ports,sizeof ports),"bad second-port input changes neither port");
+        decoded[port].motion[0]=0; decoded[1-port].kind=SIO_DEVICE_GUNCON;
+        check(!sio_apply_replay_devices(decoded),"profile mismatch refused without a type switch");
+    }
+    for (int kind=SIO_DEVICE_NEGCON;kind<=SIO_DEVICE_GUNCON;++kind) for (int port=0;port<2;++port) {
+        for (int s=0;s<2;++s) { sio_set_port_device(s,SIO_DEVICE_PAD); sio_set_pad_connected(s,1); }
+        setup_bus(); sio_set_port_device(port,kind);
+        if (kind == SIO_DEVICE_NEGCON) sio_set_negcon_state(port,0xFFF7,0x12,0x34,0x56,0x78);
+        else sio_set_guncon_state(port,0xDFF7,0x01BC,0x00AA);
+        check(sio_capture_replay_devices(ports),"capture wire neGcon/GunCon");
+        if (kind == SIO_DEVICE_NEGCON) sio_set_negcon_state(port,0xFFFF,0x80,0,0,0);
+        else sio_set_guncon_state(port,0xFFFF,1,10);
+        check(sio_apply_replay_devices(ports),"apply wire neGcon/GunCon");
+        const uint8_t tx[9]={1,0x42,0,0,0,0,0,0,0}; uint8_t rx[9],ack[9];
+        static const uint8_t ng[9]={0xFF,0x23,0x5A,0xF7,0xFF,0x12,0x34,0x56,0x78};
+        static const uint8_t gc[9]={0xFF,0x63,0x5A,0xF7,0xDF,0xBC,0x01,0xAA,0x00};
+        txn(port,tx,9,rx,ack);
+        check(!memcmp(rx,kind==SIO_DEVICE_NEGCON ? ng : gc,9),"recorded buttons and four axes/coordinates reach guest wire");
+        for (int b=0;b<9;++b) check(ack[b] == (b<8),"replay peripheral ACK follows all bytes except final");
+        if (kind == SIO_DEVICE_GUNCON) {
+            ports[port].xy[0]=1; ports[port].xy[1]=10;
+            check(sio_apply_replay_devices(ports),"apply offscreen trigger");
+            txn(port,tx,9,rx,ack);
+            static const uint8_t off[9]={0xFF,0x63,0x5A,0xF7,0xDF,1,0,10,0};
+            check(!memcmp(rx,off,9),"offscreen shot retains trigger and exact no-light coordinates");
+        }
+    }
+    for (int s=0;s<2;++s) sio_set_port_device(s,SIO_DEVICE_PAD);
+}
+
 int main(void) {
     setup_bus();
     sio_set_port_device(0,SIO_DEVICE_MOUSE);
@@ -217,6 +275,7 @@ int main(void) {
     sio_set_multitap(0);
 #endif
 
+    replay_device_vectors();
     printf("sio_mouse: %u checks passed (players=%d)\n",checks,PSX_MAX_PLAYERS);
     return 0;
 }

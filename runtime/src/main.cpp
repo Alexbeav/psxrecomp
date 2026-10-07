@@ -5099,7 +5099,8 @@ static int controller_port_swap_available(void) {
 static void refresh_sio_port_routes(void) {
     /* A replay recording or playing keeps the ports it started with: a
      * hotplug would change them in the recording and never in playback. */
-    if (psx_netplay_active() || input_route_session_owns_ports() || replay_session_owns_p1())
+    if (psx_netplay_active() || input_route_session_owns_ports() || replay_session_owns_p1() ||
+        replay_session_owns_devices())
         return;
     for (int sio_slot = 0; sio_slot < PSX_MAX_PLAYERS; sio_slot++) {
         const int host = host_player_for_sio_slot(sio_slot);
@@ -5709,8 +5710,12 @@ static int savestate_input_guard_active(void) {
 /* P1 state a player replay delivers this frame (see replay_frame_boundary). */
 static uint16_t g_replay_p1_buttons = 0xFFFFu;
 static uint8_t  g_replay_p1_sticks[4] = { 0x80u, 0x80u, 0x80u, 0x80u };
+static bool s_replay_device_sample = false;
 
 static void apply_input_override_to_sio(int override_word) {
+    /* A device replay installed both ports at the boundary. Reapplying here
+     * would refill a mouse accumulator that the guest has already drained. */
+    if (replay_session_owns_devices()) return;
     if (replay_session_owns_p1()) {
         /* A replay records or plays P1: deliver exactly the recorded state,
          * with no pad-type request (the type is part of the anchor). */
@@ -5928,6 +5933,13 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
 }
 
 static void apply_pad_slot_to_sio(int s, const PsxNetPad& pad) {
+    if (replay_session_owns_devices() && s_replay_device_sample) {
+        /* As for pad-only replays, the anchor/boot owns pad type and config.
+         * Capture live buttons/sticks without an unrecorded Hybrid switch. */
+        sio_set_pad_state_slot(s, pad.buttons);
+        sio_set_pad_sticks(s, pad.lx, pad.ly, pad.rx, pad.ry);
+        return;
+    }
     if (sio_pad_on_multitap(s) && !sio_get_multitap_analog())
         sio_set_pad_config_capable(s, 0);
     sio_set_pad_state_slot(s, pad.buttons);
@@ -6512,6 +6524,7 @@ static int sample_negcon_slot(int s) {
 }
 
 static void sample_pad_into_sio(int override) {
+    if (replay_session_owns_devices() && !s_replay_device_sample) return;
     /* Selfcheck fighter mash owns P1 when enabled (headless-safe). */
     if (override < 0) {
         uint16_t mash = 0xFFFFu;
@@ -6556,6 +6569,7 @@ static void sample_pad_into_sio(int override) {
 }
 
 static void sample_headless_pad_into_sio(int override) {
+    if (replay_session_owns_devices() && !s_replay_device_sample) return;
     if (override < 0) {
         uint16_t mash = 0xFFFFu;
         if (psx_selfcheck_mash_override(&mash))
@@ -8312,7 +8326,9 @@ static int g_replay_scripted_record = 0;
 extern "C" int replay_host_can_record(char *why, size_t cap) {
     char slot0[600];
     if (psx_netplay_active()) { std::snprintf(why, cap, "netplay is active"); return 0; }
-    if (sio_get_multitap()) { std::snprintf(why, cap, "a multitap is attached"); return 0; }
+    if (sio_get_multitap() || g_offline_pad_count > 2) {
+        std::snprintf(why, cap, "multitap replay is not supported"); return 0;
+    }
     if (input_route_session_recording()) { std::snprintf(why, cap, "a route is recording"); return 0; }
     if (input_route_session_owns_ports() && !g_replay_scripted_record) {
         std::snprintf(why, cap, "an input route is playing"); return 0;
@@ -8321,15 +8337,34 @@ extern "C" int replay_host_can_record(char *why, size_t cap) {
         std::snprintf(why, cap, "save states are not available for this game"); return 0;
     }
     if (psx_rewind_is_open()) { std::snprintf(why, cap, "rewind is open"); return 0; }
-    /* Replays carry pad input only (PS1B-313): a mouse, neGcon or GunCon
-     * would be neither recorded nor fed during playback. */
-    for (int slot = 0; slot < 2; ++slot) {
-        if (sio_get_port_device(slot) != SIO_DEVICE_PAD) {
-            std::snprintf(why, cap, "port %d needs a pad or the keyboard", slot + 1);
-            return 0;
-        }
-    }
     return 1;
+}
+
+extern "C" int replay_host_devices_capture(InputReplayDevicePort out[2], int sample) {
+    static_assert(GUNCON_X_OFFSET == INPUT_REPLAY_GUNCON_X_OFFSET,
+                  "a new GunCon mapping needs a new replay mapping schema");
+    if (sample) {
+        s_replay_device_sample = true;
+        if (g_headless) sample_headless_pad_into_sio(-1);
+        else {
+            sample_pad_into_sio(-1);
+            /* A one-player title may still use the other console port; the
+             * ordinary sampler only guarantees that extra seat for a mouse. */
+            if (sio_get_port_device(1) == SIO_DEVICE_NEGCON) sample_negcon_slot(1);
+            else if (sio_get_port_device(1) == SIO_DEVICE_PAD) {
+                PsxNetPad pad;
+                if (capture_pad_slot(1, &pad)) apply_pad_slot_to_sio(1, pad);
+            }
+        }
+        s_replay_device_sample = false;
+    }
+    return sio_capture_replay_devices(out);
+}
+extern "C" int replay_host_devices_apply(const InputReplayDevicePort in[2]) {
+    return sio_apply_replay_devices(in);
+}
+extern "C" void replay_host_devices_end(void) {
+    if (!g_headless) (void)SDL_GetRelativeMouseState(nullptr, nullptr);
 }
 
 /* The replay identity needs the SHA-256 of the whole disc image (~1.7 s for
