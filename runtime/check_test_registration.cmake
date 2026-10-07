@@ -56,6 +56,7 @@ set(_PSXRECOMP_TESTREG_DIR "${CMAKE_CURRENT_LIST_DIR}")
 # Every entry needs a reason. An entry with no reason is a silent orphan with
 # extra steps, which is the thing this file exists to prevent.
 set(PSXRECOMP_TESTS_NOT_REGISTERED
+    "test_icache_digest.c|Driven by registered test_icache_slice_admission.py against production digest code at O0/O2"
     "test_load_delay_l1.c|Driven by registered test_load_delay_l1.py with production decoder"
     "test_break_guest_vector_report.c|Driven by registered test_break_guest_vector_interp.py with production traps.c"
     "test_mfc0_event_sample.c|Driven by registered test_mfc0_event_sample.py with the production decoder and cycle charging on"

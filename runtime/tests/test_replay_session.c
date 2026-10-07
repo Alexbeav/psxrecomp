@@ -758,6 +758,14 @@ int main(int argc, char **argv) {
     CHECK(replay_session_play_slot(0), "current digest replay starts");
     CHECK(replay_session_core_digest_version() == 2u, "new replay keeps cache-word digest");
     replay_session_shutdown();
+    CHECK(replay_session_core_digest_version() == 2u, "shutdown restores current digest");
+    char *digest_version_line = strstr(product_lines, "core_digest=2");
+    digest_version_line[strlen("core_digest=")] = '3';
+    clear_slots();
+    record(20, "cd_speed=1\n");
+    CHECK(!replay_session_play_slot(0), "unknown digest version is refused");
+    CHECK(replay_session_core_digest_version() == 2u, "refused replay keeps current digest");
+    digest_version_line[strlen("core_digest=")] = '2';
     test_record_and_play_in_sync();
     test_thumb_and_name();
     test_out_of_sync_is_reported();
