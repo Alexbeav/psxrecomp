@@ -2084,7 +2084,8 @@ static void persist_relaunch_sidecars(const char* near_exe,
     }
 }
 
-/* json_get_string: the string value of a key in one of the CLI's rows. */
+/* json_get_string: the string value of a key in one of the CLI's rows, with
+ * its escapes resolved to UTF-8 (a file name in Greek arrives as \uXXXX). */
 #include "psx_json_text.h"
 
 static int json_get_number(const char* line, const char* key, double* out) {
