@@ -35,6 +35,15 @@ static uint64_t capture_cycle;
 int replay_host_capture(const char *path) {
     (void)path; capture_calls++; capture_cycle = cycle; return !capture_fail;
 }
+static int export_compete;
+static char export_foreign_path[1100], export_failed_replay[1024];
+void replay_test_export_sidecar_pending(const char *path) {
+    if (!export_compete) return;
+    snprintf(export_failed_replay, sizeof export_failed_replay, "%s", path);
+    replay_marks_path(path, export_foreign_path, sizeof export_foreign_path);
+    FILE *f = fopen(export_foreign_path, "wb");
+    if (f) { fputs("EXPORT-FOREIGN-SENTINEL", f); fclose(f); }
+}
 static int can_record = 1;
 int replay_host_can_record(char *why, size_t cap) { if (!can_record) snprintf(why, cap, "netplay"); return can_record; }
 static char product_pin[41] = "0123456789abcdef0123456789abcdef01234567";
@@ -783,7 +792,22 @@ static void test_marks(void) {
     CHECK(!replay_marks_read(path, 160, &marks) && marks.count == 3, "read recorded marks");
     CHECK(marks.items[0].frame == 0 && marks.items[1].frame == 120 && marks.items[2].frame == 61,
           "last completed boundary and repeated-label move");
-    CHECK(replay_marks_add(&marks, 160, "end", 0) && !replay_marks_write(path, &marks), "editable END annotation");
+    FILE *owned_annotation = fopen(marks_path, "r+b"); /* fixture-created file */
+    CHECK(owned_annotation && replay_marks_add(&marks, 160, "end", 0) &&
+          !replay_marks_save(path, &marks, &owned_annotation), "editable END annotation");
+    if (owned_annotation) fclose(owned_annotation);
+    export_compete = 1;
+    char exported[1100], text[80] = {0};
+    CHECK(!replay_session_export_slot(0, exported, sizeof exported), "competing sidecar makes export fail");
+    export_compete = 0;
+    FILE *foreign = fopen(export_foreign_path, "rb");
+    CHECK(foreign != NULL, "competing sidecar exists");
+    if (foreign) { fread(text, 1, sizeof text - 1, foreign); fclose(foreign); }
+    CHECK(!strcmp(text, "EXPORT-FOREIGN-SENTINEL") && file_size(export_failed_replay) == -1,
+          "failed export preserves foreign bytes and removes its unqualified replay");
+    CHECK(replay_session_export_slot(0, exported, sizeof exported), "export skips the existing foreign sidecar");
+    CHECK(strcmp(exported, export_failed_replay) && !replay_marks_read(exported, 160, &marks) && marks.count == 4,
+          "successful export keeps annotations under a different fresh name");
     play_marked(0);
     CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "full marked recording in sync");
     CHECK(read_verdict() && strstr(verdict, "\"label\": \"title\", \"estimated\": false, \"reached\": true, \"in_sync\": true") &&
@@ -886,6 +910,34 @@ static void test_marks(void) {
     CHECK(read_verdict() && strstr(verdict, "\"frames_played\": 0,") &&
           strstr(verdict, "\"end_reached\": false"), "power-on zero prefix has no END proof");
     replay_session_set_mark_actions(NULL, NULL, NULL);
+    power_on_now = 0; remove(path); remove(marks_path);
+
+    /* A new recording must not adopt an orphan partial sidecar as its own. */
+    char partial[700], orphan[800];
+    snprintf(path, sizeof path, "%s/orphan-partial.psxrpl", dir);
+    replay_marks_path(path, marks_path, sizeof marks_path);
+    replay_session_partial_path(path, partial, sizeof partial);
+    replay_marks_path(partial, orphan, sizeof orphan);
+    remove(path); remove(marks_path); remove(partial);
+    foreign = fopen(orphan, "wb");
+    CHECK(foreign != NULL, "orphan sidecar fixture");
+    if (foreign) { fputs("PARTIAL-FOREIGN-SENTINEL", foreign); fclose(foreign); }
+    cold_boot(); power_on_now = 1;
+    CHECK(replay_session_record_power_on(path), "orphan-partial recording starts");
+    for (unsigned i = 0; i <= REPLAY_PARTIAL_INTERVAL; ++i) {
+        vblank(0xffff, neutral);
+        if (!i) CHECK(replay_session_mark("title"), "record owns only its full sidecar");
+    }
+    memset(text, 0, sizeof text);
+    foreign = fopen(orphan, "rb");
+    if (foreign) { fread(text, 1, sizeof text - 1, foreign); fclose(foreign); }
+    CHECK(!strcmp(text, "PARTIAL-FOREIGN-SENTINEL") && file_size(partial) == -1,
+          "orphan metadata admission preserves foreign bytes before prefix creation");
+    replay_session_toggle_record(); vblank(0xffff, neutral);
+    memset(text, 0, sizeof text);
+    foreign = fopen(orphan, "rb");
+    if (foreign) { fread(text, 1, sizeof text - 1, foreign); fclose(foreign); }
+    CHECK(!strcmp(text, "PARTIAL-FOREIGN-SENTINEL"), "clean finish never removes the foreign partial metadata");
     power_on_now = 0; remove(path); remove(marks_path);
 }
 

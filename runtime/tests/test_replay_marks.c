@@ -38,6 +38,7 @@ int main(int argc, char **argv) {
     CHECK(!replay_marks_resolve(&marks, "gameplay+01", 120, &frame));
     CHECK(replay_marks_add(&marks, 80, "gameplay", 0) && marks.count == 2 && marks.items[1].frame == 80);
     CHECK(replay_marks_add(&marks, 80, "Caf\xc3\xa9 \\\" path", 0));
+    remove(path);
     CHECK(!replay_marks_write(replay, &marks));
     CHECK(!replay_marks_read(replay, 120, &marks) && marks.count == 3 && !strcmp(marks.items[2].label, "Caf\xc3\xa9 \\\" path"));
     raw("{\"schema\":\"psxrecomp-replay-marks/1\",\"marks\":[{\"frame\":120,\"label\":\"\\u03b1\\ud83d\\ude00\"}]}");
@@ -73,6 +74,7 @@ int main(int argc, char **argv) {
         CHECK(replay_marks_add(&marks, 0, label, 0));
     }
     CHECK(!replay_marks_add(&marks, 0, "overflow", 0));
+    remove(path);
     CHECK(!replay_marks_write(replay, &marks));
     CHECK(!replay_marks_read(replay, 120, &marks) && marks.count == REPLAY_MARKS_MAX);
     FILE *f = fopen(path, "ab"); CHECK(f != NULL);
@@ -81,6 +83,32 @@ int main(int argc, char **argv) {
     raw("{\"schema\":\"psxrecomp-replay-marks/1\",\"marks\":[]}");
     f = fopen(path, "ab"); CHECK(f != NULL); if (f) { fputc(0, f); fclose(f); }
     CHECK(replay_marks_read(replay, 120, &marks) != NULL);
+    raw("FOREIGN-MARK-SENTINEL");
+    CHECK(replay_marks_write(replay, &marks) != NULL);
+    char sentinel[64] = {0};
+    f = fopen(path, "rb"); CHECK(f != NULL);
+    if (f) { fread(sentinel, 1, sizeof sentinel - 1, f); fclose(f); }
+    CHECK(!strcmp(sentinel, "FOREIGN-MARK-SENTINEL"));
+    remove(path);
+    memset(&marks, 0, sizeof marks);
+    CHECK(replay_marks_add(&marks, 0, "title", 0));
+    FILE *owner = NULL;
+    CHECK(!replay_marks_save(replay, &marks, &owner) && owner != NULL);
+    CHECK(replay_marks_add(&marks, 60, "gameplay", 0));
+    CHECK(!replay_marks_save(replay, &marks, &owner));
+    CHECK(!replay_marks_read(replay, 120, &marks) && marks.count == 2);
+#ifndef _WIN32
+    char moved[1200]; snprintf(moved, sizeof moved, "%s.owned", path);
+    CHECK(rename(path, moved) == 0);
+    raw("REPLACED-FOREIGN-SENTINEL");
+    CHECK(replay_marks_save(replay, &marks, &owner) != NULL);
+    memset(sentinel, 0, sizeof sentinel);
+    f = fopen(path, "rb"); CHECK(f != NULL);
+    if (f) { fread(sentinel, 1, sizeof sentinel - 1, f); fclose(f); }
+    CHECK(!strcmp(sentinel, "REPLACED-FOREIGN-SENTINEL"));
+    remove(moved);
+#endif
+    if (owner) fclose(owner);
     remove(path);
     if (failures) { fprintf(stderr, "%d of %d checks failed\n", failures, checks); return 1; }
     printf("PASS: replay mark parser and selectors, %d checks\n", checks);

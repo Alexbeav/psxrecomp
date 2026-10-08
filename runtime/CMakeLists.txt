@@ -403,6 +403,7 @@ if(BUILD_TESTING)
     add_executable(replay_session_test tests/test_replay_session.c
         src/replay_session.c src/replay_marks.c src/psx_sha256.c)
     target_include_directories(replay_session_test PRIVATE include)
+    target_compile_definitions(replay_session_test PRIVATE PSX_REPLAY_MARKS_TEST_HOOK=1)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
     add_test(NAME replay_session_test COMMAND replay_session_test
         ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)

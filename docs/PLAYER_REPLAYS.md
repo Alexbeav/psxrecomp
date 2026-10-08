@@ -224,6 +224,12 @@ playback before settings, cards or the anchor change. A missing sidecar is
 an empty list. Keep the sidecar with the replay; it is annotation, not proof
 of the replay's identity or of gameplay.
 
+Recording creates its mark file exclusively and holds its own writer for
+updates. Export creates a new sidecar and refuses a competing file; it never
+truncates that file. A foreign partial sidecar prevents that prefix from being
+written. Clean finish removes the crash-recovery replay but retains its
+partial metadata, so it cannot delete a replacement sidecar by name.
+
 For a shorter run, pass `--replay-stop-after-mark gameplay+180`. An exact
 label or a label plus a nonnegative frame offset selects the completed
 boundary. Missing labels and offsets past the end refuse playback. A prefix

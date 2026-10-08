@@ -29,6 +29,7 @@ static ReplayResult s_result = REPLAY_RESULT_NONE;
 static char s_rec_path[PATH_BYTES];
 static int s_rec_slot = -1;
 static int s_stop_requested;
+static FILE *s_marks_writer, *s_partial_marks_writer;
 static InputRouteDualShockWord *s_words;
 static uint32_t s_frames, s_steps;
 static InputRouteV3 s_meta;
@@ -69,6 +70,7 @@ static int s_diverged;
 static int s_play_power_on, s_cards_installed;
 
 static const char *digest_parts_text(unsigned parts, char *out, size_t cap);
+static int file_exists(const char *path);
 
 /* Verdict file (replay_session_set_verdict_path) and what it reports. */
 static char s_verdict_path[PATH_BYTES];
@@ -199,8 +201,11 @@ int replay_session_slot_exists(int slot)
 
 int replay_session_next_free_slot(void)
 {
-    for (int s = 0; s < REPLAY_SLOTS; ++s)
-        if (!replay_session_slot_exists(s)) return s;
+    for (int s = 0; s < REPLAY_SLOTS; ++s) {
+        char path[PATH_BYTES], marks_path[PATH_BYTES + 32];
+        if (!replay_session_slot_exists(s) && replay_session_slot_path(s, path, sizeof path) &&
+            replay_marks_path(path, marks_path, sizeof marks_path) && !file_exists(marks_path)) return s;
+    }
     return -1;
 }
 
@@ -263,7 +268,7 @@ int replay_session_partial_path(const char *path, char *out, size_t cap)
 int replay_session_boot_path(const char *dir, const char *title, int64_t utc_seconds,
                              char *out, size_t cap)
 {
-    char base[49], stamp[32], partial[PATH_BYTES];
+    char base[49], stamp[32], partial[PATH_BYTES], marks_path[PATH_BYTES + 32], partial_marks[PATH_BYTES + 32];
     const time_t t = (time_t)utc_seconds;
     struct tm tm_utc;
     size_t n = 0;
@@ -291,7 +296,9 @@ int replay_session_boot_path(const char *dir, const char *title, int64_t utc_sec
         if (snprintf(out, cap, "%s/%s-boot-%s%s.psxrpl", dir, base, stamp, suffix) >= (int)cap)
             return 0;
         if (!file_exists(out) && replay_session_partial_path(out, partial, sizeof partial) &&
-            !file_exists(partial))
+            !file_exists(partial) && replay_marks_path(out, marks_path, sizeof marks_path) &&
+            !file_exists(marks_path) && replay_marks_path(partial, partial_marks, sizeof partial_marks) &&
+            !file_exists(partial_marks))
             return 1;
     }
     return 0;
@@ -340,6 +347,11 @@ int replay_session_export_slot(int slot, char *out_path, size_t cap)
     fclose(in);
     if (fclose(out)) ok = 0;
     if (!ok) { remove(dst); return 0; }
+#ifdef PSX_REPLAY_MARKS_TEST_HOOK
+    /* Deterministic boundary control; absent from product builds. */
+    extern void replay_test_export_sidecar_pending(const char *path);
+    replay_test_export_sidecar_pending(dst);
+#endif
     ReplayMarks marks;
     const char *error = replay_marks_read(src, INPUT_ROUTE_MAX_FRAMES, &marks);
     if (error || (marks.count && replay_marks_write(dst, &marks))) { remove(dst); return 0; }
@@ -513,6 +525,9 @@ unsigned replay_session_digests_checked(void) { return s_digests_checked; }
 
 static void free_recording(void)
 {
+    if (s_marks_writer) fclose(s_marks_writer);
+    if (s_partial_marks_writer) fclose(s_partial_marks_writer);
+    s_marks_writer = s_partial_marks_writer = NULL;
     free(s_thumb); s_thumb = NULL; s_have_thumb = 0;
     free(s_digests); s_digests = NULL; s_digest_count = 0;
     free(s_words); s_words = NULL;
@@ -613,7 +628,7 @@ int replay_session_mark(const char *label)
 {
     if (s_state != REPLAY_RECORDING ||
         !replay_marks_add(&s_marks, s_last_frame, label, 0)) return 0;
-    const char *error = replay_marks_write(s_rec_path, &s_marks);
+    const char *error = replay_marks_save(s_rec_path, &s_marks, &s_marks_writer);
     replay_host_osd(error ? "Replay mark could not be saved" : "Replay mark saved", 1500);
     return error == NULL;
 }
@@ -728,13 +743,19 @@ static void write_partial(void)
     char partial[PATH_BYTES], tmp[PATH_BYTES + 8];
     const char *error;
     if (!replay_session_partial_path(s_rec_path, partial, sizeof partial)) return;
+    /* An orphan/competing sidecar is foreign. Admit first creation before
+     * changing this prefix; later updates retain our own open handle. */
+    error = s_marks.count ? replay_marks_save(partial, &s_marks, &s_partial_marks_writer) : NULL;
+    if (error) {
+        fprintf(stderr, "replay: partial copy not written: %s (%s)\n", error, partial);
+        return;
+    }
     snprintf(tmp, sizeof tmp, "%s.tmp", partial);
     remove(tmp);
     error = write_recording(tmp);
     if (!error) {
         remove(partial);
         if (rename(tmp, partial)) { remove(tmp); error = "rename failed"; }
-        else if (s_marks.count) error = replay_marks_write(partial, &s_marks);
     }
     if (error) fprintf(stderr, "replay: partial copy not written: %s (%s)\n", error, partial);
     else fprintf(stdout, "replay_partial: path=%s frames=%u\n", partial, (unsigned)s_last_frame);
@@ -759,9 +780,9 @@ static void finish_recording(void)
     } else {
         /* The finished replay supersedes the crash-recovery copy. */
         if (s_power_on && replay_session_partial_path(s_rec_path, partial, sizeof partial)) {
-            char marks_path[PATH_BYTES + 32];
             remove(partial);
-            if (replay_marks_path(partial, marks_path, sizeof marks_path)) remove(marks_path);
+            /* Keep the partial metadata: deleting by path after closing its
+             * writer could remove a replacement belonging to someone else. */
         }
         if (s_rec_slot >= 0) snprintf(msg, sizeof msg, "Replay saved: slot %d", s_rec_slot + 1);
         else {

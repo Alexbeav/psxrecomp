@@ -2,6 +2,13 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 int replay_marks_path(const char *replay, char *out, size_t cap)
 {
@@ -210,12 +217,37 @@ const char *replay_marks_read(const char *replay, uint32_t total, ReplayMarks *o
     if (error) memset(out, 0, sizeof *out);
     return error;
 }
-const char *replay_marks_write(const char *replay, const ReplayMarks *marks)
+const char *replay_marks_save(const char *replay, const ReplayMarks *marks, FILE **owner)
 {
     char path[1100];
     if (!replay_marks_path(replay, path, sizeof path)) return "mark file path too long";
-    FILE *f = fopen(path, "wb");
-    if (!f) return "cannot write replay marks";
+    if (!*owner) {
+#ifdef _WIN32
+        int fd = _open(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
+        *owner = fd < 0 ? NULL : _fdopen(fd, "wb");
+        if (!*owner && fd >= 0) _close(fd);
+#else
+        int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        *owner = fd < 0 ? NULL : fdopen(fd, "wb");
+        if (!*owner && fd >= 0) close(fd);
+#endif
+        if (!*owner) return "cannot create new replay marks";
+    }
+    FILE *f = *owner;
+#ifndef _WIN32
+    /* An unlinked/replaced POSIX path must not be reported as a saved mark.
+     * Even if a race replaces it later, writes still target our own inode. */
+    struct stat opened, named;
+    if (fstat(fileno(f), &opened) || stat(path, &named) ||
+        opened.st_dev != named.st_dev || opened.st_ino != named.st_ino)
+        return "recording mark file was replaced";
+#endif
+    if (fflush(f) || fseek(f, 0, SEEK_SET)) return "cannot update recording marks";
+#ifdef _WIN32
+    if (_chsize(_fileno(f), 0)) return "cannot update recording marks";
+#else
+    if (ftruncate(fileno(f), 0)) return "cannot update recording marks";
+#endif
     fputs("{\n  \"schema\": \"psxrecomp-replay-marks/1\",\n  \"marks\": [", f);
     for (unsigned i = 0; i < marks->count; ++i) {
         const ReplayMark *m = &marks->items[i];
@@ -224,9 +256,19 @@ const char *replay_marks_write(const char *replay, const ReplayMarks *marks)
         fprintf(f, ", \"estimated\": %s}", m->estimated ? "true" : "false");
     }
     fputs("\n  ]\n}\n", f);
-    int bad = ferror(f);
-    if (fclose(f)) bad = 1;
-    return bad ? "cannot write replay marks" : NULL;
+    if (ferror(f) || fflush(f)) return "cannot write replay marks";
+#ifndef _WIN32
+    if (stat(path, &named) || opened.st_dev != named.st_dev || opened.st_ino != named.st_ino)
+        return "recording mark file was replaced";
+#endif
+    return NULL;
+}
+const char *replay_marks_write(const char *replay, const ReplayMarks *marks)
+{
+    FILE *owner = NULL;
+    const char *error = replay_marks_save(replay, marks, &owner);
+    if (owner && fclose(owner) && !error) error = "cannot close replay marks";
+    return error;
 }
 int replay_marks_resolve(const ReplayMarks *marks, const char *selector,
                          uint32_t total, uint32_t *frame)
