@@ -472,6 +472,11 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, refusal);
         append_str(buf, sizeof(buf), &pos, ",\n  \"launcher_status\": ");
         append_str(buf, sizeof(buf), &pos, rows);
+        static char disc_warning[6 * PSX_START_REFUSAL_TEXT_CAP + 4];
+        if (psx_disc_warning_json(disc_warning, sizeof(disc_warning)) <= 0)
+            snprintf(disc_warning, sizeof(disc_warning), "null");
+        append_str(buf, sizeof(buf), &pos, ",\n  \"disc_warning\": ");
+        append_str(buf, sizeof(buf), &pos, disc_warning);
         append_str(buf, sizeof(buf), &pos, ",\n");
     }
 
@@ -785,6 +790,22 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             append_str(buf, sizeof(buf), &pos, "\"}");
         }
         append_str(buf, sizeof(buf), &pos, "},\n");
+    }
+
+    /* RAM 0..15 as the game found it at entry: the kernel's stub words
+     * (PSX-SPX, "Garbage Area at Address 00000000h"). A game that reads
+     * through a null pointer sees them. null: no game entry in this process. */
+    {
+        extern int memory_low_ram_at_entry(uint8_t out[16]);
+        uint8_t low[16];
+        if (memory_low_ram_at_entry(low)) {
+            append_str(buf, sizeof(buf), &pos, "  \"low_ram_at_entry\": \"");
+            for (int i = 0; i < 16; i++)
+                append_fmt(buf, sizeof(buf), &pos, "%s%02x", i && !(i & 3) ? " " : "", low[i]);
+            append_str(buf, sizeof(buf), &pos, "\",\n");
+        } else {
+            append_str(buf, sizeof(buf), &pos, "  \"low_ram_at_entry\": null,\n");
+        }
     }
 
     /* CD read streams that ended before their first sector (PS1B-317): a
