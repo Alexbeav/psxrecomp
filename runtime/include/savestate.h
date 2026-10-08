@@ -142,6 +142,10 @@ int savestate_request_load_blob_protocol(const void* data, size_t size);
  * start from the same freshly loaded state. savestate_take_anchor returns 1
  * with the blob (caller frees), -1 when the save failed, 0 while pending. */
 int savestate_request_anchor(void);
+/* Optional host-input capture at the actual safe save point, immediately
+ * before the in-memory anchor is written and reloaded. The callback runs once
+ * on the emulation thread; a failed/deferred save does not invoke it early. */
+int savestate_request_anchor_capture(void (*capture)(void));
 int savestate_take_anchor(uint8_t** data, size_t* size);
 /* Load a replay's anchor blob without the slot toast. The result is reported
  * through savestate_take_load_completed / savestate_take_load_failed. */

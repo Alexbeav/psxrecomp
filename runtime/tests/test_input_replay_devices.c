@@ -29,6 +29,7 @@ static void error_is(const char *e, const char *want) {
     check(e && !strcmp(e, want), want);
 }
 static InputDualShockRouteStep dual[INPUT_ROUTE_MAX_STEPS];
+static InputRouteStep digital[INPUT_ROUTE_MAX_STEPS];
 static InputRouteMarker marks[INPUT_ROUTE_V3_MAX_MARKERS];
 static InputRouteCheckpoint cps[INPUT_ROUTE_V3_MAX_MARKERS];
 static void container(void) {
@@ -49,6 +50,11 @@ static void container(void) {
     }
     rx.anchor = anchor; rx.anchor_length = sizeof anchor; rx.settings = "cd_speed=1\n";
     rx.devices = runs; rx.devices_count = 3; rx.device_initial = runs[0].ports;
+    const uint16_t digital_words[4] = {0xffff,0xffff,0xffff,0xffff};
+    FILE *invalid = tmpfile(); check(invalid != NULL,"digital device layout file");
+    error_is(input_route_v3_write_ex(invalid,&meta,digital_words,NULL,4,&end,&cp,&rx),
+             "device replay record size");
+    check(ftell(invalid)==0,"bad device layout emits no successful/partial header"); fclose(invalid);
     FILE *f = tmpfile(); check(f != NULL, "container file");
     check(!input_route_v3_write_ex(f, &meta, NULL, words, 4, &end, &cp, &rx), "write v4");
     unsigned char h[28]; rewind(f); check(fread(h, 1, 28, f) == 28, "header");
@@ -94,6 +100,10 @@ static void container(void) {
     rewind(f); error_is(input_route_v3_read_ex(f, &parsed, NULL, dual, marks, cps, &rp), "device replay not admitted");
     fclose(f);
     rx.devices = NULL; rx.devices_count = 0;
+    f = tmpfile(); check(f != NULL,"ordinary digital v3 file");
+    check(!input_route_v3_write_ex(f,&meta,digital_words,NULL,4,&end,&cp,&rx),"ordinary digital writer retained");
+    rewind(f); check(!input_route_v3_read_ex(f,&parsed,digital,NULL,marks,cps,&rp) && parsed.record_size==8,
+                     "ordinary digital v3 replay still readable"); fclose(f);
     f = tmpfile(); check(f != NULL, "legacy writer file");
     check(!input_route_v3_write_ex(f, &meta, NULL, words, 4, &end, &cp, &rx), "legacy v3 writer");
     rewind(f); check(fread(h, 1, 28, f) == 28 && !memcmp(h, "PSXRTI3\0", 8), "pad-only remains v3");

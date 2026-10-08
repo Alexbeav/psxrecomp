@@ -1212,7 +1212,7 @@ int replay_session_boundary(uint16_t live, const uint8_t live_sticks[4],
     case REPLAY_ARMING: {
         uint8_t *data = NULL;
         size_t size = 0;
-        const int r = replay_host_take_anchor(&data, &size);
+        const int r = replay_host_take_anchor(&data, &size, s_initial_devices);
         if (r == 0) return 0;
         if (r < 0 || !data || !size || size > INPUT_ROUTE_V3_MAX_EXT / 2) {
             free(data);

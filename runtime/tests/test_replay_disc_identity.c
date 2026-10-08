@@ -63,10 +63,11 @@ int replay_host_identity(InputRouteV3 *m, char *why, size_t cap) {
 static int anchor_pending;
 static uint8_t *anchor_blob; static size_t anchor_size;
 int replay_host_request_anchor(void) { anchor_pending = 1; return 1; }
-int replay_host_take_anchor(uint8_t **data, size_t *size) {
+int replay_host_take_anchor(uint8_t **data, size_t *size, InputReplayDevicePort initial[2]) {
     if (anchor_pending != 2) return 0;
     anchor_pending = 0;
     *data = anchor_blob; *size = anchor_size; anchor_blob = NULL;
+    memset(initial,0,2 * sizeof *initial);
     return 1;
 }
 static int load_pending; static uint8_t *load_blob; static size_t load_size;

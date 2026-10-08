@@ -8409,14 +8409,25 @@ static void replay_overlay_unpin_if_idle(void) {
     overlay_interp_pin_release();
 }
 
+static InputReplayDevicePort s_replay_anchor_devices[2];
+static int s_replay_anchor_devices_ready;
+static void replay_anchor_capture_devices(void) {
+    s_replay_anchor_devices_ready = sio_capture_replay_devices(s_replay_anchor_devices);
+}
 extern "C" int replay_host_request_anchor(void) {
-    if (!savestate_request_anchor())
+    s_replay_anchor_devices_ready = 0;
+    if (!savestate_request_anchor_capture(replay_anchor_capture_devices))
         return 0;
     replay_overlay_pin();
     return 1;
 }
-extern "C" int replay_host_take_anchor(uint8_t **data, size_t *size) {
-    return savestate_take_anchor(data, size);
+extern "C" int replay_host_take_anchor(uint8_t **data, size_t *size, InputReplayDevicePort initial[2]) {
+    const int r = savestate_take_anchor(data, size);
+    if (r > 0) {
+        if (!s_replay_anchor_devices_ready) return -1;
+        memcpy(initial, s_replay_anchor_devices, sizeof s_replay_anchor_devices);
+    }
+    return r;
 }
 extern "C" int replay_host_load_anchor(const void *data, size_t size) {
     if (!savestate_request_load_blob_quiet(data, size))

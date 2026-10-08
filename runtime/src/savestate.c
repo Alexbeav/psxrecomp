@@ -70,6 +70,7 @@ static size_t   s_load_blob_len = 0;
 /* Replay anchor (PS1B-191): a save into memory that is loaded straight back,
  * so a recording starts from the same post-load machine as its playback. */
 static int      s_anchor_pending = 0;
+static void   (*s_anchor_capture)(void);
 static int      s_anchor_result = 0;   /* 1 done, -1 failed, 0 none */
 static uint8_t *s_anchor_blob = NULL;
 static size_t   s_anchor_len = 0;
@@ -817,7 +818,7 @@ int savestate_request_load_blob_protocol(const void* data, size_t size) {
     return 1;
 }
 
-int savestate_request_anchor(void) {
+int savestate_request_anchor_capture(void (*capture)(void)) {
     if (netplay_user_blocked()) return 0;
     if (!psx_hle_scheduler_enabled()) {
         fprintf(stderr, "savestate: replay anchor requires the HLE scheduler\n");
@@ -829,9 +830,14 @@ int savestate_request_anchor(void) {
     s_anchor_len = 0;
     s_anchor_result = 0;
     if (!request_save_inner(0)) return 0;
+    s_anchor_capture = capture;
     s_anchor_pending = 1;
     s_anchor_request_ms = savestate_mono_ms();
     return 1;
+}
+
+int savestate_request_anchor(void) {
+    return savestate_request_anchor_capture(NULL);
 }
 
 int savestate_take_anchor(uint8_t** data, size_t* size) {
@@ -944,6 +950,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     snapshot_safe, snapshot_site);
             if (s_anchor_pending) {
                 s_anchor_pending = 0;
+                s_anchor_capture = NULL;
                 s_anchor_result = -1;
             } else {
                 psx_frontend_on_savestate_notify(0, slot, 0);
@@ -961,6 +968,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_status_pending = 0;
             s_status_generation++;
             const double t_save0 = savestate_mono_ms();
+            if (s_anchor_capture) s_anchor_capture();
+            s_anchor_capture = NULL;
             const int saved = boot_state_save_buffer(&snap, s_bios_checksum, s_entry_pc, &buf, &len);
             fprintf(stderr, "savestate: replay anchor wait=%.1f ms save=%.1f ms\n",
                     t_save0 - s_anchor_request_ms, savestate_mono_ms() - t_save0);

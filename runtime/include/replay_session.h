@@ -160,7 +160,10 @@ int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap);
  * boundary; the blob is fetched with replay_host_take_anchor. */
 int replay_host_request_anchor(void);
 /* 1 = done (blob returned, caller frees), -1 = failed, 0 = pending. */
-int replay_host_take_anchor(uint8_t **data, size_t *size);
+#define REPLAY_ANCHOR_INPUT_CAPTURE 1
+/* initial receives final device input at the actual anchor save point, not
+ * at its request. Guest polls may consume mouse counts while a save defers. */
+int replay_host_take_anchor(uint8_t **data, size_t *size, InputReplayDevicePort initial[2]);
 /* Load a state blob at the next safe boundary. */
 int replay_host_load_anchor(const void *data, size_t size);
 /* 1 = loaded, -1 = failed, 0 = pending. */

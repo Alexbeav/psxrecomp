@@ -80,14 +80,22 @@ int replay_host_identity(InputRouteV3 *m, char *why, size_t cap) {
     return 1;
 }
 /* The anchor blob is the whole stand-in machine: RAM then cycle. */
-static int anchor_pending, anchor_fail;
+static int anchor_pending, anchor_fail, anchor_delay_frames;
+static InputReplayDevicePort anchor_devices[2];
 static uint8_t *anchor_blob; static size_t anchor_size;
 int replay_host_request_anchor(void) { anchor_pending = 1; return 1; }
+#ifdef REPLAY_ANCHOR_INPUT_CAPTURE
+int replay_host_take_anchor(uint8_t **data, size_t *size, InputReplayDevicePort initial[2]) {
+#else
 int replay_host_take_anchor(uint8_t **data, size_t *size) {
+#endif
     if (anchor_pending != 2) return 0;
     anchor_pending = 0;
     if (anchor_fail) { free(anchor_blob); anchor_blob = NULL; anchor_size = 0; return -1; }
     *data = anchor_blob; *size = anchor_size; anchor_blob = NULL;
+#ifdef REPLAY_ANCHOR_INPUT_CAPTURE
+    memcpy(initial,anchor_devices,sizeof anchor_devices);
+#endif
     return 1;
 }
 static int load_pending; static uint8_t *load_blob; static size_t load_size;
@@ -160,6 +168,8 @@ void replay_host_product(char *out, size_t cap) { snprintf(out, cap, "%s", produ
  * it; a pending load restores it. */
 static void safe_point(void) {
     if (anchor_pending == 1) {
+        if (anchor_delay_frames) { --anchor_delay_frames; return; }
+        memcpy(anchor_devices,device_ports,sizeof anchor_devices);
         anchor_size = RAM_BYTES + 8;
         anchor_blob = malloc(anchor_size);
         memcpy(anchor_blob, ram, RAM_BYTES); memcpy(anchor_blob + RAM_BYTES, &cycle, 8);
@@ -233,6 +243,7 @@ static int record(unsigned n, const char *settings) {
     CHECK(replay_session_state() == REPLAY_ARMING, "arming after F11");
     vblank(0xFFFF, neutral);                       /* anchor saved + reloaded in this frame */
     CHECK(replay_session_state() == REPLAY_ARMING, "still arming until the next boundary");
+    while (anchor_pending == 1) vblank(0xFFFF,neutral);
     for (unsigned i = 0; i < n; ++i) {
         uint8_t st[4] = { (uint8_t)(0x80 + i), 0x80, 0x80, (uint8_t)(0x7F - i) };
         vblank(script(i), st);                     /* boundary 0 starts the recording */
@@ -804,6 +815,7 @@ static void test_devices(void) {
         char path[700];
         clear_slots(); cold_boot(); device_initial(kind, port); device_guest = 1;
         const InputReplayDevicePort seed[2] = {device_ports[0], device_ports[1]};
+        anchor_delay_frames = 1; /* guest consumes input before the safe save */
         const int slot = record(80, "cd_speed=1\n");
         CHECK(device_samples == 80, "kind%u port%u samples exactly once per recorded boundary", kind, port);
         CHECK(replay_session_rename_slot(slot, "peripheral"), "v4 rename preserves stream");
@@ -813,8 +825,22 @@ static void test_devices(void) {
         const unsigned applies = device_applies, ends = device_ends;
         CHECK(replay_session_play_file(path), "kind%u port%u anchored playback: %s", kind, port, osd_last);
         CHECK(replay_session_owns_devices(), "both ports owned while loading");
+        if (kind == 1)
+            CHECK(device_ports[port].motion[0] == 173 && device_ports[port].motion[1] == -172,
+                  "delayed anchor seed contains the remaining mouse counts");
+        vblank(0xffff, neutral); /* load and settling frame */
+        vblank(0xffff, neutral); /* first recorded input and frame-0 digest */
+        uint32_t divergence; unsigned parts;
+        CHECK(replay_session_digests_checked() == 1 &&
+              !replay_session_first_divergence(&divergence, &parts),
+              "kind%u port%u delayed anchor frame-0 digest", kind, port);
         for (unsigned i = 0; i < 90 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xffff, neutral);
         CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "kind%u port%u anchored in sync", kind, port);
+        CHECK(replay_session_digests_checked() == 3 && read_verdict() &&
+              strstr(verdict, "\"frames_played\": 80") &&
+              strstr(verdict, "\"first_divergence_frame\": null") &&
+              strstr(verdict, "\"result\": \"in_sync\""),
+              "kind%u port%u delayed anchor reaches the complete END checkpoint", kind, port);
         CHECK(device_applies == applies + 82, "one seed,80 frames,one restore; no extra mouse refill");
         CHECK(device_ends == ends + 1 && !replay_session_owns_devices(), "ownership released and live motion discarded");
         CHECK(device_ports[port].kind == saved[port].kind, "profile retained after play");

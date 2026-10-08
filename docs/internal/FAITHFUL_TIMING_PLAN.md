@@ -226,8 +226,9 @@ on a fixed region -> next.
 
 - **2026-10-08 (PS1B-344 candidate, qualification pending):** Add a bounded
   PSXRTI4 device stream for both standalone ports. Capture final mouse pending
-  counts/buttons, neGcon axes and GunCon wire coordinates; preserve initial
-  input across the anchor-load settling frame. Apply once per vblank and keep
+  counts/buttons, neGcon axes and GunCon wire coordinates; capture initial
+  input at the actual safe anchor-save point, preserving it across the
+  anchor-load settling frame. Apply once per vblank and keep
   host latency sampling from refilling consumed mouse counts. Protocol byte
   and ACK controls derive from the corpus peripheral specs/PSX-SPX; no SIO
   timing, snapshot wire or pad-only v3 writer change. Independent reading,

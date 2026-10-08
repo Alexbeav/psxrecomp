@@ -541,6 +541,7 @@ static inline const char *input_route_v3_write_ex(
         ext += input_route_v3_entry_bytes(36);
     }
     if (!words == !dual) return "record layout";
+    if (device_count && words) return "device replay record size";
     if (rx && rx->devices && (!device_count || (!anchor && !power_on)))
         return "device replay frame coverage/start";
     if (device_bytes) ext += input_route_v3_entry_bytes(device_bytes);
