@@ -32,4 +32,10 @@ checked. Deleting a ref does not introduce a commit. Git's `--no-verify` can byp
 a local hook, so the fork CI repeats the commit check; the hook is a mistake guard,
 not an access control system.
 
+`tools/test_public_commits.py` builds private fixture repositories in the
+temporary folder. On Windows, when that folder is on C:, it builds them in the
+working directory instead, because the installer refuses C:. ctest starts the
+test in the build tree. A failed install assertion prints the installer's exit
+code and messages and the fixture folder.
+
 The protocol follows [Git's pre-push documentation](https://git-scm.com/docs/githooks#_pre_push).

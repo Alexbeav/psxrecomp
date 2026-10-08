@@ -26,11 +26,39 @@ def run(*args, data=None, env=None):
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
 
+def fixture_parent():
+    """Return the folder that holds the fixtures, or None for the default.
+
+    The installer refuses a hook folder on C: on Windows, and the default
+    temporary folder is on C: there. The working directory is used then,
+    because ctest starts this file in the build tree.
+    """
+    if sys.platform == 'win32' and Path(tempfile.gettempdir()).resolve().drive.upper() == 'C:':
+        here = Path.cwd().resolve()
+        if here.drive.upper() != 'C:':
+            return str(here)
+    return None
+
+
+def report(result):
+    """Describe an installer run for an assertion message."""
+    return 'installer exit {}\nfixture: {}\nstdout: {}\nstderr: {}'.format(
+        result.returncode, Path.cwd(), result.stdout.decode('utf-8', 'replace').strip(),
+        result.stderr.decode('utf-8', 'replace').strip())
+
+
+FIXTURE_PARENT = fixture_parent()
+
+
 class GuardTests(unittest.TestCase):
     def setUp(self):
-        self.folder = tempfile.TemporaryDirectory()
+        self.folder = tempfile.TemporaryDirectory(prefix='public-commit-guard-', dir=FIXTURE_PARENT)
         self.previous = Path.cwd()
         os.chdir(self.folder.name)
+        # A fixture below a work tree must never reach the repository above it.
+        ceiling = patch.dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(self.folder.name).resolve().parent))
+        ceiling.start()
+        self.addCleanup(ceiling.stop)
         run('init', '--quiet')
         self.base = self.commit('historical', author=BAD, committer=BAD)
 
@@ -149,15 +177,24 @@ class GuardTests(unittest.TestCase):
         return subprocess.run([sys.executable, '-B', str(INSTALLER)], stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE)
 
+    def installed(self):
+        result = self.install()
+        self.assertEqual(result.returncode, 0, report(result))
+
+    def refused(self, reason):
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0, report(result))
+        self.assertIn(reason, result.stderr.decode('utf-8', 'replace'), report(result))
+
     def test_installer_preserves_existing_hook_and_path(self):
         hook = Path('.git/hooks/pre-push')
         original = b'#!/bin/sh\necho existing fixture hook\n'
         hook.write_bytes(original)
-        self.assertNotEqual(self.install().returncode, 0)
+        self.refused('existing pre-push hook')
         self.assertEqual(hook.read_bytes(), original)
         hook.unlink()
         run('config', 'core.hooksPath', 'other-hooks')
-        self.assertNotEqual(self.install().returncode, 0)
+        self.refused('existing hook path policy')
         self.assertEqual(run('config', '--get', 'core.hooksPath').strip(), b'other-hooks')
 
     def test_cli_cannot_override_historical_base(self):
@@ -168,11 +205,11 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
 
     def test_installer_preserves_modified_own_hook(self):
-        self.assertEqual(self.install().returncode, 0)
+        self.installed()
         hook = Path('.git/hooks/pre-push')
         modified = hook.read_bytes() + b'echo user hook modification\n'
         hook.write_bytes(modified)
-        self.assertNotEqual(self.install().returncode, 0)
+        self.refused('existing pre-push hook')
         self.assertEqual(hook.read_bytes(), modified)
 
     def test_installer_rejects_symlinked_hook_directory(self):
@@ -187,12 +224,29 @@ class GuardTests(unittest.TestCase):
             hooks.symlink_to(outside, target_is_directory=True)
         except OSError:
             self.skipTest('directory symlink privilege unavailable')
-        self.assertNotEqual(self.install().returncode, 0)
+        self.refused('hook directory resolves outside this clone Git directory')
         self.assertEqual(list(outside.iterdir()), [])
 
     def test_installed_hook_blocks_actual_mock_public_push_and_allows_private(self):
-        self.assertEqual(self.install().returncode, 0)
-        copied = Path('.git/hooks/public-commit-guard/check_public_commits.py')
+        self.installed()
+        self.assertTrue(Path('.git/hooks/pre-push').is_file())
+        self.guarded_pushes()
+
+    def test_installer_in_linked_work_tree_uses_the_shared_hook_folder(self):
+        hooks = Path('.git/hooks').resolve()
+        linked = Path('linked-work-tree').resolve()
+        run('worktree', 'add', '--detach', str(linked), self.base)
+        os.chdir(linked)
+        self.assertTrue(Path('.git').is_file())
+        self.installed()
+        self.assertTrue((hooks / 'pre-push').is_file())
+        self.assertTrue((hooks / 'public-commit-guard' / 'check_public_commits.py').is_file())
+        self.guarded_pushes()
+
+    def guarded_pushes(self):
+        """Push through the installed hook from the current work tree."""
+        hooks = Path(run('rev-parse', '--git-path', 'hooks').decode('utf-8').strip()).resolve()
+        copied = hooks / 'public-commit-guard' / 'check_public_commits.py'
         # The isolated transport fixture uses its own historical pin. Production
         # pin identity is tested separately by invoking the guard on the stage head.
         copied.write_text(copied.read_text(encoding='utf-8').replace(guard.PIN_H, self.base), encoding='utf-8')
@@ -226,7 +280,7 @@ class GuardTests(unittest.TestCase):
             payload.symlink_to(outside, target_is_directory=True)
         except OSError:
             self.skipTest('directory symlink privilege unavailable')
-        self.assertNotEqual(self.install().returncode, 0)
+        self.refused('hook target resolves outside this clone hook directory')
         self.assertFalse(outside.exists())
 
 
