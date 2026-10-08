@@ -28,7 +28,7 @@ def replay(path, version=3, frames=4000):
     for tag, value in ((0x302, b"cd_speed=1\n"), (0x306, bytes(4)), (0x307, bytes(4))):
         extension += struct.pack("<II", tag, len(value)) + value + bytes(-len(value) % 4)
     path.write_bytes(struct.pack("<8sIIIII", f"PSXRTI{version}".encode() + b"\0",
-                                version, 12, frames, 0, len(extension)) + bytes(frames * 12))
+                                version, 12, frames, 0, len(extension)) + extension + bytes(frames * 12))
 
 
 def png(path):
