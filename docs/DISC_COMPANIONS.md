@@ -49,6 +49,26 @@ Cooked ISO and 2448-byte conversions preserve supplied SBI files but do not inhe
 The existing 2448-byte conversion discards embedded subchannels; this change does not extract them into SBI.
 CHD preparation and automatic protection detection for other revisions are outside this tool's coverage.
 
+## Known-disc missing-file warning
+
+PS1B-467 adds warning metadata for CTR Europe SCES-02105 and Final Fantasy IX
+Europe discs SLES-02965, SLES-12965, SLES-22965 and SLES-32965. The metadata
+comes from owner BIN SHA-1 values matched to the named Redump entries in the
+PS1G-107 intake of 2026-10-08. It qualifies no current CHD, pressing or SBI hash.
+
+Python preparation and verification use the measured main-track SHA-1. They
+print one missing-SBI sentence and retain it in the existing subchannel receipt.
+The native setup/validation paths use the mounted disc's detected boot serial,
+never a configured or expected serial. Serial membership is a warning lead,
+not a revision check. A successfully loaded companion removes the warning;
+the existing exact-revision requirement and hash checks remain separate.
+
+The runtime prints the sentence on a validation/game start and retains it as
+`disc_warning` in the run report after the first guest instruction. This warning
+adds no new refusal, download, patch or companion redistribution rule. Unknown
+discs do not receive it. Neither an absent warning nor a format-valid SBI proves
+that a protection check passed. Player kit instructions remain Alex's decision.
+
 ## Receipts and callers
 
 Preparation writes `<output-cue-basename>.disc-receipt.json` beside the output.
@@ -108,8 +128,16 @@ Run the source-owned setup tests from the framework root:
 ```sh
 python tools/tests/test_disc_companion.py -v
 python tools/tests/test_sbi_registry.py -v
+python tools/tests/test_missing_sbi_callers.py --cc gcc --cxx g++
 ```
 
 The fixtures create synthetic ISO directory records, an inert executable header, audio bytes, and SBI records.
 Tests bind their own synthetic revision through an in-memory registry entry.
 No fixture copies retail game data, BIOS data, or a third-party SBI.
+The native `missing_sbi_report_test` target checks the warning's report lifetime
+and privacy. `missing_sbi_callers_test` compiles the actual CD controller and
+shared frontend warning helper with the existing synthetic ISO callbacks.
+It checks successful, refused and rolled-back mounts plus source wiring at
+startup and disc-change commit points. These focused controls do not run the
+complete frontend, real ISO/CHD reader or a game. The caller compiler command
+uses GNU/Clang flags; the report-value target uses standard C++17.

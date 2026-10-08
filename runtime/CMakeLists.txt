@@ -52,6 +52,11 @@ if(BUILD_TESTING)
         src/start_refusal.c)
     target_include_directories(start_refusal_test PRIVATE include)
     add_test(NAME start_refusal_test COMMAND start_refusal_test)
+    add_executable(missing_sbi_report_test
+        ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_report.cpp
+        src/start_refusal.c)
+    target_include_directories(missing_sbi_report_test PRIVATE include)
+    add_test(NAME missing_sbi_report_test COMMAND missing_sbi_report_test)
     # PS1B-295: a LAN / Direct IP host refuses a guest on another build.
     add_executable(netplay_lan_version_test
         tests/test_netplay_lan_version.c
@@ -1541,6 +1546,11 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+            add_test(NAME missing_sbi_callers_test COMMAND ${Python3_EXECUTABLE}
+                ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_callers.py
+                --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+        endif()
         add_test(NAME cd_seek_trace_validation_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cd_seek_trace_validation.py)

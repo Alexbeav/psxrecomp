@@ -3829,6 +3829,10 @@ int cdrom_has_disc(void) {
     return has_disc();
 }
 
+int cdrom_has_sbi(void) {
+    return iso_handle != NULL && subq_replacements_active;
+}
+
 int cdrom_replace_disc(const char* cue_path, const char scex[4]) {
     void* replacement;
     void* previous;
