@@ -406,6 +406,12 @@ if(BUILD_TESTING)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
     add_test(NAME replay_session_test COMMAND replay_session_test
         ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
+    add_executable(replay_digest_sequence_test tests/test_replay_digest_sequence.c
+        src/replay_session.c src/replay_marks.c src/psx_sha256.c)
+    target_include_directories(replay_digest_sequence_test PRIVATE include)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_digest_sequence_scratch)
+    add_test(NAME replay_digest_sequence_test COMMAND replay_digest_sequence_test
+        ${CMAKE_CURRENT_BINARY_DIR}/replay_digest_sequence_scratch)
     add_executable(replay_marks_test tests/test_replay_marks.c src/replay_marks.c)
     target_include_directories(replay_marks_test PRIVATE include)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_marks_scratch)
