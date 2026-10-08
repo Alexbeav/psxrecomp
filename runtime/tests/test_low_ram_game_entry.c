@@ -1,24 +1,31 @@
-/* Game entry leaves guest RAM 0..15 as the BIOS left it, and a replay of a
- * recording from an older build still compares those bytes as that build
- * held them.
+/* Guest RAM 0..15 belongs to the guest: game entry leaves it as the BIOS left
+ * it, and every guest store to it lands. A replay of a recording from an
+ * older build still compares those bytes as that build held them.
  *
- * Builds before this change zeroed RAM 0..15 at game entry. Their player
- * replays hold state digests of RAM with the zeros in it. This fixture links
- * the real store path (memory.c), the real game-start latch (fntrace.c) and
- * the real core digest (netplay_state_digest.c), and checks three things:
+ * Two older kinds of build changed RAM 0..15 from the host, and their player
+ * replays hold state digests of RAM as they held it:
+ *
+ *   - builds before PS1G-39 zeroed the 16 bytes at game entry, and dropped
+ *     some guest word stores to them after game entry, by the program counter
+ *     of the store;
+ *   - builds from PS1G-39 up to PS1B-456 kept the bytes at game entry and
+ *     dropped the same stores.
+ *
+ * This fixture links the real store path (memory.c), the real game-start
+ * latch (fntrace.c) and the real core digest (netplay_state_digest.c), and
+ * checks four things:
  *
  *   1. words stored at RAM 0..15 before game entry are still in RAM after it;
- *   2. with the older-recording switch on, the RAM part of the core digest
- *      equals the digest of RAM as a build with the clear holds it (`model`
- *      below: zero at game entry, then the same stores), and with the switch
- *      off it is the digest of RAM itself;
- *   3. the 16 bytes at game entry are kept for the run report;
- *   4. a guest store to RAM 0..15 lands whatever instruction made it. Older
- *      builds dropped some word stores after game entry, by the program
- *      counter of the store (PS1B-456). RAM takes those stores, and the older
- *      build's bytes of point 2 leave them out.
+ *   2. a guest store to RAM 0..15 lands whatever instruction made it, also
+ *      the stores that the older builds dropped, and the run report's count
+ *      takes exactly those;
+ *   3. with the switch for one of the older kinds on, the RAM part of the
+ *      core digest equals the digest of RAM as a build of that kind holds it
+ *      (`old_low` and `kept_low` below, kept by hand by that build's rule),
+ *      and with both switches off it is the digest of RAM itself;
+ *   4. the 16 bytes at game entry are kept for the run report.
  *
- * The end of main() keeps the known limit of point 2 as a negative case: an
+ * The end of main() keeps the known limit of point 3 as a negative case: an
  * unaligned word store (SWL, SWR) into RAM 0..15.
  *
  * test_low_ram_game_entry.py builds it; link seams that this path does not
@@ -45,8 +52,10 @@ void psx_write_word(uint32_t addr, uint32_t val);
 void psx_write_half(uint32_t addr, uint16_t val);
 void psx_write_byte(uint32_t addr, uint8_t val);
 void memory_set_low_ram_view_old(int on);
+void memory_set_low_ram_view_filtered(int on);
 const uint8_t *memory_low_ram_view(void);
 int memory_low_ram_at_entry(uint8_t out[16]);
+uint64_t memory_low_ram_older_dropped_stores(void);
 
 /* ---- what the three sources read from the rest of the runtime ----------- */
 void (*g_overlay_flush_pending_cycles)(void);
@@ -110,40 +119,60 @@ static const uint32_t dropped_pc[10] = {
     0xBFC405E4u, 0xBFC40788u, 0xBFC41C50u, 0x80012434u, 0x800125ACu,
 };
 
-/* RAM as a build with the old clear holds it: every byte as in real RAM
- * except 0..15, which this fixture keeps by the old rule. */
+/* RAM as an older build holds it: every byte as in real RAM except 0..15,
+ * which this fixture keeps by that build's rule. old_low is a build with the
+ * clear at game entry; kept_low is a build that kept the bytes at game entry.
+ * Both dropped the same stores. */
 static uint8_t old_low[16];
+static uint8_t kept_low[16];
 static uint8_t model[RAM_BYTES];
 
-static uint32_t digest_ram_part(void) {
+/* A store that both older kinds of build let land. */
+static void both_kept(uint32_t at, uint32_t value, uint32_t width) {
+    for (uint32_t b = 0; b < width; ++b)
+        old_low[at + b] = kept_low[at + b] = (uint8_t)(value >> (8 * b));
+}
+
+static NetplayCoreParts digest_parts(void) {
     static CPUState cpu;
     NetplayCoreParts parts;
     netplay_core_digest_parts(&cpu, &parts);
-    return parts.ram;
+    return parts;
 }
-static uint32_t crc_of_model(void) {
+static uint32_t digest_ram_part(void) { return digest_parts().ram; }
+static uint32_t crc_of_model(const uint8_t low[16]) {
     memcpy(model, memory_get_ram_ptr(), RAM_BYTES);
-    memcpy(model, old_low, sizeof old_low);
+    memcpy(model, low, 16);
     return crc32_compute(model, RAM_BYTES);
 }
 static uint32_t crc_of_ram(void) {
     return crc32_compute(memory_get_ram_ptr(), RAM_BYTES);
 }
-/* Both switch positions, against real RAM and against the model. */
+static void check_view_is(const uint8_t low[16], const char *when, const char *which) {
+    char what[200];
+    snprintf(what, sizeof what, "%s: %s, the view is that build's 16 bytes", when, which);
+    check(memory_low_ram_view() != memory_get_ram_ptr() &&
+          !memcmp(memory_low_ram_view(), low, 16), what);
+    snprintf(what, sizeof what, "%s: %s, the digest is that build's", when, which);
+    check(digest_ram_part() == crc_of_model(low), what);
+}
+/* Every switch position, against real RAM and against the two models. */
 static void check_views(const char *when) {
-    char what[160];
+    char what[200];
     memory_set_low_ram_view_old(0);
-    snprintf(what, sizeof what, "%s: switch off, the view is RAM itself", when);
+    memory_set_low_ram_view_filtered(0);
+    snprintf(what, sizeof what, "%s: switches off, the view is RAM itself", when);
     check(memory_low_ram_view() == memory_get_ram_ptr(), what);
-    snprintf(what, sizeof what, "%s: switch off, the digest is of RAM", when);
+    snprintf(what, sizeof what, "%s: switches off, the digest is of RAM", when);
     check(digest_ram_part() == crc_of_ram(), what);
     memory_set_low_ram_view_old(1);
-    snprintf(what, sizeof what, "%s: switch on, the view is the older build's 16 bytes", when);
-    check(memory_low_ram_view() != memory_get_ram_ptr() &&
-          !memcmp(memory_low_ram_view(), old_low, sizeof old_low), what);
-    snprintf(what, sizeof what, "%s: switch on, the digest is the older build's", when);
-    check(digest_ram_part() == crc_of_model(), what);
+    check_view_is(old_low, when, "a recording of a build with the clear");
+    /* A build with the clear dropped the stores too: its switch decides. */
+    memory_set_low_ram_view_filtered(1);
+    check_view_is(old_low, when, "both switches on");
     memory_set_low_ram_view_old(0);
+    check_view_is(kept_low, when, "a recording of a build that dropped stores");
+    memory_set_low_ram_view_filtered(0);
 }
 
 int main(void) {
@@ -152,10 +181,10 @@ int main(void) {
     static CPUState cpu;
     uint8_t *ram = memory_get_ram_ptr();
     uint8_t expect[16], at_entry[16];
-    uint32_t word;
+    uint32_t word, dirty_part;
 
-    /* Before game entry: the kernel's stores land, and both builds agree.
-     * The older build dropped no store before game entry, so the stub copy
+    /* Before game entry: the kernel's stores land, and every build agrees.
+     * The older builds dropped no store before game entry, so the stub copy
      * comes from 0xBFC10A00 here and the 3 from a delay-loop address. */
     g_debug_last_store_pc = 0xBFC10A00u;
     psx_write_word(0x80000000u, 0x3c1a0000u);
@@ -166,6 +195,7 @@ int main(void) {
         for (uint32_t b = 0; b < 4; ++b) expect[4 * i + b] = (uint8_t)(bios_words[i] >> (8 * b));
     check(!memcmp(ram, expect, 16), "the stores before game entry are in RAM");
     memcpy(old_low, expect, 16);
+    memcpy(kept_low, expect, 16);
     check(!memory_low_ram_at_entry(at_entry), "no bytes at entry before game entry");
     check_views("before game entry");
 
@@ -177,10 +207,11 @@ int main(void) {
     check(memory_low_ram_at_entry(at_entry) && !memcmp(at_entry, expect, 16),
           "the 16 bytes at game entry are kept");
     memset(old_low, 0, sizeof old_low);              /* the old host cleared here */
-    check(crc_of_model() != crc_of_ram(), "the older build's RAM differs from this one's");
+    check(crc_of_model(old_low) != crc_of_ram(), "the RAM of a build with the clear differs from this one's");
+    check(crc_of_model(kept_low) == crc_of_ram(), "a build that kept the bytes holds this build's RAM at game entry");
     check_views("at game entry");
 
-    /* Stores after game entry reach RAM and the older build's bytes alike. */
+    /* Stores after game entry reach RAM and the older builds' bytes alike. */
     g_debug_last_store_pc = 0x80012000u;
     psx_write_word(0x80000008u, 0xCAFEF00Du);
     psx_write_half(0x80000004u, 0x1234u);
@@ -188,17 +219,21 @@ int main(void) {
     expect[8] = 0x0D; expect[9] = 0xF0; expect[10] = 0xFE; expect[11] = 0xCA;
     expect[4] = 0x34; expect[5] = 0x12; expect[15] = 0x56;
     check(!memcmp(ram, expect, 16), "the stores after game entry are in RAM");
-    old_low[8] = 0x0D; old_low[9] = 0xF0; old_low[10] = 0xFE; old_low[11] = 0xCA;
-    old_low[4] = 0x34; old_low[5] = 0x12; old_low[15] = 0x56;
+    both_kept(8, 0xCAFEF00Du, 4);
+    both_kept(4, 0x1234u, 2);
+    both_kept(15, 0x56u, 1);
     check_views("after three stores");
+    check(memory_low_ram_older_dropped_stores() == 0, "no store so far is one that the older builds dropped");
 
-    /* A guest store to RAM 0..15 lands whatever instruction made it. Older
-     * builds dropped two kinds of word store after game entry, by the store's
-     * program counter (PS1B-456): every word store to RAM 0..15 from
-     * 0xBFC10A00, where the kernel copies its exception stub to address 0,
-     * and a word store to address 0 from ten listed addresses, the delay
+    /* A guest store to RAM 0..15 lands whatever instruction made it. The
+     * older builds dropped two kinds of word store after game entry, by the
+     * program counter of the store (PS1B-456): every word store to RAM 0..15
+     * from 0xBFC10A00, where the kernel copies its exception stub to address
+     * 0, and a word store to address 0 from ten listed addresses, the delay
      * loops that leave 3 in the first word. Both are guest stores, and RAM
-     * takes them. The older build's bytes do not: that build dropped them. */
+     * takes them. The older builds' bytes do not: those builds dropped them.
+     * The page was written before, so the digest's dirty-page part stays. */
+    dirty_part = digest_parts().dirty;
     g_debug_last_store_pc = 0xBFC10A00u;
     for (uint32_t i = 0; i < 4; ++i) psx_write_word(0x80000000u + 4u * i, 0xA0B0C0D0u + i);
     for (uint32_t i = 0; i < 4; ++i)
@@ -215,25 +250,30 @@ int main(void) {
         check(!memcmp(ram, expect, 16), what);
     }
     check_views("after the word stores to RAM 0 from the ten addresses");
-    /* The older build dropped word stores only. A half and a byte store from
+    check(memcmp(ram, kept_low, 16) != 0 && memcmp(old_low, kept_low, 16) != 0,
+          "RAM and the two older builds' bytes are three different things here");
+    check(digest_parts().dirty == dirty_part, "those stores change no dirty-page bit");
+    check(memory_low_ram_older_dropped_stores() == 14, "the run report's count holds the 4 and the 10 stores");
+    /* The older builds dropped word stores only. A half and a byte store from
      * the same program counter landed there too. */
     g_debug_last_store_pc = 0xBFC10A00u;
     psx_write_half(0x80000002u, 0xBEEFu);
     psx_write_byte(0x8000000Cu, 0x77u);
     expect[2] = 0xEF; expect[3] = 0xBE; expect[12] = 0x77;
     check(!memcmp(ram, expect, 16), "a half and a byte store from 0xBFC10A00 are in RAM");
-    old_low[2] = 0xEF; old_low[3] = 0xBE; old_low[12] = 0x77;
+    both_kept(2, 0xBEEFu, 2);
+    both_kept(12, 0x77u, 1);
     check_views("after a half and a byte store from 0xBFC10A00");
-    /* Outside RAM 0..15 the older build dropped nothing: a word at 0x10 from
-     * 0xBFC10A00, and a word at 4 from a delay-loop address. */
+    /* Outside their two rules the older builds dropped nothing: a word at
+     * 0x10 from 0xBFC10A00, and a word at 4 from a delay-loop address. */
     psx_write_word(0x80000010u, 0x22222222u);
     check(psx_read_word(0x80000010u) == 0x22222222u, "a word store at 0x10 from 0xBFC10A00 is in RAM");
     g_debug_last_store_pc = dropped_pc[0];
     psx_write_word(0x80000004u, 0x33333333u);
     expect[4] = expect[5] = expect[6] = expect[7] = 0x33;
     check(!memcmp(ram, expect, 16), "a word store at 4 from a delay-loop address is in RAM");
-    old_low[4] = old_low[5] = old_low[6] = old_low[7] = 0x33;
-    check_views("after word stores that the older build kept");
+    both_kept(4, 0x33333333u, 4);
+    check_views("after word stores that the older builds kept");
 
     /* A store outside 0..15 changes no byte of the 16. */
     g_debug_last_store_pc = 0x80012000u;
@@ -246,6 +286,7 @@ int main(void) {
     for (uint32_t i = 0; i < 16; ++i) ram[i] = (uint8_t)(0xA0u + i);
     psx_kernel_bless_note_range(0, RAM_BYTES);
     memcpy(old_low, ram, 16);
+    memcpy(kept_low, ram, 16);
     check_views("after a state load");
 
     /* A state from before game entry, then game entry again. */
@@ -257,21 +298,21 @@ int main(void) {
     memset(old_low, 0, sizeof old_low);
     check_views("at the second game entry");
 
-    /* The source profile never had the clear. */
+    /* The source profile never had the clear, and it dropped no store. */
     source_profile = 1;
     psx_kernel_bless_note_range(0, RAM_BYTES);
     fntrace_restore_game_started(0);
     fntrace_mark_game_started(&cpu);
     memcpy(old_low, ram, 16);
     check_views("source profile");
-    /* The older build dropped no store in the source profile either. */
     g_debug_last_store_pc = 0xBFC10A00u;
     psx_write_word(0x80000008u, 0x44444444u);
     g_debug_last_store_pc = dropped_pc[9];
     psx_write_word(0x80000000u, 0x55555555u);
     check(psx_read_word(0x80000008u) == 0x44444444u && psx_read_word(0x80000000u) == 0x55555555u,
           "source profile: the stores from those addresses are in RAM");
-    memcpy(old_low, ram, 16);
+    both_kept(8, 0x44444444u, 4);
+    both_kept(0, 0x55555555u, 4);
     check_views("source profile, after stores from those addresses");
 
     /* The known limit, kept as a negative case. SWL and SWR store part of a
@@ -283,10 +324,12 @@ int main(void) {
      * of an older recording reports a difference that is not real. It cannot
      * hide one: the view's bytes of that word are the real ones. When the
      * store path follows byte by byte, the two checks marked "limit" fail:
-     * put check_views() in their place. */
+     * put check_views() in their place. A build that kept the bytes at game
+     * entry holds the real bytes there, so its view has no such limit here. */
     source_profile = 0;
     fntrace_restore_game_started(0);
     fntrace_mark_game_started(&cpu);
+    memcpy(expect, ram, 16);
     memset(old_low, 0, sizeof old_low);
     check_views("at the third game entry");
     g_debug_last_store_pc = 0x80012000u;
@@ -298,18 +341,25 @@ int main(void) {
     psx_write_word(0x80000004u, (word & 0x0000FFFFu) | (0x9ABCDEF0u << 16));
     expect[0] = 0x34; expect[1] = 0x12; expect[6] = 0xF0; expect[7] = 0xDE;
     check(!memcmp(ram, expect, 16), "SWL and SWR store the merged words in RAM");
-    /* The older build merged the same four bytes into its zeros. */
-    old_low[0] = 0x34; old_low[1] = 0x12; old_low[6] = 0xF0; old_low[7] = 0xDE;
+    /* The older builds merged the same four bytes into what they held. */
+    both_kept(0, 0x1234u, 2);
+    both_kept(6, 0xDEF0u, 2);
     memory_set_low_ram_view_old(1);
     check(!memcmp(memory_low_ram_view(), ram, 8),
           "limit: after SWL and SWR the view holds both whole words of real RAM");
-    check(memcmp(memory_low_ram_view(), old_low, 8) != 0 && digest_ram_part() != crc_of_model(),
-          "limit: after SWL and SWR the view is not the older build's RAM");
+    check(memcmp(memory_low_ram_view(), old_low, 8) != 0 && digest_ram_part() != crc_of_model(old_low),
+          "limit: after SWL and SWR the view is not the RAM of a build with the clear");
     check(!memcmp(memory_low_ram_view() + 8, old_low + 8, 8),
           "SWL and SWR leave the view's other two words");
     memory_set_low_ram_view_old(0);
-    check(digest_ram_part() == crc_of_ram(), "after SWL and SWR: switch off, the digest is of RAM");
+    memory_set_low_ram_view_filtered(1);
+    check_view_is(kept_low, "after SWL and SWR", "a recording of a build that dropped stores");
+    memory_set_low_ram_view_filtered(0);
+    check(digest_ram_part() == crc_of_ram(), "after SWL and SWR: switches off, the digest is of RAM");
+    check(memory_low_ram_older_dropped_stores() == 14,
+          "the count took no store that the older builds kept, and none in the source profile");
 
-    puts("low RAM at game entry: RAM kept, older-recording view exact, SWL/SWR limit unchanged");
+    puts("low RAM: game entry keeps it, every guest store lands, both older-recording views exact, "
+         "SWL/SWR limit unchanged");
     return 0;
 }

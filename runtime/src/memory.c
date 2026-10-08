@@ -185,33 +185,93 @@ uint8_t *memory_get_scratchpad_ptr(void) { return scratchpad; }
 /* ---- RAM 0..15 as an older build held it ----
  *
  * RAM 0..15 is guest memory. The kernel leaves a copy of its exception stub
- * there, and a game can read it through a null pointer (PSX-SPX, "Garbage
- * Area at Address 00000000h"). Builds before this change zeroed those bytes
- * at game entry. A player replay recorded by such a build holds state digests
- * and an end checkpoint of RAM with the zeros in it.
+ * there, its delay loops leave 3 in the first word, and a game can read the
+ * bytes through a null pointer (PSX-SPX, "Garbage Area at Address
+ * 00000000h"). This build leaves them to the guest. Two older kinds of build
+ * did not, and a player replay recorded by one of them holds state digests
+ * and an end checkpoint of RAM as that build held it:
  *
- * s_low_ram_old is RAM 0..15 as such a build would hold it. It takes every
- * write to those bytes, and it is zeroed at game entry, where the old host
- * cleared RAM. While a replay of such a recording plays, the replay's RAM
- * digest and its end checkpoint read these 16 bytes in place of the real ones
+ *   1. builds before PS1G-39 zeroed the 16 bytes at game entry, and dropped
+ *      some guest word stores to them after game entry
+ *      (low_ram_older_build_dropped);
+ *   2. builds from PS1G-39 up to PS1B-456 kept the bytes at game entry and
+ *      dropped the same stores.
+ *
+ * s_low_ram_old is RAM 0..15 as a build of the first kind would hold it, and
+ * s_low_ram_filtered as a build of the second kind would. Both take every
+ * write to those bytes except the stores that those builds dropped, and
+ * s_low_ram_old is zeroed at game entry, where the old host cleared RAM.
+ * While a replay of such a recording plays, the replay's RAM digest and its
+ * end checkpoint read these 16 bytes in place of the real ones
  * (memory_low_ram_view). Guest RAM is not changed, and nothing the guest can
- * observe reads the copy. */
+ * observe reads a copy. */
 #define LOW_RAM_BYTES 0x10u
 static uint8_t s_low_ram_old[LOW_RAM_BYTES];
+static uint8_t s_low_ram_filtered[LOW_RAM_BYTES];
 static uint8_t s_low_ram_at_entry[LOW_RAM_BYTES];
 static int s_low_ram_at_entry_valid;
 static int s_low_ram_view_old;
+static int s_low_ram_view_filtered;
 
 /* Call after a write of len bytes at phys has landed in ram. */
 static inline void low_ram_old_follow(uint32_t phys, uint32_t len) {
     if (phys >= LOW_RAM_BYTES) return;
     if (len > LOW_RAM_BYTES - phys) len = LOW_RAM_BYTES - phys;
     memcpy(s_low_ram_old + phys, ram + phys, len);
+    memcpy(s_low_ram_filtered + phys, ram + phys, len);
 }
 
+/* Did the older builds drop a guest word store at phys (below LOW_RAM_BYTES)
+ * that the instruction at g_debug_last_store_pc makes now? They dropped two
+ * kinds, after game entry and outside the source profile:
+ *
+ *   - every word store to RAM 0..15 from 0xBFC10A00. In the SCPH1001 kernel
+ *     that is the loop of C(07h), InstallExceptionHandlers, which copies the
+ *     exception stub to address 0 (PSX-SPX);
+ *   - a word store to address 0 from ten addresses: eight loops in the
+ *     SCPH1001 ROM that count to 3 into address 0, and two in one game.
+ *
+ * This is a record of what those builds did, read only for the two copies
+ * above. It decides nothing about guest RAM: the store has landed. The list
+ * is closed. A new address never belongs in it. */
+static int low_ram_older_build_dropped(uint32_t phys) {
+    extern uint32_t g_debug_last_store_pc;
+    if (source_gpu_runtime_active() || !fntrace_is_game_started()) return 0;
+    if (g_debug_last_store_pc == 0xBFC10A00u) return 1;
+    if (phys != 0u) return 0;
+    switch (g_debug_last_store_pc) {
+    case 0xBFC04E90u:
+    case 0xBFC04EF0u:
+    case 0xBFC05164u:
+    case 0xBFC0D634u:
+    case 0xBFC3EEB4u:
+    case 0xBFC405E4u:
+    case 0xBFC40788u:
+    case 0xBFC41C50u:
+    case 0x80012434u:
+    case 0x800125ACu:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Call after a guest word store at phys has landed in ram. */
+static uint64_t s_low_ram_older_dropped;
+static inline void low_ram_old_follow_word(uint32_t phys) {
+    if (phys >= LOW_RAM_BYTES) return;
+    if (low_ram_older_build_dropped(phys)) { s_low_ram_older_dropped++; return; }
+    low_ram_old_follow(phys, 4u);
+}
+
+/* For the run report: the guest word stores to RAM 0..15 that landed in this
+ * process and that the older builds dropped. While it is 0, this build has
+ * done nothing to RAM 0..15 that a build from PS1G-39 on did not do. */
+uint64_t memory_low_ram_older_dropped_stores(void) { return s_low_ram_older_dropped; }
+
 /* Game entry (fntrace_mark_game_started). Keeps the 16 bytes for the run
- * report, and does to the copy what the old host did to RAM: it clears it,
- * except in the source profile. */
+ * report, and does to the first copy what the old host did to RAM: it clears
+ * it, except in the source profile. */
 void memory_note_game_entry(void) {
     memcpy(s_low_ram_at_entry, ram, LOW_RAM_BYTES);
     s_low_ram_at_entry_valid = 1;
@@ -221,9 +281,14 @@ void memory_note_game_entry(void) {
 /* On while a replay plays that a build with the clear recorded. */
 void memory_set_low_ram_view_old(int on) { s_low_ram_view_old = on != 0; }
 
-/* The 16 bytes a replay compares as RAM 0..15: ram itself, or the copy. */
+/* On while a replay plays that a build which dropped those stores recorded.
+ * A build with the clear dropped them too, so its switch decides first. */
+void memory_set_low_ram_view_filtered(int on) { s_low_ram_view_filtered = on != 0; }
+
+/* The 16 bytes a replay compares as RAM 0..15: ram itself, or a copy. */
 const uint8_t *memory_low_ram_view(void) {
-    return s_low_ram_view_old ? s_low_ram_old : ram;
+    if (s_low_ram_view_old) return s_low_ram_old;
+    return s_low_ram_view_filtered ? s_low_ram_filtered : ram;
 }
 
 /* RAM 0..15 as the game found it at entry; 0 before this process saw one. */
@@ -1389,6 +1454,8 @@ uint32_t memory_get_bios_checksum(void) { return s_bios_checksum; }
 void memory_init(const char* bios_path) {
     memset(ram, 0, sizeof(ram));
     memset(s_low_ram_old, 0, sizeof(s_low_ram_old));
+    memset(s_low_ram_filtered, 0, sizeof(s_low_ram_filtered));
+    s_low_ram_older_dropped = 0;
     s_low_ram_at_entry_valid = 0;
     memset(scratchpad, 0, sizeof(scratchpad));
     /* Rematch re-enters without process exit — wipe sticky I/O regs that
@@ -2033,31 +2100,10 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
 
     uint32_t phys = psx_phys_addr(addr);
 
-    /* Legacy Tomba 2 card-buffer workaround. Source execution writes ordinary
-     * RAM here, so the source profile must not suppress the guest store. */
-    if (!source_gpu_runtime_active() && fntrace_is_game_started() &&
-        phys < 0x10u && g_debug_last_store_pc == 0xBFC10A00u) return;
-
-    /* Retain the legacy card-buffer store filter outside the source profile.
-     * BIOS delay-loop scratch stores are observable guest RAM writes. */
-    if (!source_gpu_runtime_active() && fntrace_is_game_started() && phys == 0u) {
-        switch (g_debug_last_store_pc) {
-        case 0xBFC04E90u:
-        case 0xBFC04EF0u:
-        case 0xBFC05164u:
-        case 0xBFC0D634u:
-        case 0xBFC3EEB4u:
-        case 0xBFC405E4u:
-        case 0xBFC40788u:
-        case 0xBFC41C50u:
-        case 0x80012434u:
-        case 0x800125ACu:
-            return;
-        default:
-            break;
-        }
-    }
-
+    /* RAM 0..15 takes every guest store, in every profile and from every
+     * program counter. Builds up to PS1B-456 dropped some of them here; only
+     * the copies for their replays still leave those out
+     * (low_ram_old_follow_word). */
     if (phys < RAM_SIZE) {
         /* Tomba 2 load-game card check: the BIOS card-manager cleanup helper
          * at kernel RAM 0x1C5C scans MARK events and re-arms any READY event
@@ -2108,7 +2154,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         ram[phys + 1] = (uint8_t)(val >> 8);
         ram[phys + 2] = (uint8_t)(val >> 16);
         ram[phys + 3] = (uint8_t)(val >> 24);
-        low_ram_old_follow(phys, 4u);
+        low_ram_old_follow_word(phys);
         return;
     }
     {

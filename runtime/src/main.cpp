@@ -8412,6 +8412,7 @@ extern "C" int replay_host_take_load_result(void) {
 
 /* memory.c: RAM 0..15 as a replay compares it (see replay_host_ram). */
 extern "C" void memory_set_low_ram_view_old(int on);
+extern "C" void memory_set_low_ram_view_filtered(int on);
 extern "C" const uint8_t *memory_low_ram_view(void);
 
 /* The settings that change guest timing but are not in a save state. */
@@ -8429,14 +8430,18 @@ static std::string replay_mods_fingerprint(void) {
  *
  * game_entry_low_ram=kept says that this build leaves guest RAM 0..15 alone
  * at game entry. Builds before it zeroed those bytes there and wrote no such
- * line, so a recording without the line is one of theirs (PS1G-39). */
+ * line, so a recording without the line is one of theirs (PS1G-39).
+ *
+ * low_ram_stores=all says that this build lets every guest store to RAM
+ * 0..15 land. Builds before it dropped some of them after game entry and
+ * wrote no such line (PS1B-456). */
 extern "C" void replay_host_settings_capture(char *out, size_t cap) {
     std::snprintf(out, cap,
                   "cd_speed=%d\ncd_instant_rate=%d\nturbo_loads=%d\nturbo_load_wall=%d\n"
                   "p1_connected=%d\np1_config_capable=%d\nmods=%s\n"
                   "cd_game_speed=%d\nauto_skip_fmv=%d\nidle_skip=%d\n"
                   "p1_analog=%d\np2_connected=%d\np2_config_capable=%d\np2_analog=%d\n"
-                  "game_entry_low_ram=kept\n",
+                  "game_entry_low_ram=kept\nlow_ram_stores=all\n",
                   cdrom_get_speed(), cdrom_get_instant_rate(), g_turbo_loads_enabled,
                   g_turbo_load_wall_multiplier, sio_get_pad_connected(0),
                   sio_get_pad_config_capable(0), replay_mods_fingerprint().c_str(),
@@ -8477,6 +8482,7 @@ static void replay_settings_apply_text(const char *text, char *differs, size_t c
                 sio_set_pad_analog(slot, v ? 1 : 0, 0x80, 0x80, 0x80, 0x80);
         }
         else if (key == "game_entry_low_ram") memory_set_low_ram_view_old(value != "kept");
+        else if (key == "low_ram_stores") memory_set_low_ram_view_filtered(value != "all");
         else ok = false;
         if (!ok && differs && cap) {
             const size_t n = std::strlen(differs);
@@ -8491,9 +8497,12 @@ extern "C" void replay_host_settings_apply(const char *settings, char *differs, 
     replay_host_settings_capture(now, sizeof(now));
     s_replay_saved_settings = now;
     /* No game_entry_low_ram line: a build that zeroed RAM 0..15 at game entry
-     * recorded it, so the replay compares those bytes as that build held
-     * them. The line in `settings`, and the restore afterwards, switch it. */
+     * recorded it. No low_ram_stores line: a build that dropped some guest
+     * stores to those bytes recorded it. The replay then compares the bytes
+     * as that build held them. The lines in `settings`, and the restore
+     * afterwards, switch the two views. */
     memory_set_low_ram_view_old(1);
+    memory_set_low_ram_view_filtered(1);
     replay_settings_apply_text(settings, differs, cap);
 }
 
@@ -8511,9 +8520,10 @@ extern "C" const char *replay_host_game_title(void) { return s_picker_game_name.
 extern "C" int replay_host_frame_rate(void) { return gpu_video_standard_is_pal() ? 50 : 60; }
 
 /* Main RAM as a replay compares it. That is guest RAM, except while a replay
- * plays that was recorded by a build which zeroed RAM 0..15 at game entry
- * (replay_settings_apply_text, "game_entry_low_ram"): then those 16 bytes
- * come from memory_low_ram_view, in a copy of RAM that this returns. */
+ * plays that was recorded by a build which zeroed RAM 0..15 at game entry or
+ * dropped guest stores to those bytes (replay_settings_apply_text,
+ * "game_entry_low_ram" and "low_ram_stores"): then those 16 bytes come from
+ * memory_low_ram_view, in a copy of RAM that this returns. */
 extern "C" const uint8_t *replay_host_ram(void) {
     extern uint8_t *g_psx_ram;
     static std::vector<uint8_t> view;
