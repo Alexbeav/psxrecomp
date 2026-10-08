@@ -117,6 +117,14 @@ of one process are bounded.
 - `psx_freeze_heartbeat.json` reports the count: `automatic_freeze_dumps`,
   `suppressed_freeze_events`, `refilled_freeze_dump_slots` and
   `automatic_freeze_dump_limit`.
+- The spin class (`wedge_kind` 5) means: frames arrive, and the executing
+  function, the last store address and the interpreted instruction count are
+  the same in every heartbeat sample for 4 seconds, with no video decode in
+  that time. A wait that ends sooner is not a freeze and writes no dump.
+  `spin_pinned_ticks` is the number of samples in a row that hold the same
+  three values now. `spin_waits_ended` counts each time they stood still for
+  2 seconds or more and moved again before 4; it does not look at the frame
+  rate or at video, so a short still inside a video counts too.
 - `PSX_DUMP_AT_FRAME=<n>` asks for one more dump, at the first heartbeat sample
   whose frame count is `n` or more. It needs no slot and uses none. Its
   `wedge_kind` is 6 (`requested`), and its `frame_count` is the frame it was
