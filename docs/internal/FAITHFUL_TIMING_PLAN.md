@@ -234,6 +234,23 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-06 (PS1G-39, after pin H, kept-route/cockpit regression):** Native boot produces
+  the same BIOS low-RAM words as the oracle, then the host game-start hook clears
+  bytes 0..15. Colony Wars: Vengeance later reads halfword zero through a cleared
+  CD ring pointer; clearing the BIOS value 3 lets that callback DMA into low RAM
+  and corrupt the B0 vector. Removing the host clear preserves guest RAM for
+  every profile. The checkpoint regression checks synthetic guest words across
+  initial, repeated and restored handoffs: pin H fails, the fix passes at O0/O2.
+  The pinned release build passes and the unchanged kept route at CD 1x reaches
+  frame 30,984, exiting 0 through its 300000ms timer without an observer. Earlier
+  isolated CD cursor and restart-delay candidates did not clear the crash and
+  are not part of this change. A separate route keeps the original input prefix,
+  selects Launch from the briefing and shows the cockpit at frames 20,000 and
+  24,000; it exits through capture completion, not the timer. These measurements
+  do not replace the full Windows/seven Tier 1/Athena qualification; gate outcomes
+  belong on PS1G-39. Pin H remains frozen.
+  Evidence: PS1G-39 comments 7-4023, 7-4027 and 7-4030.
+
 - **2026-09-13 (SIO card hack removal — branch-only review checkpoint):**
   Reproduced fixed-Ape-RAM IRQ7/mask injection after an absent-card probe,
   plus SELECT-time ACK fabrication and INTC-pending ACK requeueing with the

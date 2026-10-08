@@ -1264,6 +1264,59 @@ def program_set_tool(config: Path):
     return program_set if program_set.is_set_config(config) else None
 
 
+# The mid-function split pre-pass of psxrecomp-game (CodeGenerator::generate_file,
+# MAX_PASSES). The emitter splits functions at branch targets until a pass finds
+# none. It stops after this many passes whether or not targets remain, and then
+# only prints a warning: the code it writes calls addresses its dispatch table
+# does not hold. test_cli_split_prepass_report.py holds these two patterns and
+# this number against the emitter's source.
+SPLIT_PREPASS_CAP = 256
+_PREPASS_PASS = re.compile(r"Pre-pass (\d+): \d+ mid-function branch targets\s*$")
+_PREPASS_UNCONVERGED = re.compile(
+    r"WARNING: mid-function split pre-pass did NOT converge after (\d+) passes"
+)
+
+
+def read_split_prepass(emitter_stdout: str) -> dict[str, Any]:
+    """What psxrecomp-game printed about its split pre-pass, as result fields.
+
+    prepass_passes     passes that split something (0: the first scan found no target)
+    prepass_cap        the pass limit of the emitter
+    prepass_converged  False when the emitter stopped at the limit with targets left
+    """
+    passes = 0
+    cap = SPLIT_PREPASS_CAP
+    converged = True
+    for line in emitter_stdout.splitlines():
+        found = _PREPASS_PASS.match(line)
+        if found:
+            passes = max(passes, int(found.group(1)))
+            continue
+        found = _PREPASS_UNCONVERGED.match(line)
+        if found:
+            cap = int(found.group(1))
+            converged = False
+    return {"prepass_passes": passes, "prepass_cap": cap, "prepass_converged": converged}
+
+
+def report_split_prepass(progress: ProgressReporter, emitter_stdout: str) -> dict[str, Any]:
+    """Log the pass count of this title and return the fields for the result.
+
+    One line for every title; its level is "warning" when the emitter stopped
+    at the limit. Such a title is not refused here: titles that stop at the
+    limit build and start today, and refusing them needs a decision on the
+    limit first (PS1B-135). The result says so, and a consumer can refuse.
+    """
+    fields = read_split_prepass(emitter_stdout)
+    progress.log(
+        f"split pre-pass: passes={fields['prepass_passes']} "
+        f"cap={fields['prepass_cap']} "
+        f"converged={'yes' if fields['prepass_converged'] else 'no'}",
+        level="info" if fields["prepass_converged"] else "warning",
+    )
+    return fields
+
+
 def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     config = Path(args.config).expanduser().resolve()
     if not config.is_file():
@@ -1481,6 +1534,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
             f"psxrecomp-game failed (exit {proc.returncode})", code=EXIT_ERROR
         )
         return EXIT_ERROR
+    prepass = report_split_prepass(progress, proc.stdout or "")
 
     marker_name = args.gen_marker or f"{boot}_dispatch.c"
     marker = out_dir / marker_name
@@ -1511,6 +1565,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         marker=str(marker),
         disc=str(working_disc),
         boot_exe=str(boot_path),
+        **prepass,
     )
     return EXIT_OK
 

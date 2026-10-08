@@ -797,49 +797,13 @@ const PsxBiosBackend *const psx_bios_registry[] = {
 list(APPEND PSXRECOMP_BIOS_GENERATED "${_psxrt_registry_c}")
 
 # --- BIOS generated/ staleness check (hygiene) -----------------------------------
-# generated/<stem>_*.c is gitignored build output produced by a SEPARATE build
-# (recompiler/ -> psxrecomp-bios). Editing the BIOS emitter without re-running
-# tools/regen_bios.sh leaves the runtime linking a stale BIOS that no longer matches
-# the emitter (this caused a 4439-vs-4406 drift). regen_bios.sh records an emitter
-# fingerprint in generated/<stem>.emitter.sha; recompute it here (same profile
-# argument as regen_bios.sh passes) and WARN on a mismatch so the staleness is
-# impossible to miss. Non-fatal: a stale-but-consistent
-# BIOS still builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON.
+# Compares generated/<stem>.emitter.sha with the emitter fingerprint of this tree
+# and WARNS when the generated BIOS is stale. The check, its reasons and the rule
+# for a stamp of the earlier file list are in bios_stale_check.cmake. Non-fatal;
+# opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON.
 if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
-    find_program(_psxrt_bash NAMES bash)
-    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}.emitter.sha")
-    if(_psxrt_bash AND EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh")
-        execute_process(
-            COMMAND "${_psxrt_bash}" "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh"
-                    "${PSXRECOMP_BIOS_PROFILE}"
-            WORKING_DIRECTORY "${PSXRECOMP_ROOT}"
-            OUTPUT_VARIABLE _psxrt_cur_fp OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE _psxrt_fp_rc ERROR_QUIET)
-        if(_psxrt_fp_rc EQUAL 0 AND _psxrt_cur_fp)
-            set(_psxrt_saved_fp "")
-            if(EXISTS "${_psxrt_stamp}")
-                file(READ "${_psxrt_stamp}" _psxrt_saved_fp)
-                string(STRIP "${_psxrt_saved_fp}" _psxrt_saved_fp)
-            endif()
-            if(_psxrt_saved_fp STREQUAL "")
-                # No stamp at all is not evidence of drift: say so quietly
-                # rather than crying STALE about a BIOS that may be fresh.
-                message(STATUS
-                    "psxrecomp: BIOS generated/ carries no emitter "
-                    "fingerprint (${PSXRECOMP_BIOS_STEM}.emitter.sha) - "
-                    "provenance unknown, staleness not checked.")
-            elseif(NOT _psxrt_saved_fp STREQUAL _psxrt_cur_fp)
-                message(WARNING
-                    "BIOS generated/ is STALE vs the recompiler emitter "
-                    "(fingerprint mismatch).\n"
-                    "  Linking generated/${PSXRECOMP_BIOS_STEM}_*.c that may not "
-                    "match the current emitter source, seeds, ROM or profile.\n"
-                    "  Fix:  tools/regen_bios.sh --config <profile>   (rebuilds "
-                    "psxrecomp-bios + regenerates the BIOS)\n"
-                    "  (Suppress: -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON)")
-            endif()
-        endif()
-    endif()
+    include(${PSXRECOMP_ROOT}/runtime/bios_stale_check.cmake)
+    psxrecomp_check_bios_stale()
 endif()
 
 # zlib for boot_state v4. System packages first; otherwise FetchContent a pinned

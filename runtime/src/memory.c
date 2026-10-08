@@ -182,12 +182,55 @@ int memory_peek_instruction_word(uint32_t address, uint32_t *value) {
 }
 uint8_t *memory_get_scratchpad_ptr(void) { return scratchpad; }
 
-void memory_clear_low_boot_scratch(void) {
-    /* Game entry is a host bookkeeping event. The source profile preserves
-     * guest RAM across it, including BIOS scratch and trampoline words. */
-    if (source_gpu_runtime_active()) return;
-    memset(ram, 0, 0x10u);
-    psx_kernel_bless_note_range(0u, 0x10u);   /* raw write: see the rule there */
+/* ---- RAM 0..15 as an older build held it ----
+ *
+ * RAM 0..15 is guest memory. The kernel leaves a copy of its exception stub
+ * there, and a game can read it through a null pointer (PSX-SPX, "Garbage
+ * Area at Address 00000000h"). Builds before this change zeroed those bytes
+ * at game entry. A player replay recorded by such a build holds state digests
+ * and an end checkpoint of RAM with the zeros in it.
+ *
+ * s_low_ram_old is RAM 0..15 as such a build would hold it. It takes every
+ * write to those bytes, and it is zeroed at game entry, where the old host
+ * cleared RAM. While a replay of such a recording plays, the replay's RAM
+ * digest and its end checkpoint read these 16 bytes in place of the real ones
+ * (memory_low_ram_view). Guest RAM is not changed, and nothing the guest can
+ * observe reads the copy. */
+#define LOW_RAM_BYTES 0x10u
+static uint8_t s_low_ram_old[LOW_RAM_BYTES];
+static uint8_t s_low_ram_at_entry[LOW_RAM_BYTES];
+static int s_low_ram_at_entry_valid;
+static int s_low_ram_view_old;
+
+/* Call after a write of len bytes at phys has landed in ram. */
+static inline void low_ram_old_follow(uint32_t phys, uint32_t len) {
+    if (phys >= LOW_RAM_BYTES) return;
+    if (len > LOW_RAM_BYTES - phys) len = LOW_RAM_BYTES - phys;
+    memcpy(s_low_ram_old + phys, ram + phys, len);
+}
+
+/* Game entry (fntrace_mark_game_started). Keeps the 16 bytes for the run
+ * report, and does to the copy what the old host did to RAM: it clears it,
+ * except in the source profile. */
+void memory_note_game_entry(void) {
+    memcpy(s_low_ram_at_entry, ram, LOW_RAM_BYTES);
+    s_low_ram_at_entry_valid = 1;
+    if (!source_gpu_runtime_active()) memset(s_low_ram_old, 0, LOW_RAM_BYTES);
+}
+
+/* On while a replay plays that a build with the clear recorded. */
+void memory_set_low_ram_view_old(int on) { s_low_ram_view_old = on != 0; }
+
+/* The 16 bytes a replay compares as RAM 0..15: ram itself, or the copy. */
+const uint8_t *memory_low_ram_view(void) {
+    return s_low_ram_view_old ? s_low_ram_old : ram;
+}
+
+/* RAM 0..15 as the game found it at entry; 0 before this process saw one. */
+int memory_low_ram_at_entry(uint8_t out[16]) {
+    if (!s_low_ram_at_entry_valid) return 0;
+    memcpy(out, s_low_ram_at_entry, LOW_RAM_BYTES);
+    return 1;
 }
 
 /* ---- Dirty-page tracking for install-at-runtime code (CLAUDE.md Rule 18) ----
@@ -494,8 +537,12 @@ static void kbless_note_write(uint32_t phys) {
  * writer of guest RAM calls this, next to the write.
  * tests/test_raw_ram_writers.py lists those writers and fails on a new one
  * that does not. Marking a range executable is not a write and resets
- * nothing: see dirty_ram_mark_executable_range. */
+ * nothing: see dirty_ram_mark_executable_range.
+ *
+ * Because every such writer comes here after its write, this is also where
+ * the older-build copy of RAM 0..15 follows them (low_ram_old_follow). */
 void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
+    low_ram_old_follow(phys, len);
     if (kbless_enabled <= 0) return;   /* also pre-init: nothing verified yet */
     if (len == 0) return;
     uint32_t end = phys + len;
@@ -1342,6 +1389,8 @@ uint32_t memory_get_bios_checksum(void) { return s_bios_checksum; }
 void memory_init(const char* bios_path) {
     psx_icache_bind_memory(ram, sizeof ram, bios_rom);
     memset(ram, 0, sizeof(ram));
+    memset(s_low_ram_old, 0, sizeof(s_low_ram_old));
+    s_low_ram_at_entry_valid = 0;
     memset(scratchpad, 0, sizeof(scratchpad));
     /* Rematch re-enters without process exit — wipe sticky I/O regs that
      * live outside device *_init (I_STAT/I_MASK cleared in interrupts_init). */
@@ -2060,6 +2109,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         ram[phys + 1] = (uint8_t)(val >> 8);
         ram[phys + 2] = (uint8_t)(val >> 16);
         ram[phys + 3] = (uint8_t)(val >> 24);
+        low_ram_old_follow(phys, 4u);
         return;
     }
     {
@@ -2192,6 +2242,7 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
 #endif
         ram[phys]     = (uint8_t)(val);
         ram[phys + 1] = (uint8_t)(val >> 8);
+        low_ram_old_follow(phys, 2u);
         return;
     }
     {
@@ -2510,6 +2561,7 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
         { extern void cosim_note_ram_write(uint32_t,uint32_t); cosim_note_ram_write(phys, 1); }
 #endif
         ram[phys] = val;
+        low_ram_old_follow(phys, 1u);
         return;
     }
     {

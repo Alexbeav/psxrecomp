@@ -121,10 +121,37 @@ the same value), so a difference there means another build.
   enabled mods, auto-skip FMV, idle skip, and both ports' connection, analog
   mode and DualShock capability. Playback switches to them and switches back
   afterwards.
+- One line about the build itself, `game_entry_low_ram=kept`: see "A recording
+  from an older build" below.
 - Both memory cards as the console found them at power-on: which slots had a
   card, and each card's 128 KiB image.
 - State digests every 60 frames and an end checkpoint (the cycle count and a
   SHA-256 of main RAM), so playback can report the first frame that differs.
+
+### A recording from an older build
+
+Builds before this one set the first 16 bytes of main RAM to zero when the game
+started. The console does not do that: the BIOS leaves four words there and a
+game can read them through a null pointer. This build leaves the bytes alone.
+
+A replay stores hashes of main RAM, so a recording from an older build holds
+the zeros. A recording says which kind it is in its settings: this build writes
+the line `game_entry_low_ram=kept`, and a recording without that line comes
+from a build that set the bytes to zero.
+
+When a recording without the line plays, the state digests and the end
+checkpoint read those 16 bytes as the older build held them: zero at the start
+of the game, then every later store to them. The game itself still runs with
+the real bytes. So the recording stays in sync when the game behaves the same,
+and goes out of sync when the game reads those bytes and takes another path.
+That is a real difference between the two builds, and the replay reports it.
+
+The other direction has no such view. A power-on recording with the line,
+played on an older build, goes out of sync when the game starts, because the
+older build still sets the bytes to zero. That build says "Replay from a
+different build: it may go out of sync" before it plays. An F11 recording whose
+anchor was taken after the game started stays in sync on the older build: that
+build loads the anchor's RAM and does not set the bytes to zero again.
 
 ### Memory cards
 

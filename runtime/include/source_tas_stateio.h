@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "psx_file_create_new.h"
 
 /* v3 adds the memory card images, which live in host files rather than in any
  * boot_state section: a checkpoint taken after the guest writes its card must
@@ -193,7 +194,7 @@ static inline int source_tas_stateio_manifest_write(const char *path, const TasS
         else escaped[used++]=(char)*p;
     }
     escaped[used]=0;
-    f = fopen(path, "wbx");
+    f = psx_file_create_new(path, 1);
     if (!f) return 0;
     ok = fprintf(f,
                  "{\n"

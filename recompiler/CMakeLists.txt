@@ -1093,6 +1093,19 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_backend_constant_codegen.py
                     --recompiler $<TARGET_FILE:psxrecomp-bios>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # tools/bios_emitter_fingerprint.sh takes its file list from the
+        # psxrecomp-bios target above. CMake hands the test its own list of
+        # that target's sources, so the script's reading of this file is held
+        # to the authority in both directions; the test also checks the
+        # verdicts of runtime/bios_stale_check.cmake (PS1B-131).
+        add_test(
+            NAME bios_emitter_fingerprint
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_emitter_fingerprint.py
+                    --target-sources "$<JOIN:$<TARGET_PROPERTY:psxrecomp-bios,SOURCES>,$<COMMA>>"
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        set_tests_properties(bios_emitter_fingerprint PROPERTIES SKIP_RETURN_CODE 77)
         add_test(
             NAME stall_report
             COMMAND ${Python3_EXECUTABLE}
@@ -1144,6 +1157,14 @@ if(BUILD_TESTING)
             NAME setup_package_payload_filter
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_package_payload_filter.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The bash the two gate tests below run a script with must not be a
+        # WSL launcher. On a host whose PATH puts System32 before Git it was,
+        # and both failed with exit 127 for no fault of the tree (PS1B-271).
+        add_test(
+            NAME host_bash
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_host_bash.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME setup_private_path_gate
@@ -1283,6 +1304,7 @@ if(BUILD_TESTING)
                 bios_selection_guards
                 capture_history
                 cli_retail_bios_profile
+                cli_split_prepass_report
                 codegen_hash_line_endings
                 codegen_host_bios_stems
                 default_renderer_guards
@@ -1473,27 +1495,15 @@ if(BUILD_TESTING AND EXISTS
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_cpu_return_probe.py"
                 --cc ${CMAKE_C_COMPILER})
-        # Both probe headers open their output with C11 fopen "wx". msvcrt
-        # (MSYS2 MINGW64) rejects "x", so the probes abort under that CRT: a
-        # runtime bug tracked as PSX Work T109, not a test defect. Keep the
-        # tests registered and visible as Disabled there; UCRT and glibc run them.
-        include(CheckCSourceRuns)
-        check_c_source_runs([=[
-#include <stdio.h>
-int main(void) {
-    FILE *f;
-    remove("psx_fopen_x_probe.tmp");
-    f = fopen("psx_fopen_x_probe.tmp", "wx");
-    if (!f) return 1;
-    fclose(f);
-    remove("psx_fopen_x_probe.tmp");
-    return 0;
-}
-]=] PSX_FOPEN_EXCLUSIVE_MODE)
-        if(NOT PSX_FOPEN_EXCLUSIVE_MODE)
-            set_tests_properties(tas_ram_long_route tas_cpu_long_route
-                PROPERTIES DISABLED TRUE)
-        endif()
+        # The probes and the checkpoint manifest create their files through
+        # psx_file_create_new.h, which needs no exclusive-create flag from the C
+        # runtime, so these tests run on msvcrt (MSYS2 MINGW64) too (PS1B-206).
+        # The driver compiles test_file_create_new.c at O0/O2 and fails when a
+        # source file opens a stream with that flag again.
+        add_test(NAME file_create_new
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_file_create_new.py"
+                --cc ${CMAKE_C_COMPILER})
         # tas_stateio_manifest and tas_stateio_identity are registered with the
         # foundation above. The Python driver compiles test_input_route_raster_wire.c at O0/O2.
         add_test(NAME tas_raster_wire

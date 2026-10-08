@@ -168,6 +168,19 @@ if(BUILD_TESTING)
     add_executable(break_vector_enter_test tests/test_break_vector_enter.c)
     target_include_directories(break_vector_enter_test PRIVATE include)
     add_test(NAME break_vector_enter_test COMMAND break_vector_enter_test)
+    # PS1G-39: game entry leaves guest RAM 0..15 as the kernel left it, and a
+    # replay recorded by a build that zeroed those bytes still compares them
+    # as that build held them. Links the real memory.c, fntrace.c and
+    # netplay_state_digest.c. The driver's link helper reads nm's listing and
+    # GNU ld's messages, so the test is registered for GCC, and for Clang on
+    # Linux, where Clang links through GNU ld (the sanitizer gate).
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
+            OR (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        add_test(NAME low_ram_game_entry_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_low_ram_game_entry.py --cc ${CMAKE_C_COMPILER})
+    else()
+        message(STATUS "low_ram_game_entry_test: not registered (its link helper needs GCC, or Clang on Linux; this is ${CMAKE_C_COMPILER_ID} on ${CMAKE_SYSTEM_NAME})")
+    endif()
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         add_test(NAME break_guest_vector_interp_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_break_guest_vector_interp.py --cc ${CMAKE_C_COMPILER})
@@ -331,6 +344,12 @@ if(BUILD_TESTING)
     add_executable(cdrom_read_starts_motor_test tests/test_cdrom_read_starts_motor.c src/psx_sha256.c)
     target_include_directories(cdrom_read_starts_motor_test PRIVATE include)
     add_test(NAME cdrom_read_starts_motor_test COMMAND cdrom_read_starts_motor_test
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
+    # PS1G-95: on the default path GetlocP names the target of a completed
+    # SeekL/SeekP; after a Pause it names the last delivered sector.
+    add_executable(cdrom_getlocp_after_seek_test tests/test_cdrom_getlocp_after_seek.c src/psx_sha256.c)
+    target_include_directories(cdrom_getlocp_after_seek_test PRIVATE include)
+    add_test(NAME cdrom_getlocp_after_seek_test COMMAND cdrom_getlocp_after_seek_test
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
     # PS1B-317 fleet check: read streams that ended before their first sector,
     # counted for the run report (docs/RUN_REPORT_CDROM.md).
