@@ -171,6 +171,13 @@ int main(void) {
         target(1200); int origin=after_pause?last_sector_lba:msf_to_lba(read_min,read_sec,read_sect); command(6);
         int expect=apply_speed(source_seek_lower_bound(origin,1200,1,after_pause,mode_reg))+
                    initial_read_delay_cycles();
+        /* PS1G-103: a read that consumes a pending Setloc waits at least
+         * three single-speed sector periods at double speed. The paused
+         * restart is later than that and stands; the standby read, 471,584
+         * cycles by the seek model, is held to the floor. */
+        CHECK(after_pause?expect>3*451584:expect<3*451584,
+              after_pause?"paused restart is later than the floor":"standby seek model is under the floor");
+        if(expect<3*451584) expect=3*451584;
         CHECK(read_delay==expect,after_pause?"ReadN after Pause pays paused restart":
                                              "ReadN after completed SeekL pays no paused restart");
         if(after_pause) pause_delay=read_delay; else seekl_delay=read_delay;
@@ -190,8 +197,10 @@ int main(void) {
         /* PS1B-118: the restored standby drive sits on the SeekL target (read
          * cursor, PSX-SPX SeekL/GetlocP); that is the implicit seek origin. */
         target(1200); int origin=msf_to_lba(read_min,read_sec,read_sect); command(6);
-        CHECK(read_delay==apply_speed(source_seek_lower_bound(origin,1200,1,0,mode_reg))+
-                         initial_read_delay_cycles(),
+        /* PS1G-103: under the floor of a read after Setloc, so held to it;
+         * the paused restart (1,709,536 cycles here) would be later. */
+        CHECK(apply_speed(source_seek_lower_bound(origin,1200,1,0,mode_reg))+
+              initial_read_delay_cycles()<3*451584&&read_delay==3*451584,
               "restored standby ReadN pays no paused restart");
         free(snap);
     }

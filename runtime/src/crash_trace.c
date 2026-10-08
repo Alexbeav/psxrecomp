@@ -821,6 +821,18 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
                    starts, silent, longest_run);
     }
 
+    /* Read starts held to the floor of a read after Setloc, and the cycles
+     * that added in all (PS1G-103). 0 reads: the floor did not touch the run. */
+    {
+        extern void cdrom_seek_floor_stats(uint32_t *reads, uint64_t *cycles);
+        uint32_t floor_reads = 0;
+        uint64_t floor_cycles = 0;
+        cdrom_seek_floor_stats(&floor_reads, &floor_cycles);
+        append_fmt(buf, sizeof(buf), &pos,
+                   "  \"cdrom_seek_floor\": {\"reads\": %u, \"added_cycles\": %llu},\n",
+                   floor_reads, (unsigned long long)floor_cycles);
+    }
+
     /* Host overlay-DLL / resim gate at FAIL-FAST. Distinguishes "CD DMA never
      * finished" from "rollback froze registration mid-splash load". */
     {

@@ -289,6 +289,12 @@ static uint64_t s_cd_probe_stop_count, s_cd_probe_stop_cycles;
 static uint64_t s_cd_stream_open_seq = UINT64_MAX;
 static uint32_t s_cd_stream_starts, s_cd_silent_reads, s_cd_silent_run, s_cd_silent_run_max;
 static void cd_stream_account_end(void);
+/* Read starts whose first-sector deadline the pending-Setloc floor raised
+ * (PS1G-103), and the cycles it added in all. For the run report: a title
+ * that shows 0 here is not touched by the floor. Diagnostics only: nothing
+ * reads these to decide anything. */
+static uint32_t s_cd_seek_floor_reads;
+static uint64_t s_cd_seek_floor_cycles;
 
 static void cd_timing_note_intc(void);
 static uint8_t filter_file;
@@ -1846,8 +1852,32 @@ static int source_explicit_seek_cycles(uint8_t cmd)
 }
 /* T172 end CD explicit seek. */
 
+/* Earliest first sector of a ReadN or ReadS that consumes a pending Setloc,
+ * on the default path: the first-sector wait plus four sector periods. That
+ * is three single-speed sector periods at double speed and six at single
+ * speed, and it follows the disc speed setting as those two terms do.
+ * [NOT OBSERVED: release policy, corpus PSX-CD-003] Duke Nukem: Land of the
+ * Babes loaded the wrong scene after a skipped cutscene when this sector came
+ * one or two periods after the command, and the right one with three; Ape
+ * Escape's attract mode kept its textures with one and with three. The
+ * oracle's first INT1 from standby with a short implicit seek is 729,032
+ * cycles (C1-C9 row 16), which is below this floor. A later deadline of the
+ * seek model stands: a paused drive, a far target, a stopped motor. */
+static int pending_setloc_read_floor_cycles(void)
+{
+    return initial_read_delay_cycles() + 4 * sector_delay_cycles();
+}
+
+void cdrom_seek_floor_stats(uint32_t *reads, uint64_t *cycles) {
+    if (reads) *reads = s_cd_seek_floor_reads;
+    if (cycles) *cycles = s_cd_seek_floor_cycles;
+}
+
 static void start_read_stream(uint8_t cmd) {
     last_sector_have_raw = GETLOCL_NO_HEADER;   /* until the first data sector */
+    /* The default path holds a read that consumes a pending Setloc to the
+     * floor above. A source profile keeps its own deadline. */
+    int floor_applies = setloc_pending && !s_source_clock;
     int source_target = setloc_pending ? s_setloc_lba :
         msf_to_lba(read_min, read_sec, read_sect);
     int seek_cycles = implicit_read_seek_cycles();
@@ -1878,6 +1908,14 @@ static void start_read_stream(uint8_t cmd) {
     if (s_nymashock_drive) source_drive_hold_logical = 1;
     read_cmd = cmd;
     read_delay = seek_cycles + initial_read_delay_cycles();
+    if (floor_applies) {
+        int floor_cycles = pending_setloc_read_floor_cycles();
+        if (read_delay < floor_cycles) {
+            s_cd_seek_floor_reads++;
+            s_cd_seek_floor_cycles += (uint64_t)(floor_cycles - read_delay);
+            read_delay = floor_cycles;
+        }
+    }
     s_cd_probe_read_start_count++;
     s_cd_probe_read_start_cycles += (uint64_t)read_delay;
     s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;

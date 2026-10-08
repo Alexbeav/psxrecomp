@@ -43,6 +43,25 @@ fires. `"instant"` is expected to be safe for all titles targeted by this recomp
 
 ---
 
+## First sector of a read after Setloc
+
+A ReadN or ReadS that consumes a pending Setloc does not deliver its first
+sector before the first-sector wait plus four sector periods. At `"1x"` that
+is three single-speed sector periods for a double-speed read and six for a
+single-speed read. The faster settings scale it as they scale the other read
+delays. The drive shows SEEK until that sector and READ from it.
+
+This is a floor. A paused drive, a far target and a stopped motor already
+wait longer, and their delay does not change.
+
+The value is a compatibility value, not a measured hardware time. Duke Nukem:
+Land of the Babes loaded the wrong scene after a skipped cutscene with one and
+with two periods and the right one with three. Ape Escape's attract mode kept
+its textures with one and with three. The run report counts the reads the
+floor held (`cdrom_seek_floor`, see `RUN_REPORT_CDROM.md`).
+
+---
+
 ## Implementation
 
 Change is localized to `runtime/src/cdrom.c`. The timing delay paths (seek duration, sector

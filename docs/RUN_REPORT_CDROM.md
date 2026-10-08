@@ -39,3 +39,25 @@ each report. The counters are per process and are not part of a save state;
 after a state load they can be off by one.
 
 The numbers are diagnostics. The drive reads none of them to decide anything.
+
+## Reads held to the floor of a read after Setloc
+
+A second object counts one timing rule (PS1G-103):
+
+```json
+"cdrom_seek_floor": {"reads": 12, "added_cycles": 10598016}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `reads` | ReadN and ReadS starts that consumed a pending Setloc and whose first sector was held to the floor: three single-speed sector periods at double speed, six at single speed. |
+| `added_cycles` | The cycles the floor added to those starts in all. 33,868,800 cycles are one second. |
+
+The floor holds only a read whose own deadline is earlier: the drive spins, it
+is not paused, and the target is less than 2,250 sectors from the drive's
+position. After a Pause, for a far target and with the motor off the seek
+model already waits longer, and the read is not counted.
+
+`reads` of 0 means the rule did not change the timing of that run.
+`added_cycles` divided by 33,868,800 is the load time it added, in seconds.
+Both are per process and are not part of a save state.

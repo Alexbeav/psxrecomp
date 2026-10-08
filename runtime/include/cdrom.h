@@ -90,6 +90,10 @@ void cdrom_timing_stats_json(char* out, int cap);
  * carries them (psx_last_run_report.json "cdrom"), so a title whose reads
  * never deliver can be found without a debug build (PS1B-317). */
 void cdrom_silent_read_stats(uint32_t *starts, uint32_t *silent, uint32_t *longest_run);
+/* Read starts of this process whose first sector was held to the floor of a
+ * read after Setloc, and the cycles that added in all (PS1G-103). The run
+ * report carries them too: 0 means the floor did not touch the title. */
+void cdrom_seek_floor_stats(uint32_t *reads, uint64_t *cycles);
 int cdrom_get_delivered_lba(void);
 
 /* Per-record view of the same ring, for localising a single lost/skipped

@@ -61,4 +61,28 @@ for name in ("s_cd_silent_reads", "s_cd_silent_run_max", "s_cd_silent_run", "s_c
     assert not re.search(rf"{name}", rest), f"{name} is used outside the accounting: the counters must not steer the drive"
 
 
+# PS1G-103: the counters of the floor of a read after Setloc reach the report
+# under their own key, so a release build shows which titles the floor touches.
+assert "void cdrom_seek_floor_stats(uint32_t *reads, uint64_t *cycles);" in HEADER
+floor_call = REPORT.index("cdrom_seek_floor_stats(&floor_reads, &floor_cycles);")
+assert re.search(
+    r'"  \\"cdrom_seek_floor\\": \{\\"reads\\": %u, \\"added_cycles\\": %llu\},\\n",\s*'
+    r"floor_reads, \(unsigned long long\)floor_cycles\);",
+    REPORT[floor_call:],
+), 'the report must write "cdrom_seek_floor": {"reads", "added_cycles"} from the counters'
+
+# They are written where the floor raises a deadline and read by the getter;
+# nothing else uses them.
+rest = CDROM
+for part in (body(CDROM, "void cdrom_seek_floor_stats("),
+             "static uint32_t s_cd_seek_floor_reads;",
+             "static uint64_t s_cd_seek_floor_cycles;",
+             "s_cd_seek_floor_reads++;",
+             "s_cd_seek_floor_cycles += (uint64_t)(floor_cycles - read_delay);"):
+    assert rest.count(part) == 1, part[:60]
+    rest = rest.replace(part, "")
+for name in ("s_cd_seek_floor_reads", "s_cd_seek_floor_cycles"):
+    assert name not in rest, f"{name} is used outside the accounting: the counters must not steer the drive"
+
+
 print("run report cdrom counters: ok")

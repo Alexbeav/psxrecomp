@@ -34,6 +34,9 @@
  *      the far flag is restored on its own. The size does not change.
  *   S4 A source profile's state bytes do not change: its pending Setloc stays
  *      in its own field.
+ *   R1 The run report counters (psx_last_run_report.json "cdrom_seek_floor")
+ *      count each read the floor held and the cycles it added, and no other
+ *      read.
  * Controller-level, through the MMIO interface. Synthetic sectors only; no
  * BIOS or game data.
  *
@@ -62,6 +65,8 @@ static void standby_at(int lba) {
           "a completed SeekL leaves the drive in standby with no Setloc pending");
 }
 static int cursor(void) { return msf_to_lba(read_min, read_sec, read_sect); }
+static uint32_t held_reads(void) { uint32_t n = 0; cdrom_seek_floor_stats(&n, NULL); return n; }
+static uint64_t held_cycles(void) { uint64_t c = 0; cdrom_seek_floor_stats(NULL, &c); return c; }
 
 /* The read is issued; check its deadline, the status hand-over and the first
  * sector. `pre_status` is the status the ACK must carry. */
@@ -90,7 +95,12 @@ static void floor_rows(uint8_t cmd, const char *name) {
     /* D1, D2: standby after SeekL, Setloc 100 sectors on, read. */
     default_path(0x80);
     standby_at(1000);
+    const uint32_t reads0 = held_reads();
+    const uint64_t cycles0 = held_cycles();
     target(1100); command(cmd);
+    /* R1: the seek model asked for 20,000 cycles of travel and one period. */
+    snprintf(what, sizeof what, "R1 %s: the held read and its added cycles are counted", name);
+    CHECK(held_reads() == reads0 + 1 && held_cycles() == cycles0 + (uint64_t)(2 * PERIOD - 20000), what);
     snprintf(what, sizeof what, "D1 %s from standby", name);
     expect_first_sector(what, 3 * PERIOD, 1100, CDSTAT_MOTOR);
     /* D3: steady cadence afterwards. */
@@ -104,6 +114,7 @@ static void floor_rows(uint8_t cmd, const char *name) {
     target(1500); command(cmd);
     snprintf(what, sizeof what, "D4 %s from a running stream", name);
     expect_first_sector(what, 3 * PERIOD, 1500, CDSTAT_MOTOR | CDSTAT_READ);
+    CHECK(held_reads() == reads0 + 2, "R1: the moved stream is the second held read");
 
     /* D5: single speed. */
     default_path(0x00);
@@ -133,9 +144,11 @@ static void later_deadlines_stand(void) {
     command(0x09); finish();
     CHECK(!reading && s_source_seek_paused && !(stat_reg & DRIVE_BITS), "K1: the drive is paused");
     const int from = cursor();
+    uint32_t held = held_reads();
     target(from + 10); command(0x06);
     CHECK(read_delay == 20000 + 1237952 + PERIOD, "K1: after a Pause the seek model's deadline is unchanged");
     CHECK(read_delay > 3 * PERIOD, "K1: and it is later than the floor");
+    CHECK(held_reads() == held, "R1: a read after a Pause is not counted");
 
     /* K2: 9,000 sectors away. Travel 9,000 * 1568 / 15, the long-seek settle
      * 10,160,640, then the first-sector wait. */
@@ -143,12 +156,14 @@ static void later_deadlines_stand(void) {
     standby_at(1000);
     target(10000); command(0x06);
     CHECK(read_delay == 940800 + 10160640 + PERIOD, "K2: a far target keeps the seek model's deadline");
+    CHECK(held_reads() == held, "R1: a read to a far target is not counted");
 
     /* K3: a completed SeekL consumed the Setloc; the read that follows has
      * no implicit seek. */
     default_path(0x80);
     standby_at(1000);
     command(0x06);
+    CHECK(held_reads() == held, "R1: a read with no pending Setloc is not counted");
     CHECK(read_delay == PERIOD, "K3: a read with no pending Setloc waits one period");
     CHECK((stat_reg & DRIVE_BITS) == CDSTAT_READ, "K3: and reads at once, with no SEEK");
     int before = reads;
@@ -163,6 +178,7 @@ static void later_deadlines_stand(void) {
     target(next); command(0x06);
     CHECK(reading && read_delay == remaining && (stat_reg & DRIVE_BITS) == CDSTAT_READ,
           "K4: a read that continues the running stream is not restarted");
+    CHECK(held_reads() == held, "R1: a continued stream is not counted");
 }
 
 /* K5: a source profile times the same read by its own rules: three sector
@@ -185,10 +201,12 @@ static void source_profile_unchanged(const char *drive) {
     param_count = 3; irq_flag = 0; response_clear();
     exec_command(0x02);
     irq_flag = 0; response_clear();
+    const uint32_t held = held_reads();
     exec_command(0x06);
     snprintf(what, sizeof what, "K5 %s: the source profile keeps its own deadline (%d cycles)",
              *drive ? drive : "no drive model", read_delay);
     CHECK(reading && read_delay >= 3 * (PERIOD / 2) + 20000 && read_delay < 3 * (PERIOD / 2) + 20000 + 25000, what);
+    CHECK(held_reads() == held, "R1: a source profile's read is not counted");
 
     /* S4: the pending Setloc of a source profile lives in the profile's own
      * field. Two states that differ only in it differ in one byte. */
