@@ -90,10 +90,12 @@ static void replay_device_vectors(void) {
     InputReplayDeviceRun run, back;
     for (int port=0;port<2;++port) {
         sio_set_multitap(0);
+        setup_bus();
         for (int s=0;s<2;++s) { sio_set_port_device(s,SIO_DEVICE_PAD); sio_set_pad_connected(s,1); }
-        setup_bus(); sio_set_port_device(port,SIO_DEVICE_MOUSE);
+        sio_set_port_device(port,SIO_DEVICE_MOUSE);
         sio_mouse_add_motion(port,300,-300); sio_set_mouse_buttons(port,1,0);
         check(sio_capture_replay_devices(ports),"capture pending mouse, both ports");
+        check(ports[0].connected && ports[1].connected,"replay vector ports connect after bus power-on");
         check(ports[port].motion[0] == 300 && ports[port].motion[1] == -300,"capture full pending amount, not one poll byte");
         memset(&run,0,sizeof run); run.frames=1; memcpy(run.ports,ports,sizeof ports);
         FILE *f=tmpfile(); check(f != NULL,"owned replay stream temp");
@@ -116,11 +118,13 @@ static void replay_device_vectors(void) {
         check(!sio_apply_replay_devices(decoded),"profile mismatch refused without a type switch");
     }
     for (int kind=SIO_DEVICE_NEGCON;kind<=SIO_DEVICE_GUNCON;++kind) for (int port=0;port<2;++port) {
+        setup_bus();
         for (int s=0;s<2;++s) { sio_set_port_device(s,SIO_DEVICE_PAD); sio_set_pad_connected(s,1); }
-        setup_bus(); sio_set_port_device(port,kind);
+        sio_set_port_device(port,kind);
         if (kind == SIO_DEVICE_NEGCON) sio_set_negcon_state(port,0xFFF7,0x12,0x34,0x56,0x78);
         else sio_set_guncon_state(port,0xDFF7,0x01BC,0x00AA);
         check(sio_capture_replay_devices(ports),"capture wire neGcon/GunCon");
+        check(ports[0].connected && ports[1].connected,"replay vector ports connect after bus power-on");
         if (kind == SIO_DEVICE_NEGCON) sio_set_negcon_state(port,0xFFFF,0x80,0,0,0);
         else sio_set_guncon_state(port,0xFFFF,1,10);
         check(sio_apply_replay_devices(ports),"apply wire neGcon/GunCon");
