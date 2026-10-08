@@ -492,13 +492,15 @@ add_executable(sio_dualshock_p2_p3_test tests/test_sio_dualshock_p2_p3.c)
 target_include_directories(sio_dualshock_p2_p3_test PRIVATE include)
 add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
     # PS1 Mouse (PS1B-279): the byte protocol, and pin F byte identity of the
-    # pad/card bus when no port is a mouse. Two builds: 2 ports, and 5 players
-    # for the multitap seat.
-    foreach(_players IN ITEMS 2 5)
+    # pad/card bus when no port is a mouse. Mouse/method-2 checks also cover
+    # eight players, where both physical ports have a multitap.
+    foreach(_players IN ITEMS 2 5 8)
         add_executable(sio_mouse_p${_players}_test tests/test_sio_mouse.c)
         target_include_directories(sio_mouse_p${_players}_test PRIVATE include)
         target_compile_definitions(sio_mouse_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
         add_test(NAME sio_mouse_p${_players}_test COMMAND sio_mouse_p${_players}_test)
+    endforeach()
+    foreach(_players IN ITEMS 2 5)
         set(_target sio_port_device_identity_p${_players}_test)
         add_executable(${_target} tests/test_sio_port_device_identity.c)
         target_include_directories(${_target} PRIVATE include)
