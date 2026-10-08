@@ -3,6 +3,7 @@
 #include "psx_icache.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static uint32_t ram[0x200000u / 4u];
@@ -43,6 +44,27 @@ void psx_pgxp_load(CPUState *cpu, uint32_t insn, uint32_t addr, uint32_t result)
 { (void)cpu; (void)insn; (void)addr; (void)result; }
 extern uint32_t g_slice_exit_reason, g_slice_exit_iter, g_slice_exit_dispatchable, g_slice_exit_dirty;
 
+extern uint64_t g_slice_irq_taken;
+static unsigned irq_takes, irq_boundaries;
+int psx_interrupt_cooldown_active(void) { return 0; }
+int psx_irq_opcode_eligible(uint32_t pc) { (void)pc; return 1; }
+void psx_check_interrupts(CPUState *cpu)
+{
+    assert((i_stat & i_mask) != 0u);
+    assert(++irq_takes <= 2u);
+    i_stat = 0;
+    if (irq_takes == 2u) cpu->gpr[8] = 1u;
+}
+static void wait_irq_boundary(CPUState *cpu, uint32_t pc, uint64_t cycles)
+{
+    (void)cpu; (void)pc; (void)cycles;
+    if (++irq_boundaries == 32u) i_stat = 1u;
+    if (irq_boundaries > 1000u) {
+        fprintf(stderr, "FAIL: cached wait loop starved second IRQ; takes=%u slice_takes=%llu\n",
+                irq_takes, (unsigned long long)g_slice_irq_taken);
+        exit(1);
+    }
+}
 int main(void)
 {
     CPUState cpu = {0};
@@ -86,6 +108,27 @@ int main(void)
     assert(g_icache_execution_stats.stale_fetches == 1u);
     assert(g_icache_execution_stats.first_fetch_pc == pc && g_icache_execution_stats.last_fetch_pc == pc);
     assert(!g_icache_execution_stats.stale_blocks_in_exception && !g_icache_execution_stats.nested_stale_blocks);
+    /* First IRQ is already pending at entry; a later IRQ releases a cached
+     * no-call wait loop. The original one-take policy hits the authored guard. */
+    const uint32_t wait_loop[] = {0x1100ffffu, 0x25290001u, 0x03e00008u, 0u};
+    memset(&cpu, 0, sizeof cpu);
+    memset(&g_icache_execution_stats, 0, sizeof g_icache_execution_stats);
+    for (unsigned k = 0; k < 4u; ++k) {
+        ram[0x1000u / 4u + k] = wait_loop[k];
+        g_psx_icache_tv[index + k] = pc + 4u * k;
+        g_psx_icache_words[index + k] = wait_loop[k];
+    }
+    ram[0x1000u / 4u] = 0u; /* RAM no longer contains the cached BEQ. */
+    dirty = 0; i_stat = i_mask = 1u; cpu.cop0[12] = 0x401u;
+    cpu.gpr[31] = 0x80002000u;
+    irq_takes = irq_boundaries = 0u; g_slice_irq_taken = 0;
+    g_psx_cpu_step_boundary_callback = wait_irq_boundary;
+    assert(psx_slice_block_impl(&cpu, pc, 4u, 0));
+    g_psx_cpu_step_boundary_callback = NULL;
+    assert(irq_takes == 2u && g_slice_irq_taken == 2u);
+    assert(cpu.gpr[8] == 1u && cpu.pc == cpu.gpr[31]);
+    assert(g_slice_exit_dispatchable && !g_precise_mode);
+    i_stat = i_mask = 0;
     /* Three precision-loop iterations per lap exceed the old 200,000 guard.
      * Every loop PC is clean text without a compiled dispatcher entry. */
     enum { LAPS = 70001 };
