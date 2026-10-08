@@ -10474,10 +10474,10 @@ namespace {
              * (PS1G-63). */
             const char* why =
                 !companion.ready ? companion.message.c_str()
-                : !id.sbi_warning.empty() ? id.sbi_warning.c_str()
                 : !id.detail.empty() ? id.detail.c_str()
                 : (id.expected_serial_given && !id.serial_matches)
                     ? "the disc does not carry the expected serial"
+                : !id.sbi_warning.empty() ? id.sbi_warning.c_str()
                 : id.netplay_detail.c_str();
             char row[PSX_START_LAUNCHER_ROW_CAP];
             std::snprintf(row, sizeof(row),

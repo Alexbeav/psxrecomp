@@ -129,6 +129,7 @@ Run the source-owned setup tests from the framework root:
 python tools/tests/test_disc_companion.py -v
 python tools/tests/test_sbi_registry.py -v
 python tools/tests/test_missing_sbi_callers.py --cc gcc --cxx g++
+python tools/tests/test_missing_sbi_reason.py --cxx g++
 ```
 
 The fixtures create synthetic ISO directory records, an inert executable header, audio bytes, and SBI records.
@@ -141,3 +142,6 @@ It checks successful, refused and rolled-back mounts plus source wiring at
 startup and disc-change commit points. These focused controls do not run the
 complete frontend, real ISO/CHD reader or a game. The caller compiler command
 uses GNU/Clang flags; the report-value target uses standard C++17.
+`missing_sbi_reason_test` executes the launcher's exact reason expression.
+An identity refusal or required-companion failure keeps its blocking reason
+ahead of the advisory missing-SBI warning.

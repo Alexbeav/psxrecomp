@@ -1550,6 +1550,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             add_test(NAME missing_sbi_callers_test COMMAND ${Python3_EXECUTABLE}
                 ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_callers.py
                 --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+            add_test(NAME missing_sbi_reason_test COMMAND ${Python3_EXECUTABLE}
+                ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_reason.py
+                --cxx ${CMAKE_CXX_COMPILER})
         endif()
         add_test(NAME cd_seek_trace_validation_test
                  COMMAND ${Python3_EXECUTABLE}
