@@ -1029,6 +1029,11 @@ struct QualityPreset {
     std::vector<std::string> keys;     // the [video] keys this preset sets
 };
 
+struct WidescreenPackedXSite {
+    uint32_t address = 0;
+    uint32_t expected = 0;
+};
+
 struct GameConfig {
     std::filesystem::path config_path;
     std::filesystem::path project_root;
@@ -1547,6 +1552,8 @@ struct GameConfig {
     std::vector<QualityPreset> quality_presets;
     // [[mod_immediate.sites]]: run-time-selectable immediates (ModImmediateSite).
     std::vector<ModImmediateSite> mod_immediate_sites;
+    // Guarded SLTU on SX<<16 against screen width<<16; both wide edges.
+    std::vector<WidescreenPackedXSite> ws_cull_packed_x_sites;
 };
 
 // Effective clip_edge_width: explicit value, else screen_w_imms[0], else 320.

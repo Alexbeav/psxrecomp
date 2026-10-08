@@ -64,6 +64,18 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
 
     h.words("sprite_tag_funcs", c.ws_sprite_tag_funcs);
     h.words("mod_function_entry_funcs", c.mod_function_entry_funcs);
+    if (!c.ws_cull_packed_x_sites.empty()) {
+        h.tag("cull_packed_x");
+        auto sites = c.ws_cull_packed_x_sites;
+        std::sort(sites.begin(), sites.end(), [](const auto& a, const auto& b) {
+            return (a.address & 0x1FFFFFFFu) < (b.address & 0x1FFFFFFFu);
+        });
+        h.u32((uint32_t)sites.size());
+        for (const auto& site : sites) {
+            h.u32(site.address & 0x1FFFFFFFu);
+            h.u32(site.expected);
+        }
+    }
     if (!c.ws_cull_masked_reject_sites.empty()) {
         h.tag("cull_masked_reject");
         auto sites = c.ws_cull_masked_reject_sites;
@@ -2489,6 +2501,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenSxyCullSite> ws_cull_sxy_sites;
     std::vector<WidescreenMaskedRejectSite> ws_cull_masked_reject_sites;
+    std::vector<WidescreenPackedXSite> ws_cull_packed_x_sites;
     std::vector<WidescreenCullScaleSite> ws_cull_scale_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
@@ -2555,6 +2568,27 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                     ws_cull_masked_reject_sites.push_back(site);
                     if (ws_cull_masked_reject_sites.size() > 256)
                         throw std::runtime_error("masked_reject supports at most 256 sites");
+                }
+            }
+            if (cull.contains("packed_x")) {
+                std::set<uint32_t> seen;
+                for (const auto& item : toml::find<toml::array>(cull, "packed_x")) {
+                    WidescreenPackedXSite site;
+                    site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                             "widescreen.cull.packed_x.address");
+                    site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                              "widescreen.cull.packed_x.expected");
+                    if ((site.address & 3u) || (site.expected >> 26) != 0u ||
+                        (site.expected & 0x7FFu) != 0x2Bu ||
+                        ((site.expected >> 21) & 31u) == 0u ||
+                        ((site.expected >> 16) & 31u) == 0u ||
+                        ((site.expected >> 11) & 31u) == 0u)
+                        throw std::runtime_error("packed_x needs aligned SLTU rd,rs,rt with nonzero registers");
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+                        throw std::runtime_error("duplicate packed_x address");
+                    ws_cull_packed_x_sites.push_back(site);
+                    if (ws_cull_packed_x_sites.size() > 256)
+                        throw std::runtime_error("packed_x supports at most 256 sites");
                 }
             }
             if (cull.contains("keep")) {
@@ -3097,6 +3131,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         std::move(ws_cull_clip_edge_x_load_sites);
     loaded.ws_cull_clip_edge_width = ws_cull_clip_edge_width;
     loaded.ws_cull_masked_reject_sites = std::move(ws_cull_masked_reject_sites);
+    loaded.ws_cull_packed_x_sites = std::move(ws_cull_packed_x_sites);
     loaded.draw_distance_clamp_sites =
         parse_draw_distance_clamps(cfg, config_path);
     loaded.quality_presets = parse_quality_presets(cfg, root, config_path);
