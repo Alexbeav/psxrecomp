@@ -2539,6 +2539,15 @@ static std::string g_restore_mount_serial;
 static void replay_identity_follow_disc(const std::string& serial,
                                         const std::string& mount);
 
+static void note_mounted_disc_warning(const std::filesystem::path& image,
+                                      const std::string& serial) {
+    const auto warning = PSXRecompV4::missing_sbi_warning(
+        image, serial, cdrom_has_sbi() != 0);
+    psx_disc_warning_set(warning.c_str());
+    if (!warning.empty())
+        std::fprintf(stderr, "psxrecomp: %s\n", warning.c_str());
+}
+
 /* True when `image` is the disc of the set with this serial. The serial read
  * from the image decides when there is one; an image without a readable boot
  * serial is judged the way the launch check judges it. */
@@ -2619,6 +2628,7 @@ extern "C" int psx_frontend_savestate_mount_disc(int disc_number, char *why,
 extern "C" void psx_frontend_savestate_mount_result(int disc_number, int kept) {
     cdrom_restore_mount_end(kept);
     if (!kept) return;
+    note_mounted_disc_warning(g_restore_mount_image, g_restore_mount_serial);
     g_session_disc_images[disc_number] = g_restore_mount_image;
     g_savestate_load_mounted_disc = disc_number;
     replay_identity_follow_disc(g_restore_mount_serial,
@@ -2662,6 +2672,7 @@ struct DiscValidation {
     bool has_header = false;
     bool id_matches = false;
     std::string detail;
+    std::string sbi_warning;
 };
 
 static DiscValidation validate_disc_image(const std::filesystem::path& selected_path,
@@ -2681,6 +2692,7 @@ static DiscValidation validate_disc_image(const std::filesystem::path& selected_
     v.has_header = id.has_header;
     v.id_matches = expect.empty() ? true : id.serial_matches;
     v.detail     = id.detail;
+    v.sbi_warning = id.sbi_warning;
     if (id.opened && id.has_header && !v.id_matches && v.detail.empty()) {
         v.detail = "The disc header is readable, but it does not contain the expected game ID " +
                    uppercase_ascii(expect) + " in the early disc metadata.";
@@ -2705,6 +2717,8 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
         launcher_warning("SBI file required", companion.message);
         return false;
     }
+    if (!v.sbi_warning.empty())
+        launcher_warning("Missing SBI", v.sbi_warning);
     return true;
 }
 
@@ -7161,6 +7175,7 @@ static int runtime_ui_change_disc(PsxRuntimeUiContext *context) {
                       2600);
         return 0;
     }
+    note_mounted_disc_warning(resolved.mount, identity.detected_serial);
 
     /* States and replays made from here on are named for this disc, and the
      * rewind history from before the change is dropped. */
@@ -10451,6 +10466,8 @@ namespace {
         } else {
             last_companion_warning.clear();
         }
+        if (companion.ready && !id.sbi_warning.empty() && out->verdict == 1)
+            out->verdict = 2; // Warning only: no new pressing/companion gate.
         {
             /* The row's verdict and its reason, for the run report: a red
              * row blocks Play, and the start then ends as "launcher closed"
@@ -10460,6 +10477,7 @@ namespace {
                 : !id.detail.empty() ? id.detail.c_str()
                 : (id.expected_serial_given && !id.serial_matches)
                     ? "the disc does not carry the expected serial"
+                : !id.sbi_warning.empty() ? id.sbi_warning.c_str()
                 : id.netplay_detail.c_str();
             char row[PSX_START_LAUNCHER_ROW_CAP];
             std::snprintf(row, sizeof(row),
@@ -15058,6 +15076,7 @@ namespace {
 #endif
 
 int main(int argc, char** argv) {
+    psx_disc_warning_set("");
     /* Force line-buffered output so messages appear even if killed. */
     std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
     std::setvbuf(stderr, nullptr, _IOLBF, BUFSIZ);
@@ -17834,6 +17853,7 @@ session_reboot:
         const auto ident = PSXRecompV4::identify_disc(
             disc_path_str, expected_serial, expected_crc,
             has_crc, /*compute_crc*/false);
+        note_mounted_disc_warning(disc_path_str, ident.detected_serial);
         if (ident.region == "PAL") {
             cdrom_set_disc_scex("SCEE");
 

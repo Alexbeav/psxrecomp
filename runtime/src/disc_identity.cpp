@@ -10,6 +10,7 @@
 #include "disc_path.h"
 #include "iso_reader.h"
 #include "psx_sha256.h"
+#include "sbi_setup.h"
 
 #include <algorithm>
 #include <cctype>
@@ -140,6 +141,7 @@ void fill_toc_from_mount(DiscIdentity& v, const DiscPathResolution& resolved) {
         return;
     }
     v.toc_opened = true;
+    v.sbi_loaded = reader.HasSubChannelReplacements();
     // SYSTEM.CNF can lie beyond the bounded early-image scan. Read the actual
     // directory entry first; unrelated executable strings must not select a region.
     uint8_t pvd[2048];
@@ -330,6 +332,8 @@ DiscIdentity identify_disc(const fs::path& path,
             }
         }
         netplay_verdict();
+        v.sbi_warning = missing_sbi_warning(resolved.mount, v.detected_serial,
+                                            !v.toc_opened || v.sbi_loaded);
         return v;
     }
 
@@ -415,6 +419,8 @@ DiscIdentity identify_disc(const fs::path& path,
     if (netplay_expect)
         apply_netplay_disc_expect(v, *netplay_expect);
 
+    v.sbi_warning = missing_sbi_warning(resolved.mount, v.detected_serial,
+                                        !v.toc_opened || v.sbi_loaded);
     return v;
 }
 

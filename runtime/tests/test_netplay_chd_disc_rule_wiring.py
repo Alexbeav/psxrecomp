@@ -35,10 +35,35 @@ assert "v.from_chd = is_chd_path(resolved.mount);" in body, "identify_disc does 
 branch_start = body.index("if (v.from_chd) {")
 branch = body[branch_start : body.index("std::ifstream f(data_path", branch_start)]
 assert "apply_netplay_disc_expect(v, *netplay_expect);" in branch, "the .chd branch never applies the rule"
-returns = [m.start() for m in re.finditer(r"return v;", branch)]
-assert len(returns) >= 3, "expected the open failure, the missing header and the normal way out"
-for at in returns:
-    before = branch[max(0, at - 120) : at]
-    assert "netplay_verdict();" in before, "a way out of the .chd branch skips the netplay rule: " + before[-80:].strip()
 
-print("netplay chd disc rule wiring test: PASS")
+def check_returns(text):
+    returns = re.findall(r"return v;", text)
+    assert len(returns) >= 3, "expected the open failure, the missing header and the normal way out"
+    # Allow the nonfatal companion warning between the verdict and the return,
+    # regardless of line length; no intervening branch or other statement.
+    checked = re.findall(
+        r"netplay_verdict\(\);\s*"
+        r"(?:v\.sbi_warning\s*=\s*missing_sbi_warning\([^;{}]*\);\s*)?"
+        r"return v;", text
+    )
+    assert len(checked) == len(returns), "a way out of the .chd branch skips the netplay rule"
+
+
+check_returns(branch)
+
+# Removing any actual call, moving it after the return, or guarding it with
+# an unrelated condition must still fail this source wiring check.
+calls = list(re.finditer(r"netplay_verdict\(\);", branch))
+mutations = [branch[:call.start()] + "(void)0;" + branch[call.end():] for call in calls]
+mutations.append(re.sub(r"netplay_verdict\(\);(\s*)(return v;)",
+                        r"\2\1netplay_verdict();", branch, count=1))
+mutations.append(branch.replace("netplay_verdict();", "if (false) { netplay_verdict(); }", 1))
+for mutated in mutations:
+    assert mutated != branch, "negative control did not change the source"
+    try:
+        check_returns(mutated)
+    except AssertionError:
+        continue
+    raise AssertionError("a missing or bypassed netplay call passed the wiring check")
+
+print(f"netplay chd disc rule wiring test: PASS ({len(calls)} returns, {len(mutations)} rejected mutations)")
