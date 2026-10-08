@@ -12,7 +12,11 @@
  *      equals the digest of RAM as a build with the clear holds it (`model`
  *      below: zero at game entry, then the same stores), and with the switch
  *      off it is the digest of RAM itself;
- *   3. the 16 bytes at game entry are kept for the run report.
+ *   3. the 16 bytes at game entry are kept for the run report;
+ *   4. a guest store to RAM 0..15 lands whatever instruction made it. Older
+ *      builds dropped some word stores after game entry, by the program
+ *      counter of the store (PS1B-456). RAM takes those stores, and the older
+ *      build's bytes of point 2 leave them out.
  *
  * The end of main() keeps the known limit of point 2 as a negative case: an
  * unaligned word store (SWL, SWR) into RAM 0..15.
@@ -99,6 +103,13 @@ static void check(int ok, const char *what) {
     if (!ok) { fprintf(stderr, "FAIL: %s\n", what); exit(1); }
 }
 
+/* The ten store addresses whose word store to address 0 an older build
+ * dropped after game entry: eight in the SCPH1001 ROM, two in one game. */
+static const uint32_t dropped_pc[10] = {
+    0xBFC04E90u, 0xBFC04EF0u, 0xBFC05164u, 0xBFC0D634u, 0xBFC3EEB4u,
+    0xBFC405E4u, 0xBFC40788u, 0xBFC41C50u, 0x80012434u, 0x800125ACu,
+};
+
 /* RAM as a build with the old clear holds it: every byte as in real RAM
  * except 0..15, which this fixture keeps by the old rule. */
 static uint8_t old_low[16];
@@ -143,9 +154,14 @@ int main(void) {
     uint8_t expect[16], at_entry[16];
     uint32_t word;
 
-    /* Before game entry: the kernel's stores land, and both builds agree. */
-    g_debug_last_store_pc = 0xBFC019ECu;
-    for (uint32_t i = 0; i < 4; ++i) psx_write_word(0x80000000u + 4u * i, bios_words[i]);
+    /* Before game entry: the kernel's stores land, and both builds agree.
+     * The older build dropped no store before game entry, so the stub copy
+     * comes from 0xBFC10A00 here and the 3 from a delay-loop address. */
+    g_debug_last_store_pc = 0xBFC10A00u;
+    psx_write_word(0x80000000u, 0x3c1a0000u);
+    for (uint32_t i = 1; i < 4; ++i) psx_write_word(0x80000000u + 4u * i, bios_words[i]);
+    g_debug_last_store_pc = dropped_pc[0];
+    psx_write_word(0x80000000u, bios_words[0]);
     for (uint32_t i = 0; i < 4; ++i)
         for (uint32_t b = 0; b < 4; ++b) expect[4 * i + b] = (uint8_t)(bios_words[i] >> (8 * b));
     check(!memcmp(ram, expect, 16), "the stores before game entry are in RAM");
@@ -176,12 +192,48 @@ int main(void) {
     old_low[4] = 0x34; old_low[5] = 0x12; old_low[15] = 0x56;
     check_views("after three stores");
 
-    /* memory.c drops this store today (a card-buffer filter keyed to the
-     * store's PC). Whatever it does, both builds do the same with it. */
+    /* A guest store to RAM 0..15 lands whatever instruction made it. Older
+     * builds dropped two kinds of word store after game entry, by the store's
+     * program counter (PS1B-456): every word store to RAM 0..15 from
+     * 0xBFC10A00, where the kernel copies its exception stub to address 0,
+     * and a word store to address 0 from ten listed addresses, the delay
+     * loops that leave 3 in the first word. Both are guest stores, and RAM
+     * takes them. The older build's bytes do not: that build dropped them. */
     g_debug_last_store_pc = 0xBFC10A00u;
-    psx_write_word(0x80000000u, 0xAAAAAAAAu);
-    if (memcmp(ram, expect, 4)) { memcpy(expect, ram, 4); memcpy(old_low, ram, 4); }
-    check_views("after a store from a filtered PC");
+    for (uint32_t i = 0; i < 4; ++i) psx_write_word(0x80000000u + 4u * i, 0xA0B0C0D0u + i);
+    for (uint32_t i = 0; i < 4; ++i)
+        for (uint32_t b = 0; b < 4; ++b) expect[4 * i + b] = (uint8_t)((0xA0B0C0D0u + i) >> (8 * b));
+    check(!memcmp(ram, expect, 16), "word stores to RAM 0..15 from 0xBFC10A00 after game entry are in RAM");
+    check_views("after the word stores from 0xBFC10A00");
+    for (uint32_t i = 0; i < sizeof dropped_pc / sizeof dropped_pc[0]; ++i) {
+        char what[96];
+        g_debug_last_store_pc = dropped_pc[i];
+        psx_write_word(0x80000000u, 0x00000100u + i);
+        expect[0] = (uint8_t)i; expect[1] = 0x01; expect[2] = 0; expect[3] = 0;
+        snprintf(what, sizeof what, "a word store to RAM 0 from 0x%08X after game entry is in RAM",
+                 (unsigned)dropped_pc[i]);
+        check(!memcmp(ram, expect, 16), what);
+    }
+    check_views("after the word stores to RAM 0 from the ten addresses");
+    /* The older build dropped word stores only. A half and a byte store from
+     * the same program counter landed there too. */
+    g_debug_last_store_pc = 0xBFC10A00u;
+    psx_write_half(0x80000002u, 0xBEEFu);
+    psx_write_byte(0x8000000Cu, 0x77u);
+    expect[2] = 0xEF; expect[3] = 0xBE; expect[12] = 0x77;
+    check(!memcmp(ram, expect, 16), "a half and a byte store from 0xBFC10A00 are in RAM");
+    old_low[2] = 0xEF; old_low[3] = 0xBE; old_low[12] = 0x77;
+    check_views("after a half and a byte store from 0xBFC10A00");
+    /* Outside RAM 0..15 the older build dropped nothing: a word at 0x10 from
+     * 0xBFC10A00, and a word at 4 from a delay-loop address. */
+    psx_write_word(0x80000010u, 0x22222222u);
+    check(psx_read_word(0x80000010u) == 0x22222222u, "a word store at 0x10 from 0xBFC10A00 is in RAM");
+    g_debug_last_store_pc = dropped_pc[0];
+    psx_write_word(0x80000004u, 0x33333333u);
+    expect[4] = expect[5] = expect[6] = expect[7] = 0x33;
+    check(!memcmp(ram, expect, 16), "a word store at 4 from a delay-loop address is in RAM");
+    old_low[4] = old_low[5] = old_low[6] = old_low[7] = 0x33;
+    check_views("after word stores that the older build kept");
 
     /* A store outside 0..15 changes no byte of the 16. */
     g_debug_last_store_pc = 0x80012000u;
@@ -212,6 +264,15 @@ int main(void) {
     fntrace_mark_game_started(&cpu);
     memcpy(old_low, ram, 16);
     check_views("source profile");
+    /* The older build dropped no store in the source profile either. */
+    g_debug_last_store_pc = 0xBFC10A00u;
+    psx_write_word(0x80000008u, 0x44444444u);
+    g_debug_last_store_pc = dropped_pc[9];
+    psx_write_word(0x80000000u, 0x55555555u);
+    check(psx_read_word(0x80000008u) == 0x44444444u && psx_read_word(0x80000000u) == 0x55555555u,
+          "source profile: the stores from those addresses are in RAM");
+    memcpy(old_low, ram, 16);
+    check_views("source profile, after stores from those addresses");
 
     /* The known limit, kept as a negative case. SWL and SWR store part of a
      * word. The interpreter and the generated code read the aligned word,
