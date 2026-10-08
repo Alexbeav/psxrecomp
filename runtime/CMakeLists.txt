@@ -356,6 +356,13 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_getlocp_after_seek_test PRIVATE include)
     add_test(NAME cdrom_getlocp_after_seek_test COMMAND cdrom_getlocp_after_seek_test
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
+    # PS1G-103: on the default path a read that consumes a pending Setloc
+    # waits at least three single-speed sector periods at double speed, and a
+    # saved state keeps the pending Setloc.
+    add_executable(cdrom_seek_deadline_test tests/test_cdrom_seek_deadline.c src/psx_sha256.c)
+    target_include_directories(cdrom_seek_deadline_test PRIVATE include)
+    add_test(NAME cdrom_seek_deadline_test COMMAND cdrom_seek_deadline_test
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/cd_source_cold_random_256.psxrng)
     # PS1B-317 fleet check: read streams that ended before their first sector,
     # counted for the run report (docs/RUN_REPORT_CDROM.md).
     add_executable(cdrom_silent_read_counter_test tests/test_cdrom_silent_read_counter.c src/psx_sha256.c)
