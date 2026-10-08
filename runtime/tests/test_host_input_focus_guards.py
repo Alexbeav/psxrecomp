@@ -24,6 +24,11 @@ def main() -> int:
     assert "if (!sdl_window) return true;" in focused
     assert "SDL_WINDOW_INPUT_FOCUS" in focused
 
+    guest = body("static const Uint8 *guest_keyboard_state", "static int manual_fast_forward_multiplier")
+    assert "replay_mark_keyboard(SDL_GetKeyboardState(nullptr)," in guest
+    assert "replay_session_state() == REPLAY_RECORDING" in guest
+    assert guest.count("SDL_GetKeyboardState") == 1
+
     keyboard = body("static uint16_t pad_from_keyboard", "static bool source_is_stick_axis")
     sticks = body("static void pad_sticks_for", "static bool controller_stick_active")
     dpad = body("static bool controller_policy_dpad_active", "static int controller_policy_resolve_mode")
@@ -40,7 +45,8 @@ def main() -> int:
                           ("sample_guncon_ports", guncon)):
         assert "host_hotkey_input_focused()" in guarded, name
         # The guard must come before the key array is read.
-        assert guarded.index("host_hotkey_input_focused()") < guarded.index("SDL_GetKeyboardState"), name
+        reader = "SDL_GetKeyboardState" if name == "sample_guncon_ports" else "guest_keyboard_state()"
+        assert guarded.index("host_hotkey_input_focused()") < guarded.index(reader), name
 
     assert "if (!host_hotkey_input_focused()) return 0xFFFF;" in keyboard
     assert "out[0] = out[1] = out[2] = out[3] = 0x80" in sticks
@@ -58,8 +64,10 @@ def main() -> int:
     # The hold-to-turbo read was already gated; keep it that way.
     assert "const bool kb_turbo = host_hotkey_input_focused() &&" in SOURCE
 
-    # Every SDL_GetKeyboardState reader in main.cpp is one of the guarded sites.
-    readers = SOURCE.count("SDL_GetKeyboardState(NULL)")
+    # Four guest readers share the mark filter; four host readers stay direct.
+    assert SOURCE.count("guest_keyboard_state()") == 4
+    assert SOURCE.count("SDL_GetKeyboardState(nullptr)") == 1
+    readers = SOURCE.count("SDL_GetKeyboardState(NULL)") + SOURCE.count("guest_keyboard_state()")
     assert readers == 8, readers
     print("host input focus guards: PASS")
     return 0
