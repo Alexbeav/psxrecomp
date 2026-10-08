@@ -47,6 +47,23 @@ void psx_icache_restore_legacy_words(void)
     }
 }
 
+void psx_icache_refresh_host_write(uint32_t address, uint32_t bytes)
+{
+    if (!cache_ram || !bytes || address >= 0xc0000000u ||
+        (address & 0x1fffffffu) >= 0x800000u) return;
+    const uint32_t ram_bytes = 0x800000u - (address & 0x1fffffffu);
+    if (bytes > ram_bytes) bytes = ram_bytes;
+    const uint32_t start = address & 0x1ffffcu;
+    const uint64_t span = (uint64_t)bytes + (address & 3u);
+    for (unsigned i = 0; i < 1024u; ++i) {
+        uint32_t pc = g_psx_icache_tv[i];
+        if (!(pc & 3u) && (pc & 0x1fffffffu) < 0x800000u &&
+            (uint64_t)(((pc & 0x1ffffcu) - start) & 0x1fffffu) < span) {
+            g_psx_icache_words[i] = cache_memory_word(pc);
+        }
+    }
+}
+
 static uint32_t recorded_tags[1024], suspended_tags[1024];
 static uint32_t recorded_words[1024], suspended_words[1024];
 

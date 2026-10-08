@@ -1066,6 +1066,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(mod_runtime_test
         tests/test_mod_runtime.cpp
         src/mod_runtime.cpp
+        src/psx_icache.c
         src/mod_packages.cpp
         src/disc_path.cpp
         src/cue_sheet.cpp
@@ -1077,6 +1078,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         ../recompiler/include
         ../recompiler/lib/toml11)
     target_link_libraries(mod_runtime_test PRIVATE chdr-static)
+    target_compile_definitions(mod_runtime_test PRIVATE PSX_NO_STEP_BOUNDARY=1)
     # The real disc hasher uses a 1 MiB scratch buffer. Match the runtime's
     # stack allowance instead of overflowing MinGW's 1 MiB executable default.
     if(WIN32)

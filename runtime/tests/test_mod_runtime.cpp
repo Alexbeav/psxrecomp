@@ -2,6 +2,7 @@
 #include "mod_packages.h"
 #include "mod_plugins.h"
 #include "psx_sha256.h"
+#include "psx_icache.h"
 
 #include "gpu.h"
 
@@ -20,12 +21,15 @@ static std::array<uint8_t, 2 * 1024 * 1024> ram;
 static int failures;
 static int activation_calls;
 static int plugin_calls;
+extern "C" { int g_ls_replay_active; }
 
 extern "C" uint8_t psx_read_byte(uint32_t address) {
+    if (address >= 0xc0000000u || (address & 0x1fffffffu) >= 0x800000u) return 0;
     return ram[address & 0x1fffffu];
 }
 
 extern "C" void psx_write_byte(uint32_t address, uint8_t value) {
+    if (address >= 0xc0000000u || (address & 0x1fffffffu) >= 0x800000u) return;
     ram[address & 0x1fffffu] = value;
 }
 
@@ -49,6 +53,8 @@ extern "C" uint32_t psx_read_word(uint32_t address) {
 }
 
 extern "C" void psx_write_word(uint32_t address, uint32_t value) {
+    /* Production memory.c ignores KSEG2 writes outside cache control. */
+    if (address >= 0xc0000000u) return;
     const uint32_t offset = address & 0x1fffffu;
     ram[offset] = (uint8_t)value;
     ram[offset + 1] = (uint8_t)(value >> 8);
@@ -191,6 +197,12 @@ int main() {
         "address = 2147487744\n"
         "expected = \"01020304\"\n"
         "replace = \"a1a2a3a4\"\n"
+        "[[patch]]\n"
+        "feature = \"main-code\"\n"
+        "target = \"main_exe\"\n"
+        "address = 2155872255\n" /* 0x807fffff: last RAM aperture byte */
+        "expected = \"0000\"\n"
+        "replace = \"abcd\"\n"
         "[[patch]]\n"
         "feature = \"disc-byte\"\n"
         "target = \"disc_raw\"\n"
@@ -354,12 +366,46 @@ int main() {
     ram[0x1102] = 1; ram[0x1103] = 0;
     ram[0x1200] = 2; ram[0x1201] = 0;
     ram[0x1202] = 1; ram[0x1203] = 0x32;
+    psx_icache_bind_memory(ram.data(), (uint32_t)ram.size(), nullptr);
+    psx_icache_reset();
+    g_psx_icache_active = 1;
+    for (uint32_t pc : {0x80001000u, 0x80001100u, 0x80001200u, 0x80001300u}) {
+        const unsigned index = (pc >> 2) & 1023u;
+        g_psx_icache_tv[index] = pc;
+        g_psx_icache_words[index] = psx_read_word(pc);
+    }
     mod_runtime_on_savestate_loaded();
     check(ram[0x1000] == 0xa1 && ram[0x1003] == 0xa4 &&
               ram[0x1100] == 42 && ram[0x1102] == 43 &&
               ram[0x1200] == 1 && ram[0x1201] == 0x42 &&
               ram[0x1202] == 0 && ram[0x1203] == 0x32,
           "savestate restore must reapply the complete enabled main plan");
+    for (uint32_t pc : {0x80001000u, 0x80001100u, 0x80001200u})
+        check(psx_icache_read_cached(pc, psx_read_word(pc)) == psx_read_word(pc),
+              "restored whole-word and field mod writes must reach instruction fetch");
+    check(g_psx_icache_tv[(0x1300u >> 2) & 1023u] == 0x80001300u,
+          "mod writes must retain unrelated resident instructions");
+    psx_mod_write_code_word(0xa0001300u, 0x24080007u);
+    check(psx_icache_read_cached(0x80001300u, psx_read_word(0x80001300u)) == 0x24080007u,
+          "plugin code write through an uncached alias must reach cached fetch");
+    g_psx_icache_words[(0x1300u >> 2) & 1023u] = 0x2408002au;
+    psx_mod_write_code_word(0xc0001300u, 0x24080009u);
+    check(psx_read_word(0x80001300u) == 0x24080007u &&
+              psx_icache_read_cached(0x80001300u, psx_read_word(0x80001300u)) == 0x2408002au,
+          "unmapped plugin code writes must leave RAM and cached instructions untouched");
+    /* Run the actual whole-byte plan across the RAM-aperture boundary.
+     * Its non-RAM tail must not refresh the mirrored cache word at RAM zero. */
+    ram.back() = 0;
+    g_psx_icache_tv[0] = 0x80000000u;
+    g_psx_icache_words[0] = 0x2409002au;
+    g_psx_icache_tv[1023] = 0x807ffffcu;
+    g_psx_icache_words[1023] = psx_read_word(0x807ffffcu);
+    mod_runtime_on_savestate_loaded();
+    check(ram.back() == 0xabu &&
+              psx_icache_read_cached(0x807ffffcu, psx_read_word(0x807ffffcu)) == psx_read_word(0x807ffffcu),
+          "main-plan boundary write must refresh its changed RAM byte");
+    check(psx_icache_read_cached(0x80000000u, psx_read_word(0x80000000u)) == 0x2409002au,
+          "main-plan RAM-aperture tail must retain unrelated cached RAM zero");
 
     std::array<uint8_t, 2352> sector{};
     sector[10] = 0xaa;

@@ -212,6 +212,15 @@ paths. The registered cache admission, scheduler escape and section-wire
 fixtures cover the deterministic path at O0 and O2. Retail, replay and cost
 qualification remain separate requirements.
 
+Host mod code writes refresh the resident instruction words that overlap the
+written RAM range. This includes whole-plan replacements, field replacements
+and `psx_mod_write_code_word`. The refresh retains tags and untouched resident
+words, so the next fetch does not refill a line over an unrelated stale word.
+RAM aliases and mirrors refer to the same patch. Unmapped KSEG2 writes leave
+RAM and the cache unchanged. Refresh ranges stop at the 8 MiB RAM-aperture
+end, so an ignored non-RAM tail cannot refresh mirrored RAM words. Ordinary
+guest stores retain stale cached words.
+
 - Beetle exc_ring oracle: native exception-entry record (cycle, last/next PC,
   EPC, BD, Status/Cause, I_STAT/I_MASK, pending-load) must match interp + Beetle
   at the f1823->1824 VBLANK.

@@ -127,6 +127,15 @@ int main(void)
     assert(g_icache_execution_stats.stale_fetches == 1u);
     assert(g_icache_execution_stats.first_fetch_pc == pc && g_icache_execution_stats.last_fetch_pc == pc);
     assert(!g_icache_execution_stats.stale_blocks_in_exception && !g_icache_execution_stats.nested_stale_blocks);
+    /* A host mod write must expose the patched ADDIU immediately. Guest stores
+     * in the preceding control deliberately kept the old cached ADDIU. */
+    psx_icache_refresh_host_write(0xa0001000u, 4u);
+    g_psx_icache_words[index + 2u] = 0x24090001u; /* unrelated cached delay-slot word */
+    memset(&cpu, 0, sizeof cpu);
+    cpu.pc = pc; cpu.gpr[31] = 0x80002000u;
+    assert(psx_slice_block_impl(&cpu, pc, 3u, 0));
+    assert(cpu.gpr[8] == 7u && cpu.gpr[9] == 1u && cpu.pc == cpu.gpr[31]);
+    puts("PASS: host code write executes patched instruction; guest store retains stale word");
     /* First IRQ is already pending at entry; a later IRQ releases a cached
      * no-call wait loop. The original one-take policy hits the authored guard. */
     const uint32_t wait_loop[] = {0x1100ffffu, 0x25290001u, 0x03e00008u, 0u};
