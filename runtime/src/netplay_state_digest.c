@@ -153,6 +153,9 @@ void netplay_core_digest_parts_version(const CPUState* cpu, NetplayCoreParts* ou
         if (version >= 2u)
             crc_clk = crc32_update(crc_clk, (const uint8_t*)g_psx_icache_words,
                                    sizeof(g_psx_icache_words));
+        if (version >= 3u)
+            crc_clk = crc32_update(crc_clk, (const uint8_t*)&g_psx_cache_ctrl,
+                                   sizeof(g_psx_cache_ctrl));
     }
 
     timers_get_snapshot(counter, mode, target, irq_line, frac);
@@ -201,7 +204,7 @@ void netplay_core_digest_parts_version(const CPUState* cpu, NetplayCoreParts* ou
 
 void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
 {
-    netplay_core_digest_parts_version(cpu, out, 2u);
+    netplay_core_digest_parts_version(cpu, out, 3u);
 }
 
 uint32_t netplay_core_digest(const CPUState* cpu)

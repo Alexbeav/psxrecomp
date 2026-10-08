@@ -1319,3 +1319,5 @@ on a fixed region -> next.
   `PSX_PRECISE_SLICE` left in tree (inert). −8 mechanism located in
   code_generator.cpp (delay-slot-is-leader undercount). Tree builds + boots clean.
   NEXT: P1 (cycle-audit) → P2 (delay-slot ownership fix).
+
+2026-10-08, PS1G-73 visible cache worker: state v17 and digest v3 retain explicit legacy conversions. The registry correction preserves all 224 state-entry blocks and passes missing 0. Canonical input comparison traces the renewed Pin-H destination to two cache-header declarations. The strict admission assertion remains. Source migration controls and independent addendum precede local delivery. Full title, replay, cost, native-guard comparison and actual guest integration remain open. Evidence is in the PS1G-73 issue and the owned visible-cache record.

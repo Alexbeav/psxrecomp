@@ -33,7 +33,7 @@ typedef struct NetplayCoreParts {
 
 uint32_t netplay_core_digest(const CPUState* cpu);
 void     netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out);
-/* Replay core v1 predates the cache-word section. Rollback always uses v2. */
+/* Replay v1 predates cache words; v2 predates cache control. Rollback uses v3. */
 void     netplay_core_digest_parts_version(const CPUState* cpu, NetplayCoreParts* out, unsigned version);
 uint32_t netplay_master_digest(const CPUState* cpu);
 uint32_t netplay_cdrom_digest(void);

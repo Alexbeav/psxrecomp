@@ -5,6 +5,7 @@
 
 uint64_t psx_cycle_count;
 uint32_t i_stat, i_mask, g_psx_icache_tv[1024], g_psx_icache_words[1024];
+uint32_t g_psx_cache_ctrl;
 static uint8_t ram[2u << 20];
 static unsigned fixture_vector;
 uint8_t *memory_get_ram_ptr(void) { return ram; }
@@ -32,6 +33,7 @@ static void initialize(CPUState *cpu, unsigned vector)
     memset(g_psx_icache_tv, 0, sizeof g_psx_icache_tv);
     memset(g_psx_icache_words, 0, sizeof g_psx_icache_words);
     psx_cycle_count = 0; i_stat = i_mask = 0;
+    g_psx_cache_ctrl = 0;
     if (!vector) return;
     for (unsigned i = 0; i < 32; ++i) {
         cpu->gpr[i] = i * 0x9e3779b9u ^ 0xdeadbeefu;
@@ -70,6 +72,16 @@ int main(void)
     assert(current.core != changed_current.core);
     assert(current.cpu == changed_current.cpu && current.ram == changed_current.ram);
     assert(current.clock_irq != changed_current.clock_irq);
+    netplay_core_digest_parts_version(&cpu, &old, 2u);
+    netplay_core_digest_parts(&cpu, &current);
+    g_psx_cache_ctrl = 0x804u;
+    netplay_core_digest_parts_version(&cpu, &changed_old, 2u);
+    netplay_core_digest_parts(&cpu, &changed_current);
+    assert(old.core == changed_old.core);
+    assert(current.core != changed_current.core);
+    assert(current.cpu == changed_current.cpu && current.ram == changed_current.ram);
+    puts("PASS: digest v3 hashes cache control; legacy v2 does not");
+    netplay_core_digest_parts_version(&cpu, &old, 1u);
     g_psx_icache_tv[0] = 0x80001000u;
     netplay_core_digest_parts_version(&cpu, &changed_old, 1);
     assert(old.core != changed_old.core);

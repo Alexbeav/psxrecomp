@@ -285,7 +285,7 @@ static void test_out_of_sync_is_reported(void) {
     for (unsigned i = 0; i < 130 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
     drift = 0;
     CHECK(replay_session_last_result() == REPLAY_RESULT_OUT_OF_SYNC, "drift reported (result %d)", replay_session_last_result());
-    CHECK(replay_session_core_digest_version() == 2u, "divergence end restores current digest");
+    CHECK(replay_session_core_digest_version() == 3u, "divergence end restores current digest");
     CHECK(strstr(osd_last, "out of sync") != NULL, "OSD says out of sync: %s", osd_last);
     /* The first digest after the drift names the frame and the core partition. */
     uint32_t df = 0; unsigned parts = 0;
@@ -451,8 +451,8 @@ static ReplayResult play_from_boot(const char *p, unsigned max_frames, int new_h
 }
 
 static void test_core_digest_metadata(void) {
-    const char *valid[] = { "", "renderer=software\n", "core_digest=1\n", "core_digest=2\n" };
-    const char *invalid[] = { "core_digest=", "core_digest=\n", "core_digest=3\n",
+    const char *valid[] = { "", "renderer=software\n", "core_digest=1\n", "core_digest=2\n", "core_digest=3\n" };
+    const char *invalid[] = { "core_digest=", "core_digest=\n", "core_digest=4\n",
         "core_digest=2x\n", "core_digest= 2\n", "core_digest=2\ncore_digest=2\n",
         "core_digest=1\ncore_digest=2\n", "core_digest=\ncore_digest=2\n" };
     char saved[sizeof product_lines], path[700];
@@ -470,14 +470,18 @@ static void test_core_digest_metadata(void) {
             } else {
                 record(20, "cd_speed=1\n"); slot_path(0, path, sizeof path);
             }
+            const int notices = osd_count;
             CHECK(replay_session_play_file(path), "valid metadata %u boot %u starts", i, boot);
-            CHECK(replay_session_core_digest_version() == (i == 3 ? 2u : 1u),
+            CHECK(osd_count == notices + 1 && (i == 4 || strstr(osd_last, "older runtime behavior")),
+                  "one older-recording notice at start %u boot %u", i, boot);
+            CHECK(replay_session_core_digest_version() == (i == 4 ? 3u : i == 3 ? 2u : 1u),
                   "declared/absent digest version %u boot %u", i, boot);
             for (unsigned f = 0; f < 30 && replay_session_state() != REPLAY_IDLE; ++f) {
                 vblank(0xffff, neutral); power_on_now = 0;
+                if (f < 5u) CHECK(osd_count == notices + 1, "older notice does not repeat each frame");
             }
             CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "valid version completes");
-            CHECK(replay_session_core_digest_version() == 2u, "end restores current digest");
+            CHECK(replay_session_core_digest_version() == 3u, "end restores current digest");
             remove(path);
         }
         for (unsigned i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
@@ -499,7 +503,7 @@ static void test_core_digest_metadata(void) {
             CHECK(anchor_loads == loads && settings_switches == switches &&
                   cards_installs == cards && power_on_begins == begins,
                   "bad digest metadata applies no host state");
-            CHECK(replay_session_state() == REPLAY_IDLE && replay_session_core_digest_version() == 2u,
+            CHECK(replay_session_state() == REPLAY_IDLE && replay_session_core_digest_version() == 3u,
                   "refusal leaves current comparison");
             power_on_now = 0; remove(path);
         }
@@ -507,11 +511,11 @@ static void test_core_digest_metadata(void) {
     /* Exercise legacy playback's end, divergence and input take-over paths. */
     product_lines[0] = 0;
     test_record_and_play_in_sync();
-    CHECK(replay_session_core_digest_version() == 2u, "legacy in-sync end leaves current digest");
+    CHECK(replay_session_core_digest_version() == 3u, "legacy in-sync end leaves current digest");
     test_out_of_sync_is_reported();
-    CHECK(replay_session_core_digest_version() == 2u, "legacy divergence end leaves current digest");
+    CHECK(replay_session_core_digest_version() == 3u, "legacy divergence end leaves current digest");
     test_take_over();
-    CHECK(replay_session_core_digest_version() == 2u, "legacy take-over leaves current digest");
+    CHECK(replay_session_core_digest_version() == 3u, "legacy take-over leaves current digest");
     snprintf(product_lines, sizeof product_lines, "%s", saved);
 }
 
@@ -815,26 +819,26 @@ int main(int argc, char **argv) {
     mkdir_p(dir);
     snprintf(verdict_path, sizeof verdict_path, "%s/verdict.json", dir);
     replay_session_set_verdict_path(verdict_path);
-    CHECK(replay_session_core_digest_version() == 2u, "idle uses the current core digest");
+    CHECK(replay_session_core_digest_version() == 3u, "idle uses the current core digest");
     clear_slots();
     record(20, "cd_speed=1\n");
     CHECK(replay_session_play_slot(0), "legacy digest replay starts");
     CHECK(replay_session_core_digest_version() == 1u, "absent version selects pin H digest");
     replay_session_shutdown();
-    strcat(product_lines, "core_digest=2\n");
+    strcat(product_lines, "core_digest=3\n");
     clear_slots();
     record(20, "cd_speed=1\n");
     CHECK(replay_session_play_slot(0), "current digest replay starts");
-    CHECK(replay_session_core_digest_version() == 2u, "new replay keeps cache-word digest");
+    CHECK(replay_session_core_digest_version() == 3u, "new replay keeps cache-word digest");
     replay_session_shutdown();
-    CHECK(replay_session_core_digest_version() == 2u, "shutdown restores current digest");
-    char *digest_version_line = strstr(product_lines, "core_digest=2");
-    digest_version_line[strlen("core_digest=")] = '3';
+    CHECK(replay_session_core_digest_version() == 3u, "shutdown restores current digest");
+    char *digest_version_line = strstr(product_lines, "core_digest=3");
+    digest_version_line[strlen("core_digest=")] = '4';
     clear_slots();
     record(20, "cd_speed=1\n");
     CHECK(!replay_session_play_slot(0), "unknown digest version is refused");
-    CHECK(replay_session_core_digest_version() == 2u, "refused replay keeps current digest");
-    digest_version_line[strlen("core_digest=")] = '2';
+    CHECK(replay_session_core_digest_version() == 3u, "refused replay keeps current digest");
+    digest_version_line[strlen("core_digest=")] = '3';
     test_core_digest_metadata();
     test_record_and_play_in_sync();
     test_thumb_and_name();

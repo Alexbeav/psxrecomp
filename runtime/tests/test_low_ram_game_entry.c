@@ -61,7 +61,7 @@ uint32_t g_psx_cyc_batch, g_psx_cyc_batch_limit;
 uint64_t g_psx_bail_flattened, g_psx_device_gen, psx_cycle_count, s_frame_count;
 uint64_t psx_next_service_cycle;
 int psx_in_device_service;
-uint32_t g_psx_icache_tv[1024], g_psx_icache_words[1024];
+uint32_t g_psx_icache_tv[1024], g_psx_icache_words[1024], g_psx_cache_ctrl;
 CPUState *debug_cpu_ptr;
 PsxBiosImageInfo psx_bios_image;
 const PsxKernelBody *psx_bios_kernel_bodies;

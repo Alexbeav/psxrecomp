@@ -35,22 +35,26 @@ that differ from RAM. These counters are diagnostics, not saved guest state.
 The BIOS emitter passes an instruction count to `psx_slice_bios_block`.
 Its timing budget remains eight cycles per instruction.
 
-Boot-state version 16 saves the words with the tags. Version 15 player saves
-remain readable: after restoring RAM, the loader fills every valid tag from
-restored memory, matching the old runtime at the load point. Older formats remain
-refused. Pin H codegen hash `25fd1f54` imports only into the cache-guard hash
-`3572b436`, named by `BOOT_STATE_PIN_H_IMPORT_HASH`. The unconditional assertion
+Boot-state version 17 saves the cache-control register, words and tags.
+Versions 15 and 16 default the absent register to zero. After restoring version
+15 RAM, the loader also fills every valid tag from restored memory. This cannot
+recover an earlier mid-FlushCache register value. Older formats remain refused.
+Pin H codegen hash `25fd1f54` imports only into the cache-guard hash
+`6d27c2c2`, named by `BOOT_STATE_PIN_H_IMPORT_HASH`. The unconditional assertion
 in `gpu_queue_boot_admission_test` fails if a later emitter or header change moves
 that hash without renewing the import decision. The BIOS guard separates the
-word count from its timing budget. The guest-state layout and overlay ABI stay
-unchanged. BIOS, entry, ABI, codegen version and section
+word count from its timing budget. The renewed destination adds only the host
+refresh API and cache-register declarations to the hashed cache header. CPUState,
+the emitter and overlay ABI stay unchanged. BIOS, entry, ABI, codegen version and section
 checks still apply. Overlay loading stays strict. TAS checkpoint compatibility
 is separate and requires new checkpoints.
-New replay product metadata declares `core_digest=2`. Earlier recordings omit
+New replay product metadata declares `core_digest=3`. Earlier recordings omit
 that field and use version 1, which excludes cache words from the core digest.
-Version 2 and rollback digests include them. Both versions retain cache tags.
+Version 2 includes words, and version 3 also includes the cache-control register.
+Rollback uses version 3. All versions retain cache tags. Explicit versions 1 and 2
+keep their former byte streams, and older recordings get one start notice.
 This changes comparison only. Guest execution still uses cache contents.
-An explicit digest version must occur once with value `1` or `2`. Empty,
+An explicit digest version must occur once with value `1`, `2` or `3`. Empty,
 repeated or unknown versions are refused before settings, cards or an anchor
 are applied. An absent product extension also selects the legacy comparison.
 Lockstep shadow state and the deterministic clock digest also include contents.

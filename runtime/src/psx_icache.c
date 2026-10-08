@@ -6,6 +6,7 @@
 /* Compatibility established by T172 authored cache observations. */
 uint32_t g_psx_icache_tv[1024];
 uint32_t g_psx_icache_words[1024];
+uint32_t g_psx_cache_ctrl;
 int g_psx_icache_active = -1;
 int g_input_instruction_histogram_active = 0;
 void (*g_input_instruction_histogram_callback)(uint32_t) = NULL;
@@ -66,6 +67,7 @@ void psx_icache_refresh_host_write(uint32_t address, uint32_t bytes)
 
 static uint32_t recorded_tags[1024], suspended_tags[1024];
 static uint32_t recorded_words[1024], suspended_words[1024];
+static uint32_t recorded_control, suspended_control;
 
 uint32_t psx_icache_read_cached(uint32_t address, uint32_t memory_word)
 {
@@ -113,6 +115,7 @@ void psx_icache_reset(void)
 {
     for (unsigned i = 0; i < 1024; ++i) g_psx_icache_tv[i] = 1;
     memset(g_psx_icache_words, 0, sizeof g_psx_icache_words);
+    g_psx_cache_ctrl = 0;
     g_psx_icache_active = psx_icache_enabled();
 }
 
@@ -121,6 +124,7 @@ int psx_icache_shadow_record_begin(void)
     if (shadow_state) return 0;
     memcpy(recorded_tags, g_psx_icache_tv, sizeof recorded_tags);
     memcpy(recorded_words, g_psx_icache_words, sizeof g_psx_icache_words);
+    recorded_control = g_psx_cache_ctrl;
     shadow_state = 1;
     return 1;
 }
@@ -130,8 +134,10 @@ int psx_icache_shadow_replay_begin(void)
     if (shadow_state != 1) return 0;
     memcpy(suspended_tags, g_psx_icache_tv, sizeof suspended_tags);
     memcpy(suspended_words, g_psx_icache_words, sizeof g_psx_icache_words);
+    suspended_control = g_psx_cache_ctrl;
     memcpy(g_psx_icache_tv, recorded_tags, sizeof recorded_tags);
     memcpy(g_psx_icache_words, recorded_words, sizeof recorded_words);
+    g_psx_cache_ctrl = recorded_control;
     shadow_state = 2;
     return 1;
 }
@@ -141,6 +147,7 @@ void psx_icache_shadow_replay_end(void)
     if (shadow_state != 2) return;
     memcpy(g_psx_icache_tv, suspended_tags, sizeof suspended_tags);
     memcpy(g_psx_icache_words, suspended_words, sizeof suspended_words);
+    g_psx_cache_ctrl = suspended_control;
     shadow_state = 0;
 }
 

@@ -489,7 +489,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     if (ok) {
         /* Tags and contents form one execution state. RAM may have changed
          * since refill; restoring tags alone cannot reconstruct the words. */
-        uint8_t ib[1024u * 8u];
+        uint8_t ib[1024u * 8u + 4u];
         PstW w;
         pst_w_init(&w, ib, sizeof ib);
         ok = 1;
@@ -497,6 +497,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
             ok = pst_w_u32(&w, g_psx_icache_tv[i]);
         for (uint32_t i = 0; ok && i < 1024u; i++)
             ok = pst_w_u32(&w, g_psx_icache_words[i]);
+        if (ok) ok = pst_w_u32(&w, g_psx_cache_ctrl);
         if (ok) ok = write_section(o, BS_SEC_ICACHE, ib, sizeof ib);
     }
     if (ok) {
@@ -800,7 +801,8 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         return psx_mod_memory_snapshot_read(p, len);
     case BS_SEC_ICACHE: {
         PstR r;
-        if (len != 1024u * 4u && len != 1024u * 8u) return 0;
+        if (len != 1024u * 4u && len != 1024u * 8u &&
+            len != 1024u * 8u + 4u) return 0;
         pst_r_init(&r, p, len);
         for (uint32_t i = 0; i < 1024u; i++)
             if (!pst_r_u32(&r, &g_psx_icache_tv[i])) return 0;
@@ -808,6 +810,10 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
             psx_icache_restore_legacy_words();
         else for (uint32_t i = 0; i < 1024u; i++)
             if (!pst_r_u32(&r, &g_psx_icache_words[i])) return 0;
+        /* Older states did not record the register. Do not inherit the
+         * loading process's unrelated isolated-store mode. */
+        g_psx_cache_ctrl = 0;
+        if (len == 1024u * 8u + 4u && !pst_r_u32(&r, &g_psx_cache_ctrl)) return 0;
         return 1;
     }
     default:
@@ -908,9 +914,12 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
         boot_state_append_reason(reason, reason_cap, part);
     }
     /* Pin H's v15 guest-state layout is unchanged by the native cache guard.
-     * The emitter now separates BIOS word count from its existing cycle budget;
-     * CPU layout and overlay ABI remain identical. Limit this import to the
-     * reviewed target: later codegen changes must establish their own migration.
+     * The emitter now separates BIOS word count from its existing cycle budget.
+     * The renewed target adds only host-refresh and cache-register declarations
+     * to the hashed cache header; CPU layout, emitter and overlay ABI are unchanged.
+     * v15 has no cache words/control: explicit conversion fills words from RAM
+     * and defaults control to zero, without reconstructing a mid-FlushCache state.
+     * Limit this import to the reviewed target; later codegen changes need review.
      * Overlay DLL admission and TAS checkpoint identity stay strict. */
     const int pin_h_import = h.version == 15u &&
         h.codegen_hash == 0x25fd1f54u &&
@@ -962,7 +971,8 @@ static int section_shape_ok(uint32_t tag, uint32_t len, uint32_t version) {
     case BS_SEC_DMA:        return len == dma_snapshot_bytes();
     case BS_SEC_SIO:        return sio_snapshot_shape_ok(len);
     case BS_SEC_MDEC:       return 1; /* variable FIFO lengths: mdec_snapshot_prepare */
-    case BS_SEC_ICACHE:     return len == 1024u * (version == 15u ? 4u : 8u);
+    case BS_SEC_ICACHE:     return len == 1024u * (version == 15u ? 4u : 8u) +
+                                      (version >= 17u ? 4u : 0u);
     case BS_SEC_DIRTY:      return (len % 4u) == 0u;
     case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;
     case BS_SEC_GPU_SERVICE:return len == SOURCE_GPU_SERVICE_WIRE_BYTES;

@@ -38,7 +38,7 @@ extern "C" {
 #define BOOT_STATE_MAGIC   0x50535842u  /* "PSXB" */
 /* Reviewed import target. A hash-changing row must renew this decision and
  * the unconditional hash assertion in gpu_queue_boot_admission_test. */
-#define BOOT_STATE_PIN_H_IMPORT_HASH 0x3572b436u
+#define BOOT_STATE_PIN_H_IMPORT_HASH 0x6d27c2c2u
 /* v1 = incomplete RAM-only; v2 = full machine but host-struct memcpy (padding);
  * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
  * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);
@@ -67,12 +67,14 @@ extern "C" {
  * v15 = v14 plus the ordinary GPU FIFO and pending default GPU block DMA. */
 /* v16 includes instruction-cache bytes. Version 15 is imported by filling
  * valid tags from restored memory, matching that runtime at the load point. */
-#define BOOT_STATE_VERSION 16u
+/* v17 adds the cache-control register beside cache tags and words. */
+#define BOOT_STATE_VERSION 17u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v16 accepts v15 through explicit conversion. */
+ * runtime's blob to a new loader. v15/v16 import defaults the absent register
+ * to zero; v15 additionally fills cache words from restored RAM. */
 #define BOOT_STATE_VERSION_MIN_READ 15u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u

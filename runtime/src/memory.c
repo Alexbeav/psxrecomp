@@ -1220,7 +1220,6 @@ uint64_t g_kseg2_ignored_reads;
 uint64_t g_kseg2_ignored_writes;
 
 /* Cache control register (KSEG2: 0xFFFE0130). */
-static uint32_t cache_ctrl;
 
 /* Pointer to cpu->cop0[12] (SR).  Set once at init.
  * Used by write functions to check the IsC (Isolate Cache) bit.
@@ -1388,6 +1387,7 @@ uint32_t memory_get_bios_checksum(void) { return s_bios_checksum; }
 
 void memory_init(const char* bios_path) {
     psx_icache_bind_memory(ram, sizeof ram, bios_rom);
+    g_psx_cache_ctrl = 0;
     memset(ram, 0, sizeof(ram));
     memset(s_low_ram_old, 0, sizeof(s_low_ram_old));
     s_low_ram_at_entry_valid = 0;
@@ -1901,7 +1901,7 @@ uint32_t psx_read_word(uint32_t addr) {
  * normal-range RAM is byte-identical; MMIO/scratchpad/BIOS (>= 0x800000) untouched. */
 static uint32_t psx_read_word_raw(uint32_t addr) {
     /* KSEG2 cache control — before physical translation. */
-    if (addr == 0xFFFE0130u) return cache_ctrl;
+    if (addr == 0xFFFE0130u) return g_psx_cache_ctrl;
     /* KSEG2 (0xC0000000+): only cache control (0xFFFE0130, above where
      * applicable) exists there: PSX-SPX "KUSEG,KSEG0,KSEG1,KSEG2 Memory
      * Regions" says KSEG2 holds only the cache control registers. We treat
@@ -2021,14 +2021,14 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     g_guest_store_count++;
     /* Isolated stores target the cache before memory-address routing. */
     if (sr_ptr && (*sr_ptr & 0x10000u)) {
-        psx_icache_isolated_store(addr, cache_ctrl);
+        psx_icache_isolated_store(addr, g_psx_cache_ctrl);
         return;
     }
     /* (pgxp) plain-store shadow invalidation retired: the PGXP engine
      * validates tracked words against the actual packet word on read, so an
      * overwritten word can never be believed (docs/ENHANCEMENTS.md G1). */
     /* KSEG2 cache control — before physical translation. */
-    if (addr == 0xFFFE0130u) { cache_ctrl = val; return; }
+    if (addr == 0xFFFE0130u) { g_psx_cache_ctrl = val; return; }
     /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
 
@@ -2222,7 +2222,7 @@ void psx_write_half(uint32_t addr, uint16_t val) {
 static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     g_guest_store_count++;
     if (sr_ptr && (*sr_ptr & 0x10000u)) {
-        psx_icache_isolated_store(addr, cache_ctrl);
+        psx_icache_isolated_store(addr, g_psx_cache_ctrl);
         return;
     }
 
@@ -2542,7 +2542,7 @@ void psx_write_byte(uint32_t addr, uint8_t val) {
 static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     g_guest_store_count++;
     if (sr_ptr && (*sr_ptr & 0x10000u)) {
-        psx_icache_isolated_store(addr, cache_ctrl);
+        psx_icache_isolated_store(addr, g_psx_cache_ctrl);
         return;
     }
 

@@ -44,14 +44,19 @@ INACTIVE_READER(source_gpu_raster_wire_read)
 INACTIVE_READER(timers_source_wire_read)
 INACTIVE_READER(source_gpu_service_wire_read)
 void timers_set_snapshot(const uint16_t a[3],const uint32_t b[3],const uint16_t c[3],const int32_t d[3],const uint32_t e[3]){(void)a;(void)b;(void)c;(void)d;(void)e;mutations++;}
-uint32_t g_psx_icache_tv[1024], g_psx_icache_words[1024];
+#ifndef GPU_QUEUE_REAL_ICACHE
+uint32_t g_psx_icache_tv[1024], g_psx_icache_words[1024], g_psx_cache_ctrl;
+#endif
 static unsigned legacy_restores;
+#ifndef GPU_QUEUE_REAL_ICACHE
 void psx_icache_restore_legacy_words(void) {
  /* Cache-owner conversion is tested in test_psx_icache_fastpath. Here prove
   * the full loader calls it after RAM is committed, only for the v15 shape. */
  assert(test_ram[0]==0x2408002au);legacy_restores++;
  g_psx_icache_words[0]=test_ram[0];
 }
+#endif
+#ifndef GPU_QUEUE_REAL_ICACHE
 int main(void) {
  assert((uint32_t)PSX_OVERLAY_CODEGEN_HASH==BOOT_STATE_PIN_H_IMPORT_HASH);
  reset_gpu_state_for_test(); dma_init();
@@ -71,38 +76,47 @@ int main(void) {
   case BS_SEC_SPAD:n=SPAD_SIZE;break;case BS_SEC_IRQ:case BS_SEC_CLOCK:n=8;break;
   case BS_SEC_TIMER:n=48;break;case BS_SEC_GPU:n=gpu_snapshot_bytes();break;
   case BS_SEC_VRAM:n=VRAM_SIZE;break;case BS_SEC_SPURAM:n=sizeof spuram;break;
-  case BS_SEC_DMA:n=dma_snapshot_bytes();break;case BS_SEC_ICACHE:n=8192;break;case BS_SEC_IRQ_TIMING:n=64;break;
+  case BS_SEC_DMA:n=dma_snapshot_bytes();break;case BS_SEC_ICACHE:n=8196;break;case BS_SEC_IRQ_TIMING:n=64;break;
   }
   uint8_t *p=calloc(1,n);
   if(tag==BS_SEC_CPU) assert(cpu_state_wire_write(p,&saved));
   if(tag==BS_SEC_RAM){PstW w;pst_w_init(&w,p,n);assert(pst_w_u32(&w,0x2408002au));}
   if(tag==BS_SEC_GPU){gpu_snapshot_write(p);gpu_at=o.len+16;}
   if(tag==BS_SEC_DMA)dma_snapshot_write(p);
-  if(tag==BS_SEC_ICACHE){PstW w;icache_at=o.len+16;pst_w_init(&w,p,n);assert(pst_w_u32(&w,0x80000000u));pst_w_init(&w,p+4096,4096);assert(pst_w_u32(&w,0x8fa80018u));}
+  if(tag==BS_SEC_ICACHE){PstW w;icache_at=o.len+16;pst_w_init(&w,p,n);assert(pst_w_u32(&w,0x80000000u));pst_w_init(&w,p+4096,4096);assert(pst_w_u32(&w,0x8fa80018u));pst_w_init(&w,p+8192,4);assert(pst_w_u32(&w,0x804u));}
   assert(write_section_raw(&o,tag,0,p,n));free(p);
  }
  /* A valid full stream first proves this fixture reaches and applies commit. */
  assert(boot_state_load_buffer(o.data,o.len,0,0,&live));assert(live.pc==saved.pc);
  assert(g_psx_icache_words[0]==0x8fa80018u && !legacy_restores);
+ assert(g_psx_cache_ctrl==0x804u);
+ /* Version16 carried words but no control register; import defaults it. */
+ uint8_t *v16=malloc(o.len-4u);
+ memcpy(v16,o.data,icache_at+8192u);
+ memcpy(v16+icache_at+8192u,o.data+icache_at+8196u,o.len-icache_at-8196u);
+ {PstW w;pst_w_init(&w,v16+icache_at-8u,8u);assert(pst_w_u64(&w,8192u));}
+ assert(!boot_state_load_buffer(v16,o.len-4u,0,0,&live));
+ v16[4]=16;assert(boot_state_load_buffer(v16,o.len-4u,0,0,&live));
+ assert(g_psx_icache_words[0]==0x8fa80018u && g_psx_cache_ctrl==0u && !legacy_restores);free(v16);
  /* A real v15 stream has tags only; v16 must not accept that short shape. */
- uint8_t *legacy=malloc(o.len-4096u);
+ uint8_t *legacy=malloc(o.len-4100u);
  memcpy(legacy,o.data,icache_at+4096u);
- memcpy(legacy+icache_at+4096u,o.data+icache_at+8192u,o.len-icache_at-8192u);
+ memcpy(legacy+icache_at+4096u,o.data+icache_at+8196u,o.len-icache_at-8196u);
  {PstW w;pst_w_init(&w,legacy+icache_at-8u,8u);assert(pst_w_u64(&w,4096u));}
- assert(!boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
+ assert(!boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));
  legacy[4]=15;test_ram[0]=0xdeadbeefu;
- assert(boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
+ assert(boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));
  assert(legacy_restores==1u && g_psx_icache_words[0]==0x2408002au);
  {PstW w;pst_w_init(&w,legacy+16,4);assert(pst_w_u32(&w,0x25fd1f54u));}
- assert(boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
+ assert(boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));
  unsigned restores_before_reject=legacy_restores;
  const unsigned integrity_offsets[]={8,12,20,24,32};
  for(unsigned k=0;k<sizeof(integrity_offsets)/sizeof(integrity_offsets[0]);k++){
   unsigned at=integrity_offsets[k];legacy[at]^=1u;
-  assert(!boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));legacy[at]^=1u;
+  assert(!boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));legacy[at]^=1u;
  }
  assert(legacy_restores==restores_before_reject);
- legacy[16]^=1u;assert(!boot_state_load_buffer(legacy,o.len-4096u,0,0,&live));
+ legacy[16]^=1u;assert(!boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));
  o.data[4]=15;assert(!boot_state_load_buffer(o.data,o.len,0,0,&live));
  assert(legacy_restores==restores_before_reject);o.data[4]=BOOT_STATE_VERSION;free(legacy);
  CPUState before={0};before.pc=0x5678;live=before;
@@ -125,3 +139,5 @@ int main(void) {
  free(ram_before);free(gpu_before);free(gpu_after);
  free(o.data);puts("PASS full GPU admission rejects before any mutation");return 0;
 }
+
+#endif /* standalone admission fixture; real-cache roundtrip has its own entry */

@@ -8698,7 +8698,7 @@ extern "C" void replay_host_product(char *out, size_t cap) {
     lines += std::string("renderer=") +
              (g_vk_active ? "vulkan" : g_gl_active ? "opengl" : "software") + "\n";
     lines += std::string("platform=") + replay_platform_name() + "\n";
-    lines += "core_digest=2\n";
+    lines += "core_digest=3\n";
     if (const char *seed = std::getenv("PSX_REPLAY_TEST_INPUT_SEED");
         seed && seed[0] && g_replay_scripted_record) {
         std::snprintf(line, sizeof(line), "input_seed=%lu\n", std::strtoul(seed, nullptr, 10));

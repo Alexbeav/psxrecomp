@@ -3891,7 +3891,8 @@
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
             " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v16 accepts v15 through explicit conversion. */",
+            " * runtime's blob to a new loader. v15/v16 import defaults the absent register",
+            " * to zero; v15 additionally fills cache words from restored RAM. */",
             "#define BOOT_STATE_VERSION_MIN_READ 15u"
           ]
         },
@@ -4529,7 +4530,8 @@
             "    case BS_SEC_DMA:        return len == dma_snapshot_bytes();",
             "    case BS_SEC_SIO:        return sio_snapshot_shape_ok(len);",
             "    case BS_SEC_MDEC:       return 1; /* variable FIFO lengths: mdec_snapshot_prepare */",
-            "    case BS_SEC_ICACHE:     return len == 1024u * (version == 15u ? 4u : 8u);",
+            "    case BS_SEC_ICACHE:     return len == 1024u * (version == 15u ? 4u : 8u) +",
+            "                                      (version >= 17u ? 4u : 0u);",
             "    case BS_SEC_DIRTY:      return (len % 4u) == 0u;",
             "    case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;",
             "    case BS_SEC_GPU_SERVICE:return len == SOURCE_GPU_SERVICE_WIRE_BYTES;",
@@ -7275,6 +7277,17 @@
         }
       ],
       "contract_amendments": [
+        {
+          "date": "2026-10-08",
+          "issue": "PS1G-73",
+          "source_revision": "d2d4a4bd0c2bb1e9b061fbafcb7d62b8d80eb8c5 plus STATE-R5 e776097a308eebf3061244e579464476c4d57c22a9eb7e4f8148b2a69b4581b0",
+          "reason": "Evolve the complete version-boundary comment and section_shape_ok block for state v17 cache control. Keep explicit v15/v16 shapes and absent-control zero defaults. Preserve all 224 blocks and five existing debts. STATE-R5 bounded writer/reader and malformed-state controls passed; Pin-H admission and full title/replay qualification remain open.",
+          "from_blocks": 224,
+          "to_blocks": 224,
+          "replacement_blocks_added": 0,
+          "dropped_lines": 2,
+          "added_lines": 4
+        },
         {
           "date": "2026-09-27",
           "issue": "PS1B-220",

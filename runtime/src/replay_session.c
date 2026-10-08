@@ -23,12 +23,12 @@
 
 static ReplayState s_state = REPLAY_IDLE;
 static ReplayResult s_result = REPLAY_RESULT_NONE;
-static unsigned s_play_core_digest_version = 2u;
+static unsigned s_play_core_digest_version = 3u;
 
 unsigned replay_session_core_digest_version(void)
 {
     return s_state == REPLAY_PLAYING || s_state == REPLAY_LOADING
-        ? s_play_core_digest_version : 2u;
+        ? s_play_core_digest_version : 3u;
 }
 
 /* Recording. */
@@ -854,7 +854,7 @@ int replay_session_play_file(const char *path)
     s_rec_exe[0] = s_player_exe[0] = 0;
     s_rec_platform[0] = s_player_platform[0] = 0;
     s_rec_codegen[0] = s_player_codegen[0] = 0;
-    s_play_core_digest_version = 2u;
+    s_play_core_digest_version = 3u;
     s_cross_platform = 0;
     s_play_power_on = 0;
     s_play_frame = s_play_frames = 0;
@@ -931,7 +931,9 @@ int replay_session_play_file(const char *path)
             error = "empty or repeated core digest version";
         else if (strcmp(digest_version, "1") == 0)
             s_play_core_digest_version = 1u;
-        else if (strcmp(digest_version, "2") != 0)
+        else if (strcmp(digest_version, "2") == 0)
+            s_play_core_digest_version = 2u;
+        else if (strcmp(digest_version, "3") != 0)
             error = "unsupported core digest version";
     }
     /* The BIOS image decides, not its file name: with a CRC on both sides the
@@ -1008,9 +1010,14 @@ int replay_session_play_file(const char *path)
          * switched for playback and restored after, so they are not news). */
         snprintf(msg, sizeof msg, "Replay may go out of sync: different %s", differs);
         replay_host_osd(msg, 2600);
+    } else if (s_play_core_digest_version < 3u) {
+        replay_host_osd("Replay uses older runtime behavior: it may go out of sync", 2600);
     } else {
         replay_host_osd("Replay playing", 1200);
     }
+    if (s_play_core_digest_version < 3u)
+        fprintf(stderr, "replay: older core digest v%u; current runtime uses v3\n",
+                s_play_core_digest_version);
     fprintf(stdout, "replay_playing: path=%s frames=%u other_build=%d power_on=%d cross_platform=%d\n", path,
             (unsigned)meta.frames, other_build, s_play_power_on, s_cross_platform);
     fflush(stdout);
