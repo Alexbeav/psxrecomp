@@ -45,6 +45,10 @@
 #include "dispatch_publish.h"
 #include "pst_wire.h"
 
+#ifndef PSX_NATIVE_ICACHE_GUARD
+#define PSX_NATIVE_ICACHE_GUARD 1
+#endif
+
 uint64_t g_dirty_ram_blocks_run = 0;
 uint64_t g_dirty_ram_insns_run  = 0;
 uint64_t g_dirty_window_dispatches = 0;  /* capture-window interp dispatches */
@@ -3133,7 +3137,7 @@ static int slice_block_with_words(CPUState *cpu, uint32_t block_addr,
     int in_exception = psx_get_in_exception();
     if (g_precise_mode || in_exception) {
         g_sd_nested_skip++;
-#if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
+#if (defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)) && PSX_NATIVE_ICACHE_GUARD
         if (psx_icache_block_stale(block_addr, words)) {
             g_icache_execution_stats.nested_stale_blocks++;
             if (in_exception) g_icache_execution_stats.exception_stale_blocks++;
@@ -3143,7 +3147,7 @@ static int slice_block_with_words(CPUState *cpu, uint32_t block_addr,
     }
     /* A native body describes the RAM image, not stale cache contents. Keep
      * such a block in the shared interpreter until a dispatchable boundary. */
-#if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
+#if (defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)) && PSX_NATIVE_ICACHE_GUARD
     if (psx_icache_block_stale(block_addr, words)) {
         if (!g_icache_execution_stats.stale_blocks++)
             g_icache_execution_stats.first_block = block_addr;

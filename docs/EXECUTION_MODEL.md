@@ -214,3 +214,5 @@ interpreted — a narrow, accepted cost, not a wall.
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how these connect to the hardware
 simulation, and [`docs/FEATURES.md`](FEATURES.md) for the overlay-system feature
 reference.
+
+For source qualification, the advanced CMake option PSX_NATIVE_ICACHE_GUARD defaults to ON. OFF removes native stale-block admission checks while keeping interpreter cache contents and timing. See [the qualification limits](internal/PRECISE_IRQ_SLICE.md).

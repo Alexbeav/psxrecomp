@@ -196,4 +196,5 @@ int main(void)
     printf("PASS: cached slice yields=%u laps=%u load=%u checkpoint_pending=%d\n",
            cache_yields, (unsigned)LAPS, cpu.gpr[8], dirty_ram_checkpoint_resume_pending());
     puts("PASS: nested admission, BIOS range and actual cached instruction fallback");
+    return 0;
 }

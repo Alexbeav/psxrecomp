@@ -428,6 +428,9 @@ if(BUILD_TESTING)
     add_test(NAME icache_slice_admission_test COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_icache_slice_admission.py"
         --cc "${CMAKE_C_COMPILER}")
+    add_test(NAME icache_native_guard_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_icache_native_guard.py"
+        --cc "${CMAKE_C_COMPILER}")
     add_test(NAME scheduler_precise_escape_test COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_scheduler_precise_escape.py"
         --cc "${CMAKE_C_COMPILER}")
