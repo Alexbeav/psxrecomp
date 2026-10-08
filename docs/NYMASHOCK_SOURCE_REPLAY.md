@@ -86,7 +86,8 @@ native call frames across guest thread switches.
 Source-profile CD register reads sample stored device state before servicing
 events crossed by their width-dependent bus wait. The load still consumes its
 full duration. `runtime/tests/test_cd_read_sample_order.py` checks event ordering,
-byte/half/word reads, LWC2 and address aliases at O0/O2 without retail assets.
+byte/half/word reads, LWC2 and address aliases at O1/O2 without retail assets.
+It compiles the production memory map whole; it reads no source text.
 
 The drive and source memory-card/DualShock profiles admit checkpoint diagnostics.
 See [TAS checkpoints](TAS_CHECKPOINTS.md#debugging-a-late-mismatch) for same-build
