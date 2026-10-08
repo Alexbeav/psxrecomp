@@ -235,6 +235,11 @@ ports and caps `g_offline_pad_count` at 2 (`settings.toml` `[controller]
 multitap`, default on). Multitap still arms at game-start when three or more
 offline seats are live (`multitap_port` from `game.toml`).
 
+The controller bus also accepts direct multitap polls: addresses `02h`, `03h`
+and `04h` select seats B, C and D on the enabled tap's physical port. An empty
+seat returns `FFh` without ACK. These addresses have no effect on a standalone
+controller port. The pad DTR rules accept these addresses only on a tap port.
+
 **Multitap analog (hack):** tap seats are plain digital by default. Opt in
 with `game.toml` / `settings.toml` `[controller] multitap_analog = true`
 (or Settings → INPUT / Lobby Settings). When on, tap seats may report
