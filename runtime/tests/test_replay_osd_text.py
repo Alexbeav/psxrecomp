@@ -77,6 +77,11 @@ def add(text: str, where: str) -> None:
 # ---- replay_session.c ----
 for m in re.finditer(r"replay_host_osd\(\s*" + LIT, SESSION):
     add(m.group(1), "replay_session.c")
+# The mark hook selects between two literal toasts in its first argument.
+mark_texts = re.findall(LIT, body(SESSION, "int replay_session_mark("))
+assert len(mark_texts) == 2, "mark success/failure texts not found"
+for text in mark_texts:
+    add(text, "replay_session.c host-only mark")
 for m in re.finditer(r"end_playback\([A-Z_]+,\s*" + LIT, SESSION):
     add(m.group(1), "replay_session.c end of playback")
 for m in re.finditer(r"refuse_record\(\s*" + LIT, SESSION):
