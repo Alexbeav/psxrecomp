@@ -89,7 +89,8 @@ for m in re.finditer(r"snprintf\(msg, sizeof msg,\s*" + LIT, SESSION):
 # `error = "..."`: inside replay_session_play_file it is why a replay does not
 # play; everywhere else in the file it is why a recording was not saved.
 play_body = body(SESSION, "int replay_session_play_file(")
-play_errors = re.findall(r"error = " + LIT, play_body)
+play_errors = [text for assignment in re.findall(r"\berror\s*=\s*([^;]+);", play_body)
+               for text in re.findall(LIT, assignment)]
 save_errors = re.findall(r"error = " + LIT, SESSION.replace(play_body, ""))
 assert play_errors and save_errors, "error texts not found in replay_session.c"
 for e in play_errors:
