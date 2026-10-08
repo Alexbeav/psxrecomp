@@ -8,6 +8,7 @@ uint32_t i_stat, i_mask, g_psx_icache_tv[1024], g_psx_icache_words[1024];
 static uint8_t ram[2u << 20];
 static unsigned fixture_vector;
 uint8_t *memory_get_ram_ptr(void) { return ram; }
+const uint8_t *memory_low_ram_view(void) { return ram; }
 uint32_t interrupts_get_cycles_since_vblank(void) { return fixture_vector ? 77u : 0u; }
 uint32_t dirty_ram_get_bitmap_word_count(void) { return fixture_vector ? 2u : 0u; }
 uint32_t dirty_ram_get_bitmap_word(uint32_t index)
