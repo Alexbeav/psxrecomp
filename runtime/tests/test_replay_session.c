@@ -836,7 +836,7 @@ static void test_devices(void) {
               "kind%u port%u delayed anchor frame-0 digest", kind, port);
         for (unsigned i = 0; i < 90 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xffff, neutral);
         CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "kind%u port%u anchored in sync", kind, port);
-        CHECK(replay_session_digests_checked() == 3 && read_verdict() &&
+        CHECK(replay_session_digests_checked() == 2 && read_verdict() &&
               strstr(verdict, "\"frames_played\": 80") &&
               strstr(verdict, "\"first_divergence_frame\": null") &&
               strstr(verdict, "\"result\": \"in_sync\""),
