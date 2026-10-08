@@ -192,6 +192,26 @@ as continuations in the generator (full_function_emitter.cpp + main_psx.cpp), th
 the delay-loop leaders become dispatchable and the slice hands back within one block.
 
 ## Validation  [Task #5]
+
+### Cache-owned interpreter continuation (PS1G-73)
+
+A stale cached instruction can keep the interpreter active after the first
+interrupt. The ordinary deterministic scheduler now accepts a saved
+interpreter continuation at a PC that has no native entry. Each cache slice
+yields after 200,000 precision-loop steps. A step can include a branch and
+its delay slot, so this number is not a retired-instruction count.
+
+The checkpoint keeps cache ownership, the exact next PC and branch state.
+CPUState keeps the pending load. The scheduler resumes the checkpoint through
+the interpreter before attempting native dispatch. Cache slices check every
+eligible interrupt boundary, including boundaries after an earlier interrupt.
+
+Standalone and legacy fiber paths have no checkpoint unwind target and retain
+their existing interpreter ownership. This change does not qualify those
+paths. The registered cache admission, scheduler escape and section-wire
+fixtures cover the deterministic path at O0 and O2. Retail, replay and cost
+qualification remain separate requirements.
+
 - Beetle exc_ring oracle: native exception-entry record (cycle, last/next PC,
   EPC, BD, Status/Cause, I_STAT/I_MASK, pending-load) must match interp + Beetle
   at the f1823->1824 VBLANK.

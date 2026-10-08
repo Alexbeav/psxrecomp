@@ -10,7 +10,7 @@ int g_precise_mode, g_psx_dispatch_depth, psx_in_device_service;
 int g_call_unit_depth, g_cosim_dirty_pump_site, g_psx_cyc_bb_defer;
 uint32_t g_dirty_safe_resume_pc, g_psx_cyc_batch;
 uint32_t *g_psx_cyc_local_acc;
-static unsigned dispatches, fixups;
+static unsigned dispatches, fixups, mode, checkpoint_pending, checkpoint_resumes;
 
 static uint32_t read_word(uint32_t address) {
     assert(address == 0x108u || address == 0x110u || address == 0x114u);
@@ -38,7 +38,18 @@ int dirty_ram_is_dirty(uint32_t phys) {
     return 1;
 }
 PsxBiosImageInfo psx_bios_image; /* no BIOS selected: the kbless window is empty */
-int dirty_ram_checkpoint_resume_pending(void) { return 0; }
+int dirty_ram_checkpoint_resume_pending(void) { return (int)checkpoint_pending; }
+int psx_get_in_exception(void) { return 0; }
+void dirty_ram_checkpoint_resume(CPUState *cpu)
+{
+    assert(mode == 1u && checkpoint_pending);
+    assert(cpu->pc == 0x80001008u); /* deliberately not a native entry */
+    assert(cpu->load_value_rt == 8u && cpu->load_value == 123u && cpu->load_value_age == 0u);
+    assert(cpu->gpr[8] == 17u); /* no premature commit on scheduler yield */
+    checkpoint_pending = 0u;
+    ++checkpoint_resumes;
+    cpu->pc = 0x80001004u; /* authored interpreter completed at a safe entry */
+}
 int savestate_pending(void) { return 0; }
 void overlay_loader_shadow_scheduler_escape_fixup(void) { ++fixups; }
 void psx_irq_arm_compiled_resume_pc(uint32_t pc) { assert(pc == 0x80001004u); }
@@ -47,6 +58,17 @@ void psx_dispatch(CPUState *cpu, uint32_t pc) {
     assert(g_precise_mode == 0); /* a fresh dispatch must admit precise blocks */
     if (++dispatches == 1) {
         assert(pc == 0x80001000u);
+        assert(psx_scheduler_can_resume_checkpoint());
+        if (mode == 1u) {
+            cpu->pc = 0x80001008u;
+            cpu->gpr[8] = 17u;
+            cpu->load_value_rt = 8u;
+            cpu->load_value = 123u;
+            cpu->load_value_age = 0u;
+            checkpoint_pending = 1u;
+            psx_scheduler_resume_checkpoint(cpu);
+            assert(!"checkpoint yield must abandon this native frame");
+        }
         g_precise_mode = 1;
         psx_scheduler_resume_at(0x80001004u);
         assert(!"scheduler resume must unwind the slice");
@@ -62,5 +84,13 @@ int main(void) {
     cpu.read_word = read_word;
     psx_scheduler_run(&cpu);
     assert(dispatches == 2 && fixups == 2 && g_precise_mode == 0);
+    assert(!psx_scheduler_can_resume_checkpoint());
+    mode = 1u;
+    dispatches = fixups = 0u;
+    cpu.pc = 0x80001000u;
+    psx_clear_return_to_lobby();
+    psx_scheduler_run(&cpu);
+    assert(dispatches == 2u && fixups == 2u && checkpoint_resumes == 1u);
+    assert(!checkpoint_pending && !psx_scheduler_can_resume_checkpoint());
     return 0;
 }

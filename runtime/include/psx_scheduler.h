@@ -21,7 +21,9 @@
  * CPUState / RAM / the TCB reg array — NEVER in a host fiber stack, generated
  * C locals, a pc=0 sentinel, or a global resume PC. A yield/switch/RFE may
  * unwind the host stack ONLY after all guest-visible state is committed and the
- * resume PC is dispatchable, and only at a block-leader boundary.
+ * resume PC is dispatchable, and only at a block-leader boundary. An
+ * interpreter checkpoint is the explicit exception: it resumes through the
+ * interpreter before dispatch and keeps its pending load in CPUState.
  *
  * ── SCAFFOLDING (plan steps 1-2) ──────────────────────────────────────────
  * This header + the matching definitions in traps.c are INERT: the host-fiber
@@ -87,6 +89,13 @@ int psx_is_dispatchable(uint32_t pc);
  * exit-diagnostic dump then runs. Forward-declared for main.cpp (C++). */
 struct CPUState;
 void psx_scheduler_run(struct CPUState* cpu);
+
+/* Bounded cache interpretation yields through a saved interpreter checkpoint,
+ * not a generated entry. Requires the outer deterministic scheduler and no
+ * live exception frame. The checkpoint keeps pending CPU loads and cache
+ * ownership; resume_checkpoint never returns when those conditions hold. */
+int psx_scheduler_can_resume_checkpoint(void);
+void psx_scheduler_resume_checkpoint(struct CPUState* cpu);
 
 /*
  * Soft-exit netplay back to the lobby UI. Sets PSX_RUN_RETURN_TO_LOBBY and

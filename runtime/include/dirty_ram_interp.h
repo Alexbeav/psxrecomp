@@ -22,6 +22,8 @@
 extern "C" {
 #endif
 
+/* Cache slices also use the source-checkpoint format below. Wire word5 is
+ * cache ownership; the remaining three reserved words are zero. */
 /* Instruction continuation captured only while the source boundary callback runs. */
 #define DIRTY_RAM_CHECKPOINT_BYTES 36u
 void dirty_ram_checkpoint_enter(uint32_t pc, int slot, uint32_t target, int taken);

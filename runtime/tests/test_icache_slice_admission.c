@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <setjmp.h>
 #include <string.h>
 
 static uint32_t ram[0x200000u / 4u];
@@ -65,9 +66,27 @@ static void wait_irq_boundary(CPUState *cpu, uint32_t pc, uint64_t cycles)
         exit(1);
     }
 }
+static jmp_buf cache_yield;
+static unsigned cache_yields;
+int psx_scheduler_can_resume_checkpoint(void) { return 1; }
+void psx_scheduler_resume_checkpoint(CPUState *cpu)
+{
+    uint8_t wire[DIRTY_RAM_CHECKPOINT_BYTES], again[DIRTY_RAM_CHECKPOINT_BYTES];
+    assert(!g_precise_mode && dirty_ram_checkpoint_resume_pending());
+    assert(g_slice_exit_reason == 5u && g_slice_exit_iter == 200000u);
+    assert(!g_slice_exit_dispatchable && cpu->load_value_rt);
+    dirty_ram_checkpoint_write(wire);
+    assert(wire[20] == 1u); /* cache ownership, not a forced native entry */
+    assert(dirty_ram_checkpoint_read(wire, sizeof wire));
+    dirty_ram_checkpoint_write(again);
+    assert(!memcmp(wire, again, sizeof wire));
+    assert(++cache_yields == 1u);
+    longjmp(cache_yield, 1);
+}
+
 int main(void)
 {
-    CPUState cpu = {0};
+    static CPUState cpu;
     const uint32_t pc = 0x80001000u, index = (pc >> 2) & 1023u;
     psx_icache_bind_memory((const uint8_t *)ram, sizeof ram, NULL);
     psx_icache_reset();
@@ -128,11 +147,13 @@ int main(void)
     assert(irq_takes == 2u && g_slice_irq_taken == 2u);
     assert(cpu.gpr[8] == 1u && cpu.pc == cpu.gpr[31]);
     assert(g_slice_exit_dispatchable && !g_precise_mode);
+    printf("PASS: cached wait takes=%u slice_takes=%llu boundaries=%u\n",
+           irq_takes, (unsigned long long)g_slice_irq_taken, irq_boundaries);
     i_stat = i_mask = 0;
     /* Three precision-loop iterations per lap exceed the old 200,000 guard.
      * Every loop PC is clean text without a compiled dispatcher entry. */
     enum { LAPS = 70001 };
-    const uint32_t loop[] = {0x25290001u, 0x256b0004u, 0x152afffdu,
+    const uint32_t loop[] = {0u, 0u, 0x25290001u, 0x256b0004u, 0x152afffdu,
                              0x8d680000u, 0x250c0001u, 0x03e00008u, 0u};
     memset(&cpu, 0, sizeof cpu);
     memset(&g_icache_execution_stats, 0, sizeof g_icache_execution_stats);
@@ -141,21 +162,29 @@ int main(void)
         g_psx_icache_tv[index + k] = pc + 4u * k;
         g_psx_icache_words[index + k] = loop[k];
     }
-    ram[0x1000u / 4u] = 0x25290002u; /* RAM increments t1 twice as fast. */
+    ram[0x1008u / 4u] = 0x25290002u; /* RAM increments t1 twice as fast. */
     for (unsigned k = 0; k < LAPS; ++k) ram[0x4000u / 4u + k] = k + 1u;
     cpu.gpr[10] = LAPS; cpu.gpr[11] = 0x80003ffcu; cpu.gpr[31] = 0x80002000u;
     dirty = 0;
     i_stat = 1u; i_mask = 0u; /* Pending IRQ is masked; source profile remains off. */
-    assert(psx_slice_block_impl(&cpu, pc, 7, 0));
+    if (!setjmp(cache_yield)) {
+        assert(psx_slice_block_impl(&cpu, pc, 9, 0));
+    } else {
+        assert(dirty_ram_checkpoint_resume_pending());
+        dirty_ram_checkpoint_resume(&cpu);
+    }
     assert(cpu.pc == cpu.gpr[31] && g_slice_exit_dispatchable);
     assert(!g_slice_exit_dirty);
-    assert(g_slice_exit_reason == 1u && g_slice_exit_iter > 200000u);
+    assert(g_slice_exit_reason == 1u && g_slice_exit_iter < 200000u && cache_yields == 1u);
+    assert(!dirty_ram_checkpoint_resume_pending());
     assert(cpu.gpr[9] == LAPS && cpu.gpr[8] == LAPS);
     /* The last LW's immediate consumer reads the preceding lap's value. */
     assert(cpu.gpr[12] == LAPS && !cpu.load_value_rt && !cpu.load_value_age);
     assert(cpu.gpr[11] == 0x80003ffcu + 4u * LAPS && !g_precise_mode);
     assert(g_icache_execution_stats.stale_blocks == 1u);
     assert(g_icache_execution_stats.stale_fetches == LAPS);
-    assert(g_icache_execution_stats.first_fetch_pc == pc && g_icache_execution_stats.last_fetch_pc == pc);
+    assert(g_icache_execution_stats.first_fetch_pc == pc+8u && g_icache_execution_stats.last_fetch_pc == pc+8u);
+    printf("PASS: cached slice yields=%u laps=%u load=%u checkpoint_pending=%d\n",
+           cache_yields, (unsigned)LAPS, cpu.gpr[8], dirty_ram_checkpoint_resume_pending());
     puts("PASS: nested admission, BIOS range and actual cached instruction fallback");
 }

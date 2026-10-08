@@ -21,6 +21,7 @@
 #include "psx_bios_backend.h" /* psx_bios_is_entry, psx_bios_image (psx_is_dispatchable) */
 #include "dispatch_publish.h"
 #include "psx_break_vector.h"
+#include "dirty_ram_interp.h"
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
@@ -899,6 +900,26 @@ void psx_scheduler_rfe_resume(CPUState* cpu, uint32_t resume_pc, uint32_t origin
     sched_escape_ring_log(cpu, PSX_RUN_RESUME_CURRENT, psx_current_tcb_ptr(cpu), 0,
                           resume_pc);
     longjmp(g_scheduler_jmpbuf, 1); /* unwind to psx_scheduler_run; never returns */
+}
+
+/* A cache slice can yield at an instruction boundary that has no generated
+ * entry. Its checkpoint, rather than a TCB/native entry, owns resumption. */
+int psx_scheduler_can_resume_checkpoint(void)
+{
+    return g_in_scheduler_run && psx_hle_scheduler_enabled() && !psx_get_in_exception();
+}
+
+void psx_scheduler_resume_checkpoint(CPUState* cpu)
+{
+    if (!psx_scheduler_can_resume_checkpoint() || !dirty_ram_checkpoint_resume_pending()) {
+        trap_crash("interpreter checkpoint has no scheduler owner");
+        return;
+    }
+    g_sched_escape.target_tcb = 0;
+    g_sched_escape.resume_pc = cpu->pc;
+    g_sched_escape.reason = PSX_RUN_RESUME_CURRENT;
+    sched_escape_ring_log(cpu, PSX_RUN_RESUME_CURRENT, psx_current_tcb_ptr(cpu), 0, cpu->pc);
+    longjmp(g_scheduler_jmpbuf, 1);
 }
 
 void psx_scheduler_run(CPUState* cpu)

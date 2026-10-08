@@ -273,8 +273,12 @@ int main(void) {
         check(dirty_ram_checkpoint_resume_pending(),"CPU_EXEC pending continuation");
         dirty_ram_checkpoint_write(out);
         check(!memcmp(in,out,sizeof in),"CPU_EXEC round trip with live branch");
+        in[20]=1;
+        check(dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC accepts cache-owned continuation");
+        dirty_ram_checkpoint_write(out);
+        check(!memcmp(in,out,sizeof in),"CPU_EXEC cache ownership round trip");
         in[20]=32;
-        check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid load register");
+        check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid cache ownership");
         in[20]=0;in[8]=2;
         check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid branch state");
         check(!dirty_ram_checkpoint_read(in,sizeof in-1),"CPU_EXEC rejects truncated continuation");

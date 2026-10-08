@@ -344,11 +344,13 @@ int psx_exec_phase(void) { return g_exec_phase; }
  * ring afterward at leisure (ring-first; no arm-then-hope). */
 /* Load values live in CPUState across every executor and host return.
  * The continuation below records only the active instruction and branch. */
-static struct { uint32_t active,pc,slot,target,taken; } s_checkpoint;
+static struct { uint32_t active,pc,slot,target,taken,cache_owned; } s_checkpoint;
+static int s_cache_owned_slice;
 static int s_checkpoint_resume;
 void dirty_ram_checkpoint_enter(uint32_t pc,int slot,uint32_t target,int taken) {
     s_checkpoint.active=1;s_checkpoint.pc=pc;s_checkpoint.slot=(uint32_t)slot;
     s_checkpoint.target=target;s_checkpoint.taken=(uint32_t)taken;
+    s_checkpoint.cache_owned=(uint32_t)s_cache_owned_slice;
 }
 void dirty_ram_checkpoint_leave(void) { memset(&s_checkpoint,0,sizeof s_checkpoint); }
 uint32_t dirty_ram_checkpoint_pc(uint32_t fallback) {
@@ -360,15 +362,16 @@ void dirty_ram_checkpoint_write(uint8_t *out) {
     pst_w_u32(&w,s_checkpoint.slot); pst_w_u32(&w,s_checkpoint.target);
     pst_w_u32(&w,s_checkpoint.taken);
     /* Value pipeline belongs to CPU_STATE, never process-global continuation. */
-    for (unsigned i=0;i<4;i++) pst_w_u32(&w,0u);
+    pst_w_u32(&w,s_checkpoint.cache_owned);
+    for (unsigned i=0;i<3;i++) pst_w_u32(&w,0u);
 }
 static int checkpoint_parse(const uint8_t *in,uint32_t len,uint32_t v[9]) {
     PstR r;
     if(len!=DIRTY_RAM_CHECKPOINT_BYTES)return 0;
     pst_r_init(&r,in,len);
     for(unsigned i=0;i<9;i++)if(!pst_r_u32(&r,&v[i]))return 0;
-    if(v[0]>1u || v[2]>1u || v[4]>1u || (v[5]|v[6]|v[7]|v[8]) ||
-       (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4])))return 0;
+    if(v[0]>1u || v[2]>1u || v[4]>1u || v[5]>1u || (v[6]|v[7]|v[8]) ||
+       (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4]||v[5])))return 0;
     return 1;
 }
 int dirty_ram_checkpoint_validate(const uint8_t *in,uint32_t len) {
@@ -378,7 +381,7 @@ int dirty_ram_checkpoint_read(const uint8_t *in,uint32_t len) {
     uint32_t v[9];
     if (!checkpoint_parse(in,len,v)) return 0;
     s_checkpoint.active=v[0];s_checkpoint.pc=v[1];s_checkpoint.slot=v[2];
-    s_checkpoint.target=v[3];s_checkpoint.taken=v[4];
+    s_checkpoint.target=v[3];s_checkpoint.taken=v[4];s_checkpoint.cache_owned=v[5];
     s_checkpoint_resume=(int)v[0];
     return 1;
 }
@@ -2790,6 +2793,8 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
     int prev_precise = g_precise_mode;
     int prev_active  = g_dirty_interp_active;
     int prev_phase   = g_exec_phase;
+    int prev_cache_owner = s_cache_owned_slice;
+    s_cache_owned_slice = cache_owned_slice;
     g_precise_mode = 1;
     g_dirty_interp_active = 1;
     g_exec_phase = 1;
@@ -2809,7 +2814,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
     g_slice_exit_in_text = 0;
 #endif
     g_slice_exit_want = 0;
-    int irq_taken = 0;   /* default profile limits takes; also requests safe exit */
+    int irq_taken = 0;   /* ordinary event slices request a safe exit after a take */
     if(s_checkpoint_resume) {
         uint32_t slot=s_checkpoint.slot,target=s_checkpoint.target,taken=s_checkpoint.taken;
         s_checkpoint_resume=0;
@@ -2820,17 +2825,18 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
             cpu->pc=pc;
         }
     }
-    enum { MAX_PRECISE_INSNS = 200000 };
-    /* A host instruction budget cannot retire a pending guest load or create a
-     * generated entry. Source-profile and stale-cache slices retain ownership
-     * until the safe exit below, even when a branch-slot load spans every lap.
-     * Each instruction still advances devices and the normal frontend hooks.
-     * Keep the legacy guard for other ordinary event slices. Saturate the
-     * diagnostic iteration count rather than overflowing on a guest spin. */
+    enum { MAX_PRECISE_STEPS = 200000 };
+    /* The normal outer scheduler can resume an interpreter checkpoint without
+     * entering a generated body or retiring a pending load. Bound each cached
+     * slice there. Standalone/fiber owners have no such unwind target and retain
+     * interpreter ownership until a safe native boundary, as before.
+     * One step can include a branch and its delay slot. */
     const int source_owned_slice = source_gpu_runtime_active();
-    for (uint32_t i = 0; source_owned_slice || cache_owned_slice || i < MAX_PRECISE_INSNS;
+    const int bounded_cache_slice = cache_owned_slice && psx_scheduler_can_resume_checkpoint();
+    for (uint32_t i = 0; source_owned_slice ||
+         (cache_owned_slice && !bounded_cache_slice) || i < MAX_PRECISE_STEPS;
          i += i != UINT32_MAX) {
-        if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,pc)) {
+        if ((source_owned_slice || cache_owned_slice || !irq_taken) && precise_irq_before(cpu,pc)) {
             uint32_t committed = pc;
             extern uint32_t i_stat;
             g_slice_last_committed = committed;
@@ -2910,8 +2916,9 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
         /* Source RFE can re-enable an unacknowledged IRQ while this slice
          * still owns a mid-block return target. SR/in_exception determine
          * eligibility at every boundary; a previous take cannot permit one
-         * extra opcode before the next IRQ. Retain the default take limit. */
-        if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,committed)) {
+         * extra opcode before the next IRQ. A cache-owned wait loop may also
+         * need a later IRQ before reaching a native-safe boundary. */
+        if ((source_owned_slice || cache_owned_slice || !irq_taken) && precise_irq_before(cpu,committed)) {
             extern uint32_t i_stat;
             g_slice_last_committed = committed;
             g_slice_last_istat = i_stat;
@@ -2964,8 +2971,12 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
         }
     }
     if (g_slice_exit_reason == 0) {
-        g_slice_exit_reason = 4;
-        g_slice_exit_iter = MAX_PRECISE_INSNS;
+        g_slice_exit_reason = bounded_cache_slice ? 5u : 4u;
+        g_slice_exit_iter = MAX_PRECISE_STEPS;
+        if (bounded_cache_slice) {
+            dirty_ram_checkpoint_enter(pc,0,0u,0);
+            s_checkpoint_resume=1;
+        }
     }
 
     cpu->pc = pc;
@@ -2981,6 +2992,10 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
     g_precise_mode = prev_precise;
     g_dirty_interp_active = prev_active;
     g_exec_phase = prev_phase;
+    s_cache_owned_slice = prev_cache_owner;
+    if (g_slice_exit_reason == 5u) {
+        psx_scheduler_resume_checkpoint(cpu); /* retains the exact CPU/load state */
+    }
 }
 
 /* Event-slicing policy. Cache-content safety is checked independently before
@@ -2988,7 +3003,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
 int g_psx_precise_slice = 0;
 
 void dirty_ram_checkpoint_resume(CPUState *cpu) {
-    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1,0);
+    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1,(int)s_checkpoint.cache_owned);
 }
 
 void psx_precise_slice_init_from_env(void) {

@@ -11,7 +11,7 @@ UNDEFINED = re.compile(r"undefined reference to [`']([^`']+)[`']")
 # A definition in our stub object would silently override a symbol that the C
 # library would otherwise satisfy from an archive/shared object, so anything
 # libc/CRT/compiler-runtime provides must never be stubbed.
-LIBRARY_CANDIDATES = ["libc.a", "libm.a", "libgcc.a", "libmingw32.a",
+LIBRARY_CANDIDATES = ["libc.a", "libc.so.6", "libm.a", "libgcc.a", "libmingw32.a",
                       "libmingwex.a", "libmsvcrt.a", "libucrt.a",
                       "libkernel32.a"]
 ISO_C_FALLBACK = {
@@ -36,11 +36,13 @@ def library_symbols(cc):
                              capture_output=True, text=True, encoding='utf-8', errors='replace').stdout.strip()
         if not out or not os.path.exists(out):
             continue
-        listing = subprocess.run(["nm", out], capture_output=True, text=True, encoding='utf-8', errors='replace').stdout
+        command = ["nm", "--dynamic", "--defined-only", out] if ".so" in name else ["nm", out]
+        listing = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace').stdout
         for line in listing.splitlines():
             parts = line.split()
-            if len(parts) >= 2 and parts[-2] != "U" and SYMBOL.match(parts[-1]):
-                provided.add(parts[-1])
+            symbol = parts[-1].split("@", 1)[0] if parts else ""
+            if len(parts) >= 2 and parts[-2] != "U" and SYMBOL.match(symbol):
+                provided.add(symbol)
     return provided
 
 
@@ -126,3 +128,4 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
     if run.returncode != 0:
         raise SystemExit("%s: runtime fixture failed (rc=%d)\n%s%s"
                          % (opt, run.returncode, run.stdout, run.stderr))
+    return run.stdout

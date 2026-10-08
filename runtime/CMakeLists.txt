@@ -428,6 +428,12 @@ if(BUILD_TESTING)
     add_test(NAME icache_slice_admission_test COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_icache_slice_admission.py"
         --cc "${CMAKE_C_COMPILER}")
+    add_test(NAME scheduler_precise_escape_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_scheduler_precise_escape.py"
+        --cc "${CMAKE_C_COMPILER}")
+    add_test(NAME boot_state_section_wire_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_boot_state_section_wire.py"
+        --cc "${CMAKE_C_COMPILER}")
     # PS1B-316: a replay names the disc in the drive, not the launch disc. The
     # real product identity behind the replay session, two files as the discs.
     add_executable(replay_disc_identity_test tests/test_replay_disc_identity.c
