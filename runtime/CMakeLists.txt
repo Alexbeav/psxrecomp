@@ -910,6 +910,20 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(overlay_capture_queue_bound_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME overlay_capture_queue_bound_test COMMAND overlay_capture_queue_bound_test)
 
+    # The durable capture history (overlay_capture_history = true) keeps one
+    # whole record per snapshot while the emulation thread, the queue's writer
+    # and the periodic capture's writer commit at the same time (PS1B-396).
+    add_executable(overlay_capture_history_test
+        tests/test_overlay_capture_history.cpp
+        src/overlay_capture.c)
+    target_include_directories(overlay_capture_history_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(overlay_capture_history_test PRIVATE
+        SDL_MAIN_HANDLED PSX_OVERLAY_CAPTURE_TEST=1
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(overlay_capture_history_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME overlay_capture_history_test COMMAND overlay_capture_history_test)
+
     add_executable(overlay_path_canon_test
         tests/test_overlay_path_canon.c
         src/overlay_path_canon.c)
