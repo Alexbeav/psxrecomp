@@ -229,6 +229,11 @@ updates. Export creates a new sidecar and refuses a competing file; it never
 truncates that file. A foreign partial sidecar prevents that prefix from being
 written. Clean finish removes the crash-recovery replay but retains its
 partial metadata, so it cannot delete a replacement sidecar by name.
+A first partial save reserves an empty mark file. Later marks are committed
+only after the new replay prefix reads back and replaces the previous copy.
+If that prefix fails, the old replay and its old admissible marks remain.
+Writer close errors report a failed save even if the replay file was written;
+the failure remains visible to headless callers as `REPLAY_RESULT_FAILED`.
 
 For a shorter run, pass `--replay-stop-after-mark gameplay+180`. An exact
 label or a label plus a nonnegative frame offset selects the completed

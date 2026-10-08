@@ -7,15 +7,18 @@
 #include "replay_session.h"
 #include "replay_marks.h"
 #include "input_route_v3_file.h"
+#include "psx_sha256.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
 #include <direct.h>
+#include <io.h>
 #define mkdir_p(d) _mkdir(d)
 #else
 #include <sys/stat.h>
+#include <unistd.h>
 #define mkdir_p(d) mkdir(d, 0755)
 #endif
 
@@ -43,6 +46,19 @@ void replay_test_export_sidecar_pending(const char *path) {
     replay_marks_path(path, export_foreign_path, sizeof export_foreign_path);
     FILE *f = fopen(export_foreign_path, "wb");
     if (f) { fputs("EXPORT-FOREIGN-SENTINEL", f); fclose(f); }
+}
+static int partial_commit_fail, partial_commit_faults;
+void replay_test_partial_commit_pending(const char *temporary) {
+    if (partial_commit_fail && !remove(temporary)) partial_commit_faults++;
+}
+static int close_fail_kind, close_faults;
+void replay_test_marks_closing(FILE *writer, int partial) {
+    if (close_fail_kind != (partial ? 2 : 1)) return;
+#ifdef _WIN32
+    if (!_close(_fileno(writer))) close_faults++;
+#else
+    if (!close(fileno(writer))) close_faults++;
+#endif
 }
 static int can_record = 1;
 int replay_host_can_record(char *why, size_t cap) { if (!can_record) snprintf(why, cap, "netplay"); return can_record; }
@@ -429,6 +445,18 @@ static void copy_file(const char *from, const char *to) {
     if (out) fclose(out);
 }
 
+static int file_digest(const char *path, uint8_t out[32]) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    psx_sha256_ctx hash; psx_sha256_init(&hash);
+    uint8_t bytes[65536]; size_t n;
+    while ((n = fread(bytes, 1, sizeof bytes, f))) psx_sha256_update(&hash, bytes, n);
+    int good = !ferror(f);
+    if (fclose(f)) good = 0;
+    psx_sha256_final(&hash, out);
+    return good;
+}
+
 /* The replay reader's view of a file. */
 static const char *read_replay(const char *p, InputRouteV3 *meta, InputRouteV3Replay *rp) {
     InputDualShockRouteStep *steps = calloc(INPUT_ROUTE_MAX_STEPS, sizeof *steps);
@@ -766,6 +794,100 @@ static void play_marked(int slot) {
     for (unsigned i = 0; i < 200 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xffff, neutral);
 }
 
+static void test_partial_mark_failures(void) {
+    char path[700], partial[700], marks_path[800], full_marks[800], tmp[710], recovered[700], recovered_marks[800];
+    snprintf(path, sizeof path, "%s/partial-failure.psxrpl", dir);
+    replay_session_partial_path(path, partial, sizeof partial);
+    replay_marks_path(partial, marks_path, sizeof marks_path);
+    replay_marks_path(path, full_marks, sizeof full_marks);
+    snprintf(tmp, sizeof tmp, "%s.tmp", partial);
+    remove(path); remove(partial); remove(marks_path); remove(full_marks); remove(tmp);
+    /* A first-prefix write failure must reserve valid empty metadata and
+     * must not delete the pre-existing temporary-path blocker. */
+    FILE *blocker = fopen(tmp, "wb");
+    CHECK(blocker != NULL, "first-prefix blocker fixture");
+    if (blocker) { fputs("TEMP-BLOCKER", blocker); fclose(blocker); }
+    cold_boot(); power_on_now = 1;
+    CHECK(replay_session_record_power_on(path), "first-prefix failure recording");
+    for (unsigned i = 0; i <= REPLAY_PARTIAL_INTERVAL; ++i) {
+        vblank(0xffff, neutral);
+        if (!i) CHECK(replay_session_mark("title"), "first-prefix full annotation");
+    }
+    ReplayMarks marks;
+    CHECK(file_size(partial) == -1 && !replay_marks_read(partial, 0, &marks) && !marks.count,
+          "failed first prefix leaves admissible empty reservation");
+    char sentinel[40] = {0}; blocker = fopen(tmp, "rb");
+    if (blocker) { fread(sentinel, 1, sizeof sentinel - 1, blocker); fclose(blocker); }
+    CHECK(!strcmp(sentinel, "TEMP-BLOCKER"), "failed write preserves the foreign temporary file");
+    replay_session_shutdown();
+    remove(path); remove(partial); remove(marks_path); remove(full_marks); remove(tmp);
+
+    cold_boot(); power_on_now = 1;
+    CHECK(replay_session_record_power_on(path), "later-prefix failure recording");
+    for (unsigned i = 0; i <= REPLAY_PARTIAL_INTERVAL; ++i) {
+        vblank(0xffff, neutral);
+        if (!i) CHECK(replay_session_mark("title"), "first committed annotation");
+    }
+    InputRouteV3 meta;
+    InputRouteV3Replay *rp = malloc(sizeof *rp);
+    CHECK(rp != NULL, "recovery reader allocation");
+    const char *err = rp ? read_replay(partial, &meta, rp) : "allocation";
+    CHECK(!err && meta.frames == REPLAY_PARTIAL_INTERVAL &&
+          !replay_marks_read(partial, meta.frames, &marks) && marks.count == 1 && marks.items[0].frame == 0,
+          "old replay and annotations admit before next prefix");
+    uint8_t old_replay[32], old_marks[32], actual[32];
+    CHECK(file_digest(partial, old_replay) && file_digest(marks_path, old_marks), "hash old recovery pair");
+    partial_commit_fail = 1; partial_commit_faults = 0;
+    for (unsigned i = REPLAY_PARTIAL_INTERVAL + 1; i <= 2u * REPLAY_PARTIAL_INTERVAL; ++i) {
+        vblank(0xffff, neutral);
+        if (i == REPLAY_PARTIAL_INTERVAL + REPLAY_PARTIAL_INTERVAL / 2u)
+            CHECK(replay_session_mark("gameplay"), "later mark past the old prefix END");
+    }
+    partial_commit_fail = 0;
+    CHECK(partial_commit_faults == 1 && file_size(tmp) == -1, "real later rename failure executed after readback");
+    CHECK(file_digest(partial, actual) && !memcmp(actual, old_replay, 32), "failed commit preserves old replay bytes");
+    CHECK(file_digest(marks_path, actual) && !memcmp(actual, old_marks, 32), "failed commit preserves old annotation bytes");
+    err = rp ? read_replay(partial, &meta, rp) : "allocation";
+    CHECK(!err && meta.frames == REPLAY_PARTIAL_INTERVAL &&
+          !replay_marks_read(partial, meta.frames, &marks) && marks.count == 1 && !strcmp(marks.items[0].label, "title"),
+          "old recovery pair remains admissible without the later mark");
+    snprintf(recovered, sizeof recovered, "%s/recovered-prefix.psxrpl", dir);
+    replay_marks_path(recovered, recovered_marks, sizeof recovered_marks);
+    copy_file(partial, recovered); copy_file(marks_path, recovered_marks);
+    close_fail_kind = 2; close_faults = 0;
+    replay_session_shutdown();
+    close_fail_kind = 0;
+    CHECK(close_faults == 1 && replay_session_last_result() == REPLAY_RESULT_FAILED &&
+          strstr(osd_last, "cannot close replay marks") && !strstr(osd_last, "Replay saved"),
+          "partial writer fclose error survives shutdown: %s", osd_last);
+    replay_session_shutdown();
+    CHECK(replay_session_last_result() == REPLAY_RESULT_FAILED, "idle shutdown preserves close failure result");
+    CHECK(play_from_boot(recovered, REPLAY_PARTIAL_INTERVAL + 10u, 0) == REPLAY_RESULT_IN_SYNC,
+          "preserved annotated recovery prefix plays to its real END");
+    power_on_now = 0;
+    free(rp); remove(path); remove(partial); remove(marks_path); remove(full_marks);
+    remove(recovered); remove(recovered_marks);
+}
+
+static void test_mark_close_failures(void) {
+    for (int shutdown = 0; shutdown < 2; ++shutdown) {
+        clear_slots();
+        CHECK(replay_session_toggle_record(), "close-failure anchored recording");
+        vblank(0xffff, neutral);
+        for (unsigned i = 0; i < 20; ++i) {
+            vblank(0xffff, neutral);
+            if (!i) CHECK(replay_session_mark("title"), "own full annotation writer");
+        }
+        close_fail_kind = 1; close_faults = 0;
+        if (shutdown) replay_session_shutdown();
+        else { replay_session_toggle_record(); vblank(0xffff, neutral); }
+        close_fail_kind = 0;
+        CHECK(close_faults == 1 && replay_session_state() == REPLAY_IDLE &&
+              replay_session_last_result() == REPLAY_RESULT_FAILED && strstr(osd_last, "cannot close replay marks") &&
+              !strstr(osd_last, "Replay saved"), "full fclose error on %s: %s", shutdown ? "shutdown" : "stop", osd_last);
+    }
+}
+
 static void test_marks(void) {
     clear_slots();
     memset(ram, 0, sizeof ram); cycle = 1000; vram_word = 0;
@@ -957,6 +1079,8 @@ int main(int argc, char **argv) {
     test_power_on_record_and_play();
     test_identity_rules();
     test_boot_names();
+    test_partial_mark_failures();
+    test_mark_close_failures();
     test_marks();
     clear_slots();
     if (failures) { fprintf(stderr, "%d of %d checks failed\n", failures, checks); return 1; }

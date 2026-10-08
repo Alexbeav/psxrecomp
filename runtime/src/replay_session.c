@@ -12,6 +12,7 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <io.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -523,11 +524,31 @@ unsigned replay_session_digests_checked(void) { return s_digests_checked; }
 
 /* ---- Recording ---- */
 
+static const char *close_recording_marks(void)
+{
+    const char *error = NULL;
+    FILE **writers[] = { &s_marks_writer, &s_partial_marks_writer };
+    for (unsigned i = 0; i < 2; ++i) {
+        FILE *writer = *writers[i];
+        *writers[i] = NULL;
+        if (!writer) continue;
+#ifdef PSX_REPLAY_MARKS_TEST_HOOK
+        extern void replay_test_marks_closing(FILE *, int);
+        replay_test_marks_closing(writer, i != 0);
+#endif
+        if (fclose(writer)) {
+            fprintf(stderr, "replay_marks_close_error: path=%s writer=%s errno=%d\n",
+                    s_rec_path, i ? "partial" : "full", errno);
+            error = "cannot close replay marks";
+            s_result = REPLAY_RESULT_FAILED;
+        }
+    }
+    return error;
+}
+
 static void free_recording(void)
 {
-    if (s_marks_writer) fclose(s_marks_writer);
-    if (s_partial_marks_writer) fclose(s_partial_marks_writer);
-    s_marks_writer = s_partial_marks_writer = NULL;
+    if (close_recording_marks()) replay_host_osd("Replay marks could not be closed", 2200);
     free(s_thumb); s_thumb = NULL; s_have_thumb = 0;
     free(s_digests); s_digests = NULL; s_digest_count = 0;
     free(s_words); s_words = NULL;
@@ -743,20 +764,30 @@ static void write_partial(void)
     char partial[PATH_BYTES], tmp[PATH_BYTES + 8];
     const char *error;
     if (!replay_session_partial_path(s_rec_path, partial, sizeof partial)) return;
-    /* An orphan/competing sidecar is foreign. Admit first creation before
-     * changing this prefix; later updates retain our own open handle. */
-    error = s_marks.count ? replay_marks_save(partial, &s_marks, &s_partial_marks_writer) : NULL;
+    /* Reserve first ownership with empty metadata, valid even if this prefix
+     * fails. Never change the old annotations before its replacement commits. */
+    ReplayMarks empty = {0};
+    error = s_marks.count && !s_partial_marks_writer
+          ? replay_marks_save(partial, &empty, &s_partial_marks_writer) : NULL;
     if (error) {
         fprintf(stderr, "replay: partial copy not written: %s (%s)\n", error, partial);
         return;
     }
     snprintf(tmp, sizeof tmp, "%s.tmp", partial);
-    remove(tmp);
     error = write_recording(tmp);
     if (!error) {
-        remove(partial);
-        if (rename(tmp, partial)) { remove(tmp); error = "rename failed"; }
+#ifdef PSX_REPLAY_MARKS_TEST_HOOK
+        extern void replay_test_partial_commit_pending(const char *);
+        replay_test_partial_commit_pending(tmp);
+#endif
+#ifdef _WIN32
+        if (!MoveFileExA(tmp, partial, MOVEFILE_REPLACE_EXISTING)) error = "rename failed";
+#else
+        if (rename(tmp, partial)) error = "rename failed";
+#endif
+        if (error) remove(tmp); /* this call created the temporary replay */
     }
+    if (!error && s_marks.count) error = replay_marks_save(partial, &s_marks, &s_partial_marks_writer);
     if (error) fprintf(stderr, "replay: partial copy not written: %s (%s)\n", error, partial);
     else fprintf(stdout, "replay_partial: path=%s frames=%u\n", partial, (unsigned)s_last_frame);
     fflush(stdout);
@@ -773,8 +804,11 @@ static void finish_recording(void)
         free_recording();
         return;
     }
+    const char *close_error = close_recording_marks();
     error = write_recording(s_rec_path);
+    if (!error) error = close_error;
     if (error) {
+        s_result = REPLAY_RESULT_FAILED;
         snprintf(msg, sizeof msg, "Replay not saved: %s", error);
         fprintf(stderr, "replay: %s (%s)\n", msg, s_rec_path);
     } else {

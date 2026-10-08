@@ -36,7 +36,7 @@ typedef enum {
     REPLAY_PLAYING
 } ReplayState;
 
-/* Result of the last playback, for headless tests and the OSD. */
+/* Result of the last playback, or FAILED after a recording write/close error. */
 typedef enum {
     REPLAY_RESULT_NONE = 0,
     REPLAY_RESULT_IN_SYNC,
