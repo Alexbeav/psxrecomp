@@ -127,7 +127,7 @@ assert len(messages) >= 50, f"only {len(messages)} replay messages found; the ex
 
 with tempfile.TemporaryDirectory() as tmp:
     listing = Path(tmp) / "messages.txt"
-    listing.write_text("\n".join(messages) + "\n", encoding="utf-8", newline="\n")
+    listing.write_bytes(("\n".join(messages) + "\n").encode("utf-8"))
     run = subprocess.run([sys.argv[1], "--fit", str(listing)], capture_output=True, text=True,
                          encoding="utf-8", errors="replace")
 rows = [line.split("\t") for line in run.stdout.splitlines() if line.strip()]
