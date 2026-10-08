@@ -102,3 +102,28 @@ The diagnostic product can record what you play as a frame-exact input route
   `runtime/tests/test_cli_diagnostic_only.py` (a diagnostic request leaves the
   normal build directory unchanged, with or without PGO enabled) and
   `runtime/tests/test_codegen_host_bios_stems.py` (host contract strings).
+
+### Freeze dumps
+
+The diagnostic product's heartbeat writes a full dump
+(`psx_freeze_dump_*.json`, tens of megabytes) when it sees a wedge. The dumps
+of one process are bounded.
+
+- There are two slots: one for a hard freeze (the frame count stands still),
+  one for every other wedge (a re-entry storm, slow frames, a spin).
+- A slot that was used is free again after 60 healthy seconds in a row, once.
+  So the slow frames of a startup do not silence a wedge later in the run. One
+  process writes at most four automatic dumps.
+- `psx_freeze_heartbeat.json` reports the count: `automatic_freeze_dumps`,
+  `suppressed_freeze_events`, `refilled_freeze_dump_slots` and
+  `automatic_freeze_dump_limit`.
+- `PSX_DUMP_AT_FRAME=<n>` asks for one more dump, at the first heartbeat sample
+  whose frame count is `n` or more. It needs no slot and uses none. Its
+  `wedge_kind` is 6 (`requested`), and its `frame_count` is the frame it was
+  taken at. The heartbeat reports `requested_dump_frame` and `requested_dumps`.
+- The replay harness starts the runtime without the shell's `PSX_*` variables.
+  Ask a replay for the dump with `--dump-at-frame <n>` (every title command,
+  and `tools/tasreplays/run_native.py`); the run's `manifest.json` records it.
+- Regression coverage: `runtime/tests/test_freeze_dump_policy.c`,
+  `runtime/tests/test_freeze_heartbeat_wedge.c` and
+  `tools/tasreplays/test_dump_at_frame.py`.

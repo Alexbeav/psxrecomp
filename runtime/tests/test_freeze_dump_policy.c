@@ -46,7 +46,8 @@ int main(void) {
     /* A hard freeze owns the reserved second slot during the same event. */
     EXPECT_EQ(observe(&policy, 1), 1);
     freeze_dump_policy_record_result(&policy, 1);
-    EXPECT_EQ(policy.automatic_dumps, FREEZE_DUMP_AUTO_LIMIT);
+    EXPECT_EQ(policy.automatic_dumps,
+              FREEZE_DUMP_ORDINARY_SLOTS + FREEZE_DUMP_HARD_SLOTS);
     EXPECT_EQ(policy.hard_slot_consumed, 1);
     EXPECT_EQ(observe(&policy, 1), 0);
 
@@ -103,7 +104,8 @@ int main(void) {
     observe_healthy(&hard_first, FREEZE_DUMP_REARM_HEALTHY_TICKS);
     EXPECT_EQ(observe(&hard_first, 5), 1);
     freeze_dump_policy_record_result(&hard_first, 1);
-    EXPECT_EQ(hard_first.automatic_dumps, FREEZE_DUMP_AUTO_LIMIT);
+    EXPECT_EQ(hard_first.automatic_dumps,
+              FREEZE_DUMP_ORDINARY_SLOTS + FREEZE_DUMP_HARD_SLOTS);
 
     /* PS1B-268. A slot spent at startup is filled again after a long healthy
      * interval: 600 samples in a row, 60 s at the heartbeat's 100 ms. */
@@ -129,6 +131,7 @@ int main(void) {
     EXPECT_EQ(observe(&late, 3), 0);
     EXPECT_EQ(observe(&late, 1), 0);
     EXPECT_EQ(late.automatic_dumps, 4);
+    EXPECT_EQ(late.automatic_dumps, FREEZE_DUMP_AUTO_LIMIT);
 
     /* The healthy samples must be in a row. Two halves do not add up. */
     FreezeDumpPolicy broken = {0};
