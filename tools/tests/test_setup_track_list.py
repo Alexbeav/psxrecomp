@@ -225,7 +225,8 @@ class SetupTrackList(unittest.TestCase):
         (folder / "Game.cue").write_text(CUE[:CUE.index('FILE "Game (Track 3).bin"')], encoding="ascii")
         cases.append((folder / "Game.cue", "it has 2 tracks, the kit's disc has 3"))
         # The data track was selected by itself: the other tracks are not staged.
-        cases.append((self.disc / "Game (Track 1).bin", "it has 1 track, the kit's disc has 3"))
+        cases.append((self.disc / "Game (Track 1).bin",
+                      "it has 1 track, the kit's disc has 3; select the disc's .cue to include every track"))
         # A later track cut inside a sector.
         cases.append((self.cut_last_track("cut-inside-a-sector", by=1000),
                       '"Game (Track 3).bin" is %d bytes, which is not a whole number of sectors'
@@ -276,7 +277,7 @@ class SetupTrackList(unittest.TestCase):
         self.assertEqual(self.the_row(rows)["status"], "match")
         code, rows = self.verify(config, self.disc / "Game (Track 1).bin")
         self.assertEqual(code, cli.EXIT_VERIFY, rows)
-        self.assertIn("(it has 1 track, the kit's disc has 3)", self.refusal(rows))
+        self.assertIn("(it has 1 track, the kit's disc has 3; select the disc's .cue", self.refusal(rows))
 
     def test_a_set_of_discs_lists_a_fingerprint_for_each(self):
         other = "0" * 64
@@ -314,6 +315,116 @@ class SetupTrackList(unittest.TestCase):
         self.assertEqual(len(said), 1)
         self.assertTrue(said[0].startswith('Track list: the track list of "Game.cue" is not the kit\'s ('), said[0])
         self.assertNotIn("data track", said[0].split("(")[0])
+
+    def test_a_fault_in_the_check_itself_does_not_stop_setup(self):
+        import disc_track_list
+
+        with patch.object(disc_track_list, "check", side_effect=KeyError("a slip in the check")):
+            code, rows = self.verify(self.kit("refuse"), self.cut_last_track())
+        self.assertEqual(code, cli.EXIT_OK, rows)
+        row = self.the_row(rows)
+        self.assertEqual(row["status"], "not_checked")
+        self.assertTrue(row["reason"].startswith("the check stopped: KeyError"), row)
+        said = [r["message"] for r in rows if r["event"] == "log" and "not checked" in r["message"]]
+        self.assertEqual(said, ["Track list was not checked: the check itself stopped. "
+                                "The disc is accepted on its data track."])
+        for sign in ERROR_SIGNS:
+            self.assertNotIn(sign, said[0])
+
+    def test_one_track_in_the_forms_setup_stages(self):
+        # A disc of one track is the same disc as a .cue with its file, as the
+        # file alone, as a cooked image (2048 bytes a sector) and as a dump
+        # with subchannel data (2448 bytes a sector).
+        folder = self.root / "one-track"
+        folder.mkdir()
+        sectors = 40
+        (folder / "One.bin").write_bytes(made_up(sectors, 5)[:sectors * SECTOR])
+        (folder / "One.cue").write_text('FILE "One.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n',
+                                        encoding="ascii")
+        (folder / "One.iso").write_bytes(bytes(sectors * 2048))
+        (folder / "One.img").write_bytes(bytes(sectors * 2448))
+        tracks, files = probe_disc.parse_cue(folder / "One.cue")
+        fingerprint = probe_disc.compute_disc_fp(folder / "One.cue", tracks, files)
+        config = self.kit("refuse", netplay=False, digests=False, extra_netplay=(
+            'required_tracks = 1\nrequired_disc_fp = "%s"' % fingerprint))
+        for name in ("One.cue", "One.bin", "One.iso", "One.img"):
+            code, rows = self.verify(config, folder / name)
+            self.assertEqual(code, cli.EXIT_OK, (name, rows))
+            self.assertEqual(self.the_row(rows)["status"], "match", name)
+        # One sector short is another disc.
+        (folder / "Short.bin").write_bytes(bytes((sectors - 1) * SECTOR))
+        code, rows = self.verify(config, folder / "Short.bin")
+        self.assertEqual(code, cli.EXIT_VERIFY, rows)
+        self.assertIn("(its track does not end where the kit's does)", self.refusal(rows))
+
+    # -- a .chd ---------------------------------------------------------------------------------
+
+    def test_a_chd_table_gives_the_track_list_of_the_cue_it_is_staged_as(self):
+        # No track data is read for a .chd: its list comes from its track
+        # table. It must be the list of the cue and files the same table is
+        # staged as (psx_chd.render_cue, layout "multi"), for a pregap that is
+        # stored in the track, one that is not, and none.
+        import disc_track_list
+        import psx_chd
+
+        tables = [
+            [psx_chd.ChdTrack(1, "MODE2_RAW", "NONE", 40)],
+            [psx_chd.ChdTrack(1, "MODE2_RAW", "NONE", 40),
+             psx_chd.ChdTrack(2, "AUDIO", "NONE", 210, pregap=150, pgtype="VAUDIO"),
+             psx_chd.ChdTrack(3, "AUDIO", "NONE", 240, pregap=150, pgtype="VAUDIO")],
+            [psx_chd.ChdTrack(1, "MODE2_RAW", "NONE", 40),
+             psx_chd.ChdTrack(2, "AUDIO", "NONE", 60, pregap=150, pgtype="AUDIO"),
+             psx_chd.ChdTrack(3, "AUDIO", "NONE", 90)],
+        ]
+        seen = []
+        for index, entries in enumerate(tables):
+            table = psx_chd.build_track_table(entries, v2=[True] * len(entries))
+            folder = self.root / ("staged-%d" % index)
+            folder.mkdir()
+            for name, entry in zip(psx_chd.multi_layout_bins(table, "Game.cue"), table):
+                with open(folder / name, "wb") as handle:
+                    handle.truncate(entry.frames * SECTOR)
+            cue = folder / "Game.cue"
+            cue.write_text(psx_chd.render_cue(table, layout="multi", stem="Game"), encoding="ascii")
+            tracks, files = probe_disc.parse_cue(cue)
+            got = disc_track_list.of_chd_tracks(table)
+            self.assertEqual(got.disc_fp, probe_disc.compute_disc_fp(cue, tracks, files), index)
+            self.assertEqual(got, disc_track_list.of_cue(cue), index)
+            self.assertEqual((got.tracks, got.leadout), (len(table), sum(e.frames for e in table)), index)
+            seen.append(got.disc_fp)
+        self.assertEqual(seen[1], self.kit_fp)            # the second table is the complete disc of these tests
+        self.assertEqual(len(set(seen)), 3)
+
+    def test_a_chd_is_checked_like_a_cue(self):
+        import psx_chd
+
+        reader = psx_chd.find_libchdr(None, ROOT)
+        if reader is None:
+            self.skipTest("libchdr is not built (CMake target chdr): the .chd check was not run end to end")
+        import test_psx_chd as fixture
+
+        data, second, third = ((self.disc / ("Game (Track %d).bin" % n)).read_bytes() for n in (1, 2, 3))
+        whole = self.root / "Game.chd"
+        fixture.write_uncompressed_chd(whole, [("MODE2_RAW", data, 0, "MODE2_RAW"),
+                                               ("AUDIO", second, 150, "VAUDIO"),
+                                               ("AUDIO", third, 150, "VAUDIO")])
+        cut = self.root / "Game (cut short).chd"
+        fixture.write_uncompressed_chd(cut, [("MODE2_RAW", data, 0, "MODE2_RAW"),
+                                             ("AUDIO", second, 150, "VAUDIO"),
+                                             ("AUDIO", third[:-10 * SECTOR], 150, "VAUDIO")])
+        with patch.object(cli, "ensure_chd_reader", lambda *a, **k: reader):
+            code, rows = self.verify(self.kit("refuse"), whole)
+            self.assertEqual(code, cli.EXIT_OK, rows)
+            row = self.the_row(rows)
+            self.assertEqual((row["status"], row["disc_fp"]), ("match", self.kit_fp))
+            code, rows = self.verify(self.kit(), cut)
+            self.assertEqual(code, cli.EXIT_OK, rows)
+            self.assertEqual(self.the_row(rows)["status"], "mismatch")
+            self.assertEqual(len(self.warnings(rows)), 1)
+            self.assertIn('the data track of "Game (cut short).chd" is right', self.warnings(rows)[0])
+            code, rows = self.verify(self.kit("refuse"), cut)
+            self.assertEqual(code, cli.EXIT_VERIFY, rows)
+            self.assertIn("Setup needs the complete disc.", self.refusal(rows))
 
 
 if __name__ == "__main__":
