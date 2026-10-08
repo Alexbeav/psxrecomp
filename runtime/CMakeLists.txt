@@ -1236,7 +1236,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             Threads::Threads ${CMAKE_DL_LIBS})
     endif()
     foreach(_scenario IN ITEMS
-            budget-after-startup dump-at-frame dump-at-frame-bad-value)
+            budget-after-startup dump-at-frame dump-at-frame-bad-value
+            spin-ends-only spin-wait-ends spin-real spin-video
+            spin-pause-restarts)
         file(MAKE_DIRECTORY
             ${CMAKE_CURRENT_BINARY_DIR}/freeze_heartbeat_wedge_scratch/${_scenario})
         add_test(NAME freeze_heartbeat_wedge_${_scenario}

@@ -41,7 +41,10 @@ uint64_t g_psx_bail_anomaly;
 const char *g_psx_fatal_reason;
 CPUState *debug_cpu_ptr;
 
-static int t_mdec_active = 0;
+/* A video: while it plays, every sample has a colour decode in it. */
+static int      t_video_playing = 0;
+static int      t_video_seen = 0;
+static uint64_t t_video_last_frame = 0;
 
 uint64_t psx_get_cycle_count(void) { return s_frame_count * 564480ull; }
 
@@ -105,9 +108,10 @@ EMPTY_RING(debug_server_freeze_dump_restore_trace_json)
 EMPTY_RING(debug_server_freeze_dump_fn_entry_json)
 EMPTY_RING(debug_server_freeze_dump_dirty_block_json)
 
+/* As the runtime's own: was there a colour decode in the last N frames? */
 int mdec_recently_active(uint32_t within_frames) {
-    (void)within_frames;
-    return t_mdec_active;
+    if (!t_video_seen) return 0;
+    return s_frame_count - t_video_last_frame <= within_frames;
 }
 
 /* ---- the test's own bookkeeping ---- */
@@ -177,6 +181,10 @@ static void sample(unsigned frames, uint32_t current_func, uint32_t store_pc,
     uint32_t before = s_dump_sequence;
     long long first_wall = (long long)time(NULL);
     s_frame_count += frames;
+    if (t_video_playing) {
+        t_video_seen = 1;
+        t_video_last_frame = s_frame_count;
+    }
     g_debug_current_func_addr = current_func;
     g_debug_last_store_pc = store_pc;
     g_dirty_ram_insns_run = dirty_insns;
@@ -205,6 +213,12 @@ static void slow(unsigned count) {
 static void stopped(unsigned count) {
     for (unsigned i = 0; i < count; i++)
         sample(0, 0x80012340u, 0x80055AA0u, 1000);
+}
+
+/* Frames arrive and the three values stand still: a wait, or a spin. */
+static void pinned(unsigned count, unsigned frames) {
+    for (unsigned i = 0; i < count; i++)
+        sample(frames, 0x00000F40u, 0x80065E94u, 1000);
 }
 
 /* A field of psx_freeze_heartbeat.json as the last sample wrote it, or -1. */
@@ -305,6 +319,89 @@ static void dump_at_frame_bad_value(void) {
           t_dump_count);
 }
 
+/* PS1B-414. The shape that six healthy runs recorded: the last store is at
+ * another address in every sample, and the sample 19 back happens to hold the
+ * same values as the newest. Nothing stands still. Six addresses, 19 steps. */
+static void spin_ends_only(void) {
+#define PC(n) (0x80020000u + 0x104u * (n))
+    static const uint32_t pc[19] = {
+        PC(0), PC(1), PC(2), PC(0), PC(3), PC(1), PC(4), PC(0), PC(5), PC(2),
+        PC(0), PC(1), PC(3), PC(0), PC(4), PC(5), PC(1), PC(0), PC(2) };
+#undef PC
+    for (unsigned i = 0; i < 300; i++)
+        sample(6, 0x00000F40u, pc[i % 19u], 1000);
+    CHECK(t_dump_count == 0,
+          "30 s of a game at work wrote %d dump(s), the first of kind %lld "
+          "at sample %u", t_dump_count, t_dumps[0].kind, t_dumps[0].sample);
+    CHECK(heartbeat_field("automatic_freeze_dumps") == 0,
+          "automatic_freeze_dumps is %lld; expected 0",
+          heartbeat_field("automatic_freeze_dumps"));
+}
+
+/* PS1B-414. A wait that ends is not a freeze: the three values stand still
+ * for 3.0 s, and later for 3.9 s, and each time the game goes on. */
+static void spin_wait_ends(void) {
+    moving(25, 6);
+    pinned(30, 6);
+    moving(25, 6);
+    pinned(39, 6);
+    moving(25, 6);
+    CHECK(t_dump_count == 0,
+          "two waits that ended wrote %d dump(s), the first of kind %lld at "
+          "sample %u", t_dump_count, t_dumps[0].kind, t_dumps[0].sample);
+    CHECK(heartbeat_field("spin_waits_ended") == 2,
+          "spin_waits_ended is %lld; expected 2",
+          heartbeat_field("spin_waits_ended"));
+}
+
+/* The other side: a spin that does not end still gets its dump. The values
+ * stand still for 4.0 s while about 50 frames a second arrive. */
+static void spin_real(void) {
+    moving(25, 5);
+    pinned(40, 5);
+    CHECK(t_dump_count == 1 && t_dumps[0].kind == 5,
+          "4.0 s of a spin: %d dump(s), kind %lld; expected 1 of kind 5",
+          t_dump_count, t_dumps[0].kind);
+    pinned(200, 5);
+    CHECK(t_dump_count == 1, "one spin wrote %d dumps", t_dump_count);
+}
+
+/* A video holds the same shape for as long as it plays, and stays excluded.
+ * After it, a spin needs its whole time without a decode in it. */
+static void spin_video(void) {
+    moving(25, 6);
+    t_video_playing = 1;
+    pinned(100, 6);
+    t_video_playing = 0;
+    CHECK(t_dump_count == 0, "a video wrote %d dump(s)", t_dump_count);
+    pinned(39, 6);
+    CHECK(t_dump_count == 0,
+          "3.9 s after a video: %d dump(s), the first at sample %u; the spin "
+          "time still holds decodes", t_dump_count, t_dumps[0].sample);
+    pinned(2, 6);
+    CHECK(t_dump_count == 1 && t_dumps[0].kind == 5,
+          "a spin that goes on after a video: %d dump(s), kind %lld; "
+          "expected 1 of kind 5", t_dump_count, t_dumps[0].kind);
+}
+
+/* A host pause (a menu, a rewind) starts the count again: the samples before
+ * it do not add to the samples after it. */
+static void spin_pause_restarts(void) {
+    moving(25, 6);
+    pinned(30, 6);
+    freeze_heartbeat_set_paused(1);
+    pinned(10, 6);
+    freeze_heartbeat_set_paused(0);
+    pinned(39, 6);
+    CHECK(t_dump_count == 0,
+          "3.9 s after a pause: %d dump(s), the first of kind %lld at sample "
+          "%u", t_dump_count, t_dumps[0].kind, t_dumps[0].sample);
+    pinned(1, 6);
+    CHECK(t_dump_count == 1 && t_dumps[0].kind == 5,
+          "4.0 s of a spin after a pause: %d dump(s), kind %lld; expected 1 "
+          "of kind 5", t_dump_count, t_dumps[0].kind);
+}
+
 int main(int argc, char **argv) {
     static const struct {
         const char *name;
@@ -313,6 +410,11 @@ int main(int argc, char **argv) {
         {"budget-after-startup", budget_after_startup},
         {"dump-at-frame", dump_at_frame},
         {"dump-at-frame-bad-value", dump_at_frame_bad_value},
+        {"spin-ends-only", spin_ends_only},
+        {"spin-wait-ends", spin_wait_ends},
+        {"spin-real", spin_real},
+        {"spin-video", spin_video},
+        {"spin-pause-restarts", spin_pause_restarts},
     };
     const char *wanted = argc > 1 ? argv[1] : "";
     for (size_t i = 0; i < sizeof(scenarios) / sizeof(scenarios[0]); i++) {
