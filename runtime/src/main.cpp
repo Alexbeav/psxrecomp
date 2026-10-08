@@ -8898,7 +8898,7 @@ static void replay_frame_boundary(int *override) {
             fast_saved = -1;
         }
     }
-    if (exit_at_end && previous != REPLAY_IDLE && now == REPLAY_IDLE) {
+    if (exit_at_end && (previous != REPLAY_IDLE || state != REPLAY_IDLE) && now == REPLAY_IDLE) {
         int status = 0;
         if (previous == REPLAY_RECORDING || previous == REPLAY_ARMING) {
             const char *want = record_file ? record_file : boot_file.empty() ? nullptr : boot_file.c_str();

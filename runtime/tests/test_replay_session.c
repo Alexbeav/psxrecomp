@@ -862,6 +862,31 @@ static void test_marks(void) {
     CHECK(read_verdict() && strstr(verdict, "\"label\": \"gameplay\", \"estimated\": false, \"reached\": false, \"in_sync\": null"),
           "unreached annotations survive early exit");
     CHECK(replay_session_delete_slot(0) && file_size(marks_path) == -1, "slot deletion removes its annotations");
+
+    /* A power-on mark at zero can finish on the very first host boundary,
+     * without a previous PLAYING frame or any input record being supplied. */
+    snprintf(path, sizeof path, "%s/mark-boot.psxrpl", dir);
+    replay_marks_path(path, marks_path, sizeof marks_path);
+    remove(path); remove(marks_path);
+    cold_boot(); power_on_now = 1;
+    CHECK(replay_session_record_power_on(path), "record power-on zero mark");
+    for (unsigned i = 0; i < 20; ++i) {
+        vblank(0xffff, neutral);
+        if (!i) CHECK(replay_session_mark("title"), "power-on boundary zero annotation");
+    }
+    replay_session_toggle_record(); vblank(0xffff, neutral);
+    CHECK(replay_session_set_mark_actions("title", NULL, NULL), "power-on zero stop");
+    cold_boot();
+    CHECK(replay_session_play_file(path), "play power-on zero stop");
+    uint16_t b = 0x1234; uint8_t st[4] = {1,2,3,4};
+    CHECK(!replay_session_boundary(0xffff, neutral, &b, st) &&
+          replay_session_state() == REPLAY_IDLE && replay_session_last_result() == REPLAY_RESULT_STOPPED_AT_MARK,
+          "power-on stops on its first boundary");
+    CHECK(cycle == 0 && b == 0x1234 && st[0] == 1, "no guest frame/input supplied at zero stop");
+    CHECK(read_verdict() && strstr(verdict, "\"frames_played\": 0,") &&
+          strstr(verdict, "\"end_reached\": false"), "power-on zero prefix has no END proof");
+    replay_session_set_mark_actions(NULL, NULL, NULL);
+    power_on_now = 0; remove(path); remove(marks_path);
 }
 
 int main(int argc, char **argv) {
