@@ -4457,6 +4457,20 @@ int cdrom_savestate_boost_vblanks_remaining(void) {
 #define CDDA_SNAP_WIRE_BYTES (9u * 4u + 2u * 2352u + 8u)
 #define CD_SOURCE_RING_WIRE_BYTES (8u * (SECTOR_BUFFER_SIZE + 8u) + 12u + 56u)
 
+/* The far flag and, on the default path, the pending Setloc share the wire
+ * slot that held the far flag alone: bit 0 far, bit 1 pending. A state
+ * written before stored 0 or 1 there and loads as "no Setloc pending". A
+ * source profile keeps its pending Setloc in its own field further down, so
+ * its bytes do not change. Without the bit, a state taken between a Setloc
+ * and its read restored a drive that had forgotten the Setloc: the read
+ * continued a running stream at the old position, or started with no seek
+ * (PS1G-103). */
+static int32_t setloc_snapshot_state(void)
+{
+    return (setloc_seek_far ? 1 : 0) |
+           ((setloc_pending && !s_source_clock) ? 2 : 0);
+}
+
 static int cdrom_snap_emit(PstW *w) {
 #define W8(f)  do { if (!pst_w_u8(w, (uint8_t)(f))) return 0; } while (0)
 #define WI(f)  do { if (!pst_w_i32(w, (int32_t)(f))) return 0; } while (0)
@@ -4492,7 +4506,7 @@ static int cdrom_snap_emit(PstW *w) {
     WU(0u); W8(last_sector_mode); W8(last_sector_have_raw);
     W8(last_sector_raw_mode); W8(last_sector_xa_file); W8(last_sector_xa_channel);
     W8(last_sector_xa_submode); W8(last_sector_xa_coding);
-    W8(seek_min); W8(seek_sec); W8(seek_sect); WI(s_setloc_lba); WI(setloc_seek_far);
+    W8(seek_min); W8(seek_sec); W8(seek_sect); WI(s_setloc_lba); WI(setloc_snapshot_state());
     WI(reading); WI(read_min); WI(read_sec); WI(read_sect); W8(mode_reg);
     W8(read_cmd); WI(read_delay); W8(filter_file); W8(filter_channel); W8(cd_muted);
     WI(cdda_playing); WI(cdda_track); WU(cdda_lba); WI(cdda_delay);
@@ -4596,7 +4610,8 @@ static int cdrom_snap_parse(PstR *r) {
     RU(last_sector_frame); R8(last_sector_mode); R8(last_sector_have_raw);
     R8(last_sector_raw_mode); R8(last_sector_xa_file); R8(last_sector_xa_channel);
     R8(last_sector_xa_submode); R8(last_sector_xa_coding);
-    R8(seek_min); R8(seek_sec); R8(seek_sect); RI(s_setloc_lba); RI(setloc_seek_far); setloc_pending = 0;
+    R8(seek_min); R8(seek_sec); R8(seek_sect); RI(s_setloc_lba);
+    { int state; RI(state); setloc_seek_far = (state & 1) != 0; setloc_pending = (state & 2) != 0; }
     RI(reading); RI(read_min); RI(read_sec); RI(read_sect); R8(mode_reg);
     R8(read_cmd); RI(read_delay); R8(filter_file); R8(filter_channel); R8(cd_muted);
     RI(cdda_playing); RI(cdda_track); RU(cdda_lba); RI(cdda_delay);
