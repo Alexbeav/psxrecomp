@@ -5,6 +5,7 @@
  * cycle count, so a replay that feeds the recorded input from the anchor must
  * end on the recorded RAM hash and cycle. */
 #include "replay_session.h"
+#include "replay_marks.h"
 #include "input_route_v3_file.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -29,6 +30,11 @@ static int drift_av;               /* perturb only that during playback */
 static char osd_last[256];
 static int osd_count;
 void replay_host_osd(const char *text, int ms) { (void)ms; snprintf(osd_last, sizeof osd_last, "%s", text); osd_count++; }
+static int capture_calls, capture_fail;
+static uint64_t capture_cycle;
+int replay_host_capture(const char *path) {
+    (void)path; capture_calls++; capture_cycle = cycle; return !capture_fail;
+}
 static int can_record = 1;
 int replay_host_can_record(char *why, size_t cap) { if (!can_record) snprintf(why, cap, "netplay"); return can_record; }
 static char product_pin[41] = "0123456789abcdef0123456789abcdef01234567";
@@ -86,7 +92,9 @@ int replay_host_thumb(uint32_t *out) {
 const char *replay_host_game_title(void) { return "Test Game"; }
 int replay_host_frame_rate(void) { return 60; }
 static int digest_calls;
+static int digest_unavailable;
 int replay_host_state_digest(uint32_t out[4]) {
+    if (digest_unavailable) return 0;
     uint32_t h = 2166136261u;
     for (unsigned i = 0; i < RAM_BYTES; ++i) h = (h ^ ram[i]) * 16777619u;   /* all of RAM, like the core digest */
     for (unsigned i = 0; i < 8; ++i) h = (h ^ (uint8_t)(cycle >> (8 * i))) * 16777619u;
@@ -178,7 +186,10 @@ static int read_verdict(void) {
 
 static void slot_path(int s, char *out, size_t cap) { CHECK(replay_session_slot_path(s, out, cap), "slot path %d", s); }
 static long file_size(const char *p) { FILE *f = fopen(p, "rb"); long n = -1; if (f) { fseek(f, 0, SEEK_END); n = ftell(f); fclose(f); } return n; }
-static void clear_slots(void) { char p[700]; for (int s = 0; s < REPLAY_SLOTS; ++s) { slot_path(s, p, sizeof p); remove(p); } }
+static void clear_slots(void) { char p[700], marks_path[800]; for (int s = 0; s < REPLAY_SLOTS; ++s) {
+    slot_path(s, p, sizeof p); remove(p);
+    if (replay_marks_path(p, marks_path, sizeof marks_path)) remove(marks_path);
+} }
 
 /* Record `n` frames of scripted input into the next free slot. */
 static int record(unsigned n, const char *settings) {
@@ -741,6 +752,118 @@ static void test_boot_names(void) {
     CHECK(!replay_session_boot_path("", "t", 0, p, sizeof p), "no folder, no name");
 }
 
+static void play_marked(int slot) {
+    CHECK(replay_session_play_slot(slot), "play marked slot: %s", osd_last);
+    for (unsigned i = 0; i < 200 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xffff, neutral);
+}
+
+static void test_marks(void) {
+    clear_slots();
+    memset(ram, 0, sizeof ram); cycle = 1000; vram_word = 0;
+    CHECK(!replay_session_mark("title"), "no annotation while idle");
+    CHECK(replay_session_toggle_record(), "start marked recording");
+    CHECK(!replay_session_mark("title"), "no annotation while anchor pending");
+    vblank(0xffff, neutral);
+    uint64_t cycle_at_120 = 0;
+    for (unsigned i = 0; i < 160; ++i) {
+        vblank(script(i), neutral);
+        if (i == 119) cycle_at_120 = cycle;
+        if (i == 0 || i == 60 || i == 61 || i == 120) {
+            uint64_t before = cycle;
+            uint8_t byte = ram[12345];
+            CHECK(replay_session_mark(i == 0 ? "title" : i == 61 ? "between" : "gameplay"), "save annotation at %u", i);
+            CHECK(cycle == before && ram[12345] == byte, "annotation changes no guest state");
+        }
+    }
+    CHECK(replay_session_toggle_record(), "finish marked recording");
+    vblank(0xffff, neutral);
+    char path[700], marks_path[800]; slot_path(0, path, sizeof path);
+    CHECK(replay_marks_path(path, marks_path, sizeof marks_path), "sidecar path");
+    ReplayMarks marks;
+    CHECK(!replay_marks_read(path, 160, &marks) && marks.count == 3, "read recorded marks");
+    CHECK(marks.items[0].frame == 0 && marks.items[1].frame == 120 && marks.items[2].frame == 61,
+          "last completed boundary and repeated-label move");
+    CHECK(replay_marks_add(&marks, 160, "end", 0) && !replay_marks_write(path, &marks), "editable END annotation");
+    play_marked(0);
+    CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "full marked recording in sync");
+    CHECK(read_verdict() && strstr(verdict, "\"label\": \"title\", \"estimated\": false, \"reached\": true, \"in_sync\": true") &&
+          strstr(verdict, "\"label\": \"gameplay\", \"estimated\": false, \"reached\": true, \"in_sync\": true") &&
+          strstr(verdict, "\"label\": \"between\", \"estimated\": false, \"reached\": true, \"in_sync\": null") &&
+          strstr(verdict, "\"label\": \"end\", \"estimated\": false, \"reached\": true, \"in_sync\": true"),
+          "exact checkpoints true, intervening state unmeasured: %s", verdict);
+
+    capture_calls = capture_fail = 0;
+    CHECK(replay_session_set_mark_actions("gameplay+5", "gameplay", "unused.png"), "configure prefix and capture");
+    play_marked(0);
+    CHECK(replay_session_last_result() == REPLAY_RESULT_STOPPED_AT_MARK && capture_calls == 1, "exact prefix stop/capture");
+    CHECK(read_verdict() && strstr(verdict, "\"frames_played\": 125,") && strstr(verdict, "\"end_reached\": false") &&
+          strstr(verdict, "\"frame\": 120, \"written\": true") &&
+          strstr(verdict, "\"label\": \"end\", \"estimated\": false, \"reached\": false, \"in_sync\": null"),
+          "prefix cannot become full END verdict: %s", verdict);
+    CHECK(capture_cycle == cycle_at_120, "capture at the exact completed boundary 120");
+
+    CHECK(replay_session_set_mark_actions("title", "title", "unused.png"), "boundary zero actions");
+    capture_calls = 0;
+    play_marked(0);
+    CHECK(replay_session_last_result() == REPLAY_RESULT_STOPPED_AT_MARK && capture_calls == 1, "capture before zero-frame stop");
+    CHECK(read_verdict() && strstr(verdict, "\"frames_played\": 0,"), "no input supplied at boundary zero");
+
+    CHECK(replay_session_set_mark_actions("end", NULL, NULL), "END target");
+    play_marked(0);
+    CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC && read_verdict() &&
+          strstr(verdict, "\"end_reached\": true"), "original END still compares RAM/cycle");
+
+    CHECK(replay_session_set_mark_actions("gameplay", NULL, NULL), "prefix sync observation");
+    drift_av = 1;
+    play_marked(0); drift_av = 0;
+    CHECK(read_verdict() && strstr(verdict, "\"divergence_parts\": \"av\"") &&
+          strstr(verdict, "\"label\": \"gameplay\", \"estimated\": false, \"reached\": true, \"in_sync\": true"),
+          "AV-only differences retain semantic agreement at the exact boundary");
+    drift = 1;
+    play_marked(0); drift = 0;
+    CHECK(read_verdict() && strstr(verdict, "\"label\": \"gameplay\", \"estimated\": false, \"reached\": true, \"in_sync\": false"),
+          "known core difference makes later marks false");
+    digest_unavailable = 1;
+    play_marked(0); digest_unavailable = 0;
+    CHECK(read_verdict() && strstr(verdict, "\"label\": \"gameplay\", \"estimated\": false, \"reached\": true, \"in_sync\": null"),
+          "unavailable digest never asserts sync");
+
+    CHECK(replay_session_set_mark_actions(NULL, NULL, NULL), "clear prefix");
+    CHECK(replay_session_play_slot(0), "AV followed by core playback");
+    drift_av = 1;
+    for (unsigned i = 0; i < 85; ++i) vblank(0xffff, neutral);
+    drift_av = 0; drift = 1;
+    for (unsigned i = 0; i < 100 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xffff, neutral);
+    drift = 0;
+    CHECK(replay_session_last_result() == REPLAY_RESULT_OUT_OF_SYNC, "first AV difference must not hide later core failure");
+    CHECK(read_verdict() && strstr(verdict, "\"divergence_parts\": \"av\"") &&
+          strstr(verdict, "\"label\": \"gameplay\", \"estimated\": false, \"reached\": true, \"in_sync\": false"),
+          "first difference stays AV, cumulative relevant failure remains visible");
+
+    unsigned saved_restores = (unsigned)restores;
+    CHECK(replay_session_set_mark_actions("missing", NULL, NULL), "missing selector setup");
+    CHECK(!replay_session_play_slot(0) && (unsigned)restores == saved_restores && load_pending == 0,
+          "missing selector refused before guest mutation");
+    read_verdict();
+    CHECK(replay_session_set_mark_actions("gameplay+41", NULL, NULL), "past END selector setup");
+    CHECK(!replay_session_play_slot(0) && load_pending == 0, "past END refused"); read_verdict();
+    CHECK(replay_session_set_mark_actions("title", "gameplay", "unused.png"), "capture-after-stop setup");
+    CHECK(!replay_session_play_slot(0) && load_pending == 0, "capture after stop refused"); read_verdict();
+    CHECK(!replay_session_set_mark_actions(NULL, "title", NULL), "capture needs path");
+    CHECK(replay_session_set_mark_actions(NULL, "title", "unused.png"), "failing capture setup");
+    capture_fail = 1;
+    play_marked(0); capture_fail = 0;
+    CHECK(replay_session_last_result() == REPLAY_RESULT_FAILED && read_verdict() &&
+          strstr(verdict, "\"written\": false"), "capture failure stays failed");
+    CHECK(replay_session_set_mark_actions(NULL, NULL, NULL), "clear actions");
+    CHECK(replay_session_play_slot(0), "early exit setup");
+    vblank(0xffff, neutral); vblank(0xffff, neutral);
+    replay_session_shutdown();
+    CHECK(read_verdict() && strstr(verdict, "\"label\": \"gameplay\", \"estimated\": false, \"reached\": false, \"in_sync\": null"),
+          "unreached annotations survive early exit");
+    CHECK(replay_session_delete_slot(0) && file_size(marks_path) == -1, "slot deletion removes its annotations");
+}
+
 int main(int argc, char **argv) {
     snprintf(dir, sizeof dir, "%s", argc > 1 ? argv[1] : "replay_session_test_dir");
     mkdir_p(dir);
@@ -757,6 +880,7 @@ int main(int argc, char **argv) {
     test_power_on_record_and_play();
     test_identity_rules();
     test_boot_names();
+    test_marks();
     clear_slots();
     if (failures) { fprintf(stderr, "%d of %d checks failed\n", failures, checks); return 1; }
     printf("PASS: replay session, %d checks\n", checks);

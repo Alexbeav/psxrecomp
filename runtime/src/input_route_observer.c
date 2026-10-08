@@ -13,7 +13,7 @@
 #include "timers.h"
 #include "event_ring.h"
 #include "debug_server.h"
-#include "png_write.h"
+#include "guest_display_capture.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -427,16 +427,9 @@ void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame) {
     unsigned h = di.disabled ? 1u : (unsigned)di.height;
     if (!w || w > 640) w = 1;
     if (!h || h > 512) h = 1;
-    uint8_t *rgb = (uint8_t *)calloc((size_t)w*h, 3);
-    if (!rgb) fail("screenshot allocation");
-    if (!di.disabled) for (unsigned y=0; y<h; ++y) for (unsigned x=0; x<w; ++x) {
-        uint8_t *p = rgb + ((size_t)y*w+x)*3;
-        gpu_display_pixel_rgb(&di, x, y, p, p+1, p+2);
-    }
     snprintf(name, sizeof(name), "frame-%06u.png", (unsigned)completed);
     FILE *png = open_output(name);
-    int ok = png_write_rgb(png, rgb, w, h);
-    free(rgb);
+    int ok = guest_display_write_png(png, &di);
     if (fclose(png) || !ok) fail("screenshot write");
     if (fprintf(log_file,
         "{\"frame\":%u,\"runtime_frame\":%llu,\"boundary\":\"before_next_input\","

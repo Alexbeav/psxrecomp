@@ -21,6 +21,8 @@
 #include "bios_hle_plan.h"
 #include "input_route_session.h"
 #include "replay_session.h"
+#include "replay_mark_hotkeys.h"
+#include "guest_display_capture.h"
 #include "turbo_loads_gate.h"
 #include "netplay_state_digest.h"
 #include "disc_digest_cache.h"
@@ -198,6 +200,9 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #include <iphlpapi.h>
 #include <windows.h>
 #include <commdlg.h>
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -657,6 +662,13 @@ static void fps_telemetry_toggle(void) {
 static bool host_hotkey_input_focused(void) {
     if (!sdl_window) return true;
     return (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+}
+
+static const Uint8 *guest_keyboard_state(void) {
+    static uint8_t filtered[SDL_NUM_SCANCODES];
+    static unsigned held;
+    return replay_mark_keyboard(SDL_GetKeyboardState(nullptr),
+                                replay_session_state() == REPLAY_RECORDING, filtered, &held);
 }
 
 static int manual_fast_forward_multiplier(void) {
@@ -5194,7 +5206,7 @@ static uint16_t pad_from_keyboard(int player) {
     /* Without input focus the keyboard reads as released: the cached key array
      * can hold keys pressed for another application (PS1B-208). */
     if (!host_hotkey_input_focused()) return 0xFFFF;
-    const Uint8* keys = SDL_GetKeyboardState(NULL);
+    const Uint8* keys = guest_keyboard_state();
     return psx_keybinds_pad_word(keys, player);
 }
 
@@ -5307,7 +5319,7 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4],
          * old keyboard analog behaviour is preserved unless the user rebinds.
          * Without input focus the sticks stay centred (PS1B-208). */
         if (!host_hotkey_input_focused()) return;
-        const Uint8* keys = SDL_GetKeyboardState(NULL);
+        const Uint8* keys = guest_keyboard_state();
         psx_keybinds_sticks(keys, player, out);
         return;
     }
@@ -5483,7 +5495,7 @@ static bool controller_policy_dpad_active(const PlayerInput& p, int player,
         }
     }
     if (src.keybinds && host_hotkey_input_focused()) {
-        const Uint8* keys = SDL_GetKeyboardState(NULL);
+        const Uint8* keys = guest_keyboard_state();
         if (psx_keybinds_dpad_active(keys, player)) return true;
     }
     return false;
@@ -5863,7 +5875,7 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * applying it twice is idempotent. */
     if (eff_analog) {
         if (src.keybinds && host_hotkey_input_focused()) {
-            const Uint8* keys = SDL_GetKeyboardState(NULL);
+            const Uint8* keys = guest_keyboard_state();
             psx_keybinds_sticks(keys, player, st);
         }
         if (src.all_pads)
@@ -8285,6 +8297,9 @@ static int route_record_live_p1_word(void) {
  *       --replay FILE, which starts it at vblank 0 of the new process. */
 static const char *g_replay_cli_path = nullptr;
 static const char *g_replay_cli_verdict = nullptr;
+static const char *g_replay_cli_stop_mark = nullptr;
+static const char *g_replay_cli_capture_mark = nullptr;
+static const char *g_replay_cli_capture_file = nullptr;
 static bool g_replay_cli_fast = false;
 static std::string s_replay_disc_serial;
 static std::string s_replay_saved_settings;
@@ -8480,6 +8495,29 @@ extern "C" int replay_host_thumb(uint32_t *out) {
 }
 extern "C" const char *replay_host_game_title(void) { return s_picker_game_name.c_str(); }
 extern "C" int replay_host_frame_rate(void) { return gpu_video_standard_is_pal() ? 50 : 60; }
+
+extern "C" int replay_host_capture(const char *path) {
+    /* Preserve existing evidence. The readback has the same semantics as the
+     * input-route observer; use a separate picture pass, never route proof. */
+#ifdef _WIN32
+    int fd = _open(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
+    FILE *f = fd < 0 ? nullptr : _fdopen(fd, "wb");
+    if (!f && fd >= 0) _close(fd);
+#else
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    FILE *f = fd < 0 ? nullptr : fdopen(fd, "wb");
+    if (!f && fd >= 0) close(fd);
+#endif
+    if (!f) return 0;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (!di.depth24 && !di.disabled) {
+        gl_renderer_sync_cpu(); vk_renderer_sync_cpu();
+    }
+    const bool ok = guest_display_write_png(f, &di) != 0;
+    const int closed = std::fclose(f);
+    return ok && closed == 0;
+}
 
 extern "C" const uint8_t *replay_host_ram(void) {
     extern uint8_t *g_psx_ram;
@@ -8773,6 +8811,13 @@ static void replay_frame_boundary(int *override) {
         env_read = 1;
         play_path = g_replay_cli_path ? g_replay_cli_path : std::getenv("PSX_REPLAY_FILE");
         if (play_path && !play_path[0]) play_path = nullptr;
+        if (!replay_session_set_mark_actions(g_replay_cli_stop_mark, g_replay_cli_capture_mark,
+                                            g_replay_cli_capture_file) ||
+            (!play_path && (g_replay_cli_stop_mark || g_replay_cli_capture_mark || g_replay_cli_capture_file))) {
+            std::fprintf(stderr, "replay: mark options need --replay and capture needs a new --replay-capture-file\n");
+            psx_crash_trace_set_exit_origin("replay_mark_options_invalid");
+            std::exit(4);
+        }
         record_file = std::getenv("PSX_REPLAY_RECORD_FILE");
         if (record_file && !record_file[0]) record_file = nullptr;
         if (const char *e = std::getenv("PSX_REPLAY_RECORD_AT")) record_at = std::atoll(e);
@@ -8862,7 +8907,8 @@ static void replay_frame_boundary(int *override) {
             if (written) std::fclose(written);
         } else {
             const ReplayResult r = replay_session_last_result();
-            status = r == REPLAY_RESULT_IN_SYNC ? 0 : r == REPLAY_RESULT_OUT_OF_SYNC ? 3 : 4;
+            status = r == REPLAY_RESULT_IN_SYNC || r == REPLAY_RESULT_STOPPED_AT_MARK ? 0 :
+                     r == REPLAY_RESULT_OUT_OF_SYNC ? 3 : 4;
         }
         std::fflush(stdout);
         psx_crash_trace_set_exit_origin("replay_end");
@@ -9085,6 +9131,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     netplay_soft_exit("netplay_escape");
                     return ep;
                 }
+                if (!key_repeat && replay_session_state() == REPLAY_RECORDING &&
+                    !psx_rewind_is_open() && !runtime_settings_menu_open && !savestate_menu_open &&
+                    (mod & KMOD_SHIFT) && !(mod & (KMOD_CTRL | KMOD_ALT)) &&
+                    (key == SDLK_F11 || key == SDLK_F12)) {
+                    replay_session_mark(key == SDLK_F11 ? "title" : "gameplay");
+                }
+                else
 #ifndef PSX_NO_DEBUG_TOOLS
                 /* Route recording markers: Shift+F11 MENU, F12 GAMEPLAY.
                  * Plain F11 is the player replay recorder (PS1B-191). */
@@ -15160,6 +15213,18 @@ int main(int argc, char** argv) {
             g_replay_cli_verdict = argv[++i];
         } else if (std::strcmp(argv[i], "--replay-fast") == 0) {
             g_replay_cli_fast = true;
+        } else if (std::strcmp(argv[i], "--replay-stop-after-mark") == 0 ||
+                   std::strcmp(argv[i], "--replay-capture-at-mark") == 0 ||
+                   std::strcmp(argv[i], "--replay-capture-file") == 0) {
+            const char *option = argv[i];
+            if (i + 1 >= argc || !argv[i + 1][0] || argv[i + 1][0] == '-') {
+                std::fprintf(stderr, "replay: %s needs a value\n", option);
+                return 4;
+            }
+            const char *value = argv[++i];
+            if (std::strcmp(option, "--replay-stop-after-mark") == 0) g_replay_cli_stop_mark = value;
+            else if (std::strcmp(option, "--replay-capture-at-mark") == 0) g_replay_cli_capture_mark = value;
+            else g_replay_cli_capture_file = value;
         } else if (std::strcmp(argv[i], "--headless") == 0) {
             g_headless = 1;
             force_no_launcher = true;

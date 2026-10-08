@@ -48,6 +48,7 @@ void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry
 /* ---- replay host stubs ---- */
 static char osd_last[256];
 void replay_host_osd(const char *text, int ms) { (void)ms; snprintf(osd_last, sizeof osd_last, "%s", text); }
+int replay_host_capture(const char *path) { (void)path; return 0; }
 int replay_host_can_record(char *why, size_t cap) { (void)why; (void)cap; return 1; }
 /* The host's hook, as main.cpp has it: the real product identity. */
 int replay_host_identity(InputRouteV3 *m, char *why, size_t cap) {

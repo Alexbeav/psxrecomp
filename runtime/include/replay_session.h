@@ -42,7 +42,8 @@ typedef enum {
     REPLAY_RESULT_IN_SYNC,
     REPLAY_RESULT_OUT_OF_SYNC,
     REPLAY_RESULT_TAKEN_OVER,
-    REPLAY_RESULT_FAILED
+    REPLAY_RESULT_FAILED,
+    REPLAY_RESULT_STOPPED_AT_MARK /* requested prefix completed; END unmeasured */
 } ReplayResult;
 
 ReplayState replay_session_state(void);
@@ -123,6 +124,15 @@ unsigned replay_session_digests_checked(void);
  * SHA-256s, power_on). NULL clears. */
 void replay_session_set_verdict_path(const char *path);
 
+/* Host-only annotation at the last completed recording boundary. A repeated
+ * label moves that annotation. No pad input or checkpoint is generated. */
+int replay_session_mark(const char *label);
+/* Optional LABEL or LABEL+frame-offset actions. Capture needs a new PNG path.
+ * NULL clears an action. Names/range are resolved before playback mutates the
+ * guest. A stopped prefix has its own result, never a full END verdict. */
+int replay_session_set_mark_actions(const char *stop, const char *capture,
+                                    const char *capture_file);
+
 /* Thumbnail (taken at the anchor) and name stored in the replay. The default
  * name is "<game> · m:ss · YYYY-MM-DD HH:MM" (UTF-8 middle dots). */
 #define REPLAY_THUMB_W 128
@@ -140,6 +150,9 @@ void replay_session_shutdown(void);
 
 /* ---- Host hooks (main.cpp; stubs in the unit test) ---- */
 void replay_host_osd(const char *text, int ms);
+/* Explicit picture pass only: fresh destination, guest display without OSD.
+ * Renderer readback can affect later digests; a picture is not a proof run. */
+int replay_host_capture(const char *path);
 /* 0 and a reason when recording is not possible now (netplay, a multitap, an
  * armed route, a mouse or other non-pad device in either port). */
 int replay_host_can_record(char *why, size_t cap);

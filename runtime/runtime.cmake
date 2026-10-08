@@ -340,6 +340,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/input_route_observer.c
     ${PSXRECOMP_ROOT}/runtime/src/input_route_session.c
     ${PSXRECOMP_ROOT}/runtime/src/replay_session.c
+    ${PSXRECOMP_ROOT}/runtime/src/replay_marks.c
     ${PSXRECOMP_ROOT}/runtime/src/disc_digest_cache.c
     ${PSXRECOMP_ROOT}/runtime/src/turbo_loads_gate.c
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp

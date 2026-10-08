@@ -191,3 +191,77 @@ A power-on recording does not start when a save state is loaded at boot
 
 Replays are private test inputs. Never commit them to a repository. They
 contain memory card saves.
+
+## Marks and short runs
+
+On Windows and Linux, press **Shift+F11** while recording to mark the title
+screen, or **Shift+F12** to mark gameplay. The mark names the last completed
+replay boundary. The toast says whether it was saved. Repeating the key moves
+that label. These host keys, including their Shift modifier, are kept out of
+the guest keyboard input while the chord is held. Plain F11 still starts or
+stops the recording.
+
+Marks live beside the replay in `<replay>.marks.json`. The replay bytes and
+its recorded inputs and checkpoints stay unchanged; older players ignore the
+sidecar. You can edit labels and frames or annotate an existing replay:
+
+```json
+{
+  "schema": "psxrecomp-replay-marks/1",
+  "marks": [
+    {"frame": 600, "label": "title"},
+    {"frame": 1800, "label": "gameplay", "estimated": false}
+  ]
+}
+```
+
+Frame 0 is before the first input. Frame N is the boundary after N inputs and
+before input N+1. Frames must be in `0..replay length`. Labels must be unique,
+nonempty UTF-8 text of at most 64 bytes, with no control characters. Several
+labels can share one boundary. The file admits at most 256 marks and 64 KiB.
+Unknown fields, duplicate keys, invalid JSON and out-of-range marks refuse
+playback before settings, cards or the anchor change. A missing sidecar is
+an empty list. Keep the sidecar with the replay; it is annotation, not proof
+of the replay's identity or of gameplay.
+
+For a shorter run, pass `--replay-stop-after-mark gameplay+180`. An exact
+label or a label plus a nonnegative frame offset selects the completed
+boundary. Missing labels and offsets past the end refuse playback. A prefix
+ends with verdict `stopped_at_mark` and `end_reached: false`; it does not
+claim the original replay's end checkpoint. If the target is the original
+END, the usual full end comparison still decides the verdict.
+
+The verdict's `marks` list contains `reached` and `in_sync` for every label.
+`in_sync` is `true` only when the exact marked boundary has a successful
+available state digest or end comparison, with no earlier core, aux or ext
+difference. It is `false` after an observed relevant difference and `null`
+when exact state is unmeasured or the mark was not reached. An AV-only
+difference does not make it false. A frame between the stored 60-frame
+checkpoints is normally unmeasured. A mark and an in-sync digest do not prove
+that the screen shows gameplay.
+
+For a separate picture pass, also pass
+`--replay-capture-at-mark gameplay+120 --replay-capture-file <new PNG path>`.
+The capture must be no later than the requested stop. The PNG shows the guest
+display without the host toast, upscaling or widescreen. A disabled display
+produces a black 1-by-1 PNG. An existing destination is never overwritten;
+a write failure fails the playback. The verdict reports its frame, path and
+whether it was written. **Run the proof pass without capture first.** Renderer
+readback for the picture can change later video state, so its verdict cannot
+replace the proof run. Visually inspect the PNG to judge the labelled scene.
+
+`PSX_REPLAY_EXIT_AT_END=1` exits at the requested stop as well as the full end.
+A successful requested prefix returns status 0; this reports completion of
+the command, not full replay agreement. Read the verdict's checkpoint fields.
+Normal full replay status codes keep their earlier meanings.
+
+To estimate a gameplay mark in an existing power-on recording, use
+`python tools/replay_marks.py <replay> --fps 60` (or 50 for PAL). Old replays
+do not store the frame rate, so the tool requires it. The default subtracts
+30 seconds from END: under the convention that recording ends 30–60 seconds
+after play begins, this estimate falls 0–30 seconds after the actual start.
+Use `--tail-seconds N` to choose another duration. A shorter replay is refused
+rather than labelled at zero. The tool creates a new sidecar, refuses to
+replace an existing one, reports the replay's SHA-256 and records
+`estimated: true`. It reads header metadata, not the input stream's admission
+rules. It never observes gameplay and never changes the replay.

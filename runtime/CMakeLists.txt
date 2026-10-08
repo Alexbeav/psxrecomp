@@ -401,15 +401,23 @@ if(BUILD_TESTING)
     # Player replays (PS1B-191): recorder/player state machine against a
     # deterministic stand-in machine behind the replay_host_* hooks.
     add_executable(replay_session_test tests/test_replay_session.c
-        src/replay_session.c src/psx_sha256.c)
+        src/replay_session.c src/replay_marks.c src/psx_sha256.c)
     target_include_directories(replay_session_test PRIVATE include)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
     add_test(NAME replay_session_test COMMAND replay_session_test
         ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
+    add_executable(replay_marks_test tests/test_replay_marks.c src/replay_marks.c)
+    target_include_directories(replay_marks_test PRIVATE include)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_marks_scratch)
+    add_test(NAME replay_marks_test COMMAND replay_marks_test ${CMAKE_CURRENT_BINARY_DIR}/replay_marks_scratch)
+    add_executable(guest_display_capture_test tests/test_guest_display_capture.c)
+    target_include_directories(guest_display_capture_test PRIVATE include)
+    add_test(NAME replay_marks_tool_and_png COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_marks.py $<TARGET_FILE:guest_display_capture_test>)
     # PS1B-316: a replay names the disc in the drive, not the launch disc. The
     # real product identity behind the replay session, two files as the discs.
     add_executable(replay_disc_identity_test tests/test_replay_disc_identity.c
-        src/replay_session.c src/input_route_session.c src/disc_digest_cache.c
+        src/replay_session.c src/replay_marks.c src/input_route_session.c src/disc_digest_cache.c
         src/psx_sha256.c)
     target_include_directories(replay_disc_identity_test PRIVATE include)
     target_compile_definitions(replay_disc_identity_test PRIVATE
@@ -640,6 +648,11 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
     target_link_libraries(host_keymap_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_keymap_test COMMAND host_keymap_test)
+    add_executable(replay_mark_hotkeys_test tests/test_replay_mark_hotkeys.c src/psx_keybinds.c)
+    target_include_directories(replay_mark_hotkeys_test PRIVATE include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(replay_mark_hotkeys_test PRIVATE SDL_MAIN_HANDLED $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(replay_mark_hotkeys_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME replay_mark_hotkeys_test COMMAND replay_mark_hotkeys_test)
 
     # Replay REC badge (PS1B-191), with the launcher OSD compiled in.
     add_executable(host_osd_rec_test tests/test_host_osd_rec.c)

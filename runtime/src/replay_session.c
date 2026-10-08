@@ -1,5 +1,6 @@
 /* Player replay recorder and player (PS1B-191). See replay_session.h. */
 #include "replay_session.h"
+#include "replay_marks.h"
 #include "psx_sha256.h"
 #include <errno.h>
 #include <stdio.h>
@@ -83,6 +84,23 @@ static int s_cross_platform;
 static uint64_t s_end_cycle, s_end_recorded_cycle;
 static unsigned s_end_pages;
 static int s_end_reached;
+static ReplayMarks s_marks;
+static char s_stop_mark[96], s_capture_mark[96], s_capture_file[PATH_BYTES];
+static uint32_t s_stop_frame, s_capture_frame;
+static int s_stop_active, s_capture_active, s_capture_written;
+static int s_mark_diverged, s_boundary_checked;
+
+int replay_session_set_mark_actions(const char *stop, const char *capture, const char *capture_file)
+{
+    if (s_state != REPLAY_IDLE || (stop && strlen(stop) >= sizeof s_stop_mark) ||
+        (capture && strlen(capture) >= sizeof s_capture_mark) ||
+        (capture_file && strlen(capture_file) >= sizeof s_capture_file) ||
+        ((capture && capture[0]) != (capture_file && capture_file[0]))) return 0;
+    snprintf(s_stop_mark, sizeof s_stop_mark, "%s", stop ? stop : "");
+    snprintf(s_capture_mark, sizeof s_capture_mark, "%s", capture ? capture : "");
+    snprintf(s_capture_file, sizeof s_capture_file, "%s", capture_file ? capture_file : "");
+    return 1;
+}
 
 void replay_session_set_verdict_path(const char *path)
 {
@@ -103,18 +121,34 @@ static void json_string(FILE *f, const char *s)
 
 static void write_verdict(ReplayResult result, const char *reason)
 {
-    static const char *const names[] = {"incomplete", "in_sync", "diverged", "stopped_by_input", "failed"};
+    static const char *const names[] = {"incomplete", "in_sync", "diverged", "stopped_by_input", "failed", "stopped_at_mark"};
     char parts[32];
     FILE *f;
     if (!s_verdict_path[0] || !(f = fopen(s_verdict_path, "wb"))) return;
     fprintf(f, "{\n  \"schema\": \"psxrecomp-replay-verdict/1\",\n  \"result\": \"%s\",\n",
-            names[result <= REPLAY_RESULT_FAILED ? result : 0]);
+            names[result <= REPLAY_RESULT_STOPPED_AT_MARK ? result : 0]);
     fprintf(f, "  \"frames_played\": %u,\n  \"frames_total\": %u,\n",
             (unsigned)s_play_frame, (unsigned)s_play_frames);
     if (s_diverged) fprintf(f, "  \"first_divergence_frame\": %u,\n  \"divergence_parts\": \"%s\",\n",
                             (unsigned)s_div_frame, digest_parts_text(s_div_parts, parts, sizeof parts));
     else fprintf(f, "  \"first_divergence_frame\": null,\n  \"divergence_parts\": null,\n");
     fprintf(f, "  \"digests_checked\": %u,\n", s_digests_checked);
+    fprintf(f, "  \"end_reached\": %s,\n  \"marks\": [", s_end_reached ? "true" : "false");
+    for (unsigned i = 0; i < s_marks.count; ++i) {
+        const ReplayMark *m = &s_marks.items[i];
+        fprintf(f, "%s\n    {\"frame\": %u, \"label\": ", i ? "," : "", (unsigned)m->frame);
+        json_string(f, m->label);
+        fprintf(f, ", \"estimated\": %s, \"reached\": %s, \"in_sync\": %s}",
+                m->estimated ? "true" : "false", m->reached ? "true" : "false",
+                !m->reached || m->in_sync < 0 ? "null" : m->in_sync ? "true" : "false");
+    }
+    fputs("\n  ],\n  \"capture\": ", f);
+    if (s_capture_active) {
+        fprintf(f, "{\"frame\": %u, \"written\": %s, \"path\": ", (unsigned)s_capture_frame,
+                s_capture_written ? "true" : "false");
+        json_string(f, s_capture_file);
+        fputs("},\n", f);
+    } else fputs("null,\n", f);
     if (s_end_reached)
         fprintf(f, "  \"end_cycle\": %llu,\n  \"recorded_end_cycle\": %llu,\n  \"differing_ram_pages\": %u,\n",
                 (unsigned long long)s_end_cycle, (unsigned long long)s_end_recorded_cycle, s_end_pages);
@@ -173,7 +207,10 @@ int replay_session_next_free_slot(void)
 int replay_session_delete_slot(int slot)
 {
     char path[PATH_BYTES];
-    return replay_session_slot_path(slot, path, sizeof path) && remove(path) == 0;
+    char marks_path[PATH_BYTES + 32];
+    if (!replay_session_slot_path(slot, path, sizeof path) || remove(path)) return 0;
+    if (replay_marks_path(path, marks_path, sizeof marks_path)) remove(marks_path);
+    return 1;
 }
 
 static int create_exclusive(const char *path, FILE **out)
@@ -289,6 +326,8 @@ int replay_session_export_slot(int slot, char *out_path, size_t cap)
         else
             snprintf(dst, sizeof dst, n ? "%s/%s-%s-%d.psxrpl" : "%s/%s-%s.psxrpl",
                      dir, replay_host_disc_serial(), stamp, n);
+        char marks_path[PATH_BYTES + 32];
+        if (!replay_marks_path(dst, marks_path, sizeof marks_path) || file_exists(marks_path)) continue;
         create_exclusive(dst, &out);
     }
     if (!out || !(in = fopen(src, "rb"))) { if (out) { fclose(out); remove(dst); } return 0; }
@@ -301,6 +340,9 @@ int replay_session_export_slot(int slot, char *out_path, size_t cap)
     fclose(in);
     if (fclose(out)) ok = 0;
     if (!ok) { remove(dst); return 0; }
+    ReplayMarks marks;
+    const char *error = replay_marks_read(src, INPUT_ROUTE_MAX_FRAMES, &marks);
+    if (error || (marks.count && replay_marks_write(dst, &marks))) { remove(dst); return 0; }
     snprintf(out_path, cap, "%s", dst);
     return 1;
 }
@@ -506,6 +548,9 @@ static int begin_recording(const char *path, int slot, int power_on)
 {
     char why[256] = "";
     if (s_state != REPLAY_IDLE) return 0;
+    char marks_path[PATH_BYTES + 32];
+    if (!replay_marks_path(path, marks_path, sizeof marks_path) || file_exists(marks_path))
+        return refuse_record("its mark file already exists");
     if (power_on && !replay_host_at_power_on())
         return refuse_record("a replay from power-on must start at boot");
     if (!replay_host_can_record(why, sizeof why)) return refuse_record(why);
@@ -533,6 +578,8 @@ static int begin_recording(const char *path, int slot, int power_on)
     replay_host_settings_capture(s_settings, sizeof s_settings);
     snprintf(s_rec_path, sizeof s_rec_path, "%s", path);
     s_rec_slot = slot;
+    memset(&s_marks, 0, sizeof s_marks);
+    s_last_frame = 0;
     s_result = REPLAY_RESULT_NONE;
     if (!power_on) {
         s_state = REPLAY_ARMING;
@@ -560,6 +607,15 @@ int replay_session_record_power_on(const char *path)
 {
     if (!path || !path[0] || strlen(path) >= PATH_BYTES || file_exists(path)) return 0;
     return begin_recording(path, -1, 1);
+}
+
+int replay_session_mark(const char *label)
+{
+    if (s_state != REPLAY_RECORDING ||
+        !replay_marks_add(&s_marks, s_last_frame, label, 0)) return 0;
+    const char *error = replay_marks_write(s_rec_path, &s_marks);
+    replay_host_osd(error ? "Replay mark could not be saved" : "Replay mark saved", 1500);
+    return error == NULL;
 }
 
 /* "<game> · m:ss · YYYY-MM-DD HH:MM", cut to fit on a UTF-8 boundary. */
@@ -678,6 +734,7 @@ static void write_partial(void)
     if (!error) {
         remove(partial);
         if (rename(tmp, partial)) { remove(tmp); error = "rename failed"; }
+        else if (s_marks.count) error = replay_marks_write(partial, &s_marks);
     }
     if (error) fprintf(stderr, "replay: partial copy not written: %s (%s)\n", error, partial);
     else fprintf(stdout, "replay_partial: path=%s frames=%u\n", partial, (unsigned)s_last_frame);
@@ -701,8 +758,11 @@ static void finish_recording(void)
         fprintf(stderr, "replay: %s (%s)\n", msg, s_rec_path);
     } else {
         /* The finished replay supersedes the crash-recovery copy. */
-        if (s_power_on && replay_session_partial_path(s_rec_path, partial, sizeof partial))
+        if (s_power_on && replay_session_partial_path(s_rec_path, partial, sizeof partial)) {
+            char marks_path[PATH_BYTES + 32];
             remove(partial);
+            if (replay_marks_path(partial, marks_path, sizeof marks_path)) remove(marks_path);
+        }
         if (s_rec_slot >= 0) snprintf(msg, sizeof msg, "Replay saved: slot %d", s_rec_slot + 1);
         else {
             /* The file's name without folder or extension: the longest boot
@@ -852,6 +912,9 @@ int replay_session_play_file(const char *path)
     s_diverged = 0;
     s_digests_checked = 0;
     s_end_reached = 0;
+    memset(&s_marks, 0, sizeof s_marks);
+    s_stop_active = s_capture_active = s_capture_written = 0;
+    s_mark_diverged = s_boundary_checked = 0;
     if (!(f = fopen(path, "rb"))) return refuse_play("cannot open the file");
     rp = (InputRouteV3Replay *)malloc(sizeof *rp);
     markers = (InputRouteMarker *)calloc(INPUT_ROUTE_V3_MAX_MARKERS, sizeof *markers);
@@ -895,6 +958,17 @@ int replay_session_play_file(const char *path)
     }
     free(dig);
     fclose(f);
+    if (!error) error = replay_marks_read(path, meta.frames, &s_marks);
+    if (!error && s_stop_mark[0]) {
+        s_stop_active = replay_marks_resolve(&s_marks, s_stop_mark, meta.frames, &s_stop_frame);
+        if (!s_stop_active) error = "stop mark missing or outside the replay";
+    }
+    if (!error && s_capture_mark[0]) {
+        s_capture_active = replay_marks_resolve(&s_marks, s_capture_mark, meta.frames, &s_capture_frame);
+        if (!s_capture_active) error = "capture mark missing or outside the replay";
+        else if (s_stop_active && s_capture_frame > s_stop_frame) error = "capture mark is after the stop mark";
+        else if (file_exists(s_capture_file)) error = "capture file already exists";
+    }
     memset(&product, 0, sizeof product);
     if (!error && !replay_host_identity(&product, why, sizeof why)) error = why;
     if (!error && (strcmp(meta.disc_serial, product.disc_serial) ||
@@ -1023,12 +1097,15 @@ static void check_digest(void)
     uint32_t d[4];
     unsigned parts = 0;
     char text[32];
+    s_boundary_checked = 0;
     if (s_play_digest_next >= s_play_digest_count ||
         s_play_digests[s_play_digest_next][0] != s_play_frame) return;
     const uint32_t *want = &s_play_digests[s_play_digest_next++][1];
     if (!replay_host_state_digest(d)) return;
     s_digests_checked++;
     for (unsigned k = 0; k < 4; ++k) parts |= (d[k] != want[k]) << k;
+    s_boundary_checked = 1;
+    if (parts & ~REPLAY_DIGEST_AV) s_mark_diverged = 1;
     if (!parts || s_diverged) return;
     s_diverged = 1;
     s_div_frame = s_play_frame;
@@ -1037,6 +1114,25 @@ static void check_digest(void)
             (unsigned)s_play_frame, digest_parts_text(parts, text, sizeof text),
             d[0], want[0], d[1], want[1], d[2], want[2], d[3], want[3]);
     fflush(stdout);
+}
+
+static int observe_marks(void)
+{
+    for (unsigned i = 0; i < s_marks.count; ++i) {
+        ReplayMark *m = &s_marks.items[i];
+        if (m->frame == s_play_frame) {
+            m->reached = 1;
+            m->in_sync = s_mark_diverged ? 0 : s_boundary_checked ? 1 : -1;
+        }
+    }
+    if (s_capture_active && s_play_frame == s_capture_frame && !s_capture_written) {
+        s_capture_written = replay_host_capture(s_capture_file);
+        if (!s_capture_written) {
+            end_playback(REPLAY_RESULT_FAILED, "Replay stopped: picture could not be saved");
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int play_boundary(uint16_t live, const uint8_t live_sticks[4],
@@ -1052,11 +1148,14 @@ static int play_boundary(uint16_t live, const uint8_t live_sticks[4],
         char text[32];
         for (uint32_t p = 0; p < INPUT_ROUTE_RAM_PAGES; ++p) differing += now.pages[p] != s_end.pages[p];
         /* AV alone does not fail a replay (see REPLAY_DIGEST_AV). */
-        const int state = !(s_diverged && (s_div_parts & ~REPLAY_DIGEST_AV));
+        const int state = !s_mark_diverged;
         s_end_reached = 1;
         s_end_cycle = now.cycle;
         s_end_recorded_cycle = s_end.cycle;
         s_end_pages = differing;
+        s_boundary_checked = 1;
+        if (!ram || !cyc || !state) s_mark_diverged = 1;
+        if (!observe_marks()) return 0;
         fprintf(stdout, "replay_end: frames=%u result=%s cycle=%llu recorded_cycle=%llu differing_pages=%u "
                 "digests_checked=%u first_divergence=%d divergence_parts=%s\n",
                 (unsigned)s_play_frame, ram && cyc && state ? "in_sync" : "out_of_sync",
@@ -1072,6 +1171,11 @@ static int play_boundary(uint16_t live, const uint8_t live_sticks[4],
                      differing, (long long)(now.cycle - s_end.cycle));
             end_playback(REPLAY_RESULT_OUT_OF_SYNC, msg);
         }
+        return 0;
+    }
+    if (!observe_marks()) return 0;
+    if (s_stop_active && s_play_frame == s_stop_frame) {
+        end_playback(REPLAY_RESULT_STOPPED_AT_MARK, "Replay stopped at the requested mark");
         return 0;
     }
     /* Any live input takes over, once the pad has been neutral after the start
