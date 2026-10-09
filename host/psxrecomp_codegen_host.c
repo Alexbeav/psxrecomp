@@ -2084,25 +2084,9 @@ static void persist_relaunch_sidecars(const char* near_exe,
     }
 }
 
-static int json_get_string(const char* line, const char* key, char* out,
-                           size_t out_cap) {
-    char pattern[96];
-    snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
-    const char* p = strstr(line, pattern);
-    if (!p) return 0;
-    p += strlen(pattern);
-    size_t i = 0;
-    while (*p && *p != '"' && i + 1 < out_cap) {
-        if (*p == '\\' && p[1]) {
-            ++p;
-            out[i++] = *p++;
-            continue;
-        }
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return i > 0;
-}
+/* json_get_string: the string value of a key in one of the CLI's rows, with
+ * its escapes resolved to UTF-8 (a file name in Greek arrives as \uXXXX). */
+#include "psx_json_text.h"
 
 static int json_get_number(const char* line, const char* key, double* out) {
     char pattern[96];
@@ -2164,61 +2148,9 @@ static void handle_progress_line(const char* line,
     }
 }
 
-/* Last-lines capture so a failed CLI run can say WHY in the wizard, which has
- * no console: the child's stderr shares the progress pipe, JSON progress rows
- * contribute their "message", raw rows (compiler/traceback text) contribute
- * as-is, and the most recent error-looking line is appended to err_msg. This
- * is what turns "psxrecomp rebuild failed (exit 1)" into "… failed (exit 1):
- * Could NOT find OpenGL (missing: OPENGL_INCLUDE_DIR)". */
-typedef struct {
-    char last[480];
-    char last_err[480];
-} CliTail;
-
-static int cli_tail_line_is_error(const char* s) {
-    return strstr(s, "rror") != NULL || strstr(s, "ailed") != NULL ||
-           strstr(s, "FAILED") != NULL || strstr(s, "Traceback") != NULL ||
-           strstr(s, "fatal") != NULL || strstr(s, "Fatal") != NULL;
-}
-
-static void cli_tail_note(CliTail* t, const char* line) {
-    char msg[480];
-    const char* rec = line;
-    int is_error_event = 0;
-    if (line[0] == '{') {
-        /* sdk_progress emits compact JSON: {"event":"error","message":…}. */
-        is_error_event = strstr(line, "\"event\":\"error\"") != NULL;
-        if (!json_get_string(line, "message", msg, sizeof(msg)))
-            return; /* structured row without text (e.g. result) */
-        rec = msg;
-    }
-    if (!rec[0])
-        return;
-    snprintf(t->last, sizeof(t->last), "%s", rec);
-    if (is_error_event || cli_tail_line_is_error(rec))
-        snprintf(t->last_err, sizeof(t->last_err), "%s", rec);
-}
-
-static void cli_fail_msg(char* err_msg, size_t err_cap, const char* fail_label,
-                         long code, const CliTail* t) {
-    const char* why = t->last_err[0] ? t->last_err : t->last;
-    if (code == 3) {
-        /* The CLI names the failing check (a digest mismatch, or a .chd it
-         * cannot read) and cli_tail_note has captured that line. A flat
-         * "wrong dump" contradicts it and sends players hunting a bad rip
-         * when the dump is fine. Keep the reason when there is one. */
-        if (why[0])
-            snprintf(err_msg, err_cap, "Disc verification failed: %s", why);
-        else
-            snprintf(err_msg, err_cap, "Disc verification failed (wrong dump).");
-        return;
-    }
-    if (why[0])
-        snprintf(err_msg, err_cap, "%s failed (exit %ld): %s", fail_label,
-                 code, why);
-    else
-        snprintf(err_msg, err_cap, "%s failed (exit %ld).", fail_label, code);
-}
+/* CliTail, cli_tail_note, cli_fail_msg: why a run of the CLI failed, in words
+ * for the setup window. */
+#include "psx_cli_tail.h"
 
 #if defined(_WIN32)
 static int run_cli_win(const char* cmdline,
@@ -3384,6 +3316,8 @@ static int path_is_under_dir(const char* child, const char* parent) {
     }
 #endif
     n = strlen(pa);
+    while (n && (pa[n - 1] == '/' || pa[n - 1] == '\\'))
+        --n;
 #if defined(_WIN32)
     if (_strnicmp(ca, pa, (int)n) != 0)
         return 0;
@@ -4914,21 +4848,34 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
     /* A diagnostic request writes nothing into the normal product's directory,
      * not even this helper. */
     char diag_dir[1200];
-    if (want_diagnostic &&
-        !join_path(diag_dir, sizeof(diag_dir), g_project_root,
+    if (!join_path(diag_dir, sizeof(diag_dir), g_project_root,
                    PSX_DIAGNOSTIC_DIR_NAME)) {
         snprintf(err_msg, err_cap, "Failed to form the diagnostic build path.");
         return 0;
     }
-    const char* helper_dir = want_diagnostic ? diag_dir : g_build_dir;
+    /* Configure may replace either build directory while cmd.exe reads its
+     * helper. Keep both helpers in private scratch, outside those directories. */
+    char helper_dir[1200];
+    if (!join_path(helper_dir, sizeof(helper_dir), g_project_root, "_scratch")) {
+        snprintf(err_msg, err_cap, "Failed to form the helper directory.");
+        return 0;
+    }
+    if (path_is_under_dir(helper_dir, g_build_dir) ||
+        path_is_under_dir(helper_dir, diag_dir)) {
+        snprintf(err_msg, err_cap,
+                 "The build directory overlaps the rebuild helper directory. "
+                 "Choose a build directory outside _scratch.");
+        return 0;
+    }
+    const char* helper_name = want_diagnostic ? "recomp_diagnostic_rebuild.cmd"
+                                             : "recomp_deferred_rebuild.cmd";
     if (!join_path(g_helper_path, sizeof(g_helper_path), helper_dir,
-                   "recomp_deferred_rebuild.cmd")) {
+                   helper_name)) {
         snprintf(err_msg, err_cap, "Failed to form helper path.");
         return 0;
     }
-    /* Setup zips omit build-release/; create it before writing the .cmd. */
     if (!mkdir_p(helper_dir)) {
-        snprintf(err_msg, err_cap, "Failed to create build dir: %s",
+        snprintf(err_msg, err_cap, "Failed to create helper dir: %s",
                  helper_dir);
         return 0;
     }

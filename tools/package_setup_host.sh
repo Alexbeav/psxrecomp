@@ -843,7 +843,7 @@ if [[ -f "${STAGE}/CMakeLists.txt" ]]; then
   # `|| true`: a CMakeLists.txt with no if(EXISTS ...) guard at all (the host
   # project of a set) makes grep exit 1, which under `set -euo pipefail` ended
   # the packager here without a word.
-  guarded="$(grep -oE 'if\(EXISTS[[:space:]]+"\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+"' "${cml}" \
+  guarded="$(sed '/^[[:space:]]*#/d' "${cml}" | grep -oE 'if\(EXISTS[[:space:]]+"\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+"' \
                | sed -E 's|.*\$\{CMAKE_CURRENT_SOURCE_DIR\}/||; s|"$||' | sort -u || true)"
   missing_refs=()
   while IFS= read -r rel; do
@@ -853,7 +853,7 @@ if [[ -f "${STAGE}/CMakeLists.txt" ]]; then
       continue
     fi
     [[ -e "${STAGE}/${rel}" ]] || missing_refs+=("${rel}")
-  done < <(grep -oE '\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+' "${cml}" \
+  done < <(sed '/^[[:space:]]*#/d' "${cml}" | grep -oE '\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+' \
              | sed 's|^\${CMAKE_CURRENT_SOURCE_DIR}/||' | sort -u)
   if (( ${#missing_refs[@]} )); then
     echo "error: CMakeLists.txt references paths that are not staged in the zip:" >&2
@@ -867,7 +867,7 @@ fi
 for _folder in "${SET_FOLDERS[@]:-}"; do
   [[ -n "${_folder}" ]] || continue
   cml="${STAGE}/${_folder}/CMakeLists.txt"
-  guarded="$(grep -oE 'if\(EXISTS[[:space:]]+"\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+"' "${cml}" \
+  guarded="$(sed '/^[[:space:]]*#/d' "${cml}" | grep -oE 'if\(EXISTS[[:space:]]+"\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+"' \
                | sed -E 's|.*\$\{CMAKE_CURRENT_SOURCE_DIR\}/||; s|"$||' | sort -u || true)"
   missing_refs=()
   while IFS= read -r rel; do
@@ -880,7 +880,7 @@ for _folder in "${SET_FOLDERS[@]:-}"; do
       psxrecomp|psxrecomp/*|recomp-ui|recomp-ui/*) [[ -e "${STAGE}/${rel}" ]] && continue ;;
     esac
     [[ -e "${STAGE}/${_folder}/${rel}" ]] || missing_refs+=("${_folder}/${rel}")
-  done < <(grep -oE '\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+' "${cml}" \
+  done < <(sed '/^[[:space:]]*#/d' "${cml}" | grep -oE '\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+' \
              | sed 's|^\${CMAKE_CURRENT_SOURCE_DIR}/||' | sort -u || true)
   if (( ${#missing_refs[@]} )); then
     echo "error: a program's CMakeLists.txt references paths that are not staged in the zip:" >&2

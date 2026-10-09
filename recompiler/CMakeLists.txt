@@ -1123,6 +1123,11 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_bios_hint.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME package_setup_cmake_comments
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_cmake_comments.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # A set whose discs boot different programs, set up as one folder
         # (PS1B-333): the set file, the disc check, the join, the start
         # scripts, the host project, and the unchanged single-program path.
@@ -1183,14 +1188,55 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # The DuckStation oracle patch must hold added lines only: a context
         # line or a removed line is a line of upstream's source (PS1B-216).
-        # This runs the patch-form tests of the oracle tool's test file; its
-        # other tests are run by hand and are not part of this gate.
+        # Keep this focused gate beside the complete oracle suite below.
         add_test(
             NAME duckstation_oracle_patch_form
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_duckstation_oracle.py
                     TestOraclePatch
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-476/375: these source-owned tool checks must execute in the
+        # recompiler gate. A missing compiler or CHD reader must not turn a
+        # skipped case into a green gate.
+        set(_psx_tools_tests "")
+        foreach(_t IN ITEMS
+                menu_scan cursor_writers gpu_frame pad_trace pad_delivery
+                aligned_lzss_banks static_fragment_variant_keys
+                mips_tagged_relocations overlay_widescreen_callbacks
+                duckstation_oracle)
+            add_test(NAME tools_${_t}
+                COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+                    -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+                    -p test_${_t}.py -v
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            list(APPEND _psx_tools_tests tools_${_t})
+        endforeach()
+        if(PSXRECOMP_ENABLE_CHD AND TARGET chdr)
+            add_test(NAME tools_psx_chd
+                COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+                    -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+                    -p test_psx_chd.py -v
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            set_tests_properties(tools_psx_chd PROPERTIES
+                ENVIRONMENT "PSXRECOMP_LIBCHDR=$<TARGET_FILE:chdr>")
+            list(APPEND _psx_tools_tests tools_psx_chd)
+            set(_psx_tools_registration_args "")
+        else()
+            set(_psx_tools_registration_args --without-chd)
+        endif()
+        set_tests_properties(${_psx_tools_tests} PROPERTIES
+            FAIL_REGULAR_EXPRESSION "skipped;Ran 0 tests")
+        # Clean gate hosts need not install optional image tools. Decode and
+        # diff checks still run; only NumPy/Pillow rendering cases may skip.
+        set_tests_properties(tools_gpu_frame PROPERTIES
+            FAIL_REGULAR_EXPRESSION "Ran 0 tests")
+        add_test(NAME tools_ctest_registration
+            COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_ctest_tools_registration.py
+                --build-tree ${CMAKE_BINARY_DIR} --ctest ${CMAKE_CTEST_COMMAND}
+                ${_psx_tools_registration_args})
+        set_tests_properties(tools_ctest_registration PROPERTIES
+            SKIP_RETURN_CODE 77)
         add_test(
             NAME app_icon_rc_spaces
             COMMAND ${Python3_EXECUTABLE}
@@ -1309,6 +1355,7 @@ if(BUILD_TESTING)
                 cli_split_prepass_report
                 codegen_hash_line_endings
                 codegen_host_bios_stems
+                windows_rebuild_helper
                 default_renderer_guards
                 deferred_switch_interp_poll
                 mod_owned_display_controls
@@ -1367,6 +1414,10 @@ if(BUILD_TESTING)
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
+
+        set_tests_properties(windows_rebuild_helper PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:"
+            TIMEOUT 90)
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # (overlay_pair_dedup_runtime was the third of these. It failed to link:
