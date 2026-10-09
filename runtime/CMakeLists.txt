@@ -1563,6 +1563,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
+        # PS1B-407: setup checks the later tracks of a disc against the kit's
+        # track list. A disc whose last track is cut short is said, and is
+        # refused when the kit sets [prepare_disc] track_list_mismatch = "refuse".
+        add_test(NAME setup_track_list_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_setup_track_list.py)
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
             add_test(NAME missing_sbi_callers_test COMMAND ${Python3_EXECUTABLE}
                 ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_callers.py
@@ -1570,6 +1574,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             add_test(NAME missing_sbi_reason_test COMMAND ${Python3_EXECUTABLE}
                 ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_reason.py
                 --cxx ${CMAKE_CXX_COMPILER})
+            # PS1B-413: what the CLI says about a player's file is what the
+            # setup window gets, also for a file name outside ASCII. The test
+            # compiles the host's reader of the CLI's rows from its headers.
+            add_test(NAME setup_host_cli_text_test COMMAND ${Python3_EXECUTABLE}
+                ${PSXRECOMP_ROOT}/tools/tests/test_setup_host_cli_text.py
+                --compiler ${CMAKE_C_COMPILER})
+            set_tests_properties(setup_host_cli_text_test PROPERTIES
+                SKIP_RETURN_CODE 77)
         endif()
         add_test(NAME cd_seek_trace_validation_test
                  COMMAND ${Python3_EXECUTABLE}
