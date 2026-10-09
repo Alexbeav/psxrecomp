@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 import host_bash
 
 BASELINE_CLI = None
+BASELINE_CMAKE = None
 
 
 def load(name, path):
@@ -166,29 +167,63 @@ class BashCallerTests(unittest.TestCase):
                 run.assert_not_called()
         self.assertEqual(self.real_find('valid override', environ={**self.env, 'PSX_GIT_BASH': str(self.git)}, windows=True), str(self.git))
 
-    def test_cmake_finder_skips_launchers_and_honours_override(self):
+    def cmake_find(self, *, cached=None, override=None, path=None, windows_root=None):
         cmake = os.environ.get('PSX_TEST_CMAKE') or shutil.which('cmake')
         if not cmake:
             self.skipTest('standalone check needs CMake; CTest passes its actual CMAKE_COMMAND')
         script = self.root / 'find-bash.cmake'
         script.write_text('set(CMAKE_HOST_WIN32 TRUE)\n'
-                          f'set(_psxrt_bash "{self.wsl.as_posix()}")\n'
-                          f'include("{(ROOT / "runtime/host_bash.cmake").as_posix()}")\n'
+                          f'set(_psxrt_bash "{cached.as_posix() if cached else ""}")\n'
+                          f'include("{(BASELINE_CMAKE or ROOT / "runtime/host_bash.cmake").as_posix()}")\n'
                           'psxrecomp_find_bash(picked launcher)\n'
-                          'message("PICK=${picked}")\n', encoding='utf-8')
+                          'message("PICK=${picked}\\nLAUNCHER=${launcher}")\n', encoding='utf-8')
         env = {**os.environ, **self.env}
         for name in ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
             env.pop(name, None)
+        env.pop('PSX_GIT_BASH', None)
+        if override is not None:
+            env['PSX_GIT_BASH'] = str(override)
+        if path is not None:
+            env['PATH'] = os.pathsep.join(str(directory) for directory in path)
+        if windows_root is not None:
+            env['SystemRoot'] = str(windows_root)
         # CMake converts PATH using its real host separator. This does not execute Bash.
+        return subprocess.run([cmake, '-P', str(script)], env=env,
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+
+    def directory_alias(self, link, target):
+        # All targets are empty authored fixtures inside this temporary directory.
+        self.assertTrue(link.parent.resolve().is_relative_to(self.root.resolve()))
+        self.assertTrue(target.resolve().is_relative_to(self.root.resolve()))
+        if os.name == 'nt':
+            powershell = shutil.which('pwsh') or shutil.which('powershell')
+            if not powershell:
+                self.skipTest('authored directory junction needs PowerShell')
+            script = self.root / 'make-junction.ps1'
+            script.write_text('param([string]$Link, [string]$Target)\n'
+                              'New-Item -ItemType Junction -Path $Link -Value $Target '
+                              '-ErrorAction Stop | Out-Null\n', encoding='utf-8')
+            proc = subprocess.run([powershell, '-NoLogo', '-NoProfile', '-NonInteractive',
+                                   '-File', str(script), '-Link', str(link), '-Target', str(target)],
+                                  capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                  timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+            if proc.returncode:
+                self.skipTest('authored junction unavailable: ' + proc.stdout + proc.stderr)
+            self.addCleanup(link.rmdir)
+        else:
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest('authored directory symlink unavailable: ' + str(exc))
+            self.addCleanup(link.unlink)
+        self.assertEqual(link.resolve(), target.resolve())
+        return link
+
+    def test_cmake_finder_skips_launchers_and_honours_override(self):
         for explicit, good in ((None, True), (self.git, True), (self.wsl, False), (self.root / 'missing.exe', False)):
             with self.subTest(override=explicit):
-                case_env = dict(env)
-                case_env.pop('PSX_GIT_BASH', None)
-                if explicit:
-                    case_env['PSX_GIT_BASH'] = str(explicit)
-                proc = subprocess.run([cmake, '-P', str(script)], env=case_env,
-                                      capture_output=True, text=True, encoding='utf-8', errors='replace',
-                                      creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                proc = self.cmake_find(cached=self.wsl, override=explicit)
                 if good:
                     self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                     self.assertIn('PICK=' + self.git.as_posix(), (proc.stdout + proc.stderr).replace('\\', '/'))
@@ -196,13 +231,54 @@ class BashCallerTests(unittest.TestCase):
                     self.assertNotEqual(proc.returncode, 0)
                     self.assertIn('PSX_GIT_BASH', proc.stdout + proc.stderr)
 
+    def test_cmake_finder_refuses_aliases_in_override_cache_and_path(self):
+        alias = self.directory_alias(self.root / 'launcher alias', self.wsl.parent) / 'bash.exe'
+        for route in ('override', 'cache', 'PATH'):
+            with self.subTest(route=route):
+                proc = self.cmake_find(override=alias if route == 'override' else None,
+                                       cached=alias if route == 'cache' else None,
+                                       path=[alias.parent, self.git.parent])
+                output = (proc.stdout + proc.stderr).replace('\\', '/')
+                if route == 'override':
+                    self.assertNotEqual(proc.returncode, 0, output)
+                    self.assertIn('PSX_GIT_BASH', output)
+                else:
+                    self.assertEqual(proc.returncode, 0, output)
+                    self.assertIn('PICK=' + self.git.as_posix(), output)
+                    self.assertIn('LAUNCHER=' + alias.as_posix(), output)
+
+    def test_cmake_finder_resolves_root_and_retains_windowsapps_spelling(self):
+        root_alias = self.directory_alias(self.root / 'root alias', self.windows)
+        apps_parent = self.root / 'Microsoft'
+        apps_parent.mkdir()
+        apps = self.directory_alias(apps_parent / 'WindowsApps', self.git.parent) / 'bash.exe'
+        for explicit, windows_root in ((self.wsl, root_alias), (apps, self.windows)):
+            with self.subTest(override=explicit):
+                proc = self.cmake_find(override=explicit, windows_root=windows_root)
+                self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertIn('PSX_GIT_BASH', proc.stdout + proc.stderr)
+
+    def test_cmake_finder_accepts_spaced_git_aliases(self):
+        alias = self.directory_alias(self.root / 'Git alias with spaces', self.git.parent) / 'bash.exe'
+        for route in ('override', 'cache', 'PATH'):
+            with self.subTest(route=route):
+                proc = self.cmake_find(override=alias if route == 'override' else None,
+                                       cached=alias if route == 'cache' else None, path=[alias.parent])
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertIn('PICK=' + alias.as_posix(), (proc.stdout + proc.stderr).replace('\\', '/'))
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--baseline-cli', type=Path)
+    baseline = parser.add_mutually_exclusive_group()
+    baseline.add_argument('--baseline-cli', type=Path)
+    baseline.add_argument('--baseline-cmake', type=Path)
     args, remaining = parser.parse_known_args()
     BASELINE_CLI = args.baseline_cli
+    BASELINE_CMAKE = args.baseline_cmake
     suite = (unittest.TestSuite([BashCallerTests('test_cli_fingerprint_never_executes_the_first_path_launcher')])
-             if BASELINE_CLI else unittest.defaultTestLoader.loadTestsFromTestCase(BashCallerTests))
+             if BASELINE_CLI else
+             unittest.TestSuite([BashCallerTests('test_cmake_finder_refuses_aliases_in_override_cache_and_path')])
+             if BASELINE_CMAKE else unittest.defaultTestLoader.loadTestsFromTestCase(BashCallerTests))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)
