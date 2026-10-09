@@ -83,6 +83,11 @@ void psx_rfe_mark_escape(void) {}
 int psx_syscall(CPUState *cpu, uint32_t code) {
     (void)cpu; (void)code; return 0;
 }
+/* These ownership fixtures contain no BREAK; an unexpected call must fail. */
+void psx_game_break(CPUState *cpu, uint32_t code, uint32_t pc, int in_delay_slot) {
+    (void)cpu; (void)code; (void)pc; (void)in_delay_slot;
+    abort();
+}
 void psx_unknown_dispatch(CPUState *cpu, uint32_t addr, uint32_t phys) {
     (void)cpu; (void)addr; (void)phys;
 }

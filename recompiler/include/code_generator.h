@@ -424,7 +424,8 @@ private:
     int detect_cull_bltz_sites(const ControlFlowGraph& cfg);
 
     // Instruction translation
-    std::string translate_instruction(uint32_t addr, uint32_t instr);
+    std::string translate_instruction(uint32_t addr, uint32_t instr,
+                                      bool in_delay_slot = false);
 
     // Register name mapping
     static std::string reg_name(int reg_num);

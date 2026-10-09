@@ -836,7 +836,8 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
     return keep_branch_if_wide("0 /* unknown branch condition: defaults to not-taken */");
 }
 
-std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) {
+std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr,
+                                                bool in_delay_slot) {
     uint32_t opcode = (instr >> 26) & 0x3F;
     uint32_t funct = instr & 0x3F;
 
@@ -1488,7 +1489,8 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
             case 0x0D:                                          // break
                 {
                     uint32_t break_code = (instr >> 6) & 0xFFFFF;
-                    code = fmt::format("/* break({}) — trap, no-op in recompiler */", break_code);
+            code = fmt::format("psx_game_break(cpu, 0x{:05X}u, 0x{:08X}u, {}); return;",
+                               break_code, addr, in_delay_slot ? 1 : 0);
                 }
                 break;
             case 0x10: code = translate_mfhi(instr); break;    // mfhi
@@ -1928,10 +1930,10 @@ std::string CodeGenerator::translate_basic_block(
         }
         return rt == r;
     };
-    auto emit_value = [&](uint32_t pc, uint32_t word) {
+    auto emit_value = [&](uint32_t pc, uint32_t word, bool in_delay_slot = false) {
         uint32_t writer = 0;
         for (uint32_t r=1;r<32;r++) if (writes_gpr(word,r)) { writer=r; break; }
-        return emit_load_value(word,writer,translate_instruction(pc,word));
+        return emit_load_value(word,writer,translate_instruction(pc,word,in_delay_slot));
     };
 
     /* Zero-word runs. Discovery reaches the zero-filled BSS / overlay load
@@ -2170,7 +2172,7 @@ std::string CodeGenerator::translate_basic_block(
                         if (block.exit_instr.is_likely) {
                             ss << config_.indent << "/* delay slot (likely) - conditional execution */\n";
                             ss << config_.indent << "if (" << generate_branch_condition(block.exit_instr.instruction, block.exit_instr.address) << ") {\n";
-                            ss << emit_value(delay_slot_addr, delay_instr);
+                            ss << emit_value(delay_slot_addr, delay_instr, true);
                             emit_cosim_instr(delay_slot_addr, config_.indent + config_.indent);
                             ss << config_.indent << "}\n";
                         } else {
@@ -2186,7 +2188,7 @@ std::string CodeGenerator::translate_basic_block(
                             // Delay slot's own fetch + §1+deps+DO_LDS, before its body (skipped if a load).
                             if (cycle_per_insn) emit_pre_icache(delay_slot_addr, config_.indent);
                             if (cycle_per_insn) emit_pre_timing(delay_instr, config_.indent);
-                            ss << emit_value(delay_slot_addr, delay_instr);
+                            ss << emit_value(delay_slot_addr, delay_instr, true);
                             emit_cosim_instr(delay_slot_addr, config_.indent);
                         }
                     }

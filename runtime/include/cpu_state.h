@@ -184,6 +184,10 @@ extern uint32_t psx_gte_cmd_latency(uint32_t cmd);  /* cycles-1 for the 6-bit op
 
 extern void psx_unaligned_access(CPUState* cpu, uint32_t addr, uint32_t pc);
 extern void psx_break(CPUState* cpu, uint32_t code, uint32_t pc);
+/* Compiled game BREAK: enter the guest vector, or keep the fatal trap policy.
+ * Delay-slot BREAK remains fatal because branch EPC/BD is not supported. */
+extern void psx_game_break(CPUState* cpu, uint32_t code, uint32_t pc,
+                           int in_delay_slot);
 /* Fail-closed native entry guard: a function's CPS entry-switch calls this when
  * dispatched at a PC that is not one of its legal entries (foreign interior PC
  * from a range-ownership mismatch). The function returns without executing; the
