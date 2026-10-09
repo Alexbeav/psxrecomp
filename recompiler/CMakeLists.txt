@@ -1295,6 +1295,12 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # ---- runtime source-invariant guards --------------------------------
+        if(NOT MSVC)
+            add_test(NAME pgxp_mod_startup
+                COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_pgxp_mod_startup.py
+                    --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+        endif()
         # These live in runtime/tests/ but only READ runtime source, so they
         # need neither a generated BIOS nor a built runtime. Registering them
         # here (as dirty_text_continuation_guards already was) means they run

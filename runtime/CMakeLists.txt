@@ -1571,6 +1571,12 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME present_skip_cadence_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_present_skip_cadence_guard.py)
+        if(NOT MSVC)
+            add_test(NAME pgxp_mod_startup
+                COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pgxp_mod_startup.py
+                    --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+        endif()
         add_test(NAME mod_bezel_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_bezel.py)

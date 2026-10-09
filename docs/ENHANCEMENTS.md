@@ -770,6 +770,17 @@ re-test protocol are preserved on `park/pgxp-geometry-correction` (see its G1.9)
 
 ### G1.10 — PGXP value-propagation engine LANDED, phases 0+1 (2026-08-15)
 
+The built-in PGXP mod requests geometry correction, perspective texturing and
+its CPU-mode option during activation. Session video setup applies that request
+after the baseline settings. Directly switching the corrections on during
+activation lets the later baseline setters switch them off again (PS1G-66).
+Each launcher session clears the request before activating its selected mods.
+Netplay ignores the offline request, including during a session reboot.
+`pgxp_mod_startup` executes the actual built-in activation and the video-setting
+statements. It checks the order, disabling a previously enabled mod, the CPU
+option, the independent texture setting and the netplay control. This check
+does not qualify a title picture or change G1.9's geometry-quality limits.
+
 The G1.2/G1.3 mechanism — precision travelling WITH the data — now exists
 (`feat/pgxp-dataflow`, tracked as `beads-eio.3.48`). **Clean-room**: the
 vendored `duckstation/` tree is CC BY-NC-ND (NoDerivatives) and `beetle-psx/`

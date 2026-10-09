@@ -15,15 +15,10 @@
  * is validated against the exact packet word before it is believed.
  */
 #include "mod_plugins.h"
-#include "pgxp.h"
 
 #include <string.h>
 
 #define PKG_PGXP "psx.enhancement.pgxp"
-
-/* gte.cpp / gpu.c — the two correction toggles this mod arms. */
-extern void gte_geometry_correction_set(int enabled);
-extern void gpu_texture_correction_set(int enabled);
 
 static int pgxp_option_flag(const char* feature, const char* id) {
     char text[16] = "";
@@ -32,9 +27,7 @@ static int pgxp_option_flag(const char* feature, const char* id) {
 }
 
 static void builtin_pgxp_activate(void) {
-    gte_geometry_correction_set(1);
-    gpu_texture_correction_set(1);   /* also arms the shadow engine */
-    pgxp_set_cpu_mode(pgxp_option_flag("pgxp", "cpu_mode"));
+    psx_mod_request_pgxp(pgxp_option_flag("pgxp", "cpu_mode"));
 }
 
 PSX_MOD_CONSTRUCTOR(psx_register_builtin_pgxp_plugin) {
