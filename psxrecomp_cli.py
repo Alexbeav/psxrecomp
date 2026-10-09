@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "tools"))
 from sdk_progress import ProgressReporter  # noqa: E402
 from disc_companion import CompanionError, inspect_companion  # noqa: E402
+import disc_track_list  # noqa: E402
 import psx_chd  # noqa: E402
 from toolchain_pack import (  # noqa: E402
     ToolchainRefused,
@@ -1055,6 +1056,58 @@ def ensure_chd_reader(
     return lib
 
 
+def check_track_list(
+    identity: dict[str, Any],
+    selected: Path,
+    prep: dict[str, Any],
+    netplay: Optional[dict[str, Any]],
+    progress: ProgressReporter,
+    *,
+    skip_hash: bool,
+    data_track_checked: bool,
+    chd_tracks: Optional[list] = None,
+) -> None:
+    """The later tracks of a disc whose data track is accepted (PS1B-407).
+
+    The digests of [prepare_disc] cover the data track only. The kit's track
+    list ([netplay] required_disc_fp, required_tracks) covers the rest: how
+    many tracks, and where each begins and ends. A difference is logged as one
+    sentence, or refuses the disc when the kit sets
+    [prepare_disc] track_list_mismatch = "refuse". See tools/disc_track_list.py.
+
+    Every check writes one "track_list" row with its status, so that a check
+    that did not run cannot look like one that passed.
+    """
+    stopped = False
+    if skip_hash:
+        record: dict[str, Any] = {"status": "not_checked", "reason": "--skip-hash-check"}
+    else:
+        try:
+            record = disc_track_list.check(
+                selected, netplay, prep, chd_tracks=chd_tracks,
+                data_track_checked=data_track_checked,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # A fault in this check must not stop a setup that worked before
+            # the check existed. The row and one line say that it did not run.
+            stopped = True
+            record = {"status": "not_checked",
+                      "reason": f"the check stopped: {type(exc).__name__}: {exc}"}
+    identity["track_list"] = record
+    progress.event("track_list", **record)
+    if stopped:
+        progress.log("Track list was not checked: the check itself stopped. "
+                     "The disc is accepted on its data track.", level="warning")
+    if record.get("kit_fault"):
+        progress.log("KIT FAULT: " + record["kit_fault"], level="warning")
+    if record["status"] != "mismatch":
+        return
+    if record["policy"] == disc_track_list.REFUSE:
+        identity["verified"] = False
+        raise DiscVerifyError(record["sentence"])
+    progress.log(record["sentence"], level="warning")
+
+
 def _verify_chd(
     disc: Path,
     prep: dict[str, Any],
@@ -1062,6 +1115,7 @@ def _verify_chd(
     skip_hash: bool,
     progress: ProgressReporter,
     chd_lib: Optional[Path],
+    netplay: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """verify_disc_path for a .chd: reproduce the Redump track bytes through
     libchdr and check those digests, never the compressed container's."""
@@ -1073,6 +1127,7 @@ def _verify_chd(
             progress.log(
                 f"{disc.name}: {len(chd.tracks)} track(s), reading through {lib_path.name}"
             )
+            chd_tracks = list(chd.tracks)
             chd_digests = psx_chd.digests(chd)
     except psx_chd.ChdError as exc:
         raise DiscVerifyError(str(exc)) from exc
@@ -1097,10 +1152,19 @@ def _verify_chd(
         "chd": {"layout": layout or "multi", "tracks": len(chd_digests.tracks)},
     }
     progress.event("disc", **identity)
+
+    def track_list(data_track_checked: bool) -> None:
+        check_track_list(
+            identity, disc, prep, netplay, progress, skip_hash=skip_hash,
+            data_track_checked=data_track_checked, chd_tracks=chd_tracks,
+        )
+
     if not md5s and not sha1s and not sizes:
         identity["verified"] = True
+        track_list(False)
         return identity
     if skip_hash:
+        track_list(False)
         return identity
     if layout is None:
         first = chd_digests.first_track
@@ -1111,6 +1175,7 @@ def _verify_chd(
             f"whole disc: size={whole.size} md5={whole.md5} sha1={whole.sha1})"
         )
     identity["verified"] = True
+    track_list(True)
     return identity
 
 
@@ -1121,8 +1186,14 @@ def verify_disc_path(
     skip_hash: bool,
     progress: ProgressReporter,
     chd_lib: Optional[Path] = None,
+    netplay: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    path = disc.resolve()
+    """Check the selected disc against the kit: the data track by its digest
+    ([prepare_disc] known_*), then the track list by the kit's own
+    ([netplay], see check_track_list). `netplay` is the kit's [netplay] table;
+    without it the track list is not checked, and the result says so."""
+    selected = disc.resolve()
+    path = selected
     if path.suffix.lower() == ".cue":
         path = resolve_cue_bin(path)
     elif path.suffix.lower() == ".chd":
@@ -1130,7 +1201,8 @@ def verify_disc_path(
         # is a compressed container, so it is read back through libchdr into
         # the same bytes a Redump .bin holds and those are what get hashed.
         return _verify_chd(
-            path, prep, skip_hash=skip_hash, progress=progress, chd_lib=chd_lib
+            path, prep, skip_hash=skip_hash, progress=progress, chd_lib=chd_lib,
+            netplay=netplay,
         )
     md5, sha1, size = file_hashes(path)
     try:
@@ -1151,10 +1223,19 @@ def verify_disc_path(
     sizes = [int(s) for s in (prep.get("known_sizes") or [])]
     md5s = [str(x).lower() for x in (prep.get("known_md5") or [])]
     sha1s = [str(x).lower() for x in (prep.get("known_sha1") or [])]
+
+    def track_list(data_track_checked: bool) -> None:
+        check_track_list(
+            identity, selected, prep, netplay, progress, skip_hash=skip_hash,
+            data_track_checked=data_track_checked,
+        )
+
     if not md5s and not sha1s and not sizes:
         identity["verified"] = True
+        track_list(False)
         return identity
     if skip_hash:
+        track_list(False)
         return identity
     ok = (md5 in md5s) or (sha1 in sha1s)
     if not ok and sizes and size in sizes and not md5s and not sha1s:
@@ -1165,6 +1246,7 @@ def verify_disc_path(
             f"(size={size} md5={md5} sha1={sha1})"
         )
     identity["verified"] = True
+    track_list(True)
     return identity
 
 
@@ -1200,13 +1282,16 @@ def cmd_verify_disc(args: argparse.Namespace, progress: ProgressReporter) -> int
     try:
         identity = verify_disc_path(
             disc, prep, skip_hash=bool(args.skip_hash_check), progress=progress,
-            chd_lib=chd_lib,
+            chd_lib=chd_lib, netplay=secs.get("netplay") or {},
         )
     except DiscVerifyError as exc:
         progress.error(str(exc), code=EXIT_VERIFY, verify_failed=True)
         return EXIT_VERIFY
+    track_list = {"match": "the kit's", "mismatch": "not the kit's (see the line above)"}.get(
+        identity["track_list"]["status"], "not checked")
     progress.phase("done", pct=1.0,
-                   message=f"Main track accepted; subchannel status: {identity['subchannel']['status']}")
+                   message=f"Main track accepted; track list: {track_list}; "
+                           f"subchannel status: {identity['subchannel']['status']}")
     progress.result(ok=True, **identity)
     return EXIT_OK
 
@@ -1363,7 +1448,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if disc.is_file():
             verify_disc_path(
                 disc, prep, skip_hash=bool(args.skip_hash_check), progress=progress,
-                chd_lib=chd_lib,
+                chd_lib=chd_lib, netplay=secs.get("netplay") or {},
             )
     except DiscVerifyError as exc:
         progress.error(str(exc), code=EXIT_VERIFY, verify_failed=True)

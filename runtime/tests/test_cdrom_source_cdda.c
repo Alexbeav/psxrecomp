@@ -66,12 +66,67 @@ setenv(k,v,1);
 #endif
 }
 static void out(FILE *f,uint32_t v){uint8_t b[]={v,v>>8,v>>16,v>>24};if(fwrite(b,1,4,f)!=4)exit(3);}
+
+/* Scope report. Where the source profile is not qualified the controller
+ * stops the process with exit status 2. The status does not say which
+ * statement stopped it, and a stop during setup has the same status. For a
+ * scope case the fixture therefore writes, when the process ends, the step
+ * that was running and the controller values before that step and at the
+ * end. The contract driver reads the file; nothing is read from stderr. */
+enum { SCOPE_VALUES = 11 };
+static const char *const scope_names[SCOPE_VALUES] = {
+    "draws", "tape_cursor", "status", "mode", "cdda_playing", "cdda_seeking",
+    "reading", "irq_flag", "irq_raises", "response_bytes", "command_pending"};
+static const char *scope_path;
+static int scope_step; /* 0 setup, 1 the step under test, 2 the step returned */
+static uint32_t scope_before[SCOPE_VALUES];
+static void scope_values(uint32_t *v) {
+    v[0] = s_source_clock_calls; v[1] = s_source_clock_tape.cursor;
+    v[2] = stat_reg; v[3] = mode_reg;
+    v[4] = (uint32_t)cdda_playing; v[5] = (uint32_t)source_cdda.seeking;
+    v[6] = (uint32_t)reading; v[7] = irq_flag; v[8] = (uint32_t)irq_raises;
+    v[9] = (uint32_t)(response_count - response_read); v[10] = (uint32_t)queued_cmd.pending;
+}
+static void scope_report(void) {
+    uint32_t now[SCOPE_VALUES];
+    FILE *f = fixture_create_new(scope_path);
+    if (!f) return;
+    scope_values(now);
+    fprintf(f, "step %d\n", scope_step);
+    for (int i = 0; i < SCOPE_VALUES; i++)
+        fprintf(f, "%s %u %u\n", scope_names[i], (unsigned)scope_before[i], (unsigned)now[i]);
+    fclose(f);
+}
+/* One scope case, from the state cdrom_init leaves. Each refused case has an
+ * accepted twin that differs in the one condition only. */
+static int scope_case(const char *name) {
+    int play = 0;
+    uint8_t command = 0;
+    if (!strcmp(name, "single-speed")) play = 1;                           /* accepted */
+    else if (!strcmp(name, "double-speed")) { play = 1; mode_reg = 0x80; } /* refused */
+    else if (!strcmp(name, "active-read")) { play = 1; reading = 1; }      /* refused */
+    else if (!strcmp(name, "getstat")) command = 0x01;                     /* accepted */
+    else if (!strcmp(name, "scan-forward")) command = 0x04;                /* refused */
+    else if (!strcmp(name, "scan-backward")) command = 0x05;               /* refused */
+    else return 6;
+    scope_values(scope_before);
+    scope_step = 1;
+    if (play) start_source_cdda(2);
+    else cdrom_write(0x1f801801, command);
+    scope_step = 2;
+    return 0;
+}
+static int scope_requested(const char *name) {
+    return strcmp(name, "capture") && strcmp(name, "write-state") && strcmp(name, "restore");
+}
+
 int main(int argc,char **argv){if(argc!=4 && argc!=5)return 2;
+if(argc==5 && scope_requested(argv[4])){scope_path=argv[3];atexit(scope_report);}
 env("PSX_CD_EXPLICIT_SEEK_MODEL","octoshock-2.2.2");env("PSX_CD_TOC_SEEK_MODEL","octoshock-2.2.2");env("PSX_CD_READ_START_MODEL","octoshock-2.2.2-pipeline");env("PSX_CD_COLD_STATUS_MODEL","octoshock-2.2.2");env("PSX_CD_SOURCE_CLOCK_TAPE",argv[1]);env("PSX_CD_CDDA_MODEL","octoshock-2.3");
 cdrom_init("authored");
 /* Match the isolated oracle's explicit powered, disc-poked STOPPED head.
  * This unit precondition is not the runtime's production cold-boot image. */
-if(argc==5){if(!strcmp(argv[4],"capture"))cdrom_snapshot_bytes();else if(!strcmp(argv[4],"write-state"))cdrom_snapshot_write(NULL);else if(!strcmp(argv[4],"scan"))cdrom_write(0x1f801801,4);else if(!strcmp(argv[4],"restore"))return cdrom_snapshot_read(NULL,0)?1:0;else if(!strcmp(argv[4],"double-speed")){mode_reg=0x80;start_source_cdda(2);}else if(!strcmp(argv[4],"active-read")){reading=1;start_source_cdda(2);}return 1;}
+if(argc==5){if(!strcmp(argv[4],"capture"))cdrom_snapshot_bytes();else if(!strcmp(argv[4],"write-state"))cdrom_snapshot_write(NULL);else if(!strcmp(argv[4],"restore"))return cdrom_snapshot_read(NULL,0)?1:0;else return scope_case(argv[4]);return 1;}
 stat_reg=CDSTAT_SHELL;s_source_seek_paused=0;read_sec=2;setloc_pending=1;s_setloc_lba=0;
 FILE *in=fopen(argv[2],"rb"),*f=fixture_create_new(argv[3]);if(!in||!f)return 3;uint8_t bytes[16];
 while(fread(bytes,1,16,in)==16){uint32_t o[4];for(int i=0;i<4;i++)o[i]=cd_tape_le32(bytes+i*4);

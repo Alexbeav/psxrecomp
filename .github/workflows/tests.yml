@@ -42,6 +42,13 @@ jobs:
         run: cmake --build recompiler/build --parallel 4
       - name: Run recompiler tests
         run: ctest --test-dir recompiler/build --output-on-failure --parallel 4
+      - name: Qualified-hunk registry
+        # The registry is an integrity check on the source tree: it fails when a registered
+        # accuracy hunk is missing and not recorded as debt. Worktree mode reads the checked-out
+        # files, so it needs no git revision and no retail assets. Until now it ran only in the
+        # Pegasus build (build_cache.stage_tools), so a composed pin could carry an evolved hunk
+        # and the first notice was a refused build (pin F, 2026-09-28).
+        run: python tools/tasreplays/qualified_hunks.py check
       - name: Install GL development files
         # psx-runtime and psx-oracle are part of the runtime tree's default
         # build and link libGL (gpu_gl_renderer.c).

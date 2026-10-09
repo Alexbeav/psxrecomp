@@ -203,6 +203,10 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_changethread_in_handler.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME overlay_dispatch_region_counters_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_dispatch_region_counters.py --cc ${CMAKE_C_COMPILER})
+        # PS1B-343: a data shard replay marks the RAM pages it writes. Links
+        # the real data_shards.c and memory.c.
+        add_test(NAME data_shard_replay_marks_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_data_shard_replay_marks.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME tas_resume_interval_test COMMAND ${Python3_EXECUTABLE}
             ${PSXRECOMP_ROOT}/tools/tasreplays/test_resume_interval.py)
         foreach(_opt IN ITEMS 0 2)
@@ -212,9 +216,6 @@ if(BUILD_TESTING)
             target_compile_options(${_target} PRIVATE -O${_opt} -UNDEBUG)
             add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_source_cdda_contracts.py $<TARGET_FILE:${_target}>)
-            # Disabled (PS1B-167): stderr trace removed by T172 8ffbb053 (rule 3); convert to
-            # a debug-server/ring observation. The unsupported cases still exit 2.
-            set_tests_properties(${_target} PROPERTIES DISABLED TRUE)
         endforeach()
         add_executable(critical_exception_test tests/test_critical_exception.c)
         target_include_directories(critical_exception_test PRIVATE include)
@@ -924,6 +925,20 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_link_libraries(overlay_capture_queue_bound_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME overlay_capture_queue_bound_test COMMAND overlay_capture_queue_bound_test)
 
+    # The durable capture history (overlay_capture_history = true) keeps one
+    # whole record per snapshot while the emulation thread, the queue's writer
+    # and the periodic capture's writer commit at the same time (PS1B-396).
+    add_executable(overlay_capture_history_test
+        tests/test_overlay_capture_history.cpp
+        src/overlay_capture.c)
+    target_include_directories(overlay_capture_history_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(overlay_capture_history_test PRIVATE
+        SDL_MAIN_HANDLED PSX_OVERLAY_CAPTURE_TEST=1
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(overlay_capture_history_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME overlay_capture_history_test COMMAND overlay_capture_history_test)
+
     add_executable(overlay_path_canon_test
         tests/test_overlay_path_canon.c
         src/overlay_path_canon.c)
@@ -1236,6 +1251,32 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         src/freeze_dump_policy.c)
     target_include_directories(freeze_dump_policy_test PRIVATE src)
     add_test(NAME freeze_dump_policy_test COMMAND freeze_dump_policy_test)
+
+    # The heartbeat unit itself, one sample per call, with the production
+    # dump policy. Each scenario writes psx_freeze_heartbeat.json and its
+    # dumps into the working directory, so each has a directory of its own.
+    add_executable(freeze_heartbeat_wedge_test
+        tests/test_freeze_heartbeat_wedge.c
+        src/freeze_dump_policy.c)
+    target_include_directories(freeze_heartbeat_wedge_test PRIVATE include src)
+    if(WIN32)
+        target_link_libraries(freeze_heartbeat_wedge_test PRIVATE dbghelp)
+    else()
+        find_package(Threads REQUIRED)
+        target_link_libraries(freeze_heartbeat_wedge_test PRIVATE
+            Threads::Threads ${CMAKE_DL_LIBS})
+    endif()
+    foreach(_scenario IN ITEMS
+            budget-after-startup dump-at-frame dump-at-frame-bad-value
+            spin-ends-only spin-wait-ends spin-real spin-video
+            spin-pause-restarts)
+        file(MAKE_DIRECTORY
+            ${CMAKE_CURRENT_BINARY_DIR}/freeze_heartbeat_wedge_scratch/${_scenario})
+        add_test(NAME freeze_heartbeat_wedge_${_scenario}
+                 COMMAND freeze_heartbeat_wedge_test ${_scenario}
+                 WORKING_DIRECTORY
+                     ${CMAKE_CURRENT_BINARY_DIR}/freeze_heartbeat_wedge_scratch/${_scenario})
+    endforeach()
 
     add_executable(frame_interpolation_schedule_test
         tests/test_frame_interpolation_schedule.c
@@ -1569,6 +1610,10 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
+        # PS1B-407: setup checks the later tracks of a disc against the kit's
+        # track list. A disc whose last track is cut short is said, and is
+        # refused when the kit sets [prepare_disc] track_list_mismatch = "refuse".
+        add_test(NAME setup_track_list_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_setup_track_list.py)
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
             add_test(NAME missing_sbi_callers_test COMMAND ${Python3_EXECUTABLE}
                 ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_callers.py
@@ -1576,6 +1621,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
             add_test(NAME missing_sbi_reason_test COMMAND ${Python3_EXECUTABLE}
                 ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_reason.py
                 --cxx ${CMAKE_CXX_COMPILER})
+            # PS1B-413: what the CLI says about a player's file is what the
+            # setup window gets, also for a file name outside ASCII. The test
+            # compiles the host's reader of the CLI's rows from its headers.
+            add_test(NAME setup_host_cli_text_test COMMAND ${Python3_EXECUTABLE}
+                ${PSXRECOMP_ROOT}/tools/tests/test_setup_host_cli_text.py
+                --compiler ${CMAKE_C_COMPILER})
+            set_tests_properties(setup_host_cli_text_test PROPERTIES
+                SKIP_RETURN_CODE 77)
         endif()
         add_test(NAME cd_seek_trace_validation_test
                  COMMAND ${Python3_EXECUTABLE}
