@@ -6,8 +6,15 @@ static constexpr SbiRequirement kSbiRequirements[] = {
 // Warning-only serials; no pressing or companion hash qualification.
 static constexpr const char* kKnownLibcryptSerials[] = {
     "SCES-02105",
+    "SLES-01301",
+    "SLES-02328",
+    "SLES-02529",
     "SLES-02965",
+    "SLES-03324",
+    "SLES-03530",
+    "SLES-12328",
     "SLES-12965",
+    "SLES-22328",
     "SLES-22965",
     "SLES-32965",
 };

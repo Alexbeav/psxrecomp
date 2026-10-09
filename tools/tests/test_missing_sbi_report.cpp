@@ -7,6 +7,15 @@
 
 int main() {
     char report[8192];
+    // PS1B-467 comment7-4916: eight selected fleet serials, warning metadata only.
+    const char* fleet_serials[] = {"SLES-02529", "SLES-01301", "SLES-02328",
+        "SLES-12328", "SLES-22328", "SLES-03324", "SLES-03530", "SCES-02105"};
+    for (const char* serial : fleet_serials) {
+        const auto missing = PSXRecompV4::missing_sbi_warning("fleet.chd", serial, false);
+        assert(missing.find("Missing SBI: " + std::string(serial)) == 0);
+        assert(missing.find("fleet.chd") != std::string::npos);
+        assert(PSXRecompV4::missing_sbi_warning("fleet.chd", serial, true).empty());
+    }
     for (const char* serial : PSXRecompV4::kKnownLibcryptSerials) {
         const auto missing = PSXRecompV4::missing_sbi_warning("disc.cue", serial, false);
         assert(missing.find("Missing SBI: " + std::string(serial)) == 0);
