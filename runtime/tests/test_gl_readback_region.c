@@ -59,6 +59,35 @@ static void verify_depth24_primitive_authority(void) {
  check(glb_vram_read(40,40)==0,"depth24 primitive fixture retains clear-on-leave");
  verify("depth24 primitive fixture leaves coherent 15-bit VRAM");
 }
+static void verify_depth24_upload_order(void) {
+ uint16_t upload[8*4], readback[8*4];
+ /* Small uploads outside the movie clear band must reach the GPU before
+  * a mirror draw or overlapping copy changes their CPU-backed source. */
+ for(int i=0;i<8*4;i++)upload[i]=0x7bde;
+ test_depth24=1;depth24_upload_policy();
+ glb_vram_transfer_in(900,400,8,4,upload);
+ check(s_up_nrects>0,"depth24 small blend upload is queued");
+ glb_set_semi_transparency(1,0);
+ glb_draw_flat_rect(900,400,8,4,0);
+ glb_set_semi_transparency(0,0);
+ check(image[400*1024+900]==0x3def,"depth24 small blend updates CPU once");
+ test_depth24=0;depth24_upload_policy();
+ uint16_t blended=glb_vram_read(900,400);
+ printf("ordered_blend_native=%04x\n",blended);
+ check(blended==0x3def,"depth24 upload precedes half blend");
+
+ for(int i=0;i<8*4;i++)upload[i]=(i%8<4)?0x001f:0x03e0;
+ test_depth24=1;depth24_upload_policy();
+ glb_vram_transfer_in(900,416,8,4,upload);
+ check(s_up_nrects>0,"depth24 small copy upload is queued");
+ glb_copy_rect(900,416,904,416,8,4);
+ check(image[416*1024+908]==0x03e0,"depth24 overlapping copy updates CPU once");
+ test_depth24=0;depth24_upload_policy();
+ glb_vram_transfer_out(904,416,8,4,readback);
+ printf("ordered_copy_native=%04x\n",readback[4]);
+ check(memcmp(upload,readback,sizeof upload)==0,"depth24 upload precedes overlapping copy");
+ verify("depth24 outside-band upload operations remain coherent");
+}
 static void verify_bank_batching(void) {
  static uint16_t bank[256*128], baseline[96*96], result[96*96];
  for(int i=256;i<256*128;++i)bank[i]=0x3210;
@@ -152,6 +181,7 @@ int main(int argc,char **argv){
  for(int i=0;i<1024*512;i++)image[i]=(uint16_t)((i*23)&0x7fff);
  gl_renderer_restage_vram_after_savestate();verify("state restage with pending draw");
  verify_depth24_primitive_authority();
+ verify_depth24_upload_order();
  /* Existing depth24 policy clears the skipped movie band on return to15-bit.
   * That GPU write must become visible without waiting for another primitive. */
  static uint16_t movie[480*16], texture[4]={0x3210,0x3210,0x3210,0x3210};
