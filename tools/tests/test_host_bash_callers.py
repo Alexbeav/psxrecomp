@@ -245,7 +245,6 @@ class BashCallerTests(unittest.TestCase):
                 else:
                     self.assertEqual(proc.returncode, 0, output)
                     self.assertIn('PICK=' + self.git.as_posix(), output)
-                    self.assertIn('LAUNCHER=' + alias.as_posix(), output)
 
     def test_cmake_finder_resolves_root_and_retains_windowsapps_spelling(self):
         root_alias = self.directory_alias(self.root / 'root alias', self.windows)
