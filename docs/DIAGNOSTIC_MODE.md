@@ -91,6 +91,10 @@ The diagnostic product can record what you play as a frame-exact input route
   --diagnostic-dir build-diagnostic` on both the Windows deferred-helper route
   and the POSIX route, because setup pruned the normal product's intermediates
   and the player may have optimised it with PGO since.
+- On Windows, ordinary and diagnostic rebuild helpers use separate files in
+  the project's private `_scratch` directory. Configure can replace either
+  build directory. The host refuses a build directory that contains `_scratch`
+  before writing a helper; choose a different build directory in that case.
 - `--setup-selfcheck` reports `diagnostic_build_present` and
   `diagnostic_mode_requested`, so a kit's diagnostic readiness is scriptable.
 - A diagnostic build failure never removes the normal product. In the
@@ -101,7 +105,9 @@ The diagnostic product can record what you play as a frame-exact input route
   both products; the collector's include and exclude lists),
   `runtime/tests/test_cli_diagnostic_only.py` (a diagnostic request leaves the
   normal build directory unchanged, with or without PGO enabled) and
-  `runtime/tests/test_codegen_host_bios_stems.py` (host contract strings).
+  `runtime/tests/test_codegen_host_bios_stems.py` (host contract strings) and
+  `runtime/tests/test_windows_rebuild_helper.py` (native Windows helper survival
+  and refusal before writing when build paths overlap; skipped on other hosts).
 
 ### Freeze dumps
 
