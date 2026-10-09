@@ -114,6 +114,7 @@ void ls_write_hook(uint32_t addr, int size, uint32_t val) {
     (void)addr; (void)size; (void)val;
 }
 /* This ownership harness stubs instruction execution and cache timing. */
+uint32_t g_psx_cache_ctrl;
 void psx_icache_bind_memory(const uint8_t *ram, uint32_t ram_size, const uint8_t *rom) {
     (void)ram; (void)ram_size; (void)rom;
 }
