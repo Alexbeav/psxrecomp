@@ -20,8 +20,8 @@
  *      wrote (a store to the scratchpad marks none), and the code generation
  *      has moved.
  *
- * The recorded call stores words: the recorder is fed by the word and
- * half-word paths of memory.c.
+ * PS1B-474 also checks byte input verification, byte output replay and the
+ * byte feeds' MMIO, exception and DMA rules.
  *
  * test_data_shard_replay_marks.py builds it; link seams that this path does
  * not reach are stubs that abort (source_fixture_link.py). */
@@ -47,12 +47,19 @@
 #define OVL_ADDR    0x801A0010u   /* 4 bytes in page 0x1A0, above the boot text */
 #define SCR_ADDR    0x1F800020u   /* 4 bytes in the scratchpad */
 #define TEXT_WORDS  4u
+#define BYTE_IN     (IN_ADDR + 8u)
+#define BYTE_OUT    (OVL_ADDR + 16u)
+#define OMIT_IN     (IN_ADDR + 12u)
+#define OMIT_OUT    (OVL_ADDR + 20u)
+#define MMIO_ADDR   0x1F801000u   /* memory-control byte lane in real memory.c */
 
 /* ---- memory.c under test ------------------------------------------------ */
 uint8_t *memory_get_ram_ptr(void);
 uint8_t *memory_get_scratchpad_ptr(void);
 uint32_t psx_read_word(uint32_t addr);
 void psx_write_word(uint32_t addr, uint32_t val);
+uint8_t psx_read_byte(uint32_t addr);
+void psx_write_byte(uint32_t addr, uint8_t val);
 extern uint32_t g_dirty_ram_code_gen;
 
 /* ---- what the two sources read from the rest of the runtime -------------- */
@@ -81,7 +88,17 @@ uint32_t psx_bios_kernel_patch_range_count;
 
 int source_gpu_runtime_active(void) { return 0; }
 int fntrace_is_game_started(void) { return 1; }
-int psx_get_in_exception(void) { return 0; }
+static int in_exception;
+int psx_get_in_exception(void) { return in_exception; }
+/* Observer and scheduler seams; memory.c's real MMIO byte lane still runs. */
+static unsigned device_reads, device_writes;
+void psx_devices_mmio_sync(void) { }
+void debug_server_trace_mmio_read(uint32_t addr, uint32_t val, uint8_t width) {
+    (void)addr; (void)val; (void)width; ++device_reads;
+}
+void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width) {
+    (void)addr; (void)val; (void)width; ++device_writes;
+}
 /* The recorded call costs no guest time here, so the replay credits none. */
 uint64_t psx_get_cycle_count(void) { return psx_cycle_count; }
 int card_data_writes_check(uint32_t phys, uint32_t value, uint8_t width) {
@@ -135,6 +152,83 @@ static int outputs_present(uint32_t in) {
         if (psx_read_word(TEXT_ADDR + 4u * i) != (text_words[i] ^ in)) return 0;
     return psx_read_word(OVL_ADDR) == (0x0BADC0DEu ^ in) &&
            psx_read_word(SCR_ADDR) == (0x5CA7C4EDu ^ in);
+}
+
+static void byte_function_body(void) {
+    psx_write_byte(BYTE_OUT, (uint8_t)(psx_read_byte(BYTE_IN) ^ 0xA5u));
+}
+
+static void check_byte_feeds(CPUState *cpu, uint8_t *ram) {
+    const uint32_t input = BYTE_IN & RAM_MASK, output = BYTE_OUT & RAM_MASK;
+    ram[input] = 0x36u;
+    ram[output - 1u] = 0x11u; ram[output + 1u] = 0x22u;
+    check(!psx_datashard_enter(cpu, FUNC_ADDR + 4u) && g_ds_recording,
+          "the byte call arms a capture");
+    byte_function_body();
+    psx_datashard_ret(cpu);
+    check(stat_is("captures_ok", 2u), "the byte call is captured");
+    ram[output] = 0;
+    check(psx_datashard_enter(cpu, FUNC_ADDR + 4u) && stat_is("replays", 2u),
+          "the byte call replays");
+    check(ram[output] == (0x36u ^ 0xA5u) && ram[output - 1u] == 0x11u &&
+          ram[output + 1u] == 0x22u, "byte replay restores only the stored byte");
+    ram[input] ^= 1u;
+    check(!psx_datashard_enter(cpu, FUNC_ADDR + 4u) && g_ds_recording &&
+          stat_is("verify_fail", 1u) && stat_is("replays", 2u),
+          "changed byte input rejects the shard with exactly one verify failure");
+    byte_function_body();
+    psx_datashard_ret(cpu);
+    check(stat_is("captures_ok", 3u), "the changed input records a new variant");
+
+    psx_write_byte(MMIO_ADDR, 0x7Au);
+    device_reads = device_writes = 0;
+    for (unsigned write = 0; write < 2u; ++write) {
+        check(!psx_datashard_enter(cpu, FUNC_ADDR + 8u + 4u * write) && g_ds_recording,
+              "the device byte call arms a capture");
+        if (write) psx_write_byte(MMIO_ADDR, 0x42u);
+        else check(psx_read_byte(MMIO_ADDR) == 0x7Au, "the device read returns its byte");
+        psx_datashard_ret(cpu);
+        check(stat_is("poison_mmio", write + 1u) && stat_is("captures_poisoned", write + 1u) &&
+              stat_is("captures_ok", 3u), "byte MMIO poisons the capture instead of storing it");
+    }
+    check(device_reads == 1u && device_writes == 1u, "both byte device paths execute");
+
+    check(!psx_datashard_enter(cpu, FUNC_ADDR + 16u) && g_ds_recording,
+          "the exception exclusion call arms a capture");
+    in_exception = 1;
+    (void)psx_read_byte(OMIT_IN);
+    psx_write_byte(OMIT_OUT, 0x55u);
+    (void)psx_read_byte(MMIO_ADDR);
+    psx_write_byte(MMIO_ADDR, 0x42u);
+    in_exception = 0;
+    byte_function_body();
+    psx_datashard_ret(cpu);
+    ram[OMIT_IN & RAM_MASK] ^= 1u; ram[OMIT_OUT & RAM_MASK] = 0;
+    ram[output] = 0;
+    check(psx_datashard_enter(cpu, FUNC_ADDR + 16u) && ram[OMIT_OUT & RAM_MASK] == 0 &&
+          ram[output] == (ram[input] ^ 0xA5u) && stat_is("captures_ok", 4u) &&
+          stat_is("verify_fail", 1u) && stat_is("poison_mmio", 2u),
+          "exception byte reads, stores and MMIO are excluded");
+
+    check(!psx_datashard_enter(cpu, FUNC_ADDR + 20u) && g_ds_recording,
+          "the DMA read exclusion call arms a capture");
+    g_dma_exec_depth = 1;
+    (void)psx_read_byte(OMIT_IN); (void)psx_read_byte(MMIO_ADDR);
+    g_dma_exec_depth = 0;
+    byte_function_body();
+    psx_datashard_ret(cpu);
+    ram[OMIT_IN & RAM_MASK] ^= 1u;
+    check(psx_datashard_enter(cpu, FUNC_ADDR + 20u) && stat_is("captures_ok", 5u) &&
+          stat_is("verify_fail", 1u) && stat_is("poison_mmio", 2u),
+          "DMA byte reads are excluded");
+    check(!psx_datashard_enter(cpu, FUNC_ADDR + 24u) && g_ds_recording,
+          "the DMA byte store call arms a capture");
+    g_dma_exec_depth = 1;
+    psx_write_byte(BYTE_OUT, 0x66u);
+    g_dma_exec_depth = 0;
+    psx_datashard_ret(cpu);
+    check(stat_is("poison_dma", 1u) && stat_is("captures_poisoned", 3u) &&
+          stat_is("captures_ok", 5u), "a DMA byte store poisons the capture");
 }
 
 int main(void) {
@@ -198,6 +292,7 @@ int main(void) {
           "a dispatch into replayed boot text finds its page dirty");
     check(g_dirty_ram_code_gen != gen, "the replay moves the code generation");
 
-    puts("data_shard_replay_marks: PASS");
+    check_byte_feeds(&cpu, ram);
+    puts("data_shard_replay_marks: PASS (word marks, byte replay/verification/MMIO/exclusions)");
     return 0;
 }
