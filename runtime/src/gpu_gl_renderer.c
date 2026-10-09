@@ -2156,6 +2156,48 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
     }
 }
 
+/* A one-pixel line encoded as a right triangle covers the complete native
+ * strip. Above 1x its geometric diagonal leaves old HR subpixels behind.
+ * Expand only an affine line encoding: the two vertices on the minimum axis
+ * span its ends, and the third vertex duplicates one end's UV and colour.
+ * Genuine cross-axis attributes and precision overrides remain triangles. */
+static void gpu_textured_line_triangle(const int *xs, const int *ys,
+                                      const int *us, const int *vs,
+                                      const float *col, uint16_t tp,
+                                      uint16_t cx, uint16_t cy, int raw, int semi) {
+    if (s_scale > 1 && !s_pc_valid && !s_pq_valid && !gpu_raster_polygon_is_quad()) {
+        for (int axis = 0; axis < 2; axis++) {
+            const int *cross = axis ? ys : xs;
+            const int *along = axis ? xs : ys;
+            for (int a = 0; a < 3; a++) {
+                int b = (a + 1) % 3, c = (a + 2) % 3;
+                if (cross[a] != cross[b] || cross[c] != cross[a] + 1 ||
+                    along[a] == along[b]) continue;
+                /* A bottom-tip column leaves its first native row empty. */
+                if (!axis && along[c] != (along[a] < along[b] ? along[a] : along[b])) continue;
+                int end = along[c] == along[a] ? a : along[c] == along[b] ? b : -1;
+                if (end < 0 || us[c] != us[end] || vs[c] != vs[end] ||
+                    memcmp(col + c * 3, col + end * 3, 3 * sizeof(float))) continue;
+                int x[4] = {xs[a], xs[a] + !axis, xs[b], xs[b] + !axis};
+                int y[4] = {ys[a], ys[a] + axis, ys[b], ys[b] + axis};
+                const int indices[2][3] = {{0, 1, 2}, {1, 2, 3}};
+                for (int triangle = 0; triangle < 2; triangle++) {
+                    int tx[3], ty[3], tu[3], tv[3]; float colors[9];
+                    for (int i = 0; i < 3; i++) {
+                        int corner = indices[triangle][i], source = corner < 2 ? a : b;
+                        tx[i] = x[corner]; ty[i] = y[corner];
+                        tu[i] = us[source]; tv[i] = vs[source];
+                        memcpy(colors + i * 3, col + source * 3, 3 * sizeof(float));
+                    }
+                    gpu_textured_triangle(tx, ty, tu, tv, colors, tp, cx, cy, raw, semi, NULL);
+                }
+                return;
+            }
+        }
+    }
+    gpu_textured_triangle(xs, ys, us, vs, col, tp, cx, cy, raw, semi, NULL);
+}
+
 /* Draw a flat-colored rect (GEO program) DIRECTLY into the active wide surface
  * at wide-space coords [wx, wx+ww) × [y, y+h). Used only by the full-screen-
  * overlay path; positions are already in wide space so u_xoff stays 0. Mirrors
@@ -2468,7 +2510,7 @@ static void glb_draw_textured_triangle(int x0,int y0,int u0,int v0,int x1,int y1
     int xs[3]={x0,x1,x2}, ys[3]={y0,y1,y2}, us[3]={u0,u1,u2}, vs[3]={v0,v1,v2};
     float mr=s_mod_r/255.0f, mg=s_mod_g/255.0f, mb=s_mod_b/255.0f;
     float col[9]={mr,mg,mb, mr,mg,mb, mr,mg,mb};
-    gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
+    gpu_textured_line_triangle(xs,ys,us,vs,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1);
     precise_consumed();
 }
 static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32_t c0,int x1,int y1,int u1,int v1,uint32_t c1,int x2,int y2,int u2,int v2,uint32_t c2,uint16_t cx,uint16_t cy,uint16_t tp,int raw){
@@ -2478,7 +2520,7 @@ static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32
     int xs[3]={x0,x1,x2}, ys[3]={y0,y1,y2}, us[3]={u0,u1,u2}, vs[3]={v0,v1,v2};
     uint32_t cc[3]={c0,c1,c2}; float col[9];
     for (int i=0;i<3;i++){ col[i*3+0]=(cc[i]&0xFF)/255.0f; col[i*3+1]=((cc[i]>>8)&0xFF)/255.0f; col[i*3+2]=((cc[i]>>16)&0xFF)/255.0f; }
-    gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
+    gpu_textured_line_triangle(xs,ys,us,vs,col,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1);
     precise_consumed();
 }
 static void glb_draw_flat_rect(int x,int y,int w,int h,uint16_t c){

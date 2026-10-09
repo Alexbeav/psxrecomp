@@ -30,6 +30,7 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--gl-source")
     parser.add_argument("--fixture", type=pathlib.Path)
+    parser.add_argument("--scales", type=int, nargs="+", choices=(1, 2, 4), default=[1, 4])
     parser.add_argument("--expect-unbounded", action="store_true")
     args = parser.parse_args()
     framework = pathlib.Path(__file__).resolve().parents[2]
@@ -78,7 +79,7 @@ def main():
             sdl_library, *["-l" + name for name in libraries],
             "-o", dest / "probe.exe"]).returncode:
         return 2
-    for scale in (1, 4):
+    for scale in args.scales:
         result = run([dest / "probe.exe", scale])
         if not probe_result_ok(result.returncode, result.stdout, result.stderr,
                                args.expect_unbounded):

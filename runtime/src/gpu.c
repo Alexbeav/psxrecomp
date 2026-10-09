@@ -67,6 +67,7 @@ typedef enum {
 static Gp0State gp0_state;
 static uint64_t gp0_write_count;
 static uint64_t gp0_nop_count, gp0_fill_count, gp0_draw_count, gp0_env_count, gp0_copy_count;
+static int s_raster_polygon_quad; /* transient draw-command provenance */
 static uint32_t gp0_cmd_buf[16];   /* max fixed-length command is 12 words */
 static int      gp0_words_collected;
 static int      gp0_words_needed;
@@ -5418,9 +5419,12 @@ int gpu_ws_census_dump(uint32_t f0, uint32_t f1, const char *path) {
 void gpu_ws_census_set(int on) { ws_census_on = on ? 1 : 0; }
 uint64_t gpu_ws_census_seq(void) { return ws_census_seq; }
 
+int gpu_raster_polygon_is_quad(void) { return s_raster_polygon_quad; }
+
 /* Execute a fully-collected GP0 command */
 static void gp0_execute_command(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
+    s_raster_polygon_quad = opcode >= 0x20 && opcode < 0x40 && (opcode & 8);
     gp0_opcode_count[opcode]++;
     gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
     extern void ws_bg_phase_note(uint32_t op);
@@ -5612,6 +5616,7 @@ static void gp0_execute_command(void) {
                 psx_fatal_halt(reason);
             }
     }
+    s_raster_polygon_quad = 0;
 }
 
 /* ---- GP0 write (0x1F801810 write) — command state machine ---- */

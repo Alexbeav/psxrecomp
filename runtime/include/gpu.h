@@ -16,6 +16,8 @@ extern "C" {
 #endif
 
 void     gpu_init(void);
+/* True only while dispatching a GP0 polygon with four vertices. */
+int gpu_raster_polygon_is_quad(void);
 /* Ordinary renderer queue: service only on the device clock. */
 void gpu_queue_service(void);
 /* Non-mutating admission shared with the full machine-state loader. */
