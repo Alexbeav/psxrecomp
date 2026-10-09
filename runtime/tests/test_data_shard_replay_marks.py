@@ -1,7 +1,8 @@
 """A data shard replay marks the RAM pages it writes (PS1B-343).
 
 The C fixture links the real shard store (data_shards.c) and the real store
-path and page bitmap (memory.c). This driver builds it at -O0 and -O2.
+path and page bitmap (memory.c), including the PS1B-474 byte feeds. This driver
+builds it at -O0 and -O2.
 """
 import argparse
 import tempfile
@@ -28,4 +29,4 @@ if __name__ == "__main__":
             build_and_run(args.cc, HERE, HERE.parent, opt, Path(root),
                           ["memory.c", "data_shards.c", "crc32.c"],
                           "test_data_shard_replay_marks.c")
-    print("PASS: a data shard replay marks exactly the RAM pages it wrote (O0/O2)")
+    print("PASS: shard word marks and byte replay/verification/MMIO/exclusions (O0/O2)")
