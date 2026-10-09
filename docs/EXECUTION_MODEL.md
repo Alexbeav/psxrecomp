@@ -40,9 +40,10 @@ Versions 15 and 16 default the absent register to zero. After restoring version
 15 RAM, the loader also fills every valid tag from restored memory. This cannot
 recover an earlier mid-FlushCache register value. Older formats remain refused.
 Pin H codegen hash `25fd1f54` imports only into the cache-guard hash
-`6d27c2c2`, named by `BOOT_STATE_PIN_H_IMPORT_HASH`. The unconditional assertion
-in `gpu_queue_boot_admission_test` fails if a later emitter or header change moves
-that hash without renewing the import decision. The BIOS guard separates the
+`6d27c2c2`, named by `BOOT_STATE_PIN_H_IMPORT_HASH`. The admission fixture accepts
+authentic old-H state only when the active hash equals that destination and the
+ABI and generator still match. Otherwise it checks refusal before loader state
+changes. Current-key v15/v16 conversion controls are separate. The BIOS guard separates the
 word count from its timing budget. The renewed destination adds only the host
 refresh API and cache-register declarations to the hashed cache header. CPUState,
 the emitter and overlay ABI stay unchanged. BIOS, entry, ABI, codegen version and section
@@ -51,6 +52,13 @@ is separate and requires new checkpoints.
 New replay product metadata declares `core_digest=3`. Earlier recordings omit
 that field and use version 1, which excludes cache words from the core digest.
 Version 2 includes words, and version 3 also includes the cache-control register.
+
+Cached KUSEG and KSEG0 addresses share resident instruction words and hit timing
+through their physical tag. KSEG1 reads RAM without replacing that line. Saved
+tags retain their original virtual address and validity bits; lookup compares
+the physical address. The section shapes and digest versions stay unchanged.
+Historical timing results qualify their recorded source only. The new authored
+alias controls do not qualify a title route or all dynamic-alias behavior.
 Rollback uses version 3. All versions retain cache tags. Explicit versions 1 and 2
 keep their former byte streams, and older recordings get one start notice.
 This changes comparison only. Guest execution still uses cache contents.

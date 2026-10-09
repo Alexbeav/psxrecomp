@@ -48,9 +48,13 @@
       "runtime/src/boot_state.c",
       "runtime/src/netplay_state_digest.c"
     ],
-    "qualification_boundary": "Historical counts above apply to tested_commit only; they do not qualify cached instruction execution, v16 state import or versioned replay digests.",
+    "qualification_boundary": "Historical counts above apply to tested_commit only; they do not qualify cached instruction execution, v16/v17 state import, versioned replay digests or the later physical-tag alias correction. Serialized virtual tags remain unchanged; the later lookup shares cached KUSEG/KSEG0 physical tags and changes the formerly excluded cross-alias hit timing.",
     "focused_checks": "Authored production O0/O2 nesting and BIOS word-range fixtures, current/legacy digest checks, cache fastpath and pin-H import positive/wrong-hash controls",
-    "reviewed_pin_h_import_hash": "3572b436",
+    "reviewed_pin_h_import_hash": "6d27c2c2",
+    "historical_pin_h_import_hashes": {
+      "8d80f14f": "3572b436",
+      "host_refresh_api_successor": "52c10b95"
+    },
     "remaining": [
       "Locate the safe authored 84-dataset plan and bind results to the final head",
       "Run required full runtime, title routes, alternating cost pairs and replay comparisons",

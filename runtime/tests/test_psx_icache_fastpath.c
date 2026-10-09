@@ -75,9 +75,12 @@ int main(void) {
     g_psx_icache_active = 1;
     test_cycles = 0;
     psx_icache_fetch_interp(&cpu, 0x80010000u);
+    cpu.read_absorb_which = 1;
+    cpu.read_absorb[1] = 55u;
     psx_icache_fetch_interp(&cpu, 0x00010000u);
-    if (!expect(test_cycles == 14u,
-                "KUSEG/KSEG0 aliases replace full virtual tags")) return 1;
+    if (!expect(test_cycles == 7u && g_psx_icache_tv[0] == 0x80010000u &&
+                cpu.read_absorb_which == 1u && cpu.read_absorb[1] == 55u,
+                "KUSEG/KSEG0 share a hit and preserve serialized tag/load give-back")) return 1;
     psx_icache_reset();
     if (!expect(g_psx_icache_tv[0] == 1u,
                 "reset makes a warmed line cold")) return 1;

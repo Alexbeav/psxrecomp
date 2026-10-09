@@ -1,5 +1,27 @@
 # Faithful Timing Core — Game Plan (psxrecomp)
 
+2026-10-09, PS1G-73 review F01/F02: frozen 10880921 reproduced the authored
+cached-alias counterexample through the real cache and native guard at O2 in
+both directions. Each alternate cached alias returned RAM instruction 7,
+missed the stale guard and charged seven refill cycles instead of retaining
+instruction 42. KSEG1 read RAM 7. The bounded correction compares physical tags
+while retaining serialized virtual tags and validity bits. Same-address miss,
+partial refill, isolation and shadow-state rules stay in place. The new alias
+hit changes the formerly excluded cross-alias timing; historical T172 counts
+remain bound to their recorded source. Corrected documentation names the
+conditional authentic old-H admission and current digest version 3.
+
+The consult-test-return used the existing corpus CPU002/dynamic-alias gap,
+the historical regression exclusion and the reviewer report. Primary context:
+[PSX-SPX memory map](https://psx-spx.consoledev.net/ps1/system/memorymap/).
+An exact Formula One 99/cache-alias search found no reproduced matching repair;
+the libretro title/ICACHE note remains a lead. No emulator implementation was
+copied. The successor's focused and full-suite results, independent review,
+Windows admission, actual412 binding and title qualification remain pending.
+Frozen108 Linux recompiler results remain 286 passed, five failed, four skipped
+and four disabled out of 299. This alias correction does not diagnose those
+failures or establish a title outcome.
+
 2026-10-07, PS1G-73 Assignment 9: the candidate remains on
 `fix/ps1g-73-icache`, outside pin H. The review orders a guarded pin H import,
 execution counters, no nested stale slicing and a separate BIOS word count.

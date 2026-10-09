@@ -69,11 +69,19 @@ static uint32_t recorded_tags[1024], suspended_tags[1024];
 static uint32_t recorded_words[1024], suspended_words[1024];
 static uint32_t recorded_control, suspended_control;
 
+/* Keep the serialized virtual addresses and validity bits. Cached KUSEG and
+ * KSEG0 accesses compare the physical address; KSEG1 never uses a cached tag. */
+static int cache_tag_matches(uint32_t tag, uint32_t address)
+{
+    return !(tag & 3u) && tag < 0xa0000000u &&
+           (tag & 0x1fffffffu) == (address & 0x1fffffffu);
+}
+
 uint32_t psx_icache_read_cached(uint32_t address, uint32_t memory_word)
 {
     unsigned index = (address >> 2) & 1023u;
     if ((cache_ram || cache_rom) && g_psx_icache_active > 0 && address < 0xa0000000u &&
-        g_psx_icache_tv[index] == address)
+        cache_tag_matches(g_psx_icache_tv[index], address))
         return g_psx_icache_words[index];
     return memory_word;
 }
@@ -85,10 +93,13 @@ int psx_icache_block_stale(uint32_t address, uint32_t words)
     /* Only resident words can differ from the RAM image native guards checked.
      * A conservative extra word merely keeps execution in the interpreter. */
     if (words > 1024u) {
-        uint64_t end = (uint64_t)address + 4ull * words;
+        uint32_t start = address & 0x1fffffffu;
+        uint64_t end = (uint64_t)start + 4ull * words;
         for (unsigned index = 0; index < 1024u; ++index) {
             uint32_t pc = g_psx_icache_tv[index];
-            if (!(pc & 3u) && pc >= address && (uint64_t)pc < end &&
+            uint32_t phys = pc & 0x1fffffffu;
+            if (!(pc & 3u) && pc < 0xa0000000u &&
+                phys >= start && (uint64_t)phys < end &&
                 g_psx_icache_words[index] != cache_memory_word(pc)) return 1;
         }
         return 0;
@@ -96,7 +107,7 @@ int psx_icache_block_stale(uint32_t address, uint32_t words)
     for (uint32_t i = 0; i < words; ++i) {
         uint32_t pc = address + 4u * i;
         unsigned index = (pc >> 2) & 1023u;
-        if (g_psx_icache_tv[index] == pc &&
+        if (cache_tag_matches(g_psx_icache_tv[index], pc) &&
             g_psx_icache_words[index] != cache_memory_word(pc)) return 1;
     }
     return 0;
@@ -202,7 +213,8 @@ void psx_icache_fetch_miss(CPUState *cpu, uint32_t address)
     if (g_psx_icache_active < 0) g_psx_icache_active = psx_icache_enabled();
     if (!g_psx_icache_active) return;
     unsigned index = (address >> 2) & 1023u;
-    if (g_psx_icache_tv[index] == address) return;
+    if (address < 0xa0000000u &&
+        cache_tag_matches(g_psx_icache_tv[index], address)) return;
     uint32_t cost = 4;
     if (address < 0xa0000000u) {
         unsigned offset = index & 3u;
