@@ -64,6 +64,10 @@ void psx_icache_restore_legacy_words(void) {
 #endif
 #ifndef GPU_QUEUE_REAL_ICACHE
 int main(void) {
+ printf("BOOT_IDENTITY version=%u hash=%08x abi=%d generator=%u reviewed_pin_h=%08x\n",
+        (unsigned)BOOT_STATE_VERSION,(unsigned)PSX_OVERLAY_CODEGEN_HASH,
+        (int)PSX_OVERLAY_ABI_TAG,(unsigned)PSX_OVERLAY_CODEGEN_VER,
+        (unsigned)BOOT_STATE_PIN_H_IMPORT_HASH);
  reset_gpu_state_for_test(); dma_init();
  BsOut o={0}; o.no_zlib=1;
  BootStateHeader h={0}; h.magic=BOOT_STATE_MAGIC;h.version=BOOT_STATE_VERSION;
