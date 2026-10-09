@@ -2,10 +2,11 @@
 
 ## Running the tests
 
-The complete tool gate needs Python 3.11 or newer and the pinned NumPy and
-Pillow wheels in `tools/tests/requirements.txt`. They are dependencies of the
-existing GPU-frame analysis tool. Install them in an owned Python environment
-before configuring CMake:
+The tool gate needs Python 3.11 or newer. Four GPU-frame image tests also need
+NumPy and Pillow. If either package is absent, those four cases report the
+missing package and skip; the other 23 GPU-frame cases still run. This is reduced
+image coverage. For the complete gate, install the pinned wheels in an owned
+Python environment before configuring CMake:
 
 ```powershell
 python -m pip install --require-hashes --only-binary=:all: -r tools/tests/requirements.txt
@@ -19,9 +20,14 @@ The entries use `unittest discover` with an exact file pattern, so a file that
 defines test classes without a direct script entry point still runs its tests.
 Directly executing such a file can exit successfully without running a case;
 the former cursor-writer registration did that with all 29 cases. The entries
-reject skipped cases and zero-test results. The
+reject zero-test results. Suites other than `tools_gpu_frame` also reject skipped
+cases. The
 `tools_ctest_registration` check reads the generated CTest commands and
 properties. A name in a CMake comment does not satisfy it.
+It finds CTest at the configured path, then on `PATH`. If neither is available,
+that check reports the missing executable and skips with return code 77. An
+available CTest that fails remains a test failure. Report this skipped check
+and reduced image coverage separately from a complete gate.
 
 The Python `public_commit_guard` test uses isolated local Git repositories and a
 local mock SSH transport. It contacts no public remote. It needs Git and Python;

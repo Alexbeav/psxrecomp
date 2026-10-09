@@ -38,11 +38,22 @@ class TestLocations(EnvGuard):
     def test_install_is_outside_any_game_repo(self):
         os.environ.pop("RETCOMM_ORACLE_DIR", None)
         os.environ.pop("RETCOMM_DATA_DIR", None)
-        root = DSO.oracle_root()
-        self.assertEqual(root.parts[-2:], ("oracle", "duckstation"))
-        # The whole point: one build shared by every title, not per-repo.
-        self.assertIn("retcomm", str(root))
-        self.assertNotIn("psxrecomp", str(root))
+        # An ancestor can legitimately be named psxrecomp. The default store
+        # must still be shared user data, independent of the game directory.
+        with tempfile.TemporaryDirectory(prefix="psxrecomp-") as temporary:
+            shared = Path(temporary) / "shared-data"
+            game = Path(temporary) / "game-repo"
+            game.mkdir()
+            os.environ.pop("XDG_DATA_HOME", None)
+            os.environ["LOCALAPPDATA" if sys.platform == "win32" else "XDG_DATA_HOME"] = str(shared)
+            previous = Path.cwd()
+            try:
+                os.chdir(game)
+                root = DSO.oracle_root()
+            finally:
+                os.chdir(previous)
+            self.assertEqual(root, shared / "retcomm" / "oracle" / "duckstation")
+            self.assertFalse(root.is_relative_to(game))
 
     def test_data_dir_override_moves_everything(self):
         os.environ.pop("RETCOMM_ORACLE_DIR", None)

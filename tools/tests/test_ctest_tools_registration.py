@@ -1,6 +1,7 @@
 """Check the generated CTest tree, including commands and skip protection."""
 import argparse
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -17,8 +18,12 @@ def main():
     parser.add_argument("--ctest", default="ctest")
     parser.add_argument("--without-chd", action="store_true")
     args = parser.parse_args()
+    ctest = shutil.which(args.ctest) or shutil.which("ctest")
+    if ctest is None:
+        print("SKIP: CTest is unavailable at the configured path and on PATH")
+        raise SystemExit(77)
     result = subprocess.run(
-        [args.ctest, "--test-dir", args.build_tree, "--show-only=json-v1"],
+        [ctest, "--test-dir", args.build_tree, "--show-only=json-v1"],
         check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     tests = {test["name"]: test for test in json.loads(result.stdout)["tests"]}
@@ -40,7 +45,10 @@ def main():
         properties = {prop["name"]: prop["value"] for prop in test.get("properties", [])}
         if properties.get("DISABLED") or properties.get("WILL_FAIL"):
             errors.append(name + ": disables or inverts the real verdict")
-        if "skipped" not in str(properties.get("FAIL_REGULAR_EXPRESSION", "")):
+        failures = str(properties.get("FAIL_REGULAR_EXPRESSION", ""))
+        if "Ran 0 tests" not in failures:
+            errors.append(name + ": zero cases can pass")
+        if stem != "gpu_frame" and "skipped" not in failures:
             errors.append(name + ": skipped cases can pass")
         if stem == "psx_chd" and not any(
             item.startswith("PSXRECOMP_LIBCHDR=") and item.split("=", 1)[1]
