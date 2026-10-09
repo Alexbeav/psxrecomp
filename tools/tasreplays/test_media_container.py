@@ -175,47 +175,31 @@ class BashDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.git = self.root / 'Git'
+        self.git = self.root / 'Git with spaces'
         for relative in ('cmd/git.exe', 'mingw64/bin/git.exe', 'bin/bash.exe', 'usr/bin/bash.exe'):
-            (self.git / relative).parent.mkdir(parents=True, exist_ok=True)
-            (self.git / relative).write_bytes(b'')
+            path = self.git / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'')
         self.addCleanup(self.temporary.cleanup)
         media_container._bash = None
         self.addCleanup(setattr, media_container, '_bash', None)
 
-    def candidates(self, git):
-        exec_path = str(self.git / 'mingw64/libexec/git-core')
-        with patch.object(media_container.shutil, 'which', return_value=str(git)), \
-                patch.object(media_container.subprocess, 'check_output', return_value=exec_path + '\n'):
-            return media_container.bash_candidates()
-
-    def test_both_git_locations_reach_the_same_bash(self):
-        # From PowerShell git is Git/cmd/git.exe; from Git Bash it is
-        # Git/mingw64/bin/git.exe, where the old parents[1] guess is wrong.
+    def test_both_git_locations_reach_the_same_verified_bash(self):
         wanted = self.git / 'bin/bash.exe'
-        resolved = {}
-        for label, git in (('powershell', self.git / 'cmd/git.exe'),
-                           ('git-bash', self.git / 'mingw64/bin/git.exe')):
-            with self.subTest(launcher=label):
-                self.assertIn(wanted, self.candidates(git))
-                if label == 'git-bash':
-                    # The old derivation, which(git).parents[1]/'bin/bash.exe',
-                    # is exactly what broke here: that path does not exist.
-                    self.assertFalse((git.parents[1] / 'bin/bash.exe').exists())
+        for git in (self.git / 'cmd/git.exe', self.git / 'mingw64/bin/git.exe'):
+            with self.subTest(git=git), patch.dict(os.environ, {'PATH': str(git.parent)}, clear=True), \
+                    patch.object(media_container.host_bash, 'is_msys_bash',
+                                 side_effect=lambda path, *args: Path(path) == wanted):
+                candidates = media_container.host_bash.windows_candidates(os.environ)
+                self.assertIn(str(wanted), candidates)
                 media_container._bash = None
-                with patch.object(media_container.shutil, 'which', return_value=str(git)), \
-                        patch.object(media_container.subprocess, 'check_output',
-                                     return_value=str(self.git / 'mingw64/libexec/git-core')), \
-                        patch.object(media_container, 'is_msys_bash', lambda path: Path(path) == wanted):
-                    resolved[label] = media_container.find_git_bash()
-        self.assertEqual(resolved['powershell'], resolved['git-bash'])
-        self.assertEqual(resolved['powershell'], wanted.resolve())
+                self.assertEqual(media_container.find_git_bash(), wanted.resolve())
 
-    def test_bash_is_still_found_when_git_exec_path_is_unavailable(self):
+    def test_invalid_candidate_does_not_hide_a_later_valid_shell(self):
         wanted = self.git / 'usr/bin/bash.exe'
-        with patch.object(media_container.shutil, 'which', return_value=str(self.git / 'cmd/git.exe')), \
-                patch.object(media_container.subprocess, 'check_output', side_effect=OSError), \
-                patch.object(media_container, 'is_msys_bash', lambda path: Path(path) == wanted):
+        with patch.dict(os.environ, {'PATH': str(self.git / 'cmd')}, clear=True), \
+                patch.object(media_container.host_bash, 'is_msys_bash',
+                             side_effect=lambda path, *args: Path(path) == wanted):
             self.assertEqual(media_container.find_git_bash(), wanted.resolve())
 
     def test_wsl_launcher_is_rejected_without_being_run(self):
@@ -224,19 +208,20 @@ class BashDiscoveryTests(unittest.TestCase):
         wsl.parent.mkdir(parents=True)
         wsl.write_bytes(b'')
         with patch.dict(os.environ, {'SystemRoot': str(windows)}), \
-                patch.object(media_container.subprocess, 'run', side_effect=AssertionError):
+                patch.object(media_container.host_bash.subprocess, 'run') as run:
             self.assertFalse(media_container.is_msys_bash(wsl))
+            run.assert_not_called()
         self.assertFalse(media_container.is_msys_bash(self.root / 'absent.exe'))
 
-    def test_explicit_override_must_be_a_git_bash(self):
-        with patch.dict(os.environ, {'PSX_GIT_BASH': str(self.git / 'bin/bash.exe')}), \
-                patch.object(media_container, 'is_msys_bash', return_value=False):
+    def test_explicit_override_must_be_verified(self):
+        wanted = self.git / 'usr/bin/bash.exe'
+        with patch.dict(os.environ, {'PSX_GIT_BASH': str(wanted)}, clear=True), \
+                patch.object(media_container.host_bash, 'is_msys_bash', return_value=False):
             with self.assertRaisesRegex(ValueError, 'PSX_GIT_BASH is not'):
                 media_container.find_git_bash()
-        media_container._bash = None
-        with patch.dict(os.environ, {'PSX_GIT_BASH': str(self.git / 'usr/bin/bash.exe')}), \
-                patch.object(media_container, 'is_msys_bash', return_value=True):
-            self.assertEqual(media_container.find_git_bash(), (self.git / 'usr/bin/bash.exe').resolve())
+        with patch.dict(os.environ, {'PSX_GIT_BASH': str(wanted)}, clear=True), \
+                patch.object(media_container.host_bash, 'is_msys_bash', return_value=True):
+            self.assertEqual(media_container.find_git_bash(), wanted.resolve())
 
     @unittest.skipUnless(os.name == 'nt' and shutil.which('git'), 'needs an installed Git for Windows')
     def test_installed_git_bash_is_located_and_verified(self):

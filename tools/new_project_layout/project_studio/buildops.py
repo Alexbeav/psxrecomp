@@ -16,9 +16,13 @@ import re
 import shutil
 import subprocess
 import threading
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from host_bash import find_bash
 
 from .gitops import CmdResult
 
@@ -443,7 +447,12 @@ def _regen_bios_profile(
         return CmdResult(False, f"BIOS profile missing: {profile}")
 
     script = fw / "tools" / "regen_bios.sh"
-    bash = shutil.which("bash") or shutil.which("bash.exe")
+    try:
+        bash = find_bash("BIOS regeneration", verify_msys=True)
+    except AssertionError as exc:
+        bash = None
+        if log:
+            log(f"Bash unavailable; using the direct emitter: {exc}")
 
     if script.is_file() and bash:
         cmd = [bash, str(script), "--config", profile_rel]
@@ -528,7 +537,12 @@ def ensure_bios_backends(
     # Prefer regen_bios.sh (builds emitter + fingerprints). It does not configure
     # the recompiler — ensure a usable tree (or a found binary) first.
     script = fw / "tools" / "regen_bios.sh"
-    bash = shutil.which("bash") or shutil.which("bash.exe")
+    try:
+        bash = find_bash("BIOS regeneration", verify_msys=True)
+    except AssertionError as exc:
+        bash = None
+        if log:
+            log(f"Bash unavailable; using the direct emitter: {exc}")
     need_emitter_setup = not (
         _any_usable_recompiler_build(fw) or _find_psxrecomp_bios(fw, root) is not None
     )
