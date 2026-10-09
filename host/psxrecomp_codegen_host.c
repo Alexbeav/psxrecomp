@@ -3316,6 +3316,8 @@ static int path_is_under_dir(const char* child, const char* parent) {
     }
 #endif
     n = strlen(pa);
+    while (n && (pa[n - 1] == '/' || pa[n - 1] == '\\'))
+        --n;
 #if defined(_WIN32)
     if (_strnicmp(ca, pa, (int)n) != 0)
         return 0;
@@ -4846,21 +4848,34 @@ static int write_windows_deferred_rebuild_helper(int force_pgo, int want_diagnos
     /* A diagnostic request writes nothing into the normal product's directory,
      * not even this helper. */
     char diag_dir[1200];
-    if (want_diagnostic &&
-        !join_path(diag_dir, sizeof(diag_dir), g_project_root,
+    if (!join_path(diag_dir, sizeof(diag_dir), g_project_root,
                    PSX_DIAGNOSTIC_DIR_NAME)) {
         snprintf(err_msg, err_cap, "Failed to form the diagnostic build path.");
         return 0;
     }
-    const char* helper_dir = want_diagnostic ? diag_dir : g_build_dir;
+    /* Configure may replace either build directory while cmd.exe reads its
+     * helper. Keep both helpers in private scratch, outside those directories. */
+    char helper_dir[1200];
+    if (!join_path(helper_dir, sizeof(helper_dir), g_project_root, "_scratch")) {
+        snprintf(err_msg, err_cap, "Failed to form the helper directory.");
+        return 0;
+    }
+    if (path_is_under_dir(helper_dir, g_build_dir) ||
+        path_is_under_dir(helper_dir, diag_dir)) {
+        snprintf(err_msg, err_cap,
+                 "The build directory overlaps the rebuild helper directory. "
+                 "Choose a build directory outside _scratch.");
+        return 0;
+    }
+    const char* helper_name = want_diagnostic ? "recomp_diagnostic_rebuild.cmd"
+                                             : "recomp_deferred_rebuild.cmd";
     if (!join_path(g_helper_path, sizeof(g_helper_path), helper_dir,
-                   "recomp_deferred_rebuild.cmd")) {
+                   helper_name)) {
         snprintf(err_msg, err_cap, "Failed to form helper path.");
         return 0;
     }
-    /* Setup zips omit build-release/; create it before writing the .cmd. */
     if (!mkdir_p(helper_dir)) {
-        snprintf(err_msg, err_cap, "Failed to create build dir: %s",
+        snprintf(err_msg, err_cap, "Failed to create helper dir: %s",
                  helper_dir);
         return 0;
     }

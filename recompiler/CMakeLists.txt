@@ -1309,6 +1309,7 @@ if(BUILD_TESTING)
                 cli_split_prepass_report
                 codegen_hash_line_endings
                 codegen_host_bios_stems
+                windows_rebuild_helper
                 default_renderer_guards
                 deferred_switch_interp_poll
                 mod_owned_display_controls
@@ -1367,6 +1368,10 @@ if(BUILD_TESTING)
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
+
+        set_tests_properties(windows_rebuild_helper PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:"
+            TIMEOUT 90)
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # (overlay_pair_dedup_runtime was the third of these. It failed to link:
