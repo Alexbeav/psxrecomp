@@ -292,6 +292,8 @@ typedef uint32_t (*PSXModControllerPresentationCallback)(
  */
 int psx_mod_set_controller_mode_override(uint32_t player,
                                          uint32_t controller_mode);
+/* Request PGXP after the session applies its baseline video settings. */
+void psx_mod_request_pgxp(int cpu_mode);
 /*
  * Let a game-owned plugin choose analog/digital presentation for one player on
  * every input sample. The initial mode is used for boot/hotplug before the

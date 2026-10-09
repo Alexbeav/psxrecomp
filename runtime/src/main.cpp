@@ -1357,6 +1357,7 @@ static uint32_t      g_mod_native_vblank_fps = 0;
 /* Activation-time request. -1 means no enabled mod owns load acceleration. */
 static int           g_mod_load_wall_multiplier = -1;
 static int           g_mod_load_release_frames = -1;
+static int           g_mod_pgxp_cpu_mode = -1;
 static int           g_mod_disc_speed_divisor = -1;
 static int           g_mod_disc_instant_rate = -1;
 
@@ -1598,6 +1599,10 @@ extern "C" int psx_mod_set_disc_speed(
     g_mod_disc_instant_rate =
         divisor == 0 ? (int)instant_max_per_frame : -1;
     return 1;
+}
+
+extern "C" void psx_mod_request_pgxp(int cpu_mode) {
+    g_mod_pgxp_cpu_mode = cpu_mode ? 1 : 0;
 }
 
 extern "C" int psx_mod_set_controller_mode_override(
@@ -17445,6 +17450,7 @@ int main(int argc, char** argv) {
         policy = ModControllerPresentationPolicy{};
     g_mod_load_wall_multiplier = -1;
     g_mod_load_release_frames = -1;
+    g_mod_pgxp_cpu_mode = -1;
     g_mod_disc_speed_divisor = -1;
     g_mod_disc_instant_rate = -1;
     g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
@@ -17693,9 +17699,14 @@ session_reboot:
         g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
     if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
         g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
-    gte_geometry_correction_set(g_video_geometry_correction);
-    gpu_texture_correction_set(g_video_perspective_texturing);
-    pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
+    /* Activation requests precede device setup. Apply them here so the
+     * baseline settings cannot undo the mod, including on a session reboot. */
+    const bool pgxp_mod_enabled = g_mod_pgxp_cpu_mode >= 0 && !net_cfg.enabled;
+    const int pgxp_session_geometry = g_video_geometry_correction || pgxp_mod_enabled;
+    const int pgxp_session_texture = g_video_perspective_texturing || pgxp_mod_enabled;
+    gte_geometry_correction_set(pgxp_session_geometry);
+    gpu_texture_correction_set(pgxp_session_texture);
+    pgxp_set_cpu_mode(pgxp_mod_enabled ? g_mod_pgxp_cpu_mode : g_video_pgxp_cpu_mode);
     pgxp_set_tolerance(g_video_pgxp_tolerance);
     /* Scanlines: env override wins over config, same as the corrections above,
      * so a headless/free-run boot can be captured with the effect armed from the
@@ -17709,12 +17720,12 @@ session_reboot:
     }
     gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
                               g_video_scanline_strength);
-    if (g_video_geometry_correction || g_video_perspective_texturing) {
+    if (pgxp_session_geometry || pgxp_session_texture) {
         std::fprintf(stdout,
                      "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
-                     g_video_geometry_correction ? "on" : "off",
-                     g_video_perspective_texturing ? "on" : "off",
-                     (g_video_geometry_correction && requested_scale < 2)
+                     pgxp_session_geometry ? "on" : "off",
+                     pgxp_session_texture ? "on" : "off",
+                     (pgxp_session_geometry && requested_scale < 2)
                          ? " (needs [video] supersampling >= 2 to be visible)" : "");
     }
     /* Display aspect. Identity at the default 4:3. The present letterbox uses
