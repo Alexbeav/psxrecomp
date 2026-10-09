@@ -28,6 +28,8 @@ add_test(NAME tas_replay_prefix COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_replay_prefix.py")
 add_test(NAME tas_launch_identity COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_launch_identity.py")
+add_test(NAME tas_run_native_staging COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_run_native_staging.py")
 add_test(NAME tas_diverge_trace COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_diverge_trace.py")
 add_test(NAME tas_qualified_hunks COMMAND ${Python3_EXECUTABLE}

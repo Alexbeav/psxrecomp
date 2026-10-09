@@ -468,7 +468,7 @@ def main():
     # This runtime loads settings and card paths beside argv[0], not CWD.
     # A private copy also freezes the executable while later builds proceed.
     launch_exe = run / paths["exe"].name
-    shutil.copyfile(paths["exe"], launch_exe)
+    shutil.copy(paths["exe"], launch_exe)
     staged_sha = digest(launch_exe)
     if staged_sha != digest(paths["exe"]):
         raise ValueError("staged executable differs")

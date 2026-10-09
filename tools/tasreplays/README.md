@@ -171,7 +171,8 @@ comparison still decides a pass exactly as before.
   `binary_sha256`, `binary_matches_setup` and `diagnostic_binary`; a mismatching
   binary yields `status: "diagnostic"` and a nonzero exit, never a qualifying
   pass. `run_native.py` binds the staged copy with `--expected-exe-sha256` and
-  records `staged_executable` in `manifest.json`.
+  records `staged_executable` in `manifest.json`. The private run copy keeps
+  the source executable's permission mode, so Unix executables stay executable.
 - `--cpu-boundary-window LO HI` is forwarded unchanged to `run_native.py`.
 - `diverge_trace.py <run-a> <run-b> <return> --output <dir>` is a diagnostic, not a
   qualification. It takes the return clocks at R-1 and R from both `cpu-return.tsv`
