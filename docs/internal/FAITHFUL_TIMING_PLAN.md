@@ -1321,3 +1321,12 @@ on a fixed region -> next.
   NEXT: P1 (cycle-audit) → P2 (delay-slot ownership fix).
 
 2026-10-08, PS1G-73 visible cache worker: state v17 and digest v3 retain explicit legacy conversions. The registry correction preserves all 224 state-entry blocks and passes missing 0. Canonical input comparison traces the renewed Pin-H destination to two cache-header declarations. The strict admission assertion remains. Source migration controls preceded local delivery. The independent source addendum followed the local commits and found no blocking production defect in the S3 registry, strict Pin-H destination and S4 scope. Full title, replay, cost, native-guard comparison and actual guest integration remain open. Evidence is in the PS1G-73 issue and the owned visible-cache record.
+
+- **2026-10-07 (PS1B-288):** The SIO router now passes multitap method-2
+  addresses to the existing pad state machine. Both physical ports pass the
+  seat B/C/D byte and ACK checks in `test_sio_mouse.c`; empty seats and
+  standalone ports stay silent. Source-profile DTR selection uses the same
+  address rule. The five-player identity fixture includes a method-2 poll,
+  so its five-player golden values were refreshed after the unchanged stage
+  passed the old values as a control. Two-player values remain frozen. Independent review,
+  fork CI and the seven Tier 1 trial routes remain separate acceptance work.

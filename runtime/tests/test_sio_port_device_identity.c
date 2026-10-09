@@ -143,13 +143,15 @@ static void set_profile(const char *pad, const char *card) {
 
 typedef struct { const char *name, *pad, *card; uint64_t golden2, golden5; } Profile;
 
-/* Recorded from pin F a3e5fd892 runtime/src/sio.c (no mouse; sha256
- * dac9311e304c9ac0a2e613affd72559f27c5000579b41b93cd4dece6b77a874c). golden2 is the
- * PSX_MAX_PLAYERS=2 build, golden5 the PSX_MAX_PLAYERS=5 (multitap) build. */
+/* golden2 retains pin F a3e5fd892 runtime/src/sio.c (no mouse; sha256
+ * dac9311e304c9ac0a2e613affd72559f27c5000579b41b93cd4dece6b77a874c).
+ * golden5 includes the method-2 03h poll in script(), which now reaches seat C.
+ * Measured against the PS1B-288 candidate, with stage 9016036bf5456708ce3dcfbe511af44c4d6c73f9
+ * passing the old pin F golden as a separate control. */
 static const Profile profiles[] = {
-    { "default",                   "",                           "",                 0xE78B3101B495BF34ull, 0xB153529BDCEC2D71ull },
-    { "octoshock-2.2.2-digital",   "octoshock-2.2.2-digital",    "",                 0xD5AFDEB1F613FBA8ull, 0xAB99D878F1CA9AA7ull },
-    { "nymashock-1.29.0-dualshock","nymashock-1.29.0-dualshock", "nymashock-1.29.0", 0x11B28ADCB1A3E907ull, 0x94190B1DA4039FA2ull },
+    { "default",                   "",                           "",                 0xE78B3101B495BF34ull, 0xB7FE6DB2EE9CB500ull },
+    { "octoshock-2.2.2-digital",   "octoshock-2.2.2-digital",    "",                 0xD5AFDEB1F613FBA8ull, 0xA0100CD88FB64904ull },
+    { "nymashock-1.29.0-dualshock","nymashock-1.29.0-dualshock", "nymashock-1.29.0", 0x11B28ADCB1A3E907ull, 0x902F7CDFD376FE8Bull },
 };
 
 static uint64_t run(const Profile *p, int touch_mouse, int touch_negcon,
@@ -235,12 +237,12 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (h != golden) {
-        fprintf(stderr,"FAIL: players=%d profile=%s%s hash %016llX, pin F golden %016llX\n",
+        fprintf(stderr,"FAIL: players=%d profile=%s%s hash %016llX, golden %016llX\n",
                 PSX_MAX_PLAYERS,p->name,trip,
                 (unsigned long long)h,(unsigned long long)golden);
         return 1;
     }
-    printf("sio_port_device_identity: players=%d profile=%s%s: %u bytes match pin F\n",
+    printf("sio_port_device_identity: players=%d profile=%s%s: %u bytes match golden\n",
            PSX_MAX_PLAYERS,p->name,trip,bytes);
     return 0;
 }

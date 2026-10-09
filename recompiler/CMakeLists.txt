@@ -417,6 +417,8 @@ if(BUILD_TESTING)
     target_include_directories(input_route_v3_file_test PRIVATE ../runtime/include)
     add_test(NAME input_route_v3_file_test COMMAND input_route_v3_file_test)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME public_commit_guard COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_public_commits.py)
         foreach(_product IN ITEMS diagnostic release)
             set(_target input_route_session_${_product})
             add_executable(${_target} ../runtime/tests/test_input_route_session.c

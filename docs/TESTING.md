@@ -2,6 +2,11 @@
 
 ## Running the tests
 
+The Python `public_commit_guard` test uses isolated local Git repositories and a
+local mock SSH transport. It contacts no public remote. It needs Git and Python;
+the [public push policy](PUBLIC_PUSH_POLICY.md) describes the separate stage check
+and per-clone hook installation.
+
 ```sh
 cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build recompiler/build

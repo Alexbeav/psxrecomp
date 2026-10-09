@@ -52,6 +52,11 @@ if(BUILD_TESTING)
         src/start_refusal.c)
     target_include_directories(start_refusal_test PRIVATE include)
     add_test(NAME start_refusal_test COMMAND start_refusal_test)
+    add_executable(missing_sbi_report_test
+        ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_report.cpp
+        src/start_refusal.c)
+    target_include_directories(missing_sbi_report_test PRIVATE include)
+    add_test(NAME missing_sbi_report_test COMMAND missing_sbi_report_test)
     # PS1B-295: a LAN / Direct IP host refuses a guest on another build.
     add_executable(netplay_lan_version_test
         tests/test_netplay_lan_version.c
@@ -499,13 +504,15 @@ add_executable(sio_dualshock_p2_p3_test tests/test_sio_dualshock_p2_p3.c)
 target_include_directories(sio_dualshock_p2_p3_test PRIVATE include)
 add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
     # PS1 Mouse (PS1B-279): the byte protocol, and pin F byte identity of the
-    # pad/card bus when no port is a mouse. Two builds: 2 ports, and 5 players
-    # for the multitap seat.
-    foreach(_players IN ITEMS 2 5)
+    # pad/card bus when no port is a mouse. Mouse/method-2 checks also cover
+    # eight players, where both physical ports have a multitap.
+    foreach(_players IN ITEMS 2 5 8)
         add_executable(sio_mouse_p${_players}_test tests/test_sio_mouse.c)
         target_include_directories(sio_mouse_p${_players}_test PRIVATE include)
         target_compile_definitions(sio_mouse_p${_players}_test PRIVATE PSX_MAX_PLAYERS=${_players})
         add_test(NAME sio_mouse_p${_players}_test COMMAND sio_mouse_p${_players}_test)
+    endforeach()
+    foreach(_players IN ITEMS 2 5)
         set(_target sio_port_device_identity_p${_players}_test)
         add_executable(${_target} tests/test_sio_port_device_identity.c)
         target_include_directories(${_target} PRIVATE include)
@@ -1562,6 +1569,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc_picker_ascii.py)
         add_test(NAME disc_companion_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_disc_companion.py)
         add_test(NAME sbi_registry_test COMMAND ${Python3_EXECUTABLE} ${PSXRECOMP_ROOT}/tools/tests/test_sbi_registry.py)
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+            add_test(NAME missing_sbi_callers_test COMMAND ${Python3_EXECUTABLE}
+                ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_callers.py
+                --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+            add_test(NAME missing_sbi_reason_test COMMAND ${Python3_EXECUTABLE}
+                ${PSXRECOMP_ROOT}/tools/tests/test_missing_sbi_reason.py
+                --cxx ${CMAKE_CXX_COMPILER})
+        endif()
         add_test(NAME cd_seek_trace_validation_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cd_seek_trace_validation.py)

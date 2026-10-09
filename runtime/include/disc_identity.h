@@ -48,6 +48,8 @@ struct DiscIdentity {
     bool        cue_fallback   = false;  // resolver fell back from a broken cue to a bin
     bool        upgraded_to_cue = false; // caller picked bin; mounted owning cue
     bool        toc_opened     = false;  // ISOReader::Open succeeded on mount
+    bool        sbi_loaded     = false;  // actual mounted reader has replacements
+    std::string sbi_warning;             // nonfatal known-serial missing-SBI note
     int         track_count    = 0;      // >= 1 when toc_opened
     uint32_t    leadout_lba    = 0;      // iso sector count (GetTD track 0)
     std::string disc_fp;                 // lowercase hex SHA-256 of canonical TOC
