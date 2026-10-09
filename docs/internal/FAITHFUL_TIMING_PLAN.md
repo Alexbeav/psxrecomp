@@ -1,5 +1,15 @@
 # Faithful Timing Core — Game Plan (psxrecomp)
 
+2026-10-07, PS1G-73 Assignment 9: the candidate remains on
+`fix/ps1g-73-icache`, outside pin H. The review orders a guarded pin H import,
+execution counters, no nested stale slicing and a separate BIOS word count.
+The focused cache admission and digest fixtures pass at O0 and O2. Existing
+assignment 7 Windows and Tier 1 results describe the earlier head. The required
+three-title cost sample, four self-patching routes, replay comparisons and final
+qualification remain outstanding. A run is alive only when its last interrupt
+delivery falls within its final second. Frame count at exit proves no liveness.
+See [execution model](../EXECUTION_MODEL.md#instruction-cache-contents).
+
 2026-09-12 local integration: restore inherited GTE arithmetic/register and MDEC
 output-completion behavior before PGXP consumers. Scope, controls and separate
 packing limit: [core retention](../CORE_CORRECTNESS_RETENTION.md). No timing-mode,
@@ -1327,6 +1337,8 @@ on a fixed region -> next.
   `PSX_PRECISE_SLICE` left in tree (inert). −8 mechanism located in
   code_generator.cpp (delay-slot-is-leader undercount). Tree builds + boots clean.
   NEXT: P1 (cycle-audit) → P2 (delay-slot ownership fix).
+
+2026-10-08, PS1G-73 visible cache worker: state v17 and digest v3 retain explicit legacy conversions. The registry correction preserves all 224 state-entry blocks and passes missing 0. Canonical input comparison traces the renewed Pin-H destination to two cache-header declarations. The strict admission assertion remains. Source migration controls preceded local delivery. The independent source addendum followed the local commits and found no blocking production defect in the S3 registry, strict Pin-H destination and S4 scope. Full title, replay, cost, native-guard comparison and actual guest integration remain open. Evidence is in the PS1G-73 issue and the owned visible-cache record.
 
 - **2026-10-07 (PS1B-288):** The SIO router now passes multitap method-2
   addresses to the existing pad state machine. Both physical ports pass the

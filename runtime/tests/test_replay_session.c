@@ -58,8 +58,9 @@ int replay_host_take_anchor(uint8_t **data, size_t *size) {
     *data = anchor_blob; *size = anchor_size; anchor_blob = NULL;
     return 1;
 }
-static int load_pending; static uint8_t *load_blob; static size_t load_size;
+static int load_pending, anchor_loads; static uint8_t *load_blob; static size_t load_size;
 int replay_host_load_anchor(const void *d, size_t n) {
+    anchor_loads++;
     load_blob = realloc(load_blob, n); memcpy(load_blob, d, n); load_size = n; load_pending = 1; return 1;
 }
 int replay_host_take_load_result(void) {
@@ -68,10 +69,11 @@ int replay_host_take_load_result(void) {
     return load_size == RAM_BYTES + 8 ? 1 : -1;
 }
 static char settings_now[256] = "cd_speed=1\n", settings_saved[256], settings_applied[256];
-static int restores;
+static int restores, settings_switches;
 static char stub_differs[64];      /* settings the host could not switch */
 void replay_host_settings_capture(char *out, size_t cap) { snprintf(out, cap, "%s", settings_now); }
 void replay_host_settings_apply(const char *s, char *differs, size_t cap) {
+    settings_switches++;
     snprintf(settings_saved, sizeof settings_saved, "%s", settings_now);
     snprintf(settings_applied, sizeof settings_applied, "%s", s);
     snprintf(settings_now, sizeof settings_now, "%s", s);
@@ -110,11 +112,12 @@ static uint8_t host_cards[2][CARD_BYTES];
 static uint32_t host_cards_mask = 1;
 static uint8_t replay_cards[2][CARD_BYTES];
 static uint32_t replay_cards_mask;
-static int replay_cards_in;
+static int replay_cards_in, cards_installs;
 int replay_host_cards_capture(uint8_t *images, uint32_t *mask) {
     memcpy(images, host_cards, sizeof host_cards); *mask = host_cards_mask; return 1;
 }
 int replay_host_cards_install(const uint8_t *images, uint32_t mask) {
+    cards_installs++;
     memcpy(replay_cards, images, sizeof replay_cards); replay_cards_mask = mask; replay_cards_in = 1; return 1;
 }
 void replay_host_cards_restore(void) { replay_cards_in = 0; }
@@ -282,6 +285,7 @@ static void test_out_of_sync_is_reported(void) {
     for (unsigned i = 0; i < 130 && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
     drift = 0;
     CHECK(replay_session_last_result() == REPLAY_RESULT_OUT_OF_SYNC, "drift reported (result %d)", replay_session_last_result());
+    CHECK(replay_session_core_digest_version() == 3u, "divergence end restores current digest");
     CHECK(strstr(osd_last, "out of sync") != NULL, "OSD says out of sync: %s", osd_last);
     /* The first digest after the drift names the frame and the core partition. */
     uint32_t df = 0; unsigned parts = 0;
@@ -444,6 +448,75 @@ static ReplayResult play_from_boot(const char *p, unsigned max_frames, int new_h
     power_on_now = 0;
     for (unsigned i = 0; i < max_frames && replay_session_state() != REPLAY_IDLE; ++i) vblank(0xFFFF, neutral);
     return replay_session_last_result();
+}
+
+static void test_core_digest_metadata(void) {
+    const char *valid[] = { "", "renderer=software\n", "core_digest=1\n", "core_digest=2\n", "core_digest=3\n" };
+    const char *invalid[] = { "core_digest=", "core_digest=\n", "core_digest=4\n",
+        "core_digest=2x\n", "core_digest= 2\n", "core_digest=2\ncore_digest=2\n",
+        "core_digest=1\ncore_digest=2\n", "core_digest=\ncore_digest=2\n" };
+    char saved[sizeof product_lines], path[700];
+    snprintf(saved, sizeof saved, "%s", product_lines);
+    for (unsigned boot = 0; boot < 2; ++boot) {
+        for (unsigned i = 0; i < sizeof valid / sizeof valid[0]; ++i) {
+            snprintf(product_lines, sizeof product_lines, "%s", valid[i]);
+            clear_slots();
+            if (boot) {
+                snprintf(path, sizeof path, "%s/digest-boot.psxrpl", dir);
+                remove(path); cold_boot(); power_on_now = 1;
+                CHECK(replay_session_record_power_on(path), "digest power-on record starts");
+                for (unsigned f = 0; f < 20; ++f) { vblank(script(f), neutral); power_on_now = 0; }
+                replay_session_shutdown(); cold_boot(); power_on_now = 1;
+            } else {
+                record(20, "cd_speed=1\n"); slot_path(0, path, sizeof path);
+            }
+            const int notices = osd_count;
+            CHECK(replay_session_play_file(path), "valid metadata %u boot %u starts", i, boot);
+            CHECK(osd_count == notices + 1 && (i == 4 || strstr(osd_last, "older runtime behavior")),
+                  "one older-recording notice at start %u boot %u", i, boot);
+            CHECK(replay_session_core_digest_version() == (i == 4 ? 3u : i == 3 ? 2u : 1u),
+                  "declared/absent digest version %u boot %u", i, boot);
+            for (unsigned f = 0; f < 30 && replay_session_state() != REPLAY_IDLE; ++f) {
+                vblank(0xffff, neutral); power_on_now = 0;
+                if (f < 5u) CHECK(osd_count == notices + 1, "older notice does not repeat each frame");
+            }
+            CHECK(replay_session_last_result() == REPLAY_RESULT_IN_SYNC, "valid version completes");
+            CHECK(replay_session_core_digest_version() == 3u, "end restores current digest");
+            remove(path);
+        }
+        for (unsigned i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
+            snprintf(product_lines, sizeof product_lines, "%s", invalid[i]);
+            clear_slots();
+            if (boot) {
+                snprintf(path, sizeof path, "%s/digest-invalid.psxrpl", dir);
+                remove(path); cold_boot(); power_on_now = 1;
+                CHECK(replay_session_record_power_on(path), "invalid metadata recording starts");
+                for (unsigned f = 0; f < 20; ++f) { vblank(script(f), neutral); power_on_now = 0; }
+                replay_session_shutdown(); cold_boot(); power_on_now = 1;
+            } else {
+                record(20, "cd_speed=1\n"); slot_path(0, path, sizeof path);
+            }
+            const int loads = anchor_loads, switches = settings_switches;
+            const int cards = cards_installs, begins = power_on_begins;
+            CHECK(!replay_session_play_file(path) && strstr(osd_last, "core digest version"),
+                  "invalid metadata %u boot %u refused: %s", i, boot, osd_last);
+            CHECK(anchor_loads == loads && settings_switches == switches &&
+                  cards_installs == cards && power_on_begins == begins,
+                  "bad digest metadata applies no host state");
+            CHECK(replay_session_state() == REPLAY_IDLE && replay_session_core_digest_version() == 3u,
+                  "refusal leaves current comparison");
+            power_on_now = 0; remove(path);
+        }
+    }
+    /* Exercise legacy playback's end, divergence and input take-over paths. */
+    product_lines[0] = 0;
+    test_record_and_play_in_sync();
+    CHECK(replay_session_core_digest_version() == 3u, "legacy in-sync end leaves current digest");
+    test_out_of_sync_is_reported();
+    CHECK(replay_session_core_digest_version() == 3u, "legacy divergence end leaves current digest");
+    test_take_over();
+    CHECK(replay_session_core_digest_version() == 3u, "legacy take-over leaves current digest");
+    snprintf(product_lines, sizeof product_lines, "%s", saved);
 }
 
 static void test_power_on_record_and_play(void) {
@@ -746,6 +819,27 @@ int main(int argc, char **argv) {
     mkdir_p(dir);
     snprintf(verdict_path, sizeof verdict_path, "%s/verdict.json", dir);
     replay_session_set_verdict_path(verdict_path);
+    CHECK(replay_session_core_digest_version() == 3u, "idle uses the current core digest");
+    clear_slots();
+    record(20, "cd_speed=1\n");
+    CHECK(replay_session_play_slot(0), "legacy digest replay starts");
+    CHECK(replay_session_core_digest_version() == 1u, "absent version selects pin H digest");
+    replay_session_shutdown();
+    strcat(product_lines, "core_digest=3\n");
+    clear_slots();
+    record(20, "cd_speed=1\n");
+    CHECK(replay_session_play_slot(0), "current digest replay starts");
+    CHECK(replay_session_core_digest_version() == 3u, "new replay keeps cache-word digest");
+    replay_session_shutdown();
+    CHECK(replay_session_core_digest_version() == 3u, "shutdown restores current digest");
+    char *digest_version_line = strstr(product_lines, "core_digest=3");
+    digest_version_line[strlen("core_digest=")] = '4';
+    clear_slots();
+    record(20, "cd_speed=1\n");
+    CHECK(!replay_session_play_slot(0), "unknown digest version is refused");
+    CHECK(replay_session_core_digest_version() == 3u, "refused replay keeps current digest");
+    digest_version_line[strlen("core_digest=")] = '3';
+    test_core_digest_metadata();
     test_record_and_play_in_sync();
     test_thumb_and_name();
     test_out_of_sync_is_reported();

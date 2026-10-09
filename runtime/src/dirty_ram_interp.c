@@ -45,6 +45,10 @@
 #include "dispatch_publish.h"
 #include "pst_wire.h"
 
+#ifndef PSX_NATIVE_ICACHE_GUARD
+#define PSX_NATIVE_ICACHE_GUARD 1
+#endif
+
 uint64_t g_dirty_ram_blocks_run = 0;
 uint64_t g_dirty_ram_insns_run  = 0;
 uint64_t g_dirty_window_dispatches = 0;  /* capture-window interp dispatches */
@@ -344,11 +348,13 @@ int psx_exec_phase(void) { return g_exec_phase; }
  * ring afterward at leisure (ring-first; no arm-then-hope). */
 /* Load values live in CPUState across every executor and host return.
  * The continuation below records only the active instruction and branch. */
-static struct { uint32_t active,pc,slot,target,taken; } s_checkpoint;
+static struct { uint32_t active,pc,slot,target,taken,cache_owned; } s_checkpoint;
+static int s_cache_owned_slice;
 static int s_checkpoint_resume;
 void dirty_ram_checkpoint_enter(uint32_t pc,int slot,uint32_t target,int taken) {
     s_checkpoint.active=1;s_checkpoint.pc=pc;s_checkpoint.slot=(uint32_t)slot;
     s_checkpoint.target=target;s_checkpoint.taken=(uint32_t)taken;
+    s_checkpoint.cache_owned=(uint32_t)s_cache_owned_slice;
 }
 void dirty_ram_checkpoint_leave(void) { memset(&s_checkpoint,0,sizeof s_checkpoint); }
 uint32_t dirty_ram_checkpoint_pc(uint32_t fallback) {
@@ -360,15 +366,16 @@ void dirty_ram_checkpoint_write(uint8_t *out) {
     pst_w_u32(&w,s_checkpoint.slot); pst_w_u32(&w,s_checkpoint.target);
     pst_w_u32(&w,s_checkpoint.taken);
     /* Value pipeline belongs to CPU_STATE, never process-global continuation. */
-    for (unsigned i=0;i<4;i++) pst_w_u32(&w,0u);
+    pst_w_u32(&w,s_checkpoint.cache_owned);
+    for (unsigned i=0;i<3;i++) pst_w_u32(&w,0u);
 }
 static int checkpoint_parse(const uint8_t *in,uint32_t len,uint32_t v[9]) {
     PstR r;
     if(len!=DIRTY_RAM_CHECKPOINT_BYTES)return 0;
     pst_r_init(&r,in,len);
     for(unsigned i=0;i<9;i++)if(!pst_r_u32(&r,&v[i]))return 0;
-    if(v[0]>1u || v[2]>1u || v[4]>1u || (v[5]|v[6]|v[7]|v[8]) ||
-       (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4])))return 0;
+    if(v[0]>1u || v[2]>1u || v[4]>1u || v[5]>1u || (v[6]|v[7]|v[8]) ||
+       (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4]||v[5])))return 0;
     return 1;
 }
 int dirty_ram_checkpoint_validate(const uint8_t *in,uint32_t len) {
@@ -378,7 +385,7 @@ int dirty_ram_checkpoint_read(const uint8_t *in,uint32_t len) {
     uint32_t v[9];
     if (!checkpoint_parse(in,len,v)) return 0;
     s_checkpoint.active=v[0];s_checkpoint.pc=v[1];s_checkpoint.slot=v[2];
-    s_checkpoint.target=v[3];s_checkpoint.taken=v[4];
+    s_checkpoint.target=v[3];s_checkpoint.taken=v[4];s_checkpoint.cache_owned=v[5];
     s_checkpoint_resume=(int)v[0];
     return 1;
 }
@@ -580,6 +587,16 @@ static inline uint32_t fetch_word(uint32_t phys) {
          | ((uint32_t)ram[phys + 1] <<  8)
          | ((uint32_t)ram[phys + 2] << 16)
          | ((uint32_t)ram[phys + 3] << 24);
+}
+
+/* Execution observes cached instructions; scanners and data reads observe RAM.
+ * Refills and their cycle cost remain at the instruction's existing boundary. */
+static inline uint32_t fetch_instruction(uint32_t pc) {
+#if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
+    return psx_icache_read_cached(pc, fetch_word(pc & 0x1FFFFFFFu));
+#else
+    return fetch_word(pc & 0x1FFFFFFFu);
+#endif
 }
 
 /* Widescreen render-funnel cull detection for the interpreter ([widescreen.cull]
@@ -1513,15 +1530,14 @@ static int source_dirty_irq_before(CPUState *cpu,uint32_t pc) {
 }
 static int exec_one(CPUState *cpu, uint32_t pc, uint32_t *next_pc_out) {
     if(source_dirty_irq_before(cpu,pc))return 1;
-    return exec_one_fetched(cpu, pc, fetch_word(pc & 0x1FFFFFFFu), next_pc_out);
+    return exec_one_fetched(cpu, pc, fetch_instruction(pc), next_pc_out);
 }
 
 /* Forward: helper for delay-slot execution on jumps/branches. */
 static int exec_delay_slot(CPUState *cpu,uint32_t pc,uint32_t target,int taken) {
     /* Delay-slot instruction at pc must NOT be a control transfer.
      * Recursively interpret as a single non-branching instruction. */
-    uint32_t ds_phys = pc & 0x1FFFFFFFu;
-    uint32_t insn = fetch_word(ds_phys);
+    uint32_t insn = fetch_instruction(pc);
     if(source_gpu_runtime_active() && precise_irq_before(cpu,pc) &&
        irq_epc_resumable(pc-4u)) {
         if(psx_check_interrupts_delay_slot(cpu,pc,target,taken,insn)) {
@@ -1660,6 +1676,13 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
 
 static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
                                   uint32_t *next_pc_out) {
+#if defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)
+    if (insn != fetch_word(pc & 0x1fffffffu)) {
+        if (!g_icache_execution_stats.stale_fetches++)
+            g_icache_execution_stats.first_fetch_pc = pc;
+        g_icache_execution_stats.last_fetch_pc = pc;
+    }
+#endif
     exec_pc_table_record(pc);
     uint32_t opc  = op_field(insn);
     uint32_t rs   = rs_field(insn);
@@ -2117,7 +2140,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             XRES(XRES_NONLOCAL);
             return dispatch_nonlocal_call(cpu, target, return_pc, next_pc_out);
         }
-        if (!dirty_ram_word_looks_decodable(fetch_word(target & 0x1FFFFFFFu))) {
+        if (!dirty_ram_word_looks_decodable(fetch_instruction(target))) {
             XRES(XRES_UNDECODABLE);
             return dispatch_nonlocal_call(cpu, target, return_pc, next_pc_out);
         }
@@ -2769,10 +2792,13 @@ static int precise_pc_dispatchable(CPUState *cpu, uint32_t pc) {
  * IRQ we keep interpreting to the next transfer before handing back to compiled.
  * `bcyc` = originating block's cycle budget; `deadline_entry` = entered because an
  * event is due within bcyc (vs a side-effect-only block, which runs one block). */
-static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
+static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry,
+                            int cache_owned_slice) {
     int prev_precise = g_precise_mode;
     int prev_active  = g_dirty_interp_active;
     int prev_phase   = g_exec_phase;
+    int prev_cache_owner = s_cache_owned_slice;
+    s_cache_owned_slice = cache_owned_slice;
     g_precise_mode = 1;
     g_dirty_interp_active = 1;
     g_exec_phase = 1;
@@ -2780,7 +2806,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     uint32_t pc = cpu->pc;
     g_slice_last_block    = pc;
     g_slice_last_first_pc = pc;
-    g_slice_last_first_insn = fetch_word(pc & 0x1FFFFFFFu);
+    g_slice_last_first_insn = fetch_instruction(pc);
     g_slice_exit_pc = pc;
     g_slice_exit_reason = 0;
     g_slice_exit_iter = 0;
@@ -2792,7 +2818,7 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     g_slice_exit_in_text = 0;
 #endif
     g_slice_exit_want = 0;
-    int irq_taken = 0;   /* default profile limits takes; also requests safe exit */
+    int irq_taken = 0;   /* ordinary event slices request a safe exit after a take */
     if(s_checkpoint_resume) {
         uint32_t slot=s_checkpoint.slot,target=s_checkpoint.target,taken=s_checkpoint.taken;
         s_checkpoint_resume=0;
@@ -2803,17 +2829,18 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
             cpu->pc=pc;
         }
     }
-    enum { MAX_PRECISE_INSNS = 200000 };
-    /* A host instruction budget cannot retire a pending guest load or create a
-     * generated entry. In the source profile retain ownership until the safe
-     * exit below, even when a branch-slot load spans every lap of a long loop.
-     * Each instruction still advances devices and the normal frontend hooks.
-     * Keep the legacy guard outside this explicit profile. Saturate the
-     * diagnostic iteration count rather than overflowing on a guest spin. */
+    enum { MAX_PRECISE_STEPS = 200000 };
+    /* The normal outer scheduler can resume an interpreter checkpoint without
+     * entering a generated body or retiring a pending load. Bound each cached
+     * slice there. Standalone/fiber owners have no such unwind target and retain
+     * interpreter ownership until a safe native boundary, as before.
+     * One step can include a branch and its delay slot. */
     const int source_owned_slice = source_gpu_runtime_active();
-    for (uint32_t i = 0; source_owned_slice || i < MAX_PRECISE_INSNS;
+    const int bounded_cache_slice = cache_owned_slice && psx_scheduler_can_resume_checkpoint();
+    for (uint32_t i = 0; source_owned_slice ||
+         (cache_owned_slice && !bounded_cache_slice) || i < MAX_PRECISE_STEPS;
          i += i != UINT32_MAX) {
-        if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,pc)) {
+        if ((source_owned_slice || cache_owned_slice || !irq_taken) && precise_irq_before(cpu,pc)) {
             uint32_t committed = pc;
             extern uint32_t i_stat;
             g_slice_last_committed = committed;
@@ -2893,8 +2920,9 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
         /* Source RFE can re-enable an unacknowledged IRQ while this slice
          * still owns a mid-block return target. SR/in_exception determine
          * eligibility at every boundary; a previous take cannot permit one
-         * extra opcode before the next IRQ. Retain the default take limit. */
-        if ((source_owned_slice || !irq_taken) && precise_irq_before(cpu,committed)) {
+         * extra opcode before the next IRQ. A cache-owned wait loop may also
+         * need a later IRQ before reaching a native-safe boundary. */
+        if ((source_owned_slice || cache_owned_slice || !irq_taken) && precise_irq_before(cpu,committed)) {
             extern uint32_t i_stat;
             g_slice_last_committed = committed;
             g_slice_last_istat = i_stat;
@@ -2947,8 +2975,12 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
         }
     }
     if (g_slice_exit_reason == 0) {
-        g_slice_exit_reason = 4;
-        g_slice_exit_iter = MAX_PRECISE_INSNS;
+        g_slice_exit_reason = bounded_cache_slice ? 5u : 4u;
+        g_slice_exit_iter = MAX_PRECISE_STEPS;
+        if (bounded_cache_slice) {
+            dirty_ram_checkpoint_enter(pc,0,0u,0);
+            s_checkpoint_resume=1;
+        }
     }
 
     cpu->pc = pc;
@@ -2964,15 +2996,18 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
     g_precise_mode = prev_precise;
     g_dirty_interp_active = prev_active;
     g_exec_phase = prev_phase;
+    s_cache_owned_slice = prev_cache_owner;
+    if (g_slice_exit_reason == 5u) {
+        psx_scheduler_resume_checkpoint(cpu); /* retains the exact CPU/load state */
+    }
 }
 
-/* Precise-slice gate (PARKED default OFF). Hot callers use the cpu_state.h
- * inline which returns 0 when this is 0 — no out-of-line call. Opt in with
- * PSX_PRECISE_SLICE=1 (same binary A/B). */
+/* Event-slicing policy. Cache-content safety is checked independently before
+ * this gate, including when precise event slicing is disabled. */
 int g_psx_precise_slice = 0;
 
 void dirty_ram_checkpoint_resume(CPUState *cpu) {
-    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1);
+    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1,(int)s_checkpoint.cache_owned);
 }
 
 void psx_precise_slice_init_from_env(void) {
@@ -3092,21 +3127,46 @@ void psx_slice_diag_write(const char *dir) {
             (unsigned long long)g_sd_compiled_cycles, (unsigned long long)g_sd_slice_cycles, (unsigned long long)g_sd_slice_insns);
 }
 
-int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int side_effects) {
+IcacheExecutionStats g_icache_execution_stats;
+
+static int slice_block_with_words(CPUState *cpu, uint32_t block_addr,
+                                 uint32_t bcyc, int side_effects, uint32_t words) {
+    g_sd_leaders++;
+    /* A stale block inside a handler cannot start a nested precision slice.
+     * Count the blocked cases so the qualification can expose that gap. */
+    int in_exception = psx_get_in_exception();
+    if (g_precise_mode || in_exception) {
+        g_sd_nested_skip++;
+#if (defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)) && PSX_NATIVE_ICACHE_GUARD
+        if (psx_icache_block_stale(block_addr, words)) {
+            g_icache_execution_stats.nested_stale_blocks++;
+            if (in_exception) g_icache_execution_stats.exception_stale_blocks++;
+        }
+#endif
+        return 0;
+    }
+    /* A native body describes the RAM image, not stale cache contents. Keep
+     * such a block in the shared interpreter until a dispatchable boundary. */
+#if (defined(PSX_ENABLE_BLOCK_CYCLES) || defined(PSX_COSIM)) && PSX_NATIVE_ICACHE_GUARD
+    if (psx_icache_block_stale(block_addr, words)) {
+        if (!g_icache_execution_stats.stale_blocks++)
+            g_icache_execution_stats.first_block = block_addr;
+        g_icache_execution_stats.last_block = block_addr;
+        if (in_exception) g_icache_execution_stats.stale_blocks_in_exception++;
+        psx_cyc_batch_flush();
+        cpu->pc = block_addr;
+        psx_run_precise(cpu, bcyc, 0, 1);
+        return 1;
+    }
+#endif
     /* PARKED (PRECISE_IRQ_SLICE.md): precise take-point slicing is a later
      * correctness upgrade, NOT the current FMV blocker (that is the -8 cycle
      * drift / faithful per-instruction cycle model — see CLAUDE.md Rule -1). */
-    g_sd_leaders++;
     if (!g_psx_precise_slice) { g_sd_gate_off++; return 0; }
 
     uint32_t block_phys = block_addr & 0x1FFFFFFFu;
     if (block_phys >= 0x1FC00000u && block_phys < 0x1FC80000u &&
         !source_gpu_runtime_active()) { g_sd_bios_skip++; return 0; }
-
-    /* No nested slicing: a handler dispatched from inside precise-mode, and any
-     * block executed while in_exception, run compiled (interrupts are gated during
-     * exception handling anyway). Keeps re-entrancy structurally impossible. */
-    if (g_precise_mode || psx_get_in_exception()) { g_sd_nested_skip++; return 0; }
 
     static int s_slice_always = -1;
     static int s_slice_margin = -1;
@@ -3269,13 +3329,21 @@ int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int 
     {
         extern uint64_t g_dirty_ram_insns_run;
         uint64_t cyc0 = psx_get_cycle_count(), ins0 = g_dirty_ram_insns_run;
-        psx_run_precise(cpu, bcyc, has_deadline);
+        psx_run_precise(cpu, bcyc, has_deadline, 0);
         uint64_t dcyc = psx_get_cycle_count() - cyc0, dins = g_dirty_ram_insns_run - ins0;
         g_sd_sliced++; g_sd_slice_cycles += dcyc; g_sd_slice_insns += dins;
         g_sd_slice_insn_hist[sd_bucket(dins)]++;
         g_sd_exit_reason[g_slice_exit_reason < 5 ? g_slice_exit_reason : 0]++;
     }
     return 1;
+}
+
+int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int side_effects) {
+    return slice_block_with_words(cpu, block_addr, bcyc, side_effects, bcyc);
+}
+
+int psx_slice_bios_block(CPUState *cpu, uint32_t block_addr, uint32_t words, int side_effects) {
+    return slice_block_with_words(cpu, block_addr, words * 8u, side_effects, words);
 }
 
 static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
@@ -3399,7 +3467,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
          * still fail closed via the decodability check. */
         if (phys < (2u * 1024u * 1024u) &&
             phys_is_overlay_region(phys) &&
-            dirty_ram_word_looks_decodable(fetch_word(phys))) {
+            dirty_ram_word_looks_decodable(fetch_instruction(addr))) {
             dirty_ram_mark_executable_range(phys, 4u);
         } else {
             return 0;
@@ -3571,7 +3639,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
 #ifdef PSX_COSIM
         { extern void cosim_block(uint32_t); cosim_block(pc); }
 #endif
-        uint32_t insn = fetch_word(pc & 0x1FFFFFFFu);
+        uint32_t insn = fetch_instruction(pc);
 #ifndef PSX_NO_DEBUG_TOOLS
         uint32_t before_s0 = cpu->gpr[16];
         uint32_t before_ra = cpu->gpr[31];
@@ -3952,7 +4020,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
         current_page = next_page;
     }
     g_dirty_ram_last_unsupported_pc = pc;
-    g_dirty_ram_last_unsupported_insn = fetch_word(pc & 0x1FFFFFFFu);
+    g_dirty_ram_last_unsupported_insn = fetch_instruction(pc);
     g_dirty_ram_last_unsupported_reason = "instruction guard";
     g_dirty_ram_guard_yields++;
     g_dirty_ram_blocks_run++;

@@ -11,7 +11,7 @@ UNDEFINED = re.compile(r"undefined reference to [`']([^`']+)[`']")
 # A definition in our stub object would silently override a symbol that the C
 # library would otherwise satisfy from an archive/shared object, so anything
 # libc/CRT/compiler-runtime provides must never be stubbed.
-LIBRARY_CANDIDATES = ["libc.a", "libm.a", "libgcc.a", "libmingw32.a",
+LIBRARY_CANDIDATES = ["libc.a", "libc.so.6", "libm.a", "libgcc.a", "libmingw32.a",
                       "libmingwex.a", "libmsvcrt.a", "libucrt.a",
                       "libkernel32.a"]
 ISO_C_FALLBACK = {
@@ -33,14 +33,16 @@ def library_symbols(cc):
     provided = set(ISO_C_FALLBACK)
     for name in LIBRARY_CANDIDATES:
         out = subprocess.run([cc, "-print-file-name=" + name],
-                             capture_output=True, text=True).stdout.strip()
+                             capture_output=True, text=True, encoding='utf-8', errors='replace').stdout.strip()
         if not out or not os.path.exists(out):
             continue
-        listing = subprocess.run(["nm", out], capture_output=True, text=True).stdout
+        command = ["nm", "--dynamic", "--defined-only", out] if ".so" in name else ["nm", out]
+        listing = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace').stdout
         for line in listing.splitlines():
             parts = line.split()
-            if len(parts) >= 2 and parts[-2] != "U" and SYMBOL.match(parts[-1]):
-                provided.add(parts[-1])
+            symbol = parts[-1].split("@", 1)[0] if parts else ""
+            if len(parts) >= 2 and parts[-2] != "U" and SYMBOL.match(symbol):
+                provided.add(symbol)
     return provided
 
 
@@ -48,7 +50,7 @@ def library_symbols(cc):
 def nm_symbols(objs):
     defined, undefined = set(), set()
     for obj in objs:
-        out = subprocess.run(["nm", str(obj)], capture_output=True, text=True)
+        out = subprocess.run(["nm", str(obj)], capture_output=True, text=True, encoding='utf-8', errors='replace')
         for line in out.stdout.splitlines():
             parts = line.split()
             if len(parts) < 2:
@@ -61,8 +63,9 @@ def nm_symbols(objs):
 
 
 def write_stubs(path, symbols):
-    lines = ["#include <stdlib.h>", "/* Unrelated link seams must not execute. */"]
-    lines += ["void %s(void) { abort(); }" % s for s in sorted(symbols)]
+    lines = ["#include <stdlib.h>", "#include <stdio.h>", "/* Unrelated link seams must not execute. */"]
+    lines += ['void %s(void) { fputs("unexpected fixture seam: %s\\n", stderr); abort(); }' % (s, s)
+              for s in sorted(symbols)]
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -89,6 +92,8 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
     subprocess.run([cc, "-std=c11", opt, "-Wall", "-Wextra", "-Werror",
                     "-I", include, "-c", str(test_c), "-o", str(test_o)],
                    check=True)
+    test_defined, _ = nm_symbols([test_o])
+    stubs -= test_defined
     exe = work / ("sectionwire" + tag + (".exe" if os.name == "nt" else ""))
 
     for _ in range(40):
@@ -98,7 +103,7 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
         result = subprocess.run(
             [cc, str(test_o)] + [str(o) for o in objs] + [str(stub_o),
              "-o", str(exe)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding='utf-8', errors='replace')
         if result.returncode == 0:
             break
         errors = result.stderr
@@ -118,7 +123,9 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name, defines=())
 
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PSX_")}
     run = subprocess.run([str(exe)], env=env, capture_output=True, text=True,
+                         encoding='utf-8', errors='replace',
                          timeout=60)
     if run.returncode != 0:
         raise SystemExit("%s: runtime fixture failed (rc=%d)\n%s%s"
                          % (opt, run.returncode, run.stdout, run.stderr))
+    return run.stdout

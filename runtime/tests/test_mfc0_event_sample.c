@@ -12,6 +12,10 @@
 #include "cpu_state.h"
 int l1_step(CPUState *, uint32_t, uint32_t, uint32_t *);
 
+/* The production fetch diagnostic compares the supplied word with RAM. */
+static uint32_t instruction_ram[(2u << 20) / 4u];
+uint8_t *memory_get_ram_ptr(void) { return (uint8_t *)instruction_ram; }
+
 /* Clock and device seams read as data on the charged path. */
 uint64_t psx_cycle_count, psx_next_service_cycle, g_psx_cycle_fast_limit;
 int psx_in_device_service, g_event_step_conservative, g_psx_cyc_bb_defer;
@@ -42,6 +46,9 @@ static void equal(uint32_t got, uint32_t expected, const char *what) {
     if (got != expected) { fprintf(stderr, "%s: %08x != %08x\n", what, got, expected); assert(got == expected); }
 }
 static void step(CPUState *c, uint32_t word) {
+    uint32_t phys = c->pc & 0x1fffffffu;
+    assert(!(phys & 3u) && phys < sizeof instruction_ram);
+    instruction_ram[phys / 4u] = word;
     uint32_t next; assert(l1_step(c, c->pc, word, &next) == 0); c->pc = next;
 }
 /* Run `word` (reading COP0 register 13 into a1) then two nops, so the delayed

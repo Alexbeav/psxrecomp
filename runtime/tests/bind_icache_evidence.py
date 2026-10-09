@@ -31,7 +31,7 @@ files.update(p.resolve() for p in folder.glob('icache-*.json'))
 for pattern in ['icache*.py','icache_provenance.json','run_icache_qualification.py','bind_icache_evidence.py','validate_cpu_timing_trace.py']:
     files.update(p.resolve() for p in (a.source/'runtime/tests').glob(pattern))
 owned=['runtime/src/psx_icache.c','runtime/include/psx_icache.h']
-head=subprocess.check_output(['git','-C',str(a.source),'rev-parse','HEAD'],text=True).strip()
+head=subprocess.check_output(['git','-C',str(a.source),'rev-parse','HEAD'],text=True,encoding='utf-8',errors='replace').strip()
 for path in owned:
     assert subprocess.run(['git','-C',str(a.source),'diff','--quiet',report['tested_commit'],'HEAD','--',path]).returncode==0
     assert subprocess.run(['git','-C',str(a.source),'diff','--quiet','HEAD','--',path]).returncode==0

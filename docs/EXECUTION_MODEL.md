@@ -12,6 +12,53 @@ either compiled to native code the first time it appears, or run by a tiny
 built-in interpreter until it is — so the game is always **correct**, and gets
 **faster** the more it's played.
 
+## Instruction-cache contents
+
+Guest stores change RAM, but do not replace instructions already fetched into
+the CPU's instruction cache. The shared cache records 1,024 instruction words
+alongside its tags. Native and interpreted fetches fill and evict the same
+lines; partial refills, uncached aliases and isolated invalidation keep the
+existing timing rules. Interpreter execution uses the cached view; diagnostic
+memory scans still inspect RAM.
+
+At a native block boundary outside an exception or an active precision slice,
+cached words that differ from RAM send execution through the interpreter to a
+dispatchable continuation. This also applies to native overlay callbacks. The
+cache-owned slice retains the interpreter past its ordinary host instruction
+guard until that safe continuation, including any pending guest load value.
+It does not add a per-title patch.
+An exception handler keeps its compiled path. The run report's
+`icache_execution.exception_stale_blocks` counts stale blocks skipped by that rule.
+`stale_blocks`, `first_block` and `last_block` identify interpreter admissions.
+`stale_fetches`, `first_fetch_pc` and `last_fetch_pc` identify interpreted words
+that differ from RAM. These counters are diagnostics, not saved guest state.
+The BIOS emitter passes an instruction count to `psx_slice_bios_block`.
+Its timing budget remains eight cycles per instruction.
+
+Boot-state version 17 saves the cache-control register, words and tags.
+Versions 15 and 16 default the absent register to zero. After restoring version
+15 RAM, the loader also fills every valid tag from restored memory. This cannot
+recover an earlier mid-FlushCache register value. Older formats remain refused.
+Pin H codegen hash `25fd1f54` imports only into the cache-guard hash
+`6d27c2c2`, named by `BOOT_STATE_PIN_H_IMPORT_HASH`. The unconditional assertion
+in `gpu_queue_boot_admission_test` fails if a later emitter or header change moves
+that hash without renewing the import decision. The BIOS guard separates the
+word count from its timing budget. The renewed destination adds only the host
+refresh API and cache-register declarations to the hashed cache header. CPUState,
+the emitter and overlay ABI stay unchanged. BIOS, entry, ABI, codegen version and section
+checks still apply. Overlay loading stays strict. TAS checkpoint compatibility
+is separate and requires new checkpoints.
+New replay product metadata declares `core_digest=3`. Earlier recordings omit
+that field and use version 1, which excludes cache words from the core digest.
+Version 2 includes words, and version 3 also includes the cache-control register.
+Rollback uses version 3. All versions retain cache tags. Explicit versions 1 and 2
+keep their former byte streams, and older recordings get one start notice.
+This changes comparison only. Guest execution still uses cache contents.
+An explicit digest version must occur once with value `1`, `2` or `3`. Empty,
+repeated or unknown versions are refused before settings, cards or an anchor
+are applied. An absent product extension also selects the legacy comparison.
+Lockstep shadow state and the deterministic clock digest also include contents.
+
 ## Why a PS1 game can't just be "decompiled once"
 
 A PlayStation game is not one fixed blob of code sitting in memory. The main
@@ -172,3 +219,5 @@ interpreted — a narrow, accepted cost, not a wall.
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how these connect to the hardware
 simulation, and [`docs/FEATURES.md`](FEATURES.md) for the overlay-system feature
 reference.
+
+For source qualification, the advanced CMake option PSX_NATIVE_ICACHE_GUARD defaults to ON. OFF removes native stale-block admission checks while keeping interpreter cache contents and timing. See [the qualification limits](internal/PRECISE_IRQ_SLICE.md).

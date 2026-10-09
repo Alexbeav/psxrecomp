@@ -192,9 +192,52 @@ as continuations in the generator (full_function_emitter.cpp + main_psx.cpp), th
 the delay-loop leaders become dispatchable and the slice hands back within one block.
 
 ## Validation  [Task #5]
+
+### Cache-owned interpreter continuation (PS1G-73)
+
+A stale cached instruction can keep the interpreter active after the first
+interrupt. The ordinary deterministic scheduler now accepts a saved
+interpreter continuation at a PC that has no native entry. Each cache slice
+yields after 200,000 precision-loop steps. A step can include a branch and
+its delay slot, so this number is not a retired-instruction count.
+
+The checkpoint keeps cache ownership, the exact next PC and branch state.
+CPUState keeps the pending load. The scheduler resumes the checkpoint through
+the interpreter before attempting native dispatch. Cache slices check every
+eligible interrupt boundary, including boundaries after an earlier interrupt.
+
+Standalone and legacy fiber paths have no checkpoint unwind target and retain
+their existing interpreter ownership. This change does not qualify those
+paths. The registered cache admission, scheduler escape and section-wire
+fixtures cover the deterministic path at O0 and O2. Retail, replay and cost
+qualification remain separate requirements.
+
+Host mod code writes refresh the resident instruction words that overlap the
+written RAM range. This includes whole-plan replacements, field replacements
+and `psx_mod_write_code_word`. The refresh retains tags and untouched resident
+words, so the next fetch does not refill a line over an unrelated stale word.
+RAM aliases and mirrors refer to the same patch. Unmapped KSEG2 writes leave
+RAM and the cache unchanged. Refresh ranges stop at the 8 MiB RAM-aperture
+end, so an ignored non-RAM tail cannot refresh mirrored RAM words. Ordinary
+guest stores retain stale cached words.
+
+State version 17 stores the cache-control register with the tags and words.
+Version 16 keeps its previous serialized shape; import defaults its missing
+register to zero. Version 15 also reconstructs cached words from restored RAM.
+These conversions cannot recover a historical mid-FlushCache register value.
+Short version 17 sections are rejected before state changes. Reset and shadow
+record/replay also carry the register. Core digest version 3 hashes it; replay
+versions 1 and 2 keep their earlier comparisons. New recordings declare version
+3. Older recordings get one start notice, and their former digest stays selected
+for comparison. These format controls do not qualify product replay routes.
+
 - Beetle exc_ring oracle: native exception-entry record (cycle, last/next PC,
   EPC, BD, Status/Cause, I_STAT/I_MASK, pending-load) must match interp + Beetle
   at the f1823->1824 VBLANK.
 - Regen + screenshot-smoke ALL titles (BIOS, Tomba 1, MMX6, Ape, Tomba 2).
 - Delete Tomba2 overlay_native_block; native must still reach the FMV/title.
 - Only then: pin bump (user-gated).
+
+The Pin-H v15 import destination is exactly 0x6d27c2c2. The canonical generator produces 0x3572b436 on reviewed source 8d80f14f, 0x52c10b95 after the host-refresh API, and 0x6d27c2c2 after the cache-register declaration. Only psx_icache.h changes among the 30 normalized inputs. CPUState, the emitter, and the overlay ABI stay identical. The loader still requires source hash 0x25fd1f54, version 15, and every other integrity field. The unconditional destination assertion stays in gpu_queue_boot_admission_test. Conversion fills absent cache words from RAM and defaults absent control to zero. It cannot reconstruct an earlier mid-FlushCache control value. This source migration does not qualify a complete title recording or product resume.
+
+For source qualification, the advanced CMake option PSX_NATIVE_ICACHE_GUARD defaults to ON. OFF compiles out native stale-block admission and its nested-block diagnostic checks. The interpreter still reads cached words, and cache fills, invalidation, persistence, digest and timing stay enabled. PSX_ICACHE=0 disables the cache model and does not provide this control. The option needs an exact compiler-definition and preprocessing receipt for each title comparison. A fixture comparison does not qualify a title, replay or cost measurement.

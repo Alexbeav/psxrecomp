@@ -2321,7 +2321,8 @@
             " * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,",
             " * so a runtime-only change (new sections, changed snapshot writers) leaves all",
             " * three unchanged. A pin bump without a code regen would otherwise hand an old",
-            " * runtime's blob to a new loader. v15 therefore rejects every earlier state. */",
+            " * runtime's blob to a new loader. v15/v16 import defaults the absent register",
+            " * to zero; v15 additionally fills cache words from restored RAM. */",
             "#define BOOT_STATE_VERSION_MIN_READ 15u"
           ]
         },
@@ -2939,7 +2940,7 @@
             " * BEFORE any section is applied. Without this, a failure part-way through left a",
             " * HALF-APPLIED machine (live state changed, replay then runs on a mix), and the",
             " * first failing section masked every later one. */",
-            "static int section_shape_ok(uint32_t tag, uint32_t len) {",
+            "static int section_shape_ok(uint32_t tag, uint32_t len, uint32_t version) {",
             "    switch (tag) {",
             "    case BS_SEC_CPU:        return len == CPU_REGS_WIRE_BYTES;",
             "    case BS_SEC_CPU_EXEC:   return len == DIRTY_RAM_CHECKPOINT_BYTES;",
@@ -2959,7 +2960,8 @@
             "    case BS_SEC_DMA:        return len == dma_snapshot_bytes();",
             "    case BS_SEC_SIO:        return sio_snapshot_shape_ok(len);",
             "    case BS_SEC_MDEC:       return 1; /* variable FIFO lengths: mdec_snapshot_prepare */",
-            "    case BS_SEC_ICACHE:     return len == 1024u * 4u;",
+            "    case BS_SEC_ICACHE:     return len == 1024u * (version == 15u ? 4u : 8u) +",
+            "                                      (version >= 17u ? 4u : 0u);",
             "    case BS_SEC_DIRTY:      return (len % 4u) == 0u;",
             "    case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;",
             "    case BS_SEC_GPU_SERVICE:return len == SOURCE_GPU_SERVICE_WIRE_BYTES;",
@@ -3028,7 +3030,7 @@
             "            free(owned); /* unknown sections remain forward-compatible */",
             "            continue;",
             "        }",
-            "        if ((seen & (1u << tag)) || !section_shape_ok(tag, raw_len)) {",
+            "        if ((seen & (1u << tag)) || !section_shape_ok(tag, raw_len, h.version)) {",
             "            free(owned);",
             "            goto cleanup;",
             "        }",
@@ -3371,11 +3373,13 @@
         {
           "file": "runtime/src/dirty_ram_interp.c",
           "lines": [
-            "static struct { uint32_t active,pc,slot,target,taken; } s_checkpoint;",
+            "static struct { uint32_t active,pc,slot,target,taken,cache_owned; } s_checkpoint;",
+            "static int s_cache_owned_slice;",
             "static int s_checkpoint_resume;",
             "void dirty_ram_checkpoint_enter(uint32_t pc,int slot,uint32_t target,int taken) {",
             "    s_checkpoint.active=1;s_checkpoint.pc=pc;s_checkpoint.slot=(uint32_t)slot;",
             "    s_checkpoint.target=target;s_checkpoint.taken=(uint32_t)taken;",
+            "    s_checkpoint.cache_owned=(uint32_t)s_cache_owned_slice;",
             "}",
             "void dirty_ram_checkpoint_leave(void) { memset(&s_checkpoint,0,sizeof s_checkpoint); }",
             "uint32_t dirty_ram_checkpoint_pc(uint32_t fallback) {",
@@ -3387,15 +3391,16 @@
             "    pst_w_u32(&w,s_checkpoint.slot); pst_w_u32(&w,s_checkpoint.target);",
             "    pst_w_u32(&w,s_checkpoint.taken);",
             "    /* Value pipeline belongs to CPU_STATE, never process-global continuation. */",
-            "    for (unsigned i=0;i<4;i++) pst_w_u32(&w,0u);",
+            "    pst_w_u32(&w,s_checkpoint.cache_owned);",
+            "    for (unsigned i=0;i<3;i++) pst_w_u32(&w,0u);",
             "}",
             "static int checkpoint_parse(const uint8_t *in,uint32_t len,uint32_t v[9]) {",
             "    PstR r;",
             "    if(len!=DIRTY_RAM_CHECKPOINT_BYTES)return 0;",
             "    pst_r_init(&r,in,len);",
             "    for(unsigned i=0;i<9;i++)if(!pst_r_u32(&r,&v[i]))return 0;",
-            "    if(v[0]>1u || v[2]>1u || v[4]>1u || (v[5]|v[6]|v[7]|v[8]) ||",
-            "       (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4])))return 0;",
+            "    if(v[0]>1u || v[2]>1u || v[4]>1u || v[5]>1u || (v[6]|v[7]|v[8]) ||",
+            "       (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4]||v[5])))return 0;",
             "    return 1;",
             "}",
             "int dirty_ram_checkpoint_validate(const uint8_t *in,uint32_t len) {",
@@ -3405,7 +3410,7 @@
             "    uint32_t v[9];",
             "    if (!checkpoint_parse(in,len,v)) return 0;",
             "    s_checkpoint.active=v[0];s_checkpoint.pc=v[1];s_checkpoint.slot=v[2];",
-            "    s_checkpoint.target=v[3];s_checkpoint.taken=v[4];",
+            "    s_checkpoint.target=v[3];s_checkpoint.taken=v[4];s_checkpoint.cache_owned=v[5];",
             "    s_checkpoint_resume=(int)v[0];",
             "    return 1;",
             "}",
@@ -3451,7 +3456,7 @@
           "file": "runtime/src/dirty_ram_interp.c",
           "lines": [
             "void dirty_ram_checkpoint_resume(CPUState *cpu) {",
-            "    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1);",
+            "    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1,(int)s_checkpoint.cache_owned);",
             "}",
             ""
           ]
@@ -4922,7 +4927,7 @@
           ]
         }
       ],
-      "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion. Evolved for T168: restore retained section staging and canonical commit order; perform v10 content/presence/allocation admission before mutations. The old two-pass shape/apply path failed118/166 full-runtime checks. Updated blocks retain checkpoint semantics and reject malformed states atomically; current expanded fixture passes202 default and260 comparison-profile checks. This is not a new full-route replay verdict. superseded by T172 a01f2f6cede9; requalification pending the PS1B-102 Pegasus TAS rerun superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun PS1B-175 narrow source re-pin 2026-10-08: only the current line-family or saved-layout spans replace the whole rewritten projection header; other blocks and historical title evidence are unchanged. The --as-of source is pin H a279b5e86a8d4f027ccdc4965d2aabc39bfbf04e, whose projection header is identical on stage 13023e29. PS1B-178/179 full-H qualification covers only the separate Tekken 3 victory route and Pepsiman route recorded below, not a new Biohazard/Abe catalogue pass or opcode coverage.",
+      "note": "Save-state capture and resume, ported from pegasus-codex/biohazard-resume-20260913 (e4581bd3..155003cb) onto this lineage as format v10 / manifest v3. Final tree 4c7b926a (REDC candidate on fe1e8985 and route rerun on 730ac73a, tool-only changes): Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC full routes pass while capturing checkpoints; Abe's Oddysee 5620M reproduces its lane baseline byte for byte (ram-pages.tsv and cpu-return.tsv, still diverging at 949). Checkpoint cohorts pass for Abe's Oddysee and Mega Man X4 (two cold 3,000-return runs, resumes at 500/1500/2500, timer-2 negative control); late adapter resumes (Abe 40,000, Mega Man X4 125,000, Bio Hazard 200,000, Resident Evil DC 250,000) reproduce the full runs row for row. The snapshot_read tail check is rewritten, not only extended: the session bytes shift the source-extension offsets and join the 0/1 validation; re-pinned at its current span. evolved 2026-09-17: the source pad SIO extension appends the per-port DTR session bytes; the registered lines are unchanged and re-pinned with the insertion. Evolved for T168: restore retained section staging and canonical commit order; perform v10 content/presence/allocation admission before mutations. The old two-pass shape/apply path failed118/166 full-runtime checks. Updated blocks retain checkpoint semantics and reject malformed states atomically; current expanded fixture passes202 default and260 comparison-profile checks. This is not a new full-route replay verdict. superseded by T172 a01f2f6cede9; requalification pending the PS1B-102 Pegasus TAS rerun superseded by T172 A2(i) 9dba29120943, 64319dab21d1, af2052b6d72a; requalification pending the PS1B-102 Pegasus TAS rerun PS1B-175 narrow source re-pin 2026-10-08: only the current line-family or saved-layout spans replace the whole rewritten projection header; other blocks and historical title evidence are unchanged. The --as-of source is pin H a279b5e86a8d4f027ccdc4965d2aabc39bfbf04e, whose projection header is identical on stage 13023e29. PS1B-178/179 full-H qualification covers only the separate Tekken 3 victory route and Pepsiman route recorded below, not a new Biohazard/Abe catalogue pass or opcode coverage. PS1G-73 candidate 0b054291: pin the explicit v15-to-v16 cache conversion shape and new TAS compatibility identifier without dropping any admission guard. Focused cache/full-loader positive and negative controls pass (7-4017); final Windows/Tier1 runs remain pending. The historical qualified_tree is not qualification of this candidate.",
       "repins": [
         {
           "as_of": "6c813943011a356e97d8ecd02341254637d9adb2",
@@ -5071,6 +5076,17 @@
         }
       ],
       "contract_amendments": [
+        {
+          "date": "2026-10-08",
+          "issue": "PS1G-73",
+          "source_revision": "d2d4a4bd0c2bb1e9b061fbafcb7d62b8d80eb8c5 plus STATE-R5 e776097a308eebf3061244e579464476c4d57c22a9eb7e4f8148b2a69b4581b0",
+          "reason": "Evolve the complete version-boundary comment and section_shape_ok block for state v17 cache control. Keep explicit v15/v16 shapes and absent-control zero defaults. Preserve all 224 blocks and five existing debts. STATE-R5 bounded writer/reader and malformed-state controls passed; Pin-H admission and full title/replay qualification remain open.",
+          "from_blocks": 224,
+          "to_blocks": 224,
+          "replacement_blocks_added": 0,
+          "dropped_lines": 2,
+          "added_lines": 4
+        },
         {
           "date": "2026-09-27",
           "issue": "PS1B-220",
@@ -6371,7 +6387,7 @@
         {
           "file": "runtime/include/source_tas_stateio.h",
           "lines": [
-            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v14-t172-test-b2\""
+            "#define PSX_TAS_STATEIO_COMPATIBILITY \"psx-tas-v16-icache-contents\""
           ]
         },
         {
@@ -6495,7 +6511,7 @@
           ]
         }
       ],
-      "note": "Source pads ignore a DTR session whose first byte is not 0x01 until DTR rises again; Crash 7798S return 1153 (card probe leaves DTR asserted, the BIOS pad read times out, a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949.",
+      "note": "Source pads ignore a DTR session whose first byte is not 0x01 until DTR rises again; Crash 7798S return 1153 (card probe leaves DTR asserted, the BIOS pad read times out, a source lag frame). Qualified on 970ab88d (requal-03): Crash 7798S passes its full 207,077-return route uninterrupted with terminal RAM equal; Tekken 3, Pepsiman, Mega Man X5, Mega Man X4, Bio Hazard and Resident Evil DC pass; Abe's Oddysee no longer diverges at 949. PS1G-73 candidate 0b054291: pin the explicit v15-to-v16 cache conversion shape and new TAS compatibility identifier without dropping any admission guard. Focused cache/full-loader positive and negative controls pass (7-4017); final Windows/Tier1 runs remain pending. The historical qualified_tree is not qualification of this candidate.",
       "repins": [
         {
           "as_of": "worktree on b5b1dc9c3f7e3d580d06afa05e0288757d942a28",

@@ -20,14 +20,15 @@ DMA = (ROOT / "src/dma.c").read_text(encoding="utf-8")
 # (the DualShock power-on flag) made it v11 with a read floor of 11: every
 # PS1B-220 (the CPU load-value pipeline) made it v12 on test pin A; PS1B-186
 # (the rewritten source-DMA machines) made it v13 on test pin B; the 186 spec v2 field meanings made it v14. The ordinary GPU FIFO and DMA block state make v15. Every
-# writer emits v15 and every earlier state is refused. That matches the Wave 5 rule of a clean install with no save
-# compatibility. Bumping either number is a deliberate format decision; update
+# writer emits v17 (cache contents and control); v15/v16 import defaults the
+# absent control register to zero, and v15 fills words from restored RAM.
+# Older formats remain refused. Update
 # these lines with it.
 assert "#define DMA_GPU_LL_WIRE (4u + (10u * 4u))" in DMA
-assert "#define BOOT_STATE_VERSION 15u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION 17u" in BOOT_STATE_H
 assert "h.version       = BOOT_STATE_VERSION;" in BOOT_STATE_C
 assert "#define BOOT_STATE_VERSION_MIN_READ 15u" in BOOT_STATE_H
-assert "v15 therefore rejects every earlier state." in BOOT_STATE_H
+assert "v15/v16 import defaults the absent register" in BOOT_STATE_H
 
 assert "void savestate_status_json(char* buf, size_t cap);" in HEADER
 assert '\\"generation\\"' in STATE and '\\"pending\\"' in STATE

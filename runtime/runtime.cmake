@@ -14,6 +14,8 @@ endif()
 # costly PGO rebuild/train cycle a silent no-op.
 set(PSX_PGO "" CACHE STRING "PGO mode: empty, generate, or use")
 option(PSX_STEP_BOUNDARY "Emit the per-instruction retirement boundary for the source-GPU comparison model (diagnostic/source builds; OFF for the normal product)" ON)
+option(PSX_NATIVE_ICACHE_GUARD "Guard native blocks against stale cached instructions (qualification control)" ON)
+mark_as_advanced(PSX_NATIVE_ICACHE_GUARD)
 set_property(CACHE PSX_PGO PROPERTY STRINGS "" generate use)
 include("${PSXRECOMP_ROOT}/cmake/psx_runtime_ipo.cmake")
 
@@ -1803,6 +1805,7 @@ function(psxrecomp_add_runtime_target target)
 
     target_compile_definitions(${target} PRIVATE
         DEFAULT_DEBUG_PORT=${PSXRT_DEBUG_PORT}
+        PSX_NATIVE_ICACHE_GUARD=$<BOOL:${PSX_NATIVE_ICACHE_GUARD}>
         PSX_DEFAULT_BIOS_PATH="${PSXRT_DEFAULT_BIOS_PATH}"
         # The retail stem this build pins. A setup host has no linked
         # backend to ask, so this is how it knows which image to look for

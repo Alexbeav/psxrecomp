@@ -431,6 +431,18 @@ if(BUILD_TESTING)
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
     add_test(NAME replay_session_test COMMAND replay_session_test
         ${CMAKE_CURRENT_BINARY_DIR}/replay_session_scratch)
+    add_test(NAME icache_slice_admission_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_icache_slice_admission.py"
+        --cc "${CMAKE_C_COMPILER}")
+    add_test(NAME icache_native_guard_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_icache_native_guard.py"
+        --cc "${CMAKE_C_COMPILER}")
+    add_test(NAME scheduler_precise_escape_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_scheduler_precise_escape.py"
+        --cc "${CMAKE_C_COMPILER}")
+    add_test(NAME boot_state_section_wire_test COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_boot_state_section_wire.py"
+        --cc "${CMAKE_C_COMPILER}")
     # PS1B-316: a replay names the disc in the drive, not the launch disc. The
     # real product identity behind the replay session, two files as the discs.
     add_executable(replay_disc_identity_test tests/test_replay_disc_identity.c
@@ -1079,6 +1091,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     add_executable(mod_runtime_test
         tests/test_mod_runtime.cpp
         src/mod_runtime.cpp
+        src/psx_icache.c
         src/mod_packages.cpp
         src/disc_path.cpp
         src/cue_sheet.cpp
@@ -1090,6 +1103,7 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         ../recompiler/include
         ../recompiler/lib/toml11)
     target_link_libraries(mod_runtime_test PRIVATE chdr-static)
+    target_compile_definitions(mod_runtime_test PRIVATE PSX_NO_STEP_BOUNDARY=1)
     # The real disc hasher uses a 1 MiB scratch buffer. Match the runtime's
     # stack allowance instead of overflowing MinGW's 1 MiB executable default.
     if(WIN32)
@@ -1435,9 +1449,16 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_executable(gpu_command_queue_test tests/test_gpu_command_queue.c)
         add_executable(dma_gpu_command_queue_test tests/test_dma_gpu_command_queue.c src/dma_gpu_ll.c)
         add_executable(gpu_queue_boot_admission_test tests/test_gpu_queue_boot_admission.c src/dma_gpu_ll.c)
+        add_executable(icache_boot_roundtrip_test tests/test_icache_boot_roundtrip.c src/dma_gpu_ll.c src/psx_icache.c)
+        target_include_directories(icache_boot_roundtrip_test BEFORE PRIVATE ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR})
+        add_dependencies(icache_boot_roundtrip_test psxrecomp_codegen_hash)
+        target_link_libraries(icache_boot_roundtrip_test PRIVATE ZLIB::ZLIB)
+        add_test(NAME icache_boot_roundtrip COMMAND icache_boot_roundtrip_test)
+        target_include_directories(gpu_queue_boot_admission_test BEFORE PRIVATE ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR})
+        add_dependencies(gpu_queue_boot_admission_test psxrecomp_codegen_hash)
         target_link_libraries(gpu_queue_boot_admission_test PRIVATE ZLIB::ZLIB)
         add_test(NAME gpu_queue_boot_admission COMMAND gpu_queue_boot_admission_test)
-        foreach(_queue_test gpu_command_queue dma_gpu_command_queue gpu_queue_boot_admission)
+        foreach(_queue_test gpu_command_queue dma_gpu_command_queue gpu_queue_boot_admission icache_boot_roundtrip)
             target_include_directories(${_queue_test}_test PRIVATE include)
             target_compile_definitions(${_queue_test}_test PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
             target_compile_options(${_queue_test}_test PRIVATE -O2 -flto -fwhole-program -UNDEBUG)

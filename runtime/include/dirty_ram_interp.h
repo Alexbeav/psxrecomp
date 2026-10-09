@@ -22,6 +22,8 @@
 extern "C" {
 #endif
 
+/* Cache slices also use the source-checkpoint format below. Wire word5 is
+ * cache ownership; the remaining three reserved words are zero. */
 /* Instruction continuation captured only while the source boundary callback runs. */
 #define DIRTY_RAM_CHECKPOINT_BYTES 36u
 void dirty_ram_checkpoint_enter(uint32_t pc, int slot, uint32_t target, int taken);
@@ -412,6 +414,15 @@ typedef struct {
 } DirtyRamInsnLogEntry;
 extern DirtyRamInsnLogEntry g_dirty_ram_insn_log[DIRTY_RAM_INSN_LOG_CAP];
 extern uint64_t             g_dirty_ram_insn_log_seq;
+
+/* Diagnostic counters only: neither saved guest state nor a digest input. */
+typedef struct IcacheExecutionStats {
+    uint64_t stale_blocks, stale_blocks_in_exception;
+    uint64_t nested_stale_blocks, exception_stale_blocks;
+    uint64_t stale_fetches;
+    uint32_t first_block, last_block, first_fetch_pc, last_fetch_pc;
+} IcacheExecutionStats;
+extern IcacheExecutionStats g_icache_execution_stats;
 
 #ifdef __cplusplus
 }

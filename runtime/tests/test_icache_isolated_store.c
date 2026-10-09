@@ -10,7 +10,7 @@ uint64_t psx_cycle_count,psx_next_service_cycle;
 int psx_in_device_service,g_ls_replay_active,g_event_step_conservative;
 uint32_t g_psx_cyc_batch,g_psx_cyc_batch_limit;
 uint64_t g_guest_store_count,g_kseg2_ignored_writes;
-static uint32_t sr,cache_ctrl,*sr_ptr=&sr;
+static uint32_t sr,*sr_ptr=&sr;
 static unsigned ordinary_writes;
 void psx_devices_service_to_now(void){}
 void psx_advance_cycles_slow(uint32_t n){psx_cycle_count+=n;}

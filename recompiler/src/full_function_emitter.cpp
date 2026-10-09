@@ -770,8 +770,8 @@ bool FullFunctionEmitter::emit_function(
                 // cycle. This conservative guard budget is not a guest charge.
                 out += "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
                 out += fmt::format(
-                    "    if (psx_slice_block(cpu, 0x{:08X}u, {}u, {})) return;\n",
-                    relocate_ra(addr), count * 8u, may_stall_or_change_irq ? 1 : 0);
+                    "    if (psx_slice_bios_block(cpu, 0x{:08X}u, {}u, {})) return;\n",
+                    relocate_ra(addr), count, may_stall_or_change_irq ? 1 : 0);
                 out += "#endif\n";
             }
             // Phase 1.0e-d: advance guest cycles for this block. Macro-

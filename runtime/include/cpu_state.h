@@ -205,17 +205,22 @@ extern void psx_dispatch_call(CPUState* cpu, uint32_t target_addr, uint32_t retu
  * the caller must `return` without executing its compiled body. See
  * PRECISE_IRQ_SLICE.md.
  *
- * PARKED default OFF (g_psx_precise_slice=0). The hot inline returns 0 with no
- * call; PSX_PRECISE_SLICE=1 enables the impl for A/B. Every compiled block
- * leader hits this — MotK VLC alone issues millions of calls/s. */
+ * The cache-content guard always runs: a stale cached instruction must not
+ * execute a native body compiled from different RAM bytes. The separate event
+ * slicing policy remains controlled by g_psx_precise_slice. */
 extern int g_psx_precise_slice;
 extern int psx_slice_block_impl(CPUState* cpu, uint32_t block_addr, uint32_t bcyc, int side_effects);
+/* BIOS blocks use a conservative eight-cycle budget per instruction. Keep
+ * that budget separate from the cache range, which is a count of words. */
+extern int psx_slice_bios_block(CPUState* cpu, uint32_t block_addr, uint32_t words, int side_effects);
 void psx_precise_slice_init_from_env(void);
 #ifdef PSX_OVERLAY_DLL_BUILD
 int psx_slice_block(CPUState* cpu, uint32_t block_addr, uint32_t bcyc, int side_effects);
 #else
 static inline int psx_slice_block(CPUState* cpu, uint32_t block_addr, uint32_t bcyc, int side_effects) {
+#if !defined(PSX_ENABLE_BLOCK_CYCLES) && !defined(PSX_COSIM)
     if (!g_psx_precise_slice) return 0;
+#endif
     return psx_slice_block_impl(cpu, block_addr, bcyc, side_effects);
 }
 #endif

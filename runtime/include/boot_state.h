@@ -36,6 +36,9 @@ extern "C" {
  */
 
 #define BOOT_STATE_MAGIC   0x50535842u  /* "PSXB" */
+/* Reviewed import target. A hash-changing row must renew this decision and
+ * the unconditional hash assertion in gpu_queue_boot_admission_test. */
+#define BOOT_STATE_PIN_H_IMPORT_HASH 0x6d27c2c2u
 /* v1 = incomplete RAM-only; v2 = full machine but host-struct memcpy (padding);
  * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
  * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);
@@ -62,12 +65,16 @@ extern "C" {
  *       BS_SEC_DMA_SRC layout, but served_until is the last service point and
  *       link is the SyncMode 1 block start.
  * v15 = v14 plus the ordinary GPU FIFO and pending default GPU block DMA. */
-#define BOOT_STATE_VERSION 15u
+/* v16 includes instruction-cache bytes. Version 15 is imported by filling
+ * valid tags from restored memory, matching that runtime at the load point. */
+/* v17 adds the cache-control register beside cache tags and words. */
+#define BOOT_STATE_VERSION 17u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v15 therefore rejects every earlier state. */
+ * runtime's blob to a new loader. v15/v16 import defaults the absent register
+ * to zero; v15 additionally fills cache words from restored RAM. */
 #define BOOT_STATE_VERSION_MIN_READ 15u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
@@ -80,7 +87,7 @@ extern "C" {
 typedef struct {
     uint32_t magic;          /* BOOT_STATE_MAGIC                                  */
     uint32_t version;        /* BOOT_STATE_VERSION                                */
-    /* ---- integrity key (every field must match to accept) ---- */
+    /* ---- integrity key (exact match or documented version migration) ---- */
     uint32_t bios_checksum;  /* sum of all uint32 words in the BIOS ROM           */
     uint32_t entry_pc;       /* game PS-EXE entry PC                              */
     uint32_t codegen_hash;   /* PSX_OVERLAY_CODEGEN_HASH (auto-gen by cmake)      */
@@ -124,7 +131,7 @@ enum {
     BS_SEC_SIO    = 0x0D,  /* SIO regs + pad-config FSM + memcard FSM             */
     BS_SEC_DIRTY  = 0x0E,  /* dirty-RAM page bitmap (guest-written code pages)    */
     BS_SEC_MDEC   = 0x0F,  /* MDEC command/FIFOs/quant/scale (FMV decode resume)  */
-    BS_SEC_ICACHE = 0x10,  /* R3000A I-cache tag/valid words (1024 u32) — fetch
+    BS_SEC_ICACHE = 0x10,  /* R3000A I-cache tags and contents (2048 u32) — fetch
                               cost model. Host-persistent otherwise: a warm load
                               without it replays with the pre-load timeline's
                               cache, so fetch-miss cycles differ per peer/retry

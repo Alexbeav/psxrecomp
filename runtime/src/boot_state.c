@@ -487,15 +487,17 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     if (ok) ok = write_module_section(o, BS_SEC_SIO,   sio_snapshot_bytes,   sio_snapshot_write);
     if (ok) ok = write_module_section(o, BS_SEC_MDEC,  mdec_snapshot_bytes,  mdec_snapshot_write);
     if (ok) {
-        /* I-cache tags: warm loads must replay with the fetch-cost state the
-         * live timeline had, or miss cycles differ per peer/retry and IRQ
-         * delivery forks a few wait-loop iterations (MotK abort@940). */
-        uint8_t ib[1024u * 4u];
+        /* Tags and contents form one execution state. RAM may have changed
+         * since refill; restoring tags alone cannot reconstruct the words. */
+        uint8_t ib[1024u * 8u + 4u];
         PstW w;
         pst_w_init(&w, ib, sizeof ib);
         ok = 1;
         for (uint32_t i = 0; ok && i < 1024u; i++)
             ok = pst_w_u32(&w, g_psx_icache_tv[i]);
+        for (uint32_t i = 0; ok && i < 1024u; i++)
+            ok = pst_w_u32(&w, g_psx_icache_words[i]);
+        if (ok) ok = pst_w_u32(&w, g_psx_cache_ctrl);
         if (ok) ok = write_section(o, BS_SEC_ICACHE, ib, sizeof ib);
     }
     if (ok) {
@@ -799,10 +801,19 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         return psx_mod_memory_snapshot_read(p, len);
     case BS_SEC_ICACHE: {
         PstR r;
-        if (len != 1024u * 4u) return 0;
+        if (len != 1024u * 4u && len != 1024u * 8u &&
+            len != 1024u * 8u + 4u) return 0;
         pst_r_init(&r, p, len);
         for (uint32_t i = 0; i < 1024u; i++)
             if (!pst_r_u32(&r, &g_psx_icache_tv[i])) return 0;
+        if (len == 1024u * 4u)
+            psx_icache_restore_legacy_words();
+        else for (uint32_t i = 0; i < 1024u; i++)
+            if (!pst_r_u32(&r, &g_psx_icache_words[i])) return 0;
+        /* Older states did not record the register. Do not inherit the
+         * loading process's unrelated isolated-store mode. */
+        g_psx_cache_ctrl = 0;
+        if (len == 1024u * 8u + 4u && !pst_r_u32(&r, &g_psx_cache_ctrl)) return 0;
         return 1;
     }
     default:
@@ -902,7 +913,18 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
                  (unsigned)h.entry_pc, (unsigned)entry_pc);
         boot_state_append_reason(reason, reason_cap, part);
     }
-    if (h.codegen_hash != (uint32_t)PSX_OVERLAY_CODEGEN_HASH) {
+    /* Pin H's v15 guest-state layout is unchanged by the native cache guard.
+     * The emitter now separates BIOS word count from its existing cycle budget.
+     * The renewed target adds only host-refresh and cache-register declarations
+     * to the hashed cache header; CPU layout, emitter and overlay ABI are unchanged.
+     * v15 has no cache words/control: explicit conversion fills words from RAM
+     * and defaults control to zero, without reconstructing a mid-FlushCache state.
+     * Limit this import to the reviewed target; later codegen changes need review.
+     * Overlay DLL admission and TAS checkpoint identity stay strict. */
+    const int pin_h_import = h.version == 15u &&
+        h.codegen_hash == 0x25fd1f54u &&
+        (uint32_t)PSX_OVERLAY_CODEGEN_HASH == BOOT_STATE_PIN_H_IMPORT_HASH;
+    if (h.codegen_hash != (uint32_t)PSX_OVERLAY_CODEGEN_HASH && !pin_h_import) {
         snprintf(part, sizeof(part), "codegen_hash=%08X(want %08X)",
                  (unsigned)h.codegen_hash,
                  (unsigned)PSX_OVERLAY_CODEGEN_HASH);
@@ -929,7 +951,7 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
  * BEFORE any section is applied. Without this, a failure part-way through left a
  * HALF-APPLIED machine (live state changed, replay then runs on a mix), and the
  * first failing section masked every later one. */
-static int section_shape_ok(uint32_t tag, uint32_t len) {
+static int section_shape_ok(uint32_t tag, uint32_t len, uint32_t version) {
     switch (tag) {
     case BS_SEC_CPU:        return len == CPU_REGS_WIRE_BYTES;
     case BS_SEC_CPU_EXEC:   return len == DIRTY_RAM_CHECKPOINT_BYTES;
@@ -949,7 +971,8 @@ static int section_shape_ok(uint32_t tag, uint32_t len) {
     case BS_SEC_DMA:        return len == dma_snapshot_bytes();
     case BS_SEC_SIO:        return sio_snapshot_shape_ok(len);
     case BS_SEC_MDEC:       return 1; /* variable FIFO lengths: mdec_snapshot_prepare */
-    case BS_SEC_ICACHE:     return len == 1024u * 4u;
+    case BS_SEC_ICACHE:     return len == 1024u * (version == 15u ? 4u : 8u) +
+                                      (version >= 17u ? 4u : 0u);
     case BS_SEC_DIRTY:      return (len % 4u) == 0u;
     case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;
     case BS_SEC_GPU_SERVICE:return len == SOURCE_GPU_SERVICE_WIRE_BYTES;
@@ -1174,7 +1197,7 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
             free(owned); /* unknown sections remain forward-compatible */
             continue;
         }
-        if ((seen & (1u << tag)) || !section_shape_ok(tag, raw_len)) {
+        if ((seen & (1u << tag)) || !section_shape_ok(tag, raw_len, h.version)) {
             free(owned);
             goto cleanup;
         }

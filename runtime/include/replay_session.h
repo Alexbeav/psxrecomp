@@ -220,6 +220,9 @@ static inline const char *replay_platform_name(void) {
     return REPLAY_PLATFORM_OS "-" REPLAY_PLATFORM_ARCH;
 }
 
+/* New recordings declare core_digest=2 in their product lines. An absent
+ * field means the pin H digest, which excludes instruction-cache words. */
+unsigned replay_session_core_digest_version(void);
 #ifdef __cplusplus
 }
 #endif

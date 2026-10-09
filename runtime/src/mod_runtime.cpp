@@ -6,6 +6,7 @@
 #include "mod_plugins.h"
 #include "gpu.h"
 #include "psx_sha256.h"
+#include "psx_icache.h"
 
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"
@@ -165,6 +166,8 @@ void apply_main_write(const ModResolution::Write& write) {
         dirty_ram_mark_executable_range(
             (uint32_t)write.location & 0x1FFFFFFFu,
             (uint32_t)write.replacement.size());
+        psx_icache_refresh_host_write((uint32_t)write.location,
+                                        (uint32_t)write.replacement.size());
         return;
     }
     for (const ModResolution::Write::Field& field : write.fields) {
@@ -177,6 +180,8 @@ void apply_main_write(const ModResolution::Write& write) {
             ((uint32_t)write.location +
              (uint32_t)field.offset) & 0x1FFFFFFFu,
             (uint32_t)field.replacement.size());
+        psx_icache_refresh_host_write((uint32_t)write.location + (uint32_t)field.offset,
+                                        (uint32_t)field.replacement.size());
     }
 }
 
@@ -1490,6 +1495,7 @@ extern "C" void psx_mod_write_word(uint32_t address, uint32_t value) {
 extern "C" void psx_mod_write_code_word(uint32_t address, uint32_t value) {
     psx_write_word(address, value);
     dirty_ram_mark_executable_range(address & 0x1FFFFFFFu, 4u);
+    psx_icache_refresh_host_write(address, 4u);
 }
 
 extern "C" uint32_t psx_mod_alloc_guest_memory(uint32_t size,

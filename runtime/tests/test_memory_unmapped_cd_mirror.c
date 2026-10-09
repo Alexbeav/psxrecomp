@@ -16,6 +16,7 @@ void cdrom_write(uint32_t addr, uint32_t val) { cd_last_write = addr; cd_last_va
 
 /* Devices and tracing the memory map reaches but these cases do not use. */
 uint32_t g_debug_current_func_addr, g_debug_last_store_pc;
+uint32_t g_psx_cache_ctrl;
 int g_dma_exec_depth, g_ls_mode, g_ls_suppress_record, g_ram_read_watch_active;
 volatile int g_ds_recording;
 uint64_t g_psx_device_gen;

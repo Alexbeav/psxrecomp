@@ -10,10 +10,19 @@ extern "C" {
 #endif
 
 extern uint32_t g_psx_icache_tv[1024];
+extern uint32_t g_psx_icache_words[1024];
+extern uint32_t g_psx_cache_ctrl;
+void psx_icache_bind_memory(const uint8_t *ram, uint32_t ram_size, const uint8_t *rom);
+uint32_t psx_icache_read_cached(uint32_t address, uint32_t memory_word);
+int psx_icache_block_stale(uint32_t address, uint32_t words);
 extern int g_psx_icache_active;
 extern int g_ls_replay_active;
 extern void (*g_psx_cpu_step_boundary_callback)(CPUState *, uint32_t, uint64_t);
 void psx_icache_reset(void);
+void psx_icache_restore_legacy_words(void);
+/* Refresh only resident words touched by a host-authored RAM code patch.
+ * Retain other cached words and tags; guest stores must not call this. */
+void psx_icache_refresh_host_write(uint32_t address, uint32_t bytes);
 int psx_icache_enabled(void);
 void psx_icache_fetch(CPUState *, uint32_t);
 void psx_icache_fetch_miss(CPUState *, uint32_t);

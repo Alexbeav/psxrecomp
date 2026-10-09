@@ -103,7 +103,7 @@ uint32_t netplay_av_digest(void)
     return crc ^ 0xFFFFFFFFu;
 }
 
-void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
+void netplay_core_digest_parts_version(const CPUState* cpu, NetplayCoreParts* out, unsigned version)
 {
     uint32_t crc_cpu = 0xFFFFFFFFu;
     uint32_t crc_clk = 0xFFFFFFFFu;
@@ -146,10 +146,16 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
         /* VBlank phase was invisible to FRAME_COMMIT — peers could agree on
          * core while holding different csv, then resim from zeroed phase. */
         crc_clk = crc32_update(crc_clk, (const uint8_t*)&csv, sizeof(csv));
-        /* I-cache tags travel in BS_SEC_ICACHE; fold them so cache asymmetry
-         * (fetch-cost fork) surfaces at compare time, not as a resim abort. */
+        /* I-cache tags and contents travel together in BS_SEC_ICACHE. A
+         * cached instruction can differ while both peers have identical RAM. */
         crc_clk = crc32_update(crc_clk, (const uint8_t*)g_psx_icache_tv,
                                sizeof(g_psx_icache_tv));
+        if (version >= 2u)
+            crc_clk = crc32_update(crc_clk, (const uint8_t*)g_psx_icache_words,
+                                   sizeof(g_psx_icache_words));
+        if (version >= 3u)
+            crc_clk = crc32_update(crc_clk, (const uint8_t*)&g_psx_cache_ctrl,
+                                   sizeof(g_psx_cache_ctrl));
     }
 
     timers_get_snapshot(counter, mode, target, irq_line, frac);
@@ -194,6 +200,11 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
         out->dirty = drt_h;
         out->core = fold ^ 0xFFFFFFFFu;
     }
+}
+
+void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
+{
+    netplay_core_digest_parts_version(cpu, out, 3u);
 }
 
 uint32_t netplay_core_digest(const CPUState* cpu)
