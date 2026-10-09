@@ -101,3 +101,19 @@ void psx_host_overlay_draw(int width, int height) {
     atomic_fetch_sub(&s_draw_inflight, 1);
 }
 
+/* ---- P3: input sink -------------------------------------------------------- */
+static PsxHostInputSinkFn s_sink_fn = NULL;
+static void *s_sink_ctx = NULL;
+static volatile int s_ui_capture = 0;
+
+void psx_host_set_input_sink(PsxHostInputSinkFn fn, void *ctx) {
+    s_sink_fn = fn;
+    s_sink_ctx = ctx;
+}
+
+int psx_host_input_sink_dispatch(const void *event) {
+    return (s_sink_fn && event) ? (s_sink_fn(event, s_sink_ctx) != 0) : 0;
+}
+
+void psx_host_set_ui_capture(int on) { s_ui_capture = on ? 1 : 0; }
+int psx_host_ui_capture_active(void) { return s_ui_capture; }
