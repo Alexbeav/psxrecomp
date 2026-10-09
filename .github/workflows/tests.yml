@@ -34,6 +34,8 @@ jobs:
         with:
           key: linux-tests
           max-size: 500M
+      - name: Install tool test dependencies
+        run: python3 -m pip install --require-hashes --only-binary=:all: -r tools/tests/requirements.txt
       - name: Configure recompiler tests
         run: >-
           cmake -S recompiler -B recompiler/build -DBUILD_TESTING=ON

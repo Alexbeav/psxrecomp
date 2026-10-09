@@ -2,6 +2,23 @@
 
 ## Running the tests
 
+The complete tool gate needs Python 3.11 or newer and the pinned NumPy and
+Pillow wheels in `tools/tests/requirements.txt`. They are dependencies of the
+existing GPU-frame analysis tool. Install them in an owned Python environment
+before configuring CMake:
+
+```powershell
+python -m pip install --require-hashes --only-binary=:all: -r tools/tests/requirements.txt
+```
+
+The recompiler tree registers the ten tool suites reported in PS1B-476 and
+the complete oracle suite from PS1B-375. `tools_psx_chd` uses the shared `chdr`
+target from that build. Build the target before running the suite. A build
+with `PSXRECOMP_ENABLE_CHD=OFF` omits that entry and does not qualify CHD checks.
+The entries reject skipped cases and zero-test results. The
+`tools_ctest_registration` check reads the generated CTest commands and
+properties. A name in a CMake comment does not satisfy it.
+
 The Python `public_commit_guard` test uses isolated local Git repositories and a
 local mock SSH transport. It contacts no public remote. It needs Git and Python;
 the [public push policy](PUBLIC_PUSH_POLICY.md) describes the separate stage check

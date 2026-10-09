@@ -1183,14 +1183,47 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # The DuckStation oracle patch must hold added lines only: a context
         # line or a removed line is a line of upstream's source (PS1B-216).
-        # This runs the patch-form tests of the oracle tool's test file; its
-        # other tests are run by hand and are not part of this gate.
+        # Keep this focused gate beside the complete oracle suite below.
         add_test(
             NAME duckstation_oracle_patch_form
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_duckstation_oracle.py
                     TestOraclePatch
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-476/375: these source-owned tool checks must execute in the
+        # recompiler gate. A missing compiler or CHD reader must not turn a
+        # skipped case into a green gate.
+        set(_psx_tools_tests "")
+        foreach(_t IN ITEMS
+                menu_scan cursor_writers gpu_frame pad_trace pad_delivery
+                aligned_lzss_banks static_fragment_variant_keys
+                mips_tagged_relocations overlay_widescreen_callbacks
+                duckstation_oracle)
+            add_test(NAME tools_${_t}
+                COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_${_t}.py -v
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            list(APPEND _psx_tools_tests tools_${_t})
+        endforeach()
+        if(PSXRECOMP_ENABLE_CHD AND TARGET chdr)
+            add_test(NAME tools_psx_chd
+                COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_psx_chd.py -v
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            set_tests_properties(tools_psx_chd PROPERTIES
+                ENVIRONMENT "PSXRECOMP_LIBCHDR=$<TARGET_FILE:chdr>")
+            list(APPEND _psx_tools_tests tools_psx_chd)
+            set(_psx_tools_registration_args "")
+        else()
+            set(_psx_tools_registration_args --without-chd)
+        endif()
+        set_tests_properties(${_psx_tools_tests} PROPERTIES
+            FAIL_REGULAR_EXPRESSION "skipped;Ran 0 tests")
+        add_test(NAME tools_ctest_registration
+            COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_ctest_tools_registration.py
+                --build-tree ${CMAKE_BINARY_DIR} --ctest ${CMAKE_CTEST_COMMAND}
+                ${_psx_tools_registration_args})
         add_test(
             NAME app_icon_rc_spaces
             COMMAND ${Python3_EXECUTABLE}
