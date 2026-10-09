@@ -121,7 +121,7 @@ slot or under the BIOS's own vector, and a `break` in compiled BIOS code, ends
 the run with a report. Compiled game code returns to the dispatcher immediately
 after entering the vector; the handler runs before the instruction after BREAK
 (PS1B-412). Native overlays forward this operation through ABI 27, with their
-pending cycles flushed first; codegen 15 prevents reuse of the old no-op output.
+pending cycles flushed first; codegen 16 prevents reuse of the old no-op output.
 The run report counts the vector entries
 (`break_guest_vector`).
 The recompiler starts a new control-flow block after BREAK, as it does after
