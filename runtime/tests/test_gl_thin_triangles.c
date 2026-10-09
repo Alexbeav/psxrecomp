@@ -39,6 +39,7 @@ static void fingerprint(const char *label,int x,int y,int scale) {
 
 static void native_pixels(const char *label,int x,int y,int w,int h) {
  uint16_t result[16];int wrong=0;
+ flush_flat_batch();flush_tex_batch();flush_cpu_upload();
  check(gl_renderer_fbo_peek(x,y,w,h,result),"native sample read");
  for(int j=0;j<h;j++)for(int i=0;i<w;i++)
   wrong+=(result[j*w+i]&0x7fff)!=(oracle[(y+j)*1024+x+i]&0x7fff);
