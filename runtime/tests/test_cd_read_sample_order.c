@@ -55,6 +55,9 @@ void debug_server_trace_mmio_write(uint32_t a, uint32_t v, uint8_t w) { (void)a;
 
 /* Devices and tracing the memory map reaches but these loads do not use. */
 uint32_t g_debug_current_func_addr, g_debug_last_store_pc;
+#ifndef PSX_TEST_OMIT_CACHE_CTRL
+uint32_t g_psx_cache_ctrl;
+#endif
 int g_dma_exec_depth, g_ls_mode, g_ls_suppress_record, g_ram_read_watch_active;
 volatile int g_ds_recording;
 void (*g_overlay_flush_pending_cycles)(void);

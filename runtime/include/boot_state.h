@@ -12,19 +12,19 @@ extern "C" {
 /*
  * Boot snapshot (a.k.a. fast_boot) — a COMPLETE post-BIOS save-state.
  *
- * Model: first launch (and the first launch after ANY app/recompiler update)
- * runs the real recompiled BIOS normally, logos and all. At the moment the BIOS
- * dispatches into the game's PS-EXE entry_pc, we capture a complete hardware
- * snapshot. Every subsequent launch (same build) restores that snapshot and
- * presents the game's first frame — instant boot, no BIOS, no logos.
+ * The capture API stores complete hardware state at the game's entry point.
+ * A caller can restore a compatible snapshot to skip the BIOS boot sequence.
+ * Capture and recovery are caller-owned; explicit TAS resume rejects an
+ * incompatible snapshot and returns an error rather than recapturing it.
  *
  * This is NOT HLE: it persists the REAL hardware state produced by a real BIOS
  * run, then replays it. Nothing about BIOS behaviour is synthesized.
  *
  * Rebuild-proof: the file carries an integrity key (below) that includes the
  * codegen hash + ABI tag + codegen version. A user update changes those, so a
- * stale snapshot can NEVER silently load into a new build — it is rejected and
- * the next boot is a normal boot that recaptures. Graceful, automatic.
+ * incompatible snapshot is rejected. An old Pin H snapshot has only the
+ * reviewed hash exception below; its ABI and generator version must still
+ * match. A recording owner can boot separately and capture a current state.
  *
  * Completeness is mandatory (v4 no-stub rule): a partial capture that leaves a
  * subsystem at reset while CPU/RAM assume it was configured is a latent stub.
@@ -36,8 +36,9 @@ extern "C" {
  */
 
 #define BOOT_STATE_MAGIC   0x50535842u  /* "PSXB" */
-/* Reviewed import target. A hash-changing row must renew this decision and
- * the unconditional hash assertion in gpu_queue_boot_admission_test. */
+/* Reviewed old Pin H hash-import target. Other current hashes reject that
+ * old identity; current-format roundtrips do not depend on this constant.
+ * ABI and generator checks remain independent of the hash exception. */
 #define BOOT_STATE_PIN_H_IMPORT_HASH 0x6d27c2c2u
 /* v1 = incomplete RAM-only; v2 = full machine but host-struct memcpy (padding);
  * v3 = little-endian field wire (portable Win/Linux/macOS ARM);

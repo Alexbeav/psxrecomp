@@ -173,3 +173,5 @@ target_link_options(tas_guest_syscall_exception PRIVATE -flto)
 add_test(NAME tas_guest_syscall_exception COMMAND tas_guest_syscall_exception)
 add_test(NAME tas_cd_read_sample_order COMMAND ${Python3_EXECUTABLE}
     "${_tas_runtime}/tests/test_cd_read_sample_order.py" --cc ${CMAKE_C_COMPILER})
+add_test(NAME tas_single_file_fixture_link COMMAND ${Python3_EXECUTABLE}
+    "${_tas_runtime}/tests/test_cd_read_sample_order.py" --cc ${CMAKE_C_COMPILER} --link-only)

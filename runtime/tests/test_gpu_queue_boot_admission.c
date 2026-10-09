@@ -1,4 +1,10 @@
 /* Full-loader admission fixture, real GPU/DMA and boot-state owners. */
+#include "overlay_api.h"
+#include "overlay_codegen_hash.h" /* Require the bound generated identity. */
+#ifdef GPU_QUEUE_BOOT_CHANGED_CODEGEN
+#undef PSX_OVERLAY_CODEGEN_HASH
+#define PSX_OVERLAY_CODEGEN_HASH (BOOT_STATE_PIN_H_IMPORT_HASH ^ 1u)
+#endif
 #define GPU_QUEUE_BOOT_ADMISSION
 #include "test_dma_gpu_command_queue.c"
 #include "../src/boot_state.c"
@@ -58,7 +64,6 @@ void psx_icache_restore_legacy_words(void) {
 #endif
 #ifndef GPU_QUEUE_REAL_ICACHE
 int main(void) {
- assert((uint32_t)PSX_OVERLAY_CODEGEN_HASH==BOOT_STATE_PIN_H_IMPORT_HASH);
  reset_gpu_state_for_test(); dma_init();
  BsOut o={0}; o.no_zlib=1;
  BootStateHeader h={0}; h.magic=BOOT_STATE_MAGIC;h.version=BOOT_STATE_VERSION;
@@ -107,8 +112,53 @@ int main(void) {
  legacy[4]=15;test_ram[0]=0xdeadbeefu;
  assert(boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));
  assert(legacy_restores==1u && g_psx_icache_words[0]==0x2408002au);
- {PstW w;pst_w_init(&w,legacy+16,4);assert(pst_w_u32(&w,0x25fd1f54u));}
- assert(boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));
+ /* Authentic recorded Pin H header identity, with authored legacy sections;
+  * changing only the hash of a current-header stream is not this tuple. */
+ {PstW w;pst_w_init(&w,legacy+16,12);
+  assert(pst_w_u32(&w,0x25fd1f54u));assert(pst_w_u32(&w,26u));assert(pst_w_u32(&w,15u));}
+ if((uint32_t)PSX_OVERLAY_CODEGEN_HASH==BOOT_STATE_PIN_H_IMPORT_HASH &&
+    (int32_t)PSX_OVERLAY_ABI_TAG==26 && (uint32_t)PSX_OVERLAY_CODEGEN_VER==15u) {
+  assert(boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));
+ } else {
+  CPUState before_import=live;
+  unsigned mutations_before_import=mutations,restores_before_import=legacy_restores;
+  uint32_t ram_before_import=test_ram[0];test_ram[0]=0xdeadbeefu;
+  uint8_t *import_ram_before=malloc(RAM_SIZE);assert(import_ram_before);
+  memcpy(import_ram_before,test_ram,RAM_SIZE);
+  uint32_t tags_before_import[1024],words_before_import[1024];
+  memcpy(tags_before_import,g_psx_icache_tv,sizeof tags_before_import);
+  memcpy(words_before_import,g_psx_icache_words,sizeof words_before_import);
+  uint32_t control_before_import=g_psx_cache_ctrl;
+  uint8_t spad_before_import[sizeof spad],spuram_before_import[sizeof spuram];
+  memcpy(spad_before_import,spad,sizeof spad);memcpy(spuram_before_import,spuram,sizeof spuram);
+  uint64_t clock_before_import=psx_cycle_count;
+  uint32_t import_gpu_bytes=gpu_snapshot_bytes();
+  uint8_t *import_gpu_before=malloc(import_gpu_bytes),*import_gpu_after=malloc(import_gpu_bytes);
+  assert(import_gpu_before && import_gpu_after);
+  uint32_t import_dma_bytes=dma_snapshot_bytes();
+  uint8_t *import_dma_before=malloc(import_dma_bytes),*import_dma_after=malloc(import_dma_bytes);
+  assert(import_dma_before && import_dma_after);
+  gpu_snapshot_write(import_gpu_before);
+  dma_snapshot_write(import_dma_before);
+  assert(!boot_state_load_buffer(legacy,o.len-4100u,0,0,&live));
+  assert(!memcmp(&live,&before_import,sizeof live));
+  assert(!memcmp(test_ram,import_ram_before,RAM_SIZE));test_ram[0]=ram_before_import;
+  assert(!memcmp(g_psx_icache_tv,tags_before_import,sizeof tags_before_import));
+  assert(!memcmp(g_psx_icache_words,words_before_import,sizeof words_before_import));
+  assert(g_psx_cache_ctrl==control_before_import);
+  assert(!memcmp(spad,spad_before_import,sizeof spad) && !memcmp(spuram,spuram_before_import,sizeof spuram));
+  assert(psx_cycle_count==clock_before_import);
+  gpu_snapshot_write(import_gpu_after);assert(!memcmp(import_gpu_before,import_gpu_after,import_gpu_bytes));
+  dma_snapshot_write(import_dma_after);assert(!memcmp(import_dma_before,import_dma_after,import_dma_bytes));
+  free(import_ram_before);free(import_gpu_before);free(import_gpu_after);
+  free(import_dma_before);free(import_dma_after);
+  assert(mutations==mutations_before_import && legacy_restores==restores_before_import);
+ }
+ /* Keep each remaining integrity-key rejection independent of the legacy
+  * migration's codegen mismatch on an unreviewed target. */
+ {PstW w;pst_w_init(&w,legacy+16,12);
+  assert(pst_w_u32(&w,PSX_OVERLAY_CODEGEN_HASH));assert(pst_w_u32(&w,PSX_OVERLAY_ABI_TAG));
+  assert(pst_w_u32(&w,PSX_OVERLAY_CODEGEN_VER));}
  unsigned restores_before_reject=legacy_restores;
  const unsigned integrity_offsets[]={8,12,20,24,32};
  for(unsigned k=0;k<sizeof(integrity_offsets)/sizeof(integrity_offsets[0]);k++){
