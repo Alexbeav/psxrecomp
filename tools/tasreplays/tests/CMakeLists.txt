@@ -149,9 +149,6 @@ foreach(_mode IN ITEMS O0 O2)
     target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
     add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
         "${_tas_runtime}/tests/test_cdrom_source_cdda_contracts.py" $<TARGET_FILE:${_target}>)
-    # Disabled (PS1B-167): stderr trace removed by T172 8ffbb053 (rule 3); convert to a
-    # debug-server/ring observation. The unsupported cases still exit 2.
-    set_tests_properties(${_target} PROPERTIES DISABLED TRUE)
     set(_target "tas_cdrom_checkpoint_${_mode}")
     add_executable(${_target} "${_tas_runtime}/tests/test_cdrom_checkpoint.c" "${_tas_runtime}/src/psx_sha256.c")
     target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
@@ -174,7 +171,3 @@ target_link_options(tas_guest_syscall_exception PRIVATE -flto)
 add_test(NAME tas_guest_syscall_exception COMMAND tas_guest_syscall_exception)
 add_test(NAME tas_cd_read_sample_order COMMAND ${Python3_EXECUTABLE}
     "${_tas_runtime}/tests/test_cd_read_sample_order.py" --cc ${CMAKE_C_COMPILER})
-# Disabled (PS1B-167): text scrape of psx_mmio_read_wait( removed by 8b8555c4; needs a
-# behavioural test; the behaviour is covered by the Bio Hazard return-3846 route in the
-# PS1B-102 TAS rerun.
-set_tests_properties(tas_cd_read_sample_order PROPERTIES DISABLED TRUE)
