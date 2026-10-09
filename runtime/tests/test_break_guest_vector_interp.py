@@ -1,6 +1,7 @@
 """PS1G-74: an interpreted BREAK reaches the guest's own exception vector; a
-BREAK in compiled BIOS code keeps the fatal exit; compiled game code emits
-nothing for a BREAK (PS1B-412). The run report counts the vector entries."""
+BREAK in compiled BIOS code keeps the fatal exit; compiled game code forwards
+BREAK to the shared guest-vector/fatal policy (PS1B-412). The run report counts
+the vector entries."""
 import argparse
 from pathlib import Path
 import re
@@ -9,7 +10,7 @@ from source_fixture_link import build_and_run
 
 
 def static_side(root):
-    """psx_break is the exit and nothing else; only the interpreter asks the vector."""
+    """psx_break stays fatal; interpreter and compiled game share vector policy."""
     traps = (root / 'runtime/src/traps.c').read_text(encoding='utf-8')
     body = re.search(r'^void psx_break\(CPUState\* cpu, uint32_t code, uint32_t pc\) \{\n(.*?)^\}\n',
                      traps, re.S | re.M)
@@ -26,14 +27,12 @@ def static_side(root):
     translator = root / 'recompiler/src/strict_translator.cpp'
     assert '"psx_break(cpu, 0x{:05X}u, 0x{:08X}u); return;"' in translator.read_text(encoding='utf-8'), \
         'the BIOS translator no longer emits the plain psx_break call'
-    # The game generator (a kit's static functions, native overlay units) emits
-    # a comment for a BREAK and no call. psx_break_vector.h and
-    # docs/EXECUTION_MODEL.md say so; when PS1B-412 changes it, they change too.
+    # The game generator emits a shared runtime trap and returns immediately.
     generator = (root / 'recompiler/src/code_generator.cpp').read_text(encoding='utf-8')
     case = re.search(r'case 0x0D:\s*// break\n(.*?)\n\s*break;\n', generator, re.S)
     assert case, 'the BREAK case of the game generator was not found'
-    assert 'trap, no-op in recompiler' in case.group(1) and 'psx_break' not in case.group(1), \
-        'the game generator no longer skips a BREAK: update psx_break_vector.h and docs/EXECUTION_MODEL.md'
+    assert 'psx_game_break(cpu,' in case.group(1) and 'return;' in case.group(1)
+    assert 'in_delay_slot ? 1 : 0' in case.group(1)
     for doc in ('runtime/include/psx_break_vector.h', 'docs/EXECUTION_MODEL.md'):
         assert 'PS1B-412' in (root / doc).read_text(encoding='utf-8'), doc
 

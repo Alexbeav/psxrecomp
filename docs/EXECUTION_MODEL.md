@@ -114,14 +114,19 @@ the program's real instructions, exactly as the game's authors wrote them — th
 (RAM-at-runtime vs disc-at-build-time). We never synthesize "the answer the code
 would have produced."
 
-A `break` that the interpreter executes raises exception code 9 through the
+A `break` that the interpreter or compiled game executes raises exception code 9 through the
 guest's exception vector when the guest has installed its own stub there
-(`runtime/include/psx_break_vector.h`); an interpreted `break` in a branch delay
+(`runtime/include/psx_break_vector.h`); a `break` in a branch delay
 slot or under the BIOS's own vector, and a `break` in compiled BIOS code, ends
-the run with a report. Compiled game code (a kit's static functions and native
-overlay units) does neither: the game generator emits nothing for a `break`, so
-it is skipped there (PS1B-412). The run report counts the vector entries
+the run with a report. Compiled game code returns to the dispatcher immediately
+after entering the vector; the handler runs before the instruction after BREAK
+(PS1B-412). Native overlays forward this operation through ABI 27, with their
+pending cycles flushed first; codegen 16 prevents reuse of the old no-op output.
+The run report counts the vector entries
 (`break_guest_vector`).
+The recompiler starts a new control-flow block after BREAK, as it does after
+SYSCALL. The generated entry switch can therefore resume at EPC+4 when the
+exception handler returns.
 
 ## The guiding rule: precision over recall
 

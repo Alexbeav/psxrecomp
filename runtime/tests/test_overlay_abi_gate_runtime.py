@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Drive the real loader with shards of three ABIs (overlay ABI v26).
+"""Drive the real loader with current and stale shards (overlay ABI v27).
 
 The fork and upstream both exported "25" for different callback tables. v26 is
-upstream's v25 layout plus the fork's slots. What the loader must do with each
-kind of shard:
+upstream's v25 layout plus the fork's slots; v27 appends BREAK forwarding.
+What the loader must do with each kind of shard:
 
-  current     built against this tree's header: loads, runs natively, and
+  current     built against this tree's header (v27): loads, runs natively, and
               reaches the host through upstream's v24/v25 slots and the fork's
               v26 slots;
   upstream    built against upstream's v25 header (the byte-for-byte fixture):
               refused, never called;
   g2          exports the tag a pin G2 shard exports (25): refused, never
               called.
+  fork-v26    exports the former fork tag (26): refused, never called.
 
 "Refused" is checked from the outside: the shard's own trace file has no line
 (the loader called neither overlay_init nor a function), the harness exits 0,
@@ -95,7 +96,7 @@ def main() -> int:
     include = str(RUNTIME / "include")
     tag = compile_overlays.overlay_abi_tag(include, 0)
     codegen = compile_overlays.codegen_ver(include)
-    assert tag == 26, f"this test describes ABI v26, the header says {tag}"
+    assert tag == 27, f"this test describes ABI v27, the header says {tag}"
 
     with tempfile.TemporaryDirectory(
             prefix="psx-abi-gate-", ignore_cleanup_errors=True) as raw:
@@ -103,9 +104,11 @@ def main() -> int:
         current = tmp / f"current{EXT}"
         upstream = tmp / f"upstream-v25{EXT}"
         g2 = tmp / f"g2-tag{EXT}"
+        fork_v26 = tmp / f"fork-v26{EXT}"
         compile_shard(args.gcc, current)
         compile_shard(args.gcc, upstream, "-DTEST_UPSTREAM_V25=1")
         compile_shard(args.gcc, g2, "-DTEST_STALE_ABI=25")
+        compile_shard(args.gcc, fork_v26, "-DTEST_STALE_ABI=26")
         harness = tmp / ("abi-harness" + (".exe" if EXT == ".dll" else ""))
         base.compile_harness(args.gcc, harness)
         leaf = base.codegen_leaf()
@@ -118,9 +121,9 @@ def main() -> int:
         assert "PASS abi-gate accept" in out, out
         assert trace_lines(tmp / "t-accept") == ["init", "call"], out
 
-        # 2. Shards that say "25" are refused and never called: one built
-        #    against upstream's v25 header, one carrying pin G2's tag.
-        for name, library in (("upstream-v25", upstream), ("g2-tag", g2)):
+        # 2. Preserve both v25 controls and reject the former fork's v26 tag.
+        for name, library in (("upstream-v25", upstream), ("g2-tag", g2),
+                              ("fork-v26", fork_v26)):
             cache = tmp / f"cache-{name}"
             shard = publish(cache, leaf, library)
             trace = tmp / f"t-{name}"
@@ -171,7 +174,7 @@ def main() -> int:
         assert "abi_rejected=0" in out, out
         print(f"sibling cache ignored. {out.splitlines()[0]}")
 
-    print("PASS: overlay ABI gate (v26 accepted; upstream v25 and G2 tag "
+    print("PASS: overlay ABI gate (v27 accepted; upstream v25, G2 and v26 tags "
           "refused; replacement loads; cg12 folder ignored)")
     return 0
 

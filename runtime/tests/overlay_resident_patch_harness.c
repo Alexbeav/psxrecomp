@@ -182,6 +182,10 @@ uint64_t psx_exception_setjmp_epoch(void) { return 0; }
 void psx_restore_state_escape(void) {}
 void psx_rfe_mark_escape(void) {}
 int psx_syscall(CPUState *cpu, uint32_t code) { (void)cpu; (void)code; return 0; }
+void psx_game_break(CPUState *cpu, uint32_t code, uint32_t pc, int in_delay_slot) {
+    (void)cpu; (void)code; (void)pc; (void)in_delay_slot;
+    unreachable("compiled BREAK");
+}
 void psx_unknown_dispatch(CPUState *cpu, uint32_t addr, uint32_t phys) {
     (void)cpu; (void)addr; (void)phys;
 }

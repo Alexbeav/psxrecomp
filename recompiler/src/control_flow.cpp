@@ -209,10 +209,11 @@ std::set<uint32_t> ControlFlowAnalyzer::find_block_boundaries(const Function& fu
 
         uint32_t instr = *instr_opt;
 
-        // A synchronous syscall can transfer to the guest exception vector.
+        // SYSCALL and BREAK can transfer to the guest exception vector.
         // Its return is the following instruction (there is no delay slot),
         // which must be independently re-enterable by the flat dispatcher.
-        if ((instr & 0xFC00003Fu) == 0x0000000Cu && addr + 4 < func.end_addr)
+        if (((instr & 0xFC00003Fu) == 0x0000000Cu ||
+             (instr & 0xFC00003Fu) == 0x0000000Du) && addr + 4 < func.end_addr)
             boundaries.insert(addr + 4);
 
         if (is_control_flow(instr)) {
@@ -520,8 +521,9 @@ ControlFlowGraph ControlFlowAnalyzer::analyze_function(const Function& func) {
         if (!instr_opt) continue;
         uint32_t instr = *instr_opt;
 
-        if ((instr & 0xFC00003Fu) == 0x0000000Cu)
-            add_boundary(addr + 4); // architectural post-syscall resume
+        if ((instr & 0xFC00003Fu) == 0x0000000Cu ||
+            (instr & 0xFC00003Fu) == 0x0000000Du)
+            add_boundary(addr + 4); // architectural post-trap resume
 
         if (is_control_flow(instr)) {
             ControlFlowInstr cf = analyze_instruction(addr, instr);

@@ -15075,6 +15075,7 @@ namespace {
 }  // namespace
 #endif
 
+#ifndef PSX_RUNTIME_EXTERNAL_MAIN
 int main(int argc, char** argv) {
     psx_disc_warning_set("");
     /* Force line-buffered output so messages appear even if killed. */
@@ -19777,3 +19778,4 @@ soft_return_lobby:
     SDL_Quit();
     return 0;
 }
+#endif /* PSX_RUNTIME_EXTERNAL_MAIN */
