@@ -1278,6 +1278,7 @@ static int           g_video_win_w    = 0;    /* 0 = fit the display; see clamp_
  * the transient controller-port route. */
 static std::filesystem::path g_runtime_settings_path;
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
+static int           g_audio_buffer_ms = 180;
 static int           g_audio_freq     = 44100; /* host device request */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
 /* Local rewind is opt-in: the snap ring is whole-machine state on a frame
@@ -15678,6 +15679,7 @@ int main(int argc, char** argv) {
                 psx_ws_set_backdrop_sites(gc.ws_backdrop_x_sites.data(),
                                           (int)gc.ws_backdrop_x_sites.size());
             g_audio_spu_hq     = gc.runtime.audio_spu_hq;
+            g_audio_buffer_ms  = gc.runtime.audio_buffer_ms;
             g_auto_skip_fmv    = gc.runtime.video_auto_skip_fmv ? 1 : 0;
             /* [controller] game-declared input defaults (settings.toml/launcher
              * still override below). */
@@ -18114,7 +18116,12 @@ session_reboot:
                 cfg.channels    = 2;
                 cfg.source_rate = 44100.0;            /* SPU render rate */
                 cfg.host_rate   = (double)have.freq;  /* actual device rate */
-                if (rab_init(&s_drc, &cfg) == 0) s_drc_ready = true;
+                cfg.target_ms   = (double)g_audio_buffer_ms;
+                if (rab_init(&s_drc, &cfg) == 0) {
+                    s_drc_ready = true;
+                    std::fprintf(stderr, "[audio] bridge buffer_ms=%.0f source_rate=%.0f host_rate=%.0f\n",
+                                 s_drc.cfg.target_ms, s_drc.cfg.source_rate, s_drc.cfg.host_rate);
+                }
             }
             g_audio_host_rate = have.freq;
             audio_trace_set_tap_rate(AUDIO_TAP_HOST, (uint32_t)have.freq);
