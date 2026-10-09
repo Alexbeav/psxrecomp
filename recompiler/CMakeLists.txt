@@ -695,6 +695,21 @@ if(BUILD_TESTING)
     target_include_directories(cli_boot_path_test PRIVATE src)
     add_test(NAME cli_boot_path_test COMMAND cli_boot_path_test)
 
+    if(PSXRECOMP_ENABLE_CHD)
+        add_executable(cli_bios_profile_retirement_test
+            tests/cli_bios_profile_retirement_test.cpp
+            src/cli_boot_path.cpp
+            src/ps1_exe_parser.cpp
+            ../runtime/src/cue_sheet.cpp
+            ../runtime/src/iso_reader.cpp
+        )
+        target_include_directories(cli_bios_profile_retirement_test PRIVATE
+            include ../runtime/include lib/fmt/include)
+        target_link_libraries(cli_bios_profile_retirement_test PRIVATE fmt chdr-static)
+        add_test(NAME cli_bios_profile_retirement_test
+            COMMAND cli_bios_profile_retirement_test)
+    endif()
+
     add_executable(ps1_exe_padding_test
         tests/ps1_exe_padding_test.cpp
         src/ps1_exe_parser.cpp
