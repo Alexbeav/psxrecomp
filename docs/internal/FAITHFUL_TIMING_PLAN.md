@@ -1344,3 +1344,14 @@ on a fixed region -> next.
   Historical 64-cell proof remains bound to its original source and codegen15.
   Current-head controls, runtime reading, fork CI, full registry preservation,
   and seven retained-cache F1 starts remain before a ready or delivery claim.
+
+- **2026-10-09 (PS1B-412 CI consumers):** The first carried head's fork CI
+  failed four overlay checks: two shared inert harnesses omitted the required
+  BREAK callback, and the ABI gate still required 26. The harness callbacks
+  now fail if unexpectedly reached; they do not model guest BREAK behavior.
+  The ABI gate retains its v25 controls, requires v27, refuses v26 and checks
+  that the loader supplies the new callback. The original full-runtime matrix
+  is unchanged and remains separate. Consulted CPU004, OVL003/005 and local
+  failure records; exact-symbol search found no repair. WiiStation's README
+  mentions F1 BREAK support as an unverified lead; no emulator source is used.
+  New-head fork CI and actual retained-cache starts still need qualification.

@@ -1,11 +1,12 @@
 /* Shard fixture for test_overlay_abi_gate_runtime.py.
  *
- * Built three ways:
- *   default                  against this tree's overlay_api.h (ABI v26);
+ * Built four ways:
+ *   default                  against this tree's overlay_api.h (ABI v27);
  *   -DTEST_UPSTREAM_V25      against upstream's v25 header, byte for byte
  *                            (fixtures/overlay_api_upstream_v25.h);
  *   -DTEST_STALE_ABI=25      this tree's header, but exporting the tag a
  *                            pin G2 shard exports.
+ *   -DTEST_STALE_ABI=26      the former fork tag without BREAK forwarding.
  *
  * The loader must run the first and must never call into the other two: both
  * say "25", and neither lays the callback table out as this host does. Every
@@ -52,6 +53,9 @@ TEST_EXPORT uint64_t overlay_pair_id(void) { return TEST_PAIR_ID; }
 
 TEST_EXPORT void overlay_init(const OverlayCallbacks *callbacks) {
     s_cbs = *callbacks;
+#if !defined(TEST_UPSTREAM_V25)
+    if (!s_cbs.psx_game_break) abort(); /* required v27 slot is wired */
+#endif
     trace("init");
 }
 
