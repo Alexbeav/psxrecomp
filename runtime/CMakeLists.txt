@@ -119,6 +119,18 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME netplay_overlay_pin_wiring_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_overlay_pin_wiring.py")
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
+                OR (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+            add_test(NAME overlay_tier_witness_runtime_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_tier_witness_runtime.py"
+                --cc "${CMAKE_C_COMPILER}")
+        endif()
+        add_test(NAME overlay_tier_identity_test COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/tier-identity-fixture"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_tier_identity.cmake")
         add_test(NAME runtime_overlay_guards_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_overlay_guards.py")
         add_test(NAME interp_mod_entry_guards_test COMMAND "${Python3_EXECUTABLE}"
