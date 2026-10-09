@@ -13,14 +13,14 @@ import psxrecomp_cli as cli
 
 
 class PgoTrainingTests(unittest.TestCase):
-    def train(self, root, spawn):
+    def train(self, root, spawn, *, train_runs=1):
         config = root / "game.toml"
         config.write_text("[runtime]\nopenbios = false\n", encoding="utf-8")
         with patch.object(cli, "_resolve_runtime_exe", return_value=(root / "game.exe", None)), \
              patch.object(cli.subprocess, "Popen", side_effect=spawn):
             cli.run_pgo_train(root, root / "build", exe_basename="game", target="game",
                               disc=root / "disc.chd", config=config, train_secs=60,
-                              train_runs=1, mute_host_audio=True, hide_video=True,
+                              train_runs=train_runs, mute_host_audio=True, hide_video=True,
                               progress=Mock())
 
     def test_training_skips_intro_over_inherited_environment(self):
@@ -52,6 +52,36 @@ class PgoTrainingTests(unittest.TestCase):
                 self.train(root, spawn)
             log = root / "build/pgo/train-1.stderr.log"
             self.assertIn("no_bios", log.read_text(encoding="utf-8"))
+            self.assertFalse((root / "build/pgo/default.profdata").exists())
+
+    def test_killed_run_is_reaped_and_rejected_before_next_run_or_merge(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            events = []
+            proc = Mock(pid=42, returncode=None, poll=Mock(return_value=None))
+            def wait(timeout):
+                events.append(("wait", timeout))
+                if not proc.kill.called:
+                    raise subprocess.TimeoutExpired("authored runtime", timeout)
+                proc.returncode = -9
+                return -9
+            proc.wait.side_effect = wait
+            proc.kill.side_effect = lambda: events.append(("kill", None))
+            def spawn(argv, **kw):
+                (root / "build/pgo/stale.profraw").write_bytes(b"authored stale profile")
+                return proc
+            with patch.object(cli, "_debug_quit", return_value=False), \
+                 patch.object(cli, "_soft_stop"), \
+                 patch.object(cli.subprocess, "run") as merge, \
+                 patch.object(cli.subprocess, "Popen", side_effect=spawn) as popen:
+                with self.assertRaisesRegex(RuntimeError, "exited with code -9"):
+                    self.train(root, popen, train_runs=2)
+                self.assertEqual(popen.call_count, 1)
+                merge.assert_not_called()
+            self.assertEqual(events, [
+                ("wait", 150), ("wait", 5), ("wait", 5),
+                ("kill", None), ("wait", 5),
+            ])
             self.assertFalse((root / "build/pgo/default.profdata").exists())
 
 

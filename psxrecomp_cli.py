@@ -11,7 +11,8 @@ Commands:
 
 Exit codes: 0 ok · 1 runtime · 2 usage · 3 disc verify fail
 
-PGO training skips the BIOS intro and retains each run's stdout and stderr
+PGO training requests BIOS HLE with the intro disabled; the selected image
+decides the boot and kernel-call tiers. Each run's stdout and stderr remain
 under build-dir/pgo/. A refused runtime start reports its exit code and logs.
 """
 
@@ -2006,6 +2007,7 @@ def run_pgo_train(
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.wait(timeout=5)
 
         if proc.returncode:
             raise RuntimeError(
