@@ -12332,6 +12332,16 @@ static void handle_overlay_capture_dump(int id, const char *json)
  * whether active, how many functions are registered, which regions have
  * been checked, and the most recent load event. Rule-3 inspection path for
  * the loader (it does no stderr logging). */
+static void handle_overlay_tier_witness(int id, const char *json)
+{
+    (void)json;
+    char tier[2048];
+    if (overlay_loader_tier_witness_json(tier, sizeof(tier)))
+        send_fmt("{\"id\":%d,\"ok\":true,\"overlay_tier\":%s}\n", id, tier);
+    else
+        send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"tier witness overflow\"}\n", id);
+}
+
 static void handle_overlay_loader_status(int id, const char *json)
 {
     (void)json;
@@ -12918,14 +12928,16 @@ static void handle_overlay_native_on(int id, const char *json)
     (void)json;
     extern void overlay_loader_set_native_exec(int on);
     overlay_loader_set_native_exec(1);
-    send_fmt("{\"id\":%d,\"ok\":true,\"native_exec\":1}\n", id);
+    send_fmt("{\"id\":%d,\"ok\":true,\"native_exec\":%d}\n",
+             id, overlay_loader_get_native_exec());
 }
 static void handle_overlay_native_off(int id, const char *json)
 {
     (void)json;
     extern void overlay_loader_set_native_exec(int on);
     overlay_loader_set_native_exec(0);
-    send_fmt("{\"id\":%d,\"ok\":true,\"native_exec\":0}\n", id);
+    send_fmt("{\"id\":%d,\"ok\":true,\"native_exec\":%d}\n",
+             id, overlay_loader_get_native_exec());
 }
 
 /* overlay_native_block: per-function native-disable for bisection. Forces the
@@ -14183,6 +14195,7 @@ static const CmdEntry s_commands[] = {
     { "overlay_dump",      handle_overlay_dump },
     { "cd_read_log",       handle_cd_read_log },
     { "overlay_loader_status", handle_overlay_loader_status },
+    { "overlay_tier_witness", handle_overlay_tier_witness },
     { "overlay_candidates",   handle_overlay_candidates },
     { "overlay_native_ring",  handle_overlay_native_ring },
     { "overlay_irq_suppress_on",  handle_overlay_irq_suppress_on },
