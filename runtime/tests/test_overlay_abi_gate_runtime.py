@@ -2,8 +2,8 @@
 """Drive the real loader with current and stale shards (overlay ABI v27).
 
 The fork and upstream both exported "25" for different callback tables. v26 is
-upstream's v25 layout plus the fork's slots. What the loader must do with each
-kind of shard:
+upstream's v25 layout plus the fork's slots; v27 appends BREAK forwarding.
+What the loader must do with each kind of shard:
 
   current     built against this tree's header (v27): loads, runs natively, and
               reaches the host through upstream's v24/v25 slots and the fork's

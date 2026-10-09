@@ -8,8 +8,8 @@
  *                            pin G2 shard exports.
  *   -DTEST_STALE_ABI=26      the former fork tag without BREAK forwarding.
  *
- * The loader must run the first and must never call into the other two: both
- * say "25", and neither lays the callback table out as this host does. Every
+ * The loader must run the first and must never call into the other three.
+ * Their tags are 25 or 26, while this host requires 27. Every
  * entry point writes a trace line, so "never called" is observable. */
 #ifdef TEST_UPSTREAM_V25
 #include "fixtures/overlay_api_upstream_v25.h"
