@@ -241,6 +241,24 @@ on a fixed region -> next.
   belong on PS1G-39. Pin H remains frozen.
   Evidence: PS1G-39 comments 7-4023, 7-4027 and 7-4030.
 
+- **2026-10-05 (PS1B-412 / PS1G-74 compiled game BREAK):**
+  The game translator calls the shared guest-vector operation and returns to
+  the dispatcher. BREAK now ends its control-flow block so the generated
+  entry switch can resume after the exception handler. Native overlays flush
+  their pending cycles and forward through ABI 27, callback slot 49.
+  Codegen 15 separates the new generated output from the previous cache.
+  Authored static and real paired-overlay cases run at O0 and O2.
+  Candidate results: 20 full observer passes and 12 expected delay-slot fatal
+  exits with exact PC/code reports. Parent results retain 24 BREAK failures
+  and eight NOP passes. Four frozen parent O0 receipts are reused.
+  ABI layout, control-flow metadata, and interpreter/report checks pass at
+  both optimization levels. The 21 host guard controls also pass.
+  Source base: e595ee4b5c85c577a98a703a28fb75310f4662e0, with local edits.
+  Evidence: `I:/Projects/PSX-Ports/_runs/codex-f1-20261005/compiled-break-candidate-r2-20261005/COMPILED-BREAK-RESULTS.md`.
+  This proves authored game behavior, not hardware accuracy or a complete
+  Windows player. Independent runtime review on October 7 and player/second
+  start qualification remain before kit delivery. No release pin changes.
+
 - **2026-09-13 (SIO card hack removal — branch-only review checkpoint):**
   Reproduced fixed-Ape-RAM IRQ7/mask injection after an absent-card probe,
   plus SELECT-time ACK fabrication and INTC-pending ACK requeueing with the
@@ -1318,3 +1336,11 @@ on a fixed region -> next.
   so its five-player golden values were refreshed after the unchanged stage
   passed the old values as a control. Two-player values remain frozen. Independent review,
   fork CI and the seven Tier 1 trial routes remain separate acceptance work.
+
+- **2026-10-09 (PS1B-412 delivery):** The completed October 5 compiled-BREAK
+  packet is carried to stage ea9e2de53 without changing its guest operation.
+  Newer stage source and logs are preserved. ABI 27 still appends callback 49;
+  codegen advances to 16 because stage already uses 15 for unsigned LUI emits.
+  Historical 64-cell proof remains bound to its original source and codegen15.
+  Current-head controls, runtime reading, fork CI, full registry preservation,
+  and seven retained-cache F1 starts remain before a ready or delivery claim.
