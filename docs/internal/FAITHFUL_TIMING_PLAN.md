@@ -1328,3 +1328,11 @@ on a fixed region -> next.
   with and without prepare. It also checks invalid lengths and output bounds.
   The parent fails its capacity assertion before a continued write.
   Retail state loading, independent review and fork CI remain separate checks.
+- **2026-10-09 (PS1B-478):** The generated native warning list now combines
+  the measured-track serials, required-SBI serials, and six fleet-table serials.
+  All eight PS1B-467 comment 7-4916 serials warn when no companion loads and
+  clear the warning when one loads. Existing unknown-serial, report reset,
+  path-redaction, exact-revision and mount transaction controls pass.
+  The parent fails the authored fleet check on SLES-02529.
+  This adds serial warning metadata, not qualified track or companion hashes.
+  Actual RE3 starts, independent review, fork CI and stage delivery remain open.

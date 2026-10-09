@@ -36,6 +36,17 @@ KNOWN_LIBCRYPT_TRACKS = {
     "b73a9f9334144c0435570668f024ef09a331bfa0": "SLES-32965",
 }
 
+# Native warning metadata: PS1B-467, comment 7-4916, eight-disc fleet table.
+# Keep measured track identities and exact-revision requirements separate.
+KNOWN_LIBCRYPT_SERIALS = set(KNOWN_LIBCRYPT_TRACKS.values()) | {
+    entry["serial"] for entry in REQUIRED_SBI.values()
+} | {
+    "SLES-01301",  # Legacy of Kain: Soul Reaver
+    "SLES-02328", "SLES-12328", "SLES-22328",  # Galerians, discs 1-3
+    "SLES-03324",  # Asterix: Mega Madness
+    "SLES-03530",  # Lucky Luke: Western Fever
+}
+
 
 def missing_sbi_warning(image: Path, serial: str) -> str:
     return (f'Missing SBI: {serial} is associated with LibCrypt and no SBI was loaded '

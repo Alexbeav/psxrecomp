@@ -56,6 +56,13 @@ Europe discs SLES-02965, SLES-12965, SLES-22965 and SLES-32965. The metadata
 comes from owner BIN SHA-1 values matched to the named Redump entries in the
 PS1G-107 intake of 2026-10-08. It qualifies no current CHD, pressing or SBI hash.
 
+PS1B-478 adds the remaining native warning serials from the eight-disc fleet
+table in PS1B-467 comment 7-4916: Soul Reaver SLES-01301, Galerians SLES-02328,
+SLES-12328 and SLES-22328, Asterix SLES-03324, and Lucky Luke SLES-03530.
+RE3 SLES-02529 also enters the warning list through its existing required-SBI
+record. The generator combines these serials with the measured-track registry;
+it adds no track or SBI hashes and leaves Python's measured-track checks intact.
+
 Python preparation and verification use the measured main-track SHA-1. They
 print one missing-SBI sentence and retain it in the existing subchannel receipt.
 The native setup/validation paths use the mounted disc's detected boot serial,
