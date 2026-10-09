@@ -78,6 +78,11 @@ def add_launch_arguments(parser):
                         help='diagnostic: resume from a checkpoint .pst; only the later returns are compared, never a pass')
     parser.add_argument('--resume-compatible-build', action='store_true',
                         help='with --resume-from: admit a rebuilt runtime with the same checkpoint compatibility identifier')
+    # One deliberate freeze dump (PSX_DUMP_AT_FRAME). run_native removes the shell's
+    # PSX_* variables, so this option is the only way to ask a replay for it; the
+    # manifest records it under psx_environment.
+    parser.add_argument('--dump-at-frame', type=int, metavar='FRAME',
+                        help='diagnostic: forwarded to run_native --dump-at-frame; one full freeze dump at or after this frame')
     return parser
 
 
@@ -97,6 +102,11 @@ def check_launch_arguments(args):
     if getattr(args, 'ladder', None) is not None and (
             resume is not None or every is not None or getattr(args, 'save_state_at', None)):
         raise ValueError('checkpoint capture and resume apply to one replay, not a ladder')
+    dump_at = getattr(args, 'dump_at_frame', None)
+    if dump_at is not None and dump_at < 1:
+        raise ValueError('--dump-at-frame must be a frame count of 1 or more')
+    if dump_at is not None and getattr(args, 'ladder', None) is not None:
+        raise ValueError('--dump-at-frame applies to one replay, not a ladder')
     if resume is not None:
         checkpoint_resume(args)
 
@@ -143,9 +153,10 @@ def checkpoint_receipt(args, observed):
 
 def run_native_arguments(args, binary, observed=None):
     """Extra run_native argv: bind the staged executable, forward the CPU window,
-    any precise-slice variant that differs from the qualified default, and the
-    checkpoint capture/resume options. `observed` is the run's last compared
-    return; it bounds --save-state-every and is required when either is used."""
+    any precise-slice variant that differs from the qualified default, the
+    checkpoint capture/resume options and --dump-at-frame. `observed` is the
+    run's last compared return; it bounds --save-state-every and is required
+    when either checkpoint option is used."""
     argv = ['--expected-exe-sha256', binary['binary_sha256']]
     wants_checkpoints = getattr(args, 'save_state_at', None) or getattr(args, 'save_state_every', None)
     if wants_checkpoints or getattr(args, 'resume_from', None) is not None:
@@ -166,4 +177,6 @@ def run_native_arguments(args, binary, observed=None):
                                      ('--slot-take', 'slot_take', 'off')):
         value = getattr(args, attribute, default)
         if value != default: argv += [flag, value]
+    dump_at = getattr(args, 'dump_at_frame', None)
+    if dump_at is not None: argv += ['--dump-at-frame', str(dump_at)]
     return argv

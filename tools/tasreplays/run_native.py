@@ -260,6 +260,9 @@ def main():
                         help='negative control: corrupt exactly one restored field '
                              '(raster_fraction, raster_cycle, raster_rises, '
                              'service_cycle, service_frame_returns, service_budget)')
+    parser.add_argument('--dump-at-frame', type=int, metavar='FRAME',
+                        help='diagnostic: one full freeze dump at the first heartbeat sample at or after this frame '
+                             '(PSX_DUMP_AT_FRAME); it needs no automatic dump slot and a diagnostic product')
     parser.add_argument('--storage-budget-mib',type=int,help='Stop with host_storage_budget if diagnostic output exceeds this bound')
     parser.add_argument('--expected-exe-sha256',help='refuse to launch unless the staged executable copy has exactly this SHA-256')
     parser.add_argument("--watch-u16", type=lambda x: int(x, 0), action="append", default=[],
@@ -372,6 +375,8 @@ def main():
         raise ValueError("checkpoint interval outside 1..10000")
     if args.storage_budget_mib is not None and not 1<=args.storage_budget_mib<=16384:
         raise ValueError('storage budget must be in 1..16384 MiB')
+    if args.dump_at_frame is not None and args.dump_at_frame < 1:
+        raise ValueError('dump-at-frame must be a frame count of 1 or more')
     if args.expected_exe_sha256 is not None:
         args.expected_exe_sha256=args.expected_exe_sha256.lower()
         if len(args.expected_exe_sha256)!=64 or any(c not in '0123456789abcdef' for c in args.expected_exe_sha256):
@@ -572,6 +577,9 @@ def main():
         selected_env['PSX_TAS_PERTURB_RESTORE'] = args.perturb_restore
     if args.e_survey:
         selected_env['PSX_E_SURVEY'] = '1'
+    if args.dump_at_frame is not None:
+        # The shell's own PSX_DUMP_AT_FRAME was removed above with the rest; only this option sets it.
+        selected_env['PSX_DUMP_AT_FRAME'] = str(args.dump_at_frame)
     if args.gpu_dma_model!='default':
         selected_env['PSX_GPU_DMA_MODEL']=args.gpu_dma_model
     if args.legacy_card_repair == "off":
