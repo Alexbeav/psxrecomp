@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import tempfile
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import host_bash
 
 
@@ -100,7 +102,7 @@ def main() -> None:
 
         # 6. Nothing named bash.exe anywhere: refuse and say so.
         message = refused(env([root / "empty"]))
-        assert "No bash.exe was found" in message and "Git for Windows" in message, message
+        assert "No suitable bash.exe was found" in message and "Git for Windows" in message, message
         cases += 1
 
         # 7. PSX_GIT_BASH wins when it names a real bash, and is refused when it

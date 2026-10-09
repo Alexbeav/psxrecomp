@@ -44,6 +44,8 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import host_bash
 SCRIPT = "tools/bios_emitter_fingerprint.sh"
 CMAKE_LISTS = "recompiler/CMakeLists.txt"
 STALE_CHECK = ROOT / "runtime" / "bios_stale_check.cmake"
@@ -70,32 +72,10 @@ WAS_FALSE = ("recompiler/src/basic_block.cpp", "recompiler/src/control_flow.cpp"
 
 
 def find_bash() -> str | None:
-    """A bash for the script. On Windows never a WSL launcher (System32, WindowsApps)."""
-    if os.name != "nt":
-        return shutil.which("bash")
-    candidates = []
-    for name in ("ProgramFiles", "ProgramW6432"):
-        base = os.environ.get(name)
-        if base:
-            candidates += [os.path.join(base, "Git", "bin", "bash.exe"),
-                           os.path.join(base, "Git", "usr", "bin", "bash.exe")]
-    git = shutil.which("git")
-    if git:
-        parents = Path(git).resolve().parents
-        for up in (1, 2):
-            if up < len(parents):
-                candidates += [str(parents[up] / "bin" / "bash.exe"),
-                               str(parents[up] / "usr" / "bin" / "bash.exe")]
-    candidates += [os.path.join(entry, "bash.exe")
-                   for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
-    system_root = os.path.normcase(os.path.abspath(os.environ.get("SystemRoot") or r"C:\Windows"))
-    for candidate in candidates:
-        folded = os.path.normcase(os.path.abspath(candidate))
-        if folded.startswith(system_root + os.sep) or (os.sep + "windowsapps" + os.sep) in folded:
-            continue
-        if os.path.isfile(candidate):
-            return candidate
-    return None
+    try:
+        return host_bash.find_bash("the BIOS fingerprint test", verify_msys=True)
+    except AssertionError:
+        return None
 
 
 def shell_env(bash: str) -> dict:

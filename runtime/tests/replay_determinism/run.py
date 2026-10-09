@@ -49,6 +49,7 @@ TAS = ROOT / 'tools' / 'tasreplays'
 sys.path.insert(0, str(TAS))
 import tekken3  # noqa: E402  (disc checks, EXE extraction, pinned hashes)
 import media_container  # noqa: E402
+from host_bash import find_bash  # noqa: E402
 
 
 def sha(path: Path) -> str:
@@ -173,12 +174,10 @@ EXE = '.exe' if os.name == 'nt' else ''
 
 def host_bash() -> Path:
     """Git for Windows bash on Windows; the system bash elsewhere."""
-    if os.name == 'nt':
-        return media_container.find_git_bash()
-    found = shutil.which('bash')
-    if not found:
-        raise SystemExit('bash is missing from PATH')
-    return Path(found)
+    try:
+        return Path(find_bash("the replay runner", verify_msys=True))
+    except AssertionError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def build(args, out: Path) -> dict[str, Path]:
