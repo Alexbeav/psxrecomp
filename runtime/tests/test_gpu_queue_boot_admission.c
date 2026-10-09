@@ -1,6 +1,9 @@
 /* Full-loader admission fixture, real GPU/DMA and boot-state owners. */
-#include "overlay_api.h"
 #include "overlay_codegen_hash.h" /* Require the bound generated identity. */
+#ifndef PSX_OVERLAY_CODEGEN_HASH
+#error "overlay_codegen_hash.h must define the build identity before overlay_api.h"
+#endif
+#include "overlay_api.h"
 #ifdef GPU_QUEUE_BOOT_CHANGED_CODEGEN
 #undef PSX_OVERLAY_CODEGEN_HASH
 #define PSX_OVERLAY_CODEGEN_HASH (BOOT_STATE_PIN_H_IMPORT_HASH ^ 1u)
