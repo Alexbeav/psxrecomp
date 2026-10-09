@@ -172,6 +172,7 @@ class BashCallerTests(unittest.TestCase):
             self.skipTest('standalone check needs CMake; CTest passes its actual CMAKE_COMMAND')
         script = self.root / 'find-bash.cmake'
         script.write_text('set(CMAKE_HOST_WIN32 TRUE)\n'
+                          f'set(_psxrt_bash "{self.wsl.as_posix()}")\n'
                           f'include("{(ROOT / "runtime/host_bash.cmake").as_posix()}")\n'
                           'psxrecomp_find_bash(picked launcher)\n'
                           'message("PICK=${picked}")\n', encoding='utf-8')

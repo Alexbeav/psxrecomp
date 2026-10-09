@@ -323,11 +323,14 @@ def check_stale_verdicts(copy: Tree, cmake: str | None) -> None:
     def verdict(bash: str | None = copy.bash, env: dict | None = None) -> str:
         """Run the check; `bash` is passed as -D_psxrt_bash, None leaves the lookup to it."""
         given = [f"-D_psxrt_bash={Path(bash).as_posix()}"] if bash else []
+        # This fixture binds each configured shell. The caller suite checks the environment override.
+        case_env = dict(env or copy.env)
+        case_env.pop("PSX_GIT_BASH", None)
         result = subprocess.run(
             [cmake, "-DPSXRECOMP_BIOS_STALE_CHECK_RUN=ON", f"-DPSXRECOMP_ROOT={copy.root.as_posix()}",
              "-DPSXRECOMP_BIOS_STEM=T", f"-DPSXRECOMP_BIOS_PROFILE={profile.as_posix()}",
              *given, "-P", str(STALE_CHECK)],
-            cwd=copy.root, env=env or copy.env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            cwd=copy.root, env=case_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
         text = said[0] = " ".join((result.stdout + result.stderr).split())
         assert text.count("-- psxrecomp:") <= 1, f"more than one line for one verdict: {text}"

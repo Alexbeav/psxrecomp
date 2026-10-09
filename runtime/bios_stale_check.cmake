@@ -30,7 +30,8 @@
 # configure with no word.
 #
 # THE BASH THAT RUNS THE SCRIPT
-# A bash named with -D_psxrt_bash=<bash> is used as given. Otherwise, on a Windows
+# PSX_GIT_BASH takes priority over -D_psxrt_bash=<bash> and a cached path.
+# Without that override, a non-launcher named with -D_psxrt_bash is used. On Windows
 # host, Git for Windows is looked for first: in its usual folders, beside a git.exe
 # on PATH, then on PATH itself. A bash.exe below %SystemRoot% or in a
 # Microsoft\WindowsApps folder starts WSL. It hands the script's Windows path to a
