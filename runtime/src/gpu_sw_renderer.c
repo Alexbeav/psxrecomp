@@ -745,8 +745,8 @@ static inline void put_textured(const RTarget *t, int x, int y, uint16_t texel,
         color = blend_pixels(t->buf[idx], color, g_semi_trans_mode);
     }
 
-    /* Mask bit set */
-    if (g_mask_set_bit) color |= 0x8000;
+    /* Textured writes preserve the texel mask bit, including after blending. */
+    if (g_mask_set_bit || (texel & 0x8000)) color |= 0x8000;
 
     t->buf[idx] = color;
     if (t->buf == g_vram)

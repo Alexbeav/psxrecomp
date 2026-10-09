@@ -1282,6 +1282,14 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(gpu_sw_edges_test PRIVATE src)
     add_test(NAME gpu_sw_edges_test COMMAND gpu_sw_edges_test)
 
+    add_executable(gpu_sw_texture_mask_test
+        tests/test_gpu_sw_texture_mask.c src/gpu_sw_renderer.c src/gpu_vram_dirty.c)
+    target_include_directories(gpu_sw_texture_mask_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(gpu_sw_texture_mask_test PRIVATE m)
+    endif()
+    add_test(NAME gpu_sw_texture_mask_test COMMAND gpu_sw_texture_mask_test)
+
     add_executable(gpu_interlace_render_test
         tests/test_gpu_interlace_render.c src/gpu_render.c
         src/gpu_sw_renderer.c src/gpu_vram_dirty.c)
