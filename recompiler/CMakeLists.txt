@@ -948,6 +948,9 @@ if(BUILD_TESTING)
         add_test(NAME pgo_rebuild_flow
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pgo_rebuild_flow.py)
+        add_test(NAME pgo_training
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pgo_training.py)
         add_test(
             NAME cli_project_packaging
             COMMAND ${Python3_EXECUTABLE}

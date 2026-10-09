@@ -10,6 +10,10 @@ Commands:
   ensure-emitters    Build psxrecomp-game + psxrecomp-bios when missing
 
 Exit codes: 0 ok · 1 runtime · 2 usage · 3 disc verify fail
+
+PGO training requests BIOS HLE with the intro disabled; the selected image
+decides the boot and kernel-call tiers. Each run's stdout and stderr remain
+under build-dir/pgo/. A refused runtime start reports its exit code and logs.
 """
 
 from __future__ import annotations
@@ -2002,7 +2006,8 @@ def run_pgo_train(
     pgo_dir.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
-    env.setdefault("PSX_BIOS_HLE", "0")
+    env["PSX_BIOS_HLE"] = "1"
+    env["PSX_BIOS_HLE_KEEP_INTRO"] = "0"
     env["LLVM_PROFILE_FILE"] = str(pgo_dir / "bpe-%p.profraw")
     # The runtime exits cleanly on its own after the training window, so the profile
     # runtime's atexit writer runs. The instrumented binary is product-shaped (no debug
@@ -2061,13 +2066,12 @@ def run_pgo_train(
         if hide_video:
             cmd.append("--headless")
         cmd.extend(["--debug-port", str(PGO_DEBUG_PORT)])
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(project_root),
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        stdout_path = pgo_dir / f"train-{run}.stdout.log"
+        stderr_path = pgo_dir / f"train-{run}.stderr.log"
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            proc = subprocess.Popen(
+                cmd, cwd=str(project_root), env=env, stdout=stdout, stderr=stderr,
+            )
         # Clean exit first: PSX_EXIT_AFTER_MS ends the run from inside. Allow boot time
         # plus a margin before falling back to the debug quit and then a forced stop
         # (either of which may lose this run's profile; the size check below catches it).
@@ -2088,6 +2092,13 @@ def run_pgo_train(
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.wait(timeout=5)
+
+        if proc.returncode:
+            raise RuntimeError(
+                f"PGO training run {run} exited with code {proc.returncode}; "
+                f"read {stdout_path} and {stderr_path}"
+            )
 
     n_gcda = len(list(build_dir.rglob("*.gcda")))
     all_raw = list(pgo_dir.glob("*.profraw"))
