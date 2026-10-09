@@ -493,9 +493,9 @@ between Play and TCP availability.
 
 ## Complete command index (generated)
 
-**371 commands registered** — 358 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**373 commands registered** — 360 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-83 of 371 have prose above; **288 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+84 of 373 have prose above; **289 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -659,6 +659,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `hle_dump` | ✓ |  | ✓ |
 | `host_launch_timings` | ✓ |  | ✓ |
 | `host_osd_shot` | ✓ |  |  |
+| `host_pause` | ✓ |  |  |
 | `host_profile` | ✓ |  |  |
 | `idle_skip` | ✓ |  |  |
 | `imask_trace` | ✓ |  |  |
