@@ -30,6 +30,35 @@ static void verify(const char *label){
  if(n)fprintf(stderr,"%s: %d native words differ\n",label,n);
  check(n==0,label);check(glGetError()==GL_NO_ERROR,"GL error");
 }
+static void verify_depth24_primitive_authority(void) {
+ /* Synthetic RGB888 bytes share VRAM with 15-bit GP0 operations. A black
+  * half blend still operates on three 5-bit channels in each halfword. The
+  * CPU scanout must see it without a savestate or FBO readback. */
+ static uint16_t movie[480*16], readback[480*16];
+ for(int i=0;i<480*16;i++)movie[i]=0x7bde;
+ glb_draw_flat_rect(900,400,1,1,0x4321);
+ test_depth24=1;depth24_upload_policy();
+ check(image[400*1024+900]==0x4321,"depth24 entry retains pending 15-bit draw");
+ glb_vram_transfer_in(32,32,480,16,movie);
+ glb_set_semi_transparency(1,0);
+ glb_draw_flat_rect(40,36,8,4,0);
+ glb_set_semi_transparency(0,0);
+ check(image[36*1024+40]==0x3def,"depth24 half blend reaches CPU scanout");
+ glb_copy_rect(40,36,60,36,8,4);
+ check(image[36*1024+60]==0x3def,"depth24 copy reaches CPU scanout");
+ glb_vram_transfer_out(32,32,480,16,readback);
+ int mismatch=0;
+ for(int y=0;y<16;y++)for(int x=0;x<480;x++) {
+  const int dim=y>=4&&y<8&&((x>=8&&x<16)||(x>=28&&x<36));
+  const uint16_t expected=dim?0x3def:0x7bde;
+  mismatch+=readback[y*480+x]!=expected;
+  mismatch+=image[(y+32)*1024+x+32]!=expected;
+ }
+ check(mismatch==0,"depth24 read preserves packed bytes and GP0 writes");
+ test_depth24=0;depth24_upload_policy();
+ check(glb_vram_read(40,40)==0,"depth24 primitive fixture retains clear-on-leave");
+ verify("depth24 primitive fixture leaves coherent 15-bit VRAM");
+}
 static void verify_bank_batching(void) {
  static uint16_t bank[256*128], baseline[96*96], result[96*96];
  for(int i=256;i<256*128;++i)bank[i]=0x3210;
@@ -70,7 +99,7 @@ int main(int argc,char **argv){
  for(int i=0;i<1024*512;i++)image[i]=(uint16_t)((i*17)&0x7fff);
  glb_init(image);glb_set_scale(scale);gl_renderer_set_swap_interval(0);
  if(!gl_renderer_init_context(win))return 2;
- printf("driver=%s renderer=%s scale=%d\n",glGetString(GL_VERSION),glGetString(GL_RENDERER),scale);
+ printf("driver=%s vendor=%s renderer=%s scale=%d\n",glGetString(GL_VERSION),glGetString(GL_VENDOR),glGetString(GL_RENDERER),scale);
  glb_set_draw_area(0,0,1023,511);glb_set_mask_bits(0,0);glb_set_semi_transparency(0,0);glb_set_color_modulation(128,128,128,1);
  verify("initial upload");
  /* Each queued primitive retains its own field even if state changes before
@@ -95,7 +124,9 @@ int main(int argc,char **argv){
  for(int y=0;y<16;y++)check(image[y*1024+80]==0x1234,"transfer keeps both fields");
  verify("field preservation and transfer coherence");
  glb_draw_flat_rect(1020,511,1,1,0x7fff);
- check(glb_vram_read(1020,511)==0x7fff,"test pixel value");
+ uint16_t native_probe=glb_vram_read(1020,511);
+ printf("native_probe=%04x\n",native_probe);
+ check(native_probe==0x7fff,"test pixel value");
  GlCohEvent event;int found=0;
  for(uint64_t i=gl_renderer_coh_total();i>0&&i+32>gl_renderer_coh_total();){i--;if(gl_renderer_coh_get(i,&event)&&event.kind==GL_COH_ENSURE){found=1;break;}}
  check(found,"readback event");check(found&&(event.x1-event.x0+1)*(event.y1-event.y0+1)<=4,"single-pixel bounded transfer");
@@ -120,6 +151,7 @@ int main(int argc,char **argv){
  glb_set_draw_area(0,0,1023,511);glb_draw_flat_rect(320,320,8,8,0x4444);
  for(int i=0;i<1024*512;i++)image[i]=(uint16_t)((i*23)&0x7fff);
  gl_renderer_restage_vram_after_savestate();verify("state restage with pending draw");
+ verify_depth24_primitive_authority();
  /* Existing depth24 policy clears the skipped movie band on return to15-bit.
   * That GPU write must become visible without waiting for another primitive. */
  static uint16_t movie[480*16], texture[4]={0x3210,0x3210,0x3210,0x3210};

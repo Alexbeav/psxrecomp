@@ -1,6 +1,6 @@
 # OpenGL native readback regions
 
-OpenGL owns the rendered video memory. A CPU read must see all prior GPU writes.
+OpenGL owns the rendered video memory in 15-bit display mode. A CPU read must see all prior GPU writes.
 The backend now keeps a separate conservative rectangle for GPU writes that
 have not reached the CPU array. It reads that rectangle into the full-width CPU
 array with an explicit row stride. It then clears the CPU readback debt.
@@ -13,9 +13,17 @@ conservative union is safe for GPU-to-CPU reads because the GPU image is current
 CPU-to-GPU uploads still use their exact rectangle list.
 
 This does not change raster rules, read values, guest clocks, draw order or
-precision. It does not switch OpenGL to software raster ownership. The original
+precision. The original
 interlaced row clipping remains in place. State recreation clears the new debt;
 CPU-authority mode retains its existing no-readback behavior.
+
+During 24-bit display, the CPU array owns packed RGB888 pixels. GP0 drawing
+commands still operate on 15-bit halfwords, so their software raster writes
+also update this array. Reads retain those bytes rather than replacing them
+with the FBO, which can omit large RGB888 uploads. The latched depth24 mode
+allows the entry readback to finish earlier 15-bit drawing before ownership
+changes. Existing movie-band clearing and queued texture upload order on
+return to 15-bit mode remain in place.
 
 ## Verification
 
@@ -26,9 +34,21 @@ stride, disjoint uploads, texture dependencies, wrapping fills, overlapping
 copies, masks, blending, clipping, precision margins and state restore. A depth24 exit followed by an immediate
 CPU read verifies that cleared movie pixels are visible and newer overlapping
 texture uploads survive. It tests this existing clear policy, not full movie
-playback or depth24 raster accuracy.
+playback or depth24 raster accuracy. An additional original fixture checks a
+black half blend and a VRAM copy during 24-bit display against explicit native
+halfword values, including untouched packed bytes after a CPU transfer read.
+It checks the entry readback and the existing clear on return to 15-bit mode.
 The hardware rasterizer is shared by the comparison; this proves coherence,
 not independent raster accuracy. No retail assets are required.
+
+On 2026-10-09 an original Linux SDL2 offscreen/EGL unit completed on NVIDIA
+GeForce RTX 3060 Laptop GPU, OpenGL 4.6.0 driver 615.71.09. The accepted source
+`015fe7a` failed exactly the three new depth24 blend/copy/read assertions at
+both native and 4x scale. The candidate passed all 176 checks at both scales.
+Both variants completed the existing hardware tests and observed the expected
+`0x7fff` native test pixel. The input manifest and complete unit/closure
+receipts are attached to PS1G-34. This proves the synthetic ownership behavior,
+not The X-Files menu/NewGame result, Windows SDL3 or a qualified replay.
 
 Run `python runtime/tests/run_gl_readback_region.py --compiler-bin <mingw-bin>
 --sdl-root <deps> --output <new-directory>`. The SDL dependency root must contain

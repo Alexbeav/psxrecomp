@@ -4,7 +4,8 @@
  * -------------------------------------------
  * The FBO color texture (`s_hr_tex`, RGBA8, 1024*S x 512*S where S is the
  * internal-resolution scale from [video] supersampling) is the single
- * authoritative copy of VRAM. EVERY mutation goes through the GPU:
+ * authoritative copy of VRAM in 15-bit display mode. Every mutation also
+ * goes through the GPU; 24-bit scanout retains CPU authority as below:
  *
  *   - polys / rects / lines  -> rasterized into the hr FBO
  *   - GP0(02h) fills         -> scissored glClear (color + stencil)
@@ -39,14 +40,15 @@
  * coords). CPU->VRAM uploads update the raw mirror directly. So content
  * rendered by the GPU is immediately valid as a texture source.
  *
- * CPU READBACKS (VRAM->CPU transfers, GPUREAD, screenshots, 24-bit FMV
- * display) flush uploads + pack, then glReadPixels the raw mirror straight
- * into the CPU VRAM array (raw 1555, no conversion loop).
+ * CPU READBACKS (VRAM->CPU transfers, GPUREAD, screenshots) flush uploads +
+ * pack, then glReadPixels the raw mirror into CPU VRAM in 15-bit mode.
+ * During 24-bit display CPU VRAM owns packed RGB888 bytes; GP0 primitives
+ * also write that mirror, and FBO readback must not replace those bytes.
  *
  * PRESENT is deterministic: 15-bit frames always blit the display region
  * from the hr FBO into a 4:3 letterboxed rect (single path — no more
  * frame-to-frame alternation between FBO and CPU presents). 24-bit (FMV)
- * frames sync to CPU and use the quad-present path, also letterboxed.
+ * frames use authoritative CPU VRAM and the quad-present path, also letterboxed.
  * PSX_GL_FORCE_CPU_PRESENT=1 (read by main.cpp) forces the CPU path as a
  * diagnostic.
  *
@@ -1546,9 +1548,11 @@ static DirtyRect s_d24_skip_fb; /* union of skipped MDEC FB rects (VRAM halfword
 static void ensure_cpu(void) {
     extern int psx_netplay_active(void);
     if (!s_raster_ok || !s_gpu_dirty) return;
-    /* Dual-raster / netplay: CPU VRAM is written on every GP0 (or pure SW).
-     * Never glReadPixels — that forked peer snaps/resim. */
-    if (s_cpu_auth_dual || psx_netplay_active()) {
+    /* Dual-raster / netplay and active 24-bit scanout write CPU VRAM on
+     * every GP0. The FBO does not contain skipped packed RGB888 uploads.
+     * Use the latched mode so entry can still read pending 15-bit draws
+     * before depth24_upload_policy hands authority to the CPU. */
+    if (s_cpu_auth_dual || psx_netplay_active() || s_depth24_skip_up) {
         s_gpu_dirty = 0;
         rect_clear(&s_cpu_dirty);
         return;
@@ -2426,21 +2430,23 @@ static void glb_set_draw_offset(int x,int y) { flush_flat_batch(); flush_tex_bat
 
 /* Pre-context draws (s_raster_ok == 0) fall back to the software rasterizer
  * over CPU VRAM; the initial full-VRAM upload at context init folds them in.
- * Offline post-init is GPU-only (FBO-auth). Netplay dual-raster always writes
- * SW @ 1× for authority, then GPU @ s_scale for present quality. */
+ * Offline post-init is FBO-authoritative in 15-bit mode. During 24-bit
+ * scanout GP0 still operates on 15-bit halfwords, but those writes must also
+ * reach the CPU mirror holding packed RGB888. Netplay dual-raster always
+ * writes SW @ 1× for authority, then GPU @ s_scale for present quality. */
 /* The sub-pixel / perspective override describes exactly one triangle; drop it
  * once that triangle has been submitted so a later prim can never inherit it. */
 static inline void precise_consumed(void) { s_pc_valid = 0; s_pq_valid = 0; }
 
 static void glb_draw_flat_triangle(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t col) {
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_flat_triangle(x0,y0,x1,y1,x2,y2,col);
     if (!s_raster_ok) return;
     gpu_triangle(x0,y0,col, x1,y1,col, x2,y2,col, s_semi_en?s_semi_mode:-1);
     precise_consumed();
 }
 static void glb_draw_gouraud_triangle(int x0,int y0,uint16_t c0,int x1,int y1,uint16_t c1,int x2,int y2,uint16_t c2) {
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_gouraud_triangle(x0,y0,c0,x1,y1,c1,x2,y2,c2);
     if (!s_raster_ok) return;
     gpu_triangle(x0,y0,c0, x1,y1,c1, x2,y2,c2, s_semi_en?s_semi_mode:-1);
@@ -2456,13 +2462,13 @@ static void glb_fill_rect(int x,int y,int w,int h,uint16_t c){
     gpu_fill(x,y,w,h,c);
 }
 static void glb_copy_rect(int sx,int sy,int dx,int dy,int w,int h){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_copy_rect(sx,sy,dx,dy,w,h);
     if (!s_raster_ok) return;
     gpu_copy_rect(sx,sy,dx,dy,w,h);
 }
 static void glb_draw_textured_triangle(int x0,int y0,int u0,int v0,int x1,int y1,int u1,int v1,int x2,int y2,int u2,int v2,uint16_t cx,uint16_t cy,uint16_t tp){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_textured_triangle(x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,cx,cy,tp);
     if (!s_raster_ok) return;
     int xs[3]={x0,x1,x2}, ys[3]={y0,y1,y2}, us[3]={u0,u1,u2}, vs[3]={v0,v1,v2};
@@ -2472,7 +2478,7 @@ static void glb_draw_textured_triangle(int x0,int y0,int u0,int v0,int x1,int y1
     precise_consumed();
 }
 static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32_t c0,int x1,int y1,int u1,int v1,uint32_t c1,int x2,int y2,int u2,int v2,uint32_t c2,uint16_t cx,uint16_t cy,uint16_t tp,int raw){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_shaded_textured_triangle(x0,y0,u0,v0,c0,x1,y1,u1,v1,c1,x2,y2,u2,v2,c2,cx,cy,tp,raw);
     if (!s_raster_ok) return;
     int xs[3]={x0,x1,x2}, ys[3]={y0,y1,y2}, us[3]={u0,u1,u2}, vs[3]={v0,v1,v2};
@@ -2482,31 +2488,31 @@ static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32
     precise_consumed();
 }
 static void glb_draw_flat_rect(int x,int y,int w,int h,uint16_t c){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_flat_rect(x,y,w,h,c);
     if (!s_raster_ok) return;
     gpu_flat_rect(x,y,w,h,c, s_semi_en?s_semi_mode:-1);
 }
 static void glb_draw_textured_rect(int x,int y,int w,int h,int u,int v,uint16_t cx,uint16_t cy,uint16_t tp){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_textured_rect(x,y,w,h,u,v,cx,cy,tp);
     if (!s_raster_ok) return;
     gpu_textured_rect(x,y,w,h, u,v, u+w,v+h, cx,cy,tp, s_semi_en?s_semi_mode:-1);
 }
 static void glb_draw_textured_rect_scaled(int x,int y,int w,int h,int u0,int v0,int u1,int v1,uint16_t cx,uint16_t cy,uint16_t tp){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_textured_rect_scaled(x,y,w,h,u0,v0,u1,v1,cx,cy,tp);
     if (!s_raster_ok) return;
     gpu_textured_rect(x,y,w,h, u0,v0, u1,v1, cx,cy,tp, s_semi_en?s_semi_mode:-1);
 }
 static void glb_draw_line(int x0,int y0,int x1,int y1,uint16_t c){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_line(x0,y0,x1,y1,c);
     if (!s_raster_ok) return;
     gpu_line(x0,y0,c, x1,y1,c, s_semi_en?s_semi_mode:-1);
 }
 static void glb_draw_shaded_line(int x0,int y0,uint16_t c0,int x1,int y1,uint16_t c1){
-    if (s_cpu_auth_dual || !s_raster_ok)
+    if (s_cpu_auth_dual || !s_raster_ok || gpu_display_is_depth24())
         sw_draw_shaded_line(x0,y0,c0,x1,y1,c1);
     if (!s_raster_ok) return;
     gpu_line(x0,y0,c0, x1,y1,c1, s_semi_en?s_semi_mode:-1);
