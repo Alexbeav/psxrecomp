@@ -1200,15 +1200,17 @@ if(BUILD_TESTING)
                 mips_tagged_relocations overlay_widescreen_callbacks
                 duckstation_oracle)
             add_test(NAME tools_${_t}
-                COMMAND ${Python3_EXECUTABLE} -B
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_${_t}.py -v
+                COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+                    -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+                    -p test_${_t}.py -v
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
             list(APPEND _psx_tools_tests tools_${_t})
         endforeach()
         if(PSXRECOMP_ENABLE_CHD AND TARGET chdr)
             add_test(NAME tools_psx_chd
-                COMMAND ${Python3_EXECUTABLE} -B
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_psx_chd.py -v
+                COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+                    -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+                    -p test_psx_chd.py -v
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
             set_tests_properties(tools_psx_chd PROPERTIES
                 ENVIRONMENT "PSXRECOMP_LIBCHDR=$<TARGET_FILE:chdr>")

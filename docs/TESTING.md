@@ -15,7 +15,11 @@ The recompiler tree registers the ten tool suites reported in PS1B-476 and
 the complete oracle suite from PS1B-375. `tools_psx_chd` uses the shared `chdr`
 target from that build. Build the target before running the suite. A build
 with `PSXRECOMP_ENABLE_CHD=OFF` omits that entry and does not qualify CHD checks.
-The entries reject skipped cases and zero-test results. The
+The entries use `unittest discover` with an exact file pattern, so a file that
+defines test classes without a direct script entry point still runs its tests.
+Directly executing such a file can exit successfully without running a case;
+the former cursor-writer registration did that with all 29 cases. The entries
+reject skipped cases and zero-test results. The
 `tools_ctest_registration` check reads the generated CTest commands and
 properties. A name in a CMake comment does not satisfy it.
 

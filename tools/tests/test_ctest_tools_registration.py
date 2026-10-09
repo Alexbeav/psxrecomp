@@ -32,11 +32,10 @@ def main():
             errors.append(name + ": missing from generated tree")
             continue
         command = test.get("command", [])
-        files = [i for i, arg in enumerate(command)
-                 if Path(arg).name == "test_" + stem + ".py"]
-        if len(files) != 1:
-            errors.append(name + ": does not run its test file")
-        elif command[files[0] + 1:] != ["-v"]:
+        if (len(command) != 10 or
+                command[1:6] != ["-B", "-m", "unittest", "discover", "-s"] or
+                Path(command[6]).resolve() != Path(__file__).resolve().parent or
+                command[7:] != ["-p", "test_" + stem + ".py", "-v"]):
             errors.append(name + ": does not run the complete test file")
         properties = {prop["name"]: prop["value"] for prop in test.get("properties", [])}
         if properties.get("DISABLED") or properties.get("WILL_FAIL"):
