@@ -227,7 +227,7 @@ def main():
     for name in ("exe", "game", "route", "disc", "bios"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument('--card1', type=Path, help='raw initial card1; staged as a fresh writable copy and verified in the loaded peripheral')
-    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0'), default='default')
+    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0','nymashock-1.32.1'), default='default')
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--speed", choices=("1", "2", "4", "8", "16", "32", "64", "max"), default="1",
@@ -291,14 +291,14 @@ def main():
                         metavar=("LOW", "HIGH"), help="record existing RAM reads in physical [LOW,HIGH)")
     parser.add_argument("--cd-read-start-model", choices=("default", "octoshock-2.2.2-pipeline"), default="default",
                         help="explicit source-core pipeline comparison; not full timing compatibility")
-    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0','octoshock-2.7'),default='default',
+    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0','nymashock-1.32.1','octoshock-2.7'),default='default',
                         help='experimental Nymashock drive head, seek, Pause and Reset timing; octoshock-2.7 is '
                              'the same drive with the MSVC order of the Reset random draws')
     parser.add_argument('--cd-source-clock-tape', type=Path,
                         help='experimental command/seek clock using an immutable raw random-word tape')
     parser.add_argument('--cd-cdda-model',choices=('default','octoshock-2.3'),default='default',
                         help='source CDDA single-speed seek, two-sector pipe and report ownership')
-    parser.add_argument('--mdec-source-model',choices=('default','octoshock-2.3','nymashock-1.29.0'),default='default',
+    parser.add_argument('--mdec-source-model',choices=('default','octoshock-2.3','nymashock-1.29.0','nymashock-1.32.1'),default='default',
                         help='source MDEC FIFO/work and request DMA model; color output only')
     parser.add_argument('--cd-dma-model',choices=('default','octoshock-2.2.2'),default='default',
                         help='experimental manual CD DMA service and CPU wait; cold boot only')
@@ -320,7 +320,7 @@ def main():
                         help='source GPUSTAT field/line bits only; requires the NTSC raster clock')
     parser.add_argument("--legacy-card-repair", choices=("default", "off"), default="default",
                         help="Disable inherited global Ape Escape fixed-address card repair explicitly")
-    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock"), default="default",
+    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock", "nymashock-1.32.1-dualshock"), default="default",
                         help="Experimental source pad ACK delay/pulse; checkpoints retain the pad, DualShock and card state")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
                         help="experimental source OTC service and CPU-wait rule; cold boot only")
@@ -421,8 +421,8 @@ def main():
         raise ValueError('DualShock does not admit retiming or the digital Octoshock ACK model')
     initial_card = None
     if args.card1:
-        if args.card_model != 'nymashock-1.29.0' or args.legacy_card_repair != 'off':
-            raise ValueError('card replay requires the qualified explicit card model and legacy repair off')
+        if args.card_model not in ('nymashock-1.29.0','nymashock-1.32.1') or args.legacy_card_repair != 'off':
+            raise ValueError('card replay requires an explicit source card model and legacy repair off')
         paths['card1'] = args.card1.resolve(strict=True)
         initial_card = card_identity(paths['card1'])
     elif args.card_model != 'default':
