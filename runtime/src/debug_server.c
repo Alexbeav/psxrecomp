@@ -12928,14 +12928,16 @@ static void handle_overlay_native_on(int id, const char *json)
     (void)json;
     extern void overlay_loader_set_native_exec(int on);
     overlay_loader_set_native_exec(1);
-    send_fmt("{\"id\":%d,\"ok\":true,\"native_exec\":1}\n", id);
+    send_fmt("{\"id\":%d,\"ok\":true,\"native_exec\":%d}\n",
+             id, overlay_loader_get_native_exec());
 }
 static void handle_overlay_native_off(int id, const char *json)
 {
     (void)json;
     extern void overlay_loader_set_native_exec(int on);
     overlay_loader_set_native_exec(0);
-    send_fmt("{\"id\":%d,\"ok\":true,\"native_exec\":0}\n", id);
+    send_fmt("{\"id\":%d,\"ok\":true,\"native_exec\":%d}\n",
+             id, overlay_loader_get_native_exec());
 }
 
 /* overlay_native_block: per-function native-disable for bisection. Forces the
