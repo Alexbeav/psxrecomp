@@ -7,6 +7,12 @@ from pathlib import Path
 import tempfile
 
 
+def _reason_text(reason, code):
+    # The C reader rejects ASCII controls, including ESC and DEL.
+    text = ''.join(' ' if ord(char) < 32 or ord(char) == 127 else char for char in str(reason))
+    return ' '.join(text.split()).encode('utf-8', errors='replace')[:1023].decode('utf-8', errors='ignore') or code
+
+
 class SetupDegrades:
     def __init__(self, root: Path, operation: str, progress):
         self.path = root / '.cache' / f'setup-degrades-{operation}.txt'
@@ -17,13 +23,19 @@ class SetupDegrades:
 
     def add(self, code, reason):
         # One line per row in the bounded C reader. Keep valid UTF-8 boundaries.
-        reason = ' '.join(str(reason).split()).encode('utf-8', errors='replace')[:1023].decode('utf-8', errors='ignore')
-        row = {'code': code, 'reason': reason or code}
+        row = {'code': code, 'reason': _reason_text(reason, code)}
         if row not in self.rows:
-            if len(self.rows) < 128:
+            if code in ('report.persistence', 'report.truncated'):
+                for index, saved in enumerate(self.rows):
+                    if saved['code'] == code:
+                        self.rows[index] = row
+                        break
+                else:
+                    self.rows.append(row)
+            elif sum(saved['code'] not in ('report.persistence', 'report.truncated') for saved in self.rows) < 126:
                 self.rows.append(row)
             else:
-                self.rows[-1] = {'code': 'report.truncated', 'reason': 'More than128 fallback rows; this record is partial'}
+                self.add('report.truncated', 'More than126 ordinary fallback rows; this bounded record is partial')
             event = getattr(self.progress, 'event', None)
             if callable(event):
                 event('degrade', **row)
@@ -67,7 +79,7 @@ def record_degrade(progress, code, reason):
         # Callers outside generate/rebuild still receive the explicit event.
         event = getattr(progress, 'event', None)
         if callable(event):
-            event('degrade', code=code, reason=str(reason))
+            event('degrade', code=code, reason=_reason_text(reason, code))
 
 
 def finish_degrades(progress):

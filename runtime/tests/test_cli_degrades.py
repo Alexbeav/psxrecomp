@@ -285,6 +285,114 @@ class DegradeTests(unittest.TestCase):
         self.assertIn('report.persistence', [row['code'] for row in result['degrades']])
         self.assertIn('bios.emitter_stamp', (self.root / '.cache/setup-degrades-generate.txt').read_text(encoding='utf-8'))
 
+    def test_real_emitter_builder_and_set_root_toolchain_choices(self):
+        programs = [{'program': name, 'folder': 'programs/' + name, 'positions': [index]}
+                    for index, name in enumerate(('first', 'second'), 1)]
+        spec = {'root': str(self.root), 'name': 'AuthoredSet', 'title': 'Authored set',
+                'serials': ['AUTHORED_FIRST', 'AUTHORED_SECOND'], 'programs': programs}
+        discs = [self.root / 'authored-first.fixture', self.root / 'authored-second.fixture']
+        def child(_args, progress):
+            progress.result(ok=True, degrades=[])
+            return cli.EXIT_OK
+        for scope in ('helper', 'set_root'):
+            for route in ('portable', 'system', 'missing', 'unusable'):
+                with self.subTest(scope=scope, route=route), ExitStack() as stack:
+                    self.progress = Mock()
+                    if scope == 'helper':
+                        self.begin('generate')
+                    portable = route == 'portable'
+                    def tool(name):
+                        return str(self.root / ('authored-' + name + '.fixture')) if name in ('cmake', 'ninja') else None
+                    run = Mock(return_value=SimpleNamespace(returncode=0, stdout='', stderr=''))
+                    replacements = {
+                        'activate_embedded_toolchain': Mock(return_value=portable),
+                        'ensure_toolchain_for_rebuild': Mock(return_value=route == 'unusable'),
+                        '_which_tool': Mock(side_effect=lambda name: None if route == 'missing' else tool(name)),
+                        'resolve_embedded_toolchain_bin': Mock(return_value=self.root / 'authored-toolchain'),
+                        '_tool_in_dir': Mock(side_effect=lambda _folder, name: tool(name) if portable else None),
+                        '_toolchain_stamp': Mock(return_value=''), '_pack_sysroot_cmake_args': Mock(return_value=[]),
+                        'recompiler_source_dir': Mock(return_value=self.root / 'authored-recompiler'),
+                        'find_psxrecomp_game': Mock(side_effect=FileNotFoundError('authored absent emitter')),
+                        'find_emitters': Mock(side_effect=[FileNotFoundError('authored absent emitters'),
+                                                          (self.root / 'authored-game.fixture', self.root / 'authored-bios.fixture')]),
+                        'cmd_generate': child,
+                    }
+                    for name, value in replacements.items():
+                        stack.enter_context(patch.object(cli, name, value))
+                    stack.enter_context(patch.object(cli.subprocess, 'run', run))
+                    for name, value in {'load_set': spec, 'located_discs': discs, 'check_discs': None,
+                                        'prepare_program_folder': None}.items():
+                        stack.enter_context(patch.object(program_set, name, return_value=value))
+                    fatal = route in ('missing', 'unusable')
+                    if scope == 'helper':
+                        if fatal:
+                            with self.assertRaises(RuntimeError):
+                                cli._build_recompiler_targets(self.root, self.progress, ('psxrecomp-game', 'psxrecomp-bios'),
+                                                              download_toolchain=route == 'unusable')
+                        else:
+                            cli._build_recompiler_targets(self.root, self.progress, ('psxrecomp-game', 'psxrecomp-bios'),
+                                                          download_toolchain=False)
+                            self.progress.result(**finish_degrades(self.progress))
+                    else:
+                        args = argparse.Namespace(config=str(self.root / 'set.toml'), project_root=str(self.root),
+                                                  disc='', bios='', no_toolchain_download=route != 'unusable')
+                        self.assertEqual(program_set.generate_set(cli, args, self.progress),
+                                         cli.EXIT_ERROR if fatal else cli.EXIT_OK)
+                    self.assertEqual(run.call_count, 0 if fatal else 2)
+                    rows = self.progress._setup_degrades.rows
+                    self.assertEqual([row['code'] for row in rows], ['toolchain.system_fallback'] if route == 'system' else [])
+                    if fatal:
+                        self.assertFalse(self.progress.result.called)
+                    else:
+                        self.assertEqual(self.progress.result.call_args.kwargs['degrades'], rows)
+                        saved = self.root / '.cache/setup-degrades-generate.txt'
+                        self.assertEqual('toolchain.system_fallback' in saved.read_text(encoding='utf-8'), route == 'system')
+
+    def test_producer_normalizes_controls_and_preserves_utf8_in_rows_events(self):
+        self.begin()
+        reason = 'Δ "authored" ' + ''.join(chr(value) for value in range(32)) + '\x7f τέλος ' + 'λ' * 600
+        record_degrade(self.progress, 'mtime.clamp', reason)
+        result = finish_degrades(self.progress)
+        normalized = result['degrades'][0]['reason']
+        self.assertTrue(normalized.startswith('Δ "authored" τέλος '))
+        self.assertNotRegex(normalized, r'[\x00-\x1f\x7f]')
+        self.assertLessEqual(len(normalized.encode('utf-8')), 1023)
+        self.assertTrue(normalized.endswith('λ'))
+        self.assertEqual(self.progress.event.call_args.kwargs['reason'], normalized)
+        self.assertIn('mtime.clamp\t' + normalized + '\n', (self.root / '.cache/setup-degrades-rebuild.txt').read_text(encoding='utf-8'))
+        outside = Mock()
+        record_degrade(outside, 'mtime.clamp', '\x1bΔ\x7f')
+        self.assertEqual(outside.event.call_args.kwargs['reason'], 'Δ')
+
+    def test_capacity_final_save_failure_retains_both_warning_rows_and_events(self):
+        self.begin()
+        report = self.progress._setup_degrades
+        for number in range(128):
+            report.add('authored.row' + str(number), 'authored ordinary fallback ' + str(number))
+            if number == 125:
+                self.assertEqual(len(report.rows), 126)
+                self.assertNotIn('report.truncated', [row['code'] for row in report.rows])
+        report.save('incomplete')
+        with patch('setup_degrades.os.replace', side_effect=OSError('authored final save refusal')):
+            result = finish_degrades(self.progress)
+        rows = result['degrades']
+        self.assertEqual(len(rows), 128)
+        self.assertEqual(result['degrade_report']['state'], 'not_saved')
+        self.assertEqual([row['code'] for row in rows].count('report.persistence'), 1)
+        self.assertEqual([row['code'] for row in rows].count('report.truncated'), 1)
+        events = [call.kwargs for call in self.progress.event.call_args_list]
+        for code in ('report.persistence', 'report.truncated'):
+            self.assertEqual(len([event for event in events if event['code'] == code]), 1)
+            self.assertIn(next(row for row in rows if row['code'] == code), events)
+        with patch('setup_degrades.os.replace', side_effect=OSError('authored later save refusal')):
+            later = finish_degrades(self.progress)
+        self.assertEqual(len(later['degrades']), 128)
+        persistence = [row for row in later['degrades'] if row['code'] == 'report.persistence']
+        self.assertEqual(len(persistence), 1)
+        self.assertIn('authored later save refusal', persistence[0]['reason'])
+        self.assertEqual(len([call for call in self.progress.event.call_args_list
+                              if call.kwargs['code'] == 'report.truncated']), 1)
+
     def test_actual_set_delegates_retain_each_authored_members_rows(self):
         programs = [{'program': name, 'folder': 'programs/' + name, 'positions': [position],
                      'exe_name': name} for position, name in enumerate(('first', 'second'), 1)]
@@ -357,6 +465,16 @@ class DegradeTests(unittest.TestCase):
                      valid.replace(b'\n1\n', b'\n129\n'), valid.replace('Δ'.encode(), b'\xff')):
             saved.write_bytes(data)
             self.assertEqual(read(saved), ['invalid', '0'])
+        self.begin()
+        record_degrade(self.progress, 'pgo.unavailable', 'unchanged valid row')
+        record_degrade(self.progress, 'mtime.clamp', 'Δ "quotes"\x1b\x7f\x00 τέλος ' + 'λ' * 600)
+        result = finish_degrades(self.progress)
+        self.assertEqual(read(saved), ['recorded_complete', '2'] +
+                         [row['code'] + '\t' + row['reason'] for row in result['degrades']])
+        normalized_record = saved.read_bytes()
+        for control in (b'\x1b', b'\x7f', b'\x00'):
+            saved.write_bytes(normalized_record.replace('Δ'.encode(), control))
+            self.assertEqual(read(saved), ['invalid', '0'])
 
 
 if __name__ == '__main__':
@@ -365,7 +483,8 @@ if __name__ == '__main__':
     args, rest = parser.parse_known_args()
     if args.baseline_cli:
         cli = load_cli(args.baseline_cli)
-        suite = unittest.TestSuite([DegradeTests('test_actual_rebuild_result_reports_system_fallback')])
+        suite = unittest.TestSuite([DegradeTests('test_actual_rebuild_result_reports_system_fallback'),
+                                   DegradeTests('test_real_emitter_builder_and_set_root_toolchain_choices')])
     else:
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(DegradeTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)

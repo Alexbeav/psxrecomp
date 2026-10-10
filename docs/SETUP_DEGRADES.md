@@ -19,6 +19,14 @@ The codegen host's `--setup-selfcheck` adds `setup_degrades`, with `scope: "last
 States are `recorded_complete`, `recorded_incomplete`, `missing`, `unreadable` or `invalid`.
 Missing or invalid records do not mean that no fallback happened.
 The reader performs no build, subprocess, cleanup or file write.
+Producer reasons replace ASCII control characters with spaces, collapse whitespace,
+and retain a valid UTF-8 prefix of at most 1023 bytes. Quotes and Greek text remain valid.
+The reader still rejects a record with forbidden controls or invalid UTF-8.
+The 128-row limit reserves one row for each reporting warning. At most 126 ordinary
+fallback rows are retained. Further decisions emit their progress events and add
+one `report.truncated` row and event. A final save failure can still retain and emit
+`report.persistence` alongside that truncation warning.
+Each warning code keeps its latest reason rather than consuming additional rows.
 The readiness exit codes remain 0 for complete sources, 2 when setup would reopen,
 and 1 when the host cannot identify the project.
 For a set of programs, CLI results and the set-root report retain each member's
@@ -27,7 +35,7 @@ existing `--setup-selfcheck` command; this change does not add one.
 
 | Code | Reported decision |
 |---|---|
-| `toolchain.system_fallback` | The portable toolchain was unavailable; system CMake was used. |
+| `toolchain.system_fallback` | The portable toolchain was unavailable; system CMake was selected for product or emitter builds, including the set root. |
 | `bios.openbios_regen` | OpenBIOS generation failed; an already staged retail backend was retained. |
 | `bios.emitter_stamp` | An optional emitter fingerprint could not be written. |
 | `mtime.clamp` | Timestamp inspection or repair missed one or more paths. |
@@ -42,7 +50,7 @@ existing `--setup-selfcheck` command; this change does not add one.
 | `cleanup.incomplete` | Requested cleanup could not remove one or more paths. |
 | `disc.track_list` | The track list was not checked or an advisory mismatch or kit fault was tolerated. |
 | `report.persistence` | The fallback report could not be saved. |
-| `report.truncated` | The bounded report exceeded 128 rows; it is partial. |
+| `report.truncated` | More than 126 ordinary fallback rows were reported; the bounded report is partial. |
 
 Licence counts remain counts of copied files. They do not establish complete staging or
 licence suitability. Normal and diagnostic staging reports include their product folders.
