@@ -152,6 +152,7 @@ static const Profile profiles[] = {
     { "default",                   "",                           "",                 0xE78B3101B495BF34ull, 0xB7FE6DB2EE9CB500ull },
     { "octoshock-2.2.2-digital",   "octoshock-2.2.2-digital",    "",                 0xD5AFDEB1F613FBA8ull, 0xA0100CD88FB64904ull },
     { "nymashock-1.29.0-dualshock","nymashock-1.29.0-dualshock", "nymashock-1.29.0", 0x11B28ADCB1A3E907ull, 0x902F7CDFD376FE8Bull },
+    { "nymashock-1.32.1-dualshock","nymashock-1.32.1-dualshock", "nymashock-1.32.1", 0x11B28ADCB1A3E907ull, 0x902F7CDFD376FE8Bull },
 };
 
 static uint64_t run(const Profile *p, int touch_mouse, int touch_negcon,
