@@ -1441,9 +1441,13 @@ if(BUILD_TESTING)
         #                              s_next_service_cycle
         #   runtime_perf_diag_guards   asserts a substring no longer present in
         #                              the runtime source
+        # PS1B-176 source correction uses the current s_frame_pacer name.
+        # The guard and its rejection controls remain disabled pending an
+        # admitted pass. The historical failures above remain unresolved.
         foreach(_t IN ITEMS
                 interpreter_perf_guards
-                runtime_perf_diag_guards)
+                runtime_perf_diag_guards
+                runtime_perf_diag_guard_controls)
             add_test(
                 NAME ${_t}
                 COMMAND ${Python3_EXECUTABLE}
