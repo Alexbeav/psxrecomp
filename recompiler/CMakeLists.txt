@@ -1201,7 +1201,7 @@ if(BUILD_TESTING)
         set(_psx_tools_tests "")
         foreach(_t IN ITEMS
                 menu_scan cursor_writers gpu_frame pad_trace pad_delivery
-                aligned_lzss_banks static_fragment_variant_keys
+                aligned_lzss_banks static_fragment_variant_keys host_bash_callers
                 mips_tagged_relocations overlay_widescreen_callbacks
                 duckstation_oracle)
             add_test(NAME tools_${_t}
@@ -1211,6 +1211,8 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
             list(APPEND _psx_tools_tests tools_${_t})
         endforeach()
+        set_tests_properties(tools_host_bash_callers PROPERTIES
+            ENVIRONMENT "PSX_TEST_CMAKE=${CMAKE_COMMAND}")
         if(PSXRECOMP_ENABLE_CHD AND TARGET chdr)
             add_test(NAME tools_psx_chd
                 COMMAND ${Python3_EXECUTABLE} -B -m unittest discover

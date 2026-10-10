@@ -13,6 +13,9 @@ _TOOLKIT = Path(__file__).resolve().parent.parent
 if str(_TOOLKIT) not in sys.path:
     sys.path.insert(0, str(_TOOLKIT))
 
+sys.path.insert(0, str(_TOOLKIT.parent))
+from host_bash import find_bash
+
 from project_studio import __version__  # noqa: E402
 from project_studio.detect import audit_project  # noqa: E402
 from project_studio.models import MigrateOptions  # noqa: E402
@@ -1355,9 +1358,10 @@ def cmd_build_mingw(args: argparse.Namespace) -> int:
         print(f"error: missing {script}", file=sys.stderr)
         return 2
 
-    bash = shutil.which("bash")
-    if not bash:
-        print("error: bash not found (required for MinGW cross script)", file=sys.stderr)
+    try:
+        bash = find_bash("the MinGW cross script", verify_msys=True)
+    except AssertionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
 
     cmd: list[str] = [bash, str(script)]

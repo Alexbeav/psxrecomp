@@ -28,6 +28,7 @@ from typing import Any, Iterable, Optional, Union
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "tools"))
+from host_bash import find_bash  # noqa: E402
 from sdk_progress import ProgressReporter  # noqa: E402
 from disc_companion import CompanionError, inspect_companion  # noqa: E402
 import disc_track_list  # noqa: E402
@@ -929,8 +930,10 @@ def write_bios_emitter_stamp(
     script = fw / "tools" / "bios_emitter_fingerprint.sh"
     if not script.is_file():
         return
-    bash = shutil.which("bash")
-    if not bash:
+    try:
+        bash = find_bash("BIOS emitter fingerprint", verify_msys=True)
+    except AssertionError as exc:
+        progress.log(f"note: BIOS emitter fingerprint unavailable: {exc}")
         return
     try:
         recomp = parse_toml_simple(

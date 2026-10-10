@@ -177,3 +177,21 @@ explanation for a failure that was really the two bugs above — so nobody looke
 those it becomes a standing excuse for whatever fails next under that test's name. The response
 to a red test is never to remove its registration; use ctest's `DISABLED` property, which keeps
 it counted and visible.
+
+## Bash selected from PATH
+
+On Windows, `System32/bash.exe` and `Microsoft/WindowsApps/bash.exe` start WSL.
+They cannot run these scripts with Windows paths.
+All Python callers use `tools/host_bash.py`.
+CMake uses `runtime/host_bash.cmake` for the BIOS stamp check and Bash-based test registration.
+Both check the written and resolved shell paths before handing a shell to a caller.
+The Windows root is also resolved, so directory aliases cannot hide a launcher.
+The original `Microsoft/WindowsApps` spelling remains refused even when it points elsewhere.
+
+For a Git installation in another folder, set `PSX_GIT_BASH` to its `bin/bash.exe` or `usr/bin/bash.exe`.
+The override takes priority over discovery and the CMake cached value.
+A missing override or a WSL launcher is refused.
+Python production callers also retain the replay tools' MSYS validation.
+Without an override, Unix hosts use Bash on PATH.
+The optional BIOS stamp and direct-emitter fallback keep their existing policy.
+Required shell commands fail when no usable shell exists.
