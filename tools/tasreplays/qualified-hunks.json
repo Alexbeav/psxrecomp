@@ -117,13 +117,13 @@
         {
           "file": "runtime/src/mdec.c",
           "lines": [
-            "        if(strcmp(source_mode,\"octoshock-2.3\") && strcmp(source_mode,\"nymashock-1.29.0\")){fprintf(stderr,\"[mdec-source] unknown model\\n\");exit(2);}"
+            "        if(strcmp(source_mode,\"octoshock-2.3\") && strcmp(source_mode,\"nymashock-1.29.0\") && strcmp(source_mode,\"nymashock-1.32.1\")){fprintf(stderr,\"[mdec-source] unknown model\\n\");exit(2);}"
           ]
         },
         {
           "file": "runtime/src/mdec.c",
           "lines": [
-            "        if(!strcmp(source_mode,\"nymashock-1.29.0\"))source_mdec.block_cycles=512;"
+            "        if(!strcmp(source_mode,\"nymashock-1.29.0\") || !strcmp(source_mode,\"nymashock-1.32.1\"))source_mdec.block_cycles=512;"
           ]
         },
         {
@@ -707,7 +707,8 @@
             "        if (drive_model && *drive_model) {",
             "            if (strcmp(drive_model, \"octoshock-2.7\") == 0) {",
             "                s_cd_reset_seek_draw_first = 1;",
-            "            } else if (strcmp(drive_model, \"nymashock-1.29.0\") != 0) {",
+            "            } else if (strcmp(drive_model, \"nymashock-1.29.0\") != 0 &&",
+            "                       strcmp(drive_model, \"nymashock-1.32.1\") != 0) {",
             "                fprintf(stderr, \"[CDROM] Unsupported PSX_CD_DRIVE_MODEL=%s\\n\", drive_model);",
             "                exit(2);",
             "            }",
@@ -768,6 +769,15 @@
           "to_blocks": 56,
           "replacement_blocks_added": 10,
           "note": "Clean-room rewrite (PS1B-311): the stub lines are replaced by lines written from the behaviour spec by an unexposed implementer. Requalification of the TAS routes on this tree is owed."
+        },
+        {
+          "as_of": "8d8ddd04e325af26e6a9395ae5141c92c9975fdc",
+          "issue": "PS1B-276",
+          "from_blocks": 56,
+          "to_blocks": 56,
+          "updated_blocks": 3,
+          "dropped_lines": 0,
+          "note": "Selector identity rename only: retain the complete current 1.29.0/1.32.1 admission spans. Historical origin, qualified_tree, titles, route/tape qualification and all other blocks remain unchanged; no external-core equivalence or title requalification is established."
         }
       ]
     },
@@ -6317,7 +6327,8 @@
             "        if (drive_model && *drive_model) {",
             "            if (strcmp(drive_model, \"octoshock-2.7\") == 0) {",
             "                s_cd_reset_seek_draw_first = 1;",
-            "            } else if (strcmp(drive_model, \"nymashock-1.29.0\") != 0) {",
+            "            } else if (strcmp(drive_model, \"nymashock-1.29.0\") != 0 &&",
+            "                       strcmp(drive_model, \"nymashock-1.32.1\") != 0) {",
             "                fprintf(stderr, \"[CDROM] Unsupported PSX_CD_DRIVE_MODEL=%s\\n\", drive_model);",
             "                exit(2);",
             "            }",
@@ -6350,6 +6361,15 @@
           "to_blocks": 4,
           "replacement_blocks_added": 2,
           "note": "Clean-room rewrite (PS1B-311): the stub lines are replaced by lines written from the behaviour spec by an unexposed implementer. Requalification of the TAS routes on this tree is owed."
+        },
+        {
+          "as_of": "8d8ddd04e325af26e6a9395ae5141c92c9975fdc",
+          "issue": "PS1B-276",
+          "from_blocks": 4,
+          "to_blocks": 4,
+          "updated_blocks": 1,
+          "dropped_lines": 0,
+          "note": "Selector identity rename only: retain the complete current 1.29.0/1.32.1 admission spans. Historical origin, qualified_tree, titles, route/tape qualification and all other blocks remain unchanged; no external-core equivalence or title requalification is established."
         }
       ]
     },
