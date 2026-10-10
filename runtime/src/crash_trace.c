@@ -44,6 +44,7 @@
 #include "start_refusal.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */
+#include "overlay_loader.h"
 
 /* Output path — overwritten per dump. */
 static const char *kReportPath = "psx_last_run_report.json";
@@ -824,6 +825,11 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
     /* Host overlay-DLL / resim gate at FAIL-FAST. Distinguishes "CD DMA never
      * finished" from "rollback froze registration mid-splash load". */
     {
+        char tier[2048];
+        if (overlay_loader_tier_witness_json(tier, sizeof(tier)))
+            append_fmt(buf, sizeof(buf), &pos, "  \"overlay_tier\": %s,\n", tier);
+        else
+            append_fmt(buf, sizeof(buf), &pos, "  \"overlay_tier\": null,\n");
         int active = 0, valid = 0, regions = 0, last_found = 0;
         uint32_t last_crc = 0;
         overlay_loader_get_status(&active, &valid, &regions,

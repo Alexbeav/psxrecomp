@@ -76,6 +76,31 @@ function(psxrecomp_framework_identity root out_pin out_rev out_source)
     set(${out_source} "${_source}" PARENT_SCOPE)
 endfunction()
 
+# Tree identity for compact tier evidence. Archives carry %T alongside %H.
+# Unknown identity stays empty and cannot qualify a measurement.
+function(psxrecomp_framework_tree root pin out)
+    set(_tree "")
+    if(DEFINED PSX_FRAMEWORK_TREE)
+        set(_tree "${PSX_FRAMEWORK_TREE}")
+    elseif(EXISTS "${root}/runtime/FRAMEWORK_TREE")
+        file(STRINGS "${root}/runtime/FRAMEWORK_TREE" _line LIMIT_COUNT 1)
+        string(STRIP "${_line}" _tree)
+    endif()
+    string(LENGTH "${_tree}" _len)
+    if(NOT _len EQUAL 40 OR NOT "${_tree}" MATCHES "^[0-9a-f]+$")
+        set(_tree "")
+    endif()
+    if(_tree STREQUAL "" AND NOT "${pin}" STREQUAL "")
+        execute_process(COMMAND git -C "${root}" rev-parse "${pin}^{tree}"
+            RESULT_VARIABLE _rc OUTPUT_VARIABLE _git_tree
+            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(_rc EQUAL 0)
+            set(_tree "${_git_tree}")
+        endif()
+    endif()
+    set(${out} "${_tree}" PARENT_SCOPE)
+endfunction()
+
 # psxrecomp_lobby_version(<game version> <framework pin> <out>)
 #
 # The string the lobby matches rooms on. Peers must run the same emulation

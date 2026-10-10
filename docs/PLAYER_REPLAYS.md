@@ -210,7 +210,9 @@ A power-on recording does not start when a save state is loaded at boot
   and 65,536 input changes. Constant analog stick movement can reach the input
   limit in about 18 minutes. At either limit the recording stops and is saved.
 - Overlays run interpreted while a replay records or plays (the PS1B-191
-  stopgap), so an overlay-heavy game can run slower.
+  stopgap), so an overlay-heavy game can run slower. New dynamic overlays also
+  stay unregistered until the replay ends. The
+  [tier witness](OVERLAY_TIER_WITNESS.md) records this protection in the run report.
 - Netplay, a multitap, a route recording or a playing input route stop a
   recording from starting.
 
