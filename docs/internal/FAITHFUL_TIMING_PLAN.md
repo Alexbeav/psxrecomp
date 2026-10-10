@@ -224,6 +224,15 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-09 (PS1B-238(a), source candidate):** Loader-owned replay/netplay
+  holders freeze admission as well as native execution and retain a compact
+  [tier witness](../OVERLAY_TIER_WITNESS.md). Source base 015fe7a; the real-loader
+  authored controls pass in twelve O0/O2 configurations, including selfcheck
+  start/end during a hold. Existing pair controls, pin wiring and tree identity
+  pass; registry has zero missing entries of 35 and five unchanged debt entries.
+  Exact-head review/CI are pending. No guest timing, deterministic
+  switching policy, prepared-image retention, title qualification or pin change.
+
 - **2026-10-06 (PS1G-39, after pin H, kept-route/cockpit regression):** Native boot produces
   the same BIOS low-RAM words as the oracle, then the host game-start hook clears
   bytes 0..15. Colony Wars: Vengeance later reads halfword zero through a cleared
