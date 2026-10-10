@@ -1095,6 +1095,15 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_backend_constant_codegen.py
                     --recompiler $<TARGET_FILE:psxrecomp-bios>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-308: the actual BIOS emitter counts an authored synthetic image.
+        # This needs no BIOS/profile/seed input from the checkout and cannot skip.
+        add_test(
+            NAME kbless_capacity_synthetic
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kbless_capacity_synthetic.py
+                    --recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --evidence-dir ${CMAKE_CURRENT_BINARY_DIR}/kbless-synthetic-evidence
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # tools/bios_emitter_fingerprint.sh takes its file list from the
         # psxrecomp-bios target above. CMake hands the test its own list of
         # that target's sources, so the script's reading of this file is held
