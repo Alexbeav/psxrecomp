@@ -946,7 +946,7 @@ def _copy_notices(names, source, dest):
     return len(names)
 
 
-def stage_product_notices(stage, framework, ui=None, project=None, package=None, log=print):
+def stage_product_notices(stage, framework, ui=None, project=None, package=None, log=print, on_degrade=None):
     """Write a product's licence texts into <stage>/licenses. Never raises.
 
       licenses/kit/        the project's own licence files (`project`: the folder with game.toml)
@@ -959,6 +959,8 @@ def stage_product_notices(stage, framework, ui=None, project=None, package=None,
     Returns the number of files written per folder. A package without a
     licenses/toolchain folder is said in plain words: the product then has no
     text for SDL3, zlib or the compiler's runtime, which it links.
+    on_degrade, when supplied, receives partial-copy and missing-carried-text
+    reasons. Counts retain their old type and do not imply complete staging.
 
     The step never reads what it writes. The folder it writes, and the product
     folder when that lies inside a tree it scans, are left out of every scan:
@@ -989,10 +991,14 @@ def stage_product_notices(stage, framework, ui=None, project=None, package=None,
             else:
                 counts['toolchain'] = _copy_notices(names, carried, target)
     except OSError as exc:
+        if on_degrade:
+            on_degrade('Licence copy incomplete: %s' % exc)
         log('WARNING: the licence texts were not all written beside the product (%s). The game is '
             'unaffected; the texts are in the package folder.' % exc)
         return counts
     if not counts['toolchain']:
+        if on_degrade:
+            on_degrade('No carried toolchain licence texts to stage')
         log('note: this package carries no licence texts for its toolchain libraries '
             '(licenses/toolchain), so none were written beside the product')
     log('licence texts staged in %s: kit %d, framework %d, ui %d, toolchain %d'

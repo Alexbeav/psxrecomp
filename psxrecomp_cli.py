@@ -29,6 +29,7 @@ from typing import Any, Iterable, Optional, Union
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "tools"))
 from sdk_progress import ProgressReporter  # noqa: E402
+from setup_degrades import begin_degrades, record_degrade, finish_degrades  # noqa: E402
 from disc_companion import CompanionError, inspect_companion  # noqa: E402
 import disc_track_list  # noqa: E402
 import psx_chd  # noqa: E402
@@ -155,10 +156,12 @@ def prune_after_rebuild(
     """Free disk after a successful rebuild (wizard / one-shot setup)."""
     if not modes:
         return
+    def tree_error(_function, path, _error):
+        record_degrade(progress, "cleanup.incomplete", f"Could not remove {path}")
     if "toolchain" in modes or "all" in modes:
         tc = project_root / "toolchain"
         if tc.is_dir():
-            shutil.rmtree(tc, ignore_errors=True)
+            shutil.rmtree(tc, onerror=tree_error)
             progress.log(f"Pruned {tc}")
     if "build-intermediates" in modes or "all" in modes:
         if build_dir.is_dir():
@@ -166,12 +169,12 @@ def prune_after_rebuild(
                          "cmake_install.cmake", "build.ninja", "compile_commands.json"):
                 p = build_dir / name
                 if p.is_dir():
-                    shutil.rmtree(p, ignore_errors=True)
+                    shutil.rmtree(p, onerror=tree_error)
                 elif p.is_file():
                     try:
                         p.unlink()
-                    except OSError:
-                        pass
+                    except OSError as exc:
+                        record_degrade(progress, "cleanup.incomplete", f"Could not remove {p}: {exc}")
             # Drop object/lib digests but keep the launch binary + assets/.
             # Never inside what was staged beside the binary for the player:
             # the overlay toolchain's tcc needs its own tcc/lib/libtcc1-*.a to
@@ -185,8 +188,8 @@ def prune_after_rebuild(
                 if p.suffix in {".o", ".obj", ".a", ".lib", ".pdb", ".ilk", ".exp"}:
                     try:
                         p.unlink()
-                    except OSError:
-                        pass
+                    except OSError as exc:
+                        record_degrade(progress, "cleanup.incomplete", f"Could not remove {p}: {exc}")
             progress.log(f"Pruned build intermediates under {build_dir}")
     if "build-tree" in modes:
         # Keep only the executable + assets next to it, then wipe the rest of
@@ -201,7 +204,7 @@ def prune_after_rebuild(
             assets = build_dir / "assets"
             staging = build_dir.parent / f".prune-keep-{build_dir.name}"
             if staging.exists():
-                shutil.rmtree(staging, ignore_errors=True)
+                shutil.rmtree(staging, onerror=tree_error)
             staging.mkdir(parents=True, exist_ok=True)
             for name in keep_names:
                 src = build_dir / name
@@ -209,7 +212,7 @@ def prune_after_rebuild(
                     shutil.move(str(src), str(staging / name))
             if assets.is_dir():
                 shutil.move(str(assets), str(staging / "assets"))
-            shutil.rmtree(build_dir, ignore_errors=True)
+            shutil.rmtree(build_dir, onerror=tree_error)
             staging.rename(build_dir)
             progress.log(f"Pruned build tree to binary+assets under {build_dir}")
 
@@ -219,6 +222,7 @@ def clamp_future_mtimes(
     *,
     skip: Union[Path, Iterable[Path], None] = None,
     now: Optional[float] = None,
+    progress: Optional[ProgressReporter] = None,
 ) -> int:
     """Clamp mtimes ahead of *now* so Ninja does not infinite-reconfigure.
 
@@ -230,18 +234,29 @@ def clamp_future_mtimes(
     if not root.is_dir():
         return 0
     stamp = time.time() if now is None else now
+    failed = 0
+    sample = ""
+    def note_failure(path):
+        nonlocal failed, sample
+        failed += 1
+        if not sample:
+            sample = str(path)
     skip_res: set[Path] = set()
     for sk in ([skip] if isinstance(skip, Path) else list(skip or [])):
         try:
             skip_res.add(sk.resolve())
         except OSError:
+            note_failure(sk)
             skip_res.add(sk)
     n = 0
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(
+        root, followlinks=False, onerror=lambda exc: note_failure(exc.filename or root)
+    ):
         dpath = Path(dirpath)
         try:
             d_res = dpath.resolve()
         except OSError:
+            note_failure(dpath)
             d_res = dpath
         # Skip the active build tree entirely (outputs are rewritten anyway).
         if any(d_res == sk or sk in d_res.parents for sk in skip_res):
@@ -257,7 +272,7 @@ def clamp_future_mtimes(
                     if (dpath / x).resolve() in skip_res:
                         continue
                 except OSError:
-                    pass
+                    note_failure(dpath / x)
             pruned.append(x)
         dirnames[:] = pruned
         for name in filenames:
@@ -265,6 +280,7 @@ def clamp_future_mtimes(
             try:
                 mtime = p.stat().st_mtime
             except OSError:
+                note_failure(p)
                 continue
             if mtime > stamp:
                 try:
@@ -278,7 +294,9 @@ def clamp_future_mtimes(
                         os.utime(p, (stamp, stamp))
                     n += 1
                 except OSError:
-                    pass
+                    note_failure(p)
+    if failed and progress is not None:
+        record_degrade(progress, "mtime.clamp", f"Could not inspect/update {failed} timestamp path(s); first: {sample}")
     return n
 
 
@@ -928,18 +946,22 @@ def write_bios_emitter_stamp(
     """
     script = fw / "tools" / "bios_emitter_fingerprint.sh"
     if not script.is_file():
+        record_degrade(progress, "bios.emitter_stamp", "Fingerprint script is missing")
         return
     bash = shutil.which("bash")
     if not bash:
+        record_degrade(progress, "bios.emitter_stamp", "No host Bash for the fingerprint stamp")
         return
     try:
         recomp = parse_toml_simple(
             (fw / profile_rel).read_text(encoding="utf-8")
         ).get("recompiler") or {}
-    except OSError:
+    except OSError as exc:
+        record_degrade(progress, "bios.emitter_stamp", f"Fingerprint profile cannot be read: {exc}")
         return
     stem = str(recomp.get("out_stem") or "").strip()
     if not stem:
+        record_degrade(progress, "bios.emitter_stamp", "Fingerprint profile has no output stem")
         return
     out_dir = str(recomp.get("out_dir") or "generated")
     # Same profile argument runtime.cmake passes, or the hashes cannot match.
@@ -951,6 +973,7 @@ def write_bios_emitter_stamp(
     )
     fingerprint = (proc.stdout or "").strip()
     if proc.returncode != 0 or not fingerprint:
+        record_degrade(progress, "bios.emitter_stamp", "Fingerprint command failed or returned no stamp")
         progress.log(
             "note: BIOS emitter fingerprint unavailable; staleness stamp not written"
         )
@@ -960,6 +983,7 @@ def write_bios_emitter_stamp(
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(fingerprint + "\n", encoding="utf-8")
     except OSError as exc:
+        record_degrade(progress, "bios.emitter_stamp", f"Fingerprint stamp cannot be written: {exc}")
         progress.log(f"note: could not write {out_dir}/{stem}.emitter.sha ({exc})")
         return
     progress.log(f"wrote BIOS emitter fingerprint {out_dir}/{stem}.emitter.sha")
@@ -1095,6 +1119,11 @@ def check_track_list(
                       "reason": f"the check stopped: {type(exc).__name__}: {exc}"}
     identity["track_list"] = record
     progress.event("track_list", **record)
+    if record.get("kit_fault") or record["status"] == "not_checked" or (
+        record["status"] == "mismatch" and record.get("policy") != disc_track_list.REFUSE
+    ):
+        record_degrade(progress, "disc.track_list", record.get("reason") or record.get("kit_fault")
+                       or record.get("sentence") or "Track list was not fully verified")
     if stopped:
         progress.log("Track list was not checked: the check itself stopped. "
                      "The disc is accepted on its data track.", level="warning")
@@ -1419,6 +1448,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if args.project_root
         else config.parent
     )
+    begin_degrades(progress, project_root, "generate")
     activate_embedded_toolchain(project_root, progress)
     secs = load_sections(config)
     game = secs.get("game") or {}
@@ -1567,6 +1597,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         except Exception as exc:  # noqa: BLE001
             # Prefer retail when --bios was given; OpenBIOS is then best-effort.
             if staged_retail:
+                record_degrade(progress, "bios.openbios_regen", f"OpenBIOS failed; staged retail backend retained: {exc}")
                 progress.log(f"OpenBIOS regen skipped (retail BIOS ok): {exc}")
             else:
                 progress.error(str(exc), code=EXIT_ERROR)
@@ -1654,6 +1685,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         marker=str(marker),
         disc=str(working_disc),
         boot_exe=str(boot_path),
+        **finish_degrades(progress),
         **prepass,
     )
     return EXIT_OK
@@ -1803,6 +1835,7 @@ def _configure_product(project_root: Path, build_dir: Path, *, pgo: str, cmake_e
             progress.log("LTO: this compiler/linker cannot do link-time optimisation here "
                          "(see the IPO check above); building the product without it")
             once(False)
+            record_degrade(progress, "lto.unsupported", "Requested LTO is unsupported; the plain configure succeeded")
             return False
         raise
 
@@ -2170,6 +2203,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
             progress.error("--diagnostic-dir must differ from --build-dir", code=EXIT_USAGE)
             return EXIT_USAGE
 
+    begin_degrades(progress, project_root, "rebuild")
     secs = load_sections(config)
     pgo = secs.get("pgo") or {}
     # Opt-in only: requires game.toml [pgo] enabled = true (or --force-pgo).
@@ -2225,6 +2259,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 )
                 return EXIT_ERROR
             progress.log("Using system cmake on PATH")
+            record_degrade(progress, "toolchain.system_fallback", "Portable toolchain unavailable; using system CMake")
 
     # Full playable link after local generate (not the CI setup-host shape).
     # The legacy BPE_ alias in runtime.cmake only maps ON, so clear the
@@ -2242,7 +2277,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         cmake_extra.extend(args.cmake_extra)
 
     clamped = clamp_future_mtimes(
-        project_root, skip=[build_dir, diag_dir] if diagnostic_only else build_dir)
+        project_root, skip=[build_dir, diag_dir] if diagnostic_only else build_dir, progress=progress)
     if clamped:
         progress.log(
             f"Clamped {clamped} future mtime(s) under {project_root} "
@@ -2258,7 +2293,8 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
             progress.error(f"diagnostic build failed: {diagnostic_error}", code=EXIT_ERROR)
             return EXIT_ERROR
         progress.phase("done", pct=1.0, message="Diagnostic build complete")
-        progress.result(ok=True, diagnostic_only=True, diagnostic_exe=str(diagnostic_exe))
+        progress.result(ok=True, diagnostic_only=True, diagnostic_exe=str(diagnostic_exe),
+                        **finish_degrades(progress))
         return EXIT_OK
 
     # mute_host_audio / hide_video: default ON; game.toml / CLI can disable.
@@ -2287,6 +2323,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
             else:
                 pgo_skip_reason = ("no llvm-profdata on PATH or in the toolchain pack, so a "
                                    "clang profile could not be merged")
+                record_degrade(progress, "pgo.unavailable", pgo_skip_reason)
                 progress.log(f"PGO: off ({pgo_skip_reason}); building the plain product")
                 pgo_enabled = False
         if not pgo_enabled:
@@ -2351,6 +2388,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
             lto = _configure_product(project_root, build_dir, pgo="", cmake_extra=cmake_extra,
                                      lto=lto, progress=progress)
             _cmake_build(build_dir, target, progress)
+            record_degrade(progress, "pgo.failed", pgo_skip_reason)
         except Exception as exc2:  # noqa: BLE001
             progress.error(str(exc2), code=EXIT_ERROR)
             return EXIT_ERROR
@@ -2378,6 +2416,8 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         diagnostic_exe, diagnostic_error = build_diagnostic_product(
             project_root, diag_dir, target, exe_basename, cmake_extra, progress=progress
         )
+        if diagnostic_exe is None:
+            record_degrade(progress, "diagnostic.optional_failure", diagnostic_error or "No diagnostic product was produced")
 
     progress.phase("done", pct=1.0, message="Rebuild complete")
     progress.result(
@@ -2388,6 +2428,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         lto=lto,
         diagnostic_exe=str(diagnostic_exe) if diagnostic_exe else None,
         diagnostic_error=diagnostic_error or None,
+        **finish_degrades(progress),
     )
     return EXIT_OK
 
@@ -2405,8 +2446,10 @@ def stage_notices_for_product(project_root: Path, exe_dir: Path, progress,
         ui = project_root / "recomp-ui"
         return release_stage.stage_product_notices(
             str(exe_dir), str(fw), ui=str(ui) if ui.is_dir() else None, project=str(project_root),
-            package=package_root or None, log=progress.log)
+            package=package_root or None, log=progress.log,
+            on_degrade=lambda reason: record_degrade(progress, "notices.partial_or_missing", f"{exe_dir}: {reason}"))
     except Exception as exc:  # noqa: BLE001
+        record_degrade(progress, "notices.partial_or_missing", f"{exe_dir}: {exc}")
         progress.log(f"WARNING: the licence texts were not written beside the product: {exc}")
         return {}
 
@@ -2453,9 +2496,11 @@ def stage_overlay_toolchain_for_product(project_root: Path, exe_dir: Path, progr
             (tk / "compiler.txt").write_text(str(compiler) + "\n", encoding="utf-8")
             progress.log(f"overlay toolchain staged at {tk}; shard compiler: {compiler}")
         else:
+            record_degrade(progress, "overlay.tcc_tier", f"{exe_dir}: no optimising compiler; tcc remains")
             progress.log(f"overlay toolchain staged at {tk}; no optimising compiler found (tcc tier)")
         return tk
     except Exception as exc:  # noqa: BLE001
+        record_degrade(progress, "overlay.staging", f"{exe_dir}: {exc}")
         progress.log(f"WARNING: overlay toolchain staging failed; overlays will run interpreted: {exc}")
         return None
 
@@ -2503,6 +2548,7 @@ def product_lto_enabled(args, progress) -> bool:
         return False
     mem = _host_memory_gb()
     if sys.platform == "darwin" and 0.0 < mem < LTO_MIN_MEMORY_GB:
+        record_degrade(progress, "lto.low_memory", f"Automatic low-memory macOS policy disabled LTO ({mem:.1f} GiB)")
         progress.log(f"LTO: off on this macOS host ({mem:.1f} GiB RAM < {LTO_MIN_MEMORY_GB:g}; "
                      "the ThinLTO link has not been proven at this size)")
         return False

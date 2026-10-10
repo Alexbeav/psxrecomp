@@ -5327,6 +5327,41 @@ static void host_json_str(const char* s) {
     putchar('"');
 }
 
+#include "psx_setup_degrades.h"
+
+static void host_selfcheck_degrades(void) {
+    const char* operations[] = {"generate", "rebuild"};
+    PsxSetupDegradeReport report;
+    char relative[96], absolute[1200];
+    int operation;
+    printf(",\n  \"setup_degrades\": {\"scope\":\"last_recorded\"");
+    for (operation = 0; operation < 2; ++operation) {
+        size_t row;
+        snprintf(relative, sizeof(relative), ".cache/setup-degrades-%s.txt", operations[operation]);
+        if (join_path(absolute, sizeof(absolute), g_project_root, relative))
+            psx_setup_degrades_read(absolute, operations[operation], &report);
+        else {
+            memset(&report, 0, sizeof(report));
+            report.state = "unreadable";
+        }
+        printf(",\"%s\":{\"state\":", operations[operation]);
+        host_json_str(report.state);
+        printf(",\"recorded_at\":");
+        host_json_str(report.recorded_at);
+        printf(",\"degrades\":[");
+        for (row = 0; row < report.count; ++row) {
+            if (row) putchar(',');
+            printf("{\"code\":");
+            host_json_str(report.rows[row].code);
+            printf(",\"reason\":");
+            host_json_str(report.rows[row].reason);
+            putchar('}');
+        }
+        printf("]}");
+    }
+    putchar('}');
+}
+
 static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
                                      int argc, char** argv) {
     const PsxKnownBiosImage* want;
@@ -5428,6 +5463,7 @@ static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
         printf(",\n  \"toolchain_note\": ");
         host_json_str(g_tc_repair_note);
     }
+    host_selfcheck_degrades();
     printf("\n}\n");
     fflush(stdout);
     exit(missing ? 2 : 0);
