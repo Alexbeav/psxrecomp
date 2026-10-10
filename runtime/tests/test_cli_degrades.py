@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 import release_stage
+import program_set
 from setup_degrades import begin_degrades, record_degrade, finish_degrades
 
 
@@ -283,6 +284,42 @@ class DegradeTests(unittest.TestCase):
         self.assertEqual(result['degrade_report']['state'], 'not_saved')
         self.assertIn('report.persistence', [row['code'] for row in result['degrades']])
         self.assertIn('bios.emitter_stamp', (self.root / '.cache/setup-degrades-generate.txt').read_text(encoding='utf-8'))
+
+    def test_actual_set_delegates_retain_each_authored_members_rows(self):
+        programs = [{'program': name, 'folder': 'programs/' + name, 'positions': [position],
+                     'exe_name': name} for position, name in enumerate(('first', 'second'), 1)]
+        spec = {'root': str(self.root), 'name': 'AuthoredSet', 'title': 'Authored set',
+                'serials': ['AUTHORED_FIRST', 'AUTHORED_SECOND'], 'programs': programs}
+        discs = [self.root / 'authored-first.fixture', self.root / 'authored-second.fixture']
+        args = argparse.Namespace(config=str(self.root / 'set.toml'), project_root=str(self.root),
+                                  build_dir='normal', disc='', bios='', prune_after='')
+        def child(args, progress):
+            name = Path(args.project_root).name
+            code = 'bios.emitter_stamp' if name == 'first' else 'mtime.clamp'
+            progress.result(ok=True, marker='authored marker', disc='authored disc',
+                            exe=str(self.root / name / 'Authored.exe'), lto=False,
+                            degrades=[{'code': code, 'reason': 'authored member fallback'}])
+            return cli.EXIT_OK
+        fake_cli = SimpleNamespace(EXIT_OK=cli.EXIT_OK, EXIT_ERROR=cli.EXIT_ERROR,
+                                   EXIT_USAGE=cli.EXIT_USAGE, EXIT_VERIFY=cli.EXIT_VERIFY,
+                                   activate_embedded_toolchain=Mock(), ensure_framework=Mock(),
+                                   ensure_emitters=Mock(), cmd_generate=child, cmd_rebuild=child,
+                                   _resolve_under=lambda root, raw: root / raw)
+        for operation in ('generate', 'rebuild'):
+            self.progress = Mock()
+            with ExitStack() as stack:
+                for name, value in {'load_set': spec, 'located_discs': discs, 'read_marker': True,
+                                    'check_discs': None, 'prepare_program_folder': None,
+                                    'join_products': {'per_program': [{'executable': 'Authored.exe'}]},
+                                    'write_start_scripts': [], 'write_install_record': self.root / 'install.json'}.items():
+                    stack.enter_context(patch.object(program_set, name, return_value=value))
+                code = getattr(program_set, operation + '_set')(fake_cli, args, self.progress)
+            self.assertEqual(code, cli.EXIT_OK)
+            rows = self.progress.result.call_args.kwargs['degrades']
+            self.assertEqual([row['code'] for row in rows], ['bios.emitter_stamp', 'mtime.clamp'])
+            self.assertEqual([row['reason'].split(':')[0] for row in rows], ['first', 'second'])
+            saved = self.root / '.cache' / f'setup-degrades-{operation}.txt'
+            self.assertIn('mtime.clamp', saved.read_text(encoding='utf-8'))
 
     def test_native_reader_missing_invalid_incomplete_and_utf8_records(self):
         compiler = os.environ.get('PSX_TEST_C_COMPILER')

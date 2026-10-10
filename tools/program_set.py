@@ -901,6 +901,12 @@ class _ProgramProgress:
         self.parent.event(event, **fields)
 
 
+def _carry_degrades(progress, program, result):
+    from setup_degrades import record_degrade
+    for row in result.get("degrades", []):
+        record_degrade(progress, row["code"], f"{program}: {row['reason']}")
+
+
 def _program_args(args: argparse.Namespace, folder: Path, **changes: Any) -> argparse.Namespace:
     """The arguments of one program's step: the set's own, aimed at the program."""
     sub = argparse.Namespace(**vars(args))
@@ -942,6 +948,8 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
         progress.error(str(error), code=cli.EXIT_USAGE)
         return cli.EXIT_USAGE
 
+    from setup_degrades import begin_degrades, finish_degrades
+    begin_degrades(progress, root, "generate")
     marker = root / "generated" / (getattr(args, "gen_marker", "") or SET_MARKER)
     try:
         marker.unlink()
@@ -977,6 +985,7 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
                                               bios=bios, gen_marker="", force_emitters=False), child)
         if code != cli.EXIT_OK:
             return code
+        _carry_degrades(progress, program["program"], child.last_result)
         done.append({"program": program["program"], "marker": child.last_result.get("marker"),
                      "disc": child.last_result.get("disc")})
         reports.append({key: value for key, value in child.last_result.items()
@@ -986,7 +995,8 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
                                     "programs": done}, indent=2) + "\n").encode("utf-8"))
     progress.phase("done", pct=1.0, message="Generate complete")
     progress.result(ok=True, out_dir=str(marker.parent), marker=str(marker), disc=str(discs[0]),
-                    programs=[dict(entry, **report) for entry, report in zip(done, reports)])
+                    programs=[dict(entry, **report) for entry, report in zip(done, reports)],
+                    **finish_degrades(progress))
     return cli.EXIT_OK
 
 
@@ -1016,6 +1026,8 @@ def rebuild_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
         progress.error(str(error), code=cli.EXIT_USAGE)
         return cli.EXIT_USAGE
 
+    from setup_degrades import begin_degrades, finish_degrades
+    begin_degrades(progress, root, "rebuild")
     out = cli._resolve_under(root, args.build_dir)
     first = spec["programs"][0]
     for name in (first["exe_name"] + ".exe", first["exe_name"]):
@@ -1047,6 +1059,7 @@ def rebuild_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
             package_root=str(root)), child)
         if code != cli.EXIT_OK:
             return code
+        _carry_degrades(progress, program["program"], child.last_result)
         built = child.last_result.get("exe")
         products[program["program"]] = Path(built).parent if built else folder / "build-release"
         lto = child.last_result.get("lto") if lto is None else lto
@@ -1062,7 +1075,8 @@ def rebuild_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
     progress.result(ok=True, exe=str(out / record["per_program"][0]["executable"]), pgo=False,
                     pgo_skipped="not available for a set of programs", lto=lto,
                     programs=[row["executable"] for row in record["per_program"]],
-                    start_scripts=record["start_scripts"], install_record=str(installed))
+                    start_scripts=record["start_scripts"], install_record=str(installed),
+                    **finish_degrades(progress))
     return cli.EXIT_OK
 
 

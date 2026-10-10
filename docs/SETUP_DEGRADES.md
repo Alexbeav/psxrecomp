@@ -14,13 +14,16 @@ The commands save separate reports under the project's `.cache` folder.
 An older saved report can survive such a failure.
 These are last-recorded command reports, not a test of the current installation.
 
-`--setup-selfcheck` adds `setup_degrades`, with `scope: "last_recorded"` and separate
+The codegen host's `--setup-selfcheck` adds `setup_degrades`, with `scope: "last_recorded"` and separate
 `generate` and `rebuild` objects. Each has `state`, `recorded_at` and `degrades`.
 States are `recorded_complete`, `recorded_incomplete`, `missing`, `unreadable` or `invalid`.
 Missing or invalid records do not mean that no fallback happened.
 The reader performs no build, subprocess, cleanup or file write.
 The readiness exit codes remain 0 for complete sources, 2 when setup would reopen,
 and 1 when the host cannot identify the project.
+For a set of programs, CLI results and the set-root report retain each member's
+fallback rows, with its program name in the reason. The separate set host has no
+existing `--setup-selfcheck` command; this change does not add one.
 
 | Code | Reported decision |
 |---|---|
