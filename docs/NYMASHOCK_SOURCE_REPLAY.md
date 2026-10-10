@@ -173,3 +173,19 @@ the source core raises no CD interrupt there (`cpu-boundary.tsv` shows I_STAT bi
 pending at cycle 2,914,352,327 only on the split build). The DATA_END delivery is now
 kept out of the Nymashock drive profile. With both changes the full 239,202-return
 route matches, with terminal RAM and persisted card equality.
+
+## Core selector identities
+
+BizHawk 2.9.1 uses Mednafen 1.29.0. Its selectors retain `nymashock-1.29.0` and `nymashock-1.29.0-dualshock`.
+BizHawk 2.10, 2.11 and 2.11.1 use Mednafen 1.32.1. Their selectors use `nymashock-1.32.1` and `nymashock-1.32.1-dualshock`.
+The Mega Man X4 6790M profile selects the latter names because its movie declares BizHawk 2.10.
+Bio Hazard, Mega Man X5 and Resident Evil DC keep their pinned BizHawk 2.9.1 profile names.
+
+Both names select the existing runtime comparison candidates for the pad, card, CD drive and MDEC.
+This rename changes identity labels, not device behaviour. It does not prove that the two oracle cores behave identically.
+Mega Man X4 keeps the random tape's existing 1.29.0 source-commit binding. The rename does not requalify that tape against 1.32.1.
+Existing setup and replay receipts remain immutable. The exact-profile admission check still rejects an older Mega Man X4 setup under the renamed profile.
+
+Primary metadata: [BizHawk's Mednafen update](https://github.com/TASEmulators/BizHawk/commit/cb3c7610d53bec2a82adc1c721ae5329557cd659).
+The release gitlinks are `ddf225cf63b7b355cb2ac7772450cf473f4b53ac` for 2.9.1 and `382ff1b8d293c9a862497706808cbb79b2cecbfb` for 2.10, 2.11 and 2.11.1.
+Tracking: PS1B-276. These identity facts do not replace source admission or gameplay qualification.

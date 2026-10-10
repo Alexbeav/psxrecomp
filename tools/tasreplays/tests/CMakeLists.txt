@@ -12,6 +12,8 @@ add_test(NAME tas_checkpoint_run_comparator COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_compare_checkpoint_runs.py")
 add_test(NAME tas_nymashock_admission COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock_admission.py")
+add_test(NAME tas_nymashock_selectors COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock_selectors.py")
 add_test(NAME tas_biohazard_adapter COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_biohazard.py")
 add_test(NAME tas_megamanx5_adapter COMMAND ${Python3_EXECUTABLE}
