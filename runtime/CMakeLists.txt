@@ -1723,7 +1723,8 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     # stages the cache tree, builds the fixture and the test, and runs it — so
     # register THAT rather than reimplementing its fixture staging here.
     if(UNIX)
-        find_program(BASH_EXECUTABLE bash)
+        include("${CMAKE_CURRENT_SOURCE_DIR}/host_bash.cmake")
+        psxrecomp_find_bash(BASH_EXECUTABLE _bash_launcher)
         if(BASH_EXECUTABLE)
             add_test(NAME overlay_posix_test
                      COMMAND ${BASH_EXECUTABLE}

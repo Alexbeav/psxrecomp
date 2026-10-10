@@ -9,7 +9,7 @@ substitutes an expected identity, and a container whose contents differ fails
 with the same error a wrong .cue produces. A non-.chd path is returned
 untouched, so .cue input keeps its current code path byte for byte.
 
-This module also holds the shared Git for Windows bash lookup used for
+This module uses tools/host_bash.py for the Git for Windows shell used for
 tools/bios_emitter_fingerprint.sh and the -D_psxrt_bash= CMake define.
 """
 from __future__ import annotations
@@ -20,6 +20,9 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import host_bash
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -29,9 +32,6 @@ CUE_FILE = re.compile(rb'FILE\s+"([^"\r\n]+)"\s+BINARY', re.I)
 CHDMAN_FALLBACKS = (ROOT / 'tools/mame-0.289/chdman.exe',
                     Path('D:/psxrecomp/tools/mame-0.289/chdman.exe'))
 # Git for Windows ships the MSYS bash at both of these, relative to its root.
-BASH_RELATIVE = ('bin/bash.exe', 'usr/bin/bash.exe')
-MSYSTEM_MARKER = re.compile(r'MINGW|MSYS|UCRT|CLANG', re.I)
-BASH_BUILD_MARKER = re.compile(r'msys|mingw', re.I)
 _bash = None
 
 
@@ -135,67 +135,17 @@ def resolve_disc(disc, *, cache=None, chdman=None, stem=None) -> Path:
 
 
 def is_msys_bash(path) -> bool:
-    """Reject WSL's C:\\Windows\\System32\\bash.exe and anything else non-MSYS."""
-    path = Path(path)
-    if not path.is_file():
-        return False
-    system = Path(os.environ.get('SystemRoot') or 'C:/Windows')
-    try:
-        if path.resolve().is_relative_to(system.resolve()):
-            return False
-    except OSError:
-        return False
-    for argv, marker in (([str(path), '-c', 'echo $MSYSTEM'], MSYSTEM_MARKER),
-                         ([str(path), '--version'], BASH_BUILD_MARKER)):
-        try:
-            output = subprocess.run(argv, capture_output=True, text=True,
-                                    errors='replace', timeout=60).stdout
-        except (OSError, subprocess.SubprocessError):
-            return False
-        if marker.search(output or ''):
-            return True
-    return False
-
-
-def bash_candidates() -> list[Path]:
-    """Git install roots, nearest first, as both bash locations under each."""
-    roots = []
-    try:
-        exec_path = subprocess.check_output(['git', '--exec-path'], text=True, timeout=60).strip()
-    except (OSError, subprocess.SubprocessError):
-        exec_path = ''
-    if exec_path:
-        # C:/Program Files/Git/mingw64/libexec/git-core -> .../Git
-        roots += list(Path(exec_path).parents)
-    found = shutil.which('git')
-    if found:
-        # Works from cmd/PowerShell (Git/cmd/git.exe) and from Git Bash, where
-        # git resolves to Git/mingw64/bin/git.exe and parents[1] is not the root.
-        parents = Path(found).resolve().parents
-        roots += [parents[index] for index in (1, 2) if index < len(parents)]
-    candidates = []
-    for root in roots:
-        for relative in BASH_RELATIVE:
-            candidate = root / relative
-            if candidate not in candidates:
-                candidates.append(candidate)
-    return candidates
+    """Compatibility adapter for the shared MSYS validation."""
+    return host_bash.is_msys_bash(str(path))
 
 
 def find_git_bash() -> Path:
-    """Git for Windows bash, for the BIOS fingerprint script and the CMake define."""
+    """Keep the replay API and cache; selection belongs to host_bash."""
     global _bash
-    if _bash is not None:
-        return _bash
-    explicit = os.environ.get('PSX_GIT_BASH')
-    if explicit:
-        if not is_msys_bash(explicit):
-            raise ValueError(f'PSX_GIT_BASH is not a Git for Windows bash.exe: {explicit}')
-        _bash = Path(explicit).resolve()
-        return _bash
-    for candidate in bash_candidates():
-        if is_msys_bash(candidate):
-            _bash = candidate.resolve()
-            return _bash
-    raise ValueError('Git for Windows bash is required for BIOS fingerprint verification; '
-                     'install Git for Windows or set PSX_GIT_BASH')
+    if _bash is None:
+        try:
+            _bash = Path(host_bash.find_bash("BIOS fingerprint verification",
+                                           windows=True, verify_msys=True)).resolve()
+        except AssertionError as exc:
+            raise ValueError(str(exc)) from exc
+    return _bash

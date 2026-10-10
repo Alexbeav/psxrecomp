@@ -17,6 +17,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import host_bash
 PACKAGER = ROOT / "tools" / "package_setup_host.sh"
 
 CASES = [
@@ -33,19 +35,10 @@ CASES = [
 
 
 def find_bash() -> str | None:
-    candidates = []
-    found = shutil.which("bash")
-    if found:
-        candidates.append(found)
-    if os.name == "nt":
-        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), r"C:\Program Files"):
-            candidates += [os.path.join(base, "Git", "usr", "bin", "bash.exe"),
-                           os.path.join(base, "Git", "bin", "bash.exe")]
-    for c in candidates:
-        # System32\bash.exe is the WSL launcher, not a shell for this repo's scripts.
-        if os.path.isfile(c) and "system32" not in c.lower():
-            return c
-    return None
+    try:
+        return host_bash.find_bash("the package BIOS hint test", verify_msys=True)
+    except AssertionError:
+        return None
 
 
 def shell_env(bash: str) -> dict:
