@@ -20,8 +20,8 @@ import program_set
 from setup_degrades import begin_degrades, record_degrade, finish_degrades
 
 
-def load_cli(path):
-    spec = importlib.util.spec_from_file_location('_cli_degrades_under_test', path)
+def load_cli(path, name='_cli_degrades_under_test'):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -479,12 +479,20 @@ class DegradeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--baseline-cli', type=Path)
+    baseline = parser.add_mutually_exclusive_group()
+    baseline.add_argument('--baseline-cli', type=Path)
+    baseline.add_argument('--baseline-report-helper', type=Path)
     args, rest = parser.parse_known_args()
     if args.baseline_cli:
         cli = load_cli(args.baseline_cli)
         suite = unittest.TestSuite([DegradeTests('test_actual_rebuild_result_reports_system_fallback'),
                                    DegradeTests('test_real_emitter_builder_and_set_root_toolchain_choices')])
+    elif args.baseline_report_helper:
+        helper = load_cli(args.baseline_report_helper, '_setup_degrades_baseline')
+        begin_degrades, record_degrade, finish_degrades = helper.begin_degrades, helper.record_degrade, helper.finish_degrades
+        suite = unittest.TestSuite([DegradeTests('test_producer_normalizes_controls_and_preserves_utf8_in_rows_events'),
+                                   DegradeTests('test_capacity_final_save_failure_retains_both_warning_rows_and_events'),
+                                   DegradeTests('test_native_reader_missing_invalid_incomplete_and_utf8_records')])
     else:
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(DegradeTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
