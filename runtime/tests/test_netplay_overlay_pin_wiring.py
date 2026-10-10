@@ -31,26 +31,22 @@ def body(signature: str) -> str:
     raise AssertionError(f"unterminated body: {signature}")
 
 
-# The counted pin: the first holder turns the native tier off and keeps what it
-# was; the last holder to let go puts that back.
-acquire = body("static void overlay_interp_pin_acquire(void) {")
-assert "s_overlay_interp_holders++ == 0" in acquire, "only the first holder may save and switch the tier"
-assert acquire.index("overlay_loader_get_native_exec()") < acquire.index("overlay_loader_set_native_exec(0)"), (
-    "the tier's state must be saved before it is turned off"
-)
-release = body("static void overlay_interp_pin_release(void) {")
-assert "--s_overlay_interp_holders > 0" in release, "the tier must stay off while another holder remains"
-assert "overlay_loader_set_native_exec(s_overlay_native_saved)" in release, "the last release must restore the saved state"
+# The loader now owns the counted pin and continuous witness (PS1B-238).
+# Executable authored loader controls test nesting, flags and admission.
+acquire = body("static bool overlay_interp_pin_acquire(unsigned kind) {")
+assert "overlay_loader_tier_hold(kind)" in acquire
+release = body("static void overlay_interp_pin_release(unsigned kind) {")
+assert "overlay_loader_tier_release(kind)" in release
 
 # The session's pin and its release each act once per session.
 pin = body("static void netplay_overlay_pin(void) {")
-assert "overlay_interp_pin_acquire();" in pin and "s_netplay_overlay_pinned = true;" in pin
-assert pin.index("if (s_netplay_overlay_pinned") < pin.index("overlay_interp_pin_acquire();"), (
+assert "s_netplay_overlay_pinned = overlay_interp_pin_acquire(OVERLAY_TIER_NETPLAY);" in pin
+assert pin.index("if (s_netplay_overlay_pinned") < pin.index("overlay_interp_pin_acquire(OVERLAY_TIER_NETPLAY)"), (
     "a second pin in one session must not take a second hold"
 )
 unpin = body("static void netplay_overlay_unpin(void) {")
-assert "overlay_interp_pin_release();" in unpin and "s_netplay_overlay_pinned = false;" in unpin
-assert unpin.index("if (!s_netplay_overlay_pinned)") < unpin.index("overlay_interp_pin_release();"), (
+assert "overlay_interp_pin_release(OVERLAY_TIER_NETPLAY);" in unpin and "s_netplay_overlay_pinned = false;" in unpin
+assert unpin.index("if (!s_netplay_overlay_pinned)") < unpin.index("overlay_interp_pin_release(OVERLAY_TIER_NETPLAY);"), (
     "shutdown runs more than once per match; only the first may release"
 )
 
@@ -85,11 +81,20 @@ for signature in (
 
 # A replay holds the same counted pin, so a replay and a session cannot undo
 # each other.
-replay_pin = body("static void replay_overlay_pin(void) {")
-assert "overlay_interp_pin_acquire();" in replay_pin, "the replay pin must use the counted pin"
+replay_pin = body("static bool replay_overlay_pin(void) {")
+assert "overlay_interp_pin_acquire(OVERLAY_TIER_REPLAY)" in replay_pin, "the replay pin must use the counted pin"
 assert "overlay_loader_set_native_exec(" not in replay_pin, "the replay pin must not switch the tier by itself"
-replay_unpin = body("static void replay_overlay_unpin_if_idle(void) {")
-assert "overlay_interp_pin_release();" in replay_unpin, "the replay unpin must use the counted pin"
+replay_unpin = body("static void replay_overlay_unpin(void) {")
+assert "overlay_interp_pin_release(OVERLAY_TIER_REPLAY);" in replay_unpin, "the replay unpin must use the counted pin"
 assert "overlay_loader_set_native_exec(" not in replay_unpin, "the replay unpin must not switch the tier by itself"
+assert "replay_overlay_unpin();" in body("static void replay_overlay_unpin_if_idle(void) {")
+for signature, request in (
+    ('extern "C" int replay_host_request_anchor(void) {', "savestate_request_anchor()"),
+    ('extern "C" int replay_host_load_anchor(const void *data, size_t size) {',
+     "savestate_request_load_blob_quiet(data, size)"),
+):
+    anchor = body(signature)
+    assert anchor.index("replay_overlay_pin()") < anchor.index(request)
+    assert "if (!held) replay_overlay_unpin();" in anchor
 
 print("netplay overlay pin wiring test: PASS")

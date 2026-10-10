@@ -88,10 +88,8 @@ def main() -> int:
                    'PSX_DIAGNOSTIC_MARKER "diagnostic-mode.txt"', 'PSX_DIAGNOSTIC_DIR_NAME "build-diagnostic"',
                    '"--collect-diagnostics"', 'diagnostic_build_present', 'diagnostic_mode_requested',
                    'if (strcmp(argv[i], "--diagnostic") == 0)',
-                   # The helper bat belongs beside the product it builds, and the
-                   # forward path must start it itself: relaunch_or_exit takes the
+                   # The forward path must start the helper itself: relaunch_or_exit takes the
                    # launcher UI's path, which no launcher has set there.
-                   'want_diagnostic ? diag_dir : g_build_dir',
                    'host_start_helper_and_exit(built)'):
         assert needle in host_text, f"host lacks the diagnostic-mode contract: {needle}"
     ui = find_recomp_ui()
@@ -109,14 +107,15 @@ def main() -> int:
         probe_c.write_text(PROBE, encoding="utf-8")
         exe = tmp / ("probe.exe" if os.name == "nt" else "probe")
         framework = "framework checkout"
+        # The host uses POSIX APIs whose declarations strict C11 hides on glibc.
         build = subprocess.run(
-            [cc, "-std=c11", "-o", str(exe), str(probe_c), str(HOST_C),
+            [cc, "-std=gnu11", "-o", str(exe), str(probe_c), str(HOST_C),
              '-DPSX_SETUP_BIOS_STEMS="OpenBIOS|SCPH5552"',
              f'-DPSX_SETUP_FRAMEWORK_REL="{framework}"',
              "-I", str(ROOT / "host"),
              "-I", str(ROOT / "runtime" / "include"),
              "-I", str(ui / "src"), "-I", str(ui / "src" / "common")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         if build.returncode != 0:
             print("FAIL: could not build probe\n" + build.stderr[-2000:])
             return 1
@@ -143,7 +142,8 @@ def main() -> int:
             project = tmp / f"case{index}"
             make_project(project, artefacts, framework, descriptor)
             env = dict(os.environ, PSXRECOMP_PROJECT_ROOT=str(project))
-            run = subprocess.run([str(exe)], capture_output=True, text=True, env=env)
+            run = subprocess.run([str(exe)], capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", env=env)
             got = run.stdout.strip()
             if got != str(expected):
                 print("FAIL: %s\n  artefacts=%s expected=%s got=%r"

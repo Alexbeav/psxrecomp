@@ -56,6 +56,29 @@ void overlay_loader_set_native_exec(int on);
 int  overlay_loader_get_native_exec(void);
 int  overlay_loader_load_frozen(void);
 
+/* PS1B-238(a): emulation-thread protection shared by replay and netplay.
+ * The last release restores native execution and removes only its own load
+ * freeze. The independent selfcheck freeze remains under its original owner.
+ * Diagnostic no-pin runs remain unprotected and must say so in their evidence. */
+enum { OVERLAY_TIER_REPLAY = 0, OVERLAY_TIER_NETPLAY = 1 };
+typedef struct OverlayTierWitness {
+    uint32_t holders[2];
+    uint32_t native_exec, load_frozen, candidates, dlls;
+    uint64_t native_entries, intervals, admission_checks, blocked_admissions;
+    uint64_t dispatch_checks, blocked_dispatches, blocked_flag_changes;
+    uint64_t begin_frame, begin_cycle, end_frame, end_cycle;
+    uint64_t begin_native_entries, end_native_entries;
+    uint32_t begin_candidates, end_candidates, begin_dlls, end_dlls;
+    uint64_t first_violation_frame, first_violation_cycle;
+    uint32_t first_violation_pc, violations, overflow;
+} OverlayTierWitness;
+int overlay_loader_tier_hold(unsigned kind);
+void overlay_loader_tier_release(unsigned kind);
+void overlay_loader_tier_witness(OverlayTierWitness *out);
+/* One compact JSON object, also used by the final run report. Returns 0 when
+ * the buffer cannot hold it; no partial object is accepted as evidence. */
+int overlay_loader_tier_witness_json(char *out, int cap);
+
 /* Drop the negative lazy-lookup memo (host-only). Call on snap restore so
  * resim#1 and resim#2 take the same dispatch path. */
 void overlay_loader_clear_lazy_miss(void);

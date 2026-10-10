@@ -1,9 +1,10 @@
 name: TAS replay source checks
 on:
+  # 2026-09-28: those three branches were dead refs - the default branch is main - so this
+  # workflow never ran on a push or PR and only ever ran by hand. Point it at real refs.
   pull_request:
-    branches: [master, tasreplays, "codex/tas-upstream-integration-20260913"]
   push:
-    branches: [master, tasreplays, "codex/tas-upstream-integration-20260913"]
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,6 +19,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-git
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-python

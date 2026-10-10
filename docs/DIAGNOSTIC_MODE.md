@@ -91,6 +91,10 @@ The diagnostic product can record what you play as a frame-exact input route
   --diagnostic-dir build-diagnostic` on both the Windows deferred-helper route
   and the POSIX route, because setup pruned the normal product's intermediates
   and the player may have optimised it with PGO since.
+- On Windows, ordinary and diagnostic rebuild helpers use separate files in
+  the project's private `_scratch` directory. Configure can replace either
+  build directory. The host refuses a build directory that contains `_scratch`
+  before writing a helper; choose a different build directory in that case.
 - `--setup-selfcheck` reports `diagnostic_build_present` and
   `diagnostic_mode_requested`, so a kit's diagnostic readiness is scriptable.
 - A diagnostic build failure never removes the normal product. In the
@@ -101,4 +105,39 @@ The diagnostic product can record what you play as a frame-exact input route
   both products; the collector's include and exclude lists),
   `runtime/tests/test_cli_diagnostic_only.py` (a diagnostic request leaves the
   normal build directory unchanged, with or without PGO enabled) and
-  `runtime/tests/test_codegen_host_bios_stems.py` (host contract strings).
+  `runtime/tests/test_codegen_host_bios_stems.py` (host contract strings) and
+  `runtime/tests/test_windows_rebuild_helper.py` (native Windows helper survival
+  and refusal before writing when build paths overlap; skipped on other hosts).
+
+### Freeze dumps
+
+The diagnostic product's heartbeat writes a full dump
+(`psx_freeze_dump_*.json`, tens of megabytes) when it sees a wedge. The dumps
+of one process are bounded.
+
+- There are two slots: one for a hard freeze (the frame count stands still),
+  one for every other wedge (a re-entry storm, slow frames, a spin).
+- A slot that was used is free again after 60 healthy seconds in a row, once.
+  So the slow frames of a startup do not silence a wedge later in the run. One
+  process writes at most four automatic dumps.
+- `psx_freeze_heartbeat.json` reports the count: `automatic_freeze_dumps`,
+  `suppressed_freeze_events`, `refilled_freeze_dump_slots` and
+  `automatic_freeze_dump_limit`.
+- The spin class (`wedge_kind` 5) means: frames arrive, and the executing
+  function, the last store address and the interpreted instruction count are
+  the same in every heartbeat sample for 4 seconds, with no video decode in
+  that time. A wait that ends sooner is not a freeze and writes no dump.
+  `spin_pinned_ticks` is the number of samples in a row that hold the same
+  three values now. `spin_waits_ended` counts each time they stood still for
+  2 seconds or more and moved again before 4; it does not look at the frame
+  rate or at video, so a short still inside a video counts too.
+- `PSX_DUMP_AT_FRAME=<n>` asks for one more dump, at the first heartbeat sample
+  whose frame count is `n` or more. It needs no slot and uses none. Its
+  `wedge_kind` is 6 (`requested`), and its `frame_count` is the frame it was
+  taken at. The heartbeat reports `requested_dump_frame` and `requested_dumps`.
+- The replay harness starts the runtime without the shell's `PSX_*` variables.
+  Ask a replay for the dump with `--dump-at-frame <n>` (every title command,
+  and `tools/tasreplays/run_native.py`); the run's `manifest.json` records it.
+- Regression coverage: `runtime/tests/test_freeze_dump_policy.c`,
+  `runtime/tests/test_freeze_heartbeat_wedge.c` and
+  `tools/tasreplays/test_dump_at_frame.py`.

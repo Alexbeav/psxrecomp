@@ -106,6 +106,14 @@ if [[ -f "${pin_file}" ]] && ! grep -Eqx '[0-9a-f]{40}' "${pin_file}"; then
   fi
 fi
 
+# Preserve the corresponding source tree in a checkout-based export too.
+tree_file="${DEST}/runtime/FRAMEWORK_TREE"
+if [[ -f "${tree_file}" ]] && ! grep -Eqx '[0-9a-f]{40}' "${tree_file}"; then
+  if tree="$(git -C "${SRC}" rev-parse 'HEAD^{tree}' 2>/dev/null)" && [[ "${tree}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "${tree}" > "${tree_file}"
+  fi
+fi
+
 # The emitters are built from this copy, so a header the build includes must
 # not depend on the filter list being right. Check the vendored generated
 # headers directly: they are the ones an unanchored exclude eats, and their

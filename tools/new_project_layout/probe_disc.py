@@ -187,13 +187,24 @@ def first_binary_bin(cue_path: Path, files_order: list[str], tracks: list[CueTra
     return resolve_cue_file(cue_path, name)
 
 
-def compute_disc_fp(cue_path: Path, tracks: list[CueTrack], files_order: list[str]) -> str:
-    """Match runtime disc_identity.cpp psxrecomp-toc-v1 SHA-256."""
+def toc_canonical(cue_path: Path, tracks: list[CueTrack], files_order: list[str],
+                  sizes: dict[str, int] | None = None) -> str:
+    """The psxrecomp-toc-v1 text of a cue: the track count, the lead-out, and
+    each track's type, start and pregap. Its SHA-256 is the fingerprint.
+
+    ``sizes`` gives the byte size of each FILE by its name in the cue. With it
+    no file is looked up, so a track table that is not on disk as a cue and
+    its files (a CHD's) gets the text of the cue it stands for.
+    """
     next_lba = 0
     file_start: dict[str, int] = {}
     for name in files_order:
-        path = resolve_cue_file(cue_path, name)
-        size = path.stat().st_size
+        if sizes is not None:
+            path = Path(name)
+            size = int(sizes[name])
+        else:
+            path = resolve_cue_file(cue_path, name)
+            size = path.stat().st_size
         raw = size % DST_SEC == 0 and size > 0
         sec = DST_SEC if raw else USER
         if size % sec != 0:
@@ -219,7 +230,13 @@ def compute_disc_fp(cue_path: Path, tracks: list[CueTrack], files_order: list[st
         lines.append(
             f"t={t.number},a={audio},start={start},pregap={pregap}\n"
         )
-    canonical = "".join(lines)
+    return "".join(lines)
+
+
+def compute_disc_fp(cue_path: Path, tracks: list[CueTrack], files_order: list[str],
+                    sizes: dict[str, int] | None = None) -> str:
+    """Match runtime disc_identity.cpp psxrecomp-toc-v1 SHA-256."""
+    canonical = toc_canonical(cue_path, tracks, files_order, sizes)
     return hashlib.sha256(canonical.encode("ascii")).hexdigest()
 
 

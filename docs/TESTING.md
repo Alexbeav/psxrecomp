@@ -2,6 +2,33 @@
 
 ## Running the tests
 
+The tool gate needs Python 3.11 or newer. Four GPU-frame image tests also need
+NumPy and Pillow. If either package is absent, those four cases report the
+missing package and skip; the other 23 GPU-frame cases still run. This is reduced
+image coverage. For the complete gate, install the pinned wheels in an owned
+Python environment before configuring CMake:
+
+```powershell
+python -m pip install --require-hashes --only-binary=:all: -r tools/tests/requirements.txt
+```
+
+The recompiler tree registers the ten tool suites reported in PS1B-476 and
+the complete oracle suite from PS1B-375. `tools_psx_chd` uses the shared `chdr`
+target from that build. Build the target before running the suite. A build
+with `PSXRECOMP_ENABLE_CHD=OFF` omits that entry and does not qualify CHD checks.
+The entries use `unittest discover` with an exact file pattern, so a file that
+defines test classes without a direct script entry point still runs its tests.
+Directly executing such a file can exit successfully without running a case;
+the former cursor-writer registration did that with all 29 cases. The entries
+reject zero-test results. Suites other than `tools_gpu_frame` also reject skipped
+cases. The
+`tools_ctest_registration` check reads the generated CTest commands and
+properties. A name in a CMake comment does not satisfy it.
+It finds CTest at the configured path, then on `PATH`. If neither is available,
+that check reports the missing executable and skips with return code 77. An
+available CTest that fails remains a test failure. Report this skipped check
+and reduced image coverage separately from a complete gate.
+
 The Python `public_commit_guard` test uses isolated local Git repositories and a
 local mock SSH transport. It contacts no public remote. It needs Git and Python;
 the [public push policy](PUBLIC_PUSH_POLICY.md) describes the separate stage check
@@ -75,19 +102,58 @@ and catch whole regression classes without running a game. Registered from
 runtime tree cannot configure until a BIOS has been generated, and these need
 neither.
 
-## Known-failing tests (not registered)
+## Kernel-table capacity without BIOS data
 
-Three tests exist and are **deliberately left out of `ctest`** because they fail
-today. They are not registered because a suite with a known-red test is a suite
-people stop believing — the exact failure mode that took CI off pull requests in
-the first place (see `.github/workflows/cli-release.yml`). Fix or retire them,
-then wire them in.
+The recompiler's `kbless_capacity_synthetic` test invokes its built
+`psxrecomp-bios` on a wholly authored image. It creates three return functions
+in a zero-filled image, its own discovery roots and an isolated profile. The
+real emitter must produce a nonempty kernel-body table with the expected
+relocated extents and matching row, array and enum counts. No checkout BIOS
+profile or seed file supplies that fixture.
+
+The test runs the existing runtime capacity guard on that emitted table. It
+checks the actual capacity header, the exact headroom boundary, one row beyond
+that boundary and an overflow. Boundary headers are authored controls; their
+values derive from the actual emitted count and the guard's headroom policy.
+The production capacity and emitter remain unchanged. A missing emitter,
+malformed output or failed generation fails the test. It has no skip property.
+
+Unique input/output/provenance directories remain below the configured build's
+`kbless-synthetic-evidence` directory. The receipt binds input, output and tool
+file hashes. The build and execution records must establish which source
+produced that tool; its file hash alone does not prove a source binding.
+
+The runtime's real-profile guard retains its exit77 when no generated BIOS
+tables exist. That skip remains unqualified real-profile coverage. The
+synthetic test checks the emitter's counting and capacity rules; it cannot prove
+that current retail profiles fit. PS1B-308's six methods, fixture generation and
+native execution are unrun until admitted validation.
+
+## Disabled performance guards
+
+`recompiler/CMakeLists.txt` registers the performance guards with `DISABLED TRUE`.
+CTest lists them and reports them as disabled. This preserves the known failures;
+it does not count as a pass. Keep them disabled until an admitted run proves the
+checks pass. A source edit or syntax check is not that evidence.
 
 | Test | Status |
 |---|---|
-| `runtime/tests/test_interpreter_perf_guards.py` | Asserts `psx_devices_mmio_sync` invalidates the inline cycle limit. It does not: the function delegates to `psx_devices_service_to_now()` (which clears `g_psx_cycle_fast_limit`, `psx_cycles.c:161`) **or** to `psx_devices_recompute_deadline()` (`:153-157`), and that second branch never clears it. Needs a timing owner to decide whether the guard found a real hole or the invariant moved. The guard is also partly stale — it still names `s_next_service_cycle`, since renamed to `psx_next_service_cycle`. |
-| `runtime/tests/test_runtime_perf_diag_guards.py` | Asserts a substring that is no longer present in the runtime source. Either the diagnostic was removed or it was renamed; the guard has not been updated either way. |
-| `runtime/tests/test_overlay_pair_dedup_runtime.py` | Needs its companion harness (`overlay_pair_dedup_harness.c`) built. Unlike the other Python tests it is not source-only, so it needs a build target before it can be registered. |
+| `runtime/tests/test_interpreter_perf_guards.py` | Disabled and unchanged. MMIO synchronization can recompute the device deadline without directly clearing `g_psx_cycle_fast_limit`. The guard also names the legacy `s_next_service_cycle` alias. A timing owner must resolve the invalidation requirement. Source inspection alone does not prove an active production defect. |
+| `runtime/tests/test_runtime_perf_diag_guards.py` | Disabled. The retained failure searched for `frame_pacer_wait(&pacer, g_frame_period_ms)`. PS1B-176 changes that name to the current `s_frame_pacer`, preserving the other checks. This source correction has not passed an admitted run. |
+| `runtime/tests/test_runtime_perf_diag_guard_controls.py` | Disabled. One current-source positive and twelve deliberate source defects exercise the actual guard. The defects cover opt-in gates, cadence, exact guest-frame boundaries, a one-shot summary, provider timing and counters, and forbidden telemetry in hot paths. All thirteen methods are unrun. |
+
+`overlay_pair_dedup_runtime` is in the normal enabled registration list. Its
+companion harness now supplies the step-boundary functions. Its historical link
+failure does not make it one of the currently disabled guards.
+
+After execution admission, run the guard and its controls directly through the
+qualified runner. The controls also accept `--baseline-guard` with a byte-exact
+copy of the guard from accepted commit `79434620340b8b0e347ac8d4e43e93cb3210fad5`.
+That baseline against current source must fail, including the current-source
+positive. A baseline failure alone does not prove the corrected candidate passes.
+The controls copy only these public runtime source files into a temporary fixture;
+they do not compile or run the runtime. Their source checks do not prove runtime
+timing or performance.
 
 ## Tests that are not in `ctest` and should not be
 

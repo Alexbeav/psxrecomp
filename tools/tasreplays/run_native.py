@@ -227,7 +227,7 @@ def main():
     for name in ("exe", "game", "route", "disc", "bios"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument('--card1', type=Path, help='raw initial card1; staged as a fresh writable copy and verified in the loaded peripheral')
-    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0'), default='default')
+    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0','nymashock-1.32.1'), default='default')
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--speed", choices=("1", "2", "4", "8", "16", "32", "64", "max"), default="1",
@@ -260,6 +260,9 @@ def main():
                         help='negative control: corrupt exactly one restored field '
                              '(raster_fraction, raster_cycle, raster_rises, '
                              'service_cycle, service_frame_returns, service_budget)')
+    parser.add_argument('--dump-at-frame', type=int, metavar='FRAME',
+                        help='diagnostic: one full freeze dump at the first heartbeat sample at or after this frame '
+                             '(PSX_DUMP_AT_FRAME); it needs no automatic dump slot and a diagnostic product')
     parser.add_argument('--storage-budget-mib',type=int,help='Stop with host_storage_budget if diagnostic output exceeds this bound')
     parser.add_argument('--expected-exe-sha256',help='refuse to launch unless the staged executable copy has exactly this SHA-256')
     parser.add_argument("--watch-u16", type=lambda x: int(x, 0), action="append", default=[],
@@ -288,14 +291,14 @@ def main():
                         metavar=("LOW", "HIGH"), help="record existing RAM reads in physical [LOW,HIGH)")
     parser.add_argument("--cd-read-start-model", choices=("default", "octoshock-2.2.2-pipeline"), default="default",
                         help="explicit source-core pipeline comparison; not full timing compatibility")
-    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0','octoshock-2.7'),default='default',
+    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0','nymashock-1.32.1','octoshock-2.7'),default='default',
                         help='experimental Nymashock drive head, seek, Pause and Reset timing; octoshock-2.7 is '
                              'the same drive with the MSVC order of the Reset random draws')
     parser.add_argument('--cd-source-clock-tape', type=Path,
                         help='experimental command/seek clock using an immutable raw random-word tape')
     parser.add_argument('--cd-cdda-model',choices=('default','octoshock-2.3'),default='default',
                         help='source CDDA single-speed seek, two-sector pipe and report ownership')
-    parser.add_argument('--mdec-source-model',choices=('default','octoshock-2.3','nymashock-1.29.0'),default='default',
+    parser.add_argument('--mdec-source-model',choices=('default','octoshock-2.3','nymashock-1.29.0','nymashock-1.32.1'),default='default',
                         help='source MDEC FIFO/work and request DMA model; color output only')
     parser.add_argument('--cd-dma-model',choices=('default','octoshock-2.2.2'),default='default',
                         help='experimental manual CD DMA service and CPU wait; cold boot only')
@@ -317,7 +320,7 @@ def main():
                         help='source GPUSTAT field/line bits only; requires the NTSC raster clock')
     parser.add_argument("--legacy-card-repair", choices=("default", "off"), default="default",
                         help="Disable inherited global Ape Escape fixed-address card repair explicitly")
-    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock"), default="default",
+    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock", "nymashock-1.32.1-dualshock"), default="default",
                         help="Experimental source pad ACK delay/pulse; checkpoints retain the pad, DualShock and card state")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
                         help="experimental source OTC service and CPU-wait rule; cold boot only")
@@ -372,6 +375,8 @@ def main():
         raise ValueError("checkpoint interval outside 1..10000")
     if args.storage_budget_mib is not None and not 1<=args.storage_budget_mib<=16384:
         raise ValueError('storage budget must be in 1..16384 MiB')
+    if args.dump_at_frame is not None and args.dump_at_frame < 1:
+        raise ValueError('dump-at-frame must be a frame count of 1 or more')
     if args.expected_exe_sha256 is not None:
         args.expected_exe_sha256=args.expected_exe_sha256.lower()
         if len(args.expected_exe_sha256)!=64 or any(c not in '0123456789abcdef' for c in args.expected_exe_sha256):
@@ -416,8 +421,8 @@ def main():
         raise ValueError('DualShock does not admit retiming or the digital Octoshock ACK model')
     initial_card = None
     if args.card1:
-        if args.card_model != 'nymashock-1.29.0' or args.legacy_card_repair != 'off':
-            raise ValueError('card replay requires the qualified explicit card model and legacy repair off')
+        if args.card_model not in ('nymashock-1.29.0','nymashock-1.32.1') or args.legacy_card_repair != 'off':
+            raise ValueError('card replay requires an explicit source card model and legacy repair off')
         paths['card1'] = args.card1.resolve(strict=True)
         initial_card = card_identity(paths['card1'])
     elif args.card_model != 'default':
@@ -572,6 +577,9 @@ def main():
         selected_env['PSX_TAS_PERTURB_RESTORE'] = args.perturb_restore
     if args.e_survey:
         selected_env['PSX_E_SURVEY'] = '1'
+    if args.dump_at_frame is not None:
+        # The shell's own PSX_DUMP_AT_FRAME was removed above with the rest; only this option sets it.
+        selected_env['PSX_DUMP_AT_FRAME'] = str(args.dump_at_frame)
     if args.gpu_dma_model!='default':
         selected_env['PSX_GPU_DMA_MODEL']=args.gpu_dma_model
     if args.legacy_card_repair == "off":

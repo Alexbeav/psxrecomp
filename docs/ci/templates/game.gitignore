@@ -8,6 +8,9 @@
 /out/
 /.happypath/
 
+# Setup-host rebuild helpers contain local paths and survive build-dir replacement.
+/_scratch/
+
 # Setup-host: leave generated/ gitignored (users generate locally).
 # Titles that still CI-build from committed game C may track generated/ instead.
 /generated/

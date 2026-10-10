@@ -30,7 +30,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FLOOR = (3, 9)
-SEARCH = (ROOT, ROOT / "tools")
+# tools/new_project_layout: the CLI's disc check imports probe_disc from there
+# (tools/disc_track_list.py puts the folder on sys.path), on every generate.
+SEARCH = (ROOT, ROOT / "tools", ROOT / "tools" / "new_project_layout")
 
 TYPE_NAMES = {
     "None", "str", "int", "float", "bytes", "bool", "list", "dict", "tuple",

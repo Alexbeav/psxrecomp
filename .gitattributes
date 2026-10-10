@@ -18,3 +18,4 @@ tools/licenses/LGPL-2.1.txt text eol=lf
 # git archive writes the commit here, so a snapshot with no .git still knows
 # its framework pin (runtime/framework_identity.cmake).
 runtime/FRAMEWORK_PIN export-subst text eol=lf
+runtime/FRAMEWORK_TREE export-subst text eol=lf

@@ -60,6 +60,8 @@ static void selection_rows(void) {
     CHECK(!source_drive_head_valid && source_drive_head_lba==0 && source_drive_head_target==0 &&
           source_drive_head_due==0 && !source_drive_hold_logical && !source_reset_phase &&
           source_drive_subq_lba==-1,"S5: start state of the seven drive values");
+    select_drive("nymashock-1.32.1");
+    CHECK(s_nymashock_drive==1 && s_cd_reset_seek_draw_first==0,"BizHawk 2.10+ selector admits the existing candidate drive");
     select_drive("octoshock-2.7");
     CHECK(s_nymashock_drive==1 && s_cd_reset_seek_draw_first==1,"S3: octoshock-2.7 takes the jitter draw first");
 }

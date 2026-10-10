@@ -49,7 +49,7 @@ def arch_abi() -> str:
 
 
 def run(command: list[str], *, cwd: pathlib.Path | None = None) -> None:
-    result = subprocess.run(command, cwd=cwd, text=True, encoding="utf-8",
+    result = subprocess.run(command, cwd=cwd, text=True, encoding="utf-8", errors="replace",
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
         raise RuntimeError(

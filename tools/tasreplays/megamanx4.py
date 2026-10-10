@@ -1,7 +1,7 @@
 """Build the exact Mega Man X4 (USA) Training X candidate after source admission.
 
-Runtime models below are explicit comparison candidates. Their older profile
-names do not establish Nymashock equivalence; source RAM/clock checks do that.
+Runtime models below are explicit comparison candidates. Their names identify
+the BizHawk 2.10 core. This rename does not establish core equivalence.
 """
 from pathlib import Path
 import argparse,hashlib,json,os,re,shutil,struct,subprocess,sys
@@ -35,13 +35,13 @@ PROFILE=[
     '--critical-section-model','exception','--syscall-model','guest-exception',
     '--field-model','octoshock-2.2.2-ntsc-raster',
     '--dma-model','octoshock-2.2.2-otc',
-    '--pad-ack-model','nymashock-1.29.0-dualshock',
-    '--card-model','nymashock-1.29.0','--legacy-card-repair','off',
+    '--pad-ack-model','nymashock-1.32.1-dualshock',
+    '--card-model','nymashock-1.32.1','--legacy-card-repair','off',
     '--cd-firmware-model','octoshock-2.2.2','--cd-cold-status-model','octoshock-2.2.2',
     '--cd-toc-seek-model','octoshock-2.2.2','--cd-explicit-seek-model','octoshock-2.2.2',
     '--cd-read-start-model','octoshock-2.2.2-pipeline','--cd-dma-model','octoshock-2.2.2',
-    '--cd-drive-model','nymashock-1.29.0',
-    '--cd-cdda-model','octoshock-2.3','--mdec-source-model','nymashock-1.29.0',
+    '--cd-drive-model','nymashock-1.32.1',
+    '--cd-cdda-model','octoshock-2.3','--mdec-source-model','nymashock-1.32.1',
     '--gpu-status-model','octoshock-2.2.2-raster','--gpu-dma-model','octoshock-2.2.2-bounded-quad',
     '--timer1-model','octoshock-2.2.2','--timer2-model','octoshock-2.2.2',
     '--precise-slice','on','--cpu-return-probe','--ram-page-probe',

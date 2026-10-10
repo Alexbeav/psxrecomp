@@ -929,7 +929,8 @@ static int sio_ack_visible_reads = 0;
 
 void sio_init(void) {
     const char *card_model = getenv("PSX_INPUT_ROUTE_CARD_MODEL");
-    sio_source_card = card_model && !strcmp(card_model, "nymashock-1.29.0");
+    sio_source_card = card_model && (!strcmp(card_model, "nymashock-1.29.0") ||
+                                      !strcmp(card_model, "nymashock-1.32.1"));
     if (card_model && *card_model && !sio_source_card) {
         fprintf(stderr, "Unsupported input route card model: %s\n", card_model);
         abort();
@@ -940,7 +941,8 @@ void sio_init(void) {
 #if SIO_MODEL_CYCLE_PACED
     const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
     sio_source_pad_ack = ack_model && strcmp(ack_model, "octoshock-2.2.2-digital") == 0;
-    if (ack_model && !strcmp(ack_model, "nymashock-1.29.0-dualshock")) sio_source_pad_ack = 2;
+    if (ack_model && (!strcmp(ack_model, "nymashock-1.29.0-dualshock") ||
+                      !strcmp(ack_model, "nymashock-1.32.1-dualshock"))) sio_source_pad_ack = 2;
     if (ack_model && *ack_model && !sio_source_pad_ack) {
         fprintf(stderr, "Unsupported input route pad ACK model: %s\n", ack_model);
         abort();

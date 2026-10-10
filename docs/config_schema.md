@@ -65,6 +65,29 @@ How the two configs relate:
 exact revision coverage, and preparation receipts. No SBI configuration key
 is required.
 
+### The later tracks at setup (`track_list_mismatch`)
+
+The digests do not cover a later track (CD audio). Setup therefore also
+compares the track list of the selected disc with the kit's own: `[netplay]`
+`required_disc_fp` (and every entry of `required_disc_fps`), or
+`required_tracks` and `required_leadout_lba` when the kit gives no
+fingerprint. It reads a `.cue` with its files, a `.chd` by its track table,
+and a file selected without a `.cue` as one track. A kit with none of these
+keys is not checked.
+
+| Field | Default | Description |
+|---|---|---|
+| `track_list_mismatch` | `"warn"` | What setup does when the data track is right and the track list is not the kit's: a later track is missing, cut short or longer, or the `.cue` is another disc's. `"warn"` accepts the disc and logs one line that begins `Track list:`. `"refuse"` ends the check as a wrong data track does (exit 3), with the same sentence. Any other value counts as `"warn"` and logs a `KIT FAULT:` line. |
+
+Every check writes one row `{"event":"track_list","status":...}` to the JSON
+progress stream: `match`, `mismatch` (with `detail` and `sentence`) or
+`not_checked` (with `reason`). `verify-disc` repeats it in its result row.
+
+The track list holds lengths and positions, not content. A later track with
+the right length and other bytes passes. `--skip-hash-check` skips this check
+too. `"warn"` changes the verdict of no disc; before a kit is set to
+`"refuse"`, run the check over the discs that the kit must accept.
+
 ## Netplay disc mount (`[netplay]`)
 
 Optional. Online play needs the same CD geometry on every peer — data-track
