@@ -102,6 +102,33 @@ and catch whole regression classes without running a game. Registered from
 runtime tree cannot configure until a BIOS has been generated, and these need
 neither.
 
+## Kernel-table capacity without BIOS data
+
+The recompiler's `kbless_capacity_synthetic` test invokes its built
+`psxrecomp-bios` on a wholly authored image. It creates three return functions
+in a zero-filled image, its own discovery roots and an isolated profile. The
+real emitter must produce a nonempty kernel-body table with the expected
+relocated extents and matching row, array and enum counts. No checkout BIOS
+profile or seed file supplies that fixture.
+
+The test runs the existing runtime capacity guard on that emitted table. It
+checks the actual capacity header, the exact headroom boundary, one row beyond
+that boundary and an overflow. Boundary headers are authored controls; their
+values derive from the actual emitted count and the guard's headroom policy.
+The production capacity and emitter remain unchanged. A missing emitter,
+malformed output or failed generation fails the test. It has no skip property.
+
+Unique input/output/provenance directories remain below the configured build's
+`kbless-synthetic-evidence` directory. The receipt binds input, output and tool
+file hashes. The build and execution records must establish which source
+produced that tool; its file hash alone does not prove a source binding.
+
+The runtime's real-profile guard retains its exit77 when no generated BIOS
+tables exist. That skip remains unqualified real-profile coverage. The
+synthetic test checks the emitter's counting and capacity rules; it cannot prove
+that current retail profiles fit. PS1B-308's six methods, fixture generation and
+native execution are unrun until admitted validation.
+
 ## Known-failing tests (not registered)
 
 Three tests exist and are **deliberately left out of `ctest`** because they fail
