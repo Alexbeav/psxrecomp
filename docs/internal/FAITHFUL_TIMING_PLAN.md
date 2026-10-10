@@ -1327,3 +1327,13 @@ on a fixed region -> next.
   so its five-player golden values were refreshed after the unchanged stage
   passed the old values as a control. Two-player values remain frozen. Independent review,
   fork CI and the seven Tier 1 trial routes remain separate acceptance work.
+
+- **2026-10-09 (PS1B-479):** MDEC snapshot prepare and read reserve the
+  larger of the saved input count and the command's expected input length.
+  Parsing refuses expected input lengths above the existing snapshot limit.
+  Output positions remain bounded by the saved output size, and output writes
+  retain their capacity checks. The authored `mdec_snapshot_capacity_test`
+  compares a resumed command with uninterrupted execution through MMIO and DMA,
+  with and without prepare. It also checks invalid lengths and output bounds.
+  The parent fails its capacity assertion before a continued write.
+  Retail state loading, independent review and fork CI remain separate checks.

@@ -41,6 +41,12 @@ Boot-state format **v10** requires a 580-byte CPU section, a 36-byte CPU_EXEC
 section, a 16-byte SPU sample-clock extension, and MDEC snapshot version 2.
 It rejects earlier boot states and player save slots.
 
+MDEC restore reserves input storage for both the saved data and the rest of
+the active command. It refuses an expected input length above the existing
+snapshot input limit. It also refuses an output position beyond the saved
+output size. Output storage covers that size before the saved bytes are read.
+These bounds apply to both prepare and read without changing the wire format.
+
 v10 is the merge of two lineages that both numbered their formats v6-v9 with
 different contents: the resume lineage (`pegasus-codex/biohazard-resume-20260913`)
 and upstream (per-word DMA2 linked-list progress, XA DATA_END, and the optional
