@@ -285,12 +285,12 @@ static void rasterize_panel(void)
 
     fill_rect(s_panel, 0, 0, SSM_W, 46, 0xFF171B25u);
     draw_text(s_panel, 24, 14, s_replays ? "REPLAYS" : "SAVE STATES", 0xFFFFD24Du, 2);
-    draw_text(s_panel, 330, 18, s_replays ? "TAB / L1 R1: STATES" : "TAB / L1 R1: REPLAYS",
+    draw_text(s_panel, 330, 32, s_replays ? "TAB / L1 R1: STATES" : "TAB / L1 R1: REPLAYS",
               0xFF7F8796u, 1);
     host_keymap_label(HOST_KEYMAP_SAVE_STATE_MENU, key, sizeof(key));
     snprintf(buf, sizeof(buf), "%s MENU",
              key[0] ? key : "F7");
-    draw_text(s_panel, 432, 18, buf, 0xFFB8BDC8u, 1);
+    draw_text(s_panel, SSM_W - 24 - (int)strlen(buf) * 8, 18, buf, 0xFFB8BDC8u, 1);
 
     if (s_replays) refresh_replay_info();
     else refresh_thumbs();
