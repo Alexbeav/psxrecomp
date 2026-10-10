@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 project(psxrecomp-runtime C CXX)
 include(CTest)
 
@@ -119,6 +119,18 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME netplay_overlay_pin_wiring_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_overlay_pin_wiring.py")
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
+                OR (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+            add_test(NAME overlay_tier_witness_runtime_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_tier_witness_runtime.py"
+                --cc "${CMAKE_C_COMPILER}")
+        endif()
+        add_test(NAME overlay_tier_identity_test COMMAND "${CMAKE_COMMAND}"
+            "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/tier-identity-fixture"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_tier_identity.cmake")
         add_test(NAME runtime_overlay_guards_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_overlay_guards.py")
         add_test(NAME interp_mod_entry_guards_test COMMAND "${Python3_EXECUTABLE}"
@@ -506,7 +518,7 @@ add_test(NAME sio_dualshock_p2_p3_test COMMAND sio_dualshock_p2_p3_test)
         add_executable(${_target} tests/test_sio_port_device_identity.c)
         target_include_directories(${_target} PRIVATE include)
         target_compile_definitions(${_target} PRIVATE PSX_MAX_PLAYERS=${_players})
-        foreach(_profile IN ITEMS 0 1 2)
+        foreach(_profile IN ITEMS 0 1 2 3)
             add_test(NAME ${_target}_${_profile} COMMAND ${_target} ${_profile})
             add_test(NAME ${_target}_${_profile}_mouse_roundtrip
                 COMMAND ${_target} ${_profile} --touch-mouse)
