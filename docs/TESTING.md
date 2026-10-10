@@ -102,19 +102,31 @@ and catch whole regression classes without running a game. Registered from
 runtime tree cannot configure until a BIOS has been generated, and these need
 neither.
 
-## Known-failing tests (not registered)
+## Disabled performance guards
 
-Three tests exist and are **deliberately left out of `ctest`** because they fail
-today. They are not registered because a suite with a known-red test is a suite
-people stop believing — the exact failure mode that took CI off pull requests in
-the first place (see `.github/workflows/cli-release.yml`). Fix or retire them,
-then wire them in.
+`recompiler/CMakeLists.txt` registers the performance guards with `DISABLED TRUE`.
+CTest lists them and reports them as disabled. This preserves the known failures;
+it does not count as a pass. Keep them disabled until an admitted run proves the
+checks pass. A source edit or syntax check is not that evidence.
 
 | Test | Status |
 |---|---|
-| `runtime/tests/test_interpreter_perf_guards.py` | Asserts `psx_devices_mmio_sync` invalidates the inline cycle limit. It does not: the function delegates to `psx_devices_service_to_now()` (which clears `g_psx_cycle_fast_limit`, `psx_cycles.c:161`) **or** to `psx_devices_recompute_deadline()` (`:153-157`), and that second branch never clears it. Needs a timing owner to decide whether the guard found a real hole or the invariant moved. The guard is also partly stale — it still names `s_next_service_cycle`, since renamed to `psx_next_service_cycle`. |
-| `runtime/tests/test_runtime_perf_diag_guards.py` | Asserts a substring that is no longer present in the runtime source. Either the diagnostic was removed or it was renamed; the guard has not been updated either way. |
-| `runtime/tests/test_overlay_pair_dedup_runtime.py` | Needs its companion harness (`overlay_pair_dedup_harness.c`) built. Unlike the other Python tests it is not source-only, so it needs a build target before it can be registered. |
+| `runtime/tests/test_interpreter_perf_guards.py` | Disabled and unchanged. MMIO synchronization can recompute the device deadline without directly clearing `g_psx_cycle_fast_limit`. The guard also names the legacy `s_next_service_cycle` alias. A timing owner must resolve the invalidation requirement. Source inspection alone does not prove an active production defect. |
+| `runtime/tests/test_runtime_perf_diag_guards.py` | Disabled. The retained failure searched for `frame_pacer_wait(&pacer, g_frame_period_ms)`. PS1B-176 changes that name to the current `s_frame_pacer`, preserving the other checks. This source correction has not passed an admitted run. |
+| `runtime/tests/test_runtime_perf_diag_guard_controls.py` | Disabled. One current-source positive and twelve deliberate source defects exercise the actual guard. The defects cover opt-in gates, cadence, exact guest-frame boundaries, a one-shot summary, provider timing and counters, and forbidden telemetry in hot paths. All thirteen methods are unrun. |
+
+`overlay_pair_dedup_runtime` is in the normal enabled registration list. Its
+companion harness now supplies the step-boundary functions. Its historical link
+failure does not make it one of the currently disabled guards.
+
+After execution admission, run the guard and its controls directly through the
+qualified runner. The controls also accept `--baseline-guard` with a byte-exact
+copy of the guard from accepted commit `79434620340b8b0e347ac8d4e43e93cb3210fad5`.
+That baseline against current source must fail, including the current-source
+positive. A baseline failure alone does not prove the corrected candidate passes.
+The controls copy only these public runtime source files into a temporary fixture;
+they do not compile or run the runtime. Their source checks do not prove runtime
+timing or performance.
 
 ## Tests that are not in `ctest` and should not be
 
