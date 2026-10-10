@@ -312,6 +312,7 @@ class DegradeTests(unittest.TestCase):
                         '_tool_in_dir': Mock(side_effect=lambda _folder, name: tool(name) if portable else None),
                         '_toolchain_stamp': Mock(return_value=''), '_pack_sysroot_cmake_args': Mock(return_value=[]),
                         'recompiler_source_dir': Mock(return_value=self.root / 'authored-recompiler'),
+                        'ensure_framework': Mock(return_value=self.root / 'authored-framework'),
                         'find_psxrecomp_game': Mock(side_effect=FileNotFoundError('authored absent emitter')),
                         'find_emitters': Mock(side_effect=[FileNotFoundError('authored absent emitters'),
                                                           (self.root / 'authored-game.fixture', self.root / 'authored-bios.fixture')]),
