@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source guards for overlay ABI v26 (upstream's v25 layout plus fork slots).
+"""Source guards for overlay ABI v27 (upstream's v25 layout plus fork slots).
 
 test_overlay_abi_layout.c pins the struct against a copy of upstream's header.
 That is only worth something if the copy really is upstream's file, and if the
@@ -48,11 +48,11 @@ def main() -> None:
     assert define(upstream, "PSX_OVERLAY_ABI_VERSION") == 25
     assert define(upstream, "PSX_OVERLAY_CODEGEN_VER") == 13
 
-    # 2. The numbers: one above upstream's ABI; a codegen number upstream does
+    # 2. The numbers: two above upstream's ABI; a codegen number upstream does
     #    not use, so every cache folder a G2 build wrote (cg12) is left behind.
     api = read("runtime/include/overlay_api.h")
-    assert define(api, "PSX_OVERLAY_ABI_VERSION") == 26
-    assert define(api, "PSX_OVERLAY_CODEGEN_VER") == 15
+    assert define(api, "PSX_OVERLAY_ABI_VERSION") == 27
+    assert define(api, "PSX_OVERLAY_CODEGEN_VER") == 16
 
     # 3. Upstream's struct text is in this tree's header unchanged, and the
     #    fork's two slots follow its last member.
@@ -64,7 +64,7 @@ def main() -> None:
         "this tree's OverlayCallbacks no longer begins with upstream's v25 text")
     tail = ours[len(theirs):]
     members = re.findall(r"\(\*(\w+)\)\(", tail)
-    assert members == ["cpu_step_boundary_enabled", "cpu_step_boundary"], members
+    assert members == ["cpu_step_boundary_enabled", "cpu_step_boundary", "psx_game_break"], members
 
     # 4. v24, last_store_pc: the host hands out its own word, the shim keeps a
     #    private one only as the pre-init / NULL-host fallback, and DLL builds
@@ -120,7 +120,10 @@ def main() -> None:
     assert "s_callbacks.cpu_step_boundary = psx_cpu_step_boundary_fn;" in loader
     assert "g_cbs.cpu_step_boundary(cpu, addr);" in shim
 
-    print("overlay ABI v26 guards: PASS (fixture blob %s, ABI 26, codegen 15)"
+    assert "s_callbacks.psx_game_break       = psx_game_break;" in loader
+    assert "g_cbs.psx_game_break(cpu, code, pc, in_delay_slot);" in shim
+
+    print("overlay ABI v27 guards: PASS (fixture blob %s, ABI 27, codegen 16)"
           % UPSTREAM_BLOB[:12])
 
 

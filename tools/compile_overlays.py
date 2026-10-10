@@ -4806,9 +4806,21 @@ def _compile_dll_tcc(c_path: str, out_dll: str, include_dirs, flavor: int,
     return True
 
 
+def _validate_overlay_optimization(optimization: str, compiler: str) -> None:
+    if optimization not in ('-O0', '-O2'):
+        raise ValueError('overlay optimization must be -O0 or -O2')
+    if compiler == 'tcc' and optimization != '-O2':
+        raise ValueError('TinyCC does not support proof optimization overrides')
+
 def _compile_dll_direct(c_path: str, out_dll: str, include_dirs: list[str],
                         gcc: str = 'gcc', flavor: int = 0,
-                        compiler: str = 'gcc', tcc: str = 'tcc') -> bool:
+                        compiler: str = 'gcc', tcc: str = 'tcc',
+                        optimization: str = '-O2') -> bool:
+    try:
+        _validate_overlay_optimization(optimization, compiler)
+    except ValueError as exc:
+        print(f'  COMPILE ERROR: {exc}')
+        return False
     import platform
     # Absolute paths (interpreter flavor) for EVERY path the native compiler
     # touches — see native_path's docstring for the two rules and the
@@ -4823,7 +4835,7 @@ def _compile_dll_direct(c_path: str, out_dll: str, include_dirs: list[str],
     # that conflicts with the host process. Use -shared without -fPIC.
     pic_flag = [] if is_windows() else ['-fPIC']
     cmd = [
-        gcc, '-shared', *pic_flag, '-O2',
+        gcc, '-shared', *pic_flag, optimization,
         '-DPSX_OVERLAY_DLL_BUILD',
         # Overlays mirror the runtime's no-debug-tools build: the emitter guards
         # debug_server_cyc_observe (and friends) behind PSX_NO_DEBUG_TOOLS, and the
@@ -4880,7 +4892,8 @@ def compile_dll(c_path: str, out_dll: str, include_dirs: list[str],
                 expected_existing_abi: int | None = None,
                 publication_result: dict | None = None,
                 candidate_cap: int | None = None,
-                manifest_provenance: str | None = None) -> bool:
+                manifest_provenance: str | None = None,
+                optimization: str = '-O2') -> bool:
     """Publish a shard only after all of its artifacts are complete.
 
     GCC and tcc write their output incrementally. If the process is interrupted
@@ -4894,6 +4907,11 @@ def compile_dll(c_path: str, out_dll: str, include_dirs: list[str],
     The pair ID additionally lets a pair-aware loader reject the only filesystem
     TOCTOU left: an old manifest parsed immediately before the DLL rename.
     """
+    try:
+        _validate_overlay_optimization(optimization, compiler)
+    except ValueError as exc:
+        print(f'  COMPILE ERROR: {exc}')
+        return False
     final_out = os.path.abspath(out_dll)
     out_dir = os.path.dirname(final_out)
     os.makedirs(out_dir, exist_ok=True)
@@ -4926,7 +4944,7 @@ def compile_dll(c_path: str, out_dll: str, include_dirs: list[str],
     try:
         if not _compile_dll_direct(
                 c_path, staged, include_dirs, gcc=gcc, flavor=flavor,
-                compiler=compiler, tcc=tcc):
+                compiler=compiler, tcc=tcc, optimization=optimization):
             return False
         if not os.path.isfile(staged) or os.path.getsize(staged) == 0:
             print('  COMPILE ERROR: compiler reported success but emitted no DLL')

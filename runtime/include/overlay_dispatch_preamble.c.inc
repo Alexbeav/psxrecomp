@@ -69,6 +69,11 @@ int psx_syscall(CPUState *cpu, uint32_t code) {
     overlay_flush_cycles();
     return g_cbs.psx_syscall(cpu, code);
 }
+void psx_game_break(CPUState *cpu, uint32_t code, uint32_t pc,
+                    int in_delay_slot) {
+    overlay_flush_cycles();
+    g_cbs.psx_game_break(cpu, code, pc, in_delay_slot);
+}
 void psx_native_bad_entry(CPUState *cpu, uint32_t owner, uint32_t pc) {
     overlay_flush_cycles();
     if (g_cbs.psx_native_bad_entry) g_cbs.psx_native_bad_entry(cpu, owner, pc);

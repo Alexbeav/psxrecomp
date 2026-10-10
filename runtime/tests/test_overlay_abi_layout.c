@@ -1,4 +1,4 @@
-/* Overlay ABI layout pin (ABI v26, PS1B-331).
+/* Overlay ABI layout pin (ABI v27, PS1B-331 / PS1B-412).
  *
  * The fork and upstream both called their ABI "25" while the two structs
  * differed from slot 45 on, so a shard that passed the version gate on the
@@ -70,9 +70,10 @@ enum {
     X(44, ws_screen_x_bound)        X(45, mod_function_entry)      \
     X(46, last_store_pc)
 
-/* The fork's additions (v26), after upstream's last slot. */
+/* Fork v26 slots stay fixed; v27 appends compiled-game BREAK at slot 49. */
 #define FORK_V26_SLOTS(X) \
-    X(47, cpu_step_boundary_enabled) X(48, cpu_step_boundary)
+    X(47, cpu_step_boundary_enabled) X(48, cpu_step_boundary) \
+    X(49, psx_game_break)
 
 #define COUNT_SLOT(index, member) + 1
 enum {
@@ -114,18 +115,18 @@ _Static_assert(sizeof(UpstreamV25Callbacks) ==
                "upstream v25 has a slot this test does not list");
 _Static_assert(sizeof(OverlayCallbacks) ==
                    (UPSTREAM_SLOT_COUNT + FORK_SLOT_COUNT) * sizeof(void *),
-               "v26 has a slot this test does not list");
-_Static_assert(UPSTREAM_SLOT_COUNT == 47 && FORK_SLOT_COUNT == 2,
+               "v27 has a slot this test does not list");
+_Static_assert(UPSTREAM_SLOT_COUNT == 47 && FORK_SLOT_COUNT == 3,
                "slot counts changed");
 
-/* The numbers. Upstream's header is v25 / codegen 13. The fork is one above
+/* The numbers. Upstream's header is v25 / codegen 13. The fork is two above
  * upstream's ABI, and its codegen number is not upstream's. */
 _Static_assert(UPSTREAM_ABI_VERSION == 25, "fixture is not upstream v25");
 _Static_assert(UPSTREAM_CODEGEN_VER == 13, "fixture is not upstream cg13");
-_Static_assert(PSX_OVERLAY_ABI_VERSION == 26, "fork ABI version");
-_Static_assert(PSX_OVERLAY_ABI_VERSION == UPSTREAM_ABI_VERSION + 1,
-               "fork ABI must be upstream's version plus one");
-_Static_assert(PSX_OVERLAY_CODEGEN_VER == 15, "fork codegen version");
+_Static_assert(PSX_OVERLAY_ABI_VERSION == 27, "fork ABI version");
+_Static_assert(PSX_OVERLAY_ABI_VERSION == UPSTREAM_ABI_VERSION + 2,
+               "fork v27 includes BREAK after v26");
+_Static_assert(PSX_OVERLAY_CODEGEN_VER == 16, "fork codegen version");
 _Static_assert(PSX_OVERLAY_CODEGEN_VER != UPSTREAM_CODEGEN_VER,
                "fork codegen version must not reuse upstream's number");
 
@@ -135,7 +136,8 @@ _Static_assert(sizeof(void *) != 8 ||
                     offsetof(OverlayCallbacks, last_store_pc) == 0x170 &&
                     offsetof(OverlayCallbacks, cpu_step_boundary_enabled) == 0x178 &&
                     offsetof(OverlayCallbacks, cpu_step_boundary) == 0x180 &&
-                    sizeof(OverlayCallbacks) == 0x188 &&
+                    offsetof(OverlayCallbacks, psx_game_break) == 0x188 &&
+                    sizeof(OverlayCallbacks) == 0x190 &&
                     sizeof(UpstreamV25Callbacks) == 0x178),
                "x86-64 tail offsets");
 

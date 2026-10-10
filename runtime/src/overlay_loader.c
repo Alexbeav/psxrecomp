@@ -2547,6 +2547,7 @@ static void init_callbacks(void) {
     s_callbacks.advance_cycles     = psx_advance_cycles;
     s_callbacks.gte_execute          = gte_execute;
     s_callbacks.psx_syscall          = psx_syscall;
+    s_callbacks.psx_game_break       = psx_game_break;
     s_callbacks.psx_native_bad_entry = psx_native_bad_entry;
     s_callbacks.psx_unknown_dispatch = psx_unknown_dispatch;
 #ifdef PSX_NO_DEBUG_TOOLS
