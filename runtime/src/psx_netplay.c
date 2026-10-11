@@ -4378,7 +4378,7 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
         }
     }
 
-    if (!use_ice) {
+    if (!use_ice && !ice_hub) {
         /* Host-as-relay: slot 0 with 3+ seats and no dial peer. */
 #if PSX_MAX_PLAYERS >= 3
         const int peer_empty =
