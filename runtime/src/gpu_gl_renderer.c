@@ -1944,7 +1944,6 @@ static const char *TEX_FS =
     "uniform int u_semipass;  /* 0=all texels, 1=STP=0 only, 2=STP=1 only */\n"
     "uniform int u_semimode;  /* PS1 blend mode; drives dual-source factors */\n"
     "uniform int u_maskset;   /* GP0(E6h) set-mask: OR bit15 into output */\n"
-    "uniform int u_filter;    /* bits 0-3: 0 nearest, 1 bilinear, 2 stable, 3 xbr; bit 4: LOD */\n"
     "uniform int u_aniso;     /* [video] anisotropic_filtering, 1..16 */\n"
     "uniform float u_shift;\n"
     "int vram_at(int x, int y){\n"
@@ -2157,7 +2156,7 @@ static const char *TEX_FS =
     "                + float((c01 >> 15) & 1) * w01 + float((c11 >> 15) & 1) * w11) / opac;\n"
     "    stp = stpf >= 0.5 ? 1 : 0;\n"
     "  }\n"
-    "  if ((u_filter & 16) != 0 && v_hd_mode == 0) rgb = lod_sample(uv0, dx0, dy0, stp, rgb);\n"
+    "  if ((v_filter & 16) != 0 && v_hd_mode == 0) rgb = lod_sample(uv0, dx0, dy0, stp, rgb);\n"
     "  if (u_semipass == 1 && stp == 1) discard;\n"
     "  if (u_semipass == 2 && stp == 0) discard;\n"
     "  if (v_raw == 0) rgb = clamp(rgb * (v_cp != 0 ? v_col_p : v_col.rgb) * 2.0, 0.0, 1.0);\n"
@@ -4637,8 +4636,9 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
     const int untracked=(lim && !s_projected_uv_valid) || (!s_pc_valid && !s_pq_valid);
     /* [video] texture_lod rides in the filter batch key (bit 4) for proven
      * world geometry only; sprites and HUD keep their exact texels. */
-    const int filter=(s_tex_filter==2 && untracked ? 0 : s_tex_filter) |
-                     (s_tex_lod && !untracked ? 16 : 0);
+    const int filter = s_selected_bank_tex ? 0 :
+        ((s_tex_filter==2 && untracked ? 0 : s_tex_filter) |
+         (s_tex_lod && !untracked ? 16 : 0));
     int lim_buf[4];
     int uv_buf[6];
     if (!lim) {
@@ -5914,7 +5914,6 @@ static int init_gpu_raster(void) {
     s_uSemipass = p_glGetUniformLocation(s_tex_prog, "u_semipass");
     s_uSemimode = p_glGetUniformLocation(s_tex_prog, "u_semimode");
     s_uMaskset  = p_glGetUniformLocation(s_tex_prog, "u_maskset");
-    s_uFilter   = p_glGetUniformLocation(s_tex_prog, "u_filter");
     s_uAniso = -1;
     lod_apply_uniforms();
     s_uAccurate = -1;

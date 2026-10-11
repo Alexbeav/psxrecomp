@@ -411,7 +411,7 @@ static void ck_wrapped(void) {
 static int ck_in_pass(void) { return s_ck_depth != 0; }
 
 static inline PGXPValue *pgxp_ptr_w(uint32_t addr) {
-    PGXPValue *pv = pgxp_ptr(addr, true);
+    PGXPValue *pv = pgxp_ptr(addr);
     ck_note(pv, addr);
     return pv;
 }
