@@ -150,6 +150,23 @@ void spu_cd_audio_reset(void);
 /* Get pointer to SPU RAM for direct access (512KB) */
 const uint8_t* spu_get_ram(void);
 
+/* Opt-in enhancement assets. Bank 0 is hardware RAM; immutable ADPCM banks
+ * 1..31 reside outside it. A binding is consumed at the next KEYON on that
+ * voice, preserving the native decoder, pitch, envelopes, mixer and KEYOFF.
+ * Bank addresses are byte offsets (the voice registers still use /8 units).
+ * Both active and pending bindings are part of the SPU snapshot wire. */
+int spu_register_sample_bank(uint32_t bank, const void *adpcm, uint32_t bytes);
+int spu_bind_next_voice_bank(unsigned voice, uint32_t bank);
+/* Optional title-owned voices, independent of all 24 hardware channels.
+ * Register order is VOL_L, VOL_R, PITCH, START, ADSR_LO, ADSR_HI, ENV, LOOP.
+ * Mode bits: 0 noise, 1 reverb. Slots 0..23; nonzero immutable bank required.
+ * Decoder/envelope/sweep state is serialized; ordinary snapshots retain their
+ * existing size until this enhancement is used. */
+int spu_private_voice_play(unsigned slot,uint32_t bank,const uint16_t regs[8],unsigned mode);
+void spu_private_voice_stop(uint32_t mask);
+int spu_private_voice_volume(unsigned slot,uint16_t left,uint16_t right);
+uint32_t spu_private_voice_active(void);
+
 /* ---- Verified-enhancement shadow tap (consumed by spu_shadow.c) ---------
  *
  * Present-time, opt-in float SPU re-render. When the shadow is enabled,
@@ -158,7 +175,7 @@ const uint8_t* spu_get_ram(void);
  * fractional phase, envelope level, and per-voice + main volumes). The shadow
  * re-interpolates these in float. The layout MUST match spu.c's internal
  * SpuShadowVoiceTap / SpuShadowFrameTap. */
-#define SPU_SHADOW_MAX_VOICES 24
+#define SPU_SHADOW_MAX_VOICES 48
 
 typedef struct {
     int16_t  s[4];     /* decoded samples sample_idx-1 .. +2 (block-edge clamped) */

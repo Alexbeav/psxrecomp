@@ -6,6 +6,8 @@
  */
 
 #include "cpu_state.h"
+#include "mod_netplay.h"
+#include "execution_profile.h"
 #include "projection_scale.hpp"
 #include "projection_scale_config.hpp"
 #include "mod_controller_source.h"
@@ -424,6 +426,7 @@ struct PlayerInput {
     int   deadzone = 3277;  /* raw SDL axis units, ~10% default */
     SDL_GameController* handle = nullptr;
     SDL_JoystickID      instance = -1;
+    SDL_JoystickID      preferred_instance = -1; /* live launcher choice only */
     uint8_t rumble_small = 0;
     uint8_t rumble_large = 0;
     bool    rumble_known = false;
@@ -1455,6 +1458,9 @@ extern "C" int psx_mod_set_host_rumble(uint32_t player, uint32_t small,
     psx_host_rumble_set(&g_mod_rumble[player], g_rumble_vblank, small, large);
     return 1;
 }
+extern "C" void psx_mod_set_savestate_blocked(int blocked) {
+    savestate_set_title_blocked(blocked);
+}
 static uint32_t      g_savestate_input_guard_min_until = 0;
 static uint32_t      g_savestate_input_guard_max_until = 0;
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
@@ -1619,6 +1625,19 @@ static bool ensure_sdl_pixel_buf_capacity(size_t pixels) {
  * session vanilla (mods cleared), the LAN MOTK1 wire protocol, lobby caps
  * without mod fields, and the neutral headless idle pad. */
 static int g_netplay_content_negotiation = 0;
+static int title_netplay_aspect_index(int num, int den) {
+    if (num <= 0 || den <= 0) return 0;
+    return num * 9 == den * 21 ? 2 : num * 9 == den * 16 ? 1 : 0;
+}
+static void title_netplay_fix_caps_view(PsxLobbyMatchCaps* caps) {
+    const PSXModNetplayProfile* profile = psx_mod_netplay_profile();
+    if (!caps || !profile || !profile->fixed_aspect_mask) return;
+    const int index = title_netplay_aspect_index(caps->aspect_num, caps->aspect_den);
+    if (!psx_mod_netplay_set_aspect(index)) (void)psx_mod_netplay_set_aspect(0);
+    const int selected = psx_mod_netplay_aspect();
+    caps->aspect_num = selected == 2 ? 21 : selected == 1 ? 16 : 4;
+    caps->aspect_den = selected ? 9 : 3;
+}
 /* Install the netplay session's mod plan without touching the persisted
  * offline selection. Default: vanilla (clear every mod). Opted in: the
  * host-published lobby plan, or the locally selected verified plan for a
@@ -1626,6 +1645,14 @@ static int g_netplay_content_negotiation = 0;
  * fingerprint before guest execution). */
 static bool netplay_commit_mods(const std::filesystem::path& disc,
                                 std::string* error) {
+    if (psx_mod_netplay_profile()) {
+        const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+        const int num = caps && caps->valid ? caps->aspect_num : g_video_aspect_num;
+        const int den = caps && caps->valid ? caps->aspect_den : g_video_aspect_den;
+        const int index = title_netplay_aspect_index(num, den);
+        if (!psx_mod_netplay_set_aspect(index)) (void)psx_mod_netplay_set_aspect(0);
+        return PSXRecompV4::mod_runtime_commit_netplay(disc, error);
+    }
     if (!g_netplay_content_negotiation)
         return PSXRecompV4::mod_runtime_commit_netplay_view(disc, error);
     const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
@@ -5199,10 +5226,29 @@ static void open_player(PlayerInput& p, int self_slot) {
         SDL_JoystickGUID g = SDL_JoystickGetDeviceGUID(i);
         char buf[40] = {0};
         SDL_JoystickGetGUIDString(g, buf, sizeof(buf));
-        /* Skip a device already opened by another player. */
+        /* Development seats may explicitly choose the same physical pad.
+         * Auto/fallback allocation still reserves a separate device per seat. */
         SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
-        if (device_claimed_by_other(self_slot, inst)) continue;
-        if (p.guid[0] && std::strcmp(buf, p.guid) == 0) { chosen = i; break; }
+        bool shared = false;
+#if !defined(PSX_NO_DEBUG_TOOLS)
+        shared = PSXRecompV4::launcher_controller_can_share(
+            true, p.guid[0] && std::strcmp(buf, p.guid) == 0);
+#endif
+        if (device_claimed_by_other(self_slot, inst) && !shared) continue;
+        /* Do not let an earlier seat's fallback steal a later seat's explicit
+         * selection. Two pads of the same model have the same GUID. */
+        bool reserved = false;
+        for (int o = 0; o < PSX_MAX_PLAYERS; ++o) {
+            if (o != self_slot && g_players[o].kind == 2 &&
+                g_players[o].preferred_instance == inst) reserved = true;
+        }
+        if (reserved && p.preferred_instance != inst && !shared) continue;
+        if (p.preferred_instance == inst &&
+            (!p.guid[0] || std::strcmp(buf, p.guid) == 0)) {
+            chosen = i;
+            break;
+        }
+        if (chosen < 0 && p.guid[0] && std::strcmp(buf, p.guid) == 0) chosen = i;
         if (fallback < 0) fallback = i;
     }
     if (chosen < 0) chosen = fallback;
@@ -5212,6 +5258,7 @@ static void open_player(PlayerInput& p, int self_slot) {
     if (p.handle) {
         SDL_Joystick* joy = SDL_GameControllerGetJoystick(p.handle);
         p.instance = joy ? SDL_JoystickInstanceID(joy) : -1;
+        p.preferred_instance = p.instance;
         /* Persist the GUID of the pad we actually opened so per-device
          * [mapping.<guid>] lookups match the live hardware (including the
          * first-available fallback when the saved GUID is offline). */
@@ -5221,7 +5268,8 @@ static void open_player(PlayerInput& p, int self_slot) {
         }
         const char* name = SDL_GameControllerName(p.handle);
         p.steering_wheel = psx_controller_name_is_wheel(name);
-        std::fprintf(stdout, "psxrecomp runtime: opened controller for slot: %s\n",
+        std::fprintf(stdout, "psxrecomp runtime: opened controller for slot %d (instance %d): %s\n",
+                     self_slot + 1, (int)p.instance,
                      name ? name : "(unnamed)");
         if (p.steering_wheel)
             std::fprintf(stdout,
@@ -6099,8 +6147,10 @@ static uint16_t host_layer_release_claimed(uint16_t word, uint32_t claimed) {
  * (host_view, the transform's host pad: the sticks in either mode). */
 static int capture_host_layer_pad(PsxNetPad* out, uint16_t word,
                                   const uint8_t st[4], bool guarded,
-                                  bool host_view) {
-    const int mode = effective_player_mode_for_sio(g_players[0], 0);
+                                  bool host_view, int present_sio_slot = 0) {
+    const int present = present_sio_slot >= 0 && present_sio_slot < PSX_MAX_PLAYERS
+        ? present_sio_slot : 0;
+    const int mode = effective_player_mode_for_sio(g_players[0], present);
     const bool analog = mode != PSXRecompV4::PAD_MODE_DIGITAL;
     const bool sticks = analog || host_view;
     out->buttons = host_layer_release_claimed(word, g_p1_claimed_buttons);
@@ -6240,6 +6290,16 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
     out->lx = out->ly = out->rx = out->ry = 0x80u;
     out->analog = 0;
     out->connected = 0;
+
+    /* An explicit virtual host device follows the same local-device -> session
+     * seat route as a physical controller. It is not a simulation SIO override. */
+    if (s == 0) {
+        uint16_t word;
+        uint8_t sticks[4], lt, rt;
+        if (host_pad_layer(&word, sticks, &lt, &rt))
+            return capture_host_layer_pad(out, word, sticks, false, false,
+                                          present_sio_slot);
+    }
 
     PlayerInput& p = g_players[s];
     const int  player  = s + 1;             /* keybinds.ini section (1..5) */
@@ -6769,6 +6829,10 @@ static void netplay_barrier_admit(int override) {
             (tip_hold && !psx_start_bisect_no_tiphold_capture());
         if (need_sample) {
             PsxNetPad local{};
+            uint16_t host_word;
+            uint8_t host_sticks[4], host_lt, host_rt;
+            const bool virtual_host = g_headless &&
+                host_pad_layer(&host_word, host_sticks, &host_lt, &host_rt);
             /* An explicit debug-server override is the local player's input
              * windowed or headless: headless LAN peers are how netplay is
              * exercised without windows. With no override, headless has no
@@ -6776,8 +6840,11 @@ static void netplay_barrier_admit(int override) {
              * into content negotiation, whose headless fixtures use the same
              * negotiated pad mode and local-to-session routing as windowed
              * injected input. */
-            if (override >= 0 || (g_headless && g_netplay_content_negotiation)) {
+            if (override >= 0 || (g_headless && g_netplay_content_negotiation && !virtual_host)) {
                 capture_override_pad(override >= 0 ? override : 0xFFFF, &local);
+            } else if (virtual_host) {
+                capture_host_layer_pad(&local, host_word, host_sticks, false, false,
+                                      psx_netplay_local_slot());
             } else if (g_headless) {
                 local.buttons = 0xFFFFu;
                 local.lx = local.ly = local.rx = local.ry = 0x80u;
@@ -7630,6 +7697,10 @@ static void savestate_menu_move(int delta) {
 }
 
 static int savestate_submit_slot(int slot, int save) {
+    if (savestate_title_blocked() || !psx_mod_netplay_savestates_supported()) {
+        host_osd_push("Save states are unavailable in this game mode", 1800);
+        return 0;
+    }
     if (!save && !savestate_slot_exists(slot)) {
         char msg[32];
         snprintf(msg, sizeof(msg), "Slot %d is empty", slot + 1);
@@ -11007,6 +11078,9 @@ namespace {
     }
 
     static void ae_np_lan_udp_close(void) {
+        if (std::getenv("PSX_NET_LOBBY_TRACE"))
+            std::fprintf(stderr, "LAN trace: close socket (host=%d guest=%d)\n",
+                         g_lnch_hosting_lan, g_lnch_joined_lan);
         ae_np_lan_sock_close(&g_lnch_lan_udp);
         for (int i = 0; i < kAeLanMaxSlots; ++i)
             g_lnch_lan_peer_ok[i] = false;
@@ -11253,6 +11327,10 @@ namespace {
     }
 
     static void ae_np_lan_udp_sendto(const sockaddr_in& to, const char* msg) {
+        if (std::getenv("PSX_NET_LOBBY_TRACE") && msg)
+            std::fprintf(stderr, "LAN trace: send %.*s to %08x:%u\n",
+                         (int)std::strcspn(msg, "\n"), msg,
+                         (unsigned)ntohl(to.sin_addr.s_addr), (unsigned)ntohs(to.sin_port));
         if (g_lnch_lan_udp == kAeLanSockInvalid || !msg) return;
         const int n = (int)std::strlen(msg);
 #ifdef _WIN32
@@ -12510,6 +12588,34 @@ namespace {
         caps->mod_plan_fp[0] = '\0';
         caps->mod_count = 0;
         std::memset(caps->mods, 0, sizeof(caps->mods));
+        if (const PSXModNetplayProfile* profile = psx_mod_netplay_profile()) {
+            if (!profile->settings_package_id) return 1;
+            RecompLauncherCModPackage package{};
+            if (!mods || !mods->feature_count || !mods->feature_get ||
+                !ae_mod_package_get_by_id(profile->settings_package_id, &package)) {
+                g_lnch_mod_plan_error = "Title netplay settings package is unavailable";
+                return 0;
+            }
+            for (int index = 0; index < mods->feature_count(mods->ctx); ++index) {
+                RecompLauncherCModFeature feature{};
+                if (!mods->feature_get(mods->ctx, index, &feature) ||
+                    std::strcmp(feature.package_id, profile->settings_package_id) ||
+                    std::strcmp(feature.id, profile->settings_feature_id)) continue;
+                ae_fill_lobby_mod_pkg_from_package(&caps->mods[0], package);
+                char token[PSX_LOBBY_MOD_FEATS_LEN] = {};
+                ae_copy_lobby_text(token, sizeof(token), feature.id);
+                ae_append_feature_options(token, sizeof(token), mods, feature);
+                ae_copy_lobby_text(caps->mods[0].feats, sizeof(caps->mods[0].feats), token);
+                caps->mod_count = 1;
+                std::string fingerprint;
+                if (!PSXRecompV4::mod_runtime_netplay_settings_fingerprint(
+                        *caps, fingerprint, &g_lnch_mod_plan_error)) return 0;
+                ae_copy_lobby_text(caps->mod_plan_fp, sizeof(caps->mod_plan_fp), fingerprint.c_str());
+                return 1;
+            }
+            g_lnch_mod_plan_error = "Title netplay settings feature is unavailable";
+            return 0;
+        }
         if (!PSXRecompV4::mod_runtime_prepare_resources(g_launcher_disc_path,
                                                        &g_lnch_mod_plan_error)) return 0;
         if (!mods || !mods->package_count || !mods->package_get)
@@ -12576,6 +12682,7 @@ namespace {
             case 1:  caps.aspect_num = 16; caps.aspect_den = 9; break;
             default: caps.aspect_num = 4;  caps.aspect_den = 3; break;
         }
+        title_netplay_fix_caps_view(&caps);
         caps.turbo_loads   = s ? (s->turbo_loads != 0) : 0;
         caps.auto_skip_fmv = s ? (s->auto_skip_fmv != 0) : 0;
         caps.input_delay   = g_lnch_lobby_input_delay;
@@ -12587,7 +12694,7 @@ namespace {
         caps.force_input_relay = g_lnch_force_input_relay != 0;
         caps.relay_host = g_lnch_relay_host != 0;
         caps.force_turn = g_lnch_force_turn != 0;
-        caps.rollback = g_lnch_rollback != 0;
+        caps.rollback = g_lnch_rollback != 0 && psx_mod_netplay_rollback_supported();
         caps.multitap_analog = g_lnch_multitap_analog != 0;
         if (s) caps.multitap_analog = s->multitap_analog != 0;
         caps.guest_memcard = g_lnch_guest_memcard != 0;
@@ -12638,6 +12745,7 @@ namespace {
             : ae_netplay_caps_from_settings(settings);
         caps.valid = 1;
         caps.input_delay = g_lnch_lobby_input_delay;
+        title_netplay_fix_caps_view(&caps);
         if (caps.input_delay < 2) caps.input_delay = 2;
         if (caps.input_delay > 20) caps.input_delay = 20;
         caps.input_prediction = g_lnch_lobby_input_prediction;
@@ -12646,7 +12754,7 @@ namespace {
         caps.force_input_relay = g_lnch_force_input_relay != 0;
         caps.relay_host = g_lnch_relay_host != 0;
         caps.force_turn = g_lnch_force_turn != 0;
-        caps.rollback = g_lnch_rollback != 0;
+        caps.rollback = g_lnch_rollback != 0 && psx_mod_netplay_rollback_supported();
         caps.multitap_analog = g_lnch_multitap_analog != 0;
         if (settings) caps.multitap_analog = settings->multitap_analog != 0;
         caps.guest_memcard = g_lnch_guest_memcard != 0;
@@ -13252,6 +13360,7 @@ namespace {
         return 0;
     }
     int ae_np_rollback_get(void*) {
+        if (!psx_mod_netplay_rollback_supported()) return 0;
         if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
             const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
             if (caps && caps->valid)
@@ -13260,7 +13369,7 @@ namespace {
         return g_lnch_rollback;
     }
     int ae_np_rollback_set(void*, int enable) {
-        g_lnch_rollback = enable ? 1 : 0;
+        g_lnch_rollback = enable && psx_mod_netplay_rollback_supported();
         ae_np_push_match_caps(nullptr);
         return 0;
     }
@@ -13434,6 +13543,10 @@ namespace {
 
             /* Content negotiation: a guest accepts lobby datagrams (and so a
              * plan) only from the host endpoint it joined. */
+            if (std::getenv("PSX_NET_LOBBY_TRACE"))
+                std::fprintf(stderr, "LAN trace: receive %.*s from %08x:%u\n",
+                             (int)std::strcspn(buf, "\n"), buf,
+                             (unsigned)ntohl(from.sin_addr.s_addr), (unsigned)ntohs(from.sin_port));
             if (g_lnch_remote_lan && g_netplay_content_negotiation) {
                 char host[64]; in_addr expected{};
                 if (!ae_np_lan_endpoint_host(g_lnch_lan_endpoint, host, sizeof(host)) ||
@@ -13951,7 +14064,8 @@ namespace {
                 if (g_lnch_lan_start_plan_session == g_lnch_remote_lan_state.session_id &&
                     !g_lnch_remote_lan_state.mod_caps_json.empty()) {
                     PsxLobbyMatchCaps caps{};
-                    if (psx_lobby_decode_match_caps(g_lnch_remote_lan_state.mod_caps_json.c_str(), &caps))
+                    if (psx_lobby_decode_match_caps(g_lnch_remote_lan_state.mod_caps_json.c_str(), &caps) &&
+                        caps.session_bios[0])
                         ae_np_set_session_bios_token(caps.session_bios, caps.session_bios_crc);
                 }
                 continue;
@@ -14052,7 +14166,7 @@ namespace {
 
     void ae_np_request_list(void*) {
         ae_np_lan_rescan();
-        psx_lobby_request_list();
+        if (ae_np_list_want_online()) psx_lobby_request_list();
     }
 
     int ae_np_list_count(void*) {
@@ -14973,9 +15087,18 @@ namespace {
                                                         : "openbios",
                                          session_crc);
             ae_np_log_settled_bios("LAN");
+            ae_np_lan_sync_local_slot_memcard();
+            g_lnch_lan_guest_memcard_active = ae_np_lan_guest_memcard_effective(state);
             if (g_netplay_content_negotiation) {
                 PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
+                /* The START plan must carry the same settled boot image as
+                 * its legacy fields. An empty BIOS in the plan cleared the
+                 * guest's START token, leaving it in the lobby while the
+                 * host waited forever for tick zero. */
+                std::snprintf(caps.session_bios, sizeof(caps.session_bios),
+                              "%s", g_lnch_session_bios);
                 caps.session_bios_crc = session_crc;
+                caps.guest_memcard_active = g_lnch_lan_guest_memcard_active;
                 char caps_wire[8192];
                 if (!g_lnch_mod_plan_error.empty() ||
                     !psx_lobby_encode_match_caps(caps_wire, sizeof(caps_wire), &caps)) return -1;
@@ -14995,8 +15118,6 @@ namespace {
             if (delay > 20) delay = 20;
             if (pred < 2) pred = 2;
             if (pred > 16) pred = 16;
-            ae_np_lan_sync_local_slot_memcard();
-            g_lnch_lan_guest_memcard_active = ae_np_lan_guest_memcard_effective(state);
             std::fprintf(stdout, "psxrecomp: LAN guest memcard (P2 card as slot 2) = %s\n",
                          g_lnch_lan_guest_memcard_active ? "on" : "off");
             char session_crc_text[16];
@@ -15541,6 +15662,9 @@ namespace {
          * the generic Display -> View mode launcher row. */
         gi->widescreen_supported = 0;
         gi->num_players = game_players_n;
+#if defined(RECOMP_LAUNCHER_HAS_SHARED_GAMEPAD) && !defined(PSX_NO_DEBUG_TOOLS)
+        gi->allow_shared_gamepad = 1;
+#endif
         gi->msu1_supported = 0;
         gi->sram_path = nullptr;
         gi->has_bios = psx_bios_has_selectable();
@@ -15749,6 +15873,8 @@ int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
     std::setvbuf(stderr, nullptr, _IOLBF, BUFSIZ);
     std::fprintf(stderr, "psxrecomp: main() entered\n");
+    std::fprintf(stderr, "psxrecomp: execution=%s identity=%s\n",
+                 PSX_EXECUTION_NAME, PSX_EXECUTION_ID);
     std::fflush(stderr);
 #if defined(RECOMP_LAUNCHER)
     launcher_boot_timing_mark("host:main_enter");
@@ -15990,6 +16116,7 @@ int main(int argc, char** argv) {
      * Release keeps "keyboard" as its pre-launch default (the launcher assigns
      * the selected physical device). */
     std::string player_device[PSX_MAX_PLAYERS];
+    uint32_t player_instance[PSX_MAX_PLAYERS] = {}; /* never persisted */
     int  player_mode[PSX_MAX_PLAYERS];
     int  player_deadzone[PSX_MAX_PLAYERS];
     int  ctrl_locked_mode[PSX_MAX_PLAYERS];
@@ -16108,7 +16235,9 @@ int main(int argc, char** argv) {
                 gc.netplay_local_viewport_state_addr,
                 gc.netplay_local_viewport_state_values.data(),
                 (int)gc.netplay_local_viewport_state_values.size());
-            g_netplay_content_negotiation = gc.netplay_content_negotiation ? 1 : 0;
+            const PSXModNetplayProfile* settings_profile = psx_mod_netplay_profile();
+            g_netplay_content_negotiation = gc.netplay_content_negotiation ||
+                (settings_profile && settings_profile->settings_package_id) ? 1 : 0;
             PSXRecompV4::mod_runtime_set_netplay_content_negotiation(
                 g_netplay_content_negotiation != 0);
             game_discs = gc.discs;
@@ -17805,6 +17934,10 @@ int main(int argc, char** argv) {
                     const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
                     const int un = std::min(n, PSXRecompV4::UserSettings::kMaxControllerPlayers);
                     for (int i = 0; i < n; ++i) {
+#if defined(RECOMP_LAUNCHER_HAS_PLAYER_GAMEPAD_INSTANCE)
+                        player_instance[i] = ls.player_src[i] == 2
+                            ? ls.player_gamepad_instance[i] : 0;
+#endif
                         if (ls.player_src[i] == 1) {
                             player_device[i] = "keyboard";
                         } else if (ls.player_src[i] == 0) {
@@ -18304,6 +18437,7 @@ int main(int argc, char** argv) {
         std::memset(g_mod_rumble, 0, sizeof g_mod_rumble);
         g_p1_claimed_buttons = 0;
         psx_rewind_set_title_blocked(0);
+        savestate_set_title_blocked(0);
         for (auto& policy : g_mod_controller_policy)
             policy = ModControllerPresentationPolicy{};
         g_mod_load_wall_multiplier = -1;
@@ -18327,6 +18461,12 @@ int main(int argc, char** argv) {
         gpu_ws_set_local_view_only(
             netplay && PSXRecompV4::mod_runtime_netplay_view_active() ? 1 : 0);
         mod_runtime_activate_plugins();
+        const PSXModNetplayProfile* profile = psx_mod_netplay_profile();
+        if (netplay && profile && profile->fixed_aspect_mask) {
+            const int index = psx_mod_netplay_aspect();
+            (void)psx_mod_set_fixed_display_aspect(index == 2 ? 21u : index == 1 ? 16u : 4u,
+                                                 index ? 9u : 3u);
+        }
         apply_netplay_local_viewport_aspect(netplay);
         for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
             if (g_mod_controller_mode_override[i] >= 0)
@@ -18442,6 +18582,11 @@ session_reboot:
     }
     memory_init(bios_path_str.c_str());
     if (g_headless_opengl) g_video_renderer = 1;
+    if (net_cfg.enabled && !psx_mod_netplay_renderer_allowed(g_video_renderer)) {
+        std::fprintf(stderr, "psxrecomp: this title's netplay profile requires OpenGL "
+                             "retained textures; select the OpenGL renderer\n");
+        return 1;
+    }
 #ifndef PSX_HAVE_VULKAN
     /* Vulkan was not compiled in (PSX_ENABLE_VULKAN=OFF or no SDK found).
      * Refuse a vulkan request from ANY source (config / CLI / launcher seed)
@@ -18744,6 +18889,8 @@ session_reboot:
      * ports during early boot. */
     for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
         set_player_device(g_players[s], player_device[s], player_mode[s]);
+        g_players[s].preferred_instance = player_instance[s]
+            ? (SDL_JoystickID)(player_instance[s] - 1) : -1;
         g_players[s].deadzone = player_deadzone[s];
     }
     /* Multitap stays OFF through BIOS boot: SCPH-1070 on port 1 breaks shell /
@@ -19351,6 +19498,12 @@ session_reboot:
     log_present_cadence();
   }
 
+    if (net_cfg.enabled && psx_mod_netplay_requires_texture_banks() &&
+        !psx_mod_texture_banks_supported()) {
+        std::fprintf(stderr, "psxrecomp: this title's netplay profile requires "
+                             "OpenGL retained texture banks; the backend is unavailable\n");
+        return 1;
+    }
     /* Register vblank presentation callback. */
     gpu_set_vblank_callback(sdl_vblank_present);
 
@@ -19537,6 +19690,12 @@ session_reboot:
         req.have_deliver_event_ret = (psx_bios_image.deliver_event_ret != 0);
         req.have_shell_entry       = (psx_bios_image.shell_entry_phys != 0);
         req.have_game_entry        = (game_entry_pc != 0);
+        const PSXModNetplayProfile* boot_profile = psx_mod_netplay_profile();
+        if (net_cfg.enabled && boot_profile && boot_profile->skip_bios_intro) {
+            req.bios_hle = 0;
+            req.keep_intro = 0;
+            req.fast_boot = 1;
+        }
         const PsxBiosHlePlan plan = psx_bios_hle_plan(req);
 
         /* Call-HLE is a per-image capability, not just a preference: an image
@@ -20259,6 +20418,10 @@ soft_return_lobby:
             {
                 const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
                 for (int i = 0; i < n; ++i) {
+#if defined(RECOMP_LAUNCHER_HAS_PLAYER_GAMEPAD_INSTANCE)
+                    player_instance[i] = ls.player_src[i] == 2
+                        ? ls.player_gamepad_instance[i] : 0;
+#endif
                     if (ls.player_src[i] == 1) {
                         player_device[i] = "keyboard";
                     } else if (ls.player_src[i] == 0) {

@@ -23,6 +23,38 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(mod_netplay_test tests/test_mod_netplay.c
+        src/mod_netplay.c src/netplay_state_digest.c src/crc32.c src/psx_sha256.c)
+    target_include_directories(mod_netplay_test PRIVATE include)
+    add_test(NAME mod_netplay_test COMMAND mod_netplay_test)
+    add_test(NAME mod_netplay_wide_test COMMAND mod_netplay_test --wide)
+    add_test(NAME mod_netplay_optional_bank_test COMMAND mod_netplay_test --no-banks)
+    add_test(NAME mod_netplay_options_policy_test COMMAND mod_netplay_test --options)
+    add_executable(savestate_title_policy_test tests/test_savestate_title_policy.c
+        src/mod_netplay.c src/psx_sha256.c)
+    target_include_directories(savestate_title_policy_test PRIVATE include)
+    add_test(NAME savestate_title_policy_test COMMAND savestate_title_policy_test)
+    add_executable(mod_capcom_bg2d_test tests/test_mod_capcom_bg2d.c)
+    target_include_directories(mod_capcom_bg2d_test PRIVATE include)
+    add_test(NAME mod_capcom_bg2d_test COMMAND mod_capcom_bg2d_test)
+    # White-box failure injection checks restart after partial native hashing.
+    foreach(_hash_variant native portable)
+        add_executable(sha256_file_${_hash_variant}_test
+            tests/test_psx_sha256_file.cpp src/psx_sha256.c)
+        target_include_directories(sha256_file_${_hash_variant}_test PRIVATE include)
+        if(_hash_variant STREQUAL "portable")
+            target_compile_definitions(sha256_file_${_hash_variant}_test PRIVATE
+                PSX_SHA256_FILE_PORTABLE=1)
+        elseif(WIN32)
+            target_link_libraries(sha256_file_${_hash_variant}_test PRIVATE bcrypt)
+        elseif(TARGET OpenSSL::Crypto)
+            target_compile_definitions(sha256_file_${_hash_variant}_test PRIVATE
+                PSX_SHA256_FILE_OPENSSL=1)
+            target_link_libraries(sha256_file_${_hash_variant}_test PRIVATE OpenSSL::Crypto)
+        endif()
+        add_test(NAME sha256_file_${_hash_variant}_test
+            COMMAND sha256_file_${_hash_variant}_test)
+    endforeach()
     find_package(Threads REQUIRED)
     add_executable(host_launch_timing_test
         tests/test_host_launch_timing.cpp tests/host_launch_timing_helper.cpp)
@@ -138,6 +170,15 @@ if(BUILD_TESTING)
         target_link_libraries(boot_state_impl_tag_test PRIVATE ZLIB::ZLIB)
         add_test(NAME boot_state_impl_tag_test COMMAND boot_state_impl_tag_test)
 
+        add_executable(boot_state_execution_test tests/test_boot_state_handoff.c)
+        target_include_directories(boot_state_execution_test PRIVATE include src)
+        target_compile_definitions(boot_state_execution_test PRIVATE PSX_COSIM=1)
+        target_compile_options(boot_state_execution_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections -UNDEBUG)
+        target_link_options(boot_state_execution_test PRIVATE -flto -Wl,--gc-sections)
+        target_link_libraries(boot_state_execution_test PRIVATE ZLIB::ZLIB)
+        psxrecomp_execution_profile(boot_state_execution_test PROFILE ENHANCED)
+        add_test(NAME boot_state_execution_test COMMAND boot_state_execution_test)
+
         add_executable(static_match_cache_test tests/test_static_match_cache.c
             src/overlay_loader.c src/crc32.c)
         target_include_directories(static_match_cache_test PRIVATE include)
@@ -175,6 +216,14 @@ if(BUILD_TESTING)
             --cmake "${CMAKE_COMMAND}" --compiler "${CMAKE_C_COMPILER}"
             --generator "${CMAKE_GENERATOR}"
             --work-root "${CMAKE_CURRENT_BINARY_DIR}/hle-binding-fixtures")
+        find_program(PSX_PROFILE_TEST_NINJA NAMES ninja ninja.exe)
+        if(PSX_PROFILE_TEST_NINJA)
+            add_test(NAME execution_profile_test COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_execution_profile.py"
+                --cmake "${CMAKE_COMMAND}" --cc "${CMAKE_C_COMPILER}"
+                --ninja "${PSX_PROFILE_TEST_NINJA}")
+            set_tests_properties(execution_profile_test PROPERTIES RUN_SERIAL TRUE)
+        endif()
         add_test(NAME host_launch_timings_protocol_test COMMAND ${CMAKE_COMMAND} -E env
             "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}" "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_host_launch_timings_protocol.py")
@@ -572,6 +621,16 @@ if(BUILD_TESTING)
     target_link_libraries(host_keymap_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_keymap_test COMMAND host_keymap_test)
 
+    add_executable(host_osd_diagnostics_test
+        tests/test_host_osd_diagnostics.c src/host_osd.c)
+    target_include_directories(host_osd_diagnostics_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(host_osd_diagnostics_test PRIVATE
+        SDL_MAIN_HANDLED RECOMP_LAUNCHER=1 PSX_SDL_NO_RENDER=1
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(host_osd_diagnostics_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME host_osd_diagnostics_test COMMAND host_osd_diagnostics_test)
+
     add_executable(keyboard_pad_chord_test
         tests/test_keyboard_pad_chord.c
         src/psx_keybinds.c src/host_keymap.c)
@@ -709,6 +768,14 @@ if(BUILD_TESTING)
         PSX_GTE_REGISTER_TEST=1
         PSX_ENABLE_BLOCK_CYCLES=1)
     add_test(NAME gte_register_access_test COMMAND gte_register_access_test)
+    # Same ABI/result corpus for the native operation entry and the reference.
+    add_executable(gte_hle_contract_test
+        tests/test_gte_register_access.cpp src/gte.cpp src/pgxp.cpp src/psx_ram_geometry.c)
+    target_include_directories(gte_hle_contract_test PRIVATE include)
+    target_compile_definitions(gte_hle_contract_test PRIVATE
+        PSX_NO_DEBUG_TOOLS=1 PSX_GTE_REGISTER_TEST=1 PSX_ENABLE_BLOCK_CYCLES=1)
+    psxrecomp_execution_profile(gte_hle_contract_test PROFILE ENHANCED)
+    add_test(NAME gte_hle_contract_test COMMAND gte_hle_contract_test)
 
     # PGXP value-propagation engine (docs/ENHANCEMENTS.md G1.2/G1.3): shadow
     # load/store/COP2 roundtrips, half-word semantics, validate-on-read
@@ -720,6 +787,11 @@ if(BUILD_TESTING)
         src/psx_ram_geometry.c)
     target_include_directories(pgxp_test PRIVATE include)
     add_test(NAME pgxp_test COMMAND pgxp_test)
+
+    add_executable(pgxp_word_shadow_test tests/test_pgxp_word_shadow.cpp
+        src/pgxp.cpp src/psx_ram_geometry.c)
+    target_include_directories(pgxp_word_shadow_test PRIVATE include)
+    add_test(NAME pgxp_word_shadow_test COMMAND pgxp_word_shadow_test)
 
     # psx.enhancement.pgxp at session start (docs/ENHANCEMENTS.md G1.11): the
     # real builtin activation (mod API stubbed) and the pgxp_session.h
@@ -750,6 +822,8 @@ if(BUILD_TESTING)
         target_compile_definitions(${_pgxp_session_test} PRIVATE
             PSX_BUILTIN_PGXP_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/../mods/builtin/packages/psx.enhancement.pgxp/1.0.0/manifest.toml")
         target_link_libraries(${_pgxp_session_test} PRIVATE chdr-static)
+        target_sources(${_pgxp_session_test} PRIVATE src/mod_netplay.c)
+        psxrecomp_sha256_file(${_pgxp_session_test})
         if(WIN32)
             if(MSVC)
                 target_link_options(${_pgxp_session_test} PRIVATE /STACK:16777216)
@@ -761,6 +835,11 @@ if(BUILD_TESTING)
         if(_pgxp_session_test STREQUAL "pgxp_session_hooks_test")
             target_compile_definitions(${_pgxp_session_test} PRIVATE PSX_PGXP=1)
         endif()
+    endforeach()
+
+    foreach(_pgxp_isolated_test
+            gte_register_access_test gte_hle_contract_test pgxp_test pgxp_session_test)
+        target_sources(${_pgxp_isolated_test} PRIVATE tests/pgxp_test_mod_memory.cpp)
     endforeach()
 
     add_executable(psx_instr_cost_test tests/test_psx_instr_cost.cpp)
@@ -1106,6 +1185,7 @@ if(BUILD_TESTING)
         tests/test_mod_runtime.cpp
         src/iso_reader_c.cpp
         src/mod_runtime.cpp
+        src/mod_netplay.c
         src/mod_packages.cpp
         src/mod_media.cpp
         src/disc_path.cpp
@@ -1118,8 +1198,8 @@ if(BUILD_TESTING)
         ../recompiler/include
         ../recompiler/lib/toml11)
     target_link_libraries(mod_runtime_test PRIVATE chdr-static)
-    # The real disc hasher uses a 1 MiB scratch buffer. Match the runtime's
-    # stack allowance instead of overflowing MinGW's 1 MiB executable default.
+    psxrecomp_sha256_file(mod_runtime_test)
+    # Match the runtime's stack allowance for the remaining disc/mod helpers.
     if(WIN32)
         if(MSVC)
             target_link_options(mod_runtime_test PRIVATE /STACK:16777216)
@@ -1128,11 +1208,30 @@ if(BUILD_TESTING)
         endif()
     endif()
     add_test(NAME mod_runtime_test COMMAND mod_runtime_test)
+    add_test(NAME mod_netplay_missing_plugin_test COMMAND mod_runtime_test --missing-profile)
+    add_test(NAME mod_netplay_missing_renderer_test COMMAND mod_runtime_test --missing-renderer)
+    add_test(NAME mod_netplay_profile_options_test COMMAND mod_runtime_test --profile-options)
+    add_test(NAME mod_netplay_option_renderer_missing_test COMMAND mod_runtime_test --option-renderer-missing)
 
+    add_executable(neversoft_helpers_test tests/test_neversoft_helpers.cpp)
+    target_include_directories(neversoft_helpers_test PRIVATE include)
+    target_compile_features(neversoft_helpers_test PRIVATE cxx_std_17)
+    add_test(NAME neversoft_helpers_test COMMAND neversoft_helpers_test)
+
+    add_executable(aligned_archive_test tests/test_aligned_archive.cpp)
+    target_include_directories(aligned_archive_test PRIVATE include)
+    target_compile_features(aligned_archive_test PRIVATE cxx_std_17)
+    add_test(NAME aligned_archive_test COMMAND aligned_archive_test)
+
+    add_executable(resident_sector_test tests/test_resident_sector.cpp)
+    target_include_directories(resident_sector_test PRIVATE include)
+    target_compile_features(resident_sector_test PRIVATE cxx_std_17)
+    add_test(NAME resident_sector_test COMMAND resident_sector_test)
     add_executable(netplay_view_mods_test
         tests/test_netplay_view_mods.cpp
         src/iso_reader_c.cpp
         src/mod_runtime.cpp
+        src/mod_netplay.c
         src/mod_packages.cpp
         src/mod_media.cpp
         src/disc_path.cpp
@@ -1145,6 +1244,7 @@ if(BUILD_TESTING)
         ../recompiler/include
         ../recompiler/lib/toml11)
     target_link_libraries(netplay_view_mods_test PRIVATE chdr-static)
+    psxrecomp_sha256_file(netplay_view_mods_test)
     if(WIN32)
         if(MSVC)
             target_link_options(netplay_view_mods_test PRIVATE /STACK:16777216)
@@ -1160,6 +1260,7 @@ if(BUILD_TESTING)
     target_compile_definitions(mod_runtime_cache_test PRIVATE
         PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE=1)
     target_link_libraries(mod_runtime_cache_test PRIVATE chdr-static)
+    psxrecomp_sha256_file(mod_runtime_cache_test)
     if(WIN32)
         if(MSVC)
             target_link_options(mod_runtime_cache_test PRIVATE /STACK:16777216)
@@ -1173,6 +1274,7 @@ if(BUILD_TESTING)
         tests/test_mod_resident.cpp
         src/mod_resident.cpp
         src/mod_runtime.cpp
+        src/mod_netplay.c
         src/mod_packages.cpp
         src/mod_media.cpp
         src/disc_path.cpp
@@ -1185,6 +1287,7 @@ if(BUILD_TESTING)
         ../recompiler/include
         ../recompiler/lib/toml11)
     target_link_libraries(mod_resident_test PRIVATE chdr-static)
+    psxrecomp_sha256_file(mod_resident_test)
     if(WIN32)
         if(MSVC)
             target_link_options(mod_resident_test PRIVATE /STACK:16777216)
@@ -1422,6 +1525,20 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME render_pass_sandbox_test COMMAND render_pass_sandbox_test)
 
+    add_executable(render_pass_ot_test tests/test_render_pass_ot.cpp)
+    target_include_directories(render_pass_ot_test PRIVATE include)
+    target_compile_features(render_pass_ot_test PRIVATE cxx_std_17)
+    add_test(NAME render_pass_ot_test COMMAND render_pass_ot_test)
+
+    foreach(_submit_profile ENHANCED REFERENCE)
+        string(TOLOWER "${_submit_profile}" _submit_suffix)
+        set(_submit_test "render_pass_gpu_submit_${_submit_suffix}_test")
+        add_executable(${_submit_test} ../tests/test_render_pass_gpu_submit.cpp src/dma_gpu_ll.c)
+        target_include_directories(${_submit_test} PRIVATE include)
+        psxrecomp_execution_profile(${_submit_test} PROFILE ${_submit_profile})
+        add_test(NAME ${_submit_test} COMMAND ${_submit_test})
+    endforeach()
+
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)
@@ -1504,7 +1621,8 @@ if(BUILD_TESTING)
         # guard define and include roots the runtime build uses; the two WS
         # calls that TU makes are stubbed in the test and abort if reached.
         if(EXISTS "${PSXRECOMP_ROOT}/runtime/src/lobby_ws/rnet_ws.c")
-            add_executable(lobby_chat_ring_test tests/test_lobby_chat_ring.c)
+            add_executable(lobby_chat_ring_test tests/test_lobby_chat_ring.c
+                src/mod_netplay.c src/psx_sha256.c)
             target_include_directories(lobby_chat_ring_test PRIVATE
                 include
                 src
@@ -1524,6 +1642,8 @@ if(BUILD_TESTING)
             add_test(NAME lobby_chat_ring_test COMMAND lobby_chat_ring_test)
             add_executable(netplay_bios_wire_test
                 tests/test_netplay_bios_wire.c
+                src/mod_netplay.c
+                src/psx_sha256.c
                 src/netplay_bios_settle.c
                 src/lobby_ws/rnet_ws.c
                 src/lobby_ws/rnet_sha1.c)
@@ -1609,6 +1729,9 @@ if(BUILD_TESTING)
     add_executable(spu_guest_clock_test tests/test_spu_guest_clock.c)
     target_include_directories(spu_guest_clock_test PRIVATE include)
     add_test(NAME spu_guest_clock_test COMMAND spu_guest_clock_test)
+    add_executable(spu_sample_banks_test tests/test_spu_sample_banks.c)
+    target_include_directories(spu_sample_banks_test PRIVATE include)
+    add_test(NAME spu_sample_banks_test COMMAND spu_sample_banks_test)
 
     add_executable(spu_gaussian_test tests/test_spu_gaussian.c)
     target_include_directories(spu_gaussian_test PRIVATE include)
@@ -1729,6 +1852,21 @@ if(BUILD_TESTING)
         add_test(NAME release_stage_cache_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_stage_cache.py)
+        find_program(PSX_PACKAGE_TEST_BASH NAMES bash
+            HINTS "C:/Program Files/Git/bin")
+        add_test(NAME package_execution_stage_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_package_execution_stage.py
+                         --bash "${PSX_PACKAGE_TEST_BASH}")
+        if(NOT PSX_PACKAGE_TEST_BASH)
+            set_tests_properties(package_execution_stage_test PROPERTIES DISABLED TRUE)
+        endif()
+        add_test(NAME package_appimage_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_package_appimage.py)
+        if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+            set_tests_properties(package_appimage_test PROPERTIES DISABLED TRUE)
+        endif()
         # Overlay shards and BIOS modules are compiled for the RUNTIME's
         # architecture: an x86_64 macOS runtime under Rosetta used to get arm64
         # shards (arm64-only Xcode clang, no -arch) in its macos-x64 cache and

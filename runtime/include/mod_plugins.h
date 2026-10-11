@@ -204,6 +204,15 @@ int psx_mod_host_write_ram(uint32_t address, const void* data, uint32_t bytes);
  * Library bookkeeping (transfer callbacks, busy flags) stays the caller's. */
 int psx_mod_spu_upload(uint32_t spu_address, uint32_t guest_source,
                        uint32_t bytes, int stop_after);
+/* Private immutable ADPCM residency for opt-in title mods. Does not upload
+ * into or expand the 512 KiB hardware RAM. Bind before the original driver
+ * queues a voice; the bank is latched when its next KEYON reaches the SPU. */
+int psx_mod_spu_sample_bank(uint32_t bank, const void *adpcm, uint32_t bytes);
+int psx_mod_spu_bind_voice_bank(unsigned voice, uint32_t bank);
+int psx_mod_spu_private_voice_play(unsigned slot,uint32_t bank,const uint16_t regs[8],unsigned mode);
+void psx_mod_spu_private_voice_stop(uint32_t mask);
+int psx_mod_spu_private_voice_volume(unsigned slot,uint16_t left,uint16_t right);
+uint32_t psx_mod_spu_private_voice_active(void);
 /* PsyQ LoadImage completed synchronously: texture-cache flush, GP0 A0h
  * rectangle copy of w*h 16-bit pixels from guest RAM (provenance attributed
  * per word), then GP1(04h) DMA direction CPU->GP0 for uploads the library
@@ -264,8 +273,12 @@ void psx_mod_set_native_wide_nclip_previous_site(uint32_t address, uint32_t expe
 void psx_mod_tag_hud_primitive(uint32_t primitive, int edge);
 /* Packet-guarded screen-space anchor: -1 left, +1 right, 0 stays centred.
  * Unlike the legacy role tag above, zero explicitly protects centred text
- * from automatic layout transforms. Word immediately before the GP0 colour
- * command; for a compound E1+SPRT packet this is its E1 word (P_TAG+4). */
+ * from automatic layout transforms. Native-wide translates the group;
+ * projection-and-stretch squashes around the selected screen anchor. This
+ * works across separate DMA lists and is inert at native 4:3. Title code
+ * owns classification and must tag each completed packet. Pass the word
+ * immediately before the GP0 colour command; for a compound E1+SPRT packet
+ * this is its E1 word (P_TAG+4). */
 void psx_mod_anchor_hud_primitive(uint32_t primitive, int edge);
 /* Screen-space masks identified by their title's producer, P_TAG addresses.
  * Flat panels extend only their exterior boundaries. Radial flat/Gouraud
@@ -1019,6 +1032,10 @@ int psx_mod_allow_direct_shortcut(uint32_t shortcut);
  * when the mode starts and 0 when it ends (setting it every frame from the
  * title's state is fine). Cleared at every mod/session reset. */
 void psx_mod_set_rewind_blocked(int blocked);
+/* Refuse saves and loads while trusted host gameplay state cannot be restored
+ * by the guest serializer. Includes synchronized netplay state operations;
+ * pending requests are cancelled. Cleared before each session's activation. */
+void psx_mod_set_savestate_blocked(int blocked);
 
 /* Title-supplied host rumble for one guest port (0-based): DualShock motor
  * values (small: 0 off / nonzero on, large: 0..255) for a title that

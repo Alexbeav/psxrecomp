@@ -82,6 +82,11 @@ int main(void) {
         assert(!boot_state_load_buffer(saved,len,123,0x801b0000,&cpu));
         assert(cpu.pc==0xdeadbeef && ram[0x100]==0x55 && fntrace_is_game_started()==!started);
         u32(saved + 24, implementation_key);
+        /* A foreign execution identity must fail before any state is applied. */
+        u32(saved+32,boot_state_layout_cookie() ^ 0x12345678u);
+        assert(!boot_state_load_buffer(saved,len,123,0x801b0000,&cpu));
+        assert(cpu.pc==0xdeadbeef && ram[0x100]==0x55 && fntrace_is_game_started()==!started);
+        u32(saved+32,boot_state_layout_cookie());
         saved[len-4]=2;
         assert(!boot_state_load_buffer(saved,len,123,0x801b0000,&cpu));
         saved[len-4]=started;

@@ -81,6 +81,7 @@
 #include "gpu_hd_textures.h"
 #include "mod_texture_banks.h"
 #include "gl_batch_policy.h"
+#include "mod_netplay.h"
 #include "frame_interpolation.h"
 #include "render_pass_plan.h"
 #include "render_pass.h"
@@ -749,7 +750,7 @@ static GLuint s_tex_prog = 0, s_tex_vao = 0, s_tex_vbo = 0;
  * fragment shader read the noperspective varying — i.e. bit-identical to the
  * pre-feature pipeline. twin is the prim's GP0(E2h) texture window, its low 20
  * bits as a whole float (mask x, mask y, offset x, offset y; 5 bits each). */
-#define TEXV 26
+#define TEXV 27
 static GLuint s_blit_prog = 0, s_blit_vao = 0, s_blit_vbo = 0;
 static GLuint s_blit_hi_prog = 0;            /* windowed hi surface blit */
 static GLint  s_uBhSrc = -1, s_uBhPass = -1, s_uBhMaskset = -1, s_uBhSrcDiv = -1;
@@ -795,7 +796,7 @@ static GLint s_uVram = -1, s_uTpage = -1, s_uClut = -1, s_uDepth = -1;
 static GLint s_uHdTexture = -1;
 static GLint s_uPalette = -1;
 static GLint s_uRaw = -1, s_uSemipass = -1, s_uSemimode = -1;
-static GLint s_uMaskset = -1, s_uFilter = -1;
+static GLint s_uMaskset = -1;
 static GLint s_uLimits = -1;
 /* Native-wide x-projection uniforms (per program). u_xoff = x translation in
  * native px (0 canonical), u_xhalf = x clip half-extent in native px (512
@@ -1857,7 +1858,8 @@ static const char *GEO_FS =
  * vertices — instead of uniforms, so consecutive textured prims with the same
  * blend/mask state batch into one draw (see flush_tex_batch). The texture
  * window rides in the vertex too (a_twin), so a GP0(E2h) change need not end
- * a batch. The remaining uniforms (u_maskset/u_filter/u_semipass) are the
+ * a batch. Sampling mode also travels per primitive, so sharp UI and filtered
+ * world geometry can share a draw. The remaining uniforms (u_maskset/u_semipass) are the
  * batch keys + per-pass state. */
 static const char *TEX_VS =
     "#version 330\n"
@@ -1874,6 +1876,7 @@ static const char *TEX_VS =
     "layout(location=10) in float a_twin; /* GP0(E2h) bits 0..19 */\n"
     "layout(location=11) in vec4 a_hd_source; /* page origin + native extent */\n"
     "layout(location=12) in float a_hd_mode;\n"
+    "layout(location=13) in float a_filter; /* 0 nearest, 1 bilinear, 2 stable */\n"
     "uniform float u_shift;\n"
     "uniform float u_xoff;   /* native-wide x translation (px); 0 canonical */\n"
     "uniform float u_xhalf;  /* x clip half-extent (px); 512 canonical */\n"
@@ -1887,6 +1890,7 @@ static const char *TEX_VS =
     "flat out int v_raw; flat out ivec4 v_limits; flat out int v_semi;\n"
     "flat out int v_twin;\n"
     "flat out vec4 v_hd_source; flat out int v_hd_mode;\n"
+    "flat out int v_filter;\n"
     "smooth out vec3 v_col_p; flat out int v_cp;\n"
     "void main(){ v_uv = a_uv; v_uv_p = a_uv; v_col = a_col; v_col_p = a_col.rgb;\n"
     "  v_persp = (a_q > 0.0) ? 1 : 0;\n"
@@ -1894,6 +1898,7 @@ static const char *TEX_VS =
     "  v_depth = int(a_depth + 0.5); v_raw = int(a_raw + 0.5);\n"
     "  v_semi = int(a_semi + 0.5);\n"
     "  v_twin = int(a_twin + 0.5);\n"
+    "  v_filter = int(a_filter + 0.5);\n"
     "  v_hd_source=a_hd_source; v_hd_mode=int(a_hd_mode+0.5);\n"
     "  v_limits = ivec4(floor(a_limits + 0.5));\n"
     "  /* u_shift: align GL's center-sample grid with the PS1 integer grid (see\n"
@@ -1931,6 +1936,7 @@ static const char *TEX_FS =
     "flat in ivec4 v_limits;  /* prim uv sampling bounds (inclusive, post-wrap) */\n"
     "flat in int v_semi;      /* GP0 command has semi-transparency enabled */\n"
     "flat in int v_twin;      /* texture window, GP0(E2h) bits 0..19 */\n"
+    "flat in int v_filter;    /* sampling mode belongs to this primitive */\n"
     "flat in vec4 v_hd_source; flat in int v_hd_mode;\n"
     "uniform sampler2D u_hd_texture;\n"
     "uniform usampler2D u_vram;\n"
@@ -2077,7 +2083,7 @@ static const char *TEX_FS =
     "}\n"
     "void main(){\n"
     "  int stp; vec3 rgb;\n"
-    "  int fmode = u_filter & 15;\n"
+    "  int fmode = v_filter & 15;\n"
     "  /* v_persp is 0 for every prim unless [video] perspective_texturing is on\n"
     "   * AND this prim's packet carried full GTE projection provenance, so the\n"
     "   * default is the PS1's affine (noperspective) mapping. */\n"
@@ -3412,10 +3418,10 @@ static void wide_clear_bd_scale(GLint uScale, GLint uCenter) {
 }
 
 /* ---- textured-prim batching -------------------------------------------- *
- * Consecutive textured prims sharing blend/mask/texwindow/filter coalesce into
+ * Consecutive textured prims sharing blend/mask/texwindow coalesce into
  * one draw. Per-prim texture state (texpage/clut/depth/raw/uv-limits/texture
- * window) rides in the vertex (TEXV flat attributes), so only `semi` (blend)
- * and the global mask/filter are batch keys, plus the texture window unless
+ * window/filter) rides in the vertex (TEXV flat attributes), so only `semi` (blend)
+ * and the global mask are batch keys, plus the texture window unless
  * texture-window batching is on (below). flush_tex_batch() draws the queued verts; it
  * is called before any op that reads VRAM, writes it outside the batch, or
  * changes batch state (see callers: flush_cpu_upload, flush_pack_if_sampling,
@@ -3690,7 +3696,6 @@ typedef struct {
     int8_t  semi;            /* tex: batch semi key; geo: blend mode, -1 opaque */
     uint8_t mask;            /* tex: batch set-mask; geo: stencil write value */
     uint8_t check;           /* mask-check state at draw time */
-    uint8_t filter;
     GLuint  tex;             /* sampled texture (bank or raw mirror) */
     GLuint  palette, hd_tex;
     int     ax0, ay0, ax1, ay1;  /* draw area, inclusive */
@@ -3787,7 +3792,6 @@ static int hiw_enqueue_tex(int nverts, int semi, int mirror, int gate) {
     if (!c) { hiw_flush_queue(); return 0; }
     c->semi = (int8_t)semi;
     c->mask = (uint8_t)s_tb_mask;
-    c->filter = (uint8_t)s_tb_filter;
     c->tex = s_tb_bank_tex ? s_tb_bank_tex : s_raw_tex;
     c->palette = s_tb_bank_tex && !s_tb_bank_live_clut ? s_tb_bank_tex : s_raw_tex;
     c->hd_tex = s_tb_hd_tex;
@@ -3846,7 +3850,6 @@ static void hiw_replay_wide(void) {
             p_glUniform1f(s_tex_uXcenter, c->wcenter);
             bind_textured_resources(c->tex, c->palette, c->hd_tex);
             p_glUniform1i(s_uMaskset, c->mask);
-            p_glUniform1i(s_uFilter, c->filter);
             p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
                            s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
             depth_apply_ex(c->depth, 1);
@@ -3931,7 +3934,6 @@ static void hiw_flush_queue(void) {
                 }
                 bind_textured_resources(c->tex, c->palette, c->hd_tex);
                 p_glUniform1i(s_uMaskset, c->mask);
-                p_glUniform1i(s_uFilter, c->filter);
                 p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
                                s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
                 depth_apply_ex(c->depth, 1);
@@ -3991,7 +3993,6 @@ static void flush_tex_batch_impl(void) {
     bind_textured_resources(s_tb_bank_tex ? s_tb_bank_tex : s_raw_tex,
         s_tb_bank_tex && !s_tb_bank_live_clut ? s_tb_bank_tex : s_raw_tex, s_tb_hd_tex);
     p_glUniform1i(s_uMaskset, s_tb_mask);
-    p_glUniform1i(s_uFilter, s_tb_filter);
     p_glBindVertexArray(s_tex_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_tex_vbo);
     p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(nverts * TEXV * sizeof(float)), s_tb, PSXGL_STREAM_DRAW);
@@ -4674,8 +4675,9 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
     }
     mark_prim_dirty(xs, ys, 3, 1 /* textured */);
 
-    /* Append to the textured batch. Flush first if this prim's blend/mask/twin/
-     * filter differ from the open batch, or the buffer is full. Per-prim texture
+    /* Append to the textured batch. Flush first if this prim's blend/mask/twin
+     * differ from the open batch, or the buffer is full. Under mask checking,
+     * retain filter boundaries for stencil visibility. Per-prim texture
      * state goes in the vertex; only these keys force a new draw (the window
      * not at all under texture-window batching, see s_twin_batching). */
     {
@@ -4697,7 +4699,10 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             else if (isolate) reason = 0;
             else if (batch_semi != s_tb_semi) reason = 1;
             else if (s_mask_set != s_tb_mask) reason = 2;
-            else if (filter != s_tb_filter) reason = 3;
+            /* With destination-mask checking, a batch's STP stencil fixup
+             * happens after its color pass. Keep the old filter boundary so
+             * a later primitive observes an earlier primitive's mask. */
+            else if (s_mask_check && filter != s_tb_filter) reason = 3;
             else if (gate != s_tb_gate) reason = 4;
             else if ((!s_twin_batching || s_mask_check) &&
                      (twx != s_tb_twin[0] || twy != s_tb_twin[1] ||
@@ -4737,6 +4742,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             vp[21] = (float)hd.origin_u; vp[22] = (float)hd.origin_v;
             vp[23] = (float)hd.source_width; vp[24] = (float)hd.source_height;
             vp[25] = (float)hd.alpha_mode;
+            vp[26] = (float)filter; /* per-primitive filter */
         }
         if (pgxp_tri_is_3d()) {
             float *t0 = &s_tb[s_tb_n * TEXV];
@@ -6009,6 +6015,7 @@ static int init_gpu_raster(void) {
         p_glVertexAttribPointer(10, 1, GL_FLOAT, GL_FALSE, st, (void*)(20*sizeof(float))); p_glEnableVertexAttribArray(10); /* twin */
         p_glVertexAttribPointer(11, 4, GL_FLOAT, GL_FALSE, st, (void*)(21*sizeof(float))); p_glEnableVertexAttribArray(11); /* HD source */
         p_glVertexAttribPointer(12, 1, GL_FLOAT, GL_FALSE, st, (void*)(25*sizeof(float))); p_glEnableVertexAttribArray(12); /* HD alpha mode */
+        p_glVertexAttribPointer(13, 1, GL_FLOAT, GL_FALSE, st, (void*)(26*sizeof(float))); p_glEnableVertexAttribArray(13); /* filter */
     }
 
     p_glGenVertexArrays(1, &s_blit_vao);
@@ -6064,7 +6071,13 @@ static int init_gpu_raster(void) {
     return 1;
 }
 
-int gl_renderer_texture_banks_supported(void) { return s_raster_ok && !s_cpu_auth_dual && !s_hd_native_authority; }
+int gl_renderer_texture_banks_supported(void) {
+    /* A trusted title's bank pixels affect GL presentation only. Keep the
+     * existing software @1x VRAM authority during its delay-sync session. */
+    return s_raster_ok && !s_hd_native_authority &&
+           (!s_cpu_auth_dual || (psx_mod_netplay_is_active() &&
+                                psx_mod_netplay_requires_texture_banks()));
+}
 
 int gl_renderer_fit_wide_aspect(int disp_w, int *num, int *den) {
     /* No sync point: pure arithmetic on limits that change only while the
@@ -7649,13 +7662,15 @@ static void interp_present_source_interval(void) {
  * rect; its phases then map onto host time from that interval's start. At
  * each output deadline the presenter shows the newest image at or before the
  * deadline's phase, crossfading to the next one when passes were shed. Two
- * generations exist: the one on screen and the one being built for the next
- * flip. */
+ * generations can wait behind the one on screen: IRQ-driven flips can become
+ * visible to the host after the game has already drawn its next frame. */
 
 #define PASS_SLOTS (RENDER_PASS_MAX_PHASES + 1u)
+#define PASS_GENERATIONS 3
 typedef struct PassGen {
     int      valid;
     int      promoted;
+    uint64_t order,created_cycle;
     int      x, y, w, h;          /* captured VRAM rect (what is presented) */
     int      rx, ry, rw, rh;      /* the plugin's pass rect (backed up)     */
     int      tex_w, tex_h;        /* slot size (hr pixels; wide band if wide) */
@@ -7667,7 +7682,8 @@ typedef struct PassGen {
     double   t_start, t_len;      /* host ticks, set on promotion */
 } PassGen;
 static int      s_pass_flip_shown = 0;
-static PassGen  s_pgen[2];
+static PassGen  s_pgen[PASS_GENERATIONS];
+static uint64_t s_pgen_order;
 /* Double-buffer complete pairs: the unpublished set may be overwritten while
  * the last complete pair remains visible. No temporal phases or generation. */
 typedef struct StereoPair {
@@ -7693,13 +7709,14 @@ static uint32_t s_stereo_capture_count;
 static int      s_present_crop_dx = 0, s_present_crop_dy = 0;
 static int      s_present_crop_w = 0, s_present_crop_h = 0;
 /* Slot textures are made as slots fill: [0, s_pgen_alloc_n) exist, all at
- * s_pgen_alloc_w x h. A generation never fills past pass_slot_cap, so two
+ * s_pgen_alloc_w x h. A generation never fills past pass_slot_cap, so three
  * generations stay inside its budget whatever the internal scale. */
-static GLuint   s_pgen_tex[2][PASS_SLOTS];
-static uint32_t s_pgen_alloc_n[2];
-static int      s_pgen_alloc_w[2], s_pgen_alloc_h[2];
+static GLuint   s_pgen_tex[PASS_GENERATIONS][PASS_SLOTS];
+static uint32_t s_pgen_alloc_n[PASS_GENERATIONS];
+static int      s_pgen_alloc_w[PASS_GENERATIONS], s_pgen_alloc_h[PASS_GENERATIONS];
 static int      s_pgen_cur = 0;
-static int      s_pgen_promote = 0;
+static int      s_pgen_write = 1;
+static int      s_pgen_promote = -1;
 static uint64_t s_pgen_promotions = 0, s_pgen_presents = 0, s_pgen_blends = 0;
 static uint64_t s_pgen_expired = 0, s_pgen_unmatched = 0, s_pgen_early = 0;
 static uint64_t s_pgen_late = 0;     /* presents past the frame's planned end */
@@ -7760,9 +7777,8 @@ uint64_t gl_renderer_perf_ticks(void) { return SDL_GetPerformanceCounter(); }
 uint64_t gl_renderer_perf_frequency(void) { return SDL_GetPerformanceFrequency(); }
 
 static void pass_gens_invalidate(void) {
-    s_pgen[0].valid = s_pgen[1].valid = 0;
-    s_pgen[0].promoted = s_pgen[1].promoted = 0;
-    s_pgen_promote = 0;
+    for(int i=0;i<PASS_GENERATIONS;++i)s_pgen[i].valid=s_pgen[i].promoted=0;
+    s_pgen_promote = -1;
 }
 
 static int s_pass_force_refuse = -1;   /* -1: read PSX_RENDER_PASS_REFUSE */
@@ -7834,9 +7850,9 @@ int gl_renderer_pass_ready(void) {
     return gl_renderer_pass_unavailable() == PSX_MOD_RENDER_PASS_READY;
 }
 
-/* Slots per generation that fit a 256 MiB budget for both generations. */
+/* Slots per generation that fit a 256 MiB budget for the whole queue. */
 static uint32_t pass_slot_cap(int tex_w, int tex_h) {
-    double bytes = (double)tex_w * (double)tex_h * 4.0 * 2.0;
+    double bytes = (double)tex_w * (double)tex_h * 4.0 * PASS_GENERATIONS;
     uint32_t cap = bytes > 0.0 ? (uint32_t)((256.0 * 1024.0 * 1024.0) / bytes)
                                : PASS_SLOTS;
     if (cap > PASS_SLOTS) cap = PASS_SLOTS;
@@ -8123,8 +8139,7 @@ static void pass_resources_release(void) {
     }
     s_xr_color_prog=s_xr_native_tex=0;
     stereo_resources_release();
-    pass_gen_release(0);
-    pass_gen_release(1);
+    for(int gi=0;gi<PASS_GENERATIONS;++gi)pass_gen_release(gi);
     pass_gens_invalidate();
     pass_free_color_fbo(&s_pb_hr_tex, &s_pb_hr_rb, &s_pb_hr_fbo,
                         &s_pb_hr_w, &s_pb_hr_h);
@@ -8195,7 +8210,12 @@ static int transaction_begin(int x, int y, int w, int h, int open_gen,
     s_pass_begin_diag.source_path = s_interp_source_path;
     s_pass_begin_diag.capture_w = s_interp_w;
     s_pass_begin_diag.capture_h = s_interp_h;
-    gi = 1 - s_pgen_cur;
+    if(open_gen && !stereo) {
+        uint64_t order[PASS_GENERATIONS];uint32_t valid=0;
+        for(int i=0;i<PASS_GENERATIONS;++i){order[i]=s_pgen[i].order;if(s_pgen[i].valid)valid|=1u<<i;}
+        s_pgen_write=render_pass_generation_write(s_pgen_cur,valid,order,PASS_GENERATIONS);
+    }
+    gi = s_pgen_write;
     g = &s_pgen[gi];
     s_pass_begin_diag.generation = gi;
     s_pass_begin_diag.valid = g->valid;
@@ -8231,7 +8251,7 @@ static int transaction_begin(int x, int y, int w, int h, int open_gen,
     s_pass_begin_diag.wide = wide;
     s_pass_begin_diag.requested_w = tw;
     s_pass_begin_diag.requested_h = th;
-    gi = 1 - s_pgen_cur;
+    gi = s_pgen_write;
     g = &s_pgen[gi];
     if (local) {
         /* No generation: the image stays in the presenter surface. */
@@ -8244,6 +8264,7 @@ static int transaction_begin(int x, int y, int w, int h, int open_gen,
         if (!pass_gen_reserve(gi, 1u, tw, th))
             return pass_begin_refuse("generation_reserve");
         memset(g, 0, sizeof *g);
+        g->order=++s_pgen_order;g->created_cycle=psx_cycle_count;
         g->x = cx; g->y = cy; g->w = cw; g->h = ch;
         g->rx = x; g->ry = y; g->rw = w; g->rh = h;
         g->tex_w = tw; g->tex_h = th;
@@ -8333,7 +8354,7 @@ backed_up:
 /* keep_color: a committed netplay local view keeps the rect's presented
  * colour (hr surface, native-wide band); everything else is put back. */
 static void transaction_restore_ex(int keep_color) {
-    int S = s_hr_scale, gi = 1 - s_pgen_cur;
+    int S = s_hr_scale, gi = s_pgen_write;
     const GLbitfield hr_bits = keep_color ? GL_STENCIL_BUFFER_BIT
                                           : GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
     (void)gi;
@@ -8425,7 +8446,7 @@ int gl_renderer_stereo_begin(int x, int y, int w, int h, int reuse) {
 }
 void gl_renderer_pass_end(uint32_t alpha_q16, int keep) {
     GL_RT_SYNC("pass_end");
-    int gi = 1 - s_pgen_cur;
+    int gi = s_pgen_write;
     PassGen *g = &s_pgen[gi];
     if (!s_pass_active) return;
     flush_flat_batch(); flush_tex_batch(); flush_cpu_upload();
@@ -8809,13 +8830,13 @@ static int pass_gen_present(uint64_t deadline) {
     /* Past phase 1 the next flip is late (a lagging tick): the newest image
      * holds until it comes. Only a game that stops flipping for several
      * frame lengths expires the generation. */
-    if (!render_pass_gen_select(g->phase, g->n, p, &lo, &hi, &t)) {
+    if (!render_pass_gen_select_mode(g->phase, g->n, p, s_interp_hold, &lo, &hi, &t)) {
         g->valid = 0;
         s_pgen_expired++;
         return 0;
     }
     if (!interp_present_pair(s_pgen_tex[s_pgen_cur][lo],
-                             s_pgen_tex[s_pgen_cur][hi], t, 0))
+                             s_pgen_tex[s_pgen_cur][hi], t, s_interp_blend_mode))
         return 0;
     s_pgen_presents++;
     if (lo != hi) s_pgen_blends++;
@@ -8865,10 +8886,11 @@ uint64_t gl_renderer_pass_backups_reused(void) {
 
 uint32_t gl_renderer_pass_image_textures(uint64_t *bytes) {
     GL_RT_SYNC("pass_image_textures");
-    uint32_t n = s_pgen_alloc_n[0] + s_pgen_alloc_n[1];
+    uint32_t n = 0;
+    for(int gi=0;gi<PASS_GENERATIONS;++gi)n+=s_pgen_alloc_n[gi];
     if (bytes) {
         *bytes = 0;
-        for (int gi = 0; gi < 2; gi++)
+        for (int gi = 0; gi < PASS_GENERATIONS; gi++)
             *bytes += (uint64_t)s_pgen_alloc_n[gi] * (uint64_t)s_pgen_alloc_w[gi] *
                       (uint64_t)s_pgen_alloc_h[gi] * 4u;
     }
@@ -8893,14 +8915,17 @@ void gl_renderer_pass_set_flip_shown(int shown) {
  * for (render_pass_gen_flip_matches) or a frame without passes. */
 static void pass_note_new_frame(int origin_x, int origin_y, int source_path,
                                 int pw, int ph) {
-    PassGen *pend = &s_pgen[1 - s_pgen_cur];
-    if (pend->valid && !pend->promoted &&
-        render_pass_gen_flip_matches(pend->shown, pend->x, pend->y,
-                                     pend->source_path, pend->tex_w, pend->tex_h,
-                                     origin_x, origin_y, source_path, pw, ph)) {
-        s_pgen_promote = 1;
-    } else {
-        s_pgen_promote = 0;
+    uint64_t order[PASS_GENERATIONS];uint32_t matches=0;
+    for(int i=0;i<PASS_GENERATIONS;++i) {
+        PassGen* pend=&s_pgen[i];order[i]=pend->order;
+        if(!pend->valid || pend->promoted)continue;
+        if(psx_cycle_count<pend->created_cycle || psx_cycle_count-pend->created_cycle>
+            (uint64_t)pend->period*g_psx_vblank_cycles*4u){pend->valid=0;continue;}
+        if(render_pass_gen_flip_matches(pend->shown,pend->x,pend->y,
+            pend->source_path,pend->tex_w,pend->tex_h,origin_x,origin_y,source_path,pw,ph))matches|=1u<<i;
+    }
+    s_pgen_promote=render_pass_generation_oldest(matches,order,PASS_GENERATIONS);
+    if(s_pgen_promote<0) {
         if (s_pgen[s_pgen_cur].valid) s_pgen_unmatched++;
         s_pgen[s_pgen_cur].valid = 0;
         s_pgen[s_pgen_cur].promoted = 0;
@@ -8943,11 +8968,11 @@ static void pass_dump_generation(int gi) {
 
 static void pass_apply_promotion(void) {
     s_intervals_since_plan++;
-    if (!s_pgen_promote) return;
-    s_pgen_promote = 0;
+    if (s_pgen_promote<0) return;
     s_pgen[s_pgen_cur].valid = 0;
     s_pgen[s_pgen_cur].promoted = 0;
-    s_pgen_cur = 1 - s_pgen_cur;
+    s_pgen_cur = s_pgen_promote;
+    s_pgen_promote = -1;
     {
         PassGen *g = &s_pgen[s_pgen_cur];
         double sp = s_interp_schedule.frame_end - s_interp_schedule.frame_start;

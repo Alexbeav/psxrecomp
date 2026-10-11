@@ -24,8 +24,37 @@ appears when the host advertises `GameInfo.netplay_supported`.
 ## Rollback netcode
 
 Titles that opt in with `[netplay] content_negotiation = true` (game.toml,
-default false) get content negotiation; every other title keeps vanilla
-netplay (mods cleared), the MOTK1 LAN protocol and plan-free lobby caps.
+default false) get content negotiation; titles without a trusted simulation
+profile keep vanilla netplay (simulation mods cleared), the MOTK1 LAN protocol
+and plan-free lobby caps.
+
+A statically linked title can register `PSXModNetplayProfile` from
+`runtime/include/mod_netplay.h` for a shared simulation such as experimental
+co-op. The profile forces its native simulation plugin and permitted fixed view
+without importing or saving offline package choices. Its compatibility revision
+pins lobby versioning and a SHA-256 profile identity joins the normal
+execution/content handshake on every transport. Unsupported rollback requests
+use delay-sync; unsupported user and synchronized save/load requests are refused.
+An optional read-only callback contributes canonical host-owned gameplay state
+to the existing core CRC; digest logs report this as `mod=`. The callback must
+exclude pointers, padding, rendering caches and local-only input state.
+
+`requires_retained_texture_banks` opts a trusted profile into retained GL
+textures during dual-raster netplay. It requires a working OpenGL backend;
+software/Vulkan selections and an unavailable bank implementation are rejected
+before guest boot. Software at 1x remains the authoritative VRAM/GPUREAD/CRC
+source, independent of GL presentation resolution/filter preferences. Retained
+bank pixels replace textures only on the GL image; the software authority still
+samples ordinary VRAM for those commands. This policy follows the X6 co-op
+renderer behavior and does not provide software retained-bank rendering or
+prove visual equivalence to authoritative VRAM. Validate gameplay state and
+GL presentation separately. The flag is part of the session content identity.
+
+For an offline mode whose host state is not serialized, a trusted plugin can
+call `psx_mod_set_savestate_blocked(1)` and `psx_mod_set_rewind_blocked(1)` during
+activation. These policies reset before each new session; save blocking also
+cancels already staged requests and in-memory load blobs. Memory-card saves
+and the user's persisted settings are separate and remain available.
 
 Online rooms can publish a host-selected mod plan: package versions, enabled
 features/options and a portable plan fingerprint. Every peer resolves and

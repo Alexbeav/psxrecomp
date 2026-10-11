@@ -73,7 +73,7 @@ typedef struct {
     uint32_t codegen_ver;    /* codegen version XOR build PSX_SAVESTATE_IMPL_TAG  */
     /* ---- layout ---- */
     uint32_t section_count;  /* number of sections that follow                    */
-    uint32_t reserved;       /* v8: enhancement-memory layout cookie; vanilla 0   */
+    uint32_t reserved;       /* enhancement-memory, RAM and execution cookie     */
 } BootStateHeader;
 
 #define BOOT_STATE_HEADER_WIRE_BYTES 36u

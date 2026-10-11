@@ -236,6 +236,11 @@ GrBackend gr_backend(void) { return GR_BACKEND_SOFTWARE; }
 int gl_renderer_texture_banks_supported(void) { return 0; }
 int gl_renderer_select_texture_bank(uint16_t id) { return id == 0; }
 int gl_renderer_select_texture_bank_live_clut(uint16_t id) { return id == 0; }
+void gl_renderer_note_wide_triangle_recovery(int enabled) { (void)enabled; }
+int gl_renderer_projective_supported(void) { return 0; }
+void gl_renderer_draw_projected_triangle(const PSXProjectedVertex vertices[3],
+    uint16_t texpage, uint16_t clut_x, uint16_t clut_y, int raw, int semi, int perspective)
+{ (void)vertices; (void)texpage; (void)clut_x; (void)clut_y; (void)raw; (void)semi; (void)perspective; abort(); }
 uint16_t mod_texture_packet_bank(uint32_t p, const uint32_t *words, uint32_t n)
 { (void)p; (void)words; (void)n; return 0; }
 int mod_texture_packet_precision(uint32_t p, float q[3], float xy[6])
@@ -303,6 +308,10 @@ int gte_fg_source_enabled(void) { return 0; }
 int gte_fg_source_lookup(uint32_t packed, GteFgSrc out[2])
 { (void)packed; (void)out; abort(); }
 void pgxp_set_enabled(int enabled) { (void)enabled; }
+void pgxp_set_projection_tracking(int enabled) { (void)enabled; }
+int pgxp_projection_tracking(void) { return 0; }
+int pgxp_load_projection(uint32_t addr, uint32_t packed, PGXPProjection *out)
+{ (void)addr; (void)packed; (void)out; return 0; }
 int pgxp_get_gte_sxy_checked(uint32_t slot, uint32_t packed, int require_valid,
                              int32_t *x16, int32_t *y16)
 { (void)slot; (void)packed; (void)require_valid; (void)x16; (void)y16; return 0; }

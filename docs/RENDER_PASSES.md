@@ -207,12 +207,13 @@ While `fn` runs (`g_psx_render_pass_active`):
 
 | Area | Behaviour | Where |
 |---|---|---|
-| Guest clock | cycles are counted (GTE and mult/div deadlines work) but no device is serviced, no VBlank or device event fires | `psx_cycles.c` freeze (`psx_cycle_freeze.h`, runtime-only: the codegen-hashed `psx_cycles.h` is untouched) |
+| Guest clock | cycles are counted (GTE and mult/div deadlines work) but no device is serviced, no VBlank or device event fires; render freezes restore the carried guest-cycle-scale fraction and gates as well as clock/deferred charges | `psx_cycles.c` freeze (`psx_cycle_freeze.h`, runtime-only: the codegen-hashed `psx_cycles.h` is untouched) |
 | Interrupts | never delivered | `interrupts.c` |
 | GPU DMA | linked lists and delayed completions finish synchronously | `dma.c` |
 | RAM / scratchpad stores | written directly, bypassing code-page tracking, overlay watch, write traces and fingerprints; RAM addresses fold through the live geometry (2 MiB mirrored, or 8 MiB with the 8 MB RAM mod), as outside a pass | `memory.c` `render_pass_store` |
 | Mod arena stores (Expansion-1 mod memory, GPU-DMA aperture) | written; each page is backed up on its first write in the pass and put back at the end, so a title may keep its primitive buffers there (extended draw distance) | `memory.c` `render_pass_mod_store` |
 | MMIO stores | allowed: GP0, GP1 DMA mode / info, GPU and OTC DMA channels, DPCR/DICR, I_STAT/I_MASK. Dropped and counted: SPU (key-ons), CD, timers, SIO, MDEC, other DMA channels, memory control | `memory.c` |
+| MMIO reads | SIO, CD, MDEC and SPU reads abort the pass before consuming device state. I_STAT reads do not tick SIO. Checkpointed GPU, timer, DMA and interrupt reads remain available | `memory.c`, `render_pass.c` |
 | VRAM | only the declared rect; writes that bypass the scissor elsewhere (fills, copies, uploads, pokes: never a native-wide surface) are journaled and rolled back | `gpu_gl_renderer.c` |
 | Runaway code | an 8 M guest-cycle watchdog rolls the pass back | `render_pass.c` |
 
@@ -238,7 +239,20 @@ unit depth, shard stack and cycle-flush hook, the DMA execution depth, and
 the interpreter's active/phase/precise flags, resume latch and pending load
 (`render_pass_abort_test`). A plugin must likewise not keep state that only
 its callback's normal return resets.
-After 8 faults (watchdog or refused writes) passes stay off for the session.
+For a verified draw subset with recorded static prefix/tail packets,
+`pgxp_capture_word_shadow` and `pgxp_restore_word_shadow` preserve exact packet
+precision, including CPU-derived coordinate flags and homogeneous projection.
+The caller supplies the actual current RAM/scratchpad word. Restore requires
+the same canonical address, matching word and checkpoint-entry generation;
+it journals both live shadows and recorded absence. These ephemeral host
+receipts belong to one timeline and must not be persisted in saves. Packet
+layout/ownership guards remain the title's responsibility.
+
+After 8 faults (watchdog, refused VRAM writes or uncheckpointed device reads)
+passes stay off for the session. `render_pass_stats` exposes `device_reads`,
+`last_device_read` and `last_device_read_width`; these refusals also count as
+`aborted`. A draw boundary that reaches a device service needs correction;
+the sandbox does not manufacture its completion or return value.
 
 ## Netplay local view
 
