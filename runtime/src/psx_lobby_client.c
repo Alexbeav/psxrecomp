@@ -1084,6 +1084,9 @@ static const char *effective_game_version(const char *override_ver)
  * unofficial / mismatched hosts; join still requires an exact version match. */
 static int list_filter_version_strict(void)
 {
+#ifdef PSX_LOBBY_DEV_LIST
+    return 0;
+#endif
     const char *gv = effective_game_version(NULL);
     return gv && gv[0] && strcmp(gv, "dev") != 0;
 }
@@ -1317,7 +1320,7 @@ static void host_ice_step(void)
     v.is_host = g_lc.is_host ? 1 : 0;
     v.local_slot = local_member_slot();
     v.active = psx_lobby_connected() && g_lc.in_lobby && !g_lc.launch_pending &&
-               !g_lc.join.local_is_spectator && room_relays_via_ice() &&
+               !g_lc.ice_rtt_suspended && !g_lc.join.local_is_spectator && room_relays_via_ice() &&
                v.local_slot >= 0;
     if (v.active) {
         if (v.is_host) {
@@ -5492,6 +5495,12 @@ int psx_lobby_request_start(const PsxLobbyMatchCaps *match_caps)
                 return -1;
             }
         }
+        /* The encoder selects the host relay's path from the local preference.
+         * Keep the waiting-room view on that same path while START is in flight:
+         * callers construct fresh caps and need not copy relay_via_ice. Clearing
+         * it here destroys the completed agents before LAUNCH can take them. */
+        caps_local.relay_via_ice = caps_local.relay_host &&
+            g_relay_via_ice_pref && rnet_host_ice_available();
         g_lc.match_caps = caps_local;
         send = &caps_local;
     }

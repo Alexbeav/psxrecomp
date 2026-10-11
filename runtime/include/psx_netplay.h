@@ -354,6 +354,11 @@ void psx_netplay_wait_recv(int timeout_ms);
 void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
                                  uint32_t *sim_tick_out, int *lead_out);
 
+/* One-line transport snapshot for a session stuck before RUNNING: ICE state,
+ * selected path, datagrams received, recv-queue drops and time since the last
+ * peer datagram. Writes "inactive" when no session exists. */
+void psx_netplay_link_diag(char *out, size_t cap);
+
 /* Normalize for stabler cross-device blobs: unknown types become digital;
  * centred axes (sticks, wheel, twist) snap to 0x80 inside a deadzone; NeGcon
  * pressure bytes (ly/rx/ry) are kept exactly; digital centres everything. */

@@ -118,6 +118,9 @@ endif()
 # release when no system package is available, so a default build does not
 # silently fall back to SDL2. SDL2 remains an explicit, fully supported A/B
 # backend.
+# Dev-only: the lobby browser lists every version of this title instead of
+# pinning to our exact game_version. Joining still requires an exact match.
+option(PSX_LOBBY_DEV_LIST "Lobby browser ignores game_version (dev testing only)" OFF)
 set(PSX_SDL_BACKEND "SDL3" CACHE STRING "SDL backend (SDL3 or SDL2)")
 set_property(CACHE PSX_SDL_BACKEND PROPERTY STRINGS SDL3 SDL2)
 string(TOUPPER "${PSX_SDL_BACKEND}" _psx_sdl_backend)
@@ -2002,7 +2005,8 @@ function(psxrecomp_add_runtime_target target)
     # target-wide compile line so Ninja does not rebuild every runtime + shard TU.
     set_source_files_properties(
         "${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c"
-        PROPERTIES COMPILE_DEFINITIONS "PSX_GAME_VERSION=\"${PSXRT_GAME_VERSION}\""
+        PROPERTIES COMPILE_DEFINITIONS
+            "PSX_GAME_VERSION=\"${PSXRT_GAME_VERSION}\";$<$<BOOL:${PSX_LOBBY_DEV_LIST}>:PSX_LOBBY_DEV_LIST=1>"
     )
     set_source_files_properties(
         "${PSXRECOMP_ROOT}/runtime/src/crash_trace.c"

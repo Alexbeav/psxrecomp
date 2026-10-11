@@ -218,6 +218,67 @@ static void case_profile_settings_roundtrip(void)
        !strcmp(g_lc.match_caps.mods[0].feats, caps.mods[0].feats), "trusted settings survive the online lobby codec");
 }
 
+static void case_full_title_profile_version(void)
+{
+    static char version[64];
+    static PSXModNetplayProfile profile = {0};
+    char wire[768];
+    memset(version, 'v', sizeof(version) - 1);
+    version[sizeof(version) - 1] = '\0';
+    profile.plugin_id = "lobby.profile.test";
+    profile.compatibility_id = version;
+    ck(psx_mod_register_netplay_profile(&profile), "register maximum-length title profile");
+    psx_lobby_set_game_identity("Profile Fixture", version);
+    ck(!strcmp(g_lc.filter_game_version, version), "retain all 63 profile bytes in local metadata");
+    /* Suppress discovery: this fixture checks the native codec/filter only. */
+    g_list_rtt_active = 1;
+    snprintf(wire, sizeof(wire), "{\"op\":\"lobby_list\",\"lobbies\":[{"
+             "\"lobby_id\":\"profile-room\",\"name\":\"Profile Room\","
+             "\"game_name\":\"Profile Fixture\",\"game_version\":\"%s\"}]}", version);
+    handle_server_json(wire);
+    ck(g_lc.list_count == 1, "matching full profile remains visible");
+    ck(!strcmp(g_lc.list[0].game_version, version), "room metadata retains full profile");
+    /* A difference beyond the former 31-byte prefix must still reject. */
+    char *last = strstr(wire, version);
+    if (last) last[62] = 'w';
+    ck(last != NULL, "locate profile in fixture");
+    handle_server_json(wire);
+    ck(g_lc.list_count == 0, "reject profile differing only in final byte");
+    g_list_rtt_active = 0;
+}
+
+static void case_start_retains_relay_path(void)
+{
+    PsxLobbyMatchCaps caps = {0}, decoded;
+    char wire[4096];
+    int prefer, host;
+    const int old_pref = g_relay_via_ice_pref;
+    printf("  START keeps the advertised relay path locally\n");
+    for (prefer = 0; prefer < 2; ++prefer) {
+        for (host = 0; host < 2; ++host) {
+            memset(&g_lc, 0, sizeof(g_lc));
+            /* An unhandshaken fixture queues START without touching a socket. */
+            g_lc.connected = g_lc.in_lobby = g_lc.is_host = 1;
+            g_lc.fd = 0;
+            caps.valid = 1;
+            caps.relay_host = host;
+            caps.relay_via_ice = 0; /* fresh launcher caps, as in the regression */
+            strcpy(caps.session_bios, "openbios");
+            psx_lobby_set_relay_via_ice_pref(prefer);
+            ck(psx_lobby_request_start(&caps) == 0, "queue host START");
+            ck(psx_lobby_encode_match_caps(wire, sizeof(wire), &caps) &&
+               psx_lobby_decode_match_caps(wire, &decoded), "decode advertised START caps");
+            ck(g_lc.match_caps.relay_via_ice == decoded.relay_via_ice,
+               "local ICE path matches the wire before LAUNCH arrives");
+            ck(room_relays_via_ice() == (host && prefer && rnet_host_ice_available()),
+               "waiting-room agents remain active for an ICE host START");
+        }
+    }
+    memset(&g_lc, 0, sizeof(g_lc));
+    g_lc.fd = -1;
+    psx_lobby_set_relay_via_ice_pref(old_pref);
+}
+
 int main(void)
 {
     case_room_order();
@@ -226,6 +287,8 @@ int main(void)
     case_long_line_is_truncated_not_dropped();
     case_mod_caps_roundtrip();
     case_profile_settings_roundtrip();
+    case_full_title_profile_version();
+    case_start_retains_relay_path();
     if (g_failures == 0) {
         printf("lobby_chat_ring_test: ok\n");
         return 0;

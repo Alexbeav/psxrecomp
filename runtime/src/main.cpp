@@ -6803,6 +6803,11 @@ static void netplay_barrier_admit(int override) {
                          (unsigned long long)(now_ms - clock0),
                          running ? "" : ", linking");
             last_stall_log_ms = now_ms;
+            if (!running) {
+                char link[320];
+                psx_netplay_link_diag(link, sizeof(link));
+                std::fprintf(stderr, "psxrecomp: netplay link not up: %s\n", link);
+            }
         }
         psx_lobby_pump();
         if (psx_netplay_input_desync(&dt, &lh, &rh)) {

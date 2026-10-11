@@ -548,6 +548,10 @@ int  psx_netplay_input_delay(void) { return 2; }
 int  psx_netplay_catchup_budget(void) { return 0; }
 void psx_netplay_catchup_consume_frame(void) {}
 void psx_netplay_wait_recv(int timeout_ms) { (void)timeout_ms; }
+void psx_netplay_link_diag(char *out, size_t cap)
+{
+    if (out && cap) snprintf(out, cap, "off");
+}
 void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
                                  uint32_t *sim_tick_out, int *lead_out)
 {
@@ -4378,7 +4382,7 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
         }
     }
 
-    if (!use_ice) {
+    if (!use_ice && !ice_hub) {
         /* Host-as-relay: slot 0 with 3+ seats and no dial peer. */
 #if PSX_MAX_PLAYERS >= 3
         const int peer_empty =
@@ -5678,6 +5682,31 @@ void psx_netplay_wait_recv(int timeout_ms)
 {
     if (!psx_netplay_active()) return;
     (void)rnet_session_wait_recv(g_np.session, timeout_ms);
+}
+
+void psx_netplay_link_diag(char *out, size_t cap)
+{
+    RNetSessionStats st;
+    static const char *const k_state[] = {
+        "idle", "gathering", "connecting", "connected", "completed", "failed"
+    };
+    unsigned si;
+    if (!out || !cap) return;
+    if (!psx_netplay_active() || !g_np.session) {
+        snprintf(out, cap, "inactive");
+        return;
+    }
+    memset(&st, 0, sizeof(st));
+    rnet_session_get_stats(g_np.session, &st);
+    si = (unsigned)st.ice_state;
+    snprintf(out, cap,
+             "ice=%s path=%s local=%s remote=%s rx=%u recv_drops=%u rx_age_ms=%llu",
+             si < sizeof(k_state) / sizeof(k_state[0]) ? k_state[si] : "?",
+             st.ice_path[0] ? st.ice_path : "-",
+             st.ice_local[0] ? st.ice_local : "-",
+             st.ice_remote[0] ? st.ice_remote : "-",
+             (unsigned)st.packets_rx, (unsigned)st.ice_recv_drops,
+             (unsigned long long)st.last_peer_rx_age_ms);
 }
 
 void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,

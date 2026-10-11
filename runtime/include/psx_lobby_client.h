@@ -10,7 +10,9 @@ extern "C" {
 
 #define PSX_LOBBY_ID_LEN 40
 #define PSX_LOBBY_NAME_LEN 64
-#define PSX_LOBBY_VERSION_LEN 32
+/* Title compatibility IDs may contain a prefix and a 160-bit source hash.
+ * Preserve the full 63-byte ID for exact list/join comparisons. */
+#define PSX_LOBBY_VERSION_LEN 64
 #define PSX_LOBBY_ENDPOINT_LEN 64
 #define PSX_LOBBY_MAX_LIST 32
 /* Player seats this framework can seat. Was what PSX_LOBBY_MAX_MEMBERS meant
