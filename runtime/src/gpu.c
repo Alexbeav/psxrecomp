@@ -2454,7 +2454,8 @@ static int ws_hud_command_words(uint32_t command_addr, uint32_t *words,
     if (!words || !out_count) return 0;
     if ((command_addr & 3u) != 0) return 0;
     uint32_t phys = command_addr & 0x1FFFFFFFu;
-    if (phys > psx_ram_live_bytes() - 4u) return 0;
+    if (phys > psx_ram_live_bytes() - 4u &&
+        !psx_mod_gpu_dma_memory_contains(command_addr, 4u)) return 0;
 
     words[0] = psx_read_word(command_addr);
     uint8_t op = (uint8_t)(words[0] >> 24);
@@ -2462,7 +2463,8 @@ static int ws_hud_command_words(uint32_t command_addr, uint32_t *words,
     int count = gp0_command_word_count(op);
     if (count <= 0 || count > 12) return 0;
     uint32_t bytes = (uint32_t)count * 4u;
-    if (phys > psx_ram_live_bytes() - bytes) return 0;
+    if (phys > psx_ram_live_bytes() - bytes &&
+        !psx_mod_gpu_dma_memory_contains(command_addr, bytes)) return 0;
 
     for (int i = 1; i < count; i++)
         words[i] = psx_read_word(command_addr + (uint32_t)i * 4u);
@@ -2495,7 +2497,7 @@ void gpu_ws_tag_hud_prim(uint32_t prim, int anchor) {
     uint32_t command_addr = prim + 4u;
     uint32_t words[12];
     uint32_t word_count = 0;
-    if (!ws_native_wide_configured() ||
+    if (!(ws_native_wide_configured() || ws_configured()) ||
         (prim & 3u) != 0 || prim > UINT32_MAX - 4u ||
         !ws_hud_command_words(command_addr, words, &word_count)) {
         ws_hud_tag_stats.tag_rejected++;
@@ -2626,25 +2628,53 @@ static int ws_nw_radial_mask_transform(int32_t x[4], int32_t y[4]) {
     return 1;
 }
 
-static int ws_nw_explicit_hud_delta(int32_t *out_delta) {
-    if (out_delta) *out_delta = 0;
-    if (!ws_native_wide_active() || gp0_cmd_source_addr == 0xFFFFFFFFu)
+static int ws_explicit_hud_anchor(int *out_anchor) {
+    if (gp0_cmd_source_addr == 0xFFFFFFFFu)
         return 0;
     if (gp0_words_needed <= 0 || gp0_words_needed > 12)
         return 0;
     uint32_t command_addr = gp0_cmd_source_addr & 0x1FFFFFFFu;
-    if (command_addr >= psx_ram_live_bytes() || (command_addr & 3u)) return 0;
+    if ((command_addr & 3u) ||
+        (command_addr >= psx_ram_live_bytes() &&
+         !psx_mod_gpu_dma_memory_contains(command_addr, 4u))) return 0;
     int anchor = 0;
     int result = ws_hud_anchor_lookup_result(
-        ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE, command_addr,
+        ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE, GPU_RAM_KEY(command_addr),
         gp0_cmd_buf, (uint32_t)gp0_words_needed, (uint32_t)s_frame_count,
         &anchor);
     ws_tag_stats_note_lookup(&ws_hud_tag_stats, result);
     if (result != WS_HUD_ANCHOR_HIT)
         return 0;
-    int32_t off = ws_nw_offset();
+    if (out_anchor) *out_anchor = anchor;
+    return 1;
+}
+
+static int ws_nw_explicit_hud_delta(int32_t *out_delta) {
+    if (out_delta) *out_delta = 0;
+    if (!ws_native_wide_active()) return 0;
+    int anchor;
+    if (!ws_explicit_hud_anchor(&anchor)) return 0;
     if (out_delta)
-        *out_delta = ws_hud_anchor_native_delta(1, off, anchor);
+        *out_delta = ws_hud_anchor_native_delta(1, ws_nw_offset(), anchor);
+    return 1;
+}
+
+/* A title can identify one widget whose pieces arrive in separate DMA lists.
+ * Per-list auto grouping cannot see that ownership. Use the same guarded
+ * edge/centre role as native-wide, expressed as a squash pivot here. */
+static int ws_projection_hud_anchor(int32_t *out_anchor) {
+    if (!ws_active()) return 0;
+    int edge;
+    if (!ws_explicit_hud_anchor(&edge)) return 0;
+    if (out_anchor)
+        *out_anchor = ws_disp_x() + (edge < 0 ? 0 : edge > 0 ? ws_disp_w() : ws_disp_w() / 2);
+    return 1;
+}
+
+static int ws_projection_hud_transform(int32_t *x, int count) {
+    int32_t anchor;
+    if (!ws_projection_hud_anchor(&anchor)) return 0;
+    for (int i = 0; i < count; i++) x[i] = ws_scale_about(x[i], anchor);
     return 1;
 }
 
@@ -2742,6 +2772,9 @@ static void ws_screen_transform_quad(int32_t vx[4]) {
  * a direct hit too in case a tag site passes the colour-word address. */
 static int ws_tagged_anchor(int32_t *out_ax) {
     if (!ws_active() || gp0_cmd_source_addr == 0xFFFFFFFFu) return 0;
+    /* Explicit screen-space ownership wins over a recycled billboard tag.
+     * The regular UI transform below will apply it exactly once. */
+    if (ws_projection_hud_anchor(NULL)) return 0;
     uint32_t now = (uint32_t)s_frame_count;
     for (int variant = 0; variant < 2; variant++) {
         uint32_t key = GPU_RAM_KEY((gp0_cmd_source_addr - (variant ? 0u : 4u)));
@@ -3099,6 +3132,7 @@ static int ws_axis_aligned_quad(const int32_t vx[4], const int32_t vy[4]) {
  * quad): squashed with its widget when the prepass admitted it as lying
  * inside that widget (ws_ui_prepass_finish). */
 static int ws_auto_ui_transform_part(int32_t *vx, int32_t *vy, int n) {
+    if (ws_projection_hud_transform(vx, n)) return 1;
     if (ws_nw_explicit_hud_delta(NULL) || psx_ws_prim_is_tagged()) return 0;
     const WsUiPrepassItem *it = ws_auto_ui_item();
     if (!it) return 0;
@@ -3112,6 +3146,7 @@ static int ws_auto_ui_transform_part(int32_t *vx, int32_t *vy, int n) {
 }
 
 static int ws_auto_ui_transform_quad(int32_t vx[4], int32_t vy[4]) {
+    if (ws_projection_hud_transform(vx, 4)) return 1;
     if (ws_nw_explicit_hud_delta(NULL) || psx_ws_prim_is_tagged()) return 0;
     if (!ws_axis_aligned_quad(vx, vy)) return ws_auto_ui_transform_part(vx, vy, 4);
 
@@ -3140,7 +3175,14 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], int32_t vy[4]) {
 }
 
 static int ws_auto_ui_transform_rect(int32_t *x, int32_t *y, int *w, int *h) {
-    if (!x || !y || !w || !h || *w <= 0 || ws_nw_explicit_hud_delta(NULL) || psx_ws_prim_is_tagged())
+    if (!x || !y || !w || !h || *w <= 0) return 0;
+    int32_t explicit_anchor;
+    if (ws_projection_hud_anchor(&explicit_anchor)) {
+        *x = ws_scale_about(*x, explicit_anchor);
+        *w = (int)ws_scale_len(*w);
+        return 1;
+    }
+    if (ws_nw_explicit_hud_delta(NULL) || psx_ws_prim_is_tagged())
         return 0;
     int32_t X = ws_disp_x(), W = ws_disp_w(), H = ws_disp_h();
     if ((*x <= X && *x + *w >= X + W && *y <= 0 && *y + *h >= H) ||
@@ -6239,6 +6281,10 @@ static int gp0_command_word_count(uint8_t opcode) {
             }
             return 0;  /* unknown */
     }
+}
+
+int gpu_gp0_command_word_count(uint8_t opcode) {
+    return gp0_command_word_count(opcode);
 }
 
 static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,

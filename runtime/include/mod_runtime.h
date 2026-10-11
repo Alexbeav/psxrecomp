@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "mod_packages.h"
+struct PsxLobbyMatchCaps;
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"
 #endif
@@ -42,8 +43,15 @@ bool mod_runtime_commit_for_netplay(const std::filesystem::path& disc_path = {},
 bool mod_runtime_commit_for_direct_netplay(const std::filesystem::path& disc_path,
                                            std::string* error = nullptr);
 bool mod_runtime_clear_for_netplay(std::string* error = nullptr);
-/* [netplay] content_negotiation from game.toml. Off (default): the launcher's
- * netplay commit clears the plan exactly like mod_runtime_clear_for_netplay. */
+/* Install only the executable's trusted simulation profile (if registered).
+ * Original-disc reads remain available; offline selections are never saved. */
+bool mod_runtime_commit_netplay(const std::filesystem::path& disc_path = {},
+                                std::string* error = nullptr);
+bool mod_runtime_netplay_settings_fingerprint(const PsxLobbyMatchCaps& caps,
+                                               std::string& fingerprint,
+                                               std::string* error = nullptr);
+/* [netplay] content_negotiation from game.toml. Off (default): clear package
+ * simulation mods; an executable-owned profile takes precedence when present. */
 void mod_runtime_set_netplay_content_negotiation(bool enabled);
 bool mod_runtime_netplay_content_negotiation();
 /* Restore the pre-session selection before returning to the launcher. */
@@ -66,6 +74,8 @@ bool mod_runtime_netplay_input_active();
 /* "package/feature" keys of `plan` that qualify as own-view features. */
 std::vector<std::string> mod_runtime_netplay_view_features(const ModResolution& plan);
 const std::string& mod_runtime_fingerprint();
+/* Host diagnostics may copy the persisted offline selection from this root. */
+const std::filesystem::path& mod_runtime_root();
 const std::filesystem::path& mod_runtime_effective_disc_path();
 /* Read an effective-disc file as whole sectors (true end-of-file tail bytes
  * included). max_bytes = 0 allows a full CD. Emulation-thread only. */
