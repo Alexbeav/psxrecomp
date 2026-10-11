@@ -79,11 +79,11 @@ int main(void) {
     uint32_t expanded=spu_snapshot_bytes();CHECK(expanded>n);
     uint8_t *full=malloc(expanded);CHECK(full);spu_snapshot_write(full);
     int16_t together[160],replayed[160],only_first[160];
-    spu_render(together,80);
+    spu_render_block(together,80);
     CHECK(voices[20].samples[0]==4096 && voices[44].samples[0]==12288);
-    CHECK(spu_snapshot_read(full,expanded));spu_render(replayed,80);
+    CHECK(spu_snapshot_read(full,expanded));spu_render_block(replayed,80);
     CHECK(!memcmp(together,replayed,sizeof together));
-    CHECK(spu_snapshot_read(full,expanded));voices[44].active=0;spu_render(only_first,80);
+    CHECK(spu_snapshot_read(full,expanded));voices[44].active=0;spu_render_block(only_first,80);
     CHECK(memcmp(together,only_first,sizeof together));
     CHECK(spu_snapshot_read(full,expanded));key_off(1u<<20);
     CHECK(voices[20].adsr_phase==ADSR_RELEASE && voices[44].adsr_phase==ADSR_SUSTAIN);
