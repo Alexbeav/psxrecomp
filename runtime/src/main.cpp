@@ -45,6 +45,7 @@
 #include "overlay_loader.h"
 #include "autocompile.h"
 #include "code_provider.h"
+#include "host_span_ring.h"
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
@@ -8346,6 +8347,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     int override = -1;
     int override_p2 = -1;
 #endif
+    /* Always-on wall-time stamp for this guest frame (host_span_ring.h). */
+    extern uint64_t s_frame_count;
+    host_frame_stamp((uint32_t)s_frame_count, (uint32_t)g_dirty_ram_insns_run);
 
     psx_local_mouse_begin(sdl_window, local_mouse_live(override));
     {
@@ -8455,7 +8459,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * frontend is skipping presents. Both are cheap and emu-thread-only. */
     {
         uint64_t perf_start = runtime_perf_section_begin();
+        const uint64_t span_t0 = host_span_begin();
         overlay_autocapture_tick();
+        host_span_end(HSPAN_AUTOCAPTURE_TICK, span_t0, 0);
         runtime_perf_section_end(perf_start,
                                  &g_runtime_perf.autocapture_ticks);
     }
@@ -8463,7 +8469,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * cache rescan on done). */
         uint64_t perf_start = runtime_perf_section_begin();
         const CodeProvider *cp = code_provider_active();
+        const uint64_t span_t0 = host_span_begin();
         if (cp->poll_main) cp->poll_main();
+        host_span_end(HSPAN_PROVIDER_POLL, span_t0, 0);
         runtime_perf_section_end(perf_start,
                                  &g_runtime_perf.provider_poll_ticks);
     }
@@ -17260,7 +17268,19 @@ int main(int argc, char** argv) {
         const char *tk_recompiler = "psxrecomp-game";
         const char *tk_tcc        = "tcc";
 #endif
-        const bool tk_present = std::filesystem::exists(tk_py);
+        bool tk_present = std::filesystem::exists(tk_py);
+        /* A toolchain staged from a different emitter than this runtime writes shards under its
+         * own codegen hash, a cache directory the loader never reads (LoD playtest 2026-10-12:
+         * 27 compile runs, no shard ever loaded, everything interpreted). Refuse it loudly:
+         * autocompile_status reports degraded_reason. An explicit overlay_autocompile_cmd in the
+         * game config, or PSX_OVERLAY_AUTOCOMPILE_CMD, is the author's own choice and stays, and
+         * PSX_OVERLAY_ALLOW_STALE_TOOLCHAIN=1 reproduces the stale-toolchain condition on purpose
+         * (A/B measurements). */
+        const char *allow_stale_tk = std::getenv("PSX_OVERLAY_ALLOW_STALE_TOOLCHAIN");
+        if (tk_present && !(allow_stale_tk && allow_stale_tk[0] && allow_stale_tk[0] != '0') &&
+            !autocompile_check_toolchain_hash((tk_dir / "include").string().c_str(),
+                                              (uint32_t)overlay_loader_codegen_hash()))
+            tk_present = false;
         /* Wave-5 F2: the CLI names the compiler it already has (the wizard's pack on
          * Windows, the native cc on POSIX) in overlay_toolchain/compiler.txt, so a player
          * with nothing on PATH still gets optimised shards instead of tcc's. */
