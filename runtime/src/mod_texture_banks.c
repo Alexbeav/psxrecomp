@@ -54,8 +54,10 @@ const uint16_t* mod_texture_bank_pixels(uint16_t id, uint32_t* w, uint32_t* h) {
     return banks[id].pixels;
 }
 
+int psx_mod_host_output_scope(void);
 uint32_t psx_mod_alloc_texture_packet_memory(uint32_t size, uint32_t alignment) {
     uint32_t addr;
+    if (psx_mod_host_output_scope()) return 0;
     if (arena_count == 16u || size < 40u) return 0;
     addr = psx_mod_gpu_dma_memory_alloc(size, alignment);
     if (!addr) return 0;

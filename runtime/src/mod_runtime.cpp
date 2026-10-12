@@ -2963,13 +2963,16 @@ extern "C" void psx_mod_write_code_word(uint32_t address, uint32_t value) {
     dirty_ram_mark_executable_range(address & 0x1FFFFFFFu, 4u);
 }
 
+extern "C" int psx_mod_host_output_scope(void);
 extern "C" uint32_t psx_mod_alloc_guest_memory(uint32_t size,
                                                 uint32_t alignment) {
+    if (psx_mod_host_output_scope()) return 0;
     return psx_mod_memory_alloc(size, alignment);
 }
 
 extern "C" uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size,
                                                   uint32_t alignment) {
+    if (psx_mod_host_output_scope()) return 0;
     return psx_mod_gpu_dma_memory_alloc(size, alignment);
 }
 
@@ -3086,6 +3089,7 @@ extern "C" int psx_mod_register_function_filter_plugin(
 extern "C" int psx_mod_finish_function(CPUState* cpu) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();
+    if (psx_mod_host_output_scope()) return 0;
     if (!cpu || s.current_function_cpu != cpu || !s.current_plugin) return 0;
     s.current_function_finished = true;
     return 1;
@@ -3145,8 +3149,18 @@ static int game_netplay_function_entry(CPUState* cpu, uint32_t address);
 
 /* Netplay host-output plugins ([[plugin]] netplay = "host_output") run their
  * entry hooks in the shared simulation while the rest of the own-view plan is
- * parked. They observe only: a completion request is ignored and guest
- * writes are refused (mod_host_output_write_blocked). */
+ * parked. They observe only: each callback gets a private copy of the CPU
+ * state (register changes to it are discarded), a completion request is
+ * ignored, and every guest-mutating mod service refuses while one runs
+ * (psx_mod_host_output_scope), so the shared simulation is bit-identical
+ * with or without them. */
+static int s_host_output_depth;
+
+extern "C" int psx_mod_host_output_scope(void) {
+    return s_host_output_depth > 0 &&
+           PSXRecompV4::state().netplay_view_plan ? 1 : 0;
+}
+
 static void run_host_output_hooks(CPUState* cpu, uint32_t address) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();
@@ -3158,18 +3172,22 @@ static void run_host_output_hooks(CPUState* cpu, uint32_t address) {
     for (; it != table.end() && it->key == key; ++it) {
         if (!it->plugin || !it->plugin->netplay_host_output || !it->callback)
             continue;
-        PluginCallbackScope scope(s, it->plugin, cpu);
-        it->callback(cpu, address);
+        CPUState view = *cpu;   /* observation copy */
+        PluginCallbackScope scope(s, it->plugin, &view);
+        ++s_host_output_depth;
+        it->callback(&view, address);
+        --s_host_output_depth;
         s.current_function_finished = false;
     }
 }
 
-/* A host-output plugin may not change guest memory while a netplay plan is
- * live: anything it wrote would exist on one peer only. */
+/* Memory writes from a host-output plugin while a netplay plan is live would
+ * exist on one peer only. */
 static bool mod_host_output_write_blocked(void) {
     const auto& s = PSXRecompV4::state();
-    return s.netplay_view_plan && s.current_plugin &&
-           s.current_plugin->netplay_host_output;
+    return psx_mod_host_output_scope() ||
+           (s.netplay_view_plan && s.current_plugin &&
+            s.current_plugin->netplay_host_output);
 }
 
 extern "C" int psx_mod_function_entry(CPUState* cpu, uint32_t address) {

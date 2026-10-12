@@ -447,9 +447,13 @@ Two more plugin classes stay on per player. `netplay = "input"` transforms
 only this player's pad before it is staged (`psx_mod_set_pad_transform`).
 `netplay = "host_output"` only reads guest state to drive this player's host
 output (rumble, haptics): its function-entry hooks run in the shared
-simulation (including rollback resimulation), a completion request from them
-is ignored, and every `psx_mod_write_*` they attempt is refused while the
-match runs, so they cannot diverge the peers. Host-side calls that must not
+simulation (including rollback resimulation) on a private copy of the CPU
+state, whose register changes are discarded; a completion request from them
+is ignored; and every guest-mutating mod service (`psx_mod_write_*`,
+`psx_mod_host_write_ram`, `psx_mod_call_guest*`, DMA / SPU / VRAM uploads,
+guest allocations, the cycle-scale gate) refuses while one runs
+(`psx_mod_host_output_scope()`), so the shared simulation is unchanged by
+them. This is a determinism contract for trusted plugins, not a sandbox. Host-side calls that must not
 repeat on a resim (e.g. `psx_mod_set_host_rumble`) check
 `psx_netplay_is_resimulating()` themselves.
 

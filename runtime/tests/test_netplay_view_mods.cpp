@@ -1,6 +1,7 @@
 #include "mod_runtime.h"
 #include "mod_packages.h"
 #include "mod_plugins.h"
+#include <cstring>
 #include "psx_sha256.h"
 
 #include "gpu.h"
@@ -139,9 +140,13 @@ static void sim_entry(CPUState*, uint32_t) { sim_hits++; }
 static void view_activate(void) { view_activations++; }
 static void sim_activate(void) { sim_activations++; }
 static void view_vblank(void) { vblanks++; }
-static int out_hits, out_activations;
+static int out_hits, out_activations, out_scope;
+extern "C" int psx_mod_host_output_scope(void);
 static void out_entry(CPUState* cpu, uint32_t) {
     out_hits++;
+    out_scope = psx_mod_host_output_scope();
+    cpu->gpr[2] = 0x12345678u;                /* review repro: must not stick */
+    cpu->pc = 0x80001234u;
     psx_mod_write_byte(0x80004000u, 0x5Au);   /* must be refused online */
     psx_mod_finish_function(cpu);             /* must be ignored online */
 }
@@ -200,8 +205,9 @@ int main() {
     psx_mod_function_entry(&cpu, 0x80003100u);
     check(view_hits == 1 && sim_hits == 1, "offline hooks run in the game");
     check(psx_mod_function_entry(&cpu, 0x80003200u) == 1 && out_hits == 1 &&
-              psx_read_byte(0x80004000u) == 0x5Au,
+              psx_read_byte(0x80004000u) == 0x5Au && !out_scope,
           "offline a host-output hook is an ordinary hook");
+    cpu = CPUState{};
     psx_write_byte(0x80004000u, 0);
 
     /* Netplay: only the local-view feature remains, parked outside the scope. */
@@ -214,8 +220,15 @@ int main() {
           "only the local-view plugin activates in a match");
     check(out_activations == 2, "the host-output plugin activates in a match too");
     out_hits = 0;
+    cpu = CPUState{};
+    cpu.gpr[31] = 0x80005550u;
+    const CPUState before = cpu;
     check(psx_mod_function_entry(&cpu, 0x80003200u) == 0 && out_hits == 1,
           "a host-output hook runs in the shared simulation, cannot finish it");
+    check(out_scope == 1 && !psx_mod_host_output_scope(),
+          "host-output scope is set only while its hook runs");
+    check(cpu.gpr[2] == 0 && std::memcmp(&cpu, &before, sizeof cpu) == 0,
+          "a host-output hook's CPU register changes do not reach the shared CPU");
     check(psx_read_byte(0x80004000u) == 0,
           "a host-output plugin's guest write is refused online");
     psx_mod_function_entry(&cpu, 0x80003000u);
