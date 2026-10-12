@@ -62,6 +62,7 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `present_shot_seq` | ✓ |   | — | Completion counter for `present_shot`, plus `wrote` (1 = that completion produced a PNG). Sample before staging, poll until `seq` moves. Advances on success *and* failure, so the poll always terminates |
 | `fmv_chroma` | ✓ |   | `on` (optional: 0/1) | Read or set `[video] fmv_chroma_smoothing` live. Replies `on` and `frames` (24-bit presents smoothed so far) |
 | `texture_lod` | ✓ |   | `mode` (optional: 0 off, 1 mipmap), `aniso` (optional: 1..16) | Read or set `[video] texture_lod` / `anisotropic_filtering` live. Replies `mode`, `aniso` |
+| `bloom` | ✓ |   | `strength` (0..2), `threshold`, `view` (0 normal, 1 bloom only, 2 split, 3 sources), `time` (0/1), all optional | Read or set bloom live (`[video] bloom`). Replies the settings, `passes` and, while `time` is on, `us_mean`: the mean `glFinish`-fenced pass time over `timed` passes since the last query |
 | `post_aa` | ✓ |   | `mode` (optional: 0 off, 1 fxaa, 2 fxaa_hq) | Read or set post-process anti-aliasing live (`[video] antialiasing_mode`). Replies `mode`, `passes` (filtered presents so far) and `gpu_us`: the mean pass time since the last query when the run has `PSX_POST_AA_TIME=N` (N passes per present between `glFinish` fences, a measurement mode), else 0 |
 | `hd_textures` | ✓ |   | optional `replacements`, `dump` (0 or 1), `reload` (1) | HD pack root, switches, backend support, replacement count, matched/ready/applied draw counts, queued/pending dumps, composition hits/builds/pixels, GL uploads/evictions, decoded images/evictions/bytes. Optional controls update the configured host pack on the emulation thread; no configured root is an error. Reload retains unchanged upload identities. OpenGL displays replacements; software/Vulkan retain original artwork. Pair with `present_shot` for visual evidence and native VRAM probes for architectural data |
 | `gl_interp` | ✓ |   | — | OpenGL frame-rate presenter ([FRAME_RATE.md](FRAME_RATE.md)): enabled/suspended, host and target Hz, swaps, `source` (`vblank`/`flip`), `flip_period`, `captures` (new source frames) and `duplicates` (VBlanks that re-presented the same frame) |
@@ -491,9 +492,9 @@ between Play and TCP availability.
 
 ## Complete command index (generated)
 
-**369 commands registered** — 356 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
+**371 commands registered** — 358 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-82 of 369 have prose above; **287 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+83 of 371 have prose above; **288 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -509,6 +510,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `batch_sites` | ✓ |  | ✓ |
 | `bios_info` | ✓ |  | ✓ |
 | `bioscall_dump` | ✓ |  |  |
+| `bloom` | ✓ |  | ✓ |
 | `c0_history` | ✓ |  |  |
 | `call_focus_dump` | ✓ |  |  |
 | `call_focus_reset` | ✓ |  |  |
@@ -654,6 +656,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `history` | ✓ | ✓ | ✓ |
 | `hle_dump` | ✓ |  | ✓ |
 | `host_launch_timings` | ✓ |  | ✓ |
+| `host_osd_shot` | ✓ |  |  |
 | `host_profile` | ✓ |  |  |
 | `idle_skip` | ✓ |  |  |
 | `imask_trace` | ✓ |  |  |
