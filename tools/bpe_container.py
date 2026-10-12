@@ -8,9 +8,11 @@ stream of symbols each expanded through that table. The container is
     u32  magic                   (a title-declared constant, "BPE\\x1a" in the
                                   titles seen so far)
     block*:
-        u32  symbol count        (0 ends the container)
+        u32  block size          bytes this block decodes to (0 ends the container)
         table                    256 entries, run-length coded (below)
-        symbols                  `symbol count` bytes, expanded through the table
+        symbols                  as many input bytes as it takes to produce
+                                 `block size` output bytes, each expanded
+                                 through the table
 
 The decoder reads its input as little-endian 32-bit words, handing the words
 out as bytes. Anything left unread in the last word of a table or block is
@@ -26,7 +28,8 @@ Table coding, entry index `c` starting at 0 until it reaches 256:
 Expanding a symbol `b`: while `left[b] != b`, the byte `right[b]` is
 queued to follow, and `b` becomes `left[b]`; the final `b` is emitted, then the
 queued bytes are expanded the same way, nearest first. A queued byte is
-processed before any unread input.
+processed before any unread input. Each emitted byte counts against the block
+size, whether it came from a symbol or from the queue.
 
 This module is a pure function of its input. It rejects truncated input, a
 declared size that the blocks do not produce, a different magic, and tables
@@ -96,7 +99,7 @@ def decode(data, *, magic, offset=0, max_output=1 << 28):
                 if symbol != index:
                     right[index] = take()
                 index += 1
-        budget = (count + 1) * 256
+        budget = (count + 1) * 256     # a table that never reaches a literal
         for _ in range(count):
             symbol = take()
             while left[symbol] != symbol:
