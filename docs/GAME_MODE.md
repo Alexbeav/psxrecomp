@@ -13,11 +13,19 @@ the game, borderless fullscreen.
 | `SteamDeck=1` (Steam sets it for games on a Steam Deck) | on (detected) |
 | none of the above | off: desktop behaviour, unchanged |
 
+Detection is an environment check, not a session check. Steam sets
+`SteamDeck=1` for every game it starts on a Deck, so a game launched through
+Steam in the Deck's **Desktop Mode** also boots straight into the game,
+fullscreen. Use `--no-game-mode` (or `PSX_GAME_MODE=0`) in the launch options
+to keep the desktop behaviour there, or `--launcher` to reach the launcher
+for one run. Started outside Steam (no `SteamDeck`, no gamescope), the game
+behaves as on any desktop.
+
 When it is on:
 
 - With a disc already set up (settings.toml `[disc] path`, or `--disc`), the
   launcher is skipped and the game opens borderless fullscreen. The saved
-  Fullscreen choice is not changed, so Desktop Mode keeps its own.
+  Fullscreen choice is not changed: a run where Game Mode is off keeps its own.
 - On the first run, with no disc yet, the launcher opens so the player can pick
   their disc image. The next start goes straight in.
 - `--launcher` still opens the launcher. In Game Mode, add it to the Steam
