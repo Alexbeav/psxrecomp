@@ -18966,6 +18966,10 @@ session_reboot:
         const int mounted = roster_index_for_disc(game_discs, disc_path_str);
         cdrom_disc_roster_set(roster.data(), (int)roster.size(),
                               mounted >= 0 ? mounted + 1 : selected_disc_index);
+        /* Host-side disc reads by plugins (resident packs) follow a mid-session swap. */
+        mod_runtime_set_mounted_disc_resolver(
+            [](void) -> const char* { return cdrom_disc_roster_path(cdrom_disc_selected()); },
+            [](void) -> int { return cdrom_disc_selected(); });
         /* --disc names a disc of the set, but the earlier index derivation is
          * skipped for an override, so selected_disc_index kept its default of
          * 1. That put the savestate disc token at _disc1 whatever was mounted,

@@ -2693,6 +2693,33 @@ static bool find_effective_file(PS1::ISOReader& reader, const std::string& path,
     return true;
 }
 
+/* The disc image the guest drive currently reads. A multi-disc title swaps
+ * images mid-session; host reads that stand in for the drive must follow the
+ * swap. The runtime registers a resolver for the roster; without one (or with
+ * a patched effective disc, which exists only for the boot image) the boot
+ * disc is read, exactly as before. */
+static const char* (*g_mounted_disc_path)(void) = nullptr;
+static int (*g_mounted_disc_index)(void) = nullptr;
+
+static std::filesystem::path mounted_disc_path(const PSXRecompV4::RuntimeMods& s) {
+    if (!s.effective_disc_path.empty()) return s.effective_disc_path;
+    if (g_mounted_disc_path) {
+        const char* p = g_mounted_disc_path();
+        if (p && *p) return p;
+    }
+    return s.disc_path;
+}
+
+extern "C" void mod_runtime_set_mounted_disc_resolver(const char* (*path)(void),
+                                                      int (*index)(void)) {
+    g_mounted_disc_path = path;
+    g_mounted_disc_index = index;
+}
+
+extern "C" int psx_mod_mounted_disc(void) {
+    return g_mounted_disc_index ? g_mounted_disc_index() : 0;
+}
+
 extern "C" int psx_mod_read_disc_file(const char* path, void* buffer,
                                       uint32_t capacity, uint32_t* size) {
     using namespace PSXRecompV4;
@@ -2700,7 +2727,7 @@ extern "C" int psx_mod_read_disc_file(const char* path, void* buffer,
     if (!path || !*path || !size || (!buffer && capacity)) return 0;
     try {
         const auto& s = state();
-        const auto& mount = s.effective_disc_path.empty() ? s.disc_path : s.effective_disc_path;
+        const auto mount = mounted_disc_path(s);
         if (mount.empty()) return 0;
         PS1::ISOReader reader;
         uint32_t lba = 0, bytes = 0;
@@ -2730,7 +2757,7 @@ extern "C" int psx_mod_disc_file_extent(const char* path, uint32_t* lba,
     if (!path || !*path || !lba || !size) return 0;
     try {
         const auto& s = state();
-        const auto& mount = s.effective_disc_path.empty() ? s.disc_path : s.effective_disc_path;
+        const auto mount = mounted_disc_path(s);
         if (mount.empty()) return 0;
         PS1::ISOReader reader;
         uint32_t first = 0, bytes = 0;
@@ -2760,7 +2787,7 @@ bool mod_runtime_read_disc_file_sectors(const std::string& path, uint32_t max_by
     };
     try {
         const auto& s = state();
-        const auto& mount = s.effective_disc_path.empty() ? s.disc_path : s.effective_disc_path;
+        const auto mount = mounted_disc_path(s);
         if (mount.empty()) return fail("no disc mounted");
         PS1::ISOReader reader;
         bool directory = false;

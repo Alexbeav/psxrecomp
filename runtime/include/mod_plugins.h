@@ -110,6 +110,10 @@ int psx_mod_game_started(void);
  * otherwise capacity must hold the entire file. Active sector mods apply. */
 int psx_mod_read_disc_file(const char* path, void* buffer, uint32_t capacity,
                            uint32_t* size);
+/* 1-based roster index of the disc image the guest drive has mounted, or 0
+ * for a single-image session. It changes when the player swaps discs; the
+ * psx_mod_read_disc_file / psx_mod_disc_file_extent calls read that image. */
+int psx_mod_mounted_disc(void);
 /* Effective-disc LBA and byte size of a file (directory records patched by
  * active mods apply, so a relocated file reports its new extent). */
 int psx_mod_disc_file_extent(const char* path, uint32_t* lba, uint32_t* size);
