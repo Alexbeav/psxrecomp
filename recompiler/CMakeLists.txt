@@ -953,8 +953,8 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_cli_generate_aot_static.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # psxrecomp_cli.py rebuild: the pre-build mtime clamp works without
-        # lutimes (Windows), and --cmake-extra wins over the shipping
-        # PSX_DEBUG_TOOLS=OFF default.
+        # lutimes (Windows), --cmake-extra wins over the shipping
+        # PSX_DEBUG_TOOLS=OFF default, and the build runs the configuring cmake.
         add_test(
             NAME cli_rebuild_host
             COMMAND ${Python3_EXECUTABLE}
