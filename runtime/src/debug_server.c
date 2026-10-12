@@ -19,6 +19,7 @@
 #include "debug_server.h"
 #include "host_launch_timing.h"
 #include "host_sampler.h"
+#include "savestate.h"
 #include "guest_cycle_profile.h"
 #include "host_osd.h"
 #include "psx_video_timing.h"
@@ -9472,6 +9473,12 @@ static void handle_savestate(int id, const char *json)
     extern int psx_netplay_request_load(int slot);
     int slot = json_get_int(json, "slot", -1);
     if (slot < 0) { send_err(id, "missing slot"); return; }
+    if (slot >= SAVESTATE_SLOTS) {
+        /* Name the real reason: the generic refusal below blamed LLE runs. */
+        send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"slot %d out of range (0..%d)\"}",
+                 id, slot, SAVESTATE_SLOTS - 1);
+        return;
+    }
     char op[16];
     if (!json_get_str(json, "op", op, sizeof(op))) { send_err(id, "missing op"); return; }
     int staged;
