@@ -57,13 +57,34 @@ typedef struct FreezeWedgeSample {
     uint32_t last_store_pc;
 } FreezeWedgeSample;
 
+/* A spinning guest enters only its wait loop plus whatever the interrupt
+ * handlers last stamped; a running game loop enters dozens of functions per
+ * window (LoD title/field/battle >= 13 per 120 frames, measured 2026-10-12). */
+#define FREEZE_WEDGE_SPIN_MAX_FNS 8u
+#define FREEZE_WEDGE_FN_DIVERSITY_UNKNOWN UINT32_MAX
+
+/* Distinct-value counter that stops counting past its capacity. */
+typedef struct FreezeDistinct {
+    uint32_t values[FREEZE_WEDGE_SPIN_MAX_FNS + 1u];
+    uint32_t count;
+} FreezeDistinct;
+
+/* Add one value; returns nonzero once more than FREEZE_WEDGE_SPIN_MAX_FNS
+ * distinct values have been seen (the caller can stop scanning). */
+int freeze_distinct_add(FreezeDistinct *set, uint32_t value);
+
 /* Classify a window of consecutive samples, oldest first. A spin requires the
  * executing function, last store PC and dirty-RAM instruction count to hold
- * one value at EVERY sample: statically compiled code leaves dirty_ram_insns
- * flat, so a per-frame main loop that happens to store at the same PC at both
- * window ends is not a spin. mdec_recently_active (may be NULL) vetoes a spin
- * while FMV decoding parks the guest in BIOS MDEC code. */
+ * one value at EVERY sample, AND (when known) at most FREEZE_WEDGE_SPIN_MAX_FNS
+ * distinct guest functions entered outside exceptions over the window.
+ * Statically compiled code stamps neither current_func nor dirty_ram_insns, so
+ * the pinned signature alone also matches a healthy static main loop; the
+ * function-entry stamp is maintained by all generated code. fn_diversity is
+ * FREEZE_WEDGE_FN_DIVERSITY_UNKNOWN when no profile samples cover the window.
+ * mdec_recently_active (may be NULL) vetoes a spin while FMV decoding parks
+ * the guest in BIOS MDEC code. */
 uint32_t freeze_wedge_classify(const FreezeWedgeSample *window, uint32_t count,
+                               uint32_t fn_diversity,
                                int (*mdec_recently_active)(uint32_t frames));
 
 /* Format a unique dump path. The sequence prevents same-second truncation. */
