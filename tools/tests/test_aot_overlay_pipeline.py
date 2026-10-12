@@ -1110,6 +1110,44 @@ class PreparedImageTests(unittest.TestCase):
         self.assertEqual(inventory['source_images'][0]['sha256'], sha(self.CODE))
 
 
+class CrossImageRootsTests(unittest.TestCase):
+    """Calls made from one image into another are entries of the callee image."""
+
+    @staticmethod
+    def image(name, base, words):
+        body = b''.join(struct.pack('<I', w) for w in words)
+        return dict(name=name, base=base, body=body, spec=dict(method='fixed_address_files',
+                                                               allow_missing=True), aliases=[])
+
+    def setUp(self):
+        nop, ret = 0, 0x03E00008
+        prologue = 0x27BDFFE8                          # addiu sp, sp, -0x18
+        # Engine: data-free code with a routine at +0x10 nothing inside it calls.
+        self.engine = self.image('ENGINE', 0x80010000,
+                                 [ret, nop, nop, nop, prologue, 0, ret, nop])
+        self.target = 0x80010010
+        jal = lambda t: 0x0C000000 | ((t & 0x0FFFFFFF) >> 2)
+        self.caller = self.image('CALLER', 0x80100000, [jal(self.target), nop, ret, nop])
+
+    def test_a_target_only_another_image_calls_becomes_a_root(self):
+        engine, caller = self.engine, self.caller
+        self.assertEqual(pipeline.foreign_call_roots(engine, [engine, caller]), [self.target])
+        self.assertEqual(pipeline.foreign_call_roots(caller, [engine, caller]), [])
+        local = pipeline.make_fixed_record(engine, None, [engine, caller], False)
+        cross = pipeline.make_fixed_record(engine, None, [engine, caller], True)
+        self.assertNotIn(hex(self.target), local.get('static_discovery_entry_pcs', []))
+        self.assertIn(hex(self.target), cross['static_discovery_entry_pcs'])
+
+    def test_an_address_several_images_occupy_names_no_one_of_them(self):
+        engine = self.engine
+        twin = self.image('TWIN', 0x80010000, [0x03E00008, 0, 0, 0, 0x27BDFFE8, 0, 0x03E00008, 0])
+        self.assertEqual(pipeline.foreign_call_roots(engine, [engine, twin, self.caller]), [])
+
+    def test_a_target_without_boundary_evidence_is_not_a_root(self):
+        data = self.image('DATA', 0x80010000, [0x11111111] * 8)
+        self.assertEqual(pipeline.foreign_call_roots(data, [data, self.caller]), [])
+
+
 class StaticGenerationTest(unittest.TestCase):
     """The `static` action as `psxrecomp_cli.py generate` drives it."""
 

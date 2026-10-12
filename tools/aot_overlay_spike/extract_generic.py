@@ -216,10 +216,13 @@ def jal_targets(data):
             ts.add(0x80000000 | ((w & 0x03FFFFFF) << 2))
     return ts
 
-def direct_jal_roots(data, base):
-    """Locally bounded call targets with independent boundary evidence."""
+def direct_jal_roots(data, base, targets=None):
+    """Call targets inside [base, base+len) with independent boundary evidence.
+
+    `targets` are the jal targets to consider: this image's own by default; an
+    AOT profile can pass the targets other images call into this one."""
     lo,hi=base,base+len(data)
-    return sorted(t for t in jal_targets(data)
+    return sorted(t for t in (jal_targets(data) if targets is None else targets)
                   if lo <= t < hi and (t&3)==0 and
                   not _dense_local_pointer_table(data,base,t-base) and
                   (_callable_boundary(data,t-base) or

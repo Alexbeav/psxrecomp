@@ -60,6 +60,7 @@ Profiles declare these reusable methods:
 | `disc_set` | Instead of `disc_hashes`: `[{name, disc_hashes}]`, every disc of a release whose executable images are identical. Any one matches; the images are pinned by their own content hashes, so which disc was read does not change the output. |
 | `file_aliases` | `{logical: [per-disc names]}` for one file that discs name differently (`SCUS_944.91`, `SCUS_945.84`, ...). Exactly one candidate must exist; the logical name reads as that file everywhere in the profile. |
 | `prepared_files[]` | Virtual files derived from disc bytes by a declared transform (see below). Each is verified, then usable as a `file` by every method and check. |
+| `cross_image_call_roots` | Opt in (`true`): a `jal` target that other images call becomes a static discovery root of the image holding it, when the evidence at the target is the same as for local calls and exactly one image occupies that address. Finds routines only an overlay (or boot code) calls. |
 | `generic_exclude_files[]` | `{files, reason}`: disc files the generic detector must not consider because the profile owns them (aliased program files are excluded automatically). |
 | `images[].method = fixed_address_files` | Whole original files placed at a verified `load_addr`. Optional duplicate-leaf checks require identical bytes. |
 | `images[].method = fixed_address_extents` | Declared `{file, file_offset, base, address, size, sha256}` byte extents placed at a verified `load_addr`. Offset rules match `words` checks; size and SHA-256 are required. |
@@ -131,6 +132,10 @@ Current consumers:
 - Ape Escape USA: `ApeEscapeRecomp/aot/overlays.json`, 47 established packed
   sector-table overlays plus two minigame PS-X EXEs. Two additional archive
   members have unresolved load paths and are explicitly excluded.
+- The Legend of Dragoon USA: `aot/overlays.json`, `disc_set` over all four discs
+  (identical executable images). The BPE launcher's embedded container is the engine
+  (`prepared_files`, two code extents at 0x80010000) and the ten BPE overlays fill
+  slot A (0x800C6688) or slot B (0x800FB778); all linked with `static`.
 - WipEout 3 SE PAL: `aot/overlays.json`, the front-end menu overlay (member 5
   of `WIPEOUT3/NFE.PB`, `indexed_lzss_members`) from the stock disc and from the
   NTSC / PAL Mode package's patched disc, plus that package's engine image; all
@@ -170,11 +175,6 @@ A packed image is rarely all code (its BSS, tables and replaced overlay area are
 data). Use `fixed_address_extents` on the prepared file to name only the code runs,
 each with its `sha256`, so data is never a producer: a data run decoded as code
 fails the generated-C audit and costs the whole image.
-
-Legend of Dragoon (`aot/overlays.json`): the launcher's embedded container becomes
-the engine image at 0x80010000 (two code runs), and each of the ten `OVL/*.OV_`
-files becomes an image in overlay slot A (0x800C6688) or slot B (0x800FB778). One
-`disc_set` profile covers all four discs.
 
 ### Executable images from a mod package
 

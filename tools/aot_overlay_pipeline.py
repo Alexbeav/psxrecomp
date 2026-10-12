@@ -579,10 +579,31 @@ def declared_entries(source, disc):
     return entries
 
 
-def make_fixed_record(source, disc):
+def foreign_call_roots(source, sources):
+    """Entries of `source` that other images call directly (`jal`).
+
+    A call target is a function entry by construction, but an image's own scan
+    cannot see calls made from elsewhere: an overlay calling a frameless engine
+    routine, boot code calling its constructors. Only targets inside exactly one
+    image count: an address that several images occupy alternatively (overlays
+    sharing a load slot) names no particular one. The same boundary evidence as
+    for local calls applies to the target bytes."""
+    lo, hi = source['base'], source['base'] + len(source['body'])
+    others = [other for other in sources if other is not source]
+    targets = set()
+    for other in others:
+        targets |= {t for t in extractor.jal_targets(other['body']) if lo <= t < hi}
+    targets = {t for t in targets
+               if not any(o['base'] <= t < o['base'] + len(o['body']) for o in others)}
+    return extractor.direct_jal_roots(source['body'], source['base'], targets)
+
+
+def make_fixed_record(source, disc, sources=(), cross_image=False):
     body, base, spec = source['body'], source['base'], source['spec']
     require(spec.get('allow_missing'), f"Generic extractor missed required image: {source['name']}")
     direct = set(extractor.direct_jal_roots(body, base))
+    if cross_image:
+        direct |= set(foreign_call_roots(source, sources))
     seeds = set(extractor.prologues(body, base)) | extractor.frameless_leaf_entries(body, base)
     if spec.get('supplemental_entries', True):
         seeds |= extractor.supplemental_callable_seeds(body, base)
@@ -665,7 +686,7 @@ def prepare(profile, disc, records, output, views=None):
                 singles[source['name']] = record
     for source in sources:
         if source['spec']['method'] in ('fixed_address_files', 'fixed_address_extents', 'packed_sector_members', 'sector_extent_members', 'aligned_lzss_banks', 'indexed_lzss_members', 'tagged_relocated_files', 'counted_relocated_members') and source['name'] not in singles:
-            record = make_fixed_record(source, disc)
+            record = make_fixed_record(source, disc, sources, bool(profile.get('cross_image_call_roots')))
             singles[source['name']] = record
             records.append(record)
     # Loader-established exports remain required even when heuristic discovery
