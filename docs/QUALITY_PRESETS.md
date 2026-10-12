@@ -58,8 +58,10 @@ name is the fallback when the probe fails, and the probe is skipped under the
 renderer too.
 
 `quality_tier.c` maps the facts to a tier. It is a pure function, unit-tested in
-`recompiler/tests/quality_presets_test.cpp`. **Autodetect picks only Low or
-Ultra.** Medium and High are manual choices. Low-end machines start on Low.
+`recompiler/tests/quality_presets_test.cpp`. **Autodetect is a static
+heuristic that picks only Low or Ultra**: it classifies the hardware it reads
+and measures nothing. A GPU it does not recognise gets Ultra. Medium and High
+are manual choices. Low-end machines start on Low.
 Every other machine starts on Ultra, and the dynamic systems are its safety
 net: dynamic resolution (a title can floor it at native x1), Smooth motion's
 in-between frames (made from surplus only) and the adaptive aspect.
