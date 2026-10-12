@@ -125,8 +125,7 @@ static int    s_sym_initialized = 0;
  * activity (boot, FMV decode, save load) doesn't trip it; short enough
  * that real wedges dump within seconds. */
 #define WEDGE_WINDOW_TICKS 20u
-#define WEDGE_EXC_REENTRY_PER_FRAME_THRESHOLD 20000u /* ~10x chronic 2K/frame */
-#define WEDGE_SLOW_FRAMES_MAX_DELTA 10u   /* <5 fps avg over the 2s window */
+/* Thresholds and the classifier live in freeze_dump_policy.{h,c} (unit-tested). */
 
 /* Per-ring caps for auto-dump. Newest-first window. The old 4-16K caps
  * spanned well under a second of activity — too short to cross a
@@ -823,43 +822,23 @@ static void heartbeat_write(void) {
         s_ring_count = 0;
         s_last_wedge_kind = 0;
     } else if (s_ring_count >= WEDGE_WINDOW_TICKS) {
-        /* The just-pushed tick is at (s_ring_head - 1). The oldest in
-         * our window is WEDGE_WINDOW_TICKS - 1 ticks before it. */
-        uint32_t newest_idx = (s_ring_head + RING_CAP - 1u) % RING_CAP;
-        uint32_t oldest_idx = (s_ring_head + RING_CAP - WEDGE_WINDOW_TICKS) % RING_CAP;
-        uint64_t newest_frame = s_ring[newest_idx].frame_count;
-        uint64_t oldest_frame = s_ring[oldest_idx].frame_count;
-        uint64_t newest_excre = s_ring[newest_idx].exc_reentry;
-        uint64_t oldest_excre = s_ring[oldest_idx].exc_reentry;
-        uint64_t frame_delta = (newest_frame >= oldest_frame)
-                               ? (newest_frame - oldest_frame) : 0;
-        uint64_t excre_delta = (newest_excre >= oldest_excre)
-                               ? (newest_excre - oldest_excre) : 0;
-
-        /* Logical-hang (kind D) signature: the executing function, the last
-         * store PC, and the retired dirty-RAM instruction count are all
-         * unchanged across the whole window. Requiring all three pinned makes
-         * this specific to a guest spin loop — a legitimate long native
-         * compute would still move last_store_pc, and any interpreted/overlay
-         * work would advance dirty_insns. Checked only when frames are
-         * advancing healthily (kinds 1/2/3 take precedence below). */
-        int logic_pinned =
-            (s_ring[newest_idx].current_func    == s_ring[oldest_idx].current_func) &&
-            (s_ring[newest_idx].last_store_pc   == s_ring[oldest_idx].last_store_pc) &&
-            (s_ring[newest_idx].dirty_ram_insns == s_ring[oldest_idx].dirty_ram_insns);
-
-        if (frame_delta == 0)
-            wedge_kind = 1;
-        else if (excre_delta / frame_delta > WEDGE_EXC_REENTRY_PER_FRAME_THRESHOLD)
-            wedge_kind = 2;
-        else if (frame_delta < WEDGE_SLOW_FRAMES_MAX_DELTA)
-            wedge_kind = 3;
-        else if (logic_pinned && !mdec_recently_active((uint32_t)frame_delta + 1u))
-            wedge_kind = 5;  /* spin freeze: game wedged while frames advance */
-        /* Wave-5 F9: during an FMV the guest parks in BIOS MDEC code with the dirty-RAM
-         * counters legitimately still while frames advance -- exactly the spin signature.
-         * Every boot FMV wrote a 47-76 MB dump (1.8 GB per kit in one session). MDEC
-         * activity inside the window rules the spin classification out. */
+        /* The just-pushed tick is at (s_ring_head - 1); the window is the
+         * WEDGE_WINDOW_TICKS samples ending there, passed oldest first. A
+         * spin must hold at every sample, not just the window ends: static
+         * code leaves dirty_ram_insns flat, and a per-frame main loop often
+         * stores at the same PC when two ticks happen to align. */
+        FreezeWedgeSample window[WEDGE_WINDOW_TICKS];
+        for (uint32_t i = 0; i < WEDGE_WINDOW_TICKS; i++) {
+            const HbRingEntry *src =
+                &s_ring[(s_ring_head + RING_CAP - WEDGE_WINDOW_TICKS + i) % RING_CAP];
+            window[i].frame_count     = src->frame_count;
+            window[i].exc_reentry     = src->exc_reentry;
+            window[i].dirty_ram_insns = src->dirty_ram_insns;
+            window[i].current_func    = src->current_func;
+            window[i].last_store_pc   = src->last_store_pc;
+        }
+        wedge_kind = freeze_wedge_classify(window, WEDGE_WINDOW_TICKS,
+                                           mdec_recently_active);
     }
 
     if (!s_wedge_classification_paused &&

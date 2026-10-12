@@ -89,3 +89,32 @@ int freeze_dump_format_path(char *out, size_t cap, const char *backend,
                      backend, wall, sequence);
     return n > 0 && (size_t)n < cap;
 }
+
+uint32_t freeze_wedge_classify(const FreezeWedgeSample *window, uint32_t count,
+                               int (*mdec_recently_active)(uint32_t frames)) {
+    if (!window || count < 2u) return 0;
+    const FreezeWedgeSample *oldest = &window[0];
+    const FreezeWedgeSample *newest = &window[count - 1u];
+    uint64_t frame_delta = (newest->frame_count >= oldest->frame_count)
+                           ? (newest->frame_count - oldest->frame_count) : 0;
+    uint64_t excre_delta = (newest->exc_reentry >= oldest->exc_reentry)
+                           ? (newest->exc_reentry - oldest->exc_reentry) : 0;
+
+    if (frame_delta == 0) return FREEZE_WEDGE_HARD;
+    if (excre_delta / frame_delta > FREEZE_WEDGE_EXC_REENTRY_PER_FRAME_THRESHOLD)
+        return FREEZE_WEDGE_REENTRY_STORM;
+    if (frame_delta < FREEZE_WEDGE_SLOW_FRAMES_MAX_DELTA) return FREEZE_WEDGE_SLOW_FRAMES;
+
+    for (uint32_t i = 1; i < count; i++) {
+        if (window[i].current_func    != oldest->current_func ||
+            window[i].last_store_pc   != oldest->last_store_pc ||
+            window[i].dirty_ram_insns != oldest->dirty_ram_insns)
+            return 0;
+    }
+    /* During an FMV the guest parks in BIOS MDEC code with every pinned
+     * signal legitimately still while frames advance. */
+    if (mdec_recently_active &&
+        mdec_recently_active((uint32_t)(frame_delta > 0xFFFFFFFEu ? 0xFFFFFFFEu : frame_delta) + 1u))
+        return 0;
+    return FREEZE_WEDGE_SPIN;
+}
