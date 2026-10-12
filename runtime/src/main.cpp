@@ -69,6 +69,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "sio.h"
 #include "psx_host_rumble.h"
 #include "psx_jogcon_ffb.h"
+#include "psx_jogcon_ffb_sdl.h"
 #ifndef PSX_MAX_PLAYERS
 #define PSX_MAX_PLAYERS 2
 #endif
@@ -433,15 +434,13 @@ struct PlayerInput {
     bool    rumble_known = false;
     bool    rumble_warned = false;
     bool    steering_wheel = false;
-    /* JogCon force feedback on this pad's haptics ([controller]
-     * jogcon_force_feedback; psx_jogcon_ffb.h). -1 = no such effect. */
-    SDL_Haptic*  haptic = nullptr;
-    int          ffb_constant = -1;
-    int          ffb_spring = -1;
-    bool         ffb_probed = false;
-    PsxJogconFfb ffb_last = {0, 0};
+    /* EXPERIMENTAL JogCon force feedback on this pad's SDL haptics
+     * ([controller] experimental_jogcon_force_feedback; psx_jogcon_ffb.h). */
+    PsxJogconHaptic    ffb_haptic = {nullptr, -1, -1};
+    PsxJogconFfbDriver ffb = {{0, 0}, 0};
+    bool               ffb_probed = false;
 };
-/* game.toml [controller] jogcon_force_feedback(_invert): opt-in. */
+/* game.toml [controller] experimental_jogcon_force_feedback(_invert). */
 static bool g_jogcon_ffb = false;
 static bool g_jogcon_ffb_invert = false;
 static PlayerInput g_players[PSX_MAX_PLAYERS];
@@ -5195,14 +5194,23 @@ static void load_input_config(const char* argv0) {
     psx_keybinds_init(argv0);
 }
 
-static void close_player_haptic(PlayerInput& p) {
-    if (p.haptic) {
-        SDL_HapticClose(p.haptic);   /* stops and frees its effects */
-        p.haptic = nullptr;
+static PsxJogconFfbBackend player_ffb_backend(PlayerInput& p) {
+    return psx_jogcon_haptic_backend(&p.ffb_haptic);
+}
+
+/* Pause / disconnect / session end: the wheel goes neutral now. */
+static void jogcon_ffb_neutral_all(void) {
+    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
+        PsxJogconFfbBackend b = player_ffb_backend(g_players[s]);
+        psx_jogcon_ffb_neutral(&g_players[s].ffb, &b);
     }
-    p.ffb_constant = p.ffb_spring = -1;
+}
+
+static void close_player_haptic(PlayerInput& p) {
+    PsxJogconFfbBackend b = player_ffb_backend(p);
+    psx_jogcon_ffb_neutral(&p.ffb, &b);
+    psx_jogcon_haptic_close(&p.ffb_haptic);
     p.ffb_probed = false;
-    p.ffb_last = PsxJogconFfb{0, 0};
 }
 
 static void close_player(PlayerInput& p) {
@@ -5307,99 +5315,37 @@ static void open_player(PlayerInput& p, int self_slot) {
  * the small motor is fixed-strength/high-frequency. Active effects are renewed
  * every VBlank with a short lifetime so a crash or unplug cannot leave a host
  * controller vibrating indefinitely. */
-#if defined(PSX_SDL3)
-#define PSX_SDL_OK(call) ((call) ? 0 : -1)
-#else
-#define PSX_SDL_OK(call) (call)
-#endif
-
-/* Open the pad's haptic device and make the two JogCon effects, once per
- * pad. Pads without constant / spring support (gamepads) get none. */
-static void probe_jogcon_haptic(PlayerInput& p) {
-    p.ffb_probed = true;
-    if (!p.handle) return;
-    if (!SDL_WasInit(SDL_INIT_HAPTIC) &&
-        PSX_SDL_OK(SDL_InitSubSystem(SDL_INIT_HAPTIC)) != 0)
-        return;
-    SDL_Joystick* joy = SDL_GameControllerGetJoystick(p.handle);
-    p.haptic = joy ? SDL_HapticOpenFromJoystick(joy) : nullptr;
-    if (!p.haptic) return;
-    const unsigned features = (unsigned)SDL_HapticQuery(p.haptic);
-    SDL_HapticEffect e;
-    if (features & SDL_HAPTIC_CONSTANT) {
-        std::memset(&e, 0, sizeof e);
-        e.type = SDL_HAPTIC_CONSTANT;
-        e.constant.direction.type = SDL_HAPTIC_CARTESIAN;
-        e.constant.direction.dir[0] = 1;
-        e.constant.length = SDL_HAPTIC_INFINITY;
-        p.ffb_constant = SDL_HapticNewEffect(p.haptic, &e);
-    }
-    if (features & SDL_HAPTIC_SPRING) {
-        std::memset(&e, 0, sizeof e);
-        e.type = SDL_HAPTIC_SPRING;
-        e.condition.direction.type = SDL_HAPTIC_CARTESIAN;
-        e.condition.length = SDL_HAPTIC_INFINITY;
-        e.condition.right_sat[0] = e.condition.left_sat[0] = 0xFFFF;
-        p.ffb_spring = SDL_HapticNewEffect(p.haptic, &e);
-    }
-    if (p.ffb_constant < 0 && p.ffb_spring < 0) {
-        SDL_HapticClose(p.haptic);
-        p.haptic = nullptr;
-    } else {
-        std::fprintf(stdout,
-            "psxrecomp runtime: JogCon force feedback on this controller "
-            "(constant %s, spring %s)\n", p.ffb_constant >= 0 ? "yes" : "no",
-            p.ffb_spring >= 0 ? "yes" : "no");
-    }
-}
-
-static void apply_jogcon_effect(PlayerInput& p, int effect, bool on,
-                                SDL_HapticEffect* e) {
-    if (!p.haptic || effect < 0) return;
-    if (on) {
-        (void)SDL_HapticUpdateEffect(p.haptic, effect, e);
-        (void)SDL_HapticRunEffect(p.haptic, effect, 1);
-    } else {
-        (void)SDL_HapticStopEffect(p.haptic, effect);
-    }
-}
-
-/* JogCon force feedback ([controller] jogcon_force_feedback): the guest's
- * motor command and strength become a constant force or a centring spring on
- * a host wheel with SDL haptics. Gamepads are left alone. */
+/* EXPERIMENTAL JogCon force feedback: the guest's motor command and
+ * strength drive a host wheel's SDL haptics through psx_jogcon_ffb.h, which
+ * renews a finite-lifetime force each VBlank and goes neutral otherwise.
+ * Pads without constant / spring haptics (gamepads) are left alone. */
 static void update_jogcon_ffb(int s, PlayerInput& p, bool trace) {
-    PsxJogconFfb f = {0, 0};
     uint8_t command = 0, strength = 0;
-    if (g_jogcon_ffb && sio_get_pad_analog(s) == SIO_PAD_JOGCON) {
+    const int enabled = g_jogcon_ffb && sio_get_pad_analog(s) == SIO_PAD_JOGCON;
+    if (enabled) {
         sio_get_pad_jogcon_motor(s, &command, &strength);
-        f = psx_jogcon_ffb_map(command, strength, g_jogcon_ffb_invert ? 1 : 0);
-        if (!p.ffb_probed) probe_jogcon_haptic(p);
+        if (!p.ffb_probed && p.handle) {
+            p.ffb_probed = true;
+            if (psx_jogcon_haptic_open(&p.ffb_haptic,
+                                       SDL_GameControllerGetJoystick(p.handle)))
+                std::fprintf(stdout,
+                    "psxrecomp runtime: EXPERIMENTAL JogCon force feedback on "
+                    "slot %d (constant %s, spring %s)\n", s + 1,
+                    p.ffb_haptic.constant >= 0 ? "yes" : "no",
+                    p.ffb_haptic.spring >= 0 ? "yes" : "no");
+        }
     }
-    if (f.constant == p.ffb_last.constant && f.spring == p.ffb_last.spring)
-        return;
-    if (p.haptic) {
-        SDL_HapticEffect e;
-        std::memset(&e, 0, sizeof e);
-        e.type = SDL_HAPTIC_CONSTANT;
-        e.constant.direction.type = SDL_HAPTIC_CARTESIAN;
-        e.constant.direction.dir[0] = 1;
-        e.constant.length = SDL_HAPTIC_INFINITY;
-        e.constant.level = f.constant;
-        apply_jogcon_effect(p, p.ffb_constant, f.constant != 0, &e);
-        std::memset(&e, 0, sizeof e);
-        e.type = SDL_HAPTIC_SPRING;
-        e.condition.direction.type = SDL_HAPTIC_CARTESIAN;
-        e.condition.length = SDL_HAPTIC_INFINITY;
-        e.condition.right_sat[0] = e.condition.left_sat[0] = 0xFFFF;
-        e.condition.right_coeff[0] = e.condition.left_coeff[0] = (Sint16)f.spring;
-        apply_jogcon_effect(p, p.ffb_spring, f.spring != 0, &e);
-    }
-    if (trace)
+    const PsxJogconFfb before = p.ffb.last;
+    PsxJogconFfbBackend b = player_ffb_backend(p);
+    psx_jogcon_ffb_tick(&p.ffb, &b, enabled, command, strength,
+                        g_jogcon_ffb_invert ? 1 : 0);
+    if (trace && (before.constant != p.ffb.last.constant ||
+                  before.spring != p.ffb.last.spring))
         std::fprintf(stdout,
             "psxrecomp ffb: slot=%d jogcon cmd=%u strength=%u constant=%d "
             "spring=%u host=%s\n", s + 1, (unsigned)command, (unsigned)strength,
-            (int)f.constant, (unsigned)f.spring, p.haptic ? "wheel" : "none");
-    p.ffb_last = f;
+            (int)p.ffb.last.constant, (unsigned)p.ffb.last.spring,
+            p.ffb_haptic.haptic ? "wheel" : "none");
 }
 
 static void update_controller_rumble(void) {
@@ -8079,6 +8025,7 @@ static void rewind_pause_present(void) {
 
 /* Freeze guest in vblank present while the rewind filmstrip is open. */
 static void rewind_host_pause_loop(void) {
+    jogcon_ffb_neutral_all();   /* the wheel goes slack while paused */
     psx_local_mouse_begin(sdl_window, false);
     psx_local_mouse_reset();
     freeze_heartbeat_set_paused(1);
@@ -8137,6 +8084,7 @@ static void rewind_host_pause_loop(void) {
 
 /* Freeze guest in vblank present while the save-state slot menu is open. */
 static void savestate_menu_host_pause_loop(void) {
+    jogcon_ffb_neutral_all();   /* the wheel goes slack while paused */
     psx_local_mouse_begin(sdl_window, false);
     psx_local_mouse_reset();
     freeze_heartbeat_set_paused(1);
@@ -16735,8 +16683,12 @@ int main(int argc, char** argv) {
             g_auto_skip_fmv    = gc.runtime.video_auto_skip_fmv ? 1 : 0;
             /* [controller] game-declared input defaults (settings.toml/launcher
              * still override below). */
-            g_jogcon_ffb = gc.runtime.jogcon_force_feedback;
-            g_jogcon_ffb_invert = gc.runtime.jogcon_force_feedback_invert;
+            g_jogcon_ffb = gc.runtime.experimental_jogcon_force_feedback;
+            g_jogcon_ffb_invert =
+                gc.runtime.experimental_jogcon_force_feedback_invert;
+            if (g_jogcon_ffb)
+                std::fprintf(stdout, "psxrecomp: EXPERIMENTAL JogCon force "
+                             "feedback enabled by game.toml (wheels only)\n");
             if (!gc.runtime.direct_shortcut.empty())
                 apply_title_direct_shortcut(gc.runtime.direct_shortcut,
                                             gc.runtime.direct_shortcut_button);
