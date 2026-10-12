@@ -870,7 +870,8 @@ VBlanks after the last call and all are cleared at every mod/session reset.
 **EXPERIMENTAL:** JogCon wheel force feedback is a player setting,
 `settings.toml [controller] jogcon_force_feedback` (off by default; the
 launcher / in-game menu toggle writes it via
-`RecompLauncherCSettings.jogcon_force_feedback`, applied live through
+`RecompLauncherCSettings.jogcon_force_feedback` (recomp-launcher; read behind
+`RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK`, so other providers still build), applied live through
 `psx_jogcon_ffb_set_player_enabled`). A title may set its default with
 `game.toml [controller] experimental_jogcon_force_feedback` (off when
 absent); the player's setting always wins. When on, it drives a host
