@@ -18955,6 +18955,7 @@ session_reboot:
      * game runs (debug server `disc_select`). Take the current index from what
      * actually mounted rather than the requested one: a --disc override can
      * mount an image the persisted index does not name. */
+    mod_runtime_set_progress_hook(starvation_watchdog_heartbeat);
     if (game_discs.size() > 1) {
         std::vector<std::string> roster_storage;
         std::vector<const char*> roster;

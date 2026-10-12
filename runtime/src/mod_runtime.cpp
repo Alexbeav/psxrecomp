@@ -2700,6 +2700,9 @@ static bool find_effective_file(PS1::ISOReader& reader, const std::string& path,
  * disc is read, exactly as before. */
 static const char* (*g_mounted_disc_path)(void) = nullptr;
 static int (*g_mounted_disc_index)(void) = nullptr;
+static void (*g_progress_hook)(void) = nullptr;
+
+extern "C" void mod_runtime_set_progress_hook(void (*hook)(void)) { g_progress_hook = hook; }
 
 static std::filesystem::path mounted_disc_path(const PSXRecompV4::RuntimeMods& s) {
     if (!s.effective_disc_path.empty()) return s.effective_disc_path;
@@ -2798,9 +2801,11 @@ bool mod_runtime_read_disc_file_sectors(const std::string& path, uint32_t max_by
             return fail("unsupported size " + std::to_string(size));
         const uint32_t sectors = (size + 2047u) / 2048u;
         padded.resize(size_t(sectors) * 2048u);
-        for (uint32_t i = 0; i < sectors; ++i)
+        for (uint32_t i = 0; i < sectors; ++i) {
+            if (g_progress_hook && !(i & 1023u)) g_progress_hook();
             if (!read_effective_user_sector(reader, lba + i, padded.data() + size_t(i) * 2048u))
                 return fail("unreadable sector " + std::to_string(lba + i));
+        }
         return true;
     } catch (const std::exception& e) {
         return fail(e.what());
