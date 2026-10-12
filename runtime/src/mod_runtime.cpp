@@ -714,8 +714,14 @@ bool sha256_disc_range(const std::filesystem::path& image,
     std::array<uint8_t, 2048> bytes{};
     size_t remaining = size;
     uint64_t at = location;
-    const bool raw_source = file_size > 0 &&
-        ((uint64_t)file_size % 2352u) == 0;
+    // Same geometry rule as the mount (cue TRACK mode, else sector-0 sync):
+    // a raw dump whose length happens to be a multiple of 2048 is still raw.
+    bool raw_source = false;
+    if (target == ModPatchTarget::DiscUser &&
+        !PS1::ISOReader::FirstFileIsRaw(image.string(), &raw_source)) {
+        if (error) *error = "cannot determine stock image sector geometry: " + image.string();
+        return false;
+    }
     while (remaining != 0) {
         uint64_t physical = at;
         size_t chunk = remaining;
