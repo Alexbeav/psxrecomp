@@ -4,6 +4,7 @@
 #include "psx_memory.h"
 #include "freeze_heartbeat.h"
 #include "freeze_dump_policy.h"
+#include "guest_cycle_profile.h"
 #include "debug_server.h"
 #include "crash_trace.h"   /* g_psx_fatal_reason */
 #include "cpu_state.h"     /* g_psx_bail_* call-contract counters */
@@ -162,6 +163,7 @@ typedef struct {
     uint64_t tcp_stall_ms;
     uint16_t t1_count;        /* Timer1/RCnt1 counter — must advance if the wait is to complete */
     uint64_t t1_irq_fired;    /* Timer1 IRQ-fire count — flat == RCnt IRQ never fires */
+    uint64_t gcp_seq;         /* guest_cycle_profile_total() at this tick */
 } HbRingEntry;
 static HbRingEntry s_ring[RING_CAP];
 static uint32_t    s_ring_head = 0;
@@ -754,6 +756,24 @@ void freeze_heartbeat_fatal_dump(const char *reason) {
                             sio_get_mc_max_state(), sio_get_tx_writes());
 }
 
+/* Distinct guest functions entered outside exceptions in profile samples
+ * [lo, hi), read from the always-on guest-cycle profile ring. Stops counting
+ * past FREEZE_WEDGE_SPIN_MAX_FNS; UNKNOWN when no sample covers the window. */
+static uint32_t window_fn_diversity(uint64_t lo, uint64_t hi) {
+    uint64_t oldest = guest_cycle_profile_oldest();
+    if (lo < oldest) lo = oldest;
+    FreezeDistinct set = {{0}, 0};
+    int any = 0;
+    GcpSample s;
+    for (uint64_t seq = lo; seq < hi; seq++) {
+        if (!guest_cycle_profile_get(seq, &s)) continue;
+        if (s.flags & GCP_FLAG_EXCEPTION) continue;
+        any = 1;
+        if (freeze_distinct_add(&set, s.fn)) break;
+    }
+    return any ? set.count : FREEZE_WEDGE_FN_DIVERSITY_UNKNOWN;
+}
+
 static void heartbeat_write(void) {
     uint64_t cyc = psx_get_cycle_count();
     uint64_t frame = s_frame_count;
@@ -804,6 +824,7 @@ static void heartbeat_write(void) {
     { uint16_t _t1c = 0; uint64_t _t1f = 0;
       timers_get_debug(1, &_t1c, NULL, NULL, &_t1f);
       re->t1_count = _t1c; re->t1_irq_fired = _t1f; }
+    re->gcp_seq = guest_cycle_profile_total();
     s_ring_head = (s_ring_head + 1) % RING_CAP;
     if (s_ring_count < RING_CAP) s_ring_count++;
 
@@ -838,7 +859,16 @@ static void heartbeat_write(void) {
             window[i].last_store_pc   = src->last_store_pc;
         }
         wedge_kind = freeze_wedge_classify(window, WEDGE_WINDOW_TICKS,
+                                           FREEZE_WEDGE_FN_DIVERSITY_UNKNOWN,
                                            mdec_recently_active);
+        if (wedge_kind == FREEZE_WEDGE_SPIN) {
+            /* Only a pinned window pays for the profile scan. */
+            uint64_t lo = s_ring[(s_ring_head + RING_CAP - WEDGE_WINDOW_TICKS) % RING_CAP].gcp_seq;
+            uint64_t hi = s_ring[(s_ring_head + RING_CAP - 1u) % RING_CAP].gcp_seq;
+            wedge_kind = freeze_wedge_classify(window, WEDGE_WINDOW_TICKS,
+                                               window_fn_diversity(lo, hi),
+                                               mdec_recently_active);
+        }
     }
 
     if (!s_wedge_classification_paused &&
