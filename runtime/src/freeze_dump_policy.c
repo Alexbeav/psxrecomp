@@ -98,6 +98,21 @@ int freeze_distinct_add(FreezeDistinct *set, uint32_t value) {
     return set->count > FREEZE_WEDGE_SPIN_MAX_FNS;
 }
 
+uint32_t freeze_window_fn_diversity(uint64_t lo, uint64_t hi, uint64_t oldest,
+                                    int (*get)(uint64_t seq, uint32_t *fn,
+                                               int *in_exception)) {
+    if (lo < oldest) lo = oldest;
+    FreezeDistinct set = {{0}, 0};
+    int any = 0;
+    for (uint64_t seq = lo; seq < hi; seq++) {
+        uint32_t fn = 0;
+        int in_exception = 0;
+        if (!get(seq, &fn, &in_exception) || in_exception) continue;
+        any = 1;
+        if (freeze_distinct_add(&set, fn)) break;
+    }
+    return any ? set.count : FREEZE_WEDGE_FN_DIVERSITY_UNKNOWN;
+}
 uint32_t freeze_wedge_classify(const FreezeWedgeSample *window, uint32_t count,
                                uint32_t fn_diversity,
                                int (*mdec_recently_active)(uint32_t frames)) {

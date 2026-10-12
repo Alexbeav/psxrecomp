@@ -73,6 +73,14 @@ typedef struct FreezeDistinct {
  * distinct values have been seen (the caller can stop scanning). */
 int freeze_distinct_add(FreezeDistinct *set, uint32_t value);
 
+/* Distinct functions entered outside exceptions over profile samples
+ * [lo, hi), clamped to oldest (the ring's oldest held sample). get() returns
+ * 0 for an evicted/unavailable sample. Stops counting past
+ * FREEZE_WEDGE_SPIN_MAX_FNS; FREEZE_WEDGE_FN_DIVERSITY_UNKNOWN when no
+ * non-exception sample covers the window. */
+uint32_t freeze_window_fn_diversity(uint64_t lo, uint64_t hi, uint64_t oldest,
+                                    int (*get)(uint64_t seq, uint32_t *fn,
+                                               int *in_exception));
 /* Classify a window of consecutive samples, oldest first. A spin requires the
  * executing function, last store PC and dirty-RAM instruction count to hold
  * one value at EVERY sample, AND (when known) at most FREEZE_WEDGE_SPIN_MAX_FNS

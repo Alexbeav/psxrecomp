@@ -756,24 +756,14 @@ void freeze_heartbeat_fatal_dump(const char *reason) {
                             sio_get_mc_max_state(), sio_get_tx_writes());
 }
 
-/* Distinct guest functions entered outside exceptions in profile samples
- * [lo, hi), read from the always-on guest-cycle profile ring. Stops counting
- * past FREEZE_WEDGE_SPIN_MAX_FNS; UNKNOWN when no sample covers the window. */
-static uint32_t window_fn_diversity(uint64_t lo, uint64_t hi) {
-    uint64_t oldest = guest_cycle_profile_oldest();
-    if (lo < oldest) lo = oldest;
-    FreezeDistinct set = {{0}, 0};
-    int any = 0;
+/* Adapter from the guest-cycle profile ring to freeze_window_fn_diversity. */
+static int gcp_sample_fn(uint64_t seq, uint32_t *fn, int *in_exception) {
     GcpSample s;
-    for (uint64_t seq = lo; seq < hi; seq++) {
-        if (!guest_cycle_profile_get(seq, &s)) continue;
-        if (s.flags & GCP_FLAG_EXCEPTION) continue;
-        any = 1;
-        if (freeze_distinct_add(&set, s.fn)) break;
-    }
-    return any ? set.count : FREEZE_WEDGE_FN_DIVERSITY_UNKNOWN;
+    if (!guest_cycle_profile_get(seq, &s)) return 0;
+    *fn = s.fn;
+    *in_exception = (s.flags & GCP_FLAG_EXCEPTION) != 0;
+    return 1;
 }
-
 static void heartbeat_write(void) {
     uint64_t cyc = psx_get_cycle_count();
     uint64_t frame = s_frame_count;
@@ -866,7 +856,9 @@ static void heartbeat_write(void) {
             uint64_t lo = s_ring[(s_ring_head + RING_CAP - WEDGE_WINDOW_TICKS) % RING_CAP].gcp_seq;
             uint64_t hi = s_ring[(s_ring_head + RING_CAP - 1u) % RING_CAP].gcp_seq;
             wedge_kind = freeze_wedge_classify(window, WEDGE_WINDOW_TICKS,
-                                               window_fn_diversity(lo, hi),
+                                               freeze_window_fn_diversity(
+                                                   lo, hi, guest_cycle_profile_oldest(),
+                                                   gcp_sample_fn),
                                                mdec_recently_active);
         }
     }
