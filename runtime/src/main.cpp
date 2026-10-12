@@ -46,6 +46,9 @@
 #include "autocompile.h"
 #include "code_provider.h"
 #include "host_span_ring.h"
+#ifdef PSX_HAS_OVERLAY_DISPATCH
+extern "C" void psx_overlay_static_get_stats(uint64_t *, uint64_t *, uint64_t *, uint64_t *);
+#endif
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
@@ -8349,7 +8352,15 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #endif
     /* Always-on wall-time stamp for this guest frame (host_span_ring.h). */
     extern uint64_t s_frame_count;
-    host_frame_stamp((uint32_t)s_frame_count, (uint32_t)g_dirty_ram_insns_run);
+    uint32_t stamp_static_checks = 0;
+#ifdef PSX_HAS_OVERLAY_DISPATCH
+    {
+        uint64_t sc = 0, sh = 0, sv = 0, sa = 0;
+        psx_overlay_static_get_stats(&sc, &sh, &sv, &sa);
+        stamp_static_checks = (uint32_t)sc;
+    }
+#endif
+    host_frame_stamp((uint32_t)s_frame_count, (uint32_t)g_dirty_ram_insns_run, stamp_static_checks);
 
     psx_local_mouse_begin(sdl_window, local_mouse_live(override));
     {

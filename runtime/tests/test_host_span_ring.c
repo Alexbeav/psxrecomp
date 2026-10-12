@@ -40,15 +40,15 @@ static int failures;
 
 int main(void) {
     /* Frame stamps: monotonic, carry frame number and interpreter count. */
-    host_frame_stamp(100, 11);
+    host_frame_stamp(100, 11, 5);
     sleep_ms(2);
-    host_frame_stamp(101, 25);
+    host_frame_stamp(101, 25, 9);
     CHECK(host_frame_stamp_total() == 2);
-    uint32_t fr = 0, ii = 0; uint64_t t_a = 0, t_b = 0;
-    CHECK(host_frame_stamp_get(0, &fr, &t_a, &ii) && fr == 100 && ii == 11);
-    CHECK(host_frame_stamp_get(1, &fr, &t_b, &ii) && fr == 101 && ii == 25);
+    uint32_t fr = 0, ii = 0, ck = 0; uint64_t t_a = 0, t_b = 0;
+    CHECK(host_frame_stamp_get(0, &fr, &t_a, &ii, &ck) && fr == 100 && ii == 11 && ck == 5);
+    CHECK(host_frame_stamp_get(1, &fr, &t_b, &ii, &ck) && fr == 101 && ii == 25 && ck == 9);
     CHECK(t_b >= t_a + 1500);                    /* ~2 ms apart */
-    CHECK(!host_frame_stamp_get(2, &fr, &t_a, &ii));   /* not written yet */
+    CHECK(!host_frame_stamp_get(2, &fr, &t_a, &ii, &ck));   /* not written yet */
 
     /* A span shorter than HOST_SPAN_MIN_US is dropped; a long one is kept and tagged emu. */
     uint64_t s0 = host_span_total();

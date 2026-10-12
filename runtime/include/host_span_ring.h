@@ -75,10 +75,13 @@ const char *host_span_kind_name(unsigned kind);
 /* Stamp guest frame `frame` at the current wall time. Also marks the calling
  * thread as the emulation thread for span attribution. Call once per frame.
  * interp_insns is the low 32 bits of the cumulative count of guest instructions run by the
- * interpreter (successive differences = interpreter work in that frame). */
-void host_frame_stamp(uint32_t frame, uint32_t interp_insns);
+ * interpreter (successive differences = interpreter work in that frame); static_checks likewise
+ * counts static-AOT dispatch checks (guest calls into statically compiled code), the work a native
+ * stretch of guest code between two vblanks does. */
+void host_frame_stamp(uint32_t frame, uint32_t interp_insns, uint32_t static_checks);
 uint64_t host_frame_stamp_total(void);
-int host_frame_stamp_get(uint64_t seq, uint32_t *frame, uint64_t *t_us, uint32_t *interp_insns);
+int host_frame_stamp_get(uint64_t seq, uint32_t *frame, uint64_t *t_us, uint32_t *interp_insns,
+                         uint32_t *static_checks);
 #define HOST_FRAME_STAMP_CAP 131072u
 
 #ifdef __cplusplus
