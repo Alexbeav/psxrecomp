@@ -111,6 +111,37 @@ static inline void psx_cyc_charge(uint32_t cycles) {
         }
         cycles = psx_gcs_scale(cycles);
         if (cycles == 0u) return;
+#if !defined(PSX_COSIM)
+        /* Publish on the guest clock alone: the device deadline or the soft
+         * cap. The scale-1 path below also defers while g_psx_cyc_bb_defer is
+         * nonzero and routes through the VLC local sink; both are host call-
+         * stack state (longjmp escapes leak or reset the depth), so which
+         * charge published the batch -- and so which device saw which clock
+         * when -- differed between a Mac and a Windows peer, and the scaled
+         * race split by a few cycles (R4 2P Mac<->PC: clk/tim fork at ~3296
+         * with cpu/ram equal; matching with the batch off). */
+        if (!g_ls_replay_active && !g_event_step_conservative &&
+            !psx_in_device_service) {
+            uint32_t prior = g_psx_cyc_batch;
+            uint32_t sum = prior + cycles;
+            if (sum >= prior) {
+                if (prior == 0u) {
+                    uint64_t room = 0u;
+                    if (psx_next_service_cycle > psx_cycle_count)
+                        room = psx_next_service_cycle - psx_cycle_count;
+                    g_psx_cyc_batch_limit = room == 0u ? 1u :
+                        (room < (uint64_t)PSX_CYC_BATCH_SOFT
+                            ? (uint32_t)room : (uint32_t)PSX_CYC_BATCH_SOFT);
+                }
+                if (sum < g_psx_cyc_batch_limit) {
+                    g_psx_cyc_batch = sum;
+                    return;
+                }
+            }
+            psx_advance_cycles(cycles);
+            return;
+        }
+#endif
     }
 #if defined(__GNUC__) || defined(__clang__)
     if (__builtin_expect(g_ls_replay_active | g_event_step_conservative, 0)) {

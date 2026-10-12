@@ -97,6 +97,37 @@ static void check_batch_matches(uint32_t scale, uint32_t charges, uint32_t every
     }
 }
 
+/* The batched scaled charge must publish on the guest clock alone. The
+ * bb_defer depth and the VLC local sink are host call-stack state (a longjmp
+ * escape leaks or resets the depth), so the service log -- which cycle and
+ * which check each deadline was serviced at -- must not depend on them.
+ * Before the fix a Mac and a Windows peer split by a few cycles. */
+static void check_batch_ignores_host_stack(uint32_t scale, uint32_t charges, uint32_t every) {
+    uint64_t c0[64]; int k0[64];
+    uint64_t t0 = run_checks(scale, 1, charges, every);
+    int n0 = s_services;
+    for (int i = 0; i < n0 && i < 64; i++) { c0[i] = s_service_cycle[i]; k0[i] = s_service_check[i]; }
+    g_psx_cyc_bb_defer = 338;
+    uint64_t t1 = run_checks(scale, 1, charges, every);
+    g_psx_cyc_bb_defer = 0;
+    assert(t1 == t0);
+    assert(s_services == n0);
+    for (int i = 0; i < n0 && i < 64; i++) {
+        assert(s_service_cycle[i] == c0[i]);
+        assert(s_service_check[i] == k0[i]);
+    }
+    {
+        uint32_t acc = 0;
+        g_psx_cyc_local_acc = &acc;
+        uint64_t t2 = run_checks(scale, 1, charges, every);
+        g_psx_cyc_local_acc = 0;
+        assert(t2 == t0);
+        assert(s_services == n0);
+        for (int i = 0; i < n0 && i < 64; i++)
+            assert(s_service_cycle[i] == c0[i] && s_service_check[i] == k0[i]);
+    }
+}
+
 int main(void) {
     assert(psx_gcs_recip_for(1) == 65536u);
     assert(psx_gcs_recip_for(0) == 65536u);          /* never slower than faithful */
@@ -122,5 +153,9 @@ int main(void) {
     check_batch_matches(2, 20000, 7);
     check_batch_matches(3, 30000, 5);
     check_batch_matches(2, 20000, 64);
+
+    /* ...and does not depend on host call-stack state. */
+    check_batch_ignores_host_stack(2, 20000, 7);
+    check_batch_ignores_host_stack(3, 30000, 64);
     return 0;
 }
