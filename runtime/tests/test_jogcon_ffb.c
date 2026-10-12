@@ -37,6 +37,18 @@ int main(void) {
     CHECK(f.constant == 0 && f.spring == 8 * 32767 / 15, "hold: centring spring");
     f = psx_jogcon_ffb_map(0x21, 0x0F, 0);
     CHECK(f.constant == 32767, "only the low nibbles count");
+    {   /* player setting off (the default): R4's hold commands send nothing */
+        PsxJogconFfbBackend b = { NULL, rec_play, rec_stop };
+        PsxJogconFfbDriver d = {{0, 0}, 0};
+        for (uint8_t st = 1; st <= 15; ++st) psx_jogcon_ffb_tick(&d, &b, 0, 3, st, 0);
+        CHECK(s_plays == 0 && s_stops == 0 && !d.active,
+              "setting off: no haptic calls at all");
+        psx_jogcon_ffb_tick(&d, &b, 1, 3, 4, 0);
+        CHECK(s_plays == 1 && d.active, "toggled on: the hold drives the wheel");
+        psx_jogcon_ffb_tick(&d, &b, 0, 3, 4, 0);
+        CHECK(s_stops == 1 && !d.active, "toggled off live: neutral now");
+        s_plays = s_stops = 0;
+    }
     {   /* driver */
         PsxJogconFfbBackend b = { NULL, rec_play, rec_stop };
         PsxJogconFfbDriver d = {{0, 0}, 0};

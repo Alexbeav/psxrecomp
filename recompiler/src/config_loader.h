@@ -1627,6 +1627,10 @@ struct UserSettings {
     // DualShock-on-tap hack (settings.toml [controller] multitap_analog).
     // Default on when unset; game.toml / global prefs may override.
     bool has_multitap_analog = false; bool multitap_analog = true;
+    // EXPERIMENTAL JogCon wheel force feedback, the player's choice
+    // (settings.toml [controller] jogcon_force_feedback). Unset = the title's
+    // game.toml experimental_jogcon_force_feedback default (off).
+    bool has_jogcon_force_feedback = false; bool jogcon_force_feedback = false;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.

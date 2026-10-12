@@ -867,9 +867,14 @@ pad with the louder of that and the guest's SIO motors; a value lapses 8
 VBlanks after the last call and all are cleared at every mod/session reset.
 `PSX_RUMBLE_TRACE=1` logs every change, headless included.
 
-**EXPERIMENTAL:** `[controller] experimental_jogcon_force_feedback = true`
-drives a host force-feedback wheel's SDL haptics from a presented JogCon's
-motor commands: a constant force for turn commands 1 and 2, and a centring
+**EXPERIMENTAL:** JogCon wheel force feedback is a player setting,
+`settings.toml [controller] jogcon_force_feedback` (off by default; the
+launcher / in-game menu toggle writes it via
+`RecompLauncherCSettings.jogcon_force_feedback`, applied live through
+`psx_jogcon_ffb_set_player_enabled`). A title may set its default with
+`game.toml [controller] experimental_jogcon_force_feedback` (off when
+absent); the player's setting always wins. When on, it drives a host
+force-feedback wheel's SDL haptics from a presented JogCon's motor commands: a constant force for turn commands 1 and 2, and a centring
 spring for hold. It is off by default. Gamepads and devices without constant
 or spring haptics are never driven. Every force has a 120 ms lifetime and is
 renewed each VBlank, so a pause, stall or crash leaves the wheel slack. The

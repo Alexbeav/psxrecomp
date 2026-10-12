@@ -5206,6 +5206,20 @@ static void jogcon_ffb_neutral_all(void) {
     }
 }
 
+/* The player's EXPERIMENTAL wheel force-feedback setting, live: takes effect
+ * on the next VBlank; turning it off makes every wheel neutral now. Callers
+ * (launcher exits, the in-game menu's settings apply) also persist it to
+ * settings.toml [controller] jogcon_force_feedback. */
+extern "C" void psx_jogcon_ffb_set_player_enabled(int on) {
+    const bool was = g_jogcon_ffb;
+    g_jogcon_ffb = on != 0;
+    if (was && !g_jogcon_ffb) jogcon_ffb_neutral_all();
+    if (was != g_jogcon_ffb)
+        std::fprintf(stdout, "psxrecomp: EXPERIMENTAL JogCon wheel force "
+                     "feedback %s (player setting)\n", g_jogcon_ffb ? "on" : "off");
+}
+extern "C" int psx_jogcon_ffb_player_enabled(void) { return g_jogcon_ffb ? 1 : 0; }
+
 static void close_player_haptic(PlayerInput& p) {
     PsxJogconFfbBackend b = player_ffb_backend(p);
     psx_jogcon_ffb_neutral(&p.ffb, &b);
@@ -16688,7 +16702,8 @@ int main(int argc, char** argv) {
                 gc.runtime.experimental_jogcon_force_feedback_invert;
             if (g_jogcon_ffb)
                 std::fprintf(stdout, "psxrecomp: EXPERIMENTAL JogCon force "
-                             "feedback enabled by game.toml (wheels only)\n");
+                             "feedback on by the title's default (wheels "
+                             "only; the player setting overrides)\n");
             if (!gc.runtime.direct_shortcut.empty())
                 apply_title_direct_shortcut(gc.runtime.direct_shortcut,
                                             gc.runtime.direct_shortcut_button);
@@ -17016,6 +17031,8 @@ int main(int argc, char** argv) {
         if (us.has_memcard1_enabled) memcard1_enabled = us.memcard1_enabled;
         if (us.has_memcard2_enabled) memcard2_enabled = us.memcard2_enabled;
         if (us.has_multitap_enabled) multitap_enabled = us.multitap_enabled;
+        if (us.has_jogcon_force_feedback)
+            psx_jogcon_ffb_set_player_enabled(us.jogcon_force_feedback ? 1 : 0);
         if (us.has_multitap_analog) {
             multitap_analog = us.multitap_analog;
             sio_set_multitap_analog(multitap_analog ? 1 : 0);
@@ -17791,6 +17808,9 @@ int main(int argc, char** argv) {
             ls.multitap_analog = seed.multitap_analog ? 1 : 0;
             g_lnch_multitap_analog = seed.multitap_analog ? 1 : 0;
 #endif
+#if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK)
+            ls.jogcon_force_feedback = psx_jogcon_ffb_player_enabled();
+#endif
 
             /* Region badge: game.toml [game] region wins verbatim; otherwise derive
              * from the game_id serial prefix (SCUS/SLUS/LSP -> USA, SCES/SLES ->
@@ -18168,6 +18188,14 @@ int main(int argc, char** argv) {
                     (void)PSXRecompV4::upsert_game_toml_controller_bool(
                         game_config_path, "multitap_analog", multitap_analog);
                 }
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK)
+                if ((ls.jogcon_force_feedback != 0) != (psx_jogcon_ffb_player_enabled() != 0) ||
+                    seed.has_jogcon_force_feedback) {
+                    seed.jogcon_force_feedback = ls.jogcon_force_feedback != 0;
+                    seed.has_jogcon_force_feedback = true;
+                }
+                psx_jogcon_ffb_set_player_enabled(ls.jogcon_force_feedback);
 #endif
                 if (ls.memcard_path[0][0]) { seed.memcard1_path = ls.memcard_path[0]; seed.has_memcard1_path = true; }
                 if (ls.memcard_path[1][0]) { seed.memcard2_path = ls.memcard_path[1]; seed.has_memcard2_path = true; }
@@ -20309,6 +20337,9 @@ soft_return_lobby:
         ls.multitap_analog = multitap_analog ? 1 : 0;
         g_lnch_multitap_analog = multitap_analog ? 1 : 0;
 #endif
+#if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK)
+        ls.jogcon_force_feedback = psx_jogcon_ffb_player_enabled();
+#endif
         /* Preserve input devices across soft-return. A zeroed ls left every
          * player_src at None, so the rematch UI (and a subsequent writeback)
          * looked like netplay had wiped the pad assignment. */
@@ -20559,6 +20590,14 @@ soft_return_lobby:
                 us.multitap_enabled = multitap_enabled;
                 us.has_multitap_enabled = true;
                 apply_offline_pad_count(game_players, multitap_enabled);
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_JOGCON_FORCE_FEEDBACK)
+                if ((ls.jogcon_force_feedback != 0) != (psx_jogcon_ffb_player_enabled() != 0) ||
+                    us.has_jogcon_force_feedback) {
+                    us.jogcon_force_feedback = ls.jogcon_force_feedback != 0;
+                    us.has_jogcon_force_feedback = true;
+                }
+                psx_jogcon_ffb_set_player_enabled(ls.jogcon_force_feedback);
 #endif
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ANALOG)
                 multitap_analog = ls.multitap_analog != 0;
