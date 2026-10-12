@@ -15,8 +15,9 @@
  *    spans show the work that fed them.
  *
  * Wall time is microseconds since the first call in the process (monotonic).
- * Writers may be different threads: slots are claimed with an atomic counter
- * and a torn read blurs one diagnostic row only.
+ * Writers may be different threads. Per-slot ownership and publication sequence
+ * validation prevent torn or overwritten rows. Contended samples are dropped;
+ * diagnostics never wait for a reader to release a slot.
  *
  * Reading: TCP "host_span_ring" / "frame_wall_ring"; a title's hitch report
  * tool joins them (LegendOfDragoonRecomp tools/lod_hitch_report.py). */
@@ -43,6 +44,7 @@ typedef enum HostSpanKind {
     HSPAN_OVERLAY_DISPATCH,   /* emu: overlay_loader_dispatch slow path           */
     HSPAN_MOD_WORK,           /* emu: resident pack / mod host work               */
     HSPAN_FRAME_PRESENT,      /* emu: frontend present for the frame              */
+    HSPAN_DISC_READ,          /* emu: one sector read from the disc image (arg lba) */
     HSPAN_KIND_COUNT
 } HostSpanKind;
 
@@ -77,11 +79,13 @@ const char *host_span_kind_name(unsigned kind);
  * interp_insns is the low 32 bits of the cumulative count of guest instructions run by the
  * interpreter (successive differences = interpreter work in that frame); static_checks likewise
  * counts static-AOT dispatch checks (guest calls into statically compiled code), the work a native
- * stretch of guest code between two vblanks does. */
+ * stretch of guest code between two vblanks does. Each stamp also records the process's cumulative
+ * page-fault count and disk-read volume (KiB), so a frame that waited on the OS (code or data pages
+ * paged in from disk) is told apart from one that computed. */
 void host_frame_stamp(uint32_t frame, uint32_t interp_insns, uint32_t static_checks);
 uint64_t host_frame_stamp_total(void);
 int host_frame_stamp_get(uint64_t seq, uint32_t *frame, uint64_t *t_us, uint32_t *interp_insns,
-                         uint32_t *static_checks);
+                         uint32_t *static_checks, uint32_t *page_faults, uint32_t *io_read_kb);
 #define HOST_FRAME_STAMP_CAP 131072u
 
 #ifdef __cplusplus

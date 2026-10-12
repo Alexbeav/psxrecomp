@@ -1199,6 +1199,7 @@ if(BUILD_TESTING)
     add_executable(mod_runtime_test
         tests/test_mod_runtime.cpp
         src/iso_reader_c.cpp
+        src/host_span_ring.c
         src/mod_runtime.cpp
         src/mod_netplay.c
         src/mod_packages.cpp
@@ -1245,6 +1246,7 @@ if(BUILD_TESTING)
     add_executable(netplay_view_mods_test
         tests/test_netplay_view_mods.cpp
         src/iso_reader_c.cpp
+        src/host_span_ring.c
         src/mod_runtime.cpp
         src/mod_netplay.c
         src/mod_packages.cpp

@@ -5538,7 +5538,7 @@ static void handle_host_profile(int id, const char *json)
  *   {"cmd":"host_span_ring","from":SEQ,"n":N}  spans with seq >= from (default: oldest)
  *     -> {total, oldest, events:[[seq, kind, t0_us, dur_us, frame, emu, arg], ...]}
  *   {"cmd":"frame_wall_ring","from":SEQ,"n":N} per-guest-frame wall stamps
- *     -> {total, oldest, now_us, f:[frame, t_us, interp_insns_lo32, static_checks_lo32, ...]}
+ *     -> {total, oldest, now_us, f:[frame, t_us, interp_insns_lo32, static_checks_lo32, page_faults, io_read_kb, ...]}
  * Both read a window that already happened; nothing is armed. */
 static void handle_host_span_ring(int id, const char *json)
 {
@@ -5581,19 +5581,19 @@ static void handle_frame_wall_ring(int id, const char *json)
     if (n > (int)HOST_FRAME_STAMP_CAP) n = (int)HOST_FRAME_STAMP_CAP;
     uint64_t from = from_i >= 0 ? (uint64_t)from_i : oldest;
     if (from < oldest) from = oldest;
-    size_t cap = 192 + (size_t)n * 52;
+    size_t cap = 192 + (size_t)n * 64;
     char *buf = (char *)malloc(cap);
     if (!buf) { send_err(id, "oom"); return; }
     size_t pos = (size_t)snprintf(buf, cap,
-        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"oldest\":%llu,\"from\":%llu,\"now_us\":%llu,\"f\":[",
+        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"oldest\":%llu,\"from\":%llu,\"now_us\":%llu,\"stride\":6,\"f\":[",
         id, (unsigned long long)total, (unsigned long long)oldest,
         (unsigned long long)from, (unsigned long long)host_clock_us());
     int first = 1, emitted = 0;
-    for (uint64_t q = from; q < total && emitted < n && pos + 80 < cap; q++) {
-        uint32_t fr, ii, ck; uint64_t t;
-        if (!host_frame_stamp_get(q, &fr, &t, &ii, &ck)) continue;
-        pos += (size_t)snprintf(buf + pos, cap - pos, "%s%u,%llu,%u,%u", first ? "" : ",", fr,
-                                (unsigned long long)t, ii, ck);
+    for (uint64_t q = from; q < total && emitted < n && pos + 96 < cap; q++) {
+        uint32_t fr, ii, ck, pf, io; uint64_t t;
+        if (!host_frame_stamp_get(q, &fr, &t, &ii, &ck, &pf, &io)) continue;
+        pos += (size_t)snprintf(buf + pos, cap - pos, "%s%u,%llu,%u,%u,%u,%u", first ? "" : ",", fr,
+                                (unsigned long long)t, ii, ck, pf, io);
         first = 0; emitted++;
     }
     snprintf(buf + pos, cap - pos, "]}");
