@@ -39,6 +39,33 @@ int freeze_dump_policy_observe(FreezeDumpPolicy *policy, uint32_t wedge_kind,
  * bounded number of failed attempts before the policy consumes that slot. */
 void freeze_dump_policy_record_result(FreezeDumpPolicy *policy, int written);
 
+/* Wedge kinds reported by freeze_wedge_classify (0 = healthy). */
+#define FREEZE_WEDGE_HARD          1u  /* frame_count did not advance */
+#define FREEZE_WEDGE_REENTRY_STORM 2u  /* exception re-entries per frame over threshold */
+#define FREEZE_WEDGE_SLOW_FRAMES   3u  /* frames advanced below the slow-frames floor */
+#define FREEZE_WEDGE_SPIN          5u  /* guest pinned in one loop while frames advance */
+
+#define FREEZE_WEDGE_EXC_REENTRY_PER_FRAME_THRESHOLD 20000u /* ~10x chronic 2K/frame */
+#define FREEZE_WEDGE_SLOW_FRAMES_MAX_DELTA 10u   /* <5 fps avg over the 2s window */
+
+/* One heartbeat sample, as far as wedge classification needs it. */
+typedef struct FreezeWedgeSample {
+    uint64_t frame_count;
+    uint64_t exc_reentry;
+    uint64_t dirty_ram_insns;
+    uint32_t current_func;
+    uint32_t last_store_pc;
+} FreezeWedgeSample;
+
+/* Classify a window of consecutive samples, oldest first. A spin requires the
+ * executing function, last store PC and dirty-RAM instruction count to hold
+ * one value at EVERY sample: statically compiled code leaves dirty_ram_insns
+ * flat, so a per-frame main loop that happens to store at the same PC at both
+ * window ends is not a spin. mdec_recently_active (may be NULL) vetoes a spin
+ * while FMV decoding parks the guest in BIOS MDEC code. */
+uint32_t freeze_wedge_classify(const FreezeWedgeSample *window, uint32_t count,
+                               int (*mdec_recently_active)(uint32_t frames));
+
 /* Format a unique dump path. The sequence prevents same-second truncation. */
 int freeze_dump_format_path(char *out, size_t cap, const char *backend,
                             long long wall, uint32_t sequence);
