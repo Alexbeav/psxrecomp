@@ -698,7 +698,7 @@ if ($Bad.Count -gt 0) {
     throw "Scaffold emitted BOM/UTF-16 text (must be BOM-less UTF-8): $($Bad -join ', ')"
 }
 
-git add CMakeLists.txt game.toml codegen_setup.c codegen_setup.h .gitignore VERSION README.md seeds scripts tools mods framework_pins.txt symbols.toml psx_symbols.h 2>$null
+git add CMakeLists.txt game.toml game_options.toml codegen_setup.c codegen_setup.h .gitignore VERSION README.md seeds scripts tools mods framework_pins.txt symbols.toml psx_symbols.h 2>$null
 if (Test-Path (Join-Path $Root ".github")) {
     git add .github 2>$null
 }
