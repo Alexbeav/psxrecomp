@@ -9760,7 +9760,7 @@ extern "C" unsigned psx_video_apply_live(const PsxHostVideoSettings *next) {
     if (m & PSX_VIDEO_LIVE_FULLSCREEN)
         (void)psx_window_fullscreen_set(sdl_window, &s_window_fullscreen, next->fullscreen);
     if (m & PSX_VIDEO_LIVE_TEXTURE_FILTER) {
-        g_video_texfilter = next->texture_filter ? 1 : 0;
+        g_video_texfilter = psx_texture_filter_from_ui(next->texture_filter);
         if (g_mod_texfilter < 0) gr_set_texture_filter(g_video_texfilter);
     }
     if (m & PSX_VIDEO_LIVE_FMV_FILTER) {

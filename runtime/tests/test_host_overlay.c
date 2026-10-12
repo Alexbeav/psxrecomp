@@ -146,10 +146,20 @@ static void test_video(void) {
     CHECK(psx_host_video_live_changes(NULL, &b) == 0 && psx_host_video_restart_bits(&a, NULL) == 0);
 }
 
+/* One texture-filter enum for settings, handoff and menu (xBR included). */
+static void test_texture_filter(void) {
+    CHECK(psx_texture_filter_from_ui(0) == PSX_TEXTURE_FILTER_NEAREST);
+    CHECK(psx_texture_filter_from_ui(1) == PSX_TEXTURE_FILTER_BILINEAR);
+    CHECK(psx_texture_filter_from_ui(3) == PSX_TEXTURE_FILTER_XBR);
+    CHECK(psx_texture_filter_from_ui(9) == PSX_TEXTURE_FILTER_NEAREST);
+    CHECK(psx_texture_filter_from_ui(-1) == PSX_TEXTURE_FILTER_NEAREST);
+}
+
 int main(void) {
     test_draw_lifetime();
     test_draw_reentrant();
     test_video();
+    test_texture_filter();
     test_sink();
     test_draw();
     test_pause();
