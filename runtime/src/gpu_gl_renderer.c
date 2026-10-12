@@ -920,11 +920,21 @@ static void c5_to_float(uint16_t c, float *r, float *g, float *b) {
         *r = (c & 0x1F) / 31.0f; *g = ((c >> 5) & 0x1F) / 31.0f; *b = ((c >> 10) & 0x1F) / 31.0f;
     }
 }
-/* [video] dithering (see psx_dither in the shaders): 0 off = true colour (the
- * historical path), 1 the PS1 4x4 pattern at internal resolution, 2 scaled to
- * the native pixel grid. s_dither_bit is the last GP0(E1h) bit 9; the shaders
- * only ever see s_dither_mode while the guest has dithering enabled. */
-static int s_dither_mode = 0, s_dither_bit = 0, s_dither_live = 0;
+/* [video] dithering (see psx_dither in the shaders): 1 (default) the PS1 4x4
+ * pattern at internal resolution, 2 scaled to the native pixel grid, 0 off =
+ * true colour. s_dither_bit is the last GP0(E1h) bit 9. Each primitive's
+ * eligibility (bit set AND Gouraud-shaded, or a texture-modulated polygon;
+ * never flat, raw-textured or a rectangle) is fixed when it is queued and
+ * rides in its vertices, so bit changes need no flush. s_prim_shaded /
+ * s_prim_rect are set by the glb_draw_* entry points for gpu_geometry and
+ * gpu_textured_triangle. */
+static int s_dither_mode = 1, s_dither_bit = 0;
+static int s_prim_shaded = 0, s_prim_rect = 0;
+/* Added to a geometry vertex's a_col.a (as 2*131072) for an eligible prim. */
+#define GPU_GEO_DITHER_CODE 262144.0f
+static float geo_dither_code(void) {
+    return (s_dither_mode && s_dither_bit && s_prim_shaded) ? GPU_GEO_DITHER_CODE : 0.0f;
+}
 /* Opaque textured draws carry the exact mask bit in FBO alpha. Keeping the
  * duplicate stencil copy current is deferred until mask checking is requested. */
 static int s_stencil_valid = 1;
@@ -1818,21 +1828,21 @@ static const char *INTERP_FS =
  * rect coverage exactly [x*S, (x+w)*S) at every scale AND makes the
  * top-left subpixel of each S*S block sample the exact PS1 value (which is
  * what the PACK pass reads back). */
-/* PS1 dithering ([video] dithering). The GPU adds the 4x4 offset matrix below
- * to a shaded or texture-modulated pixel before truncating it to 5 bits, when
- * GP0(E1h) bit 9 is set. Flat and raw-texture pixels are already 5-bit exact
- * and are left alone, which is what the hardware's shading/modulation rule
- * amounts to. u_dither 0 = off (true colour, the default and the historical
- * renderer), 1 = pattern per internal-resolution pixel, 2 = pattern scaled
- * to the native grid (v_npos is the fragment's native VRAM position). */
+/* PS1 dithering ([video] dithering, on by default). While GP0(E1h) bit 9 is
+ * set the GPU adds the 4x4 offset matrix below to every pixel of a
+ * Gouraud-shaded polygon or line and of a texture-modulated polygon, then
+ * truncates to 5 bits. Flat untextured primitives, raw-texture polygons and
+ * all rectangles (sprites) are never dithered. Eligibility is decided per
+ * primitive on the CPU and carried in the vertex (v_dith), never inferred
+ * from the colour. u_dither 0 = off (true colour), 1 = PS1 pattern per
+ * internal-resolution pixel (default), 2 = pattern scaled to the native
+ * grid (v_npos is the fragment's native VRAM position). The result is
+ * written in the surface's colour basis (u_accurate). */
 #define PSX_DITHER_GLSL \
     "uniform int u_dither;\n" \
     "uniform int u_accurate;  /* [video] accurate_blending: VRAM in the k*8/255 basis */\n" \
-    "vec3 psx_dither(vec3 c, vec2 npos){\n" \
-    "  if (u_dither == 0) return c;\n" \
-    "  vec3 q8 = c * (255.0 / 8.0), q31 = c * 31.0;\n" \
-    "  if (all(lessThan(abs(q8 - floor(q8 + 0.5)), vec3(0.02))) ||\n" \
-    "      (u_accurate == 0 && all(lessThan(abs(q31 - floor(q31 + 0.5)), vec3(0.02))))) return c;\n" \
+    "vec3 psx_dither(vec3 c, vec2 npos, int eligible){\n" \
+    "  if (u_dither == 0 || eligible == 0) return c;\n" \
     "  ivec2 p = (u_dither == 2 ? ivec2(floor(npos)) : ivec2(gl_FragCoord.xy)) & 3;\n" \
     "  const float m[16] = float[16](-4.0,0.0,-3.0,1.0, 2.0,-2.0,3.0,-1.0,\n" \
     "                                -3.0,1.0,-4.0,0.0, 3.0,-1.0,2.0,-2.0);\n" \
@@ -1853,6 +1863,7 @@ static const char *GEO_VS =
     "smooth out vec3 v_col_p;   /* perspective-correct colour (PGXP, G1.14) */\n"
     "flat out int v_cp;\n"
     "noperspective out vec2 v_npos;  /* native VRAM position (dithering) */\n"
+    "flat out int v_dith;            /* this primitive is dither-eligible */\n"
     "void main(){\n"
     "  v_npos = a_pos;\n"
     "  /* a_col.a carries the mask bit (0/1) and, for a PGXP 3D vertex, its\n"
@@ -1860,6 +1871,8 @@ static const char *GEO_VS =
     "   * negative a is a depth-clear vertex (beyond every SZ, inside the far plane). */\n"
     "  float a = a_col.a, code = floor(a * 0.5), zn = 0.0, w = 1.0;\n"
     "  float m = a - 2.0 * code;\n"
+    "  /* + 2*131072: the primitive is dither-eligible (GPU_GEO_DITHER_CODE). */\n"
+    "  float dth = (a >= 0.0 && code >= 131072.0) ? 1.0 : 0.0; code -= 131072.0 * dth; v_dith = int(dth);\n"
     "  float cp = code >= 65536.0 ? 1.0 : 0.0, sz = code - 65536.0 * cp;\n"
     "  if (a < 0.0) { m = 0.0; zn = 0.9999; sz = 0.0; cp = 0.0; }  /* inside the far plane: never clipped */\n"
     "  else if (sz > 0.5) { zn = 1.0 - 512.0 / (max(sz * (1.0 - u_zbias) - (u_zbias > 0.0 ? 48.0 : 0.0), 1.0) + 256.0); if (cp > 0.5) w = sz / 1024.0; }\n"
@@ -1874,10 +1887,10 @@ static const char *GEO_VS =
 static const char *GEO_FS =
     "#version 330\n"
     "noperspective in vec4 v_col; smooth in vec3 v_col_p; flat in int v_cp; out vec4 frag;\n"
-    "noperspective in vec2 v_npos;\n"
+    "noperspective in vec2 v_npos; flat in int v_dith;\n"
     PSX_DITHER_GLSL
     "void main(){ frag = v_cp != 0 ? vec4(v_col_p, v_col.a) : v_col;\n"
-    "  frag.rgb = psx_dither(frag.rgb, v_npos); }\n";
+    "  frag.rgb = psx_dither(frag.rgb, v_npos, v_dith); }\n";
 
 /* Textured prims: sample raw 1555 VRAM (integer), CLUT decode per depth,
  * texture window, optional bilinear, texel-0 discard, STP-split discard,
@@ -1919,6 +1932,7 @@ static const char *TEX_VS =
     "flat out int v_persp;\n"
     "flat out ivec2 v_tpage; flat out ivec2 v_clut; flat out int v_depth;\n"
     "flat out int v_raw; flat out ivec4 v_limits; flat out int v_semi;\n"
+    "flat out int v_dith;\n"
     "flat out int v_twin;\n"
     "flat out vec4 v_hd_source; flat out int v_hd_mode;\n"
     "flat out int v_filter;\n"
@@ -1930,6 +1944,7 @@ static const char *TEX_VS =
     "  v_tpage = ivec2(a_tpage + 0.5); v_clut = ivec2(a_clut + 0.5);\n"
     "  v_depth = int(a_depth + 0.5); v_raw = int(a_raw + 0.5);\n"
     "  v_semi = int(a_semi + 0.5);\n"
+    "  v_dith = v_semi >> 3; v_semi &= 7;   /* +8: dither-eligible primitive */\n"
     "  v_twin = int(a_twin + 0.5);\n"
     "  v_filter = int(a_filter + 0.5);\n"
     "  v_hd_source=a_hd_source; v_hd_mode=int(a_hd_mode+0.5);\n"
@@ -1970,6 +1985,7 @@ static const char *TEX_FS =
     "flat in int v_raw;       /* 1 = no color modulation */\n"
     "flat in ivec4 v_limits;  /* prim uv sampling bounds (inclusive, post-wrap) */\n"
     "flat in int v_semi;      /* GP0 command has semi-transparency enabled */\n"
+    "flat in int v_dith;      /* dither-eligible (modulated polygon, E1 bit 9) */\n"
     "flat in int v_twin;      /* texture window, GP0(E2h) bits 0..19 */\n"
     "flat in int v_filter;    /* sampling mode belongs to this primitive */\n"
     "flat in vec4 v_hd_source; flat in int v_hd_mode;\n"
@@ -2193,7 +2209,8 @@ static const char *TEX_FS =
     "  if ((v_filter & 16) != 0 && v_hd_mode == 0) rgb = lod_sample(uv0, dx0, dy0, stp, rgb);\n"
     "  if (u_semipass == 1 && stp == 1) discard;\n"
     "  if (u_semipass == 2 && stp == 0) discard;\n"
-    "  if (v_raw == 0) rgb = psx_dither(clamp(rgb * (v_cp != 0 ? v_col_p : v_col.rgb) * 2.0, 0.0, 1.0), v_npos);\n"
+    "  if (v_raw == 0) rgb = clamp(rgb * (v_cp != 0 ? v_col_p : v_col.rgb) * 2.0, 0.0, 1.0);\n"
+    "  rgb = psx_dither(rgb, v_npos, v_dith);\n"
     "  float dst_factor = 0.0;\n"
     "  if (u_semimode == 4 && v_semi != 0 && stp != 0) {\n"
     "    dst_factor = v_semi == 1 ? 0.5 : 1.0;\n"
@@ -4454,7 +4471,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         s_fb_depth = 0;   /* lines are 2D: never depth-tested (G1.14) */
         s_fb_semi = semi;
         s_fb_mask = (int)s_mask_set;
-        float mask_a = s_mask_set ? 1.0f : 0.0f;
+        float mask_a = (s_mask_set ? 1.0f : 0.0f) + geo_dither_code();
         for (int i = 0; i < 2; i++) {
             float *v = &s_fb[s_fb_n * 6];
             v[0] = (float)xs[i];
@@ -4481,7 +4498,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
      * batch above. */
     if (mode == GL_LINES && n == 2 && s_out_scale > 1 && !bd_prim_gate(xs, n, 0)) {
         float lv[2 * 6], quad[6 * 6];
-        float mask_a = s_mask_set ? 1.0f : 0.0f;
+        float mask_a = (s_mask_set ? 1.0f : 0.0f) + geo_dither_code();
         for (int i = 0; i < 2; i++) {
             lv[i*6+0] = (float)xs[i];
             lv[i*6+1] = (float)ys[i];
@@ -4514,7 +4531,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     if (mode != GL_TRIANGLES || n < 3) {
         flush_flat_batch();
         float verts[3 * 6];
-        float mask_a = s_mask_set ? 1.0f : 0.0f;
+        float mask_a = (s_mask_set ? 1.0f : 0.0f) + geo_dither_code();
         for (int i = 0; i < n; i++) {
             verts[i*6+0] = precise ? s_pc_x[i] : (float)xs[i];
             verts[i*6+1] = precise ? s_pc_y[i] : (float)ys[i];
@@ -4596,7 +4613,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     s_fb_gate = gate;
     s_fb_depth = dmode;
 
-    float mask_a = s_mask_set ? 1.0f : 0.0f;
+    float mask_a = (s_mask_set ? 1.0f : 0.0f) + geo_dither_code();
     float *v0 = &s_fb[s_fb_n * 6];
     for (int i = 0; i < n; i++) {
         float *v = &s_fb[s_fb_n * 6];
@@ -4665,6 +4682,9 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
                                   const float *col, uint16_t texpage,
                                   uint16_t clut_x, uint16_t clut_y, int rawtex,
                                   int semi, const int *lim) {
+    /* PS1 dithering: texture-modulated polygons only (never raw texels or
+     * rectangles), while E1 bit 9 is set. */
+    const int dither_tex = s_dither_mode && s_dither_bit && !rawtex && !s_prim_rect;
     // Mode 2 needs proven world geometry. Sprites, HUD and untracked packets
     // retain point sampling; their cutout pixels must stay sharp.
     const int untracked=(lim && !s_projected_uv_valid) || (!s_pc_valid && !s_pq_valid);
@@ -4770,7 +4790,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             vp[12] = (float)depth;   vp[13] = (float)rawtex;        /* a_depth, a_raw */
             vp[14] = (float)lim[0];  vp[15] = (float)lim[1];        /* a_limits */
             vp[16] = (float)lim[2];  vp[17] = (float)lim[3];
-            vp[18] = semi >= 0 ? (float)(semi + 1) : 0.0f;          /* a_semi code */
+            vp[18] = (semi >= 0 ? (float)(semi + 1) : 0.0f)          /* a_semi code */
+                   + (dither_tex ? 8.0f : 0.0f);                     /* + dither-eligible */
             vp[19] = s_pq_valid ? s_pq[i] : 0.0f;                   /* a_q; 0 = affine */
             vp[20] = twin;                                          /* a_twin   */
             vp[21] = (float)hd.origin_u; vp[22] = (float)hd.origin_v;
@@ -5089,36 +5110,27 @@ void gl_renderer_set_accurate_blending(int on) {
     if (s_ctx) accurate_apply_uniforms();
 }
 int gl_renderer_accurate_blending(void) { return s_accurate_blend; }
-/* Dither uniforms live in the geometry and textured programs. The effective
- * value only changes between batches (glb_set_dither drains them first). */
+/* Dither mode uniform in the geometry and textured programs; queued draws
+ * are drained before it changes. */
 static GLint s_geo_uDither = -1, s_tex_uDither = -1;
 static void dither_apply_uniforms(void) {
     if (!s_geo_prog || !s_tex_prog) return;
     GLint prev = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &prev);
     if (s_geo_uDither < 0) s_geo_uDither = p_glGetUniformLocation(s_geo_prog, "u_dither");
     if (s_tex_uDither < 0) s_tex_uDither = p_glGetUniformLocation(s_tex_prog, "u_dither");
-    p_glUseProgram(s_geo_prog); p_glUniform1i(s_geo_uDither, s_dither_live);
-    p_glUseProgram(s_tex_prog); p_glUniform1i(s_tex_uDither, s_dither_live);
+    p_glUseProgram(s_geo_prog); p_glUniform1i(s_geo_uDither, s_dither_mode);
+    p_glUseProgram(s_tex_prog); p_glUniform1i(s_tex_uDither, s_dither_mode);
     p_glUseProgram((GLuint)prev);
 }
-static void dither_update(void) {
-    const int live = s_dither_bit ? s_dither_mode : 0;
-    if (live == s_dither_live) return;
-    /* Queued draws keep the state they were submitted under. */
-    flush_flat_batch(); flush_tex_batch(); hiw_flush_queue();
-    s_dither_live = live;
-    dither_apply_uniforms();
-}
-/* GP0(E1h) bit 9. With [video] dithering off (the default) this only records
- * the bit; nothing is flushed and no uniform changes. */
-static void glb_set_dither(int on) {
-    s_dither_bit = on ? 1 : 0;
-    if (s_dither_mode || s_dither_live) dither_update();
-}
+/* GP0(E1h) bit 9: recorded; it is read when each primitive is queued. */
+static void glb_set_dither(int on) { s_dither_bit = on ? 1 : 0; }
 void gl_renderer_set_dithering(int mode) {
     GL_RT_SYNC("dithering");
-    s_dither_mode = (mode == 1 || mode == 2) ? mode : 0;
-    if (s_ctx) dither_update();
+    mode = (mode == 1 || mode == 2) ? mode : 0;
+    if (mode == s_dither_mode) return;
+    if (s_ctx) { flush_flat_batch(); flush_tex_batch(); hiw_flush_queue(); }
+    s_dither_mode = mode;
+    if (s_ctx) dither_apply_uniforms();
 }
 int gl_renderer_dithering(void) { return s_dither_mode; }
 static void glb_set_texture_filter(int b) { s_tex_filter = b >= 0 && b <= 3 ? b : 0; sw_set_texture_filter(b != 0); }
@@ -5281,7 +5293,9 @@ static void glb_draw_gouraud_triangle(int x0,int y0,uint16_t c0,int x1,int y1,ui
         native_draw_end(faithful);
     }
     if (!s_raster_ok) return;
+    s_prim_shaded = 1;   /* Gouraud: dither-eligible */
     gpu_triangle(x0,y0,c0, x1,y1,c1, x2,y2,c2, s_semi_en?s_semi_mode:-1);
+    s_prim_shaded = 0;
     precise_consumed();
 }
 static void glb_fill_rect(int x,int y,int w,int h,uint16_t c){
@@ -5353,7 +5367,7 @@ static void glb_draw_textured_rect(int x,int y,int w,int h,int u,int v,uint16_t 
     if (native_required && !s_hd_native_authority)
         sw_draw_textured_rect(x,y,w,h,u,v,cx,cy,tp);
     if (s_raster_ok)
-        gpu_textured_rect(x,y,w,h, u,v, u+w,v+h, cx,cy,tp, s_semi_en?s_semi_mode:-1);
+        { s_prim_rect = 1; gpu_textured_rect(x,y,w,h, u,v, u+w,v+h, cx,cy,tp, s_semi_en?s_semi_mode:-1); s_prim_rect = 0; }
     if (native_required && s_hd_native_authority) {
         int faithful = native_draw_begin();
         sw_draw_textured_rect(x,y,w,h,u,v,cx,cy,tp);
@@ -5365,7 +5379,7 @@ static void glb_draw_textured_rect_scaled(int x,int y,int w,int h,int u0,int v0,
     if (native_required && !s_hd_native_authority)
         sw_draw_textured_rect_scaled(x,y,w,h,u0,v0,u1,v1,cx,cy,tp);
     if (s_raster_ok)
-        gpu_textured_rect(x,y,w,h, u0,v0, u1,v1, cx,cy,tp, s_semi_en?s_semi_mode:-1);
+        { s_prim_rect = 1; gpu_textured_rect(x,y,w,h, u0,v0, u1,v1, cx,cy,tp, s_semi_en?s_semi_mode:-1); s_prim_rect = 0; }
     if (native_required && s_hd_native_authority) {
         int faithful = native_draw_begin();
         sw_draw_textured_rect_scaled(x,y,w,h,u0,v0,u1,v1,cx,cy,tp);
@@ -5388,7 +5402,9 @@ static void glb_draw_shaded_line(int x0,int y0,uint16_t c0,int x1,int y1,uint16_
         native_draw_end(faithful);
     }
     if (!s_raster_ok) return;
+    s_prim_shaded = 1;   /* shaded line: dither-eligible */
     gpu_line(x0,y0,c0, x1,y1,c1, s_semi_en?s_semi_mode:-1);
+    s_prim_shaded = 0;
 }
 static int gl_read_display_argb(int x, int y, int w, int h, uint32_t *out,
                                 int pitch_bytes, int cap_px, int *ow, int *oh);
@@ -6036,7 +6052,6 @@ static int init_gpu_raster(void) {
         s_shift_hi = 0.5f / (float)s_out_scale - 1.0f / 64.0f;
         s_geo_uShift = p_glGetUniformLocation(s_geo_prog, "u_shift");
         s_geo_uDither = s_tex_uDither = -1;
-        s_dither_live = s_dither_bit ? s_dither_mode : 0;
         dither_apply_uniforms();
         s_tex_uShift = p_glGetUniformLocation(s_tex_prog, "u_shift");
         s_geo_uZbias = p_glGetUniformLocation(s_geo_prog, "u_zbias");

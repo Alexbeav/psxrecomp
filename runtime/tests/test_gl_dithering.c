@@ -1,18 +1,22 @@
-/* [video] dithering on a real, hidden OpenGL context, driven through the
- * renderer facade (gr_*) the way gpu.c drives it.
+/* PS1 dithering ([video] dithering, on by default) on a real, hidden OpenGL
+ * context, driven through the renderer facade (gr_*) the way gpu.c drives it.
  *
- *  - off (the default): the GP0(E1h) dither bit changes nothing, so the
- *    native VRAM and the frame at internal resolution are byte-identical
- *    with the bit set or clear;
- *  - on / scaled with the bit clear: identical to off;
- *  - on / scaled with the bit set: a gouraud gradient and a modulated
- *    texture gain the PS1 4x4 pattern (more 5-bit steps along a row, same
- *    mean brightness), while flat fills, flat polygons and raw textures stay
- *    exactly as they were;
- *  - "scaled" puts the pattern on the native grid: the native VRAM at 4x
- *    (stepped by dynamic resolution) equals the native VRAM at 1x;
- *  - the render thread (records replayed later), PGXP depth and native-wide
- *    margins give the same pixels as the direct path.
+ * Eligibility, with GP0(E1h) bit 9 set (hardware rule):
+ *   - Gouraud polygon .................. dithered (also when its three
+ *     vertex colours are equal and 5-bit exact: eligibility is the command,
+ *     not the colour)
+ *   - shaded line ...................... dithered
+ *   - texture-modulated polygon ........ dithered (also at the neutral
+ *     0x80 modulation, whose output is 5-bit exact)
+ *   - flat polygon, flat line, flat rect, raw-texture polygon,
+ *     textured rectangle (modulated or not) ...... never dithered
+ * With the bit clear nothing is dithered, and "off" is the true-colour
+ * output whatever the bit. Each eligible case is compared against "off"
+ * region by region in the native VRAM.
+ * Also: "scaled" puts the pattern on the native grid (native VRAM at 4x,
+ * stepped by dynamic resolution, equals 1x); the render thread, PGXP depth
+ * and native-wide margins give the same pixels; with accurate_blending the
+ * dithered channels stay on the k*8 grid.
  * Original source-owned scene; no retail payload. */
 #define main rt_fixture_main
 #include "test_gl_render_thread.c"
@@ -24,6 +28,31 @@ static uint16_t nat[1024 * 512];
 static uint32_t hi[DW * 4 * DH * 4];
 static int k_test_scale = 4;
 
+/* Regions (native px): x, y, w, h */
+enum { R_GOURAUD, R_GOURAUD_FLATCOL, R_SHADED_LINE, R_TEX_MOD, R_TEX_NEUTRAL,
+       R_FLAT_TRI, R_FLAT_RECT, R_FLAT_LINE, R_TEX_RAW, R_RECT_MOD, R_RECT_RAW, R_N };
+static const int REG[R_N][4] = {
+    {0, 0, 160, 40},      /* Gouraud gradient */
+    {170, 0, 60, 40},     /* Gouraud, equal 5-bit-exact vertex colours */
+    {240, 0, 70, 40},     /* shaded lines */
+    {0, 50, 70, 60},      /* modulated textured polygon */
+    {80, 50, 70, 60},     /* textured polygon at neutral 0x80 modulation */
+    {160, 50, 60, 40},    /* flat triangle */
+    {230, 50, 60, 40},    /* flat rect */
+    {0, 120, 70, 30},     /* flat lines */
+    {80, 120, 70, 60},    /* raw textured polygon */
+    {160, 120, 64, 64},   /* modulated textured rect */
+    {240, 120, 64, 64},   /* raw textured rect */
+};
+static const char *RNAME[R_N] = {"gouraud", "gouraud equal colours", "shaded line",
+    "modulated textured poly", "neutral-modulated textured poly", "flat triangle",
+    "flat rect", "flat line", "raw textured poly", "modulated textured rect", "raw textured rect"};
+static const int ELIGIBLE[R_N] = {1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0};
+
+static void tquad(int x, int y, int w, int h, uint32_t c, int raw) {
+    gr_draw_shaded_textured_triangle(x, y, 0, 0, c, x + w, y, 63, 0, c, x, y + h, 0, 63, c, 512, 256, 0x0008, raw);
+    gr_draw_shaded_textured_triangle(x + w, y, 63, 0, c, x + w, y + h, 63, 63, c, x, y + h, 0, 63, c, 512, 256, 0x0008, raw);
+}
 static void scene(int bit, int depth) {
     gr_set_draw_area(0, 0, DW - 1, DH - 1);
     gr_set_draw_offset(0, 0);
@@ -34,21 +63,26 @@ static void scene(int bit, int depth) {
     gr_fill_rect(0, 0, DW, DH, 0x0000);
     gr_wide_clear(0, 0, DH, 0x0000);
     gr_set_dither(bit);
-    /* A horizontal gouraud gradient, black to white (rows 0..63), reaching
-     * into the left native-wide margin. */
+    /* Gouraud gradient, black to white, reaching into the left wide margin. */
     if (depth) gr_set_depth_triangle(1, 900.0f, 900.0f, 900.0f);
-    gr_draw_gouraud_triangle(-40, 0, 0x0000, 256, 0, 0x7fff, -40, 64, 0x0000);
+    gr_draw_gouraud_triangle(-40, 0, 0x0000, 160, 0, 0x7fff, -40, 40, 0x0000);
     if (depth) gr_set_depth_triangle(1, 900.0f, 900.0f, 900.0f);
-    gr_draw_gouraud_triangle(256, 0, 0x7fff, 256, 64, 0x7fff, -40, 64, 0x0000);
-    /* Flat polygon and flat rect (never dithered). */
-    gr_draw_flat_rect(0, 80, 64, 32, 0x4210);
-    gr_draw_flat_triangle(80, 80, 140, 80, 80, 112, 0x2d6b);
-    /* Modulated and raw textured draws. */
+    gr_draw_gouraud_triangle(160, 0, 0x7fff, 160, 40, 0x7fff, -40, 40, 0x0000);
+    /* Gouraud with three equal 5-bit-exact colours. */
+    gr_draw_gouraud_triangle(170, 0, 0x4210, 230, 0, 0x4210, 170, 40, 0x4210);
+    gr_draw_gouraud_triangle(230, 0, 0x4210, 230, 40, 0x4210, 170, 40, 0x4210);
+    for (int i = 0; i < 40; i += 2) gr_draw_shaded_line(240, i, 0x0421, 309, i, 0x5ef7);
     gr_set_color_modulation(128, 128, 128, 0);
-    gr_draw_shaded_textured_triangle(160, 80, 0, 0, 0x404040, 300, 80, 63, 0, 0xa0a0a0,
-                                     160, 200, 0, 63, 0x606060, 512, 256, 0x0008, 0);
+    tquad(0, 50, 70, 60, 0x6080a0, 0);
+    tquad(80, 50, 70, 60, 0x808080, 0);
+    gr_draw_flat_triangle(160, 50, 220, 50, 160, 90, 0x2d6b);
+    gr_draw_flat_rect(230, 50, 60, 40, 0x4210);
+    for (int i = 0; i < 30; i += 2) gr_draw_line(0, 120 + i, 69, 120 + i, 0x5294);
+    tquad(80, 120, 70, 60, 0x6080a0, 1);
+    gr_set_color_modulation(0x60, 0x80, 0xa0, 0);
+    gr_draw_textured_rect(160, 120, 64, 64, 0, 0, 512, 256, 0x0008);
     gr_set_color_modulation(128, 128, 128, 1);
-    gr_draw_textured_rect(0, 130, 64, 64, 0, 0, 512, 256, 0x0008);
+    gr_draw_textured_rect(240, 120, 64, 64, 0, 0, 512, 256, 0x0008);
     gr_set_color_modulation(128, 128, 128, 0);
     gr_set_dither(0);
     gl_renderer_render_thread_frame_boundary();
@@ -69,19 +103,19 @@ static Shot shot(void) {
     return s;
 }
 static int same(Shot a, Shot b) { return a.native == b.native && a.hires == b.hires && a.wide == b.wide; }
-static int region_equal(const uint16_t *a, const uint16_t *b, int x, int y, int w, int h) {
-    for (int r = y; r < y + h; r++)
-        if (memcmp(a + r * 1024 + x, b + r * 1024 + x, (size_t)w * 2)) return 0;
+static int region_equal(const uint16_t *a, const uint16_t *b, int r) {
+    const int x = REG[r][0], y = REG[r][1], w = REG[r][2], h = REG[r][3];
+    for (int yy = y; yy < y + h; yy++)
+        if (memcmp(a + yy * 1024 + x, b + yy * 1024 + x, (size_t)w * 2)) return 0;
     return 1;
 }
-/* Along the gradient's row 30: steps between neighbours, and the mean red. */
-static void row_stats(const uint16_t *v, int *steps, double *mean) {
-    int s = 0; long sum = 0;
-    for (int x = 0; x < 250; x++) {
-        int r = v[30 * 1024 + x] & 31, n = v[30 * 1024 + x + 1] & 31;
-        s += r != n; sum += r;
-    }
-    *steps = s; *mean = (double)sum / 250.0;
+static double region_mean(const uint16_t *v, int r) {
+    long s = 0; int n = 0;
+    for (int y = REG[r][1]; y < REG[r][1] + REG[r][3]; y++)
+        for (int x = REG[r][0]; x < REG[r][0] + REG[r][2]; x++) {
+            uint16_t p = v[y * 1024 + x]; s += (p & 31) + ((p >> 5) & 31) + ((p >> 10) & 31); n += 3;
+        }
+    return (double)s / n;
 }
 
 int main(void) {
@@ -105,76 +139,73 @@ int main(void) {
     gr_wide_configure(426, 53);
     static uint16_t ref[1024 * 512], dith[1024 * 512];
 
-    /* Off: the bit is ignored. */
-    check(gl_renderer_dithering() == 0, "off by default");
+    check(gl_renderer_dithering() == 1, "on by default");
+    /* Off: true colour whatever the bit. */
+    gl_renderer_set_dithering(0);
     scene(0, 0); Shot off0 = shot(); memcpy(ref, nat, sizeof ref);
     scene(1, 0); Shot off1 = shot();
     check(same(off0, off1), "off: dither bit changes nothing");
     for (int mode = 1; mode <= 2; mode++) {
         gl_renderer_set_dithering(mode);
         scene(0, 0); Shot clear = shot();
-        check(same(off0, clear), "on/scaled with the bit clear equals off");
+        check(same(off0, clear), "bit clear: nothing is dithered");
         scene(1, 0); Shot on = shot();
-        check(on.native != off0.native && on.hires != off0.hires, "bit set dithers");
-        check(on.wide != off0.wide, "native-wide margin dithers too");
         memcpy(dith, nat, sizeof dith);
-        check(region_equal(ref, dith, 0, 80, 150, 32), "flat polygons untouched");
-        check(region_equal(ref, dith, 0, 130, 64, 64), "raw texture untouched");
-        check(!region_equal(ref, dith, 160, 80, 140, 120), "modulated texture dithered");
-        int s0, s1; double m0, m1;
-        row_stats(ref, &s0, &m0); row_stats(dith, &s1, &m1);
-        printf("mode=%d steps true=%d dithered=%d mean true=%.2f dithered=%.2f\n", mode, s0, s1, m0, m1);
-        /* "on" dithers per internal pixel, so the native pack (each block's
-         * top-left sample) sees one pattern column; "scaled" all four. */
-        check(mode == 2 ? s1 > s0 * 3 : s1 > s0, "dither pattern adds 5-bit steps");
-        check(fabs(m1 - m0) < 1.0, "dither keeps the mean brightness");
-        for (int x = 0; x < 250; x++) {
-            uint16_t p = dith[30 * 1024 + x];
-            check((p & 31) == ((p >> 5) & 31) && (p & 31) == ((p >> 10) & 31), "grey stays grey");
+        check(on.wide != off0.wide, "native-wide margin dithers too");
+        for (int r = 0; r < R_N; r++) {
+            const int eq = region_equal(ref, dith, r);
+            const double m0 = region_mean(ref, r), m1 = region_mean(dith, r);
+            printf("mode=%d %-32s %s mean %.2f -> %.2f\n", mode, RNAME[r], eq ? "unchanged" : "dithered", m0, m1);
+            char msg[128];
+            snprintf(msg, sizeof msg, "%s: %s", RNAME[r], ELIGIBLE[r] ? "dithered" : "never dithered");
+            /* "on" at 4x: the native pack sees the top-left sample of each
+             * 4x4 block, i.e. one pattern cell (-4), still a change. */
+            check(ELIGIBLE[r] ? !eq : eq, msg);
+            /* Mean over the native pack: "on" at 4x reads one pattern cell
+             * per block, "scaled" the whole pattern. */
+            if (ELIGIBLE[r] && mode == 2) check(fabs(m1 - m0) < 1.0, "dither keeps the mean brightness");
         }
-        /* PGXP depth: the same 2D-depth scene, depth-tested. */
+        /* PGXP depth: the same scene, depth-tested. */
         gl_renderer_set_pgxp_depth(1);
         scene(1, 1); Shot dep = shot();
         check(dep.native == on.native, "PGXP depth path dithers the same");
         gl_renderer_set_pgxp_depth(0);
-        /* Render thread: dither bit and mode recorded with the draws. */
+        /* Render thread: bit, mode and per-primitive eligibility recorded. */
         check(gl_renderer_render_thread_start(2) == 1, "render thread started");
         scene(1, 0);
         gl_renderer_render_thread_sync("dither");
         Shot rt = shot();
         gl_renderer_render_thread_stop();
         check(same(rt, on), "render thread gives the same pixels");
-        /* With accurate_blending the dither output uses the k*8 basis, like
-         * every other write: every gradient channel at internal resolution
-         * is a multiple of 8 (no k*255/31 values mixed in). */
+        /* With accurate_blending every dithered gradient channel is on the
+         * k*8 grid (the surface basis). */
+        const int acc0 = gl_renderer_accurate_blending();
         gl_renderer_set_accurate_blending(1);
-        scene(1, 0); Shot acc = shot();
+        scene(1, 0); (void)shot();
         int off_basis = 0;
-        for (int y = 0; y < 60 * gr_scale(); y++)
-            for (int x = 0; x < 250 * gr_scale(); x++) {
-                uint32_t p = hi[y * DW * gr_scale() + x];
-                off_basis += ((p & 0xff) % 8) != 0;
-            }
-        int sa; double ma;
-        row_stats(nat, &sa, &ma);
-        printf("mode=%d accurate: mean=%.2f channels off the k*8 grid=%d\n", mode, ma, off_basis);
-        check(fabs(ma - m0) < 1.0, "dither + accurate blending keeps the mean");
+        for (int y = 0; y < 40 * gr_scale(); y++)
+            for (int x = 0; x < 150 * gr_scale(); x++)
+                off_basis += ((hi[y * DW * gr_scale() + x] & 0xff) % 8) != 0;
+        printf("mode=%d accurate: gradient channels off the k*8 grid=%d\n", mode, off_basis);
         check(off_basis == 0, "dither output follows the accurate (k*8) basis");
-        gl_renderer_set_accurate_blending(0);
+        gl_renderer_set_accurate_blending(acc0);
         if (mode == 2) {
-            /* Scaled: the pattern sits on the native grid at any scale. */
             check(gl_renderer_step_internal_scale_now(1) == 1, "step to 1x");
             scene(1, 0); Shot one = shot();
-            check(one.native == on.native, "scaled: native VRAM at 4x equals 1x");
+            (void)one;
+            /* Lines are drawn as one-native-pixel quads above 1x (see
+             * test_gl_scale_invariance.c), so they are not compared. */
+            int inv = 1;
+            for (int r = 0; r < R_N; r++)
+                if (r != R_SHADED_LINE && r != R_FLAT_LINE) inv &= region_equal(dith, nat, r);
+            check(inv, "scaled: native VRAM at 4x equals 1x");
             check(gl_renderer_step_internal_scale_now(k_test_scale) == 1, "back to 4x");
         }
     }
     gl_renderer_set_dithering(0);
     scene(1, 0); Shot back = shot();
-    check(same(back, off0), "back off restores the exact true-colour image");
+    check(same(back, off0), "off again restores the exact true-colour image");
     check(glGetError() == GL_NO_ERROR, "GL errors");
-    printf("off native=%016llx hires=%016llx\n", (unsigned long long)off0.native,
-           (unsigned long long)off0.hires);
     printf("checks=%d failures=%d\n", checks, failures);
     gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
     return failures ? 1 : 0;

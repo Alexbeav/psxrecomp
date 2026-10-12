@@ -580,11 +580,11 @@ struct RuntimeConfig {
     // semi-transparency truncates exactly like the PS1's 5-bit blend.
     // Default true: PS1 colour/blend correctness. OpenGL only.
     bool                  video_accurate_blending = true;
-    // dithering: PS1 dither pattern on shaded/modulated draws while the
-    // guest enables it (GP0(E1h) bit 9). 0 "off" = true colour (default),
-    // 1 "on" = pattern per internal-resolution pixel, 2 "scaled" = pattern
-    // on the native pixel grid (the PS1 look at any scale). OpenGL only.
-    int                   video_dithering = 0;
+    // dithering: PS1 dithering of Gouraud-shaded and texture-modulated
+    // polygons while the guest sets GP0(E1h) bit 9 (hardware behaviour).
+    // 1 "on" (default) = pattern per internal-resolution pixel, 2 "scaled"
+    // = pattern on the native pixel grid, 0 "off" = true colour. OpenGL only.
+    int                   video_dithering = 1;
     bool                  video_pgxp_color_correction = false;
     int                   video_pgxp_seam = 0;
     double                video_pgxp_depth_threshold = 4096.0;

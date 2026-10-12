@@ -729,18 +729,20 @@ first layer's full 8-bit result where the console would have truncated it to
 
 ```toml
 [video]
-dithering = "off"     # off (default, true colour) | on | scaled
+dithering = "on"      # on (default) | scaled | off (true colour)
 ```
 
-The PS1 GPU adds a 4x4 offset pattern to shaded and texture-modulated pixels
-before truncating them to 5 bits per channel, when the game sets GP0(E1h)
-bit 9. The OpenGL renderer has always drawn those pixels at 8 bits per channel
-with no pattern ("true colour"), and `off` keeps exactly that. `on` applies
-the PS1 pattern and 5-bit truncation per internal-resolution pixel (a fine
-grain that all but vanishes at high scales); `scaled` puts the pattern on the
-native pixel grid, so it looks like the console at any scale and the native
-VRAM a game reads back is the same at every internal resolution. Flat fills,
-flat polygons and raw textures are already 5-bit exact and are never touched.
+The PS1 GPU dithers while the game sets GP0(E1h) bit 9: it adds a 4x4
+offset pattern to every pixel of a Gouraud-shaded polygon or line and of a
+texture-modulated polygon, then truncates to 5 bits per channel. Flat
+untextured primitives, raw-texture polygons and all rectangles (sprites) are
+never dithered. The OpenGL renderer does the same by default (`on`), with the
+pattern on internal-resolution pixels. Eligibility is decided per primitive
+from its command and carried to the shader, never guessed from colours.
+`scaled` puts the pattern on the native pixel grid, so it reads like the
+console at any internal scale and the native VRAM a game reads back is the
+same at every scale. `off` is the old true-colour output (8 bits per channel,
+no pattern). The software and Vulkan renderers do not dither.
 The pattern is applied to the source colour before semi-transparent blending;
 the console dithers the blended result at its final 8-to-5-bit write. Fixed-
 function GL blending cannot run a shader after the blend (GL 3.3 has no
