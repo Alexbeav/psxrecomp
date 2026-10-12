@@ -975,6 +975,9 @@ def main():
     ap.add_argument('--project-root', default=None,
                     help='root holding bios/SCPH1001.toml for normal-mode discovery '
                          '(default: this framework)')
+    ap.add_argument('--exclude-file', action='append', default=[],
+                    help='disc file the detector must not consider (an AOT profile '
+                         'declares it another way); repeatable')
     ap.add_argument('--bios', default=None,
                     help='BIOS ROM for exact-hash resident-code recipes (default: '
                          'PSXRECOMP_BIOS_ROM or framework bios/SCPH1001.BIN)')
@@ -1036,8 +1039,11 @@ def main():
     records=[]; np=nh=nr=na=ne=nc=0; seen_crc=set(); header_files=[]; raw_files=[]
     relocatable=[]
     positioned=[]
+    excluded={name.replace('\\','/').lstrip('/').upper() for name in a.exclude_file}
     for p,l,s in sorted(files):
         if p.upper() in hed_consumed:
+            continue
+        if p.replace('\\','/').lstrip('/').upper() in excluded:
             continue
         if s<8 or s>2_000_000: continue
         if exe_base and os.path.basename(p).upper()==exe_base:
