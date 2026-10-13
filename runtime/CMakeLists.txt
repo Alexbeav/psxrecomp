@@ -364,6 +364,19 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-xbr-results")
         set_tests_properties(gl_xbr_filter_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        # [video] dithering: off ignores the guest's dither bit (byte-identical
+        # true colour); on/scaled add the PS1 pattern to shaded/modulated draws
+        # only, through the facade, the render thread, PGXP depth and wide.
+        add_test(NAME gl_dithering_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py" --single
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_dithering.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "${_gl_scale_sdl_inc}"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-dithering-results")
+        set_tests_properties(gl_dithering_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         unset(_gl_scale_sdl_inc)
     else()
         message(STATUS "gl_scale_invariance_test: not registered (needs macOS, Linux or MinGW, Python 3 and SDL3)")
@@ -1146,6 +1159,16 @@ if(BUILD_TESTING)
     target_link_libraries(iso_reader_pregap_test PRIVATE chdr-static)
     add_test(NAME iso_reader_pregap_test COMMAND iso_reader_pregap_test)
 
+    # Raw vs cooked geometry comes from the cue TRACK mode / sector-0 sync,
+    # never from file length.
+    add_executable(iso_reader_geometry_test
+        tests/test_iso_reader_geometry.cpp
+        src/iso_reader.cpp
+        src/cue_sheet.cpp)
+    target_include_directories(iso_reader_geometry_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
+    target_link_libraries(iso_reader_geometry_test PRIVATE chdr-static)
+    add_test(NAME iso_reader_geometry_test COMMAND iso_reader_geometry_test)
+
     add_executable(iso_reader_sbi_test
         tests/test_iso_reader_sbi.cpp
         src/iso_reader.cpp
@@ -1263,7 +1286,8 @@ if(BUILD_TESTING)
         src/cue_sheet.cpp
         src/iso_reader.cpp
         src/crc32.c
-        src/psx_sha256.c)
+        src/psx_sha256.c
+        src/sio.c)
     target_include_directories(netplay_view_mods_test PRIVATE
         include
         ../recompiler/include

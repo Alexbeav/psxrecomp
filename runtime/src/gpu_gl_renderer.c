@@ -464,7 +464,7 @@ enum {
     RTH_WIDE_DISABLE, RTH_WIDE_CLEAR, RTH_WIDE_CLEAR_MARGINS, RTH_PROJ_TRI,
     RTH_WIDE_RECOVERY, RTH_INTERP_SUSPENDED, RTH_PRESENT_VRAM,
     RTH_PRESENT_WIDE, RTH_STATE, RTH_PEEK, RTH_RING_CAPTURE, RTH_DYN_STEP,
-    RTH_FRAME, RTH_FG_SRC, RTH_DEPTH, RTH_HD_NOTE
+    RTH_FRAME, RTH_FG_SRC, RTH_DEPTH, RTH_HD_NOTE, RTH_DITHER
 };
 /* GP0(A0) whose payload gpu.c is still streaming into its array (the
  * facade's vram_upload_open, emulation thread), tracked whatever the HD
@@ -672,6 +672,8 @@ static void pass_note_new_frame(int origin_x, int origin_y, int source_path,
 static void pass_apply_promotion(void);
 static int pass_gen_present(uint64_t deadline);
 static int stereo_present(int w, int h);
+static int xr_mirror_mode(void);
+static int xr_mirror_active(void);
 static void stereo_resources_release(void);
 static void stereo_invalidate(void);
 static uint64_t s_idle_ticks_accum_fwd(uint64_t add);
@@ -921,6 +923,21 @@ static void c5_to_float(uint16_t c, float *r, float *g, float *b) {
     } else {
         *r = (c & 0x1F) / 31.0f; *g = ((c >> 5) & 0x1F) / 31.0f; *b = ((c >> 10) & 0x1F) / 31.0f;
     }
+}
+/* [video] dithering (see psx_dither in the shaders): 1 (default) the PS1 4x4
+ * pattern on the native VRAM grid, 2 elective pattern per internal-resolution
+ * pixel, 0 off = true colour. s_dither_bit is the last GP0(E1h) bit 9. Each primitive's
+ * eligibility (bit set AND Gouraud-shaded, or a texture-modulated polygon;
+ * never flat, raw-textured or a rectangle) is fixed when it is queued and
+ * rides in its vertices, so bit changes need no flush. s_prim_shaded /
+ * s_prim_rect are set by the glb_draw_* entry points for gpu_geometry and
+ * gpu_textured_triangle. */
+static int s_dither_mode = 1, s_dither_bit = 0;
+static int s_prim_shaded = 0, s_prim_rect = 0;
+/* Added to a geometry vertex's a_col.a (as 2*131072) for an eligible prim. */
+#define GPU_GEO_DITHER_CODE 262144.0f
+static float geo_dither_code(void) {
+    return (s_dither_mode && s_dither_bit && s_prim_shaded) ? GPU_GEO_DITHER_CODE : 0.0f;
 }
 /* Opaque textured draws carry the exact mask bit in FBO alpha. Keeping the
  * duplicate stencil copy current is deferred until mask checking is requested. */
@@ -1743,6 +1760,28 @@ static const char *INTERP_FS =
  * rect coverage exactly [x*S, (x+w)*S) at every scale AND makes the
  * top-left subpixel of each S*S block sample the exact PS1 value (which is
  * what the PACK pass reads back). */
+/* PS1 dithering ([video] dithering, on by default). While GP0(E1h) bit 9 is
+ * set the GPU adds the 4x4 offset matrix below to every pixel of a
+ * Gouraud-shaded polygon or line and of a texture-modulated polygon, then
+ * truncates to 5 bits. Flat untextured primitives, raw-texture polygons and
+ * all rectangles (sprites) are never dithered. Eligibility is decided per
+ * primitive on the CPU and carried in the vertex (v_dith), never inferred
+ * from the colour. u_dither 1 (default) = the PS1 pattern on the native
+ * VRAM grid (v_npos is the fragment's native position), so guest-visible
+ * VRAM is the same at every internal scale; 2 = elective finer pattern per
+ * internal-resolution pixel; 0 = off (true colour). The result is written
+ * in the surface's colour basis (u_accurate). */
+#define PSX_DITHER_GLSL \
+    "uniform int u_dither;\n" \
+    "uniform int u_accurate;  /* [video] accurate_blending: VRAM in the k*8/255 basis */\n" \
+    "vec3 psx_dither(vec3 c, vec2 npos, int eligible){\n" \
+    "  if (u_dither == 0 || eligible == 0) return c;\n" \
+    "  ivec2 p = (u_dither == 2 ? ivec2(gl_FragCoord.xy) : ivec2(floor(npos))) & 3;\n" \
+    "  const float m[16] = float[16](-4.0,0.0,-3.0,1.0, 2.0,-2.0,3.0,-1.0,\n" \
+    "                                -3.0,1.0,-4.0,0.0, 3.0,-1.0,2.0,-2.0);\n" \
+    "  vec3 k = clamp(floor((c * 255.0 + m[p.y * 4 + p.x]) / 8.0), 0.0, 31.0);\n" \
+    "  return u_accurate != 0 ? k * (8.0 / 255.0) : k / 31.0;   /* the surface's basis */\n" \
+    "}\n"
 static const char *GEO_VS =
     "#version 330\n"
     "layout(location=0) in vec2 a_pos;\n"
@@ -1757,12 +1796,17 @@ static const char *GEO_VS =
     "smooth out vec3 v_col_p;   /* perspective-correct colour (PGXP, G1.14) */\n"
     "flat out int v_cp;\n"
     "noperspective out float v_b3d;   /* bloom source: 1 on a PGXP 3D vertex */\n"
+    "noperspective out vec2 v_npos;  /* native VRAM position (dithering) */\n"
+    "flat out int v_dith;            /* this primitive is dither-eligible */\n"
     "void main(){\n"
+    "  v_npos = a_pos;\n"
     "  /* a_col.a carries the mask bit (0/1) and, for a PGXP 3D vertex, its\n"
     "   * GTE SZ: a = mask + 2*(sz + 65536*cp), cp = perspective colour. A\n"
     "   * negative a is a depth-clear vertex (beyond every SZ, inside the far plane). */\n"
     "  float a = a_col.a, code = floor(a * 0.5), zn = 0.0, w = 1.0;\n"
     "  float m = a - 2.0 * code;\n"
+    "  /* + 2*131072: the primitive is dither-eligible (GPU_GEO_DITHER_CODE). */\n"
+    "  float dth = (a >= 0.0 && code >= 131072.0) ? 1.0 : 0.0; code -= 131072.0 * dth; v_dith = int(dth);\n"
     "  float cp = code >= 65536.0 ? 1.0 : 0.0, sz = code - 65536.0 * cp;\n"
     "  if (a < 0.0) { m = 0.0; zn = 0.9999; sz = 0.0; cp = 0.0; }  /* inside the far plane: never clipped */\n"
     "  else if (sz > 0.5) { zn = 1.0 - 512.0 / (max(sz * (1.0 - u_zbias) - (u_zbias > 0.0 ? 48.0 : 0.0), 1.0) + 256.0); if (cp > 0.5) w = sz / 1024.0; }\n"
@@ -1781,9 +1825,12 @@ static const char *GEO_FS =
     "noperspective in float v_b3d;\n"
     "uniform int u_bcls;   /* bloom source pass (gl_postfx.inc): 0 off, 2 clear, 1 mark */\n"
     "uniform int u_badd;   /* this batch blends additively */\n"
+    "noperspective in vec2 v_npos; flat in int v_dith;\n"
+    PSX_DITHER_GLSL
     "void main(){\n"
     "  if (u_bcls != 0) { if (u_bcls == 1 && !(v_b3d > 0.999 || u_badd != 0)) discard; frag = vec4(0.0); return; }\n"
-    "  frag = v_cp != 0 ? vec4(v_col_p, v_col.a) : v_col; }\n";
+    "  frag = v_cp != 0 ? vec4(v_col_p, v_col.a) : v_col;\n"
+    "  frag.rgb = psx_dither(frag.rgb, v_npos, v_dith); }\n";
 
 /* Textured prims: sample raw 1555 VRAM (integer), CLUT decode per depth,
  * texture window, optional bilinear, texel-0 discard, STP-split discard,
@@ -1825,16 +1872,20 @@ static const char *TEX_VS =
     "flat out int v_persp;\n"
     "flat out ivec2 v_tpage; flat out ivec2 v_clut; flat out int v_depth;\n"
     "flat out int v_raw; flat out ivec4 v_limits; flat out int v_semi;\n"
+    "flat out int v_dith;\n"
     "flat out int v_twin;\n"
     "flat out vec4 v_hd_source; flat out int v_hd_mode;\n"
     "flat out int v_filter;\n"
     "smooth out vec3 v_col_p; flat out int v_cp;\n"
     "noperspective out float v_b3d;   /* bloom source: 1 on a PGXP 3D vertex */\n"
+    "noperspective out vec2 v_npos;  /* native VRAM position (dithering) */\n"
     "void main(){ v_uv = a_uv; v_uv_p = a_uv; v_col = a_col; v_col_p = a_col.rgb;\n"
+    "  v_npos = a_pos;\n"
     "  v_persp = (a_q > 0.0) ? 1 : 0;\n"
     "  v_tpage = ivec2(a_tpage + 0.5); v_clut = ivec2(a_clut + 0.5);\n"
     "  v_depth = int(a_depth + 0.5); v_raw = int(a_raw + 0.5);\n"
     "  v_semi = int(a_semi + 0.5);\n"
+    "  v_dith = v_semi >> 3; v_semi &= 7;   /* +8: dither-eligible primitive */\n"
     "  v_twin = int(a_twin + 0.5);\n"
     "  v_filter = int(a_filter + 0.5);\n"
     "  v_hd_source=a_hd_source; v_hd_mode=int(a_hd_mode+0.5);\n"
@@ -1866,6 +1917,8 @@ static const char *TEX_FS =
     "noperspective in vec2 v_uv; noperspective in vec4 v_col;\n"
     "smooth in vec2 v_uv_p; flat in int v_persp;\n"
     "smooth in vec3 v_col_p; flat in int v_cp;\n"
+    "noperspective in vec2 v_npos;\n"
+    PSX_DITHER_GLSL
     "out vec4 frag; out vec4 blend_factor;\n"
     "noperspective in float v_b3d;\n"
     "uniform int u_bcls;      /* bloom source pass (gl_postfx.inc): 0 off, 2 clear, 1 mark */\n"
@@ -1875,6 +1928,7 @@ static const char *TEX_FS =
     "flat in int v_raw;       /* 1 = no color modulation */\n"
     "flat in ivec4 v_limits;  /* prim uv sampling bounds (inclusive, post-wrap) */\n"
     "flat in int v_semi;      /* GP0 command has semi-transparency enabled */\n"
+    "flat in int v_dith;      /* dither-eligible (modulated polygon, E1 bit 9) */\n"
     "flat in int v_twin;      /* texture window, GP0(E2h) bits 0..19 */\n"
     "flat in int v_filter;    /* sampling mode belongs to this primitive */\n"
     "flat in vec4 v_hd_source; flat in int v_hd_mode;\n"
@@ -1917,7 +1971,6 @@ static const char *TEX_FS =
     "  }\n"
     "  return vram_at(v_tpage.x + u, v_tpage.y + v);\n"
     "}\n"
-    "uniform int u_accurate;  /* [video] accurate_blending: VRAM in the k*8/255 basis */\n"
     "vec3 col5(int raw){\n"
     "  vec3 k = vec3(float(raw & 31), float((raw >> 5) & 31), float((raw >> 10) & 31));\n"
     "  return u_accurate != 0 ? k * (8.0 / 255.0) : k / 31.0;\n"
@@ -2105,6 +2158,7 @@ static const char *TEX_FS =
     "  if (u_semipass == 1 && stp == 1) discard;\n"
     "  if (u_semipass == 2 && stp == 0) discard;\n"
     "  if (v_raw == 0) rgb = clamp(rgb * (v_cp != 0 ? v_col_p : v_col.rgb) * 2.0, 0.0, 1.0);\n"
+    "  rgb = psx_dither(rgb, v_npos, v_dith);\n"
     "  float dst_factor = 0.0;\n"
     "  if (u_semimode == 4 && v_semi != 0 && stp != 0) {\n"
     "    dst_factor = v_semi == 1 ? 0.5 : 1.0;\n"
@@ -2995,6 +3049,29 @@ static const HiwTile *hiw_ensure(int x0, int x1) {
 }
 
 /* ---- coherency: hr FBO -> raw mirror (pack) ------------------------------ */
+#ifndef PSXGL_PIXEL_UNPACK_BUFFER
+#define PSXGL_PIXEL_UNPACK_BUFFER 0x88EC
+#endif
+static GLuint s_raw_pbo = 0;
+/* On by default only on macOS, where the stall was measured (Apple's GL on
+ * Metal); elsewhere opt-in until there is AMD/NVIDIA/Intel data (an AMD iGPU
+ * on Windows showed no stall and no change). PSX_GL_PBO_UPLOAD=0/1 overrides
+ * it on any platform. */
+#if defined(__APPLE__)
+#define PSXGL_PBO_UPLOAD_DEFAULT 1
+#else
+#define PSXGL_PBO_UPLOAD_DEFAULT 0
+#endif
+static int raw_upload_pbo_on(void) {
+    static int env = -1;
+    if (env < 0) {
+        const char *e = getenv("PSX_GL_PBO_UPLOAD");
+        env = (e && e[0]) ? (e[0] != '0') : PSXGL_PBO_UPLOAD_DEFAULT;
+    }
+    if (!env) return 0;
+    if (!s_raw_pbo) p_glGenBuffers(1, &s_raw_pbo);
+    return s_raw_pbo != 0;
+}
 static void pack_flush(void) {
     if (!s_raster_ok || !s_pack_dirty.set) return;
     /* A generated frame draws into its own surfaces: the raw mirror keeps
@@ -3013,8 +3090,26 @@ static void pack_flush(void) {
         p_glActiveTexture(PSXGL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, s_raw_tex);
         glPixelStorei(PSXGL_UNPACK_ROW_LENGTH, VRAM_W);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, PSXGL_RED_INTEGER,
-                       GL_UNSIGNED_SHORT, s_vram + (size_t)y * VRAM_W + x);
+        if (raw_upload_pbo_on()) {
+            /* Through an orphaned pixel-unpack buffer: the copy into a
+             * texture the GPU is still sampling is queued on the GPU, where
+             * a client-memory upload makes the driver wait for those draws
+             * (Apple's GL: GLDShareGroupRec::waitUsage, about 40 % of the
+             * render thread's work in an R4 race with the HD HUD). Same
+             * bytes, same order. PSX_GL_PBO_UPLOAD=0 for the direct path. */
+            const size_t rows = (size_t)(y + h - 1) * VRAM_W + (size_t)x + (size_t)w;
+            const size_t first = (size_t)y * VRAM_W + (size_t)x;
+            const size_t bytes = (rows - first) * sizeof(uint16_t);
+            p_glBindBuffer(PSXGL_PIXEL_UNPACK_BUFFER, s_raw_pbo);
+            p_glBufferData(PSXGL_PIXEL_UNPACK_BUFFER, (GLsizeiptr)bytes,
+                           s_vram + first, PSXGL_STREAM_DRAW);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, PSXGL_RED_INTEGER,
+                            GL_UNSIGNED_SHORT, (const void *)0);
+            p_glBindBuffer(PSXGL_PIXEL_UNPACK_BUFFER, 0);
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, PSXGL_RED_INTEGER,
+                           GL_UNSIGNED_SHORT, s_vram + (size_t)y * VRAM_W + x);
+        }
         glPixelStorei(PSXGL_UNPACK_ROW_LENGTH, 0);
         return;
     }
@@ -4463,7 +4558,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         s_fb_depth = 0;   /* lines are 2D: never depth-tested (G1.14) */
         s_fb_semi = semi;
         s_fb_mask = (int)s_mask_set;
-        float mask_a = s_mask_set ? 1.0f : 0.0f;
+        float mask_a = (s_mask_set ? 1.0f : 0.0f) + geo_dither_code();
         for (int i = 0; i < 2; i++) {
             float *v = &s_fb[s_fb_n * 6];
             v[0] = (float)xs[i];
@@ -4490,7 +4585,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
      * batch above. */
     if (mode == GL_LINES && n == 2 && s_out_scale > 1 && !bd_prim_gate(xs, n, 0)) {
         float lv[2 * 6], quad[6 * 6];
-        float mask_a = s_mask_set ? 1.0f : 0.0f;
+        float mask_a = (s_mask_set ? 1.0f : 0.0f) + geo_dither_code();
         for (int i = 0; i < 2; i++) {
             lv[i*6+0] = (float)xs[i];
             lv[i*6+1] = (float)ys[i];
@@ -4523,7 +4618,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     if (mode != GL_TRIANGLES || n < 3) {
         flush_flat_batch();
         float verts[3 * 6];
-        float mask_a = s_mask_set ? 1.0f : 0.0f;
+        float mask_a = (s_mask_set ? 1.0f : 0.0f) + geo_dither_code();
         for (int i = 0; i < n; i++) {
             verts[i*6+0] = precise ? s_pc_x[i] : (float)xs[i];
             verts[i*6+1] = precise ? s_pc_y[i] : (float)ys[i];
@@ -4608,7 +4703,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     s_fb_depth = dmode;
     s_fb_b3d = b3d;
 
-    float mask_a = s_mask_set ? 1.0f : 0.0f;
+    float mask_a = (s_mask_set ? 1.0f : 0.0f) + geo_dither_code();
     float *v0 = &s_fb[s_fb_n * 6];
     for (int i = 0; i < n; i++) {
         float *v = &s_fb[s_fb_n * 6];
@@ -4677,6 +4772,9 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
                                   const float *col, uint16_t texpage,
                                   uint16_t clut_x, uint16_t clut_y, int rawtex,
                                   int semi, const int *lim) {
+    /* PS1 dithering: texture-modulated polygons only (never raw texels or
+     * rectangles), while E1 bit 9 is set. */
+    const int dither_tex = s_dither_mode && s_dither_bit && !rawtex && !s_prim_rect;
     // Mode 2 needs proven world geometry. Sprites, HUD and untracked packets
     // retain point sampling; their cutout pixels must stay sharp.
     const int untracked=(lim && !s_projected_uv_valid) || (!s_pc_valid && !s_pq_valid);
@@ -4786,7 +4884,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             vp[12] = (float)depth;   vp[13] = (float)rawtex;        /* a_depth, a_raw */
             vp[14] = (float)lim[0];  vp[15] = (float)lim[1];        /* a_limits */
             vp[16] = (float)lim[2];  vp[17] = (float)lim[3];
-            vp[18] = semi >= 0 ? (float)(semi + 1) : 0.0f;          /* a_semi code */
+            vp[18] = (semi >= 0 ? (float)(semi + 1) : 0.0f)          /* a_semi code */
+                   + (dither_tex ? 8.0f : 0.0f);                     /* + dither-eligible */
             vp[19] = s_pq_valid ? s_pq[i] : 0.0f;                   /* a_q; 0 = affine */
             vp[20] = twin;                                          /* a_twin   */
             vp[21] = (float)hd.origin_u; vp[22] = (float)hd.origin_v;
@@ -5087,12 +5186,15 @@ void gl_renderer_set_texture_lod(int mode, int aniso) {
 }
 int gl_renderer_texture_lod(void) { return s_tex_lod; }
 int gl_renderer_anisotropy(void) { return s_tex_aniso; }
-static GLint s_uAccurate = -1;
+static GLint s_uAccurate = -1, s_geo_uAccurate = -1;
 static void accurate_apply_uniforms(void) {
     if (!s_tex_prog) return;
     GLint prev = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &prev);
     if (s_uAccurate < 0) s_uAccurate = p_glGetUniformLocation(s_tex_prog, "u_accurate");
+    if (s_geo_uAccurate < 0 && s_geo_prog) s_geo_uAccurate = p_glGetUniformLocation(s_geo_prog, "u_accurate");
     p_glUseProgram(s_tex_prog); p_glUniform1i(s_uAccurate, s_accurate_blend);
+    /* The dither snippet in the geometry program follows the same basis. */
+    if (s_geo_prog) { p_glUseProgram(s_geo_prog); p_glUniform1i(s_geo_uAccurate, s_accurate_blend); }
     p_glUseProgram((GLuint)prev);
 }
 void gl_renderer_set_accurate_blending(int on) {
@@ -5102,6 +5204,29 @@ void gl_renderer_set_accurate_blending(int on) {
     if (s_ctx) accurate_apply_uniforms();
 }
 int gl_renderer_accurate_blending(void) { return s_accurate_blend; }
+/* Dither mode uniform in the geometry and textured programs; queued draws
+ * are drained before it changes. */
+static GLint s_geo_uDither = -1, s_tex_uDither = -1;
+static void dither_apply_uniforms(void) {
+    if (!s_geo_prog || !s_tex_prog) return;
+    GLint prev = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &prev);
+    if (s_geo_uDither < 0) s_geo_uDither = p_glGetUniformLocation(s_geo_prog, "u_dither");
+    if (s_tex_uDither < 0) s_tex_uDither = p_glGetUniformLocation(s_tex_prog, "u_dither");
+    p_glUseProgram(s_geo_prog); p_glUniform1i(s_geo_uDither, s_dither_mode);
+    p_glUseProgram(s_tex_prog); p_glUniform1i(s_tex_uDither, s_dither_mode);
+    p_glUseProgram((GLuint)prev);
+}
+/* GP0(E1h) bit 9: recorded; it is read when each primitive is queued. */
+static void glb_set_dither(int on) { s_dither_bit = on ? 1 : 0; }
+void gl_renderer_set_dithering(int mode) {
+    GL_RT_SYNC("dithering");
+    mode = (mode == 1 || mode == 2) ? mode : 0;
+    if (mode == s_dither_mode) return;
+    if (s_ctx) { flush_flat_batch(); flush_tex_batch(); hiw_flush_queue(); }
+    s_dither_mode = mode;
+    if (s_ctx) dither_apply_uniforms();
+}
+int gl_renderer_dithering(void) { return s_dither_mode; }
 static void glb_set_texture_filter(int b) { s_tex_filter = b >= 0 && b <= 3 ? b : 0; sw_set_texture_filter(b != 0); }
 static int  glb_texture_filter(void) { return s_tex_filter; }
 
@@ -5262,7 +5387,9 @@ static void glb_draw_gouraud_triangle(int x0,int y0,uint16_t c0,int x1,int y1,ui
         native_draw_end(faithful);
     }
     if (!s_raster_ok) return;
+    s_prim_shaded = 1;   /* Gouraud: dither-eligible */
     gpu_triangle(x0,y0,c0, x1,y1,c1, x2,y2,c2, s_semi_en?s_semi_mode:-1);
+    s_prim_shaded = 0;
     precise_consumed();
 }
 static void glb_fill_rect(int x,int y,int w,int h,uint16_t c){
@@ -5334,7 +5461,7 @@ static void glb_draw_textured_rect(int x,int y,int w,int h,int u,int v,uint16_t 
     if (native_required && !s_hd_native_authority)
         sw_draw_textured_rect(x,y,w,h,u,v,cx,cy,tp);
     if (s_raster_ok)
-        gpu_textured_rect(x,y,w,h, u,v, u+w,v+h, cx,cy,tp, s_semi_en?s_semi_mode:-1);
+        { s_prim_rect = 1; gpu_textured_rect(x,y,w,h, u,v, u+w,v+h, cx,cy,tp, s_semi_en?s_semi_mode:-1); s_prim_rect = 0; }
     if (native_required && s_hd_native_authority) {
         int faithful = native_draw_begin();
         sw_draw_textured_rect(x,y,w,h,u,v,cx,cy,tp);
@@ -5346,7 +5473,7 @@ static void glb_draw_textured_rect_scaled(int x,int y,int w,int h,int u0,int v0,
     if (native_required && !s_hd_native_authority)
         sw_draw_textured_rect_scaled(x,y,w,h,u0,v0,u1,v1,cx,cy,tp);
     if (s_raster_ok)
-        gpu_textured_rect(x,y,w,h, u0,v0, u1,v1, cx,cy,tp, s_semi_en?s_semi_mode:-1);
+        { s_prim_rect = 1; gpu_textured_rect(x,y,w,h, u0,v0, u1,v1, cx,cy,tp, s_semi_en?s_semi_mode:-1); s_prim_rect = 0; }
     if (native_required && s_hd_native_authority) {
         int faithful = native_draw_begin();
         sw_draw_textured_rect_scaled(x,y,w,h,u0,v0,u1,v1,cx,cy,tp);
@@ -5369,7 +5496,9 @@ static void glb_draw_shaded_line(int x0,int y0,uint16_t c0,int x1,int y1,uint16_
         native_draw_end(faithful);
     }
     if (!s_raster_ok) return;
+    s_prim_shaded = 1;   /* shaded line: dither-eligible */
     gpu_line(x0,y0,c0, x1,y1,c1, s_semi_en?s_semi_mode:-1);
+    s_prim_shaded = 0;
 }
 static int gl_read_display_argb(int x, int y, int w, int h, uint32_t *out,
                                 int pitch_bytes, int cap_px, int *ow, int *oh);
@@ -5966,7 +6095,7 @@ static int init_gpu_raster(void) {
     s_uMaskset  = p_glGetUniformLocation(s_tex_prog, "u_maskset");
     s_uAniso = -1;
     lod_apply_uniforms();
-    s_uAccurate = -1;
+    s_uAccurate = s_geo_uAccurate = -1;
     accurate_apply_uniforms();
     s_uLimits   = p_glGetUniformLocation(s_tex_prog, "u_limits");
     s_uHdTexture = p_glGetUniformLocation(s_tex_prog, "u_hd_texture");
@@ -6019,6 +6148,8 @@ static int init_gpu_raster(void) {
         s_shift_hr = shift;
         s_shift_hi = 0.5f / (float)s_out_scale - 1.0f / 64.0f;
         s_geo_uShift = p_glGetUniformLocation(s_geo_prog, "u_shift");
+        s_geo_uDither = s_tex_uDither = -1;
+        dither_apply_uniforms();
         s_tex_uShift = p_glGetUniformLocation(s_tex_prog, "u_shift");
         s_geo_uZbias = p_glGetUniformLocation(s_geo_prog, "u_zbias");
         s_tex_uZbias = p_glGetUniformLocation(s_tex_prog, "u_zbias");
@@ -6426,8 +6557,12 @@ void gl_renderer_shutdown(void) {
     s_selected_bank_live_clut = s_tb_bank_live_clut = 0;
     if (s_ctx) {
         ensure_cpu();
+        /* The upload buffer belongs to this context: a lobby rematch
+         * creates a new one, which must create its own. */
+        if (s_raw_pbo) p_glDeleteBuffers(1, &s_raw_pbo);
         SDL_GL_DeleteContext(s_ctx); s_ctx = NULL;
     }
+    s_raw_pbo = 0;
     free(s_conv); s_conv = NULL;
     s_hq_n = 0; s_hq_vn = 0;   /* queued window draws die with the context */
     s_raster_ok = 0;
@@ -8848,15 +8983,29 @@ static int stereo_present(int w, int h) {
         gl_renderer_stereo_unavailable() != PSX_MOD_RENDER_PASS_READY) return 0;
     SDL_GL_GetDrawableSize(s_win, &ww, &wh);
     gl_perf_present_enter();
-    letterbox_rect_aspect(ww, wh, s_aspect_num * 2, s_aspect_den, &lx, &ly, &lw, &lh);
+    /* Desktop spectator layout while XR runs: default single left eye filled to
+     * the window, PSX_VR_DESKTOP_MIRROR selects 0 legacy / 1 left / 2 SBS / 3 right. */
+    const int mirror = xr_mirror_active() ? xr_mirror_mode() : 0;
+    const int solo = (mirror == 1 || mirror == 3);
+    const int solo_eye = (mirror == 3) ? 1 : 0;
+    if (solo)
+        letterbox_rect_aspect(ww, wh, p->tw[solo_eye], p->th[solo_eye], &lx, &ly, &lw, &lh);
+    else
+        letterbox_rect_aspect(ww, wh, s_aspect_num * 2, s_aspect_den, &lx, &ly, &lw, &lh);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
     glDisable(GL_SCISSOR_TEST); glViewport(0, 0, ww, wh);
     glClearColor(0.f, 0.f, 0.f, 1.f); glClear(GL_COLOR_BUFFER_BIT);
-    for (int eye = 0; eye < 2; eye++) {
-        int start = eye ? lw / 2 : 0, width = eye ? lw - lw / 2 : lw / 2;
-        present_target_quad(p->tex[eye], p->tw[eye], p->th[eye],
-                            0, 0, p->tw[eye], p->th[eye], 0,
-                            lx + start, ly, width, lh, 1, 1, 1);
+    if (solo) {
+        present_target_quad(p->tex[solo_eye], p->tw[solo_eye], p->th[solo_eye],
+                            0, 0, p->tw[solo_eye], p->th[solo_eye], 0,
+                            lx, ly, lw, lh, 1, 1, 1);
+    } else {
+        for (int eye = 0; eye < 2; eye++) {
+            int start = eye ? lw / 2 : 0, width = eye ? lw - lw / 2 : lw / 2;
+            present_target_quad(p->tex[eye], p->tw[eye], p->th[eye],
+                                0, 0, p->tw[eye], p->th[eye], 0,
+                                lx + start, ly, width, lh, 1, 1, 1);
+        }
     }
     pres_record(GL_PRES_STEREO, p->x, p->y, w, h, lx, ly, lw, lh);
     hold_capture_drawable();
@@ -8869,6 +9018,31 @@ static int stereo_present(int w, int h) {
     present_force_consumed();
     s_last_present_path = GL_PRES_STEREO;
     return 1;
+}
+
+/* ---- Desktop spectator mirror -------------------------------------------
+ * stereo_present() draws the live XR eye textures, so this shows the headset
+ * image on the monitor. Default is a single left eye filled to the window;
+ * PSX_VR_DESKTOP_MIRROR selects 0 (restore the legacy desktop presentation, the
+ * side-by-side pair -- the window is not blanked or stopped), 1 left (default),
+ * 2 side-by-side, 3 right. Applies only while an XR session is running. */
+static int s_xr_mirror = -2;
+static int xr_mirror_mode(void) {
+    if (s_xr_mirror == -2) {
+        const char* e = getenv("PSX_VR_DESKTOP_MIRROR");
+        if (!e || !*e) s_xr_mirror = 1;                                    /* on by default */
+        else if (*e == '0') s_xr_mirror = 0;
+        else if (!strcmp(e, "sbs") || !strcmp(e, "both") || !strcmp(e, "2")) s_xr_mirror = 2;
+        else if (!strcmp(e, "right") || !strcmp(e, "r") || !strcmp(e, "3")) s_xr_mirror = 3;
+        else s_xr_mirror = 1;
+    }
+    return s_xr_mirror;
+}
+static int xr_mirror_active(void) {
+    if (xr_mirror_mode() == 0) return 0;
+    PSXOpenXRStats s;
+    psx_openxr_stats(&s);
+    return s.running ? 1 : 0;
 }
 
 /* Draw two presented images crossfaded (t = weight of b) into the window. */
@@ -10695,6 +10869,7 @@ static const GpuRenderBackend GL_BACKEND = {
     .set_texture_window = glb_set_texture_window, .set_color_modulation = glb_set_color_modulation,
     .set_precise_triangle = glb_set_precise_triangle,
     .set_perspective_triangle = glb_set_perspective_triangle,
+    .set_dither = glb_set_dither,
     .fill_rect = glb_fill_rect, .copy_rect = glb_copy_rect,
     .draw_flat_triangle = glb_draw_flat_triangle, .draw_gouraud_triangle = glb_draw_gouraud_triangle,
     .draw_textured_triangle = glb_draw_textured_triangle,
@@ -11352,7 +11527,7 @@ static int fg_raw_add(const FgRaw *r) {
 static int fg_op_kept(uint16_t op) {
     switch (op) {
     case RTH_SEMI: case RTH_MASK: case RTH_TWIN: case RTH_MOD: case RTH_PRECISE:
-    case RTH_PERSP: case RTH_DEPTH: case RTH_FILL: case RTH_FLAT_TRI: case RTH_GOURAUD_TRI:
+    case RTH_PERSP: case RTH_DEPTH: case RTH_DITHER: case RTH_FILL: case RTH_FLAT_TRI: case RTH_GOURAUD_TRI:
     case RTH_TEX_TRI: case RTH_SHADED_TEX_TRI: case RTH_FLAT_RECT: case RTH_TEX_RECT:
     case RTH_TEX_RECT_SCALED: case RTH_LINE: case RTH_SHADED_LINE: case RTH_AREA:
     case RTH_OFFSET: case RTH_WIDE_VIEW: case RTH_WIDE_TARGET: case RTH_WIDE_DISABLE:
@@ -11823,6 +11998,7 @@ static void fg_replay(const FgList *a, const FgList *b, double t, GLuint gen_wid
         const int in = !s_fg_replay_objects_only && fg_area_meets(area, disp);
         switch (h.op) {
         case RTH_SEMI:    glb_set_semi_transparency(v[0], v[1]); break;
+        case RTH_DITHER:  glb_set_dither(v[0]); break;
         case RTH_MASK:    glb_set_mask_bits(v[0], v[1]); break;
         case RTH_TWIN:    glb_set_texture_window((uint32_t)v[0]); break;
         case RTH_MOD:     glb_set_color_modulation(v[0], v[1], v[2], v[3]); break;
@@ -13309,6 +13485,8 @@ static int  rtb_scale(void) {
 }
 static void rtb_set_texture_filter(int b) { GL_RT_SYNC("texture_filter"); glb_set_texture_filter(b); }
 static int  rtb_texture_filter(void) { return s_tex_filter; }
+static void rtb_set_dither(int on) {
+    RTH_DIRECT_OR(RTH_REC(RTH_DITHER, 0, on ? 1 : 0)); glb_set_dither(on); }
 static void rtb_set_semi_transparency(int e, int m) {
     RTH_DIRECT_OR(RTH_REC(RTH_SEMI, 0, e, m)); glb_set_semi_transparency(e, m); }
 static void rtb_set_mask_bits(int sb, int cb) {
@@ -13517,6 +13695,7 @@ static const GpuRenderBackend GL_RT_BACKEND = {
     .set_texture_window = rtb_set_texture_window, .set_color_modulation = rtb_set_color_modulation,
     .set_precise_triangle = rtb_set_precise_triangle,
     .set_perspective_triangle = rtb_set_perspective_triangle,
+    .set_dither = rtb_set_dither,
     .fill_rect = rtb_fill_rect, .copy_rect = rtb_copy_rect,
     .draw_flat_triangle = rtb_draw_flat_triangle, .draw_gouraud_triangle = rtb_draw_gouraud_triangle,
     .draw_textured_triangle = rtb_draw_textured_triangle,
@@ -13555,6 +13734,7 @@ static void gl_rth_exec(void *user, const RtCmd *c, const void *payload) {
     if (s_fg_on) fg_capture(c, payload);
     switch (c->op) {
     case RTH_SEMI:      glb_set_semi_transparency(v[0], v[1]); break;
+    case RTH_DITHER:    glb_set_dither(v[0]); break;
     case RTH_MASK:      glb_set_mask_bits(v[0], v[1]); break;
     case RTH_TWIN:      glb_set_texture_window((uint32_t)v[0]); break;
     case RTH_MOD:       glb_set_color_modulation(v[0], v[1], v[2], v[3]); break;

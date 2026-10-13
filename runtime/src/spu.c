@@ -2028,9 +2028,20 @@ int spu_snapshot_read(const uint8_t *p, uint32_t len) {
     }
     uint32_t phase = 0;
     if (len == spu_snapshot_bytes() && !pst_r_u32(&r, &phase)) return 0;
-    /* Applied at the next catch-up, once the guest clock is restored too. */
-    s_clock_carry = phase % SPU_CYCLES_PER_SAMPLE;
-    s_clock_valid = 0;
+    /* Anchor the SPU's sample phase to the restored clock NOW. boot_state
+     * writes CLOCK before SPU, so the clock is already restored here. It used
+     * to be applied lazily at the next catch-up -- after the guest had run on,
+     * so the phase was taken against a later clock and lost: a rollback
+     * replay rendered SPU samples at other guest cycles than the live run
+     * (voice state / SPU RAM split with identical CPU paths,
+     * PSX_RB_DET_SELFTEST). */
+    {
+        const uint64_t now = psx_get_cycle_count();
+        const uint32_t carry = phase % SPU_CYCLES_PER_SAMPLE;
+        s_clock = now >= carry ? now - carry : now;
+        s_clock_carry = 0;
+        s_clock_valid = 1;
+    }
     spu_output_flush();
     return 1;
 }
