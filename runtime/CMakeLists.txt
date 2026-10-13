@@ -797,7 +797,13 @@ if(BUILD_TESTING)
     target_include_directories(host_overlay_test PRIVATE include src)
     find_package(Threads REQUIRED)
     target_link_libraries(host_overlay_test PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(host_overlay_test PRIVATE shell32)
+    endif()
     add_test(NAME host_overlay_test COMMAND host_overlay_test)
+    add_executable(psx_menu_host_test tests/test_psx_menu_host.c src/psx_menu_host.c)
+    target_include_directories(psx_menu_host_test PRIVATE include src)
+    add_test(NAME psx_menu_host_test COMMAND psx_menu_host_test)
 
     add_executable(gte_register_access_test
         tests/test_gte_register_access.cpp
