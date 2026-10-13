@@ -65,12 +65,16 @@ int main(void) {
     }
 
     /* File import: shaders resolve next to the preset. */
-    FILE *f = fopen("pfx_chain_test.glsl", "w"); fputs("void main(){ o = vec4(1.0); }\n", f); fclose(f);
+    FILE *f = fopen("pfx_chain_test.glsl", "wb"); fputs("void main(){ o = vec4(1.0); }\n", f); fclose(f);
     f = fopen("pfx_chain_test.pfx", "w"); fputs("pfx 1\npass p\n shader pfx_chain_test.glsl\n input t source\n", f); fclose(f);
     check(pfx_chain_load_file("pfx_chain_test.pfx", &c, err, sizeof err) &&
           !strcmp(c.pass[0].shader, "void main(){ o = vec4(1.0); }\n"), "file preset and shader import");
     pfx_chain_free(&c);
     check(!pfx_chain_load_file("pfx_missing.pfx", &c, err, sizeof err) && strstr(err, "cannot open"), "missing preset");
+    /* A preset written with CRLF line ends (Windows editors) parses the same. */
+    check(parse("pfx 1\r\npass a\r\n shader builtin:blur\r\n input t source\r\n scale 0.5\r\n", &c, err) &&
+          c.pass[0].in[0].from == PFX_IN_SOURCE, "CRLF preset");
+    pfx_chain_free(&c);
     remove("pfx_chain_test.glsl"); remove("pfx_chain_test.pfx");
 
     printf("checks=%d failures=%d\n", checks, failures);

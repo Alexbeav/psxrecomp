@@ -29,10 +29,19 @@
  * source); runtime/tests/test_postfx_chain.c builds it alone. */
 #include "postfx_chain.c"
 
+/* Uniform locations, looked up once per program (a lookup per frame is a
+ * driver round trip on a threaded GL). */
+enum { PFX_LOC_RCP, PFX_LOC_SIZE, PFX_LOC_ORG, PFX_LOC_UV, PFX_LOC_FIXED };
+typedef struct {
+    GLint fixed[PFX_LOC_FIXED];
+    GLint in[PFX_MAX_INPUTS];
+    GLint u[PFX_MAX_UNIFORMS];
+} PfxLocs;
 typedef struct {
     PfxChain chain;
     int      loaded, failed;
     GLuint   prog[PFX_MAX_PASSES];
+    PfxLocs  loc[PFX_MAX_PASSES];
     GLuint   tex[PFX_MAX_PASSES], fbo[PFX_MAX_PASSES];
     int      tw[PFX_MAX_PASSES], th[PFX_MAX_PASSES];
 } PfxStage;
@@ -54,6 +63,7 @@ static GLuint s_mask_src_fbo = 0;
 static int    s_mask_src[4];                /* x0,y0,x1,y1 in source FBO px (y0 = top) */
 static int    s_mask_src_valid = 0, s_mask_ok = 0;
 static GLuint s_mask_tex = 0, s_mask_rb = 0, s_mask_fbo = 0, s_mask_prog = 0;
+static GLint  s_mask_uUv = -1, s_mask_uV = -1;
 static int    s_mask_w = 0, s_mask_h = 0;
 
 static int pfx_stage_on(int i) {
@@ -171,8 +181,10 @@ static void pfx_fbo_attach(GLuint *f, GLuint tex) {
 static int pfx_mask_build(int fresh, int lw, int lh) {
     if (!s_mask_prog) {
         s_mask_prog = build_program(PRESENT_VS,
-            "#version 330\nin vec2 v_uv; out vec4 o;\nvoid main(){ o = vec4(1.0); }\n");
+            "#version 330\nin vec2 v_uv; out vec4 o; uniform float u_v;\nvoid main(){ o = vec4(u_v); }\n");
         if (!s_mask_prog) return 0;
+        s_mask_uUv = p_glGetUniformLocation(s_mask_prog, "u_uv_rect");
+        s_mask_uV = p_glGetUniformLocation(s_mask_prog, "u_v");
     }
     if (s_mask_w != lw || s_mask_h != lh) {
         pfx_tex_alloc(&s_mask_tex, lw, lh, -1, 1);
@@ -192,11 +204,16 @@ static int pfx_mask_build(int fresh, int lw, int lh) {
                             0, lh, lw, 0, GL_STENCIL_BUFFER_BIT, GL_NEAREST);
         p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_mask_fbo);
         glViewport(0, 0, lw, lh);
-        glClear(GL_COLOR_BUFFER_BIT);
+        /* 0 everywhere, then 1 where the marks are (no clear: the clear
+         * colour is caller state this pass would have to query back). */
+        p_glUseProgram(s_mask_prog);
+        p_glUniform1f(s_mask_uV, 0.0f);
+        post_fullscreen(s_mask_prog, s_mask_uUv);
         glEnable(GL_STENCIL_TEST);
         glStencilFunc(GL_EQUAL, 0x02, 0x02);
         glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-        post_fullscreen(s_mask_prog, p_glGetUniformLocation(s_mask_prog, "u_uv_rect"));
+        p_glUniform1f(s_mask_uV, 1.0f);
+        post_fullscreen(s_mask_prog, s_mask_uUv);
         glDisable(GL_STENCIL_TEST);
         s_mask_ok = 1;
     }
@@ -216,6 +233,16 @@ static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, in
         const int last = i == c->npasses - 1;
         if (!st->prog[i]) {
             st->prog[i] = pfx_build_pass(ps);
+            if (st->prog[i]) {
+                PfxLocs *L = &st->loc[i];
+                const GLuint pg = st->prog[i];
+                L->fixed[PFX_LOC_RCP] = p_glGetUniformLocation(pg, "u_rcp");
+                L->fixed[PFX_LOC_SIZE] = p_glGetUniformLocation(pg, "u_size");
+                L->fixed[PFX_LOC_ORG] = p_glGetUniformLocation(pg, "u_org");
+                L->fixed[PFX_LOC_UV] = p_glGetUniformLocation(pg, "u_uv_rect");
+                for (int k = 0; k < ps->ninputs; k++) L->in[k] = p_glGetUniformLocation(pg, ps->in[k].sampler);
+                for (int k = 0; k < ps->nuniforms; k++) L->u[k] = p_glGetUniformLocation(pg, ps->u[k].name);
+            }
             if (!st->prog[i]) {
                 fprintf(stdout, "psxrecomp: post effect '%s' pass '%s' did not compile; effect off\n",
                         c->name, ps->name);
@@ -244,6 +271,7 @@ static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, in
             glViewport(lx, ly, lw, lh);
         }
         const GLuint prog = st->prog[i];
+        const PfxLocs *L = &st->loc[i];
         p_glUseProgram(prog);
         for (int k = 0; k < ps->ninputs; k++) {
             const int from = ps->in[k].from;
@@ -251,15 +279,15 @@ static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, in
                            : from == PFX_IN_MASK ? s_mask_tex : st->tex[from];
             p_glActiveTexture(PSXGL_TEXTURE0 + (GLenum)k);
             glBindTexture(GL_TEXTURE_2D, t);
-            p_glUniform1i(p_glGetUniformLocation(prog, ps->in[k].sampler), k);
+            p_glUniform1i(L->in[k], k);
         }
         p_glActiveTexture(PSXGL_TEXTURE0);
-        p_glUniform2f(p_glGetUniformLocation(prog, "u_rcp"), 1.0f / (float)w, 1.0f / (float)h);
-        p_glUniform2f(p_glGetUniformLocation(prog, "u_size"), (float)w, (float)h);
-        p_glUniform2i(p_glGetUniformLocation(prog, "u_org"), last ? lx : 0, last ? ly : 0);
+        p_glUniform2f(L->fixed[PFX_LOC_RCP], 1.0f / (float)w, 1.0f / (float)h);
+        p_glUniform2f(L->fixed[PFX_LOC_SIZE], (float)w, (float)h);
+        p_glUniform2i(L->fixed[PFX_LOC_ORG], last ? lx : 0, last ? ly : 0);
         for (int k = 0; k < ps->nuniforms; k++) {
             const PfxUniform *u = &ps->u[k];
-            const GLint loc = p_glGetUniformLocation(prog, u->name);
+            const GLint loc = L->u[k];
             if (loc < 0) continue;
             switch (u->count) {
             case 1: p_glUniform1f(loc, u->v[0]); break;
@@ -268,7 +296,7 @@ static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, in
             default: p_glUniform4f(loc, u->v[0], u->v[1], u->v[2], u->v[3]); break;
             }
         }
-        post_fullscreen(prog, p_glGetUniformLocation(prog, "u_uv_rect"));
+        post_fullscreen(prog, L->fixed[PFX_LOC_UV]);
     }
     for (int k = PFX_MAX_INPUTS - 1; k >= 0; k--) {
         p_glActiveTexture(PSXGL_TEXTURE0 + (GLenum)k);
@@ -280,31 +308,29 @@ static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, in
 }
 
 /* The GL state the executor changes, put back afterwards so whatever runs
- * next (the OSD, the next frame's draws) sees what it left. */
+ * next (the OSD, the next frame's draws) sees what it left. It queries
+ * little (capability flags and the viewport; every query can be a driver
+ * round trip on a threaded GL, per present, generated frames included) and
+ * never touches the clear colour. It runs inside a present, which draws to
+ * the window, so both framebuffer bindings go back to the window (0) and
+ * texture unit 0 is left active. */
 typedef struct {
     GLboolean blend, depth, scissor, stencil;
-    GLfloat clear[4];
-    GLint viewport[4], fbo, rfbo, active;
+    GLint viewport[4];
 } PfxGlState;
 static void pfx_state_save(PfxGlState *st) {
     st->blend = glIsEnabled(GL_BLEND); st->depth = glIsEnabled(GL_DEPTH_TEST);
     st->scissor = glIsEnabled(GL_SCISSOR_TEST); st->stencil = glIsEnabled(GL_STENCIL_TEST);
-    glGetFloatv(GL_COLOR_CLEAR_VALUE, st->clear);
     glGetIntegerv(GL_VIEWPORT, st->viewport);
-    glGetIntegerv(0x8CA6 /*DRAW_FRAMEBUFFER_BINDING*/, &st->fbo);
-    glGetIntegerv(0x8CAA /*READ_FRAMEBUFFER_BINDING*/, &st->rfbo);
-    glGetIntegerv(0x84E0 /*ACTIVE_TEXTURE*/, &st->active);
 }
 static void pfx_state_restore(const PfxGlState *st) {
     if (st->blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
     if (st->depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if (st->scissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
     if (st->stencil) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
-    glClearColor(st->clear[0], st->clear[1], st->clear[2], st->clear[3]);
     glViewport(st->viewport[0], st->viewport[1], st->viewport[2], st->viewport[3]);
-    p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, (GLuint)st->fbo);
-    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, (GLuint)st->rfbo);
-    p_glActiveTexture((GLenum)st->active);
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
+    p_glActiveTexture(PSXGL_TEXTURE0);
 }
 
 /* fresh: the noted source is this present's (0: reuse the last mask).
@@ -316,7 +342,6 @@ static void postfx_present(int fresh, int with_aa, int lx, int ly, int lw, int l
     PfxGlState saved;
     pfx_state_save(&saved);
     glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST); glDisable(GL_STENCIL_TEST);
-    glClearColor(0.f, 0.f, 0.f, 0.f);
     int mask_done = 0, mask_ok = 0;
     for (int i = 0; i < PFX_NSTAGES; i++) {
         if (!pfx_stage_on(i)) continue;

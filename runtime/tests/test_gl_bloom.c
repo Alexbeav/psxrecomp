@@ -267,7 +267,8 @@ int main(int argc, char **argv) {
         }
     }
     gl_renderer_render_thread_stop();
-    /* The executor leaves the GL state as it found it, both ways round, with
+    /* The executor leaves the GL state as it found it (capabilities both ways
+     * round, the viewport, the clear colour; the window target bound), with
      * every stage on (bloom, an imported chain reading the mask, FXAA). */
     {
         uint64_t h = 0;
@@ -281,13 +282,20 @@ int main(int argc, char **argv) {
             else { glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST); glDisable(GL_STENCIL_TEST); }
             glClearColor(0.25f, 0.5f, 0.75f, on ? 1.0f : 0.0f);
             glViewport(3, 5, 101 + on, 77);
-            p_glBindFramebuffer(PSXGL_FRAMEBUFFER, on ? s_hr_fbo : 0);
+            p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);   /* a present draws to the window */
+            p_glActiveTexture(PSXGL_TEXTURE0);
             pfx_state_save(&want);
+            GLfloat cc0[4], cc1[4]; glGetFloatv(GL_COLOR_CLEAR_VALUE, cc0);
             const uint64_t n0 = s_bloom_passes, a0 = s_paa_passes;
             postfx_present(0, 1, 0, 0, ww, wh);
             pfx_state_save(&got);
+            glGetFloatv(GL_COLOR_CLEAR_VALUE, cc1);
+            GLint dfb = -1, rfb = -1, act = -1;
+            glGetIntegerv(0x8CA6, &dfb); glGetIntegerv(0x8CAA, &rfb); glGetIntegerv(0x84E0, &act);
             check(s_bloom_passes == n0 + 1 && s_paa_passes == a0 + 1, "state test ran bloom and AA");
-            check(memcmp(&want, &got, sizeof want) == 0, "the pipeline leaves GL state unchanged");
+            check(memcmp(&want, &got, sizeof want) == 0, "the pipeline restores caps and viewport");
+            check(!memcmp(cc0, cc1, sizeof cc0), "the pipeline never touches the clear colour");
+            check(dfb == 0 && rfb == 0 && act == (GLint)PSXGL_TEXTURE0, "the pipeline leaves the window target bound");
         }
         p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
         glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST); glDisable(GL_STENCIL_TEST);

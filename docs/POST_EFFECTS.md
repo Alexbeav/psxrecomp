@@ -15,7 +15,10 @@ a fresh copy of the image:
 
 They run on whichever thread presents (the render thread included), before
 hold-last capture, screenshots and the OSD. Smooth motion's generated frames
-run bloom and the user chain; AA stays on real frames, as before. The executor
+run bloom and the user chain; AA stays on real frames, as before. Passes
+marked `generated reuse` (bloom's bright and blur passes) are not run again
+on generated frames: those reuse the last real frame's result and run only
+the rest (bloom's masked composite, over their own picture and mask). The executor
 owns targets, programs, uniforms and GL state, and puts back everything it
 touches.
 
@@ -30,6 +33,8 @@ pass <name>                        # the last pass writes the window
   format rgba8|rgba16f             # default rgba8
   filter linear|nearest            # how later passes sample this target
   uniform <name> <f> [f [f [f]]]   # float .. vec4
+  generated reuse|run              # Smooth motion generated frames: keep this pass's
+                                   # target from the last real frame (default: run)
 ```
 
 A shader file is a GLSL 330 fragment body. It is appended to this header:
