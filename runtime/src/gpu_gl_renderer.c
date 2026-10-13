@@ -3540,21 +3540,14 @@ void gl_renderer_batch_diag(uint64_t out[9]) {
  * painter ordered like the colour; semi-transparent texels and primitives
  * leave it as it was. Bloom off: none of this runs and no state changes. */
 static GLint s_tex_uBcls = -1, s_geo_uBcls = -1, s_geo_uBadd = -1;
-typedef struct {
-    GLboolean st, bl, dm, cm[4];
-    GLint func, ref, vmask, wmask, sf, zf, zp;
-} BclsSave;
-static void bcls_begin(BclsSave *v, int tex, int additive) {
-    v->st = glIsEnabled(GL_STENCIL_TEST); v->bl = glIsEnabled(GL_BLEND);
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &v->dm);
-    glGetBooleanv(GL_COLOR_WRITEMASK, v->cm);
-    glGetIntegerv(GL_STENCIL_FUNC, &v->func); glGetIntegerv(GL_STENCIL_REF, &v->ref);
-    glGetIntegerv(GL_STENCIL_VALUE_MASK, &v->vmask); glGetIntegerv(GL_STENCIL_WRITEMASK, &v->wmask);
-    glGetIntegerv(GL_STENCIL_FAIL, &v->sf); glGetIntegerv(GL_STENCIL_PASS_DEPTH_FAIL, &v->zf);
-    glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS, &v->zp);
+/* No glGet here: on a threaded driver every query is a round trip, and these
+ * run per batch. The passes set what they need; the caller's draw state is
+ * then put back from what the caller knows (bcls_end_geo / tex_bcls_end).
+ * Depth writes need no care: mode-1 batches already have them off and
+ * mode-0 batches have no depth test; mode-2 (depth clear) draws mark nothing. */
+static void bcls_begin(int tex, int additive) {
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDisable(GL_BLEND);
-    glDepthMask(GL_FALSE);
     glEnable(GL_STENCIL_TEST);
     glStencilMask(0x02);
     glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
@@ -3565,34 +3558,25 @@ static void bcls_pass(int tex, int pass) {
     glStencilFunc(GL_ALWAYS, pass == 1 ? 0x02 : 0x00, 0xFF);
     p_glUniform1i(tex ? s_tex_uBcls : s_geo_uBcls, pass);
 }
-static void bcls_end(const BclsSave *v, int tex) {
-    p_glUniform1i(tex ? s_tex_uBcls : s_geo_uBcls, 0);
-    if (!tex) p_glUniform1i(s_geo_uBadd, 0);
-    glColorMask(v->cm[0], v->cm[1], v->cm[2], v->cm[3]);
-    if (v->bl) glEnable(GL_BLEND);
-    glDepthMask(v->dm);
-    glStencilFunc((GLenum)v->func, v->ref, (GLuint)v->vmask);
-    glStencilMask((GLuint)v->wmask);
-    glStencilOp((GLenum)v->sf, (GLenum)v->zf, (GLenum)v->zp);
-    if (!v->st) glDisable(GL_STENCIL_TEST);
+/* Back to an untextured draw's state: its blend and mask-bit stencil. */
+static void bcls_end_geo(int semi, int mask, int check) {
+    p_glUniform1i(s_geo_uBcls, 0);
+    p_glUniform1i(s_geo_uBadd, 0);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    if (semi >= 0) apply_psx_blend(semi); else glDisable(GL_BLEND);
+    mask_stencil_ex(mask, check);
 }
-/* A draw with colour writes off (the PGXP depth-clear pass) draws nothing
- * one sees, so it marks nothing either. */
-static int bcls_colour_draw(void) {
-    GLboolean cm[4]; glGetBooleanv(GL_COLOR_WRITEMASK, cm);
-    return cm[0] || cm[1] || cm[2];
-}
-/* DRAW, then (bloom on) its two marking passes. GEO semi modes 1 and 3 add.
- * A semi-transparent primitive does not clear: what shows through it (a lamp
- * under a fog or shade quad) keeps glowing. */
-#define BCLS_DRAW(tex, semi, DRAW) do {                                        \
+/* DRAW (an untextured draw set up with blend `semi`, mask_stencil_ex(mask,
+ * check) and PGXP depth mode `dmode`), then (mask on) its two marking passes.
+ * GEO semi modes 1 and 3 add. A semi-transparent primitive does not clear:
+ * what shows through it (a lamp under a fog or shade quad) keeps glowing. */
+#define BCLS_DRAW(semi, dmode, mask, check, DRAW) do {                         \
         DRAW;                                                                 \
-        if (s_bcls_on && bcls_colour_draw()) {                                \
-            BclsSave bcls_sv_;                                                \
-            bcls_begin(&bcls_sv_, (tex), (semi) == 1 || (semi) == 3);         \
-            if ((semi) < 0) { bcls_pass((tex), 2); DRAW; }                    \
-            bcls_pass((tex), 1); DRAW;                                        \
-            bcls_end(&bcls_sv_, (tex));                                       \
+        if (s_bcls_on && (dmode) != 2) {                                      \
+            bcls_begin(0, (semi) == 1 || (semi) == 3);                        \
+            if ((semi) < 0) { bcls_pass(0, 2); DRAW; }                        \
+            bcls_pass(0, 1); DRAW;                                            \
+            bcls_end_geo((semi), (mask), (check));                            \
         }                                                                     \
     } while (0)
 
@@ -3643,11 +3627,27 @@ static void tex_draw_passes_ex(int nverts, int semi, int tb_mask, int check,
         glDrawArrays(GL_TRIANGLES, 0, nverts);
     }
     if (s_bcls_on) {
-        BclsSave sv;
-        bcls_begin(&sv, 1, 0);
+        bcls_begin(1, 0);
         bcls_pass(1, 2); glDrawArrays(GL_TRIANGLES, 0, nverts);
         bcls_pass(1, 1); glDrawArrays(GL_TRIANGLES, 0, nverts);
-        bcls_end(&sv, 1);
+        /* Back to the state the branch above ended in. */
+        p_glUniform1i(s_tex_uBcls, 0);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        if (semi < 0) {
+            glDisable(GL_BLEND);
+            mask_stencil_ex(check ? 1 : tb_mask, check);
+            p_glUniform1i(s_uSemipass, check ? 2 : 0);
+        } else if (!check && semi == 4) {
+            glEnable(GL_BLEND);
+            p_glBlendEquationSeparate(PSXGL_FUNC_ADD, PSXGL_FUNC_ADD);
+            p_glBlendFuncSeparate(GL_ONE, PSXGL_SRC1_ALPHA, GL_ONE, GL_ZERO);
+            if (tb_mask) mask_stencil_ex(1, check); else glDisable(GL_STENCIL_TEST);
+            p_glUniform1i(s_uSemipass, 0);
+        } else {
+            apply_psx_blend(semi);
+            mask_stencil_ex(1, check);
+            p_glUniform1i(s_uSemipass, 2);
+        }
     }
 }
 static void tex_batch_draw_passes(int nverts, int semi) {
@@ -3894,7 +3894,7 @@ static void hiw_replay_wide(void) {
             p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * 6 * sizeof(float)),
                            s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
             depth_apply_ex(c->depth, 0);
-            BCLS_DRAW(0, c->semi, glDrawArrays(GL_TRIANGLES, 0, c->vcount));
+            BCLS_DRAW(c->semi, c->depth, c->mask, c->check, glDrawArrays(GL_TRIANGLES, 0, c->vcount));
             depth_restore_ex(c->depth, 0, c->vcount);
         }
     }
@@ -3975,7 +3975,7 @@ static void hiw_flush_queue(void) {
                 p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * 6 * sizeof(float)),
                                s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
                 depth_apply_ex(c->depth, 0);
-                BCLS_DRAW(0, c->semi, glDrawArrays(GL_TRIANGLES, 0, c->vcount));
+                BCLS_DRAW(c->semi, c->depth, c->mask, c->check, glDrawArrays(GL_TRIANGLES, 0, c->vcount));
                 depth_restore_ex(c->depth, 0, c->vcount);
             }
         }
@@ -4161,7 +4161,7 @@ static void flush_flat_batch_impl(void) {
     p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((nverts + 2 * nl) * 6 * sizeof(float)),
                    s_fb, PSXGL_STREAM_DRAW);
     depth_apply_ex(dmode, 0);
-    BCLS_DRAW(0, semi, if (nl) flat_batch_draw_hr_lines(nverts, nl);
+    BCLS_DRAW(semi, dmode, mask, s_mask_check, if (nl) flat_batch_draw_hr_lines(nverts, nl);
                        else glDrawArrays(fmode, 0, nverts));
     depth_restore_ex(dmode, 0, nverts);
     int mirror = g_wide_cur && !s_wide_suppress && s_ws_ablate != 1 &&
@@ -4183,7 +4183,7 @@ static void flush_flat_batch_impl(void) {
         wide_target_begin(dx, s_geo_uXoff, s_geo_uXhalf);
         wide_set_bd_scale(s_geo_uXscale, s_geo_uXcenter);
         depth_apply_ex(dmode, 0);
-        if (s_ws_ablate != 2) BCLS_DRAW(0, semi, glDrawArrays(fmode, 0, nverts));
+        if (s_ws_ablate != 2) BCLS_DRAW(semi, dmode, mask, s_mask_check, glDrawArrays(fmode, 0, nverts));
         depth_restore_ex(dmode, 0, nverts);
         wide_clear_bd_scale(s_geo_uXscale, s_geo_uXcenter);
         wide_target_end(s_geo_uXoff, s_geo_uXhalf);
@@ -4540,7 +4540,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
         p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(draw_n * 6 * sizeof(float)),
                        draw_verts, PSXGL_STREAM_DRAW);
-        BCLS_DRAW(0, semi, glDrawArrays(draw_mode, 0, draw_n));
+        BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, glDrawArrays(draw_mode, 0, draw_n));
         if (is_line && s_out_scale > 1 && draw_mode == GL_LINES) {
             /* windowed: hr drew a 1x line; the S surfaces take the quad */
             p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(6 * 6 * sizeof(float)),
@@ -4564,7 +4564,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
             gl_perf_mirror_begin();
             wide_target_begin(dx, s_geo_uXoff, s_geo_uXhalf);
             wide_set_bd_scale(s_geo_uXscale, s_geo_uXcenter);
-            if (s_ws_ablate != 2) BCLS_DRAW(0, semi, glDrawArrays(draw_mode, 0, draw_n));
+            if (s_ws_ablate != 2) BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, glDrawArrays(draw_mode, 0, draw_n));
             wide_clear_bd_scale(s_geo_uXscale, s_geo_uXcenter);
             wide_target_end(s_geo_uXoff, s_geo_uXhalf);
             gl_perf_mirror_end();
@@ -4841,7 +4841,7 @@ static void wide_flat_rect_direct(int wx, int y, int ww, int h, uint16_t c, int 
     p_glBindVertexArray(s_geo_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
     p_glBufferData(PSXGL_ARRAY_BUFFER, sizeof verts, verts, PSXGL_STREAM_DRAW);
-    BCLS_DRAW(0, semi, glDrawArrays(GL_TRIANGLES, 0, 6));
+    BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, glDrawArrays(GL_TRIANGLES, 0, 6));
     if (s_hiw) p_glUniform1f(s_geo_uShift, s_shift_hr);
     p_glUniform1f(s_geo_uXoff, 0.0f);
     p_glUniform1f(s_geo_uXhalf, 512.0f);

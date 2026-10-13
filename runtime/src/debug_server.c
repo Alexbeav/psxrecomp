@@ -8612,9 +8612,11 @@ static void handle_bloom(int id, const char *json)
     gl_renderer_bloom_debug(strength, threshold, json_get_int(json, "view", -1),
                             json_get_int(json, "time", -1), &bi);
     send_fmt("{\"id\":%d,\"ok\":true,\"strength\":%.3f,\"threshold\":%.3f,\"view\":%d,"
-             "\"passes\":%llu,\"timed\":%llu,\"us_mean\":%.1f}",
+             "\"passes\":%llu,\"timed\":%llu,\"us_mean\":%.1f,\"gen_timed\":%llu,"
+             "\"gen_us_mean\":%.1f,\"reused\":%llu}",
              id, bi.strength, bi.threshold, bi.view, (unsigned long long)bi.passes,
-             (unsigned long long)bi.us_n, bi.us_mean);
+             (unsigned long long)bi.us_n, bi.us_mean, (unsigned long long)bi.gen_us_n,
+             bi.gen_us_mean, (unsigned long long)bi.reused);
 }
 
 static void handle_post_aa(int id, const char *json)

@@ -120,18 +120,21 @@ const char *pfx_builtin_shader(const char *name) {
 static const char BLOOM_PFX[] =
     "pfx 1\n"
     "# [video] bloom: glow from 3D and additive primitives only (the mask).\n"
+    "# Smooth motion's generated frames reuse the real frame's glow (bright and\n"
+    "# blur) and run only the masked composite over their own picture.\n"
     "pass bright\n"
     "  shader builtin:bloom_bright\n"
     "  input u_tex source\n"
     "  input u_mask mask\n"
     "  scale 0.25\n  format rgba16f\n"
     "  uniform u_thr 0.55\n"
-    "pass h1\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  uniform u_dir 1 0\n"
-    "pass v1\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  uniform u_dir 0 1\n"
-    "pass h2\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  uniform u_dir 2 0\n"
-    "pass v2\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  uniform u_dir 0 2\n"
-    "pass h3\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  uniform u_dir 3 0\n"
-    "pass v3\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  uniform u_dir 0 3\n"
+    "  generated reuse\n"
+    "pass h1\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  generated reuse\n  uniform u_dir 1 0\n"
+    "pass v1\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  generated reuse\n  uniform u_dir 0 1\n"
+    "pass h2\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  generated reuse\n  uniform u_dir 2 0\n"
+    "pass v2\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  generated reuse\n  uniform u_dir 0 2\n"
+    "pass h3\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  generated reuse\n  uniform u_dir 3 0\n"
+    "pass v3\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  generated reuse\n  uniform u_dir 0 3\n"
     "pass composite\n"
     "  shader builtin:bloom_composite\n"
     "  input u_tex source\n"
@@ -262,6 +265,11 @@ int pfx_chain_parse(const char *text, const char *name, PfxShaderLoader load, vo
             if (!strcmp(v, "linear")) cur->nearest = 0;
             else if (!strcmp(v, "nearest")) cur->nearest = 1;
             else { pfx_chain_free(out); return pfx_fail(err, errlen, line, "filter must be linear or nearest"); }
+        } else if (!strcmp(kw, "generated")) {
+            char v[16]; pfx_word(&q, v, sizeof v);
+            if (!strcmp(v, "reuse")) cur->reuse_generated = 1;
+            else if (!strcmp(v, "run")) cur->reuse_generated = 0;
+            else { pfx_chain_free(out); return pfx_fail(err, errlen, line, "generated must be reuse or run"); }
         } else if (!strcmp(kw, "uniform")) {
             if (cur->nuniforms == PFX_MAX_UNIFORMS) { pfx_chain_free(out); return pfx_fail(err, errlen, line, "more than %d uniforms", PFX_MAX_UNIFORMS); }
             PfxUniform *u = &cur->u[cur->nuniforms];
@@ -284,8 +292,9 @@ int pfx_chain_parse(const char *text, const char *name, PfxShaderLoader load, vo
     if (!out->npasses) return pfx_fail(err, errlen, line, "no passes");
     for (int i = 0; i < out->npasses; i++)
         if (!out->pass[i].shader) { int n = out->npasses; snprintf(err, (size_t)errlen, "pass '%s' has no shader", out->pass[i].name); (void)n; pfx_chain_free(out); return 0; }
-    /* The window pass draws over the game rect at its own size. */
+    /* The window pass draws over the game rect at its own size, every time. */
     out->pass[out->npasses - 1].scale = 1.0f;
+    out->pass[out->npasses - 1].reuse_generated = 0;
     return 1;
 }
 

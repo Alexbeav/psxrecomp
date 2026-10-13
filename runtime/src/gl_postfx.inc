@@ -45,7 +45,9 @@ static float  s_bloom_thr = 0.55f;          /* bloom bright-pass threshold */
 static int    s_bloom_view = 0;             /* debug: 1 bloom only, 2 split */
 static uint64_t s_bloom_passes = 0;
 static int    s_bloom_time = 0;             /* debug: glFinish-bracketed cost */
-static double s_bloom_us_sum = 0.0; static uint64_t s_bloom_us_n = 0;
+static double s_bloom_us_sum = 0.0; static uint64_t s_bloom_us_n = 0;   /* real frames */
+static double s_bloom_gus_sum = 0.0; static uint64_t s_bloom_gus_n = 0; /* generated frames */
+static uint64_t s_pfx_reused = 0;           /* passes skipped on generated frames */
 
 /* The mask (see above). */
 static GLuint s_mask_src_fbo = 0;
@@ -201,8 +203,11 @@ static int pfx_mask_build(int fresh, int lw, int lh) {
     return s_mask_ok;
 }
 
-/* Run one stage's chain over the window rect. 0 when it could not run. */
-static int pfx_stage_run(PfxStage *st, int lx, int ly, int lw, int lh) {
+/* Run one stage's chain over the window rect. 0 when it could not run.
+ * generated: a Smooth motion in-between frame; passes marked `generated
+ * reuse` keep the target the last real frame left (when it is there at this
+ * size) instead of running. */
+static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, int lh) {
     PfxChain *c = &st->chain;
     post_copy_bind(lw, lh);
     post_copy_window(lx, ly, lw, lh);
@@ -223,6 +228,10 @@ static int pfx_stage_run(PfxStage *st, int lx, int ly, int lw, int lh) {
             w = (int)((float)lw * ps->scale); h = (int)((float)lh * ps->scale);
             if (w < 1) w = 1;
             if (h < 1) h = 1;
+            if (generated && ps->reuse_generated && st->fbo[i] && st->tw[i] == w && st->th[i] == h) {
+                s_pfx_reused++;
+                continue;
+            }
             if (st->tw[i] != w || st->th[i] != h) {
                 pfx_tex_alloc(&st->tex[i], w, h, ps->format, ps->nearest);
                 pfx_fbo_attach(&st->fbo[i], st->tex[i]);
@@ -299,7 +308,7 @@ static void pfx_state_restore(const PfxGlState *st) {
 }
 
 /* fresh: the noted source is this present's (0: reuse the last mask).
- * with_aa: run the AA stage too (real frames). */
+ * with_aa: a real frame (runs AA too); 0: a Smooth motion generated frame. */
 static void postfx_present(int fresh, int with_aa, int lx, int ly, int lw, int lh) {
     const int src_fresh = fresh;
     if (!s_ctx) { s_mask_src_valid = 0; return; }
@@ -335,13 +344,14 @@ static void postfx_present(int fresh, int with_aa, int lx, int ly, int lw, int l
             }
             if (s_paa_time) { reps = s_paa_time > 1 ? s_paa_time : 1; sum = &s_paa_gpu_us_sum; cnt = &s_paa_gpu_n; }
         } else if (i == PFX_STAGE_BLOOM && s_bloom_time) {
-            sum = &s_bloom_us_sum; cnt = &s_bloom_us_n;
+            sum = with_aa ? &s_bloom_us_sum : &s_bloom_gus_sum;
+            cnt = with_aa ? &s_bloom_us_n : &s_bloom_gus_n;
         }
         uint64_t t0 = 0;
         if (sum) { glFinish(); t0 = SDL_GetPerformanceCounter(); }
 #endif
         int ran = 0;
-        for (int r = 0; r < reps; r++) ran = pfx_stage_run(st, lx, ly, lw, lh);
+        for (int r = 0; r < reps; r++) ran = pfx_stage_run(st, !with_aa, lx, ly, lw, lh);
 #ifndef PSX_NO_DEBUG_TOOLS
         if (sum && ran) {
             glFinish();
@@ -418,6 +428,9 @@ void gl_renderer_bloom_debug(float strength, float threshold, int view, int time
         out->passes = s_bloom_passes;
         out->us_mean = s_bloom_us_n ? s_bloom_us_sum / (double)s_bloom_us_n : 0.0;
         out->us_n = s_bloom_us_n;
-        s_bloom_us_sum = 0.0; s_bloom_us_n = 0;
+        out->gen_us_mean = s_bloom_gus_n ? s_bloom_gus_sum / (double)s_bloom_gus_n : 0.0;
+        out->gen_us_n = s_bloom_gus_n;
+        out->reused = s_pfx_reused;
+        s_bloom_us_sum = 0.0; s_bloom_us_n = 0; s_bloom_gus_sum = 0.0; s_bloom_gus_n = 0;
     }
 }

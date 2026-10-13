@@ -24,6 +24,8 @@ int main(void) {
     check(c.pass[0].scale == 0.25f && c.pass[0].format == PFX_FMT_RGBA16F, "bloom: quarter-res float bright pass");
     check(c.pass[7].ninputs == 3 && c.pass[7].in[1].from == 6 && c.pass[7].in[2].from == PFX_IN_MASK,
           "bloom: composite reads source, previous and mask");
+    check(c.pass[0].reuse_generated && c.pass[6].reuse_generated && !c.pass[7].reuse_generated,
+          "bloom: generated frames reuse bright/blur, run the composite");
     const float k = 1.7f;
     check(pfx_chain_set_uniform(&c, "u_strength", 1, &k) == 1 && c.pass[7].u[0].v[0] == 1.7f, "uniform override");
     pfx_chain_free(&c);
@@ -34,10 +36,11 @@ int main(void) {
     check(!pfx_chain_builtin("nope", &c, err, sizeof err), "unknown preset refused");
 
     check(parse("pfx 1\n# c\npass a\n shader builtin:blur\n input t source\n scale 0.5\n filter nearest\n"
-                " uniform u_dir 1 2\npass b\n shader builtin:blur\n input t a\n input m mask\n", &c, err),
+                " uniform u_dir 1 2\n generated reuse\npass b\n generated reuse\n shader builtin:blur\n input t a\n input m mask\n", &c, err),
           "custom chain parses");
     check(c.pass[0].nearest && c.pass[0].u[0].count == 2 && c.pass[1].in[0].from == 0 &&
-          c.pass[1].scale == 1.0f && c.uses_mask, "custom chain fields");
+          c.pass[1].scale == 1.0f && c.uses_mask && c.pass[0].reuse_generated &&
+          !c.pass[1].reuse_generated, "custom chain fields (the window pass always runs)");
     pfx_chain_free(&c);
 
     static const struct { const char *text, *want; } bad[] = {
@@ -53,6 +56,7 @@ int main(void) {
         { "pfx 1\npass a\npass a\n", "line 3: duplicate pass 'a'" },
         { "pfx 1\npass a\n input t source\n", "pass 'a' has no shader" },
         { "pfx 1\npass a\n wobble 1\n", "line 3: unknown directive 'wobble'" },
+        { "pfx 1\npass a\n generated maybe\n", "line 3: generated must be reuse or run" },
     };
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
         int ok = parse(bad[i].text, &c, err);

@@ -199,7 +199,10 @@ typedef struct {
     float strength, threshold;
     int view;
     uint64_t passes, us_n;
-    double us_mean;     /* glFinish-bracketed pass cost while timing, then reset */
+    double us_mean;     /* glFinish-bracketed pass cost on real frames while timing, then reset */
+    double gen_us_mean; /* the same on Smooth motion generated frames */
+    uint64_t gen_us_n;
+    uint64_t reused;    /* passes generated frames took from the last real frame */
 } GlBloomInfo;
 /* Debug: negative arguments keep the current value. view 0 normal, 1 bloom
  * only, 2 split (stock | bloom). */

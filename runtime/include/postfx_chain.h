@@ -14,6 +14,9 @@
  *     format rgba8|rgba16f             # target format (default rgba8)
  *     filter linear|nearest            # how later passes sample this target (default linear)
  *     uniform <name> <f> [f [f [f]]]   # float, vec2, vec3 or vec4
+ *     generated reuse|run              # Smooth motion's generated frames: reuse this
+ *                                      # pass's target from the last real frame (not
+ *                                      # for the last pass), or run it (default)
  *
  * A shader body is GLSL 330 appended to a header that declares
  *   in vec2 v_uv; out vec4 o;
@@ -50,6 +53,7 @@ typedef struct {
     char      *shader;               /* fragment body (owned) */
     float      scale;
     int        format, nearest;
+    int        reuse_generated;      /* generated frames reuse the last real frame's target */
     int        ninputs, nuniforms;
     PfxInput   in[PFX_MAX_INPUTS];
     PfxUniform u[PFX_MAX_UNIFORMS];
