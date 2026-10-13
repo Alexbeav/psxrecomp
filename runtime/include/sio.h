@@ -215,6 +215,8 @@ uint16_t sio_get_pad_buttons_slot(int slot);
 uint16_t sio_peek_stat(void);
 uint16_t sio_peek_ctrl(void);
 uint8_t  sio_peek_rx_data(void);
+/* SIO_STAT reads left before a visible ACK clears (side-effect free). */
+int      sio_peek_ack_visible_reads(void);
 
 /* Debug accessors: is a logical pad connected, and is it in analog mode. */
 int sio_get_pad_connected(int slot);

@@ -287,9 +287,12 @@ int main() {
      * and a pending ACK that a bus read would consume or age. */
     sio_init();
     sio_set_pad_connected(0, 1);
-    sio_write(0x1F80104Au, 0x1003u);
-    sio_write(0x1F801040u, 0x01u);
-    for (int i = 0; i < 4; ++i) (void)sio_peek_stat();
+    sio_write(0x1F80104Au, 0x1003u);   /* TX_EN | SELECT | ACK_IRQ_EN, port 1 */
+    sio_write(0x1F801040u, 0x01u);     /* pad address byte */
+    sio_tick(2000);                    /* exchange done: RX byte + ACK pending */
+    check((sio_peek_stat() & 0x0002u) != 0, "fixture: RX_RDY set (pending RX byte)");
+    check(sio_peek_ack_visible_reads() > 0, "fixture: ACK counter > 0");
+    const int ack0 = sio_peek_ack_visible_reads();
     const uint16_t stat0 = sio_peek_stat(), ctrl0 = sio_peek_ctrl();
     const uint8_t rx0 = sio_peek_rx_data();
     psx_write_word(0x80004004u, 0x11111111u);
@@ -304,9 +307,13 @@ int main() {
           "a host-output hook's CPU register changes do not reach the shared CPU");
     check(mmio_bus_accesses == 0,
           "a host-output hook makes no MMIO bus access (reads or cpu->write_*)");
+    check((sio_peek_stat() & 0x0002u) != 0,
+          "SIO RX_RDY still set: the hook did not pop the RX byte");
+    check(sio_peek_ack_visible_reads() == ack0,
+          "SIO ACK counter unchanged: the hook's SIO_STAT reads did not age it");
     check(sio_peek_stat() == stat0 && sio_peek_ctrl() == ctrl0 &&
               sio_peek_rx_data() == rx0,
-          "SIO stat (RX_RDY, ACK), ctrl and RX data unchanged by the hook");
+          "SIO stat, ctrl and RX data unchanged by the hook");
     check(psx_read_word(0x80004004u) == 0x11111111u &&
               psx_read_byte(0x80004008u) == 0x22u,
           "cpu->write_* from a host-output hook do not reach guest RAM");
