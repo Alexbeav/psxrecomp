@@ -184,11 +184,17 @@ int  gl_renderer_has_bezel(void);
  * filtered and guest VRAM is never touched. Takes effect at the next present;
  * safe to call from any thread. */
 enum { GL_POST_AA_OFF = 0, GL_POST_AA_FXAA = 1, GL_POST_AA_FXAA_HQ = 2 };
-/* Opt-in bloom ([video] bloom, 0 = off .. 2; PSX_BLOOM overrides): glow from
- * 3D and additive primitives only, never the HUD (gl_bloom.inc). Safe from
- * any thread; takes effect at the next draw. */
+/* Post-effect pipeline (gl_postfx.inc, docs/POST_EFFECTS.md). All elective,
+ * off by default; safe from any thread, effective at the next present.
+ * Bloom ([video] bloom, 0 = off .. 2; PSX_BLOOM overrides) is the built-in
+ * "bloom" chain: glow from 3D and additive primitives only, never the HUD. */
 void  gl_renderer_set_bloom(float strength);
 float gl_renderer_get_bloom(void);
+/* [video] post_shader: a .pfx chain file run after bloom and before AA
+ * ("" = none; PSX_POST_SHADER overrides). A preset that fails to load or
+ * compile is logged and skipped. */
+void  gl_renderer_set_post_shader(const char *path);
+int   gl_renderer_post_shader_loaded(void);
 typedef struct {
     float strength, threshold;
     int view;
@@ -196,7 +202,7 @@ typedef struct {
     double us_mean;     /* glFinish-bracketed pass cost while timing, then reset */
 } GlBloomInfo;
 /* Debug: negative arguments keep the current value. view 0 normal, 1 bloom
- * only, 2 split (stock | bloom), 3 the masked bright pass. */
+ * only, 2 split (stock | bloom). */
 void  gl_renderer_bloom_debug(float strength, float threshold, int view, int time,
                               GlBloomInfo *out);
 int  gl_renderer_set_post_aa(int mode);

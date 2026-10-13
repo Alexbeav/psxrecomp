@@ -187,6 +187,7 @@ typedef void   (APIENTRY *PFN_glUniform2i)(GLint, GLint, GLint);
 typedef void   (APIENTRY *PFN_glUniform4i)(GLint, GLint, GLint, GLint, GLint);
 typedef void   (APIENTRY *PFN_glUniform2f)(GLint, GLfloat, GLfloat);
 typedef void   (APIENTRY *PFN_glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat);
+typedef void   (APIENTRY *PFN_glUniform3f)(GLint, GLfloat, GLfloat, GLfloat);
 typedef void   (APIENTRY *PFN_glUniform4fv)(GLint, GLsizei, const GLfloat *);
 typedef void   (APIENTRY *PFN_glBlendColor)(GLfloat, GLfloat, GLfloat, GLfloat);
 typedef void   (APIENTRY *PFN_glBlendFuncSeparate)(GLenum, GLenum, GLenum, GLenum);
@@ -259,6 +260,7 @@ static PFN_glUniform2i         p_glUniform2i;
 static PFN_glUniform4i         p_glUniform4i;
 static PFN_glUniform2f         p_glUniform2f;
 static PFN_glUniform4f         p_glUniform4f;
+static PFN_glUniform3f         p_glUniform3f;
 static PFN_glUniform4fv        p_glUniform4fv;
 static PFN_glBlendColor        p_glBlendColor;
 static PFN_glBlendFuncSeparate p_glBlendFuncSeparate;
@@ -340,7 +342,7 @@ static int load_modern_gl(void) {
     LOAD(p_glUniform1f, "glUniform1f");
     LOAD(p_glUniform2i, "glUniform2i"); LOAD(p_glUniform4i, "glUniform4i");
     LOAD(p_glUniform2f, "glUniform2f");
-    LOAD(p_glUniform4f, "glUniform4f");
+    LOAD(p_glUniform4f, "glUniform4f"); LOAD(p_glUniform3f, "glUniform3f");
     LOAD(p_glUniform4fv, "glUniform4fv");
     LOAD(p_glBlendColor, "glBlendColor");
     LOAD(p_glBlendFuncSeparate, "glBlendFuncSeparate");
@@ -1372,16 +1374,16 @@ int gl_renderer_coh_get(uint64_t seq, GlCohEvent *out) {
 static GlPresEvent s_pres_ring[GL_PRES_RING_CAP];
 static uint64_t    s_pres_seq = 0;
 
-static void post_aa_apply(int lx, int ly, int lw, int lh);
-static float s_bloom = 0.0f;           /* [video] bloom strength (gl_bloom.inc) */
-static void bloom_apply(int fresh, int lx, int ly, int lw, int lh);
+static float s_bloom = 0.0f;           /* [video] bloom strength (gl_postfx.inc) */
+static int   s_bcls_on = 0;            /* draws keep the "may glow" mask (a chain reads it) */
+static int  postfx_active(void);
+static void postfx_present(int fresh, int with_aa, int lx, int ly, int lw, int lh);
 static void pres_record(int path, int dx, int dy, int w, int h,
                         int lx, int ly, int lw, int lh) {
-    /* The composed game image, before hold-last capture and the OSD. */
-    if (s_bloom > 0.0f && (path == GL_PRES_VRAM || path == GL_PRES_WIDE || path == GL_PRES_INTERP))
-        bloom_apply(path != GL_PRES_INTERP, lx, ly, lw, lh);
-    if (s_post_aa && (path == GL_PRES_VRAM || path == GL_PRES_WIDE || path == GL_PRES_INTERP))
-        post_aa_apply(lx, ly, lw, lh);
+    /* The composed game image, before hold-last capture and the OSD: the
+     * post-effect chains (bloom, [video] post_shader, AA; gl_postfx.inc). */
+    if ((path == GL_PRES_VRAM || path == GL_PRES_WIDE || path == GL_PRES_INTERP) && postfx_active())
+        postfx_present(path != GL_PRES_INTERP, 1, lx, ly, lw, lh);
     s_native_surface_pending=s_native_surface_enabled &&
         (path==GL_PRES_VRAM || path==GL_PRES_WIDE || path==GL_PRES_CPU || path==GL_PRES_BLANK);
     s_native_surface_rect[0]=lx;s_native_surface_rect[1]=ly;
@@ -1465,9 +1467,8 @@ static const char *PRESENT_VS =
  * (luma contrast test, edge orientation, bounded end-of-edge search,
  * sub-pixel blend); it is one copy plus one full-screen pass. */
 static GLuint build_program(const char *vs, const char *fs);
-static GLuint s_paa_prog = 0;
-static int    s_paa_failed = 0;
-static GLint  s_paa_uTex = -1, s_paa_uRcp = -1, s_paa_uUvRect = -1, s_paa_uQuality = -1;
+/* FXAA is the "fxaa"/"fxaa_hq" built-in chain (postfx_chain.c, run by
+ * gl_postfx.inc); these are its counters. */
 static uint64_t s_paa_passes = 0;
 #ifndef PSX_NO_DEBUG_TOOLS
 /* Cost of the pass (debug server post_aa), only with PSX_POST_AA_TIME=N: the
@@ -1480,58 +1481,6 @@ static double s_paa_gpu_us_sum = 0.0;
 static uint64_t s_paa_gpu_n = 0, s_paa_t0 = 0;
 #endif
 
-static const char *POST_AA_FS =
-    "#version 330\n"
-    "in vec2 v_uv; out vec4 o;\n"
-    "uniform sampler2D u_tex; uniform vec2 u_rcp; uniform int u_quality;\n"
-    "float L(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }\n"
-    "float LS(vec2 p){ return L(textureLod(u_tex,p,0.0).rgb); }\n"
-    "void main(){\n"
-    "  vec3 cM = textureLod(u_tex, v_uv, 0.0).rgb; float lM = L(cM);\n"
-    "  float lN = LS(v_uv+vec2(0.0, u_rcp.y)), lS = LS(v_uv-vec2(0.0, u_rcp.y));\n"
-    "  float lE = LS(v_uv+vec2(u_rcp.x,0.0)), lW = LS(v_uv-vec2(u_rcp.x,0.0));\n"
-    "  float mx = max(lM,max(max(lN,lS),max(lE,lW)));\n"
-    "  float mn = min(lM,min(min(lN,lS),min(lE,lW)));\n"
-    "  float range = mx - mn;\n"
-    /* thresholds: absolute 1/16 (1/24 at high quality), relative 1/8 */
-    "  float thr = u_quality > 0 ? 0.0417 : 0.0625;\n"
-    "  if (range < max(thr, mx*0.125)) { o = vec4(cM,1.0); return; }\n"
-    "  float lNE = LS(v_uv+u_rcp), lSW = LS(v_uv-u_rcp);\n"
-    "  float lNW = LS(v_uv+vec2(-u_rcp.x,u_rcp.y)), lSE = LS(v_uv+vec2(u_rcp.x,-u_rcp.y));\n"
-    "  float eH = abs(lNW+lNE-2.0*lN) + 2.0*abs(lW+lE-2.0*lM) + abs(lSW+lSE-2.0*lS);\n"
-    "  float eV = abs(lNW+lSW-2.0*lW) + 2.0*abs(lN+lS-2.0*lM) + abs(lNE+lSE-2.0*lE);\n"
-    "  bool horz = eH >= eV;\n"
-    "  float l1 = horz ? lS : lW, l2 = horz ? lN : lE;\n"
-    "  float g1 = abs(l1-lM), g2 = abs(l2-lM);\n"
-    "  bool neg = g1 >= g2;\n"
-    "  float grad = 0.25*max(g1,g2);\n"
-    "  float step = horz ? u_rcp.y : u_rcp.x;\n"
-    "  float lLocal; if (neg) { step = -step; lLocal = 0.5*(l1+lM); } else lLocal = 0.5*(l2+lM);\n"
-    "  vec2 p = v_uv; if (horz) p.y += 0.5*step; else p.x += 0.5*step;\n"
-    "  vec2 off = horz ? vec2(u_rcp.x,0.0) : vec2(0.0,u_rcp.y);\n"
-    "  vec2 p1 = p - off, p2 = p + off;\n"
-    "  float e1 = LS(p1)-lLocal, e2 = LS(p2)-lLocal;\n"
-    "  bool d1 = abs(e1) >= grad, d2 = abs(e2) >= grad;\n"
-    "  int steps = u_quality > 0 ? 12 : 8;\n"
-    "  for (int i = 1; i < steps && !(d1 && d2); i++) {\n"
-    "    float k = i < 2 ? 1.0 : (i < 5 ? 1.5 : (i < 8 ? 2.0 : 4.0));\n"
-    "    if (!d1) { p1 -= off*k; e1 = LS(p1)-lLocal; d1 = abs(e1) >= grad; }\n"
-    "    if (!d2) { p2 += off*k; e2 = LS(p2)-lLocal; d2 = abs(e2) >= grad; }\n"
-    "  }\n"
-    "  float dist1 = horz ? v_uv.x-p1.x : v_uv.y-p1.y;\n"
-    "  float dist2 = horz ? p2.x-v_uv.x : p2.y-v_uv.y;\n"
-    "  bool near1 = dist1 < dist2; float dmin = min(dist1,dist2);\n"
-    "  float len = dist1 + dist2;\n"
-    "  bool mLess = (lM - lLocal) < 0.0;\n"
-    "  bool good = ((near1 ? e1 : e2) < 0.0) != mLess;\n"
-    "  float eo = good ? (0.5 - dmin/len) : 0.0;\n"
-    "  float avg = (2.0*(lN+lS+lE+lW) + lNE+lNW+lSE+lSW) / 12.0;\n"
-    "  float sp = clamp(abs(avg-lM)/range, 0.0, 1.0);\n"
-    "  sp = (-2.0*sp + 3.0)*sp*sp; sp = sp*sp*0.75;\n"
-    "  float f = max(eo, sp);\n"
-    "  vec2 q = v_uv; if (horz) q.y += f*step; else q.x += f*step;\n"
-    "  o = vec4(textureLod(u_tex, q, 0.0).rgb, 1.0);\n"
-    "}\n";
 
 int gl_renderer_set_post_aa(int mode) {
     if (mode < GL_POST_AA_OFF || mode > GL_POST_AA_FXAA_HQ) mode = GL_POST_AA_OFF;
@@ -1598,58 +1547,9 @@ static void post_fullscreen(GLuint prog, GLint uv_rect) {
 }
 
 static void post_aa_release(void) {
-    s_paa_prog = 0; s_paa_failed = 0;
     s_post_copy_tex = 0; s_post_copy_w = s_post_copy_h = 0;
 }
 
-/* The composed image in [lx,ly,lw,lh] of the bound window target, in place. */
-static void post_aa_apply(int lx, int ly, int lw, int lh) {
-    if (!s_post_aa || !s_ctx || s_paa_failed) return;
-    if (!post_clip_rect(&lx, &ly, &lw, &lh, 3)) return;
-    if (!s_paa_prog) {
-        s_paa_prog = build_program(PRESENT_VS, POST_AA_FS);
-        if (!s_paa_prog) { s_paa_failed = 1; return; }
-        s_paa_uTex = p_glGetUniformLocation(s_paa_prog, "u_tex");
-        s_paa_uRcp = p_glGetUniformLocation(s_paa_prog, "u_rcp");
-        s_paa_uUvRect = p_glGetUniformLocation(s_paa_prog, "u_uv_rect");
-        s_paa_uQuality = p_glGetUniformLocation(s_paa_prog, "u_quality");
-    }
-    post_copy_bind(lw, lh);
-#ifndef PSX_NO_DEBUG_TOOLS
-    if (s_paa_time < 0) {
-        const char *e = getenv("PSX_POST_AA_TIME");
-        s_paa_time = e ? atoi(e) : 0;
-        if (s_paa_time < 0) s_paa_time = 0;
-        if (s_paa_time > 64) s_paa_time = 64;
-    }
-    if (s_paa_time) { glFinish(); s_paa_t0 = SDL_GetPerformanceCounter(); }
-    const int reps = s_paa_time > 1 ? s_paa_time : 1;
-#else
-    const int reps = 1;
-#endif
-    for (int r = 0; r < reps; r++) {
-    post_copy_window(lx, ly, lw, lh);
-    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
-    glViewport(lx, ly, lw, lh);
-    p_glUseProgram(s_paa_prog);
-    p_glUniform1i(s_paa_uTex, 0);
-    p_glUniform2f(s_paa_uRcp, 1.0f / (float)lw, 1.0f / (float)lh);
-    p_glUniform1i(s_paa_uQuality, s_post_aa == GL_POST_AA_FXAA_HQ ? 1 : 0);
-    post_fullscreen(s_paa_prog, s_paa_uUvRect);
-    p_glBindVertexArray(0);
-    p_glUseProgram(0);
-    }
-    glBindTexture(GL_TEXTURE_2D, 0);
-#ifndef PSX_NO_DEBUG_TOOLS
-    if (s_paa_time) {
-        glFinish();
-        s_paa_gpu_us_sum += (double)(SDL_GetPerformanceCounter() - s_paa_t0) * 1e6 /
-                            (double)SDL_GetPerformanceFrequency() / (double)reps;
-        s_paa_gpu_n++;
-    }
-#endif
-    s_paa_passes++;
-}
 
 /* Mean microseconds per pass since the last call (debug builds with
  * PSX_POST_AA_TIME=N; 0 otherwise). Resets the mean. */
@@ -1879,7 +1779,7 @@ static const char *GEO_FS =
     "#version 330\n"
     "noperspective in vec4 v_col; smooth in vec3 v_col_p; flat in int v_cp; out vec4 frag;\n"
     "noperspective in float v_b3d;\n"
-    "uniform int u_bcls;   /* bloom source pass (gl_bloom.inc): 0 off, 2 clear, 1 mark */\n"
+    "uniform int u_bcls;   /* bloom source pass (gl_postfx.inc): 0 off, 2 clear, 1 mark */\n"
     "uniform int u_badd;   /* this batch blends additively */\n"
     "void main(){\n"
     "  if (u_bcls != 0) { if (u_bcls == 1 && !(v_b3d > 0.999 || u_badd != 0)) discard; frag = vec4(0.0); return; }\n"
@@ -1968,7 +1868,7 @@ static const char *TEX_FS =
     "smooth in vec3 v_col_p; flat in int v_cp;\n"
     "out vec4 frag; out vec4 blend_factor;\n"
     "noperspective in float v_b3d;\n"
-    "uniform int u_bcls;      /* bloom source pass (gl_bloom.inc): 0 off, 2 clear, 1 mark */\n"
+    "uniform int u_bcls;      /* bloom source pass (gl_postfx.inc): 0 off, 2 clear, 1 mark */\n"
     "flat in ivec2 v_tpage;   /* texture page base, VRAM px */\n"
     "flat in ivec2 v_clut;    /* CLUT base, VRAM px */\n"
     "flat in int v_depth;     /* 0=4bit 1=8bit 2=15bit */\n"
@@ -3356,7 +3256,7 @@ static void pgxp_render_wanted_update(void) {
     /* Bloom marks PGXP-proven 3D triangles as its sources, so it wants the
      * per-triangle depth too (it never enables the depth test). */
     __atomic_store_n(&s_pgxp_render_wanted,
-                     (s_pgxp_depth || s_pgxp_cpersp || s_pgxp_seam || s_bloom > 0.0f) ? 1 : 0,
+                     (s_pgxp_depth || s_pgxp_cpersp || s_pgxp_seam || s_bcls_on) ? 1 : 0,
                      __ATOMIC_RELEASE);
 }
 int gl_renderer_pgxp_render_wanted(void) {
@@ -3630,7 +3530,7 @@ void gl_renderer_batch_diag(uint64_t out[9]) {
  * blended per the PSX mode. Cross-prim order is kept by isolating semi prims to
  * one per batch (see gpu_textured_triangle), so this batch holds a single prim
  * whose two passes do not self-overlap. */
-/* ---- bloom source marking ([video] bloom; gl_bloom.inc) -------------------
+/* ---- bloom source marking ([video] bloom; gl_postfx.inc) -------------------
  * With bloom on, every textured and untextured draw is followed by two
  * stencil-only passes of the same vertices that set stencil bit 1 (bit 0 is
  * the mask-bit mirror) to "this pixel may feed the bloom": first every covered
@@ -3639,7 +3539,6 @@ void gl_renderer_batch_diag(uint64_t out[9]) {
  * Opaque 2D, sprites and the HUD therefore clear it wherever they draw,
  * painter ordered like the colour; semi-transparent texels and primitives
  * leave it as it was. Bloom off: none of this runs and no state changes. */
-static int   s_bcls_on = 0;
 static GLint s_tex_uBcls = -1, s_geo_uBcls = -1, s_geo_uBadd = -1;
 typedef struct {
     GLboolean st, bl, dm, cm[4];
@@ -3697,7 +3596,7 @@ static int bcls_colour_draw(void) {
         }                                                                     \
     } while (0)
 
-#include "gl_bloom.inc"
+#include "gl_postfx.inc"
 
 /* tb_mask / check are the batch's set-mask and the mask-check state it was
  * drawn under; track_stencil lets the canonical pass record deferred stencil
@@ -6532,7 +6431,7 @@ void gl_renderer_shutdown(void) {
     s_hold_th = 0;
     s_interp_fbo = 0;   /* died with the context */
     post_aa_release();
-    bloom_release();
+    postfx_release();
 }
 
 /* CPU-readout present (24-bit FMV frames and the PSX_GL_FORCE_CPU_PRESENT
@@ -10033,7 +9932,7 @@ static void present_vram_impl(int disp_x, int disp_y, int w, int h, int linear,
         }
         present_target_quad(src_tex, tw, th,
                             src_x, disp_y, w, h, linear, lx, ly, lw, lh, 1, 1, src_scale);
-        bloom_note_source(src_fbo, src_tex, tw, th, src_x, disp_y, w, h);
+        postfx_note_source(src_fbo, src_tex, tw, th, src_x, disp_y, w, h);
     }
     pres_record(GL_PRES_VRAM, disp_x, disp_y, w, h, lx, ly, lw, lh);
     gpu_timeline_note(GTL_PRESENT, GTL_PATH_VRAM_FBO,
@@ -10204,7 +10103,7 @@ static int present_wide_fbo_impl(int disp_x, int disp_y, int disp_h, int linear)
                            ? (float)wide_as / (float)s_out_scale : 1.0f;
     present_target_quad(tex, (float)g_wide_w * wext, (float)VRAM_H * wext,
                         0, disp_y, g_wide_w, disp_h, linear, lx, ly, lw, lh, 1, 1, s_out_scale);
-    bloom_note_source(fbo, tex, (float)g_wide_w * wext, (float)VRAM_H * wext,
+    postfx_note_source(fbo, tex, (float)g_wide_w * wext, (float)VRAM_H * wext,
                       0, disp_y, g_wide_w, disp_h);
     pres_record(GL_PRES_WIDE, disp_x, disp_y, g_wide_w, disp_h, lx, ly, lw, lh);
     gpu_timeline_note(GTL_PRESENT, GTL_PATH_WIDE_FBO,
@@ -12083,17 +11982,18 @@ static void fg_compose(const FgList *b, GLuint wide_fbo, GLuint wide_tex, int li
     if (b->wide) {
         present_target_quad(wide_tex, (float)g_wide_w, (float)VRAM_H, 0, b->disp[1], g_wide_w,
                             b->disp[3], linear, lx, ly, lw, lh, 1, 1, s_out_scale);
-        bloom_note_source(wide_fbo, wide_tex, (float)g_wide_w, (float)VRAM_H, 0, b->disp[1],
+        postfx_note_source(wide_fbo, wide_tex, (float)g_wide_w, (float)VRAM_H, 0, b->disp[1],
                           g_wide_w, b->disp[3]);
     } else {
         present_bezel(ww, wh, lx, ly, lw, lh);
         present_target_quad(s_hr_tex, (float)VRAM_W, (float)VRAM_H, b->disp[0], b->disp[1],
                             b->disp[2], b->disp[3], linear, lx, ly, lw, lh, 1, 1, s_out_scale);
-        bloom_note_source(s_hr_fbo, s_hr_tex, (float)VRAM_W, (float)VRAM_H, b->disp[0], b->disp[1],
+        postfx_note_source(s_hr_fbo, s_hr_tex, (float)VRAM_W, (float)VRAM_H, b->disp[0], b->disp[1],
                           b->disp[2], b->disp[3]);
     }
-    /* A generated frame is the same picture: the same bloom. */
-    if (s_bloom > 0.0f) bloom_apply(1, lx, ly, lw, lh);
+    /* A generated frame is the same picture: the same chains (AA stays on
+     * real frames only, as before the pipeline). */
+    if (postfx_active()) postfx_present(1, 0, lx, ly, lw, lh);
 }
 
 /* Draw and present the frame at phase t between the two lists. Returns 1

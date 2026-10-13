@@ -8599,7 +8599,7 @@ static void handle_synth_recurse(int id, const char *json)
 /* post_aa: post-process anti-aliasing, live. {"cmd":"post_aa"} reads it,
  * {"cmd":"post_aa","mode":0|1|2} sets it (off, fxaa, fxaa_hq). */
 /* bloom: {"cmd":"bloom"} reads; optional "strength" (0..2), "threshold",
- * "view" (0 normal, 1 bloom only, 2 split, 3 sources) and "time" (1: time
+ * "view" (0 normal, 1 bloom only, 2 split) and "time" (1: time
  * each pass; the mean resets on read) set. */
 static void handle_bloom(int id, const char *json)
 {

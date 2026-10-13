@@ -1506,6 +1506,12 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME frame_gen_test COMMAND frame_gen_test)
 
+    # Post-effect chain presets (postfx_chain.c alone; no GL).
+    add_executable(postfx_chain_test tests/test_postfx_chain.c src/postfx_chain.c)
+    target_include_directories(postfx_chain_test PRIVATE include)
+    add_test(NAME postfx_chain_test COMMAND postfx_chain_test
+             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
     # Render-pass time freeze against mock devices (psx_cycles.c only).
     add_executable(render_pass_freeze_test
         tests/test_render_pass_freeze.c

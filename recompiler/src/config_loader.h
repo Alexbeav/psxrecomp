@@ -458,6 +458,9 @@ struct RuntimeConfig {
     // bloom: opt-in glow strength, 0.0 (off, the default) .. 2.0. A plain
     // [video] key, so [quality.*] presets can set it.
     float                 video_bloom = 0.0f;
+    // post_shader: a post-effect chain (.pfx, docs/POST_EFFECTS.md), "" = none.
+    // Relative paths resolve against the game root.
+    std::string           video_post_shader;
     // supersample: factor on the internal-resolution target (Match display or
     // a line preset), 1.0..4.0, kept in thousandths (internal_resolution.h).
     int                   video_supersample_milli = 1000;

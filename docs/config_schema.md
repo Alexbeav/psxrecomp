@@ -626,6 +626,9 @@ and a screen blend.
 It follows 4:3, native-wide, supersample, dynamic resolution, the render
 thread and Smooth motion (generated frames carry the marks of the frame they
 are drawn from). Without PGXP geometry only additive primitives glow.
+Bloom is the built-in `bloom` chain of the post-effect pipeline
+(`docs/POST_EFFECTS.md`), which also loads your own chains through
+`post_shader = "<file>.pfx"` (relative to the game root; `PSX_POST_SHADER`).
 `PSX_BLOOM=<0..2>` overrides it for one run and the `bloom` TCP command reads
 or changes it live. It is a plain `[video]` key, so a `[quality.*]` preset can
 turn it off on low-end machines.

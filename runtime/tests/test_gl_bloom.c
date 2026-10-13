@@ -196,28 +196,103 @@ int main(int argc, char **argv) {
         check(g[SC_3D] > 20000, "3D primitive glows");
         check(g[SC_PARTIAL] > 20000, "a partly covered lamp still glows");
     }
+    /* ---- the pipeline itself: imported chains and the mask input ---- */
+    {
+        FILE *f = fopen("pfx_invert.glsl", "w");
+        fputs("void main(){ ivec2 p = ivec2(gl_FragCoord.xy) - u_org;\n"
+              "  vec4 c = texelFetch(u_tex, p, 0); o = vec4(1.0 - c.rgb, 1.0); }\n", f);
+        fclose(f);
+        f = fopen("pfx_invert.pfx", "w");
+        fputs("pfx 1\n# a user chain: half-res copy, then invert\n"
+              "pass half\n  shader builtin:blur\n  input u_tex source\n  scale 0.5\n  uniform u_dir 0 0\n"
+              "pass invert\n  shader pfx_invert.glsl\n  input u_tex source\n  input u_half half\n", f);
+        fclose(f);
+        f = fopen("pfx_mask.pfx", "w");
+        fputs("pfx 1\npass show\n  shader pfx_mask.glsl\n  input u_mask mask\n", f);
+        fclose(f);
+        f = fopen("pfx_mask.glsl", "w");
+        fputs("void main(){ float m = texelFetch(u_mask, ivec2(gl_FragCoord.xy) - u_org, 0).r;\n"
+              "  o = vec4(vec3(m), 1.0); }\n", f);
+        fclose(f);
+        f = fopen("pfx_bad.pfx", "w");
+        fputs("pfx 1\npass x\n  shader builtin:nope\n", f);
+        fclose(f);
+        f = fopen("pfx_nocompile.pfx", "w");
+        fputs("pfx 1\npass x\n  shader pfx_nocompile.glsl\n  input u_tex source\n", f);
+        fclose(f);
+        f = fopen("pfx_nocompile.glsl", "w");
+        fputs("void main(){ o = this is not glsl; }\n", f);
+        fclose(f);
+    }
+    for (int pass = 0; pass < 2; pass++) {   /* 0: this thread, 1: render thread */
+        uint64_t h = 0;
+        gl_renderer_set_post_shader("pfx_invert.pfx");
+        check(gl_renderer_post_shader_loaded(), "imported chain loads");
+        uint8_t *inv = frame(SC_PARTIAL, 0.0f, &h);
+        long wrong = 0;
+        for (size_t i = 0; i < bytes; i++) wrong += inv[i] != (uint8_t)(255 - off[SC_PARTIAL][i]);
+        printf("%s import: inverted mismatches=%ld\n", pass ? "rt" : "st", wrong);
+        check(wrong == 0, "imported shader runs on the whole game image");
+        check(h == h_off[SC_PARTIAL], "imported chain leaves guest VRAM alone");
+        free(inv);
+
+        gl_renderer_set_post_shader("pfx_mask.pfx");
+        check(gl_renderer_post_shader_loaded(), "mask chain loads");
+        uint8_t *m = frame(SC_PARTIAL, 0.0f, &h);
+        long hud_lit = 0, lit = 0;
+        const int sx = s_cap_w / FRAME_W, sy = s_cap_h / FRAME_H;
+        for (int i = 0; i < 2; i++)
+            for (int y = k_hud[i][1] * sy; y < (k_hud[i][1] + k_hud[i][3]) * sy; y++)
+                for (int x = k_hud[i][0] * sx; x < (k_hud[i][0] + k_hud[i][2]) * sx; x++)
+                    hud_lit += m[((size_t)(s_cap_h - 1 - y) * s_cap_w + x) * 3] != 0;
+        for (int i = 0; i < s_cap_w * s_cap_h; i++) lit += m[i * 3] == 255;
+        printf("%s mask: hud lit=%ld lit=%ld of %d\n", pass ? "rt" : "st", hud_lit, lit, s_cap_w * s_cap_h);
+        check(hud_lit == 0, "mask input: HUD panels are unlit");
+        check(lit > s_cap_w * s_cap_h / 2, "mask input: the 3D ground and lamp are lit");
+        free(m);
+
+        gl_renderer_set_post_shader("pfx_bad.pfx");
+        check(!gl_renderer_post_shader_loaded(), "a bad preset is refused");
+        gl_renderer_set_post_shader("pfx_nocompile.pfx");
+        uint8_t *nc = frame(SC_PARTIAL, 0.0f, &h);
+        check(memcmp(nc, off[SC_PARTIAL], bytes) == 0, "a pass that does not compile leaves the frame alone");
+        free(nc);
+        gl_renderer_set_post_shader("");
+        uint8_t *back = frame(SC_PARTIAL, 0.0f, &h);
+        check(memcmp(back, off[SC_PARTIAL], bytes) == 0, "no chain: byte-identical again");
+        free(back);
+        if (pass == 0) {
+            check(gl_renderer_render_thread_start(2) == 1, "render thread restarted");
+            gl_renderer_render_thread_frame_boundary();
+        }
+    }
     gl_renderer_render_thread_stop();
-    /* The pass leaves the GL state as it found it, both ways round. */
+    /* The executor leaves the GL state as it found it, both ways round, with
+     * every stage on (bloom, an imported chain reading the mask, FXAA). */
     {
         uint64_t h = 0;
+        gl_renderer_set_post_shader("pfx_mask.pfx");
+        gl_renderer_set_post_aa(GL_POST_AA_FXAA);
         free(frame(SC_3D, 1.5f, &h));           /* marks for a reused-marks pass */
         int ww = 0, wh = 0; SDL_GL_GetDrawableSize(s_win, &ww, &wh);
         for (int on = 0; on < 2; on++) {
-            BloomGlState want, got;
+            PfxGlState want, got;
             if (on) { glEnable(GL_BLEND); glEnable(GL_DEPTH_TEST); glEnable(GL_SCISSOR_TEST); glEnable(GL_STENCIL_TEST); }
             else { glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST); glDisable(GL_STENCIL_TEST); }
             glClearColor(0.25f, 0.5f, 0.75f, on ? 1.0f : 0.0f);
             glViewport(3, 5, 101 + on, 77);
             p_glBindFramebuffer(PSXGL_FRAMEBUFFER, on ? s_hr_fbo : 0);
-            bloom_state_save(&want);
-            const uint64_t n0 = s_bloom_passes;
-            bloom_apply(0, 0, 0, ww, wh);
-            bloom_state_save(&got);
-            check(s_bloom_passes == n0 + 1, "state test ran the pass");
-            check(memcmp(&want, &got, sizeof want) == 0, "bloom pass leaves GL state unchanged");
+            pfx_state_save(&want);
+            const uint64_t n0 = s_bloom_passes, a0 = s_paa_passes;
+            postfx_present(0, 1, 0, 0, ww, wh);
+            pfx_state_save(&got);
+            check(s_bloom_passes == n0 + 1 && s_paa_passes == a0 + 1, "state test ran bloom and AA");
+            check(memcmp(&want, &got, sizeof want) == 0, "the pipeline leaves GL state unchanged");
         }
         p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
         glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST); glDisable(GL_STENCIL_TEST);
+        gl_renderer_set_post_shader("");
+        gl_renderer_set_post_aa(GL_POST_AA_OFF);
     }
     (void)k_scene;
 #endif
