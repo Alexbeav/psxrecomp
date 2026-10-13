@@ -23,6 +23,9 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(video_texture_filter_test tests/test_video_texture_filter.c src/video_texture_filter.c)
+    target_include_directories(video_texture_filter_test PRIVATE include)
+    add_test(NAME video_texture_filter_test COMMAND video_texture_filter_test)
     add_executable(mod_netplay_test tests/test_mod_netplay.c
         src/mod_netplay.c src/netplay_state_digest.c src/crc32.c src/psx_sha256.c)
     target_include_directories(mod_netplay_test PRIVATE include)
