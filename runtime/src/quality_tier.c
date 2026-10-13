@@ -1,8 +1,10 @@
 /* quality_tier.c -- graphics preset autodetection rules (quality_tier.h).
  *
- * Ultra is the default; a GPU class, a thread count or memory size steps a
- * machine down only where Ultra cannot hold 60 Hz even at its dynamic floor
- * (docs/QUALITY_PRESETS.md). */
+ * A static heuristic, no benchmark (docs/QUALITY_PRESETS.md): recognised
+ * hardware gets Low or Ultra; an unrecognised GPU gets Medium (or the nearest
+ * lower preset the title offers, psx_quality_pick_offered); High is never
+ * detected, only chosen by the player. Few CPU threads or little memory cap
+ * the result at Low. */
 #include "quality_tier.h"
 
 #include <ctype.h>

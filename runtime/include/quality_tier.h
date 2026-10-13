@@ -37,8 +37,9 @@ const char *psx_quality_name(int tier);
 int psx_quality_from_name(const char *name);
 
 /* The preset this host should start from, and one line saying why
- * ("AMD integrated GPU: Low"). Ultra unless the class cannot hold 60 Hz even
- * at the dynamic floor; unknown hardware gets Medium. */
+ * ("AMD integrated GPU: Low"). Recognised hardware: Low or Ultra. Unknown
+ * GPU: Medium. Never High (manual only). The caller maps the result onto the
+ * title's offered presets with psx_quality_pick_offered. */
 int psx_quality_classify(const PsxHostInfo *h, char *reason, size_t reason_cap);
 
 /* Nearest preset the title offers (bit i of offered_mask = tier i): the
