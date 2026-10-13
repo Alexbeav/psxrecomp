@@ -184,6 +184,28 @@ int  gl_renderer_has_bezel(void);
  * filtered and guest VRAM is never touched. Takes effect at the next present;
  * safe to call from any thread. */
 enum { GL_POST_AA_OFF = 0, GL_POST_AA_FXAA = 1, GL_POST_AA_FXAA_HQ = 2 };
+/* Post-effect pipeline (gl_postfx.inc, docs/POST_EFFECTS.md). All elective,
+ * off by default; safe from any thread, effective at the next present.
+ * Bloom ([video] bloom, 0 = off .. 2; PSX_BLOOM overrides) is the built-in
+ * "bloom" chain: glow from 3D and additive primitives only, never the HUD. */
+void  gl_renderer_set_bloom(float strength);
+float gl_renderer_get_bloom(void);
+/* [video] post_shader: a .pfx chain file run after bloom and before AA
+ * ("" = none; PSX_POST_SHADER overrides). A preset that fails to load or
+ * compile is logged and skipped. */
+void  gl_renderer_set_post_shader(const char *path);
+int   gl_renderer_post_shader_loaded(void);
+typedef struct {
+    float strength, threshold;
+    uint64_t passes, us_n;
+    double us_mean;     /* glFinish-bracketed pass cost on real frames while timing, then reset */
+    double gen_us_mean; /* the same on Smooth motion generated frames */
+    uint64_t gen_us_n;
+    uint64_t reused;    /* passes generated frames took from the last real frame */
+} GlBloomInfo;
+/* Debug: negative arguments keep the current value. */
+void  gl_renderer_bloom_debug(float strength, float threshold, int time,
+                              GlBloomInfo *out);
 int  gl_renderer_set_post_aa(int mode);
 int  gl_renderer_post_aa(void);
 uint64_t gl_renderer_post_aa_passes(void);

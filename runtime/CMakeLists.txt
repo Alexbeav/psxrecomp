@@ -401,6 +401,16 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-post-aa-results")
         set_tests_properties(gl_post_aa_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        add_test(NAME gl_bloom_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_bloom.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "$<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-bloom-results")
+        set_tests_properties(gl_bloom_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         add_test(NAME gl_hd_texture_pack_test
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
@@ -1519,6 +1529,12 @@ if(BUILD_TESTING)
         target_link_libraries(frame_gen_test PRIVATE m)
     endif()
     add_test(NAME frame_gen_test COMMAND frame_gen_test)
+
+    # Post-effect chain presets (postfx_chain.c alone; no GL).
+    add_executable(postfx_chain_test tests/test_postfx_chain.c src/postfx_chain.c)
+    target_include_directories(postfx_chain_test PRIVATE include)
+    add_test(NAME postfx_chain_test COMMAND postfx_chain_test
+             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
     # Render-pass time freeze against mock devices (psx_cycles.c only).
     add_executable(render_pass_freeze_test
