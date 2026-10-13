@@ -13,6 +13,7 @@ def main():
     parser.add_argument('--sdl-include',required=True)
     parser.add_argument('--sdl-library',required=True)
     parser.add_argument('--output',required=True)
+    parser.add_argument('--debug-tools',action='store_true',help='build with the debug tools (present ring) compiled in')
     parser.add_argument('--fixture',type=Path)
     parser.add_argument('--build-only',action='store_true',
                         help='build the probe without starting a GL context')
@@ -35,7 +36,7 @@ def main():
         (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
         print(r.stdout,r.stderr[-4000:],flush=True)
         if r.returncode: raise subprocess.CalledProcessError(r.returncode,command)
-    flags=['-std=gnu11','-O'+args.optimization,'-DPSX_SDL3=1','-DPSX_NO_DEBUG_TOOLS=1',
+    flags=['-std=gnu11','-O'+args.optimization,'-DPSX_SDL3=1',*([] if args.debug_tools else ['-DPSX_NO_DEBUG_TOOLS=1']),
            '-ffunction-sections','-fdata-sections','-I',fw/'runtime/include','-I',fw/'runtime/src']
     for include in args.sdl_include.split(';'):
         if include: flags+=['-I',include]
