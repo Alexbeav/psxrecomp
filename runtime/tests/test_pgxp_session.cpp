@@ -114,6 +114,8 @@ extern "C" void psx_write_half(uint32_t a, uint16_t v) {
     ram[o] = (uint8_t)v;
     ram[o + 1] = (uint8_t)(v >> 8);
 }
+/* Side-effect-free peek (memory.c); host-output observation reads. */
+extern "C" int psx_peek_word(uint32_t, uint32_t* out) { *out = 0; return 0; }
 extern "C" uint32_t psx_read_word(uint32_t a) {
     const uint32_t o = a & 0x1fffffu;
     return (uint32_t)ram[o] | ((uint32_t)ram[o + 1] << 8) |

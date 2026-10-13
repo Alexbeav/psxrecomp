@@ -2906,7 +2906,27 @@ extern "C" int psx_mod_reload_hd_texture_pack(void) {
     return ok;
 }
 
+/* Host-output observation reads: side-effect-free peeks of RAM, scratchpad
+ * and BIOS ROM (psx_peek_word); MMIO and anything else reads 0, because a bus
+ * read of a device register can change the device (SIO data pops the RX FIFO,
+ * SIO_STAT ages the ACK). */
+extern "C" int psx_mod_host_output_scope(void);
+static uint32_t ho_peek_word(uint32_t address) {
+    uint32_t v = 0;
+    return psx_peek_word(address & ~3u, &v) ? v : 0u;
+}
+static uint8_t ho_peek_byte(uint32_t address) {
+    return (uint8_t)(ho_peek_word(address) >> ((address & 3u) * 8u));
+}
+static uint16_t ho_peek_half(uint32_t address) {
+    return (uint16_t)(ho_peek_word(address) >> ((address & 2u) * 8u));
+}
+static void ho_drop_word(uint32_t, uint32_t) {}
+static void ho_drop_half(uint32_t, uint16_t) {}
+static void ho_drop_byte(uint32_t, uint8_t) {}
+
 extern "C" uint8_t psx_mod_read_byte(uint32_t address) {
+    if (psx_mod_host_output_scope()) return ho_peek_byte(address);
     return psx_read_byte(address);
 }
 
@@ -2938,6 +2958,7 @@ extern "C" void psx_mod_write_byte(uint32_t address, uint8_t value) {
 }
 
 extern "C" uint16_t psx_mod_read_half(uint32_t address) {
+    if (psx_mod_host_output_scope()) return ho_peek_half(address);
     return psx_read_half(address);
 }
 
@@ -2948,6 +2969,7 @@ extern "C" void psx_mod_write_half(uint32_t address, uint16_t value) {
 }
 
 extern "C" uint32_t psx_mod_read_word(uint32_t address) {
+    if (psx_mod_host_output_scope()) return ho_peek_word(address);
     return psx_read_word(address);
 }
 
@@ -3150,7 +3172,9 @@ static int game_netplay_function_entry(CPUState* cpu, uint32_t address);
 /* Netplay host-output plugins ([[plugin]] netplay = "host_output") run their
  * entry hooks in the shared simulation while the rest of the own-view plan is
  * parked. They observe only: each callback gets a private copy of the CPU
- * state (register changes to it are discarded), a completion request is
+ * state (register changes to it are discarded; its bus pointers peek RAM /
+ * ROM and drop writes), psx_mod_read_* peek too (no MMIO side effects), a
+ * completion request is
  * ignored, and every guest-mutating mod service refuses while one runs
  * (psx_mod_host_output_scope), so the shared simulation is bit-identical
  * with or without them. */
@@ -3172,7 +3196,10 @@ static void run_host_output_hooks(CPUState* cpu, uint32_t address) {
     for (; it != table.end() && it->key == key; ++it) {
         if (!it->plugin || !it->plugin->netplay_host_output || !it->callback)
             continue;
-        CPUState view = *cpu;   /* observation copy */
+        CPUState view = *cpu;   /* observation copy: peek reads, dropped writes */
+        view.read_word = ho_peek_word;   view.write_word = ho_drop_word;
+        view.read_half = ho_peek_half;   view.write_half = ho_drop_half;
+        view.read_byte = ho_peek_byte;   view.write_byte = ho_drop_byte;
         PluginCallbackScope scope(s, it->plugin, &view);
         ++s_host_output_depth;
         it->callback(&view, address);

@@ -72,7 +72,11 @@ uint32_t psx_mod_call_guest_uncharged_counted(struct CPUState* cpu,
         uint32_t function, uint32_t return_address, uint32_t a0, uint32_t a1,
         uint32_t a2, uint32_t a3, uint32_t budget_cycles, int* charged,
         uint64_t* counted_cycles) {
-    if (psx_mod_host_output_scope()) { if (charged) *charged = 0; return 0; }
+    if (psx_mod_host_output_scope()) {
+        if (charged) *charged = 0;
+        if (counted_cycles) *counted_cycles = 0;
+        return 0;
+    }
     PsxCycleFreeze save;
     CallerTiming timing;
     timing_save(&timing, cpu);

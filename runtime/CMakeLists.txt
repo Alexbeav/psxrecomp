@@ -1238,7 +1238,8 @@ if(BUILD_TESTING)
         src/cue_sheet.cpp
         src/iso_reader.cpp
         src/crc32.c
-        src/psx_sha256.c)
+        src/psx_sha256.c
+        src/sio.c)
     target_include_directories(netplay_view_mods_test PRIVATE
         include
         ../recompiler/include
