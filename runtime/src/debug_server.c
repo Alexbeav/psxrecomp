@@ -9932,23 +9932,22 @@ static void handle_get_snapshots(int id, const char *json)
  * deterministic runs (GL vs software) can each serve the display for the
  * SAME frame number, giving a pixel-exact renderer-divergence census.
  * GL reads GPU-side truth via the fbo peek; software reads CPU VRAM (its
- * authoritative surface). depth24 scanout frames are tagged and refused
- * (15-bit only). */
-#define DISP_RING_CAP   64    /* full-VRAM entries are 1MB each; 32 frames of
-                               * lookback (~0.3-0.5s) for exact-frame forensics */
-#define DISP_RING_MAX_W 640
-#define DISP_RING_MAX_H 256
-/* Full-VRAM aux capture alongside the display: the entire 1024x512 raw VRAM
- * as the renderer sees it at this frame (GL: FBO truth; SW: CPU truth), so an
- * offline client can micro-cosim ANY prim of the frame — rasterize it from
- * the GP0 ring against the exact same-frame texels/CLUTs — and attribute a
- * bad pixel to sampling vs content. Streamed texture pages and palette
- * cycling make later peeks worthless; only a same-frame capture is evidence. */
+ * authoritative surface). Each entry is the full 1024x512 VRAM plus the
+ * display geometry of that frame, and the PNG is decoded from it with the
+ * same scanout decode as screenshot_file — so 480-line interlaced displays
+ * and depth24 (FMV) frames are served whole, not cropped or refused. */
+#define DISP_RING_CAP   64    /* full-VRAM entries are 1MB each; ~1s of
+                               * lookback for exact-frame forensics */
+/* The entire 1024x512 raw VRAM as the renderer sees it at this frame (GL: FBO
+ * truth; SW and depth24: CPU truth), so an offline client can micro-cosim ANY
+ * prim of the frame — rasterize it from the GP0 ring against the exact
+ * same-frame texels/CLUTs — and attribute a bad pixel to sampling vs content.
+ * Streamed texture pages and palette cycling make later peeks worthless; only
+ * a same-frame capture is evidence. */
 typedef struct {
     uint32_t frame;
-    uint16_t w, h;
-    uint8_t  depth24, valid;
-    uint16_t *px;                 /* DISP_RING_MAX_W*DISP_RING_MAX_H halfwords */
+    uint8_t  valid;
+    GpuDisplayInfo di;            /* display geometry/depth at capture */
     uint16_t *vram;               /* full 1024x512 */
 } DispRingEntry;
 static PSX_BSS DispRingEntry s_disp_ring[DISP_RING_CAP];
@@ -9973,15 +9972,11 @@ static void disp_ring_capture(void)
     }
     if (!enabled || s_capture_frozen) return;
     if (!s_disp_ring_px) {
-        size_t per  = (size_t)DISP_RING_MAX_W * DISP_RING_MAX_H;
         size_t vram = (size_t)1024 * 512;
-        s_disp_ring_px = (uint16_t *)malloc(DISP_RING_CAP * (per + vram) * sizeof(uint16_t));
+        s_disp_ring_px = (uint16_t *)malloc(DISP_RING_CAP * vram * sizeof(uint16_t));
         if (!s_disp_ring_px) return;
-        for (int i = 0; i < DISP_RING_CAP; i++) {
-            uint16_t *base = s_disp_ring_px + (size_t)i * (per + vram);
-            s_disp_ring[i].px   = base;
-            s_disp_ring[i].vram = base + per;
-        }
+        for (int i = 0; i < DISP_RING_CAP; i++)
+            s_disp_ring[i].vram = s_disp_ring_px + (size_t)i * vram;
     }
     DispRingEntry *e = &s_disp_ring[(uint32_t)(s_frame_count % DISP_RING_CAP)];
     e->frame = (uint32_t)s_frame_count;
@@ -9990,30 +9985,15 @@ static void disp_ring_capture(void)
     gpu_get_display_info(&di);
     if (di.disabled || di.width == 0 || di.height == 0) return;
     gpu_timeline_note(GTL_DISP_CAPTURE, 0, di.display_x | (di.display_y << 16));
-    uint32_t w = di.width, h = di.height;
-    if (w > DISP_RING_MAX_W) w = DISP_RING_MAX_W;
-    if (h > DISP_RING_MAX_H) h = DISP_RING_MAX_H;
-    e->w = (uint16_t)w; e->h = (uint16_t)h;
-    e->depth24 = (uint8_t)(di.depth24 ? 1 : 0);
-    /* GPU-side truth when the GL raster pipeline is live (scissored pack of
-     * just the display rect + one small readback); CPU VRAM otherwise (the
-     * software backend's authoritative surface). Runs on the present thread,
-     * where the GL context is current. */
-    /* Deferred: with the render thread on, the readback is recorded at this
-     * point of the command stream and filled in by the render thread (ring
-     * readers sync first), instead of a per-frame sync point. */
-    int got = 0;
-    if (di.display_x + w <= 1024 && di.display_y + h <= 512)
-        got = gl_renderer_fbo_peek_deferred((int)di.display_x, (int)di.display_y,
-                                            (int)w, (int)h, e->px);
-    if (!got) {
-        for (uint32_t y = 0; y < h; y++)
-            for (uint32_t x = 0; x < w; x++)
-                e->px[y * w + x] =
-                    gpu_vram_peek((int)(di.display_x + x), (int)(di.display_y + y));
-    }
-    /* Full-VRAM aux capture (same GL-truth/CPU-truth split as the display). */
-    if (!gl_renderer_fbo_peek_deferred(0, 0, 1024, 512, e->vram)) {
+    e->di = di;
+    /* GPU-side truth when the GL raster pipeline is live; CPU VRAM otherwise
+     * (the software backend's authoritative surface). depth24 always reads
+     * the CPU mirror: packed RGB888 MDEC bytes live there, not in the FBO
+     * (see screenshot_file). Runs on the present thread, where the GL context
+     * is current. Deferred: with the render thread on, the readback is
+     * recorded at this point of the command stream and filled in by the
+     * render thread (ring readers sync first). */
+    if (di.depth24 || !gl_renderer_fbo_peek_deferred(0, 0, 1024, 512, e->vram)) {
         const uint16_t *v = gpu_get_vram();
         memcpy(e->vram, v, (size_t)1024 * 512 * sizeof(uint16_t));
     }
@@ -10076,16 +10056,17 @@ static void handle_display_ring_get(int id, const char *json)
     if (!e->valid || e->frame != (uint32_t)f) {
         send_err(id, "frame not in display ring"); return;
     }
-    if (e->depth24) { send_err(id, "frame is 24bpp scanout (unsupported)"); return; }
-    uint32_t w = e->w, h = e->h;
+    /* Same clamp and scanout decode as screenshot_file, against this frame's
+     * VRAM snapshot. */
+    uint32_t w = e->di.width;  if (w > 640) w = 640;
+    uint32_t h = e->di.height; if (h > 512) h = 512;
     uint8_t *rgb = (uint8_t *)malloc((size_t)w * h * 3);
     if (!rgb) { send_err(id, "alloc failed"); return; }
-    for (uint32_t i = 0; i < w * h; i++) {
-        uint16_t p = e->px[i];
-        rgb[i * 3 + 0] = (uint8_t)((p & 0x1F) << 3);
-        rgb[i * 3 + 1] = (uint8_t)(((p >> 5) & 0x1F) << 3);
-        rgb[i * 3 + 2] = (uint8_t)(((p >> 10) & 0x1F) << 3);
-    }
+    for (uint32_t y = 0; y < h; y++)
+        for (uint32_t x = 0; x < w; x++) {
+            uint8_t *p = rgb + ((size_t)y * w + x) * 3;
+            gpu_display_pixel_rgb_in(e->vram, &e->di, x, y, &p[0], &p[1], &p[2]);
+        }
     FILE *fp = fopen(path, "wb");
     if (!fp) { free(rgb); send_err(id, "cannot open file"); return; }
     int ok = png_write_rgb(fp, rgb, w, h);
@@ -10093,7 +10074,8 @@ static void handle_display_ring_get(int id, const char *json)
     fclose(fp);
     if (!ok) { send_err(id, "png encode failed"); return; }
     send_fmt("{\"id\":%d,\"ok\":true,\"frame\":%d,\"path\":\"%s\","
-             "\"width\":%u,\"height\":%u}", id, f, path, w, h);
+             "\"width\":%u,\"height\":%u,\"depth24\":%d}", id, f, path, w, h,
+             e->di.depth24 ? 1 : 0);
 }
 
 static void handle_screenshot_file(int id, const char *json)
