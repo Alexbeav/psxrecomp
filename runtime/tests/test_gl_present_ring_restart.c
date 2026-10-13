@@ -58,6 +58,16 @@ static SDL_Window *open_ctx(void) {
     return win;
 }
 
+static void check_forgotten(const char* when) {
+    char l[160];
+    snprintf(l, sizeof l, "%s: ring names forgotten at shutdown", when);
+    check(s_pir_fbo == 0 && s_pir_tex == 0 && s_pir_pbo[0] == 0 && s_pir_pbo[1] == 0, l);
+    snprintf(l, sizeof l, "%s: no readback pending across contexts", when);
+    check(s_pir_pending[0] == 0 && s_pir_pending[1] == 0, l);
+    snprintf(l, sizeof l, "%s: forgotten after the render thread stopped", when);
+    check(s_pir_forget_rth_on == 0, l);
+}
+
 int main(void) {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SKIP no video\n"); return 77; }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -67,20 +77,46 @@ int main(void) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
 #endif
     for (int i = 0; i < SW * SH; i++) src[i] = 0xFF336699u;
+
+    /* 1. Direct presents (no render thread), then shutdown. */
     SDL_Window *win = open_ctx();
     if (!win) { fprintf(stderr, "SKIP no GL context\n"); return 77; }
     for (int i = 0; i < 3; i++) gl_renderer_present(src, SW, SH, 0, 0, 0);
     check(s_pir_fbo != 0 && s_pir_pbo[0] != 0, "ring objects made in the first context");
     gl_renderer_shutdown();
-    /* The context and its objects are gone: no name may survive. A stale
-     * pack-buffer name made the next readback write through a null client
-     * pointer (glReadPixels crash after a lobby rematch). */
-    check(s_pir_fbo == 0 && s_pir_tex == 0 && s_pir_pbo[0] == 0 && s_pir_pbo[1] == 0,
-          "ring names forgotten at shutdown");
-    check(s_pir_pending[0] == 0 && s_pir_pending[1] == 0, "no readback pending across contexts");
+    /* A stale pack-buffer name made the next readback write through a null
+     * client pointer (glReadPixels crash after a lobby rematch). */
+    check_forgotten("direct");
     SDL_DestroyWindow(win);
+
+    /* 2. Render thread: presents (and ring captures) run on the worker.
+     * Queued frames are drained before the check, and shutdown must stop
+     * the worker before the names are forgotten. */
     win = open_ctx();
     if (!win) { fprintf(stderr, "SKIP no second GL context\n"); return 77; }
+    if (gl_renderer_render_thread_start(2) == 1) {
+        for (int i = 0; i < 6; i++) {
+            gl_renderer_present(src, SW, SH, 0, 0, 0);
+            gl_renderer_render_thread_frame_boundary();
+        }
+        gl_renderer_render_thread_sync("ring test drain");
+        check(s_pir_fbo != 0 && s_pir_pbo[0] != 0, "ring objects made by the render thread");
+        for (int i = 0; i < 3; i++) {  /* leave presents queued at shutdown */
+            gl_renderer_present(src, SW, SH, 0, 0, 0);
+            gl_renderer_render_thread_frame_boundary();
+        }
+        gl_renderer_shutdown();
+        check(!gl_renderer_render_thread_active(), "render thread stopped by shutdown");
+        check_forgotten("render thread");
+    } else {
+        printf("render thread not eligible here: threaded case skipped\n");
+        gl_renderer_shutdown();
+    }
+    SDL_DestroyWindow(win);
+
+    /* 3. A fresh context rebuilds live objects. */
+    win = open_ctx();
+    if (!win) { fprintf(stderr, "SKIP no third GL context\n"); return 77; }
     for (int i = 0; i < 3; i++) gl_renderer_present(src, SW, SH, 0, 0, 0);
     check(s_pir_fbo != 0 && s_pir_pbo[0] != 0, "ring rebuilt in the new context");
     check(glIsTexture(s_pir_tex) == GL_TRUE, "ring texture is a live object of the new context");

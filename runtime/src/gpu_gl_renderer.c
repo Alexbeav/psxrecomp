@@ -6351,14 +6351,12 @@ int gl_renderer_get_swap_interval(void) {
 
 static void pass_resources_release(void);
 
-#ifndef PSX_NO_DEBUG_TOOLS
 static void present_image_ring_gl_forget(void);
-#endif
 void gl_renderer_shutdown(void) {
-#ifndef PSX_NO_DEBUG_TOOLS
+    gl_renderer_render_thread_stop();   /* drains; the context comes back to this thread */
+    /* After the worker has stopped (it presents, and captures, on its own
+     * thread) and before the context dies: forget the ring's GL names. */
     present_image_ring_gl_forget();
-#endif
-    gl_renderer_render_thread_stop();   /* the context comes back to this thread */
     s_native_surface_enabled=s_native_surface_pending=0;
     gl_renderer_clear_hd_texture_cache();
     pass_resources_release();
@@ -9078,7 +9076,9 @@ static int      s_pir_disabled;
 /* The GL objects belong to the context: a renderer restart (lobby rematch,
  * in-game menu -> match) makes new ones, so forget the old names. Reading
  * back into a stale pack-buffer name reads into client memory instead. */
+static int s_pir_forget_rth_on = -1;  /* tests: was a render thread still running? */
 static void present_image_ring_gl_forget(void) {
+    s_pir_forget_rth_on = s_rth_on;
     s_pir_fbo = s_pir_tex = 0;
     s_pir_pbo[0] = s_pir_pbo[1] = 0;
     s_pir_pending[0] = s_pir_pending[1] = 0;
@@ -9151,6 +9151,9 @@ static void present_image_ring_capture_gl(void) {
     s_pir_idx = prev;
     s_pir_w = tw;
 }
+#endif
+#ifdef PSX_NO_DEBUG_TOOLS
+static void present_image_ring_gl_forget(void) {}  /* no ring in this build */
 #endif
 
 /* Host overlays (OSD text, volume bar, rewind strip, savestate menu) are
