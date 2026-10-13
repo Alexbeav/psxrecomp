@@ -1096,6 +1096,11 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
 fs::path find_project_root(const fs::path& config_path) {
     fs::path cur = PSXRecompV4::host_absolute(config_path).parent_path();
     const fs::path fallback = cur;
+    // A packaged game (tools/package_game_release.sh stages its licenses/
+    // beside game.toml) is its own root. Walking up from it would stop at
+    // the first ancestor with a marker -- e.g. a global ~/.gitignore -- and
+    // anchor the game's relative paths (memcard_dir = "saves") there.
+    if (fs::exists(cur / "licenses" / "psxrecomp-LICENSE")) return cur;
     for (int i = 0; i < 8; ++i) {
         for (const char* marker : { ".gitignore", ".git", "CMakeLists.txt" }) {
             if (fs::exists(cur / marker)) {
