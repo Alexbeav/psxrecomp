@@ -106,8 +106,10 @@ static void pfx_mask_wanted_update(void) {
 
 static int pfx_stage_load(int i) {
     PfxStage *st = &s_pfx[i];
-    if (st->loaded) return 1;
+    /* failed first: a preset that loaded but has a pass that did not
+     * compile stays off until it is set again (no rebuild every present). */
     if (st->failed) return 0;
+    if (st->loaded) return 1;
     char err[256] = "";
     int ok;
     if (i == PFX_STAGE_USER) ok = pfx_chain_load_file(s_pfx_user_path, &st->chain, err, sizeof err);
@@ -126,7 +128,9 @@ static int pfx_stage_load(int i) {
     return 1;
 }
 
+static uint64_t s_pfx_builds = 0;           /* program builds (tests) */
 static GLuint pfx_build_pass(const PfxPass *ps) {
+    s_pfx_builds++;
     size_t n = strlen(ps->shader) + 512 + (size_t)ps->ninputs * 64;
     char *src = (char *)malloc(n);
     if (!src) return 0;
@@ -414,7 +418,9 @@ void gl_renderer_set_post_shader(const char *path) {
         if (e) { snprintf(s_pfx_user_path, sizeof s_pfx_user_path, "%s", e); s_pfx_user_env = 1; }
     }
     if (!s_pfx_user_env) {
-        if (strcmp(s_pfx_user_path, path ? path : "")) pfx_stage_unload(&s_pfx[PFX_STAGE_USER]);
+        /* Setting it again (same path or not) reloads: the file may have
+         * changed, and a failed preset gets one new try. */
+        pfx_stage_unload(&s_pfx[PFX_STAGE_USER]);
         snprintf(s_pfx_user_path, sizeof s_pfx_user_path, "%s", path ? path : "");
     }
     if (s_pfx_user_path[0] && s_ctx) (void)pfx_stage_load(PFX_STAGE_USER);

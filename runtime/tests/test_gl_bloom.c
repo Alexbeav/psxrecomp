@@ -257,6 +257,13 @@ int main(int argc, char **argv) {
         uint8_t *nc = frame(SC_PARTIAL, 0.0f, &h);
         check(memcmp(nc, off[SC_PARTIAL], bytes) == 0, "a pass that does not compile leaves the frame alone");
         free(nc);
+        if (s_rth_on) gl_renderer_render_thread_sync("builds");
+        const uint64_t b0 = s_pfx_builds;
+        nc = frame(SC_PARTIAL, 0.0f, &h);
+        if (s_rth_on) gl_renderer_render_thread_sync("builds");
+        check(s_pfx_builds == b0 && memcmp(nc, off[SC_PARTIAL], bytes) == 0,
+              "a failed pass is not rebuilt on the next present");
+        free(nc);
         gl_renderer_set_post_shader("");
         uint8_t *back = frame(SC_PARTIAL, 0.0f, &h);
         check(memcmp(back, off[SC_PARTIAL], bytes) == 0, "no chain: byte-identical again");
