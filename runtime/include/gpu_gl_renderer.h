@@ -197,16 +197,14 @@ void  gl_renderer_set_post_shader(const char *path);
 int   gl_renderer_post_shader_loaded(void);
 typedef struct {
     float strength, threshold;
-    int view;
     uint64_t passes, us_n;
     double us_mean;     /* glFinish-bracketed pass cost on real frames while timing, then reset */
     double gen_us_mean; /* the same on Smooth motion generated frames */
     uint64_t gen_us_n;
     uint64_t reused;    /* passes generated frames took from the last real frame */
 } GlBloomInfo;
-/* Debug: negative arguments keep the current value. view 0 normal, 1 bloom
- * only, 2 split (stock | bloom). */
-void  gl_renderer_bloom_debug(float strength, float threshold, int view, int time,
+/* Debug: negative arguments keep the current value. */
+void  gl_renderer_bloom_debug(float strength, float threshold, int time,
                               GlBloomInfo *out);
 int  gl_renderer_set_post_aa(int mode);
 int  gl_renderer_post_aa(void);

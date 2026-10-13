@@ -22,8 +22,12 @@ int main(void) {
     check(pfx_chain_builtin("bloom", &c, err, sizeof err), "bloom preset loads");
     check(c.npasses == 8 && c.uses_mask, "bloom: 8 passes, reads the mask");
     check(c.pass[0].scale == 0.25f && c.pass[0].format == PFX_FMT_RGBA16F, "bloom: quarter-res float bright pass");
-    check(c.pass[7].ninputs == 3 && c.pass[7].in[1].from == 6 && c.pass[7].in[2].from == PFX_IN_MASK,
-          "bloom: composite reads source, previous and mask");
+    check(c.pass[7].ninputs == 2 && c.pass[7].in[0].from == 6 && c.pass[7].in[1].from == PFX_IN_MASK &&
+          c.pass[7].blend == PFX_BLEND_SCREEN, "bloom: composite screen-blends previous under the mask");
+    check(c.pass[0].in[0].from == PFX_IN_SOURCE_DOWN, "bloom: bright pass reads the scaled-down image");
+    for (int i = 0; i < c.npasses; i++)
+        for (int k = 0; k < c.pass[i].ninputs; k++)
+            check(c.pass[i].in[k].from != PFX_IN_SOURCE, "bloom: no full-size copy of the image");
     check(c.pass[0].reuse_generated && c.pass[6].reuse_generated && !c.pass[7].reuse_generated,
           "bloom: generated frames reuse bright/blur, run the composite");
     const float k = 1.7f;
@@ -57,6 +61,9 @@ int main(void) {
         { "pfx 1\npass a\n input t source\n", "pass 'a' has no shader" },
         { "pfx 1\npass a\n wobble 1\n", "line 3: unknown directive 'wobble'" },
         { "pfx 1\npass a\n generated maybe\n", "line 3: generated must be reuse or run" },
+        { "pfx 1\npass a\n blend add\n", "line 3: blend must be replace or screen" },
+        { "pfx 1\npass a\n shader builtin:blur\n blend screen\npass b\n shader builtin:blur\n",
+          "pass 'a': only the last pass may blend" },
     };
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
         int ok = parse(bad[i].text, &c, err);

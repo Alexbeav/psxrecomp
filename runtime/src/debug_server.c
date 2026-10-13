@@ -8599,7 +8599,7 @@ static void handle_synth_recurse(int id, const char *json)
 /* post_aa: post-process anti-aliasing, live. {"cmd":"post_aa"} reads it,
  * {"cmd":"post_aa","mode":0|1|2} sets it (off, fxaa, fxaa_hq). */
 /* bloom: {"cmd":"bloom"} reads; optional "strength" (0..2), "threshold",
- * "view" (0 normal, 1 bloom only, 2 split) and "time" (1: time
+ * and "time" (1: time
  * each pass; the mean resets on read) set. */
 static void handle_bloom(int id, const char *json)
 {
@@ -8609,12 +8609,11 @@ static void handle_bloom(int id, const char *json)
     p = strstr(json, "\"threshold\"");
     if (p && (p = strchr(p, ':'))) threshold = (float)strtod(p + 1, NULL);
     GlBloomInfo bi;
-    gl_renderer_bloom_debug(strength, threshold, json_get_int(json, "view", -1),
-                            json_get_int(json, "time", -1), &bi);
-    send_fmt("{\"id\":%d,\"ok\":true,\"strength\":%.3f,\"threshold\":%.3f,\"view\":%d,"
+    gl_renderer_bloom_debug(strength, threshold, json_get_int(json, "time", -1), &bi);
+    send_fmt("{\"id\":%d,\"ok\":true,\"strength\":%.3f,\"threshold\":%.3f,"
              "\"passes\":%llu,\"timed\":%llu,\"us_mean\":%.1f,\"gen_timed\":%llu,"
              "\"gen_us_mean\":%.1f,\"reused\":%llu}",
-             id, bi.strength, bi.threshold, bi.view, (unsigned long long)bi.passes,
+             id, bi.strength, bi.threshold, (unsigned long long)bi.passes,
              (unsigned long long)bi.us_n, bi.us_mean, (unsigned long long)bi.gen_us_n,
              bi.gen_us_mean, (unsigned long long)bi.reused);
 }

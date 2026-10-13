@@ -62,13 +62,15 @@ static const char FXAA_FS[] =
     "  o = vec4(textureLod(u_tex, q, 0.0).rgb, 1.0);\n"
     "}\n";
 
-/* Bloom: soft-knee bright pass of masked (lit) pixels, 4 taps of the source. */
+/* Bloom: soft-knee bright pass of lit pixels (the mask) of the image already
+ * scaled to this pass (source_down). */
 static const char BLOOM_BRIGHT_FS[] =
     "uniform float u_thr;\n"
-    "vec3 S(vec2 p){ return textureLod(u_tex, p, 0.0).rgb * textureLod(u_mask, p, 0.0).r; }\n"
     "void main(){\n"
-    "  vec2 r = 1.0 / vec2(textureSize(u_tex, 0));\n"
-    "  vec3 c = 0.25*(S(v_uv+r*vec2(-1,-1))+S(v_uv+r*vec2(1,-1))+S(v_uv+r*vec2(-1,1))+S(v_uv+r*vec2(1,1)));\n"
+    "  vec2 r = 0.25 / u_size;\n"   /* the mask's 4x4 footprint, 4 taps */
+    "  float m = 0.25*(textureLod(u_mask, v_uv+r*vec2(-1,-1), 0.0).r + textureLod(u_mask, v_uv+r*vec2(1,-1), 0.0).r\n"
+    "                + textureLod(u_mask, v_uv+r*vec2(-1,1), 0.0).r + textureLod(u_mask, v_uv+r*vec2(1,1), 0.0).r);\n"
+    "  vec3 c = textureLod(u_tex, v_uv, 0.0).rgb * m;\n"
     "  float l = max(c.r, max(c.g, c.b));\n"
     "  float k = 0.15; float s = clamp(l - u_thr + k, 0.0, 2.0*k); s = s*s/(4.0*k+1e-5);\n"
     "  float w = max(s, l - u_thr) / max(l, 1e-4);\n"
@@ -86,20 +88,14 @@ static const char BLUR_FS[] =
     "  o = vec4(c, 1.0);\n"
     "}\n";
 
-/* Screen-blend the glow back onto lit pixels only; every other pixel is the
- * source texel, unchanged (the HUD next to a lamp included). */
+/* The glow, screen-blended (blend screen) onto lit pixels only: every other
+ * pixel is discarded, so it keeps the image's value exactly (the HUD next to
+ * a lamp included). No copy of the image is read. */
 static const char BLOOM_COMPOSITE_FS[] =
-    "uniform float u_strength; uniform float u_view;\n"
+    "uniform float u_strength;\n"
     "void main(){\n"
-    "  ivec2 p = ivec2(gl_FragCoord.xy) - u_org;\n"
-    "  vec4 c4 = texelFetch(u_tex, p, 0); vec3 c = c4.rgb;\n"
-    "  bool lit = texelFetch(u_mask, p, 0).r > 0.5;\n"
-    "  vec3 b = clamp(textureLod(u_bloom, v_uv, 0.0).rgb * u_strength, 0.0, 1.0);\n"
-    "  vec3 r = lit ? 1.0 - (1.0 - c) * (1.0 - b) : c;\n"
-    "  if (u_view > 0.5 && u_view < 1.5) r = b;\n"
-    /* 2: split view, stock left / bloom right */
-    "  if (u_view > 1.5) { if (v_uv.x < 0.5) r = c; if (abs(v_uv.x - 0.5) < 0.0012) r = vec3(1.0); }\n"
-    "  o = vec4(r, c4.a);\n"
+    "  if (texelFetch(u_mask, ivec2(gl_FragCoord.xy) - u_org, 0).r < 0.5) discard;\n"
+    "  o = vec4(clamp(textureLod(u_bloom, v_uv, 0.0).rgb * u_strength, 0.0, 1.0), 0.0);\n"
     "}\n";
 
 static const struct { const char *name, *body; } k_shaders[] = {
@@ -121,10 +117,12 @@ static const char BLOOM_PFX[] =
     "pfx 1\n"
     "# [video] bloom: glow from 3D and additive primitives only (the mask).\n"
     "# Smooth motion's generated frames reuse the real frame's glow (bright and\n"
-    "# blur) and run only the masked composite over their own picture.\n"
+    "# blur) and run only the masked composite over their own picture. Nothing\n"
+    "# copies the full-size image: the bright pass reads it already scaled\n"
+    "# down and the composite blends onto the window.\n"
     "pass bright\n"
     "  shader builtin:bloom_bright\n"
-    "  input u_tex source\n"
+    "  input u_tex source_down\n"
     "  input u_mask mask\n"
     "  scale 0.25\n  format rgba16f\n"
     "  uniform u_thr 0.55\n"
@@ -137,11 +135,10 @@ static const char BLOOM_PFX[] =
     "pass v3\n  shader builtin:blur\n  input u_tex previous\n  scale 0.25\n  format rgba16f\n  generated reuse\n  uniform u_dir 0 3\n"
     "pass composite\n"
     "  shader builtin:bloom_composite\n"
-    "  input u_tex source\n"
     "  input u_bloom previous\n"
     "  input u_mask mask\n"
-    "  uniform u_strength 1.0\n"
-    "  uniform u_view 0\n";
+    "  blend screen\n"
+    "  uniform u_strength 1.0\n";
 
 static const char FXAA_PFX[] =
     "pfx 1\npass fxaa\n  shader builtin:fxaa\n  input u_tex source\n  uniform u_quality 0\n";
@@ -239,6 +236,7 @@ int pfx_chain_parse(const char *text, const char *name, PfxShaderLoader load, vo
             int from;
             const int self = (int)(cur - out->pass);
             if (!strcmp(f, "source")) from = PFX_IN_SOURCE;
+            else if (!strcmp(f, "source_down")) from = PFX_IN_SOURCE_DOWN;
             else if (!strcmp(f, "mask")) { from = PFX_IN_MASK; out->uses_mask = 1; }
             else if (!strcmp(f, "previous")) {
                 if (self == 0) { pfx_chain_free(out); return pfx_fail(err, errlen, line, "the first pass has no previous"); }
@@ -265,6 +263,11 @@ int pfx_chain_parse(const char *text, const char *name, PfxShaderLoader load, vo
             if (!strcmp(v, "linear")) cur->nearest = 0;
             else if (!strcmp(v, "nearest")) cur->nearest = 1;
             else { pfx_chain_free(out); return pfx_fail(err, errlen, line, "filter must be linear or nearest"); }
+        } else if (!strcmp(kw, "blend")) {
+            char v[16]; pfx_word(&q, v, sizeof v);
+            if (!strcmp(v, "replace")) cur->blend = PFX_BLEND_REPLACE;
+            else if (!strcmp(v, "screen")) cur->blend = PFX_BLEND_SCREEN;
+            else { pfx_chain_free(out); return pfx_fail(err, errlen, line, "blend must be replace or screen"); }
         } else if (!strcmp(kw, "generated")) {
             char v[16]; pfx_word(&q, v, sizeof v);
             if (!strcmp(v, "reuse")) cur->reuse_generated = 1;
@@ -295,6 +298,12 @@ int pfx_chain_parse(const char *text, const char *name, PfxShaderLoader load, vo
     /* The window pass draws over the game rect at its own size, every time. */
     out->pass[out->npasses - 1].scale = 1.0f;
     out->pass[out->npasses - 1].reuse_generated = 0;
+    for (int i = 0; i < out->npasses - 1; i++)
+        if (out->pass[i].blend != PFX_BLEND_REPLACE) {
+            snprintf(err, (size_t)errlen, "pass '%s': only the last pass may blend", out->pass[i].name);
+            pfx_chain_free(out);
+            return 0;
+        }
     return 1;
 }
 

@@ -17,8 +17,13 @@ They run on whichever thread presents (the render thread included), before
 hold-last capture, screenshots and the OSD. Smooth motion's generated frames
 run bloom and the user chain; AA stays on real frames, as before. Passes
 marked `generated reuse` (bloom's bright and blur passes) are not run again
-on generated frames: those reuse the last real frame's result and run only
-the rest (bloom's masked composite, over their own picture and mask). The executor
+on generated frames: those reuse the last real frame's glow and mask and run
+only the rest (bloom's masked composite, over their own picture).
+
+`source` is a full-size copy of the image, made only when a pass that runs
+reads it; `source_down` is the image blitted straight to that pass's size.
+Bloom reads only `source_down` and composites with `blend screen`, so it never
+copies the full image. The executor
 owns targets, programs, uniforms and GL state, and puts back everything it
 touches.
 
@@ -28,11 +33,13 @@ touches.
 pfx 1                              # required first line
 pass <name>                        # the last pass writes the window
   shader <file.glsl|builtin:name>  # file paths resolve next to the preset
-  input <sampler> <source|mask|previous|<earlier pass>>
+  input <sampler> <source|source_down|mask|previous|<earlier pass>>
   scale <f>                        # target size as a fraction of the game rect (default 1)
   format rgba8|rgba16f             # default rgba8
   filter linear|nearest            # how later passes sample this target
   uniform <name> <f> [f [f [f]]]   # float .. vec4
+  blend replace|screen             # last pass: write, or screen o + dst*(1-o)
+                                   # onto the window (discard keeps dst exactly)
   generated reuse|run              # Smooth motion generated frames: keep this pass's
                                    # target from the last real frame (default: run)
 ```
@@ -74,7 +81,11 @@ data, so it needs PGXP geometry) or an additive semi-transparent primitive
 a sprite, a fill or the HUD. Only while an active chain reads `mask` does every
 draw keep that mark in stencil bit 1 (bit 0 is the PS1 mask-bit mirror). The
 mark follows the picture through native-wide centre copies and Smooth motion
-surfaces. At the present it becomes a window-sized R8 texture. A chain that
+surfaces. At a real frame's present it is resolved in the presented surface's
+own pixels (an R8 target sharing that surface's depth-stencil renderbuffer,
+so no depth-stencil blit, which costs the CPU milliseconds on macOS) and mapped
+to a window-sized R8 texture. Native-wide takes the centre's marks from the
+hr surface directly. Generated frames reuse the newer real frame's mask. A chain that
 does not read `mask` costs none of this.
 
 Bloom uses the mask at both ends: only lit pixels feed its bright pass, and

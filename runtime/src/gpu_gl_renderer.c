@@ -3566,16 +3566,31 @@ static void bcls_end_geo(int semi, int mask, int check) {
     if (semi >= 0) apply_psx_blend(semi); else glDisable(GL_BLEND);
     mask_stencil_ex(mask, check);
 }
+/* Which marking passes a draw needs. b3d: 1 = every primitive of the batch
+ * is a 3D source, 0 = none is, -1 = not known. An opaque batch that is all
+ * 3D only sets (one pass); one with no 3D (and so no additive texels) only
+ * clears (one pass); a semi-transparent one never clears, it only sets its
+ * additive or 3D fragments (one pass). Only a batch of unknown make needs
+ * both, clear then set. Each pass is a full draw of the batch. */
+enum { BCLS_CLEAR = 1, BCLS_SET = 2 };
+static int bcls_passes(int semi, int b3d) {
+    if (semi >= 0) return BCLS_SET;
+    if (b3d == 1) return BCLS_SET;
+    if (b3d == 0) return BCLS_CLEAR;
+    return BCLS_CLEAR | BCLS_SET;
+}
 /* DRAW (an untextured draw set up with blend `semi`, mask_stencil_ex(mask,
- * check) and PGXP depth mode `dmode`), then (mask on) its two marking passes.
- * GEO semi modes 1 and 3 add. A semi-transparent primitive does not clear:
- * what shows through it (a lamp under a fog or shade quad) keeps glowing. */
-#define BCLS_DRAW(semi, dmode, mask, check, DRAW) do {                         \
+ * check) and PGXP depth mode `dmode`; b3d as above), then (mask on) its
+ * marking passes. GEO semi modes 1 and 3 add. A semi-transparent primitive
+ * does not clear: what shows through it (a lamp under a fog or shade quad)
+ * keeps glowing. */
+#define BCLS_DRAW(semi, dmode, mask, check, b3d, DRAW) do {                    \
         DRAW;                                                                 \
-        if (s_bcls_on && (dmode) != 2) {                                      \
+        if (s_bcls_on && (dmode) != 2 && !s_fg_drawing) {                     \
+            const int bcls_p_ = bcls_passes((semi), (b3d));                   \
             bcls_begin(0, (semi) == 1 || (semi) == 3);                        \
-            if ((semi) < 0) { bcls_pass(0, 2); DRAW; }                        \
-            bcls_pass(0, 1); DRAW;                                            \
+            if (bcls_p_ & BCLS_CLEAR) { bcls_pass(0, 2); DRAW; }              \
+            if (bcls_p_ & BCLS_SET)   { bcls_pass(0, 1); DRAW; }              \
             bcls_end_geo((semi), (mask), (check));                            \
         }                                                                     \
     } while (0)
@@ -3586,7 +3601,7 @@ static void bcls_end_geo(int semi, int mask, int check) {
  * drawn under; track_stencil lets the canonical pass record deferred stencil
  * (a replay into the high-resolution window must not touch that flag). */
 static void tex_draw_passes_ex(int nverts, int semi, int tb_mask, int check,
-                               int track_stencil) {
+                               int track_stencil, int b3d) {
     p_glUniform1i(s_uSemimode, semi < 0 ? 0 : semi);
     if (semi < 0) {
         glDisable(GL_BLEND);
@@ -3626,10 +3641,11 @@ static void tex_draw_passes_ex(int nverts, int semi, int tb_mask, int check,
         p_glUniform1i(s_uSemipass, 2);
         glDrawArrays(GL_TRIANGLES, 0, nverts);
     }
-    if (s_bcls_on) {
+    if (s_bcls_on && !s_fg_drawing) {
+        const int bp = bcls_passes(semi, b3d);
         bcls_begin(1, 0);
-        bcls_pass(1, 2); glDrawArrays(GL_TRIANGLES, 0, nverts);
-        bcls_pass(1, 1); glDrawArrays(GL_TRIANGLES, 0, nverts);
+        if (bp & BCLS_CLEAR) { bcls_pass(1, 2); glDrawArrays(GL_TRIANGLES, 0, nverts); }
+        if (bp & BCLS_SET)   { bcls_pass(1, 1); glDrawArrays(GL_TRIANGLES, 0, nverts); }
         /* Back to the state the branch above ended in. */
         p_glUniform1i(s_tex_uBcls, 0);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -3651,7 +3667,7 @@ static void tex_draw_passes_ex(int nverts, int semi, int tb_mask, int check,
     }
 }
 static void tex_batch_draw_passes(int nverts, int semi) {
-    tex_draw_passes_ex(nverts, semi, s_tb_mask, s_mask_check, 1);
+    tex_draw_passes_ex(nverts, semi, s_tb_mask, s_mask_check, 1, s_tb_b3d);
 }
 
 /* ---- frame_perf CPU attribution (native-wide wedge hunt) ----------------- *
@@ -3877,7 +3893,7 @@ static void hiw_replay_wide(void) {
             p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
                            s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
             depth_apply_ex(c->depth, 1);
-            tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0);
+            tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0, -1);
             depth_restore_ex(c->depth, 1, c->vcount);
         } else {
             if (cur != HQ_GEO) {
@@ -3894,7 +3910,7 @@ static void hiw_replay_wide(void) {
             p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * 6 * sizeof(float)),
                            s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
             depth_apply_ex(c->depth, 0);
-            BCLS_DRAW(c->semi, c->depth, c->mask, c->check, glDrawArrays(GL_TRIANGLES, 0, c->vcount));
+            BCLS_DRAW(c->semi, c->depth, c->mask, c->check, -1, glDrawArrays(GL_TRIANGLES, 0, c->vcount));
             depth_restore_ex(c->depth, 0, c->vcount);
         }
     }
@@ -3961,7 +3977,7 @@ static void hiw_flush_queue(void) {
                 p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * TEXV * sizeof(float)),
                                s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
                 depth_apply_ex(c->depth, 1);
-                tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0);
+                tex_draw_passes_ex(c->vcount, c->semi, c->mask, c->check, 0, -1);
                 depth_restore_ex(c->depth, 1, c->vcount);
             } else {
                 if (cur != HQ_GEO) {
@@ -3975,7 +3991,7 @@ static void hiw_flush_queue(void) {
                 p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((size_t)c->vcount * 6 * sizeof(float)),
                                s_hq_v + c->vfirst, PSXGL_STREAM_DRAW);
                 depth_apply_ex(c->depth, 0);
-                BCLS_DRAW(c->semi, c->depth, c->mask, c->check, glDrawArrays(GL_TRIANGLES, 0, c->vcount));
+                BCLS_DRAW(c->semi, c->depth, c->mask, c->check, -1, glDrawArrays(GL_TRIANGLES, 0, c->vcount));
                 depth_restore_ex(c->depth, 0, c->vcount);
             }
         }
@@ -4145,6 +4161,7 @@ static void flush_flat_batch_impl(void) {
     if (s_fb_mode != GL_TRIANGLES && !hiw_on())
         hiw_flush_queue();  /* GL_LINES mirror at once: queued mirrors first */
     int nverts = s_fb_n, semi = s_fb_semi, mask = s_fb_mask, nl = s_fbl_n;
+    const int b3d = nl ? -1 : s_fb_b3d;   /* lines in the batch: mixed */
     int dmode = s_fb_depth;
     GLenum fmode = s_fb_mode;
     s_fb_n = 0;
@@ -4161,7 +4178,7 @@ static void flush_flat_batch_impl(void) {
     p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)((nverts + 2 * nl) * 6 * sizeof(float)),
                    s_fb, PSXGL_STREAM_DRAW);
     depth_apply_ex(dmode, 0);
-    BCLS_DRAW(semi, dmode, mask, s_mask_check, if (nl) flat_batch_draw_hr_lines(nverts, nl);
+    BCLS_DRAW(semi, dmode, mask, s_mask_check, b3d, if (nl) flat_batch_draw_hr_lines(nverts, nl);
                        else glDrawArrays(fmode, 0, nverts));
     depth_restore_ex(dmode, 0, nverts);
     int mirror = g_wide_cur && !s_wide_suppress && s_ws_ablate != 1 &&
@@ -4183,7 +4200,7 @@ static void flush_flat_batch_impl(void) {
         wide_target_begin(dx, s_geo_uXoff, s_geo_uXhalf);
         wide_set_bd_scale(s_geo_uXscale, s_geo_uXcenter);
         depth_apply_ex(dmode, 0);
-        if (s_ws_ablate != 2) BCLS_DRAW(semi, dmode, mask, s_mask_check, glDrawArrays(fmode, 0, nverts));
+        if (s_ws_ablate != 2) BCLS_DRAW(semi, dmode, mask, s_mask_check, b3d, glDrawArrays(fmode, 0, nverts));
         depth_restore_ex(dmode, 0, nverts);
         wide_clear_bd_scale(s_geo_uXscale, s_geo_uXcenter);
         wide_target_end(s_geo_uXoff, s_geo_uXhalf);
@@ -4540,7 +4557,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
         p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(draw_n * 6 * sizeof(float)),
                        draw_verts, PSXGL_STREAM_DRAW);
-        BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, glDrawArrays(draw_mode, 0, draw_n));
+        BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, -1, glDrawArrays(draw_mode, 0, draw_n));
         if (is_line && s_out_scale > 1 && draw_mode == GL_LINES) {
             /* windowed: hr drew a 1x line; the S surfaces take the quad */
             p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(6 * 6 * sizeof(float)),
@@ -4564,7 +4581,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
             gl_perf_mirror_begin();
             wide_target_begin(dx, s_geo_uXoff, s_geo_uXhalf);
             wide_set_bd_scale(s_geo_uXscale, s_geo_uXcenter);
-            if (s_ws_ablate != 2) BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, glDrawArrays(draw_mode, 0, draw_n));
+            if (s_ws_ablate != 2) BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, -1, glDrawArrays(draw_mode, 0, draw_n));
             wide_clear_bd_scale(s_geo_uXscale, s_geo_uXcenter);
             wide_target_end(s_geo_uXoff, s_geo_uXhalf);
             gl_perf_mirror_end();
@@ -4841,7 +4858,7 @@ static void wide_flat_rect_direct(int wx, int y, int ww, int h, uint16_t c, int 
     p_glBindVertexArray(s_geo_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
     p_glBufferData(PSXGL_ARRAY_BUFFER, sizeof verts, verts, PSXGL_STREAM_DRAW);
-    BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, glDrawArrays(GL_TRIANGLES, 0, 6));
+    BCLS_DRAW(semi, 0, (int)s_mask_set, s_mask_check, 0, glDrawArrays(GL_TRIANGLES, 0, 6));
     if (s_hiw) p_glUniform1f(s_geo_uShift, s_shift_hr);
     p_glUniform1f(s_geo_uXoff, 0.0f);
     p_glUniform1f(s_geo_uXhalf, 512.0f);
@@ -9963,9 +9980,12 @@ static void wide_blit_center(GLuint wide_fbo, int base_x, int disp_y, int disp_h
     if (native_w <= 0) return;
     int S = s_out_scale;
     (void)disp_y; (void)disp_h;
-    /* Bloom on: the centre's bloom-source bits (stencil bit 1) come with it;
-     * bit 0 is rebuilt from alpha anyway (the wst_add below). */
-    const GLbitfield bits = GL_COLOR_BUFFER_BIT | (s_bcls_on ? GL_STENCIL_BUFFER_BIT : 0);
+    /* The mask's bits (stencil bit 1) of the centre are not copied (a
+     * depth-stencil blit costs the CPU milliseconds on macOS): the mask takes
+     * them from the hr surface itself (postfx_note_center). The windowed
+     * high-resolution tiles are the exception: there the centre comes from
+     * tiles and the bits travel with it. */
+    const GLbitfield bits = GL_COLOR_BUFFER_BIT | (s_bcls_on && s_hiw ? GL_STENCIL_BUFFER_BIT : 0);
     /* Colour only: the centre's stencil is left behind (see s_wst_*). */
     wst_add(wide_index(wide_fbo), g_wide_off, 0, g_wide_off + native_w, VRAM_H);
     /* Copy the canonical framebuffer column into the wide surface CENTRE over the
@@ -10105,6 +10125,10 @@ static int present_wide_fbo_impl(int disp_x, int disp_y, int disp_h, int linear)
                         0, disp_y, g_wide_w, disp_h, linear, lx, ly, lw, lh, 1, 1, s_out_scale);
     postfx_note_source(fbo, tex, (float)g_wide_w * wext, (float)VRAM_H * wext,
                       0, disp_y, g_wide_w, disp_h);
+    if (!s_hiw && wide_center_is_canonical() && g_wide_w > 2 * g_wide_off)
+        postfx_note_center(s_hr_fbo, s_hr_tex, present_alloc_extent(VRAM_W, s_hr_scale),
+                           present_alloc_extent(VRAM_H, s_hr_scale), disp_x, disp_y,
+                           g_wide_w - 2 * g_wide_off, disp_h, g_wide_off, g_wide_w);
     pres_record(GL_PRES_WIDE, disp_x, disp_y, g_wide_w, disp_h, lx, ly, lw, lh);
     gpu_timeline_note(GTL_PRESENT, GTL_PATH_WIDE_FBO,
                       (uint32_t)disp_x | ((uint32_t)disp_y << 16));
@@ -11667,18 +11691,7 @@ static void fg_blit2(GLuint src, GLuint dst, int sx, int sy, int dx, int dy, int
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, src);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, dst);
     glDisable(GL_SCISSOR_TEST);
-    /* Bloom on: the bloom-source bits come along (stencil bit 1; bit 0 is
-     * marked stale by the caller and rebuilt from alpha). */
-    p_glBlitFramebuffer(sx, sy, sx + w, sy + h, dx, dy, dx + w, dy + h,
-                        GL_COLOR_BUFFER_BIT | (s_bcls_on ? GL_STENCIL_BUFFER_BIT : 0), GL_NEAREST);
-    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
-    p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
-}
-static void fg_blit_stencil(GLuint src, GLuint dst, int sx, int sy, int dx, int dy, int w, int h) {
-    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, src);
-    p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, dst);
-    glDisable(GL_SCISSOR_TEST);
-    p_glBlitFramebuffer(sx, sy, sx + w, sy + h, dx, dy, dx + w, dy + h, GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+    p_glBlitFramebuffer(sx, sy, sx + w, sy + h, dx, dy, dx + w, dy + h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
 }
@@ -11982,18 +11995,17 @@ static void fg_compose(const FgList *b, GLuint wide_fbo, GLuint wide_tex, int li
     if (b->wide) {
         present_target_quad(wide_tex, (float)g_wide_w, (float)VRAM_H, 0, b->disp[1], g_wide_w,
                             b->disp[3], linear, lx, ly, lw, lh, 1, 1, s_out_scale);
-        postfx_note_source(wide_fbo, wide_tex, (float)g_wide_w, (float)VRAM_H, 0, b->disp[1],
-                          g_wide_w, b->disp[3]);
     } else {
         present_bezel(ww, wh, lx, ly, lw, lh);
         present_target_quad(s_hr_tex, (float)VRAM_W, (float)VRAM_H, b->disp[0], b->disp[1],
                             b->disp[2], b->disp[3], linear, lx, ly, lw, lh, 1, 1, s_out_scale);
-        postfx_note_source(s_hr_fbo, s_hr_tex, (float)VRAM_W, (float)VRAM_H, b->disp[0], b->disp[1],
-                          b->disp[2], b->disp[3]);
     }
     /* A generated frame is the same picture: the same chains (AA stays on
-     * real frames only, as before the pipeline). */
-    if (postfx_active()) postfx_present(1, 0, lx, ly, lw, lh);
+     * real frames only, as before the pipeline). It takes the newer real
+     * frame's mask: no stencil copies into the generation surfaces (a
+     * depth-stencil blit costs the CPU milliseconds on macOS) and no marking
+     * while they are drawn. */
+    if (postfx_active()) postfx_present(0, 0, lx, ly, lw, lh);
 }
 
 /* Draw and present the frame at phase t between the two lists. Returns 1
@@ -12567,11 +12579,6 @@ static int fg_generate(double t, int swap) {
     if (L->disp[0] != b->disp[0] || lh != dh || L->disp[2] != b->disp[2]) return 0;
     /* Reprojected frames start from the list's snapshot instead (below). */
     const int will_rp = s_fg_reproject && L == b && s_fg_fit.ok && rp_snap_slot((int)(L - s_fg_l)) >= 0;
-    if (will_rp && s_bcls_on) {
-        /* The warp writes colour only: the newer real frame's bloom sources. */
-        fg_blit_stencil(s_hr_fbo, s_fg_hr_fbo, b->disp[0] * S, dy * S, L->disp[0] * S, ly * S, b->disp[2] * S, dh * S);
-        if (iw >= 0) fg_blit_stencil(s_wide_fbo[iw], s_fg_w_fbo, 0, dy * S, 0, ly * S, g_wide_w * S, dh * S);
-    }
     if (!will_rp) {
         fg_blit2(s_hr_fbo, s_fg_hr_fbo, b->disp[0] * S, dy * S, L->disp[0] * S, ly * S, b->disp[2] * S, dh * S);
         if (iw >= 0) fg_blit2(s_wide_fbo[iw], s_fg_w_fbo, 0, dy * S, 0, ly * S, g_wide_w * S, dh * S);

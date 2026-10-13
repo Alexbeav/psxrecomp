@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
     }
 #ifndef BLOOM_FIXTURE_NO_BLOOM
     GlBloomInfo bi;
-    gl_renderer_bloom_debug(-1.0f, -1.0f, -1, -1, &bi);
+    gl_renderer_bloom_debug(-1.0f, -1.0f, -1, &bi);
     check(bi.passes == 0, "off never runs the bloom pass");
     for (int pass = 0; pass < 2; pass++) {   /* 0: this thread, 1: render thread */
         if (pass == 1) {
@@ -214,6 +214,16 @@ int main(int argc, char **argv) {
         fputs("void main(){ float m = texelFetch(u_mask, ivec2(gl_FragCoord.xy) - u_org, 0).r;\n"
               "  o = vec4(vec3(m), 1.0); }\n", f);
         fclose(f);
+        f = fopen("pfx_screen.pfx", "wb");
+        fputs("pfx 1\npass down\n  shader pfx_copy.glsl\n  input u_tex source_down\n  scale 0.5\n"
+              "pass screen\n  shader pfx_half.glsl\n  input u_down down\n  blend screen\n", f);
+        fclose(f);
+        f = fopen("pfx_copy.glsl", "wb");
+        fputs("void main(){ o = textureLod(u_tex, v_uv, 0.0); }\n", f);
+        fclose(f);
+        f = fopen("pfx_half.glsl", "wb");   /* red 0.5 screen-blended; u_down read so it stays bound */
+        fputs("void main(){ o = vec4(0.5 + 0.0 * textureLod(u_down, v_uv, 0.0).r, 0.0, 0.0, 0.0); }\n", f);
+        fclose(f);
         f = fopen("pfx_bad.pfx", "w");
         fputs("pfx 1\npass x\n  shader builtin:nope\n", f);
         fclose(f);
@@ -251,6 +261,18 @@ int main(int argc, char **argv) {
         check(lit > s_cap_w * s_cap_h / 2, "mask input: the 3D ground and lamp are lit");
         free(m);
 
+        gl_renderer_set_post_shader("pfx_screen.pfx");
+        check(gl_renderer_post_shader_loaded(), "source_down + blend screen chain loads");
+        uint8_t *sc = frame(SC_PARTIAL, 0.0f, &h);
+        long bad = 0;
+        for (int i = 0; i < s_cap_w * s_cap_h; i++) {
+            const int c0 = off[SC_PARTIAL][i * 3], want = (int)(127.5f + (float)c0 * 0.5f + 0.5f);
+            bad += abs(sc[i * 3] - want) > 1 || sc[i * 3 + 1] != off[SC_PARTIAL][i * 3 + 1] ||
+                   sc[i * 3 + 2] != off[SC_PARTIAL][i * 3 + 2];
+        }
+        printf("%s screen: mismatches=%ld\n", pass ? "rt" : "st", bad);
+        check(bad == 0, "blend screen: o + dst * (1 - o) on the window, other channels untouched");
+        free(sc);
         gl_renderer_set_post_shader("pfx_bad.pfx");
         check(!gl_renderer_post_shader_loaded(), "a bad preset is refused");
         gl_renderer_set_post_shader("pfx_nocompile.pfx");

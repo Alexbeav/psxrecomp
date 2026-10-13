@@ -43,6 +43,8 @@ typedef struct {
     GLuint   prog[PFX_MAX_PASSES];
     PfxLocs  loc[PFX_MAX_PASSES];
     GLuint   tex[PFX_MAX_PASSES], fbo[PFX_MAX_PASSES];
+    GLuint   dtex[PFX_MAX_PASSES], dfbo[PFX_MAX_PASSES];   /* source_down copies */
+    int      dw[PFX_MAX_PASSES], dh[PFX_MAX_PASSES];
     int      tw[PFX_MAX_PASSES], th[PFX_MAX_PASSES];
 } PfxStage;
 enum { PFX_STAGE_BLOOM, PFX_STAGE_USER, PFX_STAGE_AA, PFX_STAGE_HQ, PFX_NSTAGES };
@@ -51,7 +53,6 @@ static char   s_pfx_user_path[1024] = "";
 static int    s_pfx_user_env = 0;
 
 static float  s_bloom_thr = 0.55f;          /* bloom bright-pass threshold */
-static int    s_bloom_view = 0;             /* debug: 1 bloom only, 2 split */
 static uint64_t s_bloom_passes = 0;
 static int    s_bloom_time = 0;             /* debug: glFinish-bracketed cost */
 static double s_bloom_us_sum = 0.0; static uint64_t s_bloom_us_n = 0;   /* real frames */
@@ -59,11 +60,24 @@ static double s_bloom_gus_sum = 0.0; static uint64_t s_bloom_gus_n = 0; /* gener
 static uint64_t s_pfx_reused = 0;           /* passes skipped on generated frames */
 
 /* The mask (see above). */
-static GLuint s_mask_src_fbo = 0;
+static GLuint s_mask_src_fbo = 0, s_mask_src_rb = 0;
+static int    s_mask_src_tw = 0, s_mask_src_th = 0;
 static int    s_mask_src[4];                /* x0,y0,x1,y1 in source FBO px (y0 = top) */
 static int    s_mask_src_valid = 0, s_mask_ok = 0;
-static GLuint s_mask_tex = 0, s_mask_rb = 0, s_mask_fbo = 0, s_mask_prog = 0;
+/* Native-wide: the centre's marks come from the hr surface (its copy into
+ * the wide surface is colour only). */
+static GLuint s_mask_ctr_fbo = 0, s_mask_ctr_rb = 0;
+static int    s_mask_ctr_tw = 0, s_mask_ctr_th = 0;
+static int    s_mask_ctr[4], s_mask_ctr_valid = 0;
+static float  s_mask_ctr_x0 = 0.0f, s_mask_ctr_x1 = 0.0f;   /* fractions of the displayed width */
+static GLuint s_mask_tex = 0, s_mask_fbo = 0, s_mask_prog = 0, s_mask_map_prog = 0;
 static GLint  s_mask_uUv = -1, s_mask_uV = -1;
+static GLint  s_mmap_uUv = -1, s_mmap_uS = -1, s_mmap_uSrc = -1, s_mmap_uDst = -1;
+/* Marks resolved in the surfaces' own px: an R8 texture per surface,
+ * attached with that surface's own depth-stencil renderbuffer, so no
+ * depth-stencil blit is needed (one costs the CPU milliseconds on macOS). */
+typedef struct { GLuint rb, tex, fbo; int w, h; } PfxSurfMask;
+static PfxSurfMask s_smask[2];
 static int    s_mask_w = 0, s_mask_h = 0;
 
 static int pfx_stage_on(int i) {
@@ -86,8 +100,11 @@ static void pfx_stage_unload(PfxStage *st) {
             if (st->prog[i]) p_glDeleteProgram(st->prog[i]);
             if (st->fbo[i]) p_glDeleteFramebuffers(1, &st->fbo[i]);
             if (st->tex[i]) glDeleteTextures(1, &st->tex[i]);
+            if (st->dfbo[i]) p_glDeleteFramebuffers(1, &st->dfbo[i]);
+            if (st->dtex[i]) glDeleteTextures(1, &st->dtex[i]);
         }
         st->prog[i] = st->tex[i] = st->fbo[i] = 0; st->tw[i] = st->th[i] = 0;
+        st->dtex[i] = st->dfbo[i] = 0; st->dw[i] = st->dh[i] = 0;
     }
     pfx_chain_free(&st->chain);
     st->loaded = st->failed = 0;
@@ -144,23 +161,54 @@ static GLuint pfx_build_pass(const PfxPass *ps) {
     return prog;
 }
 
-/* The presented surface: its FBO and the displayed rect, in native units of
- * a texture tex_w x tex_h native units across (as present_target_quad). */
-static void postfx_note_source(GLuint fbo, GLuint tex, float tex_w, float tex_h,
-                               int x, int y, int w, int h) {
-    s_mask_src_valid = 0;
-    if (!s_bcls_on || !fbo || !tex || tex_w <= 0.0f || tex_h <= 0.0f) return;
+/* The depth-stencil renderbuffer of a presentable surface (0: unknown). */
+static GLuint pfx_surface_rb(GLuint fbo) {
+    if (fbo == s_hr_fbo) return s_hr_rb;
+    for (int i = 0; i < s_hiw_n; i++) if (s_hiw_t[i].fbo == fbo) return s_hiw_t[i].rb;
+    const int wi = wide_index(fbo);
+    return wi >= 0 ? s_wide_rb[wi] : 0;
+}
+/* A displayed rect of a surface in that surface's px (y0 = top row). */
+static void pfx_rect_px(GLuint tex, float tex_w, float tex_h, int x, int y, int w, int h, int out[4],
+                        int *out_tw, int *out_th) {
     GLint tw = 0, th = 0;
     glBindTexture(GL_TEXTURE_2D, tex);
     glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
     glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
     glBindTexture(GL_TEXTURE_2D, 0);
     const float sx = (float)tw / tex_w, sy = (float)th / tex_h;
+    *out_tw = tw; *out_th = th;
+    out[0] = (int)lrintf((float)x * sx);
+    out[1] = (int)lrintf((float)y * sy);
+    out[2] = (int)lrintf((float)(x + w) * sx);
+    out[3] = (int)lrintf((float)(y + h) * sy);
+}
+/* Native-wide: the centre (native px x..x+w of the hr surface) shows at
+ * native-wide columns off..off+w of the wide_w displayed. */
+static void postfx_note_center(GLuint fbo, GLuint tex, float tex_w, float tex_h,
+                               int x, int y, int w, int h, int off, int wide_w) {
+    s_mask_ctr_valid = 0;
+    if (!s_bcls_on || !fbo || !tex || wide_w <= 0) return;
+    s_mask_ctr_rb = pfx_surface_rb(fbo);
+    if (!s_mask_ctr_rb) return;
+    pfx_rect_px(tex, tex_w, tex_h, x, y, w, h, s_mask_ctr, &s_mask_ctr_tw, &s_mask_ctr_th);
+    s_mask_ctr_fbo = fbo;
+    s_mask_ctr_x0 = (float)off / (float)wide_w;
+    s_mask_ctr_x1 = (float)(off + w) / (float)wide_w;
+    s_mask_ctr_valid = 1;
+}
+
+/* The presented surface: its FBO and the displayed rect, in native units of
+ * a texture tex_w x tex_h native units across (as present_target_quad). */
+static void postfx_note_source(GLuint fbo, GLuint tex, float tex_w, float tex_h,
+                               int x, int y, int w, int h) {
+    s_mask_src_valid = 0;
+    s_mask_ctr_valid = 0;
+    if (!s_bcls_on || !fbo || !tex || tex_w <= 0.0f || tex_h <= 0.0f) return;
+    s_mask_src_rb = pfx_surface_rb(fbo);
+    if (!s_mask_src_rb) return;
+    pfx_rect_px(tex, tex_w, tex_h, x, y, w, h, s_mask_src, &s_mask_src_tw, &s_mask_src_th);
     s_mask_src_fbo = fbo;
-    s_mask_src[0] = (int)lrintf((float)x * sx);
-    s_mask_src[1] = (int)lrintf((float)y * sy);
-    s_mask_src[2] = (int)lrintf((float)(x + w) * sx);
-    s_mask_src[3] = (int)lrintf((float)(y + h) * sy);
     s_mask_src_valid = 1;
 }
 
@@ -182,43 +230,80 @@ static void pfx_fbo_attach(GLuint *f, GLuint tex) {
 }
 
 /* Window-sized mask from the presented surface's marks (fresh) or the last. */
+/* The marks of rect r (surface px) of surface rb (tw x th px) into slot k's
+ * R8 texture: 0 over the rect, then 1 where stencil bit 1 is set. */
+static int pfx_surf_mask(int k, GLuint rb, int tw, int th, const int r[4]) {
+    PfxSurfMask *m = &s_smask[k];
+    if (m->rb != rb || m->w != tw || m->h != th) {
+        pfx_tex_alloc(&m->tex, tw, th, -1, 1);
+        pfx_fbo_attach(&m->fbo, m->tex);
+        p_glFramebufferRenderbuffer(PSXGL_FRAMEBUFFER, PSXGL_DEPTH_STENCIL_ATTACHMENT,
+                                    PSXGL_RENDERBUFFER, rb);
+        m->rb = rb; m->w = tw; m->h = th;
+    }
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, m->fbo);
+    glViewport(r[0], r[1], r[2] - r[0], r[3] - r[1]);
+    p_glUseProgram(s_mask_prog);
+    p_glUniform1f(s_mask_uV, 0.0f);
+    post_fullscreen(s_mask_prog, s_mask_uUv);
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_EQUAL, 0x02, 0x02);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    p_glUniform1f(s_mask_uV, 1.0f);
+    post_fullscreen(s_mask_prog, s_mask_uUv);
+    glDisable(GL_STENCIL_TEST);
+    return 1;
+}
+/* Slot k's rect r into window columns [x0, x1) of the lw x lh mask, the way
+ * a NEAREST blit (row 0 = the rect's bottom) would map it. */
+static void pfx_mask_map(int k, const int r[4], int x0, int x1, int lh) {
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_mask_fbo);
+    glViewport(x0, 0, x1 - x0, lh);
+    p_glUseProgram(s_mask_map_prog);
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_smask[k].tex);
+    p_glUniform1i(s_mmap_uS, 0);
+    p_glUniform4i(s_mmap_uSrc, r[0], r[1], r[2], r[3]);
+    p_glUniform4f(s_mmap_uDst, (float)x0, (float)(x1 - x0), (float)lh, 0.0f);
+    post_fullscreen(s_mask_map_prog, s_mmap_uUv);
+}
+
+/* Window-sized mask from the presented surface's marks (fresh) or the last. */
 static int pfx_mask_build(int fresh, int lw, int lh) {
     if (!s_mask_prog) {
         s_mask_prog = build_program(PRESENT_VS,
             "#version 330\nin vec2 v_uv; out vec4 o; uniform float u_v;\nvoid main(){ o = vec4(u_v); }\n");
-        if (!s_mask_prog) return 0;
+        s_mask_map_prog = build_program(PRESENT_VS,
+            "#version 330\nin vec2 v_uv; out vec4 o; uniform sampler2D u_s;\n"
+            "uniform ivec4 u_src; uniform vec4 u_dst;\n"   /* dst: x0, width, height */
+            "void main(){\n"
+            "  vec2 f = gl_FragCoord.xy;\n"
+            "  int sx = u_src.x + int(floor((f.x - u_dst.x) * float(u_src.z - u_src.x) / u_dst.y));\n"
+            "  int sy = u_src.y + int(floor((u_dst.z - f.y) * float(u_src.w - u_src.y) / u_dst.z));\n"
+            "  o = vec4(texelFetch(u_s, ivec2(sx, sy), 0).r);\n"
+            "}\n");
+        if (!s_mask_prog || !s_mask_map_prog) { s_mask_prog = 0; return 0; }
         s_mask_uUv = p_glGetUniformLocation(s_mask_prog, "u_uv_rect");
         s_mask_uV = p_glGetUniformLocation(s_mask_prog, "u_v");
+        s_mmap_uUv = p_glGetUniformLocation(s_mask_map_prog, "u_uv_rect");
+        s_mmap_uS = p_glGetUniformLocation(s_mask_map_prog, "u_s");
+        s_mmap_uSrc = p_glGetUniformLocation(s_mask_map_prog, "u_src");
+        s_mmap_uDst = p_glGetUniformLocation(s_mask_map_prog, "u_dst");
     }
     if (s_mask_w != lw || s_mask_h != lh) {
         pfx_tex_alloc(&s_mask_tex, lw, lh, -1, 1);
         pfx_fbo_attach(&s_mask_fbo, s_mask_tex);
-        if (!s_mask_rb) p_glGenRenderbuffers(1, &s_mask_rb);
-        p_glBindRenderbuffer(PSXGL_RENDERBUFFER, s_mask_rb);
-        p_glRenderbufferStorage(PSXGL_RENDERBUFFER, PSXGL_DEPTH24_STENCIL8, lw, lh);
-        p_glFramebufferRenderbuffer(PSXGL_FRAMEBUFFER, PSXGL_DEPTH_STENCIL_ATTACHMENT,
-                                    PSXGL_RENDERBUFFER, s_mask_rb);
         s_mask_w = lw; s_mask_h = lh; s_mask_ok = 0;
     }
     if (fresh && s_mask_src_valid) {
-        /* source rect (y0 = top row) -> window orientation (row 0 = bottom) */
-        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, s_mask_src_fbo);
-        p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_mask_fbo);
-        p_glBlitFramebuffer(s_mask_src[0], s_mask_src[1], s_mask_src[2], s_mask_src[3],
-                            0, lh, lw, 0, GL_STENCIL_BUFFER_BIT, GL_NEAREST);
-        p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_mask_fbo);
-        glViewport(0, 0, lw, lh);
-        /* 0 everywhere, then 1 where the marks are (no clear: the clear
-         * colour is caller state this pass would have to query back). */
-        p_glUseProgram(s_mask_prog);
-        p_glUniform1f(s_mask_uV, 0.0f);
-        post_fullscreen(s_mask_prog, s_mask_uUv);
-        glEnable(GL_STENCIL_TEST);
-        glStencilFunc(GL_EQUAL, 0x02, 0x02);
-        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-        p_glUniform1f(s_mask_uV, 1.0f);
-        post_fullscreen(s_mask_prog, s_mask_uUv);
-        glDisable(GL_STENCIL_TEST);
+        pfx_surf_mask(0, s_mask_src_rb, s_mask_src_tw, s_mask_src_th, s_mask_src);
+        if (s_mask_ctr_valid)
+            pfx_surf_mask(1, s_mask_ctr_rb, s_mask_ctr_tw, s_mask_ctr_th, s_mask_ctr);
+        pfx_mask_map(0, s_mask_src, 0, lw, lh);
+        if (s_mask_ctr_valid) {
+            const int c0 = (int)lrintf(s_mask_ctr_x0 * (float)lw), c1 = (int)lrintf(s_mask_ctr_x1 * (float)lw);
+            if (c1 > c0) pfx_mask_map(1, s_mask_ctr, c0, c1, lh);
+        }
         s_mask_ok = 1;
     }
     return s_mask_ok;
@@ -227,11 +312,12 @@ static int pfx_mask_build(int fresh, int lw, int lh) {
 /* Run one stage's chain over the window rect. 0 when it could not run.
  * generated: a Smooth motion in-between frame; passes marked `generated
  * reuse` keep the target the last real frame left (when it is there at this
- * size) instead of running. */
+ * size) instead of running. The full-size copy of the image is made only
+ * if a pass that runs reads `source`; `source_down` is a blit of the window
+ * rect straight to that pass's size. */
 static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, int lh) {
     PfxChain *c = &st->chain;
-    post_copy_bind(lw, lh);
-    post_copy_window(lx, ly, lw, lh);
+    int copied = 0;
     for (int i = 0; i < c->npasses; i++) {
         const PfxPass *ps = &c->pass[i];
         const int last = i == c->npasses - 1;
@@ -268,18 +354,33 @@ static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, in
                 pfx_fbo_attach(&st->fbo[i], st->tex[i]);
                 st->tw[i] = w; st->th[i] = h;
             }
-            p_glBindFramebuffer(PSXGL_FRAMEBUFFER, st->fbo[i]);
-            glViewport(0, 0, w, h);
-        } else {
-            p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
-            glViewport(lx, ly, lw, lh);
         }
+        /* The image this pass reads, before its target is bound. */
+        for (int k = 0; k < ps->ninputs; k++) {
+            if (ps->in[k].from == PFX_IN_SOURCE && !copied) {
+                post_copy_bind(lw, lh);
+                post_copy_window(lx, ly, lw, lh);
+                copied = 1;
+            } else if (ps->in[k].from == PFX_IN_SOURCE_DOWN) {
+                if (st->dw[i] != w || st->dh[i] != h) {
+                    pfx_tex_alloc(&st->dtex[i], w, h, PFX_FMT_RGBA8, 0);
+                    pfx_fbo_attach(&st->dfbo[i], st->dtex[i]);
+                    st->dw[i] = w; st->dh[i] = h;
+                }
+                p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
+                p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, st->dfbo[i]);
+                p_glBlitFramebuffer(lx, ly, lx + lw, ly + lh, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            }
+        }
+        if (last) { p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0); glViewport(lx, ly, lw, lh); }
+        else { p_glBindFramebuffer(PSXGL_FRAMEBUFFER, st->fbo[i]); glViewport(0, 0, w, h); }
         const GLuint prog = st->prog[i];
         const PfxLocs *L = &st->loc[i];
         p_glUseProgram(prog);
         for (int k = 0; k < ps->ninputs; k++) {
             const int from = ps->in[k].from;
             const GLuint t = from == PFX_IN_SOURCE ? s_post_copy_tex
+                           : from == PFX_IN_SOURCE_DOWN ? st->dtex[i]
                            : from == PFX_IN_MASK ? s_mask_tex : st->tex[from];
             p_glActiveTexture(PSXGL_TEXTURE0 + (GLenum)k);
             glBindTexture(GL_TEXTURE_2D, t);
@@ -300,7 +401,13 @@ static int pfx_stage_run(PfxStage *st, int generated, int lx, int ly, int lw, in
             default: p_glUniform4f(loc, u->v[0], u->v[1], u->v[2], u->v[3]); break;
             }
         }
+        if (ps->blend == PFX_BLEND_SCREEN) {
+            glEnable(GL_BLEND);
+            p_glBlendEquationSeparate(PSXGL_FUNC_ADD, PSXGL_FUNC_ADD);
+            p_glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_COLOR, GL_ZERO, GL_ONE);
+        }
         post_fullscreen(prog, L->fixed[PFX_LOC_UV]);
+        if (ps->blend != PFX_BLEND_REPLACE) glDisable(GL_BLEND);
     }
     for (int k = PFX_MAX_INPUTS - 1; k >= 0; k--) {
         p_glActiveTexture(PSXGL_TEXTURE0 + (GLenum)k);
@@ -357,10 +464,9 @@ static void postfx_present(int fresh, int with_aa, int lx, int ly, int lw, int l
             if (!mask_ok) continue;                  /* no marks yet */
         }
         if (i == PFX_STAGE_BLOOM) {
-            const float k = s_bloom, view = (float)s_bloom_view;
+            const float k = s_bloom;
             pfx_chain_set_uniform(&st->chain, "u_strength", 1, &k);
             pfx_chain_set_uniform(&st->chain, "u_thr", 1, &s_bloom_thr);
-            pfx_chain_set_uniform(&st->chain, "u_view", 1, &view);
         }
         int reps = 1; double *sum = NULL; uint64_t *cnt = NULL;
 #ifndef PSX_NO_DEBUG_TOOLS
@@ -393,7 +499,7 @@ static void postfx_present(int fresh, int with_aa, int lx, int ly, int lw, int l
         if (i == PFX_STAGE_BLOOM) s_bloom_passes++;
         if (i == PFX_STAGE_AA || i == PFX_STAGE_HQ) s_paa_passes++;
     }
-    s_mask_src_valid = 0;
+    s_mask_src_valid = 0; s_mask_ctr_valid = 0;
     pfx_state_restore(&saved);
 }
 
@@ -403,10 +509,12 @@ static void postfx_release(void) {
         for (int k = 0; k < PFX_MAX_PASSES; k++) {
             s_pfx[i].prog[k] = s_pfx[i].tex[k] = s_pfx[i].fbo[k] = 0;
             s_pfx[i].tw[k] = s_pfx[i].th[k] = 0;
+            s_pfx[i].dtex[k] = s_pfx[i].dfbo[k] = 0; s_pfx[i].dw[k] = s_pfx[i].dh[k] = 0;
         }
         s_pfx[i].failed = 0;
     }
-    s_mask_tex = s_mask_rb = s_mask_fbo = s_mask_prog = 0;
+    s_mask_tex = s_mask_fbo = s_mask_prog = s_mask_map_prog = 0;
+    memset(s_smask, 0, sizeof s_smask);
     s_mask_w = s_mask_h = 0; s_mask_ok = 0; s_mask_src_valid = 0;
 }
 
@@ -447,15 +555,14 @@ void gl_renderer_set_bloom(float strength) {
 }
 float gl_renderer_get_bloom(void) { return s_bloom; }
 
-void gl_renderer_bloom_debug(float strength, float threshold, int view, int time,
+void gl_renderer_bloom_debug(float strength, float threshold, int time,
                              GlBloomInfo *out) {
     GL_RT_SYNC("bloom_debug");
     if (strength >= 0.0f && strength <= 2.0f) { s_bloom = strength; pfx_mask_wanted_update(); }
     if (threshold > 0.0f) s_bloom_thr = threshold;
-    if (view >= 0 && view <= 2) s_bloom_view = view;
     if (time >= 0) s_bloom_time = time ? 1 : 0;
     if (out) {
-        out->strength = s_bloom; out->threshold = s_bloom_thr; out->view = s_bloom_view;
+        out->strength = s_bloom; out->threshold = s_bloom_thr;
         out->passes = s_bloom_passes;
         out->us_mean = s_bloom_us_n ? s_bloom_us_sum / (double)s_bloom_us_n : 0.0;
         out->us_n = s_bloom_us_n;

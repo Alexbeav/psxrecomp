@@ -9,11 +9,15 @@
  *   pfx 1                              # format version (required first)
  *   pass <name>                        # starts a pass; the last pass writes the window
  *     shader <file.glsl|builtin:name>  # fragment body (see below)
- *     input <sampler> <source|mask|previous|<pass name>>
+ *     input <sampler> <source|source_down|mask|previous|<pass name>>
+ *                                      # source_down: the image scaled to this pass's
+ *                                      # target (one bilinear blit, no full-size copy)
  *     scale <f>                        # target size, fraction of the game rect (default 1)
  *     format rgba8|rgba16f             # target format (default rgba8)
  *     filter linear|nearest            # how later passes sample this target (default linear)
  *     uniform <name> <f> [f [f [f]]]   # float, vec2, vec3 or vec4
+ *     blend replace|screen             # how the window pass lands (default replace):
+ *                                      # screen = o + dst * (1 - o); discard leaves dst
  *     generated reuse|run              # Smooth motion's generated frames: reuse this
  *                                      # pass's target from the last real frame (not
  *                                      # for the last pass), or run it (default)
@@ -34,7 +38,8 @@ extern "C" {
 
 enum { PFX_MAX_PASSES = 16, PFX_MAX_INPUTS = 4, PFX_MAX_UNIFORMS = 8, PFX_NAME = 32 };
 /* Input sources; a value >= 0 is an earlier pass's index. */
-enum { PFX_IN_SOURCE = -1, PFX_IN_MASK = -2 };
+enum { PFX_IN_SOURCE = -1, PFX_IN_MASK = -2, PFX_IN_SOURCE_DOWN = -3 };
+enum { PFX_BLEND_REPLACE = 0, PFX_BLEND_SCREEN = 1 };
 enum { PFX_FMT_RGBA8 = 0, PFX_FMT_RGBA16F = 1 };
 
 typedef struct {
@@ -54,6 +59,7 @@ typedef struct {
     float      scale;
     int        format, nearest;
     int        reuse_generated;      /* generated frames reuse the last real frame's target */
+    int        blend;                /* PFX_BLEND_*: the window pass only */
     int        ninputs, nuniforms;
     PfxInput   in[PFX_MAX_INPUTS];
     PfxUniform u[PFX_MAX_UNIFORMS];
