@@ -509,6 +509,39 @@ counter word are not individually made (`frame_fingerprint` `wc`/`ws` count
 fewer writes, its judge columns match). In R4 races it removes about a quarter
 of the emulation thread's time. Off under netplay, like `idle_skip`.
 
+#### Developer contract for `idle_skip_store_counters`
+
+A skip leaves out stores to the counter word that the guest would have made.
+That is invisible only if nothing observes the word between those stores. The
+assumptions, and how each one is enforced:
+
+| Assumption | Enforced by |
+|---|---|
+| The loop makes exactly one guest store per pass: a 4-byte-aligned word in RAM or the scratchpad, at the same address every pass, one lower each pass. | `idle_stores_ok` plus the address/value check at the anchor. Any other store count, any device or BIOS-area address, or a changed pattern resets the detector. |
+| The loop touches no MMIO, so it cannot start DMA, acknowledge an IRQ or poll a device mid-span. | `g_mmio_access_count` must be unchanged across the pass. |
+| Everything else in the pass is a pure function of the registers. Only the counter register and the counter word progress; every other GPR is invariant at the anchor. | The register snapshot is compared at the anchor; one progress register is allowed, and only if it moves in step with the word. |
+| No other observer (IRQ handler, DMA, timer, SPU, CD, GPU, host-side mod or debugger code) runs between two device events. | The skip lands on the anchor strictly before the next scheduled device event, measured from the current cycle. Every IRQ, DMA completion and VBlank callback therefore sees the counter value that unskipped execution would have stored at that same edge. Host mod hooks run only at VBlank or at function entry, and neither happens inside the span. |
+| The loop's own exit test still runs. | The counter is never lowered to 1 or below, so the `--timeout == -1` path executes for real. |
+| The game does not alias the counter word through another pointer that it reads inside the loop. | Implied by the above: any such read sits on a code path that also runs between edges, and its result can only feed registers that must be invariant. A loop that reads the word through an alias and branches on it shows up as a register or edge-count change, and the detector rejects it. |
+
+What differs from unskipped execution: the guest store count (`frame_fingerprint`
+`wc`/`ws`) and the host time. Guest cycles, device-register writes, scratchpad
+and RAM contents at every device event are the same. That is why the judge
+columns `cyc`, `mmio`, `mc`, `sp`, `sc` and `qc` must match. A title that
+breaks one of the assumptions in a way the detector cannot see (for example, a
+second CPU-side writer driven by a device it does not schedule) must leave
+the key off.
+
+Evidence (R4, OpenBIOS, M4 release build with debug tools, `frame_fingerprint`, key off vs on):
+
+- boot into attract: 9000 frames
+- race from a savestate: 3600 frames
+- all judge columns identical, 0 dispatch misses
+- `wc`/`ws` lower with the key on
+
+The other psxrecomp titles have no disc in this test setup, so they keep the
+key off until they are run the same way.
+
 ### `turbo_loads` / `offer_turbo_loads` — deprecated and ignored
 
 **Do not use these keys.** Load acceleration is owned by the Mods catalog:
