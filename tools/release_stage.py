@@ -706,8 +706,13 @@ def stage_linux_tcc(toolchain, dl_cache, pins, log=print):
     cc = os.environ.get('CC', 'cc')
     _run_build(['./configure', '--prefix=' + inst, '--cc=' + cc,
                 '--extra-cflags=-O2'], tcc_src, 'tcc configure')
-    _run_build(['make', '-j%d' % (os.cpu_count() or 2)], tcc_src, 'tcc build')
-    _run_build(['make', 'install'], tcc_src, 'tcc install')
+    # BCHECK_O= : leave out lib/bcheck.o, tcc's legacy bounds-checking runtime
+    # (-b). Shards never use it, and it does not build against current glibc
+    # (it uses __malloc_hook, removed in glibc 2.34: Ubuntu 24.04 fails at
+    # lib/bcheck.c:738). libtcc1.a keeps every other object. Unconditional,
+    # so every build host produces the same bundle.
+    _run_build(['make', '-j%d' % (os.cpu_count() or 2), 'BCHECK_O='], tcc_src, 'tcc build')
+    _run_build(['make', 'install', 'BCHECK_O='], tcc_src, 'tcc install')
 
     musl = get_pinned_archive(pins['musl_url'], pins['musl_sha256'],
                               os.path.join(dl_cache, _url_basename(pins['musl_url'])),

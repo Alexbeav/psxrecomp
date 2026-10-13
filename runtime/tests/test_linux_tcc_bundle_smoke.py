@@ -134,8 +134,8 @@ def main():
             out = os.path.join(work, 'shard_f%d.so' % flavor)
             env_keep = dict(os.environ)
             os.environ['PATH'] = '/nonexistent'      # no host compiler can help
-            os.environ.pop('CPATH', None)
-            os.environ.pop('C_INCLUDE_PATH', None)
+            for v in ('CPATH', 'C_INCLUDE_PATH', 'LIBRARY_PATH', 'CC', 'GCC_EXEC_PREFIX'):
+                os.environ.pop(v, None)
             try:
                 ok = co._compile_dll_tcc(c_path, out, [inc], flavor, tcc)
             finally:
@@ -152,6 +152,10 @@ def main():
                 fails += 1
             if not hasattr(lib, 'func_80114000'):
                 print('FAIL flavor %d: func_80114000 not exported' % flavor)
+                fails += 1
+            nm = os.popen('nm -D --undefined-only %s' % out).read()
+            if 'bound' in nm or '__bound' in nm:
+                print('FAIL flavor %d: the shard references bounds-checking symbols' % flavor)
                 fails += 1
             print('ok   flavor %d: shard built by the bundled tcc + musl and loaded (abi 0x%X)'
                   % (flavor, abi))
