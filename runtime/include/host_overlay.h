@@ -30,7 +30,15 @@ void psx_host_pause_set_refuse_probe(PsxHostPauseRefuseFn fn);
  * swap, with the drawable size in pixels. It runs on the thread that owns the
  * GL context (the render thread when it is on, else the main thread), with the
  * window framebuffer bound. The callback must leave GL state as it found it.
- * Vulkan and the SDL renderer never call it. NULL unregisters. */
+ * Vulkan and the SDL renderer never call it. NULL unregisters.
+ *
+ * Lifetime contract: the registrant owns ctx. psx_host_overlay_set_draw_cb
+ * (replace or NULL) returns only after any draw call that may still be using
+ * the previous fn/ctx has finished, so the registrant may free ctx and the GL
+ * objects it draws with right after it returns, and must keep them alive
+ * until then. Unregister before destroying those objects or the GL context
+ * (e.g. on renderer shutdown). Called from inside the callback it does not
+ * wait; the current call is then the last one with the old ctx. */
 typedef void (*PsxHostOverlayDrawFn)(int width, int height, void *ctx);
 void psx_host_overlay_set_draw_cb(PsxHostOverlayDrawFn fn, void *ctx);
 int  psx_host_overlay_has_draw(void);
