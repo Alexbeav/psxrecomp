@@ -582,8 +582,9 @@ struct RuntimeConfig {
     bool                  video_accurate_blending = true;
     // dithering: PS1 dithering of Gouraud-shaded and texture-modulated
     // polygons while the guest sets GP0(E1h) bit 9 (hardware behaviour).
-    // 1 "on" (default) = pattern per internal-resolution pixel, 2 "scaled"
-    // = pattern on the native pixel grid, 0 "off" = true colour. OpenGL only.
+    // 1 "on" (default; "scaled" is an alias) = pattern on the native VRAM
+    // grid, identical guest VRAM at every scale; 2 "fine" = elective pattern
+    // per internal-resolution pixel; 0 "off" = true colour. OpenGL only.
     int                   video_dithering = 1;
     bool                  video_pgxp_color_correction = false;
     int                   video_pgxp_seam = 0;

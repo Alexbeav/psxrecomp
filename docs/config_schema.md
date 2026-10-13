@@ -729,29 +729,32 @@ first layer's full 8-bit result where the console would have truncated it to
 
 ```toml
 [video]
-dithering = "on"      # on (default) | scaled | off (true colour)
+dithering = "on"      # on (default) | fine | off
 ```
 
 The PS1 GPU dithers while the game sets GP0(E1h) bit 9: it adds a 4x4
 offset pattern to every pixel of a Gouraud-shaded polygon or line and of a
 texture-modulated polygon, then truncates to 5 bits per channel. Flat
 untextured primitives, raw-texture polygons and all rectangles (sprites) are
-never dithered. The OpenGL renderer does the same by default (`on`), with the
-pattern on internal-resolution pixels. Eligibility is decided per primitive
-from its command and carried to the shader, never guessed from colours.
-`scaled` puts the pattern on the native pixel grid, so it reads like the
-console at any internal scale and the native VRAM a game reads back is the
-same at every scale. `off` is the old true-colour output (8 bits per channel,
-no pattern). The software and Vulkan renderers do not dither.
-The pattern is applied to the source colour before semi-transparent blending;
-the console dithers the blended result at its final 8-to-5-bit write. Fixed-
-function GL blending cannot run a shader after the blend (GL 3.3 has no
-framebuffer fetch, and macOS offers none), so a dithered semi-transparent
-pixel can differ from the console by one 5-bit step; opaque pixels match.
-The dither output follows the surface basis, so it composes with
-`accurate_blending`.
-OpenGL only. `PSX_DITHERING=0|1|2` overrides it for one run and the
-`dithering` TCP command switches it live.
+never dithered. Eligibility is decided per primitive from its command and
+carried to the shader, never guessed from colours.
+
+`on` (the default; `scaled` is accepted as an alias) is that hardware
+behaviour with the pattern on the native VRAM grid, so it looks like the
+console at any internal scale and the VRAM a game reads back is identical at
+every scale. `fine` is elective: the pattern per internal-resolution pixel, a
+grain that all but vanishes at high scales (guest VRAM then depends on the
+scale). `off` is the old true-colour output (8 bits per channel, no pattern).
+
+Semi-transparent primitives are an approximation: the pattern is applied to
+the source colour before blending, while the console dithers the blended
+result at its final 8-to-5-bit write. Fixed-function GL blending cannot run
+a shader after the blend (GL 3.3 has no framebuffer fetch, and macOS offers
+none), so a dithered semi-transparent pixel can differ from the console by
+one 5-bit step; opaque pixels match exactly. The dither output follows the
+surface colour basis, so it composes with `accurate_blending`. OpenGL only;
+the software and Vulkan renderers do not dither. `PSX_DITHERING=0|1|2`
+overrides it for one run and the `dithering` TCP command switches it live.
 
 ### Texture filtering (`texture_filtering`)
 

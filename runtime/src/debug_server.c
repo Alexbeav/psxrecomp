@@ -8650,7 +8650,7 @@ static void handle_texture_filter(int id, const char *json)
 }
 
 /* dithering: {"cmd":"dithering"} reads, {"cmd":"dithering","mode":0|1|2}
- * sets [video] dithering live (off, on, scaled). */
+ * sets [video] dithering live (0 off, 1 on = native grid, 2 fine). */
 static void handle_dithering(int id, const char *json)
 {
     int mode = json_get_int(json, "mode", -1);

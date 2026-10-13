@@ -13,8 +13,9 @@
  * With the bit clear nothing is dithered, and "off" is the true-colour
  * output whatever the bit. Each eligible case is compared against "off"
  * region by region in the native VRAM.
- * Also: "scaled" puts the pattern on the native grid (native VRAM at 4x,
- * stepped by dynamic resolution, equals 1x); the render thread, PGXP depth
+ * The default "on" puts the pattern on the native VRAM grid: the native VRAM
+ * at 4x, stepped by dynamic resolution, equals 1x (no guest-visible change
+ * across scales). "fine" (elective) dithers per internal pixel. Also: the render thread, PGXP depth
  * and native-wide margins give the same pixels; with accurate_blending the
  * dithered channels stay on the k*8 grid.
  * Original source-owned scene; no retail payload. */
@@ -158,12 +159,12 @@ int main(void) {
             printf("mode=%d %-32s %s mean %.2f -> %.2f\n", mode, RNAME[r], eq ? "unchanged" : "dithered", m0, m1);
             char msg[128];
             snprintf(msg, sizeof msg, "%s: %s", RNAME[r], ELIGIBLE[r] ? "dithered" : "never dithered");
-            /* "on" at 4x: the native pack sees the top-left sample of each
+            /* "fine" at 4x: the native pack sees the top-left sample of each
              * 4x4 block, i.e. one pattern cell (-4), still a change. */
             check(ELIGIBLE[r] ? !eq : eq, msg);
-            /* Mean over the native pack: "on" at 4x reads one pattern cell
-             * per block, "scaled" the whole pattern. */
-            if (ELIGIBLE[r] && mode == 2) check(fabs(m1 - m0) < 1.0, "dither keeps the mean brightness");
+            /* Mean over the native pack: the default reads the whole pattern;
+             * "fine" at 4x reads one pattern cell per block. */
+            if (ELIGIBLE[r] && mode == 1) check(fabs(m1 - m0) < 1.0, "dither keeps the mean brightness");
         }
         /* PGXP depth: the same scene, depth-tested. */
         gl_renderer_set_pgxp_depth(1);
@@ -189,7 +190,7 @@ int main(void) {
         printf("mode=%d accurate: gradient channels off the k*8 grid=%d\n", mode, off_basis);
         check(off_basis == 0, "dither output follows the accurate (k*8) basis");
         gl_renderer_set_accurate_blending(acc0);
-        if (mode == 2) {
+        if (mode == 1) {   /* default: guest VRAM independent of the scale */
             check(gl_renderer_step_internal_scale_now(1) == 1, "step to 1x");
             scene(1, 0); Shot one = shot();
             (void)one;
@@ -198,7 +199,7 @@ int main(void) {
             int inv = 1;
             for (int r = 0; r < R_N; r++)
                 if (r != R_SHADED_LINE && r != R_FLAT_LINE) inv &= region_equal(dith, nat, r);
-            check(inv, "scaled: native VRAM at 4x equals 1x");
+            check(inv, "default dithering: native VRAM at 4x equals 1x");
             check(gl_renderer_step_internal_scale_now(k_test_scale) == 1, "back to 4x");
         }
     }

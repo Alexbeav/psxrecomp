@@ -921,8 +921,8 @@ static void c5_to_float(uint16_t c, float *r, float *g, float *b) {
     }
 }
 /* [video] dithering (see psx_dither in the shaders): 1 (default) the PS1 4x4
- * pattern at internal resolution, 2 scaled to the native pixel grid, 0 off =
- * true colour. s_dither_bit is the last GP0(E1h) bit 9. Each primitive's
+ * pattern on the native VRAM grid, 2 elective pattern per internal-resolution
+ * pixel, 0 off = true colour. s_dither_bit is the last GP0(E1h) bit 9. Each primitive's
  * eligibility (bit set AND Gouraud-shaded, or a texture-modulated polygon;
  * never flat, raw-textured or a rectangle) is fixed when it is queued and
  * rides in its vertices, so bit changes need no flush. s_prim_shaded /
@@ -1834,16 +1834,17 @@ static const char *INTERP_FS =
  * truncates to 5 bits. Flat untextured primitives, raw-texture polygons and
  * all rectangles (sprites) are never dithered. Eligibility is decided per
  * primitive on the CPU and carried in the vertex (v_dith), never inferred
- * from the colour. u_dither 0 = off (true colour), 1 = PS1 pattern per
- * internal-resolution pixel (default), 2 = pattern scaled to the native
- * grid (v_npos is the fragment's native VRAM position). The result is
- * written in the surface's colour basis (u_accurate). */
+ * from the colour. u_dither 1 (default) = the PS1 pattern on the native
+ * VRAM grid (v_npos is the fragment's native position), so guest-visible
+ * VRAM is the same at every internal scale; 2 = elective finer pattern per
+ * internal-resolution pixel; 0 = off (true colour). The result is written
+ * in the surface's colour basis (u_accurate). */
 #define PSX_DITHER_GLSL \
     "uniform int u_dither;\n" \
     "uniform int u_accurate;  /* [video] accurate_blending: VRAM in the k*8/255 basis */\n" \
     "vec3 psx_dither(vec3 c, vec2 npos, int eligible){\n" \
     "  if (u_dither == 0 || eligible == 0) return c;\n" \
-    "  ivec2 p = (u_dither == 2 ? ivec2(floor(npos)) : ivec2(gl_FragCoord.xy)) & 3;\n" \
+    "  ivec2 p = (u_dither == 2 ? ivec2(gl_FragCoord.xy) : ivec2(floor(npos))) & 3;\n" \
     "  const float m[16] = float[16](-4.0,0.0,-3.0,1.0, 2.0,-2.0,3.0,-1.0,\n" \
     "                                -3.0,1.0,-4.0,0.0, 3.0,-1.0,2.0,-2.0);\n" \
     "  vec3 k = clamp(floor((c * 255.0 + m[p.y * 4 + p.x]) / 8.0), 0.0, 31.0);\n" \
