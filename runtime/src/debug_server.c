@@ -8649,6 +8649,15 @@ static void handle_texture_filter(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,\"mode\":%d}", id, gr_texture_filter());
 }
 
+/* dithering: {"cmd":"dithering"} reads, {"cmd":"dithering","mode":0|1|2}
+ * sets [video] dithering live (0 off, 1 on = native grid, 2 fine). */
+static void handle_dithering(int id, const char *json)
+{
+    int mode = json_get_int(json, "mode", -1);
+    if (mode >= 0) gl_renderer_set_dithering(mode);
+    send_fmt("{\"id\":%d,\"ok\":true,\"mode\":%d}", id, gl_renderer_dithering());
+}
+
 static void handle_frame_perf(int id, const char *json)
 {
     (void)json;
@@ -15904,6 +15913,7 @@ static const CmdEntry s_commands[] = {
     { "accurate_blending", handle_accurate_blending },
 
     { "texture_filter",    handle_texture_filter },
+    { "dithering",         handle_dithering },
     { "gl_ws_ablate",      handle_gl_ws_ablate },
     { "gl_interp",         handle_gl_interp },
     { "render_pass_stats", handle_render_pass_stats },

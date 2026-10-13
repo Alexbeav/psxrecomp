@@ -306,6 +306,12 @@ int  gl_renderer_anisotropy(void);
  * uploads and untextured primitives already are). On by default. */
 void gl_renderer_set_accurate_blending(int on);
 int  gl_renderer_accurate_blending(void);
+/* [video] dithering: 1 (default) PS1 dither pattern on the native VRAM grid
+ * (guest VRAM identical at every internal scale), 2 elective pattern per
+ * internal-resolution pixel, 0 off (true colour). Applies to eligible
+ * primitives (Gouraud, texture-modulated polygons) while GP0(E1h) bit 9 is set. */
+void gl_renderer_set_dithering(int mode);
+int  gl_renderer_dithering(void);
 int  gl_renderer_get_pgxp_depth(void);
 void gl_renderer_set_pgxp_color_perspective(int on);
 int  gl_renderer_get_pgxp_color_perspective(void);
