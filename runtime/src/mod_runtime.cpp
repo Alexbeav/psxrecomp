@@ -2291,7 +2291,8 @@ std::vector<std::string> mod_runtime_netplay_view_features(const ModResolution& 
     for (const ModResolution::Plugin& p : plan.plugins) {
         const std::string key = p.package_id + "/" + p.feature_id;
         auto it = ok.find(key);
-        const bool good = p.netplay_local_view || p.netplay_input;
+        const bool good = p.netplay_local_view || p.netplay_input ||
+                          p.netplay_host_output;
         ok[key] = it == ok.end() ? good : (it->second && good);
     }
     for (const ModResolution::Write& w : plan.writes)
@@ -2911,7 +2912,27 @@ extern "C" int psx_mod_reload_hd_texture_pack(void) {
     return ok;
 }
 
+/* Host-output observation reads: side-effect-free peeks of RAM, scratchpad
+ * and BIOS ROM (psx_peek_word); MMIO and anything else reads 0, because a bus
+ * read of a device register can change the device (SIO data pops the RX FIFO,
+ * SIO_STAT ages the ACK). */
+extern "C" int psx_mod_host_output_scope(void);
+static uint32_t ho_peek_word(uint32_t address) {
+    uint32_t v = 0;
+    return psx_peek_word(address & ~3u, &v) ? v : 0u;
+}
+static uint8_t ho_peek_byte(uint32_t address) {
+    return (uint8_t)(ho_peek_word(address) >> ((address & 3u) * 8u));
+}
+static uint16_t ho_peek_half(uint32_t address) {
+    return (uint16_t)(ho_peek_word(address) >> ((address & 2u) * 8u));
+}
+static void ho_drop_word(uint32_t, uint32_t) {}
+static void ho_drop_half(uint32_t, uint16_t) {}
+static void ho_drop_byte(uint32_t, uint8_t) {}
+
 extern "C" uint8_t psx_mod_read_byte(uint32_t address) {
+    if (psx_mod_host_output_scope()) return ho_peek_byte(address);
     return psx_read_byte(address);
 }
 
@@ -2936,38 +2957,50 @@ extern "C" int psx_mod_current_resource_bytes(const char* resource_id,
     return 0;
 }
 
+static bool mod_host_output_write_blocked(void);
 extern "C" void psx_mod_write_byte(uint32_t address, uint8_t value) {
+    if (mod_host_output_write_blocked()) return;
     psx_host_write_byte(address, value);
 }
 
 extern "C" uint16_t psx_mod_read_half(uint32_t address) {
+    if (psx_mod_host_output_scope()) return ho_peek_half(address);
     return psx_read_half(address);
 }
 
+static bool mod_host_output_write_blocked(void);
 extern "C" void psx_mod_write_half(uint32_t address, uint16_t value) {
+    if (mod_host_output_write_blocked()) return;
     psx_host_write_half(address, value);
 }
 
 extern "C" uint32_t psx_mod_read_word(uint32_t address) {
+    if (psx_mod_host_output_scope()) return ho_peek_word(address);
     return psx_read_word(address);
 }
 
+static bool mod_host_output_write_blocked(void);
 extern "C" void psx_mod_write_word(uint32_t address, uint32_t value) {
+    if (mod_host_output_write_blocked()) return;
     psx_host_write_word(address, value);
 }
 
 extern "C" void psx_mod_write_code_word(uint32_t address, uint32_t value) {
+    if (mod_host_output_write_blocked()) return;
     psx_host_write_word(address, value);
     dirty_ram_mark_executable_range(address & 0x1FFFFFFFu, 4u);
 }
 
+extern "C" int psx_mod_host_output_scope(void);
 extern "C" uint32_t psx_mod_alloc_guest_memory(uint32_t size,
                                                 uint32_t alignment) {
+    if (psx_mod_host_output_scope()) return 0;
     return psx_mod_memory_alloc(size, alignment);
 }
 
 extern "C" uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size,
                                                   uint32_t alignment) {
+    if (psx_mod_host_output_scope()) return 0;
     return psx_mod_gpu_dma_memory_alloc(size, alignment);
 }
 
@@ -3084,6 +3117,7 @@ extern "C" int psx_mod_register_function_filter_plugin(
 extern "C" int psx_mod_finish_function(CPUState* cpu) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();
+    if (psx_mod_host_output_scope()) return 0;
     if (!cpu || s.current_function_cpu != cpu || !s.current_plugin) return 0;
     s.current_function_finished = true;
     return 1;
@@ -3141,11 +3175,62 @@ extern "C" void psx_mod_instruction(CPUState* cpu, uint32_t address, uint32_t in
 
 static int game_netplay_function_entry(CPUState* cpu, uint32_t address);
 
+/* Netplay host-output plugins ([[plugin]] netplay = "host_output") run their
+ * entry hooks in the shared simulation while the rest of the own-view plan is
+ * parked. They observe only: each callback gets a private copy of the CPU
+ * state (register changes to it are discarded; its bus pointers peek RAM /
+ * ROM and drop writes), psx_mod_read_* peek too (no MMIO side effects), a
+ * completion request is
+ * ignored, and every guest-mutating mod service refuses while one runs
+ * (psx_mod_host_output_scope), so the shared simulation is bit-identical
+ * with or without them. */
+static int s_host_output_depth;
+
+extern "C" int psx_mod_host_output_scope(void) {
+    return s_host_output_depth > 0 &&
+           PSXRecompV4::state().netplay_view_plan ? 1 : 0;
+}
+
+static void run_host_output_hooks(CPUState* cpu, uint32_t address) {
+    using namespace PSXRecompV4;
+    RuntimeMods& s = state();
+    const auto& table = active_function_entry_hooks();
+    const uint32_t key = function_entry_key(address);
+    auto it = std::lower_bound(
+        table.begin(), table.end(), key,
+        [](const ActiveFunctionEntryHook& hook, uint32_t k) { return hook.key < k; });
+    for (; it != table.end() && it->key == key; ++it) {
+        if (!it->plugin || !it->plugin->netplay_host_output || !it->callback)
+            continue;
+        CPUState view = *cpu;   /* observation copy: peek reads, dropped writes */
+        view.read_word = ho_peek_word;   view.write_word = ho_drop_word;
+        view.read_half = ho_peek_half;   view.write_half = ho_drop_half;
+        view.read_byte = ho_peek_byte;   view.write_byte = ho_drop_byte;
+        PluginCallbackScope scope(s, it->plugin, &view);
+        ++s_host_output_depth;
+        it->callback(&view, address);
+        --s_host_output_depth;
+        s.current_function_finished = false;
+    }
+}
+
+/* Memory writes from a host-output plugin while a netplay plan is live would
+ * exist on one peer only. */
+static bool mod_host_output_write_blocked(void) {
+    const auto& s = PSXRecompV4::state();
+    return psx_mod_host_output_scope() ||
+           (s.netplay_view_plan && s.current_plugin &&
+            s.current_plugin->netplay_host_output);
+}
+
 extern "C" int psx_mod_function_entry(CPUState* cpu, uint32_t address) {
     using namespace PSXRecompV4;
     if (!g_psx_mod_function_entry_hooks || !cpu) return 0;
     RuntimeMods& s = state();
-    if (mod_plan_hooks_parked()) return game_netplay_function_entry(cpu, address);
+    if (mod_plan_hooks_parked()) {
+        run_host_output_hooks(cpu, address);
+        return game_netplay_function_entry(cpu, address);
+    }
     const auto& table = active_function_entry_hooks();
     const uint32_t key = function_entry_key(address);
     auto it = std::lower_bound(

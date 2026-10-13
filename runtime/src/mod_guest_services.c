@@ -11,9 +11,14 @@
 #include "spu.h"
 #include <string.h>
 
+/* mod_runtime.cpp: 1 while a netplay host-output plugin's hook runs; every
+ * guest-mutating service refuses then (docs/NETPLAY.md). */
+int psx_mod_host_output_scope(void);
+
 uint32_t psx_mod_call_guest(struct CPUState* cpu, uint32_t function,
                             uint32_t return_address, uint32_t a0, uint32_t a1,
                             uint32_t a2, uint32_t a3) {
+    if (psx_mod_host_output_scope()) return 0;
     uint32_t regs[32];
     const uint32_t pc = cpu->pc, hi = cpu->hi, lo = cpu->lo;
     memcpy(regs, cpu->gpr, sizeof regs);
@@ -67,6 +72,11 @@ uint32_t psx_mod_call_guest_uncharged_counted(struct CPUState* cpu,
         uint32_t function, uint32_t return_address, uint32_t a0, uint32_t a1,
         uint32_t a2, uint32_t a3, uint32_t budget_cycles, int* charged,
         uint64_t* counted_cycles) {
+    if (psx_mod_host_output_scope()) {
+        if (charged) *charged = 0;
+        if (counted_cycles) *counted_cycles = 0;
+        return 0;
+    }
     PsxCycleFreeze save;
     CallerTiming timing;
     timing_save(&timing, cpu);
@@ -85,12 +95,14 @@ uint32_t psx_mod_call_guest_uncharged(struct CPUState* cpu, uint32_t function,
                                       uint32_t return_address, uint32_t a0,
                                       uint32_t a1, uint32_t a2, uint32_t a3,
                                       uint32_t budget_cycles, int* charged) {
+    if (psx_mod_host_output_scope()) { if (charged) *charged = 0; return 0; }
     return psx_mod_call_guest_uncharged_counted(cpu, function, return_address,
         a0, a1, a2, a3, budget_cycles, charged, NULL);
 }
 
 int psx_mod_dma_write_ram(uint32_t address, const void* data, uint32_t bytes,
                           int lba) {
+    if (psx_mod_host_output_scope()) return 0;
     return dma_host_cdrom_write(address, (const uint8_t*)data, bytes, lba);
 }
 
@@ -101,6 +113,7 @@ static int ram_span(uint32_t address, uint32_t bytes) {
 }
 
 int psx_mod_host_write_ram(uint32_t address, const void* data, uint32_t bytes) {
+    if (psx_mod_host_output_scope()) return 0;
     const uint8_t* p = (const uint8_t*)data;
     if ((!p && bytes) || !ram_span(address, bytes)) return 0;
     while (bytes && (address & 3u)) { psx_host_write_byte(address++, *p++); --bytes; }
@@ -118,22 +131,30 @@ int psx_mod_host_write_ram(uint32_t address, const void* data, uint32_t bytes) {
 #define SPU_CONTROL 0x1F801DAAu
 
 int psx_mod_spu_sample_bank(uint32_t bank,const void *adpcm,uint32_t bytes) {
+    if (psx_mod_host_output_scope()) return 0;
     return spu_register_sample_bank(bank,adpcm,bytes);
 }
 int psx_mod_spu_bind_voice_bank(unsigned voice,uint32_t bank) {
+    if (psx_mod_host_output_scope()) return 0;
     return spu_bind_next_voice_bank(voice,bank);
 }
 int psx_mod_spu_private_voice_play(unsigned slot,uint32_t bank,const uint16_t regs[8],unsigned mode) {
+    if (psx_mod_host_output_scope()) return 0;
     return spu_private_voice_play(slot,bank,regs,mode);
 }
-void psx_mod_spu_private_voice_stop(uint32_t mask) {spu_private_voice_stop(mask);}
+void psx_mod_spu_private_voice_stop(uint32_t mask) {
+    if (psx_mod_host_output_scope()) return;
+    spu_private_voice_stop(mask);
+}
 int psx_mod_spu_private_voice_volume(unsigned slot,uint16_t left,uint16_t right) {
+    if (psx_mod_host_output_scope()) return 0;
     return spu_private_voice_volume(slot,left,right);
 }
 uint32_t psx_mod_spu_private_voice_active(void) {return spu_private_voice_active();}
 
 int psx_mod_spu_upload(uint32_t spu_address, uint32_t guest_source,
                        uint32_t bytes, int stop_after) {
+    if (psx_mod_host_output_scope()) return 0;
     if ((spu_address & 7u) || (guest_source & 3u) || (bytes & 3u) ||
         spu_address >= SPU_RAM_BYTES || bytes > SPU_RAM_BYTES ||
         !ram_span(guest_source, bytes))
@@ -148,6 +169,7 @@ int psx_mod_spu_upload(uint32_t spu_address, uint32_t guest_source,
 
 int psx_mod_psyq_load_image(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                             uint32_t guest_source) {
+    if (psx_mod_host_output_scope()) return 0;
     if (!w || w > 1024u || !h || h > 512u || x >= 1024u || y >= 512u ||
         (guest_source & 3u))
         return 0;
