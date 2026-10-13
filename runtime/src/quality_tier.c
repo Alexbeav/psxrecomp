@@ -51,9 +51,10 @@ static int apple_gen(const char *s, int *variant) {
 /* Autodetect picks between Low and Ultra only (owner decision 2026-10-08):
  * low-end machines -- software GL, the Steam Deck's APU, mobile GPUs, every
  * integrated GPU up to the 890M class, Apple M1/M2 base chips, GeForce MX/GT
- * -- start on Low; everything else, unknown GPUs included, starts on Ultra
+ * -- start on Low; recognised capable GPUs start on Ultra
  * with dynamic resolution, Smooth motion from surplus and the adaptive aspect
- * as the safety net. Medium and High are manual choices.
+ * as the safety net. A GPU the rules do not recognise gets Medium (see
+ * psx_quality_classify). High is a manual choice.
  *
  * The input is a GL_RENDERER string as Windows drivers, Mesa and macOS
  * report it ("AMD Radeon(TM) Graphics", "AMD Radeon RX Vega 11 Graphics",
@@ -154,7 +155,7 @@ static int pci_tier(const char *id, const char **why) {
         return PSX_QUALITY_LOW;
     }
     if (vendor == 0x10de) { *why = "NVIDIA GPU (PCI id)"; return PSX_QUALITY_ULTRA; }
-    return -1;   /* AMD: the id alone does not tell an APU from a card */
+    return -1;   /* AMD: the id alone does not tell an APU from a card (=> Medium) */
 }
 
 int psx_quality_classify(const PsxHostInfo *h, char *reason, size_t reason_cap) {
@@ -171,7 +172,13 @@ int psx_quality_classify(const PsxHostInfo *h, char *reason, size_t reason_cap) 
     if (tier < 0 && g[0]) tier = gpu_tier(g, &why);
     if (tier < 0 && !g[0] && h && h->gpu_id[0]) tier = pci_tier(h->gpu_id, &why);
     if (tier < 0) tier = gpu_tier(c, &why);      /* Apple: the CPU names the GPU */
-    if (tier < 0) { tier = PSX_QUALITY_ULTRA; why = "unknown GPU"; }
+    /* Unrecognised GPU: Medium, not Ultra. Nothing was measured, so the
+     * expensive Ultra-only work (1.5x supersampling, mipmaps + 16x aniso,
+     * bloom) is not assumed; Medium keeps the display's own resolution,
+     * Smooth motion from surplus and the PGXP extras, which Low would drop
+     * on what is often new, capable hardware. A title without Medium falls
+     * to the nearest lower preset (psx_quality_pick_offered). */
+    if (tier < 0) { tier = PSX_QUALITY_MEDIUM; why = "unknown GPU"; }
 
     /* Only what the dynamic systems cannot absorb: too few CPU threads for
      * the emulation + render threads, or too little memory. */

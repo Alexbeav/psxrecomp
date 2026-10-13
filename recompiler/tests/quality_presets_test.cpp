@@ -148,7 +148,7 @@ static void test_classify() {
               PSX_QUALITY_ULTRA, "RTX 4080: Ultra");
     check(tier(host("x", "llvmpipe (LLVM 17.0.6, 256 bits)", 16, 32)) == PSX_QUALITY_LOW,
           "software GL: Low");
-    check(tier(host("x", "Some Future GPU", 16, 32)) == PSX_QUALITY_ULTRA, "unknown GPU: Ultra");
+    check(tier(host("x", "Some Future GPU", 16, 32)) == PSX_QUALITY_MEDIUM, "unknown GPU: Medium (conservative)");
     check(tier(host("AMD Ryzen 7 9800X3D 8-Core Processor", "AMD Radeon(TM) Graphics", 16, 48)) ==
               PSX_QUALITY_LOW, "2-CU Radeon iGPU: Low");
     check(tier(host("x", "NVIDIA GeForce RTX 3060", 4, 16)) == PSX_QUALITY_LOW,
@@ -208,7 +208,8 @@ static void test_renderer_table() {
         {"Mesa Intel(R) Arc(tm) Graphics (MTL)", PSX_QUALITY_LOW},
         {"Mesa Intel(R) Arc(tm) A750 Graphics (DG2)", PSX_QUALITY_ULTRA},
         {"NVIDIA GeForce RTX 3060/PCIe/SSE2", PSX_QUALITY_ULTRA},
-        {"NV167 (nouveau)", PSX_QUALITY_ULTRA},
+        {"NV167 (nouveau)", PSX_QUALITY_MEDIUM},   /* unnamed chip: unknown */
+        {"Virtio-GPU Venus (Some Future GPU)", PSX_QUALITY_MEDIUM},
         {"llvmpipe (LLVM 17.0.6, 256 bits)", PSX_QUALITY_LOW},
         {"zink Vulkan 1.3(AMD Radeon Graphics (RADV RENOIR) (MESA_RADV))", PSX_QUALITY_LOW},
         /* macOS */

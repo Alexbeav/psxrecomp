@@ -58,29 +58,38 @@ name is the fallback when the probe fails, and the probe is skipped under the
 renderer too.
 
 `quality_tier.c` maps the facts to a tier. It is a pure function, unit-tested in
-`recompiler/tests/quality_presets_test.cpp`. **Autodetect is a static
-heuristic that picks only Low or Ultra**: it classifies the hardware it reads
-and measures nothing. A GPU it does not recognise gets Ultra. Medium and High
-are manual choices. Low-end machines start on Low.
-Every other machine starts on Ultra, and the dynamic systems are its safety
-net: dynamic resolution (a title can floor it at native x1), Smooth motion's
-in-between frames (made from surplus only) and the adaptive aspect.
+`recompiler/tests/quality_presets_test.cpp` against a table of real
+`GL_RENDERER` strings from Windows drivers, Mesa and macOS.
+
+**What it is, and what it is not.** Autodetect is a static heuristic over the
+GPU name, the CPU thread count and the memory size. It measures nothing:
+there is no benchmark, and a name says nothing about clocks, thermals or the
+driver. It is a first-launch starting point, and the dynamic systems
+(dynamic resolution down to the title's floor, Smooth motion's in-between
+frames made from surplus only, the adaptive aspect) are what actually keep
+the frame rate.
 
 | Class | Detected |
 | --- | --- |
 | Software GL, Steam Deck (Van Gogh), mobile GPUs, every integrated GPU up to the Radeon 890M / Iris Xe / Arc iGPU class, Apple M1 and M2 base chips, GeForce MX/GT | Low |
-| Everything else: discrete GPUs, Apple M3 and later, any Pro/Max/Ultra chip, Strix Halo (8050S/8060S), unknown GPUs | Ultra |
+| A GPU the rules do not recognise (including Linux with only an AMD PCI id, and unnamed nouveau chips) | Medium |
+| Recognised capable GPUs: discrete RX/RTX/GTX/Arc A/B cards, Apple M3 and later, any Pro/Max/Ultra chip, Strix Halo (8050S/8060S) | Ultra |
 
-Fewer than 5 CPU threads, or under 6 GB of memory, also gives Low. No mid
-class is detected as Medium: on every in-between part measured, either Low's
-savings or Ultra's dynamic floor decided it. There is no timed benchmark
-yet; the probe is the GPU class, thread count and memory.
+Fewer than 5 CPU threads, or under 6 GB of memory, also gives Low. High is a
+manual choice. If the detected tier is not offered, the highest offered tier
+below it is used, or failing that the lowest one above it.
 
-The classifier reads the `GL_RENDERER` string as Windows drivers, Mesa and
-macOS report it; the unit test holds a table of real strings from all three.
+**Why unknown is Medium.** Nothing about an unrecognised GPU is known, so the
+fallback must not assume Ultra's extra work (supersampling above the display,
+and whatever a title adds there, such as R4's mipmaps, 16x aniso and bloom).
+Low would also be wrong for what is usually new hardware: it gives up
+Smooth motion and the PGXP extras on machines that can almost always run
+them. Medium keeps the display's own resolution with dynamic resolution
+under it, which is the safe middle. A player can pick any preset at any
+time.
+
 On Linux, when the GL probe fails, the sysfs PCI id is used instead (Steam
-Deck parts, Intel integrated vs Arc, NVIDIA); an AMD id alone cannot tell an
-APU from a card, so it falls through to Ultra.
+Deck parts, Intel integrated vs Arc, NVIDIA).
 
 ## When detection runs, and what is saved
 
