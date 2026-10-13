@@ -1026,6 +1026,28 @@ static int msf_to_lba(int m, int s, int f) {
     return (m * 60 + s) * 75 + f - 150;
 }
 
+/* CD-ROM XA MBF addressing with SetMode bit6 enabled: Xing CinePlayer
+ * (XINGLOGO.STR boot movie, SLPS-00756) seeks 0xC0,0x00,0x00 immediately
+ * after the real extent seek (5:45:52 = the movie's ADPCM extent) and then
+ * issues ReadS. The STR header (sector 10709) carries the extents as plain
+ * LBA pairs, so 0xC00000 is not an addressable MBF: it is the stream
+ * sentinel meaning "run the auto-read past the lead-out until XA EOB".
+ * Such an out-of-range XA MBF must NOT move the head: the data the game
+ * waits for is delivered from the previously armed seek. Valid BCD digits
+ * keep the standard MM:SS:FF decode. Returns SEEK_KEEP_MBF to signal the
+ * no-op, or the LBA otherwise. */
+#define SEEK_KEEP_MBF (-999999)
+static int seek_params_to_lba(const uint8_t *p) {
+    int nib_invalid = ((p[0] >> 4) > 9) || ((p[0] & 0xF) > 9) ||
+                      ((p[1] >> 4) > 9) || ((p[1] & 0xF) > 9) ||
+                      ((p[2] >> 4) > 9) || ((p[2] & 0xF) > 9);
+    /* SetMode arrives AFTER these two SetLocs, so the sentinel cannot be
+     * gated on the XA bit: any A-F nibble is not a valid BCD MSF digit at
+     * all, and no conforming seek sends one. */
+    if (nib_invalid) return SEEK_KEEP_MBF;
+    return msf_to_lba(bcd_to_bin(p[0]), bcd_to_bin(p[1]), bcd_to_bin(p[2]));
+}
+
 static CdTimingRecord *cd_timing_lookup(uint64_t seq) {
     if (seq == UINT64_MAX || seq >= s_cd_timing_total ||
         s_cd_timing_total - seq > CD_TIMING_CAP) return NULL;
@@ -2137,16 +2159,19 @@ static void exec_command(uint8_t cmd) {
 
     case 0x02: /* SetLoc */
         if (param_count >= 3) {
-            int current_lba = (last_sector_lba >= 0)
-                ? last_sector_lba
-                : msf_to_lba(seek_min, seek_sec, seek_sect);
-            seek_min = bcd_to_bin(param_fifo[0]);
-            seek_sec = bcd_to_bin(param_fifo[1]);
-            seek_sect = bcd_to_bin(param_fifo[2]);
-            s_setloc_lba = msf_to_lba(seek_min, seek_sec, seek_sect);
-            setloc_pending = 1;
-            setloc_seek_far = (abs(current_lba - s_setloc_lba) > 16) ? 1 : 0;
-            warm_route_on_setloc(s_setloc_lba);
+            int new_lba = seek_params_to_lba(param_fifo);
+            if (new_lba != SEEK_KEEP_MBF) {
+                int current_lba = (last_sector_lba >= 0)
+                    ? last_sector_lba
+                    : msf_to_lba(seek_min, seek_sec, seek_sect);
+                seek_min = bcd_to_bin(param_fifo[0]);
+                seek_sec = bcd_to_bin(param_fifo[1]);
+                seek_sect = bcd_to_bin(param_fifo[2]);
+                s_setloc_lba = new_lba;
+                setloc_pending = 1;
+                setloc_seek_far = (abs(current_lba - s_setloc_lba) > 16) ? 1 : 0;
+                warm_route_on_setloc(s_setloc_lba);
+            }
         }
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
