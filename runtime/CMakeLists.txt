@@ -783,6 +783,11 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_compile_definitions(mdec_output_lifetime_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
     add_test(NAME mdec_output_lifetime_test COMMAND mdec_output_lifetime_test)
 
+    add_executable(mdec_snapshot_capacity_test tests/test_mdec_snapshot_capacity.c)
+    target_include_directories(mdec_snapshot_capacity_test PRIVATE include)
+    target_compile_definitions(mdec_snapshot_capacity_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
+    add_test(NAME mdec_snapshot_capacity_test COMMAND mdec_snapshot_capacity_test)
+
     add_library(mdec_clean_fixture_probe SHARED tests/mdec_clean_fixture_probe.c)
     target_include_directories(mdec_clean_fixture_probe PRIVATE include)
     add_test(NAME mdec_clean_fixtures_test COMMAND ${Python3_EXECUTABLE}

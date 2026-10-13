@@ -1336,3 +1336,21 @@ on a fixed region -> next.
   The parent fails the authored fleet check on SLES-02529.
   This adds serial warning metadata, not qualified track or companion hashes.
   Actual RE3 starts, independent review, fork CI and stage delivery remain open.
+
+- **2026-10-09 (PS1B-479):** MDEC snapshot prepare and read reserve the
+  larger of the saved input count and the command's expected input length.
+  Parsing refuses expected input lengths above the existing snapshot limit.
+  Output positions remain bounded by the saved output size, and output writes
+  retain their capacity checks. The authored `mdec_snapshot_capacity_test`
+  compares a resumed command with uninterrupted execution through MMIO and DMA,
+  with and without prepare. It also checks invalid lengths and output bounds.
+  The parent fails its capacity assertion before a continued write.
+  Retail state loading, independent review and fork CI remain separate checks.
+
+- **2026-10-13 (PS1B-478):** SAME review 7-6527 qualified the selected public
+  source acquisition at fix `b61a14af` and stage `d806234a`, with 2,486 permitted
+  blobs and no excluded or unexpected blob bodies. The fresh existing-branch
+  integration keeps both October 9 entries above. The composed source still
+  needs its changed-source review. A fresh build, the stock cold/warm starts,
+  and the two clean 5,400-frame SBI comparisons remain unrun. This is public
+  source qualification, not full-history, private-source or gameplay qualification.
