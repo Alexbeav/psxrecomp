@@ -1427,6 +1427,9 @@ if(BUILD_TESTING)
         set_tests_properties(windows_rebuild_helper PROPERTIES
             SKIP_REGULAR_EXPRESSION "^SKIP:"
             TIMEOUT 90)
+        # PS1B-485: same for the BIOS stems test: no recomp-ui prints "SKIP:" and returns 0.
+        set_tests_properties(codegen_host_bios_stems PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:")
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # (overlay_pair_dedup_runtime was the third of these. It failed to link:
