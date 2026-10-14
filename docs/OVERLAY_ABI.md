@@ -118,6 +118,11 @@ padding between routines, an interior alias, a dispatch root, a
 no fixture reaches, such as the other `--ws-config` widescreen site lists,
 is not caught. Add a fixture when you add such a path.
 
+The record is append-only by rule, and `--record` keeps the rule. The test
+cannot tell a hand edit of an existing entry from the original. In review, a
+changed or removed entry in `overlay_emitter_fixture.json` is a re-pin without a
+version raise: refuse it.
+
 ## What the loader does with another build's shards
 
 | Shard | Result |
