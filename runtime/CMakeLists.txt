@@ -224,6 +224,14 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME menu_video_snapshot_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_video_snapshot.py
+                --cxx ${CMAKE_CXX_COMPILER})
+            add_test(NAME host_pause_first_present_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_host_pause_first_present.py
+                --cxx ${CMAKE_CXX_COMPILER})
+        endif()
         add_test(NAME guest_implementation_binding_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_guest_implementation.py"
             --cmake "${CMAKE_COMMAND}" --compiler "${CMAKE_C_COMPILER}"
@@ -803,6 +811,17 @@ if(BUILD_TESTING)
         tests/test_pad_external_input.c src/pad_external_input.c)
     target_include_directories(pad_external_input_test PRIVATE include src)
     add_test(NAME pad_external_input_test COMMAND pad_external_input_test)
+    add_executable(host_overlay_test tests/test_host_overlay.c src/host_overlay.c src/video_texture_filter.c)
+    target_include_directories(host_overlay_test PRIVATE include src)
+    find_package(Threads REQUIRED)
+    target_link_libraries(host_overlay_test PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(host_overlay_test PRIVATE shell32)
+    endif()
+    add_test(NAME host_overlay_test COMMAND host_overlay_test)
+    add_executable(psx_menu_host_test tests/test_psx_menu_host.c src/psx_menu_host.c)
+    target_include_directories(psx_menu_host_test PRIVATE include src)
+    add_test(NAME psx_menu_host_test COMMAND psx_menu_host_test)
 
     add_executable(gte_register_access_test
         tests/test_gte_register_access.cpp
