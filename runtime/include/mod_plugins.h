@@ -600,6 +600,14 @@ uint32_t psx_mod_render_pass_plan(uint32_t period_vblanks,
  * partially updated plugin state) across guest code, or tolerate the abort. */
 int psx_mod_render_pass(struct CPUState* cpu, const PSXModRenderPass* pass,
                         PSXModRenderPassFn fn, void* user);
+/* Isolated draw/readback using the stereo-capable rollback transaction.
+ * Never publishes an eye pair or changes presentation. Returns native-sized
+ * top-to-bottom RGBA8 pixels (alpha remains the PSX mask bit, not coverage).
+ * Call outside another pass. rgba_bytes must cover rect->w*rect->h*4. */
+int psx_mod_render_capture_rgba(struct CPUState *cpu,const PSXModRenderPass *rect,
+                               PSXModRenderPassFn fn,void *user,
+                               uint8_t *rgba,uint32_t rgba_bytes);
+#define PSX_MOD_RENDER_CAPTURE_RGBA 1
 /*
  * Why passes cannot run right now, the host-time budget aside (a plan that
  * returns 0 while this says READY was shed for time). A plugin that relies on

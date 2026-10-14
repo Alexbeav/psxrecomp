@@ -610,6 +610,8 @@ static GLuint        s_osd_tex = 0;
 static int           s_osd_tw = 0, s_osd_th = 0;
 static GLuint        s_present_prog = 0, s_present_vao = 0;
 static GLuint        s_xr_color_prog = 0, s_xr_native_tex = 0;
+static GLuint s_capture_read_tex,s_capture_read_fbo;
+static int s_capture_read_w,s_capture_read_h;
 static void          gl_swap_with_osd(void);
 static int           s_post_aa = 0;   /* GL_POST_AA_*; post-process AA (post_aa_apply) */
 static int s_native_surface_enabled, s_native_surface_pending;
@@ -8331,6 +8333,7 @@ static void pass_resources_release(void) {
         if(s_xr_native_tex) glDeleteTextures(1,&s_xr_native_tex);
     }
     s_xr_color_prog=s_xr_native_tex=0;
+    pass_free_color_fbo(&s_capture_read_tex,NULL,&s_capture_read_fbo,&s_capture_read_w,&s_capture_read_h);
     stereo_resources_release();
     for(int gi=0;gi<PASS_GENERATIONS;++gi)pass_gen_release(gi);
     pass_gens_invalidate();
@@ -8672,6 +8675,34 @@ uint32_t gl_renderer_stereo_unavailable(void) {
 void gl_renderer_stereo_stage_reset(void) {
     GL_RT_SYNC("stereo_stage_reset");
     s_stereo_pair[1 - s_stereo_current].mask = 0;
+}
+int gl_renderer_stereo_stage_readback(uint32_t eye,uint32_t w,uint32_t h,uint8_t *rgba) {
+    GL_RT_SYNC("capture_readback");
+    if(eye>=2 || !rgba || !w || !h || w>1024 || h>512)return 0;
+    StereoPair *pair=&s_stereo_pair[1-s_stereo_current];
+    if(!(pair->mask&(1u<<eye)))return 0;
+    GLint read,draw,texture,pack,pbo,row,skipr,skipp;
+    GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST),srgb=glIsEnabled(0x8DB9);
+    glGetIntegerv(0x8CAA,&read);glGetIntegerv(0x8CA6,&draw);glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);
+    glGetIntegerv(GL_PACK_ALIGNMENT,&pack);glGetIntegerv(0x88ED,&pbo);glGetIntegerv(GL_PACK_ROW_LENGTH,&row);
+    glGetIntegerv(GL_PACK_SKIP_ROWS,&skipr);glGetIntegerv(GL_PACK_SKIP_PIXELS,&skipp);
+    int ok=pass_make_color_fbo(&s_capture_read_tex,NULL,&s_capture_read_fbo,&s_capture_read_w,&s_capture_read_h,
+                              w,h,GL_RGBA8,GL_RGBA,GL_UNSIGNED_BYTE);
+    if(ok) {
+        glDisable(GL_SCISSOR_TEST);glDisable(0x8DB9);
+        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,pair->fbo[eye]);
+        p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,s_capture_read_fbo);
+        p_glBlitFramebuffer(0,0,pair->tw[eye],pair->th[eye],0,0,w,h,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,s_capture_read_fbo);
+        p_glBindBuffer(0x88EB,0);glPixelStorei(GL_PACK_ALIGNMENT,1);glPixelStorei(GL_PACK_ROW_LENGTH,0);
+        glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
+        glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+    }
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER,read);p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER,draw);
+    glBindTexture(GL_TEXTURE_2D,texture);glPixelStorei(GL_PACK_ALIGNMENT,pack);
+    glPixelStorei(GL_PACK_ROW_LENGTH,row);glPixelStorei(GL_PACK_SKIP_ROWS,skipr);glPixelStorei(GL_PACK_SKIP_PIXELS,skipp);
+    p_glBindBuffer(0x88EB,pbo);if(scissor)glEnable(GL_SCISSOR_TEST);if(srgb)glEnable(0x8DB9);
+    return ok;
 }
 static void stereo_invalidate(void) {
     s_stereo_valid = 0;
