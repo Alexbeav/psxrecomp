@@ -83,6 +83,41 @@ The boot-state header stores the ABI tag, the codegen version and the codegen
 hash. A boot-state cache or a save state (`.pst`) from a build where one of the
 three differs is refused.
 
+### What the key does not cover
+
+`recompiler/src/main_psx.cpp` and `recompiler/src/config_loader.cpp` are not in
+the codegen hash. They hold the overlay driver: the seed partition, the
+exact-entry walk, alias entries, the `--ws-config` merge, patch application and
+the overlay monolith. Hashing them would move the key, and refuse every save
+state, on each static-only edit too (PS1B-339).
+
+The test `overlay_emitter_fixture_guard` covers them instead. It runs
+`psxrecomp-game --overlay` on authored fixtures, the way `compile_overlays.py`
+does, and hashes `<stem>_full.c` and `<stem>_full.ranges`.
+`recompiler/tests/overlay_emitter_fixture.json` holds an append-only list of
+(codegen version, digest) pairs. One codegen version owns one digest. The test
+fails when the overlay output changes and `PSX_OVERLAY_CODEGEN_VER` does not.
+
+When a change moves the overlay output on purpose:
+
+1. Increase `PSX_OVERLAY_CODEGEN_VER` in `runtime/include/overlay_api.h`, and
+   update the tests that name it (`test_overlay_abi_layout.c`,
+   `test_overlay_abi_v26_guards.py`).
+2. Build `psxrecomp-game` and run
+   `python -B recompiler/tests/test_overlay_emitter_fixture_guard.py --recompiler <psxrecomp-game> --record`.
+   It appends the new pair. It refuses a version that already owns another
+   digest.
+
+A static-only change does not change the overlay output, so it does not touch
+the key or the record.
+
+The guard sees only what the fixtures reach: the exact-entry walk with
+padding between routines, an interior alias, a dispatch root, a
+`[[recompiler.patch]]` edit and a `mod_function_entry_funcs` hook from
+`--ws-config`, and a trailing guard word. A change to an overlay path that
+no fixture reaches, such as the other `--ws-config` widescreen site lists,
+is not caught. Add a fixture when you add such a path.
+
 ## What the loader does with another build's shards
 
 | Shard | Result |
@@ -114,6 +149,9 @@ comparison.
 4. Set `PSX_OVERLAY_ABI_VERSION` to upstream's number plus one.
 5. Increase `PSX_OVERLAY_CODEGEN_VER`.
 6. Update `runtime/tests/test_overlay_abi_layout.c`.
+7. Append the new pair to `recompiler/tests/overlay_emitter_fixture.json` with
+   `test_overlay_emitter_fixture_guard.py --record`, even when the overlay
+   output did not change.
 
 Each such change makes all overlay caches, boot-state caches and save states
 from the previous build unusable.
@@ -130,3 +168,7 @@ from the previous build unusable.
   the host's store-PC word.
 - `runtime/tests/test_codegen_hash_line_endings.py`: the hash with LF and CRLF
   sources.
+- `recompiler/tests/test_overlay_emitter_fixture_guard.py`: the overlay output
+  of the authored fixtures against the record for the current codegen version
+  (`overlay_emitter_fixture_guard`), and its decision rules on authored records
+  (`overlay_emitter_fixture_guard_rules`).
