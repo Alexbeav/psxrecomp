@@ -17,6 +17,11 @@ def main():
     body = source.split("int ae_disc_verify(", 1)[1].split("int ae_memcard_inspect(", 1)[0]
     match = re.search(r"const char\* why =\s*(.*?);\s*char row\[", body, re.S)
     assert match, "launcher reason expression missing"
+    # The SBI File row is OK only for a mounted disc with its SBI loaded.
+    # runtime/tests/test_disc_identity.cpp holds the warning to the same test
+    # (PS1B-495); this pins the row's side of it to the source.
+    assert "(id.toc_opened && id.sbi_loaded) ? RECOMP_SBI_OK : RECOMP_SBI_MISSING" in body, \
+        "the SBI File row no longer reads toc_opened && sbi_loaded"
     program = '''
 #include <cassert>
 #include <cstring>
