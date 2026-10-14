@@ -2522,7 +2522,8 @@ void gpu_ws_tag_background_prim(uint32_t prim) {
         return;
     }
     uint32_t op = words[0] >> 24;
-    if (op < 0x20u || op > 0x3Fu || (op & 2u)) {
+    if (!((op >= 0x20u && op <= 0x3Fu && !(op & 2u)) ||
+          op == 0x64u || op == 0x65u)) {
         ws_background_tag_stats.tag_rejected++;
         return;
     }
