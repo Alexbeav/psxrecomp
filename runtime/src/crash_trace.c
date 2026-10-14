@@ -809,6 +809,19 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         }
     }
 
+    /* KSEG2 reads and writes that memory.c dropped (PS1B-516). A title that
+     * reads KSEG2 by word or half sees 0 where it once saw the RAM mirror. */
+    {
+        extern int memory_kseg2_ignored_json(char *out, int cap);
+        char k2[96];
+        if (memory_kseg2_ignored_json(k2, (int)sizeof k2))
+            append_fmt(buf, sizeof(buf), &pos, "  \"kseg2_ignored\": %s,
+", k2);
+        else
+            append_str(buf, sizeof(buf), &pos, "  \"kseg2_ignored\": null,
+");
+    }
+
     /* CD read streams that ended before their first sector (PS1B-317): a
      * long run means the game restarts a read that never delivers. */
     {
