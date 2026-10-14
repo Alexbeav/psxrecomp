@@ -18,6 +18,9 @@ SPEC.loader.exec_module(guard)
 ALEX = ('Alexandros Mandravillis', 'Alexbeav@live.com')
 BAD = ('unlisted fixture', 'fixture@example.invalid')
 INSTALLER = Path(__file__).with_name('install_public_push_guard.py').resolve()
+INSTALLER_SPEC = importlib.util.spec_from_file_location('installer', INSTALLER)
+installer = importlib.util.module_from_spec(INSTALLER_SPEC)
+INSTALLER_SPEC.loader.exec_module(installer)
 CHECKER = Path(__file__).with_name('check_public_commits.py').resolve()
 
 
@@ -29,11 +32,12 @@ def run(*args, data=None, env=None):
 def fixture_parent():
     """Return the folder that holds the fixtures, or None for the default.
 
-    The installer refuses a hook folder on C: on Windows, and the default
-    temporary folder is on C: there. The working directory is used then,
-    because ctest starts this file in the build tree.
+    On a host whose C: is the small system drive, the installer refuses a
+    hook folder on C:, and the default temporary folder is on C: there. The
+    working directory is used then, because ctest starts this file in the
+    build tree.
     """
-    if sys.platform == 'win32' and Path(tempfile.gettempdir()).resolve().drive.upper() == 'C:':
+    if installer.refuses_drive_c() and Path(tempfile.gettempdir()).resolve().drive.upper() == 'C:':
         here = Path.cwd().resolve()
         if here.drive.upper() != 'C:':
             return str(here)
@@ -282,6 +286,15 @@ class GuardTests(unittest.TestCase):
             self.skipTest('directory symlink privilege unavailable')
         self.refused('hook target resolves outside this clone hook directory')
         self.assertFalse(outside.exists())
+
+
+class DriveRuleTests(unittest.TestCase):
+    def test_drive_c_is_refused_only_on_the_small_system_drive_host(self):
+        for platform, host, refused in (('win32', 'EAGLE', True), ('win32', 'eagle', True),
+                                        ('win32', 'PEGASUS', False), ('win32', '', False), ('linux', 'EAGLE', False)):
+            with self.subTest(platform=platform, host=host), patch.object(installer.sys, 'platform', platform), \
+                    patch.dict(os.environ, COMPUTERNAME=host):
+                self.assertEqual(installer.refuses_drive_c(), refused)
 
 
 if __name__ == '__main__':

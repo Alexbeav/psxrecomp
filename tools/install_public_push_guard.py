@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """Install a persistent pre-push guard without replacing another hook policy."""
+import os
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
 import sys
+
+# Only Eagle keeps its system drive C: small, so a guarded clone there belongs on another drive.
+# On other hosts C: may be the work drive (Pegasus builds on its SSD, which is C:).
+SMALL_SYSTEM_DRIVE_HOSTS = frozenset({'EAGLE'})
+
+
+def refuses_drive_c():
+    """True on a Windows host whose drive C: must not hold a guarded clone."""
+    return sys.platform == 'win32' and os.environ.get('COMPUTERNAME', '').upper() in SMALL_SYSTEM_DRIVE_HOSTS
 
 
 def install():
@@ -20,7 +30,7 @@ def install():
     git_dir = Path(common.stdout.strip()).resolve()
     if not hooks.is_relative_to(git_dir):
         raise ValueError('hook directory resolves outside this clone Git directory')
-    if sys.platform == 'win32' and hooks.drive.upper() == 'C:':
+    if refuses_drive_c() and hooks.drive.upper() == 'C:':
         raise ValueError('refusing to write a hook on C:')
     hook = hooks / 'pre-push'
     payload = hooks / 'public-commit-guard'
