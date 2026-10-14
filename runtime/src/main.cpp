@@ -10452,8 +10452,18 @@ namespace {
         const auto resolved = PSXRecompV4::resolve_disc_path(disc_path);
         const auto companion = PSXRecompV4::check_sbi_setup(resolved.data, resolved.mount);
 #if defined(RECOMP_LAUNCHER_HAS_SBI_STATUS)
-        out->sbi_status = !companion.required ? RECOMP_SBI_NA :
-                         companion.ready ? RECOMP_SBI_OK : RECOMP_SBI_MISSING;
+        if (companion.required) {
+            out->sbi_status = companion.ready ? RECOMP_SBI_OK : RECOMP_SBI_MISSING;
+        } else {
+            /* A CHD (or a revision without a data-track rule) never matches the
+             * size/hash rule, so fall back to the LibCrypt serial list: the row
+             * is OK only when the disc mounted with its .sbi loaded, Missing
+             * otherwise (absent, malformed, or the disc did not mount). */
+            const bool listed = !PSXRecompV4::missing_sbi_warning(
+                resolved.mount, serial, false).empty();
+            out->sbi_status = !listed ? RECOMP_SBI_NA
+                            : (id.toc_opened && id.sbi_loaded) ? RECOMP_SBI_OK : RECOMP_SBI_MISSING;
+        }
 #endif
         static std::string last_companion_warning;
         if (!companion.ready) {
