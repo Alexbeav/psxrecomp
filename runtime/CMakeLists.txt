@@ -23,6 +23,16 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(debug_socket_shutdown_test tests/test_debug_socket_shutdown.cpp)
+    target_include_directories(debug_socket_shutdown_test PRIVATE src)
+    find_package(Threads REQUIRED)
+    target_link_libraries(debug_socket_shutdown_test PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(debug_socket_shutdown_test PRIVATE ws2_32)
+    endif()
+    add_test(NAME debug_socket_shutdown_test COMMAND debug_socket_shutdown_test)
+    set_tests_properties(debug_socket_shutdown_test PROPERTIES TIMEOUT 15)
+
     add_executable(video_texture_filter_test tests/test_video_texture_filter.c src/video_texture_filter.c)
     target_include_directories(video_texture_filter_test PRIVATE include)
     add_test(NAME video_texture_filter_test COMMAND video_texture_filter_test)
