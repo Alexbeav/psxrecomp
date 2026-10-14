@@ -1,7 +1,7 @@
 """Generate the native launcher's metadata table from the Python intake registry."""
 from pathlib import Path
 import json
-from disc_companion import REQUIRED_SBI, KNOWN_LIBCRYPT_TRACKS
+from disc_companion import REQUIRED_SBI, KNOWN_LIBCRYPT_SERIALS
 
 
 def render():
@@ -14,7 +14,7 @@ def render():
             + "\n".join(rows) + "\n};\n"
             + "// Warning-only serials; no pressing or companion hash qualification.\n"
             + "static constexpr const char* kKnownLibcryptSerials[] = {\n"
-            + "\n".join("    " + json.dumps(serial) + "," for serial in KNOWN_LIBCRYPT_TRACKS.values())
+            + "\n".join("    " + json.dumps(serial) + "," for serial in sorted(KNOWN_LIBCRYPT_SERIALS))
             + "\n};\n")
 
 

@@ -1328,6 +1328,15 @@ on a fixed region -> next.
   passed the old values as a control. Two-player values remain frozen. Independent review,
   fork CI and the seven Tier 1 trial routes remain separate acceptance work.
 
+- **2026-10-09 (PS1B-478):** The generated native warning list now combines
+  the measured-track serials, required-SBI serials, and six fleet-table serials.
+  All eight PS1B-467 comment 7-4916 serials warn when no companion loads and
+  clear the warning when one loads. Existing unknown-serial, report reset,
+  path-redaction, exact-revision and mount transaction controls pass.
+  The parent fails the authored fleet check on SLES-02529.
+  This adds serial warning metadata, not qualified track or companion hashes.
+  Actual RE3 starts, independent review, fork CI and stage delivery remain open.
+
 - **2026-10-09 (PS1B-479):** MDEC snapshot prepare and read reserve the
   larger of the saved input count and the command's expected input length.
   Parsing refuses expected input lengths above the existing snapshot limit.
@@ -1337,3 +1346,11 @@ on a fixed region -> next.
   with and without prepare. It also checks invalid lengths and output bounds.
   The parent fails its capacity assertion before a continued write.
   Retail state loading, independent review and fork CI remain separate checks.
+
+- **2026-10-13 (PS1B-478):** SAME review 7-6527 qualified the selected public
+  source acquisition at fix `b61a14af` and stage `d806234a`, with 2,486 permitted
+  blobs and no excluded or unexpected blob bodies. The fresh existing-branch
+  integration keeps both October 9 entries above. The composed source still
+  needs its changed-source review. A fresh build, the stock cold/warm starts,
+  and the two clean 5,400-frame SBI comparisons remain unrun. This is public
+  source qualification, not full-history, private-source or gameplay qualification.
