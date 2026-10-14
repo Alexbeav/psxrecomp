@@ -158,6 +158,75 @@ int main(void)
         /* A listen address that is not address:port. */
         netplay_start_failure_text(-3, 1, "47810", "", NETPLAY_BIND_BAD_ADDRESS, 0, "", why, sizeof(why));
         CHECK(strstr(why, "\"47810\" is not an address and a port") != NULL);
+        /* A correct IPv6 listen address is not "not an address" (PS1B-511):
+         * netplay listens on IPv4 only, and the sentence says so. The probe
+         * in main.cpp answers NETPLAY_BIND_IPV6_UNSUPPORTED exactly when
+         * netplay_listen_text_is_ipv6 is 1, and NETPLAY_BIND_BAD_ADDRESS
+         * when the text is no address. */
+        {
+            static const char *const v6_ok[] = {
+                "[2001:db8::77]:47810", "[::]:47810", "[::]", "[::1]:1", "[fe80::1%3]:47810", "[fe80::1%eth0]:65535",
+                "::1", "::", "2001:db8::77", "2001:db8::77:47810", "fe80::1%3", "fe80::1234%eth0",
+                "2001:0db8:0000:0000:0000:0000:0000:0077", "::ffff:192.0.2.1", ":::1", "fe80::1%3:47810" };
+            static const char *const not_v6[] = {
+                "0.0.0.0:47810", "127.0.0.1:47810", "203.0.113.77:47810", ":47810", "47810", "my lan pc",
+                "localhost:47810", "listen-host.example:47810", "", "[", "[]", "[]:47810",
+                "[2001:db8::77", "[2001:db8::77]47810", "[2001:db8::77]:", "[2001:db8::77]:99999",
+                "[2001:db8::77]:123456", "[2001:db8::77]:47810x", "[gggg::1]:47810", "[1.2.3.4]:47810",
+                "[fe80::1%]:47810", "fe80::1%", "1:2", "::g", "2001:db8::77::1", "2001:db8::77:123456", "2001:db8::77:47810x", "[::1]]:47810" };
+            static const char *const v6_bad[] = { "[2001:db8::77]:99999", "[gggg::1]:47810", "2001:db8::77::1", "my lan pc" };
+            size_t k;
+            char report6[NETPLAY_START_FAILURE_CAP];
+            const char *const typed[] = { "2001:db8", "77", "fe80", "[", "]" };
+            for (k = 0; k < sizeof(v6_ok) / sizeof(v6_ok[0]); ++k) {
+                if (!netplay_listen_text_is_ipv6(v6_ok[k])) {
+                    fprintf(stderr, "not read as IPv6: [%s]\n", v6_ok[k]);
+                    ++failures;
+                }
+            }
+            for (k = 0; k < sizeof(not_v6) / sizeof(not_v6[0]); ++k) {
+                if (netplay_listen_text_is_ipv6(not_v6[k])) {
+                    fprintf(stderr, "read as IPv6: [%s]\n", not_v6[k]);
+                    ++failures;
+                }
+            }
+            CHECK(netplay_listen_text_is_ipv6(NULL) == 0);
+            /* The listen texts of the issue, and the sentence they get. */
+            for (k = 0; k < 2; ++k) {
+                const char *t = k == 0 ? "[2001:db8::77]:47810" : "[::]:47810";
+                const int probe = netplay_listen_text_is_ipv6(t) ? NETPLAY_BIND_IPV6_UNSUPPORTED
+                                                                 : NETPLAY_BIND_BAD_ADDRESS;
+                CHECK(probe == NETPLAY_BIND_IPV6_UNSUPPORTED);
+                netplay_start_failure_text(-3, 1, t, "", probe, 0, "", why, sizeof(why));
+                CHECK(strcmp(why, "Netplay listens on IPv4 addresses only. "
+                                  "Use an IPv4 address, such as 0.0.0.0:47810.") == 0);
+                CHECK(strstr(why, "is not an address") == NULL);
+                CHECK(strlen(why) < NETPLAY_START_FAILURE_CAP);
+                /* The run report: the same sentence, with no address in it. */
+                netplay_start_failure_report_text(-3, 1, t, "[2001:db8::78]:47811", probe, 0, "",
+                                                  report6, sizeof(report6));
+                CHECK(strcmp(report6, why) == 0);
+            }
+            /* A malformed address, a name and an IPv4 address that is wrong
+             * keep the old words. */
+            for (k = 0; k < sizeof(v6_bad) / sizeof(v6_bad[0]); ++k) {
+                const int probe = netplay_listen_text_is_ipv6(v6_bad[k]) ? NETPLAY_BIND_IPV6_UNSUPPORTED
+                                                                         : NETPLAY_BIND_BAD_ADDRESS;
+                netplay_start_failure_text(-3, 1, v6_bad[k], "", probe, 0, "", why, sizeof(why));
+                CHECK(strstr(why, "is not an address and a port to listen on.") != NULL);
+                CHECK(strstr(why, "IPv4") == NULL);
+            }
+            /* The IPv6 sentence repeats nothing the player typed. */
+            netplay_start_failure_text(-3, 1, "[2001:db8::77]:47810", "", NETPLAY_BIND_IPV6_UNSUPPORTED, 0, "",
+                                       why, sizeof(why));
+            for (k = 0; k < sizeof(typed) / sizeof(typed[0]); ++k)
+                CHECK(strstr(why, typed[k]) == NULL);
+            /* Only a LAN start (-3) gets it; the other codes keep their words. */
+            netplay_start_failure_text(-4, 1, "[::]:47810", "", NETPLAY_BIND_IPV6_UNSUPPORTED, 0, "", why, sizeof(why));
+            CHECK(strcmp(why, "Netplay could not start the online connection.") == 0);
+            netplay_start_failure_text(-3, 0, "[::]:47810", "", NETPLAY_BIND_IPV6_UNSUPPORTED, 0, "", why, sizeof(why));
+            CHECK(strstr(why, "no netplay") != NULL);
+        }
         /* A host waiting for the first peer (no peer address), port free. */
         netplay_start_failure_text(-3, 1, "0.0.0.0:7777", "", NETPLAY_BIND_OK, 0, "", why, sizeof(why));
         CHECK(strstr(why, "its connection on 0.0.0.0:7777") != NULL);

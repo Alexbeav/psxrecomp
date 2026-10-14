@@ -6,6 +6,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
 typedef struct {
     const char *origin;
     const char *text;
@@ -69,6 +78,62 @@ static int sys_text_fits(const char *text)
             return 0;
     }
     return n <= 80;
+}
+
+/* One IPv6 address, with no brackets and no port. A zone ("fe80::1%3",
+ * "fe80::1%eth0") is the system's own; inet_pton does not read it the same
+ * way everywhere, so the address is cut before it. */
+static int ipv6_address_ok(const char *start, size_t n)
+{
+    char address[64];
+    unsigned char packed[16];
+    const char *zone = (const char *)memchr(start, '%', n);
+    if (zone) {
+        if (zone + 1 >= start + n) return 0;
+        n = (size_t)(zone - start);
+    }
+    if (n == 0 || n >= sizeof(address)) return 0;
+    memcpy(address, start, n);
+    address[n] = '\0';
+    return inet_pton(AF_INET6, address, packed) == 1;
+}
+
+/* ":" and one to five digits up to 65535 at `colon`, then the end of the text
+ * (when `end` is NULL) or `end`. */
+static int port_after_colon(const char *colon)
+{
+    unsigned long port = 0;
+    size_t digits = 0;
+    if (colon[0] != ':') return 0;
+    while (colon[1 + digits] >= '0' && colon[1 + digits] <= '9') {
+        port = port * 10ul + (unsigned long)(colon[1 + digits] - '0');
+        if (++digits > 5) return 0;
+    }
+    return digits > 0 && colon[1 + digits] == '\0' && port <= 65535ul;
+}
+
+int netplay_listen_text_is_ipv6(const char *hostport)
+{
+    const char *first;
+    const char *last;
+    size_t n;
+    if (!hostport || !hostport[0]) return 0;
+    if (hostport[0] == '[') {
+        const char *close = strchr(hostport, ']');
+        if (!close) return 0;
+        /* After the bracket: nothing, or ":" and a port. */
+        if (close[1] != '\0' && !port_after_colon(close + 1)) return 0;
+        return ipv6_address_ok(hostport + 1, (size_t)(close - hostport - 1));
+    }
+    /* Without brackets the netplay library reads "address:port" at the last
+     * colon, so "2001:db8::77:47810" is an address and a port to it, and
+     * "2001:db8::77" alone is an address. Either way it needs two colons. */
+    first = strchr(hostport, ':');
+    if (!first || !strchr(first + 1, ':')) return 0;
+    n = strlen(hostport);
+    if (ipv6_address_ok(hostport, n)) return 1;
+    last = strrchr(hostport, ':');
+    return port_after_colon(last) && last > first && ipv6_address_ok(hostport, (size_t)(last - hostport));
 }
 
 void netplay_start_failure_text(int start_rc, int has_netplay,
@@ -137,6 +202,12 @@ void netplay_start_failure_text(int start_rc, int has_netplay,
                  port, address, system);
     } else if (start_rc == -3 && bind_probe == NETPLAY_BIND_NO_SOCKET) {
         snprintf(out, cap, "Netplay could not open a network socket %s.", system);
+    } else if (start_rc == -3 && bind_probe == NETPLAY_BIND_IPV6_UNSUPPORTED) {
+        /* A correct address that netplay does not use (PS1B-511). The text the
+         * player typed is not repeated: the sentence holds no address. */
+        snprintf(out, cap,
+                 "Netplay listens on IPv4 addresses only. Use an IPv4 "
+                 "address, such as 0.0.0.0:47810.");
     } else if (start_rc == -3 && bind_probe == NETPLAY_BIND_BAD_ADDRESS) {
         snprintf(out, cap,
                  "Netplay could not start: \"%.60s\" is not an address and a "

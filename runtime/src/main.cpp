@@ -3592,6 +3592,11 @@ static int netplay_bind_probe(const char* bind_hostport, const char* peer_hostpo
     WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
     sockaddr_in addr{};
+    /* A well-formed IPv6 address is not a bad address: netplay listens on
+     * IPv4 only, and the player is told that (PS1B-511). Checked before the
+     * name lookup, so no lookup runs for an address in brackets. */
+    if (netplay_listen_text_is_ipv6(bind_hostport))
+        return NETPLAY_BIND_IPV6_UNSUPPORTED;
     if (netplay_hostport_addr(bind_hostport, &addr) != 0)
         return NETPLAY_BIND_BAD_ADDRESS;
     if (tried && tried_cap) {

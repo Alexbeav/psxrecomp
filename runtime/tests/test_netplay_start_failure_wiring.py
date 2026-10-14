@@ -98,6 +98,12 @@ assert "NETPLAY_BIND_NOT_TRIED" not in probe, "the probe must not leave a listen
 assert re.search(r"if \(netplay_hostport_addr\(bind_hostport, &addr\) != 0\)\s*return NETPLAY_BIND_BAD_ADDRESS;", probe), (
     "a listen address the library refuses must be reported as such"
 )
+# A well-formed IPv6 address is its own answer (PS1B-511), judged before the name lookup and before the
+# generic bad address.
+assert re.search(r"if \(netplay_listen_text_is_ipv6\(bind_hostport\)\)\s*return NETPLAY_BIND_IPV6_UNSUPPORTED;\s*"
+                 r"if \(netplay_hostport_addr\(bind_hostport, &addr\) != 0\)\s*return NETPLAY_BIND_BAD_ADDRESS;", probe), (
+    "an IPv6 listen address must not be reported as a bad address"
+)
 # The peer address is read only after the listen address opened, and is named only when it cannot be read.
 opened = probe.index("if (result != NETPLAY_BIND_OK)")
 peer = probe.index("netplay_hostport_addr(peer_hostport, &peer) != 0 || peer.sin_port == 0")
