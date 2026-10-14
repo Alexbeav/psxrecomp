@@ -55,10 +55,18 @@ class GuardTests(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory(prefix='public-commit-guard-', dir=FIXTURE_PARENT)
         self.previous = Path.cwd()
         os.chdir(self.folder.name)
-        # A fixture below a work tree must never reach the repository above it.
-        ceiling = patch.dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(self.folder.name).resolve().parent))
+        # A fixture below a work tree must never reach the repository above it,
+        # and must never read the host's Git configuration (a global or system
+        # core.hooksPath makes the installer refuse). The global file is an empty
+        # one in the fixture and the system file is skipped.
+        blind = Path(self.folder.name).resolve() / 'blind.gitconfig'
+        blind.write_bytes(b'')
+        ceiling = patch.dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(self.folder.name).resolve().parent),
+                             GIT_CONFIG_GLOBAL=str(blind), GIT_CONFIG_NOSYSTEM='1')
         ceiling.start()
         self.addCleanup(ceiling.stop)
+        for name in ('GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS'):
+            os.environ.pop(name, None)
         run('init', '--quiet')
         self.base = self.commit('historical', author=BAD, committer=BAD)
 
@@ -196,6 +204,26 @@ class GuardTests(unittest.TestCase):
         run('config', 'core.hooksPath', 'other-hooks')
         self.refused('existing hook path policy')
         self.assertEqual(run('config', '--get', 'core.hooksPath').strip(), b'other-hooks')
+
+    def test_installer_refuses_host_hook_path_policy(self):
+        for scope in ('global', 'system'):
+            config = Path(f'host-{scope}.gitconfig').resolve()
+            config.write_text('[core]\n\thooksPath = host-hooks\n', encoding='utf-8')
+            with self.subTest(scope=scope), patch.dict(os.environ, {f'GIT_CONFIG_{scope.upper()}': str(config)}):
+                if scope == 'system':
+                    os.environ.pop('GIT_CONFIG_NOSYSTEM', None)
+                self.refused('existing hook path policy')
+                self.assertFalse(Path('.git/hooks/pre-push').exists())
+
+    def test_fixtures_ignore_host_hook_path(self):
+        """A host-wide core.hooksPath must not change a fixture's result (PS1B-489)."""
+        config = Path('host.gitconfig').resolve()
+        config.write_text('[core]\n\thooksPath = host-hooks\n', encoding='utf-8')
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=str(config))
+        test ='GuardTests.test_installer_preserves_modified_own_hook'
+        child = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()), test], env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(child.returncode, 0, child.stderr.decode('utf-8', 'replace'))
 
     def test_cli_cannot_override_historical_base(self):
         run('update-ref', 'refs/heads/base-fixture', self.base)
