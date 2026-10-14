@@ -109,9 +109,16 @@ mark = body(FNTRACE, "void fntrace_mark_game_started(CPUState* cpu)")
 assert "dirty_ram_pc_table_game_load();" in mark, "game entry must move the pre-load rows"
 assert mark.index("s_game_started = 1;") < mark.index("dirty_ram_pc_table_game_load();"), \
     "the rows move once, after the latch is set"
-restore = body(FNTRACE, "void fntrace_restore_game_started(int started)")
-assert re.search(r"if \(started && !s_game_started\) dirty_ram_pc_table_game_load\(\);", restore), \
-    "a restored started latch moves the pre-load rows once"
+# A state load restores the latch without the handoff (fntrace_restore_game_started
+# stays the one line the qualified-hunks registry pins), so the load makes the
+# move itself, on the latch's 0 -> 1 only, before it restores the latch.
+BOOT_STATE = (ROOT / "runtime" / "src" / "boot_state.c").read_text(encoding="utf-8")
+resume = re.search(r"if \(s_pending_game_started && !fntrace_is_game_started\(\)\) \{\s*"
+                   r"extern void dirty_ram_pc_table_game_load\(void\);\s*"
+                   r"dirty_ram_pc_table_game_load\(\);\s*\}\s*"
+                   r"fntrace_restore_game_started\(s_pending_game_started\);", BOOT_STATE)
+assert resume, "a state load that restores a started game moves the pre-load rows once, before the latch"
+assert BOOT_STATE.count("dirty_ram_pc_table_game_load();") == 1, "one move per state load"
 load = body(INTERP, "void dirty_ram_pc_table_game_load(void)")
 assert re.search(r"psx_interp_preload_close\(g_dirty_ram_pc_table, DIRTY_RAM_PC_TABLE_SIZE,\s*"
                  r"DIRTY_RAM_KERNEL_WINDOW_END, g_text_image_lo,\s*g_overlay_region_floor, s_frame_count,",
