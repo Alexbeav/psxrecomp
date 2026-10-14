@@ -50,5 +50,11 @@ External build/authoring recipes are retained in the campaign recovery evidence.
 Scope: single-speed audio tracks with valid SubQ, ordinary authored commands,
 cold source-clock selection. Double speed, Forward/Backward, playing data tracks,
 active data-read to Play and hardware timing are not
-qualified. Full Pepsiman RAM/clock parity and witnessed ending remain separate
+qualified. Any track count is accepted (PS1G-118). The transcripts cover three
+tracks; a scope case checks that a 57-track disc starts a Play as the
+three-track disc does. From track 10 on, the binary track a Play asks for
+differs from the BCD SubQ track, so autopause ends that Play at its first
+sector. Octoshock 2.7 `cdc.cpp` (Play and its autopause test) compares the
+same two values. No oracle transcript covers a disc of more than nine tracks.
+Full Pepsiman RAM/clock parity and witnessed ending remain separate
 acceptance gates, as does the unchanged Tekken regression after shared changes.

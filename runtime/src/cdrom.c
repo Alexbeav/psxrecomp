@@ -2129,8 +2129,11 @@ static void start_source_cdda(int requested_track)
     cdrom_clear_pending_dataready();
     if (cdda_playing && !source_cdda.seeking && !requested_track && !setloc_pending) return;
 
+    /* Any track count (PS1G-118: Tomb Raider has 57). From track 10 on, the
+     * binary play_track_match differs from the BCD SubQ track, so an
+     * autopause Play of such a track ends at its first sector. */
     int tracks = iso_track_count(iso_handle);
-    if (tracks < 1 || tracks > 9) exit(2);
+    if (tracks < 1) exit(2);
     if (requested_track > tracks) requested_track = tracks;
     int origin = cdda_playing ? (cdda_lba > 2147483647U ? 0 : (int)cdda_lba) : msf_to_lba(read_min, read_sec, read_sect);
     if (origin < 0) origin = 0;

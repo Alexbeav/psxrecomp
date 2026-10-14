@@ -54,7 +54,8 @@ static void q_msf(unsigned n,uint8_t *b){b[0]=bin_to_bcd(n/4500);b[1]=bin_to_bcd
 int iso_read_subq(void *p,uint32_t lba,uint8_t *q,int n,int *v){(void)p;if(n!=12)return 0;int track=lba<90?1:lba<450?2:lba<960?3:100;int index=track==100||lba>=starts[track];memset(q,0,12);q[0]=track==1?0x41:1;q[1]=track==100?0xaa:bin_to_bcd(track);q[2]=index;q_msf(track==100?0:abs((int)lba-(int)starts[track]),q+3);q_msf(lba+150,q+7);unsigned crc=0;for(int i=0;i<10;i++){crc^=(unsigned)q[i]<<8;for(int j=0;j<8;j++)crc=((crc<<1)^((crc&0x8000)?0x1021:0))&65535;}q[10]=(~crc)>>8;q[11]=~crc;*v=1;return 1;}
 int iso_has_subq_replacements(void *p){(void)p;return 0;}
 uint32_t iso_sector_count(void *p){(void)p;return 960;}
-int iso_track_count(void *p){(void)p;return 3;}
+static int track_count=3;
+int iso_track_count(void *p){(void)p;return track_count;}
 uint32_t iso_track_start_lba(void *p,int t){(void)p;return t==0?960:starts[t];}
 uint32_t iso_track_pregap_lba(void *p,int t){(void)p;return t==2?90:t==3?450:0;}
 int iso_track_is_audio(void *p,int t){(void)p;return t==2||t==3;}
@@ -105,6 +106,7 @@ static int scope_case(const char *name) {
     if (!strcmp(name, "single-speed")) play = 1;                           /* accepted */
     else if (!strcmp(name, "double-speed")) { play = 1; mode_reg = 0x80; } /* refused */
     else if (!strcmp(name, "active-read")) { play = 1; reading = 1; }      /* refused */
+    else if (!strcmp(name, "fifty-seven-tracks")) { play = 1; track_count = 57; } /* accepted */
     else if (!strcmp(name, "getstat")) command = 0x01;                     /* accepted */
     else if (!strcmp(name, "scan-forward")) command = 0x04;                /* refused */
     else if (!strcmp(name, "scan-backward")) command = 0x05;               /* refused */

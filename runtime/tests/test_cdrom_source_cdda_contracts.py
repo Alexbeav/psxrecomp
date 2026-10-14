@@ -31,9 +31,12 @@ with tempfile.TemporaryDirectory(prefix='cd-source-cdda-') as temp:
   assert rows[0][0]=='step' and len(rows)==12,(name,rows)
   return run.returncode,int(rows[0][1]),{key:(int(before),int(after)) for key,before,after in rows[1:]}
  # Accepted twins: the step returns, takes one draw and changes the controller.
- code,step,v=scope('single-speed')
- assert (code,step)==(0,2) and v['draws'][1]==v['draws'][0]+1,('single-speed',code,step,v)
- assert v['mode'][0]==0 and v['reading'][0]==0 and v['cdda_playing']==(0,1) and v['cdda_seeking']==(0,1),('single-speed',v)
+ # A disc of more than nine tracks plays as the three-track disc does (PS1G-118:
+ # Tomb Raider has 57 tracks, and its first Play stopped the process).
+ for name in ('single-speed','fifty-seven-tracks'):
+  code,step,v=scope(name)
+  assert (code,step)==(0,2) and v['draws'][1]==v['draws'][0]+1,(name,code,step,v)
+  assert v['mode'][0]==0 and v['reading'][0]==0 and v['cdda_playing']==(0,1) and v['cdda_seeking']==(0,1),(name,v)
  code,step,v=scope('getstat')
  assert (code,step)==(0,2) and v['draws'][1]==v['draws'][0]+1 and v['command_pending']==(0,1),('getstat',code,step,v)
  # Refused: the stop comes from the step under test, before a draw and before any change.
@@ -46,4 +49,4 @@ with tempfile.TemporaryDirectory(prefix='cd-source-cdda-') as temp:
  assert (code,step)==(2,0),('setup stop',code,step,v)
  run=subprocess.run([str(exe),str(tape),'unused','unused','restore'],env=env,capture_output=True,timeout=30)
  assert run.returncode==0,('restore',run.returncode,run.stderr)
-print('CDDA: four complete source command/state/audio transcripts, four refused scope cases with two accepted twins, and the null restore PASS')
+print('CDDA: four complete source command/state/audio transcripts, four refused scope cases with three accepted twins, and the null restore PASS')
