@@ -980,6 +980,10 @@ if(BUILD_TESTING)
         src/psx_video_timing.c
         src/gpu_timeline.c)
     target_include_directories(depth24_present_hold_exec_test PRIVATE include src)
+    if(MINGW)
+        target_compile_options(depth24_present_hold_exec_test PRIVATE -flto)
+        target_link_options(depth24_present_hold_exec_test PRIVATE -flto)
+    endif()
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(depth24_present_hold_exec_test PRIVATE
             -ffunction-sections -fdata-sections)
