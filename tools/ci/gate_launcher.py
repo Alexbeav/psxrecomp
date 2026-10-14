@@ -11,6 +11,7 @@ skips LOG [LOG ...] [--must-run NAME ...]
     Passed (skipped, failed, or absent from the logs).
 """
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -22,8 +23,9 @@ TAIL = re.compile(r"^\s+\d+ - (\S+) \(Skipped\)\s*$", re.M)
 
 
 def git(root, *args):
+    # GIT_OPTIONAL_LOCKS=0: "git status" must not refresh the index of a checkout that is only being read.
     done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
+                          encoding="utf-8", errors="replace", env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
     if done.returncode != 0:
         raise SystemExit("git %s failed in %s: %s" % (" ".join(args), root, done.stderr.strip()))
     return done.stdout.strip()
@@ -59,7 +61,8 @@ def results(logs):
     for log in logs:
         text = Path(log).read_text(encoding="utf-8", errors="replace")
         for name, status in RESULT.findall(text):
-            seen[name] = "Skipped" if "Skipped" in status else status.strip("* ")
+            if seen.get(name) != "Skipped":
+                seen[name] = "Skipped" if "Skipped" in status else status.strip("* ")
         for name in TAIL.findall(text):
             seen[name] = "Skipped"
     return seen

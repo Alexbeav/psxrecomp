@@ -67,6 +67,26 @@ class SkipReader(unittest.TestCase):
         code, out, _ = run("skips", rt, rc)
         self.assertEqual((code, out), (0, "skipped: 2 (codegen_host_handover_launcher_test windows_rebuild_helper)"))
 
+    def test_a_later_pass_does_not_hide_an_earlier_skip(self):
+        # "Skipped wins" holds across logs too: the name is Skipped in the first tree, Passed in the second.
+        first = self.log("rt.log", CTEST_RECOMP_WITHOUT)
+        later = self.log("rc.log", "1/1 Test #9: windows_rebuild_helper ...........   Passed    1.00 sec\n")
+        for order in ((first, later), (later, first)):
+            code, out, _ = run("skips", *order, "--must-run", "windows_rebuild_helper")
+            self.assertEqual(code, 1, order)
+            self.assertEqual(out, "skipped: 1 (windows_rebuild_helper)", order)
+
+    def test_every_git_call_leaves_the_index_alone(self):
+        import importlib.util
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("gate_launcher_under_test", TOOL)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        done = subprocess.CompletedProcess([], 0, stdout="x\n", stderr="")
+        with mock.patch.object(module.subprocess, "run", return_value=done) as called:
+            module.git(Path("."), "status", "--porcelain")
+        self.assertEqual(called.call_args.kwargs["env"]["GIT_OPTIONAL_LOCKS"], "0")
+
     def test_zero_when_nothing_was_left_out(self):
         code, out, _ = run("skips", self.log("rt.log", CTEST_WITH))
         self.assertEqual((code, out), (0, "skipped: 0 ()"))
