@@ -3027,11 +3027,7 @@ static void exec_command(uint8_t cmd) {
             break;
         }
         if(s_source_clock) {
-            if(reading || cdda_playing || pending_dataready) {
-                fprintf(stderr,"[CDROM] Source reset from an active stream is not qualified\n");exit(2);
-            }
-            /* Empty/paused stream is the qualified source scope.
-             * Spec 14.5 J2: the acknowledge (PSX-SPX "Init - Command 0Ah":
+            /* Spec 14.5 J2: the acknowledge (PSX-SPX "Init - Command 0Ah":
              * INT3, then INT2) carries the status from before the command
              * [UNIT: cdrom_c_fixture_replay_tekken_test, _pepsiman_test;
              * C1-C9 row 9]. Every Init on this path gets it, also one that
@@ -3045,6 +3041,16 @@ static void exec_command(uint8_t cmd) {
              * J4: an Init during a running reset changes neither. J5: the
              * completion is process_source_reset. */
             if (!s_source_reset_due) {
+                /* J6 (PS1G-118): an Init during a read, a CD-DA play or
+                 * with a pended data-ready notice stops that stream at the
+                 * command, as the default path below does (PSX-SPX "Init":
+                 * abort all commands). No sector, CD-DA report or pended
+                 * notice follows the acknowledge. The audio, the mode and
+                 * the position still change at the completion (J5). No
+                 * oracle transcript covers this yet (fixture N1, "an
+                 * established read"). */
+                if (reading || pending_dataready) stop_read_stream();
+                if (cdda_playing) stop_cdda_playback();
                 s_source_reset_due = psx_cycle_count + 1136000u;
                 stat_reg = has_disc() ? CDSTAT_MOTOR : CDSTAT_SHELL;
             }
