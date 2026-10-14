@@ -23,6 +23,12 @@ def run(command, cwd):
     return result.stdout
 
 
+def scratch_root():
+    # Use WORKBENCH_RUN_ROOT only when that folder exists; else the default temp folder.
+    root = os.environ.get("WORKBENCH_RUN_ROOT")
+    return root if root and os.path.isdir(root) else None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cc", default="gcc")
@@ -101,7 +107,7 @@ int main() {
     report("unknown-missing", nullptr);
 }
 '''
-    with tempfile.TemporaryDirectory(prefix="missing_sbi_callers_", dir=os.environ.get("WORKBENCH_RUN_ROOT")) as scratch:
+    with tempfile.TemporaryDirectory(prefix="missing_sbi_callers_", dir=scratch_root()) as scratch:
         work = Path(scratch)
         (work / "fixture.c").write_text(fixture, encoding="utf-8")
         (work / "helper.cpp").write_text(program, encoding="utf-8")
