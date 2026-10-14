@@ -982,6 +982,26 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME ws_local_view_margin_test COMMAND ws_local_view_margin_test)
 
+    # Depth24 GP1(07h) present hold (#636): hold count, upload span and the
+    # staged frame agree across windowed/headless/deferred presents, rollback
+    # replay and disk loads; stale trailing FMV pixels never reach a frame.
+    add_executable(depth24_present_hold_exec_test
+        tests/test_depth24_present_hold_exec.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(depth24_present_hold_exec_test PRIVATE include src)
+    if(MINGW)
+        target_compile_options(depth24_present_hold_exec_test PRIVATE -flto)
+        target_link_options(depth24_present_hold_exec_test PRIVATE -flto)
+    endif()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(depth24_present_hold_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(depth24_present_hold_exec_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME depth24_present_hold_exec_test COMMAND depth24_present_hold_exec_test)
+
     add_executable(ws_view_anchor_test tests/test_ws_view_anchor.c)
     add_executable(ws_view_anchor_gpu_test tests/test_ws_view_anchor_gpu.c
         src/psx_video_timing.c
@@ -1837,6 +1857,9 @@ if(BUILD_TESTING)
                              --cc ${CMAKE_C_COMPILER})
         endif()
         add_test(NAME fntrace_c_linkage_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
+        add_test(NAME depth24_present_hold_vblank_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_depth24_present_hold_vblank.py)
         add_test(NAME netplay_load_apply_flow_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_load_apply_flow.py)
