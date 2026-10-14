@@ -10,10 +10,16 @@ import time
 import unittest
 
 from compare_ram_pages import MAGIC, PAGE_BYTES, PAGE_COUNT, RAM_BYTES, page_hash
-from investigate import compare_pair, trace_pair, validate
+from investigate import compare_pair, trace_pair, unlocked, validate
 
 HERE = Path(__file__).resolve().parent
 CONTROLLER = HERE / 'investigate.py'
+# A loaded build host can take many seconds to start the controller and its worker (this file took
+# 75.8 s in a trial gate, 14.8 s alone; PS1B-439). Waits on other processes are therefore ceilings
+# that only bound a hang, and a worker that must still be running when the test acts is held
+# until the test releases it instead of sleeping a fixed time the host can outrun.
+WAIT = 120
+HOLD = '{run}/release'
 
 
 def fixture(directory, mode, delay=0):
@@ -28,7 +34,11 @@ def fixture(directory, mode, delay=0):
     if mode == 'tree':
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
         (root / 'descendant.pid').write_text(str(child.pid))
-    time.sleep(float(delay))
+    try:
+        time.sleep(float(delay))
+    except ValueError:
+        while not Path(delay).exists():  # held: the step's own timeout still bounds it
+            time.sleep(.05)
     for side in ('source', 'native'):
         target = root / side
         target.mkdir(exist_ok=True)
@@ -56,7 +66,7 @@ def recipe(directory, mode='match', delay=0, diagnostics=False):
     def step(name, phase, output, kind, wait=0):
         return dict(id=name, phase=phase,
                     argv=['{python}', str(Path(__file__).resolve()), '--fixture', output, kind, str(wait)],
-                    timeout=15, max_bytes=20000000, max_files=100, memory_mib=256)
+                    timeout=WAIT, max_bytes=20000000, max_files=100, memory_mib=256)
     data = dict(schema='tas-investigation-v1', expected_returns=4,
                 identity=dict(input='{recipe_dir}/input.bin', profile='{recipe_dir}/profile.json',
                               executable=sys.executable, fixture=str(Path(__file__).resolve())),
@@ -82,9 +92,10 @@ class ControllerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.run = self.root / 'run'
+        self.addCleanup(self.settle)
 
     def command(self, *args):
-        return subprocess.run([sys.executable, str(CONTROLLER), *map(str, args)], capture_output=True, text=True, timeout=30)
+        return subprocess.run([sys.executable, str(CONTROLLER), *map(str, args)], capture_output=True, text=True, timeout=WAIT)
 
     def start(self, mode='match', delay=0, diagnostics=False):
         self.path, self.data = recipe(self.root / 'recipe', mode, delay, diagnostics)
@@ -96,12 +107,29 @@ class ControllerTests(unittest.TestCase):
     def state(self):
         return json.loads((self.run / 'progress.json').read_text())
 
-    def wait_for(self, path):
-        deadline = time.monotonic() + 10
-        while not path.exists():
+    def wait_until(self, done, what):
+        deadline = time.monotonic() + WAIT
+        while not done():
             if time.monotonic() > deadline:
-                self.fail('worker did not reach ' + str(path))
+                self.fail('worker did not reach ' + what)
             time.sleep(.05)
+
+    def wait_for(self, path):
+        self.wait_until(path.exists, str(path))
+
+    def release(self):
+        (self.run / 'release').touch()
+
+    def settle(self):
+        """Stop the detached workers of every run and let them exit before the temporary directory
+        goes: a worker still holding its logs made cleanup fail with WinError 32."""
+        workers = list(self.root.glob('**/attempts/*/worker.lock'))
+        for run in {worker.parents[2] for worker in workers}:
+            (run / 'STOP').touch()
+        deadline = time.monotonic() + WAIT
+        for worker in workers:
+            while not unlocked(worker) and time.monotonic() < deadline:
+                time.sleep(.05)
 
     def background(self):
         process = subprocess.Popen([sys.executable, str(CONTROLLER), 'run', str(self.path), str(self.run)],
@@ -200,7 +228,7 @@ class ControllerTests(unittest.TestCase):
         env = dict(os.environ, CLAUDE_CODE_SESSION_ACCESS_TOKEN=secret, GH_TOKEN=secret, EXAMPLE_API_KEY=secret,
                    PSX_TAS_KEEP='kept')
         outcome = subprocess.run([sys.executable, str(CONTROLLER), 'run', str(self.path), str(self.run)],
-                                 capture_output=True, text=True, timeout=30, env=env)
+                                 capture_output=True, text=True, timeout=WAIT, env=env)
         self.assertEqual(outcome.returncode, 0, outcome.stderr + outcome.stdout)
         child = json.loads(probe.read_text())
         self.assertEqual(child.get('PSX_TAS_KEEP'), 'kept')
@@ -210,35 +238,38 @@ class ControllerTests(unittest.TestCase):
             self.assertNotIn(secret, record.read_text())
 
     def test_changed_input_blocks_diagnostics(self):
-        self.start('mismatch', 1, diagnostics=True)
+        self.start('mismatch', HOLD, diagnostics=True)
         process = self.background()
-        self.command('pause', self.run); process.wait(timeout=5)
+        self.command('pause', self.run); process.wait(timeout=WAIT)
         (self.path.parent / 'input.bin').write_bytes(b'changed')
+        self.release()
         self.command('resume', self.run)
         self.assertEqual(self.state()['status'], 'failed')
         self.assertFalse((self.run / 'attempts/snapshots-1').exists())
 
     def test_interrupted_recovery_and_lock(self):
-        self.start('match', 2)
+        self.start('match', HOLD)
         process = self.background()
         self.assertNotEqual(self.command('run', self.path, self.run).returncode, 0)
         process.kill(); process.wait()
+        self.release()
         self.assertEqual(self.command('run', self.path, self.run).returncode, 0)
         self.assertEqual((self.run / 'capture/invocations.txt').read_text().count('started'), 1)
 
     def test_pause_resume_and_stop(self):
-        self.start('match', 1)
+        self.start('match', HOLD)
         process = self.background()
         self.command('pause', self.run)
-        process.wait(timeout=5)
+        process.wait(timeout=WAIT)
         self.assertEqual(self.state()['status'], 'paused')
+        self.release()
         self.assertEqual(self.command('resume', self.run).returncode, 0)
         self.assertEqual((self.run / 'capture/invocations.txt').read_text().count('started'), 1)
         self.run = self.root / 'stop'
-        self.start('match', 10)
+        self.start('match', HOLD)
         process = self.background()
         self.command('stop', self.run)
-        process.wait(timeout=5)
+        process.wait(timeout=WAIT)
         self.assertEqual(self.state()['status'], 'stopped')
         self.assertNotEqual(self.command('resume', self.run).returncode, 0)
 
@@ -257,12 +288,13 @@ class ControllerTests(unittest.TestCase):
         self.run.mkdir()
         (self.run / 'controller.lock').touch()
         # Initialize by pausing after worker launch, then retain an expired intent without receipt.
-        self.data['steps'][0]['argv'][-1] = '1'
+        self.data['steps'][0]['argv'][-1] = HOLD
         self.save()
         process = self.background()
-        self.command('pause', self.run); process.wait(timeout=5)
+        self.command('pause', self.run); process.wait(timeout=WAIT)
+        self.release()
         self.wait_for(self.run / 'attempts/replay-1/result.json')
-        time.sleep(.2)
+        self.wait_until(lambda: unlocked(self.run / 'attempts/replay-1/worker.lock'), 'worker exit')
         (self.run / 'attempts/replay-1/result.json').unlink()
         path = self.run / 'attempts/replay-1/command.json'
         spec = json.loads(path.read_text()); spec['launched'] = 0
