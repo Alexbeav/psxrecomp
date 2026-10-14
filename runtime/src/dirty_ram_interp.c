@@ -35,6 +35,7 @@
 #include "lockstep.h"
 #include "starvation_ring.h"
 #include "fntrace.h"  /* fntrace_is_game_started / fntrace_mark_game_started */
+#include "interp_report.h"  /* psx_interp_preload_close (PS1B-513) */
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -287,6 +288,24 @@ static DirtyRamPcEntry *pc_table_get_or_insert_in(DirtyRamPcEntry *table, uint32
 
 static DirtyRamPcEntry *pc_table_get_or_insert(uint32_t pc) {
     return pc_table_get_or_insert_in(g_dirty_ram_pc_table, pc);
+}
+
+/* PS1B-513: what the interpreter ran before game entry. The BIOS start-up
+ * code (with a real intro, the shell in RAM 0x30000 and up) is not the
+ * game's, but its addresses lie in the game's text or overlay range. Game
+ * entry moves those rows' counts here, so the run report's by_place and
+ * hottest describe the game. Called from fntrace.c on the emulation thread. */
+static PsxInterpPreload s_pc_table_preload;
+
+void dirty_ram_pc_table_game_load(void) {
+    psx_interp_preload_close(g_dirty_ram_pc_table, DIRTY_RAM_PC_TABLE_SIZE,
+                             DIRTY_RAM_KERNEL_WINDOW_END, g_text_image_lo,
+                             g_overlay_region_floor, s_frame_count,
+                             &s_pc_table_preload);
+}
+
+void dirty_ram_pc_table_preload(PsxInterpPreload *out) {
+    if (out) *out = s_pc_table_preload;
 }
 
 /* Record every PC the interpreter executes (not just block entries) so

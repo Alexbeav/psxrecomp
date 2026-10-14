@@ -46,7 +46,14 @@ void fntrace_set_game_range(uint32_t lo, uint32_t hi) {
 }
 
 int fntrace_is_game_started(void) { return s_game_started; }
-void fntrace_restore_game_started(int started) { s_game_started = !!started; }
+/* A restored latch skips the handoff's RAM clears and CD change. Only the run
+ * report's per-address table takes the new side (PS1B-513): a state taken in
+ * the game, loaded before game entry, ends the pre-load rows as entry does. */
+void fntrace_restore_game_started(int started) {
+    extern void dirty_ram_pc_table_game_load(void);
+    if (started && !s_game_started) dirty_ram_pc_table_game_load();
+    s_game_started = !!started;
+}
 
 /* Centralised game-start transition.  Idempotent — safe to call from both
  * the dispatcher (fntrace_record) and the generated entry-point function.
@@ -59,8 +66,11 @@ void fntrace_mark_game_started(CPUState* cpu) {
     s_game_started = 1;
     extern void dirty_ram_clear_image_baseline(void);
     extern void memory_note_game_entry(void);
+    extern void dirty_ram_pc_table_game_load(void);
     dirty_ram_clear_image_baseline();
     memory_note_game_entry();
+    /* PS1B-513: the interpreter rows so far are the BIOS's, not the game's. */
+    dirty_ram_pc_table_game_load();
     cdrom_notify_game_started();
     boot_state_trigger_capture(cpu);
 }

@@ -83,6 +83,9 @@ void parity_trace_note_write(uint32_t addr, uint32_t width, uint32_t pc) {
 }
 static unsigned cd_notices, captures;
 void cdrom_notify_game_started(void) { cd_notices++; }
+/* The interpreter's pre-load counts (PS1B-513) live in dirty_ram_interp.c,
+ * which this fixture does not link; they touch no guest RAM. */
+void dirty_ram_pc_table_game_load(void) {}
 void boot_state_trigger_capture(const CPUState *cpu) { (void)cpu; captures++; }
 uint32_t interrupts_get_cycles_since_vblank(void) { return 0; }
 void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3], uint16_t target[3],

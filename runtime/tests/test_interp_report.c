@@ -10,6 +10,9 @@
  *   a full table       the 32 hottest, hottest first, the lower address first among
  *                      equals, each with its place; sums per place; empty slots ignored;
  *   guard and misses   the values it was given, every reason by name;
+ *   game entry         (PS1B-513) the rows so far move to preload by place, keep their
+ *                      address and lose their counts; by_place and hottest then hold
+ *                      only what ran after entry; a second entry adds to the sums;
  *   a small buffer     -1 and no partial object; one byte more than the text fits.
  *
  * Build/run: ctest -R interp_report_test
@@ -100,6 +103,11 @@ int main(void)
         check(count_of(s_json, key) == 2, key);
     }
     check(strcmp(psx_interp_miss_reason_name(PSX_INTERP_MISS_REASONS), "unknown") == 0, "a reason past the list has no name");
+    check(strstr(s_json, "\"preload\": {\"game_started\": 0, \"frame\": 0, \"addresses\": 0, \"by_place\": "
+                         "{\"kernel\": {\"addresses\": 0, \"hits\": 0, \"entries\": 0}, "
+                         "\"text\": {\"addresses\": 0, \"hits\": 0, \"entries\": 0}, "
+                         "\"overlay\": {\"addresses\": 0, \"hits\": 0, \"entries\": 0}}}, \"hottest_max\"") != NULL,
+          "nothing ran: preload says the game was not entered and moved nothing");
 
     /* --- a full table -------------------------------------------------------- */
     memset(&in, 0, sizeof in);
@@ -169,6 +177,85 @@ int main(void)
                          "\"outside_window\": 1003, \"device_touch\": 1004, \"native_off\": 1005, \"diff_gate\": 1006, "
                          "\"rank\": 1007, \"bad_entry\": 1008, \"modified_text_backoff\": 1009, \"modified_text_load_bound\": 1010}") != NULL, "guard and misses: the misses above the kernel");
     check(strstr(s_json, "\"kernel\": {\"miss_cached\": 2000, \"no_unit\": 2001,") != NULL, "guard and misses: the misses in the kernel window");
+
+    /* --- game entry (PS1B-513) ------------------------------------------------------ */
+    /* With a real BIOS intro the BIOS shell runs from RAM 0x30000 and up before the
+     * game's boot executable is loaded, inside the game's text range. Game entry moves
+     * those rows to preload; by_place and hottest then hold only what ran after it. */
+    {
+        PsxInterpPreload pre;
+        memset(&in, 0, sizeof in);
+        memset(&pre, 0, sizeof pre);
+        memset(s_table, 0, sizeof s_table);
+        in.kernel_end = 0x00010000u; in.text_lo = 0x00010000u; in.text_hi = 0x000E5800u;
+        in.table = s_table; in.table_size = 512;
+        /* Before entry: two BIOS shell blocks in the text range (the counts of the EU
+         * BIOS run of Resident Evil 3), a kernel stub, a BIOS block above the text. */
+        s_table[10].pc = 0x000597E8u; s_table[10].hits = 5133281; s_table[10].insns = 25666405;
+        s_table[11].pc = 0x0005981Cu; s_table[11].hits = 5133281; s_table[11].insns = 25666405;
+        s_table[11].entry_hits = 2;
+        s_table[12].pc = 0x00000CF0u; s_table[12].hits = 40; s_table[12].entry_hits = 40;
+        s_table[13].pc = 0x001F0000u; s_table[13].hits = 9; s_table[13].entry_hits = 1;
+        s_table[13].occ_crc = 0x1234u; s_table[13].occ_ok = 1; s_table[13].last_ext_ra = 0x80001234u;
+        s_table[14].pc = 0x80060000u;   /* inserted, never counted */
+        psx_interp_preload_close(s_table, 512, in.kernel_end, in.text_lo, in.text_hi, 1234, &pre);
+        check(pre.game_started == 1 && pre.frame == 1234, "game entry: the move carries its frame");
+        check(pre.addresses[0] == 1 && pre.hits[0] == 40 && pre.entries[0] == 40,
+              "game entry: the kernel row moves to the kernel sum");
+        check(pre.addresses[1] == 2 && pre.hits[1] == 10266562 && pre.entries[1] == 2,
+              "game entry: the BIOS rows in the text range move to the text sum");
+        check(pre.addresses[2] == 1 && pre.hits[2] == 9 && pre.entries[2] == 1,
+              "game entry: the row above the text moves to the overlay sum");
+        check(s_table[10].pc == 0x000597E8u && s_table[11].pc == 0x0005981Cu && s_table[12].pc == 0x00000CF0u &&
+              s_table[13].pc == 0x001F0000u && s_table[14].pc == 0x80060000u,
+              "game entry: every row keeps its address, so no probe chain breaks");
+        {
+            int cleared = 1;
+            for (int i = 10; i <= 14; i++)
+                cleared &= s_table[i].hits == 0 && s_table[i].insns == 0 && s_table[i].entry_hits == 0 &&
+                           s_table[i].occ_crc == 0 && s_table[i].occ_ok == 0 && s_table[i].last_ext_ra == 0;
+            check(cleared, "game entry: each moved row's counts and caller fields are cleared");
+        }
+        /* After entry: the game's own blocks, and the kernel stub again in its old row. */
+        s_table[20].pc = 0x80020000u; s_table[20].hits = 300; s_table[20].entry_hits = 30; s_table[20].insns = 3000;
+        s_table[21].pc = 0x80180000u; s_table[21].hits = 50; s_table[21].entry_hits = 5;
+        s_table[12].hits = 7; s_table[12].entry_hits = 7;
+        in.preload = pre;
+        n = psx_interp_report_json(s_json, (int)sizeof s_json, &in);
+        check(n > 0 && json_valid(s_json), "game entry: valid JSON");
+        check(strstr(s_json, "0x000597E8") == NULL && strstr(s_json, "0x0005981C") == NULL,
+              "game entry: the BIOS blocks are not in the hottest list");
+        check(strstr(s_json, "\"addresses\": 3, \"by_place\": {\"kernel\": {\"addresses\": 1, \"hits\": 7, \"entries\": 7}, "
+                             "\"text\": {\"addresses\": 1, \"hits\": 300, \"entries\": 30}, "
+                             "\"overlay\": {\"addresses\": 1, \"hits\": 50, \"entries\": 5}}") != NULL,
+              "game entry: by_place counts only what ran after entry");
+        check(strstr(s_json, "\"preload\": {\"game_started\": 1, \"frame\": 1234, \"addresses\": 4, \"by_place\": "
+                             "{\"kernel\": {\"addresses\": 1, \"hits\": 40, \"entries\": 40}, "
+                             "\"text\": {\"addresses\": 2, \"hits\": 10266562, \"entries\": 2}, "
+                             "\"overlay\": {\"addresses\": 1, \"hits\": 9, \"entries\": 1}}}, \"hottest_max\"") != NULL,
+              "game entry: preload holds what ran before entry, by place");
+        {
+            const char *first = strstr(s_json, "{\"pc\": ");
+            check(first && first == strstr(s_json, "{\"pc\": \"0x80020000\", \"place\": \"text\", \"hits\": 300, \"entries\": 30"),
+                  "game entry: the game's own block leads the hottest list");
+        }
+        /* The game range armed again and entered again: the sums grow, the frame is the latest. */
+        psx_interp_preload_close(s_table, 512, in.kernel_end, in.text_lo, in.text_hi, 5000, &pre);
+        check(pre.frame == 5000 && pre.addresses[0] == 2 && pre.hits[0] == 47 && pre.addresses[1] == 3 &&
+              pre.hits[1] == 10266862 && pre.addresses[2] == 2 && pre.hits[2] == 59,
+              "a second entry: the sums grow and the frame is the latest");
+        /* No table: marked, nothing moved; no sums: nothing happens. */
+        {
+            PsxInterpPreload none;
+            memset(&none, 0, sizeof none);
+            psx_interp_preload_close(NULL, 0, in.kernel_end, in.text_lo, in.text_hi, 77, &none);
+            check(none.game_started == 1 && none.frame == 77 && none.addresses[0] + none.addresses[1] + none.addresses[2] == 0,
+                  "an empty table: entry is marked and nothing moves");
+            s_table[20].hits = 5;
+            psx_interp_preload_close(s_table, 512, in.kernel_end, in.text_lo, in.text_hi, 77, NULL);
+            check(s_table[20].hits == 5, "no sums given: the rows are left as they were");
+        }
+    }
 
     /* --- a small buffer ------------------------------------------------------------ */
     {

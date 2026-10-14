@@ -37,6 +37,25 @@ enum {
 
 #define PSX_INTERP_REPORT_HOTTEST 32
 
+/* The places of an address, in the report's order: kernel, text, overlay. */
+#define PSX_INTERP_PLACES 3
+
+/* What the interpreter ran before the game was entered (PS1B-513).
+ *
+ * The place of an address is decided from the game's text range. Code that
+ * ran before the game's boot executable was loaded is not the game's: with a
+ * real BIOS intro the BIOS shell runs from RAM 0x30000 and up, which lies in
+ * the game's text or overlay range. At game entry the rows of the per-address
+ * table are added here, by place, and their counts are cleared; each row
+ * keeps its address. So the report's by_place and hottest describe what ran
+ * after game entry, and by_place plus this is what ran since power-on. */
+typedef struct {
+    int      game_started;              /* 1 once game entry moved the rows here */
+    uint64_t frame;                     /* the frame of the last such move */
+    uint32_t addresses[PSX_INTERP_PLACES];
+    uint64_t hits[PSX_INTERP_PLACES], entries[PSX_INTERP_PLACES];
+} PsxInterpPreload;
+
 typedef struct {
     /* Text image guard (memory.c). */
     int      guard_armed;
@@ -55,9 +74,25 @@ typedef struct {
     uint32_t table_size;
     /* Loader misses by reason: [0] above the kernel window, [1] inside it. */
     uint64_t miss[2][PSX_INTERP_MISS_REASONS];
+    /* The rows moved out of the table at game entry. */
+    PsxInterpPreload preload;
 } PsxInterpReportInput;
 
 const char *psx_interp_miss_reason_name(int reason);
+
+/* Game entry: add every row of the table that has hits to `pre`, by the place
+ * of its address, then clear the row's counts and caller fields. The row keeps
+ * its address, so no probe chain of the table breaks. Called once per game
+ * entry, on the emulation thread; a later entry adds to the same sums. */
+void psx_interp_preload_close(DirtyRamPcEntry *table, uint32_t table_size,
+                              uint32_t kernel_end, uint32_t text_lo, uint32_t text_hi,
+                              uint64_t frame, PsxInterpPreload *pre);
+
+/* The runtime's own table (dirty_ram_interp.c): dirty_ram_pc_table_game_load
+ * runs psx_interp_preload_close on it at game entry (fntrace.c), and
+ * dirty_ram_pc_table_preload copies the sums for the run report. */
+void dirty_ram_pc_table_game_load(void);
+void dirty_ram_pc_table_preload(PsxInterpPreload *out);
 
 /* Write the object to `out` (a JSON object, no trailing newline). Returns its
  * length, or -1 when `cap` is too small; `out` then holds no partial object. */
