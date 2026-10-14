@@ -1,6 +1,7 @@
 #include "psx_openxr.h"
 #include <stdio.h>
 #include <math.h>
+#include "xr_surface_math.h"
 /* Evaluate side effects and failures even when NDEBUG is defined. */
 #define CHECK(expr) do { \
     if (!(expr)) { \
@@ -9,6 +10,17 @@
     } \
 } while (0)
 int main(void) {
+    uint8_t pixel[4]={255,0,0,255};
+    PSXModOpenXRSurface surface={0};surface.struct_size=sizeof surface;
+    surface.width_px=surface.height_px=1;surface.rgba=pixel;
+    surface.size_m[0]=surface.size_m[1]=.1f;surface.orientation_xyzw[3]=1;
+    CHECK(psx_openxr_surface_valid(&surface));CHECK(!psx_openxr_surface(&surface));
+    surface.flags=1;CHECK(!psx_openxr_surface_valid(&surface));surface.flags=0;
+    surface.id=2;CHECK(!psx_openxr_surface_valid(&surface));surface.id=0;
+    surface.position_m[0]=NAN;CHECK(!psx_openxr_surface_valid(&surface));surface.position_m[0]=0;
+    surface.orientation_xyzw[3]=0;CHECK(!psx_openxr_surface_valid(&surface));surface.orientation_xyzw[3]=1;
+    surface.width_px=1025;CHECK(!psx_openxr_surface_valid(&surface));surface.width_px=1;
+    surface.rgba=NULL;CHECK(!psx_openxr_surface_valid(&surface));
     /* Interpolation gate: only a compiled, enabled, initialized, RUNNING session
      * suspends presentation interpolation; every other state is a no-op. */
     CHECK(psx_openxr_interp_gate(1,1,1,1));
