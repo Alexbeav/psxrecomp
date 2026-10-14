@@ -63,6 +63,9 @@ int psx_in_device_service, g_event_step_conservative;
 uint32_t g_psx_cyc_batch, g_psx_cyc_batch_limit = 1000;
 uint32_t *g_psx_cyc_local_acc;
 int g_psx_cyc_bb_defer;
+/* psx_cycles.c is not linked; the compiled take reads the clock for the
+ * branch's re-execution boundary. */
+uint64_t psx_get_cycle_count(void) { return psx_cycle_count + g_psx_cyc_batch; }
 
 static void reset_capture(void) {
     /* Each case starts at the same boundary; device timing is out of scope. */
@@ -115,6 +118,7 @@ static void paired(uint32_t word, uint32_t rs_value, uint32_t rt_value,
 }
 
 int main(void) {
+    setvbuf(stdout, NULL, _IONBF, 0); /* keep the last pair's line on an assert */
     irq_handoff_enable_source();
     g_psx_slice_irq_handoff = g_psx_slice_slot_take = 1;
     for (unsigned distance = 7; distance <= 13; distance += 6) {
