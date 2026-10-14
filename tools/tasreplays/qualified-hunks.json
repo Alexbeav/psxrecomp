@@ -2428,7 +2428,7 @@
             "static inline int cpu_state_wire_read(const uint8_t *in, uint32_t len, CPUState *cpu) {",
             "    if(len!=CPU_STATE_WIRE_BYTES || in[573]>32u || in[574]>32u || in[575]>32u) return 0;",
             "    PstR tail; uint32_t rt, value, age; pst_r_init(&tail,in+580,12);",
-            "    pst_r_u32(&tail,&rt); pst_r_u32(&tail,&value); pst_r_u32(&tail,&age);",
+            "    if(!pst_r_u32(&tail,&rt) || !pst_r_u32(&tail,&value) || !pst_r_u32(&tail,&age)) return 0;",
             "    if(rt>31u || age>1u || (!rt && age)) return 0;",
             "    PstR r; pst_r_init(&r,in,len);",
             "    for (unsigned i=0;i<32;i++) pst_r_u32(&r,&cpu->gpr[i]);",
