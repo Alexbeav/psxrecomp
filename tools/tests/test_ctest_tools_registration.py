@@ -9,6 +9,7 @@ FILES = (
     "psx_chd", "menu_scan", "cursor_writers", "gpu_frame", "pad_trace",
     "pad_delivery", "aligned_lzss_banks", "static_fragment_variant_keys",
     "mips_tagged_relocations", "overlay_widescreen_callbacks", "duckstation_oracle",
+    "gate_launcher",
 )
 
 
