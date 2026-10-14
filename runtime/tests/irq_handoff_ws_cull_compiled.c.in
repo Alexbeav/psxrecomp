@@ -1,0 +1,8 @@
+/* Compile the production hand-off unchanged; expose only this fixture's entry. */
+#include "@COMPILED_SOURCE@"
+/* source_gpu_runtime_active() gates the interpreter's slot take too. */
+void ws_cull_handoff_enable_source(void) { enabled = 1; }
+void ws_cull_handoff_compiled(CPUState *cpu, uint32_t slot_pc) {
+    enabled = 1;
+    compiled_irq_handoff(cpu, slot_pc);
+}

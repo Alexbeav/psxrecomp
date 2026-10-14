@@ -205,6 +205,10 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_biohazard_checkpoint.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME interp_refused_text_handoff_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_refused_text_handoff.py --cc ${CMAKE_C_COMPILER})
+        # PS1B-510: the compiled IRQ hand-off decides a widescreen funnel BLTZ
+        # as the interpreter does (Cause.BT and register 6).
+        add_test(NAME irq_handoff_ws_cull_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_irq_handoff_ws_cull.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME syscall_change_thread_self_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syscall_change_thread_self.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME rfe_irq_context_test COMMAND ${Python3_EXECUTABLE}

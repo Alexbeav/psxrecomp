@@ -652,6 +652,19 @@ static int ws_cull_bltz_site(uint32_t pc) {
     return flag;
 }
 
+/* The BLTZ decision at pc for the value of rs. Widescreen render-funnel
+ * LEFT-edge widen (auto_screen_x): a classified funnel bltz rejects only past
+ * the revealed margin; identity at 4:3 (margin 0); gated per game, cheap
+ * cached scan. One definition for the interpreter and for the compiled IRQ
+ * hand-off, which recomputes the branch at a delay-slot interrupt
+ * (source_gpu_runtime.c): Cause.BT and the register-6 value follow it
+ * (PS1B-510). */
+int dirty_ram_bltz_taken(uint32_t pc, uint32_t rs_value) {
+    if (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc))
+        return psx_ws_cull_bltz(rs_value);
+    return (int32_t)rs_value < 0;
+}
+
 /* Widescreen far-backdrop column-PRELOAD site classification for the interpreter
  * ([widescreen.cull] auto_backdrop). The scrolling-backdrop column-window
  * generators run interpreted in the dev build, so the recompiler emit can't
@@ -2157,14 +2170,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x01: { /* REGIMM: BLTZ/BGEZ/BLTZAL/BGEZAL by rt field */
         int taken;
         switch (rt) {
-        case 0x00: /* BLTZ */
-            /* Widescreen render-funnel LEFT-edge widen (auto_screen_x): a
-             * classified funnel bltz rejects only past the revealed margin.
-             * Identity at 4:3 (margin 0). Gated per-game, cheap cached scan. */
-            if (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc))
-                taken = psx_ws_cull_bltz(cpu->gpr[rs]);
-            else
-                taken = ((int32_t)cpu->gpr[rs] <  0);
+        case 0x00: /* BLTZ, with the widescreen funnel widen */
+            taken = dirty_ram_bltz_taken(pc, cpu->gpr[rs]);
             break;
         case 0x01: /* BGEZ */    taken = ((int32_t)cpu->gpr[rs] >= 0); break;
         case 0x10: /* BLTZAL */  taken = ((int32_t)cpu->gpr[rs] <  0);

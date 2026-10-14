@@ -152,7 +152,19 @@ static void compiled_irq_handoff(CPUState *cpu,uint32_t pc) {
         else if(op==5u) { target=pc+((uint32_t)simm<<2); taken=vs!=vt; }
         else if(op==6u) { target=pc+((uint32_t)simm<<2); taken=vs<=0; }
         else if(op==7u) { target=pc+((uint32_t)simm<<2); taken=vs>0; }
-        else if(op==1u) { target=pc+((uint32_t)simm<<2); taken=(rt&1u)?(vs>=0):(vs<0); if(rt&0x10u) { /* bltzal/bgezal: link written at branch */ } }
+        else if(op==1u) {
+            target=pc+((uint32_t)simm<<2);
+            /* BLTZ decides as the interpreter and the generated code do, with
+             * the widescreen funnel widen (psx_ws_cull_bltz); Cause.BT and the
+             * register-6 value follow it (PS1B-510). */
+            taken=(rt&1u)?(vs>=0):(rt==0u?dirty_ram_bltz_taken(bpc,cpu->gpr[rs]):(vs<0));
+            if(rt&0x10u) {
+                /* bltzal/bgezal: link written at branch. With rs = 31 this
+                 * recompute would read that link, not the old ra. MIPS does not
+                 * allow rs = 31 here (the branch could not be restarted after an
+                 * exception), so compilers do not emit it; no code handles it. */
+            }
+        }
         else ok=0;
         if(!ok) { g_sd_handoff_slot_skipped++; return; }
         extern int psx_check_interrupts_delay_slot(CPUState *cpu,uint32_t slot_pc,uint32_t target,int taken,uint32_t instruction);
