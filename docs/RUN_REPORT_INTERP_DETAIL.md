@@ -86,7 +86,9 @@ image baseline, `fntrace_mark_game_started`) each row's counts are moved to
 `preload` and cleared. The row keeps its address, so the table's lookups are
 unchanged, and an address that runs again after entry counts again from 0.
 `table_size` is still the size of the whole table: rows moved at entry stay in
-it.
+it. So `addresses` no longer counts every row in use: the rows in use are at
+most `addresses` plus `preload.addresses` (a row that ran on both sides of game
+entry is in both). A reader that judges how full the table is uses that sum.
 
 | Field | Meaning |
 | --- | --- |
