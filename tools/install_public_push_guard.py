@@ -2,6 +2,7 @@
 """Install a persistent pre-push guard without replacing another hook policy."""
 import os
 from pathlib import Path
+import platform
 import shlex
 import shutil
 import subprocess
@@ -12,9 +13,14 @@ import sys
 SMALL_SYSTEM_DRIVE_HOSTS = frozenset({'EAGLE'})
 
 
+def host_name():
+    """Upper-case host name; COMPUTERNAME, or platform.node() when it is missing or empty."""
+    return (os.environ.get('COMPUTERNAME', '').strip() or platform.node().strip()).upper()
+
+
 def refuses_drive_c():
     """True on a Windows host whose drive C: must not hold a guarded clone."""
-    return sys.platform == 'win32' and os.environ.get('COMPUTERNAME', '').upper() in SMALL_SYSTEM_DRIVE_HOSTS
+    return sys.platform == 'win32' and host_name() in SMALL_SYSTEM_DRIVE_HOSTS
 
 
 def check_hook_drive(hooks):

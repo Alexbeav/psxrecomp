@@ -24,7 +24,8 @@ and identity list beside the clone's Git hooks and binds the current Python path
 The guard survives branch changes. Re-run the installer to update its copied
 policy. On Eagle, whose system drive C: is small, it refuses writes on C:; the
 host list is `SMALL_SYSTEM_DRIVE_HOSTS` in the installer, matched against
-`COMPUTERNAME`. On any other host C: is allowed (Pegasus builds on its C: SSD).
+`COMPUTERNAME` (or the node name when that is empty). On any other host C: is
+allowed (Pegasus builds on its C: SSD).
 It refuses to replace an existing hook or configured hook path. A modified installed hook is preserved, and a
 hook-directory symlink outside the clone's Git directory is refused. Integrate
 an existing hook explicitly. GitHub destinations,
