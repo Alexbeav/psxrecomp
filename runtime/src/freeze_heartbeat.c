@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -165,7 +166,17 @@ static uintptr_t s_stack_hi = 0;
  *      never flips (Tomba dwarf-village dialogue freeze, issue #1:
  *      ~51 fps, exc_re ~1.6K/frame — UNDER every threshold above, so
  *      A/B/C all miss it). Detected by cur_fn + store_pc + dirty_insns
- *      all stable across the window while frame_delta is healthy.
+ *      the same in EVERY sample of two windows in a row (4.0 sec) while
+ *      frame_delta is healthy. Two rules, both from runs that were not
+ *      wedged:
+ *        - Every sample, not the two ends of a window. A game at work
+ *          shows the same three values in two samples 1.9 sec apart
+ *          often enough: six dumps of healthy runs each had 5 to 10
+ *          different value sets inside the window that classed them.
+ *        - Two windows, not one. A held logo, a timed fade or a disc
+ *          seek keeps the values still for two seconds and then goes
+ *          on. A wait that ends is not a freeze; one that lasts is
+ *          dumped two seconds later than before.
  *
  * Window = 20 ticks = 2.0 sec. Long enough that legitimate startup
  * activity (boot, FMV decode, save load) doesn't trip it; short enough
@@ -173,6 +184,7 @@ static uintptr_t s_stack_hi = 0;
 #define WEDGE_WINDOW_TICKS 20u
 #define WEDGE_EXC_REENTRY_PER_FRAME_THRESHOLD 20000u /* ~10x chronic 2K/frame */
 #define WEDGE_SLOW_FRAMES_MAX_DELTA 10u   /* <5 fps avg over the 2s window */
+#define SPIN_CONFIRM_TICKS (2u * WEDGE_WINDOW_TICKS)
 
 /* Per-ring caps for auto-dump. Newest-first window. The old 4-16K caps
  * spanned well under a second of activity — too short to cross a
@@ -214,11 +226,56 @@ static HbRingEntry s_ring[RING_CAP];
 static uint32_t    s_ring_head = 0;
 static uint32_t    s_ring_count = 0;
 
+/* The spin class reads the ring this far back. */
+typedef char spin_confirm_fits_ring[(SPIN_CONFIRM_TICKS <= RING_CAP) ? 1 : -1];
+
+/* Samples in a row, the newest included, that hold the same current_func,
+ * last_store_pc and dirty_ram_insns. A host pause sets it back to 0. */
+static uint32_t s_spin_pinned_ticks = 0;
+/* Times the values stood still for a window or more and then moved before
+ * two windows were full: waits that ended. It does not look at the frame rate
+ * or at MDEC, so a short still inside a video counts too. Reported in the
+ * heartbeat. */
+static uint32_t s_spin_waits_ended = 0;
+
 /* Automatic full dumps are bounded independently from deliberate fatal dumps.
  * The heartbeat JSON reports both written and suppressed event counts. */
 static FreezeDumpPolicy s_dump_policy = {0};
 static uint32_t s_last_wedge_kind = 0;  /* informational, last detected kind */
 static volatile int s_wedge_classification_paused = 0;
+
+/* PSX_DUMP_AT_FRAME=<n>: one deliberate full dump at the first heartbeat
+ * sample whose frame count is n or more. It is asked for, so it is outside
+ * the automatic policy: it needs no slot and spends none. The heartbeat
+ * samples every 100 ms, so the dump's own "frame_count" names the frame it
+ * was taken at. Kind 6 takes no stack samples and never suspends the main
+ * thread. */
+#define REQUESTED_DUMP_KIND 6u
+static int      s_requested_dump_parsed = 0;
+static uint64_t s_requested_dump_frame = 0;   /* 0 = not asked for */
+static uint32_t s_requested_dump_attempts = 0;
+static uint32_t s_requested_dumps = 0;
+
+static void hb_requested_dump_init(void) {
+    if (s_requested_dump_parsed) return;
+    s_requested_dump_parsed = 1;
+    const char *text = getenv("PSX_DUMP_AT_FRAME");
+    if (!text || !text[0]) return;
+    uint64_t value = 0;
+    for (const char *p = text; *p; p++) {
+        if (*p < '0' || *p > '9' || value > (UINT64_MAX - 9u) / 10u) {
+            value = 0;
+            break;
+        }
+        value = value * 10u + (uint64_t)(*p - '0');
+    }
+    if (value == 0) {
+        fprintf(stderr, "[freeze] PSX_DUMP_AT_FRAME is not a frame count of 1 "
+                        "or more; no dump is requested\n");
+        return;
+    }
+    s_requested_dump_frame = value;
+}
 
 void freeze_heartbeat_set_paused(int paused) {
     s_wedge_classification_paused = paused ? 1 : 0;
@@ -737,7 +794,8 @@ static int freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
         (wedge_kind == 2) ? "reentry_storm" :
         (wedge_kind == 3) ? "slow_frames" :
         (wedge_kind == 4) ? "fatal" :
-        (wedge_kind == 5) ? "spin_freeze" : "unknown",
+        (wedge_kind == 5) ? "spin_freeze" :
+        (wedge_kind == REQUESTED_DUMP_KIND) ? "requested" : "unknown",
         (unsigned)DUMP_CAP_WTRACE_ALL,
         (unsigned)DUMP_CAP_WTRACE,
         (unsigned)DUMP_CAP_FRAME_HISTORY,
@@ -900,6 +958,10 @@ void freeze_heartbeat_fatal_dump(const char *reason) {
 }
 
 static void heartbeat_write(void) {
+    /* Read at start, on the main thread. This call covers a caller that
+     * samples without the thread. */
+    hb_requested_dump_init();
+
     uint64_t cyc = psx_get_cycle_count();
     uint64_t frame = s_frame_count;
     uint32_t cur_fn = g_debug_current_func_addr;
@@ -952,6 +1014,25 @@ static void heartbeat_write(void) {
     s_ring_head = (s_ring_head + 1) % RING_CAP;
     if (s_ring_count < RING_CAP) s_ring_count++;
 
+    /* The spin class needs the same three values in every sample, so count
+     * the samples in a row that hold them. s_ring_count is the number of
+     * samples since the last host pause; the one before `re` is live when it
+     * is 2 or more. A paused sample is not counted and ends nothing. */
+    if (!s_wedge_classification_paused) {
+        const HbRingEntry *prev = &s_ring[(s_ring_head + RING_CAP - 2u) % RING_CAP];
+        if (s_ring_count >= 2u &&
+            prev->current_func == re->current_func &&
+            prev->last_store_pc == re->last_store_pc &&
+            prev->dirty_ram_insns == re->dirty_ram_insns) {
+            if (s_spin_pinned_ticks < UINT32_MAX) s_spin_pinned_ticks++;
+        } else {
+            if (s_spin_pinned_ticks >= WEDGE_WINDOW_TICKS &&
+                s_spin_pinned_ticks < SPIN_CONFIRM_TICKS)
+                s_spin_waits_ended++;
+            s_spin_pinned_ticks = 1;
+        }
+    }
+
     /* ---- Wedge detection: bounded automatic dump ----
      * Walk back WEDGE_WINDOW_TICKS in the heartbeat ring (just pushed
      * above) and compute deltas. Trigger if any of:
@@ -965,6 +1046,7 @@ static void heartbeat_write(void) {
     uint32_t wedge_kind = 0;  /* 0=healthy 1=hard 2=reentry storm 3=slow frames */
     if (s_wedge_classification_paused) {
         s_ring_count = 0;
+        s_spin_pinned_ticks = 0;
         s_last_wedge_kind = 0;
     } else if (s_ring_count >= WEDGE_WINDOW_TICKS) {
         /* The just-pushed tick is at (s_ring_head - 1). The oldest in
@@ -981,16 +1063,15 @@ static void heartbeat_write(void) {
                                ? (newest_excre - oldest_excre) : 0;
 
         /* Logical-hang (kind D) signature: the executing function, the last
-         * store PC, and the retired dirty-RAM instruction count are all
-         * unchanged across the whole window. Requiring all three pinned makes
-         * this specific to a guest spin loop — a legitimate long native
-         * compute would still move last_store_pc, and any interpreted/overlay
-         * work would advance dirty_insns. Checked only when frames are
-         * advancing healthily (kinds 1/2/3 take precedence below). */
-        int logic_pinned =
-            (s_ring[newest_idx].current_func    == s_ring[oldest_idx].current_func) &&
-            (s_ring[newest_idx].last_store_pc   == s_ring[oldest_idx].last_store_pc) &&
-            (s_ring[newest_idx].dirty_ram_insns == s_ring[oldest_idx].dirty_ram_insns);
+         * store PC, and the retired dirty-RAM instruction count are the same
+         * in every sample of the last SPIN_CONFIRM_TICKS. Requiring all three
+         * pinned makes this specific to a guest spin loop — a legitimate long
+         * native compute would still move last_store_pc, and any
+         * interpreted/overlay work would advance dirty_insns. Checked only
+         * when frames are advancing healthily (kinds 1/2/3 take precedence
+         * below). */
+        int logic_pinned = s_spin_pinned_ticks >= SPIN_CONFIRM_TICKS &&
+                           s_ring_count >= SPIN_CONFIRM_TICKS;
 
         if (frame_delta == 0)
             wedge_kind = 1;
@@ -998,12 +1079,20 @@ static void heartbeat_write(void) {
             wedge_kind = 2;
         else if (frame_delta < WEDGE_SLOW_FRAMES_MAX_DELTA)
             wedge_kind = 3;
-        else if (logic_pinned && !mdec_recently_active((uint32_t)frame_delta + 1u))
-            wedge_kind = 5;  /* spin freeze: game wedged while frames advance */
-        /* Wave-5 F9: during an FMV the guest parks in BIOS MDEC code with the dirty-RAM
-         * counters legitimately still while frames advance -- exactly the spin signature.
-         * Every boot FMV wrote a 47-76 MB dump (1.8 GB per kit in one session). MDEC
-         * activity inside the window rules the spin classification out. */
+        else if (logic_pinned) {
+            /* Wave-5 F9: during an FMV the guest parks in BIOS MDEC code with
+             * the dirty-RAM counters legitimately still while frames advance
+             * -- exactly the spin signature. Every boot FMV wrote a 47-76 MB
+             * dump (1.8 GB per kit in one session). MDEC activity anywhere in
+             * the pinned time rules the spin classification out. */
+            uint32_t first_idx =
+                (s_ring_head + RING_CAP - SPIN_CONFIRM_TICKS) % RING_CAP;
+            uint64_t first_frame = s_ring[first_idx].frame_count;
+            uint64_t spin_frames = (newest_frame >= first_frame)
+                                   ? (newest_frame - first_frame) : 0;
+            if (!mdec_recently_active((uint32_t)spin_frames + 1u))
+                wedge_kind = 5;  /* spin freeze: game wedged while frames advance */
+        }
     }
 
     if (!s_wedge_classification_paused &&
@@ -1016,6 +1105,23 @@ static void heartbeat_write(void) {
             dispatch_count, exc_entries,
             sio_stat, sio_ctrl, card_active, mc_max, tx_writes);
         freeze_dump_policy_record_result(&s_dump_policy, written);
+    }
+
+    /* The requested dump. A fatal halt writes its own dump of the same
+     * rings, so nothing is requested once one is active. A write that fails
+     * is tried again on the next samples, a bounded number of times. */
+    if (s_requested_dump_frame != 0 && s_requested_dumps == 0 &&
+        frame >= s_requested_dump_frame && g_psx_fatal_reason == NULL &&
+        s_requested_dump_attempts < FREEZE_DUMP_MAX_FAILED_ATTEMPTS) {
+        s_last_wedge_kind = REQUESTED_DUMP_KIND;
+        if (freeze_dump_write(
+                wall, frame, cyc, exc_reentry, cur_fn, last_store,
+                i_stat, i_mask, in_exc, total_checks,
+                dispatch_count, exc_entries,
+                sio_stat, sio_ctrl, card_active, mc_max, tx_writes))
+            s_requested_dumps = 1;
+        else
+            s_requested_dump_attempts++;
     }
 
     /* Timer1/RootCounter1 decode (Tomba 2 RCnt-wait diagnosis): if the game
@@ -1119,6 +1225,11 @@ static void heartbeat_write(void) {
         "  \"failed_freeze_dumps\":%u,\n"
         "  \"suppressed_freeze_events\":%u,\n"
         "  \"automatic_freeze_dump_limit\":%u,\n"
+        "  \"refilled_freeze_dump_slots\":%u,\n"
+        "  \"requested_dump_frame\":%llu,\n"
+        "  \"requested_dumps\":%u,\n"
+        "  \"spin_pinned_ticks\":%u,\n"
+        "  \"spin_waits_ended\":%u,\n"
         "  \"fatal\":%s%s%s\n"
         "}\n",
         s_backend,
@@ -1182,6 +1293,11 @@ static void heartbeat_write(void) {
         s_dump_policy.failed_dumps,
         s_dump_policy.suppressed_events,
         (unsigned)FREEZE_DUMP_AUTO_LIMIT,
+        s_dump_policy.ordinary_refills + s_dump_policy.hard_refills,
+        (unsigned long long)s_requested_dump_frame,
+        s_requested_dumps,
+        s_spin_pinned_ticks,
+        s_spin_waits_ended,
         g_psx_fatal_reason ? "\"" : "",
         g_psx_fatal_reason ? fatal_esc : "null",
         g_psx_fatal_reason ? "\"" : "");
@@ -1292,6 +1408,8 @@ void freeze_heartbeat_start(const char *backend_label) {
         memcpy(s_backend, backend_label, n);
         s_backend[n] = 0;
     }
+    /* Before the thread exists: it then never reads the environment. */
+    hb_requested_dump_init();
 #ifdef _WIN32
     /* Duplicate the main thread's pseudo-handle into a real handle so the
      * heartbeat thread can SuspendThread/GetThreadContext for stack capture

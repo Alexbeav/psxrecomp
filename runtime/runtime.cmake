@@ -1764,6 +1764,7 @@ function(psxrecomp_add_runtime_target target)
     # `git archive` snapshot carries, then git (framework_identity.cmake).
     psxrecomp_framework_identity("${PSXRECOMP_ROOT}"
         PSX_FRAMEWORK_PIN PSX_GIT_REV _psxrt_pin_source)
+    psxrecomp_framework_tree("${PSXRECOMP_ROOT}" "${PSX_FRAMEWORK_PIN}" PSX_FRAMEWORK_TREE)
     message(STATUS "psxrecomp ${target}: framework pin "
         "${PSX_FRAMEWORK_PIN} (${_psxrt_pin_source}), build rev ${PSX_GIT_REV}")
 
@@ -1834,6 +1835,11 @@ function(psxrecomp_add_runtime_target target)
     set_source_files_properties(
         "${PSXRECOMP_ROOT}/runtime/src/input_route_session.c"
         PROPERTIES COMPILE_DEFINITIONS "PSX_FRAMEWORK_PIN=\"${PSX_FRAMEWORK_PIN}\""
+    )
+    set_source_files_properties(
+        "${PSXRECOMP_ROOT}/runtime/src/overlay_loader.c"
+        PROPERTIES COMPILE_DEFINITIONS
+        "PSX_FRAMEWORK_PIN=\"${PSX_FRAMEWORK_PIN}\";PSX_FRAMEWORK_TREE=\"${PSX_FRAMEWORK_TREE}\""
     )
 
     # Stamp the lobby pin next to the exe (and, on multi-config, in the build

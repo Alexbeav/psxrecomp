@@ -3704,7 +3704,8 @@ void cdrom_init(const char* cue_path) {
         if (drive_model && *drive_model) {
             if (strcmp(drive_model, "octoshock-2.7") == 0) {
                 s_cd_reset_seek_draw_first = 1;
-            } else if (strcmp(drive_model, "nymashock-1.29.0") != 0) {
+            } else if (strcmp(drive_model, "nymashock-1.29.0") != 0 &&
+                       strcmp(drive_model, "nymashock-1.32.1") != 0) {
                 fprintf(stderr, "[CDROM] Unsupported PSX_CD_DRIVE_MODEL=%s\n", drive_model);
                 exit(2);
             }

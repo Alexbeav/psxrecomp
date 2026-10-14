@@ -550,12 +550,12 @@ void mdec_init(void) {
     source_mdec_enabled=0;
     const char *source_mode=getenv("PSX_MDEC_SOURCE_MODEL");
     if(source_mode && *source_mode){
-        if(strcmp(source_mode,"octoshock-2.3") && strcmp(source_mode,"nymashock-1.29.0")){fprintf(stderr,"[mdec-source] unknown model\n");exit(2);}
+        if(strcmp(source_mode,"octoshock-2.3") && strcmp(source_mode,"nymashock-1.29.0") && strcmp(source_mode,"nymashock-1.32.1")){fprintf(stderr,"[mdec-source] unknown model\n");exit(2);}
         source_mdec_enabled=1;
         memset(mdec.y_quant,0,sizeof(mdec.y_quant));memset(mdec.uv_quant,0,sizeof(mdec.uv_quant));
         memset(mdec.scale,0,sizeof(mdec.scale));memset(source_cr,0,sizeof(source_cr));memset(source_cb,0,sizeof(source_cb));
         source_mdec_power(&source_mdec,source_decode_block,source_table_word,0);
-        if(!strcmp(source_mode,"nymashock-1.29.0"))source_mdec.block_cycles=512;
+        if(!strcmp(source_mode,"nymashock-1.29.0") || !strcmp(source_mode,"nymashock-1.32.1"))source_mdec.block_cycles=512;
     }
 }
 
@@ -931,7 +931,9 @@ static int mdec_snapshot_parse(const uint8_t *p, uint32_t len,
     if (!pst_r_u32(&r, &input_count) || !pst_r_u32(&r, &output_size) ||
         !pst_r_u64(&r, &last_decode_cycle))
         return 0;
-    if (input_count > MDEC_SNAP_INPUT_MAX || output_size > MDEC_SNAP_OUTPUT_MAX)
+    if (input_count > MDEC_SNAP_INPUT_MAX ||
+        next->expected_halfwords > MDEC_SNAP_INPUT_MAX ||
+        output_size > MDEC_SNAP_OUTPUT_MAX)
         return 0;
     if (next->output_pos > output_size) return 0;
     if ((size_t)(r.end - r.p) !=
@@ -951,7 +953,9 @@ int mdec_snapshot_prepare(const uint8_t *p, uint32_t len) {
     uint64_t last_decode_cycle;
     if (!mdec_snapshot_parse(p, len, &next, &payload, &last_decode_cycle)) return 0;
 
-    return ensure_input_capacity(next.input_count ? next.input_count : 1u) &&
+    uint32_t input_capacity = next.input_count > next.expected_halfwords
+                            ? next.input_count : next.expected_halfwords;
+    return ensure_input_capacity(input_capacity ? input_capacity : 1u) &&
            ensure_output_capacity(next.output_size ? next.output_size : 1u);
 }
 
@@ -963,7 +967,9 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     if (!mdec_snapshot_parse(p, len, &next, &r, &last_decode_cycle)) return 0;
     input_count = next.input_count;
     output_size = next.output_size;
-    if (!ensure_input_capacity(input_count ? input_count : 1u)) return 0;
+    uint32_t input_capacity = input_count > next.expected_halfwords
+                            ? input_count : next.expected_halfwords;
+    if (!ensure_input_capacity(input_capacity ? input_capacity : 1u)) return 0;
     if (!ensure_output_capacity(output_size ? output_size : 1u)) return 0;
     next.input = mdec.input;
     next.input_cap = mdec.input_cap;

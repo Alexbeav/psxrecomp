@@ -224,6 +224,15 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-10-09 (PS1B-238(a), source candidate):** Loader-owned replay/netplay
+  holders freeze admission as well as native execution and retain a compact
+  [tier witness](../OVERLAY_TIER_WITNESS.md). Source base 015fe7a; the real-loader
+  authored controls pass in twelve O0/O2 configurations, including selfcheck
+  start/end during a hold. Existing pair controls, pin wiring and tree identity
+  pass; registry has zero missing entries of 35 and five unchanged debt entries.
+  Exact-head review/CI are pending. No guest timing, deterministic
+  switching policy, prepared-image retention, title qualification or pin change.
+
 - **2026-10-09 (PS1B-456, guest stores to RAM 0..15):** After game entry the word
   store path dropped guest stores to RAM 0..15 by the program counter of the
   store: the kernel's copy of its exception stub to address 0 (0xBFC10A00) and
@@ -1319,3 +1328,39 @@ on a fixed region -> next.
   `PSX_PRECISE_SLICE` left in tree (inert). −8 mechanism located in
   code_generator.cpp (delay-slot-is-leader undercount). Tree builds + boots clean.
   NEXT: P1 (cycle-audit) → P2 (delay-slot ownership fix).
+
+- **2026-10-07 (PS1B-288):** The SIO router now passes multitap method-2
+  addresses to the existing pad state machine. Both physical ports pass the
+  seat B/C/D byte and ACK checks in `test_sio_mouse.c`; empty seats and
+  standalone ports stay silent. Source-profile DTR selection uses the same
+  address rule. The five-player identity fixture includes a method-2 poll,
+  so its five-player golden values were refreshed after the unchanged stage
+  passed the old values as a control. Two-player values remain frozen. Independent review,
+  fork CI and the seven Tier 1 trial routes remain separate acceptance work.
+
+- **2026-10-09 (PS1B-478):** The generated native warning list now combines
+  the measured-track serials, required-SBI serials, and six fleet-table serials.
+  All eight PS1B-467 comment 7-4916 serials warn when no companion loads and
+  clear the warning when one loads. Existing unknown-serial, report reset,
+  path-redaction, exact-revision and mount transaction controls pass.
+  The parent fails the authored fleet check on SLES-02529.
+  This adds serial warning metadata, not qualified track or companion hashes.
+  Actual RE3 starts, independent review, fork CI and stage delivery remain open.
+
+- **2026-10-09 (PS1B-479):** MDEC snapshot prepare and read reserve the
+  larger of the saved input count and the command's expected input length.
+  Parsing refuses expected input lengths above the existing snapshot limit.
+  Output positions remain bounded by the saved output size, and output writes
+  retain their capacity checks. The authored `mdec_snapshot_capacity_test`
+  compares a resumed command with uninterrupted execution through MMIO and DMA,
+  with and without prepare. It also checks invalid lengths and output bounds.
+  The parent fails its capacity assertion before a continued write.
+  Retail state loading, independent review and fork CI remain separate checks.
+
+- **2026-10-13 (PS1B-478):** SAME review 7-6527 qualified the selected public
+  source acquisition at fix `b61a14af` and stage `d806234a`, with 2,486 permitted
+  blobs and no excluded or unexpected blob bodies. The fresh existing-branch
+  integration keeps both October 9 entries above. The composed source still
+  needs its changed-source review. A fresh build, the stock cold/warm starts,
+  and the two clean 5,400-frame SBI comparisons remain unrun. This is public
+  source qualification, not full-history, private-source or gameplay qualification.

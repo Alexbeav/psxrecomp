@@ -294,7 +294,7 @@ def regen(checkout: Path, pin: Dict[str, Any]) -> List[Dict[str, Any]]:
     if rc != 0:
         raise PatchError(f"git diff failed: {diff}")
     text, removed = zero_context(diff + "\n")
-    patch_path(pin).write_text(text, encoding="utf-8", newline="\n")
+    patch_path(pin).write_bytes(text.encode("utf-8"))
     return removed
 
 

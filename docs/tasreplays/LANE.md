@@ -179,12 +179,17 @@ runtime header, the encoder and `run_native.route_identity`.
   column and there is no playlist concept. Abe's Exoddus needs exactly one tray open (frame
   179,993) and a close on Disc 2 (179,996). Its oracle side is complete.
 
-## Octoshock 2.7 / 2.10 is Nymashock 1.29.0 with a different wrapper and compiler
+## Octoshock 2.7 / 2.10 uses the retained comparison switches
 
 BizHawk 2.7 moved Octoshock from Mednafen 0.9.38.7 to Mednafen 1.27.1; 2.10 is the same source
 plus EXE-only checks. **Mednafen 1.27.1 and 1.29.0 emulate the PS1 identically** (`src/psx` and
 `src/cdrom` differ only in messages, VFS and host I/O), so a 2.7/2.10 Octoshock movie runs on the
 Nymashock 1.29.0 device switches, not the 2.3 ones. Crash 7798S qualifies that way.
+
+The 1.29.0 switch names identify this retained runtime comparison candidate.
+BizHawk 2.10's Nymashock core is Mednafen 1.32.1; see
+[Core selector identities](../NYMASHOCK_SOURCE_REPLAY.md#core-selector-identities).
+This rename does not requalify the Octoshock source comparison.
 
 Two places still differ, and both were found by divergence, not by reading:
 

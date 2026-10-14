@@ -1,5 +1,7 @@
 # Building PSXRecomp
 
+Fork contributors must also follow the [public push policy](PUBLIC_PUSH_POLICY.md).
+
 PSXRecomp builds natively on **Windows** (MSVC or MinGW/MSYS2), **macOS** (Apple
 Silicon & Intel), and **Linux**. There are two things you can build:
 
