@@ -37,6 +37,16 @@ and production native boot; ordinary Reset/GetStat establishes the unit starting
 condition and those warm-up response bytes are explicitly excluded. Inactive
 source timers, unused internal state and downstream SPU mixing are not projected.
 
+DATA-TRACK PLAY (PS1G-116): `runtime/tests/cdrom_source_cdda_data_track_fixtures.json` binds five
+more transcripts from the same oracle build, disc, warm-up and projection. Play starts at a SetLoc
+inside the data track (modes 0, 1, 3 and 5) and runs into audio track 2; the fifth case is the
+SetLoc/Setmode 1/SeekP/Mute/Play order of Spyro: Year of the Dragon's disc check. The oracle
+accepts Play there: the drive seeks, walks, reports and pauses as on an audio track. A buffered
+sector reaches the SPU only while the sub-Q of the sector under the head has the control data bit
+(0x40) clear, so the two data sectors still in the buffer play when the head enters track 2. The
+synthetic data sectors carry an MSF/mode header in bytes 12-15 on both sides. The stage refused
+this Play with exit status 2.
+
 REPRODUCE: configure the runtime CMake tests with GNU C and run
 `ctest --test-dir <build> -R cdrom_source_cdda --output-on-failure`.
 O0 and O2 replay each complete transcript and check rejection of scan commands,
@@ -47,8 +57,8 @@ Fixtures bind original upstream, external oracle source head/tree/core hash,
 authoring driver, random-word tape, complete operation stream and output hash.
 External build/authoring recipes are retained in the campaign recovery evidence.
 
-Scope: single-speed audio tracks with valid SubQ, ordinary authored commands,
-cold source-clock selection. Double speed, Forward/Backward, playing data tracks,
-active data-read to Play and hardware timing are not
+Scope: single-speed play with valid SubQ on audio tracks and from the data track
+into audio, ordinary authored commands, cold source-clock selection. Double speed,
+Forward/Backward, active data-read to Play and hardware timing are not
 qualified. Full Pepsiman RAM/clock parity and witnessed ending remain separate
 acceptance gates, as does the unchanged Tekken regression after shared changes.

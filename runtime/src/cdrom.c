@@ -2141,8 +2141,11 @@ static void start_source_cdda(int requested_track)
     }
     else if (setloc_pending)
         target = s_setloc_lba < 0 ? 0 : s_setloc_lba;
+    /* Play starts on a data track too. The drive then plays without sound: it
+     * walks, reports and pauses as on an audio track (PS1G-116, Spyro: Year of
+     * the Dragon's disc check; cdrom_source_cdda_data_track_fixtures.json). */
     int track = cdda_track_for_lba((uint32_t)target);
-    if (!track || !iso_track_is_audio(iso_handle, track)) exit(2);
+    if (!track) exit(2);
 
     int delay = source_seek_lower_bound(origin, target, (stat_reg & 2) != 0,
                                         s_source_seek_paused, mode_reg);
@@ -2233,17 +2236,21 @@ static void process_source_cdda(uint32_t cycles)
         }
 
         unsigned slot = source_cdda.pipe_at;
+        /* The oldest buffered sector reaches the SPU only while the sub-Q of
+         * the sector under the head names audio (control bit 0x40 clear). */
         if (source_cdda.pipe_count == 2) {
-            int16_t stereo[1176];
-            for (unsigned i = 0; i < 1176; ++i) {
-                int sample = source_cdda.pipe[slot][i * 2] |
-                             ((unsigned)source_cdda.pipe[slot][i * 2 + 1] << 8);
-                if (sample >= 32768) sample -= 65536;
-                stereo[i] = cd_muted ? 0 : (int16_t)sample;
+            if (!(last_valid_subq[0] & 0x40)) {
+                int16_t stereo[1176];
+                for (unsigned i = 0; i < 1176; ++i) {
+                    int sample = source_cdda.pipe[slot][i * 2] |
+                                 ((unsigned)source_cdda.pipe[slot][i * 2 + 1] << 8);
+                    if (sample >= 32768) sample -= 65536;
+                    stereo[i] = cd_muted ? 0 : (int16_t)sample;
+                }
+                cd_apply_decode_volume(stereo, 588);
+                spu_cd_audio_push(stereo, 588);
+                ++cdda_sectors_played;
             }
-            cd_apply_decode_volume(stereo, 588);
-            spu_cd_audio_push(stereo, 588);
-            ++cdda_sectors_played;
         } else {
             ++source_cdda.pipe_count;
         }
