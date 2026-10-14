@@ -927,6 +927,53 @@ bool materialize_derived_disc(RuntimeMods& s, const ModResolution& plan,
     return true;
 }
 
+template <typename Callback>
+int mutate(Callback callback) {
+    state().ticket_ready = false;
+    ++state().preparation_revision;
+    std::string error;
+    if (!callback(error)) {
+        set_error(error);
+        return 0;
+    }
+    if (!state().disc_path.empty())
+        state().validation = state().manager.resolve(
+            state().game_id, state().exe_sha256, state().disc_sha256, true);
+    else
+        state().validation = {};
+    state().error.clear();
+    return 1;
+}
+
+/* Feature switch / option edits shared by the launcher ABI provider and the
+ * in-game menu host (psx_mod_feature_enable / psx_mod_feature_set_option). */
+int feature_enable_impl(const char* package_id, const char* feature_id, int enabled) {
+    if (!package_id || !feature_id) return 0;
+    return mutate([&](std::string& error) {
+        const ModFeature* feature =
+            state().manager.selected_feature(package_id, feature_id);
+        if (feature && feature->legacy)
+            return state().manager.set_enabled(
+                package_id, enabled != 0, &error);
+        return state().manager.set_feature_enabled(
+            package_id, feature_id, enabled != 0, &error);
+    });
+}
+
+int feature_set_option_impl(const char* package_id, const char* feature_id,
+                            const char* option_id, const char* value) {
+    if (!package_id || !feature_id || !option_id || !value) return 0;
+    return mutate([&](std::string& error) {
+        const ModFeature* feature =
+            state().manager.selected_feature(package_id, feature_id);
+        if (feature && feature->legacy)
+            return state().manager.set_option(
+                package_id, option_id, value, &error);
+        return state().manager.set_feature_option(
+            package_id, feature_id, option_id, value, &error);
+    });
+}
+
 #if defined(RECOMP_LAUNCHER)
 void copy_text(char* out, size_t capacity, const std::string& value) {
     if (!out || capacity == 0) return;
@@ -1166,32 +1213,14 @@ int provider_feature_choice_get(void*, const char* package_id,
 
 int provider_feature_enable(void*, const char* package_id,
                             const char* feature_id, int enabled) {
-    if (!package_id || !feature_id) return 0;
-    return mutate([&](std::string& error) {
-        const ModFeature* feature =
-            state().manager.selected_feature(package_id, feature_id);
-        if (feature && feature->legacy)
-            return state().manager.set_enabled(
-                package_id, enabled != 0, &error);
-        return state().manager.set_feature_enabled(
-            package_id, feature_id, enabled != 0, &error);
-    });
+    return feature_enable_impl(package_id, feature_id, enabled);
 }
 
 int provider_feature_set_option(void*, const char* package_id,
                                 const char* feature_id,
                                 const char* option_id,
                                 const char* value) {
-    if (!package_id || !feature_id || !option_id || !value) return 0;
-    return mutate([&](std::string& error) {
-        const ModFeature* feature =
-            state().manager.selected_feature(package_id, feature_id);
-        if (feature && feature->legacy)
-            return state().manager.set_option(
-                package_id, option_id, value, &error);
-        return state().manager.set_feature_option(
-            package_id, feature_id, option_id, value, &error);
-    });
+    return feature_set_option_impl(package_id, feature_id, option_id, value);
 }
 
 int provider_feature_resource_count(void*, const char* package_id,
@@ -1317,23 +1346,6 @@ int provider_version_get(void*, const char* package_id, int index,
     return 1;
 }
 
-template <typename Callback>
-int mutate(Callback callback) {
-    state().ticket_ready = false;
-    ++state().preparation_revision;
-    std::string error;
-    if (!callback(error)) {
-        set_error(error);
-        return 0;
-    }
-    if (!state().disc_path.empty())
-        state().validation = state().manager.resolve(
-            state().game_id, state().exe_sha256, state().disc_sha256, true);
-    else
-        state().validation = {};
-    state().error.clear();
-    return 1;
-}
 
 int provider_install(void*, const char* path) {
     if (!path) return 0;
@@ -3516,4 +3528,14 @@ extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,
                                                uint8_t* bytes, uint32_t size) {
     if (!PSXRecompV4::state().disc_enabled) return;
     patch_committed_disc_sector(lba, raw_sector, bytes, size);
+}
+
+/* In-game menu host (psx_menu_host.h): the same feature edits as the launcher
+ * ABI provider, without its types. Main thread. */
+extern "C" int psx_mod_feature_enable(const char* package_id, const char* feature_id, int enabled) {
+    return PSXRecompV4::feature_enable_impl(package_id, feature_id, enabled);
+}
+extern "C" int psx_mod_feature_set_option(const char* package_id, const char* feature_id,
+                                          const char* option_id, const char* value) {
+    return PSXRecompV4::feature_set_option_impl(package_id, feature_id, option_id, value);
 }

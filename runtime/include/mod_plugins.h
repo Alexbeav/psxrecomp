@@ -398,6 +398,12 @@ int psx_mod_option_live_capable(const char* package_id, const char* feature_id);
  * as edited through the launcher mod provider) to mods/state.toml now,
  * without re-resolving the running plan. Main thread. 1 on success. */
 int psx_mod_save_selection(void);
+/* Switch a feature on/off or set one of its options in the selection (not
+ * the committed plan; psx_mod_save_selection persists it). Main thread.
+ * Returns 1 on success. Used by the in-game menu host. */
+int psx_mod_feature_enable(const char* package_id, const char* feature_id, int enabled);
+int psx_mod_feature_set_option(const char* package_id, const char* feature_id,
+                               const char* option_id, const char* value);
 /*
  * Read the committed owner-selected path for a resource declared by the
  * package feature whose trusted plugin is currently running. Returns 0 when
