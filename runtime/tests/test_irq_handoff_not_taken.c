@@ -98,6 +98,10 @@ static void paired(uint32_t word, uint32_t rs_value, uint32_t rt_value,
     reset_capture();
     irq_handoff_compiled(&compiled, SLOT_PC);
     assert(calls == 1);
+    /* The value each path hands to the common helper, which writes it to COP0
+     * register 6 at delivery. */
+    printf("r6 branch=%08X taken=%d interp=%08X compiled=%08X expected=%08X\n",
+           word, taken, from_interp.target, delivery.target, expected);
     assert(delivery.slot == from_interp.slot);
     assert(delivery.target == from_interp.target);
     assert(delivery.instruction == from_interp.instruction);
