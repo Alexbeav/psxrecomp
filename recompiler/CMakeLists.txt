@@ -2002,6 +2002,10 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
 
+        # PS1B-485: without recomp-ui the BIOS stems test prints "SKIP:" and returns 0; read that as Skipped.
+        set_tests_properties(codegen_host_bios_stems PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:")
+
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # (overlay_pair_dedup_runtime was the third of these. It failed to link:
         # its harness had no psx_cpu_step_boundary_* definitions after the
