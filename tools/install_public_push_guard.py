@@ -17,6 +17,11 @@ def refuses_drive_c():
     return sys.platform == 'win32' and os.environ.get('COMPUTERNAME', '').upper() in SMALL_SYSTEM_DRIVE_HOSTS
 
 
+def check_hook_drive(hooks):
+    if refuses_drive_c() and hooks.drive.upper() == 'C:':
+        raise ValueError('refusing to write a hook on C:')
+
+
 def install():
     configured = subprocess.run(['git', 'config', '--get', 'core.hooksPath'],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -30,8 +35,7 @@ def install():
     git_dir = Path(common.stdout.strip()).resolve()
     if not hooks.is_relative_to(git_dir):
         raise ValueError('hook directory resolves outside this clone Git directory')
-    if refuses_drive_c() and hooks.drive.upper() == 'C:':
-        raise ValueError('refusing to write a hook on C:')
+    check_hook_drive(hooks)
     hook = hooks / 'pre-push'
     payload = hooks / 'public-commit-guard'
     for target in (hook, payload, payload / 'check_public_commits.py', payload / 'public_commit_identities.json'):

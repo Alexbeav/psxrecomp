@@ -22,8 +22,10 @@ For a clone without an existing hook policy, run
 `python -B tools/install_public_push_guard.py` from that clone. It copies the check
 and identity list beside the clone's Git hooks and binds the current Python path.
 The guard survives branch changes. Re-run the installer to update its copied
-policy. It refuses writes on C: on Windows and refuses to replace an existing
-hook or configured hook path. A modified installed hook is preserved, and a
+policy. On Eagle, whose system drive C: is small, it refuses writes on C:; the
+host list is `SMALL_SYSTEM_DRIVE_HOSTS` in the installer, matched against
+`COMPUTERNAME`. On any other host C: is allowed (Pegasus builds on its C: SSD).
+It refuses to replace an existing hook or configured hook path. A modified installed hook is preserved, and a
 hook-directory symlink outside the clone's Git directory is refused. Integrate
 an existing hook explicitly. GitHub destinations,
 including SSH aliases, are checked before a push; private Gitea destinations are
@@ -33,8 +35,8 @@ a local hook, so the fork CI repeats the commit check; the hook is a mistake gua
 not an access control system.
 
 `tools/test_public_commits.py` builds private fixture repositories in the
-temporary folder. On Windows, when that folder is on C:, it builds them in the
-working directory instead, because the installer refuses C:. ctest starts the
+temporary folder. On a host whose installer refuses C: (Eagle), when that folder
+is on C:, it builds them in the working directory instead. ctest starts the
 test in the build tree. A failed install assertion prints the installer's exit
 code and messages and the fixture folder.
 

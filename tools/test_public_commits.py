@@ -4,7 +4,7 @@ from contextlib import redirect_stdout
 import importlib.util
 import io
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import sys
 import tempfile
@@ -295,6 +295,20 @@ class DriveRuleTests(unittest.TestCase):
             with self.subTest(platform=platform, host=host), patch.object(installer.sys, 'platform', platform), \
                     patch.dict(os.environ, COMPUTERNAME=host):
                 self.assertEqual(installer.refuses_drive_c(), refused)
+
+    def test_hook_folder_on_c_follows_the_host_name_without_writing_anything(self):
+        # Pure paths: the check reads only the drive letter, so no folder is made on C:.
+        on_c = PureWindowsPath('C:/work/clone/.git/hooks')
+        on_d = PureWindowsPath('D:/work/clone/.git/hooks')
+        for host, folder, refused in (('EAGLE', on_c, True), ('eagle', on_c, True), ('EAGLE', on_d, False),
+                                      ('PEGASUS', on_c, False), ('PEGASUS', on_d, False), ('', on_c, False)):
+            with self.subTest(host=host, folder=str(folder)), patch.object(installer.sys, 'platform', 'win32'), \
+                    patch.dict(os.environ, COMPUTERNAME=host):
+                if refused:
+                    with self.assertRaisesRegex(ValueError, 'refusing to write a hook on C:'):
+                        installer.check_hook_drive(folder)
+                else:
+                    installer.check_hook_drive(folder)
 
 
 if __name__ == '__main__':
