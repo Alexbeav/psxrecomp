@@ -36,6 +36,8 @@ add_test(NAME tas_diverge_trace COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_diverge_trace.py")
 add_test(NAME tas_qualified_hunks COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_qualified_hunks.py")
+add_test(NAME tas_repin_records COMMAND ${Python3_EXECUTABLE} -B
+    "${CMAKE_CURRENT_LIST_DIR}/../test_repin_records.py")
 add_test(NAME tas_archive_run COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_archive_run.py")
 add_test(NAME tas_octoshock210_route COMMAND ${Python3_EXECUTABLE}

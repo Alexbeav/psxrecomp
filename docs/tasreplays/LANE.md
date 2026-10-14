@@ -11,10 +11,15 @@ qualifying replay depended on. `build_cache.stage_tools` verifies them, so **no 
 adapter can build a candidate from a tree that silently dropped one.** Register a behaviour
 in the same commit that qualifies it (CLAUDE.md rule 19). A known loss goes in the
 registry's `known_absent` map with a written reason and is reported as a debt.
+A change that adds or changes a `known_absent` reason, or shortens, edits or removes a pinned
+block, also appends a record to that entry's `repins` list with `"issue": "PS1B-<n>"` and the
+reason; the Tests workflow's re-pin records step fails the change without it. Do not delete an
+entry or rewrite its earlier records.
 
 ```
 python tools/tasreplays/qualified_hunks.py check --rev HEAD      # one tree
 python tools/tasreplays/qualified_hunks.py check-all             # across the split branches
+python tools/tasreplays/repin_records.py --base origin/stage/pin-i   # this branch's registry edits
 ```
 
 ## Batch rule (operator rule, 2026-09-17; Wave 5 batch, PSX Work T59)
