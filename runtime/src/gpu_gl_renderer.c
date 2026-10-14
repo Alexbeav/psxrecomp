@@ -10691,12 +10691,13 @@ static int dyn_apply(int snew) {
     const uint64_t t4 = dyn_mark();
     /* 5. Native-wide surfaces: presentation-only, rescaled in place over the
      *    rows they have presented (all rows before the first present). While
-     *    the centre is spliced from hr at every present (wide_blit_center),
-     *    only the margins hold anything of their own. */
+     *    the centre is canonical it is spliced from hr at present, so only the
+     *    margins need preserving. Explicit backgrounds and shifted views own
+     *    their centre pixels too; preserve their full composite. */
     if (g_wide_w > 0) {
         int cols[2][2], nc = 0;
         int native_w = g_wide_w - 2 * g_wide_off;
-        if (s_wide_fast && !view_enabled && native_w > 0 && g_wide_off > 0) {
+        if (wide_center_is_canonical() && native_w > 0 && g_wide_off > 0) {
             cols[0][0] = 0;                     cols[0][1] = g_wide_off;
             cols[1][0] = g_wide_off + native_w; cols[1][1] = g_wide_w;
             nc = 2;
