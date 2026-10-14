@@ -1,0 +1,5 @@
+# The recomp-ui (launcher) commit that this psxrecomp tree pairs with.
+# The Windows gate points RECOMP_UI_ROOT at a checkout of it and `gate_launcher.py check`
+# refuses any other commit (PS1B-485). Change this line in the same commit that moves the launcher pin.
+# Pin H and pin I: aff1c6ef (Alexbeav/psxrecomp stage/pin-i; PIN-I-FIX-PILE.md "Base").
+aff1c6ef29faa51d57d2f67610d8902bf7cb8772

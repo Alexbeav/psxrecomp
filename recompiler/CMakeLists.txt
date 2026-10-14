@@ -1212,7 +1212,7 @@ if(BUILD_TESTING)
                 menu_scan cursor_writers gpu_frame pad_trace pad_delivery
                 aligned_lzss_banks static_fragment_variant_keys
                 mips_tagged_relocations overlay_widescreen_callbacks
-                duckstation_oracle)
+                duckstation_oracle gate_launcher)
             add_test(NAME tools_${_t}
                 COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
                     -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
