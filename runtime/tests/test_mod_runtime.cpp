@@ -69,6 +69,8 @@ extern "C" void psx_write_half(uint32_t address, uint16_t value) {
     ram[offset + 1] = (uint8_t)(value >> 8);
 }
 
+/* Side-effect-free peek (memory.c); host-output observation reads. */
+extern "C" int psx_peek_word(uint32_t, uint32_t* out) { *out = 0; return 0; }
 extern "C" uint32_t psx_read_word(uint32_t address) {
     const uint32_t offset = address & 0x1fffffu;
     return (uint32_t)ram[offset] |
@@ -1165,6 +1167,9 @@ int main(int argc, char** argv) {
     check(!psx_mod_read_disc_file("S0",nullptr,0,&bytes),"directory rejected");
     std::vector<uint8_t> raw_iso(24*2352);
     for(unsigned i=0;i<24;++i) {
+        /* A raw sector starts with the CD sync pattern; geometry is read from
+         * it, never from the file length. */
+        raw_iso[i*2352]=0; std::fill_n(raw_iso.begin()+i*2352+1,10,(uint8_t)0xFF); raw_iso[i*2352+11]=0;
         raw_iso[i*2352+15]=2;
         std::copy_n(iso.begin()+i*2048,2048,raw_iso.begin()+i*2352+24);
     }

@@ -23,6 +23,9 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(video_texture_filter_test tests/test_video_texture_filter.c src/video_texture_filter.c)
+    target_include_directories(video_texture_filter_test PRIVATE include)
+    add_test(NAME video_texture_filter_test COMMAND video_texture_filter_test)
     add_executable(mod_netplay_test tests/test_mod_netplay.c
         src/mod_netplay.c src/netplay_state_digest.c src/crc32.c src/psx_sha256.c)
     target_include_directories(mod_netplay_test PRIVATE include)
@@ -361,6 +364,19 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-xbr-results")
         set_tests_properties(gl_xbr_filter_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        # [video] dithering: off ignores the guest's dither bit (byte-identical
+        # true colour); on/scaled add the PS1 pattern to shaded/modulated draws
+        # only, through the facade, the render thread, PGXP depth and wide.
+        add_test(NAME gl_dithering_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py" --single
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_dithering.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "${_gl_scale_sdl_inc}"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-dithering-results")
+        set_tests_properties(gl_dithering_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         unset(_gl_scale_sdl_inc)
     else()
         message(STATUS "gl_scale_invariance_test: not registered (needs macOS, Linux or MinGW, Python 3 and SDL3)")
@@ -385,6 +401,16 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-post-aa-results")
         set_tests_properties(gl_post_aa_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        add_test(NAME gl_bloom_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_bloom.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "$<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-bloom-results")
+        set_tests_properties(gl_bloom_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         add_test(NAME gl_hd_texture_pack_test
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
@@ -407,6 +433,18 @@ if(BUILD_TESTING)
                 --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-fmv-chroma-results")
         set_tests_properties(gl_fmv_chroma_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        # Debug present ring: GL names do not outlive a renderer restart.
+        add_test(NAME gl_present_ring_restart_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
+                --debug-tools
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_present_ring_restart.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "$<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-present-ring-restart-results")
+        set_tests_properties(gl_present_ring_restart_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
     endif()
     add_executable(launcher_device_roundtrip_test
@@ -1121,6 +1159,16 @@ if(BUILD_TESTING)
     target_link_libraries(iso_reader_pregap_test PRIVATE chdr-static)
     add_test(NAME iso_reader_pregap_test COMMAND iso_reader_pregap_test)
 
+    # Raw vs cooked geometry comes from the cue TRACK mode / sector-0 sync,
+    # never from file length.
+    add_executable(iso_reader_geometry_test
+        tests/test_iso_reader_geometry.cpp
+        src/iso_reader.cpp
+        src/cue_sheet.cpp)
+    target_include_directories(iso_reader_geometry_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
+    target_link_libraries(iso_reader_geometry_test PRIVATE chdr-static)
+    add_test(NAME iso_reader_geometry_test COMMAND iso_reader_geometry_test)
+
     add_executable(iso_reader_sbi_test
         tests/test_iso_reader_sbi.cpp
         src/iso_reader.cpp
@@ -1238,7 +1286,8 @@ if(BUILD_TESTING)
         src/cue_sheet.cpp
         src/iso_reader.cpp
         src/crc32.c
-        src/psx_sha256.c)
+        src/psx_sha256.c
+        src/sio.c)
     target_include_directories(netplay_view_mods_test PRIVATE
         include
         ../recompiler/include
@@ -1345,6 +1394,10 @@ if(BUILD_TESTING)
     add_executable(cdrom_irq_mask_test tests/test_cdrom_irq_mask.c)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
+
+    add_executable(cdrom_sector_fifo_test tests/test_cdrom_sector_fifo.c)
+    target_include_directories(cdrom_sector_fifo_test PRIVATE include src)
+    add_test(NAME cdrom_sector_fifo_test COMMAND cdrom_sector_fifo_test)
 
     add_executable(cdrom_lid_state_test tests/test_cdrom_lid_state.c)
     target_include_directories(cdrom_lid_state_test PRIVATE src)
@@ -1480,6 +1533,12 @@ if(BUILD_TESTING)
         target_link_libraries(frame_gen_test PRIVATE m)
     endif()
     add_test(NAME frame_gen_test COMMAND frame_gen_test)
+
+    # Post-effect chain presets (postfx_chain.c alone; no GL).
+    add_executable(postfx_chain_test tests/test_postfx_chain.c src/postfx_chain.c)
+    target_include_directories(postfx_chain_test PRIVATE include)
+    add_test(NAME postfx_chain_test COMMAND postfx_chain_test
+             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
     # Render-pass time freeze against mock devices (psx_cycles.c only).
     add_executable(render_pass_freeze_test
@@ -1867,6 +1926,13 @@ if(BUILD_TESTING)
         if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
             set_tests_properties(package_appimage_test PROPERTIES DISABLED TRUE)
         endif()
+        # The Linux release's bundled tcc + musl headers build and load a real
+        # shard with nothing from the host (x86_64 Linux; skips elsewhere).
+        add_test(NAME linux_tcc_bundle_smoke_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_linux_tcc_bundle_smoke.py)
+        set_tests_properties(linux_tcc_bundle_smoke_test PROPERTIES
+            SKIP_RETURN_CODE 77 TIMEOUT 900)
         # Overlay shards and BIOS modules are compiled for the RUNTIME's
         # architecture: an x86_64 macOS runtime under Rosetta used to get arm64
         # shards (arm64-only Xcode clang, no -arch) in its macos-x64 cache and

@@ -104,7 +104,11 @@ void psx_guest_cycle_scale_vblank(void) {
 }
 
 /* Public mod API (mod_plugins.h): the mod gate. */
-void psx_mod_set_guest_cycle_scale_gate(int open) { psx_guest_cycle_scale_gate_open(open); }
+int psx_mod_host_output_scope(void);
+void psx_mod_set_guest_cycle_scale_gate(int open) {
+    if (psx_mod_host_output_scope()) return;
+    psx_guest_cycle_scale_gate_open(open);
+}
 uint32_t psx_mod_guest_cycle_scale(void) { return s_psx_gcs_live; }
 
 void psx_guest_cycle_scale_snapshot(uint32_t out[3]) {

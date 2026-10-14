@@ -84,6 +84,8 @@
 #include "gl_batch_policy_hle.c"
 #include "gl_batch_policy_select.c"
 uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t n,uint32_t a){(void)n;(void)a;return 0;}
+/* mod_texture_banks.c refuses inside a netplay host-output hook (mod_runtime.cpp); none here. */
+int psx_mod_host_output_scope(void){return 0;}
 uint32_t psx_mod_read_word(uint32_t a){(void)a;return 0;}
 int g_psx_vram_dirty_tracking=0;
 uint64_t s_frame_count=0;
@@ -109,8 +111,6 @@ void psx_ws_dbg_gate_frame_snapshot(void){}
 void gpu_depth24_upload_span_reset(void){}
 /* Netplay unsplit view and forward-pass opt-in: off in these fixtures. */
 int gpu_ws_netplay_local_viewport_width(void){return 0;}
-int gpu_ws_background_requires_full_composite(void){return 0;}
-void gpu_timeline_note(uint8_t kind,uint32_t a,uint32_t b){(void)kind;(void)a;(void)b;}
 int render_pass_netplay_enabled(void){return 0;}
 /* Guest clock the renderer's stereo-pair freshness reads; test stand-ins, as
  * in test_gl_readback_region.c. */
