@@ -240,9 +240,11 @@ on a fixed region -> next.
   in one game). The source profile never dropped them. Removed: every guest
   store lands, in every profile. The two copies of the 16 bytes that replays of
   older recordings compare leave those stores out, and a recording of this build
-  says `low_ram_stores=all`. `low_ram_game_entry_test` holds the rule. Not
-  measured in a game: Tomba! 2 save and load, the title the dropped stores were
-  written for.
+  says `low_ram_stores=all`. `low_ram_game_entry_test` holds the rule. Tomba!
+  2 (USA), the title the dropped stores were written for, saved and loaded by
+  hand on a build of this change (2026-10-09). Save and load in Ape Escape,
+  Tomba! and Mega Man X6, the other titles of the July change, are still to be
+  measured.
 - **2026-10-06 (PS1G-39, after pin H, kept-route/cockpit regression):** Native boot produces
   the same BIOS low-RAM words as the oracle, then the host game-start hook clears
   bytes 0..15. Colony Wars: Vengeance later reads halfword zero through a cleared
