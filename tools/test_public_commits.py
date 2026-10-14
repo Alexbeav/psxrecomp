@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Private Git object fixtures; no network or public refs are changed."""
 from contextlib import redirect_stdout
+import hashlib
 import importlib.util
 import io
 import os
@@ -47,7 +48,26 @@ def report(result):
         result.stderr.decode('utf-8', 'replace').strip())
 
 
+def repository_variables():
+    """Names of the environment variables that select or redirect a repository.
+
+    `git rev-parse --local-env-vars` lists them (GIT_DIR, GIT_WORK_TREE,
+    GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR, ...). A fixed list
+    backs it up, so an old Git or a failed call still leaves the main ones.
+    """
+    names = {'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+             'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_CONFIG',
+             'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_IMPLICIT_WORK_TREE',
+             'GIT_PREFIX', 'GIT_NAMESPACE', 'GIT_GRAFT_FILE', 'GIT_SHALLOW_FILE'}
+    try:
+        names.update(run('rev-parse', '--local-env-vars').decode('utf-8', 'replace').split())
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return sorted(names)
+
+
 FIXTURE_PARENT = fixture_parent()
+REPOSITORY_VARIABLES = repository_variables()
 
 
 class GuardTests(unittest.TestCase):
@@ -58,14 +78,16 @@ class GuardTests(unittest.TestCase):
         # A fixture below a work tree must never reach the repository above it,
         # and must never read the host's Git configuration (a global or system
         # core.hooksPath makes the installer refuse). The global file is an empty
-        # one in the fixture and the system file is skipped.
+        # one in the fixture and the system file is skipped. The variables that
+        # select a repository (GIT_DIR and the rest) are dropped, so a suite that
+        # a Git hook or another tool starts cannot write into that repository.
         blind = Path(self.folder.name).resolve() / 'blind.gitconfig'
         blind.write_bytes(b'')
         ceiling = patch.dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(self.folder.name).resolve().parent),
                              GIT_CONFIG_GLOBAL=str(blind), GIT_CONFIG_NOSYSTEM='1')
         ceiling.start()
         self.addCleanup(ceiling.stop)
-        for name in ('GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS'):
+        for name in REPOSITORY_VARIABLES:
             os.environ.pop(name, None)
         run('init', '--quiet')
         self.base = self.commit('historical', author=BAD, committer=BAD)
@@ -215,15 +237,50 @@ class GuardTests(unittest.TestCase):
                 self.refused('existing hook path policy')
                 self.assertFalse(Path('.git/hooks/pre-push').exists())
 
+    def child(self, env, *tests):
+        """Run fixture cases of this file in a fresh process; a hung child fails after two minutes."""
+        child = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()),
+                                *('GuardTests.' + test for test in tests)], env=env, timeout=120,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(child.returncode, 0, child.stderr.decode('utf-8', 'replace'))
+
     def test_fixtures_ignore_host_hook_path(self):
         """A host-wide core.hooksPath must not change a fixture's result (PS1B-489)."""
         config = Path('host.gitconfig').resolve()
         config.write_text('[core]\n\thooksPath = host-hooks\n', encoding='utf-8')
-        env = dict(os.environ, GIT_CONFIG_GLOBAL=str(config))
-        test ='GuardTests.test_installer_preserves_modified_own_hook'
-        child = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve()), test], env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual(child.returncode, 0, child.stderr.decode('utf-8', 'replace'))
+        # Both halves: the child gets a hostile global file and a hostile system
+        # file, and must still see neither. Its own setUp has to skip the system file.
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=str(config), GIT_CONFIG_SYSTEM=str(config))
+        env.pop('GIT_CONFIG_NOSYSTEM', None)
+        self.child(env, 'test_installer_preserves_modified_own_hook')
+
+    def sentinel_state(self, sentinel):
+        """Every file of the sentinel's Git directory with its SHA-256, and its object count."""
+        git_dir = sentinel / '.git'
+        files = {path.relative_to(git_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in sorted(git_dir.rglob('*')) if path.is_file()}
+        objects = [name for name in files if name.startswith('objects/') and not name.startswith(('objects/info/', 'objects/pack/'))]
+        return files, len(objects)
+
+    def test_fixtures_ignore_host_repository_variables(self):
+        """GIT_DIR and its relatives must not send a fixture into another repository (PS1B-509)."""
+        sentinel = Path('sentinel').resolve()
+        run('init', '--quiet', str(sentinel))
+        run('-C', str(sentinel), 'config', 'user.name', 'sentinel')
+        blob = run('-C', str(sentinel), 'hash-object', '-w', '--stdin', data=b'sentinel\n').strip().decode()
+        git_dir = sentinel / '.git'
+        before, config = self.sentinel_state(sentinel), (git_dir / 'config').read_bytes()
+        self.assertEqual(before[1], 1)
+        env = dict(os.environ, GIT_DIR=str(git_dir), GIT_WORK_TREE=str(sentinel),
+                   GIT_INDEX_FILE=str(git_dir / 'index'), GIT_OBJECT_DIRECTORY=str(git_dir / 'objects'),
+                   GIT_COMMON_DIR=str(git_dir))
+        # The first case runs `git init` and `git config`; the second writes objects.
+        self.child(env, 'test_installer_preserves_existing_hook_and_path', 'test_historical_bad_identity_is_exempt')
+        after = self.sentinel_state(sentinel)
+        self.assertEqual(after[1], before[1], 'objects were written into the sentinel')
+        self.assertEqual((git_dir / 'config').read_bytes(), config, 'the sentinel config changed')
+        self.assertEqual(after[0], before[0], 'files of the sentinel Git directory changed')
+        self.assertEqual(run('-C', str(sentinel), 'cat-file', '-t', blob).strip(), b'blob')
 
     def test_cli_cannot_override_historical_base(self):
         run('update-ref', 'refs/heads/base-fixture', self.base)
