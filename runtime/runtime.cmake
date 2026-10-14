@@ -2320,6 +2320,23 @@ function(psxrecomp_add_runtime_target target)
             $<$<COMPILE_LANGUAGE:CXX>:-fzero-initialized-in-bss>)
     endif()
 
+    # Same float results on every host of a netplay match (PS1B-490). Clang
+    # (default contract=on) and GCC (default contract=fast) turn a*b+c into one
+    # fused multiply-add wherever the target has the instruction: always on
+    # arm64 (Apple Silicon), never on our x86-64 builds (no -mfma). A fused
+    # result is rounded once instead of twice, so the software renderer's float
+    # UV and shade interpolation picked other texels on an arm64 Mac than on a
+    # PC, and VRAM is part of the compared netplay state. Contraction off keeps
+    # every multiply and add rounded on its own on all targets.
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${target} PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-ffp-contract=off>)
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${target} PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
+    endif()
+
     if(MINGW)
         target_link_options(${target} PRIVATE -Wl,--stack,67108864)
         # No console window in Release MinGW builds.
