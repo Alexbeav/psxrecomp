@@ -24,7 +24,8 @@ import sys
 from collections import Counter
 
 REGISTRY = 'tools/tasreplays/qualified-hunks.json'
-ISSUE = re.compile(r'\b[A-Z][A-Z0-9]*-\d+\b')
+TRACKER_PREFIXES = ('PS1B', 'PS1G', 'X360B', 'X360G', 'PLAT')
+ANY_ID = re.compile(r'\b([A-Z][A-Z0-9]*)-\d+\b')
 ZERO = re.compile(r'^0+$')
 
 
@@ -50,9 +51,11 @@ def resolve(repo, rev):
 
 
 def registry_at(repo, rev, path=REGISTRY):
-    data = git(repo, 'show', f'{rev}:{path}', allow_fail=True)
-    if data is None:
+    # Absent from the tree: an empty registry. Present but unreadable (a missing blob in a partial
+    # clone, a damaged object): an error, never an empty registry that would excuse every loss.
+    if not git(repo, 'ls-tree', '--name-only', rev, '--', path).strip():
         return {'known_absent': {}, 'entries': []}
+    data = git(repo, 'show', f'{rev}:{path}')
     try:
         registry = json.loads(data.decode('utf-8'))
     except ValueError as error:
@@ -78,9 +81,31 @@ def weakened_blocks(base_entry, head_entry):
             if not any(f == b['file'] and contains(lines, b['lines']) for f, lines in head)]
 
 
-def issue_of(record):
-    match = ISSUE.search(str(record.get('issue', ''))) if isinstance(record, dict) else None
-    return match.group(0) if match else None
+def issue_pattern(base):
+    """Tracker prefixes: the fixed projects plus every prefix an existing record of the base names."""
+    prefixes = set(TRACKER_PREFIXES)
+    for entry in base.get('entries', []):
+        for record in entry.get('repins', []):
+            if isinstance(record, dict):
+                prefixes.update(ANY_ID.findall(str(record.get('issue', ''))))
+    return re.compile(r'\b(?:%s)-\d+\b' % '|'.join(sorted(map(re.escape, prefixes), key=len, reverse=True)))
+
+
+def record_problem(record, pattern, earlier_as_of):
+    """Why a new repins record does not count, or None. Only the issue field names the issue."""
+    if not isinstance(record, dict):
+        return 'is not an object'
+    if not pattern.search(str(record.get('issue', ''))):
+        return 'its "issue" names no tracker issue (PS1B-n, PS1G-n, ...)'
+    # The registry's records spell the explanation `reason` or `note`; either counts.
+    if not (str(record.get('reason', '')).strip() or str(record.get('note', '')).strip()):
+        return 'it has no "reason" (or "note")'
+    as_of = str(record.get('as_of', '')).strip()
+    if not as_of:
+        return 'it has no "as_of"'
+    if as_of in earlier_as_of:
+        return f'its "as_of" {as_of} is already in an earlier record of this entry'
+    return None
 
 
 def compare(base, head):
@@ -105,6 +130,7 @@ def compare(base, head):
             needs.setdefault(entry_id, []).append('known_absent is added')
         elif base_known[entry_id] != reason:
             needs.setdefault(entry_id, []).append('its known_absent reason is changed')
+    pattern = issue_pattern(base)
     failures, recorded = [], []
     for entry_id in sorted(needs):
         what = '; '.join(needs[entry_id])
@@ -120,13 +146,19 @@ def compare(base, head):
                             f'{sum((old - new).values())} earlier repins record(s) of this entry; '
                             f'leave them as they are and add a new one')
             continue
-        issues = [issue_of(json.loads(r)) for r in (new - old).elements()]
-        issues = sorted({i for i in issues if i})
+        earlier_as_of = {str(r.get('as_of', '')).strip() for r in base_entries.get(entry_id, {}).get('repins', [])
+                         if isinstance(r, dict)}
+        added = [json.loads(r) for r in (new - old).elements()]
+        problems = [record_problem(r, pattern, earlier_as_of) for r in added]
+        issues = sorted({m for r, p in zip(added, problems) if p is None
+                         for m in pattern.findall(str(r['issue']))})
         if issues:
             recorded.append(f"{entry_id}: {what}; recorded by a new repins record ({', '.join(issues)})")
         else:
-            failures.append(f'{entry_id}: {what}; no new repins record in this entry names an issue '
-                            f'(add one to its "repins" list with "issue": "PS1B-<n>" and the reason)')
+            why = ('no new repins record in this entry names an issue' if not added else
+                   'no new repins record in this entry counts (' + '; '.join(problems) + ')')
+            failures.append(f'{entry_id}: {what}; {why} '
+                            f'(add one to its "repins" list with "issue": "PS1B-<n>", a "reason" and a new "as_of")')
     return failures, recorded
 
 
@@ -145,8 +177,18 @@ def github_base(repo, head):
     elif os.environ.get('GITHUB_REF', '').startswith('refs/heads/stage/'):
         candidates.append(event.get('before'))
     # A fix branch is compared with the stage it was cut from: the newest stage branch.
-    refs = git(repo, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', 'refs/remotes/origin/stage/')
-    candidates += [r for r in refs.decode().split() if resolve(repo, r) != head]
+    refs = git(repo, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)',
+               'refs/remotes/origin/stage/').decode().split()
+    if os.environ.get('GITHUB_EVENT_NAME') != 'pull_request':
+        # Head already is the tip of a stage branch other than the one pushed (a new stage branch cut
+        # from the stage head, or a fix branch pushed before its first commit): the change carries no
+        # commit that the stage has not already taken. Judge nothing; do not fall back to an older stage.
+        own = os.environ.get('GITHUB_REF', '').replace('refs/heads/', 'refs/remotes/origin/', 1)
+        same = [r for r in refs if r != own and resolve(repo, r) == head]
+        if same:
+            print(f'note: head {head[:12]} is already the tip of {same[0]}; nothing to judge')
+            return head
+    candidates += [r for r in refs if resolve(repo, r) != head]
     if os.environ.get('GITHUB_EVENT_NAME') != 'pull_request':
         candidates.append(event.get('before'))
     for candidate in candidates:

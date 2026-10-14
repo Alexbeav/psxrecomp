@@ -94,6 +94,35 @@ def unit_controls():
     expect(absent_with('fix-a', RECORD), failing=['fix-b'])
     expect(absent_with('fix-b', dict(RECORD, issue='see the chat')), failing=['fix-b'])
     expect(absent_with('fix-b', {k: v for k, v in RECORD.items() if k != 'issue'}), failing=['fix-b'])
+    # F6: the issue id must be in the issue field, not taken from the reason or any other field.
+    expect(absent_with('fix-b', dict(RECORD, issue='see the chat', reason='PS1B-9')), failing=['fix-b'])
+    # F2: a record with only an issue id; an empty reason; no as_of.
+    expect(absent_with('fix-b', {'issue': 'PS1B-1'}), failing=['fix-b'], text='it has no "reason"')
+    expect(absent_with('fix-b', dict(RECORD, reason='  ')), failing=['fix-b'], text='it has no "reason"')
+    # `note` is the registry's other spelling of the explanation and counts.
+    expect(absent_with('fix-b', {k: v for k, v in dict(RECORD, note='why').items() if k != 'reason'}),
+           recorded=['fix-b'])
+    expect(absent_with('fix-b', {k: v for k, v in RECORD.items() if k != 'as_of'}), failing=['fix-b'],
+           text='it has no "as_of"')
+    # F2: only tracker ids count, not any WORD-digits text.
+    for word in ('SHA-256', 'UTF-8', 'CRC-32'):
+        expect(absent_with('fix-b', dict(RECORD, issue=word)), failing=['fix-b'], text='names no tracker issue')
+    for good in ('PS1G-12', 'X360B-3', 'PLAT-72', 'SHA-256 and PS1B-480'):
+        expect(absent_with('fix-b', dict(RECORD, issue=good)), recorded=['fix-b'])
+    # F2: the prefixes are read from the registry too: an id of a project the base already uses counts.
+    other = changed(lambda r: entry(r, 'fix-a')['repins'].append({'as_of': 'c00', 'issue': 'NEWP-4', 'reason': 'x'}))
+    def newp(r):
+        r['known_absent']['fix-b'] = 'Lost.'
+        entry(r, 'fix-b')['repins'] = [dict(RECORD, issue='NEWP-5')]
+    head = copy.deepcopy(other)
+    newp(head)
+    expect(head, recorded=['fix-b'], base=other)
+    expect(absent_with('fix-b', dict(RECORD, issue='NEWP-5')), failing=['fix-b'])
+    # F2: a copy of an earlier record of the same entry (same as_of) does not count, even with a new issue.
+    def copied(r):
+        entry(r, 'fix-a')['blocks'][0]['lines'].pop()
+        entry(r, 'fix-a')['repins'].append(dict(entry(r, 'fix-a')['repins'][0], issue='PS1B-480', reason='copy'))
+    expect(changed(copied), failing=['fix-a'], text='already in an earlier record')
 
     # Good: a shortened block with its record; issue ids inside longer text count.
     def shortened(issue):
@@ -102,7 +131,7 @@ def unit_controls():
             entry(r, 'fix-a')['repins'].append(dict(RECORD, issue=issue))
         return changed(edit)
     expect(shortened('PS1B-480'), recorded=['fix-a'])
-    expect(shortened('PS1B-211, PS1B-215'), recorded=['fix-a'], text='(PS1B-211)')
+    expect(shortened('PS1B-211, PS1B-215'), recorded=['fix-a'], text='(PS1B-211, PS1B-215)')
     # Bad: the old record of the entry is rewritten instead of a new one added.
     def rewritten(r):
         entry(r, 'fix-a')['blocks'][0]['lines'].pop()
@@ -164,6 +193,21 @@ def git_controls(temp):
     assert run(repo, '--head', 'no-such-rev', '--base', base).returncode == 2
     assert run(repo).returncode == 2
 
+    # F4: a base registry that exists but cannot be read is an error, not an empty registry.
+    blob = git(repo, 'rev-parse', f'{base}:{rr.REGISTRY}')
+    loose = repo / '.git' / 'objects' / blob[:2] / blob[2:]
+    assert loose.exists(), loose
+    saved = loose.read_bytes()
+    os.chmod(loose, 0o666)
+    loose.unlink()
+    unreadable = run(repo, '--base', base, '--head', bad)
+    assert unreadable.returncode == 2 and 'error:' in unreadable.stderr and 'MISSING' not in unreadable.stdout, \
+        (unreadable.stdout, unreadable.stderr)
+    loose.write_bytes(saved)
+    assert run(repo, '--base', base, '--head', bad).returncode == 1
+    # A path that is absent from the tree is still an empty registry.
+    assert run(repo, '--base', base, '--head', bad, '--registry', 'no/such.json').returncode == 0
+
     # GitHub event selection.
     event = Path(temp) / 'event.json'
 
@@ -186,6 +230,21 @@ def git_controls(temp):
     assert result.returncode == 1 and f'from {base}' in result.stdout, result.stdout
     result = gh('pull_request', 'refs/pull/1/merge', {'pull_request': {'base': {'sha': base}}}, head=good)
     assert result.returncode == 0 and f'from {base}' in result.stdout, result.stdout
+    # F1: the head is the tip of the stage branch already (a new stage branch cut from it, a fix branch
+    # pushed before its first commit): judge nothing, do not fall back to the older stage. The old stage
+    # branch pin-w predates the stage's own unrecorded change, which must not be judged again here.
+    git(repo, 'update-ref', 'refs/remotes/origin/stage/pin-w', base)
+    git(repo, 'update-ref', 'refs/remotes/origin/stage/pin-x', stage)
+    for ref, before in (('refs/heads/stage/pin-y', zero), ('refs/heads/fix/new', zero), ('refs/heads/fix/new', stage)):
+        git(repo, 'update-ref', 'refs/remotes/origin/' + ref[len('refs/heads/'):], stage)
+        result = gh('push', ref, {'before': before}, head=stage)
+        assert result.returncode == 0 and 'nothing to judge' in result.stdout and 'MISSING' not in result.stdout, \
+            (ref, result.stdout, result.stderr)
+    # ... while a fix branch with a commit of its own is still judged against the newest stage.
+    assert gh('push', 'refs/heads/fix/x', {'before': zero}, head=bad).returncode == 1
+    git(repo, 'update-ref', '-d', 'refs/remotes/origin/stage/pin-y')
+    git(repo, 'update-ref', '-d', 'refs/remotes/origin/stage/pin-w')
+    git(repo, 'update-ref', '-d', 'refs/remotes/origin/fix/new')
     # The stage branch itself is never its own base.
     git(repo, 'update-ref', 'refs/remotes/origin/stage/pin-x', bad)
     result = gh('push', 'refs/heads/stage/pin-x', {'before': zero}, head=bad)

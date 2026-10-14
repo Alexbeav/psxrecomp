@@ -12,8 +12,10 @@ adapter can build a candidate from a tree that silently dropped one.** Register 
 in the same commit that qualifies it (CLAUDE.md rule 19). A known loss goes in the
 registry's `known_absent` map with a written reason and is reported as a debt.
 A change that adds or changes a `known_absent` reason, or shortens, edits or removes a pinned
-block, also appends a record to that entry's `repins` list with `"issue": "PS1B-<n>"` and the
-reason; the Tests workflow's re-pin records step fails the change without it. Do not delete an
+block, also appends a record to that entry's `repins` list: `"issue"` a tracker id (`PS1B-<n>`,
+`PS1G-<n>`, `X360B-<n>`, `X360G-<n>`, `PLAT-<n>`), a non-empty `"reason"` (or `"note"`) and an
+`"as_of"` that no earlier record of the entry has; the Tests workflow's re-pin records step
+fails the change without it. A copy of an old record does not count. Do not delete an
 entry or rewrite its earlier records.
 
 ```
