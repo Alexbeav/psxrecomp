@@ -218,6 +218,9 @@ if(BUILD_TESTING)
             add_test(NAME menu_video_snapshot_test COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_video_snapshot.py
                 --cxx ${CMAKE_CXX_COMPILER})
+            add_test(NAME host_pause_first_present_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_host_pause_first_present.py
+                --cxx ${CMAKE_CXX_COMPILER})
         endif()
         add_test(NAME guest_implementation_binding_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_guest_implementation.py"
