@@ -8953,7 +8953,8 @@ static int openxr_surface_draw(uint32_t eye) {
     p_glBindBuffer(0x88EC,0);glPixelStorei(GL_UNPACK_ALIGNMENT,1);glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
     glPixelStorei(GL_UNPACK_SKIP_ROWS,0);glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
     for(int i=0;i<2;i++)if(present[i]) {
-        float vertices[36];if(!xr_surface_vertices(&surface[i],xr.pose[eye],xr.fov[eye],vertices))continue;
+        float head[3];for(int j=0;j<3;j++)head[j]=(xr.pose[0][j]+xr.pose[1][j])*.5f;
+        float vertices[36];if(!xr_surface_vertices_head(&surface[i],xr.pose[eye],xr.fov[eye],head,vertices))continue;
         glBindTexture(GL_TEXTURE_2D,s_xr_surface_tex[i]);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);

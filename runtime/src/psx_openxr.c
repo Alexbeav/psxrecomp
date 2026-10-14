@@ -85,7 +85,7 @@ void psx_openxr_native_metadata(uint64_t frame){s_pair_id=s_pair_cycle=0;s_sourc
 int psx_openxr_surface_valid(const PSXModOpenXRSurface *v) {
     if(!v || v->struct_size!=sizeof *v || v->id>=2 || !v->rgba ||
        !v->width_px || !v->height_px || v->width_px>1024 || v->height_px>1024)return 0;
-    if(v->flags)return 0;
+    if(v->flags&~PSX_MOD_OPENXR_SURFACE_FACE_HEAD)return 0;
     double norm=0;
     for(int i=0;i<3;i++)if(!isfinite(v->position_m[i]) || fabs(v->position_m[i])>100)return 0;
     for(int i=0;i<4;i++){if(!isfinite(v->orientation_xyzw[i]))return 0;norm+=v->orientation_xyzw[i]*v->orientation_xyzw[i];}

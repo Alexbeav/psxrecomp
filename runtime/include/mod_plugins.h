@@ -728,6 +728,9 @@ typedef struct PSXModOpenXRSurface {
     const uint8_t *rgba;
 } PSXModOpenXRSurface;
 #define PSX_MOD_OPENXR_SURFACES 1
+/* Ignore surface orientation: aim at predicted eye midpoint, upright in LOCAL
+ * space. Both eyes use the same plane. Position remains caller-controlled. */
+#define PSX_MOD_OPENXR_SURFACE_FACE_HEAD 1u
 int psx_mod_openxr_surface(const PSXModOpenXRSurface *surface);
 /* Opt-in native presentation surface for boot, videos and menus. Copies the
  * freshly drawn desktop content before host overlays, without guest replay.
