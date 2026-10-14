@@ -115,6 +115,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "mod_local_input_policy.h"
 #include "mod_session_baseline.h"
 #include "mod_runtime.h"
+#include "video_texture_filter.h"
 #include "host_launch_timing.h"
 #include "mod_packages.h"
 #include "present_image_ring.h"
@@ -1228,6 +1229,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE void psx_web_set_smooth_60fps(int enabled) {
 static int           g_video_scale = 1;     /* internal-resolution SSAA factor */
 static bool          g_video_aa    = true;  /* linear present filtering */
 static int           g_video_post_aa = 0;   /* [video] antialiasing_mode / PSX_AA_MODE (GL_POST_AA_*) */
+static float         g_video_bloom = 0.0f;  /* [video] bloom (PSX_BLOOM overrides) */
+static std::string   g_video_post_shader;   /* [video] post_shader (PSX_POST_SHADER overrides) */
 static int           g_video_ss_milli = 1000; /* [video] supersample / PSX_SUPERSAMPLE */
 /* FMV present reconstruction (VIDEO_FMV_FILTER_*), pushed to the GL renderer
  * once the config is resolved. Only consulted while g_video_aa is on. */
@@ -1293,6 +1296,7 @@ static int           g_video_fmv_chroma = 0;   /* [video] fmv_chroma_smoothing /
 /* [video] texture_lod / anisotropic_filtering; PSX_TEXTURE_LOD / PSX_ANISO. */
 static int           g_video_texture_lod = 0, g_video_aniso = 1;
 static int           g_video_accurate_blending = 1;   /* [video] accurate_blending / PSX_ACCURATE_BLENDING */
+static int           g_video_dithering = 1;   /* [video] dithering / PSX_DITHERING */
 static int           g_video_pgxp_color_correction = 0;
 static int           g_video_pgxp_seam = 0;
 static float         g_video_pgxp_depth_threshold = 4096.0f;
@@ -16331,6 +16335,11 @@ int main(int argc, char** argv) {
             }
             g_video_aa         = gc.runtime.video_antialiasing;
             g_video_post_aa    = gc.runtime.video_antialiasing_mode;
+            g_video_bloom      = gc.runtime.video_bloom;
+            {   /* UTF-8 bytes on every host (C++17: string, C++20: u8string) */
+                const auto u8 = gc.runtime.video_post_shader.u8string();
+                g_video_post_shader.assign(u8.begin(), u8.end());
+            }
             g_video_ss_milli   = gc.runtime.video_supersample_milli;
             g_video_texfilter  = gc.runtime.video_texture_filter;
             g_video_fmv_filter = gc.runtime.video_fmv_filter;
@@ -16353,6 +16362,7 @@ int main(int argc, char** argv) {
             g_video_texture_lod = gc.runtime.video_texture_lod;
             g_video_aniso = gc.runtime.video_anisotropic_filtering;
             g_video_accurate_blending = gc.runtime.video_accurate_blending ? 1 : 0;
+            g_video_dithering = gc.runtime.video_dithering;
             g_video_pgxp_color_correction = gc.runtime.video_pgxp_color_correction ? 1 : 0;
             g_video_pgxp_seam = gc.runtime.video_pgxp_seam;
             g_video_pgxp_depth_threshold = (float)gc.runtime.video_pgxp_depth_threshold;
@@ -17929,10 +17939,10 @@ int main(int argc, char** argv) {
                 }
                 seed.has_aspect_ratio = true;
                 /* has_texture_filter is on (PSX profile) so the launcher edits
-                 * ls.texture_filter directly (0=nearest,1=bilinear); ls.linear_filter
+                 * ls.texture_filter as the [video] enum (psx_texture_filter_from_ui: 0 nearest, 1 bilinear, 3 xBR); ls.linear_filter
                  * is the legacy fallback field for consoles without the cap and is
                  * left unused here. */
-                seed.texture_filter = ls.texture_filter ? 1 : 0; seed.has_texture_filter = true;
+                seed.texture_filter = psx_texture_filter_from_ui(ls.texture_filter); seed.has_texture_filter = true;
                 seed.fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
                 seed.has_fmv_filter = true;
                 {
@@ -18785,6 +18795,8 @@ session_reboot:
     gl_renderer_set_texture_lod(g_video_texture_lod, g_video_aniso);
     if (const char* e = std::getenv("PSX_ACCURATE_BLENDING")) g_video_accurate_blending = (*e && *e != '0');
     gl_renderer_set_accurate_blending(g_video_accurate_blending);
+    if (const char* e = std::getenv("PSX_DITHERING")) g_video_dithering = std::atoi(e);
+    gl_renderer_set_dithering(g_video_dithering);
     gl_renderer_set_pgxp_color_perspective(g_video_pgxp_color_correction);
     gl_renderer_set_pgxp_seam(g_video_pgxp_seam);
     if (const char* e = std::getenv("PSX_PGXP_DEPTH_THRESHOLD")) g_video_pgxp_depth_threshold = (float)std::atof(e);
@@ -19113,6 +19125,8 @@ session_reboot:
         }
         gl_renderer_set_swap_interval(0);
         (void)gl_renderer_set_post_aa(g_video_post_aa);
+        gl_renderer_set_bloom(g_video_bloom);
+        gl_renderer_set_post_shader(g_video_post_shader.c_str());
         g_gl_active = gl_renderer_init_context(s_headless_gl_window) != 0;
         if (!g_gl_active || gr_backend() != GR_BACKEND_OPENGL ||
             !(SDL_GetWindowFlags(s_headless_gl_window) & SDL_WINDOW_HIDDEN)) {
@@ -19325,6 +19339,8 @@ session_reboot:
         gl_renderer_set_dynamic_resolution(
             ((dynres_requested() || dbg_live_scale) && g_video_scale_applies) ? 1 : 0);
         (void)gl_renderer_set_post_aa(g_video_post_aa);
+        gl_renderer_set_bloom(g_video_bloom);
+        gl_renderer_set_post_shader(g_video_post_shader.c_str());
         g_gl_active = (gl_renderer_init_context(sdl_window) != 0);
         dynres_setup();
         if (dbg_live_scale && g_gl_active) {
@@ -20545,7 +20561,7 @@ soft_return_lobby:
 #endif
                 us.antialiasing = ls.antialiasing != 0;
                 us.has_antialiasing = true;
-                us.texture_filter = ls.texture_filter;
+                us.texture_filter = psx_texture_filter_from_ui(ls.texture_filter);
                 us.has_texture_filter = true;
                 us.fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
                 us.has_fmv_filter = true;
@@ -20621,7 +20637,7 @@ soft_return_lobby:
             g_video_internal_res = ir.preset;
             g_video_scale = ir.scale;
             g_video_aa = ls.antialiasing;
-            g_video_texfilter = ls.texture_filter;
+            g_video_texfilter = psx_texture_filter_from_ui(ls.texture_filter);
             g_video_fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
             g_video_geometry_correction = ls.geometry_correction ? 1 : 0;
             g_video_perspective_texturing = ls.perspective_texturing ? 1 : 0;

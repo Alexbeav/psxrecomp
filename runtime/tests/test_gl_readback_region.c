@@ -14,6 +14,8 @@ uint64_t psx_cycle_count=0;
 static int test_full_composite;
 int gpu_ws_background_requires_full_composite(void){return test_full_composite;}
 uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t n,uint32_t a){(void)n;(void)a;return 0;}
+/* mod_texture_banks.c refuses inside a netplay host-output hook (mod_runtime.cpp); none here. */
+int psx_mod_host_output_scope(void){return 0;}
 uint32_t psx_mod_read_word(uint32_t a){(void)a;return 0;}
 static uint16_t image[1024*512], oracle[1024*512];
 int g_psx_vram_dirty_tracking=0;
