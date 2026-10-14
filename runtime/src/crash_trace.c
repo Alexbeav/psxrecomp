@@ -41,6 +41,7 @@
 #include "psx_bss.h"
 #include "dispatch_publish.h"
 #include "crash_trace.h"
+#include "bios_hle_plan.h"  /* PSX_FAST_BOOT_IGNORED_NOTICE (PS1B-354) */
 #include "start_refusal.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */
@@ -250,6 +251,16 @@ void psx_crash_trace_note_settings(int file_format, int current_format,
     s_settings_file_format = file_format;
     s_settings_current_format = current_format;
     s_settings_boot_keys_ignored = boot_keys_ignored ? 1 : 0;
+}
+
+/* PS1B-354: the BIOS plan as main() settled it. -1 = not decided yet (a start
+ * that ended before the plan). */
+static int s_boot_skip = -1;
+static int s_boot_fast_boot_ignored = 0;
+
+void psx_crash_trace_note_boot(int boot_skip, int fast_boot_ignored) {
+    s_boot_skip = boot_skip ? 1 : 0;
+    s_boot_fast_boot_ignored = fast_boot_ignored ? 1 : 0;
 }
 
 /* ── Native call-stack snapshot ──────────────────────────────────────────
@@ -577,6 +588,14 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         "\"boot_keys_ignored\": %d, \"notice\": \"%s\"},\n",
         s_settings_file_format, s_settings_current_format, s_settings_boot_keys_ignored,
         s_settings_boot_keys_ignored ? PSX_SETTINGS_BOOT_KEYS_NOTICE : "");
+
+    /* PS1B-354: a written fast_boot = false that bios_hle overrode is said on
+     * stdout only, which a product does not keep. */
+    append_fmt(buf, sizeof(buf), &pos,
+        "  \"boot\": {\"boot_skip\": %d, \"fast_boot_ignored\": %d, "
+        "\"notice\": \"%s\"},\n",
+        s_boot_skip, s_boot_fast_boot_ignored,
+        s_boot_fast_boot_ignored ? PSX_FAST_BOOT_IGNORED_NOTICE : "");
 
     /* PS1B-306: kernel bless decides whether relocated kernel routines run
      * their compiled bodies or the interpreter, so the report states it.

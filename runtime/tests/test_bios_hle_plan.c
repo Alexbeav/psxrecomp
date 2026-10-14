@@ -32,6 +32,7 @@ static PsxBiosHleRequest req(int bios_hle, int keep_intro, int fast_boot,
     r.bios_hle               = bios_hle;
     r.keep_intro             = keep_intro;
     r.fast_boot              = fast_boot;
+    r.fast_boot_set          = 0;
     r.have_deliver_event_ret = have_der;
     r.have_shell_entry       = have_shell;
     r.have_game_entry        = have_game;
@@ -112,6 +113,54 @@ int main(void) {
     expect(bare.call_hle_denied == 1 && bare.boot_skip_denied == 1,
            "bare image: both refusals reported");
 
+    /* ---- 3b. A written fast_boot = false under bios_hle (PS1B-354) ------- */
+    /* fast_boot only ever asks for the skip. With bios_hle on and keep_intro
+     * off the skip happens anyway, so a written false changes nothing: the
+     * plan says so, and the boot decision is the one without the line. */
+    for (int i = 0; i < 2; i++) {
+        const int der = (i == 0) ? 1 : 0;  /* retail, then OpenBIOS */
+
+        PsxBiosHleRequest r = req(1, 0, 0, der, 1, 1);
+        PsxBiosHlePlan unset = psx_bios_hle_plan(r);
+        r.fast_boot_set = 1;
+        PsxBiosHlePlan written_false = psx_bios_hle_plan(r);
+        expect(written_false.boot_skip == 1 &&
+               written_false.boot_skip == unset.boot_skip,
+               "a written fast_boot = false does not change the boot");
+        expect(written_false.fast_boot_ignored == 1,
+               "bios_hle on, fast_boot = false written: reported as ignored");
+        expect(unset.fast_boot_ignored == 0,
+               "fast_boot not written: nothing to report");
+
+        r.fast_boot = 1;
+        PsxBiosHlePlan written_true = psx_bios_hle_plan(r);
+        expect(written_true.boot_skip == 1 && written_true.fast_boot_ignored == 0,
+               "fast_boot = true agrees with the skip: not reported");
+
+        PsxBiosHleRequest keep = req(1, 1, 0, der, 1, 1);
+        keep.fast_boot_set = 1;
+        PsxBiosHlePlan keep_p = psx_bios_hle_plan(keep);
+        expect(keep_p.boot_skip == 0 && keep_p.fast_boot_ignored == 0,
+               "keep_intro plays the intro: fast_boot = false is honoured");
+
+        PsxBiosHleRequest lle = req(0, 0, 0, der, 1, 1);
+        lle.fast_boot_set = 1;
+        PsxBiosHlePlan lle_p = psx_bios_hle_plan(lle);
+        expect(lle_p.boot_skip == 0 && lle_p.fast_boot_ignored == 0,
+               "bios_hle off: the real intro plays, fast_boot = false is honoured");
+    }
+    {
+        /* No skip happens (no shell entry, or no game): nothing is ignored. */
+        PsxBiosHleRequest r = req(1, 0, 0, 1, 0, 1);
+        r.fast_boot_set = 1;
+        expect(psx_bios_hle_plan(r).fast_boot_ignored == 0,
+               "no shell entry: no skip, nothing ignored");
+        r = req(1, 0, 0, 1, 1, 0);
+        r.fast_boot_set = 1;
+        expect(psx_bios_hle_plan(r).fast_boot_ignored == 0,
+               "BIOS-only run: no skip, nothing ignored");
+    }
+
     /* ---- 4. Purity: exhaustive sweep, no cross-axis contamination -------- */
     for (int bits = 0; bits < 64; bits++) {
         PsxBiosHleRequest r = req((bits >> 0) & 1, (bits >> 1) & 1,
@@ -142,6 +191,20 @@ int main(void) {
                "call-HLE never both granted and denied");
         expect(!(p.boot_skip && p.boot_skip_denied),
                "boot-skip never both granted and denied");
+
+        /* fast_boot_set is a report input only: it never moves either axis,
+         * and the report fires exactly when a written false met a skip. */
+        PsxBiosHleRequest set = r;
+        set.fast_boot_set = 1;
+        PsxBiosHlePlan t = psx_bios_hle_plan(set);
+        expect(t.boot_skip == p.boot_skip && t.call_hle == p.call_hle &&
+               t.boot_skip_denied == p.boot_skip_denied &&
+               t.call_hle_denied == p.call_hle_denied,
+               "fast_boot_set never changes the boot or the call tier");
+        expect(p.fast_boot_ignored == 0,
+               "fast_boot not written: never reported");
+        expect(t.fast_boot_ignored == (t.boot_skip && !set.fast_boot),
+               "reported exactly when the skip happens over a written false");
     }
 
     if (s_fails) {

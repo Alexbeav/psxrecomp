@@ -44,6 +44,12 @@ extern const char *g_psx_fatal_reason;
 void psx_crash_trace_note_settings(int file_format, int current_format,
                                    int boot_keys_ignored);
 
+/* How the BIOS boot was decided, for the run report (PS1B-354): whether the
+ * intro is skipped, and whether a written fast_boot = false had no effect
+ * because bios_hle skips it anyway. The report then carries a "boot" object
+ * with PSX_FAST_BOOT_IGNORED_NOTICE (bios_hle_plan.h) for that case. */
+void psx_crash_trace_note_boot(int boot_skip, int fast_boot_ignored);
+
 /* The sentence for that case, in the run report and on stdout (wording
  * accepted by Alex, 2026-10-02). It goes into a JSON string as it is: no
  * quote, no backslash, no control character. */

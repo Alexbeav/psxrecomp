@@ -47,6 +47,7 @@ typedef struct PsxBiosHleRequest {
     int bios_hle;    /* [runtime] bios_hle, PSX_BIOS_HLE                     */
     int keep_intro;  /* bios_hle_keep_intro, PSX_BIOS_HLE_KEEP_INTRO         */
     int fast_boot;   /* deprecated alias: boot-skip only, never call-HLE     */
+    int fast_boot_set; /* game.toml or settings.toml wrote fast_boot          */
     /* ---- capabilities of the SELECTED backend (psx_bios_image anchors) ---- */
     int have_deliver_event_ret; /* image exports the DeliverEvent $ra anchor  */
     int have_shell_entry;       /* image exports the shell entry PC           */
@@ -62,7 +63,19 @@ typedef struct PsxBiosHlePlan {
      * silent downgrade is what made the original bug invisible. */
     int call_hle_denied;
     int boot_skip_denied;
+    /* fast_boot = false was written, yet the boot is skipped because
+     * bios_hle asks for it: fast_boot only ever turns the skip on, so the
+     * player's false changes nothing (PS1B-354). Startup line and run report
+     * say so with PSX_FAST_BOOT_IGNORED_NOTICE. */
+    int fast_boot_ignored;
 } PsxBiosHlePlan;
+
+/* The sentence for fast_boot_ignored, on stdout and in the run report. It goes
+ * into a JSON string as it is: no quote, no backslash, no control character. */
+#define PSX_FAST_BOOT_IGNORED_NOTICE \
+    "fast_boot = false has no effect while bios_hle is on: the BIOS intro is " \
+    "still skipped. To see the intro, set bios_hle = false in settings.toml, " \
+    "or bios_hle_keep_intro = true in game.toml."
 
 /* Pure function: same request in, same plan out, no globals touched. */
 PsxBiosHlePlan psx_bios_hle_plan(PsxBiosHleRequest req);

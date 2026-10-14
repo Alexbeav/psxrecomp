@@ -9,6 +9,7 @@ PsxBiosHlePlan psx_bios_hle_plan(PsxBiosHleRequest req)
     p.boot_skip        = 0;
     p.call_hle_denied  = 0;
     p.boot_skip_denied = 0;
+    p.fast_boot_ignored = 0;
 
     /* Axis 1 — call-HLE. Anchor-gated on deliver_event_ret: servicing B0
      * events without the kernel's own DeliverEvent return address would send a
@@ -32,6 +33,12 @@ PsxBiosHlePlan psx_bios_hle_plan(PsxBiosHleRequest req)
         if (req.have_shell_entry) p.boot_skip = 1;
         else                      p.boot_skip_denied = 1;
     }
+
+    /* fast_boot can only ask for the skip, never refuse it: with bios_hle on
+     * and keep_intro off the skip happens whatever fast_boot says. A written
+     * fast_boot = false is then a choice with no effect, and nothing showed
+     * it (PS1B-354). Report it; the boot decision above stays as it is. */
+    p.fast_boot_ignored = p.boot_skip && req.fast_boot_set && !req.fast_boot;
 
     return p;
 }

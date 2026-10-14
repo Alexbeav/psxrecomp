@@ -220,6 +220,9 @@ struct RuntimeConfig {
     // tier, and it works on any BIOS image that exports a shell entry.
     // Kept so existing game.toml/settings.toml keep working.
     bool                  fast_boot = false;
+    // True when game.toml wrote fast_boot. A written false under bios_hle has
+    // no effect, and the runtime says so at start (PS1B-354).
+    bool                  has_fast_boot = false;
 
     // bios_hle: High-Level Emulation tier for BIOS kernel services
     // (CLAUDE.md §0 amendment 2026-07-02, the gbarecomp model). DEFAULT ON as of

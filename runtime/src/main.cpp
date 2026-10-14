@@ -15367,6 +15367,9 @@ int main(int argc, char** argv) {
     bool       kit_fast_boot = false;
     bool       kit_bios_hle  = false;
     bool       kit_bios_hle_keep_intro = false;
+    /* Did game.toml write fast_boot? A written false under bios_hle has no
+     * effect, and the start says so (PS1B-354). */
+    bool       kit_fast_boot_set = false;
     bool       fast_boot     = false;  /* DEPRECATED alias: HLE boot-skip only */
     bool       bios_hle      = false;  /* HLE kernel-service tier (bios_hle.c) */
     bool       bios_hle_keep_intro = false;
@@ -15743,6 +15746,7 @@ int main(int argc, char** argv) {
             kit_fast_boot = fast_boot;
             kit_bios_hle  = bios_hle;
             kit_bios_hle_keep_intro = bios_hle_keep_intro;
+            kit_fast_boot_set = gc.runtime.has_fast_boot;
             /* Developer compatibility finding, applied before BIOS selection.
              * Not exposed to settings.toml on purpose — see BIOS_SELECTION.md. */
             s_openbios_allowed  = gc.runtime.openbios;
@@ -18576,6 +18580,11 @@ session_reboot:
         req.bios_hle               = boot.bios_hle;
         req.keep_intro             = boot.keep_intro;
         req.fast_boot              = boot.fast_boot;
+        /* Whether fast_boot was written, for the PS1B-354 notice only. A
+         * match boots with the kit's values, so there only game.toml counts. */
+        req.fast_boot_set          = (kit_fast_boot_set ||
+                                      (!net_cfg.enabled && settings_chose_fast_boot))
+                                     ? 1 : 0;
         req.have_deliver_event_ret = (psx_bios_image.deliver_event_ret != 0);
         req.have_shell_entry       = (psx_bios_image.shell_entry_phys != 0);
         req.have_game_entry        = (game_entry_pc != 0);
@@ -18604,6 +18613,12 @@ session_reboot:
                      psx_bios_hle_boot_skip_enabled()
                          ? "HLE (shell skipped)" : "LLE (real intro)",
                      psx_bios_image.image_id ? psx_bios_image.image_id : "?");
+        /* PS1B-354: fast_boot = false cannot bring the intro back under
+         * bios_hle. Say so here and in the run report (a product keeps no
+         * stdout); the boot itself is unchanged. */
+        if (plan.fast_boot_ignored)
+            std::fprintf(stdout, "psxrecomp: " PSX_FAST_BOOT_IGNORED_NOTICE "\n");
+        psx_crash_trace_note_boot(plan.boot_skip, plan.fast_boot_ignored);
         /* PS1B-306: a bless table larger than the runtime's verify-state
          * array is a build defect. Stop here; running on would interpret
          * every relocated kernel routine with nothing to show for it. */
