@@ -129,31 +129,27 @@ synthetic test checks the emitter's counting and capacity rules; it cannot prove
 that current retail profiles fit. PS1B-308's six methods, fixture generation and
 native execution are unrun until admitted validation.
 
-## Disabled performance guards
+## Performance guards
 
-`recompiler/CMakeLists.txt` registers the performance guards with `DISABLED TRUE`.
-CTest lists them and reports them as disabled. This preserves the known failures;
-it does not count as a pass. Keep them disabled until an admitted run proves the
-checks pass. A source edit or syntax check is not that evidence.
+`recompiler/CMakeLists.txt` runs the performance guards and their controls as
+ordinary tests. They read runtime source only; they do not compile or run the
+runtime, so they do not prove runtime timing or performance.
 
-| Test | Status |
+| Test | What it checks |
 |---|---|
-| `runtime/tests/test_interpreter_perf_guards.py` | Disabled and unchanged. MMIO synchronization can recompute the device deadline without directly clearing `g_psx_cycle_fast_limit`. The guard also names the legacy `s_next_service_cycle` alias. A timing owner must resolve the invalidation requirement. Source inspection alone does not prove an active production defect. |
-| `runtime/tests/test_runtime_perf_diag_guards.py` | Disabled. The retained failure searched for `frame_pacer_wait(&pacer, g_frame_period_ms)`. PS1B-176 changes that name to the current `s_frame_pacer`, preserving the other checks. This source correction has not passed an admitted run. |
-| `runtime/tests/test_runtime_perf_diag_guard_controls.py` | Disabled. One current-source positive and twelve deliberate source defects exercise the actual guard. The defects cover opt-in gates, cadence, exact guest-frame boundaries, a one-shot summary, provider timing and counters, and forbidden telemetry in hot paths. All thirteen methods are unrun. |
+| `runtime/tests/test_interpreter_perf_guards.py` | Capture, overlay-cache and interpreter hot-path shapes. PS1B-176 re-expressed six stale groups against the current source: the load-value carry of PS1B-220, the hashed loaded-DLL lookup, the inline dependency mask, the inline cycle limit, and the rewritten main-RAM load paths. |
+| `runtime/tests/test_interpreter_perf_guard_controls.py` | The interpreter guard passes on current source and rejects 14 deliberate source defects, each with its exact message. |
+| `runtime/tests/test_runtime_perf_diag_guards.py` | Opt-in Release performance telemetry: gates, cadence, exact benchmark frames and hot-path exclusions. |
+| `runtime/tests/test_runtime_perf_diag_guard_controls.py` | The telemetry guard passes on current source and rejects 12 deliberate source defects. `--baseline-guard <file>` runs the controls against another copy of the guard. |
 
-`overlay_pair_dedup_runtime` is in the normal enabled registration list. Its
-companion harness now supplies the step-boundary functions. Its historical link
-failure does not make it one of the currently disabled guards.
+The inline cycle limit `g_psx_cycle_fast_limit` has had no nonzero writer since
+`31015cea` (PS1B-50), so the interpreter step and the main-RAM poll charge that
+read it always fall back to `psx_advance_cycles`. The guard fails if any runtime source stores
+a value other than 0 into it. A change that publishes a nonzero limit again must
+also invalidate it wherever a device deadline can move earlier.
 
-After execution admission, run the guard and its controls directly through the
-qualified runner. The controls also accept `--baseline-guard` with a byte-exact
-copy of the guard from accepted commit `79434620340b8b0e347ac8d4e43e93cb3210fad5`.
-That baseline against current source must fail, including the current-source
-positive. A baseline failure alone does not prove the corrected candidate passes.
-The controls copy only these public runtime source files into a temporary fixture;
-they do not compile or run the runtime. Their source checks do not prove runtime
-timing or performance.
+A guard that fails stays registered: mark it `DISABLED` in its `add_test`
+block and record why, never de-register it.
 
 ## Tests that are not in `ctest` and should not be
 
