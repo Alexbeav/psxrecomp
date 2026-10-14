@@ -131,9 +131,10 @@ static void close_observation_json(FILE *f) {
         psx_sha256_final(&hash, bytes); hex_hash(bytes, expected);
         hash = input_hash;
         psx_sha256_final(&hash, bytes); hex_hash(bytes, supplied);
-        fprintf(f, ",\"controller_profile\":\"nymashock-2.9.1-dualshock-neutral-analog\","
+        fprintf(f, ",\"controller_profile\":\"%s\","
                    "\"expected_protocol_sha256\":\"%s\",\"original_controller_sha256\":\"%s\","
-                   "\"guest_analog_mode\":%d", expected, supplied, last_protocol_mode);
+                   "\"guest_analog_mode\":%d", input_dualshock_controller_profile(),
+                   expected, supplied, last_protocol_mode);
     }
     if (resumed_inputs) fprintf(f,",\"resumed_inputs\":%u",resumed_inputs);
     if (fputs("}\n", f) < 0 || ferror(f)) fail("observation JSON write");
