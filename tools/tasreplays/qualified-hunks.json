@@ -793,12 +793,14 @@
         {
           "file": "runtime/src/cdrom.c",
           "lines": [
-            "            /* Spec 6.7 G2b: in the drive profile an established read names",
-            "             * the sector after the next delivery (Bio Hazard route;",
-            "             * cdrom_source_explicit_timing_test). G2c: while the read is still",
-            "             * seeking, GetlocP names the seek target, which is the delivery",
-            "             * cursor (PSX-SPX \"GetlocP\": it works during a seek). */",
-            "            if (s_nymashock_drive && !(stat_reg & CDSTAT_SEEK)) lba += 1;"
+            "            /* Spec 6.7 G2b: on the source read pipeline, and so in the drive",
+            "             * profile, an established read names the sector after the next",
+            "             * delivery (Bio Hazard route; Spyro 4083M return 4423; oracle",
+            "             * fixture C6-getlocp-reading; cdrom_source_explicit_timing_test).",
+            "             * G2c: while the read is still seeking, GetlocP names the seek",
+            "             * target, which is the delivery cursor (PSX-SPX \"GetlocP\": it",
+            "             * works during a seek). */",
+            "            if ((s_nymashock_drive || s_source_read_pipeline) && !(stat_reg & CDSTAT_SEEK)) lba += 1;"
           ]
         }
       ],
@@ -820,6 +822,15 @@
           "to_blocks": 1,
           "replacement_blocks_added": 1,
           "note": "Clean-room rewrite (PS1B-311): the stub lines are replaced by lines written from the behaviour spec by an unexposed implementer. Requalification of the TAS routes on this tree is owed."
+        },
+        {
+          "as_of": "a85eb25e24338503aac8c480e9419ae974e0f78c",
+          "issue": "PS1G-116",
+          "dropped_lines": 6,
+          "from_blocks": 1,
+          "to_blocks": 1,
+          "replacement_blocks_added": 1,
+          "note": "G2b widened from the drive profile to the source read pipeline (Octoshock 2.2.2/2.3 SectorPipe_Count 2; oracle fixture C6-getlocp-reading 40 of 40 replies; Spyro 4083M return 4423). The drive profile requires the source clock tape, which requires the pipeline, so a drive-profile run takes the same branch as before: Bio Hazard behaviour is unchanged by construction; its route replay on this tree is the trial's."
         }
       ]
     },
