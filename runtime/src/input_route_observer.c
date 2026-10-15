@@ -325,14 +325,15 @@ void input_route_observer_applied(uint16_t buttons, int connected, int analog) {
         first_non_neutral_seen = 1;
     }
 }
-void input_route_observer_dualshock_input(uint16_t buttons, const uint8_t source_axes[4]) {
+void input_route_observer_dualshock_input(uint16_t buttons, const uint8_t source_axes[4], uint8_t mode_button) {
     if (!log_file) return;
     if (!dualshock_mode || pending) fail("invalid DualShock sample sequence");
     uint8_t row[7] = {(uint8_t)buttons, (uint8_t)(buttons >> 8), 0,0,0,0,0};
     memcpy(row + 2, source_axes, 4);
+    row[6] = mode_button;
     if (delivered_inputs < total_inputs) psx_sha256_update(&input_hash, row, sizeof(row));
     else if (buttons != 0xFFFF || source_axes[0] != 128 || source_axes[1] != 128 ||
-             source_axes[2] != 128 || source_axes[3] != 128)
+             source_axes[2] != 128 || source_axes[3] != 128 || mode_button)
         fail("post-input DualShock sample was not neutral");
     memcpy(pending_controller, row, sizeof(row));
     for (unsigned i = 2; i < 6; ++i)
@@ -345,7 +346,7 @@ void input_route_observer_dualshock_applied(uint16_t buttons, const uint8_t stic
                                           int connected, int config_capable, int analog) {
     if (!log_file) return;
     uint8_t row[7] = {(uint8_t)buttons, (uint8_t)(buttons >> 8),
-                     sticks[1], sticks[0], sticks[3], sticks[2], 0};
+                     sticks[1], sticks[0], sticks[3], sticks[2], (uint8_t)sio_get_pad_mode_button(0)};
     if (!dualshock_mode || !pending || !connected || !config_capable ||
         (analog != 0 && analog != 1) || memcmp(row, pending_controller, sizeof(row)))
         fail("SIO delivery differs from complete DualShock route");

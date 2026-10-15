@@ -2,8 +2,9 @@
 
 Also guards what must NOT change: the strict read_movie_octoshock27 path Crash is qualified on,
 and run_native.route_identity's refusal of a physical Analog press, which is the gate that keeps a
-Spyro route out of the pipeline until a runtime models the MODE rule. A route this reader wrote is
-admitted with axis_model='octoshock-byte', so the pad receives every logged byte unscaled.
+Spyro route out of the pipeline unless a MODE model is named (mode_model='octoshock-2.4.2', which needs
+axis_model='octoshock-byte'). A route this reader wrote is admitted with axis_model='octoshock-byte',
+so the pad receives every logged byte unscaled.
 """
 import io
 import json
@@ -157,8 +158,7 @@ for name, frames, kwargs in REAL:
             assert raw['frames'] == frames and raw['steps'] == receipt['steps']
             assert raw['expected_protocol_sha256'] == raw['original_controller_sha256'] == receipt['canonical_controller_sha256']
 
-# A route carrying a MODE press must still be refused by the pipeline: the runtime does not model
-# the rule yet, and this refusal is what will require it.
+# A route carrying a MODE press is still refused by default: it needs a named MODE model.
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / 'analog.psxrti2'
     route.write_route([(0xFFFF, 128, 128, 128, 128, 1)], path)
@@ -184,4 +184,39 @@ if expected.is_file():
     print(f'{len(recorded)} qualified route identities unchanged')
 else:
     print(f'skipped (absent): {expected}')
+
+# -------------------------------------------------- the octoshock-2.4.2 MODE model (PS1G-127)
+# Admitted only when named, only with the unscaled Octoshock axes, and every physical MODE edge reaches the hashes.
+with tempfile.TemporaryDirectory() as tmp:
+    mode_rows = [(0xFFFF, 128, 128, 128, 128, flag) for flag in (0, 1, 1, 0)]
+    path = Path(tmp) / 'mode.psxrti2'
+    route.write_route(mode_rows, path)
+    for kwargs in ({}, {'axis_model': 'octoshock-byte'}, {'mode_model': 'octoshock-2.4.2'},
+                   {'axis_model': 'nymashock-u16', 'mode_model': 'octoshock-2.4.2'},
+                   {'axis_model': 'octoshock-byte', 'mode_model': 'octoshock-9'}):
+        refuses(lambda: run_native.route_identity(path, **kwargs), 'MODE' if 'mode_model' in kwargs else 'physical Analog press')
+    got = run_native.route_identity(path, axis_model='octoshock-byte', mode_model='octoshock-2.4.2')
+    expected = hashlib.sha256(b''.join(struct.pack('<H5B', *r) for r in mode_rows)).hexdigest()
+    assert got['original_controller_sha256'] == got['expected_protocol_sha256'] == expected
+    assert got['controller_profile'] == 'octoshock-2.4.2-dualshock-mode' and got['mode_model'] == 'octoshock-2.4.2'
+    assert got['frames'] == 4 and got['steps'] == 3
+    # A route without a MODE press keeps its identity when the model is named (the profile names the model).
+    plain = Path(tmp) / 'plain-mode.psxrti2'
+    route.write_route([(0xFFFF, 128, 128, 128, 128, 0)], plain)
+    assert (run_native.route_identity(plain, axis_model='octoshock-byte')['controller_profile']
+            == 'octoshock-byte-dualshock-neutral-analog')
+    assert 'mode_model' not in run_native.route_identity(plain, axis_model='octoshock-byte')
+    # An analog flag above 1 is never a MODE press.
+    bad = Path(tmp) / 'bad.psxrti2'
+    route.write_route([(0xFFFF, 128, 128, 128, 128, 0)], bad)
+    data = bytearray(bad.read_bytes())
+    data[24 + 10] = 2
+    bad.write_bytes(bytes(data))
+    refuses(lambda: run_native.route_identity(bad, axis_model='octoshock-byte', mode_model='octoshock-2.4.2'),
+            'physical Analog press')
+    # A MODE model never applies to a digital PSXRTI1 route.
+    digital = Path(tmp) / 'digital.psxrti'
+    digital.write_bytes(struct.pack('<8sIIII', b'PSXRTI1\0', 1, 8, 1, 0) + struct.pack('<IHH', 1, 0xFFFF, 0))
+    refuses(lambda: run_native.route_identity(digital, axis_model='octoshock-byte', mode_model='octoshock-2.4.2'),
+            'DualShock route only')
 print('octoshock dualshock tests passed')

@@ -66,6 +66,7 @@ static InputDualShockRouteStep *s_dual;
 static uint32_t s_step_count, s_step_index, s_step_remaining;
 static int s_release_loaded, s_release_dual;
 static uint8_t s_dual_axes[4] = {128, 128, 128, 128};
+static uint8_t s_dual_mode_button;
 #ifdef PSX_NO_DEBUG_TOOLS
 /* Route pictures in a release product (PS1B-404). The diagnostic product
  * drives the route observer from its debug server; a release product has no
@@ -498,7 +499,7 @@ int input_route_session_admit(const char *path)
     }
     if (fclose(f) && !error) error = "close error";
     for (uint32_t i = 0; !error && dualshock && i < count; ++i)
-        if (dual[i].analog_button) error = "physical Analog press is not qualified";
+        if (dual[i].analog_button && !input_dualshock_mode_button_enabled()) error = "physical Analog press is not qualified";
     if (error) {
         free(digital); free(dual);
         memset(s_markers, 0, sizeof(s_markers));
@@ -742,10 +743,12 @@ static int release_next_word(void)
 {
     if (s_release_dual) {
         uint16_t current = 0xFFFF;
+        s_dual_mode_button = 0;
         memset(s_dual_axes, 128, sizeof(s_dual_axes));
         if (s_step_index < s_step_count) {
             current = s_dual[s_step_index].buttons;
             memcpy(s_dual_axes, s_dual[s_step_index].axes_ly_lx_ry_rx, 4);
+            s_dual_mode_button = s_dual[s_step_index].analog_button;
             if (--s_step_remaining == 0 && ++s_step_index < s_step_count)
                 s_step_remaining = s_dual[s_step_index].frames;
         }
@@ -771,7 +774,7 @@ int input_route_session_release_override(void)
         release_capture_delivered();
         input_route_observer_boundary(s_release_consumed, s_frame_count);
         const int word = release_next_word();
-        if (s_release_dual) input_route_observer_dualshock_input((uint16_t)word, s_dual_axes);
+        if (s_release_dual) input_route_observer_dualshock_input((uint16_t)word, s_dual_axes, s_dual_mode_button);
         else input_route_observer_input((uint16_t)word);
         s_release_in_observer = 0;
         ++s_release_consumed;
@@ -784,7 +787,7 @@ int input_route_session_release_override(void)
 int input_route_session_release_dualshock(int buttons)
 {
     if (!s_release_loaded || !s_release_dual) return 0;
-    input_dualshock_deliver((uint16_t)buttons, s_dual_axes);
+    input_dualshock_deliver_mode((uint16_t)buttons, s_dual_axes, s_dual_mode_button);
     return 1;
 }
 

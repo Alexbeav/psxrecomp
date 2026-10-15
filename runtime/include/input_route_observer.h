@@ -10,7 +10,7 @@ void input_route_observer_resume(uint32_t consumed);
 void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame);
 void input_route_observer_input(uint16_t buttons);
 void input_route_observer_applied(uint16_t buttons, int connected, int analog);
-void input_route_observer_dualshock_input(uint16_t buttons, const uint8_t source_axes[4]);
+void input_route_observer_dualshock_input(uint16_t buttons, const uint8_t source_axes[4], uint8_t mode_button);
 void input_route_observer_dualshock_applied(uint16_t buttons, const uint8_t sticks_lx_ly_rx_ry[4],
                                           int connected, int config_capable, int analog);
 #endif
