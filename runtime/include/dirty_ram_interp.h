@@ -63,6 +63,12 @@ void dirty_ram_ld_delay_flush(CPUState* cpu);
  * on the next interp step (selfcheck MotK v0=countdown vs v0=1 forks). */
 void dirty_ram_ld_delay_discard(void);
 
+/* The interpreter's BLTZ decision at pc for the value of rs, widescreen funnel
+ * widen included (1 = taken). The compiled IRQ hand-off uses it when it
+ * recomputes a BLTZ at a delay-slot interrupt, so Cause.BT and register 6
+ * follow the same decision as the interpreter (PS1B-510). */
+int dirty_ram_bltz_taken(uint32_t pc, uint32_t rs_value);
+
 /* Re-anchor host-only dirty IRQ pump ambient (entry-poll stride + 4096-insn
  * gap) after snap restore. Not in boot_state — peers that drifted through FMV
  * otherwise entered the post-FMV dirty wait on opposite poll phases. */
