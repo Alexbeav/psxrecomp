@@ -2428,7 +2428,7 @@
             "static inline int cpu_state_wire_read(const uint8_t *in, uint32_t len, CPUState *cpu) {",
             "    if(len!=CPU_STATE_WIRE_BYTES || in[573]>32u || in[574]>32u || in[575]>32u) return 0;",
             "    PstR tail; uint32_t rt, value, age; pst_r_init(&tail,in+580,12);",
-            "    pst_r_u32(&tail,&rt); pst_r_u32(&tail,&value); pst_r_u32(&tail,&age);",
+            "    if(!pst_r_u32(&tail,&rt) || !pst_r_u32(&tail,&value) || !pst_r_u32(&tail,&age)) return 0;",
             "    if(rt>31u || age>1u || (!rt && age)) return 0;",
             "    PstR r; pst_r_init(&r,in,len);",
             "    for (unsigned i=0;i<32;i++) pst_r_u32(&r,&cpu->gpr[i]);",
@@ -5078,6 +5078,16 @@
             "6d2f8b9f74fa173f87ad648e4fee02402f4dc585"
           ],
           "signature": "signed: Claude MANAGER 2026-09-28 — see PIN-F-QUALIFIED-HUNK-REPIN-20260928.md"
+        },
+        {
+          "as_of": "614126d27d572a19ae9f33e92be285e41eecac19",
+          "issue": "PS1B-322",
+          "reason": "GCC 11 -Werror=maybe-uninitialized in cpu_state_wire_read: the three tail reads now check pst_r_u32 and return 0 on failure. The new early return is unreachable, because the length is checked to be 592 bytes before the tail reads and the tail cursor covers bytes 580 to 591, so accepted and rejected inputs are unchanged. No route replay has run on this change",
+          "detail": "runtime/include/cpu_state_wire.h: 'pst_r_u32(&tail,&rt); pst_r_u32(&tail,&value); pst_r_u32(&tail,&age);' -> 'if(!pst_r_u32(&tail,&rt) || !pst_r_u32(&tail,&value) || !pst_r_u32(&tail,&age)) return 0;'. One pinned line changed, none removed.",
+          "dropped_lines": 1,
+          "added_lines": 1,
+          "from_blocks": 167,
+          "to_blocks": 167
         }
       ],
       "contract_amendments": [
