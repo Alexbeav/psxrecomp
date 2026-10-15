@@ -5,7 +5,7 @@ nclip_exact_sites) as the generated code decides it.
 The compiled side is the generator's condition text from
 recompiler/tests/ws_branch_site_cases.h (checked against the generator by
 recompiler_patch_test). --src-root links another runtime tree's interpreter: a
-tree without gpu_ws_set_branch_cull_sites (the stage before PS1B-520) gets no
+tree without dirty_ram_set_ws_branch_sites (the stage before PS1B-520) gets no
 lists, so its interpreter decides every listed site raw and the fixture fails.
 """
 import argparse
@@ -29,8 +29,9 @@ def main():
     cases = here.parent.parent / 'recompiler' / 'tests' / 'ws_branch_site_cases.h'
     if not cases.is_file():
         raise SystemExit('missing ' + str(cases))
-    gpu_h = (source / 'include' / 'gpu.h').read_text(encoding='utf-8', errors='replace')
-    has_setter = 'gpu_ws_set_branch_cull_sites' in gpu_h
+    interp_h = (source / 'include' / 'dirty_ram_interp.h').read_text(encoding='utf-8',
+                                                              errors='replace')
+    has_setter = 'dirty_ram_set_ws_branch_sites' in interp_h
     defines = ('WS_FIXTURE_HAVE_BRANCH_SITES',) if has_setter else ()
     levels = args.opt or ['O0', 'O2']
     with tempfile.TemporaryDirectory() as temporary:
@@ -47,7 +48,7 @@ def main():
             wrapper.write_text((here / (name + '.in')).read_text(encoding='utf-8').replace(
                 marker, path.as_posix()), encoding='utf-8')
             modules.append(str(wrapper))
-        modules.append('gpu.c')  # production widescreen state and branch-site lists
+        modules.append('gpu.c')  # production widescreen margin and cull helpers
         for level in levels:
             output = work / level
             output.mkdir()

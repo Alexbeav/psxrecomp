@@ -26,7 +26,6 @@ uint8_t psx_cyc_load_byte(CPUState *c,uint32_t a,uint32_t r,uint32_t m) {
 }
 int psx_ws_angle_site(uint32_t p,uint32_t i,uint32_t *v) {(void)p;(void)i;(void)v;return 0;}
 int psx_ws_is_cull_bias_site(uint32_t p) {(void)p;return 0;}
-unsigned psx_ws_branch_site_kinds(uint32_t p) {(void)p;return 0u;}
 int psx_ws_is_signed_x_bound_site(uint32_t p,uint32_t i) {(void)p;(void)i;return 0;}
 static unsigned checks;
 static void equal(uint32_t got,uint32_t expected) {

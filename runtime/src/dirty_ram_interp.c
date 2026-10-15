@@ -665,6 +665,66 @@ int dirty_ram_bltz_taken(uint32_t pc, uint32_t rs_value) {
     return (int32_t)rs_value < 0;
 }
 
+/* Branch-decision site lists of [widescreen.cull] (bltz_sites,
+ * branch_keep_sites, nclip_keep_sites, nclip_exact_sites). The recompiler
+ * widens or keeps the branch at each listed PC (code_generator.cpp,
+ * generate_branch_condition); main.cpp gives the interpreter the same lists
+ * here (PS1B-520). They live in this file because only the interpreter reads
+ * them: a module that links the interpreter without gpu.c gets no new link
+ * seam, and with no list set a branch costs one compare. Physical PCs, sorted
+ * for a binary search. */
+#define WS_BRANCH_SITES_MAX 1024
+static uint32_t ws_branch_sites[PSX_WS_BRANCH_KINDS][WS_BRANCH_SITES_MAX];
+static int ws_branch_n[PSX_WS_BRANCH_KINDS];
+static int ws_branch_requested[PSX_WS_BRANCH_KINDS];
+static int ws_branch_total = 0;
+static uint64_t ws_branch_hits[PSX_WS_BRANCH_KINDS];
+static uint64_t ws_branch_changed[PSX_WS_BRANCH_KINDS];
+
+static int ws_branch_cmp(const void *a, const void *b) {
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+void dirty_ram_set_ws_branch_sites(int kind, const uint32_t *sites, int nsites) {
+    if (kind < 0 || kind >= PSX_WS_BRANCH_KINDS) return;
+    if (nsites < 0 || !sites) nsites = 0;
+    /* A list longer than the table is cut; ws_branch_sites reports both counts. */
+    ws_branch_requested[kind] = nsites;
+    if (nsites > WS_BRANCH_SITES_MAX) nsites = WS_BRANCH_SITES_MAX;
+    for (int i = 0; i < nsites; i++)
+        ws_branch_sites[kind][i] = sites[i] & 0x1FFFFFFFu;
+    qsort(ws_branch_sites[kind], (size_t)nsites, sizeof(uint32_t), ws_branch_cmp);
+    ws_branch_n[kind] = nsites;
+    ws_branch_hits[kind] = ws_branch_changed[kind] = 0;
+    ws_branch_total = 0;
+    for (int k = 0; k < PSX_WS_BRANCH_KINDS; k++) ws_branch_total += ws_branch_n[k];
+}
+
+void dirty_ram_get_ws_branch_site_stats(DirtyRamWsBranchSiteStats *out) {
+    if (!out) return;
+    for (int k = 0; k < PSX_WS_BRANCH_KINDS; k++) {
+        out->sites[k] = (uint32_t)ws_branch_n[k];
+        out->requested[k] = (uint32_t)ws_branch_requested[k];
+        out->hits[k] = ws_branch_hits[k];
+        out->changed[k] = ws_branch_changed[k];
+    }
+}
+
+/* A bit (1 << kind) for each list that holds pc. */
+static unsigned ws_branch_site_kinds(uint32_t pc) {
+    if (ws_branch_total == 0) return 0u;
+    uint32_t p = pc & 0x1FFFFFFFu;
+    unsigned kinds = 0u;
+    for (int k = 0; k < PSX_WS_BRANCH_KINDS; k++) {
+        if (ws_branch_n[k] > 0 &&
+            bsearch(&p, ws_branch_sites[k], (size_t)ws_branch_n[k],
+                    sizeof(uint32_t), ws_branch_cmp))
+            kinds |= 1u << k;
+    }
+    return kinds;
+}
+
 /* The interpreter's conditional-branch decision at pc (1 = taken), with the
  * widescreen branch-site lists of [widescreen.cull] and the auto_screen_x
  * funnel widen. It mirrors the recompiler's generate_branch_condition
@@ -677,7 +737,7 @@ int dirty_ram_bltz_taken(uint32_t pc, uint32_t rs_value) {
  *   any other branch: the raw condition.
  * The bltz kinds apply to rt 0 only, as in the generator; bltzal, bgez and
  * bgezal take branch_keep_sites only. Each decision at a listed PC is counted
- * (gpu_state "interp_branch_sites"). The compiled IRQ hand-off still uses
+ * (debug command ws_branch_sites). The compiled IRQ hand-off still uses
  * dirty_ram_bltz_taken above: which decision it takes is PS1B-519. */
 int dirty_ram_branch_taken(uint32_t pc, uint32_t insn, uint32_t rs_value,
                            uint32_t rt_value) {
@@ -692,7 +752,7 @@ int dirty_ram_branch_taken(uint32_t pc, uint32_t insn, uint32_t rs_value,
     case 0x07: raw = ((int32_t)rs_value > 0); break;
     default:   return 0;
     }
-    unsigned kinds = psx_ws_branch_site_kinds(pc);
+    unsigned kinds = ws_branch_site_kinds(pc);
     int kind = -1, taken = raw;
     if (op == 0x01 && rt == 0u) {
         if (kinds & (1u << PSX_WS_BRANCH_BLTZ)) {
@@ -713,8 +773,10 @@ int dirty_ram_branch_taken(uint32_t pc, uint32_t insn, uint32_t rs_value,
         kind = PSX_WS_BRANCH_KEEP;
         taken = psx_ws_x_margin() > 0 ? 0 : raw;
     }
-    if (kind >= 0)
-        psx_ws_branch_site_note(kind, taken != raw);
+    if (kind >= 0) {
+        ws_branch_hits[kind]++;
+        if (taken != raw) ws_branch_changed[kind]++;
+    }
     return taken;
 }
 

@@ -46,6 +46,7 @@
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
+#include "dirty_ram_interp.h"  /* dirty_ram_set_ws_branch_sites */
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "interrupts.h"
@@ -15601,15 +15602,15 @@ int main(int argc, char** argv) {
             /* Branch-decision lists: the generated code widens or keeps these
              * branches; the dirty-RAM interpreter decides them the same way
              * (dirty_ram_branch_taken, PS1B-520). */
-            gpu_ws_set_branch_cull_sites(PSX_WS_BRANCH_BLTZ,
+            dirty_ram_set_ws_branch_sites(PSX_WS_BRANCH_BLTZ,
                 gc.ws_cull_bltz_sites.data(), (int)gc.ws_cull_bltz_sites.size());
-            gpu_ws_set_branch_cull_sites(PSX_WS_BRANCH_KEEP,
+            dirty_ram_set_ws_branch_sites(PSX_WS_BRANCH_KEEP,
                 gc.ws_cull_branch_keep_sites.data(),
                 (int)gc.ws_cull_branch_keep_sites.size());
-            gpu_ws_set_branch_cull_sites(PSX_WS_BRANCH_NCLIP_KEEP,
+            dirty_ram_set_ws_branch_sites(PSX_WS_BRANCH_NCLIP_KEEP,
                 gc.ws_cull_nclip_keep_sites.data(),
                 (int)gc.ws_cull_nclip_keep_sites.size());
-            gpu_ws_set_branch_cull_sites(PSX_WS_BRANCH_NCLIP_EXACT,
+            dirty_ram_set_ws_branch_sites(PSX_WS_BRANCH_NCLIP_EXACT,
                 gc.ws_cull_nclip_exact_sites.data(),
                 (int)gc.ws_cull_nclip_exact_sites.size());
             {

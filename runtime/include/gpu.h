@@ -334,30 +334,6 @@ int  psx_ws_cull_bltz_at(const uint32_t *words, int n, int idx);
  * screen_h_imms); defaults 0x140/0x141 + 0xE0/0xF1. */
 void gpu_ws_set_cull_imms(const uint32_t *w, int nw, const uint32_t *h, int nh);
 int  psx_ws_is_cull_w_imm(uint32_t imm);
-/* Branch-decision site lists of [widescreen.cull] (PS1B-520). The recompiler
- * decides a branch at each listed PC widened or kept (code_generator.cpp,
- * generate_branch_condition); the runtime gets the same lists so the dirty-RAM
- * interpreter decides those branches the same way (dirty_ram_branch_taken).
- * psx_ws_branch_site_kinds returns a bit (1 << kind) for each list holding pc.
- * psx_ws_branch_site_note counts one interpreted decision at a listed site and
- * whether it differs from the raw branch condition. */
-enum {
-    PSX_WS_BRANCH_BLTZ = 0,        /* bltz_sites */
-    PSX_WS_BRANCH_KEEP = 1,        /* branch_keep_sites */
-    PSX_WS_BRANCH_NCLIP_KEEP = 2,  /* nclip_keep_sites */
-    PSX_WS_BRANCH_NCLIP_EXACT = 3, /* nclip_exact_sites */
-    PSX_WS_BRANCH_KINDS = 4
-};
-void     gpu_ws_set_branch_cull_sites(int kind, const uint32_t *sites, int nsites);
-unsigned psx_ws_branch_site_kinds(uint32_t pc);
-void     psx_ws_branch_site_note(int kind, int changed);
-typedef struct {
-    uint32_t sites[PSX_WS_BRANCH_KINDS];     /* PCs the interpreter holds */
-    uint32_t requested[PSX_WS_BRANCH_KINDS]; /* PCs game.toml listed */
-    uint64_t hits[PSX_WS_BRANCH_KINDS];      /* interpreted decisions at a listed PC */
-    uint64_t changed[PSX_WS_BRANCH_KINDS];   /* of those, differing from the raw condition */
-} GpuWsBranchSiteStats;
-void gpu_ws_get_branch_site_stats(GpuWsBranchSiteStats *out);
 /* Per-game opt-in gates for the pattern-scanned interp widen hooks
  * (auto_screen_x cull + auto_backdrop preload). Default OFF: a title that
  * never opted in must never have its live code pattern-scanned and rewritten. */
