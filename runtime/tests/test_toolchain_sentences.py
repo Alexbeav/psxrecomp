@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""What a player reads when the toolchain check or an install fails (PS1B-410, item A13).
+"""What a player reads when the toolchain check or an install fails (PS1B-410, item A13;
+PS1B-488 for S4 and S5).
 
-Three sentences, each saying only what the program knows:
+Five sentences, each saying only what the program knows:
 
   S1  "The portable toolchain did not pass its check: <step>. It was not removed.
        Download the latest pack to replace it."                  (setup host)
@@ -10,6 +11,17 @@ Three sentences, each saying only what the program knows:
   S3  the installed folder cannot be renamed aside, by the system's error:
       Windows error 32, Windows error 5, any other error with its number.
                                                                  (setup host, CLI)
+  S4  "The toolchain pack was not downloaded: <reason>. The installed toolchain
+       was not changed. Check the free space and the permissions of the
+       temporary folder, then try again."                        (setup host, CLI)
+  S5  "The new toolchain pack did not pass its check: <step>. The installed
+       toolchain could not be put back under its name. It was left in the same
+       place, with .old- at the start of its name. Download the latest pack to
+       install the toolchain again."                             (setup host, CLI)
+
+S4 and S5 are proposals of PS1B-488 until Alex approves the wording.
+<reason> is one of two: the temporary folder could not be created / the pack
+could not be written into the temporary folder.
 
 <step> is one of five: cmake does not run / clang or the linker is missing from
 the pack / clang does not run / a test file could not be written to the
@@ -24,6 +36,18 @@ sentence is compared:
   S3, by number    the host's sentence for 32, 5 and 13; the CLI's install with
                    a rename that fails with each number (the failure is put in
                    by the test).
+  S4, both         the CLI's download with a temporary folder that is not there
+                   and with a write that fails (no network is used: the test puts
+                   the failure in); the setup host's download with a curl that
+                   exits 23, its write error (a stub in front of the real one),
+                   and, on Windows, a temporary folder that cannot be created.
+  S5               a pack that passes where it was unpacked and fails in its
+                   place, with the put back of the installed pack made to fail
+                   (the CLI by a rename that fails, the setup host by a probe
+                   that fails the rename of a ".old-" folder). The installed
+                   pack must still be there under its ".old-" name, as the
+                   sentence says. The same pack with a put back that works must
+                   give S2 and bring the installed pack back.
   what is printed  the CLI itself (psxrecomp_cli.py ensure-toolchain, with and
                    without --json-progress) and the rebuild's toolchain step
                    print the sentence alone: no exception name, no label in
@@ -56,7 +80,8 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import toolchain_test_support as support  # noqa: E402
-from toolchain_test_support import EXE, STEPS, WINDOWS, make_pack, make_zip, s1, s2, s3  # noqa: E402
+from toolchain_test_support import (D_REASONS, EXE, STEPS, WINDOWS, make_pack, make_zip,  # noqa: E402
+                                    s1, s2, s3, sd, sp)
 
 THIS = Path(__file__).resolve()
 SKIPPED = 77
@@ -64,21 +89,31 @@ NUMBERS = (32, 5, 13)
 
 
 def make_stubs(tmp: Path, cc: str | None) -> dict | None:
-    """Three programs: one that exits 0, one that exits 1, one that exits 0 for --version only."""
+    """Five programs: one that exits 0, one that exits 1, one that exits 0 for --version only,
+    one that exits 0 where it was unpacked (a path with .staging in it) and 1 in its place,
+    and one that stands for curl and exits 23 (curl's write error)."""
     ok = support.make_stub(tmp, cc)
     if ok is None:
         return None
     if not WINDOWS:
-        fail, version = tmp / "stub-fail", tmp / "stub-version"
-        fail.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-        version.write_text('#!/bin/sh\n[ "$1" = "--version" ] && exit 0\nexit 1\n', encoding="utf-8")
-        fail.chmod(0o755)
-        version.chmod(0o755)
-        return {"ok": ok, "fail": fail, "version": version}
+        made = {"ok": ok}
+        for name, body in (("fail", "exit 1\n"),
+                           ("version", '[ "$1" = "--version" ] && exit 0\nexit 1\n'),
+                           ("place", 'case "$0" in *.staging*) exit 0;; esac\nexit 1\n'),
+                           ("curl23", "exit 23\n")):
+            stub = tmp / ("stub-" + name)
+            stub.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+            stub.chmod(0o755)
+            made[name] = stub
+        return made
     made = {"ok": ok}
     for name, body in (("fail", "int main(void) { return 1; }\n"),
                        ("version", "#include <string.h>\nint main(int c, char** v) "
-                                   "{ return (c > 1 && strcmp(v[1], \"--version\") == 0) ? 0 : 1; }\n")):
+                                   "{ return (c > 1 && strcmp(v[1], \"--version\") == 0) ? 0 : 1; }\n"),
+                       ("place", "#include <windows.h>\n#include <string.h>\nint main(void) { char p[2048]; "
+                                 "DWORD n = GetModuleFileNameA(NULL, p, sizeof p); "
+                                 "return (n > 0 && n < sizeof p && strstr(p, \".staging\") != NULL) ? 0 : 1; }\n"),
+                       ("curl23", "int main(void) { return 23; }\n")):
         source, stub = tmp / ("stub-%s.c" % name), tmp / ("stub-%s.exe" % name)
         source.write_text(body, encoding="utf-8")
         build = subprocess.run([cc, "-o", str(stub), str(source)], capture_output=True, text=True,
@@ -161,6 +196,62 @@ def cli_child(case: str) -> int:
                                               download=False, min_version="0")
         print(json.dumps({"ok": bool(ok), "lines": lines.lines}))
         return 0
+    if case in ("download-folder", "download-write", "download-ensure"):
+        # The download into the temporary folder (PS1B-488). No network is used: the first and the
+        # third stop before any connection, the second has the connection and the write put in by the test.
+        if case == "download-write":
+            import builtins
+            import urllib.request
+
+            class Response:
+                def __init__(self):
+                    self.chunks = [b"PK", b""]
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_exc):
+                    return False
+
+                def read(self, _size=-1):
+                    return self.chunks.pop(0) if self.chunks else b""
+            urllib.request.urlopen = lambda *_a, **_k: Response()
+            real_open = builtins.open
+            asset = tp._ASSET[tp.host_artifact()]
+
+            def failing_open(file, mode="r", *args, **kwargs):
+                if "w" in mode and str(file).endswith(asset):
+                    raise OSError(28, "put in by the test")
+                return real_open(file, mode, *args, **kwargs)
+            builtins.open = failing_open
+        else:
+            tp.tempfile.tempdir = no_temp(sandbox)["TMPDIR"]          # a temporary folder that is not there
+        try:
+            if case == "download-ensure":
+                tp.ensure_toolchain(sandbox / "project", download=True, min_version="0")
+            else:
+                tp.download_latest_pack(repo="example/none", min_version="0")
+        except Exception as exc:    # noqa: BLE001: the text is what is checked
+            out["raised"] = str(exc)
+            out["kind"] = type(exc).__name__
+        print(json.dumps(out))
+        return 0
+    if case == "rebuild-download":
+        # The toolchain step of a rebuild with a download that stops at the temporary folder.
+        sys.path.insert(0, str(support.ROOT))
+        import psxrecomp_cli as cli
+
+        class DownloadLines:
+            def __init__(self):
+                self.lines = []
+
+            def log(self, message, **_kwargs):
+                self.lines.append(str(message))
+        lines = DownloadLines()
+        tp.tempfile.tempdir = no_temp(sandbox)["TMPDIR"]
+        ok = cli.ensure_toolchain_for_rebuild(sandbox / "project", lines, download=True, min_version="0")
+        print(json.dumps({"ok": bool(ok), "lines": lines.lines}))
+        return 0
     if case == "steps":
         found = []
         for step in range(len(STEPS)):
@@ -170,6 +261,17 @@ def cli_child(case: str) -> int:
             tp.tempfile.tempdir = None
         out["steps"] = found
     else:
+        if case == "put-back":
+            # The put back of the installed pack fails: the rename of a folder named .old-... fails.
+            real = os.rename
+
+            def failing_put_back(src, dst, *args, **kwargs):
+                if os.path.basename(str(src)).startswith(".old-"):
+                    if WINDOWS:
+                        raise OSError(13, "put in by the test", str(src), 5)      # winerror
+                    raise OSError(13, "put in by the test", str(src))
+                return real(src, dst, *args, **kwargs)
+            tp.os.rename = failing_put_back
         if case.startswith("rename-"):
             number = int(case.split("-", 1)[1])
             real = os.rename
@@ -248,6 +350,53 @@ def cli_layer(tmp: Path, stubs: dict, check: support.Checks) -> None:
         print("not run here: the rebuild's toolchain step reaches the installer on Windows only "
               "(elsewhere it uses the native tools first)")
 
+    # S4: the download into the temporary folder.
+    for case, reason, what in (("download-folder", D_REASONS[0], "a temporary folder that is not there"),
+                               ("download-write", D_REASONS[1], "a write into the temporary folder that fails")):
+        sandbox = tmp / ("cli-" + case)
+        support.closed_environment(sandbox)
+        seen = support.run_cli_child(THIS, case, sandbox, False)
+        check(seen.get("raised") == sd(reason) and seen.get("kind") == "ToolchainRefused",
+              "CLI: the sentence for a download with %s, as the whole text of the refusal" % what, seen)
+    sandbox = tmp / "cli-download-ensure"
+    support.closed_environment(sandbox)
+    (sandbox / "project").mkdir(exist_ok=True)
+    seen = support.run_cli_child(THIS, "download-ensure", sandbox, False)
+    check(seen.get("raised") == sd(D_REASONS[0]) and seen.get("kind") == "ToolchainRefused",
+          "CLI: ensure_toolchain with a download passes the same sentence on, whole", seen)
+    if WINDOWS:
+        sandbox = tmp / "cli-download-rebuild"
+        support.closed_environment(sandbox)
+        (sandbox / "project").mkdir(exist_ok=True)
+        seen = support.run_cli_child(THIS, "rebuild-download", sandbox, False)
+        check(seen.get("ok") is False and seen.get("lines") and seen["lines"][-1] == sd(D_REASONS[0]),
+              "CLI rebuild (Windows): the toolchain step gives the progress line the download sentence alone", seen)
+    else:
+        print("not run here: the rebuild's toolchain step reaches the installer on Windows only "
+              "(elsewhere it uses the native tools first)")
+
+    # S5: a pack that fails its check in its place, and the installed pack cannot be put back.
+    sandbox = tmp / "cli-put-back"
+    cache = Path(support.closed_environment(sandbox)["RETCOMM_TOOLCHAIN_CACHE"])
+    make_pack(cache / "1.0.14", marker="old.txt", stub=stubs["ok"])
+    make_zip(sandbox / "pack.zip", stub=stubs["ok"], overrides={"clang": stubs["place"]})
+    seen = support.run_cli_child(THIS, "put-back", sandbox, False)
+    check(seen.get("raised") == sp(STEPS[2]) and seen.get("kind") == "ToolchainRefused",
+          "CLI: the sentence for a new pack that fails its check in its place when the installed pack "
+          "cannot be put back", seen)
+    left = [e for e in cache.iterdir() if e.name.startswith(".old-") and (e / "old.txt").is_file()]
+    check(len(left) == 1 and not (cache / "1.0.14").exists(),
+          "CLI: after that failure the installed pack is whole under its .old- name, as the sentence says",
+          sorted(e.name for e in cache.iterdir()))
+    sandbox = tmp / "cli-put-back-control"
+    cache = Path(support.closed_environment(sandbox)["RETCOMM_TOOLCHAIN_CACHE"])
+    make_pack(cache / "1.0.14", marker="old.txt", stub=stubs["ok"])
+    make_zip(sandbox / "pack.zip", stub=stubs["ok"], overrides={"clang": stubs["place"]})
+    seen = support.run_cli_child(THIS, "s2", sandbox, False)
+    check(seen.get("raised") == s2(STEPS[2]) and (cache / "1.0.14" / "old.txt").is_file(),
+          "CLI: the same pack with a put back that works gives the sentence S2 and the installed pack is back",
+          seen)
+
     for number in NUMBERS:
         sandbox = tmp / ("cli-rename-%d" % number)
         cache = Path(support.closed_environment(sandbox)["RETCOMM_TOOLCHAIN_CACHE"])
@@ -309,6 +458,56 @@ def host_layer(probe: Path, tmp: Path, stubs: dict, check: support.Checks) -> No
         seen = support.run_probe(probe, ["rename-text", str(number)], sandbox, False)
         check(seen.get("err") == s3(number), "host: the sentence for a rename that fails with system error %d" % number,
               {k: v for k, v in seen.items() if k != "stderr"})
+
+    # S4: the download into the temporary folder.
+    if WINDOWS:
+        sandbox = tmp / "host-download-folder"
+        support.closed_environment(sandbox)
+        blocker = sandbox / "temp" / "a-file"
+        blocker.write_text("not a folder\n", encoding="utf-8")
+        gone = str(blocker / "x")                       # below a file: the folder cannot be created
+        seen = support.run_probe(probe, ["download"], sandbox, False, {"TEMP": gone, "TMP": gone, "TMPDIR": gone})
+        check(seen.get("ret") == "0" and seen.get("err") == sd(D_REASONS[0]),
+              "host (Windows): the sentence for a download when the temporary folder cannot be created",
+              {k: v for k, v in seen.items() if k != "stderr"})
+    else:
+        print("not run here: on Linux and macOS the setup host downloads into /tmp, which a test cannot close")
+    sandbox = tmp / "host-download-write"
+    support.closed_environment(sandbox)
+    stubbin = sandbox / "stubbin"
+    stubbin.mkdir()
+    shutil.copy2(stubs["curl23"], stubbin / ("curl" + EXE))
+    if WINDOWS:
+        runner, extra = stubbin / "probe.exe", None     # CreateProcess looks beside the program first
+        shutil.copy2(probe, runner)
+    else:
+        runner, extra = probe, {"PATH": str(stubbin) + os.pathsep + "/usr/bin:/bin"}
+    seen = support.run_probe(runner, ["download"], sandbox, False, extra)
+    check(seen.get("ret") == "0" and seen.get("err") == sd(D_REASONS[1]),
+          "host: the sentence for a download where curl exits with its write error (23)",
+          {k: v for k, v in seen.items() if k != "stderr"})
+
+    # S5: a pack that fails its check in its place, and the installed pack cannot be put back.
+    sandbox = tmp / "host-put-back"
+    cache = Path(support.closed_environment(sandbox)["RETCOMM_TOOLCHAIN_CACHE"])
+    make_pack(cache / "1.0.14", marker="old.txt", stub=stubs["ok"])
+    archive = make_zip(sandbox / "pack.zip", stub=stubs["ok"], overrides={"clang": stubs["place"]})
+    seen = support.run_probe(probe, ["install", str(archive)], sandbox, False, {"PROBE_FAIL_PUT_BACK": "1"})
+    check(seen.get("ret") == "0" and seen.get("err") == sp(STEPS[2]),
+          "host: the sentence for a new pack that fails its check in its place when the installed pack "
+          "cannot be put back", {k: v for k, v in seen.items() if k != "stderr"})
+    left = [e for e in cache.iterdir() if e.name.startswith(".old-") and (e / "old.txt").is_file()]
+    check(len(left) == 1 and not (cache / "1.0.14").exists(),
+          "host: after that failure the installed pack is whole under its .old- name, as the sentence says",
+          sorted(e.name for e in cache.iterdir()))
+    sandbox = tmp / "host-put-back-control"
+    cache = Path(support.closed_environment(sandbox)["RETCOMM_TOOLCHAIN_CACHE"])
+    make_pack(cache / "1.0.14", marker="old.txt", stub=stubs["ok"])
+    archive = make_zip(sandbox / "pack.zip", stub=stubs["ok"], overrides={"clang": stubs["place"]})
+    seen = support.run_probe(probe, ["install", str(archive)], sandbox, False)
+    check(seen.get("ret") == "0" and seen.get("err") == s2(STEPS[2]) and (cache / "1.0.14" / "old.txt").is_file(),
+          "host: the same pack with a put back that works gives the sentence S2 and the installed pack is back",
+          {k: v for k, v in seen.items() if k != "stderr"})
 
     if WINDOWS:
         for kind, number in HELD:
