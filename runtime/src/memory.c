@@ -226,6 +226,17 @@ const uint8_t *memory_low_ram_view(void) {
     return s_low_ram_view_old ? s_low_ram_old : ram;
 }
 
+/* KSEG2 accesses that memory.c dropped (reads return 0, writes are ignored),
+ * as the run report prints them (PS1B-516): {"reads": N, "writes": N}.
+ * Returns the length written, or 0 when `cap` is too small. */
+extern uint64_t g_kseg2_ignored_reads, g_kseg2_ignored_writes; /* defined below */
+int memory_kseg2_ignored_json(char *out, int cap) {
+    int n = snprintf(out, (size_t)cap, "{\"reads\": %llu, \"writes\": %llu}",
+                     (unsigned long long)g_kseg2_ignored_reads,
+                     (unsigned long long)g_kseg2_ignored_writes);
+    return (n > 0 && n < cap) ? n : 0;
+}
+
 /* RAM 0..15 as the game found it at entry; 0 before this process saw one. */
 int memory_low_ram_at_entry(uint8_t out[16]) {
     if (!s_low_ram_at_entry_valid) return 0;
