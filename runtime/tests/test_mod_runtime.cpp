@@ -1447,11 +1447,8 @@ int main(int argc, char** argv) {
     check(PSXRecompV4::mod_runtime_plan_fingerprint_portable().empty(), "unverified resource has no online fingerprint");
     const auto rejected_commit_timing = launch_timing_total();
     check(!PSXRecompV4::mod_runtime_commit(iso_path, &error, false), "online commit rejects unverified resource");
-#if defined(PSX_LAUNCHER_MOD_COMMIT_WORKER_SAFE)
+    // Netplay remeasures the source in both worker and legacy configurations.
     check_commit_timing(rejected_commit_timing, false, true);
-#else
-    check_commit_timing(rejected_commit_timing, false, false);
-#endif
     check(!PSXRecompV4::mod_runtime_commit_for_direct_netplay(iso_path, &error), "LAN also refuses unverified resources");
     test_match_caps = {};
     test_match_caps.valid = 1;
