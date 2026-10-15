@@ -73,6 +73,7 @@
  * returns 0 and the runtime falls back to the pure software renderer — no
  * half-GL hybrid. */
 
+#include "host_overlay.h"
 #include "gpu.h"
 #include "gpu_render.h"
 #include "gl_scale_limits.h"
@@ -9682,6 +9683,9 @@ static void gl_swap_with_osd(void) {
             }
             if (ov_image(3, &px, &ow, &oh) && px)
                 gl_draw_osd_image(px, ow, oh, ww, wh, 0, 0, ww, wh);
+            /* In-game overlay provider (host_overlay.h P2), over everything
+             * the host composes; no-op unless one registered. */
+            psx_host_overlay_draw(ww, wh);
         }
     }
     if (!rth_replaying()) host_osd_present_done();   /* replay: done at record */
@@ -10689,12 +10693,13 @@ static int dyn_apply(int snew) {
     const uint64_t t4 = dyn_mark();
     /* 5. Native-wide surfaces: presentation-only, rescaled in place over the
      *    rows they have presented (all rows before the first present). While
-     *    the centre is spliced from hr at every present (wide_blit_center),
-     *    only the margins hold anything of their own. */
+     *    the centre is canonical it is spliced from hr at present, so only the
+     *    margins need preserving. Explicit backgrounds and shifted views own
+     *    their centre pixels too; preserve their full composite. */
     if (g_wide_w > 0) {
         int cols[2][2], nc = 0;
         int native_w = g_wide_w - 2 * g_wide_off;
-        if (s_wide_fast && !view_enabled && native_w > 0 && g_wide_off > 0) {
+        if (wide_center_is_canonical() && native_w > 0 && g_wide_off > 0) {
             cols[0][0] = 0;                     cols[0][1] = g_wide_off;
             cols[1][0] = g_wide_off + native_w; cols[1][1] = g_wide_w;
             nc = 2;
