@@ -63,6 +63,12 @@ if(BUILD_TESTING)
         src/netplay_lan_version.c)
     target_include_directories(netplay_lan_version_test PRIVATE include)
     add_test(NAME netplay_lan_version_test COMMAND netplay_lan_version_test)
+    # PS1B-468: the game-drawn frame counter beside the video rate.
+    add_executable(drawn_frames_test
+        tests/test_drawn_frames.c
+        src/drawn_frames.c)
+    target_include_directories(drawn_frames_test PRIVATE include)
+    add_test(NAME drawn_frames_test COMMAND drawn_frames_test)
     add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
     target_include_directories(ws_scene_hold_test PRIVATE include)
     add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)

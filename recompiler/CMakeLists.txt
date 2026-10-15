@@ -1371,6 +1371,7 @@ if(BUILD_TESTING)
                 fmv_quiet_guards
                 netplay_early_input_idle_wiring
                 fps_telemetry_opt_in
+                drawn_frames_wiring
                 frame_interpolation_display_rate
                 gl_swap_self_heal
                 netplay_test_input_wiring
