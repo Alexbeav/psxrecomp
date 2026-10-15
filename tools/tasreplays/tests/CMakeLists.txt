@@ -42,6 +42,8 @@ add_test(NAME tas_octoshock210_route COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_octoshock210_route.py")
 add_test(NAME tas_nymashock28_route COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock28_route.py")
+add_test(NAME tas_nymashock28_digital_route COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock28_digital_route.py")
 add_test(NAME tas_octoshock_dualshock COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_dualshock_octoshock.py")
 add_test(NAME tas_build_cache COMMAND ${Python3_EXECUTABLE}
