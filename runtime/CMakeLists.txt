@@ -94,6 +94,23 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/framework_identity_test"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/framework_identity/check.cmake")
+    # PS1B-490: psx-runtime must carry the float-contraction-off flag. Reads the
+    # target's COMPILE_OPTIONS as written at configure time.
+    get_target_property(_psx_runtime_opts psx-runtime COMPILE_OPTIONS)
+    if(NOT _psx_runtime_opts)
+        set(_psx_runtime_opts "")
+    endif()
+    string(REPLACE ";" "\n" _psx_runtime_opts "${_psx_runtime_opts}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fp_contract_flag_test/psx-runtime-options.txt"
+         "${_psx_runtime_opts}\n")
+    add_test(NAME fp_contract_flag_test
+        COMMAND ${CMAKE_COMMAND}
+            "-DOPTIONS_FILE=${CMAKE_CURRENT_BINARY_DIR}/fp_contract_flag_test/psx-runtime-options.txt"
+            "-DC_ID=${CMAKE_C_COMPILER_ID}"
+            "-DC_FRONTEND=${CMAKE_C_COMPILER_FRONTEND_VARIANT}"
+            "-DCXX_ID=${CMAKE_CXX_COMPILER_ID}"
+            "-DCXX_FRONTEND=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/fp_contract/check.cmake")
     if(NOT MSVC)
         add_executable(ws_world_scene_test tests/test_ws_world_scene.c)
         target_include_directories(ws_world_scene_test PRIVATE include src)
@@ -201,6 +218,24 @@ if(BUILD_TESTING)
     else()
         message(STATUS "low_ram_game_entry_test: not registered (its link helper needs GCC, or Clang on Linux; this is ${CMAKE_C_COMPILER_ID} on ${CMAKE_SYSTEM_NAME})")
     endif()
+    # PS1B-506: word and half loads from KSEG2 read 0 and are counted, as the
+    # byte load is. Links the real memory.c; same link helper as above.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
+            OR (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        add_test(NAME kseg2_inline_load_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kseg2_inline_load.py --cc ${CMAKE_C_COMPILER})
+    else()
+        message(STATUS "kseg2_inline_load_test: not registered (its link helper needs GCC, or Clang on Linux; this is ${CMAKE_C_COMPILER_ID} on ${CMAKE_SYSTEM_NAME})")
+    endif()
+    # PS1B-516: the KSEG2 ignored-read and ignored-write counters are in the
+    # run report. Links the real memory.c; same link helper as above.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
+            OR (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        add_test(NAME kseg2_report_counters_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kseg2_report_counters.py --cc ${CMAKE_C_COMPILER})
+    else()
+        message(STATUS "kseg2_report_counters_test: not registered (its link helper needs GCC, or Clang on Linux; this is ${CMAKE_C_COMPILER_ID} on ${CMAKE_SYSTEM_NAME})")
+    endif()
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         add_test(NAME break_guest_vector_interp_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_break_guest_vector_interp.py --cc ${CMAKE_C_COMPILER})
@@ -211,6 +246,10 @@ if(BUILD_TESTING)
         # PS1B-454 row 5: a deliverable interrupt is taken at the next dirty-RAM entry (590c23693).
         add_test(NAME interp_entry_poll_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_entry_poll.py --cc ${CMAKE_C_COMPILER})
+        # PS1B-510: the compiled IRQ hand-off decides a widescreen funnel BLTZ
+        # as the interpreter does (Cause.BT and register 6).
+        add_test(NAME irq_handoff_ws_cull_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_irq_handoff_ws_cull.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME syscall_change_thread_self_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syscall_change_thread_self.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME rfe_irq_context_test COMMAND ${Python3_EXECUTABLE}
@@ -219,6 +258,8 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rfe_syscall_depth.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME changethread_in_handler_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_changethread_in_handler.py --cc ${CMAKE_C_COMPILER})
+        add_test(NAME irq_handoff_not_taken_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_irq_handoff_not_taken.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME overlay_dispatch_region_counters_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_dispatch_region_counters.py --cc ${CMAKE_C_COMPILER})
         # PS1B-343: a data shard replay marks the RAM pages it writes. Links

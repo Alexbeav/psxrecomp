@@ -38,7 +38,7 @@ int main(int argc,char **argv){
  if(argc>1 && !strcmp(argv[1],"timer0-irq")){timers_init();timers_write(0x1f801104,0x158);return 9;}
  unsigned op,v,time,c,m,t,d,irqs,irqtime,istat,next,rows=0,errors=0;
  while(scanf("%u %u %u %u %u %u %u %u %u %u %u",&op,&v,&time,&c,&m,&t,&d,&irqs,&irqtime,&istat,&next)==11){
-  if(op==0){timers_init();psx_cycle_count=0;s_devices_synced_cycle=0;psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;g_psx_cyc_batch=0;psx_in_device_service=0;g_event_step_conservative=0;irq_count=last_irq=i_stat=i_mask=0;s_next_watchdog=s_next_pc_sample=UINT64_MAX;}
+  if(op==0){timers_init();psx_cycle_count=0;s_devices_synced_cycle=0;psx_next_service_cycle=0;g_psx_cyc_batch=0;psx_in_device_service=0;g_event_step_conservative=0;irq_count=last_irq=i_stat=i_mask=0;s_next_watchdog=s_next_pc_sample=UINT64_MAX;}
   else if(op==4)psx_advance_cycles(v);
   else if(op==6)i_stat=0;
   else {psx_devices_mmio_sync();timers_write(0x1f801120+(op==1?4:op==3?8:0),v);}

@@ -23,27 +23,36 @@ def body(source, name):
     raise AssertionError(f"unterminated function {name}")
 
 
-def fast_limit_nonzero_writes():
-    """Every runtime write to g_psx_cycle_fast_limit that may store nonzero."""
+# C and C++ comments, kept apart from string and character literals so that a
+# code-generator template (a string) is still scanned while a comment is not.
+_C_TOKENS = re.compile(
+    r'//[^\n]*|/\*.*?\*/|R"([^()\\\s]{0,16})\(.*?\)\1"'
+    r'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'', re.S)
+
+
+def code_without_comments(text):
+    return _C_TOKENS.sub(lambda m: " " if m.group(0)[0] == "/" else m.group(0), text)
+
+
+def removed_cycle_limit_references():
+    """Sources whose code (not comments) names the inline cycle limit PS1B-507 removed.
+
+    Covers the runtime, its unit tests and the code generator, whose emitted C lives in
+    string templates. A restored limit must come back on purpose: with this guard
+    changed, a writer at every deadline change, and the timing proof PS1B-507 asked for.
+    """
     found = []
-    for directory in ("runtime/src", "runtime/include"):
+    for directory in ("runtime/src", "runtime/include", "runtime/tests", "recompiler/src"):
+        if not (ROOT / directory).is_dir():
+            continue
         for path in sorted((ROOT / directory).rglob("*")):
-            if path.suffix not in (".c", ".cpp", ".h", ".inc") or not path.is_file():
+            if path.suffix not in (".c", ".cc", ".cpp", ".h", ".hpp", ".inc") or not path.is_file():
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
-            name = path.relative_to(ROOT).as_posix()
-            for match in re.finditer(r"\bg_psx_cycle_fast_limit\b", text):
-                before = text[:match.start()].rstrip()
-                after = text[match.end():].lstrip()
-                if (before.endswith(("++", "--")) or
-                        (before.endswith("&") and not before.endswith("&&")) or
-                        after.startswith(("++", "--")) or
-                        re.match(r"(?:[-+*/%|&^]|<<|>>)=", after)):
-                    found.append(name)
-                elif after.startswith("=") and not after.startswith("=="):
-                    value = re.match(r"=\s*([^;,]*)", after).group(1).strip()
-                    if not re.fullmatch(r"0[uUlL]*", value):
-                        found.append(name)
+            if "g_psx_cycle_fast_limit" not in text:
+                continue
+            if re.search(r"\bg_psx_cycle_fast_limit\b", code_without_comments(text)):
+                found.append(path.relative_to(ROOT).as_posix())
     return found
 
 
@@ -58,8 +67,10 @@ def main():
     interrupts = (ROOT / "runtime/src/interrupts.c").read_text(encoding="utf-8")
     cycles = (ROOT / "runtime/src/psx_cycles.c").read_text(encoding="utf-8")
     cyc_header = (ROOT / "runtime/include/psx_cyc.h").read_text(encoding="utf-8")
+    cycles_header = (ROOT / "runtime/include/psx_cycles.h").read_text(encoding="utf-8")
     instr_cost = (ROOT / "runtime/include/psx_instr_cost.h").read_text(encoding="utf-8")
     starvation = (ROOT / "runtime/include/starvation_ring.h").read_text(encoding="utf-8")
+    inline_loads_exclude_kseg2(cyc_header)
 
     record = body(interp, "exec_pc_table_record")
     if "uint32_t *slot = &g_dirty_ram_exec_pc_bitmap[word >> 5]" not in record:
@@ -311,15 +322,19 @@ def main():
             abi_sweep.find("LoadLibraryA(full)")):
         raise AssertionError("ABI preflight can execute a legacy Windows DllMain")
 
+    # The interpreter's one-cycle charge goes straight to the inline
+    # psx_advance_cycles (PS1B-507 removed the dead inline limit in front of it;
+    # see removed_cycle_limit_references below). Lockstep replay charges nothing
+    # here, and the exact diagnostic modes take the slow path inside the advance.
     interp_step = body(interp, "interp_cyc_step")
-    if "g_psx_cycle_fast_limit" not in interp_step or "next <= g_psx_cycle_fast_limit" not in interp_step:
-        raise AssertionError("interpreter lost its exact pre-deadline one-cycle fast path")
-    if "g_psx_cycle_fast_limit != 0u &&" not in interp_step:
-        raise AssertionError("interpreter cycle fast path does not fall back on a zero limit")
-    if "g_ls_replay_active" not in interp_step or "g_event_step_conservative" not in interp_step:
-        raise AssertionError("interpreter cycle fast path does not guard exact diagnostic modes")
-    if "g_psx_cycle_fast_limit" in cyc_header:
-        raise AssertionError("runtime cycle fast path leaked into the overlay-DLL shared header")
+    if "psx_advance_cycles(1u)" not in interp_step:
+        raise AssertionError("interpreter step no longer charges through psx_advance_cycles")
+    if "g_ls_replay_active" not in interp_step:
+        raise AssertionError("interpreter step charges guest time during lockstep replay")
+    advance = body(cycles_header, "psx_advance_cycles")
+    if ("g_ls_replay_active | g_event_step_conservative" not in advance or
+            "psx_advance_cycles_slow(cycles)" not in advance):
+        raise AssertionError("inline cycle advance does not send exact diagnostic modes to the slow path")
     if "PSX_NO_DEBUG_TOOLS" not in starvation or "STARVATION_RING_ENABLED 0" not in starvation:
         raise AssertionError("production still enables the diagnostic starvation ring")
     # The mask is a header inline over the instruction word since 9f9ac75b (a
@@ -345,27 +360,14 @@ def main():
                          "gte_mfc2(&gte", "gte_cfc2(&gte"):
         if old_selector in gte_marshaling:
             raise AssertionError("GTE command bridge regressed to selector dispatch loops")
-    # Inline cycle limit. Since 31015cea no deadline recompute publishes a
-    # nonzero limit, so MMIO sync and the exact path need no clear of their
-    # own: the limit cannot go stale while every write stores 0. A change that
-    # publishes a nonzero limit again must bring back and prove the
-    # invalidation at every deadline change (PS1B-50, PS1B-176).
-    nonzero = fast_limit_nonzero_writes()
-    if nonzero:
-        raise AssertionError(f"nonzero inline cycle limit writer: {nonzero[0]}")
-    if "g_psx_cycle_fast_limit" in body(cycles, "psx_devices_recompute_deadline"):
-        raise AssertionError("device deadline recompute publishes the inline cycle limit")
-    if "g_psx_cycle_fast_limit = 0" not in body(cycles, "psx_cycles_resync_after_restore"):
-        raise AssertionError("psx_cycles_resync_after_restore does not invalidate the inline cycle limit")
-    service = body(cycles, "psx_devices_service_to_now")
-    service_order = [service.find("g_psx_cycle_fast_limit = 0")]
-    for pattern in (r"\b(?:s|psx)_in_device_service = 1;",
-                    r"\bpsx_devices_recompute_deadline\(\);",
-                    r"\b(?:s|psx)_in_device_service = 0;"):
-        found = re.search(pattern, service)
-        service_order.append(found.start() if found else -1)
-    if min(service_order) < 0 or service_order != sorted(service_order):
-        raise AssertionError("device-service reentrancy can observe a nonzero inline cycle limit")
+    # Inline cycle limit. It had no nonzero writer from 31015cea on, so both
+    # readers always fell back to psx_advance_cycles (PS1B-50, PS1B-176 O2).
+    # PS1B-507 measured the dead check at about 0.74 ns per interpreted
+    # instruction and a restored limit at the same cost as none, and removed
+    # the symbol. No code may name it again without changing this guard.
+    stale = removed_cycle_limit_references()
+    if stale:
+        raise AssertionError(f"removed inline cycle limit is referenced again: {stale[0]}")
     if "!defined(PSX_COSIM) && !STARVATION_RING_ENABLED" not in memory:
         raise AssertionError("runtime load fast path leaks into COSIM/diagnostic builds")
 
@@ -422,6 +424,15 @@ def main():
 
     print("PASS: capture/cache and interpreter cycle hot-path guards intact")
     return 0
+
+
+def inline_loads_exclude_kseg2(cyc_header):
+    """KSEG2 is not main RAM: the inline word and half loads leave it to the
+    slow readers, which return 0 and count g_kseg2_ignored_reads (PS1B-506).
+    The control is in test_kseg2_inline_load.py."""
+    for fn in ("psx_cyc_load_word", "psx_cyc_load_half"):
+        if "addr < UINT32_C(0xC0000000) && physical < UINT32_C(0x800000)" not in body(cyc_header, fn):
+            raise AssertionError(f"{fn} main-RAM fast path does not exclude KSEG2")
 
 
 if __name__ == "__main__":

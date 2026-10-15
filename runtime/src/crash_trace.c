@@ -829,6 +829,27 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         }
     }
 
+    /* KSEG2 reads and writes that memory.c dropped (PS1B-516). A title that
+     * reads KSEG2 by word or half sees 0 where it once saw the RAM mirror. */
+    {
+        extern int memory_kseg2_ignored_json(char *out, int cap);
+        char k2[96];
+        if (memory_kseg2_ignored_json(k2, (int)sizeof k2))
+            append_fmt(buf, sizeof(buf), &pos, "  \"kseg2_ignored\": %s,\n", k2);
+        else
+            append_str(buf, sizeof(buf), &pos, "  \"kseg2_ignored\": null,\n");
+    }
+
+    /* Guest word stores to RAM 0..15 that landed in this process and that a
+     * build before PS1B-456 dropped by the program counter of the store. 0:
+     * the game ran with the same RAM 0..15 as on such a build (after
+     * PS1G-39). More: from the first of them on it did not. */
+    {
+        extern uint64_t memory_low_ram_older_dropped_stores(void);
+        append_fmt(buf, sizeof(buf), &pos, "  \"low_ram_older_dropped_stores\": %llu,\n",
+                   (unsigned long long)memory_low_ram_older_dropped_stores());
+    }
+
     /* CD read streams that ended before their first sector (PS1B-317): a
      * long run means the game restarts a read that never delivers. */
     {
