@@ -52,11 +52,18 @@ def checkpoint_asset_digest(path):
 AXIS_MODELS = {'nymashock-u16': 'nymashock-2.9.1-dualshock-neutral-analog',
                'octoshock-byte': 'octoshock-byte-dualshock-neutral-analog'}
 DEFAULT_AXIS_MODEL = 'nymashock-u16'
+# A physical MODE press in the route (the analog flag of a PSXRTI2 row) is admitted only under a named MODE model.
+# 'octoshock-2.4.2': the pad evaluates the latched button when the port's DTR falls (corpus PSX-TAS-001).
+# It needs the Octoshock axis model, and the runtime reads PSX_INPUT_ROUTE_MODE_MODEL.
+MODE_MODELS = ('none', 'octoshock-2.4.2')
+MODE_PROFILE = 'octoshock-2.4.2-dualshock-mode'
 
 
-def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL):
+def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL, mode_model='none'):
     if axis_model not in AXIS_MODELS:
         raise ValueError('unknown DualShock axis model')
+    if mode_model not in MODE_MODELS or (mode_model != 'none' and axis_model != 'octoshock-byte'):
+        raise ValueError('a physical MODE model needs the octoshock-byte axis model')
     if path.stat().st_size > 24 + 12 * 1000000:
         raise ValueError('route exceeds frame capacity')
     data = path.read_bytes()
@@ -70,7 +77,7 @@ def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL):
         previous, steps = None, 0
         for index in range(count):
             sequence, buttons, ly, lx, ry, rx, analog, zero = struct.unpack_from('<IH6B', data, 24+12*index)
-            if sequence != index+1 or zero or analog:
+            if sequence != index+1 or zero or analog > 1 or (analog and mode_model == 'none'):
                 raise ValueError('DualShock sequence/reserved bytes or unqualified physical Analog press')
             row = struct.pack('<H5B', buttons, ly, lx, ry, rx, analog)
             steps += row != previous; previous = row
@@ -90,9 +97,11 @@ def route_identity(path, start=0, axis_model=DEFAULT_AXIS_MODEL):
         if axis_model != DEFAULT_AXIS_MODEL:
             # Named only when not the default, so every recorded Nymashock identity is unchanged.
             identity.update(axis_model=axis_model, controller_profile=AXIS_MODELS[axis_model])
+        if mode_model != 'none':
+            identity.update(mode_model=mode_model, controller_profile=MODE_PROFILE)
         return identity
-    if axis_model != DEFAULT_AXIS_MODEL:
-        raise ValueError('an axis model applies to a DualShock route only')
+    if axis_model != DEFAULT_AXIS_MODEL or mode_model != 'none':
+        raise ValueError('an axis or MODE model applies to a DualShock route only')
     if (magic, version, size, reserved) != (b"PSXRTI1\0", 1, 8, 0):
         raise ValueError("unsupported route header")
     if not 0 < count <= 1000000 or len(data) != 24 + 8 * count:
@@ -342,6 +351,8 @@ def main():
                         help="Disable inherited global Ape Escape fixed-address card repair explicitly")
     parser.add_argument('--axis-model', choices=tuple(AXIS_MODELS), default=DEFAULT_AXIS_MODEL,
                         help='who wrote the DualShock route axis bytes: Nymashock u16 (rescaled) or Octoshock (unscaled bytes)')
+    parser.add_argument('--mode-button-model', choices=MODE_MODELS, default='none',
+                        help='admit physical MODE presses in a DualShock route: the pad evaluates the latched button on the DTR falling edge; needs --axis-model octoshock-byte')
     parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock", "nymashock-1.32.1-dualshock"), default="default",
                         help="Experimental source pad ACK delay/pulse; checkpoints retain the pad, DualShock and card state")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
@@ -424,7 +435,7 @@ def main():
                                        args.cd_explicit_seek_model, args.cd_read_start_model)
     if clock_tape:
         paths['cd_source_clock_tape'] = Path(clock_tape['path'])
-    identity = route_identity(paths["route"], axis_model=args.axis_model)
+    identity = route_identity(paths["route"], axis_model=args.axis_model, mode_model=args.mode_button_model)
     resume_frame = resume_inputs = 0
     if args.resume_compatible_build and args.resume_from is None:
         raise ValueError('--resume-compatible-build requires --resume-from')
@@ -436,7 +447,7 @@ def main():
             raise ValueError('checkpoint size or SHA256 mismatch')
         if not checkpoint_cards_valid(args.resume_from, resume_manifest):
             raise ValueError('checkpoint card image missing or SHA256 mismatch')
-    completion_identity = route_identity(paths['route'], resume_inputs, args.axis_model)
+    completion_identity = route_identity(paths['route'], resume_inputs, args.axis_model, args.mode_button_model)
 
     dualshock = identity.get('format') == 'PSXRTI2'
     if dualshock and (args.update_profile or args.pad_ack_model == 'octoshock-2.2.2-digital'):
@@ -610,6 +621,10 @@ def main():
         selected_env["PSX_INPUT_ROUTE_PAD_ACK_MODEL"] = args.pad_ack_model
     if args.axis_model != DEFAULT_AXIS_MODEL:
         selected_env["PSX_INPUT_ROUTE_AXIS_MODEL"] = args.axis_model
+    if args.mode_button_model != 'none':
+        if not dualshock or args.resume_from:
+            raise ValueError('the MODE model needs a cold DualShock route (no resume: the latch is not carried in older checkpoints)')
+        selected_env['PSX_INPUT_ROUTE_MODE_MODEL'] = args.mode_button_model
     if initial_card:
         selected_env['PSX_INPUT_ROUTE_CARD_MODEL'] = args.card_model
         selected_env['PSX_INPUT_ROUTE_CARD1_SHA256'] = initial_card['sha256']
