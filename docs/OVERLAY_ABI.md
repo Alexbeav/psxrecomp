@@ -142,9 +142,14 @@ gate that lets every such call through. That gate is in
 there moves the key.
 
 The record is append-only by rule, and `--record` keeps the rule. The test
-cannot tell a hand edit of an existing entry from the original. In review, a
-changed or removed entry in `overlay_emitter_fixture.json` is a re-pin without a
-version raise: refuse it.
+cannot tell a hand edit of an existing entry from the original, so CI does
+(PS1B-518): the Tests workflow step "Qualified-hunk re-pin records" runs
+`tools/tasreplays/repin_records.py`, which reads the record at the merge base
+and fails unless the base's `history` is a prefix of the head's `history`. A
+changed or removed entry is a re-pin without a version raise and fails. A new
+entry is the re-pin. The first landing of the file passes, because the merge
+base has no copy. Run it locally with
+`python tools/tasreplays/repin_records.py --base origin/stage/pin-i`.
 
 ## What the loader does with another build's shards
 

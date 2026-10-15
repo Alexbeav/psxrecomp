@@ -17,6 +17,9 @@ block, also appends a record to that entry's `repins` list: `"issue"` a tracker 
 `"as_of"` that no earlier record of the entry has; the Tests workflow's re-pin records step
 fails the change without it. A copy of an old record does not count. Do not delete an
 entry or rewrite its earlier records.
+The same step lists the pinned records that may only grow: `recompiler/tests/overlay_emitter_fixture.json`
+(its `history`). A re-pin of one names it by appending a new entry (with the `PSX_OVERLAY_CODEGEN_VER`
+raise); an edited or removed entry fails. A re-pin lists every such record it moves.
 
 ```
 python tools/tasreplays/qualified_hunks.py check --rev HEAD      # one tree

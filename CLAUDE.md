@@ -537,7 +537,9 @@ with a written reason and reported as a debt rather than refusing; nothing may b
 absent silently, and clearing a debt means porting the behaviour back and deleting the entry.
 Every re-pin or new debt appends a record to the entry's `repins` list naming the issue;
 `tools/tasreplays/repin_records.py` fails a change in CI that excuses or removes pinned lines
-without one.
+without one. The same tool keeps the pinned records that may only grow
+(`recompiler/tests/overlay_emitter_fixture.json`, its `history`) append-only against the merge
+base; a re-pin of such a record is a new entry with a version raise, never an edited one.
 
 Presence proves nothing about behaviour. Absence is a definite finding. Read
 `docs/tasreplays/LANE.md` before working the lane.

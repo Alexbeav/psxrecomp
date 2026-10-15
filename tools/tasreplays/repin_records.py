@@ -14,6 +14,14 @@ What needs a record, per entry:
   - the entry itself is removed (this always fails: keep the entry and record the loss instead).
 A change that needs a record must also leave the entry's earlier `repins` records as they were.
 Adding entries, blocks or lines, and removing a `known_absent` reason, need no record.
+
+Append-only records (PS1B-518). A few pinned records are lists of (version, digest) entries that may
+only grow: a new entry is the re-pin, and it comes with a version raise. Overwriting the digest of an
+existing entry is a silent re-pin that every other check passes (the version is unchanged, so stale
+caches still load). The same merge-base comparison therefore requires that the base's list is a
+prefix of the head's list in each file named in APPEND_ONLY_RECORDS. A file that does not exist at
+the merge-base (its first landing) passes. A file that exists at the base and is gone, or unreadable,
+at the head fails.
 """
 import argparse
 import json
@@ -24,6 +32,9 @@ import sys
 from collections import Counter
 
 REGISTRY = 'tools/tasreplays/qualified-hunks.json'
+# (repository path, key of the list that may only be appended to). Every re-pin names these
+# records: an overlay-output change appends an entry (PS1B-339, PS1B-518).
+APPEND_ONLY_RECORDS = (('recompiler/tests/overlay_emitter_fixture.json', 'history'),)
 TRACKER_PREFIXES = ('PS1B', 'PS1G', 'X360B', 'X360G', 'PLAT')
 ANY_ID = re.compile(r'\b([A-Z][A-Z0-9]*)-\d+\b')
 ZERO = re.compile(r'^0+$')
@@ -63,6 +74,34 @@ def registry_at(repo, rev, path=REGISTRY):
     if not isinstance(registry.get('entries'), list):
         raise RecordError(f'{path} at {rev[:12]}: no entries list')
     return registry
+
+
+def append_only_at(repo, rev, path, key):
+    """The list `key` of the JSON record at `path` in `rev`: None when the file is absent from the tree."""
+    if not git(repo, 'ls-tree', '--name-only', rev, '--', path).strip():
+        return None
+    try:
+        doc = json.loads(git(repo, 'show', f'{rev}:{path}').decode('utf-8'))
+    except ValueError as error:
+        raise RecordError(f'{path} at {rev[:12]}: {error}')
+    if not isinstance(doc, dict) or not isinstance(doc.get(key), list):
+        raise RecordError(f'{path} at {rev[:12]}: no "{key}" list')
+    return doc[key]
+
+
+def append_only_problem(path, key, base, head):
+    """Why the head's list is not the base's list plus new entries, or None."""
+    if base is None:
+        return None  # first landing: no earlier entry to protect
+    if head is None:
+        return f'{path} exists at the merge-base and is gone at the head'
+    for index, old in enumerate(base):
+        if index >= len(head):
+            return f'{path}: {len(base) - len(head)} entr{"y" if len(base) - len(head) == 1 else "ies"} of "{key}" removed (first: index {len(head)})'
+        if canonical(old) != canonical(head[index]):
+            return (f'{path}: "{key}" entry {index} is changed '
+                    f'(was {canonical(old)[:120]}); append a new entry instead of editing one')
+    return None
 
 
 def canonical(value):
@@ -221,6 +260,12 @@ def main(argv=None):
         merge_base = git(args.repo, 'merge-base', base, head).decode().strip()
         failures, recorded = compare(registry_at(args.repo, merge_base, args.registry),
                                      registry_at(args.repo, head, args.registry))
+        append_failures = []
+        for path, key in APPEND_ONLY_RECORDS:
+            problem = append_only_problem(path, key, append_only_at(args.repo, merge_base, path, key),
+                                          append_only_at(args.repo, head, path, key))
+            if problem:
+                append_failures.append(problem)
     except RecordError as error:
         print(f'error: {error}', file=sys.stderr)
         return 2
@@ -228,9 +273,11 @@ def main(argv=None):
         print(f'recorded  {line}')
     for line in failures:
         print(f'MISSING   {line}')
+    for line in append_failures:
+        print(f'APPEND-ONLY  {line}')
     print(f're-pin records: {len(recorded) + len(failures)} entries excused or reduced, '
           f'{len(failures)} without a record  (merge-base {merge_base[:12]} from {base_rev} -> head {head[:12]})')
-    return 1 if failures else 0
+    return 1 if failures or append_failures else 0
 
 
 if __name__ == '__main__':
