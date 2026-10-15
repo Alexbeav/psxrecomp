@@ -1277,6 +1277,15 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
     target_include_directories(interp_report_test PRIVATE include)
     add_test(NAME interp_report_test COMMAND interp_report_test)
 
+    # PS1B-105: the stdout line of what the interpreter ran before game entry,
+    # by place (kernel, shell, shell_tail, other). Pure functions plus the
+    # game-entry hook, over a synthetic per-address table.
+    add_executable(bios_phase_report_test
+        tests/test_bios_phase_report.c
+        src/bios_phase_report.c)
+    target_include_directories(bios_phase_report_test PRIVATE include)
+    add_test(NAME bios_phase_report_test COMMAND bios_phase_report_test)
+
     # ---- previously-unregistered standalone tests -------------------------
     # These 16 existed in runtime/tests/ with no add_test() entry. Their only
     # build instructions were a gcc command line in each file's header comment,

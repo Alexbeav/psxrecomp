@@ -1451,6 +1451,7 @@ if(BUILD_TESTING)
                 interp_report_wiring
                 interpreter_perf_guards
                 interpreter_perf_guard_controls
+                bios_phase_report_wiring
                 overlay_init_guard
                 overlay_pair_dedup_runtime
                 recomp_ui_root_override

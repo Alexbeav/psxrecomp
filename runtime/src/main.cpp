@@ -92,6 +92,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "memcard.h"
 #include "debug_server.h"
 #include "crash_trace.h"
+#include "bios_phase_report.h"
 #include "freeze_heartbeat.h"
 #include "config_loader.h"
 #include "bios_rom_alias.h"
@@ -15119,6 +15120,9 @@ int main(int argc, char** argv) {
     /* Install crash handlers early so they catch issues during init too.
      * Writes psx_last_run_report.json on signal/SEH/atexit/fail-fast. */
     psx_crash_trace_install_handlers();
+    /* PS1B-105: one stdout line with what the interpreter ran before game
+     * entry (or in the whole start, when there is none). */
+    bios_phase_report_install();
 #if defined(RECOMP_LAUNCHER)
     launcher_boot_timing_mark("host:crash_handlers");
 #endif
