@@ -113,7 +113,7 @@ static int run_case(uint64_t start,unsigned words,unsigned future,int empty,int 
     dma_init();memset(ram,0,sizeof(ram));irqs=i_stat=0;gpu_words=gpu_headers=0;
     psx_cycle_count=start;s_devices_synced_cycle=start;
     s_next_watchdog=s_next_pc_sample=UINT64_MAX;
-    psx_in_device_service=0;g_psx_cycle_fast_limit=0;g_psx_cyc_batch=0;
+    psx_in_device_service=0;g_psx_cyc_batch=0;
     g_psx_cyc_batch_limit=0;g_psx_cyc_local_acc=NULL;
     timer_due=future?start+future:0;timer_events=0;timer_fired_cycle=dma_irq_cycle=0;
     i_mask=masked?0:8;dpcr|=8u<<8;dicr=(1u<<23)|(1u<<18);

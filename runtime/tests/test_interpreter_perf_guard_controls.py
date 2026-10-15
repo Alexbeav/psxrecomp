@@ -79,35 +79,49 @@ class InterpreterGuardControls(unittest.TestCase):
     def test_current_source_passes(self):
         self.assertEqual(self.run_guard(), 0)
 
-    def test_rejects_nonzero_deadline_limit(self):
+    def test_rejects_restored_deadline_limit(self):
         self.reject("runtime/src/psx_cycles.c",
                     "    psx_next_service_cycle = psx_cycle_count + (uint64_t)next;\n",
                     "    psx_next_service_cycle = psx_cycle_count + (uint64_t)next;\n"
                     "    g_psx_cycle_fast_limit = psx_next_service_cycle - 1u;\n",
-                    "nonzero inline cycle limit writer: runtime/src/psx_cycles.c")
+                    "removed inline cycle limit is referenced again: runtime/src/psx_cycles.c")
 
-    def test_rejects_limit_written_through_address(self):
-        self.reject("runtime/src/timers.c",
-                    "psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;",
-                    "psx_next_service_cycle=0;*(&g_psx_cycle_fast_limit)=1;",
-                    "nonzero inline cycle limit writer: runtime/src/timers.c")
-
-    def test_rejects_compound_limit_write(self):
-        self.reject("runtime/src/interrupts.c",
-                    "        g_psx_cycle_fast_limit=0;\n",
-                    "        g_psx_cycle_fast_limit+=1;\n",
-                    "nonzero inline cycle limit writer: runtime/src/interrupts.c")
-
-    def test_rejects_fast_path_without_zero_fallback(self):
+    def test_rejects_restored_interpreter_fast_path(self):
         self.reject("runtime/src/dirty_ram_interp.c",
-                    "g_psx_cycle_fast_limit != 0u &&", "",
-                    "interpreter cycle fast path does not fall back on a zero limit")
+                    "    } else if (!g_ls_replay_active) {\n"
+                    "        psx_advance_cycles(1u);\n",
+                    "    } else if (!g_ls_replay_active) {\n"
+                    "        extern uint64_t g_psx_cycle_fast_limit;\n"
+                    "        if (psx_cycle_count + 1u <= g_psx_cycle_fast_limit) psx_cycle_count++;\n"
+                    "        else psx_advance_cycles(1u);\n",
+                    "removed inline cycle limit is referenced again: runtime/src/dirty_ram_interp.c")
 
-    def test_rejects_service_clear_after_reentry_flag(self):
-        self.reject("runtime/src/psx_cycles.c",
-                    "    g_psx_cycle_fast_limit = 0;\n    s_in_device_service = 1;\n",
-                    "    s_in_device_service = 1;\n    g_psx_cycle_fast_limit = 0;\n",
-                    "device-service reentrancy can observe a nonzero inline cycle limit")
+    def test_rejects_limit_in_generator_template(self):
+        template = self.root / "recompiler/src/control_cycle_limit_template.cpp"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text('static const char *k = "    g_psx_cycle_fast_limit = 0;\\n";\n',
+                            encoding="utf-8")
+        try:
+            with self.assertRaises(AssertionError) as raised:
+                self.run_guard()
+        finally:
+            template.unlink()
+        self.assertEqual(str(raised.exception), "removed inline cycle limit is referenced again: "
+                         "recompiler/src/control_cycle_limit_template.cpp")
+
+    def test_rejects_interpreter_step_without_advance(self):
+        self.reject("runtime/src/dirty_ram_interp.c",
+                    "    } else if (!g_ls_replay_active) {\n"
+                    "        psx_advance_cycles(1u);\n",
+                    "    } else if (!g_ls_replay_active) {\n"
+                    "        psx_cycle_count += 1u;\n",
+                    "interpreter step no longer charges through psx_advance_cycles")
+
+    def test_rejects_inline_advance_without_conservative_mode(self):
+        self.reject("runtime/include/psx_cycles.h",
+                    "__builtin_expect(g_ls_replay_active | g_event_step_conservative, 0)",
+                    "__builtin_expect(g_ls_replay_active, 0)",
+                    "inline cycle advance does not send exact diagnostic modes to the slow path")
 
     def test_rejects_unarmed_load_value(self):
         self.reject("runtime/src/dirty_ram_interp.c",

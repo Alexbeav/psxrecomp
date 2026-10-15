@@ -12,7 +12,6 @@
 #include <string.h>
 uint64_t psx_cycle_count;
 static uint64_t sample_cycle;
-static uint64_t g_psx_cycle_fast_limit;
 #ifdef PSX_TEST_DEADLINE
 int g_event_step_conservative=0;
 #else

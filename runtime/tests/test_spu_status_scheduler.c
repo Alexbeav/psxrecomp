@@ -53,7 +53,7 @@ int main(void){
  for(unsigned irq=0;irq<2;irq++)for(unsigned phase=0;phase<768;phase++)for(unsigned adjacent=0;adjacent<2;adjacent++){
   spu_init();spu_write(0x1f801daa,0xc010u|(irq?0x40u:0));
   {int16_t stereo[2];spu_render(stereo,1);}
-  psx_cycle_count=768+phase;s_devices_synced_cycle=psx_cycle_count;psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;g_psx_cyc_batch=0;psx_in_device_service=0;g_event_step_conservative=0;s_next_watchdog=s_next_pc_sample=UINT64_MAX;
+  psx_cycle_count=768+phase;s_devices_synced_cycle=psx_cycle_count;psx_next_service_cycle=0;g_psx_cyc_batch=0;psx_in_device_service=0;g_event_step_conservative=0;s_next_watchdog=s_next_pc_sample=UINT64_MAX;
   pumps=timer_events=order=0;pump_time=0;i_stat=i_mask=0;timer_deadline=0;
   psx_set_midframe_audio_pump(pump);psx_devices_mmio_sync();
   uint64_t cached=psx_next_service_cycle;
@@ -74,7 +74,7 @@ int main(void){
  for(unsigned irq=0;irq<2;irq++){
   spu_init();spu_write(0x1f801daa,0xc010u|(irq?0x40u:0));
   {int16_t stereo[2];spu_render(stereo,1);}
-  psx_cycle_count=s_devices_synced_cycle=767;psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
+  psx_cycle_count=s_devices_synced_cycle=767;psx_next_service_cycle=0;
   timer_deadline=768;pumps=timer_events=order=0;psx_devices_mmio_sync();psx_advance_cycles(1);psx_devices_mmio_sync();
   expect(pumps==1 && order==12,"boundary services timer/sample before write",irq,0);
   spu_write(0x1f801daa,0xc001u|(irq?0x40u:0));spu_write(0x1f801daa,0xc000u|(irq?0x40u:0));

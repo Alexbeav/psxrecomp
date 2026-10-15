@@ -71,7 +71,6 @@ int memory_peek_instruction_word(uint32_t a, uint32_t *value) {
 uint32_t i_stat, i_mask;
 uint64_t psx_cycle_count;
 uint64_t psx_next_service_cycle;
-uint64_t g_psx_cycle_fast_limit;
 uint64_t g_psx_device_gen;
 uint64_t s_frame_count;
 uint64_t g_async_rfe_fire_count;

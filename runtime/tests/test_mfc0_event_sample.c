@@ -13,7 +13,7 @@
 int l1_step(CPUState *, uint32_t, uint32_t, uint32_t *);
 
 /* Clock and device seams read as data on the charged path. */
-uint64_t psx_cycle_count, psx_next_service_cycle, g_psx_cycle_fast_limit;
+uint64_t psx_cycle_count, psx_next_service_cycle;
 int psx_in_device_service, g_event_step_conservative, g_psx_cyc_bb_defer;
 uint32_t g_psx_cyc_batch, g_psx_cyc_batch_limit, *g_psx_cyc_local_acc;
 int g_input_instruction_histogram_active;
