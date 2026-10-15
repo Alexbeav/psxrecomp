@@ -16091,7 +16091,16 @@ namespace {
         if (!g_quality_offered || ls->quality_preset < 1 || ls->quality_preset > 5) return;
         const int preset = ls->quality_preset - 1;
         if (preset == PSX_QUALITY_CUSTOM) {
-            if (g_quality.preset != PSX_QUALITY_CUSTOM) g_quality_edit = psxq::Edit::GOVERNED_EDIT;
+            /* A player may pick a different tier and edit one of its rows
+             * before leaving the launcher. Custom belongs to that tier,
+             * including its values which have no launcher row. */
+            const int base = ls->quality_base - 1;
+            const auto* p = quality_preset_for(base);
+            const bool changed_base = p && base != g_quality.base;
+            if (g_quality.preset != PSX_QUALITY_CUSTOM || changed_base)
+                g_quality_edit = psxq::Edit::GOVERNED_EDIT;
+            if (p) g_quality.base = base;
+            if (apply_now && changed_base) quality_apply_video_globals(p->runtime);
             return;
         }
         if (preset == g_quality.preset) return;
