@@ -815,11 +815,9 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         extern int memory_kseg2_ignored_json(char *out, int cap);
         char k2[96];
         if (memory_kseg2_ignored_json(k2, (int)sizeof k2))
-            append_fmt(buf, sizeof(buf), &pos, "  \"kseg2_ignored\": %s,
-", k2);
+            append_fmt(buf, sizeof(buf), &pos, "  \"kseg2_ignored\": %s,\n", k2);
         else
-            append_str(buf, sizeof(buf), &pos, "  \"kseg2_ignored\": null,
-");
+            append_str(buf, sizeof(buf), &pos, "  \"kseg2_ignored\": null,\n");
     }
 
     /* CD read streams that ended before their first sector (PS1B-317): a

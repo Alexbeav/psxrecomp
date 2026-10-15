@@ -22,7 +22,7 @@ source_fixture_link.ISO_C_FALLBACK |= {"memcmp", "bcmp"}
 
 def check_wiring():
     report = (ROOT / "runtime/src/crash_trace.c").read_text(encoding="utf-8")
-    assert "memory_kseg2_ignored_json(k2" in report and '\\"kseg2_ignored\\": ' in report, \
+    assert "memory_kseg2_ignored_json(k2" in report and '\\"kseg2_ignored\\": %s,\\n", k2' in report, \
         "the run report must print kseg2_ignored"
     doc = (ROOT / "docs/RUN_REPORT_KSEG2.md").read_text(encoding="utf-8")
     assert "kseg2_ignored" in doc, "docs/RUN_REPORT_KSEG2.md must describe the field"
