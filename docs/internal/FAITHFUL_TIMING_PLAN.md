@@ -233,6 +233,18 @@ on a fixed region -> next.
   Exact-head review/CI are pending. No guest timing, deterministic
   switching policy, prepared-image retention, title qualification or pin change.
 
+- **2026-10-09 (PS1B-456, guest stores to RAM 0..15):** After game entry the word
+  store path dropped guest stores to RAM 0..15 by the program counter of the
+  store: the kernel's copy of its exception stub to address 0 (0xBFC10A00) and
+  ten delay loops that leave 3 in the first word (eight in the SCPH1001 ROM, two
+  in one game). The source profile never dropped them. Removed: every guest
+  store lands, in every profile. The two copies of the 16 bytes that replays of
+  older recordings compare leave those stores out, and a recording of this build
+  says `low_ram_stores=all`. `low_ram_game_entry_test` holds the rule. Tomba!
+  2 (USA), the title the dropped stores were written for, saved and loaded by
+  hand on a build of this change (2026-10-09). Save and load in Ape Escape,
+  Tomba! and Mega Man X6, the other titles of the July change, are still to be
+  measured.
 - **2026-10-06 (PS1G-39, after pin H, kept-route/cockpit regression):** Native boot produces
   the same BIOS low-RAM words as the oracle, then the host game-start hook clears
   bytes 0..15. Colony Wars: Vengeance later reads halfword zero through a cleared

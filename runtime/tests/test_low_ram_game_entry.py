@@ -1,9 +1,12 @@
-"""Game entry keeps guest RAM 0..15; replays of older recordings still compare.
+"""Guest RAM 0..15 belongs to the guest; replays of older recordings still compare.
 
-The C fixture links the real store path (memory.c), the real game-start latch
-(fntrace.c) and the real core digest (netplay_state_digest.c). This driver
-builds it at -O0 and -O2, and then reads the two places outside those sources
-that the fixture cannot link: the replay host in main.cpp and the run report.
+Game entry keeps the bytes, and every guest store to them lands (PS1B-456: no
+store is dropped by its program counter). The C fixture links the real store
+path (memory.c), the real game-start latch (fntrace.c) and the real core
+digest (netplay_state_digest.c). This driver builds it at -O0 and -O2, and
+then reads the places outside those sources that the fixture cannot link: the
+replay host in main.cpp and the run report. It also reads the store functions
+of memory.c for a return that depends on the program counter of the store.
 """
 import argparse
 import re
@@ -42,10 +45,17 @@ def check_wiring():
     apply_one = body(main, "static void replay_settings_apply_text(")
     assert re.search(r'key == "game_entry_low_ram"\) memory_set_low_ram_view_old\(value != "kept"\)',
                      apply_one), "the recording's line must switch the older-recording view"
+    assert "low_ram_stores=all\\n" in capture, \
+        "a recording must say that this build lets every store to RAM 0..15 land"
+    assert re.search(r'key == "low_ram_stores"\) memory_set_low_ram_view_filtered\(value != "all"\)',
+                     apply_one), "the recording's line must switch the dropped-stores view"
     apply_all = body(main, 'extern "C" void replay_host_settings_apply(')
     assert apply_all.index("memory_set_low_ram_view_old(1)") < \
         apply_all.index("replay_settings_apply_text(settings"), \
         "a recording without the line is an older build's: switch the view on first"
+    assert apply_all.index("memory_set_low_ram_view_filtered(1)") < \
+        apply_all.index("replay_settings_apply_text(settings"), \
+        "a recording without the stores line is an older build's: switch its view on first"
     restore = body(main, 'extern "C" void replay_host_settings_restore(')
     assert "replay_settings_apply_text(s_replay_saved_settings" in restore, \
         "the end of playback must switch the view back with the saved settings"
@@ -56,6 +66,32 @@ def check_wiring():
     report = (SRC / "crash_trace.c").read_text(encoding="utf-8")
     assert "memory_low_ram_at_entry(low)" in report and '\\"low_ram_at_entry\\": ' in report, \
         "the run report must print low_ram_at_entry"
+    assert re.search(r'\\"low_ram_older_dropped_stores\\": %llu,\\n",\s*'
+                     r'\(unsigned long long\)memory_low_ram_older_dropped_stores\(\)', report), \
+        "the run report must print low_ram_older_dropped_stores"
+
+
+# The guest store functions of memory.c, and the tests of the store's program
+# counter that each may hold. The one entry is the event-block guard that
+# PSX_TOMB_CARD_EVCB_PROTECT=1 switches on; it never matches RAM 0..15.
+STORE_PC_TESTS = {
+    "static void psx_write_word_raw(uint32_t addr, uint32_t val) {":
+        ["g_debug_last_store_pc == 0xBFC117E4u"],
+    "static void psx_write_half_raw(uint32_t addr, uint16_t val) {": [],
+    "static void psx_write_byte_raw(uint32_t addr, uint8_t val) {": [],
+}
+
+
+def check_store_path():
+    memory = (SRC / "memory.c").read_text(encoding="utf-8")
+    for signature, allowed in STORE_PC_TESTS.items():
+        text = body(memory, signature)
+        for use in allowed:
+            assert text.count(use) == 1, signature + " no longer holds: " + use
+            text = text.replace(use, "")
+        assert "g_debug_last_store_pc" not in text, \
+            signature + " tests the program counter of the store: a guest store " \
+            "must land whatever instruction made it (PS1B-456)"
 
 
 if __name__ == "__main__":
@@ -63,10 +99,11 @@ if __name__ == "__main__":
     parser.add_argument("--cc", default="gcc")
     args = parser.parse_args()
     check_wiring()
+    check_store_path()
     with tempfile.TemporaryDirectory() as root:
         for opt in ("-O0", "-O2"):
             build_and_run(args.cc, HERE, HERE.parent, opt, Path(root),
                           ["memory.c", "fntrace.c", "netplay_state_digest.c", "crc32.c"],
                           "test_low_ram_game_entry.c")
-    print("PASS: game entry keeps RAM 0..15; the older-recording view is exact; "
-          "its SWL/SWR limit is unchanged (O0/O2)")
+    print("PASS: game entry keeps RAM 0..15 and every guest store to it lands; "
+          "both older-recording views are exact; the SWL/SWR limit is unchanged (O0/O2)")
