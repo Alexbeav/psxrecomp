@@ -6,7 +6,7 @@
 #include "test_gpu_textured_dot_nw_shift_exec.c"
 #undef main
 #ifndef GPU_QUEUE_REAL_CLOCK
-uint64_t psx_cycle_count, psx_next_service_cycle, g_psx_cycle_fast_limit;
+uint64_t psx_cycle_count, psx_next_service_cycle;
 uint64_t psx_get_cycle_count(void) { return psx_cycle_count; }
 #endif
 #ifndef TEST_BASE

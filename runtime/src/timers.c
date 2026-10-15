@@ -462,8 +462,8 @@ void timers_write(uint32_t addr, uint32_t value) {
          * Its cached absolute deadline cannot survive a guest reprogramming
          * the timer to an earlier event. The next CPU charge must recompute
          * both scheduler paths; no guest clocks or counter values are added. */
-        extern uint64_t psx_next_service_cycle,g_psx_cycle_fast_limit;
-        psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
+        extern uint64_t psx_next_service_cycle;
+        psx_next_service_cycle=0;
     }
     if(source_timer2_enabled && timer==0 && reg==4 && (value&0x30)) {
         fprintf(stderr,"[timer2-source-clock] timer0 IRQ modes unsupported in combined source profile\n");exit(4);

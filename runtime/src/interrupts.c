@@ -208,9 +208,7 @@ void interrupts_raster_gp1(uint32_t word) {
     }
     uint32_t command=(word>>24)&63u;
     if (command==0 || command==7 || command==8) {
-        extern uint64_t g_psx_cycle_fast_limit;
         input_route_raster_recompute();
-        g_psx_cycle_fast_limit=0;
         /* Existing MMIO sync ran before this write. Publish the new deadline
          * after changing the raster controls so a prior later deadline cannot
          * let the CPU cross an earlier newly programmed vertical boundary. */

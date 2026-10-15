@@ -8,7 +8,7 @@
 #pragma GCC diagnostic pop
 #include "pst_wire.h"
 
-uint64_t psx_cycle_count, psx_next_service_cycle, g_psx_cycle_fast_limit;
+uint64_t psx_cycle_count, psx_next_service_cycle;
 void (*g_psx_cpu_step_boundary_callback)(CPUState *,uint32_t,uint64_t);
 uint64_t psx_get_cycle_count(void) { return psx_cycle_count; }
 static unsigned dma_calls, draws;

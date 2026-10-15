@@ -92,23 +92,23 @@ extern int g_ls_replay_active;     /* defined in the lockstep section; used by e
 
 /* Interpreter-only production fast path.  Do not put this in psx_cyc.h:
  * generated overlay DLLs deliberately batch psx_advance_cycles() through a
- * DLL-local accumulator and must never bind directly to runtime cycle state. */
+ * DLL-local accumulator and must never bind directly to runtime cycle state.
+ *
+ * The one-cycle charge goes straight to psx_advance_cycles(1u). An earlier
+ * inline limit (g_psx_cycle_fast_limit, "next <= limit: bump the counter")
+ * had no nonzero writer after 31015cea and was removed in PS1B-507. It is not
+ * worth restoring: psx_advance_cycles is a static inline since that commit,
+ * so its common path is the same few loads and an add, and a clang 22 -O2
+ * measurement put the restored and the direct forms at the same cost per
+ * step. A restored limit would also need an invalidation at every deadline
+ * change, with no host-time gain to pay for that risk. */
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM) && !STARVATION_RING_ENABLED
-extern uint64_t g_psx_cycle_fast_limit;
-extern int g_event_step_conservative;
-
 static inline void interp_cyc_step(CPUState *cpu, uint32_t reg_mask, uint32_t load_rt) {
     uint8_t w = cpu->read_absorb_which;
     if (cpu->read_absorb[w]) {
         cpu->read_absorb[w]--;
     } else if (!g_ls_replay_active) {
-        uint64_t next = psx_cycle_count + 1u;
-        if (!g_event_step_conservative && g_psx_cycle_fast_limit != 0u &&
-            next <= g_psx_cycle_fast_limit) {
-            psx_cycle_count = next;
-        } else {
-            psx_advance_cycles(1u);
-        }
+        psx_advance_cycles(1u);
     }
     psx_cyc_deps(cpu, reg_mask);
     if (load_rt < 32u && cpu->ld_which_t == load_rt) cpu->ld_which_t = 0u;

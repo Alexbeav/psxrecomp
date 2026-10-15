@@ -18,7 +18,6 @@
 #include "memcard.h"                  /* TAS checkpoint card images */
 #include <stdio.h>
 #include <stdlib.h>
-extern uint64_t g_psx_cycle_fast_limit;
 static int enabled;
 static SourceGPUServiceClock clock_state;
 static SourceGPUCommandProjection command_state;
@@ -361,7 +360,7 @@ static void cpu_boundary_inner(CPUState *cpu,uint32_t pc,uint64_t cycle) {
             tas_stateio_save(cpu,clock_state.frame_returns,cycle);
             e_survey();
             { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }   /* frame end re-arms the GPU service clock */
-            psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
+            psx_next_service_cycle=0;
         }
         dma_cpu_read_wait_boundary();
         source_cpu_boundary_probe(cpu,pc,cycle);
@@ -394,7 +393,7 @@ void source_gpu_runtime_init(void) {
     source_gpu_service_cold(&clock_state);source_gpu_command_cold(&command_state);
     input_route_raster_reset(&draw_raster);command_state.field_valid=1;
     enabled=1;g_psx_cpu_step_boundary_callback=cpu_boundary;
-    psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
+    psx_next_service_cycle=0;
 }
 int source_gpu_runtime_active(void) {return enabled;}
 /* Resume support: restore the frontend-return counter after a checkpoint load,
@@ -598,7 +597,7 @@ void source_gpu_runtime_gp1(uint32_t word) {
     source_gpu_runtime_advance();
     if(!source_gpu_command_gp1(&command_state,word) || !input_route_raster_gp1(&clock_state.raster,word) || !input_route_raster_gp1(&draw_raster,word))fail("unsupported GP1 control");
     command_state.skip_field=(draw_raster.y_start+draw_raster.readout_field)&1u;
-    psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
+    psx_next_service_cycle=0;
 }
 void source_gpu_runtime_copy(SourceGPUServiceClock *clock,SourceGPUCommandProjection *command) {
     if(clock)*clock=clock_state;

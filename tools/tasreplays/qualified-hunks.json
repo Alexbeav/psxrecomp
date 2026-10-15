@@ -4035,8 +4035,7 @@
           "lines": [
             "    /* v8 restores guest timing and pending load writeback from the snapshot.",
             "     * They belong to the restored clock and must survive host resynchronization. */",
-            "    (void)cpu;",
-            "    g_psx_cycle_fast_limit = 0;"
+            "    (void)cpu;"
           ]
         },
         {
@@ -5078,6 +5077,15 @@
             "6d2f8b9f74fa173f87ad648e4fee02402f4dc585"
           ],
           "signature": "signed: Claude MANAGER 2026-09-28 — see PIN-F-QUALIFIED-HUNK-REPIN-20260928.md"
+        },
+        {
+          "as_of": "worktree on b5406464d397d0f7f7793a1ab264bab306d8fc64",
+          "issue": "PS1B-507",
+          "reason": "Evolved-hunk case, narrowed to this entry's own blocks. PS1B-507 removed the dead inline cycle limit g_psx_cycle_fast_limit (no nonzero writer since 31015cea; both readers always fell back to psx_advance_cycles), so its clear in psx_cycles_resync_after_restore goes with it. The other three lines of the block are unchanged. No restore, capture or timing behaviour changes: the removed store wrote 0 to a variable that nothing reads any more.",
+          "detail": "runtime/src/psx_cycles.c: '    g_psx_cycle_fast_limit = 0;' removed from the end of the 4-line block in psx_cycles_resync_after_restore. One pinned line removed, none changed.",
+          "dropped_lines": 1,
+          "from_blocks": 167,
+          "to_blocks": 167
         }
       ],
       "contract_amendments": [
