@@ -12,8 +12,9 @@ required = (
     'std::getenv("PSX_FPS_TELEMETRY")',
     "fps_telemetry_enabled() && !psx_netplay_in_load_barrier()",
     "sdl_window && s_fps_base_title.empty()",
-    "Game %.0f fps %.2fx | Display %.0f fps",
-    "Game %.0f FPS  %.2fx | Display %.0f FPS",
+    # PS1B-468: Game is the game-drawn rate, Video the VBlank rate.
+    "Game %.0f fps | Video %.0f fps | Speed %.0f%% | Display %.0f fps",
+    "Game %.0f FPS | Video %.0f FPS | Speed %.0f%% | Display %.0f FPS",
 )
 for needle in required:
     if needle not in main_cpp:

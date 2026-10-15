@@ -40,6 +40,7 @@
 #include "ws_prepass_guard.h"
 #include "ws_hud_anchor.h"
 #include "ws_repeat_rect.h"
+#include "drawn_frames.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -3205,7 +3206,24 @@ void gpu_vblank_flush_present(void) {
     s_flushing_present = 0;
 }
 
+/* PS1B-468: the field that just ended, for the game-drawn frame counter. CPU
+ * VRAM is the picture only on the software renderer. */
+static void drawn_frames_vblank_sample(void) {
+    GpuDisplayInfo di;
+    PsxDrawnFrameDisplay d;
+    gpu_get_display_info(&di);
+    d.x = di.display_x;
+    d.y = di.display_y;
+    d.w = di.depth24 ? (di.width * 3u + 1u) / 2u : di.width;
+    d.h = di.height;
+    d.disabled = di.disabled;
+    psx_drawn_frames_vblank(&d,
+        gr_backend() == GR_BACKEND_SOFTWARE ? vram : NULL);
+}
+
 void gpu_vblank_tick(void) {
+    if (psx_drawn_frames_enabled())
+        drawn_frames_vblank_sample();
     lcf ^= 1;
     /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
      * field while GP1(08h) vertical interlace is on, in antiphase with the
@@ -5418,10 +5436,37 @@ int gpu_ws_census_dump(uint32_t f0, uint32_t f1, const char *path) {
 void gpu_ws_census_set(int on) { ws_census_on = on ? 1 : 0; }
 uint64_t gpu_ws_census_seq(void) { return ws_census_seq; }
 
+/* PS1B-468: the VRAM rectangle a GP0 command writes, for the game-drawn frame
+ * counter. Draws are bounded by the draw area; fill, copy and CPU upload by
+ * their destination. */
+static void drawn_frames_note_gp0(uint8_t opcode) {
+    if (opcode >= 0x20 && opcode <= 0x7F) {
+        psx_drawn_frames_note_write((int)draw_area_left, (int)draw_area_top,
+            (int)draw_area_right - (int)draw_area_left + 1,
+            (int)draw_area_bottom - (int)draw_area_top + 1);
+    } else if (opcode == 0x02) {
+        psx_drawn_frames_note_write((int)(gp0_cmd_buf[1] & 0x3F0u),
+            (int)((gp0_cmd_buf[1] >> 16) & 0x1FFu),
+            (int)(((gp0_cmd_buf[2] & 0x3FFu) + 0xFu) & ~0xFu),
+            (int)((gp0_cmd_buf[2] >> 16) & 0x1FFu));
+    } else if (opcode >= 0x80 && opcode <= 0xBF) {
+        const int dst = opcode >= 0xA0 ? 1 : 2;
+        const int size = dst + 1;
+        int w = (int)(gp0_cmd_buf[size] & 0x3FFu);
+        int h = (int)((gp0_cmd_buf[size] >> 16) & 0x1FFu);
+        if (w == 0) w = 0x400;
+        if (h == 0) h = 0x200;
+        psx_drawn_frames_note_write((int)(gp0_cmd_buf[dst] & 0x3FFu),
+            (int)((gp0_cmd_buf[dst] >> 16) & 0x1FFu), w, h);
+    }
+}
+
 /* Execute a fully-collected GP0 command */
 static void gp0_execute_command(void) {
     uint8_t opcode = (gp0_cmd_buf[0] >> 24) & 0xFF;
     gp0_opcode_count[opcode]++;
+    if (psx_drawn_frames_enabled())
+        drawn_frames_note_gp0(opcode);
     gp0_ring_record(gp0_cmd_buf, gp0_words_needed);
     extern void ws_bg_phase_note(uint32_t op);
     ws_bg_phase_note(opcode);   /* native-wide 2D-backdrop stretch: background-phase latch */
@@ -6066,6 +6111,8 @@ static void gp1_display_area_start(uint32_t val) {
      * bits 10-18: Y (0-511) */
     display_area_x = val & 0x3FF;
     display_area_y = (val >> 10) & 0x1FF;
+    if (psx_drawn_frames_enabled())
+        psx_drawn_frames_note_display_start(display_area_x, display_area_y);
     ws_note_display_base(display_area_x);  /* learn the display buffer set (native-wide) */
 }
 
