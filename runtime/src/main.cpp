@@ -1676,6 +1676,12 @@ static void quality_apply_video_globals(const PSXRecompV4::RuntimeConfig& r) {
     g_frame_generation_method = r.video_frame_generation_method;
     g_frame_interpolation     = r.video_frame_interpolation ? 1 : 0;
     g_frame_interpolation_fps = r.video_frame_interpolation_fps;
+    /* Preset-only keys (no settings.toml form): picking a preset applies them. */
+    g_video_bloom        = r.video_bloom;
+    g_video_fmv_chroma   = r.video_fmv_chroma_smoothing ? 1 : 0;
+    g_video_texture_lod  = r.video_texture_lod;
+    g_video_aniso        = r.video_anisotropic_filtering;
+    g_video_dithering    = r.video_dithering;
 }
 static int           g_frame_interpolation_blend =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
@@ -16011,7 +16017,10 @@ namespace {
                   sv_pth = g_present_thread, sv_fg = g_frame_generation,
                   sv_fgm = g_frame_generation_method, sv_fi = g_frame_interpolation,
                   sv_fif = g_frame_interpolation_fps;
-        const float sv_tol = g_video_pgxp_tolerance, sv_dth = g_video_pgxp_depth_threshold;
+        const float sv_tol = g_video_pgxp_tolerance, sv_dth = g_video_pgxp_depth_threshold,
+                    sv_bloom = g_video_bloom;
+        const int sv_chroma = g_video_fmv_chroma, sv_lod = g_video_texture_lod,
+                  sv_aniso = g_video_aniso, sv_dith = g_video_dithering;
         quality_apply_video_globals(p->runtime);
 #if defined(RECOMP_LAUNCHER_HAS_INTERNAL_RESOLUTION)
         s->internal_resolution = internal_resolution_for_launcher();
@@ -16046,6 +16055,32 @@ namespace {
         g_present_thread = sv_pth; g_frame_generation = sv_fg;
         g_frame_generation_method = sv_fgm; g_frame_interpolation = sv_fi;
         g_frame_interpolation_fps = sv_fif;
+        g_video_bloom = sv_bloom; g_video_fmv_chroma = sv_chroma;
+        g_video_texture_lod = sv_lod; g_video_aniso = sv_aniso; g_video_dithering = sv_dith;
+    }
+
+    /* Does a launcher row a governed, player-editable key owns differ between
+     * two Settings? (Host-side Custom classification: only the keys this
+     * title's presets govern count.) */
+    static bool quality_row_differs(const std::string& k, const RecompLauncherCSettings& a,
+                                    const RecompLauncherCSettings& b) {
+        if (k == "texture_filtering") return a.texture_filter != b.texture_filter;
+        if (k == "fmv_filter") return a.fmv_filter != b.fmv_filter;
+        if (k == "antialiasing") return (a.antialiasing != 0) != (b.antialiasing != 0);
+#if defined(RECOMP_LAUNCHER_HAS_DYNAMIC_RESOLUTION)
+        if (k == "dynamic_resolution") return (a.dynamic_resolution != 0) != (b.dynamic_resolution != 0);
+        if (k == "dynamic_resolution_min") return a.dynamic_resolution_min != b.dynamic_resolution_min;
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_RENDER_PIPELINE)
+        if (k == "frame_generation") return (a.frame_generation != 0) != (b.frame_generation != 0);
+        if (k == "render_thread") return (a.render_thread != 0) != (b.render_thread != 0);
+        if (k == "present_thread") return (a.present_thread != 0) != (b.present_thread != 0);
+#endif
+        if (k == "geometry_correction") return (a.geometry_correction != 0) != (b.geometry_correction != 0);
+        if (k == "perspective_texturing") return (a.perspective_texturing != 0) != (b.perspective_texturing != 0);
+        if (k == "frame_interpolation") return (a.frame_interp != 0) != (b.frame_interp != 0);
+        if (k == "frame_interpolation_fps") return a.frame_interp_fps != b.frame_interp_fps;
+        return false;   /* preset-only keys have no row */
     }
 
     void quality_publish_strings(void) {
@@ -16103,6 +16138,24 @@ namespace {
              * including its values which have no launcher row. */
             const int base = ls->quality_base - 1;
             const auto* p = quality_preset_for(base);
+            /* The frontends flag Custom on any row their snapshot tracks;
+             * only a row this title's presets govern makes it Custom. */
+            if (p && g_quality.preset != PSX_QUALITY_CUSTOM) {
+                RecompLauncherCSettings expect = *ls;
+                quality_launcher_apply(base + 1, &expect);
+                int picked = PSX_QUALITY_NONE;
+                const psxq::Edit e = psxq::launcher_custom_edit(
+                    g_quality_keys, base, g_quality.preset,
+                    [&](const std::string& k) { return quality_row_differs(k, *ls, expect); },
+                    &picked);
+                if (e == psxq::Edit::NONE) return;              /* unrelated rows only */
+                if (e == psxq::Edit::PICK) {                    /* a pick, then unrelated rows */
+                    g_quality_edit = e;
+                    g_quality_picked = picked;
+                    if (apply_now && !g_quality.env_override) quality_apply_video_globals(p->runtime);
+                    return;
+                }
+            }
             const bool changed_base = p && base != g_quality.base;
             if (g_quality.preset != PSX_QUALITY_CUSTOM || changed_base)
                 g_quality_edit = psxq::Edit::GOVERNED_EDIT;

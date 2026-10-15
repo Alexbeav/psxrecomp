@@ -35,13 +35,32 @@ pgxp_color_correction = false
 pgxp_seam = "off"
 ```
 
-Each `[quality.<name>]` table holds `[video]` keys. The preset is the whole
-game.toml re-parsed with those keys laid over `[video]`, so every `[video]` key
-works in a preset, with the same validation, and no other code needs to know
-about presets. The names are `low`, `medium`, `high` and `ultra`. Any subset
-may be offered. Any other name, a table value, or an invalid value is a load
+Each `[quality.<name>]` table holds `[video]` keys from the supported set
+below. The preset is the whole game.toml re-parsed with those keys laid over
+`[video]`, so each key gets its usual `[video]` validation. The names are
+`low`, `medium`, `high` and `ultra`. Any subset may be offered. Any other name,
+a table value, an invalid value, or a key outside the supported set is a load
 error. The keys a title's presets set, taken together, are the keys presets
 **govern**.
+
+### Supported keys
+
+Every key in the set is fully owned by the preset system. A preset in force
+masks the player's saved value. A one-run override, or an edit that touches no
+governed key, keeps the value on disk. A launcher row or live in-game change
+to a governed key is a governed edit and makes the state Custom. Picking a
+preset applies the key at once on the boot launcher, and at the next launch
+from the soft-return launcher.
+
+| Kind | Keys |
+|---|---|
+| Player-editable (settings.toml form, launcher row) | `texture_filtering`, `fmv_filter`, `antialiasing`, `dynamic_resolution`, `dynamic_resolution_min`, `frame_generation`, `render_thread`, `present_thread`, `geometry_correction`, `perspective_texturing`, `frame_interpolation`, `frame_interpolation_fps` |
+| Preset-only (no settings.toml form, no row) | `supersample`, `texture_lod`, `anisotropic_filtering`, `fmv_chroma_smoothing`, `bloom`, `dithering`, `pgxp_depth_buffer`, `pgxp_color_correction`, `pgxp_seam` |
+
+Other `[video]` keys (`vsync`, `renderer`, `scanlines`, `internal_resolution`,
+`supersampling`, ...) are rejected in a preset: they stay the player's.
+`PSXRecompV4::quality_key_supported` is the list; extending it means adding
+masking, copying, edit classification and apply-on-select for the key.
 
 ## Detection
 
@@ -152,10 +171,16 @@ and two callbacks:
 - `quality_redetect` probes again, GL included, and returns the preset.
 
 `Settings.quality_preset` is 1–4 for a preset and 5 for Custom. The launcher
-snapshots the rows after a preset is applied. As soon as a governed row differs
+snapshots the rows after a preset is applied. As soon as a tracked row differs
 from the snapshot, it sets Custom and keeps the preset it came from in
-`quality_base`. recomp-ui and recomp-launcher report the same way; the host
-turns the report into the saved state (the transaction above). A newly picked
+`quality_base`. recomp-ui and recomp-launcher report the same way. The
+frontends track every quality row, so the host classifies the report itself
+(`psxq::launcher_custom_edit`): it fills a copy of the rows from the reported
+base preset and counts only rows of keys this title governs. A Custom flag
+raised by an ungoverned row (for example Antialiasing when no preset sets it)
+keeps the preset, or records the pick it followed. The host then saves the
+state through the transaction above. (The launcher may still label such an
+edit Custom until it is reopened.) A newly picked
 preset's keys that have no row, such as `supersample` and the PGXP extras,
 apply at once on the boot launcher and at the next launch from the soft-return
 launcher.

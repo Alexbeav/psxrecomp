@@ -1217,9 +1217,29 @@ static std::vector<DrawDistanceClampSite> parse_draw_distance_clamps(
 // audit_config.py logic: strip a trailing .BIN/.EXE (case-insensitive) but
 // preserve dotted names like "SCUS_942.36" unchanged.
 // [quality.<name>] (docs/QUALITY_PRESETS.md). Each preset is the whole
-// game.toml re-parsed with its keys laid over [video], so a preset accepts
-// exactly the [video] keys (with the same validation) and nothing else needs
-// to know about presets. Lowest preset first.
+// game.toml re-parsed with its keys laid over [video], so each key gets the
+// same validation as in [video]. Only the supported quality keys
+// (quality_key_supported) are accepted. Lowest preset first.
+static const char* const kQualityPlayerKeys[] = {
+    "texture_filtering", "fmv_filter", "antialiasing", "dynamic_resolution",
+    "dynamic_resolution_min", "frame_generation", "render_thread", "present_thread",
+    "geometry_correction", "perspective_texturing", "frame_interpolation",
+    "frame_interpolation_fps"};
+static const char* const kQualityPresetOnlyKeys[] = {
+    "supersample", "texture_lod", "anisotropic_filtering", "fmv_chroma_smoothing",
+    "bloom", "dithering", "pgxp_depth_buffer", "pgxp_color_correction", "pgxp_seam"};
+
+bool quality_key_player_editable(const std::string& key) {
+    for (const char* k : kQualityPlayerKeys) if (key == k) return true;
+    return false;
+}
+
+bool quality_key_supported(const std::string& key) {
+    if (quality_key_player_editable(key)) return true;
+    for (const char* k : kQualityPresetOnlyKeys) if (key == k) return true;
+    return false;
+}
+
 static std::vector<QualityPreset> parse_quality_presets(const toml::value& cfg,
                                                         const fs::path& root,
                                                         const fs::path& config_path) {
@@ -1256,6 +1276,10 @@ static std::vector<QualityPreset> parse_quality_presets(const toml::value& cfg,
                 throw std::runtime_error(fmt::format(
                     "{}: [quality.{}] {} must be a [video] value, not a table",
                     config_path.string(), n, kv.first));
+            if (!quality_key_supported(kv.first))
+                throw std::runtime_error(fmt::format(
+                    "{}: [quality.{}] {} is not a preset key (docs/QUALITY_PRESETS.md "
+                    "lists the supported set)", config_path.string(), n, kv.first));
             video[kv.first] = kv.second;
             p.keys.push_back(kv.first);
         }

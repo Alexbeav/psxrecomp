@@ -960,6 +960,21 @@ struct WidescreenMaskedRejectSite {
 // The table holds [video] keys; the preset's runtime config is the whole
 // game.toml parsed with those keys laid over [video], so every [video] key
 // (and its validation) works in a preset without being listed here.
+// The [video] keys a [quality.*] preset may set (docs/QUALITY_PRESETS.md).
+// Each is fully enforced: a preset in force masks the player's saved value,
+// a one-run override and an unrelated edit keep the disk value, a launcher
+// row or live change to it is a governed edit, and picking a preset applies
+// it. Player-editable (settings.toml form, launcher row): texture_filtering,
+// fmv_filter, antialiasing, dynamic_resolution, dynamic_resolution_min,
+// frame_generation, render_thread, present_thread, geometry_correction,
+// perspective_texturing, frame_interpolation, frame_interpolation_fps.
+// Preset-only (no settings.toml form, no row): supersample, texture_lod,
+// anisotropic_filtering, fmv_chroma_smoothing, bloom, dithering,
+// pgxp_depth_buffer, pgxp_color_correction, pgxp_seam. Any other key in a
+// preset is a load error.
+bool quality_key_supported(const std::string& key);
+bool quality_key_player_editable(const std::string& key);
+
 struct QualityPreset {
     std::string              name;     // "low" | "medium" | "high" | "ultra"
     RuntimeConfig            runtime;  // [video] with [quality.<name>] on top

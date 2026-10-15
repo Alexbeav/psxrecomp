@@ -144,8 +144,9 @@ void mask_user_settings(PSXRecompV4::UserSettings& us,
         } else if (k == "frame_interpolation_fps") {
             us.has_frame_interpolation_fps = false;
         }
-        /* Every other [video] key has no settings.toml form: the preset's
-         * value already stands. */
+        /* The preset-only keys (PSXRecompV4::quality_key_supported) have no
+         * settings.toml form: the preset's value already stands. Any other
+         * key is rejected when game.toml loads. */
     }
 }
 
@@ -204,6 +205,20 @@ Edit live_edit(const PsxHostVideoSettings& c, const PsxHostVideoSettings& n,
              (c.internal_resolution != n.internal_resolution ||
               c.supersampling != n.supersampling));
         if (diff) return Edit::GOVERNED_EDIT;
+    }
+    return Edit::NONE;
+}
+
+Edit launcher_custom_edit(const std::vector<std::string>& keys, int base, int current,
+                          const std::function<bool(const std::string&)>& row_changed,
+                          int* picked) {
+    if (current == PSX_QUALITY_CUSTOM) return Edit::GOVERNED_EDIT;   /* stays Custom */
+    for (const std::string& k : keys)
+        if (PSXRecompV4::quality_key_player_editable(k) && row_changed(k))
+            return Edit::GOVERNED_EDIT;
+    if (base >= 0 && base < PSX_QUALITY_COUNT && base != current) {
+        if (picked) *picked = base;
+        return Edit::PICK;
     }
     return Edit::NONE;
 }

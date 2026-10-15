@@ -79,6 +79,15 @@ bool settle_save(PSXRecompV4::UserSettings& save, const PSXRecompV4::UserSetting
 Edit live_edit(const PsxHostVideoSettings& cur, const PsxHostVideoSettings& next,
                const std::vector<std::string>& keys);
 
+/* Host-side launcher classification. The frontend reports Custom when any
+ * row its snapshot tracks changed; only rows of keys this title governs
+ * count. row_changed(key) says whether that key's row differs from what the
+ * frontend's base preset puts there. Returns GOVERNED_EDIT, PICK (*picked =
+ * base) when the base is a new tier and only unrelated rows changed, or NONE. */
+Edit launcher_custom_edit(const std::vector<std::string>& keys, int base, int current,
+                          const std::function<bool(const std::string&)>& row_changed,
+                          int* picked);
+
 /* Copy one governed key's settings.toml field(s) (value and presence). */
 void copy_key(PSXRecompV4::UserSettings& dst, const PSXRecompV4::UserSettings& src,
               const std::string& key);

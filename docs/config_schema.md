@@ -644,7 +644,8 @@ Vulkan after validating their visuals and stability.
 
 ### Graphics presets (`[quality.low|medium|high|ultra]`)
 
-Optional named presets of `[video]` keys, laid over `[video]`, with hardware
+Optional named presets of supported `[video]` keys (the set is listed in
+QUALITY_PRESETS.md; any other key is a load error), laid over `[video]`, with hardware
 detection on first launch, a launcher Graphics preset row, Re-detect and a
 Custom state. See [QUALITY_PRESETS.md](QUALITY_PRESETS.md).
 
@@ -723,8 +724,8 @@ Bloom is the built-in `bloom` chain of the post-effect pipeline
 (`docs/POST_EFFECTS.md`), which also loads your own chains through
 `post_shader = "<file>.pfx"` (relative to the game root; `PSX_POST_SHADER`).
 `PSX_BLOOM=<0..2>` overrides it for one run and the `bloom` TCP command reads
-or changes it live. It is a plain `[video]` key, so a `[quality.*]` preset can
-turn it off on low-end machines.
+or changes it live. It is one of the supported quality keys, so a
+`[quality.*]` preset can turn it off on low-end machines.
 
 ### Anti-aliasing (`antialiasing_mode`, `supersample`)
 

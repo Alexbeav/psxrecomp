@@ -501,6 +501,93 @@ static void test_ownership_txn() {
     }
 }
 
+/* The supported quality-key set (docs/QUALITY_PRESETS.md): anything else in
+ * a preset is a load error, and every player-editable key is masked and
+ * copied (ownership enforced). */
+static void test_supported_keys() {
+    bool threw = false;
+    fs::path bad = write_game_toml("psxrecomp_quality_vsync.toml",
+                                   "[quality.ultra]\nvsync = \"on\"\n");
+    try { (void)PSXRecompV4::load_game_config(bad); } catch (const std::exception&) { threw = true; }
+    check(threw, "vsync in a preset is rejected (not a supported quality key)");
+    fs::remove(bad);
+    threw = false;
+    bad = write_game_toml("psxrecomp_quality_renderer.toml", "[quality.low]\nrenderer = \"opengl\"\n");
+    try { (void)PSXRecompV4::load_game_config(bad); } catch (const std::exception&) { threw = true; }
+    check(threw, "renderer in a preset is rejected");
+    fs::remove(bad);
+
+    /* R4's preset keys (#23) are all supported. */
+    for (const char* k : {"supersample", "dynamic_resolution_min", "frame_generation",
+                          "pgxp_depth_buffer", "pgxp_color_correction", "pgxp_seam",
+                          "texture_lod", "anisotropic_filtering", "fmv_chroma_smoothing",
+                          "bloom", "dithering"})
+        check(PSXRecompV4::quality_key_supported(k), k);
+
+    /* Every player-editable key: masked while a preset is in force, and a
+     * one-run save restores its disk value. */
+    const std::vector<std::string> player = {
+        "texture_filtering", "fmv_filter", "antialiasing", "dynamic_resolution",
+        "dynamic_resolution_min", "frame_generation", "render_thread", "present_thread",
+        "geometry_correction", "perspective_texturing", "frame_interpolation",
+        "frame_interpolation_fps"};
+    PSXRecompV4::UserSettings on;
+    on.has_texture_filter = on.has_fmv_filter = on.has_antialiasing = true;
+    on.has_dynamic_resolution = on.has_dynamic_resolution_min = on.has_frame_generation = true;
+    on.has_render_thread = on.has_present_thread = on.has_geometry_correction = true;
+    on.has_perspective_texturing = on.has_frame_interpolation = true;
+    on.has_frame_interpolation_fps = true;
+    for (const std::string& k : player) {
+        check(PSXRecompV4::quality_key_supported(k) && PSXRecompV4::quality_key_player_editable(k),
+              ("player-editable: " + k).c_str());
+        PSXRecompV4::UserSettings m = on;
+        psxq::mask_user_settings(m, {k});
+        PSXRecompV4::UserSettings c = on;
+        psxq::copy_key(c, PSXRecompV4::UserSettings{}, k);
+        const bool masked =
+            (k == "texture_filtering" && !m.has_texture_filter && !c.has_texture_filter) ||
+            (k == "fmv_filter" && !m.has_fmv_filter && !c.has_fmv_filter) ||
+            (k == "antialiasing" && !m.has_antialiasing && !c.has_antialiasing) ||
+            (k == "dynamic_resolution" && !m.has_dynamic_resolution && !c.has_dynamic_resolution) ||
+            (k == "dynamic_resolution_min" && !m.has_dynamic_resolution_min && !c.has_dynamic_resolution_min) ||
+            (k == "frame_generation" && !m.has_frame_generation && !c.has_frame_generation) ||
+            (k == "render_thread" && !m.has_render_thread && !c.has_render_thread) ||
+            (k == "present_thread" && !m.has_present_thread && !c.has_present_thread) ||
+            (k == "geometry_correction" && !m.has_geometry_correction && !c.has_geometry_correction) ||
+            (k == "perspective_texturing" && !m.has_perspective_texturing && !c.has_perspective_texturing) ||
+            (k == "frame_interpolation" && !m.has_frame_interpolation && !c.has_frame_interpolation) ||
+            (k == "frame_interpolation_fps" && !m.has_frame_interpolation_fps && !c.has_frame_interpolation_fps);
+        check(masked, ("masked and copied: " + k).c_str());
+    }
+}
+
+/* Host-side launcher classification: the frontend flags Custom on any
+ * tracked row; only rows of keys the title governs count. */
+static void test_launcher_classification() {
+    const std::vector<std::string> keys = {"texture_filtering", "supersample",
+                                           "dynamic_resolution_min", "frame_generation"};
+    auto only = [](const char* changed) {
+        return [changed](const std::string& k) { return k == changed; };
+    };
+    int picked = PSX_QUALITY_NONE;
+    check(psxq::launcher_custom_edit(keys, PSX_QUALITY_ULTRA, PSX_QUALITY_ULTRA,
+                                     only("antialiasing"), &picked) == psxq::Edit::NONE,
+          "Antialiasing (not governed) leaves Ultra in force");
+    check(psxq::launcher_custom_edit(keys, PSX_QUALITY_ULTRA, PSX_QUALITY_ULTRA,
+                                     only("texture_filtering"), &picked) ==
+              psxq::Edit::GOVERNED_EDIT,
+          "a governed row (texture filter) makes Custom");
+    picked = PSX_QUALITY_NONE;
+    check(psxq::launcher_custom_edit(keys, PSX_QUALITY_LOW, PSX_QUALITY_ULTRA,
+                                     only("antialiasing"), &picked) == psxq::Edit::PICK &&
+              picked == PSX_QUALITY_LOW,
+          "pick Low then change Antialiasing: a Low pick, not Custom");
+    check(psxq::launcher_custom_edit(keys, PSX_QUALITY_ULTRA, PSX_QUALITY_CUSTOM,
+                                     only("antialiasing"), &picked) ==
+              psxq::Edit::GOVERNED_EDIT,
+          "already Custom stays Custom");
+}
+
 int main() {
     test_parse();
     test_classify();
@@ -509,6 +596,8 @@ int main() {
     test_mask();
     test_settings_round_trip();
     test_ownership_txn();
+    test_supported_keys();
+    test_launcher_classification();
     if (failures) {
         std::fprintf(stderr, "quality_presets_test: %d failure(s)\n", failures);
         return 1;
