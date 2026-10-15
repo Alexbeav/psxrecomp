@@ -501,6 +501,43 @@ static void test_ownership_txn() {
     }
 }
 
+/* The in-game menu (#674): a hidden/headless run never detects but keeps a
+ * saved preset; a preset pick in the menu, then a governed live edit, are
+ * settled by the same save transaction as the launchers. */
+static void test_ingame_menu_txn() {
+    const std::vector<std::string> keys = {"texture_filtering", "frame_generation",
+                                           "supersample"};
+    PsxHostInfo m4 = host("Apple M4", "Apple M4", 10, 16);
+    PSXRecompV4::UserSettings ultra;
+    ultra.has_quality_preset = true; ultra.quality_preset = "ultra";
+
+    psxq::Decision run = psxq::decide(0xFu, ultra, m4, nullptr, false, nullptr, /*no_detect=*/true);
+    check(run.detection_skipped && run.preset == PSX_QUALITY_ULTRA,
+          "menu: a hidden run keeps the saved preset without detecting");
+
+    /* Menu: pick High (the launcher contract: Settings.quality_preset). */
+    PSXRecompV4::UserSettings us = ultra;
+    us.has_frame_generation = true; us.frame_generation = true;   /* the live path writes every row */
+    check(psxq::settle_save(us, ultra, run, psxq::Edit::PICK, PSX_QUALITY_HIGH, keys),
+          "menu: a pick changes the preset");
+    PSXRecompV4::UserSettings disk = save_load(us);
+    check(disk.quality_preset == "high" && !disk.has_frame_generation,
+          "menu: High is saved and owns its keys");
+
+    /* Menu: Smooth motion off (governed) while High is in force. */
+    PsxHostVideoSettings cur{}, next{};
+    cur.frame_generation = 1; next = cur; next.frame_generation = 0;
+    const psxq::Edit e = psxq::live_edit(cur, next, keys);
+    check(e == psxq::Edit::GOVERNED_EDIT, "menu: Smooth motion is a governed live edit");
+    PSXRecompV4::UserSettings us2 = disk;
+    us2.has_frame_generation = true; us2.frame_generation = false;
+    psxq::settle_save(us2, disk, run, e, PSX_QUALITY_NONE, keys);
+    PSXRecompV4::UserSettings disk2 = save_load(us2);
+    check(disk2.quality_preset == "custom" && disk2.quality_base == "high" &&
+              disk2.has_frame_generation && !disk2.frame_generation,
+          "menu: the governed edit is Custom from High and keeps the value");
+}
+
 /* The supported quality-key set (docs/QUALITY_PRESETS.md): anything else in
  * a preset is a load error, and every player-editable key is masked and
  * copied (ownership enforced). */
@@ -598,6 +635,7 @@ int main() {
     test_ownership_txn();
     test_supported_keys();
     test_launcher_classification();
+    test_ingame_menu_txn();
     if (failures) {
         std::fprintf(stderr, "quality_presets_test: %d failure(s)\n", failures);
         return 1;
