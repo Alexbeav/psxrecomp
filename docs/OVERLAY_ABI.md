@@ -108,6 +108,9 @@ When a change moves the overlay output on purpose:
    It appends the new pair. It refuses a version that already owns another
    digest.
 
+An overlay-output change raises `PSX_OVERLAY_CODEGEN_VER` and runs the guard's
+`--record` on the merged tree.
+
 A static-only change does not change the overlay output, so it does not touch
 the key or the record.
 
