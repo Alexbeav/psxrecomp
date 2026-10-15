@@ -13,6 +13,7 @@ void psx_pgxp_move(CPUState *c,uint32_t i,uint32_t v) {(void)c;(void)i;(void)v;}
 void psx_pgxp_alu(CPUState *c,uint32_t i,uint32_t a,uint32_t b,uint32_t v) {(void)c;(void)i;(void)a;(void)b;(void)v;}
 int psx_ws_angle_site(uint32_t p,uint32_t i,uint32_t *v) {(void)p;(void)i;(void)v;return 0;}
 int psx_ws_is_cull_bias_site(uint32_t p) {(void)p;return 0;}
+unsigned psx_ws_branch_site_kinds(uint32_t p) {(void)p;return 0u;}
 int psx_ws_is_signed_x_bound_site(uint32_t p,uint32_t i) {(void)p;(void)i;return 0;}
 
 #include "@MATRIX@"
