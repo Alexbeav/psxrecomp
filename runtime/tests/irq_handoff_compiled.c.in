@@ -1,0 +1,7 @@
+/* Compile the production hand-over unchanged; expose only this fixture's entry. */
+#include "@COMPILED_SOURCE@"
+void irq_handoff_enable_source(void) { enabled = 1; }
+void irq_handoff_compiled(CPUState *cpu, uint32_t slot_pc) {
+    enabled = 1;
+    compiled_irq_handoff(cpu, slot_pc);
+}

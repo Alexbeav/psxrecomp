@@ -213,6 +213,8 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rfe_syscall_depth.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME changethread_in_handler_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_changethread_in_handler.py --cc ${CMAKE_C_COMPILER})
+        add_test(NAME irq_handoff_not_taken_test COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_irq_handoff_not_taken.py --cc ${CMAKE_C_COMPILER})
         add_test(NAME overlay_dispatch_region_counters_test COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_dispatch_region_counters.py --cc ${CMAKE_C_COMPILER})
         # PS1B-343: a data shard replay marks the RAM pages it writes. Links
