@@ -120,6 +120,27 @@ cannot pin them. Under Custom the player's saved values apply on top of
 `PSX_QUALITY=low|medium|high|ultra` picks a preset for one run and is never
 saved. `PSX_QUALITY_REDETECT=1` forces a detection.
 
+### Who owns a saved key: one transaction
+
+Every settings.toml save that can carry governed keys goes through
+`psxq::settle_save` (`quality_presets.cpp`): the boot launcher (Play and Quit),
+the soft-return launcher, and the in-game menu's live video settings. The
+frontend only reports what the player did (below); the host decides what is
+written, against settings.toml as it is on disk at that moment:
+
+| This run | Player did | Saved |
+|---|---|---|
+| `PSX_QUALITY` override | anything | the governed keys and `quality_*` keys exactly as on disk: the previous preset, or Custom and its values, survive. A governed edit applies to this run only. |
+| a preset in force | picked another preset | the picked preset; its keys stay as on disk (it owns them) |
+| a preset in force | changed a governed value (launcher row, or a live in-game change) | Custom, from the preset in force, with the edited values; the next launch keeps them |
+| Custom | anything | Custom, with the edited values |
+| a preset in force | changed only keys no preset governs | the preset, unchanged; those keys are saved |
+
+This holds when a launcher builds its save from an empty seed (the boot
+launcher does): governed values the player did not choose are never written.
+`quality_presets_test` covers each row through a real settings.toml round
+trip, including the next launch's masking.
+
 ## Launcher
 
 `RecompLauncherCGameInfo.quality_*` gives the launcher the offered presets, the
@@ -133,6 +154,14 @@ and two callbacks:
 `Settings.quality_preset` is 1–4 for a preset and 5 for Custom. The launcher
 snapshots the rows after a preset is applied. As soon as a governed row differs
 from the snapshot, it sets Custom and keeps the preset it came from in
-`quality_base`. On launch the host saves the state. A newly picked preset's
-keys that have no row, such as `supersample` and the PGXP extras, apply at once
-on the boot launcher and at the next launch from the in-game settings.
+`quality_base`. recomp-ui and recomp-launcher report the same way; the host
+turns the report into the saved state (the transaction above). A newly picked
+preset's keys that have no row, such as `supersample` and the PGXP extras,
+apply at once on the boot launcher and at the next launch from the soft-return
+launcher.
+
+The in-game menu's live video settings (`psx_video_apply_live`) have no preset
+row. The host compares the governed values the menu changes (texture filter,
+FMV filter, smooth scaling, dynamic resolution, Smooth motion, render and
+present threads, internal resolution) with the ones in force; a change to any
+of them is a governed edit and makes the state Custom.
