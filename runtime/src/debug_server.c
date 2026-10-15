@@ -7970,8 +7970,8 @@ static void handle_ws_margin(int id, const char *json)
 static void handle_ws_branch_sites(int id, const char *json)
 {
     (void)json;
-    GpuWsBranchSiteStats st;
-    gpu_ws_get_branch_site_stats(&st);
+    DirtyRamWsBranchSiteStats st;
+    dirty_ram_get_ws_branch_site_stats(&st);
     static const char *const names[PSX_WS_BRANCH_KINDS] = {
         "bltz_sites", "branch_keep_sites", "nclip_keep_sites", "nclip_exact_sites"
     };

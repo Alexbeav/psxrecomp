@@ -4,7 +4,7 @@
  * checks against CodeGenerator::generate_branch_condition. */
 #include <stdint.h>
 #include "cpu_state.h"
-#include "gpu.h"
+#include "dirty_ram_interp.h"
 #include "@CASES_HEADER@"
 
 #define WS_COMPILED(name, lists, word, cond, tag) \
@@ -37,12 +37,12 @@ int ws_case_compiled(int i, const CPUState *cpu) { return rows[i].compiled(cpu);
 /* Put pc on the lists the case names, as main.cpp passes game.toml's lists. */
 int ws_branch_configure(unsigned lists, uint32_t pc) {
     for (int k = 0; k < PSX_WS_BRANCH_KINDS; k++)
-        gpu_ws_set_branch_cull_sites(k, &pc, ((lists >> k) & 1u) ? 1 : 0);
+        dirty_ram_set_ws_branch_sites(k, &pc, ((lists >> k) & 1u) ? 1 : 0);
     return 1;
 }
 int ws_branch_stats(int kind, uint64_t *hits, uint64_t *changed) {
-    GpuWsBranchSiteStats st;
-    gpu_ws_get_branch_site_stats(&st);
+    DirtyRamWsBranchSiteStats st;
+    dirty_ram_get_ws_branch_site_stats(&st);
     *hits = st.hits[kind];
     *changed = st.changed[kind];
     return 1;

@@ -77,6 +77,25 @@ int dirty_ram_bltz_taken(uint32_t pc, uint32_t rs_value);
 int dirty_ram_branch_taken(uint32_t pc, uint32_t insn, uint32_t rs_value,
                            uint32_t rt_value);
 
+/* The [widescreen.cull] branch-site lists the interpreter decides (PS1B-520);
+ * main.cpp passes game.toml's lists at start. Only the interpreter reads them:
+ * the compiled code had them at generation. */
+enum {
+    PSX_WS_BRANCH_BLTZ = 0,        /* bltz_sites */
+    PSX_WS_BRANCH_KEEP = 1,        /* branch_keep_sites */
+    PSX_WS_BRANCH_NCLIP_KEEP = 2,  /* nclip_keep_sites */
+    PSX_WS_BRANCH_NCLIP_EXACT = 3, /* nclip_exact_sites */
+    PSX_WS_BRANCH_KINDS = 4
+};
+void dirty_ram_set_ws_branch_sites(int kind, const uint32_t *sites, int nsites);
+typedef struct {
+    uint32_t sites[PSX_WS_BRANCH_KINDS];     /* PCs the interpreter holds */
+    uint32_t requested[PSX_WS_BRANCH_KINDS]; /* PCs game.toml listed */
+    uint64_t hits[PSX_WS_BRANCH_KINDS];      /* interpreted decisions at a listed PC */
+    uint64_t changed[PSX_WS_BRANCH_KINDS];   /* of those, differing from the raw condition */
+} DirtyRamWsBranchSiteStats;
+void dirty_ram_get_ws_branch_site_stats(DirtyRamWsBranchSiteStats *out);
+
 /* Re-anchor host-only dirty IRQ pump ambient (entry-poll stride + 4096-insn
  * gap) after snap restore. Not in boot_state — peers that drifted through FMV
  * otherwise entered the post-FMV dirty wait on opposite poll phases. */
