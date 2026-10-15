@@ -604,6 +604,35 @@ the pixels to show it. Native keeps the window exactly as before.
 downsamples to the window. It accepts 1 to 32 in both `game.toml` and the
 player's `settings.toml`; 1 (the default) is native and unchanged.
 
+### Bloom (`bloom`)
+
+Opt-in glow around lights, OpenGL only. Off (0) changes nothing.
+
+```toml
+[video]
+bloom = 1.0                     # 0.0 (off, default) .. 2.0 strength
+```
+
+Only what 3D primitives (proven from GTE data, so it needs PGXP geometry) and
+additive semi-transparent primitives (blend modes 1 and 3) drew can glow: each
+draw marks its pixels in a spare stencil bit, and a sprite, fill or HUD element
+drawn over them clears the mark. The marks gate both ends of the pass: only
+marked pixels feed the bright pass, and only marked pixels take the glow back,
+so a HUD, sprite or fill pixel is never changed, even right next to a lamp
+(the halo spreads over 3D surroundings only). The pass runs on the composed
+game image like `antialiasing_mode` (before it, sharing its copy texture and
+full-screen pass): a quarter-resolution bright pass, three Gaussian iterations
+and a screen blend.
+It follows 4:3, native-wide, supersample, dynamic resolution, the render
+thread and Smooth motion (generated frames carry the marks of the frame they
+are drawn from). Without PGXP geometry only additive primitives glow.
+Bloom is the built-in `bloom` chain of the post-effect pipeline
+(`docs/POST_EFFECTS.md`), which also loads your own chains through
+`post_shader = "<file>.pfx"` (relative to the game root; `PSX_POST_SHADER`).
+`PSX_BLOOM=<0..2>` overrides it for one run and the `bloom` TCP command reads
+or changes it live. It is a plain `[video]` key, so a `[quality.*]` preset can
+turn it off on low-end machines.
+
 ### Anti-aliasing (`antialiasing_mode`, `supersample`)
 
 Both are opt-in and change nothing unless set.
@@ -725,6 +754,36 @@ first layer's full 8-bit result where the console would have truncated it to
 5 bits first (at most one 5-bit step). OpenGL only.
 `PSX_ACCURATE_BLENDING=0|1` overrides it for one run and the
 `accurate_blending` TCP command switches it live.
+### Dithering (`dithering`)
+
+```toml
+[video]
+dithering = "on"      # on (default) | fine | off
+```
+
+The PS1 GPU dithers while the game sets GP0(E1h) bit 9: it adds a 4x4
+offset pattern to every pixel of a Gouraud-shaded polygon or line and of a
+texture-modulated polygon, then truncates to 5 bits per channel. Flat
+untextured primitives, raw-texture polygons and all rectangles (sprites) are
+never dithered. Eligibility is decided per primitive from its command and
+carried to the shader, never guessed from colours.
+
+`on` (the default; `scaled` is accepted as an alias) is that hardware
+behaviour with the pattern on the native VRAM grid, so it looks like the
+console at any internal scale and the VRAM a game reads back is identical at
+every scale. `fine` is elective: the pattern per internal-resolution pixel, a
+grain that all but vanishes at high scales (guest VRAM then depends on the
+scale). `off` is the old true-colour output (8 bits per channel, no pattern).
+
+Semi-transparent primitives are an approximation: the pattern is applied to
+the source colour before blending, while the console dithers the blended
+result at its final 8-to-5-bit write. Fixed-function GL blending cannot run
+a shader after the blend (GL 3.3 has no framebuffer fetch, and macOS offers
+none), so a dithered semi-transparent pixel can differ from the console by
+one 5-bit step; opaque pixels match exactly. The dither output follows the
+surface colour basis, so it composes with `accurate_blending`. OpenGL only;
+the software and Vulkan renderers do not dither. `PSX_DITHERING=0|1|2`
+overrides it for one run and the `dithering` TCP command switches it live.
 
 ### Texture filtering (`texture_filtering`)
 

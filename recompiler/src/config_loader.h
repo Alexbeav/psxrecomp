@@ -455,6 +455,12 @@ struct RuntimeConfig {
     // "fxaa_hq". Separate from the legacy antialiasing bool above, which the
     // launcher and settings.toml already persist as the linear present filter.
     int                   video_antialiasing_mode = 0;
+    // bloom: opt-in glow strength, 0.0 (off, the default) .. 2.0. A plain
+    // [video] key, so [quality.*] presets can set it.
+    float                 video_bloom = 0.0f;
+    // post_shader: a post-effect chain (.pfx, docs/POST_EFFECTS.md), "" = none.
+    // Relative paths resolve against the game root.
+    std::filesystem::path video_post_shader;
     // supersample: factor on the internal-resolution target (Match display or
     // a line preset), 1.0..4.0, kept in thousandths (internal_resolution.h).
     int                   video_supersample_milli = 1000;
@@ -580,6 +586,12 @@ struct RuntimeConfig {
     // semi-transparency truncates exactly like the PS1's 5-bit blend.
     // Default true: PS1 colour/blend correctness. OpenGL only.
     bool                  video_accurate_blending = true;
+    // dithering: PS1 dithering of Gouraud-shaded and texture-modulated
+    // polygons while the guest sets GP0(E1h) bit 9 (hardware behaviour).
+    // 1 "on" (default; "scaled" is an alias) = pattern on the native VRAM
+    // grid, identical guest VRAM at every scale; 2 "fine" = elective pattern
+    // per internal-resolution pixel; 0 "off" = true colour. OpenGL only.
+    int                   video_dithering = 1;
     bool                  video_pgxp_color_correction = false;
     int                   video_pgxp_seam = 0;
     double                video_pgxp_depth_threshold = 4096.0;

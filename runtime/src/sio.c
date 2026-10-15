@@ -2172,6 +2172,7 @@ uint32_t sio_read(uint32_t addr) {
 uint16_t sio_peek_stat(void) { return sio_stat; }
 uint16_t sio_peek_ctrl(void) { return sio_ctrl; }
 uint8_t  sio_peek_rx_data(void) { return sio_rx_data; }
+int      sio_peek_ack_visible_reads(void) { return (int)sio_ack_visible_reads; }
 
 void sio_write(uint32_t addr, uint32_t value) {
     sio_debug_poll_maybe();

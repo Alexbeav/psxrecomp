@@ -762,6 +762,21 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             else throw std::runtime_error(fmt::format(
                 "[video] antialiasing_mode must be \"off\", \"fxaa\" or \"fxaa_hq\": {}", mode));
         }
+        // bloom: opt-in glow (OpenGL), 0.0 (off, default) .. 2.0.
+        if (video.contains("bloom")) {
+            const auto& v = toml::find(video, "bloom");
+            const double f = v.is_integer() ? static_cast<double>(v.as_integer())
+                                            : toml::get<double>(v);
+            if (!(f >= 0.0 && f <= 2.0))
+                throw std::runtime_error(fmt::format("[video] bloom out of range (0.0..2.0): {}", f));
+            rt.video_bloom = static_cast<float>(f);
+        }
+        // post_shader: an elective post-effect chain (.pfx), relative to the
+        // game root. The runtime parses it and logs (and skips) a bad one.
+        if (video.contains("post_shader")) {
+            const std::string ps = toml::find<std::string>(video, "post_shader");
+            if (!ps.empty()) rt.video_post_shader = PSXRecompV4::host_resolve(root, ps);
+        }
         if (video.contains("supersample")) {
             const auto& v = toml::find(video, "supersample");
             const double f = v.is_integer() ? static_cast<double>(v.as_integer())
@@ -840,6 +855,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         }
         if (video.contains("accurate_blending"))
             rt.video_accurate_blending = toml::find<bool>(video, "accurate_blending");
+        if (video.contains("dithering")) {
+            const auto mode = toml::find<std::string>(video, "dithering");
+            if (mode == "off")         rt.video_dithering = 0;
+            else if (mode == "on" || mode == "scaled") rt.video_dithering = 1;
+            else if (mode == "fine")   rt.video_dithering = 2;
+            else throw std::runtime_error(fmt::format(
+                "[video] dithering must be \"on\", \"fine\" or \"off\": {}", mode));
+        }
         if (video.contains("pgxp_depth_buffer"))
             rt.video_pgxp_depth_buffer = toml::find<bool>(video, "pgxp_depth_buffer");
         if (video.contains("pgxp_color_correction"))

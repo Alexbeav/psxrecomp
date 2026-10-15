@@ -23,6 +23,16 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(debug_socket_shutdown_test tests/test_debug_socket_shutdown.cpp)
+    target_include_directories(debug_socket_shutdown_test PRIVATE src)
+    find_package(Threads REQUIRED)
+    target_link_libraries(debug_socket_shutdown_test PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(debug_socket_shutdown_test PRIVATE ws2_32)
+    endif()
+    add_test(NAME debug_socket_shutdown_test COMMAND debug_socket_shutdown_test)
+    set_tests_properties(debug_socket_shutdown_test PROPERTIES TIMEOUT 15)
+
     add_executable(video_texture_filter_test tests/test_video_texture_filter.c src/video_texture_filter.c)
     target_include_directories(video_texture_filter_test PRIVATE include)
     add_test(NAME video_texture_filter_test COMMAND video_texture_filter_test)
@@ -214,6 +224,14 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME menu_video_snapshot_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_menu_video_snapshot.py
+                --cxx ${CMAKE_CXX_COMPILER})
+            add_test(NAME host_pause_first_present_test COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_host_pause_first_present.py
+                --cxx ${CMAKE_CXX_COMPILER})
+        endif()
         add_test(NAME guest_implementation_binding_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_guest_implementation.py"
             --cmake "${CMAKE_COMMAND}" --compiler "${CMAKE_C_COMPILER}"
@@ -364,6 +382,19 @@ if(BUILD_TESTING)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-xbr-results")
         set_tests_properties(gl_xbr_filter_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        # [video] dithering: off ignores the guest's dither bit (byte-identical
+        # true colour); on/scaled add the PS1 pattern to shaded/modulated draws
+        # only, through the facade, the render thread, PGXP depth and wide.
+        add_test(NAME gl_dithering_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_render_thread.py" --single
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_dithering.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "${_gl_scale_sdl_inc}"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-dithering-results")
+        set_tests_properties(gl_dithering_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         unset(_gl_scale_sdl_inc)
     else()
         message(STATUS "gl_scale_invariance_test: not registered (needs macOS, Linux or MinGW, Python 3 and SDL3)")
@@ -387,6 +418,16 @@ if(BUILD_TESTING)
                 --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
                 --output "${CMAKE_CURRENT_BINARY_DIR}/gl-post-aa-results")
         set_tests_properties(gl_post_aa_test PROPERTIES
+            LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        add_test(NAME gl_bloom_test
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gl_texture_filter.py"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_bloom.c"
+                --cc "${CMAKE_C_COMPILER}"
+                --sdl-include "$<TARGET_PROPERTY:SDL3::Headers,INTERFACE_INCLUDE_DIRECTORIES>"
+                --sdl-library "$<TARGET_FILE:SDL3::SDL3-static>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/gl-bloom-results")
+        set_tests_properties(gl_bloom_test PROPERTIES
             LABELS "gpu;opengl;hardware" TIMEOUT 180 SKIP_RETURN_CODE 77)
         add_test(NAME gl_hd_texture_pack_test
             COMMAND "${Python3_EXECUTABLE}"
@@ -770,6 +811,17 @@ if(BUILD_TESTING)
         tests/test_pad_external_input.c src/pad_external_input.c)
     target_include_directories(pad_external_input_test PRIVATE include src)
     add_test(NAME pad_external_input_test COMMAND pad_external_input_test)
+    add_executable(host_overlay_test tests/test_host_overlay.c src/host_overlay.c src/video_texture_filter.c)
+    target_include_directories(host_overlay_test PRIVATE include src)
+    find_package(Threads REQUIRED)
+    target_link_libraries(host_overlay_test PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(host_overlay_test PRIVATE shell32)
+    endif()
+    add_test(NAME host_overlay_test COMMAND host_overlay_test)
+    add_executable(psx_menu_host_test tests/test_psx_menu_host.c src/psx_menu_host.c)
+    target_include_directories(psx_menu_host_test PRIVATE include src)
+    add_test(NAME psx_menu_host_test COMMAND psx_menu_host_test)
 
     add_executable(gte_register_access_test
         tests/test_gte_register_access.cpp
@@ -949,6 +1001,26 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME ws_local_view_margin_test COMMAND ws_local_view_margin_test)
 
+    # Depth24 GP1(07h) present hold (#636): hold count, upload span and the
+    # staged frame agree across windowed/headless/deferred presents, rollback
+    # replay and disk loads; stale trailing FMV pixels never reach a frame.
+    add_executable(depth24_present_hold_exec_test
+        tests/test_depth24_present_hold_exec.c
+        src/psx_video_timing.c
+        src/gpu_timeline.c)
+    target_include_directories(depth24_present_hold_exec_test PRIVATE include src)
+    if(MINGW)
+        target_compile_options(depth24_present_hold_exec_test PRIVATE -flto)
+        target_link_options(depth24_present_hold_exec_test PRIVATE -flto)
+    endif()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(depth24_present_hold_exec_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(depth24_present_hold_exec_test PRIVATE
+            $<IF:$<PLATFORM_ID:Darwin>,-Wl$<COMMA>-dead_strip,-Wl$<COMMA>--gc-sections>)
+    endif()
+    add_test(NAME depth24_present_hold_exec_test COMMAND depth24_present_hold_exec_test)
+
     add_executable(ws_view_anchor_test tests/test_ws_view_anchor.c)
     add_executable(ws_view_anchor_gpu_test tests/test_ws_view_anchor_gpu.c
         src/psx_video_timing.c
@@ -1015,6 +1087,19 @@ if(BUILD_TESTING)
         set_tests_properties(exit_critical_section_test PROPERTIES
             SKIP_REGULAR_EXPRESSION "^SKIP:")
     endif()
+
+    # #636 / PR #660: restore-vs-live IRQ delivery at the restore edge, over
+    # the real scheduler (traps.c) and IRQ delivery (interrupts.c). Compiled
+    # game, BIOS ROM, CPS continuation and interpreted resumes; no pending
+    # IRQ; I_MASK/SR gating; same-edge dedup; null-PC recovery.
+    add_executable(restore_edge_irq_replay_test
+        tests/test_restore_edge_irq_replay.c
+        tests/restore_edge_irq_stubs.c
+        src/traps.c
+        src/interrupts.c)
+    target_include_directories(restore_edge_irq_replay_test PRIVATE include src)
+    add_test(NAME restore_edge_irq_replay_test COMMAND restore_edge_irq_replay_test)
+    set_tests_properties(restore_edge_irq_replay_test PROPERTIES TIMEOUT 60)
 
     add_executable(dma_gpu_linked_list_timing_test
         tests/test_dma_gpu_linked_list_timing.c
@@ -1136,6 +1221,16 @@ if(BUILD_TESTING)
     target_link_libraries(iso_reader_pregap_test PRIVATE chdr-static)
     add_test(NAME iso_reader_pregap_test COMMAND iso_reader_pregap_test)
 
+    # Raw vs cooked geometry comes from the cue TRACK mode / sector-0 sync,
+    # never from file length.
+    add_executable(iso_reader_geometry_test
+        tests/test_iso_reader_geometry.cpp
+        src/iso_reader.cpp
+        src/cue_sheet.cpp)
+    target_include_directories(iso_reader_geometry_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
+    target_link_libraries(iso_reader_geometry_test PRIVATE chdr-static)
+    add_test(NAME iso_reader_geometry_test COMMAND iso_reader_geometry_test)
+
     add_executable(iso_reader_sbi_test
         tests/test_iso_reader_sbi.cpp
         src/iso_reader.cpp
@@ -1253,7 +1348,8 @@ if(BUILD_TESTING)
         src/cue_sheet.cpp
         src/iso_reader.cpp
         src/crc32.c
-        src/psx_sha256.c)
+        src/psx_sha256.c
+        src/sio.c)
     target_include_directories(netplay_view_mods_test PRIVATE
         include
         ../recompiler/include
@@ -1360,6 +1456,10 @@ if(BUILD_TESTING)
     add_executable(cdrom_irq_mask_test tests/test_cdrom_irq_mask.c)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
+
+    add_executable(cdrom_sector_fifo_test tests/test_cdrom_sector_fifo.c)
+    target_include_directories(cdrom_sector_fifo_test PRIVATE include src)
+    add_test(NAME cdrom_sector_fifo_test COMMAND cdrom_sector_fifo_test)
 
     add_executable(cdrom_lid_state_test tests/test_cdrom_lid_state.c)
     target_include_directories(cdrom_lid_state_test PRIVATE src)
@@ -1499,6 +1599,12 @@ if(BUILD_TESTING)
         target_link_libraries(frame_gen_test PRIVATE m)
     endif()
     add_test(NAME frame_gen_test COMMAND frame_gen_test)
+
+    # Post-effect chain presets (postfx_chain.c alone; no GL).
+    add_executable(postfx_chain_test tests/test_postfx_chain.c src/postfx_chain.c)
+    target_include_directories(postfx_chain_test PRIVATE include)
+    add_test(NAME postfx_chain_test COMMAND postfx_chain_test
+             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
     # Render-pass time freeze against mock devices (psx_cycles.c only).
     add_executable(render_pass_freeze_test
@@ -1774,14 +1880,29 @@ if(BUILD_TESTING)
                              --cc ${CMAKE_C_COMPILER})
         endif()
         add_test(NAME fntrace_c_linkage_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
+        add_test(NAME depth24_present_hold_vblank_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_depth24_present_hold_vblank.py)
         add_test(NAME netplay_load_apply_flow_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_load_apply_flow.py)
+        add_test(NAME restore_edge_irq_check_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_restore_edge_irq_check.py)
         if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME netplay_rb_session_reset_test
                      COMMAND ${Python3_EXECUTABLE}
                              ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_rb_session_reset.py
                              --compiler ${CMAKE_C_COMPILER})
+            if(PSXRECOMP_TEST_HAS_RBENGINE)
+                # Multi-seat Verify with a lost POST (#636): production Verify
+                # code, controlled clock and lossy transport.
+                add_test(NAME netplay_rb_verify_lost_post_test
+                         COMMAND ${Python3_EXECUTABLE}
+                                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_netplay_rb_verify_lost_post.py
+                                 --compiler ${CMAKE_C_COMPILER}
+                                 --recomp-net ${_RNET_ROOT})
+            endif()
             add_test(NAME overlay_retry_c11_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_retry_c11.py --compiler ${CMAKE_C_COMPILER})
         endif()
         add_test(NAME setup_bios_assets_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_bios_assets.py)
