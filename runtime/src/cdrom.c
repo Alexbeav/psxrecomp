@@ -999,6 +999,10 @@ static int s_source_cold_status_model;
 static int s_source_toc_seek_model;
 static int s_source_explicit_seek_model;
 static int s_nymashock_drive;
+/* PSX_CD_READ_START_MODEL=octoshock-2.2.2-pipeline: the source drive keeps two
+ * read sectors in flight before it delivers one (Octoshock 2.2.2 and 2.3
+ * SectorPipe_Count). The drive profile always runs on it. */
+static int s_source_read_pipeline;
 /* octoshock-2.7: Init takes its seek-jitter draw before its floor draw.
  * Observed on the Octoshock 2.7 and 2.10 oracles (Crash Bandicoot 7798S,
  * return 709). The nymashock-1.29.0 selector takes the floor draw first. */
@@ -3075,12 +3079,14 @@ static void exec_command(uint8_t cmd) {
             /* GetlocP reports the drive/sub-Q position. During a read the
              * sector stream has already advanced past the data-ready sector. */
             lba = msf_to_lba(read_min, read_sec, read_sect);
-            /* Spec 6.7 G2b: in the drive profile an established read names
-             * the sector after the next delivery (Bio Hazard route;
-             * cdrom_source_explicit_timing_test). G2c: while the read is still
-             * seeking, GetlocP names the seek target, which is the delivery
-             * cursor (PSX-SPX "GetlocP": it works during a seek). */
-            if (s_nymashock_drive && !(stat_reg & CDSTAT_SEEK)) lba += 1;
+            /* Spec 6.7 G2b: on the source read pipeline, and so in the drive
+             * profile, an established read names the sector after the next
+             * delivery (Bio Hazard route; Spyro 4083M return 4423; oracle
+             * fixture C6-getlocp-reading; cdrom_source_explicit_timing_test).
+             * G2c: while the read is still seeking, GetlocP names the seek
+             * target, which is the delivery cursor (PSX-SPX "GetlocP": it
+             * works during a seek). */
+            if ((s_nymashock_drive || s_source_read_pipeline) && !(stat_reg & CDSTAT_SEEK)) lba += 1;
         } else if (s_nymashock_drive && source_drive_last_decoded() >= 0) {
             /* Spec 6.7 G3: idle drive, drive profile. Without a decoded
              * position the two branches below answer (G4). */
@@ -3695,6 +3701,10 @@ void cdrom_init(const char* cue_path) {
     s_source_cold_status_model=source_boot_model("PSX_CD_COLD_STATUS_MODEL");
     s_source_toc_seek_model=source_boot_model("PSX_CD_TOC_SEEK_MODEL");
     s_source_explicit_seek_model=source_boot_model("PSX_CD_EXPLICIT_SEEK_MODEL");
+    {
+        const char *pipeline=getenv("PSX_CD_READ_START_MODEL");
+        s_source_read_pipeline=pipeline && strcmp(pipeline,"octoshock-2.2.2-pipeline")==0;
+    }
     cd_tape_free(&s_source_clock_tape);
     s_source_clock=0;s_source_command_due=0;s_source_ready_due=0;s_source_clock_calls=0;s_source_reset_due=0;
     s_source_command_phase=-1;s_source_args_remaining=0;
