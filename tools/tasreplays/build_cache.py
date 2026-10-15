@@ -81,6 +81,13 @@ BIOS_GENERATED = ('{stem}_full.c', '{stem}_dispatch.c', '{stem}_skipped_function
 # itself embeds paths), anything else = that literal (out_dir is an output location).
 PATH_KEYS = {'exe': 'file', 'seeds': 'file', 'bios_config': 'toml', 'out_dir': 'out_dir', 'rom': 'file'}
 HEX64 = re.compile('[0-9a-f]{64}')
+TEST_LOG = 'test-tools.log'
+# ctest's own closing lines. Its "out of N" leaves the Disabled tests out and counts a
+# Skipped test (one that returned its skip code) as passed. A clean run is spelled
+# "100% tests passed out of N" by some ctest versions and "100% tests passed, 0 tests
+# failed out of N" by others; both are on our hosts.
+CTEST_SUMMARY = re.compile(r'^(\d+)% tests passed(?:, (\d+) tests? failed)? out of (\d+)[ \t\r]*$', re.M)
+CTEST_NOT_RUN = re.compile(r'^[ \t]*\d+ - \S+ \((Disabled|Skipped)\)[ \t\r]*$', re.M)
 
 
 # ---------------------------------------------------------------- identities
@@ -347,11 +354,13 @@ def lookup(root, stage, key) -> Entry | None:
     return verify(entry_dir(root, stage, key), stage, key)
 
 
-def store(root, stage, key, files, logs, receipt, partial=None) -> Entry:
+def store(root, stage, key, files, logs, receipt, partial=None, usable=None) -> Entry:
     """Copy `files` (entry name -> source) and `logs` (name -> source) into a partial entry,
     write its receipt and rename it into place. A source already inside the partial entry
     (stage 1 builds there) is hashed in place. Returns the entry to use: this one, or the
-    verified winner of a concurrent store of the same key.
+    verified winner of a concurrent store of the same key. `usable(entry)`, when given, is
+    the stage's own rule for an entry it will serve; an entry in place that fails it is
+    replaced by this one.
     """
     root = Path(root)
     partial = Path(partial) if partial else new_partial(root, stage, key)
@@ -368,10 +377,10 @@ def store(root, stage, key, files, logs, receipt, partial=None) -> Entry:
         shutil.copyfile(source, target)
         receipt['logs'][name] = digest(target)
     (partial / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf8', newline='\n')
-    return _commit(root, stage, key, partial, receipt)
+    return _commit(root, stage, key, partial, receipt, usable)
 
 
-def _commit(root, stage, key, partial, receipt) -> Entry:
+def _commit(root, stage, key, partial, receipt, usable=None) -> Entry:
     final = entry_dir(root, stage, key)
     if not final.exists():
         try:
@@ -381,9 +390,10 @@ def _commit(root, stage, key, partial, receipt) -> Entry:
             if not final.exists():
                 raise
     # Lost the race: a complete entry for this key exists. Use it if it verifies; a
-    # complete-but-corrupt entry is replaced (it would only ever be a miss).
+    # complete-but-corrupt entry is replaced (it would only ever be a miss). So is one
+    # that the stage refuses to serve: the lookup that led here treated it as a miss.
     winner = verify(final, stage, key)
-    if winner is not None:
+    if winner is not None and (usable is None or usable(winner)):
         shutil.rmtree(partial, ignore_errors=True)
         return winner
     shutil.rmtree(final)
@@ -441,10 +451,74 @@ def _announce(stage, key, entry: Entry | None):
               f'at source_head {entry.receipt.get("source_head")}', flush=True)
 
 
+def ctest_counts(log) -> dict | None:
+    """What a ctest log says the run examined: tests executed (started and judged), failed,
+    skipped by their own skip code, and disabled. None when the log is absent or holds no
+    summary line, which is also what ctest leaves when it found no test at all."""
+    try:
+        text = Path(log).read_text(encoding='utf8', errors='replace')
+    except OSError:
+        return None
+    summaries = list(CTEST_SUMMARY.finditer(text))
+    if not summaries:
+        return None
+    summary = summaries[-1]
+    failed, judged = int(summary[2] or 0), int(summary[3])
+    reasons = CTEST_NOT_RUN.findall(text, summary.end())
+    skipped, disabled = reasons.count('Skipped'), reasons.count('Disabled')
+    return {'executed': judged - skipped, 'failed': failed, 'skipped': skipped, 'disabled': disabled}
+
+
+def _counts_text(counts) -> str:
+    if counts is None:
+        return f'test count UNKNOWN ({TEST_LOG} holds no ctest summary line)'
+    return (f"{counts['executed']} tests executed, {counts['failed']} failed "
+            f"({counts['skipped']} skipped and {counts['disabled']} disabled are not in that count)")
+
+
+def _tools_gate_ran(project) -> dict:
+    """The tools test gate ran in this setup: say what it examined, and refuse a run that
+    examined nothing. ctest ends with exit 0 when it finds no test, and a pass with no
+    test behind it would be stored and then served to every later setup (PS1B-125)."""
+    counts = ctest_counts(Path(project) / TEST_LOG)
+    if counts is None or counts['executed'] < 1:
+        raise RuntimeError(f'the tools test gate examined nothing: {_counts_text(counts)}; '
+                           f'see {Path(project) / TEST_LOG}')
+    print(f'Tools test gate ran in this setup: {_counts_text(counts)}; '
+          'tests taken from the build cache: 0', flush=True)
+    return {'ran_here': True, 'executed_here': counts['executed'], 'cached': 0,
+            'failed': counts['failed'], 'skipped': counts['skipped'], 'disabled': counts['disabled']}
+
+
+def _tools_entry_usable(entry: Entry) -> bool:
+    """False for a tools entry whose stored ctest log shows a run that executed no test:
+    a pass with no test behind it. No such entry can be stored now, but one stored before
+    the count was read can be in a cache. A hit on it is a miss: the tools are built and
+    tested again, and that run replaces the entry. An entry whose log holds no summary
+    line at all is still served; _tools_gate_reused then says that the count is unknown."""
+    counts = ctest_counts(entry.path / 'logs' / TEST_LOG)
+    return counts is None or counts['executed'] >= 1
+
+
+def _tools_gate_reused(entry: Entry) -> dict:
+    """A tools cache hit skips ctest. Say so, and say what the reused run examined: a
+    reused verdict that does not name itself reads as a pass of this setup (PS1B-125)."""
+    counts = ctest_counts(entry.path / 'logs' / TEST_LOG)
+    print('Tools test gate DID NOT RUN in this setup (build cache hit): 0 tests executed here; '
+          f'cached verdict of {entry.receipt.get("built_at")} at source_head '
+          f'{entry.receipt.get("source_head")}: {_counts_text(counts)}', flush=True)
+    counts = counts or {'executed': None, 'failed': None, 'skipped': None, 'disabled': None}
+    return {'ran_here': False, 'executed_here': 0, 'cached': counts['executed'],
+            'failed': counts['failed'], 'skipped': counts['skipped'], 'disabled': counts['disabled']}
+
+
 def stage_tools(root, repo, project, explicit_dir, inputs, miss, head):
     """Stage 1. `explicit_dir` (--tools-dir) bypasses the cache and rebuilds there as before.
     `inputs()` returns the key document; `miss(tools_dir)` runs configure, build and ctest.
-    Returns (tools build directory, receipt record).
+    Returns (tools build directory, receipt record). The record's `tests` block and one
+    console line say how many tests this setup executed itself and how many it took from
+    a cached run. An entry whose stored log shows no executed test is not served: see
+    _tools_entry_usable.
 
     Every title adapter's setup reaches this function, so it is where a candidate is refused
     if `head` has lost a qualified behaviour that no build or unit test would notice. See
@@ -454,30 +528,39 @@ def stage_tools(root, repo, project, explicit_dir, inputs, miss, head):
     project = Path(project)
     if explicit_dir is not None:
         miss(Path(explicit_dir))
-        return Path(explicit_dir), stage_record(None, False, None, now_iso(), head)
+        return Path(explicit_dir), {**stage_record(None, False, None, now_iso(), head),
+                                    'tests': _tools_gate_ran(project)}
     if root is None:
         tools_dir = project / 'tools'
         miss(tools_dir)
-        return tools_dir, stage_record(None, False, None, now_iso(), head)
+        return tools_dir, {**stage_record(None, False, None, now_iso(), head),
+                           'tests': _tools_gate_ran(project)}
     document = inputs()
     key = key_of(document)
     entry = lookup(root, 'tools', key)
+    if entry is not None and not _tools_entry_usable(entry):
+        print(f'Build cache entry refused (tools): {entry.path} built {entry.receipt.get("built_at")} '
+              f'at source_head {entry.receipt.get("source_head")}: its {TEST_LOG} shows 0 tests '
+              'executed; this setup builds and tests the tools again', flush=True)
+        entry = None
     _announce('tools', key, entry)
     if entry is not None:
         copy_logs(entry, project)
-        return entry.path / 'build', stage_record(key, True, entry)
+        return entry.path / 'build', {**stage_record(key, True, entry), 'tests': _tools_gate_reused(entry)}
     partial = new_partial(root, 'tools', key)
     tools_dir = partial / 'build'
     try:
         miss(tools_dir)
+        tests = _tools_gate_ran(project)
     except BaseException:
         shutil.rmtree(partial, ignore_errors=True)  # a failed configure/build/ctest leaves no entry
         raise
     entry = store(root, 'tools', key, {f'build/{name}': tools_dir / name for name in TOOL_EXES},
                   {name: project / name for name in TOOLS_LOGS},
-                  {'inputs': document, 'ctest_exit': 0, 'built_at': now_iso(), 'source_head': head,
-                   'project': str(project)}, partial=partial)
-    return entry.path / 'build', stage_record(key, False, entry)
+                  {'inputs': document, 'ctest_exit': 0, 'ctest_counts': ctest_counts(project / TEST_LOG),
+                   'built_at': now_iso(), 'source_head': head, 'project': str(project)}, partial=partial,
+                  usable=_tools_entry_usable)
+    return entry.path / 'build', {**stage_record(key, False, entry), 'tests': tests}
 
 
 def _generated_target(repo, project, name) -> Path:

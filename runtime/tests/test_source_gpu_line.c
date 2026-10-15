@@ -1,4 +1,5 @@
-/* Authored input cases are compared against the retained source oracle hashes. */
+/* Authored input cases are compared with retained fixture hashes.
+ * Expected costs are test-derived; hardware measurement owed. */
 #include "source_gpu_command_projection.h"
 #include "gpu_sw_renderer.h"
 #include "psx_sha256.h"
@@ -40,11 +41,10 @@ int main(void) {
     assert(source_gpu_command_write(&s,0x4000ff00));assert(source_gpu_command_write(&s,0x00a20054));
     assert(source_gpu_command_write(&s,0x00a20054));assert(s.count==3 && !s.dispatch.kind);
     assert(source_gpu_command_update(&s,1));assert(!s.count && s.budget==-17);
-    /* Poly-lines. Every command in 40h-5Fh has the length of its two-vertex line: 3 words,
-     * plus 1 when shaded. So an opening poly-line packet has a single line's shape. After it,
-     * each segment takes 1 word, plus 1 when shaded, until a terminator word; the terminator
-     * is tested before the segment length. Only the opening packet pays the per-command
-     * cost of 2: the opening line here costs 50 and each later segment 48. */
+    /* Commands 40h-5Fh open with a two-vertex line: 3 words, plus 1 when shaded.
+     * Each later segment takes 1 word, plus 1 when shaded, until a terminator word;
+     * the terminator is checked before the segment length. In this fixture, the opening
+     * line costs 50 and each later segment 48: test-derived; hardware measurement owed. */
     source_gpu_command_cold(&s);
     s.budget=4096;s.clip_x1=1023;s.clip_y1=511;
     assert(source_gpu_command_length(0x48000000u)==3);

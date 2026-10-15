@@ -7,6 +7,9 @@
 /out/
 /.happypath/
 
+# Setup-host rebuild helpers contain local paths and survive build-dir replacement.
+/_scratch/
+
 # Setup-host: players Generate game C locally (CI clears generated/).
 /generated/
 

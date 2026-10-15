@@ -13,14 +13,16 @@ static void model(const char *name) {
  mdec_init();
 }
 int main(void) {
- for(unsigned cycles=474;cycles<=512;cycles+=38) {
-  model(cycles==512?"nymashock-1.29.0":"octoshock-2.3");
+ const char *models[]={"octoshock-2.3","nymashock-1.29.0","nymashock-1.32.1"};
+ for(unsigned i=0;i<3;i++) {
+  unsigned cycles=i?512:474;
+  model(models[i]);
   mdec_write(0x1f801820,0x38000002);mdec_source_advance(1);
   mdec_dma_write_word(0xfe000000);
   assert(source_mdec.phase==SMDEC_BLOCK_WAIT);
   mdec_source_advance(cycles-1);assert(source_mdec.phase==SMDEC_BLOCK_WAIT);
   unsigned n=mdec_snapshot_bytes();uint8_t *wire=malloc(n);mdec_snapshot_write(wire);
-  model(cycles==512?"nymashock-1.29.0":"octoshock-2.3");
+  model(models[i]);
   assert(mdec_snapshot_read(wire,n));
   mdec_source_advance(1);assert(source_mdec.phase==SMDEC_INPUT);
   if(cycles==512) {

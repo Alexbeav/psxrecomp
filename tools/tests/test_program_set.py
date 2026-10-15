@@ -806,6 +806,32 @@ class SetSteps(unittest.TestCase):
             self.assertEqual(pcts, sorted(pcts))
             self.assertEqual(sum(1 for e in progress.events if e[0] == "result"), 1)
 
+    def test_generate_reports_each_programs_split_prepass(self):
+        """The set's result carries each program's pre-pass fields; the marker file does not (PS1B-135)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "set"
+            make_set(root)
+            d1, d2 = make_discs(Path(tmp) / "discs")
+            cli, progress = fake_cli(root), Progress()
+            plain = cli.cmd_generate
+            fields = {"leon": {"prepass_passes": 208, "prepass_cap": 256, "prepass_converged": True},
+                      "claire": {"prepass_passes": 256, "prepass_cap": 256, "prepass_converged": False}}
+
+            def cmd_generate(args, child):
+                code = plain(args, child)
+                child.result(**child.last_result, **fields[Path(args.project_root).name])
+                return code
+
+            cli.cmd_generate = cmd_generate
+            code = ps.generate_set(cli, generate_args(root, set_disc=[f"1={d1}", f"2={d2}"]), progress)
+            self.assertEqual(code, 0, progress.events)
+            result = [e[1] for e in progress.events if e[0] == "result"][0]
+            self.assertEqual([p["program"] for p in result["programs"]], ["leon", "claire"])
+            self.assertEqual([{key: p[key] for key in fields["leon"]} for p in result["programs"]],
+                             [fields["leon"], fields["claire"]])
+            marker = json.loads((root / "generated" / ps.SET_MARKER).read_text())
+            self.assertEqual([sorted(p) for p in marker["programs"]], [["disc", "marker", "program"]] * 2)
+
     def test_a_failed_generate_leaves_no_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "set"

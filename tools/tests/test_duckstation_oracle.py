@@ -38,11 +38,22 @@ class TestLocations(EnvGuard):
     def test_install_is_outside_any_game_repo(self):
         os.environ.pop("RETCOMM_ORACLE_DIR", None)
         os.environ.pop("RETCOMM_DATA_DIR", None)
-        root = DSO.oracle_root()
-        self.assertEqual(root.parts[-2:], ("oracle", "duckstation"))
-        # The whole point: one build shared by every title, not per-repo.
-        self.assertIn("retcomm", str(root))
-        self.assertNotIn("psxrecomp", str(root))
+        # An ancestor can legitimately be named psxrecomp. The default store
+        # must still be shared user data, independent of the game directory.
+        with tempfile.TemporaryDirectory(prefix="psxrecomp-") as temporary:
+            shared = Path(temporary) / "shared-data"
+            game = Path(temporary) / "game-repo"
+            game.mkdir()
+            os.environ.pop("XDG_DATA_HOME", None)
+            os.environ["LOCALAPPDATA" if sys.platform == "win32" else "XDG_DATA_HOME"] = str(shared)
+            previous = Path.cwd()
+            try:
+                os.chdir(game)
+                root = DSO.oracle_root()
+            finally:
+                os.chdir(previous)
+            self.assertEqual(root, shared / "retcomm" / "oracle" / "duckstation")
+            self.assertFalse(root.is_relative_to(game))
 
     def test_data_dir_override_moves_everything(self):
         os.environ.pop("RETCOMM_ORACLE_DIR", None)
@@ -269,9 +280,27 @@ class TestOraclePatch(unittest.TestCase):
 
     def git(self, root, *args):
         import subprocess
-        return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t",
+        return subprocess.run(["git", "-C", str(root), "-c", "user.name=Alexandros Mandravillis", "-c", "user.email=Alexbeav@live.com",
                                "-c", "core.autocrlf=false", *args],
-                              capture_output=True, text=True, check=True).stdout
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
+
+    def test_regen_writes_utf8_without_newline_translation(self):
+        """Run the product writer on an authored patch, including UTF-8 text."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "checkout"
+            root.mkdir()
+            self.git(root, "init", "-q")
+            (root / "f.txt").write_bytes(b"old\n")
+            self.git(root, "add", "f.txt")
+            self.git(root, "commit", "-q", "-m", "test: add base fixture")
+            base = self.git(root, "rev-parse", "HEAD").strip()
+            (root / "f.txt").write_bytes("old\ncaf\u00e9\n".encode("utf-8"))
+            patch = Path(td) / "authored.patch"
+            self.assertEqual(self.OP.regen(root, {"patch": str(patch), "upstream_base": base}), [])
+            data = patch.read_bytes()
+            self.assertIn("+caf\u00e9\n".encode("utf-8"), data)
+            self.assertNotIn(b"\r", data)
+            self.assertEqual(self.OP.problems(data.decode("utf-8")), [])
 
     def test_stored_patch_holds_no_upstream_line(self):
         pin = DSO.load_pin()
@@ -314,15 +343,14 @@ class TestOraclePatch(unittest.TestCase):
             self.git(root, "init", "-q")
             lines = [f"line {i}" for i in range(1, 11)]
             lines[5] = "call(A SOURCES B)"
-            (root / "f.txt").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-            (root / "build.txt").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+            (root / "f.txt").write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+            (root / "build.txt").write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
             self.git(root, "add", "-A")
             self.git(root, "commit", "-q", "-m", "base")
             blob = self.git(root, "rev-parse", "HEAD:f.txt").strip()
             patch = Path(td) / "p.patch"
-            patch.write_text("diff --git a/f.txt b/f.txt\nindex %s..%s 100644\n--- a/f.txt\n+++ b/f.txt\n"
-                             "@@ -3,0 +4,2 @@\n+ours 1\n+ours 2\n" % (blob[:7], "f" * 7),
-                             encoding="utf-8", newline="\n")
+            patch.write_bytes(("diff --git a/f.txt b/f.txt\nindex %s..%s 100644\n--- a/f.txt\n+++ b/f.txt\n"
+                             "@@ -3,0 +4,2 @@\n+ours 1\n+ours 2\n" % (blob[:7], "f" * 7)).encode("utf-8"))
             pin = {"patch": str(patch), "line_edits": [{
                 "path": "build.txt", "line": 6, "remove_text": "SOURCES ", "upstream_blob": blob[:7],
                 "sha256_before": self.OP.line_hash("call(A SOURCES B)"),
@@ -336,14 +364,12 @@ class TestOraclePatch(unittest.TestCase):
             self.assertEqual(self.OP.apply(root, pin), "already applied")
             # A changed file that is not the patched one is refused, not patched twice.
             self.git(root, "checkout", "--", "f.txt")
-            (root / "f.txt").write_text("other\n" + (root / "f.txt").read_text(encoding="utf-8"),
-                                        encoding="utf-8", newline="\n")
+            (root / "f.txt").write_bytes(("other\n" + (root / "f.txt").read_text(encoding="utf-8")).encode("utf-8"))
             with self.assertRaises(self.OP.PatchError):
                 self.OP.apply(root, pin)
             # A base whose blob is another one is refused.
             wrong = dict(pin, patch=str(Path(td) / "wrong.patch"))
-            Path(wrong["patch"]).write_text(patch.read_text(encoding="utf-8").replace(blob[:7], "0" * 7),
-                                            encoding="utf-8", newline="\n")
+            Path(wrong["patch"]).write_bytes(patch.read_text(encoding="utf-8").replace(blob[:7], "0" * 7).encode("utf-8"))
             self.git(root, "checkout", "--", "f.txt")
             with self.assertRaises(self.OP.PatchError):
                 self.OP.apply(root, wrong)

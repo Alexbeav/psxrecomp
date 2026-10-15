@@ -256,6 +256,12 @@ static int selected_is_mtap_port(void) {
     return selected_slot == sio_multitap_port;
 }
 
+static int pad_select_address(uint8_t address, int phys_port) {
+    return address == 0x01 ||
+           (address >= 0x02 && address <= 0x04 && sio_multitap_active() &&
+            (sio_dual_multitap() || phys_port == sio_multitap_port));
+}
+
 /* After a completed 0x42 on the multitap port, arm the next response mode
  * from the REQ bit seen this transfer and what we just returned (psx-spx). */
 static void mtap_finish_42(void) {
@@ -923,7 +929,8 @@ static int sio_ack_visible_reads = 0;
 
 void sio_init(void) {
     const char *card_model = getenv("PSX_INPUT_ROUTE_CARD_MODEL");
-    sio_source_card = card_model && !strcmp(card_model, "nymashock-1.29.0");
+    sio_source_card = card_model && (!strcmp(card_model, "nymashock-1.29.0") ||
+                                      !strcmp(card_model, "nymashock-1.32.1"));
     if (card_model && *card_model && !sio_source_card) {
         fprintf(stderr, "Unsupported input route card model: %s\n", card_model);
         abort();
@@ -934,7 +941,8 @@ void sio_init(void) {
 #if SIO_MODEL_CYCLE_PACED
     const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
     sio_source_pad_ack = ack_model && strcmp(ack_model, "octoshock-2.2.2-digital") == 0;
-    if (ack_model && !strcmp(ack_model, "nymashock-1.29.0-dualshock")) sio_source_pad_ack = 2;
+    if (ack_model && (!strcmp(ack_model, "nymashock-1.29.0-dualshock") ||
+                      !strcmp(ack_model, "nymashock-1.32.1-dualshock"))) sio_source_pad_ack = 2;
     if (ack_model && *ack_model && !sio_source_pad_ack) {
         fprintf(stderr, "Unsupported input route pad ACK model: %s\n", ack_model);
         abort();
@@ -1447,6 +1455,11 @@ static void pad_process_byte(uint8_t tx_byte) {
             sio_stat |= SIO_STAT_ACK;
         } else if (selected_is_mtap_port() && tx_byte >= 0x02 && tx_byte <= 0x04) {
             pad_active_logical = mtap_slot_a_logical() + (int)(tx_byte - 1);
+            if (pad_active_logical >= PSX_MAX_PLAYERS ||
+                !(pad_connected & (1u << pad_active_logical))) {
+                sio_rx_data = 0xFF;
+                break;
+            }
             pad_mtap_addr = tx_byte;
             pad_state = PAD_WAIT_ACCESS;
             sio_rx_data = 0xFF;
@@ -2130,7 +2143,7 @@ static void sio_process_byte(uint8_t tx_byte) {
         int port = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
         if (pad_dtr_session_first[port]) {
             pad_dtr_session_first[port] = 0;
-            pad_dtr_session_mute[port] = tx_byte != 0x01;
+            pad_dtr_session_mute[port] = !pad_select_address(tx_byte, port);
         }
         pad_muted = pad_dtr_session_mute[port];
     }
@@ -2139,7 +2152,7 @@ static void sio_process_byte(uint8_t tx_byte) {
     if (active_device == DEV_NONE) {
         selected_slot = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
 
-        if (tx_byte == 0x01 && !pad_muted) {
+        if (pad_select_address(tx_byte, selected_slot) && !pad_muted) {
             /* Pad select.  Save any in-flight card state back to its slot
              * so it survives pad polling.  Don't touch mc_state — we need
              * it per-slot, and mc_load_slot will restore it when the card
@@ -2221,7 +2234,7 @@ static void sio_process_byte(uint8_t tx_byte) {
             } else {
                 active_device = DEV_NONE;
                 selected_slot = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
-                if (tx_byte == 0x01 && !pad_muted) {
+                if (pad_select_address(tx_byte, selected_slot) && !pad_muted) {
                     active_device = DEV_PAD;
                     pad_process_byte(tx_byte);
                 } else {

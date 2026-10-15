@@ -2539,6 +2539,15 @@ static std::string g_restore_mount_serial;
 static void replay_identity_follow_disc(const std::string& serial,
                                         const std::string& mount);
 
+static void note_mounted_disc_warning(const std::filesystem::path& image,
+                                      const std::string& serial) {
+    const auto warning = PSXRecompV4::missing_sbi_warning(
+        image, serial, cdrom_has_sbi() != 0);
+    psx_disc_warning_set(warning.c_str());
+    if (!warning.empty())
+        std::fprintf(stderr, "psxrecomp: %s\n", warning.c_str());
+}
+
 /* True when `image` is the disc of the set with this serial. The serial read
  * from the image decides when there is one; an image without a readable boot
  * serial is judged the way the launch check judges it. The set may list a
@@ -2621,6 +2630,7 @@ extern "C" int psx_frontend_savestate_mount_disc(int disc_number, char *why,
 extern "C" void psx_frontend_savestate_mount_result(int disc_number, int kept) {
     cdrom_restore_mount_end(kept);
     if (!kept) return;
+    note_mounted_disc_warning(g_restore_mount_image, g_restore_mount_serial);
     g_session_disc_images[disc_number] = g_restore_mount_image;
     g_savestate_load_mounted_disc = disc_number;
     replay_identity_follow_disc(g_restore_mount_serial,
@@ -2664,6 +2674,7 @@ struct DiscValidation {
     bool has_header = false;
     bool id_matches = false;
     std::string detail;
+    std::string sbi_warning;
 };
 
 static DiscValidation validate_disc_image(const std::filesystem::path& selected_path,
@@ -2683,6 +2694,7 @@ static DiscValidation validate_disc_image(const std::filesystem::path& selected_
     v.has_header = id.has_header;
     v.id_matches = expect.empty() ? true : id.serial_matches;
     v.detail     = id.detail;
+    v.sbi_warning = id.sbi_warning;
     if (id.opened && id.has_header && !v.id_matches && v.detail.empty()) {
         v.detail = "The disc header is readable, but it does not contain the expected game ID " +
                    uppercase_ascii(expect) + " in the early disc metadata.";
@@ -2707,6 +2719,8 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
         launcher_warning("SBI file required", companion.message);
         return false;
     }
+    if (!v.sbi_warning.empty())
+        launcher_warning("Missing SBI", v.sbi_warning);
     return true;
 }
 
@@ -3459,19 +3473,11 @@ static void netplay_host_present_restore(void) {
  * every machine to count the same cycles, so each holds the native tier off
  * for its length. The holders are counted; the tier returns when the last one
  * lets go. */
-static int s_overlay_interp_holders = 0;
-static int s_overlay_native_saved = -1;
-static void overlay_interp_pin_acquire(void) {
-    if (s_overlay_interp_holders++ == 0) {
-        s_overlay_native_saved = overlay_loader_get_native_exec();
-        overlay_loader_set_native_exec(0);
-    }
+static bool overlay_interp_pin_acquire(unsigned kind) {
+    return overlay_loader_tier_hold(kind) != 0;
 }
-static void overlay_interp_pin_release(void) {
-    if (s_overlay_interp_holders <= 0 || --s_overlay_interp_holders > 0)
-        return;
-    overlay_loader_set_native_exec(s_overlay_native_saved);
-    s_overlay_native_saved = -1;
+static void overlay_interp_pin_release(unsigned kind) {
+    overlay_loader_tier_release(kind);
 }
 
 /* A netplay session runs overlays interpreted (PS1B-367). Two players never
@@ -3486,14 +3492,13 @@ static void netplay_overlay_pin(void) {
     }();
     if (s_netplay_overlay_pinned || no_pin)
         return;
-    s_netplay_overlay_pinned = true;
-    overlay_interp_pin_acquire();
+    s_netplay_overlay_pinned = overlay_interp_pin_acquire(OVERLAY_TIER_NETPLAY);
 }
 static void netplay_overlay_unpin(void) {
     if (!s_netplay_overlay_pinned)
         return;
     s_netplay_overlay_pinned = false;
-    overlay_interp_pin_release();
+    overlay_interp_pin_release(OVERLAY_TIER_NETPLAY);
 }
 
 /* Why the last match ended, for the launcher's status line once the lobby is
@@ -7163,6 +7168,7 @@ static int runtime_ui_change_disc(PsxRuntimeUiContext *context) {
                       2600);
         return 0;
     }
+    note_mounted_disc_warning(resolved.mount, identity.detected_serial);
 
     /* States and replays made from here on are named for this disc, and the
      * rewind history from before the change is dropped. */
@@ -8359,36 +8365,44 @@ extern "C" int replay_host_identity(InputRouteV3 *meta, char *why, size_t cap) {
  * netplay session also holds (overlay_interp_pin_acquire), so neither undoes
  * the other. */
 static bool s_replay_overlay_pinned = false;
-static void replay_overlay_pin(void) {
+static bool replay_overlay_pin(void) {
     static const bool no_pin = [] {   /* diagnostic: measure without the pin */
         const char *e = std::getenv("PSX_REPLAY_NO_OVERLAY_PIN");
         return e && e[0] == '1';
     }();
     if (s_replay_overlay_pinned || no_pin)
-        return;
-    s_replay_overlay_pinned = true;
-    overlay_interp_pin_acquire();
+        return true;
+    s_replay_overlay_pinned = overlay_interp_pin_acquire(OVERLAY_TIER_REPLAY);
+    return s_replay_overlay_pinned;
+}
+static void replay_overlay_unpin(void) {
+    if (!s_replay_overlay_pinned) return;
+    s_replay_overlay_pinned = false;
+    overlay_interp_pin_release(OVERLAY_TIER_REPLAY);
 }
 static void replay_overlay_unpin_if_idle(void) {
-    if (!s_replay_overlay_pinned || replay_session_state() != REPLAY_IDLE)
-        return;
-    s_replay_overlay_pinned = false;
-    overlay_interp_pin_release();
+    if (replay_session_state() == REPLAY_IDLE) replay_overlay_unpin();
 }
 
 extern "C" int replay_host_request_anchor(void) {
-    if (!savestate_request_anchor())
+    const bool held = s_replay_overlay_pinned;
+    if (!replay_overlay_pin()) return 0;
+    if (!savestate_request_anchor()) {
+        if (!held) replay_overlay_unpin();
         return 0;
-    replay_overlay_pin();
+    }
     return 1;
 }
 extern "C" int replay_host_take_anchor(uint8_t **data, size_t *size) {
     return savestate_take_anchor(data, size);
 }
 extern "C" int replay_host_load_anchor(const void *data, size_t size) {
-    if (!savestate_request_load_blob_quiet(data, size))
+    const bool held = s_replay_overlay_pinned;
+    if (!replay_overlay_pin()) return 0;
+    if (!savestate_request_load_blob_quiet(data, size)) {
+        if (!held) replay_overlay_unpin();
         return 0;
-    replay_overlay_pin();
+    }
     return 1;
 }
 extern "C" int replay_host_take_load_result(void) {
@@ -8396,6 +8410,10 @@ extern "C" int replay_host_take_load_result(void) {
     if (savestate_take_load_failed()) return -1;
     return 0;
 }
+
+/* memory.c: RAM 0..15 as a replay compares it (see replay_host_ram). */
+extern "C" void memory_set_low_ram_view_old(int on);
+extern "C" const uint8_t *memory_low_ram_view(void);
 
 /* The settings that change guest timing but are not in a save state. */
 static std::string replay_mods_fingerprint(void) {
@@ -8408,13 +8426,18 @@ static std::string replay_mods_fingerprint(void) {
 /* PS1B-316 added what a power-on replay needs at vblank 0, where no anchor
  * restores it: the game's pending post-BIOS CD speed, the two options that
  * change guest behaviour (auto-skip FMV pokes RAM or holds Start; idle skip
- * advances the clock), and port 2 and both pad types as startup set them. */
+ * advances the clock), and port 2 and both pad types as startup set them.
+ *
+ * game_entry_low_ram=kept says that this build leaves guest RAM 0..15 alone
+ * at game entry. Builds before it zeroed those bytes there and wrote no such
+ * line, so a recording without the line is one of theirs (PS1G-39). */
 extern "C" void replay_host_settings_capture(char *out, size_t cap) {
     std::snprintf(out, cap,
                   "cd_speed=%d\ncd_instant_rate=%d\nturbo_loads=%d\nturbo_load_wall=%d\n"
                   "p1_connected=%d\np1_config_capable=%d\nmods=%s\n"
                   "cd_game_speed=%d\nauto_skip_fmv=%d\nidle_skip=%d\n"
-                  "p1_analog=%d\np2_connected=%d\np2_config_capable=%d\np2_analog=%d\n",
+                  "p1_analog=%d\np2_connected=%d\np2_config_capable=%d\np2_analog=%d\n"
+                  "game_entry_low_ram=kept\n",
                   cdrom_get_speed(), cdrom_get_instant_rate(), g_turbo_loads_enabled,
                   g_turbo_load_wall_multiplier, sio_get_pad_connected(0),
                   sio_get_pad_config_capable(0), replay_mods_fingerprint().c_str(),
@@ -8454,6 +8477,7 @@ static void replay_settings_apply_text(const char *text, char *differs, size_t c
             if (sio_get_pad_analog(slot) != (v ? 1 : 0))
                 sio_set_pad_analog(slot, v ? 1 : 0, 0x80, 0x80, 0x80, 0x80);
         }
+        else if (key == "game_entry_low_ram") memory_set_low_ram_view_old(value != "kept");
         else ok = false;
         if (!ok && differs && cap) {
             const size_t n = std::strlen(differs);
@@ -8467,6 +8491,10 @@ extern "C" void replay_host_settings_apply(const char *settings, char *differs, 
     char now[INPUT_ROUTE_REPLAY_SETTINGS_MAX + 1];
     replay_host_settings_capture(now, sizeof(now));
     s_replay_saved_settings = now;
+    /* No game_entry_low_ram line: a build that zeroed RAM 0..15 at game entry
+     * recorded it, so the replay compares those bytes as that build held
+     * them. The line in `settings`, and the restore afterwards, switch it. */
+    memory_set_low_ram_view_old(1);
     replay_settings_apply_text(settings, differs, cap);
 }
 
@@ -8483,9 +8511,19 @@ extern "C" int replay_host_thumb(uint32_t *out) {
 extern "C" const char *replay_host_game_title(void) { return s_picker_game_name.c_str(); }
 extern "C" int replay_host_frame_rate(void) { return gpu_video_standard_is_pal() ? 50 : 60; }
 
+/* Main RAM as a replay compares it. That is guest RAM, except while a replay
+ * plays that was recorded by a build which zeroed RAM 0..15 at game entry
+ * (replay_settings_apply_text, "game_entry_low_ram"): then those 16 bytes
+ * come from memory_low_ram_view, in a copy of RAM that this returns. */
 extern "C" const uint8_t *replay_host_ram(void) {
     extern uint8_t *g_psx_ram;
-    return g_psx_ram;
+    static std::vector<uint8_t> view;
+    const uint8_t *low = memory_low_ram_view();
+    if (low == g_psx_ram)
+        return g_psx_ram;
+    view.assign(g_psx_ram, g_psx_ram + (2u << 20));
+    std::memcpy(view.data(), low, 16);
+    return view.data();
 }
 extern "C" uint64_t replay_host_cycle(void) {
     extern uint64_t psx_cycle_count;
@@ -10416,8 +10454,18 @@ namespace {
         const auto resolved = PSXRecompV4::resolve_disc_path(disc_path);
         const auto companion = PSXRecompV4::check_sbi_setup(resolved.data, resolved.mount);
 #if defined(RECOMP_LAUNCHER_HAS_SBI_STATUS)
-        out->sbi_status = !companion.required ? RECOMP_SBI_NA :
-                         companion.ready ? RECOMP_SBI_OK : RECOMP_SBI_MISSING;
+        if (companion.required) {
+            out->sbi_status = companion.ready ? RECOMP_SBI_OK : RECOMP_SBI_MISSING;
+        } else {
+            /* A CHD (or a revision without a data-track rule) never matches the
+             * size/hash rule, so fall back to the LibCrypt serial list: the row
+             * is OK only when the disc mounted with its .sbi loaded, Missing
+             * otherwise (absent, malformed, or the disc did not mount). */
+            const bool listed = !PSXRecompV4::missing_sbi_warning(
+                resolved.mount, serial, false).empty();
+            out->sbi_status = !listed ? RECOMP_SBI_NA
+                            : (id.toc_opened && id.sbi_loaded) ? RECOMP_SBI_OK : RECOMP_SBI_MISSING;
+        }
 #endif
         static std::string last_companion_warning;
         if (!companion.ready) {
@@ -10429,6 +10477,8 @@ namespace {
         } else {
             last_companion_warning.clear();
         }
+        if (companion.ready && !id.sbi_warning.empty() && out->verdict == 1)
+            out->verdict = 2; // Warning only: no new pressing/companion gate.
         {
             /* The row's verdict and its reason, for the run report: a red
              * row blocks Play, and the start then ends as "launcher closed"
@@ -10438,6 +10488,7 @@ namespace {
                 : !id.detail.empty() ? id.detail.c_str()
                 : (id.expected_serial_given && !id.serial_matches)
                     ? "the disc does not carry the expected serial"
+                : !id.sbi_warning.empty() ? id.sbi_warning.c_str()
                 : id.netplay_detail.c_str();
             char row[PSX_START_LAUNCHER_ROW_CAP];
             std::snprintf(row, sizeof(row),
@@ -15036,6 +15087,7 @@ namespace {
 #endif
 
 int main(int argc, char** argv) {
+    psx_disc_warning_set("");
     /* Force line-buffered output so messages appear even if killed. */
     std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
     std::setvbuf(stderr, nullptr, _IOLBF, BUFSIZ);
@@ -17812,6 +17864,7 @@ session_reboot:
         const auto ident = PSXRecompV4::identify_disc(
             disc_path_str, expected_serial, expected_crc,
             has_crc, /*compute_crc*/false);
+        note_mounted_disc_warning(disc_path_str, ident.detected_serial);
         if (ident.region == "PAL") {
             cdrom_set_disc_scex("SCEE");
 

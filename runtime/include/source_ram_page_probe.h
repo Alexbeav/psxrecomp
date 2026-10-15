@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "source_observer_limit.h"
+#include "psx_file_create_new.h"
 
 /* Passive diagnostic index. A hash mismatch locates bytes to inspect; hashes
  * are not a substitute for comparing the selected raw RAM snapshots. */
@@ -47,7 +48,7 @@ static void source_ram_page_probe(unsigned frame, uint64_t cycle) {
     if (!ram || !directory) abort();
     if (!stream) {
         if (snprintf(path, sizeof(path), "%s/ram-pages.tsv", directory) >= (int)sizeof(path)) abort();
-        stream = fopen(path, "wx");
+        stream = psx_file_create_new(path, 0);
         if (!stream) abort();
         fputs("# psx-ram-pages-v1 page_bytes=4096 ram_bytes=2097152 hash=fnv1a64\nframe\tcycle", stream);
         for (unsigned page = 0; page < 512; ++page) fprintf(stream, "\t%06X", page * 4096);
@@ -60,7 +61,7 @@ static void source_ram_page_probe(unsigned frame, uint64_t cycle) {
     if (fflush(stream) != 0 || ferror(stream)) abort();
     for (unsigned i = 0; i < snapshot_count; ++i) if (snapshots[i] == frame) {
         if (snprintf(path, sizeof(path), "%s/ram-frame-%06u.bin", directory, frame) >= (int)sizeof(path)) abort();
-        FILE *snapshot = fopen(path, "wbx");
+        FILE *snapshot = psx_file_create_new(path, 1);
         if (!snapshot) abort();
         if (fwrite(ram, 1, 2097152, snapshot) != 2097152 || fclose(snapshot) != 0) abort();
     }

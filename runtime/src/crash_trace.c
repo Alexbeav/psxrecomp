@@ -44,6 +44,7 @@
 #include "start_refusal.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */
+#include "overlay_loader.h"
 
 /* Output path — overwritten per dump. */
 static const char *kReportPath = "psx_last_run_report.json";
@@ -472,6 +473,11 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, refusal);
         append_str(buf, sizeof(buf), &pos, ",\n  \"launcher_status\": ");
         append_str(buf, sizeof(buf), &pos, rows);
+        static char disc_warning[6 * PSX_START_REFUSAL_TEXT_CAP + 4];
+        if (psx_disc_warning_json(disc_warning, sizeof(disc_warning)) <= 0)
+            snprintf(disc_warning, sizeof(disc_warning), "null");
+        append_str(buf, sizeof(buf), &pos, ",\n  \"disc_warning\": ");
+        append_str(buf, sizeof(buf), &pos, disc_warning);
         append_str(buf, sizeof(buf), &pos, ",\n");
     }
 
@@ -787,6 +793,22 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, "},\n");
     }
 
+    /* RAM 0..15 as the game found it at entry: the kernel's stub words
+     * (PSX-SPX, "Garbage Area at Address 00000000h"). A game that reads
+     * through a null pointer sees them. null: no game entry in this process. */
+    {
+        extern int memory_low_ram_at_entry(uint8_t out[16]);
+        uint8_t low[16];
+        if (memory_low_ram_at_entry(low)) {
+            append_str(buf, sizeof(buf), &pos, "  \"low_ram_at_entry\": \"");
+            for (int i = 0; i < 16; i++)
+                append_fmt(buf, sizeof(buf), &pos, "%s%02x", i && !(i & 3) ? " " : "", low[i]);
+            append_str(buf, sizeof(buf), &pos, "\",\n");
+        } else {
+            append_str(buf, sizeof(buf), &pos, "  \"low_ram_at_entry\": null,\n");
+        }
+    }
+
     /* CD read streams that ended before their first sector (PS1B-317): a
      * long run means the game restarts a read that never delivers. */
     {
@@ -803,6 +825,11 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
     /* Host overlay-DLL / resim gate at FAIL-FAST. Distinguishes "CD DMA never
      * finished" from "rollback froze registration mid-splash load". */
     {
+        char tier[2048];
+        if (overlay_loader_tier_witness_json(tier, sizeof(tier)))
+            append_fmt(buf, sizeof(buf), &pos, "  \"overlay_tier\": %s,\n", tier);
+        else
+            append_fmt(buf, sizeof(buf), &pos, "  \"overlay_tier\": null,\n");
         int active = 0, valid = 0, regions = 0, last_found = 0;
         uint32_t last_crc = 0;
         overlay_loader_get_status(&active, &valid, &regions,

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "source_observer_limit.h"
+#include "psx_file_create_new.h"
 /* One passive snapshot per original-model frontend return. Unlike input-route
  * fields, these boundaries include the CPU instruction's event overshoot. */
 static void source_cpu_return_probe(CPUState *cpu,uint32_t pc,uint64_t cycle,unsigned frame) {
@@ -20,7 +21,7 @@ static void source_cpu_return_probe(CPUState *cpu,uint32_t pc,uint64_t cycle,uns
     if(!stream) {
         char path[4096];const char *directory=getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
         if(!directory || snprintf(path,sizeof(path),"%s/cpu-return.tsv",directory)>=(int)sizeof(path))abort();
-        stream=fopen(path,"wx");if(!stream)abort();
+        stream=psx_file_create_new(path,0);if(!stream)abort();
         fprintf(stream,"frame\tpc\tcycle\tsr\tcause\tepc");
         for(unsigned i=0;i<32;i++)fprintf(stream,"\tr%u",i);
         fputc('\n',stream);
@@ -54,7 +55,7 @@ static void source_cpu_boundary_probe(CPUState *cpu,uint32_t pc,uint64_t cycle) 
     if(!stream) {
         char path[4096];const char *directory=getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
         if(!directory || snprintf(path,sizeof(path),"%s/cpu-boundary.tsv",directory)>=(int)sizeof(path))abort();
-        stream=fopen(path,"wx");if(!stream)abort();
+        stream=psx_file_create_new(path,0);if(!stream)abort();
         fprintf(stream,"pc\tcycle\tcache_tag\tcache_active\tsr\tcause\tepc");
         for(unsigned i=0;i<32;i++)fprintf(stream,"\tr%u",i);
         fprintf(stream,"\tread_fudge\tld_absorb\tld_which\tread_absorb_which\tdma_read_wait\tprecise\tdirty\ti_stat\ti_mask\tslice_pc\tslice_deadline\tslice_bound\tslice_cycle\tslice_takes\n");

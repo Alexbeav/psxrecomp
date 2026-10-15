@@ -135,6 +135,17 @@ Stdout is reserved for one JSON object per line. Useful events:
 | `result` | final payload |
 | `error` | `message`, `code` |
 
+The `result` of `generate` also reports the emitter's mid-function split
+pre-pass: `prepass_passes` (the passes that split something), `prepass_cap`
+(the emitter's limit, 256) and `prepass_converged`. `prepass_converged` is
+`false` when the emitter stopped at the limit with branch targets left; the
+code it wrote then calls addresses that its dispatch table does not hold. The
+same facts are logged once for each title:
+`split pre-pass: passes=N cap=256 converged=yes` (or `converged=no`, at level
+`warning`). For a set of programs each entry of `programs` holds the three
+fields. `generate` does not refuse a title that did not converge. A consumer
+that wants to refuse it reads the field.
+
 ## Portable recomp-ui host (`psxrecomp/host/`)
 
 Prefer `psxrecomp_add_game_runtime(...)` — it compiles

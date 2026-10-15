@@ -38,7 +38,7 @@ static void command_probe(void) {
         initialized=1; const char *range=getenv("PSX_SOURCE_GPU_COMMAND_WINDOW");
         if(range) {
             if(sscanf(range,"%llu,%llu",&low,&high)!=2 || high<=low || high-low>1000000)abort();
-            output=fopen("gpu-commands.tsv","wx");if(!output)abort();
+            output=psx_file_create_new("gpu-commands.tsv",0);if(!output)abort();
             fputs("cycle\tbudget\tphase\tqueued\tkind\twords\n",output);
         }
     }

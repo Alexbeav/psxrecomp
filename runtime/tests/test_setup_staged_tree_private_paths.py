@@ -16,11 +16,12 @@ source package) it stages the tree it is in.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+
+import host_bash
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,17 +41,8 @@ MUST_BE_DROPPED = ("docs/internal", "tools/tasreplays", "CLAUDE.md")
 
 
 def find_bash() -> str:
-    candidates = []
-    program_files = os.environ.get("ProgramFiles")
-    if program_files:
-        candidates.append(Path(program_files) / "Git" / "bin" / "bash.exe")
-    path_bash = shutil.which("bash")
-    if path_bash:
-        candidates.append(Path(path_bash))
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    raise AssertionError("bash is required for the staged-tree gate test")
+    # Never a WSL launcher: see host_bash.py (PS1B-271).
+    return host_bash.find_bash("the staged-tree gate test")
 
 
 def tracked_files() -> list[str] | None:

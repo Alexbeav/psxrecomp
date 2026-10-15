@@ -109,11 +109,17 @@ Host quirks, each found the hard way:
 
 ## Build environment
 
-**Launch native builds from PowerShell, not Bash.** Git Bash puts Git's own `mingw64\bin`
-first on PATH, whose 2025 libstdc++ cannot load the WinLibs GCC 16 tool binaries. Under ctest
-that appears as processes parked at 0 CPU in an `LpcReply` wait with every test timing out at
-1500 s, which reads like a hang and is not one. The lane's `.ps1` drivers pin the WinLibs
-runtime first and drop Git's copy.
+**Put the WinLibs `mingw64\bin` first on PATH, in every shell.** The recipe is at the top of
+[`docs/WINDOWS_TOOLCHAIN_TRAPS.md`](../WINDOWS_TOOLCHAIN_TRAPS.md). Git Bash puts Git's own
+`mingw64\bin` first on PATH, whose 2025 libstdc++ cannot load the WinLibs GCC 16 tool binaries.
+Under ctest that appears as processes parked at 0 CPU in an `LpcReply` wait with every test
+timing out at 1500 s, which reads like a hang and is not one. A native shell fails the same
+way when any other toolchain's runtime comes first, so "use PowerShell, not Bash" is not the
+rule: the order of PATH is. The lane's `.ps1` drivers pin the WinLibs runtime first and drop
+Git's copy.
+
+A tools build-cache hit runs no test. Setup says so in one line (`Tools test gate DID NOT RUN
+in this setup`) with the count of the cached run; quote that count as cached, not as run.
 
 The runtime's starvation watchdog is wall-clock. With several replays and builds running, a host
 stall once killed two unrelated multi-hour routes in the same second, so `run_native.py` sets it
@@ -173,12 +179,17 @@ runtime header, the encoder and `run_native.route_identity`.
   column and there is no playlist concept. Abe's Exoddus needs exactly one tray open (frame
   179,993) and a close on Disc 2 (179,996). Its oracle side is complete.
 
-## Octoshock 2.7 / 2.10 is Nymashock 1.29.0 with a different wrapper and compiler
+## Octoshock 2.7 / 2.10 uses the retained comparison switches
 
 BizHawk 2.7 moved Octoshock from Mednafen 0.9.38.7 to Mednafen 1.27.1; 2.10 is the same source
 plus EXE-only checks. **Mednafen 1.27.1 and 1.29.0 emulate the PS1 identically** (`src/psx` and
 `src/cdrom` differ only in messages, VFS and host I/O), so a 2.7/2.10 Octoshock movie runs on the
 Nymashock 1.29.0 device switches, not the 2.3 ones. Crash 7798S qualifies that way.
+
+The 1.29.0 switch names identify this retained runtime comparison candidate.
+BizHawk 2.10's Nymashock core is Mednafen 1.32.1; see
+[Core selector identities](../NYMASHOCK_SOURCE_REPLAY.md#core-selector-identities).
+This rename does not requalify the Octoshock source comparison.
 
 Two places still differ, and both were found by divergence, not by reading:
 

@@ -417,6 +417,8 @@ if(BUILD_TESTING)
     target_include_directories(input_route_v3_file_test PRIVATE ../runtime/include)
     add_test(NAME input_route_v3_file_test COMMAND input_route_v3_file_test)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME public_commit_guard COMMAND ${Python3_EXECUTABLE} -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_public_commits.py)
         foreach(_product IN ITEMS diagnostic release)
             set(_target input_route_session_${_product})
             add_executable(${_target} ../runtime/tests/test_input_route_session.c
@@ -1093,6 +1095,28 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_backend_constant_codegen.py
                     --recompiler $<TARGET_FILE:psxrecomp-bios>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-308: the actual BIOS emitter counts an authored synthetic image.
+        # This needs no BIOS/profile/seed input from the checkout and cannot skip.
+        add_test(
+            NAME kbless_capacity_synthetic
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kbless_capacity_synthetic.py
+                    --recompiler $<TARGET_FILE:psxrecomp-bios>
+                    --evidence-dir ${CMAKE_CURRENT_BINARY_DIR}/kbless-synthetic-evidence
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # tools/bios_emitter_fingerprint.sh takes its file list from the
+        # psxrecomp-bios target above. CMake hands the test its own list of
+        # that target's sources, so the script's reading of this file is held
+        # to the authority in both directions; the test also checks the
+        # verdicts of runtime/bios_stale_check.cmake (PS1B-131).
+        add_test(
+            NAME bios_emitter_fingerprint
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_emitter_fingerprint.py
+                    --target-sources "$<JOIN:$<TARGET_PROPERTY:psxrecomp-bios,SOURCES>,$<COMMA>>"
+                    --cmake ${CMAKE_COMMAND}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        set_tests_properties(bios_emitter_fingerprint PROPERTIES SKIP_RETURN_CODE 77)
         add_test(
             NAME stall_report
             COMMAND ${Python3_EXECUTABLE}
@@ -1107,6 +1131,11 @@ if(BUILD_TESTING)
             NAME package_setup_bios_hint
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_bios_hint.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME package_setup_cmake_comments
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_cmake_comments.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # A set whose discs boot different programs, set up as one folder
         # (PS1B-333): the set file, the disc check, the join, the start
@@ -1145,6 +1174,14 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_package_payload_filter.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # The bash the two gate tests below run a script with must not be a
+        # WSL launcher. On a host whose PATH puts System32 before Git it was,
+        # and both failed with exit 127 for no fault of the tree (PS1B-271).
+        add_test(
+            NAME host_bash
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_host_bash.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME setup_private_path_gate
             COMMAND ${Python3_EXECUTABLE}
@@ -1160,14 +1197,55 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         # The DuckStation oracle patch must hold added lines only: a context
         # line or a removed line is a line of upstream's source (PS1B-216).
-        # This runs the patch-form tests of the oracle tool's test file; its
-        # other tests are run by hand and are not part of this gate.
+        # Keep this focused gate beside the complete oracle suite below.
         add_test(
             NAME duckstation_oracle_patch_form
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_duckstation_oracle.py
                     TestOraclePatch
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # PS1B-476/375: these source-owned tool checks must execute in the
+        # recompiler gate. A missing compiler or CHD reader must not turn a
+        # skipped case into a green gate.
+        set(_psx_tools_tests "")
+        foreach(_t IN ITEMS
+                menu_scan cursor_writers gpu_frame pad_trace pad_delivery
+                aligned_lzss_banks static_fragment_variant_keys
+                mips_tagged_relocations overlay_widescreen_callbacks
+                duckstation_oracle)
+            add_test(NAME tools_${_t}
+                COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+                    -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+                    -p test_${_t}.py -v
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            list(APPEND _psx_tools_tests tools_${_t})
+        endforeach()
+        if(PSXRECOMP_ENABLE_CHD AND TARGET chdr)
+            add_test(NAME tools_psx_chd
+                COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+                    -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
+                    -p test_psx_chd.py -v
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            set_tests_properties(tools_psx_chd PROPERTIES
+                ENVIRONMENT "PSXRECOMP_LIBCHDR=$<TARGET_FILE:chdr>")
+            list(APPEND _psx_tools_tests tools_psx_chd)
+            set(_psx_tools_registration_args "")
+        else()
+            set(_psx_tools_registration_args --without-chd)
+        endif()
+        set_tests_properties(${_psx_tools_tests} PROPERTIES
+            FAIL_REGULAR_EXPRESSION "skipped;Ran 0 tests")
+        # Clean gate hosts need not install optional image tools. Decode and
+        # diff checks still run; only NumPy/Pillow rendering cases may skip.
+        set_tests_properties(tools_gpu_frame PROPERTIES
+            FAIL_REGULAR_EXPRESSION "Ran 0 tests")
+        add_test(NAME tools_ctest_registration
+            COMMAND ${Python3_EXECUTABLE} -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_ctest_tools_registration.py
+                --build-tree ${CMAKE_BINARY_DIR} --ctest ${CMAKE_CTEST_COMMAND}
+                ${_psx_tools_registration_args})
+        set_tests_properties(tools_ctest_registration PROPERTIES
+            SKIP_RETURN_CODE 77)
         add_test(
             NAME app_icon_rc_spaces
             COMMAND ${Python3_EXECUTABLE}
@@ -1283,8 +1361,10 @@ if(BUILD_TESTING)
                 bios_selection_guards
                 capture_history
                 cli_retail_bios_profile
+                cli_split_prepass_report
                 codegen_hash_line_endings
                 codegen_host_bios_stems
+                windows_rebuild_helper
                 default_renderer_guards
                 deferred_switch_interp_poll
                 mod_owned_display_controls
@@ -1344,6 +1424,10 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
 
+        set_tests_properties(windows_rebuild_helper PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:"
+            TIMEOUT 90)
+
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # (overlay_pair_dedup_runtime was the third of these. It failed to link:
         # its harness had no psx_cpu_step_boundary_* definitions after the
@@ -1366,9 +1450,13 @@ if(BUILD_TESTING)
         #                              s_next_service_cycle
         #   runtime_perf_diag_guards   asserts a substring no longer present in
         #                              the runtime source
+        # PS1B-176 source correction uses the current s_frame_pacer name.
+        # The guard and its rejection controls remain disabled pending an
+        # admitted pass. The historical failures above remain unresolved.
         foreach(_t IN ITEMS
                 interpreter_perf_guards
-                runtime_perf_diag_guards)
+                runtime_perf_diag_guards
+                runtime_perf_diag_guard_controls)
             add_test(
                 NAME ${_t}
                 COMMAND ${Python3_EXECUTABLE}
@@ -1473,27 +1561,15 @@ if(BUILD_TESTING AND EXISTS
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_cpu_return_probe.py"
                 --cc ${CMAKE_C_COMPILER})
-        # Both probe headers open their output with C11 fopen "wx". msvcrt
-        # (MSYS2 MINGW64) rejects "x", so the probes abort under that CRT: a
-        # runtime bug tracked as PSX Work T109, not a test defect. Keep the
-        # tests registered and visible as Disabled there; UCRT and glibc run them.
-        include(CheckCSourceRuns)
-        check_c_source_runs([=[
-#include <stdio.h>
-int main(void) {
-    FILE *f;
-    remove("psx_fopen_x_probe.tmp");
-    f = fopen("psx_fopen_x_probe.tmp", "wx");
-    if (!f) return 1;
-    fclose(f);
-    remove("psx_fopen_x_probe.tmp");
-    return 0;
-}
-]=] PSX_FOPEN_EXCLUSIVE_MODE)
-        if(NOT PSX_FOPEN_EXCLUSIVE_MODE)
-            set_tests_properties(tas_ram_long_route tas_cpu_long_route
-                PROPERTIES DISABLED TRUE)
-        endif()
+        # The probes and the checkpoint manifest create their files through
+        # psx_file_create_new.h, which needs no exclusive-create flag from the C
+        # runtime, so these tests run on msvcrt (MSYS2 MINGW64) too (PS1B-206).
+        # The driver compiles test_file_create_new.c at O0/O2 and fails when a
+        # source file opens a stream with that flag again.
+        add_test(NAME file_create_new
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_file_create_new.py"
+                --cc ${CMAKE_C_COMPILER})
         # tas_stateio_manifest and tas_stateio_identity are registered with the
         # foundation above. The Python driver compiles test_input_route_raster_wire.c at O0/O2.
         add_test(NAME tas_raster_wire

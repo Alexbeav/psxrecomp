@@ -38,7 +38,6 @@ WRITERS = [
     ("memory.c", "ram[phys + 2] = (uint8_t)(val >> 16);", "hook", "psx_write_word"),
     ("memory.c", "ram[phys + 3] = (uint8_t)(val >> 24);", "hook", "psx_write_word"),
     ("memory.c", "ram[phys] = val;", "hook", "psx_write_byte"),
-    ("memory.c", "memset(ram, 0, 0x10u);", "note", "low boot scratch clear at game entry"),
     ("memory.c", "memset(ram, 0, sizeof(ram));", "reset", "memory_init"),
     ("boot_state.c", "memcpy(memory_get_ram_ptr(), p, RAM_SIZE);", "note", "state restore"),
     ("overlay_loader.c", "memcpy(ram,  s_ram0,  SHADOW_RAM_SIZE);", "note", "shadow diff: rewind to the entry state"),

@@ -963,6 +963,7 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
         return cli.EXIT_ERROR
     count = len(spec["programs"])
     done = []
+    reports = []      # each program's split pre-pass fields, for the result only
     for index, program in enumerate(spec["programs"]):
         folder = root / program["folder"]
         try:
@@ -978,12 +979,14 @@ def generate_set(cli: Any, args: argparse.Namespace, progress: Any) -> int:
             return code
         done.append({"program": program["program"], "marker": child.last_result.get("marker"),
                      "disc": child.last_result.get("disc")})
+        reports.append({key: value for key, value in child.last_result.items()
+                        if key.startswith("prepass_")})
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_bytes((json.dumps({"schema": 1, "set": spec["name"], "discs": [str(d) for d in discs],
                                     "programs": done}, indent=2) + "\n").encode("utf-8"))
     progress.phase("done", pct=1.0, message="Generate complete")
     progress.result(ok=True, out_dir=str(marker.parent), marker=str(marker), disc=str(discs[0]),
-                    programs=done)
+                    programs=[dict(entry, **report) for entry, report in zip(done, reports)])
     return cli.EXIT_OK
 
 

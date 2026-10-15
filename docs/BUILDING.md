@@ -1,5 +1,7 @@
 # Building PSXRecomp
 
+Fork contributors must also follow the [public push policy](PUBLIC_PUSH_POLICY.md).
+
 PSXRecomp builds natively on **Windows** (MSVC or MinGW/MSYS2), **macOS** (Apple
 Silicon & Intel), and **Linux**. There are two things you can build:
 
@@ -81,6 +83,9 @@ git clone --recurse-submodules https://github.com/mstan/psxrecomp.git
 pacman -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
                    mingw-w64-x86_64-ninja mingw-w64-x86_64-ccache
 ```
+A Windows host often has more than one MinGW runtime on `PATH`. Read
+[`WINDOWS_TOOLCHAIN_TRAPS.md`](WINDOWS_TOOLCHAIN_TRAPS.md) before the first
+build: its recipe puts the build toolchain first on `PATH` in every shell.
 
 **macOS:**
 ```sh
