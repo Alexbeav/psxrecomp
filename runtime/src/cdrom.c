@@ -1978,9 +1978,12 @@ static void start_read_stream(uint8_t cmd) {
      * sector does not pay it again. Without this a game library that
      * restarts a read after 60 silent vblanks (one second) never gets a
      * sector after a Stop: every attempt is charged a new full second
-     * (PS1B-317, Time Crisis). Default path only; a source profile keeps
-     * its own status. */
-    if (!s_source_clock) stat_reg |= CDSTAT_MOTOR;
+     * (PS1B-317, Time Crisis). A source profile follows the same rule: its
+     * Pause leaves the motor on too, and without the bit the retry of
+     * Street Fighter EX Plus Alpha at LBA 8693 was charged 45.6M cycles,
+     * longer than the library's 35.66M, so no sector ever arrived
+     * (PS1G-120). */
+    stat_reg |= CDSTAT_MOTOR;
     /* ENQUEUE: sector-read stream scheduled (due in read_delay cycles). A
      * content load that happens in OFF but not ON shows up as a missing
      * SRC_CD_READ enqueue here. */
