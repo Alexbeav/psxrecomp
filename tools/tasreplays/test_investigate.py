@@ -190,8 +190,10 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue((self.run / 'capture/large.bin').exists())
 
     def test_descendants_die_after_timeout(self):
-        self.start('tree', 10)
-        self.data['steps'][0]['timeout'] = 1
+        # The fixture is held, so only the step timeout ends it. The timeout is long enough for a
+        # starved host to start Python and write descendant.pid first (1 s was not; PS1B-439).
+        self.start('tree', HOLD)
+        self.data['steps'][0]['timeout'] = 10
         self.save()
         self.command('run', self.path, self.run)
         pid = int((self.run / 'capture/descendant.pid').read_text())
@@ -202,7 +204,7 @@ class ControllerTests(unittest.TestCase):
         handle = kernel.OpenProcess(0x100000, False, pid)
         if handle:
             try:
-                self.assertEqual(kernel.WaitForSingleObject(handle, 2000), 0)
+                self.assertEqual(kernel.WaitForSingleObject(handle, WAIT * 1000), 0)
             finally:
                 kernel.CloseHandle(handle)
 
