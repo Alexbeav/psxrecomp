@@ -32,7 +32,9 @@ def fixture(directory, mode, delay=0):
     if mode == 'storage':
         (root / 'large.bin').write_bytes(bytes(2000000))
     if mode == 'tree':
-        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        # The descendant outlives the test's wait (WAIT = 120 s), so the test passes only if the
+        # controller kills it at the step timeout (PS1B-439 review F1).
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(240)'])
         (root / 'descendant.pid').write_text(str(child.pid))
     try:
         time.sleep(float(delay))
