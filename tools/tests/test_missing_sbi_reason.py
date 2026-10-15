@@ -7,6 +7,12 @@ import subprocess
 import tempfile
 
 
+def scratch_root():
+    # Use WORKBENCH_RUN_ROOT only when that folder exists; else the default temp folder.
+    root = os.environ.get("WORKBENCH_RUN_ROOT")
+    return root if root and os.path.isdir(root) else None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cxx", default="g++")
@@ -56,7 +62,7 @@ int main() {
     assert(!std::strcmp(reason(id, companion), id.netplay_detail.c_str()));
 }
 '''
-    with tempfile.TemporaryDirectory(prefix="missing_sbi_reason_", dir=os.environ.get("WORKBENCH_RUN_ROOT")) as scratch:
+    with tempfile.TemporaryDirectory(prefix="missing_sbi_reason_", dir=scratch_root()) as scratch:
         work = Path(scratch)
         (work / "reason.cpp").write_text(program, encoding="utf-8")
         for command in ([args.cxx, "-std=c++17", "-O0", "-UNDEBUG", "-Wall", "-Wextra", "-Werror",
