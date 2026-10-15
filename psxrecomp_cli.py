@@ -1959,6 +1959,36 @@ def _pgo_train_warning(*, hide_video: bool) -> str:
     )
 
 
+def pgo_bios_preflight(runtime: dict, build_dir: Path) -> str:
+    """Why training would be refused for want of a BIOS, or "" when it may go on.
+    Checked BEFORE the instrumented build, as the profile merge tool is: the runtime would
+    refuse the first training run (start refused (no_bios)), but only after the instrumented
+    configure and build, and the product is then built a second time as the plain one.
+    The product is not built yet, so the runtime cannot be asked. This reads no BIOS image
+    and checks no CRC. It looks only at the two places the headless runtime reads a BIOS path
+    from beside the product (bios.cfg, and [bios] path in settings.toml) and whether that file
+    exists; a file that exists but is the wrong image is still refused by the runtime."""
+    if bool(runtime.get("openbios", True)):
+        return ""   # the bundled OpenBIOS is the fallback
+    candidates = []
+    try:
+        line = (build_dir / "bios.cfg").read_text(encoding="utf-8", errors="replace").splitlines()
+        if line and line[0].strip():
+            candidates.append(line[0].strip())
+    except OSError:
+        pass
+    try:
+        bios = parse_toml_simple((build_dir / "settings.toml").read_text(encoding="utf-8")).get("bios") or {}
+        if str(bios.get("path") or "").strip():
+            candidates.append(str(bios["path"]).strip())
+    except (OSError, ValueError):
+        pass
+    if any((build_dir / c).is_file() for c in candidates):   # absolute paths ignore the left side
+        return ""
+    return ("this title needs a PlayStation BIOS (openbios = false), but "
+            f"{build_dir / 'bios.cfg'} is missing or names a file that does not exist")
+
+
 def pgo_merge_tool_available(project_root: Path) -> str:
     """Name of the profile merge route that will work here, or "" when PGO cannot complete.
     Checked BEFORE the instrumented build: finding out after two minutes of training that
@@ -1980,6 +2010,18 @@ def pgo_merge_tool_available(project_root: Path) -> str:
     if clang_c is None and (shutil.which("gcc") or shutil.which("cc")):
         return "gcc (.gcda)"
     return ""
+
+
+def _pgo_refusal_note(stderr_path: Path) -> str:
+    """": start refused (<kind>)" when the last stderr line of a training run is the
+    runtime's refusal line, else "". Nothing else from the log is repeated."""
+    try:
+        lines = [ln.strip() for ln in stderr_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                 if ln.strip()]
+    except OSError:
+        return ""
+    m = re.search(r"start refused \((\w+)\)\s*$", lines[-1]) if lines else None
+    return f": start refused ({m.group(1)})" if m else ""
 
 
 def run_pgo_train(
@@ -2075,11 +2117,13 @@ def run_pgo_train(
         # Clean exit first: PSX_EXIT_AFTER_MS ends the run from inside. Allow boot time
         # plus a margin before falling back to the debug quit and then a forced stop
         # (either of which may lose this run's profile; the size check below catches it).
+        wait_secs = train_secs + 90
         try:
-            proc.wait(timeout=train_secs + 90)
+            proc.wait(timeout=wait_secs)
         except subprocess.TimeoutExpired:
             pass
-        if proc.poll() is None:
+        stopped_by_cli = proc.poll() is None
+        if stopped_by_cli:
             if not _debug_quit(proc.pid, PGO_DEBUG_PORT):
                 progress.log("PGO train run did not exit on its own and debug quit is unavailable; "
                              "using forced stop (this run's profile may be lost).")
@@ -2096,8 +2140,11 @@ def run_pgo_train(
 
         if proc.returncode:
             raise RuntimeError(
-                f"PGO training run {run} exited with code {proc.returncode}; "
-                f"read {stdout_path} and {stderr_path}"
+                f"PGO training run {run} "
+                + (f"did not exit within {wait_secs} s; stopped (exit code {proc.returncode})"
+                   if stopped_by_cli else f"exited with code {proc.returncode}")
+                + _pgo_refusal_note(stderr_path)
+                + f"; read {stdout_path} and {stderr_path}"
             )
 
     n_gcda = len(list(build_dir.rglob("*.gcda")))
@@ -2298,6 +2345,12 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
             else:
                 pgo_skip_reason = ("no llvm-profdata on PATH or in the toolchain pack, so a "
                                    "clang profile could not be merged")
+                progress.log(f"PGO: off ({pgo_skip_reason}); building the plain product")
+                pgo_enabled = False
+        if pgo_enabled:
+            bios_reason = pgo_bios_preflight(secs.get("runtime") or {}, build_dir)
+            if bios_reason:
+                pgo_skip_reason = bios_reason
                 progress.log(f"PGO: off ({pgo_skip_reason}); building the plain product")
                 pgo_enabled = False
         if not pgo_enabled:
