@@ -339,6 +339,40 @@ if(BUILD_TESTING)
             endforeach()
         endforeach()
     endif()
+    # PS1B-454 row 4: a refused state load leaves the machine as it was
+    # (f02669bf4, restored by f4751d005: section_shape_ok and the admission
+    # passes of boot_state_load_buffer). The fixture includes main.cpp in place
+    # of the front end and links every other psx-runtime object, so it checks
+    # the readers of this build; tests/state_load_atomicity/run.py does the same
+    # for a title's build. GNU ld only (--wrap fails chosen allocations), and
+    # only with no BIOS backend linked (_psxrt_bios_count from runtime.cmake).
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+            AND PSXRECOMP_ALLOW_NO_BIOS AND _psxrt_bios_count EQUAL 0)
+        add_executable(state_load_atomicity_test
+            tests/state_load_atomicity/fixture.cpp
+            "$<FILTER:$<TARGET_OBJECTS:psx-runtime>,EXCLUDE,/src/main\\.cpp\\.o>")
+        add_dependencies(state_load_atomicity_test psx-runtime)
+        target_include_directories(state_load_atomicity_test PRIVATE
+            $<TARGET_PROPERTY:psx-runtime,INCLUDE_DIRECTORIES>)
+        target_compile_definitions(state_load_atomicity_test PRIVATE
+            $<TARGET_PROPERTY:psx-runtime,COMPILE_DEFINITIONS>
+            "PSX_RUNTIME_MAIN_SOURCE=\"${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp\"")
+        target_compile_options(state_load_atomicity_test PRIVATE
+            $<TARGET_PROPERTY:psx-runtime,COMPILE_OPTIONS>)
+        target_link_directories(state_load_atomicity_test PRIVATE
+            $<TARGET_PROPERTY:psx-runtime,LINK_DIRECTORIES>)
+        target_link_libraries(state_load_atomicity_test PRIVATE
+            $<TARGET_PROPERTY:psx-runtime,LINK_LIBRARIES>)
+        target_link_options(state_load_atomicity_test PRIVATE
+            "$<FILTER:$<TARGET_PROPERTY:psx-runtime,LINK_OPTIONS>,EXCLUDE,^-mwindows$>"
+            -Wl,--wrap=malloc,--wrap=realloc)
+        add_test(NAME state_load_atomicity_default COMMAND state_load_atomicity_test
+            ${CMAKE_CURRENT_BINARY_DIR}/state_load_atomicity_default_bios.bin)
+        add_test(NAME state_load_atomicity_source COMMAND state_load_atomicity_test
+            ${CMAKE_CURRENT_BINARY_DIR}/state_load_atomicity_source_bios.bin source)
+    else()
+        message(STATUS "state_load_atomicity tests: not registered (they need GCC and GNU ld, and PSXRECOMP_ALLOW_NO_BIOS with no BIOS backend linked)")
+    endif()
     add_executable(cdrom_boot_model_test tests/test_cdrom_boot_model.c src/psx_sha256.c)
     target_include_directories(cdrom_boot_model_test PRIVATE include)
     add_test(NAME cdrom_boot_model_test COMMAND cdrom_boot_model_test)
