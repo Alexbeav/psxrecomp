@@ -1384,6 +1384,8 @@ if(BUILD_TESTING)
                 replay_disc_identity_wiring
                 netplay_chd_disc_rule_wiring
                 run_report_cdrom_counters
+                runtime_perf_diag_guards
+                runtime_perf_diag_guard_controls
                 start_refusal_wiring
                 netplay_lan_identity_wiring
                 netplay_overlay_pin_wiring
@@ -1399,6 +1401,8 @@ if(BUILD_TESTING)
                 overlay_decodable_fallback
                 overlay_export_declarations
                 interp_report_wiring
+                interpreter_perf_guards
+                interpreter_perf_guard_controls
                 overlay_init_guard
                 overlay_pair_dedup_runtime
                 recomp_ui_root_override
@@ -1428,42 +1432,11 @@ if(BUILD_TESTING)
             SKIP_REGULAR_EXPRESSION "^SKIP:"
             TIMEOUT 90)
 
-        # ---- known-failing guards: DISABLED, not de-registered ---------------
-        # (overlay_pair_dedup_runtime was the third of these. It failed to link:
-        # its harness had no psx_cpu_step_boundary_* definitions after the
-        # loader began to hand them to shards. The harness has them now, the
-        # overlay ABI gate test shares it, and the test is in the list above.)
-        # These were previously left out of the list above with a comment
-        # explaining that they FAIL and that wiring a red check would recreate
-        # the problem that took CI off PRs. That reasoning is right; the remedy
-        # was not. De-registering is precisely how a test stops being counted,
-        # and it is the mechanism that let 16 C/C++ tests rot in runtime/tests/.
-        #
-        # ctest's DISABLED property is the intended tool: the test stays
-        # registered, stays visible in `ctest -N`, and is reported as Disabled
-        # rather than silently absent — without turning the run red. Delete the
-        # matching set_tests_properties line to re-enable one once it is fixed.
-        #
-        #   interpreter_perf_guards    psx_devices_mmio_sync's recompute-deadline
-        #                              branch never clears g_psx_cycle_fast_limit,
-        #                              and the guard still names the pre-rename
-        #                              s_next_service_cycle
-        #   runtime_perf_diag_guards   asserts a substring no longer present in
-        #                              the runtime source
-        # PS1B-176 source correction uses the current s_frame_pacer name.
-        # The guard and its rejection controls remain disabled pending an
-        # admitted pass. The historical failures above remain unresolved.
-        foreach(_t IN ITEMS
-                interpreter_perf_guards
-                runtime_perf_diag_guards
-                runtime_perf_diag_guard_controls)
-            add_test(
-                NAME ${_t}
-                COMMAND ${Python3_EXECUTABLE}
-                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
-            set_tests_properties(${_t} PROPERTIES DISABLED TRUE)
-        endforeach()
+        # interpreter_perf_guards, runtime_perf_diag_guards and their controls
+        # were registered DISABLED while they named source that had since been
+        # renamed or rewritten (PS1B-176). They run in the list above again.
+        # A guard that fails stays registered: use the DISABLED property, never
+        # de-registration, which is how 16 C/C++ tests once stopped being counted.
     endif()
 endif()
 
