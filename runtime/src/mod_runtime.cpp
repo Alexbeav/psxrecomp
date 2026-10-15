@@ -126,6 +126,7 @@ struct RuntimeMods {
     bool cached_prepare = false;
     bool provider_preparing = false;
     bool initialized = false;
+    bool plan_committed = false;
     bool main_applied = false;
     bool disc_enabled = false;
     bool disc_guard_failed = false;
@@ -1511,6 +1512,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     s.audio_tracks.clear();
     s.extent_start = 0;
     s.plan = {};
+    s.plan_committed = false;
     reset_live_option_overrides();  /* a new plan ends the last session's live values */
     s.validation = {};
     s.raw_disc_index.clear();
@@ -1618,6 +1620,7 @@ bool mod_runtime_clear_for_netplay(std::string* error) {
     s.audio_tracks.clear();
     s.extent_start = 0;
     s.plan = {};
+    s.plan_committed = true; // Explicit vanilla session, not unresolved preparation.
     reset_live_option_overrides();  /* a new plan ends the last session's live values */
     s.validation = {};
     s.raw_disc_index.clear();
@@ -1773,6 +1776,7 @@ bool mod_runtime_commit_netplay(const std::filesystem::path& disc_path,
     if (renderer) plan.plugins.push_back({renderer, "", ""});
     s.disc_path = disc_path;
     s.plan = std::move(plan);
+    s.plan_committed = true;
     reset_live_option_overrides();  /* a new plan ends the last session's live values */
     mod_runtime_set_session_plan_fp({});
     psx_mod_netplay_set_active(1);
@@ -2117,6 +2121,7 @@ static bool install_plan(RuntimeMods& s, ModResolution plan,
     s.audio_tracks.clear();
     s.extent_start = 0;
     s.plan = std::move(plan);
+    s.plan_committed = true;
     reset_live_option_overrides();  /* a new plan ends the last session's live values */
     {
         HostLaunchTimingScope index_timing(HOST_LAUNCH_BUILD_DISC_INDEX);
@@ -2433,6 +2438,34 @@ bool mod_runtime_commit_netplay_view(const std::filesystem::path& disc_path,
 }
 const std::string& mod_runtime_fingerprint() {
     return state().plan.fingerprint;
+}
+
+bool mod_runtime_savestate_scope(std::string& scope, std::string* error) {
+    scope.clear();
+    if (error) error->clear();
+    const RuntimeMods& s = state();
+    if (!s.initialized) {
+        if (s.manager.root().empty()) return true;
+        if (error) *error = "Save-state mod catalog is unavailable";
+        return false;
+    }
+    if (!s.plan_committed) {
+        if (error) *error = "Save-state content plan has not been committed";
+        return false;
+    }
+    const bool isolated = std::any_of(s.plan.ordered.begin(), s.plan.ordered.end(),
+        [](const ModPackage* package) { return package->save_compatibility == "isolated"; });
+    if (!isolated) return true;
+    const std::string& fingerprint = s.plan.fingerprint;
+    if (!s.plan.ok || fingerprint.size() != 64 ||
+        !std::all_of(fingerprint.begin(), fingerprint.end(), [](char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        }) || !netplay_resources_verified(s.plan)) {
+        if (error && error->empty()) *error = "Isolated save states require a verified content plan";
+        return false;
+    }
+    scope = fingerprint;
+    return true;
 }
 
 const std::filesystem::path& mod_runtime_root() {

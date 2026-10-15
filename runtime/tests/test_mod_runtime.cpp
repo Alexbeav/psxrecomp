@@ -1252,7 +1252,7 @@ int main(int argc, char** argv) {
                 write_bytes(pack_path,pack);outputs["pack"]=pack_path;return true;
             }),"register prepared overlay fixture");
         write_text(folder/"bundled/prepared.overlay/1.0.0/manifest.toml",
-            "format_version = 10\nid = \"prepared.overlay\"\nversion = \"1.0.0\"\nname = \"Prepared overlay\"\nprepare = \"test.overlay.prepare\"\n"
+            "format_version = 10\nid = \"prepared.overlay\"\nversion = \"1.0.0\"\nname = \"Prepared overlay\"\nprepare = \"test.overlay.prepare\"\nsave_compatibility = \"isolated\"\n"
             "[[target]]\ngame_id = \"READER\"\ndisc_sha256 = \""+sha256_hex(raw_iso)+"\"\n"
             "[[feature]]\nid = \"audio\"\nname = \"Audio\"\ndefault_enabled = true\n"
             "[[resource]]\nfeature = \"audio\"\nid = \"pack\"\nlabel = \"Pack\"\nformat = \"file\"\nhidden = true\nrequired = true\nsize = 3016\nsha256 = \""+sha256_hex(pack)+"\"\n"
@@ -1264,7 +1264,12 @@ int main(int argc, char** argv) {
             [&](float fraction,const std::string&){++reports;return fraction<1.0f;}),"cancel before installing prepared plan");
         check(reports>1 && error=="Preparation canceled.","runtime propagates cooperative cancellation");
         check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"cold offer overlay initialize");
+        std::string save_scope;
+        check(!PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope.empty(),
+              "uncommitted isolated plan cannot fall back to shared save states");
         check(PSXRecompV4::mod_runtime_prepare_resources(raw_path,&error),"cold offer prepares exact-disc resources without commit");
+        check(!PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error),
+              "resource preparation does not install a save-state scope");
         const auto offer_fp=PSXRecompV4::mod_runtime_plan_fingerprint_portable();
         check(offer_fp.size()==64 && PSXRecompV4::mod_runtime_fingerprint().empty(),"cold offer qualifies disc without installing a plan");
         check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"cold LAN overlay initialize");
@@ -1273,7 +1278,11 @@ int main(int argc, char** argv) {
         check(PSXRecompV4::mod_runtime_session_plan_fp()==offer_fp &&
               PSXRecompV4::mod_runtime_plan_fingerprint_portable()==offer_fp &&
               PSXRecompV4::mod_runtime_fingerprint()==offer_fp,"offer and committed exact-disc identities agree");
+        check(PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope==offer_fp,
+              "direct netplay scopes isolated save states by its installed verified plan");
         PSXRecompV4::mod_runtime_end_netplay();
+        check(PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope.empty(),
+              "intentional netplay clear retires isolated save scope");
         const auto changed_disc=folder/"offered.bin";
         write_bytes(changed_disc,raw_iso);
         check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"changed offer overlay initialize");
@@ -1282,10 +1291,16 @@ int main(int argc, char** argv) {
         write_bytes(changed_disc,changed_bytes);
         check(!PSXRecompV4::mod_runtime_commit_for_direct_netplay(changed_disc,&error),"final LAN commit rejects same-path changed source identity");
         check(PSXRecompV4::mod_runtime_session_plan_fp().empty(),"changed offer cannot install session identity");
+        check(!PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error),
+              "failed required plan cannot select shared save-state slots");
         check(PSXRecompV4::mod_runtime_initialize(folder,"READER",0,{},&error),"restore original overlay selection");
         check(PSXRecompV4::mod_runtime_prepare_for_launcher(raw_path,&error),"prepare verified resource-backed overlay");
+        check(PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope==offer_fp,
+              "offline isolated plan restores the same verified save-state scope");
         mod_runtime_enable_disc_patches();
         fs::remove(pack_path,ec); // Committed bytes must remain immutable and resident.
+        check(PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope==offer_fp,
+              "isolated scope uses committed immutable content after source removal");
         for(unsigned lba=21;lba<=23;++lba) {
             std::array<uint8_t,2352> sector;
             std::copy_n(raw_iso.begin()+lba*2352,2352,sector.begin());
@@ -1327,6 +1342,11 @@ int main(int argc, char** argv) {
     check(psx_mod_register_activation_plugin("media.test.plugin", test_media_plugin), "register media consumer");
     check(PSXRecompV4::mod_runtime_initialize(media_root, "READER", 0, {}, &error), "media initialize");
     check(PSXRecompV4::mod_runtime_commit(iso_path, &error), "verify and commit owner media");
+    {
+        std::string save_scope;
+        check(PSXRecompV4::mod_runtime_savestate_scope(save_scope,&error) && save_scope.empty(),
+              "shared packages retain historical save-state paths");
+    }
     const std::string host_media_fp = PSXRecompV4::mod_runtime_plan_fingerprint_portable();
     check(host_media_fp.size() == 64, "verified external media has a portable netplay identity");
     test_match_caps = {};
