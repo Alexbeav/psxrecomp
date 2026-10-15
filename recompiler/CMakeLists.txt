@@ -1348,6 +1348,24 @@ if(BUILD_TESTING)
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+        # PS1B-339: the overlay cache key hashes neither main_psx.cpp nor
+        # config_loader.cpp. The guard pins the overlay output of authored
+        # fixtures to PSX_OVERLAY_CODEGEN_VER, so an overlay output change at
+        # the same version fails. The _rules test runs the decision rules on
+        # authored records. See docs/OVERLAY_ABI.md.
+        add_test(
+            NAME overlay_emitter_fixture_guard
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_emitter_fixture_guard.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME overlay_emitter_fixture_guard_rules
+            COMMAND ${Python3_EXECUTABLE} -B
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_emitter_fixture_guard.py
+                    --self-test
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
         # ---- runtime source-invariant guards --------------------------------
         # These live in runtime/tests/ but only READ runtime source, so they
         # need neither a generated BIOS nor a built runtime. Registering them
