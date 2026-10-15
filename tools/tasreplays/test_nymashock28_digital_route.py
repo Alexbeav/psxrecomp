@@ -1,7 +1,7 @@
 """nymashock28_digital_route.py: the plain-gamepad 2.8 reader, its refusals and the real Driver 2 movie.
 
-The real movie is checked only where it is present (set PSX_CHICAGO_MOVIE or keep the lane copy);
-a host without it skips that part and says so.
+The real movie is checked only where it is present: PSX_CHICAGO_MOVIE names it, or the private
+library holds it (Pegasus). A host without it skips that part and says so.
 """
 import hashlib
 import io
@@ -105,11 +105,14 @@ with tempfile.TemporaryDirectory(prefix='nyma28-digital-') as folder:
 
 # The real Driver 2 Chicago movie (4726M), where present.
 REAL_SHA256 = '7e51bcb4'
-candidates = [os.environ.get('PSX_CHICAGO_MOVIE', '')]
-candidates += [str(p) for p in Path(r'Z:\Share\Projects\Recompilations\PS1\Work\in-progress\PS1B-109-replay-intake-20261013-r1\inputs\4726').glob('*.bk2')]
-real = next((Path(c) for c in candidates if c and Path(c).is_file()), None)
-if real is None:
-    print('real-movie check skipped: no Chicago movie on this host')
+LIBRARY = Path(r'D:\Projects\Recompilations\PS1\Library\PS1B-109\intake\movies')
+named = os.environ.get('PSX_CHICAGO_MOVIE', '')
+if named and not Path(named).is_file():
+    raise AssertionError('PSX_CHICAGO_MOVIE names no file: ' + named)
+real = Path(named) if named else LIBRARY / 'thunderaxe31-driver2-survival,chicago.bk2'
+if not real.is_file():
+    print('real-movie check SKIPPED: the Driver 2 Chicago movie (4726M) is not on this host '
+          '(set PSX_CHICAGO_MOVIE to its .bk2 to run it)')
 else:
     assert hashlib.sha256(real.read_bytes()).hexdigest().startswith(REAL_SHA256)
     chicago = n.read_movie(real)
