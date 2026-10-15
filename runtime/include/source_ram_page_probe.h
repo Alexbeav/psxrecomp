@@ -40,7 +40,7 @@ static void source_ram_page_probe(unsigned frame, uint64_t cycle) {
         }
     }
     if (!enabled) return;
-    if (frame < 1 || frame > max_frames) abort();
+    if (!source_observer_frame_recorded("source_ram_page_probe", frame, max_frames)) return;
     extern uint8_t *memory_get_ram_ptr(void);
     const uint8_t *ram = memory_get_ram_ptr();
     char path[4096];

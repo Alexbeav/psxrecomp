@@ -17,7 +17,7 @@ static void source_cpu_return_probe(CPUState *cpu,uint32_t pc,uint64_t cycle,uns
         if(enabled)max_frames=source_observer_max_frames("PSX_SOURCE_CPU_MAX_FRAMES");
     }
     if(!enabled)return;
-    if(frame<1 || frame>max_frames)abort();
+    if(!source_observer_frame_recorded("source_cpu_return_probe",frame,max_frames))return;
     if(!stream) {
         char path[4096];const char *directory=getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
         if(!directory || snprintf(path,sizeof(path),"%s/cpu-return.tsv",directory)>=(int)sizeof(path))abort();

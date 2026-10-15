@@ -21,10 +21,12 @@ def main():
     zero = fnv(bytes(4096))
     expected = [fnv(ram[:4096])] + [zero]*510 + [fnv(ram[-4096:])]
     cases = [('legacy',None,20000,None,0),
-             ('legacy_limit',None,20001,None,4),
+             ('legacy_one_past',None,20001,None,0),
+             ('legacy_limit',None,20002,None,4),
              ('pepsiman','71806',71806,'71806',0),
              ('re1','227202',227202,'227202',0),
-             ('bound','71806',71807,None,4),
+             ('one_past','71806',71807,None,0),
+             ('bound','71806',71808,None,4),
              ('snapshot_capacity','239202',64,','.join(map(str,range(1,65))),0),
              ('snapshot_over_capacity','239202',65,','.join(map(str,range(1,66))),4),
              ('snapshot_bound','71806',1,'71807',4),
@@ -48,7 +50,11 @@ def main():
                 if snapshot: env['PSX_SOURCE_RAM_SNAPSHOT_FRAMES']=snapshot
                 result=subprocess.run([str(exe),str(frame)],env=env,capture_output=True,timeout=20)
                 assert result.returncode==code,(opt,name,result.returncode,code,result.stderr)
-                if code==0:
+                if name in ('legacy_one_past','one_past'):
+                    # The one return past the cap is left out (PS1G-119).
+                    assert not (out/'ram-pages.tsv').exists(),name
+                    assert b'not recorded' in result.stderr,(opt,name,result.stderr)
+                elif code==0:
                     rows=(out/'ram-pages.tsv').read_text().splitlines()
                     assert len(rows)==3,(name,len(rows))
                     row=rows[2].split('\t')
