@@ -76,6 +76,9 @@
  *     colour); the wide margins must be the nearest rescale of the old ones.
  *     Then the scene is drawn again and must equal the fixed-scale run at the
  *     final level. In the window mode steps are refused and the scale stays.
+ *   - mode "composite-steps": explicitly tagged backgrounds own the centre
+ *     of native-wide too. Two held buffer composites must survive 3x -> 5x ->
+ *     3x as the nearest rescale of all their pixels, before any redraw.
  * Original source-owned scene; no retail payload. */
 #include "gpu_gl_renderer.c"
 #include "gpu_hd_texture_stubs.inc"
@@ -103,7 +106,34 @@ int gpu_display_is_depth24(void){return 0;}
 void gpu_get_display_info(GpuDisplayInfo *out){memset(out,0,sizeof(*out));out->width=320;out->height=240;}
 int psx_ws_prim_in_backdrop(void){return 0;}
 int gpu_ws_nw_flat_backdrop_enabled(void){return 0;}
-int gpu_ws_background_requires_full_composite(void){return 0;}
+static int test_background_full_composite;
+int gpu_ws_background_requires_full_composite(void){return test_background_full_composite;}
+/* Fixtures embedding this source rename main and supply their own frontend /
+ * HD adapters. The standalone scale fixture has no overlays or external pack. */
+#ifndef main
+int host_osd_needs_present(void){return 0;}
+int psx_present_vsync_owns_cadence(void){return 0;}
+void latency_ring_mark(LatencyStage stage){(void)stage;}
+void psx_host_sleep_ms(unsigned ms){SDL_Delay(ms);}
+void psx_host_sleep_micros(unsigned us){SDL_Delay((us + 999u) / 1000u);}
+int present_shot_take(char *out,int n){(void)out;(void)n;return 0;}
+void present_shot_done(int ok){(void)ok;}
+int host_osd_image(const uint32_t **p,int *w,int *h){*p=NULL;*w=*h=0;return 0;}
+int host_osd_volume_image(const uint32_t **p,int *w,int *h){return host_osd_image(p,w,h);}
+void host_osd_present_done(void){}
+int psx_rewind_overlay_image(const uint32_t **p,int *w,int *h){return host_osd_image(p,w,h);}
+float psx_rewind_slide(void){return 0.0f;}
+int psx_savestate_menu_overlay_image(const uint32_t **p,int *w,int *h){return host_osd_image(p,w,h);}
+void gpu_hd_textures_track_upload(int x,int y,int w,int h,const uint16_t *words){
+    (void)x;(void)y;(void)w;(void)h;(void)words;
+}
+void gpu_hd_textures_begin_upload(int x,int y,int w,int h){(void)x;(void)y;(void)w;(void)h;}
+void gpu_hd_textures_begin_copy(int sx,int sy,int dx,int dy,int w,int h){
+    (void)sx;(void)sy;(void)dx;(void)dy;(void)w;(void)h;
+}
+void gpu_hd_textures_end_copy(void){}
+void gpu_hd_textures_invalidate(int x,int y,int w,int h){(void)x;(void)y;(void)w;(void)h;}
+#endif
 void gpu_timeline_note(uint8_t kind,uint32_t a,uint32_t b){(void)kind;(void)a;(void)b;}
 int g_ws_tex_edge_pct=0;
 int psx_ws_prim_is_tagged(void){return 0;}
@@ -974,15 +1004,83 @@ static uint64_t steps_hires_digest(int x, int y, int w, int h) {
     return d;
 }
 
-static uint64_t steps_wide_digest(uint32_t **keep) {
+static uint64_t steps_wide_digest_for(int base, uint32_t **keep) {
     int ww = 426 * s_out_scale, wh = 512 * s_out_scale, gw = 0, gh = 0;
     uint32_t *wb = (uint32_t *)malloc((size_t)ww * wh * 4);
-    int got = wb ? glb_wide_dump_full(wb, ww * wh, &gw, &gh, 0) : 0;
+    int got = wb ? glb_wide_dump_full(wb, ww * wh, &gw, &gh, base) : 0;
     check(got == ww * wh && gw == ww && gh == wh, "wide surface dump size");
     uint64_t d = got ? fnv(wb, (size_t)ww * wh * 4, 0xcbf29ce484222325ull) : 0;
     if (keep) *keep = got ? wb : (free(wb), (uint32_t *)NULL);
     else free(wb);
     return d;
+}
+
+static uint64_t steps_wide_digest(uint32_t **keep) {
+    return steps_wide_digest_for(0, keep);
+}
+
+static int composite_steps_main(int ceiling, int window) {
+    check(!window && ceiling == 5, "full composite fixture uses full VRAM with a 5x ceiling");
+    if (window || ceiling != 5) return 1;
+    check(gl_renderer_step_internal_scale_now(3) && s_out_scale == 3,
+          "initial 3x level applied before drawing");
+    test_background_full_composite = 1;
+    gl_renderer_set_wide_fast(1);
+    glb_wide_configure(426, 53);
+    check(!view_enabled && !wide_center_is_canonical(),
+          "explicit background owns the centre with fast mirroring and no shifted view");
+    glb_set_draw_offset(0, 0);
+    glb_set_mask_bits(0, 0);
+    glb_set_semi_transparency(0, 0);
+    for (int bank = 0; bank < 2; bank++) {
+        int base = bank * 512;
+        glb_wide_disable_target();
+        glb_set_draw_area(base, 0, base + FRAME_W - 1, FRAME_H - 1);
+        glb_fill_rect(base, 0, FRAME_W, FRAME_H, 0x03e0);
+        /* A background composite differs from canonical VRAM in its centre.
+         * Keep both banks distinct and cover the held rows, including margins. */
+        glb_wide_clear(base, 0, 512, bank ? 0x4210 : 0x2d6b);
+        glb_wide_set_target(base);
+        glb_draw_gouraud_triangle(base - 40, 20, 0x001f,
+                                  base + 360, 50, 0x7c00,
+                                  base + 100, 220, 0x03ff);
+        glb_draw_flat_rect(base + 90, 80, 90, 50, bank ? 0x7c1f : 0x7fff);
+    }
+    gl_renderer_sync_cpu();
+    uint32_t *before[2] = {NULL, NULL};
+    for (int bank = 0; bank < 2; bank++) {
+        (void)steps_wide_digest_for(bank * 512, &before[bank]);
+        check(before[bank] && (before[bank][400 * 3 * 426 * 3 + 160 * 3] & 0xFFFFFFu),
+              "held composite has nonzero centre pixels outside the canonical frame");
+    }
+    const int levels[2] = {5, 3};
+    for (int i = 0; i < 2; i++) {
+        int sold = s_out_scale, snew = levels[i];
+        uint64_t native_before = steps_native_digest(0);
+        check(gl_renderer_step_internal_scale_now(snew) && s_out_scale == snew,
+              "held full composite scale step applied");
+        check(steps_native_digest(0) == native_before,
+              "held full composite step preserves guest-visible VRAM");
+        /* Read both banks before submitting any draw. The dump uses present's
+         * centre-copy rule, so copying canonical pixels cannot hide a loss. */
+        for (int bank = 0; bank < 2; bank++) {
+            uint32_t *after = NULL;
+            (void)steps_wide_digest_for(bank * 512, &after);
+            long bad = before[bank] && after
+                ? steps_rescale_mismatch(before[bank], sold, after, snew, 426, 512) : -1;
+            char label[128];
+            snprintf(label, sizeof label, "bank %d held full composite %dx -> %dx: every pixel rescaled before redraw",
+                     bank, sold, snew);
+            check(bad == 0, label);
+            printf("full composite bank=%d %dx -> %dx mismatch=%ld\n", bank, sold, snew, bad);
+            free(before[bank]);
+            before[bank] = after;
+        }
+    }
+    free(before[0]); free(before[1]);
+    check(glGetError() == GL_NO_ERROR, "full composite scale steps: GL error");
+    printf("checks=%d failures=%d\n", checks, failures);
+    return failures ? 1 : 0;
 }
 
 /* The hr and native-wide surfaces are allocated at the level they render at
@@ -1212,7 +1310,8 @@ int main(int argc, char **argv) {
     glb_init(vram);
     glb_set_scale(scale);
     gl_renderer_set_swap_interval(0);
-    if (!strcmp(mode, "steps")) gl_renderer_set_dynamic_resolution(1);
+    if (!strcmp(mode, "steps") || !strcmp(mode, "composite-steps"))
+        gl_renderer_set_dynamic_resolution(1);
     if (!gl_renderer_init_context(win)) { fprintf(stderr, "FAIL context\n"); return 2; }
     GlScaleInfo si;
     gl_renderer_scale_info(&si);
@@ -1243,6 +1342,11 @@ int main(int argc, char **argv) {
     }
 
     check(si.effective == scale, "requested scale allocated");
+    if (!strcmp(mode, "composite-steps")) {
+        int rc = composite_steps_main(scale, si.windowed);
+        gl_renderer_shutdown(); SDL_DestroyWindow(win); SDL_Quit();
+        return rc;
+    }
     if (!strcmp(mode, "steps")) {
         int rc = steps_main(scale, si.windowed, argc > 3 ? argv[3] : "",
                             argc > 4 && !strcmp(argv[4], "fresh"));
