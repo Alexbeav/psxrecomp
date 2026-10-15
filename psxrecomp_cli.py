@@ -1617,17 +1617,41 @@ def _pack_sysroot_cmake_args(
     return [f"-DCMAKE_SYSROOT={sysroot}", "-DOpenGL_GL_PREFERENCE=LEGACY"]
 
 
-def _read_cmake_cache_generator(cache_file: Path) -> str:
+def _read_cmake_cache_entry(cache_file: Path, key: str) -> str:
     if not cache_file.is_file():
         return ""
     try:
         text = cache_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    prefix = f"{key}:"
     for line in text.splitlines():
-        if line.startswith("CMAKE_GENERATOR:INTERNAL="):
+        if line.startswith(prefix) and "=" in line:
             return line.split("=", 1)[1].strip()
     return ""
+
+
+def _read_cmake_cache_generator(cache_file: Path) -> str:
+    return _read_cmake_cache_entry(cache_file, "CMAKE_GENERATOR")
+
+
+def _cmake_for_build_dir(build_dir: Path) -> Path:
+    """The cmake that configured *build_dir* (CMakeCache CMAKE_COMMAND).
+
+    Building must use the same cmake as configure. A bare ``cmake`` resolves
+    through PATH, and on Windows that is often an MSYS2 cmake that rewrites
+    the Windows build path as ``/f/.../F:/...`` and fails.
+    """
+    cached = _read_cmake_cache_entry(build_dir / "CMakeCache.txt", "CMAKE_COMMAND")
+    if cached and Path(cached).is_file():
+        return Path(cached)
+    found = _which_tool("cmake")
+    if found is None:
+        raise RuntimeError(
+            f"cmake not found: {build_dir} has no configured CMAKE_COMMAND "
+            "and no cmake is on PATH"
+        )
+    return found
 
 
 def _cmake_configure(
@@ -1759,7 +1783,7 @@ def _cmake_build(
         os.cpu_count() or 4
     )
     cmd = [
-        "cmake",
+        str(_cmake_for_build_dir(build_dir)),
         "--build",
         str(build_dir),
         "--parallel",

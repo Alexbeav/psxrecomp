@@ -391,6 +391,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_openxr.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_controller_source.c
     ${PSXRECOMP_ROOT}/runtime/src/pad_external_input.c
+    ${PSXRECOMP_ROOT}/runtime/src/host_overlay.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_menu_host.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_pad_transform.c
     ${PSXRECOMP_ROOT}/runtime/src/vr_pose_math.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
@@ -409,6 +411,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/render_pass_frame.c
     ${PSXRECOMP_ROOT}/runtime/src/dynamic_resolution.c
     ${PSXRECOMP_ROOT}/runtime/src/host_time.c
+    ${PSXRECOMP_ROOT}/runtime/src/game_mode.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_fiber.c
     ${PSXRECOMP_ROOT}/runtime/src/sio.c
     ${PSXRECOMP_ROOT}/runtime/src/memcard.c
@@ -433,6 +436,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
+    ${PSXRECOMP_ROOT}/runtime/src/video_texture_filter.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_savestate_menu.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_rewind.c
     ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
@@ -2286,7 +2290,7 @@ function(psxrecomp_add_runtime_target target)
         # by opengl32; Phase 2b will load modern GL via SDL_GL_GetProcAddress.
         # iphlpapi: GetAdaptersAddresses in the launcher's netplay
         # local-address discovery (MSVC does not link it implicitly).
-        target_link_libraries(${target} PRIVATE ws2_32 iphlpapi dbghelp comdlg32 opengl32)
+        target_link_libraries(${target} PRIVATE ws2_32 iphlpapi dbghelp comdlg32 opengl32 shell32)
         # Newer mingw-w64 maps clock_gettime → clock_gettime64 in libwinpthread.
         # Link it even when netplay code prefers Win32 clocks, so any residual
         # POSIX time refs (third-party / debug tools) resolve under -static.

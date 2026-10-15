@@ -196,6 +196,9 @@ struct ModOverlay {
     ModPatchTarget target = ModPatchTarget::DiscRaw;
     uint64_t location = 0;
     std::filesystem::path file;
+    // Format 10: verified same-feature derived resource instead of a package file.
+    std::string resource_id;
+    uint64_t resource_offset = 0;
     std::string sha256;
     std::string expected_sha256;
     uint64_t size = 0;
@@ -223,6 +226,11 @@ struct ModPlugin {
      * before it is staged (psx_mod_set_pad_transform). Online it stays on per
      * player: the post-transform pad is what every peer simulates. */
     bool netplay_input = false;
+    /* netplay = "host_output": the plugin only reads guest state and drives
+     * host output (rumble, haptics). Online it stays on per player and its
+     * hooks run in the shared simulation, but every guest write it attempts
+     * is refused there, so it can never diverge the peers. */
+    bool netplay_host_output = false;
 };
 
 struct ModResource {
@@ -310,6 +318,9 @@ struct ModPackage {
     std::vector<ModDerivedDisc> derived_discs;
 };
 
+// False requests cancellation. Providers report between bounded work units
+// and before publishing outputs; no UI code runs on the preparation worker.
+using ModPrepareProgress = std::function<bool(float, const std::string&)>;
 struct ModPrepareContext {
     const ModPackage& package;
     std::string feature_id;
@@ -317,6 +328,7 @@ struct ModPrepareContext {
     std::filesystem::path cache_root;
     std::filesystem::path application_dir;
     std::map<std::string, std::filesystem::path> inputs;
+    ModPrepareProgress progress;
 };
 using ModMediaPreparer = std::function<bool(const ModPrepareContext&,
     std::map<std::string, std::filesystem::path>&, std::string&)>;
@@ -388,6 +400,7 @@ struct ModResolution {
         std::string feature_id;
         bool netplay_local_view = false;
         bool netplay_input = false;
+        bool netplay_host_output = false;
     };
     std::vector<Plugin> plugins;
     struct Resource {
@@ -463,7 +476,8 @@ public:
     bool prepare_resources(const std::string& game_id,
                            const std::filesystem::path& disc_path,
                            const std::filesystem::path& cache_root,
-                           std::string* error = nullptr, bool cached_only = false);
+                           std::string* error = nullptr, bool cached_only = false,
+                           const ModPrepareProgress& progress = {});
 
     bool install_archive(const std::filesystem::path& archive,
                          std::string* installed_id = nullptr,
