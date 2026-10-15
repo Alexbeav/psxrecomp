@@ -121,8 +121,8 @@ the same value), so a difference there means another build.
   enabled mods, auto-skip FMV, idle skip, and both ports' connection, analog
   mode and DualShock capability. Playback switches to them and switches back
   afterwards.
-- One line about the build itself, `game_entry_low_ram=kept`: see "A recording
-  from an older build" below.
+- Two lines about the build itself, `game_entry_low_ram=kept` and
+  `low_ram_stores=all`: see "A recording from an older build" below.
 - Both memory cards as the console found them at power-on: which slots had a
   card, and each card's 128 KiB image.
 - State digests every 60 frames and an end checkpoint (the cycle count and a
@@ -146,11 +146,33 @@ the real bytes. So the recording stays in sync when the game behaves the same,
 and goes out of sync when the game reads those bytes and takes another path.
 That is a real difference between the two builds, and the replay reports it.
 
-The other direction has no such view. A power-on recording with the line,
-played on an older build, goes out of sync when the game starts, because the
-older build still sets the bytes to zero. That build says "Replay from a
-different build: it may go out of sync" before it plays. An F11 recording whose
-anchor was taken after the game started stays in sync on the older build: that
+Older builds also dropped some of the game's and the BIOS's own writes to
+those 16 bytes after the game started. They chose the writes by the address of
+the instruction: the BIOS routine that copies its exception stub to address 0,
+and ten delay loops that leave 3 in the first word. The console keeps those
+writes, and so does this build. It says so with a second line,
+`low_ram_stores=all`. A recording without that line comes from a build that
+dropped them.
+
+When a recording without the second line plays, the state digests and the end
+checkpoint read the 16 bytes without those writes, as the older build held
+them. The game itself still runs with the real bytes. As above, the recording
+stays in sync when the game behaves the same, and goes out of sync when the
+game reads the bytes and takes another path.
+
+| The recording has | Its build | The 16 bytes are compared as |
+| --- | --- | --- |
+| neither line | set them to zero at game start and dropped those writes | zero at game start, then every later write except the dropped ones |
+| `game_entry_low_ram=kept` only | kept them at game start and dropped those writes | every write except the dropped ones |
+| both lines | this build | main RAM itself |
+
+The other direction has no such view. A power-on recording with the first
+line, played on a build that sets the bytes to zero, goes out of sync when the
+game starts. A recording with both lines, played on a build that drops those
+writes, goes out of sync at the first such write. An older build says "Replay
+from a different build: it may go out of sync" before it plays. An F11
+recording whose anchor was taken after the game started stays in sync on a
+build that sets the bytes to zero, as long as no dropped write follows: that
 build loads the anchor's RAM and does not set the bytes to zero again.
 
 ### Memory cards
