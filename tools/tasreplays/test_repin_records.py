@@ -251,10 +251,89 @@ def git_controls(temp):
     assert result.returncode == 2, (result.stdout, result.stderr)
 
 
+OVERLAY = 'recompiler/tests/overlay_emitter_fixture.json'
+
+
+def overlay_record(*pairs):
+    return {'schema': 'psx-overlay-emitter-fixture-v1',
+            'history': [{'codegen_ver': v, 'digest': d, 'files': {'a': {'full.c': d[::-1]}}} for v, d in pairs]}
+
+
+def commit_files(repo, files, message):
+    for rel, doc in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, indent=2) + chr(10), encoding='utf-8', newline=chr(10))
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', message)
+    return git(repo, 'rev-parse', 'HEAD')
+
+
+def append_only_controls(temp):
+    """PS1B-518: two commits in a scratch repo. The second changes the overlay record's history."""
+    repo = Path(temp) / 'overlay'
+    repo.mkdir()
+    git(repo, 'init', '-q')
+    git(repo, 'config', 'core.autocrlf', 'false')
+    # First landing: the record is absent at the base, so any history passes.
+    first = commit_files(repo, {rr.REGISTRY: BASE}, 'registry only')
+    one = overlay_record((15, 'aa' * 32))
+    landed = commit_files(repo, {OVERLAY: one}, 'record lands')
+    result = run(repo, '--base', first, '--head', landed)
+    assert result.returncode == 0 and 'APPEND-ONLY' not in result.stdout, (result.stdout, result.stderr)
+
+    def second(doc, message):
+        git(repo, 'checkout', '-q', '-B', 'work', landed)
+        return commit_files(repo, {OVERLAY: doc}, message)
+
+    def verdict(head):
+        return run(repo, '--base', landed, '--head', head)
+
+    # Unchanged and appended: pass.
+    assert verdict(landed).returncode == 0
+    appended = second(overlay_record((15, 'aa' * 32), (16, 'bb' * 32)), 'append an entry')
+    result = verdict(appended)
+    assert result.returncode == 0 and 'APPEND-ONLY' not in result.stdout, (result.stdout, result.stderr)
+    # The fault: the digest of the existing entry is replaced and the version is not raised.
+    overwritten = second(overlay_record((15, 'cc' * 32)), 'overwrite the digest')
+    result = verdict(overwritten)
+    assert result.returncode == 1 and 'APPEND-ONLY' in result.stdout and 'entry 0 is changed' in result.stdout,         (result.stdout, result.stderr)
+    # The version of an existing entry changed.
+    renumbered = second(overlay_record((16, 'aa' * 32)), 'renumber the entry')
+    assert verdict(renumbered).returncode == 1
+    # An entry removed, from the end and from the middle (the rest shifts: the prefix no longer matches).
+    base2 = second(overlay_record((15, 'aa' * 32), (16, 'bb' * 32)), 'two entries')
+    git(repo, 'checkout', '-q', '-B', 'work2', base2)
+    removed_last = commit_files(repo, {OVERLAY: overlay_record((15, 'aa' * 32))}, 'drop the last entry')
+    result = run(repo, '--base', base2, '--head', removed_last)
+    assert result.returncode == 1 and 'removed' in result.stdout, (result.stdout, result.stderr)
+    git(repo, 'checkout', '-q', '-B', 'work3', base2)
+    removed_first = commit_files(repo, {OVERLAY: overlay_record((16, 'bb' * 32))}, 'drop the first entry')
+    assert run(repo, '--base', base2, '--head', removed_first).returncode == 1
+    # The record deleted, or damaged.
+    git(repo, 'checkout', '-q', '-B', 'work4', landed)
+    (repo / OVERLAY).unlink()
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', 'delete the record')
+    result = verdict(git(repo, 'rev-parse', 'HEAD'))
+    assert result.returncode == 1 and 'gone at the head' in result.stdout, (result.stdout, result.stderr)
+    # A base record that exists and cannot be parsed is an error, never an empty history.
+    git(repo, 'checkout', '-q', '-B', 'work5', landed)
+    (repo / OVERLAY).write_text('{not json', encoding='utf-8')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', 'damage the record')
+    damaged = git(repo, 'rev-parse', 'HEAD')
+    assert run(repo, '--base', damaged, '--head', damaged).returncode == 2
+    result = verdict(damaged)
+    assert result.returncode == 2 and 'error:' in result.stderr, (result.stdout, result.stderr)
+
+
 def main():
     unit_controls()
     with tempfile.TemporaryDirectory() as temp:
         git_controls(temp)
+    with tempfile.TemporaryDirectory() as temp:
+        append_only_controls(temp)
     print('repin_records: all controls passed')
     return 0
 
