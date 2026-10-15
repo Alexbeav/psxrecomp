@@ -665,6 +665,59 @@ int dirty_ram_bltz_taken(uint32_t pc, uint32_t rs_value) {
     return (int32_t)rs_value < 0;
 }
 
+/* The interpreter's conditional-branch decision at pc (1 = taken), with the
+ * widescreen branch-site lists of [widescreen.cull] and the auto_screen_x
+ * funnel widen. It mirrors the recompiler's generate_branch_condition
+ * (code_generator.cpp) kind for kind, so an overlay that runs interpreted
+ * decides a listed branch as its compiled form does (PS1B-520):
+ *   bltz on bltz_sites, or an auto-classified funnel bltz: psx_ws_cull_bltz;
+ *   bltz on nclip_keep_sites:  not taken when widened, raw at 4:3;
+ *   bltz on nclip_exact_sites: gte_nclip_precise_bltz when widened, raw at 4:3;
+ *   any branch on branch_keep_sites: not taken when widened, raw at 4:3;
+ *   any other branch: the raw condition.
+ * The bltz kinds apply to rt 0 only, as in the generator; bltzal, bgez and
+ * bgezal take branch_keep_sites only. Each decision at a listed PC is counted
+ * (gpu_state "interp_branch_sites"). The compiled IRQ hand-off still uses
+ * dirty_ram_bltz_taken above: which decision it takes is PS1B-519. */
+int dirty_ram_branch_taken(uint32_t pc, uint32_t insn, uint32_t rs_value,
+                           uint32_t rt_value) {
+    uint32_t op = insn >> 26;
+    uint32_t rt = (insn >> 16) & 31u;
+    int raw;
+    switch (op) {
+    case 0x01: raw = (rt & 1u) ? ((int32_t)rs_value >= 0) : ((int32_t)rs_value < 0); break;
+    case 0x04: raw = (rs_value == rt_value); break;
+    case 0x05: raw = (rs_value != rt_value); break;
+    case 0x06: raw = ((int32_t)rs_value <= 0); break;
+    case 0x07: raw = ((int32_t)rs_value > 0); break;
+    default:   return 0;
+    }
+    unsigned kinds = psx_ws_branch_site_kinds(pc);
+    int kind = -1, taken = raw;
+    if (op == 0x01 && rt == 0u) {
+        if (kinds & (1u << PSX_WS_BRANCH_BLTZ)) {
+            kind = PSX_WS_BRANCH_BLTZ;
+            taken = psx_ws_cull_bltz(rs_value);
+        } else if (psx_ws_auto_cull_on() && ws_cull_bltz_site(pc)) {
+            return psx_ws_cull_bltz(rs_value);
+        } else if (kinds & (1u << PSX_WS_BRANCH_NCLIP_KEEP)) {
+            kind = PSX_WS_BRANCH_NCLIP_KEEP;
+            taken = psx_ws_x_margin() > 0 ? 0 : raw;
+        } else if (kinds & (1u << PSX_WS_BRANCH_NCLIP_EXACT)) {
+            kind = PSX_WS_BRANCH_NCLIP_EXACT;
+            taken = psx_ws_x_margin() > 0
+                  ? gte_nclip_precise_bltz((int32_t)rs_value) : raw;
+        }
+    }
+    if (kind < 0 && (kinds & (1u << PSX_WS_BRANCH_KEEP))) {
+        kind = PSX_WS_BRANCH_KEEP;
+        taken = psx_ws_x_margin() > 0 ? 0 : raw;
+    }
+    if (kind >= 0)
+        psx_ws_branch_site_note(kind, taken != raw);
+    return taken;
+}
+
 /* Widescreen far-backdrop column-PRELOAD site classification for the interpreter
  * ([widescreen.cull] auto_backdrop). The scrolling-backdrop column-window
  * generators run interpreted in the dev build, so the recompiler emit can't
@@ -2140,28 +2193,28 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #undef XRES
     }
     case 0x04: { /* BEQ rs, rt, simm */
-        int taken = (cpu->gpr[rs] == cpu->gpr[rt]);
+        int taken = dirty_ram_branch_taken(pc, insn, cpu->gpr[rs], cpu->gpr[rt]);
         if(exec_delay_slot(cpu,pc+4,taken?(pc+4+(simm<<2)):(pc+8),taken))return 1;
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x05: { /* BNE */
-        int taken = (cpu->gpr[rs] != cpu->gpr[rt]);
+        int taken = dirty_ram_branch_taken(pc, insn, cpu->gpr[rs], cpu->gpr[rt]);
         if(exec_delay_slot(cpu,pc+4,taken?(pc+4+(simm<<2)):(pc+8),taken))return 1;
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x06: { /* BLEZ */
-        int taken = ((int32_t)cpu->gpr[rs] <= 0);
+        int taken = dirty_ram_branch_taken(pc, insn, cpu->gpr[rs], 0u);
         if(exec_delay_slot(cpu,pc+4,taken?(pc+4+(simm<<2)):(pc+8),taken))return 1;
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
         return 1;
     }
     case 0x07: { /* BGTZ */
-        int taken = ((int32_t)cpu->gpr[rs] > 0);
+        int taken = dirty_ram_branch_taken(pc, insn, cpu->gpr[rs], 0u);
         if(exec_delay_slot(cpu,pc+4,taken?(pc+4+(simm<<2)):(pc+8),taken))return 1;
         cosim_exec_one_transfer_hook(pc + 4);
         cpu->pc = taken ? (pc + 4 + (simm << 2)) : (pc + 8);
@@ -2170,14 +2223,16 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x01: { /* REGIMM: BLTZ/BGEZ/BLTZAL/BGEZAL by rt field */
         int taken;
         switch (rt) {
-        case 0x00: /* BLTZ, with the widescreen funnel widen */
-            taken = dirty_ram_bltz_taken(pc, cpu->gpr[rs]);
+        /* The widescreen funnel widen and the [widescreen.cull] branch-site
+         * lists are decided in dirty_ram_branch_taken (PS1B-520). */
+        case 0x00: /* BLTZ */
+        case 0x01: /* BGEZ */
+            taken = dirty_ram_branch_taken(pc, insn, cpu->gpr[rs], 0u);
             break;
-        case 0x01: /* BGEZ */    taken = ((int32_t)cpu->gpr[rs] >= 0); break;
-        case 0x10: /* BLTZAL */  taken = ((int32_t)cpu->gpr[rs] <  0);
-                                  cpu->gpr[31] = pc + 8; break;
-        case 0x11: /* BGEZAL */  taken = ((int32_t)cpu->gpr[rs] >= 0);
-                                  cpu->gpr[31] = pc + 8; break;
+        case 0x10: /* BLTZAL */
+        case 0x11: /* BGEZAL */
+            taken = dirty_ram_branch_taken(pc, insn, cpu->gpr[rs], 0u);
+            cpu->gpr[31] = pc + 8; break;
         default: return abort_unsupported(pc, insn, "REGIMM rt");
         }
         if(exec_delay_slot(cpu,pc+4,taken?(pc+4+(simm<<2)):(pc+8),taken))return 1;

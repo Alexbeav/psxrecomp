@@ -694,6 +694,65 @@ uint32_t psx_ws_xclip_bound(uint32_t vanilla) {
     return psx_ws_x_margin() > 0 ? 0x7FFFFFFFu : vanilla;
 }
 
+/* Branch-decision site lists ([widescreen.cull] bltz_sites, branch_keep_sites,
+ * nclip_keep_sites, nclip_exact_sites). The recompiler widens or keeps the
+ * branch at each listed PC (code_generator.cpp generate_branch_condition); the
+ * dirty-RAM interpreter reads the same lists here so an overlay that runs
+ * interpreted decides those branches as its compiled form does (PS1B-520).
+ * Physical PCs, sorted for a binary search: the interpreter asks on every
+ * conditional branch. No list configured costs one compare. */
+#define WS_BRANCH_SITES_MAX 1024
+static uint32_t ws_branch_sites[PSX_WS_BRANCH_KINDS][WS_BRANCH_SITES_MAX];
+static int ws_branch_n[PSX_WS_BRANCH_KINDS];
+static int ws_branch_requested[PSX_WS_BRANCH_KINDS];
+static int ws_branch_total = 0;
+static uint64_t ws_branch_hits[PSX_WS_BRANCH_KINDS];
+static uint64_t ws_branch_changed[PSX_WS_BRANCH_KINDS];
+static int ws_branch_cmp(const void *a, const void *b) {
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+void gpu_ws_set_branch_cull_sites(int kind, const uint32_t *sites, int nsites) {
+    if (kind < 0 || kind >= PSX_WS_BRANCH_KINDS) return;
+    if (nsites < 0 || !sites) nsites = 0;
+    /* A list longer than the table is cut; gpu_state reports both counts. */
+    ws_branch_requested[kind] = nsites;
+    if (nsites > WS_BRANCH_SITES_MAX) nsites = WS_BRANCH_SITES_MAX;
+    for (int i = 0; i < nsites; i++)
+        ws_branch_sites[kind][i] = sites[i] & 0x1FFFFFFFu;
+    qsort(ws_branch_sites[kind], (size_t)nsites, sizeof(uint32_t), ws_branch_cmp);
+    ws_branch_n[kind] = nsites;
+    ws_branch_hits[kind] = ws_branch_changed[kind] = 0;
+    ws_branch_total = 0;
+    for (int k = 0; k < PSX_WS_BRANCH_KINDS; k++) ws_branch_total += ws_branch_n[k];
+}
+unsigned psx_ws_branch_site_kinds(uint32_t pc) {
+    if (ws_branch_total == 0) return 0u;
+    uint32_t p = pc & 0x1FFFFFFFu;
+    unsigned kinds = 0u;
+    for (int k = 0; k < PSX_WS_BRANCH_KINDS; k++) {
+        if (ws_branch_n[k] > 0 &&
+            bsearch(&p, ws_branch_sites[k], (size_t)ws_branch_n[k],
+                    sizeof(uint32_t), ws_branch_cmp))
+            kinds |= 1u << k;
+    }
+    return kinds;
+}
+void psx_ws_branch_site_note(int kind, int changed) {
+    if (kind < 0 || kind >= PSX_WS_BRANCH_KINDS) return;
+    ws_branch_hits[kind]++;
+    if (changed) ws_branch_changed[kind]++;
+}
+void gpu_ws_get_branch_site_stats(GpuWsBranchSiteStats *out) {
+    if (!out) return;
+    for (int k = 0; k < PSX_WS_BRANCH_KINDS; k++) {
+        out->sites[k] = (uint32_t)ws_branch_n[k];
+        out->requested[k] = (uint32_t)ws_branch_requested[k];
+        out->hits[k] = ws_branch_hits[k];
+        out->changed[k] = ws_branch_changed[k];
+    }
+}
+
 typedef struct {
     uint32_t address;
     uint32_t expected;

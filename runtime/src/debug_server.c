@@ -7958,6 +7958,36 @@ static void handle_ws_margin(int id, const char *json)
              id, v, ws.x_margin, ws.activation_margin, ws.active);
 }
 
+/* ws_branch_sites: the [widescreen.cull] branch-decision lists as the
+ * dirty-RAM interpreter holds them (PS1B-520). Per list: sites held, sites
+ * game.toml listed, interpreted decisions at a listed PC, and how many of those
+ * differed from the raw branch condition. hits > 0 means a listed site ran in
+ * the interpreter; the compiled code's decisions are not counted. */
+static void handle_ws_branch_sites(int id, const char *json)
+{
+    (void)json;
+    GpuWsBranchSiteStats st;
+    gpu_ws_get_branch_site_stats(&st);
+    static const char *const names[PSX_WS_BRANCH_KINDS] = {
+        "bltz_sites", "branch_keep_sites", "nclip_keep_sites", "nclip_exact_sites"
+    };
+    char body[1024];
+    int n = 0;
+    for (int k = 0; k < PSX_WS_BRANCH_KINDS && n < (int)sizeof body; k++) {
+        int w = snprintf(body + n, sizeof body - (size_t)n,
+                         "%s\"%s\":{\"sites\":%u,\"requested\":%u,"
+                         "\"hits\":%llu,\"changed\":%llu}",
+                         k ? "," : "", names[k],
+                         (unsigned)st.sites[k], (unsigned)st.requested[k],
+                         (unsigned long long)st.hits[k],
+                         (unsigned long long)st.changed[k]);
+        if (w < 0) break;
+        n += w;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"x_margin\":%d,%s}",
+             id, psx_ws_x_margin(), body);
+}
+
 /* frame_perf: per-frame GPU/CPU phase timing (gpu_gl_renderer.c frame_perf ring).
  * Reports avg/max over the recent ring for ALL frames plus the native-wide (16:9)
  * and 4:3 subsets, so a 16:9-vs-4:3 A/B reads straight off one query. The GPU
@@ -13959,6 +13989,7 @@ static const CmdEntry s_commands[] = {
     { "pgxp",              handle_pgxp },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
+    { "ws_branch_sites",   handle_ws_branch_sites },
     { "ws_hud_mode",       handle_ws_hud_mode },
     { "kernel_bless",      handle_kernel_bless },
     { "ws_aspect",         handle_ws_aspect },
