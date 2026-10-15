@@ -34,6 +34,8 @@ void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry
 void sio_set_pad_analog(int slot, int enabled, uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 { analog[slot] = enabled; sio_set_pad_sticks(slot, a, b, c, d); }
 void sio_set_pad_state_slot(int slot, uint16_t buttons) { pad[slot] = buttons; }
+static int mode_button[PSX_MAX_PLAYERS];
+void sio_set_pad_mode_button(int slot, int pressed) { mode_button[slot] = pressed; }
 
 #ifdef PSX_NO_DEBUG_TOOLS
 /* A release product links the route observer and drives it from the release
@@ -51,6 +53,7 @@ int sio_get_multitap(void) { return multitap > 0; }
 int sio_get_pad_connected(int slot) { return connected[slot]; }
 int sio_get_pad_config_capable(int slot) { return config_capable[slot]; }
 int sio_get_pad_analog(int slot) { return analog[slot]; }
+int sio_get_pad_mode_button(int slot) { return mode_button[slot]; }
 uint16_t sio_get_pad_buttons_slot(int slot) { return pad[slot]; }
 void sio_get_pad_sticks(int slot, uint8_t out[4]) { memcpy(out, sticks[slot], 4); }
 uint32_t sio_get_trace(const SioTraceEntry **out, int *index) { *out = NULL; *index = 0; return 0; }
