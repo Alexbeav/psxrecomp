@@ -92,13 +92,13 @@ static void print_line(const char *end, int with_counts)
 /* fntrace's game-entry hook: first thing at the latch's 0 -> 1, before the
  * entry's side effects. Only the first entry of a start is the BIOS phase's
  * end; a later one (the game range armed again) prints nothing. */
-static void on_game_entry(void)
+static void bios_phase_on_game_entry(void)
 {
     if (s_lines) return;
     print_line("game_entry", 1);
 }
 
-static void on_exit(void)
+static void bios_phase_on_exit(void)
 {
     if (s_lines) return;
     if (fntrace_is_game_started()) print_line("latch_without_entry", 0);
@@ -110,6 +110,6 @@ void bios_phase_report_install(void)
     static int installed;
     if (installed) return;
     installed = 1;
-    g_fntrace_game_entry_hook = on_game_entry;
-    atexit(on_exit);
+    g_fntrace_game_entry_hook = bios_phase_on_game_entry;
+    atexit(bios_phase_on_exit);
 }
