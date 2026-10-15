@@ -74,6 +74,8 @@ static PSX_BSS uint8_t pad_rumble_large[PSX_MAX_PLAYERS];
  * flips underneath a game that pinned DualShock, the exact desync the
  * deferred-request machinery cannot otherwise prevent. */
 static PSX_BSS uint8_t analog_mode_locked[PSX_MAX_PLAYERS];
+static uint8_t pad_mode_button[PSX_MAX_PLAYERS], pad_mode_previous[PSX_MAX_PLAYERS];
+static int pad_mode_octoshock;
 
 /* Which logical pads have devices connected (bit i = pad i). Fits 5 pads. */
 static uint8_t pad_connected = 0;
@@ -928,6 +930,10 @@ static int sio_ack_visible_reads = 0;
 #define SIO_CTRL_SLOT        (1 << 13)
 
 void sio_init(void) {
+    const char *mode_model = getenv("PSX_INPUT_ROUTE_MODE_MODEL");
+    pad_mode_octoshock = mode_model && !strcmp(mode_model, "octoshock-2.4.2");
+    memset(pad_mode_button, 0, sizeof pad_mode_button);
+    memset(pad_mode_previous, 0, sizeof pad_mode_previous);
     const char *card_model = getenv("PSX_INPUT_ROUTE_CARD_MODEL");
     sio_source_card = card_model && (!strcmp(card_model, "nymashock-1.29.0") ||
                                       !strcmp(card_model, "nymashock-1.32.1"));
@@ -1253,6 +1259,13 @@ void sio_request_pad_type(int slot, int analog) {
     if (sio_tap_force_digital(slot)) analog = 0;
     int want = analog ? 1 : 0;
     pad_type_req[slot] = (pad_analog[slot] == want) ? -1 : (int8_t)want;
+}
+
+void sio_set_pad_mode_button(int slot, int pressed) {
+    if (slot >= 0 && slot < PSX_MAX_PLAYERS && pad_mode_octoshock) pad_mode_button[slot] = pressed != 0;
+}
+int sio_get_pad_mode_button(int slot) {
+    return slot >= 0 && slot < PSX_MAX_PLAYERS ? pad_mode_button[slot] : 0;
 }
 
 uint16_t sio_get_pad_buttons(void) {
@@ -2561,6 +2574,23 @@ void sio_write(uint32_t addr, uint32_t value) {
         uint16_t old_ctrl = sio_ctrl;
         sio_ctrl = (uint16_t)value;
         sr_record(SR_EVT_CTRL_WRITE, (uint8_t)(value & 0xFF), (uint8_t)((value >> 8) & 0xFF));
+        /* Physical MODE (PSX_INPUT_ROUTE_MODE_MODEL=octoshock-2.4.2): an input
+         * update only latches the button. The press is evaluated when the
+         * selected port's DTR falls: it toggles analog once per press, a press
+         * while the mode is locked is consumed, and a held button does not
+         * toggle again [ORACLE FIXTURE: corpus PSX-TAS-001]. */
+        if (pad_mode_octoshock) {
+            uint16_t next = (value & SIO_CTRL_RESET) ? 0 : (uint16_t)value;
+            for (int port = 0; port < 2; ++port) {
+                int was = (old_ctrl & SIO_CTRL_SELECT) && (((old_ctrl & SIO_CTRL_SLOT) != 0) == port);
+                int now = (next & SIO_CTRL_SELECT) && (((next & SIO_CTRL_SLOT) != 0) == port);
+                if (was && !now && port < PSX_MAX_PLAYERS) {
+                    if (pad_mode_button[port] && !pad_mode_previous[port] && !analog_mode_locked[port])
+                        pad_analog[port] ^= 1;
+                    pad_mode_previous[port] = pad_mode_button[port];
+                }
+            }
+        }
 #if SIO_MODEL_CYCLE_PACED
         if (sio_source_pad_ack) {
             /* Per-port DTR: the DTR bit together with the port-select bit. */
@@ -3286,6 +3316,8 @@ static int sio_snap_emit(PstW *w) {
              !pst_w_bytes(w, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;
         if (sio_source_pad_ack == 1 &&
             !pst_w_bytes(w, pad_power_on_first, sizeof pad_power_on_first)) return 0;
+        if (pad_mode_octoshock && (!pst_w_bytes(w, pad_mode_button, sizeof pad_mode_button) ||
+            !pst_w_bytes(w, pad_mode_previous, sizeof pad_mode_previous))) return 0;
     }
 #endif
     return 1;
@@ -3463,6 +3495,8 @@ static int sio_snap_parse(PstR *r) {
              !pst_r_bytes(r, pad_dtr_session_mute, sizeof pad_dtr_session_mute))) return 0;
         if (sio_source_pad_ack == 1 &&
             !pst_r_bytes(r, pad_power_on_first, sizeof pad_power_on_first)) return 0;
+        if (pad_mode_octoshock && (!pst_r_bytes(r, pad_mode_button, sizeof pad_mode_button) ||
+            !pst_r_bytes(r, pad_mode_previous, sizeof pad_mode_previous))) return 0;
     }
 #endif
     if (r->p != r->end) return 0;
@@ -3515,6 +3549,8 @@ int sio_snapshot_validate(const uint8_t *p, uint32_t len) {
             2u * PSX_MAX_PLAYERS : 0u;
         uint32_t session_bytes = sio_source_pad_ack ?
             (uint32_t)(sizeof pad_dtr_session_first + sizeof pad_dtr_session_mute) : 0u;
+        if (pad_mode_octoshock)   /* the physical MODE latch rides at the end of the state, like the session bytes */
+            session_bytes += (uint32_t)(sizeof pad_mode_button + sizeof pad_mode_previous);
         uint32_t first_bytes = sio_source_pad_ack == 1 ?
             (uint32_t)sizeof pad_power_on_first : 0u;
         const uint32_t tail = first_bytes + session_bytes + config_bytes;

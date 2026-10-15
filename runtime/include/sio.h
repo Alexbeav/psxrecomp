@@ -150,6 +150,9 @@ void sio_set_pad_analog(int slot, int enabled,
  * sio_set_pad_analog every frame for the type — that is for boot/hotplug only. */
 void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
 void sio_request_pad_type(int slot, int analog);
+/* Explicit Octoshock physical MODE input; evaluated only on the port DTR falling edge. */
+void sio_set_pad_mode_button(int slot, int pressed);
+int sio_get_pad_mode_button(int slot);
 
 /* Connect / disconnect a logical pad (0 .. PSX_MAX_PLAYERS-1). By default no
  * pads are connected during initial BIOS boot. */
