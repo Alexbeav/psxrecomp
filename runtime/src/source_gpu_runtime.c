@@ -158,7 +158,8 @@ static void compiled_irq_handoff(CPUState *cpu,uint32_t pc) {
         extern int psx_check_interrupts_delay_slot(CPUState *cpu,uint32_t slot_pc,uint32_t target,int taken,uint32_t instruction);
         uint64_t before=g_irq_deliver_count;
         s_handoff_active=1;
-        int took=psx_check_interrupts_delay_slot(cpu,pc,target,taken,sw);
+        /* Match exec_delay_slot: a not-taken branch hands off the fall-through. */
+        int took=psx_check_interrupts_delay_slot(cpu,pc,taken?target:pc+4u,taken,sw);
         s_handoff_active=0;
         if(took && g_irq_deliver_count!=before) {
             g_sd_handoff_slot_taken++;
