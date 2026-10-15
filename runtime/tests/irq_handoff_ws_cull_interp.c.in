@@ -1,0 +1,6 @@
+/* Compile the production decoder unchanged; expose only this fixture's entry. */
+#include "@DIRTY_RAM_SOURCE@"
+int ws_cull_handoff_interpret(CPUState *cpu, uint32_t pc, uint32_t instruction) {
+    uint32_t next = 0;
+    return exec_one_fetched_inner(cpu, pc, instruction, &next);
+}
