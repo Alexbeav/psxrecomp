@@ -4,7 +4,8 @@
  * checks against CodeGenerator::generate_branch_condition. */
 #include <stdint.h>
 #include "cpu_state.h"
-#include "dirty_ram_interp.h"
+#include "gpu.h"               /* psx_ws_x_margin, psx_ws_cull_bltz: the generated code's helpers */
+#include "dirty_ram_interp.h"  /* dirty_ram_set_ws_branch_sites */
 #include "@CASES_HEADER@"
 
 #define WS_COMPILED(name, lists, word, cond, tag) \
