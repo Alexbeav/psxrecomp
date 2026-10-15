@@ -653,6 +653,7 @@ volatile int g_sio_timing_active = 0;
  * The source-profile devices request a delay of 64; the acknowledge pulse
  * lasts 32 clocks (pinned by test_sio_ack_timing.c). */
 static int sio_source_pad_ack;
+static int sio_source_pad_plain; /* nymashock-2.8-gamepad: mode 2, digital pad timed too */
 static int sio_ack_pulse_remaining;
 static int sio_pending_ack_timed;
 static int sio_tick_quantum_cycles = 64;
@@ -930,7 +931,8 @@ static int sio_ack_visible_reads = 0;
 void sio_init(void) {
     const char *card_model = getenv("PSX_INPUT_ROUTE_CARD_MODEL");
     sio_source_card = card_model && (!strcmp(card_model, "nymashock-1.29.0") ||
-                                      !strcmp(card_model, "nymashock-1.32.1"));
+                                      !strcmp(card_model, "nymashock-1.32.1") ||
+                                      !strcmp(card_model, "nymashock-2.8"));
     if (card_model && *card_model && !sio_source_card) {
         fprintf(stderr, "Unsupported input route card model: %s\n", card_model);
         abort();
@@ -943,6 +945,11 @@ void sio_init(void) {
     sio_source_pad_ack = ack_model && strcmp(ack_model, "octoshock-2.2.2-digital") == 0;
     if (ack_model && (!strcmp(ack_model, "nymashock-1.29.0-dualshock") ||
                       !strcmp(ack_model, "nymashock-1.32.1-dualshock"))) sio_source_pad_ack = 2;
+    /* The 2.8 core's plain gamepad requests the same 0x40-cycle ACK delay as
+     * its DualShock, and the pad here is digital (config off); it shares the
+     * mode-2 wire layout and times every pad byte (PS1G-128). */
+    sio_source_pad_plain = ack_model && !strcmp(ack_model, "nymashock-2.8-gamepad");
+    if (sio_source_pad_plain) sio_source_pad_ack = 2;
     if (ack_model && *ack_model && !sio_source_pad_ack) {
         fprintf(stderr, "Unsupported input route pad ACK model: %s\n", ack_model);
         abort();
@@ -2957,7 +2964,7 @@ static void sio_handle_shift_complete(void) {
                                ? SIO_IRQ_SRC_CARD_ACK : SIO_IRQ_SRC_PAD_ACK;
     sio_irq_pending_slot     = (uint8_t)selected_slot;
     int timed_pad = sio_source_pad_ack && active_device == DEV_PAD &&
-                    (sio_source_pad_ack == 2 ? pad_supports_config[pad_active_logical] :
+                    (sio_source_pad_ack == 2 ? (sio_source_pad_plain || pad_supports_config[pad_active_logical]) :
                                               !pad_analog[pad_active_logical]) && !sio_multitap_active();
     int timed_card = sio_source_card && active_device == DEV_MEMCARD;
     int ack_delay = timed_pad ? 64 : timed_card ? 256 : SIO_ACK_CYCLES_DEFAULT;

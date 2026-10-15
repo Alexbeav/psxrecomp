@@ -227,7 +227,7 @@ def main():
     for name in ("exe", "game", "route", "disc", "bios"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument('--card1', type=Path, help='raw initial card1; staged as a fresh writable copy and verified in the loaded peripheral')
-    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0','nymashock-1.32.1'), default='default')
+    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0','nymashock-1.32.1','nymashock-2.8'), default='default')
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--speed", choices=("1", "2", "4", "8", "16", "32", "64", "max"), default="1",
@@ -320,7 +320,7 @@ def main():
                         help='source GPUSTAT field/line bits only; requires the NTSC raster clock')
     parser.add_argument("--legacy-card-repair", choices=("default", "off"), default="default",
                         help="Disable inherited global Ape Escape fixed-address card repair explicitly")
-    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock", "nymashock-1.32.1-dualshock"), default="default",
+    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock", "nymashock-1.32.1-dualshock", "nymashock-2.8-gamepad"), default="default",
                         help="Experimental source pad ACK delay/pulse; checkpoints retain the pad, DualShock and card state")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
                         help="experimental source OTC service and CPU-wait rule; cold boot only")
@@ -417,11 +417,11 @@ def main():
     completion_identity = route_identity(paths['route'], resume_inputs)
 
     dualshock = identity.get('format') == 'PSXRTI2'
-    if dualshock and (args.update_profile or args.pad_ack_model == 'octoshock-2.2.2-digital'):
-        raise ValueError('DualShock does not admit retiming or the digital Octoshock ACK model')
+    if dualshock and (args.update_profile or args.pad_ack_model in ('octoshock-2.2.2-digital', 'nymashock-2.8-gamepad')):
+        raise ValueError('DualShock does not admit retiming, the digital Octoshock ACK model or the 2.8 plain-gamepad ACK model')
     initial_card = None
     if args.card1:
-        if args.card_model not in ('nymashock-1.29.0','nymashock-1.32.1') or args.legacy_card_repair != 'off':
+        if args.card_model not in ('nymashock-1.29.0','nymashock-1.32.1','nymashock-2.8') or args.legacy_card_repair != 'off':
             raise ValueError('card replay requires an explicit source card model and legacy repair off')
         paths['card1'] = args.card1.resolve(strict=True)
         initial_card = card_identity(paths['card1'])

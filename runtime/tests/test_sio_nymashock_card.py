@@ -24,7 +24,8 @@ for offset in range(2048, 4608, 128):
     blank[offset:offset+4] = b'\xff'*4; blank[offset+8:offset+10] = b'\xff\xff'
 
 env = {k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
-for profile, golden in (('', 'nymashock_card_default_baseline'), ('nymashock-1.29.0', 'nymashock_card_transactions')):
+# nymashock-2.8 is a label for the 2.8 core: the frozen 2.8 memory card requests the same 0x100-cycle ACK (PS1G-128).
+for profile, golden in (('', 'nymashock_card_default_baseline'), ('nymashock-1.29.0', 'nymashock_card_transactions'), ('nymashock-2.8', 'nymashock_card_transactions')):
     env['PSX_INPUT_ROUTE_CARD_MODEL'] = profile
     with tempfile.TemporaryDirectory(prefix='nymashock-card-') as folder:
         card = Path(folder) / 'initial.mcd'; card.write_bytes(blank)
