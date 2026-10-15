@@ -8941,7 +8941,8 @@ static void handle_openxr_stats(int id, const char *json) {
              "\"gl_version\":%llu,\"min_gl_version\":%llu,\"max_gl_version\":%llu,\"swapchain_format\":%lld,"
              "\"submitted_layer\":%u,\"quad_submitted\":%llu,"
              "\"submitted_source\":%u,\"native_submitted\":%llu,\"submitted_native_frame\":%llu,"
-             "\"quad_distance_m\":%.6f,\"quad_width_m\":%.6f,\"quad_height_m\":%.6f,\"losses\":%llu}", id,s.compiled,s.enabled,
+             "\"quad_distance_m\":%.6f,\"quad_width_m\":%.6f,\"quad_height_m\":%.6f,\"losses\":%llu,"
+             "\"submitted_surfaces\":%u,\"surface_uploads\":%llu,\"surface_failures\":%llu}", id,s.compiled,s.enabled,
              s.initialized,s.running,s.state,s.tracking,s.frame_open,s.result,
              s.stage?s.stage:"off",s.runtime,s.last_failure?s.last_failure:"",s.last_failure_result,
              (unsigned long long)s.view_flags,(unsigned long long)s.waits,
@@ -8951,7 +8952,8 @@ static void handle_openxr_stats(int id, const char *json) {
              (unsigned long long)s.max_gl_version,(long long)s.swapchain_format,s.submitted_layer,
              (unsigned long long)s.quad_submitted,s.submitted_source,
              (unsigned long long)s.native_submitted,(unsigned long long)s.submitted_native_frame,
-             s.quad_distance_m,s.quad_width_m,s.quad_height_m,(unsigned long long)s.losses);
+             s.quad_distance_m,s.quad_width_m,s.quad_height_m,(unsigned long long)s.losses,
+             s.submitted_surfaces,(unsigned long long)s.surface_uploads,(unsigned long long)s.surface_failures);
 }
 static void handle_openxr_views(int id,const char *json) {
     PSXOpenXRStats s; (void)json;psx_openxr_stats(&s);
@@ -9265,6 +9267,17 @@ static void handle_host_pause(int id, const char *json)
     else if (on == 0) psx_host_pause_pop();
     send_fmt("{\"id\":%d,\"ok\":%s,\"depth\":%d}", id, ok ? "true" : "false",
              psx_host_pause_depth());
+}
+
+/* menu_host: in-game menu host state (psx_menu_host.h): provider, attached,
+ * open, pause, ui capture, and the video/netplay snapshot. */
+extern int psx_debug_menu_host_json(char *out, size_t cap);
+static void handle_menu_host(int id, const char *json)
+{
+    char body[768];
+    (void)json;
+    psx_debug_menu_host_json(body, sizeof body);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, body);
 }
 
 /* host_key name=<SDL scancode name> down=<1|0> (both when omitted). */
@@ -15952,6 +15965,7 @@ static const CmdEntry s_commands[] = {
     { "debug_key",         handle_debug_key },
     { "host_pause",        handle_host_pause },
     { "host_key",          handle_host_key },
+    { "menu_host",         handle_menu_host },
     { "host_mouse",        handle_host_mouse },
     { "scanline",          handle_scanline },
     { "ws_backdrop_ring",  handle_ws_backdrop_ring },

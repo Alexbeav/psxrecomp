@@ -354,6 +354,15 @@ struct RuntimeConfig {
     // device events still advance exactly. Opt-in per game; the idle_skip
     // debug command and PSX_IDLE_SKIP environment variable support live A/B.
     bool                  idle_skip = false;
+    // idle_skip_store_counters: with idle_skip, also skip loops that count a
+    // stack timeout down once per iteration and span several block edges --
+    // PsyQ libetc's v_wait, the VSync(0) spin. Bit-exact (psx_cycles.c);
+    // PSX_IDLE_SKIP_EXT=0/1 overrides it for one run.
+    bool                  idle_skip_store_counters = false;
+    // idle_skip_store_counter_sites: the audited loop sites (block-edge PCs
+    // the detector anchors on) where the store-counter extension may skip.
+    // Unlisted sites are never skipped; an empty list disables the extension.
+    std::vector<uint32_t> idle_skip_store_counter_sites;
 
     // overlay_autocompile_cmd: variant-capture automation (step 2.8). A
     // shell command (run via cmd.exe /C, cwd = project root) that compiles
@@ -644,6 +653,9 @@ struct RuntimeConfig {
     // constants from game.toml only. See config_loader.cpp.
     int                   guest_cycle_scale = 1;
     bool                  guest_cycle_scale_gated = false;
+    // [timing] guest_cycle_scale_batch: batch the scaled CPU charge like the
+    // scale-1 path (psx_cyc.h). Same totals and observation points; opt-in.
+    bool                  guest_cycle_scale_batch = false;
     // guest_cycle_scale_gate: declarative RAM gate, judged at every VBlank;
     // the scale applies only while every predicate holds.
     struct GuestCycleScaleGatePred {

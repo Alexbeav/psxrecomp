@@ -1579,6 +1579,10 @@ if(BUILD_TESTING)
         target_link_libraries(dynamic_resolution_test PRIVATE m)
     endif()
     add_test(NAME dynamic_resolution_test COMMAND dynamic_resolution_test)
+    # Game Mode (Steam Deck / gamescope) detection and precedence.
+    add_executable(game_mode_test tests/test_game_mode.c src/game_mode.c)
+    target_include_directories(game_mode_test PRIVATE include)
+    add_test(NAME game_mode_test COMMAND game_mode_test)
     # The render-thread controller (dynrt_*) against a synthetic pipeline.
     add_executable(dynamic_resolution_rt_test
         tests/test_dynamic_resolution_rt.c
@@ -1821,6 +1825,13 @@ if(BUILD_TESTING)
     target_include_directories(psx_cycle_event_boundaries_test PRIVATE include)
     add_test(NAME psx_cycle_event_boundaries_test
              COMMAND psx_cycle_event_boundaries_test)
+
+    # idle_skip store-counter loops: PsyQ v_wait skips, near misses do not.
+    add_executable(idle_skip_store_counter_test
+        tests/test_idle_skip_store_counter.c
+        src/psx_cycles.c)
+    target_include_directories(idle_skip_store_counter_test PRIVATE include)
+    add_test(NAME idle_skip_store_counter_test COMMAND idle_skip_store_counter_test)
 
     add_executable(psx_vblank_clock_test
         tests/test_psx_vblank_clock.c
