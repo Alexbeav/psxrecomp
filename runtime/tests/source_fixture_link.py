@@ -15,7 +15,7 @@ LIBRARY_CANDIDATES = ["libc.a", "libm.a", "libgcc.a", "libmingw32.a",
                       "libmingwex.a", "libmsvcrt.a", "libucrt.a",
                       "libkernel32.a"]
 ISO_C_FALLBACK = {
-    "abort", "atexit", "atoi", "atol", "calloc", "exit", "fclose", "ferror",
+    "abort", "atexit", "atoi", "atol", "bsearch", "calloc", "exit", "fclose", "ferror",
     "fflush", "fopen", "fprintf", "fputc", "fputs", "fread", "free", "fwrite",
     "getenv", "longjmp", "malloc", "memcpy", "memmove", "memset", "printf",
     "putchar", "puts", "qsort", "realloc", "setjmp", "snprintf", "sprintf",
