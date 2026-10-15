@@ -44,6 +44,7 @@ uint64_t dma_debug_get_cdrom_history(const DMACDROMHistoryEntry **out) { *out = 
 uint32_t sio_get_trace(const SioTraceEntry **out, int *index) {
     *out = NULL; *index = 0; return 0;
 }
+int sio_get_pad_mode_button(int slot) { (void)slot; return 0; }
 /* The observer's boundary hook asks the precise-slice interpreter to dump its
  * diagnostic counters; that lives in dirty_ram_interp.c, which this fixture
  * deliberately does not link. */
