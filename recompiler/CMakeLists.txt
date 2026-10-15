@@ -1208,7 +1208,7 @@ if(BUILD_TESTING)
                 menu_scan cursor_writers gpu_frame pad_trace pad_delivery
                 aligned_lzss_banks static_fragment_variant_keys
                 mips_tagged_relocations overlay_widescreen_callbacks
-                duckstation_oracle)
+                duckstation_oracle gate_launcher)
             add_test(NAME tools_${_t}
                 COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
                     -s ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests
@@ -1428,6 +1428,9 @@ if(BUILD_TESTING)
         set_tests_properties(windows_rebuild_helper PROPERTIES
             SKIP_REGULAR_EXPRESSION "^SKIP:"
             TIMEOUT 90)
+        # PS1B-485: same for the BIOS stems test: no recomp-ui prints "SKIP:" and returns 0.
+        set_tests_properties(codegen_host_bios_stems PROPERTIES
+            SKIP_REGULAR_EXPRESSION "^SKIP:")
 
         # interpreter_perf_guards, runtime_perf_diag_guards and their controls
         # were registered DISABLED while they named source that had since been

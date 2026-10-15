@@ -1543,6 +1543,9 @@ add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c
         add_test(NAME codegen_host_disc_cfg_handoff_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_disc_cfg_handoff.py)
+        # PS1B-485: without recomp-ui (RECOMP_UI_ROOT) it prints "SKIP:" and returns 0; read that as Skipped.
+        set_tests_properties(codegen_host_disc_cfg_handoff_test PROPERTIES
+                 SKIP_REGULAR_EXPRESSION "^SKIP:")
         # The hand-over to the product forces the launcher for a player and
         # honours a headless start (a gate that starts a kit's own exe needs
         # frames from the game it hands over to).
