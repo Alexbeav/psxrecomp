@@ -111,6 +111,10 @@ When a change moves the overlay output on purpose:
 A static-only change does not change the overlay output, so it does not touch
 the key or the record.
 
+The guard runs `psxrecomp-game` with every `PSX*` variable removed from its
+environment, so a generator switch in the caller's shell cannot change the
+digest.
+
 The guard sees only what the fixtures reach: the exact-entry walk with
 padding between routines, an interior alias, a dispatch root, a
 `[[recompiler.patch]]` edit and a `mod_function_entry_funcs` hook from

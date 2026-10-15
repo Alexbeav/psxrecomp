@@ -170,6 +170,23 @@ def codegen_version(header=OVERLAY_API):
     return int(match.group(1))
 
 
+def child_env(environ=None):
+    """The caller's environment without any variable whose name starts with PSX.
+
+    psxrecomp-game reads generator switches from the environment: PSX_CPS,
+    PSX_CODEGEN_CYCLE_PER_INSN and PSX_EMIT_PROD change the emitted C, and
+    PSXRECOMP_VERBOSE_RI_WARNINGS changes the log. A switch left set in a
+    developer's shell would fail the guard with a false fault, or be written
+    into the record by --record, where CI could not reproduce it. The guard
+    sets no PSX variable itself, so all of them go: a list of names would miss
+    the next switch. The rest stays, because the child needs PATH (the
+    compiler's runtime libraries), SYSTEMROOT and TEMP to start.
+    """
+    environ = os.environ if environ is None else environ
+    return {key: value for key, value in environ.items()
+            if not key.upper().startswith("PSX")}
+
+
 def run_fixture(recompiler, name, image, seeds, config, tmp):
     """Overlay-mode generation of one fixture; returns {file: sha256}."""
     work = Path(tmp) / name
@@ -179,15 +196,14 @@ def run_fixture(recompiler, name, image, seeds, config, tmp):
     (work / exe_name).write_bytes(image())
     (work / "seeds.txt").write_text(seeds(), encoding="utf-8", newline="\n")
     # The same invocation as compile_overlays.py: relative paths from the
-    # capture's folder, the framework as --project-root, no PSX_CPS override.
+    # capture's folder, the framework as --project-root, the generator's
+    # default switches (child_env).
     cmd = [str(Path(recompiler).resolve()), exe_name, "--seeds", "seeds.txt", "--out-dir", "out", "--overlay"]
     if config:
         (work / "game.toml").write_text(config(exe_name), encoding="utf-8", newline="\n")
         cmd += ["--ws-config", "game.toml"]
     cmd += ["--project-root", str(ROOT)]
-    env = dict(os.environ)
-    env.pop("PSX_CPS", None)
-    result = subprocess.run(cmd, cwd=work, env=env, capture_output=True,
+    result = subprocess.run(cmd, cwd=work, env=child_env(), capture_output=True,
                             text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         # Not a verdict on the overlay output: the generator did not finish.
@@ -341,6 +357,14 @@ def self_test():
         bad += 1
     else:
         print("PASS: --record after a version raise appends a pair that passes")
+    # The child environment drops every generator switch and keeps the rest.
+    env = child_env({"PATH": "p", "PSX_CODEGEN_CYCLE_PER_INSN": "0", "PSX_EMIT_PROD": "0",
+                     "PSX_CPS": "0", "PSXRECOMP_VERBOSE_RI_WARNINGS": "1", "psx_lower": "0"})
+    if env == {"PATH": "p"}:
+        print("PASS: the child environment drops PSX* switches and keeps PATH")
+    else:
+        print(f"FAIL: the child environment is {sorted(env)}")
+        bad += 1
     return 1 if bad else 0
 
 
