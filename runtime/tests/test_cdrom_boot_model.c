@@ -61,6 +61,20 @@ static void test_version(int source) {
     for(int i=0;i<4;i++) CHECK(cdrom_read(0x1f801801)==expected[source][i],"documented controller version byte");
     ack();
 }
+/* Test 04h resets the SCEx counters and answers the status; Test 05h answers
+ * the two counters and no status byte (PS1G-116). */
+static void test_scex_counters(int source) {
+    set_model("PSX_CD_FIRMWARE_MODEL",source?"octoshock-2.2.2":"");
+    cdrom_init("synthetic");
+    cdrom_write(0x1f801800,0);cdrom_write(0x1f801802,0x04);command(0x19);
+    CHECK(irq_flag==CDIRQ_ACK&&response_count==1,"SCEx counter reset owns one status ACK");
+    CHECK(cdrom_read(0x1f801801)==stat_reg,"SCEx counter reset answers the status");
+    ack();
+    cdrom_write(0x1f801800,0);cdrom_write(0x1f801802,0x05);command(0x19);
+    CHECK(irq_flag==CDIRQ_ACK&&response_count==2,"SCEx counters own one two-byte ACK");
+    CHECK(cdrom_read(0x1f801801)==0x00&&cdrom_read(0x1f801801)==0x00,"SCEx counters read zero, not the status");
+    ack();
+}
 static void test_status(int source,int present) {
     set_model("PSX_CD_COLD_STATUS_MODEL",source?"octoshock-2.2.2":"");
     iso_handle=NULL;cdrom_init(present?"synthetic":NULL);
@@ -74,6 +88,7 @@ static void test_status(int source,int present) {
 int main(void) {
     for(int firmware=0;firmware<2;firmware++) for(int cold=0;cold<2;cold++) {
         set_model("PSX_CD_COLD_STATUS_MODEL",cold?"octoshock-2.2.2":"");test_version(firmware);
+        test_scex_counters(firmware);
         for(int disc=0;disc<2;disc++) test_status(cold,disc);
     }
     set_model("PSX_CD_FIRMWARE_MODEL","");set_model("PSX_CD_COLD_STATUS_MODEL","");
