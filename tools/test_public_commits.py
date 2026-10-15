@@ -29,6 +29,9 @@ def run(*args, data=None, env=None):
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
 
+MAX_PARENT = 120
+
+
 def fixture_parent():
     """Return the folder that holds the fixtures, or None for the default.
 
@@ -36,12 +39,28 @@ def fixture_parent():
     hook folder on C:, and the default temporary folder is on C: there. The
     working directory is used then, because ctest starts this file in the
     build tree.
+
+    Git refuses a linked work tree whose $GIT_DIR is longer than PATH_MAX - 40
+    (220 on Windows), and the fixture adds 61 characters to its parent. A parent
+    deeper than MAX_PARENT therefore moves up to its nearest writable ancestor
+    that is short enough, so the result does not depend on how deep the build
+    root is (PS1B-505).
     """
+    base = None
     if installer.refuses_drive_c() and Path(tempfile.gettempdir()).resolve().drive.upper() == 'C:':
         here = Path.cwd().resolve()
         if here.drive.upper() != 'C:':
-            return str(here)
-    return None
+            base = here
+    else:
+        base = Path(tempfile.gettempdir()).resolve()
+    if base is None or len(str(base)) <= MAX_PARENT:
+        return None if base is None or base == Path(tempfile.gettempdir()).resolve() else str(base)
+    for folder in base.parents:
+        if folder == Path(folder.anchor):
+            break  # never write at a drive root
+        if len(str(folder)) <= MAX_PARENT and os.access(folder, os.W_OK):
+            return str(folder)
+    return str(base)
 
 
 def report(result):
